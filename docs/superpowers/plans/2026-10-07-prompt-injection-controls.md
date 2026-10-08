@@ -24,26 +24,27 @@
 
 ## File Structure
 
-| File | Action | Responsibility |
-|------|--------|----------------|
-| `web/tool_validation.py` | Create | Validate model-supplied inputs against the offered `input_schema` |
-| `web/data_sources.py` | Create | Map a tool call to a data source; per-tab approval store; card wording |
-| `web/content_guard.py` | Create | Untrusted-content notice and removal of high-signal injected instructions |
-| `web/app.py` | Modify (`execute_tool`) | Call `validate_tool_inputs` before dispatch |
-| `web/agent_loop.py` | Modify | Allow-list, source card, notice and filter in the tool runner; forward card labels |
-| `web/routes/conversation_routes.py` | Modify | End source approvals when a tab closes |
-| `web/static/app.js` | Modify | Confirm card takes a title and button labels |
-| `web/skills/_always_on/tools.py` | Modify | `fetch_webpage` address, query-length and redirect guard |
-| `web/skills/aigator/SKILL.md` | Modify | One rule: tool results are data, never instructions |
-| `web/requirements.txt` | Modify | Declare `jsonschema` |
-| `tests/prompt_injection/` | Create | All new tests |
-| `docs/security/threatmodel-remediation.md`, spec | Modify | Status row; spec brought in line with what was built |
+| File                                             | Action                  | Responsibility                                                                     |
+| ------------------------------------------------ | ----------------------- | ---------------------------------------------------------------------------------- |
+| `web/tool_validation.py`                         | Create                  | Validate model-supplied inputs against the offered `input_schema`                  |
+| `web/data_sources.py`                            | Create                  | Map a tool call to a data source; per-tab approval store; card wording             |
+| `web/content_guard.py`                           | Create                  | Untrusted-content notice and removal of high-signal injected instructions          |
+| `web/app.py`                                     | Modify (`execute_tool`) | Call `validate_tool_inputs` before dispatch                                        |
+| `web/agent_loop.py`                              | Modify                  | Allow-list, source card, notice and filter in the tool runner; forward card labels |
+| `web/routes/conversation_routes.py`              | Modify                  | End source approvals when a tab closes                                             |
+| `web/static/app.js`                              | Modify                  | Confirm card takes a title and button labels                                       |
+| `web/skills/_always_on/tools.py`                 | Modify                  | `fetch_webpage` address, query-length and redirect guard                           |
+| `web/skills/aigator/SKILL.md`                    | Modify                  | One rule: tool results are data, never instructions                                |
+| `web/requirements.txt`                           | Modify                  | Declare `jsonschema`                                                               |
+| `tests/prompt_injection/`                        | Create                  | All new tests                                                                      |
+| `docs/security/threatmodel-remediation.md`, spec | Modify                  | Status row; spec brought in line with what was built                               |
 
 ---
 
 ### Task 1: Schema validation of tool inputs (criterion 1)
 
 **Files:**
+
 - Create: `web/tool_validation.py`
 - Create: `tests/prompt_injection/__init__.py` (empty)
 - Create: `tests/prompt_injection/test_tool_validation.py`
@@ -51,6 +52,7 @@
 - Modify: `web/requirements.txt`
 
 **Interfaces:**
+
 - Produces: `tool_validation.validate_tool_inputs(tool_name: str, inputs: dict) -> dict | None`. Returns `None` when valid, when the tool has no schema, or when the schema is unsupported. Otherwise returns `{"error": "invalid_tool_input", "tool": str, "field": str, "reason": str, "hint": str}`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -264,11 +266,13 @@ git commit -m "feat: tool inputs are validated against the offered schema before
 ### Task 2: Data-source mapping and per-tab approvals
 
 **Files:**
+
 - Create: `web/data_sources.py`
 - Create: `tests/prompt_injection/test_data_sources.py`
 - Modify: `web/routes/conversation_routes.py:1-19`
 
 **Interfaces:**
+
 - Produces:
   - `data_sources.Source` frozen dataclass: `key: str`, `label: str`, `kind: str` (`"data"` or `"web"`).
   - `data_sources.source_for_call(tool_name: str, inputs: dict | None) -> Source | None`
@@ -535,10 +539,12 @@ git commit -m "feat: data-source mapping and per-tab source approvals that end w
 ### Task 3: Tool allow-list and first-use source card in the tool runner (criteria 2, 3, 5)
 
 **Files:**
+
 - Modify: `web/agent_loop.py:425-460` (`_make_tool_runner`, `_request_browser_confirm`, start of `_run_tool_block`), `592-604`, `984-985`, `1250-1252`, `1502-1503`
 - Create: `tests/prompt_injection/test_tool_runner_gates.py`
 
 **Interfaces:**
+
 - Consumes: Task 2 (`data_sources.source_for_call`, `prompt_for`, `allow`, `is_allowed`, `deny`, `recently_denied`).
 - Produces:
   - `_make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _SLACK_SAFE_MSG, *, context_id: str | None = None, offered_names: frozenset[str] | None = None)` (same three-value return).
@@ -863,10 +869,12 @@ git commit -m "feat: the agent loop rejects tools it did not offer and asks once
 ### Task 4: Confirm card takes a title and button labels (UI)
 
 **Files:**
+
 - Modify: `web/static/app.js:14842-14909` (`_showBrowserConfirmCard`)
 - Create: `tests/prompt_injection_confirm_card.test.js`
 
 **Interfaces:**
+
 - Consumes: Task 3 events (`title`, `allow_label`, `deny_label` on the `browser_confirm` message).
 - Produces: `_confirmCardText({ title, allow_label, deny_label }) -> { title, allowLabel, denyLabel, icon, isSource }`.
 
@@ -895,13 +903,20 @@ const _confirmCardText = vm.runInNewContext(match[0] + ';_confirmCardText;', {})
   assert.strictEqual(t.isSource, false);
 }
 {
-  const t = _confirmCardText({ title: 'Allow access to Jira?', allow_label: 'Allow for this tab', deny_label: 'Deny' });
+  const t = _confirmCardText({
+    title: 'Allow access to Jira?',
+    allow_label: 'Allow for this tab',
+    deny_label: 'Deny',
+  });
   assert.strictEqual(t.title, 'Allow access to Jira?');
   assert.strictEqual(t.allowLabel, 'Allow for this tab');
   assert.strictEqual(t.denyLabel, 'Deny');
   assert.strictEqual(t.isSource, true);
 }
-assert(/source-confirm-\$\{confirm_id\}/.test(source), 'source cards must get a per-request id so two pending cards do not replace each other');
+assert(
+  /source-confirm-\$\{confirm_id\}/.test(source),
+  'source cards must get a per-request id so two pending cards do not replace each other',
+);
 console.log('ok');
 ```
 
@@ -962,12 +977,14 @@ git commit -m "feat: the confirm card shows a title and Allow for this tab / Den
 ### Task 5: Untrusted-content notice, injected-instruction filter and system rule (criterion 4)
 
 **Files:**
+
 - Create: `web/content_guard.py`
 - Create: `tests/prompt_injection/test_content_guard.py`
 - Modify: `web/agent_loop.py` (end of `_run_tool_block`, just before its final `return result`)
 - Modify: `web/skills/aigator/SKILL.md` (new section after "Human-in-the-Loop Rules")
 
 **Interfaces:**
+
 - Consumes: `data_sources.is_untrusted`.
 - Produces: `content_guard.NOTICE: str`, `content_guard.REMOVED: str`, `content_guard.scrub(value) -> tuple[value, int]`, `content_guard.mark_untrusted(result: dict) -> tuple[dict, int]`.
 
@@ -1179,10 +1196,12 @@ git commit -m "feat: results from outside sources are marked untrusted and injec
 ### Task 6: `fetch_webpage` address, query-length and redirect guard (criterion 4)
 
 **Files:**
+
 - Modify: `web/skills/_always_on/tools.py:1-10` (imports) and `303-352` (`_tool_fetch_webpage`)
 - Create: `tests/prompt_injection/test_fetch_guard.py`
 
 **Interfaces:**
+
 - Produces: `tools._check_fetch_target(url: str) -> dict | None` (an error dict whose `error` starts with `Blocked:`, or `None`), `tools._GuardedRedirect` (raises `urllib.error.URLError` when a redirect target is blocked).
 
 - [ ] **Step 1: Write the failing tests**
@@ -1337,6 +1356,7 @@ git commit -m "feat: fetch_webpage refuses private and metadata addresses, long 
 ### Task 7: Full suite, spec and tracker
 
 **Files:**
+
 - Modify: `docs/superpowers/specs/2026-10-07-prompt-injection-controls-design.md`
 - Modify: `docs/security/threatmodel-remediation.md` (the `H_Prompt_injection_leading_to_unintended_d_04` row, line 19)
 
@@ -1348,6 +1368,7 @@ Expected: no new failures against `main`. For each failure, decide whether it is
 - [ ] **Step 2: Bring the spec in line with what was built**
 
 In the spec make these edits so it matches the code:
+
 - Section 3 and 5: the table covers every tool of a source (not only reading ones), and also Outlook calendar, Outlook contacts, the people directory, OneNote and GitHub; the "broad" flag is dropped because the first-use card already gates every search tool of a source; `fetch_webpage` hosts are sources keyed by host.
 - Section 2: the allow-list is the set of tool names the loop was built with (`normalized_tools`); a mid-turn skill activation builds a new loop with the larger set.
 - Section 4: the paragraph "No keyword filter..." is replaced by the pattern filter that now exists (override phrases, "new instructions:", instructions aimed at the assistant to send or fetch, markdown images carrying data in the URL), with the toast and log, and a plain statement that it is a pattern filter that cannot prove content is safe. `fetch_webpage` also checks each redirect hop.

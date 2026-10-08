@@ -61,7 +61,7 @@ def test_default_cwd_is_app_work_dir():
     from config import WORK_DIR
     result = _tool_run_shell(command='python -c "import os;print(os.getcwd())"')
     out = (result["stdout"] or "").strip()
-    assert os.path.normcase(out) == os.path.normcase(str(WORK_DIR))
+    assert os.path.normcase(os.path.realpath(out)) == os.path.normcase(os.path.realpath(str(WORK_DIR)))
     assert WORK_DIR.is_dir()  # created on demand
 
 

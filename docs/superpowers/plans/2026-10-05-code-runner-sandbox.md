@@ -41,12 +41,14 @@ Root cause: the spec builds a PyInstaller **onefile** binary, so every `--run-py
 This task does not block Tasks 2-9: they work with either layout (the frozen runtime path is `Path(sys.executable).parent`).
 
 **Files:**
+
 - Modify: `packaging/aigator-backend.spec` (the `exe = EXE(...)` block at the end)
 - Modify: `.github/workflows/release-desktop.yml:78` (PyInstaller command)
 - Modify: `docs/BUILD_INSTRUCTIONS.md:95` and `:101` (PyInstaller commands), `AGENTS.md:101`
 - Test: `tests/test_desktop_packaging.py` (append)
 
 **Interfaces:**
+
 - Consumes: nothing.
 - Produces: onedir sidecar at `dist/backend/aigator-backend[.exe]` with `dist/backend/_internal/`; `sys.executable` parent is the bundle directory (used by Task 7 `_runtime_paths`).
 
@@ -134,7 +136,7 @@ coll = COLLECT(
 In `.github/workflows/release-desktop.yml` line 78 change the command to:
 
 ```yaml
-        run: uv run pyinstaller --clean --noconfirm packaging/aigator-backend.spec --distpath dist --workpath build/pyinstaller-desktop
+run: uv run pyinstaller --clean --noconfirm packaging/aigator-backend.spec --distpath dist --workpath build/pyinstaller-desktop
 ```
 
 In `docs/BUILD_INSTRUCTIONS.md` change the Windows command (line 95) to:
@@ -149,7 +151,7 @@ and the macOS/Linux command (line 101) and `AGENTS.md` line 101 to:
 uv run pyinstaller --clean --noconfirm packaging/aigator-backend.spec --distpath dist --workpath build/pyinstaller-desktop
 ```
 
-In `docs/BUILD_INSTRUCTIONS.md` under "Expected output" add a third bullet: `- Plus the bundle folder `dist/backend/_internal/` (onedir build; ship the whole `dist/backend/` folder).`
+In `docs/BUILD_INSTRUCTIONS.md` under "Expected output" add a third bullet: `- Plus the bundle folder `dist/backend/\_internal/`(onedir build; ship the whole`dist/backend/` folder).`
 
 - [ ] **Step 5: Run the packaging tests**
 
@@ -161,6 +163,7 @@ Expected: all pass.
 Run: `uv run pyinstaller --clean --noconfirm packaging/aigator-backend.spec --distpath dist --workpath build/pyinstaller-desktop` then the Step 1 timing script again.
 
 Decision rule:
+
 - Total under 5 s: done, go to Step 8.
 - First output under 5 s but exit still over 3 s: apply Step 7.
 - First output still over 5 s: stop here, record the numbers in the commit message and the Task 9 tracker row, and continue with Task 2 (the sandbox works either way; frozen runs are just slow).
@@ -236,6 +239,7 @@ git commit -m "fix: build the backend sidecar onedir so --run-python starts in s
 ### Task 2: `web/sandbox` core (types, policy, paths and deny list, environment, telemetry)
 
 **Files:**
+
 - Create: `web/sandbox/__init__.py`
 - Create: `web/sandbox/policy.py`
 - Create: `web/sandbox/paths.py`
@@ -244,6 +248,7 @@ git commit -m "fix: build the backend sidecar onedir so --run-python starts in s
 - Create: `tests/code_sandbox/__init__.py` (empty), `tests/code_sandbox/test_core.py`, `tests/code_sandbox/test_policy.py`, `tests/code_sandbox/test_paths.py`
 
 **Interfaces:**
+
 - Produces (in `sandbox`): `SandboxUnavailable(RuntimeError)`; `SandboxRequest(argv: list[str], cwd: Path, env: dict[str, str], runtime_paths: list[Path], read_paths: list[Path], write_paths: list[Path], network: bool, timeout: int)` (frozen dataclass); `SandboxResult(returncode: int, stdout: str, stderr: str, timed_out: bool)`; `sandbox_level() -> str` (`"enforced"|"unavailable"`); `sandbox_unavailable_reason() -> str | None`; `launch_sandboxed(req: SandboxRequest) -> SandboxResult` (raises `SandboxUnavailable`); `build_env(parent: Mapping[str, str], run_dir: Path, node_path: str | None, platform: str | None = None) -> dict[str, str]`; `telemetry_record(run_id: str, skill_id: str, level: str, network: bool, extra_read: int, extra_write: int, approval: str | None) -> dict`; `run_process_group(argv: list[str], cwd: Path, env: dict[str, str], timeout: int) -> SandboxResult` (POSIX); module globals `_PROBE`, `_launcher()`.
 - Produces (in `sandbox.policy`): `Policy(code_runner: str = "enabled", network: str = "ask", filesystem: str = "ask", require_sandbox: bool = False)` with `.as_dict() -> dict`; `DEFAULT_POLICY`, `FAIL_CLOSED_POLICY`; `platform_policy_path(platform: str | None = None) -> Path`; `policy_path() -> Path` (the path for this OS; tests patch it); `parse_policy(text: str) -> Policy` (raises `ValueError`); `load_policy() -> Policy`; `_is_posix() -> bool`; `_reset_cache() -> None`.
 - Produces (in `sandbox.paths`): `HOME_DENY: tuple[str, ...]`; `PathNotGrantable(ValueError)`; `is_within(child: Path, parent: Path) -> bool`; `check_grantable(path: Path, home: Path) -> None`; `normalize_grant_paths(raw, home: Path | None = None) -> list[Path]`; `normalize_hosts(raw) -> list[str]`.
@@ -963,12 +968,14 @@ git commit -m "feat: sandbox core (request/result types, fail-closed policy file
 ### Task 3: Approval store, approve/deny routes, status and opt-out routes
 
 **Files:**
+
 - Create: `web/sandbox/approvals.py`
 - Create: `web/routes/sandbox_routes.py`
 - Modify: `web/app.py` (router import next to line 70 `from routes.config_routes import router as config_router`; `app.include_router(sandbox_router)` after line 747 `app.include_router(auth_router)`)
 - Create: `tests/code_sandbox/test_approvals.py`, `tests/test_sandbox_routes.py`
 
 **Interfaces:**
+
 - Consumes: `sandbox.sandbox_level()`, `sandbox.sandbox_unavailable_reason()`, `sandbox.policy.load_policy() -> Policy`, `Policy.as_dict()`, `security.verify_csrf`, `config.load_config()`, `config.update_config(mutator)`.
 - Produces (in `sandbox.approvals`): `APPROVAL_TTL_SECONDS = 600`; `ApprovalError(status_code: int, detail: str)`; `ApprovalRequest(id: str, context_id: str, read_paths: tuple[str, ...], write_paths: tuple[str, ...], network_hosts: tuple[str, ...], created_at: float, status: str = "pending")`; `create(context_id, read_paths, write_paths, network_hosts, now=None) -> ApprovalRequest`; `lookup(context_id, read_paths, write_paths, network_hosts, now=None) -> tuple[str, ApprovalRequest | None]` where the status is `"none" | "pending" | "approved" | "denied" | "expired"` and `approved` consumes the request; `decide(request_id, context_id, approve: bool, now=None) -> ApprovalRequest`; `_reset()`; `_REQUESTS: dict[str, ApprovalRequest]`.
 - Produces (HTTP): `POST /api/sandbox/requests/{id}/approve` and `/deny` with body `{"context_id": str}` (CSRF) returning `{"ok": true, "request_id", "status"}`; 404 unknown/consumed, 409 other tab or already decided, 410 expired. `GET /api/sandbox/status` returning `{"level", "reason", "opted_out", "policy"}`. `POST /api/sandbox/opt-out` with `{"opted_out": bool}` (CSRF), 409 when the policy requires the sandbox; stores `code_runner_sandbox: "off"` or removes the key.
@@ -1409,6 +1416,7 @@ Port of `.superpowers/spike-appcontainer/ac.py` (proven on this machine 2026-10-
 Grant model rationale (deviation from the spec's "removed after the run" for runtime directories): measured on this machine, `icacls /grant ... (OI)(CI)RX` on a 30,000-file tree took 8.5 s and `/remove:g` another 8.5 s; `build/python_dist` has 30,568 files, the dev `.venv` 26,599 and the base interpreter 40,101. Per-run grant and revoke of runtime directories would add 17-40 s to every run. So one per-user profile `AIGator.CodeRunner` is reused, runtime directories get a persistent `RX` ACE for its SID (granted once, recorded in the ledger), and only the run folder and approved extras are granted per run and revoked. Because the SID is shared, runs are serialized (`_RUN_LOCK`) so one run's grants are never visible to another.
 
 **Files:**
+
 - Create: `web/sandbox/launcher_windows.py`
 - Modify: `web/sandbox/__init__.py` (add `sweep_stale_grants()` after `launch_sandboxed`)
 - Modify: `web/app.py` lifespan (before `from mcp.supervisor import respawn_all_on_startup, start_supervisor, stop_supervisor`, around line 689)
@@ -1417,6 +1425,7 @@ Grant model rationale (deviation from the spec's "removed after the run" for run
 - Create: `tests/code_sandbox/test_launcher_windows.py`
 
 **Interfaces:**
+
 - Consumes: `SandboxRequest`, `SandboxResult`, `SandboxUnavailable`, `build_env` (Task 2).
 - Produces (in `sandbox.launcher_windows`): `PROFILE_NAME = "AIGator.CodeRunner"`; `INTERNET_CLIENT_SID = "S-1-15-3-1"`; `ledger_path() -> Path` (`~/.gator/sandbox/grants.json`); `ace_spec(sid: str, perm: str, is_dir: bool) -> str`; `acl_grants(req) -> tuple[list[tuple[Path, str]], list[tuple[Path, str]]]` (runtime, per-run); `ensure_profile(name: str) -> tuple[c_void_p, str]`; `delete_profile(name: str) -> int`; `probe() -> str | None`; `launch(req) -> SandboxResult`; `sweep_stale_grants() -> int`; `revoke_runtime_grants() -> int`; private `_api()`, `_grant(path, sid, perm) -> tuple[int, str]`, `_revoke(path, sid) -> tuple[int, str]`, `_ledger_load() -> dict`, `_ledger_save(data)`, `_ledger_add_per_run(sid, path)`, `_ledger_remove_per_run(sid, path)`.
 - Produces (in `sandbox`): `sweep_stale_grants() -> int` (0 off Windows, never raises).
@@ -2148,11 +2157,13 @@ git commit -m "feat: Windows AppContainer launcher (ctypes, no admin): per-run g
 This launcher **cannot be run on this Windows machine**. It is verified by profile-builder tests that run on every OS, a real-run test that only runs on macOS (skipped here), and the manual release-gate smoke test in Task 9.
 
 **Files:**
+
 - Create: `web/sandbox/launcher_macos.py`
 - Create: `tests/code_sandbox/posix_sandbox_check.py` (shared with Task 6)
 - Create: `tests/code_sandbox/test_launcher_macos.py`
 
 **Interfaces:**
+
 - Consumes: `SandboxRequest`, `SandboxResult`, `SandboxUnavailable`, `run_process_group`, `build_env`.
 - Produces (in `sandbox.launcher_macos`): `SANDBOX_EXEC = "/usr/bin/sandbox-exec"`; `SYSTEM_READ_PATHS`; `build_profile(req: SandboxRequest) -> str`; `probe() -> str | None`; `launch(req) -> SandboxResult`.
 - Produces (tests): `tests/code_sandbox/posix_sandbox_check.py <linux|macos>` printing one JSON object with keys `probe`, `default`, `with_extra`, `tree_kill`, `leftover_sleepers`.
@@ -2427,10 +2438,12 @@ git commit -m "feat: macOS Seatbelt launcher (profile builder tested on every OS
 Real runs use the WSL Ubuntu on this machine (checked 2026-10-05: `bwrap` 0.11.1 at `/usr/bin/bwrap`, `python3` 3.14; an `--unshare-all` run printed output and got `Network is unreachable`). If WSL or bubblewrap is missing, the real test is skipped with the install command in the reason.
 
 **Files:**
+
 - Create: `web/sandbox/launcher_linux.py`
 - Create: `tests/code_sandbox/test_launcher_linux.py`
 
 **Interfaces:**
+
 - Consumes: `SandboxRequest`, `SandboxResult`, `SandboxUnavailable`, `run_process_group`, `tests/code_sandbox/posix_sandbox_check.py` (Task 5).
 - Produces (in `sandbox.launcher_linux`): `SYSTEM_RO_PATHS`, `ETC_RO_PATHS`, `BWRAP_MISSING: str`, `BWRAP_BLOCKED: str`; `build_argv(req: SandboxRequest, bwrap: str = "bwrap") -> list[str]`; `probe() -> str | None`; `launch(req) -> SandboxResult`.
 
@@ -2654,6 +2667,7 @@ git commit -m "feat: Linux bubblewrap launcher (argv builder tested on every OS;
 ### Task 7: `run_python` integration
 
 **Files:**
+
 - Modify: `web/skills/code_runner/tools.py` (imports at lines 3-20; new helpers after `_find_skill_dir`; `_tool_run_python` lines 232-477 replaced; `TOOL_DEFS` lines 480-518 replaced)
 - Modify: `web/skills/code_runner/SKILL.md` (frontmatter `description`; "Local filesystem access" section; the "Editing the user's file?" rule)
 - Modify: `web/agent_loop.py` (`_summarize_tool_calls`, lines 314-335)
@@ -2662,6 +2676,7 @@ git commit -m "feat: Linux bubblewrap launcher (argv builder tested on every OS;
 - Create: `tests/code_runner/test_run_python_sandbox.py`, `tests/code_sandbox/test_run_python_mode.py`, `tests/test_agent_loop_sandbox.py`
 
 **Interfaces:**
+
 - Consumes: `sandbox.SandboxRequest`, `sandbox.SandboxResult`, `sandbox.SandboxUnavailable`, `sandbox.launch_sandboxed`, `sandbox.sandbox_level`, `sandbox.sandbox_unavailable_reason`, `sandbox.build_env`, `sandbox.telemetry_record` (Task 2); `sandbox.policy.load_policy`, `Policy` (Task 2); `sandbox.paths.normalize_grant_paths`, `normalize_hosts`, `PathNotGrantable`, `is_within` (Task 2); `sandbox.approvals.lookup`, `create` (Task 3); `windows_container` fixture (Task 4).
 - Produces (in `skills.code_runner.tools`): `_tool_run_python(code, skill_id="", timeout=None, confirmed=False, packages=None, extra_read_paths=None, extra_write_paths=None, network_hosts=None, _install_timeout=120, _context_id="") -> dict`; `_sandbox_mode(cfg: dict, policy: Policy) -> tuple[str, str | None]` returning `("enforced"|"off"|"unavailable", reason)`; `_approval_gate(...) -> dict | tuple[list[Path], list[Path], list[str], str | None]`; `_runtime_paths(skill_dir: Path | None, npm_root: str | None) -> list[Path]`; `_with_sandbox_hint(stderr: str) -> str`; constants `_SANDBOX_HINT`, `_DISABLED_MSG`, `_NETWORK_REFUSED_MSG`, `_FS_REFUSED_MSG`, `_DENIED_MSG`, `_EXPIRED_MSG`, `_APPROVAL_MSG`. Every result after the gate carries `"sandbox": "enforced"|"off"` and `"_sandbox_telemetry"`; an approval request returns `{"approval_required": True, "request_id", "read_paths", "write_paths", "network_hosts", "message", "_sandbox_approval": {...}, "_sandbox_telemetry": {...}}` (the `_sandbox_approval` dict has keys `request_id`, `read_paths`, `write_paths`, `network_hosts`, `context_id`; consumed by Task 8).
 - Produces (in `agent_loop`): `_summarize_tool_calls` entries gain `"sandbox": <telemetry record>` when the result carries `_sandbox_telemetry`.
@@ -3617,6 +3632,7 @@ git commit -m "feat: run_python runs in the OS sandbox with user-approved extra 
 ### Task 8: UI — approval card, follow-up chat message, Settings notice and opt-out
 
 **Files:**
+
 - Modify: `web/agent_loop.py` (`_run_tool_block` after the `_jira_target_selection` branch, lines 513-514; SSE branches after lines 971-972 and 1487-1488)
 - Modify: `web/static/app.js` (stream handler after line 12092-12093 `msg.jira_target_selection` branch; new functions after `_showJiraTargetSelection`, which ends at line 8889; call in the Settings init after `_initClearCredentialsSettings();` at line 15781)
 - Modify: `web/static/index.html` (new row after the "Stored credentials" row, which ends just before `<!-- ═══ Google Workspace ═══ -->`, around line 693)
@@ -3624,6 +3640,7 @@ git commit -m "feat: run_python runs in the OS sandbox with user-approved extra 
 - Create: `tests/sandbox_ui.test.js`
 
 **Interfaces:**
+
 - Consumes: result key `_sandbox_approval` (Task 7) with keys `request_id`, `read_paths`, `write_paths`, `network_hosts`, `context_id`; `POST /api/sandbox/requests/{id}/approve|deny` with `{context_id}`, `GET /api/sandbox/status`, `POST /api/sandbox/opt-out` (Task 3); existing `_activeTabId`, `_showConnectivityToast`, `#chat-input`, `#chat-form`, `#messages`, `window.__CSRF_TOKEN__`, `/api/csrf`.
 - Produces: SSE event `{"sandbox_approval": {...}}`; JS functions `_sandboxFollowUpText(decision, requestId) -> string`, `_sendSandboxFollowUp(tabId, text)`, `_showSandboxApproval(data, ownerTabId)`, `_sandboxNoticeText(status) -> string`, `_initSandboxSettings()`; DOM ids `sandbox-row`, `sandbox-notice`, `sandbox-optout-label`, `sandbox-optout`.
 
@@ -3684,7 +3701,10 @@ function extract(name) {
   return match[0];
 }
 
-const followUp = vm.runInNewContext(extract('_sandboxFollowUpText') + '; _sandboxFollowUpText;', {});
+const followUp = vm.runInNewContext(
+  extract('_sandboxFollowUpText') + '; _sandboxFollowUpText;',
+  {},
+);
 const notice = vm.runInNewContext(extract('_sandboxNoticeText') + '; _sandboxNoticeText;', {});
 
 assert.match(followUp('approve', 'abc123'), /approved sandbox access request abc123/);
@@ -3699,7 +3719,12 @@ assert.match(
   /Install bubblewrap\..*blocked/,
 );
 assert.match(
-  notice({ level: 'unavailable', reason: 'x', opted_out: true, policy: { require_sandbox: false } }),
+  notice({
+    level: 'unavailable',
+    reason: 'x',
+    opted_out: true,
+    policy: { require_sandbox: false },
+  }),
   /without a sandbox/,
 );
 assert.match(
@@ -3719,7 +3744,7 @@ console.log('sandbox_ui: all assertions passed');
 - [ ] **Step 2: Run them to verify they fail**
 
 Run: `python -m pytest tests/test_agent_loop_sandbox.py -q && node tests/sandbox_ui.test.js`
-Expected: the two new Python tests FAIL; the Node script fails with "_sandboxFollowUpText not found in app.js".
+Expected: the two new Python tests FAIL; the Node script fails with "\_sandboxFollowUpText not found in app.js".
 
 - [ ] **Step 3: Implement the server side**
 
@@ -3782,7 +3807,10 @@ function _sandboxFollowUpText(decision, requestId) {
 
 function _sendSandboxFollowUp(tabId, text) {
   if (tabId !== _activeTabId) {
-    _showConnectivityToast('Decision saved. Switch to that tab and tell AI Gator to continue.', 'info');
+    _showConnectivityToast(
+      'Decision saved. Switch to that tab and tell AI Gator to continue.',
+      'info',
+    );
     return;
   }
   const input = document.getElementById('chat-input');
@@ -3874,7 +3902,10 @@ function _showSandboxApproval(data, ownerTabId) {
     const post = () =>
       fetch(`/api/sandbox/requests/${encodeURIComponent(requestId)}/${decision}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': window.__CSRF_TOKEN__ || '' },
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': window.__CSRF_TOKEN__ || '',
+        },
         body: JSON.stringify({ context_id: tabId }),
       });
     try {
@@ -3918,17 +3949,17 @@ function _showSandboxApproval(data, ownerTabId) {
 In `web/static/index.html`, directly after the "Stored credentials" `srow` block (just before `<!-- ═══ Google Workspace ═══ -->`):
 
 ```html
-            <!-- ═══ Code sandbox (shown only when the sandbox is unavailable) ═══ -->
-            <div class="srow integration-row-sep" id="sandbox-row" style="display: none">
-              <div class="srow-info">
-                <div class="srow-label">Code sandbox</div>
-                <div class="srow-sub" id="sandbox-notice"></div>
-                <label class="srow-sub" id="sandbox-optout-label" hidden>
-                  <input type="checkbox" id="sandbox-optout" />
-                  Allow code to run without a sandbox on this machine
-                </label>
-              </div>
-            </div>
+<!-- ═══ Code sandbox (shown only when the sandbox is unavailable) ═══ -->
+<div class="srow integration-row-sep" id="sandbox-row" style="display: none">
+  <div class="srow-info">
+    <div class="srow-label">Code sandbox</div>
+    <div class="srow-sub" id="sandbox-notice"></div>
+    <label class="srow-sub" id="sandbox-optout-label" hidden>
+      <input type="checkbox" id="sandbox-optout" />
+      Allow code to run without a sandbox on this machine
+    </label>
+  </div>
+</div>
 ```
 
 In `web/static/app.js`, directly after the closing `}` of `function _initClearCredentialsSettings()` add:
@@ -3972,7 +4003,10 @@ function _initSandboxSettings() {
     const post = () =>
       fetch('/api/sandbox/opt-out', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': window.__CSRF_TOKEN__ || '' },
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': window.__CSRF_TOKEN__ || '',
+        },
         body: JSON.stringify({ opted_out: wanted }),
       });
     try {
@@ -3997,7 +4031,7 @@ function _initSandboxSettings() {
 In the Settings init, directly after `  _initClearCredentialsSettings();` add:
 
 ```javascript
-  _initSandboxSettings();
+_initSandboxSettings();
 ```
 
 - [ ] **Step 6: Run the tests**
@@ -4021,12 +4055,14 @@ git commit -m "feat: sandbox approval card with follow-up chat message, and Sett
 ### Task 9: Linux packaging, documentation, tracker, full verification
 
 **Files:**
+
 - Modify: `shell/package.json` (`build.deb.depends`)
 - Modify: `tests/test_desktop_packaging.py` (append)
 - Modify: `docs/BUILD_INSTRUCTIONS.md` (Prerequisites platform notes, line 23; new section before `## Troubleshooting`; Troubleshooting table)
 - Modify: `docs/security/threatmodel-remediation.md` (row `H_Code_runner_skill_used_for_lateral_movem_06`, line 16)
 
 **Interfaces:**
+
 - Consumes: everything above; the measured run time from Task 4 Step 5 and the Task 1 decision.
 - Produces: documentation only, plus the `.deb` dependency on `bubblewrap`.
 
@@ -4104,7 +4140,7 @@ If the last command fails, unprivileged user namespaces are disabled or restrict
 `%ProgramData%\AIGator\sandbox-policy.json` (Windows), `/Library/Application Support/AIGator/sandbox-policy.json` (macOS), `/etc/aigator/sandbox-policy.json` (Linux; must be root-owned and not group/world-writable):
 
 ```json
-{"code_runner": "enabled", "network": "ask", "filesystem": "ask", "require_sandbox": false}
+{ "code_runner": "enabled", "network": "ask", "filesystem": "ask", "require_sandbox": false }
 ```
 
 `code_runner: disabled` blocks code execution, `network: deny` refuses network requests, `filesystem: strict` refuses extra paths, `require_sandbox: true` hides the user opt-out. A present but invalid file fails closed (`network: deny`, `filesystem: strict`, `require_sandbox: true`).
@@ -4118,13 +4154,13 @@ The macOS and Linux launchers are verified by unit tests on Windows (and Linux t
 3. Ask: "Use run_python to read ~/Documents/<some file>": an approval card appears; Approve runs it once; asking again shows a new card; Deny is not retried.
 4. Ask for a network call to `example.com:443`: card mentions network for the whole run; approved run succeeds; unapproved run fails with the `[sandbox]` hint.
 5. Rename `bwrap` away (Linux) or run on a machine without it: Settings shows the notice and the opt-out checkbox; code is blocked until opted out.
-Record the result (date, OS version, pass/fail per step) in the PR before release.
+   Record the result (date, OS version, pass/fail per step) in the PR before release.
 ````
 
 In the Troubleshooting table add a row (keep the column alignment style of the table):
 
 ```markdown
-| Code runs fail with "code sandbox is unavailable"      | Linux: install `bubblewrap` and allow unprivileged user namespaces (see "Code sandbox"); Windows/macOS: see the reason in Settings     |
+| Code runs fail with "code sandbox is unavailable" | Linux: install `bubblewrap` and allow unprivileged user namespaces (see "Code sandbox"); Windows/macOS: see the reason in Settings |
 ```
 
 - [ ] **Step 4: Update the tracker row**

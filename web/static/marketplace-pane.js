@@ -1984,7 +1984,10 @@
       skill,
       async () => {
         try {
-          const second = await _postJson('/api/marketplace/install', _consentPayload(payload, body));
+          const second = await _postJson(
+            '/api/marketplace/install',
+            _consentPayload(payload, body),
+          );
           const data = second.body || {};
           const ok = second.resp.ok && data.ok === true;
           if (ok && typeof window.registerUserSkill === 'function') {

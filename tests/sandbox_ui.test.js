@@ -10,19 +10,27 @@ const vm = require('vm');
 const source = fs.readFileSync(path.join(__dirname, '..', 'web', 'static', 'app.js'), 'utf8');
 
 function extract(name) {
-  const match = source.match(new RegExp(`(?:async )?function ${name}\\([^)]*\\)\\s*\\{[\\s\\S]*?\\n\\}`));
+  const match = source.match(
+    new RegExp(`(?:async )?function ${name}\\([^)]*\\)\\s*\\{[\\s\\S]*?\\n\\}`),
+  );
   assert(match, `${name} not found in app.js`);
   return match[0];
 }
 
-const followUp = vm.runInNewContext(extract('_sandboxFollowUpText') + '; _sandboxFollowUpText;', {});
+const followUp = vm.runInNewContext(
+  extract('_sandboxFollowUpText') + '; _sandboxFollowUpText;',
+  {},
+);
 const notice = vm.runInNewContext(extract('_sandboxNoticeText') + '; _sandboxNoticeText;', {});
 
 assert.match(followUp('approve', 'abc123'), /approved sandbox access request abc123/);
 assert.match(followUp('approve', 'abc123'), /exactly the same/);
 assert.match(followUp('deny', 'abc123'), /denied sandbox access request abc123/);
 assert.match(followUp('deny', 'abc123'), /Do not retry/);
-assert.match(followUp('approve', 'abc123', 'run_shell'), /Run the same run_shell call again with exactly the same command, cwd/);
+assert.match(
+  followUp('approve', 'abc123', 'run_shell'),
+  /Run the same run_shell call again with exactly the same command, cwd/,
+);
 assert.doesNotMatch(followUp('approve', 'abc123'), /run_shell/);
 
 assert.strictEqual(notice({ level: 'enforced', reason: null, opted_out: false, policy: {} }), '');
@@ -32,7 +40,12 @@ assert.match(
   /Install bubblewrap\..*blocked/,
 );
 assert.match(
-  notice({ level: 'unavailable', reason: 'x', opted_out: true, policy: { require_sandbox: false } }),
+  notice({
+    level: 'unavailable',
+    reason: 'x',
+    opted_out: true,
+    policy: { require_sandbox: false },
+  }),
   /without a sandbox/,
 );
 assert.match(
@@ -40,13 +53,21 @@ assert.match(
   /blocked/,
 );
 
-for (const name of ['_showSandboxApproval', '_initSandboxSettings', '_sendSandboxFollowUp', '_initSavedPermissions']) {
+for (const name of [
+  '_showSandboxApproval',
+  '_initSandboxSettings',
+  '_sendSandboxFollowUp',
+  '_initSavedPermissions',
+]) {
   assert(!/innerHTML/.test(extract(name)), `${name} must not use innerHTML`);
 }
 assert(source.includes('_showSandboxApproval(msg.sandbox_approval, requestTabId)'));
 assert(source.includes('  _initSandboxSettings();'));
 assert(source.includes('  _initSavedPermissions();'));
-assert(!/alert\(/.test(extract('_initSandboxSettings')), 'opt-out failure uses a toast, not alert()');
+assert(
+  !/alert\(/.test(extract('_initSandboxSettings')),
+  'opt-out failure uses a toast, not alert()',
+);
 
 // ── Behaviour against a fake DOM ─────────────────────────────────────────────
 function makeEl(tag) {
@@ -149,9 +170,13 @@ function makeEnv(activeTab) {
     Promise,
   };
   vm.createContext(ctx);
-  ['_sandboxFollowUpText', '_sendSandboxFollowUp', '_flushSandboxFollowUp', '_showSandboxApproval', '_renderTabSandboxCards'].forEach((n) =>
-    vm.runInContext(extract(n), ctx),
-  );
+  [
+    '_sandboxFollowUpText',
+    '_sendSandboxFollowUp',
+    '_flushSandboxFollowUp',
+    '_showSandboxApproval',
+    '_renderTabSandboxCards',
+  ].forEach((n) => vm.runInContext(extract(n), ctx));
   return { ctx, messages, input, form, toasts, fetches, calls };
 }
 
@@ -177,9 +202,18 @@ const flush = async () => {
   env.ctx._showSandboxApproval(card, 'tab-1');
   assert.strictEqual(env.messages.children.length, 1);
   const all = walk(env.messages);
-  assert(all.some((e) => e.tag === 'li' && e.textContent === evilPath), 'path rendered as text');
-  assert(all.some((e) => e.tag === 'li' && e.textContent === evilHost), 'host rendered as text');
-  assert(!all.some((e) => e.tag === 'img' || e.tag === 'script'), 'no elements created from model text');
+  assert(
+    all.some((e) => e.tag === 'li' && e.textContent === evilPath),
+    'path rendered as text',
+  );
+  assert(
+    all.some((e) => e.tag === 'li' && e.textContent === evilHost),
+    'host rendered as text',
+  );
+  assert(
+    !all.some((e) => e.tag === 'img' || e.tag === 'script'),
+    'no elements created from model text',
+  );
   assert.strictEqual(env.fetches.length, 0, 'rendering must not send any decision');
   assert.strictEqual(env.form.submits, 0, 'rendering must not send a chat message');
 
@@ -189,15 +223,24 @@ const flush = async () => {
 
   // Approve: CSRF POST for the right request, then exactly one ordinary chat turn.
   const buttons = all.filter((e) => e.tag === 'button');
-  assert.deepStrictEqual(buttons.map((b) => b.textContent), ['Allow for this tab', 'Allow once', 'Deny']);
-  assert(all.some((e) => /Allowed until you close this tab/.test(e._text)), 'footer states the tab-long lifetime');
+  assert.deepStrictEqual(
+    buttons.map((b) => b.textContent),
+    ['Allow for this tab', 'Allow once', 'Deny'],
+  );
+  assert(
+    all.some((e) => /Allowed until you close this tab/.test(e._text)),
+    'footer states the tab-long lifetime',
+  );
   await buttons[0].listeners.click({ stopPropagation() {} });
   await flush();
   assert.strictEqual(env.fetches.length, 1);
   assert.strictEqual(env.fetches[0].url, '/api/sandbox/requests/req1/approve');
   assert.strictEqual(env.fetches[0].opts.method, 'POST');
   assert.strictEqual(env.fetches[0].opts.headers['X-CSRF-Token'], 'aigator-fake-api-key');
-  assert.deepStrictEqual(JSON.parse(env.fetches[0].opts.body), { context_id: 'tab-1', scope: 'task' });
+  assert.deepStrictEqual(JSON.parse(env.fetches[0].opts.body), {
+    context_id: 'tab-1',
+    scope: 'task',
+  });
   assert.strictEqual(env.form.submits, 1);
   assert.match(env.form.sent[0], /approved sandbox access request req1/);
 
@@ -214,14 +257,23 @@ const flush = async () => {
   // "Allow once" sends scope "once".
   const envO = makeEnv('tab-1');
   envO.ctx._showSandboxApproval({ ...card, request_id: 'req2b' }, 'tab-1');
-  await walk(envO.messages).filter((e) => e.tag === 'button')[1].listeners.click({ stopPropagation() {} });
+  await walk(envO.messages)
+    .filter((e) => e.tag === 'button')[1]
+    .listeners.click({ stopPropagation() {} });
   await flush();
   assert.strictEqual(envO.fetches[0].url, '/api/sandbox/requests/req2b/approve');
-  assert.deepStrictEqual(JSON.parse(envO.fetches[0].opts.body), { context_id: 'tab-1', scope: 'once' });
+  assert.deepStrictEqual(JSON.parse(envO.fetches[0].opts.body), {
+    context_id: 'tab-1',
+    scope: 'once',
+  });
 
   // A failed decision sends no follow-up and re-enables the buttons.
   const env3 = makeEnv('tab-1');
-  env3.ctx.fetch = async () => ({ ok: false, status: 409, json: async () => ({ detail: 'already approved' }) });
+  env3.ctx.fetch = async () => ({
+    ok: false,
+    status: 409,
+    json: async () => ({ detail: 'already approved' }),
+  });
   env3.ctx._showSandboxApproval({ ...card, request_id: 'req3' }, 'tab-1');
   const btns3 = walk(env3.messages).filter((e) => e.tag === 'button');
   await btns3[0].listeners.click({ stopPropagation() {} });
@@ -257,10 +309,18 @@ const flush = async () => {
 
   // The POST uses the server's context id even when it differs from the tab id.
   const env6 = makeEnv('tab-1');
-  env6.ctx._showSandboxApproval({ ...card, request_id: 'req6', context_id: 'ctx-from-server' }, 'tab-1');
-  await walk(env6.messages).filter((e) => e.tag === 'button')[0].listeners.click({ stopPropagation() {} });
+  env6.ctx._showSandboxApproval(
+    { ...card, request_id: 'req6', context_id: 'ctx-from-server' },
+    'tab-1',
+  );
+  await walk(env6.messages)
+    .filter((e) => e.tag === 'button')[0]
+    .listeners.click({ stopPropagation() {} });
   await flush();
-  assert.deepStrictEqual(JSON.parse(env6.fetches[0].opts.body), { context_id: 'ctx-from-server', scope: 'task' });
+  assert.deepStrictEqual(JSON.parse(env6.fetches[0].opts.body), {
+    context_id: 'ctx-from-server',
+    scope: 'task',
+  });
 
   // A second click while the first is in flight does not send a second POST.
   const env7 = makeEnv('tab-1');
@@ -332,11 +392,17 @@ const flush = async () => {
   assert(env10.calls.slot >= 1 && env10.calls.placeholder >= 1);
 
   // The un-awaited follow-up cannot cause an unhandled rejection.
-  assert(/_sendSandboxFollowUp\(tabId, _sandboxFollowUpText\(decision, requestId, tool\)\)\.catch\(/.test(source));
+  assert(
+    /_sendSandboxFollowUp\(tabId, _sandboxFollowUpText\(decision, requestId, tool\)\)\.catch\(/.test(
+      source,
+    ),
+  );
 
   // I-2: the follow-up is flushed from the end of doSend (turn fully finished),
   // chat_done and [DONE] are delayed fallbacks only, and Stop drops the queued text.
-  const tailAt = source.search(/_resetBtn\(\);\s*setStatus\('ready'\);\s*\} else \{\s*_detachStop\(\);\s*\}/);
+  const tailAt = source.search(
+    /_resetBtn\(\);\s*setStatus\('ready'\);\s*\} else \{\s*_detachStop\(\);\s*\}/,
+  );
   assert(tailAt > 0, 'end of doSend found');
   const flushAt = source.indexOf('_flushSandboxFollowUp(requestTabId)', tailAt);
   const doSendCall = source.indexOf('await doSend();', tailAt);
@@ -344,7 +410,11 @@ const flush = async () => {
   assert(/setTimeout\(\(\) => _flushSandboxFollowUp\(msg\.context_id\), 1500\)/.test(source));
   assert(/setTimeout\(\(\) => _flushSandboxFollowUp\(requestTabId\), 1500\)/.test(source));
   assert(!/_flushSandboxFollowUp\(msg\.context_id\), 0\)/.test(source));
-  assert(/_userStopped = true;[\s\S]{0,200}_pendingSandboxFollowUps\.delete\(requestTabId\)/.test(source));
+  assert(
+    /_userStopped = true;[\s\S]{0,200}_pendingSandboxFollowUps\.delete\(requestTabId\)/.test(
+      source,
+    ),
+  );
 
   // ── run_shell card ──
   const shellCard = {
@@ -362,38 +432,71 @@ const flush = async () => {
   envS.ctx._showSandboxApproval(shellCard, 'tab-1');
   const allS = walk(envS.messages);
   assert(allS.some((e) => e.textContent === 'AI Gator wants to run a command'));
-  assert(allS.some((e) => e.textContent === shellCard.command), 'command rendered as text');
-  assert(!allS.some((e) => e.tag === 'img' || e.tag === 'b'), 'no elements created from the command');
-  assert(allS.some((e) => /any host/.test(e._text) && /scripts/.test(e._text)), 'Always allow risk is stated');
-  assert(allS.some((e) => /outbound network for this tab;/.test(e._text)), 'shell network note says tab');
+  assert(
+    allS.some((e) => e.textContent === shellCard.command),
+    'command rendered as text',
+  );
+  assert(
+    !allS.some((e) => e.tag === 'img' || e.tag === 'b'),
+    'no elements created from the command',
+  );
+  assert(
+    allS.some((e) => /any host/.test(e._text) && /scripts/.test(e._text)),
+    'Always allow risk is stated',
+  );
+  assert(
+    allS.some((e) => /outbound network for this tab;/.test(e._text)),
+    'shell network note says tab',
+  );
   assert(!allS.some((e) => /whole run/.test(e._text)));
-  assert(all.some((e) => /outbound network for the runs it covers;/.test(e._text)), 'python network note covers the approved runs');
+  assert(
+    all.some((e) => /outbound network for the runs it covers;/.test(e._text)),
+    'python network note covers the approved runs',
+  );
   const shellButtons = allS.filter((e) => e.tag === 'button');
-  assert.deepStrictEqual(shellButtons.map((b) => b.textContent), ['Allow for this tab', 'Always allow this', 'Deny']);
+  assert.deepStrictEqual(
+    shellButtons.map((b) => b.textContent),
+    ['Allow for this tab', 'Always allow this', 'Deny'],
+  );
   await shellButtons[0].listeners.click({ stopPropagation() {} });
   await flush();
   assert.strictEqual(envS.fetches[0].url, '/api/sandbox/requests/sh1/approve');
-  assert.deepStrictEqual(JSON.parse(envS.fetches[0].opts.body), { context_id: 'tab-1', scope: 'task' });
+  assert.deepStrictEqual(JSON.parse(envS.fetches[0].opts.body), {
+    context_id: 'tab-1',
+    scope: 'task',
+  });
   assert.match(envS.form.sent[0], /Run the same run_shell call again/);
 
   // Always allow sends scope "always"; an unsaveable request has no such button.
   const envA = makeEnv('tab-1');
   envA.ctx._showSandboxApproval({ ...shellCard, request_id: 'sh2' }, 'tab-1');
-  await walk(envA.messages).filter((e) => e.tag === 'button')[1].listeners.click({ stopPropagation() {} });
+  await walk(envA.messages)
+    .filter((e) => e.tag === 'button')[1]
+    .listeners.click({ stopPropagation() {} });
   await flush();
-  assert.deepStrictEqual(JSON.parse(envA.fetches[0].opts.body), { context_id: 'tab-1', scope: 'always' });
+  assert.deepStrictEqual(JSON.parse(envA.fetches[0].opts.body), {
+    context_id: 'tab-1',
+    scope: 'always',
+  });
   const envU = makeEnv('tab-1');
   envU.ctx._showSandboxApproval({ ...shellCard, request_id: 'sh3', saveable: false }, 'tab-1');
   assert.deepStrictEqual(
-    walk(envU.messages).filter((e) => e.tag === 'button').map((b) => b.textContent),
+    walk(envU.messages)
+      .filter((e) => e.tag === 'button')
+      .map((b) => b.textContent),
     ['Allow for this tab', 'Deny'],
   );
-  assert(!walk(envU.messages).some((e) => /any host/.test(e._text)), 'no Always-allow note without the button');
+  assert(
+    !walk(envU.messages).some((e) => /any host/.test(e._text)),
+    'no Always-allow note without the button',
+  );
 
   // Deny on a command card sends no scope.
   const envD = makeEnv('tab-1');
   envD.ctx._showSandboxApproval({ ...shellCard, request_id: 'sh4' }, 'tab-1');
-  const denyBtn = walk(envD.messages).filter((e) => e.tag === 'button').pop();
+  const denyBtn = walk(envD.messages)
+    .filter((e) => e.tag === 'button')
+    .pop();
   await denyBtn.listeners.click({ stopPropagation() {} });
   await flush();
   assert.deepStrictEqual(JSON.parse(envD.fetches[0].opts.body), { context_id: 'tab-1' });
@@ -404,7 +507,11 @@ const flush = async () => {
     const clear = makeEl('button');
     clear.hidden = true;
     const row = makeEl('div');
-    const byId = { 'saved-permissions-row': row, 'saved-permissions-list': list, 'saved-permissions-clear': clear };
+    const byId = {
+      'saved-permissions-row': row,
+      'saved-permissions-list': list,
+      'saved-permissions-clear': clear,
+    };
     const calls = [];
     const confirms = [];
     const state = { entries };
@@ -423,7 +530,8 @@ const flush = async () => {
         const method = opts.method || 'GET';
         calls.push({ url, method, headers: opts.headers });
         if (method === 'DELETE' && url.endsWith('/saved-permissions')) state.entries = [];
-        else if (method === 'DELETE') state.entries = state.entries.filter((e) => !url.endsWith(encodeURIComponent(e.id)));
+        else if (method === 'DELETE')
+          state.entries = state.entries.filter((e) => !url.endsWith(encodeURIComponent(e.id)));
         return { ok: true, status: 200, json: async () => ({ ok: true, entries: state.entries }) };
       },
     };
@@ -441,7 +549,10 @@ const flush = async () => {
   assert.strictEqual(sEnv.calls[0].method, 'GET');
   assert.strictEqual(sEnv.calls[0].headers['X-CSRF-Token'], 'aigator-fake-api-key');
   const rows = walk(sEnv.list);
-  assert(rows.some((e) => e.textContent === evilDesc), 'description rendered as text');
+  assert(
+    rows.some((e) => e.textContent === evilDesc),
+    'description rendered as text',
+  );
   assert(!rows.some((e) => e.tag === 'img'));
   assert.strictEqual(sEnv.clear.hidden, false);
   assert.strictEqual(typeof sEnv.ctx.window._refreshSavedPermissions, 'function');
@@ -452,15 +563,24 @@ const flush = async () => {
   const del = sEnv.calls.find((c) => c.method === 'DELETE');
   assert.strictEqual(del.url, '/api/sandbox/saved-permissions/e%2F2');
   assert.strictEqual(del.headers['X-CSRF-Token'], 'aigator-fake-api-key');
-  assert.strictEqual(walk(sEnv.list).filter((e) => e.tag === 'button').length, 1, 'list refreshed after Remove');
+  assert.strictEqual(
+    walk(sEnv.list).filter((e) => e.tag === 'button').length,
+    1,
+    'list refreshed after Remove',
+  );
   assert.strictEqual(sEnv.confirms.length, 0, 'single Remove does not ask');
 
   await sEnv.clear.listeners.click({ stopPropagation() {} });
   await flush();
   assert.strictEqual(sEnv.confirms.length, 1, 'Remove all asks first');
-  assert(sEnv.calls.some((c) => c.method === 'DELETE' && c.url === '/api/sandbox/saved-permissions'));
+  assert(
+    sEnv.calls.some((c) => c.method === 'DELETE' && c.url === '/api/sandbox/saved-permissions'),
+  );
   assert.strictEqual(sEnv.clear.hidden, true);
-  assert(walk(sEnv.list).some((e) => /Nothing saved/.test(e.textContent)), 'empty state shown');
+  assert(
+    walk(sEnv.list).some((e) => /Nothing saved/.test(e.textContent)),
+    'empty state shown',
+  );
 
   // Remove all does nothing when the user cancels.
   const cEnv = makeSettingsEnv([{ id: 'e1', description: 'x', created: 1 }]);
@@ -483,9 +603,15 @@ const flush = async () => {
     (opts.method || 'GET') === 'GET'
       ? { ok: false, status: 500, json: async () => ({}) }
       : okFetch(url, opts);
-  await walk(fEnv.list).filter((e) => e.tag === 'button')[0].listeners.click({ stopPropagation() {} });
+  await walk(fEnv.list)
+    .filter((e) => e.tag === 'button')[0]
+    .listeners.click({ stopPropagation() {} });
   await flush();
-  assert.strictEqual(walk(fEnv.list).filter((e) => e.tag === 'button').length, 0, 'no stale Remove buttons');
+  assert.strictEqual(
+    walk(fEnv.list).filter((e) => e.tag === 'button').length,
+    0,
+    'no stale Remove buttons',
+  );
   assert(!walk(fEnv.list).some((e) => e.textContent === 'second'), 'no stale rows');
   assert(walk(fEnv.list).some((e) => e.textContent === 'Could not load saved permissions.'));
   assert.strictEqual(fEnv.clear.hidden, true);

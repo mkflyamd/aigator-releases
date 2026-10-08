@@ -258,7 +258,13 @@ If the last command fails, unprivileged user namespaces are disabled or restrict
 `%ProgramData%\AIGator\sandbox-policy.json` (Windows), `/Library/Application Support/AIGator/sandbox-policy.json` (macOS), `/etc/aigator/sandbox-policy.json` (Linux; must be root-owned and not group/world-writable):
 
 ```json
-{"code_runner": "enabled", "network": "ask", "filesystem": "ask", "require_sandbox": false, "saved_permissions": "allow"}
+{
+  "code_runner": "enabled",
+  "network": "ask",
+  "filesystem": "ask",
+  "require_sandbox": false,
+  "saved_permissions": "allow"
+}
 ```
 
 `code_runner: disabled` blocks code execution, `network: deny` refuses network requests, `filesystem: strict` refuses extra paths, `require_sandbox: true` hides the user opt-out. `saved_permissions: deny` hides "Always allow this" on command approvals and ignores permissions already saved (task approvals still work); the default is `allow`. A present but invalid file fails closed (`network: deny`, `filesystem: strict`, `require_sandbox: true`, `saved_permissions: deny`). The file must be UTF-8 without a BOM (a BOM makes it invalid). On Windows the file's ACL is not checked, so restrict write access to `%ProgramData%\AIGator` to administrators.
@@ -268,6 +274,7 @@ If the last command fails, unprivileged user namespaces are disabled or restrict
 `run_shell` uses the same launcher, deny list, policy file and approval card as `run_python`. A command runs with no card when it needs only its working folder (the scratch folder `~/.gator/work`, or a folder already approved), the system tools and no network. A new working folder, extra paths or network need a card with two choices: **Allow for this tab** (until you close that tab) and **Always allow this** (saved in the encrypted store; managed under Settings, "Saved permissions"). The store protects against casual reading and against the model's own file tools, which are refused access to the secrets folder (`~/.gator/secrets`), so the model cannot add a saved permission itself. Same-user code that runs outside the sandbox (malware, MCP filesystem servers, a run with the sandbox turned off) could still forge one; that is out of scope. "Always allow" is not offered for commands that run an interpreter or shell (`python`, `node`, `bash`, `powershell`, `cmd`, `wsl`, `npx`, ...) or that use command substitution, `eval`, `source` or `-c`-style code arguments. An approval is bound to the tool and, for `run_shell`, to the exact command, so an approval for one command cannot be used by a different command.
 
 Behavior to know about:
+
 - Windows: with the sandbox enforced the shell is **cmd.exe only**. WSL is never used (it reaches the whole user profile through `/mnt/c`), Git Bash cannot start in an AppContainer, and PowerShell cannot set its working folder. A call that asks for `bash` or `powershell` returns an error that says so. This changes the default on machines where WSL was the default shell. `dir` and `git` do not work inside a project folder (Windows needs list access on the parent folders); the hint tells the model to use the file tools to list files and to ask you to run git.
 - macOS and Linux: `bash` or `sh` under Seatbelt or bubblewrap, system tool folders read-only.
 - Windows speed: `run_shell` uses its own AppContainer profile, and the scratch folder (`~/.gator/work`) gets one persistent modify grant for that profile instead of a grant and revoke on every run (a scratch folder holding `node_modules` took about 50 s per command that way). The first `run_shell` after install pays a one-time setup (about 1 minute on a scratch folder with 28,000 files); later runs take about half a second. A project folder you approve (`cwd`) is still granted and revoked per run, so a very large project is slow on Windows.

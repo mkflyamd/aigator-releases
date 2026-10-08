@@ -23,10 +23,12 @@
 ### Task 1: Non-Windows backend in `secure_store`
 
 **Files:**
+
 - Modify: `web/secure_store.py` (imports; `_protect`/`_unprotect` at lines 77-82; new vault section)
 - Create: `tests/test_secure_store_vault.py`
 
 **Interfaces:**
+
 - Produces: `_platform() -> str`, `_use_dpapi() -> bool`, `_VaultUnavailable(Exception)`, `_vault_get() -> str | None`, `_vault_set(value: str) -> None`, `_key_file() -> Path`, `_master_key() -> bytes`, `_vault_protect(data: bytes) -> bytes`, `_vault_unprotect(blob: bytes) -> bytes`, `protection_level() -> str` returning `"os-vault"`, `"key-file"` or `"unavailable"`. Module globals `_MASTER: bytes | None`, `_LEVEL: str`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -366,12 +368,14 @@ git commit -m "feat: secure_store backend for macOS and Linux (vault-held AES-GC
 ### Task 2: Protection-level route and Settings notice
 
 **Files:**
+
 - Modify: `web/routes/auth.py` (add route after `clear_credentials`)
 - Modify: `web/static/index.html` (Stored credentials row, around line 680-684)
 - Modify: `web/static/app.js` (`_initClearCredentialsSettings`, around line 15784)
 - Create: `tests/test_auth_storage_route.py`
 
 **Interfaces:**
+
 - Consumes: `secure_store.protection_level() -> str`.
 - Produces: `GET /api/auth/storage` returning `{"level": "os-vault" | "key-file" | "unavailable"}`.
 
@@ -420,30 +424,30 @@ def storage_level():  # sync: protection_level() may call the OS vault
 In `web/static/index.html`, inside the `srow-info` of the Stored credentials row, after the existing `srow-sub` div:
 
 ```html
-                <div class="srow-sub" id="storage-level-notice" hidden></div>
+<div class="srow-sub" id="storage-level-notice" hidden></div>
 ```
 
 In `web/static/app.js`, in `_initClearCredentialsSettings`, immediately after `function _initClearCredentialsSettings() {`:
 
 ```javascript
-  const notice = document.getElementById('storage-level-notice');
-  if (notice) {
-    fetch('/api/auth/storage')
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => {
-        const msg = {
-          'key-file':
-            'Linux keyring not found — credentials are protected at a reduced level (key stored in a user-only file). Install or unlock gnome-keyring or KWallet, then restart AI Gator to upgrade.',
-          unavailable:
-            'Secure credential storage is unavailable, so sign-in tokens cannot be saved. Unlock the system keychain and restart AI Gator.',
-        }[d && d.level];
-        if (msg) {
-          notice.textContent = msg;
-          notice.hidden = false;
-        }
-      })
-      .catch(() => {});
-  }
+const notice = document.getElementById('storage-level-notice');
+if (notice) {
+  fetch('/api/auth/storage')
+    .then((r) => (r.ok ? r.json() : null))
+    .then((d) => {
+      const msg = {
+        'key-file':
+          'Linux keyring not found — credentials are protected at a reduced level (key stored in a user-only file). Install or unlock gnome-keyring or KWallet, then restart AI Gator to upgrade.',
+        unavailable:
+          'Secure credential storage is unavailable, so sign-in tokens cannot be saved. Unlock the system keychain and restart AI Gator.',
+      }[d && d.level];
+      if (msg) {
+        notice.textContent = msg;
+        notice.hidden = false;
+      }
+    })
+    .catch(() => {});
+}
 ```
 
 - [ ] **Step 4: Run the tests**
@@ -463,6 +467,7 @@ git commit -m "feat: report credential protection level and show a Settings noti
 ### Task 3: Dependencies and packaging
 
 **Files:**
+
 - Modify: `pyproject.toml` (dependencies list, after the `pywinpty` line)
 - Modify: `web/requirements.txt` (after the `pystray` line)
 - Modify: `packaging/aigator-backend.spec`
@@ -532,7 +537,7 @@ Regenerate the lock: `uv lock`. If it cannot reach the network, stop and report;
 - [ ] **Step 4: Run the tests**
 
 Run: `python -m pytest tests/test_packaging_vault_imports.py -q && git diff --stat uv.lock`
-Expected: pass; `uv.lock` shows only keyring-related additions (plus transitive packages such as SecretStorage, jeepney, jaraco.* for non-Windows markers).
+Expected: pass; `uv.lock` shows only keyring-related additions (plus transitive packages such as SecretStorage, jeepney, jaraco.\* for non-Windows markers).
 
 - [ ] **Step 5: Commit**
 
@@ -546,6 +551,7 @@ git commit -m "build: add keyring and cryptography for non-Windows secure store 
 ### Task 4: Documentation and full verification
 
 **Files:**
+
 - Modify: `docs/superpowers/specs/2026-10-05-secure-store-macos-linux-design.md` (upgrade wording)
 - Modify: `docs/superpowers/specs/2026-10-05-oauth-token-storage-design.md` (supersession note)
 - Modify: `docs/security/threatmodel-remediation.md` (OAuth row)

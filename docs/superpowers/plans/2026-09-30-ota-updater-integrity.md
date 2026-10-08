@@ -22,9 +22,11 @@
 ### Task 1: Embed SHA-256 checksum in the published manifest
 
 **Files:**
+
 - Modify: `build/release.bat:218-273`
 
 **Interfaces:**
+
 - Produces: `latest.json` manifest now contains a `"sha256"` field (lowercase 64-hex-char string) alongside `version`/`url`/`notes`. Task 2 depends on this field existing.
 
 This is a release-ops batch script with no existing automated test coverage in this repo (no `.bat` tests exist); verification here is a manual dry run instead of TDD.
@@ -98,10 +100,12 @@ git commit -m "build: embed installer SHA-256 checksum in OTA manifest"
 ### Task 2: Pin manifest URL/asset and validate checksum format before accepting an update
 
 **Files:**
+
 - Modify: `web/updater.py:1-83` (imports, `UpdateInfo` dataclass, `check_for_update()`)
 - Test: `tests/test_updater.py`
 
 **Interfaces:**
+
 - Consumes: nothing from Task 1 at runtime (the manifest is fetched over HTTP; Task 1 only changes what's published).
 - Produces: `UpdateInfo` gains a `sha256: str` field. `check_for_update()` only returns a non-`None` `UpdateInfo` (and only sets `_state.state = "available"`) when `url` matches the pinned pattern and `sha256` is well-formed. Task 3 and Task 4 consume `_state.info.sha256` and `_state.info.url`.
 
@@ -238,7 +242,7 @@ _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 # Must match build/build.bat's SIGN_THUMBPRINT. If the signing cert is ever
 # rotated, update both locations together.
-EXPECTED_SIGNING_THUMBPRINT = "B09F5EF43A1D7BF0F97C4883D723BA1AF67A7F42"
+EXPECTED_SIGNING_THUMBPRINT = "B09F5EF43A1D7BF0F97C4883D723BA1AF67A7F42"  # pragma: allowlist secret
 ```
 
 Update the `UpdateInfo` dataclass (lines 26-30):
@@ -306,10 +310,12 @@ git commit -m "feat: pin OTA manifest URL and validate checksum format before ac
 ### Task 3: Verify downloaded installer checksum before marking the update ready
 
 **Files:**
+
 - Modify: `web/updater.py:86-121` (`download_update()`)
 - Test: `tests/test_updater.py`
 
 **Interfaces:**
+
 - Consumes: `_state.info.sha256` (produced by Task 2).
 - Produces: `download_update()` now computes `hashlib.sha256(...)` of the downloaded file and only proceeds past that point on a match; on mismatch, deletes the file and sets `_state.state = "error"`, `_state.error = "checksum mismatch"`. Task 4 inserts its own check immediately after this one, before the final `_state.state = "ready"` assignment.
 
@@ -411,10 +417,12 @@ git commit -m "feat: verify downloaded OTA installer checksum before marking it 
 ### Task 4: Verify Authenticode signature and pinned thumbprint before marking the update ready
 
 **Files:**
+
 - Modify: `web/updater.py:86-121,124-138` (`download_update()`, new `_verify_authenticode_signature()` helper, `launch_installer()` import cleanup)
 - Test: `tests/test_updater.py`
 
 **Interfaces:**
+
 - Consumes: `EXPECTED_SIGNING_THUMBPRINT` (from Task 2), the checksum-verified file at `tmp_path` (from Task 3).
 - Produces: `_verify_authenticode_signature(path: Path) -> tuple[bool, str]` — `(True, "")` on a valid signature matching the pinned thumbprint, else `(False, "invalid signature")` or `(False, "untrusted signer")`. `download_update()` calls this immediately after the checksum check and before setting `_state.state = "ready"`.
 
@@ -668,9 +676,11 @@ git commit -m "feat: verify Authenticode signature and pinned thumbprint before 
 ### Task 5: Add route-level regression test for install-gating, then run the full suite
 
 **Files:**
+
 - Create: `tests/test_updater_routes.py`
 
 **Interfaces:**
+
 - Consumes: `web/routes/updater.py`'s existing `install_update()` endpoint (unmodified by this plan) and the bare `updater` module it imports (`web/routes/updater.py:5` does `import updater`, not `import web.updater` — this test must patch the same bare `updater` module, since pytest's `tests/conftest.py:12` puts `web/` on `sys.path` and a bare `import updater` resolves to a separate module object from `import web.updater`, used everywhere else in this plan).
 - Produces: regression coverage proving `/api/update/install` refuses to launch anything unless state is `"ready"` — already true today via the early return in `install_update()`, and must stay true now that more paths can land in `"error"`.
 

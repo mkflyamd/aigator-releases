@@ -7144,7 +7144,10 @@ const atlassianSiteLists = {
   confluence: document.querySelector('#atlassian-confluence-sites .site-list'),
 };
 const ATLASSIAN_SITE_PLACEHOLDERS = {
-  jira: ['Primary Jira URL (e.g. https://your-org.atlassian.net)', 'https://other-org.atlassian.net'],
+  jira: [
+    'Primary Jira URL (e.g. https://your-org.atlassian.net)',
+    'https://other-org.atlassian.net',
+  ],
   confluence: [
     'Primary Confluence URL (e.g. https://your-org.atlassian.net/wiki)',
     'https://other-org.atlassian.net/wiki',
@@ -7196,7 +7199,9 @@ function setAtlassianSites(kind, primary, extras) {
 function atlassianSiteValues(kind) {
   const list = atlassianSiteLists[kind];
   if (!list) return [];
-  const [primary = '', ...extras] = Array.from(list.querySelectorAll('input')).map((i) => i.value.trim());
+  const [primary = '', ...extras] = Array.from(list.querySelectorAll('input')).map((i) =>
+    i.value.trim(),
+  );
   return [primary, ...extras.filter(Boolean)];
 }
 
@@ -8908,7 +8913,11 @@ function _buildJiraFieldRows(data, editable = {}) {
     rows.push(['Summary', '<strong>' + escapeHtml(data.summary) + '</strong>']);
   }
   if (editable.description && data.description !== undefined) {
-    rows.push(['Description', _jiraEditRow('description', 'Description', data.description, 'text'), 'edit']);
+    rows.push([
+      'Description',
+      _jiraEditRow('description', 'Description', data.description, 'text'),
+      'edit',
+    ]);
   } else if (data.description) {
     const { html, block } = _renderJiraFieldValue('description', data.description);
     rows.push(['Description', html, block]);
@@ -8925,7 +8934,16 @@ function _buildJiraFieldRows(data, editable = {}) {
   if (data.fields && typeof data.fields === 'object') {
     Object.entries(data.fields).forEach(([key, value]) => {
       if (editable[key] && (key === 'comment' || key === 'summary' || key === 'description')) {
-        rows.push([key, _jiraEditRow(key, key.charAt(0).toUpperCase() + key.slice(1), value, key === 'summary' ? 'line' : 'text'), 'edit']);
+        rows.push([
+          key,
+          _jiraEditRow(
+            key,
+            key.charAt(0).toUpperCase() + key.slice(1),
+            value,
+            key === 'summary' ? 'line' : 'text',
+          ),
+          'edit',
+        ]);
         return;
       }
       const { html, block } = _renderJiraFieldValue(key, value);
@@ -9038,7 +9056,10 @@ const _pendingSandboxFollowUps = new Map();
 
 async function _sendSandboxFollowUp(tabId, text) {
   if (tabId !== _activeTabId) {
-    _showConnectivityToast('Decision saved. Switch to that tab and tell AI Gator to continue.', 'info');
+    _showConnectivityToast(
+      'Decision saved. Switch to that tab and tell AI Gator to continue.',
+      'info',
+    );
     return;
   }
   if (_chatTaskIds.has(tabId)) {
@@ -9086,7 +9107,9 @@ function _showSandboxApproval(data, ownerTabId) {
   _pendingSandboxCards.get(cardTab).set(requestId, data);
   if (ownerTabId && ownerTabId !== _activeTabId) {
     _tabsWithUpdates.add(ownerTabId);
-    document.querySelector?.(`.tab-item[data-tab-id="${ownerTabId}"]`)?.classList.add('tab-has-update');
+    document
+      .querySelector?.(`.tab-item[data-tab-id="${ownerTabId}"]`)
+      ?.classList.add('tab-has-update');
     _showConnectivityToast('AI Gator needs your approval in another tab.', 'info');
     return;
   }
@@ -9152,7 +9175,12 @@ function _showSandboxApproval(data, ownerTabId) {
     note.textContent = `Approving turns on outbound network for ${isShell ? 'this tab' : 'the runs it covers'}; the host is shown to you but not enforced.`;
     body.appendChild(note);
   }
-  if (isShell && data.saveable === true && Array.isArray(data.network_hosts) && data.network_hosts.length) {
+  if (
+    isShell &&
+    data.saveable === true &&
+    Array.isArray(data.network_hosts) &&
+    data.network_hosts.length
+  ) {
     const risk = document.createElement('div');
     risk.className = 'gcc-refine';
     risk.textContent =
@@ -9186,7 +9214,8 @@ function _showSandboxApproval(data, ownerTabId) {
   footer.className = 'gcc-footer';
   const footNote = document.createElement('span');
   footNote.className = 'gcc-refine';
-  footNote.textContent = 'Allowed until you close this tab. Unanswered requests expire after 10 minutes.';
+  footNote.textContent =
+    'Allowed until you close this tab. Unanswered requests expire after 10 minutes.';
   footer.appendChild(footNote);
 
   box.append(header, body, actions, footer);
@@ -9205,8 +9234,14 @@ function _showSandboxApproval(data, ownerTabId) {
     const post = () =>
       fetch(`/api/sandbox/requests/${encodeURIComponent(requestId)}/${decision}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': window.__CSRF_TOKEN__ || '' },
-        body: JSON.stringify({ context_id: contextId, ...(decision === 'approve' ? { scope } : {}) }),
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': window.__CSRF_TOKEN__ || '',
+        },
+        body: JSON.stringify({
+          context_id: contextId,
+          ...(decision === 'approve' ? { scope } : {}),
+        }),
       });
     try {
       let res = await post();
@@ -14874,7 +14909,8 @@ function _expireConfirmCard(card) {
   const textWrap = document.createElement('div');
   textWrap.style.cssText = 'flex: 1; min-width: 0;';
   const titleEl = document.createElement('div');
-  titleEl.style.cssText = 'font-size: 0.85rem; font-weight: 600; color: var(--text); margin-bottom: 2px;';
+  titleEl.style.cssText =
+    'font-size: 0.85rem; font-weight: 600; color: var(--text); margin-bottom: 2px;';
   titleEl.textContent = title ? `${title} (expired)` : 'Request expired';
   const note = document.createElement('div');
   note.style.cssText = 'font-size: 0.78rem; color: var(--text-muted);';
@@ -14897,7 +14933,9 @@ function _expireConfirmCard(card) {
 }
 
 function _expireConfirmCardById(confirm_id) {
-  _expireConfirmCard(document.querySelector(`[data-confirm-id="${CSS.escape(String(confirm_id))}"]`));
+  _expireConfirmCard(
+    document.querySelector(`[data-confirm-id="${CSS.escape(String(confirm_id))}"]`),
+  );
 }
 
 function _showBrowserConfirmCard(msgDiv, { confirm_id, action, title, allow_label, deny_label }) {
@@ -16366,7 +16404,10 @@ function _initSandboxSettings() {
     const post = () =>
       fetch('/api/sandbox/opt-out', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': window.__CSRF_TOKEN__ || '' },
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': window.__CSRF_TOKEN__ || '',
+        },
         body: JSON.stringify({ opted_out: wanted }),
       });
     try {
@@ -16393,7 +16434,8 @@ function _initSavedPermissions() {
   const clear = document.getElementById('saved-permissions-clear');
   if (!row || !list || !clear) return;
   const call = async (method, url) => {
-    const send = () => fetch(url, { method, headers: { 'X-CSRF-Token': window.__CSRF_TOKEN__ || '' } });
+    const send = () =>
+      fetch(url, { method, headers: { 'X-CSRF-Token': window.__CSRF_TOKEN__ || '' } });
     let res = await send();
     if (res.status === 403) {
       const fresh = await fetch('/api/csrf')
@@ -16411,7 +16453,8 @@ function _initSavedPermissions() {
     if (!entries.length) {
       const empty = document.createElement('div');
       empty.className = 'srow-sub';
-      empty.textContent = 'Nothing saved yet. Choose "Always allow this" on a command approval to save one here.';
+      empty.textContent =
+        'Nothing saved yet. Choose "Always allow this" on a command approval to save one here.';
       list.appendChild(empty);
       return;
     }
@@ -16448,7 +16491,8 @@ function _initSavedPermissions() {
       .then(refresh);
   clear.addEventListener('click', (e) => {
     e.stopPropagation();
-    if (!confirm('Remove all saved command permissions? AI Gator will ask again next time.')) return;
+    if (!confirm('Remove all saved command permissions? AI Gator will ask again next time.'))
+      return;
     act('DELETE', '/api/sandbox/saved-permissions');
   });
   window._refreshSavedPermissions = refresh;

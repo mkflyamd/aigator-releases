@@ -33,25 +33,25 @@ Spec: [2026-10-05-oauth-token-storage-design.md](../specs/2026-10-05-oauth-token
 
 ## File Structure
 
-| File | Responsibility |
-|---|---|
-| `web/secure_store.py` (new) | DPAPI blobs, legacy table + migration, `get/set/delete/list_names/get_json/set_json/migrate_all` |
-| `tests/conftest.py` (modify) | autouse fixture: temp home + fake backend for `secure_store` |
-| `tests/test_secure_store.py` (new) | unit + migration tests |
-| `web/oauth/storage.py` (modify) | same API, backed by `secure_store` (`oauth/<id>`) |
-| `web/oauth/provider.py`, `web/oauth/dcr.py` (modify) | capture optional `revocation_endpoint` |
-| `web/skills/m365-email/graph_client.py` (modify) | token load/save via `secure_store`; `TOKEN_FILE` kept as legacy symbol for the 7 wrappers |
-| `web/skills/_m365/helpers.py` (modify) | `get_teams_token()` via `secure_store` |
-| `web/skills/m365-teams/scripts/read_chats.py` (modify) | graph token + skype cache via `secure_store` |
-| `web/routes/auth.py` (modify) | token writes/reads via `secure_store`; new `POST /api/auth/clear` |
-| `web/routes/teams.py` (modify) | direct `token.json`/`teams_token.json` reads via `secure_store` |
-| `web/skills/slack/mcp_client.py` (modify) | token + PKCE via `secure_store` |
-| `web/config.py` (modify) | PAT overlay on load, split on write, `.bak`/`.damaged` scrub |
-| `web/app.py` (modify) | startup `migrate_all()` + config scrub |
-| `web/static/index.html`, `web/static/app.js` (modify) | Settings "Clear stored credentials" button |
-| `tests/test_token_storage_guard.py` (new) | asserts no module writes token JSON |
-| `tests/test_*_characterization*.py`, `tests/test_token_rotation.py` (new) | behavior locks |
-| `docs/security/threatmodel-remediation.md`, `reset-auth.ps1` (modify) | tracker + dev script |
+| File                                                                      | Responsibility                                                                                   |
+| ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `web/secure_store.py` (new)                                               | DPAPI blobs, legacy table + migration, `get/set/delete/list_names/get_json/set_json/migrate_all` |
+| `tests/conftest.py` (modify)                                              | autouse fixture: temp home + fake backend for `secure_store`                                     |
+| `tests/test_secure_store.py` (new)                                        | unit + migration tests                                                                           |
+| `web/oauth/storage.py` (modify)                                           | same API, backed by `secure_store` (`oauth/<id>`)                                                |
+| `web/oauth/provider.py`, `web/oauth/dcr.py` (modify)                      | capture optional `revocation_endpoint`                                                           |
+| `web/skills/m365-email/graph_client.py` (modify)                          | token load/save via `secure_store`; `TOKEN_FILE` kept as legacy symbol for the 7 wrappers        |
+| `web/skills/_m365/helpers.py` (modify)                                    | `get_teams_token()` via `secure_store`                                                           |
+| `web/skills/m365-teams/scripts/read_chats.py` (modify)                    | graph token + skype cache via `secure_store`                                                     |
+| `web/routes/auth.py` (modify)                                             | token writes/reads via `secure_store`; new `POST /api/auth/clear`                                |
+| `web/routes/teams.py` (modify)                                            | direct `token.json`/`teams_token.json` reads via `secure_store`                                  |
+| `web/skills/slack/mcp_client.py` (modify)                                 | token + PKCE via `secure_store`                                                                  |
+| `web/config.py` (modify)                                                  | PAT overlay on load, split on write, `.bak`/`.damaged` scrub                                     |
+| `web/app.py` (modify)                                                     | startup `migrate_all()` + config scrub                                                           |
+| `web/static/index.html`, `web/static/app.js` (modify)                     | Settings "Clear stored credentials" button                                                       |
+| `tests/test_token_storage_guard.py` (new)                                 | asserts no module writes token JSON                                                              |
+| `tests/test_*_characterization*.py`, `tests/test_token_rotation.py` (new) | behavior locks                                                                                   |
+| `docs/security/threatmodel-remediation.md`, `reset-auth.ps1` (modify)     | tracker + dev script                                                                             |
 
 Paths from skill files to `web/`: `web/skills/m365-email/graph_client.py` -> `parents[2]`; `web/skills/_m365/helpers.py` -> `parents[2]`; `web/skills/slack/mcp_client.py` -> `parents[2]`; `web/skills/m365-teams/scripts/read_chats.py` -> `parents[3]`.
 
@@ -78,11 +78,13 @@ def _secure_store():
 ### Task 1: `secure_store` module, test fixture, unit tests
 
 **Files:**
+
 - Create: `web/secure_store.py`
 - Modify: `tests/conftest.py` (add one autouse fixture after the imports)
 - Test: `tests/test_secure_store.py`
 
 **Interfaces:**
+
 - Produces:
   - `class SecureStoreError(RuntimeError)`
   - `get(name: str) -> str | None`, `set(name: str, value: str) -> None`, `delete(name: str) -> None`, `list_names(prefix: str = "") -> list[str]`
@@ -572,10 +574,12 @@ git commit -m "feat: add DPAPI-backed secure_store with legacy-file migration"
 ### Task 2: `oauth/storage.py` on `secure_store`
 
 **Files:**
+
 - Modify: `web/oauth/storage.py`
 - Test: `tests/test_oauth_storage_characterization.py`
 
 **Interfaces:**
+
 - Consumes: `secure_store.get_json/set_json/delete` (Task 1).
 - Produces: unchanged `storage.load(pid)->dict`, `save(pid, data)`, `delete(pid)`, `update_token(pid, token)`; `ValueError` on invalid id remains.
 
@@ -728,11 +732,13 @@ git commit -m "feat: store MCP OAuth records in secure_store"
 ### Task 3: Graph canonical client + `_m365/helpers`
 
 **Files:**
+
 - Modify: `web/skills/m365-email/graph_client.py` (`_load_token` 94-129, `_save_token` 131-155, `complete_auth` ~251; add loader snippet)
 - Modify: `web/skills/_m365/helpers.py:69-94` (`get_teams_token`)
 - Test: `tests/test_graph_token_storage.py`
 
 **Interfaces:**
+
 - Consumes: `secure_store.get_json("graph/token")`, `set_json`, `get_json("graph/teams_token")`.
 - Produces: `GraphClient` behavior unchanged. `TOKEN_FILE`/`OLD_TOKEN_FILE` remain as module symbols (the seven wrapper `graph_client.py` files re-export `TOKEN_FILE`; do not remove it) but are no longer read or written. `complete_auth` returns `"token_file": "secure_store:graph/token"`.
 
@@ -878,6 +884,7 @@ In `web/skills/_m365/helpers.py` `get_teams_token()` replace the file read (69-9
     if token and data.get("expires_at", 0) > time.time() + 60:
         return token
 ```
+
 (then keep the existing fallthrough to `GraphClient().get_token()`; read the surrounding lines first and preserve the exact expiry check the old code used, adapting only the data source). Add the loader snippet with `parents[2]` to this file.
 
 - [ ] **Step 4: Run tests**
@@ -897,11 +904,13 @@ git commit -m "feat: store Graph and Teams tokens in secure_store"
 ### Task 4: `routes/auth.py` and `routes/teams.py` token access
 
 **Files:**
+
 - Modify: `web/routes/auth.py` (writes at 64-75, 126-137, 189-207; reads at 233/242, 264/268, 298-307; `device_auth_poll` 403-426)
 - Modify: `web/routes/teams.py` (reads at 73-75, 285-287, 1013-1014, 1357-1358, 1574-1575, 1807-1810, 2880-2886). Line 1753 (`teams_member_cache.json`) is not a token; leave it.
 - Test: `tests/test_auth_token_routes.py`
 
 **Interfaces:**
+
 - Consumes: `secure_store.get_json/set_json` (`import secure_store` — web app imports normally).
 - Produces: `routes.auth` no longer references `~/.config/...token*.json`; `auth_status` reports `"reason": "No token"` when `graph/token` is absent.
 
@@ -910,7 +919,8 @@ git commit -m "feat: store Graph and Teams tokens in secure_store"
 ```python
     secure_store.set_json("graph/teams_token", {"access_token": token, "expires_at": expires_at})
 ```
-using the variable names already present at each site; delete the `mkdir`, `write_text`, and `chmod` lines that belonged to the token file. In `device_auth_poll`, replace the diagnostic re-read of `token.json` (403-426) with a read of `secure_store.get_json("graph/token")` that logs only key *names* and expiry, never values; if the block is purely diagnostic and adds nothing, remove it.
+
+using the variable names already present at each site; delete the `mkdir`, `write_text`, and `chmod` lines that belonged to the token file. In `device_auth_poll`, replace the diagnostic re-read of `token.json` (403-426) with a read of `secure_store.get_json("graph/token")` that logs only key _names_ and expiry, never values; if the block is purely diagnostic and adds nothing, remove it.
 
 - [ ] **Step 2: Write tests** `tests/test_auth_token_routes.py` using FastAPI `TestClient` against the auth router (mirror how other `tests/test_*routes*.py` build the app; reuse their fixture if one exists):
 
@@ -963,10 +973,12 @@ git commit -m "feat: route auth and teams token access through secure_store"
 ### Task 5: `read_chats.py` (Graph token + skype cache)
 
 **Files:**
+
 - Modify: `web/skills/m365-teams/scripts/read_chats.py` (`TOKEN_FILE` 30, `SKYPE_TOKEN_FILE` 31, `_load_graph_tokens` 38-43, `_load_cached_skype_token` 46-55, `_save_skype_token` 58-73)
 - Test: `tests/test_read_chats_token_storage.py`
 
 **Interfaces:**
+
 - Consumes: `secure_store` names `graph/teams_token` (what `_load_graph_tokens` read via `TOKEN_FILE`; confirm in Step 1) and `graph/skype_token`.
 - Produces: `_load_graph_tokens() -> dict` raising `RuntimeError` if absent (unchanged contract), `_load_cached_skype_token()`/`_save_skype_token(skype_token, messaging_service, expires_in, global_service="")` unchanged signatures.
 
@@ -1026,10 +1038,12 @@ git commit -m "feat: keep Teams chat tokens and skype cache in secure_store"
 ### Task 6: Slack token and PKCE state
 
 **Files:**
+
 - Modify: `web/skills/slack/mcp_client.py` (`TOKEN_FILE` 38, `_load_token` 47-54, `_save_token` 57-76, `_PKCE_FILE` 171, `_load_pkce`/`_save_pkce`/`_clear_pkce` 174-192; add loader snippet with `parents[2]`)
 - Test: `tests/test_slack_token_storage.py`
 
 **Interfaces:**
+
 - Consumes: `secure_store` names `slack/token`, `slack/pkce`.
 - Produces: unchanged `_load_token() -> dict`, `_save_token(data: dict)` (still clears the display-name cache), `_load_pkce`, `_save_pkce`, `_clear_pkce` with existing signatures.
 
@@ -1121,10 +1135,12 @@ git commit -m "feat: store Slack token and PKCE state in secure_store"
 ### Task 7: `config.json` PATs
 
 **Files:**
+
 - Modify: `web/config.py` (`load_config` 187-194, `_write_config_locked` 203-225; add helpers)
 - Test: `tests/test_config_pat_storage.py`
 
 **Interfaces:**
+
 - Consumes: `secure_store.get/set/delete`, names `config/jira_api_token`, `config/jira_pat`, `config/confluence_pat`, `config/github_token`.
 - Produces: `load_config()` returns the four PAT keys overlaid when present; `save_config`/`update_config` persist them to `secure_store` and never to `config.json`. A key absent or empty in the dict passed to a write is deleted from the store (full-replace semantics, matching the `save_jira_pat` sibling-key pops).
 
@@ -1331,10 +1347,12 @@ git commit -m "feat: keep config PATs in secure_store and scrub backups"
 ### Task 8: Startup migration sweep
 
 **Files:**
+
 - Modify: `web/app.py` (before the PAT-to-environment copy at ~95-116)
 - Test: `tests/test_startup_secret_sweep.py`
 
 **Interfaces:**
+
 - Consumes: `secure_store.migrate_all()`, `config.load_config()` (which migrates PATs and scrubs backups).
 - Produces: `app.py` imports/calls a small function `_sweep_legacy_secrets()` once at startup, exception-safe.
 
@@ -1401,6 +1419,7 @@ git commit -m "feat: sweep legacy plaintext tokens at startup"
 ### Task 9: `POST /api/auth/clear`, revocation, Settings button
 
 **Files:**
+
 - Modify: `web/routes/auth.py` (new route; add `from security import verify_csrf` and `Depends`)
 - Modify: `web/oauth/provider.py` (optional `revocation_endpoint: str = ""` field in the dataclass, `to_dict`, `from_dict`)
 - Modify: `web/oauth/dcr.py` (pass `revocation_endpoint=meta.get("revocation_endpoint", "")` where `OAuthProvider(...)` is built, lines ~284 and ~376)
@@ -1408,6 +1427,7 @@ git commit -m "feat: sweep legacy plaintext tokens at startup"
 - Test: `tests/test_auth_clear_route.py`
 
 **Interfaces:**
+
 - Consumes: `secure_store.delete/list_names/get_json`, `routes.graph_client reset` (find the existing `reset_graph_client` via Grep and call it).
 - Produces: `POST /api/auth/clear` with body `{"scope": "all" | "graph" | "slack" | "mcp" | "pats"}` (default `"all"`), CSRF-protected, returning `{"cleared": [<names>], "revoked": [<provider labels>]}`.
 
@@ -1558,11 +1578,12 @@ Use the module's existing `router`, logger name, and `HTTPException`/imports (ad
 ```javascript
 document.getElementById('clear-credentials-btn')?.addEventListener('click', async () => {
   if (!confirm('Remove all stored sign-in tokens and API tokens from this computer?')) return;
-  const post = () => fetch('/api/auth/clear', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': window.__CSRF_TOKEN__ },
-    body: JSON.stringify({ scope: 'all' }),
-  });
+  const post = () =>
+    fetch('/api/auth/clear', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': window.__CSRF_TOKEN__ },
+      body: JSON.stringify({ scope: 'all' }),
+    });
   let res = await post();
   if (res.status === 403) {
     const t = await (await fetch('/api/csrf')).json();
@@ -1589,6 +1610,7 @@ git commit -m "feat: add clear-stored-credentials route and Settings control"
 ### Task 10: Guard test, rotation test for generic OAuth, docs
 
 **Files:**
+
 - Create: `tests/test_token_storage_guard.py`, `tests/test_oauth_rotation.py`
 - Modify: `docs/security/threatmodel-remediation.md` (status row), `reset-auth.ps1`
 

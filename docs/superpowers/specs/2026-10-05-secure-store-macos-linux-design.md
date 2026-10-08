@@ -61,7 +61,7 @@ appears (step 2 adoption), because the key is cached per process.
 ## Dependencies and packaging
 
 - `pyproject.toml`: add `keyring>=25; sys_platform != 'win32'` and `cryptography; sys_platform !=
-  'win32'` (cryptography is already locked transitively). Windows packages are unchanged.
+'win32'` (cryptography is already locked transitively). Windows packages are unchanged.
   `uv.lock` is regenerated with `uv lock`; `requirements.txt` is updated if it mirrors the project
   dependencies.
 - `packaging/aigator-backend.spec`: on non-Windows, add hidden imports for `keyring.backends`

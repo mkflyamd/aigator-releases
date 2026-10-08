@@ -4,11 +4,11 @@ AI Gator is local-first: tokens, logs and skills live under `~/.gator` on the us
 
 ## Requirements
 
-| Requirement | Owner and source |
-|---|---|
-| Up-to-date EDR installed and active | AMD IT, AMD-IS-STD-014 Endpoint Security Standard |
-| Full-disk encryption enabled | AMD IT, AMD-IS-STD-014 |
-| OS security updates applied | AMD IT, AMD-IS-STD-012 Vulnerability and Patch Management Standard |
+| Requirement                                                | Owner and source                                                                 |
+| ---------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| Up-to-date EDR installed and active                        | AMD IT, AMD-IS-STD-014 Endpoint Security Standard                                |
+| Full-disk encryption enabled                               | AMD IT, AMD-IS-STD-014                                                           |
+| OS security updates applied                                | AMD IT, AMD-IS-STD-012 Vulnerability and Patch Management Standard               |
 | Run only on AMD-managed devices, never on personal devices | AMD-IS-STD-030 Use of Personal Devices to Access AMD Data and Resources Standard |
 
 AI Gator adds no new kind of endpoint. It runs on the same managed Windows, macOS and Linux devices that these standards already cover, so no separate enrolment is needed.

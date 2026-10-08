@@ -34,7 +34,18 @@ function plain(value) {
 {
   const _permissionLines = extractFn('_permissionLines');
   assert.deepStrictEqual(
-    plain(_permissionLines({ lines: ['Reads these folders: none declared', '', '  ', 7, null, 'Network access: none declared'] })),
+    plain(
+      _permissionLines({
+        lines: [
+          'Reads these folders: none declared',
+          '',
+          '  ',
+          7,
+          null,
+          'Network access: none declared',
+        ],
+      }),
+    ),
     ['Reads these folders: none declared', 'Network access: none declared'],
   );
   assert.deepStrictEqual(plain(_permissionLines(null)), []);
@@ -46,7 +57,12 @@ function plain(value) {
 {
   const _consentPayload = extractFn('_consentPayload');
   assert.deepStrictEqual(
-    plain(_consentPayload({ skill_id: 'a', tier: 'Community' }, { summary: { digest: 'abc' }, resolved_ref: 'deadbeef' })),
+    plain(
+      _consentPayload(
+        { skill_id: 'a', tier: 'Community' },
+        { summary: { digest: 'abc' }, resolved_ref: 'deadbeef' },
+      ),
+    ),
     { skill_id: 'a', tier: 'Community', consent: true, digest: 'abc', pinned_ref: 'deadbeef' },
   );
   // No resolved_ref from the server: no pinned_ref is sent.
@@ -55,7 +71,11 @@ function plain(value) {
     { skill_id: 'a', consent: true, digest: 'abc' },
   );
   // No summary at all: an empty digest, which the server refuses with a 400.
-  assert.deepStrictEqual(plain(_consentPayload({ skill_id: 'a' }, {})), { skill_id: 'a', consent: true, digest: '' });
+  assert.deepStrictEqual(plain(_consentPayload({ skill_id: 'a' }, {})), {
+    skill_id: 'a',
+    consent: true,
+    digest: '',
+  });
   // The original payload is not modified.
   const original = { skill_id: 'a' };
   _consentPayload(original, { summary: { digest: 'x' } });
@@ -66,7 +86,10 @@ function plain(value) {
 {
   const _toggleState = extractFn('_toggleState');
   assert.deepStrictEqual(plain(_toggleState({ id: 's' })), { action: 'disable', label: 'Disable' });
-  assert.deepStrictEqual(plain(_toggleState({ id: 's', disabled: true })), { action: 'enable', label: 'Enable' });
+  assert.deepStrictEqual(plain(_toggleState({ id: 's', disabled: true })), {
+    action: 'enable',
+    label: 'Enable',
+  });
   assert.deepStrictEqual(plain(_toggleState(null)), { action: 'disable', label: 'Disable' });
 }
 
@@ -112,11 +135,10 @@ async function postJsonCase(initialToken, script) {
       fakeResponse(200, { csrf_token: 'new' }),
       fakeResponse(200, { ok: true }),
     ]);
-    assert.deepStrictEqual(calls.map((c) => c.url), [
-      '/api/marketplace/install',
-      '/api/csrf',
-      '/api/marketplace/install',
-    ]);
+    assert.deepStrictEqual(
+      calls.map((c) => c.url),
+      ['/api/marketplace/install', '/api/csrf', '/api/marketplace/install'],
+    );
     assert.strictEqual(calls[2].opts.headers['X-CSRF-Token'], 'new');
     assert.strictEqual(win.__CSRF_TOKEN__, 'new');
     assert.deepStrictEqual(plain(result.body), { ok: true });
@@ -134,7 +156,13 @@ async function postJsonCase(initialToken, script) {
 
   // An answer that is not JSON gives body null instead of throwing.
   {
-    const res = { status: 502, ok: false, json: async () => { throw new Error('not json'); } };
+    const res = {
+      status: 502,
+      ok: false,
+      json: async () => {
+        throw new Error('not json');
+      },
+    };
     const { result } = await postJsonCase('t', [res]);
     assert.strictEqual(result.body, null);
     assert.strictEqual(result.resp.status, 502);
@@ -160,7 +188,10 @@ async function postJsonCase(initialToken, script) {
 
   // Not a consent answer: returned as is, no card.
   {
-    const h = approvalHarness([{ resp: { ok: false, status: 400 }, body: { detail: 'bad' } }], true);
+    const h = approvalHarness(
+      [{ resp: { ok: false, status: 400 }, body: { detail: 'bad' } }],
+      true,
+    );
     const out = await h.run('/api/marketplace/install', { skill_id: 'a' }, 'T', 'Install');
     assert.strictEqual(out.resp.status, 400);
     assert.strictEqual(h.confirms.length, 0);
@@ -182,18 +213,36 @@ async function postJsonCase(initialToken, script) {
       ],
       true,
     );
-    const out = await h.run('/api/marketplace/install', { skill_id: 'a', tier: 'Community' }, 'Install a?', 'Install');
-    assert.deepStrictEqual(h.confirms.map((c) => [c.title, c.label]), [['Install a?', 'Install']]);
+    const out = await h.run(
+      '/api/marketplace/install',
+      { skill_id: 'a', tier: 'Community' },
+      'Install a?',
+      'Install',
+    );
+    assert.deepStrictEqual(
+      h.confirms.map((c) => [c.title, c.label]),
+      [['Install a?', 'Install']],
+    );
     assert.deepStrictEqual(h.confirms[0].summary, consent.summary);
     assert.strictEqual(h.posts.length, 2);
-    assert.deepStrictEqual(h.posts[1].payload, { skill_id: 'a', tier: 'Community', consent: true, digest: 'd1' });
+    assert.deepStrictEqual(h.posts[1].payload, {
+      skill_id: 'a',
+      tier: 'Community',
+      consent: true,
+      digest: 'd1',
+    });
     assert.strictEqual(out.body.ok, true);
   }
 
   // Declined: one call only, nothing is sent with consent.
   {
     const h = approvalHarness(
-      [{ resp: { ok: true, status: 200 }, body: { ok: false, consent_required: true, summary: { lines: [], digest: 'd' } } }],
+      [
+        {
+          resp: { ok: true, status: 200 },
+          body: { ok: false, consent_required: true, summary: { lines: [], digest: 'd' } },
+        },
+      ],
       false,
     );
     const out = await h.run('/api/marketplace/install', { skill_id: 'a' }, 'T', 'Install');
@@ -205,8 +254,14 @@ async function postJsonCase(initialToken, script) {
   {
     const h = approvalHarness(
       [
-        { resp: { ok: true, status: 200 }, body: { consent_required: true, summary: { lines: [], digest: 'd' } } },
-        { resp: { ok: false, status: 409 }, body: { detail: { error: 'content_changed', message: 'changed' } } },
+        {
+          resp: { ok: true, status: 200 },
+          body: { consent_required: true, summary: { lines: [], digest: 'd' } },
+        },
+        {
+          resp: { ok: false, status: 409 },
+          body: { detail: { error: 'content_changed', message: 'changed' } },
+        },
       ],
       true,
     );
@@ -218,9 +273,17 @@ async function postJsonCase(initialToken, script) {
   // ── _handleInstallOutcome: a skill installed but its tool list could not be read ──
   {
     const alerts = [];
-    const ctx = { _showAlert: (msg, kind) => alerts.push([msg, kind]), refresh: () => {}, window: {} };
+    const ctx = {
+      _showAlert: (msg, kind) => alerts.push([msg, kind]),
+      refresh: () => {},
+      window: {},
+    };
     const outcome = extractFn('_handleInstallOutcome', ctx);
-    outcome(true, { ok: true, tools_error: 'sandbox unavailable' }, { id: 's', name: 'S', tier: 'Community' });
+    outcome(
+      true,
+      { ok: true, tools_error: 'sandbox unavailable' },
+      { id: 's', name: 'S', tier: 'Community' },
+    );
     assert.deepStrictEqual(plain(alerts), [
       ['Installed, but the skill\u2019s tools could not be loaded: sandbox unavailable', 'warning'],
     ]);
@@ -230,20 +293,40 @@ async function postJsonCase(initialToken, script) {
   }
 
   // ── Wiring: no install call bypasses the helpers ───────────────────────
-  assert(!/fetch\('\/api\/marketplace\/install(?:-local)?'/.test(source), 'an install call still uses raw fetch');
+  assert(
+    !/fetch\('\/api\/marketplace\/install(?:-local)?'/.test(source),
+    'an install call still uses raw fetch',
+  );
   for (const name of ['_pickLocalSkill', '_importInstall', '_installUrlPlugin']) {
-    assert(fnSource(name).includes('_postWithApproval('), name + ' must go through _postWithApproval');
+    assert(
+      fnSource(name).includes('_postWithApproval('),
+      name + ' must go through _postWithApproval',
+    );
   }
   const install = fnSource('_install');
-  assert(install.includes('_postJson(') && install.includes('_consentPayload(') && install.includes('body.summary'));
+  assert(
+    install.includes('_postJson(') &&
+      install.includes('_consentPayload(') &&
+      install.includes('body.summary'),
+  );
   const verified = fnSource('_installVerifiedPlugin');
   assert(verified.includes('_postJson(') && verified.includes('_consentPayload('));
   assert(fnSource('_showVerifiedConsentModal').includes('_appendPermissionList('));
   assert(fnSource('_showInstallModal').includes('_appendPermissionList('));
-  assert(fnSource('_importInstall').includes('body.tools_error'), 'URL import must surface tools_error');
+  assert(
+    fnSource('_importInstall').includes('body.tools_error'),
+    'URL import must surface tools_error',
+  );
   const click = fnSource('_handleContentClick');
-  assert(click.includes("'disable'") && click.includes("'enable'") && click.includes('_setSkillDisabled('));
-  assert(fnSource('_renderInstalled').split('_decorateInstalledRow(').length - 1 === 2, 'bundle rows and standalone rows both get the toggle');
+  assert(
+    click.includes("'disable'") &&
+      click.includes("'enable'") &&
+      click.includes('_setSkillDisabled('),
+  );
+  assert(
+    fnSource('_renderInstalled').split('_decorateInstalledRow(').length - 1 === 2,
+    'bundle rows and standalone rows both get the toggle',
+  );
   const toggle = fnSource('_setSkillDisabled');
   assert(toggle.includes('_postJson(') && toggle.includes('refresh()'));
 

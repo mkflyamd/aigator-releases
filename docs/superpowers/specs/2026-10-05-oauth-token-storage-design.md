@@ -11,14 +11,14 @@
 AI Gator stores OAuth and personal-access tokens as plaintext JSON under the user profile. Any
 process running as the same user can read them. Inventory of what exists today:
 
-| Store | Contents | Writer | Direct readers |
-|---|---|---|---|
-| `~/.config/microsoft-graph/token.json` | Graph refresh/access token | `web/skills/m365-email/graph_client.py` (`_save_token`) | `graph_client.py`, `web/routes/auth.py`, `web/routes/teams.py`, `m365-teams/scripts/read_chats.py`, `web/skills/_m365/helpers.py` |
-| `~/.config/microsoft-graph/teams_token.json` | Browser-captured Teams token | `web/routes/auth.py` (3 sites) | `_m365/helpers.py`, `routes/auth.py`, `routes/teams.py` |
-| `~/.config/microsoft-graph/skype_token.json`, `skypetoken.json` | Skype swap cache | `read_chats.py` | `read_chats.py` |
-| `~/.config/slack-mcp/token.json`, `.pkce_pending.json` | Slack token, PKCE verifier | `web/skills/slack/mcp_client.py` | `mcp_client.py`, `routes/auth.py` |
-| `~/.gator/oauth/<provider>.json` | MCP provider config plus `token` block | `web/oauth/storage.py` | `web/oauth/flow.py`, `web/routes/mcp_routes.py` |
-| `~/.gator/config.json` | `jira_api_token`, `jira_pat`, `confluence_pat`, `github_token` | `web/routes/config_routes.py` via `web/config.py` | `web/app.py` (copies into env), `web/mcp/url_fetcher.py` |
+| Store                                                           | Contents                                                       | Writer                                                  | Direct readers                                                                                                                    |
+| --------------------------------------------------------------- | -------------------------------------------------------------- | ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `~/.config/microsoft-graph/token.json`                          | Graph refresh/access token                                     | `web/skills/m365-email/graph_client.py` (`_save_token`) | `graph_client.py`, `web/routes/auth.py`, `web/routes/teams.py`, `m365-teams/scripts/read_chats.py`, `web/skills/_m365/helpers.py` |
+| `~/.config/microsoft-graph/teams_token.json`                    | Browser-captured Teams token                                   | `web/routes/auth.py` (3 sites)                          | `_m365/helpers.py`, `routes/auth.py`, `routes/teams.py`                                                                           |
+| `~/.config/microsoft-graph/skype_token.json`, `skypetoken.json` | Skype swap cache                                               | `read_chats.py`                                         | `read_chats.py`                                                                                                                   |
+| `~/.config/slack-mcp/token.json`, `.pkce_pending.json`          | Slack token, PKCE verifier                                     | `web/skills/slack/mcp_client.py`                        | `mcp_client.py`, `routes/auth.py`                                                                                                 |
+| `~/.gator/oauth/<provider>.json`                                | MCP provider config plus `token` block                         | `web/oauth/storage.py`                                  | `web/oauth/flow.py`, `web/routes/mcp_routes.py`                                                                                   |
+| `~/.gator/config.json`                                          | `jira_api_token`, `jira_pat`, `confluence_pat`, `github_token` | `web/routes/config_routes.py` via `web/config.py`       | `web/app.py` (copies into env), `web/mcp/url_fetcher.py`                                                                          |
 
 `config.py` also copies `config.json` to `config.json.bak` on every save, so the PATs persist in
 backup copies too. There is no encryption, no DPAPI, and no Graph/Slack/Teams clear route. All
@@ -96,13 +96,13 @@ writes token JSON, and clear-route tests.
 
 ## Acceptance mapping
 
-| Criterion | Met by |
-|---|---|
-| Stored only in OS-native secure storage | Sections 1-2 |
-| No JSON token files in runtime dirs | Sections 2-3 (migration and sweep) |
-| Encrypted at rest | DPAPI |
-| Short-lived access tokens, refresh rotation | Section 4 (existing, now tested) |
-| Revoke/clear controls work | Section 5 |
+| Criterion                                   | Met by                             |
+| ------------------------------------------- | ---------------------------------- |
+| Stored only in OS-native secure storage     | Sections 1-2                       |
+| No JSON token files in runtime dirs         | Sections 2-3 (migration and sweep) |
+| Encrypted at rest                           | DPAPI                              |
+| Short-lived access tokens, refresh rotation | Section 4 (existing, now tested)   |
+| Revoke/clear controls work                  | Section 5                          |
 
 ## Known limitation
 

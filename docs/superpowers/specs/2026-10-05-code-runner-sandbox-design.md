@@ -16,11 +16,11 @@ can read `~/.ssh`, reach internal hosts, or exfiltrate data.
 Run the code in an OS-level sandbox on all three platforms behind one small interface, and gate every
 widening of access on a real human approval that the model cannot grant itself.
 
-| OS | Mechanism | Needs admin / new install |
-|----|-----------|---------------------------|
-| Windows | AppContainer launched through `ctypes` (CreateProcessW + `PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES`), Job Object for tree kill | No |
-| macOS | Seatbelt, `/usr/bin/sandbox-exec -p <profile>` | No (ships with the OS) |
-| Linux | `bwrap` (bubblewrap) with `--unshare-all` | Needs the `bubblewrap` package and unprivileged user namespaces |
+| OS      | Mechanism                                                                                                                         | Needs admin / new install                                       |
+| ------- | --------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| Windows | AppContainer launched through `ctypes` (CreateProcessW + `PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES`), Job Object for tree kill | No                                                              |
+| macOS   | Seatbelt, `/usr/bin/sandbox-exec -p <profile>`                                                                                    | No (ships with the OS)                                          |
+| Linux   | `bwrap` (bubblewrap) with `--unshare-all`                                                                                         | Needs the `bubblewrap` package and unprivileged user namespaces |
 
 No off-the-shelf library is used. Codex's Windows sandbox needs elevation, `@anthropic-ai/sandbox-runtime`
 needs Node and is beta, MXC is an early preview and not yet a security boundary, and microsandbox is VM
@@ -121,7 +121,12 @@ Windows `%ProgramData%\AIGator\sandbox-policy.json`, macOS `/Library/Application
 Linux `/etc/aigator/sandbox-policy.json`.
 
 ```json
-{"code_runner": "enabled|disabled", "network": "ask|deny", "filesystem": "ask|strict", "require_sandbox": true}
+{
+  "code_runner": "enabled|disabled",
+  "network": "ask|deny",
+  "filesystem": "ask|strict",
+  "require_sandbox": true
+}
 ```
 
 - `disabled`: `run_python` returns a fixed error and does nothing.

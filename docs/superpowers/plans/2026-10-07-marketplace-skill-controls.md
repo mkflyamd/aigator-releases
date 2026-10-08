@@ -34,18 +34,18 @@ Spec: `docs/superpowers/specs/2026-10-07-marketplace-skill-controls-design.md` (
 
 New files (all under `web/marketplace/` unless noted):
 
-| File | Responsibility |
-|---|---|
-| `permissions.py` | `Permissions` dataclass, `parse_permissions`, `declared_permissions(files)`, `files_digest`, `summarize_package`, `readable_paths` |
-| `skill_audit.py` | `log_launch`, `log_outbound`, `extract_outbound` (logger `aigator.skill_audit`) |
-| `sandbox_launch.py` | `SkillRun`, `new_run_dir`, `run_in_sandbox` (one place that builds the `SandboxRequest` for hooks and tools) |
-| `state.py` | Per-skill flags in `installed-skills.json`: `disabled`, `permissions`, `approved_at` |
-| `kill_switch.py` | `disable(skill_id)` and `enable(skill_id)` |
-| `tool_runner_source.py` | `RUNNER_SOURCE`: the script that runs inside the sandbox |
-| `tool_sandbox.py` | `describe_skill_tools`, `call_skill_tool`, `make_stub` |
-| `tests/marketplace/test_permissions.py`, `test_install_digest.py`, `test_skill_audit.py`, `test_sandbox_launch.py`, `test_state.py`, `test_tool_sandbox.py`, `test_kill_switch.py`, `test_consent_routes.py` | Tests |
-| `tests/hooks/test_hooks_sandboxed.py` | Sandboxed hook tests |
-| `tests/marketplace_controls.test.js` | Node-based JS tests (run as `node tests/marketplace_controls.test.js`) |
+| File                                                                                                                                                                                                         | Responsibility                                                                                                                     |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `permissions.py`                                                                                                                                                                                             | `Permissions` dataclass, `parse_permissions`, `declared_permissions(files)`, `files_digest`, `summarize_package`, `readable_paths` |
+| `skill_audit.py`                                                                                                                                                                                             | `log_launch`, `log_outbound`, `extract_outbound` (logger `aigator.skill_audit`)                                                    |
+| `sandbox_launch.py`                                                                                                                                                                                          | `SkillRun`, `new_run_dir`, `run_in_sandbox` (one place that builds the `SandboxRequest` for hooks and tools)                       |
+| `state.py`                                                                                                                                                                                                   | Per-skill flags in `installed-skills.json`: `disabled`, `permissions`, `approved_at`                                               |
+| `kill_switch.py`                                                                                                                                                                                             | `disable(skill_id)` and `enable(skill_id)`                                                                                         |
+| `tool_runner_source.py`                                                                                                                                                                                      | `RUNNER_SOURCE`: the script that runs inside the sandbox                                                                           |
+| `tool_sandbox.py`                                                                                                                                                                                            | `describe_skill_tools`, `call_skill_tool`, `make_stub`                                                                             |
+| `tests/marketplace/test_permissions.py`, `test_install_digest.py`, `test_skill_audit.py`, `test_sandbox_launch.py`, `test_state.py`, `test_tool_sandbox.py`, `test_kill_switch.py`, `test_consent_routes.py` | Tests                                                                                                                              |
+| `tests/hooks/test_hooks_sandboxed.py`                                                                                                                                                                        | Sandboxed hook tests                                                                                                               |
+| `tests/marketplace_controls.test.js`                                                                                                                                                                         | Node-based JS tests (run as `node tests/marketplace_controls.test.js`)                                                             |
 
 Modified: `tests/conftest.py` (fixtures `fake_sandbox`, `make_skill_dir`), `web/marketplace/installer.py`, `web/marketplace/loader.py`, `web/hooks/executor.py`, `web/routes/marketplace.py`, `web/shared.py` (prompt loader skip), `web/commands.py` (plugin command loader skip), `web/static/marketplace-pane.js`, existing tests `tests/marketplace/test_loader.py`, `tests/marketplace/test_routes.py`, `tests/hooks/test_hooks_executor.py`, tracker `docs/security/threatmodel-remediation.md`.
 
@@ -61,10 +61,12 @@ Conventions in this repo that the tasks rely on:
 ### Task 1: Declared permissions and the package summary
 
 **Files:**
+
 - Create: `web/marketplace/permissions.py`
 - Test: `tests/marketplace/test_permissions.py`
 
 **Interfaces:**
+
 - Consumes: `sandbox.paths.normalize_grant_paths(raw) -> list[Path]` (raises `PathNotGrantable`), `sandbox.paths.is_secrets_path(path) -> bool`, `marketplace.installer._discover_plugin_mcp_manifest_from_files(files) -> dict[name, cfg]` (imported lazily).
 - Produces (later tasks use these exact names):
   - `Permissions(filesystem: tuple[str,...]=(), network: tuple[str,...]=(), invalid: bool=False)` frozen dataclass; property `wants_network -> bool`; `to_dict() -> dict`; `Permissions.from_dict(d) -> Permissions`.
@@ -439,11 +441,13 @@ git commit -m "feat: declared permissions parser, package summary and content di
 ### Task 2: Audit logging, sandbox launch wrapper, skill state, fixtures
 
 **Files:**
+
 - Create: `web/marketplace/skill_audit.py`, `web/marketplace/sandbox_launch.py`, `web/marketplace/state.py`
 - Modify: `tests/conftest.py` (append two fixtures)
 - Test: `tests/marketplace/test_skill_audit.py`, `tests/marketplace/test_sandbox_launch.py`, `tests/marketplace/test_state.py`
 
 **Interfaces:**
+
 - Consumes: `marketplace.permissions.Permissions`, `readable_paths` (Task 1); `sandbox.SandboxRequest`, `sandbox.SandboxResult(returncode, stdout, stderr, timed_out)`, `sandbox.launch_sandboxed`, `sandbox.SandboxUnavailable`, `sandbox.SandboxRunError`, `sandbox.build_env(parent, run_dir, node_path)`; `skills.code_runner.tools` helpers `_runtime_paths(skill_dir, npm_root)`, `_runtime_path_refused(path)`, `_unavailable_message(reason)`, `_RUN_ERROR_MSG`; `marketplace.installer.load_installed/save_installed/_INSTALL_INDEX_LOCK`; `config.OUTPUTS_DIR`, `config.PLUGINS_DIR`, `config.INSTALLED_SKILLS_DIR`.
 - Produces:
   - `skill_audit.MARKER = "AIGATOR-SKILL-OUTBOUND "`; `log_launch(skill_id, kind, network, declared)`; `log_outbound(skill_id, destinations)`; `extract_outbound(stderr) -> (list[str], str)`.
@@ -916,10 +920,12 @@ git commit -m "feat: audit logging, sandbox launch wrapper and per-skill state f
 Every install path must be able to fetch the package, show what is in it, and install exactly that content after approval. This task changes `web/marketplace/installer.py` only (the routes follow in Task 4). Nothing about the existing public names changes except new optional parameters and extra keys in return dicts.
 
 **Files:**
+
 - Modify: `web/marketplace/installer.py` (`install_skill_md` at ~146-324, `_install_github_folder` at ~327-396, `get_claude_plugins_official_capabilities` at ~1369-1497, `install_claude_plugins_official_plugin` at ~1500-1741, `get_github_url_capabilities` at ~1764-1873, `install_github_url_plugin` at ~1876-1978)
 - Test: `tests/marketplace/test_install_digest.py` (new)
 
 **Interfaces:**
+
 - Consumes: `marketplace.permissions.declared_permissions(files) -> Permissions`, `Permissions.to_dict()`, `files_digest(files) -> str` (Task 1).
 - Produces (Task 4 uses these exact names):
   - `installer.preview_package(skill_md: str = "", install_url: str = "", local_zip_bytes: bytes | None = None) -> {"ok": True, "files": dict[str, bytes]} | {"ok": False, "error": str}`. Fetches or reads the package, writes nothing.
@@ -1518,11 +1524,13 @@ git commit -m "feat: installers read the whole package first, check an approved 
 Every install route returns a summary of the package first, installs nothing until the client resubmits with `consent=True` and the digest it was shown, and records the approved permissions on the install record. This task changes `web/routes/marketplace.py` and the existing tests that call the install routes. The disable and enable routes belong to Task 7 (they need the kill switch module).
 
 **Files:**
+
 - Modify: `web/routes/marketplace.py` (imports at 1-26, `InstallRequest` at 64-81, helpers after `_skill_already_installed` at 94, `_install_claude_plugins_official` at 143-241, `install_skill` at 426-533, `LocalInstallRequest` at 609-613, `install_local` at 616-674)
 - Test: `tests/marketplace/test_consent_routes.py` (new)
 - Modify (existing tests that call these routes): `tests/marketplace/test_routes.py`, `tests/marketplace/test_preview_endpoint.py`, `tests/marketplace/test_installer.py` (the four `install-local` tests at ~512-617)
 
 **Interfaces:**
+
 - Consumes (Task 1): `marketplace.permissions.summarize_package(files) -> dict` (keys `permissions`, `has_tools`, `hooks`, `bin`, `mcp_servers`, `lines`, `digest`). (Task 2): `marketplace.state.record_approval(skill_id, perms_dict)`. (Task 3): `installer.preview_package`, `installer.install_github_url`, `installer.install_skill_md(..., expected_digest=)`, `installer.install_claude_plugins_official_plugin(..., expected_digest=)`, the `"package"` key on both capability functions, the `"permissions"` key on successful install results, and the error string `"content_changed"`.
 - Produces (Task 8, the JS, depends on these shapes):
   - `InstallRequest.digest: str = ""`; `LocalInstallRequest.consent: bool = False`, `LocalInstallRequest.digest: str = ""`.
@@ -2539,11 +2547,13 @@ git commit -m "feat: marketplace install routes ask for approval on every path, 
 `fire_event` stops using `subprocess.run(shell=True)` and runs each hook command through `run_in_sandbox`. A hook that cannot be started in the sandbox blocks the send (fail closed). Disabled skills are skipped.
 
 **Files:**
+
 - Modify: `web/hooks/executor.py` (whole file)
 - Modify: `tests/hooks/test_hooks_executor.py` (rewrite lines 1-158 and 186-243; keep lines 160-183 unchanged)
 - Create: `tests/hooks/test_hooks_sandboxed.py`
 
 **Interfaces:**
+
 - Consumes (Task 2): `marketplace.sandbox_launch.run_in_sandbox(skill_id, kind, argv, skill_dir, run_dir, perms, timeout) -> SkillRun(ok, returncode, stdout, stderr, timed_out, error)`, `new_run_dir() -> Path`; `marketplace.state.disabled_ids()`, `approved_permissions(skill_id) -> Permissions`, `skill_dir_for(entry) -> Path`; `marketplace.permissions.Permissions`; fixtures `fake_sandbox`, `make_skill_dir`.
 - Produces: `fire_event(event_name, skill_dir, skill_id="", perms=None) -> {"blocked": bool, "reason": str}` (the two new parameters are optional, so existing callers keep working with no grants); `fire_all_skill_hooks(event_name)` unchanged signature. `_BLOCKED_ENV_VARS` and `_safe_env` are deleted: the sandbox environment comes from `sandbox.build_env`, which never carries API keys.
 
@@ -3081,16 +3091,19 @@ Expected: pass.
 git add web/hooks/executor.py tests/hooks/test_hooks_executor.py tests/hooks/test_hooks_sandboxed.py
 git commit -m "feat: marketplace hook commands run in the OS sandbox with only the approved access and fail closed"
 ```
+
 ### Task 6: Run `tools.py` in the sandbox, one call per process
 
 After this task the app process never imports a marketplace skill's `tools.py`. Each tool call (and the one-time read of the tool list at install/Enable) runs `tools.py` in the OS sandbox with only the approved access. Outbound destinations are logged on every run.
 
 **Files:**
+
 - Create: `web/marketplace/tool_runner_source.py`, `web/marketplace/tool_sandbox.py`
 - Modify: `web/marketplace/loader.py` (imports, top of `load_skill_tools`, the in-process import block, the module eviction in `unload_skill_tools`), `tests/conftest.py` (append one fixture)
 - Test: `tests/marketplace/test_tool_runner.py` (new), `tests/marketplace/test_tool_sandbox.py` (new), `tests/marketplace/test_loader.py` (rewritten)
 
 **Interfaces:**
+
 - Consumes (Task 2): `skill_audit.MARKER`, `skill_audit.extract_outbound(stderr) -> (list[str], str)`, `skill_audit.log_outbound(skill_id, destinations)`; `sandbox_launch.new_run_dir() -> Path`, `sandbox_launch.run_in_sandbox(skill_id, kind, argv, skill_dir, run_dir, perms, timeout) -> SkillRun(ok, returncode, stdout, stderr, timed_out, error)`; `state.is_disabled(skill_id)`, `state.approved_permissions(skill_id) -> Permissions`; fixtures `fake_sandbox` and `make_skill_dir`; `skills.code_runner.tools._python_command(script_path)`; `config.load_config()`.
 - Produces:
   - `tool_runner_source.RUNNER_SOURCE: str`, `RUNNER_NAME`, `ARGS_NAME`, `RESULT_NAME` (file names inside the run folder).
@@ -4046,23 +4059,26 @@ Expected: pass, apart from the two known `httpserver` errors in `tests/marketpla
 git add web/marketplace/tool_runner_source.py web/marketplace/tool_sandbox.py web/marketplace/loader.py web/shared.py tests/conftest.py tests/marketplace/test_tool_runner.py tests/marketplace/test_tool_sandbox.py tests/marketplace/test_loader.py
 git commit -m "feat: marketplace tools.py runs in the OS sandbox per call instead of inside the app process"
 ```
-Stage any other test file you had to adjust in Step 11 by name too.
 
+Stage any other test file you had to adjust in Step 11 by name too.
 
 ### Task 7: Kill switch (disable and re-enable) with routes
 
 After this task a user can switch an installed skill or plugin bundle off in one call. A disabled skill's prompt, tools, hooks (Task 5), commands and MCP servers stop working, and it stays off across restarts and reloads. Enable turns it back on.
 
 **Files:**
+
 - Create: `web/marketplace/kill_switch.py`
 - Modify: `web/routes/marketplace.py` (one import, two routes), `web/shared.py:336-389` (`load_installed_skill_prompts` skips disabled ids), `web/marketplace/commands.py:186-195` (`load_installed_plugin_commands` skips disabled entries), `web/skills/code_runner/tools.py:116` (`_find_skill_dir` refuses a disabled skill)
 - Test: `tests/marketplace/test_kill_switch.py` (new)
 
 **Interfaces:**
+
 - Consumes (Task 2): `state.get_entry`, `state.set_disabled`, `state.disabled_ids`, `state.skill_dir_for`. (Task 4): `routes/marketplace.py` already imports `Depends`, `HTTPException` and `verify_csrf`. (Task 6): `loader.load_skill_tools(skill_id, skill_dir, tier)` and `loader.unload_skill_tools(skill_id)`. Existing: `installer._teardown_plugin_mcp(plugin_id)`, `installer._register_plugin_mcp_servers(plugin_id, plugin_dir)`, `commands.register_plugin_commands(plugin_id, plugin_dir)`, `commands.deregister_plugin_commands(command_ids)`, `shared.load_installed_skill_prompts()`.
 - Produces: `kill_switch.disable(skill_id) -> {"ok": True} | {"ok": False, "error": "skill not found: <id>"}`; `kill_switch.enable(skill_id)` (same shape); routes `POST /api/marketplace/disable/{skill_id}` and `POST /api/marketplace/enable/{skill_id}` (CSRF-protected), each returning `{"ok": True, "skill_id": str, "disabled": bool}`, 404 for an unknown id.
 
 Design notes (so the tests make sense):
+
 - Only an entry itself can be disabled. A bundle's inner skill ids follow the bundle (`state.disabled_ids()` already includes them); asking to disable an inner id alone is "not found".
 - The disabled flag is written first. The teardown steps after it each run on their own, so one failing step is logged and the rest still run. The kill switch must never half-apply because of one error.
 - Disabling a bundle wipes its MCP connections and their stored credentials (that is what `_teardown_plugin_mcp` does). Enable re-registers the servers from disk; the user re-enters any credential. This is listed under Known limits.
@@ -4448,15 +4464,18 @@ Expected: all pass. If `test_run_python_cannot_borrow_a_disabled_skills_folder` 
 git add web/marketplace/kill_switch.py web/routes/marketplace.py web/shared.py web/marketplace/commands.py web/skills/code_runner/tools.py tests/marketplace/test_kill_switch.py
 git commit -m "feat: kill switch to disable and re-enable an installed marketplace skill or plugin"
 ```
+
 ### Task 8: Marketplace pane, permission card on every install path and Disable/Enable controls
 
 After this task every install in the marketplace pane sends the CSRF header, shows the package's permission lines before anything is installed, and resends with `consent: true` plus the digest it showed. Installed rows get a Disable / Enable button that calls the Task 7 routes.
 
 **Files:**
+
 - Modify: `web/static/marketplace-pane.js`, `web/static/style.css` (append only)
 - Test: `tests/marketplace_controls.test.js` (new). The repo runs JS tests as `node tests/<name>.test.js`; they pull functions out of the pane file by regex and run them in `vm` (no DOM, no jsdom).
 
 **Interfaces:**
+
 - Consumes (Tasks 4 and 7):
   - `POST /api/marketplace/install` and `/api/marketplace/install-local` without `consent` answer HTTP 200 `{"ok": false, "consent_required": true, "skill_id", "resolved_ref", "summary": {"lines": [str], "digest": str, ...}}`. Plugin and catalog answers also carry `plugin_id` and `capabilities`.
   - The same routes with `consent: true` and a missing `digest` are HTTP 400; a changed package is HTTP 409 with `detail = {"error": "content_changed", "message": str}` (the existing `_errorMessage` already shows `detail.message`).
@@ -4514,7 +4533,18 @@ function plain(value) {
 {
   const _permissionLines = extractFn('_permissionLines');
   assert.deepStrictEqual(
-    plain(_permissionLines({ lines: ['Reads these folders: none declared', '', '  ', 7, null, 'Network access: none declared'] })),
+    plain(
+      _permissionLines({
+        lines: [
+          'Reads these folders: none declared',
+          '',
+          '  ',
+          7,
+          null,
+          'Network access: none declared',
+        ],
+      }),
+    ),
     ['Reads these folders: none declared', 'Network access: none declared'],
   );
   assert.deepStrictEqual(plain(_permissionLines(null)), []);
@@ -4526,7 +4556,12 @@ function plain(value) {
 {
   const _consentPayload = extractFn('_consentPayload');
   assert.deepStrictEqual(
-    plain(_consentPayload({ skill_id: 'a', tier: 'Community' }, { summary: { digest: 'abc' }, resolved_ref: 'deadbeef' })),
+    plain(
+      _consentPayload(
+        { skill_id: 'a', tier: 'Community' },
+        { summary: { digest: 'abc' }, resolved_ref: 'deadbeef' },
+      ),
+    ),
     { skill_id: 'a', tier: 'Community', consent: true, digest: 'abc', pinned_ref: 'deadbeef' },
   );
   // No resolved_ref from the server: no pinned_ref is sent.
@@ -4535,7 +4570,11 @@ function plain(value) {
     { skill_id: 'a', consent: true, digest: 'abc' },
   );
   // No summary at all: an empty digest, which the server refuses with a 400.
-  assert.deepStrictEqual(plain(_consentPayload({ skill_id: 'a' }, {})), { skill_id: 'a', consent: true, digest: '' });
+  assert.deepStrictEqual(plain(_consentPayload({ skill_id: 'a' }, {})), {
+    skill_id: 'a',
+    consent: true,
+    digest: '',
+  });
   // The original payload is not modified.
   const original = { skill_id: 'a' };
   _consentPayload(original, { summary: { digest: 'x' } });
@@ -4546,7 +4585,10 @@ function plain(value) {
 {
   const _toggleState = extractFn('_toggleState');
   assert.deepStrictEqual(plain(_toggleState({ id: 's' })), { action: 'disable', label: 'Disable' });
-  assert.deepStrictEqual(plain(_toggleState({ id: 's', disabled: true })), { action: 'enable', label: 'Enable' });
+  assert.deepStrictEqual(plain(_toggleState({ id: 's', disabled: true })), {
+    action: 'enable',
+    label: 'Enable',
+  });
   assert.deepStrictEqual(plain(_toggleState(null)), { action: 'disable', label: 'Disable' });
 }
 
@@ -4592,11 +4634,10 @@ async function postJsonCase(initialToken, script) {
       fakeResponse(200, { csrf_token: 'new' }),
       fakeResponse(200, { ok: true }),
     ]);
-    assert.deepStrictEqual(calls.map((c) => c.url), [
-      '/api/marketplace/install',
-      '/api/csrf',
-      '/api/marketplace/install',
-    ]);
+    assert.deepStrictEqual(
+      calls.map((c) => c.url),
+      ['/api/marketplace/install', '/api/csrf', '/api/marketplace/install'],
+    );
     assert.strictEqual(calls[2].opts.headers['X-CSRF-Token'], 'new');
     assert.strictEqual(win.__CSRF_TOKEN__, 'new');
     assert.deepStrictEqual(plain(result.body), { ok: true });
@@ -4614,7 +4655,13 @@ async function postJsonCase(initialToken, script) {
 
   // An answer that is not JSON gives body null instead of throwing.
   {
-    const res = { status: 502, ok: false, json: async () => { throw new Error('not json'); } };
+    const res = {
+      status: 502,
+      ok: false,
+      json: async () => {
+        throw new Error('not json');
+      },
+    };
     const { result } = await postJsonCase('t', [res]);
     assert.strictEqual(result.body, null);
     assert.strictEqual(result.resp.status, 502);
@@ -4640,7 +4687,10 @@ async function postJsonCase(initialToken, script) {
 
   // Not a consent answer: returned as is, no card.
   {
-    const h = approvalHarness([{ resp: { ok: false, status: 400 }, body: { detail: 'bad' } }], true);
+    const h = approvalHarness(
+      [{ resp: { ok: false, status: 400 }, body: { detail: 'bad' } }],
+      true,
+    );
     const out = await h.run('/api/marketplace/install', { skill_id: 'a' }, 'T', 'Install');
     assert.strictEqual(out.resp.status, 400);
     assert.strictEqual(h.confirms.length, 0);
@@ -4662,18 +4712,36 @@ async function postJsonCase(initialToken, script) {
       ],
       true,
     );
-    const out = await h.run('/api/marketplace/install', { skill_id: 'a', tier: 'Community' }, 'Install a?', 'Install');
-    assert.deepStrictEqual(h.confirms.map((c) => [c.title, c.label]), [['Install a?', 'Install']]);
+    const out = await h.run(
+      '/api/marketplace/install',
+      { skill_id: 'a', tier: 'Community' },
+      'Install a?',
+      'Install',
+    );
+    assert.deepStrictEqual(
+      h.confirms.map((c) => [c.title, c.label]),
+      [['Install a?', 'Install']],
+    );
     assert.deepStrictEqual(h.confirms[0].summary, consent.summary);
     assert.strictEqual(h.posts.length, 2);
-    assert.deepStrictEqual(h.posts[1].payload, { skill_id: 'a', tier: 'Community', consent: true, digest: 'd1' });
+    assert.deepStrictEqual(h.posts[1].payload, {
+      skill_id: 'a',
+      tier: 'Community',
+      consent: true,
+      digest: 'd1',
+    });
     assert.strictEqual(out.body.ok, true);
   }
 
   // Declined: one call only, nothing is sent with consent.
   {
     const h = approvalHarness(
-      [{ resp: { ok: true, status: 200 }, body: { ok: false, consent_required: true, summary: { lines: [], digest: 'd' } } }],
+      [
+        {
+          resp: { ok: true, status: 200 },
+          body: { ok: false, consent_required: true, summary: { lines: [], digest: 'd' } },
+        },
+      ],
       false,
     );
     const out = await h.run('/api/marketplace/install', { skill_id: 'a' }, 'T', 'Install');
@@ -4685,8 +4753,14 @@ async function postJsonCase(initialToken, script) {
   {
     const h = approvalHarness(
       [
-        { resp: { ok: true, status: 200 }, body: { consent_required: true, summary: { lines: [], digest: 'd' } } },
-        { resp: { ok: false, status: 409 }, body: { detail: { error: 'content_changed', message: 'changed' } } },
+        {
+          resp: { ok: true, status: 200 },
+          body: { consent_required: true, summary: { lines: [], digest: 'd' } },
+        },
+        {
+          resp: { ok: false, status: 409 },
+          body: { detail: { error: 'content_changed', message: 'changed' } },
+        },
       ],
       true,
     );
@@ -4696,19 +4770,36 @@ async function postJsonCase(initialToken, script) {
   }
 
   // ── Wiring: no install call bypasses the helpers ───────────────────────
-  assert(!/fetch\('\/api\/marketplace\/install/.test(source), 'an install call still uses raw fetch');
+  assert(
+    !/fetch\('\/api\/marketplace\/install/.test(source),
+    'an install call still uses raw fetch',
+  );
   for (const name of ['_pickLocalSkill', '_importInstall', '_installUrlPlugin']) {
-    assert(fnSource(name).includes('_postWithApproval('), name + ' must go through _postWithApproval');
+    assert(
+      fnSource(name).includes('_postWithApproval('),
+      name + ' must go through _postWithApproval',
+    );
   }
   const install = fnSource('_install');
-  assert(install.includes('_postJson(') && install.includes('_consentPayload(') && install.includes('body.summary'));
+  assert(
+    install.includes('_postJson(') &&
+      install.includes('_consentPayload(') &&
+      install.includes('body.summary'),
+  );
   const verified = fnSource('_installVerifiedPlugin');
   assert(verified.includes('_postJson(') && verified.includes('_consentPayload('));
   assert(fnSource('_showVerifiedConsentModal').includes('_appendPermissionList('));
   assert(fnSource('_showInstallModal').includes('_appendPermissionList('));
   const click = fnSource('_handleContentClick');
-  assert(click.includes("'disable'") && click.includes("'enable'") && click.includes('_setSkillDisabled('));
-  assert(fnSource('_renderInstalled').split('_decorateInstalledRow(').length - 1 === 2, 'bundle rows and standalone rows both get the toggle');
+  assert(
+    click.includes("'disable'") &&
+      click.includes("'enable'") &&
+      click.includes('_setSkillDisabled('),
+  );
+  assert(
+    fnSource('_renderInstalled').split('_decorateInstalledRow(').length - 1 === 2,
+    'bundle rows and standalone rows both get the toggle',
+  );
   const toggle = fnSource('_setSkillDisabled');
   assert(toggle.includes('_postJson(') && toggle.includes('refresh()'));
 
@@ -4729,162 +4820,161 @@ Expected: FAIL with `AssertionError: _permissionLines not found in marketplace-p
 Insert this block directly before the comment line that starts `  // Collision-detection predicate for decision #10` (it follows `_errorMessage`):
 
 ```js
-  // ── Install approval (permission card) and CSRF ───────────────────────────
-  // Every install POST carries the CSRF header; on a 403 the token is fetched
-  // again and the call is retried once, but only when the token actually
-  // changed (a 403 for another reason, e.g. not_installable, is not retried).
-  async function _postJson(url, payload) {
-    const sent = window.__CSRF_TOKEN__ || '';
-    const send = () =>
-      fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-CSRF-Token': window.__CSRF_TOKEN__ || '',
-        },
-        body: JSON.stringify(payload || {}),
-      });
-    let resp = await send();
-    if (resp.status === 403) {
-      const fresh = await fetch('/api/csrf');
-      if (fresh.ok) {
-        const token = (await fresh.json()).csrf_token || '';
-        if (token && token !== sent) {
-          window.__CSRF_TOKEN__ = token;
-          resp = await send();
-        }
+// ── Install approval (permission card) and CSRF ───────────────────────────
+// Every install POST carries the CSRF header; on a 403 the token is fetched
+// again and the call is retried once, but only when the token actually
+// changed (a 403 for another reason, e.g. not_installable, is not retried).
+async function _postJson(url, payload) {
+  const sent = window.__CSRF_TOKEN__ || '';
+  const send = () =>
+    fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': window.__CSRF_TOKEN__ || '',
+      },
+      body: JSON.stringify(payload || {}),
+    });
+  let resp = await send();
+  if (resp.status === 403) {
+    const fresh = await fetch('/api/csrf');
+    if (fresh.ok) {
+      const token = (await fresh.json()).csrf_token || '';
+      if (token && token !== sent) {
+        window.__CSRF_TOKEN__ = token;
+        resp = await send();
       }
     }
-    let body = null;
-    try {
-      body = await resp.json();
-    } catch (e) {
-      body = null;
-    }
-    return { resp, body };
   }
-
-  function _permissionLines(summary) {
-    const lines = summary && Array.isArray(summary.lines) ? summary.lines : [];
-    return lines.filter((l) => typeof l === 'string' && l.trim() !== '');
+  let body = null;
+  try {
+    body = await resp.json();
+  } catch (e) {
+    body = null;
   }
+  return { resp, body };
+}
 
-  // The second install call: the same payload plus the approval and the digest
-  // the card showed. pinned_ref is sent only when the server returned one.
-  function _consentPayload(payload, firstBody) {
-    const out = Object.assign({}, payload, {
-      consent: true,
-      digest: (firstBody && firstBody.summary && firstBody.summary.digest) || '',
-    });
-    if (firstBody && firstBody.resolved_ref) out.pinned_ref = firstBody.resolved_ref;
-    return out;
-  }
+function _permissionLines(summary) {
+  const lines = summary && Array.isArray(summary.lines) ? summary.lines : [];
+  return lines.filter((l) => typeof l === 'string' && l.trim() !== '');
+}
 
-  function _toggleState(skill) {
-    return skill && skill.disabled
-      ? { action: 'enable', label: 'Enable' }
-      : { action: 'disable', label: 'Disable' };
-  }
+// The second install call: the same payload plus the approval and the digest
+// the card showed. pinned_ref is sent only when the server returned one.
+function _consentPayload(payload, firstBody) {
+  const out = Object.assign({}, payload, {
+    consent: true,
+    digest: (firstBody && firstBody.summary && firstBody.summary.digest) || '',
+  });
+  if (firstBody && firstBody.resolved_ref) out.pinned_ref = firstBody.resolved_ref;
+  return out;
+}
 
-  function _appendPermissionList(container, summary) {
-    const lines = _permissionLines(summary);
-    if (!lines.length) return;
-    const intro = document.createElement('p');
-    intro.textContent = 'This package asks for the access below:';
-    container.appendChild(intro);
-    const ul = document.createElement('ul');
-    ul.className = 'mp-permission-list';
-    lines.forEach((line) => {
-      const li = document.createElement('li');
-      li.textContent = line;
-      ul.appendChild(li);
-    });
-    container.appendChild(ul);
-  }
+function _toggleState(skill) {
+  return skill && skill.disabled
+    ? { action: 'enable', label: 'Enable' }
+    : { action: 'disable', label: 'Disable' };
+}
 
-  // Standalone permission card. Resolves true on approval, false on cancel or Escape.
-  function _confirmPermissions(title, summary, confirmLabel) {
-    return new Promise((resolve) => {
-      const prevFocus = document.activeElement;
-      const titleId = 'mp-perm-title-' + Date.now();
-      const overlay = document.createElement('div');
-      overlay.className = 'mp-modal-overlay';
-      const modal = document.createElement('div');
-      modal.className = 'mp-modal';
-      modal.setAttribute('role', 'dialog');
-      modal.setAttribute('aria-modal', 'true');
-      modal.setAttribute('aria-labelledby', titleId);
+function _appendPermissionList(container, summary) {
+  const lines = _permissionLines(summary);
+  if (!lines.length) return;
+  const intro = document.createElement('p');
+  intro.textContent = 'This package asks for the access below:';
+  container.appendChild(intro);
+  const ul = document.createElement('ul');
+  ul.className = 'mp-permission-list';
+  lines.forEach((line) => {
+    const li = document.createElement('li');
+    li.textContent = line;
+    ul.appendChild(li);
+  });
+  container.appendChild(ul);
+}
 
-      const heading = document.createElement('div');
-      heading.className = 'mp-modal-title';
-      heading.id = titleId;
-      heading.textContent = title;
+// Standalone permission card. Resolves true on approval, false on cancel or Escape.
+function _confirmPermissions(title, summary, confirmLabel) {
+  return new Promise((resolve) => {
+    const prevFocus = document.activeElement;
+    const titleId = 'mp-perm-title-' + Date.now();
+    const overlay = document.createElement('div');
+    overlay.className = 'mp-modal-overlay';
+    const modal = document.createElement('div');
+    modal.className = 'mp-modal';
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+    modal.setAttribute('aria-labelledby', titleId);
 
-      const body = document.createElement('div');
-      body.className = 'mp-modal-body';
-      _appendPermissionList(body, summary);
-      const note = document.createElement('p');
-      note.textContent = 'Nothing is installed until you approve.';
-      body.appendChild(note);
+    const heading = document.createElement('div');
+    heading.className = 'mp-modal-title';
+    heading.id = titleId;
+    heading.textContent = title;
 
-      const actions = document.createElement('div');
-      actions.className = 'mp-modal-actions';
-      const cancelBtn = document.createElement('button');
-      cancelBtn.className = 'ap-card-btn';
-      cancelBtn.textContent = 'Cancel';
-      const approveBtn = document.createElement('button');
-      approveBtn.className = 'ap-card-btn primary';
-      approveBtn.textContent = confirmLabel || 'Install';
+    const body = document.createElement('div');
+    body.className = 'mp-modal-body';
+    _appendPermissionList(body, summary);
+    const note = document.createElement('p');
+    note.textContent = 'Nothing is installed until you approve.';
+    body.appendChild(note);
 
-      const finish = (approved) => {
-        overlay.remove();
-        document.removeEventListener('keydown', onKey, true);
-        if (prevFocus && typeof prevFocus.focus === 'function') prevFocus.focus();
-        resolve(approved);
-      };
-      const onKey = (e) => {
-        if (e.key === 'Escape') {
-          e.stopPropagation();
+    const actions = document.createElement('div');
+    actions.className = 'mp-modal-actions';
+    const cancelBtn = document.createElement('button');
+    cancelBtn.className = 'ap-card-btn';
+    cancelBtn.textContent = 'Cancel';
+    const approveBtn = document.createElement('button');
+    approveBtn.className = 'ap-card-btn primary';
+    approveBtn.textContent = confirmLabel || 'Install';
+
+    const finish = (approved) => {
+      overlay.remove();
+      document.removeEventListener('keydown', onKey, true);
+      if (prevFocus && typeof prevFocus.focus === 'function') prevFocus.focus();
+      resolve(approved);
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        e.preventDefault();
+        finish(false);
+        return;
+      }
+      if (e.key === 'Tab') {
+        if (e.shiftKey && document.activeElement === cancelBtn) {
           e.preventDefault();
-          finish(false);
-          return;
+          approveBtn.focus();
+        } else if (!e.shiftKey && document.activeElement === approveBtn) {
+          e.preventDefault();
+          cancelBtn.focus();
         }
-        if (e.key === 'Tab') {
-          if (e.shiftKey && document.activeElement === cancelBtn) {
-            e.preventDefault();
-            approveBtn.focus();
-          } else if (!e.shiftKey && document.activeElement === approveBtn) {
-            e.preventDefault();
-            cancelBtn.focus();
-          }
-        }
-      };
-      cancelBtn.addEventListener('click', () => finish(false));
-      approveBtn.addEventListener('click', () => finish(true));
+      }
+    };
+    cancelBtn.addEventListener('click', () => finish(false));
+    approveBtn.addEventListener('click', () => finish(true));
 
-      actions.appendChild(cancelBtn);
-      actions.appendChild(approveBtn);
-      modal.appendChild(heading);
-      modal.appendChild(body);
-      modal.appendChild(actions);
-      overlay.appendChild(modal);
-      document.body.appendChild(overlay);
-      document.addEventListener('keydown', onKey, true);
-      cancelBtn.focus();
-    });
-  }
+    actions.appendChild(cancelBtn);
+    actions.appendChild(approveBtn);
+    modal.appendChild(heading);
+    modal.appendChild(body);
+    modal.appendChild(actions);
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+    document.addEventListener('keydown', onKey, true);
+    cancelBtn.focus();
+  });
+}
 
-  // First call without consent, card, second call with consent and the digest.
-  // Anything that is not a consent answer (an error, an unexpected success) is
-  // returned untouched for the caller to handle.
-  async function _postWithApproval(url, payload, title, confirmLabel) {
-    const first = await _postJson(url, payload);
-    if (!first.resp.ok || !first.body || !first.body.consent_required) return first;
-    const approved = await _confirmPermissions(title, first.body.summary, confirmLabel);
-    if (!approved) return { cancelled: true };
-    return _postJson(url, _consentPayload(payload, first.body));
-  }
-
+// First call without consent, card, second call with consent and the digest.
+// Anything that is not a consent answer (an error, an unexpected success) is
+// returned untouched for the caller to handle.
+async function _postWithApproval(url, payload, title, confirmLabel) {
+  const first = await _postJson(url, payload);
+  if (!first.resp.ok || !first.body || !first.body.consent_required) return first;
+  const approved = await _confirmPermissions(title, first.body.summary, confirmLabel);
+  if (!approved) return { cancelled: true };
+  return _postJson(url, _consentPayload(payload, first.body));
+}
 ```
 
 - [ ] **Step 4: Run the helper tests**
@@ -4899,41 +4989,41 @@ Make these edits in `web/static/marketplace-pane.js`. Find each block by its tex
 5a. `_pickLocalSkill`: replace the statements from `const resp = await fetch('/api/marketplace/install-local', {` through the closing `}` of the `if (!resp.ok || !data.ok) { ... }` block. Old text:
 
 ```js
-      const resp = await fetch('/api/marketplace/install-local', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      const data = await resp.json();
-      if (previewArea) {
-        previewArea.classList.remove('active');
-        while (previewArea.firstChild) previewArea.removeChild(previewArea.firstChild);
-      }
-      if (!resp.ok || !data.ok) {
-        if (errorArea) errorArea.textContent = (data && data.detail) || 'Install failed.';
-        return;
-      }
+const resp = await fetch('/api/marketplace/install-local', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(payload),
+});
+const data = await resp.json();
+if (previewArea) {
+  previewArea.classList.remove('active');
+  while (previewArea.firstChild) previewArea.removeChild(previewArea.firstChild);
+}
+if (!resp.ok || !data.ok) {
+  if (errorArea) errorArea.textContent = (data && data.detail) || 'Install failed.';
+  return;
+}
 ```
 
 New text:
 
 ```js
-      const out = await _postWithApproval(
-        '/api/marketplace/install-local',
-        payload,
-        'Install “' + (picked.name || 'skill') + '”?',
-        'Install',
-      );
-      if (previewArea) {
-        previewArea.classList.remove('active');
-        while (previewArea.firstChild) previewArea.removeChild(previewArea.firstChild);
-      }
-      if (out.cancelled) return;
-      const data = out.body || {};
-      if (!out.resp.ok || !data.ok) {
-        if (errorArea) errorArea.textContent = _errorMessage(data);
-        return;
-      }
+const out = await _postWithApproval(
+  '/api/marketplace/install-local',
+  payload,
+  'Install “' + (picked.name || 'skill') + '”?',
+  'Install',
+);
+if (previewArea) {
+  previewArea.classList.remove('active');
+  while (previewArea.firstChild) previewArea.removeChild(previewArea.firstChild);
+}
+if (out.cancelled) return;
+const data = out.body || {};
+if (!out.resp.ok || !data.ok) {
+  if (errorArea) errorArea.textContent = _errorMessage(data);
+  return;
+}
 ```
 
 The lines after it (`const skill = { id: data.skill_id, ...`) stay as they are; `resp` is not used after this block.
@@ -4941,157 +5031,155 @@ The lines after it (`const skill = { id: data.skill_id, ...`) stay as they are; 
 5b. `_installUrlPlugin`: old text:
 
 ```js
-      const resp = await fetch('/api/marketplace/install', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ skill_id: skillId, install_url: url, consent: true }),
-      });
-      const data = await resp.json();
-      if (!resp.ok || data.ok !== true) {
-        if (errorArea) errorArea.textContent = _errorMessage(data);
-        return;
-      }
+const resp = await fetch('/api/marketplace/install', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ skill_id: skillId, install_url: url, consent: true }),
+});
+const data = await resp.json();
+if (!resp.ok || data.ok !== true) {
+  if (errorArea) errorArea.textContent = _errorMessage(data);
+  return;
+}
 ```
 
 New text:
 
 ```js
-      const out = await _postWithApproval(
-        '/api/marketplace/install',
-        { skill_id: skillId, install_url: url },
-        'Approve “' + (previewBody.name || skillId) + '”?',
-        'Approve and install',
-      );
-      if (out.cancelled) return;
-      const data = out.body || {};
-      if (!out.resp.ok || data.ok !== true) {
-        if (errorArea) errorArea.textContent = _errorMessage(data);
-        return;
-      }
+const out = await _postWithApproval(
+  '/api/marketplace/install',
+  { skill_id: skillId, install_url: url },
+  'Approve “' + (previewBody.name || skillId) + '”?',
+  'Approve and install',
+);
+if (out.cancelled) return;
+const data = out.body || {};
+if (!out.resp.ok || data.ok !== true) {
+  if (errorArea) errorArea.textContent = _errorMessage(data);
+  return;
+}
 ```
 
 5c. `_importInstall`: replace everything inside its `try {` up to and including the closing `}` of `if (!resp.ok || body.ok !== true) { ... }` (the block that starts `const resp = await fetch('/api/marketplace/install', {` and ends just before the comment line `// Success → refresh installed list and switch tab`). That block contains the long comment about HTTP 200 with `consent_required` and the "needs the consent flow" message; both go. New text:
 
 ```js
-      const out = await _postWithApproval(
-        '/api/marketplace/install',
-        payload,
-        'Install “' + skillId + '”?',
-        'Install',
-      );
-      if (out.cancelled) {
-        btn.disabled = false;
-        btn.textContent = 'Install';
-        return;
-      }
-      const body = out.body || {};
-      if (!out.resp.ok || body.ok !== true) {
-        const err = document.getElementById('mp-import-error');
-        if (err) err.textContent = _errorMessage(body);
-        btn.disabled = false;
-        btn.textContent = 'Install';
-        return;
-      }
+const out = await _postWithApproval(
+  '/api/marketplace/install',
+  payload,
+  'Install “' + skillId + '”?',
+  'Install',
+);
+if (out.cancelled) {
+  btn.disabled = false;
+  btn.textContent = 'Install';
+  return;
+}
+const body = out.body || {};
+if (!out.resp.ok || body.ok !== true) {
+  const err = document.getElementById('mp-import-error');
+  if (err) err.textContent = _errorMessage(body);
+  btn.disabled = false;
+  btn.textContent = 'Install';
+  return;
+}
 ```
 
 5d. `_install`: replace the `_showInstallModal(skill, async () => { ... });` call (the last statement of the function) with:
 
 ```js
-    const payload = {
-      skill_id: skill.id,
-      skill_md: '',
-      version: skill.version || '1.0',
-      tier: skill.tier,
-      install_url: skill.install_url || '',
-    };
-    let first;
+const payload = {
+  skill_id: skill.id,
+  skill_md: '',
+  version: skill.version || '1.0',
+  tier: skill.tier,
+  install_url: skill.install_url || '',
+};
+let first;
+try {
+  first = await _postJson('/api/marketplace/install', payload);
+} catch (err) {
+  _showAlert('Install error: ' + err.message, 'error');
+  return;
+}
+const body = first.body || {};
+if (!first.resp.ok || !body.consent_required) {
+  _handleInstallOutcome(first.resp.ok && body.ok === true, body, skill);
+  return;
+}
+_showInstallModal(
+  skill,
+  async () => {
     try {
-      first = await _postJson('/api/marketplace/install', payload);
+      const second = await _postJson('/api/marketplace/install', _consentPayload(payload, body));
+      const data = second.body || {};
+      const ok = second.resp.ok && data.ok === true;
+      if (ok && typeof window.registerUserSkill === 'function') {
+        window.registerUserSkill(skill.id, skill.name, skill.tier);
+      }
+      _handleInstallOutcome(ok, data, skill);
     } catch (err) {
       _showAlert('Install error: ' + err.message, 'error');
-      return;
     }
-    const body = first.body || {};
-    if (!first.resp.ok || !body.consent_required) {
-      _handleInstallOutcome(first.resp.ok && body.ok === true, body, skill);
-      return;
-    }
-    _showInstallModal(
-      skill,
-      async () => {
-        try {
-          const second = await _postJson('/api/marketplace/install', _consentPayload(payload, body));
-          const data = second.body || {};
-          const ok = second.resp.ok && data.ok === true;
-          if (ok && typeof window.registerUserSkill === 'function') {
-            window.registerUserSkill(skill.id, skill.name, skill.tier);
-          }
-          _handleInstallOutcome(ok, data, skill);
-        } catch (err) {
-          _showAlert('Install error: ' + err.message, 'error');
-        }
-      },
-      body.summary,
-    );
+  },
+  body.summary,
+);
 ```
 
 5e. `_showInstallModal`: change the signature `function _showInstallModal(skill, onConfirm) {` to `function _showInstallModal(skill, onConfirm, summary) {`, and insert this directly before the line `const actions = document.createElement('div');` that follows the Community warning block in that function (the first `actions` declaration after `body.appendChild(communityWarning)`; it is the one preceded by the `if (skill.tier === 'Community') { ... }` block):
 
 ```js
-    _appendPermissionList(body, summary);
-
+_appendPermissionList(body, summary);
 ```
 
 5f. `_installVerifiedPlugin`, first call. Old text:
 
 ```js
-      resp = await fetch('/api/marketplace/install', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ skill_id: skill.id }),
-      });
-      body = await resp.json();
+resp = await fetch('/api/marketplace/install', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ skill_id: skill.id }),
+});
+body = await resp.json();
 ```
 
 New text:
 
 ```js
-      const first = await _postJson('/api/marketplace/install', { skill_id: skill.id });
-      resp = first.resp;
-      body = first.body || {};
+const first = await _postJson('/api/marketplace/install', { skill_id: skill.id });
+resp = first.resp;
+body = first.body || {};
 ```
 
 5g. `_installVerifiedPlugin`, second call. Old text:
 
 ```js
-          resp2 = await fetch('/api/marketplace/install', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              skill_id: skill.id,
-              consent: true,
-              pinned_ref: body.resolved_ref || '',
-            }),
-          });
-          body2 = await resp2.json();
+resp2 = await fetch('/api/marketplace/install', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    skill_id: skill.id,
+    consent: true,
+    pinned_ref: body.resolved_ref || '',
+  }),
+});
+body2 = await resp2.json();
 ```
 
 New text:
 
 ```js
-          const second = await _postJson(
-            '/api/marketplace/install',
-            _consentPayload({ skill_id: skill.id }, body),
-          );
-          resp2 = second.resp;
-          body2 = second.body || {};
+const second = await _postJson(
+  '/api/marketplace/install',
+  _consentPayload({ skill_id: skill.id }, body),
+);
+resp2 = second.resp;
+body2 = second.body || {};
 ```
 
 5h. `_showVerifiedConsentModal`: insert directly before `const trust = document.createElement('p');` (the paragraph that says "Part of Anthropic's curated marketplace"):
 
 ```js
-    _appendPermissionList(body, previewBody.summary);
-
+_appendPermissionList(body, previewBody.summary);
 ```
 
 - [ ] **Step 6: Add the Disable / Enable controls**
@@ -5154,16 +5242,16 @@ with
 6b. In `_renderInstalled`, bundle rows. Old text (8-space indent, followed by the Remove button):
 
 ```js
-        actions.className = 'mp-installed-actions';
-        const removeBtn = document.createElement('button');
+actions.className = 'mp-installed-actions';
+const removeBtn = document.createElement('button');
 ```
 
 New text:
 
 ```js
-        actions.className = 'mp-installed-actions';
-        _decorateInstalledRow(row, meta, actions, skill);
-        const removeBtn = document.createElement('button');
+actions.className = 'mp-installed-actions';
+_decorateInstalledRow(row, meta, actions, skill);
+const removeBtn = document.createElement('button');
 ```
 
 6c. In `_renderInstalled`, standalone rows. Old text (6-space indent, followed by the Mine check):
@@ -5184,7 +5272,6 @@ New text:
 6d. Append to the end of `web/static/style.css` (use `cat >> web/static/style.css <<'EOF'`; do not rewrite the file, it holds non-ASCII characters elsewhere):
 
 ```css
-
 /* Install permission list and disabled rows (marketplace skill controls) */
 .mp-permission-list {
   margin: 0 0 10px 18px;
@@ -5206,6 +5293,7 @@ New text:
 - [ ] **Step 7: Run the tests and the syntax check**
 
 Run:
+
 ```bash
 node tests/marketplace_controls.test.js
 node --check web/static/marketplace-pane.js
@@ -5214,11 +5302,13 @@ node tests/marketplace_p0_ui.test.js
 node tests/marketplace_p0_dom_render.test.js
 node tests/marketplace_bundled_skill_registration.test.js
 ```
+
 Expected: `marketplace_controls.test.js: ok`, `--check` prints nothing, the four older tests pass unchanged. If a wiring assertion fails, the named function still contains a raw `fetch(`; fix the site, not the test.
 
 - [ ] **Step 8: Check it in a browser**
 
 Start the app the usual way (`python web/app.py` or the dev launcher already used in this repo), open the Marketplace pane and check:
+
 1. Browse tab, install a Community skill: the confirmation dialog lists the permission lines (`Reads these folders: ...`, `Network access: ...`), one click installs, and the skill appears under Installed.
 2. Add tab, import a skill by URL and by local ZIP: after Install a permission card appears, Cancel installs nothing (Installed list unchanged), Install completes.
 3. Installed tab: click Disable on a skill; the row dims with a "Disabled" label and the button reads Enable; ask the assistant for something that needs the skill and confirm it is not offered; click Enable and confirm it is back.
@@ -5232,6 +5322,7 @@ Report what was and was not checked; if the app cannot be started in the session
 git add web/static/marketplace-pane.js web/static/style.css tests/marketplace_controls.test.js
 git commit -m "feat: marketplace pane shows the permission card on every install path, sends the CSRF header, and adds Disable/Enable"
 ```
+
 Do not add a Co-Authored-By line (project rule, CLAUDE.md).
 
 ### Task 9: Whole-suite check, acceptance walk-through, tracker and docs
@@ -5239,10 +5330,12 @@ Do not add a Co-Authored-By line (project rule, CLAUDE.md).
 After this task the full suite is green apart from the known baseline failures, the five acceptance criteria are each shown working against the real sandbox, and the tracker and plugin docs describe what was built and where it stops.
 
 **Files:**
+
 - Modify: `docs/security/threatmodel-remediation.md` (the `H_Malicious_marketplace_or_MCP_skill_execu_03` row), `docs/pluginArchitecture.md` (insert one section), `docs/superpowers/specs/2026-10-07-marketplace-skill-controls-design.md` (status line only)
 - No new test files. Steps 1 and 2 only run existing tests.
 
 **Interfaces:**
+
 - Consumes: everything from Tasks 1 to 8.
 - Produces: nothing code-level.
 
@@ -5251,12 +5344,15 @@ After this task the full suite is green apart from the known baseline failures, 
 ```bash
 python -m pytest tests web/tests -q -x --deselect tests/marketplace/test_installer.py 2>&1 | tail -30
 ```
+
 If `-x` stops on a known baseline failure (listed in Global Constraints), rerun without `-x`:
+
 ```bash
 python -m pytest tests web/tests -q 2>&1 | tail -40
 cd shell && node --test ../tests/*.test.js ../web/tests/*.test.js 2>&1 | tail -15; cd ..
 python tools/check_javascript.py
 ```
+
 Expected: the only failures and errors are the known baseline set from Global Constraints. Any other failure is ours: fix it before going on. Changed behaviour that existing tests encoded (a consent-less install now answering `consent_required`, hooks now sandboxed, `tools.py` no longer imported in-process) should already have been updated in Tasks 3 to 7; if one is still red, update the test to the new behaviour and note it in the commit message.
 
 - [ ] **Step 2: Walk the five acceptance criteria against the real sandbox**
@@ -5294,6 +5390,7 @@ io.open(path, "w", encoding="utf-8", newline="\n").write("\n".join(lines))
 EOF
 git diff --stat docs/security/threatmodel-remediation.md
 ```
+
 Expected: one file changed, one line replaced (about 1 insertion and 1 deletion). Also check the severity summary at the top still reads right (it counts findings, not statuses, so it needs no edit).
 
 - [ ] **Step 4: Add the controls section to `docs/pluginArchitecture.md`**
@@ -5328,6 +5425,7 @@ io.open(path, "w", encoding="utf-8", newline="").write(text)
 EOF
 git diff --stat docs/pluginArchitecture.md
 ```
+
 Expected: only insertions. If `git diff` shows the whole file changed, the line endings were altered: run `git checkout -- docs/pluginArchitecture.md` after confirming `git status` shows nothing else of yours in that file, then redo the insert opening the file with `newline=""` for both read and write.
 
 - [ ] **Step 5: Mark the spec as implemented**
@@ -5345,6 +5443,7 @@ git status --short
 git add docs/security/threatmodel-remediation.md docs/pluginArchitecture.md docs/superpowers/specs/2026-10-07-marketplace-skill-controls-design.md
 git commit -m "docs: tracker, plugin architecture note and spec status for the marketplace skill controls"
 ```
+
 `git status --short` before the add must show only your files plus the untracked `pip/` folder; never stage `pip/`. Do not add a Co-Authored-By line (project rule, CLAUDE.md).
 
 ---
@@ -5352,6 +5451,7 @@ git commit -m "docs: tracker, plugin architecture note and spec status for the m
 ## Self-review
 
 **Spec coverage** (spec section, then where it is built):
+
 - 1 Declared permissions: Task 1 (`permissions.py`, parse, summary, digest, malformed handling).
 - 2 Install approval on every install path: Task 3 (installer reads the whole package, digest check, nothing written before approval), Task 4 (consent on catalog, Verified plugin, URL import, URL plugin, local ZIP or folder; CSRF; recorded grants), Task 8 (permission card on every path in the pane).
 - 3 Enforcement: Task 5 (hooks in the sandbox, fail closed), Task 6 (`tools.py` per call in the sandbox, no in-process import, 2 s no-op timing test, `passthrough_sandbox` fixture).

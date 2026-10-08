@@ -27,7 +27,7 @@ _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 # Must match build/build.bat's SIGN_THUMBPRINT. If the signing cert is ever
 # rotated, update both locations together.
-EXPECTED_SIGNING_THUMBPRINT = "B09F5EF43A1D7BF0F97C4883D723BA1AF67A7F42"
+EXPECTED_SIGNING_THUMBPRINT = "B09F5EF43A1D7BF0F97C4883D723BA1AF67A7F42"  # pragma: allowlist secret
 
 VERSION_FILE = (
     Path(getattr(sys, "_MEIPASS")) / "version.txt"

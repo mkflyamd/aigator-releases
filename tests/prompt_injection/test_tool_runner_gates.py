@@ -308,4 +308,3 @@ async def test_bidi_and_zero_width_characters_are_stripped_from_the_schedule_car
     action = cards[0]["action"]
     assert not any(ch in action for ch in hidden)
     assert action.startswith("Name: Digest")
-

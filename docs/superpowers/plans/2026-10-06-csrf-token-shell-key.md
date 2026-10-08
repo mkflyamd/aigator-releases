@@ -27,7 +27,7 @@ Files: `web/security.py`, `web/routes/health.py`, `shell/main.js`, `tests/test_s
    URL parse with try/catch). Add a static assertion in `tests/test_desktop_packaging.py` that
    `main.js` contains `AIGATOR_SHELL_KEY` and `X-AIGator-Shell-Key`.
 5. Docs: tracker row `_05` -> implemented; sandbox spec Known gaps: replace the Linux localhost
-   paragraph with "closed by the shell key (M_..._05); a network-approved Linux run can still reach
+   paragraph with "closed by the shell key (M\_...\_05); a network-approved Linux run can still reach
    the localhost API but cannot get the token"; BUILD_INSTRUCTIONS note on browser-only dev mode.
 6. Run focused tests (`tests/test_shell_key.py`, `tests/test_desktop_packaging.py`,
    `tests/code_sandbox`, `web/tests/test_outlook_native_hitl.py`). Commit without Co-Authored-By.

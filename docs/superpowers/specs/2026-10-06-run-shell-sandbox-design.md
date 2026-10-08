@@ -19,26 +19,32 @@ Closes the open gap in finding `H_Code_runner_skill_used_for_lateral_movem_06` (
 ## Behavior
 
 ### What runs with no card
+
 A command runs in the sandbox with no card when it needs only:
+
 - read and write in its working folder, if the working folder is the default scratch folder (`~/.gator/work`) or a folder the user already approved (this task or saved);
 - read of the runtime (shell, system tools, Git for Windows, Node, Python);
 - no network.
 
 ### What triggers a card
+
 - A working folder (`cwd`) that is not the scratch folder and not yet approved: card "write to <folder>" (first use in a project asks once; Always allow makes it permanent for that folder).
 - The model declares extra read/write paths or network need (`extra_read_paths`, `extra_write_paths`, `network_hosts`, the same parameters and normalization as `run_python`).
 - A command that fails inside the sandbox with a permission or network error returns the same sandbox hint `run_python` uses, so the model asks again with the right declaration. The sandbox is never relaxed silently.
 
 ### Never grantable
+
 The existing deny list applies unchanged (drive roots, home folder, `~/.ssh`, `~/.aws`, `~/.azure`, `~/.kube`, `~/.gnupg`, `~/.config/gcloud`, `~/.gator` except outputs, autostart locations, Windows UNC/device/stream/dot-or-space spellings, network drives). A card is never shown for these; the call is refused.
 
 ### Task approvals
+
 - Stored server-side next to the existing `approvals` store, keyed by tab (`context_id`).
 - A command may run when its required access is a subset of the union of the tab's live task approvals.
 - Created only by the CSRF-guarded approve route. Ended when the tab is closed (`DELETE /api/conversation/{id}`) or the backend restarts; no time limit and no end at a new message (the original next-message and 10-minute rule, and the `sandbox_followup` chat flag it needed, were removed).
 - The existing single-use approvals for `run_python` are unchanged.
 
 ### Saved permissions ("Always allow this")
+
 - Offered only when the card requests:
   - folder access only (read or write on a path that passed the deny list); the saved permission is that path and mode; or
   - network, where every statement of the command starts with a plain program name that is not an interpreter and the command has no substitution; the saved permission is the set of program names plus network.

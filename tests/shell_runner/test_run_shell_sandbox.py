@@ -77,7 +77,7 @@ def test_project_cwd_needs_a_card_then_task_grant_covers(env):
     assert "approval_required" not in second
     req = env.fake.requests[-1]
     assert req.cwd == proj and proj not in req.write_paths
-    env_dir = Path(req.env["TEMP"])
+    env_dir = Path(req.env.get("TEMP") or req.env["TMPDIR"])
     assert env_dir.parent == env.work and env_dir.name.startswith(".run-") and env_dir in req.write_paths
     assert not env_dir.exists()
 

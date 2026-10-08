@@ -35,6 +35,7 @@ Spec: `docs/superpowers/specs/2026-10-06-run-shell-sandbox-design.md`. Read it b
 ## File Structure
 
 New:
+
 - `web/sandbox/command_programs.py` — `programs_in(command)`; parses a shell command into program names or `None`.
 - `web/sandbox/task_grants.py` — per-tab, in-memory, 10-minute task grants.
 - `web/sandbox/saved_permissions.py` — saved permissions on `secure_store`.
@@ -42,6 +43,7 @@ New:
 - `tests/shell_runner/conftest.py`, `tests/shell_runner/test_run_shell_sandbox.py`, `tests/shell_runner/test_run_shell_sandbox_real.py`
 
 Modified:
+
 - `web/sandbox/paths.py` (`paths_covered`), `web/sandbox/policy.py`, `web/sandbox/approvals.py`
 - `web/routes/sandbox_routes.py`, `web/routes/chat.py`
 - `web/skills/shell_runner/tools.py`
@@ -55,10 +57,12 @@ Run tests from the repo root: `python -m pytest <path> -q`. pytest config alread
 ### Task 1: Command program parser
 
 **Files:**
+
 - Create: `web/sandbox/command_programs.py`
 - Test: `tests/code_sandbox/test_command_programs.py`
 
 **Interfaces:**
+
 - Produces: `programs_in(command: str) -> set[str] | None`. `None` means "cannot be saved with network": empty, unreadable, interpreter, wrapper, substitution or code-argument command. Otherwise the lowercase program names (no `.exe/.cmd/.bat`) of every statement.
 
 - [ ] **Step 1: Write the failing test**
@@ -209,11 +213,13 @@ git commit -m "feat: command program parser decides which shell commands can be 
 ### Task 2: Task grants and path coverage
 
 **Files:**
+
 - Modify: `web/sandbox/paths.py` (append `paths_covered`; `Path` and `is_within` already exist there)
 - Create: `web/sandbox/task_grants.py`
 - Test: `tests/code_sandbox/test_task_grants.py`
 
 **Interfaces:**
+
 - Consumes: `sandbox.paths.is_within(child: Path, parent: Path) -> bool` (True for equal or nested, case-insensitive).
 - Produces:
   - `paths.paths_covered(read, write, granted_read, granted_write) -> bool` (all arguments are iterables of `str | Path`): every requested write lies inside a granted write folder; every requested read lies inside a granted read or write folder.
@@ -396,11 +402,13 @@ git commit -m "feat: per-tab task grants and a path coverage check for run_shell
 ### Task 3: Saved permissions and the policy field
 
 **Files:**
+
 - Create: `web/sandbox/saved_permissions.py`
 - Modify: `web/sandbox/policy.py` (the `Policy` dataclass, `_ALLOWED`)
 - Test: `tests/code_sandbox/test_saved_permissions.py`, extend `tests/code_sandbox/test_policy.py`
 
 **Interfaces:**
+
 - Consumes: `paths.paths_covered`; `secure_store.get_json(name)`, `secure_store.set_json(name, data)` (imported lazily inside functions: the `sandbox` package must stay importable without the web modules).
 - Produces (`saved_permissions`):
   - `list_entries() -> list[dict]` — each entry `{"id": str, "read_paths": [str], "write_paths": [str], "network": bool, "programs": [str], "created": float}`
@@ -534,6 +542,7 @@ Expected: FAIL.
     require_sandbox: bool = False
     saved_permissions: str = "allow"   # allow | deny
 ```
+
 ```python
 FAIL_CLOSED_POLICY = Policy(code_runner="enabled", network="deny", filesystem="strict", require_sandbox=True,
                             saved_permissions="deny")
@@ -544,6 +553,7 @@ _ALLOWED = {
     "saved_permissions": {"allow", "deny"},
 }
 ```
+
 (`parse_policy` already loops over `_ALLOWED`, so no other change is needed.)
 
 `web/sandbox/saved_permissions.py`:
@@ -672,10 +682,12 @@ git commit -m "feat: saved permissions in the encrypted store and a saved_permis
 ### Task 4: Approval scope and the sandbox routes
 
 **Files:**
+
 - Modify: `web/sandbox/approvals.py`, `web/routes/sandbox_routes.py`
 - Test: `tests/code_sandbox/test_approvals.py` (extend), `tests/code_sandbox/test_sandbox_routes_scope.py` (new)
 
 **Interfaces:**
+
 - Consumes: `task_grants.add`, `saved_permissions.add/list_entries/remove/remove_all/describe`, `policy.load_policy().saved_permissions`.
 - Produces:
   - `ApprovalRequest` gains, after `status`: `tool: str = "run_python"`, `command: str = ""`, `programs: tuple[str, ...] | None = None`, `saveable: bool = False`, `scope: str = "once"`.
@@ -850,6 +862,7 @@ Expected: FAIL.
     saveable: bool = False
     scope: str = "once"      # once | task | always (run_shell only; set by decide)
 ```
+
 ```python
 def create(context_id: str, read_paths, write_paths, network_hosts, now: float | None = None, *,
            tool: str = "run_python", command: str = "", programs=None, saveable: bool = False) -> ApprovalRequest:
@@ -865,6 +878,7 @@ def create(context_id: str, read_paths, write_paths, network_hosts, now: float |
         _REQUESTS[req.id] = req
     return req
 ```
+
 ```python
 def decide(request_id: str, context_id: str, approve: bool, now: float | None = None,
            scope: str = "once", allow_saved: bool = True) -> ApprovalRequest:
@@ -948,10 +962,12 @@ git commit -m "feat: approval scope (task or always allow) and saved-permission 
 ### Task 5: Sandbox `run_shell`
 
 **Files:**
+
 - Modify: `web/skills/shell_runner/tools.py` (imports at the top; `_tool_run_shell` at ~560-717; `TOOL_DEFS` at ~720)
 - Create: `tests/shell_runner/conftest.py`, `tests/shell_runner/test_run_shell_sandbox.py`, `tests/shell_runner/test_run_shell_sandbox_real.py`
 
 **Interfaces:**
+
 - Consumes (all already exist): `skills.code_runner.tools` helpers `_check_requested_access(extra_read, extra_write, hosts, policy)` (returns an error dict, or `(read, write, hosts)` of normalized `Path` lists and host strings), `_sandbox_mode(cfg, policy)` -> `("enforced"|"off"|"unavailable", reason)`, `_unavailable_message(reason)`, `_runtime_paths(None, npm_root)`, `_runtime_path_refused(path)`, `_PERMISSION_PATTERNS`, and the messages `_DISABLED_MSG`, `_DENIED_MSG`, `_EXPIRED_MSG`, `_RUN_ERROR_MSG`, `_FS_REFUSED_MSG`. From `sandbox`: `SandboxRequest(argv, cwd, env, runtime_paths, read_paths, write_paths, network, timeout)`, `launch_sandboxed(req) -> SandboxResult(returncode, stdout, stderr, timed_out)` (blocking), `SandboxUnavailable`, `SandboxRunError`, `build_env(parent, run_dir, node_path)`, `telemetry_record(run_id, skill_id, level, network, extra_read, extra_write, approval)`. From Tasks 1-4: `programs_in`, `task_grants.covers`, `saved_permissions.covers`, `approvals.create(..., tool, command, programs, saveable)`, `approvals.lookup`.
 - Produces:
   - `_tool_run_shell(command, shell="", cwd="", timeout=60, background=False, extra_read_paths=None, extra_write_paths=None, network_hosts=None, _context_id="")`. The app injects `_context_id` (the tab id) into handlers whose signature has it, exactly as for `run_python`.
@@ -1556,12 +1572,14 @@ git commit -m "feat: run_shell runs in the OS sandbox with task and saved approv
 ### Task 6: End task approvals on a new user message
 
 **Files:**
+
 - Modify: `web/routes/chat.py` (`ChatRequest` at ~108; start of `chat()` at ~904)
 - Modify: `web/static/app.js` (`_sendSandboxFollowUp` ~8907; submit handler ~11272; `_postBody` ~12003)
 - Modify: `tests/sandbox_ui.test.js`
 - Create: `tests/code_sandbox/test_chat_task_grants.py`
 
 **Interfaces:**
+
 - Consumes: `task_grants.end_for_tab(tab: str) -> None` (Task 2).
 - Produces: `ChatRequest.sandbox_followup: bool = False`; `_end_task_grants_for_new_message(req) -> None` in `routes/chat.py`; JS module variable `_sandboxFollowUpSending` (true only while `_sendSandboxFollowUp` calls `form.requestSubmit()`); the chat POST body carries `sandbox_followup: true` only for that automatic message.
 
@@ -1623,8 +1641,8 @@ In `tests/sandbox_ui.test.js`, make three edits:
 2. After the "Approve: CSRF POST ..." block's `assert.match(env.form.sent[0], /approved sandbox access request req1/);` add:
 
 ```js
-  assert.deepStrictEqual(env.form.flags, [true], 'automatic follow-up is marked');
-  assert.strictEqual(env.ctx._sandboxFollowUpSending, false, 'flag is reset after the submit');
+assert.deepStrictEqual(env.form.flags, [true], 'automatic follow-up is marked');
+assert.strictEqual(env.ctx._sandboxFollowUpSending, false, 'flag is reset after the submit');
 ```
 
 3. After the line `assert(source.includes('  _initSandboxSettings();'));` add:
@@ -1668,13 +1686,13 @@ As the first statement of `async def chat(req: ChatRequest):` (before the functi
 - In `_sendSandboxFollowUp`, replace the `try { form.requestSubmit(); } finally { _aigatorImages = images; }` block with:
 
 ```js
-  _sandboxFollowUpSending = true;
-  try {
-    form.requestSubmit();
-  } finally {
-    _sandboxFollowUpSending = false;
-    _aigatorImages = images;
-  }
+_sandboxFollowUpSending = true;
+try {
+  form.requestSubmit();
+} finally {
+  _sandboxFollowUpSending = false;
+  _aigatorImages = images;
+}
 ```
 
 - In the submit handler (`form.addEventListener('submit', async (e) => {`), directly after `e.preventDefault();` add `const _isSandboxFollowUp = _sandboxFollowUpSending;` (`requestSubmit` dispatches `submit` synchronously, so the flag is still true here; `doSend` is a closure inside this handler and sees the constant).
@@ -1697,11 +1715,13 @@ git commit -m "feat: a new user message ends the tab's task approvals; the autom
 ### Task 7: Approval card for commands, and the Saved permissions page
 
 **Files:**
+
 - Modify: `web/static/app.js` (`_sandboxFollowUpText` ~8897; `_showSandboxApproval` ~8947-9078; `_initOnReady` ~15982; `openDrawer` ~5144; `activateTab` ~5491; new `_initSavedPermissions` after `_initSandboxSettings` ~16092)
 - Modify: `web/static/index.html` (after the `sandbox-row` block, ~705)
 - Modify: `tests/sandbox_ui.test.js`
 
 **Interfaces:**
+
 - Consumes: the card dict from Task 5 (`tool, command, saveable, programs, read_paths, write_paths, network_hosts, context_id, request_id`); `POST /api/sandbox/requests/{id}/approve` body `{context_id, scope?}` returning `{ok, request_id, status, scope, saved}`; `GET /api/sandbox/saved-permissions` -> `{"entries": [{"id", "description", "created"}]}`; `DELETE /api/sandbox/saved-permissions/{id}`; `DELETE /api/sandbox/saved-permissions` (all CSRF header `X-CSRF-Token`).
 - Produces: `_sandboxFollowUpText(decision, requestId, tool = 'run_python')`; `_initSavedPermissions()`; `window._refreshSavedPermissions()`.
 
@@ -1714,7 +1734,10 @@ Edit `tests/sandbox_ui.test.js`:
 1. Extend the first assertions (after the `followUp('deny', 'abc123')` lines):
 
 ```js
-assert.match(followUp('approve', 'abc123', 'run_shell'), /Run the same run_shell call again with exactly the same command, cwd/);
+assert.match(
+  followUp('approve', 'abc123', 'run_shell'),
+  /Run the same run_shell call again with exactly the same command, cwd/,
+);
 assert.doesNotMatch(followUp('approve', 'abc123'), /run_shell/);
 ```
 
@@ -1725,108 +1748,141 @@ assert.doesNotMatch(followUp('approve', 'abc123'), /run_shell/);
 4. Add new behaviour tests inside the async IIFE, just before `console.log('sandbox_ui: all assertions passed');`:
 
 ```js
-  // ── run_shell card ──
-  const shellCard = {
-    request_id: 'sh1',
-    tool: 'run_shell',
-    command: '<b>git pull</b> && echo "<img src=x onerror=alert(1)>"',
-    read_paths: [],
-    write_paths: ['C:/proj'],
-    network_hosts: ['github.com:443'],
-    context_id: 'tab-1',
-    saveable: true,
-    programs: ['git'],
+// ── run_shell card ──
+const shellCard = {
+  request_id: 'sh1',
+  tool: 'run_shell',
+  command: '<b>git pull</b> && echo "<img src=x onerror=alert(1)>"',
+  read_paths: [],
+  write_paths: ['C:/proj'],
+  network_hosts: ['github.com:443'],
+  context_id: 'tab-1',
+  saveable: true,
+  programs: ['git'],
+};
+const envS = makeEnv('tab-1');
+envS.ctx._showSandboxApproval(shellCard, 'tab-1');
+const allS = walk(envS.messages);
+assert(allS.some((e) => e.textContent === 'AI Gator wants to run a command'));
+assert(
+  allS.some((e) => e.textContent === shellCard.command),
+  'command rendered as text',
+);
+assert(!allS.some((e) => e.tag === 'img' || e.tag === 'b'), 'no elements created from the command');
+const shellButtons = allS.filter((e) => e.tag === 'button');
+assert.deepStrictEqual(
+  shellButtons.map((b) => b.textContent),
+  ['Allow for this task', 'Always allow this', 'Deny'],
+);
+await shellButtons[0].listeners.click({ stopPropagation() {} });
+await flush();
+assert.strictEqual(envS.fetches[0].url, '/api/sandbox/requests/sh1/approve');
+assert.deepStrictEqual(JSON.parse(envS.fetches[0].opts.body), {
+  context_id: 'tab-1',
+  scope: 'task',
+});
+assert.match(envS.form.sent[0], /Run the same run_shell call again/);
+
+// Always allow sends scope "always"; an unsaveable request has no such button.
+const envA = makeEnv('tab-1');
+envA.ctx._showSandboxApproval({ ...shellCard, request_id: 'sh2' }, 'tab-1');
+await walk(envA.messages)
+  .filter((e) => e.tag === 'button')[1]
+  .listeners.click({ stopPropagation() {} });
+await flush();
+assert.deepStrictEqual(JSON.parse(envA.fetches[0].opts.body), {
+  context_id: 'tab-1',
+  scope: 'always',
+});
+const envU = makeEnv('tab-1');
+envU.ctx._showSandboxApproval({ ...shellCard, request_id: 'sh3', saveable: false }, 'tab-1');
+assert.deepStrictEqual(
+  walk(envU.messages)
+    .filter((e) => e.tag === 'button')
+    .map((b) => b.textContent),
+  ['Allow for this task', 'Deny'],
+);
+
+// Deny on a command card sends no scope.
+const envD = makeEnv('tab-1');
+envD.ctx._showSandboxApproval({ ...shellCard, request_id: 'sh4' }, 'tab-1');
+const denyBtn = walk(envD.messages)
+  .filter((e) => e.tag === 'button')
+  .pop();
+await denyBtn.listeners.click({ stopPropagation() {} });
+await flush();
+assert.deepStrictEqual(JSON.parse(envD.fetches[0].opts.body), { context_id: 'tab-1' });
+
+// ── Settings: Saved permissions ──
+function makeSettingsEnv(entries) {
+  const list = makeEl('div');
+  const clear = makeEl('button');
+  clear.hidden = true;
+  const row = makeEl('div');
+  const byId = {
+    'saved-permissions-row': row,
+    'saved-permissions-list': list,
+    'saved-permissions-clear': clear,
   };
-  const envS = makeEnv('tab-1');
-  envS.ctx._showSandboxApproval(shellCard, 'tab-1');
-  const allS = walk(envS.messages);
-  assert(allS.some((e) => e.textContent === 'AI Gator wants to run a command'));
-  assert(allS.some((e) => e.textContent === shellCard.command), 'command rendered as text');
-  assert(!allS.some((e) => e.tag === 'img' || e.tag === 'b'), 'no elements created from the command');
-  const shellButtons = allS.filter((e) => e.tag === 'button');
-  assert.deepStrictEqual(shellButtons.map((b) => b.textContent), ['Allow for this task', 'Always allow this', 'Deny']);
-  await shellButtons[0].listeners.click({ stopPropagation() {} });
-  await flush();
-  assert.strictEqual(envS.fetches[0].url, '/api/sandbox/requests/sh1/approve');
-  assert.deepStrictEqual(JSON.parse(envS.fetches[0].opts.body), { context_id: 'tab-1', scope: 'task' });
-  assert.match(envS.form.sent[0], /Run the same run_shell call again/);
+  const calls = [];
+  const state = { entries };
+  const ctx = {
+    document: { createElement: makeEl, getElementById: (id) => byId[id] || null },
+    window: { __CSRF_TOKEN__: 'aigator-fake-api-key' },
+    _showConnectivityToast: () => {},
+    encodeURIComponent,
+    Array,
+    fetch: async (url, opts = {}) => {
+      const method = opts.method || 'GET';
+      calls.push({ url, method, headers: opts.headers });
+      if (method === 'DELETE' && url.endsWith('/saved-permissions')) state.entries = [];
+      else if (method === 'DELETE')
+        state.entries = state.entries.filter((e) => !url.endsWith(encodeURIComponent(e.id)));
+      return { ok: true, status: 200, json: async () => ({ ok: true, entries: state.entries }) };
+    },
+  };
+  vm.createContext(ctx);
+  vm.runInContext(extract('_initSavedPermissions'), ctx);
+  return { ctx, list, clear, calls };
+}
+const evilDesc = '<img src=x onerror=alert(1)> git: network in C:/proj';
+const sEnv = makeSettingsEnv([
+  { id: 'e1', description: evilDesc, created: 1 },
+  { id: 'e/2', description: 'second', created: 2 },
+]);
+sEnv.ctx._initSavedPermissions();
+await flush();
+assert.strictEqual(sEnv.calls[0].method, 'GET');
+assert.strictEqual(sEnv.calls[0].headers['X-CSRF-Token'], 'aigator-fake-api-key');
+let rows = walk(sEnv.list);
+assert(
+  rows.some((e) => e.textContent === evilDesc),
+  'description rendered as text',
+);
+assert(!rows.some((e) => e.tag === 'img'));
+assert.strictEqual(sEnv.clear.hidden, false);
+assert.strictEqual(typeof sEnv.ctx.window._refreshSavedPermissions, 'function');
 
-  // Always allow sends scope "always"; an unsaveable request has no such button.
-  const envA = makeEnv('tab-1');
-  envA.ctx._showSandboxApproval({ ...shellCard, request_id: 'sh2' }, 'tab-1');
-  await walk(envA.messages).filter((e) => e.tag === 'button')[1].listeners.click({ stopPropagation() {} });
-  await flush();
-  assert.deepStrictEqual(JSON.parse(envA.fetches[0].opts.body), { context_id: 'tab-1', scope: 'always' });
-  const envU = makeEnv('tab-1');
-  envU.ctx._showSandboxApproval({ ...shellCard, request_id: 'sh3', saveable: false }, 'tab-1');
-  assert.deepStrictEqual(
-    walk(envU.messages).filter((e) => e.tag === 'button').map((b) => b.textContent),
-    ['Allow for this task', 'Deny'],
-  );
+const removeBtns = walk(sEnv.list).filter((e) => e.tag === 'button');
+await removeBtns[1].listeners.click({ stopPropagation() {} });
+await flush();
+const del = sEnv.calls.find((c) => c.method === 'DELETE');
+assert.strictEqual(del.url, '/api/sandbox/saved-permissions/e%2F2');
+assert.strictEqual(del.headers['X-CSRF-Token'], 'aigator-fake-api-key');
+assert.strictEqual(
+  walk(sEnv.list).filter((e) => e.tag === 'button').length,
+  1,
+  'list refreshed after Remove',
+);
 
-  // Deny on a command card sends no scope.
-  const envD = makeEnv('tab-1');
-  envD.ctx._showSandboxApproval({ ...shellCard, request_id: 'sh4' }, 'tab-1');
-  const denyBtn = walk(envD.messages).filter((e) => e.tag === 'button').pop();
-  await denyBtn.listeners.click({ stopPropagation() {} });
-  await flush();
-  assert.deepStrictEqual(JSON.parse(envD.fetches[0].opts.body), { context_id: 'tab-1' });
-
-  // ── Settings: Saved permissions ──
-  function makeSettingsEnv(entries) {
-    const list = makeEl('div');
-    const clear = makeEl('button');
-    clear.hidden = true;
-    const row = makeEl('div');
-    const byId = { 'saved-permissions-row': row, 'saved-permissions-list': list, 'saved-permissions-clear': clear };
-    const calls = [];
-    const state = { entries };
-    const ctx = {
-      document: { createElement: makeEl, getElementById: (id) => byId[id] || null },
-      window: { __CSRF_TOKEN__: 'aigator-fake-api-key' },
-      _showConnectivityToast: () => {},
-      encodeURIComponent,
-      Array,
-      fetch: async (url, opts = {}) => {
-        const method = opts.method || 'GET';
-        calls.push({ url, method, headers: opts.headers });
-        if (method === 'DELETE' && url.endsWith('/saved-permissions')) state.entries = [];
-        else if (method === 'DELETE') state.entries = state.entries.filter((e) => !url.endsWith(encodeURIComponent(e.id)));
-        return { ok: true, status: 200, json: async () => ({ ok: true, entries: state.entries }) };
-      },
-    };
-    vm.createContext(ctx);
-    vm.runInContext(extract('_initSavedPermissions'), ctx);
-    return { ctx, list, clear, calls };
-  }
-  const evilDesc = '<img src=x onerror=alert(1)> git: network in C:/proj';
-  const sEnv = makeSettingsEnv([
-    { id: 'e1', description: evilDesc, created: 1 },
-    { id: 'e/2', description: 'second', created: 2 },
-  ]);
-  sEnv.ctx._initSavedPermissions();
-  await flush();
-  assert.strictEqual(sEnv.calls[0].method, 'GET');
-  assert.strictEqual(sEnv.calls[0].headers['X-CSRF-Token'], 'aigator-fake-api-key');
-  let rows = walk(sEnv.list);
-  assert(rows.some((e) => e.textContent === evilDesc), 'description rendered as text');
-  assert(!rows.some((e) => e.tag === 'img'));
-  assert.strictEqual(sEnv.clear.hidden, false);
-  assert.strictEqual(typeof sEnv.ctx.window._refreshSavedPermissions, 'function');
-
-  const removeBtns = walk(sEnv.list).filter((e) => e.tag === 'button');
-  await removeBtns[1].listeners.click({ stopPropagation() {} });
-  await flush();
-  const del = sEnv.calls.find((c) => c.method === 'DELETE');
-  assert.strictEqual(del.url, '/api/sandbox/saved-permissions/e%2F2');
-  assert.strictEqual(del.headers['X-CSRF-Token'], 'aigator-fake-api-key');
-  assert.strictEqual(walk(sEnv.list).filter((e) => e.tag === 'button').length, 1, 'list refreshed after Remove');
-
-  await sEnv.clear.listeners.click({ stopPropagation() {} });
-  await flush();
-  assert(sEnv.calls.some((c) => c.method === 'DELETE' && c.url === '/api/sandbox/saved-permissions'));
-  assert.strictEqual(sEnv.clear.hidden, true);
-  assert(walk(sEnv.list).some((e) => /Nothing saved/.test(e.textContent)), 'empty state shown');
+await sEnv.clear.listeners.click({ stopPropagation() {} });
+await flush();
+assert(sEnv.calls.some((c) => c.method === 'DELETE' && c.url === '/api/sandbox/saved-permissions'));
+assert.strictEqual(sEnv.clear.hidden, true);
+assert(
+  walk(sEnv.list).some((e) => /Nothing saved/.test(e.textContent)),
+  'empty state shown',
+);
 ```
 
 - [ ] **Step 2: Run to verify failure**
@@ -1858,66 +1914,75 @@ Edit `_showSandboxApproval` (keep everything not listed):
 - In `body`, before the `[ ['Read', ...], ... ].forEach(...)` block, add the command row:
 
 ```js
-  if (isShell && typeof data.command === 'string' && data.command) {
-    const row = document.createElement('div');
-    row.className = 'gcc-field-row gcc-field-row--block';
-    const key = document.createElement('span');
-    key.className = 'gcc-field-key';
-    key.textContent = 'Command';
-    const cmd = document.createElement('pre');
-    cmd.className = 'gcc-field-val';
-    cmd.textContent = data.command;
-    row.append(key, cmd);
-    body.appendChild(row);
-  }
+if (isShell && typeof data.command === 'string' && data.command) {
+  const row = document.createElement('div');
+  row.className = 'gcc-field-row gcc-field-row--block';
+  const key = document.createElement('span');
+  key.className = 'gcc-field-key';
+  key.textContent = 'Command';
+  const cmd = document.createElement('pre');
+  cmd.className = 'gcc-field-val';
+  cmd.textContent = data.command;
+  row.append(key, cmd);
+  body.appendChild(row);
+}
 ```
 
 - After the existing network-note block add:
 
 ```js
-  if (isShell && data.saveable === true && Array.isArray(data.network_hosts) && data.network_hosts.length) {
-    const risk = document.createElement('div');
-    risk.className = 'gcc-refine';
-    risk.textContent =
-      'Always allow lets these programs use the network in the folders shown. Programs such as git and npm run scripts stored in the project, so those scripts get network access too. You can remove it in Settings.';
-    body.appendChild(risk);
-  }
+if (
+  isShell &&
+  data.saveable === true &&
+  Array.isArray(data.network_hosts) &&
+  data.network_hosts.length
+) {
+  const risk = document.createElement('div');
+  risk.className = 'gcc-refine';
+  risk.textContent =
+    'Always allow lets these programs use the network in the folders shown. Programs such as git and npm run scripts stored in the project, so those scripts get network access too. You can remove it in Settings.';
+  body.appendChild(risk);
+}
 ```
 
 - Buttons: replace the `approve`/`deny`/`actions.append` lines with:
 
 ```js
-  const approve = document.createElement('button');
-  approve.className = 'gcc-approve-btn';
-  approve.textContent = isShell ? 'Allow for this task' : 'Approve';
-  let always = null;
-  if (isShell && data.saveable === true) {
-    always = document.createElement('button');
-    always.className = 'btn-secondary';
-    always.textContent = 'Always allow this';
-  }
-  const deny = document.createElement('button');
-  deny.className = 'btn-secondary';
-  deny.textContent = 'Deny';
-  actions.append(approve, ...(always ? [always] : []), deny);
+const approve = document.createElement('button');
+approve.className = 'gcc-approve-btn';
+approve.textContent = isShell ? 'Allow for this task' : 'Approve';
+let always = null;
+if (isShell && data.saveable === true) {
+  always = document.createElement('button');
+  always.className = 'btn-secondary';
+  always.textContent = 'Always allow this';
+}
+const deny = document.createElement('button');
+deny.className = 'btn-secondary';
+deny.textContent = 'Deny';
+actions.append(approve, ...(always ? [always] : []), deny);
 ```
 
 - Footer note: `footNote.textContent = isShell ? 'Allowed until you send your next message, or for 10 minutes. Requests expire after 10 minutes.' : 'Applies to one run only. Requests expire after 10 minutes.';`.
 - In `decide`: change the signature to `const decide = async (decision, scope = 'task') => {`; disable `always` too (`if (always) always.disabled = true;` next to the other two, and re-enable it in the `catch`); build the body as `JSON.stringify({ context_id: contextId, ...(isShell && decision === 'approve' ? { scope } : {}) })`; replace the success line `footNote.textContent = decision === 'approve' ? 'Approved for one run.' : 'Denied.';` with:
 
 ```js
-      let outcome = 'Denied.';
-      if (decision === 'approve') {
-        if (!isShell) outcome = 'Approved for one run.';
-        else if (scope === 'always') {
-          const out = await res.json().catch(() => ({}));
-          outcome = out && out.saved ? 'Always allowed. You can remove this in Settings.' : 'Allowed for this task (it could not be saved).';
-        } else outcome = 'Allowed for this task.';
-      }
-      footNote.textContent = outcome;
+let outcome = 'Denied.';
+if (decision === 'approve') {
+  if (!isShell) outcome = 'Approved for one run.';
+  else if (scope === 'always') {
+    const out = await res.json().catch(() => ({}));
+    outcome =
+      out && out.saved
+        ? 'Always allowed. You can remove this in Settings.'
+        : 'Allowed for this task (it could not be saved).';
+  } else outcome = 'Allowed for this task.';
+}
+footNote.textContent = outcome;
 ```
 
-  and the follow-up call to `_sendSandboxFollowUp(tabId, _sandboxFollowUpText(decision, requestId, tool)).catch((e) =>`.
+and the follow-up call to `_sendSandboxFollowUp(tabId, _sandboxFollowUpText(decision, requestId, tool)).catch((e) =>`.
+
 - Handlers: `approve` click -> `decide('approve', 'task')`; add `if (always) always.addEventListener('click', (e) => { e.stopPropagation(); decide('approve', 'always'); });`; deny unchanged.
 
 Add after `_initSandboxSettings` (and call `_initSavedPermissions();` right after `_initSandboxSettings();` in `_initOnReady`; add `if (typeof window._refreshSavedPermissions === 'function') window._refreshSavedPermissions();` as the first line of `openDrawer()` and after `localStorage.setItem(STORAGE_KEY, tabName);` in `activateTab`):
@@ -1929,7 +1994,8 @@ function _initSavedPermissions() {
   const clear = document.getElementById('saved-permissions-clear');
   if (!row || !list || !clear) return;
   const call = async (method, url) => {
-    const send = () => fetch(url, { method, headers: { 'X-CSRF-Token': window.__CSRF_TOKEN__ || '' } });
+    const send = () =>
+      fetch(url, { method, headers: { 'X-CSRF-Token': window.__CSRF_TOKEN__ || '' } });
     let res = await send();
     if (res.status === 403) {
       const fresh = await fetch('/api/csrf')
@@ -1947,7 +2013,8 @@ function _initSavedPermissions() {
     if (!entries.length) {
       const empty = document.createElement('div');
       empty.className = 'srow-sub';
-      empty.textContent = 'Nothing saved yet. Choose "Always allow this" on a command approval to save one here.';
+      empty.textContent =
+        'Nothing saved yet. Choose "Always allow this" on a command approval to save one here.';
       list.appendChild(empty);
       return;
     }
@@ -1987,19 +2054,19 @@ function _initSavedPermissions() {
 `web/static/index.html`, directly after the closing `</div>` of the `sandbox-row` block (~705):
 
 ```html
-            <!-- ═══ Saved command permissions ═══ -->
-            <div class="srow integration-row-sep" id="saved-permissions-row">
-              <div class="srow-info">
-                <div class="srow-label">Saved permissions</div>
-                <div class="srow-sub">
-                  Commands you chose "Always allow this" for. Remove one and AI Gator asks again.
-                </div>
-                <div id="saved-permissions-list"></div>
-              </div>
-              <div class="srow-actions">
-                <button id="saved-permissions-clear" class="btn-secondary" hidden>Remove all</button>
-              </div>
-            </div>
+<!-- ═══ Saved command permissions ═══ -->
+<div class="srow integration-row-sep" id="saved-permissions-row">
+  <div class="srow-info">
+    <div class="srow-label">Saved permissions</div>
+    <div class="srow-sub">
+      Commands you chose "Always allow this" for. Remove one and AI Gator asks again.
+    </div>
+    <div id="saved-permissions-list"></div>
+  </div>
+  <div class="srow-actions">
+    <button id="saved-permissions-clear" class="btn-secondary" hidden>Remove all</button>
+  </div>
+</div>
 ```
 
 - [ ] **Step 4: Run to verify pass**
@@ -2023,10 +2090,12 @@ git commit -m "feat: approval card for commands with Allow for this task and Alw
 ### Task 8: Documentation
 
 **Files:**
+
 - Modify: `docs/BUILD_INSTRUCTIONS.md` (policy example ~261 and its description ~264; smoke test ~270-280; Known gaps ~282)
 - Modify: `docs/security/threatmodel-remediation.md` (the `H_Code_runner_skill_used_for_lateral_movem_06` row, line 16)
 
 **Interfaces:**
+
 - Consumes: the behavior built in Tasks 1-7. No code changes in this task.
 
 - [ ] **Step 1: Update `docs/BUILD_INSTRUCTIONS.md`**
@@ -2035,10 +2104,16 @@ git commit -m "feat: approval card for commands with Allow for this task and Alw
 2. Replace the policy JSON example (line 261) with:
 
 ```json
-{"code_runner": "enabled", "network": "ask", "filesystem": "ask", "require_sandbox": false, "saved_permissions": "allow"}
+{
+  "code_runner": "enabled",
+  "network": "ask",
+  "filesystem": "ask",
+  "require_sandbox": false,
+  "saved_permissions": "allow"
+}
 ```
 
-3. At the end of the line-264 paragraph (before "A present but invalid file fails closed") insert: `` `saved_permissions: deny` hides "Always allow this" on command approvals and ignores permissions already saved (task approvals still work); the default is `allow`. ``  And change the fail-closed list to `(`network: deny`, `filesystem: strict`, `require_sandbox: true`, `saved_permissions: deny`)`.
+3. At the end of the line-264 paragraph (before "A present but invalid file fails closed") insert: `` `saved_permissions: deny` hides "Always allow this" on command approvals and ignores permissions already saved (task approvals still work); the default is `allow`. `` And change the fail-closed list to `(`network: deny`, `filesystem: strict`, `require_sandbox: true`, `saved_permissions: deny`)`.
 4. Insert a new section before "### Code sandbox smoke test (release gate)":
 
 ```markdown
@@ -2047,6 +2122,7 @@ git commit -m "feat: approval card for commands with Allow for this task and Alw
 `run_shell` uses the same launcher, deny list, policy file and approval card as `run_python`. A command runs with no card when it needs only its working folder (the scratch folder `~/.gator/work`, or a folder already approved), the system tools and no network. A new working folder, extra paths or network need a card with two choices: **Allow for this task** (until the next message you send in that tab, or 10 minutes) and **Always allow this** (saved in the encrypted store; managed under Settings, "Saved permissions"). "Always allow" is not offered for commands that run an interpreter or shell (`python`, `node`, `bash`, `powershell`, `cmd`, `wsl`, `npx`, ...) or that use command substitution, `eval`, `source` or `-c`-style code arguments.
 
 Behavior to know about:
+
 - Windows: with the sandbox enforced the shell is **cmd.exe only**. WSL is never used (it reaches the whole user profile through `/mnt/c`), Git Bash cannot start in an AppContainer, and PowerShell cannot set its working folder. A call that asks for `bash` or `powershell` returns an error that says so. This changes the default on machines where WSL was the default shell. `dir` and `git` do not work inside a project folder (Windows needs list access on the parent folders); the hint tells the model to use the file tools to list files and to ask you to run git.
 - macOS and Linux: `bash` or `sh` under Seatbelt or bubblewrap, system tool folders read-only.
 - `background=true` is refused while the sandbox is enforced.
@@ -2056,16 +2132,16 @@ Behavior to know about:
 
 5. Smoke test: add after step 5 two steps:
    `6. Ask: "Use run_shell to run \`echo hi > note.txt\` in ~/Documents/<some folder>": a card names the command and the folder; "Allow for this task" runs it; a second command in the same folder in the same task shows no card; after you send a new message the card appears again.`
-   `7. Choose "Always allow this" on a folder card, open Settings, confirm the entry appears under "Saved permissions" in plain words, Remove it, and confirm the card returns.`
-   Update the Windows line (~270) to add: ` Also on Windows: \`python -m pytest tests/shell_runner/test_run_shell_sandbox_real.py -q -s -m real_sandbox\`.`
+`7. Choose "Always allow this" on a folder card, open Settings, confirm the entry appears under "Saved permissions" in plain words, Remove it, and confirm the card returns.`Update the Windows line (~270) to add:` Also on Windows: \`python -m pytest tests/shell_runner/test_run_shell_sandbox_real.py -q -s -m real_sandbox\`.`
 6. Known gaps: replace `` `run_shell` is not sandboxed and bypasses this control; `` with `` `run_shell` is sandboxed (see above) but cannot run credentialed commands, and on Windows runs only cmd.exe without `dir`/`git`; ``.
 
 - [ ] **Step 2: Update the tracker row**
 
 In `docs/security/threatmodel-remediation.md` line 16 (the `_06` row):
+
 - In the status cell keep **Implemented (Windows real-run tests passed; macOS/Linux real-system smoke test pending)** and change the plan link cell to also link `[run_shell design](../superpowers/specs/2026-10-06-run-shell-sandbox-design.md) / [plan](../superpowers/plans/2026-10-06-run-shell-sandbox.md)`.
-- Replace the sentence fragment `` (the CSRF token is served only to the AI Gator shell, see `M_Localhost_CSRF_token_exposure_via_browse_05`, so code that reaches the localhost API, such as `run_shell` or a network-approved run on Linux, cannot obtain it) `` with `` (the CSRF token is served only to the AI Gator shell, see `M_Localhost_CSRF_token_exposure_via_browse_05`, so code that reaches the localhost API, such as a network-approved run on Linux, cannot obtain it) ``.
-- Replace `` Known gaps: `run_shell` (shell_runner) is unsandboxed and can run `python` (bypass, not named in the report, unchanged); `` with `` `run_shell` now runs in the same sandbox: same launcher, deny list and policy, an approval card with "Allow for this task" (ends at the next user message or after 10 minutes) and "Always allow this" (never for interpreters or substitution; stored in the encrypted store, managed in Settings, policy field `saved_permissions`). On Windows it is cmd.exe only (no WSL, no `dir`/`git`), background commands are refused, credentialed commands (`git push`, `gh`, `ssh`) do not work. Known gaps: ``.
+- Replace the sentence fragment ``(the CSRF token is served only to the AI Gator shell, see `M_Localhost_CSRF_token_exposure_via_browse_05`, so code that reaches the localhost API, such as `run_shell` or a network-approved run on Linux, cannot obtain it)`` with ``(the CSRF token is served only to the AI Gator shell, see `M_Localhost_CSRF_token_exposure_via_browse_05`, so code that reaches the localhost API, such as a network-approved run on Linux, cannot obtain it)``.
+- Replace ``Known gaps: `run_shell` (shell_runner) is unsandboxed and can run `python` (bypass, not named in the report, unchanged);`` with `` `run_shell` now runs in the same sandbox: same launcher, deny list and policy, an approval card with "Allow for this task" (ends at the next user message or after 10 minutes) and "Always allow this" (never for interpreters or substitution; stored in the encrypted store, managed in Settings, policy field `saved_permissions`). On Windows it is cmd.exe only (no WSL, no `dir`/`git`), background commands are refused, credentialed commands (`git push`, `gh`, `ssh`) do not work. Known gaps: ``.
 - Append to the end of the row, before the final ` |`: ` run_shell sandbox verification: unit tests and fake-launcher tests everywhere; real runs on Windows (cmd under the AppContainer) and Linux (WSL); the macOS Seatbelt profile still has no real-Mac run (release gate, same smoke test plus the two run_shell steps).`
 
 - [ ] **Step 3: Check for stale statements**
