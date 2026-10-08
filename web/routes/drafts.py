@@ -23,6 +23,78 @@ from security import verify_csrf
 router = APIRouter()
 
 
+_REHYDRATABLE_STATUSES = ("pending", "sending", "handing_off")
+
+
+async def _ensure_draft_loaded(draft_id: str) -> None:
+    """Rehydrate a task-bound draft from durable storage into the live,
+    claimable _pending_drafts store if it's missing from memory (issue #54)
+    — a backend restart wipes skills._drafts._pending_drafts entirely, but
+    a scheduled job's draft may still be sitting, unapproved, in the
+    durable task_drafts table hours later. No-op (and cheap: one dict
+    lookup) for the overwhelmingly common case of a draft that's either a
+    plain interactive-chat draft (never durably recorded at all) or still
+    present in memory (no restart happened).
+
+    A durable "sending"/"handing_off" row (not just "pending") is also
+    rehydratable: reaching this function at all means get_draft(draft_id)
+    was already None in *this* process, so there is no possibility of a
+    still-live claimant — a durable non-terminal status here can only mean
+    a previous process instance crashed mid-delivery. That's recovered as
+    retryable (durable status reset to "pending" below), mirroring this
+    codebase's existing precedent for the in-memory-only case ("a draft
+    left in 'sending' by a crashed process is treated as retryable... which
+    is strictly better than the prior silent loss", skills/_drafts.py:16-18)
+    rather than leaving it permanently stuck showing a "check back in a
+    moment" message that never resolves.
+
+    CONCURRENCY (issue #54 review, round 1): the `await` below is a real
+    suspension point, unlike every other skills/_drafts.py mutation, which
+    that file's own docstring notes are safe specifically *because* they
+    have no `await` between check and write. Two concurrent callers could
+    both observe get_draft(draft_id) is None, both suspend on the DB read,
+    and — without the second check immediately below — both then
+    unconditionally rehydrate, with the second call's rehydrate_draft()
+    clobbering the first's already-"sending"/"handing_off" claim back to
+    "pending", enabling a double-claim (double-send / double-native-draft).
+    The second get_draft(draft_id) is not None check, with no `await`
+    between it and rehydrate_draft's synchronous dict write, restores the
+    same no-interleaving-possible guarantee the rest of the file relies on:
+    whichever coroutine resumes first and passes this check wins; the
+    second observes the first's write and bails.
+    """
+    from skills._drafts import get_draft, rehydrate_draft
+
+    if get_draft(draft_id) is not None:
+        return
+    try:
+        import task_drafts
+
+        row = await task_drafts.get_for_rehydrate(draft_id)
+    except Exception:
+        return
+    if get_draft(draft_id) is not None:  # re-check after the await -- see docstring
+        return
+    if row is None or row["status"] not in _REHYDRATABLE_STATUSES or row["expired"]:
+        return
+    rehydrate_draft(draft_id, row["draft_type"], row["params"])
+    if row["status"] != "pending":
+        await _sync_task_draft_status(draft_id, "pending")
+
+
+async def _sync_task_draft_status(draft_id: str, status: str) -> None:
+    """Best-effort mirror of a live draft-status transition into the
+    durable task_drafts table (issue #54) — see task_drafts.sync_status.
+    Never raises: a durability hiccup here must not block the actual
+    send/claim/release the user is waiting on."""
+    try:
+        import task_drafts
+
+        await task_drafts.sync_status(draft_id, status)
+    except Exception:
+        pass
+
+
 async def _run_sync(fn, *args, **kwargs):
     """Run a synchronous function in a thread — same pattern as execute_tool in app.py.
 
@@ -124,7 +196,10 @@ async def approve_draft(draft_id: str, body: dict = None):
     """
     from skills._drafts import claim_for_sending, pop_draft, release_claim_for_retry
 
+    await _ensure_draft_loaded(draft_id)
     draft = claim_for_sending(draft_id)
+    if draft is not None:
+        await _sync_task_draft_status(draft_id, "sending")
     if draft is None:
         from skills._drafts import get_draft
         existing = get_draft(draft_id)
@@ -793,13 +868,23 @@ async def approve_draft(draft_id: str, body: dict = None):
         # release_claim_for_retry (not mark_status) so a concurrent
         # open_draft_in_outlook that already flipped this draft to
         # "handed_off" isn't clobbered back to "pending" (PR #58 review).
-        release_claim_for_retry(draft_id)
+        # Only mirror "pending" durably if the release actually happened —
+        # release_claim_for_retry no-ops (returns False) when a concurrent
+        # handoff already claimed the draft, and the durable status must
+        # reflect that real "handed_off" state, not be clobbered to "pending".
+        if release_claim_for_retry(draft_id):
+            await _sync_task_draft_status(draft_id, "pending")
         raise
     except Exception as e:
-        release_claim_for_retry(draft_id)
+        if release_claim_for_retry(draft_id):
+            await _sync_task_draft_status(draft_id, "pending")
         raise HTTPException(status_code=500, detail=str(e))
 
     pop_draft(draft_id)
+    # "sent" is written only here, durably — pop_draft() just deleted the
+    # only in-memory record, so this durable row becomes the sole remaining
+    # evidence of what happened when the task is opened again later (issue #54).
+    await _sync_task_draft_status(draft_id, "sent")
 
     _nav_app = {
         "email-reply": "outlook",
@@ -875,6 +960,7 @@ async def open_draft_in_outlook(draft_id: str, body: dict = None):
 
     msg_id = ""
 
+    await _ensure_draft_loaded(draft_id)
     draft = get_draft(draft_id)
     if draft is None:
         raise HTTPException(status_code=404, detail="Draft not found or expired.")
@@ -888,6 +974,8 @@ async def open_draft_in_outlook(draft_id: str, body: dict = None):
         )
 
     claimed = claim_for_handoff(draft_id)
+    if claimed is not None:
+        await _sync_task_draft_status(draft_id, "handing_off")
     if claimed is None:
         existing = get_draft(draft_id)
         status = existing.get("status") if existing else None
@@ -970,7 +1058,8 @@ async def open_draft_in_outlook(draft_id: str, body: dict = None):
 
     except HTTPException:
         if msg_id:
-            complete_handoff(draft_id)
+            if complete_handoff(draft_id):
+                await _sync_task_draft_status(draft_id, "handed_off")
             raise HTTPException(
                 status_code=502,
                 detail=(
@@ -979,7 +1068,8 @@ async def open_draft_in_outlook(draft_id: str, body: dict = None):
                     "disabled for this message to avoid a duplicate send."
                 ),
             )
-        abort_handoff(draft_id)
+        if abort_handoff(draft_id):
+            await _sync_task_draft_status(draft_id, "pending")
         raise
     except Exception as e:
         status_code = getattr(e, "status_code", None)
@@ -987,7 +1077,8 @@ async def open_draft_in_outlook(draft_id: str, body: dict = None):
             isinstance(status_code, int) and (status_code == 0 or status_code >= 500)
         )
         if side_effect_uncertain:
-            complete_handoff(draft_id)
+            if complete_handoff(draft_id):
+                await _sync_task_draft_status(draft_id, "handed_off")
             raise HTTPException(
                 status_code=502,
                 detail=(
@@ -997,9 +1088,11 @@ async def open_draft_in_outlook(draft_id: str, body: dict = None):
                     "message to avoid a duplicate send."
                 ),
             )
-        abort_handoff(draft_id)
+        if abort_handoff(draft_id):
+            await _sync_task_draft_status(draft_id, "pending")
         raise HTTPException(status_code=500, detail=str(e))
 
-    complete_handoff(draft_id)
+    if complete_handoff(draft_id):
+        await _sync_task_draft_status(draft_id, "handed_off")
     enc = quote(msg_id, safe="")
     return {"url": f"https://outlook.office.com/mail/drafts/id/{enc}"}

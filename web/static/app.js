@@ -5543,8 +5543,19 @@ function _cleanSubtitleText(s) {
   return t.trim();
 }
 
-async function _openTaskResult(taskId, inNewTab) {
+// The single, shared implementation of "open a background/scheduled task's
+// result" — used by the inline system-card (_showSystemCard below) AND by
+// agents-pane.js's two "View in this chat"/"View in new tab" handlers
+// (the task list card and a job's history row). Those used to be three
+// independent copy-pasted implementations that had already drifted apart
+// (agents-pane.js's fallback tab-creation branch set a custom title;
+// this one didn't) and, more importantly, meant a fix here (like the HITL
+// draft-card rendering below) silently didn't apply to the other two —
+// exactly what happened with issue #54's first pass. Consolidated so
+// there's exactly one place left to fix.
+async function _openTaskResult(taskId, inNewTab, opts = {}) {
   if (!taskId) return;
+  const tabTitle = opts.tabTitle || 'Task Result';
   try {
     const t = await fetch('/api/tasks/' + taskId).then((r) => r.json());
     const result = t.result || '(no result)';
@@ -5555,11 +5566,19 @@ async function _openTaskResult(taskId, inNewTab) {
       } catch {}
     }
     if (inNewTab) {
-      const _title = 'Task Result';
       if (t.context_id && typeof createTabWithId === 'function') {
-        createTabWithId(t.context_id, _title);
+        createTabWithId(t.context_id, tabTitle);
       } else if (typeof createTab === 'function') {
         createTab();
+        if (typeof _tabs !== 'undefined' && typeof _activeTabId !== 'undefined') {
+          const tab = _tabs.find((tb) => tb.id === _activeTabId);
+          if (tab) {
+            tab.title = tabTitle;
+            if (typeof _saveTabs === 'function') _saveTabs();
+            if (typeof _preserveScrollOnRender !== 'undefined') _preserveScrollOnRender = true;
+            if (typeof _renderTabBar === 'function') _renderTabBar();
+          }
+        }
       }
     }
     const messages = document.getElementById('messages');
@@ -5573,9 +5592,58 @@ async function _openTaskResult(taskId, inNewTab) {
       messages.appendChild(msgDiv);
       messages.scrollTop = messages.scrollHeight;
     }
+    // Replay any HITL draft(s) this scheduled/background task's tool calls
+    // created (issue #54) — before this, a completed task only ever showed
+    // plain Markdown text, even when the model had staged an outbound
+    // email/Teams/Slack/Jira draft that still needed the user's explicit
+    // approval. Each draft's durable status (from GET /api/tasks response,
+    // see task_drafts.py) decides whether to show the real, actionable
+    // approval card or an explicit non-actionable state — never silently
+    // nothing, and never an auto-sent side effect.
+    if (Array.isArray(t.drafts)) {
+      for (const d of t.drafts) {
+        _renderTaskDraft(d);
+      }
+    }
   } catch (err) {
     console.warn('Open task failed:', err);
   }
+}
+
+function _renderTaskDraft(d) {
+  if (!d || !d.draft_data) return;
+  if (d.status === 'pending' && !d.expired) {
+    // Still awaiting approval and within the durable TTL — render the exact
+    // same approval card an interactive chat draft gets. persist:true so it
+    // survives a subsequent tab switch (_restoreTabDrafts), same as any
+    // other draft.
+    _injectDraftApprovalCard(d.draft_type, d.draft_data);
+    return;
+  }
+  const draftId = d.draft_data.draft_id || '';
+  if (draftId && document.querySelector(`[data-draft-id="${draftId}"]`)) return;
+  const messages = document.getElementById('messages');
+  if (!messages) return;
+  const label =
+    {
+      sent: '\u2705 This draft was already sent.',
+      handed_off: '\u2709\uFE0F This draft was opened in Outlook - finish or discard it there.',
+      sending: '\u23F3 This draft is currently being sent - check back in a moment.',
+      handing_off:
+        '\u23F3 A native Outlook draft is being created for this message - check back in a moment.',
+    }[d.status] ||
+    (d.expired
+      ? '\u231B This draft has expired. Ask Gator to re-draft it if you still want to send it.'
+      : '\u26A0\uFE0F This draft is no longer available.');
+  const msgDiv = document.createElement('div');
+  msgDiv.className = 'msg assistant';
+  msgDiv.dataset.draftId = draftId;
+  const note = document.createElement('div');
+  note.className = 'prose draft-nonactionable-note';
+  note.textContent = label;
+  msgDiv.appendChild(note);
+  messages.appendChild(msgDiv);
+  messages.scrollTop = messages.scrollHeight;
 }
 
 function _showSystemCard(opts) {
@@ -9031,24 +9099,53 @@ function _injectComposeCard(type, data) {
 // Derive a human-readable context label for Teams messages.
 // Distinguishes 1:1 DMs, group chats, and channel posts from the
 // chat_id format and available metadata.
+//
+// Bug fixed here (2026-09-30 incident, round 1): this used to treat "has a
+// chat_topic" as proof of being a group chat — wrong, since a 1:1 chat
+// (including an unmaterialized "19:preview-..." stub) also has a topic
+// (the other person's display name). Group vs 1:1 is determined from the
+// chat_id's own real shape instead — the same convention already used
+// elsewhere in this file (see the chat-deeplink parsing above).
+//
+// Bug fixed here (2026-09-30 incident, round 2): the "no chat_id yet"
+// fallback then used `names.includes(',')` as a recipient-COUNT check —
+// also wrong, because this org's directory formats a SINGLE person's name
+// as "Last, First" (e.g. "Valliyappan, Ram", "Kulkarni, Mayuresh"), so
+// almost every single-recipient name already contains a comma. That
+// mislabeled ordinary 1:1 drafts as "Group message to ...". Recipient
+// count must come from the structured email list (data.to) instead — an
+// email address can never legitimately contain a comma, so splitting
+// there is unambiguous in a way splitting a display name never is.
 function _teamsContextLabel(data) {
   const chatId = data.chat_id || '';
   const topic = data.chat_topic || '';
   const names = data.to_names || data.to || '';
-  // 1:1 DM: thread id contains exactly one _ separator between two GUIDs
+  const toEmailCount = (data.to || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean).length;
+  // Group/meeting thread: real Microsoft id shapes for multi-person chats.
+  if (chatId && (chatId.includes('@thread.v2') || chatId.includes('@thread.skype'))) {
+    return 'Group' + (topic ? ' — ' + topic : names ? ' message to ' + names : '');
+  }
+  // 1:1 DM: either an already-materialized thread (ends "@unq.gbl.spaces")
+  // or a not-yet-started "preview" stub (chat_id starting "19:preview-") —
+  // both are still fundamentally one-person conversations. Show the full
+  // `names` string as-is (not just its first comma-segment) — splitting it
+  // would wrongly truncate a "Last, First" single name.
   if (
     chatId &&
-    chatId.startsWith('19:') &&
-    chatId.includes('_') &&
-    chatId.endsWith('@unq.gbl.spaces')
+    ((chatId.startsWith('19:') && chatId.includes('_') && chatId.endsWith('@unq.gbl.spaces')) ||
+      chatId.startsWith('19:preview-'))
   ) {
-    return 'Direct message' + (names ? ' to ' + names.split(',')[0].trim() : '');
+    return 'Direct message' + (names ? ' to ' + names : topic ? ' to ' + topic : '');
   }
-  // Group chat: has a topic or multiple names
-  if (topic) return 'Group — ' + topic;
-  if (names && names.includes(',')) return 'Group message to ' + names;
+  // No chat_id yet (composing fresh) — infer recipient count from the
+  // email list, never from the display name (see comment above).
+  if (toEmailCount > 1) return 'Group message to ' + names;
+  if (names) return 'Direct message to ' + names;
   // Fallback
-  return 'Message to ' + (names || 'Teams');
+  return 'Message to ' + (topic || 'Teams');
 }
 
 // Build structured field rows HTML for the Jira draft approval card.
@@ -13760,11 +13857,29 @@ function _initNotificationStream() {
             msg.tier || 'Mine',
           );
         }
+        // registerUserSkill only patches SKILL_REGISTRY/SKILL_MAP (the "/"
+        // compose-bar dropdown's data source, which already updates live).
+        // The Settings drawer's Skills tab renders from marketplace-pane.js's
+        // own private _installed array, fetched once via GET
+        // /api/marketplace/installed and never re-fetched by this handler —
+        // so a newly-created skill didn't show up there until a hard reload
+        // re-triggered the fetch. refresh() re-fetches unconditionally; it's
+        // a no-op if the pane was never mounted (_render() null-guards
+        // #mp-content) — same live-update precedent as
+        // window.registerPluginCommand for freshly-installed plugin commands.
+        if (typeof window.MarketplacePane?.refresh === 'function') {
+          window.MarketplacePane.refresh();
+        }
         return;
       }
       if (msg.type === 'skill_renamed' && msg.skill_id) {
         const entry = SKILL_MAP[msg.skill_id];
         if (entry && msg.display_name) entry.label = msg.display_name;
+        // Same gap as skill_registered above — the Skills tab's Installed
+        // row would otherwise keep showing the old display_name until reload.
+        if (typeof window.MarketplacePane?.refresh === 'function') {
+          window.MarketplacePane.refresh();
+        }
         return;
       }
       if (msg.type === 'model_changed' && msg.model) {

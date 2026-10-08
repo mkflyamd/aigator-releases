@@ -3875,6 +3875,21 @@ async def tp_teams_send_message(req: TeamsSendMessageRequest):
             )
 
         # Fast path: chat_id already known — send directly via Skype
+        #
+        # NOTE (incident, 2026-09-30): a "19:preview-..." + recipient
+        # auto-fallback used to live here (resolve via `to` when the
+        # cached chat_id looked like an unrealized preview stub). It was
+        # REMOVED after it delivered a real message to the wrong person —
+        # a scheduled job's draft had chat_topic "ValliyappanRam,AI Agent"
+        # but `to` had been resolved to Ram's *personal* email, and the
+        # fallback trusted `to` without any cross-check against
+        # chat_topic. `to`/`chat_id`/`chat_topic` are independently
+        # model-supplied with no code-level guarantee they name the same
+        # person — verified false in this exact incident. Never
+        # auto-resolve a delivery target here again without an actual
+        # verification step (e.g. confirming the resolved contact's
+        # identity matches chat_topic) — see the honest-422 branch below,
+        # which is the safe behavior: fail loudly, let a human re-send.
         if req.chat_id:
             content = req.message
             has_mentions = 'itemtype="http://schema.skype.com/Mention"' in content
@@ -3920,8 +3935,40 @@ async def tp_teams_send_message(req: TeamsSendMessageRequest):
                         timeout=15,
                     )
             if resp.status_code not in (200, 201):
+                # A cached chat_id can go stale — e.g. a Teams "preview" 1:1
+                # stub (chat_id starting "19:preview-...") that was never
+                # actually materialized, or a chat the recipient later left.
+                # Root-caused live: a recurring scheduled job's draft had a
+                # stale preview chat_id and consistently 404'd here, while a
+                # fresh compose to the same person (resolved via email, no
+                # cached chat_id) sent fine — confirming the ID, not the
+                # recipient, was the problem.
+                #
+                # Deliberately NOT auto-falling-back to a recipient-resolved
+                # send here (an earlier version of this fix did): chat_id and
+                # to/recipients are independently model-supplied fields with
+                # no code-level guarantee they name the same person. If they
+                # were ever mismatched, silently retrying via `to` instead of
+                # just failing could deliver to a different, unintended
+                # recipient — exactly the failure mode this app's
+                # human-in-the-loop design exists to prevent. Failing loudly
+                # with the real reason (below) is strictly safer than
+                # resilience here; the user/model can explicitly re-send.
+                #
+                # Status 422 deliberately avoids 404/410 (which the draft-
+                # approval UI reads as "this draft itself expired" — a
+                # completely different, misleading meaning from "Teams
+                # rejected this specific conversation") and avoids 401/403/
+                # 500/502/503 (each mapped to an unrelated canned message by
+                # the frontend) — 422 falls through to showing this real
+                # detail text verbatim.
                 raise HTTPException(
-                    status_code=resp.status_code, detail=f"Skype API: {resp.text[:300]}"
+                    status_code=422,
+                    detail=(
+                        f"Teams could not deliver to this conversation — it may be a stale "
+                        f"'preview' chat. Ask Gator to re-draft/resend to this recipient "
+                        f"directly. ({resp.text[:300]})"
+                    ),
                 )
             result = resp.json() if resp.text else {}
             print(

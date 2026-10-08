@@ -380,3 +380,22 @@ it to land in a curated catalog.
 
 Limits: 10 MB total, 100 files. Larger skills must be added via a curated
 marketplace source.
+
+## Importing a skill from a local file or folder
+
+Marketplace pane → **+ Import from URL** tab → **or install from local file**:
+
+- **Choose ZIP/.skill…** — opens a native file picker filtered to
+  `.zip` / `.skill` / `.gator`. All three are the same ZIP archive format
+  under the hood — `install_skill_md()` detects them by magic bytes
+  (`PK\x03\x04`), not by extension — so a `.skill` package produced by
+  Claude's skill-creator (or any other Agent Skills tool) installs the same
+  way a hand-zipped skill does. Requires a top-level (or single-nested)
+  `SKILL.md`.
+- **Choose Folder…** — opens a native directory picker. Point this at an
+  already-unzipped skill folder instead.
+
+Both paths go through `/api/marketplace/install-local`, register the skill in
+`installed-skills.json` at **Community** tier, and hot-load `tools.py` if
+present — same as any other install, so the skill shows up in the Installed
+list immediately without a restart.
