@@ -45,6 +45,9 @@ def test_profile_denies_by_default_and_scopes_access():
     assert not [r for r in _rules(profile) if "network" in r or "system-socket" in r]
     subpaths = _literals(profile, "subpath")
     assert "/Users/me" not in subpaths and "/" not in subpaths  # never the home folder or root itself
+    # Processes abort at start-up unless the root directory entry itself is readable; only that literal.
+    assert '(allow file-read-data (literal "/"))' in rules
+    assert _literals(profile, "literal").count("/") == 1
 
 
 def test_profile_network_only_when_approved():

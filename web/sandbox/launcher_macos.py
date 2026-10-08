@@ -1,7 +1,7 @@
 """macOS Seatbelt launcher (/usr/bin/sandbox-exec -p <profile>).
 
 Not runnable on the Windows development machine: verified by build_profile
-tests on every OS plus the manual release-gate smoke test on a real Mac.
+tests on every OS plus real sandboxed runs on the macOS CI runner.
 Children inherit the sandbox. Paths are passed through realpath before the
 profile is built (/var -> /private/var, /tmp -> /private/tmp).
 """
@@ -47,6 +47,9 @@ def build_profile(req: SandboxRequest) -> str:
         "(allow signal (target same-sandbox))",
         "(allow sysctl-read)",
         "(allow file-read-metadata)",
+        # Every process (even /usr/bin/true) reads the root directory entry itself at start-up and
+        # aborts with SIGABRT if that is denied. A literal covers only "/", never what is below it.
+        '(allow file-read-data (literal "/"))',
         f"(allow mach-lookup {_global_names(_MACH_SERVICES)})",
         f"(allow file-read* {_subpaths(SYSTEM_READ_PATHS)})",
         # /System includes the firmlinked data volume (/System/Volumes/Data/Users/...): deny it
