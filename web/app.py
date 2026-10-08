@@ -535,11 +535,17 @@ async def _execute_tool_impl(
                 try:
                     parsed = json.loads(r_text)
                     if isinstance(parsed, dict) and parsed.get("status") == "error":
+                        if outcome_state is not None:
+                            outcome_state["outcome"] = "error"
+                            outcome_state["error_code"] = "tool_error"
                         return {"result": shared._SLACK_SAFE_MSG}
                 except (json.JSONDecodeError, TypeError):
                     pass
                 low = r_text.lower()
                 if any(kw in low for kw in ("invalid_auth", "token_expired", "not_authed", "invalid_token")):
+                    if outcome_state is not None:
+                        outcome_state["outcome"] = "error"
+                        outcome_state["error_code"] = "tool_error"
                     return {"result": shared._SLACK_SAFE_MSG}
             if "error" in result:
                 return {"result": shared._SLACK_SAFE_MSG}
@@ -556,6 +562,9 @@ async def _execute_tool_impl(
             return maybe_truncate_json_result(result, tool_name=name)
         return truncate_tool_result(result, tool_name=name)
     except Exception as e:
+        if outcome_state is not None:
+            outcome_state["outcome"] = "error"
+            outcome_state["error_code"] = "tool_exception"
         if name.startswith("slack_"):
             return {"result": shared._SLACK_SAFE_MSG}
         return {"error": str(e)}
