@@ -18,9 +18,11 @@ from __future__ import annotations
 
 import json
 import logging
+import asyncio
 import time
 import uuid
-from datetime import datetime, timezone
+from contextvars import ContextVar
+from datetime import datetime, timedelta, timezone
 
 import aiosqlite
 
@@ -29,6 +31,11 @@ from config import TASKS_DB as DB_PATH
 _log = logging.getLogger(__name__)
 
 _MAX_ERROR_LEN = 500
+TELEMETRY_RETENTION_DAYS = 30
+_initialized = False
+_tool_telemetry_tasks: set[asyncio.Task] = set()
+_main_loop: asyncio.AbstractEventLoop | None = None
+mcp_audit_suppressed: ContextVar[bool] = ContextVar("mcp_audit_suppressed", default=False)
 
 # In-memory map: context_id -> (last_turn_id, last_turn_end_ts).
 # Used by link_next_turn to fill next_turn_id / next_turn_delay_s on the
@@ -40,6 +47,7 @@ _last_turn_by_context: dict[str, tuple[str, float]] = {}
 async def init_table() -> None:
     """Create the turn_log table if it doesn't exist. Called from
     task_queue.init_db() alongside the existing usage_log table creation."""
+    global _initialized, _main_loop
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
@@ -74,7 +82,31 @@ async def init_table() -> None:
         await db.execute("CREATE INDEX IF NOT EXISTS idx_turn_log_context ON turn_log(context_id, created_at)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_turn_log_task ON turn_log(task_id)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_turn_log_outcome ON turn_log(outcome)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_turn_log_created_at ON turn_log(created_at)")
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS tool_call_log (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at    TEXT NOT NULL,
+                context_id    TEXT,
+                task_id       TEXT,
+                tool_name     TEXT NOT NULL,
+                is_mcp        INTEGER NOT NULL DEFAULT 0,
+                outcome       TEXT NOT NULL,
+                duration_ms   INTEGER NOT NULL DEFAULT 0,
+                error_code    TEXT
+            )
+        """)
+        columns = {
+            row[1] for row in await (await db.execute("PRAGMA table_info(tool_call_log)")).fetchall()
+        }
+        if "error_code" not in columns:
+            await db.execute("ALTER TABLE tool_call_log ADD COLUMN error_code TEXT")
+        if "error_detail" in columns:
+            await db.execute("UPDATE tool_call_log SET error_detail = NULL WHERE error_detail IS NOT NULL")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_tool_call_log_created_at ON tool_call_log(created_at)")
         await db.commit()
+    _initialized = True
+    _main_loop = asyncio.get_running_loop()
 
 
 def _truncate(s: str | None) -> str | None:
@@ -87,6 +119,94 @@ def _truncate(s: str | None) -> str | None:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+async def log_tool_call(
+    tool_name: str,
+    outcome: str,
+    duration_ms: int,
+    *,
+    context_id: str | None = None,
+    task_id: str | None = None,
+    error_code: str | None = None,
+) -> None:
+    """Best-effort metadata-only record for a user tool execution."""
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(
+                """INSERT INTO tool_call_log (
+                    created_at, context_id, task_id, tool_name, is_mcp,
+                    outcome, duration_ms, error_code
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    _now_iso(), context_id, task_id, tool_name,
+                    1 if tool_name.startswith("mcp-") else 0,
+                    outcome, max(0, duration_ms), _truncate(error_code),
+                ),
+            )
+            await db.commit()
+    except Exception as exc:
+        _log.warning("[turn_telemetry] failed to log tool call: %s", exc)
+
+
+def schedule_tool_call(
+    tool_name: str,
+    outcome: str,
+    duration_ms: int,
+    *,
+    context_id: str | None = None,
+    task_id: str | None = None,
+    error_code: str | None = None,
+) -> None:
+    """Schedule fail-open telemetry from any async user execution path."""
+    if not _initialized or _main_loop is None:
+        return
+
+    def _schedule() -> None:
+        task = asyncio.create_task(log_tool_call(
+            tool_name, outcome, duration_ms, context_id=context_id,
+            task_id=task_id, error_code=error_code,
+        ))
+        _tool_telemetry_tasks.add(task)
+        task.add_done_callback(_tool_telemetry_tasks.discard)
+
+    try:
+        try:
+            running_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            running_loop = None
+        if running_loop is _main_loop:
+            _schedule()
+        else:
+            _main_loop.call_soon_threadsafe(_schedule)
+    except Exception:
+        _log.warning("[turn_telemetry] failed to schedule tool call")
+
+
+async def drain_tool_call_tasks(timeout_s: float = 0.5) -> None:
+    """Bounded graceful drain; telemetry never holds shutdown indefinitely."""
+    pending = list(_tool_telemetry_tasks)
+    if not pending:
+        return
+    done, still_pending = await asyncio.wait(pending, timeout=timeout_s)
+    for task in still_pending:
+        task.cancel()
+    if still_pending:
+        await asyncio.gather(*still_pending, return_exceptions=True)
+
+
+async def cleanup_old_records(now: datetime | None = None) -> dict[str, int]:
+    """Delete telemetry records older than the fixed retention period."""
+    cutoff = (now or datetime.now(timezone.utc)) - timedelta(days=TELEMETRY_RETENTION_DAYS)
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            turn_cur = await db.execute("DELETE FROM turn_log WHERE created_at < ?", (cutoff.isoformat(),))
+            tool_cur = await db.execute("DELETE FROM tool_call_log WHERE created_at < ?", (cutoff.isoformat(),))
+            await db.commit()
+            return {"turn_log": turn_cur.rowcount, "tool_call_log": tool_cur.rowcount}
+    except Exception as exc:
+        _log.warning("[turn_telemetry] failed to clean old records: %s", exc)
+        return {"turn_log": 0, "tool_call_log": 0}
 
 
 async def log_turn_start(

@@ -127,18 +127,46 @@ def new_session_id() -> str:
 
 def build_opencode_bare_command(repo_path: str) -> list[str] | None:
     """argv for a single bare `opencode` process rooted at repo_path — no
-    `serve`, no `attach`. None if the bundled binary isn't found (mirrors
+    `serve`, no `attach`. None if opencode can't be found (mirrors
     build_command's contract for the route layer's "not installed" error).
+
+    Resolution order:
+      1. PATH via shutil.which("opencode") — same model as crush/codex/claude.
+         This is what makes it work in the PACKAGED app: find_bundled_opencode()
+         computes a path relative to __file__, which in a PyInstaller onefile
+         build lands in the %TEMP%\\_MEI… extraction dir and never resolves. PATH
+         has no such problem, so a user-installed `opencode` just works.
+      2. Bundled binary via find_bundled_opencode() — the dev fallback, where the
+         repo ships node\\opencode.cmd next to web/ (WakeGator provisions it).
 
     No --session resume: a lost/restarted PTY just starts a fresh OpenCode
     session, same tradeoff _active_sessions already documents for every other
-    agent here — this is a connectivity test, not a resume-parity feature.
+    agent here.
     """
+    import shutil
+
+    resolved = shutil.which("opencode")
+    if resolved:
+        return [_wrap_windows_cmd(resolved), repo_path]
+
     from skills.opencode_agent.binary import find_bundled_opencode
-    resolved = find_bundled_opencode()
-    if not resolved:
-        return None
-    return [str(resolved), repo_path]
+
+    bundled = find_bundled_opencode()
+    if bundled:
+        return [str(bundled), repo_path]
+    return None
+
+
+def _wrap_windows_cmd(path: str) -> str:
+    """Return an argv[0] safe for PtyProcess.spawn.
+
+    shutil.which("opencode") on Windows can return a .cmd/.bat shim (npm global
+    installs are .cmd). PtyProcess.spawn can exec those directly here because the
+    caller wraps the command list, but we normalise to the resolved path so the
+    child never re-resolves the bare name through PATH (which could hit a
+    different shim). Kept trivial and platform-agnostic on purpose.
+    """
+    return path
 
 
 def build_opencode_bare_env() -> dict[str, str]:

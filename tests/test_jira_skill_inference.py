@@ -13,7 +13,11 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "web"))
 
-from routes.chat import _infer_skills_from_message
+from routes.chat import (
+    _ensure_image_fetch_skill,
+    _infer_skills_from_message,
+    _is_image_analysis_request,
+)
 
 
 def test_atlassian_browse_url_infers_jira():
@@ -59,3 +63,29 @@ def test_atlassian_url_without_browse_or_wiki_does_not_force_jira():
     # path is fine to catch, but the structural rule specifically needs /browse/).
     # This asserts the structural rule is precise; keyword matching may still apply.
     assert isinstance(inferred, list)
+
+
+def test_image_recap_is_routed_to_authenticated_image_fetching():
+    assert _is_image_analysis_request("recap the image") is True
+    assert _is_image_analysis_request("describe this Teams screenshot") is True
+    assert _is_image_analysis_request("what is in this picture?") is True
+    assert _is_image_analysis_request("OCR the attached diagram") is True
+
+
+def test_image_generation_is_not_mistaken_for_image_analysis():
+    assert _is_image_analysis_request("generate an image of a gator") is False
+    assert _is_image_analysis_request("draw a diagram") is False
+
+
+def test_image_analysis_adds_fetch_tool_to_initial_skill_set():
+    inferred = _ensure_image_fetch_skill(
+        "recap the image", ["teams", "code_runner"], {"teams", "code_runner", "fetch_image"}
+    )
+    assert inferred == ["teams", "code_runner", "fetch_image"]
+
+
+def test_image_fetch_skill_is_not_added_when_unavailable_or_already_present():
+    assert _ensure_image_fetch_skill("recap the image", ["teams"], {"teams"}) == ["teams"]
+    assert _ensure_image_fetch_skill(
+        "recap the image", ["teams", "fetch_image"], {"teams", "fetch_image"}
+    ) == ["teams", "fetch_image"]

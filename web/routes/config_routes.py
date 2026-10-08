@@ -50,6 +50,11 @@ class GithubConfigRequest(BaseModel):
     token: str
 
 
+class GoogleWorkspaceConfigRequest(BaseModel):
+    client_id: str
+    client_secret: str
+
+
 class UsernameRequest(BaseModel):
     username: str
 
@@ -454,7 +459,46 @@ def save_jira_pat(req: JiraPatRequest):
             current.pop("jira_api_token", None)
         return current
     _update_config(_commit_jira)
+    # Direct API credentials are intentionally site-specific. Do not silently
+    # create a generic Cloud MCP connection here: that service may choose a
+    # provider-default site rather than this configured base URL. Users opt
+    # into Cloud MCP or Rovo SSO explicitly through their separate controls.
     return {"ok": True, "user": display_name, "base_url": base_url}
+
+
+@router.post("/api/config/atlassian/cloud-mcp", dependencies=[Depends(verify_csrf)])
+def connect_atlassian_cloud_mcp():
+    """Create/update the optional API-token Atlassian Cloud MCP connection.
+
+    This is deliberately separate from saving the direct Jira/Confluence API
+    site. The MCP endpoint exposes a broad catalog but does not currently
+    accept the direct site's base URL as a resource target.
+    """
+    cfg = _load_config()
+    email = cfg.get("jira_email") or cfg.get("confluence_email") or ""
+    token = cfg.get("jira_api_token") or cfg.get("confluence_pat") or ""
+    base_url = cfg.get("jira_base_url") or cfg.get("confluence_base_url") or ""
+    if not email or not token or "atlassian.net" not in base_url:
+        raise HTTPException(
+            status_code=400,
+            detail="Save a Jira & Confluence Cloud API-token connection before enabling Cloud MCP.",
+        )
+
+    from mcp.manager import add_or_update
+
+    result = add_or_update(
+        {
+            "connection_id": "cloud-atlassian",
+            "name": "Atlassian Cloud MCP · API token",
+            "transport": "http",
+            "url": "https://mcp-platform.amd.com/mcp/cloud_atlassian",
+            "auth_type": "basic",
+            "auth_value": f"{email}:{token}",
+        }
+    )
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error", "Could not connect Cloud MCP."))
+    return result
 
 
 class JiraExtraSitesRequest(BaseModel):
@@ -753,6 +797,53 @@ def save_github(req: GithubConfigRequest):
     cfg["github_base_url"] = base_url
     _save_config(cfg)
     return {"ok": True, "user": username, "base_url": base_url}
+
+
+@router.post("/api/config/google")
+def save_google_workspace(req: GoogleWorkspaceConfigRequest):
+    """Persist the shared Google OAuth client_id/secret for the Google
+    Workspace MCP preset (see docs/google-workspace-integration.md).
+
+    One Google Cloud OAuth client is created once (by whoever administers
+    this AI Gator instance) and shared by every user who connects Google
+    Workspace here — this endpoint is how that pair actually reaches
+    config.json instead of requiring a hand edit of the file.
+    """
+    client_id = req.client_id.strip()
+    client_secret = req.client_secret.strip()
+    if not client_id:
+        raise HTTPException(status_code=400, detail="Client ID is required")
+    if not client_secret:
+        raise HTTPException(status_code=400, detail="Client Secret is required")
+
+    def _mutate(cfg: dict):
+        cfg["google_oauth_client_id"] = client_id
+        cfg["google_oauth_client_secret"] = client_secret
+        return cfg
+
+    _update_config(_mutate)
+    return {"ok": True, "client_id": client_id}
+
+
+@router.get("/api/config/google/status")
+def google_workspace_credentials_status():
+    """Whether the shared Google OAuth client_id/secret are configured.
+
+    Does not return the secret — only a truncated client_id preview — so the
+    Settings UI can show "configured" state without re-displaying credentials.
+    """
+    cfg = _load_config()
+    client_id = (
+        os.environ.get("GATOR_GOOGLE_CLIENT_ID") or cfg.get("google_oauth_client_id", "") or ""
+    )
+    client_secret = (
+        os.environ.get("GATOR_GOOGLE_CLIENT_SECRET")
+        or cfg.get("google_oauth_client_secret", "")
+        or ""
+    )
+    configured = bool(client_id and client_secret)
+    preview = f"{client_id[:16]}…" if configured and len(client_id) > 20 else client_id
+    return {"configured": configured, "client_id_preview": preview if configured else ""}
 
 
 @router.get("/api/config/github/status")
