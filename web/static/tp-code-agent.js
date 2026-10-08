@@ -1420,7 +1420,18 @@ function _caShowSessionDropdown() {
   const chip = document.querySelector('.ca-session-chip');
   if (chip) {
     const rect = chip.getBoundingClientRect();
-    dropdown.style.top = rect.bottom + 4 + 'px';
+    const margin = 8;
+    const spaceBelow = window.innerHeight - rect.bottom - margin;
+    const spaceAbove = rect.top - margin;
+    // Prefer below the chip, but flip above when the project list has more
+    // usable room there. The CSS supplies the thin app scrollbar once the
+    // rendered menu exceeds this bound.
+    const openBelow = spaceBelow >= spaceAbove;
+    const availableHeight = Math.max(0, openBelow ? spaceBelow : spaceAbove);
+    dropdown.style.maxHeight = availableHeight + 'px';
+    dropdown.style.top = openBelow
+      ? rect.bottom + 4 + 'px'
+      : Math.max(margin, rect.top - Math.min(dropdown.scrollHeight, availableHeight) - 4) + 'px';
     dropdown.style.left = rect.left + 'px';
   }
 

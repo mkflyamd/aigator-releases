@@ -519,14 +519,18 @@ def _onedrive_docx_context(item_id: str, readonly: bool = False):
     import time as _time
     import httpx
     from pathlib import Path
+    from urllib.parse import quote as _url_quote
     from .._m365.helpers import get_skill_client
+
+    def _eid(v: str) -> str:
+        return _url_quote(v or "", safe="")
 
     ONEDRIVE_SKILLS_DIR = Path(__file__).parent.parent / "m365-onedrive" / "scripts"
     gc = get_skill_client(ONEDRIVE_SKILLS_DIR)
 
     # Resolve metadata to get the pre-auth downloadUrl and filename
     meta = gc.get(
-        f"/me/drive/items/{item_id}",
+        f"/me/drive/items/{_eid(item_id)}",
         params={"$select": "id,name,@microsoft.graph.downloadUrl"},
     )
     name = meta.get("name", "document.docx")
@@ -540,7 +544,7 @@ def _onedrive_docx_context(item_id: str, readonly: bool = False):
             r = client.get(direct_url)
         else:
             r = client.get(
-                f"https://graph.microsoft.com/v1.0/me/drive/items/{item_id}/content",
+                f"https://graph.microsoft.com/v1.0/me/drive/items/{_eid(item_id)}/content",
                 headers={"Authorization": f"Bearer {token}"},
             )
         r.raise_for_status()
@@ -575,7 +579,7 @@ def _onedrive_docx_context(item_id: str, readonly: bool = False):
             )
             try:
                 sess_resp = sess_client.post(
-                    f"https://graph.microsoft.com/v1.0/me/drive/items/{item_id}/createUploadSession",
+                    f"https://graph.microsoft.com/v1.0/me/drive/items/{_eid(item_id)}/createUploadSession",
                     headers={
                         "Authorization": f"Bearer {token}",
                         "Content-Type": "application/json",
@@ -609,7 +613,7 @@ def _onedrive_docx_context(item_id: str, readonly: bool = False):
                 )
                 try:
                     resp = put_client.put(
-                        f"https://graph.microsoft.com/v1.0/me/drive/items/{item_id}/content",
+                        f"https://graph.microsoft.com/v1.0/me/drive/items/{_eid(item_id)}/content",
                         headers={
                             "Authorization": f"Bearer {token}",
                             "Content-Type": "application/octet-stream",

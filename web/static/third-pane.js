@@ -58,6 +58,7 @@ const _nativeSlack = {
   mode: null, // null = unknown, 'classic' | 'native'
   _chipEl: null,
   _currentCtx: null,
+  _lastChannelCtx: null, // retained for directory fallback after Slack is hidden
   _ctxListenerInstalled: false,
 
   // Native Slack is active when either (a) running inside the Electron shell
@@ -216,6 +217,7 @@ const _nativeSlack = {
       const ctx = e.detail;
       if (ctx && ctx.channel) {
         this._currentCtx = ctx;
+        this._lastChannelCtx = ctx;
       }
     });
   },
@@ -228,6 +230,7 @@ const _nativeSlack = {
         const ctx = await r.json();
         if (ctx && ctx.channel && ctx !== this._currentCtx) {
           this._currentCtx = ctx;
+          this._lastChannelCtx = ctx;
           this._renderChip(ctx);
         }
       } catch {}

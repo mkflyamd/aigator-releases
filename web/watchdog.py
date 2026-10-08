@@ -7,6 +7,7 @@ Usage: python3 web/watchdog.py
 """
 
 import json
+import os
 import socket
 import subprocess
 import sys
@@ -28,13 +29,6 @@ class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
 
 
 ROOT = Path(__file__).parent.parent
-if sys.platform == "win32":
-    _LOG_DIR = Path.home() / "AppData" / "Local" / "AIGator" / "logs"
-elif sys.platform == "darwin":
-    _LOG_DIR = Path.home() / "Library" / "Logs" / "AIGator"
-else:
-    _LOG_DIR = Path.home() / ".local" / "state" / "AIGator" / "logs"
-LOG_FILE = _LOG_DIR / "aigator.log"
 _proc = None
 
 
@@ -134,26 +128,6 @@ def _running() -> bool:
     return _proc is not None and _proc.poll() is None
 
 
-def _rotate_log():
-    max_bytes = 5 * 1024 * 1024  # 5 MB
-    if not (LOG_FILE.exists() and LOG_FILE.stat().st_size > max_bytes):
-        return
-    backup = LOG_FILE.with_suffix(".1.log")
-    backup.unlink(missing_ok=True)
-    try:
-        LOG_FILE.rename(backup)
-    except OSError:
-        # On Windows, rename fails if another process holds the file open
-        # (WinError 32). Fall back to copy+truncate which works on open handles.
-        import shutil
-
-        try:
-            shutil.copy2(LOG_FILE, backup)
-            LOG_FILE.write_bytes(b"")
-        except OSError:
-            pass  # rotation is best-effort; never block startup
-
-
 def _port_in_use(port: int) -> bool:
     import socket
 
@@ -212,17 +186,6 @@ def _preflight() -> tuple[bool, str]:
                 "AI Gator couldn't start because something else is using its port. "
                 "Try restarting your computer. If the problem persists, contact support."
             )
-    # Check log dir is writable
-    try:
-        LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-        test = LOG_FILE.parent / ".write_test"
-        test.write_text("x")
-        test.unlink()
-    except OSError as e:
-        return False, (
-            f"AI Gator could not write to its log folder. "
-            f"Try running as your normal user account, or contact support. (Detail: {e})"
-        )
     return True, ""
 
 
@@ -238,19 +201,7 @@ def _start() -> bool:
         _startup_error = err
         return False
     _startup_error = ""
-    try:
-        LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        pass
-    try:
-        _rotate_log()
-    except Exception:
-        pass
     flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-    try:
-        log_fh = open(LOG_FILE, "a")
-    except OSError:
-        log_fh = subprocess.DEVNULL
     _proc = subprocess.Popen(
         [
             sys.executable,
@@ -264,7 +215,8 @@ def _start() -> bool:
         ],
         cwd=str(ROOT),
         creationflags=flags,
-        stdout=log_fh,
+        env={**os.environ, "AIGATOR_MANAGED_LOGGING": "1"},
+        stdout=subprocess.DEVNULL,
         stderr=subprocess.STDOUT,
     )
     return True

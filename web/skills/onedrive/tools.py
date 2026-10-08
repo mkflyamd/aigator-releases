@@ -1,6 +1,12 @@
 """OneDrive skill -- 2 tools."""
 
 from pathlib import Path
+from urllib.parse import quote as _url_quote
+
+
+def _eid(v: str) -> str:
+    """Percent-encode a Graph resource ID for use in a URL path segment."""
+    return _url_quote(v or "", safe="")
 
 ONEDRIVE_SKILLS_DIR = Path(__file__).parent.parent / "m365-onedrive" / "scripts"
 
@@ -19,7 +25,7 @@ def download_drive_item_bytes(file_id: str, drive_id: str = "", *, max_bytes: in
     if not file_id:
         return {"error": "A OneDrive item ID is required."}
     gc = get_skill_client(ONEDRIVE_SKILLS_DIR)
-    meta_path = f"/drives/{drive_id}/items/{file_id}" if drive_id else f"/me/drive/items/{file_id}"
+    meta_path = f"/drives/{_eid(drive_id)}/items/{_eid(file_id)}" if drive_id else f"/me/drive/items/{_eid(file_id)}"
     try:
         meta = gc.get(meta_path, params={"$select": "id,name,size,file,@microsoft.graph.downloadUrl"})
     except Exception as exc:
@@ -35,8 +41,8 @@ def download_drive_item_bytes(file_id: str, drive_id: str = "", *, max_bytes: in
                 response = client.get(direct_url)
             else:
                 path = (
-                    f"https://graph.microsoft.com/v1.0/drives/{drive_id}/items/{item_id}/content"
-                    if drive_id else f"https://graph.microsoft.com/v1.0/me/drive/items/{item_id}/content"
+                    f"https://graph.microsoft.com/v1.0/drives/{_eid(drive_id)}/items/{_eid(item_id)}/content"
+                    if drive_id else f"https://graph.microsoft.com/v1.0/me/drive/items/{_eid(item_id)}/content"
                 )
                 response = client.get(path, headers={"Authorization": f"Bearer {gc.get_token()}"})
             response.raise_for_status()
@@ -113,10 +119,10 @@ def _try_direct_lookup(
     try:
         if drive_id:
             meta = gc.get(
-                f"/drives/{drive_id}/items/{item_id}", params={"$select": select}
+                f"/drives/{_eid(drive_id)}/items/{_eid(item_id)}", params={"$select": select}
             )
         else:
-            meta = gc.get(f"/me/drive/items/{item_id}", params={"$select": select})
+            meta = gc.get(f"/me/drive/items/{_eid(item_id)}", params={"$select": select})
         return _from_meta(meta, drive_id)
     except Exception as e:
         status = getattr(e, "status_code", 0)
@@ -147,7 +153,7 @@ def _try_direct_lookup(
                 if not ri_drive:
                     continue
                 meta = gc.get(
-                    f"/drives/{ri_drive}/items/{ri_id}", params={"$select": select}
+                    f"/drives/{_eid(ri_drive)}/items/{_eid(ri_id)}", params={"$select": select}
                 )
                 return _from_meta(meta, ri_drive)
     except Exception:
@@ -692,14 +698,14 @@ def _tool_read_onedrive_file(
                 drive_id = resolved.get("drive_id", drive_id)
                 if drive_id:
                     meta = gc.get(
-                        f"/drives/{drive_id}/items/{file_id}",
+                        f"/drives/{_eid(drive_id)}/items/{_eid(file_id)}",
                         params={
                             "$select": "id,name,size,file,webUrl,parentReference,@microsoft.graph.downloadUrl"
                         },
                     )
                 else:
                     meta = gc.get(
-                        f"/me/drive/items/{file_id}",
+                        f"/me/drive/items/{_eid(file_id)}",
                         params={
                             "$select": "id,name,size,file,webUrl,parentReference,@microsoft.graph.downloadUrl"
                         },
@@ -743,10 +749,10 @@ def _tool_read_onedrive_file(
             return r.content
         # Fall back to the Graph /content endpoint with Bearer token.
         if drive_id:
-            dl_url = f"https://graph.microsoft.com/v1.0/drives/{drive_id}/items/{item_id}/content"
+            dl_url = f"https://graph.microsoft.com/v1.0/drives/{_eid(drive_id)}/items/{_eid(item_id)}/content"
         else:
             dl_url = (
-                f"https://graph.microsoft.com/v1.0/me/drive/items/{item_id}/content"
+                f"https://graph.microsoft.com/v1.0/me/drive/items/{_eid(item_id)}/content"
             )
         r = _pool.get(dl_url, headers={"Authorization": f"Bearer {token}"})
         r.raise_for_status()
@@ -1066,7 +1072,7 @@ def _tool_list_onedrive_files(path: str = "", count: int = 50, drive_id: str = "
     gc = get_skill_client(ONEDRIVE_SKILLS_DIR)
     if drive_id:
         if folder_id:
-            api_path = f"/drives/{drive_id}/items/{folder_id}/children"
+            api_path = f"/drives/{_eid(drive_id)}/items/{_eid(folder_id)}/children"
         elif path:
             from urllib.parse import quote as _quote
 
@@ -1226,9 +1232,9 @@ def _tool_download_onedrive_file(
     # Get metadata + pre-authenticated download URL
     if file_id:
         meta_path = (
-            f"/drives/{drive_id}/items/{file_id}"
+            f"/drives/{_eid(drive_id)}/items/{_eid(file_id)}"
             if drive_id
-            else f"/me/drive/items/{file_id}"
+            else f"/me/drive/items/{_eid(file_id)}"
         )
     else:
         from urllib.parse import quote
@@ -1248,9 +1254,9 @@ def _tool_download_onedrive_file(
             r = pool.get(direct_url)
         else:
             dl_url = (
-                f"https://graph.microsoft.com/v1.0/drives/{drive_id}/items/{item_id}/content"
+                f"https://graph.microsoft.com/v1.0/drives/{_eid(drive_id)}/items/{_eid(item_id)}/content"
                 if drive_id
-                else f"https://graph.microsoft.com/v1.0/me/drive/items/{item_id}/content"
+                else f"https://graph.microsoft.com/v1.0/me/drive/items/{_eid(item_id)}/content"
             )
             r = pool.get(dl_url, headers={"Authorization": f"Bearer {gc.get_token()}"})
         r.raise_for_status()
@@ -1511,7 +1517,7 @@ def _tool_move_onedrive_file(source_drive_id: str, source_item_id: str,
         patch_body["name"] = new_name
     try:
         result = gc.patch(
-            f"/drives/{source_drive_id}/items/{source_item_id}",
+            f"/drives/{_eid(source_drive_id)}/items/{_eid(source_item_id)}",
             patch_body,
         )
     except Exception as e:
@@ -1551,7 +1557,7 @@ def _tool_copy_onedrive_file(source_drive_id: str, source_item_id: str,
         copy_body["name"] = new_name
 
     token = gc.get_token()
-    copy_url = f"https://graph.microsoft.com/v1.0/drives/{source_drive_id}/items/{source_item_id}/copy"
+    copy_url = f"https://graph.microsoft.com/v1.0/drives/{_eid(source_drive_id)}/items/{_eid(source_item_id)}/copy"
     try:
         r = _httpx.post(
             copy_url,
@@ -1614,7 +1620,7 @@ def _tool_get_onedrive_item(drive_id: str, item_id: str) -> dict:
     gc = get_skill_client(ONEDRIVE_SKILLS_DIR)
     try:
         meta = gc.get(
-            f"/drives/{drive_id}/items/{item_id}",
+            f"/drives/{_eid(drive_id)}/items/{_eid(item_id)}",
             params={"$select": "id,name,size,createdDateTime,lastModifiedDateTime,webUrl,parentReference,@microsoft.graph.downloadUrl"},
         )
     except Exception as e:

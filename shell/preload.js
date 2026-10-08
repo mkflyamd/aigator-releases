@@ -8,7 +8,7 @@ contextBridge.exposeInMainWorld('gatorShell', {
   platform: process.platform,
 
   // ── Slack (backwards-compatible — existing callers unchanged) ──────
-  showSlack: () => ipcRenderer.invoke('slack-pane:show'),
+  showSlack: () => ipcRenderer.invoke('external-pane:show', 'slack'),
   hideSlack: () => ipcRenderer.invoke('slack-pane:hide'),
   adjustSlackWidth: (delta) => ipcRenderer.invoke('slack-pane:adjust-width', delta),
   setSlackWidth: (width) => ipcRenderer.invoke('slack-pane:set-width', width),

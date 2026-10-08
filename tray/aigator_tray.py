@@ -482,6 +482,10 @@ def _spawn_electron():
         return _electron_proc
     env = dict(os.environ)
     env["GATOR_URL"] = "http://localhost:8000"
+    # Marks this Electron process as the owner of the tray-managed watchdog.
+    # Other Electron/dev instances may attach to a backend but must never stop
+    # the global stable watchdog when their own window closes.
+    env["GATOR_WATCHDOG_OWNER"] = "1"
     flags = (
         subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
         if sys.platform == "win32"

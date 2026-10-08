@@ -719,8 +719,12 @@
         elUrlInput.addEventListener('focus', () => {
           if (!userEditing && currentUrl) {
             elUrlInput.removeAttribute('readonly');
-            elUrlInput.select();
             userEditing = true;
+            // Defer select() to the next tick: the native mouseup that
+            // follows this focus (when focus was triggered by a click)
+            // would otherwise collapse our selection to a caret at the
+            // click point right after we set it.
+            setTimeout(() => elUrlInput.select(), 0);
           }
         });
 

@@ -81,9 +81,23 @@ function _ocSpawnTerm(sess) {
   });
 
   sess.term.onData((data) => {
-    if (sess.ws && sess.ws.readyState === WebSocket.OPEN) {
-      sess.ws.send(JSON.stringify({ type: 'input', data }));
+    if (!(sess.ws && sess.ws.readyState === WebSocket.OPEN)) return;
+    // Swallow xterm's automatic Device-Attributes reply at startup — but ONLY
+    // for the bare shell agent ('terminal'), where the reply echoes as a stray
+    // "[?1;2c" after the drawn prompt. TUI agents (opencode-bare, crush, codex,
+    // claude) NEED the DA1 reply forwarded: they send ESC[c during their TUI
+    // initialization and wait for the response before drawing their UI. Dropping
+    // it for those agents causes them to stall and render a blank or cursor-only
+    // pane — exactly the symptom we saw with opencode.
+    if (sess.agent === 'terminal' && !sess._sawUserInput) {
+      if (/^\x1b\[\?[0-9;]*c$/.test(data)) {
+        return; // startup DA1 auto-reply for bare shell — drop it
+      }
+      if (!/^\x1b\[[0-9;]*[a-zA-Z]$/.test(data)) {
+        sess._sawUserInput = true;
+      }
     }
+    sess.ws.send(JSON.stringify({ type: 'input', data }));
   });
 }
 
@@ -102,10 +116,13 @@ function _ocFit(sess) {
   // resize when nothing changed makes TUI apps redraw needlessly; clearing
   // the buffer on a no-op resize would wipe the screen for nothing.
   if (sess.term.cols === prevCols && sess.term.rows === prevRows) return;
-  // Clear the xterm viewport so stale content from the old size doesn't
-  // bleed into the TUI's redraw at the new size. Without this, a resize
-  // mid-popup leaves the old popup text interleaved with the new layout.
-  sess.term.reset();
+  // A post-start reset clears the TUI frame xterm has already painted. That
+  // is especially visible for a newly opened second session: it receives and
+  // renders OpenCode's first frame, then this late fit wipes it and leaves a
+  // blank canvas until OpenCode eventually redraws. A reset is safe only
+  // before the session has produced visible output; after that, let the PTY's
+  // resize notification drive the application's normal redraw.
+  if (!sess._hasOutput) sess.term.reset();
   if (sess.ws && sess.ws.readyState === WebSocket.OPEN) {
     sess.ws.send(
       JSON.stringify({

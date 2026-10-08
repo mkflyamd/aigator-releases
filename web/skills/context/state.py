@@ -35,6 +35,27 @@ def get_pins(context_id: str = "default") -> list[dict]:
     return list(pinned_contexts.get(context_id, {}).values())
 
 
+def find_slack_channel_for_ts(message_ts: str) -> str:
+    """Search ALL contexts for a Slack pin with this message_ts and return its channel_id.
+
+    Used to recover a missing channel_id when a pin was captured without one (e.g. in the
+    Threads dock where __gatorCurrentCtx.channel was null at pin time). Scans cross-context
+    so a pin created in one tab can recover its channel from a healthy pin in another tab.
+    """
+    for ctx in pinned_contexts.values():
+        for entry in ctx.values():
+            if entry.get("source") != "slack":
+                continue
+            pin_id = entry.get("id", "")
+            candidate = pin_id.split(":")[0] if ":" in pin_id else ""
+            if not candidate:
+                continue
+            meta = entry.get("meta", {})
+            if meta.get("message_ts") == message_ts:
+                return candidate
+    return ""
+
+
 def set_pin(
     source: str,
     item_id: str,

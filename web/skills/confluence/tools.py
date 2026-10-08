@@ -3,6 +3,7 @@
 import html as _html_mod
 import re
 import urllib.parse
+from datetime import date
 from .api import confluence_api, confluence_browse_url
 
 try:
@@ -15,15 +16,126 @@ ALWAYS_ON = False
 
 
 def _html_to_text(raw_html: str, max_len: int = 0) -> str:
-    text = re.sub(r"<br\s*/?>", "\n", raw_html, flags=re.IGNORECASE)
-    text = re.sub(r"</p>|</div>|</tr>|</li>", "\n", text, flags=re.IGNORECASE)
-    text = re.sub(r"<[^>]+>", "", text)
-    text = _html_mod.unescape(text)
-    text = text.replace("\u00a0", " ")
-    text = re.sub(r"[ \t]+", " ", text)
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    text = text.strip()
-    return text[:max_len] if max_len else text
+    from skills._m365.helpers import html_to_text as _central_html_to_text
+
+    # Confluence storage format uses <ac:image> with nested <ri:attachment> or
+    # <ri:url> instead of standard <img src>. Convert them to [image: filename]
+    # so the LLM knows an image is present, before the central stripper runs.
+    def _ac_image(m):
+        block = m.group(0)
+        url_m = re.search(r'ri:url\s+ri:value=["\']([^"\']+)["\']', block)
+        att_m = re.search(r'ri:attachment\s+ri:filename=["\']([^"\']+)["\']', block)
+        if url_m:
+            return f"[image]({url_m.group(1)})"
+        if att_m:
+            return f"[image: {att_m.group(1)}]"
+        return "[image]"
+
+    raw_html = re.sub(
+        r"<ac:image\b[^>]*>.*?</ac:image>",
+        _ac_image,
+        raw_html,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    # Also handle Confluence structured macros that embed content (e.g. drawio diagrams)
+    raw_html = re.sub(
+        r'<ac:structured-macro[^>]+ac:name=["\']drawio["\'][^>]*>.*?</ac:structured-macro>',
+        "[diagram]",
+        raw_html,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    return _central_html_to_text(raw_html, max_len=max_len)
+
+
+_HEADING_RE = re.compile(
+    r"<h([1-6])(?P<attrs>[^>]*)>(?P<body>[\s\S]*?)</h\1>", re.IGNORECASE
+)
+
+
+def _render_storage_time(match: re.Match) -> str:
+    """Render Confluence's storage-format time macro as the date users see."""
+    raw_date = match.group(1)[:10]
+    try:
+        parsed = date.fromisoformat(raw_date)
+        # %-d is unavailable on Windows, so compose the portable form rather
+        # than falling back to the raw ISO date in desktop CI.
+        return f"{parsed.strftime('%b')} {parsed.day}, {parsed.year}"
+    except (TypeError, ValueError):
+        return raw_date
+
+
+def _heading_outline(body_html: str) -> list[dict]:
+    """Extract a compact, human-readable heading index from storage HTML."""
+    headings = []
+    for index, match in enumerate(_HEADING_RE.finditer(body_html), start=1):
+        attrs = match.group("attrs")
+        local_id_match = re.search(
+            r'(?<![\w:-])(?:ac:)?local-id=["\']([^"\']+)["\']', attrs
+        )
+        rendered_body = re.sub(
+            r'<time\b[^>]*\bdatetime=["\']([^"\']+)["\'][^>]*/?\s*>',
+            _render_storage_time,
+            match.group("body"),
+            flags=re.IGNORECASE,
+        )
+        text = re.sub(r"\s+", " ", _html_to_text(rendered_body)).strip()
+        headings.append(
+            {
+                "heading_id": f"h{index}",
+                "level": int(match.group(1)),
+                "text": text or "(untitled heading)",
+                "local_id": local_id_match.group(1) if local_id_match else "",
+            }
+        )
+    return headings
+
+
+def _outline_table(headings: list[dict]) -> str:
+    """Format headings for direct display and easy user anchor selection."""
+    rows = ["| ID | Level | Heading | local-id |", "| --- | ---: | --- | --- |"]
+    for heading in headings:
+        text = heading["text"].replace("|", "\\|")
+        local_id = heading["local_id"] or "—"
+        rows.append(
+            f"| {heading['heading_id']} | H{heading['level']} | {text} | {local_id} |"
+        )
+    return "\n".join(rows)
+
+
+def _url_section_hint(page_id_or_url: str) -> str:
+    """Decode a Confluence URL fragment into the heading text a user intended."""
+    if "#" not in page_id_or_url:
+        return ""
+    fragment = urllib.parse.unquote(urllib.parse.urlsplit(page_id_or_url).fragment)
+    return re.sub(r"[-_]+", " ", fragment).strip()
+
+
+def _section_match_key(value: str) -> str:
+    """Normalize URL slugs and rendered headings for a conservative comparison."""
+    value = _html_mod.unescape(value).lower()
+    return re.sub(r"[^\w]+", " ", value).strip()
+
+
+def _matching_section_headings(headings: list[dict], section_hint: str) -> list[dict]:
+    """Match a decoded URL fragment, including unique bracketed placeholders."""
+    hint_key = _section_match_key(section_hint)
+    if not hint_key:
+        return []
+    exact_matches = [
+        heading for heading in headings if _section_match_key(heading["text"]) == hint_key
+    ]
+    if exact_matches or "[" not in section_hint or "]" not in section_hint:
+        return exact_matches
+
+    # Some generated anchors preserve a template token such as "[date]", while
+    # storage renders it as a Confluence time macro. Treat each bracketed token
+    # as a wildcard, but return every match so callers still require uniqueness.
+    pattern = "".join(
+        ".+?" if token.startswith("[") and token.endswith("]") else re.escape(token)
+        for token in re.split(r"(\[[^\]]+\])", re.sub(r"[-_]+", " ", section_hint))
+    )
+    matcher = re.compile(rf"^{pattern}$", re.IGNORECASE)
+    return [heading for heading in headings if matcher.fullmatch(heading["text"])]
 
 
 TOOL_DEFS = [
@@ -52,6 +164,42 @@ TOOL_DEFS = [
                 "page_id": {
                     "type": "string",
                     "description": "Confluence page ID (numeric) or full page URL",
+                },
+            },
+            "required": ["page_id"],
+        },
+    },
+    {
+        "name": "get_confluence_page_outline",
+        "description": "Read a page's heading outline without editing it. Returns each heading's displayed text, level, and local-id in a Markdown table. Use before editing whenever the requested location is unclear, especially on large pages or pages whose headings contain macros such as dates.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "page_id": {
+                    "type": "string",
+                    "description": "Confluence page ID (numeric) or full page URL",
+                },
+            },
+            "required": ["page_id"],
+        },
+    },
+    {
+        "name": "get_confluence_edit_context",
+        "description": "Get a small, safe Confluence edit target instead of reading a whole page. Pass the full page or section URL when available; its #fragment is resolved to a heading. Pass target_text (for example a Jira key) to return the containing table row and adjacent rows. If the page, section, or target is ambiguous, this tool returns needs_user_choice and you MUST ask the user rather than guessing or patching.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "page_id": {
+                    "type": "string",
+                    "description": "Confluence page ID, page URL, or section URL.",
+                },
+                "section": {
+                    "type": "string",
+                    "description": "Optional heading text when the URL has no #fragment.",
+                },
+                "target_text": {
+                    "type": "string",
+                    "description": "Optional unique text within the requested section, such as a Jira key. Returns the containing table row when present.",
                 },
             },
             "required": ["page_id"],
@@ -207,6 +355,11 @@ TOOL_DEFS = [
                     "description": "Set true ONLY after reviewing a dry_run preview's match_location to confirm a fuzzy (macro/heading/text) match anchored at the intended spot. Default false — fuzzy matches return a preview instead of applying.",
                     "default": False,
                 },
+                "dry_run": {
+                    "type": "boolean",
+                    "description": "Preview any resolved patch, including exact and local-id anchors, without writing to Confluence. Use this to validate an anchor; a dry run never issues a PUT request.",
+                    "default": False,
+                },
                 "after_local_id": {
                     "type": "string",
                     "description": "Structure-aware insert: splice `content` immediately AFTER the whole element bearing this local-id (copied from a read_confluence_page result). Tables, rows, cells, list items, paragraphs and headings all carry a local-id. Precise and unambiguous — ignores `find`/`mode`. Ideal for adding a table row or list item.",
@@ -241,6 +394,8 @@ TOOL_DEFS = [
 TOOL_STATUS = {
     "search_confluence": "📄 Searching Confluence...",
     "read_confluence_page": "📄 Reading Confluence page...",
+    "get_confluence_page_outline": "📄 Reading Confluence page outline...",
+    "get_confluence_edit_context": "📄 Preparing a safe Confluence edit context...",
     "create_confluence_page": "📄 Creating Confluence page...",
     "update_confluence_page": "📄 Updating Confluence page...",
     "patch_confluence_page": "📄 Patching Confluence page...",
@@ -339,8 +494,13 @@ def _tool_read_confluence_page(page_id: str) -> dict:
         body_text = (
             _html_to_text(body_html, max_len=4000) if body_html else "(empty page)"
         )
+        # Extract attachment filenames so the LLM knows what images are available
+        # and can call fetch_image directly without writing code.
+        image_filenames = re.findall(
+            r'ri:attachment\s+ri:filename=["\']([^"\']+)["\']', body_html, re.IGNORECASE
+        )
         history = data.get("history", {})
-        return {
+        result = {
             "id": data.get("id", page_id),
             "title": data.get("title", ""),
             "space": data.get("space", {}).get("name", ""),
@@ -356,6 +516,222 @@ def _tool_read_confluence_page(page_id: str) -> dict:
             .get("by", {})
             .get("displayName", ""),
         }
+        if image_filenames:
+            result["images"] = image_filenames
+            result["images_note"] = (
+                f"This page has {len(image_filenames)} image(s): {', '.join(image_filenames)}. "
+                f"To view any of them call fetch_image(page_id=\"{data.get('id', page_id)}\", filename=\"<name>\"). "
+                "Do NOT write code to download them — use the fetch_image tool directly."
+            )
+        return result
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def _tool_get_confluence_page_outline(page_id: str) -> dict:
+    """Return the page's headings and stable local-id anchors without writing."""
+    section_hint = _url_section_hint(page_id)
+    if page_id.startswith("http") or page_id.startswith("/wiki/"):
+        resolved = _resolve_page_id_from_url(page_id)
+        if resolved:
+            page_id = resolved
+    match = re.search(r"/pages/(\d+)", page_id)
+    if match:
+        page_id = match.group(1)
+    page_id = page_id.strip()
+    if not page_id.isdigit():
+        return {
+            "error": f"Invalid page ID: {page_id}. Provide a numeric ID or a Confluence page URL."
+        }
+    try:
+        data = confluence_api("GET", f"content/{page_id}?expand=body.storage,version")
+        headings = _heading_outline(
+            data.get("body", {}).get("storage", {}).get("value", "")
+        )
+        result = {
+            "id": data.get("id", page_id),
+            "title": data.get("title", ""),
+            "version": data.get("version", {}).get("number", 0),
+            "headings": headings,
+            "table": _outline_table(headings),
+            "hint": (
+                "When the edit location is unclear, show this table to the user and ask them "
+                "to select a heading by local-id or heading text. Use after_local_id or "
+                "before_local_id only when the selected heading has a local-id."
+            ),
+        }
+        if section_hint:
+            matches = _matching_section_headings(headings, section_hint)
+            result["url_section"] = section_hint
+            result["section_matches"] = matches
+            if len(matches) == 1:
+                result["target_heading"] = matches[0]
+                result["hint"] = (
+                    f"The URL fragment resolves uniquely to '{matches[0]['text']}'. "
+                    "Use its local-id as the precise patch anchor when available."
+                )
+            elif not matches:
+                result["hint"] = (
+                    f"The URL fragment '{section_hint}' did not exactly match a heading. "
+                    "Show the table and ask the user to select the intended heading."
+                )
+            else:
+                result["hint"] = (
+                    f"The URL fragment '{section_hint}' matches multiple headings. "
+                    "Show the matching rows and ask the user to choose a local-id."
+                )
+        return result
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def _heading_sections(body_html: str) -> list[dict]:
+    """Return heading records with the storage-HTML range each heading owns."""
+    matches = list(_HEADING_RE.finditer(body_html))
+    sections = []
+    for index, match in enumerate(matches):
+        attrs = match.group("attrs")
+        local_id_match = re.search(
+            r'(?<![\w:-])(?:ac:)?local-id=["\']([^"\']+)["\']', attrs
+        )
+        rendered_body = re.sub(
+            r'<time\b[^>]*\bdatetime=["\']([^"\']+)["\'][^>]*/?\s*>',
+            _render_storage_time,
+            match.group("body"),
+            flags=re.IGNORECASE,
+        )
+        text = re.sub(r"\s+", " ", _html_to_text(rendered_body)).strip()
+        level = int(match.group(1))
+        end = len(body_html)
+        for later in matches[index + 1 :]:
+            if int(later.group(1)) <= level:
+                end = later.start()
+                break
+        sections.append(
+            {
+                "heading_id": f"h{index + 1}",
+                "level": level,
+                "text": text or "(untitled heading)",
+                "local_id": local_id_match.group(1) if local_id_match else "",
+                "start": match.start(),
+                "end": end,
+            }
+        )
+    return sections
+
+
+def _bounded_storage_html(value: str, max_bytes: int) -> tuple[str, bool]:
+    """Return a UTF-8-safe bounded storage fragment for the model context."""
+    encoded = value.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return value, False
+    return encoded[:max_bytes].decode("utf-8", errors="ignore"), True
+
+
+def _row_context(body_html: str, target_text: str, start: int, end: int) -> dict:
+    """Return a table-row-sized context for one unique text occurrence."""
+    region = body_html[start:end]
+    occurrences = [m.start() for m in re.finditer(re.escape(target_text), region, re.IGNORECASE)]
+    if not occurrences:
+        return {"needs_user_choice": True, "reason": "target_not_found"}
+    if len(occurrences) > 1:
+        return {
+            "needs_user_choice": True,
+            "reason": "target_is_ambiguous",
+            "match_count": len(occurrences),
+        }
+    pos = start + occurrences[0]
+    row_start = body_html.rfind("<tr", start, pos + 1)
+    row_end = body_html.find("</tr>", pos, end)
+    if row_start == -1 or row_end == -1:
+        lo, hi = max(start, pos - 1000), min(end, pos + 1000)
+        return {"context_html": body_html[lo:hi], "context_is_table_row": False}
+    row_end += len("</tr>")
+    before_start = body_html.rfind("<tr", start, row_start)
+    after_end = body_html.find("</tr>", row_end, end)
+    row_html, row_truncated = _bounded_storage_html(body_html[row_start:row_end], 12_000)
+    result = {
+        "context_is_table_row": True,
+        "row_html": row_html,
+        "row_html_truncated": row_truncated,
+        "row_local_id": (
+            re.search(r'(?<![\w:-])(?:ac:)?local-id=["\']([^"\']+)["\']', body_html[row_start:row_end]).group(1)
+            if re.search(r'(?<![\w:-])(?:ac:)?local-id=["\']([^"\']+)["\']', body_html[row_start:row_end])
+            else ""
+        ),
+    }
+    if before_start != -1:
+        result["previous_row_html"] = _bounded_storage_html(
+            body_html[before_start:row_start], 4_000
+        )[0]
+    if after_end != -1:
+        result["next_row_html"] = _bounded_storage_html(
+            body_html[row_end : after_end + len("</tr>")], 4_000
+        )[0]
+    return result
+
+
+def _tool_get_confluence_edit_context(
+    page_id: str, section: str = "", target_text: str = ""
+) -> dict:
+    """Resolve the user's scope to a bounded, patchable Confluence context."""
+    section_hint = section or _url_section_hint(page_id)
+    source = page_id
+    if source.startswith("http") or source.startswith("/wiki/"):
+        source = _resolve_page_id_from_url(source)
+    match = re.search(r"/pages/(\d+)", source)
+    if match:
+        source = match.group(1)
+    source = source.strip()
+    if not source.isdigit():
+        return {"error": "Invalid page ID or URL. Provide a numeric ID or a Confluence page URL."}
+    try:
+        data = confluence_api("GET", f"content/{source}?expand=body.storage,version")
+        body_html = data.get("body", {}).get("storage", {}).get("value", "")
+        sections = _heading_sections(body_html)
+        outline = [{k: item[k] for k in ("heading_id", "level", "text", "local_id")} for item in sections]
+        selected = sections
+        if section_hint:
+            matched_ids = {
+                item["heading_id"] for item in _matching_section_headings(outline, section_hint)
+            }
+            selected = [item for item in sections if item["heading_id"] in matched_ids]
+        if len(selected) != 1:
+            return {
+                "needs_user_choice": True,
+                "reason": "section_not_found" if not selected else "section_is_ambiguous",
+                "page_id": data.get("id", source),
+                "title": data.get("title", ""),
+                "section_hint": section_hint,
+                "headings": outline,
+                "hint": "Ask the user to select a heading before attempting any patch.",
+            }
+        chosen = selected[0]
+        result = {
+            "page_id": data.get("id", source),
+            "title": data.get("title", ""),
+            "version": data.get("version", {}).get("number", 0),
+            "section": {k: chosen[k] for k in ("heading_id", "level", "text", "local_id")},
+        }
+        if target_text:
+            context = _row_context(body_html, target_text, chosen["start"], chosen["end"])
+            result.update(context)
+            if context.get("needs_user_choice"):
+                result["hint"] = "Ask the user to identify the exact row or insertion point before patching."
+            else:
+                result["hint"] = "Use row_local_id with after_local_id/before_local_id, then dry_run=true before saving."
+            return result
+        preview, preview_truncated = _bounded_storage_html(
+            body_html[chosen["start"] : chosen["end"]], 12_000
+        )
+        result.update(
+            {
+                "section_html_preview": preview,
+                "section_truncated": preview_truncated,
+                "hint": "Provide target_text (for example a Jira key) to retrieve one row; do not patch this whole section blindly.",
+            }
+        )
+        return result
     except Exception as e:
         return {"error": str(e)}
 
@@ -1031,6 +1407,21 @@ def _find_in_body(needle: str, haystack: str):
     return None
 
 
+def _match_splits_html_tag(body: str, start: int, end: int) -> bool:
+    """True when a match begins or ends inside an HTML/XML tag token.
+
+    A raw string match for ``<td`` or an attribute prefix is not a safe patch
+    anchor: inserting at its boundary changes the tag name/attribute syntax
+    (for example ``<tdPLACEHOLDER>``). Patch only at complete tag or text-node
+    boundaries; structure-aware local-id anchors are preferred for tables.
+    """
+    def _inside_tag(position: int) -> bool:
+        prefix = body[:position]
+        return prefix.rfind("<") > prefix.rfind(">")
+
+    return _inside_tag(start) or _inside_tag(end)
+
+
 def _find_macro(needle: str, haystack: str):
     """Match by Confluence macro name. If needle looks like a macro name (e.g. 'excerpt',
     'status', 'panel', 'info') or contains 'macro:name', find that macro block."""
@@ -1215,6 +1606,7 @@ def _tool_patch_confluence_page(
     mode: str = "insert_after",
     title: str = "",
     allow_fuzzy: bool = False,
+    dry_run: bool = False,
     after_local_id: str = "",
     before_local_id: str = "",
 ) -> dict:
@@ -1257,6 +1649,7 @@ def _tool_patch_confluence_page(
             cur_version,
             "appended",
             content_fragment=content,
+            dry_run=dry_run,
         )
 
     # Structure-aware insert by local-id — a precise, unambiguous anchor. Splices
@@ -1294,6 +1687,7 @@ def _tool_patch_confluence_page(
             cur_version,
             method,
             content_fragment=content,
+            dry_run=dry_run,
         )
         if isinstance(result, dict):
             result.setdefault("match_type", "local-id")
@@ -1314,7 +1708,7 @@ def _tool_patch_confluence_page(
         # Extract available macros and headings for the hint
         macro_names = list(set(re.findall(r'ac:name="([^"]+)"', cur_body)))
         headings = [
-            _normalize_ws(_strip_tags(m.group(2)))
+            _normalize_ws(_strip_tags(m.group(1)))
             for m in re.finditer(r"<h[1-6][^>]*>([\s\S]*?)</h[1-6]>", cur_body)
         ]
         return {
@@ -1326,6 +1720,18 @@ def _tool_patch_confluence_page(
         }
 
     start, end, match_type = match
+
+    if _match_splits_html_tag(cur_body, start, end):
+        return {
+            "patch_applied": False,
+            "error": "Unsafe patch anchor: the matched text ends inside an HTML tag or attribute.",
+            "match_type": match_type,
+            "hint": (
+                "Do not use partial markup such as '<tr', '<td', or an attribute prefix as find. "
+                "Use a complete row/element copied from get_confluence_edit_context, or use its "
+                "row_local_id with after_local_id/before_local_id."
+            ),
+        }
 
     # Check for multiple matches (precise strategies only — fuzzy strategies
     # already return a single inferred region).
@@ -1409,6 +1815,7 @@ def _tool_patch_confluence_page(
         cur_version,
         f"{mode} (matched via {match_type})",
         content_fragment=content,
+        dry_run=dry_run,
     )
     if isinstance(result, dict):
         result.setdefault("match_type", match_type)
@@ -1418,7 +1825,14 @@ def _tool_patch_confluence_page(
 
 
 def _validate_and_apply(
-    page_id, cur_body, new_body, title, cur_version, method, content_fragment=None
+    page_id,
+    cur_body,
+    new_body,
+    title,
+    cur_version,
+    method,
+    content_fragment=None,
+    dry_run=False,
 ):
     """Reject structurally-malformed saves before they reach Confluence.
 
@@ -1524,6 +1938,18 @@ def _validate_and_apply(
                 "meant to swap an existing element."
             ),
         }
+    if dry_run:
+        return {
+            "patch_applied": False,
+            "dry_run": True,
+            "would_change": True,
+            "base_version": cur_version,
+            "method": method,
+            "hint": (
+                "Preview complete. No Confluence write was issued. Re-send the same "
+                "patch with dry_run=false only after confirming this is the intended anchor."
+            ),
+        }
     # The patch tool NEVER auto-opens the HITL edit form — not on success, not on
     # failure. Every failure path returns an actionable error plus a suggested_next
     # pointing at confluence_open_edit_form, which the model calls explicitly when a
@@ -1598,6 +2024,12 @@ def _apply_patch(page_id, new_body, title, cur_version, method):
         "url": f"{wiki}{data.get('_links', {}).get('webui', '')}",
         "patch_applied": True,
         "method": method,
+        "_pane": "confluence-page",
+        "data": {
+            "page_id": data.get("id", page_id),
+            "title": data.get("title", title),
+            "url": f"{wiki}{data.get('_links', {}).get('webui', '')}",
+        },
     }
 
 
@@ -1614,6 +2046,8 @@ def _tool_confluence_open_edit_form(
 TOOL_HANDLERS = {
     "search_confluence": _tool_search_confluence,
     "read_confluence_page": _tool_read_confluence_page,
+    "get_confluence_page_outline": _tool_get_confluence_page_outline,
+    "get_confluence_edit_context": _tool_get_confluence_edit_context,
     "create_confluence_page": _tool_create_confluence_page,
     "update_confluence_page": _tool_update_confluence_page,
     "patch_confluence_page": _tool_patch_confluence_page,
