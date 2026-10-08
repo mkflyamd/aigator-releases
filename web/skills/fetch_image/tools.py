@@ -17,6 +17,9 @@ import uuid
 from pathlib import Path, PureWindowsPath
 from urllib.parse import urljoin, urlsplit
 
+import httpcore
+import httpx
+
 SKILL_ID = "fetch_image"
 ALWAYS_ON = False
 
@@ -105,12 +108,13 @@ def _host_matches(host: str, allowed_hosts: set[str]) -> bool:
     return any(host == allowed or host.endswith("." + allowed) for allowed in allowed_hosts)
 
 
-def _validate_fetch_url(url: str, allowed_hosts: set[str] | None = None) -> None:
-    """Reject non-public targets before opening a network connection.
+def _validate_fetch_url(url: str, allowed_hosts: set[str] | None = None) -> list[str]:
+    """Reject non-public targets and return the validated IP addresses.
 
     Image URLs may originate in untrusted content. Authenticated callers pass an
     allowlist so their credentials can only be used with the integration that
     issued the URL; anonymous callers still require a public HTTPS destination.
+    The caller must connect to the returned addresses, not re-resolve the host.
     """
     parsed = urlsplit(url)
     host = (parsed.hostname or "").lower()
@@ -130,25 +134,65 @@ def _validate_fetch_url(url: str, allowed_hosts: set[str] | None = None) -> None
         ip = ipaddress.ip_address(address)
         if not ip.is_global:
             raise ValueError("Image URL must not resolve to a private or local address.")
+    return sorted(addresses)
+
+
+class _PinnedBackend(httpcore.SyncBackend):
+    """Open TCP connections only to pre-validated addresses, never via DNS."""
+
+    def __init__(self, addresses: list[str]) -> None:
+        super().__init__()
+        self._addresses = addresses
+
+    def connect_tcp(self, host, port, timeout=None, local_address=None, socket_options=None):
+        error: Exception | None = None
+        for address in self._addresses:
+            try:
+                return super().connect_tcp(
+                    address,
+                    port,
+                    timeout=timeout,
+                    local_address=local_address,
+                    socket_options=socket_options,
+                )
+            except httpcore.ConnectError as exc:
+                error = exc
+        raise error or httpcore.ConnectError("No validated address to connect to.")
+
+
+class _PinnedTransport(httpx.HTTPTransport):
+    """HTTPS transport that connects to fixed IPs but verifies TLS for the URL host."""
+
+    def __init__(self, addresses: list[str]) -> None:
+        super().__init__()
+        self._pool.close()
+        self._pool = httpcore.ConnectionPool(
+            ssl_context=httpx.create_ssl_context(),
+            network_backend=_PinnedBackend(addresses),
+        )
 
 
 def _safe_http_get(
     url: str, headers: dict[str, str] | None = None, allowed_hosts: set[str] | None = None
 ) -> tuple[bytes, str]:
-    """Fetch a public HTTPS image without forwarding credentials on redirects."""
-    import httpx
+    """Fetch a public HTTPS image without forwarding credentials on redirects.
 
+    Every hop is validated, then connected to the validated addresses so a
+    second DNS lookup cannot redirect the request to an internal address.
+    Proxy environment variables are ignored: a proxy would resolve the host itself.
+    """
     current_url = url
     current_headers = headers or {}
     current_allowed_hosts = allowed_hosts
     for _ in range(4):
-        _validate_fetch_url(current_url, current_allowed_hosts)
-        response = httpx.get(
-            current_url,
-            headers=current_headers,
+        addresses = _validate_fetch_url(current_url, current_allowed_hosts)
+        with httpx.Client(
+            transport=_PinnedTransport(addresses),
+            trust_env=False,
             timeout=20,
             follow_redirects=False,
-        )
+        ) as client:
+            response = client.get(current_url, headers=current_headers)
         if response.is_redirect:
             location = response.headers.get("location")
             if not location:
