@@ -110,6 +110,7 @@ def test_packaged_shell_uses_bundled_backend_sidecar():
     assert "http://localhost:${GATOR_PORT}" not in main
     assert "http.request(GATOR_URL + '/api/context/pin'" in main
     assert "backendEnv.TMPDIR = runtimeDir" in main
+    assert "AIGATOR_MANAGED_LOGGING: '1'" in main
     assert "windowsHide: true" in main
     assert "pyProc.kill()" in main
     assert "EXPECTED_API_CONTRACT" in main
@@ -232,6 +233,7 @@ def test_packaged_backend_supports_sandboxed_python_execution():
     assert 'parser.add_argument("--run-python", nargs=argparse.REMAINDER)' in entry
     assert 'return [sys.executable, "--run-python", str(script_path)]' in runner
     assert '"-c", full_code' not in runner
+    assert "log_config=None" in entry
 
 
 def test_backend_python_runner_supports_inline_code(monkeypatch, capsys):

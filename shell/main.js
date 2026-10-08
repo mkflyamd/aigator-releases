@@ -953,7 +953,11 @@ function startBackend() {
   const args = app.isPackaged
     ? ['--port', String(GATOR_PORT)]
     : ['-m', 'uvicorn', 'web.app:app', '--port', String(GATOR_PORT)];
-  const backendEnv = { ...process.env, PYTHONIOENCODING: 'utf-8' };
+  const backendEnv = {
+    ...process.env,
+    PYTHONIOENCODING: 'utf-8',
+    ...(app.isPackaged ? { AIGATOR_MANAGED_LOGGING: '1' } : {}),
+  };
   if (app.isPackaged && !IS_WINDOWS) {
     const runtimeDir = path.join(app.getPath('userData'), 'backend-runtime');
     fs.mkdirSync(runtimeDir, { recursive: true });

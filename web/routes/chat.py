@@ -955,7 +955,6 @@ async def chat(req: ChatRequest):
     # Import execute_tool and _tool_toast from the app module (they stay in app.py
     # because they are also used by the lifespan background worker).
     from app import execute_tool as _execute_tool_raw, _tool_toast
-    from functools import partial as _partial
 
     # Minimal plugin commands (decision #11, 2026-08-07 milestone): a bare
     # `/command args` typed by the user, where "command" is a registered
@@ -1732,8 +1731,6 @@ async def chat(req: ChatRequest):
     # Bind context_id into execute_tool so handlers that opt-in by accepting
     # a _context_id kwarg (e.g. get_tab_pins) know the current tab without
     # the LLM having to pass it explicitly.
-    _base_execute_tool = _partial(_execute_tool_raw, context_id=context_id)
-
     async def execute_tool(tool_name: str, tool_inputs: dict):
         """Bind selected main-composer people to outbound mention-capable tools.
 
@@ -1770,7 +1767,9 @@ async def chat(req: ChatRequest):
             if mentions:
                 # Same immutable-binding rule for AAD identities.
                 inputs["mentions"] = mentions
-        return await _base_execute_tool(tool_name, inputs)
+        return await _execute_tool_raw(
+            tool_name, inputs, context_id=context_id, task_id=task_id
+        )
 
     # Shared mutable flag so stream()'s finally and _run_and_buffer's exception
     # handler can coordinate: if stream() already yielded [DONE], _run_and_buffer

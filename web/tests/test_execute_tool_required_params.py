@@ -7,6 +7,9 @@ never let Python raise a raw `TypeError: missing 1 required positional argument`
 """
 
 import asyncio
+import json
+
+import pytest
 
 import app
 import shared
@@ -108,3 +111,77 @@ def test_context_id_not_treated_as_required():
     _with_tool("_test_ctx_tool", _test_ctx_tool)
     res = _run(app.execute_tool("_test_ctx_tool", {"page_id": "1"}, context_id="tab-9"))
     assert res == {"ctx": "tab-9"}
+
+
+def test_execution_telemetry_is_scheduled_for_success_and_rejection(monkeypatch):
+    captured = []
+    monkeypatch.setattr(app, "_schedule_tool_telemetry", lambda *args: captured.append(args))
+
+    def _test_req(code: str):
+        return {"ok": True}
+
+    _with_tool("_test_req", _test_req)
+    assert _run(app.execute_tool("_test_req", {"code": "ok"}, context_id="ctx", task_id="task")) == {"ok": True}
+    assert captured[-1][0] == "_test_req"
+    assert captured[-1][1] == "success"
+    assert captured[-1][4:] == ("ctx", "task")
+
+    result = _run(app.execute_tool("_test_req", {}, context_id="ctx", task_id="task"))
+    assert result["error"] == "missing_required_params"
+    assert captured[-1][1] == "rejected"
+
+
+def test_slack_tool_exception_is_recorded_as_error_but_response_stays_sanitized(monkeypatch):
+    captured = []
+    monkeypatch.setattr(app, "_schedule_tool_telemetry", lambda *args: captured.append(args))
+
+    def slack_test_boom(channel: str):
+        raise RuntimeError("aigator-fake-api-key leaked in upstream error")
+
+    shared.TOOL_DISPATCH["slack_test_boom"] = slack_test_boom
+    try:
+        result = _run(app.execute_tool("slack_test_boom", {"channel": "C1"}))
+    finally:
+        shared.TOOL_DISPATCH.pop("slack_test_boom", None)
+
+    assert result == {"result": shared._SLACK_SAFE_MSG}
+    assert captured[-1][0] == "slack_test_boom"
+    assert captured[-1][1] == "error"
+    assert captured[-1][3] == "tool_exception"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"result": json.dumps({"status": "error", "detail": "upstream failure"})},
+        {"result": "slack said: invalid_auth"},
+    ],
+)
+def test_slack_failure_hidden_in_result_text_is_recorded_as_error(monkeypatch, payload):
+    captured = []
+    monkeypatch.setattr(app, "_schedule_tool_telemetry", lambda *args: captured.append(args))
+
+    shared.TOOL_DISPATCH["slack_test_hidden_failure"] = lambda channel: payload
+    try:
+        result = _run(app.execute_tool("slack_test_hidden_failure", {"channel": "C1"}))
+    finally:
+        shared.TOOL_DISPATCH.pop("slack_test_hidden_failure", None)
+
+    assert result == {"result": shared._SLACK_SAFE_MSG}
+    assert captured[-1][1] == "error"
+    assert captured[-1][3] == "tool_error"
+
+
+def test_non_slack_tool_exception_is_recorded_as_tool_exception(monkeypatch):
+    captured = []
+    monkeypatch.setattr(app, "_schedule_tool_telemetry", lambda *args: captured.append(args))
+
+    def _test_req(code: str):
+        raise RuntimeError("boom")
+
+    _with_tool("_test_req", _test_req)
+    result = _run(app.execute_tool("_test_req", {"code": "x"}))
+
+    assert result == {"error": "boom"}
+    assert captured[-1][1] == "error"
+    assert captured[-1][3] == "tool_exception"
