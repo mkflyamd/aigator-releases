@@ -371,3 +371,28 @@ def test_forensic_paths_returned_to_model_on_failure(tmp_path):
     assert Path(f["stderr_path"]).exists()
     # and the stderr.log holds the full traceback, not truncated
     assert "NameError" in Path(f["stderr_path"]).read_text(encoding="utf-8")
+
+
+@pytest.mark.real_sandbox
+@pytest.mark.skipif(sys.platform != "win32", reason="real AppContainer run needs Windows")
+def test_real_sandboxed_run_on_windows(windows_container, monkeypatch, tmp_path):
+    import sandbox
+    import skills.code_runner.tools as cr_mod
+
+    monkeypatch.setattr(sandbox, "_PROBE", ("enforced", None))
+    monkeypatch.setattr(cr_mod, "_sandbox_mode", lambda cfg, policy: ("enforced", None))
+    secret = tmp_path / "secret.txt"  # in the outputs root, outside this run's folder
+    secret.write_text("dummy-secret")
+    code = (
+        "from pathlib import Path\n"
+        "Path(OUTPUT_DIR, 'ok.txt').write_text('x')\n"
+        "try:\n"
+        f"    print(Path({str(secret)!r}).read_text())\n"
+        "except PermissionError:\n"
+        "    print('secret-denied')\n"
+    )
+    result = cr_mod._tool_run_python(code=code)
+    assert result["error"] is None, result
+    assert "secret-denied" in result["stdout"]
+    assert result["sandbox"] == "enforced"
+    assert [f["name"] for f in result["files"]] == ["ok.txt"]

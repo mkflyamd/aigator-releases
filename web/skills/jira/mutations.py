@@ -17,6 +17,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from threading import RLock
 from urllib.parse import urlparse
+import os
 import secrets
 import hashlib
 from pathlib import Path
@@ -56,6 +57,54 @@ def _canonical_base_url(url: str) -> str:
     if path.lower().endswith(("/browse", "/secure", "/projects")):
         raise JiraTargetResolutionError("Jira target URL must be a site base URL, not a Jira page URL.")
     return f"https://{parsed.netloc.lower()}{path}"
+
+
+# Hosts that may reuse the primary Cloud email + API token. Atlassian Cloud API
+# tokens are account-wide, so any *.atlassian.net site the user can reach accepts
+# the same token. Extending this to another domain is a one-line change here.
+_SHARED_TOKEN_HOST_SUFFIXES = (".atlassian.net",)
+
+
+def validate_extra_site_url(url: str) -> str:
+    """Return the canonical site root for an additional shared-token site, or raise."""
+
+    base = _canonical_base_url(url)
+    parsed = urlparse(base)
+    host = (parsed.hostname or "").lower()
+    if parsed.port is not None or parsed.path:
+        raise JiraTargetResolutionError("An additional Jira site must be a bare site URL such as https://example.atlassian.net.")
+    if not any(host.endswith(s) and len(host) > len(s) for s in _SHARED_TOKEN_HOST_SUFFIXES):
+        raise JiraTargetResolutionError(
+            "Additional Jira sites share the primary token, so the host must end with "
+            + " or ".join(_SHARED_TOKEN_HOST_SUFFIXES) + "."
+        )
+    return base
+
+
+def configured_extra_urls() -> list[str]:
+    """Validated additional site URLs from config, excluding the primary site.
+
+    Invalid entries are dropped silently so a hand-edited config cannot make the
+    shared token travel to an unexpected host.
+    """
+
+    raw = load_config().get("jira_extra_base_urls", [])
+    if not isinstance(raw, list):
+        return []
+    primary = ""
+    try:
+        primary = _canonical_base_url(os.environ.get("JIRA_BASE_URL", ""))
+    except JiraTargetResolutionError:
+        pass
+    out: list[str] = []
+    for item in raw:
+        try:
+            base = validate_extra_site_url(str(item))
+        except JiraTargetResolutionError:
+            continue
+        if base != primary and base not in out:
+            out.append(base)
+    return out
 
 
 @dataclass(frozen=True)
@@ -105,17 +154,37 @@ def configured_builtin_target() -> JiraTarget:
     Jira configuration and must exactly match a supplied Jira URL.
     """
 
-    base_url = _canonical_base_url(api.jira_browse_url())
+    with api.use_site(None):
+        base_url = _canonical_base_url(api.jira_browse_url())
+        is_cloud = api.jira_is_cloud()
     return JiraTarget(
         id=f"builtin:{base_url}",
         base_url=base_url,
         adapter="builtin-rest",
-        is_cloud=api.jira_is_cloud(),
+        is_cloud=is_cloud,
         display_name="Jira",
         # Advertise only operations that currently have a target-bound,
         # HITL-gated, read-back-verified direct REST implementation.
         capabilities=("read", "create", "update", "watcher", "attachment"),
     )
+
+
+def _extra_builtin_targets(primary: JiraTarget) -> list[JiraTarget]:
+    """Additional sites reusing the primary Cloud credentials (Cloud primary only)."""
+
+    if not primary.is_cloud:
+        return []
+    return [
+        JiraTarget(
+            id=f"builtin:{url}",
+            base_url=url,
+            adapter="builtin-rest",
+            is_cloud=True,
+            display_name="Jira",
+            capabilities=primary.capabilities,
+        )
+        for url in configured_extra_urls()
+    ]
 
 
 def _registered_targets() -> list[JiraTarget]:
@@ -168,8 +237,10 @@ def available_targets() -> list[JiraTarget]:
     except Exception:
         builtin = None
     if builtin:
-        targets = [t for t in targets if t.base_url != builtin.base_url]
-        targets.insert(0, builtin)
+        direct = [builtin, *_extra_builtin_targets(builtin)]
+        direct_urls = {t.base_url for t in direct}
+        targets = [t for t in targets if t.base_url not in direct_urls]
+        targets = direct + targets
     return targets
 
 
@@ -535,6 +606,62 @@ def resolve_target_for_context(issue_or_url: str = "", context_id: str = "", for
     if selected is not None:
         return resolve_jira_target(issue_or_url, target_id=selected.id, for_write=for_write)
     return resolve_jira_target(issue_or_url, for_write=for_write, _context_id=context_id)
+
+
+def _probe_project(project_key: str, target: JiraTarget, context_id: str = "") -> bool:
+    """Return True if the project exists on target. Never raises; cached like _probe_target."""
+    cache_key = (context_id or "", f"project:{project_key}", target.id)
+    with _probe_cache_lock:
+        cached = _probe_cache.get(cache_key)
+        if cached is not None and time.monotonic() - cached[1] < _PROBE_CACHE_TTL:
+            return cached[0]
+    try:
+        if target.adapter == "rovo-mcp":
+            raw = rovo_jira_call(target, "get_projects", {"searchString": project_key})
+            items = raw if isinstance(raw, list) else (
+                next((raw.get(k) for k in ("values", "projects", "data") if isinstance(raw.get(k), list)), [])
+                if isinstance(raw, dict) else []
+            )
+            found = any(str(i.get("key", "")).upper() == project_key for i in items if isinstance(i, dict))
+        else:
+            data = api.jira_api_for_target(target, "GET", f"project/{project_key}")
+            found = str(data.get("key", "")).upper() == project_key
+    except Exception:
+        found = False
+    with _probe_cache_lock:
+        _probe_cache[cache_key] = (found, time.monotonic())
+    return found
+
+
+def resolve_target_for_project(project: str, context_id: str = "") -> JiraTarget:
+    """Pick the Jira site that hosts a project, for actions that have no issue key.
+
+    A tab selection wins. Otherwise a single connected site is used directly;
+    with several, each is probed for the project. Exactly one hit is used,
+    several hits raise an "ambiguous" error so the UI asks which site to use.
+    """
+    selected = selected_target_for_context(context_id)
+    if selected is not None:
+        return selected
+    targets = available_targets()
+    if not targets:
+        raise JiraTargetResolutionError("No Jira site is connected. Connect Jira in Apps first.")
+    if len(targets) == 1:
+        return targets[0]
+    key = (project or "").strip().upper()
+    if not key:
+        raise JiraTargetResolutionError("A Jira project key is required to choose the Jira site.")
+    hits = [t for t in targets if _probe_project(key, t, context_id)]
+    if len(hits) == 1:
+        return hits[0]
+    if not hits:
+        raise JiraTargetResolutionError(
+            f"Project {key!r} was not found on any of the {len(targets)} connected Jira site(s). "
+            "Check the project key or connect the site that hosts it in Apps → Settings."
+        )
+    raise JiraTargetResolutionError(
+        f"Project {key!r} exists on {len(hits)} connected Jira sites, so the Jira site is ambiguous."
+    )
 
 
 def resolve_builtin_target(issue_or_url: str = "", context_id: str = "") -> JiraTarget:

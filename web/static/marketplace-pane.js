@@ -170,7 +170,44 @@
       }
     } else if (action === 'mp-import-install') {
       _importInstall(btn);
+    } else if (action === 'disable' || action === 'enable') {
+      _setSkillDisabled(btn.dataset.skillId, action === 'disable');
     }
+  }
+
+  async function _setSkillDisabled(skillId, disable) {
+    const verb = disable ? 'disable' : 'enable';
+    try {
+      const { resp, body } = await _postJson(
+        '/api/marketplace/' + verb + '/' + encodeURIComponent(skillId),
+        {},
+      );
+      if (!resp.ok || !body || body.ok !== true) {
+        _showAlert('Could not ' + verb + ': ' + _errorMessage(body), 'error');
+        return;
+      }
+      await refresh();
+    } catch (err) {
+      _showAlert('Network error: ' + err.message, 'error');
+    }
+  }
+
+  // Disabled label, dimmed row and the Disable / Enable button for one installed row.
+  function _decorateInstalledRow(row, meta, actions, skill) {
+    const state = _toggleState(skill);
+    if (skill.disabled) {
+      row.classList.add('mp-installed-disabled');
+      const label = document.createElement('span');
+      label.className = 'mp-installed-disabled-label';
+      label.textContent = 'Disabled';
+      meta.appendChild(label);
+    }
+    const toggleBtn = document.createElement('button');
+    toggleBtn.className = 'mp-row-btn';
+    toggleBtn.textContent = state.label;
+    toggleBtn.dataset.action = state.action;
+    toggleBtn.dataset.skillId = skill.id;
+    actions.appendChild(toggleBtn);
   }
 
   // ── Skeleton loader ────────────────────────────────────────────────────────
@@ -281,6 +318,162 @@
       return JSON.stringify(d);
     }
     return d || (data && data.error) || 'Unknown error';
+  }
+
+  // ── Install approval (permission card) and CSRF ───────────────────────────
+  // Every install POST carries the CSRF header; on a 403 the token is fetched
+  // again and the call is retried once, but only when the token actually
+  // changed (a 403 for another reason, e.g. not_installable, is not retried).
+  async function _postJson(url, payload) {
+    const sent = window.__CSRF_TOKEN__ || '';
+    const send = () =>
+      fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': window.__CSRF_TOKEN__ || '',
+        },
+        body: JSON.stringify(payload || {}),
+      });
+    let resp = await send();
+    if (resp.status === 403) {
+      const fresh = await fetch('/api/csrf');
+      if (fresh.ok) {
+        const token = (await fresh.json()).csrf_token || '';
+        if (token && token !== sent) {
+          window.__CSRF_TOKEN__ = token;
+          resp = await send();
+        }
+      }
+    }
+    let body = null;
+    try {
+      body = await resp.json();
+    } catch (e) {
+      body = null;
+    }
+    return { resp, body };
+  }
+
+  function _permissionLines(summary) {
+    const lines = summary && Array.isArray(summary.lines) ? summary.lines : [];
+    return lines.filter((l) => typeof l === 'string' && l.trim() !== '');
+  }
+
+  // The second install call: the same payload plus the approval and the digest
+  // the card showed. pinned_ref is sent only when the server returned one.
+  function _consentPayload(payload, firstBody) {
+    const out = Object.assign({}, payload, {
+      consent: true,
+      digest: (firstBody && firstBody.summary && firstBody.summary.digest) || '',
+    });
+    if (firstBody && firstBody.resolved_ref) out.pinned_ref = firstBody.resolved_ref;
+    return out;
+  }
+
+  function _toggleState(skill) {
+    return skill && skill.disabled
+      ? { action: 'enable', label: 'Enable' }
+      : { action: 'disable', label: 'Disable' };
+  }
+
+  function _appendPermissionList(container, summary) {
+    const lines = _permissionLines(summary);
+    if (!lines.length) return;
+    const intro = document.createElement('p');
+    intro.textContent = 'This package asks for the access below:';
+    container.appendChild(intro);
+    const ul = document.createElement('ul');
+    ul.className = 'mp-permission-list';
+    lines.forEach((line) => {
+      const li = document.createElement('li');
+      li.textContent = line;
+      ul.appendChild(li);
+    });
+    container.appendChild(ul);
+  }
+
+  // Standalone permission card. Resolves true on approval, false on cancel or Escape.
+  function _confirmPermissions(title, summary, confirmLabel) {
+    return new Promise((resolve) => {
+      const prevFocus = document.activeElement;
+      const titleId = 'mp-perm-title-' + Date.now();
+      const overlay = document.createElement('div');
+      overlay.className = 'mp-modal-overlay';
+      const modal = document.createElement('div');
+      modal.className = 'mp-modal';
+      modal.setAttribute('role', 'dialog');
+      modal.setAttribute('aria-modal', 'true');
+      modal.setAttribute('aria-labelledby', titleId);
+
+      const heading = document.createElement('div');
+      heading.className = 'mp-modal-title';
+      heading.id = titleId;
+      heading.textContent = title;
+
+      const body = document.createElement('div');
+      body.className = 'mp-modal-body';
+      _appendPermissionList(body, summary);
+      const note = document.createElement('p');
+      note.textContent = 'Nothing is installed until you approve.';
+      body.appendChild(note);
+
+      const actions = document.createElement('div');
+      actions.className = 'mp-modal-actions';
+      const cancelBtn = document.createElement('button');
+      cancelBtn.className = 'ap-card-btn';
+      cancelBtn.textContent = 'Cancel';
+      const approveBtn = document.createElement('button');
+      approveBtn.className = 'ap-card-btn primary';
+      approveBtn.textContent = confirmLabel || 'Install';
+
+      const finish = (approved) => {
+        overlay.remove();
+        document.removeEventListener('keydown', onKey, true);
+        if (prevFocus && typeof prevFocus.focus === 'function') prevFocus.focus();
+        resolve(approved);
+      };
+      const onKey = (e) => {
+        if (e.key === 'Escape') {
+          e.stopPropagation();
+          e.preventDefault();
+          finish(false);
+          return;
+        }
+        if (e.key === 'Tab') {
+          if (e.shiftKey && document.activeElement === cancelBtn) {
+            e.preventDefault();
+            approveBtn.focus();
+          } else if (!e.shiftKey && document.activeElement === approveBtn) {
+            e.preventDefault();
+            cancelBtn.focus();
+          }
+        }
+      };
+      cancelBtn.addEventListener('click', () => finish(false));
+      approveBtn.addEventListener('click', () => finish(true));
+
+      actions.appendChild(cancelBtn);
+      actions.appendChild(approveBtn);
+      modal.appendChild(heading);
+      modal.appendChild(body);
+      modal.appendChild(actions);
+      overlay.appendChild(modal);
+      document.body.appendChild(overlay);
+      document.addEventListener('keydown', onKey, true);
+      cancelBtn.focus();
+    });
+  }
+
+  // First call without consent, card, second call with consent and the digest.
+  // Anything that is not a consent answer (an error, an unexpected success) is
+  // returned untouched for the caller to handle.
+  async function _postWithApproval(url, payload, title, confirmLabel) {
+    const first = await _postJson(url, payload);
+    if (!first.resp.ok || !first.body || !first.body.consent_required) return first;
+    const approved = await _confirmPermissions(title, first.body.summary, confirmLabel);
+    if (!approved) return { cancelled: true };
+    return _postJson(url, _consentPayload(payload, first.body));
   }
 
   // Collision-detection predicate for decision #10 ("show both... on a
@@ -813,6 +1006,7 @@
 
         const actions = document.createElement('div');
         actions.className = 'mp-installed-actions';
+        _decorateInstalledRow(row, meta, actions, skill);
         const removeBtn = document.createElement('button');
         removeBtn.className = 'mp-row-btn mp-row-btn-danger';
         removeBtn.textContent = 'Remove';
@@ -870,6 +1064,7 @@
 
       const actions = document.createElement('div');
       actions.className = 'mp-installed-actions';
+      _decorateInstalledRow(row, meta, actions, skill);
       if (skill.tier === 'Mine') {
         const editBtn = document.createElement('button');
         editBtn.className = 'mp-row-btn';
@@ -1188,18 +1383,20 @@
     }
 
     try {
-      const resp = await fetch('/api/marketplace/install-local', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      const data = await resp.json();
+      const out = await _postWithApproval(
+        '/api/marketplace/install-local',
+        payload,
+        'Install “' + (picked.name || 'skill') + '”?',
+        'Install',
+      );
       if (previewArea) {
         previewArea.classList.remove('active');
         while (previewArea.firstChild) previewArea.removeChild(previewArea.firstChild);
       }
-      if (!resp.ok || !data.ok) {
-        if (errorArea) errorArea.textContent = (data && data.detail) || 'Install failed.';
+      if (out.cancelled) return;
+      const data = out.body || {};
+      if (!out.resp.ok || !data.ok) {
+        if (errorArea) errorArea.textContent = _errorMessage(data);
         return;
       }
       const skill = { id: data.skill_id, name: picked.name || data.skill_id, tier: 'Community' };
@@ -1406,13 +1603,15 @@
     const errorArea = document.getElementById('mp-import-error');
     const skill = { id: skillId, name: previewBody.name, tier: 'Unverified' };
     try {
-      const resp = await fetch('/api/marketplace/install', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ skill_id: skillId, install_url: url, consent: true }),
-      });
-      const data = await resp.json();
-      if (!resp.ok || data.ok !== true) {
+      const out = await _postWithApproval(
+        '/api/marketplace/install',
+        { skill_id: skillId, install_url: url },
+        'Approve “' + (previewBody.name || skillId) + '”?',
+        'Approve and install',
+      );
+      if (out.cancelled) return;
+      const data = out.body || {};
+      if (!out.resp.ok || data.ok !== true) {
         if (errorArea) errorArea.textContent = _errorMessage(data);
         return;
       }
@@ -1572,32 +1771,28 @@
       payload.orphan_resolution = orphanRadio.value;
     }
     try {
-      const resp = await fetch('/api/marketplace/install', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      const body = await resp.json();
-      // fix (2026-08-07 milestone, Increment 4): a 200 response isn't
-      // necessarily a success — the install route can return HTTP 200 with
-      // {ok:false, consent_required:true} when skill_id happens to match a
-      // claude-plugins-official catalog entry (routed there server-side
-      // regardless of this being a raw-URL import). Must check body.ok, not
-      // just resp.ok.
-      if (!resp.ok || body.ok !== true) {
-        const err = document.getElementById('mp-import-error');
-        if (err) {
-          err.textContent =
-            body && body.consent_required
-              ? '"' +
-                skillId +
-                '" is part of AI Gator’s Verified marketplace and needs the consent flow — ' +
-                'install it from the Browse tab instead of a raw URL import.'
-              : _errorMessage(body);
-        }
+      const out = await _postWithApproval(
+        '/api/marketplace/install',
+        payload,
+        'Install “' + skillId + '”?',
+        'Install',
+      );
+      if (out.cancelled) {
         btn.disabled = false;
         btn.textContent = 'Install';
         return;
+      }
+      const body = out.body || {};
+      if (!out.resp.ok || body.ok !== true) {
+        const err = document.getElementById('mp-import-error');
+        if (err) err.textContent = _errorMessage(body);
+        btn.disabled = false;
+        btn.textContent = 'Install';
+        return;
+      }
+      // A skill that installed but whose tool list could not be read: reuse the shared warning.
+      if (body.tools_error) {
+        _handleInstallOutcome(true, body, { id: skillId, name: skillId, tier: 'Community' });
       }
       // Success → refresh installed list and switch tab
       await refresh();
@@ -1611,7 +1806,7 @@
   }
 
   // ── Actions ────────────────────────────────────────────────────────────────
-  function _showInstallModal(skill, onConfirm) {
+  function _showInstallModal(skill, onConfirm, summary) {
     const overlay = document.createElement('div');
     overlay.className = 'mp-modal-overlay';
     const modal = document.createElement('div');
@@ -1644,6 +1839,8 @@
         body.appendChild(reviewLink);
       }
     }
+
+    _appendPermissionList(body, summary);
 
     const actions = document.createElement('div');
     actions.className = 'mp-modal-actions';
@@ -1687,6 +1884,7 @@
   function _handleInstallOutcome(ok, body, skill) {
     if (ok) {
       const compatibilityWarnings = body.mcp_compatibility_warnings || [];
+      const toolsError = typeof body.tools_error === 'string' ? body.tools_error : '';
       if (compatibilityWarnings.length) {
         const quarantined = compatibilityWarnings.reduce(
           (total, item) => total + (item.quarantined || 0),
@@ -1702,10 +1900,16 @@
             ' quarantined. Review Settings > Connections for details.',
           'warning',
         );
-      } else {
+      } else if (!toolsError) {
         _showAlert(
           '\u201C' + skill.name + '\u201D installed. AI Gator will use this skill immediately.',
           'success',
+        );
+      }
+      if (toolsError) {
+        _showAlert(
+          'Installed, but the skill\u2019s tools could not be loaded: ' + toolsError,
+          'warning',
         );
       }
       // Bug fix (post-milestone live testing): a claude-plugins-official
@@ -1757,29 +1961,45 @@
       _installVerifiedPlugin(skill, btn);
       return;
     }
-    _showInstallModal(skill, async () => {
-      try {
-        const resp = await fetch('/api/marketplace/install', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            skill_id: skill.id,
-            skill_md: '',
-            version: skill.version || '1.0',
-            tier: skill.tier,
-            install_url: skill.install_url || '',
-          }),
-        });
-        const data = await resp.json();
-        const ok = resp.ok && data.ok === true;
-        if (ok && typeof window.registerUserSkill === 'function') {
-          window.registerUserSkill(skill.id, skill.name, skill.tier);
+    const payload = {
+      skill_id: skill.id,
+      skill_md: '',
+      version: skill.version || '1.0',
+      tier: skill.tier,
+      install_url: skill.install_url || '',
+    };
+    let first;
+    try {
+      first = await _postJson('/api/marketplace/install', payload);
+    } catch (err) {
+      _showAlert('Install error: ' + err.message, 'error');
+      return;
+    }
+    const body = first.body || {};
+    if (!first.resp.ok || !body.consent_required) {
+      _handleInstallOutcome(first.resp.ok && body.ok === true, body, skill);
+      return;
+    }
+    _showInstallModal(
+      skill,
+      async () => {
+        try {
+          const second = await _postJson(
+            '/api/marketplace/install',
+            _consentPayload(payload, body),
+          );
+          const data = second.body || {};
+          const ok = second.resp.ok && data.ok === true;
+          if (ok && typeof window.registerUserSkill === 'function') {
+            window.registerUserSkill(skill.id, skill.name, skill.tier);
+          }
+          _handleInstallOutcome(ok, data, skill);
+        } catch (err) {
+          _showAlert('Install error: ' + err.message, 'error');
         }
-        _handleInstallOutcome(ok, data, skill);
-      } catch (err) {
-        _showAlert('Install error: ' + err.message, 'error');
-      }
-    });
+      },
+      body.summary,
+    );
   }
 
   // \u2500\u2500 claude-plugins-official install (decisions #7/#8/#10, Increment 4) \u2500\u2500\u2500\u2500
@@ -1815,12 +2035,9 @@
 
     let resp, body;
     try {
-      resp = await fetch('/api/marketplace/install', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ skill_id: skill.id }),
-      });
-      body = await resp.json();
+      const first = await _postJson('/api/marketplace/install', { skill_id: skill.id });
+      resp = first.resp;
+      body = first.body || {};
     } catch (err) {
       _showAlert('Network error: ' + err.message, 'error');
       _release();
@@ -1875,16 +2092,12 @@
       async () => {
         let resp2, body2;
         try {
-          resp2 = await fetch('/api/marketplace/install', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              skill_id: skill.id,
-              consent: true,
-              pinned_ref: body.resolved_ref || '',
-            }),
-          });
-          body2 = await resp2.json();
+          const second = await _postJson(
+            '/api/marketplace/install',
+            _consentPayload({ skill_id: skill.id }, body),
+          );
+          resp2 = second.resp;
+          body2 = second.body || {};
         } catch (err) {
           _showAlert('Install error: ' + err.message, 'error');
           _release();
@@ -2029,6 +2242,8 @@
         body.appendChild(compatNote);
       }
     }
+
+    _appendPermissionList(body, previewBody.summary);
 
     const trust = document.createElement('p');
     trust.textContent =

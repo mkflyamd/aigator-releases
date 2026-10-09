@@ -4,8 +4,10 @@
 # OAuth), Electron webview partitions (Slack/Teams/Outlook cookies + localStorage),
 # and stale caches - so you can test the sign-in flow from a true cold start.
 #
-# Keeps your LLM gateway config (~/.config/teamspoc/config.json) and MCP OAuth
-# tokens (~/.gator/oauth/) intact - this is for app-auth testing, not a full wipe.
+# Also removes the DPAPI-encrypted secret store (~\.gator\secrets), which holds
+# the M365/Slack tokens, MCP OAuth tokens and the Jira/Confluence/GitHub PATs.
+# Keeps your LLM gateway config (~/.config/teamspoc/config.json) intact - this
+# is for app-auth testing, not a full wipe.
 #
 # Usage:
 #   .\reset-auth.ps1              - clear everything, kill all running instances
@@ -83,6 +85,17 @@ foreach ($f in $tokenFiles) {
 }
 Write-Host "  Agent tokens: $cleared deleted, $failed skipped." -ForegroundColor Green
 
+# Encrypted secret store (tokens + config PATs live here, one .bin per secret)
+$secretsDir = Join-Path $env:USERPROFILE ".gator\secrets"
+if (Test-Path $secretsDir) {
+    try {
+        Remove-Item $secretsDir -Recurse -Force -ErrorAction Stop
+        Write-Host "  Secret store: removed $secretsDir" -ForegroundColor Green
+    } catch {
+        Write-Host "  could not delete (in use?): $secretsDir" -ForegroundColor DarkYellow
+    }
+}
+
 # ── 3. Clear Electron webview partitions (the "Web" side of the dashboard) ─
 # Each port gets its own userData dir (gator-shell-<port>). Clear all known ports
 # so stale state on :8000 doesn't leak into a :8003 dev test.
@@ -127,6 +140,12 @@ if ($slackRemaining) {
     $slackRemaining | ForEach-Object { Write-Host "    $($_.Name)" -ForegroundColor DarkYellow }
 } else {
     Write-Host "  Slack tokens: cleared" -ForegroundColor Green
+}
+
+if (Test-Path $secretsDir) {
+    Write-Host "  WARNING: secret store still present: $secretsDir" -ForegroundColor Yellow
+} else {
+    Write-Host "  Secret store: cleared" -ForegroundColor Green
 }
 
 $partRemaining = 0

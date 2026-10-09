@@ -2,12 +2,13 @@
 import json
 import logging
 import re
+import urllib.error
+import urllib.parse
 import urllib.request
+import urllib.request as _urllib
 from pathlib import Path
 
 import shared
-import dataclasses
-import urllib.request as _urllib
 from mcp.normalizer import normalize as _normalize, NormalizeResult as _NR, _make_gateway_llm
 from mcp.url_fetcher import url_fetcher as _url_fetcher
 
@@ -300,16 +301,47 @@ def _js_challenge_error(blocker: str, url: str) -> dict:
     }
 
 
+_MAX_FETCH_QUERY = 300
+
+
+def _check_fetch_target(url: str) -> dict | None:
+    """Refuse URLs that could carry data out. Any address, including internal ones, is allowed."""
+    parsed = urllib.parse.urlsplit(url)
+    host = parsed.hostname
+    if not host:
+        return {"error": "Blocked: the URL has no host."}
+    # Measure what urllib actually puts on the request line (path, ;params and query, with the
+    # fragment cut at the last "#" the way urllib does), instead of re-deriving it.
+    try:
+        target = urllib.request.Request(url).selector
+    except ValueError:
+        return {"error": "Blocked: the URL is not valid."}
+    if len(target) > _MAX_FETCH_QUERY:
+        return {"error": f"Blocked: the URL's path and query string together are longer than {_MAX_FETCH_QUERY} characters."}
+    return None
+
+
+class _GuardedRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        blocked = _check_fetch_target(newurl)
+        if blocked is not None:
+            raise urllib.error.URLError(blocked["error"])
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 def _tool_fetch_webpage(url: str) -> dict:
     """Fetch a public webpage and return its content as text."""
     if not url.startswith(("http://", "https://")):
         return {"error": "URL must start with http:// or https://"}
+    blocked = _check_fetch_target(url)
+    if blocked is not None:
+        return {**blocked, "url": url}
     try:
         req = urllib.request.Request(url, headers={
             "User-Agent": "Mozilla/5.0 (compatible; GatorBot/1.0)",
             "Accept": "text/html,application/json,text/plain",
         })
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with urllib.request.build_opener(_GuardedRedirect).open(req, timeout=15) as resp:
             content_type = resp.headers.get("Content-Type", "")
             raw = resp.read()
             # Try to decode
@@ -385,6 +417,9 @@ _IMAGE_MEDIA_TYPES = {
 
 async def _tool_describe_images(task: str, image_paths: list | None = None,
                                fields: list | None = None, fps: float = 0.2) -> dict:
+    from sandbox.paths import PROTECTED_MSG, is_secrets_path
+    if any(isinstance(p, str) and is_secrets_path(p) for p in image_paths or []):
+        return {"ok": False, "error": PROTECTED_MSG}
     if task == "analyze_sequence" and image_paths:
         # Validate image_paths exist on disk BEFORE calling the gateway — the
         # common failure mode used to be masked as "image_paths don't exist"

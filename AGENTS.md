@@ -98,7 +98,7 @@ git add -u
 PyInstaller sidecar → electron-builder. Build on the target OS (no reliable cross-compile).
 
 ```bash
-uv run pyinstaller --clean --noconfirm packaging/aigator-backend.spec --distpath dist/backend --workpath build/pyinstaller-desktop
+uv run pyinstaller --clean --noconfirm packaging/aigator-backend.spec --distpath dist --workpath build/pyinstaller-desktop
 npm --prefix shell run dist -- --win --x64 --publish never   # or --mac/--linux
 ```
 

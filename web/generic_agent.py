@@ -218,6 +218,24 @@ def build_opencode_bare_env() -> dict[str, str]:
     # Without modalities, OpenCode refuses image reads even though every Gator
     # LLM provider already declares supports_vision = True (llm/base.py,
     # llm/anthropic_provider.py).
+    #
+    # options.thinking.blockBinding = False on every Claude model: OpenCode
+    # auto-enables Anthropic's "adaptive thinking" block-binding beta
+    # (thinking.block_binding on the wire) for Claude models whose version is
+    # 5.1+ (e.g. Claude-Sonnet-5.5), but AMD's Anthropic-native gateway
+    # rejects that field with "thinking.adaptive.block_binding: Extra inputs
+    # are not permitted" (confirmed directly against the real gateway with
+    # the official anthropic Python SDK - thinking:{type:"adaptive"} alone
+    # works, adding block_binding fails every time, with or without the
+    # anthropic-beta header). blockBinding=false is OpenCode's opt-out; it
+    # strips block_binding before the wire. Verified end-to-end against the
+    # real gateway through opencode itself (isolated from this machine's
+    # ambient OPENCODE_CONFIG_CONTENT env var, which otherwise silently
+    # shadows custom providers and produces misleading errors that look
+    # like a config/compat problem but aren't): Claude-Sonnet-5,
+    # Claude-Sonnet-5.5, and Claude-Haiku-4.5 all responded successfully
+    # with this option set, including against this exact bundled binary
+    # (not just the global npm install), so it's safe on every Claude model.
     provider = {}
     enabled_providers = []
     if claude_models:
@@ -230,7 +248,8 @@ def build_opencode_bare_env() -> dict[str, str]:
                 "headers": {api_key_header: "{env:GATOR_OPENCODE_KEY}"},
             },
             "models": {m: {"name": m, "attachment": True,
-                           "modalities": {"input": ["text", "image"], "output": ["text"]}}
+                           "modalities": {"input": ["text", "image"], "output": ["text"]},
+                           "options": {"thinking": {"blockBinding": False}}}
                        for m in claude_models},
         }
     if other_models:

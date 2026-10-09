@@ -11,12 +11,13 @@ import time as _time_mod
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
 import perf
 import shared
 import updater
+from security import require_shell_key
 
 router = APIRouter()
 
@@ -514,14 +515,14 @@ def _plugin_commands_bootstrap() -> str:
     return f'<script>window.__PLUGIN_COMMANDS__ = {payload};</script>'
 
 
-@router.get("/api/csrf")
+@router.get("/api/csrf", dependencies=[Depends(require_shell_key)])
 async def get_csrf():
     """Return the current process CSRF token so the UI can refresh after a server reload."""
     from security import get_csrf_token
     return {"csrf_token": get_csrf_token()}
 
 
-@router.get("/", response_class=HTMLResponse)
+@router.get("/", response_class=HTMLResponse, dependencies=[Depends(require_shell_key)])
 async def root():
     from security import get_csrf_token
     html = (Path(__file__).parent.parent / "static" / "index.html").read_text(encoding="utf-8")

@@ -95,6 +95,10 @@ const _backendAvailable = (() => {
 const SPAWN_BACKEND = !process.env.GATOR_URL && _backendAvailable;
 const GATOR_PORT = app.isPackaged ? 8000 : 8002;
 const GATOR_URL = process.env.GATOR_URL || `http://127.0.0.1:${GATOR_PORT}`;
+// Per-launch secret proving to the backend that a request comes from this shell.
+// Only generated when the shell spawns the backend itself.
+const SHELL_KEY = SPAWN_BACKEND ? require('crypto').randomBytes(32).toString('hex') : '';
+
 // Set only by tray/aigator_tray.py for the Electron process whose lifecycle
 // owns the stable watchdog. Dev/secondary shells may attach to a backend, but
 // closing them must never send the global :8001/quit request.
@@ -958,6 +962,7 @@ function startBackend() {
     PYTHONIOENCODING: 'utf-8',
     ...(app.isPackaged ? { AIGATOR_MANAGED_LOGGING: '1' } : {}),
   };
+  if (SHELL_KEY) backendEnv.AIGATOR_SHELL_KEY = SHELL_KEY;
   if (app.isPackaged && !IS_WINDOWS) {
     const runtimeDir = path.join(app.getPath('userData'), 'backend-runtime');
     fs.mkdirSync(runtimeDir, { recursive: true });
@@ -1080,6 +1085,14 @@ function createWindow() {
   // Slack, Google ΓÇö see mcp_add_modal.js / extension_setup_modal.js).
   gatorSession.webRequest.onBeforeSendHeaders((details, callback) => {
     details.requestHeaders['User-Agent'] = gatorUA;
+    // Shell key goes to the AI Gator backend origin only, never to other hosts.
+    if (SHELL_KEY) {
+      try {
+        if (new URL(details.url).origin === new URL(GATOR_URL).origin) {
+          details.requestHeaders['X-AIGator-Shell-Key'] = SHELL_KEY;
+        }
+      } catch {}
+    }
     callback({ requestHeaders: details.requestHeaders });
   });
 

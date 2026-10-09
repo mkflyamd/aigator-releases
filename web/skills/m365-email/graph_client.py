@@ -48,10 +48,27 @@ _token_refresh_lock = threading.Lock()
 # AADSTS65002 on some M365 tenants.
 DEFAULT_CLIENT_ID = "1fec8e78-bce4-4aaf-ab1b-5451cc387264"
 DEFAULT_SCOPES = "Files.ReadWrite.All Sites.ReadWrite.All offline_access"
+# Legacy plaintext locations; kept only because the m365-* wrappers re-export TOKEN_FILE.
 TOKEN_FILE = Path.home() / ".config" / "microsoft-graph" / "token.json"
 OLD_TOKEN_FILE = Path.home() / ".config" / "sharepoint-files" / "token.json"
 
 log = logging.getLogger("graph_client")
+
+
+def _secure_store():
+    import importlib.util
+
+    mod = sys.modules.get("secure_store")
+    if mod is None:
+        try:
+            import secure_store as mod  # frozen build / web/ on sys.path
+        except ImportError:
+            path = Path(__file__).resolve().parents[2] / "secure_store.py"
+            spec = importlib.util.spec_from_file_location("secure_store", path)
+            mod = importlib.util.module_from_spec(spec)
+            sys.modules["secure_store"] = mod
+            spec.loader.exec_module(mod)
+    return mod
 
 
 # ── Typed exceptions (subclass RuntimeError for backward compatibility) ─────
@@ -92,30 +109,13 @@ class GraphClient:
         self._load_token()
 
     def _load_token(self) -> None:
-        # Clean up any stale .tmp left by a previous crash mid-write.
-        # Only delete if older than 60s — avoids racing with another process's write.
-        _tmp = TOKEN_FILE.with_suffix(".tmp")
-        if _tmp.exists():
-            try:
-                if time.time() - _tmp.stat().st_mtime > 60:
-                    _tmp.unlink()
-            except OSError:
-                pass
-        if not TOKEN_FILE.exists() and OLD_TOKEN_FILE.exists():
-            TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
-            import shutil
-
-            shutil.copy2(str(OLD_TOKEN_FILE), str(TOKEN_FILE))
-        if TOKEN_FILE.exists():
-            try:
-                data = json.loads(TOKEN_FILE.read_text())
-                self._refresh_token = data.get("refresh_token", "")
-                self._client_id = data.get("client_id", DEFAULT_CLIENT_ID)
-                self._tenant_id = data.get("tenant_id", "")
-                self._access_token = data.get("access_token", "")
-                self._expires_at = data.get("expires_at", 0.0)
-            except (json.JSONDecodeError, KeyError):
-                pass
+        data = _secure_store().get_json("graph/token") or {}
+        if data:
+            self._refresh_token = data.get("refresh_token", "")
+            self._client_id = data.get("client_id", DEFAULT_CLIENT_ID)
+            self._tenant_id = data.get("tenant_id", "")
+            self._access_token = data.get("access_token", "")
+            self._expires_at = data.get("expires_at", 0.0)
         env_token = os.environ.get("MS_ACCESS_TOKEN", "")
         if env_token and not self._access_token:
             self._access_token = env_token.removeprefix("Bearer ").strip()
@@ -129,9 +129,8 @@ class GraphClient:
                 self._expires_at = time.time() + 3000
 
     def _save_token(self) -> None:
-        TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
-        tmp = TOKEN_FILE.with_suffix(".tmp")
-        payload = json.dumps(
+        _secure_store().set_json(
+            "graph/token",
             {
                 "refresh_token": self._refresh_token,
                 "client_id": self._client_id,
@@ -139,20 +138,7 @@ class GraphClient:
                 "access_token": self._access_token,
                 "expires_at": self._expires_at,
             },
-            indent=2,
         )
-        # Open with restricted permissions from creation — no world-readable window
-        fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        try:
-            with os.fdopen(fd, "w") as f:
-                f.write(payload)
-        except Exception:
-            try:
-                tmp.unlink()
-            except OSError:
-                pass
-            raise
-        os.replace(str(tmp), str(TOKEN_FILE))
 
     def _refresh(self) -> str:
         if not self._refresh_token or not self._tenant_id:
@@ -248,7 +234,7 @@ class GraphClient:
                 return {
                     "status": "ok",
                     "message": "Authentication successful! Tokens saved.",
-                    "token_file": str(TOKEN_FILE),
+                    "token_file": "secure_store:graph/token",
                     "scopes": d.get("scope", ""),
                 }
             except urllib.error.HTTPError as e:

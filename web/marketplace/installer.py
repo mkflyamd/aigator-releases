@@ -143,6 +143,90 @@ def save_installed(entries: list[dict]) -> None:
     os.replace(tmp, installed_json)
 
 
+def _zip_name_is_unsafe(name: str) -> bool:
+    return (
+        name.startswith(("/", "\\"))
+        or (len(name) > 1 and name[1] == ":")
+        or ".." in name.replace("\\", "/").split("/")
+    )
+
+
+def _read_zip_package(data: bytes) -> tuple[dict[str, bytes], str]:
+    """Read a skill ZIP into ({path relative to the skill root: bytes}, SKILL.md member name).
+
+    The skill root is the folder of the shallowest SKILL.md. Raises ValueError
+    with a user-facing message; nothing is written to disk."""
+    from marketplace.github_fetcher import MAX_FILES, MAX_TOTAL_BYTES
+
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(data))
+    except zipfile.BadZipFile as exc:
+        raise ValueError(f"File is not a valid ZIP archive: {exc}") from exc
+    with zf:
+        names = [n for n in zf.namelist() if n.endswith("SKILL.md")]
+        if not names:
+            raise ValueError("No SKILL.md found in package")
+        # Reject any traversal or absolute entry BEFORE choosing a root: a
+        # malicious archive is not trusted because the bad entry sits outside
+        # the chosen subtree.
+        all_files = [n for n in zf.namelist() if not n.endswith("/")]
+        for n in all_files:
+            if _zip_name_is_unsafe(n):
+                raise ValueError(f"path traversal not allowed: {n}")
+        skill_md_name = min(names, key=lambda n: n.count("/"))
+        root_prefix = skill_md_name[: -len("SKILL.md")]
+        members = [n for n in all_files if n.startswith(root_prefix)]
+        if len(members) > MAX_FILES:
+            raise ValueError(f"Skill has too many files (> {MAX_FILES})")
+        total = sum(zf.getinfo(n).file_size for n in members)
+        if total > MAX_TOTAL_BYTES:
+            raise ValueError(f"Skill too large (> {MAX_TOTAL_BYTES // (1024 * 1024)} MB)")
+        files = {n[len(root_prefix):]: zf.read(n) for n in members}
+    return files, skill_md_name
+
+
+def _load_package(
+    skill_md: str, install_url: str, local_zip_bytes: bytes | None
+) -> tuple[dict[str, bytes], str]:
+    """Return ({relative path: bytes}, SKILL.md member name) for the three
+    non-GitHub sources: local ZIP bytes, an http(s) URL (ZIP or raw SKILL.md),
+    or inline SKILL.md text. Raises ValueError with a user-facing message."""
+    if local_zip_bytes is not None:
+        if local_zip_bytes[:4] != b"PK\x03\x04":
+            raise ValueError("File is not a ZIP archive")
+        return _read_zip_package(local_zip_bytes)
+
+    if install_url and not skill_md:
+        if not install_url.startswith(("https://", "http://")):
+            raise ValueError("install_url must be an http:// or https:// URL")
+        try:
+            req = urllib.request.Request(install_url, headers={"User-Agent": "AIGator/1.0"})
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                data = resp.read(20 * 1024 * 1024)  # 20 MB limit
+            if data[:4] != b"PK\x03\x04":
+                data.decode("utf-8")
+        except Exception as exc:
+            raise ValueError(f"Download failed: {exc}") from exc
+        # ZIP magic bytes are PK\x03\x04; anything else is a plain SKILL.md.
+        if data[:4] == b"PK\x03\x04":
+            return _read_zip_package(data)
+        return {"SKILL.md": data}, "SKILL.md"
+
+    return {"SKILL.md": skill_md.encode("utf-8")}, "SKILL.md"
+
+
+def preview_package(
+    skill_md: str = "", install_url: str = "", local_zip_bytes: bytes | None = None
+) -> dict:
+    """Fetch or read a package exactly as install_skill_md would, without
+    writing anything. Returns {"ok": True, "files": {...}} or {"ok": False, "error"}."""
+    try:
+        files, _member = _load_package(skill_md, install_url, local_zip_bytes)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True, "files": files}
+
+
 def install_skill_md(
     skill_id: str,
     skill_md: str,
@@ -150,165 +234,60 @@ def install_skill_md(
     tier: str,
     install_url: str = "",
     _local_zip_bytes: bytes | None = None,
+    expected_digest: str = "",
 ) -> dict:
     """Install a skill from inline SKILL.md, a URL, or raw ZIP bytes.
 
-    If _local_zip_bytes is given (from the local file/folder install path),
-    it is used directly instead of downloading from install_url — the same
-    ZIP extraction logic applies. skill_id may be empty when _local_zip_bytes
-    is supplied; it is derived from the SKILL.md frontmatter name in that case.
+    The whole package is read first. If expected_digest is given and the
+    content's digest differs (the content changed since the user approved it),
+    nothing is written and the error is "content_changed". skill_id may be
+    empty when _local_zip_bytes is supplied; it is derived from the SKILL.md
+    frontmatter name (or the folder name) in that case.
 
-    If install_url is given and skill_md is empty, downloads from the URL: a
-    ZIP is extracted in full (SKILL.md, tools.py, scripts/, reference docs)
-    subject to size caps and path-traversal guards; a plain SKILL.md URL is
-    written as the single file."""
-    _zip_already_written = False
+    A URL ZIP is extracted in full (SKILL.md, tools.py, scripts/, reference
+    docs) subject to size caps and path-traversal guards; a plain SKILL.md URL
+    is written as the single file."""
+    from marketplace.permissions import declared_permissions, files_digest
 
-    if _local_zip_bytes is not None:
-        if _local_zip_bytes[:4] != b"PK\x03\x04":
-            return {"ok": False, "error": "File is not a ZIP archive"}
-        from marketplace.github_fetcher import MAX_FILES, MAX_TOTAL_BYTES
-        with zipfile.ZipFile(io.BytesIO(_local_zip_bytes)) as zf:
-            names = [n for n in zf.namelist() if n.endswith("SKILL.md")]
-            if not names:
-                return {"ok": False, "error": "No SKILL.md found in package"}
-            all_files = [n for n in zf.namelist() if not n.endswith("/")]
-            for n in all_files:
-                if (
-                    n.startswith(("/", "\\"))
-                    or (len(n) > 1 and n[1] == ":")
-                    or ".." in n.replace("\\", "/").split("/")
-                ):
-                    return {"ok": False, "error": f"path traversal not allowed: {n}"}
-            skill_md_name = min(names, key=lambda n: n.count("/"))
-            root_prefix = skill_md_name[: -len("SKILL.md")]
-            members = [n for n in all_files if n.startswith(root_prefix)]
-            if len(members) > MAX_FILES:
-                return {"ok": False, "error": f"Skill has too many files (> {MAX_FILES})"}
-            total = sum(zf.getinfo(n).file_size for n in members)
-            if total > MAX_TOTAL_BYTES:
-                return {"ok": False, "error": f"Skill too large (> {MAX_TOTAL_BYTES // (1024 * 1024)} MB)"}
-            raw_skill_md = zf.read(skill_md_name).decode("utf-8", errors="replace")
-            fm = _parse_skill_md_frontmatter(raw_skill_md)
-            derived_id = _slugify(fm.get("name") or skill_md_name.split("/")[-2] or skill_md_name)
-            if not skill_id:
-                skill_id = derived_id
-            try:
-                skill_dir = _safe_skill_dir(INSTALLED_SKILLS_DIR, skill_id)
-            except ValueError as exc:
-                return {"ok": False, "error": str(exc)}
-            created_now = not skill_dir.exists()
-            skill_dir.mkdir(parents=True, exist_ok=True)
-            dest_resolved = skill_dir.resolve()
-            for name in members:
-                rel = name[len(root_prefix):]
-                target = (skill_dir / rel).resolve()
-                if not target.is_relative_to(dest_resolved):
-                    if created_now:
-                        shutil.rmtree(skill_dir, ignore_errors=True)
-                    return {"ok": False, "error": f"path traversal not allowed: {rel}"}
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_bytes(zf.read(name))
-            skill_md = raw_skill_md
-            _zip_already_written = True
+    if skill_id:
+        try:
+            _safe_skill_dir(INSTALLED_SKILLS_DIR, skill_id)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
 
-        entries = [e for e in load_installed() if e.get("id") != skill_id]
-        entries.append({
-            "id": skill_id,
-            "version": version,
-            "tier": tier,
-            "installed_at": datetime.now(timezone.utc).isoformat(),
-            "has_tools": (skill_dir / "tools.py").exists(),
-        })
-        save_installed(entries)
-        return {"ok": True, "skill_id": skill_id}
+    try:
+        files, skill_md_member = _load_package(skill_md, install_url, _local_zip_bytes)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+
+    if expected_digest and files_digest(files) != expected_digest:
+        return {"ok": False, "error": "content_changed"}
+
+    if not skill_id:
+        fm = _parse_skill_md_frontmatter(files["SKILL.md"].decode("utf-8", errors="replace"))
+        parts = skill_md_member.split("/")
+        parent = parts[-2] if len(parts) > 1 else ""
+        skill_id = _slugify(fm.get("name") or parent or "skill")
 
     try:
         skill_dir = _safe_skill_dir(INSTALLED_SKILLS_DIR, skill_id)
     except ValueError as exc:
         return {"ok": False, "error": str(exc)}
 
-    if install_url and not skill_md:
-        if not install_url.startswith(("https://", "http://")):
-            return {
-                "ok": False,
-                "error": "install_url must be an http:// or https:// URL",
-            }
-        # Track whether the skill directory existed before this install so that
-        # cleanup on failure only removes directories we created (mirrors the
-        # pattern used by _install_github_folder).
-        created_now = not skill_dir.exists()
-        try:
-            req = urllib.request.Request(
-                install_url, headers={"User-Agent": "AIGator/1.0"}
-            )
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                data = resp.read(20 * 1024 * 1024)  # 20 MB limit
-            # Detect format from content: ZIP magic bytes are PK\x03\x04
-            if data[:4] == b"PK\x03\x04":
-                # ZIP — extract whole folder (SKILL.md + tools.py + scripts/ + reference docs).
-                from marketplace.github_fetcher import MAX_FILES, MAX_TOTAL_BYTES
-
-                with zipfile.ZipFile(io.BytesIO(data)) as zf:
-                    names = [n for n in zf.namelist() if n.endswith("SKILL.md")]
-                    if not names:
-                        return {"ok": False, "error": "No SKILL.md found in package"}
-                    # Reject any ZIP entry with traversal/absolute paths BEFORE
-                    # picking a root — a malicious archive shouldn't be trusted
-                    # just because the bad entry is outside our chosen subtree.
-                    all_files = [n for n in zf.namelist() if not n.endswith("/")]
-                    for n in all_files:
-                        if (
-                            n.startswith(("/", "\\"))
-                            or (len(n) > 1 and n[1] == ":")
-                            or ".." in n.replace("\\", "/").split("/")
-                        ):
-                            return {
-                                "ok": False,
-                                "error": f"path traversal not allowed: {n}",
-                            }
-                    # Pick the shallowest SKILL.md as the skill root.
-                    skill_md_name = min(names, key=lambda n: n.count("/"))
-                    root_prefix = skill_md_name[: -len("SKILL.md")]
-                    members = [n for n in all_files if n.startswith(root_prefix)]
-                    if len(members) > MAX_FILES:
-                        return {
-                            "ok": False,
-                            "error": f"Skill has too many files (> {MAX_FILES})",
-                        }
-                    total = sum(zf.getinfo(n).file_size for n in members)
-                    if total > MAX_TOTAL_BYTES:
-                        return {
-                            "ok": False,
-                            "error": f"Skill too large (> {MAX_TOTAL_BYTES // (1024 * 1024)} MB)",
-                        }
-                    skill_dir.mkdir(parents=True, exist_ok=True)
-                    dest_resolved = skill_dir.resolve()
-                    for name in members:
-                        rel = name[len(root_prefix) :]
-                        target = (skill_dir / rel).resolve()
-                        # Defense in depth — resolve() should catch anything the
-                        # textual check above missed (e.g., symlink-style entries).
-                        if not target.is_relative_to(dest_resolved):
-                            if created_now:
-                                shutil.rmtree(skill_dir, ignore_errors=True)
-                            return {
-                                "ok": False,
-                                "error": f"path traversal not allowed: {rel}",
-                            }
-                        target.parent.mkdir(parents=True, exist_ok=True)
-                        target.write_bytes(zf.read(name))
-                    skill_md = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
-                    _zip_already_written = True
-            else:
-                # Plain text SKILL.md (raw URL, no ZIP wrapper)
-                skill_md = data.decode("utf-8")
-        except Exception as exc:
-            return {"ok": False, "error": f"Download failed: {exc}"}
-
-    skill_dir.mkdir(parents=True, exist_ok=True)
-    if not _zip_already_written:
-        (skill_dir / "SKILL.md").write_text(skill_md, encoding="utf-8")
+    # Only remove a directory this call created if the write fails.
+    created_now = not skill_dir.exists()
+    try:
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        _write_files_atomically(skill_dir, files)
+    except ValueError as exc:
+        if created_now:
+            shutil.rmtree(skill_dir, ignore_errors=True)
+        return {"ok": False, "error": str(exc)}
+    except Exception as exc:
+        if created_now:
+            shutil.rmtree(skill_dir, ignore_errors=True)
+        logger.warning("Skill install write failed for %s: %s", skill_id, exc)
+        return {"ok": False, "error": f"Install failed: {exc}"}
 
     entries = [e for e in load_installed() if e.get("id") != skill_id]
     entries.append(
@@ -321,7 +300,11 @@ def install_skill_md(
         }
     )
     save_installed(entries)
-    return {"ok": True, "skill_id": skill_id}
+    return {
+        "ok": True,
+        "skill_id": skill_id,
+        "permissions": declared_permissions(files).to_dict(),
+    }
 
 
 def _install_github_folder(
@@ -329,6 +312,7 @@ def _install_github_folder(
     skill_id: str,
     version: str = "1.0",
     orphan_resolution: str | None = None,
+    _files: dict[str, bytes] | None = None,
 ) -> dict:
     """Install a skill from a GitHub tree/blob URL via codeload tarball.
 
@@ -343,22 +327,25 @@ def _install_github_folder(
     except ValueError as exc:
         return {"ok": False, "error": str(exc)}
 
-    try:
-        parsed = github_fetcher.parse_github_url(install_url)
-    except ValueError as exc:
-        return {"ok": False, "error": str(exc)}
-    if parsed["kind"] == "raw_file":
-        return {"ok": False, "error": "Use install_skill_md for raw SKILL.md URLs"}
+    if _files is None:
+        try:
+            parsed = github_fetcher.parse_github_url(install_url)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        if parsed["kind"] == "raw_file":
+            return {"ok": False, "error": "Use install_skill_md for raw SKILL.md URLs"}
 
-    try:
-        files = github_fetcher.download_skill_tarball(
-            parsed["owner"], parsed["repo"], parsed["branch"], parsed["path"]
-        )
-    except ValueError as exc:
-        return {"ok": False, "error": str(exc)}
-    except Exception as exc:
-        logger.warning("Codeload download failed: %s", exc)
-        return {"ok": False, "error": f"Download failed: {exc}"}
+        try:
+            files = github_fetcher.download_skill_tarball(
+                parsed["owner"], parsed["repo"], parsed["branch"], parsed["path"]
+            )
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        except Exception as exc:
+            logger.warning("Codeload download failed: %s", exc)
+            return {"ok": False, "error": f"Download failed: {exc}"}
+    else:
+        files = _files
 
     if "SKILL.md" not in files:
         return {"ok": False, "error": "No SKILL.md found at this URL"}
@@ -1386,6 +1373,9 @@ def get_claude_plugins_official_capabilities(entry: dict) -> dict:
     _write_files_atomically nor _upsert_plugin_bundle_entry — calling it
     before consent is granted cannot itself install or execute anything.
 
+    The returned dict also carries "package" (the fetched files, bytes); callers
+    must pop it before serializing to JSON.
+
     `mcp_servers` (Phase E, Increment 3, decision #7): when `has_mcp` is
     true, a list of `{"name", "needs_secrets"}` — one entry per declared
     mcpServers entry, `needs_secrets` listing any {PLACEHOLDER}-style env
@@ -1494,11 +1484,15 @@ def get_claude_plugins_official_capabilities(entry: dict) -> dict:
         "mcp_servers": mcp_servers,
         "has_compat_risk": has_compat_risk,
         "resolved_ref": resolved_ref,
+        "package": files,
     }
 
 
 def install_claude_plugins_official_plugin(
-    entry: dict, consented: bool = False, pinned_ref: str | None = None
+    entry: dict,
+    consented: bool = False,
+    pinned_ref: str | None = None,
+    expected_digest: str = "",
 ) -> dict:
     """Install a claude-plugins-official plugin (decisions #2-#4).
 
@@ -1542,6 +1536,12 @@ def install_claude_plugins_official_plugin(
     if isinstance(fetched, dict):
         return fetched
     plugin_id, files, resolved_ref = fetched
+
+    from marketplace.permissions import declared_permissions, files_digest
+
+    if expected_digest and files_digest(files) != expected_digest:
+        return {"ok": False, "error": "content_changed"}
+    permissions = declared_permissions(files).to_dict()
 
     version = _extract_plugin_version(files) or "unknown"
     tier = entry.get("tier", "Verified")
@@ -1660,6 +1660,7 @@ def install_claude_plugins_official_plugin(
                 "command_ids": stale_command_ids or [],
                 "mcp_connection_ids": mcp_connection_ids,
                 "mcp_compatibility_warnings": mcp_compatibility_warnings,
+                "permissions": permissions,
             }
         # Version dir exists but no matching record (e.g. a prior run crashed
         # after writing files but before the upsert) — fall through and
@@ -1738,6 +1739,7 @@ def install_claude_plugins_official_plugin(
         "command_ids": command_ids,
         "mcp_connection_ids": mcp_connection_ids,
         "mcp_compatibility_warnings": mcp_compatibility_warnings,
+        "permissions": permissions,
     }
 
 
@@ -1771,6 +1773,9 @@ def get_github_url_capabilities(install_url: str) -> dict:
     "has_mcp", "has_local_code", "mcp_servers", "has_compat_risk",
     "skill_id", "name", "description", "files_count", "total_size"} or
     {"ok": False, "error": ...}.
+
+    The returned dict also carries "package" (the fetched files, bytes); callers
+    must pop it before serializing to JSON.
     """
     try:
         parsed = github_fetcher.parse_github_url(install_url)
@@ -1870,6 +1875,7 @@ def get_github_url_capabilities(install_url: str) -> dict:
         "has_compat_risk": has_compat_risk,
         "files_count": len(files),
         "total_size": sum(len(b) for b in files.values()),
+        "package": files,
     }
 
 
@@ -1877,6 +1883,7 @@ def install_github_url_plugin(
     install_url: str,
     plugin_id: str,
     consented: bool = False,
+    _files: dict[str, bytes] | None = None,
 ) -> dict:
     """Install a GitHub tree URL as an Unverified plugin bundle.
 
@@ -1887,20 +1894,23 @@ def install_github_url_plugin(
     determined `is_plugin=True`. Falls back to `_install_github_folder`
     for standalone skills (the route handles that routing, not this function).
     """
-    try:
-        parsed = github_fetcher.parse_github_url(install_url)
-    except ValueError as exc:
-        return {"ok": False, "error": str(exc)}
+    if _files is None:
+        try:
+            parsed = github_fetcher.parse_github_url(install_url)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
 
-    try:
-        files = github_fetcher.download_skill_tarball(
-            parsed["owner"], parsed["repo"], parsed["branch"], parsed["path"]
-        )
-    except ValueError as exc:
-        return {"ok": False, "error": str(exc)}
-    except Exception as exc:
-        logger.warning("GitHub URL plugin fetch failed: %s", exc)
-        return {"ok": False, "error": f"Download failed: {exc}"}
+        try:
+            files = github_fetcher.download_skill_tarball(
+                parsed["owner"], parsed["repo"], parsed["branch"], parsed["path"]
+            )
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        except Exception as exc:
+            logger.warning("GitHub URL plugin fetch failed: %s", exc)
+            return {"ok": False, "error": f"Download failed: {exc}"}
+    else:
+        files = _files
 
     if not any(r.endswith("SKILL.md") for r in files):
         return {"ok": False, "error": "No SKILL.md found at this URL"}
@@ -1976,3 +1986,50 @@ def install_github_url_plugin(
         "mcp_connection_ids": mcp_connection_ids,
         "mcp_compatibility_warnings": mcp_compatibility_warnings,
     }
+
+
+def install_github_url(
+    install_url: str,
+    skill_id: str,
+    version: str = "1.0",
+    orphan_resolution: str | None = None,
+    expected_digest: str = "",
+) -> dict:
+    """Install a GitHub tree/blob URL after approval: fetch once, check the
+    content digest the user approved, then install the same bytes as a plugin
+    bundle or as a plain skill folder."""
+    from marketplace.permissions import declared_permissions, files_digest
+
+    try:
+        parsed = github_fetcher.parse_github_url(install_url)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    if parsed["kind"] == "raw_file":
+        return {"ok": False, "error": "Use install_skill_md for raw SKILL.md URLs"}
+
+    try:
+        files = github_fetcher.download_skill_tarball(
+            parsed["owner"], parsed["repo"], parsed["branch"], parsed["path"]
+        )
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    except Exception as exc:
+        logger.warning("GitHub URL fetch failed for %s: %s", install_url, exc)
+        return {"ok": False, "error": f"Download failed: {exc}"}
+
+    if not any(r.endswith("SKILL.md") for r in files):
+        return {"ok": False, "error": "No SKILL.md found at this URL"}
+    if expected_digest and files_digest(files) != expected_digest:
+        return {"ok": False, "error": "content_changed"}
+
+    if _is_plugin_bundle(files):
+        result = install_github_url_plugin(
+            install_url, skill_id, consented=True, _files=files
+        )
+    else:
+        result = _install_github_folder(
+            install_url, skill_id, version, orphan_resolution, _files=files
+        )
+    if result.get("ok"):
+        result["permissions"] = declared_permissions(files).to_dict()
+    return result

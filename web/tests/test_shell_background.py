@@ -16,6 +16,8 @@ import os
 import sys
 import time
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from skills.shell_runner.tools import (
@@ -23,6 +25,13 @@ from skills.shell_runner.tools import (
     _tool_check_shell_process,
     _tool_stop_shell_process,
 )
+
+
+@pytest.fixture(autouse=True)
+def _legacy_shell_is_unsandboxed(monkeypatch):
+    from skills.code_runner import tools as cr
+
+    monkeypatch.setattr(cr, "_sandbox_mode", lambda cfg, policy: ("off", None))
 
 # Single-quoted Python source embedded in a double-quoted shell command —
 # verified to survive bash/WSL, Git Bash, PowerShell, and cmd quoting alike.

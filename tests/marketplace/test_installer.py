@@ -509,6 +509,18 @@ def test_local_zip_rejects_path_traversal(tmp_path, monkeypatch):
 # /api/marketplace/install-local route
 # ---------------------------------------------------------------------------
 
+def _route_client():
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from routes.marketplace import router
+    from security import verify_csrf
+
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[verify_csrf] = lambda: None
+    return TestClient(app)
+
+
 def test_install_local_route_zip(tmp_path, monkeypatch):
     monkeypatch.setattr("marketplace.installer.INSTALLED_SKILLS_DIR", tmp_path)
     monkeypatch.setattr("marketplace.installer.PLUGINS_DIR", tmp_path / "plugins")
@@ -516,30 +528,28 @@ def test_install_local_route_zip(tmp_path, monkeypatch):
     import marketplace.installer as _inst
     importlib.reload(_inst)
 
-    from fastapi.testclient import TestClient
-    from fastapi import FastAPI
     from unittest.mock import patch
-    from routes.marketplace import router
 
-    app = FastAPI()
-    app.include_router(router)
-    client = TestClient(app)
-
+    client = _route_client()
     zip_bytes = _make_zip({
         "local-skill/SKILL.md": "---\nname: Local Skill\n---\n# Local\nDo it.",
     })
     b64 = _base64.b64encode(zip_bytes).decode()
+    payload = {"kind": "zip", "name": "local-skill.zip", "b64": b64}
 
     with (
         patch("routes.marketplace.load_installed_skill_prompts"),
         patch("routes.marketplace.load_skill_tools"),
         patch("routes.marketplace.install_skill_md", wraps=_inst.install_skill_md),
     ):
-        resp = client.post("/api/marketplace/install-local", json={
-            "kind": "zip",
-            "name": "local-skill.zip",
-            "b64": b64,
-        })
+        first = client.post("/api/marketplace/install-local", json=payload)
+        assert first.status_code == 200, first.text
+        assert first.json()["consent_required"] is True
+        assert not (_inst.INSTALLED_SKILLS_DIR / "local-skill").exists()
+        resp = client.post(
+            "/api/marketplace/install-local",
+            json={**payload, "consent": True, "digest": first.json()["summary"]["digest"]},
+        )
 
     assert resp.status_code == 200, resp.text
     assert resp.json()["ok"] is True
@@ -553,30 +563,27 @@ def test_install_local_route_folder(tmp_path, monkeypatch):
     import marketplace.installer as _inst
     importlib.reload(_inst)
 
-    from fastapi.testclient import TestClient
-    from fastapi import FastAPI
     from unittest.mock import patch
-    from routes.marketplace import router
 
-    app = FastAPI()
-    app.include_router(router)
-    client = TestClient(app)
-
+    client = _route_client()
     files = [
         {"path": "SKILL.md", "b64": _base64.b64encode(b"---\nname: Folder Skill\n---\n# Folder\nDo it.").decode()},
         {"path": "tools.py", "b64": _base64.b64encode(b"TOOL_DEFS = []").decode()},
     ]
+    payload = {"kind": "folder", "name": "my-folder", "files": files}
 
     with (
         patch("routes.marketplace.load_installed_skill_prompts"),
         patch("routes.marketplace.load_skill_tools"),
         patch("routes.marketplace.install_skill_md", wraps=_inst.install_skill_md),
     ):
-        resp = client.post("/api/marketplace/install-local", json={
-            "kind": "folder",
-            "name": "my-folder",
-            "files": files,
-        })
+        first = client.post("/api/marketplace/install-local", json=payload)
+        assert first.status_code == 200, first.text
+        assert first.json()["summary"]["has_tools"] is True
+        resp = client.post(
+            "/api/marketplace/install-local",
+            json={**payload, "consent": True, "digest": first.json()["summary"]["digest"]},
+        )
 
     assert resp.status_code == 200, resp.text
     assert resp.json()["ok"] is True
@@ -584,13 +591,7 @@ def test_install_local_route_folder(tmp_path, monkeypatch):
 
 
 def test_install_local_route_rejects_invalid_kind(tmp_path):
-    from fastapi.testclient import TestClient
-    from fastapi import FastAPI
-    from routes.marketplace import router
-
-    app = FastAPI()
-    app.include_router(router)
-    client = TestClient(app)
+    client = _route_client()
 
     resp = client.post("/api/marketplace/install-local", json={
         "kind": "tarball",
@@ -601,13 +602,7 @@ def test_install_local_route_rejects_invalid_kind(tmp_path):
 
 def test_install_local_route_rejects_non_zip_bytes(tmp_path, monkeypatch):
     monkeypatch.setattr("marketplace.installer.INSTALLED_SKILLS_DIR", tmp_path)
-    from fastapi.testclient import TestClient
-    from fastapi import FastAPI
-    from routes.marketplace import router
-
-    app = FastAPI()
-    app.include_router(router)
-    client = TestClient(app)
+    client = _route_client()
 
     resp = client.post("/api/marketplace/install-local", json={
         "kind": "zip",

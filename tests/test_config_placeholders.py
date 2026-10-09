@@ -23,10 +23,18 @@ def test_atlassian_inputs_have_no_amd_references():
     assert "amd.atlassian.net" not in lowered
 
 
+def _site_placeholders() -> str:
+    js = (_INDEX.parent / "app.js").read_text(encoding="utf-8")
+    start = js.index("const ATLASSIAN_SITE_PLACEHOLDERS")
+    return js[start : js.index("};", start)]
+
+
 def test_atlassian_inputs_use_generic_examples():
     block = _atlassian_block()
     assert "you@company.com" in block
-    assert "your-org.atlassian.net" in block
+    placeholders = _site_placeholders()
+    assert "your-org.atlassian.net" in placeholders
+    assert "amd" not in placeholders.lower()
 
 
 def test_atlassian_url_inputs_not_prefilled_with_value():

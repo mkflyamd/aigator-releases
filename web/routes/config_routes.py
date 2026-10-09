@@ -501,6 +501,63 @@ def connect_atlassian_cloud_mcp():
     return result
 
 
+class JiraExtraSitesRequest(BaseModel):
+    urls: list[str] = []
+
+
+@router.post("/api/config/jira/extra-sites")
+def save_jira_extra_sites(req: JiraExtraSitesRequest):
+    """Save additional Jira Cloud sites that reuse the primary email + token."""
+    from skills.jira.mutations import JiraTargetResolutionError, validate_extra_site_url
+
+    email = os.environ.get("JIRA_EMAIL", "")
+    token = os.environ.get("JIRA_API_TOKEN", "")
+    primary = os.environ.get("JIRA_BASE_URL", JIRA_BASE_URL)
+    wants_extras = any(u.strip() for u in req.urls)
+    if wants_extras and (os.environ.get("JIRA_PAT_TOKEN") or "atlassian.net" not in primary or not (email and token)):
+        raise HTTPException(
+            status_code=400,
+            detail="Additional sites need a primary Atlassian Cloud connection (email + API token).",
+        )
+    urls: list[str] = []
+    for raw in req.urls:
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            url = validate_extra_site_url(raw)
+        except JiraTargetResolutionError as exc:
+            raise HTTPException(status_code=400, detail=f"{raw}: {exc}")
+        if url == primary.rstrip("/").lower() or url in urls:
+            continue
+        urls.append(url)
+    import urllib.request as _req2, urllib.error, base64 as _b64
+
+    auth_header = "Basic " + _b64.b64encode(f"{email}:{token}".encode()).decode()
+    for url in urls:
+        try:
+            r = _req2.Request(
+                f"{url}/rest/api/2/myself",
+                headers={"Authorization": auth_header, "Content-Type": "application/json"},
+            )
+            with _req2.urlopen(r, timeout=10) as resp:
+                resp.read()
+        except urllib.error.HTTPError as he:
+            raise HTTPException(status_code=401, detail=f"{url}: Jira auth failed: HTTP {he.code}")
+        except Exception as e:
+            raise HTTPException(status_code=401, detail=f"{url}: Jira auth failed: {e}")
+
+    def _commit_extras(current: dict):
+        if urls:
+            current["jira_extra_base_urls"] = urls
+        else:
+            current.pop("jira_extra_base_urls", None)
+        return current
+
+    _update_config(_commit_extras)
+    return {"ok": True, "extra_base_urls": urls}
+
+
 @router.get("/api/config/jira/status")
 def jira_status():
     import urllib.request as _req2, base64 as _b64
@@ -527,14 +584,22 @@ def jira_status():
             "configured": True,
             "user": me.get("displayName", me.get("name", "")),
             "base_url": base_url,
+            "extra_base_urls": _jira_extra_urls_for_status(),
         }
     except Exception:
         return {
             "configured": True,
             "user": "",
             "base_url": base_url,
+            "extra_base_urls": _jira_extra_urls_for_status(),
             "error": "Could not verify",
         }
+
+
+def _jira_extra_urls_for_status() -> list[str]:
+    from skills.jira.mutations import configured_extra_urls
+
+    return configured_extra_urls()
 
 
 # ── Confluence ────────────────────────────────────────────────────────────────
@@ -577,6 +642,67 @@ def save_confluence(req: ConfluenceRequest):
     return {"ok": True, "user": display_name, "base_url": base_url}
 
 
+class ConfluenceExtraSitesRequest(BaseModel):
+    urls: list[str] = []
+
+
+@router.post("/api/config/confluence/extra-sites")
+def save_confluence_extra_sites(req: ConfluenceExtraSitesRequest):
+    """Save additional Confluence Cloud sites that reuse the primary email + token."""
+    from skills.confluence.api import validate_extra_site_url
+
+    email = os.environ.get("CONFLUENCE_EMAIL", "") or os.environ.get("ATLASSIAN_EMAIL", "")
+    token = os.environ.get("CONFLUENCE_PAT", "") or os.environ.get("ATLASSIAN_PAT", "")
+    primary = os.environ.get("CONFLUENCE_BASE_URL", "")
+    wants_extras = any(u.strip() for u in req.urls)
+    if wants_extras and ("atlassian.net" not in primary or not (email and token)):
+        raise HTTPException(
+            status_code=400,
+            detail="Additional sites need a primary Atlassian Cloud connection (email + API token).",
+        )
+    urls: list[str] = []
+    for raw in req.urls:
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            url = validate_extra_site_url(raw)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"{raw}: {exc}")
+        if url == primary.rstrip("/").lower() or url in urls:
+            continue
+        urls.append(url)
+    import urllib.request as _req2, base64 as _b64
+
+    auth_header = "Basic " + _b64.b64encode(f"{email}:{token}".encode()).decode()
+    for url in urls:
+        try:
+            r = _req2.Request(
+                f"{url}/rest/api/user/current",
+                headers={"Authorization": auth_header, "Content-Type": "application/json"},
+            )
+            with _req2.urlopen(r, timeout=10) as resp:
+                resp.read()
+        except Exception as e:
+            raise HTTPException(status_code=401, detail=f"{url}: Confluence auth failed: {e}")
+
+    def _commit_extras(current: dict):
+        if urls:
+            current["confluence_extra_base_urls"] = urls
+        else:
+            current.pop("confluence_extra_base_urls", None)
+        return current
+
+    _update_config(_commit_extras)
+    return {"ok": True, "extra_base_urls": urls}
+
+
+def _confluence_extra_urls_for_status() -> list[str]:
+    from skills.confluence.api import configured_extra_urls
+
+    return configured_extra_urls()
+
+
 @router.get("/api/config/confluence/status")
 def confluence_status():
     email = os.environ.get("CONFLUENCE_EMAIL", "") or os.environ.get(
@@ -603,12 +729,14 @@ def confluence_status():
             "configured": True,
             "user": me.get("displayName", me.get("username", email)),
             "base_url": base_url,
+            "extra_base_urls": _confluence_extra_urls_for_status(),
         }
     except Exception:
         return {
             "configured": True,
             "user": "",
             "base_url": base_url,
+            "extra_base_urls": _confluence_extra_urls_for_status(),
             "error": "Could not verify",
         }
 

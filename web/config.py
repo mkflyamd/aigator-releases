@@ -9,6 +9,8 @@ import tempfile
 import threading
 from pathlib import Path
 
+import secure_store
+
 _log = logging.getLogger(__name__)
 _CONFIG_LOCK = threading.RLock()
 
@@ -184,14 +186,127 @@ PATCHABLE_CONFIG_KEYS = frozenset({
 })
 
 
-def load_config() -> dict:
-    """Load saved config (API key etc.) from disk."""
+# Personal access tokens that must never be written to config.json (or its
+# backup / damaged copies). They live DPAPI-encrypted in secure_store under
+# "config/<key>" and are overlaid onto the dict returned by load_config().
+_PAT_KEYS = ("jira_api_token", "jira_pat", "confluence_pat", "github_token")
+
+
+def _pat_name(key: str) -> str:
+    return f"config/{key}"
+
+
+def _read_config_file() -> dict:
     if CONFIG_FILE.exists():
         try:
-            return json.loads(CONFIG_FILE.read_text())
+            data = json.loads(CONFIG_FILE.read_text())
+            if isinstance(data, dict):
+                return data
         except Exception:
             pass
     return {}
+
+
+def _scrub_config_copies() -> None:
+    """Remove PAT keys from backup copies; delete unparseable copies that held them.
+
+    Covers ``config.json.*`` (backups and hand-made copies) and
+    ``config*.damaged`` next to CONFIG_FILE. Unparseable ``.damaged`` files are
+    always removed (they cannot be scrubbed structurally); any other unparseable
+    copy is removed only if it mentions a PAT key name.
+    """
+    parent = CONFIG_FILE.parent
+    if not parent.exists():
+        return
+    copies = list(parent.glob("config.json.*")) + list(parent.glob("config*.damaged"))
+    for path in copies:
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            _log.warning("Could not read %s for scrubbing: %s", path.name, type(exc).__name__)
+            continue
+        try:
+            data = json.loads(text)
+        except Exception:
+            data = None
+        if not isinstance(data, dict):
+            if path.name.endswith(".damaged") or any(k in text for k in _PAT_KEYS):
+                try:
+                    path.unlink()
+                except OSError as exc:
+                    _log.warning("Could not remove %s: %s", path.name, type(exc).__name__)
+            continue
+        if any(k in data for k in _PAT_KEYS):
+            for key in _PAT_KEYS:
+                data.pop(key, None)
+            try:
+                _write_json_locked(data, path, backup=False)
+            except OSError as exc:
+                _log.warning("Could not scrub %s: %s", path.name, type(exc).__name__)
+
+
+def _migrate_config_secrets(raw: dict) -> dict:
+    """Move legacy plaintext PATs from config.json into secure_store (idempotent).
+
+    A PAT is removed from config.json only after it has been written to
+    secure_store and read back identically. If secure_store fails for a key
+    (e.g. unsupported OS) that key stays in config.json and nothing is scrubbed,
+    so a PAT can never be lost. Only exception types are logged, never values.
+    If secure_store already holds a different value for a key, the stored value
+    wins and the plaintext copy is discarded.
+    """
+    with _CONFIG_LOCK:
+        current = _read_config_file()
+        legacy = {k: current[k] for k in _PAT_KEYS if k in current}
+        if not legacy:
+            return raw
+        removable = set()
+        all_ok = True
+        for key, value in legacy.items():
+            if not (isinstance(value, str) and value.strip()):
+                removable.add(key)  # empty / non-string: nothing worth keeping
+                continue
+            name = _pat_name(key)
+            try:
+                existing = secure_store.get(name)
+                if existing is None:
+                    secure_store.set(name, value)
+                    if secure_store.get(name) != value:
+                        raise ValueError("read-back verification failed")
+                elif existing != value:
+                    _log.warning("config key %s differs from secure_store; keeping stored value", key)
+                removable.add(key)
+            except Exception as exc:
+                all_ok = False
+                _log.error("could not migrate config key %s to secure_store (kept in config.json): %s",
+                           key, type(exc).__name__)
+        if not removable:
+            return raw
+        remaining = {k: v for k, v in current.items() if k not in removable}
+        try:
+            _write_json_locked(remaining, CONFIG_FILE, backup=False)
+        except OSError as exc:
+            _log.error("could not rewrite config.json after PAT migration: %s", type(exc).__name__)
+            return raw
+        if all_ok:
+            _scrub_config_copies()
+        return remaining
+
+
+def load_config() -> dict:
+    """Load saved config (API key etc.) from disk; PATs come from secure_store."""
+    raw = _read_config_file()
+    if any(k in raw for k in _PAT_KEYS):
+        raw = _migrate_config_secrets(raw)
+    for key in _PAT_KEYS:
+        try:
+            value = secure_store.get(_pat_name(key))
+        except Exception as exc:
+            _log.error("could not read config key %s from secure_store: %s", key, type(exc).__name__)
+            continue
+        if value:
+            raw[key] = value
+    return raw
 
 
 def save_config(data: dict) -> None:
@@ -201,28 +316,87 @@ def save_config(data: dict) -> None:
 
 
 def _write_config_locked(data: dict) -> None:
-    CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    # Keep a recoverable last-known-good file before replacing config. A stale
-    # writer can no longer leave a truncated JSON file, and the preceding full
-    # state is available if a caller bug ever writes the wrong object.
-    if CONFIG_FILE.exists():
+    # PATs go to secure_store first; if that fails the exception propagates and
+    # config.json is left untouched (never fall back to plaintext). A PAT that
+    # is absent/empty in *data* is deleted (full-replace semantics).
+    for key in _PAT_KEYS:
+        name = _pat_name(key)
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            if secure_store.get(name) != value:
+                secure_store.set(name, value)
+        else:
+            secure_store.delete(name)
+    _write_json_locked({k: v for k, v in data.items() if k not in _PAT_KEYS}, CONFIG_FILE, backup=True)
+
+
+def _refresh_backup(target: Path) -> None:
+    """Copy *target* to ``<target>.bak``, never carrying PAT values into it."""
+    backup = target.with_name(target.name + ".bak")
+    try:
+        text = target.read_text(encoding="utf-8", errors="replace")
         try:
-            shutil.copy2(CONFIG_FILE, CONFIG_FILE.with_name("config.json.bak"))
-        except OSError as exc:
-            _log.warning("Could not refresh config backup: %s", exc)
-    fd, tmp_name = tempfile.mkstemp(prefix="config.", suffix=".tmp", dir=CONFIG_FILE.parent)
+            parsed = json.loads(text)
+        except Exception:
+            parsed = None
+        if isinstance(parsed, dict):
+            if any(k in parsed for k in _PAT_KEYS):
+                for key in _PAT_KEYS:
+                    parsed.pop(key, None)
+                _atomic_write_json(parsed, backup)
+                return
+        elif any(k in text for k in _PAT_KEYS):
+            # Unparseable file that may hold a plaintext PAT: keep the previous
+            # (scrubbed) backup rather than copying it.
+            return
+        shutil.copy2(target, backup)
+    except OSError as exc:
+        _log.warning("Could not refresh config backup: %s", exc)
+
+
+def _atomic_write_json(data: dict, target: Path) -> None:
+    fd, tmp_name = tempfile.mkstemp(prefix="config.", suffix=".tmp", dir=target.parent)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump(data, handle, indent=2)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(tmp_name, CONFIG_FILE)
+        os.replace(tmp_name, target)
     finally:
         try:
             if os.path.exists(tmp_name):
                 os.unlink(tmp_name)
         except OSError:
             pass
+
+
+def _write_json_locked(data: dict, target: Path, backup: bool) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    # Keep a recoverable last-known-good file before replacing config. A stale
+    # writer can no longer leave a truncated JSON file, and the preceding full
+    # state is available if a caller bug ever writes the wrong object. PAT keys
+    # are stripped from the backup (they live in secure_store only).
+    if backup and target.exists():
+        _refresh_backup(target)
+    _atomic_write_json(data, target)
+
+
+def sweep_legacy_secrets() -> None:
+    """Startup pass: migrate any remaining plaintext tokens/PATs. Never raises."""
+    try:
+        secure_store.migrate_all()
+    except Exception as exc:
+        _log.error("legacy token sweep failed: %s", type(exc).__name__)
+    try:
+        load_config()  # migrates legacy PATs out of config.json (and scrubs copies)
+    except Exception as exc:
+        _log.error("legacy config sweep failed: %s", type(exc).__name__)
+    try:
+        # Finish a scrub interrupted after config.json was already cleaned.
+        with _CONFIG_LOCK:
+            _scrub_config_copies()
+    except Exception as exc:
+        _log.error("legacy config backup scrub failed: %s", type(exc).__name__)
 
 
 def update_config(mutator) -> dict:

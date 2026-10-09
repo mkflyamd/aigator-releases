@@ -217,7 +217,8 @@ async def browser_confirm_allow(confirm_id: str):
     """Allow a pending browser confirm gate."""
     from browser_agent import resolve_browser_confirm
 
-    resolve_browser_confirm(confirm_id, allowed=True)
+    if not resolve_browser_confirm(confirm_id, allowed=True):
+        return {"ok": False, "expired": True}
     return {"ok": True}
 
 
@@ -226,7 +227,8 @@ async def browser_confirm_cancel(confirm_id: str):
     """Cancel a pending browser confirm gate."""
     from browser_agent import resolve_browser_confirm
 
-    resolve_browser_confirm(confirm_id, allowed=False)
+    if not resolve_browser_confirm(confirm_id, allowed=False):
+        return {"ok": False, "expired": True}
     return {"ok": True}
 
 

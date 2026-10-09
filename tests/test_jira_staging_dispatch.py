@@ -279,7 +279,7 @@ def _rovo_create_meta_mock():
 
 class TestCreateStaging:
     def test_direct_creates_draft_with_direct_target(self):
-        with patch("skills.jira.tools.resolve_target_for_context", return_value=_direct_target()), \
+        with patch("skills.jira.tools.resolve_target_for_project", return_value=_direct_target()), \
              patch("skills.jira.tools._tool_jira_get_project_meta", return_value={"issue_types": []}):
             from skills.jira.tools import _tool_jira_open_create_form
             result = _tool_jira_open_create_form(project="PROJ", summary="New issue", issue_type="Task")
@@ -289,7 +289,7 @@ class TestCreateStaging:
         assert draft["params"]["is_cloud"] is True   # target.is_cloud, not jira_is_cloud()
 
     def test_rovo_creates_draft_with_rovo_target(self):
-        with patch("skills.jira.tools.resolve_target_for_context", return_value=_rovo_target()), \
+        with patch("skills.jira.tools.resolve_target_for_project", return_value=_rovo_target()), \
              _patch_rovo_call(side_effect=_rovo_create_meta_mock()):
             from skills.jira.tools import _tool_jira_open_create_form
             result = _tool_jira_open_create_form(project="PROJ", summary="Rovo story", issue_type="Story")
@@ -300,7 +300,7 @@ class TestCreateStaging:
 
     def test_rovo_create_does_not_call_jira_api(self):
         direct_api = MagicMock(side_effect=AssertionError("jira_api must not be called for rovo target"))
-        with patch("skills.jira.tools.resolve_target_for_context", return_value=_rovo_target()), \
+        with patch("skills.jira.tools.resolve_target_for_project", return_value=_rovo_target()), \
              patch("skills.jira.tools.jira_api", direct_api), \
              _patch_rovo_call(side_effect=_rovo_create_meta_mock()):
             from skills.jira.tools import _tool_jira_open_create_form
@@ -310,7 +310,7 @@ class TestCreateStaging:
 
     def test_rovo_create_validates_project_key(self):
         """Unknown project must fail before staging, not at approval time."""
-        with patch("skills.jira.tools.resolve_target_for_context", return_value=_rovo_target()), \
+        with patch("skills.jira.tools.resolve_target_for_project", return_value=_rovo_target()), \
              _patch_rovo_call(side_effect=_rovo_create_meta_mock()):
             from skills.jira.tools import _tool_jira_open_create_form
             result = _tool_jira_open_create_form(project="UNKNOWN", summary="s", issue_type="Task")
@@ -319,7 +319,7 @@ class TestCreateStaging:
 
     def test_rovo_create_validates_issue_type(self):
         """Unknown issue type must fail before staging."""
-        with patch("skills.jira.tools.resolve_target_for_context", return_value=_rovo_target()), \
+        with patch("skills.jira.tools.resolve_target_for_project", return_value=_rovo_target()), \
              _patch_rovo_call(side_effect=_rovo_create_meta_mock()):
             from skills.jira.tools import _tool_jira_open_create_form
             result = _tool_jira_open_create_form(project="PROJ", summary="s", issue_type="InvalidType")
@@ -342,7 +342,7 @@ class TestCreateStaging:
                                                "display_name": "", "capabilities": []}
         server_target.public_dict.return_value = {"adapter": "rovo-mcp", "is_cloud": False,
                                                    "base_url": "https://jira.example.com"}
-        with patch("skills.jira.tools.resolve_target_for_context", return_value=server_target), \
+        with patch("skills.jira.tools.resolve_target_for_project", return_value=server_target), \
              patch("skills.jira.tools.jira_is_cloud", return_value=True), \
              _patch_rovo_call(side_effect=_rovo_create_meta_mock()):
             from skills.jira.tools import _tool_jira_open_create_form
@@ -460,7 +460,7 @@ class TestRovoAllowlistRegression:
     def test_create_staging_passes_through_real_allowlist(self):
         """End-to-end: create staging goes through rovo_jira_call's real operation
         map. If either mapping is absent the call raises before returning a draft."""
-        with patch("skills.jira.tools.resolve_target_for_context", return_value=self._target()), \
+        with patch("skills.jira.tools.resolve_target_for_project", return_value=self._target()), \
              patch("mcp.manager._load_connections", return_value=_ROVO_CONN_WITH_META_TOOLS), \
              patch("mcp.manager._client_for", return_value=_mcp_client_for_meta()):
             from skills.jira.tools import _tool_jira_open_create_form
@@ -476,7 +476,7 @@ class TestRovoAllowlistRegression:
 
     def test_create_staging_fails_on_unknown_project_through_real_allowlist(self):
         """Unknown project should fail closed via the real rovo_jira_call path."""
-        with patch("skills.jira.tools.resolve_target_for_context", return_value=self._target()), \
+        with patch("skills.jira.tools.resolve_target_for_project", return_value=self._target()), \
              patch("mcp.manager._load_connections", return_value=_ROVO_CONN_WITH_META_TOOLS), \
              patch("mcp.manager._client_for", return_value=_mcp_client_for_meta()):
             from skills.jira.tools import _tool_jira_open_create_form
@@ -488,7 +488,7 @@ class TestRovoAllowlistRegression:
 
     def test_create_staging_fails_on_unknown_issue_type_through_real_allowlist(self):
         """Unknown issue type should fail closed via the real rovo_jira_call path."""
-        with patch("skills.jira.tools.resolve_target_for_context", return_value=self._target()), \
+        with patch("skills.jira.tools.resolve_target_for_project", return_value=self._target()), \
              patch("mcp.manager._load_connections", return_value=_ROVO_CONN_WITH_META_TOOLS), \
              patch("mcp.manager._client_for", return_value=_mcp_client_for_meta()):
             from skills.jira.tools import _tool_jira_open_create_form

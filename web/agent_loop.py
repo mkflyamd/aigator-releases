@@ -1,5 +1,6 @@
 """Agentic loop -- single-agent (original) and three-agent (primary) orchestration."""
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -333,6 +334,9 @@ def _summarize_tool_calls(tool_calls: list, results: list | None = None) -> list
                 entry["error"] = str(r["error"])[:300]
             else:
                 entry["success"] = True
+            # Code-runner sandbox: one metadata-only record per run (no paths, hosts, code or output).
+            if isinstance(r, dict) and isinstance(r.get("_sandbox_telemetry"), dict):
+                entry["sandbox"] = r["_sandbox_telemetry"]
         else:
             entry["success"] = None
         out.append(entry)
@@ -423,30 +427,202 @@ def _prune_largest_tool_result(msgs: list[dict]) -> int:
     return largest_size
 
 
-def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _SLACK_SAFE_MSG):
+_CONFIRM_TIMEOUT_S = 300.0
+
+_awaiting_human: dict[str, int] = {}
+
+
+def is_awaiting_human(context_id: str | None) -> bool:
+    """True while a turn in this context is blocked on the user's allow/deny answer.
+    The stream's idle watchdog must not read that wait as the model going silent."""
+    return _awaiting_human.get(context_id, 0) > 0
+
+
+@contextlib.contextmanager
+def awaiting_human(context_id: str | None):
+    if context_id is None:
+        yield
+        return
+    _awaiting_human[context_id] = _awaiting_human.get(context_id, 0) + 1
+    try:
+        yield
+    finally:
+        left = _awaiting_human.get(context_id, 1) - 1
+        if left > 0:
+            _awaiting_human[context_id] = left
+        else:
+            _awaiting_human.pop(context_id, None)
+
+
+def _offered_tool_names(tools) -> frozenset[str]:
+    names = set()
+    for d in tools or ():
+        if not isinstance(d, dict):
+            continue
+        name = d.get("name") or (d.get("function") or {}).get("name")
+        if name:
+            names.add(name)
+    return frozenset(names)
+
+
+def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _SLACK_SAFE_MSG,
+                      *, context_id: str | None = None, offered_names: frozenset[str] | None = None):
     """Returns (_run_tool_block, _run_all_into_queue, _SENTINEL) closures."""
+    import content_guard
+    import data_sources
     _SENTINEL = object()
+    _source_locks: dict[tuple[str, str], asyncio.Lock] = {}
 
     _BROWSER_TOOLS = {"browser_task", "browser_navigate", "browser_search"}
 
-    async def _request_browser_confirm(action: str, event_queue) -> bool:
-        """Suspend execution, ask user to allow/cancel browser use. Returns True if allowed."""
+    async def _request_browser_confirm(action: str, event_queue, *, title=None,
+                                       allow_label=None, deny_label=None) -> bool:
+        """Suspend execution, ask user to allow/cancel. Returns True if allowed."""
         from browser_agent import _pending_confirms, resolve_browser_confirm
         confirm_id = str(uuid.uuid4())
         event = asyncio.Event()
         result: list[bool] = []
         _pending_confirms[confirm_id] = (event, result)
         try:
-            await event_queue.put({"kind": "browser_confirm", "confirm_id": confirm_id, "action": action})
+            evt = {"kind": "browser_confirm", "confirm_id": confirm_id, "action": action}
+            for k, v in (("title", title), ("allow_label", allow_label), ("deny_label", deny_label)):
+                if v:
+                    evt[k] = v
+            await event_queue.put(evt)
             try:
-                await asyncio.wait_for(event.wait(), timeout=60.0)
+                with awaiting_human(context_id):
+                    await asyncio.wait_for(event.wait(), timeout=_CONFIRM_TIMEOUT_S)
             except asyncio.TimeoutError:
                 result.append(False)
+                await event_queue.put({"kind": "browser_confirm_expired", "confirm_id": confirm_id})
             return result[0] if result else False
         finally:
             _pending_confirms.pop(confirm_id, None)
 
+    async def _early_error(tc, event_queue, result: dict, summary: str):
+        await event_queue.put({"kind": "tool_result", "call_id": tc.id, "status": "error", "summary": summary})
+        return result
+
+    async def _ask_source(tc, source, event_queue):
+        """Returns None when the source is allowed, else the error result."""
+        lock = _source_locks.setdefault((context_id, source.key), asyncio.Lock())
+        async with lock:
+            if data_sources.is_allowed(context_id, source.key):
+                return None
+            if not data_sources.recently_denied(context_id, source.key):
+                text = data_sources.prompt_for(source, tc.name, tc.inputs)
+                if await _request_browser_confirm(
+                    text["action"], event_queue, title=text["title"],
+                    allow_label=text["allow_label"], deny_label=text["deny_label"],
+                ):
+                    data_sources.allow(context_id, source.key)
+                    await event_queue.put({"kind": "status", "status": f"{source.label}: allowed for this tab"})
+                    return None
+                data_sources.deny(context_id, source.key)
+        return await _early_error(
+            tc, event_queue,
+            {
+                "error": "data_source_denied",
+                "source": source.label,
+                "hint": (
+                    f"The user did not allow access to {source.label}. Do not retry this tool and do not "
+                    "reach the same data another way. Tell the user it needs their permission."
+                ),
+            },
+            f"Access to {source.label} was not allowed",
+        )
+
+    def _schedule_card_action(inputs: dict) -> str:
+        """Card text for a schedule. Every field is model-controlled: each one is cut, stripped of
+        control characters and "|", and shown in a fixed order so a long name cannot fake the rest."""
+        def clean(value, limit: int) -> str:
+            text = re.sub(r"[\x00-\x1f\x7f-\x9f\u2028\u2029\u200b-\u200f\u202a-\u202e\u2060\u2066-\u2069\ufeff|]+", " ", str(value)).strip()
+            return text[:limit] + "..." if len(text) > limit else text
+
+        trigger = clean(inputs.get("trigger_type", ""), 20)
+        if trigger == "date":
+            when = f"date, runs at {clean(inputs.get('run_date') or '(not given)', 40)}"
+        elif trigger == "interval":
+            when = f"interval, every {clean(inputs.get('interval_minutes', '?'), 10)} minutes"
+        elif trigger == "cron":
+            when = (f"cron, day {clean(inputs.get('cron_day_of_week') or '*', 30)} "
+                    f"at hour {clean(inputs.get('cron_hour', '*'), 5)} minute {clean(inputs.get('cron_minute', 0), 5)}")
+        else:
+            when = trigger or "(not given)"
+        skills = inputs.get("skills") or []
+        if isinstance(skills, list) and skills:
+            skills_text = ", ".join(clean(x, 40) for x in skills[:10])
+            if len(skills) > 10:
+                skills_text += f", and {len(skills) - 10} more"
+        else:
+            skills_text = "(none)"
+        parts = [f"Name: {clean(inputs.get('name', ''), 80)}", f"Trigger: {when}", f"Skills: {skills_text}"]
+        if inputs.get("end_date"):
+            parts.append(f"Ends: {clean(inputs['end_date'], 40)}")
+        if inputs.get("cron_timezone"):
+            parts.append(f"Timezone: {clean(inputs['cron_timezone'], 40)}")
+        if inputs.get("token_budget") is not None:
+            parts.append(f"Token budget: {clean(inputs['token_budget'], 10)}")
+        parts.append("It will run on its own later without asking again")
+        parts.append(f"Instructions (first 300 characters): {clean(inputs.get('prompt', ''), 300)}")
+        return " | ".join(parts)
+
+    async def _gate_schedule_task(tc, event_queue):
+        """Returns None when the schedule may be created, else the error result."""
+        if not context_id:
+            return await _early_error(
+                tc, event_queue,
+                {
+                    "error": "schedule_not_allowed_unattended",
+                    "hint": ("An unattended run cannot create new schedules without a human. "
+                             "Tell the user the schedule needs to be requested in a chat tab."),
+                },
+                "Scheduling is not allowed in an unattended run",
+            )
+        if await _request_browser_confirm(
+            _schedule_card_action(tc.inputs or {}), event_queue,
+            title="Allow AI Gator to schedule a task?", allow_label="Allow", deny_label="Deny",
+        ):
+            return None
+        return await _early_error(
+            tc, event_queue,
+            {
+                "error": "schedule_not_approved",
+                "hint": ("The user did not approve this schedule, so nothing was created. "
+                         "Do not retry it. Tell the user it needs their approval."),
+            },
+            "Scheduling was not approved",
+        )
+
     async def _run_tool_block(tc, event_queue):
+        if offered_names is not None and tc.name not in offered_names:
+            return await _early_error(
+                tc, event_queue,
+                {
+                    "error": "tool_not_offered",
+                    "tool": tc.name,
+                    "hint": "This tool is not available in this conversation. Use only the tools you were given.",
+                },
+                f"{tc.name} is not available in this conversation",
+            )
+        if tc.name == "fetch_webpage":
+            # Refuse a private or internal target before asking the user to approve it.
+            url = (tc.inputs or {}).get("url")
+            if isinstance(url, str) and url.startswith(("http://", "https://")):
+                from skills._always_on.tools import _check_fetch_target
+                refusal = await asyncio.to_thread(_check_fetch_target, url)
+                if refusal is not None:
+                    return await _early_error(tc, event_queue, {**refusal, "url": url}, refusal["error"])
+        if context_id:
+            source = data_sources.source_for_call(tc.name, tc.inputs)
+            if source is not None and not data_sources.is_allowed(context_id, source.key):
+                denied = await _ask_source(tc, source, event_queue)
+                if denied is not None:
+                    return denied
+        if tc.name == "schedule_task":
+            blocked = await _gate_schedule_task(tc, event_queue)
+            if blocked is not None:
+                return blocked
         is_browser = tc.name in _BROWSER_TOOLS
         if is_browser:
             if tc.name == "browser_navigate":
@@ -504,7 +680,8 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
         # A call rejected for missing/truncated required args never ran — don't
         # emit the "Running ..." indicator for it, so the UI shows at most one
         # indicator per real execution even when the model retries (#25).
-        _rejected = isinstance(result, dict) and result.get("error") == "missing_required_params"
+        _rejected = isinstance(result, dict) and result.get("error") in (
+            "missing_required_params", "invalid_tool_input")
         if not _slack_silent and not _rejected:
             status = TOOL_STATUS.get(tc.name, f"⚙️ Running {tc.name}...")
             await event_queue.put({"kind": "status", "status": status})
@@ -531,6 +708,8 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
             await event_queue.put({"kind": "draft", "draft": result["_draft"], "data": result.get("data", {})})
         if isinstance(result, dict) and "_jira_target_selection" in result:
             await event_queue.put({"kind": "jira_target_selection", "data": result["_jira_target_selection"]})
+        if isinstance(result, dict) and "_sandbox_approval" in result:
+            await event_queue.put({"kind": "sandbox_approval", "data": result["_sandbox_approval"]})
         if isinstance(result, dict) and result.get("files"):
             await event_queue.put({"kind": "files", "files": result["files"]})
         # Cross-skill nudge: a tool may return `suggested_next` — a list of
@@ -549,6 +728,16 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
                 if _names:
                     await event_queue.put({"kind": "toast", "level": "info",
                                            "message": f"Suggested next: {_names}"})
+        if isinstance(result, dict) and data_sources.is_untrusted(tc.name):
+            result, removed = content_guard.mark_untrusted(result)
+            if removed:
+                logging.getLogger(__name__).warning(
+                    "content_guard: removed %d suspicious instruction(s) from %s", removed, tc.name
+                )
+                await event_queue.put({
+                    "kind": "toast", "level": "warn",
+                    "message": f"Removed {removed} suspicious instruction(s) from {tc.name} results.",
+                })
         return result
 
     async def _run_all_into_queue(tool_calls, event_queue):
@@ -614,7 +803,8 @@ async def _single_agent_loop(
     """Original single-agent loop. Kept as fallback reference."""
     import turn_telemetry
     _, _run_all_into_queue, _SENTINEL = _make_tool_runner(
-        execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _SLACK_SAFE_MSG
+        execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _SLACK_SAFE_MSG,
+        context_id=context_id, offered_names=_offered_tool_names(normalized_tools),
     )
     _total_input = 0
     _total_output = 0
@@ -896,6 +1086,8 @@ async def _single_agent_loop(
 
         if turn["stop_reason"] != "tool_use":
             yield f"data: {json.dumps({'usage': {'input_tokens': _total_input, 'output_tokens': _total_output}})}\n\n"
+            if turn["stop_reason"] == "refusal" and not turn.get("text"):
+                yield f"data: {json.dumps({'token': 'The model declined to answer this request (its own safety filter refused it, so no tool was run). Try rephrasing it, or start a new chat if earlier messages in this one triggered it.'})}\n\n"
             # Show the failure banner only when a tool failed AND the model
             # produced no text response — meaning it silently gave up without
             # answering. If the model produced any text it answered the user
@@ -989,12 +1181,17 @@ async def _single_agent_loop(
                     yield f"data: {json.dumps({'draft': evt['draft'], 'draftData': evt.get('data', {})})}\n\n"
                 elif kind == "jira_target_selection":
                     yield f"data: {json.dumps({'jira_target_selection': evt.get('data', {})})}\n\n"
+                elif kind == "sandbox_approval":
+                    yield f"data: {json.dumps({'sandbox_approval': evt.get('data', {})})}\n\n"
                 elif kind == "toast":
                     yield f"data: {json.dumps({'toast': {'level': evt.get('level', 'info'), 'message': evt.get('message', '')}})}\n\n"
                 elif kind == "browser_hitl":
                     yield f"data: {json.dumps({'browser_hitl': evt['state']})}\n\n"
                 elif kind == "browser_confirm":
-                    yield f"data: {json.dumps({'browser_confirm': {'confirm_id': evt['confirm_id'], 'action': evt['action']}})}\n\n"
+                    _card = {k: evt[k] for k in ("confirm_id", "action", "title", "allow_label", "deny_label") if k in evt}
+                    yield f"data: {json.dumps({'browser_confirm': _card})}\n\n"
+                elif kind == "browser_confirm_expired":
+                    yield f"data: {json.dumps({'browser_confirm_expired': evt['confirm_id']})}\n\n"
                 elif kind == "failover_confirm":
                     yield f"data: {json.dumps({'failover_confirm': {'consent_id': evt['consent_id'], 'fallback_model': evt['fallback_model']}})}\n\n"
                 elif kind == "files":
@@ -1262,7 +1459,8 @@ async def run_three_agent_loop(
     _total_output = 0
     required_tool_names = set(required_tool_names or ())
     _, _run_all_into_queue, _SENTINEL = _make_tool_runner(
-        execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _SLACK_SAFE_MSG
+        execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _SLACK_SAFE_MSG,
+        context_id=context_id, offered_names=_offered_tool_names(normalized_tools),
     )
 
     def _budget_ok():
@@ -1507,12 +1705,17 @@ async def run_three_agent_loop(
                     yield f"data: {json.dumps({'draft': evt['draft'], 'draftData': evt.get('data', {})})}\n\n"
                 elif kind == "jira_target_selection":
                     yield f"data: {json.dumps({'jira_target_selection': evt.get('data', {})})}\n\n"
+                elif kind == "sandbox_approval":
+                    yield f"data: {json.dumps({'sandbox_approval': evt.get('data', {})})}\n\n"
                 elif kind == "toast":
                     yield f"data: {json.dumps({'toast': {'level': evt.get('level', 'info'), 'message': evt.get('message', '')}})}\n\n"
                 elif kind == "browser_hitl":
                     yield f"data: {json.dumps({'browser_hitl': evt['state']})}\n\n"
                 elif kind == "browser_confirm":
-                    yield f"data: {json.dumps({'browser_confirm': {'confirm_id': evt['confirm_id'], 'action': evt['action']}})}\n\n"
+                    _card = {k: evt[k] for k in ("confirm_id", "action", "title", "allow_label", "deny_label") if k in evt}
+                    yield f"data: {json.dumps({'browser_confirm': _card})}\n\n"
+                elif kind == "browser_confirm_expired":
+                    yield f"data: {json.dumps({'browser_confirm_expired': evt['confirm_id']})}\n\n"
                 elif kind == "failover_confirm":
                     yield f"data: {json.dumps({'failover_confirm': {'consent_id': evt['consent_id'], 'fallback_model': evt['fallback_model']}})}\n\n"
                 elif kind == "files":

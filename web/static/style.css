@@ -1833,6 +1833,11 @@ details + .spanel-divider,
   color: var(--text-sub);
   margin-top: 2px;
 }
+.saved-permission-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
 .srow-tag {
   font-size: 0.68rem;
   font-weight: 500;
@@ -5986,12 +5991,37 @@ body.gator-chat-expanded .gator-expand-btn {
   min-width: 0;
   overflow-wrap: break-word;
 }
+ul.gcc-field-val {
+  margin: 0;
+  padding-left: 18px;
+}
 .gcc-field-row--block {
   flex-direction: column;
   gap: 2px;
 }
 .gcc-field-row--block .gcc-field-key {
   min-width: unset;
+}
+.gcc-field-edit {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--surface2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+textarea.gcc-field-edit {
+  min-height: 60px;
+  max-height: 220px;
+  resize: vertical;
+}
+.gcc-field-edit:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 .gcc-field-markdown {
   color: var(--text, #e0e0e0);
@@ -22343,4 +22373,85 @@ body.tab-fullscreen {
   100% {
     background-position: -200% 0;
   }
+}
+
+/* Atlassian site lists (Jira sites / Confluence sites) */
+.site-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+}
+.site-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.site-section-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text);
+}
+.site-add-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 0.78rem;
+  color: var(--accent);
+  cursor: pointer;
+}
+.site-add-btn:hover {
+  text-decoration: underline;
+}
+.site-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.site-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.site-row .key-field {
+  flex: 1;
+  min-width: 0;
+}
+.site-row-tag {
+  flex: none;
+  width: 4.2rem;
+  font-size: 0.7rem;
+  color: var(--text-sub);
+  text-align: center;
+}
+.site-remove {
+  flex: none;
+  width: 4.2rem;
+  padding: 0.35rem 0;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.site-remove:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+/* Install permission list and disabled rows (marketplace skill controls) */
+.mp-permission-list {
+  margin: 0 0 10px 18px;
+  padding: 0;
+  font-size: 0.875rem;
+  color: var(--text-dim, #aaa);
+}
+
+.mp-installed-row.mp-installed-disabled .mp-installed-text {
+  opacity: 0.6;
+}
+
+.mp-installed-disabled-label {
+  font-size: 0.7rem;
+  color: var(--warn, #f0a040);
 }

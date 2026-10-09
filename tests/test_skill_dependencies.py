@@ -211,3 +211,52 @@ def test_plugin_commands_bootstrap_reflects_command_registry():
         assert matched["plugin_id"] == "amd-skills"
     finally:
         COMMAND_REGISTRY.pop("_test_standup", None)
+
+
+def test_filter_tools_includes_dep_tools_for_prompt_only_skill():
+    """A SKILL.md-only skill (no SKILL_TOOLS_MAP entry) still gets its dependencies' tools."""
+    import sys, os
+
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "web"))
+    import shared
+    from routes.chat import _filter_tools
+
+    shared.SKILL_TOOLS_MAP["file_ops"] = {"edit_file"}
+    shared.SKILL_DEPENDENCIES_MAP["_test_prompt_only"] = [
+        {"id": "file_ops", "reason": "edits skill files"}
+    ]
+    shared.TOOLS.append(
+        {"name": "edit_file", "description": "test", "input_schema": {"type": "object", "properties": {}}}
+    )
+    try:
+        assert "_test_prompt_only" not in shared.SKILL_TOOLS_MAP
+        names = {t["name"] for t in _filter_tools("_test_prompt_only", has_images=False)}
+        assert "edit_file" in names
+    finally:
+        shared.TOOLS[:] = [t for t in shared.TOOLS if t["name"] != "edit_file"]
+        shared.SKILL_TOOLS_MAP.pop("file_ops", None)
+        shared.SKILL_DEPENDENCIES_MAP.pop("_test_prompt_only", None)
+
+
+def test_load_skill_tools_autodetects_file_usage(tmp_path):
+    """A prompt-only skill that edits SKILL.md files gets a file_ops dependency."""
+    import sys, os
+
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "web"))
+    import shared
+    from marketplace.loader import load_skill_tools
+
+    skill_dir = tmp_path / "editor-skill"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: Editor Skill\n---\n\nImprove an existing skill by revising its SKILL.md.\n",
+        encoding="utf-8",
+    )
+    shared.SKILL_DEPENDENCIES_MAP.pop("editor-skill", None)
+    try:
+        load_skill_tools("editor-skill", skill_dir, "Mine")
+        deps = shared.SKILL_DEPENDENCIES_MAP.get("editor-skill", [])
+        assert any(d["id"] == "file_ops" for d in deps)
+        assert not any(d["id"] == "shell_runner" for d in deps)
+    finally:
+        shared.SKILL_DEPENDENCIES_MAP.pop("editor-skill", None)

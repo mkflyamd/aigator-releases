@@ -78,6 +78,35 @@ class ConversationStore:
                 _strip_image_blocks(_repair_all(recent))
             )
 
+    async def recent_tool_names(self, context_id: str, last_n: int = 24) -> set[str]:
+        """Names of tools the model actually ran in the last `last_n` messages.
+
+        A call the allow-list refused (`tool_not_offered`) is not counted: a tool the
+        model merely asked for must not become a reason to offer it next turn.
+        """
+        async with self._lock:
+            recent = list(self._store.get(context_id, []))[-last_n:]
+        refused: set[str] = set()
+        for msg in recent:
+            blocks = msg.get("content") if isinstance(msg.get("content"), list) else []
+            for b in blocks:
+                if isinstance(b, dict) and b.get("type") == "tool_result" and "tool_not_offered" in str(b.get("content")):
+                    refused.add(b.get("tool_use_id"))
+            if msg.get("role") == "tool" and "tool_not_offered" in str(msg.get("content")):
+                refused.add(msg.get("tool_call_id"))
+        names: set[str] = set()
+        for msg in recent:
+            if msg.get("role") != "assistant":
+                continue
+            for b in (msg.get("content") if isinstance(msg.get("content"), list) else []):
+                if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("id") not in refused and b.get("name"):
+                    names.add(b["name"])
+            for tc in (msg.get("tool_calls") if isinstance(msg.get("tool_calls"), list) else []):
+                name = (tc.get("function") or {}).get("name")
+                if name and tc.get("id") not in refused:
+                    names.add(name)
+        return names
+
     async def seed(self, context_id: str, history: list[dict]) -> None:
         """Seed from browser-sent history (backward compat, first message only)."""
         async with self._lock:

@@ -519,6 +519,12 @@ class AnthropicProvider(LLMProvider):
                             len(tool_calls),
                         )
 
+                print(
+                    f"[provider] done stop_reason={authoritative_stop_reason!r}"
+                    f" text_chars={sum(len(t) for t in text_parts)} tool_calls={len(tool_calls)}"
+                    f" out_tokens={usage.get('output_tokens', 0)}",
+                    flush=True,
+                )
                 _emit(
                     {
                         "type": "done",

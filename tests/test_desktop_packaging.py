@@ -111,6 +111,8 @@ def test_packaged_shell_uses_bundled_backend_sidecar():
     assert "http.request(GATOR_URL + '/api/context/pin'" in main
     assert "backendEnv.TMPDIR = runtimeDir" in main
     assert "AIGATOR_MANAGED_LOGGING: '1'" in main
+    assert "AIGATOR_SHELL_KEY" in main
+    assert "X-AIGator-Shell-Key" in main
     assert "windowsHide: true" in main
     assert "pyProc.kill()" in main
     assert "EXPECTED_API_CONTRACT" in main
@@ -358,3 +360,40 @@ def test_reload_targets_focused_view_and_resets_gator_to_root():
     assert "reloadGator" in menu
     assert "contents.id !== gatorView.webContents.id" in main
     assert "gatorView.webContents.loadURL(GATOR_URL)" in main
+
+
+def test_backend_sidecar_is_onedir_so_run_python_starts_fast():
+    """A onefile sidecar re-extracts ~136 MB on every `--run-python` child
+    (~37 s before the first line of output on Windows, 2026-10-05). The
+    sidecar is built onedir into dist/backend/ instead; the executable path
+    used by shell/main.js and the release workflow is unchanged."""
+    spec = (ROOT / "packaging" / "aigator-backend.spec").read_text(encoding="utf-8")
+    workflow = (ROOT / ".github" / "workflows" / "release-desktop.yml").read_text(
+        encoding="utf-8"
+    )
+    build_doc = (ROOT / "docs" / "BUILD_INSTRUCTIONS.md").read_text(encoding="utf-8")
+
+    assert "exclude_binaries=True" in spec
+    assert "COLLECT(" in spec
+    assert 'name="backend"' in spec
+    assert "--distpath dist --workpath build/pyinstaller-desktop" in workflow
+    assert "--distpath dist/backend" not in workflow
+    assert "--distpath dist/backend" not in build_doc
+    assert "--distpath dist\\backend" not in build_doc
+
+
+def test_linux_deb_depends_on_bubblewrap_and_docs_explain_it():
+    package = json.loads((ROOT / "shell" / "package.json").read_text(encoding="utf-8"))
+    depends = package["build"]["deb"]["depends"]
+    assert "bubblewrap" in depends
+    # electron-builder replaces (does not extend) its default list, so keep it.
+    for default in ("libgtk-3-0", "libnotify4", "libnss3", "libxss1", "libxtst6",
+                    "xdg-utils", "libatspi2.0-0", "libuuid1", "libsecret-1-0"):
+        assert default in depends
+    build_doc = (ROOT / "docs" / "BUILD_INSTRUCTIONS.md").read_text(encoding="utf-8")
+    assert "Linux: bubblewrap" in build_doc
+    assert "Code sandbox smoke test (release gate)" in build_doc
+
+    from web.sandbox.launcher_linux import BWRAP_BLOCKED
+
+    assert "Linux: bubblewrap" in BWRAP_BLOCKED

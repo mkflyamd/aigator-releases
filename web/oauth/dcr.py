@@ -284,6 +284,7 @@ def register_byoc_provider(
         authorize_url=meta["authorization_endpoint"],
         token_url=meta["token_endpoint"],
         registration_endpoint="",
+        revocation_endpoint=meta.get("revocation_endpoint", ""),
         client_id=client_id.strip(),
         client_secret=client_secret.strip(),
         scopes=resolved_scopes,
@@ -376,6 +377,7 @@ def discover_and_register(
         authorize_url=meta["authorization_endpoint"],
         token_url=meta["token_endpoint"],
         registration_endpoint=registration_endpoint,
+        revocation_endpoint=meta.get("revocation_endpoint", ""),
         client_id=client_id,
         client_secret=reg.get("client_secret", ""),
         scopes=[],  # MCP servers gate scopes server-side; leave empty unless caller sets
