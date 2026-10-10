@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import os
 import secrets
+from urllib.parse import urlsplit
 
 from fastapi import Header, HTTPException
 
@@ -52,3 +53,28 @@ async def require_shell_key(x_aigator_shell_key: str | None = Header(default=Non
         x_aigator_shell_key.encode("utf-8"), _SHELL_KEY.encode("utf-8")
     ):
         raise HTTPException(status_code=403, detail="Shell key missing or invalid")
+
+
+_SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+def origin_allowed(method: str, host: str | None, origin: str | None, referer: str | None) -> bool:
+    """State-changing browser requests must come from the page this server serves.
+
+    Browsers always attach Origin (or at least Referer) to cross-site POSTs, so a
+    foreign page or a DNS-rebound hostname is refused. Requests that carry neither
+    header are not browser-initiated and fall through to the token checks.
+    """
+    if method.upper() in _SAFE_METHODS:
+        return True
+    source = origin or referer
+    if not source:
+        return True
+    parsed = urlsplit(source)
+    return (
+        parsed.scheme == "http"
+        and parsed.hostname in _LOOPBACK_HOSTS
+        and bool(host)
+        and parsed.netloc.lower() == host.lower()
+    )
