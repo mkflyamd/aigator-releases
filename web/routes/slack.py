@@ -13,10 +13,11 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 import shared
+from security import verify_csrf
 
 router = APIRouter()
 
@@ -1690,7 +1691,7 @@ async def slack_post_message(channel_id: str, req: SlackPostRequest):
     return draft
 
 
-@router.post("/api/slack/channels/{channel_id}/send")
+@router.post("/api/slack/channels/{channel_id}/send", dependencies=[Depends(verify_csrf)])
 async def slack_send_message_confirmed(channel_id: str, req: SlackPostRequest):
     """Confirmed send — validates the single-use confirm_token before dispatching."""
     token = req.confirm_token or ""
@@ -1957,7 +1958,7 @@ async def slack_send_dm(req: Request):
     }
 
 
-@router.post("/api/slack/dm/send")
+@router.post("/api/slack/dm/send", dependencies=[Depends(verify_csrf)])
 async def slack_send_dm_confirmed(req: Request):
     """Confirmed DM send — validates the single-use confirm_token before dispatching."""
     body = await req.json()

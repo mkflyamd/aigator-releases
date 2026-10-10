@@ -1238,7 +1238,11 @@ class TestSlackLegacyPaneApproval:
         token = drafted.json()["confirm_token"]
         with patch("skills.slack.mcp_client._load_token", return_value={"team_id": "T2"}), \
              patch("routes.slack._slack_web_api") as post:
-            sent = client.post("/api/slack/channels/C1/send", json={"confirm_token": token, "message": "ignored"})
+            sent = client.post(
+                "/api/slack/channels/C1/send",
+                json={"confirm_token": token, "message": "ignored"},
+                headers={"X-CSRF-Token": _csrf()},
+            )
         assert sent.status_code == 409, sent.text
         post.assert_not_called()
 
@@ -1259,5 +1263,7 @@ class TestSlackLegacyPaneApproval:
 
         with patch("skills.slack.mcp_client._load_token", return_value={"team_id": "T1"}), \
              patch("routes.slack._slack_web_api", side_effect=slack_api):
-            sent = client.post("/api/slack/dm/send", json={"confirm_token": token})
+            sent = client.post(
+                "/api/slack/dm/send", json={"confirm_token": token}, headers={"X-CSRF-Token": _csrf()}
+            )
         assert sent.status_code == 200, sent.text

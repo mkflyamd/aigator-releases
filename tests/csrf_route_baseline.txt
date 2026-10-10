@@ -89,7 +89,6 @@ POST /api/email/forward
 POST /api/email/messages/{message_id}/markread
 POST /api/email/messages/{message_id}/respond
 POST /api/email/reply
-POST /api/email/send
 POST /api/extensions/setup/commit
 POST /api/extensions/setup/normalize
 POST /api/extensions/setup/start
@@ -138,9 +137,7 @@ POST /api/server/stop
 POST /api/shell/background-processes/{pid}/stop
 POST /api/slack/channel-seen
 POST /api/slack/channels/{channel_id}/post
-POST /api/slack/channels/{channel_id}/send
 POST /api/slack/dm
-POST /api/slack/dm/send
 POST /api/slack/react
 POST /api/slack/resolve-members
 POST /api/slack/unreact
@@ -150,17 +147,14 @@ POST /api/tabs/sync
 POST /api/tasks
 POST /api/tasks/{task_id}/cancel
 POST /api/teams/channels
-POST /api/teams/channels/{team_id}/{channel_id}/send
 POST /api/teams/chats/find-by-members
 POST /api/teams/chats/new
 POST /api/teams/chats/{chat_id}/mark-read
 POST /api/teams/chats/{chat_id}/mark-unread
 POST /api/teams/chats/{chat_id}/members/add
 POST /api/teams/chats/{chat_id}/messages/{message_id}/react
-POST /api/teams/chats/{chat_id}/send
 POST /api/teams/presence
 POST /api/teams/presence/batch
-POST /api/teams/send-message
 POST /api/update/download
 POST /api/update/install
 POST /api/upload/onedrive

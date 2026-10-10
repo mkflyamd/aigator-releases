@@ -11,10 +11,11 @@ import urllib.request
 from collections import OrderedDict as _OD
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 import secure_store
+from security import verify_csrf
 import shared
 
 router = APIRouter()
@@ -3166,7 +3167,7 @@ def _upload_images_to_asm(
     return content
 
 
-@router.post("/api/teams/chats/{chat_id}/send")
+@router.post("/api/teams/chats/{chat_id}/send", dependencies=[Depends(verify_csrf)])
 def tp_teams_send(chat_id: str, req: TeamsSendRequest):
     """Send a message to an existing Teams chat via Skype chatsvc API.
 
@@ -3837,7 +3838,7 @@ class TeamsSendMessageRequest(BaseModel):
     ] = []  # Graph-format mentions [{id, mentionText, mentioned: {user: {id, displayName}}}]
 
 
-@router.post("/api/teams/send-message")
+@router.post("/api/teams/send-message", dependencies=[Depends(verify_csrf)])
 async def tp_teams_send_message(req: TeamsSendMessageRequest):
     """Send a Teams message from the compose pane — entirely via Skype chatsvc API.
 
@@ -4270,7 +4271,7 @@ class ChannelSendRequest(BaseModel):
     message: str
 
 
-@router.post("/api/teams/channels/{team_id}/{channel_id}/send")
+@router.post("/api/teams/channels/{team_id}/{channel_id}/send", dependencies=[Depends(verify_csrf)])
 def tp_channel_send(team_id: str, channel_id: str, req: ChannelSendRequest):
     """Send a message to a Teams channel."""
     try:

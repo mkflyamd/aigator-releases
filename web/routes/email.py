@@ -1,11 +1,12 @@
 """Email route group -- inbox, message detail, reply, forward, send, drafts, delta sync."""
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from urllib.parse import quote as _url_quote
 
 import perf
 import shared
+from security import verify_csrf
 from skills._m365.helpers import GraphClient, html_to_text
 
 router = APIRouter()
@@ -901,7 +902,7 @@ def tp_email_forward(req: EmailForwardRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/api/email/send")
+@router.post("/api/email/send", dependencies=[Depends(verify_csrf)])
 def tp_email_send(req: EmailSendRequest):
     """Send a new email -- direct Graph API call for frontend-initiated sends."""
     try:
