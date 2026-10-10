@@ -216,6 +216,17 @@ def _enforce_tier(skill_id: str, tier: str) -> None:
         raise HTTPException(status_code=403, detail=f"Installing {tier} skills is not allowed by policy")
 
 
+def _enforce_pinned(entry: dict | None, req_install_url: str) -> None:
+    """Admin policy: downloads must be claude-plugins-official plugins whose catalog entry pins a commit SHA."""
+    if not load_policy().require_pinned_installs:
+        return
+    is_plugin = entry is not None and entry.get("source") == "claude-plugins-official"
+    pinned = is_plugin and bool((entry.get("plugin_source") or {}).get("sha"))
+    if (is_plugin and not pinned) or (not is_plugin and req_install_url):
+        logger.warning("marketplace install blocked by pinning policy: %s", (entry or {}).get("id") or req_install_url)
+        raise HTTPException(status_code=403, detail="Policy only allows installs pinned to a specific commit")
+
+
 def _install_claude_plugins_official(
     entry: dict, consent: bool, pinned_ref: str = "", digest: str = ""
 ) -> dict:
@@ -483,6 +494,7 @@ async def install_skill(req: InstallRequest):
     if catalog_entry is not None and (not req.install_url or req.install_url == catalog_entry.get("install_url")):
         gate_tier = catalog_entry.get("tier") or "Community"
     _enforce_tier(req.skill_id, gate_tier)
+    _enforce_pinned(catalog_entry, req.install_url)
     if (
         catalog_entry is not None
         and catalog_entry.get("source") == "claude-plugins-official"

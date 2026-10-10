@@ -30,6 +30,7 @@ class Policy:
     require_sandbox: bool = False
     saved_permissions: str = "allow"   # allow | deny
     marketplace_allowed_tiers: tuple[str, ...] | None = None   # None = no admin restriction
+    require_pinned_installs: bool = False   # True = no URL downloads except SHA-pinned catalog plugins
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -37,7 +38,8 @@ class Policy:
 
 DEFAULT_POLICY = Policy()
 FAIL_CLOSED_POLICY = Policy(code_runner="enabled", network="deny", filesystem="strict", require_sandbox=True,
-                            saved_permissions="deny", marketplace_allowed_tiers=("Native", "Verified"))
+                            saved_permissions="deny", marketplace_allowed_tiers=("Native", "Verified"),
+                            require_pinned_installs=True)
 _ALLOWED = {
     "code_runner": {"enabled", "disabled"},
     "network": {"ask", "deny"},
@@ -88,7 +90,7 @@ def parse_policy(text: str) -> Policy:
         raise ValueError("policy is nested too deeply") from exc
     if not isinstance(data, dict):
         raise ValueError("policy must be a JSON object")
-    unknown = set(data) - set(_ALLOWED) - {"require_sandbox", "marketplace_allowed_tiers"}
+    unknown = set(data) - set(_ALLOWED) - {"require_sandbox", "marketplace_allowed_tiers", "require_pinned_installs"}
     if unknown:  # a typo must not silently select the weakest default
         raise ValueError("policy has unknown keys")
     values: dict = {}
@@ -102,6 +104,10 @@ def parse_policy(text: str) -> Policy:
         if not isinstance(data["require_sandbox"], bool):
             raise ValueError("require_sandbox must be true or false")
         values["require_sandbox"] = data["require_sandbox"]
+    if "require_pinned_installs" in data:
+        if not isinstance(data["require_pinned_installs"], bool):
+            raise ValueError("require_pinned_installs must be true or false")
+        values["require_pinned_installs"] = data["require_pinned_installs"]
     if "marketplace_allowed_tiers" in data:
         tiers = data["marketplace_allowed_tiers"]
         if not isinstance(tiers, list) or not tiers or not all(isinstance(t, str) and t in _TIERS for t in tiers):

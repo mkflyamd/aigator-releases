@@ -264,11 +264,27 @@ If the last command fails, unprivileged user namespaces are disabled or restrict
   "filesystem": "ask",
   "require_sandbox": false,
   "saved_permissions": "allow",
-  "marketplace_allowed_tiers": ["Verified", "Community"]
+  "marketplace_allowed_tiers": ["Verified", "Community"],
+  "require_pinned_installs": false
 }
 ```
 
-`code_runner: disabled` blocks code execution, `network: deny` refuses network requests, `filesystem: strict` refuses extra paths, `require_sandbox: true` hides the user opt-out. `saved_permissions: deny` hides "Always allow this" on command approvals and ignores permissions already saved (task approvals still work); the default is `allow`. `marketplace_allowed_tiers` (a non-empty list of `Native`, `Verified`, `Community`, `Mine`) limits which marketplace tiers are listed and installable; it is enforced at install time (a URL or local import counts as `Community`), the user's own `marketplace_allowed_tiers` setting can only narrow it, and omitting the key means no restriction. A present but invalid file fails closed (`network: deny`, `filesystem: strict`, `require_sandbox: true`, `saved_permissions: deny`, `marketplace_allowed_tiers: ["Native", "Verified"]`). The file must be UTF-8 without a BOM (a BOM makes it invalid). On Windows the file's ACL is not checked, so restrict write access to `%ProgramData%\AIGator` to administrators.
+`code_runner: disabled` blocks code execution, `network: deny` refuses network requests, `filesystem: strict` refuses extra paths, `require_sandbox: true` hides the user opt-out. `saved_permissions: deny` hides "Always allow this" on command approvals and ignores permissions already saved (task approvals still work); the default is `allow`. `marketplace_allowed_tiers` (a non-empty list of `Native`, `Verified`, `Community`, `Mine`) limits which marketplace tiers are listed and installable; it is enforced at install time (a URL or local import counts as `Community`), the user's own `marketplace_allowed_tiers` setting can only narrow it, and omitting the key means no restriction. A present but invalid file fails closed (`network: deny`, `filesystem: strict`, `require_sandbox: true`, `saved_permissions: deny`, `marketplace_allowed_tiers: ["Native", "Verified"]`, `require_pinned_installs: true`). The file must be UTF-8 without a BOM (a BOM makes it invalid). On Windows the file's ACL is not checked, so restrict write access to `%ProgramData%\AIGator` to administrators.
+
+### Marketplace tiers
+
+Administrators control which tiers users can install with `marketplace_allowed_tiers` in the admin policy file (above). Leave a tier out of the list to disable it.
+
+| Tier | What it is | Limits |
+|---|---|---|
+| Native | Skills built into AI Gator. Always active, not installable. | Reviewed and shipped with the app. |
+| Verified | Catalog entries from the reviewed catalog. Plugins are pinned to a commit SHA where the catalog gives one. | Tool code runs in the OS sandbox with the permissions the user approved; 60 s run timeout (`code_runner_timeout_verified`). |
+| Community | Unreviewed catalog entries and every URL or local import. | Same sandbox and approval; 30 s run timeout (`code_runner_timeout_community`). |
+| Mine | Skills the user wrote themselves. | Same sandbox and approval. |
+
+Every install needs the user's consent against a content digest of the package and its declared permissions. A kill switch can disable an installed skill.
+
+`require_pinned_installs: true` in the same file also refuses any install that downloads from a URL unless it is a claude-plugins-official plugin whose catalog entry pins a commit SHA. Pasted `SKILL.md` text and local ZIP or folder imports are not downloads and are unaffected; limit them with the tier list. GitHub archives are not signed, so the pin is the integrity control until catalog publishers provide signed manifests.
 
 ### run_shell in the sandbox
 
