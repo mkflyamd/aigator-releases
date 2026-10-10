@@ -29,6 +29,7 @@ class Policy:
     filesystem: str = "ask"        # ask | strict
     require_sandbox: bool = False
     saved_permissions: str = "allow"   # allow | deny
+    marketplace_allowed_tiers: tuple[str, ...] | None = None   # None = no admin restriction
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -36,13 +37,14 @@ class Policy:
 
 DEFAULT_POLICY = Policy()
 FAIL_CLOSED_POLICY = Policy(code_runner="enabled", network="deny", filesystem="strict", require_sandbox=True,
-                            saved_permissions="deny")
+                            saved_permissions="deny", marketplace_allowed_tiers=("Native", "Verified"))
 _ALLOWED = {
     "code_runner": {"enabled", "disabled"},
     "network": {"ask", "deny"},
     "filesystem": {"ask", "strict"},
     "saved_permissions": {"allow", "deny"},
 }
+_TIERS = {"Native", "Verified", "Community", "Mine"}
 
 _LOCK = threading.Lock()
 _CACHE: tuple[tuple, Policy] | None = None
@@ -86,7 +88,7 @@ def parse_policy(text: str) -> Policy:
         raise ValueError("policy is nested too deeply") from exc
     if not isinstance(data, dict):
         raise ValueError("policy must be a JSON object")
-    unknown = set(data) - set(_ALLOWED) - {"require_sandbox"}
+    unknown = set(data) - set(_ALLOWED) - {"require_sandbox", "marketplace_allowed_tiers"}
     if unknown:  # a typo must not silently select the weakest default
         raise ValueError("policy has unknown keys")
     values: dict = {}
@@ -100,6 +102,11 @@ def parse_policy(text: str) -> Policy:
         if not isinstance(data["require_sandbox"], bool):
             raise ValueError("require_sandbox must be true or false")
         values["require_sandbox"] = data["require_sandbox"]
+    if "marketplace_allowed_tiers" in data:
+        tiers = data["marketplace_allowed_tiers"]
+        if not isinstance(tiers, list) or not tiers or not all(isinstance(t, str) and t in _TIERS for t in tiers):
+            raise ValueError("invalid value for marketplace_allowed_tiers")
+        values["marketplace_allowed_tiers"] = tuple(tiers)
     return Policy(**values)
 
 

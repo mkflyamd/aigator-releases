@@ -263,11 +263,12 @@ If the last command fails, unprivileged user namespaces are disabled or restrict
   "network": "ask",
   "filesystem": "ask",
   "require_sandbox": false,
-  "saved_permissions": "allow"
+  "saved_permissions": "allow",
+  "marketplace_allowed_tiers": ["Verified", "Community"]
 }
 ```
 
-`code_runner: disabled` blocks code execution, `network: deny` refuses network requests, `filesystem: strict` refuses extra paths, `require_sandbox: true` hides the user opt-out. `saved_permissions: deny` hides "Always allow this" on command approvals and ignores permissions already saved (task approvals still work); the default is `allow`. A present but invalid file fails closed (`network: deny`, `filesystem: strict`, `require_sandbox: true`, `saved_permissions: deny`). The file must be UTF-8 without a BOM (a BOM makes it invalid). On Windows the file's ACL is not checked, so restrict write access to `%ProgramData%\AIGator` to administrators.
+`code_runner: disabled` blocks code execution, `network: deny` refuses network requests, `filesystem: strict` refuses extra paths, `require_sandbox: true` hides the user opt-out. `saved_permissions: deny` hides "Always allow this" on command approvals and ignores permissions already saved (task approvals still work); the default is `allow`. `marketplace_allowed_tiers` (a non-empty list of `Native`, `Verified`, `Community`, `Mine`) limits which marketplace tiers are listed and installable; it is enforced at install time (a URL or local import counts as `Community`), the user's own `marketplace_allowed_tiers` setting can only narrow it, and omitting the key means no restriction. A present but invalid file fails closed (`network: deny`, `filesystem: strict`, `require_sandbox: true`, `saved_permissions: deny`, `marketplace_allowed_tiers: ["Native", "Verified"]`). The file must be UTF-8 without a BOM (a BOM makes it invalid). On Windows the file's ACL is not checked, so restrict write access to `%ProgramData%\AIGator` to administrators.
 
 ### run_shell in the sandbox
 

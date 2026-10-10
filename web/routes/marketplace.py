@@ -27,6 +27,7 @@ from marketplace.installer import (
 from marketplace.loader import load_skill_tools, unload_skill_tools
 from marketplace.commands import COMMAND_REGISTRY
 from shared import load_installed_skill_prompts
+from sandbox.policy import load_policy
 from security import verify_csrf
 
 _SKILLS_DIR = Path(__file__).parent.parent / "skills"
@@ -196,6 +197,25 @@ def _find_catalog_entry(skill_id: str) -> dict | None:
     return None
 
 
+def _allowed_tiers(cfg: dict) -> set[str] | None:
+    """Tiers that may be listed/installed: the admin policy file, narrowed (never widened) by user config."""
+    admin = load_policy().marketplace_allowed_tiers
+    user = cfg.get("marketplace_allowed_tiers")
+    if admin is None and not user:
+        return None
+    allowed = set(admin) if admin is not None else None
+    if user:
+        allowed = set(user) if allowed is None else allowed & set(user)
+    return allowed
+
+
+def _enforce_tier(skill_id: str, tier: str) -> None:
+    allowed = _allowed_tiers(_load_config())
+    if allowed is not None and tier not in allowed:
+        logger.warning("marketplace install blocked by tier policy: skill=%s tier=%s", skill_id, tier)
+        raise HTTPException(status_code=403, detail=f"Installing {tier} skills is not allowed by policy")
+
+
 def _install_claude_plugins_official(
     entry: dict, consent: bool, pinned_ref: str = "", digest: str = ""
 ) -> dict:
@@ -276,10 +296,9 @@ async def get_catalog():
     remote = fetch_catalog(cfg)
     # Exclude Native from browse — they're always active and not installable
     skills = [s for s in remote if s.get("tier") != "Native"]
-    allowed = cfg.get("marketplace_allowed_tiers")
-    if allowed:
-        allowed_set = set(allowed)
-        skills = [s for s in skills if s.get("tier") in allowed_set]
+    allowed = _allowed_tiers(cfg)
+    if allowed is not None:
+        skills = [s for s in skills if s.get("tier") in allowed]
     return {"skills": skills, "count": len(skills)}
 
 
@@ -459,6 +478,11 @@ async def install_skill(req: InstallRequest):
     # looked up server-side from the cached catalog (never from a client
     # field) so installable/coding_class enforcement cannot be bypassed.
     catalog_entry = _find_catalog_entry(req.skill_id)
+    # Tier comes from the server's catalog, never the client; a URL that is not the catalog's own is Community.
+    gate_tier = "Community"
+    if catalog_entry is not None and (not req.install_url or req.install_url == catalog_entry.get("install_url")):
+        gate_tier = catalog_entry.get("tier") or "Community"
+    _enforce_tier(req.skill_id, gate_tier)
     if (
         catalog_entry is not None
         and catalog_entry.get("source") == "claude-plugins-official"
@@ -675,6 +699,7 @@ async def install_local(req: LocalInstallRequest):
 
     import marketplace.installer as _installer
 
+    _enforce_tier("local-import", "Community")
     if not req.consent:
         preview = _installer.preview_package(local_zip_bytes=zip_bytes)
         if not preview.get("ok"):
