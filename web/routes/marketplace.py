@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from config import load_config as _load_config
-from marketplace import kill_switch
+from marketplace import kill_switch, skill_audit
 from marketplace import state as skill_state
 from marketplace.permissions import summarize_package
 from marketplace.registry import (
@@ -292,6 +292,7 @@ def _install_claude_plugins_official(
     if not result.get("ok"):
         raise _install_failure(result)
     _record_grants(result, result.get("plugin_id") or entry.get("id", ""))
+    skill_audit.log_install(entry.get("id", ""), entry.get("tier") or "Community", "catalog", digest)
     load_installed_skill_prompts()  # refresh SKILL_PROMPTS without restart
     # Enrich command_ids into {name, description, plugin_id} so the "/" menu
     # can register them without a reload.
@@ -571,6 +572,7 @@ async def install_skill(req: InstallRequest):
         raise _install_failure(result)
     # Record the approval before tools load: the sandbox grants come from it.
     _record_grants(result, result.get("plugin_id") or result.get("skill_id") or req.skill_id)
+    skill_audit.log_install(req.skill_id, gate_tier, "url" if req.install_url else "catalog", req.digest)
     load_installed_skill_prompts()  # refresh SKILL_PROMPTS without restart
     if result.get("plugin_id"):
         result["commands"] = _commands_payload(result.get("command_ids") or [])
@@ -736,6 +738,7 @@ async def install_local(req: LocalInstallRequest):
         raise HTTPException(status_code=400, detail=result.get("error", "Install failed"))
 
     _record_grants(result, result["skill_id"])
+    skill_audit.log_install(result["skill_id"], "Community", "local", req.digest)
     load_installed_skill_prompts()
     skill_dir = __import__("config").INSTALLED_SKILLS_DIR / result["skill_id"]
     _note_tools_error(result, load_skill_tools(result["skill_id"], skill_dir, "Community"))

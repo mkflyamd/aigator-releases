@@ -211,3 +211,26 @@ def test_pinned_policy_must_be_a_boolean():
 
     with pytest.raises(ValueError):
         _policy.parse_policy('{"require_pinned_installs": "yes"}')
+
+
+# ── install audit log (M_09) ──────────────────────────────────────────────────
+
+def test_successful_install_is_written_to_the_audit_log(caplog):
+    import logging
+
+    with (
+        patch("routes.marketplace.fetch_catalog", return_value=CATALOG),
+        patch("routes.marketplace._load_config", return_value={"marketplace_enabled": True}),
+        patch("routes.marketplace.install_skill_md", return_value={"ok": True, "skill_id": "gmail"}),
+        patch("routes.marketplace._record_grants"),
+        patch("routes.marketplace.load_installed_skill_prompts"),
+        patch("routes.marketplace.load_skill_tools", return_value={"ok": True}),
+        caplog.at_level(logging.INFO, logger="aigator.skill_audit"),
+    ):
+        r = client.post(
+            "/api/marketplace/install",
+            json={"skill_id": "gmail", "skill_md": "---\nname: x\n---\nbody", "consent": True, "digest": "abc123"},
+            headers=_CSRF,
+        )
+    assert r.status_code == 200
+    assert "skill-install skill=gmail tier=Community source=catalog digest=abc123" in caplog.text

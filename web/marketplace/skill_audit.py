@@ -23,6 +23,11 @@ def _clean(value, limit: int = 200) -> str:
     return _CONTROL.sub("?", str(value))[:limit]
 
 
+def log_install(skill_id: str, tier: str, source: str, digest: str) -> None:
+    logger.info("skill-install skill=%s tier=%s source=%s digest=%s",
+                _clean(skill_id), _clean(tier, 20), _clean(source, 20), _clean(digest, 80) or "-")
+
+
 def log_launch(skill_id: str, kind: str, network: bool, declared) -> None:
     hosts = ",".join(_clean(h) for h in declared) or "-"
     logger.info("skill-launch skill=%s kind=%s network=%s declared_hosts=%s",
