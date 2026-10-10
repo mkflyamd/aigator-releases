@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import asyncio
 import time
 import uuid
@@ -27,11 +28,13 @@ from datetime import datetime, timedelta, timezone
 import aiosqlite
 
 from config import TASKS_DB as DB_PATH
+from log_sanitizer import sanitize
 
 _log = logging.getLogger(__name__)
 
 _MAX_ERROR_LEN = 500
 TELEMETRY_RETENTION_DAYS = 30
+TELEMETRY_MAX_ROWS = 100_000
 _initialized = False
 _tool_telemetry_tasks: set[asyncio.Task] = set()
 _main_loop: asyncio.AbstractEventLoop | None = None
@@ -105,6 +108,11 @@ async def init_table() -> None:
             await db.execute("UPDATE tool_call_log SET error_detail = NULL WHERE error_detail IS NOT NULL")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_tool_call_log_created_at ON tool_call_log(created_at)")
         await db.commit()
+    if os.name == "posix":  # telemetry is for the owner only (Windows uses the profile ACL)
+        try:
+            os.chmod(DB_PATH, 0o600)
+        except OSError:
+            pass
     _initialized = True
     _main_loop = asyncio.get_running_loop()
 
@@ -112,6 +120,7 @@ async def init_table() -> None:
 def _truncate(s: str | None) -> str | None:
     if s is None:
         return None
+    s = sanitize(s)
     if len(s) > _MAX_ERROR_LEN:
         return s[:_MAX_ERROR_LEN] + "…"
     return s
@@ -202,8 +211,14 @@ async def cleanup_old_records(now: datetime | None = None) -> dict[str, int]:
         async with aiosqlite.connect(DB_PATH) as db:
             turn_cur = await db.execute("DELETE FROM turn_log WHERE created_at < ?", (cutoff.isoformat(),))
             tool_cur = await db.execute("DELETE FROM tool_call_log WHERE created_at < ?", (cutoff.isoformat(),))
+            deleted = {"turn_log": turn_cur.rowcount, "tool_call_log": tool_cur.rowcount}
+            for table in deleted:  # size cap on top of the age limit; ids grow with time
+                cap_cur = await db.execute(
+                    f"DELETE FROM {table} WHERE id <= (SELECT MAX(id) FROM {table}) - ?", (TELEMETRY_MAX_ROWS,)
+                )
+                deleted[table] += cap_cur.rowcount
             await db.commit()
-            return {"turn_log": turn_cur.rowcount, "tool_call_log": tool_cur.rowcount}
+            return deleted
     except Exception as exc:
         _log.warning("[turn_telemetry] failed to clean old records: %s", exc)
         return {"turn_log": 0, "tool_call_log": 0}

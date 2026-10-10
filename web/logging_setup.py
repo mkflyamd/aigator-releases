@@ -15,6 +15,8 @@ import time
 from logging.handlers import QueueHandler, QueueListener
 from pathlib import Path
 
+from log_sanitizer import sanitize
+
 
 APP_LOG_MAX_BYTES = 5 * 1024 * 1024
 LOG_RETENTION_DAYS = 30
@@ -39,6 +41,17 @@ def _bounded_utf8_tail(data: bytes, limit: int) -> bytes:
     if len(data) <= limit:
         return data.decode("utf-8", "ignore").encode("utf-8")
     return data[-limit:].decode("utf-8", "ignore").encode("utf-8")
+
+
+def _restrict_to_owner(path: Path) -> None:
+    """Logs may hold paths and error text: owner-only on POSIX (Windows uses the profile ACL)."""
+    if os.name != "posix":
+        return
+    try:
+        os.chmod(path, 0o600)
+        os.chmod(path.parent, 0o700)
+    except OSError:
+        pass
 
 
 def _normalize_file(path: Path, max_bytes: int) -> None:
@@ -89,7 +102,9 @@ class StrictRotatingFileHandler(logging.Handler):
 
     def _open(self):
         self.filename.parent.mkdir(parents=True, exist_ok=True)
-        return open(self.filename, "ab")
+        stream = open(self.filename, "ab")
+        _restrict_to_owner(self.filename)
+        return stream
 
     def _ensure_stream(self):
         if self._stream is None:
@@ -106,7 +121,7 @@ class StrictRotatingFileHandler(logging.Handler):
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
-            data = (self.format(record) + self.terminator).encode("utf-8", "backslashreplace")
+            data = (sanitize(self.format(record)) + self.terminator).encode("utf-8", "backslashreplace")
             if len(data) > self.max_bytes:
                 budget = max(0, self.max_bytes - len(TRUNCATION_MARKER))
                 data = data[:budget].decode("utf-8", "ignore").encode("utf-8")
