@@ -5757,6 +5757,11 @@ body.gator-chat-expanded .gator-expand-btn {
   font-size: 0.72rem;
   margin: -4px 0 6px;
 }
+.gcc-flow {
+  color: var(--text-sub, #999);
+  font-size: 0.72rem;
+  margin: 0 0 8px;
+}
 .gcc-mention-hint {
   color: var(--text-sub, #999);
   font-size: 0.7rem;

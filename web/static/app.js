@@ -10264,6 +10264,14 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
       ? `<div class="gcc-workspace">Slack · ${escapeHtml(data.workspace_name)}</div>`
       : '';
   const canOpenNativeApp = typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell;
+  const destinationLabel =
+    { '@outlook': 'Outlook', '@slack': 'Slack', '@teams': 'Microsoft Teams', '@jira': 'Jira', '@gcal': 'Google Calendar' }[
+      config.paneLabel
+    ] || '';
+  const sourcesRead = Array.isArray(data.sources) ? data.sources : [];
+  const flowLine = destinationLabel
+    ? `<div class="gcc-flow">Data from: <strong>${sourcesRead.length ? escapeHtml(sourcesRead.join(', ')) : 'no apps read in this request'}</strong> &rarr; Sending to: <strong>${escapeHtml(destinationLabel)}</strong></div>`
+    : '';
 
   const card = document.createElement('div');
   card.className = 'message assistant';
@@ -10286,6 +10294,7 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
           <div class="gcc-title">Draft ready for approval</div>
         </div>
         <div class="gcc-body">
+          ${flowLine}
           ${
             config.service === 'email'
               ? `

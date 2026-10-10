@@ -472,6 +472,7 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
     import data_sources
     _SENTINEL = object()
     _source_locks: dict[tuple[str, str], asyncio.Lock] = {}
+    _sources_read: set[str] = set()
 
     _BROWSER_TOOLS = {"browser_task", "browser_navigate", "browser_search"}
 
@@ -705,7 +706,14 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
             print(f"[pane-signal] tool {tc.name} emitted pane signal: {result['_pane']}", flush=True)
             await event_queue.put({"kind": "pane", "pane": result["_pane"], "data": result.get("data", {})})
         if isinstance(result, dict) and "_draft" in result:
-            await event_queue.put({"kind": "draft", "draft": result["_draft"], "data": result.get("data", {})})
+            await event_queue.put({
+                "kind": "draft", "draft": result["_draft"],
+                "data": {**result.get("data", {}), "sources": sorted(_sources_read)},
+            })
+        elif not _is_error:
+            _read = data_sources.source_for_call(tc.name, tc.inputs)
+            if _read is not None:
+                _sources_read.add(_read.label)
         if isinstance(result, dict) and "_jira_target_selection" in result:
             await event_queue.put({"kind": "jira_target_selection", "data": result["_jira_target_selection"]})
         if isinstance(result, dict) and "_sandbox_approval" in result:

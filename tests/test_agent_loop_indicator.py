@@ -61,3 +61,33 @@ def test_running_indicator_emitted_on_successful_call():
     events = _collect(_build_runner(fake_execute), tc)
     statuses = [e for e in events if e.get("kind") == "status"]
     assert any(e["status"] == "Running code..." for e in statuses)
+
+
+def test_draft_event_lists_the_sources_read_earlier_in_the_turn(monkeypatch):
+    import shared
+
+    monkeypatch.setitem(shared.SKILL_TOOLS_MAP, "jira", ["jira_get_issue"])
+    monkeypatch.setitem(shared.SKILL_TOOLS_MAP, "slack", ["slack_draft"])
+
+    async def fake_execute(name, inputs, **kw):
+        if name == "slack_draft":
+            return {"_draft": "slack-post", "data": {"draft_id": "d1"}}
+        return {"result": "ok"}
+
+    run_tool_block = _build_runner(fake_execute)
+
+    async def _go():
+        q = asyncio.Queue()
+        await run_tool_block(SimpleNamespace(name="jira_get_issue", inputs={}, id="c1"), q)
+        await run_tool_block(SimpleNamespace(name="slack_draft", inputs={}, id="c2"), q)
+        return [q.get_nowait() for _ in range(q.qsize())]
+
+    loop = asyncio.new_event_loop()
+    try:
+        events = loop.run_until_complete(_go())
+    finally:
+        loop.close()
+        asyncio.set_event_loop(asyncio.new_event_loop())
+    draft = next(e for e in events if e.get("kind") == "draft")
+    assert draft["data"]["sources"] == ["Jira"]
+    assert draft["data"]["draft_id"] == "d1"
