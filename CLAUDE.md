@@ -33,6 +33,10 @@ This project is called **AI Gator** — never refer to it as a POC.
 
 Use `aigator-fake-api-key` as the only fake credential in tests, examples, fixtures, and documentation. Do not invent alternate fake API keys, tokens, passwords, or secrets.
 
+## New API Routes
+
+Every new POST/PUT/PATCH/DELETE route must use `dependencies=[Depends(verify_csrf)]` from `web/security.py`. `tests/test_csrf_route_inventory.py` fails CI otherwise; do not add routes to `tests/csrf_route_baseline.txt`.
+
 ## Human-in-the-Loop
 
 Email, Teams, and Slack messages must NEVER auto-send. Always draft-only and require explicit human approval before sending.
