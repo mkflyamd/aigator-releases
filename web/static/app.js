@@ -10294,6 +10294,10 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
   const flowLine = destinationLabel
     ? `<div class="gcc-flow">Data from: <strong>${sourcesRead.length ? escapeHtml(sourcesRead.join(', ')) : 'no apps read in this request'}</strong> &rarr; Sending to: <strong>${escapeHtml(destinationLabel)}</strong></div>`
     : '';
+  const sensitiveMarks = Array.isArray(data.sensitive) ? data.sensitive : [];
+  const sensitiveBanner = sensitiveMarks.length
+    ? `<div class="gcc-sensitive" role="alert">Sensitive content: this draft contains <strong>${escapeHtml(sensitiveMarks.join(', '))}</strong>. Check the destination before you approve.</div>`
+    : '';
 
   const card = document.createElement('div');
   card.className = 'message assistant';
@@ -10317,6 +10321,7 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
         </div>
         <div class="gcc-body">
           ${flowLine}
+          ${sensitiveBanner}
           ${
             config.service === 'email'
               ? `

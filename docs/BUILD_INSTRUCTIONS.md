@@ -266,7 +266,8 @@ If the last command fails, unprivileged user namespaces are disabled or restrict
   "saved_permissions": "allow",
   "marketplace_allowed_tiers": ["Verified", "Community"],
   "require_pinned_installs": false,
-  "approved_digests": ["<package digest from the install card>"]
+  "approved_digests": ["<package digest from the install card>"],
+  "blocked_data_flows": ["email>slack", "web>*"]
 }
 ```
 
@@ -292,6 +293,8 @@ The server sets the tier of an install from the catalog (a URL or pasted skill t
 `require_pinned_installs: true` in the same file also refuses any install that downloads from a URL unless it is a claude-plugins-official plugin whose catalog entry pins a commit SHA. Pasted `SKILL.md` text and local ZIP or folder imports are not downloads and are unaffected; limit them with the tier list. GitHub archives are not signed, so the pin is the integrity control until catalog publishers provide signed manifests.
 
 `approved_digests` is an admin allow-list of package digests (the digest the install card shows). When the key is present, a marketplace install (catalog, URL, pasted or local) succeeds only if its digest is in the list. An empty list blocks every install. When the key is missing, nothing is blocked. The user sees the blocked digest in the error message and can ask IT to add it. A digest changes with every change to the package, so each skill update needs a new entry. Native skills ship inside the app and are not affected. The list is local to the device; the app does not fetch it from Git or the network. It proves that IT approved this exact content. It does not prove who wrote it, because signed manifests are not available.
+
+`blocked_data_flows` is a list of `source>destination` rules that restrict cross-domain data movement. A source is an app the agent read in the current request: `email`, `calendar`, `contacts`, `people`, `teams`, `onedrive`, `sharepoint`, `onenote`, `jira`, `confluence`, `slack`, `github`, `web` (a web page) or `mcp` (an MCP server). A destination is an app a draft sends to: `email`, `calendar`, `teams`, `slack` or `jira`. `*` matches any source or destination. When the agent has read a blocked source and then makes a draft for a blocked destination, AI Gator removes the draft and tells the model and the user that the policy blocks it. No approval card is shown. An unknown name makes the policy file invalid, so a typo fails closed. The default is an empty list. The check follows the apps read in the current request, not the classification of the data. The approval card always shows `Data from` and `Sending to`, and it shows a warning banner when the draft text has a classification word. `GET /api/sandbox/status` returns the policy in force, so you can audit it. See `docs/safe-usage-guide.md` for the user guide.
 
 ### run_shell in the sandbox
 

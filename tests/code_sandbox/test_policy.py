@@ -113,7 +113,7 @@ def test_as_dict():
     assert pol.Policy().as_dict() == {
         "code_runner": "enabled", "network": "ask", "filesystem": "ask", "require_sandbox": False,
         "saved_permissions": "allow", "marketplace_allowed_tiers": ("Native", "Verified"),
-        "require_pinned_installs": False, "approved_digests": None,
+        "require_pinned_installs": False, "approved_digests": None, "blocked_data_flows": (),
     }
 
 
@@ -125,3 +125,29 @@ def test_saved_permissions_field():
     assert DEFAULT_POLICY.as_dict()["saved_permissions"] == "allow"
     with pytest.raises(ValueError):
         parse_policy('{"saved_permissions": "maybe"}')
+
+
+def test_blocked_data_flows_parse_and_validate():
+    from sandbox.policy import parse_policy
+    assert parse_policy('{"blocked_data_flows": ["email > slack", "*>jira"]}').blocked_data_flows == ("email>slack", "*>jira")
+    assert parse_policy('{"blocked_data_flows": []}').blocked_data_flows == ()
+    for bad in ('"email>"', '["emial>slack"]', '["email>sharepoint"]', '["email"]', '["a>b>c"]', '[1]'):
+        with pytest.raises(ValueError):
+            parse_policy('{"blocked_data_flows": %s}' % bad)
+
+
+def test_blocked_flow_matching(monkeypatch):
+    import data_sources
+    monkeypatch.setattr(pol, "load_policy", lambda: pol.Policy(blocked_data_flows=("email>slack", "web>*", "*>jira")))
+    assert data_sources.blocked_flow({"email"}, "slack-post") == "email>slack"
+    assert data_sources.blocked_flow({"email"}, "teams-message") is None
+    assert data_sources.blocked_flow({"web"}, "email-send") == "web>*"
+    assert data_sources.blocked_flow({"confluence"}, "jira-create") == "*>jira"
+    assert data_sources.blocked_flow(set(), "jira-create") is None
+
+
+def test_sensitivity_markers():
+    import data_sources
+    assert data_sources.sensitivity_markers({"subject": "Roadmap", "body": "AMD Restricted and confidential"}) == [
+        "AMD Restricted", "confidential"]
+    assert data_sources.sensitivity_markers({"body": "lunch at noon"}) == []

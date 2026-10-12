@@ -32,6 +32,7 @@ class Policy:
     marketplace_allowed_tiers: tuple[str, ...] = ("Native", "Verified")   # Community and Mine need an admin policy file
     require_pinned_installs: bool = False   # True = no URL downloads except SHA-pinned catalog plugins
     approved_digests: tuple[str, ...] | None = None   # None = off; a list = only these package digests install
+    blocked_data_flows: tuple[str, ...] = ()   # "source>destination" pairs; a draft is refused after data from source was read
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -48,6 +49,9 @@ _ALLOWED = {
     "saved_permissions": {"allow", "deny"},
 }
 _TIERS = {"Native", "Verified", "Community", "Mine"}
+FLOW_SOURCES = {"*", "email", "calendar", "contacts", "people", "teams", "onedrive", "sharepoint", "onenote",
+                "jira", "confluence", "slack", "github", "web", "mcp"}
+FLOW_DESTINATIONS = {"*", "email", "calendar", "teams", "slack", "jira"}
 
 _LOCK = threading.Lock()
 _CACHE: tuple[tuple, Policy] | None = None
@@ -92,7 +96,7 @@ def parse_policy(text: str) -> Policy:
     if not isinstance(data, dict):
         raise ValueError("policy must be a JSON object")
     unknown = set(data) - set(_ALLOWED) - {"require_sandbox", "marketplace_allowed_tiers", "require_pinned_installs",
-                                                  "approved_digests"}
+                                                  "approved_digests", "blocked_data_flows"}
     if unknown:  # a typo must not silently select the weakest default
         raise ValueError("policy has unknown keys")
     values: dict = {}
@@ -120,6 +124,15 @@ def parse_policy(text: str) -> Policy:
         if not isinstance(digests, list) or not all(isinstance(d, str) and d for d in digests):
             raise ValueError("invalid value for approved_digests")
         values["approved_digests"] = tuple(digests)
+    if "blocked_data_flows" in data:
+        flows = data["blocked_data_flows"]
+        if not isinstance(flows, list) or not all(isinstance(f, str) and f.count(">") == 1 for f in flows):
+            raise ValueError("invalid value for blocked_data_flows")
+        for flow in flows:
+            source, destination = (part.strip() for part in flow.split(">"))
+            if source not in FLOW_SOURCES or destination not in FLOW_DESTINATIONS:
+                raise ValueError("invalid value for blocked_data_flows")
+        values["blocked_data_flows"] = tuple(f.replace(" ", "") for f in flows)
     return Policy(**values)
 
 
