@@ -586,7 +586,7 @@ async def install_skill(req: InstallRequest):
     return result
 
 
-@router.delete("/api/marketplace/uninstall/{skill_id}")
+@router.delete("/api/marketplace/uninstall/{skill_id}", dependencies=[Depends(verify_csrf)])
 async def uninstall(skill_id: str):
     result = uninstall_skill(skill_id)
     if not result.get("ok"):
@@ -631,7 +631,7 @@ async def get_skill_md(skill_id: str):
     }
 
 
-@router.put("/api/marketplace/skill-md/{skill_id}")
+@router.put("/api/marketplace/skill-md/{skill_id}", dependencies=[Depends(verify_csrf)])
 async def update_skill_md(skill_id: str, req: UpdateSkillMdRequest):
     path = _resolve_mine_skill_md(skill_id)
     if not req.skill_md.strip():
@@ -641,7 +641,7 @@ async def update_skill_md(skill_id: str, req: UpdateSkillMdRequest):
     return {"ok": True, "skill_id": skill_id}
 
 
-@router.post("/api/marketplace/create")
+@router.post("/api/marketplace/create", dependencies=[Depends(verify_csrf)])
 async def create_skill(req: CreateSkillRequest):
     if not req.name.strip():
         raise HTTPException(status_code=400, detail="name is required")

@@ -1507,7 +1507,7 @@ async def slack_search(
     return result
 
 
-@router.post("/api/slack/react")
+@router.post("/api/slack/react", dependencies=[Depends(verify_csrf)])
 async def slack_add_reaction(req: SlackReactionRequest):
     """Add a reaction to a Slack message using the Slack Web API directly."""
     import urllib.parse, urllib.request, urllib.error
@@ -1542,7 +1542,7 @@ async def slack_add_reaction(req: SlackReactionRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/api/slack/unreact")
+@router.post("/api/slack/unreact", dependencies=[Depends(verify_csrf)])
 async def slack_remove_reaction(req: SlackReactionRequest):
     """Remove a reaction from a Slack message using the Slack Web API directly."""
     import urllib.parse, urllib.request, urllib.error
@@ -1676,7 +1676,7 @@ async def slack_thread_detail(channel_id: str, message_ts: str, limit: int = 50)
     }
 
 
-@router.post("/api/slack/channels/{channel_id}/post")
+@router.post("/api/slack/channels/{channel_id}/post", dependencies=[Depends(verify_csrf)])
 async def slack_post_message(channel_id: str, req: SlackPostRequest):
     """Issue a draft and a single-use confirm_token — never auto-sends per CLAUDE.md."""
     token = _issue_draft_token(channel_id, req.message, req.thread_ts)
@@ -1940,7 +1940,7 @@ async def slack_users_seen(req: Request):
     return {"ok": True, "added": added}
 
 
-@router.post("/api/slack/dm")
+@router.post("/api/slack/dm", dependencies=[Depends(verify_csrf)])
 async def slack_send_dm(req: Request):
     """Issue a draft DM and a single-use confirm_token — never auto-sends per CLAUDE.md."""
     body = await req.json()

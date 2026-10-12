@@ -4,7 +4,8 @@ import uuid
 from datetime import datetime, timezone
 
 import aiosqlite
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
+from security import verify_csrf
 from pydantic import BaseModel
 
 from config import GATOR_DIR
@@ -86,7 +87,7 @@ async def list_widgets():
     return {"widgets": [_row_to_dict(r) for r in rows]}
 
 
-@router.post("/api/widgets")
+@router.post("/api/widgets", dependencies=[Depends(verify_csrf)])
 async def save_widget(req: SaveWidgetRequest):
     await _init_db()
     widget_id = str(uuid.uuid4())
@@ -122,7 +123,7 @@ async def get_widget(widget_id: str):
     return _row_to_dict(row)
 
 
-@router.patch("/api/widgets/{widget_id}")
+@router.patch("/api/widgets/{widget_id}", dependencies=[Depends(verify_csrf)])
 async def update_widget(widget_id: str, req: UpdateWidgetRequest):
     await _init_db()
     async with aiosqlite.connect(WIDGETS_DB) as db:
@@ -149,7 +150,7 @@ async def update_widget(widget_id: str, req: UpdateWidgetRequest):
     return {"ok": True, "widget_id": widget_id, "updated_at": now}
 
 
-@router.delete("/api/widgets/{widget_id}")
+@router.delete("/api/widgets/{widget_id}", dependencies=[Depends(verify_csrf)])
 async def delete_widget(widget_id: str):
     await _init_db()
     async with aiosqlite.connect(WIDGETS_DB) as db:

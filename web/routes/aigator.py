@@ -1,6 +1,7 @@
 """AI Gator dedicated endpoints -- Office document generation (PPTX, Excel, DOCX)."""
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
+from security import verify_csrf
 from pydantic import BaseModel
 
 import shared
@@ -64,7 +65,7 @@ class AigatorDocxCreateRequest(BaseModel):
 # ── Aigator routes ───────────────────────────────────────────────────────────
 
 
-@router.post("/api/aigator/update-pptx")
+@router.post("/api/aigator/update-pptx", dependencies=[Depends(verify_csrf)])
 async def aigator_update_pptx(req: AigatorPptxRequest):
     from skills.ppt.tools import _tool_update_pptx
 
@@ -78,7 +79,7 @@ async def aigator_update_pptx(req: AigatorPptxRequest):
     return result
 
 
-@router.post("/api/aigator/update-excel")
+@router.post("/api/aigator/update-excel", dependencies=[Depends(verify_csrf)])
 async def aigator_update_excel(req: AigatorExcelRequest):
     from skills.excel.tools import _tool_update_excel
 
@@ -90,7 +91,7 @@ async def aigator_update_excel(req: AigatorExcelRequest):
     return result
 
 
-@router.post("/api/aigator/create-excel")
+@router.post("/api/aigator/create-excel", dependencies=[Depends(verify_csrf)])
 async def aigator_create_excel(req: AigatorExcelCreateRequest):
     from skills.excel.tools import _tool_create_excel
 
@@ -103,7 +104,7 @@ async def aigator_create_excel(req: AigatorExcelCreateRequest):
     return result
 
 
-@router.post("/api/aigator/create-pptx")
+@router.post("/api/aigator/create-pptx", dependencies=[Depends(verify_csrf)])
 async def aigator_create_pptx(req: AigatorPptxCreateRequest):
     from skills.ppt.tools import _tool_create_pptx
 
@@ -115,7 +116,7 @@ async def aigator_create_pptx(req: AigatorPptxCreateRequest):
     return result
 
 
-@router.post("/api/aigator/update-docx")
+@router.post("/api/aigator/update-docx", dependencies=[Depends(verify_csrf)])
 async def aigator_update_docx(req: AigatorDocxUpdateRequest):
     from skills.docx.tools import _tool_update_docx
 
@@ -135,7 +136,7 @@ async def aigator_update_docx(req: AigatorDocxUpdateRequest):
     return result
 
 
-@router.post("/api/aigator/create-docx")
+@router.post("/api/aigator/create-docx", dependencies=[Depends(verify_csrf)])
 async def aigator_create_docx(req: AigatorDocxCreateRequest):
     from skills.docx.tools import _tool_create_docx
 

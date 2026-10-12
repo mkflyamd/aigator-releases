@@ -988,7 +988,7 @@ async def save_persona(req: dict = Body(...)):
     return {"ok": True, "id": pid}
 
 
-@router.delete("/api/config/persona/{persona_id}")
+@router.delete("/api/config/persona/{persona_id}", dependencies=[Depends(verify_csrf)])
 async def delete_persona(persona_id: str):
     cfg = _load_config()
     personas = cfg.get("personas", {})
@@ -1256,7 +1256,7 @@ async def create_or_update_llm_profile(req: dict = Body(...)):
     return profile
 
 
-@router.delete("/api/config/llm/profiles/{profile_id}")
+@router.delete("/api/config/llm/profiles/{profile_id}", dependencies=[Depends(verify_csrf)])
 async def delete_llm_profile(profile_id: str):
     cfg = _load_config()
     if cfg.get("llm_active_profile") == profile_id:

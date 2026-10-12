@@ -1233,7 +1233,7 @@ class TestSlackLegacyPaneApproval:
     def test_legacy_channel_send_blocks_workspace_switch(self):
         client = TestClient(app)
         with patch("skills.slack.mcp_client._load_token", return_value={"team_id": "T1"}):
-            drafted = client.post("/api/slack/channels/C1/post", json={"message": "Hello"})
+            drafted = client.post("/api/slack/channels/C1/post", json={"message": "Hello"}, headers={"X-CSRF-Token": _csrf()})
         assert drafted.status_code == 200, drafted.text
         token = drafted.json()["confirm_token"]
         with patch("skills.slack.mcp_client._load_token", return_value={"team_id": "T2"}), \
@@ -1249,7 +1249,7 @@ class TestSlackLegacyPaneApproval:
     def test_legacy_dm_opens_conversation_only_after_confirm(self):
         client = TestClient(app)
         with patch("skills.slack.mcp_client._load_token", return_value={"team_id": "T1"}):
-            drafted = client.post("/api/slack/dm", json={"user_identifier": "U1", "message": "Hello"})
+            drafted = client.post("/api/slack/dm", json={"user_identifier": "U1", "message": "Hello"}, headers={"X-CSRF-Token": _csrf()})
         assert drafted.status_code == 200, drafted.text
         token = drafted.json()["confirm_token"]
 

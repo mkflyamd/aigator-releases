@@ -6,6 +6,7 @@ import aiosqlite
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from security import get_csrf_token
 
 
 @pytest.fixture()
@@ -24,7 +25,7 @@ def tasks_client(task_db):
 
     app = FastAPI()
     app.include_router(router)
-    return TestClient(app)
+    return TestClient(app, headers={"X-CSRF-Token": get_csrf_token()})
 
 
 def test_clear_completed_tasks_preserves_active_tasks(task_db, tasks_client):

@@ -1,6 +1,7 @@
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from security import get_csrf_token
 
 import app  # noqa: F401  (builds the tool registry)
 import data_sources as ds
@@ -84,7 +85,7 @@ def test_closing_a_tab_ends_its_source_approvals():
     api.include_router(conversation_routes.router)
     ds.allow("tab-a", "data:Jira")
     ds.allow("tab-b", "data:Jira")
-    assert TestClient(api).delete("/api/conversation/tab-a").status_code == 200
+    assert TestClient(api, headers={"X-CSRF-Token": get_csrf_token()}).delete("/api/conversation/tab-a").status_code == 200
     assert not ds.is_allowed("tab-a", "data:Jira")
     assert ds.is_allowed("tab-b", "data:Jira")
 

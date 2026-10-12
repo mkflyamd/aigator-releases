@@ -568,7 +568,7 @@ def tp_email_message(message_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/api/email/messages/{message_id}/respond")
+@router.post("/api/email/messages/{message_id}/respond", dependencies=[Depends(verify_csrf)])
 async def tp_email_respond(message_id: str, req: MeetingRespondRequest):
     """Accept, decline, or tentatively accept a meeting invite.
 
@@ -749,7 +749,7 @@ async def tp_email_markread(message_id: str, req: MarkReadRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/api/email/reply")
+@router.post("/api/email/reply", dependencies=[Depends(verify_csrf)])
 def tp_email_reply(req: EmailReplyRequest):
     """Reply to an email -- uses createReply + update body + send to preserve HTML formatting."""
     try:
@@ -823,7 +823,7 @@ def tp_email_reply(req: EmailReplyRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/api/email/forward")
+@router.post("/api/email/forward", dependencies=[Depends(verify_csrf)])
 def tp_email_forward(req: EmailForwardRequest):
     """Forward an email -- uses createForward + update body + recipients + send to preserve formatting."""
     try:

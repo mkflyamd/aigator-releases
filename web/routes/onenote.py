@@ -12,7 +12,8 @@ def _eid(v: str) -> str:
     """Percent-encode a Graph resource ID for use in a URL path segment."""
     return _url_quote(v or "", safe="")
 
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, Body, HTTPException, Depends
+from security import verify_csrf
 from pydantic import BaseModel
 
 import shared
@@ -151,7 +152,7 @@ async def tp_onenote_list_pins(context_id: str = "default"):
     return [p for p in get_pins(context_id) if p.get("source") == "onenote"]
 
 
-@router.delete("/api/onenote/pin/{page_id:path}")
+@router.delete("/api/onenote/pin/{page_id:path}", dependencies=[Depends(verify_csrf)])
 async def tp_onenote_unpin(page_id: str, context_id: str = "default"):
     """Unpin a OneNote page via universal pin service."""
     from skills.context.state import remove_pin
@@ -258,7 +259,7 @@ async def context_list_pins(context_id: str = "default"):
     return get_pins(context_id)
 
 
-@router.delete("/api/context/pin/{source}/{item_id:path}")
+@router.delete("/api/context/pin/{source}/{item_id:path}", dependencies=[Depends(verify_csrf)])
 async def context_unpin(source: str, item_id: str, context_id: str = "default"):
     from skills.context.state import remove_pin
 
@@ -290,7 +291,7 @@ async def context_clone_pins(req: dict = Body(...)):
     return {"ok": True, "cloned": len(pins)}
 
 
-@router.delete("/api/context/pins")
+@router.delete("/api/context/pins", dependencies=[Depends(verify_csrf)])
 async def context_clear_pins(context_id: str = "default"):
     from skills.context.state import clear_pins
 
@@ -445,7 +446,7 @@ async def tp_onenote_proxy_image(url: str):
         raise HTTPException(status_code=502, detail=f"Image fetch failed: {e}")
 
 
-@router.patch("/api/onenote/pages/{page_id}")
+@router.patch("/api/onenote/pages/{page_id}", dependencies=[Depends(verify_csrf)])
 async def tp_onenote_update_page(page_id: str, req: OneNoteUpdatePageRequest):
     """Append content to a OneNote page via the Graph API PATCH endpoint."""
     import urllib.request as _ur, urllib.error as _ue
@@ -500,7 +501,7 @@ async def tp_onenote_update_page(page_id: str, req: OneNoteUpdatePageRequest):
         raise HTTPException(status_code=429 if "429" in msg else 500, detail=msg)
 
 
-@router.post("/api/onenote/sections/{section_id}/pages")
+@router.post("/api/onenote/sections/{section_id}/pages", dependencies=[Depends(verify_csrf)])
 async def tp_onenote_create_page(section_id: str, req: OneNoteCreatePageRequest):
     """Create a new page in a section."""
     try:

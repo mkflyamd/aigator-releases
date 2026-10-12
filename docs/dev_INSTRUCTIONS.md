@@ -76,7 +76,8 @@ worth preserving.
 Follow this pattern for every new `POST`, `PUT`, `PATCH` or `DELETE` route.
 
 1. Add `dependencies=[Depends(verify_csrf)]` to the route. Import `verify_csrf` from `web/security.py`. The web page sends the token in the `X-CSRF-Token` header (`window.__CSRF_TOKEN__`).
-2. Do not add the route to `tests/csrf_route_baseline.txt`. That file lists old routes only, and it can only get shorter.
-3. If the route sends, posts, creates or deletes in an outside app (email, Teams, Slack, Jira, calendar), make it draft-only. Create the draft in `web/skills/_drafts.py`. Send only from `/api/drafts/{id}/approve` after the user approves. Never send automatically.
-4. Run `pytest tests/test_csrf_route_inventory.py`. It fails the build if a new route has no CSRF check. This is the default-deny rule for new routes.
-5. In the pull request, complete the security checklist in `.github/PULL_REQUEST_TEMPLATE.md`. The reviewer checks it.
+2. If the route sends, creates, edits or deletes user data, add `"METHOD /path"` to `SENSITIVE_ROUTES` in `web/security.py`. Use the path as FastAPI shows it in OpenAPI, without `:path` converters. `tests/test_csrf_route_inventory.py` checks that each listed route exists and rejects a request with no token.
+3. Do not add the route to `tests/csrf_route_baseline.txt`. That file lists old routes only, and it can only get shorter.
+4. If the route sends, posts, creates or deletes in an outside app (email, Teams, Slack, Jira, calendar), make it draft-only. Create the draft in `web/skills/_drafts.py`. Send only from `/api/drafts/{id}/approve` after the user approves. Never send automatically.
+5. Run `pytest tests/test_csrf_route_inventory.py`. It fails the build if a new route has no CSRF check. This is the default-deny rule for new routes.
+6. In the pull request, complete the security checklist in `.github/PULL_REQUEST_TEMPLATE.md`. The reviewer checks it.

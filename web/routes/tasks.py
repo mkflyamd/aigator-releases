@@ -3,7 +3,8 @@
 import asyncio as _asyncio
 import json
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Depends
+from security import verify_csrf
 from fastapi.responses import StreamingResponse
 
 from task_queue import enqueue, get_task, list_tasks, cancel_task, get_usage_summary
@@ -31,7 +32,7 @@ async def notification_stream():
     return StreamingResponse(_gen(), media_type="text/event-stream")
 
 
-@router.post("/api/tasks")
+@router.post("/api/tasks", dependencies=[Depends(verify_csrf)])
 async def create_task_endpoint(request: Request):
     body = await request.json()
     prompt = body.get("prompt", "").strip()
@@ -65,7 +66,7 @@ async def get_tasks_endpoint():
     return await list_tasks()
 
 
-@router.delete("/api/tasks/completed")
+@router.delete("/api/tasks/completed", dependencies=[Depends(verify_csrf)])
 async def clear_completed_tasks():
     """Delete all completed (done/failed) tasks from the database."""
     import aiosqlite
@@ -103,7 +104,7 @@ async def cancel_task_endpoint(task_id: str):
     return {"cancelled": await cancel_task(task_id)}
 
 
-@router.delete("/api/tasks/{task_id}")
+@router.delete("/api/tasks/{task_id}", dependencies=[Depends(verify_csrf)])
 async def delete_task(task_id: str):
     """Delete a single task by ID."""
     import aiosqlite

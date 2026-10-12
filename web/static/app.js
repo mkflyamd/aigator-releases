@@ -1,4 +1,26 @@
-﻿/* ── Client-side perf instrumentation (ephemeral, in-memory) ──────────────────
+﻿/* ── CSRF: attach X-CSRF-Token to every same-origin mutating /api call ───────
+ * Routes that send, create or delete data require the token. Call sites that
+ * already set the header keep their value; the rest are covered here.
+ */
+(function _initCsrfFetch() {
+  const orig = window.fetch.bind(window);
+  window.fetch = function (input, init) {
+    try {
+      const url = typeof input === 'string' ? input : (input && input.url) || '';
+      const method = String((init && init.method) || (input && input.method) || 'GET').toUpperCase();
+      if (method !== 'GET' && method !== 'HEAD' && url.startsWith('/api/') && window.__CSRF_TOKEN__) {
+        const h = new Headers((init && init.headers) || (typeof input === 'object' && input.headers) || undefined);
+        if (!h.has('X-CSRF-Token')) {
+          h.set('X-CSRF-Token', window.__CSRF_TOKEN__);
+          init = { ...(init || {}), headers: h };
+        }
+      }
+    } catch (_) { /* fall through to the plain call */ }
+    return orig(input, init);
+  };
+})();
+
+/* ── Client-side perf instrumentation (ephemeral, in-memory) ──────────────────
  * Records user-perceived timings (pane open -> first paint, thread open, poll
  * round-trips) into a bounded ring buffer on window.__gatorPerf. Nothing is
  * persisted and no message content is stored — only names + durations. Inspect

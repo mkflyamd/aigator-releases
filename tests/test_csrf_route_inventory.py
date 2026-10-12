@@ -55,3 +55,37 @@ def test_baseline_lists_only_unprotected_routes():
         "Baseline entries that are now protected or no longer exist; delete them from "
         "tests/csrf_route_baseline.txt:\n  " + "\n  ".join(stale)
     )
+
+
+def test_sensitive_routes_are_registered_and_protected():
+    from security import SENSITIVE_ROUTES
+
+    _, unprotected = _inventory()
+    routes = {
+        f"{method.upper()} {path}"
+        for path, operations in app.openapi()["paths"].items()
+        for method in operations
+        if method in MUTATING
+    }
+    missing = sorted(SENSITIVE_ROUTES - routes)
+    assert not missing, "SENSITIVE_ROUTES lists routes that do not exist:\n  " + "\n  ".join(missing)
+    open_routes = sorted(SENSITIVE_ROUTES & unprotected)
+    assert not open_routes, "Sensitive routes without verify_csrf:\n  " + "\n  ".join(open_routes)
+
+
+def test_sensitive_routes_reject_requests_without_a_token():
+    import re
+
+    from fastapi.testclient import TestClient
+
+    from security import SENSITIVE_ROUTES
+
+    client = TestClient(app, raise_server_exceptions=False)
+    failures = []
+    for route in sorted(SENSITIVE_ROUTES):
+        method, path = route.split(" ", 1)
+        url = re.sub(r"\{[^}]+\}", "x", path)
+        response = client.request(method, url)
+        if response.status_code != 403:
+            failures.append(f"{route} -> {response.status_code}")
+    assert not failures, "Sensitive routes that accepted a request without a CSRF token:\n  " + "\n  ".join(failures)
