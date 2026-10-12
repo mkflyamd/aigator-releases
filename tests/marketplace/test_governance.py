@@ -41,7 +41,8 @@ CATALOG = [
 ]
 
 
-def test_no_tier_filter_returns_all():
+def test_default_tiers_hide_community(tmp_path):
+    _no_admin_policy(tmp_path)
     with (
         patch("routes.marketplace.fetch_catalog", return_value=CATALOG),
         patch(
@@ -51,7 +52,7 @@ def test_no_tier_filter_returns_all():
         patch("routes.marketplace._load_native_skills", return_value=[]),
     ):
         r = client.get("/api/marketplace/catalog")
-    assert r.json()["count"] == 2
+    assert [s["id"] for s in r.json()["skills"]] == ["powerbi"]
 
 
 def test_allowed_tiers_filters_community():
@@ -87,6 +88,11 @@ from sandbox import policy as _policy
 from security import get_csrf_token
 
 _CSRF = {"X-CSRF-Token": get_csrf_token()}
+
+
+def _no_admin_policy(tmp_path):
+    (tmp_path / "sandbox-policy.json").unlink(missing_ok=True)
+    _policy._reset_cache()
 
 
 def _admin_policy(tmp_path, body):
@@ -151,8 +157,27 @@ def test_allowed_tier_passes_the_gate(tmp_path):
     assert r.status_code != 403
 
 
-def test_no_policy_leaves_installs_unrestricted():
+def test_default_blocks_community_installs(tmp_path):
+    _no_admin_policy(tmp_path)
+    r = _install("gmail", {"marketplace_enabled": True})
+    assert r.status_code == 403
+    assert "not allowed by policy" in r.json()["detail"]
+
+
+def test_default_allows_verified_installs(tmp_path):
+    _no_admin_policy(tmp_path)
+    assert _install("powerbi", {"marketplace_enabled": True}).status_code != 403
+
+
+def test_admin_policy_can_enable_community(tmp_path):
+    _admin_policy(tmp_path, {"marketplace_allowed_tiers": ["Native", "Verified", "Community"]})
     assert _install("gmail", {"marketplace_enabled": True}).status_code != 403
+
+
+def test_user_config_cannot_enable_community_without_admin_policy(tmp_path):
+    _no_admin_policy(tmp_path)
+    cfg = {"marketplace_enabled": True, "marketplace_allowed_tiers": ["Verified", "Community"]}
+    assert _install("gmail", cfg).status_code == 403
 
 
 def test_invalid_admin_tier_value_fails_closed(tmp_path):
@@ -189,7 +214,7 @@ def _install_plugin(entry_id):
 
 
 def test_pinned_policy_refuses_unpinned_plugin_and_url_import(tmp_path):
-    _admin_policy(tmp_path, {"require_pinned_installs": True})
+    _admin_policy(tmp_path, {"require_pinned_installs": True, "marketplace_allowed_tiers": ["Verified", "Community"]})
     assert _install_plugin("floating-plugin").status_code == 403
     r = _install("gmail", {"marketplace_enabled": True}, skill_md="", install_url="https://example.com/x.zip")
     assert r.status_code == 403
@@ -197,7 +222,7 @@ def test_pinned_policy_refuses_unpinned_plugin_and_url_import(tmp_path):
 
 
 def test_pinned_policy_allows_sha_pinned_plugin_and_pasted_skill_text(tmp_path):
-    _admin_policy(tmp_path, {"require_pinned_installs": True})
+    _admin_policy(tmp_path, {"require_pinned_installs": True, "marketplace_allowed_tiers": ["Verified", "Community"]})
     assert _install_plugin("pinned-plugin").status_code == 200
     assert _install("gmail", {"marketplace_enabled": True}).status_code != 403
 

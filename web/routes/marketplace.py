@@ -206,21 +206,15 @@ def _find_catalog_entry(skill_id: str) -> dict | None:
     return None
 
 
-def _allowed_tiers(cfg: dict) -> set[str] | None:
-    """Tiers that may be listed/installed: the admin policy file, narrowed (never widened) by user config."""
-    admin = load_policy().marketplace_allowed_tiers
+def _allowed_tiers(cfg: dict) -> set[str]:
+    """Tiers that may be listed/installed: the admin policy (default Native + Verified), narrowed (never widened) by user config."""
+    allowed = set(load_policy().marketplace_allowed_tiers)
     user = cfg.get("marketplace_allowed_tiers")
-    if admin is None and not user:
-        return None
-    allowed = set(admin) if admin is not None else None
-    if user:
-        allowed = set(user) if allowed is None else allowed & set(user)
-    return allowed
+    return allowed & set(user) if user else allowed
 
 
 def _enforce_tier(skill_id: str, tier: str) -> None:
-    allowed = _allowed_tiers(_load_config())
-    if allowed is not None and tier not in allowed:
+    if tier not in _allowed_tiers(_load_config()):
         logger.warning("marketplace install blocked by tier policy: skill=%s tier=%s", skill_id, tier)
         raise HTTPException(status_code=403, detail=f"Installing {tier} skills is not allowed by policy")
 
@@ -318,8 +312,7 @@ async def get_catalog():
     # Exclude Native from browse — they're always active and not installable
     skills = [s for s in remote if s.get("tier") != "Native"]
     allowed = _allowed_tiers(cfg)
-    if allowed is not None:
-        skills = [s for s in skills if s.get("tier") in allowed]
+    skills = [s for s in skills if s.get("tier") in allowed]
     return {"skills": skills, "count": len(skills)}
 
 

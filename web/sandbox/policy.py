@@ -29,7 +29,7 @@ class Policy:
     filesystem: str = "ask"        # ask | strict
     require_sandbox: bool = False
     saved_permissions: str = "allow"   # allow | deny
-    marketplace_allowed_tiers: tuple[str, ...] | None = None   # None = no admin restriction
+    marketplace_allowed_tiers: tuple[str, ...] = ("Native", "Verified")   # Community and Mine need an admin policy file
     require_pinned_installs: bool = False   # True = no URL downloads except SHA-pinned catalog plugins
     approved_digests: tuple[str, ...] | None = None   # None = off; a list = only these package digests install
 
