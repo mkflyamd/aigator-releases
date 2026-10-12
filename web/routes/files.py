@@ -35,8 +35,16 @@ def cleanup_old_outputs() -> None:
     """Delete output subdirectories older than 24 hours."""
     if not OUTPUTS_DIR.exists():
         return
+    from marketplace.sandbox_launch import TIER_DIRS
+
     cutoff = time.time() - _MAX_AGE_SECONDS
-    for run_dir in OUTPUTS_DIR.iterdir():
+    run_dirs = []
+    for entry in OUTPUTS_DIR.iterdir():
+        if entry.is_dir() and entry.name in TIER_DIRS:
+            run_dirs.extend(entry.iterdir())
+        else:
+            run_dirs.append(entry)
+    for run_dir in run_dirs:
         if run_dir.is_dir() and run_dir.stat().st_mtime < cutoff:
             try:
                 shutil.rmtree(run_dir)

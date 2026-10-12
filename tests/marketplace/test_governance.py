@@ -300,3 +300,25 @@ def test_allow_list_must_be_a_list_of_strings():
         with pytest.raises(ValueError):
             _policy.parse_policy('{"approved_digests": %s}' % bad)
     assert _policy.parse_policy('{"approved_digests": ["a"]}').approved_digests == ("a",)
+
+
+# ── the server sets the tier (M_07) ───────────────────────────────────────────
+
+def test_client_cannot_choose_the_tier_of_an_installed_skill():
+    with (
+        patch("routes.marketplace.fetch_catalog", return_value=CATALOG),
+        patch("routes.marketplace._load_config", return_value={"marketplace_enabled": True}),
+        patch("routes.marketplace.install_skill_md", return_value={"ok": True, "skill_id": "gmail"}) as install,
+        patch("routes.marketplace._record_grants"),
+        patch("routes.marketplace.load_installed_skill_prompts"),
+        patch("routes.marketplace.load_skill_tools", return_value={"ok": True}) as load_tools,
+    ):
+        r = client.post(
+            "/api/marketplace/install",
+            json={"skill_id": "unlisted-skill", "skill_md": "---\nname: x\n---\nbody", "tier": "Native",
+                  "consent": True, "digest": "abc123"},
+            headers=_CSRF,
+        )
+    assert r.status_code == 200
+    assert install.call_args.args[3] == "Community"
+    assert load_tools.call_args.args[2] == "Community"

@@ -45,13 +45,13 @@ def _stopped(stderr: str, returncode: int) -> str:
 
 
 def _run(skill_id: str, skill_dir: Path, mode: str, perms: Permissions, timeout: int,
-         tool_name: str = "", args: dict | None = None) -> dict:
+         tool_name: str = "", args: dict | None = None, tier: str = "") -> dict:
     # Fail closed: any error before or during the launch is an error result. tools.py is never
     # imported or run in this process as a fallback.
     try:
         from skills.code_runner import tools as cr
 
-        run_dir = new_run_dir()
+        run_dir = new_run_dir(tier)
     except Exception as exc:
         return _could_not_run(exc)
     try:
@@ -86,9 +86,9 @@ def _run(skill_id: str, skill_dir: Path, mode: str, perms: Permissions, timeout:
         shutil.rmtree(run_dir, ignore_errors=True)
 
 
-def describe_skill_tools(skill_id: str, skill_dir: Path, perms: Permissions) -> dict:
+def describe_skill_tools(skill_id: str, skill_dir: Path, perms: Permissions, tier: str = "") -> dict:
     try:
-        data = _run(skill_id, skill_dir, "describe", perms, DESCRIBE_TIMEOUT)
+        data = _run(skill_id, skill_dir, "describe", perms, DESCRIBE_TIMEOUT, tier=tier)
     except Exception as exc:
         return _could_not_run(exc)
     if data.get("ok") and not isinstance(data.get("defs"), list):
@@ -101,7 +101,7 @@ def call_skill_tool(skill_id: str, skill_dir: Path, name: str, args: dict, tier:
         if state.is_disabled(skill_id):
             return {"error": "skill is disabled"}
         data = _run(skill_id, skill_dir, "call", state.approved_permissions(skill_id),
-                    _timeout_for(tier), name, args)
+                    _timeout_for(tier), name, args, tier)
     except Exception as exc:
         return {"error": _could_not_run(exc)["error"]}
     if not data.get("ok"):

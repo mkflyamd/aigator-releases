@@ -572,7 +572,7 @@ async def install_skill(req: InstallRequest):
             req.skill_id,
             req.skill_md,
             req.version,
-            req.tier,
+            gate_tier,
             req.install_url,
             expected_digest=req.digest,
         )
@@ -589,8 +589,7 @@ async def install_skill(req: InstallRequest):
         from config import INSTALLED_SKILLS_DIR
 
         skill_dir = INSTALLED_SKILLS_DIR / req.skill_id
-        effective_tier = "Community" if req.install_url else req.tier
-        _note_tools_error(result, load_skill_tools(req.skill_id, skill_dir, effective_tier))
+        _note_tools_error(result, load_skill_tools(req.skill_id, skill_dir, gate_tier))
     return result
 
 
