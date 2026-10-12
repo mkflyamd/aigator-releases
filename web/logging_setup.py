@@ -15,6 +15,7 @@ import time
 from logging.handlers import QueueHandler, QueueListener
 from pathlib import Path
 
+import file_perms
 from log_sanitizer import sanitize
 
 
@@ -44,14 +45,9 @@ def _bounded_utf8_tail(data: bytes, limit: int) -> bytes:
 
 
 def _restrict_to_owner(path: Path) -> None:
-    """Logs may hold paths and error text: owner-only on POSIX (Windows uses the profile ACL)."""
-    if os.name != "posix":
-        return
-    try:
-        os.chmod(path, 0o600)
-        os.chmod(path.parent, 0o700)
-    except OSError:
-        pass
+    """Logs may hold paths and error text: owner-only. Raises OSError so no record is written unprotected."""
+    file_perms.restrict_to_owner(path.parent, directory=True)
+    file_perms.restrict_to_owner(path)
 
 
 def _normalize_file(path: Path, max_bytes: int) -> None:
@@ -103,7 +99,11 @@ class StrictRotatingFileHandler(logging.Handler):
     def _open(self):
         self.filename.parent.mkdir(parents=True, exist_ok=True)
         stream = open(self.filename, "ab")
-        _restrict_to_owner(self.filename)
+        try:
+            _restrict_to_owner(self.filename)
+        except OSError:
+            stream.close()
+            raise
         return stream
 
     def _ensure_stream(self):
@@ -115,8 +115,11 @@ class StrictRotatingFileHandler(logging.Handler):
             self._stream.close()
             self._stream = None
         self.backup.unlink(missing_ok=True)
+        file_perms.forget(self.backup)
         if self.filename.exists():
             self.filename.replace(self.backup)
+        file_perms.forget(self.filename)
+        file_perms.restrict_to_owner(self.backup)
         self._stream = self._open()
 
     def emit(self, record: logging.LogRecord) -> None:
@@ -158,6 +161,7 @@ class StrictRotatingFileHandler(logging.Handler):
                 self._stream.close()
                 self._stream = None
             self.filename.unlink(missing_ok=True)
+            file_perms.forget(self.filename)
             self._stream = self._open()
             return True
         finally:

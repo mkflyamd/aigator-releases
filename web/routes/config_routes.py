@@ -228,6 +228,9 @@ async def patch_config(request: Request):
         if k in PATCHABLE_CONFIG_KEYS:
             cfg[k] = v
     _save_config(cfg)
+    from log_sanitizer import refresh_privacy_mode
+
+    refresh_privacy_mode()
     # Update in-memory config so changes take effect immediately
     import shared
 
