@@ -23,7 +23,9 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import json
 import os
+import re
 import secrets
 from urllib.parse import urlsplit
 
@@ -134,6 +136,49 @@ async def require_shell_key(x_aigator_shell_key: str | None = Header(default=Non
         x_aigator_shell_key.encode("utf-8"), _SHELL_KEY.encode("utf-8")
     ):
         raise HTTPException(status_code=403, detail="Shell key missing or invalid")
+
+
+_CDN = "https://cdn.jsdelivr.net"
+_HOST_OK = re.compile(r"^[A-Za-z0-9.\-]+(:\d+)?$|^\[[0-9A-Fa-f:]+\](:\d+)?$")
+
+
+def new_csp_nonce() -> str:
+    return secrets.token_urlsafe(16)
+
+
+def script_json(value) -> str:
+    """JSON for an inline script. A "<" is escaped so data can never close the script tag."""
+    return json.dumps(value).replace("<", "\\u003c")
+
+
+def csp_header_name() -> str:
+    """AIGATOR_CSP_REPORT_ONLY=1 turns the policy into report-only (browser logs, does not block)."""
+    if os.environ.get("AIGATOR_CSP_REPORT_ONLY") == "1":
+        return "Content-Security-Policy-Report-Only"
+    return "Content-Security-Policy"
+
+
+def build_csp(nonce: str, host: str) -> str:
+    """Content-Security-Policy for the app page: no inline script without the per-response nonce.
+
+    Scripts load only from this server and the pinned CDN. Inline styles stay allowed
+    (the UI sets style attributes everywhere); that is a documented residual.
+    """
+    ws = f" ws://{host}" if _HOST_OK.match(host or "") else ""
+    directives = [
+        "default-src 'self'",
+        f"script-src 'self' 'nonce-{nonce}' {_CDN}",
+        f"style-src 'self' 'unsafe-inline' {_CDN} https://fonts.googleapis.com",
+        f"font-src 'self' data: {_CDN} https://fonts.gstatic.com",
+        "img-src 'self' data: blob: https:",
+        f"connect-src 'self'{ws} {_CDN} http://localhost:8001",
+        "worker-src 'self' blob:",
+        "object-src 'none'",
+        "base-uri 'self'",
+        "form-action 'self'",
+        "frame-ancestors 'self'",
+    ]
+    return "; ".join(directives)
 
 
 _SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}

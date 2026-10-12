@@ -167,8 +167,8 @@ function _caSourceControlPanel() {
   return `
     <div class="ca-sc-panel">
       <div class="ca-sc-viewtabs">
-        <button class="ca-sc-viewtab active" id="ca-viewtab-scm" onclick="_caSetLeftView('scm')">Source Control</button>
-        <button class="ca-sc-viewtab" id="ca-viewtab-explorer" onclick="_caSetLeftView('explorer')">Explorer</button>
+        <button class="ca-sc-viewtab active" id="ca-viewtab-scm"${gatorActionAttrs('_caSetLeftView', ['scm'])}>Source Control</button>
+        <button class="ca-sc-viewtab" id="ca-viewtab-explorer"${gatorActionAttrs('_caSetLeftView', ['explorer'])}>Explorer</button>
       </div>
       <div id="ca-scm-view" class="ca-scm-view">
         <div class="ca-sc-section-wrapper">
@@ -376,9 +376,9 @@ function _caRenderSourceControl(status, log) {
         const si = _statusInfo[f.status] || { label: f.status, cls: 'U', title: f.status };
         const fname = f.file.split(/[/\\]/).pop();
         const isStaged = f.area === 'staged';
-        return `<div class="ca-sc-file" onclick="_caShowFileDiff('${_caEsc(f.file)}',${isStaged})" title="${_caEsc(f.file)}">
+        return `<div class="ca-sc-file"${gatorActionAttrs('_caShowFileDiff', [f.file, !!isStaged])} title="${_caEsc(f.file)}">
         <span class="ca-sc-file-name">${_caEsc(fname)}</span>
-        <button class="ca-sc-file-discard" onclick="event.stopPropagation();_caDiscardFile('${_caEsc(f.file)}','${f.status}')" title="${f.status === '?' ? 'Delete file' : 'Discard changes'}">🗑️</button>
+        <button class="ca-sc-file-discard"${gatorActionAttrs('_caDiscardFile', [f.file, f.status], { stop: true })} title="${f.status === '?' ? 'Delete file' : 'Discard changes'}">🗑️</button>
         <span class="ca-sc-file-status ca-status-${si.cls}" title="${si.title}">${si.label}</span>
       </div>`;
       })
@@ -877,8 +877,8 @@ function _caEmptyState() {
       <div class="ca-empty-title">Connect your first app</div>
       <div class="ca-empty-subtitle">Point Gator at your codebase to start making changes in plain English.</div>
       <div class="ca-empty-actions">
-        <button class="ca-btn-secondary" onclick="_caAddLocalProject()">Browse for folder</button>
-        <button class="ca-btn-secondary" onclick="_caAddGitHubProject()">Paste a GitHub link</button>
+        <button class="ca-btn-secondary"${gatorActionAttrs('_caAddLocalProject')}>Browse for folder</button>
+        <button class="ca-btn-secondary"${gatorActionAttrs('_caAddGitHubProject')}>Paste a GitHub link</button>
       </div>
     </div>`;
 }
@@ -894,7 +894,7 @@ function _caNoProjectSelectedState() {
       <div class="ca-empty-title">Select a project to get started</div>
       <div class="ca-empty-subtitle">Pick one of your connected apps and I'll open its OpenCode terminal here.</div>
       <div class="ca-empty-actions">
-        <button class="ca-btn-secondary" onclick="_caShowSessionDropdown()">Select project ▾</button>
+        <button class="ca-btn-secondary"${gatorActionAttrs('_caShowSessionDropdown')}>Select project ▾</button>
       </div>
     </div>`;
 }
@@ -1587,7 +1587,7 @@ function _caAddGitHubProject() {
       <input class="ca-inline-prompt-input" type="url" placeholder="https://github.com/org/repo" autocomplete="off" spellcheck="false">
       <div class="ca-inline-prompt-hint">We'll clone it into your Gator folder automatically.</div>
       <div class="ca-inline-prompt-actions">
-        <button class="ca-btn-decline" onclick="this.closest('.ca-inline-prompt').remove()">Cancel</button>
+        <button class="ca-btn-decline"${gatorActionAttrs('removeClosest', [{ $el: true }, '.ca-inline-prompt'])}>Cancel</button>
         <button class="ca-btn-approve" id="ca-github-confirm">Clone</button>
       </div>
     </div>`;
@@ -1752,7 +1752,7 @@ function _caShowError(msg) {
   errEl.innerHTML = `
     <div class="ca-error-msg">${_caEsc(msg)}</div>
     <div class="ca-error-actions">
-      <button class="ca-btn-secondary" onclick="this.closest('.ca-error-state').remove()">Dismiss</button>
+      <button class="ca-btn-secondary"${gatorActionAttrs('removeClosest', [{ $el: true }, '.ca-error-state'])}>Dismiss</button>
     </div>`;
   sessionEl.appendChild(errEl);
 }

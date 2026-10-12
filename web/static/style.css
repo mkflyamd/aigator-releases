@@ -22468,3 +22468,5 @@ body.tab-fullscreen {
   font-size: 0.7rem;
   color: var(--warn, #f0a040);
 }
+
+.gh-row:hover { background: var(--surface2); }

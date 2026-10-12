@@ -4958,7 +4958,7 @@ async function _loadTeamsThread(chatId) {
     if (!threadRes.ok) {
       const err = await threadRes.json().catch(() => ({}));
       col.innerHTML = `<div class="tp-empty-state"><span>Error: ${escapeHtml(err.detail || String(threadRes.status))}</span>
-        <button class="tp-ai-btn" onclick="_loadTeamsThread('${escapeHtml(chatId)}')">Retry</button></div>`;
+        <button class="tp-ai-btn"${gatorActionAttrs('_loadTeamsThread', [chatId])}>Retry</button></div>`;
       return;
     }
     const data = await threadRes.json();
@@ -4988,7 +4988,7 @@ async function _loadTeamsThread(chatId) {
     _startThreadPolling(chatId);
   } catch (e) {
     col.innerHTML = `<div class="tp-empty-state"><span>Could not load conversation: ${escapeHtml(e.message)}</span>
-      <button class="tp-ai-btn" onclick="_loadTeamsThread('${escapeHtml(chatId)}')">Retry</button></div>`;
+      <button class="tp-ai-btn"${gatorActionAttrs('_loadTeamsThread', [chatId])}>Retry</button></div>`;
   }
 }
 
@@ -5484,7 +5484,7 @@ async function _loadChannelThread(teamId, channelId, channelName) {
     renderTeamsThread(payload.messages, chat, payload.myId, payload);
   } catch (e) {
     col.innerHTML = `<div class="tp-empty-state"><span>Could not load channel: ${escapeHtml(e.message)}</span>
-      <button class="tp-ai-btn" onclick="_loadChannelThread('${escapeHtml(teamId)}','${escapeHtml(channelId)}','${escapeHtml(channelName)}')">Retry</button></div>`;
+      <button class="tp-ai-btn"${gatorActionAttrs('_loadChannelThread', [teamId, channelId, channelName])}>Retry</button></div>`;
   }
 }
 
@@ -5614,7 +5614,7 @@ async function _loadEmailDetail(messageId) {
     renderEmailDetail(email);
   } catch {
     col.innerHTML = `<div class="tp-empty-state"><span>Could not load email.</span>
-      <button class="tp-ai-btn" onclick="_loadEmailDetail('${escapeHtml(messageId)}')">Retry</button></div>`;
+      <button class="tp-ai-btn"${gatorActionAttrs('_loadEmailDetail', [messageId])}>Retry</button></div>`;
   }
 }
 
@@ -12662,7 +12662,7 @@ async function _loadOneNotePageDetail(pageId) {
     _renderOneNotePageDetail(page);
   } catch (e) {
     col.innerHTML = `<div class="tp-empty-state"><span>Could not load page: ${escapeHtml(e.message)}</span>
-      <button class="tp-ai-btn" onclick="_loadOneNotePageDetail('${escapeHtml(pageId)}')">Retry</button></div>`;
+      <button class="tp-ai-btn"${gatorActionAttrs('_loadOneNotePageDetail', [pageId])}>Retry</button></div>`;
   }
 }
 
@@ -18286,9 +18286,7 @@ function _ghRenderPRList(body, items) {
       return `<div class="gh-row" data-id="${pr.number}" data-repo="${_ghEsc(repo)}"
       style="padding:9px 10px;border-bottom:1px solid var(--border);cursor:pointer;
       display:flex;gap:8px;align-items:flex-start;transition:background .12s;"
-      onmouseover="if(!this.classList.contains('gh-row-sel'))this.style.background='var(--surface2)'"
-      onmouseout="if(!this.classList.contains('gh-row-sel'))this.style.background=''"
-      onclick="_ghSelectPR(${pr.number},'${_ghEsc(repo)}',this)">
+      ${gatorActionAttrs('_ghSelectPR', [pr.number, repo, { $el: true }])}>
       ${dot}
       <div style="flex:1;min-width:0;">
         <div style="font-size:12px;font-weight:500;color:var(--text);white-space:nowrap;
@@ -18325,9 +18323,7 @@ function _ghRenderIssueList(body, items) {
       return `<div class="gh-row" data-id="${issue.number}"
       style="padding:9px 10px;border-bottom:1px solid var(--border);cursor:pointer;
       display:flex;gap:8px;align-items:flex-start;transition:background .12s;"
-      onmouseover="if(!this.classList.contains('gh-row-sel'))this.style.background='var(--surface2)'"
-      onmouseout="if(!this.classList.contains('gh-row-sel'))this.style.background=''"
-      onclick="_ghSelectIssue(${issue.number},'${_ghEsc(owner)}','${_ghEsc(repoName)}',this)">
+      ${gatorActionAttrs('_ghSelectIssue', [issue.number, owner, repoName, { $el: true }])}>
       ${dot}
       <div style="flex:1;min-width:0;">
         <div style="font-size:12px;font-weight:500;color:var(--text);white-space:nowrap;
@@ -18351,9 +18347,7 @@ function _ghRenderRepoList(body, items) {
       return `
     <div class="gh-row" data-repo='${JSON.stringify({ full_name: repo.full_name || repo.nameWithOwner, description: repo.description || '', language: repo.language || '', stargazers_count: repo.stargazers_count || 0, open_issues_count: repo.open_issues_count || 0, visibility: repo.visibility || repo.private ? 'private' : 'public', html_url: repo.html_url || '', updated_at: repo.updated_at || repo.pushedAt || '' }).replace(/'/g, '&#39;')}'
       style="padding:9px 10px;border-bottom:1px solid var(--border);cursor:pointer;transition:background .12s;"
-      onmouseover="if(!this.classList.contains('gh-row-sel'))this.style.background='var(--surface2)'"
-      onmouseout="if(!this.classList.contains('gh-row-sel'))this.style.background=''"
-      onclick="_ghSelectRepo(this)">
+      ${gatorActionAttrs('_ghSelectRepo', [{ $el: true }])}>
       <div style="font-size:12px;font-weight:600;color:var(--text);font-family:monospace;margin-bottom:2px;">
         ${fullName}</div>
       <div style="font-size:11px;color:var(--text-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
@@ -18408,15 +18402,15 @@ function _ghSelectRepo(rowEl) {
         </div>
       </div>
       <div style="display:flex;flex-direction:column;gap:8px;">
-        <button onclick="window.open('${_ghEsc(repo.html_url)}','_blank')"
+        <button${gatorActionAttrs('openExternal', [repo.html_url])}
           style="padding:7px 14px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:12px;cursor:pointer;text-align:left;">
           ↗ Open in GitHub
         </button>
-        <button onclick="_ghLoadRepoIssues('${_ghEsc(owner)}','${_ghEsc(repoName)}')"
+        <button${gatorActionAttrs('_ghLoadRepoIssues', [owner, repoName])}
           style="padding:7px 14px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:12px;cursor:pointer;text-align:left;">
           ● View open issues
         </button>
-        <button onclick="_ghLoadRepoPRs('${_ghEsc(owner)}','${_ghEsc(repoName)}')"
+        <button${gatorActionAttrs('_ghLoadRepoPRs', [owner, repoName])}
           style="padding:7px 14px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:12px;cursor:pointer;text-align:left;">
           ⎇ View open PRs
         </button>
@@ -18452,11 +18446,11 @@ function _ghLoadRepoIssues(owner, repo) {
   const detail = document.getElementById('tp-detail-col');
   detail.innerHTML = `<div style="padding:16px;display:flex;flex-direction:column;gap:8px;">
     <div style="font-size:12px;color:var(--text-sub);margin-bottom:4px;">${_ghEsc(owner)}/${_ghEsc(repo)} — Issues</div>
-    <button onclick="window.open('https://github.com/${_ghEsc(owner)}/${_ghEsc(repo)}/issues','_blank')"
+    <button${gatorActionAttrs('openExternal', [`https://github.com/${owner}/${repo}/issues`])}
       style="padding:7px 14px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:12px;cursor:pointer;">
       ↗ Open issues on GitHub
     </button>
-    <button onclick="_ghAskAboutRepo('${_ghEsc(owner)}','${_ghEsc(repo)}','issues')"
+    <button${gatorActionAttrs('_ghAskAboutRepo', [owner, repo, 'issues'])}
       style="padding:7px 14px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:12px;cursor:pointer;">
       Ask AI Gator about issues in this repo
     </button>
@@ -18467,11 +18461,11 @@ async function _ghLoadRepoPRs(owner, repo) {
   const detail = document.getElementById('tp-detail-col');
   detail.innerHTML = `<div style="padding:16px;display:flex;flex-direction:column;gap:8px;">
     <div style="font-size:12px;color:var(--text-sub);margin-bottom:4px;">${_ghEsc(owner)}/${_ghEsc(repo)} — Pull Requests</div>
-    <button onclick="window.open('https://github.com/${_ghEsc(owner)}/${_ghEsc(repo)}/pulls','_blank')"
+    <button${gatorActionAttrs('openExternal', [`https://github.com/${owner}/${repo}/pulls`])}
       style="padding:7px 14px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:12px;cursor:pointer;">
       ↗ Open PRs on GitHub
     </button>
-    <button onclick="_ghAskAboutRepo('${_ghEsc(owner)}','${_ghEsc(repo)}','pull requests')"
+    <button${gatorActionAttrs('_ghAskAboutRepo', [owner, repo, 'pull requests'])}
       style="padding:7px 14px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:12px;cursor:pointer;">
       Ask AI Gator about PRs in this repo
     </button>
@@ -18694,13 +18688,13 @@ function _ghPRDetail(pr, owner, repo) {
   </div>
   <div style="padding:10px 16px;border-top:1px solid var(--border);display:flex;gap:6px;
     flex-wrap:wrap;flex-shrink:0;background:var(--surface);">
-    <button onclick="_showAlert('Phase 2', 'info')"
+    <button${gatorActionAttrs('_showAlert', ['Phase 2', 'info'])}
       style="font-size:12px;font-weight:500;padding:5px 12px;border-radius:6px;
       background:#3fb950;color:#000;border:none;cursor:pointer;">✓ Approve</button>
-    <button onclick="_showAlert('Phase 2', 'info')"
+    <button${gatorActionAttrs('_showAlert', ['Phase 2', 'info'])}
       style="font-size:12px;padding:5px 12px;border-radius:6px;
       background:transparent;color:var(--text-dim);border:1px solid var(--border2);cursor:pointer;">Request Changes</button>
-    <button onclick="_showAlert('Phase 2', 'info')"
+    <button${gatorActionAttrs('_showAlert', ['Phase 2', 'info'])}
       style="font-size:12px;padding:5px 12px;border-radius:6px;
       background:transparent;color:var(--text-dim);border:1px solid var(--border2);cursor:pointer;">Add Comment</button>
     <button id="gh-merge-btn"
@@ -18802,10 +18796,10 @@ function _ghIssueDetail(issue, owner, repo) {
   </div>
   <div style="padding:10px 16px;border-top:1px solid var(--border);display:flex;gap:6px;
     flex-shrink:0;background:var(--surface);">
-    <button onclick="_showAlert('Phase 2', 'info')"
+    <button${gatorActionAttrs('_showAlert', ['Phase 2', 'info'])}
       style="font-size:12px;padding:5px 12px;border-radius:6px;background:transparent;
       color:var(--text-dim);border:1px solid var(--border2);cursor:pointer;">Add Comment</button>
-    <button onclick="_showAlert('Phase 2', 'info')"
+    <button${gatorActionAttrs('_showAlert', ['Phase 2', 'info'])}
       style="font-size:12px;padding:5px 12px;border-radius:6px;background:transparent;
       color:#f85149;border:1px solid rgba(248,81,73,.4);cursor:pointer;">Close Issue</button>
     ${
