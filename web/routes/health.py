@@ -516,17 +516,17 @@ def _plugin_commands_bootstrap() -> str:
 
 
 @router.get("/api/csrf", dependencies=[Depends(require_shell_key)])
-async def get_csrf():
+async def get_csrf(request: Request):
     """Return the current process CSRF token so the UI can refresh after a server reload."""
     from security import get_csrf_token
-    return {"csrf_token": get_csrf_token()}
+    return {"csrf_token": get_csrf_token(request.headers.get("host", ""))}
 
 
 @router.get("/", response_class=HTMLResponse, dependencies=[Depends(require_shell_key)])
-async def root():
+async def root(request: Request):
     from security import get_csrf_token
     html = (Path(__file__).parent.parent / "static" / "index.html").read_text(encoding="utf-8")
-    csrf = f'<script>window.__CSRF_TOKEN__ = {json.dumps(get_csrf_token())};</script>'
+    csrf = f'<script>window.__CSRF_TOKEN__ = {json.dumps(get_csrf_token(request.headers.get("host", "")))};</script>'
     bootstrap = csrf + '\n' + _mcp_skills_bootstrap() + '\n' + _user_skills_bootstrap() + '\n' + _plugin_commands_bootstrap()
     injections = bootstrap
     if os.environ.get("DEV_MODE"):

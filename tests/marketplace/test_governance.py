@@ -87,7 +87,7 @@ import json
 from sandbox import policy as _policy
 from security import get_csrf_token
 
-_CSRF = {"X-CSRF-Token": get_csrf_token()}
+_CSRF = {"X-CSRF-Token": get_csrf_token("testserver")}
 
 
 def _no_admin_policy(tmp_path):

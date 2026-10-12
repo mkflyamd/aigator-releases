@@ -59,7 +59,7 @@ class TestRespondBackendIsMessageBased:
         return gc, cal_gc
 
     def test_respond_resolves_event_via_nav_property_and_posts_to_calendar(self):
-        client = TestClient(app, headers={"X-CSRF-Token": get_csrf_token()})
+        client = TestClient(app, headers={"X-CSRF-Token": get_csrf_token("testserver")})
         gc, cal_gc = self._mock_clients()
         with (
             patch("skills._m365.helpers.get_graph_client", return_value=gc),
@@ -78,7 +78,7 @@ class TestRespondBackendIsMessageBased:
         )
 
     def test_respond_uses_frontend_supplied_event_id_when_present(self):
-        client = TestClient(app, headers={"X-CSRF-Token": get_csrf_token()})
+        client = TestClient(app, headers={"X-CSRF-Token": get_csrf_token("testserver")})
         gc, cal_gc = self._mock_clients()
         with (
             patch("skills._m365.helpers.get_graph_client", return_value=gc),
@@ -101,7 +101,7 @@ class TestRespondBackendIsMessageBased:
         ), "a frontend-supplied event_id must skip the nav-property lookup entirely"
 
     def test_respond_422_when_event_cannot_be_resolved(self):
-        client = TestClient(app, headers={"X-CSRF-Token": get_csrf_token()})
+        client = TestClient(app, headers={"X-CSRF-Token": get_csrf_token("testserver")})
         gc = MagicMock()
         gc.get.side_effect = Exception("not found")
         cal_gc = MagicMock()
@@ -117,7 +117,7 @@ class TestRespondBackendIsMessageBased:
         assert r.status_code == 422, r.text
 
     def test_respond_validates_response_value(self):
-        client = TestClient(app, headers={"X-CSRF-Token": get_csrf_token()})
+        client = TestClient(app, headers={"X-CSRF-Token": get_csrf_token("testserver")})
         gc, cal_gc = self._mock_clients()
         with (
             patch("skills._m365.helpers.get_graph_client", return_value=gc),

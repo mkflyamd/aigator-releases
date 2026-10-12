@@ -12,7 +12,7 @@ def test_closing_a_tab_ends_that_tabs_grants_only():
     task_grants._reset()
     task_grants.add("tab-a", [], ["/proj"], ["h.example:443"])
     task_grants.add("tab-b", [], ["/proj"], [])
-    assert TestClient(app, headers={"X-CSRF-Token": get_csrf_token()}).delete("/api/conversation/tab-a").status_code == 200
+    assert TestClient(app, headers={"X-CSRF-Token": get_csrf_token("testserver")}).delete("/api/conversation/tab-a").status_code == 200
     assert not task_grants.covers("tab-a", [], ["/proj"], [])
     assert task_grants.covers("tab-b", [], ["/proj"], [])
     task_grants._reset()

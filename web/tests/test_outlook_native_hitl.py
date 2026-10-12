@@ -43,7 +43,7 @@ def _sendmail_payload(gc):
 def _approve(client, draft_id, body=None):
     from security import get_csrf_token
     return client.post(f"/api/drafts/{draft_id}/approve",
-                       headers={"X-CSRF-Token": get_csrf_token()},
+                       headers={"X-CSRF-Token": get_csrf_token("testserver")},
                        json=body)
 
 

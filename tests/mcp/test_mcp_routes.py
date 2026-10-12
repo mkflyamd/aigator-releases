@@ -12,7 +12,7 @@ from routes.mcp_routes import router
 
 app = FastAPI()
 app.include_router(router)
-client = TestClient(app, headers={"X-CSRF-Token": get_csrf_token()})
+client = TestClient(app, headers={"X-CSRF-Token": get_csrf_token("testserver")})
 
 
 def test_list_connections_empty():

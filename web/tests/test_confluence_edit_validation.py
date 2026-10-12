@@ -12,7 +12,7 @@ from app import app
 
 
 def test_malformed_body_rejected_before_put():
-    client = TestClient(app, headers={"X-CSRF-Token": get_csrf_token()})
+    client = TestClient(app, headers={"X-CSRF-Token": get_csrf_token("testserver")})
     with patch("skills.confluence.api.confluence_api") as api:
         r = client.put(
             "/api/confluence/page/123",
@@ -30,7 +30,7 @@ def test_malformed_body_rejected_before_put():
 
 
 def test_well_formed_body_passes_through_to_put():
-    client = TestClient(app, headers={"X-CSRF-Token": get_csrf_token()})
+    client = TestClient(app, headers={"X-CSRF-Token": get_csrf_token("testserver")})
     with (
         patch("skills.confluence.api.confluence_api") as api,
         patch(

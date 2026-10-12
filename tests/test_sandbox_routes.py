@@ -23,7 +23,7 @@ def client():
 def csrf():
     from security import get_csrf_token
 
-    return {"X-CSRF-Token": get_csrf_token()}
+    return {"X-CSRF-Token": get_csrf_token("testserver")}
 
 
 @pytest.fixture(autouse=True)

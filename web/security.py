@@ -1,6 +1,6 @@
 """Process-local CSRF token for guarding HITL-sensitive endpoints.
 
-The token is generated once per server process and embedded in the served
+The token is derived per server process and per origin (Host header) and embedded in the served
 index.html as window.__CSRF_TOKEN__. The UI sends it back via the
 X-CSRF-Token header on sensitive POST requests. The in-process agent loop
 has no path to read window globals from the browser, so it cannot forge
@@ -20,28 +20,37 @@ key configured (backend started by hand, tests) the endpoints stay open.
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import os
 import secrets
 from urllib.parse import urlsplit
 
-from fastapi import Header, HTTPException
+from fastapi import Header, HTTPException, Request
 
-_TOKEN: str | None = None
+_TOKEN: bytes | None = None
 _SHELL_KEY: str | None = os.environ.pop("AIGATOR_SHELL_KEY", "") or None
 
 
-def get_csrf_token() -> str:
-    """Return the per-process CSRF token, generating it on first access."""
+def get_csrf_token(host: str) -> str:
+    """Return the CSRF token for one origin (the Host header of the page request).
+
+    The token is an HMAC of the lowercase host under a per-process random secret.
+    A token taken from one origin (for example localhost:8000) is not valid for
+    another (127.0.0.1:8000), and no token survives a restart.
+    """
     global _TOKEN
     if _TOKEN is None:
-        _TOKEN = secrets.token_urlsafe(32)
-    return _TOKEN
+        _TOKEN = secrets.token_bytes(32)
+    digest = hmac.new(_TOKEN, host.strip().lower().encode("utf-8"), hashlib.sha256).digest()
+    return base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
 
 
-async def verify_csrf(x_csrf_token: str | None = Header(default=None)) -> None:
-    """FastAPI dependency: reject requests without a matching CSRF header."""
-    expected = get_csrf_token()
-    if not x_csrf_token or not secrets.compare_digest(x_csrf_token, expected):
+async def verify_csrf(request: Request, x_csrf_token: str | None = Header(default=None)) -> None:
+    """FastAPI dependency: reject requests without a CSRF header that matches this origin."""
+    expected = get_csrf_token(request.headers.get("host", ""))
+    if not x_csrf_token or not secrets.compare_digest(x_csrf_token.encode("utf-8"), expected.encode("utf-8")):
         raise HTTPException(status_code=403, detail="CSRF token missing or invalid")
 
 

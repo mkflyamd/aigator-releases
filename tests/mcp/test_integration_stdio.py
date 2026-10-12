@@ -44,7 +44,7 @@ def app_client(isolated_config):
 
     app = FastAPI()
     app.include_router(router)
-    return TestClient(app, headers={"X-CSRF-Token": get_csrf_token()})
+    return TestClient(app, headers={"X-CSRF-Token": get_csrf_token("testserver")})
 
 
 def _poll_until_connected(app_client, created_id, timeout=10.0):

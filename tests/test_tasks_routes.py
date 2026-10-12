@@ -25,7 +25,7 @@ def tasks_client(task_db):
 
     app = FastAPI()
     app.include_router(router)
-    return TestClient(app, headers={"X-CSRF-Token": get_csrf_token()})
+    return TestClient(app, headers={"X-CSRF-Token": get_csrf_token("testserver")})
 
 
 def test_clear_completed_tasks_preserves_active_tasks(task_db, tasks_client):
