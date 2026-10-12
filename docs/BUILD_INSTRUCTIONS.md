@@ -265,7 +265,8 @@ If the last command fails, unprivileged user namespaces are disabled or restrict
   "require_sandbox": false,
   "saved_permissions": "allow",
   "marketplace_allowed_tiers": ["Verified", "Community"],
-  "require_pinned_installs": false
+  "require_pinned_installs": false,
+  "approved_digests": ["<package digest from the install card>"]
 }
 ```
 
@@ -285,6 +286,8 @@ Administrators control which tiers users can install with `marketplace_allowed_t
 Every install needs the user's consent against a content digest of the package and its declared permissions. A kill switch can disable an installed skill.
 
 `require_pinned_installs: true` in the same file also refuses any install that downloads from a URL unless it is a claude-plugins-official plugin whose catalog entry pins a commit SHA. Pasted `SKILL.md` text and local ZIP or folder imports are not downloads and are unaffected; limit them with the tier list. GitHub archives are not signed, so the pin is the integrity control until catalog publishers provide signed manifests.
+
+`approved_digests` is an admin allow-list of package digests (the digest the install card shows). When the key is present, a marketplace install (catalog, URL, pasted or local) succeeds only if its digest is in the list. An empty list blocks every install. When the key is missing, nothing is blocked. The user sees the blocked digest in the error message and can ask IT to add it. A digest changes with every change to the package, so each skill update needs a new entry. Native skills ship inside the app and are not affected. The list is local to the device; the app does not fetch it from Git or the network. It proves that IT approved this exact content. It does not prove who wrote it, because signed manifests are not available.
 
 ### run_shell in the sandbox
 

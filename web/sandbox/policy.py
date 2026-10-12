@@ -31,6 +31,7 @@ class Policy:
     saved_permissions: str = "allow"   # allow | deny
     marketplace_allowed_tiers: tuple[str, ...] | None = None   # None = no admin restriction
     require_pinned_installs: bool = False   # True = no URL downloads except SHA-pinned catalog plugins
+    approved_digests: tuple[str, ...] | None = None   # None = off; a list = only these package digests install
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -90,7 +91,8 @@ def parse_policy(text: str) -> Policy:
         raise ValueError("policy is nested too deeply") from exc
     if not isinstance(data, dict):
         raise ValueError("policy must be a JSON object")
-    unknown = set(data) - set(_ALLOWED) - {"require_sandbox", "marketplace_allowed_tiers", "require_pinned_installs"}
+    unknown = set(data) - set(_ALLOWED) - {"require_sandbox", "marketplace_allowed_tiers", "require_pinned_installs",
+                                                  "approved_digests"}
     if unknown:  # a typo must not silently select the weakest default
         raise ValueError("policy has unknown keys")
     values: dict = {}
@@ -113,6 +115,11 @@ def parse_policy(text: str) -> Policy:
         if not isinstance(tiers, list) or not tiers or not all(isinstance(t, str) and t in _TIERS for t in tiers):
             raise ValueError("invalid value for marketplace_allowed_tiers")
         values["marketplace_allowed_tiers"] = tuple(tiers)
+    if "approved_digests" in data:
+        digests = data["approved_digests"]
+        if not isinstance(digests, list) or not all(isinstance(d, str) and d for d in digests):
+            raise ValueError("invalid value for approved_digests")
+        values["approved_digests"] = tuple(digests)
     return Policy(**values)
 
 

@@ -125,6 +125,15 @@ def _install_failure(result: dict) -> HTTPException:
                 "message": "The package changed since you reviewed it. Review it again before installing.",
             },
         )
+    if error == "digest_not_approved":
+        return HTTPException(
+            status_code=403,
+            detail={
+                "error": "digest_not_approved",
+                "message": "Your administrator has not approved this package. Ask IT to approve digest "
+                           f"{result.get('digest', '')} and try again.",
+            },
+        )
     if error == "orphan_resolution_required":
         return HTTPException(
             status_code=400,
@@ -733,7 +742,7 @@ async def install_local(req: LocalInstallRequest):
         expected_digest=req.digest,
     )
     if not result.get("ok"):
-        if result.get("error") == "content_changed":
+        if result.get("error") in ("content_changed", "digest_not_approved"):
             raise _install_failure(result)
         raise HTTPException(status_code=400, detail=result.get("error", "Install failed"))
 

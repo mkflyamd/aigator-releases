@@ -234,3 +234,69 @@ def test_successful_install_is_written_to_the_audit_log(caplog):
         )
     assert r.status_code == 200
     assert "skill-install skill=gmail tier=Community source=catalog digest=abc123" in caplog.text
+
+
+# ── admin hash allow-list (M_11) ──────────────────────────────────────────────
+
+_SKILL_MD = "---\nname: demo-skill\ndescription: d\n---\nBody\n"
+
+
+def _digest_of_skill_md():
+    from marketplace.permissions import files_digest
+
+    return files_digest({"SKILL.md": _SKILL_MD.encode()})
+
+
+def _install_inline(tmp_path, monkeypatch):
+    from marketplace import installer
+
+    monkeypatch.setattr(installer, "INSTALLED_SKILLS_DIR", tmp_path / "skills")
+    monkeypatch.setattr(installer, "PLUGINS_DIR", tmp_path / "plugins")
+    return installer.install_skill_md("demo-skill", _SKILL_MD, "1.0", "Community")
+
+
+def test_without_an_allow_list_any_package_installs(tmp_path, monkeypatch):
+    assert _install_inline(tmp_path, monkeypatch)["ok"] is True
+
+
+def test_allow_list_blocks_a_package_that_is_not_listed(tmp_path, monkeypatch):
+    _admin_policy(tmp_path, {"approved_digests": ["not-this-one"]})
+    res = _install_inline(tmp_path, monkeypatch)
+    assert res == {"ok": False, "error": "digest_not_approved", "digest": _digest_of_skill_md()}
+    assert not (tmp_path / "skills").exists()
+
+
+def test_an_empty_allow_list_blocks_every_download(tmp_path, monkeypatch):
+    _admin_policy(tmp_path, {"approved_digests": []})
+    assert _install_inline(tmp_path, monkeypatch)["error"] == "digest_not_approved"
+
+
+def test_allow_list_lets_a_listed_package_install(tmp_path, monkeypatch):
+    _admin_policy(tmp_path, {"approved_digests": [_digest_of_skill_md()]})
+    assert _install_inline(tmp_path, monkeypatch)["ok"] is True
+
+
+def test_blocked_install_tells_the_user_which_digest_to_ask_for():
+    with (
+        patch("routes.marketplace.fetch_catalog", return_value=CATALOG),
+        patch("routes.marketplace._load_config", return_value={"marketplace_enabled": True}),
+        patch("routes.marketplace.install_skill_md",
+              return_value={"ok": False, "error": "digest_not_approved", "digest": "abc123"}),
+    ):
+        r = client.post(
+            "/api/marketplace/install",
+            json={"skill_id": "gmail", "skill_md": "---\nname: x\n---\nbody", "consent": True, "digest": "abc123"},
+            headers=_CSRF,
+        )
+    assert r.status_code == 403
+    assert r.json()["detail"]["error"] == "digest_not_approved"
+    assert "abc123" in r.json()["detail"]["message"]
+
+
+def test_allow_list_must_be_a_list_of_strings():
+    import pytest
+
+    for bad in ('"abc"', "[1]", '[""]', "null"):
+        with pytest.raises(ValueError):
+            _policy.parse_policy('{"approved_digests": %s}' % bad)
+    assert _policy.parse_policy('{"approved_digests": ["a"]}').approved_digests == ("a",)

@@ -227,6 +227,20 @@ def preview_package(
     return {"ok": True, "files": files}
 
 
+def _digest_not_approved(files: dict[str, bytes]) -> dict | None:
+    """Admin allow-list (policy approved_digests): None when off or the package is listed."""
+    from marketplace.permissions import files_digest
+    from sandbox.policy import load_policy
+
+    approved = load_policy().approved_digests
+    if approved is None:
+        return None
+    digest = files_digest(files)
+    if digest in approved:
+        return None
+    return {"ok": False, "error": "digest_not_approved", "digest": digest}
+
+
 def install_skill_md(
     skill_id: str,
     skill_md: str,
@@ -262,6 +276,9 @@ def install_skill_md(
 
     if expected_digest and files_digest(files) != expected_digest:
         return {"ok": False, "error": "content_changed"}
+    blocked = _digest_not_approved(files)
+    if blocked:
+        return blocked
 
     if not skill_id:
         fm = _parse_skill_md_frontmatter(files["SKILL.md"].decode("utf-8", errors="replace"))
@@ -1541,6 +1558,9 @@ def install_claude_plugins_official_plugin(
 
     if expected_digest and files_digest(files) != expected_digest:
         return {"ok": False, "error": "content_changed"}
+    blocked = _digest_not_approved(files)
+    if blocked:
+        return blocked
     permissions = declared_permissions(files).to_dict()
 
     version = _extract_plugin_version(files) or "unknown"
@@ -2021,6 +2041,9 @@ def install_github_url(
         return {"ok": False, "error": "No SKILL.md found at this URL"}
     if expected_digest and files_digest(files) != expected_digest:
         return {"ok": False, "error": "content_changed"}
+    blocked = _digest_not_approved(files)
+    if blocked:
+        return blocked
 
     if _is_plugin_bundle(files):
         result = install_github_url_plugin(

@@ -113,7 +113,7 @@ def test_as_dict():
     assert pol.Policy().as_dict() == {
         "code_runner": "enabled", "network": "ask", "filesystem": "ask", "require_sandbox": False,
         "saved_permissions": "allow", "marketplace_allowed_tiers": None,
-        "require_pinned_installs": False,
+        "require_pinned_installs": False, "approved_digests": None,
     }
 
 
