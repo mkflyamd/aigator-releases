@@ -509,7 +509,11 @@ def _register(conn: dict) -> None:
                             f"Just present the link above."
                         )
                     err = {"error": f"MCP call failed: {display_msg}", "transport": transport}
-                    if is_auth:
+                    if is_auth and _is_forbidden_msg(msg):
+                        # The server accepted the credential but refused this tool.
+                        # Reconnecting cannot fix that, so do not send the user to Settings.
+                        err["_mcp_forbidden"] = True
+                    elif is_auth:
                         err["_mcp_auth_error"] = True
                         err["_connection_id"] = c.get("id", "")
                         err["_connection_name"] = c.get("name", c.get("id", ""))
@@ -606,6 +610,14 @@ _AUTH_HINT_KEYWORDS = (
     "access denied", "permission denied", "forbidden",
     "credentials",
 )
+
+
+def _is_forbidden_msg(msg: str) -> bool:
+    """True for a 403 / Forbidden refusal that is not also a 401 / unauthorized one."""
+    low = msg.lower()
+    if re.search(r"\b401\b", low) or "unauthorized" in low or "unauthenticated" in low:
+        return False
+    return bool(re.search(r"\b403\b", low)) or "forbidden" in low
 
 
 def _is_auth_msg(msg: str) -> bool:
