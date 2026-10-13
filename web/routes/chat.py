@@ -57,6 +57,20 @@ _SKILL_REQUEST_RE = _re.compile(
     _re.IGNORECASE | _re.MULTILINE,
 )
 
+# A run of bare tokens that ends the turn, however the model laid it out:
+# "...to see what it asks for./slack /sharepoint /file_ops". The model is told
+# to emit each token alone on a line, but it often glues them to a sentence or
+# puts several on one line; the line-anchored form above misses those and the
+# turn then ends silently. Anchored to the END of the turn so a path mentioned
+# mid-sentence never counts, and each name is still checked against the skill
+# registry by _detect_requested_skills.
+_SKILL_TOKEN = r"/[a-z0-9][a-z0-9_-]*(?=$|[\s/])"
+_TRAILING_SKILL_RUN_RE = _re.compile(
+    rf"(?:^|(?<=[\s.!?:;,)]))((?:{_SKILL_TOKEN}\s*)+)$",
+    _re.IGNORECASE,
+)
+_SKILL_TOKEN_RE = _re.compile(r"/([a-z0-9][a-z0-9_-]*)", _re.IGNORECASE)
+
 # Map user-facing skill names to internal IDs for the auto-activate fallback.
 # Keep this minimal — the only cases where UI label diverges from skill ID.
 _SKILL_NAME_ALIASES = {
@@ -92,8 +106,13 @@ def _detect_requested_skills(turn_text: str, already_active) -> list[str]:
     """
     active = set(already_active or [])
     found: list[str] = []
-    for m in _SKILL_REQUEST_RE.finditer(turn_text or ""):
-        sid = _resolve_skill_id(m.group(1) or m.group(2) or "")
+    text = turn_text or ""
+    names = [m.group(1) or m.group(2) or "" for m in _SKILL_REQUEST_RE.finditer(text)]
+    tail = _TRAILING_SKILL_RUN_RE.search(text.rstrip())
+    if tail:
+        names += _SKILL_TOKEN_RE.findall(tail.group(1))
+    for name in names:
+        sid = _resolve_skill_id(name)
         # Accept a skill if it has a prompt (built-in / installed) OR has tools
         # registered (MCP connections have tools in SKILL_TOOLS_MAP but no
         # SKILL.md prompt). Gated skills still excluded — they require the
