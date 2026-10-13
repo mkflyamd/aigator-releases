@@ -58,6 +58,64 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+  os-sandbox:
+    name: Real OS sandbox and vault (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+    runs-on: ${{ matrix.os }}
+    env:
+      AIGATOR_REAL_VAULT: '1'
+      SANDBOX_TESTS: >-
+        tests/code_sandbox tests/shell_runner tests/marketplace/test_tool_sandbox.py
+        tests/hooks/test_hooks_sandboxed.py tests/test_secure_store_real_vault.py
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install locked development dependencies
+        run: uv sync --locked
+
+      - name: Linux - install bubblewrap and a keyring, allow user namespaces
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap gnome-keyring dbus-user-session
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          bwrap --unshare-all --ro-bind / / -- true
+
+      - name: macOS - create an unlocked keychain
+        if: runner.os == 'macOS'
+        run: |
+          security create-keychain -p aigator-fake-api-key aigator-ci.keychain
+          security default-keychain -s aigator-ci.keychain
+          security unlock-keychain -p aigator-fake-api-key aigator-ci.keychain
+          security set-keychain-settings aigator-ci.keychain
+
+      - name: Run sandbox and vault tests (a skip is a failure)
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            runner='dbus-run-session -- bash -c'
+            prefix='echo -n aigator-fake-api-key | gnome-keyring-daemon --unlock --components=secrets >/dev/null;'
+          else
+            runner='bash -c'
+            prefix=''
+          fi
+          $runner "$prefix uv run pytest $SANDBOX_TESTS -q -rs" 2>&1 | tee sandbox-tests.log
+          test "${PIPESTATUS[0]}" -eq 0
+          if grep -E "^SKIPPED .*(OS sandbox is not (enforced|available)|bubblewrap is not installed|AIGATOR_REAL_VAULT)" sandbox-tests.log; then
+            echo "A sandbox or vault test was skipped; the platform check did not run." >&2
+            exit 1
+          fi
+
   javascript:
     name: JavaScript tests
     runs-on: ubuntu-24.04
