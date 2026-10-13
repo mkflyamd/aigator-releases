@@ -2470,7 +2470,7 @@ async def chat(req: ChatRequest):
                     # Otherwise the cross-tab alert and the in-progress tab
                     # indicator would only clear on the happy path, leaving a
                     # stalled chat silently stuck.
-                    shared.notify_all({"type": "chat_done", "context_id": context_id})
+                    shared.notify_all({"type": "chat_done", "context_id": context_id, "task_id": task_id})
                     # Close the generator ourselves (see comment above). On the
                     # happy path stream() is already exhausted and this is a
                     # cheap no-op; on cancel/error it drives stream()'s own

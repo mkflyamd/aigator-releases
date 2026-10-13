@@ -4104,6 +4104,7 @@ let _tabs = [];
 let _activeTabId = '';
 const _inflightRequests = new Map();
 const _chatTaskIds = new Map(); // tabId -> task_id for the active chat request
+const _locallyFinishedTasks = new Set(); // task ids already cleaned up here; their chat_done is late
 const _tabsWithUpdates = new Set(); // tabIds with completed responses the user hasn't seen
 const _pendingSandboxCards = new Map(); // tabId -> Map(requestId -> card data); drawn again each time the tab is shown
 const _tabsWorking = new Set(); // tabIds with an in-flight request (animated working line)
@@ -12367,6 +12368,7 @@ form.addEventListener('submit', async (e) => {
     const _stopTaskId = _chatTaskIds.get(_stopTabKey);
     if (_stopTaskId) {
       fetch(`/api/chat/${_stopTaskId}/cancel`, { method: 'POST' }).catch(() => {});
+      _locallyFinishedTasks.add(_stopTaskId);
       _chatTaskIds.delete(_stopTabKey);
       _inflightRequests.delete(_stopTabKey);
     }
@@ -12852,6 +12854,7 @@ form.addEventListener('submit', async (e) => {
             _sawDone = true;
             if (_activeTabId === requestTabId) _isStreaming = false;
             es.close();
+            _locallyFinishedTasks.add(task_id);
             _chatTaskIds.delete(_tabKey);
             _inflightRequests.delete(_tabKey);
             // Fallback only (see chat_done); doSend flushes at its end.
@@ -13274,6 +13277,7 @@ form.addEventListener('submit', async (e) => {
           // EventSource reconnects automatically with Last-Event-ID — only act on permanent close
           if (es.readyState === EventSource.CLOSED) {
             _userScrolledUp = false;
+            _locallyFinishedTasks.add(task_id);
             _chatTaskIds.delete(_tabKey);
             _inflightRequests.delete(_tabKey);
             _setTabWorking(requestTabId, false);
@@ -14450,7 +14454,15 @@ function _initNotificationStream() {
         // The request finished (success, error, or cancel) — clear the in-progress
         // line. This is the reliable signal: it fires from the server's finally even
         // when a stalled/cancelled chat never sent a local [DONE].
-        if (msg.context_id) {
+        // A chat_done for a task this client already finished ([DONE], Stop, or a closed
+        // stream) is late. A newer task may be running on the same tab now, so it must
+        // not clear that task's state, dots or Stop button.
+        const _runningTask = _chatTaskIds.get(msg.context_id);
+        const _lateDone =
+          !!msg.task_id &&
+          (_locallyFinishedTasks.delete(msg.task_id) ||
+            (!!_runningTask && _runningTask !== msg.task_id));
+        if (msg.context_id && !_lateDone) {
           _setTabWorking(msg.context_id, false);
           // Clear the per-tab task tracking so the send button returns to green
           // even if [DONE] was never received (stalled stream, server crash, etc.).
