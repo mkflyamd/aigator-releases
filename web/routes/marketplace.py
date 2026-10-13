@@ -714,7 +714,7 @@ async def install_local(req: LocalInstallRequest):
 
     import marketplace.installer as _installer
 
-    _enforce_tier("local-import", "Community")
+    _enforce_tier("local-import", "Mine")
     if not req.consent:
         preview = _installer.preview_package(local_zip_bytes=zip_bytes)
         if not preview.get("ok"):

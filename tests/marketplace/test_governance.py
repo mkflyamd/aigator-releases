@@ -169,6 +169,32 @@ def test_default_allows_verified_installs(tmp_path):
     assert _install("powerbi", {"marketplace_enabled": True}).status_code != 403
 
 
+def _install_local(cfg):
+    import base64
+    import io
+    import zipfile
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("s/SKILL.md", "---\nname: s\ndescription: d\n---\n\nbody\n")
+    body = {"kind": "zip", "name": "s.zip", "b64": base64.b64encode(buf.getvalue()).decode()}
+    with patch("routes.marketplace._load_config", return_value=cfg):
+        return client.post("/api/marketplace/install-local", json=body, headers=_CSRF)
+
+
+def test_default_allows_a_local_zip_import(tmp_path):
+    _no_admin_policy(tmp_path)
+    r = _install_local({"marketplace_enabled": True})
+    assert r.status_code == 200 and r.json()["consent_required"] is True
+
+
+def test_admin_policy_can_block_local_imports(tmp_path):
+    _admin_policy(tmp_path, {"marketplace_allowed_tiers": ["Native", "Verified"]})
+    r = _install_local({"marketplace_enabled": True})
+    assert r.status_code == 403
+    assert "not allowed by policy" in r.json()["detail"]
+
+
 def test_admin_policy_can_enable_community(tmp_path):
     _admin_policy(tmp_path, {"marketplace_allowed_tiers": ["Native", "Verified", "Community"]})
     assert _install("gmail", {"marketplace_enabled": True}).status_code != 403

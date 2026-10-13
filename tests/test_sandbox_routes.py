@@ -87,7 +87,7 @@ def test_status(client, cfg, monkeypatch):
     assert r.json() == {
         "level": "unavailable", "reason": "install bubblewrap", "opted_out": True,
         "policy": {"code_runner": "enabled", "network": "ask", "filesystem": "ask", "require_sandbox": False,
-                   "saved_permissions": "allow", "marketplace_allowed_tiers": ["Native", "Verified"],
+                   "saved_permissions": "allow", "marketplace_allowed_tiers": ["Native", "Verified", "Mine"],
                    "require_pinned_installs": False, "approved_digests": None, "blocked_data_flows": []},
     }
 
