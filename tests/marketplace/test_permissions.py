@@ -127,6 +127,15 @@ def _lines_for_servers(monkeypatch, servers):
     return [l for l in P.summarize_package({"SKILL.md": _skill_md("")})["lines"] if "MCP server" in l]
 
 
+def test_summary_says_when_policy_blocks_a_stdio_server(monkeypatch):
+    from sandbox import policy
+
+    monkeypatch.setattr(policy, "load_policy", lambda: policy.Policy(block_bundle_stdio_mcp=True))
+    (line,) = _lines_for_servers(monkeypatch, {"srv": {"command": "npx", "args": ["x"]}})
+    assert line.startswith("Blocked by your administrator's policy") and "npx x" in line
+    assert "not sandboxed" not in line
+
+
 def test_summary_cuts_a_long_mcp_command_with_a_visible_marker(monkeypatch):
     payload = "A" * 40
     (line,) = _lines_for_servers(monkeypatch, {

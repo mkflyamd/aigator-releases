@@ -33,7 +33,7 @@ def test_partial_file_keeps_defaults_for_missing_keys(policy_file):
 def test_invalid_file_fails_closed(policy_file, text):
     policy_file.write_text(text)
     assert pol.load_policy() == pol.FAIL_CLOSED_POLICY
-    assert pol.FAIL_CLOSED_POLICY == pol.Policy("enabled", "deny", "strict", True, "deny", ("Native", "Verified"), True)
+    assert pol.FAIL_CLOSED_POLICY == pol.Policy("enabled", "deny", "strict", True, "deny", ("Native", "Verified"), True, block_bundle_stdio_mcp=True)
 
 
 @pytest.mark.parametrize("text", [
@@ -114,7 +114,18 @@ def test_as_dict():
         "code_runner": "enabled", "network": "ask", "filesystem": "ask", "require_sandbox": False,
         "saved_permissions": "allow", "marketplace_allowed_tiers": ("Native", "Verified", "Mine"),
         "require_pinned_installs": False, "approved_digests": None, "blocked_data_flows": (),
+        "block_bundle_stdio_mcp": False,
     }
+
+
+def test_block_bundle_stdio_mcp_field():
+    from sandbox.policy import parse_policy, DEFAULT_POLICY, FAIL_CLOSED_POLICY
+    assert DEFAULT_POLICY.block_bundle_stdio_mcp is False
+    assert parse_policy('{"block_bundle_stdio_mcp": true}').block_bundle_stdio_mcp is True
+    assert FAIL_CLOSED_POLICY.block_bundle_stdio_mcp is True
+    for bad in ('"yes"', "1", "null", "[]"):
+        with pytest.raises(ValueError):
+            parse_policy('{"block_bundle_stdio_mcp": %s}' % bad)
 
 
 def test_saved_permissions_field():

@@ -348,6 +348,52 @@ def test_register_plugin_mcp_server_self_contained_enables_and_tags_owner():
     _unregister("plugin:fs-plugin:filesystem")
 
 
+def _block_bundle_stdio(tmp_path, monkeypatch):
+    from sandbox import policy
+
+    path = tmp_path / "sandbox-policy.json"
+    path.write_text('{"block_bundle_stdio_mcp": true}', encoding="utf-8")
+    monkeypatch.setattr(policy, "policy_path", lambda: path)
+    policy._reset_cache()
+
+
+def test_policy_blocks_bundle_stdio_server_at_registration(tmp_path, monkeypatch):
+    from mcp.manager import register_plugin_mcp_server, BUNDLE_STDIO_BLOCKED_MSG
+
+    _block_bundle_stdio(tmp_path, monkeypatch)
+    provisional = {"transport": "stdio", "command": "npx", "args": ["pkg"], "env": {}, "name": "fs"}
+    with patch("mcp.manager.acquire_pooled") as pooled, \
+         patch("mcp.manager.StdioMCPClient") as one_shot, \
+         patch("mcp.manager._upsert_raw_connection") as upsert:
+        result = register_plugin_mcp_server("fs-plugin", "fs", provisional, missing_secrets=[])
+    assert result == {"ok": False, "id": "plugin:fs-plugin:fs", "error": BUNDLE_STDIO_BLOCKED_MSG}
+    pooled.assert_not_called()
+    one_shot.assert_not_called()
+    assert upsert.call_args.args[0]["enabled"] is False
+
+
+def test_policy_blocks_already_installed_bundle_stdio_server(tmp_path, monkeypatch):
+    from mcp.manager import _client_for, BUNDLE_STDIO_BLOCKED_MSG
+
+    _block_bundle_stdio(tmp_path, monkeypatch)
+    conn = {"transport": "stdio", "command": "npx", "args": [], "env": {}, "name": "fs", "plugin_id": "fs-plugin"}
+    with patch("mcp.manager.acquire_pooled") as pooled:
+        with pytest.raises(RuntimeError, match="administrator's policy"):
+            _client_for(conn)
+    pooled.assert_not_called()
+    assert "administrator" in BUNDLE_STDIO_BLOCKED_MSG
+
+
+def test_policy_does_not_block_user_added_stdio_server(tmp_path, monkeypatch):
+    from mcp.manager import _client_for
+
+    _block_bundle_stdio(tmp_path, monkeypatch)
+    conn = {"transport": "stdio", "command": "npx", "args": [], "env": {}, "name": "mine"}
+    with patch("mcp.manager.acquire_pooled", return_value="client") as pooled:
+        assert _client_for(conn) == "client"
+    pooled.assert_called_once()
+
+
 def test_register_plugin_mcp_server_missing_secret_never_spawns():
     """A declared server with an unresolved {PLACEHOLDER} secret must be
     persisted disabled WITHOUT ever attempting to connect/spawn."""
