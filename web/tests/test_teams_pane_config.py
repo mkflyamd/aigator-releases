@@ -48,10 +48,13 @@ class TestTeamsDraftApproval:
         ), "teams-message approval must NOT self-POST to a hardcoded localhost port"
 
     def test_edited_message_applied_before_dtype_branch(self):
-        edited_idx = EMAIL_ROUTE_SRC.find(
+        start = EMAIL_ROUTE_SRC.index("async def approve_draft(")
+        end = EMAIL_ROUTE_SRC.find("\n@router.", start)
+        approve_src = EMAIL_ROUTE_SRC[start : end if end != -1 else len(EMAIL_ROUTE_SRC)]
+        edited_idx = approve_src.find(
             'draft["params"]["message"] = body["edited_message"]'
         )
-        dtype_idx = EMAIL_ROUTE_SRC.find('dtype = draft["type"]')
+        dtype_idx = approve_src.find('dtype = draft["type"]')
         assert edited_idx != -1, "edited_message override must exist in approve_draft"
         assert dtype_idx != -1
         assert edited_idx < dtype_idx, (

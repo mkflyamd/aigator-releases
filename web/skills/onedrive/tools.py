@@ -1,5 +1,6 @@
 """OneDrive skill -- 2 tools."""
 
+from skills._skill_utils import guard_path_args
 from pathlib import Path
 from urllib.parse import quote as _url_quote
 
@@ -1655,3 +1656,5 @@ TOOL_HANDLERS = {
     "copy_onedrive_file": _tool_copy_onedrive_file,
     "get_onedrive_item": _tool_get_onedrive_item,
 }
+TOOL_HANDLERS.update(guard_path_args(
+    {"download_onedrive_file": _tool_download_onedrive_file}, "local_path"))

@@ -625,12 +625,17 @@ def _install_payment_guard(tools) -> None:
 _pending_confirms: dict[str, tuple[asyncio.Event, list[bool]]] = {}
 
 
-def resolve_browser_confirm(confirm_id: str, allowed: bool) -> None:
-    """Called by REST endpoints to resolve a pending browser confirm gate."""
-    if confirm_id in _pending_confirms:
-        event, result = _pending_confirms[confirm_id]
-        result.append(allowed)
-        event.set()
+def resolve_browser_confirm(confirm_id: str, allowed: bool) -> bool:
+    """Called by REST endpoints to resolve a pending browser confirm gate.
+
+    Returns False when no such gate is pending (answered already or expired).
+    """
+    if confirm_id not in _pending_confirms:
+        return False
+    event, result = _pending_confirms[confirm_id]
+    result.append(allowed)
+    event.set()
+    return True
 
 
 # Max consecutive steps with no screenshot (proxy for tab-detach cascade).

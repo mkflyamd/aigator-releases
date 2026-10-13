@@ -196,16 +196,22 @@ def _filter_tools(active_skill: str, has_images: bool, active_skills: list[str] 
     This prevents any oversized MCP — Atlassian, GitHub, custom — from
     blowing the model's tool budget on a single request.
     """
-    skill_ids = set()
-    if active_skill and active_skill in shared.SKILL_TOOLS_MAP:
-        skill_ids.add(active_skill)
+    # Prompt-only skills (SKILL.md, no tools.py) have no SKILL_TOOLS_MAP entry but
+    # still pull in their dependency skills' tools (e.g. skill-creator -> file_ops).
+    def _is_routable(sid: str) -> bool:
+        return sid in shared.SKILL_TOOLS_MAP or sid in shared.SKILL_DEPENDENCIES_MAP
+
+    primary_ids = set()
+    if active_skill and _is_routable(active_skill):
+        primary_ids.add(active_skill)
     for sid in (active_skills or []):
-        if sid in shared.SKILL_TOOLS_MAP:
-            skill_ids.add(sid)
+        if _is_routable(sid):
+            primary_ids.add(sid)
+    skill_ids = {sid for sid in primary_ids if sid in shared.SKILL_TOOLS_MAP}
 
     _unapproved = set(unapproved_deps or [])
     # Auto-include approved dependency skills; skip gated deps that are still unapproved.
-    for primary_sid in list(skill_ids):
+    for primary_sid in list(primary_ids):
         for dep in shared.SKILL_DEPENDENCIES_MAP.get(primary_sid, []):
             dep_id = dep["id"]
             if dep_id in shared.SKILL_TOOLS_MAP:
@@ -258,8 +264,19 @@ def _append_jira_instance_context(system: str, active_skill_ids: list[str], cfg:
     native_jira_available = bool(_shared.SKILL_TOOLS_MAP.get("jira"))
     if not native_jira_available and not direct_url:
         return system
+    try:
+        from skills.jira.mutations import configured_extra_urls
+        extra_urls = configured_extra_urls() if direct_url else []
+    except Exception:
+        extra_urls = []
+    direct_sites = ", ".join([direct_url, *extra_urls])
     direct_line = (
-        f"The native jira_* tools use direct credentials for {direct_url}. "
+        (
+            f"The native jira_* tools use direct credentials for {direct_sites} "
+            "and find the right site from the issue key or URL. "
+            if extra_urls else
+            f"The native jira_* tools use direct credentials for {direct_url}. "
+        )
         if direct_url else
         "Native jira_* tools are available and handle all connected Jira sites including Rovo-connected ones via HITL approval. "
     )
@@ -268,7 +285,7 @@ def _append_jira_instance_context(system: str, active_skill_ids: list[str], cfg:
         + direct_line +
         f"MCP tools (cloud-atlassian, Rovo) cover other instances for reads only. "
         f"ROUTING RULES (these override general MCP guidance for Jira): "
-        f"(1) READ (any URL or bare key) → always call jira_get_issue first; it handles all connected sites automatically. Also call cloud-atlassian/Rovo MCP Jira tools IN PARALLEL for coverage — this parallel call is intentional and overrides the general serial-MCP rule. Use whichever returns a result. "
+        f"(1) READ (any URL or bare key) → always call jira_get_issue first; it handles all connected sites automatically. Call cloud-atlassian/Rovo MCP Jira tools ONLY if jira_get_issue reports the issue was not found or the site is not connected; never call them in parallel with it when the URL matches the native site. "
         f"(2) WRITE (comment, update, create, transition, watcher, link) → ALWAYS use native jira_* tools only, never MCP tools. Pass the full URL if you have it; bare keys are resolved automatically. "
         f"(3) If jira_get_issue returns a 'multiple sites' error → ask the user for the full issue URL. "
         f"(4) Only tell the user the issue was not found after ALL available Jira tools have returned 404/error."
@@ -751,6 +768,26 @@ def _append_skill_prompt(system: str, sid: str, preamble_done: bool) -> tuple[st
     return system, preamble_done
 
 
+def _skills_for_tools(tool_names) -> list[str]:
+    """The skill that owns each named tool, so a chat keeps the skills it was already using.
+
+    Where a tool sits in several skills (a raw MCP connection and its capability groups),
+    the smallest one is chosen so a carry-forward never offers more than was used. Internal
+    skills and the gated shell/code runners are never carried forward.
+    """
+    owners: list[str] = []
+    for name in sorted(set(tool_names or ())):
+        candidates = [
+            (len(tools), sid) for sid, tools in shared.SKILL_TOOLS_MAP.items()
+            if name in tools and not sid.startswith("_") and sid not in _GATED_DEP_SKILLS
+        ]
+        if candidates:
+            owner = min(candidates)[1]
+            if owner not in owners:
+                owners.append(owner)
+    return owners
+
+
 def _classify_skills_via_llm(message: str, extra_skills: dict | None = None) -> list[str]:
     """Use a fast LLM call to classify which skills a message needs."""
     import re as _re
@@ -803,6 +840,7 @@ _HEARTBEAT_EVERY_INTERVALS = 2   # then re-emit every ~30s of continued silence
 #     means the LLM hung after producing partial output.
 _FIRST_TOKEN_TIMEOUT_S = 300
 _INTER_CHUNK_TIMEOUT_S = 180
+_WATCHDOG_POLL_S = 1.0
 # The browser opens the task SSE stream immediately after receiving task_id.
 # Wait briefly for that subscription before starting model generation so the
 # first text delta cannot race the POST response and disappear from the UI.
@@ -1531,6 +1569,16 @@ async def chat(req: ChatRequest):
                 sid for sid, kws in _SKILL_KEYWORDS.items()
                 if any(kw in _recent_text for kw in kws)
             ]
+            # The history above is text only. The server-side store also knows which tools
+            # actually ran, so a chat that used Slack keeps Slack on a short follow-up.
+            _from_tools = _skills_for_tools(
+                await shared.conversation_store.recent_tool_names(_context_id)
+            )
+            for _sid in _from_tools:
+                if _sid not in _history_skills:
+                    _history_skills.append(_sid)
+            if _from_tools:
+                print(f"[skill-detect] skills of tools already run in this chat: {_from_tools}", flush=True)
             # Only carry forward skills not already explicit (avoid double-loading)
             _carried = [s for s in _history_skills if s not in _explicit_skill_ids]
             if _carried:
@@ -1919,7 +1967,8 @@ async def chat(req: ChatRequest):
 
             if direct.get("ok"):
                 # ONE LLM call with pre-fetched data, NO tools
-                data_summary = _json.dumps(direct["data"], default=str)
+                import data_sources
+                data_summary = _json.dumps(data_sources.mark_direct_data(intent["tool"], direct["data"]), default=str)
                 if len(data_summary) > 8000:
                     data_summary = data_summary[:8000] + "\n... (truncated)"
                 routed_system = system + "\n\nYou have the data below. Summarize it directly for the user. Do NOT call any tools — the data is already fetched."
@@ -2004,6 +2053,7 @@ async def chat(req: ChatRequest):
                 _turn_text_parts: list[str] = []
                 _turn_reactive_skills: list[str] = []
                 _done_chunk = None
+                _held_stall = None
                 async for chunk in _current_loop:
                     # Capture usage for logging
                     if chunk.startswith("data: ") and not chunk.startswith("data: [DONE]"):
@@ -2028,6 +2078,9 @@ async def chat(req: ChatRequest):
                     if chunk.startswith("data: [DONE]"):
                         _done_chunk = chunk
                         break
+                    if chunk.startswith('data: {"stalled"'):
+                        _held_stall = chunk
+                        continue
                     yield chunk
 
                 # Detect "please activate /skillname" mentions in the just-completed
@@ -2044,6 +2097,8 @@ async def chat(req: ChatRequest):
                             _new_skills.append(_rsid)
 
                 if not _new_skills:
+                    if _held_stall:
+                        yield _held_stall
                     if _done_chunk:
                         _stream_emitted_done = True
                         _done_emitted_flag[0] = True
@@ -2216,7 +2271,14 @@ async def chat(req: ChatRequest):
                   _tool_activity_emitted = False
                   async def _idle_watchdog():
                       nonlocal _idle_triggered
+                      from agent_loop import is_awaiting_human
                       await _asyncio.sleep(_idle_timeout_s)
+                      # Waiting on the user's allow/deny is not the model going silent:
+                      # hold off, then give the turn a fresh budget once they answer.
+                      while is_awaiting_human(context_id):
+                          while is_awaiting_human(context_id):
+                              await _asyncio.sleep(_WATCHDOG_POLL_S)
+                          await _asyncio.sleep(_idle_timeout_s)
                       _idle_triggered = True
                   _got_real_llm_output = False  # any LLM-originated chunk (token/thinking/tool_call)
                   def _reset_idle_timer(is_first_token: bool = False):

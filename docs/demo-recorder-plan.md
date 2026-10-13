@@ -183,7 +183,7 @@ uv lock --check && uv sync --locked
 uv run pytest tests/test_desktop_packaging.py -v
 
 # 4. Build installer
-uv run pyinstaller --clean --noconfirm packaging/aigator-backend.spec --distpath dist/backend --workpath build/pyinstaller-desktop
+uv run pyinstaller --clean --noconfirm packaging/aigator-backend.spec --distpath dist --workpath build/pyinstaller-desktop
 npm --prefix shell run dist -- --win --x64 --publish never
 
 # 5. Smoke test the installer

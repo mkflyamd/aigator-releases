@@ -575,23 +575,23 @@
                   </svg>
                 </button>
               </div>
-              <div class="sform-row">
-                <input
-                  id="atlassian-jira-url-input"
-                  type="text"
-                  class="key-field"
-                  style="flex: 1"
-                  placeholder="Jira URL (e.g. https://your-org.atlassian.net)"
-                  autocomplete="off"
-                />
-                <input
-                  id="atlassian-confluence-url-input"
-                  type="text"
-                  class="key-field"
-                  style="flex: 1"
-                  placeholder="Confluence URL (e.g. https://your-org.atlassian.net/wiki)"
-                  autocomplete="off"
-                />
+              <div class="site-section" id="atlassian-jira-sites" data-kind="jira">
+                <div class="site-section-head">
+                  <span class="site-section-title">Jira sites</span>
+                  <button type="button" class="site-add-btn" data-add="jira">
+                    + Add Jira site
+                  </button>
+                </div>
+                <div class="site-list"></div>
+              </div>
+              <div class="site-section" id="atlassian-confluence-sites" data-kind="confluence">
+                <div class="site-section-head">
+                  <span class="site-section-title">Confluence sites</span>
+                  <button type="button" class="site-add-btn" data-add="confluence">
+                    + Add Confluence site
+                  </button>
+                </div>
+                <div class="site-list"></div>
               </div>
               <div class="key-row connection-save-row">
                 <span id="atlassian-msg" class="field-msg"></span>
@@ -693,6 +693,51 @@
               <div class="key-row connection-save-row">
                 <span id="github-msg" class="field-msg"></span>
                 <button id="github-save-btn" class="btn-primary">Save</button>
+              </div>
+            </div>
+
+            <!-- ═══ Stored credentials ═══ -->
+            <div class="srow integration-row-sep">
+              <div class="srow-info">
+                <div class="srow-label">Stored credentials</div>
+                <div class="srow-sub">
+                  Removes saved sign-in tokens and API tokens from this computer. You will need to
+                  sign in again.
+                </div>
+                <div class="srow-sub" id="storage-level-notice" hidden></div>
+              </div>
+              <div class="srow-actions">
+                <button id="clear-credentials-btn" class="btn-secondary">
+                  Clear stored credentials
+                </button>
+              </div>
+            </div>
+
+            <!-- ═══ Code sandbox (shown only when the sandbox is unavailable) ═══ -->
+            <div class="srow integration-row-sep" id="sandbox-row" style="display: none">
+              <div class="srow-info">
+                <div class="srow-label">Code sandbox</div>
+                <div class="srow-sub" id="sandbox-notice"></div>
+                <label class="srow-sub" id="sandbox-optout-label" hidden>
+                  <input type="checkbox" id="sandbox-optout" />
+                  Allow code to run without a sandbox on this machine
+                </label>
+              </div>
+            </div>
+
+            <!-- ═══ Saved command permissions ═══ -->
+            <div class="srow integration-row-sep" id="saved-permissions-row">
+              <div class="srow-info">
+                <div class="srow-label">Saved permissions</div>
+                <div class="srow-sub">
+                  Commands you chose "Always allow this" for. Remove one and AI Gator asks again.
+                </div>
+                <div id="saved-permissions-list"></div>
+              </div>
+              <div class="srow-actions">
+                <button id="saved-permissions-clear" class="btn-secondary" hidden>
+                  Remove all
+                </button>
               </div>
             </div>
 

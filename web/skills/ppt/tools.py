@@ -1,5 +1,7 @@
 """PowerPoint skill -- 4 tools."""
 
+from sandbox.paths import PROTECTED_MSG, is_secrets_path
+from skills._skill_utils import guard_path_args
 import os
 import contextlib
 import tempfile
@@ -875,6 +877,8 @@ def _tool_create_pptx(file_path: str, slides: list, author: str = "") -> dict:
 
             # Image
             image_def = slide_def.get("image")
+            if image_def and is_secrets_path(image_def.get("path", "")):
+                return {"error": PROTECTED_MSG}
             if image_def and os.path.exists(image_def.get("path", "")):
                 left = Inches(image_def.get("left", 1))
                 top = Inches(image_def.get("top", 2))
@@ -1844,3 +1848,4 @@ TOOL_HANDLERS = {
     "pptx_add_hyperlink": _tool_add_hyperlink,
     "pptx_apply_theme": _tool_apply_theme,
 }
+TOOL_HANDLERS = guard_path_args(TOOL_HANDLERS, "file_path", "new_image_path")

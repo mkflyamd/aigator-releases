@@ -42,13 +42,13 @@ When calling the compose tool:
 | `markChatReadForUser` / `markChatUnreadForUser` | Mark chat read/unread state                                     | `Chat.ReadWrite` (browser-captured token only)        |
 
 **Token sources:** Teams chat tools (read, send, edit, members, list) use the
-same FOCI token as the rest of M365 (`~/.config/microsoft-graph/token.json`,
+same FOCI token as the rest of M365 (the AI Gator secure store (`graph/token`),
 client `1fec8e78`) via a FOCI→Skype token swap. Sign in once via Settings →
 Apps → Microsoft 365 (device-code flow). The token auto-renews via refresh_token.
 
 Only `markChatReadForUser` / `markChatUnreadForUser` require the separate
 `Chat.ReadWrite` scope, which FOCI cannot grant. That scope comes from a
-browser-captured token (`~/.config/microsoft-graph/teams_token.json`) that
+browser-captured token (the AI Gator secure store (`graph/teams_token`)) that
 expires in ~1h with no refresh_token. All other Teams features keep working
 when that token expires — only mark-read/unread degrades.
 

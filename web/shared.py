@@ -93,10 +93,10 @@ FAILED_SKILLS: dict[str, str] = {}
 TOOL_TIER_MAP: dict[str, str] = {}  # skill_id -> tier ("Verified", "Community", etc.)
 INSTALLED_TOOL_MODULES: dict[
     str, str
-] = {}  # skill_id -> sys.modules key for cache eviction
+] = {}  # skill_id -> marker for a loaded marketplace tools.py (nothing is imported; the tools run in the sandbox)
 SKILL_BIN_PATHS: dict[
     str, str
-] = {}  # skill_id -> bin dir string injected into PATH (for unload cleanup)
+] = {}  # skill_id -> bin dir; offered only on the sandboxed run_shell/run_python PATH, never on the app's os.environ
 TOOL_SEMAPHORES: dict[
     str, asyncio.Semaphore
 ] = {}  # skill_id -> concurrency lock (one at a time)
@@ -344,6 +344,13 @@ def load_installed_skill_prompts() -> None:
     skill_id wins, so a marketplace install shadows a same-named folder dropped
     in ~/.agents/skills.
     """
+    try:
+        from marketplace.state import disabled_ids
+
+        disabled = disabled_ids()
+    except Exception:
+        log.warning("could not read the disabled-skill list; loading every skill", exc_info=True)
+        disabled = set()
     found_ids = set()
     any_root_reachable = False
     for root in _USER_SKILL_DIRS:
@@ -354,6 +361,8 @@ def load_installed_skill_prompts() -> None:
             skill_id = _resolve_skill_id(root, candidate)
             if skill_id in found_ids:
                 continue  # higher-precedence root already provided this skill
+            if skill_id in disabled:
+                continue  # left out of found_ids on purpose: the cleanup loop below removes it
             found_ids.add(skill_id)
             # Always re-read so on-disk edits take effect without a server restart
             # (built-in skills are read once at module load; only installed/user

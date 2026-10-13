@@ -2,17 +2,23 @@
 
 import asyncio
 import json
+import logging
 import os
 import sys
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+import secure_store
 import shared
+from security import verify_csrf
 
 router = APIRouter()
+_log = logging.getLogger("auth")
 
 
 # ── Pydantic models ───────────────────────────────────────────────────────────
@@ -37,8 +43,7 @@ class DeviceCodePollRequest(BaseModel):
 
 @router.post("/api/auth/token")
 async def save_token(req: TokenRequest):
-    import base64, time as _time, os as _os
-    from pathlib import Path as _Path
+    import base64, time as _time
 
     token = req.token.strip().strip('"').strip("'")
     if token.startswith("Bearer "):
@@ -60,19 +65,14 @@ async def save_token(req: TokenRequest):
             status_code=401,
             detail="Token is already expired — recapture via the in-pane overlay",
         )
-    # Save to separate teams token file — never overwrites the OAuth token
-    teams_token_file = _Path.home() / ".config" / "microsoft-graph" / "teams_token.json"
-    teams_token_file.parent.mkdir(parents=True, exist_ok=True)
-    teams_token_file.write_text(
-        json.dumps(
-            {
-                "access_token": token,
-                "expires_at": claims.get("exp", _time.time() + 3600),
-            },
-            indent=2,
-        )
+    # Save under a separate secret name — never overwrites the OAuth token
+    secure_store.set_json(
+        "graph/teams_token",
+        {
+            "access_token": token,
+            "expires_at": claims.get("exp", _time.time() + 3600),
+        },
     )
-    _os.chmod(str(teams_token_file), 0o600)
     remaining = int((claims.get("exp", 0) - _time.time()) / 60)
     scopes = claims.get("scp", "").split()
     return {
@@ -93,7 +93,6 @@ async def teams_token_capture():
     import asyncio
     import base64 as _b64
     import time as _time
-    from pathlib import Path as _Path
 
     sys.path.insert(0, str(Path(__file__).parent.parent))
     from capture_token import capture_token
@@ -123,18 +122,13 @@ async def teams_token_capture():
         remaining = 3600
         claims = {}
 
-    teams_token_file = _Path.home() / ".config" / "microsoft-graph" / "teams_token.json"
-    teams_token_file.parent.mkdir(parents=True, exist_ok=True)
-    teams_token_file.write_text(
-        json.dumps(
-            {
-                "access_token": raw,
-                "expires_at": claims.get("exp", _time.time() + remaining),
-            },
-            indent=2,
-        )
+    secure_store.set_json(
+        "graph/teams_token",
+        {
+            "access_token": raw,
+            "expires_at": claims.get("exp", _time.time() + remaining),
+        },
     )
-    os.chmod(str(teams_token_file), 0o600)
 
     return {
         "ok": True,
@@ -150,7 +144,6 @@ async def teams_token_capture_stream():
     import time as _time
     import queue as _queue
     import threading as _threading
-    from pathlib import Path as _Path
 
     sys.path.insert(0, str(Path(__file__).parent.parent))
     from capture_token import capture_token
@@ -186,25 +179,13 @@ async def teams_token_capture_stream():
                     except Exception:
                         remaining = 3600
                         claims = {}
-                    teams_token_file = (
-                        _Path.home()
-                        / ".config"
-                        / "microsoft-graph"
-                        / "teams_token.json"
+                    secure_store.set_json(
+                        "graph/teams_token",
+                        {
+                            "access_token": raw,
+                            "expires_at": claims.get("exp", _time.time() + remaining),
+                        },
                     )
-                    teams_token_file.parent.mkdir(parents=True, exist_ok=True)
-                    teams_token_file.write_text(
-                        json.dumps(
-                            {
-                                "access_token": raw,
-                                "expires_at": claims.get(
-                                    "exp", _time.time() + remaining
-                                ),
-                            },
-                            indent=2,
-                        )
-                    )
-                    os.chmod(str(teams_token_file), 0o600)
                     result = {
                         "ok": True,
                         "expires_in_minutes": max(0, remaining // 60),
@@ -228,10 +209,12 @@ def _slack_status_block() -> dict:
     runs even when M365 has no token (the dashboard needs Slack status
     independently)."""
     import time as _time
-    from pathlib import Path as _Path
 
-    f = _Path.home() / ".config" / "slack-mcp" / "token.json"
-    if not f.exists():
+    try:
+        sd = secure_store.get_json("slack/token")
+    except Exception:
+        sd = None
+    if not sd:
         return {
             "ok": False,
             "expires_in_minutes": 0,
@@ -239,7 +222,6 @@ def _slack_status_block() -> dict:
             "team": "",
         }
     try:
-        sd = json.loads(f.read_text())
         exp = float(sd.get("expires_at", 0))
         return {
             "ok": bool(sd.get("access_token")) and _time.time() < exp,
@@ -259,13 +241,14 @@ def _slack_status_block() -> dict:
 def _teams_chat_status_block() -> dict:
     """Teams Chat.ReadWrite browser-captured token status."""
     import time as _time
-    from pathlib import Path as _Path
 
-    f = _Path.home() / ".config" / "microsoft-graph" / "teams_token.json"
-    if not f.exists():
+    try:
+        td = secure_store.get_json("graph/teams_token")
+    except Exception:
+        td = None
+    if not td:
         return {"ok": False, "expires_in_minutes": 0, "has_refresh_token": False}
     try:
-        td = json.loads(f.read_text())
         rem = int(td.get("expires_at", 0) - _time.time())
         return {
             "ok": rem > 0,
@@ -279,7 +262,6 @@ def _teams_chat_status_block() -> dict:
 @router.get("/api/auth/status")
 async def auth_status():
     import base64, time as _time
-    from pathlib import Path as _Path
 
     # Slack + Teams-chat status are independent of M365 — build them up front so
     # the dashboard always gets an `apps` payload even when M365 isn't signed in.
@@ -295,16 +277,18 @@ async def auth_status():
 
     _m365_absent = {"ok": False, "expires_in_minutes": 0, "has_refresh_token": False}
 
-    token_file = _Path.home() / ".config" / "microsoft-graph" / "token.json"
-    if not token_file.exists():
+    try:
+        data = secure_store.get_json("graph/token")
+    except Exception:
+        data = None
+    if not data:
         return {
             "authenticated": False,
-            "reason": "No token file",
+            "reason": "No token",
             "teams_token_ok": teams_chat_block["ok"],
             "apps": _apps_payload(_m365_absent),
         }
     try:
-        data = json.loads(token_file.read_text())
         token = data.get("access_token", "")
         if not token:
             return {
@@ -396,34 +380,33 @@ async def device_auth_poll(req: DeviceCodePollRequest):
         result = gc.complete_auth(req.device_code)
         if result.get("status") == "ok":
             reset_graph_client()
-            # Diagnostic: confirm token.json has the fields needed for refresh
-            import json as _json, time as _time
-            from pathlib import Path as _Path
+            # Diagnostic: confirm the stored token has the fields needed for
+            # refresh. Logs only booleans/expiry, never token values.
+            import time as _time
 
-            _tf = _Path.home() / ".config" / "microsoft-graph" / "token.json"
             try:
-                _td = _json.loads(_tf.read_text())
+                _td = secure_store.get_json("graph/token") or {}
                 _has_refresh = bool(_td.get("refresh_token"))
                 _has_tenant = bool(_td.get("tenant_id"))
                 _exp = _td.get("expires_at", 0)
                 _remaining = int(_exp - _time.time())
                 if not _has_refresh or not _has_tenant:
                     _logger.warning(
-                        "token.json after auth is missing fields — "
+                        "Stored token after auth is missing fields — "
                         "has_refresh_token=%s has_tenant_id=%s — SharePoint refresh will fail",
                         _has_refresh,
                         _has_tenant,
                     )
                 else:
                     _logger.info(
-                        "token.json OK after auth — access_token expires in %ds, "
+                        "Stored token OK after auth — access_token expires in %ds, "
                         "has_refresh_token=%s has_tenant_id=%s",
                         _remaining,
                         _has_refresh,
                         _has_tenant,
                     )
             except Exception as _e:
-                _logger.warning("Could not read token.json after auth: %s", _e)
+                _logger.warning("Could not read stored token after auth: %s", _e)
             return {"ok": True, "message": result["message"]}
         return {"ok": False, "pending": True}
     except Exception as e:
@@ -462,3 +445,112 @@ async def github_get_issue_endpoint(body: dict):
     from skills.github.tools import _github_get_issue
 
     return _github_get_issue(body["owner"], body["repo"], body["issue_number"])
+
+
+# ── Clear stored credentials ──────────────────────────────────────────────────
+
+_CLEAR_SCOPES = {
+    "graph": ["graph/token", "graph/teams_token", "graph/skype_token"],
+    "slack": ["slack/token", "slack/pkce"],
+}
+_PAT_ENV = ("JIRA_API_TOKEN", "JIRA_PAT_TOKEN", "CONFLUENCE_PAT", "GITHUB_TOKEN")
+
+
+def _revoke_slack(token: dict) -> None:
+    access = token.get("access_token", "")
+    if not access:
+        return
+    req = urllib.request.Request(
+        "https://slack.com/api/auth.revoke",
+        data=urllib.parse.urlencode({"token": access}).encode(),
+        method="POST",
+    )
+    urllib.request.urlopen(req, timeout=10).read()
+
+
+def _revoke_oauth(record: dict) -> None:
+    prov = record.get("provider") or {}
+    endpoint = prov.get("revocation_endpoint", "")
+    token = record.get("token") or {}
+    if not endpoint or not token.get("access_token"):
+        return
+    if urllib.parse.urlparse(endpoint).scheme != "https":
+        raise ValueError("revocation endpoint must use https")
+    for hint, value in (
+        ("refresh_token", token.get("refresh_token")),
+        ("access_token", token.get("access_token")),
+    ):
+        if value:
+            body = urllib.parse.urlencode(
+                {"token": value, "token_type_hint": hint, "client_id": prov.get("client_id", "")}
+            ).encode()
+            urllib.request.urlopen(
+                urllib.request.Request(endpoint, data=body, method="POST"), timeout=10
+            ).read()
+
+
+@router.get("/api/auth/storage")
+def storage_level():  # sync: protection_level() may call the OS vault
+    return {"level": secure_store.protection_level()}
+
+
+@router.post("/api/auth/clear", dependencies=[Depends(verify_csrf)])
+def clear_credentials(body: dict | None = None):  # sync: runs in the threadpool, revocation does blocking I/O
+    scope = (body or {}).get("scope", "all")
+    valid = {"all", "graph", "slack", "mcp", "pats"}
+    if scope not in valid:
+        raise HTTPException(400, f"scope must be one of {sorted(valid)}")
+    names: list[str] = []
+    if scope in ("all", "graph"):
+        names += _CLEAR_SCOPES["graph"]
+    if scope in ("all", "slack"):
+        names += _CLEAR_SCOPES["slack"]
+    if scope in ("all", "mcp"):
+        names += secure_store.list_names("oauth/")
+    if scope in ("all", "pats"):
+        names += secure_store.list_names("config/")
+    revoked: list[str] = []
+    if scope in ("all", "slack"):
+        try:
+            tok = secure_store.get_json("slack/token")
+        except secure_store.SecureStoreError as exc:
+            _log.warning("cannot read slack token for revocation: %s", exc)
+            tok = None
+        if tok:
+            try:
+                _revoke_slack(tok)
+                revoked.append("slack")
+            except Exception as exc:
+                _log.warning("slack revoke failed: %s", type(exc).__name__)
+    if scope in ("all", "mcp"):
+        for name in secure_store.list_names("oauth/"):
+            try:
+                rec = secure_store.get_json(name)
+            except secure_store.SecureStoreError as exc:
+                _log.warning("cannot read %s for revocation: %s", name, exc)
+                continue
+            if rec:
+                try:
+                    _revoke_oauth(rec)
+                    if (rec.get("provider") or {}).get("revocation_endpoint"):
+                        revoked.append(name)
+                except Exception as exc:
+                    _log.warning("oauth revoke failed for %s: %s", name, type(exc).__name__)
+    for name in names:
+        secure_store.delete(name)
+    if scope == "all" and not secure_store.list_names():
+        secure_store.reset_key_material()
+    if scope in ("all", "pats"):
+        for var in _PAT_ENV:
+            os.environ.pop(var, None)
+        # Drop the in-memory copies too, or the next save_config(shared.cfg)
+        # would write the cleared PATs straight back into secure_store.
+        from config import _PAT_KEYS
+
+        for key in _PAT_KEYS:
+            shared.cfg.pop(key, None)
+    if scope in ("all", "graph"):
+        from skills._m365.helpers import reset_graph_client
+
+        reset_graph_client()
+    return {"cleared": sorted(set(names)), "revoked": revoked}

@@ -18,6 +18,7 @@ class OAuthProvider:
     redirect_uri: str = ""  # filled at flow start once port is bound
     issuer: str = ""  # informational
     registration_endpoint: str = ""  # DCR only
+    revocation_endpoint: str = ""  # RFC 7009, optional
     extra_authorize_params: dict[str, str] = field(default_factory=dict)
     label: str = ""  # human-readable display name
     resource: str = (
@@ -36,6 +37,7 @@ class OAuthProvider:
             "redirect_uri": self.redirect_uri,
             "issuer": self.issuer,
             "registration_endpoint": self.registration_endpoint,
+            "revocation_endpoint": self.revocation_endpoint,
             "extra_authorize_params": dict(self.extra_authorize_params),
             "label": self.label,
             "resource": self.resource,
@@ -54,6 +56,7 @@ class OAuthProvider:
             redirect_uri=d.get("redirect_uri", ""),
             issuer=d.get("issuer", ""),
             registration_endpoint=d.get("registration_endpoint", ""),
+            revocation_endpoint=d.get("revocation_endpoint", ""),
             extra_authorize_params=dict(d.get("extra_authorize_params", {})),
             label=d.get("label", ""),
             resource=d.get("resource", ""),

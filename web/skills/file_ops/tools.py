@@ -10,6 +10,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from sandbox.paths import PROTECTED_MSG, is_secrets_path
+
 SKILL_ID = "file_ops"
 
 _MAX_READ_BYTES = 5 * 1024 * 1024  # 5 MB
@@ -39,6 +41,8 @@ def _is_filesystem_root(path: Path) -> bool:
 
 def _tool_read_file(path: str, encoding: str = "") -> dict:
     """Read a file. Returns text content or base64-encoded binary."""
+    if is_secrets_path(path):
+        return {"error": PROTECTED_MSG}
     p = Path(path)
     if not p.exists() or not p.is_file():
         return {"error": f"File not found: {path}"}
@@ -112,6 +116,8 @@ def _tool_edit_file(
     path: str, old_str: str, new_str: str, encoding: str = "utf-8"
 ) -> dict:
     """Replace an exact string in a file. Fails if old_str is not found or is not unique."""
+    if is_secrets_path(path):
+        return {"error": PROTECTED_MSG}
     p = Path(path)
     if not p.exists() or not p.is_file():
         return {"error": f"File not found: {path}"}
@@ -136,6 +142,8 @@ def _tool_edit_file(
 
 def _tool_write_file(path: str, content: str, encoding: str = "utf-8") -> dict:
     """Write text content to a file. Creates parent directories automatically."""
+    if is_secrets_path(path):
+        return {"ok": False, "error": PROTECTED_MSG}
     p = Path(path)
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -147,6 +155,8 @@ def _tool_write_file(path: str, content: str, encoding: str = "utf-8") -> dict:
 
 def _tool_list_dir(path: str) -> dict:
     """List directory contents — dirs first then files, both sorted alphabetically."""
+    if is_secrets_path(path):
+        return {"error": PROTECTED_MSG}
     p = Path(path)
     if not p.exists() or not p.is_dir():
         return {"error": f"Directory not found: {path}"}
@@ -219,7 +229,7 @@ def _tool_glob_files(pattern: str, base_path: str = "") -> dict:
             return {"matches": [], "count": 0, "error": str(exc)}
 
     truncated = len(matches) > _MAX_GLOB
-    matches = sorted(matches)[:_MAX_GLOB]
+    matches = [m for m in sorted(matches)[:_MAX_GLOB] if not is_secrets_path(m)]
     result = {"matches": matches, "count": len(matches)}
     if truncated:
         result["truncated"] = True
@@ -239,6 +249,8 @@ def _tool_grep_files(
     max_results: int = _MAX_GREP,
 ) -> dict:
     """Search file contents for a regex pattern."""
+    if is_secrets_path(path):
+        return {"matches": [], "count": 0, "error": PROTECTED_MSG}
     search_path = Path(path)
     if not search_path.exists():
         return {"matches": [], "count": 0, "error": f"Path not found: {path}"}
@@ -261,6 +273,8 @@ def _tool_grep_files(
     matches = []
     truncated = False
     for f in files:
+        if is_secrets_path(f):
+            continue
         try:
             lines = f.read_text(encoding="utf-8", errors="replace").splitlines()
         except Exception:

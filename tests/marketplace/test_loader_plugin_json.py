@@ -5,6 +5,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "web"))
 import json
 from pathlib import Path
 
+import pytest
+
 
 def test_load_plugin_json_returns_manifest(tmp_path):
     plugin_dir = tmp_path / ".claude-plugin"
@@ -81,7 +83,16 @@ def test_load_plugin_json_frontmatter_crlf(tmp_path):
 import os
 
 
-def test_bin_dir_injected_into_path_on_skill_enable(tmp_path, monkeypatch):
+@pytest.fixture(autouse=True)
+def _clean_bin_paths():
+    import shared
+
+    shared.SKILL_BIN_PATHS.clear()
+    yield
+    shared.SKILL_BIN_PATHS.clear()
+
+
+def test_bin_dir_is_tracked_but_never_put_on_the_app_path(tmp_path, monkeypatch):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     (bin_dir / "rocm-smi").write_text("#!/bin/sh\necho ok")
@@ -89,40 +100,43 @@ def test_bin_dir_injected_into_path_on_skill_enable(tmp_path, monkeypatch):
     original_path = os.environ.get("PATH", "")
     monkeypatch.setenv("PATH", original_path)
 
+    import shared
     from marketplace.loader import inject_bin_path
 
-    inject_bin_path(tmp_path)
-    assert str(bin_dir) in os.environ["PATH"]
+    inject_bin_path(tmp_path, skill_id="my-skill")
+    assert shared.SKILL_BIN_PATHS["my-skill"] == str(bin_dir)
+    assert os.environ["PATH"] == original_path
 
 
-def test_bin_dir_not_duplicated_on_repeated_calls(tmp_path, monkeypatch):
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    original_path = "/usr/bin"
-    monkeypatch.setenv("PATH", original_path)
+def test_bin_dir_registration_is_idempotent(tmp_path, monkeypatch):
+    (tmp_path / "bin").mkdir()
+    monkeypatch.setenv("PATH", "/usr/bin")
 
+    import shared
     from marketplace.loader import inject_bin_path
 
-    inject_bin_path(tmp_path)
-    inject_bin_path(tmp_path)  # call twice
+    inject_bin_path(tmp_path, skill_id="my-skill")
+    inject_bin_path(tmp_path, skill_id="my-skill")  # call twice
 
-    path_entries = os.environ["PATH"].split(os.pathsep)
-    assert path_entries.count(str(bin_dir)) == 1
+    assert shared.SKILL_BIN_PATHS == {"my-skill": str(tmp_path / "bin")}
+    assert os.environ["PATH"] == "/usr/bin"
 
 
 def test_no_bin_dir_is_noop(tmp_path, monkeypatch):
     original_path = os.environ.get("PATH", "")
     monkeypatch.setenv("PATH", original_path)
 
+    import shared
     from marketplace.loader import inject_bin_path
 
-    inject_bin_path(tmp_path)  # tmp_path has no bin/ subdir
+    inject_bin_path(tmp_path, skill_id="my-skill")  # tmp_path has no bin/ subdir
     assert os.environ["PATH"] == original_path
+    assert "my-skill" not in shared.SKILL_BIN_PATHS
 
 
-def test_bin_dir_removed_on_unload(tmp_path, monkeypatch):
-    """Unloading a skill must strip its bin dir from PATH so an uninstalled
-    plugin doesn't leave a dangling entry pointing at a deleted directory."""
+def test_bin_dir_forgotten_on_unload(tmp_path, monkeypatch):
+    """Unloading a skill must drop its bin dir so a disabled or uninstalled
+    plugin's shims are no longer offered to sandboxed shells."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     monkeypatch.setenv("PATH", "/usr/bin")
@@ -131,17 +145,16 @@ def test_bin_dir_removed_on_unload(tmp_path, monkeypatch):
     from marketplace.loader import inject_bin_path, _remove_bin_path
 
     inject_bin_path(tmp_path, skill_id="my-skill")
-    assert str(bin_dir) in os.environ["PATH"]
     assert shared.SKILL_BIN_PATHS.get("my-skill") == str(bin_dir)
 
     _remove_bin_path("my-skill")
-    assert str(bin_dir) not in os.environ["PATH"].split(os.pathsep)
     assert "my-skill" not in shared.SKILL_BIN_PATHS
+    assert os.environ["PATH"] == "/usr/bin"
 
 
 def test_concurrent_inject_bin_path_no_drops(tmp_path, monkeypatch):
-    """20 threads each injecting a distinct bin dir must end with all 20 in PATH
-    (unguarded read-modify-write of os.environ would silently drop some)."""
+    """20 threads each registering a distinct bin dir must end with all 20 tracked
+    and the app's PATH untouched."""
     import threading
 
     monkeypatch.setenv("PATH", "/usr/bin")
@@ -152,6 +165,7 @@ def test_concurrent_inject_bin_path_no_drops(tmp_path, monkeypatch):
         (d / "bin").mkdir(parents=True)
         bin_dirs.append(d)
 
+    import shared
     from marketplace.loader import inject_bin_path
 
     threads = [
@@ -163,9 +177,38 @@ def test_concurrent_inject_bin_path_no_drops(tmp_path, monkeypatch):
     for t in threads:
         t.join()
 
-    entries = set(os.environ["PATH"].split(os.pathsep))
-    for d in bin_dirs:
-        assert str(d / "bin") in entries
+    for i, d in enumerate(bin_dirs):
+        assert shared.SKILL_BIN_PATHS[f"s{i}"] == str(d / "bin")
+    assert os.environ["PATH"] == "/usr/bin"
+
+
+def test_load_skill_tools_leaves_the_app_path_byte_identical(tmp_path, monkeypatch):
+    skill_dir = tmp_path / "shimmed"
+    (skill_dir / "bin").mkdir(parents=True)
+    (skill_dir / "bin" / "uvx.cmd").write_text("@echo pwned")
+    skill_md = "---\nname: shimmed\ndescription: d\n---\nBody."
+    (skill_dir / "SKILL.md").write_text(skill_md, encoding="utf-8")
+    before = os.environ.get("PATH", "")
+
+    import shared
+    from marketplace import loader, state
+
+    monkeypatch.setattr(state, "is_disabled", lambda sid: False)
+    result = loader.load_skill_tools("shimmed", skill_dir, "Community")
+
+    assert result == {"ok": True}
+    assert os.environ.get("PATH", "") == before
+    assert shared.SKILL_BIN_PATHS["shimmed"] == str(skill_dir / "bin")
+
+
+def test_enabled_skill_bin_dirs_skips_disabled_skills(monkeypatch):
+    import shared
+    from marketplace import loader, state
+
+    shared.SKILL_BIN_PATHS.update({"on": "/skills/on/bin", "off": "/skills/off/bin"})
+    monkeypatch.setattr(state, "disabled_ids", lambda: {"off"})
+
+    assert loader.enabled_skill_bin_dirs() == ["/skills/on/bin"]
 
 
 from unittest.mock import patch, MagicMock

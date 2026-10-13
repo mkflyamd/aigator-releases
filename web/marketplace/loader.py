@@ -1,12 +1,9 @@
 """Hot-load and unload tools.py from marketplace-installed skills."""
 
-import importlib.util
 import json
 import logging
 import os as _os
 import re as _re
-import shutil
-import sys
 import threading
 from pathlib import Path
 
@@ -14,7 +11,7 @@ from pathlib import Path
 _PATH_LOCK = threading.Lock()
 
 import shared
-from skills._skill_utils import validate_tool_contract
+from marketplace import state, tool_sandbox
 
 logger = logging.getLogger(__name__)
 
@@ -146,42 +143,50 @@ def stop_plugin_mcp(skill_id: str, server_name: str) -> None:
 
 
 def inject_bin_path(skill_dir: Path, skill_id: str | None = None) -> None:
-    """Add skill_dir/bin/ to PATH if it exists and isn't already present.
+    """Remember skill_dir/bin/ in shared.SKILL_BIN_PATHS if it exists.
 
-    When skill_id is provided, the injected path is tracked in
-    shared.SKILL_BIN_PATHS so unload_skill_tools can remove it.
+    The app process's own os.environ["PATH"] is NEVER changed: the app launches
+    unsandboxed programs by bare name (MCP stdio servers, git), and a marketplace
+    skill's bin/ must not be able to shadow them. The sandboxed run_shell/run_python
+    child gets these dirs on its own PATH (see enabled_skill_bin_dirs).
     """
     bin_dir = skill_dir / "bin"
-    if not bin_dir.is_dir():
+    if not bin_dir.is_dir() or skill_id is None:
         return
-    bin_str = str(bin_dir)
     with _PATH_LOCK:
-        current = _os.environ.get("PATH", "")
-        entries = current.split(_os.pathsep)
-        if bin_str not in entries:
-            _os.environ["PATH"] = bin_str + _os.pathsep + current
-            logger.info("Added %s to PATH", bin_str)
-        if skill_id is not None:
-            shared.SKILL_BIN_PATHS[skill_id] = bin_str
+        shared.SKILL_BIN_PATHS[skill_id] = str(bin_dir)
 
 
 def _remove_bin_path(skill_id: str) -> None:
-    """Strip a previously-injected bin path from PATH (called on unload)."""
-    bin_str = shared.SKILL_BIN_PATHS.pop(skill_id, None)
-    if not bin_str:
-        return
+    """Forget a skill's bin dir (called on unload, i.e. Disable and uninstall)."""
     with _PATH_LOCK:
-        current = _os.environ.get("PATH", "")
-        entries = [e for e in current.split(_os.pathsep) if e != bin_str]
-        _os.environ["PATH"] = _os.pathsep.join(entries)
+        shared.SKILL_BIN_PATHS.pop(skill_id, None)
+
+
+def enabled_skill_bin_dirs() -> list[str]:
+    """bin dirs of installed, currently enabled skills, for the SANDBOXED child's PATH only."""
+    with _PATH_LOCK:
+        tracked = dict(shared.SKILL_BIN_PATHS)
+    if not tracked:
+        return []
+    try:
+        disabled = state.disabled_ids()
+    except Exception as exc:
+        logger.warning("Could not read the disabled skills (%s); offering no skill shims", exc)
+        return []
+    return [d for sid, d in tracked.items() if sid not in disabled]
 
 
 def load_skill_tools(skill_id: str, skill_dir: Path, tier: str) -> dict:
-    """Load tools.py from skill_dir into shared dispatch. Returns {"ok": True} or {"ok": False, "error": ...}.
+    """Register a skill's tools. tools.py is never imported here: its tool list is read, and each call runs, in the OS sandbox.
+    Returns {"ok": True} or {"ok": False, "error": ...}.
 
     Tool names are namespaced as {skill_id}__{tool_name} to prevent collisions.
     If tools.py does not exist, returns ok=True (SKILL.md-only skill is valid).
     """
+    if state.is_disabled(skill_id):
+        return {"ok": False, "error": "skill is disabled"}
+
     # bin/ and .mcp.json must be processed regardless of whether tools.py exists
     # — a plugin can ship MCP-bridged tools or CLI shims with no Python tools.py.
     inject_bin_path(skill_dir, skill_id)
@@ -204,7 +209,7 @@ def load_skill_tools(skill_id: str, skill_dir: Path, tier: str) -> dict:
                 ]
                 if deps:
                     shared.SKILL_DEPENDENCIES_MAP[skill_id] = deps
-            # Auto-detect shell_runner need from skill body when not explicitly declared
+            # Auto-detect shell_runner / file_ops need from skill body when not explicitly declared
             if skill_id not in shared.SKILL_DEPENDENCIES_MAP:
                 _shell_signals = (
                     "gh ",
@@ -218,13 +223,28 @@ def load_skill_tools(skill_id: str, skill_dir: Path, tier: str) -> dict:
                     "execute ",
                     "command",
                 )
-                if any(sig in skill_md_text.lower() for sig in _shell_signals):
-                    shared.SKILL_DEPENDENCIES_MAP[skill_id] = [
-                        {
-                            "id": "shell_runner",
-                            "reason": "detected shell usage in skill",
-                        }
-                    ]
+                _file_signals = (
+                    "skill.md",
+                    "write file",
+                    "save file",
+                    "edit file",
+                    "create a file",
+                    "create files",
+                    "save to ",
+                    "write to ",
+                )
+                _body = skill_md_text.lower()
+                _auto_deps = []
+                if any(sig in _body for sig in _shell_signals):
+                    _auto_deps.append(
+                        {"id": "shell_runner", "reason": "detected shell usage in skill"}
+                    )
+                if any(sig in _body for sig in _file_signals):
+                    _auto_deps.append(
+                        {"id": "file_ops", "reason": "detected file read/write usage in skill"}
+                    )
+                if _auto_deps:
+                    shared.SKILL_DEPENDENCIES_MAP[skill_id] = _auto_deps
         except Exception:
             pass  # malformed frontmatter — skip dependency registration
 
@@ -236,43 +256,18 @@ def load_skill_tools(skill_id: str, skill_dir: Path, tier: str) -> dict:
     if skill_id in shared.INSTALLED_TOOL_MODULES:
         unload_skill_tools(skill_id)
 
-    module_key = f"_marketplace_skill_{skill_id.replace('-', '_')}"
-
-    # Evict stale cached module (handles reinstall case)
-    if module_key in sys.modules:
-        del sys.modules[module_key]
-
-    # Clear __pycache__ so a replaced tools.py is never shadowed by stale bytecode
-    pycache = skill_dir / "__pycache__"
-    if pycache.exists():
-        shutil.rmtree(pycache, ignore_errors=True)
-
-    try:
-        spec = importlib.util.spec_from_file_location(module_key, tools_py)
-        if spec is None or spec.loader is None:
-            err = "could not build module spec for tools.py (unrecognized file type or loader)"
-            shared.FAILED_SKILLS[skill_id] = err
-            return {"ok": False, "error": err}
-        mod = importlib.util.module_from_spec(spec)
-        sys.modules[module_key] = mod
-        spec.loader.exec_module(mod)
-    except Exception as exc:
-        shared.FAILED_SKILLS[skill_id] = str(exc)
-        logger.warning("Failed to load tools.py for skill %s: %s", skill_id, exc)
-        return {"ok": False, "error": str(exc)}
-
-    if not validate_tool_contract(mod, skill_id):
-        err = (
-            "tool contract mismatch (TOOL_DEFS/TOOL_HANDLERS/TOOL_STATUS inconsistent)"
-        )
+    perms = state.approved_permissions(skill_id)
+    described = tool_sandbox.describe_skill_tools(skill_id, skill_dir, perms)
+    if not described.get("ok"):
+        err = described.get("error") or "the skill's tools could not be read"
         shared.FAILED_SKILLS[skill_id] = err
+        logger.warning("Failed to read tools.py for skill %s: %s", skill_id, err)
         return {"ok": False, "error": err}
 
     shared.FAILED_SKILLS.pop(skill_id, None)  # clear any previous failure
 
-    defs = getattr(mod, "TOOL_DEFS", [])
-    handlers = getattr(mod, "TOOL_HANDLERS", {})
-    status = getattr(mod, "TOOL_STATUS", {})
+    defs = described["defs"]
+    status = described["status"]
 
     # Namespace all tool names: skill_id__tool_name (hyphens preserved in skill_id portion)
     # Prefix every description with the marketplace tier ([Verified], [Community],
@@ -281,28 +276,28 @@ def load_skill_tools(skill_id: str, skill_dir: Path, tier: str) -> dict:
     prefix = skill_id + "__"
     tier_tag = f"[{tier}] " if tier else ""
     namespaced_defs = []
+    stubs = {}
     for d in defs:
         nd = dict(d)
         nd["name"] = prefix + d["name"]
         nd["description"] = f"{tier_tag}{d.get('description', '')}".rstrip()
         namespaced_defs.append(nd)
-
-    namespaced_handlers = {prefix + k: v for k, v in handlers.items()}
+        stubs[nd["name"]] = tool_sandbox.make_stub(skill_id, skill_dir, d["name"], tier)
     namespaced_status = {prefix + k: v for k, v in status.items()}
 
     # Register into shared state
     shared.TOOLS.extend(namespaced_defs)
-    shared.TOOL_DISPATCH.update(namespaced_handlers)
+    shared.TOOL_DISPATCH.update(stubs)
     shared.TOOL_STATUS.update(namespaced_status)
     tool_names = {d["name"] for d in namespaced_defs}
     shared.SKILL_TOOLS_MAP.setdefault(skill_id, set()).update(tool_names)
 
-    # Track tier and module key for future use
+    # Track tier; the value in INSTALLED_TOOL_MODULES is only a marker now (nothing is imported)
     shared.TOOL_TIER_MAP[skill_id] = tier
-    shared.INSTALLED_TOOL_MODULES[skill_id] = module_key
+    shared.INSTALLED_TOOL_MODULES[skill_id] = f"_marketplace_skill_{skill_id.replace('-', '_')}"
 
     logger.info(
-        "Loaded tools.py for skill %s (tier=%s): %s", skill_id, tier, sorted(tool_names)
+        "Loaded tools for skill %s (tier=%s, sandboxed): %s", skill_id, tier, sorted(tool_names)
     )
     return {"ok": True}
 
@@ -325,10 +320,7 @@ def unload_skill_tools(skill_id: str) -> None:
     # Remove from SKILL_TOOLS_MAP
     shared.SKILL_TOOLS_MAP.pop(skill_id, None)
 
-    # Evict cached module
-    module_key = shared.INSTALLED_TOOL_MODULES.pop(skill_id, None)
-    if module_key and module_key in sys.modules:
-        del sys.modules[module_key]
+    shared.INSTALLED_TOOL_MODULES.pop(skill_id, None)
 
     # Remove tier mapping and dependency declarations
     shared.TOOL_TIER_MAP.pop(skill_id, None)

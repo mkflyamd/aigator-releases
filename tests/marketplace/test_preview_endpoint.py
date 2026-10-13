@@ -9,8 +9,11 @@ from routes.marketplace import router
 
 
 def _client():
+    from security import verify_csrf
+
     app = FastAPI()
     app.include_router(router)
+    app.dependency_overrides[verify_csrf] = lambda: None
     return TestClient(app)
 
 
@@ -181,22 +184,22 @@ def test_preview_first_install_has_empty_existing_files(monkeypatch, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_install_standalone_skill_no_consent_routes_to_folder_installer(tmp_path, monkeypatch):
-    """A GitHub tree URL with no MCP/commands and no consent still uses
-    _install_github_folder (standalone skill path)."""
+_PKG = {"SKILL.md": b"---\nname: docx\ndescription: d\n---\nBody\n"}
+
+
+def test_install_standalone_skill_no_consent_returns_consent_required(tmp_path, monkeypatch):
+    """A GitHub tree URL for a plain skill now asks for approval first and
+    installs nothing."""
     import marketplace.installer as inst
     monkeypatch.setattr(inst, "INSTALLED_SKILLS_DIR", tmp_path)
 
-    # get_github_url_capabilities returns is_plugin=False → standalone path
     with (
         patch(
             "marketplace.installer.get_github_url_capabilities",
-            return_value=_fake_caps(is_plugin=False),
+            return_value=_fake_caps(is_plugin=False, package=_PKG),
         ),
-        patch(
-            "marketplace.installer._install_github_folder",
-            return_value={"ok": True, "skill_id": "docx"},
-        ) as fake_inst,
+        patch("marketplace.installer._install_github_folder") as fake_inst,
+        patch("marketplace.installer.install_github_url") as fake_dispatch,
     ):
         r = _client().post(
             "/api/marketplace/install",
@@ -206,7 +209,43 @@ def test_install_standalone_skill_no_consent_routes_to_folder_installer(tmp_path
             },
         )
     assert r.status_code == 200
-    fake_inst.assert_called_once()
+    body = r.json()
+    assert body["consent_required"] is True
+    assert body["skill_id"] == "docx"
+    assert body["summary"]["digest"]
+    fake_inst.assert_not_called()
+    fake_dispatch.assert_not_called()
+
+
+def test_install_standalone_skill_with_consent_uses_the_dispatcher(tmp_path, monkeypatch):
+    import marketplace.installer as inst
+    monkeypatch.setattr(inst, "INSTALLED_SKILLS_DIR", tmp_path)
+
+    with (
+        patch(
+            "marketplace.installer.install_github_url",
+            return_value={"ok": True, "skill_id": "docx", "permissions": {}},
+        ) as fake_dispatch,
+        patch("routes.marketplace.load_installed_skill_prompts"),
+        patch("routes.marketplace.load_skill_tools"),
+    ):
+        r = _client().post(
+            "/api/marketplace/install",
+            json={
+                "skill_id": "docx",
+                "install_url": "https://github.com/foo/bar/tree/main/skills/docx",
+                "consent": True,
+                "digest": "d1",
+            },
+        )
+    assert r.status_code == 200
+    fake_dispatch.assert_called_once_with(
+        "https://github.com/foo/bar/tree/main/skills/docx",
+        "docx",
+        "1.0",
+        orphan_resolution=None,
+        expected_digest="d1",
+    )
 
 
 def test_install_plugin_bundle_without_consent_returns_consent_required(tmp_path, monkeypatch):
@@ -217,7 +256,8 @@ def test_install_plugin_bundle_without_consent_returns_consent_required(tmp_path
     with patch(
         "marketplace.installer.get_github_url_capabilities",
         return_value=_fake_caps(is_plugin=True, has_mcp=True,
-                                mcp_servers=[{"name": "s", "needs_secrets": []}]),
+                                mcp_servers=[{"name": "s", "needs_secrets": []}],
+                                package=_PKG),
     ):
         r = _client().post(
             "/api/marketplace/install",
@@ -232,31 +272,38 @@ def test_install_plugin_bundle_without_consent_returns_consent_required(tmp_path
     assert body["ok"] is False
     assert body["consent_required"] is True
     assert body["capabilities"]["has_mcp"] is True
+    assert body["summary"]["digest"]
 
 
-def test_install_plugin_bundle_with_consent_calls_url_plugin_installer(tmp_path, monkeypatch):
-    """A GitHub tree URL with consent=True routes to install_github_url_plugin."""
+def test_install_plugin_bundle_with_consent_uses_the_dispatcher(tmp_path, monkeypatch):
+    """With consent a GitHub tree URL goes through install_github_url, which
+    decides between the bundle and the plain-skill installer."""
     import marketplace.installer as inst
     monkeypatch.setattr(inst, "INSTALLED_SKILLS_DIR", tmp_path)
 
-    with patch(
-        "marketplace.installer.install_github_url_plugin",
-        return_value={
-            "ok": True,
-            "plugin_id": "my-plugin",
-            "path": str(tmp_path),
-            "skill_ids": ["my-plugin"],
-            "command_ids": [],
-            "mcp_connection_ids": [],
-            "mcp_compatibility_warnings": [],
-        },
-    ) as fake_inst:
+    with (
+        patch(
+            "marketplace.installer.install_github_url",
+            return_value={
+                "ok": True,
+                "plugin_id": "my-plugin",
+                "path": str(tmp_path),
+                "skill_ids": ["my-plugin"],
+                "command_ids": [],
+                "mcp_connection_ids": [],
+                "mcp_compatibility_warnings": [],
+                "permissions": {},
+            },
+        ) as fake_inst,
+        patch("routes.marketplace.load_installed_skill_prompts"),
+    ):
         r = _client().post(
             "/api/marketplace/install",
             json={
                 "skill_id": "my-plugin",
                 "install_url": "https://github.com/owner/repo/tree/main/my-plugin",
                 "consent": True,
+                "digest": "d1",
             },
         )
     assert r.status_code == 200
@@ -264,24 +311,26 @@ def test_install_plugin_bundle_with_consent_calls_url_plugin_installer(tmp_path,
     fake_inst.assert_called_once_with(
         "https://github.com/owner/repo/tree/main/my-plugin",
         "my-plugin",
-        consented=True,
+        "1.0",
+        orphan_resolution=None,
+        expected_digest="d1",
     )
 
 
-def test_install_orphan_resolution_passed_to_folder_installer(monkeypatch, tmp_path):
-    """orphan_resolution is forwarded to _install_github_folder for standalone skills."""
+def test_install_orphan_resolution_passed_to_the_dispatcher(monkeypatch, tmp_path):
+    """orphan_resolution is forwarded for standalone skills."""
     import marketplace.installer as inst
     monkeypatch.setattr(inst, "INSTALLED_SKILLS_DIR", tmp_path)
     captured = {}
 
-    def fake_install(install_url, skill_id, version="1.0", orphan_resolution=None):
+    def fake_install(install_url, skill_id, version="1.0", orphan_resolution=None, expected_digest=""):
         captured["orphan_resolution"] = orphan_resolution
-        return {"ok": True, "skill_id": skill_id}
+        return {"ok": True, "skill_id": skill_id, "permissions": {}}
 
     with (
-        patch("marketplace.installer.get_github_url_capabilities",
-              return_value=_fake_caps(is_plugin=False)),
-        patch("marketplace.installer._install_github_folder", side_effect=fake_install),
+        patch("marketplace.installer.install_github_url", side_effect=fake_install),
+        patch("routes.marketplace.load_installed_skill_prompts"),
+        patch("routes.marketplace.load_skill_tools"),
     ):
         resp = _client().post(
             "/api/marketplace/install",
@@ -289,6 +338,8 @@ def test_install_orphan_resolution_passed_to_folder_installer(monkeypatch, tmp_p
                 "skill_id": "foo",
                 "install_url": "https://github.com/owner/repo/tree/main/skills/foo",
                 "orphan_resolution": "delete",
+                "consent": True,
+                "digest": "d1",
             },
         )
     assert resp.status_code == 200

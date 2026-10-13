@@ -184,6 +184,8 @@ def load_installed_plugin_commands() -> None:
     from marketplace.installer import load_installed, PLUGINS_DIR
 
     for entry in load_installed():
+        if entry.get("disabled"):
+            continue
         command_ids = entry.get("command_ids")
         source = entry.get("source")
         version = entry.get("version")
