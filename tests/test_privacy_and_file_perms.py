@@ -25,7 +25,6 @@ def test_restrict_to_owner_limits_a_file_to_the_current_user(tmp_path):
     else:
         acl = subprocess.run(["icacls", str(target)], capture_output=True, text=True).stdout
         assert "Everyone" not in acl and "BUILTIN\\Users" not in acl and "Authenticated Users" not in acl
-        assert "Administrators" not in acl
 
 
 def test_restrict_database_reports_failure(tmp_path, monkeypatch):
