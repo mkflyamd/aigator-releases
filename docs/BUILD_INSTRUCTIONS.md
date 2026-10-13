@@ -279,12 +279,12 @@ Administrators control which tiers users can install with `marketplace_allowed_t
 
 **Changing the tier list.** Users cannot change this setting. Only someone who can write to the policy folder can change it. That is an administrator on every platform. Treat each change as a change to the device's software policy: record who asked for it and who approved it in your normal change process, and roll the new file out with your device management tool. AI Gator does not edit this file.
 
-| Tier | What it is | Limits |
-|---|---|---|
-| Native | Skills built into AI Gator. Always active, not installable. | Reviewed and shipped with the app. |
-| Verified | Catalog entries from the reviewed catalog. Plugins are pinned to a commit SHA where the catalog gives one. | Tool code runs in the OS sandbox with the permissions the user approved; 60 s run timeout (`code_runner_timeout_verified`). |
-| Community | Unreviewed catalog entries and every URL or local import. | Same sandbox and approval; 30 s run timeout (`code_runner_timeout_community`). |
-| Mine | Skills the user wrote themselves. | Same sandbox and approval. |
+| Tier      | What it is                                                                                                 | Limits                                                                                                                      |
+| --------- | ---------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| Native    | Skills built into AI Gator. Always active, not installable.                                                | Reviewed and shipped with the app.                                                                                          |
+| Verified  | Catalog entries from the reviewed catalog. Plugins are pinned to a commit SHA where the catalog gives one. | Tool code runs in the OS sandbox with the permissions the user approved; 60 s run timeout (`code_runner_timeout_verified`). |
+| Community | Unreviewed catalog entries and every URL or local import.                                                  | Same sandbox and approval; 30 s run timeout (`code_runner_timeout_community`).                                              |
+| Mine      | Skills the user wrote themselves.                                                                          | Same sandbox and approval.                                                                                                  |
 
 Every install needs the user's consent against a content digest of the package and its declared permissions. A kill switch can disable an installed skill.
 

@@ -7,15 +7,26 @@
   window.fetch = function (input, init) {
     try {
       const url = typeof input === 'string' ? input : (input && input.url) || '';
-      const method = String((init && init.method) || (input && input.method) || 'GET').toUpperCase();
-      if (method !== 'GET' && method !== 'HEAD' && url.startsWith('/api/') && window.__CSRF_TOKEN__) {
-        const h = new Headers((init && init.headers) || (typeof input === 'object' && input.headers) || undefined);
+      const method = String(
+        (init && init.method) || (input && input.method) || 'GET',
+      ).toUpperCase();
+      if (
+        method !== 'GET' &&
+        method !== 'HEAD' &&
+        url.startsWith('/api/') &&
+        window.__CSRF_TOKEN__
+      ) {
+        const h = new Headers(
+          (init && init.headers) || (typeof input === 'object' && input.headers) || undefined,
+        );
         if (!h.has('X-CSRF-Token')) {
           h.set('X-CSRF-Token', window.__CSRF_TOKEN__);
           init = { ...(init || {}), headers: h };
         }
       }
-    } catch (_) { /* fall through to the plain call */ }
+    } catch (_) {
+      /* fall through to the plain call */
+    }
     return orig(input, init);
   };
 })();
@@ -27,13 +38,37 @@
  * cannot call arbitrary functions.
  */
 const GATOR_ACTIONS = new Set([
-  'ThemeManager.set', 'GatorTerminal.toggle', 'selectSkill', 'openExternal', 'removeClosest', '_showAlert',
-  'gatorOpenWidgetManager', 'gatorCloseWidgetManager', 'gatorWidgetSavePrompt', 'gatorWidgetSaveConfirm',
-  'gatorWidgetSaveCancel', 'gatorWidgetOpenFromDb', 'gatorWidgetCaptureToggle', 'gatorWidgetPinToggle',
-  'gatorWidgetDeleteConfirm', '_loadTeamsThread', '_loadChannelThread', '_loadEmailDetail',
-  '_loadOneNotePageDetail', '_ghSelectPR', '_ghSelectIssue', '_ghSelectRepo', '_ghLoadRepoIssues',
-  '_ghLoadRepoPRs', '_ghAskAboutRepo', '_caSetLeftView', '_caShowFileDiff', '_caDiscardFile',
-  '_caAddLocalProject', '_caAddGitHubProject', '_caShowSessionDropdown',
+  'ThemeManager.set',
+  'GatorTerminal.toggle',
+  'selectSkill',
+  'openExternal',
+  'removeClosest',
+  '_showAlert',
+  'gatorOpenWidgetManager',
+  'gatorCloseWidgetManager',
+  'gatorWidgetSavePrompt',
+  'gatorWidgetSaveConfirm',
+  'gatorWidgetSaveCancel',
+  'gatorWidgetOpenFromDb',
+  'gatorWidgetCaptureToggle',
+  'gatorWidgetPinToggle',
+  'gatorWidgetDeleteConfirm',
+  '_loadTeamsThread',
+  '_loadChannelThread',
+  '_loadEmailDetail',
+  '_loadOneNotePageDetail',
+  '_ghSelectPR',
+  '_ghSelectIssue',
+  '_ghSelectRepo',
+  '_ghLoadRepoIssues',
+  '_ghLoadRepoPRs',
+  '_ghAskAboutRepo',
+  '_caSetLeftView',
+  '_caShowFileDiff',
+  '_caDiscardFile',
+  '_caAddLocalProject',
+  '_caAddGitHubProject',
+  '_caShowSessionDropdown',
 ]);
 
 function openExternal(url) {
@@ -72,7 +107,10 @@ function gatorActionAttrs(name, args, opts) {
         return;
       }
       if (el.dataset.stop) event.stopPropagation();
-      action.fn.apply(action.owner, args.map((a) => (a && a.$el ? el : a)));
+      action.fn.apply(
+        action.owner,
+        args.map((a) => (a && a.$el ? el : a)),
+      );
     },
     true,
   );
@@ -10354,9 +10392,13 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
       : '';
   const canOpenNativeApp = typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell;
   const destinationLabel =
-    { '@outlook': 'Outlook', '@slack': 'Slack', '@teams': 'Microsoft Teams', '@jira': 'Jira', '@gcal': 'Google Calendar' }[
-      config.paneLabel
-    ] || '';
+    {
+      '@outlook': 'Outlook',
+      '@slack': 'Slack',
+      '@teams': 'Microsoft Teams',
+      '@jira': 'Jira',
+      '@gcal': 'Google Calendar',
+    }[config.paneLabel] || '';
   const sourcesRead = Array.isArray(data.sources) ? data.sources : [];
   const flowLine = destinationLabel
     ? `<div class="gcc-flow">Data from: <strong>${sourcesRead.length ? escapeHtml(sourcesRead.join(', ')) : 'no apps read in this request'}</strong> &rarr; Sending to: <strong>${escapeHtml(destinationLabel)}</strong></div>`
@@ -10960,7 +11002,12 @@ function gatorWidgetCspHtml(html) {
     for (const attr of Array.from(el.attributes)) {
       if (!/^on[a-z]+$/i.test(attr.name)) continue;
       const mark = `data-gw${wired.length}`;
-      wired.push({ mark, event: attr.name.slice(2).toLowerCase(), code: attr.value, tag: el.tagName });
+      wired.push({
+        mark,
+        event: attr.name.slice(2).toLowerCase(),
+        code: attr.value,
+        tag: el.tagName,
+      });
       el.removeAttribute(attr.name);
       el.setAttribute(mark, '');
     }
@@ -10968,7 +11015,8 @@ function gatorWidgetCspHtml(html) {
   doc.querySelectorAll('script:not([src])').forEach((s) => s.setAttribute('nonce', nonce));
   if (wired.length) {
     const lines = wired.map((w) => {
-      const target = w.tag === 'BODY' && w.event === 'load' ? 'window' : `document.querySelector('[${w.mark}]')`;
+      const target =
+        w.tag === 'BODY' && w.event === 'load' ? 'window' : `document.querySelector('[${w.mark}]')`;
       const code = w.code.replace(/<\/script/gi, '<\\/script');
       return `${target}.addEventListener(${JSON.stringify(w.event)},function(event){var r=(function(event){${code}\n}).call(this,event);if(r===false)event.preventDefault();});`;
     });

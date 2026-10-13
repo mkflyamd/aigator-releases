@@ -274,7 +274,8 @@
     // by AI Gator/your admin — hence the consent gate before install.
     Verified:
       'Listed in a curated marketplace. Not reviewed by AI Gator — you’ll confirm what it does before it installs. Runs in a sandbox: reads only folders you approve, writes only to its own output folder, uses the network only if you approved it.',
-    Community: 'Unreviewed. Runs in a sandbox: reads only folders you approve, writes only to its own output folder, uses the network only if you approved it. Shorter time limit.',
+    Community:
+      'Unreviewed. Runs in a sandbox: reads only folders you approve, writes only to its own output folder, uses the network only if you approved it. Shorter time limit.',
     Mine: 'Created by you. Runs in the same sandbox as other installed skills: reads only folders you approve, writes only to its own output folder, uses the network only if you approved it.',
   };
 

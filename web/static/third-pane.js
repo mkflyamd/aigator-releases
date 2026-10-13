@@ -370,7 +370,10 @@ const _nativeSlack = {
             if (!d || !d.confirm_token) throw new Error('no token');
             return fetch('/api/slack/channels/' + chan + '/send', {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': window.__CSRF_TOKEN__ || '' },
+              headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': window.__CSRF_TOKEN__ || '',
+              },
               body: JSON.stringify({
                 message: ta.value,
                 thread_ts: tsv,
@@ -13139,7 +13142,10 @@ function _showNewEmailCompose(prefill) {
 
         const res = await fetch('/api/email/send', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': window.__CSRF_TOKEN__ || '' },
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': window.__CSRF_TOKEN__ || '',
+          },
           body: JSON.stringify({
             to,
             cc: ccField.getEmails(),
@@ -16211,7 +16217,10 @@ function _renderTeamsComposeForm(container, data) {
       if (userIds.replace(/,/g, '')) body.user_ids = userIds;
       const resp = await _teamsFetchWithTimeout('/api/teams/send-message', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': window.__CSRF_TOKEN__ || '' },
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': window.__CSRF_TOKEN__ || '',
+        },
         body: JSON.stringify(body),
         signal: sendAbortCtrl.signal,
       });
@@ -20442,7 +20451,10 @@ async function _slackPostMessage(
       const sendPayload = { ...payload, confirm_token: resBody.confirm_token };
       const sendRes = await fetch(`/api/slack/channels/${encodeURIComponent(channelName)}/send`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': window.__CSRF_TOKEN__ || '' },
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': window.__CSRF_TOKEN__ || '',
+        },
         body: JSON.stringify(sendPayload),
       });
       if (!sendRes.ok) {
@@ -20692,7 +20704,10 @@ function _slackShowDMCompose({
           sendBtn.textContent = 'Sending\u2026';
           const sendRes = await fetch('/api/slack/dm/send', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': window.__CSRF_TOKEN__ || '' },
+            headers: {
+              'Content-Type': 'application/json',
+              'X-CSRF-Token': window.__CSRF_TOKEN__ || '',
+            },
             body: JSON.stringify({ ...dmPayload, confirm_token: resBody.confirm_token }),
           });
           if (!sendRes.ok) {

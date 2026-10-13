@@ -100,9 +100,9 @@ Outcomes, durations, token counts and tool-call counts stay available.
 
 ## Retention summary
 
-| Data                  | Size limit                        | Age limit | When it runs                      |
-| --------------------- | --------------------------------- | --------- | --------------------------------- |
-| `gator_backend.log`   | 5 MiB (plus one 5 MiB backup)     | 30 days   | on every write; startup; every 24 h |
-| `tasks.db` telemetry  | 100,000 rows per telemetry table  | 30 days   | startup; every 24 h               |
+| Data                 | Size limit                       | Age limit | When it runs                        |
+| -------------------- | -------------------------------- | --------- | ----------------------------------- |
+| `gator_backend.log`  | 5 MiB (plus one 5 MiB backup)    | 30 days   | on every write; startup; every 24 h |
+| `tasks.db` telemetry | 100,000 rows per telemetry table | 30 days   | startup; every 24 h                 |
 
 These limits follow the AMD logging and data protection requirement to keep diagnostic data only as long as needed.

@@ -9,13 +9,18 @@ const vm = require('vm');
 const source = fs.readFileSync(path.join(__dirname, '..', 'web', 'static', 'app.js'), 'utf8');
 
 function extract(name) {
-  const match = source.match(new RegExp('\\nfunction ' + name + '\\([^)]*\\)\\s*\\{[\\s\\S]*?\\n\\}'));
+  const match = source.match(
+    new RegExp('\\nfunction ' + name + '\\([^)]*\\)\\s*\\{[\\s\\S]*?\\n\\}'),
+  );
   assert(match, name + ' not found in app.js');
   return match[0];
 }
 
-const code = ['escapeHtml', 'applyInline', 'renderMarkdown'].map(extract).join('\n') + '\nrenderMarkdown;';
-const renderMarkdown = vm.runInNewContext(code, { window: { location: { origin: 'http://127.0.0.1:8000' } } });
+const code =
+  ['escapeHtml', 'applyInline', 'renderMarkdown'].map(extract).join('\n') + '\nrenderMarkdown;';
+const renderMarkdown = vm.runInNewContext(code, {
+  window: { location: { origin: 'http://127.0.0.1:8000' } },
+});
 
 function render(payload) {
   return renderMarkdown(payload);
@@ -24,7 +29,8 @@ function render(payload) {
 // Tags and attributes that would run script when the HTML is inserted into the page.
 const LIVE_TAG = /<\s*(script|iframe|object|embed|svg|img|style|link|meta|form)\b/i;
 const LIVE_HANDLER = /<[^>]*\son[a-z]+\s*=/i;
-const SCRIPT_URL = /<[^>]*\b(href|src|action|formaction)\s*=\s*["']?\s*(javascript|data|vbscript):/i;
+const SCRIPT_URL =
+  /<[^>]*\b(href|src|action|formaction)\s*=\s*["']?\s*(javascript|data|vbscript):/i;
 
 const payloads = [
   '<script>alert(1)</script>',
