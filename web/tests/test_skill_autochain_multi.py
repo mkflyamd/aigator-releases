@@ -56,6 +56,41 @@ def test_never_auto_activates_gated_skills():
     assert "jira" in found, "non-gated skills must still activate"
 
 
+def test_detects_tokens_glued_to_a_sentence_and_on_one_line():
+    # Real transcript: the model ended a sentence with the tokens on one line,
+    # twice. The line-anchored regex missed it and the turn ended silently.
+    turn = (
+        "I'll start by reading the pinned message to see what it asks for."
+        "/slack /sharepoint /file_ops"
+        "/slack /sharepoint /file_ops"
+    )
+    found = _detect_requested_skills(turn, already_active=set())
+    assert found == ["slack", "sharepoint", "file_ops"], found
+
+
+def test_detects_tokens_after_a_sentence_on_one_line_with_spaces():
+    found = _detect_requested_skills(
+        "Let me look. /slack /sharepoint", already_active=set()
+    )
+    assert found == ["slack", "sharepoint"], found
+
+
+def test_trailing_run_resolves_aliases_and_keeps_filters():
+    found = _detect_requested_skills(
+        "Need both. /outlook /code_runner /not-a-real-skill", already_active={"slack"}
+    )
+    assert found == ["email"], found
+
+
+def test_skill_names_inside_prose_or_paths_do_not_activate():
+    for turn in (
+        "Open /slack to read it and then summarize the result.",
+        "The file is at /tmp/slack/notes.txt and is ready.",
+        "I saved it to /home/user/file_ops.",
+    ):
+        assert _detect_requested_skills(turn, already_active=set()) == [], turn
+
+
 def test_loop_activates_all_detected_skills_not_just_first():
     # The retry loop must consult the multi-skill detector, not the single-match
     # `.search()` path that activated only the first mention.

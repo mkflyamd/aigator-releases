@@ -5757,6 +5757,19 @@ body.gator-chat-expanded .gator-expand-btn {
   font-size: 0.72rem;
   margin: -4px 0 6px;
 }
+.gcc-flow {
+  color: var(--text-sub, #999);
+  font-size: 0.72rem;
+  margin: 0 0 8px;
+}
+.gcc-sensitive {
+  background: rgba(224, 160, 0, 0.15);
+  border: 1px solid #e0a000;
+  border-radius: 6px;
+  font-size: 0.78rem;
+  margin: 0 0 8px;
+  padding: 6px 8px;
+}
 .gcc-mention-hint {
   color: var(--text-sub, #999);
   font-size: 0.7rem;
@@ -22454,4 +22467,8 @@ body.tab-fullscreen {
 .mp-installed-disabled-label {
   font-size: 0.7rem;
   color: var(--warn, #f0a040);
+}
+
+.gh-row:hover {
+  background: var(--surface2);
 }

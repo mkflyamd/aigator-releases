@@ -908,6 +908,18 @@ app.include_router(code_agent_router, prefix="/api/code_agent")
 # ── Middleware ────────────────────────────────────────────────────────────────
 
 @app.middleware("http")
+async def _origin_guard(request, call_next):
+    from fastapi.responses import JSONResponse
+    from security import origin_allowed
+
+    h = request.headers
+    if not origin_allowed(request.method, h.get("host"), h.get("origin"), h.get("referer")):
+        logger.warning("Blocked cross-origin %s %s (origin=%s)", request.method, request.url.path, h.get("origin"))
+        return JSONResponse({"detail": "Cross-origin request blocked"}, status_code=403)
+    return await call_next(request)
+
+
+@app.middleware("http")
 async def _latency_logger(request, call_next):
     import time as _t
     import perf as _perf

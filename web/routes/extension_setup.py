@@ -10,7 +10,8 @@ mcp_routes.py — NOT here. Only touch this file (and web/extensions/*) if
 the user has explicitly asked for post-MVP wizard work.
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
+from security import verify_csrf
 from pydantic import BaseModel
 
 from extensions.registry import get_adapter
@@ -214,7 +215,7 @@ def commit(req: CommitRequest):
     return {"ok": True, "connection_id": result.connection_id, "name": result.name}
 
 
-@router.delete("/api/extensions/setup/{session_id}")
+@router.delete("/api/extensions/setup/{session_id}", dependencies=[Depends(verify_csrf)])
 def discard(session_id: str):
     ext_tools._SESSIONS.discard(session_id)
     return {"ok": True}

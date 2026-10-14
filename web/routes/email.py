@@ -1,11 +1,12 @@
 """Email route group -- inbox, message detail, reply, forward, send, drafts, delta sync."""
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from urllib.parse import quote as _url_quote
 
 import perf
 import shared
+from security import verify_csrf
 from skills._m365.helpers import GraphClient, html_to_text
 
 router = APIRouter()
@@ -567,7 +568,7 @@ def tp_email_message(message_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/api/email/messages/{message_id}/respond")
+@router.post("/api/email/messages/{message_id}/respond", dependencies=[Depends(verify_csrf)])
 async def tp_email_respond(message_id: str, req: MeetingRespondRequest):
     """Accept, decline, or tentatively accept a meeting invite.
 
@@ -748,7 +749,7 @@ async def tp_email_markread(message_id: str, req: MarkReadRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/api/email/reply")
+@router.post("/api/email/reply", dependencies=[Depends(verify_csrf)])
 def tp_email_reply(req: EmailReplyRequest):
     """Reply to an email -- uses createReply + update body + send to preserve HTML formatting."""
     try:
@@ -822,7 +823,7 @@ def tp_email_reply(req: EmailReplyRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/api/email/forward")
+@router.post("/api/email/forward", dependencies=[Depends(verify_csrf)])
 def tp_email_forward(req: EmailForwardRequest):
     """Forward an email -- uses createForward + update body + recipients + send to preserve formatting."""
     try:
@@ -901,7 +902,7 @@ def tp_email_forward(req: EmailForwardRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/api/email/send")
+@router.post("/api/email/send", dependencies=[Depends(verify_csrf)])
 def tp_email_send(req: EmailSendRequest):
     """Send a new email -- direct Graph API call for frontend-initiated sends."""
     try:

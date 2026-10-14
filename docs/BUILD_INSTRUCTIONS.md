@@ -263,11 +263,41 @@ If the last command fails, unprivileged user namespaces are disabled or restrict
   "network": "ask",
   "filesystem": "ask",
   "require_sandbox": false,
-  "saved_permissions": "allow"
+  "saved_permissions": "allow",
+  "marketplace_allowed_tiers": ["Verified", "Community"],
+  "require_pinned_installs": false,
+  "approved_digests": ["<package digest from the install card>"],
+  "blocked_data_flows": ["email>slack", "web>*"],
+  "block_bundle_stdio_mcp": false
 }
 ```
 
-`code_runner: disabled` blocks code execution, `network: deny` refuses network requests, `filesystem: strict` refuses extra paths, `require_sandbox: true` hides the user opt-out. `saved_permissions: deny` hides "Always allow this" on command approvals and ignores permissions already saved (task approvals still work); the default is `allow`. A present but invalid file fails closed (`network: deny`, `filesystem: strict`, `require_sandbox: true`, `saved_permissions: deny`). The file must be UTF-8 without a BOM (a BOM makes it invalid). On Windows the file's ACL is not checked, so restrict write access to `%ProgramData%\AIGator` to administrators.
+`code_runner: disabled` blocks code execution, `network: deny` refuses network requests, `filesystem: strict` refuses extra paths, `require_sandbox: true` hides the user opt-out. `saved_permissions: deny` hides "Always allow this" on command approvals and ignores permissions already saved (task approvals still work); the default is `allow`. `marketplace_allowed_tiers` (a non-empty list of `Native`, `Verified`, `Community`, `Mine`) limits which marketplace tiers are listed and installable; it is enforced at install time (a URL import counts as `Community`; a local zip or folder that the user picks counts as `Mine`), the user's own `marketplace_allowed_tiers` setting can only narrow it, and omitting the key (or having no policy file) means only `Native`, `Verified` and `Mine` are allowed. A present but invalid file fails closed (`network: deny`, `filesystem: strict`, `require_sandbox: true`, `saved_permissions: deny`, `marketplace_allowed_tiers: ["Native", "Verified"]`, `require_pinned_installs: true`). The file must be UTF-8 without a BOM (a BOM makes it invalid). On Windows the file's ACL is not checked, so restrict write access to `%ProgramData%\AIGator` to administrators.
+
+### Marketplace tiers
+
+Administrators control which tiers users can install with `marketplace_allowed_tiers` in the admin policy file (above). Leave a tier out of the list to disable it. With no policy file, Native and Verified skills, and local zip or folder imports that the user picks (tier Mine), can be installed. Catalog Community skills and URL imports need an administrator to add `Community` to the list. To block local imports, leave `Mine` out of the list. Skills that were installed earlier are not removed.
+
+**Changing the tier list.** Users cannot change this setting. Only someone who can write to the policy folder can change it. That is an administrator on every platform. Treat each change as a change to the device's software policy: record who asked for it and who approved it in your normal change process, and roll the new file out with your device management tool. AI Gator does not edit this file.
+
+| Tier      | What it is                                                                                                 | Limits                                                                                                                      |
+| --------- | ---------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| Native    | Skills built into AI Gator. Always active, not installable.                                                | Reviewed and shipped with the app.                                                                                          |
+| Verified  | Catalog entries from the reviewed catalog. Plugins are pinned to a commit SHA where the catalog gives one. | Tool code runs in the OS sandbox with the permissions the user approved; 60 s run timeout (`code_runner_timeout_verified`). |
+| Community | Unreviewed catalog entries and every URL or local import.                                                  | Same sandbox and approval; 30 s run timeout (`code_runner_timeout_community`).                                              |
+| Mine      | Skills the user wrote themselves.                                                                          | Same sandbox and approval.                                                                                                  |
+
+Every install needs the user's consent against a content digest of the package and its declared permissions. A kill switch can disable an installed skill.
+
+The server sets the tier of an install from the catalog (a URL or pasted skill that is not in the catalog is `Community`). The client cannot choose it. Each skill run uses its own temporary folder under `~/.gator/outputs/<tier>/` (`verified`, `community`, `mine`), so run data is kept apart by tier. Installed skill code and the saved approvals are still shared by all tiers, and the OS sandbox rules are the same for Verified, Community and Mine. Skills installed before this change stay where they are.
+
+`require_pinned_installs: true` in the same file also refuses any install that downloads from a URL unless it is a claude-plugins-official plugin whose catalog entry pins a commit SHA. Pasted `SKILL.md` text and local ZIP or folder imports are not downloads and are unaffected; limit them with the tier list. GitHub archives are not signed, so the pin is the integrity control until catalog publishers provide signed manifests.
+
+`approved_digests` is an admin allow-list of package digests (the digest the install card shows). When the key is present, a marketplace install (catalog, URL, pasted or local) succeeds only if its digest is in the list. An empty list blocks every install. When the key is missing, nothing is blocked. The user sees the blocked digest in the error message and can ask IT to add it. A digest changes with every change to the package, so each skill update needs a new entry. Native skills ship inside the app and are not affected. The list is local to the device; the app does not fetch it from Git or the network. It proves that IT approved this exact content. It does not prove who wrote it, because signed manifests are not available.
+
+`blocked_data_flows` is a list of `source>destination` rules that restrict cross-domain data movement. A source is an app the agent read in the current request: `email`, `calendar`, `contacts`, `people`, `teams`, `onedrive`, `sharepoint`, `onenote`, `jira`, `confluence`, `slack`, `github`, `web` (a web page) or `mcp` (an MCP server). A destination is an app a draft sends to: `email`, `calendar`, `teams`, `slack` or `jira`. `*` matches any source or destination. When the agent has read a blocked source and then makes a draft for a blocked destination, AI Gator removes the draft and tells the model and the user that the policy blocks it. No approval card is shown. An unknown name makes the policy file invalid, so a typo fails closed. The default is an empty list. The check follows the apps read in the current request, not the classification of the data. The approval card always shows `Data from` and `Sending to`, and it shows a warning banner when the draft text has a classification word. `GET /api/sandbox/status` returns the policy in force, so you can audit it. See `docs/safe-usage-guide.md` for the user guide.
+
+`block_bundle_stdio_mcp: true` stops stdio MCP servers that a marketplace bundle declares in its `.mcp.json`. These servers run as normal programs with the user's rights, outside the OS sandbox. With the setting on, a new bundle installs without them (the install card says they are blocked), and bundle servers that are already installed refuse to start with a message that names the policy. Remote (HTTP) MCP servers of a bundle and MCP servers the user adds themselves are not affected. The default is `false`. An invalid policy file fails closed to `true`.
 
 ### run_shell in the sandbox
 
@@ -282,13 +312,13 @@ Behavior to know about:
 - Credentialed commands (`git push`, `gh`, `ssh`) do not work: the sandbox has no access to `~/.gitconfig`, `~/.ssh` or tokens.
 - Network approval is all or nothing per run. A saved network permission covers any host (not only the hosts listed on the card) for those folders and programs, and for `git` or `npm`-like programs it lets scripts stored in the project use the network (the card says so). "Always allow this" is offered only for commands that can be saved.
 
-### Code sandbox smoke test (release gate)
+### Code sandbox verification
 
-Verification status, stated plainly: the Linux launcher was run for real only in WSL Ubuntu (bubblewrap 0.11.1); the macOS Seatbelt profile has never been run on a real Mac (its builder is unit tested only). On Windows, the six real-run tests passed on the development machine on 2026-10-06 (run-folder write, denied read outside it, network denial, tree kill, stale-ACE sweep, extra-path grants), and Windows 10, antivirus/EDR reactions, long paths and loopback exemptions are untested. The Mac and Linux smoke tests below are release gates and have not been run yet.
+CI (`.github/workflows/tests.yml`, job "Real OS sandbox and vault") runs the real launchers on every PR: bubblewrap on ubuntu-24.04, Seatbelt on macos-14 (including the `/System/Volumes/Data` deny rule), and a real Secret Service (gnome-keyring) round trip of the master key on Linux. The job fails if any of those tests is skipped. The hosted macOS runner blocks on Keychain writes, so the macOS Keychain backend is covered by unit tests with a fake vault only. On Windows, the six real-run tests passed on the development machine on 2026-10-06 (run-folder write, denied read outside it, network denial, tree kill, stale-ACE sweep, extra-path grants), and Windows 10, antivirus/EDR reactions, long paths and loopback exemptions are untested.
 
 Windows: `python -m pytest tests/code_sandbox/test_launcher_windows.py -q -s -m real_sandbox` (6 tests; the network test may skip if `1.1.1.1:443` is unreachable) passed on the dev machine on 2026-10-06; re-run it on any Windows machine you ship from. Also on Windows: `python -m pytest tests/shell_runner/test_run_shell_sandbox_real.py -q -s -m real_sandbox`.
 
-The macOS and Linux launchers are covered by unit tests on Windows (and Linux through WSL Ubuntu). Before a release, also run on a real Mac and on a real Linux desktop (installed package, not a dev checkout):
+Step 1 below is what CI runs on Linux and macOS. Steps 2-7 check the installed app and are worth repeating on a real Mac and a real Linux desktop (installed package, not a dev checkout) before a release:
 
 1. `python3 tests/code_sandbox/posix_sandbox_check.py macos` (or `linux`) from a checkout on that machine: `probe` is `null`, `default.read_secret`, `default.read_secret_via_data_volume` (on macOS the same secret through `/System/Volumes/Data`), `default.read_extra` and `default.net_external` start with `DENIED`, `default.token` is `null`, `with_extra.read_extra` is `OK:extra-data`, `tree_kill.timed_out` is `true`, `leftover_sleepers` is `0`.
 2. In the installed app ask: "Use run_python to make a PNG chart in OUTPUT_DIR": the file is returned.
@@ -300,7 +330,7 @@ The macOS and Linux launchers are covered by unit tests on Windows (and Linux th
 
 Record the result (date, OS version, pass/fail per step) in the PR before release.
 
-Known gaps: `run_shell` is sandboxed (see above) but cannot run credentialed commands, and on Windows runs only cmd.exe without `dir`/`git`; `packages=[...]` pip installs of any PyPI name run unsandboxed in the server process with the full environment and need no approval; network approval is all-or-nothing per run (the host is shown but not enforced); on Linux a network-approved run shares the host network namespace, so the code can still reach AI Gator's localhost API, but it cannot get the CSRF token (served only to the AI Gator shell via a per-launch shell key, `M_Localhost_CSRF_token_exposure_via_browse_05`), so it cannot approve its own requests (Windows AppContainer blocks loopback; macOS denies `localhost:*` in the profile, not verified on a real Mac); on Windows the run lock is per process, so two backends running at once (dev and desktop) share the container SID and ledger and one backend's launch-time sweep can revoke the other's grants; the macOS `/System/Volumes/Data` deny rule has not been run on a real Mac; same-user malware and OS sandbox escapes are out of scope.
+Known gaps: `run_shell` is sandboxed (see above) but cannot run credentialed commands, and on Windows runs only cmd.exe without `dir`/`git`; `packages=[...]` pip installs of any PyPI name run unsandboxed in the server process with the full environment and need no approval; network approval is all-or-nothing per run (the host is shown but not enforced); on Linux a network-approved run shares the host network namespace, so the code can still reach AI Gator's localhost API, but it cannot get the CSRF token (served only to the AI Gator shell via a per-launch shell key, `M_Localhost_CSRF_token_exposure_via_browse_05`), so it cannot approve its own requests (Windows AppContainer blocks loopback; macOS denies `localhost:*` in the profile, not verified on a real Mac); on Windows the run lock is per process, so two backends running at once (dev and desktop) share the container SID and ledger and one backend's launch-time sweep can revoke the other's grants; same-user malware and OS sandbox escapes are out of scope.
 
 ## Troubleshooting
 

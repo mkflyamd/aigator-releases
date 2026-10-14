@@ -1,4 +1,5 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
+from security import verify_csrf
 from pydantic import BaseModel
 import shared
 from sandbox import task_grants
@@ -11,7 +12,7 @@ class SeedRequest(BaseModel):
     history: list[dict]
 
 
-@router.delete("/api/conversation/{context_id}")
+@router.delete("/api/conversation/{context_id}", dependencies=[Depends(verify_csrf)])
 async def delete_conversation(context_id: str):
     """Clear server-side history when a tab is closed."""
     await shared.conversation_store.delete(context_id)

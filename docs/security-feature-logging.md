@@ -66,3 +66,43 @@ through the shared execution and MCP transport paths.
 
 Retention cleanup runs at application startup and once every 24 hours. SQLite
 records older than 30 days are deleted from both `turn_log` and `tool_call_log`.
+
+## Access control
+
+The backend log (and its folder), `tasks.db` and `scheduler.db` hold paths, error text and job prompts.
+AI Gator limits them to the current user when it creates them and again after a log rotation.
+
+- On macOS and Linux the mode is `600` for files and `700` for the log folder.
+- On Windows AI Gator removes the inherited ACL entries and grants Full Control to the current user only (`icacls`).
+- If AI Gator cannot apply the restriction, it logs an error. It writes no log lines to the file. It also turns telemetry off for that run.
+
+## Logging levels and privacy mode
+
+The backend log records `INFO` and above. Telemetry holds metadata only (see above).
+
+Every record is passed through one function, `sanitize()` in `web/log_sanitizer.py`, before it is written.
+This function always removes:
+
+- secrets, tokens and bearer values;
+- the user's home folder name;
+- tenant IDs; and
+- internal hostnames (`*.amd.com`, `.corp`, `.local`, `.internal`, UNC server names).
+
+Privacy mode removes more. Turn it on with `privacy_mode` in `config.json` (or `PATCH /api/config`), or with
+`AIGATOR_PRIVACY_MODE=1`. It is on by default in packaged builds. Set `privacy_mode` to `false` to turn it off.
+In privacy mode, logs and telemetry:
+
+- omit tool, skill and MCP server names (telemetry stores `<tool>`);
+- omit all file paths and GUIDs; and
+- replace error detail text with `<redacted>` in telemetry.
+
+Outcomes, durations, token counts and tool-call counts stay available.
+
+## Retention summary
+
+| Data                 | Size limit                       | Age limit | When it runs                        |
+| -------------------- | -------------------------------- | --------- | ----------------------------------- |
+| `gator_backend.log`  | 5 MiB (plus one 5 MiB backup)    | 30 days   | on every write; startup; every 24 h |
+| `tasks.db` telemetry | 100,000 rows per telemetry table | 30 days   | startup; every 24 h                 |
+
+These limits follow the AMD logging and data protection requirement to keep diagnostic data only as long as needed.

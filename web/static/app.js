@@ -1,4 +1,131 @@
-﻿/* ── Client-side perf instrumentation (ephemeral, in-memory) ──────────────────
+﻿/* ── CSRF: attach X-CSRF-Token to every same-origin mutating /api call ───────
+ * Routes that send, create or delete data require the token. Call sites that
+ * already set the header keep their value; the rest are covered here.
+ */
+(function _initCsrfFetch() {
+  const orig = window.fetch.bind(window);
+  window.fetch = function (input, init) {
+    try {
+      const url = typeof input === 'string' ? input : (input && input.url) || '';
+      const method = String(
+        (init && init.method) || (input && input.method) || 'GET',
+      ).toUpperCase();
+      if (
+        method !== 'GET' &&
+        method !== 'HEAD' &&
+        url.startsWith('/api/') &&
+        window.__CSRF_TOKEN__
+      ) {
+        const h = new Headers(
+          (init && init.headers) || (typeof input === 'object' && input.headers) || undefined,
+        );
+        if (!h.has('X-CSRF-Token')) {
+          h.set('X-CSRF-Token', window.__CSRF_TOKEN__);
+          init = { ...(init || {}), headers: h };
+        }
+      }
+    } catch (_) {
+      /* fall through to the plain call */
+    }
+    return orig(input, init);
+  };
+})();
+
+/* ── Click actions: the Content Security Policy forbids on*= attributes ──────
+ * Markup carries data-call (a name from the allow-list below) and data-args (a
+ * JSON array; {"$el":true} stands for the clicked element). Build the pair with
+ * gatorActionAttrs(). Names outside the list do nothing, so injected markup
+ * cannot call arbitrary functions.
+ */
+const GATOR_ACTIONS = new Set([
+  'ThemeManager.set',
+  'GatorTerminal.toggle',
+  'selectSkill',
+  'openExternal',
+  'removeClosest',
+  '_showAlert',
+  'gatorOpenWidgetManager',
+  'gatorCloseWidgetManager',
+  'gatorWidgetSavePrompt',
+  'gatorWidgetSaveConfirm',
+  'gatorWidgetSaveCancel',
+  'gatorWidgetOpenFromDb',
+  'gatorWidgetCaptureToggle',
+  'gatorWidgetPinToggle',
+  'gatorWidgetDeleteConfirm',
+  '_loadTeamsThread',
+  '_loadChannelThread',
+  '_loadEmailDetail',
+  '_loadOneNotePageDetail',
+  '_ghSelectPR',
+  '_ghSelectIssue',
+  '_ghSelectRepo',
+  '_ghLoadRepoIssues',
+  '_ghLoadRepoPRs',
+  '_ghAskAboutRepo',
+  '_caSetLeftView',
+  '_caShowFileDiff',
+  '_caDiscardFile',
+  '_caAddLocalProject',
+  '_caAddGitHubProject',
+  '_caShowSessionDropdown',
+]);
+
+function openExternal(url) {
+  if (/^https:\/\//i.test(url)) window.open(url, '_blank');
+}
+
+function removeClosest(el, selector) {
+  el.closest(selector)?.remove();
+}
+
+function gatorActionAttrs(name, args, opts) {
+  const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+  const stop = opts && opts.stop ? ' data-stop="1"' : '';
+  return ` data-call="${esc(name)}" data-args="${esc(JSON.stringify(args || []))}"${stop}`;
+}
+
+(function _initGatorActions() {
+  function resolve(name) {
+    if (!GATOR_ACTIONS.has(name)) return null;
+    const parts = name.split('.');
+    const owner = parts.length > 1 ? window[parts[0]] : window;
+    const fn = owner && owner[parts[parts.length - 1]];
+    return typeof fn === 'function' ? { fn, owner } : null;
+  }
+  document.addEventListener(
+    'click',
+    (event) => {
+      const el = event.target.closest && event.target.closest('[data-call]');
+      if (!el) return;
+      const action = resolve(el.dataset.call);
+      if (!action) return;
+      let args = [];
+      try {
+        args = JSON.parse(el.dataset.args || '[]');
+      } catch (_) {
+        return;
+      }
+      if (el.dataset.stop) event.stopPropagation();
+      action.fn.apply(
+        action.owner,
+        args.map((a) => (a && a.$el ? el : a)),
+      );
+    },
+    true,
+  );
+  // load does not bubble; the capture listener sees widget iframes finish loading.
+  document.addEventListener(
+    'load',
+    (event) => {
+      const el = event.target;
+      if (el && el.classList && el.classList.contains('gator-widget-frame')) gatorWidgetResize(el);
+    },
+    true,
+  );
+})();
+
+/* ── Client-side perf instrumentation (ephemeral, in-memory) ──────────────────
  * Records user-perceived timings (pane open -> first paint, thread open, poll
  * round-trips) into a bounded ring buffer on window.__gatorPerf. Nothing is
  * persisted and no message content is stored — only names + durations. Inspect
@@ -3977,6 +4104,7 @@ let _tabs = [];
 let _activeTabId = '';
 const _inflightRequests = new Map();
 const _chatTaskIds = new Map(); // tabId -> task_id for the active chat request
+const _locallyFinishedTasks = new Set(); // task ids already cleaned up here; their chat_done is late
 const _tabsWithUpdates = new Set(); // tabIds with completed responses the user hasn't seen
 const _pendingSandboxCards = new Map(); // tabId -> Map(requestId -> card data); drawn again each time the tab is shown
 const _tabsWorking = new Set(); // tabIds with an in-flight request (animated working line)
@@ -10264,6 +10392,22 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
       ? `<div class="gcc-workspace">Slack · ${escapeHtml(data.workspace_name)}</div>`
       : '';
   const canOpenNativeApp = typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell;
+  const destinationLabel =
+    {
+      '@outlook': 'Outlook',
+      '@slack': 'Slack',
+      '@teams': 'Microsoft Teams',
+      '@jira': 'Jira',
+      '@gcal': 'Google Calendar',
+    }[config.paneLabel] || '';
+  const sourcesRead = Array.isArray(data.sources) ? data.sources : [];
+  const flowLine = destinationLabel
+    ? `<div class="gcc-flow">Data from: <strong>${sourcesRead.length ? escapeHtml(sourcesRead.join(', ')) : 'no apps read in this request'}</strong> &rarr; Sending to: <strong>${escapeHtml(destinationLabel)}</strong></div>`
+    : '';
+  const sensitiveMarks = Array.isArray(data.sensitive) ? data.sensitive : [];
+  const sensitiveBanner = sensitiveMarks.length
+    ? `<div class="gcc-sensitive" role="alert">Sensitive content: this draft contains <strong>${escapeHtml(sensitiveMarks.join(', '))}</strong>. Check the destination before you approve.</div>`
+    : '';
 
   const card = document.createElement('div');
   card.className = 'message assistant';
@@ -10286,6 +10430,8 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
           <div class="gcc-title">Draft ready for approval</div>
         </div>
         <div class="gcc-body">
+          ${flowLine}
+          ${sensitiveBanner}
           ${
             config.service === 'email'
               ? `
@@ -10844,6 +10990,45 @@ function applyInline(html) {
   return html;
 }
 
+/* A widget runs in a srcdoc frame that inherits the page CSP, which forbids inline
+ * scripts and on*= attributes. Give the widget's own inline scripts the page nonce
+ * and turn its on*= attributes into listeners set up by one nonced script. Scripts
+ * with a src keep no nonce, so they load only from hosts the CSP allows. */
+function gatorWidgetCspHtml(html) {
+  const nonce = window.__CSP_NONCE__;
+  if (!nonce) return html;
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const wired = [];
+  doc.querySelectorAll('*').forEach((el) => {
+    for (const attr of Array.from(el.attributes)) {
+      if (!/^on[a-z]+$/i.test(attr.name)) continue;
+      const mark = `data-gw${wired.length}`;
+      wired.push({
+        mark,
+        event: attr.name.slice(2).toLowerCase(),
+        code: attr.value,
+        tag: el.tagName,
+      });
+      el.removeAttribute(attr.name);
+      el.setAttribute(mark, '');
+    }
+  });
+  doc.querySelectorAll('script:not([src])').forEach((s) => s.setAttribute('nonce', nonce));
+  if (wired.length) {
+    const lines = wired.map((w) => {
+      const target =
+        w.tag === 'BODY' && w.event === 'load' ? 'window' : `document.querySelector('[${w.mark}]')`;
+      const code = w.code.replace(/<\/script/gi, '<\\/script');
+      return `${target}.addEventListener(${JSON.stringify(w.event)},function(event){var r=(function(event){${code}\n}).call(this,event);if(r===false)event.preventDefault();});`;
+    });
+    const s = doc.createElement('script');
+    s.setAttribute('nonce', nonce);
+    s.textContent = lines.join('\n');
+    doc.body.appendChild(s);
+  }
+  return (doc.doctype ? '<!DOCTYPE html>' : '') + doc.documentElement.outerHTML;
+}
+
 function renderMarkdown(raw) {
   // Normalize model output that emits the fence language tag as a bare word
   // (e.g. "html:widget\n\n<!DOCTYPE html>...```") — strip the orphaned tag so
@@ -10899,8 +11084,8 @@ function renderMarkdown(raw) {
         '::-webkit-scrollbar-thumb{background:#2a4a6b;border-radius:2px}' +
         '::-webkit-scrollbar-thumb:hover{background:#4ade80}' +
         '*{scrollbar-width:thin;scrollbar-color:#2a4a6b transparent}' +
-        `</style><script>window._GATOR="${_gatorOrigin}";<\/script>`;
-      const srcdoc = (normStyle + trimmed).replace(/"/g, '&quot;');
+        `</style><script nonce="${window.__CSP_NONCE__ || ''}">window._GATOR="${_gatorOrigin}";<\/script>`;
+      const srcdoc = (normStyle + gatorWidgetCspHtml(trimmed)).replace(/"/g, '&quot;');
       // Hide the Save button for transient widgets (narration editor, playback)
       // that don't make sense to persist. Detected via data-no-save attribute
       // or known heading text.
@@ -10914,17 +11099,17 @@ function renderMarkdown(raw) {
           `<span class="gator-widget-label" id="${widgetId}-label">Widget</span>` +
           `<div class="gator-widget-save-row" id="${widgetId}-save-row" style="display:none;flex:1;gap:4px;align-items:center">` +
           `<input id="${widgetId}-name-input" class="gator-widget-name-input" type="text" placeholder="Widget name..." value="My Widget" />` +
-          `<button class="gator-widget-btn" onclick="gatorWidgetSaveConfirm('${widgetId}')">✓</button>` +
-          `<button class="gator-widget-btn" onclick="gatorWidgetSaveCancel('${widgetId}')">✕</button>` +
+          `<button class="gator-widget-btn"${gatorActionAttrs('gatorWidgetSaveConfirm', [widgetId])}>✓</button>` +
+          `<button class="gator-widget-btn"${gatorActionAttrs('gatorWidgetSaveCancel', [widgetId])}>✕</button>` +
           `</div>` +
           (_noSave
             ? ''
-            : `<button class="gator-widget-btn" id="${widgetId}-save-btn" onclick="gatorWidgetSavePrompt('${widgetId}')" title="Save widget">&#128190; Save</button>`) +
+            : `<button class="gator-widget-btn" id="${widgetId}-save-btn"${gatorActionAttrs('gatorWidgetSavePrompt', [widgetId])} title="Save widget">&#128190; Save</button>`) +
           `</div>` +
           `<iframe id="${widgetId}" class="gator-widget-frame" sandbox="allow-scripts allow-forms allow-modals allow-pointer-lock allow-same-origin"` +
           ` srcdoc="${srcdoc}"` +
           ` data-src="${encoded}"` +
-          ` onload="gatorWidgetResize(this)" frameborder="0"></iframe>` +
+          ` frameborder="0"></iframe>` +
           `</div>`,
       );
       return `\x00B${idx}\x00`;
@@ -12183,6 +12368,7 @@ form.addEventListener('submit', async (e) => {
     const _stopTaskId = _chatTaskIds.get(_stopTabKey);
     if (_stopTaskId) {
       fetch(`/api/chat/${_stopTaskId}/cancel`, { method: 'POST' }).catch(() => {});
+      _locallyFinishedTasks.add(_stopTaskId);
       _chatTaskIds.delete(_stopTabKey);
       _inflightRequests.delete(_stopTabKey);
     }
@@ -12668,6 +12854,7 @@ form.addEventListener('submit', async (e) => {
             _sawDone = true;
             if (_activeTabId === requestTabId) _isStreaming = false;
             es.close();
+            _locallyFinishedTasks.add(task_id);
             _chatTaskIds.delete(_tabKey);
             _inflightRequests.delete(_tabKey);
             // Fallback only (see chat_done); doSend flushes at its end.
@@ -13090,6 +13277,7 @@ form.addEventListener('submit', async (e) => {
           // EventSource reconnects automatically with Last-Event-ID — only act on permanent close
           if (es.readyState === EventSource.CLOSED) {
             _userScrolledUp = false;
+            _locallyFinishedTasks.add(task_id);
             _chatTaskIds.delete(_tabKey);
             _inflightRequests.delete(_tabKey);
             _setTabWorking(requestTabId, false);
@@ -14266,7 +14454,15 @@ function _initNotificationStream() {
         // The request finished (success, error, or cancel) — clear the in-progress
         // line. This is the reliable signal: it fires from the server's finally even
         // when a stalled/cancelled chat never sent a local [DONE].
-        if (msg.context_id) {
+        // A chat_done for a task this client already finished ([DONE], Stop, or a closed
+        // stream) is late. A newer task may be running on the same tab now, so it must
+        // not clear that task's state, dots or Stop button.
+        const _runningTask = _chatTaskIds.get(msg.context_id);
+        const _lateDone =
+          !!msg.task_id &&
+          (_locallyFinishedTasks.delete(msg.task_id) ||
+            (!!_runningTask && _runningTask !== msg.task_id));
+        if (msg.context_id && !_lateDone) {
           _setTabWorking(msg.context_id, false);
           // Clear the per-tab task tracking so the send button returns to green
           // even if [DONE] was never received (stalled stream, server crash, etc.).
@@ -17657,7 +17853,7 @@ async function gatorWidgetManagerRender(panel) {
       `</svg>` +
       `<span id="gwm-title-text">My Widgets</span>` +
       `</div>` +
-      `<button class="gwm-close-btn" onclick="gatorCloseWidgetManager()" title="Close">` +
+      `<button class="gwm-close-btn"${gatorActionAttrs('gatorCloseWidgetManager')} title="Close">` +
       `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">` +
       `<line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/>` +
       `</svg>` +
@@ -17682,10 +17878,10 @@ async function gatorWidgetManagerRender(panel) {
       row.innerHTML =
         `<span class="gator-widget-manager-name" title="${escapeHtml(w.name)}">${escapeHtml(w.name)}</span>` +
         `<div class="gator-widget-manager-actions">` +
-        `<button onclick="gatorWidgetOpenFromDb('${w.widget_id}')" title="Open as floating window">Open</button>` +
-        `<button onclick="gatorWidgetCaptureToggle('${w.widget_id}', ${_hide})" title="${_hide ? 'Hidden during screen share — click to show' : 'Visible during screen share — click to hide'}">${_hide ? gatorEyeOffSvg() : gatorEyeSvg()}</button>` +
-        `<button onclick="gatorWidgetPinToggle('${w.widget_id}', ${w.pinned})" title="${w.pinned ? 'Unpin from rail' : 'Pin to rail'}">${w.pinned ? '★' : '☆'}</button>` +
-        `<button onclick="gatorWidgetDeleteConfirm('${w.widget_id}', '${escapeHtml(w.name).replace(/'/g, "\\'")}')" title="Delete">🗑</button>` +
+        `<button${gatorActionAttrs('gatorWidgetOpenFromDb', [w.widget_id])} title="Open as floating window">Open</button>` +
+        `<button${gatorActionAttrs('gatorWidgetCaptureToggle', [w.widget_id, !!_hide])} title="${_hide ? 'Hidden during screen share — click to show' : 'Visible during screen share — click to hide'}">${_hide ? gatorEyeOffSvg() : gatorEyeSvg()}</button>` +
+        `<button${gatorActionAttrs('gatorWidgetPinToggle', [w.widget_id, !!w.pinned])} title="${w.pinned ? 'Unpin from rail' : 'Pin to rail'}">${w.pinned ? '★' : '☆'}</button>` +
+        `<button${gatorActionAttrs('gatorWidgetDeleteConfirm', [w.widget_id, w.name])} title="Delete">🗑</button>` +
         `</div>`;
       listEl.appendChild(row);
     });

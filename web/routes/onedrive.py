@@ -9,7 +9,8 @@ def _eid(v: str) -> str:
     """Percent-encode a Graph resource ID for use in a URL path segment."""
     return _url_quote(v or "", safe="")
 
-from fastapi import APIRouter, HTTPException, UploadFile
+from fastapi import APIRouter, HTTPException, UploadFile, Depends
+from security import verify_csrf
 from pydantic import BaseModel
 
 import shared
@@ -249,7 +250,7 @@ def onedrive_get_item(item_id: str, drive_id: str = ""):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.delete("/api/onedrive/items/{item_id}")
+@router.delete("/api/onedrive/items/{item_id}", dependencies=[Depends(verify_csrf)])
 def onedrive_delete_item(item_id: str, drive_id: str = ""):
     """Delete a OneDrive file or folder by item ID. Pass drive_id for SharePoint items."""
     try:
@@ -267,7 +268,7 @@ def onedrive_delete_item(item_id: str, drive_id: str = ""):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.patch("/api/onedrive/items/{item_id}")
+@router.patch("/api/onedrive/items/{item_id}", dependencies=[Depends(verify_csrf)])
 def onedrive_rename_item(item_id: str, body: dict, drive_id: str = ""):
     """Rename a OneDrive file or folder. Pass drive_id for SharePoint items."""
     try:
@@ -290,7 +291,7 @@ def onedrive_rename_item(item_id: str, body: dict, drive_id: str = ""):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/api/onedrive/folders/{parent_id}")
+@router.post("/api/onedrive/folders/{parent_id}", dependencies=[Depends(verify_csrf)])
 def onedrive_create_folder(parent_id: str, body: dict):
     """Create a subfolder inside a OneDrive folder."""
     try:
@@ -315,7 +316,7 @@ def onedrive_create_folder(parent_id: str, body: dict):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/api/onedrive/upload/{folder_id}")
+@router.post("/api/onedrive/upload/{folder_id}", dependencies=[Depends(verify_csrf)])
 async def onedrive_upload_to_folder(folder_id: str, file: UploadFile):
     """Upload a file to a specific OneDrive folder by item ID ('root' for root)."""
     try:
@@ -357,7 +358,7 @@ async def onedrive_upload_to_folder(folder_id: str, file: UploadFile):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/api/upload/onedrive")
+@router.post("/api/upload/onedrive", dependencies=[Depends(verify_csrf)])
 async def upload_to_onedrive(file: UploadFile):
     """Upload a file to the user's OneDrive and return a shareable link."""
     try:
@@ -450,7 +451,7 @@ def onedrive_list_site_drives(site_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/api/onedrive/drives/{drive_id}/folders/{parent_id}")
+@router.post("/api/onedrive/drives/{drive_id}/folders/{parent_id}", dependencies=[Depends(verify_csrf)])
 def onedrive_create_folder_in_drive(drive_id: str, parent_id: str, body: dict):
     """Create a subfolder inside a SharePoint drive."""
     # SharePoint drive IDs use format "b!<base64url>" which contains '!' and '='

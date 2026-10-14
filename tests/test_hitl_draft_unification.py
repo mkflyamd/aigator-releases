@@ -28,7 +28,7 @@ from skills import _drafts
 
 def _csrf():
     from security import get_csrf_token
-    return get_csrf_token()
+    return get_csrf_token("testserver")
 
 
 def _approve(client, draft_id, body=None):
@@ -1233,19 +1233,23 @@ class TestSlackLegacyPaneApproval:
     def test_legacy_channel_send_blocks_workspace_switch(self):
         client = TestClient(app)
         with patch("skills.slack.mcp_client._load_token", return_value={"team_id": "T1"}):
-            drafted = client.post("/api/slack/channels/C1/post", json={"message": "Hello"})
+            drafted = client.post("/api/slack/channels/C1/post", json={"message": "Hello"}, headers={"X-CSRF-Token": _csrf()})
         assert drafted.status_code == 200, drafted.text
         token = drafted.json()["confirm_token"]
         with patch("skills.slack.mcp_client._load_token", return_value={"team_id": "T2"}), \
              patch("routes.slack._slack_web_api") as post:
-            sent = client.post("/api/slack/channels/C1/send", json={"confirm_token": token, "message": "ignored"})
+            sent = client.post(
+                "/api/slack/channels/C1/send",
+                json={"confirm_token": token, "message": "ignored"},
+                headers={"X-CSRF-Token": _csrf()},
+            )
         assert sent.status_code == 409, sent.text
         post.assert_not_called()
 
     def test_legacy_dm_opens_conversation_only_after_confirm(self):
         client = TestClient(app)
         with patch("skills.slack.mcp_client._load_token", return_value={"team_id": "T1"}):
-            drafted = client.post("/api/slack/dm", json={"user_identifier": "U1", "message": "Hello"})
+            drafted = client.post("/api/slack/dm", json={"user_identifier": "U1", "message": "Hello"}, headers={"X-CSRF-Token": _csrf()})
         assert drafted.status_code == 200, drafted.text
         token = drafted.json()["confirm_token"]
 
@@ -1259,5 +1263,7 @@ class TestSlackLegacyPaneApproval:
 
         with patch("skills.slack.mcp_client._load_token", return_value={"team_id": "T1"}), \
              patch("routes.slack._slack_web_api", side_effect=slack_api):
-            sent = client.post("/api/slack/dm/send", json={"confirm_token": token})
+            sent = client.post(
+                "/api/slack/dm/send", json={"confirm_token": token}, headers={"X-CSRF-Token": _csrf()}
+            )
         assert sent.status_code == 200, sent.text

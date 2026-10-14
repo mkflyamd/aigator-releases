@@ -92,6 +92,7 @@ PATCHABLE_CONFIG_KEYS = frozenset({
     "browser_mode",     # fast | balanced | thorough
     "browser_display",  # pane | external
     "browser_timeout",  # seconds (default 300)
+    "privacy_mode",     # true = logs and telemetry omit tool names, file paths and error detail
     "browser_native",   # true → use installed Chrome/Edge via CDP instead of Playwright Chromium
     "browser_prefer",   # chrome | edge | auto (used when browser_native=true)
     "browser_profile",        # gator | personal (used when browser_native=true)

@@ -221,6 +221,9 @@ async def init_scheduler() -> None:
 
     # Start the scheduler (also opens/creates the apscheduler_jobs table)
     _scheduler.start()
+    import file_perms
+
+    file_perms.restrict_database(DB_PATH)  # job prompts are private; logs an error if this fails
 
     # Re-register the callable for every persisted job.
     # APScheduler persists trigger state but NOT the Python callable reference.

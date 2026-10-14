@@ -92,11 +92,11 @@ The install, local install, disable and enable routes get the existing `verify_c
 
 ## Known limits to state in the report
 
-- `tools.py`, hooks and scripts run in the OS sandbox, and `bin/` shims can only be reached from sandboxed runs, so criterion 1 is met for them. Stdio MCP servers shipped in a plugin bundle are not sandboxed (the launcher is one-shot, not persistent): criterion 1 is partially met overall. The user sees each server's exact command before approving, and the kill switch stops them.
-- Network access is all-or-nothing per run: declared hosts are shown and logged, not enforced, so a skill with an approved network declaration can reach any host. Criterion 2 is met for the filesystem and for "no network unless declared and approved", and is partially met for per-host network limits.
+- `tools.py`, hooks and scripts run in the OS sandbox, and `bin/` shims can only be reached from sandboxed runs, so criterion 1 is met for them. Stdio MCP servers shipped in a plugin bundle are not sandboxed (the launcher is one-shot, not persistent). The user sees each server's exact command before approving, and the kill switch stops them.
+- Network access is all-or-nothing per run: declared hosts are shown and logged, not enforced, so a skill with an approved network declaration can reach any host.
 - Declared filesystem paths are read-only grants for hooks and `tools.py`; scripts are governed by the code runner sandbox cards.
 - Existing marketplace `tools.py` files that import app code (`shared` and similar), stream results or return non-JSON will stop working and report why. Each tool call starts a new process, so it is slower than before.
-- Outbound logging records destinations of Python connections made inside a `tools.py` handler; for hooks and scripts it records the launch and the network flag, not the destinations of their subprocesses. It records, not blocks, so criterion 4 is met for `tools.py` and partially met for hooks and scripts.
+- Outbound logging records destinations of Python connections made inside a `tools.py` handler; for hooks and scripts it records the launch and the network flag, not the destinations of their subprocesses. It records, not blocks.
 - Disable on a plugin bundle removes its MCP connections with `remove_plugin_mcp_servers`, which also wipes the credentials saved for them; Enable registers the servers again and the user must re-enter any secrets.
 - `tools.py` sandboxing covers standalone marketplace skills. A plugin bundle's `tools.py` is not loaded by the app today, so it never runs; the bundle's hooks and MCP servers are covered as described above.
 - A skill installed before this change has no recorded approval, so it gets no filesystem or network grant until it is reinstalled through the card.

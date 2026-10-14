@@ -354,3 +354,35 @@ def test_pending_tool_telemetry_drains_with_bounded_shutdown():
         assert task.done()
 
     asyncio.run(_run())
+
+
+def test_error_text_is_sanitized_before_it_is_stored():
+    assert turn_telemetry._truncate("auth failed: password=aigator-fake-api-key") == "auth failed: password=[redacted]"
+
+
+def test_cleanup_old_records_caps_row_count(monkeypatch):
+    monkeypatch.setattr(turn_telemetry, "TELEMETRY_MAX_ROWS", 2)
+    asyncio.run(_setup())
+    try:
+        async def _run():
+            import aiosqlite
+            from datetime import datetime, timezone
+
+            now = datetime.now(timezone.utc).isoformat()
+            async with aiosqlite.connect(turn_telemetry.DB_PATH) as db:
+                for i in range(5):
+                    await db.execute(
+                        "INSERT INTO tool_call_log (created_at, tool_name, is_mcp, outcome, duration_ms) VALUES (?, ?, 0, 'success', 1)",
+                        (now, f"tool{i}"),
+                    )
+                await db.commit()
+            deleted = await turn_telemetry.cleanup_old_records()
+            async with aiosqlite.connect(turn_telemetry.DB_PATH) as db:
+                async with db.execute("SELECT tool_name FROM tool_call_log ORDER BY id") as cur:
+                    return deleted, [r[0] for r in await cur.fetchall()]
+
+        deleted, kept = asyncio.run(_run())
+        assert deleted["tool_call_log"] == 3
+        assert kept == ["tool3", "tool4"]
+    finally:
+        asyncio.run(_cleanup())

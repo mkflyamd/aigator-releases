@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from config import load_config as _load_config
-from marketplace import kill_switch
+from marketplace import kill_switch, skill_audit
 from marketplace import state as skill_state
 from marketplace.permissions import summarize_package
 from marketplace.registry import (
@@ -27,6 +27,7 @@ from marketplace.installer import (
 from marketplace.loader import load_skill_tools, unload_skill_tools
 from marketplace.commands import COMMAND_REGISTRY
 from shared import load_installed_skill_prompts
+from sandbox.policy import load_policy
 from security import verify_csrf
 
 _SKILLS_DIR = Path(__file__).parent.parent / "skills"
@@ -124,6 +125,15 @@ def _install_failure(result: dict) -> HTTPException:
                 "message": "The package changed since you reviewed it. Review it again before installing.",
             },
         )
+    if error == "digest_not_approved":
+        return HTTPException(
+            status_code=403,
+            detail={
+                "error": "digest_not_approved",
+                "message": "Your administrator has not approved this package. Ask IT to approve digest "
+                           f"{result.get('digest', '')} and try again.",
+            },
+        )
     if error == "orphan_resolution_required":
         return HTTPException(
             status_code=400,
@@ -196,6 +206,30 @@ def _find_catalog_entry(skill_id: str) -> dict | None:
     return None
 
 
+def _allowed_tiers(cfg: dict) -> set[str]:
+    """Tiers that may be listed/installed: the admin policy (default Native + Verified), narrowed (never widened) by user config."""
+    allowed = set(load_policy().marketplace_allowed_tiers)
+    user = cfg.get("marketplace_allowed_tiers")
+    return allowed & set(user) if user else allowed
+
+
+def _enforce_tier(skill_id: str, tier: str) -> None:
+    if tier not in _allowed_tiers(_load_config()):
+        logger.warning("marketplace install blocked by tier policy: skill=%s tier=%s", skill_id, tier)
+        raise HTTPException(status_code=403, detail=f"Installing {tier} skills is not allowed by policy")
+
+
+def _enforce_pinned(entry: dict | None, req_install_url: str) -> None:
+    """Admin policy: downloads must be claude-plugins-official plugins whose catalog entry pins a commit SHA."""
+    if not load_policy().require_pinned_installs:
+        return
+    is_plugin = entry is not None and entry.get("source") == "claude-plugins-official"
+    pinned = is_plugin and bool((entry.get("plugin_source") or {}).get("sha"))
+    if (is_plugin and not pinned) or (not is_plugin and req_install_url):
+        logger.warning("marketplace install blocked by pinning policy: %s", (entry or {}).get("id") or req_install_url)
+        raise HTTPException(status_code=403, detail="Policy only allows installs pinned to a specific commit")
+
+
 def _install_claude_plugins_official(
     entry: dict, consent: bool, pinned_ref: str = "", digest: str = ""
 ) -> dict:
@@ -261,6 +295,7 @@ def _install_claude_plugins_official(
     if not result.get("ok"):
         raise _install_failure(result)
     _record_grants(result, result.get("plugin_id") or entry.get("id", ""))
+    skill_audit.log_install(entry.get("id", ""), entry.get("tier") or "Community", "catalog", digest)
     load_installed_skill_prompts()  # refresh SKILL_PROMPTS without restart
     # Enrich command_ids into {name, description, plugin_id} so the "/" menu
     # can register them without a reload.
@@ -276,10 +311,8 @@ async def get_catalog():
     remote = fetch_catalog(cfg)
     # Exclude Native from browse — they're always active and not installable
     skills = [s for s in remote if s.get("tier") != "Native"]
-    allowed = cfg.get("marketplace_allowed_tiers")
-    if allowed:
-        allowed_set = set(allowed)
-        skills = [s for s in skills if s.get("tier") in allowed_set]
+    allowed = _allowed_tiers(cfg)
+    skills = [s for s in skills if s.get("tier") in allowed]
     return {"skills": skills, "count": len(skills)}
 
 
@@ -459,6 +492,12 @@ async def install_skill(req: InstallRequest):
     # looked up server-side from the cached catalog (never from a client
     # field) so installable/coding_class enforcement cannot be bypassed.
     catalog_entry = _find_catalog_entry(req.skill_id)
+    # Tier comes from the server's catalog, never the client; a URL that is not the catalog's own is Community.
+    gate_tier = "Community"
+    if catalog_entry is not None and (not req.install_url or req.install_url == catalog_entry.get("install_url")):
+        gate_tier = catalog_entry.get("tier") or "Community"
+    _enforce_tier(req.skill_id, gate_tier)
+    _enforce_pinned(catalog_entry, req.install_url)
     if (
         catalog_entry is not None
         and catalog_entry.get("source") == "claude-plugins-official"
@@ -526,7 +565,7 @@ async def install_skill(req: InstallRequest):
             req.skill_id,
             req.skill_md,
             req.version,
-            req.tier,
+            gate_tier,
             req.install_url,
             expected_digest=req.digest,
         )
@@ -535,6 +574,7 @@ async def install_skill(req: InstallRequest):
         raise _install_failure(result)
     # Record the approval before tools load: the sandbox grants come from it.
     _record_grants(result, result.get("plugin_id") or result.get("skill_id") or req.skill_id)
+    skill_audit.log_install(req.skill_id, gate_tier, "url" if req.install_url else "catalog", req.digest)
     load_installed_skill_prompts()  # refresh SKILL_PROMPTS without restart
     if result.get("plugin_id"):
         result["commands"] = _commands_payload(result.get("command_ids") or [])
@@ -542,12 +582,11 @@ async def install_skill(req: InstallRequest):
         from config import INSTALLED_SKILLS_DIR
 
         skill_dir = INSTALLED_SKILLS_DIR / req.skill_id
-        effective_tier = "Community" if req.install_url else req.tier
-        _note_tools_error(result, load_skill_tools(req.skill_id, skill_dir, effective_tier))
+        _note_tools_error(result, load_skill_tools(req.skill_id, skill_dir, gate_tier))
     return result
 
 
-@router.delete("/api/marketplace/uninstall/{skill_id}")
+@router.delete("/api/marketplace/uninstall/{skill_id}", dependencies=[Depends(verify_csrf)])
 async def uninstall(skill_id: str):
     result = uninstall_skill(skill_id)
     if not result.get("ok"):
@@ -592,7 +631,7 @@ async def get_skill_md(skill_id: str):
     }
 
 
-@router.put("/api/marketplace/skill-md/{skill_id}")
+@router.put("/api/marketplace/skill-md/{skill_id}", dependencies=[Depends(verify_csrf)])
 async def update_skill_md(skill_id: str, req: UpdateSkillMdRequest):
     path = _resolve_mine_skill_md(skill_id)
     if not req.skill_md.strip():
@@ -602,7 +641,7 @@ async def update_skill_md(skill_id: str, req: UpdateSkillMdRequest):
     return {"ok": True, "skill_id": skill_id}
 
 
-@router.post("/api/marketplace/create")
+@router.post("/api/marketplace/create", dependencies=[Depends(verify_csrf)])
 async def create_skill(req: CreateSkillRequest):
     if not req.name.strip():
         raise HTTPException(status_code=400, detail="name is required")
@@ -675,6 +714,7 @@ async def install_local(req: LocalInstallRequest):
 
     import marketplace.installer as _installer
 
+    _enforce_tier("local-import", "Mine")
     if not req.consent:
         preview = _installer.preview_package(local_zip_bytes=zip_bytes)
         if not preview.get("ok"):
@@ -694,11 +734,12 @@ async def install_local(req: LocalInstallRequest):
         expected_digest=req.digest,
     )
     if not result.get("ok"):
-        if result.get("error") == "content_changed":
+        if result.get("error") in ("content_changed", "digest_not_approved"):
             raise _install_failure(result)
         raise HTTPException(status_code=400, detail=result.get("error", "Install failed"))
 
     _record_grants(result, result["skill_id"])
+    skill_audit.log_install(result["skill_id"], "Community", "local", req.digest)
     load_installed_skill_prompts()
     skill_dir = __import__("config").INSTALLED_SKILLS_DIR / result["skill_id"]
     _note_tools_error(result, load_skill_tools(result["skill_id"], skill_dir, "Community"))

@@ -184,7 +184,7 @@ def client():
 
 
 def _post(client, path, token=True):
-    return client.post(path, headers={"X-CSRF-Token": get_csrf_token()} if token else {})
+    return client.post(path, headers={"X-CSRF-Token": get_csrf_token("testserver")} if token else {})
 
 
 def test_routes_require_the_csrf_token(env, calls, client):

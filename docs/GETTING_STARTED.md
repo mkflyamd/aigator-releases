@@ -131,6 +131,15 @@ Once authenticated, everything is driven by natural language through Claude Code
 | "Search my email for X"                     | Searches by keyword, sender, or date |
 | "Read the email from Alice about the build" | Fetches and displays full content    |
 
+### Safe usage: moving data between apps
+
+AI Gator can read from one app and draft into another (for example, a Jira ticket summarised into a Slack post). Nothing is sent until you approve it.
+
+- Every draft card shows **Data from** (the apps AI Gator read during that request) and **Sending to** (the app the draft goes to). Check both before you approve.
+- Do not approve a draft if the source app holds information the recipient is not allowed to see, such as confidential tickets, private mail, or internal-only pages.
+- Check the recipient, channel, or issue on the card. Edit or reject the draft if anything is wrong.
+- Disconnect any integration you do not need in Settings.
+
 ---
 
 ## 5. File Reference

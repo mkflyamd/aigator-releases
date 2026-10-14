@@ -44,6 +44,7 @@ def fire_event(
     skill_dir: Path,
     skill_id: str = "",
     perms: Permissions | None = None,
+    tier: str = "",
 ) -> dict:
     """Fire all hooks matching event_name in skill_dir/hooks.json.
 
@@ -75,7 +76,7 @@ def fire_event(
             continue
         run_dir = None
         try:
-            run_dir = new_run_dir()
+            run_dir = new_run_dir(tier)
             run = run_in_sandbox(
                 label, "hook", _hook_argv(command), skill_dir, run_dir, perms, _HOOK_TIMEOUT
             )
@@ -153,6 +154,7 @@ def fire_all_skill_hooks(event_name: str) -> dict:
             state.skill_dir_for(entry),
             skill_id=skill_id,
             perms=perms,
+            tier=str(entry.get("tier") or ""),
         )
         if result["blocked"]:
             return result

@@ -394,6 +394,8 @@ def _extract_error_code(result: dict) -> str:
                 return code
         if "google authentication required" in lowered:
             return "google_authentication_required"
+    if result.get("_mcp_forbidden"):
+        return "mcp_forbidden"
     if result.get("_mcp_auth_error"):
         return "mcp_authentication_required"
     return ""
@@ -416,6 +418,13 @@ def classify_tool_failure(result: object, *, tool_name: str = "") -> ToolFailure
         return ToolFailure(
             "authentication", code, False, True,
             f"Google authentication is required.{suffix}",
+        )
+    if code == "mcp_forbidden":
+        return ToolFailure(
+            "permission", code, False, True,
+            "The server refused this tool with 403 Forbidden. The connection is working, "
+            "so reconnecting will not help. Your account or key may not have access to this "
+            "tool; ask the server owner to grant it.",
         )
     if code in _AUTH_CODES or code == "mcp_authentication_required":
         service = "Slack" if tool_name.startswith("slack_") else "This connection"

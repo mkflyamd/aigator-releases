@@ -471,7 +471,7 @@ def jira_issue_transitions(issue_key: str, context_id: str = ""):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/api/jira/issue/{issue_key}/transition")
+@router.post("/api/jira/issue/{issue_key}/transition", dependencies=[Depends(verify_csrf)])
 def jira_issue_transition(issue_key: str, req: JiraTransitionRequest, context_id: str = ""):
     """Execute a status transition on an issue."""
     try:
@@ -488,7 +488,7 @@ def jira_issue_transition(issue_key: str, req: JiraTransitionRequest, context_id
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/api/jira/issue/{issue_key}/comment")
+@router.post("/api/jira/issue/{issue_key}/comment", dependencies=[Depends(verify_csrf)])
 def jira_issue_comment(issue_key: str, req: JiraCommentRequest, context_id: str = ""):
     """Add a comment to an issue."""
     try:
@@ -507,7 +507,7 @@ def jira_issue_comment(issue_key: str, req: JiraCommentRequest, context_id: str 
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/api/jira/issue/{issue_key}/assign")
+@router.post("/api/jira/issue/{issue_key}/assign", dependencies=[Depends(verify_csrf)])
 def jira_issue_assign(issue_key: str, req: JiraAssignRequest, context_id: str = ""):
     """Update issue fields (assignee, priority, summary, description)."""
     try:
