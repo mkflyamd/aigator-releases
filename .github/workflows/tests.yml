@@ -67,7 +67,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     env:
-      AIGATOR_REAL_VAULT: '1'
       SANDBOX_TESTS: >-
         tests/test_secure_store_real_vault.py tests/code_sandbox tests/shell_runner
         tests/marketplace/test_tool_sandbox.py tests/hooks/test_hooks_sandboxed.py
@@ -97,11 +96,13 @@ jobs:
         shell: bash
         run: |
           if [ "$RUNNER_OS" = "Linux" ]; then
+            export AIGATOR_REAL_VAULT=1
             runner='dbus-run-session -- bash -c'
             prefix='echo -n aigator-fake-api-key | gnome-keyring-daemon --unlock --components=secrets >/dev/null;'
           else
             runner='bash -c'
             prefix=''
+            SANDBOX_TESTS="${SANDBOX_TESTS/tests\/test_secure_store_real_vault.py/}"
           fi
           $runner "$prefix uv run pytest $SANDBOX_TESTS -q -rs -o faulthandler_timeout=120" 2>&1 | tee sandbox-tests.log
           test "${PIPESTATUS[0]}" -eq 0
