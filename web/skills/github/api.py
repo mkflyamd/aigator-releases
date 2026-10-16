@@ -61,6 +61,24 @@ def _rest(path: str, method: str = "GET", body: dict | None = None) -> dict:
         return {"error": f"GitHub API call failed: {e}"}
 
 
+_PAGE_SIZE = 100
+_MAX_PAGES = 3
+
+
+def _rest_list(path: str) -> list:
+    """Fetch up to _MAX_PAGES pages of a REST list endpoint; errors yield what was fetched so far."""
+    items: list = []
+    for page in range(1, _MAX_PAGES + 1):
+        sep = "&" if "?" in path else "?"
+        data = _rest(f"{path}{sep}per_page={_PAGE_SIZE}&page={page}")
+        if not isinstance(data, list):
+            break
+        items.extend(data)
+        if len(data) < _PAGE_SIZE:
+            break
+    return items
+
+
 def _rest_tool(tool_name: str, inputs: dict) -> dict:
     """Map MCP-style tool names to GitHub REST API calls."""
     if tool_name == "get_me":
@@ -100,8 +118,7 @@ def _rest_tool(tool_name: str, inputs: dict) -> dict:
         if method == "get":
             return _rest(f"/repos/{owner}/{repo}/pulls/{num}")
         elif method == "get_reviews":
-            data = _rest(f"/repos/{owner}/{repo}/pulls/{num}/reviews")
-            return {"reviews": data if isinstance(data, list) else []}
+            return {"reviews": _rest_list(f"/repos/{owner}/{repo}/pulls/{num}/reviews")}
         elif method == "get_check_runs":
             # Need the head SHA first, then fetch check runs for that commit
             pr = _rest(f"/repos/{owner}/{repo}/pulls/{num}")
@@ -110,14 +127,15 @@ def _rest_tool(tool_name: str, inputs: dict) -> dict:
             sha = pr.get("head", {}).get("sha", "")
             if not sha:
                 return {"check_runs": []}
-            data = _rest(f"/repos/{owner}/{repo}/commits/{sha}/check-runs")
+            data = _rest(f"/repos/{owner}/{repo}/commits/{sha}/check-runs?per_page={_PAGE_SIZE}")
             return {"check_runs": data.get("check_runs", [])}
         elif method == "get_comments":
-            data = _rest(f"/repos/{owner}/{repo}/pulls/{num}/comments")
-            return {"comments": data if isinstance(data, list) else []}
+            # The PR conversation lives on the issue; /pulls/{n}/comments is inline review comments only.
+            return {"comments": _rest_list(f"/repos/{owner}/{repo}/issues/{num}/comments")}
+        elif method == "get_review_comments":
+            return {"comments": _rest_list(f"/repos/{owner}/{repo}/pulls/{num}/comments")}
         elif method == "get_files":
-            data = _rest(f"/repos/{owner}/{repo}/pulls/{num}/files")
-            return {"files": data if isinstance(data, list) else []}
+            return {"files": _rest_list(f"/repos/{owner}/{repo}/pulls/{num}/files")}
 
     elif tool_name == "search_repositories":
         q = urllib.parse.quote(inputs.get("query", ""))
