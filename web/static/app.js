@@ -6604,6 +6604,7 @@ async function _saveLlmProfile() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(30000),
     });
     const d = await res.json();
     if (!res.ok) {
@@ -6616,6 +6617,7 @@ async function _saveLlmProfile() {
     _llmEditingId = savedId;
     const actRes = await fetch('/api/config/llm/profiles/' + savedId + '/activate', {
       method: 'POST',
+      signal: AbortSignal.timeout(30000),
     });
     if (!actRes.ok) {
       const ad = await actRes.json().catch(() => ({}));
@@ -6627,6 +6629,7 @@ async function _saveLlmProfile() {
     _llmShowError('');
     // Hide the form — we're back to the card list
     _hideLlmForm();
+    if (d.warning) _llmShowCardError(d.warning);
     if (saveBtn) {
       saveBtn.textContent = '\u2713 Activated';
       setTimeout(() => {
@@ -6634,7 +6637,11 @@ async function _saveLlmProfile() {
       }, 2000);
     }
   } catch (err) {
-    _llmShowError(err.message);
+    _llmShowError(
+      err.name === 'TimeoutError'
+        ? 'Timed out waiting for the server. Check your network/VPN and try again.'
+        : err.message,
+    );
   } finally {
     if (saveBtn) {
       saveBtn.disabled = false;

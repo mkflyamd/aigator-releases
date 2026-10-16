@@ -1017,6 +1017,12 @@ async def set_active_persona(req: dict = Body(...)):
 
 import uuid as _uuid
 
+_PROFILE_CHECK_DEADLINE = 6  # seconds; covers DNS stalls httpx timeouts don't
+_UNREACHABLE_WARNING = (
+    "Saved, but the endpoint could not be reached yet — check your network/VPN. "
+    "Models will load once it is reachable."
+)
+
 
 def _fetch_profile_models(profile: dict) -> list[str]:
     """Fetch model list from profile's /v1/models endpoint. Returns list of model IDs.
@@ -1203,6 +1209,7 @@ async def list_llm_profiles():
 
 @router.post("/api/config/llm/profiles")
 async def create_or_update_llm_profile(req: dict = Body(...)):
+    import asyncio
     from llm.registry import load_profile
 
     cfg = _load_config()
@@ -1235,7 +1242,19 @@ async def create_or_update_llm_profile(req: dict = Body(...)):
             )
 
     # Validate credentials and fetch live model list
-    models = _fetch_profile_models(profile)
+    # A slow or unreachable endpoint (no VPN, proxy, DNS) must not block a
+    # first-time setup: save the profile and warn. Wrong key / wrong URL still reject.
+    warning = ""
+    try:
+        models = await asyncio.wait_for(
+            asyncio.to_thread(_fetch_profile_models, profile), _PROFILE_CHECK_DEADLINE
+        )
+    except asyncio.TimeoutError:
+        models, warning = [], _UNREACHABLE_WARNING
+    except HTTPException as exc:
+        if exc.status_code not in (502, 504):
+            raise
+        models, warning = [], _UNREACHABLE_WARNING
     profile["models"] = models
 
     # Update in-place if id already exists, otherwise append
@@ -1256,7 +1275,7 @@ async def create_or_update_llm_profile(req: dict = Body(...)):
     else:
         _save_config(cfg)
 
-    return profile
+    return {**profile, "warning": warning} if warning else profile
 
 
 @router.delete("/api/config/llm/profiles/{profile_id}", dependencies=[Depends(verify_csrf)])
@@ -1289,7 +1308,9 @@ async def activate_llm_profile(profile_id: str):
     # Refresh model list + context windows from the live endpoint so the
     # registry has accurate context sizes immediately on activation.
     try:
-        live = await asyncio.to_thread(_fetch_profile_models, profile)
+        live = await asyncio.wait_for(
+            asyncio.to_thread(_fetch_profile_models, profile), _PROFILE_CHECK_DEADLINE
+        )
         if live:
             profile["models"] = live
             _persist_profile_models(profile_id, live, profile.get("model_context_windows"))
