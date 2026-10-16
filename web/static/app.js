@@ -15525,14 +15525,15 @@ function _showBrowserConfirmCard(msgDiv, { confirm_id, action, title, allow_labe
   }
 
   const body = document.createElement('div');
-  body.style.cssText = 'display: flex; align-items: flex-start; gap: 10px; width: 100%;';
+  body.style.cssText =
+    'display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px 10px; width: 100%;';
 
   const icon = document.createElement('span');
   icon.textContent = text.icon;
   icon.style.cssText = 'font-size: 1.1rem; flex-shrink: 0; margin-top: 2px;';
 
   const textWrap = document.createElement('div');
-  textWrap.style.cssText = 'flex: 1; min-width: 0;';
+  textWrap.style.cssText = 'flex: 1 1 0; min-width: 0;';
 
   const titleEl = document.createElement('div');
   titleEl.style.cssText =
@@ -15547,7 +15548,8 @@ function _showBrowserConfirmCard(msgDiv, { confirm_id, action, title, allow_labe
   textWrap.append(titleEl, detail);
 
   const btnWrap = document.createElement('div');
-  btnWrap.style.cssText = 'display: flex; gap: 6px; flex-shrink: 0; align-items: center;';
+  btnWrap.style.cssText =
+    'display: flex; flex-wrap: wrap; gap: 6px; flex: 1 1 100%; justify-content: flex-end; align-items: center;';
 
   const cancelBtn = document.createElement('button');
   cancelBtn.textContent = text.denyLabel;
@@ -15601,14 +15603,15 @@ function _showFailoverConfirmCard(msgDiv, { consent_id, fallback_model }) {
   card.id = 'failover-confirm-card';
 
   const body = document.createElement('div');
-  body.style.cssText = 'display: flex; align-items: flex-start; gap: 10px; width: 100%;';
+  body.style.cssText =
+    'display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px 10px; width: 100%;';
 
   const icon = document.createElement('span');
   icon.textContent = '⚠️';
   icon.style.cssText = 'font-size: 1.1rem; flex-shrink: 0; margin-top: 2px;';
 
   const textWrap = document.createElement('div');
-  textWrap.style.cssText = 'flex: 1; min-width: 0;';
+  textWrap.style.cssText = 'flex: 1 1 0; min-width: 0;';
 
   const title = document.createElement('div');
   title.style.cssText =
@@ -15622,7 +15625,8 @@ function _showFailoverConfirmCard(msgDiv, { consent_id, fallback_model }) {
   textWrap.append(title, detail);
 
   const btnWrap = document.createElement('div');
-  btnWrap.style.cssText = 'display: flex; gap: 6px; flex-shrink: 0; align-items: center;';
+  btnWrap.style.cssText =
+    'display: flex; flex-wrap: wrap; gap: 6px; flex: 1 1 100%; justify-content: flex-end; align-items: center;';
 
   const cancelBtn = document.createElement('button');
   cancelBtn.textContent = 'Cancel';
