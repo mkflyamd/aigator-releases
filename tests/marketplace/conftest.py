@@ -7,7 +7,7 @@ import pytest
 def _all_tiers_allowed(tmp_path):
     """Route tests install Community skills, so give them an admin policy that allows every tier.
 
-    The default (Native + Verified only) is tested in test_governance.py, which removes this file.
+    The default (every tier allowed) and the narrowed lists are tested in test_governance.py, which removes this file.
     """
     from sandbox import policy
 

@@ -41,7 +41,7 @@ CATALOG = [
 ]
 
 
-def test_default_tiers_hide_community(tmp_path):
+def test_default_tiers_show_community(tmp_path):
     _no_admin_policy(tmp_path)
     with (
         patch("routes.marketplace.fetch_catalog", return_value=CATALOG),
@@ -52,7 +52,7 @@ def test_default_tiers_hide_community(tmp_path):
         patch("routes.marketplace._load_native_skills", return_value=[]),
     ):
         r = client.get("/api/marketplace/catalog")
-    assert [s["id"] for s in r.json()["skills"]] == ["powerbi"]
+    assert sorted(s["id"] for s in r.json()["skills"]) == ["gmail", "powerbi"]
 
 
 def test_allowed_tiers_filters_community():
@@ -157,8 +157,13 @@ def test_allowed_tier_passes_the_gate(tmp_path):
     assert r.status_code != 403
 
 
-def test_default_blocks_community_installs(tmp_path):
+def test_default_allows_community_installs(tmp_path):
     _no_admin_policy(tmp_path)
+    assert _install("gmail", {"marketplace_enabled": True}).status_code != 403
+
+
+def test_admin_policy_can_block_community_installs(tmp_path):
+    _admin_policy(tmp_path, {"marketplace_allowed_tiers": ["Native", "Verified", "Mine"]})
     r = _install("gmail", {"marketplace_enabled": True})
     assert r.status_code == 403
     assert "not allowed by policy" in r.json()["detail"]
@@ -200,9 +205,9 @@ def test_admin_policy_can_enable_community(tmp_path):
     assert _install("gmail", {"marketplace_enabled": True}).status_code != 403
 
 
-def test_user_config_cannot_enable_community_without_admin_policy(tmp_path):
+def test_user_config_can_narrow_the_default(tmp_path):
     _no_admin_policy(tmp_path)
-    cfg = {"marketplace_enabled": True, "marketplace_allowed_tiers": ["Verified", "Community"]}
+    cfg = {"marketplace_enabled": True, "marketplace_allowed_tiers": ["Verified"]}
     assert _install("gmail", cfg).status_code == 403
 
 

@@ -112,7 +112,7 @@ def test_policy_paths_per_platform(monkeypatch):
 def test_as_dict():
     assert pol.Policy().as_dict() == {
         "code_runner": "enabled", "network": "ask", "filesystem": "ask", "require_sandbox": False,
-        "saved_permissions": "allow", "marketplace_allowed_tiers": ("Native", "Verified", "Mine"),
+        "saved_permissions": "allow", "marketplace_allowed_tiers": ("Native", "Verified", "Community", "Mine"),
         "require_pinned_installs": False, "approved_digests": None, "blocked_data_flows": (),
         "block_bundle_stdio_mcp": False,
     }
