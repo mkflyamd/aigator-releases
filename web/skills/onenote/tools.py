@@ -42,7 +42,7 @@ TOOL_DEFS = [
     },
     {
         "name": "list_onenote_sections",
-        "description": "List sections in a OneNote notebook. Call after list_onenote_notebooks to get section IDs. For SharePoint team notebooks, pass the notebook's site_id. If a team site's notebooks cannot be listed (for example a 403), call with only site_id (leave notebook_id empty) to list every section on that site, then use list_onenote_pages with a section id.",
+        "description": "List sections in a OneNote notebook. Call after list_onenote_notebooks to get section IDs. For SharePoint team notebooks, pass the notebook's site_id. If a team site's notebooks cannot be listed (for example a 403), call with only site_id (leave notebook_id empty) to list every section on that site, then use list_onenote_pages with a section id. In that call site_id may also be the SharePoint site URL (such as https://tenant.sharepoint.com/sites/Name/...) or the site name; the result returns the real site_id to use afterwards.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -263,6 +263,32 @@ def _onenote_root(site_id: str = "") -> str:
     return f"/sites/{_eid(site_id)}/onenote" if site_id else "/me/onenote"
 
 
+_SITE_ID_RE = re.compile(r"^[^,\s/]+,[0-9a-fA-F-]{36},[0-9a-fA-F-]{36}$")
+
+
+def _resolve_site_id(gc, site_ref: str) -> str:
+    """Turn a SharePoint site URL or name into Graph's 'host,siteGuid,webGuid' id."""
+    import urllib.parse as _up
+
+    ref = (site_ref or "").strip()
+    if not ref or _SITE_ID_RE.match(ref):
+        return ref
+    if ref.lower().startswith(("http://", "https://")):
+        u = _up.urlparse(ref)
+        m = re.match(r"^/((?:sites|teams)/[^/]+)", u.path, flags=re.I)
+        if not m:
+            raise ValueError(f"No SharePoint site found in {ref}")
+        data = gc.get(f"/sites/{u.netloc}:/{m.group(1)}", params={"$select": "id"})
+        return data.get("id", "")
+    found = gc.get("/sites", params={"search": ref, "$select": "id,displayName", "$top": "20"})
+    sites = found.get("value") or []
+    exact = [x for x in sites if (x.get("displayName") or "").lower() == ref.lower()]
+    pick = exact or (sites if len(sites) == 1 else [])
+    if not pick:
+        raise ValueError(f"Could not find a SharePoint site named '{ref}'")
+    return pick[0].get("id", "")
+
+
 def _tool_list_onenote_notebooks(include_sites: bool = False) -> dict:
     """List OneNote notebooks. Returns PERSONAL notebooks by default (fast).
     Set include_sites=True to ALSO sweep all SharePoint site notebooks — but that
@@ -448,6 +474,11 @@ def _tool_list_onenote_sections(notebook_id: str = "", site_id: str = "") -> dic
     if not notebook_id and not site_id:
         return {"error": "Pass a notebook_id, or a site_id to list all sections on that site."}
     gc = get_skill_client(ONENOTE_SKILLS_DIR)
+    if site_id:
+        try:
+            site_id = _resolve_site_id(gc, site_id)
+        except Exception as e:
+            return {"error": str(e)}
     base = _onenote_root(site_id)
     items = _paginate_onenote(
         gc,

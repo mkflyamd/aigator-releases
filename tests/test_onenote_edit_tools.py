@@ -312,13 +312,49 @@ def test_list_sections_by_site_only():
 
     gc = SectionsGC()
     with patch("skills._m365.helpers.get_skill_client", return_value=gc):
-        out = tools._tool_list_onenote_sections(site_id="host,a,b")
-    assert gc.paths == ["/sites/host%2Ca%2Cb/onenote/sections"]
+        out = tools._tool_list_onenote_sections(site_id="host,11111111-1111-1111-1111-111111111111,22222222-2222-2222-2222-222222222222")
+    assert gc.paths == ["/sites/host%2C11111111-1111-1111-1111-111111111111%2C22222222-2222-2222-2222-222222222222/onenote/sections"]
     assert out["sections"][0]["name"] == "Start Here"
-    assert out["sections"][0]["site_id"] == "host,a,b"
+    assert out["sections"][0]["site_id"] == "host,11111111-1111-1111-1111-111111111111,22222222-2222-2222-2222-222222222222"
 
 
 def test_list_sections_needs_notebook_or_site():
     from skills.onenote import tools
 
     assert "error" in tools._tool_list_onenote_sections()
+
+
+def test_list_sections_resolves_site_url():
+    from skills.onenote import tools
+
+    class UrlGC:
+        def __init__(self):
+            self.paths = []
+
+        def get(self, path, params=None):
+            self.paths.append(path)
+            if path.endswith("onenote/sections"):
+                return {"value": [{"id": "s1", "displayName": "Start Here"}]}
+            return {"id": "host.example,11111111-1111-1111-1111-111111111111,22222222-2222-2222-2222-222222222222"}
+
+    gc = UrlGC()
+    url = "https://host.example/sites/SiloEngineering/_layouts/15/Doc.aspx?sourcedoc=x"
+    with patch("skills._m365.helpers.get_skill_client", return_value=gc):
+        out = tools._tool_list_onenote_sections(site_id=url)
+    assert gc.paths[0] == "/sites/host.example:/sites/SiloEngineering"
+    assert out["sections"][0]["site_id"].startswith("host.example,1111")
+
+
+def test_list_sections_resolves_site_name_and_reports_unknown():
+    from skills.onenote import tools
+
+    class NameGC:
+        def get(self, path, params=None):
+            if path == "/sites":
+                return {"value": [{"id": "h,1,2", "displayName": "Other"}, {"id": "h2,3,4", "displayName": "SiloEngineering"}]}
+            return {"value": []}
+
+    with patch("skills._m365.helpers.get_skill_client", return_value=NameGC()):
+        assert "sections" in tools._tool_list_onenote_sections(site_id="siloengineering")
+        out = tools._tool_list_onenote_sections(site_id="Nope")
+    assert "error" in out
