@@ -219,6 +219,7 @@ class OpenAIProvider(LLMProvider):
             tool_calls_acc: dict[int, dict] = {}
             usage = {"input_tokens": 0, "output_tokens": 0}
             stop_reason = "end_turn"
+            raw_finish_reason = None
 
             def _create_stream(call_kwargs):
                 try:
@@ -315,6 +316,7 @@ class OpenAIProvider(LLMProvider):
                                         })
 
                         if choice.finish_reason:
+                            raw_finish_reason = choice.finish_reason
                             stop_reason = "tool_use" if choice.finish_reason == "tool_calls" else "end_turn"
 
                         if chunk.usage:
@@ -326,6 +328,11 @@ class OpenAIProvider(LLMProvider):
                     try:
                         inputs = json.loads(acc["json"]) if acc["json"] else {}
                     except json.JSONDecodeError:
+                        print(
+                            f"[provider] unparseable tool arguments for {acc['name']!r}"
+                            f" ({len(acc['json'])} chars) - using {{}}",
+                            flush=True,
+                        )
                         inputs = {}
                     _call_id = acc["id"] or str(_orig_idx)
                     _emit({
@@ -339,6 +346,15 @@ class OpenAIProvider(LLMProvider):
 
                 if tool_calls and stop_reason != "tool_use":
                     stop_reason = "tool_use"
+
+                print(
+                    f"[provider] done finish_reason={raw_finish_reason!r} stop_reason={stop_reason!r}"
+                    f" text_chars={sum(len(t) for t in text_parts)}"
+                    f" reasoning_chars={sum(len(t) for t in reasoning_parts)}"
+                    f" tool_calls={[tc.name for tc in tool_calls]}"
+                    f" out_tokens={usage.get('output_tokens', 0)}",
+                    flush=True,
+                )
 
                 if tool_calls:
                     raw_content = {"role": "assistant", "content": None, "tool_calls": [
