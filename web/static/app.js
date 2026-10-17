@@ -10825,15 +10825,27 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
             : editArea
               ? { edited_message: editArea.value || editArea.textContent || '' }
               : null;
-          const res = await fetch('/api/drafts/' + draftId + '/open-in-outlook', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'X-CSRF-Token': window.__CSRF_TOKEN__ || '',
-            },
-            body: outlookEdit ? JSON.stringify(outlookEdit) : undefined,
-          });
-          if (!res.ok) throw new Error('HTTP ' + res.status);
+          const postOpen = () =>
+            fetch('/api/drafts/' + draftId + '/open-in-outlook', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': window.__CSRF_TOKEN__ || '',
+              },
+              body: outlookEdit ? JSON.stringify(outlookEdit) : undefined,
+            });
+          let res = await postOpen();
+          if (res.status === 403) {
+            const _csrf = await fetch('/api/csrf')
+              .then((r) => (r.ok ? r.json() : null))
+              .catch(() => null);
+            if (_csrf?.csrf_token) window.__CSRF_TOKEN__ = _csrf.csrf_token;
+            res = await postOpen();
+          }
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(typeof err.detail === 'string' ? err.detail : 'HTTP ' + res.status);
+          }
           const { url } = await res.json();
           // Enter the native-pane state first so tpState, the divider, and the
           // visible Expand Gator button stay in sync. This may navigate Outlook
@@ -10864,8 +10876,11 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
           await window.gatorShell.navigateSlackPin(data.channel_id);
           editLink.textContent = 'Viewing Slack \u2197';
         }
-      } catch (_err) {
+      } catch (err) {
         editLink.textContent = config.openLabel || 'Open in ' + config.paneLabel;
+        if (config.service === 'email' && err && err.message) {
+          _showConnectivityToast("Couldn't open in Outlook: " + err.message, 'warn');
+        }
       } finally {
         editLink.style.pointerEvents = '';
       }
