@@ -7,6 +7,8 @@ import urllib.error as _ue
 from pathlib import Path
 from urllib.parse import quote as _url_quote
 
+from . import page_edit as _pe
+
 
 def _eid(v: str) -> str:
     """Percent-encode a Graph resource ID for use in a URL path segment."""
@@ -107,7 +109,7 @@ TOOL_DEFS = [
     },
     {
         "name": "read_onenote_page",
-        "description": "Read the content of a OneNote page. Returns the page title and body as plain text. Use to read, summarize, or answer questions about a page's content. For pages in SharePoint team notebooks, pass the site_id.",
+        "description": "Read the content of a OneNote page. Returns the page title and body as plain text. Use to read, summarize, or answer questions about a page's content. For pages in SharePoint team notebooks, pass the site_id. Before editing existing content, call with include_ids=true to get an outline of editable elements (id, tag, text; tables also rows and cols); call with element_id to get one element's full HTML (use it to rebuild a table before replacing it).",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -119,6 +121,26 @@ TOOL_DEFS = [
                     "type": "string",
                     "description": "SharePoint site id (same site_id the page came from). Omit or '' for personal notebooks.",
                     "default": "",
+                },
+                "include_ids": {
+                    "type": "boolean",
+                    "description": "If true, return an outline of the page's editable elements with their ids instead of the plain text.",
+                    "default": False,
+                },
+                "element_id": {
+                    "type": "string",
+                    "description": "An element id from the outline. Returns that element's full HTML.",
+                    "default": "",
+                },
+                "offset": {
+                    "type": "integer",
+                    "description": "Outline paging: index of the first element to return. Default 0.",
+                    "default": 0,
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Outline paging: max elements to return. Default 100, at most 200.",
+                    "default": 100,
                 },
             },
             "required": ["page_id"],
@@ -479,19 +501,62 @@ def _tool_create_onenote_page(
     }
 
 
-def _tool_read_onenote_page(page_id: str, site_id: str = "") -> dict:
+def _fetch_page_html(gc, root: str, page_id: str, include_ids: bool = False) -> str:
+    url = f"https://graph.microsoft.com/v1.0{root}/pages/{_eid(page_id)}/content"
+    if include_ids:
+        url += "?includeIDs=true"
+    resp = gc._request(
+        "GET",
+        url,
+        headers={**gc._headers(), "Accept": "text/html"},
+        label=f"onenote/pages/{page_id}/content",
+    )
+    return resp.text
+
+
+def _tool_read_onenote_page(
+    page_id: str,
+    site_id: str = "",
+    include_ids: bool = False,
+    element_id: str = "",
+    offset: int = 0,
+    limit: int = _pe.DEFAULT_LIMIT,
+) -> dict:
     """Read a OneNote page's content as plain text. Pass site_id for pages in
-    SharePoint team/shared notebooks (from list_onenote_pages)."""
+    SharePoint team/shared notebooks (from list_onenote_pages). include_ids
+    returns an outline of editable elements; element_id returns one element's HTML."""
     from .._m365.helpers import get_skill_client
 
     gc = get_skill_client(ONENOTE_SKILLS_DIR)
     token = gc.get_token()
     root = _onenote_root(site_id)
 
+    if element_id:
+        element = _pe.element_html(
+            _fetch_page_html(gc, root, page_id, include_ids=True), element_id
+        )
+        if element is None:
+            return {
+                "error": "target_not_found",
+                "hint": "Read the page again; element ids change after an update.",
+            }
+        if len(element) > _pe.MAX_ELEMENT_HTML:
+            return {"error": "element_too_large", "length": len(element)}
+        return {"id": element_id, "html": element}
+
     # Get metadata
     meta = gc.get(
         f"{root}/pages/{_eid(page_id)}", params={"$select": "id,title,lastModifiedDateTime"}
     )
+
+    if include_ids:
+        page_html = _fetch_page_html(gc, root, page_id, include_ids=True)
+        return {
+            "title": meta.get("title", "(untitled)"),
+            "id": page_id,
+            "modified": meta.get("lastModifiedDateTime", "")[:16],
+            **_pe.outline(page_html, offset, limit),
+        }
 
     # Get HTML content
     url = f"https://graph.microsoft.com/v1.0{root}/pages/{_eid(page_id)}/content"
