@@ -21,8 +21,11 @@ Formatting must survive three hops:
 ### Canonical model: sanitized HTML subset
 
 Every draft has one canonical rich body: HTML limited to
-`p br b strong i em u s a ul ol li code pre blockquote` plus mention spans
-(`<span data-mention-id data-mention-name>`). Anything else is stripped.
+`p br b strong i em u s a ul ol li code pre blockquote h1 h2 h3 table thead tbody tr th td`
+plus mention spans (`<span data-mention-id data-mention-name data-mention-service>`).
+Only `color`, `background-color`, `font-weight`, `font-style`, `text-decoration`, and `text-align`
+survive in `style`. Anything else is stripped. Headings and tables exist so LLM-authored
+`body_html` is not flattened; the card toolbar does not create them.
 
 ### New module `web/skills/_rich_text.py`
 
@@ -30,7 +33,7 @@ Pure functions, no I/O, one place for all conversion rules:
 
 - `sanitize(html) -> html` — allow-list tags and attributes; `href` limited to `http`, `https`, `mailto`; drop scripts, styles, event attributes.
 - `normalize(body=None, body_html=None) -> html` — `body_html` if present; otherwise plain text or markdown converted to the subset (paragraphs, `**bold**`, `*italic*`, `` `code` ``, lists, links).
-- `to_text(html) -> str` — plain fallback and `message_snippet`.
+- `slack_to_html(message, names) -> html` and `teams_to_html(message, mentions) -> html` — lift a tool's native Slack mrkdwn or Teams Skype-mention message into the canonical model so tools can seed `body_html`.
 - Adapter registry: `ADAPTERS[service] = Adapter(capabilities, render)`.
   - `email` — HTML passthrough, wrapped in `<html><body>`.
   - `teams` — HTML subset with Skype mention spans and nested lists.
@@ -39,7 +42,7 @@ Pure functions, no I/O, one place for all conversion rules:
 
 ### Draft creation
 
-`create_draft` normalizes at creation and stores `body_html` (canonical) in the draft params next to the existing fields. Email, Teams, and Slack tools pass their `body` / `body_html` / `message` through `normalize`. Existing tool schemas stay valid.
+Each Email, Teams, and Slack draft tool normalizes its `body` / `body_html` / `message` at creation and stores `body_html` (canonical) in the draft params next to the existing fields. The card payload also carries `body_html` and `format_capabilities`. Existing tool schemas stay valid.
 
 ### Card (`web/static/app.js`)
 
