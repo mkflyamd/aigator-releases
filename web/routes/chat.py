@@ -1008,7 +1008,10 @@ async def chat(req: ChatRequest):
     import asyncio as _asyncio
     from fastapi.responses import JSONResponse
     from llm import get_provider, get_active_model
-    from routes.config_routes import _get_active_persona_prompt
+    from routes.config_routes import (
+        _get_active_persona_prompt,
+        _get_user_profile_prompt,
+    )
     # Import execute_tool and _tool_toast from the app module (they stay in app.py
     # because they are also used by the lifespan background worker).
     from app import execute_tool as _execute_tool_raw, _tool_toast
@@ -1114,6 +1117,9 @@ async def chat(req: ChatRequest):
     _persona_prompt = _get_active_persona_prompt()
     if _persona_prompt:
         system = _persona_prompt + "\n\n" + system
+    _user_prompt = _get_user_profile_prompt()
+    if _user_prompt:
+        system = _user_prompt + "\n\n" + system
 
     # Inject per-skill prompt instructions — ONLY for explicitly active skills,
     # NOT all always-on skills (those add 10K+ tokens of irrelevant context).

@@ -365,7 +365,7 @@
                 id="persona-name-input"
                 type="text"
                 class="key-field"
-                placeholder="Persona name (e.g. Product Manager)"
+                placeholder="Persona name (e.g. Technical Program Manager)"
                 style="margin-bottom: 6px; padding: 0.45rem 0.6rem; font-size: 0.82rem"
               />
               <textarea
@@ -385,6 +385,41 @@
                   Cancel
                 </button>
                 <span id="persona-msg" class="field-msg"></span>
+              </div>
+            </div>
+
+            <!-- About you -->
+            <div class="srow">
+              <div class="section-status st-dim"></div>
+              <div class="srow-info">
+                <div class="srow-label">About you</div>
+                <div class="srow-sub" id="user-profile-sub">
+                  Used when you say "me" or "email myself"
+                </div>
+              </div>
+            </div>
+            <div style="margin-left: 22px">
+              <input
+                id="user-profile-name"
+                type="text"
+                class="key-field"
+                placeholder="Your name"
+                autocomplete="off"
+                style="margin-bottom: 6px; padding: 0.45rem 0.6rem; font-size: 0.82rem"
+              />
+              <input
+                id="user-profile-email"
+                type="email"
+                class="key-field"
+                placeholder="name@example.com"
+                autocomplete="off"
+                style="margin-bottom: 6px; padding: 0.45rem 0.6rem; font-size: 0.82rem"
+              />
+              <div style="display: flex; gap: 6px; align-items: center">
+                <button id="user-profile-save-btn" class="btn-primary" style="font-size: 0.78rem">
+                  Save
+                </button>
+                <span id="user-profile-msg" class="field-msg"></span>
               </div>
             </div>
 

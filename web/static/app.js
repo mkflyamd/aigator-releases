@@ -7132,6 +7132,50 @@ personaDeleteBtn.addEventListener('click', () => {
 // Load on startup
 loadPersonas();
 
+/* ── About you (who "me" and "myself" mean) ────────────── */
+const userProfileName = document.getElementById('user-profile-name');
+const userProfileEmail = document.getElementById('user-profile-email');
+const userProfileSaveBtn = document.getElementById('user-profile-save-btn');
+const userProfileMsg = document.getElementById('user-profile-msg');
+
+async function loadUserProfile() {
+  try {
+    const d = await (await fetch('/api/config/user-profile')).json();
+    userProfileName.value = d.name || '';
+    userProfileEmail.value = d.email || '';
+  } catch {}
+}
+
+userProfileSaveBtn.addEventListener('click', async () => {
+  userProfileSaveBtn.disabled = true;
+  userProfileMsg.textContent = 'Saving...';
+  userProfileMsg.style.color = 'var(--text-dim)';
+  try {
+    const res = await fetch('/api/config/user-profile', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: userProfileName.value,
+        email: userProfileEmail.value,
+      }),
+    });
+    const d = await res.json();
+    if (!res.ok) {
+      userProfileMsg.textContent = d.detail || 'Failed';
+      userProfileMsg.style.color = 'var(--danger)';
+    } else {
+      userProfileMsg.textContent = 'Saved';
+      userProfileMsg.style.color = 'var(--success, var(--text-dim))';
+    }
+  } catch (err) {
+    userProfileMsg.textContent = err.message;
+    userProfileMsg.style.color = 'var(--danger)';
+  }
+  userProfileSaveBtn.disabled = false;
+});
+
+loadUserProfile();
+
 // Setup gate — opens Settings drawer on the AI Model tab
 gateSaveBtn.addEventListener('click', () => {
   if (typeof window.openSettingsPanel === 'function') {

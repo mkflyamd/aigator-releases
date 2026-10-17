@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -904,15 +905,29 @@ async def username_status():
 
 # ── Personas ──────────────────────────────────────────────────────────────────
 
+_OLD_PROGRAM_MANAGER = {
+    "name": "Program Manager",
+    "prompt": (
+        "You are helping a **Program Manager** who coordinates cross-team deliverables, "
+        "tracks milestones, writes weekly status updates, and communicates with stakeholders.\n\n"
+        "Prioritize:\n"
+        "- Actionable summaries over raw data\n"
+        "- Status/risk/blocker framing\n"
+        "- Stakeholder-ready formatting (bullets, tables, clear headers)\n"
+        "- Timeline awareness — flag what's late, what's coming up"
+    ),
+}
+
 _DEFAULT_PERSONAS = {
-    "program-manager": {
-        "name": "Program Manager",
+    "technical-program-manager": {
+        "name": "Technical Program Manager",
         "prompt": (
-            "You are helping a **Program Manager** who coordinates cross-team deliverables, "
-            "tracks milestones, writes weekly status updates, and communicates with stakeholders.\n\n"
+            "You are helping a **Technical Program Manager** who coordinates cross-team "
+            "engineering deliverables, tracks milestones and dependencies, writes weekly "
+            "status updates, and communicates with stakeholders and engineering leads.\n\n"
             "Prioritize:\n"
             "- Actionable summaries over raw data\n"
-            "- Status/risk/blocker framing\n"
+            "- Status/risk/blocker framing, with technical dependencies called out\n"
             "- Stakeholder-ready formatting (bullets, tables, clear headers)\n"
             "- Timeline awareness — flag what's late, what's coming up"
         ),
@@ -944,6 +959,19 @@ _DEFAULT_PERSONAS = {
 }
 
 
+def _is_old_program_manager(persona) -> bool:
+    # Compare ASCII only: saved copies can carry a garbled em dash.
+    def ascii_only(text: str) -> str:
+        return re.sub(r"[^\x00-\x7f]", "", text)
+
+    return (
+        isinstance(persona, dict)
+        and persona.get("name") == _OLD_PROGRAM_MANAGER["name"]
+        and ascii_only(persona.get("prompt", ""))
+        == ascii_only(_OLD_PROGRAM_MANAGER["prompt"])
+    )
+
+
 def _get_personas() -> dict:
     cfg = _load_config()
     personas = cfg.get("personas")
@@ -951,6 +979,15 @@ def _get_personas() -> dict:
         cfg["personas"] = dict(_DEFAULT_PERSONAS)
         _save_config(cfg)
         return cfg["personas"]
+    if _is_old_program_manager(personas.get("program-manager")):
+        del personas["program-manager"]
+        personas.setdefault(
+            "technical-program-manager",
+            _DEFAULT_PERSONAS["technical-program-manager"],
+        )
+        if cfg.get("active_persona") == "program-manager":
+            cfg["active_persona"] = "technical-program-manager"
+        _save_config(cfg)
     return personas
 
 
@@ -1011,6 +1048,73 @@ async def set_active_persona(req: dict = Body(...)):
     cfg["active_persona"] = pid
     _save_config(cfg)
     return {"ok": True, "active": pid}
+
+
+# ── User details (who "me" and "myself" mean) ────────────────────────────────
+
+
+class UserProfileRequest(BaseModel):
+    name: str = ""
+    email: str = ""
+
+
+def _signed_in_identity() -> dict:
+    import base64
+    import secure_store
+
+    try:
+        token = (secure_store.get_json("graph/token") or {}).get("access_token", "")
+        payload = token.split(".")[1]
+        payload += "=" * (4 - len(payload) % 4)
+        claims = json.loads(base64.urlsafe_b64decode(payload))
+    except Exception:
+        return {"name": "", "email": ""}
+    email = claims.get("upn") or claims.get("preferred_username") or claims.get("email") or ""
+    return {"name": claims.get("name", ""), "email": email if "@" in email else ""}
+
+
+def _get_user_profile() -> dict:
+    """Saved details win; the signed-in Microsoft account fills any gap."""
+    saved = _load_config().get("user_profile") or {}
+    signed_in = _signed_in_identity()
+    return {
+        "name": saved.get("name") or signed_in["name"],
+        "email": saved.get("email") or signed_in["email"],
+    }
+
+
+def _get_user_profile_prompt() -> str:
+    profile = _get_user_profile()
+    if not profile["name"] and not profile["email"]:
+        return ""
+    who = " ".join(
+        part
+        for part in (profile["name"], f"<{profile['email']}>" if profile["email"] else "")
+        if part
+    )
+    return (
+        f"The user you are helping is {who}. "
+        'When they say "me", "myself" or "my" (for example "email myself"), '
+        "they mean this person; do not ask for these details again."
+    )
+
+
+@router.get("/api/config/user-profile")
+async def get_user_profile():
+    saved = _load_config().get("user_profile") or {}
+    return {"name": saved.get("name", ""), "email": saved.get("email", "")}
+
+
+@router.post("/api/config/user-profile", dependencies=[Depends(verify_csrf)])
+async def save_user_profile(req: UserProfileRequest):
+    name = " ".join(req.name.split())[:100]
+    email = req.email.strip()[:254]
+    if email and ("@" not in email or any(c.isspace() for c in email)):
+        raise HTTPException(status_code=400, detail="Enter a valid email address")
+    cfg = _load_config()
+    cfg["user_profile"] = {"name": name, "email": email}
+    _save_config(cfg)
+    return {"ok": True, "name": name, "email": email}
 
 
 # ── LLM Profiles ─────────────────────────────────────────────────────────────
