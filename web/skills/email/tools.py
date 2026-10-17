@@ -323,13 +323,15 @@ def _fetch_original_email_context(message_id: str) -> dict:
 
 def _tool_reply_email(message_id: str, body: str, reply_all: bool = False) -> dict:
     from .._drafts import create_draft
+    from skills import _rich_text as rich
 
     action = "replyAll" if reply_all else "reply"
     orig = _fetch_original_email_context(message_id)
     subject = f"Re: {orig['subject']}" if orig["subject"] else ""
+    body_html = rich.normalize(body)
     draft_id = create_draft(
         draft_type="email-reply",
-        params={"message_id": message_id, "body": body, "reply_all": reply_all},
+        params={"message_id": message_id, "body": body, "body_html": body_html, "reply_all": reply_all},
         preview={
             "action": action,
             "subject": subject,
@@ -347,6 +349,7 @@ def _tool_reply_email(message_id: str, body: str, reply_all: bool = False) -> di
             "to_names": orig["from_name"],
             "body": body,
             "body_snippet": body[:200],
+            **rich.rich_payload("email", body_html),
         },
         "_user_message": f"Draft {action} ready for your approval. Click 'I approve to send' or edit in /outlook.",
     }
@@ -354,13 +357,15 @@ def _tool_reply_email(message_id: str, body: str, reply_all: bool = False) -> di
 
 def _tool_forward_email(message_id: str, to: str, comment: str = "") -> dict:
     from .._drafts import create_draft
+    from skills import _rich_text as rich
 
     to_addrs = [a.strip() for a in to.split(",") if a.strip()]
     orig = _fetch_original_email_context(message_id)
     subject = f"Fw: {orig['subject']}" if orig["subject"] else ""
+    body_html = rich.normalize(comment)
     draft_id = create_draft(
         draft_type="email-forward",
-        params={"message_id": message_id, "to": to, "comment": comment},
+        params={"message_id": message_id, "to": to, "comment": comment, "body_html": body_html},
         preview={
             "to": to_addrs,
             "subject": subject,
@@ -376,6 +381,7 @@ def _tool_forward_email(message_id: str, to: str, comment: str = "") -> dict:
             "message_id": message_id,
             "body": comment,
             "body_snippet": (comment or "")[:200],
+            **rich.rich_payload("email", body_html),
         },
         "_user_message": f"Draft forward to {', '.join(to_addrs)} ready for your approval. Click 'I approve to send' or edit in /outlook.",
     }
@@ -641,7 +647,9 @@ def _tool_email_open_compose(
     as Teams, Slack, and Jira.
     """
     from .._drafts import create_draft
+    from skills import _rich_text as rich
 
+    canonical = rich.normalize(body=body, body_html=body_html)
     draft_id = create_draft(
         draft_type="email-send",
         params={
@@ -650,7 +658,7 @@ def _tool_email_open_compose(
             "body": body,
             "cc": cc,
             "bcc": bcc,
-            "body_html": body_html,
+            "body_html": canonical,
         },
         preview={
             "to": [a.strip() for a in to.split(",") if a.strip()],
@@ -667,8 +675,7 @@ def _tool_email_open_compose(
         "context": context,
         "draft_id": draft_id,
     }
-    if body_html:
-        data["body_html"] = body_html
+    data.update(rich.rich_payload("email", canonical))
     return {
         "_draft": "email-send",
         "data": data,
