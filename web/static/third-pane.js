@@ -14796,6 +14796,15 @@ tpState.type = null;
     }, 400);
   };
 
+  // The prefetch only feeds caches and badges, so it must not hold the splash.
+  // Hold it until the page has loaded (when the shell closes its native splash)
+  // so the two splashes hand off with no blank frame in between.
+  new Promise((resolve) => {
+    if (document.readyState === 'complete') return resolve();
+    window.addEventListener('load', resolve, { once: true });
+    setTimeout(resolve, 5000);
+  }).then(_dismissSplash);
+
   try {
     // Populate badges from stale cache immediately
     const staleTeams = _getStaleCache('teams');
@@ -14879,8 +14888,6 @@ tpState.type = null;
     _loadPinCache();
     console.timeEnd('[prefetch] total');
   } finally {
-    // ALWAYS dismiss — even if fetches fail
-    _dismissSplash();
     // Deferred: fetch channels in background (slow — N+2 Graph API calls)
     setTimeout(() => {
       fetch('/api/channels/search')

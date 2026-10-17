@@ -1048,6 +1048,7 @@ function createWindow() {
     // minimize/maximize/close controls, including during renderer startup.
     // Windows uses the custom Gator controls; macOS keeps traffic lights.
     titleBarStyle: IS_MAC ? 'hiddenInset' : IS_WINDOWS ? 'hidden' : 'default',
+    backgroundColor: '#0a0f1a',
     webPreferences: { contextIsolation: true, nodeIntegration: false },
   });
   win.loadURL('data:text/html,<html><body style="margin:0;background:transparent"></body></html>');
@@ -1103,6 +1104,10 @@ function createWindow() {
       nodeIntegration: false,
     },
   });
+
+  // Match the splash so the unpainted moment before the page's first frame is
+  // dark instead of Chromium's default white.
+  gatorView.setBackgroundColor('#0a0f1a');
 
   // Raise the listener cap on the Gator webContents. gatorView gets a dom-ready
   // listener added on EVERY navigation (see early-context redispatch below),
@@ -5640,12 +5645,17 @@ app.whenReady().then(() => {
     resizable: false,
     movable: false,
     center: true,
-    show: true,
+    // Hidden until splash.html has painted; showing it earlier flashes a
+    // blank white box on Windows regardless of backgroundColor.
+    show: false,
     icon: iconPath,
     transparent: false,
     backgroundColor: '#0a0f1a',
     skipTaskbar: true,
     webPreferences: { contextIsolation: true, nodeIntegration: false },
+  });
+  splashWin.once('ready-to-show', () => {
+    if (splashWin && !splashWin.isDestroyed()) splashWin.show();
   });
   splashWin.loadFile(path.join(__dirname, 'splash.html'));
   splashWin.on('closed', () => {
