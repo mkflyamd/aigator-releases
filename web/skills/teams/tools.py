@@ -859,6 +859,9 @@ def _tool_teams_open_compose(
             )
 
         message = pattern.sub(_replace, message)
+    from skills import _rich_text as rich
+
+    body_html = rich.teams_to_html(message, compiled_mentions)
     draft_id = create_draft(
         "teams-message",
         {
@@ -868,6 +871,7 @@ def _tool_teams_open_compose(
             "chat_id": chat_id,
             "chat_topic": chat_topic,
             "mentions": compiled_mentions,
+            "body_html": body_html,
         },
         {"message_snippet": message[:200]},
     )
@@ -883,6 +887,7 @@ def _tool_teams_open_compose(
             "mentions": compiled_mentions,
             "draft_id": draft_id,
             "body": message,
+            **rich.rich_payload("teams", body_html),
         },
         "_user_message": "Teams draft ready for review. Edit it here or ask me to refine it; the conversation is created only after you send.",
     }

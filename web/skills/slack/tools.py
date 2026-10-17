@@ -607,6 +607,7 @@ def _handle_slack_send_message(
 ) -> dict:
     """Send message — goes through draft approval (human-in-the-loop). Never auto-sends."""
     from .._drafts import create_draft
+    from skills import _rich_text as rich
     from skills.slack.mcp_client import _load_token
 
     if not message:
@@ -651,12 +652,19 @@ def _handle_slack_send_message(
         pattern = re.compile(r"(?<![\w@])@" + re.escape(name) + r"(?![\w])", re.IGNORECASE)
         message = pattern.sub(f"<@{user_id_for_mention}>", message)
 
+    names = {
+        str(m["user_id"]): str(m.get("name", "")).lstrip("@")
+        for m in (mentions or [])
+        if m.get("user_id")
+    }
+    body_html = rich.slack_to_html(message, names)
     params = {
         "channel_id": channel_id,
         "user_id": user_id,
         "team_id": team_id or active_team_id,
         "workspace_name": active_workspace.get("team", "Slack"),
         "message": message,
+        "body_html": body_html,
     }
     if thread_ts:
         params["thread_ts"] = thread_ts
@@ -683,6 +691,7 @@ def _handle_slack_send_message(
                 "workspace_name": params["workspace_name"],
                 "message": message,
                 "message_snippet": message[:200],
+                **rich.rich_payload("slack", body_html),
             },
             "_user_message": "Slack DM draft ready for your approval. The DM is opened only after you send.",
         }
@@ -713,6 +722,7 @@ def _handle_slack_send_message(
             "thread_ts": thread_ts or "",
             "message": message,
             "message_snippet": message[:200],
+            **rich.rich_payload("slack", body_html),
         },
         "_user_message": "Slack draft ready for your approval. Review it in AI Gator, then click Post.",
     }
