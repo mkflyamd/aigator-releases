@@ -4012,6 +4012,12 @@ body.gator-chat-expanded .gator-expand-btn {
   background: rgba(99, 102, 241, 0.08);
   color: rgba(165, 180, 252, 0.9);
 }
+.slash-refresh-hint {
+  padding: 0 12px 8px;
+  font-size: 0.68rem;
+  color: var(--text-dim);
+  user-select: none;
+}
 
 /* â”€â”€ Main â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .main {

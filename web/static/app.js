@@ -1978,6 +1978,11 @@ function _openSkillPickerDropdown(query) {
     window.openSettingsPanel?.('skills');
   });
   _mentionDropdown.appendChild(mktFooter);
+
+  const refreshHint = document.createElement('div');
+  refreshHint.className = 'slash-refresh-hint';
+  refreshHint.textContent = "Don't see a new skill or MCP? Press Ctrl+R to reload.";
+  _mentionDropdown.appendChild(refreshHint);
 }
 
 // Commit chip only — no action popup
