@@ -138,6 +138,10 @@ def _find_mcp_browser_tools() -> dict:
         _, tool_name = namespaced.split("__", 1)
         if tool_name in _BROWSER_CAPABILITY_TOOLS:
             result[namespaced] = handler
+    # A desktop-automation MCP can expose `click` without being a browser; without
+    # navigate_page the MCP path cannot load a URL, so use the native browser agent.
+    if not any(n.endswith("__navigate_page") for n in result):
+        return {}
     return result
 
 
@@ -163,6 +167,7 @@ async def _run_via_mcp(mcp_tools: dict, task: str, start_url: str = "") -> dict:
     )
 
     results = []
+    errors = []
 
     if start_url and navigate_handler:
         nav_result = navigate_handler(url=start_url)
@@ -170,6 +175,8 @@ async def _run_via_mcp(mcp_tools: dict, task: str, start_url: str = "") -> dict:
             nav_result = await nav_result
         if isinstance(nav_result, dict) and nav_result.get("result"):
             results.append(str(nav_result["result"]))
+        elif isinstance(nav_result, dict) and nav_result.get("error"):
+            errors.append(str(nav_result["error"]))
 
     if snapshot_handler:
         snap_result = snapshot_handler()
@@ -177,9 +184,13 @@ async def _run_via_mcp(mcp_tools: dict, task: str, start_url: str = "") -> dict:
             snap_result = await snap_result
         if isinstance(snap_result, dict) and snap_result.get("result"):
             results.append(str(snap_result["result"]))
+        elif isinstance(snap_result, dict) and snap_result.get("error"):
+            errors.append(str(snap_result["error"]))
 
-    content = "\n".join(results) if results else f"Task: {task}"
-    return {"result": content}
+    if not results:
+        detail = "; ".join(errors) or "the browser MCP returned no page content"
+        return {"error": f"Browser MCP could not read the page: {detail}"}
+    return {"result": "\n".join(results)}
 
 
 async def _tool_browser_search(query: str) -> dict:
