@@ -209,6 +209,11 @@ TOOL_DEFS = [
                     "type": "string",
                     "description": "Section name for context",
                 },
+                "site_id": {
+                    "type": "string",
+                    "description": "SharePoint site id if the page is in a team notebook (from the page's site_id). Omit or '' for personal notebooks.",
+                    "default": "",
+                },
             },
             "required": ["page_id", "page_title"],
         },
@@ -664,7 +669,11 @@ def _tool_update_onenote_page(
 
 
 def _tool_pin_onenote_page(
-    page_id: str, page_title: str, notebook_name: str = "", section_name: str = ""
+    page_id: str,
+    page_title: str,
+    notebook_name: str = "",
+    section_name: str = "",
+    site_id: str = "",
 ) -> dict:
     """Pin a OneNote page for quick reference."""
     from .state import pinned_onenote_pages
@@ -674,6 +683,7 @@ def _tool_pin_onenote_page(
         "title": page_title,
         "notebook": notebook_name,
         "section": section_name,
+        "site_id": site_id,
     }
     return {
         "pinned": True,

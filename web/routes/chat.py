@@ -1328,7 +1328,9 @@ async def chat(req: ChatRequest):
                     else:
                         _pin_lines.append(f"- OneNote page \"{lbl}\" (in notebook: {_nb}) \u2192 find it using list_onenote_notebooks/list_onenote_sections/list_onenote_pages (match page title \"{_title}\" in notebook \"{_nb}\"), then read_onenote_page with the resolved id.{_accessibility_note}")
                 else:
-                    _pin_lines.append(f"- OneNote: \"{lbl}\" (page_id: {pid}, notebook: {m.get('notebook','?')}, section: {m.get('section','?')}) \u2192 use update_onenote_page or read with this page_id")
+                    from skills.onenote.state import pin_site_text as _pin_site_text
+                    _site_txt = _pin_site_text(m.get("site_id"))
+                    _pin_lines.append(f"- OneNote: \"{lbl}\" (page_id: {pid}, notebook: {m.get('notebook','?')}, section: {m.get('section','?')}{_site_txt}) \u2192 use update_onenote_page or read with this page_id{' and site_id' if _site_txt else ''}")
             elif s == "onedrive":
                 _od_drive = m.get('drive_id', '')
                 _od_drive_hint = f", drive_id: {_od_drive}" if _od_drive else ""
@@ -1502,11 +1504,11 @@ async def chat(req: ChatRequest):
     # but ONLY inject into prompt if this is the default context (no tabs)
     # to prevent pin bleed across tabs.
     if _context_id == 'default' and not _pins:
-        from skills.onenote.state import pinned_onenote_pages as _pinned_onenote_pages
+        from skills.onenote.state import pinned_onenote_pages as _pinned_onenote_pages, pin_site_text as _pin_site_text
         if _pinned_onenote_pages:
-            pins = "\n".join(f"- \"{p['title']}\" (page_id: {p['page_id']}, notebook: {p.get('notebook','?')}, section: {p.get('section','?')})"
+            pins = "\n".join(f"- \"{p['title']}\" (page_id: {p['page_id']}, notebook: {p.get('notebook','?')}, section: {p.get('section','?')}{_pin_site_text(p.get('site_id'))})"
                              for p in _pinned_onenote_pages.values())
-            system += f"\n\n\U0001f4cc PINNED ONENOTE PAGES (use update_onenote_page with these page_ids directly \u2014 no need to re-navigate):\n{pins}"
+            system += f"\n\n\U0001f4cc PINNED ONENOTE PAGES (use update_onenote_page with these page_ids directly \u2014 no need to re-navigate; when a pin has a site_id, pass it to read_onenote_page and update_onenote_page):\n{pins}"
 
     # Auto-detect skills needed from pinned items — no manual chip required
     _source_skill_map = {"word": "docx", "excel": "excel", "ppt": "ppt"}
