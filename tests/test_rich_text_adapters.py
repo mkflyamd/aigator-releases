@@ -145,3 +145,32 @@ def test_slack_heading_and_table_flatten():
     assert (
         rt.render("slack", "<table><tr><th>a</th><td>b</td></tr></table>").content == "a | b"
     )
+
+
+def test_slack_mention_id_with_injected_markup_renders_as_text():
+    src = "<p>Hi " + MENTION.format(id="U1&gt; &lt;!channel", name="Alex", svc="slack") + "</p>"
+    out = rt.render("slack", src).content
+    assert out == "Hi @Alex"
+    assert "<!channel>" not in out
+
+
+def test_slack_valid_user_mention_still_renders_token():
+    src = "<p>Hi " + MENTION.format(id="U123ABC", name="Alex", svc="slack") + "</p>"
+    assert rt.render("slack", src).content == "Hi <@U123ABC>"
+
+
+def test_slack_special_and_channel_mentions_still_render_tokens():
+    src = "<p>" + MENTION.format(id="!channel", name="channel", svc="slack") + "</p>"
+    assert rt.render("slack", src).content == "<!channel>"
+    src = "<p>" + MENTION.format(id="#C123", name="chan", svc="slack") + "</p>"
+    assert rt.render("slack", src).content == "<#C123>"
+
+
+def test_slack_link_href_is_neutralized():
+    src = '<p><a href="https://a.com/&gt; &lt;!channel|x">link</a></p>'
+    assert rt.render("slack", src).content == "<https://a.com/%3E%20%3C!channel%7Cx|link>"
+
+
+def test_slack_normal_link_unchanged():
+    src = "<p><a href=\"https://x.com\">site</a></p>"
+    assert rt.render("slack", src).content == "<https://x.com|site>"

@@ -368,6 +368,17 @@ def _render_teams(markup: str) -> Rendered:
     return Rendered(content, mentions)
 
 
+_SLACK_MENTION_ID = re.compile(r"(?:[UW][A-Z0-9]+|!(?:here|channel|everyone)|#C[A-Z0-9]+)")
+
+
+def _neutralize_slack_href(href: str) -> str:
+    return re.sub(
+        r"\s",
+        "%20",
+        href.replace("&", "&amp;").replace("<", "%3C").replace(">", "%3E").replace("|", "%7C"),
+    )
+
+
 class _Mrkdwn(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -399,7 +410,7 @@ class _Mrkdwn(HTMLParser):
         if self.skip:
             self.skip += 1
             return
-        if tag == "span" and attrs.get("data-mention-id"):
+        if tag == "span" and _SLACK_MENTION_ID.fullmatch(attrs.get("data-mention-id") or ""):
             mention_id = attrs["data-mention-id"]
             self._w(f"<@{mention_id}>" if mention_id[0] in "UW" else f"<{mention_id}>")
             self.skip = 1
@@ -468,6 +479,7 @@ class _Mrkdwn(HTMLParser):
             href, start = self.links.pop()
             label = "".join(self.out[start:])
             del self.out[start:]
+            href = _neutralize_slack_href(href)
             if href and label.strip() and label != href:
                 self.out.append(f"<{href}|{label}>")
             elif href:
