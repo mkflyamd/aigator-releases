@@ -5868,31 +5868,70 @@ body.gator-chat-expanded .gator-expand-btn {
 .gcc-toolbar {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  align-items: center;
+  gap: 2px;
   margin-top: 6px;
-}
-.gcc-tool-btn {
-  min-width: 28px;
-  padding: 3px 8px;
-  font: inherit;
-  font-size: 0.78rem;
-  color: var(--text);
+  padding: 3px 4px;
   background: var(--surface2);
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-bottom: 0;
+  border-radius: 6px 6px 0 0;
+}
+.gcc-toolbar ~ .gcc-rich-editor {
+  margin-top: 0;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+.gcc-tool-sep {
+  align-self: stretch;
+  width: 1px;
+  margin: 3px 4px;
+  background: var(--border);
+}
+.gcc-tool-btn {
+  min-width: 26px;
+  min-height: 26px;
+  padding: 0 6px;
+  font: inherit;
+  font-size: 0.8rem;
+  line-height: 1;
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
   cursor: pointer;
 }
 .gcc-tool-btn:hover {
-  border-color: var(--accent);
+  background: var(--surface3);
+}
+.gcc-tool-btn.is-active {
+  background: var(--surface3);
+  color: var(--accent);
 }
 .gcc-tool-btn:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
+.gcc-tool-btn[data-cap='bold'] {
+  font-weight: 700;
+}
+.gcc-tool-btn[data-cap='italic'] {
+  font-style: italic;
+}
+.gcc-tool-btn[data-cap='underline'] {
+  text-decoration: underline;
+}
+.gcc-tool-btn[data-cap='code'] {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.74rem;
+}
 .gcc-link-row {
   display: flex;
-  gap: 4px;
-  margin-top: 6px;
+  gap: 2px;
+  padding: 3px 4px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-bottom: 0;
 }
 .gcc-link-row.hidden {
   display: none;
@@ -5904,7 +5943,7 @@ body.gator-chat-expanded .gator-expand-btn {
   font: inherit;
   font-size: 0.8rem;
   color: var(--text);
-  background: var(--surface2);
+  background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 5px;
 }
