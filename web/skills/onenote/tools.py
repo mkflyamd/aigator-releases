@@ -148,7 +148,7 @@ TOOL_DEFS = [
     },
     {
         "name": "update_onenote_page",
-        "description": "Append content to an existing OneNote page. Use this to add items, update status, or extend a page without overwriting it. Requires page_id \u2014 get it from list_onenote_pages or a pinned page.",
+        "description": "Change an existing OneNote page without rewriting it or creating a new one. Default: append content to the end. Other actions: prepend (add at the top), insert (before or after one element), replace (swap one element, or the title). To change existing content, first call read_onenote_page with include_ids=true and use an element id from the latest outline or update result as target; ids can change after every update, so never reuse older ids. Tables cannot be edited row by row: read the table with element_id, then replace the whole table with every row included. Replacing the body is refused. replace with empty content clears the element. Replace returns previous_html so the change can be undone. For SharePoint team notebooks pass site_id. Requires page_id from list_onenote_pages or a pinned page.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -158,12 +158,33 @@ TOOL_DEFS = [
                 },
                 "content": {
                     "type": "string",
-                    "description": "Content to append (plain text or HTML)",
+                    "description": "New content (plain text or HTML). Empty with action=replace clears the element.",
                 },
                 "html": {
                     "type": "boolean",
-                    "description": "If true, content is treated as HTML",
+                    "description": "If true, content is treated as HTML. Plain text is wrapped in a paragraph.",
                     "default": False,
+                },
+                "site_id": {
+                    "type": "string",
+                    "description": "SharePoint site id (same site_id the page came from). Omit or '' for personal notebooks.",
+                    "default": "",
+                },
+                "action": {
+                    "type": "string",
+                    "enum": ["append", "prepend", "insert", "replace"],
+                    "description": "What to do at the target. Default append.",
+                    "default": "append",
+                },
+                "target": {
+                    "type": "string",
+                    "description": "'body' (default), 'title' (only with replace), or an element id from read_onenote_page(include_ids=true).",
+                    "default": "body",
+                },
+                "position": {
+                    "type": "string",
+                    "enum": ["before", "after"],
+                    "description": "For insert: put the content before or after the target element (default after).",
                 },
             },
             "required": ["page_id", "content"],
@@ -583,38 +604,63 @@ def _tool_read_onenote_page(
     }
 
 
-def _tool_update_onenote_page(page_id: str, content: str, html: bool = False) -> dict:
-    """Append content to an existing OneNote page."""
+def _tool_update_onenote_page(
+    page_id: str,
+    content: str,
+    html: bool = False,
+    site_id: str = "",
+    action: str = "append",
+    target: str = "body",
+    position: str = "",
+) -> dict:
+    """Change an existing OneNote page: append (default), prepend, insert or
+    replace content, or replace the title. Pass site_id for team notebooks."""
     from .._m365.helpers import get_skill_client
 
-    gc = get_skill_client(ONENOTE_SKILLS_DIR)
-    if not html:
-        content = (
-            content.replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-            .replace("\n", "<br/>")
-        )
-    patch_ops = [
-        {"target": "body", "action": "append", "content": f"<div>{content}</div>"}
-    ]
-    url = f"https://graph.microsoft.com/v1.0/me/onenote/pages/{_eid(page_id)}/content"
-    data = json.dumps(patch_ops).encode()
-    req = _ur.Request(
-        url,
-        data=data,
-        headers={
-            "Authorization": f"Bearer {gc.get_token()}",
-            "Content-Type": "application/json",
-        },
-        method="PATCH",
-    )
     try:
-        with _ur.urlopen(req, timeout=30) as resp:
-            pass  # 204 No Content
-    except _ue.HTTPError as e:
-        raise RuntimeError(f"Graph API {e.code}: {e.read().decode()[:300]}")
-    return {"updated": True, "page_id": page_id}
+        ops = _pe.build_patch_ops(content, html, action, target, position)
+    except _pe.EditError as e:
+        return {"error": e.code, "message": e.message}
+
+    gc = get_skill_client(ONENOTE_SKILLS_DIR)
+    root = _onenote_root(site_id)
+    result = {"updated": True, "page_id": page_id}
+    try:
+        if target not in ("body", "title"):
+            current = _pe.element_html(
+                _fetch_page_html(gc, root, page_id, include_ids=True), target
+            )
+            if current is None:
+                return {
+                    "error": "target_not_found",
+                    "hint": "Read the page again; element ids change after an update.",
+                }
+            if action == "replace":
+                result["previous_html"] = current[: _pe.MAX_PREVIOUS_HTML]
+        gc._request(
+            "PATCH",
+            f"https://graph.microsoft.com/v1.0{root}/pages/{_eid(page_id)}/content",
+            headers={**gc._headers(), "Content-Type": "application/json"},
+            content=json.dumps(ops).encode(),
+            label=f"onenote/pages/{page_id}/content",
+        )
+    except Exception as e:
+        err = {"error": str(e)}
+        if getattr(e, "status_code", 0) == 404 and not site_id:
+            err["hint"] = (
+                "If this page is in a SharePoint team notebook, pass its site_id "
+                "from find_onenote_notebook."
+            )
+        return err
+
+    if not (action == "append" and target == "body"):
+        try:
+            result.update(
+                _pe.outline(_fetch_page_html(gc, root, page_id, include_ids=True))
+            )
+        except Exception as e:
+            result["outline_error"] = f"Updated, but could not refresh the outline: {e}"
+    return result
 
 
 def _tool_pin_onenote_page(

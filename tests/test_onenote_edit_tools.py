@@ -105,3 +105,139 @@ def test_read_element_id_too_large(monkeypatch):
     gc = FakeGC()
     result = _run(onenote_tools._tool_read_onenote_page, gc, "page1", element_id="table:{a}{7}")
     assert result["error"] == "element_too_large"
+
+
+# ── update_onenote_page ──────────────────────────────────────────────────────
+
+def test_update_default_is_todays_request_and_result():
+    gc = FakeGC()
+    result = _run(onenote_tools._tool_update_onenote_page, gc, "page1", "hello <x>")
+    assert result == {"updated": True, "page_id": "page1"}
+    assert gc.methods() == ["PATCH"]
+    method, url, _ = gc.calls[0]
+    assert url == "https://graph.microsoft.com/v1.0/me/onenote/pages/page1/content"
+    assert gc.patch_bodies() == [
+        [{"target": "body", "action": "append", "content": "<div>hello &lt;x&gt;</div>"}]
+    ]
+
+
+def test_update_encodes_page_id():
+    gc = FakeGC()
+    _run(onenote_tools._tool_update_onenote_page, gc, SLASH_ID, "hello")
+    assert "%2F" in gc.calls[0][1]
+
+
+def test_update_routes_to_team_site():
+    gc = FakeGC()
+    _run(onenote_tools._tool_update_onenote_page, gc, "page1", "hello", site_id=SITE)
+    assert "/sites/contoso.sharepoint.com%2Caaa%2Cbbb/onenote/pages/page1/content" in gc.calls[0][1]
+
+
+def test_update_replace_element_returns_previous_html_and_fresh_outline():
+    gc = FakeGC()
+    result = _run(
+        onenote_tools._tool_update_onenote_page,
+        gc,
+        "page1",
+        "<table><tr><td>new</td></tr></table>",
+        html=True,
+        action="replace",
+        target="table:{a}{7}",
+    )
+    assert gc.methods() == ["GET", "PATCH", "GET"]
+    assert gc.patch_bodies() == [
+        [{"target": "table:{a}{7}", "action": "replace", "content": "<table><tr><td>new</td></tr></table>"}]
+    ]
+    assert result["updated"] is True
+    assert result["previous_html"].startswith("<table")
+    assert "id=" not in result["previous_html"]
+    assert [e["tag"] for e in result["elements"]] == ["h1", "p", "table"]
+
+
+def test_update_previous_html_is_capped(monkeypatch):
+    monkeypatch.setattr(page_edit, "MAX_PREVIOUS_HTML", 12)
+    gc = FakeGC()
+    result = _run(
+        onenote_tools._tool_update_onenote_page, gc, "page1", "x", action="replace", target="table:{a}{7}"
+    )
+    assert len(result["previous_html"]) == 12
+
+
+def test_update_unknown_target_sends_nothing():
+    gc = FakeGC()
+    result = _run(
+        onenote_tools._tool_update_onenote_page, gc, "page1", "x", action="replace", target="p:{zz}{1}"
+    )
+    assert result["error"] == "target_not_found"
+    assert "PATCH" not in gc.methods()
+
+
+def test_update_replace_body_is_refused_before_any_call():
+    gc = FakeGC()
+    result = _run(
+        onenote_tools._tool_update_onenote_page, gc, "page1", "x", action="replace", target="body"
+    )
+    assert result["error"] == "replace_body_not_allowed"
+    assert gc.calls == []
+
+
+def test_update_empty_replace_sends_empty_paragraph():
+    gc = FakeGC()
+    _run(onenote_tools._tool_update_onenote_page, gc, "page1", "", action="replace", target="p:{a}{3}")
+    assert gc.patch_bodies()[0][0]["content"] == "<p></p>"
+
+
+def test_update_title_needs_no_preread_and_returns_outline():
+    gc = FakeGC()
+    result = _run(
+        onenote_tools._tool_update_onenote_page, gc, "page1", "New title", action="replace", target="title"
+    )
+    assert gc.methods() == ["PATCH", "GET"]
+    assert gc.patch_bodies() == [[{"target": "title", "action": "replace", "content": "New title"}]]
+    assert "previous_html" not in result
+    assert "elements" in result
+
+
+def test_update_insert_before_element():
+    gc = FakeGC()
+    _run(
+        onenote_tools._tool_update_onenote_page,
+        gc,
+        "page1",
+        "added",
+        action="insert",
+        target="p:{a}{3}",
+        position="before",
+    )
+    assert gc.patch_bodies()[0][0] == {
+        "target": "p:{a}{3}",
+        "action": "insert",
+        "content": "<p>added</p>",
+        "position": "before",
+    }
+
+
+class _NotFound(RuntimeError):
+    status_code = 404
+
+
+def test_update_404_without_site_adds_team_hint():
+    gc = FakeGC(patch_error=_NotFound("Graph API 404: not found"))
+    result = _run(onenote_tools._tool_update_onenote_page, gc, "page1", "x")
+    assert "404" in result["error"]
+    assert "site_id" in result["hint"]
+
+
+def test_update_404_with_site_has_no_hint():
+    gc = FakeGC(patch_error=_NotFound("Graph API 404: not found"))
+    result = _run(onenote_tools._tool_update_onenote_page, gc, "page1", "x", site_id=SITE)
+    assert "hint" not in result
+
+
+def test_update_other_graph_error_is_returned_as_error():
+    class _Bad(RuntimeError):
+        status_code = 400
+
+    gc = FakeGC(patch_error=_Bad("Graph API 400: bad"))
+    result = _run(onenote_tools._tool_update_onenote_page, gc, "page1", "x")
+    assert result == {"error": "Graph API 400: bad"}
