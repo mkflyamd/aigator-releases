@@ -87,6 +87,7 @@ from routes.conversation_routes import router as conversation_router
 from routes.tabs import router as tabs_router
 from routes.marketplace import router as marketplace_router
 from routes.files import router as files_router, cleanup_old_outputs
+from routes.inline_images import router as inline_images_router
 from routes.code_agent import router as code_agent_router
 from routes.updater import router as updater_router
 from routes.mcp_routes import router as mcp_router
@@ -896,6 +897,7 @@ app.include_router(conversation_router)
 app.include_router(tabs_router)
 app.include_router(marketplace_router)
 app.include_router(files_router)
+app.include_router(inline_images_router)
 app.include_router(updater_router)
 app.include_router(mcp_router)
 app.include_router(terminal_router)

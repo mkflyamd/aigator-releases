@@ -44,6 +44,8 @@ const GATOR_ACTIONS = new Set([
   'openExternal',
   'removeClosest',
   '_showAlert',
+  'gatorImageDownload',
+  'gatorImageSave',
   'gatorOpenWidgetManager',
   'gatorCloseWidgetManager',
   'gatorWidgetSavePrompt',
@@ -10886,6 +10888,113 @@ function _fuzzyFilterCommands(commands, query) {
   return scored.map((x) => x.command);
 }
 
+// Hosts whose https images may render inline in chat. Any other image URL stays a
+// plain link so model output can't beacon data out through an image request.
+const INLINE_IMAGE_HOSTS = ['mcp-platform.amd.com'];
+
+function _isInlineImageUrl(href) {
+  if (href.startsWith('/api/files/')) return !href.includes('..');
+  try {
+    const u = new URL(href.replace(/&amp;/g, '&'));
+    return u.protocol === 'https:' && INLINE_IMAGE_HOSTS.includes(u.hostname);
+  } catch (_) {
+    return false;
+  }
+}
+
+// Swap a failed inline image for an "unavailable" card. Generated images are
+// temporary (links expire, /api/files outputs are deleted after ~24h), so a
+// broken image is expected in older chats and must explain itself.
+function _showBrokenChatImage(img) {
+  const unit = img.closest('.chat-inline-img-wrap') || img;
+  const alt = img.getAttribute('alt') || '';
+  const card = document.createElement('span');
+  card.className = 'chat-img-broken';
+  card.setAttribute('role', 'img');
+  card.setAttribute('aria-label', `Image unavailable${alt ? ': ' + alt : ''}`);
+
+  const text = document.createElement('span');
+  text.className = 'chat-img-broken-text';
+  const title = document.createElement('strong');
+  title.textContent = 'Image unavailable';
+  const hint = document.createElement('span');
+  hint.textContent =
+    (alt ? alt + ' — ' : '') + 'generated images are temporary and may have expired.';
+  text.append(title, hint);
+
+  card.append(text);
+  unit.replaceWith(card);
+}
+
+function _chatImageUrl(btn) {
+  const img = btn.closest('.chat-inline-img-wrap')?.querySelector('img');
+  return (img && (img.dataset.origSrc || img.getAttribute('src'))) || '';
+}
+
+// Briefly relabel an action button with its outcome, then restore it.
+function _flashImageAction(btn, label, ms) {
+  btn.dataset.label = btn.dataset.label || btn.textContent;
+  btn.textContent = label;
+  clearTimeout(btn._flashTimer);
+  btn._flashTimer = setTimeout(() => {
+    btn.textContent = btn.dataset.label;
+    btn.disabled = false;
+  }, ms || 2500);
+}
+
+async function _fetchChatImage(btn) {
+  const resp = await fetch('/api/inline-image?url=' + encodeURIComponent(_chatImageUrl(btn)));
+  if (!resp.ok) throw new Error(String(resp.status));
+  const named = /filename="([^"]+)"/.exec(resp.headers.get('Content-Disposition') || '');
+  return { blob: await resp.blob(), name: named ? named[1] : 'image.png' };
+}
+
+function _downloadBlob(blob, name) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+async function gatorImageDownload(btn) {
+  if (!_chatImageUrl(btn) || btn.disabled) return;
+  btn.disabled = true;
+  try {
+    const { blob, name } = await _fetchChatImage(btn);
+    _downloadBlob(blob, name);
+    _flashImageAction(btn, 'Downloaded');
+  } catch (_) {
+    _flashImageAction(btn, 'Image unavailable', 3500);
+  }
+}
+
+async function gatorImageSave(btn) {
+  const url = _chatImageUrl(btn);
+  if (!url || btn.disabled) return;
+  btn.disabled = true;
+  try {
+    const resp = await fetch('/api/inline-image/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url }),
+    });
+    if (!resp.ok) throw new Error(String(resp.status));
+    const data = await resp.json();
+    if (data.cancelled) {
+      btn.disabled = false;
+      return;
+    }
+    btn.title = 'Saved to ' + data.file_path;
+    _flashImageAction(btn, 'Saved', 3000);
+  } catch (err) {
+    console.error('Save image failed', err);
+    _flashImageAction(btn, 'Save failed', 3500);
+  }
+}
+
 // Inline markdown (runs on already-escaped text)
 function applyInline(html) {
   // Phase 1: stash inline code spans so no other regex touches their content
@@ -10893,6 +11002,30 @@ function applyInline(html) {
   html = html.replace(/`([^`]+)`/g, (_, inner) => {
     codeStash.push(inner);
     return `\x00C${codeStash.length - 1}\x00`;
+  });
+
+  // Images: stash the generated <img> so later passes (Jira keys, bare URLs) can't
+  // rewrite its attributes. Non-allowlisted URLs fall back to a plain link.
+  const imgStash = [];
+  html = html.replace(/!\[(.*?)\]\(((?:https?:\/\/|\/)[^\)"]*)\)/g, (_, alt, href) => {
+    if (!_isInlineImageUrl(href)) return `[${alt}](${href})`;
+    // Remote links are short-lived; the server fetches once, caches, and serves the image.
+    const remote = !href.startsWith('/');
+    const src = remote
+      ? '/api/inline-image?url=' + encodeURIComponent(href.replace(/&amp;/g, '&'))
+      : href;
+    const origAttr = remote ? ` data-orig-src="${href}"` : '';
+    const btn = (action, label, tip) =>
+      `<button type="button" class="chat-img-action" title="${tip}"${gatorActionAttrs(action, [{ $el: true }])}>${label}</button>`;
+    imgStash.push(
+      `<span class="chat-inline-img-wrap is-loading">` +
+        `<img class="chat-inline-img" src="${src}"${origAttr} alt="${alt.replace(/"/g, '&quot;')}" referrerpolicy="no-referrer">` +
+        `<span class="chat-inline-img-actions">` +
+        btn('gatorImageDownload', 'Download', 'Download this image') +
+        btn('gatorImageSave', 'Save as…', 'Choose where to save this image') +
+        `</span></span>`,
+    );
+    return `\x00I${imgStash.length - 1}\x00`;
   });
 
   // Markdown links first — so the URL inside [text](url) is consumed before
@@ -10993,9 +11126,36 @@ function applyInline(html) {
     }
     return `<code>${inner}</code>`;
   });
+  html = html.replace(/\x00I(\d+)\x00/g, (_, i) => imgStash[+i]);
 
   return html;
 }
+// ── end inline images
+
+// Load events don't bubble either; clear the loading placeholder once the image arrives.
+document.addEventListener(
+  'load',
+  (e) => {
+    const t = e.target;
+    if (t instanceof HTMLImageElement && t.classList.contains('chat-inline-img')) {
+      t.closest('.chat-inline-img-wrap')?.classList.remove('is-loading');
+    }
+  },
+  true,
+);
+
+// Error events don't bubble, so listen in the capture phase for every rendered
+// chat image (CSP forbids inline onerror attributes).
+document.addEventListener(
+  'error',
+  (e) => {
+    const t = e.target;
+    if (t instanceof HTMLImageElement && t.classList.contains('chat-inline-img')) {
+      _showBrokenChatImage(t);
+    }
+  },
+  true,
+);
 
 /* A widget runs in a srcdoc frame that inherits the page CSP, which forbids inline
  * scripts and on*= attributes. Give the widget's own inline scripts the page nonce

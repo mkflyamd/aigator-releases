@@ -4335,6 +4335,121 @@ body.gator-chat-expanded .gator-expand-btn {
   cursor: help;
   user-select: none;
 }
+.prose .chat-inline-img-wrap {
+  position: relative;
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  margin: 0.5rem 0;
+}
+.prose .chat-inline-img {
+  display: block;
+  max-width: 100%;
+  max-height: 420px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+/* Remote images load through the server, so show a placeholder until they arrive. */
+.prose .chat-inline-img-wrap.is-loading {
+  width: min(320px, 100%);
+  height: 200px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: linear-gradient(100deg, var(--surface2) 30%, var(--surface) 50%, var(--surface2) 70%)
+    0 0 / 200% 100%;
+  animation: chat-img-shimmer 1.4s linear infinite;
+}
+.chat-inline-img-wrap.is-loading::after {
+  content: 'Loading image…';
+  color: var(--text-dim);
+  font-size: 0.82rem;
+}
+.prose .chat-inline-img-wrap.is-loading .chat-inline-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  border: 0;
+}
+.chat-inline-img-wrap.is-loading .chat-inline-img-actions {
+  display: none;
+}
+@keyframes chat-img-shimmer {
+  to {
+    background-position: -200% 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .prose .chat-inline-img-wrap.is-loading {
+    animation: none;
+  }
+}
+.chat-inline-img-actions {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  gap: 6px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.chat-inline-img-wrap:hover .chat-inline-img-actions,
+.chat-inline-img-wrap:focus-within .chat-inline-img-actions {
+  opacity: 1;
+}
+@media (hover: none) {
+  .chat-inline-img-actions {
+    opacity: 1;
+  }
+}
+.chat-img-action {
+  padding: 3px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.62);
+  color: #fff;
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+  backdrop-filter: blur(4px);
+}
+.chat-img-action:hover,
+.chat-img-action:focus-visible {
+  background: rgba(0, 0, 0, 0.82);
+}
+.chat-img-action:disabled {
+  cursor: default;
+  opacity: 0.85;
+}
+/* Shown in place of an inline image that failed to load (expired link / deleted file). */
+.chat-img-broken {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  margin: 0.5rem 0;
+  padding: 0.6rem 0.8rem;
+  border: 1px dashed var(--border2, var(--border));
+  border-radius: 8px;
+  background: var(--surface2);
+  color: var(--text-dim);
+  font-size: 0.82rem;
+}
+.chat-img-broken-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+.chat-img-broken-text strong {
+  color: var(--text);
+  font-weight: 600;
+}
 .code-copy-btn {
   position: absolute;
   top: 0.4rem;

@@ -44,14 +44,19 @@ class FilePickerRequest(BaseModel):
     save: bool = False  # True for "Save As" dialog
 
 
-def _open_file_dialog(title: str, filetypes: str, save: bool) -> str:
+def _open_file_dialog(
+    title: str, filetypes: str, save: bool, default_name: str = ""
+) -> str:
     try:
         import win32ui
         import win32con
 
         flags = win32con.OFN_OVERWRITEPROMPT if save else win32con.OFN_FILEMUSTEXIST
         # Parse filetypes: "Excel (*.xlsx)|*.xlsx|Word (*.docx)|*.docx"
-        dlg = win32ui.CreateFileDialog(not save, None, None, flags, filetypes)
+        default_ext = default_name.rpartition(".")[2] if "." in default_name else None
+        dlg = win32ui.CreateFileDialog(
+            not save, default_ext, default_name or None, flags, filetypes
+        )
         dlg.SetOFNTitle(title)
         if dlg.DoModal() == 1:  # IDOK
             return dlg.GetPathName()
@@ -66,7 +71,9 @@ def _open_file_dialog(title: str, filetypes: str, save: bool) -> str:
             root.withdraw()
             root.attributes("-topmost", True)
             if save:
-                path = filedialog.asksaveasfilename(title=title)
+                path = filedialog.asksaveasfilename(
+                    title=title, initialfile=default_name
+                )
             else:
                 path = filedialog.askopenfilename(title=title)
             root.destroy()
