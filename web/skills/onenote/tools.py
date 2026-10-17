@@ -42,13 +42,14 @@ TOOL_DEFS = [
     },
     {
         "name": "list_onenote_sections",
-        "description": "List sections in a OneNote notebook. Call after list_onenote_notebooks to get section IDs. For SharePoint team notebooks, pass the notebook's site_id.",
+        "description": "List sections in a OneNote notebook. Call after list_onenote_notebooks to get section IDs. For SharePoint team notebooks, pass the notebook's site_id. If a team site's notebooks cannot be listed (for example a 403), call with only site_id (leave notebook_id empty) to list every section on that site, then use list_onenote_pages with a section id.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "notebook_id": {
                     "type": "string",
-                    "description": "Notebook ID from list_onenote_notebooks",
+                    "description": "Notebook ID from list_onenote_notebooks. Empty with a site_id lists all sections on that site.",
+                    "default": "",
                 },
                 "site_id": {
                     "type": "string",
@@ -56,7 +57,7 @@ TOOL_DEFS = [
                     "default": "",
                 },
             },
-            "required": ["notebook_id"],
+            "required": [],
         },
     },
     {
@@ -441,13 +442,16 @@ def _tool_find_onenote_notebook(name: str) -> dict:
     return {"notebooks": _uniq}
 
 
-def _tool_list_onenote_sections(notebook_id: str, site_id: str = "") -> dict:
+def _tool_list_onenote_sections(notebook_id: str = "", site_id: str = "") -> dict:
     from .._m365.helpers import get_skill_client
 
+    if not notebook_id and not site_id:
+        return {"error": "Pass a notebook_id, or a site_id to list all sections on that site."}
     gc = get_skill_client(ONENOTE_SKILLS_DIR)
+    base = _onenote_root(site_id)
     items = _paginate_onenote(
         gc,
-        f"{_onenote_root(site_id)}/notebooks/{_eid(notebook_id)}/sections",
+        f"{base}/notebooks/{_eid(notebook_id)}/sections" if notebook_id else f"{base}/sections",
         {"$select": "id,displayName,createdDateTime"},
     )
     return {

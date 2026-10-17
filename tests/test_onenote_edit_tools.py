@@ -297,3 +297,28 @@ def test_update_other_graph_error_is_returned_as_error():
     gc = FakeGC(patch_error=_Bad("Graph API 400: bad"))
     result = _run(onenote_tools._tool_update_onenote_page, gc, "page1", "x")
     assert result == {"error": "Graph API 400: bad"}
+
+
+def test_list_sections_by_site_only():
+    from skills.onenote import tools
+
+    class SectionsGC:
+        def __init__(self):
+            self.paths = []
+
+        def get(self, path, params=None):
+            self.paths.append(path)
+            return {"value": [{"id": "s1", "displayName": "Start Here"}]}
+
+    gc = SectionsGC()
+    with patch("skills._m365.helpers.get_skill_client", return_value=gc):
+        out = tools._tool_list_onenote_sections(site_id="host,a,b")
+    assert gc.paths == ["/sites/host%2Ca%2Cb/onenote/sections"]
+    assert out["sections"][0]["name"] == "Start Here"
+    assert out["sections"][0]["site_id"] == "host,a,b"
+
+
+def test_list_sections_needs_notebook_or_site():
+    from skills.onenote import tools
+
+    assert "error" in tools._tool_list_onenote_sections()
