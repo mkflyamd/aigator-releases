@@ -10179,38 +10179,149 @@ function _wireInlineDraftMentions(editor, service, data) {
   editor.addEventListener('blur', () => setTimeout(close, 150));
 }
 
-function _serializeInlineDraftEditor(editor, service) {
-  const mentions = [];
-  const visit = (node) => {
-    let output = '';
-    node.childNodes.forEach((child) => {
-      if (child.nodeType === Node.TEXT_NODE) {
-        output += service === 'teams' ? escapeHtml(child.textContent) : child.textContent;
-      } else if (child.nodeName === 'BR') output += '\n';
-      else if (child.classList?.contains('gcc-inline-mention')) {
-        const id = child.dataset.mentionId || '';
-        const name = child.dataset.mentionName || '';
-        if (service === 'slack') output += `<@${id}>`;
-        else {
-          const itemid = mentions.length;
-          mentions.push({
-            id: itemid,
-            mentionText: name,
-            mentioned: { user: { id, displayName: name, userIdentityType: 'aadUser' } },
-          });
-          output += `<span itemscope itemtype="http://schema.skype.com/Mention" itemid="${itemid}">${escapeHtml(name)}</span>`;
-        }
-      } else {
-        output += visit(child);
-        if (child.nodeName === 'DIV' || child.nodeName === 'P') output += '\n';
-      }
-    });
-    return output;
+function _draftEditorSeedHtml(data, fallbackText) {
+  const html = data && typeof data.body_html === 'string' ? data.body_html.trim() : '';
+  if (html) return html;
+  return escapeHtml(String(fallbackText || '')).replace(/\n/g, '<br>');
+}
+
+function _upgradeDraftMentions(editor) {
+  editor.querySelectorAll('span[data-mention-id]').forEach((span) => {
+    if (span.classList.contains('gcc-inline-mention')) return;
+    const service = span.dataset.mentionService === 'slack' ? 'slack' : 'teams';
+    const label = span.textContent || '';
+    const name = span.dataset.mentionName || label.replace(/^[@#]/, '');
+    const chip = _draftMentionChip(service, { name, id: span.dataset.mentionId || '' });
+    chip.textContent = label;
+    span.replaceWith(chip);
+  });
+}
+
+function _normalizeDraftLinkUrl(raw) {
+  const url = String(raw || '').trim();
+  if (!url || /[\s"<>]/.test(url)) return '';
+  if (/^(https?:\/\/|mailto:)/i.test(url)) return url;
+  if (/^[a-z][a-z0-9+.-]*:(?!\d)/i.test(url)) return '';
+  if (/^[^@/]+@[^@/]+\.[^@/]+$/.test(url)) return 'mailto:' + url;
+  return 'https://' + url;
+}
+
+function _draftFormatButtons(capabilities) {
+  const allowed = new Set(capabilities || []);
+  return [
+    { cap: 'bold', label: 'B', title: 'Bold', command: 'bold' },
+    { cap: 'italic', label: 'I', title: 'Italic', command: 'italic' },
+    { cap: 'underline', label: 'U', title: 'Underline', command: 'underline' },
+    { cap: 'ul', label: '•', title: 'Bulleted list', command: 'insertUnorderedList' },
+    { cap: 'ol', label: '1.', title: 'Numbered list', command: 'insertOrderedList' },
+    { cap: 'link', label: 'Link', title: 'Link', command: 'link' },
+    { cap: 'code', label: '</>', title: 'Code', command: 'code' },
+  ].filter((button) => allowed.has(button.cap));
+}
+
+function _initDraftRichEditor(editor, capabilities) {
+  _upgradeDraftMentions(editor);
+  editor.addEventListener('focus', () => {
+    try {
+      document.execCommand('defaultParagraphSeparator', false, 'p');
+      document.execCommand('styleWithCSS', false, false);
+    } catch (_) {
+      // execCommand options are best effort; the editor still works without them.
+    }
+  });
+  editor.addEventListener('paste', (event) => {
+    const text = event.clipboardData?.getData('text/plain');
+    if (text === undefined) return;
+    event.preventDefault();
+    document.execCommand('insertHTML', false, escapeHtml(text).replace(/\r?\n/g, '<br>'));
+  });
+
+  const buttons = _draftFormatButtons(capabilities);
+  if (!buttons.length) return;
+
+  const toolbar = document.createElement('div');
+  toolbar.className = 'gcc-toolbar';
+  toolbar.setAttribute('role', 'toolbar');
+  toolbar.setAttribute('aria-label', 'Formatting');
+
+  const linkRow = document.createElement('div');
+  linkRow.className = 'gcc-link-row hidden';
+  const linkInput = document.createElement('input');
+  linkInput.type = 'text';
+  linkInput.className = 'gcc-link-input';
+  linkInput.placeholder = 'https://example.com';
+  linkInput.setAttribute('aria-label', 'Link address');
+  const linkAdd = document.createElement('button');
+  linkAdd.type = 'button';
+  linkAdd.className = 'gcc-tool-btn';
+  linkAdd.textContent = 'Add';
+  linkRow.append(linkInput, linkAdd);
+
+  let savedRange = null;
+  const applyLink = () => {
+    const url = _normalizeDraftLinkUrl(linkInput.value);
+    if (!url) {
+      linkInput.setAttribute('aria-invalid', 'true');
+      return;
+    }
+    linkInput.removeAttribute('aria-invalid');
+    editor.focus();
+    const sel = window.getSelection();
+    if (savedRange) {
+      sel.removeAllRanges();
+      sel.addRange(savedRange);
+    }
+    if (!sel.rangeCount || sel.isCollapsed) {
+      document.execCommand(
+        'insertHTML',
+        false,
+        `<a href="${escapeHtml(url)}">${escapeHtml(url)}</a>`,
+      );
+    } else {
+      document.execCommand('createLink', false, url);
+    }
+    linkInput.value = '';
+    linkRow.classList.add('hidden');
   };
-  const output = visit(editor).replace(/\n$/, '');
-  return service === 'teams'
-    ? { text: `<div>${output.replace(/\n/g, '<br>')}</div>`, mentions }
-    : { text: output, mentions: [] };
+  linkInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      applyLink();
+    } else if (event.key === 'Escape') {
+      linkRow.classList.add('hidden');
+      editor.focus();
+    }
+  });
+  linkAdd.addEventListener('click', applyLink);
+
+  buttons.forEach((button) => {
+    const el = document.createElement('button');
+    el.type = 'button';
+    el.className = 'gcc-tool-btn';
+    el.textContent = button.label;
+    el.title = button.title;
+    el.setAttribute('aria-label', button.title);
+    el.addEventListener('mousedown', (event) => event.preventDefault());
+    el.addEventListener('click', () => {
+      const sel = window.getSelection();
+      const inEditor = !!sel && sel.rangeCount > 0 && editor.contains(sel.anchorNode);
+      if (button.command === 'link') {
+        savedRange = inEditor ? sel.getRangeAt(0).cloneRange() : null;
+        linkRow.classList.toggle('hidden');
+        if (!linkRow.classList.contains('hidden')) linkInput.focus();
+        return;
+      }
+      editor.focus();
+      if (button.command === 'code') {
+        const selected = inEditor ? sel.toString() : '';
+        document.execCommand('insertHTML', false, `<code>${escapeHtml(selected || 'code')}</code>`);
+        return;
+      }
+      document.execCommand(button.command, false, null);
+    });
+    toolbar.appendChild(el);
+  });
+  editor.before(toolbar, linkRow);
 }
 
 function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persist = true } = {}) {
@@ -10463,8 +10574,8 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
               ? `<div class="gcc-fields">${config.customBody}</div>`
               : config.hideEditLink
                 ? ''
-                : config.service === 'slack' || config.service === 'teams'
-                  ? `<div class="gcc-edit-area gcc-mention-editor" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Draft message">${escapeHtml(_editableBody)}</div>`
+                : ['email', 'slack', 'teams'].includes(config.service)
+                  ? `<div class="gcc-edit-area gcc-rich-editor${config.service === 'email' ? '' : ' gcc-mention-editor'}" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Draft message">${_draftEditorSeedHtml(data, _editableBody)}</div>`
                   : `<textarea class="gcc-edit-area" rows="${Math.min(10, Math.max(3, _editableBody.split('\n').length))}">${escapeHtml(_editableBody)}</textarea>`
           }
           ${config.service === 'slack' && !config.customBody ? '<div class="gcc-mention-hint">Type <strong>@</strong> to mention a Slack person.</div>' : ''}
@@ -10508,6 +10619,9 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
   if (inlineMentionEditor && (config.service === 'slack' || config.service === 'teams')) {
     _wireInlineDraftMentions(editArea, config.service, data);
   }
+  if (editArea?.classList.contains('gcc-rich-editor')) {
+    _initDraftRichEditor(editArea, data.format_capabilities || []);
+  }
 
   const jiraEditFields = [...card.querySelectorAll('[data-jira-edit]')];
   jiraEditFields.forEach((el) => {
@@ -10523,22 +10637,14 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
         if (el.value !== el.dataset.orig) editedFields[el.dataset.jiraEdit] = el.value;
       });
       // Send the EDITED text from the textarea, not the original draft.
-      const inlineMentionPayload =
-        inlineMentionEditor && editArea
-          ? _serializeInlineDraftEditor(editArea, config.service)
-          : null;
-      const editedText = editArea
-        ? inlineMentionPayload
-          ? inlineMentionPayload.text
-          : editArea.value || editArea.textContent || ''
-        : null;
+      const richEditor = !!editArea?.classList.contains('gcc-rich-editor');
+      const editedText =
+        editArea && !richEditor ? editArea.value || editArea.textContent || '' : null;
       const _approveBody = JSON.stringify({
         context_id: ownerTabId || _activeTabId || 'default',
+        ...(richEditor ? { edited_html: editArea.innerHTML } : {}),
         ...(editedText !== null ? { edited_message: editedText } : {}),
         ...(Object.keys(editedFields).length ? { edited_fields: editedFields } : {}),
-        ...(inlineMentionPayload?.mentions?.length
-          ? { mentions: inlineMentionPayload.mentions }
-          : {}),
       });
       let res = await fetch('/api/drafts/' + draftId + '/approve', {
         method: 'POST',
@@ -10662,14 +10768,18 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
           // so edits aren't silently dropped when opening in Outlook instead
           // of sending from Gator (a handed-off draft permanently disables
           // Approve, so there is no later chance to apply them).
-          const editedText = editArea ? editArea.value || editArea.textContent || '' : null;
+          const outlookEdit = editArea?.classList.contains('gcc-rich-editor')
+            ? { edited_html: editArea.innerHTML }
+            : editArea
+              ? { edited_message: editArea.value || editArea.textContent || '' }
+              : null;
           const res = await fetch('/api/drafts/' + draftId + '/open-in-outlook', {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
               'X-CSRF-Token': window.__CSRF_TOKEN__ || '',
             },
-            body: editedText !== null ? JSON.stringify({ edited_message: editedText }) : undefined,
+            body: outlookEdit ? JSON.stringify(outlookEdit) : undefined,
           });
           if (!res.ok) throw new Error('HTTP ' + res.status);
           const { url } = await res.json();

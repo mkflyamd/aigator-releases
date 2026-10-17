@@ -1139,8 +1139,8 @@ class TestSlackTypedDestinations:
         assert "Loading Slack people" in source
         assert "_fetchSlackPeople(trigger.query" in source
         assert "gcc-mention-editor" in source
-        assert "function _serializeInlineDraftEditor" in source
-        assert "<@${id}>" in source
+        assert "function _upgradeDraftMentions" in source
+        assert "function _normalizeDraftLinkUrl" in source
 
     def test_teams_draft_card_builds_skype_mentions(self):
         source = (pathlib.Path(__file__).parent.parent / "web" / "static" / "app.js").read_text(
