@@ -10265,14 +10265,31 @@ function _normalizeDraftLinkUrl(raw) {
 function _draftFormatButtons(capabilities) {
   const allowed = new Set(capabilities || []);
   return [
-    { cap: 'bold', label: 'B', title: 'Bold', command: 'bold' },
-    { cap: 'italic', label: 'I', title: 'Italic', command: 'italic' },
-    { cap: 'underline', label: 'U', title: 'Underline', command: 'underline' },
-    { cap: 'ul', label: '•', title: 'Bulleted list', command: 'insertUnorderedList' },
-    { cap: 'ol', label: '1.', title: 'Numbered list', command: 'insertOrderedList' },
-    { cap: 'link', label: 'Link', title: 'Link', command: 'link' },
-    { cap: 'code', label: '</>', title: 'Code', command: 'code' },
+    { cap: 'bold', group: 1, label: 'B', title: 'Bold', command: 'bold' },
+    { cap: 'italic', group: 1, label: 'I', title: 'Italic', command: 'italic' },
+    { cap: 'underline', group: 1, label: 'U', title: 'Underline', command: 'underline' },
+    { cap: 'ul', group: 2, label: '•', title: 'Bulleted list', command: 'insertUnorderedList' },
+    { cap: 'ol', group: 2, label: '1.', title: 'Numbered list', command: 'insertOrderedList' },
+    { cap: 'link', group: 3, label: 'Link', title: 'Link', command: 'link' },
+    { cap: 'code', group: 3, label: '</>', title: 'Code', command: 'code' },
   ].filter((button) => allowed.has(button.cap));
+}
+
+function _draftToolbarSeparatorBefore(previous, button) {
+  return !!previous && previous.group !== button.group;
+}
+
+function _draftFormatActive(editor, button) {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0 || !editor.contains(sel.anchorNode)) return false;
+  const node = sel.anchorNode.nodeType === 1 ? sel.anchorNode : sel.anchorNode.parentElement;
+  if (button.command === 'link') return !!node?.closest('a');
+  if (button.command === 'code') return !!node?.closest('code');
+  try {
+    return document.queryCommandState(button.command);
+  } catch (_) {
+    return false;
+  }
 }
 
 function _initDraftRichEditor(editor, capabilities) {
@@ -10350,13 +10367,30 @@ function _initDraftRichEditor(editor, capabilities) {
   });
   linkAdd.addEventListener('click', applyLink);
 
-  buttons.forEach((button) => {
+  const toolButtons = [];
+  const refreshActive = () => {
+    toolButtons.forEach(({ el, button }) => {
+      const active = _draftFormatActive(editor, button);
+      el.classList.toggle('is-active', active);
+      el.setAttribute('aria-pressed', active ? 'true' : 'false');
+    });
+  };
+
+  buttons.forEach((button, index) => {
+    if (_draftToolbarSeparatorBefore(buttons[index - 1], button)) {
+      const sep = document.createElement('span');
+      sep.className = 'gcc-tool-sep';
+      sep.setAttribute('aria-hidden', 'true');
+      toolbar.appendChild(sep);
+    }
     const el = document.createElement('button');
     el.type = 'button';
     el.className = 'gcc-tool-btn';
+    el.dataset.cap = button.cap;
     el.textContent = button.label;
     el.title = button.title;
     el.setAttribute('aria-label', button.title);
+    el.setAttribute('aria-pressed', 'false');
     el.addEventListener('mousedown', (event) => event.preventDefault());
     el.addEventListener('click', () => {
       const sel = window.getSelection();
@@ -10371,13 +10405,25 @@ function _initDraftRichEditor(editor, capabilities) {
       if (button.command === 'code') {
         const selected = inEditor ? sel.toString() : '';
         document.execCommand('insertHTML', false, `<code>${escapeHtml(selected || 'code')}</code>`);
-        return;
+      } else {
+        document.execCommand(button.command, false, null);
       }
-      document.execCommand(button.command, false, null);
+      refreshActive();
     });
+    toolButtons.push({ el, button });
     toolbar.appendChild(el);
   });
   editor.before(toolbar, linkRow);
+
+  const onSelectionChange = () => {
+    if (!editor.isConnected) {
+      document.removeEventListener('selectionchange', onSelectionChange);
+      return;
+    }
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount > 0 && editor.contains(sel.anchorNode)) refreshActive();
+  };
+  document.addEventListener('selectionchange', onSelectionChange);
 }
 
 function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persist = true } = {}) {

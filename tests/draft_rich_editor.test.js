@@ -48,6 +48,24 @@ assert.strictEqual(caps(['link', 'bold']), '["bold","link"]');
 assert.strictEqual(caps([]), '[]');
 assert.strictEqual(caps(undefined), '[]');
 assert.strictEqual(buttons(['underline'])[0].command, 'underline');
+const groups = (list) => JSON.stringify(buttons(list).map((b) => b.group));
+assert.strictEqual(groups(['bold', 'italic', 'underline', 'ul', 'ol', 'link', 'code']), '[1,1,1,2,2,3,3]');
+assert.strictEqual(groups(['bold', 'italic', 'ul', 'ol', 'link']), '[1,1,2,2,3]');
+assert.strictEqual(groups(['link', 'bold']), '[1,3]');
+
+// _draftToolbarSeparatorBefore: dividers only between different groups, never leading
+const separatorBefore = load('_draftToolbarSeparatorBefore');
+const dividerPlan = (list) => {
+  const all = buttons(list);
+  return JSON.stringify(all.map((b, i) => separatorBefore(all[i - 1], b)));
+};
+assert.strictEqual(
+  dividerPlan(['bold', 'italic', 'underline', 'ul', 'ol', 'link', 'code']),
+  '[false,false,false,true,false,true,false]',
+);
+assert.strictEqual(dividerPlan(['bold', 'italic', 'link']), '[false,false,true]');
+assert.strictEqual(dividerPlan(['ul', 'ol']), '[false,false]');
+assert.strictEqual(dividerPlan(['code']), '[false]');
 
 // _upgradeDraftMentions
 const chips = [];
