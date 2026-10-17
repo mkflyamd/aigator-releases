@@ -58,6 +58,14 @@ def _email_fragment(params: dict, plain_key: str) -> str:
     return rich.render("email", markup).content
 
 
+def _slack_text(params: dict) -> str:
+    from skills import _rich_text as rich
+
+    if params.get("body_html"):
+        return rich.render("slack", params["body_html"]).content
+    return params.get("message", "")
+
+
 # â”€â”€ Jira helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Small, operation-specific wrappers that keep the approve handler readable
 # without introducing an adapter class hierarchy.  Every helper is explicit
@@ -355,7 +363,7 @@ async def approve_draft(draft_id: str, body: dict = None):
                     status_code=409,
                     detail="You are not a member of this private Slack channel. Join it, then create a new draft.",
                 )
-            payload = {"channel": p["channel_id"], "text": p["message"]}
+            payload = {"channel": p["channel_id"], "text": _slack_text(p)}
             if p.get("thread_ts"):
                 payload["thread_ts"] = p["thread_ts"]
             data = _slack_web_api("chat.postMessage", payload, method="POST")
@@ -377,7 +385,7 @@ async def approve_draft(draft_id: str, body: dict = None):
             if not opened.get("ok") or not (opened.get("channel") or {}).get("id"):
                 raise HTTPException(status_code=503, detail=f"Slack could not open the DM: {opened.get('error', 'unknown')}")
             dm_channel_id = opened["channel"]["id"]
-            data = _slack_web_api("chat.postMessage", {"channel": dm_channel_id, "text": p["message"]}, method="POST")
+            data = _slack_web_api("chat.postMessage", {"channel": dm_channel_id, "text": _slack_text(p)}, method="POST")
             if not data.get("ok"):
                 raise HTTPException(status_code=503, detail=f"Slack error: {data.get('error', 'unknown')}")
             delivery_result = {"ok": True, "ts": data.get("ts"), "channel_id": dm_channel_id}
@@ -386,13 +394,20 @@ async def approve_draft(draft_id: str, body: dict = None):
         elif dtype == "teams-message":
             from routes.teams import tp_teams_send_message, TeamsSendMessageRequest
 
+            if p.get("body_html"):
+                from skills import _rich_text as rich
+
+                rendered = rich.render("teams", p["body_html"])
+                message, html_flag, mentions = rendered.content, True, rendered.mentions
+            else:
+                message, html_flag, mentions = p.get("message", ""), p.get("html", False), p.get("mentions", [])
             send_req = TeamsSendMessageRequest(
                 to=p.get("to", ""),
-                message=p.get("message", ""),
-                html=p.get("html", False),
+                message=message,
+                html=html_flag,
                 chat_id=p.get("chat_id", ""),
                 recipients=p.get("recipients", []),
-                mentions=p.get("mentions", []),
+                mentions=mentions,
             )
             delivery_result = await tp_teams_send_message(send_req)
 
