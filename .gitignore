@@ -98,3 +98,7 @@ deckbuild/
 .playwright-mcp/
 
 .coverage
+
+# Test and tooling leftovers
+/pip/
+tests/_test_turn_telemetry.db
