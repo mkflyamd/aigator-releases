@@ -34,6 +34,30 @@ async def _run_sync(fn, *args, **kwargs):
     return await asyncio.to_thread(partial(fn, *args, **kwargs))
 
 
+def _fold_rich_edits(draft_type: str, params: dict, body: dict | None) -> None:
+    from skills import _rich_text as rich
+
+    if not body or not rich.service_for(draft_type):
+        return
+    edited_html = body.get("edited_html")
+    if isinstance(edited_html, str):
+        params["body_html"] = rich.sanitize(edited_html)
+        for key in ("body", "message", "comment"):
+            if key in params:
+                params[key] = ""
+    elif "edited_message" in body:
+        params.pop("body_html", None)
+
+
+def _email_fragment(params: dict, plain_key: str) -> str:
+    from skills import _rich_text as rich
+
+    markup = rich.normalize(
+        body=params.get(plain_key) or "", body_html=params.get("body_html") or ""
+    )
+    return rich.render("email", markup).content
+
+
 # â”€â”€ Jira helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Small, operation-specific wrappers that keep the approve handler readable
 # without introducing an adapter class hierarchy.  Every helper is explicit
@@ -214,6 +238,7 @@ async def approve_draft(draft_id: str, body: dict = None):
             draft["params"]["message"] = body["edited_message"]
     if body and isinstance(body.get("mentions"), list):
         draft["params"]["mentions"] = body["mentions"]
+    _fold_rich_edits(draft["type"], draft["params"], body)
 
     delivery_result: dict | None = None
     try:
@@ -224,7 +249,6 @@ async def approve_draft(draft_id: str, body: dict = None):
         # â”€â”€ Email â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         if dtype == "email-reply":
             from skills._m365.helpers import get_graph_client
-            import html as _html
 
             gc = get_graph_client()
             try:
@@ -241,9 +265,7 @@ async def approve_draft(draft_id: str, body: dict = None):
             action = "createReplyAll" if p.get("reply_all") else "createReply"
             draft_msg = gc.post(f"/me/messages/{_eid(p['message_id'])}/{action}", {})
             draft_msg_id = draft_msg.get("id", "")
-            body_html = p["body"]
-            if "<" not in body_html:
-                body_html = _html.escape(body_html).replace("\n", "<br>")
+            body_html = _email_fragment(p, "body")
             quoted = (
                 gc.get(f"/me/messages/{_eid(draft_msg_id)}", {"$select": "body"}).get("body") or {}
             ).get("content", "")
@@ -256,7 +278,6 @@ async def approve_draft(draft_id: str, body: dict = None):
 
         elif dtype == "email-forward":
             from skills._m365.helpers import get_graph_client
-            import html as _html
 
             gc = get_graph_client()
             try:
@@ -276,10 +297,8 @@ async def approve_draft(draft_id: str, body: dict = None):
             if not to_addrs:
                 raise HTTPException(status_code=400, detail="No recipients specified for forward")
             update: dict = {"toRecipients": [{"emailAddress": {"address": a}} for a in to_addrs]}
-            if p.get("comment"):
-                comment_html = p["comment"]
-                if "<" not in comment_html:
-                    comment_html = _html.escape(comment_html).replace("\n", "<br>")
+            comment_html = _email_fragment(p, "comment")
+            if comment_html:
                 forwarded = (
                     gc.get(f"/me/messages/{_eid(draft_msg_id)}", {"$select": "body"}).get("body") or {}
                 ).get("content", "")
@@ -292,17 +311,15 @@ async def approve_draft(draft_id: str, body: dict = None):
             from skills._m365.helpers import get_graph_client
 
             gc = get_graph_client()
-            edited = p.get("message")
-            body_content = edited if edited is not None else (p.get("body_html") or p.get("body") or "")
+            body_content = _email_fragment(p, "message" if "message" in p else "body")
             to_addrs = [a.strip() for a in p.get("to", "").split(",") if a.strip()]
             if not to_addrs:
                 raise HTTPException(status_code=400, detail="No recipients specified")
-            if "<html" not in body_content.lower():
-                body_content = (
-                    "<!DOCTYPE html><html><head>"
-                    '<meta http-equiv="Content-Type" content="text/html; charset=utf-8">'
-                    "</head><body>" + body_content + "</body></html>"
-                )
+            body_content = (
+                "<!DOCTYPE html><html><head>"
+                '<meta http-equiv="Content-Type" content="text/html; charset=utf-8">'
+                "</head><body>" + body_content + "</body></html>"
+            )
             msg: dict = {
                 "subject": p.get("subject", ""),
                 "body": {"contentType": "HTML", "content": body_content},
@@ -926,7 +943,6 @@ async def open_draft_in_outlook(draft_id: str, body: dict = None):
     >= 500 is treated as "maybe created" and resolved as a terminal handoff
     instead, same as a known msg_id.
     """
-    import html as _html
     from skills._drafts import get_draft, claim_for_handoff, abort_handoff, complete_handoff
 
     msg_id = ""
@@ -967,6 +983,7 @@ async def open_draft_in_outlook(draft_id: str, body: dict = None):
             p["comment"] = body["edited_message"]
         else:
             p["message"] = body["edited_message"]
+    _fold_rich_edits(dtype, p, body)
 
     try:
         from skills._m365.helpers import get_graph_client
@@ -977,10 +994,7 @@ async def open_draft_in_outlook(draft_id: str, body: dict = None):
             to_addrs = [a.strip() for a in p.get("to", "").split(",") if a.strip()]
             if not to_addrs:
                 raise HTTPException(status_code=400, detail="No recipients in draft.")
-            edited = p.get("message")
-            body_content = edited if edited is not None else (p.get("body_html") or p.get("body") or "")
-            if "<" not in body_content:
-                body_content = _html.escape(body_content).replace("\n", "<br>")
+            body_content = _email_fragment(p, "message" if "message" in p else "body")
             msg: dict = {
                 "subject": p.get("subject", ""),
                 "body": {"contentType": "HTML", "content": body_content},
@@ -1001,9 +1015,7 @@ async def open_draft_in_outlook(draft_id: str, body: dict = None):
             action = "createReplyAll" if p.get("reply_all") else "createReply"
             reply_draft = gc.post(f"/me/messages/{_eid(p['message_id'])}/{action}", {})
             msg_id = reply_draft.get("id", "")
-            body_html = p.get("body", "")
-            if "<" not in body_html:
-                body_html = _html.escape(body_html).replace("\n", "<br>")
+            body_html = _email_fragment(p, "body")
             quoted = (gc.get(f"/me/messages/{_eid(msg_id)}", {"$select": "body"}).get("body") or {}).get("content", "")
             gc.patch(f"/me/messages/{_eid(msg_id)}", {"body": {"contentType": "HTML", "content": body_html + quoted}})
 
@@ -1016,10 +1028,8 @@ async def open_draft_in_outlook(draft_id: str, body: dict = None):
             msg_id = fwd_draft.get("id", "")
             to_addrs = [a.strip() for a in p.get("to", "").split(",") if a.strip()]
             update: dict = {"toRecipients": [{"emailAddress": {"address": a}} for a in to_addrs]}
-            if p.get("comment"):
-                comment_html = p["comment"]
-                if "<" not in comment_html:
-                    comment_html = _html.escape(comment_html).replace("\n", "<br>")
+            comment_html = _email_fragment(p, "comment")
+            if comment_html:
                 forwarded = (gc.get(f"/me/messages/{_eid(msg_id)}", {"$select": "body"}).get("body") or {}).get("content", "")
                 update["body"] = {"contentType": "HTML", "content": comment_html + forwarded}
             gc.patch(f"/me/messages/{_eid(msg_id)}", update)
