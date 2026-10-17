@@ -304,6 +304,7 @@ _load_mcp_connections()
 _EMPTY_OK_REQUIRED = {
     ("write_file", "content"),
     ("edit_file", "new_str"),
+    ("update_onenote_page", "content"),
 }
 
 # ── Browser empty-result circuit breaker (context-scoped) ────────────────────
@@ -587,7 +588,12 @@ async def _execute_tool_impl(
             url_key = str(inputs.get("url") or inputs.get("start_url") or inputs.get("task", "")[:80])
             result = _apply_browser_empty_breaker(result, tool_name=name, url_key=url_key, context_id=context_id)
         from tool_result_truncation import truncate_tool_result, maybe_truncate_json_result
-        _NO_TRUNCATE_TOOLS = {"jira_get_project_meta"}
+        # read/update_onenote_page cap their own output
+        _NO_TRUNCATE_TOOLS = {
+            "jira_get_project_meta",
+            "read_onenote_page",
+            "update_onenote_page",
+        }
         if name in _NO_TRUNCATE_TOOLS:
             return result
         if isinstance(result, str):

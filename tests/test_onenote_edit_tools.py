@@ -187,6 +187,62 @@ def test_update_empty_replace_sends_empty_paragraph():
     assert gc.patch_bodies()[0][0]["content"] == "<p></p>"
 
 
+async def test_execute_tool_empty_replace_reaches_the_tool(monkeypatch):
+    import shared
+    from app import execute_tool
+
+    gc = FakeGC()
+    monkeypatch.setitem(
+        shared.TOOL_DISPATCH, "update_onenote_page", onenote_tools._tool_update_onenote_page
+    )
+    with patch("skills._m365.helpers.get_skill_client", return_value=gc):
+        result = await execute_tool(
+            "update_onenote_page",
+            {"page_id": "page1", "content": "", "action": "replace", "target": "p:{a}{3}"},
+        )
+    assert result.get("error") != "missing_required_params"
+    assert gc.patch_bodies()[0][0]["content"] == "<p></p>"
+
+
+def test_update_refuses_content_the_scrubber_removed_text_from():
+    import content_guard
+
+    gc = FakeGC()
+    result = _run(
+        onenote_tools._tool_update_onenote_page,
+        gc,
+        "page1",
+        f"before {content_guard.REMOVED} after",
+    )
+    assert result["error"] == "content_was_filtered"
+    assert gc.calls == []
+
+
+def test_update_previous_html_truncated_flag(monkeypatch):
+    monkeypatch.setattr(page_edit, "MAX_PREVIOUS_HTML", 12)
+    gc = FakeGC()
+    result = _run(
+        onenote_tools._tool_update_onenote_page, gc, "page1", "x", action="replace", target="table:{a}{7}"
+    )
+    assert result["previous_html_truncated"] is True
+    monkeypatch.setattr(page_edit, "MAX_PREVIOUS_HTML", 1000)
+    gc = FakeGC()
+    result = _run(
+        onenote_tools._tool_update_onenote_page, gc, "page1", "x", action="replace", target="p:{a}{3}"
+    )
+    assert "previous_html_truncated" not in result
+
+
+def test_update_null_action_and_target_default_to_append_body():
+    gc = FakeGC()
+    result = _run(
+        onenote_tools._tool_update_onenote_page, gc, "page1", "hello", action=None, target=None
+    )
+    assert result == {"updated": True, "page_id": "page1"}
+    assert gc.methods() == ["PATCH"]
+    assert gc.patch_bodies()[0][0]["target"] == "body"
+
+
 def test_update_title_needs_no_preread_and_returns_outline():
     gc = FakeGC()
     result = _run(

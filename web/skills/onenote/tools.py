@@ -621,7 +621,15 @@ def _tool_update_onenote_page(
     """Change an existing OneNote page: append (default), prepend, insert or
     replace content, or replace the title. Pass site_id for team notebooks."""
     from .._m365.helpers import get_skill_client
+    from content_guard import REMOVED
 
+    action = action or "append"
+    target = target or "body"
+    if REMOVED in (content or ""):
+        return {
+            "error": "content_was_filtered",
+            "message": "The content contains a placeholder where AI Gator removed text it flagged as a possible injected instruction. Do not write it to the page; leave that text out, or ask the user to make this edit.",
+        }
     try:
         ops = _pe.build_patch_ops(content, html, action, target, position)
     except _pe.EditError as e:
@@ -642,6 +650,8 @@ def _tool_update_onenote_page(
                 }
             if action == "replace":
                 result["previous_html"] = current[: _pe.MAX_PREVIOUS_HTML]
+                if len(current) > _pe.MAX_PREVIOUS_HTML:
+                    result["previous_html_truncated"] = True
         gc._request(
             "PATCH",
             f"https://graph.microsoft.com/v1.0{root}/pages/{_eid(page_id)}/content",

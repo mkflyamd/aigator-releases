@@ -17,7 +17,7 @@ metadata:
   2. For a table, read_onenote_page with element_id=<table id> to get its full HTML.
   3. update_onenote_page with action=replace and target=<element id>. For a table, send the whole table with every row (cells cannot be edited one by one). To remove an element, replace it with empty content. To add next to an element, use action=insert with position before or after. To rename the page, use target=title with action=replace.
   4. The result returns a fresh outline. Use ids from the latest outline only; ids can change after every update. If you get target_not_found, read the page again.
-  5. Never replace the body. Replace returns previous_html if the change has to be undone.
+  5. Never replace the body. Replace returns previous_html if the change has to be undone. If previous_html_truncated is true, the copy is incomplete; do not use it to undo.
 - Team notebooks: pass the notebook's site_id (from find_onenote_notebook or the pin) to every read and update call. A team page is reached through its section, not by listing a site's notebooks.
 - "Pin this page" → after finding a page, call pin_onenote_page (with its site_id for team notebooks) so the user can reference it by name in future messages without re-navigating.
 - When a page is pinned, ALWAYS use update_onenote_page directly — NEVER re-navigate through notebooks/sections.

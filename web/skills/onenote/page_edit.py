@@ -99,6 +99,8 @@ def build_patch_ops(
     if target == "title":
         if action != "replace":
             raise EditError("title_requires_replace", "The title can only be replaced.")
+        if not content.strip():
+            raise EditError("content_required", "The title cannot be empty.")
         title = _html.escape(" ".join(content.split()), quote=False)
         return [{"target": "title", "action": "replace", "content": title}]
 
@@ -111,6 +113,8 @@ def build_patch_ops(
         if action == "insert":
             raise EditError("insert_needs_element", "insert needs an element id as the target.")
         if action == "append":
+            if not content.strip():
+                raise EditError("content_required", "append needs non-empty content.")
             body = content if html else _escape_text(content)
             return [{"target": "body", "action": "append", "content": f"<div>{body}</div>"}]
 

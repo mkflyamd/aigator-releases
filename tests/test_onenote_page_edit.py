@@ -152,6 +152,10 @@ def test_title_replace_is_escaped_single_line():
         ({"action": "insert", "target": "p1", "position": "middle"}, "invalid_position"),
         ({"action": "insert", "target": "p1", "content": ""}, "content_required"),
         ({"action": "prepend", "target": "body", "content": ""}, "content_required"),
+        ({"action": "replace", "target": "title", "content": ""}, "content_required"),
+        ({"action": "replace", "target": "title", "content": "  \n "}, "content_required"),
+        ({"action": "append", "target": "body", "content": ""}, "content_required"),
+        ({"action": "append", "target": "body", "content": "  \n "}, "content_required"),
     ],
 )
 def test_build_patch_ops_refusals(kwargs, code):
