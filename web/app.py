@@ -760,7 +760,9 @@ async def lifespan(app):
     # Pay tkinter's cold-import + first-window cost now (measured up to ~4s)
     # instead of on the user's first Add-Project/browse click, where a slow
     # first request can outlast a keep-alive timeout and look like a failure.
-    asyncio.create_task(asyncio.to_thread(warmup_native_dialogs))
+    # Skipped on macOS: Tk() off the main thread hung startup on headless runners.
+    if sys.platform != "darwin":
+        asyncio.create_task(asyncio.to_thread(warmup_native_dialogs))
 
     await start_worker(_bg_run_fn)
     await sched.init_scheduler()
