@@ -18,7 +18,8 @@ ALLOWED_TAGS = {
     "code", "pre", "blockquote", "span", "h1", "h2", "h3",
     "table", "thead", "tbody", "tr", "th", "td",
 }
-_DROP_WITH_CONTENT = {"script", "style", "iframe", "object", "embed", "head", "title"}
+# Every tag here is a container; void tags (embed, img, ...) are dropped by the allow-list.
+_DROP_WITH_CONTENT = {"script", "style", "iframe", "object", "head", "title"}
 _SAFE_SCHEMES = ("http://", "https://", "mailto:")
 _STYLE_PROPS = {
     "color", "background-color", "font-weight", "font-style",
@@ -270,7 +271,7 @@ def slack_to_html(message: str, names: dict[str, str] | None = None) -> str:
         token, label = m.group(1), m.group(2)
         if token.startswith("@"):
             uid = token[1:]
-            return mention_span(uid, label or names.get(uid, uid), "slack")
+            return mention_span(uid, names.get(uid) or label or uid, "slack")
         if token.startswith("!"):
             return mention_span(token, token[1:], "slack")
         return mention_span(token, label or token[1:], "slack")

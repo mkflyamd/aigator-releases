@@ -20,6 +20,12 @@ def test_sanitize_unterminated_script_drops_the_rest():
     assert rt.sanitize("<p>ok</p><script>alert(1)<p>boom</p>") == "<p>ok</p>"
 
 
+def test_sanitize_void_embed_does_not_swallow_following_content():
+    assert rt.sanitize("<p>a</p><embed src=x><p>b</p>") == "<p>a</p><p>b</p>"
+    assert rt.sanitize("<p>a</p><embed src=x/><p>b</p>") == "<p>a</p><p>b</p>"
+    assert rt.sanitize("<p>a</p><object><embed src=x></object><p>b</p>") == "<p>a</p><p>b</p>"
+
+
 def test_sanitize_links_only_http_https_mailto():
     assert rt.sanitize('<a href="https://a.com">x</a>') == '<a href="https://a.com">x</a>'
     assert rt.sanitize('<a href="mailto:a@b.com">x</a>') == '<a href="mailto:a@b.com">x</a>'

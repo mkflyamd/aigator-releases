@@ -140,6 +140,13 @@ def test_slack_to_html_round_trip_preserves_native_tokens():
     )
 
 
+def test_slack_to_html_prefers_resolved_name_over_token_label():
+    html = rt.slack_to_html("hi <@U999|Bob>", {"U999": "Carol"})
+    assert MENTION.format(id="U999", name="Carol", svc="slack") in html
+    assert "Bob" not in html
+    assert MENTION.format(id="U7", name="Bob", svc="slack") in rt.slack_to_html("<@U7|Bob>", {})
+
+
 def test_slack_heading_and_table_flatten():
     assert rt.render("slack", "<h2>Title</h2><p>x</p>").content == "*Title*\n\nx"
     assert (

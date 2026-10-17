@@ -30,8 +30,13 @@ assert.strictEqual(normalize('localhost:8080/x'), 'https://localhost:8080/x');
 
 // _draftEditorSeedHtml
 const seed = load('_draftEditorSeedHtml', { escapeHtml });
-assert.strictEqual(seed({ body_html: '  <p>x</p> ' }, 'fallback'), '<p>x</p>');
-assert.strictEqual(seed({ body_html: '   ' }, 'a < b\nc'), 'a &lt; b<br>c');
+assert.strictEqual(seed({ body_html: '  <p>x</p> ', format_capabilities: ['bold'] }, 'fallback'), '<p>x</p>');
+assert.strictEqual(seed({ body_html: '   ', format_capabilities: ['bold'] }, 'a < b\nc'), 'a &lt; b<br>c');
+// Drafts restored from before server-side sanitizing carry no format_capabilities: never trust their body_html.
+assert.strictEqual(
+  seed({ body_html: '<img src=x onerror=alert(1)>' }, 'a < b'),
+  'a &lt; b',
+);
 assert.strictEqual(seed({}, 'a < b\nc'), 'a &lt; b<br>c');
 assert.strictEqual(seed({}, undefined), '');
 
@@ -48,7 +53,8 @@ assert.strictEqual(buttons(['underline'])[0].command, 'underline');
 const chips = [];
 const upgrade = load('_upgradeDraftMentions', {
   _draftMentionChip: (service, person) => {
-    const chip = { service, person, textContent: '' };
+    // Like the real chip: the label comes from the person's name, not from the span it replaces.
+    const chip = { service, person, textContent: '@' + person.name };
     chips.push(chip);
     return chip;
   },
@@ -66,9 +72,14 @@ const spans = [
   fakeSpan({ id: 'U1', service: 'slack', name: 'Alex', text: '@Alex' }),
   fakeSpan({ id: 'AAD1', service: 'teams', name: '', text: '@Sam' }),
   fakeSpan({ id: 'U2', service: 'slack', name: 'Z', text: '@Z', upgraded: true }),
+  fakeSpan({ id: 'U3', service: 'slack', name: 'Ceo Name', text: '@Bob' }),
+  fakeSpan({ id: '#C1', service: 'slack', name: 'general', text: '#general' }),
 ];
 upgrade({ querySelectorAll: () => spans });
-assert.strictEqual(chips.length, 2);
+assert.strictEqual(chips.length, 4);
+assert.strictEqual(chips[3].textContent, '#general');
+assert.strictEqual(chips[2].textContent, '@Ceo Name');
+assert.strictEqual(spans[3].replacedWith, chips[2]);
 assert.deepStrictEqual(JSON.parse(JSON.stringify(chips[0])), {
   service: 'slack',
   person: { name: 'Alex', id: 'U1' },

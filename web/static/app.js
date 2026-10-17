@@ -10180,7 +10180,12 @@ function _wireInlineDraftMentions(editor, service, data) {
 }
 
 function _draftEditorSeedHtml(data, fallbackText) {
-  const html = data && typeof data.body_html === 'string' ? data.body_html.trim() : '';
+  // Only cards built by the server-side rich-text tools (which carry format_capabilities) hold sanitized
+  // body_html; drafts restored from older storage may not, so those fall back to escaped text.
+  const html =
+    data && typeof data.body_html === 'string' && Array.isArray(data.format_capabilities)
+      ? data.body_html.trim()
+      : '';
   if (html) return html;
   return escapeHtml(String(fallbackText || '')).replace(/\n/g, '<br>');
 }
@@ -10189,10 +10194,10 @@ function _upgradeDraftMentions(editor) {
   editor.querySelectorAll('span[data-mention-id]').forEach((span) => {
     if (span.classList.contains('gcc-inline-mention')) return;
     const service = span.dataset.mentionService === 'slack' ? 'slack' : 'teams';
-    const label = span.textContent || '';
-    const name = span.dataset.mentionName || label.replace(/^[@#]/, '');
-    const chip = _draftMentionChip(service, { name, id: span.dataset.mentionId || '' });
-    chip.textContent = label;
+    const id = span.dataset.mentionId || '';
+    const name = span.dataset.mentionName || (span.textContent || '').replace(/^[@#]/, '');
+    const chip = _draftMentionChip(service, { name, id });
+    if (id.startsWith('#')) chip.textContent = '#' + name;
     span.replaceWith(chip);
   });
 }
@@ -10379,6 +10384,7 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
       service: 'slack',
       action: 'Announce to ' + (data.channels || ''),
       sendLabel: 'Post',
+      plainEditor: true,
       // An announcement can target multiple channels, so there is no single
       // conversation to open before it is posted.
       viewAvailable: false,
@@ -10574,11 +10580,11 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
               ? `<div class="gcc-fields">${config.customBody}</div>`
               : config.hideEditLink
                 ? ''
-                : ['email', 'slack', 'teams'].includes(config.service)
+                : ['email', 'slack', 'teams'].includes(config.service) && !config.plainEditor
                   ? `<div class="gcc-edit-area gcc-rich-editor${config.service === 'email' ? '' : ' gcc-mention-editor'}" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Draft message">${_draftEditorSeedHtml(data, _editableBody)}</div>`
                   : `<textarea class="gcc-edit-area" rows="${Math.min(10, Math.max(3, _editableBody.split('\n').length))}">${escapeHtml(_editableBody)}</textarea>`
           }
-          ${config.service === 'slack' && !config.customBody ? '<div class="gcc-mention-hint">Type <strong>@</strong> to mention a Slack person.</div>' : ''}
+          ${config.service === 'slack' && !config.customBody && !config.plainEditor ? '<div class="gcc-mention-hint">Type <strong>@</strong> to mention a Slack person.</div>' : ''}
           ${config.service === 'teams' && !config.customBody ? '<div class="gcc-mention-hint">Type <strong>@</strong> to mention a Teams person.</div>' : ''}
         </div>
         <div class="gcc-actions">
@@ -10636,7 +10642,7 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
       jiraEditFields.forEach((el) => {
         if (el.value !== el.dataset.orig) editedFields[el.dataset.jiraEdit] = el.value;
       });
-      // Send the EDITED text from the textarea, not the original draft.
+      // Send the edited content, not the original draft.
       const richEditor = !!editArea?.classList.contains('gcc-rich-editor');
       const editedText =
         editArea && !richEditor ? editArea.value || editArea.textContent || '' : null;
@@ -10764,7 +10770,7 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
       try {
         if (config.service === 'email') {
           // Create a real OWA draft via Graph and navigate Outlook to it.
-          // Send the EDITED text from the textarea, same as Approve does,
+          // Send the edited content, same as Approve does,
           // so edits aren't silently dropped when opening in Outlook instead
           // of sending from Gator (a handed-off draft permanently disables
           // Approve, so there is no later chance to apply them).
