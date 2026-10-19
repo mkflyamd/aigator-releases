@@ -238,6 +238,14 @@ async def context_pin(req: ContextPinRequest):
     # persisted pin resolves directly instead of relying on a read-time search.
     if req.source == "onedrive":
         item_id, meta = _resolve_onedrive_pin(item_id, req.label, meta)
+    # A team-notebook pin arrives with the SharePoint page URL; resolve its
+    # site once here so the model is handed site_id instead of having to find it.
+    if req.source == "onenote" and meta.get("web_url") and not meta.get("site_id"):
+        from skills.onenote.tools import resolve_pin_site_id
+
+        site_id = await asyncio.to_thread(resolve_pin_site_id, meta["web_url"])
+        if site_id:
+            meta = {**meta, "site_id": site_id}
     result = set_pin(req.source, item_id, req.label, meta, req.context_id)
     # Sync to legacy skill-specific state so tools can reference pinned items
     if req.source == "onenote":
@@ -246,8 +254,9 @@ async def context_pin(req: ContextPinRequest):
         pinned_onenote_pages[req.label.lower()] = {
             "page_id": req.id,
             "title": req.label,
-            "notebook": req.meta.get("notebook", ""),
-            "section": req.meta.get("section", ""),
+            "notebook": meta.get("notebook", ""),
+            "section": meta.get("section", ""),
+            "site_id": meta.get("site_id", ""),
         }
     return result
 

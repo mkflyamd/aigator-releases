@@ -3779,6 +3779,13 @@ setTimeout(scanAll, 500);
           readTarget.executeJavaScript('window.__gatorPinCtx = null;');
         } catch {}
         if (!gatorView || !gatorView.webContents || gatorView.webContents.isDestroyed()) return;
+        // OneNote: the editor subframe cannot see the SharePoint site, but its top
+        // frame URL is the Doc.aspx link; the server resolves the team site from it.
+        if (source === 'onenote' && !ctx.web_url) {
+          try {
+            if (readTarget.top && readTarget.top.url) ctx.web_url = readTarget.top.url;
+          } catch {}
+        }
         var pinId = ctx.channel || ctx.id || '';
         if (ctx.thread_ts) pinId += ':' + ctx.thread_ts;
         if (ctx.ts && ctx.kind === 'message') pinId += ':' + ctx.ts;

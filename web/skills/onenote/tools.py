@@ -1,6 +1,7 @@
 """OneNote skill -- 7 tools."""
 
 import json
+import logging
 import re
 import urllib.request as _ur
 import urllib.error as _ue
@@ -287,6 +288,19 @@ def _resolve_site_id(gc, site_ref: str) -> str:
     if not pick:
         raise ValueError(f"Could not find a SharePoint site named '{ref}'")
     return pick[0].get("id", "")
+
+
+def resolve_pin_site_id(web_url: str) -> str:
+    """Team-site id for a OneNote deep link; '' for personal links or when Graph cannot resolve it."""
+    from .._m365.helpers import get_skill_client
+
+    if not (web_url or "").lower().startswith(("http://", "https://")):
+        return ""
+    try:
+        return _resolve_site_id(get_skill_client(ONENOTE_SKILLS_DIR), web_url)
+    except Exception as e:
+        logging.getLogger(__name__).info("OneNote pin site not resolved: %s", e)
+        return ""
 
 
 def _tool_list_onenote_notebooks(include_sites: bool = False) -> dict:

@@ -1323,6 +1323,12 @@ async def chat(req: ChatRequest):
                         f"list_onenote_sections / list_onenote_pages / read_onenote_page. "
                         f"Team notebooks work fine — just always include their site_id. If it returns nothing, call list_onenote_sections with only site_id set to the SharePoint site URL or name (ask the user for it if you do not have it) and match the section name."
                     )
+                    if m.get("site_id"):
+                        _accessibility_note = (
+                            f" This notebook is in a SharePoint team site (site_id: {m['site_id']}). "
+                            f"Pass that site_id to list_onenote_sections / list_onenote_pages / "
+                            f"read_onenote_page / update_onenote_page; you do not need find_onenote_notebook."
+                        )
                     if _kind == "section":
                         _pin_lines.append(f"- OneNote section \"{lbl}\" (in notebook: {_nb}) \u2192 find it using list_onenote_notebooks then list_onenote_sections (match section \"{_title}\" in notebook \"{_nb}\"), then list_onenote_pages to read pages in it. Do NOT search for a page named \"{_title}\".{_accessibility_note}")
                     else:
