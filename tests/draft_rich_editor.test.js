@@ -30,26 +30,35 @@ assert.strictEqual(normalize('localhost:8080/x'), 'https://localhost:8080/x');
 
 // _draftEditorSeedHtml
 const seed = load('_draftEditorSeedHtml', { escapeHtml });
-assert.strictEqual(seed({ body_html: '  <p>x</p> ', format_capabilities: ['bold'] }, 'fallback'), '<p>x</p>');
-assert.strictEqual(seed({ body_html: '   ', format_capabilities: ['bold'] }, 'a < b\nc'), 'a &lt; b<br>c');
-// Drafts restored from before server-side sanitizing carry no format_capabilities: never trust their body_html.
 assert.strictEqual(
-  seed({ body_html: '<img src=x onerror=alert(1)>' }, 'a < b'),
-  'a &lt; b',
+  seed({ body_html: '  <p>x</p> ', format_capabilities: ['bold'] }, 'fallback'),
+  '<p>x</p>',
 );
+assert.strictEqual(
+  seed({ body_html: '   ', format_capabilities: ['bold'] }, 'a < b\nc'),
+  'a &lt; b<br>c',
+);
+// Drafts restored from before server-side sanitizing carry no format_capabilities: never trust their body_html.
+assert.strictEqual(seed({ body_html: '<img src=x onerror=alert(1)>' }, 'a < b'), 'a &lt; b');
 assert.strictEqual(seed({}, 'a < b\nc'), 'a &lt; b<br>c');
 assert.strictEqual(seed({}, undefined), '');
 
 // _draftFormatButtons
 const buttons = load('_draftFormatButtons');
 const caps = (list) => JSON.stringify(buttons(list).map((b) => b.cap));
-assert.strictEqual(caps(['bold', 'italic', 'ul', 'ol', 'link', 'code']), '["bold","italic","ul","ol","link","code"]');
+assert.strictEqual(
+  caps(['bold', 'italic', 'ul', 'ol', 'link', 'code']),
+  '["bold","italic","ul","ol","link","code"]',
+);
 assert.strictEqual(caps(['link', 'bold']), '["bold","link"]');
 assert.strictEqual(caps([]), '[]');
 assert.strictEqual(caps(undefined), '[]');
 assert.strictEqual(buttons(['underline'])[0].command, 'underline');
 const groups = (list) => JSON.stringify(buttons(list).map((b) => b.group));
-assert.strictEqual(groups(['bold', 'italic', 'underline', 'ul', 'ol', 'link', 'code']), '[1,1,1,2,2,3,3]');
+assert.strictEqual(
+  groups(['bold', 'italic', 'underline', 'ul', 'ol', 'link', 'code']),
+  '[1,1,1,2,2,3,3]',
+);
 assert.strictEqual(groups(['bold', 'italic', 'ul', 'ol', 'link']), '[1,1,2,2,3]');
 assert.strictEqual(groups(['link', 'bold']), '[1,3]');
 

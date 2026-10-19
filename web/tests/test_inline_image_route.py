@@ -67,7 +67,7 @@ def test_download_allowlisted_remote_image(client, remote):
         "https://evil.example/p.png",
         "https://mcp-platform.amd.com.evil.example/x.png",
         "https://mcp-platform.amd.com@evil.example/x.png",
-        "https://user:pw@mcp-platform.amd.com/x.png",
+        "https://user:aigator-fake-api-key@mcp-platform.amd.com/x.png",  # pragma: allowlist secret
         "http://mcp-platform.amd.com/x.png",
         "https://mcp-platform.amd.com:8443/x.png",
         "file:///C:/Windows/win.ini",

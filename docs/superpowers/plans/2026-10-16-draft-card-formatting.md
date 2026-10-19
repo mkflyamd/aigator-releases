@@ -28,32 +28,34 @@
 
 ## File Structure
 
-| File | Responsibility |
-|---|---|
-| `web/skills/_rich_text.py` (create) | Pure functions: `sanitize`, `normalize`, `slack_to_html`, `teams_to_html`, `mention_span`, adapter registry (`ADAPTERS`, `service_for`, `capabilities`, `render`, `rich_payload`). No I/O. |
-| `tests/test_rich_text.py` (create) | Unit tests for `sanitize` and `normalize`. |
-| `tests/test_rich_text_adapters.py` (create) | Unit tests for the registry, the three adapters, `slack_to_html`, `teams_to_html`. |
-| `web/routes/drafts.py` (modify) | `_fold_rich_edits`, `_email_fragment`, `_slack_text`; approve and open-in-Outlook paths render through adapters. |
-| `tests/test_draft_rich_email.py` (create) | Route tests for email approve and open-in-Outlook. |
-| `tests/test_draft_rich_chat.py` (create) | Route tests for Slack and Teams approve. |
-| `web/skills/email/tools.py` (modify) | Reply, forward, and open-compose seed `body_html` and `format_capabilities`. |
-| `web/skills/slack/tools.py` (modify) | `_handle_slack_send_message` seeds `body_html` and `format_capabilities`. |
-| `web/skills/teams/tools.py` (modify) | `_tool_teams_open_compose` seeds `body_html` and `format_capabilities`. |
-| `tests/test_draft_rich_tools.py` (create) | Tool tests for the three seeding paths. |
-| `web/static/app.js` (modify) | Rich editor helpers, toolbar, card markup, approve and open-in-Outlook bodies. |
-| `web/static/style.css` (modify) | Rich editor, toolbar, and link row styles. |
-| `tests/draft_rich_editor.test.js` (create) | Node `vm` tests for the pure client helpers. |
-| `tests/test_hitl_draft_unification.py` (modify, lines ~1142-1143) | Source-string assertions follow the helper rename. |
+| File                                                              | Responsibility                                                                                                                                                                             |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `web/skills/_rich_text.py` (create)                               | Pure functions: `sanitize`, `normalize`, `slack_to_html`, `teams_to_html`, `mention_span`, adapter registry (`ADAPTERS`, `service_for`, `capabilities`, `render`, `rich_payload`). No I/O. |
+| `tests/test_rich_text.py` (create)                                | Unit tests for `sanitize` and `normalize`.                                                                                                                                                 |
+| `tests/test_rich_text_adapters.py` (create)                       | Unit tests for the registry, the three adapters, `slack_to_html`, `teams_to_html`.                                                                                                         |
+| `web/routes/drafts.py` (modify)                                   | `_fold_rich_edits`, `_email_fragment`, `_slack_text`; approve and open-in-Outlook paths render through adapters.                                                                           |
+| `tests/test_draft_rich_email.py` (create)                         | Route tests for email approve and open-in-Outlook.                                                                                                                                         |
+| `tests/test_draft_rich_chat.py` (create)                          | Route tests for Slack and Teams approve.                                                                                                                                                   |
+| `web/skills/email/tools.py` (modify)                              | Reply, forward, and open-compose seed `body_html` and `format_capabilities`.                                                                                                               |
+| `web/skills/slack/tools.py` (modify)                              | `_handle_slack_send_message` seeds `body_html` and `format_capabilities`.                                                                                                                  |
+| `web/skills/teams/tools.py` (modify)                              | `_tool_teams_open_compose` seeds `body_html` and `format_capabilities`.                                                                                                                    |
+| `tests/test_draft_rich_tools.py` (create)                         | Tool tests for the three seeding paths.                                                                                                                                                    |
+| `web/static/app.js` (modify)                                      | Rich editor helpers, toolbar, card markup, approve and open-in-Outlook bodies.                                                                                                             |
+| `web/static/style.css` (modify)                                   | Rich editor, toolbar, and link row styles.                                                                                                                                                 |
+| `tests/draft_rich_editor.test.js` (create)                        | Node `vm` tests for the pure client helpers.                                                                                                                                               |
+| `tests/test_hitl_draft_unification.py` (modify, lines ~1142-1143) | Source-string assertions follow the helper rename.                                                                                                                                         |
 
 Plan order is bottom-up: module (Tasks 1-2), server (Tasks 3-4), tools (Task 5), client (Task 6), manual verification (Task 7). Every task leaves the existing suite green.
 
 ### Task 1: `_rich_text` sanitize and normalize
 
 **Files:**
+
 - Create: `web/skills/_rich_text.py`
 - Test: `tests/test_rich_text.py`
 
 **Interfaces:**
+
 - Consumes: nothing.
 - Produces (later tasks rely on these exact names):
   - `ALLOWED_TAGS: set[str]`
@@ -426,10 +428,12 @@ git commit -m "feat: add canonical rich-text sanitizer and normalizer for draft 
 ### Task 2: `_rich_text` mentions, adapters, and registry
 
 **Files:**
+
 - Modify: `web/skills/_rich_text.py` (imports at the top, then append to the end of the file)
 - Test: `tests/test_rich_text_adapters.py`
 
 **Interfaces:**
+
 - Consumes (from Task 1): `sanitize`, `_LOOKS_LIKE_HTML`, `_markdown_to_html` are defined in the same module and used by the appended code.
 - Produces:
   - `mention_span(mention_id: str, name: str, service: str) -> str`
@@ -942,10 +946,12 @@ git commit -m "feat: add Slack, Teams, and email adapters for the rich-text draf
 ### Task 3: Email approve and open-in-Outlook render through the adapter
 
 **Files:**
+
 - Modify: `web/routes/drafts.py` (helpers after `_run_sync` at line 34; `approve_draft` lines ~215-316; `open_draft_in_outlook` lines ~929-1025)
 - Test: `tests/test_draft_rich_email.py`
 
 **Interfaces:**
+
 - Consumes (Tasks 1-2): `skills._rich_text.sanitize(markup) -> str`, `normalize(body="", body_html="") -> str`, `service_for(draft_type) -> str`, `render(service, markup) -> Rendered` (`.content`).
 - Produces (Task 4 reuses the first):
   - `_fold_rich_edits(draft_type: str, params: dict, body: dict | None) -> None` — no-op unless `service_for(draft_type)` is non-empty and `body` is truthy. If `body["edited_html"]` is a string: sets `params["body_html"] = sanitize(edited_html)` and blanks any of `body`/`message`/`comment` present in `params`. Else if `"edited_message"` is in `body`: drops `params["body_html"]` so the plain edit wins.
@@ -1338,10 +1344,12 @@ git commit -m "feat: send and open email drafts with the formatting the user edi
 ### Task 4: Slack and Teams approve render through the adapter
 
 **Files:**
+
 - Modify: `web/routes/drafts.py` (new `_slack_text` helper next to `_email_fragment`; `slack-post` at ~line 341; `slack-dm` at ~line 363; `teams-message` at ~lines 369-380 in `approve_draft`)
 - Test: `tests/test_draft_rich_chat.py`
 
 **Interfaces:**
+
 - Consumes (Tasks 1-3): `skills._rich_text.render(service, markup) -> Rendered` with `.content: str` and `.mentions: list[dict]`; `_fold_rich_edits` is already called in `approve_draft` (Task 3, step 4a), so `params["body_html"]` is already the sanitized edit by the time a branch runs.
 - Produces:
   - `_slack_text(params: dict) -> str` — mrkdwn from `params["body_html"]` if present, else `params.get("message", "")`.
@@ -1587,12 +1595,14 @@ git commit -m "feat: send Slack and Teams drafts in each service's native format
 ### Task 5: Tools seed `body_html` and `format_capabilities`
 
 **Files:**
+
 - Modify: `web/skills/email/tools.py` (`_tool_reply_email` line 324, `_tool_forward_email` line 355, `_tool_email_open_compose` line 627)
 - Modify: `web/skills/slack/tools.py` (`_handle_slack_send_message` line ~599)
 - Modify: `web/skills/teams/tools.py` (`_tool_teams_open_compose`, the block that ends with `create_draft("teams-message", ...)` around lines 840-888)
 - Test: `tests/test_draft_rich_tools.py`
 
 **Interfaces:**
+
 - Consumes (Tasks 1-2): `skills._rich_text` — `normalize(body="", body_html="")`, `slack_to_html(message, names=None)`, `teams_to_html(message, mentions=None)`, `rich_payload(service, body_html) -> {"body_html": str, "format_capabilities": list[str]}`, `capabilities(service)`, `mention_span(mention_id, name, service)`.
 - Produces: every email, Slack, and Teams draft has `params["body_html"]` (canonical HTML) and its card `data` carries `body_html` and `format_capabilities`. Existing fields (`body`, `message`, `mentions`, `body_snippet`) are unchanged, so the legacy approve path and existing tests keep working. Task 6 reads `data.body_html` and `data.format_capabilities`.
 
@@ -2023,12 +2033,14 @@ git commit -m "feat: seed canonical body_html and format capabilities when Gator
 ### Task 6: Card rich editor, toolbar, and request bodies
 
 **Files:**
+
 - Modify: `web/static/app.js` (replace `_serializeInlineDraftEditor` at lines ~10182-10214; card markup at ~10461-10469; wiring at ~10508-10510; approve handler at ~10525-10542; open-in-Outlook handler at ~10665-10672)
 - Modify: `web/static/style.css` (after the `.gcc-mention-editor` rule at ~5801-5804)
 - Modify: `tests/test_hitl_draft_unification.py` (lines ~1142-1143)
 - Test: `tests/draft_rich_editor.test.js`
 
 **Interfaces:**
+
 - Consumes (Task 5): draft card `data.body_html: string` (canonical sanitized HTML) and `data.format_capabilities: string[]` (subset of `bold italic underline ul ol link code`). Existing app.js helpers: `escapeHtml(t)`, `_draftMentionChip(service, person)`, `_wireInlineDraftMentions(editor, service, data)`, `_replaceDraftEditorTrigger`, `_teamsDraftEditorSeed`.
 - Consumes (Tasks 3-4): `/api/drafts/{id}/approve` and `/open-in-outlook` accept `{"edited_html": str}` for email, Slack, and Teams drafts, and `{"edited_message": str}` for everything else.
 - Produces (new app.js functions, all top-level declarations):
@@ -2089,7 +2101,10 @@ assert.strictEqual(seed({}, undefined), '');
 // _draftFormatButtons
 const buttons = load('_draftFormatButtons');
 const caps = (list) => JSON.stringify(buttons(list).map((b) => b.cap));
-assert.strictEqual(caps(['bold', 'italic', 'ul', 'ol', 'link', 'code']), '["bold","italic","ul","ol","link","code"]');
+assert.strictEqual(
+  caps(['bold', 'italic', 'ul', 'ol', 'link', 'code']),
+  '["bold","italic","ul","ol","link","code"]',
+);
 assert.strictEqual(caps(['link', 'bold']), '["bold","link"]');
 assert.strictEqual(caps([]), '[]');
 assert.strictEqual(caps(undefined), '[]');
@@ -2318,20 +2333,20 @@ The `gcc-mention-editor` class stays on the Slack and Teams editors, so the exis
 Replace
 
 ```js
-  if (inlineMentionEditor && (config.service === 'slack' || config.service === 'teams')) {
-    _wireInlineDraftMentions(editArea, config.service, data);
-  }
+if (inlineMentionEditor && (config.service === 'slack' || config.service === 'teams')) {
+  _wireInlineDraftMentions(editArea, config.service, data);
+}
 ```
 
 with
 
 ```js
-  if (inlineMentionEditor && (config.service === 'slack' || config.service === 'teams')) {
-    _wireInlineDraftMentions(editArea, config.service, data);
-  }
-  if (editArea?.classList.contains('gcc-rich-editor')) {
-    _initDraftRichEditor(editArea, data.format_capabilities || []);
-  }
+if (inlineMentionEditor && (config.service === 'slack' || config.service === 'teams')) {
+  _wireInlineDraftMentions(editArea, config.service, data);
+}
+if (editArea?.classList.contains('gcc-rich-editor')) {
+  _initDraftRichEditor(editArea, data.format_capabilities || []);
+}
 ```
 
 - [ ] **Step 7: Post `edited_html` from Approve**
@@ -2339,37 +2354,32 @@ with
 Replace this block in the approve click handler
 
 ```js
-      const inlineMentionPayload =
-        inlineMentionEditor && editArea
-          ? _serializeInlineDraftEditor(editArea, config.service)
-          : null;
-      const editedText = editArea
-        ? inlineMentionPayload
-          ? inlineMentionPayload.text
-          : editArea.value || editArea.textContent || ''
-        : null;
-      const _approveBody = JSON.stringify({
-        context_id: ownerTabId || _activeTabId || 'default',
-        ...(editedText !== null ? { edited_message: editedText } : {}),
-        ...(Object.keys(editedFields).length ? { edited_fields: editedFields } : {}),
-        ...(inlineMentionPayload?.mentions?.length
-          ? { mentions: inlineMentionPayload.mentions }
-          : {}),
-      });
+const inlineMentionPayload =
+  inlineMentionEditor && editArea ? _serializeInlineDraftEditor(editArea, config.service) : null;
+const editedText = editArea
+  ? inlineMentionPayload
+    ? inlineMentionPayload.text
+    : editArea.value || editArea.textContent || ''
+  : null;
+const _approveBody = JSON.stringify({
+  context_id: ownerTabId || _activeTabId || 'default',
+  ...(editedText !== null ? { edited_message: editedText } : {}),
+  ...(Object.keys(editedFields).length ? { edited_fields: editedFields } : {}),
+  ...(inlineMentionPayload?.mentions?.length ? { mentions: inlineMentionPayload.mentions } : {}),
+});
 ```
 
 with
 
 ```js
-      const richEditor = !!editArea?.classList.contains('gcc-rich-editor');
-      const editedText =
-        editArea && !richEditor ? editArea.value || editArea.textContent || '' : null;
-      const _approveBody = JSON.stringify({
-        context_id: ownerTabId || _activeTabId || 'default',
-        ...(richEditor ? { edited_html: editArea.innerHTML } : {}),
-        ...(editedText !== null ? { edited_message: editedText } : {}),
-        ...(Object.keys(editedFields).length ? { edited_fields: editedFields } : {}),
-      });
+const richEditor = !!editArea?.classList.contains('gcc-rich-editor');
+const editedText = editArea && !richEditor ? editArea.value || editArea.textContent || '' : null;
+const _approveBody = JSON.stringify({
+  context_id: ownerTabId || _activeTabId || 'default',
+  ...(richEditor ? { edited_html: editArea.innerHTML } : {}),
+  ...(editedText !== null ? { edited_message: editedText } : {}),
+  ...(Object.keys(editedFields).length ? { edited_fields: editedFields } : {}),
+});
 ```
 
 - [ ] **Step 8: Post `edited_html` from Open in Outlook**
@@ -2377,17 +2387,17 @@ with
 In the `config.service === 'email'` branch of the open-in-Outlook handler, replace
 
 ```js
-          const editedText = editArea ? editArea.value || editArea.textContent || '' : null;
+const editedText = editArea ? editArea.value || editArea.textContent || '' : null;
 ```
 
 with
 
 ```js
-          const outlookEdit = editArea?.classList.contains('gcc-rich-editor')
-            ? { edited_html: editArea.innerHTML }
-            : editArea
-              ? { edited_message: editArea.value || editArea.textContent || '' }
-              : null;
+const outlookEdit = editArea?.classList.contains('gcc-rich-editor')
+  ? { edited_html: editArea.innerHTML }
+  : editArea
+    ? { edited_message: editArea.value || editArea.textContent || '' }
+    : null;
 ```
 
 and replace
@@ -2561,6 +2571,7 @@ git commit -m "feat: edit and format drafts in the approval card with a rich edi
 **Files:** none modified. This task is a checklist; fix any defect it finds in the task that owns the code, with a test, and commit that fix separately.
 
 **Interfaces:**
+
 - Consumes: everything from Tasks 1-6.
 - Produces: nothing.
 
@@ -2580,6 +2591,7 @@ Run: `./dev.ps1` from the repo root and open the app.
 
 Ask Gator: "Draft an email to myself with a short bulleted list, one bold word, and a link to https://example.com".
 Check each of these:
+
 - The draft card shows the bullets, the bold word, and the link as formatted text, not as raw tags or asterisks.
 - The toolbar shows B, I, U, bullet, 1., Link, and `</>` buttons.
 - Select a word, click B: it becomes bold. Click the Link button, type `example.org`, press Enter: the selection becomes a link to `https://example.org`. Type `javascript:alert(1)` in the link box: it is rejected and the box is marked invalid.
@@ -2589,7 +2601,8 @@ Check each of these:
 
 - [ ] **Step 4: Slack card**
 
-Ask Gator: "Draft a Slack DM to <a colleague> saying *build is green* with a bullet list of two items". Check:
+Ask Gator: "Draft a Slack DM to <a colleague> saying _build is green_ with a bullet list of two items". Check:
+
 - The card shows bold text and bullets; the toolbar omits Underline if the capability list leaves it out.
 - Type `@` and two letters: the people lookup still appears, and choosing a person inserts a chip.
 - Approve to a test channel or DM to yourself: Slack shows `*bold*`-style formatting as bold and the mention as a real mention.
@@ -2597,6 +2610,7 @@ Ask Gator: "Draft a Slack DM to <a colleague> saying *build is green* with a bul
 - [ ] **Step 5: Teams card**
 
 Ask Gator for a Teams message with a mention and a bold word. Check:
+
 - The mention is a chip, and a chip added by typing `@` works as before.
 - Approve to a chat with yourself: Teams shows the bold text and a real mention.
 

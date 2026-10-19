@@ -120,10 +120,14 @@ class _Sanitizer(HTMLParser):
         return "".join(self.out)
 
 
+_DANGLING_TAG = re.compile(r"<(?=[^>]*\Z)")
+
+
 def sanitize(markup: str) -> str:
     """Allow-list HTML: known tags, safe hrefs, mention data attributes, safe styles."""
     parser = _Sanitizer()
-    parser.feed(markup or "")
+    # A tag cut off at the end of input is text; newer Pythons drop it instead of emitting it.
+    parser.feed(_DANGLING_TAG.sub("&lt;", markup or ""))
     return parser.finish()
 
 

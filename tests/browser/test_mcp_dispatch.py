@@ -65,7 +65,7 @@ class TestBrowserCapabilityDetection:
                     del shared.TOOL_DISPATCH[k]
 
     def test_detects_take_screenshot_as_browser_capable(self):
-        """take_screenshot is a canonical chrome-devtools-mcp browser tool."""
+        """take_screenshot counts as browser-capable alongside navigate_page, and not alone."""
         from skills.browser.tools import _find_mcp_browser_tools
         import shared
 
@@ -74,11 +74,20 @@ class TestBrowserCapabilityDetection:
             shared.TOOL_DISPATCH.clear()
             shared.TOOL_DISPATCH.update(
                 _make_dispatch_with_mcp_browser(
+                    [
+                        "mcp-chrome-devtools__navigate_page",
+                        "mcp-chrome-devtools__take_screenshot",
+                    ]
+                )
+            )
+            assert "mcp-chrome-devtools__take_screenshot" in _find_mcp_browser_tools()
+            shared.TOOL_DISPATCH.clear()
+            shared.TOOL_DISPATCH.update(
+                _make_dispatch_with_mcp_browser(
                     ["mcp-chrome-devtools__take_screenshot"]
                 )
             )
-            result = _find_mcp_browser_tools()
-            assert len(result) > 0
+            assert _find_mcp_browser_tools() == {}
         finally:
             shared.TOOL_DISPATCH.update(original)
             for k in list(shared.TOOL_DISPATCH):
