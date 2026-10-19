@@ -26,8 +26,9 @@ class FakeResp:
 
 
 class FakeGC:
-    def __init__(self, page_html=PAGE, patch_error=None):
+    def __init__(self, page_html=PAGE, patch_error=None, after_html=None):
         self.page_html = page_html
+        self.after_html = after_html
         self.patch_error = patch_error
         self.calls = []
 
@@ -45,6 +46,8 @@ class FakeGC:
         self.calls.append((method, url, kw.get("content")))
         if method == "PATCH" and self.patch_error:
             raise self.patch_error
+        if method == "GET" and self.after_html is not None and "PATCH" in self.methods():
+            return FakeResp(self.after_html)
         return FakeResp(self.page_html if method == "GET" else "")
 
     def methods(self):
@@ -271,6 +274,86 @@ def test_update_insert_before_element():
         "content": "<p>added</p>",
         "position": "before",
     }
+
+
+def _page(*blocks):
+    return "<html><body><div id=\"div:{a}{1}\">" + "".join(blocks) + "</div></body></html>"
+
+
+def _h2(n, text):
+    return f'<h2 id="h2:{{a}}{{{n}}}">{text}</h2>'
+
+
+def _p(n, text):
+    return f'<p id="p:{{a}}{{{n}}}">{text}</p>'
+
+
+def _ul(n, *items):
+    lis = "".join(f'<li id="li:{{a}}{{{n}{i}}}">{t}</li>' for i, t in enumerate(items))
+    return f'<ul id="ul:{{a}}{{{n}}}">{lis}</ul>'
+
+
+HEADING_PAGE = _page(_h2(1, "Status"), _ul(2, "one", "two"), _p(3, "tail"))
+
+
+def test_update_flags_replacement_that_landed_after_the_list():
+    misplaced = _page(_ul(2, "one", "two"), _h2(4, "Done"), _p(3, "tail"))
+    gc = FakeGC(page_html=HEADING_PAGE, after_html=misplaced)
+    result = _run(
+        onenote_tools._tool_update_onenote_page,
+        gc, "page1", "<h2>Done</h2>", html=True, action="replace", target="h2:{a}{1}",
+    )
+    assert result["error"] == "edit_misplaced"
+    assert result["updated"] is True
+    assert any("Done" in line for line in result["expected"])
+    assert result["expected"] != result["actual"]
+    assert "elements" in result and "previous_html" in result
+
+
+def test_update_replacement_in_the_right_place_is_not_flagged():
+    fixed = _page(_h2(4, "Done"), _ul(2, "one", "two"), _p(3, "tail"))
+    gc = FakeGC(page_html=HEADING_PAGE, after_html=fixed)
+    result = _run(
+        onenote_tools._tool_update_onenote_page,
+        gc, "page1", "<h2>Done</h2>", html=True, action="replace", target="h2:{a}{1}",
+    )
+    assert "error" not in result
+    assert result["updated"] is True
+
+
+def test_update_clear_is_not_flagged():
+    cleared = _page(_ul(2, "one", "two"), _p(3, "tail"))
+    gc = FakeGC(page_html=HEADING_PAGE, after_html=cleared)
+    result = _run(
+        onenote_tools._tool_update_onenote_page,
+        gc, "page1", "", action="replace", target="h2:{a}{1}",
+    )
+    assert "error" not in result
+
+
+def test_update_insert_after_checked_against_position():
+    after = _page(_h2(1, "Status"), _ul(2, "one", "two"), _p(4, "new"), _p(3, "tail"))
+    gc = FakeGC(page_html=HEADING_PAGE, after_html=after)
+    result = _run(
+        onenote_tools._tool_update_onenote_page,
+        gc, "page1", "new", action="insert", target="ul:{a}{2}", position="after",
+    )
+    assert "error" not in result
+
+
+def test_update_verification_failure_to_refetch_still_reports_update():
+    class Flaky(FakeGC):
+        def _request(self, method, url, **kw):
+            if method == "GET" and "PATCH" in self.methods():
+                raise RuntimeError("boom")
+            return super()._request(method, url, **kw)
+
+    result = _run(
+        onenote_tools._tool_update_onenote_page,
+        Flaky(page_html=HEADING_PAGE), "page1", "Done", action="replace", target="h2:{a}{1}",
+    )
+    assert result["updated"] is True
+    assert "outline_error" in result
 
 
 class _NotFound(RuntimeError):

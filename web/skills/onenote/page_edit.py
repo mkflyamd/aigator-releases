@@ -69,6 +69,80 @@ def element_html(page_html: str, element_id: str) -> str | None:
     return str(el)
 
 
+_SIG_TEXT_LEN = 200
+_DIFF_WINDOW = 8
+
+
+def _signature_of(root, require_id: bool) -> list[tuple[str, str, str]]:
+    """(id, tag, text) of each editable block, in page order. Text has all
+    whitespace removed so Graph re-wrapping runs in spans does not matter."""
+    sig = []
+    for el in root.find_all(True):
+        if el.name not in _LISTED_TAGS or el.name == "div":
+            continue
+        if require_id and not el.get("id"):
+            continue
+        if any(parent.name == "table" for parent in el.parents):
+            continue
+        text = "".join("".join(el.stripped_strings).split())[:_SIG_TEXT_LEN]
+        if el.name == "p" and not text:
+            continue
+        sig.append((el.get("id", ""), el.name, text))
+    return sig
+
+
+def signature(page_html: str) -> list[tuple[str, str]]:
+    return [(tag, text) for _, tag, text in _signature_of(_soup(page_html), True)]
+
+
+def expected_signature(
+    page_html: str, markup: str, action: str, target: str, position: str = ""
+) -> list[tuple[str, str]] | None:
+    """What signature(page) should be after the edit, or None when the result
+    cannot be predicted (append/prepend onto an element)."""
+    before = _signature_of(_soup(page_html), True)
+    new = [(tag, text) for _, tag, text in _signature_of(_soup(markup), False)]
+    plain = [(tag, text) for _, tag, text in before]
+    if target == "body":
+        return new + plain if action == "prepend" else None
+    if action not in ("replace", "insert"):
+        return None
+    el = _soup(page_html).find(attrs={"id": target})
+    if el is None:
+        return None
+    ids = {target} | {d["id"] for d in el.find_all(True) if d.get("id")}
+    span = [i for i, (sid, _, _) in enumerate(before) if sid in ids]
+    if not span:
+        return None
+    first, last = span[0], span[-1] + 1
+    if action == "replace":
+        return plain[:first] + new + plain[last:]
+    cut = first if (position or "after") == "before" else last
+    return plain[:cut] + new + plain[cut:]
+
+
+def compare_signatures(expected: list, actual: list) -> dict | None:
+    """None when they match; otherwise the differing stretch of each."""
+    if expected == actual:
+        return None
+    head = 0
+    while head < min(len(expected), len(actual)) and expected[head] == actual[head]:
+        head += 1
+    tail = 0
+    while (
+        tail < min(len(expected), len(actual)) - head
+        and expected[-1 - tail] == actual[-1 - tail]
+    ):
+        tail += 1
+
+    def window(sig):
+        return [f"{t}: {x[:40]}" for t, x in sig[max(0, head - 1) : len(sig) - tail]][
+            :_DIFF_WINDOW
+        ]
+
+    return {"expected": window(expected), "actual": window(actual)}
+
+
 ACTIONS = ("append", "prepend", "insert", "replace")
 _POSITIONS = ("before", "after")
 

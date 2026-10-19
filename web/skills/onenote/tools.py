@@ -687,11 +687,12 @@ def _tool_update_onenote_page(
     gc = get_skill_client(ONENOTE_SKILLS_DIR)
     root = _onenote_root(site_id)
     result = {"updated": True, "page_id": page_id}
+    before_html = None
     try:
+        if target != "title" and not (action == "append" and target == "body"):
+            before_html = _fetch_page_html(gc, root, page_id, include_ids=True)
         if target not in ("body", "title"):
-            current = _pe.element_html(
-                _fetch_page_html(gc, root, page_id, include_ids=True), target
-            )
+            current = _pe.element_html(before_html, target)
             if current is None:
                 return {
                     "error": "target_not_found",
@@ -719,9 +720,27 @@ def _tool_update_onenote_page(
 
     if not (action == "append" and target == "body"):
         try:
-            result.update(
-                _pe.outline(_fetch_page_html(gc, root, page_id, include_ids=True))
-            )
+            after_html = _fetch_page_html(gc, root, page_id, include_ids=True)
+            result.update(_pe.outline(after_html))
+            if before_html is not None:
+                expected = _pe.expected_signature(
+                    before_html, ops[0]["content"], action, target, position
+                )
+                diff = expected is not None and _pe.compare_signatures(
+                    expected, _pe.signature(after_html)
+                )
+                if diff:
+                    result.update(
+                        error="edit_misplaced",
+                        message=(
+                            "The edit was applied but the page does not match what was "
+                            "requested: content landed in the wrong place or was changed. "
+                            "Compare 'expected' with 'actual', then fix it using the "
+                            "current 'elements' (previous_html holds the replaced content). "
+                            "Do not tell the user the edit succeeded."
+                        ),
+                        **diff,
+                    )
         except Exception as e:
             result["outline_error"] = f"Updated, but could not refresh the outline: {e}"
     return result

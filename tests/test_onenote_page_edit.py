@@ -163,3 +163,46 @@ def test_build_patch_ops_refusals(kwargs, code):
     with pytest.raises(page_edit.EditError) as exc:
         page_edit.build_patch_ops(**kwargs)
     assert exc.value.code == code
+
+
+def _sig_page(*blocks):
+    return "<html><body><div id=\"d1\">" + "".join(blocks) + "</div></body></html>"
+
+
+def test_expected_signature_replace_removes_span_and_adds_new():
+    page = _sig_page('<h2 id="a">Old</h2>', '<ul id="b"><li id="c">x</li></ul>', '<p id="d">tail</p>')
+    exp = page_edit.expected_signature(page, "<h2>New</h2>", "replace", "a")
+    assert exp == [("h2", "New"), ("ul", "x"), ("li", "x"), ("p", "tail")]
+
+
+def test_expected_signature_insert_before_and_after():
+    page = _sig_page('<p id="a">one</p>', '<p id="b">two</p>')
+    before = page_edit.expected_signature(page, "<p>n</p>", "insert", "b", "before")
+    after = page_edit.expected_signature(page, "<p>n</p>", "insert", "b", "after")
+    assert before == [("p", "one"), ("p", "n"), ("p", "two")]
+    assert after == [("p", "one"), ("p", "two"), ("p", "n")]
+
+
+def test_expected_signature_prepend_body_and_unpredictable_cases():
+    page = _sig_page('<p id="a">one</p>')
+    assert page_edit.expected_signature(page, "<p>n</p>", "prepend", "body") == [("p", "n"), ("p", "one")]
+    assert page_edit.expected_signature(page, "<p>n</p>", "append", "a") is None
+    assert page_edit.expected_signature(page, "<p>n</p>", "replace", "missing") is None
+
+
+def test_signature_ignores_whitespace_blank_paragraphs_and_table_cells():
+    page = _sig_page(
+        '<p id="a">Hello   <span>big</span>\n world</p>',
+        '<p id="b"></p>',
+        '<table id="t"><tr id="r"><td id="c"><p id="e">cell</p></td></tr></table>',
+    )
+    assert page_edit.signature(page) == [("p", "Hellobigworld"), ("table", "cell")]
+
+
+def test_compare_signatures_reports_only_the_differing_stretch():
+    exp = [("h2", "Done"), ("ul", "x"), ("p", "tail")]
+    act = [("ul", "x"), ("h2", "Done"), ("p", "tail")]
+    diff = page_edit.compare_signatures(exp, act)
+    assert diff["expected"][0].startswith("h2: Done")
+    assert diff["actual"][0].startswith("ul: x")
+    assert page_edit.compare_signatures(exp, list(exp)) is None
