@@ -516,7 +516,7 @@ Replace:
 - `SEGMENTS_PLACEHOLDER` with a JSON array of `[{start_at: <seconds>, text: "<spoken text>"}]`. Each item may also carry an optional `pause_after` (seconds of silence after that segment, 0 to 10) — the widget shows it in the "Pause after" box.
 - `PROJECT_ID_PLACEHOLDER` with the project id from the `PINNED PROJECT:` line of your context (for example `demo_20261019_101500`)
 
-The raw video path is fetched automatically by the widget from `/api/demo-projects/active` — do NOT embed any file path in the widget HTML.
+The widget learns the raw video's project-relative path from the parent (`gator:demo-summary`) and plays it through the project's file route (`/api/demo-projects/<id>/file`) using the project id — do NOT embed any file path in the widget HTML.
 
 The widget's Approve button sends `NARRATION_APPROVED:<json> PROJECT_ID:<id>` — Phase 4 listens for this exact prefix. The app records the approval first and then starts the Phase 4 turn with the approval id. Any other prefix (e.g. `NARRATION_V2_APPROVED`) will NOT trigger TTS generation.
 
@@ -602,13 +602,13 @@ The widget's Approve button sends `NARRATION_APPROVED:<json> PROJECT_ID:<id>` �
   </div>
 
   <button id="btn-approve" class="btn-approve" onclick="approve()">✓ Approve & Generate TTS</button>
+  <div class="status" id="merge-status"></div>
 </div>
 <script>
 var _BASE = window._GATOR || 'http://localhost:8003';
 var data = SEGMENTS_PLACEHOLDER;
 var _PROJECT_ID = 'PROJECT_ID_PLACEHOLDER';
 var _approving = false;
-var _videoPath = '';
 
 // ── Voice preview ─────────────────────────────────────────────────────────────
 function getVoice(){ return document.getElementById('sel-voice').value; }
@@ -778,20 +778,25 @@ data.forEach(function(s,i){
   c.appendChild(d);
 });
 
-// ── Video preview — path fetched from server, never embedded in JS ────────────
-fetch(_BASE+'/api/demo-projects/active')
-  .then(function(r){ return r.json(); })
-  .then(function(d){
-    _videoPath=d.raw||d.final||'';
-    if(_videoPath){
-      var vp=document.getElementById('video-player');
-      var vs=document.getElementById('video-section');
-      vp.src=_BASE+'/api/recorder/serve-file?path='+encodeURIComponent(_videoPath);
-      vp.onerror=function(){ vs.style.display='none'; };
-      vs.style.display='block';
-    }
-  })
-  .catch(function(){});
+// ── Video preview — summary comes from the parent; the video is a resource load ─
+function requestDemoData(type, projectId){
+  parent.postMessage({type:type, project_id:projectId}, '*');
+}
+
+var _pid=/^demo_\d/.test(_PROJECT_ID)?_PROJECT_ID:'';
+if(_pid){ requestDemoData('gator:demo-summary', _pid); }
+
+window.addEventListener('message', function(ev){
+  var m=ev.data||{};
+  if(m.type!=='gator:demo-summary-result' || m.project_id!==_pid){ return; }
+  var rel=m.ok && m.summary && m.summary.raw_rel;
+  if(!rel){ return; }
+  var vp=document.getElementById('video-player');
+  var vs=document.getElementById('video-section');
+  vp.src=_BASE+'/api/demo-projects/'+_pid+'/file?rel='+encodeURIComponent(rel);
+  vp.onerror=function(){ vs.style.display='none'; };
+  vs.style.display='block';
+});
 
 // ── Approve ───────────────────────────────────────────────────────────────────
 function approve(){
@@ -820,6 +825,64 @@ window.addEventListener('message',function(ev){
     btn.textContent='✓ Approve & Generate TTS';
     alert('Approval failed: '+(m.error||'unknown error'));
   }
+});
+
+// ── Merge progress ────────────────────────────────────────────────────────────
+var _progressTimer=null;
+
+function progressView(p, approvalId, waitedMs, sinceMs){
+  var mine=!!p && p.approval_id===approvalId && (p.updated_at||0)*1000>=sinceMs;
+  if(mine && p.state==='done'){
+    return {text:'Done — your demo video is ready.', color:'#4ade80', stop:true, retry:false};
+  }
+  if(mine && p.state==='failed'){
+    return {text:'Generation failed: '+(p.error||p.message||'unknown error'), color:'#f87171', stop:true, retry:true};
+  }
+  if(mine && p.state==='running'){
+    return {text:p.message||'Generating…', color:'#f97316', stop:false, retry:false};
+  }
+  if(waitedMs>=120000){
+    return {text:'Generation has not started yet. Check that the AI Gator agent is still working, or click Approve to retry.', color:'#f87171', stop:true, retry:true};
+  }
+  return {text:'Waiting for generation to start…', color:'#6b8db5', stop:false, retry:false};
+}
+
+function setMergeStatus(text, color){
+  var s=document.getElementById('merge-status');
+  s.textContent=text||''; s.style.color=color||'#6b8db5';
+}
+
+function stopProgress(){
+  if(_progressTimer){ clearInterval(_progressTimer); _progressTimer=null; }
+}
+
+var _progressApproval=null, _progressSince=0;
+
+function startProgress(approvalId, projectId){
+  stopProgress();
+  _progressApproval=approvalId; _progressSince=Date.now();
+  _progressTimer=setInterval(function(){ requestDemoData('gator:demo-progress', projectId); },1500);
+  requestDemoData('gator:demo-progress', projectId);
+}
+
+window.addEventListener('message', function(ev){
+  var m=ev.data||{};
+  if(m.type==='gator:demo-progress-result'){
+    if(!_progressApproval || m.project_id!==_pid){ return; }
+    var v=progressView(m.ok?m.progress:{state:'none'}, _progressApproval, Date.now()-_progressSince, _progressSince);
+    setMergeStatus(v.text, v.color);
+    if(v.stop){ stopProgress(); }
+    if(v.retry){
+      _approving=false;
+      var rb=document.getElementById('btn-approve');
+      rb.disabled=false; rb.textContent='✓ Approve & Generate TTS';
+    }
+    return;
+  }
+  if(m.type!=='gator:narration-approval-result'){ return; }
+  var a=m.approval||m;
+  if(m.ok && a.approval_id && _pid){ startProgress(a.approval_id, _pid); }
+  else { stopProgress(); setMergeStatus('',''); }
 });
 </script>
 </body>
@@ -890,6 +953,8 @@ cmd = [
     "--output", str(output_path),
     "--work-dir", str(PROJECT_DIR / "work" / "tts"),
     "--voice", voice,
+    "--progress-file", str(PROJECT_DIR / "work" / "logs" / "merge_progress.json"),
+    "--approval-id", verdict["approval_id"],
 ]
 # Imported clips: the timeline folder holds the combined music bed, if any
 soundtrack = Path(video_path).parent / "soundtrack.m4a"
@@ -907,6 +972,8 @@ if output_path.exists():
 else:
     print(f"ERROR: output file not found at {output_path}")
 ```
+
+The pipeline writes its stage to `work/logs/merge_progress.json`; the narration editor polls it through `GET /api/demo-projects/<id>/progress` and shows "Generating speech N of M", "Merging audio and video", "Done", or the error text.
 
 After running this code:
 
