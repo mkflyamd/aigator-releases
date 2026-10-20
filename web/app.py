@@ -524,10 +524,10 @@ async def _execute_tool_impl(
                     "error": "missing_required_params",
                     "tool": name,
                     "missing": missing,
+                    "required": required,
                     "hint": (
-                        "Required arguments are missing — they were likely truncated "
-                        "because the payload exceeded the output budget. Reduce the "
-                        "payload size or split it into smaller chunked calls."
+                        f"Call {name} again with every required argument: {', '.join(required)}. "
+                        "If a large payload was cut off, split it into smaller calls."
                     ),
                 }
         invalid = validate_tool_inputs(name, model_inputs)

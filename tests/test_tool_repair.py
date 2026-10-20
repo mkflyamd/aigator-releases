@@ -141,3 +141,26 @@ def test_rejection_summary_text():
     ) == "Rejected write_file: invalid path"
     assert rejection_summary_text({"error": "boom"}) is None
     assert rejection_summary_text("text") is None
+
+
+# ── real execute_tool: a rejected call never runs the tool ───────────────────
+
+async def test_rejected_call_never_executes_and_reports_required_fields(monkeypatch):
+    import shared
+    from app import execute_tool
+
+    ran = []
+
+    def probe(code: str):
+        ran.append(code)
+        return {"stdout": code}
+
+    monkeypatch.setitem(shared.TOOL_DISPATCH, "repair_probe", probe)
+    for inputs in ({}, {"code": ""}, {"code": "   "}):
+        result = await execute_tool("repair_probe", inputs)
+        assert result["error"] == "missing_required_params"
+        assert result["tool"] == "repair_probe"
+        assert result["missing"] == ["code"]
+        assert result["required"] == ["code"]
+        assert "code" in result["hint"]
+    assert ran == []
