@@ -624,7 +624,9 @@ def _tool_toast(name: str, result: object) -> dict[str, str] | None:
         )
 
     if result.get("error"):
-        return {"level": "error", "message": str(result["error"])}
+        from tool_repair import rejection_summary_text
+        rejected = rejection_summary_text({**result, "tool": result.get("tool") or name})
+        return {"level": "error", "message": rejected or str(result["error"])}
 
     for key, default in (
         ("deleted", "Couldn't cancel the calendar event."),
