@@ -30,14 +30,12 @@ def test_latest_output_derived_from_active_project(client, store):
     assert body["final"] == str(folder / "final" / "demo.mp4")
 
 
-def test_narration_approved_writes_project_and_legacy_file(client, store, tmp_path, monkeypatch):
-    import routes.recorder as rec
-    monkeypatch.setattr(rec.Path, "home", classmethod(lambda cls: tmp_path))
+def test_narration_approved_writes_project_and_legacy_file(client, store, tmp_path):
     pid = store.create_project()["project_id"]
     r = client.post("/api/recorder/narration-approved", json={"segments": [{"text": "hi"}], "flags": {}})
     assert r.status_code == 200
     assert (store.project_path(pid) / "work" / "narration.json").exists()
-    legacy = json.loads((tmp_path / ".gator" / "narration_pending.json").read_text(encoding="utf-8"))
+    legacy = json.loads((store.INDEX_PATH.parent / "narration_pending.json").read_text(encoding="utf-8"))
     assert legacy["segments"] == [{"text": "hi"}]
 
 

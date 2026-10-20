@@ -17,6 +17,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 import demo_projects as dp
+import narration_approval
 
 router = APIRouter()
 
@@ -1067,19 +1068,15 @@ class NarrationApprovedRequest(BaseModel):
 
 @router.post("/api/recorder/narration-approved")
 async def recorder_narration_approved(req: NarrationApprovedRequest):
-    """Store approved narration on the active project (and the legacy pending file)."""
+    """Legacy entry point: approve narration on the active project via the transaction."""
     pid = dp.get_active_id()
-    if pid:
-        dp.save_narration(pid, req.segments, req.flags)
-    gator_dir = Path.home() / ".gator"
-    gator_dir.mkdir(exist_ok=True)
-    pending = gator_dir / "narration_pending.json"
-    pending.write_text(json.dumps({
-        "segments": req.segments,
-        "flags": req.flags,
-        "timestamp": datetime.utcnow().isoformat(),
-    }), encoding="utf-8")
-    return {"ok": True, "path": str(pending), "project_id": pid}
+    if not pid:
+        return {"ok": True}
+    try:
+        approval = narration_approval.approve(pid, req.segments, req.flags)["approval"]
+    except narration_approval.ApprovalError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    return {"ok": True, "project_id": pid, "approval": approval}
 
 
 @router.get("/api/recorder/debug")

@@ -7,6 +7,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 import demo_projects as dp
+import narration_approval
 from security import verify_csrf
 
 router = APIRouter()
@@ -96,7 +97,10 @@ async def activate(project_id: str):
 @router.post("/api/demo-projects/{project_id}/narration", dependencies=[Depends(verify_csrf)])
 async def narration(project_id: str, req: NarrationRequest):
     _get(project_id)
-    return dp.save_narration(project_id, req.segments, req.flags)
+    try:
+        return narration_approval.approve(project_id, req.segments, req.flags)
+    except narration_approval.ApprovalError as exc:
+        raise _bad(exc)
 
 
 @router.get("/api/demo-projects/{project_id}/file")
