@@ -638,7 +638,7 @@ def load_approved_narration(pid: str, folder: Path, approval_id: str | None = No
     if digest != approval.get("sha256"):
         raise MediaError("approval_corrupt", "The approval record does not match its hash. Ask the user to approve again.")
     expected = approval.get("media_fingerprint")
-    if expected and narration_approval.media_fingerprint(dp.get_project(pid).get("raw")) != expected:
+    if expected and narration_approval.media_fingerprint(narration_approval.pinned_media(dp.get_project(pid))) != expected:
         raise MediaError("approval_stale_media", "The recording changed after the narration was approved. Ask the user to approve again.")
     return record
 

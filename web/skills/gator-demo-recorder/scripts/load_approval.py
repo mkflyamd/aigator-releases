@@ -37,6 +37,16 @@ def media_fingerprint(path):
     return h.hexdigest()
 
 
+def pinned_media(root, project):
+    raw = project.get("raw")
+    if not raw:
+        return None
+    media = (project.get("ext") or {}).get("media") or {}
+    if media.get("current") and media.get("current_base") == Path(raw).as_posix():
+        return root / media["current"]
+    return root / raw
+
+
 def _read_json(path, code, message):
     try:
         return json.loads(Path(path).read_text(encoding="utf-8"))
@@ -59,8 +69,7 @@ def load(project_dir, approval_id=None):
     if (not isinstance(segments, list) or not isinstance(flags, dict)
             or canonical_hash(segments, flags) != record.get("sha256")):
         raise ApprovalError("corrupt", f"approval record {current} failed its integrity check")
-    raw = project.get("raw")
-    if media_fingerprint(root / raw if raw else None) != record.get("media_fingerprint"):
+    if media_fingerprint(pinned_media(root, project)) != record.get("media_fingerprint"):
         raise ApprovalError("stale_media",
                             "the recording changed after this approval; approve the narration again")
     return record

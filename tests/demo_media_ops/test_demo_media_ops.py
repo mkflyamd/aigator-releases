@@ -219,3 +219,41 @@ def test_recording_changed_after_approval_is_refused(project):
     with pytest.raises(dm.MediaError) as exc:
         dm.load_approved_narration(pid, folder)
     assert exc.value.code == "approval_stale_media"
+
+
+def test_edit_after_approval_makes_it_stale(project):
+    pid, folder = project
+    approve(pid, [{"text": "one", "start_at": 0}])
+    make_video(folder / "work" / "edits" / "edit_001.mp4", 20, color="red")
+    dm.set_current(pid, folder, "work/edits/edit_001.mp4")
+    with pytest.raises(dm.MediaError) as exc:
+        dm.load_approved_narration(pid, folder)
+    assert exc.value.code == "approval_stale_media"
+
+
+def test_reapproving_after_an_edit_is_valid_again(project):
+    pid, folder = project
+    approve(pid, [{"text": "one", "start_at": 0}])
+    make_video(folder / "work" / "edits" / "edit_001.mp4", 20, color="red")
+    dm.set_current(pid, folder, "work/edits/edit_001.mp4")
+    aid = approve(pid, [{"text": "one", "start_at": 0}])
+    assert dm.load_approved_narration(pid, folder)["approval_id"] == aid
+
+
+def test_approval_with_no_edit_stays_valid_and_reuses(project):
+    import narration_approval
+    pid, folder = project
+    aid = approve(pid, [{"text": "one", "start_at": 0}])
+    assert dm.load_approved_narration(pid, folder)["approval_id"] == aid
+    again = narration_approval.approve(pid, [{"text": "one", "start_at": 0}], {})
+    assert again["approval"]["reused"] is True
+
+
+def test_edit_chain_of_an_older_raw_is_ignored_for_the_pin(project):
+    pid, folder = project
+    make_video(folder / "work" / "edits" / "edit_001.mp4", 20, color="red")
+    dm.set_current(pid, folder, "work/edits/edit_001.mp4")
+    make_video(folder / "source" / "other.mp4", 20, color="green")
+    dp.update_project(pid, raw=str(folder / "source" / "other.mp4"))
+    aid = approve(pid, [{"text": "one", "start_at": 0}])
+    assert dm.load_approved_narration(pid, folder)["approval_id"] == aid

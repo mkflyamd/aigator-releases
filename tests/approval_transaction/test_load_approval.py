@@ -113,3 +113,27 @@ def test_cli_failure_exit_2_with_code(store):
     assert r.returncode == 2
     body = json.loads(r.stdout)
     assert body["ok"] is False and body["code"] == "missing" and body["error"]
+
+
+def _set_current_edit(store, root, data):
+    pid = Path(root).name
+    edit = Path(root) / "work" / "edits" / "edit_001.mp4"
+    edit.parent.mkdir(parents=True, exist_ok=True)
+    edit.write_bytes(data)
+    store.set_ext(pid, "media", {"current": "work/edits/edit_001.mp4", "current_base": "source/rec.mp4"})
+    return edit
+
+
+def test_stale_media_when_an_edit_becomes_current(store):
+    root, _, _ = _approved(store)
+    _set_current_edit(store, root, b"an edited recording")
+    with pytest.raises(la.ApprovalError) as e:
+        la.load(root)
+    assert e.value.code == "stale_media"
+
+
+def test_load_matches_backend_pin_when_an_edit_is_current(store):
+    root, _, _ = _approved(store)
+    _set_current_edit(store, root, b"an edited recording")
+    na.approve(Path(root).name, SEGS, {"music": False})
+    assert la.load(root)["version"] == 2

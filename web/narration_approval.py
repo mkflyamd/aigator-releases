@@ -39,6 +39,23 @@ def media_fingerprint(path) -> str | None:
     return h.hexdigest()
 
 
+def pinned_media(project: dict) -> Path | None:
+    raw = project.get("raw")
+    if not raw:
+        return None
+    media = (project.get("ext") or {}).get("media") or {}
+    current = media.get("current")
+    if current:
+        folder = Path(project["path"])
+        try:
+            raw_rel = Path(raw).resolve().relative_to(folder.resolve()).as_posix()
+        except ValueError:
+            raw_rel = None
+        if raw_rel is not None and media.get("current_base") == raw_rel:
+            return folder / current
+    return Path(raw)
+
+
 def _validate(segments, flags) -> None:
     if not isinstance(segments, list) or not segments:
         raise ApprovalError("segments must be a non-empty list")
@@ -63,7 +80,7 @@ def approve(project_id: str, segments: list, flags: dict) -> dict:
     with _LOCK:
         project = dp.get_project(project_id)
         root = Path(project["path"])
-        fingerprint = media_fingerprint(project.get("raw"))
+        fingerprint = media_fingerprint(pinned_media(project))
         current = (project.get("ext") or {}).get("approval") or {}
         approvals = root / "work" / "approvals"
         reusable = (
