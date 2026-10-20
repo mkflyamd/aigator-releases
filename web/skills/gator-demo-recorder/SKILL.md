@@ -18,6 +18,8 @@ Phase 4: TTS + MERGE        — generate audio via Lemonade, merge with ffmpeg
 Phase 5: DELIVER            — report final MP4 path, offer to save to OneDrive
 ```
 
+**Import Mode:** when the user attached existing video or audio instead of recording, skip Phase 1 and follow the Import Mode section below. It produces the same inputs Phase 2 expects.
+
 ---
 
 ## Project folder
@@ -437,6 +439,55 @@ function doStop() {
 
 ---
 
+## Import Mode
+
+Use this instead of Phase 1 when the message contains `[File: <path>]` chips whose paths end in a video or audio extension and sit inside a project's `source/` folder (`<PROJECT_DIR>/source/<id>_<name>`), or when the user asks you to narrate footage they already have. There is no recording to wait for.
+
+The browser uploads each file and builds one combined, trimmed timeline in the background. The user orders and trims clips in the clips panel above the chat box. You only read the result: `<PROJECT_DIR>/project.json` holds it under `ext["clips"]` (`clips`, `audio`, and `timeline` with `state`, `file`, `duration`, `frame_times`, `clips`, `error`).
+
+- **Never call** `/api/demo-media` routes that change anything (upload, order, trim, delete) — they are for the browser. To change clips, tell the user to use the clips panel.
+- Audio-only attachments are a music bed. If there is no video clip yet, ask the user to attach one.
+
+Run this once per request. It waits for the timeline and prints its path:
+
+```python
+import json, time
+from pathlib import Path
+
+chip = Path(r"<path inside the [File: ...] chip>")
+PROJECT_DIR = chip.parent.parent
+
+def timeline_state():
+    project = json.loads((PROJECT_DIR / "project.json").read_text(encoding="utf-8"))
+    return project.get("ext", {}).get("clips", {}).get("timeline", {})
+
+tl = timeline_state()
+deadline = time.time() + 600
+while tl.get("state") == "building" and time.time() < deadline:
+    time.sleep(5)
+    tl = timeline_state()
+
+if tl.get("state") == "failed":
+    print("TIMELINE FAILED:", tl.get("error"))
+elif tl.get("state") != "ready":
+    print("TIMELINE NOT READY:", tl.get("state"))
+else:
+    print(f"VIDEO={PROJECT_DIR / tl['file']}")
+    print(f"DURATION={tl['duration']}")
+    print("FRAME_TIMES=", json.dumps(tl["frame_times"]))
+    print("CLIPS=", json.dumps(tl["clips"]))
+```
+
+Outcomes:
+
+- `TIMELINE FAILED` → tell the user the `error` text and stop; they can remove or replace the clip in the panel.
+- `TIMELINE NOT READY` → tell the user no video clip is attached yet, or the build has not started, and stop.
+- Otherwise `VIDEO` is the file Phase 4 merges into (it is also the project's `raw`). Continue at **Phase 2, Step 1** with `video_path` set to `VIDEO`: call `describe_images(task='analyze_video', video_path='<VIDEO>')`. It samples the combined timeline at the moments listed in `frame_times`. Use the `CLIPS` boundaries (`start`/`end` seconds per source clip) to say which clip each frame belongs to in the scene summary, then continue to Phase 3. Do not run ffmpeg yourself.
+- Phase 3 timing: narration `start_at` values are seconds on the combined timeline, so a segment about the second clip starts at or after that clip's `start`.
+- Phase 4: use `VIDEO` as `video_path`. The combined music bed, if any, is `work/soundtrack.m4a` next to it, and Phase 4 mixes it in automatically.
+
+---
+
 ## Phase 2: Analyze
 
 When you receive `"Recording complete. File: <path> ..."`:
@@ -806,7 +857,7 @@ output_path = PROJECT_DIR / "final" / "demo.mp4"
 voice = segments[0].get("voice", "af_heart") if segments else "af_heart"
 speed = str(segments[0].get("speed", 1.0)) if segments else "1.0"
 
-result = subprocess.run([
+cmd = [
     sys.executable,
     str(skill_dir / "tts_pipeline.py"),
     "--video", video_path,
@@ -815,7 +866,12 @@ result = subprocess.run([
     "--output", str(output_path),
     "--work-dir", str(PROJECT_DIR / "work" / "tts"),
     "--voice", voice,
-], capture_output=True, text=True, timeout=600, shell=False)
+]
+# Imported clips: the timeline folder holds the combined music bed, if any
+soundtrack = Path(video_path).parent / "soundtrack.m4a"
+if soundtrack.exists():
+    cmd += ["--soundtrack", str(soundtrack)]
+result = subprocess.run(cmd, capture_output=True, text=True, timeout=600, shell=False)
 print(result.stdout[-3000:])
 if result.stderr: print("STDERR:", result.stderr[-500:])
 
