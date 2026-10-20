@@ -172,7 +172,25 @@ def build_synced_audio(narration, out_dir, lemonade_url, model, voice):
     return full_audio
 
 
-def merge_audio_video(video_path, audio_path, out_path):
+_SOUNDTRACK_MIX = (
+    "[2:a]volume=0.25[bg];"
+    "[1:a][bg]amix=inputs=2:duration=first:dropout_transition=0[aout]"
+)
+
+
+def build_merge_argv(ffmpeg, video_path, audio_path, out_path, soundtrack=None):
+    argv = [ffmpeg, "-y", "-i", str(video_path), "-i", str(audio_path)]
+    if soundtrack:
+        argv += ["-i", str(soundtrack), "-filter_complex", _SOUNDTRACK_MIX,
+                 "-map", "0:v:0", "-map", "[aout]"]
+    else:
+        argv += ["-map", "0:v:0", "-map", "1:a:0"]
+    argv += ["-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
+             "-shortest", "-movflags", "+faststart", str(out_path)]
+    return argv
+
+
+def merge_audio_video(video_path, audio_path, out_path, soundtrack=None):
     ffmpeg = get_ffmpeg_path()
     video_dur = get_duration(video_path)
     audio_dur = get_duration(audio_path)
@@ -209,9 +227,7 @@ def merge_audio_video(video_path, audio_path, out_path):
         audio_path = padded
 
     subprocess.run(
-        [ffmpeg, "-y", "-i", str(video_path), "-i", str(audio_path),
-         "-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
-         "-shortest", "-movflags", "+faststart", str(out_path)],
+        build_merge_argv(ffmpeg, video_path, audio_path, out_path, soundtrack),
         capture_output=True, check=True
     )
     print(f"  Final video: {out_path} ({os.path.getsize(out_path)/(1024*1024):.1f} MB)")
@@ -227,6 +243,7 @@ def main():
     parser.add_argument("--model", default="kokoro-v1")
     parser.add_argument("--voice", default="af_heart")
     parser.add_argument("--work-dir", default=None)
+    parser.add_argument("--soundtrack", default=None)
     args = parser.parse_args()
 
     work_dir = Path(args.work_dir or Path(args.video).parent / "tts_work")
@@ -245,7 +262,7 @@ def main():
     audio = build_synced_audio(narration, work_dir, args.lemonade_url, args.model, args.voice)
 
     print(f"\n[2/3] Merging audio with video...")
-    merge_audio_video(args.video, audio, args.output)
+    merge_audio_video(args.video, audio, args.output, soundtrack=args.soundtrack)
 
     print(f"\n[3/3] Done! Final: {args.output}")
 
