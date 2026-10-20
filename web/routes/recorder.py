@@ -20,6 +20,7 @@ import demo_projects as dp
 import narration_approval
 
 router = APIRouter()
+_IS_WINDOWS = os.name == "nt"
 
 OUT_DIR = Path.home() / "Downloads" / "gator_demos"
 
@@ -34,7 +35,7 @@ def _find_ffmpeg() -> str | None:
     found = shutil.which("ffmpeg")
     if found:
         return found
-    if os.name == "nt":
+    if _IS_WINDOWS:
         winget_base = Path.home() / "AppData/Local/Microsoft/WinGet/Packages"
         if winget_base.exists():
             for candidate in sorted(winget_base.glob("*/*/bin/ffmpeg.exe"), reverse=True):
@@ -58,7 +59,7 @@ def _find_ffmpeg() -> str | None:
 
 def _try_install_ffmpeg() -> str | None:
     """Attempt silent winget install on Windows. Returns path if successful."""
-    if os.name != "nt":
+    if not _IS_WINDOWS:
         return None
     try:
         result = subprocess.run(
@@ -208,7 +209,7 @@ def _list_screens_mac() -> list[dict]:
 
 @router.get("/api/recorder/screens")
 async def recorder_screens():
-    if os.name == "nt":
+    if _IS_WINDOWS:
         screens = await asyncio.to_thread(_list_screens_windows)
     elif os.path.exists("/usr/bin/xrandr") or os.path.exists("/usr/local/bin/xrandr"):
         screens = [{"index": 0, "x": 0, "y": 0, "width": 1920, "height": 1080,
@@ -376,7 +377,7 @@ async def recorder_pick_region(body: dict = Body(default={})):
     """Spawn a fullscreen overlay on the given screen for the user to drag-select
     a crop region. Returns {x, y, w, h} in screen coordinates."""
     screen_index = (body or {}).get("screen_index", 0)
-    if os.name == "nt":
+    if _IS_WINDOWS:
         screens = await asyncio.to_thread(_list_screens_windows)
     else:
         screens = await asyncio.to_thread(_list_screens_mac)
@@ -474,7 +475,7 @@ def _run_recording_border(screen: dict, crop: dict | None, stop_event: threading
 
         canvas.tag_bind("rec_badge", "<Button-1>", _on_badge_click)
 
-        if os.name == "nt":
+        if _IS_WINDOWS:
             import ctypes
 
             # Make window click-through so the user can interact with apps underneath.
@@ -595,7 +596,7 @@ def _build_ffmpeg_cmd(ffmpeg: str, out_path: Path, req: StartRequest,
                       screens: list[dict]) -> list[str]:
     screen = screens[req.screen_index] if req.screen_index < len(screens) else screens[0]
 
-    if os.name == "nt":
+    if _IS_WINDOWS:
         # gdigrab always operates in physical pixels regardless of the calling
         # process's DPI awareness. Python's ctypes/GetSystemMetrics return
         # LOGICAL coordinates when the process is DPI-unaware, which differ
@@ -681,7 +682,7 @@ def _start_segment(ffmpeg: str, req: StartRequest, screens: list[dict],
             stdin=subprocess.DEVNULL,
             stdout=log_handle,
             stderr=subprocess.STDOUT,
-            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
+            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if _IS_WINDOWS else 0,
         )
     finally:
         log_handle.close()
@@ -705,7 +706,7 @@ async def recorder_start(req: StartRequest = StartRequest()):
                     "path": str(_recording_path), "elapsed": _elapsed()}
         # force=True — stop the stale recording silently before starting fresh
         try:
-            if os.name == "nt":
+            if _IS_WINDOWS:
                 _ffmpeg_proc.send_signal(signal.CTRL_BREAK_EVENT)
             else:
                 _ffmpeg_proc.terminate()
@@ -735,7 +736,7 @@ async def recorder_start(req: StartRequest = StartRequest()):
             ),
         })
 
-    screens = _list_screens_windows() if os.name == "nt" else _list_screens_mac()
+    screens = _list_screens_windows() if _IS_WINDOWS else _list_screens_mac()
     if not screens:
         screens = [{"index": 0, "x": 0, "y": 0, "width": 1920, "height": 1080,
                     "label": "Display 1", "primary": True}]
@@ -828,14 +829,14 @@ async def recorder_pause():
     # Windows: can't SIGSTOP ffmpeg — stop the segment cleanly
     elapsed_so_far = _elapsed()
     try:
-        if os.name == "nt":
+        if _IS_WINDOWS:
             _ffmpeg_proc.send_signal(signal.CTRL_BREAK_EVENT)
         else:
             _ffmpeg_proc.send_signal(signal.SIGSTOP)
     except Exception:
         pass
 
-    if os.name == "nt":
+    if _IS_WINDOWS:
         try:
             _ffmpeg_proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
@@ -866,7 +867,7 @@ async def recorder_resume():
     if not ffmpeg:
         return JSONResponse(status_code=500, content={"ok": False, "error": "ffmpeg not found"})
 
-    if os.name == "nt":
+    if _IS_WINDOWS:
         screens = _list_screens_windows()
         seg_index = len(_segments)
         try:
@@ -934,7 +935,7 @@ async def recorder_stop():
             return {"ok": False, "error": "Not recording", "status": "idle"}
         elapsed = _elapsed()
         try:
-            if os.name == "nt":
+            if _IS_WINDOWS:
                 _ffmpeg_proc.send_signal(signal.CTRL_BREAK_EVENT)
             else:
                 _ffmpeg_proc.terminate()
@@ -1082,7 +1083,7 @@ async def recorder_narration_approved(req: NarrationApprovedRequest):
 @router.get("/api/recorder/debug")
 async def recorder_debug():
     """Returns current screen list and last ffmpeg log for diagnosing capture issues."""
-    screens = await asyncio.to_thread(_list_screens_windows) if os.name == "nt" else await asyncio.to_thread(_list_screens_mac)
+    screens = await asyncio.to_thread(_list_screens_windows) if _IS_WINDOWS else await asyncio.to_thread(_list_screens_mac)
     log_lines = []
     if _session_dir:
         log_path = _log_path()
