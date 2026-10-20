@@ -513,7 +513,7 @@ Draft a narration script from the scene summary. Each segment has a start time a
 
 Replace:
 
-- `SEGMENTS_PLACEHOLDER` with a JSON array of `[{start_at: <seconds>, text: "<spoken text>"}]`
+- `SEGMENTS_PLACEHOLDER` with a JSON array of `[{start_at: <seconds>, text: "<spoken text>"}]`. Each item may also carry an optional `pause_after` (seconds of silence after that segment, 0 to 10) — the widget shows it in the "Pause after" box.
 - `PROJECT_ID_PLACEHOLDER` with the project id from the `PINNED PROJECT:` line of your context (for example `demo_20261019_101500`)
 
 The raw video path is fetched automatically by the widget from `/api/demo-projects/active` — do NOT embed any file path in the widget HTML.
@@ -546,6 +546,13 @@ The widget's Approve button sends `NARRATION_APPROVED:<json> PROJECT_ID:<id>` �
   .seg-actions{display:flex;gap:6px;margin-top:4px;align-items:center}
   .btn-seg-preview{background:none;border:1px solid #1e3a52;border-radius:5px;color:#6b8db5;padding:3px 8px;font-size:.7rem;cursor:pointer}
   .btn-seg-preview:hover{border-color:#f97316;color:#f97316}
+  .seg-pause{display:flex;align-items:center;gap:4px;font-size:.68rem;color:#6b8db5;margin-left:auto}
+  .seg-pause input{width:56px;background:#111827;border:1px solid #1e3a52;border-radius:5px;color:#dbeafe;padding:3px 6px;font-size:.72rem;font-family:inherit}
+  .seg-pause input:focus{outline:none;border-color:#4ade80}
+  .help{position:relative;display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border:1px solid #1e3a52;border-radius:50%;color:#6b8db5;font-size:.7rem;cursor:help}
+  .help:hover,.help:focus{border-color:#f97316;color:#f97316;outline:none}
+  .tip{display:none;position:absolute;top:24px;right:0;width:260px;z-index:5;background:#0f1a28;border:1px solid #1e3a52;border-radius:8px;padding:8px 10px;font-size:.7rem;line-height:1.4;color:#dbeafe;text-align:left;cursor:default}
+  .help:hover .tip,.help:focus .tip,.help:focus-within .tip{display:block}
   .seg-audio{width:100%;margin-top:4px;accent-color:#f97316;display:none}
   .btn-play-all{background:none;border:1px solid #1e3a52;border-radius:6px;color:#6b8db5;padding:5px 12px;font-size:.75rem;cursor:pointer;white-space:nowrap}
   .btn-play-all:hover{border-color:#f97316;color:#f97316}
@@ -582,6 +589,7 @@ The widget's Approve button sends `NARRATION_APPROVED:<json> PROJECT_ID:<id>` �
     </select>
     <button class="btn-preview" id="btn-global-preview" onclick="previewGlobal()">▶ Preview voice</button>
     <button class="btn-play-all" id="btn-play-all" onclick="playAll()">▶▶ Play all</button>
+    <span class="help" tabindex="0" role="button" aria-describedby="pacing-tip" aria-label="Pacing tips">?<span class="tip" role="tooltip" id="pacing-tip"><b>Pacing tips</b> — Use commas and periods for natural breaths; use <code>…</code> for a longer, trailing pause. For an exact silent gap after this section, set <b>Pause after</b>.</span></span>
   </div>
   <audio id="global-audio" controls></audio>
   <div class="status" id="status"></div>
@@ -730,6 +738,16 @@ function _stopPlayAll(){
   setStatus('','');
 }
 
+function pauseValue(raw){
+  var n=parseFloat(raw);
+  if(!isFinite(n)||n<0){ return 0; }
+  return Math.min(10, Math.round(n*10)/10);
+}
+
+function segOut(s, text, voice, speed, pauseRaw){
+  return {start_at:s.start_at||s.start||0, text:text, voice:voice, speed:speed, pause_after:pauseValue(pauseRaw)};
+}
+
 // ── Segments ──────────────────────────────────────────────────────────────────
 var c=document.getElementById('segs');
 data.forEach(function(s,i){
@@ -748,6 +766,12 @@ data.forEach(function(s,i){
   pb.id='pb'+i; pb.textContent='▶'; pb.title='Preview this segment';
   pb.onclick=function(){ previewSeg(i); };
   acts.appendChild(pb);
+  var pl=document.createElement('label'); pl.className='seg-pause';
+  pl.appendChild(document.createTextNode('Pause after (s)'));
+  var pi=document.createElement('input'); pi.type='number'; pi.id='pa'+i;
+  pi.min='0'; pi.max='10'; pi.step='0.1'; pi.value=pauseValue(s.pause_after);
+  pi.oninput=function(){ document.getElementById('dirty'+i).style.display='inline'; };
+  pl.appendChild(pi); acts.appendChild(pl);
   var sa=document.createElement('audio'); sa.controls=true; sa.id='sa'+i;
   sa.className='seg-audio';
   d.appendChild(l); d.appendChild(t); d.appendChild(acts); d.appendChild(sa);
@@ -775,7 +799,7 @@ function approve(){
   var voice=getVoice();
   var speed=getSpeed();
   var out=data.map(function(s,i){
-    return {start_at:s.start_at||s.start||0, text:document.getElementById('s'+i).value, voice:voice, speed:speed};
+    return segOut(s, document.getElementById('s'+i).value, voice, speed, document.getElementById('pa'+i).value);
   });
   var pid=/^demo_\d/.test(_PROJECT_ID)?_PROJECT_ID:'';
   _approving=true;
