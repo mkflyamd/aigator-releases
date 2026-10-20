@@ -907,19 +907,22 @@ async def recorder_resume():
 
 def _stitch_segments(ffmpeg: str, segments: list[Path], out_path: Path) -> Path:
     if len(segments) == 1:
-        import shutil as _sh
-        _sh.copy2(segments[0], out_path)
+        shutil.copy2(segments[0], out_path)
         return out_path
     concat_file = out_path.parent / "concat_list.txt"
-    with open(concat_file, "w") as f:
-        for s in segments:
-            f.write(f"file '{s}'\n")
-    subprocess.run(
-        [ffmpeg, "-y", "-f", "concat", "-safe", "0", "-i", str(concat_file),
-         "-c", "copy", str(out_path)],
-        check=True, capture_output=True,
-    )
-    concat_file.unlink(missing_ok=True)
+    try:
+        with open(concat_file, "w") as f:
+            for s in segments:
+                f.write(f"file '{s}'\n")
+        result = subprocess.run(
+            [ffmpeg, "-y", "-f", "concat", "-safe", "0", "-i", str(concat_file),
+             "-c", "copy", str(out_path)],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError((result.stderr or "").strip()[-400:] or f"ffmpeg exited with {result.returncode}")
+    finally:
+        concat_file.unlink(missing_ok=True)
     return out_path
 
 
@@ -955,20 +958,30 @@ async def recorder_stop():
 
     ffmpeg = _FFMPEG or _find_ffmpeg()
     final_path = _raw_path()
+    segments = [s for s in _segments if _file_size(s) > 0]
 
-    try:
-        final = await asyncio.to_thread(_stitch_segments, ffmpeg, _segments, final_path)
-        size = _file_size(final)
-    except Exception as exc:
-        # fallback: return last segment
-        final = _segments[-1] if _segments else _recording_path
-        size = _file_size(final) if final else 0
+    error = None
+    final = None
+    if not segments:
+        error = "No video was captured — check ffmpeg_log.txt"
+    else:
+        try:
+            final = await asyncio.to_thread(_stitch_segments, ffmpeg, segments, final_path)
+        except Exception as exc:
+            error = f"Could not join recording segments: {exc}"
 
     _paused_at = None
     _paused_elapsed = 0.0
     _stop_recording_border()
 
-    if final and _session_tag:
+    if error:
+        return JSONResponse(status_code=500, content={
+            "ok": False, "status": "idle", "error": error,
+            "segments": [str(s) for s in _segments],
+            "session_dir": str(_session_dir),
+        })
+
+    if _session_tag:
         try:
             dp.update_project(_session_tag, stage="recorded", segments=_segments, raw=final)
         except (KeyError, ValueError):
@@ -976,8 +989,8 @@ async def recorder_stop():
 
     return {
         "ok": True, "status": "idle", "project_id": _session_tag,
-        "path": str(final) if final else None,
-        "size_bytes": size,
+        "path": str(final),
+        "size_bytes": _file_size(final),
         "elapsed": elapsed,
         "segments": len(_segments),
     }

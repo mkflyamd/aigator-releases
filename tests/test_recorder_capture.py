@@ -149,3 +149,60 @@ def test_resume_uses_the_clamped_request(client, env):
     first, resumed = env.argvs
     assert _flag(first, "-video_size") == "2460x1390"
     assert _flag(resumed, "-video_size") == "2460x1390"
+
+
+def _pause_resume(client):
+    assert client.post("/api/recorder/pause").json()["ok"] is True
+    assert client.post("/api/recorder/resume").json()["ok"] is True
+
+
+def test_stop_joins_segments_with_concat_and_cleans_up(client, env):
+    started = _start(client)
+    _pause_resume(client)
+    r = client.post("/api/recorder/stop")
+    body = r.json()
+
+    assert r.status_code == 200 and body["ok"] is True and body["segments"] == 2
+    argv = env.runs[0]
+    assert argv[:6] == ["ffmpeg", "-y", "-f", "concat", "-safe", "0"]
+    assert argv[-3:-1] == ["-c", "copy"] and argv[-1] == body["path"]
+    assert body["size_bytes"] == len(b"joined-bytes")
+    assert not (Path(body["path"]).parent / "concat_list.txt").exists()
+    project = dp.get_project(started["project_id"])
+    assert project["stage"] == "recorded" and project["raw"] == body["path"]
+
+
+def test_stop_with_one_segment_needs_no_ffmpeg_run(client, env):
+    _start(client)
+    body = client.post("/api/recorder/stop").json()
+
+    assert body["ok"] is True and body["size_bytes"] == len(b"segment-bytes")
+    assert env.runs == []
+
+
+def test_stop_reports_concat_failure_and_writes_nothing(client, env):
+    started = _start(client)
+    _pause_resume(client)
+    env.concat_returncode = 1
+    env.concat_stderr = "Invalid data found when processing input"
+    r = client.post("/api/recorder/stop")
+    body = r.json()
+
+    assert r.status_code == 500 and body["ok"] is False and body["status"] == "idle"
+    assert "Invalid data found" in body["error"]
+    assert len(body["segments"]) == 2
+    assert body["session_dir"] == str(rec._session_dir)
+    project = dp.get_project(started["project_id"])
+    assert project["stage"] == "recording" and project["raw"] is None
+    assert rec._paused_at is None and env.border_stops
+    assert not (rec._session_dir / "source" / "concat_list.txt").exists()
+
+
+def test_stop_with_no_captured_video_is_an_error(client, env):
+    env.segment_bytes = b""
+    started = _start(client)
+    r = client.post("/api/recorder/stop")
+
+    assert r.status_code == 500
+    assert "No video was captured" in r.json()["error"]
+    assert dp.get_project(started["project_id"])["raw"] is None
