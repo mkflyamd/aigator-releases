@@ -20,6 +20,26 @@ Phase 5: DELIVER            — report final MP4 path, offer to save to OneDrive
 
 ---
 
+## Project folder
+
+Every demo lives in its own project folder, chosen by the user (Settings → General, or "Save project to…" when the project is created). Resolve it from the active-project index; never hard-code a path:
+
+```python
+import json, pathlib
+idx = json.loads((pathlib.Path.home() / ".gator" / "demo_projects.json").read_text(encoding="utf-8"))
+proj = next(p for p in idx["projects"] if p["project_id"] == idx["active_project_id"])
+PROJECT_DIR = pathlib.Path(proj["path"])
+```
+
+Layout: `source/` (recorded segments and `recording.mp4`), `work/` (`narration.json`, `tts/`, `frames/`, `logs/`), `final/` (the delivered video), `previous/` (archived earlier finals).
+
+- Read the approved narration from `PROJECT_DIR / "work/narration.json"`.
+- Write TTS audio and intermediates under `work/tts/`, logs under `work/logs/`, keyframes under `work/frames/`.
+- Write the merged deliverable as `final/<name>.mp4`. The file's presence in `final/` is the registration — there is nothing to call.
+- Never call a mutating `/api/` route from agent code. Read files and write files only.
+
+---
+
 ## CRITICAL RULES — Read first
 
 - **Shell:** always `shell='powershell'` or `shell='cmd'`. Never `shell='bash'`.
@@ -31,7 +51,7 @@ Phase 5: DELIVER            — report final MP4 path, offer to save to OneDrive
 - **NEVER skip Phase 3 (Narration Edit):** you MUST render the editable narration widget with the "✓ Approve & Generate TTS" button and WAIT for the user to click it. Do NOT generate TTS until you receive `"NARRATION_APPROVED:<json>"`. Generating TTS without showing the approval widget is a critical violation — the user must be able to review, edit text, preview voices, and approve before any audio is generated.
 - **Use the EXACT Phase 3 widget template:** do not design your own narration widget. Do not change the message prefix from `NARRATION_APPROVED` to anything else (e.g. `NARRATION_V2_APPROVED` will silently break Phase 4). Do not remove the voice selector, speed selector, preview buttons, or the raw recording video preview from the template. The template is in SKILL.md — copy it verbatim, only replacing `SEGMENTS_PLACEHOLDER`. The video path is fetched automatically.
 - **Re-edit flow:** when the user clicks "Edit narration & regenerate" in the Phase 5 delivery widget, go back to Phase 3 and render the **exact same Phase 3 widget template** again (with voice selector, preview buttons, video preview). Do NOT design a custom "v2" editor. Do NOT change the `NARRATION_APPROVED` prefix. The re-edit widget must be identical to the first-pass widget.
-- **Never embed file paths in widget JS.** All file paths go through `/api/recorder/set-output` → `/api/recorder/latest-output`. Widget templates have no `PATH_PLACEHOLDER` strings — they fetch paths from the API on load.
+- **Never embed file paths in widget JS.** Widget templates have no `PATH_PLACEHOLDER` strings — they fetch the active project's paths from `GET /api/demo-projects/active` on load.
 
 ## Audio/Video Quality Rules — Non-negotiable
 
@@ -424,8 +444,10 @@ import subprocess, urllib.request, json
 from pathlib import Path
 
 video = Path(r"<path extracted from message>")
-frames_dir = video.parent / "frames"
-frames_dir.mkdir(exist_ok=True)
+idx = json.loads((Path.home() / ".gator" / "demo_projects.json").read_text(encoding="utf-8"))
+PROJECT_DIR = Path(next(p for p in idx["projects"] if p["project_id"] == idx["active_project_id"])["path"])
+frames_dir = PROJECT_DIR / "work" / "frames"
+frames_dir.mkdir(parents=True, exist_ok=True)
 
 status = json.loads(urllib.request.urlopen("http://localhost:8003/api/recorder/status").read())
 ffmpeg = status["ffmpeg_path"]
@@ -482,7 +504,7 @@ Replace:
 
 - `SEGMENTS_PLACEHOLDER` with a JSON array of `[{start_at: <seconds>, text: "<spoken text>"}]`
 
-The raw video path is fetched automatically by the widget from `/api/recorder/latest-output` — do NOT embed any file path in the widget HTML.
+The raw video path is fetched automatically by the widget from `/api/demo-projects/active` — do NOT embed any file path in the widget HTML.
 
 The widget's Approve button sends `NARRATION_APPROVED:<json>` — Phase 4 listens for this exact prefix. Any other prefix (e.g. `NARRATION_V2_APPROVED`) will NOT trigger TTS generation.
 
@@ -719,7 +741,7 @@ data.forEach(function(s,i){
 });
 
 // ── Video preview — path fetched from server, never embedded in JS ────────────
-fetch(_BASE+'/api/recorder/latest-output')
+fetch(_BASE+'/api/demo-projects/active')
   .then(function(r){ return r.json(); })
   .then(function(d){
     _videoPath=d.raw||d.final||'';
@@ -754,7 +776,7 @@ function approve(){
 
 When you receive `"Narration approved (N segments)..."` or `"✓ Approve..."`:
 
-1. Read the approved segments from `~/.gator/narration_pending.json` — this file is written by the Approve button and contains `{segments: [...], flags: {...}}`. **Always read from this file rather than parsing the trigger message** — the trigger message is just a notification, the actual edited text is in the file. If the file doesn't exist, ask the user to click the Approve button in the widget.
+1. Read the approved segments from `PROJECT_DIR / "work/narration.json"` (see "Project folder") — this file is written by the Approve button and contains `{segments: [...], flags: {...}, timestamp: ...}`. **Always read from this file rather than parsing the trigger message** — the trigger message is just a notification, the actual edited text is in the file. If the file doesn't exist, ask the user to click the Approve button in the widget.
 2. Run `scripts/tts_pipeline.py`:
 
 ```python
@@ -762,15 +784,15 @@ import subprocess, sys, json, urllib.request
 from pathlib import Path
 
 video_path = r"<path from 'Recording complete' message>"
-pending = json.loads((Path.home() / ".gator/narration_pending.json").read_text())
+idx = json.loads((Path.home() / ".gator" / "demo_projects.json").read_text(encoding="utf-8"))
+PROJECT_DIR = Path(next(p for p in idx["projects"] if p["project_id"] == idx["active_project_id"])["path"])
+narration_file = PROJECT_DIR / "work" / "narration.json"
+pending = json.loads(narration_file.read_text(encoding="utf-8"))
 segments = pending["segments"]   # always read from file — has the edited text
 flags = pending.get("flags", {})
-session_dir = Path(video_path).parent
-narration_file = session_dir / "narration.json"
-narration_file.write_text(json.dumps(segments))
-timeline_file = session_dir / "timeline.json"
+timeline_file = PROJECT_DIR / "work" / "timeline.json"
 timeline_file.write_text(json.dumps({}))
-output_path = session_dir / "final_with_narration.mp4"
+output_path = PROJECT_DIR / "final" / "demo.mp4"
 
 # Locate tts_pipeline.py — check both built-in and user-installed locations
 _skill_dirs = [
@@ -790,7 +812,7 @@ result = subprocess.run([
     "--timeline", str(timeline_file),
     "--narration", str(narration_file),
     "--output", str(output_path),
-    "--work-dir", str(session_dir / "tts_work"),
+    "--work-dir", str(PROJECT_DIR / "work" / "tts"),
     "--voice", voice,
 ], capture_output=True, text=True, timeout=600, shell=False)
 print(result.stdout[-3000:])
@@ -801,15 +823,6 @@ if result.stderr: print("STDERR:", result.stderr[-500:])
 if output_path.exists():
     size_mb = output_path.stat().st_size / 1048576
     print(f"SUCCESS: {output_path} ({size_mb:.1f} MB)")
-    # Register the final path server-side so Phase 5 widget can fetch it
-    # without any path embedded in JS (eliminates backslash-escaping bugs)
-    import urllib.request as _ur2
-    _req = _ur2.Request(
-        'http://localhost:8003/api/recorder/set-output',
-        data=json.dumps({'final': str(output_path), 'raw': video_path}).encode(),
-        headers={'Content-Type': 'application/json'}, method='POST')
-    try: _ur2.urlopen(_req, timeout=5).read()
-    except Exception as e: print(f"Note: set-output failed: {e}")
 else:
     print(f"ERROR: output file not found at {output_path}")
 ```
@@ -826,19 +839,9 @@ If Lemonade TTS is unavailable (preflight `lemonade.ok` is false), tell the user
 
 ## Phase 5: Deliver
 
-Before showing the widget, call `POST /api/recorder/set-output` with the final merged path so the widget can fetch it without any path embedded in JS (eliminates all backslash-escaping bugs):
+The merged video in `PROJECT_DIR / "final"` is the deliverable; the widget finds it from the active project without any path embedded in JS (eliminates all backslash-escaping bugs). If the user is re-generating, move the earlier file from `final/` into `previous/` first.
 
-```python
-import urllib.request, json
-req = urllib.request.Request(
-    'http://localhost:8003/api/recorder/set-output',
-    data=json.dumps({'final': str(output_path), 'raw': video_path}).encode(),
-    headers={'Content-Type': 'application/json'}, method='POST')
-urllib.request.urlopen(req, timeout=5).read()
-print('Output registered.')
-```
-
-Then output this widget verbatim — no placeholders to replace:
+Output this widget verbatim — no placeholders to replace:
 
 ```html:widget
 <!DOCTYPE html>
@@ -878,7 +881,7 @@ var _BASE=window._GATOR||'http://localhost:8003';
 var _finalPath='', _encoded='';
 var vp=document.getElementById('vp');
 
-fetch(_BASE+'/api/recorder/latest-output')
+fetch(_BASE+'/api/demo-projects/active')
   .then(function(r){ return r.json(); })
   .then(function(d){
     _finalPath=d.final||d.raw||'';
@@ -892,7 +895,7 @@ vp.onloadedmetadata=function(){
     '<span style="color:#6b8db5">'+_finalPath+'</span> — '+Math.round(vp.duration)+'s';
 };
 vp.onerror=function(){
-  document.getElementById('meta').textContent='Could not load video. Check path via /api/recorder/latest-output';
+  document.getElementById('meta').textContent='Could not load video. Check the active project via /api/demo-projects/active';
 };
 function download(){
   var a=document.createElement('a');
@@ -906,7 +909,7 @@ function editNarration(){
 }
 function cleanup(){
   parent.postMessage({type:'gator:send-message',
-    text:'Please delete the frames/ and tts_work/ intermediates for the current session.'},'*');
+    text:'Please delete the work/frames and work/tts intermediates for the current project.'},'*');
 }
 </script>
 </body>
@@ -915,4 +918,4 @@ function cleanup(){
 
 After showing the widget, report the file path and size in plain text for reference.
 
-Always clean up: delete the `frames/` and `tts_work/` directories after delivery (user can trigger via Delete intermediates button).
+Always clean up: delete the `work/frames/` and `work/tts/` directories after delivery (user can trigger via Delete intermediates button).
