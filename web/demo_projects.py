@@ -274,3 +274,51 @@ def set_default_root(root: str | None) -> Path:
         cfg[CONFIG_ROOT_KEY] = str(path)
         save_config(cfg)
         return path
+
+
+_LEGACY_RE = re.compile(r"^demo_\d{8}_\d{6}$")
+
+
+def adopt_legacy_folder(folder: Path) -> dict:
+    with _LOCK:
+        if (folder / "project.json").exists():
+            data = _read_project(folder)
+            if not any(p["project_id"] == data["project_id"] for p in _read_index()["projects"]):
+                _upsert_index(data["project_id"], data["name"], folder, data["updated_at"])
+            return _expand(folder, data)
+        pid = folder.name
+        mtime = datetime.fromtimestamp(folder.stat().st_mtime, timezone.utc).isoformat()
+        _make_layout(folder)
+        for seg in sorted(folder.glob("seg_*.mp4")):
+            shutil.move(str(seg), str(folder / "source" / seg.name))
+        log = folder / "ffmpeg_log.txt"
+        if log.exists():
+            shutil.move(str(log), str(folder / "work" / "logs" / log.name))
+        stitched = folder / f"{pid}_final.mp4"
+        raw = None
+        if stitched.exists():
+            shutil.move(str(stitched), str(folder / "source" / "recording.mp4"))
+            raw = "source/recording.mp4"
+        data = _blank(pid, pid, mtime)
+        data["segments"] = [f"source/{s.name}" for s in sorted((folder / "source").glob("seg_*.mp4"))]
+        data["raw"] = raw
+        data["stage"] = "recorded" if raw else "created"
+        atomic_write_json(folder / "project.json", data)
+        _upsert_index(pid, pid, folder, mtime)
+        return _expand(folder, data)
+
+
+def list_projects() -> list[dict]:
+    with _LOCK:
+        root = get_default_root()
+        if root.is_dir():
+            for d in sorted(root.iterdir()):
+                if d.is_dir() and _LEGACY_RE.match(d.name) and not (d / "project.json").exists():
+                    adopt_legacy_folder(d)
+        idx = _read_index()
+        kept = [p for p in idx["projects"] if (Path(p["path"]) / "project.json").exists()]
+        if len(kept) != len(idx["projects"]):
+            idx["projects"] = kept
+            _write_index(idx)
+        kept.sort(key=lambda p: p["updated_at"], reverse=True)
+        return [get_project(p["project_id"]) for p in kept]
