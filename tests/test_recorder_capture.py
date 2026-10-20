@@ -206,3 +206,22 @@ def test_stop_with_no_captured_video_is_an_error(client, env):
     assert r.status_code == 500
     assert "No video was captured" in r.json()["error"]
     assert dp.get_project(started["project_id"])["raw"] is None
+
+
+def test_failed_restart_stays_paused_and_can_be_retried(client, env):
+    _start(client)
+    assert client.post("/api/recorder/pause").json()["ok"] is True
+
+    env.fail_next_start = True
+    r = client.post("/api/recorder/resume")
+    body = r.json()
+    assert r.status_code == 500 and body["ok"] is False
+    assert "ffmpeg_log.txt" in body["error"] and body["log"].endswith("ffmpeg_log.txt")
+    assert len(rec._segments) == 1
+    assert rec._paused_at is not None
+    assert rec._ffmpeg_proc is None
+
+    retry = client.post("/api/recorder/resume")
+    assert retry.json()["ok"] is True
+    assert len(rec._segments) == 2
+    assert env.argvs[-1][-1].endswith("seg_01.mp4")

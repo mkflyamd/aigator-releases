@@ -875,12 +875,17 @@ async def recorder_resume():
             proc, seg_path = _start_segment(ffmpeg, _last_start_req, screens, seg_index)
         except Exception as exc:
             return JSONResponse(status_code=500, content={"ok": False, "error": str(exc)})
+        await asyncio.sleep(0.4)
+        if proc.poll() is not None:
+            _ffmpeg_proc = None
+            return JSONResponse(status_code=500, content={
+                "ok": False,
+                "error": "ffmpeg failed to restart — check ffmpeg_log.txt",
+                "log": str(_log_path()),
+            })
         _ffmpeg_proc = proc
         _recording_path = seg_path
         _segments.append(seg_path)
-        await asyncio.sleep(0.4)
-        if _ffmpeg_proc.poll() is not None:
-            return JSONResponse(status_code=500, content={"ok": False, "error": "ffmpeg failed to restart"})
     else:
         screens = _list_screens_mac()
         # POSIX: resume the stopped process
