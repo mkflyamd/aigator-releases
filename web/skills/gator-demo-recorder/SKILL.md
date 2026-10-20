@@ -12,7 +12,7 @@ Record your screen manually using the in-chat widget. After recording, analyze t
 
 ```
 Phase 1: RENDER WIDGET      — user clicks Record / Stop in chat
-Phase 2: ANALYZE            — extract keyframes, describe_images, build scene summary
+Phase 2: ANALYZE            — describe_images(analyze_video), build scene summary
 Phase 3: NARRATION EDIT     — draft script, show editable widget, user approves
 Phase 4: TTS + MERGE        — generate audio via Lemonade, merge with ffmpeg
 Phase 5: DELIVER            — report final MP4 path, offer to save to OneDrive
@@ -31,10 +31,10 @@ proj = next(p for p in idx["projects"] if p["project_id"] == idx["active_project
 PROJECT_DIR = pathlib.Path(proj["path"])
 ```
 
-Layout: `source/` (recorded segments and `recording.mp4`), `work/` (`narration.json`, `tts/`, `frames/`, `logs/`), `final/` (the delivered video), `previous/` (archived earlier finals).
+Layout: `source/` (recorded segments and `recording.mp4`), `work/` (`narration.json`, `tts/`, `logs/`), `final/` (the delivered video), `previous/` (archived earlier finals).
 
 - Read the approved narration only through `scripts/load_approval.py` (see Phase 4); `work/narration.json` is a mirror, not the source of truth.
-- Write TTS audio and intermediates under `work/tts/`, logs under `work/logs/`, keyframes under `work/frames/`.
+- Write TTS audio and intermediates under `work/tts/` and logs under `work/logs/`.
 - Write the merged deliverable as `final/<name>.mp4`. The file's presence in `final/` is the registration — there is nothing to call.
 - Never call a mutating `/api/` route from agent code. Read files and write files only.
 
@@ -441,64 +441,16 @@ function doStop() {
 
 When you receive `"Recording complete. File: <path> ..."`:
 
-1. Extract the video path: it is between `"File: "` and the next `" ("`. Example: `"Recording complete. File: C:\Users\...\final.mp4 (46MB)."` → path = `C:\Users\...\final.mp4`
-2. Get ffmpeg path: `GET /api/recorder/status` → use `ffmpeg_path` field directly. Do not search for ffmpeg any other way.
-3. Proceed immediately — do not ask the user for the path or for ffmpeg location.
+1. Extract the video path: it is the text between `"File: "` and the next `" ("` — or, when the message shows no size, up to `". Please"`. Example: `"Recording complete. File: C:\Users\...\final.mp4 (46MB). Please analyze it…"` → path = `C:\Users\...\final.mp4`
+2. Proceed immediately — do not ask the user for the path, and do not run ffmpeg or ffprobe yourself.
 
-**Step 1 — Extract keyframes** (max 8 frames, evenly spaced):
+**Step 1 — Analyze the video**: call `describe_images(task='analyze_video', video_path='<path>')`. The tool finds ffmpeg/ffprobe, extracts up to 8 evenly spaced keyframes (at least ~5 s apart) into a private temporary folder, analyzes them, and deletes them.
 
-```python
-import subprocess, urllib.request, json
-from pathlib import Path
-
-video = Path(r"<path extracted from message>")
-idx = json.loads((Path.home() / ".gator" / "demo_projects.json").read_text(encoding="utf-8"))
-PROJECT_DIR = Path(next(p for p in idx["projects"] if p["project_id"] == idx["active_project_id"])["path"])
-frames_dir = PROJECT_DIR / "work" / "frames"
-frames_dir.mkdir(parents=True, exist_ok=True)
-
-status = json.loads(urllib.request.urlopen("http://localhost:8003/api/recorder/status").read())
-ffmpeg = status["ffmpeg_path"]
-ffprobe = status.get("ffprobe_path") or str(Path(ffmpeg).parent / "ffprobe.exe")
-
-# Get duration so we can space frames evenly
-probe = subprocess.run([ffprobe, "-v", "error", "-show_entries", "format=duration",
-  "-of", "default=noprint_wrappers=1:nokey=1", str(video)],
-  capture_output=True, text=True)
-duration = float(probe.stdout.strip() or 30)
-
-# Hard cap: 8 frames max — more causes gateway timeouts (large base64 payload)
-MAX_FRAMES = 8
-interval = max(duration / MAX_FRAMES, 5)
-fps_val = round(1 / interval, 4)
-
-subprocess.run([ffmpeg, "-y", "-i", str(video), "-vf", f"fps={fps_val}",
-  str(frames_dir / "frame_%04d.png")], shell=False, check=True)
-frames = sorted(frames_dir.glob("frame_*.png"))[:MAX_FRAMES]
-print(f"Extracted {len(frames)} frames (every {interval:.1f}s) to {frames_dir}")
-```
-
-**Step 2 — Analyze frames**: call `describe_images` with `task='analyze_sequence'`, passing the frame paths as `image_paths` and `fps` set to `round(1/interval, 4)` from above. **Never pass more than 8 frames** — the gateway times out on larger payloads and hangs the entire backend.
-
-**Do not ask the user to upload or drag-and-drop frames.** `analyze_sequence` reads from disk directly.
-
-Example:
-
-```
-describe_images(
-  task='analyze_sequence',
-  image_paths=[
-    'C:\\...\\frames\\frame_0001.png',
-    'C:\\...\\frames\\frame_0002.png',
-    # up to 8 frames only
-  ],
-  fps=0.0667
-)
-```
+**Do not ask the user to upload or drag-and-drop frames.**
 
 Returns: `{timeline: [{frame, time_sec, time_label, description}, ...], summary: "..."}`
 
-**Step 3 — Build scene summary**: from the extracted data, produce a list of `{time_sec, description}` entries covering the key moments. Show it to the user as a markdown pipe table, then immediately continue to the narration widget without waiting for user input.
+**Step 2 — Build scene summary**: from the extracted data, produce a list of `{time_sec, description}` entries covering the key moments. Show it to the user as a markdown pipe table, then immediately continue to the narration widget without waiting for user input.
 
 ---
 
@@ -959,7 +911,7 @@ function editNarration(){
 }
 function cleanup(){
   parent.postMessage({type:'gator:send-message', pin_skill:'gator-demo-recorder', project_id:_PROJECT_ID,
-    text:'Please delete the work/frames and work/tts intermediates for the current project.'},'*');
+    text:'Please delete the work/tts intermediates for the current project.'},'*');
 }
 </script>
 </body>
@@ -968,4 +920,4 @@ function cleanup(){
 
 After showing the widget, report the file path and size in plain text for reference.
 
-Always clean up: delete the `work/frames/` and `work/tts/` directories after delivery (user can trigger via Delete intermediates button).
+Always clean up: delete the `work/tts/` directory after delivery (user can trigger via Delete intermediates button).

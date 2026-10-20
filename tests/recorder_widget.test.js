@@ -120,3 +120,11 @@ test('a failed stop shows the error with the session folder and tells the chat n
   assert.strictEqual(posted.length, 0);
   assert(!fetched.some((f) => f.action === 'notify'));
 });
+
+test('Phase 2 analyzes the recording through analyze_video, not a runner script', () => {
+  const phase2 = skill.slice(skill.indexOf('## Phase 2: Analyze'), skill.indexOf('## Phase 3'));
+  assert(phase2.includes("describe_images(task='analyze_video'"));
+  assert(!phase2.includes('subprocess.run'));
+  assert(!phase2.includes('frame_%04d'));
+  assert(!skill.includes('delete the `frames/`'));
+});
