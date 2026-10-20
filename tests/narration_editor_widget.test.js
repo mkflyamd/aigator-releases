@@ -107,6 +107,53 @@ assert.ok(editor.includes('id="btn-approve"'), 'SP2 must be merged: Approve butt
   assert.strictEqual(view(rec({ state: 'done' }), 130000).text, 'Done — your demo video is ready.', 'a real result wins over the stall timer');
 }
 
+// fetchPreview: one bridged request per call, matched by id, accepted only from the parent
+{
+  const posted = [];
+  const listeners = [];
+  const timers = [];
+  const parent = { postMessage: (m, o) => posted.push(plain({ m, o })) };
+  const ctx = {
+    parent,
+    _previewRid: 0,
+    _previewPending: {},
+    addEventListener: (t, fn) => { if (t === 'message') listeners.push(fn); },
+    setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; },
+    URL: { createObjectURL: (b) => 'blob:' + b.tag },
+  };
+  vm.createContext(ctx);
+  vm.runInContext(
+    [fn('fetchPreview'), fn('onPreviewResult'), "addEventListener('message', onPreviewResult);"].join('\n'),
+    ctx
+  );
+  const results = [];
+  ctx.fetchPreview('Hello', 'af_heart', (url, err, blob) => results.push({ url, err, blob }));
+  ctx.fetchPreview('World', 'af_nova', (url, err, blob) => results.push({ url, err, blob }));
+  assert.deepStrictEqual(posted.map((p) => [p.m.type, p.m.text, p.m.voice, p.o]), [
+    ['gator:tts-preview', 'Hello', 'af_heart', '*'],
+    ['gator:tts-preview', 'World', 'af_nova', '*'],
+  ]);
+  const [r1, r2] = posted.map((p) => p.m.rid);
+  assert.notStrictEqual(r1, r2, 'each request has its own id');
+  const fire = (source, data) => listeners.forEach((fn) => fn({ source, data }));
+  fire({}, { type: 'gator:tts-preview-result', rid: r1, ok: true, blob: { tag: 'x' } });
+  assert.strictEqual(results.length, 0, 'a reply from another window is ignored');
+  fire(parent, { type: 'gator:tts-preview-result', rid: 999, ok: true, blob: { tag: 'x' } });
+  assert.strictEqual(results.length, 0, 'an unknown request id is ignored');
+  fire(parent, { type: 'gator:tts-preview-result', rid: r2, ok: false, error: 'Lemonade TTS is not running' });
+  assert.deepStrictEqual(plain(results[0]), { err: 'Lemonade TTS is not running', url: null });
+  const blob = { tag: 'b1' };
+  fire(parent, { type: 'gator:tts-preview-result', rid: r1, ok: true, blob });
+  assert.strictEqual(results[1].url, 'blob:b1');
+  assert.strictEqual(results[1].err, null);
+  assert.strictEqual(results[1].blob, blob, 'the blob is passed on for Play all');
+  fire(parent, { type: 'gator:tts-preview-result', rid: r1, ok: true, blob });
+  assert.strictEqual(results.length, 2, 'a reply settles a request once');
+  ctx.fetchPreview('Slow', 'af_heart', (url, err) => results.push({ url, err }));
+  timers[timers.length - 1].fn();
+  assert.ok(results[2].err && !results[2].url, 'no reply ends in an error, not a hang');
+}
+
 // Template and SKILL.md wiring
 assert.ok(editor.includes('id="merge-status"'), 'merge status element');
 assert.ok(editor.includes('gator:narration-approval-result'), 'listens for the approval reply');
@@ -114,7 +161,10 @@ assert.ok(editor.includes("'gator:demo-summary'"), 'asks the parent for the proj
 assert.ok(editor.includes("'gator:demo-progress'"), 'asks the parent for merge progress');
 assert.ok(editor.includes('gator:demo-summary-result') && editor.includes('gator:demo-progress-result'), 'listens for the parent replies');
 assert.ok(!/fetch\([^)]*demo-projects/.test(editor), 'no direct demo-project backend calls from the editor');
-assert.strictEqual((editor.match(/fetch\(/g) || []).length, 2, 'only the two pre-existing TTS preview fetches remain');
+assert.ok(!/fetch\(/.test(editor), 'the editor makes no direct backend calls');
+assert.ok(editor.includes("type:'gator:tts-preview'") && editor.includes('gator:tts-preview-result'), 'voice preview goes through the parent bridge');
+assert.ok(editor.includes('blob.arrayBuffer()'), 'Play all decodes the bridged blob, not a fetched object URL');
+assert.ok(!/window\.top|__CSRF_TOKEN__|parent\.document/.test(editor), 'the editor never reads the parent page');
 assert.ok(!editor.includes('latest-output'), 'editor no longer uses latest-output');
 assert.ok(!editor.includes('/api/demo-projects/active'), 'editor no longer uses the active-project route');
 assert.ok(

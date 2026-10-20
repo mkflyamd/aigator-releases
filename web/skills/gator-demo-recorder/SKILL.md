@@ -222,7 +222,35 @@ window.addEventListener('load', function() {
   }
 });
 
+// Inline in chat the widget is sandboxed (opaque origin): it cannot call the
+// backend, so each call is a named gator:recorder action handled by the parent.
+// In the floating HUD window (parent === window) it calls the backend directly.
+var _INLINE = window.parent !== window;
+var _rid = 0, _pending = {};
+window.addEventListener('message', function(ev) {
+  var m = ev.data;
+  if (ev.source !== parent || !m || m.type !== 'gator:recorder-result') return;
+  var cb = _pending[m.rid];
+  if (!cb) return;
+  delete _pending[m.rid];
+  cb(null, m.data);
+});
+
+function bridgeCall(action, params, cb) {
+  var id = ++_rid;
+  _pending[id] = cb;
+  var msg = {type:'gator:recorder', action:action, rid:id};
+  if (params) msg.params = params;
+  parent.postMessage(msg, '*');
+  setTimeout(function() {
+    if (!_pending[id]) return;
+    delete _pending[id];
+    cb(new Error('no reply from AI Gator'), null);
+  }, action === 'pick-region' ? 600000 : 60000);
+}
+
 function apiFetch(action, params, cb) {
+  if (_INLINE) { bridgeCall(action, params, cb); return; }
   var m = (action==='status'||action==='screens') ? 'GET' : 'POST';
   var opts = {method:m};
   if (m==='POST' && params) { opts.body=JSON.stringify(params); opts.headers={'Content-Type':'application/json'}; }
@@ -350,13 +378,7 @@ function onScreenChange() {
   clearCrop();
   // Tell the backend which screen is selected so global hotkeys use it
   var si = parseInt(document.getElementById('sel-screen').value) || 0;
-  try {
-    fetch(_BASE + '/api/recorder/select-screen', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ screen_index: si })
-    });
-  } catch(e) {}
+  apiFetch('select-screen', {screen_index: si}, function() {});
 }
 
 function clearCrop() {
@@ -432,14 +454,15 @@ function doStop() {
       // POST to /api/recorder/notify which the Gator frontend polls every 2s.
       var msg = 'Recording complete. File: '+_stopPath+(mb ? ' ('+mb+')' : '')+'. Please analyze it and draft a narration script.';
       try { parent.postMessage({type:'gator:send-message', pin_skill:'gator-demo-recorder', project_id:(data&&data.project_id)||'', text:msg},'*'); } catch(e){}
-      // HUD fallback — always fire, Gator deduplicates if both arrive
-      try {
-        fetch(_BASE+'/api/recorder/notify', {
-          method:'POST',
-          headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({message:msg})
-        });
-      } catch(e){}
+      if (!_INLINE) {
+        try {
+          fetch(_BASE+'/api/recorder/notify', {
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({message:msg})
+          });
+        } catch(e){}
+      }
     } else {
       actionFailed(err, data, 'Stop error');
     }
@@ -668,16 +691,31 @@ function previewSeg(i){
   });
 }
 
+// The frame is sandboxed and cannot call the backend; the parent runs the preview.
+var _previewRid=0, _previewPending={};
+
 function fetchPreview(text, voice, cb){
-  fetch(_BASE+'/api/recorder/tts-preview', {
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({text:text, voice:voice, model:'kokoro-v1'})
-  }).then(function(r){
-    if(!r.ok){ return r.json().then(function(d){ cb(null, d.error||r.status); }); }
-    return r.blob().then(function(b){ cb(URL.createObjectURL(b), null); });
-  }).catch(function(e){ cb(null, String(e)); });
+  var id=++_previewRid;
+  _previewPending[id]=cb;
+  parent.postMessage({type:'gator:tts-preview', rid:id, text:text, voice:voice}, '*');
+  setTimeout(function(){
+    var c=_previewPending[id];
+    if(!c){ return; }
+    delete _previewPending[id];
+    c(null, 'no reply from AI Gator');
+  }, 60000);
 }
+
+function onPreviewResult(ev){
+  var m=ev.data;
+  if(ev.source!==parent || !m || m.type!=='gator:tts-preview-result'){ return; }
+  var cb=_previewPending[m.rid];
+  if(!cb){ return; }
+  delete _previewPending[m.rid];
+  if(!m.ok || !m.blob){ cb(null, m.error||'preview failed'); return; }
+  cb(URL.createObjectURL(m.blob), null, m.blob);
+}
+window.addEventListener('message', onPreviewResult);
 
 var _playAllActive=false;
 var _playAllCtx=null;
@@ -698,19 +736,19 @@ function playAll(){
   var voice=getVoice();
   Promise.all(segs.map(function(seg){
     return new Promise(function(resolve){
-      fetchPreview(seg.text, voice, function(url, err){
-        resolve(err||!url ? null : url);
+      fetchPreview(seg.text, voice, function(url, err, blob){
+        resolve(err||!blob ? null : blob);
       });
     });
-  })).then(function(urls){
+  })).then(function(blobs){
     if(!_playAllActive) return;
-    // Fetch each blob and decode to AudioBuffer
+    // Decode each blob to an AudioBuffer
     var ctx=new (window.AudioContext||window.webkitAudioContext)();
     _playAllCtx=ctx;
     setStatus('Decoding audio...','#f97316');
-    return Promise.all(urls.map(function(url){
-      if(!url) return Promise.resolve(null);
-      return fetch(url).then(function(r){ return r.arrayBuffer(); })
+    return Promise.all(blobs.map(function(blob){
+      if(!blob) return Promise.resolve(null);
+      return blob.arrayBuffer()
         .then(function(ab){ return ctx.decodeAudioData(ab); })
         .catch(function(){ return null; });
     }));
