@@ -4352,6 +4352,7 @@ function _initTabSystem() {
   _saveTabs();
   _preserveScrollOnRender = true;
   _renderTabBar();
+  _renderPinChip(_activeTabId);
   // Render conversation messages from restored history
   const msgs = document.getElementById('messages');
   if (history.length && msgs) {
@@ -4439,6 +4440,7 @@ function createTab(opts) {
   });
   _showChatOrOnboarding();
   _refreshPinOrb();
+  _renderPinChip(_activeTabId);
   if (typeof _switchPinContext === 'function') _switchPinContext();
   _remountCodeAgentTerminalForTab(_activeTabId);
 }
@@ -4459,6 +4461,7 @@ function createTabWithId(id, title) {
   _renderTabBar();
   _showChatOrOnboarding();
   _refreshPinOrb();
+  _renderPinChip(_activeTabId);
   if (typeof _switchPinContext === 'function') _switchPinContext();
   _remountCodeAgentTerminalForTab(_activeTabId);
 }

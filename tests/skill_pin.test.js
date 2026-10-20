@@ -84,4 +84,9 @@ assert(
   'pin fields must be in both the resend payload and the post body',
 );
 
+// The pin chip is drawn whenever the active tab changes or loads, not only in switchTab
+for (const name of ['createTab', 'createTabWithId', '_initTabSystem']) {
+  assert(/_renderPinChip\(/.test(extract(name)), `${name} must draw the active tab's pin chip`);
+}
+
 console.log('skill_pin: all assertions passed');

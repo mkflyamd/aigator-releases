@@ -114,6 +114,7 @@ function createTabSandbox() {
     document: { querySelector: () => null },
     _showChatOrOnboarding() {},
     _refreshPinOrb() {},
+    _renderPinChip() {},
     _switchPinContext() {},
     _remountCodeAgentTerminalForTab() {},
   };
