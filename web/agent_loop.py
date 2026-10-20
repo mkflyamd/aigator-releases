@@ -17,6 +17,7 @@ from tool_pipeline import (
     sanitize_tool_failure,
     select_tools_with_budget,
 )
+from tool_repair import rejection_summaries, stalled_chunk
 
 MAX_ITERATIONS = 25
 _COMPACT_THRESHOLD = 0.85      # compact when input_tokens exceed 85% of context window (post-call)
@@ -241,6 +242,7 @@ def _forward_tool_call_event(event: dict) -> str:
 # error message back to the model once so it can self-correct, then move on.
 _NON_RETRYABLE_TOOL_ERRORS = (
     "missing_required_params",
+    "invalid_tool_input",
     "missing required",
     "required field",
     "field required",           # pydantic v2 field-level error
@@ -834,42 +836,19 @@ async def _single_agent_loop(
     _last_round_errors: list[str] = []  # failures from the most recent tool round
     _last_round_had_success = False     # did any tool in that round succeed?
     _bad_tool_streak = 0  # consecutive rounds where ALL tool calls were non-retryable errors
+    _last_rejections: list[dict] = []  # {tool, fields} per failed call in the latest all-bad round
     _doom_loop_history: list[tuple[str, str]] = []  # (tool_name, args_json) for doom loop detection
     _DOOM_LOOP_THRESHOLD = 3  # same tool + same args N times in a row = doom loop
-    _turn_tool_calls: list[dict] = []  # summarized tool calls from the PREVIOUS round (for circuit breaker + narration cap)
+    _turn_tool_calls: list[dict] = []  # summarized tool calls from the PREVIOUS round (for telemetry + narration cap)
     available_tools = list(normalized_tools)
     required_tool_names = set(required_tool_names or ())
     _definition_retries = 0
-    # Retain the previous round's telemetry identifiers for the circuit breaker
-    # at the start of the next iteration. They are initialized here so static
-    # analysis can also see they are defined before that branch.
+    # Turn telemetry identifiers, initialized here so static analysis can see
+    # they are defined before the first iteration completes.
     _turn_id = ""
     _turn_start_ts = time.monotonic()
 
     for _ in range(MAX_ITERATIONS):
-        # Circuit breaker: if the previous round had a bad-tool streak and we are
-        # about to issue a new LLM call, yield a stalled event immediately. This
-        # catches the case where the watchdog kills the LLM call (stall after a
-        # missing_required_params round) before _bad_tool_streak reaches
-        # _MAX_BAD_TOOL_RETRIES — the external cancel bypasses the normal circuit
-        # breaker check, so we pre-empt it here on the next iteration.
-        if _ > 0 and _bad_tool_streak >= 1:
-            _names = ", ".join(
-                str(tc.get("name", "tool")) for tc in (_turn_tool_calls or [{}])
-            ) or "tool"
-            yield f"data: {json.dumps({'stalled': True, 'message': f'Gator could not form valid arguments for {_names} — click Continue to retry or rephrase your request.'})}\n\n"
-            await _log_turn_end_safe(
-                _turn_id, context_id, task_id, _, "single", model,
-                type(provider).__name__, "circuit_breaker", None,
-                _turn_tool_calls,
-                _last_round_errors[0] if _last_round_errors else None, None,
-                _total_input, _total_output, 0,
-                0, False, _bad_tool_streak,
-                int((time.monotonic() - _turn_start_ts) * 1000) if _ > 0 else 0,
-                len(msgs), active_skills,
-            )
-            yield "data: [DONE]\n\n"
-            return
         turn = None
         _overflow_prunes = 0
         _failover_used = False
@@ -1146,7 +1125,7 @@ async def _single_agent_loop(
             return
 
         tool_calls = turn["tool_calls"]
-        _turn_tool_calls = _summarize_tool_calls(tool_calls)  # update for next iteration's circuit breaker + narration cap
+        _turn_tool_calls = _summarize_tool_calls(tool_calls)  # update for next iteration's telemetry + narration cap
         if not tool_calls:
             yield f"data: {json.dumps({'text': 'Model requested tool use with no tool calls.'})}\n\n"
             await _log_turn_end_safe(
@@ -1267,9 +1246,9 @@ async def _single_agent_loop(
         all_non_retryable = results and all(_is_non_retryable_tool_error(r) for r in results)
         if all_non_retryable:
             _bad_tool_streak += 1
+            _last_rejections = rejection_summaries(tool_calls, results)
             if _bad_tool_streak >= _MAX_BAD_TOOL_RETRIES:
-                _names = ", ".join(tc.name for tc in tool_calls)
-                yield f"data: {json.dumps({'text': f'The model could not form valid tool calls for {_names} after {_bad_tool_streak} attempts. Try rephrasing your request or switching to a more capable model.'})}\n\n"
+                yield stalled_chunk(_last_rejections)
                 await _log_turn_end_safe(
                     _turn_id, context_id, task_id, _, "single", model,
                     type(provider).__name__, "circuit_breaker", turn["stop_reason"],

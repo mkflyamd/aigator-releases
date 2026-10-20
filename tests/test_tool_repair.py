@@ -164,3 +164,70 @@ async def test_rejected_call_never_executes_and_reports_required_fields(monkeypa
         assert result["required"] == ["code"]
         assert "code" in result["hint"]
     assert ran == []
+
+
+# ── single-agent loop ────────────────────────────────────────────────────────
+
+def test_missing_field_gets_exactly_one_repair_call_and_task_resumes():
+    execute, executed = _fake_tool()
+    provider = _Provider([
+        _tool_turn(_tc(inputs={})),
+        _tool_turn(_tc(inputs={"code": "print(1)"})),
+        _text_turn("The script ran and printed 1, so the task is complete."),
+    ])
+    chunks = _run_single(provider, execute)
+    assert provider.calls == 3
+    assert executed == [{"code": "print(1)"}]
+    assert not _stalled(chunks)
+    # the repair call saw the structured rejection
+    repair_ctx = provider.seen[1][-1]["content"]
+    assert '"missing": ["code"]' in repair_ctx and '"tool": "run_python"' in repair_ctx
+    assert chunks[-1] == "data: [DONE]\n\n"
+
+
+def test_repair_that_fails_again_stalls_naming_tool_and_fields():
+    execute, executed = _fake_tool()
+    provider = _Provider([
+        _tool_turn(_tc(inputs={})),
+        _tool_turn(_tc(inputs={})),
+        _text_turn("unexpected third call"),
+    ])
+    chunks = _run_single(provider, execute)
+    assert provider.calls == 2
+    assert executed == []
+    stalled = _stalled(chunks)
+    assert len(stalled) == 1
+    assert "run_python" in stalled[0]["message"] and "code" in stalled[0]["message"]
+    assert stalled[0]["failed_calls"] == [{"tool": "run_python", "fields": ["code"]}]
+    assert not any("could not form valid tool calls" in c for c in chunks)
+    assert chunks[-1] == "data: [DONE]\n\n"
+
+
+def test_successful_repair_resets_the_repair_budget():
+    execute, executed = _fake_tool()
+    provider = _Provider([
+        _tool_turn(_tc(inputs={})),
+        _tool_turn(_tc(inputs={"code": "1"})),
+        _tool_turn(_tc(inputs={})),
+        _tool_turn(_tc(inputs={"code": "2"})),
+        _text_turn("Both scripts ran successfully and the task is complete."),
+    ])
+    chunks = _run_single(provider, execute)
+    assert provider.calls == 5
+    assert executed == [{"code": "1"}, {"code": "2"}]
+    assert not _stalled(chunks)
+
+
+def test_schema_violation_counts_as_a_rejected_call():
+    async def execute(name, inputs, **kw):
+        return {"error": "invalid_tool_input", "tool": name, "field": "code",
+                "reason": "123 is not of type 'string'", "hint": "Fix 'code'."}
+
+    provider = _Provider([
+        _tool_turn(_tc(inputs={"code": 123})),
+        _tool_turn(_tc(inputs={"code": 456})),
+        _text_turn("unexpected third call"),
+    ])
+    chunks = _run_single(provider, execute)
+    assert provider.calls == 2
+    assert _stalled(chunks)[0]["failed_calls"] == [{"tool": "run_python", "fields": ["code"]}]

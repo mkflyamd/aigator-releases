@@ -2,7 +2,7 @@
 
 Covers:
 1. idle-timeout path emits `stalled` SSE event (not plain text) + [DONE]
-2. circuit breaker fires on bad_tool_streak >= 1 at the START of the next iteration
+2. a rejected tool call gets one repair turn before the circuit breaker stalls (tests/test_tool_repair.py)
 3. tool result truncation caps large results before they enter history
 4. assistant message history truncation stubs large responses
 """
@@ -46,64 +46,6 @@ def _collect_loop(coro_gen):
     finally:
         loop.close()
         asyncio.set_event_loop(asyncio.new_event_loop())
-
-
-# ── P0-1/Gap2: circuit breaker pre-empts next LLM call when bad_tool_streak >= 1 ──
-
-def test_circuit_breaker_fires_on_streak_1_before_second_llm_call():
-    """After one all-bad tool round, the loop must emit stalled + [DONE] at the
-    START of the next iteration without making another LLM call."""
-    from types import SimpleNamespace
-    from agent_loop import _single_agent_loop
-
-    llm_call_count = 0
-
-    class FakeProvider:
-        context_window = 200_000
-        max_tools = 128
-        max_tool_name_length = 64
-
-        async def stream_turn(self, model, system, msgs, tools):
-            nonlocal llm_call_count
-            llm_call_count += 1
-            if llm_call_count == 1:
-                yield {"type": "done", "stop_reason": "tool_use", "raw_content": [],
-                       "tool_calls": [SimpleNamespace(name="run_python", inputs={}, id="tc1")],
-                       "usage": {"input_tokens": 10, "output_tokens": 5}}
-            else:
-                # Should never be reached — circuit breaker should fire first
-                yield {"type": "text_delta", "text": "unexpected second call"}
-                yield {"type": "done", "stop_reason": "end_turn", "raw_content": [],
-                       "tool_calls": [], "usage": {"input_tokens": 10, "output_tokens": 5}}
-
-        def normalize_tool_schema(self, t):
-            return t
-
-        def build_assistant_message(self, raw):
-            return {"role": "assistant", "content": ""}
-
-        def build_tool_result_message(self, tool_calls, results):
-            return {"role": "user", "content": []}
-
-    async def bad_execute(name, inputs, **kw):
-        return {"error": "missing_required_params", "tool": name, "missing": ["code"]}
-
-    provider = FakeProvider()
-    msgs = [{"role": "user", "content": "test"}]
-
-    chunks = _collect_loop(_single_agent_loop(
-        provider=provider, model="test-model", system="sys",
-        msgs=msgs, normalized_tools=[{"name": "run_python", "input_schema": {}}],
-        execute_tool=bad_execute,
-        COM_BOUND_TOOLS=set(), TOOL_STATUS={}, _tool_toast=lambda n, r: None,
-        _SLACK_SAFE_MSG="",
-    ))
-
-    events = _sse_events(chunks)
-    stalled = [e for e in events if e.get("stalled")]
-    assert stalled, f"Expected stalled event, got events: {events}"
-    assert _has_done(chunks), "Expected [DONE] after stalled event"
-    assert llm_call_count == 1, f"LLM called {llm_call_count} times, expected 1 (circuit breaker should stop at 2nd)"
 
 
 # ── P0-2: Tool result truncation ─────────────────────────────────────────────
