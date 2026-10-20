@@ -8443,6 +8443,22 @@ const sendBtn = document.getElementById('send-btn');
 
 let history = [];
 
+// Stop dispatch: one persistent capture-phase listener; click lands on the common ancestor of press and release.
+const _activeStops = new Set();
+function _shouldStopFromClick(e, btn, rect, streaming) {
+  if (!streaming || e.button !== 0) return false;
+  if (btn.contains(e.target)) return true;
+  return e.clientX >= rect.left && e.clientX <= rect.right &&
+         e.clientY >= rect.top && e.clientY <= rect.bottom;
+}
+document.addEventListener('click', (e) => {
+  if (!_activeStops.size) return;
+  const streaming = sendBtn.classList.contains('is-streaming');
+  if (!_shouldStopFromClick(e, sendBtn, sendBtn.getBoundingClientRect(), streaming)) return;
+  e.preventDefault();
+  [..._activeStops].forEach((stop) => stop());
+}, true);
+
 const _COMPACTION_ICON_SVG =
   '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8"/><line x1="10" y1="12" x2="14" y2="12"/></svg>';
 
@@ -12941,6 +12957,7 @@ form.addEventListener('submit', async (e) => {
   // Stop button handler — close EventSource + cancel server task + cancel browser task
   let _userStopped = false;
   const _onStop = () => {
+    if (_userStopped) return;
     if (_activeTabId !== requestTabId) return;
     _userStopped = true;
     _pendingSandboxFollowUps.delete(requestTabId);
@@ -12967,7 +12984,7 @@ form.addEventListener('submit', async (e) => {
       r();
     }
   };
-  sendBtn.addEventListener('click', _onStop);
+  _activeStops.add(_onStop);
 
   // Escape also stops generation while streaming
   const _onEscStop = (e) => {
@@ -12976,7 +12993,7 @@ form.addEventListener('submit', async (e) => {
   document.addEventListener('keydown', _onEscStop);
 
   const _detachStop = () => {
-    sendBtn.removeEventListener('click', _onStop);
+    _activeStops.delete(_onStop);
     document.removeEventListener('keydown', _onEscStop);
   };
   const _resetBtn = () => {
