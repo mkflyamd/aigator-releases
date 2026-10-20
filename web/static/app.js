@@ -118,15 +118,6 @@ function gatorActionAttrs(name, args, opts) {
     },
     true,
   );
-  // load does not bubble; the capture listener sees widget iframes finish loading.
-  document.addEventListener(
-    'load',
-    (event) => {
-      const el = event.target;
-      if (el && el.classList && el.classList.contains('gator-widget-frame')) { gatorWidgetResize(el); gatorWidgetRevealOnce(el); }
-    },
-    true,
-  );
 })();
 
 /* ── Client-side perf instrumentation (ephemeral, in-memory) ──────────────────
@@ -11743,11 +11734,10 @@ function renderMarkdown(raw) {
       const idx = blocks.length;
       const widgetId = 'w-' + Math.random().toString(36).slice(2, 9);
       const encoded = encodeURIComponent(trimmed);
-      // Inject a self-reporting resize script into the srcdoc.
-      // sandbox without allow-same-origin makes contentDocument null from the
-      // parent, so we can't read the iframe DOM directly. Instead we inject a
-      // ResizeObserver inside the iframe that postMessages its height to us.
-      // We also normalise min-height:100vh so the initial measurement is correct.
+      // The sandbox has no allow-same-origin, so the frame has an opaque origin
+      // and the parent cannot read its DOM. A script injected into the srcdoc
+      // postMessages the frame height; min-height:100vh is normalised so the
+      // measurement reflects content.
       const _gatorOrigin =
         window.location.origin && window.location.origin !== 'null'
           ? window.location.origin
@@ -11760,7 +11750,7 @@ function renderMarkdown(raw) {
         '::-webkit-scrollbar-thumb{background:#2a4a6b;border-radius:2px}' +
         '::-webkit-scrollbar-thumb:hover{background:#4ade80}' +
         '*{scrollbar-width:thin;scrollbar-color:#2a4a6b transparent}' +
-        `</style><script nonce="${window.__CSP_NONCE__ || ''}">window._GATOR="${_gatorOrigin}";<\/script>`;
+        `</style><script nonce="${window.__CSP_NONCE__ || ''}">window._GATOR="${_gatorOrigin}";${gatorWidgetFrameScript()}<\/script>`;
       const srcdoc = (normStyle + gatorWidgetCspHtml(trimmed)).replace(/"/g, '&quot;');
       // Hide the Save button for transient widgets (narration editor, playback)
       // that don't make sense to persist. Detected via data-no-save attribute
@@ -11795,7 +11785,7 @@ function renderMarkdown(raw) {
               ? `<button class="gator-widget-btn gator-widget-btn-secondary" id="${widgetId}-save-btn"${gatorActionAttrs('gatorWidgetSavePrompt', [widgetId])} title="Keep the saved widget as it is and save this version as a separate new widget">Save as new widget</button>`
               : `<button class="gator-widget-btn" id="${widgetId}-save-btn"${gatorActionAttrs('gatorWidgetSavePrompt', [widgetId])} title="Save widget">&#128190; Save</button>`) +
           `</div>` +
-          `<iframe id="${widgetId}" class="gator-widget-frame" sandbox="allow-scripts allow-forms allow-modals allow-pointer-lock allow-same-origin"` +
+          `<iframe id="${widgetId}" class="gator-widget-frame" sandbox="allow-scripts allow-forms allow-modals allow-pointer-lock"` +
           ` srcdoc="${srcdoc}"` +
           ` data-src="${encoded}"` +
           ` frameborder="0"></iframe>` +
@@ -18294,20 +18284,60 @@ function _initGoogleWorkspaceSettings() {
 
 /* ── Widget System ────────────────────────────────────────────────────────── */
 
+const GATOR_WIDGET_MAX_H = 3000;
+
 function gatorWidgetScrollSnapshot(iframe) {
   const saved = [];
   for (let el = iframe.parentElement; el; el = el.parentElement) {
     if (el.scrollTop > 0) saved.push({ el, top: el.scrollTop });
   }
-  let win = null;
-  try { win = iframe.contentWindow; } catch (_) {}
-  const inner = win && win.scrollY > 0 ? { win, x: win.scrollX, y: win.scrollY } : null;
-  return { saved, inner };
+  return { saved };
 }
 
 function gatorWidgetScrollRestore(snap) {
   for (const s of snap.saved) if (s.el.scrollTop < s.top) s.el.scrollTop = s.top;
-  if (snap.inner && snap.inner.win.scrollY < snap.inner.y) snap.inner.win.scrollTo(snap.inner.x, snap.inner.y);
+}
+
+function gatorWidgetApplyHeight(iframe, height) {
+  const snap = gatorWidgetScrollSnapshot(iframe);
+  try {
+    iframe.style.height = Math.min(Math.ceil(height), GATOR_WIDGET_MAX_H) + 'px';
+  } finally {
+    gatorWidgetScrollRestore(snap);
+  }
+}
+
+function gatorWidgetOnResize(d, e) {
+  const frame = gatorWidgetFrameForSource(e.source);
+  const h = typeof d.height === 'string' ? Number(d.height) : d.height;
+  if (!frame || typeof h !== 'number' || !Number.isFinite(h) || h <= 0) return;
+  gatorWidgetApplyHeight(frame, h);
+  if (!frame.dataset.gwSized) {
+    frame.dataset.gwSized = '1';
+    gatorWidgetRevealOnce(frame);
+  }
+}
+
+// Runs inside the opaque-origin widget frame, which the parent cannot measure.
+function gatorWidgetFrameScript() {
+  return `(function(){
+  var MAX=${GATOR_WIDGET_MAX_H},last=-1,capped=false;
+  function measure(){
+    var b=document.body;
+    if(!b)return;
+    var h=Math.ceil(Math.max(document.documentElement.getBoundingClientRect().height,b.scrollHeight))+2;
+    if(h>MAX){
+      if(!capped){capped=true;var s=document.createElement('style');s.textContent='html{overflow-y:auto!important}';document.head.appendChild(s);}
+      h=MAX;
+    }
+    if(h>2&&h!==last){last=h;parent.postMessage({type:'gator:resize',height:h},'*');}
+  }
+  try{new ResizeObserver(measure).observe(document.documentElement);}catch(e){}
+  addEventListener('load',measure);
+  setTimeout(measure,50);
+  setTimeout(measure,300);
+  measure();
+  })();`;
 }
 
 function gatorWidgetShouldReveal(streaming, following, widgetH, viewportH) {
@@ -18389,62 +18419,6 @@ async function gatorDemoBridge(d, e) {
   } catch (err) {
     reply({ ok: false, error: String(err), message: 'Could not open the folder: ' + err });
   }
-}
-
-function gatorWidgetResize(iframe) {
-  const applyHeight = () => {
-    try {
-      const doc = iframe.contentDocument;
-      if (!doc || !doc.body) return;
-      // Reset height so scrollHeight reflects content, not container
-      iframe.style.height = '0';
-      const h = Math.max(
-        doc.body.scrollHeight,
-        doc.body.offsetHeight,
-        doc.documentElement.scrollHeight,
-      );
-      if (h > 0) {
-        // Grow the iframe to its full content height so read-through artifacts
-        // (eli5 explainers, reports) flow naturally in the conversation and the
-        // CHAT scrolls — not a tiny box inside the message. A generous upper
-        // bound prevents a single runaway artifact from dominating the viewport
-        // entirely; beyond it, internal scroll kicks in as a last resort.
-        const maxH = 3000;
-        if (h > maxH) {
-          iframe.style.height = maxH + 'px';
-          const styleId = 'gator-widget-scroll-style';
-          if (!doc.getElementById(styleId)) {
-            const s = doc.createElement('style');
-            s.id = styleId;
-            s.textContent = `
-              html,body{height:100%;overflow-y:auto}
-              ::-webkit-scrollbar{width:6px;height:6px}
-              ::-webkit-scrollbar-track{background:transparent}
-              ::-webkit-scrollbar-thumb{background:#2a4a6b;border-radius:3px}
-              ::-webkit-scrollbar-thumb:hover{background:#3a5a7b}
-              *{scrollbar-width:thin;scrollbar-color:#2a4a6b transparent}
-            `;
-            doc.head.appendChild(s);
-          }
-        } else {
-          iframe.style.height = h + 2 + 'px';
-        }
-      }
-    } catch (_) {}
-  };
-  const measure = () => {
-    const snap = gatorWidgetScrollSnapshot(iframe);
-    try { applyHeight(); } finally { gatorWidgetScrollRestore(snap); }
-  };
-  measure();
-  setTimeout(measure, 50);
-  setTimeout(measure, 300);
-  try {
-    const win = iframe.contentWindow;
-    if (win?.document?.body) {
-      new win.ResizeObserver(measure).observe(win.document.body);
-    }
-  } catch (_) {}
 }
 
 function gatorWidgetHtmlFromId(widgetId) {
@@ -18771,19 +18745,9 @@ window.addEventListener('message', (e) => {
         .catch(() => {});
       break;
     }
-    case 'gator:resize': {
-      // Parent can now read DOM directly (allow-same-origin) — postMessage resize
-      // is kept as a fallback for widgets that explicitly report their height.
-      if (e.source && d.height > 0) {
-        document.querySelectorAll('.gator-widget-frame').forEach((f) => {
-          try {
-            if (f.contentWindow === e.source)
-              f.style.height = Math.min(Math.ceil(d.height), 3000) + 'px';
-          } catch (_) {}
-        });
-      }
+    case 'gator:resize':
+      gatorWidgetOnResize(d, e);
       break;
-    }
     case 'gator:recorder': {
       // Widget now uses window._GATOR + direct fetch — this bridge is kept
       // only as a fallback for older saved widgets that still use postMessage.

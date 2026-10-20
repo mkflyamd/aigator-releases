@@ -357,6 +357,7 @@ const WIDGET_FENCE = '```html:widget\n<div>hi</div>\n```';
 
 function renderSandbox(editingName) {
   return {
+    GATOR_WIDGET_MAX_H: 3000,
     window: { location: { origin: 'http://127.0.0.1:8000' } },
     _tabs: [
       {
@@ -374,6 +375,7 @@ const RENDER_FUNCTIONS = [
   'escapeHtml',
   'applyInline',
   'gatorWidgetCspHtml',
+  'gatorWidgetFrameScript',
   'gatorActionAttrs',
   '_activeEditingWidget',
   'renderMarkdown',

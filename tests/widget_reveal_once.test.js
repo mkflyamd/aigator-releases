@@ -86,6 +86,6 @@ assert.ok(
   /const doSend = async \(overridePayload\) => \{\s*_userScrolledUp = false;\s*_gatorWidgetRevealHold = false;/.test(src),
   'doSend clears the hold'
 );
-assert.ok(/gatorWidgetResize\(el\);\s*gatorWidgetRevealOnce\(el\);/.test(src), 'load listener reveals once');
+assert.ok(/gatorWidgetApplyHeight\(frame, h\);[\s\S]*?gatorWidgetRevealOnce\(frame\);/.test(src), 'the first reported size reveals once');
 
 console.log('widget_reveal_once: PASS');
