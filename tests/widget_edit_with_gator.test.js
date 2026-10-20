@@ -241,3 +241,113 @@ test('doSend passes the editing-tab suffix as system_prompt_suffix', () => {
     'doSend must build _wSuffix from _widgetEditSuffixFor',
   );
 });
+
+function actionNames() {
+  const match = source.match(/const GATOR_ACTIONS = new Set\(\[([\s\S]*?)\]\);/);
+  assert(match, 'GATOR_ACTIONS not found in app.js');
+  return [...match[1].matchAll(/'([^']+)'/g)].map((m) => m[1]);
+}
+
+test('GATOR_ACTIONS allows the Edit action', () => {
+  assert.ok(actionNames().includes('gatorWidgetEditWithGator'));
+});
+
+test('the manager row renders the Edit button through gatorActionAttrs', () => {
+  assert.ok(
+    source.includes("gatorActionAttrs('gatorWidgetEditWithGator', [w.widget_id, w.name])"),
+    'manager row must render the pencil button',
+  );
+});
+
+function editSandbox(tabs) {
+  const calls = { created: [], switched: [], closed: 0, range: [] };
+  const input = {
+    textContent: '',
+    focused: false,
+    events: [],
+    dispatchEvent(e) {
+      this.events.push(e.type);
+    },
+    focus() {
+      this.focused = true;
+    },
+  };
+  const sandbox = {
+    _tabs: tabs || [],
+    _activeTabId: 'x',
+    Event: class {
+      constructor(type) {
+        this.type = type;
+      }
+    },
+    gatorCloseWidgetManager() {
+      calls.closed++;
+    },
+    createTab(opts) {
+      calls.created.push(opts);
+    },
+    switchTab(id) {
+      calls.switched.push(id);
+    },
+    document: {
+      getElementById: (id) => (id === 'chat-input' ? input : null),
+      createRange: () => ({
+        selectNodeContents() {},
+        collapse(toStart) {
+          calls.range.push(['collapse', toStart]);
+        },
+      }),
+    },
+    window: {
+      getSelection: () => ({
+        removeAllRanges() {},
+        addRange() {
+          calls.range.push(['add']);
+        },
+      }),
+    },
+  };
+  return { sandbox, input, calls };
+}
+
+test('gatorWidgetEditWithGator opens an editing tab and prefills the input', () => {
+  const { sandbox, input, calls } = editSandbox();
+  const { gatorWidgetEditWithGator } = load(['gatorWidgetEditWithGator'], sandbox);
+  gatorWidgetEditWithGator('w1', 'Local Use');
+  assert.strictEqual(calls.closed, 1);
+  assert.deepStrictEqual(plain(calls.created), [
+    { title: 'Edit: Local Use', editingWidget: { widget_id: 'w1', name: 'Local Use' } },
+  ]);
+  assert.strictEqual(input.textContent, 'Edit my "Local Use" widget: ');
+  assert.deepStrictEqual(input.events, ['input']);
+  assert.strictEqual(input.focused, true);
+  assert.deepStrictEqual(calls.range, [['collapse', false], ['add']]);
+});
+
+test('gatorWidgetEditWithGator cuts long names in the tab title only', () => {
+  const { sandbox, input, calls } = editSandbox();
+  const { gatorWidgetEditWithGator } = load(['gatorWidgetEditWithGator'], sandbox);
+  const name = 'A'.repeat(40);
+  gatorWidgetEditWithGator('w1', name);
+  assert.strictEqual(calls.created[0].title, 'Edit: ' + 'A'.repeat(23) + '…');
+  assert.strictEqual(calls.created[0].editingWidget.name, name);
+  assert.strictEqual(input.textContent, 'Edit my "' + name + '" widget: ');
+});
+
+test('gatorWidgetEditWithGator switches to a tab already editing that widget', () => {
+  const { sandbox, calls } = editSandbox([
+    { id: 't9', title: 'Edit: X', createdAt: 1, editingWidget: { widget_id: 'w1', name: 'X' } },
+  ]);
+  const { gatorWidgetEditWithGator } = load(['gatorWidgetEditWithGator'], sandbox);
+  gatorWidgetEditWithGator('w1', 'X');
+  assert.deepStrictEqual(calls.switched, ['t9']);
+  assert.deepStrictEqual(calls.created, []);
+});
+
+test('gatorWidgetEditWithGator keeps an existing draft', () => {
+  const { sandbox, input } = editSandbox();
+  input.textContent = 'half-written message';
+  const { gatorWidgetEditWithGator } = load(['gatorWidgetEditWithGator'], sandbox);
+  gatorWidgetEditWithGator('w1', 'X');
+  assert.strictEqual(input.textContent, 'half-written message');
+});

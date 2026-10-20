@@ -52,6 +52,7 @@ const GATOR_ACTIONS = new Set([
   'gatorWidgetSaveConfirm',
   'gatorWidgetSaveCancel',
   'gatorWidgetOpenFromDb',
+  'gatorWidgetEditWithGator',
   'gatorWidgetCaptureToggle',
   'gatorWidgetPinToggle',
   'gatorWidgetDeleteConfirm',
@@ -18366,6 +18367,33 @@ async function gatorWidgetDeleteConfirm(widgetId, name) {
   if (panel) gatorWidgetManagerRender(panel);
 }
 
+function gatorWidgetEditWithGator(widgetId, name) {
+  gatorCloseWidgetManager();
+  const label = String(name || 'Widget');
+  const existing = _tabs.find((t) => t.editingWidget && t.editingWidget.widget_id === widgetId);
+  if (existing) {
+    switchTab(existing.id);
+  } else {
+    createTab({
+      title: 'Edit: ' + (label.length > 24 ? label.slice(0, 23) + '…' : label),
+      editingWidget: { widget_id: widgetId, name: label },
+    });
+  }
+  const input = document.getElementById('chat-input');
+  if (!input) return;
+  if (!(input.textContent || '').trim()) {
+    input.textContent = 'Edit my "' + label + '" widget: ';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+  input.focus();
+  const range = document.createRange();
+  range.selectNodeContents(input);
+  range.collapse(false);
+  const selection = window.getSelection();
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
 function _parseNarrationApproval(text) {
   const raw = String(text).slice('NARRATION_APPROVED:'.length).trim();
   const start = raw.indexOf('[');
@@ -18649,6 +18677,7 @@ async function gatorWidgetManagerRender(panel) {
         `<span class="gator-widget-manager-name" title="${escapeHtml(w.name)}">${escapeHtml(w.name)}</span>` +
         `<div class="gator-widget-manager-actions">` +
         `<button${gatorActionAttrs('gatorWidgetOpenFromDb', [w.widget_id])} title="Open as floating window">Open</button>` +
+        `<button${gatorActionAttrs('gatorWidgetEditWithGator', [w.widget_id, w.name])} title="Edit with Gator">✎</button>` +
         `<button${gatorActionAttrs('gatorWidgetCaptureToggle', [w.widget_id, !!_hide])} title="${_hide ? 'Hidden during screen share — click to show' : 'Visible during screen share — click to hide'}">${_hide ? gatorEyeOffSvg() : gatorEyeSvg()}</button>` +
         `<button${gatorActionAttrs('gatorWidgetPinToggle', [w.widget_id, !!w.pinned])} title="${w.pinned ? 'Unpin from rail' : 'Pin to rail'}">${w.pinned ? '★' : '☆'}</button>` +
         `<button${gatorActionAttrs('gatorWidgetDeleteConfirm', [w.widget_id, w.name])} title="Delete">🗑</button>` +
