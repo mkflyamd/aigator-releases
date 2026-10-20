@@ -33,7 +33,7 @@ PROJECT_DIR = pathlib.Path(proj["path"])
 
 Layout: `source/` (recorded segments and `recording.mp4`), `work/` (`narration.json`, `tts/`, `frames/`, `logs/`), `final/` (the delivered video), `previous/` (archived earlier finals).
 
-- Read the approved narration from `PROJECT_DIR / "work/narration.json"`.
+- Read the approved narration only through `scripts/load_approval.py` (see Phase 4); `work/narration.json` is a mirror, not the source of truth.
 - Write TTS audio and intermediates under `work/tts/`, logs under `work/logs/`, keyframes under `work/frames/`.
 - Write the merged deliverable as `final/<name>.mp4`. The file's presence in `final/` is the registration — there is nothing to call.
 - Never call a mutating `/api/` route from agent code. Read files and write files only.
@@ -49,7 +49,7 @@ Layout: `source/` (recorded segments and `recording.mp4`), `work/` (`narration.j
 - **Recording:** the widget calls `/api/recorder/start` and `/api/recorder/stop` directly — **do not invoke ffmpeg manually**. Do not call `run_shell` for record/stop.
 - **Output size:** never generate more than ~300 lines of output in one turn. Split long work across turns.
 - **NEVER skip Phase 3 (Narration Edit):** you MUST render the editable narration widget with the "✓ Approve & Generate TTS" button and WAIT for the user to click it. Do NOT generate TTS until you receive `"NARRATION_APPROVED:<json>"`. Generating TTS without showing the approval widget is a critical violation — the user must be able to review, edit text, preview voices, and approve before any audio is generated.
-- **Use the EXACT Phase 3 widget template:** do not design your own narration widget. Do not change the message prefix from `NARRATION_APPROVED` to anything else (e.g. `NARRATION_V2_APPROVED` will silently break Phase 4). Do not remove the voice selector, speed selector, preview buttons, or the raw recording video preview from the template. The template is in SKILL.md — copy it verbatim, only replacing `SEGMENTS_PLACEHOLDER`. The video path is fetched automatically.
+- **Use the EXACT Phase 3 widget template:** do not design your own narration widget. Do not change the message prefix from `NARRATION_APPROVED` to anything else (e.g. `NARRATION_V2_APPROVED` will silently break Phase 4). Do not remove the voice selector, speed selector, preview buttons, or the raw recording video preview from the template. The template is in SKILL.md — copy it verbatim, only replacing `SEGMENTS_PLACEHOLDER` and `PROJECT_ID_PLACEHOLDER`. The video path is fetched automatically.
 - **Re-edit flow:** when the user clicks "Edit narration & regenerate" in the Phase 5 delivery widget, go back to Phase 3 and render the **exact same Phase 3 widget template** again (with voice selector, preview buttons, video preview). Do NOT design a custom "v2" editor. Do NOT change the `NARRATION_APPROVED` prefix. The re-edit widget must be identical to the first-pass widget.
 - **Never embed file paths in widget JS.** Widget templates have no `PATH_PLACEHOLDER` strings — they fetch the active project's paths from `GET /api/demo-projects/active` on load.
 
@@ -407,7 +407,7 @@ function doStop() {
       // HUD widget: parent === window so postMessage goes nowhere — instead
       // POST to /api/recorder/notify which the Gator frontend polls every 2s.
       var msg = 'Recording complete. File: '+_stopPath+' ('+mb+'). Please analyze it and draft a narration script.';
-      try { parent.postMessage({type:'gator:send-message', text:msg},'*'); } catch(e){}
+      try { parent.postMessage({type:'gator:send-message', pin_skill:'gator-demo-recorder', project_id:(data&&data.project_id)||'', text:msg},'*'); } catch(e){}
       // HUD fallback — always fire, Gator deduplicates if both arrive
       try {
         fetch(_BASE+'/api/recorder/notify', {
@@ -498,15 +498,16 @@ Returns: `{timeline: [{frame, time_sec, time_label, description}, ...], summary:
 
 Draft a narration script from the scene summary. Each segment has a start time and spoken text.
 
-**You MUST use the exact widget template below verbatim.** Do not design your own widget. Do not change the message format. Do not rename the `NARRATION_APPROVED` prefix. The only modification allowed is replacing `SEGMENTS_PLACEHOLDER` with the narration JSON array.
+**You MUST use the exact widget template below verbatim.** Do not design your own widget. Do not change the message format. Do not rename the `NARRATION_APPROVED` prefix. The only modifications allowed are replacing `SEGMENTS_PLACEHOLDER` with the narration JSON array and `PROJECT_ID_PLACEHOLDER` with the project id.
 
 Replace:
 
 - `SEGMENTS_PLACEHOLDER` with a JSON array of `[{start_at: <seconds>, text: "<spoken text>"}]`
+- `PROJECT_ID_PLACEHOLDER` with the project id from the `PINNED PROJECT:` line of your context (for example `demo_20261019_101500`)
 
 The raw video path is fetched automatically by the widget from `/api/demo-projects/active` — do NOT embed any file path in the widget HTML.
 
-The widget's Approve button sends `NARRATION_APPROVED:<json>` — Phase 4 listens for this exact prefix. Any other prefix (e.g. `NARRATION_V2_APPROVED`) will NOT trigger TTS generation.
+The widget's Approve button sends `NARRATION_APPROVED:<json> PROJECT_ID:<id>` — Phase 4 listens for this exact prefix. The app records the approval first and then starts the Phase 4 turn with the approval id. Any other prefix (e.g. `NARRATION_V2_APPROVED`) will NOT trigger TTS generation.
 
 ```html:widget
 <!DOCTYPE html>
@@ -581,11 +582,13 @@ The widget's Approve button sends `NARRATION_APPROVED:<json>` — Phase 4 listen
     <video id="video-player" controls preload="metadata"></video>
   </div>
 
-  <button class="btn-approve" onclick="approve()">✓ Approve & Generate TTS</button>
+  <button id="btn-approve" class="btn-approve" onclick="approve()">✓ Approve & Generate TTS</button>
 </div>
 <script>
 var _BASE = window._GATOR || 'http://localhost:8003';
 var data = SEGMENTS_PLACEHOLDER;
+var _PROJECT_ID = 'PROJECT_ID_PLACEHOLDER';
+var _approving = false;
 var _videoPath = '';
 
 // ── Voice preview ─────────────────────────────────────────────────────────────
@@ -757,14 +760,32 @@ fetch(_BASE+'/api/demo-projects/active')
 
 // ── Approve ───────────────────────────────────────────────────────────────────
 function approve(){
+  if(_approving) return;
   var voice=getVoice();
   var speed=getSpeed();
   var out=data.map(function(s,i){
     return {start_at:s.start_at||s.start||0, text:document.getElementById('s'+i).value, voice:voice, speed:speed};
   });
-  parent.postMessage({type:'gator:send-message',
-    text:'NARRATION_APPROVED:'+JSON.stringify(out)},'*');
+  var pid=/^demo_\d/.test(_PROJECT_ID)?_PROJECT_ID:'';
+  _approving=true;
+  var btn=document.getElementById('btn-approve');
+  btn.disabled=true; btn.textContent='Approving…';
+  parent.postMessage({type:'gator:send-message', pin_skill:'gator-demo-recorder', project_id:pid,
+    text:'NARRATION_APPROVED:'+JSON.stringify(out)+(pid?' PROJECT_ID:'+pid:'')},'*');
 }
+window.addEventListener('message',function(ev){
+  var m=ev.data;
+  if(!m||m.type!=='gator:narration-approval-result') return;
+  var btn=document.getElementById('btn-approve');
+  if(m.ok){
+    btn.textContent='✓ Approved'+(m.approval&&m.approval.version?' (v'+m.approval.version+')':'');
+  }else{
+    _approving=false;
+    btn.disabled=false;
+    btn.textContent='✓ Approve & Generate TTS';
+    alert('Approval failed: '+(m.error||'unknown error'));
+  }
+});
 </script>
 </body>
 </html>
@@ -774,33 +795,53 @@ function approve(){
 
 ## Phase 4: TTS + Merge
 
-When you receive `"Narration approved (N segments)..."` or `"✓ Approve..."`:
+When you receive `"Narration approved (N segments, approval appr_<n>_<hash>)..."` or `"✓ Approve..."`:
 
-1. Read the approved segments from `PROJECT_DIR / "work/narration.json"` (see "Project folder") — this file is written by the Approve button and contains `{segments: [...], flags: {...}, timestamp: ...}`. **Always read from this file rather than parsing the trigger message** — the trigger message is just a notification, the actual edited text is in the file. If the file doesn't exist, ask the user to click the Approve button in the widget.
-2. Run `scripts/tts_pipeline.py`:
+1. Load the approved narration through the verified loader (`scripts/load_approval.py`) — **never read `work/narration.json` directly and never parse the trigger message**. The approval id in the trigger message names the exact approved version; the loader checks that it is still the current approval, that its integrity hash matches, and that the recording has not changed since. It writes the approved segments to `--segments-out` and prints a JSON result.
+2. If the loader exits with code 2, stop and tell the user using the table below. Do not generate TTS from a file you did not load through the loader.
+
+| Code | Meaning | What to tell the user |
+|---|---|---|
+| `missing` | No approval exists for this project (or the id in the message is unknown) | Click Approve & Generate TTS in the narration widget first |
+| `superseded` | A newer approval replaced the one in the message | Use the latest approval, or re-approve in the widget |
+| `corrupt` | The approval record fails its integrity hash | Re-approve in the widget |
+| `stale_media` | The recording changed after approval | Re-open the narration editor and approve again |
+
+3. Run `scripts/tts_pipeline.py` on the loaded narration:
 
 ```python
 import subprocess, sys, json, urllib.request
 from pathlib import Path
 
 video_path = r"<path from 'Recording complete' message>"
-idx = json.loads((Path.home() / ".gator" / "demo_projects.json").read_text(encoding="utf-8"))
-PROJECT_DIR = Path(next(p for p in idx["projects"] if p["project_id"] == idx["active_project_id"])["path"])
-narration_file = PROJECT_DIR / "work" / "narration.json"
-pending = json.loads(narration_file.read_text(encoding="utf-8"))
-segments = pending["segments"]   # always read from file — has the edited text
-flags = pending.get("flags", {})
-timeline_file = PROJECT_DIR / "work" / "timeline.json"
-timeline_file.write_text(json.dumps({}))
-output_path = PROJECT_DIR / "final" / "demo.mp4"
+approval_id = "<approval id from the trigger message, e.g. appr_2_0a1b2c3d>"
+PROJECT_DIR = Path(r"<PROJECT_DIR from the PINNED PROJECT: line>")
 
-# Locate tts_pipeline.py — check both built-in and user-installed locations
+# Locate the skill scripts — check both built-in and user-installed locations
 _skill_dirs = [
     Path.home() / ".gator/skills/mine/gator-demo-recorder/scripts",
     Path(__file__).parent / "scripts" if "__file__" in dir() else None,
     Path.cwd() / "web/skills/gator-demo-recorder/scripts",
 ]
 skill_dir = next((d for d in _skill_dirs if d and d.exists()), _skill_dirs[0])
+
+segments_file = PROJECT_DIR / "work" / "tts" / "approved_segments.json"
+loaded = subprocess.run([
+    sys.executable, str(skill_dir / "load_approval.py"),
+    "--project-dir", str(PROJECT_DIR),
+    "--approval-id", approval_id,
+    "--segments-out", str(segments_file),
+], capture_output=True, text=True, timeout=60, shell=False)
+verdict = json.loads(loaded.stdout or "{}")
+if loaded.returncode != 0 or not verdict.get("ok"):
+    print("APPROVAL NOT LOADED:", verdict.get("code"), verdict.get("error"))
+    raise SystemExit(2)
+
+segments = json.loads(segments_file.read_text(encoding="utf-8"))   # the verified approved segments
+flags = verdict.get("flags", {})
+timeline_file = PROJECT_DIR / "work" / "timeline.json"
+timeline_file.write_text(json.dumps({}))
+output_path = PROJECT_DIR / "final" / "demo.mp4"
 
 voice = segments[0].get("voice", "af_heart") if segments else "af_heart"
 speed = str(segments[0].get("speed", 1.0)) if segments else "1.0"
@@ -810,7 +851,7 @@ result = subprocess.run([
     str(skill_dir / "tts_pipeline.py"),
     "--video", video_path,
     "--timeline", str(timeline_file),
-    "--narration", str(narration_file),
+    "--narration", str(segments_file),
     "--output", str(output_path),
     "--work-dir", str(PROJECT_DIR / "work" / "tts"),
     "--voice", voice,
@@ -841,7 +882,7 @@ If Lemonade TTS is unavailable (preflight `lemonade.ok` is false), tell the user
 
 The merged video in `PROJECT_DIR / "final"` is the deliverable; the widget finds it from the active project without any path embedded in JS (eliminates all backslash-escaping bugs). If the user is re-generating, move the earlier file from `final/` into `previous/` first.
 
-Output this widget verbatim — no placeholders to replace:
+Output this widget verbatim. The only placeholder is `PROJECT_ID_PLACEHOLDER`: replace it with the project id from the `PINNED PROJECT:` line of your context.
 
 ```html:widget
 <!DOCTYPE html>
@@ -878,6 +919,7 @@ Output this widget verbatim — no placeholders to replace:
 </div>
 <script>
 var _BASE=window._GATOR||'http://localhost:8003';
+var _PROJECT_ID='PROJECT_ID_PLACEHOLDER';
 var _finalPath='', _encoded='';
 var vp=document.getElementById('vp');
 
@@ -904,11 +946,11 @@ function download(){
   document.body.appendChild(a); a.click(); a.remove();
 }
 function editNarration(){
-  parent.postMessage({type:'gator:send-message',
+  parent.postMessage({type:'gator:send-message', pin_skill:'gator-demo-recorder', project_id:_PROJECT_ID,
     text:'NARRATION_REEDIT: Re-show the Phase 3 narration editor widget now.'},'*');
 }
 function cleanup(){
-  parent.postMessage({type:'gator:send-message',
+  parent.postMessage({type:'gator:send-message', pin_skill:'gator-demo-recorder', project_id:_PROJECT_ID,
     text:'Please delete the work/frames and work/tts intermediates for the current project.'},'*');
 }
 </script>
