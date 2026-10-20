@@ -641,3 +641,142 @@ def load_approved_narration(pid: str, folder: Path, approval_id: str | None = No
     if expected and narration_approval.media_fingerprint(dp.get_project(pid).get("raw")) != expected:
         raise MediaError("approval_stale_media", "The recording changed after the narration was approved. Ask the user to approve again.")
     return record
+
+
+# ---------------------------------------------------------------------------
+# Merge narration
+# ---------------------------------------------------------------------------
+
+def _write_progress(folder: Path, approval_id: str, state: str, stage: str, message: str,
+                    step: int = 0, total: int = 0, error: str | None = None) -> None:
+    path = folder / "work" / "logs" / "merge_progress.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    dp.atomic_write_json(path, {
+        "approval_id": approval_id, "state": state, "stage": stage, "step": step, "total": total,
+        "message": message, "error": error, "updated_at": _now(),
+    })
+
+
+def _run_tts_pipeline(video: Path, timeline_file: Path, narration_file: Path, out: Path,
+                      work_dir: Path, voice: str, soundtrack: Path | None = None) -> None:
+    cmd = [sys.executable, str(TTS_SCRIPT), "--video", str(video), "--timeline", str(timeline_file),
+           "--narration", str(narration_file), "--output", str(out), "--work-dir", str(work_dir),
+           "--voice", voice]
+    progress = work_dir.parent / "logs" / "merge_progress.json"
+    try:
+        approval_id = json.loads(progress.read_text(encoding="utf-8")).get("approval_id")
+    except (OSError, ValueError, AttributeError):
+        approval_id = None
+    if approval_id:
+        cmd += ["--progress-file", str(progress), "--approval-id", str(approval_id)]
+    if soundtrack:
+        cmd += ["--soundtrack", str(soundtrack)]
+    result = _run(cmd, timeout=900)
+    if result.returncode != 0 or not out.is_file():
+        raise MediaError("tts_failed", "Narration generation or merge failed.",
+                         stderr_tail=((result.stderr or "") + (result.stdout or ""))[-600:])
+
+
+def _intro_request(intro_mode, intro_duration_sec, intro_title, flags: dict) -> tuple[dict, str]:
+    if intro_mode:
+        return {"mode": intro_mode, "duration_sec": intro_duration_sec, "title": intro_title}, "tool_argument"
+    return {"mode": flags.get("intro_mode"), "duration_sec": flags.get("intro_duration_sec"),
+            "title": flags.get("intro_title")}, "approved_flags"
+
+
+def _soundtrack(pid: str, folder: Path) -> Path | None:
+    timeline = ((dp.get_project(pid).get("ext") or {}).get("clips") or {}).get("timeline") or {}
+    rel = timeline.get("soundtrack")
+    if timeline.get("state") != "ready" or not rel:
+        return None
+    path = folder / rel
+    return path if path.is_file() else None
+
+
+def merge_narration(project_id: str | None = None, video_rel: str | None = None, intro_mode: str | None = None,
+                    intro_duration_sec=None, intro_title: str | None = None, voice: str | None = None,
+                    approval_id: str | None = None) -> dict:
+    with _OP_LOCK:
+        pid, folder = project_for(project_id)
+        approved = load_approved_narration(pid, folder, approval_id)
+        aid = approved["approval_id"]
+        segments = approved.get("segments") or []
+        total = len(segments)
+        try:
+            _write_progress(folder, aid, "running", "tts", f"Generating narration ({total} segments)...", 0, total)
+            result = _merge(pid, folder, approved, video_rel, intro_mode, intro_duration_sec, intro_title, voice)
+        except MediaError as exc:
+            _write_progress(folder, aid, "failed", "done", str(exc), error=str(exc))
+            raise
+        except Exception as exc:
+            _write_progress(folder, aid, "failed", "done", "Generation failed.", error=str(exc))
+            raise
+        _write_progress(folder, aid, "done", "done", "Done - your demo video is ready.", total, total)
+        return result
+
+
+def _merge(pid: str, folder: Path, approved: dict, video_rel, intro_mode, intro_duration_sec,
+           intro_title, voice) -> dict:
+    segments = approved.get("segments") or []
+    intro_raw, intro_source = _intro_request(intro_mode, intro_duration_sec, intro_title,
+                                             approved.get("flags") or {})
+    voice = voice or (segments[0].get("voice") if segments else None) or "af_heart"
+    if not re.fullmatch(r"[A-Za-z0-9_]{1,40}", voice):
+        raise MediaError("bad_argument", "voice must be letters, digits or underscores.", field="voice")
+    rel = video_rel or current_rel(pid, folder)
+    if not rel:
+        raise MediaError("no_video", "The project has no recording to merge narration into.")
+    src = project_file(pid, rel)
+    sinfo = probe(src)
+    if not sinfo.has_video:
+        raise MediaError("no_video", f"{rel} has no video stream.", rel=rel)
+    timeline = build_timeline(segments, sinfo.duration_sec, intro_raw)
+    intro = timeline["intro"]
+    video, video_info = src, sinfo
+    if intro["mode"] != "none":
+        video = project_file(pid, make_intro_video(pid, rel, intro)["output"]["rel"])
+        video_info = probe(video)
+    work = folder / "work"
+    (work / "out").mkdir(parents=True, exist_ok=True)
+    timeline_file, narration_file = work / "timeline.json", work / "narration_final.json"
+    dp.atomic_write_json(timeline_file, timeline)
+    dp.atomic_write_json(narration_file, [{**s, "start_at": s["final_start_at"]} for s in timeline["segments"]])
+    candidate = work / "out" / "final_candidate.mp4"
+    candidate.unlink(missing_ok=True)
+    _run_tts_pipeline(video, timeline_file, narration_file, candidate, work / "tts", voice, _soundtrack(pid, folder))
+    oinfo = probe(candidate)
+    if not (oinfo.has_video and oinfo.has_audio):
+        raise MediaError("output_verification_failed", "The merged file is missing its video or audio stream.",
+                         candidate=str(candidate))
+    v_sec = oinfo.video_duration_sec or oinfo.duration_sec
+    a_sec = oinfo.audio_duration_sec or oinfo.duration_sec
+    if abs(v_sec - a_sec) > SYNC_TOL:
+        raise MediaError(
+            "sync_mismatch", f"Video is {v_sec:.1f}s but audio is {a_sec:.1f}s; the file was not delivered.",
+            video_stream_sec=round(v_sec, 3), audio_stream_sec=round(a_sec, 3), candidate=str(candidate),
+        )
+    version = int(read_media(pid).get("output_version", 0)) + 1
+    safe = re.sub(r"[^A-Za-z0-9_-]+", "_", dp.get_project(pid).get("name") or pid).strip("_") or pid
+    dp.archive_final(pid)
+    final_path = folder / "final" / f"{safe}_v{version}.mp4"
+    os.replace(candidate, final_path)
+    block = {**_out_block(folder, final_path, probe(final_path)), "version": version}
+    extended = round(max(0.0, v_sec - video_info.duration_sec), 3)
+    narration = {"segments": len(segments), "offset_sec": timeline["offset_sec"],
+                 "first_start_sec": timeline["segments"][0]["final_start_at"]}
+    op = record_op(pid, folder, {
+        "operation": "merge_narration", "approval_id": approved["approval_id"],
+        "video": {"rel": rel, "duration_sec": round(sinfo.duration_sec, 3)},
+        "intro": intro, "intro_source": intro_source, "narration": narration,
+        "video_extended_by_sec": extended, "video_stream_sec": round(v_sec, 3),
+        "audio_stream_sec": round(a_sec, 3), "output": block,
+    })
+    update_media(pid, lambda m: m.update(output_version=version))
+    return {
+        "ok": True, "operation": "merge_narration", "output": block,
+        "video": {"rel": rel, "duration_sec": round(sinfo.duration_sec, 3)},
+        "intro": {**intro, "applied": intro["mode"] != "none", "source": intro_source},
+        "narration": narration, "video_extended_by_sec": extended,
+        "video_stream_sec": round(v_sec, 3), "audio_stream_sec": round(a_sec, 3),
+        "sync_ok": True, "approval_id": approved["approval_id"], "op_id": op["op_id"],
+    }

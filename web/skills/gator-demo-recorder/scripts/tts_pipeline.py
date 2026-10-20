@@ -229,7 +229,7 @@ def merge_audio_video(video_path, audio_path, out_path, soundtrack=None):
     if audio_dur > video_dur:
         ext = audio_dur - video_dur + 0.5
         print(f"  Audio longer — extending video by {ext:.1f}s (hold last frame)")
-        temp_video = Path(video_path).parent / "video_extended.mp4"
+        temp_video = Path(out_path).parent / "video_extended.mp4"
         subprocess.run(
             [ffmpeg, "-y", "-i", str(video_path),
              "-t", str(audio_dur + 0.5),
