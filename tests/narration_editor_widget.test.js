@@ -107,9 +107,10 @@ assert.ok(
   /if\(v\.retry\)\{[^}]*_approving=false/.test(editor),
   'retry re-arms approve(), not just the button'
 );
+const phase4 = skill.slice(skill.indexOf('## Phase 4: TTS + Merge'), skill.indexOf('## Phase 5: Deliver'));
 assert.ok(
-  /"--progress-file", str\(PROJECT_DIR \/ "work" \/ "logs" \/ "merge_progress\.json"\),\s*"--approval-id", verdict\["approval_id"\]/.test(skill),
-  'Phase 4 passes the progress flags'
+  phase4.includes('demo_merge_narration') && phase4.includes('work/logs/merge_progress.json'),
+  'Phase 4 merges through the tool, which writes the progress file'
 );
 
 console.log('narration_editor_widget: PASS');

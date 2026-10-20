@@ -29,6 +29,6 @@ def test_import_mode_never_mutates_via_api():
     assert "never call" in section.lower()
 
 
-def test_phase_4_passes_the_soundtrack():
-    text = _text()
-    assert '"--soundtrack"' in text and "soundtrack.m4a" in text
+def test_phase_4_mixes_the_soundtrack_through_the_merge_tool():
+    section = _import_section()
+    assert "soundtrack.m4a" in section and "demo_merge_narration" in section

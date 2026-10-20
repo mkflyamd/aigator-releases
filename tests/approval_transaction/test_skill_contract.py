@@ -27,8 +27,9 @@ def test_phase3_widget_posts_through_guarded_approve():
     assert "' PROJECT_ID:'" in SKILL
 
 
-def test_phase4_loads_the_approval_through_the_verified_loader():
-    assert "load_approval.py" in SKILL
+def test_phase4_merges_through_the_verifying_tool():
+    assert "demo_merge_narration" in SKILL
     assert "approval appr_<n>_<hash>" in SKILL
-    for code in ("missing", "superseded", "corrupt", "stale_media"):
+    assert "approval (appr_\\d+_[0-9a-f]{8})" in SKILL
+    for code in ("approval_superseded", "narration_not_approved", "approval_corrupt", "approval_stale_media"):
         assert f"`{code}`" in SKILL

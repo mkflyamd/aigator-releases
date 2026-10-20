@@ -14,7 +14,7 @@ Record your screen manually using the in-chat widget. After recording, analyze t
 Phase 1: RENDER WIDGET      — user clicks Record / Stop in chat
 Phase 2: ANALYZE            — describe_images(analyze_video), build scene summary
 Phase 3: NARRATION EDIT     — draft script, show editable widget, user approves
-Phase 4: TTS + MERGE        — generate audio via Lemonade, merge with ffmpeg
+Phase 4: TTS + MERGE        — demo_merge_narration: Lemonade audio, merge, verified output
 Phase 5: DELIVER            — report final MP4 path, offer to save to OneDrive
 ```
 
@@ -35,9 +35,9 @@ PROJECT_DIR = pathlib.Path(proj["path"])
 
 Layout: `source/` (recorded segments and `recording.mp4`), `work/` (`narration.json`, `tts/`, `logs/`), `final/` (the delivered video), `previous/` (archived earlier finals).
 
-- Read the approved narration only through `scripts/load_approval.py` (see Phase 4); `work/narration.json` is a mirror, not the source of truth.
+- The approved narration is loaded and verified by `demo_merge_narration` (see Phase 4); `work/narration.json` is a mirror, not the source of truth.
 - Write TTS audio and intermediates under `work/tts/` and logs under `work/logs/`.
-- Write the merged deliverable as `final/<name>.mp4`. The file's presence in `final/` is the registration — there is nothing to call.
+- `demo_merge_narration` writes the deliverable as `final/<project name>_v<N>.mp4`. The file's presence in `final/` is the registration — there is nothing to call.
 - Never call a mutating `/api/` route from agent code. Read files and write files only.
 
 ---
@@ -60,10 +60,23 @@ Layout: `source/` (recorded segments and `recording.mp4`), `work/` (`narration.j
 The final video must be **professional quality**. Apply these without being asked:
 
 - **Audio/video sync:** narration `start_at` timestamps must align with the actual on-screen action. A segment narrating "clicking the button" must start when the click is visible, not 2 seconds before or after. After TTS generation, compare each segment's `start_at` to the video duration — if the narration ends significantly before the video ends (>2s gap), add a closing segment; if narration runs much longer than the video (>3× video duration), shorten the script and re-generate.
-- **Sync validation (always run):** after merge, run ffprobe on both the video stream and audio stream of the output file. Report duration of each. If they differ by more than 1s, explain why (e.g. "video held on last frame for 8s to match 12s narration") and offer to re-edit.
+- **Sync validation:** `demo_merge_narration` measures the video and audio streams of the output and refuses to deliver a file whose durations differ by more than 1s. Report `video_stream_sec` and `audio_stream_sec` from its result; when `video_extended_by_sec` is above 0, say the last frame was held that long.
 - **Segment timing:** `start_at` values must be monotonically increasing and respect the video timeline. Segment 1 at `start_at: 0`, Segment 2 no earlier than `start_at: 2` (give each segment breathing room). Do not bunch all segments at `start_at: 0, 1, 2, 3` for an 8-second video.
 - **Professional pacing:** narration should feel like a polished product demo, not a speed-read. Prefer 3-5 well-paced segments over 8 rushed ones. Each spoken segment should be 1-2 natural sentences (~5-12 seconds of audio). Leave silence at the start (0.5s) and end.
 - **Background music:** when mixing, target narration at -3dB and music at -20dB to -18dB. Music must fade in (0.5s) and fade out (1s before video end). Never let music overpower narration.
+
+---
+
+## Truthful Media Claims — Non-negotiable
+
+Every statement about a video's duration, a moment in it, or an edit must come from a `demo_*` tool result obtained in this turn. Never estimate, remember, or infer one. Pass `project_id` (the id on the `PINNED PROJECT:` line) to every `demo_*` call.
+
+- **Facts first:** call `demo_media_manifest` before stating a duration or listing files.
+- **Moments:** to say what happens at a time, call `demo_inspect_frames` for that time, pass the returned `frames[].path` values to `describe_images`, and describe only what those frames show. Times must be inside `duration_sec`. On `out_of_range`, report its `duration_sec` and `options`; do not retry with another guessed time.
+- **Edits:** use `demo_replace_interval` or `demo_append_clip`. Quote `replaced_interval_sec`, `inserted_from` / `appended_from` and `output.duration_sec` exactly as returned. Say an edit was made only after the result has `ok: true`.
+- **Narration merge:** `demo_merge_narration` is the only way to produce the final video. Quote `video_extended_by_sec`, `video_stream_sec`, `audio_stream_sec` and `intro` from its result.
+- **Intro wording:** "Hold" freezes the first frame; "Title card" shows the title text on a plain card. Use the word that matches `intro.mode`.
+- **On any `error`:** relay `message` and the measured numbers, offer the listed `options`, and do not claim success.
 
 ---
 
@@ -484,7 +497,7 @@ Outcomes:
 - `TIMELINE NOT READY` → tell the user no video clip is attached yet, or the build has not started, and stop.
 - Otherwise `VIDEO` is the file Phase 4 merges into (it is also the project's `raw`). Continue at **Phase 2, Step 1** with `video_path` set to `VIDEO`: call `describe_images(task='analyze_video', video_path='<VIDEO>')`. It samples the combined timeline at the moments listed in `frame_times`. Use the `CLIPS` boundaries (`start`/`end` seconds per source clip) to say which clip each frame belongs to in the scene summary, then continue to Phase 3. Do not run ffmpeg yourself.
 - Phase 3 timing: narration `start_at` values are seconds on the combined timeline, so a segment about the second clip starts at or after that clip's `start`.
-- Phase 4: use `VIDEO` as `video_path`. The combined music bed, if any, is `work/soundtrack.m4a` next to it, and Phase 4 mixes it in automatically.
+- Phase 4: `demo_merge_narration` merges into the project's recording (`VIDEO` is also its `raw`), so pass no `video`. The combined music bed, if any, is `work/soundtrack.m4a`, and `demo_merge_narration` mixes it in automatically once the timeline is ready.
 
 ---
 
@@ -502,6 +515,8 @@ When you receive `"Recording complete. File: <path> ..."`:
 Returns: `{timeline: [{frame, time_sec, time_label, description}, ...], summary: "..."}`
 
 **Step 2 — Build scene summary**: from the extracted data, produce a list of `{time_sec, description}` entries covering the key moments. Show it to the user as a markdown pipe table, then immediately continue to the narration widget without waiting for user input.
+
+**Follow-up inspection:** to look at a specific moment after the first analysis, call `demo_inspect_frames(source='<project-relative path>', times_sec=[...])` (at most 8 times, all inside the video's duration) and pass the returned frame paths to `describe_images`. Do not write your own frame-extraction code.
 
 ---
 
@@ -895,91 +910,18 @@ window.addEventListener('message', function(ev){
 
 When you receive `"Narration approved (N segments, approval appr_<n>_<hash>)..."` or `"✓ Approve..."`:
 
-1. Load the approved narration through the verified loader (`scripts/load_approval.py`) — **never read `work/narration.json` directly and never parse the trigger message**. The approval id in the trigger message names the exact approved version; the loader checks that it is still the current approval, that its integrity hash matches, and that the recording has not changed since. It writes the approved segments to `--segments-out` and prints a JSON result.
-2. If the loader exits with code 2, stop and tell the user using the table below. Do not generate TTS from a file you did not load through the loader.
+1. Call `demo_merge_narration` with `project_id` set to the id on the `PINNED PROJECT:` line. The tool loads the approved narration itself and verifies it; do not read narration files, take segments from the trigger message, or run TTS, ffmpeg or ffprobe yourself. If the trigger message contains `approval (appr_\d+_[0-9a-f]{8})`, pass the captured id as `approval_id`.
+2. Leave `intro_mode` out unless the user asked to change the intro; the approved narration already carries `intro_mode`, `intro_duration_sec` and `intro_title`. "Hold" freezes the first frame and "Title card" shows the title. The tool adds the intro length to every narration start time, so never adjust timestamps yourself.
+3. Handle the result:
+   - `ok: true`: go to Phase 5 with `output.path`. Report `video_extended_by_sec` (when above 0, say the last frame was held that long), the `intro`, and `video_stream_sec` / `audio_stream_sec` exactly as returned.
+   - `approval_superseded`: stop; a newer approval has its own turn.
+   - `narration_not_approved`, `approval_corrupt`, `approval_stale_media`: tell the user the narration must be approved again.
+   - `out_of_range`: quote `message`, `duration_sec` and `options`, and ask which to take.
+   - `sync_mismatch`, `output_verification_failed`, `tts_failed`, `ffmpeg_failed`, `ffmpeg_timeout`: report `message` and any measured durations, and offer to retry once or to deliver the video without narration. No file was delivered.
+   - Any other `error`: report `message`.
+   Do not retry in a loop and do not describe a video that was not produced.
 
-| Code | Meaning | What to tell the user |
-|---|---|---|
-| `missing` | No approval exists for this project (or the id in the message is unknown) | Click Approve & Generate TTS in the narration widget first |
-| `superseded` | A newer approval replaced the one in the message | Use the latest approval, or re-approve in the widget |
-| `corrupt` | The approval record fails its integrity hash | Re-approve in the widget |
-| `stale_media` | The recording changed after approval | Re-open the narration editor and approve again |
-
-3. Run `scripts/tts_pipeline.py` on the loaded narration:
-
-```python
-import subprocess, sys, json, urllib.request
-from pathlib import Path
-
-video_path = r"<path from 'Recording complete' message>"
-approval_id = "<approval id from the trigger message, e.g. appr_2_0a1b2c3d>"
-PROJECT_DIR = Path(r"<PROJECT_DIR from the PINNED PROJECT: line>")
-
-# Locate the skill scripts — check both built-in and user-installed locations
-_skill_dirs = [
-    Path.home() / ".gator/skills/mine/gator-demo-recorder/scripts",
-    Path(__file__).parent / "scripts" if "__file__" in dir() else None,
-    Path.cwd() / "web/skills/gator-demo-recorder/scripts",
-]
-skill_dir = next((d for d in _skill_dirs if d and d.exists()), _skill_dirs[0])
-
-segments_file = PROJECT_DIR / "work" / "tts" / "approved_segments.json"
-loaded = subprocess.run([
-    sys.executable, str(skill_dir / "load_approval.py"),
-    "--project-dir", str(PROJECT_DIR),
-    "--approval-id", approval_id,
-    "--segments-out", str(segments_file),
-], capture_output=True, text=True, timeout=60, shell=False)
-verdict = json.loads(loaded.stdout or "{}")
-if loaded.returncode != 0 or not verdict.get("ok"):
-    print("APPROVAL NOT LOADED:", verdict.get("code"), verdict.get("error"))
-    raise SystemExit(2)
-
-segments = json.loads(segments_file.read_text(encoding="utf-8"))   # the verified approved segments
-flags = verdict.get("flags", {})
-timeline_file = PROJECT_DIR / "work" / "timeline.json"
-timeline_file.write_text(json.dumps({}))
-output_path = PROJECT_DIR / "final" / "demo.mp4"
-
-voice = segments[0].get("voice", "af_heart") if segments else "af_heart"
-speed = str(segments[0].get("speed", 1.0)) if segments else "1.0"
-
-cmd = [
-    sys.executable,
-    str(skill_dir / "tts_pipeline.py"),
-    "--video", video_path,
-    "--timeline", str(timeline_file),
-    "--narration", str(segments_file),
-    "--output", str(output_path),
-    "--work-dir", str(PROJECT_DIR / "work" / "tts"),
-    "--voice", voice,
-    "--progress-file", str(PROJECT_DIR / "work" / "logs" / "merge_progress.json"),
-    "--approval-id", verdict["approval_id"],
-]
-# Imported clips: the timeline folder holds the combined music bed, if any
-soundtrack = Path(video_path).parent / "soundtrack.m4a"
-if soundtrack.exists():
-    cmd += ["--soundtrack", str(soundtrack)]
-result = subprocess.run(cmd, capture_output=True, text=True, timeout=600, shell=False)
-print(result.stdout[-3000:])
-if result.stderr: print("STDERR:", result.stderr[-500:])
-
-# Always check output regardless of return code — tts_pipeline.py can succeed
-# even with non-zero exit on some platforms
-if output_path.exists():
-    size_mb = output_path.stat().st_size / 1048576
-    print(f"SUCCESS: {output_path} ({size_mb:.1f} MB)")
-else:
-    print(f"ERROR: output file not found at {output_path}")
-```
-
-The pipeline writes its stage to `work/logs/merge_progress.json`; the narration editor polls it through `GET /api/demo-projects/<id>/progress` and shows "Generating speech N of M", "Merging audio and video", "Done", or the error text.
-
-After running this code:
-
-- If output file exists → immediately proceed to Phase 5 with that path
-- If output file missing → report the stderr and offer to deliver video without narration
-- **Do not stop and ask the user** — check the file yourself and move on
+The tool writes its stage to `work/logs/merge_progress.json`; the narration editor polls it through `GET /api/demo-projects/<id>/progress` and shows "Generating speech N of M", "Merging audio and video", "Done", or the error text.
 
 If Lemonade TTS is unavailable (preflight `lemonade.ok` is false), tell the user and offer to deliver the video without narration. The TTS endpoint is `/v1/audio/speech` (OpenAI-compatible) and the model is `kokoro-v1` — both confirmed by preflight. Do not probe other endpoints.
 
@@ -987,7 +929,7 @@ If Lemonade TTS is unavailable (preflight `lemonade.ok` is false), tell the user
 
 ## Phase 5: Deliver
 
-The merged video in `PROJECT_DIR / "final"` is the deliverable; the widget finds it from the active project without any path embedded in JS (eliminates all backslash-escaping bugs). If the user is re-generating, move the earlier file from `final/` into `previous/` first.
+The merged video in `PROJECT_DIR / "final"` is the deliverable; the widget finds it from the active project without any path embedded in JS (eliminates all backslash-escaping bugs). `demo_merge_narration` has already moved any earlier file from `final/` into `previous/`.
 
 Output this widget verbatim, replacing only `PROJECT_ID_PLACEHOLDER` with the project id (`PROJECT_DIR.name`, the id on the `PINNED PROJECT:` line of your context):
 
@@ -1116,6 +1058,6 @@ function cleanup(){
 </html>
 ```
 
-After showing the widget, report the file path and size in plain text for reference.
+After showing the widget, report the file path, size and `output.duration_sec` in plain text. State only facts that the `demo_merge_narration` result contains.
 
 Always clean up: delete the `work/tts/` directory after delivery (user can trigger via Delete intermediates button).
