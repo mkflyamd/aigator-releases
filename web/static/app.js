@@ -3919,10 +3919,32 @@ function _syncTabsToServer() {
 function _saveTabs() {
   localStorage.setItem(
     TABS_KEY,
-    JSON.stringify(_tabs.map((t) => ({ id: t.id, title: t.title, createdAt: t.createdAt }))),
+    JSON.stringify(
+      _tabs.map((t) => ({
+        id: t.id,
+        title: t.title,
+        createdAt: t.createdAt,
+        editingWidget: t.editingWidget,
+      })),
+    ),
   );
   localStorage.setItem(ACTIVE_TAB_KEY, _activeTabId);
   _syncTabsToServer();
+}
+
+function _newTabRecord(id, opts) {
+  const tab = { id, title: 'New Chat', createdAt: Date.now() };
+  if (opts && typeof opts.title === 'string' && opts.title) tab.title = opts.title;
+  const target = opts && opts.editingWidget;
+  if (target && typeof target.widget_id === 'string' && target.widget_id) {
+    tab.editingWidget = { widget_id: target.widget_id, name: String(target.name || '') };
+  }
+  return tab;
+}
+
+function _activeEditingWidget() {
+  const tab = _tabs.find((t) => t.id === _activeTabId);
+  return tab && tab.editingWidget ? tab.editingWidget : null;
 }
 function _saveTabHistory(tabId, hist) {
   if (!tabId) return;
@@ -4347,10 +4369,10 @@ function _showChatOrOnboarding() {
   }
 }
 
-function createTab() {
+function createTab(opts) {
   // Save current tab's state
   _saveActiveTabHistory();
-  const tab = { id: _genTabId(), title: 'New Chat', createdAt: Date.now() };
+  const tab = _newTabRecord(_genTabId(), opts);
   _tabs.push(tab);
   _activeTabId = tab.id;
   history = [];
