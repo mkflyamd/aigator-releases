@@ -358,6 +358,8 @@ const WIDGET_FENCE = '```html:widget\n<div>hi</div>\n```';
 function renderSandbox(editingName) {
   return {
     GATOR_WIDGET_MAX_H: 3000,
+    GATOR_WIDGET_STORE_PREFIX: 'gator.widgetstore.',
+    localStorage: { getItem: () => null },
     window: { location: { origin: 'http://127.0.0.1:8000' } },
     _tabs: [
       {
@@ -376,6 +378,9 @@ const RENDER_FUNCTIONS = [
   'applyInline',
   'gatorWidgetCspHtml',
   'gatorWidgetFrameScript',
+  'gatorWidgetStoreKey',
+  'gatorWidgetStoreLoad',
+  'gatorWidgetStorageScript',
   'gatorActionAttrs',
   '_activeEditingWidget',
   'renderMarkdown',

@@ -28,7 +28,7 @@ for (const f of ['app.js', 'demo-media.js']) {
 
 // The frame script is nonced like the other inline widget script, so it runs under the page CSP.
 assert.ok(
-  /<script nonce="\$\{window\.__CSP_NONCE__ \|\| ''\}">window\._GATOR="\$\{_gatorOrigin\}";\$\{gatorWidgetFrameScript\(\)\}<\\\/script>/.test(src),
+  /<script nonce="\$\{window\.__CSP_NONCE__ \|\| ''\}">window\._GATOR="\$\{_gatorOrigin\}";\$\{gatorWidgetFrameScript\(\)\}\$\{gatorWidgetStorageScript\(gatorWidgetStoreLoad\(_storeKey\)\)\}<\\\/script>/.test(src),
   'resize script is injected in the nonced script'
 );
 

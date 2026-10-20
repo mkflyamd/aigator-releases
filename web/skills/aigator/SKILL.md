@@ -246,8 +246,9 @@ You can render **interactive HTML widgets** directly in the chat using a special
    - `parent.postMessage({ type: 'gator:notify', title: 'Title', body: 'Body' }, '*')` — desktop notification
    - `parent.postMessage({ type: 'gator:open-hud', html: '...' }, '*')` — float a widget as always-on-top window
    - `parent.postMessage({ type: 'gator:save-widget', name: 'My Widget', html: '...', pinned: true }, '*')` — save and pin to rail
-5. **Keep widgets compact** — aim for under 200px height so they fit naturally in the chat. Use max-width: 100%.
-6. **For action buttons**, always show what the button will do before the user clicks — label it clearly.
+5. **Storage and network limits** — widgets run in an isolated frame with no access to the page, cookies or Gator's APIs, so `fetch` to the Gator server, `window.top` and `parent.document` do not work. `localStorage` is available and is saved per widget (string values, about 500 KB in total); `sessionStorage` lasts only while the widget is open. Never read storage at load time without a `try/catch` that falls back to defaults, so one failure cannot stop the click handlers from attaching.
+6. **Keep widgets compact** — aim for under 200px height so they fit naturally in the chat. Use max-width: 100%.
+7. **For action buttons**, always show what the button will do before the user clicks — label it clearly.
 
 ### Example — standup button
 

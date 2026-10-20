@@ -11742,6 +11742,7 @@ function renderMarkdown(raw) {
         window.location.origin && window.location.origin !== 'null'
           ? window.location.origin
           : 'http://localhost:8003';
+      const _storeKey = gatorWidgetStoreKey(trimmed);
       const normStyle =
         '<style>' +
         'html,body{min-height:0!important;height:auto!important;overflow:visible!important;}' +
@@ -11750,7 +11751,7 @@ function renderMarkdown(raw) {
         '::-webkit-scrollbar-thumb{background:#2a4a6b;border-radius:2px}' +
         '::-webkit-scrollbar-thumb:hover{background:#4ade80}' +
         '*{scrollbar-width:thin;scrollbar-color:#2a4a6b transparent}' +
-        `</style><script nonce="${window.__CSP_NONCE__ || ''}">window._GATOR="${_gatorOrigin}";${gatorWidgetFrameScript()}<\/script>`;
+        `</style><script nonce="${window.__CSP_NONCE__ || ''}">window._GATOR="${_gatorOrigin}";${gatorWidgetFrameScript()}${gatorWidgetStorageScript(gatorWidgetStoreLoad(_storeKey))}<\/script>`;
       const srcdoc = (normStyle + gatorWidgetCspHtml(trimmed)).replace(/"/g, '&quot;');
       // Hide the Save button for transient widgets (narration editor, playback)
       // that don't make sense to persist. Detected via data-no-save attribute
@@ -11788,6 +11789,7 @@ function renderMarkdown(raw) {
           `<iframe id="${widgetId}" class="gator-widget-frame" sandbox="allow-scripts allow-forms allow-modals allow-pointer-lock"` +
           ` srcdoc="${srcdoc}"` +
           ` data-src="${encoded}"` +
+          ` data-store="${_storeKey}"` +
           ` frameborder="0"></iframe>` +
           `</div>`,
       );
@@ -18340,6 +18342,87 @@ function gatorWidgetFrameScript() {
   })();`;
 }
 
+const GATOR_WIDGET_STORE_PREFIX = 'gator.widgetstore.';
+const GATOR_WIDGET_STORE_LIMITS = { keys: 100, keyLen: 200, valueLen: 50000, total: 500000 };
+
+function gatorWidgetStoreKey(html) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < html.length; i++) {
+    h ^= html.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return GATOR_WIDGET_STORE_PREFIX + h.toString(16) + '.' + html.length;
+}
+
+function gatorWidgetStoreLoad(key) {
+  const out = Object.create(null);
+  try {
+    const raw = JSON.parse(localStorage.getItem(key) || '{}');
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+      for (const k of Object.keys(raw)) if (typeof raw[k] === 'string') out[k] = raw[k];
+    }
+  } catch (_) {}
+  return out;
+}
+
+function gatorWidgetStoreOnMessage(d, e) {
+  const frame = gatorWidgetFrameForSource(e.source);
+  const key = frame && frame.dataset.store;
+  if (!key || key.indexOf(GATOR_WIDGET_STORE_PREFIX) !== 0) return;
+  const L = GATOR_WIDGET_STORE_LIMITS;
+  const data = gatorWidgetStoreLoad(key);
+  if (d.op === 'clear') {
+    for (const k of Object.keys(data)) delete data[k];
+  } else if (d.op === 'remove') {
+    if (typeof d.key !== 'string') return;
+    delete data[d.key];
+  } else if (d.op === 'set') {
+    if (typeof d.key !== 'string' || typeof d.value !== 'string') return;
+    if (d.key.length > L.keyLen || d.value.length > L.valueLen) return;
+    data[d.key] = d.value;
+    const keys = Object.keys(data);
+    const total = keys.reduce((n, k) => n + k.length + data[k].length, 0);
+    if (keys.length > L.keys || total > L.total) return;
+  } else {
+    return;
+  }
+  try {
+    localStorage.setItem(key, JSON.stringify(data));
+  } catch (_) {}
+}
+
+function gatorWidgetStorageScript(snapshot) {
+  const seed = JSON.stringify(snapshot || {}).replace(/</g, '\\u003c');
+  return `(function(){
+  if(window.__gatorStore)return;
+  window.__gatorStore=1;
+  var seed=${seed};
+  function make(persist){
+    var d=Object.create(null);
+    if(persist)for(var k in seed)if(typeof seed[k]==='string')d[k]=seed[k];
+    function send(op,key,value){if(persist)parent.postMessage({type:'gator:storage',op:op,key:key,value:value},'*');}
+    var api={
+      getItem:function(k){k=String(k);return k in d?d[k]:null;},
+      setItem:function(k,v){k=String(k);v=String(v);d[k]=v;send('set',k,v);},
+      removeItem:function(k){k=String(k);delete d[k];send('remove',k);},
+      clear:function(){for(var k in d)delete d[k];send('clear');},
+      key:function(i){var ks=Object.keys(d);return i>=0&&i<ks.length?ks[i]:null;}
+    };
+    return new Proxy(api,{
+      get:function(t,p){if(p==='length')return Object.keys(d).length;if(p in t)return t[p];return typeof p==='string'&&p in d?d[p]:undefined;},
+      set:function(t,p,v){if(typeof p==='string')api.setItem(p,v);return true;},
+      deleteProperty:function(t,p){if(typeof p==='string')api.removeItem(p);return true;},
+      has:function(t,p){return p in t||(typeof p==='string'&&p in d);},
+      ownKeys:function(){return Object.keys(d);},
+      getOwnPropertyDescriptor:function(t,p){return typeof p==='string'&&p in d?{value:d[p],enumerable:true,configurable:true,writable:true}:undefined;}
+    });
+  }
+  [['localStorage',true],['sessionStorage',false]].forEach(function(s){
+    try{Object.defineProperty(window,s[0],{value:make(s[1]),configurable:true});}catch(e){}
+  });
+  })();`;
+}
+
 function gatorWidgetShouldReveal(streaming, following, widgetH, viewportH) {
   return !!streaming && !!following && widgetH > viewportH;
 }
@@ -18849,6 +18932,9 @@ window.addEventListener('message', (e) => {
     }
     case 'gator:resize':
       gatorWidgetOnResize(d, e);
+      break;
+    case 'gator:storage':
+      gatorWidgetStoreOnMessage(d, e);
       break;
     case 'gator:recorder':
       gatorRecorderBridge(d, e);
