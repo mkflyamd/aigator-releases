@@ -142,3 +142,15 @@ def test_save_narration_writes_file_and_stage(store):
     assert data["segments"] == [{"text": "hi"}] and data["flags"] == {"music": True}
     assert out["stage"] == "narration_approved"
     assert out["narration"]["approved_at"]
+
+
+def test_missing_project_folder_raises_key_error(store):
+    import shutil
+
+    p = store.create_project()
+    shutil.rmtree(p["path"])
+    for call in (lambda: store.get_project(p["project_id"]),
+                 lambda: store.update_project(p["project_id"], name="x"),
+                 lambda: store.set_ext(p["project_id"], "media", {})):
+        with pytest.raises(KeyError):
+            call()

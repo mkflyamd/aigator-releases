@@ -88,11 +88,9 @@ async def get_project(project_id: str):
 
 @router.post("/api/demo-projects/{project_id}/activate", dependencies=[Depends(verify_csrf)])
 async def activate(project_id: str):
-    try:
-        dp.set_active(project_id)
-    except KeyError:
-        raise HTTPException(status_code=404, detail="Project not found") from None
-    return dp.get_project(project_id)
+    _get(project_id)
+    dp.set_active(project_id)
+    return _get(project_id)
 
 
 @router.post("/api/demo-projects/{project_id}/narration", dependencies=[Depends(verify_csrf)])

@@ -88,3 +88,42 @@ def test_mutating_routes_require_csrf(store, method, path, body):
     c = TestClient(app)
     r = getattr(c, method)(path, json=body) if body is not None else getattr(c, method)(path)
     assert r.status_code == 403
+
+
+@pytest.fixture
+def deleted_project(client):
+    import shutil
+
+    created = client.post("/api/demo-projects", json={}).json()
+    shutil.rmtree(created["path"])
+    return created["project_id"]
+
+
+@pytest.mark.parametrize("method,path,body", [
+    ("get", "", None),
+    ("get", "/summary", None),
+    ("get", "/progress", None),
+    ("get", "/file?rel=final/x.mp4", None),
+    ("post", "/activate", None),
+    ("post", "/narration", {"segments": [{"text": "a"}], "flags": {}}),
+])
+def test_deleted_project_folder_is_404_not_500(client, deleted_project, method, path, body):
+    res = getattr(client, method)(f"/api/demo-projects/{deleted_project}{path}", **({"json": body} if body else {}))
+    assert res.status_code == 404
+    assert res.json()["detail"] == "Project not found"
+
+
+def test_deleted_active_project_legacy_shims_are_404(client, deleted_project):
+    assert client.get("/api/recorder/latest-output").status_code == 404
+    res = client.post("/api/recorder/narration-approved", json={"segments": [{"text": "a"}], "flags": {}})
+    assert res.status_code == 404
+
+
+def test_deleted_project_vanishes_from_the_list(client, deleted_project):
+    assert client.get("/api/demo-projects").json()["projects"] == []
+
+
+def test_activating_a_deleted_project_keeps_the_previous_active_one(client, deleted_project):
+    other = client.post("/api/demo-projects", json={}).json()["project_id"]
+    assert client.post(f"/api/demo-projects/{deleted_project}/activate").status_code == 404
+    assert client.get("/api/demo-projects/active").json()["project_id"] == other

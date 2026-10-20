@@ -171,3 +171,13 @@ def test_order_trim_and_delete(client, store, fake_ffprobe, scheduled):
     assert not (Path(store.get_project(pid)["path"]) / "source" / "c2_b.mp4").exists()
     assert client.delete(f"{BASE}/{pid}/items/c2").status_code == 404
     assert scheduled == [pid] * 3
+
+
+def test_deleted_project_folder_is_404(client, store, scheduled):
+    import shutil
+
+    created = store.create_project()
+    shutil.rmtree(created["path"])
+    assert client.get(f"{BASE}/{created['project_id']}").status_code == 404
+    res = _upload(client, project_id=created["project_id"])
+    assert res.status_code == 404

@@ -1058,7 +1058,10 @@ async def recorder_latest_output():
     pid = dp.get_active_id()
     if not pid:
         return JSONResponse(status_code=404, content={"error": "no output yet"})
-    p = dp.get_project(pid)
+    try:
+        p = dp.get_project(pid)
+    except KeyError:
+        return JSONResponse(status_code=404, content={"error": "no output yet"})
     return JSONResponse({"raw": p["raw"], "final": p["final"], "project_id": pid,
                          "timestamp": p["updated_at"]})
 
@@ -1096,6 +1099,8 @@ async def recorder_narration_approved(req: NarrationApprovedRequest):
         approval = narration_approval.approve(pid, req.segments, req.flags)["approval"]
     except narration_approval.ApprovalError as exc:
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    except KeyError:
+        return JSONResponse({"ok": False, "error": "project not found"}, status_code=404)
     return {"ok": True, "project_id": pid, "approval": approval}
 
 

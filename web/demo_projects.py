@@ -117,7 +117,10 @@ def _blank(project_id: str, name: str, now: str) -> dict:
 
 
 def _read_project(folder: Path) -> dict:
-    return json.loads((folder / "project.json").read_text(encoding="utf-8"))
+    try:
+        return json.loads((folder / "project.json").read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise KeyError(folder.name) from None
 
 
 def _rel(folder: Path, value) -> str:

@@ -217,7 +217,7 @@ def project_for(project_id: str | None) -> tuple[str, Path]:
     if not pid:
         raise MediaError("no_project", "No active demo project. Record or open a demo first.")
     try:
-        return pid, dp.project_path(pid)
+        return pid, Path(dp.get_project(pid)["path"])
     except KeyError:
         raise MediaError("project_not_found", f"Unknown demo project {pid}.", project_id=pid) from None
 

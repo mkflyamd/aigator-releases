@@ -257,3 +257,13 @@ def test_edit_chain_of_an_older_raw_is_ignored_for_the_pin(project):
     dp.update_project(pid, raw=str(folder / "source" / "other.mp4"))
     aid = approve(pid, [{"text": "one", "start_at": 0}])
     assert dm.load_approved_narration(pid, folder)["approval_id"] == aid
+
+
+def test_deleted_project_folder_is_project_not_found(project):
+    import shutil
+
+    pid, folder = project
+    shutil.rmtree(folder)
+    with pytest.raises(dm.MediaError) as exc:
+        dm.manifest(pid)
+    assert exc.value.code == "project_not_found"
