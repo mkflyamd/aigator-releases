@@ -98,6 +98,7 @@ from routes.helper import router as helper_router
 from routes.debug_routes import router as debug_router
 from routes.widgets import router as widgets_router
 from routes.recorder import router as recorder_router
+from routes.demo_projects import router as demo_projects_router
 import updater as _updater
 
 # ── Apply config to environment ──────────────────────────────────────────────
@@ -913,6 +914,7 @@ app.include_router(helper_router)
 app.include_router(debug_router)
 app.include_router(widgets_router)
 app.include_router(recorder_router)
+app.include_router(demo_projects_router)
 app.include_router(code_agent_router, prefix="/api/code_agent")
 
 # ── Middleware ────────────────────────────────────────────────────────────────
