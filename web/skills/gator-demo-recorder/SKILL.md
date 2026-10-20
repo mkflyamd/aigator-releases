@@ -799,7 +799,7 @@ function requestDemoData(type, projectId){
 }
 
 var _pid=/^demo_\d/.test(_PROJECT_ID)?_PROJECT_ID:'';
-if(_pid){ requestDemoData('gator:demo-summary', _pid); }
+if(_pid){ requestDemoData('gator:demo-summary', _pid); requestDemoData('gator:demo-progress', _pid); }
 
 window.addEventListener('message', function(ev){
   var m=ev.data||{};
@@ -873,17 +873,34 @@ function stopProgress(){
 
 var _progressApproval=null, _progressSince=0;
 
+function pollProgress(projectId){
+  _progressTimer=setInterval(function(){ requestDemoData('gator:demo-progress', projectId); },1500);
+  requestDemoData('gator:demo-progress', projectId);
+}
+
 function startProgress(approvalId, projectId){
   stopProgress();
   _progressApproval=approvalId; _progressSince=Date.now();
-  _progressTimer=setInterval(function(){ requestDemoData('gator:demo-progress', projectId); },1500);
-  requestDemoData('gator:demo-progress', projectId);
+  pollProgress(projectId);
+}
+
+function resumeProgress(p, projectId){
+  if(!p || p.state!=='running' || !p.approval_id){ return; }
+  var since=(p.updated_at||0)*1000;
+  if(Date.now()-since>=120000){ return; }
+  _approving=true;
+  var btn=document.getElementById('btn-approve');
+  btn.disabled=true; btn.textContent='✓ Approved';
+  stopProgress();
+  _progressApproval=p.approval_id; _progressSince=since;
+  pollProgress(projectId);
 }
 
 window.addEventListener('message', function(ev){
   var m=ev.data||{};
   if(m.type==='gator:demo-progress-result'){
-    if(!_progressApproval || m.project_id!==_pid){ return; }
+    if(m.project_id!==_pid){ return; }
+    if(!_progressApproval){ resumeProgress(m.ok?m.progress:null, _pid); return; }
     var v=progressView(m.ok?m.progress:{state:'none'}, _progressApproval, Date.now()-_progressSince, _progressSince);
     setMergeStatus(v.text, v.color);
     if(v.stop){ stopProgress(); }

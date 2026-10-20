@@ -113,4 +113,64 @@ assert.ok(
   'Phase 4 merges through the tool, which writes the progress file'
 );
 
+// Reload mid-merge: the widget resumes progress from the progress record
+{
+  const NOW = 5000000;
+  function make() {
+    const calls = [];
+    const btn = { disabled: false, textContent: 'Approve' };
+    const status = { textContent: '', style: {} };
+    const ctx = {
+      _pid: 'demo_1',
+      _approving: false,
+      _progressTimer: null,
+      _progressApproval: null,
+      _progressSince: 0,
+      Date: { now: () => NOW },
+      setInterval: () => 7,
+      clearInterval: () => {},
+      document: { getElementById: (id) => (id === 'btn-approve' ? btn : status) },
+      requestDemoData: (type, pid) => calls.push([type, pid]),
+    };
+    vm.createContext(ctx);
+    vm.runInContext(
+      ['stopProgress', 'pollProgress', 'startProgress', 'resumeProgress'].map(fn).join('\n'),
+      ctx
+    );
+    return { ctx, calls, btn };
+  }
+  const running = (o) => Object.assign({ state: 'running', approval_id: 'a1', updated_at: NOW / 1000 - 5 }, o);
+
+  let t = make();
+  t.ctx.resumeProgress(running(), 'demo_1');
+  assert.strictEqual(t.ctx._progressApproval, 'a1', 'adopts the running approval');
+  assert.strictEqual(t.ctx._progressSince, (NOW / 1000 - 5) * 1000, 'since is the record time, so the record counts as ours');
+  assert.strictEqual(t.btn.disabled, true, 'approve is disabled while the merge runs');
+  assert.strictEqual(t.ctx._approving, true, 'approve() stays locked');
+  assert.deepStrictEqual(plain(t.calls), [['gator:demo-progress', 'demo_1']], 'keeps polling');
+
+  for (const p of [
+    null,
+    { state: 'none' },
+    running({ state: 'done' }),
+    running({ state: 'failed' }),
+    running({ approval_id: '' }),
+    running({ updated_at: NOW / 1000 - 600 }),
+  ]) {
+    t = make();
+    t.ctx.resumeProgress(p, 'demo_1');
+    assert.strictEqual(t.ctx._progressApproval, null, 'does not resume ' + JSON.stringify(p));
+    assert.strictEqual(t.btn.disabled, false);
+    assert.strictEqual(t.calls.length, 0);
+  }
+}
+assert.ok(
+  /if\(_pid\)\{[^}]*requestDemoData\('gator:demo-progress', _pid\)/.test(editor),
+  'asks for the current progress once at load'
+);
+assert.ok(
+  /if\(!_progressApproval\)\{[^}]*resumeProgress\(/.test(editor),
+  'a progress reply with no approval in this page session may resume it'
+);
+
 console.log('narration_editor_widget: PASS');
