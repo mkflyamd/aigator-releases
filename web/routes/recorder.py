@@ -16,6 +16,8 @@ from fastapi import APIRouter, Body
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+import demo_projects as dp
+
 router = APIRouter()
 
 OUT_DIR = Path.home() / "Downloads" / "gator_demos"
@@ -103,6 +105,14 @@ _session_tag: str | None = None
 _border_threads: "list[tuple[threading.Thread, threading.Event, list]]" = []
 _last_screen_index: int = 0  # remembered for global hotkey start
 _last_crop: dict | None = None  # remembered for global hotkey start
+def _raw_path() -> Path | None:
+    return _session_dir / "source" / "recording.mp4" if _session_dir else None
+
+
+def _log_path() -> Path | None:
+    return _session_dir / "work" / "logs" / "ffmpeg_log.txt" if _session_dir else None
+
+
 # Each entry's third element is a 1-item list holding the tkinter root once created,
 # so _stop_recording_border can call root.after(0, root.quit) directly.
 
@@ -577,6 +587,7 @@ class StartRequest(BaseModel):
     crop_h: Optional[int] = None
     framerate: int = 30
     force: bool = False  # if True, stop any existing recording first
+    project_id: Optional[str] = None
 
 
 def _build_ffmpeg_cmd(ffmpeg: str, out_path: Path, req: StartRequest,
@@ -654,9 +665,9 @@ def _build_ffmpeg_cmd(ffmpeg: str, out_path: Path, req: StartRequest,
 
 def _start_segment(ffmpeg: str, req: StartRequest, screens: list[dict],
                     seg_index: int) -> tuple[subprocess.Popen, Path]:
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
-    seg_path = _session_dir / f"seg_{seg_index:02d}.mp4"
-    log_path = _session_dir / "ffmpeg_log.txt"
+    seg_path = _session_dir / "source" / f"seg_{seg_index:02d}.mp4"
+    log_path = _log_path()
+    log_path.parent.mkdir(parents=True, exist_ok=True)
     cmd = _build_ffmpeg_cmd(ffmpeg, seg_path, req, screens)
     with open(log_path, "ab") as lf:
         lf.write(f"[cmd seg{seg_index}] {' '.join(str(c) for c in cmd)}\n".encode())
@@ -753,15 +764,20 @@ async def recorder_start(req: StartRequest = StartRequest()):
                                          "crop_w": cw, "crop_h": ch})
 
 
-    _session_tag = datetime.now().strftime("demo_%Y%m%d_%H%M%S")
-    _session_dir = OUT_DIR / _session_tag
-    _session_dir.mkdir(parents=True, exist_ok=True)
-    _segments = []
+    try:
+        project = dp.begin_session(req.project_id)
+    except KeyError:
+        return JSONResponse(status_code=404, content={"ok": False, "error": "project not found"})
+    except ValueError as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
+    _session_tag = project["project_id"]
+    _session_dir = Path(project["path"])
+    _segments = [Path(s) for s in project["segments"]]
     _paused_elapsed = 0.0
     _paused_at = None
 
     try:
-        proc, seg_path = _start_segment(ffmpeg, req, screens, 0)
+        proc, seg_path = _start_segment(ffmpeg, req, screens, len(_segments))
     except Exception as exc:
         return JSONResponse(status_code=500, content={"ok": False, "error": str(exc)})
 
@@ -769,13 +785,14 @@ async def recorder_start(req: StartRequest = StartRequest()):
     _recording_path = seg_path
     _recording_start = time.monotonic()
     _segments.append(seg_path)
+    dp.update_project(_session_tag, stage="recording", segments=_segments)
 
     await asyncio.sleep(0.6)
     if _ffmpeg_proc.poll() is not None:
         return JSONResponse(status_code=500, content={
             "ok": False,
             "error": "ffmpeg exited immediately — check ffmpeg_log.txt",
-            "log": str(_session_dir / "ffmpeg_log.txt"),
+            "log": str(_log_path()),
         })
 
     # Show orange border around the capture area (excluded from the recording)
@@ -786,7 +803,7 @@ async def recorder_start(req: StartRequest = StartRequest()):
     screen = screens[req.screen_index] if req.screen_index < len(screens) else screens[0]
     return {
         "ok": True, "status": "recording",
-        "path": str(_session_dir / f"{_session_tag}_final.mp4"),
+        "path": str(_raw_path()), "project_id": _session_tag,
         "session_dir": str(_session_dir),
         "pid": _ffmpeg_proc.pid,
         "elapsed": 0,
@@ -934,7 +951,7 @@ async def recorder_stop():
     await asyncio.sleep(0.5)
 
     ffmpeg = _FFMPEG or _find_ffmpeg()
-    final_path = _session_dir / f"{_session_tag}_final.mp4"
+    final_path = _raw_path()
 
     try:
         final = await asyncio.to_thread(_stitch_segments, ffmpeg, _segments, final_path)
@@ -948,35 +965,19 @@ async def recorder_stop():
     _paused_elapsed = 0.0
     _stop_recording_border()
 
-    # Persist the raw recording path server-side so the Phase 3 narration widget
-    # can fetch it via /api/recorder/latest-output without any path embedded in JS.
-    if final:
-        _write_latest_output({"raw": str(final), "final": str(final)})
+    if final and _session_tag:
+        try:
+            dp.update_project(_session_tag, stage="recorded", segments=_segments, raw=final)
+        except (KeyError, ValueError):
+            pass
 
     return {
-        "ok": True, "status": "idle",
+        "ok": True, "status": "idle", "project_id": _session_tag,
         "path": str(final) if final else None,
         "size_bytes": size,
         "elapsed": elapsed,
         "segments": len(_segments),
     }
-
-
-def _write_latest_output(data: dict) -> None:
-    """Write output paths to ~/.gator/latest_output.json for widget fetch."""
-    try:
-        p = Path.home() / ".gator" / "latest_output.json"
-        p.parent.mkdir(exist_ok=True)
-        existing = {}
-        if p.exists():
-            try:
-                existing = json.loads(p.read_text(encoding="utf-8"))
-            except Exception:
-                pass
-        existing.update(data)
-        p.write_text(json.dumps(existing), encoding="utf-8")
-    except Exception:
-        pass
 
 
 # ── Status ────────────────────────────────────────────────────────────────────
@@ -986,12 +987,12 @@ async def recorder_status():
     global _ffmpeg_proc
     ffmpeg = _FFMPEG or _find_ffmpeg()
     ffprobe = _FFPROBE or _find_ffprobe()
-    log_path = str(_session_dir / "ffmpeg_log.txt") if _session_dir else None
+    log_path = str(_log_path()) if _session_dir else None
 
     if _paused_at is not None:
         return {
-            "status": "paused", "elapsed": _elapsed(), "size_bytes": 0,
-            "path": str(_session_dir / f"{_session_tag}_final.mp4") if _session_dir else None,
+            "status": "paused", "elapsed": _elapsed(), "size_bytes": 0, "project_id": _session_tag,
+            "path": str(_raw_path()) if _session_dir else None,
             "ffmpeg": bool(ffmpeg), "ffmpeg_path": ffmpeg, "ffprobe_path": ffprobe,
             "segments": len(_segments), "log": log_path,
         }
@@ -999,15 +1000,15 @@ async def recorder_status():
     if _ffmpeg_proc is None or _ffmpeg_proc.poll() is not None:
         _ffmpeg_proc = None
         return {
-            "status": "idle", "elapsed": 0, "size_bytes": 0, "path": None,
+            "status": "idle", "elapsed": 0, "size_bytes": 0, "path": None, "project_id": _session_tag,
             "ffmpeg": bool(ffmpeg), "ffmpeg_path": ffmpeg, "ffprobe_path": ffprobe,
             "log": log_path,
         }
 
     size = _file_size(_recording_path) if _recording_path else 0
     return {
-        "status": "recording", "elapsed": _elapsed(), "size_bytes": size,
-        "path": str(_session_dir / f"{_session_tag}_final.mp4") if _session_dir else None,
+        "status": "recording", "elapsed": _elapsed(), "size_bytes": size, "project_id": _session_tag,
+        "path": str(_raw_path()) if _session_dir else None,
         "pid": _ffmpeg_proc.pid,
         "ffmpeg": True, "ffmpeg_path": ffmpeg, "ffprobe_path": ffprobe,
         "segments": len(_segments), "log": log_path,
@@ -1032,19 +1033,13 @@ async def recorder_notify(req: NotifyRequest):
 
 @router.get("/api/recorder/latest-output")
 async def recorder_latest_output():
-    """Return the latest recording/output paths so widgets don't embed paths in JS.
-
-    Returns {raw, final, timestamp} — 'raw' is the raw recording, 'final' is the
-    last merged output (TTS + music). Widgets fetch this on load instead of having
-    the model bake a path string into a JS literal (which causes escaping bugs).
-    """
-    p = Path.home() / ".gator" / "latest_output.json"
-    if not p.exists():
+    """Legacy shim: raw/final of the active demo project."""
+    pid = dp.get_active_id()
+    if not pid:
         return JSONResponse(status_code=404, content={"error": "no output yet"})
-    try:
-        return JSONResponse(json.loads(p.read_text(encoding="utf-8")))
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+    p = dp.get_project(pid)
+    return JSONResponse({"raw": p["raw"], "final": p["final"], "project_id": pid,
+                         "timestamp": p["updated_at"]})
 
 
 class SetOutputRequest(BaseModel):
@@ -1054,11 +1049,14 @@ class SetOutputRequest(BaseModel):
 
 @router.post("/api/recorder/set-output")
 async def recorder_set_output(req: SetOutputRequest):
-    """Called by Phase 4 agent code after TTS/music merge to register the final path."""
-    data: dict = {"final": req.final}
-    if req.raw:
-        data["raw"] = req.raw
-    _write_latest_output(data)
+    """Legacy shim: the deliverable is whatever is in the project's final/ folder."""
+    pid = dp.get_active_id()
+    if not pid:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "no active project"})
+    try:
+        Path(req.final).resolve().relative_to(dp.project_path(pid).resolve())
+    except ValueError:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "final must be inside the project folder"})
     return {"ok": True}
 
 
@@ -1069,13 +1067,10 @@ class NarrationApprovedRequest(BaseModel):
 
 @router.post("/api/recorder/narration-approved")
 async def recorder_narration_approved(req: NarrationApprovedRequest):
-    """Store approved narration segments server-side so the agent can read them.
-
-    Called by the frontend postMessage intercept when the widget's Approve button
-    fires. Writes to ~/.gator/narration_pending.json so the agent can read it via
-    run_python without depending on browser sessionStorage (which is inaccessible
-    to the agent).
-    """
+    """Store approved narration on the active project (and the legacy pending file)."""
+    pid = dp.get_active_id()
+    if pid:
+        dp.save_narration(pid, req.segments, req.flags)
     gator_dir = Path.home() / ".gator"
     gator_dir.mkdir(exist_ok=True)
     pending = gator_dir / "narration_pending.json"
@@ -1084,7 +1079,7 @@ async def recorder_narration_approved(req: NarrationApprovedRequest):
         "flags": req.flags,
         "timestamp": datetime.utcnow().isoformat(),
     }), encoding="utf-8")
-    return {"ok": True, "path": str(pending)}
+    return {"ok": True, "path": str(pending), "project_id": pid}
 
 
 @router.get("/api/recorder/debug")
@@ -1093,7 +1088,7 @@ async def recorder_debug():
     screens = await asyncio.to_thread(_list_screens_windows) if os.name == "nt" else await asyncio.to_thread(_list_screens_mac)
     log_lines = []
     if _session_dir:
-        log_path = _session_dir / "ffmpeg_log.txt"
+        log_path = _log_path()
         try:
             log_lines = log_path.read_text(errors="replace").splitlines()[-80:]
         except OSError:
@@ -1144,16 +1139,12 @@ async def recorder_tts_preview(body: dict = Body(default={})):
 @router.get("/api/recorder/serve-file")
 async def recorder_serve_file(path: str):
     """Serve a local file (MP4/MP3) by absolute path for inline playback.
-    Only serves files under the gator_demos output directory."""
+    Only serves files under the gator_demos output directory or a demo project folder."""
     from fastapi.responses import FileResponse as _FileResponse
     p = Path(path).resolve()
-    out = OUT_DIR.resolve()
-    # Path traversal check: p must be inside out (a proper parent check,
-    # not a string prefix match which `gator_demos_evil` would bypass)
-    try:
-        p.relative_to(out)
-    except ValueError:
-        return JSONResponse(status_code=403, content={"error": "path outside gator_demos"})
+    roots = [OUT_DIR.resolve()] + [Path(proj["path"]).resolve() for proj in dp.list_projects()]
+    if not any(p.is_relative_to(r) for r in roots):
+        return JSONResponse(status_code=403, content={"error": "path outside demo projects"})
     if not p.exists():
         return JSONResponse(status_code=404, content={"error": "file not found"})
     suffix = p.suffix.lower()
