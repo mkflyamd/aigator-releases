@@ -136,3 +136,108 @@ test('createTab called as a click handler still makes a plain tab', () => {
   assert.strictEqual(sandbox._tabs[0].title, 'New Chat');
   assert.strictEqual(sandbox._tabs[0].editingWidget, undefined);
 });
+
+const HISTORY_WITH_WIDGETS = [
+  { role: 'user', content: 'make a clock' },
+  { role: 'assistant', content: 'v1\n```html:widget\n<div>v1</div>\n```' },
+  { role: 'user', content: 'bigger' },
+  { role: 'assistant', content: 'v2\n```html:widget\n<div>v2</div>\n```\nDone' },
+];
+
+test('_latestWidgetHtmlFromHistory returns the newest widget block', () => {
+  const { _latestWidgetHtmlFromHistory } = load(['_latestWidgetHtmlFromHistory']);
+  assert.strictEqual(_latestWidgetHtmlFromHistory(HISTORY_WITH_WIDGETS), '<div>v2</div>');
+});
+
+test('_latestWidgetHtmlFromHistory returns null without a widget block', () => {
+  const { _latestWidgetHtmlFromHistory } = load(['_latestWidgetHtmlFromHistory']);
+  assert.strictEqual(_latestWidgetHtmlFromHistory([]), null);
+  assert.strictEqual(
+    _latestWidgetHtmlFromHistory([{ role: 'assistant', content: 'plain text' }]),
+    null,
+  );
+});
+
+test('_latestWidgetHtmlFromHistory ignores user messages and non-string content', () => {
+  const { _latestWidgetHtmlFromHistory } = load(['_latestWidgetHtmlFromHistory']);
+  const hist = [
+    { role: 'user', content: '```html:widget\n<div>mine</div>\n```' },
+    { role: 'assistant', content: [{ type: 'text', text: '```html:widget\n<p>x</p>\n```' }] },
+  ];
+  assert.strictEqual(_latestWidgetHtmlFromHistory(hist), null);
+});
+
+test('_buildWidgetEditSuffix names the widget and demands the complete widget back', () => {
+  const { _buildWidgetEditSuffix } = load(['_buildWidgetEditSuffix']);
+  const suffix = _buildWidgetEditSuffix('Local Use', '<div>hi</div>');
+  assert.ok(suffix.includes('"Local Use"'));
+  assert.ok(suffix.includes('<div>hi</div>'));
+  assert.ok(suffix.includes('COMPLETE'));
+  assert.ok(suffix.includes('html:widget'));
+  assert.ok(suffix.includes('data'));
+});
+
+function suffixSandbox({ editing = true, fetchImpl } = {}) {
+  const calls = [];
+  const sandbox = {
+    _tabs: [
+      {
+        id: 'a',
+        title: 'Edit: Local Use',
+        createdAt: 1,
+        ...(editing ? { editingWidget: { widget_id: 'w1', name: 'Local Use' } } : {}),
+      },
+    ],
+    fetch: async (url) => {
+      calls.push(url);
+      return fetchImpl ? fetchImpl(url) : { ok: false };
+    },
+  };
+  const fns = load(
+    ['_latestWidgetHtmlFromHistory', '_buildWidgetEditSuffix', '_widgetEditSuffixFor'],
+    sandbox,
+  );
+  return { fns, calls };
+}
+
+test('_widgetEditSuffixFor returns null for a tab that is not editing', async () => {
+  const { fns, calls } = suffixSandbox({ editing: false });
+  assert.strictEqual(await fns._widgetEditSuffixFor('a', HISTORY_WITH_WIDGETS), null);
+  assert.deepStrictEqual(calls, []);
+});
+
+test('_widgetEditSuffixFor prefers the newest widget in history over the saved copy', async () => {
+  const { fns, calls } = suffixSandbox();
+  const suffix = await fns._widgetEditSuffixFor('a', HISTORY_WITH_WIDGETS);
+  assert.ok(suffix.includes('<div>v2</div>'));
+  assert.deepStrictEqual(calls, []);
+});
+
+test('_widgetEditSuffixFor falls back to the saved widget', async () => {
+  const { fns, calls } = suffixSandbox({
+    fetchImpl: () => ({ ok: true, json: async () => ({ html: '<div>saved</div>' }) }),
+  });
+  const suffix = await fns._widgetEditSuffixFor('a', [{ role: 'user', content: 'hi' }]);
+  assert.ok(suffix.includes('<div>saved</div>'));
+  assert.deepStrictEqual(calls, ['/api/widgets/w1']);
+});
+
+test('_widgetEditSuffixFor returns null when the saved widget cannot be loaded', async () => {
+  const notOk = suffixSandbox({ fetchImpl: () => ({ ok: false }) });
+  assert.strictEqual(await notOk.fns._widgetEditSuffixFor('a', []), null);
+  const failing = suffixSandbox({
+    fetchImpl: () => {
+      throw new Error('network');
+    },
+  });
+  assert.strictEqual(await failing.fns._widgetEditSuffixFor('a', []), null);
+});
+
+test('doSend passes the editing-tab suffix as system_prompt_suffix', () => {
+  assert.ok(
+    /const _wSuffix =\s*window\._pendingWidgetSuffix \|\|\s*\(await _widgetEditSuffixFor\(requestContextId, requestHistory\)\) \|\|\s*null;/.test(
+      source,
+    ),
+    'doSend must build _wSuffix from _widgetEditSuffixFor',
+  );
+});
