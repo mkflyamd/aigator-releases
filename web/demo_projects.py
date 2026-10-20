@@ -261,3 +261,16 @@ def _validate_root(root: Path) -> Path:
 def get_default_root() -> Path:
     configured = load_config().get(CONFIG_ROOT_KEY)
     return Path(configured) if configured else DEFAULT_ROOT
+
+
+def set_default_root(root: str | None) -> Path:
+    with _LOCK:
+        cfg = load_config()
+        if root is None:
+            cfg.pop(CONFIG_ROOT_KEY, None)
+            save_config(cfg)
+            return DEFAULT_ROOT
+        path = _validate_root(Path(root))
+        cfg[CONFIG_ROOT_KEY] = str(path)
+        save_config(cfg)
+        return path
