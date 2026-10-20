@@ -18368,6 +18368,107 @@ function gatorWidgetFrameForSource(source) {
   return null;
 }
 
+const GATOR_RECORDER_ACTIONS = {
+  status: { method: 'GET', params: {} },
+  screens: { method: 'GET', params: {} },
+  'select-screen': { method: 'POST', params: { screen_index: 'number' } },
+  'pick-region': { method: 'POST', params: { screen_index: 'number' } },
+  start: {
+    method: 'POST',
+    params: {
+      screen_index: 'number',
+      force: 'boolean',
+      crop_x: 'number',
+      crop_y: 'number',
+      crop_w: 'number',
+      crop_h: 'number',
+    },
+  },
+  pause: { method: 'POST', params: {} },
+  resume: { method: 'POST', params: {} },
+  stop: { method: 'POST', params: {} },
+};
+const GATOR_TTS_VOICE_RE = /^[A-Za-z0-9_-]{1,40}$/;
+
+function gatorWidgetReply(e, message) {
+  try {
+    e.source.postMessage(message, '*');
+  } catch (_) {}
+}
+
+function gatorRecorderParams(spec, given) {
+  const src = given && typeof given === 'object' ? given : {};
+  const out = {};
+  for (const [key, type] of Object.entries(spec.params)) {
+    const v = src[key];
+    if (v === undefined || v === null) continue;
+    if (typeof v !== type || (type === 'number' && !Number.isFinite(v))) return null;
+    out[key] = v;
+  }
+  return out;
+}
+
+async function gatorRecorderBridge(d, e) {
+  if (!gatorWidgetFrameForSource(e.source)) return;
+  const action = d.action;
+  const rid = typeof d.rid === 'number' || typeof d.rid === 'string' ? d.rid : undefined;
+  const reply = (data) => gatorWidgetReply(e, { type: 'gator:recorder-result', action, rid, data });
+  const spec =
+    typeof action === 'string' && Object.prototype.hasOwnProperty.call(GATOR_RECORDER_ACTIONS, action)
+      ? GATOR_RECORDER_ACTIONS[action]
+      : null;
+  if (!spec) {
+    reply({ ok: false, error: 'unknown recorder action' });
+    return;
+  }
+  const params = gatorRecorderParams(spec, d.params);
+  if (!params) {
+    reply({ ok: false, error: 'invalid parameters' });
+    return;
+  }
+  const opts = { method: spec.method };
+  if (spec.method === 'POST' && Object.keys(params).length) {
+    opts.body = JSON.stringify(params);
+    opts.headers = { 'Content-Type': 'application/json' };
+  }
+  try {
+    const r = await fetch('/api/recorder/' + action, opts);
+    reply(await r.json());
+  } catch (err) {
+    reply({ ok: false, error: String(err) });
+  }
+}
+
+async function gatorTtsPreviewBridge(d, e) {
+  if (!gatorWidgetFrameForSource(e.source)) return;
+  const rid = typeof d.rid === 'number' || typeof d.rid === 'string' ? d.rid : undefined;
+  const reply = (body) => gatorWidgetReply(e, { type: 'gator:tts-preview-result', rid, ...body });
+  const text = typeof d.text === 'string' ? d.text.trim().slice(0, 300) : '';
+  const voice = typeof d.voice === 'string' ? d.voice : '';
+  if (!text || !GATOR_TTS_VOICE_RE.test(voice)) {
+    reply({ ok: false, error: 'invalid preview request' });
+    return;
+  }
+  try {
+    const r = await fetch('/api/recorder/tts-preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, voice, model: 'kokoro-v1' }),
+    });
+    if (!r.ok) {
+      let error = 'HTTP ' + r.status;
+      try {
+        error = (await r.json()).error || error;
+      } catch (_) {}
+      reply({ ok: false, error });
+      return;
+    }
+    reply({ ok: true, blob: await r.blob() });
+  } catch (err) {
+    reply({ ok: false, error: String(err) });
+  }
+}
+
 async function gatorDemoBridge(d, e) {
   if (!gatorWidgetFrameForSource(e.source)) return;
   const id = String(d.project_id || '');
@@ -18695,6 +18796,7 @@ async function _handleNarrationApproved(text, source) {
 window.addEventListener('message', (e) => {
   const d = e.data;
   if (!d || typeof d !== 'object' || !d.type?.startsWith('gator:')) return;
+  if (!gatorWidgetFrameForSource(e.source)) return;
 
   switch (d.type) {
     case 'gator:send-message': {
@@ -18748,33 +18850,12 @@ window.addEventListener('message', (e) => {
     case 'gator:resize':
       gatorWidgetOnResize(d, e);
       break;
-    case 'gator:recorder': {
-      // Widget now uses window._GATOR + direct fetch — this bridge is kept
-      // only as a fallback for older saved widgets that still use postMessage.
-      const action = d.action;
-      if (!action) break;
-      const method = action === 'status' || action === 'screens' ? 'GET' : 'POST';
-      const body = method === 'POST' && d.params ? JSON.stringify(d.params) : undefined;
-      const headers = body ? { 'Content-Type': 'application/json' } : undefined;
-      fetch('/api/recorder/' + action, { method, body, headers })
-        .then((r) => r.json())
-        .then((data) => {
-          if (e.source)
-            try {
-              e.source.postMessage({ type: 'gator:recorder-result', action, data }, '*');
-            } catch (_) {}
-        })
-        .catch((err) => {
-          if (e.source)
-            try {
-              e.source.postMessage(
-                { type: 'gator:recorder-result', action, data: { ok: false, error: String(err) } },
-                '*',
-              );
-            } catch (_) {}
-        });
+    case 'gator:recorder':
+      gatorRecorderBridge(d, e);
       break;
-    }
+    case 'gator:tts-preview':
+      gatorTtsPreviewBridge(d, e);
+      break;
     case 'gator:pick-demo-folder': {
       const pick = window.gatorShell && window.gatorShell.pickDemoFolder;
       const reply = (data) => {
