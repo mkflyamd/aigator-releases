@@ -551,7 +551,7 @@ The widget's Approve button sends `NARRATION_APPROVED:<json> PROJECT_ID:<id>` â€
   .seg-pause input:focus{outline:none;border-color:#4ade80}
   .help{position:relative;display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border:1px solid #1e3a52;border-radius:50%;color:#6b8db5;font-size:.7rem;cursor:help}
   .help:hover,.help:focus{border-color:#f97316;color:#f97316;outline:none}
-  .tip{display:none;position:absolute;top:24px;right:0;width:260px;z-index:5;background:#0f1a28;border:1px solid #1e3a52;border-radius:8px;padding:8px 10px;font-size:.7rem;line-height:1.4;color:#dbeafe;text-align:left;cursor:default}
+  .tip{display:none;position:absolute;top:24px;left:0;width:min(260px,calc(100vw - 80px));z-index:5;background:#0f1a28;border:1px solid #1e3a52;border-radius:8px;padding:8px 10px;font-size:.7rem;line-height:1.4;color:#dbeafe;text-align:left;cursor:default}
   .help:hover .tip,.help:focus .tip,.help:focus-within .tip{display:block}
   .seg-audio{width:100%;margin-top:4px;accent-color:#f97316;display:none}
   .btn-play-all{background:none;border:1px solid #1e3a52;border-radius:6px;color:#6b8db5;padding:5px 12px;font-size:.75rem;cursor:pointer;white-space:nowrap}

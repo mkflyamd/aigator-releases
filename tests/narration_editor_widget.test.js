@@ -46,6 +46,7 @@ assert.ok(editor.includes('Pause after (s)'), 'pause label');
 assert.ok(editor.includes('id="pacing-tip"'), 'tooltip id');
 assert.ok(editor.includes('Use commas and periods for natural breaths'), 'tooltip text');
 assert.ok(!editor.includes('[pause:'), 'no [pause:...] syntax advertised');
+assert.ok(/\.tip\{[^}]*left:0[^}]*\}/.test(editor) && !/\.tip\{[^}]*right:0/.test(editor), 'tooltip anchors left so it is not clipped by the frame');
 assert.ok(editor.includes("'pa'+i"), 'per-segment pause input id');
 assert.ok(
   editor.includes("segOut(s, document.getElementById('s'+i).value, voice, speed, document.getElementById('pa'+i).value)"),
