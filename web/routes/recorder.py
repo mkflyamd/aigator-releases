@@ -1165,7 +1165,7 @@ async def recorder_serve_file(path: str):
     if not p.exists():
         return JSONResponse(status_code=404, content={"error": "file not found"})
     suffix = p.suffix.lower()
-    media = {"mp4": "video/mp4", "mp3": "audio/mpeg", "m4a": "audio/mp4"}.get(suffix[1:], "application/octet-stream")
+    media = {"mp4": "video/mp4", "mp3": "audio/mpeg", "m4a": "audio/mp4", "png": "image/png"}.get(suffix[1:], "application/octet-stream")
     return _FileResponse(str(p), media_type=media)
 
 

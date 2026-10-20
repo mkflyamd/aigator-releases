@@ -52,3 +52,16 @@ def test_serve_file_allows_any_project_folder(client, store, tmp_path):
     f.write_bytes(b"vid")
     assert client.get("/api/recorder/serve-file", params={"path": str(f)}).status_code == 200
     assert client.get("/api/recorder/serve-file", params={"path": str(tmp_path / "x.mp4")}).status_code == 403
+
+
+def test_serve_file_serves_png_frames_but_not_outside_projects(client, store, tmp_path):
+    pid = store.create_project(root=tmp_path / "other")["project_id"]
+    frames = store.project_path(pid) / "work" / "frames"
+    frames.mkdir(parents=True, exist_ok=True)
+    f = frames / "f_0001.png"
+    f.write_bytes(b"\x89PNG")
+    ok = client.get("/api/recorder/serve-file", params={"path": str(f)})
+    assert ok.status_code == 200 and ok.headers["content-type"] == "image/png"
+    outside = tmp_path / "x.png"
+    outside.write_bytes(b"\x89PNG")
+    assert client.get("/api/recorder/serve-file", params={"path": str(outside)}).status_code == 403

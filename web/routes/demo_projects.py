@@ -13,7 +13,7 @@ from security import verify_csrf
 
 router = APIRouter()
 
-_MEDIA = {".mp4": "video/mp4", ".mp3": "audio/mpeg", ".m4a": "audio/mp4"}
+_MEDIA = {".mp4": "video/mp4", ".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".png": "image/png"}
 
 
 class CreateProjectRequest(BaseModel):

@@ -67,6 +67,17 @@ def test_file_route_serves_inside_and_blocks_outside(client, store):
     assert client.get(f"/api/demo-projects/{pid}/file", params={"rel": "final/none.mp4"}).status_code == 404
 
 
+def test_file_route_serves_png_frames_with_their_media_type(client, store):
+    pid = client.post("/api/demo-projects", json={}).json()["project_id"]
+    frames = store.project_path(pid) / "work" / "frames"
+    frames.mkdir(parents=True, exist_ok=True)
+    (frames / "f_0001.png").write_bytes(b"\x89PNG")
+    ok = client.get(f"/api/demo-projects/{pid}/file", params={"rel": "work/frames/f_0001.png"})
+    assert ok.status_code == 200 and ok.content == b"\x89PNG"
+    assert ok.headers["content-type"] == "image/png"
+    assert client.get(f"/api/demo-projects/{pid}/file", params={"rel": "../f_0001.png"}).status_code == 403
+
+
 @pytest.mark.parametrize("method,path,body", [
     ("post", "/api/demo-projects", {}),
     ("put", "/api/demo-projects/settings", {"root": None}),
