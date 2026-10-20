@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from config import load_config as _load_config
 import shared
+from skill_pin import pin_context_block as _pin_context_block, resolve_pin as _resolve_pin
 
 import re as _re
 
@@ -157,6 +158,8 @@ class ChatRequest(BaseModel):
     unapproved_deps: list[str] | None = None  # gated dep IDs not yet approved this conversation
     system_prompt_suffix: str | None = None   # extra rules appended to system prompt (e.g. wizard scope)
     scoped_skill: str | None = None           # skill ID injected into active_skills for this request
+    pinned_skill: str | None = None           # per-tab skill pin (client); activates and locks skill selection
+    pinned_project_id: str | None = None      # project the pinned skill is working on
 
 
 # ── Tool filtering ────────────────────────────────────────────────────────────
@@ -1124,12 +1127,17 @@ async def chat(req: ChatRequest):
     # Inject per-skill prompt instructions — ONLY for explicitly active skills,
     # NOT all always-on skills (those add 10K+ tokens of irrelevant context).
     # Auto-detected skills get their prompts injected later (line ~326).
+    _pin = _resolve_pin(req.pinned_skill, req.pinned_project_id, shared.SKILL_PROMPTS,
+                        slash_active=bool(slash_cmd))
+    _skills_locked = bool(req.scoped_skill or _pin)
     _active_sids = set()
     if req.active_skill and req.active_skill in shared.SKILL_PROMPTS:
         _active_sids.add(req.active_skill)
     for _sid in (req.active_skills or []):
         if _sid in shared.SKILL_PROMPTS:
             _active_sids.add(_sid)
+    if _pin:
+        _active_sids.add(_pin.skill)
 
     # Include SKILL.md prompts for dependency skills
     for _primary_sid in list(_active_sids):
@@ -1141,6 +1149,7 @@ async def chat(req: ChatRequest):
     for _sid in sorted(_active_sids):
         system, _plugin_preamble_injected = _append_skill_prompt(system, _sid, _plugin_preamble_injected)
         print(f"[skill-prompt] injected SKILL.md for '{_sid}' ({len(shared.SKILL_PROMPTS[_sid])} chars) [explicit]", flush=True)
+    system += _pin_context_block(_pin)
 
     # When the Code tab is active, tell the main LLM which project/repo it's on
     # so it can answer "which repo are you on?" without saying "I don't have visibility".
@@ -1256,6 +1265,8 @@ async def chat(req: ChatRequest):
         _explicit_skill_ids.add(req.active_skill)
     for _sid in (req.active_skills or []):
         _explicit_skill_ids.add(_sid)
+    if _pin:
+        _explicit_skill_ids.add(_pin.skill)
     if _explicit_skill_ids:
         skill_lines = "\n".join(
             f"  \u2022 {_SKILL_LABELS.get(sid, sid)}"
@@ -1533,13 +1544,13 @@ async def chat(req: ChatRequest):
         _msg_text = ""
 
     # ── Continuation classifier: runs before skill detection ────────────────
-    # Skip entirely for scoped requests (wizard, etc.) — the skill set is
-    # fully controlled by scoped_skill and must not be polluted by URL/keyword
+    # Skip entirely for scoped requests (wizard, etc.) and pinned skills — the skill set is
+    # fully controlled by scoped_skill or a pinned skill and must not be polluted by URL/keyword
     # detection (e.g. the browser skill firing on a pasted MCP URL).
     _inferred = []
     _classifier_inherited = False
-    if req.scoped_skill:
-        print(f"[classifier] skipped — scoped_skill={req.scoped_skill!r}", flush=True)
+    if _skills_locked:
+        print(f"[classifier] skipped — skills locked (scoped_skill={req.scoped_skill!r}, pin={_pin.skill if _pin else None!r})", flush=True)
     else:
         from continuation_classifier import classify as _classify, detect_pending as _detect_pending
         _tab_state = shared.task_state_store.get(_context_id)
@@ -1553,7 +1564,7 @@ async def chat(req: ChatRequest):
                 shared.task_state_store.update(_context_id, pending=None)
             print(f"[classifier] inheriting skills {_inferred} (bypassing keyword/LLM detection)", flush=True)
 
-    if not _classifier_inherited and not req.scoped_skill:
+    if not _classifier_inherited and not _skills_locked:
         _inferred = _infer_skills_from_message(_msg_text)
         # Also match installed marketplace skills by name (handles skills absent from static dicts)
         _installed_matches = _installed_skill_ids_from_message(_msg_text)
@@ -1622,8 +1633,8 @@ async def chat(req: ChatRequest):
     # retrieval before the first model turn. Waiting for reactive activation
     # after read_teams_chats leaves always-on code_runner as the only apparent
     # downloader, leading to unauthenticated Teams/Graph/Slack 401 attempts.
-    _image_analysis_requested = not req.scoped_skill and _is_image_analysis_request(_msg_text)
-    if not req.scoped_skill:
+    _image_analysis_requested = not _skills_locked and _is_image_analysis_request(_msg_text)
+    if not _skills_locked:
         _inferred = _ensure_image_fetch_skill(
             _msg_text, _inferred, set(shared.SKILL_TOOLS_MAP)
         )
@@ -1673,8 +1684,9 @@ async def chat(req: ChatRequest):
         print(f"[skill-cap] {len(_capped_candidates)} tool-bearing auto-skills -> kept {sorted(_kept)}, "
               f"dropped {_dropped} (provenance-ranked); {len(_guidance_only)} guidance-only exempt: {sorted(_guidance_only)}", flush=True)
     # Inject scoped_skill (e.g. _extension_setup for the wizard) without modifying req.active_skills
-    if req.scoped_skill and req.scoped_skill not in _all_active:
-        _all_active.append(req.scoped_skill)
+    _inject_skill = req.scoped_skill or (_pin.skill if _pin else None)
+    if _inject_skill and _inject_skill not in _all_active:
+        _all_active.append(_inject_skill)
     # Expand declared dependencies (SKILL.md `requires:` frontmatter).
     # One-pass transitive expansion — covers requires-of-requires without deep recursion.
     _deps_added: list[str] = []
