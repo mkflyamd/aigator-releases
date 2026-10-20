@@ -31,7 +31,10 @@ TIER_DIRS = ("verified", "community", "mine")
 
 
 def new_run_dir(tier: str = "") -> Path:
-    """A fresh run folder under outputs/<tier>/. An unknown tier gets the least trusted folder."""
+    """A fresh run folder under outputs/<tier>/. An unknown tier gets the least trusted folder.
+
+    The tier folder only keeps outputs organized; it is not a security boundary. Isolation comes from the sandbox permissions and timeout.
+    """
     import config
 
     folder = tier.lower() if tier.lower() in TIER_DIRS else "community"
