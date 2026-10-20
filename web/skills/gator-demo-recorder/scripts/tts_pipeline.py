@@ -13,6 +13,7 @@ import subprocess
 import json
 import math
 import sys
+import time
 import os
 import argparse
 import shutil
@@ -122,7 +123,21 @@ def create_silence(duration_sec, out_path, ffmpeg_path):
     )
 
 
-def build_synced_audio(narration, out_dir, lemonade_url, model, voice):
+def write_progress(path, approval_id, state, stage, step=0, total=0, message="", error=None):
+    if not path:
+        return
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_name(p.name + ".tmp")
+    tmp.write_text(json.dumps({
+        "approval_id": approval_id, "state": state, "stage": stage,
+        "step": step, "total": total, "message": message, "error": error,
+        "updated_at": time.time(),
+    }), encoding="utf-8")
+    os.replace(tmp, p)
+
+
+def build_synced_audio(narration, out_dir, lemonade_url, model, voice, on_segment=None):
     """
     Build a single audio track where each segment starts at its start_at timestamp.
     Inserts silence between segments to align with the video timeline.
@@ -139,6 +154,8 @@ def build_synced_audio(narration, out_dir, lemonade_url, model, voice):
         # Use per-segment voice/speed if present, else fall back to function args
         seg_voice = seg.get("voice", voice)
         seg_model = model
+        if on_segment:
+            on_segment(i + 1, len(narration))
         print(f"  [TTS {i+1}/{len(narration)}] @{start_at:.1f}s: {seg['text'][:60]}...")
         size = generate_tts(seg["text"], tts_path, lemonade_url, seg_model, seg_voice)
         dur = get_duration(tts_path)
@@ -257,27 +274,46 @@ def main():
     parser.add_argument("--voice", default="af_heart")
     parser.add_argument("--work-dir", default=None)
     parser.add_argument("--soundtrack", default=None)
+    parser.add_argument("--progress-file", default=None)
+    parser.add_argument("--approval-id", default=None)
     args = parser.parse_args()
 
-    work_dir = Path(args.work_dir or Path(args.video).parent / "tts_work")
-    work_dir.mkdir(parents=True, exist_ok=True)
+    def progress(state, stage, step=0, total=0, message="", error=None):
+        write_progress(args.progress_file, args.approval_id, state, stage, step, total, message, error)
 
-    with open(args.timeline) as f:
-        timeline = json.load(f)
-    with open(args.narration) as f:
-        narration = json.load(f)
+    stage = "tts"
+    try:
+        work_dir = Path(args.work_dir or Path(args.video).parent / "tts_work")
+        work_dir.mkdir(parents=True, exist_ok=True)
 
-    print("=" * 60)
-    print("  TTS PIPELINE — Synced Narration")
-    print("=" * 60)
+        with open(args.timeline) as f:
+            timeline = json.load(f)
+        with open(args.narration) as f:
+            narration = json.load(f)
+        total = len(narration)
 
-    print(f"\n[1/3] Generating TTS segments ({len(narration)})...")
-    audio = build_synced_audio(narration, work_dir, args.lemonade_url, args.model, args.voice)
+        print("=" * 60)
+        print("  TTS PIPELINE — Synced Narration")
+        print("=" * 60)
 
-    print(f"\n[2/3] Merging audio with video...")
-    merge_audio_video(args.video, audio, args.output, soundtrack=args.soundtrack)
+        def on_segment(step, count):
+            progress("running", "tts", step, count, f"Generating speech {step} of {count}")
 
-    print(f"\n[3/3] Done! Final: {args.output}")
+        print(f"\n[1/3] Generating TTS segments ({total})...")
+        audio = build_synced_audio(
+            narration, work_dir, args.lemonade_url, args.model, args.voice, on_segment=on_segment
+        )
+
+        stage = "merge"
+        progress("running", "merge", total, total, "Merging audio and video")
+        print(f"\n[2/3] Merging audio with video...")
+        merge_audio_video(args.video, audio, args.output, soundtrack=args.soundtrack)
+
+        progress("done", "done", total, total, "Done")
+        print(f"\n[3/3] Done! Final: {args.output}")
+    except Exception as exc:
+        progress("failed", stage, message="Generation failed", error=str(exc))
+        raise
 
 
 if __name__ == "__main__":
