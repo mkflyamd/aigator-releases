@@ -123,7 +123,7 @@ function gatorActionAttrs(name, args, opts) {
     'load',
     (event) => {
       const el = event.target;
-      if (el && el.classList && el.classList.contains('gator-widget-frame')) gatorWidgetResize(el);
+      if (el && el.classList && el.classList.contains('gator-widget-frame')) { gatorWidgetResize(el); gatorWidgetRevealOnce(el); }
     },
     true,
   );
@@ -4283,6 +4283,7 @@ function _setTabWorking(tabId, on) {
 // User-scroll-override: true when the user has scrolled up during streaming.
 // Auto-scroll is suppressed until the stream ends or a new send starts.
 let _userScrolledUp = false;
+let _gatorWidgetRevealHold = false;
 
 function _initScrollOverride() {
   const msgs = document.getElementById('messages');
@@ -13151,6 +13152,7 @@ form.addEventListener('submit', async (e) => {
   // parsing and posts the saved payload directly so post-stream work runs normally.
   const doSend = async (overridePayload) => {
     _userScrolledUp = false;
+    _gatorWidgetRevealHold = false;
     _browserHITLShown = false;
     full = '';
     _rawStreamText = '';
@@ -14210,7 +14212,7 @@ form.addEventListener('submit', async (e) => {
     // _pinScrollToBottom (not a plain scrollTop= line) since it re-applies across
     // several frames/timeouts and on late <img> loads — exactly what a freshly
     // appended image/file chip needs.
-    if (_activeTabId === requestTabId && !_userScrolledUp) _pinScrollToBottom(messages);
+    if (_activeTabId === requestTabId && !_userScrolledUp && !_gatorWidgetRevealHold) _pinScrollToBottom(messages);
     // Refresh usage bar after each response
     _refreshUsageBar();
     clearInterval(_browserPoll);
@@ -18277,6 +18279,22 @@ function gatorWidgetScrollSnapshot(iframe) {
 function gatorWidgetScrollRestore(snap) {
   for (const s of snap.saved) if (s.el.scrollTop < s.top) s.el.scrollTop = s.top;
   if (snap.inner && snap.inner.win.scrollY < snap.inner.y) snap.inner.win.scrollTo(snap.inner.x, snap.inner.y);
+}
+
+function gatorWidgetShouldReveal(streaming, following, widgetH, viewportH) {
+  return !!streaming && !!following && widgetH > viewportH;
+}
+
+function gatorWidgetRevealOnce(iframe) {
+  try {
+    const wrap = iframe.closest ? iframe.closest('.gator-widget-wrap') : null;
+    const msgs = document.getElementById('messages');
+    if (!wrap || !msgs || !msgs.contains(wrap)) return;
+    if (!gatorWidgetShouldReveal(_chatTaskIds.has(_activeTabId), !_userScrolledUp, wrap.offsetHeight, msgs.clientHeight)) return;
+    _userScrolledUp = true;
+    _gatorWidgetRevealHold = true;
+    msgs.scrollTop = wrap.getBoundingClientRect().top - msgs.getBoundingClientRect().top + msgs.scrollTop;
+  } catch (_) {}
 }
 
 function gatorWidgetResize(iframe) {
