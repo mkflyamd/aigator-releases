@@ -19006,6 +19006,9 @@ document.addEventListener('DOMContentLoaded', () => {
 async function demoRootRefresh() {
   const label = document.getElementById('demo-root-path');
   if (!label) return;
+  document
+    .getElementById('demo-root-change')
+    ?.classList.toggle('hidden', !window.gatorShell?.pickDemoFolder);
   try {
     const s = await fetch('/api/demo-projects/settings').then((r) => r.json());
     label.textContent = s.default_root + (s.is_default ? ' (default)' : '');
