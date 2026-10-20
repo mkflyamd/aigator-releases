@@ -209,3 +209,127 @@ def check_interval(start, end, duration: float, *, rel: str) -> tuple[float, flo
         raise MediaError("bad_interval", "end_sec must be greater than start_sec.",
                          start_sec=s, end_sec=e)
     return s, min(e, duration)
+
+# ── project helpers, media ext, ledger ───────────────────────────────────────
+
+def project_for(project_id: str | None) -> tuple[str, Path]:
+    pid = project_id or dp.get_active_id()
+    if not pid:
+        raise MediaError("no_project", "No active demo project. Record or open a demo first.")
+    try:
+        return pid, dp.project_path(pid)
+    except KeyError:
+        raise MediaError("project_not_found", f"Unknown demo project {pid}.", project_id=pid) from None
+
+
+def project_file(pid: str, rel: str) -> Path:
+    try:
+        path = dp.resolve_file(pid, rel)
+    except ValueError:
+        raise MediaError("path_outside_project", f"{rel} is outside the project folder.", rel=rel) from None
+    if not path.is_file():
+        raise MediaError("file_not_found", f"{rel} does not exist in the project.", rel=rel)
+    return path
+
+
+def rel_of(folder: Path, path: Path) -> str:
+    return path.resolve().relative_to(folder.resolve()).as_posix()
+
+
+def read_media(pid: str) -> dict:
+    return dict((dp.get_project(pid).get("ext") or {}).get("media") or {})
+
+
+def update_media(pid: str, mutate) -> dict:
+    with _EXT_LOCK:
+        media = read_media(pid)
+        mutate(media)
+        dp.set_ext(pid, "media", media)
+        return media
+
+
+def raw_rel(pid: str, folder: Path) -> str | None:
+    raw = dp.get_project(pid).get("raw")
+    return rel_of(folder, Path(raw)) if raw else None
+
+
+def current_rel(pid: str, folder: Path) -> str | None:
+    media, raw = read_media(pid), raw_rel(pid, folder)
+    if media.get("current") and media.get("current_base") == raw:
+        return media["current"]
+    return raw
+
+
+def set_current(pid: str, folder: Path, rel: str) -> None:
+    raw = raw_rel(pid, folder)
+    update_media(pid, lambda m: m.update(current=rel, current_base=raw))
+
+
+def record_op(pid: str, folder: Path, entry: dict) -> dict:
+    entry = {"op_id": uuid.uuid4().hex[:8], "at": _now(), **entry}
+    ledger = folder / "work" / "logs" / "media_ops.jsonl"
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    with _EXT_LOCK:
+        with ledger.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(entry) + "\n")
+
+    def mutate(media: dict) -> None:
+        ops = media.setdefault("ops", [])
+        ops.append(entry)
+        del ops[:-MAX_LEDGER_SUMMARIES]
+
+    update_media(pid, mutate)
+    return entry
+
+
+def _next_path(folder: Path, sub: str, stem: str, suffix: str) -> Path:
+    target = folder / "work" / sub
+    target.mkdir(parents=True, exist_ok=True)
+    n = 1
+    while (target / f"{stem}_{n:03d}{suffix}").exists():
+        n += 1
+    return target / f"{stem}_{n:03d}{suffix}"
+
+
+def _finish(partial: Path, out: Path, expected_sec: float) -> MediaInfo:
+    info = probe(partial)
+    if abs(info.duration_sec - expected_sec) > max(DURATION_TOL, 2 / max(info.fps, 1.0)):
+        partial.unlink(missing_ok=True)
+        raise MediaError(
+            "output_verification_failed",
+            f"Output is {info.duration_sec:.2f}s but {expected_sec:.2f}s was expected; it was discarded.",
+            actual_sec=round(info.duration_sec, 3), expected_sec=round(expected_sec, 3),
+        )
+    os.replace(partial, out)
+    return probe(out)
+
+
+def _partial(out: Path) -> Path:
+    return out.with_name(out.stem + ".partial" + out.suffix)
+
+
+def _out_block(folder: Path, out: Path, info: MediaInfo) -> dict:
+    return {"rel": rel_of(folder, out), "path": str(out), "duration_sec": round(info.duration_sec, 3)}
+
+# ── manifest ─────────────────────────────────────────────────────────────────
+
+def manifest(project_id: str | None = None) -> dict:
+    with _OP_LOCK:
+        pid, folder = project_for(project_id)
+        files, seen = [], set()
+        for sub in ("source", "work/normalized", "work/edits", "final"):
+            for path in sorted((folder / sub).glob("*")) if (folder / sub).is_dir() else []:
+                if not path.is_file() or path.suffix.lower() not in MEDIA_SUFFIXES or ".partial." in path.name:
+                    continue
+                rel = rel_of(folder, path)
+                if rel in seen:
+                    continue
+                seen.add(rel)
+                try:
+                    files.append({"rel": rel, **probe(path).to_dict()})
+                except MediaError as exc:
+                    files.append({"rel": rel, "error": exc.code})
+        current = current_rel(pid, folder)
+        stamp = _now()
+        update_media(pid, lambda m: m.update(manifest={"generated_at": stamp, "files": files}))
+        return {"ok": True, "project_id": pid, "current": current, "files": files, "generated_at": stamp}
