@@ -4,7 +4,7 @@
 
 **Goal:** Stop the chat and widgets from losing scroll position and caret when a widget re-measures, add a per-segment "Pause after" control with pacing tips, show merge progress and errors inside the narration editor, and replace the delivery widget's Download button with "Open final folder" / "Open project folder" plus a summary line.
 
-**Architecture:** The scroll fix is generic and lives in the widget wrapper (`gatorWidgetResize` in `web/static/app.js`), so every widget benefits. "Pause after" is a number input in the Phase 3 editor template that emits `pause_after`; `tts_pipeline.py` sanitises it and writes an atomic progress file that a new read-only `GET /api/demo-projects/{id}/progress` route serves to the editor. The delivery widget reads a new `GET /api/demo-projects/{id}/summary` route and opens folders through the existing `POST /api/open-file` (extended with a `reveal` flag, so no new mutating route).
+**Architecture:** The scroll fix is generic and lives in the widget wrapper (`gatorWidgetResize` in `web/static/app.js`), so every widget benefits. "Pause after" is a number input in the Phase 3 editor template that emits `pause_after`; `tts_pipeline.py` sanitises it and writes an atomic progress file that a new read-only `GET /api/demo-projects/{id}/progress` route serves to the editor. Widgets make no backend call of their own: the editor and delivery widget post three named actions (`gator:demo-summary`, `gator:demo-progress`, `gator:demo-open-folder`) that a parent-side handler in `app.js` serves from the new `GET /api/demo-projects/{id}/summary` and `/progress` routes and the existing `POST /api/open-file` (extended with a `reveal` flag, so no new mutating route). The widget sandbox, CSP handling and CSRF handling are unchanged.
 
 **Tech Stack:** Vanilla JS (widgets are sandboxed `html:widget` iframes), FastAPI, pytest, Node `assert` + `vm` for widget/JS tests (no jsdom).
 
@@ -18,6 +18,7 @@
 - The only fake credential in tests, examples and docs is `aigator-fake-api-key`.
 - Every new POST/PUT/PATCH/DELETE route needs `dependencies=[Depends(verify_csrf)]` from `web/security.py`. This plan adds only GET routes and extends an existing POST body; `tests/csrf_route_baseline.txt` must not change.
 - Email, Teams and Slack messages never auto-send (nothing in this plan touches them).
+- Widget sandbox rules (a follow-up PR will drop `allow-same-origin` and put an allow-list on the parent bridge): do not change the iframe `sandbox` attribute or `gatorWidgetCspHtml()`; widget code never reads `window.top`, `window.parent` (other than `parent.postMessage`), the parent DOM or `__CSRF_TOKEN__`; widgets make no `fetch(window._GATOR + …)` calls — every widget-to-backend call is one named `gator:*` postMessage action with fixed parameters, handled in the parent (Task 8a). `<video src>` URLs are resource loads, not calls.
 - Do the least that meets the acceptance criteria: no `[pause:…]` syntax in the UI, no capability probe, no new settings.
 - JS tests run with `node tests/<name>.test.js`. Functions extracted from source by regex must be multi-line with the closing `}` at column 0 (the regex is `function NAME\([^)]*\)\s*\{[\s\S]*?\n\}`). Compare values that cross the `vm` realm boundary through `JSON.parse(JSON.stringify(x))`.
 - Python tests run with `python -m pytest <path> -v` (`pytest.ini`: `pythonpath = web .`, `--import-mode=importlib`).
@@ -33,6 +34,7 @@
 | `web/routes/utils.py` | modify | `reveal` flag on `POST /api/open-file` |
 | `web/demo_project_delivery.py` | create | `project_summary`, `read_progress` |
 | `web/routes/demo_projects.py` | modify | `GET /api/demo-projects/{id}/summary` and `/progress` |
+| `web/static/app.js` (Task 8a) | modify | `gatorDemoBridge` and three parent-handled actions: `gator:demo-summary`, `gator:demo-progress`, `gator:demo-open-folder` |
 | `web/skills/gator-demo-recorder/SKILL.md` | modify | Phase 3 editor (Pause after, tooltip, project-scoped video, merge progress), Phase 4 flags, Phase 5 delivery widget |
 | `tests/widget_resize_scroll.test.js` | create | Task 1 |
 | `tests/widget_reveal_once.test.js` | create | Task 2 |
@@ -41,6 +43,7 @@
 | `tests/test_open_file_reveal.py` | create | Task 5 |
 | `tests/demo_project_state/test_delivery.py` | create | Task 6 |
 | `tests/narration_editor_widget.test.js` | create (Task 7), extend (Task 8) | editor widget logic and template checks |
+| `tests/demo_widget_bridge.test.js` | create | Task 8a |
 | `tests/demo_ready_widget.test.js` | create | Task 9 |
 
 ---
@@ -1077,9 +1080,9 @@ The delivery widget needs the final file, source count and working-file size; th
 - Test: `tests/demo_project_state/test_delivery.py`
 
 **Interfaces:**
-- Consumes (SP3): `demo_projects.get_project(project_id) -> dict` with `path`, `final_dir`, `final` (absolute path of the newest file in `final/`, or `None`), `segments` (list of absolute source paths); `KeyError` for an unknown id. In `web/routes/demo_projects.py`: `router`, `_get(project_id)` (404 on unknown id). Test fixture `store` from `tests/demo_project_state/conftest.py`.
+- Consumes (SP3): `demo_projects.get_project(project_id) -> dict` with `path`, `raw` (absolute path of the current raw video, or `None`), `final_dir`, `final` (absolute path of the newest file in `final/`, or `None`), `segments` (list of absolute source paths); `KeyError` for an unknown id. In `web/routes/demo_projects.py`: `router`, `_get(project_id)` (404 on unknown id). Test fixture `store` from `tests/demo_project_state/conftest.py`.
 - Produces:
-  - `delivery.project_summary(project_id) -> {"project_id", "path", "final_dir", "final", "final_rel", "source_count", "work_bytes"}` where `final_rel` is `"final/<filename>"` or `None`, `source_count = len(segments)`, `work_bytes` = total file bytes under `<project>/work`.
+  - `delivery.project_summary(project_id) -> {"project_id", "path", "final_dir", "final", "final_rel", "raw_rel", "source_count", "work_bytes"}` where `final_rel` is `"final/<filename>"` or `None`, `raw_rel` is the project-relative POSIX path of the current raw video (or `None` when the project has no raw video; the editor's preview uses it, so no widget-side path maths is needed), `source_count = len(segments)`, `work_bytes` = total file bytes under `<project>/work`.
   - `delivery.read_progress(project_id) -> dict`: the parsed `work/logs/merge_progress.json`, or `{"state": "none"}` when missing, unreadable or not a JSON object.
   - `GET /api/demo-projects/{project_id}/summary` and `GET /api/demo-projects/{project_id}/progress`.
 
@@ -1118,6 +1121,20 @@ def test_summary_without_final(store):
     assert s["final"] is None and s["final_rel"] is None
     assert s["source_count"] == 0
     assert Path(s["final_dir"]).name == "final"
+
+
+def test_summary_raw_rel_is_project_relative(store):
+    pid, root = _project(store)
+    (root / "source").mkdir(parents=True, exist_ok=True)
+    raw = root / "source" / "raw.mp4"
+    raw.write_bytes(b"v")
+    store.update_project(pid, raw=str(raw))
+    assert delivery.project_summary(pid)["raw_rel"] == "source/raw.mp4"
+
+
+def test_summary_raw_rel_none_without_a_raw_video(store):
+    pid, root = _project(store)
+    assert delivery.project_summary(pid)["raw_rel"] is None
 
 
 def test_summary_with_final_sources_and_work_bytes(store):
@@ -1203,6 +1220,15 @@ def _dir_bytes(folder):
     return total
 
 
+def _rel_inside(root, target):
+    if not target:
+        return None
+    try:
+        return Path(target).resolve().relative_to(Path(root).resolve()).as_posix()
+    except (OSError, ValueError):
+        return None
+
+
 def project_summary(project_id):
     proj = dp.get_project(project_id)
     root = Path(proj["path"])
@@ -1213,6 +1239,7 @@ def project_summary(project_id):
         "final_dir": str(proj["final_dir"]),
         "final": str(final) if final else None,
         "final_rel": (Path("final") / Path(final).name).as_posix() if final else None,
+        "raw_rel": _rel_inside(root, proj.get("raw")),
         "source_count": len(proj["segments"]),
         "work_bytes": _dir_bytes(root / "work"),
     }
@@ -1424,8 +1451,9 @@ The editor must stop calling `/api/recorder/latest-output` (SP3 removes it) and 
 **Interfaces:**
 - Consumes:
   - SP2 editor: `var _PROJECT_ID = 'PROJECT_ID_PLACEHOLDER';`, the button `id="btn-approve"`, and the parent's reply message `{type:'gator:narration-approval-result', ok:true, approval:{approval_id, version, segment_count, reused}}` (the flat shape `{ok, approval_id, …}` is also accepted). SP2's Phase 4 variables `PROJECT_DIR` (a `Path`) and `verdict` (dict with `approval_id`).
-  - Task 4 CLI flags; Task 6 routes `GET /api/demo-projects/{id}` (SP3: `path`, `raw` absolute), `GET /api/demo-projects/{id}/file?rel=` (SP3), `GET /api/demo-projects/{id}/progress`.
-- Produces (inside the editor widget): `projectRel(root, abs) -> string`, `progressView(p, approvalId, waitedMs, sinceMs) -> {text, color, stop, retry}`, `setMergeStatus`, `stopProgress`, `startProgress(approvalId, projectId)`, element `id="merge-status"`.
+  - Task 4 CLI flags; Task 6 `raw_rel` in the summary and `GET /api/demo-projects/{id}/progress`; SP3 `GET /api/demo-projects/{id}/file?rel=` (used only as the `<video>` `src`, a resource load).
+  - Task 8a parent bridge actions `gator:demo-summary` and `gator:demo-progress` (see Task 8a). The widget makes no `fetch` call of its own.
+- Produces (inside the editor widget): `progressView(p, approvalId, waitedMs, sinceMs) -> {text, color, stop, retry}`, `setMergeStatus`, `stopProgress`, `startProgress(approvalId, projectId)`, `requestDemoData(type, projectId)`, element `id="merge-status"`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1436,21 +1464,11 @@ In `tests/narration_editor_widget.test.js`, insert the following immediately abo
 assert.ok(editor.includes("var _PROJECT_ID = 'PROJECT_ID_PLACEHOLDER'"), 'SP2 must be merged: editor needs _PROJECT_ID');
 assert.ok(editor.includes('id="btn-approve"'), 'SP2 must be merged: Approve button needs id="btn-approve"');
 
-// projectRel / progressView
+// progressView
 {
-  const { projectRel, progressView } = vm.runInNewContext(
-    fn('projectRel') + '\n' + fn('progressView') + '\n({ projectRel, progressView })'
+  const { progressView } = vm.runInNewContext(
+    fn('progressView') + '\n({ progressView })'
   );
-
-  assert.strictEqual(
-    projectRel('C:\\Users\\me\\demos\\demo_1', 'C:\\Users\\me\\demos\\demo_1\\source\\raw.mp4'),
-    'source/raw.mp4'
-  );
-  assert.strictEqual(projectRel('/home/me/demo_1/', '/home/me/demo_1/source/raw.mp4'), 'source/raw.mp4');
-  assert.strictEqual(projectRel('/a/demo_1', '/b/raw.mp4'), '', 'foreign root');
-  assert.strictEqual(projectRel('', '/a/raw.mp4'), '', 'empty root');
-  assert.strictEqual(projectRel('/a/demo_1', '/a/demo_10/raw.mp4'), '', 'prefix must end at a path boundary');
-  assert.strictEqual(projectRel('/a/demo_1', null), '');
 
   const SINCE = 1000000;
   const rec = (o) => Object.assign({ approval_id: 'a1', updated_at: SINCE / 1000 + 5 }, o);
@@ -1485,7 +1503,10 @@ assert.ok(editor.includes('id="btn-approve"'), 'SP2 must be merged: Approve butt
 // Template and SKILL.md wiring
 assert.ok(editor.includes('id="merge-status"'), 'merge status element');
 assert.ok(editor.includes('gator:narration-approval-result'), 'listens for the approval reply');
-assert.ok(editor.includes('/api/demo-projects/'), 'uses the project API');
+assert.ok(editor.includes("'gator:demo-summary'"), 'asks the parent for the project summary');
+assert.ok(editor.includes("'gator:demo-progress'"), 'asks the parent for merge progress');
+assert.ok(editor.includes('gator:demo-summary-result') && editor.includes('gator:demo-progress-result'), 'listens for the parent replies');
+assert.ok(!/fetch\(/.test(editor), 'editor makes no direct backend calls');
 assert.ok(!editor.includes('latest-output'), 'editor no longer uses latest-output');
 assert.ok(
   /"--progress-file", str\(PROJECT_DIR \/ "work" \/ "logs" \/ "merge_progress\.json"\),\s*"--approval-id", verdict\["approval_id"\]/.test(skill),
@@ -1496,43 +1517,39 @@ assert.ok(
 - [ ] **Step 2: Run the test to verify it fails**
 
 Run: `node tests/narration_editor_widget.test.js`
-Expected: FAIL with `Error: projectRel not found in editor widget` (or the `_PROJECT_ID` precondition message if SP2 is not merged — merge SP2 first).
+Expected: FAIL with `Error: progressView not found in editor widget` (or the `_PROJECT_ID` precondition message if SP2 is not merged — merge SP2 first).
 
 - [ ] **Step 3: Edit `SKILL.md`**
 
 3a. Video preview — in the editor script, replace everything from the comment line that starts `// ── Video preview` up to (not including) the line that starts `// ── Approve` with:
 
 ```js
-// ── Video preview — loaded through the project file route, never a raw path ───
-function projectRel(root, abs){
-  var r=String(root||'').replace(/\\/g,'/').replace(/\/+$/,'');
-  var a=String(abs||'').replace(/\\/g,'/');
-  if(!r || a.indexOf(r+'/')!==0){ return ''; }
-  return a.slice(r.length+1);
+// ── Video preview — summary comes from the parent; the video is a resource load ─
+function requestDemoData(type, projectId){
+  parent.postMessage({type:type, project_id:projectId}, '*');
 }
 
 var _pid=/^demo_\d/.test(_PROJECT_ID)?_PROJECT_ID:'';
-if(_pid){
-  fetch(_BASE+'/api/demo-projects/'+_pid)
-    .then(function(r){ return r.json(); })
-    .then(function(d){
-      var rel=projectRel(d.path, d.raw);
-      if(!rel){ return; }
-      var vp=document.getElementById('video-player');
-      var vs=document.getElementById('video-section');
-      vp.src=_BASE+'/api/demo-projects/'+_pid+'/file?rel='+encodeURIComponent(rel);
-      vp.onerror=function(){ vs.style.display='none'; };
-      vs.style.display='block';
-    })
-    .catch(function(){});
-}
+if(_pid){ requestDemoData('gator:demo-summary', _pid); }
+
+window.addEventListener('message', function(ev){
+  var m=ev.data||{};
+  if(m.type!=='gator:demo-summary-result' || m.project_id!==_pid){ return; }
+  var rel=m.ok && m.summary && m.summary.raw_rel;
+  if(!rel){ return; }
+  var vp=document.getElementById('video-player');
+  var vs=document.getElementById('video-section');
+  vp.src=_BASE+'/api/demo-projects/'+_pid+'/file?rel='+encodeURIComponent(rel);
+  vp.onerror=function(){ vs.style.display='none'; };
+  vs.style.display='block';
+});
 
 ```
 
 3b. Prose — replace the sentence that starts `The raw video path is fetched automatically by the widget` with:
 
 ```markdown
-The raw video is loaded by the widget through the project's file route (`/api/demo-projects/<id>/file`) using the project id — do NOT embed any file path in the widget HTML.
+The widget learns the raw video's project-relative path from the parent (`gator:demo-summary`) and plays it through the project's file route (`/api/demo-projects/<id>/file`) using the project id — do NOT embed any file path in the widget HTML.
 ```
 
 3c. Status line — directly after the line containing `id="btn-approve"` (the Approve button) add:
@@ -1573,31 +1590,28 @@ function stopProgress(){
   if(_progressTimer){ clearInterval(_progressTimer); _progressTimer=null; }
 }
 
+var _progressApproval=null, _progressSince=0;
+
 function startProgress(approvalId, projectId){
   stopProgress();
-  var since=Date.now();
-  var tick=function(){
-    fetch(_BASE+'/api/demo-projects/'+projectId+'/progress')
-      .then(function(r){ return r.json(); })
-      .catch(function(){ return {state:'none'}; })
-      .then(function(p){
-        var v=progressView(p, approvalId, Date.now()-since, since);
-        setMergeStatus(v.text, v.color);
-        if(v.stop){ stopProgress(); }
-        if(v.retry){ document.getElementById('btn-approve').disabled=false; }
-      });
-  };
-  _progressTimer=setInterval(tick,1500);
-  tick();
+  _progressApproval=approvalId; _progressSince=Date.now();
+  _progressTimer=setInterval(function(){ requestDemoData('gator:demo-progress', projectId); },1500);
+  requestDemoData('gator:demo-progress', projectId);
 }
 
 window.addEventListener('message', function(ev){
-  if(ev.source!==parent){ return; }
   var m=ev.data||{};
+  if(m.type==='gator:demo-progress-result'){
+    if(!_progressApproval || m.project_id!==_pid){ return; }
+    var v=progressView(m.ok?m.progress:{state:'none'}, _progressApproval, Date.now()-_progressSince, _progressSince);
+    setMergeStatus(v.text, v.color);
+    if(v.stop){ stopProgress(); }
+    if(v.retry){ document.getElementById('btn-approve').disabled=false; }
+    return;
+  }
   if(m.type!=='gator:narration-approval-result'){ return; }
   var a=m.approval||m;
-  var pid=/^demo_\d/.test(_PROJECT_ID)?_PROJECT_ID:'';
-  if(m.ok && a.approval_id && pid){ startProgress(a.approval_id, pid); }
+  if(m.ok && a.approval_id && _pid){ startProgress(a.approval_id, _pid); }
   else { stopProgress(); setMergeStatus('',''); }
 });
 ```
@@ -1629,17 +1643,270 @@ git commit -m "feat: show merge progress and errors in the narration editor"
 
 ---
 
+### Task 8a: Parent bridge for the demo widgets (`gator:demo-summary`, `gator:demo-progress`, `gator:demo-open-folder`)
+
+Widgets must not call the backend themselves: a follow-up PR drops `allow-same-origin` from the widget sandbox and puts an endpoint allow-list on the parent bridge. This task adds exactly three named actions, each with fixed parameters, handled in the parent. The widget supplies only a project id (and, for folders, one of two literal targets); it never supplies a path. The sandbox attribute, `gatorWidgetCspHtml()` and the CSRF handling are not touched.
+
+**Files:**
+- Modify: `web/static/app.js` (helpers `GATOR_DEMO_ID_RE`, `GATOR_DEMO_TARGETS`, `gatorWidgetFrameForSource`, `gatorDemoBridge` next to the other `gatorWidget*` helpers; three `case` labels in the `window.addEventListener('message', …)` switch, directly after the `gator:recorder` case, and after SP3's `gator:pick-demo-folder` case if present)
+- Test: `tests/demo_widget_bridge.test.js` (create)
+
+**Interfaces:**
+- Consumes: Task 6 `GET /api/demo-projects/{id}/summary` and `/progress`; Task 5 `POST /api/open-file` body `{path, reveal}`; the page's global `fetch` wrapper (attaches the CSRF token; the widget never sees it).
+- Produces (message in → reply to `e.source` only):
+  - `{type:'gator:demo-summary', project_id}` → `{type:'gator:demo-summary-result', project_id, ok, summary}` or `{…, ok:false, error}`
+  - `{type:'gator:demo-progress', project_id}` → `{type:'gator:demo-progress-result', project_id, ok, progress}` or `{…, ok:false, error}`
+  - `{type:'gator:demo-open-folder', project_id, target:'final'|'project'}` → `{type:'gator:demo-open-folder-result', project_id, ok, message}`. `final` reveals `summary.final` when it exists, otherwise opens `summary.final_dir`; `project` opens `summary.path`.
+- Rules enforced by the handler: the message is ignored unless `e.source` is the `contentWindow` of a `.gator-widget-frame`; `project_id` must match `/^demo_\d[\w-]*$/`; `target` must be `final` or `project`; any other field in the message (including a widget-supplied `path`) is ignored.
+
+- [ ] **Step 1: Write the failing test**
+
+Create `tests/demo_widget_bridge.test.js`:
+
+```js
+const assert = require('assert');
+const fs = require('fs');
+const path = require('path');
+const vm = require('vm');
+
+const source = fs.readFileSync(path.join(__dirname, '..', 'web', 'static', 'app.js'), 'utf8');
+
+function fn(name) {
+  const m = source.match(new RegExp('(?:async )?function ' + name + '\\([^)]*\\)\\s*\\{[\\s\\S]*?\\n\\}'));
+  if (!m) throw new Error(name + ' not found in app.js');
+  return m[0];
+}
+function line(re) {
+  const m = source.match(re);
+  if (!m) throw new Error(String(re) + ' not found in app.js');
+  return m[0];
+}
+
+// The three cases sit after gator:recorder and delegate to gatorDemoBridge.
+{
+  const rec = source.indexOf("case 'gator:recorder':");
+  assert(rec > 0, 'gator:recorder case found');
+  for (const t of ['gator:demo-summary', 'gator:demo-progress', 'gator:demo-open-folder']) {
+    const at = source.indexOf("case '" + t + "':");
+    assert(at > rec, t + ' case follows gator:recorder');
+    assert(source.slice(at, at + 160).includes('gatorDemoBridge(d, e)'), t + ' delegates to gatorDemoBridge');
+  }
+}
+
+const frameWin = { name: 'widget' };
+const otherWin = { name: 'other' };
+const fetchCalls = [];
+let routes = {};
+const ctx = {
+  document: { querySelectorAll: () => [{ contentWindow: frameWin }] },
+  fetch: (url, opts) => {
+    fetchCalls.push({ url, opts: opts ? JSON.parse(JSON.stringify(opts)) : null });
+    const h = routes[url];
+    if (!h) return Promise.reject(new Error('no route ' + url));
+    return Promise.resolve(h(opts));
+  },
+};
+const api = vm.runInNewContext(
+  [
+    line(/const GATOR_DEMO_ID_RE = [^\n]+;/),
+    line(/const GATOR_DEMO_TARGETS = [^\n]+;/),
+    fn('gatorWidgetFrameForSource'),
+    fn('gatorDemoBridge'),
+    '({ gatorWidgetFrameForSource, gatorDemoBridge })',
+  ].join('\n'),
+  ctx
+);
+
+const ok = (body) => ({ ok: true, status: 200, json: () => Promise.resolve(body) });
+const bad = (status) => ({ ok: false, status, json: () => Promise.resolve({}) });
+
+async function run(d, src) {
+  const sent = [];
+  fetchCalls.length = 0;
+  const e = { source: { postMessage: (m, o) => sent.push(JSON.parse(JSON.stringify({ m, o }))) } };
+  if (src === 'frame') e.source = Object.assign(frameWin, { postMessage: e.source.postMessage });
+  else if (src === 'other') e.source = Object.assign(otherWin, { postMessage: e.source.postMessage });
+  else if (src === null) e.source = null;
+  await api.gatorDemoBridge(d, e);
+  return sent;
+}
+
+(async () => {
+  const SUMMARY = { path: 'C:\\p', final_dir: 'C:\\p\\final', final: 'C:\\p\\final\\AI_Gator_Demo.mp4', final_rel: 'final/AI_Gator_Demo.mp4', raw_rel: 'source/raw.mp4', source_count: 3, work_bytes: 5 };
+
+  // summary and progress
+  routes = { '/api/demo-projects/demo_1/summary': () => ok(SUMMARY) };
+  let sent = await run({ type: 'gator:demo-summary', project_id: 'demo_1' }, 'frame');
+  assert.deepStrictEqual(sent, [{ m: { type: 'gator:demo-summary-result', project_id: 'demo_1', ok: true, summary: SUMMARY }, o: '*' }]);
+
+  routes = { '/api/demo-projects/demo_1/progress': () => ok({ state: 'running', approval_id: 'a1' }) };
+  sent = await run({ type: 'gator:demo-progress', project_id: 'demo_1' }, 'frame');
+  assert.deepStrictEqual(sent[0].m, { type: 'gator:demo-progress-result', project_id: 'demo_1', ok: true, progress: { state: 'running', approval_id: 'a1' } });
+
+  routes = { '/api/demo-projects/demo_1/summary': () => bad(404) };
+  sent = await run({ type: 'gator:demo-summary', project_id: 'demo_1' }, 'frame');
+  assert.deepStrictEqual(sent[0].m, { type: 'gator:demo-summary-result', project_id: 'demo_1', ok: false, error: 'HTTP 404' });
+
+  routes = {};
+  sent = await run({ type: 'gator:demo-summary', project_id: 'demo_1' }, 'frame');
+  assert.strictEqual(sent[0].m.ok, false, 'network failure becomes an error reply');
+
+  // validation and origin
+  routes = { '/api/demo-projects/demo_1/summary': () => ok(SUMMARY) };
+  sent = await run({ type: 'gator:demo-summary', project_id: '../../etc' }, 'frame');
+  assert.strictEqual(sent[0].m.ok, false);
+  assert.strictEqual(fetchCalls.length, 0, 'invalid project id makes no request');
+  sent = await run({ type: 'gator:demo-summary', project_id: 'demo_1' }, 'other');
+  assert.strictEqual(sent.length, 0, 'message from a non-widget window is ignored');
+  assert.strictEqual(fetchCalls.length, 0);
+  sent = await run({ type: 'gator:demo-summary', project_id: 'demo_1' }, null);
+  assert.strictEqual(fetchCalls.length, 0, 'message without a source is ignored');
+
+  // open folder: the parent picks the path, the widget cannot
+  const opens = [];
+  routes = {
+    '/api/demo-projects/demo_1/summary': () => ok(SUMMARY),
+    '/api/open-file': (o) => { opens.push(JSON.parse(o.body)); return ok({ ok: true }); },
+  };
+  sent = await run({ type: 'gator:demo-open-folder', project_id: 'demo_1', target: 'final', path: 'C:\\Windows\\System32\\calc.exe' }, 'frame');
+  assert.deepStrictEqual(opens[0], { path: 'C:\\p\\final\\AI_Gator_Demo.mp4', reveal: true }, 'final reveals the final video; widget path ignored');
+  assert.deepStrictEqual(sent[0].m, { type: 'gator:demo-open-folder-result', project_id: 'demo_1', ok: true, message: '' });
+
+  routes['/api/demo-projects/demo_1/summary'] = () => ok(Object.assign({}, SUMMARY, { final: null }));
+  await run({ type: 'gator:demo-open-folder', project_id: 'demo_1', target: 'final' }, 'frame');
+  assert.deepStrictEqual(opens[1], { path: 'C:\\p\\final', reveal: false }, 'no final video: open the final folder');
+
+  routes['/api/demo-projects/demo_1/summary'] = () => ok(SUMMARY);
+  await run({ type: 'gator:demo-open-folder', project_id: 'demo_1', target: 'project' }, 'frame');
+  assert.deepStrictEqual(opens[2], { path: 'C:\\p', reveal: false });
+
+  const before = opens.length;
+  sent = await run({ type: 'gator:demo-open-folder', project_id: 'demo_1', target: 'C:\\Windows' }, 'frame');
+  assert.strictEqual(sent[0].m.ok, false);
+  assert.strictEqual(fetchCalls.length, 0, 'unknown target makes no request');
+  assert.strictEqual(opens.length, before);
+
+  routes['/api/open-file'] = () => ok({ ok: false, message: 'That path no longer exists: C:\\p' });
+  sent = await run({ type: 'gator:demo-open-folder', project_id: 'demo_1', target: 'project' }, 'frame');
+  assert.deepStrictEqual(sent[0].m, { type: 'gator:demo-open-folder-result', project_id: 'demo_1', ok: false, message: 'That path no longer exists: C:\\p' });
+
+  console.log('demo_widget_bridge: PASS');
+})().catch((err) => { console.error(err); process.exit(1); });
+```
+
+- [ ] **Step 2: Run the test to verify it fails**
+
+Run: `node tests/demo_widget_bridge.test.js`
+Expected: FAIL with `AssertionError [ERR_ASSERTION]: gator:demo-summary case follows gator:recorder`.
+
+- [ ] **Step 3: Implement the helpers and cases in `web/static/app.js`**
+
+3a. Next to the other `gatorWidget*` helper functions (top level, not inside the message listener), add:
+
+```js
+const GATOR_DEMO_ID_RE = /^demo_\d[\w-]*$/;
+const GATOR_DEMO_TARGETS = ['final', 'project'];
+
+function gatorWidgetFrameForSource(source) {
+  if (!source) return null;
+  const frames = document.querySelectorAll('.gator-widget-frame');
+  for (const f of frames) {
+    if (f.contentWindow === source) return f;
+  }
+  return null;
+}
+
+async function gatorDemoBridge(d, e) {
+  if (!gatorWidgetFrameForSource(e.source)) return;
+  const id = String(d.project_id || '');
+  const reply = (body) => {
+    try {
+      e.source.postMessage({ type: d.type + '-result', project_id: id, ...body }, '*');
+    } catch (_) {}
+  };
+  if (!GATOR_DEMO_ID_RE.test(id)) {
+    reply({ ok: false, error: 'invalid project id' });
+    return;
+  }
+  const base = '/api/demo-projects/' + id;
+  try {
+    if (d.type === 'gator:demo-summary' || d.type === 'gator:demo-progress') {
+      const isSummary = d.type === 'gator:demo-summary';
+      const r = await fetch(base + (isSummary ? '/summary' : '/progress'));
+      if (!r.ok) {
+        reply({ ok: false, error: 'HTTP ' + r.status });
+        return;
+      }
+      const data = await r.json();
+      reply(isSummary ? { ok: true, summary: data } : { ok: true, progress: data });
+      return;
+    }
+    if (!GATOR_DEMO_TARGETS.includes(d.target)) {
+      reply({ ok: false, message: 'Unknown folder.' });
+      return;
+    }
+    const sr = await fetch(base + '/summary');
+    if (!sr.ok) {
+      reply({ ok: false, message: 'Could not load the project (HTTP ' + sr.status + ').' });
+      return;
+    }
+    const s = await sr.json();
+    let target = s.path;
+    let reveal = false;
+    if (d.target === 'final') {
+      target = s.final || s.final_dir;
+      reveal = !!s.final;
+    }
+    const orsp = await fetch('/api/open-file', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: target, reveal }),
+    });
+    const od = await orsp.json();
+    reply({ ok: od.ok !== false, message: od.ok === false ? od.message || 'Could not open the folder.' : '' });
+  } catch (err) {
+    reply({ ok: false, error: String(err), message: 'Could not open the folder: ' + err });
+  }
+}
+```
+
+3b. In the `window.addEventListener('message', …)` switch, directly after the closing `}` of the `gator:recorder` case (and after SP3's `gator:pick-demo-folder` case if it is already there), add:
+
+```js
+    case 'gator:demo-summary':
+    case 'gator:demo-progress':
+    case 'gator:demo-open-folder':
+      gatorDemoBridge(d, e);
+      break;
+```
+
+Do not edit the iframe `sandbox` attribute, `gatorWidgetCspHtml()`, or any `__CSRF_TOKEN__` handling.
+
+- [ ] **Step 4: Run the test to verify it passes**
+
+Run: `node tests/demo_widget_bridge.test.js`
+Expected: `demo_widget_bridge: PASS`
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add tests/demo_widget_bridge.test.js web/static/app.js
+git commit -m "feat: parent bridge actions for the demo widget summary, progress and folders"
+```
+
+---
+
 ### Task 9: Delivery widget — Open final folder, Open project folder, summary line
 
-Replaces the Phase 5 widget. "⬇ Download" is removed (it was redundant with the in-widget video and the file now lives in the project's `final/` folder). The widget loads everything through the project routes (no `latest-output`), shows `Final: final/AI_Gator_Demo.mp4 · Sources: 3 · Working files: 280 MB`, and opens folders through `POST /api/open-file` (which is exempt from the CSRF dependency today via `tests/csrf_route_baseline.txt`; this plan does not change that).
+Replaces the Phase 5 widget. "⬇ Download" is removed (it was redundant with the in-widget video and the file now lives in the project's `final/` folder). The widget makes no backend call of its own and never holds or sends a filesystem path. It asks the parent for the project summary (`gator:demo-summary`) and shows `Final: final/AI_Gator_Demo.mp4 · Sources: 3 · Working files: 280 MB`; the final video plays through the project file route as a `<video>` `src` (a resource load). The two folder buttons each send one named action (`gator:demo-open-folder` with `target` `final` or `project`); the parent resolves the path from the project summary and calls `POST /api/open-file` (exempt from the CSRF dependency today via `tests/csrf_route_baseline.txt`; this plan does not change that).
 
 **Files:**
 - Modify: `web/skills/gator-demo-recorder/SKILL.md` (Phase 5)
 - Test: `tests/demo_ready_widget.test.js`
 
 **Interfaces:**
-- Consumes: Task 5 (`POST /api/open-file` body `{path, reveal}`), Task 6 (`GET /api/demo-projects/{id}/summary` → `{path, final_dir, final, final_rel, source_count, work_bytes}`), SP3 `GET /api/demo-projects/{id}/file?rel=`, SP2's pinned `gator:send-message` form.
-- Produces (inside the widget): `formatBytes(n)`, `summaryLine(s)`, `setOpenStatus(msg)`, `openPath(path, reveal)`, `openFinal()`, `openProject()`; placeholder `PROJECT_ID_PLACEHOLDER` (the agent replaces it with `PROJECT_DIR.name`).
+- Consumes: Task 8a parent actions `gator:demo-summary` (reply `{type:'gator:demo-summary-result', project_id, ok, summary|error}`, `summary` = `{path, final_dir, final, final_rel, raw_rel, source_count, work_bytes}`) and `gator:demo-open-folder` (message `{type, project_id, target:'final'|'project'}`, reply `{type:'gator:demo-open-folder-result', project_id, ok, message}`); SP3 `GET /api/demo-projects/{id}/file?rel=` (video `src`); SP2's pinned `gator:send-message` form.
+- Produces (inside the widget): `formatBytes(n)`, `summaryLine(s)`, `setOpenStatus(msg)`, `requestOpen(target)`, `openFinal()`, `openProject()`, `handleOpenResult(m)`; placeholder `PROJECT_ID_PLACEHOLDER` (the agent replaces it with `PROJECT_DIR.name`).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1668,6 +1935,11 @@ function fn(name) {
 // Markup
 assert.ok(!/download/i.test(widget), 'no Download button, function or style');
 assert.ok(!widget.includes('latest-output'), 'no latest-output');
+assert.ok(!/fetch\(/.test(widget), 'widget makes no direct backend calls');
+assert.ok(!widget.includes('/api/open-file'), 'widget never calls open-file itself');
+assert.ok(!/window\.top|window\.parent|__CSRF_TOKEN__/.test(widget), 'widget does not reach into the parent');
+assert.ok(widget.includes("'gator:demo-summary'"), 'asks the parent for the summary');
+assert.ok(widget.includes("'gator:demo-open-folder'"), 'asks the parent to open folders');
 assert.ok(widget.includes('📁 Open final folder'), 'Open final folder button');
 assert.ok(widget.includes('Open project folder'), 'Open project folder button');
 assert.ok(widget.includes("var _PROJECT_ID = 'PROJECT_ID_PLACEHOLDER';"), 'project id placeholder');
@@ -1686,22 +1958,16 @@ assert.ok(skill.includes('replacing only `PROJECT_ID_PLACEHOLDER`'), 'prose name
 
 // Pure helpers
 const code = [
-  "var _BASE='http://x'; var _sum=null;",
+  "var _pid='demo_1';",
   fn('formatBytes'), fn('summaryLine'), fn('setOpenStatus'),
-  fn('openPath'), fn('openFinal'), fn('openProject'),
-  '({ formatBytes, summaryLine, openPath, openFinal, openProject, setSum: function(s){ _sum=s; } })',
+  fn('requestOpen'), fn('openFinal'), fn('openProject'), fn('handleOpenResult'),
+  '({ formatBytes, summaryLine, openFinal, openProject, handleOpenResult, setPid: function(p){ _pid=p; } })',
 ].join('\n');
 
-const calls = [];
-let mode = 'ok';
-let reply = { ok: true };
+const posted = [];
 const statusEl = { textContent: '' };
 const ctx = {
-  fetch: (url, opts) => {
-    calls.push({ url, method: opts.method, body: JSON.parse(opts.body) });
-    if (mode === 'throw') return Promise.reject(new Error('boom'));
-    return Promise.resolve({ json: () => Promise.resolve(reply) });
-  },
+  parent: { postMessage: (m, origin) => posted.push(JSON.parse(JSON.stringify({ m, origin }))) },
   document: { getElementById: () => statusEl },
 };
 const api = vm.runInNewContext(code, ctx);
@@ -1721,37 +1987,32 @@ assert.strictEqual(
   'Final: none · Sources: 0 · Working files: 0 B'
 );
 
-(async () => {
-  api.setSum({ final: 'C:\\p\\final\\AI_Gator_Demo.mp4', final_dir: 'C:\\p\\final', path: 'C:\\p' });
-  await api.openFinal();
-  assert.deepStrictEqual(JSON.parse(JSON.stringify(calls[0])), {
-    url: 'http://x/api/open-file', method: 'POST',
-    body: { path: 'C:\\p\\final\\AI_Gator_Demo.mp4', reveal: true },
-  });
+// Each button posts one named action with fixed parameters and no path.
+api.openFinal();
+assert.deepStrictEqual(posted[0], { m: { type: 'gator:demo-open-folder', project_id: 'demo_1', target: 'final' }, origin: '*' });
+api.openProject();
+assert.deepStrictEqual(posted[1], { m: { type: 'gator:demo-open-folder', project_id: 'demo_1', target: 'project' }, origin: '*' });
 
-  api.setSum({ final: null, final_dir: 'C:\\p\\final', path: 'C:\\p' });
-  await api.openFinal();
-  assert.deepStrictEqual(JSON.parse(JSON.stringify(calls[1].body)), { path: 'C:\\p\\final', reveal: false });
+// The parent's reply drives the status line; replies for other projects are ignored.
+statusEl.textContent = '';
+api.handleOpenResult({ type: 'gator:demo-open-folder-result', project_id: 'demo_1', ok: false, message: 'That path no longer exists: C:\\p' });
+assert.strictEqual(statusEl.textContent, 'That path no longer exists: C:\\p');
+api.handleOpenResult({ type: 'gator:demo-open-folder-result', project_id: 'demo_1', ok: false });
+assert.strictEqual(statusEl.textContent, 'Could not open the folder.');
+api.handleOpenResult({ type: 'gator:demo-open-folder-result', project_id: 'demo_1', ok: true });
+assert.strictEqual(statusEl.textContent, '');
+statusEl.textContent = 'keep';
+api.handleOpenResult({ type: 'gator:demo-open-folder-result', project_id: 'demo_9', ok: false, message: 'other' });
+assert.strictEqual(statusEl.textContent, 'keep', 'reply for another project is ignored');
 
-  await api.openProject();
-  assert.deepStrictEqual(JSON.parse(JSON.stringify(calls[2].body)), { path: 'C:\\p', reveal: false });
+// No project id: nothing is posted.
+api.setPid('');
+const before = posted.length;
+api.openFinal();
+api.openProject();
+assert.strictEqual(posted.length, before, 'no request without a project id');
 
-  reply = { ok: false, message: 'That path no longer exists: C:\\p' };
-  await api.openProject();
-  assert.strictEqual(statusEl.textContent, 'That path no longer exists: C:\\p');
-
-  reply = { ok: true };
-  mode = 'throw';
-  await api.openProject();
-  assert.ok(statusEl.textContent.startsWith('Could not open the folder:'), statusEl.textContent);
-
-  api.setSum(null);
-  const before = calls.length;
-  assert.strictEqual(await api.openFinal(), undefined);
-  assert.strictEqual(calls.length, before, 'no request before the summary has loaded');
-
-  console.log('demo_ready_widget: PASS');
-})().catch((e) => { console.error(e); process.exit(1); });
+console.log('demo_ready_widget: PASS');
 ```
 
 - [ ] **Step 2: Run the test to verify it fails**
@@ -1810,7 +2071,7 @@ Then output this widget verbatim, replacing only `PROJECT_ID_PLACEHOLDER` with t
 <script>
 var _BASE=window._GATOR||'http://localhost:8003';
 var _PROJECT_ID = 'PROJECT_ID_PLACEHOLDER';
-var _sum=null;
+var _pid=/^demo_\d/.test(_PROJECT_ID)?_PROJECT_ID:'';
 var vp=document.getElementById('vp');
 
 function formatBytes(n){
@@ -1829,43 +2090,50 @@ function setOpenStatus(msg){
   document.getElementById('open-status').textContent=msg||'';
 }
 
-function openPath(path, reveal){
+function requestOpen(target){
+  if(!_pid){ return; }
   setOpenStatus('');
-  return fetch(_BASE+'/api/open-file', {
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({path:path, reveal:!!reveal})
-  }).then(function(r){ return r.json(); })
-    .then(function(d){ if(d && d.ok===false){ setOpenStatus(d.message||'Could not open the folder.'); } })
-    .catch(function(e){ setOpenStatus('Could not open the folder: '+e); });
+  parent.postMessage({type:'gator:demo-open-folder', project_id:_pid, target:target}, '*');
 }
 
 function openFinal(){
-  if(!_sum){ return; }
-  return _sum.final ? openPath(_sum.final, true) : openPath(_sum.final_dir, false);
+  requestOpen('final');
 }
 
 function openProject(){
-  if(!_sum){ return; }
-  return openPath(_sum.path, false);
+  requestOpen('project');
 }
 
-var _pid=/^demo_\d/.test(_PROJECT_ID)?_PROJECT_ID:'';
+function handleOpenResult(m){
+  if(m.project_id!==_pid){ return; }
+  setOpenStatus(m.ok===false ? (m.message||'Could not open the folder.') : '');
+}
+
+function applySummary(m){
+  if(m.project_id!==_pid){ return; }
+  if(!m.ok || !m.summary){
+    document.getElementById('summary').textContent='Error loading: '+(m.error||'summary unavailable');
+    return;
+  }
+  var s=m.summary;
+  document.getElementById('summary').textContent=summaryLine(s);
+  if(s.final_rel){
+    vp.src=_BASE+'/api/demo-projects/'+_pid+'/file?rel='+encodeURIComponent(s.final_rel);
+  } else {
+    document.getElementById('duration').textContent='No final video was found in this project.';
+  }
+}
+
+window.addEventListener('message', function(ev){
+  var m=ev.data||{};
+  if(m.type==='gator:demo-summary-result'){ applySummary(m); }
+  else if(m.type==='gator:demo-open-folder-result'){ handleOpenResult(m); }
+});
+
 if(!_pid){
   document.getElementById('summary').textContent='Project not specified — cannot load the final video.';
 } else {
-  fetch(_BASE+'/api/demo-projects/'+_pid+'/summary')
-    .then(function(r){ if(!r.ok){ throw new Error(r.status); } return r.json(); })
-    .then(function(s){
-      _sum=s;
-      document.getElementById('summary').textContent=summaryLine(s);
-      if(s.final_rel){
-        vp.src=_BASE+'/api/demo-projects/'+_pid+'/file?rel='+encodeURIComponent(s.final_rel);
-      } else {
-        document.getElementById('duration').textContent='No final video was found in this project.';
-      }
-    })
-    .catch(function(e){ document.getElementById('summary').textContent='Error loading: '+e; });
+  parent.postMessage({type:'gator:demo-summary', project_id:_pid}, '*');
 }
 
 vp.onloadedmetadata=function(){
@@ -1921,16 +2189,23 @@ Run:
 node tests/widget_resize_scroll.test.js
 node tests/widget_reveal_once.test.js
 node tests/narration_editor_widget.test.js
+node tests/demo_widget_bridge.test.js
 node tests/demo_ready_widget.test.js
 python -m pytest tests/test_tts_pipeline_pacing.py tests/test_tts_pipeline_progress.py tests/test_open_file_reveal.py tests/demo_project_state tests/test_csrf_route_inventory.py -v
 ```
 
-Expected: four `PASS` lines from node, then all pytest tests pass.
+Expected: five `PASS` lines from node, then all pytest tests pass.
 
-- [ ] **Step 2: Confirm the CSRF baseline is untouched**
+- [ ] **Step 2: Confirm the CSRF baseline and the widget sandbox are untouched**
 
 Run: `git diff --stat main -- tests/csrf_route_baseline.txt`
 Expected: no output.
+
+Run: `git diff main -- web/static/app.js | grep -nE "^[+-].*(sandbox=|allow-same-origin|gatorWidgetCspHtml|__CSRF_TOKEN__|window\.top)"`
+Expected: no output (this plan adds no line that touches the sandbox attribute, the CSP helper, the CSRF token or `window.top`).
+
+Run: `grep -nE "fetch\(|window\.top|window\.parent|__CSRF_TOKEN__" web/skills/gator-demo-recorder/SKILL.md`
+Expected: any matches are outside the narration editor and delivery widgets (the Task 8 and Task 9 tests already assert those two contain no `fetch(`).
 
 - [ ] **Step 3: Start the app**
 
@@ -1975,7 +2250,8 @@ python -c "import json,time,sys; open(sys.argv[1],'w').write(json.dumps({'approv
 
 Expected: within 2 seconds the status turns red with "Generation failed: ffmpeg exploded" and the Approve button is enabled.
 3. Post the same console message again without writing any file. Expected: "Waiting for generation to start…" for 2 minutes, then the red "Generation has not started yet…" message with Approve enabled.
-4. The raw recording preview in the editor plays (it loads through `/api/demo-projects/<id>/file`).
+4. The raw recording preview in the editor plays (the parent supplies the project-relative path through `gator:demo-summary`; the video loads through `/api/demo-projects/<id>/file`).
+5. In DevTools → Network, filter on `demo-projects`; expected: the `/summary` and `/progress` requests come from the top page (the parent), none from the widget frame.
 
 - [ ] **Step 8: Delivery widget (Tasks 5, 6, 9)**
 
@@ -1983,6 +2259,13 @@ Expected: within 2 seconds the status turns red with "Generation failed: ffmpeg 
 2. Click "📁 Open final folder"; expected: Explorer opens the project's `final` folder with `AI_Gator_Demo.mp4` selected.
 3. Click "Open project folder"; expected: Explorer opens the project folder.
 4. Rename the project folder, click "Open project folder"; expected: the red status line shows "That path no longer exists: …". Rename it back.
+5. In the top-frame DevTools console, post the action from the top window itself (not a widget frame):
+
+```js
+window.postMessage({type:'gator:demo-open-folder',project_id:'demo_1',target:'project'},'*')
+```
+
+Expected: nothing opens and no `/api/open-file` request appears in the Network tab, because the parent ignores messages whose source is not a widget frame.
 
 ---
 
@@ -1994,13 +2277,14 @@ Expected: within 2 seconds the status turns red with "Generation failed: ffmpeg 
 |---|---|
 | Scroll and caret loss, fixed generically in the widget wrapper (issue #55 item 8, plan D1) | 1, 2 |
 | Per-segment "Pause after" driving `pause_after`, pacing tips, no `[pause:…]`, no probe (item 9, D2) | 3, 7 |
-| Merge progress and error display in the widget (D3) | 4, 6, 8 |
-| Delivery widget: Open final folder replaces Download, Open project folder, summary line | 5, 6, 9 |
+| Merge progress and error display in the widget (D3) | 4, 6, 8a, 8 |
+| Delivery widget: Open final folder replaces Download, Open project folder, summary line | 5, 6, 8a, 9 |
+| Widgets make no backend calls; three named parent-handled actions, sandbox/CSP/CSRF untouched | 8a, 8, 9, 10 (Step 2) |
 | Intro option UI placeholder only | Out-of-scope section |
 | Project-scoped widgets (`PROJECT_ID_PLACEHOLDER` / `_PROJECT_ID`, no `latest-output`) | 8, 9 |
 | Pinned `gator:send-message` form from SP2 | 9 |
 
 **Placeholder scan:** no TBD/TODO steps; every code step shows the code; the only deferred item is the SP5 intro control, which is explicitly outside this plan. `PROJECT_ID_PLACEHOLDER` is a runtime template token that SP2 already defines, not a plan placeholder.
 
-**Type consistency:** `gatorWidgetScrollSnapshot` / `gatorWidgetScrollRestore` (Task 1) are used unchanged in Task 2's source text; `_pause_after` and `PAUSE_MAX` (Task 3) are reused as-is in Task 4's `main()`; `write_progress` keys `approval_id, state, stage, step, total, message, error, updated_at` (Task 4) match `read_progress` pass-through (Task 6) and `progressView` field reads (Task 8); `final_rel`, `final`, `final_dir`, `path`, `source_count`, `work_bytes` (Task 6) match `summaryLine`, `openFinal`, `openProject` (Task 9); `reveal` (Task 5) matches the `openPath` body (Task 9); `segOut` / `pauseValue` / `pa<i>` (Task 7) are the only names Task 8 and the approve payload rely on.
+**Type consistency:** `gatorWidgetScrollSnapshot` / `gatorWidgetScrollRestore` (Task 1) are used unchanged in Task 2's source text; `_pause_after` and `PAUSE_MAX` (Task 3) are reused as-is in Task 4's `main()`; `write_progress` keys `approval_id, state, stage, step, total, message, error, updated_at` (Task 4) match `read_progress` pass-through (Task 6) and `progressView` field reads (Task 8); `final_rel`, `source_count`, `work_bytes` (Task 6) match `summaryLine` / `applySummary` (Task 9) and `raw_rel` (Task 6) matches the editor's video preview (Task 8); `final`, `final_dir`, `path` (Task 6) are read only by `gatorDemoBridge` (Task 8a); `reveal` (Task 5) matches the `/api/open-file` body built in `gatorDemoBridge` (Task 8a); the message types `gator:demo-summary`, `gator:demo-progress`, `gator:demo-open-folder` and their `-result` replies (Task 8a) match the widget posts and listeners in Tasks 8 and 9 (`summary`, `progress`, `ok`, `message`, `error`, `project_id`); `segOut` / `pauseValue` / `pa<i>` (Task 7) are the only names Task 8 and the approve payload rely on.
 

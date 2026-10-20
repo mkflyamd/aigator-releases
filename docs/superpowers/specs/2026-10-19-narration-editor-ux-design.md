@@ -58,23 +58,35 @@ Focus and caret are unaffected by the iframe height; nothing blurs the textarea,
 
 - Replace `⬇ Download` with `📁 Open final folder` and add `Open project folder`. Remove `download()` and `.btn-download`. Keep Edit narration & regenerate and Delete intermediates (their messages carry SP2's `pin_skill` and `project_id`).
 - Extend `POST /api/open-file` with `reveal: bool = False`. `_do_open_file(path, is_dir, reveal)` for a file with `reveal`: Windows `explorer /select,<path>`, macOS `open -R <path>`, Linux `xdg-open <parent dir>`. No new route and no Electron IPC; `/api/open-file` is already in the CSRF baseline (`tests/csrf_route_baseline.txt:74`) and its method and path do not change, so the baseline is untouched.
-- Open final folder: `{path: summary.final, reveal: true}`; when there is no final file, `{path: summary.final_dir, reveal: false}`. Open project folder: `{path: summary.path, reveal: false}`. An `ok:false` reply is shown in the widget as `message`.
-- New read-only `GET /api/demo-projects/{id}/summary` returns `{project_id, path, final_dir, final, final_rel, source_count, work_bytes}`. `final_rel` is the project-relative POSIX path (`final/AI_Gator_Demo.mp4`) or `null`; `source_count = len(get_project()["segments"])`; `work_bytes` is the total size of files under `work/`. The widget renders `Final: final/AI_Gator_Demo.mp4 · Sources: 3 · Working files: 280 MB` and plays `GET /api/demo-projects/{id}/file?rel=<final_rel>`.
-- Both widgets get the project through `PROJECT_ID_PLACEHOLDER` (the placeholder SP2 adds to the editor; SP7 adds it to the delivery widget). The `latest-output` fetches are removed from both templates, consistent with SP3's no-singleton test. The editor's raw-video preview uses `GET /api/demo-projects/{id}` (`path`, `raw`) and `GET /{id}/file?rel=`, with `projectRel(root, abs)` deriving `rel`.
+- The widget makes no backend call and never holds a path. Each button posts one named action to the parent (see "Widget bridge" below): `Open final folder` → `{type:'gator:demo-open-folder', project_id, target:'final'}`, `Open project folder` → the same with `target:'project'`. The parent resolves the path from the summary: `final` → `{path: summary.final, reveal: true}`, or `{path: summary.final_dir, reveal: false}` when there is no final file; `project` → `{path: summary.path, reveal: false}`, then calls `POST /api/open-file`. A reply with `ok:false` shows its `message` in the widget.
+- New read-only `GET /api/demo-projects/{id}/summary` returns `{project_id, path, final_dir, final, final_rel, raw_rel, source_count, work_bytes}`. `final_rel` is the project-relative POSIX path (`final/AI_Gator_Demo.mp4`) or `null`; `raw_rel` is the project-relative POSIX path of the raw recording or `null`; `source_count = len(get_project()["segments"])`; `work_bytes` is the total size of files under `work/`. The widget gets it through `gator:demo-summary`, renders `Final: final/AI_Gator_Demo.mp4 · Sources: 3 · Working files: 280 MB` and plays `GET /api/demo-projects/{id}/file?rel=<final_rel>` as a `<video>` `src` (a resource load, not a call).
+- Both widgets get the project through `PROJECT_ID_PLACEHOLDER` (the placeholder SP2 adds to the editor; SP7 adds it to the delivery widget). The `latest-output` fetches are removed from both templates, consistent with SP3's no-singleton test. The editor's raw-video preview asks for the summary through `gator:demo-summary` and plays `GET /{id}/file?rel=<raw_rel>` as a `<video>` `src`.
+
+### Widget bridge (the only widget-to-backend path SP7 adds)
+
+A follow-up PR will drop `allow-same-origin` from the widget sandbox and route widget calls through the parent with an endpoint allow-list. SP7 therefore adds no widget `fetch`, no widget code that reads `window.top` or `parent` (beyond `parent.postMessage`), the parent DOM or `__CSRF_TOKEN__`, and does not change the sandbox attribute, `gatorWidgetCspHtml()` or CSRF handling. Three parent-handled actions go in `app.js` after the `gator:recorder` case (and after SP3's `gator:pick-demo-folder` case when present), each a single named action with fixed parameters:
+
+| Widget posts | Parent does | Parent replies to `e.source` |
+|---|---|---|
+| `{type:'gator:demo-summary', project_id}` | `GET /api/demo-projects/<id>/summary` | `{type:'gator:demo-summary-result', project_id, ok, summary}` or `{ok:false, error}` |
+| `{type:'gator:demo-progress', project_id}` | `GET /api/demo-projects/<id>/progress` | `{type:'gator:demo-progress-result', project_id, ok, progress}` or `{ok:false, error}` |
+| `{type:'gator:demo-open-folder', project_id, target:'final'\|'project'}` | fetches the summary, picks the path, `POST /api/open-file {path, reveal}` | `{type:'gator:demo-open-folder-result', project_id, ok, message}` |
+
+Parent-side rules: ignore the message unless `e.source` is the `contentWindow` of a `.gator-widget-frame` (`gatorWidgetFrameForSource`); `project_id` must match `/^demo_\d[\w-]*$/`; `target` must be `final` or `project`; every other field in the message, including a widget-supplied `path`, is ignored; reply only to `e.source`; calls go through the page's `fetch` wrapper, which attaches the CSRF token the widget never sees. The logic lives in `gatorDemoBridge(d, e)` and the three `case` labels only delegate to it, so the later allow-list is three entries.
 
 ### Merge progress and errors inside the editor (D3)
 
 Contract with SP2 (SP7 consumes; SP2 owns the transaction and its UI):
 
 - SP2's bridge replies to the editor iframe with `{type:'gator:narration-approval-result', ok:true, approval}` on success (`approval.approval_id`, `version`, `segment_count`, `reused`) and `{ok:false, error}` on failure. SP2's editor code shows pending, `Approved (N segments)` and the save error, and disables/re-enables `#btn-approve`. SP7 adds none of that.
-- SP7 adds a second, independent `message` listener in the editor (accepts only `ev.source === parent` and `type === 'gator:narration-approval-result'`). On `ok:false` it stops any polling and clears the merge line. On `ok:true` it starts polling with the approval ID (`m.approval.approval_id`, or `m.approval_id` if the reply is flat), the project from SP2's `_PROJECT_ID`, and the time the reply arrived.
+- SP7 adds a `message` listener in the editor that handles `gator:narration-approval-result` (and the `gator:demo-*-result` replies below), matching on `type` and, for `-result` replies, on `project_id`. On `ok:false` it stops any polling and clears the merge line. On `ok:true` it starts polling with the approval ID (`m.approval.approval_id`, or `m.approval_id` if the reply is flat), the project from SP2's `_PROJECT_ID`, and the time the reply arrived.
 
 Widget side:
 
 - A `#merge-status` line below the Approve button (separate from the preview `#status` and from SP2's save status).
-- Every 1.5 s: `GET /api/demo-projects/<project_id>/progress`; `progressView(p, approvalId, waitedMs, sinceMs)` ignores records whose `approval_id` differs or whose `updated_at` is older than `sinceMs` (a finished run of the same approval, e.g. an idempotent re-approve, must not report this run as done), shows `Waiting for generation to start…`, then `p.message`, then `Done — your demo video is ready.` or `Generation failed: <error>`. After 120 s without a matching record it shows `Generation has not started yet. Check that the AI Gator agent is still working, or click Approve to retry.` Polling stops on done, failed or stall; on failed or stall the widget re-enables `#btn-approve` so retry is one click.
+- Every 1.5 s the widget posts `gator:demo-progress` with its project id and reads the `gator:demo-progress-result` reply (`progress` is the record below; `ok:false` is treated as `{state:'none'}`); `progressView(p, approvalId, waitedMs, sinceMs)` ignores records whose `approval_id` differs or whose `updated_at` is older than `sinceMs` (a finished run of the same approval, e.g. an idempotent re-approve, must not report this run as done), shows `Waiting for generation to start…`, then `p.message`, then `Done — your demo video is ready.` or `Generation failed: <error>`. After 120 s without a matching record it shows `Generation has not started yet. Check that the AI Gator agent is still working, or click Approve to retry.` Polling stops on done, failed or stall; on failed or stall the widget re-enables `#btn-approve` so retry is one click.
 - Progress transport: `tts_pipeline.py` takes `--progress-file PATH` and `--approval-id ID` and atomically writes `{approval_id, state: running|done|failed, stage: tts|merge|done, step, total, message, error, updated_at (epoch seconds)}` before each segment's TTS, before the merge, at the end, and on any exception (then re-raises). The agent's Phase 4 call passes `--progress-file <PROJECT_DIR>/work/logs/merge_progress.json` and `--approval-id <approval_id>`, the `approval_id` printed by SP2's `load_approval.py`.
-- New read-only `GET /api/demo-projects/{id}/progress` returns that file, or `{"state": "none"}` when absent or unreadable.
+- New read-only `GET /api/demo-projects/{id}/progress` returns that file, or `{"state": "none"}` when absent or unreadable. The parent serves it to the widget through `gator:demo-progress`.
 
 The helpers for `/summary` and `/progress` live in a new `web/demo_project_delivery.py`; `web/routes/demo_projects.py` only gains two `@router.get` wrappers.
 
@@ -116,6 +128,13 @@ Every choice made in place of asking the user:
 28. **Delivery widget messages carry `pin_skill` and `project_id`.** SP2's contract test requires them on every skill `gator:send-message`.
 29. **Duration stays, on its own line below the summary line.** The issue fixes the summary line's exact content.
 30. **The project for polling comes from SP2's `_PROJECT_ID`, and the approval ID is read from either reply shape.** SP2's spec shows a flat reply and its plan a nested `approval`; reading both removes the dependency on which one lands.
+31. **Widgets make no backend calls; three parent-handled actions replace them.** A follow-up PR drops `allow-same-origin` and allow-lists the parent bridge, so SP7 adds nothing that would break then. The sandbox attribute, `gatorWidgetCspHtml()` and CSRF handling are left as they are.
+32. **One named action per call, fixed parameters.** `gator:demo-summary`, `gator:demo-progress` and `gator:demo-open-folder` each map to a fixed route, so the later allow-list is three entries; the existing open-ended `gator:recorder` case is not copied.
+33. **The widget never supplies a path.** `gator:demo-open-folder` carries a project id and one of two literal targets; the parent reads the paths from the summary. A widget cannot steer `/api/open-file` to an arbitrary file.
+34. **The parent ignores messages whose source is not a widget frame, and validates `project_id` and `target`.** The existing handler does not check `e.source`; the new cases do, and reply only to `e.source`.
+35. **The summary carries `raw_rel`, and `projectRel` is removed.** The editor needs only a project-relative path for its preview; the server already knows the project root, so no client-side path arithmetic is needed. `raw_rel` is `null` when the project has no raw video.
+36. **The `<video src>` URLs stay as resource loads, built from `window._GATOR`.** They are not calls and cannot go through postMessage; they use the project file route with a project-relative path.
+37. **The editor's reply listener matches `type` and `project_id` instead of `ev.source === parent`.** Avoids new widget code that reads `parent`; `parent.postMessage` is the only use of it.
 
 ## Error handling
 
@@ -125,7 +144,8 @@ Every choice made in place of asking the user:
 - Merge failure: the pipeline writes `state: failed` with the exception text before exiting non-zero; the widget shows `Generation failed: <error>` and re-enables Approve.
 - Progress never starts: 120 s message with retry. Progress file unreadable or mid-replace: the route returns `{"state":"none"}`; the widget keeps waiting.
 - Unknown project ID on the new routes: 404, as SP3's routes.
-- Open folder: `/api/open-file` already returns `{ok:false, reason, message}`; the widget shows `message`. Network failure: `Could not open the folder: <error>`.
+- Open folder: `/api/open-file` already returns `{ok:false, reason, message}`; the parent passes `message` through and the widget shows it. A network failure or an HTTP error from the summary becomes `{ok:false, message}` (`Could not open the folder: <error>`).
+- Bridge: a message from a non-widget source is ignored with no reply; an invalid `project_id` or unknown `target` gets an `ok:false` reply and makes no request; `gator:demo-summary` / `gator:demo-progress` failures reply `{ok:false, error}` (`HTTP <status>` or the exception text). The editor treats a failed progress reply as `{state:'none'}` and keeps waiting; the delivery widget shows `Error loading: <error>`.
 - Delivery with no final file: summary shows `Final: none`, Open final folder opens `final/`.
 
 ## Testing
@@ -134,10 +154,11 @@ Automated (each confirmed defect):
 
 - Scroll/caret loss: `tests/widget_resize_scroll.test.js` runs the real `gatorWidgetResize` from `app.js` against a fake iframe whose `height = '0'` clamps a fake scroller and a fake inner window; asserts both positions and the final height, that growth is not undone, and that an unscrolled widget is untouched. Fails on the current code.
 - Pull to bottom: `tests/widget_reveal_once.test.js` covers `gatorWidgetShouldReveal` and `gatorWidgetRevealOnce` (reveals, sets both flags; does nothing for short widgets, non-streaming, or a user who scrolled up) and asserts on the `app.js` source that the post-stream pin checks `_gatorWidgetRevealHold` and `doSend` clears it.
-- Pause not exposed: `tests/narration_editor_widget.test.js` extracts the editor template from `SKILL.md`; asserts `pauseValue`/`segOut` output, the control and tooltip text, no `[pause:`, `progressView` and `projectRel` behaviour, no `latest-output`.
+- Pause not exposed: `tests/narration_editor_widget.test.js` extracts the editor template from `SKILL.md`; asserts `pauseValue`/`segOut` output, the control and tooltip text, no `[pause:`, `progressView` behaviour, the bridge message names, no `fetch(` and no `latest-output`.
 - Pause unsanitised: `tests/test_tts_pipeline_pacing.py` covers `_pause_after` and `build_synced_audio` silence lengths (minimum silence; later `start_at` wins).
-- Merge status: `tests/test_tts_pipeline_progress.py` covers `write_progress` and `main()` (running, done, failed-then-reraise); `tests/demo_project_state/test_delivery.py` covers `/summary` and `/progress`.
-- Download duplicate / no reveal: `tests/test_open_file_reveal.py` covers `_do_open_file` per platform and the route's `reveal` pass-through; `tests/demo_ready_widget.test.js` asserts no Download control, both open buttons, `formatBytes`, `summaryLine` (`Final: final/AI_Gator_Demo.mp4 · Sources: 3 · Working files: 280 MB`) and the `/api/open-file` request bodies.
+- Merge status: `tests/test_tts_pipeline_progress.py` covers `write_progress` and `main()` (running, done, failed-then-reraise); `tests/demo_project_state/test_delivery.py` covers `/summary` (including `raw_rel`) and `/progress`.
+- Download duplicate / no reveal: `tests/test_open_file_reveal.py` covers `_do_open_file` per platform and the route's `reveal` pass-through; `tests/demo_ready_widget.test.js` asserts no Download control, no `fetch(`, no `/api/open-file` and no `window.top` / `window.parent` / `__CSRF_TOKEN__` in the widget, both open buttons, `formatBytes`, `summaryLine` (`Final: final/AI_Gator_Demo.mp4 · Sources: 3 · Working files: 280 MB`) and the `gator:demo-open-folder` posts (`target` `final` / `project`, no path).
+- Widget bridge: `tests/demo_widget_bridge.test.js` runs the real `gatorDemoBridge` and `gatorWidgetFrameForSource` from `app.js` with a stubbed `fetch` and frame list; asserts the three cases follow `gator:recorder`, replies for summary, progress and open-folder, that foreign sources and a missing source are ignored, that an invalid id or unknown target makes no request, that a widget-supplied `path` is ignored, and the `reveal` / `final_dir` / `project` path choices.
 - `tests/test_csrf_route_inventory.py` stays green with `tests/csrf_route_baseline.txt` unchanged.
 
 Manual (real scroll and caret cannot be asserted without a browser): the plan's final task lists exact steps.
@@ -148,6 +169,7 @@ Manual (real scroll and caret cannot be asserted without a browser): the plan's 
 
 - `get_project()` is unchanged. SP7 appends two read-only routes (`GET /{id}/summary`, `GET /{id}/progress`) to `web/routes/demo_projects.py` and puts their helpers in the new `web/demo_project_delivery.py`.
 - Reserve `work/logs/merge_progress.json` (inside SP3's `work/logs/`) as the pipeline's progress record.
+- SP3's `gator:pick-demo-folder` case and SP7's three `gator:demo-*` cases sit side by side after `gator:recorder`; both follow the named-action pattern and neither depends on the other.
 
 ### Requested from SP2
 
