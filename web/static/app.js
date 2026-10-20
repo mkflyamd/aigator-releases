@@ -12930,6 +12930,7 @@ form.addEventListener('submit', async (e) => {
   let fileChipsDiv = null;
   let _streamExhausted = false;
   let _exhaustedMessage = '';
+  let _continueRetryNote = '';
   let _abortCtrl = new AbortController();
   _isStreaming = true;
   let _lastTokenAt = Date.now();
@@ -13827,6 +13828,7 @@ form.addEventListener('submit', async (e) => {
               _exhaustedMessage =
                 msg.message ||
                 'Gator stopped after a step failed. Click Continue to pick up where it left off.';
+              _continueRetryNote = typeof msg.retry_note === 'string' ? msg.retry_note : '';
             } else if (msg.type === 'permission_required') {
               _renderPermissionCard(
                 msgDiv,
@@ -13976,12 +13978,18 @@ form.addEventListener('submit', async (e) => {
         const btn = document.createElement('button');
         btn.className = 'exhausted-continue-btn';
         btn.textContent = 'Continue';
+        const _continueTabId = requestTabId;
+        const _continueText = _continueRequestText(
+          _lastUserRequestText(_continueTabId),
+          _continueRetryNote,
+        );
         btn.addEventListener('click', () => {
+          if (_continueRetryNote && _continueTabId !== _activeTabId) return;
           banner.remove();
           const chatInput = document.getElementById('chat-input');
           const chatForm = document.getElementById('chat-form');
           if (chatInput && chatForm) {
-            chatInput.textContent = 'Continue where you left off.';
+            chatInput.textContent = _continueText;
             chatInput.dispatchEvent(new Event('input'));
             chatForm.requestSubmit();
           }
@@ -16055,6 +16063,18 @@ function _confirmReplyExpired(resp, data) {
 
 // The streamed text re-renders after the card is added and pushes it down, so pin the way the
 // text stream does (several passes). A card blocks the turn, so it ignores the scrolled-up override.
+function _lastUserRequestText(tabId) {
+  const last = [...(_loadTabHistory(tabId) || [])].reverse().find((e) => e?.role === 'user');
+  return typeof last?.content === 'string' ? last.content : '';
+}
+
+// A stall caused by a rejected tool call resubmits the original request plus the
+// failure note; any other stall keeps the plain "Continue" prompt.
+function _continueRequestText(lastUserText, retryNote) {
+  if (!retryNote || !lastUserText) return 'Continue where you left off.';
+  return `${lastUserText}\n\n${retryNote}`;
+}
+
 function _pinConfirmCardInView(card) {
   const messages = document.getElementById('messages');
   if (messages && card.isConnected) _pinScrollToBottom(messages);
@@ -16114,10 +16134,7 @@ function _showBrowserConfirmCard(msgDiv, { confirm_id, action, title, allow_labe
   card.dataset.confirmId = confirm_id;
   // Re-sends this tab's last request so the gate is raised again with a live card.
   const _tabId = _activeTabId;
-  const _lastUserText = (() => {
-    const last = [..._loadTabHistory(_tabId)].reverse().find((e) => e?.role === 'user');
-    return typeof last?.content === 'string' ? last.content : '';
-  })();
+  const _lastUserText = _lastUserRequestText(_tabId);
   if (_lastUserText) {
     card._askAgain = () => {
       const input = document.getElementById('chat-input');
