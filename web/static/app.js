@@ -18297,6 +18297,71 @@ function gatorWidgetRevealOnce(iframe) {
   } catch (_) {}
 }
 
+const GATOR_DEMO_ID_RE = /^demo_\d[\w-]*$/;
+const GATOR_DEMO_TARGETS = ['final', 'project'];
+
+function gatorWidgetFrameForSource(source) {
+  if (!source) return null;
+  const frames = document.querySelectorAll('.gator-widget-frame');
+  for (const f of frames) {
+    if (f.contentWindow === source) return f;
+  }
+  return null;
+}
+
+async function gatorDemoBridge(d, e) {
+  if (!gatorWidgetFrameForSource(e.source)) return;
+  const id = String(d.project_id || '');
+  const reply = (body) => {
+    try {
+      e.source.postMessage({ type: d.type + '-result', project_id: id, ...body }, '*');
+    } catch (_) {}
+  };
+  if (!GATOR_DEMO_ID_RE.test(id)) {
+    reply({ ok: false, error: 'invalid project id' });
+    return;
+  }
+  const base = '/api/demo-projects/' + id;
+  try {
+    if (d.type === 'gator:demo-summary' || d.type === 'gator:demo-progress') {
+      const isSummary = d.type === 'gator:demo-summary';
+      const r = await fetch(base + (isSummary ? '/summary' : '/progress'));
+      if (!r.ok) {
+        reply({ ok: false, error: 'HTTP ' + r.status });
+        return;
+      }
+      const data = await r.json();
+      reply(isSummary ? { ok: true, summary: data } : { ok: true, progress: data });
+      return;
+    }
+    if (!GATOR_DEMO_TARGETS.includes(d.target)) {
+      reply({ ok: false, message: 'Unknown folder.' });
+      return;
+    }
+    const sr = await fetch(base + '/summary');
+    if (!sr.ok) {
+      reply({ ok: false, message: 'Could not load the project (HTTP ' + sr.status + ').' });
+      return;
+    }
+    const s = await sr.json();
+    let target = s.path;
+    let reveal = false;
+    if (d.target === 'final') {
+      target = s.final || s.final_dir;
+      reveal = !!s.final;
+    }
+    const orsp = await fetch('/api/open-file', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: target, reveal }),
+    });
+    const od = await orsp.json();
+    reply({ ok: od.ok !== false, message: od.ok === false ? od.message || 'Could not open the folder.' : '' });
+  } catch (err) {
+    reply({ ok: false, error: String(err), message: 'Could not open the folder: ' + err });
+  }
+}
+
 function gatorWidgetResize(iframe) {
   const applyHeight = () => {
     try {
@@ -18735,6 +18800,11 @@ window.addEventListener('message', (e) => {
       pick().then(reply).catch((err) => reply({ ok: false, error: String(err) }));
       break;
     }
+    case 'gator:demo-summary':
+    case 'gator:demo-progress':
+    case 'gator:demo-open-folder':
+      gatorDemoBridge(d, e);
+      break;
   }
 });
 
