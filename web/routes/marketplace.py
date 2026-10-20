@@ -210,7 +210,9 @@ def _allowed_tiers(cfg: dict) -> set[str]:
     """Tiers that may be listed/installed: the admin policy (default Native + Verified), narrowed (never widened) by user config."""
     allowed = set(load_policy().marketplace_allowed_tiers)
     user = cfg.get("marketplace_allowed_tiers")
-    return allowed & set(user) if user else allowed
+    if isinstance(user, (list, tuple, set)) and user and all(isinstance(t, str) for t in user):
+        return allowed & set(user)
+    return allowed
 
 
 def _enforce_tier(skill_id: str, tier: str) -> None:
@@ -714,7 +716,7 @@ async def install_local(req: LocalInstallRequest):
 
     import marketplace.installer as _installer
 
-    _enforce_tier("local-import", "Mine")
+    _enforce_tier("local-import", "Community")
     if not req.consent:
         preview = _installer.preview_package(local_zip_bytes=zip_bytes)
         if not preview.get("ok"):

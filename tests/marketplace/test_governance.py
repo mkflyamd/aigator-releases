@@ -200,6 +200,31 @@ def test_admin_policy_can_block_local_imports(tmp_path):
     assert "not allowed by policy" in r.json()["detail"]
 
 
+def test_mine_only_policy_does_not_allow_local_imports(tmp_path):
+    _admin_policy(tmp_path, {"marketplace_allowed_tiers": ["Native", "Verified", "Mine"]})
+    assert _install_local({"marketplace_enabled": True}).status_code == 403
+
+
+def test_community_policy_allows_local_imports(tmp_path):
+    _admin_policy(tmp_path, {"marketplace_allowed_tiers": ["Native", "Verified", "Community"]})
+    assert _install_local({"marketplace_enabled": True}).status_code == 200
+
+
+def test_user_config_can_narrow_allowed_tiers(tmp_path):
+    from routes.marketplace import _allowed_tiers
+
+    _no_admin_policy(tmp_path)
+    assert _allowed_tiers({"marketplace_allowed_tiers": ["Native"]}) == {"Native"}
+
+
+def test_malformed_user_tier_setting_falls_back_to_admin_policy(tmp_path):
+    from routes.marketplace import _allowed_tiers
+
+    _admin_policy(tmp_path, {"marketplace_allowed_tiers": ["Native", "Verified"]})
+    for bad in ("Native", 5, {"Native": 1}, ["Native", 3], []):
+        assert _allowed_tiers({"marketplace_allowed_tiers": bad}) == {"Native", "Verified"}
+
+
 def test_admin_policy_can_enable_community(tmp_path):
     _admin_policy(tmp_path, {"marketplace_allowed_tiers": ["Native", "Verified", "Community"]})
     assert _install("gmail", {"marketplace_enabled": True}).status_code != 403
