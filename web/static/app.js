@@ -18308,6 +18308,21 @@ window.addEventListener('message', (e) => {
         });
       break;
     }
+    case 'gator:pick-demo-folder': {
+      const pick = window.gatorShell && window.gatorShell.pickDemoFolder;
+      const reply = (data) => {
+        if (e.source)
+          try {
+            e.source.postMessage({ type: 'gator:pick-demo-folder-result', data }, '*');
+          } catch (_) {}
+      };
+      if (!pick) {
+        reply({ ok: false, error: 'folder picker unavailable' });
+        break;
+      }
+      pick().then(reply).catch((err) => reply({ ok: false, error: String(err) }));
+      break;
+    }
   }
 });
 
@@ -18477,3 +18492,32 @@ document.addEventListener('DOMContentLoaded', () => {
       .catch(() => {});
   }, 2000);
 })();
+
+// ── Settings → General: demo projects folder ─────────────────────────────────
+async function demoRootRefresh() {
+  const label = document.getElementById('demo-root-path');
+  if (!label) return;
+  try {
+    const s = await fetch('/api/demo-projects/settings').then((r) => r.json());
+    label.textContent = s.default_root + (s.is_default ? ' (default)' : '');
+  } catch (_) {
+    label.textContent = 'unavailable';
+  }
+}
+
+async function demoRootSet(root) {
+  const resp = await fetch('/api/demo-projects/settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': window.__CSRF_TOKEN__ || '' },
+    body: JSON.stringify({ root }),
+  });
+  if (!resp.ok) alert((await resp.json()).detail || 'Could not use that folder');
+  demoRootRefresh();
+}
+
+document.getElementById('settings-trigger')?.addEventListener('click', demoRootRefresh);
+document.getElementById('demo-root-change')?.addEventListener('click', async () => {
+  const picked = window.gatorShell?.pickDemoFolder ? await window.gatorShell.pickDemoFolder() : null;
+  if (picked && picked.ok) demoRootSet(picked.path);
+});
+document.getElementById('demo-root-reset')?.addEventListener('click', () => demoRootSet(null));

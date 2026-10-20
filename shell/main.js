@@ -4960,6 +4960,16 @@ ipcMain.handle('skill:pick-local', async (_e, kind) => {
   return { ok: true, kind: 'folder', name: nodePath.basename(chosen), files };
 });
 
+ipcMain.handle('demo:pick-folder', async () => {
+  const { dialog: _dialog } = require('electron');
+  const { filePaths, canceled } = await _dialog.showOpenDialog(win, {
+    title: 'Save project to…',
+    properties: ['openDirectory', 'createDirectory'],
+  });
+  if (canceled || !filePaths.length) return { ok: false, cancelled: true };
+  return { ok: true, path: filePaths[0] };
+});
+
 // Push maximize state to the toolbar so the button icon toggles correctly.
 // Fires on OS-level maximize/unmaximize (e.g. double-clicking the drag
 // region, Aero Snap, or Win+Up).
