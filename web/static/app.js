@@ -31,6 +31,32 @@
   };
 })();
 
+// Declared before the Init block: restoring saved chat history renders widgets during startup.
+const GATOR_WIDGET_MAX_H = 3000;
+const GATOR_WIDGET_STORE_PREFIX = 'gator.widgetstore.';
+const GATOR_WIDGET_STORE_LIMITS = { keys: 100, keyLen: 200, valueLen: 50000, total: 500000 };
+const GATOR_RECORDER_ACTIONS = {
+  status: { method: 'GET', params: {} },
+  screens: { method: 'GET', params: {} },
+  'select-screen': { method: 'POST', params: { screen_index: 'number' } },
+  'pick-region': { method: 'POST', params: { screen_index: 'number' } },
+  start: {
+    method: 'POST',
+    params: {
+      screen_index: 'number',
+      force: 'boolean',
+      crop_x: 'number',
+      crop_y: 'number',
+      crop_w: 'number',
+      crop_h: 'number',
+    },
+  },
+  pause: { method: 'POST', params: {} },
+  resume: { method: 'POST', params: {} },
+  stop: { method: 'POST', params: {} },
+};
+const GATOR_TTS_VOICE_RE = /^[A-Za-z0-9_-]{1,40}$/;
+
 /* ── Click actions: the Content Security Policy forbids on*= attributes ──────
  * Markup carries data-call (a name from the allow-list below) and data-args (a
  * JSON array; {"$el":true} stands for the clicked element). Build the pair with
@@ -18286,8 +18312,6 @@ function _initGoogleWorkspaceSettings() {
 
 /* ── Widget System ────────────────────────────────────────────────────────── */
 
-const GATOR_WIDGET_MAX_H = 3000;
-
 function gatorWidgetScrollSnapshot(iframe) {
   const saved = [];
   for (let el = iframe.parentElement; el; el = el.parentElement) {
@@ -18341,9 +18365,6 @@ function gatorWidgetFrameScript() {
   measure();
   })();`;
 }
-
-const GATOR_WIDGET_STORE_PREFIX = 'gator.widgetstore.';
-const GATOR_WIDGET_STORE_LIMITS = { keys: 100, keyLen: 200, valueLen: 50000, total: 500000 };
 
 function gatorWidgetStoreKey(html) {
   let h = 0x811c9dc5;
@@ -18450,28 +18471,6 @@ function gatorWidgetFrameForSource(source) {
   }
   return null;
 }
-
-const GATOR_RECORDER_ACTIONS = {
-  status: { method: 'GET', params: {} },
-  screens: { method: 'GET', params: {} },
-  'select-screen': { method: 'POST', params: { screen_index: 'number' } },
-  'pick-region': { method: 'POST', params: { screen_index: 'number' } },
-  start: {
-    method: 'POST',
-    params: {
-      screen_index: 'number',
-      force: 'boolean',
-      crop_x: 'number',
-      crop_y: 'number',
-      crop_w: 'number',
-      crop_h: 'number',
-    },
-  },
-  pause: { method: 'POST', params: {} },
-  resume: { method: 'POST', params: {} },
-  stop: { method: 'POST', params: {} },
-};
-const GATOR_TTS_VOICE_RE = /^[A-Za-z0-9_-]{1,40}$/;
 
 function gatorWidgetReply(e, message) {
   try {
