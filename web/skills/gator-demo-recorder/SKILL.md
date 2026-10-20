@@ -989,7 +989,7 @@ If Lemonade TTS is unavailable (preflight `lemonade.ok` is false), tell the user
 
 The merged video in `PROJECT_DIR / "final"` is the deliverable; the widget finds it from the active project without any path embedded in JS (eliminates all backslash-escaping bugs). If the user is re-generating, move the earlier file from `final/` into `previous/` first.
 
-Output this widget verbatim. The only placeholder is `PROJECT_ID_PLACEHOLDER`: replace it with the project id from the `PINNED PROJECT:` line of your context.
+Output this widget verbatim, replacing only `PROJECT_ID_PLACEHOLDER` with the project id (`PROJECT_DIR.name`, the id on the `PINNED PROJECT:` line of your context):
 
 ```html:widget
 <!DOCTYPE html>
@@ -1002,11 +1002,12 @@ Output this widget verbatim. The only placeholder is `PROJECT_ID_PLACEHOLDER`: r
   .panel{background:#1a2332;border:1px solid #1e3a52;border-radius:12px;padding:16px;max-width:560px}
   h3{color:#4ade80;font-size:.9rem;font-weight:700;margin-bottom:10px}
   video{width:100%;border-radius:8px;background:#000;display:block;margin-bottom:10px}
-  .meta{font-size:.72rem;color:#6b8db5;margin-bottom:10px;word-break:break-all}
+  .meta{font-size:.72rem;color:#6b8db5;margin-bottom:6px;word-break:break-all}
+  .status{font-size:.7rem;color:#f87171;margin-bottom:8px;min-height:14px}
   .actions{display:flex;gap:8px;flex-wrap:wrap}
   .btn{padding:8px 14px;border-radius:7px;border:none;font-size:.78rem;font-weight:700;cursor:pointer}
-  .btn-download{background:rgba(74,222,128,.15);border:1px solid rgba(74,222,128,.35);color:#4ade80}
-  .btn-download:hover{background:rgba(74,222,128,.25)}
+  .btn-open{background:rgba(74,222,128,.15);border:1px solid rgba(74,222,128,.35);color:#4ade80}
+  .btn-open:hover{background:rgba(74,222,128,.25)}
   .btn-edit{background:rgba(96,165,250,.1);border:1px solid rgba(96,165,250,.3);color:#60a5fa}
   .btn-edit:hover{background:rgba(96,165,250,.2)}
   .btn-clean{background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);color:#f87171}
@@ -1017,41 +1018,91 @@ Output this widget verbatim. The only placeholder is `PROJECT_ID_PLACEHOLDER`: r
 <div class="panel">
   <h3>🎬 Demo Ready</h3>
   <video id="vp" controls preload="metadata"></video>
-  <div class="meta" id="meta">Loading...</div>
+  <div class="meta" id="summary">Loading...</div>
+  <div class="meta" id="duration"></div>
+  <div class="status" id="open-status"></div>
   <div class="actions">
-    <button class="btn btn-download" onclick="download()">⬇ Download</button>
+    <button class="btn btn-open" onclick="openFinal()">📁 Open final folder</button>
+    <button class="btn btn-open" onclick="openProject()">Open project folder</button>
     <button class="btn btn-edit" onclick="editNarration()">✏️ Edit narration & regenerate</button>
     <button class="btn btn-clean" onclick="cleanup()">🗑 Delete intermediates</button>
   </div>
 </div>
 <script>
 var _BASE=window._GATOR||'http://localhost:8003';
-var _PROJECT_ID='PROJECT_ID_PLACEHOLDER';
-var _finalPath='', _encoded='';
+var _PROJECT_ID = 'PROJECT_ID_PLACEHOLDER';
+var _pid=/^demo_\d/.test(_PROJECT_ID)?_PROJECT_ID:'';
 var vp=document.getElementById('vp');
 
-fetch(_BASE+'/api/demo-projects/active')
-  .then(function(r){ return r.json(); })
-  .then(function(d){
-    _finalPath=d.final||d.raw||'';
-    _encoded=encodeURIComponent(_finalPath);
-    vp.src=_BASE+'/api/recorder/serve-file?path='+_encoded;
-  })
-  .catch(function(e){ document.getElementById('meta').textContent='Error loading: '+e; });
+function formatBytes(n){
+  n=Number(n)||0;
+  if(n<1024){ return n+' B'; }
+  if(n<1048576){ return Math.round(n/1024)+' KB'; }
+  if(n<1073741824){ return Math.round(n/1048576)+' MB'; }
+  return (n/1073741824).toFixed(1)+' GB';
+}
+
+function summaryLine(s){
+  return 'Final: '+(s.final_rel||'none')+' · Sources: '+s.source_count+' · Working files: '+formatBytes(s.work_bytes);
+}
+
+function setOpenStatus(msg){
+  document.getElementById('open-status').textContent=msg||'';
+}
+
+function requestOpen(target){
+  if(!_pid){ return; }
+  setOpenStatus('');
+  parent.postMessage({type:'gator:demo-open-folder', project_id:_pid, target:target}, '*');
+}
+
+function openFinal(){
+  requestOpen('final');
+}
+
+function openProject(){
+  requestOpen('project');
+}
+
+function handleOpenResult(m){
+  if(m.project_id!==_pid){ return; }
+  setOpenStatus(m.ok===false ? (m.message||'Could not open the folder.') : '');
+}
+
+function applySummary(m){
+  if(m.project_id!==_pid){ return; }
+  if(!m.ok || !m.summary){
+    document.getElementById('summary').textContent='Error loading: '+(m.error||'summary unavailable');
+    return;
+  }
+  var s=m.summary;
+  document.getElementById('summary').textContent=summaryLine(s);
+  if(s.final_rel){
+    vp.src=_BASE+'/api/demo-projects/'+_pid+'/file?rel='+encodeURIComponent(s.final_rel);
+  } else {
+    document.getElementById('duration').textContent='No final video was found in this project.';
+  }
+}
+
+window.addEventListener('message', function(ev){
+  var m=ev.data||{};
+  if(m.type==='gator:demo-summary-result'){ applySummary(m); }
+  else if(m.type==='gator:demo-open-folder-result'){ handleOpenResult(m); }
+});
+
+if(!_pid){
+  document.getElementById('summary').textContent='Project not specified — cannot load the final video.';
+} else {
+  parent.postMessage({type:'gator:demo-summary', project_id:_pid}, '*');
+}
 
 vp.onloadedmetadata=function(){
-  document.getElementById('meta').innerHTML=
-    '<span style="color:#6b8db5">'+_finalPath+'</span> — '+Math.round(vp.duration)+'s';
+  document.getElementById('duration').textContent='Duration: '+Math.round(vp.duration)+'s';
 };
 vp.onerror=function(){
-  document.getElementById('meta').textContent='Could not load video. Check the active project via /api/demo-projects/active';
+  document.getElementById('duration').textContent='Could not load the final video.';
 };
-function download(){
-  var a=document.createElement('a');
-  a.href=_BASE+'/api/recorder/serve-file?path='+_encoded;
-  a.download=_finalPath.replace(/^.*[\\\/]/,'');
-  document.body.appendChild(a); a.click(); a.remove();
-}
+
 function editNarration(){
   parent.postMessage({type:'gator:send-message', pin_skill:'gator-demo-recorder', project_id:_PROJECT_ID,
     text:'NARRATION_REEDIT: Re-show the Phase 3 narration editor widget now.'},'*');
