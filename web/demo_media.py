@@ -512,3 +512,80 @@ def append_clip(project_id: str | None, clip_rel: str, clip_start_sec=0.0, clip_
             "appended_from": appended, "appended_at_sec": round(binfo.duration_sec, 3),
             "inserted_audio_dropped": cinfo.has_audio, "timeline_shifted": False, "op_id": op["op_id"],
         }
+
+# ── intro (hold first frame / title card) ────────────────────────────────────
+
+def normalize_intro(intro: dict | None) -> dict:
+    intro = intro or {}
+    mode = intro.get("mode") or "none"
+    if mode not in INTRO_MODES:
+        raise MediaError("bad_argument", f"intro mode must be one of {list(INTRO_MODES)}.", field="intro_mode")
+    if mode == "none":
+        return {"mode": "none", "duration_sec": 0.0, "title": ""}
+    raw = intro.get("duration_sec")
+    duration = INTRO_DEFAULT_SEC if raw is None else _number(raw, "intro_duration_sec")
+    if not INTRO_MIN_SEC <= duration <= INTRO_MAX_SEC:
+        raise MediaError("bad_argument", f"intro duration must be {INTRO_MIN_SEC}-{INTRO_MAX_SEC} seconds.",
+                         field="intro_duration_sec")
+    title = str(intro.get("title") or "").strip()
+    if len(title) > INTRO_TITLE_MAX:
+        raise MediaError("bad_argument", f"intro title is limited to {INTRO_TITLE_MAX} characters.",
+                         field="intro_title")
+    if mode == "card" and not title:
+        raise MediaError("bad_argument", "A title card needs a title.", field="intro_title")
+    return {"mode": mode, "duration_sec": round(duration, 3), "title": title}
+
+
+def _find_font() -> str:
+    for candidate in _FONT_CANDIDATES:
+        if Path(candidate).is_file():
+            return candidate
+    raise MediaError("font_missing", "No system font was found to draw the title. Use 'hold' without a title.")
+
+
+def make_intro_video(project_id: str | None, video_rel: str, intro: dict) -> dict:
+    with _OP_LOCK:
+        pid, folder = project_for(project_id)
+        intro = normalize_intro(intro)
+        if intro["mode"] == "none":
+            raise MediaError("bad_argument", "intro mode 'none' has nothing to render.", field="intro_mode")
+        src = project_file(pid, video_rel)
+        info = probe(src)
+        if not info.has_video:
+            raise MediaError("no_video", f"{video_rel} has no video stream.", rel=video_rel)
+        d = intro["duration_sec"]
+        if intro["mode"] == "card":
+            pad = f"tpad=start_mode=add:start_duration={d}:color=0x111827"
+        else:
+            pad = f"tpad=start_mode=clone:start_duration={d}"
+        chain = [pad]
+        out = _next_path(folder, "edits", "intro", ".mp4")
+        partial = _partial(out)
+        title_file = out.parent / "intro_title.txt"
+        font_file = out.parent / "intro_font.ttf"
+        if intro["title"]:
+            title_file.write_text(intro["title"], encoding="utf-8")
+            shutil.copyfile(_find_font(), font_file)
+            size = max(14, min(info.height // 14, int(info.width * 0.9 / (0.55 * len(intro["title"])))))
+            chain.append(
+                "drawtext=fontfile=intro_font.ttf:textfile=intro_title.txt:expansion=none:"
+                f"fontcolor=white:fontsize={size}:borderw=2:bordercolor=black:"
+                f"x=(w-text_w)/2:y=(h-text_h)/2:enable=lt(t\\,{d})"
+            )
+        chain.append("format=yuv420p")
+        try:
+            _ffmpeg(["-i", str(src), "-vf", ",".join(chain), "-c:v", "libx264", "-preset", "veryfast",
+                     "-crf", "20", "-an", "-movflags", "+faststart", str(partial)], cwd=out.parent)
+            oinfo = _finish(partial, out, info.duration_sec + d)
+        finally:
+            partial.unlink(missing_ok=True)
+            title_file.unlink(missing_ok=True)
+            font_file.unlink(missing_ok=True)
+        block = _out_block(folder, out, oinfo)
+        op = record_op(pid, folder, {
+            "operation": "intro", "source": {"rel": video_rel, "duration_sec": round(info.duration_sec, 3)},
+            "intro": intro, "output": block,
+        })
+        return {"ok": True, "operation": "intro", "intro": intro, "output": block,
+                "source": {"rel": video_rel, "duration_sec": round(info.duration_sec, 3)},
+                "offset_sec": d, "op_id": op["op_id"]}

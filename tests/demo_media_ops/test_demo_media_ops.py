@@ -147,3 +147,24 @@ def test_edit_chain_is_discarded_when_the_raw_recording_changes(project):
     make_video(folder / "work" / "timeline.mp4", 30)
     dp.update_project(pid, raw="work/timeline.mp4")
     assert dm.current_rel(pid, folder) == "work/timeline.mp4"
+
+
+def test_intro_hold_extends_and_card_draws_title(project):
+    pid, folder = project
+    make_video(folder / "source" / "short.mp4", 5)
+    hold = dm.make_intro_video(pid, "source/short.mp4", {"mode": "hold", "duration_sec": 2})
+    assert hold["output"]["duration_sec"] == pytest.approx(7, abs=0.4)
+    card = dm.make_intro_video(pid, "source/short.mp4",
+                               {"mode": "card", "duration_sec": 2, "title": "Slack: it's 50% done"})
+    assert card["output"]["duration_sec"] == pytest.approx(7, abs=0.4)
+    assert not list((folder / "work/edits").glob("intro_title.txt"))
+
+
+def test_normalize_intro_rules():
+    assert dm.normalize_intro(None)["mode"] == "none"
+    assert dm.normalize_intro({"mode": "hold"})["duration_sec"] == 2.0
+    for bad in ({"mode": "card"}, {"mode": "hold", "duration_sec": 0.1},
+                {"mode": "hold", "duration_sec": 11}, {"mode": "spin"},
+                {"mode": "card", "title": "x" * 81}):
+        with pytest.raises(dm.MediaError):
+            dm.normalize_intro(bad)
