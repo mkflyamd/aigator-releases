@@ -389,13 +389,32 @@ test('no Update button outside an editing tab', () => {
   assert.ok(!out.includes('-update-btn'));
 });
 
-test('editing tab shows Save and Update "<name>"', () => {
+test('editing tab shows one primary Save changes button and a quieter Save as new widget', () => {
   const { renderMarkdown } = load(RENDER_FUNCTIONS, renderSandbox('Local Use'));
   const out = renderMarkdown(WIDGET_FENCE);
-  assert.ok(out.includes('-save-btn'));
   assert.ok(out.includes('-update-btn'));
   assert.ok(out.includes('data-call="gatorWidgetUpdateConfirm"'));
-  assert.ok(out.includes('Update &quot;Local Use&quot;'));
+  assert.ok(out.includes('Save changes to &quot;Local Use&quot;'));
+  assert.ok(out.includes('-save-btn'));
+  assert.ok(out.includes('Save as new widget'));
+  assert.ok(out.includes('data-call="gatorWidgetSavePrompt"'));
+  assert.ok(out.includes('gator-widget-btn-secondary'));
+  assert.ok(!/>[^<]*&#128190; Save</.test(out), 'plain Save label is gone in editing tabs');
+});
+
+test('editing tab label says the changes are unsaved', () => {
+  const { renderMarkdown } = load(RENDER_FUNCTIONS, renderSandbox('Local Use'));
+  const out = renderMarkdown(WIDGET_FENCE);
+  assert.ok(/-label">Unsaved changes to &quot;Local Use&quot;</.test(out));
+});
+
+test('plain tabs keep the Widget label and the Save button', () => {
+  const { renderMarkdown } = load(RENDER_FUNCTIONS, renderSandbox(null));
+  const out = renderMarkdown(WIDGET_FENCE);
+  assert.ok(/-label">Widget</.test(out));
+  assert.ok(out.includes('&#128190; Save'));
+  assert.ok(!out.includes('Save as new widget'));
+  assert.ok(!out.includes('gator-widget-btn-secondary'));
 });
 
 test('Update button name is escaped and cut to 20 characters', () => {
@@ -416,6 +435,7 @@ test('transient no-save widgets get no Update button', () => {
 
 function updateSandbox({ editing = true, status = 200, reject = false } = {}) {
   const btn = { textContent: '', disabled: false };
+  const label = { textContent: 'Unsaved changes to "Local Use"' };
   const calls = { fetch: [], dock: 0, manager: 0 };
   const panel = { classList: { contains: (c) => c === 'is-open' } };
   const sandbox = {
@@ -437,7 +457,13 @@ function updateSandbox({ editing = true, status = 200, reject = false } = {}) {
     },
     document: {
       getElementById: (id) =>
-        id === 'frame1-update-btn' ? btn : id === 'gator-widget-manager' ? panel : null,
+        id === 'frame1-update-btn'
+          ? btn
+          : id === 'frame1-label'
+            ? label
+            : id === 'gator-widget-manager'
+              ? panel
+              : null,
     },
     fetch: async (url, init) => {
       calls.fetch.push({ url, init });
@@ -445,38 +471,41 @@ function updateSandbox({ editing = true, status = 200, reject = false } = {}) {
       return { ok: status >= 200 && status < 300, status };
     },
   };
-  return { sandbox, btn, calls };
+  return { sandbox, btn, label, calls };
 }
 
 test('gatorWidgetUpdateConfirm PATCHes only the html of the edited widget', async () => {
-  const { sandbox, btn, calls } = updateSandbox();
+  const { sandbox, btn, label, calls } = updateSandbox();
   const { gatorWidgetUpdateConfirm } = load(['_activeEditingWidget', 'gatorWidgetUpdateConfirm'], sandbox);
   await gatorWidgetUpdateConfirm('frame1');
   assert.strictEqual(calls.fetch.length, 1);
   assert.strictEqual(calls.fetch[0].url, '/api/widgets/w1');
   assert.strictEqual(calls.fetch[0].init.method, 'PATCH');
   assert.deepStrictEqual(JSON.parse(calls.fetch[0].init.body), { html: '<div>v2</div>' });
-  assert.strictEqual(btn.textContent, '✓ Updated');
+  assert.strictEqual(btn.textContent, '✓ Saved');
+  assert.strictEqual(label.textContent, 'Saved to "Local Use"');
   assert.strictEqual(btn.disabled, true);
   assert.strictEqual(calls.dock, 1);
   assert.strictEqual(calls.manager, 1);
 });
 
 test('gatorWidgetUpdateConfirm reports a deleted widget', async () => {
-  const { sandbox, btn, calls } = updateSandbox({ status: 404 });
+  const { sandbox, btn, label, calls } = updateSandbox({ status: 404 });
   const { gatorWidgetUpdateConfirm } = load(['_activeEditingWidget', 'gatorWidgetUpdateConfirm'], sandbox);
   await gatorWidgetUpdateConfirm('frame1');
-  assert.strictEqual(btn.textContent, 'Widget was deleted — use Save');
+  assert.strictEqual(btn.textContent, 'Widget was deleted — use Save as new widget');
+  assert.strictEqual(label.textContent, 'Unsaved changes to "Local Use"');
   assert.strictEqual(btn.disabled, true);
   assert.strictEqual(calls.dock, 0);
 });
 
 test('gatorWidgetUpdateConfirm lets the user retry after a failure', async () => {
   for (const options of [{ reject: true }, { status: 500 }]) {
-    const { sandbox, btn, calls } = updateSandbox(options);
+    const { sandbox, btn, label, calls } = updateSandbox(options);
     const { gatorWidgetUpdateConfirm } = load(['_activeEditingWidget', 'gatorWidgetUpdateConfirm'], sandbox);
     await gatorWidgetUpdateConfirm('frame1');
-    assert.strictEqual(btn.textContent, 'Update failed — retry');
+    assert.strictEqual(btn.textContent, 'Save failed — retry');
+    assert.strictEqual(label.textContent, 'Unsaved changes to "Local Use"');
     assert.strictEqual(btn.disabled, false);
     assert.strictEqual(calls.dock, 0);
   }

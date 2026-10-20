@@ -11762,18 +11762,22 @@ function renderMarkdown(raw) {
       blocks.push(
         `<div class="gator-widget-wrap" id="${widgetId}-wrap">` +
           `<div class="gator-widget-toolbar">` +
-          `<span class="gator-widget-label" id="${widgetId}-label">Widget</span>` +
+          `<span class="gator-widget-label" id="${widgetId}-label">${
+            _editTarget ? 'Unsaved changes to &quot;' + escapeHtml(_updateLabel) + '&quot;' : 'Widget'
+          }</span>` +
           `<div class="gator-widget-save-row" id="${widgetId}-save-row" style="display:none;flex:1;gap:4px;align-items:center">` +
           `<input id="${widgetId}-name-input" class="gator-widget-name-input" type="text" placeholder="Widget name..." value="My Widget" />` +
           `<button class="gator-widget-btn"${gatorActionAttrs('gatorWidgetSaveConfirm', [widgetId])}>✓</button>` +
           `<button class="gator-widget-btn"${gatorActionAttrs('gatorWidgetSaveCancel', [widgetId])}>✕</button>` +
           `</div>` +
+          (_editTarget
+            ? `<button class="gator-widget-btn gator-widget-btn-primary" id="${widgetId}-update-btn"${gatorActionAttrs('gatorWidgetUpdateConfirm', [widgetId])} title="Overwrite the saved widget with this version. Your edits are not saved until you click this.">&#128190; Save changes to &quot;${escapeHtml(_updateLabel)}&quot;</button>`
+            : '') +
           (_noSave
             ? ''
-            : `<button class="gator-widget-btn" id="${widgetId}-save-btn"${gatorActionAttrs('gatorWidgetSavePrompt', [widgetId])} title="Save widget">&#128190; Save</button>`) +
-          (_editTarget
-            ? `<button class="gator-widget-btn" id="${widgetId}-update-btn"${gatorActionAttrs('gatorWidgetUpdateConfirm', [widgetId])} title="Replace the saved widget with this version">&#8635; Update &quot;${escapeHtml(_updateLabel)}&quot;</button>`
-            : '') +
+            : _editTarget
+              ? `<button class="gator-widget-btn gator-widget-btn-secondary" id="${widgetId}-save-btn"${gatorActionAttrs('gatorWidgetSavePrompt', [widgetId])} title="Keep the saved widget as it is and save this version as a separate new widget">Save as new widget</button>`
+              : `<button class="gator-widget-btn" id="${widgetId}-save-btn"${gatorActionAttrs('gatorWidgetSavePrompt', [widgetId])} title="Save widget">&#128190; Save</button>`) +
           `</div>` +
           `<iframe id="${widgetId}" class="gator-widget-frame" sandbox="allow-scripts allow-forms allow-modals allow-pointer-lock allow-same-origin"` +
           ` srcdoc="${srcdoc}"` +
@@ -18480,6 +18484,7 @@ async function gatorWidgetUpdateConfirm(frameId) {
   const target = _activeEditingWidget();
   const html = gatorWidgetHtmlFromId(frameId);
   const btn = document.getElementById(frameId + '-update-btn');
+  const label = document.getElementById(frameId + '-label');
   if (!target || !html || !btn) return;
   btn.disabled = true;
   try {
@@ -18489,16 +18494,17 @@ async function gatorWidgetUpdateConfirm(frameId) {
       body: JSON.stringify({ html }),
     });
     if (res.status === 404) {
-      btn.textContent = 'Widget was deleted — use Save';
+      btn.textContent = 'Widget was deleted — use Save as new widget';
       return;
     }
     if (!res.ok) throw new Error('HTTP ' + res.status);
-    btn.textContent = '✓ Updated';
+    btn.textContent = '✓ Saved';
+    if (label) label.textContent = 'Saved to "' + target.name + '"';
     gatorWidgetRenderDock();
     const panel = document.getElementById('gator-widget-manager');
     if (panel && panel.classList.contains('is-open')) gatorWidgetManagerRender(panel);
   } catch (_) {
-    btn.textContent = 'Update failed — retry';
+    btn.textContent = 'Save failed — retry';
     btn.disabled = false;
   }
 }
