@@ -7,6 +7,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from starlette.requests import ClientDisconnect
 
 import demo_clips as clips
 import demo_compose as compose
@@ -75,6 +76,8 @@ async def upload(request: Request, filename: str = Query(...), project_id: Optio
         item = await asyncio.to_thread(clips.add_item, pid, part, filename, info)
     except (clips.ClipError, probe.MediaRejected) as exc:
         return _fail(exc.code, exc.message)
+    except ClientDisconnect:
+        return JSONResponse({"ok": False, "code": "cancelled", "message": "Upload cancelled."}, status_code=499)
     finally:
         if part is not None:
             part.unlink(missing_ok=True)

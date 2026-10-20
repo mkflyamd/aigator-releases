@@ -181,3 +181,27 @@ def test_deleted_project_folder_is_404(client, store, scheduled):
     assert client.get(f"{BASE}/{created['project_id']}").status_code == 404
     res = _upload(client, project_id=created["project_id"])
     assert res.status_code == 404
+
+
+def test_client_disconnect_mid_upload_leaves_nothing_behind(client, store, fake_ffprobe, scheduled, monkeypatch):
+    from starlette.requests import ClientDisconnect, Request
+
+    fake_ffprobe()
+    first = _upload(client).json()
+    pid = first["project_id"]
+    folder = Path(store.get_project(pid)["path"])
+    scheduled.clear()
+
+    async def cut_off(self):
+        yield b"x" * 32
+        raise ClientDisconnect()
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Request, "stream", cut_off)
+        res = _upload(client, name="b.mp4")
+
+    assert res.status_code == 499 and res.json()["code"] == "cancelled"
+    assert list((folder / "source").glob(".upload_*")) == []
+    assert not list((folder / "source").glob("c2_*"))
+    assert scheduled == []
+    assert [c["id"] for c in client.get(f"{BASE}/{pid}").json()["clips"]["clips"]] == ["c1"]

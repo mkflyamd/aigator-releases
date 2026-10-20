@@ -64,4 +64,51 @@ assert.ok(
   'demo-media.js loads before app.js',
 );
 
-console.log('demo_media_ui: ok');
+// cancelling an upload aborts the request
+const cancelCheck = (async () => {
+  const xhrs = [];
+  class FakeXhr {
+    constructor() {
+      this.upload = {};
+      xhrs.push(this);
+    }
+    open() {}
+    setRequestHeader() {}
+    send() {}
+    abort() {
+      this.aborted = true;
+      if (this.onabort) this.onabort();
+    }
+  }
+  const DM = vm.runInNewContext(source + '; DemoMedia;', {
+    window: {},
+    document: {},
+    XMLHttpRequest: FakeXhr,
+    encodeURIComponent,
+    Error,
+  });
+  const ctl = new AbortController();
+  const pending = DM.upload({ name: 'a.mp4' }, { signal: ctl.signal });
+  ctl.abort();
+  assert.strictEqual(xhrs[0].aborted, true, 'abort signal aborts the XHR');
+  await assert.rejects(pending, (err) => err.name === 'AbortError');
+
+  const early = new AbortController();
+  early.abort();
+  const pre = DM.upload({ name: 'b.mp4' }, { signal: early.signal });
+  assert.strictEqual(xhrs[1].aborted, true, 'an already-aborted signal aborts at once');
+  await assert.rejects(pre, (err) => err.name === 'AbortError');
+
+  const attach = appJs.match(/function _attachDemoMedia\([^)]*\)\s*\{[\s\S]*?\n\}/)[0];
+  assert.ok(attach.includes('new AbortController()'), 'each media chip owns an abort controller');
+  assert.ok(/signal:\s*\w+\.signal/.test(attach), 'the controller signal reaches the upload');
+  assert.ok(/_wireChipRemove\(removeBtn, chip, input, \(\) => \w+\.abort\(\)\)/.test(attach), 'removing the chip aborts the upload');
+  assert.ok(/AbortError/.test(attach), 'a cancelled upload is not reported as an error');
+})();
+cancelCheck.then(
+  () => console.log('demo_media_ui: ok'),
+  (err) => {
+    console.error(err);
+    process.exit(1);
+  },
+);

@@ -81,6 +81,11 @@ const DemoMedia = (() => {
         if (ev.lengthComputable && o.onProgress) o.onProgress(Math.round((ev.loaded * 100) / ev.total));
       };
       xhr.onerror = () => reject(new Error('Upload failed: connection error'));
+      xhr.onabort = () => {
+        const err = new Error('Upload cancelled');
+        err.name = 'AbortError';
+        reject(err);
+      };
       xhr.onload = () => {
         let body = null;
         try {
@@ -92,6 +97,10 @@ const DemoMedia = (() => {
         else reject(new Error(errorMessage(body, xhr.status)));
       };
       xhr.send(file);
+      if (o.signal) {
+        if (o.signal.aborted) xhr.abort();
+        else o.signal.addEventListener('abort', () => xhr.abort());
+      }
     });
   }
 

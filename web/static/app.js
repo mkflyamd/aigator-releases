@@ -1394,7 +1394,7 @@ function _formatBytes(bytes) {
 // listener on a child button is swallowed there because the preceding
 // `mousedown` moves the caret/selection first — so we also preventDefault on
 // mousedown to keep the button clickable.
-function _wireChipRemove(removeBtn, chip, input) {
+function _wireChipRemove(removeBtn, chip, input, onRemove) {
   removeBtn.addEventListener('mousedown', (e) => {
     e.preventDefault();
     e.stopPropagation();
@@ -1403,6 +1403,7 @@ function _wireChipRemove(removeBtn, chip, input) {
     e.preventDefault();
     e.stopPropagation();
     chip.remove();
+    if (onRemove) onRemove();
     if (input && input.focus) input.focus();
   });
 }
@@ -12684,13 +12685,14 @@ function _attachDemoMedia(file, errEl) {
   nameSpan.className = 'file-chip-name';
   nameSpan.textContent = file.name + ' (0%)';
   chip.appendChild(nameSpan);
+  const uploadCtl = new AbortController();
   const removeBtn = document.createElement('button');
   removeBtn.type = 'button';
   removeBtn.className = 'file-chip-remove';
   removeBtn.setAttribute('aria-label', 'Remove ' + file.name);
   removeBtn.title = 'Remove';
   removeBtn.textContent = '✕';
-  _wireChipRemove(removeBtn, chip, input);
+  _wireChipRemove(removeBtn, chip, input, () => uploadCtl.abort());
   chip.appendChild(removeBtn);
   input.appendChild(chip);
   input.appendChild(document.createTextNode(' '));
@@ -12698,6 +12700,7 @@ function _attachDemoMedia(file, errEl) {
   if (typeof _moveCaretToEnd === 'function') _moveCaretToEnd(input);
 
   DemoMedia.upload(file, {
+    signal: uploadCtl.signal,
     onProgress: (pct) => {
       nameSpan.textContent = file.name + ' (' + pct + '%)';
     },
@@ -12713,7 +12716,7 @@ function _attachDemoMedia(file, errEl) {
     })
     .catch((err) => {
       chip.remove();
-      _showUploadError(errEl, err.message);
+      if (err.name !== 'AbortError') _showUploadError(errEl, err.message);
     });
 }
 
