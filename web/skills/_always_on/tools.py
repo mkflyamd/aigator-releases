@@ -413,6 +413,8 @@ _IMAGE_MEDIA_TYPES = {
     ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
     ".gif": "image/gif", ".webp": "image/webp",
 }
+_MAX_SEQUENCE_FRAMES = 8
+_FRAME_MIN_INTERVAL_SEC = 5
 
 
 async def _tool_describe_images(task: str, image_paths: list | None = None,
@@ -420,6 +422,14 @@ async def _tool_describe_images(task: str, image_paths: list | None = None,
     from sandbox.paths import PROTECTED_MSG, is_secrets_path
     if any(isinstance(p, str) and is_secrets_path(p) for p in image_paths or []):
         return {"ok": False, "error": PROTECTED_MSG}
+    if task == "analyze_sequence" and len(image_paths or []) > _MAX_SEQUENCE_FRAMES:
+        return {
+            "ok": False,
+            "error": (
+                f"analyze_sequence accepts at most {_MAX_SEQUENCE_FRAMES} frames, got {len(image_paths)}. "
+                "For a video file use task='analyze_video' with video_path."
+            ),
+        }
     if task == "analyze_sequence" and image_paths:
         # Validate image_paths exist on disk BEFORE calling the gateway — the
         # common failure mode used to be masked as "image_paths don't exist"
@@ -554,7 +564,7 @@ async def _analyze_frame_sequence(image_paths: list, fps: float = 0.2) -> dict |
     from llm.gateway import gateway_headers, get_gateway_url, profile_headers
     from llm.registry import get_active_profile, get_active_model
 
-    MAX_FRAMES = 8
+    MAX_FRAMES = _MAX_SEQUENCE_FRAMES
     image_paths = image_paths[:MAX_FRAMES]
 
     content = []
