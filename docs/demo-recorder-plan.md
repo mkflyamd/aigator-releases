@@ -76,9 +76,10 @@ Agent renders playback widget (Phase 5) — inline video, download, edit
 ### Widget → backend flow
 
 ```
-Inline chat widget (srcdoc iframe, allow-same-origin)
-  → fetch(window._GATOR + '/api/recorder/<action>', ...)
-  → result rendered from response JSON
+Inline chat widget (srcdoc iframe, opaque origin)
+  → postMessage {type:'gator:recorder', action, params, rid} to the parent
+  → parent calls /api/recorder/<action> (allow-listed actions only)
+  → postMessage {type:'gator:recorder-result', rid, data} back to the widget
 
 Floating HUD (BrowserWindow, no parent frame)
   → fetch(window._GATOR + '/api/recorder/<action>', ...)
