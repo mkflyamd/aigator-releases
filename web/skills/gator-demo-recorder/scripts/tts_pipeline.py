@@ -11,12 +11,25 @@ Standalone usage:
 
 import subprocess
 import json
+import math
 import sys
 import os
 import argparse
 import shutil
 import requests
 from pathlib import Path
+
+PAUSE_MAX = 10.0
+
+
+def _pause_after(seg):
+    try:
+        v = float(seg.get("pause_after", 0) or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    if not math.isfinite(v) or v <= 0:
+        return 0.0
+    return min(v, PAUSE_MAX)
 
 
 def get_ffmpeg_path():
@@ -132,7 +145,7 @@ def build_synced_audio(narration, out_dir, lemonade_url, model, voice):
         print(f"    -> {tts_path.name} ({size} bytes, {dur:.1f}s)")
         segments.append({
             "path": tts_path, "start_at": start_at,
-            "duration": dur, "pause_after": seg.get("pause_after", 0),
+            "duration": dur, "pause_after": _pause_after(seg),
         })
 
     # Build: silence + TTS + pause_silence + silence + TTS + ...
