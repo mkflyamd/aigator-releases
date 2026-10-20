@@ -18540,11 +18540,6 @@ function gatorWidgetRenderDock() {
         if (dock) dock.parentNode.insertBefore(el, dock.nextSibling);
       }
       el.innerHTML = '';
-      const badge = document.getElementById('dock-widgets-badge');
-      if (badge) {
-        badge.textContent = widgets.length;
-        badge.classList.toggle('hidden', widgets.length === 0);
-      }
       pinned.forEach((w) => {
         const btn = document.createElement('button');
         btn.className = 'dock-item gator-widget-dock-btn';

@@ -517,3 +517,9 @@ test('gatorWidgetUpdateConfirm does nothing outside an editing tab', async () =>
   await gatorWidgetUpdateConfirm('frame1');
   assert.deepStrictEqual(calls.fetch, []);
 });
+
+test('the My Widgets dock icon has no total-count badge', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'web', 'static', 'index.html'), 'utf8');
+  const css = fs.readFileSync(path.join(__dirname, '..', 'web', 'static', 'style.css'), 'utf8');
+  for (const text of [source, html, css]) assert.ok(!text.includes('dock-widgets-badge'));
+});
