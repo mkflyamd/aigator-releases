@@ -351,3 +351,140 @@ test('gatorWidgetEditWithGator keeps an existing draft', () => {
   gatorWidgetEditWithGator('w1', 'X');
   assert.strictEqual(input.textContent, 'half-written message');
 });
+
+const WIDGET_FENCE = '```html:widget\n<div>hi</div>\n```';
+
+function renderSandbox(editingName) {
+  return {
+    window: { location: { origin: 'http://127.0.0.1:8000' } },
+    _tabs: [
+      {
+        id: 'a',
+        title: 'Tab',
+        createdAt: 1,
+        ...(editingName ? { editingWidget: { widget_id: 'w1', name: editingName } } : {}),
+      },
+    ],
+    _activeTabId: 'a',
+  };
+}
+
+const RENDER_FUNCTIONS = [
+  'escapeHtml',
+  'applyInline',
+  'gatorWidgetCspHtml',
+  'gatorActionAttrs',
+  '_activeEditingWidget',
+  'renderMarkdown',
+];
+
+test('GATOR_ACTIONS allows the Update action', () => {
+  assert.ok(actionNames().includes('gatorWidgetUpdateConfirm'));
+});
+
+test('no Update button outside an editing tab', () => {
+  const { renderMarkdown } = load(RENDER_FUNCTIONS, renderSandbox(null));
+  const out = renderMarkdown(WIDGET_FENCE);
+  assert.ok(out.includes('-save-btn'));
+  assert.ok(!out.includes('-update-btn'));
+});
+
+test('editing tab shows Save and Update "<name>"', () => {
+  const { renderMarkdown } = load(RENDER_FUNCTIONS, renderSandbox('Local Use'));
+  const out = renderMarkdown(WIDGET_FENCE);
+  assert.ok(out.includes('-save-btn'));
+  assert.ok(out.includes('-update-btn'));
+  assert.ok(out.includes('data-call="gatorWidgetUpdateConfirm"'));
+  assert.ok(out.includes('Update &quot;Local Use&quot;'));
+});
+
+test('Update button name is escaped and cut to 20 characters', () => {
+  const escaped = load(RENDER_FUNCTIONS, renderSandbox('A<b>')).renderMarkdown(WIDGET_FENCE);
+  assert.ok(!escaped.includes('<b>'));
+  assert.ok(escaped.includes('A&lt;b&gt;'));
+  const long = load(RENDER_FUNCTIONS, renderSandbox('B'.repeat(30))).renderMarkdown(WIDGET_FENCE);
+  assert.ok(long.includes('B'.repeat(19) + '…'));
+  assert.ok(!long.includes('B'.repeat(20)));
+});
+
+test('transient no-save widgets get no Update button', () => {
+  const { renderMarkdown } = load(RENDER_FUNCTIONS, renderSandbox('Local Use'));
+  const out = renderMarkdown('```html:widget\n<div data-no-save>x</div>\n```');
+  assert.ok(!out.includes('-save-btn'));
+  assert.ok(!out.includes('-update-btn'));
+});
+
+function updateSandbox({ editing = true, status = 200, reject = false } = {}) {
+  const btn = { textContent: '', disabled: false };
+  const calls = { fetch: [], dock: 0, manager: 0 };
+  const panel = { classList: { contains: (c) => c === 'is-open' } };
+  const sandbox = {
+    _tabs: [
+      {
+        id: 'a',
+        title: 'Edit: Local Use',
+        createdAt: 1,
+        ...(editing ? { editingWidget: { widget_id: 'w1', name: 'Local Use' } } : {}),
+      },
+    ],
+    _activeTabId: 'a',
+    gatorWidgetHtmlFromId: (id) => (id === 'frame1' ? '<div>v2</div>' : null),
+    gatorWidgetRenderDock() {
+      calls.dock++;
+    },
+    gatorWidgetManagerRender() {
+      calls.manager++;
+    },
+    document: {
+      getElementById: (id) =>
+        id === 'frame1-update-btn' ? btn : id === 'gator-widget-manager' ? panel : null,
+    },
+    fetch: async (url, init) => {
+      calls.fetch.push({ url, init });
+      if (reject) throw new Error('network');
+      return { ok: status >= 200 && status < 300, status };
+    },
+  };
+  return { sandbox, btn, calls };
+}
+
+test('gatorWidgetUpdateConfirm PATCHes only the html of the edited widget', async () => {
+  const { sandbox, btn, calls } = updateSandbox();
+  const { gatorWidgetUpdateConfirm } = load(['_activeEditingWidget', 'gatorWidgetUpdateConfirm'], sandbox);
+  await gatorWidgetUpdateConfirm('frame1');
+  assert.strictEqual(calls.fetch.length, 1);
+  assert.strictEqual(calls.fetch[0].url, '/api/widgets/w1');
+  assert.strictEqual(calls.fetch[0].init.method, 'PATCH');
+  assert.deepStrictEqual(JSON.parse(calls.fetch[0].init.body), { html: '<div>v2</div>' });
+  assert.strictEqual(btn.textContent, '✓ Updated');
+  assert.strictEqual(btn.disabled, true);
+  assert.strictEqual(calls.dock, 1);
+  assert.strictEqual(calls.manager, 1);
+});
+
+test('gatorWidgetUpdateConfirm reports a deleted widget', async () => {
+  const { sandbox, btn, calls } = updateSandbox({ status: 404 });
+  const { gatorWidgetUpdateConfirm } = load(['_activeEditingWidget', 'gatorWidgetUpdateConfirm'], sandbox);
+  await gatorWidgetUpdateConfirm('frame1');
+  assert.strictEqual(btn.textContent, 'Widget was deleted — use Save');
+  assert.strictEqual(btn.disabled, true);
+  assert.strictEqual(calls.dock, 0);
+});
+
+test('gatorWidgetUpdateConfirm lets the user retry after a failure', async () => {
+  for (const options of [{ reject: true }, { status: 500 }]) {
+    const { sandbox, btn, calls } = updateSandbox(options);
+    const { gatorWidgetUpdateConfirm } = load(['_activeEditingWidget', 'gatorWidgetUpdateConfirm'], sandbox);
+    await gatorWidgetUpdateConfirm('frame1');
+    assert.strictEqual(btn.textContent, 'Update failed — retry');
+    assert.strictEqual(btn.disabled, false);
+    assert.strictEqual(calls.dock, 0);
+  }
+});
+
+test('gatorWidgetUpdateConfirm does nothing outside an editing tab', async () => {
+  const { sandbox, calls } = updateSandbox({ editing: false });
+  const { gatorWidgetUpdateConfirm } = load(['_activeEditingWidget', 'gatorWidgetUpdateConfirm'], sandbox);
+  await gatorWidgetUpdateConfirm('frame1');
+  assert.deepStrictEqual(calls.fetch, []);
+});

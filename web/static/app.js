@@ -51,6 +51,7 @@ const GATOR_ACTIONS = new Set([
   'gatorWidgetSavePrompt',
   'gatorWidgetSaveConfirm',
   'gatorWidgetSaveCancel',
+  'gatorWidgetUpdateConfirm',
   'gatorWidgetOpenFromDb',
   'gatorWidgetEditWithGator',
   'gatorWidgetCaptureToggle',
@@ -11751,6 +11752,12 @@ function renderMarkdown(raw) {
         /data-no-save/i.test(trimmed) ||
         /Edit Narration Script/i.test(trimmed) ||
         /Demo Ready/i.test(trimmed);
+      const _editTarget = _noSave ? null : _activeEditingWidget();
+      const _updateLabel = _editTarget
+        ? _editTarget.name.length > 20
+          ? _editTarget.name.slice(0, 19) + '…'
+          : _editTarget.name
+        : '';
       blocks.push(
         `<div class="gator-widget-wrap" id="${widgetId}-wrap">` +
           `<div class="gator-widget-toolbar">` +
@@ -11763,6 +11770,9 @@ function renderMarkdown(raw) {
           (_noSave
             ? ''
             : `<button class="gator-widget-btn" id="${widgetId}-save-btn"${gatorActionAttrs('gatorWidgetSavePrompt', [widgetId])} title="Save widget">&#128190; Save</button>`) +
+          (_editTarget
+            ? `<button class="gator-widget-btn" id="${widgetId}-update-btn"${gatorActionAttrs('gatorWidgetUpdateConfirm', [widgetId])} title="Replace the saved widget with this version">&#8635; Update &quot;${escapeHtml(_updateLabel)}&quot;</button>`
+            : '') +
           `</div>` +
           `<iframe id="${widgetId}" class="gator-widget-frame" sandbox="allow-scripts allow-forms allow-modals allow-pointer-lock allow-same-origin"` +
           ` srcdoc="${srcdoc}"` +
@@ -18294,6 +18304,33 @@ async function gatorWidgetSaveConfirm(widgetId) {
     }
   } catch (e) {
     gatorWidgetSaveCancel(widgetId);
+  }
+}
+
+async function gatorWidgetUpdateConfirm(frameId) {
+  const target = _activeEditingWidget();
+  const html = gatorWidgetHtmlFromId(frameId);
+  const btn = document.getElementById(frameId + '-update-btn');
+  if (!target || !html || !btn) return;
+  btn.disabled = true;
+  try {
+    const res = await fetch('/api/widgets/' + encodeURIComponent(target.widget_id), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ html }),
+    });
+    if (res.status === 404) {
+      btn.textContent = 'Widget was deleted — use Save';
+      return;
+    }
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    btn.textContent = '✓ Updated';
+    gatorWidgetRenderDock();
+    const panel = document.getElementById('gator-widget-manager');
+    if (panel && panel.classList.contains('is-open')) gatorWidgetManagerRender(panel);
+  } catch (_) {
+    btn.textContent = 'Update failed — retry';
+    btn.disabled = false;
   }
 }
 
