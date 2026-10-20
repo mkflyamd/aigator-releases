@@ -5438,66 +5438,6 @@ ipcMain.handle('widget:open-hud', (_e, html, opts) => {
   const hudCSS = `<style>
     *{box-sizing:border-box;margin:0;padding:0}
 
-    /* ── Titlebar ── */
-    #_hud_bar{
-      position:fixed;top:0;left:0;right:0;
-      height:32px;
-      background:#111827;
-      border-bottom:1px solid #1e3a52;
-      -webkit-app-region:drag;
-      display:flex;align-items:center;
-      padding:0 8px;
-      z-index:9999;
-      user-select:none;
-    }
-
-    /* Gator favicon */
-    #_hud_icon{
-      width:16px;height:16px;
-      flex-shrink:0;
-      margin-right:7px;
-      object-fit:contain;
-      -webkit-app-region:drag;
-      border-radius:3px;
-    }
-
-    /* Title label */
-    #_hud_label{
-      flex:1;
-      font-family:system-ui,-apple-system,sans-serif;
-      font-size:11px;font-weight:600;
-      color:#94a3b8;
-      letter-spacing:.02em;
-      -webkit-app-region:drag;
-      white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-    }
-
-    /* Control group — always legible, brightens when the bar is hovered */
-    #_hud_controls{
-      display:flex;align-items:center;gap:2px;
-      -webkit-app-region:no-drag;
-      opacity:.85;
-      transition:opacity .18s;
-    }
-    #_hud_bar:hover #_hud_controls{ opacity:1; }
-
-    /* Individual control button */
-    ._hud_cb{
-      -webkit-app-region:no-drag;
-      appearance:none;-webkit-appearance:none;
-      display:flex;align-items:center;justify-content:center;
-      width:24px;height:24px;
-      background:none;border:none;outline:none;
-      border-radius:5px;
-      color:#6b8db5;
-      cursor:pointer;
-      flex-shrink:0;
-      transition:background .12s,color .12s;
-    }
-    ._hud_cb svg{ width:12px;height:12px;pointer-events:none; }
-    ._hud_cb:hover{ background:rgba(255,255,255,.09);color:#e2e8f0; }
-    #_hud_close:hover{ background:rgba(239,68,68,.85);color:#fff; }
-
     /* ── Widget content area ── */
     html{
       border:1px solid rgba(255,255,255,.10);
@@ -5535,25 +5475,90 @@ ipcMain.handle('widget:open-hud', (_e, html, opts) => {
     body._hud_minimized{
       overflow:hidden;
     }
-    body._hud_minimized > *:not(#_hud_bar){
+    body._hud_minimized > *:not(#_hud_host){
       display:none!important;
     }
     body._hud_minimized{
       padding:0!important;
     }
-    body._hud_minimized #_hud_bar{
+  </style>`;
+
+  // The chrome lives in a shadow root so a widget's own stylesheet (button
+  // padding, svg rules, a fixed header, a universal reset) cannot reach it.
+  // The host's inline !important declarations beat any widget rule aimed at
+  // the host element itself.
+  const hudChromeCSS = `
+    *{box-sizing:border-box;margin:0;padding:0}
+    #_hud_bar{
+      position:absolute;top:0;left:0;right:0;
+      height:32px;
+      background:#111827;
+      border-bottom:1px solid #1e3a52;
+      -webkit-app-region:drag;
+      display:flex;align-items:center;
+      padding:0 8px;
+      user-select:none;
+    }
+    #_hud_icon{
+      width:16px;height:16px;
+      flex-shrink:0;
+      margin-right:7px;
+      object-fit:contain;
+      -webkit-app-region:drag;
+      border-radius:3px;
+    }
+    #_hud_label{
+      flex:1;
+      font-family:system-ui,-apple-system,sans-serif;
+      font-size:11px;font-weight:600;
+      color:#94a3b8;
+      letter-spacing:.02em;
+      -webkit-app-region:drag;
+      white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+    }
+    /* Control group — always legible, brightens when the bar is hovered */
+    #_hud_controls{
+      display:flex;align-items:center;gap:2px;
+      -webkit-app-region:no-drag;
+      opacity:.85;
+      transition:opacity .18s;
+    }
+    #_hud_bar:hover #_hud_controls{ opacity:1; }
+    ._hud_cb{
+      -webkit-app-region:no-drag;
+      appearance:none;-webkit-appearance:none;
+      display:flex;align-items:center;justify-content:center;
+      width:24px;height:24px;
+      background:none;border:none;outline:none;
+      border-radius:5px;
+      color:#6b8db5;
+      cursor:pointer;
+      flex-shrink:0;
+      transition:background .12s,color .12s;
+    }
+    ._hud_cb svg{ width:12px;height:12px;pointer-events:none;fill:none;stroke:currentColor; }
+    ._hud_cb:hover{ background:rgba(255,255,255,.09);color:#e2e8f0; }
+    #_hud_close:hover{ background:rgba(239,68,68,.85);color:#fff; }
+    :host-context(body._hud_minimized) #_hud_bar{
       border-bottom:none;
       border-radius:18px;
       cursor:pointer;
     }
-    body._hud_minimized #_hud_label::after{
+    :host-context(body._hud_minimized) #_hud_label::after{
       content:' — click to restore';
       color:#4a6a8a;
       font-weight:400;
     }
-  </style>`;
+  `;
 
+  const _hudHostStyle = [
+    'all:initial', 'display:block', 'position:fixed', 'top:0', 'left:0', 'right:0',
+    'height:32px', 'z-index:2147483647', 'opacity:1', 'visibility:visible',
+    'transform:none', 'filter:none', 'pointer-events:auto',
+  ].map((d) => d + '!important').join(';');
   const titlebar =
+    `<div id="_hud_host" style="${_hudHostStyle}"><template shadowrootmode="open">` +
+    `<style>${hudChromeCSS}</style>` +
     `<div id="_hud_bar">` +
     `<img id="_hud_icon" src="${_hudIconUrl}" alt="Gator" draggable="false">` +
     `<span id="_hud_label">Gator Widget</span>` +
@@ -5575,7 +5580,8 @@ ipcMain.handle('widget:open-hud', (_e, html, opts) => {
     `</svg>` +
     `</button>` +
     `</div>` +
-    `</div>`;
+    `</div>` +
+    `</template></div>`;
 
   const gatorScript = `<script>window._GATOR='${GATOR_URL}';<\/script>`;
   const hudStateScript = `<script>
@@ -5638,6 +5644,7 @@ ipcMain.handle('widget:open-hud', (_e, html, opts) => {
     .replace('<body>', '<body>' + titlebar);
   if (!html.includes('<head>')) shell = gatorScript + hudCSS + shell;
   if (!html.includes('<body>')) shell = shell + titlebar;
+  if (!html.includes('</body>')) shell = shell + hudStateScript + resizeScript;
 
   // Write to a temp file so the page has file:// origin — data: origin is
   // opaque/null and Electron blocks fetch() to localhost from null origin.
