@@ -82,3 +82,68 @@ def test_inspect_frames_returns_files_and_ledger(project):
         assert (folder / f["rel"]).stat().st_size > 0
     ledger = (folder / "work/logs/media_ops.jsonl").read_text().splitlines()
     assert json.loads(ledger[-1])["operation"] == "inspect_frames"
+
+
+def test_replace_interval_proves_source_and_keeps_duration(project):
+    pid, folder = project
+    make_video(folder / "source" / "fix.mp4", 10, color="red")
+    result = dm.replace_interval(pid, 20, 25, "source/fix.mp4", insert_start_sec=2)
+    assert result["output"]["duration_sec"] == pytest.approx(62.2, abs=0.4)
+    assert result["replaced_interval_sec"] == [20, 25]
+    assert result["inserted_from"] == {"rel": "source/fix.mp4", "interval_sec": [2, 7]}
+    assert result["timeline_shifted"] is False
+    assert dm.read_media(pid)["current"] == result["output"]["rel"]
+    entry = json.loads((folder / "work/logs/media_ops.jsonl").read_text().splitlines()[-1])
+    assert entry["inserted_from"]["source_duration_sec"] == pytest.approx(10, abs=0.2)
+
+
+def test_replace_rejects_out_of_range_interval_and_short_insert(project):
+    pid, folder = project
+    make_video(folder / "source" / "fix.mp4", 3, color="red")
+    with pytest.raises(dm.MediaError) as exc:
+        dm.replace_interval(pid, 390, 405, "source/fix.mp4")
+    assert exc.value.code == "out_of_range"
+    with pytest.raises(dm.MediaError) as exc:
+        dm.replace_interval(pid, 20, 25, "source/fix.mp4")
+    assert exc.value.code == "out_of_range" and exc.value.detail["needed_sec"] == 5
+
+
+def test_append_clip_extends_duration(project):
+    pid, folder = project
+    make_video(folder / "source" / "outro.mp4", 4, color="green")
+    result = dm.append_clip(pid, "source/outro.mp4")
+    assert result["output"]["duration_sec"] == pytest.approx(66.2, abs=0.4)
+    assert result["appended_at_sec"] == pytest.approx(62.2, abs=0.2)
+
+
+def test_base_with_audio_is_refused(project):
+    pid, folder = project
+    make_video(folder / "source" / "with_audio.mp4", 5, audio=True)
+    make_video(folder / "source" / "x.mp4", 5)
+    with pytest.raises(dm.MediaError) as exc:
+        dm.append_clip(pid, "source/x.mp4", base_rel="source/with_audio.mp4")
+    assert exc.value.code == "base_has_audio"
+
+
+def _dominant(folder, rel):
+    from PIL import Image
+    r, g, b = Image.open(folder / rel).convert("RGB").getpixel((80, 45))
+    return "red" if r > 150 and b < 100 else "blue" if b > 150 and r < 100 else f"other{(r, g, b)}"
+
+
+def test_replaced_interval_pixels_come_from_the_insert(project):
+    pid, folder = project
+    make_video(folder / "source" / "fix.mp4", 10, color="red")
+    out = dm.replace_interval(pid, 20, 25, "source/fix.mp4")["output"]["rel"]
+    frames = dm.inspect_frames(pid, out, [10, 22, 40])["frames"]
+    assert [_dominant(folder, f["rel"]) for f in frames] == ["blue", "red", "blue"]
+
+
+def test_edit_chain_is_discarded_when_the_raw_recording_changes(project):
+    pid, folder = project
+    make_video(folder / "source" / "fix.mp4", 10, color="red")
+    edited = dm.replace_interval(pid, 20, 25, "source/fix.mp4")["output"]["rel"]
+    assert dm.current_rel(pid, folder) == edited
+    make_video(folder / "work" / "timeline.mp4", 30)
+    dp.update_project(pid, raw="work/timeline.mp4")
+    assert dm.current_rel(pid, folder) == "work/timeline.mp4"

@@ -381,3 +381,134 @@ def inspect_frames(project_id: str | None, source_rel: str, times_sec: list) -> 
         })
         return {"ok": True, "operation": "inspect_frames", "source": source_rel,
                 "duration_sec": round(info.duration_sec, 3), "frames": frames, "op_id": op["op_id"]}
+
+# ── splice (replace interval, append clip) ───────────────────────────────────
+
+def _assemble(inputs: list[Path], pieces: list[tuple[int, float, float]], info: MediaInfo, out: Path) -> None:
+    chains, labels = [], []
+    for n, (idx, a, b) in enumerate(pieces):
+        chains.append(
+            f"[{idx}:v]trim=start={a:.6f}:end={b:.6f},setpts=PTS-STARTPTS,"
+            f"scale={info.width}:{info.height}:force_original_aspect_ratio=decrease,"
+            f"pad={info.width}:{info.height}:(ow-iw)/2:(oh-ih)/2,fps={info.fps_expr},setsar=1,format=yuv420p[p{n}]"
+        )
+        labels.append(f"[p{n}]")
+    chains.append("".join(labels) + f"concat=n={len(pieces)}:v=1:a=0[v]")
+    args: list[str] = []
+    for path in inputs:
+        args += ["-i", str(path)]
+    args += ["-filter_complex", ";".join(chains), "-map", "[v]", "-c:v", "libx264", "-preset", "veryfast",
+             "-crf", "20", "-pix_fmt", "yuv420p", "-an", "-movflags", "+faststart", str(out)]
+    _ffmpeg(args)
+
+
+def _edit_base(pid: str, folder: Path, base_rel: str | None) -> tuple[str, Path, MediaInfo]:
+    rel = base_rel or current_rel(pid, folder)
+    if not rel:
+        raise MediaError("no_video", "The project has no recording to edit yet.")
+    path = project_file(pid, rel)
+    info = probe(path)
+    if not info.has_video:
+        raise MediaError("no_video", f"{rel} has no video stream.", rel=rel)
+    if info.has_audio:
+        raise MediaError(
+            "base_has_audio",
+            f"{rel} already has an audio track. Edit the silent recording, then run demo_merge_narration again.",
+            rel=rel,
+        )
+    return rel, path, info
+
+
+def replace_interval(project_id: str | None, start_sec, end_sec, insert_rel: str,
+                     insert_start_sec=0.0, base_rel: str | None = None) -> dict:
+    with _OP_LOCK:
+        pid, folder = project_for(project_id)
+        base_rel, base, binfo = _edit_base(pid, folder, base_rel)
+        ins = project_file(pid, insert_rel)
+        iinfo = probe(ins)
+        if not iinfo.has_video:
+            raise MediaError("no_video", f"{insert_rel} has no video stream.", rel=insert_rel)
+        s, e = check_interval(start_sec, end_sec, binfo.duration_sec, rel=base_rel)
+        length = e - s
+        i_start = check_time(insert_start_sec, iinfo.duration_sec, field="insert_start_sec", rel=insert_rel)
+        if i_start + length > iinfo.duration_sec + EPS:
+            raise MediaError(
+                "out_of_range",
+                f"{insert_rel} is {iinfo.duration_sec:.1f}s long; {length:.1f}s from {i_start:g}s needs "
+                f"{i_start + length:.1f}s.",
+                field="insert_start_sec", requested_sec=i_start, duration_sec=round(iinfo.duration_sec, 3),
+                needed_sec=round(i_start + length, 3), file=insert_rel, options=list(_OPTIONS),
+            )
+        i_end = min(i_start + length, iinfo.duration_sec)
+        pieces: list[tuple[int, float, float]] = []
+        if s > EPS:
+            pieces.append((0, 0.0, s))
+        pieces.append((1, i_start, i_end))
+        if e < binfo.duration_sec - EPS:
+            pieces.append((0, e, binfo.duration_sec))
+        expected = sum(b - a for _, a, b in pieces)
+        out = _next_path(folder, "edits", "edit", ".mp4")
+        partial = _partial(out)
+        try:
+            _assemble([base, ins], pieces, binfo, partial)
+            oinfo = _finish(partial, out, expected)
+        finally:
+            partial.unlink(missing_ok=True)
+        block = _out_block(folder, out, oinfo)
+        op = record_op(pid, folder, {
+            "operation": "replace_interval",
+            "base": {"rel": base_rel, "duration_sec": round(binfo.duration_sec, 3)},
+            "replaced_interval_sec": [round(s, 3), round(e, 3)],
+            "inserted_from": {"rel": insert_rel, "interval_sec": [round(i_start, 3), round(i_end, 3)],
+                              "source_duration_sec": round(iinfo.duration_sec, 3)},
+            "inserted_audio_dropped": iinfo.has_audio,
+            "output": block,
+        })
+        set_current(pid, folder, block["rel"])
+        return {
+            "ok": True, "operation": "replace_interval", "output": block,
+            "base": {"rel": base_rel, "duration_sec": round(binfo.duration_sec, 3)},
+            "replaced_interval_sec": [round(s, 3), round(e, 3)],
+            "inserted_from": {"rel": insert_rel, "interval_sec": [round(i_start, 3), round(i_end, 3)]},
+            "inserted_audio_dropped": iinfo.has_audio,
+            "timeline_shifted": False, "op_id": op["op_id"],
+        }
+
+
+def append_clip(project_id: str | None, clip_rel: str, clip_start_sec=0.0, clip_end_sec=None,
+                base_rel: str | None = None) -> dict:
+    with _OP_LOCK:
+        pid, folder = project_for(project_id)
+        base_rel, base, binfo = _edit_base(pid, folder, base_rel)
+        clip = project_file(pid, clip_rel)
+        cinfo = probe(clip)
+        if not cinfo.has_video:
+            raise MediaError("no_video", f"{clip_rel} has no video stream.", rel=clip_rel)
+        c_start, c_end = check_interval(
+            clip_start_sec, cinfo.duration_sec if clip_end_sec is None else clip_end_sec,
+            cinfo.duration_sec, rel=clip_rel,
+        )
+        pieces = [(0, 0.0, binfo.duration_sec), (1, c_start, c_end)]
+        expected = binfo.duration_sec + (c_end - c_start)
+        out = _next_path(folder, "edits", "edit", ".mp4")
+        partial = _partial(out)
+        try:
+            _assemble([base, clip], pieces, binfo, partial)
+            oinfo = _finish(partial, out, expected)
+        finally:
+            partial.unlink(missing_ok=True)
+        block = _out_block(folder, out, oinfo)
+        appended = {"rel": clip_rel, "interval_sec": [round(c_start, 3), round(c_end, 3)]}
+        op = record_op(pid, folder, {
+            "operation": "append_clip",
+            "base": {"rel": base_rel, "duration_sec": round(binfo.duration_sec, 3)},
+            "appended_from": appended, "appended_at_sec": round(binfo.duration_sec, 3),
+            "inserted_audio_dropped": cinfo.has_audio, "output": block,
+        })
+        set_current(pid, folder, block["rel"])
+        return {
+            "ok": True, "operation": "append_clip", "output": block,
+            "base": {"rel": base_rel, "duration_sec": round(binfo.duration_sec, 3)},
+            "appended_from": appended, "appended_at_sec": round(binfo.duration_sec, 3),
+            "inserted_audio_dropped": cinfo.has_audio, "timeline_shifted": False, "op_id": op["op_id"],
+        }
