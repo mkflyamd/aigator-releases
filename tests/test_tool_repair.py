@@ -231,3 +231,22 @@ def test_schema_violation_counts_as_a_rejected_call():
     chunks = _run_single(provider, execute)
     assert provider.calls == 2
     assert _stalled(chunks)[0]["failed_calls"] == [{"tool": "run_python", "fields": ["code"]}]
+
+
+def test_provider_failure_during_repair_stalls_with_the_failed_tool():
+    execute, _ = _fake_tool()
+    provider = _Provider([_tool_turn(_tc(inputs={})), ValueError("provider exploded")])
+    chunks = _run_single(provider, execute)
+    stalled = _stalled(chunks)
+    assert len(stalled) == 1
+    assert stalled[0]["failed_calls"] == [{"tool": "run_python", "fields": ["code"]}]
+    assert chunks[-1] == "data: [DONE]\n\n"
+
+
+def test_rejected_call_tool_result_names_missing_fields_for_the_watchdog_banner():
+    # routes/chat.py's idle watchdog quotes the last error tool_result summary
+    execute, _ = _fake_tool()
+    provider = _Provider([_tool_turn(_tc(inputs={})), _tool_turn(_tc(inputs={}))])
+    results = [e["tool_result"] for e in _events(_run_single(provider, execute)) if "tool_result" in e]
+    assert results[0]["status"] == "error"
+    assert "code" in results[0]["summary"]

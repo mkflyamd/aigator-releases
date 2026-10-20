@@ -17,7 +17,7 @@ from tool_pipeline import (
     sanitize_tool_failure,
     select_tools_with_budget,
 )
-from tool_repair import rejection_summaries, stalled_chunk
+from tool_repair import rejection_summaries, rejection_summary_text, stalled_chunk
 
 MAX_ITERATIONS = 25
 _COMPACT_THRESHOLD = 0.85      # compact when input_tokens exceed 85% of context window (post-call)
@@ -195,6 +195,9 @@ def _retry_delay(attempt: int, exc: Exception | None = None) -> float:
 
 def _generic_tool_summary(tool_name: str, result: object) -> str:
     """Fallback one-line summary when _tool_toast returns None."""
+    rejected = rejection_summary_text(result)
+    if rejected:
+        return rejected
     if isinstance(result, dict):
         if result.get("error"):
             return f"Error: {str(result['error'])[:80]}"
@@ -1025,6 +1028,8 @@ async def _single_agent_loop(
                             continue
                         else:
                             yield f"data: {json.dumps({'text': 'LLM stream stalled — failover declined.'})}\n\n"
+                            if _bad_tool_streak:
+                                yield stalled_chunk(_last_rejections)
                             await _log_turn_end_safe(
                                 _turn_id, context_id, task_id, _, "single", model,
                                 type(provider).__name__, "llm_error", None,
@@ -1044,6 +1049,8 @@ async def _single_agent_loop(
                     yield f"data: {json.dumps({'text': f'\n\n*(LLM error after partial output — {exc})*'})}\n\n"
                 else:
                     yield f"data: {json.dumps({'text': f'LLM error: {exc}'})}\n\n"
+                if _bad_tool_streak:
+                    yield stalled_chunk(_last_rejections)
                 await _log_turn_end_safe(
                     _turn_id, context_id, task_id, _, "single", model,
                     type(provider).__name__, "llm_error", None,
@@ -1058,6 +1065,8 @@ async def _single_agent_loop(
 
         if turn is None:
             yield f"data: {json.dumps({'text': 'No response from model.'})}\n\n"
+            if _bad_tool_streak:
+                yield stalled_chunk(_last_rejections)
             await _log_turn_end_safe(
                 _turn_id, context_id, task_id, _, "single", model,
                 type(provider).__name__, "llm_error", None,
