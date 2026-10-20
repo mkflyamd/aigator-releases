@@ -44,7 +44,7 @@ Layout: `source/` (recorded segments and `recording.mp4`), `work/` (`narration.j
 
 - **Shell:** always `shell='powershell'` or `shell='cmd'`. Never `shell='bash'`.
 - **ffmpeg:** never search with `Get-ChildItem -Recurse` — it times out. Call `GET /api/recorder/status` — it returns `ffmpeg_path` AND `ffprobe_path` with the exact binary locations. Use those fields directly. Never derive ffprobe from ffmpeg via string replace — the paths differ. If `ffmpeg` is false, tell user: `winget install Gyan.FFmpeg` (Windows), `brew install ffmpeg` (macOS).
-- **File path:** the widget sends `"Recording complete. File: <path> ..."` after Stop. Extract the path from that message directly — **never ask the user for the path**. It is always the value between `"File: "` and `" ("`.
+- **File path:** the widget sends `"Recording complete. File: <path> ..."` after Stop. Extract the path from that message directly — **never ask the user for the path**. It is the value between `"File: "` and `" ("` — or, when no size is shown, `". Please"`.
 - **Trigger:** any message matching `"Recording complete. File:"` means the user just stopped recording. Immediately proceed to Phase 2 using the path from the message.
 - **Recording:** the widget calls `/api/recorder/start` and `/api/recorder/stop` directly — **do not invoke ffmpeg manually**. Do not call `run_shell` for record/stop.
 - **Output size:** never generate more than ~300 lines of output in one turn. Split long work across turns.
@@ -180,6 +180,7 @@ The widget lives in the chat iframe. If the user switches to a different Gator t
 // ── Core: all state comes from backend, never from JS variables ──────────────
 var _BASE = window._GATOR || 'http://localhost:8003';
 var _crop = null, _busy = false, _lastStatus = 'idle', _stopPath = '';
+var _actionError = '';
 
 // ── Hide-from-recording toggle ────────────────────────────────────────────────
 // When checked (default), the floating HUD window is excluded from screen
@@ -216,6 +217,16 @@ function apiFetch(action, params, cb) {
     .catch(function(e){cb(e,null);});
 }
 
+function actionFailed(err, data, label) {
+  if (!err && data && data.ok) return false;
+  _actionError = label + ': ' + ((data && data.error) || (err && err.message) || 'request failed');
+  if (data && data.session_dir) _actionError += ' (' + data.session_dir + ')';
+  var st = document.getElementById('status');
+  st.className = 'status error';
+  st.textContent = _actionError;
+  return true;
+}
+
 function fmt(s) {
   s=Math.floor(s||0);
   return (Math.floor(s/60)<10?'0':'')+Math.floor(s/60)+':'+(s%60<10?'0':'')+(s%60);
@@ -250,6 +261,7 @@ function render(s) {
     t.className='timer';
     br.disabled=false; bp.disabled=true; bp.style.display=''; bres.style.display='none'; bs.disabled=true;
   }
+  if (_actionError) { st.className = 'status error'; st.textContent = _actionError; }
 }
 
 // ── Poll backend every second — survives tab switches and iframe reloads ──────
@@ -364,31 +376,28 @@ function doCrop() {
 
 // ── Actions ───────────────────────────────────────────────────────────────────
 function doRecord() {
-  _busy = true; _stopPath = '';
+  _busy = true; _stopPath = ''; _actionError = '';
   var p = {screen_index: parseInt(document.getElementById('sel-screen').value)||0, force:true};
   if (_crop) { p.crop_x=_crop.x; p.crop_y=_crop.y; p.crop_w=_crop.w; p.crop_h=_crop.h; }
   document.getElementById('status').textContent = 'Starting...';
   apiFetch('start', p, function(err, data) {
     _busy = false;
-    if (err || !data || !data.ok) {
-      document.getElementById('status').className = 'status error';
-      document.getElementById('status').textContent = 'Error: ' + ((data&&data.error)||String(err));
-    }
+    actionFailed(err, data, 'Error');
   });
 }
 
 function doPause() {
-  _busy = true;
-  apiFetch('pause', null, function(err, data) { _busy = false; });
+  _busy = true; _actionError = '';
+  apiFetch('pause', null, function(err, data) { _busy = false; actionFailed(err, data, 'Pause error'); });
 }
 
 function doResume() {
-  _busy = true;
-  apiFetch('resume', null, function(err, data) { _busy = false; });
+  _busy = true; _actionError = '';
+  apiFetch('resume', null, function(err, data) { _busy = false; actionFailed(err, data, 'Resume error'); });
 }
 
 function doStop() {
-  _busy = true;
+  _busy = true; _actionError = '';
   document.getElementById('status').textContent = 'Stopping...';
   document.getElementById('btn-stop').disabled = true;
   apiFetch('stop', null, function(err, data) {
@@ -397,7 +406,7 @@ function doStop() {
       _stopPath = data.path || '';
       var mb = data.size_bytes ? (data.size_bytes/1048576).toFixed(1)+'MB' : '';
       document.getElementById('status').className = 'status done';
-      document.getElementById('status').textContent = '✓ Saved ' + mb;
+      document.getElementById('status').textContent = '✓ Saved' + (mb ? ' ' + mb : '');
       document.getElementById('filepath').textContent = _stopPath;
       // Reset crop after each recording so the next Record starts fresh.
       // User can re-select a region if needed — no stale state carried over.
@@ -406,7 +415,7 @@ function doStop() {
       // Inline widget: parent.postMessage triggers the bridge in app.js.
       // HUD widget: parent === window so postMessage goes nowhere — instead
       // POST to /api/recorder/notify which the Gator frontend polls every 2s.
-      var msg = 'Recording complete. File: '+_stopPath+' ('+mb+'). Please analyze it and draft a narration script.';
+      var msg = 'Recording complete. File: '+_stopPath+(mb ? ' ('+mb+')' : '')+'. Please analyze it and draft a narration script.';
       try { parent.postMessage({type:'gator:send-message', pin_skill:'gator-demo-recorder', project_id:(data&&data.project_id)||'', text:msg},'*'); } catch(e){}
       // HUD fallback — always fire, Gator deduplicates if both arrive
       try {
@@ -417,8 +426,7 @@ function doStop() {
         });
       } catch(e){}
     } else {
-      document.getElementById('status').className = 'status error';
-      document.getElementById('status').textContent = 'Stop error: ' + ((data&&data.error)||'');
+      actionFailed(err, data, 'Stop error');
     }
   });
 }
