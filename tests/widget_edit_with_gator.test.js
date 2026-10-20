@@ -523,3 +523,32 @@ test('the My Widgets dock icon has no total-count badge', () => {
   const css = fs.readFileSync(path.join(__dirname, '..', 'web', 'static', 'style.css'), 'utf8');
   for (const text of [source, html, css]) assert.ok(!text.includes('dock-widgets-badge'));
 });
+
+test('_buildWidgetEditSuffix forbids claiming a change without the widget block', () => {
+  const { _buildWidgetEditSuffix } = load(['_buildWidgetEditSuffix']);
+  const suffix = _buildWidgetEditSuffix('Local Use', '<div>hi</div>');
+  assert.ok(suffix.includes('MUST contain the complete'));
+  assert.ok(/never say .*(changed|fixed|applied)/i.test(suffix));
+  assert.ok(/cannot|can't/i.test(suffix));
+});
+
+test('_widgetEditReplyNeedsNotice flags editing-tab replies without a widget block', () => {
+  const { _widgetEditReplyNeedsNotice } = load(['_widgetEditReplyNeedsNotice']);
+  const editing = { id: 'a', editingWidget: { widget_id: 'w1', name: 'X' } };
+  assert.strictEqual(_widgetEditReplyNeedsNotice(editing, 'I fixed the layout.'), true);
+  assert.strictEqual(_widgetEditReplyNeedsNotice(editing, ''), true);
+  assert.strictEqual(_widgetEditReplyNeedsNotice(editing, 'Here:\n```html:widget\n<p>x</p>\n```'), false);
+  assert.strictEqual(_widgetEditReplyNeedsNotice(editing, '```html:live\n<p>x</p>\n```'), false);
+  assert.strictEqual(_widgetEditReplyNeedsNotice(editing, '```html\n<p>x</p>\n```'), true);
+});
+
+test('_widgetEditReplyNeedsNotice stays quiet outside editing tabs', () => {
+  const { _widgetEditReplyNeedsNotice } = load(['_widgetEditReplyNeedsNotice']);
+  assert.strictEqual(_widgetEditReplyNeedsNotice({ id: 'a' }, 'no widget here'), false);
+  assert.strictEqual(_widgetEditReplyNeedsNotice(undefined, 'no widget here'), false);
+});
+
+test('the stream-finalize path shows the notice through the helper', () => {
+  assert.ok(source.includes('_widgetEditReplyNeedsNotice(_tabs.find((t) => t.id === _tabKey), full)'));
+  assert.ok(source.includes('widget-edit-notice'));
+});

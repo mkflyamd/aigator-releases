@@ -22424,6 +22424,13 @@ body.tab-fullscreen {
   border-color: var(--accent, #4ade80);
   color: var(--accent, #4ade80);
 }
+.widget-edit-notice {
+  margin-top: 0.4rem;
+  padding: 0.3rem 0.6rem;
+  border-left: 3px solid var(--warn, #f59e0b);
+  font-size: 0.78rem;
+  color: var(--text-dim, #6b8db5);
+}
 .gator-widget-btn-secondary {
   border-color: transparent;
   text-decoration: underline;
