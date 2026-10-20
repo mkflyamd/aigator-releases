@@ -72,6 +72,16 @@ assert.deepStrictEqual(plain(fns._pinForSend(existing, 'hello')), existing);
 assert.strictEqual(fns._pinForSend(existing, '/jira list'), null);
 assert.strictEqual(fns._pinForSend(existing, '  /jira list'), null);
 
+// _pinLabel: built-in skills are not in SKILL_MAP, so the recorder needs its own label
+const labelFns = vm.runInNewContext(
+  `const SKILL_MAP = { jira: { label: 'Jira' } };\n${constLine[0]}\n${source.match(/const _PIN_LABELS = \{[^}]*\};/)[0]}\n${extract('_pinLabel')}\n({ _pinLabel });`,
+  {},
+);
+assert.strictEqual(labelFns._pinLabel(DR), 'Demo Recorder');
+assert.strictEqual(labelFns._pinLabel('jira'), 'Jira');
+assert.strictEqual(labelFns._pinLabel('unknown-skill'), 'unknown-skill');
+assert(/_pinLabel\(pin\.skill\)/.test(extract('_renderPinChip')), 'the chip uses _pinLabel');
+
 // source wiring
 assert(/localStorage\.removeItem\('tab-pin-' \+ tabId\)/.test(source), 'tab close must drop the pin');
 assert(/_tabPins\.delete\(tabId\)/.test(source), 'tab close must clear the pin map');

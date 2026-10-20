@@ -4164,6 +4164,11 @@ function _loadTabChips(tabId) {
 }
 const _DEMO_RECORDER_SKILL = 'gator-demo-recorder';
 const _tabPins = new Map(); // tabId -> { skill, projectId } | null
+const _PIN_LABELS = { [_DEMO_RECORDER_SKILL]: 'Demo Recorder' };
+
+function _pinLabel(skill) {
+  return _PIN_LABELS[skill] || SKILL_MAP[skill]?.label || skill;
+}
 
 function _pinFromMessage(d, text) {
   const cleanId = (v) => (typeof v === 'string' && /^[A-Za-z0-9_.-]{1,80}$/.test(v) ? v : null);
@@ -4226,7 +4231,7 @@ function _renderPinChip(tabId) {
   chipRow.querySelectorAll('.skill-pin-chip').forEach((el) => el.remove());
   const pin = _getTabPin(tabId);
   if (!pin) return;
-  const label = SKILL_MAP[pin.skill]?.label || pin.skill;
+  const label = _pinLabel(pin.skill);
   const chip = document.createElement('span');
   chip.className = 'skill-pin-chip';
   const text = document.createElement('span');
