@@ -5472,11 +5472,11 @@ ipcMain.handle('widget:open-hud', (_e, html, opts) => {
       white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
     }
 
-    /* Control group — ghost until bar is hovered */
+    /* Control group — always legible, brightens when the bar is hovered */
     #_hud_controls{
       display:flex;align-items:center;gap:2px;
       -webkit-app-region:no-drag;
-      opacity:.35;
+      opacity:.85;
       transition:opacity .18s;
     }
     #_hud_bar:hover #_hud_controls{ opacity:1; }
