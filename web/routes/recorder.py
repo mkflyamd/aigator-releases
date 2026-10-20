@@ -592,6 +592,9 @@ class StartRequest(BaseModel):
     project_id: Optional[str] = None
 
 
+_last_start_req: StartRequest = StartRequest()  # the request the active session started with; resume replays it
+
+
 def _build_ffmpeg_cmd(ffmpeg: str, out_path: Path, req: StartRequest,
                       screens: list[dict]) -> list[str]:
     screen = screens[req.screen_index] if req.screen_index < len(screens) else screens[0]
@@ -693,7 +696,7 @@ def _start_segment(ffmpeg: str, req: StartRequest, screens: list[dict],
 async def recorder_start(req: StartRequest = StartRequest()):
     global _ffmpeg_proc, _recording_path, _recording_start
     global _paused_at, _paused_elapsed, _segments, _session_dir, _session_tag
-    global _last_screen_index, _last_crop
+    global _last_screen_index, _last_crop, _last_start_req
 
     # Remember the screen selection so global hotkeys (Alt+R) use the same screen
     _last_screen_index = req.screen_index
@@ -777,6 +780,7 @@ async def recorder_start(req: StartRequest = StartRequest()):
     _segments = [Path(s) for s in project["segments"]]
     _paused_elapsed = 0.0
     _paused_at = None
+    _last_start_req = req
 
     try:
         proc, seg_path = _start_segment(ffmpeg, req, screens, len(_segments))
@@ -852,9 +856,6 @@ async def recorder_pause():
 
 
 # ── Resume ────────────────────────────────────────────────────────────────────
-
-_last_start_req: StartRequest = StartRequest()
-
 
 @router.post("/api/recorder/resume")
 async def recorder_resume():
