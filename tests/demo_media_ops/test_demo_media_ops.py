@@ -4,7 +4,7 @@ import pytest
 
 import demo_media as dm
 import demo_projects as dp
-from tests.demo_media_ops.helpers import make_video
+from tests.demo_media_ops.helpers import approve, make_video
 
 
 def test_probe_reports_real_duration(project):
@@ -168,3 +168,54 @@ def test_normalize_intro_rules():
                 {"mode": "card", "title": "x" * 81}):
         with pytest.raises(dm.MediaError):
             dm.normalize_intro(bad)
+
+
+def test_build_timeline_shifts_by_intro_and_validates():
+    segs = [{"text": "a", "start_at": 0}, {"text": "b", "start_at": 10}]
+    t = dm.build_timeline(segs, 62.2, {"mode": "hold", "duration_sec": 3})
+    assert [s["final_start_at"] for s in t["segments"]] == [3, 13]
+    assert dm.build_timeline(segs, 62.2, None)["offset_sec"] == 0
+    with pytest.raises(dm.MediaError) as exc:
+        dm.build_timeline([{"text": "late", "start_at": 390}], 62.2, None)
+    assert exc.value.code == "out_of_range"
+    with pytest.raises(dm.MediaError):
+        dm.build_timeline([], 62.2, None)
+
+
+def test_load_approved_narration_returns_the_verified_record(project):
+    pid, folder = project
+    aid = approve(pid, [{"text": "one", "start_at": 0}])
+    record = dm.load_approved_narration(pid, folder)
+    assert record["approval_id"] == aid and record["segments"][0]["text"] == "one"
+    assert dm.load_approved_narration(pid, folder, aid)["approval_id"] == aid
+
+
+def test_unapproved_narration_is_refused(project):
+    pid, folder = project
+    with pytest.raises(dm.MediaError) as exc:
+        dm.load_approved_narration(pid, folder)
+    assert exc.value.code == "narration_not_approved"
+
+
+def test_superseded_and_corrupt_approvals_are_refused(project):
+    pid, folder = project
+    first = approve(pid, [{"text": "one", "start_at": 0}])
+    approve(pid, [{"text": "changed", "start_at": 0}])
+    with pytest.raises(dm.MediaError) as exc:
+        dm.load_approved_narration(pid, folder, first)
+    assert exc.value.code == "approval_superseded"
+    current = dp.get_project(pid)["ext"]["approval"]["current_id"]
+    (folder / "work" / "approvals" / f"{current}.json").write_text("{}", encoding="utf-8")
+    with pytest.raises(dm.MediaError) as exc:
+        dm.load_approved_narration(pid, folder)
+    assert exc.value.code == "approval_corrupt"
+
+
+def test_recording_changed_after_approval_is_refused(project):
+    pid, folder = project
+    approve(pid, [{"text": "one", "start_at": 0}])
+    make_video(folder / "source" / "other.mp4", 20, color="green")
+    dp.update_project(pid, raw=str(folder / "source" / "other.mp4"))
+    with pytest.raises(dm.MediaError) as exc:
+        dm.load_approved_narration(pid, folder)
+    assert exc.value.code == "approval_stale_media"

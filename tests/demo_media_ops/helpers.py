@@ -18,3 +18,9 @@ def make_video(path: Path, seconds: float, *, color: str = "blue", size: str = "
     cmd.append(str(path))
     subprocess.run(cmd, check=True)
     return path
+
+
+def approve(pid, segments, intro=None):
+    import narration_approval
+    flags = {f"intro_{k}": v for k, v in (intro or {}).items()}
+    return narration_approval.approve(pid, segments, flags)["approval"]["approval_id"]

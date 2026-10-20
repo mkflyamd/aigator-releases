@@ -589,3 +589,55 @@ def make_intro_video(project_id: str | None, video_rel: str, intro: dict) -> dic
         return {"ok": True, "operation": "intro", "intro": intro, "output": block,
                 "source": {"rel": video_rel, "duration_sec": round(info.duration_sec, 3)},
                 "offset_sec": d, "op_id": op["op_id"]}
+
+# ── narration timeline and merge ─────────────────────────────────────────────
+
+def build_timeline(segments: list, source_duration: float, intro: dict | None) -> dict:
+    intro = normalize_intro(intro)
+    offset = intro["duration_sec"]
+    out, previous = [], 0.0
+    for i, seg in enumerate(segments or []):
+        text = str((seg or {}).get("text") or "").strip()
+        if not text:
+            raise MediaError("bad_argument", f"Narration segment {i} has no text.", field=f"segments[{i}].text")
+        start = (seg or {}).get("start_at", (seg or {}).get("start"))
+        if start is None:
+            raise MediaError("bad_argument", f"Narration segment {i} has no start time.", field=f"segments[{i}].start_at")
+        start = _number(start, f"segments[{i}].start_at")
+        if start < 0 or start > source_duration:
+            raise MediaError(
+                "out_of_range",
+                f"Narration segment {i} starts at {start:g}s but the recording is {source_duration:.1f}s long.",
+                field=f"segments[{i}].start_at", requested_sec=start, duration_sec=round(source_duration, 3),
+                valid_range_sec=[0, round(source_duration, 3)], options=list(_OPTIONS),
+            )
+        if start < previous:
+            raise MediaError("bad_argument", "Narration start times must not decrease.", field=f"segments[{i}].start_at")
+        previous = start
+        out.append({**seg, "text": text, "start_at": start, "final_start_at": round(start + offset, 3)})
+    if not out:
+        raise MediaError("bad_argument", "There is no approved narration to merge.", field="segments")
+    return {"intro": intro, "offset_sec": offset, "source_duration_sec": round(source_duration, 3), "segments": out}
+
+
+def load_approved_narration(pid: str, folder: Path, approval_id: str | None = None) -> dict:
+    approval = (dp.get_project(pid).get("ext") or {}).get("approval") or {}
+    current = approval.get("current_id")
+    if not current:
+        raise MediaError("narration_not_approved", "No approved narration was found. Ask the user to approve it.")
+    if approval_id and approval_id != current:
+        raise MediaError("approval_superseded", "A newer narration approval exists; stop and let its turn handle it.",
+                         requested=approval_id, current=current)
+    if not re.fullmatch(r"appr_\d+_[0-9a-f]{8}", str(current)):
+        raise MediaError("approval_corrupt", "The approval id is malformed.")
+    try:
+        record = json.loads((folder / "work" / "approvals" / f"{current}.json").read_text(encoding="utf-8"))
+        digest = narration_approval.canonical_hash(record["segments"], record["flags"])
+    except (OSError, ValueError, KeyError, TypeError):
+        raise MediaError("approval_corrupt", "The approval record is unreadable. Ask the user to approve again.") from None
+    if digest != approval.get("sha256"):
+        raise MediaError("approval_corrupt", "The approval record does not match its hash. Ask the user to approve again.")
+    expected = approval.get("media_fingerprint")
+    if expected and narration_approval.media_fingerprint(dp.get_project(pid).get("raw")) != expected:
+        raise MediaError("approval_stale_media", "The recording changed after the narration was approved. Ask the user to approve again.")
+    return record
