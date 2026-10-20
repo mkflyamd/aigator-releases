@@ -564,6 +564,7 @@ The widget's Approve button sends `NARRATION_APPROVED:<json> PROJECT_ID:<id>` â€
   .seg-pause{display:flex;align-items:center;gap:4px;font-size:.68rem;color:#6b8db5;margin-left:auto}
   .seg-pause input{width:56px;background:#111827;border:1px solid #1e3a52;border-radius:5px;color:#dbeafe;padding:3px 6px;font-size:.72rem;font-family:inherit}
   .seg-pause input:focus{outline:none;border-color:#4ade80}
+  .seg-pause-hint{color:#f97316;font-weight:600}
   .help{position:relative;display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border:1px solid #1e3a52;border-radius:50%;color:#6b8db5;font-size:.7rem;cursor:help}
   .help:hover,.help:focus{border-color:#f97316;color:#f97316;outline:none}
   .tip{display:none;position:absolute;top:24px;left:0;width:min(260px,calc(100vw - 80px));z-index:5;background:#0f1a28;border:1px solid #1e3a52;border-radius:8px;padding:8px 10px;font-size:.7rem;line-height:1.4;color:#dbeafe;text-align:left;cursor:default}
@@ -759,6 +760,12 @@ function pauseValue(raw){
   return Math.min(10, Math.round(n*10)/10);
 }
 
+function pauseHint(raw){
+  if(raw===''||raw==null){ return ''; }
+  var n=parseFloat(raw);
+  return (!isFinite(n)||n<0||n>10) ? 'Limited to 0â€“10 s' : '';
+}
+
 function segOut(s, text, voice, speed, pauseRaw){
   return {start_at:s.start_at||s.start||0, text:text, voice:voice, speed:speed, pause_after:pauseValue(pauseRaw)};
 }
@@ -785,8 +792,10 @@ data.forEach(function(s,i){
   pl.appendChild(document.createTextNode('Pause after (s)'));
   var pi=document.createElement('input'); pi.type='number'; pi.id='pa'+i;
   pi.min='0'; pi.max='10'; pi.step='0.1'; pi.value=pauseValue(s.pause_after);
-  pi.oninput=function(){ document.getElementById('dirty'+i).style.display='inline'; };
-  pl.appendChild(pi); acts.appendChild(pl);
+  var ph=document.createElement('span'); ph.className='seg-pause-hint';
+  pi.oninput=function(){ document.getElementById('dirty'+i).style.display='inline'; ph.textContent=pauseHint(pi.value); };
+  pi.onchange=function(){ if(pauseHint(pi.value)){ pi.value=pauseValue(pi.value); } };
+  pl.appendChild(pi); pl.appendChild(ph); acts.appendChild(pl);
   var sa=document.createElement('audio'); sa.controls=true; sa.id='sa'+i;
   sa.className='seg-audio';
   d.appendChild(l); d.appendChild(t); d.appendChild(acts); d.appendChild(sa);

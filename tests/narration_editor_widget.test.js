@@ -41,6 +41,20 @@ const plain = (x) => JSON.parse(JSON.stringify(x));
   );
 }
 
+// pauseHint
+{
+  const { pauseHint } = vm.runInNewContext(fn('pauseHint') + '\n({ pauseHint })');
+  assert.strictEqual(pauseHint(''), '');
+  assert.strictEqual(pauseHint(null), '');
+  assert.strictEqual(pauseHint('0'), '');
+  assert.strictEqual(pauseHint('2.5'), '');
+  assert.strictEqual(pauseHint('10'), '');
+  assert.match(pauseHint('11'), /0.10/);
+  assert.match(pauseHint('-1'), /0.10/);
+}
+assert.ok(editor.includes("pi.onchange=function(){ if(pauseHint(pi.value)){ pi.value=pauseValue(pi.value); } };"), 'out-of-range pause is clamped when the field is committed');
+assert.ok(editor.includes('pi.oninput=function(){') && editor.includes('ph.textContent=pauseHint(pi.value)'), 'pause hint follows typing');
+
 // Template wiring
 assert.ok(editor.includes('Pause after (s)'), 'pause label');
 assert.ok(editor.includes('id="pacing-tip"'), 'tooltip id');
