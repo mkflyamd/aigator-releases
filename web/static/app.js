@@ -18263,8 +18263,24 @@ function _initGoogleWorkspaceSettings() {
 
 /* ── Widget System ────────────────────────────────────────────────────────── */
 
+function gatorWidgetScrollSnapshot(iframe) {
+  const saved = [];
+  for (let el = iframe.parentElement; el; el = el.parentElement) {
+    if (el.scrollTop > 0) saved.push({ el, top: el.scrollTop });
+  }
+  let win = null;
+  try { win = iframe.contentWindow; } catch (_) {}
+  const inner = win && win.scrollY > 0 ? { win, x: win.scrollX, y: win.scrollY } : null;
+  return { saved, inner };
+}
+
+function gatorWidgetScrollRestore(snap) {
+  for (const s of snap.saved) if (s.el.scrollTop < s.top) s.el.scrollTop = s.top;
+  if (snap.inner && snap.inner.win.scrollY < snap.inner.y) snap.inner.win.scrollTo(snap.inner.x, snap.inner.y);
+}
+
 function gatorWidgetResize(iframe) {
-  const measure = () => {
+  const applyHeight = () => {
     try {
       const doc = iframe.contentDocument;
       if (!doc || !doc.body) return;
@@ -18303,6 +18319,10 @@ function gatorWidgetResize(iframe) {
         }
       }
     } catch (_) {}
+  };
+  const measure = () => {
+    const snap = gatorWidgetScrollSnapshot(iframe);
+    try { applyHeight(); } finally { gatorWidgetScrollRestore(snap); }
   };
   measure();
   setTimeout(measure, 50);
