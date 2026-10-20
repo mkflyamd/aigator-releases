@@ -24,7 +24,7 @@ def _approve(client, draft_id, body=None):
 
     return client.post(
         f"/api/drafts/{draft_id}/approve",
-        headers={"X-CSRF-Token": get_csrf_token()},
+        headers={"X-CSRF-Token": get_csrf_token("testserver")},
         json=body,
     )
 

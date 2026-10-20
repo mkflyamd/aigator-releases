@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / "web"))
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from security import get_csrf_token
 
 
 FIXTURE = str(Path(__file__).parent / "fixtures" / "fake_mcp_server.py")
@@ -43,7 +44,7 @@ def app_client(isolated_config):
 
     app = FastAPI()
     app.include_router(router)
-    return TestClient(app)
+    return TestClient(app, headers={"X-CSRF-Token": get_csrf_token("testserver")})
 
 
 def _poll_until_connected(app_client, created_id, timeout=10.0):

@@ -6,9 +6,11 @@ from fastapi.testclient import TestClient
 from fastapi import FastAPI
 from unittest.mock import patch
 from routes.marketplace import router
+from security import verify_csrf
 
 app = FastAPI()
 app.include_router(router)
+app.dependency_overrides[verify_csrf] = lambda: None
 client = TestClient(app)
 
 SAMPLE_SKILL = {
@@ -137,7 +139,7 @@ def test_install_routes_claude_plugins_official_entry_to_plugin_installer():
         patch("routes.marketplace.install_skill_md") as mock_legacy_install,
     ):
         r = client.post(
-            "/api/marketplace/install", json={"skill_id": "amd-skills", "consent": True}
+            "/api/marketplace/install", json={"skill_id": "amd-skills", "consent": True, "digest": "d1"}
         )
     assert r.status_code == 200
     assert r.json()["ok"] is True
@@ -180,6 +182,7 @@ def test_install_without_consent_is_refused_and_returns_capabilities():
         "has_compat_risk": False,
     }
     mock_install.assert_not_called()
+    assert "digest" in body["summary"]
 
 
 def test_install_with_consent_true_installs_and_threads_consented():
@@ -192,13 +195,14 @@ def test_install_with_consent_true_installs_and_threads_consented():
         patch("routes.marketplace.load_installed_skill_prompts"),
     ):
         r = client.post(
-            "/api/marketplace/install", json={"skill_id": "amd-skills", "consent": True}
+            "/api/marketplace/install", json={"skill_id": "amd-skills", "consent": True, "digest": "d1"}
         )
     assert r.status_code == 200
     assert r.json()["ok"] is True
     mock_install.assert_called_once()
     _, kwargs = mock_install.call_args
     assert kwargs.get("consented") is True
+    assert kwargs.get("expected_digest") == "d1"
 
 
 def test_install_response_enriches_commands_from_registry():
@@ -231,7 +235,7 @@ def test_install_response_enriches_commands_from_registry():
         ),
     ):
         r = client.post(
-            "/api/marketplace/install", json={"skill_id": "amd-skills", "consent": True}
+            "/api/marketplace/install", json={"skill_id": "amd-skills", "consent": True, "digest": "d1"}
         )
     assert r.status_code == 200
     assert r.json()["commands"] == [
@@ -256,7 +260,7 @@ def test_install_response_commands_empty_when_no_command_ids():
         patch("routes.marketplace.load_installed_skill_prompts"),
     ):
         r = client.post(
-            "/api/marketplace/install", json={"skill_id": "amd-skills", "consent": True}
+            "/api/marketplace/install", json={"skill_id": "amd-skills", "consent": True, "digest": "d1"}
         )
     assert r.status_code == 200
     assert r.json()["commands"] == []
@@ -332,7 +336,7 @@ def test_install_entry_missing_installable_key_is_refused():
         ) as mock_caps,
     ):
         r = client.post(
-            "/api/marketplace/install", json={"skill_id": "amd-skills", "consent": True}
+            "/api/marketplace/install", json={"skill_id": "amd-skills", "consent": True, "digest": "d1"}
         )
     assert r.status_code == 403
     assert r.json()["detail"]["error"] == "not_installable"
@@ -356,10 +360,11 @@ def test_install_non_claude_plugins_official_entry_unaffected():
     ):
         r = client.post(
             "/api/marketplace/install",
-            json={"skill_id": "powerbi", "skill_md": "---\nname: x\n---\nbody"},
+            json={"skill_id": "powerbi", "skill_md": "---\nname: x\n---\nbody", "consent": True, "digest": "d1"},
         )
     assert r.status_code == 200
     mock_legacy.assert_called_once()
+    assert mock_legacy.call_args.kwargs["expected_digest"] == "d1"
 
 
 # ── Cleanup #7 (2026-08-07 milestone adversarial review) — real two-call
@@ -392,6 +397,7 @@ def test_preview_then_consent_install_real_state_handoff(tmp_path, monkeypatch):
         assert body1["ok"] is False
         assert body1["consent_required"] is True
         resolved_ref = body1["resolved_ref"]
+        digest = body1["summary"]["digest"]
         assert resolved_ref == _CPO_ENTRY["plugin_source"]["sha"]
 
         assert not any(e.get("id") == "amd-skills" for e in m.load_installed())
@@ -406,6 +412,7 @@ def test_preview_then_consent_install_real_state_handoff(tmp_path, monkeypatch):
                 "skill_id": "amd-skills",
                 "consent": True,
                 "pinned_ref": resolved_ref,
+                "digest": digest,
             },
         )
         assert r2.status_code == 200

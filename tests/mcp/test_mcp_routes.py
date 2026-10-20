@@ -6,12 +6,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / "web"))
 import pytest
 from unittest.mock import patch
 from fastapi.testclient import TestClient
+from security import get_csrf_token
 from fastapi import FastAPI
 from routes.mcp_routes import router
 
 app = FastAPI()
 app.include_router(router)
-client = TestClient(app)
+client = TestClient(app, headers={"X-CSRF-Token": get_csrf_token("testserver")})
 
 
 def test_list_connections_empty():

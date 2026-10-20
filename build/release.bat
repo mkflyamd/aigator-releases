@@ -221,6 +221,20 @@ if not exist "%INSTALLER%" (
     exit /b 1
 )
 
+:: ── Step 5b: Compute installer checksum ──────────────────────────────────────
+echo [5b/8] Computing installer SHA-256 checksum...
+set INSTALLER_SHA256=
+set HASH_LINE=
+for /f "skip=1 tokens=* delims=" %%A in ('certutil -hashfile "%INSTALLER%" SHA256') do (
+    if not defined HASH_LINE set "HASH_LINE=%%A"
+)
+set "INSTALLER_SHA256=%HASH_LINE: =%"
+if "%INSTALLER_SHA256%"=="" (
+    echo ERROR: Could not compute installer checksum.
+    exit /b 1
+)
+echo       SHA-256: %INSTALLER_SHA256%
+
 :: ── Step 6: Upload to GitHub Release ─────────────────────────────────────────
 echo [6/8] Creating GitHub Release v%NEW_VERSION%...
 echo.
@@ -268,6 +282,7 @@ if errorlevel 1 (
 echo {
 echo   "version": "%NEW_VERSION%",
 echo   "url": "https://github.com/%RELEASE_REPO%/releases/download/v%NEW_VERSION%/AIGatorInstaller.exe",
+echo   "sha256": "%INSTALLER_SHA256%",
 echo   "notes": "See release page for details"
 echo }
 ) > "%MANIFEST_DIR%\latest.json"

@@ -365,7 +365,7 @@
                 id="persona-name-input"
                 type="text"
                 class="key-field"
-                placeholder="Persona name (e.g. Product Manager)"
+                placeholder="Persona name (e.g. Technical Program Manager)"
                 style="margin-bottom: 6px; padding: 0.45rem 0.6rem; font-size: 0.82rem"
               />
               <textarea
@@ -385,6 +385,41 @@
                   Cancel
                 </button>
                 <span id="persona-msg" class="field-msg"></span>
+              </div>
+            </div>
+
+            <!-- About you -->
+            <div class="srow">
+              <div class="section-status st-dim"></div>
+              <div class="srow-info">
+                <div class="srow-label">About you</div>
+                <div class="srow-sub" id="user-profile-sub">
+                  Used when you say "me" or "email myself"
+                </div>
+              </div>
+            </div>
+            <div style="margin-left: 22px">
+              <input
+                id="user-profile-name"
+                type="text"
+                class="key-field"
+                placeholder="Your name"
+                autocomplete="off"
+                style="margin-bottom: 6px; padding: 0.45rem 0.6rem; font-size: 0.82rem"
+              />
+              <input
+                id="user-profile-email"
+                type="email"
+                class="key-field"
+                placeholder="name@example.com"
+                autocomplete="off"
+                style="margin-bottom: 6px; padding: 0.45rem 0.6rem; font-size: 0.82rem"
+              />
+              <div style="display: flex; gap: 6px; align-items: center">
+                <button id="user-profile-save-btn" class="btn-primary" style="font-size: 0.78rem">
+                  Save
+                </button>
+                <span id="user-profile-msg" class="field-msg"></span>
               </div>
             </div>
 
@@ -575,23 +610,23 @@
                   </svg>
                 </button>
               </div>
-              <div class="sform-row">
-                <input
-                  id="atlassian-jira-url-input"
-                  type="text"
-                  class="key-field"
-                  style="flex: 1"
-                  placeholder="Jira URL (e.g. https://your-org.atlassian.net)"
-                  autocomplete="off"
-                />
-                <input
-                  id="atlassian-confluence-url-input"
-                  type="text"
-                  class="key-field"
-                  style="flex: 1"
-                  placeholder="Confluence URL (e.g. https://your-org.atlassian.net/wiki)"
-                  autocomplete="off"
-                />
+              <div class="site-section" id="atlassian-jira-sites" data-kind="jira">
+                <div class="site-section-head">
+                  <span class="site-section-title">Jira sites</span>
+                  <button type="button" class="site-add-btn" data-add="jira">
+                    + Add Jira site
+                  </button>
+                </div>
+                <div class="site-list"></div>
+              </div>
+              <div class="site-section" id="atlassian-confluence-sites" data-kind="confluence">
+                <div class="site-section-head">
+                  <span class="site-section-title">Confluence sites</span>
+                  <button type="button" class="site-add-btn" data-add="confluence">
+                    + Add Confluence site
+                  </button>
+                </div>
+                <div class="site-list"></div>
               </div>
               <div class="key-row connection-save-row">
                 <span id="atlassian-msg" class="field-msg"></span>
@@ -693,6 +728,51 @@
               <div class="key-row connection-save-row">
                 <span id="github-msg" class="field-msg"></span>
                 <button id="github-save-btn" class="btn-primary">Save</button>
+              </div>
+            </div>
+
+            <!-- ═══ Stored credentials ═══ -->
+            <div class="srow integration-row-sep">
+              <div class="srow-info">
+                <div class="srow-label">Stored credentials</div>
+                <div class="srow-sub">
+                  Removes saved sign-in tokens and API tokens from this computer. You will need to
+                  sign in again.
+                </div>
+                <div class="srow-sub" id="storage-level-notice" hidden></div>
+              </div>
+              <div class="srow-actions">
+                <button id="clear-credentials-btn" class="btn-secondary">
+                  Clear stored credentials
+                </button>
+              </div>
+            </div>
+
+            <!-- ═══ Code sandbox (shown only when the sandbox is unavailable) ═══ -->
+            <div class="srow integration-row-sep" id="sandbox-row" style="display: none">
+              <div class="srow-info">
+                <div class="srow-label">Code sandbox</div>
+                <div class="srow-sub" id="sandbox-notice"></div>
+                <label class="srow-sub" id="sandbox-optout-label" hidden>
+                  <input type="checkbox" id="sandbox-optout" />
+                  Allow code to run without a sandbox on this machine
+                </label>
+              </div>
+            </div>
+
+            <!-- ═══ Saved command permissions ═══ -->
+            <div class="srow integration-row-sep" id="saved-permissions-row">
+              <div class="srow-info">
+                <div class="srow-label">Saved permissions</div>
+                <div class="srow-sub">
+                  Commands you chose "Always allow this" for. Remove one and AI Gator asks again.
+                </div>
+                <div id="saved-permissions-list"></div>
+              </div>
+              <div class="srow-actions">
+                <button id="saved-permissions-clear" class="btn-secondary" hidden>
+                  Remove all
+                </button>
               </div>
             </div>
 
@@ -933,7 +1013,8 @@
                     class="theme-tile active"
                     id="theme-tile-system"
                     data-val="system"
-                    onclick="ThemeManager.set('system')"
+                    data-call="ThemeManager.set"
+                    data-args='["system"]'
                   >
                     <div class="theme-swatch theme-swatch-system"></div>
                     <div class="theme-tile-label">System</div>
@@ -942,7 +1023,8 @@
                     class="theme-tile"
                     id="theme-tile-light"
                     data-val="light"
-                    onclick="ThemeManager.set('light')"
+                    data-call="ThemeManager.set"
+                    data-args='["light"]'
                   >
                     <div class="theme-swatch theme-swatch-light"></div>
                     <div class="theme-tile-label">Light</div>
@@ -951,7 +1033,8 @@
                     class="theme-tile"
                     id="theme-tile-dark"
                     data-val="dark"
-                    onclick="ThemeManager.set('dark')"
+                    data-call="ThemeManager.set"
+                    data-args='["dark"]'
                   >
                     <div class="theme-swatch theme-swatch-dark"></div>
                     <div class="theme-tile-label">Dark</div>
@@ -1281,7 +1364,7 @@
           class="dock-item"
           title="My Widgets"
           id="dock-widgets"
-          onclick="gatorOpenWidgetManager()"
+          data-call="gatorOpenWidgetManager"
         >
           <svg
             width="18"
@@ -1570,7 +1653,8 @@
                     aria-label="Open OpenCode session"
                     title="OpenCode session active"
                     style="display: none; margin-right: 6px"
-                    onclick="if (typeof selectSkill === 'function') selectSkill('code_agent');"
+                    data-call="selectSkill"
+                    data-args='["code_agent"]'
                   >
                     <span style="font-family: monospace">&lt;/&gt;</span>
                   </button>
@@ -1580,7 +1664,7 @@
                     class="guide-model-pill"
                     aria-label="Toggle terminal"
                     title="Toggle terminal (Ctrl+J)"
-                    onclick="window.GatorTerminal && window.GatorTerminal.toggle()"
+                    data-call="GatorTerminal.toggle"
                     style="margin-right: 6px"
                   >
                     <span style="font-family: monospace">&gt;_</span>

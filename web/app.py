@@ -40,6 +40,7 @@ configure_production_logging()
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from config import load_config as _load_config, save_config as _save_config
+from config import sweep_legacy_secrets
 
 # Run one-time config migration (~/.config/teamspoc → ~/.gator) BEFORE importing
 # shared, which calls load_config() at module import. If migration runs in
@@ -53,7 +54,12 @@ if not _mig.get("ok"):
         _mig.get("error"),
     )
 
+# Migrate any remaining plaintext tokens/PATs into secure_store (never raises).
+# Runs after the config migration above and before shared/PAT-to-env copying.
+sweep_legacy_secrets()
+
 import shared
+from tool_validation import validate_tool_inputs
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +76,7 @@ from routes.calendar import router as calendar_router
 from routes.actions import router as actions_router
 from routes.aigator import router as aigator_router
 from routes.config_routes import router as config_router
+from routes.sandbox_routes import router as sandbox_router
 from routes.auth import router as auth_router
 from routes.health import router as health_router
 from routes.chat import router as chat_router
@@ -80,6 +87,7 @@ from routes.conversation_routes import router as conversation_router
 from routes.tabs import router as tabs_router
 from routes.marketplace import router as marketplace_router
 from routes.files import router as files_router, cleanup_old_outputs
+from routes.inline_images import router as inline_images_router
 from routes.code_agent import router as code_agent_router
 from routes.updater import router as updater_router
 from routes.mcp_routes import router as mcp_router
@@ -296,6 +304,7 @@ _load_mcp_connections()
 _EMPTY_OK_REQUIRED = {
     ("write_file", "content"),
     ("edit_file", "new_str"),
+    ("update_onenote_page", "content"),
 }
 
 # ── Browser empty-result circuit breaker (context-scoped) ────────────────────
@@ -435,6 +444,7 @@ async def _execute_tool_impl(
         fn = shared.TOOL_DISPATCH.get(name)
         if fn is None:
             return {"error": f"Unknown tool: {name}"}
+        model_inputs = dict(inputs or {})
         # Inject _context_id for handlers that opt in by accepting it.
         # The LLM never supplies _context_id itself — it's server-injected so
         # tools like get_tab_pins can know "current tab" without the LLM
@@ -466,6 +476,10 @@ async def _execute_tool_impl(
         if not single_dict_arg:
             if context_id is not None and ("_context_id" in accepted or has_var_keyword):
                 inputs = {**inputs, "_context_id": context_id}
+            elif "_context_id" in inputs:
+                # Model-supplied: it would let the model pick which tab's
+                # approvals a tool acts on.
+                inputs = {k: v for k, v in inputs.items() if k != "_context_id"}
             # Strip any kwargs the function doesn't accept to prevent TypeError retries.
             if not has_var_keyword:
                 unknown = set(inputs) - accepted
@@ -515,6 +529,12 @@ async def _execute_tool_impl(
                         "payload size or split it into smaller chunked calls."
                     ),
                 }
+        invalid = validate_tool_inputs(name, model_inputs)
+        if invalid is not None:
+            logging.getLogger(__name__).warning(
+                "execute_tool(%s): invalid input for %s: %s", name, invalid["field"], invalid["reason"]
+            )
+            return invalid
         if asyncio.iscoroutinefunction(fn):
             result = await fn(inputs) if single_dict_arg else await fn(**inputs)
         else:
@@ -568,7 +588,12 @@ async def _execute_tool_impl(
             url_key = str(inputs.get("url") or inputs.get("start_url") or inputs.get("task", "")[:80])
             result = _apply_browser_empty_breaker(result, tool_name=name, url_key=url_key, context_id=context_id)
         from tool_result_truncation import truncate_tool_result, maybe_truncate_json_result
-        _NO_TRUNCATE_TOOLS = {"jira_get_project_meta"}
+        # read/update_onenote_page cap their own output
+        _NO_TRUNCATE_TOOLS = {
+            "jira_get_project_meta",
+            "read_onenote_page",
+            "update_onenote_page",
+        }
         if name in _NO_TRUNCATE_TOOLS:
             return result
         if isinstance(result, str):
@@ -668,7 +693,8 @@ async def lifespan(app):
         if intent:
             direct = await execute_direct(intent, execute_tool, user_message=prompt)
             if direct.get("ok"):
-                data_summary = _json.dumps(direct["data"], default=str)
+                import data_sources
+                data_summary = _json.dumps(data_sources.mark_direct_data(intent["tool"], direct["data"]), default=str)
                 if len(data_summary) > 8000:
                     data_summary = data_summary[:8000] + "\n... (truncated)"
                 routed_system = system + "\n\nYou have the data below. Summarize it directly for the user. Do NOT call any tools."
@@ -741,7 +767,9 @@ async def lifespan(app):
     # Pay tkinter's cold-import + first-window cost now (measured up to ~4s)
     # instead of on the user's first Add-Project/browse click, where a slow
     # first request can outlast a keep-alive timeout and look like a failure.
-    asyncio.create_task(asyncio.to_thread(warmup_native_dialogs))
+    # Skipped on macOS: Tk() off the main thread hung startup on headless runners.
+    if sys.platform != "darwin":
+        asyncio.create_task(asyncio.to_thread(warmup_native_dialogs))
 
     await start_worker(_bg_run_fn)
     await sched.init_scheduler()
@@ -790,6 +818,10 @@ async def lifespan(app):
 
     from teams_remote_control import teams_remote_control_loop
     _teams_remote_control_task = asyncio.create_task(teams_remote_control_loop())
+
+    # Remove AppContainer ACEs left by a crashed sandboxed run (Windows; no-op elsewhere).
+    import sandbox as _sandbox
+    asyncio.create_task(asyncio.to_thread(_sandbox.sweep_stale_grants))
 
     # Respawn any spawned preset MCP servers that were orphaned by a restart
     # (e.g. Google Workspace's workspace-mcp process), then start the background
@@ -861,6 +893,7 @@ app.include_router(actions_router)
 app.include_router(aigator_router)
 app.include_router(config_router)
 app.include_router(auth_router)
+app.include_router(sandbox_router)
 app.include_router(health_router)
 app.include_router(chat_router)
 app.include_router(tasks_router)
@@ -870,6 +903,7 @@ app.include_router(conversation_router)
 app.include_router(tabs_router)
 app.include_router(marketplace_router)
 app.include_router(files_router)
+app.include_router(inline_images_router)
 app.include_router(updater_router)
 app.include_router(mcp_router)
 app.include_router(terminal_router)
@@ -882,6 +916,18 @@ app.include_router(recorder_router)
 app.include_router(code_agent_router, prefix="/api/code_agent")
 
 # ── Middleware ────────────────────────────────────────────────────────────────
+
+@app.middleware("http")
+async def _origin_guard(request, call_next):
+    from fastapi.responses import JSONResponse
+    from security import origin_allowed
+
+    h = request.headers
+    if not origin_allowed(request.method, h.get("host"), h.get("origin"), h.get("referer")):
+        logger.warning("Blocked cross-origin %s %s (origin=%s)", request.method, request.url.path, h.get("origin"))
+        return JSONResponse({"detail": "Cross-origin request blocked"}, status_code=403)
+    return await call_next(request)
+
 
 @app.middleware("http")
 async def _latency_logger(request, call_next):

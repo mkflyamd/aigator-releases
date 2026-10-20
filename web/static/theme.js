@@ -88,3 +88,5 @@ const ThemeManager = (() => {
 
   return { init, set, getActive, getEffective, _syncUI };
 })();
+
+window.ThemeManager = ThemeManager;

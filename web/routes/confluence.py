@@ -7,7 +7,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
+from security import verify_csrf
 from pydantic import BaseModel
 
 import shared
@@ -330,7 +331,7 @@ def confluence_search(body: dict):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/api/confluence/page")
+@router.post("/api/confluence/page", dependencies=[Depends(verify_csrf)])
 def confluence_create_page(body: dict):
     """Create a Confluence page from the third-pane form (human-reviewed)."""
     try:
@@ -377,7 +378,7 @@ def confluence_create_page(body: dict):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.put("/api/confluence/page/{page_id}")
+@router.put("/api/confluence/page/{page_id}", dependencies=[Depends(verify_csrf)])
 def confluence_update_page(page_id: str, body: dict):
     """Update a Confluence page from the third-pane edit form."""
     try:

@@ -70,6 +70,15 @@ def _slugify(text: str) -> str:
     return text.strip("-") or "mcp"
 
 
+BUNDLE_STDIO_BLOCKED_MSG = "Your administrator's policy blocks MCP servers that a marketplace bundle starts on this computer."
+
+
+def _bundle_stdio_blocked() -> bool:
+    from sandbox.policy import load_policy
+
+    return load_policy().block_bundle_stdio_mcp
+
+
 def _client_for(conn: dict, pooled: bool = True):
     """Instantiate the right client class for a connection's transport.
 
@@ -79,6 +88,8 @@ def _client_for(conn: dict, pooled: bool = True):
     call close() themselves.
     """
     if conn.get("transport") == "stdio":
+        if conn.get("plugin_id") and _bundle_stdio_blocked():
+            raise RuntimeError(BUNDLE_STDIO_BLOCKED_MSG)
         cfg = {
             "command": conn["command"],
             "args": conn.get("args", []),
@@ -509,7 +520,11 @@ def _register(conn: dict) -> None:
                             f"Just present the link above."
                         )
                     err = {"error": f"MCP call failed: {display_msg}", "transport": transport}
-                    if is_auth:
+                    if is_auth and _is_forbidden_msg(msg):
+                        # The server accepted the credential but refused this tool.
+                        # Reconnecting cannot fix that, so do not send the user to Settings.
+                        err["_mcp_forbidden"] = True
+                    elif is_auth:
                         err["_mcp_auth_error"] = True
                         err["_connection_id"] = c.get("id", "")
                         err["_connection_name"] = c.get("name", c.get("id", ""))
@@ -606,6 +621,14 @@ _AUTH_HINT_KEYWORDS = (
     "access denied", "permission denied", "forbidden",
     "credentials",
 )
+
+
+def _is_forbidden_msg(msg: str) -> bool:
+    """True for a 403 / Forbidden refusal that is not also a 401 / unauthorized one."""
+    low = msg.lower()
+    if re.search(r"\b401\b", low) or "unauthorized" in low or "unauthenticated" in low:
+        return False
+    return bool(re.search(r"\b403\b", low)) or "forbidden" in low
 
 
 def _is_auth_msg(msg: str) -> bool:
@@ -1399,6 +1422,15 @@ def register_plugin_mcp_server(
     conn_id = _plugin_connection_id(plugin_id, server_name)
     transport = provisional.get("transport", "stdio")
     display_name = provisional.get("name") or server_name
+
+    if transport == "stdio" and _bundle_stdio_blocked():
+        conn = _build_disabled_connection(
+            conn_id, display_name, transport, provisional, plugin_id,
+            connect_error=BUNDLE_STDIO_BLOCKED_MSG,
+        )
+        _upsert_raw_connection(conn)
+        _log.warning("[mcp] plugin %s: server %r not started: blocked by policy", plugin_id, server_name)
+        return {"ok": False, "id": conn_id, "error": BUNDLE_STDIO_BLOCKED_MSG}
 
     if missing_secrets:
         conn = _build_disabled_connection(

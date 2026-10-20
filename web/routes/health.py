@@ -11,12 +11,18 @@ import time as _time_mod
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
 import perf
 import shared
 import updater
+from security import require_shell_key, script_json
+
+
+def _inline_script(js: str, nonce: str) -> str:
+    attr = f' nonce="{nonce}"' if nonce else ""
+    return f"<script{attr}>{js}</script>"
 
 router = APIRouter()
 
@@ -380,7 +386,7 @@ def keepalive_jiggle():
 
 # ── Root (serve index.html) ──────────────────────────────────────────────────
 
-def _mcp_skills_bootstrap() -> str:
+def _mcp_skills_bootstrap(nonce: str = "") -> str:
     """Build a <script> block that injects MCP connection data into the page before app.js runs.
 
     Reads from the shared registry (already loaded at startup via load_all_from_cache).
@@ -414,8 +420,7 @@ def _mcp_skills_bootstrap() -> str:
                 )
             }
         skills.append(entry)
-    payload = json.dumps(skills)
-    return f'<script>window.__MCP_SKILLS__ = {payload};</script>'
+    return _inline_script(f'window.__MCP_SKILLS__ = {script_json(skills)};', nonce)
 
 
 def _skill_display_name(skill_md: Path, fallback: str) -> str:
@@ -428,7 +433,7 @@ def _skill_display_name(skill_md: Path, fallback: str) -> str:
         return fallback
 
 
-def _user_skills_bootstrap() -> str:
+def _user_skills_bootstrap(nonce: str = "") -> str:
     """Build a <script> block that injects installed marketplace skills (Community, Verified, Mine)
     plus locally-dropped ~/.agents/skills into the page so they appear in slash
     commands without a page reload."""
@@ -495,11 +500,10 @@ def _user_skills_bootstrap() -> str:
             if deps:
                 entry["requires"] = deps
             skills.append(entry)
-    payload = json.dumps(skills)
-    return f'<script>window.__USER_SKILLS__ = {payload};</script>'
+    return _inline_script(f'window.__USER_SKILLS__ = {script_json(skills)};', nonce)
 
 
-def _plugin_commands_bootstrap() -> str:
+def _plugin_commands_bootstrap(nonce: str = "") -> str:
     """Build a <script> block injecting installed plugin commands (decision
     #12, 2026-08-07 milestone) into the page before app.js runs — mirrors
     _mcp_skills_bootstrap/_user_skills_bootstrap's pattern so the "/"
@@ -510,28 +514,37 @@ def _plugin_commands_bootstrap() -> str:
         {"name": name, "description": c.get("description", ""), "plugin_id": c.get("plugin_id", "")}
         for name, c in sorted(COMMAND_REGISTRY.items())
     ]
-    payload = json.dumps(commands)
-    return f'<script>window.__PLUGIN_COMMANDS__ = {payload};</script>'
+    return _inline_script(f'window.__PLUGIN_COMMANDS__ = {script_json(commands)};', nonce)
 
 
-@router.get("/api/csrf")
-async def get_csrf():
+@router.get("/api/csrf", dependencies=[Depends(require_shell_key)])
+async def get_csrf(request: Request):
     """Return the current process CSRF token so the UI can refresh after a server reload."""
     from security import get_csrf_token
-    return {"csrf_token": get_csrf_token()}
+    return {"csrf_token": get_csrf_token(request.headers.get("host", ""))}
 
 
-@router.get("/", response_class=HTMLResponse)
-async def root():
-    from security import get_csrf_token
+@router.get("/", response_class=HTMLResponse, dependencies=[Depends(require_shell_key)])
+async def root(request: Request):
+    from security import build_csp, csp_header_name, get_csrf_token, new_csp_nonce
+    host = request.headers.get("host", "")
+    nonce = new_csp_nonce()
     html = (Path(__file__).parent.parent / "static" / "index.html").read_text(encoding="utf-8")
-    csrf = f'<script>window.__CSRF_TOKEN__ = {json.dumps(get_csrf_token())};</script>'
-    bootstrap = csrf + '\n' + _mcp_skills_bootstrap() + '\n' + _user_skills_bootstrap() + '\n' + _plugin_commands_bootstrap()
-    injections = bootstrap
+    html = html.replace("<script>", f'<script nonce="{nonce}">')
+    page_data = f'window.__CSRF_TOKEN__ = {script_json(get_csrf_token(host))}; window.__CSP_NONCE__ = {script_json(nonce)};'
+    injections = "\n".join([
+        _inline_script(page_data, nonce),
+        _mcp_skills_bootstrap(nonce),
+        _user_skills_bootstrap(nonce),
+        _plugin_commands_bootstrap(nonce),
+    ])
     if os.environ.get("DEV_MODE"):
         injections += '\n<script src="/static/dev-overlay.js"></script>'
     # Inject before </head> so data is available before app.js parses SKILL_REGISTRY
-    return html.replace("</head>", f"{injections}\n</head>", 1)
+    return HTMLResponse(
+        html.replace("</head>", f"{injections}\n</head>", 1),
+        headers={csp_header_name(): build_csp(nonce, host)},
+    )
 
 
 # ── Perf report (internal, local-only) ───────────────────────────────────────

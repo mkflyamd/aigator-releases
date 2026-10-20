@@ -21,6 +21,7 @@ import pathlib
 from unittest.mock import patch, MagicMock
 
 from fastapi.testclient import TestClient
+from security import get_csrf_token
 
 from app import app
 
@@ -108,7 +109,7 @@ class TestForwardBackendHonorsCcBcc:
         return gc
 
     def test_forward_sets_cc_and_bcc_recipients(self):
-        client = TestClient(app)
+        client = TestClient(app, headers={"X-CSRF-Token": get_csrf_token("testserver")})
         gc = self._mock_graph()
         with patch("skills._m365.helpers.get_graph_client", return_value=gc):
             r = client.post(
@@ -159,7 +160,7 @@ class TestReplyBackendHonorsRecipientOverrides:
         return gc
 
     def test_reply_applies_to_override_when_provided(self):
-        client = TestClient(app)
+        client = TestClient(app, headers={"X-CSRF-Token": get_csrf_token("testserver")})
         gc = self._mock_graph()
         with patch("skills._m365.helpers.get_graph_client", return_value=gc):
             r = client.post(
@@ -189,7 +190,7 @@ class TestReplyBackendHonorsRecipientOverrides:
         assert "cc@x.com" in cc_addrs, "reply must apply the edited Cc recipients (#21)"
 
     def test_reply_without_overrides_keeps_createreply_defaults(self):
-        client = TestClient(app)
+        client = TestClient(app, headers={"X-CSRF-Token": get_csrf_token("testserver")})
         gc = self._mock_graph()
         with patch("skills._m365.helpers.get_graph_client", return_value=gc):
             r = client.post(

@@ -6,6 +6,8 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
+from log_sanitizer import sanitize
+
 logger = logging.getLogger(__name__)
 
 _OLD_DIR = Path.home() / ".config" / "teamspoc"
@@ -67,9 +69,9 @@ def run_migration(
         return {"ok": True}
 
     except Exception as exc:
-        _write_state(new_dir, "failed", error=str(exc))
+        _write_state(new_dir, "failed", error=sanitize(str(exc)))
         logger.error("Migration failed: %s", exc)
-        return {"ok": False, "error": str(exc)}
+        return {"ok": False, "error": sanitize(str(exc))}
 
 
 def _write_state(new_dir: Path, status: str, error: str = "") -> None:

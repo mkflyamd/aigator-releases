@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import asyncio
 import time
 import uuid
@@ -27,11 +28,14 @@ from datetime import datetime, timedelta, timezone
 import aiosqlite
 
 from config import TASKS_DB as DB_PATH
+import file_perms
+from log_sanitizer import privacy_mode, sanitize, tool_label
 
 _log = logging.getLogger(__name__)
 
 _MAX_ERROR_LEN = 500
 TELEMETRY_RETENTION_DAYS = 30
+TELEMETRY_MAX_ROWS = 100_000
 _initialized = False
 _tool_telemetry_tasks: set[asyncio.Task] = set()
 _main_loop: asyncio.AbstractEventLoop | None = None
@@ -105,6 +109,9 @@ async def init_table() -> None:
             await db.execute("UPDATE tool_call_log SET error_detail = NULL WHERE error_detail IS NOT NULL")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_tool_call_log_created_at ON tool_call_log(created_at)")
         await db.commit()
+    if not file_perms.restrict_database(DB_PATH):
+        _log.error("[turn_telemetry] disabled: the database could not be restricted to the current user")
+        return
     _initialized = True
     _main_loop = asyncio.get_running_loop()
 
@@ -112,9 +119,29 @@ async def init_table() -> None:
 def _truncate(s: str | None) -> str | None:
     if s is None:
         return None
+    s = sanitize(s)
     if len(s) > _MAX_ERROR_LEN:
         return s[:_MAX_ERROR_LEN] + "…"
     return s
+
+
+def _detail(s: str | None) -> str | None:
+    """Error text for telemetry: sanitized, and dropped entirely in privacy mode."""
+    if s is not None and privacy_mode():
+        return "<redacted>"
+    return _truncate(s)
+
+
+def _scrub_calls(tool_calls: list[dict]) -> list[dict]:
+    out = []
+    for call in tool_calls:
+        entry = dict(call)
+        if "name" in entry:
+            entry["name"] = tool_label(entry["name"])
+        if entry.get("error"):
+            entry["error"] = _detail(str(entry["error"]))
+        out.append(entry)
+    return out
 
 
 def _now_iso() -> str:
@@ -131,6 +158,8 @@ async def log_tool_call(
     error_code: str | None = None,
 ) -> None:
     """Best-effort metadata-only record for a user tool execution."""
+    if not _initialized:
+        return
     try:
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute(
@@ -139,7 +168,7 @@ async def log_tool_call(
                     outcome, duration_ms, error_code
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
-                    _now_iso(), context_id, task_id, tool_name,
+                    _now_iso(), context_id, task_id, tool_label(tool_name),
                     1 if tool_name.startswith("mcp-") else 0,
                     outcome, max(0, duration_ms), _truncate(error_code),
                 ),
@@ -202,8 +231,14 @@ async def cleanup_old_records(now: datetime | None = None) -> dict[str, int]:
         async with aiosqlite.connect(DB_PATH) as db:
             turn_cur = await db.execute("DELETE FROM turn_log WHERE created_at < ?", (cutoff.isoformat(),))
             tool_cur = await db.execute("DELETE FROM tool_call_log WHERE created_at < ?", (cutoff.isoformat(),))
+            deleted = {"turn_log": turn_cur.rowcount, "tool_call_log": tool_cur.rowcount}
+            for table in deleted:  # size cap on top of the age limit; ids grow with time
+                cap_cur = await db.execute(
+                    f"DELETE FROM {table} WHERE id <= (SELECT MAX(id) FROM {table}) - ?", (TELEMETRY_MAX_ROWS,)
+                )
+                deleted[table] += cap_cur.rowcount
             await db.commit()
-            return {"turn_log": turn_cur.rowcount, "tool_call_log": tool_cur.rowcount}
+            return deleted
     except Exception as exc:
         _log.warning("[turn_telemetry] failed to clean old records: %s", exc)
         return {"turn_log": 0, "tool_call_log": 0}
@@ -254,6 +289,8 @@ async def log_turn_end(
     active_skills: list[str] | None = None,
 ) -> None:
     """Record the end of a turn. Called at EVERY exit path in the agent loop."""
+    if not _initialized:
+        return
     try:
         async with aiosqlite.connect(DB_PATH) as db:
             # Link to previous turn in this context: update the previous row's
@@ -282,13 +319,13 @@ async def log_turn_end(
                 (
                     turn_id, context_id, task_id, turn_index, agent, model, provider,
                     outcome, stop_reason,
-                    json.dumps(tool_calls),
-                    _truncate(tool_error),
-                    _truncate(llm_error),
+                    json.dumps(_scrub_calls(tool_calls)),
+                    _detail(tool_error),
+                    _detail(llm_error),
                     input_tokens, output_tokens, overflow_prunes, retry_count,
                     1 if failover_used else 0, bad_tool_streak, duration_ms,
                     history_turns,
-                    json.dumps(active_skills or []),
+                    json.dumps([tool_label(s) for s in (active_skills or [])]),
                     _now_iso(),
                 ),
             )

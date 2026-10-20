@@ -1,4 +1,133 @@
-﻿/* ── Client-side perf instrumentation (ephemeral, in-memory) ──────────────────
+﻿/* ── CSRF: attach X-CSRF-Token to every same-origin mutating /api call ───────
+ * Routes that send, create or delete data require the token. Call sites that
+ * already set the header keep their value; the rest are covered here.
+ */
+(function _initCsrfFetch() {
+  const orig = window.fetch.bind(window);
+  window.fetch = function (input, init) {
+    try {
+      const url = typeof input === 'string' ? input : (input && input.url) || '';
+      const method = String(
+        (init && init.method) || (input && input.method) || 'GET',
+      ).toUpperCase();
+      if (
+        method !== 'GET' &&
+        method !== 'HEAD' &&
+        url.startsWith('/api/') &&
+        window.__CSRF_TOKEN__
+      ) {
+        const h = new Headers(
+          (init && init.headers) || (typeof input === 'object' && input.headers) || undefined,
+        );
+        if (!h.has('X-CSRF-Token')) {
+          h.set('X-CSRF-Token', window.__CSRF_TOKEN__);
+          init = { ...(init || {}), headers: h };
+        }
+      }
+    } catch (_) {
+      /* fall through to the plain call */
+    }
+    return orig(input, init);
+  };
+})();
+
+/* ── Click actions: the Content Security Policy forbids on*= attributes ──────
+ * Markup carries data-call (a name from the allow-list below) and data-args (a
+ * JSON array; {"$el":true} stands for the clicked element). Build the pair with
+ * gatorActionAttrs(). Names outside the list do nothing, so injected markup
+ * cannot call arbitrary functions.
+ */
+const GATOR_ACTIONS = new Set([
+  'ThemeManager.set',
+  'GatorTerminal.toggle',
+  'selectSkill',
+  'openExternal',
+  'removeClosest',
+  '_showAlert',
+  'gatorImageDownload',
+  'gatorImageSave',
+  'gatorOpenWidgetManager',
+  'gatorCloseWidgetManager',
+  'gatorWidgetSavePrompt',
+  'gatorWidgetSaveConfirm',
+  'gatorWidgetSaveCancel',
+  'gatorWidgetOpenFromDb',
+  'gatorWidgetCaptureToggle',
+  'gatorWidgetPinToggle',
+  'gatorWidgetDeleteConfirm',
+  '_loadTeamsThread',
+  '_loadChannelThread',
+  '_loadEmailDetail',
+  '_loadOneNotePageDetail',
+  '_ghSelectPR',
+  '_ghSelectIssue',
+  '_ghSelectRepo',
+  '_ghLoadRepoIssues',
+  '_ghLoadRepoPRs',
+  '_ghAskAboutRepo',
+  '_caSetLeftView',
+  '_caShowFileDiff',
+  '_caDiscardFile',
+  '_caAddLocalProject',
+  '_caAddGitHubProject',
+  '_caShowSessionDropdown',
+]);
+
+function openExternal(url) {
+  if (/^https:\/\//i.test(url)) window.open(url, '_blank');
+}
+
+function removeClosest(el, selector) {
+  el.closest(selector)?.remove();
+}
+
+function gatorActionAttrs(name, args, opts) {
+  const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+  const stop = opts && opts.stop ? ' data-stop="1"' : '';
+  return ` data-call="${esc(name)}" data-args="${esc(JSON.stringify(args || []))}"${stop}`;
+}
+
+(function _initGatorActions() {
+  function resolve(name) {
+    if (!GATOR_ACTIONS.has(name)) return null;
+    const parts = name.split('.');
+    const owner = parts.length > 1 ? window[parts[0]] : window;
+    const fn = owner && owner[parts[parts.length - 1]];
+    return typeof fn === 'function' ? { fn, owner } : null;
+  }
+  document.addEventListener(
+    'click',
+    (event) => {
+      const el = event.target.closest && event.target.closest('[data-call]');
+      if (!el) return;
+      const action = resolve(el.dataset.call);
+      if (!action) return;
+      let args = [];
+      try {
+        args = JSON.parse(el.dataset.args || '[]');
+      } catch (_) {
+        return;
+      }
+      if (el.dataset.stop) event.stopPropagation();
+      action.fn.apply(
+        action.owner,
+        args.map((a) => (a && a.$el ? el : a)),
+      );
+    },
+    true,
+  );
+  // load does not bubble; the capture listener sees widget iframes finish loading.
+  document.addEventListener(
+    'load',
+    (event) => {
+      const el = event.target;
+      if (el && el.classList && el.classList.contains('gator-widget-frame')) gatorWidgetResize(el);
+    },
+    true,
+  );
+})();
+
+/* ── Client-side perf instrumentation (ephemeral, in-memory) ──────────────────
  * Records user-perceived timings (pane open -> first paint, thread open, poll
  * round-trips) into a bounded ring buffer on window.__gatorPerf. Nothing is
  * persisted and no message content is stored — only names + durations. Inspect
@@ -1849,6 +1978,11 @@ function _openSkillPickerDropdown(query) {
     window.openSettingsPanel?.('skills');
   });
   _mentionDropdown.appendChild(mktFooter);
+
+  const refreshHint = document.createElement('div');
+  refreshHint.className = 'slash-refresh-hint';
+  refreshHint.textContent = "Don't see a new skill or MCP? Press Ctrl+R to reload.";
+  _mentionDropdown.appendChild(refreshHint);
 }
 
 // Commit chip only — no action popup
@@ -3917,6 +4051,10 @@ function _renderTabDrafts(tabId) {
   });
 }
 
+function _renderTabSandboxCards(tabId) {
+  _pendingSandboxCards.get(tabId)?.forEach((data) => _showSandboxApproval(data, tabId));
+}
+
 function _routeDraftToTab(tabId, draft, data) {
   if (!tabId || !draft || !data?.draft_id) return;
   _storeTabDraft(tabId, draft, data);
@@ -3973,7 +4111,9 @@ let _tabs = [];
 let _activeTabId = '';
 const _inflightRequests = new Map();
 const _chatTaskIds = new Map(); // tabId -> task_id for the active chat request
+const _locallyFinishedTasks = new Set(); // task ids already cleaned up here; their chat_done is late
 const _tabsWithUpdates = new Set(); // tabIds with completed responses the user hasn't seen
+const _pendingSandboxCards = new Map(); // tabId -> Map(requestId -> card data); drawn again each time the tab is shown
 const _tabsWorking = new Set(); // tabIds with an in-flight request (animated working line)
 let _revealActiveTabOnRender = false; // true = unconditionally scroll active tab into view on next render
 let _preserveScrollOnRender = false; // true = closing a tab; keep scroll position, only nudge if needed
@@ -4210,6 +4350,7 @@ function switchTab(tabId) {
   _saveActiveTabHistory();
   // Swap
   _activeTabId = tabId;
+  setTimeout(() => _flushSandboxFollowUp(tabId), 0);
   history = _loadTabHistory(tabId);
   _restoreChipsForTab(tabId);
   _saveTabs();
@@ -4303,6 +4444,7 @@ function switchTab(tabId) {
   // Pending HITL cards are not ordinary transcript messages. Restore them
   // after tab history so a draft remains attached to its originating tab.
   _renderTabDrafts(tabId);
+  _renderTabSandboxCards(tabId);
   const inflight = _inflightRequests.get(tabId);
   if (inflight?.msgDiv && msgs && !msgs.contains(inflight.msgDiv)) {
     inflight.msgDiv.classList.add('typing');
@@ -4428,6 +4570,8 @@ function closeTab(tabId) {
       _chatTaskIds.delete(tabId);
     }
     _inflightRequests.delete(tabId);
+    _pendingSandboxFollowUps.delete(tabId);
+    _pendingSandboxCards.delete(tabId);
     // Clear pin context and stored state
     fetch(`/api/context/pins?context_id=${tabId}`, { method: 'DELETE' }).catch((err) =>
       console.warn('Tab cleanup fetch failed:', err),
@@ -5405,6 +5549,7 @@ const settingsBackdrop = document.getElementById('settings-backdrop');
 const drawerClose = document.getElementById('drawer-close');
 
 function openDrawer() {
+  if (typeof window._refreshSavedPermissions === 'function') window._refreshSavedPermissions();
   // Shell mode: if a native WebContentsView is tiled beside Gator, hide it so
   // Settings gets the full window. Restore on close. Use tpState.type
   // SYNCHRONOUSLY (not getActiveApp().then()) — the async version raced with
@@ -5823,6 +5968,7 @@ function initSettingsTabs() {
     tabs.forEach((t) => t.classList.toggle('active', t.dataset.tab === tabName));
     panels.forEach((p) => p.classList.toggle('hidden', p.id !== 'spanel-' + tabName));
     localStorage.setItem(STORAGE_KEY, tabName);
+    if (typeof window._refreshSavedPermissions === 'function') window._refreshSavedPermissions();
     // When the Skills tab is activated, lazily mount the marketplace pane into
     // its panel. Subsequent activations are no-ops (mount() is idempotent).
     if (tabName === 'skills') {
@@ -6533,6 +6679,7 @@ async function _saveLlmProfile() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(30000),
     });
     const d = await res.json();
     if (!res.ok) {
@@ -6545,6 +6692,7 @@ async function _saveLlmProfile() {
     _llmEditingId = savedId;
     const actRes = await fetch('/api/config/llm/profiles/' + savedId + '/activate', {
       method: 'POST',
+      signal: AbortSignal.timeout(30000),
     });
     if (!actRes.ok) {
       const ad = await actRes.json().catch(() => ({}));
@@ -6556,6 +6704,7 @@ async function _saveLlmProfile() {
     _llmShowError('');
     // Hide the form — we're back to the card list
     _hideLlmForm();
+    if (d.warning) _llmShowCardError(d.warning);
     if (saveBtn) {
       saveBtn.textContent = '\u2713 Activated';
       setTimeout(() => {
@@ -6563,7 +6712,11 @@ async function _saveLlmProfile() {
       }, 2000);
     }
   } catch (err) {
-    _llmShowError(err.message);
+    _llmShowError(
+      err.name === 'TimeoutError'
+        ? 'Timed out waiting for the server. Check your network/VPN and try again.'
+        : err.message,
+    );
   } finally {
     if (saveBtn) {
       saveBtn.disabled = false;
@@ -7047,6 +7200,50 @@ personaDeleteBtn.addEventListener('click', () => {
 // Load on startup
 loadPersonas();
 
+/* ── About you (who "me" and "myself" mean) ────────────── */
+const userProfileName = document.getElementById('user-profile-name');
+const userProfileEmail = document.getElementById('user-profile-email');
+const userProfileSaveBtn = document.getElementById('user-profile-save-btn');
+const userProfileMsg = document.getElementById('user-profile-msg');
+
+async function loadUserProfile() {
+  try {
+    const d = await (await fetch('/api/config/user-profile')).json();
+    userProfileName.value = d.name || '';
+    userProfileEmail.value = d.email || '';
+  } catch {}
+}
+
+userProfileSaveBtn.addEventListener('click', async () => {
+  userProfileSaveBtn.disabled = true;
+  userProfileMsg.textContent = 'Saving...';
+  userProfileMsg.style.color = 'var(--text-dim)';
+  try {
+    const res = await fetch('/api/config/user-profile', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: userProfileName.value,
+        email: userProfileEmail.value,
+      }),
+    });
+    const d = await res.json();
+    if (!res.ok) {
+      userProfileMsg.textContent = d.detail || 'Failed';
+      userProfileMsg.style.color = 'var(--danger)';
+    } else {
+      userProfileMsg.textContent = 'Saved';
+      userProfileMsg.style.color = 'var(--success, var(--text-dim))';
+    }
+  } catch (err) {
+    userProfileMsg.textContent = err.message;
+    userProfileMsg.style.color = 'var(--danger)';
+  }
+  userProfileSaveBtn.disabled = false;
+});
+
+loadUserProfile();
+
 // Setup gate — opens Settings drawer on the AI Model tab
 gateSaveBtn.addEventListener('click', () => {
   if (typeof window.openSettingsPanel === 'function') {
@@ -7461,8 +7658,90 @@ const atlassianDot = document.getElementById('atlassian-dot');
 const atlassianDetail = document.getElementById('atlassian-detail');
 const atlassianEmailInput = document.getElementById('atlassian-email-input');
 const atlassianTokenInput = document.getElementById('atlassian-token-input');
-const atlassianJiraUrlInput = document.getElementById('atlassian-jira-url-input');
-const atlassianConfluenceUrlInput = document.getElementById('atlassian-confluence-url-input');
+const atlassianSiteLists = {
+  jira: document.querySelector('#atlassian-jira-sites .site-list'),
+  confluence: document.querySelector('#atlassian-confluence-sites .site-list'),
+};
+const ATLASSIAN_SITE_PLACEHOLDERS = {
+  jira: [
+    'Primary Jira URL (e.g. https://your-org.atlassian.net)',
+    'https://other-org.atlassian.net',
+  ],
+  confluence: [
+    'Primary Confluence URL (e.g. https://your-org.atlassian.net/wiki)',
+    'https://other-org.atlassian.net/wiki',
+  ],
+};
+
+// First row is the primary site; any further rows share its email + token.
+function addAtlassianSiteRow(kind, value = '') {
+  const list = atlassianSiteLists[kind];
+  if (!list) return null;
+  const isPrimary = list.children.length === 0;
+  const row = document.createElement('div');
+  row.className = 'site-row';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'key-field';
+  input.autocomplete = 'off';
+  input.spellcheck = false;
+  input.placeholder = ATLASSIAN_SITE_PLACEHOLDERS[kind][isPrimary ? 0 : 1];
+  input.value = value;
+  row.appendChild(input);
+  if (isPrimary) {
+    const tag = document.createElement('span');
+    tag.className = 'site-row-tag';
+    tag.textContent = 'Primary';
+    row.appendChild(tag);
+  } else {
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'site-remove';
+    remove.title = 'Remove site';
+    remove.setAttribute('aria-label', 'Remove site');
+    remove.textContent = '×';
+    remove.addEventListener('click', () => row.remove());
+    row.appendChild(remove);
+  }
+  list.appendChild(row);
+  return input;
+}
+
+function setAtlassianSites(kind, primary, extras) {
+  const list = atlassianSiteLists[kind];
+  if (!list) return;
+  list.replaceChildren();
+  addAtlassianSiteRow(kind, primary || '');
+  (extras || []).forEach((u) => addAtlassianSiteRow(kind, u));
+}
+
+function atlassianSiteValues(kind) {
+  const list = atlassianSiteLists[kind];
+  if (!list) return [];
+  const [primary = '', ...extras] = Array.from(list.querySelectorAll('input')).map((i) =>
+    i.value.trim(),
+  );
+  return [primary, ...extras.filter(Boolean)];
+}
+
+setAtlassianSites('jira', '', []);
+setAtlassianSites('confluence', '', []);
+document.querySelectorAll('#atlassian-entry .site-add-btn').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    const input = addAtlassianSiteRow(btn.dataset.add);
+    if (input) input.focus();
+  });
+});
+
+async function saveAtlassianExtraSites(kind, urls) {
+  const res = await fetch(`/api/config/${kind}/extra-sites`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ urls }),
+  });
+  const data = await res.json().catch(() => ({}));
+  return res.ok ? '' : data.detail || 'error';
+}
 const atlassianSaveBtn = document.getElementById('atlassian-save-btn');
 const atlassianCloudMcpBtn = document.getElementById('atlassian-cloud-mcp-btn');
 const atlassianAddSiteBtn = document.getElementById('atlassian-add-site-btn');
@@ -7497,9 +7776,8 @@ async function loadAtlassianStatus() {
     // Pre-fill token from stored config (cloud token or PAT)
     const token = cfg.jira_api_token || cfg.jira_pat || cfg.confluence_pat || '';
     if (token) atlassianTokenInput.value = token;
-    // Pre-fill URLs
-    if (jr.base_url) atlassianJiraUrlInput.value = jr.base_url;
-    if (cr.base_url) atlassianConfluenceUrlInput.value = cr.base_url;
+    setAtlassianSites('jira', jr.base_url, jr.extra_base_urls);
+    setAtlassianSites('confluence', cr.base_url, cr.extra_base_urls);
     if (atlassianSaveBtn) atlassianSaveBtn.textContent = ok ? 'Reconnect' : 'Save Direct API';
   } catch {
     /* non-fatal */
@@ -7510,8 +7788,8 @@ loadAtlassianStatus();
 atlassianSaveBtn.addEventListener('click', async () => {
   const email = atlassianEmailInput.value.trim();
   const token = atlassianTokenInput.value.trim();
-  const jiraUrl = atlassianJiraUrlInput.value.trim();
-  const confUrl = atlassianConfluenceUrlInput.value.trim();
+  const [jiraUrl = '', ...jiraExtras] = atlassianSiteValues('jira');
+  const [confUrl = '', ...confExtras] = atlassianSiteValues('confluence');
   if (!email || !token) {
     atlassianMsg.textContent = 'Email and token are required.';
     return;
@@ -7531,6 +7809,18 @@ atlassianSaveBtn.addEventListener('click', async () => {
       }).then((r) => r.json()),
     ]);
     if (jr.ok && cr.ok) {
+      const failures = [];
+      for (const [kind, urls] of [
+        ['jira', jiraExtras],
+        ['confluence', confExtras],
+      ]) {
+        const err = await saveAtlassianExtraSites(kind, urls);
+        if (err) failures.push(`${kind === 'jira' ? 'Jira' : 'Confluence'}: ${err}`);
+      }
+      if (failures.length) {
+        atlassianMsg.textContent = 'Saved, but additional sites failed: ' + failures.join(' | ');
+        return;
+      }
       atlassianMsg.textContent =
         'Direct API connected. Optionally connect Cloud MCP or Rovo MCP below.';
       atlassianDot.className = 'section-status st-ok';
@@ -9157,6 +9447,7 @@ function _adfToPlainText(node) {
 }
 
 const _JIRA_MARKDOWN_FIELDS = new Set(['description', 'comment', 'body']);
+const _JIRA_EDITABLE_NOTE = 'Edit the fields above or just tell me here for changes.';
 
 function _renderJiraFieldValue(key, value) {
   const isMarkdownField = _JIRA_MARKDOWN_FIELDS.has((key || '').toLowerCase());
@@ -9198,15 +9489,43 @@ function _renderJiraFieldValue(key, value) {
   };
 }
 
-function _buildJiraFieldRows(data) {
+// Plain-text seed for an editable Jira field (descriptions may arrive as ADF).
+function _jiraEditSeed(value) {
+  if (typeof value === 'string') return value;
+  return value && typeof value === 'object' ? _adfToPlainText(value) : '';
+}
+
+// An editable field row. `kind` 'line' renders a single-line input, 'text' a textarea.
+// Only fields listed in `editable` get one; the approve handler sends back the ones changed.
+function _jiraEditRow(name, label, value, kind) {
+  const text = _jiraEditSeed(value);
+  const ek = escapeHtml(label);
+  const control =
+    kind === 'line'
+      ? `<input type="text" class="gcc-field-edit" data-jira-edit="${name}" maxlength="255" aria-label="${ek}" value="${escapeHtml(text).replace(/"/g, '&quot;')}">`
+      : `<textarea class="gcc-field-edit" data-jira-edit="${name}" aria-label="${ek}" rows="${Math.min(10, Math.max(3, text.split('\n').length + 1))}">${escapeHtml(text)}</textarea>`;
+  return `<div class="gcc-field-row gcc-field-row--block"><span class="gcc-field-key">${ek}</span><div class="gcc-field-val">${control}</div></div>`;
+}
+
+function _buildJiraFieldRows(data, editable = {}) {
   const rows = [];
   if (data.jira_site?.display_name || data.jira_site?.base_url) {
     rows.push(['Jira site', escapeHtml(data.jira_site.display_name || data.jira_site.base_url)]);
   }
   if (data.issue_key) rows.push(['Issue', escapeHtml(data.issue_key)]);
   if (data.issue_type) rows.push(['Type', escapeHtml(data.issue_type)]);
-  if (data.summary) rows.push(['Summary', '<strong>' + escapeHtml(data.summary) + '</strong>']);
-  if (data.description) {
+  if (editable.summary && data.summary !== undefined) {
+    rows.push(['Summary', _jiraEditRow('summary', 'Summary', data.summary, 'line'), 'edit']);
+  } else if (data.summary) {
+    rows.push(['Summary', '<strong>' + escapeHtml(data.summary) + '</strong>']);
+  }
+  if (editable.description && data.description !== undefined) {
+    rows.push([
+      'Description',
+      _jiraEditRow('description', 'Description', data.description, 'text'),
+      'edit',
+    ]);
+  } else if (data.description) {
     const { html, block } = _renderJiraFieldValue('description', data.description);
     rows.push(['Description', html, block]);
   }
@@ -9221,12 +9540,26 @@ function _buildJiraFieldRows(data) {
   if (data.priority) rows.push(['Priority', escapeHtml(data.priority)]);
   if (data.fields && typeof data.fields === 'object') {
     Object.entries(data.fields).forEach(([key, value]) => {
+      if (editable[key] && (key === 'comment' || key === 'summary' || key === 'description')) {
+        rows.push([
+          key,
+          _jiraEditRow(
+            key,
+            key.charAt(0).toUpperCase() + key.slice(1),
+            value,
+            key === 'summary' ? 'line' : 'text',
+          ),
+          'edit',
+        ]);
+        return;
+      }
       const { html, block } = _renderJiraFieldValue(key, value);
       rows.push([key, html, block]);
     });
   }
   return rows
     .map(([k, v, block]) => {
+      if (block === 'edit') return v;
       const ek = escapeHtml(String(k));
       return block
         ? `<div class="gcc-field-row gcc-field-row--block"><span class="gcc-field-key">${ek}</span><div class="gcc-field-val gcc-field-markdown">${v}</div></div>`
@@ -9304,6 +9637,275 @@ function _showJiraTargetSelection(data, ownerTabId) {
         );
       }
     });
+  });
+  document.getElementById('messages')?.appendChild(card);
+  card.scrollIntoView({ behavior: 'smooth', block: 'end' });
+}
+
+// ── Code-runner sandbox approval card ────────────────────────────────────────
+// Paths and hosts come from the model: they are rendered with textContent
+// only. Approve/Deny go to CSRF-guarded routes the agent loop cannot call;
+// a short chat message then tells the model whether to re-call.
+function _sandboxFollowUpText(decision, requestId, tool = 'run_python') {
+  if (decision !== 'approve') {
+    return `I denied sandbox access request ${requestId}. Do not retry it; continue without that access or tell me what you need.`;
+  }
+  const again =
+    tool === 'run_shell'
+      ? 'Run the same run_shell call again with exactly the same command, cwd, extra_read_paths, extra_write_paths and network_hosts.'
+      : 'Run the same run_python call again with exactly the same extra_read_paths, extra_write_paths and network_hosts.';
+  return `I approved sandbox access request ${requestId}. ${again}`;
+}
+
+// tabId -> follow-up text waiting for that tab's running chat turn to finish
+// (the submit handler ignores sends while the tab is streaming).
+const _pendingSandboxFollowUps = new Map();
+
+async function _sendSandboxFollowUp(tabId, text) {
+  if (tabId !== _activeTabId) {
+    _showConnectivityToast(
+      'Decision saved. Switch to that tab and tell AI Gator to continue.',
+      'info',
+    );
+    return;
+  }
+  if (_chatTaskIds.has(tabId)) {
+    _pendingSandboxFollowUps.set(tabId, text);
+    return;
+  }
+  const input = document.getElementById('chat-input');
+  const form = document.getElementById('chat-form');
+  if (!input || !form) return;
+  // Keep whatever the user is typing: the submit handler reads the composer
+  // now and clears it a microtask later, so put the draft back after a tick.
+  // It also snapshots attached images synchronously, so hide them for the
+  // submit (the follow-up must not carry or consume the user's attachments).
+  const draft = Array.from(input.childNodes);
+  const images = _aigatorImages;
+  input.replaceChildren();
+  input.textContent = text;
+  _aigatorImages = [];
+  try {
+    form.requestSubmit();
+  } finally {
+    _aigatorImages = images;
+  }
+  if (images.length) _renderAigatorPreviews();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  input.replaceChildren(...draft);
+  _updateSendSlot();
+  _updatePlaceholder();
+}
+
+function _flushSandboxFollowUp(tabId) {
+  const text = _pendingSandboxFollowUps.get(tabId);
+  if (!text || tabId !== _activeTabId || _chatTaskIds.has(tabId)) return;
+  _pendingSandboxFollowUps.delete(tabId);
+  _sendSandboxFollowUp(tabId, text).catch((e) => console.warn('[sandbox] follow-up not sent:', e));
+}
+
+function _showSandboxApproval(data, ownerTabId) {
+  const requestId = data && typeof data.request_id === 'string' ? data.request_id : '';
+  if (!requestId) return;
+  // The card belongs to the tab that asked. Keep it for that tab and draw it when the tab is shown,
+  // because a tab's chat is rebuilt from history on every switch.
+  const cardTab = ownerTabId || _activeTabId || 'default';
+  if (!_pendingSandboxCards.has(cardTab)) _pendingSandboxCards.set(cardTab, new Map());
+  _pendingSandboxCards.get(cardTab).set(requestId, data);
+  if (ownerTabId && ownerTabId !== _activeTabId) {
+    _tabsWithUpdates.add(ownerTabId);
+    document
+      .querySelector?.(`.tab-item[data-tab-id="${ownerTabId}"]`)
+      ?.classList.add('tab-has-update');
+    _showConnectivityToast('AI Gator needs your approval in another tab.', 'info');
+    return;
+  }
+  const seen = Array.from(document.querySelectorAll('[data-sandbox-request]')).some(
+    (el) => el.dataset.sandboxRequest === requestId,
+  );
+  if (seen) return;
+  const card = document.createElement('div');
+  card.className = 'message assistant';
+  card.dataset.sandboxRequest = requestId;
+  const bubble = document.createElement('div');
+  bubble.className = 'bubble card-bubble';
+  const box = document.createElement('div');
+  box.className = 'gator-compose-card gator-draft-card';
+  const isShell = data.tool === 'run_shell';
+  const tool = isShell ? 'run_shell' : 'run_python';
+
+  const header = document.createElement('div');
+  header.className = 'gcc-header';
+  const title = document.createElement('div');
+  title.className = 'gcc-title';
+  title.textContent = isShell ? 'AI Gator wants to run a command' : 'Code wants extra access';
+  header.appendChild(title);
+
+  const body = document.createElement('div');
+  body.className = 'gcc-body';
+  if (isShell && typeof data.command === 'string' && data.command) {
+    const row = document.createElement('div');
+    row.className = 'gcc-field-row gcc-field-row--block';
+    const key = document.createElement('span');
+    key.className = 'gcc-field-key';
+    key.textContent = 'Command';
+    const cmd = document.createElement('pre');
+    cmd.className = 'gcc-field-val';
+    cmd.textContent = data.command;
+    row.append(key, cmd);
+    body.appendChild(row);
+  }
+  [
+    ['Read', data.read_paths],
+    ['Read and write', data.write_paths],
+    ['Connect to', data.network_hosts],
+  ].forEach(([label, items]) => {
+    if (!Array.isArray(items) || !items.length) return;
+    const row = document.createElement('div');
+    row.className = 'gcc-field-row gcc-field-row--block';
+    const key = document.createElement('span');
+    key.className = 'gcc-field-key';
+    key.textContent = label;
+    const list = document.createElement('ul');
+    list.className = 'gcc-field-val';
+    items.forEach((item) => {
+      const li = document.createElement('li');
+      li.textContent = String(item);
+      list.appendChild(li);
+    });
+    row.append(key, list);
+    body.appendChild(row);
+  });
+  if (Array.isArray(data.network_hosts) && data.network_hosts.length) {
+    const note = document.createElement('div');
+    note.className = 'gcc-refine';
+    note.textContent = `Approving turns on outbound network for ${isShell ? 'this tab' : 'the runs it covers'}; the host is shown to you but not enforced.`;
+    body.appendChild(note);
+  }
+  if (
+    isShell &&
+    data.saveable === true &&
+    Array.isArray(data.network_hosts) &&
+    data.network_hosts.length
+  ) {
+    const risk = document.createElement('div');
+    risk.className = 'gcc-refine';
+    risk.textContent =
+      'Always allow lets these programs reach any host on the network, not only the ones listed, when working in these folders. Programs such as git and npm run scripts stored in the project, so those scripts get the same access. You can remove it in Settings.';
+    body.appendChild(risk);
+  }
+
+  const actions = document.createElement('div');
+  actions.className = 'gcc-actions';
+  const approve = document.createElement('button');
+  approve.className = 'gcc-approve-btn';
+  approve.textContent = 'Allow for this tab';
+  let always = null;
+  if (isShell && data.saveable === true) {
+    always = document.createElement('button');
+    always.className = 'btn-secondary';
+    always.textContent = 'Always allow this';
+  }
+  let once = null;
+  if (!isShell) {
+    once = document.createElement('button');
+    once.className = 'btn-secondary';
+    once.textContent = 'Allow once';
+  }
+  const deny = document.createElement('button');
+  deny.className = 'btn-secondary';
+  deny.textContent = 'Deny';
+  actions.append(approve, ...(always ? [always] : []), ...(once ? [once] : []), deny);
+
+  const footer = document.createElement('div');
+  footer.className = 'gcc-footer';
+  const footNote = document.createElement('span');
+  footNote.className = 'gcc-refine';
+  footNote.textContent =
+    'Allowed until you close this tab. Unanswered requests expire after 10 minutes.';
+  footer.appendChild(footNote);
+
+  box.append(header, body, actions, footer);
+  bubble.appendChild(box);
+  card.appendChild(bubble);
+
+  const tabId = ownerTabId || _activeTabId || 'default';
+  // The server stored the request under its own context id; send exactly that.
+  const contextId = typeof data.context_id === 'string' ? data.context_id : tabId;
+  const decide = async (decision, scope = 'task') => {
+    if (approve.disabled) return;
+    approve.disabled = true;
+    if (always) always.disabled = true;
+    if (once) once.disabled = true;
+    deny.disabled = true;
+    const post = () =>
+      fetch(`/api/sandbox/requests/${encodeURIComponent(requestId)}/${decision}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': window.__CSRF_TOKEN__ || '',
+        },
+        body: JSON.stringify({
+          context_id: contextId,
+          ...(decision === 'approve' ? { scope } : {}),
+        }),
+      });
+    try {
+      let res = await post();
+      if (res.status === 403) {
+        const fresh = await fetch('/api/csrf')
+          .then((r) => (r.ok ? r.json() : null))
+          .catch(() => null);
+        if (fresh?.csrf_token) window.__CSRF_TOKEN__ = fresh.csrf_token;
+        res = await post();
+      }
+      if (!res.ok) {
+        const detail = await res.json().catch(() => ({}));
+        throw new Error(detail?.detail || `HTTP ${res.status}`);
+      }
+      let outcome = 'Denied.';
+      if (decision === 'approve') {
+        if (scope === 'once') outcome = 'Allowed once.';
+        else if (scope === 'always') {
+          const out = await res.json().catch(() => ({}));
+          outcome =
+            out && out.saved
+              ? 'Always allowed. You can remove this in Settings.'
+              : 'Allowed for this tab (it could not be saved).';
+        } else outcome = 'Allowed for this tab.';
+      }
+      footNote.textContent = outcome;
+      actions.remove();
+      _pendingSandboxCards.get(cardTab)?.delete(requestId);
+      _sendSandboxFollowUp(tabId, _sandboxFollowUpText(decision, requestId, tool)).catch((e) =>
+        console.warn('[sandbox] follow-up not sent:', e),
+      );
+    } catch (err) {
+      approve.disabled = false;
+      if (always) always.disabled = false;
+      if (once) once.disabled = false;
+      deny.disabled = false;
+      // 'warn', not 'error': _showConnectivityToast mutes error toasts.
+      _showConnectivityToast(`Could not record your decision: ${err.message}`, 'warn');
+    }
+  };
+  approve.addEventListener('click', (e) => {
+    e.stopPropagation();
+    decide('approve', 'task');
+  });
+  if (always)
+    always.addEventListener('click', (e) => {
+      e.stopPropagation();
+      decide('approve', 'always');
+    });
+  if (once)
+    once.addEventListener('click', (e) => {
+      e.stopPropagation();
+      decide('approve', 'once');
+    });
+  deny.addEventListener('click', (e) => {
+    e.stopPropagation();
+    decide('deny');
   });
   document.getElementById('messages')?.appendChild(card);
   card.scrollIntoView({ behavior: 'smooth', block: 'end' });
@@ -9725,38 +10327,200 @@ function _wireInlineDraftMentions(editor, service, data) {
   editor.addEventListener('blur', () => setTimeout(close, 150));
 }
 
-function _serializeInlineDraftEditor(editor, service) {
-  const mentions = [];
-  const visit = (node) => {
-    let output = '';
-    node.childNodes.forEach((child) => {
-      if (child.nodeType === Node.TEXT_NODE) {
-        output += service === 'teams' ? escapeHtml(child.textContent) : child.textContent;
-      } else if (child.nodeName === 'BR') output += '\n';
-      else if (child.classList?.contains('gcc-inline-mention')) {
-        const id = child.dataset.mentionId || '';
-        const name = child.dataset.mentionName || '';
-        if (service === 'slack') output += `<@${id}>`;
-        else {
-          const itemid = mentions.length;
-          mentions.push({
-            id: itemid,
-            mentionText: name,
-            mentioned: { user: { id, displayName: name, userIdentityType: 'aadUser' } },
-          });
-          output += `<span itemscope itemtype="http://schema.skype.com/Mention" itemid="${itemid}">${escapeHtml(name)}</span>`;
-        }
-      } else {
-        output += visit(child);
-        if (child.nodeName === 'DIV' || child.nodeName === 'P') output += '\n';
-      }
-    });
-    return output;
+function _draftEditorSeedHtml(data, fallbackText) {
+  // Only cards built by the server-side rich-text tools (which carry format_capabilities) hold sanitized
+  // body_html; drafts restored from older storage may not, so those fall back to escaped text.
+  const html =
+    data && typeof data.body_html === 'string' && Array.isArray(data.format_capabilities)
+      ? data.body_html.trim()
+      : '';
+  if (html) return html;
+  return escapeHtml(String(fallbackText || '')).replace(/\n/g, '<br>');
+}
+
+function _upgradeDraftMentions(editor) {
+  editor.querySelectorAll('span[data-mention-id]').forEach((span) => {
+    if (span.classList.contains('gcc-inline-mention')) return;
+    const service = span.dataset.mentionService === 'slack' ? 'slack' : 'teams';
+    const id = span.dataset.mentionId || '';
+    const name = span.dataset.mentionName || (span.textContent || '').replace(/^[@#]/, '');
+    const chip = _draftMentionChip(service, { name, id });
+    if (id.startsWith('#')) chip.textContent = '#' + name;
+    span.replaceWith(chip);
+  });
+}
+
+function _normalizeDraftLinkUrl(raw) {
+  const url = String(raw || '').trim();
+  if (!url || /[\s"<>]/.test(url)) return '';
+  if (/^(https?:\/\/|mailto:)/i.test(url)) return url;
+  if (/^[a-z][a-z0-9+.-]*:(?!\d)/i.test(url)) return '';
+  if (/^[^@/]+@[^@/]+\.[^@/]+$/.test(url)) return 'mailto:' + url;
+  return 'https://' + url;
+}
+
+function _draftFormatButtons(capabilities) {
+  const allowed = new Set(capabilities || []);
+  return [
+    { cap: 'bold', group: 1, label: 'B', title: 'Bold', command: 'bold' },
+    { cap: 'italic', group: 1, label: 'I', title: 'Italic', command: 'italic' },
+    { cap: 'underline', group: 1, label: 'U', title: 'Underline', command: 'underline' },
+    { cap: 'ul', group: 2, label: '•', title: 'Bulleted list', command: 'insertUnorderedList' },
+    { cap: 'ol', group: 2, label: '1.', title: 'Numbered list', command: 'insertOrderedList' },
+    { cap: 'link', group: 3, label: 'Link', title: 'Link', command: 'link' },
+    { cap: 'code', group: 3, label: '</>', title: 'Code', command: 'code' },
+  ].filter((button) => allowed.has(button.cap));
+}
+
+function _draftToolbarSeparatorBefore(previous, button) {
+  return !!previous && previous.group !== button.group;
+}
+
+function _draftFormatActive(editor, button) {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0 || !editor.contains(sel.anchorNode)) return false;
+  const node = sel.anchorNode.nodeType === 1 ? sel.anchorNode : sel.anchorNode.parentElement;
+  if (button.command === 'link') return !!node?.closest('a');
+  if (button.command === 'code') return !!node?.closest('code');
+  try {
+    return document.queryCommandState(button.command);
+  } catch (_) {
+    return false;
+  }
+}
+
+function _initDraftRichEditor(editor, capabilities) {
+  _upgradeDraftMentions(editor);
+  editor.addEventListener('focus', () => {
+    try {
+      document.execCommand('defaultParagraphSeparator', false, 'p');
+      document.execCommand('styleWithCSS', false, false);
+    } catch (_) {
+      // execCommand options are best effort; the editor still works without them.
+    }
+  });
+  editor.addEventListener('paste', (event) => {
+    const text = event.clipboardData?.getData('text/plain');
+    if (text === undefined) return;
+    event.preventDefault();
+    document.execCommand('insertHTML', false, escapeHtml(text).replace(/\r?\n/g, '<br>'));
+  });
+
+  const buttons = _draftFormatButtons(capabilities);
+  if (!buttons.length) return;
+
+  const toolbar = document.createElement('div');
+  toolbar.className = 'gcc-toolbar';
+  toolbar.setAttribute('role', 'toolbar');
+  toolbar.setAttribute('aria-label', 'Formatting');
+
+  const linkRow = document.createElement('div');
+  linkRow.className = 'gcc-link-row hidden';
+  const linkInput = document.createElement('input');
+  linkInput.type = 'text';
+  linkInput.className = 'gcc-link-input';
+  linkInput.placeholder = 'https://example.com';
+  linkInput.setAttribute('aria-label', 'Link address');
+  const linkAdd = document.createElement('button');
+  linkAdd.type = 'button';
+  linkAdd.className = 'gcc-tool-btn';
+  linkAdd.textContent = 'Add';
+  linkRow.append(linkInput, linkAdd);
+
+  let savedRange = null;
+  const applyLink = () => {
+    const url = _normalizeDraftLinkUrl(linkInput.value);
+    if (!url) {
+      linkInput.setAttribute('aria-invalid', 'true');
+      return;
+    }
+    linkInput.removeAttribute('aria-invalid');
+    editor.focus();
+    const sel = window.getSelection();
+    if (savedRange) {
+      sel.removeAllRanges();
+      sel.addRange(savedRange);
+    }
+    if (!sel.rangeCount || sel.isCollapsed) {
+      document.execCommand(
+        'insertHTML',
+        false,
+        `<a href="${escapeHtml(url)}">${escapeHtml(url)}</a>`,
+      );
+    } else {
+      document.execCommand('createLink', false, url);
+    }
+    linkInput.value = '';
+    linkRow.classList.add('hidden');
   };
-  const output = visit(editor).replace(/\n$/, '');
-  return service === 'teams'
-    ? { text: `<div>${output.replace(/\n/g, '<br>')}</div>`, mentions }
-    : { text: output, mentions: [] };
+  linkInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      applyLink();
+    } else if (event.key === 'Escape') {
+      linkRow.classList.add('hidden');
+      editor.focus();
+    }
+  });
+  linkAdd.addEventListener('click', applyLink);
+
+  const toolButtons = [];
+  const refreshActive = () => {
+    toolButtons.forEach(({ el, button }) => {
+      const active = _draftFormatActive(editor, button);
+      el.classList.toggle('is-active', active);
+      el.setAttribute('aria-pressed', active ? 'true' : 'false');
+    });
+  };
+
+  buttons.forEach((button, index) => {
+    if (_draftToolbarSeparatorBefore(buttons[index - 1], button)) {
+      const sep = document.createElement('span');
+      sep.className = 'gcc-tool-sep';
+      sep.setAttribute('aria-hidden', 'true');
+      toolbar.appendChild(sep);
+    }
+    const el = document.createElement('button');
+    el.type = 'button';
+    el.className = 'gcc-tool-btn';
+    el.dataset.cap = button.cap;
+    el.textContent = button.label;
+    el.title = button.title;
+    el.setAttribute('aria-label', button.title);
+    el.setAttribute('aria-pressed', 'false');
+    el.addEventListener('mousedown', (event) => event.preventDefault());
+    el.addEventListener('click', () => {
+      const sel = window.getSelection();
+      const inEditor = !!sel && sel.rangeCount > 0 && editor.contains(sel.anchorNode);
+      if (button.command === 'link') {
+        savedRange = inEditor ? sel.getRangeAt(0).cloneRange() : null;
+        linkRow.classList.toggle('hidden');
+        if (!linkRow.classList.contains('hidden')) linkInput.focus();
+        return;
+      }
+      editor.focus();
+      if (button.command === 'code') {
+        const selected = inEditor ? sel.toString() : '';
+        document.execCommand('insertHTML', false, `<code>${escapeHtml(selected || 'code')}</code>`);
+      } else {
+        document.execCommand(button.command, false, null);
+      }
+      refreshActive();
+    });
+    toolButtons.push({ el, button });
+    toolbar.appendChild(el);
+  });
+  editor.before(toolbar, linkRow);
+
+  const onSelectionChange = () => {
+    if (!editor.isConnected) {
+      document.removeEventListener('selectionchange', onSelectionChange);
+      return;
+    }
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount > 0 && editor.contains(sel.anchorNode)) refreshActive();
+  };
+  document.addEventListener('selectionchange', onSelectionChange);
 }
 
 function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persist = true } = {}) {
@@ -9814,6 +10578,7 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
       service: 'slack',
       action: 'Announce to ' + (data.channels || ''),
       sendLabel: 'Post',
+      plainEditor: true,
       // An announcement can target multiple channels, so there is no single
       // conversation to open before it is posted.
       viewAvailable: false,
@@ -9845,7 +10610,8 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
       action: (data.issue_type || 'Issue') + ' in ' + (data.project || 'Jira'),
       sendLabel: 'Create issue',
       hideEditLink: true,
-      customBody: _buildJiraFieldRows(data),
+      footerNote: _JIRA_EDITABLE_NOTE,
+      customBody: _buildJiraFieldRows(data, { summary: true, description: true }),
     },
     'jira-update': {
       paneLabel: '@jira',
@@ -9854,7 +10620,8 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
       action: 'Update ' + (data.issue_key || 'Jira issue'),
       sendLabel: 'Apply update',
       hideEditLink: true,
-      customBody: _buildJiraFieldRows(data),
+      footerNote: _JIRA_EDITABLE_NOTE,
+      customBody: _buildJiraFieldRows(data, { summary: true, description: true }),
     },
     'jira-watcher': {
       paneLabel: '@jira',
@@ -9885,11 +10652,15 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
       action: 'Comment on ' + (data.issue_key || 'Jira issue'),
       sendLabel: 'Post comment',
       hideEditLink: true,
-      customBody: _buildJiraFieldRows({
-        issue_key: data.issue_key,
-        jira_site: data.jira_site,
-        fields: { comment: data.comment },
-      }),
+      footerNote: _JIRA_EDITABLE_NOTE,
+      customBody: _buildJiraFieldRows(
+        {
+          issue_key: data.issue_key,
+          jira_site: data.jira_site,
+          fields: { comment: data.comment },
+        },
+        { comment: true },
+      ),
     },
     'jira-transition': {
       paneLabel: '@jira',
@@ -9939,6 +10710,22 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
       ? `<div class="gcc-workspace">Slack · ${escapeHtml(data.workspace_name)}</div>`
       : '';
   const canOpenNativeApp = typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell;
+  const destinationLabel =
+    {
+      '@outlook': 'Outlook',
+      '@slack': 'Slack',
+      '@teams': 'Microsoft Teams',
+      '@jira': 'Jira',
+      '@gcal': 'Google Calendar',
+    }[config.paneLabel] || '';
+  const sourcesRead = Array.isArray(data.sources) ? data.sources : [];
+  const flowLine = destinationLabel
+    ? `<div class="gcc-flow">Data from: <strong>${sourcesRead.length ? escapeHtml(sourcesRead.join(', ')) : 'no apps read in this request'}</strong> &rarr; Sending to: <strong>${escapeHtml(destinationLabel)}</strong></div>`
+    : '';
+  const sensitiveMarks = Array.isArray(data.sensitive) ? data.sensitive : [];
+  const sensitiveBanner = sensitiveMarks.length
+    ? `<div class="gcc-sensitive" role="alert">Sensitive content: this draft contains <strong>${escapeHtml(sensitiveMarks.join(', '))}</strong>. Check the destination before you approve.</div>`
+    : '';
 
   const card = document.createElement('div');
   card.className = 'message assistant';
@@ -9961,6 +10748,8 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
           <div class="gcc-title">Draft ready for approval</div>
         </div>
         <div class="gcc-body">
+          ${flowLine}
+          ${sensitiveBanner}
           ${
             config.service === 'email'
               ? `
@@ -9985,11 +10774,11 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
               ? `<div class="gcc-fields">${config.customBody}</div>`
               : config.hideEditLink
                 ? ''
-                : config.service === 'slack' || config.service === 'teams'
-                  ? `<div class="gcc-edit-area gcc-mention-editor" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Draft message">${escapeHtml(_editableBody)}</div>`
+                : ['email', 'slack', 'teams'].includes(config.service) && !config.plainEditor
+                  ? `<div class="gcc-edit-area gcc-rich-editor${config.service === 'email' ? '' : ' gcc-mention-editor'}" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Draft message">${_draftEditorSeedHtml(data, _editableBody)}</div>`
                   : `<textarea class="gcc-edit-area" rows="${Math.min(10, Math.max(3, _editableBody.split('\n').length))}">${escapeHtml(_editableBody)}</textarea>`
           }
-          ${config.service === 'slack' && !config.customBody ? '<div class="gcc-mention-hint">Type <strong>@</strong> to mention a Slack person.</div>' : ''}
+          ${config.service === 'slack' && !config.customBody && !config.plainEditor ? '<div class="gcc-mention-hint">Type <strong>@</strong> to mention a Slack person.</div>' : ''}
           ${config.service === 'teams' && !config.customBody ? '<div class="gcc-mention-hint">Type <strong>@</strong> to mention a Teams person.</div>' : ''}
         </div>
         <div class="gcc-actions">
@@ -10030,27 +10819,32 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
   if (inlineMentionEditor && (config.service === 'slack' || config.service === 'teams')) {
     _wireInlineDraftMentions(editArea, config.service, data);
   }
+  if (editArea?.classList.contains('gcc-rich-editor')) {
+    _initDraftRichEditor(editArea, data.format_capabilities || []);
+  }
+
+  const jiraEditFields = [...card.querySelectorAll('[data-jira-edit]')];
+  jiraEditFields.forEach((el) => {
+    el.dataset.orig = el.value;
+  });
 
   approveBtn.addEventListener('click', async () => {
     approveBtn.disabled = true;
     approveBtn.textContent = config.hideEditLink ? 'Applying\u2026' : 'Sending\u2026';
     try {
-      // Send the EDITED text from the textarea, not the original draft.
-      const inlineMentionPayload =
-        inlineMentionEditor && editArea
-          ? _serializeInlineDraftEditor(editArea, config.service)
-          : null;
-      const editedText = editArea
-        ? inlineMentionPayload
-          ? inlineMentionPayload.text
-          : editArea.value || editArea.textContent || ''
-        : null;
+      const editedFields = {};
+      jiraEditFields.forEach((el) => {
+        if (el.value !== el.dataset.orig) editedFields[el.dataset.jiraEdit] = el.value;
+      });
+      // Send the edited content, not the original draft.
+      const richEditor = !!editArea?.classList.contains('gcc-rich-editor');
+      const editedText =
+        editArea && !richEditor ? editArea.value || editArea.textContent || '' : null;
       const _approveBody = JSON.stringify({
         context_id: ownerTabId || _activeTabId || 'default',
+        ...(richEditor ? { edited_html: editArea.innerHTML } : {}),
         ...(editedText !== null ? { edited_message: editedText } : {}),
-        ...(inlineMentionPayload?.mentions?.length
-          ? { mentions: inlineMentionPayload.mentions }
-          : {}),
+        ...(Object.keys(editedFields).length ? { edited_fields: editedFields } : {}),
       });
       let res = await fetch('/api/drafts/' + draftId + '/approve', {
         method: 'POST',
@@ -10170,20 +10964,36 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
       try {
         if (config.service === 'email') {
           // Create a real OWA draft via Graph and navigate Outlook to it.
-          // Send the EDITED text from the textarea, same as Approve does,
+          // Send the edited content, same as Approve does,
           // so edits aren't silently dropped when opening in Outlook instead
           // of sending from Gator (a handed-off draft permanently disables
           // Approve, so there is no later chance to apply them).
-          const editedText = editArea ? editArea.value || editArea.textContent || '' : null;
-          const res = await fetch('/api/drafts/' + draftId + '/open-in-outlook', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'X-CSRF-Token': window.__CSRF_TOKEN__ || '',
-            },
-            body: editedText !== null ? JSON.stringify({ edited_message: editedText }) : undefined,
-          });
-          if (!res.ok) throw new Error('HTTP ' + res.status);
+          const outlookEdit = editArea?.classList.contains('gcc-rich-editor')
+            ? { edited_html: editArea.innerHTML }
+            : editArea
+              ? { edited_message: editArea.value || editArea.textContent || '' }
+              : null;
+          const postOpen = () =>
+            fetch('/api/drafts/' + draftId + '/open-in-outlook', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': window.__CSRF_TOKEN__ || '',
+              },
+              body: outlookEdit ? JSON.stringify(outlookEdit) : undefined,
+            });
+          let res = await postOpen();
+          if (res.status === 403) {
+            const _csrf = await fetch('/api/csrf')
+              .then((r) => (r.ok ? r.json() : null))
+              .catch(() => null);
+            if (_csrf?.csrf_token) window.__CSRF_TOKEN__ = _csrf.csrf_token;
+            res = await postOpen();
+          }
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(typeof err.detail === 'string' ? err.detail : 'HTTP ' + res.status);
+          }
           const { url } = await res.json();
           // Enter the native-pane state first so tpState, the divider, and the
           // visible Expand Gator button stay in sync. This may navigate Outlook
@@ -10214,8 +11024,11 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
           await window.gatorShell.navigateSlackPin(data.channel_id);
           editLink.textContent = 'Viewing Slack \u2197';
         }
-      } catch (_err) {
+      } catch (err) {
         editLink.textContent = config.openLabel || 'Open in ' + config.paneLabel;
+        if (config.service === 'email' && err && err.message) {
+          _showConnectivityToast("Couldn't open in Outlook: " + err.message, 'warn');
+        }
       } finally {
         editLink.style.pointerEvents = '';
       }
@@ -10398,6 +11211,113 @@ function _fuzzyFilterCommands(commands, query) {
   return scored.map((x) => x.command);
 }
 
+// Hosts whose https images may render inline in chat. Any other image URL stays a
+// plain link so model output can't beacon data out through an image request.
+const INLINE_IMAGE_HOSTS = ['mcp-platform.amd.com'];
+
+function _isInlineImageUrl(href) {
+  if (href.startsWith('/api/files/')) return !href.includes('..');
+  try {
+    const u = new URL(href.replace(/&amp;/g, '&'));
+    return u.protocol === 'https:' && INLINE_IMAGE_HOSTS.includes(u.hostname);
+  } catch (_) {
+    return false;
+  }
+}
+
+// Swap a failed inline image for an "unavailable" card. Generated images are
+// temporary (links expire, /api/files outputs are deleted after ~24h), so a
+// broken image is expected in older chats and must explain itself.
+function _showBrokenChatImage(img) {
+  const unit = img.closest('.chat-inline-img-wrap') || img;
+  const alt = img.getAttribute('alt') || '';
+  const card = document.createElement('span');
+  card.className = 'chat-img-broken';
+  card.setAttribute('role', 'img');
+  card.setAttribute('aria-label', `Image unavailable${alt ? ': ' + alt : ''}`);
+
+  const text = document.createElement('span');
+  text.className = 'chat-img-broken-text';
+  const title = document.createElement('strong');
+  title.textContent = 'Image unavailable';
+  const hint = document.createElement('span');
+  hint.textContent =
+    (alt ? alt + ' — ' : '') + 'generated images are temporary and may have expired.';
+  text.append(title, hint);
+
+  card.append(text);
+  unit.replaceWith(card);
+}
+
+function _chatImageUrl(btn) {
+  const img = btn.closest('.chat-inline-img-wrap')?.querySelector('img');
+  return (img && (img.dataset.origSrc || img.getAttribute('src'))) || '';
+}
+
+// Briefly relabel an action button with its outcome, then restore it.
+function _flashImageAction(btn, label, ms) {
+  btn.dataset.label = btn.dataset.label || btn.textContent;
+  btn.textContent = label;
+  clearTimeout(btn._flashTimer);
+  btn._flashTimer = setTimeout(() => {
+    btn.textContent = btn.dataset.label;
+    btn.disabled = false;
+  }, ms || 2500);
+}
+
+async function _fetchChatImage(btn) {
+  const resp = await fetch('/api/inline-image?url=' + encodeURIComponent(_chatImageUrl(btn)));
+  if (!resp.ok) throw new Error(String(resp.status));
+  const named = /filename="([^"]+)"/.exec(resp.headers.get('Content-Disposition') || '');
+  return { blob: await resp.blob(), name: named ? named[1] : 'image.png' };
+}
+
+function _downloadBlob(blob, name) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+async function gatorImageDownload(btn) {
+  if (!_chatImageUrl(btn) || btn.disabled) return;
+  btn.disabled = true;
+  try {
+    const { blob, name } = await _fetchChatImage(btn);
+    _downloadBlob(blob, name);
+    _flashImageAction(btn, 'Downloaded');
+  } catch (_) {
+    _flashImageAction(btn, 'Image unavailable', 3500);
+  }
+}
+
+async function gatorImageSave(btn) {
+  const url = _chatImageUrl(btn);
+  if (!url || btn.disabled) return;
+  btn.disabled = true;
+  try {
+    const resp = await fetch('/api/inline-image/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url }),
+    });
+    if (!resp.ok) throw new Error(String(resp.status));
+    const data = await resp.json();
+    if (data.cancelled) {
+      btn.disabled = false;
+      return;
+    }
+    btn.title = 'Saved to ' + data.file_path;
+    _flashImageAction(btn, 'Saved', 3000);
+  } catch (err) {
+    console.error('Save image failed', err);
+    _flashImageAction(btn, 'Save failed', 3500);
+  }
+}
+
 // Inline markdown (runs on already-escaped text)
 function applyInline(html) {
   // Phase 1: stash inline code spans so no other regex touches their content
@@ -10405,6 +11325,30 @@ function applyInline(html) {
   html = html.replace(/`([^`]+)`/g, (_, inner) => {
     codeStash.push(inner);
     return `\x00C${codeStash.length - 1}\x00`;
+  });
+
+  // Images: stash the generated <img> so later passes (Jira keys, bare URLs) can't
+  // rewrite its attributes. Non-allowlisted URLs fall back to a plain link.
+  const imgStash = [];
+  html = html.replace(/!\[(.*?)\]\(((?:https?:\/\/|\/)[^\)"]*)\)/g, (_, alt, href) => {
+    if (!_isInlineImageUrl(href)) return `[${alt}](${href})`;
+    // Remote links are short-lived; the server fetches once, caches, and serves the image.
+    const remote = !href.startsWith('/');
+    const src = remote
+      ? '/api/inline-image?url=' + encodeURIComponent(href.replace(/&amp;/g, '&'))
+      : href;
+    const origAttr = remote ? ` data-orig-src="${href}"` : '';
+    const btn = (action, label, tip) =>
+      `<button type="button" class="chat-img-action" title="${tip}"${gatorActionAttrs(action, [{ $el: true }])}>${label}</button>`;
+    imgStash.push(
+      `<span class="chat-inline-img-wrap is-loading">` +
+        `<img class="chat-inline-img" src="${src}"${origAttr} alt="${alt.replace(/"/g, '&quot;')}" referrerpolicy="no-referrer">` +
+        `<span class="chat-inline-img-actions">` +
+        btn('gatorImageDownload', 'Download', 'Download this image') +
+        btn('gatorImageSave', 'Save as…', 'Choose where to save this image') +
+        `</span></span>`,
+    );
+    return `\x00I${imgStash.length - 1}\x00`;
   });
 
   // Markdown links first — so the URL inside [text](url) is consumed before
@@ -10505,8 +11449,74 @@ function applyInline(html) {
     }
     return `<code>${inner}</code>`;
   });
+  html = html.replace(/\x00I(\d+)\x00/g, (_, i) => imgStash[+i]);
 
   return html;
+}
+// ── end inline images
+
+// Load events don't bubble either; clear the loading placeholder once the image arrives.
+document.addEventListener(
+  'load',
+  (e) => {
+    const t = e.target;
+    if (t instanceof HTMLImageElement && t.classList.contains('chat-inline-img')) {
+      t.closest('.chat-inline-img-wrap')?.classList.remove('is-loading');
+    }
+  },
+  true,
+);
+
+// Error events don't bubble, so listen in the capture phase for every rendered
+// chat image (CSP forbids inline onerror attributes).
+document.addEventListener(
+  'error',
+  (e) => {
+    const t = e.target;
+    if (t instanceof HTMLImageElement && t.classList.contains('chat-inline-img')) {
+      _showBrokenChatImage(t);
+    }
+  },
+  true,
+);
+
+/* A widget runs in a srcdoc frame that inherits the page CSP, which forbids inline
+ * scripts and on*= attributes. Give the widget's own inline scripts the page nonce
+ * and turn its on*= attributes into listeners set up by one nonced script. Scripts
+ * with a src keep no nonce, so they load only from hosts the CSP allows. */
+function gatorWidgetCspHtml(html) {
+  const nonce = window.__CSP_NONCE__;
+  if (!nonce) return html;
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const wired = [];
+  doc.querySelectorAll('*').forEach((el) => {
+    for (const attr of Array.from(el.attributes)) {
+      if (!/^on[a-z]+$/i.test(attr.name)) continue;
+      const mark = `data-gw${wired.length}`;
+      wired.push({
+        mark,
+        event: attr.name.slice(2).toLowerCase(),
+        code: attr.value,
+        tag: el.tagName,
+      });
+      el.removeAttribute(attr.name);
+      el.setAttribute(mark, '');
+    }
+  });
+  doc.querySelectorAll('script:not([src])').forEach((s) => s.setAttribute('nonce', nonce));
+  if (wired.length) {
+    const lines = wired.map((w) => {
+      const target =
+        w.tag === 'BODY' && w.event === 'load' ? 'window' : `document.querySelector('[${w.mark}]')`;
+      const code = w.code.replace(/<\/script/gi, '<\\/script');
+      return `${target}.addEventListener(${JSON.stringify(w.event)},function(event){var r=(function(event){${code}\n}).call(this,event);if(r===false)event.preventDefault();});`;
+    });
+    const s = doc.createElement('script');
+    s.setAttribute('nonce', nonce);
+    s.textContent = lines.join('\n');
+    doc.body.appendChild(s);
+  }
+  return (doc.doctype ? '<!DOCTYPE html>' : '') + doc.documentElement.outerHTML;
 }
 
 function renderMarkdown(raw) {
@@ -10564,8 +11574,8 @@ function renderMarkdown(raw) {
         '::-webkit-scrollbar-thumb{background:#2a4a6b;border-radius:2px}' +
         '::-webkit-scrollbar-thumb:hover{background:#4ade80}' +
         '*{scrollbar-width:thin;scrollbar-color:#2a4a6b transparent}' +
-        `</style><script>window._GATOR="${_gatorOrigin}";<\/script>`;
-      const srcdoc = (normStyle + trimmed).replace(/"/g, '&quot;');
+        `</style><script nonce="${window.__CSP_NONCE__ || ''}">window._GATOR="${_gatorOrigin}";<\/script>`;
+      const srcdoc = (normStyle + gatorWidgetCspHtml(trimmed)).replace(/"/g, '&quot;');
       // Hide the Save button for transient widgets (narration editor, playback)
       // that don't make sense to persist. Detected via data-no-save attribute
       // or known heading text.
@@ -10579,17 +11589,17 @@ function renderMarkdown(raw) {
           `<span class="gator-widget-label" id="${widgetId}-label">Widget</span>` +
           `<div class="gator-widget-save-row" id="${widgetId}-save-row" style="display:none;flex:1;gap:4px;align-items:center">` +
           `<input id="${widgetId}-name-input" class="gator-widget-name-input" type="text" placeholder="Widget name..." value="My Widget" />` +
-          `<button class="gator-widget-btn" onclick="gatorWidgetSaveConfirm('${widgetId}')">✓</button>` +
-          `<button class="gator-widget-btn" onclick="gatorWidgetSaveCancel('${widgetId}')">✕</button>` +
+          `<button class="gator-widget-btn"${gatorActionAttrs('gatorWidgetSaveConfirm', [widgetId])}>✓</button>` +
+          `<button class="gator-widget-btn"${gatorActionAttrs('gatorWidgetSaveCancel', [widgetId])}>✕</button>` +
           `</div>` +
           (_noSave
             ? ''
-            : `<button class="gator-widget-btn" id="${widgetId}-save-btn" onclick="gatorWidgetSavePrompt('${widgetId}')" title="Save widget">&#128190; Save</button>`) +
+            : `<button class="gator-widget-btn" id="${widgetId}-save-btn"${gatorActionAttrs('gatorWidgetSavePrompt', [widgetId])} title="Save widget">&#128190; Save</button>`) +
           `</div>` +
           `<iframe id="${widgetId}" class="gator-widget-frame" sandbox="allow-scripts allow-forms allow-modals allow-pointer-lock allow-same-origin"` +
           ` srcdoc="${srcdoc}"` +
           ` data-src="${encoded}"` +
-          ` onload="gatorWidgetResize(this)" frameborder="0"></iframe>` +
+          ` frameborder="0"></iframe>` +
           `</div>`,
       );
       return `\x00B${idx}\x00`;
@@ -11838,6 +12848,7 @@ form.addEventListener('submit', async (e) => {
   const _onStop = () => {
     if (_activeTabId !== requestTabId) return;
     _userStopped = true;
+    _pendingSandboxFollowUps.delete(requestTabId);
     _isStreaming = false; // stops the typing-dots interval (see line ~6089) so the animation halts
     if (_abortCtrl._es) {
       _abortCtrl._es.close();
@@ -11847,6 +12858,7 @@ form.addEventListener('submit', async (e) => {
     const _stopTaskId = _chatTaskIds.get(_stopTabKey);
     if (_stopTaskId) {
       fetch(`/api/chat/${_stopTaskId}/cancel`, { method: 'POST' }).catch(() => {});
+      _locallyFinishedTasks.add(_stopTaskId);
       _chatTaskIds.delete(_stopTabKey);
       _inflightRequests.delete(_stopTabKey);
     }
@@ -12332,8 +13344,11 @@ form.addEventListener('submit', async (e) => {
             _sawDone = true;
             if (_activeTabId === requestTabId) _isStreaming = false;
             es.close();
+            _locallyFinishedTasks.add(task_id);
             _chatTaskIds.delete(_tabKey);
             _inflightRequests.delete(_tabKey);
+            // Fallback only (see chat_done); doSend flushes at its end.
+            setTimeout(() => _flushSandboxFollowUp(requestTabId), 1500);
             _userScrolledUp = false;
             // Auto-wrap bare HTML documents (no code fence) so renderMarkdown
             // produces a widget instead of escaped raw text. This handles the case
@@ -12402,6 +13417,8 @@ form.addEventListener('submit', async (e) => {
               _scheduleRender();
             } else if (msg.browser_confirm) {
               _showBrowserConfirmCard(msgDiv, msg.browser_confirm);
+            } else if (msg.browser_confirm_expired) {
+              _expireConfirmCardById(msg.browser_confirm_expired);
             } else if (msg.failover_confirm) {
               _showFailoverConfirmCard(msgDiv, msg.failover_confirm);
             } else if (msg.browser_hitl) {
@@ -12512,6 +13529,8 @@ form.addEventListener('submit', async (e) => {
               _routeDraftToTab(requestTabId, msg.draft, msg.draftData || {});
             } else if (msg.jira_target_selection) {
               _showJiraTargetSelection(msg.jira_target_selection, requestTabId);
+            } else if (msg.sandbox_approval) {
+              _showSandboxApproval(msg.sandbox_approval, requestTabId);
             } else if (msg.files && Array.isArray(msg.files) && msg.files.length) {
               if (!fileChipsDiv) {
                 fileChipsDiv = document.createElement('div');
@@ -12748,6 +13767,7 @@ form.addEventListener('submit', async (e) => {
           // EventSource reconnects automatically with Last-Event-ID — only act on permanent close
           if (es.readyState === EventSource.CLOSED) {
             _userScrolledUp = false;
+            _locallyFinishedTasks.add(task_id);
             _chatTaskIds.delete(_tabKey);
             _inflightRequests.delete(_tabKey);
             _setTabWorking(requestTabId, false);
@@ -12949,6 +13969,9 @@ form.addEventListener('submit', async (e) => {
     } else {
       _detachStop();
     }
+    // The turn is fully finished for this tab: now a queued sandbox follow-up
+    // can be sent without racing this turn's cleanup.
+    if (!_userStopped) setTimeout(() => _flushSandboxFollowUp(requestTabId), 0);
   };
 
   await doSend();
@@ -13939,7 +14962,15 @@ function _initNotificationStream() {
         // The request finished (success, error, or cancel) — clear the in-progress
         // line. This is the reliable signal: it fires from the server's finally even
         // when a stalled/cancelled chat never sent a local [DONE].
-        if (msg.context_id) {
+        // A chat_done for a task this client already finished ([DONE], Stop, or a closed
+        // stream) is late. A newer task may be running on the same tab now, so it must
+        // not clear that task's state, dots or Stop button.
+        const _runningTask = _chatTaskIds.get(msg.context_id);
+        const _lateDone =
+          !!msg.task_id &&
+          (_locallyFinishedTasks.delete(msg.task_id) ||
+            (!!_runningTask && _runningTask !== msg.task_id));
+        if (msg.context_id && !_lateDone) {
           _setTabWorking(msg.context_id, false);
           // Clear the per-tab task tracking so the send button returns to green
           // even if [DONE] was never received (stalled stream, server crash, etc.).
@@ -13947,6 +14978,9 @@ function _initNotificationStream() {
           // entry and switchTab shows a red stop button on an idle tab.
           _chatTaskIds.delete(msg.context_id);
           _inflightRequests.delete(msg.context_id);
+          // Fallback only: doSend flushes once its tail has run. Flushing here
+          // could submit while that tail (and the old [DONE] cleanup) still runs.
+          setTimeout(() => _flushSandboxFollowUp(msg.context_id), 1500);
           // Only reset _isStreaming and the send button if the finished chat is
           // for the active tab AND no other stream is now running on this tab.
           // The notification stream is global — a chat_done for tab A can arrive
@@ -14907,62 +15941,151 @@ function _renderPermissionCard(msgDiv, msg, prose, onApprove, onDeny) {
 
 /* ── Browser Confirm Gate ────────────────────────────── */
 
-function _showBrowserConfirmCard(msgDiv, { confirm_id, action }) {
-  // Remove any stale confirm card
-  const existing = document.getElementById('browser-confirm-card');
-  if (existing) existing.remove();
+function _confirmCardText({ title, allow_label, deny_label } = {}) {
+  const isSource = Boolean(title);
+  return {
+    title: title || 'Open browser?',
+    allowLabel: allow_label || 'Allow',
+    denyLabel: deny_label || 'Cancel',
+    icon: isSource ? '🔒' : '🌐',
+    isSource,
+  };
+}
+
+// A confirm id the server no longer holds (card expired after 60 s, or already answered).
+function _confirmReplyExpired(resp, data) {
+  return !resp || !resp.ok || Boolean(data && (data.expired || data.ok === false));
+}
+
+// The streamed text re-renders after the card is added and pushes it down, so pin the way the
+// text stream does (several passes). A card blocks the turn, so it ignores the scrolled-up override.
+function _pinConfirmCardInView(card) {
+  const messages = document.getElementById('messages');
+  if (messages && card.isConnected) _pinScrollToBottom(messages);
+}
+
+function _expireConfirmCard(card) {
+  if (!card) return;
+  const askAgain = card._askAgain;
+  const title = card.querySelector('[data-confirm-title]')?.textContent || '';
+  card.replaceChildren();
+  const body = document.createElement('div');
+  body.style.cssText = 'display: flex; align-items: flex-start; gap: 10px; width: 100%;';
+  const textWrap = document.createElement('div');
+  textWrap.style.cssText = 'flex: 1; min-width: 0;';
+  const titleEl = document.createElement('div');
+  titleEl.style.cssText =
+    'font-size: 0.85rem; font-weight: 600; color: var(--text); margin-bottom: 2px;';
+  titleEl.textContent = title ? `${title} (expired)` : 'Request expired';
+  const note = document.createElement('div');
+  note.style.cssText = 'font-size: 0.78rem; color: var(--text-muted);';
+  note.textContent = 'No answer in time, so access was not granted.';
+  textWrap.append(titleEl, note);
+  body.appendChild(textWrap);
+  if (askAgain) {
+    const btn = document.createElement('button');
+    btn.textContent = 'Ask again';
+    btn.style.cssText =
+      'font-size: 0.75rem; padding: 4px 12px; border-radius: 6px; background: var(--accent); color: #000; border: none; cursor: pointer; font-weight: 600; flex-shrink: 0;';
+    btn.addEventListener('click', () => {
+      card.remove();
+      askAgain();
+    });
+    body.appendChild(btn);
+  }
+  card.appendChild(body);
+  _pinConfirmCardInView(card);
+}
+
+function _expireConfirmCardById(confirm_id) {
+  _expireConfirmCard(
+    document.querySelector(`[data-confirm-id="${CSS.escape(String(confirm_id))}"]`),
+  );
+}
+
+function _showBrowserConfirmCard(msgDiv, { confirm_id, action, title, allow_label, deny_label }) {
+  const text = _confirmCardText({ title, allow_label, deny_label });
+  // Source cards keep their own id so two pending cards (two sources) do not replace each other.
+  if (!text.isSource) {
+    // Remove any stale browser confirm card
+    const existing = document.getElementById('browser-confirm-card');
+    if (existing) existing.remove();
+  }
 
   const card = document.createElement('div');
   card.className = 'system-card';
-  card.id = 'browser-confirm-card';
+  card.id = text.isSource ? `source-confirm-${confirm_id}` : 'browser-confirm-card';
+  card.dataset.confirmId = confirm_id;
+  // Re-sends this tab's last request so the gate is raised again with a live card.
+  const _tabId = _activeTabId;
+  const _lastUserText = (() => {
+    const last = [..._loadTabHistory(_tabId)].reverse().find((e) => e?.role === 'user');
+    return typeof last?.content === 'string' ? last.content : '';
+  })();
+  if (_lastUserText) {
+    card._askAgain = () => {
+      const input = document.getElementById('chat-input');
+      const form = document.getElementById('chat-form');
+      if (_tabId !== _activeTabId || !input || !form) return;
+      input.textContent = _lastUserText;
+      form.requestSubmit();
+    };
+  }
 
   const body = document.createElement('div');
-  body.style.cssText = 'display: flex; align-items: flex-start; gap: 10px; width: 100%;';
+  body.style.cssText =
+    'display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px 10px; width: 100%;';
 
   const icon = document.createElement('span');
-  icon.textContent = '\uD83C\uDF10';
+  icon.textContent = text.icon;
   icon.style.cssText = 'font-size: 1.1rem; flex-shrink: 0; margin-top: 2px;';
 
   const textWrap = document.createElement('div');
-  textWrap.style.cssText = 'flex: 1; min-width: 0;';
+  textWrap.style.cssText = 'flex: 1 1 0; min-width: 0;';
 
-  const title = document.createElement('div');
-  title.style.cssText =
+  const titleEl = document.createElement('div');
+  titleEl.style.cssText =
     'font-size: 0.85rem; font-weight: 600; color: var(--text); margin-bottom: 2px;';
-  title.textContent = 'Open browser?';
+  titleEl.textContent = text.title;
+  titleEl.dataset.confirmTitle = '1';
 
   const detail = document.createElement('div');
   detail.style.cssText = 'font-size: 0.78rem; color: var(--text-muted); word-break: break-word;';
   detail.textContent = action;
 
-  textWrap.append(title, detail);
+  textWrap.append(titleEl, detail);
 
   const btnWrap = document.createElement('div');
-  btnWrap.style.cssText = 'display: flex; gap: 6px; flex-shrink: 0; align-items: center;';
+  btnWrap.style.cssText =
+    'display: flex; flex-wrap: wrap; gap: 6px; flex: 1 1 100%; justify-content: flex-end; align-items: center;';
 
   const cancelBtn = document.createElement('button');
-  cancelBtn.textContent = 'Cancel';
+  cancelBtn.textContent = text.denyLabel;
   cancelBtn.style.cssText =
     'font-size: 0.75rem; padding: 4px 12px; border-radius: 6px; background: var(--surface3); color: var(--text); border: none; cursor: pointer; font-weight: 600;';
 
   const allowBtn = document.createElement('button');
-  allowBtn.textContent = 'Allow';
+  allowBtn.textContent = text.allowLabel;
   allowBtn.style.cssText =
     'font-size: 0.75rem; padding: 4px 12px; border-radius: 6px; background: var(--accent); color: #000; border: none; cursor: pointer; font-weight: 600;';
 
-  const _dismiss = () => {
-    card.remove();
+  const _answer = async (url) => {
+    cancelBtn.disabled = true;
+    allowBtn.disabled = true;
+    let expired = false;
+    try {
+      const resp = await fetch(url, { method: 'POST' });
+      const data = await resp.json().catch(() => null);
+      expired = _confirmReplyExpired(resp, data);
+    } catch (_) {
+      expired = true;
+    }
+    if (expired) _expireConfirmCard(card);
+    else card.remove();
   };
 
-  cancelBtn.addEventListener('click', async () => {
-    _dismiss();
-    await fetch(`/api/browser/confirm/${confirm_id}/cancel`, { method: 'POST' });
-  });
-
-  allowBtn.addEventListener('click', async () => {
-    _dismiss();
-    await fetch(`/api/browser/confirm/${confirm_id}`, { method: 'POST' });
-  });
+  cancelBtn.addEventListener('click', () => _answer(`/api/browser/confirm/${confirm_id}/cancel`));
+  allowBtn.addEventListener('click', () => _answer(`/api/browser/confirm/${confirm_id}`));
 
   btnWrap.append(cancelBtn, allowBtn);
   body.append(icon, textWrap, btnWrap);
@@ -14974,6 +16097,7 @@ function _showBrowserConfirmCard(msgDiv, { confirm_id, action }) {
   } else {
     msgDiv.appendChild(card);
   }
+  _pinConfirmCardInView(card);
 }
 
 /* ── Failover Consent Gate ───────────────────────────── */
@@ -14987,14 +16111,15 @@ function _showFailoverConfirmCard(msgDiv, { consent_id, fallback_model }) {
   card.id = 'failover-confirm-card';
 
   const body = document.createElement('div');
-  body.style.cssText = 'display: flex; align-items: flex-start; gap: 10px; width: 100%;';
+  body.style.cssText =
+    'display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px 10px; width: 100%;';
 
   const icon = document.createElement('span');
   icon.textContent = '⚠️';
   icon.style.cssText = 'font-size: 1.1rem; flex-shrink: 0; margin-top: 2px;';
 
   const textWrap = document.createElement('div');
-  textWrap.style.cssText = 'flex: 1; min-width: 0;';
+  textWrap.style.cssText = 'flex: 1 1 0; min-width: 0;';
 
   const title = document.createElement('div');
   title.style.cssText =
@@ -15008,7 +16133,8 @@ function _showFailoverConfirmCard(msgDiv, { consent_id, fallback_model }) {
   textWrap.append(title, detail);
 
   const btnWrap = document.createElement('div');
-  btnWrap.style.cssText = 'display: flex; gap: 6px; flex-shrink: 0; align-items: center;';
+  btnWrap.style.cssText =
+    'display: flex; flex-wrap: wrap; gap: 6px; flex: 1 1 100%; justify-content: flex-end; align-items: center;';
 
   const cancelBtn = document.createElement('button');
   cancelBtn.textContent = 'Cancel';
@@ -16264,6 +17390,192 @@ function _initOnReady() {
   const addBtn = document.getElementById('custom-app-add-btn');
   if (addBtn) addBtn.addEventListener('click', _addCustomApp);
   _initGoogleWorkspaceSettings();
+  _initClearCredentialsSettings();
+  _initSandboxSettings();
+  _initSavedPermissions();
+}
+
+function _initClearCredentialsSettings() {
+  const notice = document.getElementById('storage-level-notice');
+  if (notice) {
+    fetch('/api/auth/storage')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        const msg = {
+          'key-file':
+            'Linux keyring not found — credentials are protected at a reduced level (key stored in a user-only file). Install or unlock gnome-keyring or KWallet, then restart AI Gator to upgrade.',
+          unavailable:
+            'Secure credential storage is unavailable, so sign-in tokens cannot be saved. Unlock the system keychain or keyring and restart AI Gator. If the keyring was reset or removed, use Clear stored credentials below (you will need to sign in again).',
+        }[d && d.level];
+        if (msg) {
+          notice.textContent = msg;
+          notice.hidden = false;
+        }
+      })
+      .catch(() => {});
+  }
+  const btn = document.getElementById('clear-credentials-btn');
+  if (!btn) return;
+  btn.addEventListener('click', async () => {
+    if (!confirm('Remove all stored sign-in tokens and API tokens from this computer?')) return;
+    const post = () =>
+      fetch('/api/auth/clear', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': window.__CSRF_TOKEN__ || '',
+        },
+        body: JSON.stringify({ scope: 'all' }),
+      });
+    try {
+      let res = await post();
+      if (res.status === 403) {
+        const _csrf = await fetch('/api/csrf')
+          .then((r) => (r.ok ? r.json() : null))
+          .catch(() => null);
+        if (_csrf?.csrf_token) window.__CSRF_TOKEN__ = _csrf.csrf_token;
+        res = await post();
+      }
+      alert(res.ok ? 'Stored credentials cleared.' : 'Could not clear credentials.');
+    } catch (e) {
+      alert('Could not clear credentials.');
+    }
+  });
+}
+
+function _sandboxNoticeText(status) {
+  if (!status || status.level !== 'unavailable') return '';
+  const reason = status.reason || 'The sandbox could not start.';
+  // opted_out from the server is already the effective value; the policy check
+  // is kept so an older server cannot show "runs without a sandbox" wrongly.
+  const required = !!(status.policy && status.policy.require_sandbox);
+  if (status.opted_out && !required) {
+    return `Code sandbox unavailable: ${reason} Code currently runs without a sandbox because you allowed it below.`;
+  }
+  return `Code sandbox unavailable: ${reason} Running code is blocked until this is fixed.`;
+}
+
+function _initSandboxSettings() {
+  const row = document.getElementById('sandbox-row');
+  const notice = document.getElementById('sandbox-notice');
+  const label = document.getElementById('sandbox-optout-label');
+  const box = document.getElementById('sandbox-optout');
+  if (!row || !notice || !label || !box) return;
+  const refresh = () =>
+    fetch('/api/sandbox/status')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((s) => {
+        const text = _sandboxNoticeText(s);
+        if (!text) {
+          row.style.display = 'none';
+          return;
+        }
+        notice.textContent = text;
+        row.style.display = '';
+        const required = !!(s.policy && s.policy.require_sandbox);
+        label.hidden = required;
+        box.checked = !!s.opted_out && !required;
+      })
+      .catch(() => {});
+  refresh();
+  box.addEventListener('change', async () => {
+    const wanted = box.checked;
+    const post = () =>
+      fetch('/api/sandbox/opt-out', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': window.__CSRF_TOKEN__ || '',
+        },
+        body: JSON.stringify({ opted_out: wanted }),
+      });
+    try {
+      let res = await post();
+      if (res.status === 403) {
+        const fresh = await fetch('/api/csrf')
+          .then((r) => (r.ok ? r.json() : null))
+          .catch(() => null);
+        if (fresh?.csrf_token) window.__CSRF_TOKEN__ = fresh.csrf_token;
+        res = await post();
+      }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    } catch (e) {
+      box.checked = !wanted;
+      _showConnectivityToast('Could not change the code sandbox setting.', 'warn');
+    }
+    refresh();
+  });
+}
+
+function _initSavedPermissions() {
+  const row = document.getElementById('saved-permissions-row');
+  const list = document.getElementById('saved-permissions-list');
+  const clear = document.getElementById('saved-permissions-clear');
+  if (!row || !list || !clear) return;
+  const call = async (method, url) => {
+    const send = () =>
+      fetch(url, { method, headers: { 'X-CSRF-Token': window.__CSRF_TOKEN__ || '' } });
+    let res = await send();
+    if (res.status === 403) {
+      const fresh = await fetch('/api/csrf')
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null);
+      if (fresh?.csrf_token) window.__CSRF_TOKEN__ = fresh.csrf_token;
+      res = await send();
+    }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  };
+  const render = (entries) => {
+    list.replaceChildren();
+    clear.hidden = entries.length === 0;
+    if (!entries.length) {
+      const empty = document.createElement('div');
+      empty.className = 'srow-sub';
+      empty.textContent =
+        'Nothing saved yet. Choose "Always allow this" on a command approval to save one here.';
+      list.appendChild(empty);
+      return;
+    }
+    entries.forEach((entry) => {
+      const item = document.createElement('div');
+      item.className = 'srow-sub saved-permission-item';
+      const text = document.createElement('span');
+      text.textContent = String(entry.description);
+      const remove = document.createElement('button');
+      remove.className = 'btn-secondary';
+      remove.textContent = 'Remove';
+      remove.addEventListener('click', (e) => {
+        e.stopPropagation();
+        act('DELETE', `/api/sandbox/saved-permissions/${encodeURIComponent(entry.id)}`);
+      });
+      item.append(text, remove);
+      list.appendChild(item);
+    });
+  };
+  const refresh = () =>
+    call('GET', '/api/sandbox/saved-permissions')
+      .then((d) => render(Array.isArray(d.entries) ? d.entries : []))
+      .catch(() => {
+        list.replaceChildren();
+        clear.hidden = true;
+        const failed = document.createElement('div');
+        failed.className = 'srow-sub';
+        failed.textContent = 'Could not load saved permissions.';
+        list.appendChild(failed);
+      });
+  const act = (method, url) =>
+    call(method, url)
+      .catch(() => _showConnectivityToast('Could not change saved permissions.', 'warn'))
+      .then(refresh);
+  clear.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (!confirm('Remove all saved command permissions? AI Gator will ask again next time.'))
+      return;
+    act('DELETE', '/api/sandbox/saved-permissions');
+  });
+  window._refreshSavedPermissions = refresh;
+  refresh();
 }
 
 // Called from the shell toolbar when user clicks "Save as app" CTA pill.
@@ -17053,7 +18365,7 @@ async function gatorWidgetManagerRender(panel) {
       `</svg>` +
       `<span id="gwm-title-text">My Widgets</span>` +
       `</div>` +
-      `<button class="gwm-close-btn" onclick="gatorCloseWidgetManager()" title="Close">` +
+      `<button class="gwm-close-btn"${gatorActionAttrs('gatorCloseWidgetManager')} title="Close">` +
       `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">` +
       `<line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/>` +
       `</svg>` +
@@ -17078,10 +18390,10 @@ async function gatorWidgetManagerRender(panel) {
       row.innerHTML =
         `<span class="gator-widget-manager-name" title="${escapeHtml(w.name)}">${escapeHtml(w.name)}</span>` +
         `<div class="gator-widget-manager-actions">` +
-        `<button onclick="gatorWidgetOpenFromDb('${w.widget_id}')" title="Open as floating window">Open</button>` +
-        `<button onclick="gatorWidgetCaptureToggle('${w.widget_id}', ${_hide})" title="${_hide ? 'Hidden during screen share — click to show' : 'Visible during screen share — click to hide'}">${_hide ? gatorEyeOffSvg() : gatorEyeSvg()}</button>` +
-        `<button onclick="gatorWidgetPinToggle('${w.widget_id}', ${w.pinned})" title="${w.pinned ? 'Unpin from rail' : 'Pin to rail'}">${w.pinned ? '★' : '☆'}</button>` +
-        `<button onclick="gatorWidgetDeleteConfirm('${w.widget_id}', '${escapeHtml(w.name).replace(/'/g, "\\'")}')" title="Delete">🗑</button>` +
+        `<button${gatorActionAttrs('gatorWidgetOpenFromDb', [w.widget_id])} title="Open as floating window">Open</button>` +
+        `<button${gatorActionAttrs('gatorWidgetCaptureToggle', [w.widget_id, !!_hide])} title="${_hide ? 'Hidden during screen share — click to show' : 'Visible during screen share — click to hide'}">${_hide ? gatorEyeOffSvg() : gatorEyeSvg()}</button>` +
+        `<button${gatorActionAttrs('gatorWidgetPinToggle', [w.widget_id, !!w.pinned])} title="${w.pinned ? 'Unpin from rail' : 'Pin to rail'}">${w.pinned ? '★' : '☆'}</button>` +
+        `<button${gatorActionAttrs('gatorWidgetDeleteConfirm', [w.widget_id, w.name])} title="Delete">🗑</button>` +
         `</div>`;
       listEl.appendChild(row);
     });

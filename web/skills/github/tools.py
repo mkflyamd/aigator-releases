@@ -84,7 +84,7 @@ TOOL_DEFS = [
     },
     {
         "name": "github_get_pr",
-        "description": "Get full details of a pull request including CI check status, reviewer state, file changes, and comments. Use when user asks about a specific PR by number or URL.",
+        "description": "Get details of a pull request: state, merged/merged_at, labels, CI check status, reviews, the latest conversation comments, inline review comments, and changed files (names and line counts, no diffs). Long text is truncated; github_get_issue with the PR number returns the full conversation. Use when user asks about a specific PR by number or URL.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -288,6 +288,98 @@ def _github_get_issue(owner: str, repo: str, issue_number: int) -> dict:
     return result
 
 
+_PR_BODY_CHARS = 2000
+_PR_COMMENT_CHARS = 1500
+_PR_MAX_COMMENTS = 30
+_PR_MAX_FILES = 100
+_PR_MAX_CHECKS = 30
+_PR_OK_CONCLUSIONS = ("success", "skipped", "neutral")
+
+
+def _cap(text, limit: int) -> str:
+    text = text or ""
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}… [truncated, {len(text)} chars total]"
+
+
+def _person(user) -> dict:
+    return {"login": user.get("login")} if isinstance(user, dict) else {}
+
+
+def _slim_pr(pr: dict, reviews: list, checks: list, comments: list, review_comments: list, files: list) -> dict:
+    """Keep what the model and the GitHub pane read; drop patches, API links and repo objects.
+
+    Status fields come first so they survive in the inline preview if the result still overflows.
+    """
+    out: dict = {}
+    for key in ("number", "title", "state", "merged", "merged_at", "closed_at", "draft"):
+        if key in pr:
+            out[key] = pr[key]
+    out["labels"] = [
+        {"name": l.get("name"), "color": l.get("color")} if isinstance(l, dict) else l
+        for l in pr.get("labels") or []
+    ]
+    for key in ("mergeable_state", "html_url", "created_at", "updated_at", "commits",
+                "additions", "deletions", "changed_files"):
+        if key in pr:
+            out[key] = pr[key]
+    for key in ("user", "author", "merged_by"):
+        if key in pr:
+            out[key] = _person(pr[key])
+    for key in ("base", "head"):
+        if isinstance(pr.get(key), dict):
+            out[key] = {"ref": pr[key].get("ref")}
+    out["body"] = _cap(pr.get("body"), _PR_BODY_CHARS)
+
+    out["reviews"] = [
+        {
+            "user": _person(r.get("user")),
+            "state": r.get("state"),
+            "submitted_at": r.get("submitted_at"),
+            "body": _cap(r.get("body"), _PR_COMMENT_CHARS),
+        }
+        for r in reviews
+    ]
+
+    summary: dict = {}
+    for c in checks:
+        label = c.get("conclusion") or c.get("status") or "unknown"
+        summary[label] = summary.get(label, 0) + 1
+    shown = checks
+    if len(checks) > _PR_MAX_CHECKS:
+        shown = [c for c in checks if c.get("conclusion") not in _PR_OK_CONCLUSIONS]
+    out["checks_summary"] = summary
+    out["checks"] = [
+        {"name": c.get("name"), "status": c.get("status"), "conclusion": c.get("conclusion")}
+        for c in shown
+    ]
+
+    out["comments_total"] = len(comments)
+    out["comments"] = [
+        {"user": _person(c.get("user")), "created_at": c.get("created_at"),
+         "body": _cap(c.get("body"), _PR_COMMENT_CHARS)}
+        for c in comments[-_PR_MAX_COMMENTS:]
+    ]
+    out["review_comments_total"] = len(review_comments)
+    out["review_comments"] = [
+        {"user": _person(c.get("user")), "path": c.get("path"), "created_at": c.get("created_at"),
+         "body": _cap(c.get("body"), _PR_COMMENT_CHARS)}
+        for c in review_comments[-_PR_MAX_COMMENTS:]
+    ]
+    out["files_total"] = len(files)
+    out["files"] = [
+        {"filename": f.get("filename"), "status": f.get("status"),
+         "additions": f.get("additions"), "deletions": f.get("deletions")}
+        for f in files[:_PR_MAX_FILES]
+    ]
+    if "additions" not in out and files:
+        out["additions"] = sum(f.get("additions", 0) for f in files)
+        out["deletions"] = sum(f.get("deletions", 0) for f in files)
+        out["changed_files"] = len(files)
+    return out
+
+
 def _github_get_pr(owner: str, repo: str, pr_number: int) -> dict:
     result = github_api(
         "pull_request_read",
@@ -324,17 +416,25 @@ def _github_get_pr(owner: str, repo: str, pr_number: int) -> dict:
         "pull_request_read",
         {"method": "get_files", "owner": owner, "repo": repo, "pullNumber": pr_number},
     )
-    if "error" not in result:
-        result["reviews"] = reviews.get("reviews", [])
-        result["checks"] = checks.get("check_runs", [])
-        result["comments"] = comments.get("comments", [])
-        result["files"] = files.get("files", [])
-        # Sum additions/deletions from files if not present in the PR object
-        if "additions" not in result and result.get("files"):
-            result["additions"] = sum(f.get("additions", 0) for f in result["files"])
-            result["deletions"] = sum(f.get("deletions", 0) for f in result["files"])
-            result["changed_files"] = len(result["files"])
-    return result
+    review_comments = github_api(
+        "pull_request_read",
+        {
+            "method": "get_review_comments",
+            "owner": owner,
+            "repo": repo,
+            "pullNumber": pr_number,
+        },
+    )
+    if "error" in result:
+        return result
+    return _slim_pr(
+        result,
+        reviews.get("reviews", []),
+        checks.get("check_runs", []),
+        comments.get("comments", []),
+        review_comments.get("comments", []),
+        files.get("files", []),
+    )
 
 
 def _github_search_repos(query: str, per_page: int = 20) -> dict:

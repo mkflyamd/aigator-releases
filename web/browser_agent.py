@@ -625,12 +625,17 @@ def _install_payment_guard(tools) -> None:
 _pending_confirms: dict[str, tuple[asyncio.Event, list[bool]]] = {}
 
 
-def resolve_browser_confirm(confirm_id: str, allowed: bool) -> None:
-    """Called by REST endpoints to resolve a pending browser confirm gate."""
-    if confirm_id in _pending_confirms:
-        event, result = _pending_confirms[confirm_id]
-        result.append(allowed)
-        event.set()
+def resolve_browser_confirm(confirm_id: str, allowed: bool) -> bool:
+    """Called by REST endpoints to resolve a pending browser confirm gate.
+
+    Returns False when no such gate is pending (answered already or expired).
+    """
+    if confirm_id not in _pending_confirms:
+        return False
+    event, result = _pending_confirms[confirm_id]
+    result.append(allowed)
+    event.set()
+    return True
 
 
 # Max consecutive steps with no screenshot (proxy for tab-detach cascade).
@@ -1148,18 +1153,34 @@ async def _browser_task_impl(
 
         # Reuse browser session if available, matching headless/proxy/cloud/native/mode
         _mode_key = f"{headless}:{mode}:{proxy_url}:{use_cloud}:{cdp_url}"
-        if (
+        _same_mode = (
             _persistent_session
             and _persistent_profile
             and getattr(_persistent_profile, "_mode_key", None) == _mode_key
-        ):
+        )
+        # A cancelled task (e.g. model switch mid-run) leaves the session pointing
+        # at a Chrome that has since died and been relaunched; its CDP socket is
+        # closed, so reusing it fails every step with BrowserStateRequestEvent.
+        _stale = bool(_same_mode) and not getattr(
+            _persistent_session, "is_cdp_connected", True
+        )
+        if _same_mode and not _stale:
             session = _persistent_session
             _log.info("[browser] Reusing existing browser session")
         else:
             # Kill old session if exists
             if _persistent_session:
-                await _safe_reset_session(_persistent_session, "mode-change")
+                if _stale:
+                    _log.warning("[browser] Discarding stale browser session (CDP disconnected)")
+                # Chrome was already relaunched for this task, so a stale-session reset
+                # must never fall back to killing Chrome processes.
+                await _safe_reset_session(
+                    _persistent_session,
+                    "stale" if _stale else "mode-change",
+                    kill_on_failure=not _stale,
+                )
                 _persistent_session = None
+                _persistent_profile = None
 
             if cdp_url:
                 # Connect to the already-running native browser via CDP.
@@ -1994,7 +2015,9 @@ def _kill_orphaned_chrome():
         _log.debug("[browser] Orphan cleanup: %s", e)
 
 
-async def _safe_reset_session(session, label: str = "", timeout: float = 8.0):
+async def _safe_reset_session(
+    session, label: str = "", timeout: float = 8.0, kill_on_failure: bool = True
+):
     """Reset a browser session with a hard timeout + taskkill fallback.
 
     session.reset() can hang indefinitely on Windows when the CDP
@@ -2018,14 +2041,16 @@ async def _safe_reset_session(session, label: str = "", timeout: float = 8.0):
             timeout,
             f" ({label})" if label else "",
         )
-        _kill_orphaned_chrome()
+        if kill_on_failure:
+            _kill_orphaned_chrome()
     except Exception as e:
         _log.warning(
             "[browser] session.reset error%s: %s — force-killing Chrome",
             f" ({label})" if label else "",
             e,
         )
-        _kill_orphaned_chrome()
+        if kill_on_failure:
+            _kill_orphaned_chrome()
 
 
 async def shutdown_browser():

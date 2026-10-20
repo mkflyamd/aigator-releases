@@ -57,6 +57,20 @@ _SKILL_REQUEST_RE = _re.compile(
     _re.IGNORECASE | _re.MULTILINE,
 )
 
+# A run of bare tokens that ends the turn, however the model laid it out:
+# "...to see what it asks for./slack /sharepoint /file_ops". The model is told
+# to emit each token alone on a line, but it often glues them to a sentence or
+# puts several on one line; the line-anchored form above misses those and the
+# turn then ends silently. Anchored to the END of the turn so a path mentioned
+# mid-sentence never counts, and each name is still checked against the skill
+# registry by _detect_requested_skills.
+_SKILL_TOKEN = r"/[a-z0-9][a-z0-9_-]*(?=$|[\s/])"
+_TRAILING_SKILL_RUN_RE = _re.compile(
+    rf"(?:^|(?<=[\s.!?:;,)]))((?:{_SKILL_TOKEN}\s*)+)$",
+    _re.IGNORECASE,
+)
+_SKILL_TOKEN_RE = _re.compile(r"/([a-z0-9][a-z0-9_-]*)", _re.IGNORECASE)
+
 # Map user-facing skill names to internal IDs for the auto-activate fallback.
 # Keep this minimal — the only cases where UI label diverges from skill ID.
 _SKILL_NAME_ALIASES = {
@@ -92,8 +106,13 @@ def _detect_requested_skills(turn_text: str, already_active) -> list[str]:
     """
     active = set(already_active or [])
     found: list[str] = []
-    for m in _SKILL_REQUEST_RE.finditer(turn_text or ""):
-        sid = _resolve_skill_id(m.group(1) or m.group(2) or "")
+    text = turn_text or ""
+    names = [m.group(1) or m.group(2) or "" for m in _SKILL_REQUEST_RE.finditer(text)]
+    tail = _TRAILING_SKILL_RUN_RE.search(text.rstrip())
+    if tail:
+        names += _SKILL_TOKEN_RE.findall(tail.group(1))
+    for name in names:
+        sid = _resolve_skill_id(name)
         # Accept a skill if it has a prompt (built-in / installed) OR has tools
         # registered (MCP connections have tools in SKILL_TOOLS_MAP but no
         # SKILL.md prompt). Gated skills still excluded — they require the
@@ -196,16 +215,22 @@ def _filter_tools(active_skill: str, has_images: bool, active_skills: list[str] 
     This prevents any oversized MCP — Atlassian, GitHub, custom — from
     blowing the model's tool budget on a single request.
     """
-    skill_ids = set()
-    if active_skill and active_skill in shared.SKILL_TOOLS_MAP:
-        skill_ids.add(active_skill)
+    # Prompt-only skills (SKILL.md, no tools.py) have no SKILL_TOOLS_MAP entry but
+    # still pull in their dependency skills' tools (e.g. skill-creator -> file_ops).
+    def _is_routable(sid: str) -> bool:
+        return sid in shared.SKILL_TOOLS_MAP or sid in shared.SKILL_DEPENDENCIES_MAP
+
+    primary_ids = set()
+    if active_skill and _is_routable(active_skill):
+        primary_ids.add(active_skill)
     for sid in (active_skills or []):
-        if sid in shared.SKILL_TOOLS_MAP:
-            skill_ids.add(sid)
+        if _is_routable(sid):
+            primary_ids.add(sid)
+    skill_ids = {sid for sid in primary_ids if sid in shared.SKILL_TOOLS_MAP}
 
     _unapproved = set(unapproved_deps or [])
     # Auto-include approved dependency skills; skip gated deps that are still unapproved.
-    for primary_sid in list(skill_ids):
+    for primary_sid in list(primary_ids):
         for dep in shared.SKILL_DEPENDENCIES_MAP.get(primary_sid, []):
             dep_id = dep["id"]
             if dep_id in shared.SKILL_TOOLS_MAP:
@@ -258,8 +283,19 @@ def _append_jira_instance_context(system: str, active_skill_ids: list[str], cfg:
     native_jira_available = bool(_shared.SKILL_TOOLS_MAP.get("jira"))
     if not native_jira_available and not direct_url:
         return system
+    try:
+        from skills.jira.mutations import configured_extra_urls
+        extra_urls = configured_extra_urls() if direct_url else []
+    except Exception:
+        extra_urls = []
+    direct_sites = ", ".join([direct_url, *extra_urls])
     direct_line = (
-        f"The native jira_* tools use direct credentials for {direct_url}. "
+        (
+            f"The native jira_* tools use direct credentials for {direct_sites} "
+            "and find the right site from the issue key or URL. "
+            if extra_urls else
+            f"The native jira_* tools use direct credentials for {direct_url}. "
+        )
         if direct_url else
         "Native jira_* tools are available and handle all connected Jira sites including Rovo-connected ones via HITL approval. "
     )
@@ -268,7 +304,7 @@ def _append_jira_instance_context(system: str, active_skill_ids: list[str], cfg:
         + direct_line +
         f"MCP tools (cloud-atlassian, Rovo) cover other instances for reads only. "
         f"ROUTING RULES (these override general MCP guidance for Jira): "
-        f"(1) READ (any URL or bare key) → always call jira_get_issue first; it handles all connected sites automatically. Also call cloud-atlassian/Rovo MCP Jira tools IN PARALLEL for coverage — this parallel call is intentional and overrides the general serial-MCP rule. Use whichever returns a result. "
+        f"(1) READ (any URL or bare key) → always call jira_get_issue first; it handles all connected sites automatically. Call cloud-atlassian/Rovo MCP Jira tools ONLY if jira_get_issue reports the issue was not found or the site is not connected; never call them in parallel with it when the URL matches the native site. "
         f"(2) WRITE (comment, update, create, transition, watcher, link) → ALWAYS use native jira_* tools only, never MCP tools. Pass the full URL if you have it; bare keys are resolved automatically. "
         f"(3) If jira_get_issue returns a 'multiple sites' error → ask the user for the full issue URL. "
         f"(4) Only tell the user the issue was not found after ALL available Jira tools have returned 404/error."
@@ -751,6 +787,26 @@ def _append_skill_prompt(system: str, sid: str, preamble_done: bool) -> tuple[st
     return system, preamble_done
 
 
+def _skills_for_tools(tool_names) -> list[str]:
+    """The skill that owns each named tool, so a chat keeps the skills it was already using.
+
+    Where a tool sits in several skills (a raw MCP connection and its capability groups),
+    the smallest one is chosen so a carry-forward never offers more than was used. Internal
+    skills and the gated shell/code runners are never carried forward.
+    """
+    owners: list[str] = []
+    for name in sorted(set(tool_names or ())):
+        candidates = [
+            (len(tools), sid) for sid, tools in shared.SKILL_TOOLS_MAP.items()
+            if name in tools and not sid.startswith("_") and sid not in _GATED_DEP_SKILLS
+        ]
+        if candidates:
+            owner = min(candidates)[1]
+            if owner not in owners:
+                owners.append(owner)
+    return owners
+
+
 def _classify_skills_via_llm(message: str, extra_skills: dict | None = None) -> list[str]:
     """Use a fast LLM call to classify which skills a message needs."""
     import re as _re
@@ -803,6 +859,7 @@ _HEARTBEAT_EVERY_INTERVALS = 2   # then re-emit every ~30s of continued silence
 #     means the LLM hung after producing partial output.
 _FIRST_TOKEN_TIMEOUT_S = 300
 _INTER_CHUNK_TIMEOUT_S = 180
+_WATCHDOG_POLL_S = 1.0
 # The browser opens the task SSE stream immediately after receiving task_id.
 # Wait briefly for that subscription before starting model generation so the
 # first text delta cannot race the POST response and disappear from the UI.
@@ -951,7 +1008,10 @@ async def chat(req: ChatRequest):
     import asyncio as _asyncio
     from fastapi.responses import JSONResponse
     from llm import get_provider, get_active_model
-    from routes.config_routes import _get_active_persona_prompt
+    from routes.config_routes import (
+        _get_active_persona_prompt,
+        _get_user_profile_prompt,
+    )
     # Import execute_tool and _tool_toast from the app module (they stay in app.py
     # because they are also used by the lifespan background worker).
     from app import execute_tool as _execute_tool_raw, _tool_toast
@@ -1057,6 +1117,9 @@ async def chat(req: ChatRequest):
     _persona_prompt = _get_active_persona_prompt()
     if _persona_prompt:
         system = _persona_prompt + "\n\n" + system
+    _user_prompt = _get_user_profile_prompt()
+    if _user_prompt:
+        system = _user_prompt + "\n\n" + system
 
     # Inject per-skill prompt instructions — ONLY for explicitly active skills,
     # NOT all always-on skills (those add 10K+ tokens of irrelevant context).
@@ -1258,14 +1321,22 @@ async def chat(req: ChatRequest):
                         f"BOTH personal and SharePoint team notebooks and returns a 'site_id' "
                         f"(empty for personal, non-empty for team). Then pass that site_id to "
                         f"list_onenote_sections / list_onenote_pages / read_onenote_page. "
-                        f"Team notebooks work fine — just always include their site_id."
+                        f"Team notebooks work fine — just always include their site_id. If it returns nothing, call list_onenote_sections with only site_id set to the SharePoint site URL or name (ask the user for it if you do not have it) and match the section name."
                     )
+                    if m.get("site_id"):
+                        _accessibility_note = (
+                            f" This notebook is in a SharePoint team site (site_id: {m['site_id']}). "
+                            f"Pass that site_id to list_onenote_sections / list_onenote_pages / "
+                            f"read_onenote_page / update_onenote_page; you do not need find_onenote_notebook."
+                        )
                     if _kind == "section":
                         _pin_lines.append(f"- OneNote section \"{lbl}\" (in notebook: {_nb}) \u2192 find it using list_onenote_notebooks then list_onenote_sections (match section \"{_title}\" in notebook \"{_nb}\"), then list_onenote_pages to read pages in it. Do NOT search for a page named \"{_title}\".{_accessibility_note}")
                     else:
                         _pin_lines.append(f"- OneNote page \"{lbl}\" (in notebook: {_nb}) \u2192 find it using list_onenote_notebooks/list_onenote_sections/list_onenote_pages (match page title \"{_title}\" in notebook \"{_nb}\"), then read_onenote_page with the resolved id.{_accessibility_note}")
                 else:
-                    _pin_lines.append(f"- OneNote: \"{lbl}\" (page_id: {pid}, notebook: {m.get('notebook','?')}, section: {m.get('section','?')}) \u2192 use update_onenote_page or read with this page_id")
+                    from skills.onenote.state import pin_site_text as _pin_site_text
+                    _site_txt = _pin_site_text(m.get("site_id"))
+                    _pin_lines.append(f"- OneNote: \"{lbl}\" (page_id: {pid}, notebook: {m.get('notebook','?')}, section: {m.get('section','?')}{_site_txt}) \u2192 use update_onenote_page or read with this page_id{' and site_id' if _site_txt else ''}")
             elif s == "onedrive":
                 _od_drive = m.get('drive_id', '')
                 _od_drive_hint = f", drive_id: {_od_drive}" if _od_drive else ""
@@ -1439,11 +1510,11 @@ async def chat(req: ChatRequest):
     # but ONLY inject into prompt if this is the default context (no tabs)
     # to prevent pin bleed across tabs.
     if _context_id == 'default' and not _pins:
-        from skills.onenote.state import pinned_onenote_pages as _pinned_onenote_pages
+        from skills.onenote.state import pinned_onenote_pages as _pinned_onenote_pages, pin_site_text as _pin_site_text
         if _pinned_onenote_pages:
-            pins = "\n".join(f"- \"{p['title']}\" (page_id: {p['page_id']}, notebook: {p.get('notebook','?')}, section: {p.get('section','?')})"
+            pins = "\n".join(f"- \"{p['title']}\" (page_id: {p['page_id']}, notebook: {p.get('notebook','?')}, section: {p.get('section','?')}{_pin_site_text(p.get('site_id'))})"
                              for p in _pinned_onenote_pages.values())
-            system += f"\n\n\U0001f4cc PINNED ONENOTE PAGES (use update_onenote_page with these page_ids directly \u2014 no need to re-navigate):\n{pins}"
+            system += f"\n\n\U0001f4cc PINNED ONENOTE PAGES (use update_onenote_page with these page_ids directly \u2014 no need to re-navigate; when a pin has a site_id, pass it to read_onenote_page and update_onenote_page):\n{pins}"
 
     # Auto-detect skills needed from pinned items — no manual chip required
     _source_skill_map = {"word": "docx", "excel": "excel", "ppt": "ppt"}
@@ -1531,6 +1602,16 @@ async def chat(req: ChatRequest):
                 sid for sid, kws in _SKILL_KEYWORDS.items()
                 if any(kw in _recent_text for kw in kws)
             ]
+            # The history above is text only. The server-side store also knows which tools
+            # actually ran, so a chat that used Slack keeps Slack on a short follow-up.
+            _from_tools = _skills_for_tools(
+                await shared.conversation_store.recent_tool_names(_context_id)
+            )
+            for _sid in _from_tools:
+                if _sid not in _history_skills:
+                    _history_skills.append(_sid)
+            if _from_tools:
+                print(f"[skill-detect] skills of tools already run in this chat: {_from_tools}", flush=True)
             # Only carry forward skills not already explicit (avoid double-loading)
             _carried = [s for s in _history_skills if s not in _explicit_skill_ids]
             if _carried:
@@ -1919,7 +2000,8 @@ async def chat(req: ChatRequest):
 
             if direct.get("ok"):
                 # ONE LLM call with pre-fetched data, NO tools
-                data_summary = _json.dumps(direct["data"], default=str)
+                import data_sources
+                data_summary = _json.dumps(data_sources.mark_direct_data(intent["tool"], direct["data"]), default=str)
                 if len(data_summary) > 8000:
                     data_summary = data_summary[:8000] + "\n... (truncated)"
                 routed_system = system + "\n\nYou have the data below. Summarize it directly for the user. Do NOT call any tools — the data is already fetched."
@@ -2004,6 +2086,7 @@ async def chat(req: ChatRequest):
                 _turn_text_parts: list[str] = []
                 _turn_reactive_skills: list[str] = []
                 _done_chunk = None
+                _held_stall = None
                 async for chunk in _current_loop:
                     # Capture usage for logging
                     if chunk.startswith("data: ") and not chunk.startswith("data: [DONE]"):
@@ -2028,6 +2111,9 @@ async def chat(req: ChatRequest):
                     if chunk.startswith("data: [DONE]"):
                         _done_chunk = chunk
                         break
+                    if chunk.startswith('data: {"stalled"'):
+                        _held_stall = chunk
+                        continue
                     yield chunk
 
                 # Detect "please activate /skillname" mentions in the just-completed
@@ -2044,6 +2130,8 @@ async def chat(req: ChatRequest):
                             _new_skills.append(_rsid)
 
                 if not _new_skills:
+                    if _held_stall:
+                        yield _held_stall
                     if _done_chunk:
                         _stream_emitted_done = True
                         _done_emitted_flag[0] = True
@@ -2216,7 +2304,14 @@ async def chat(req: ChatRequest):
                   _tool_activity_emitted = False
                   async def _idle_watchdog():
                       nonlocal _idle_triggered
+                      from agent_loop import is_awaiting_human
                       await _asyncio.sleep(_idle_timeout_s)
+                      # Waiting on the user's allow/deny is not the model going silent:
+                      # hold off, then give the turn a fresh budget once they answer.
+                      while is_awaiting_human(context_id):
+                          while is_awaiting_human(context_id):
+                              await _asyncio.sleep(_WATCHDOG_POLL_S)
+                          await _asyncio.sleep(_idle_timeout_s)
                       _idle_triggered = True
                   _got_real_llm_output = False  # any LLM-originated chunk (token/thinking/tool_call)
                   def _reset_idle_timer(is_first_token: bool = False):
@@ -2389,7 +2484,7 @@ async def chat(req: ChatRequest):
                     # Otherwise the cross-tab alert and the in-progress tab
                     # indicator would only clear on the happy path, leaving a
                     # stalled chat silently stuck.
-                    shared.notify_all({"type": "chat_done", "context_id": context_id})
+                    shared.notify_all({"type": "chat_done", "context_id": context_id, "task_id": task_id})
                     # Close the generator ourselves (see comment above). On the
                     # happy path stream() is already exhausted and this is a
                     # cheap no-op; on cancel/error it drives stream()'s own

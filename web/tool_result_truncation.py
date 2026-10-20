@@ -83,7 +83,9 @@ def truncate_tool_result(result: object, *, tool_name: str = "") -> object:
         return result
 
     try:
-        original_serialized = json.dumps(result, ensure_ascii=False, default=str)
+        # Indented so the overflow file has many short lines; grep_files and
+        # read_file work per line.
+        original_serialized = json.dumps(result, ensure_ascii=False, default=str, indent=2)
     except (TypeError, ValueError):
         # Some successful tool results can contain circular or otherwise
         # non-serializable structures. Preserve them rather than turning a
@@ -100,7 +102,7 @@ def truncate_tool_result(result: object, *, tool_name: str = "") -> object:
         preview = value.encode("utf-8")[:_PREVIEW_BYTES].decode("utf-8", errors="replace")
         hint = (
             f"If read_file or grep_files are unavailable, request /file_ops first. Then use grep_files "
-            f"or read_file with offset/limit to inspect specific sections."
+            f"to find a section, and read_file with offset (line) and limit (lines) to read it."
             if not tool_name.startswith("run_python")
             else
             f"If read_file is unavailable, request /file_ops first. Then use read_file with offset/limit "
