@@ -1,7 +1,10 @@
 """Always-on skill -- 3 tools (always available regardless of active skill)."""
 import json
 import logging
+import math
 import re
+import subprocess
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -49,6 +52,8 @@ TOOL_DEFS = [
             "task='assess': generate a structured assessment report from images in this conversation. "
             "task='analyze_sequence': read a list of video frames from disk (image_paths), label each with its timestamp, "
             "and return a per-frame timeline describing what is visible, what actions are happening, and any text/UI visible. "
+            "task='analyze_video': analyze a screen-recording video file given video_path — frames are extracted for you "
+            "(max 8, evenly spaced); prefer this over extracting frames yourself. "
             "Use analyze_sequence for video keyframe analysis — do NOT ask the user to upload frames, pass image_paths directly."
         ),
         "input_schema": {
@@ -56,7 +61,7 @@ TOOL_DEFS = [
             "properties": {
                 "task": {
                     "type": "string",
-                    "enum": ["describe", "compare", "extract_data", "assess", "analyze_sequence"],
+                    "enum": ["describe", "compare", "extract_data", "assess", "analyze_sequence", "analyze_video"],
                     "description": "What visual analysis task to perform",
                 },
                 "image_paths": {
@@ -68,6 +73,13 @@ TOOL_DEFS = [
                         "For extract_data: paths to images to extract fields from. "
                         "For analyze_sequence: ordered list of video frame paths — each is read, "
                         "labeled with its index/timestamp, and described in the returned timeline."
+                    ),
+                },
+                "video_path": {
+                    "type": "string",
+                    "description": (
+                        "For analyze_video: absolute path of the video file to analyze. "
+                        "Frames are extracted server-side (at most 8, evenly spaced)."
                     ),
                 },
                 "fields": {
@@ -417,11 +429,74 @@ _MAX_SEQUENCE_FRAMES = 8
 _FRAME_MIN_INTERVAL_SEC = 5
 
 
+def _extract_video_frames(video: Path, ffmpeg: str, ffprobe: str, out_dir: Path) -> tuple[list[str], float]:
+    probe = subprocess.run(
+        [ffprobe, "-v", "error", "-show_entries", "format=duration",
+         "-of", "default=noprint_wrappers=1:nokey=1", str(video)],
+        capture_output=True, text=True,
+    )
+    try:
+        duration = float((probe.stdout or "").strip())
+    except ValueError:
+        duration = 0.0
+    if probe.returncode != 0 or duration <= 0:
+        raise RuntimeError(
+            f"Could not read the video duration with ffprobe: {(probe.stderr or '').strip()[-300:]}")
+    n = min(_MAX_SEQUENCE_FRAMES, max(1, math.ceil(duration / _FRAME_MIN_INTERVAL_SEC)))
+    interval = duration / n
+    paths = []
+    for i in range(n):
+        out = out_dir / f"frame_{i + 1:04d}.png"
+        r = subprocess.run(
+            [ffmpeg, "-y", "-ss", f"{i * interval:.3f}", "-i", str(video), "-frames:v", "1", str(out)],
+            capture_output=True, text=True,
+        )
+        if r.returncode != 0 or not out.exists():
+            raise RuntimeError(
+                f"ffmpeg could not extract a frame at {i * interval:.1f}s: {(r.stderr or '').strip()[-300:]}")
+        paths.append(str(out))
+    return paths, interval
+
+
+async def _analyze_video(video_path: str) -> dict:
+    import asyncio
+    import shutil
+    from routes import recorder as _rec
+
+    video = Path(video_path)
+    if not video.is_file():
+        return {"ok": False, "error": f"Video not found: {video_path}"}
+    ffmpeg = _rec._FFMPEG or _rec._find_ffmpeg()
+    ffprobe = _rec._FFPROBE or _rec._find_ffprobe()
+    if not ffmpeg or not ffprobe:
+        return {"ok": False, "error": (
+            "ffmpeg/ffprobe not found. Install: `winget install Gyan.FFmpeg` (Windows) "
+            "or `brew install ffmpeg` (macOS).")}
+    frames_dir = Path(tempfile.mkdtemp(prefix="gator_frames_"))
+    try:
+        try:
+            paths, interval = await asyncio.to_thread(_extract_video_frames, video, ffmpeg, ffprobe, frames_dir)
+        except RuntimeError as exc:
+            return {"ok": False, "error": str(exc)}
+        result = await _analyze_frame_sequence(paths, 1 / interval)
+    finally:
+        shutil.rmtree(frames_dir, ignore_errors=True)
+    if result is None:
+        return {"ok": False, "error": "Frame analysis failed: no frame could be read."}
+    return result
+
+
 async def _tool_describe_images(task: str, image_paths: list | None = None,
-                               fields: list | None = None, fps: float = 0.2) -> dict:
+                               fields: list | None = None, fps: float = 0.2,
+                               video_path: str | None = None) -> dict:
     from sandbox.paths import PROTECTED_MSG, is_secrets_path
-    if any(isinstance(p, str) and is_secrets_path(p) for p in image_paths or []):
+    candidates = list(image_paths or []) + ([video_path] if video_path else [])
+    if any(isinstance(p, str) and is_secrets_path(p) for p in candidates):
         return {"ok": False, "error": PROTECTED_MSG}
+    if task == "analyze_video":
+        if not video_path:
+            return {"ok": False, "error": "analyze_video requires video_path."}
+        return await _analyze_video(video_path)
     if task == "analyze_sequence" and len(image_paths or []) > _MAX_SEQUENCE_FRAMES:
         return {
             "ok": False,
