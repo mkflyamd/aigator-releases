@@ -333,3 +333,51 @@ def manifest(project_id: str | None = None) -> dict:
         stamp = _now()
         update_media(pid, lambda m: m.update(manifest={"generated_at": stamp, "files": files}))
         return {"ok": True, "project_id": pid, "current": current, "files": files, "generated_at": stamp}
+
+# ── frames ───────────────────────────────────────────────────────────────────
+
+def inspect_frames(project_id: str | None, source_rel: str, times_sec: list) -> dict:
+    with _OP_LOCK:
+        pid, folder = project_for(project_id)
+        if not isinstance(times_sec, list) or not times_sec:
+            raise MediaError("bad_argument", "times_sec must be a non-empty list of seconds.", field="times_sec")
+        if len(times_sec) > MAX_FRAMES:
+            raise MediaError("too_many_frames", f"At most {MAX_FRAMES} frames per call.", max_frames=MAX_FRAMES)
+        src = project_file(pid, source_rel)
+        info = probe(src)
+        if not info.has_video:
+            raise MediaError("no_video", f"{source_rel} has no video stream.", rel=source_rel)
+        times, rejected = [], []
+        for value in times_sec:
+            try:
+                times.append(check_time(value, info.duration_sec, field="times_sec", rel=source_rel))
+            except MediaError as exc:
+                if exc.code != "out_of_range":
+                    raise
+                rejected.append({"requested_sec": exc.detail["requested_sec"]})
+        if rejected:
+            raise MediaError(
+                "out_of_range",
+                f"Requested times {[r['requested_sec'] for r in rejected]} are outside {source_rel}, "
+                f"which is {info.duration_sec:.1f}s long. No frames were extracted.",
+                file=source_rel, duration_sec=round(info.duration_sec, 3),
+                valid_range_sec=[0, round(info.duration_sec, 3)], rejected=rejected, options=list(_OPTIONS),
+            )
+        frames_dir = folder / "work" / "frames"
+        frames_dir.mkdir(parents=True, exist_ok=True)
+        frames = []
+        for t in times:
+            out = frames_dir / f"{src.stem}_{t:.2f}s.png"
+            out.unlink(missing_ok=True)
+            _ffmpeg(["-ss", f"{t:.3f}", "-i", str(src), "-frames:v", "1", str(out)])
+            if not out.is_file() or out.stat().st_size == 0:
+                raise MediaError("frame_not_extracted", f"No frame could be read at {t:g}s in {source_rel}.",
+                                 requested_sec=t, file=source_rel)
+            frames.append({"time_sec": t, "rel": rel_of(folder, out), "path": str(out),
+                           "bytes": out.stat().st_size})
+        op = record_op(pid, folder, {
+            "operation": "inspect_frames", "source": {"rel": source_rel, "duration_sec": round(info.duration_sec, 3)},
+            "times_sec": times, "frames": [f["rel"] for f in frames],
+        })
+        return {"ok": True, "operation": "inspect_frames", "source": source_rel,
+                "duration_sec": round(info.duration_sec, 3), "frames": frames, "op_id": op["op_id"]}

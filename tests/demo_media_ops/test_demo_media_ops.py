@@ -61,3 +61,24 @@ def test_manifest_lists_real_files(project):
     assert "source/recording.mp4" in rels
     assert result["current"] == "source/recording.mp4"
     assert dm.read_media(pid)["manifest"]["files"]
+
+
+def test_check_time_rejects_impossible_390s(project):
+    pid, folder = project
+    with pytest.raises(dm.MediaError) as exc:
+        dm.inspect_frames(pid, "source/recording.mp4", [390])
+    result = exc.value.to_result()
+    assert result["error"] == "out_of_range"
+    assert result["duration_sec"] == pytest.approx(62.2, abs=0.2)
+    assert result["rejected"][0]["requested_sec"] == 390
+    assert not list((folder / "work" / "frames").glob("*.png"))
+
+
+def test_inspect_frames_returns_files_and_ledger(project):
+    pid, folder = project
+    result = dm.inspect_frames(pid, "source/recording.mp4", [0, 30.5])
+    assert [f["time_sec"] for f in result["frames"]] == [0, 30.5]
+    for f in result["frames"]:
+        assert (folder / f["rel"]).stat().st_size > 0
+    ledger = (folder / "work/logs/media_ops.jsonl").read_text().splitlines()
+    assert json.loads(ledger[-1])["operation"] == "inspect_frames"
