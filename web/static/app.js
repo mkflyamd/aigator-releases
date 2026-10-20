@@ -18264,6 +18264,96 @@ async function gatorWidgetDeleteConfirm(widgetId, name) {
   if (panel) gatorWidgetManagerRender(panel);
 }
 
+function _parseNarrationApproval(text) {
+  const raw = String(text).slice('NARRATION_APPROVED:'.length).trim();
+  const start = raw.indexOf('[');
+  const end = raw.lastIndexOf(']');
+  if (start === -1 || end === -1) throw new Error('no JSON array');
+  const segments = JSON.parse(raw.slice(start, end + 1));
+  if (!Array.isArray(segments) || !segments.length) throw new Error('no segments');
+  const flags = {};
+  for (const part of raw.slice(end + 1).trim().split(/\s+/)) {
+    const m = part.match(/^([A-Z_]+):(.+)$/);
+    if (m) flags[m[1]] = m[2];
+  }
+  const projectId = flags.PROJECT_ID || null;
+  delete flags.PROJECT_ID;
+  return { segments, flags, projectId };
+}
+
+function _approvalTrigger(approval, flags) {
+  const n = approval.segment_count;
+  const head = `Narration approved (${n} segment${n !== 1 ? 's' : ''}, approval ${approval.approval_id})`;
+  if (flags.ADD_BACKGROUND_MUSIC === 'true') {
+    return `${head} with background music requested. Please generate TTS, add background music, and merge.`;
+  }
+  return `${head}. Please generate TTS and merge.`;
+}
+
+async function _activeDemoProjectId() {
+  const res = await fetch('/api/demo-projects/active');
+  if (!res.ok) return null;
+  const data = await res.json();
+  return data.project_id || null;
+}
+
+async function _errorDetail(res) {
+  try {
+    const body = await res.json();
+    const detail = body.detail ?? body.error;
+    if (typeof detail === 'string') return detail;
+    if (detail) return JSON.stringify(detail);
+  } catch (_) {}
+  return `Approval failed (HTTP ${res.status})`;
+}
+
+function _replyApproval(source, payload) {
+  try {
+    source?.postMessage({ type: 'gator:narration-approval-result', ...payload }, '*');
+  } catch (_) {}
+}
+
+function _submitApprovalTurn(trigger) {
+  const input = document.getElementById('chat-input');
+  if (!input) return;
+  input.textContent = trigger;
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  document
+    .getElementById('chat-form')
+    ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+}
+
+async function _handleNarrationApproved(text, source) {
+  const tabId = _activeTabId;
+  let parsed;
+  try {
+    parsed = _parseNarrationApproval(text);
+  } catch (err) {
+    _replyApproval(source, { ok: false, error: 'Could not read the narration: ' + err.message });
+    return;
+  }
+  try {
+    const projectId = parsed.projectId || (await _activeDemoProjectId());
+    if (!projectId) throw new Error('No demo project is active. Record again or reopen the project.');
+    const res = await fetch('/api/demo-projects/' + encodeURIComponent(projectId) + '/narration', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ segments: parsed.segments, flags: parsed.flags }),
+    });
+    if (!res.ok) throw new Error(await _errorDetail(res));
+    const approval = (await res.json()).approval;
+    if (!approval || !approval.approval_id) throw new Error('The server did not confirm the approval.');
+    if (_activeTabId !== tabId) {
+      throw new Error('You switched tabs. Return to the original tab and approve again; nothing is lost.');
+    }
+    _setTabPin(tabId, { skill: _DEMO_RECORDER_SKILL, projectId });
+    _replyApproval(source, { ok: true, approval });
+    _submitApprovalTurn(_approvalTrigger(approval, parsed.flags));
+  } catch (err) {
+    _replyApproval(source, { ok: false, error: String((err && err.message) || err) });
+  }
+}
+
 /* ── postMessage bridge — iframe widgets → Gator agent ──────────────────── */
 
 window.addEventListener('message', (e) => {
@@ -18277,57 +18367,10 @@ window.addEventListener('message', (e) => {
       const _widgetSkill = d.skill ? String(d.skill) : null;
       const _widgetSuffix = d.system_prompt_suffix ? String(d.system_prompt_suffix) : null;
 
-      // Intercept NARRATION_APPROVED — store the JSON and send a clean trigger
-      // message to the agent instead of the raw JSON payload.
-      // The payload may have extra flags after the JSON array, e.g.:
-      //   NARRATION_APPROVED:[{...}] ADD_BACKGROUND_MUSIC:true
-      // Extract the JSON array robustly (first '[' to matching ']'), then
-      // parse any remaining key:value flags separately.
+      // Narration approval is a transaction: the handler awaits the server commit
+      // and submits the chat turn only after it succeeds.
       if (_text.startsWith('NARRATION_APPROVED:')) {
-        try {
-          const _raw = _text.slice('NARRATION_APPROVED:'.length).trim();
-          // Find the JSON array boundaries
-          const _jsonStart = _raw.indexOf('[');
-          const _jsonEnd = _raw.lastIndexOf(']');
-          if (_jsonStart === -1 || _jsonEnd === -1) throw new Error('no JSON array');
-          const _json = _raw.slice(_jsonStart, _jsonEnd + 1);
-          const _segments = JSON.parse(_json);
-          // Parse any flags that follow the JSON array
-          const _flagsStr = _raw.slice(_jsonEnd + 1).trim();
-          const _flags = {};
-          for (const part of _flagsStr.split(/\s+/)) {
-            const m = part.match(/^([A-Z_]+):(.+)$/);
-            if (m) _flags[m[1]] = m[2];
-          }
-          // Store server-side (agent reads ~/.gator/narration_pending.json via
-          // run_python) AND in sessionStorage as a fallback.
-          sessionStorage.setItem('gator_narration_approved', _json);
-          if (Object.keys(_flags).length) {
-            sessionStorage.setItem('gator_narration_flags', JSON.stringify(_flags));
-          } else {
-            sessionStorage.removeItem('gator_narration_flags');
-          }
-          fetch('/api/recorder/narration-approved', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ segments: _segments, flags: _flags }),
-          }).catch(() => {});
-          // Send a clean human-readable trigger — agent reads segments from storage
-          const _count = _segments.length;
-          let _trigger = `Narration approved (${_count} segment${_count !== 1 ? 's' : ''}). Please generate TTS and merge.`;
-          if (_flags.ADD_BACKGROUND_MUSIC === 'true') {
-            _trigger = `Narration approved (${_count} segment${_count !== 1 ? 's' : ''}) with background music requested. Please generate TTS, add background music, and merge.`;
-          }
-          const input = document.getElementById('chat-input');
-          if (!input) return;
-          input.textContent = _trigger;
-          input.dispatchEvent(new Event('input', { bubbles: true }));
-          document
-            .getElementById('chat-form')
-            ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-        } catch (_error) {
-          console.warn('[gator] NARRATION_APPROVED parse failed:', _error, _text.slice(0, 200));
-        }
+        _handleNarrationApproved(_text, e.source);
         return;
       }
 
