@@ -22755,3 +22755,71 @@ body.tab-fullscreen {
 .gh-row:hover {
   background: var(--surface2);
 }
+
+/* Demo media: clip panel above the chat input */
+.demo-media-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin: 0 0.85rem 0.4rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-card);
+  font-size: 0.78rem;
+  color: var(--text);
+}
+.demo-media-panel.hidden {
+  display: none;
+}
+.demo-media-state {
+  font-weight: 600;
+  color: var(--text-dim);
+}
+.demo-media-state.demo-media-ready {
+  color: var(--accent);
+}
+.demo-media-state.demo-media-failed {
+  color: var(--danger);
+}
+.demo-media-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.demo-media-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.demo-media-dur {
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.demo-media-trim {
+  width: 3.4rem;
+  padding: 0.1rem 0.3rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+.demo-media-btn {
+  padding: 0.05rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+}
+.demo-media-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.demo-media-error {
+  color: var(--danger);
+  font-weight: 600;
+}

@@ -12421,6 +12421,8 @@ function initAigatorUpload() {
   const fileIn = document.getElementById('aigator-file-input');
   const inputRow = document.getElementById('chat-input-row');
   if (!attachBtn || !fileIn) return;
+  const mediaPanel = document.getElementById('demo-media-panel');
+  if (mediaPanel && typeof DemoMedia !== 'undefined') DemoMedia.mountPanel(mediaPanel);
 
   const _DOC_EXTENSIONS = new Set(['docx', 'doc', 'xlsx', 'xls', 'csv', 'pptx', 'ppt']);
   const _IMAGE_TYPES = new Set([
@@ -12435,6 +12437,11 @@ function initAigatorUpload() {
     const errEl = document.getElementById('aigator-drop-error');
     for (const file of files) {
       const ext = file.name.split('.').pop().toLowerCase();
+
+      if (typeof DemoMedia !== 'undefined' && DemoMedia.classify(file.name)) {
+        _attachDemoMedia(file, errEl);
+        continue;
+      }
 
       // Document files → upload to server temp, create file chip with real path
       if (_DOC_EXTENSIONS.has(ext)) {
@@ -12640,6 +12647,61 @@ function _showUploadError(el, msg) {
   setTimeout(() => el.classList.add('hidden'), 4000);
 }
 
+function _attachDemoMedia(file, errEl) {
+  const problem = DemoMedia.validateLocal(file);
+  if (problem) {
+    _showUploadError(errEl, problem);
+    return;
+  }
+  const input = document.getElementById('chat-input');
+  if (!input) return;
+  const tabId = _activeTabId;
+  const chip = document.createElement('span');
+  chip.className = 'pin-ref-chip file-ref-chip';
+  chip.contentEditable = 'false';
+  chip.dataset.fileName = file.name;
+  chip.dataset.mediaUploading = '1';
+  chip.title = file.name;
+  chip.appendChild(
+    document.createTextNode(DemoMedia.classify(file.name) === 'audio' ? '🎵 ' : '🎬 '),
+  );
+  const nameSpan = document.createElement('span');
+  nameSpan.className = 'file-chip-name';
+  nameSpan.textContent = file.name + ' (0%)';
+  chip.appendChild(nameSpan);
+  const removeBtn = document.createElement('button');
+  removeBtn.type = 'button';
+  removeBtn.className = 'file-chip-remove';
+  removeBtn.setAttribute('aria-label', 'Remove ' + file.name);
+  removeBtn.title = 'Remove';
+  removeBtn.textContent = '✕';
+  _wireChipRemove(removeBtn, chip, input);
+  chip.appendChild(removeBtn);
+  input.appendChild(chip);
+  input.appendChild(document.createTextNode(' '));
+  input.focus();
+  if (typeof _moveCaretToEnd === 'function') _moveCaretToEnd(input);
+
+  DemoMedia.upload(file, {
+    onProgress: (pct) => {
+      nameSpan.textContent = file.name + ' (' + pct + '%)';
+    },
+  })
+    .then((res) => {
+      chip.dataset.filePath = res.path;
+      delete chip.dataset.mediaUploading;
+      nameSpan.textContent = file.name;
+      DemoMedia.setProject(res.project_id, res.clips);
+      if (typeof _setTabPin === 'function' && typeof _DEMO_RECORDER_SKILL !== 'undefined') {
+        _setTabPin(tabId, { skill: _DEMO_RECORDER_SKILL, projectId: res.project_id });
+      }
+    })
+    .catch((err) => {
+      chip.remove();
+      _showUploadError(errEl, err.message);
+    });
+}
+
 function _renderAigatorPreviews() {
   const previews = document.getElementById('aigator-previews');
   const attachBtn = document.getElementById('aigator-attach-btn');
@@ -12700,6 +12762,10 @@ form.addEventListener('submit', async (e) => {
   // Don't submit while a dropdown is open — the user is navigating, not sending
   if (_slashDropdown || _mentionDropdown || _pinDropdown || _channelDropdown) {
     console.log('[submit] BLOCKED — dropdown open');
+    return;
+  }
+  if (input.querySelector('[data-media-uploading]')) {
+    _showUploadError(document.getElementById('aigator-drop-error'), 'Wait for the upload to finish');
     return;
   }
   closeMentionDropdown();

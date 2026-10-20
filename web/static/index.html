@@ -1643,12 +1643,17 @@
             aria-label="Uploaded images"
           ></div>
           <span class="aigator-drop-error hidden" id="aigator-drop-error" role="alert"></span>
+          <div
+            id="demo-media-panel"
+            class="demo-media-panel hidden"
+            aria-label="Demo clips"
+          ></div>
 
           <div class="chat-input-row" id="chat-input-row">
             <input
               id="aigator-file-input"
               type="file"
-              accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,.docx,.xlsx,.pptx,.doc,.xls,.ppt,.csv"
+              accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,.docx,.xlsx,.pptx,.doc,.xls,.ppt,.csv,.mp4,.mov,.m4v,.webm,.mp3,.m4a,.wav,.aac,.ogg,.flac"
               multiple
               style="display: none"
               aria-label="Attach files"
@@ -2011,6 +2016,7 @@
       document.write('<scr' + 'ipt src="/static/gator-empty-state.js' + _cb + '"><\/scr' + 'ipt>');
       document.write('<scr' + 'ipt src="/static/onboarding.js' + _cb + '"><\/scr' + 'ipt>');
       document.write('<scr' + 'ipt src="/static/speech.js' + _cb + '"><\/scr' + 'ipt>');
+      document.write('<scr' + 'ipt src="/static/demo-media.js' + _cb + '"><\/scr' + 'ipt>');
       document.write('<scr' + 'ipt src="/static/app.js' + _cb + '"><\/scr' + 'ipt>');
       document.write('<scr' + 'ipt src="/static/third-pane.js' + _cb + '"><\/scr' + 'ipt>');
       document.write('<scr' + 'ipt src="/static/agents-pane.js' + _cb + '"><\/scr' + 'ipt>');

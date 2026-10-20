@@ -45,4 +45,23 @@ assert.deepStrictEqual(plain(DemoMedia.moveId(['c1', 'c2'], 'c1', -1)), ['c1', '
 assert.deepStrictEqual(plain(DemoMedia.moveId(['c1', 'c2'], 'c2', 1)), ['c1', 'c2']);
 assert.deepStrictEqual(plain(DemoMedia.moveId(['c1', 'c2'], 'zz', 1)), ['c1', 'c2']);
 
+// wiring
+const read = (...p) => fs.readFileSync(path.join(root, ...p), 'utf8');
+const appJs = read('web', 'static', 'app.js');
+const indexHtml = read('web', 'static', 'index.html');
+const styleCss = read('web', 'static', 'style.css');
+assert.ok(appJs.includes('DemoMedia.classify(file.name)'), 'processFiles routes media files');
+assert.ok(appJs.includes('function _attachDemoMedia('), 'media chip helper exists');
+assert.ok(appJs.includes('data-media-uploading'), 'submit gate checks uploading chips');
+assert.ok(appJs.includes('Wait for the upload to finish'), 'submit gate message');
+assert.ok(appJs.includes('DemoMedia.mountPanel('), 'panel is mounted');
+assert.ok(indexHtml.includes('id="demo-media-panel"'), 'panel container');
+assert.ok(indexHtml.includes('/static/demo-media.js'), 'script tag');
+assert.ok(indexHtml.includes('.mp4,.mov,.m4v,.webm,.mp3,.m4a,.wav,.aac,.ogg,.flac'), 'file input accepts media');
+assert.ok(styleCss.includes('.demo-media-panel'), 'panel styles');
+assert.ok(
+  indexHtml.indexOf('/static/demo-media.js') < indexHtml.indexOf('/static/app.js'),
+  'demo-media.js loads before app.js',
+);
+
 console.log('demo_media_ui: ok');
