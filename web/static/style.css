@@ -22809,7 +22809,8 @@ body.tab-fullscreen {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.demo-media-dur {
+.demo-media-dur,
+.demo-media-res {
   color: var(--text-dim);
   font-variant-numeric: tabular-nums;
 }

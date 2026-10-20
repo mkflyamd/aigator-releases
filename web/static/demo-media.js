@@ -33,6 +33,10 @@ const DemoMedia = (() => {
     return Math.floor(total / 60) + ':' + String(total % 60).padStart(2, '0');
   }
 
+  function formatResolution(item) {
+    return item && item.width && item.height ? item.width + 'x' + item.height : '';
+  }
+
   function parseTrim(startText, endText, duration) {
     const s = String(startText == null ? '' : startText).trim();
     const e = String(endText == null ? '' : endText).trim();
@@ -190,6 +194,8 @@ const DemoMedia = (() => {
     const row = el('div', 'demo-media-row');
     row.appendChild(el('span', 'demo-media-name', clip.name));
     row.appendChild(el('span', 'demo-media-dur', formatDuration(clip.duration)));
+    const resolution = formatResolution(clip);
+    if (resolution) row.appendChild(el('span', 'demo-media-res', resolution));
     const i = ids.indexOf(clip.id);
     row.appendChild(iconButton('↑', 'Move ' + clip.name + ' earlier', i === 0, () =>
       mutate('PUT', 'order', { ids: moveId(ids, clip.id, -1) })));
@@ -274,6 +280,7 @@ const DemoMedia = (() => {
     classify,
     validateLocal,
     formatDuration,
+    formatResolution,
     parseTrim,
     moveId,
     upload,

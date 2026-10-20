@@ -28,6 +28,11 @@ assert.strictEqual(DemoMedia.formatDuration(65), '1:05');
 assert.strictEqual(DemoMedia.formatDuration(599.6), '10:00');
 assert.strictEqual(DemoMedia.formatDuration(3725), '62:05');
 
+// formatResolution
+assert.strictEqual(DemoMedia.formatResolution({ width: 1920, height: 1080 }), '1920x1080');
+assert.strictEqual(DemoMedia.formatResolution({ width: null, height: null }), '');
+assert.strictEqual(DemoMedia.formatResolution({}), '');
+
 // parseTrim
 assert.deepStrictEqual(plain(DemoMedia.parseTrim('', '', 10)), { ok: true, trim_start: 0, trim_end: null });
 assert.deepStrictEqual(plain(DemoMedia.parseTrim('1', '6.5', 10)), { ok: true, trim_start: 1, trim_end: 6.5 });
@@ -37,6 +42,12 @@ for (const [s, e] of [['x', ''], ['-1', ''], ['0', 'abc'], ['0', '11'], ['2', '2
   assert.strictEqual(r.ok, false, `parseTrim(${s}, ${e}) should be rejected`);
   assert.ok(typeof r.error === 'string' && r.error.length > 0);
 }
+
+// the clip row shows the resolution
+assert.ok(
+  /formatResolution\(clip\)/.test(source.match(/function clipRow\([\s\S]*?\n  \}\n/)[0]),
+  'clip row renders the resolution',
+);
 
 // moveId
 assert.deepStrictEqual(plain(DemoMedia.moveId(['c1', 'c2', 'c3'], 'c2', -1)), ['c2', 'c1', 'c3']);
