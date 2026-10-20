@@ -1549,10 +1549,10 @@ async def chat(req: ChatRequest):
     # detection (e.g. the browser skill firing on a pasted MCP URL).
     _inferred = []
     _classifier_inherited = False
+    from continuation_classifier import classify as _classify, detect_pending as _detect_pending
     if _skills_locked:
         print(f"[classifier] skipped — skills locked (scoped_skill={req.scoped_skill!r}, pin={_pin.skill if _pin else None!r})", flush=True)
     else:
-        from continuation_classifier import classify as _classify, detect_pending as _detect_pending
         _tab_state = shared.task_state_store.get(_context_id)
         _clf = _classify(_msg_text, _tab_state)
         print(f"[classifier] mode={_clf.mode} reason={_clf.reason}", flush=True)
