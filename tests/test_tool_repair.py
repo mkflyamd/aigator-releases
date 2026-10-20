@@ -250,3 +250,48 @@ def test_rejected_call_tool_result_names_missing_fields_for_the_watchdog_banner(
     results = [e["tool_result"] for e in _events(_run_single(provider, execute)) if "tool_result" in e]
     assert results[0]["status"] == "error"
     assert "code" in results[0]["summary"]
+
+
+# ── executor loop ────────────────────────────────────────────────────────────
+
+def _planner_turn():
+    return _text_turn("1. Run the script.")
+
+
+def test_executor_repair_that_fails_again_stalls_with_structured_event():
+    execute, executed = _fake_tool()
+    provider = _Provider([
+        _planner_turn(),
+        _tool_turn(_tc(inputs={})),
+        _tool_turn(_tc(inputs={})),
+        _text_turn("unexpected"),
+    ])
+    chunks = _run_three(provider, execute)
+    assert provider.calls == 3  # planner + original + one repair
+    assert executed == []
+    stalled = _stalled(chunks)
+    assert len(stalled) == 1
+    assert stalled[0]["failed_calls"] == [{"tool": "run_python", "fields": ["code"]}]
+    assert not any("could not form valid tool calls" in c for c in chunks)
+    assert chunks[-1] == "data: [DONE]\n\n"
+
+
+def test_executor_successful_repair_resumes_the_task():
+    execute, executed = _fake_tool()
+    provider = _Provider([
+        _planner_turn(),
+        _tool_turn(_tc(inputs={})),
+        _tool_turn(_tc(inputs={"code": "print(1)"})),
+        _text_turn("The script ran and printed 1, so the task is complete."),
+        _text_turn("The script ran and printed 1, so the task is complete."),
+    ])
+    chunks = _run_three(provider, execute)
+    assert executed == [{"code": "print(1)"}]
+    assert not _stalled(chunks)
+
+
+def test_executor_provider_failure_after_rejection_stalls():
+    execute, _ = _fake_tool()
+    provider = _Provider([_planner_turn(), _tool_turn(_tc(inputs={})), ValueError("provider exploded")])
+    chunks = _run_three(provider, execute)
+    assert _stalled(chunks)[0]["failed_calls"] == [{"tool": "run_python", "fields": ["code"]}]

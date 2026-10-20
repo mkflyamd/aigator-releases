@@ -1565,6 +1565,7 @@ async def run_three_agent_loop(
     ]
     draft_text = ""
     _bad_tool_streak = 0  # consecutive all-bad-tool rounds in executor
+    _last_rejections: list[dict] = []
     available_tools = list(normalized_tools)
     _definition_retries = 0
 
@@ -1672,6 +1673,8 @@ async def run_three_agent_loop(
                         _exec_retry_count = 0
                         continue
                 yield f"data: {json.dumps({'text': f'Executor error: {exc}'})}\n\n"
+                if _bad_tool_streak:
+                    yield stalled_chunk(_last_rejections)
                 await _log_turn_end_safe(
                     turn_telemetry.new_turn_id(), context_id, task_id, _iter, "executor", model,
                     type(provider).__name__, "llm_error", None,
@@ -1762,9 +1765,9 @@ async def run_three_agent_loop(
         all_non_retryable = results and all(_is_non_retryable_tool_error(r) for r in results)
         if all_non_retryable:
             _bad_tool_streak += 1
+            _last_rejections = rejection_summaries(tool_calls, results)
             if _bad_tool_streak >= _MAX_BAD_TOOL_RETRIES:
-                _names = ", ".join(tc.name for tc in tool_calls)
-                yield f"data: {json.dumps({'text': f'Executor: model could not form valid tool calls for {_names} after {_bad_tool_streak} attempts. Try rephrasing or switching model.'})}\n\n"
+                yield stalled_chunk(_last_rejections)
                 yield f"data: {json.dumps({'usage': {'input_tokens': _total_input, 'output_tokens': _total_output}})}\n\n"
                 await _log_turn_end_safe(
                     turn_telemetry.new_turn_id(), context_id, task_id, _iter, "executor", model,
