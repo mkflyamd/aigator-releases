@@ -3363,6 +3363,20 @@ body.gator-chat-expanded .gator-expand-btn {
   cursor: default;
   letter-spacing: 0.01em;
 }
+.skill-pin-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.72rem;
+  font-weight: 500;
+  padding: 2px 6px 2px 8px;
+  border-radius: 6px;
+  border: 1px dashed rgba(74, 222, 128, 0.35);
+  background: rgba(74, 222, 128, 0.06);
+  color: var(--accent);
+  white-space: nowrap;
+  letter-spacing: 0.01em;
+}
 .pin-ref-chip {
   display: inline-flex;
   align-items: center;

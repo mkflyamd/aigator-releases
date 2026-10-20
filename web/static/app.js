@@ -4087,6 +4087,89 @@ function _loadTabChips(tabId) {
     return null;
   }
 }
+const _DEMO_RECORDER_SKILL = 'gator-demo-recorder';
+const _tabPins = new Map(); // tabId -> { skill, projectId } | null
+
+function _pinFromMessage(d, text) {
+  const cleanId = (v) => (typeof v === 'string' && /^[A-Za-z0-9_.-]{1,80}$/.test(v) ? v : null);
+  if (d && typeof d.pin_skill === 'string' && d.pin_skill) {
+    return { skill: d.pin_skill, projectId: cleanId(d.project_id) };
+  }
+  if (
+    /^(Recording complete\.|NARRATION_APPROVED:|NARRATION_REEDIT:|Please delete the frames\/ and tts_work\/)/.test(
+      text,
+    )
+  ) {
+    return { skill: _DEMO_RECORDER_SKILL, projectId: cleanId(d && d.project_id) };
+  }
+  return null;
+}
+
+function _mergePin(existing, incoming) {
+  if (!incoming) return existing || null;
+  if (existing && existing.skill === incoming.skill && !incoming.projectId) {
+    return { skill: incoming.skill, projectId: existing.projectId || null };
+  }
+  return { skill: incoming.skill, projectId: incoming.projectId || null };
+}
+
+function _pinForSend(pin, text) {
+  if (!pin || !pin.skill) return null;
+  if (String(text).trimStart().startsWith('/')) return null;
+  return pin;
+}
+
+function _loadTabPin(tabId) {
+  try {
+    const v = JSON.parse(localStorage.getItem('tab-pin-' + tabId) || 'null');
+    return v && typeof v.skill === 'string' ? { skill: v.skill, projectId: v.projectId || null } : null;
+  } catch {
+    return null;
+  }
+}
+
+function _getTabPin(tabId) {
+  if (!_tabPins.has(tabId)) _tabPins.set(tabId, _loadTabPin(tabId));
+  return _tabPins.get(tabId);
+}
+
+function _setTabPin(tabId, pin) {
+  if (!tabId) return;
+  _tabPins.set(tabId, pin || null);
+  try {
+    if (pin) localStorage.setItem('tab-pin-' + tabId, JSON.stringify(pin));
+    else localStorage.removeItem('tab-pin-' + tabId);
+  } catch (e) {
+    console.warn('tab pin not saved for tab', tabId, e);
+  }
+  if (tabId === _activeTabId) _renderPinChip(tabId);
+}
+
+function _renderPinChip(tabId) {
+  const chipRow = document.getElementById('chat-chip-row');
+  if (!chipRow) return;
+  chipRow.querySelectorAll('.skill-pin-chip').forEach((el) => el.remove());
+  const pin = _getTabPin(tabId);
+  if (!pin) return;
+  const label = SKILL_MAP[pin.skill]?.label || pin.skill;
+  const chip = document.createElement('span');
+  chip.className = 'skill-pin-chip';
+  const text = document.createElement('span');
+  text.textContent = `Pinned: ${label}`;
+  const remove = document.createElement('button');
+  remove.type = 'button';
+  remove.className = 'chip-remove';
+  remove.setAttribute('aria-label', `Unpin ${label}`);
+  remove.textContent = '✕';
+  remove.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    _setTabPin(tabId, null);
+  });
+  chip.append(text, remove);
+  chipRow.prepend(chip);
+  chipRow.classList.remove('hidden');
+}
+
 function _restoreChipsForTab(tabId) {
   // Wipe current chip-row DOM + state
   const chipRow = document.getElementById('chat-chip-row');
@@ -4105,6 +4188,7 @@ function _restoreChipsForTab(tabId) {
     : _activeChips[_activeChips.length - 1]?.skillId || null;
   _setRailActive?.(_activeSkillId);
   _updatePlaceholder?.();
+  _renderPinChip(tabId);
 }
 
 let _tabs = [];
@@ -4586,6 +4670,8 @@ function closeTab(tabId) {
     localStorage.removeItem('tab-draft-' + tabId);
     localStorage.removeItem('tab-drafts-' + tabId);
     localStorage.removeItem('tab-chips-' + tabId);
+    localStorage.removeItem('tab-pin-' + tabId);
+    _tabPins.delete(tabId);
 
     // Capture scroll position before ANY DOM rebuild so we can restore it
     // exactly. _forcedScrollLeft is consumed inside _renderTabBar's rAF callback
@@ -12753,6 +12839,7 @@ form.addEventListener('submit', async (e) => {
   }
   activeChannelsSnapshot.forEach((ch) => _addChannelChip(ch));
   _ensureAddSkillBtn();
+  _renderPinChip(_activeTabId || _tabs[0]?.id || 'default');
   _updatePlaceholder();
 
   // Clear images after send
@@ -12786,6 +12873,13 @@ form.addEventListener('submit', async (e) => {
 
   const requestTabId = _activeTabId || _tabs[0]?.id || 'default';
   const requestContextId = requestTabId || 'default';
+  const _sendPin = _pinForSend(_getTabPin(requestTabId), finalText);
+  const _sendPinFields = _sendPin
+    ? {
+        pinned_skill: _sendPin.skill,
+        ...(_sendPin.projectId ? { pinned_project_id: _sendPin.projectId } : {}),
+      }
+    : {};
   const requestHistory = history;
 
   requestHistory.push({ role: 'user', content: finalText });
@@ -13236,6 +13330,7 @@ form.addEventListener('submit', async (e) => {
       active_people: activePeopleSnapshot,
       context_id: requestContextId,
       model: window._currentModel || '',
+      ..._sendPinFields,
     };
     try {
       // Step 1: POST to get task_id (fast, returns immediately)
@@ -13262,6 +13357,7 @@ form.addEventListener('submit', async (e) => {
             model: window._currentModel || '',
             unapproved_deps: _getUnapprovedDeps(_activeSkillId || ''),
             ...(_wSuffix ? { system_prompt_suffix: _wSuffix } : {}),
+            ..._sendPinFields,
           };
       const postRes = await fetch('/api/chat', {
         method: 'POST',
@@ -18235,6 +18331,8 @@ window.addEventListener('message', (e) => {
         return;
       }
 
+      const _pin = _pinFromMessage(d, _text);
+      if (_pin) _setTabPin(_activeTabId, _mergePin(_getTabPin(_activeTabId), _pin));
       const input = document.getElementById('chat-input');
       if (!input) return;
       input.textContent = _text;
