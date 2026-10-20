@@ -397,11 +397,24 @@ async def git_diff(project_name: str, file: str, staged: bool = False):
     except ValueError:
         raise HTTPException(status_code=400, detail="File outside repo")
     try:
-        cmd = ["git", "-C", repo, "diff"]
-        if staged:
-            cmd.append("--staged")
-        cmd.append("--")
-        cmd.append(file)
+        untracked = False
+        if not staged and full.is_file():
+            tracked = await asyncio.to_thread(
+                subprocess.run,
+                ["git", "-C", repo, "ls-files", "--error-unmatch", "--", file],
+                capture_output=True,
+                timeout=10,
+                **no_window_kwargs(),
+            )
+            untracked = tracked.returncode != 0
+        if untracked:
+            # git diff prints nothing for untracked files; show them as all-added.
+            cmd = ["git", "-C", repo, "diff", "--no-index", "--", "/dev/null", file]
+        else:
+            cmd = ["git", "-C", repo, "diff"]
+            if staged:
+                cmd.append("--staged")
+            cmd += ["--", file]
         result = await asyncio.to_thread(
             subprocess.run,
             cmd,
