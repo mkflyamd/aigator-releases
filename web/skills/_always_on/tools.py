@@ -541,6 +541,33 @@ def _is_tool_choice_rejection(status: int, body: str) -> bool:
     return status == 400 and "tool_choice" in (body or "")
 
 
+def _is_vision_unsupported(status: int, body: str) -> bool:
+    """The gateway refused image input for the active model (not every model accepts images)."""
+    if status not in (400, 404, 415, 422):
+        return False
+    b = (body or "").lower()
+    if "api_not_supported" in b:
+        return True
+    return any(w in b for w in ("image", "vision", "multimodal")) and any(
+        w in b for w in ("not support", "unsupported", "not available")
+    )
+
+
+def _vision_unsupported_result(model: str, status: int) -> dict:
+    return {
+        "ok": False,
+        "error_code": "vision_unsupported",
+        "error": (
+            f"Image analysis is not available for the active model ({model}): the gateway rejected "
+            f"image input for it (HTTP {status}). This is a limit of the model/gateway route, not a "
+            "temporary outage, so retrying will not help. Tell the user plainly, and suggest "
+            "switching to a vision-capable model (for example a Claude model) in the model picker, "
+            "or attaching the images directly in the chat. Do NOT retry, and do NOT guess what the "
+            "images show."
+        ),
+    }
+
+
 def _extract_structured_fields(image_paths: list, fields: list) -> dict | None:
     """Schema-constrained extraction: reads the given image file(s) from disk,
     makes a dedicated gateway-routed vision call with tool_choice pinned to a
@@ -548,9 +575,11 @@ def _extract_structured_fields(image_paths: list, fields: list) -> dict | None:
     validated JSON directly — not prose the calling model has to reformat and
     potentially transcribe wrong (e.g. a numeric fee).
 
-    Returns None (not an error dict) on any failure — missing/bad file,
+    Returns None (not an error dict) on most failures — missing/bad file,
     gateway/auth failure, or the model declining to call the tool — so the
-    caller can fall back to the existing prose-based behavior silently.
+    caller can fall back to the existing prose-based behavior silently. The one
+    exception is a model that cannot accept images: that returns a
+    vision_unsupported error, since the prose fallback would be empty too.
     """
     import base64
     import os
@@ -628,6 +657,10 @@ def _extract_structured_fields(image_paths: list, fields: list) -> dict | None:
             if not _is_tool_choice_rejection(400, str(e)):
                 raise
             msg = client.messages.create(**request, tool_choice={"type": "auto"})
+    except anthropic.APIStatusError as e:
+        if _is_vision_unsupported(e.status_code, str(e)):
+            return _vision_unsupported_result(model, e.status_code)
+        return None
     except Exception:
         return None
 
@@ -760,10 +793,9 @@ async def _analyze_frame_sequence(image_paths: list, fps: float = 0.2) -> dict |
             if len(body) > 500:
                 body = body[:500] + f"...[+{len(body) - 500} chars]"
             _err = f"Gateway returned HTTP {r.status_code} for vision analysis: {body}"
-            if "api_not_supported" in body:
-                _err += (f" The active model ({model}) does not support image input through the gateway; "
-                         "switch to a vision-capable model or attach the images in the chat.")
             _log.error("describe_images.analyze_sequence: %s", _err)
+            if _is_vision_unsupported(r.status_code, r.text):
+                return _vision_unsupported_result(model, r.status_code)
             return {"ok": False, "error": _err}
         msg = r.json()
     except httpx.TimeoutException as e:
