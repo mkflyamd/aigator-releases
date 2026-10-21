@@ -27,7 +27,11 @@ async function run(gatorShell) {
   assert.strictEqual(web.hidden, true, 'Change is hidden when there is no native folder picker');
   assert.strictEqual(web.text, 'C:\demo (default)');
   const electron = await run({ pickDemoFolder: () => null });
-  assert.strictEqual(electron.hidden, false, 'Change is shown when the shell offers a folder picker');
+  assert.strictEqual(
+    electron.hidden,
+    false,
+    'Change is shown when the shell offers a folder picker',
+  );
   console.log('demo_root_change_button: ok');
 })().catch((e) => {
   console.error(e);

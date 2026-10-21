@@ -5552,10 +5552,22 @@ ipcMain.handle('widget:open-hud', (_e, html, opts) => {
   `;
 
   const _hudHostStyle = [
-    'all:initial', 'display:block', 'position:fixed', 'top:0', 'left:0', 'right:0',
-    'height:32px', 'z-index:2147483647', 'opacity:1', 'visibility:visible',
-    'transform:none', 'filter:none', 'pointer-events:auto',
-  ].map((d) => d + '!important').join(';');
+    'all:initial',
+    'display:block',
+    'position:fixed',
+    'top:0',
+    'left:0',
+    'right:0',
+    'height:32px',
+    'z-index:2147483647',
+    'opacity:1',
+    'visibility:visible',
+    'transform:none',
+    'filter:none',
+    'pointer-events:auto',
+  ]
+    .map((d) => d + '!important')
+    .join(';');
   const titlebar =
     `<div id="_hud_host" style="${_hudHostStyle}"><template shadowrootmode="open">` +
     `<style>${hudChromeCSS}</style>` +

@@ -27,10 +27,12 @@
 ### Task 1: `_IS_WINDOWS` test seam
 
 **Files:**
+
 - Modify: `web/routes/recorder.py` (every `os.name` check)
 - Create: `tests/test_recorder_capture.py`
 
 **Interfaces:**
+
 - Produces: module constant `rec._IS_WINDOWS: bool` (`os.name == "nt"`), read at call time by every recorder function, so tests can `monkeypatch.setattr(rec, "_IS_WINDOWS", ...)`.
 
 - [ ] **Step 1: Write the failing test**
@@ -84,10 +86,12 @@ git commit -m "refactor: expose recorder platform check as _IS_WINDOWS for testi
 ### Task 2: store the validated start request (issue #55 item 1)
 
 **Files:**
+
 - Modify: `web/routes/recorder.py` (`class StartRequest` area, `recorder_start`, stale declaration above `recorder_resume`)
 - Modify: `tests/test_recorder_capture.py`
 
 **Interfaces:**
+
 - Consumes: `rec._IS_WINDOWS` (Task 1).
 - Produces: module global `rec._last_start_req: StartRequest`, set by `recorder_start` to the post-validation (clamped) request; test fixtures `env` and `client` and helper `_start(client, **overrides)` that Tasks 3–4 reuse. `env` exposes `argvs` (Popen argv lists), `runs` (`subprocess.run` argv lists), `fail_next_start`, `segment_bytes`, `concat_returncode`, `concat_stderr`, `borders` (list of `(screen_label, crop_dict_or_None)`), `border_stops`, `latest` (payloads passed to `_write_latest_output`).
 
@@ -269,7 +273,9 @@ _last_start_req: StartRequest = StartRequest()
 ```python
     global _last_screen_index, _last_crop
 ```
+
 to
+
 ```python
     global _last_screen_index, _last_crop, _last_start_req
 ```
@@ -280,7 +286,9 @@ to
     try:
         proc, seg_path = _start_segment(ffmpeg, req, screens, 0)
 ```
+
 to
+
 ```python
     _last_start_req = req
 
@@ -307,10 +315,12 @@ git commit -m "fix: resume the recorder on the selected screen and crop (#55 ite
 ### Task 3: stop never returns a bogus file (issue #55 item 3)
 
 **Files:**
+
 - Modify: `web/routes/recorder.py` (`_stitch_segments`, `recorder_stop`)
 - Modify: `tests/test_recorder_capture.py`
 
 **Interfaces:**
+
 - Consumes: `env`, `client`, `_start` (Task 2).
 - Produces: `recorder_stop` failure contract `500 {"ok": False, "status": "idle", "error": str, "segments": [str], "session_dir": str}` consumed by the widget in Task 5; success payload unchanged (`ok, status, path, size_bytes, elapsed, segments`). `_stitch_segments(ffmpeg, segments, out_path)` raises `RuntimeError` on a failed concat.
 
@@ -464,10 +474,12 @@ git commit -m "fix: report a failed recording join instead of returning the last
 ### Task 4: a failed Windows resume leaves clean, retryable state (issue #55 item 2)
 
 **Files:**
+
 - Modify: `web/routes/recorder.py` (`recorder_resume`, Windows branch)
 - Modify: `tests/test_recorder_capture.py`
 
 **Interfaces:**
+
 - Consumes: `env.fail_next_start`, `_start`, `_pause_resume` helpers (Tasks 2–3).
 - Produces: resume failure contract `500 {"ok": False, "error": "ffmpeg failed to restart — check ffmpeg_log.txt", "log": "<session_dir>/ffmpeg_log.txt"}` consumed by the widget (Task 5); `_segments` only ever contains segments whose ffmpeg process survived start.
 
@@ -556,10 +568,12 @@ git commit -m "fix: keep a failed Windows resume paused and retryable (#55 item 
 ### Task 5: recorder widget shows action failures and formats the completion message
 
 **Files:**
+
 - Modify: `web/skills/gator-demo-recorder/SKILL.md` (first `html:widget` block; the CRITICAL RULES "File path" bullet)
 - Create: `tests/recorder_widget.test.js`
 
 **Interfaces:**
+
 - Consumes: backend contracts from Tasks 3–4 (`{ok:false, error, session_dir?}`).
 - Produces: widget functions `actionFailed(err, data, label)` and variable `_actionError`; completion message `Recording complete. File: <path>[ (<size>MB)]. Please analyze it and draft a narration script.` consumed by SKILL.md Phase 2 (Task 10).
 
@@ -567,7 +581,7 @@ git commit -m "fix: keep a failed Windows resume paused and retryable (#55 item 
 
 Create `tests/recorder_widget.test.js`:
 
-```js
+````js
 // The recorder widget template is extracted from SKILL.md and run against a stub DOM/fetch.
 
 const assert = require('assert');
@@ -577,7 +591,9 @@ const vm = require('vm');
 const { test } = require('node:test');
 
 const skill = fs.readFileSync(
-  path.join(__dirname, '..', 'web', 'skills', 'gator-demo-recorder', 'SKILL.md'), 'utf8');
+  path.join(__dirname, '..', 'web', 'skills', 'gator-demo-recorder', 'SKILL.md'),
+  'utf8',
+);
 
 function widgetScript() {
   const start = skill.indexOf('```html:widget');
@@ -590,10 +606,20 @@ function widgetScript() {
 
 function makeEnv(routes) {
   const els = {};
-  const el = (id) => els[id] || (els[id] = {
-    id, textContent: '', className: '', innerHTML: '', style: {}, disabled: false,
-    checked: true, value: '0', onclick: null, appendChild() {},
-  });
+  const el = (id) =>
+    els[id] ||
+    (els[id] = {
+      id,
+      textContent: '',
+      className: '',
+      innerHTML: '',
+      style: {},
+      disabled: false,
+      checked: true,
+      value: '0',
+      onclick: null,
+      appendChild() {},
+    });
   const posted = [];
   const fetched = [];
   const ctx = {
@@ -633,7 +659,10 @@ test('a failed resume is shown and survives the status poll until the next actio
   assert(el('status').textContent.includes('ffmpeg failed to restart'));
 
   ctx.render({ status: 'paused', elapsed: 5 });
-  assert(el('status').textContent.includes('ffmpeg failed to restart'), 'poll must not erase the error');
+  assert(
+    el('status').textContent.includes('ffmpeg failed to restart'),
+    'poll must not erase the error',
+  );
   assert.strictEqual(el('btn-resume').style.display, '', 'Resume stays available for a retry');
 
   routes.resume = { ok: true, status: 'recording', elapsed: 5 };
@@ -670,15 +699,21 @@ test('stop success message carries the size, or no parentheses when it is unknow
     assert.strictEqual(el('status').textContent, saved);
     assert.strictEqual(
       posted[0].text,
-      'Recording complete. File: C:\\demos\\final.mp4' + sizePart +
-        '. Please analyze it and draft a narration script.');
+      'Recording complete. File: C:\\demos\\final.mp4' +
+        sizePart +
+        '. Please analyze it and draft a narration script.',
+    );
     assert(!posted[0].text.includes('()'));
   }
 });
 
 test('a failed stop shows the error with the session folder and tells the chat nothing', async () => {
   const { ctx, el, posted, fetched, flush } = makeEnv({
-    stop: { ok: false, error: 'Could not join recording segments: bad', session_dir: 'C:\\demos\\demo_1' },
+    stop: {
+      ok: false,
+      error: 'Could not join recording segments: bad',
+      session_dir: 'C:\\demos\\demo_1',
+    },
   });
   await flush();
   ctx.doStop();
@@ -690,7 +725,7 @@ test('a failed stop shows the error with the session folder and tells the chat n
   assert.strictEqual(posted.length, 0);
   assert(!fetched.some((f) => f.action === 'notify'));
 });
-```
+````
 
 - [ ] **Step 2: Run to verify it fails**
 
@@ -702,11 +737,19 @@ Expected: FAIL — e.g. `a failed resume is shown…`: `'status' !== 'status err
 1. State line:
 
 ```js
-var _crop = null, _busy = false, _lastStatus = 'idle', _stopPath = '';
+var _crop = null,
+  _busy = false,
+  _lastStatus = 'idle',
+  _stopPath = '';
 ```
+
 becomes
+
 ```js
-var _crop = null, _busy = false, _lastStatus = 'idle', _stopPath = '';
+var _crop = null,
+  _busy = false,
+  _lastStatus = 'idle',
+  _stopPath = '';
 var _actionError = '';
 ```
 
@@ -722,7 +765,6 @@ function actionFailed(err, data, label) {
   st.textContent = _actionError;
   return true;
 }
-
 ```
 
 3. End of `render(s)`: change
@@ -732,7 +774,9 @@ function actionFailed(err, data, label) {
   }
 }
 ```
+
 to
+
 ```js
     br.disabled=false; bp.disabled=true; bp.style.display=''; bres.style.display='none'; bs.disabled=true;
   }
@@ -743,42 +787,56 @@ to
 4. `doRecord`: change `_busy = true; _stopPath = '';` to `_busy = true; _stopPath = ''; _actionError = '';`, and replace
 
 ```js
-    _busy = false;
-    if (err || !data || !data.ok) {
-      document.getElementById('status').className = 'status error';
-      document.getElementById('status').textContent = 'Error: ' + ((data&&data.error)||String(err));
-    }
+_busy = false;
+if (err || !data || !data.ok) {
+  document.getElementById('status').className = 'status error';
+  document.getElementById('status').textContent = 'Error: ' + ((data && data.error) || String(err));
+}
 ```
+
 with
+
 ```js
-    _busy = false;
-    actionFailed(err, data, 'Error');
+_busy = false;
+actionFailed(err, data, 'Error');
 ```
 
 5. Replace `doPause` and `doResume`:
 
 ```js
 function doPause() {
-  _busy = true; _actionError = '';
-  apiFetch('pause', null, function(err, data) { _busy = false; actionFailed(err, data, 'Pause error'); });
+  _busy = true;
+  _actionError = '';
+  apiFetch('pause', null, function (err, data) {
+    _busy = false;
+    actionFailed(err, data, 'Pause error');
+  });
 }
 
 function doResume() {
-  _busy = true; _actionError = '';
-  apiFetch('resume', null, function(err, data) { _busy = false; actionFailed(err, data, 'Resume error'); });
+  _busy = true;
+  _actionError = '';
+  apiFetch('resume', null, function (err, data) {
+    _busy = false;
+    actionFailed(err, data, 'Resume error');
+  });
 }
 ```
 
 6. `doStop`: change its first line `_busy = true;` to `_busy = true; _actionError = '';`; change `document.getElementById('status').textContent = '✓ Saved ' + mb;` to
 
 ```js
-      document.getElementById('status').textContent = '✓ Saved' + (mb ? ' ' + mb : '');
+document.getElementById('status').textContent = '✓ Saved' + (mb ? ' ' + mb : '');
 ```
 
 change the message line to
 
 ```js
-      var msg = 'Recording complete. File: '+_stopPath+(mb ? ' ('+mb+')' : '')+'. Please analyze it and draft a narration script.';
+var msg =
+  'Recording complete. File: ' +
+  _stopPath +
+  (mb ? ' (' + mb + ')' : '') +
+  '. Please analyze it and draft a narration script.';
 ```
 
 and replace the `else` branch
@@ -789,14 +847,16 @@ and replace the `else` branch
       document.getElementById('status').textContent = 'Stop error: ' + ((data&&data.error)||'');
     }
 ```
+
 with
+
 ```js
     } else {
       actionFailed(err, data, 'Stop error');
     }
 ```
 
-7. In the CRITICAL RULES section, change the "File path" bullet's last sentence `It is always the value between `"File: "` and `" ("`.` to ``It is the value between `"File: "` and `" ("` — or, when no size is shown, `". Please"`.``
+7. In the CRITICAL RULES section, change the "File path" bullet's last sentence `It is always the value between `"File: "`and`" ("`.` to ``It is the value between `"File: "` and `" ("` — or, when no size is shown, `". Please"`.``
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -827,15 +887,25 @@ Run the Electron shell as usual, enter fullscreen (the existing fullscreen contr
 - [ ] **Step 2: Attach the event trace in the renderer DevTools console**
 
 ```js
-['pointerdown','mousedown','mouseup','click'].forEach(t =>
-  window.addEventListener(t, e => console.log(t, e.target.id || e.target.tagName, e.clientX, e.clientY, e.isTrusted), true));
+['pointerdown', 'mousedown', 'mouseup', 'click'].forEach((t) =>
+  window.addEventListener(
+    t,
+    (e) => console.log(t, e.target.id || e.target.tagName, e.clientX, e.clientY, e.isTrusted),
+    true,
+  ),
+);
 const r = document.getElementById('send-btn').getBoundingClientRect();
-console.log('hit', document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)?.outerHTML.slice(0, 120), r);
+console.log(
+  'hit',
+  document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)?.outerHTML.slice(0, 120),
+  r,
+);
 ```
 
 - [ ] **Step 3: Click the red Stop control with the mouse; record what happened**
 
 Expected observations to note in the PR, pick whichever applies:
+
 - `hit` is not `#send-btn` or a child → an overlay is stealing the point (name it).
 - `mousedown`/`mouseup` log but no `click` → press and release landed on different elements (Task 7 fixes this).
 - Nothing logs → events never reach the page: a shell-level (Electron) issue. Open a separate GitHub issue for it; Task 7 still ships.
@@ -846,10 +916,12 @@ Expected observations to note in the PR, pick whichever applies:
 ### Task 7: delegated Stop click dispatcher (defensive fix)
 
 **Files:**
+
 - Modify: `web/static/app.js` (after `let history = [];`; `_onStop`; the `sendBtn.addEventListener('click', _onStop)` line; `_detachStop`)
 - Create: `tests/stop_button_click.test.js`
 
 **Interfaces:**
+
 - Produces: `_shouldStopFromClick(e, btn, rect, streaming) -> boolean` (module-level function in `app.js`) and `_activeStops: Set<() => void>`; each turn registers with `_activeStops.add(_onStop)` and unregisters in `_detachStop`.
 
 - [ ] **Step 1: Write the failing test**
@@ -884,9 +956,16 @@ test('_shouldStopFromClick decides from target, position, button and streaming s
   const f = loadPredicate();
   assert.strictEqual(f(ev({}), btn, rect, true), true, 'target is the button');
   assert.strictEqual(f(ev({ target: child }), btn, rect, true), true, 'target is a child');
-  assert.strictEqual(f(ev({ target: other, clientX: 120, clientY: 220 }), btn, rect, true), true,
-    'press/release moved the click to an ancestor, but the point is on the button');
-  assert.strictEqual(f(ev({ target: other, clientX: 10, clientY: 10 }), btn, rect, true), false, 'outside the button');
+  assert.strictEqual(
+    f(ev({ target: other, clientX: 120, clientY: 220 }), btn, rect, true),
+    true,
+    'press/release moved the click to an ancestor, but the point is on the button',
+  );
+  assert.strictEqual(
+    f(ev({ target: other, clientX: 10, clientY: 10 }), btn, rect, true),
+    false,
+    'outside the button',
+  );
   assert.strictEqual(f(ev({}), btn, rect, false), false, 'not streaming');
   assert.strictEqual(f(ev({ button: 2 }), btn, rect, true), false, 'non-primary button');
 });
@@ -915,16 +994,24 @@ const _activeStops = new Set();
 function _shouldStopFromClick(e, btn, rect, streaming) {
   if (!streaming || e.button !== 0) return false;
   if (btn.contains(e.target)) return true;
-  return e.clientX >= rect.left && e.clientX <= rect.right &&
-         e.clientY >= rect.top && e.clientY <= rect.bottom;
+  return (
+    e.clientX >= rect.left &&
+    e.clientX <= rect.right &&
+    e.clientY >= rect.top &&
+    e.clientY <= rect.bottom
+  );
 }
-document.addEventListener('click', (e) => {
-  if (!_activeStops.size) return;
-  const streaming = sendBtn.classList.contains('is-streaming');
-  if (!_shouldStopFromClick(e, sendBtn, sendBtn.getBoundingClientRect(), streaming)) return;
-  e.preventDefault();
-  [..._activeStops].forEach((stop) => stop());
-}, true);
+document.addEventListener(
+  'click',
+  (e) => {
+    if (!_activeStops.size) return;
+    const streaming = sendBtn.classList.contains('is-streaming');
+    if (!_shouldStopFromClick(e, sendBtn, sendBtn.getBoundingClientRect(), streaming)) return;
+    e.preventDefault();
+    [..._activeStops].forEach((stop) => stop());
+  },
+  true,
+);
 ```
 
 2. In the chat-turn setup, change
@@ -934,7 +1021,9 @@ document.addEventListener('click', (e) => {
     if (_activeTabId !== requestTabId) return;
     _userStopped = true;
 ```
+
 to
+
 ```js
   const _onStop = () => {
     if (_userStopped) return;
@@ -967,10 +1056,12 @@ git commit -m "fix: dispatch the prompt-bar Stop click through one persistent ca
 ### Task 8: `analyze_sequence` rejects more than 8 frames up front
 
 **Files:**
+
 - Modify: `web/skills/_always_on/tools.py` (`_tool_describe_images`, `_analyze_frame_sequence`, constants)
 - Create: `tests/test_describe_images_video.py`
 
 **Interfaces:**
+
 - Produces: module constants `_MAX_SEQUENCE_FRAMES = 8` and `_FRAME_MIN_INTERVAL_SEC = 5`; `describe_images(task='analyze_sequence')` returns `{"ok": False, "error": "analyze_sequence accepts at most 8 frames, got N. For a video file use task='analyze_video' with video_path."}` when `len(image_paths) > 8`, before the existence check.
 
 - [ ] **Step 1: Write the failing tests**
@@ -1046,10 +1137,12 @@ git commit -m "fix: reject analyze_sequence calls with more than 8 frames before
 ### Task 9: `describe_images(task='analyze_video')`
 
 **Files:**
+
 - Modify: `web/skills/_always_on/tools.py` (imports, `TOOL_DEFS` entry, `_tool_describe_images`, new `_extract_video_frames` and `_analyze_video`)
 - Modify: `tests/test_describe_images_video.py`
 
 **Interfaces:**
+
 - Consumes: `_MAX_SEQUENCE_FRAMES`, `_FRAME_MIN_INTERVAL_SEC`, `_analyze_frame_sequence(image_paths: list, fps: float) -> dict | None`; `routes.recorder._FFMPEG`, `_FFPROBE`, `_find_ffmpeg()`, `_find_ffprobe()`.
 - Produces: `_tool_describe_images(task, image_paths=None, fields=None, fps=0.2, video_path=None)`; `task='analyze_video'` returns the `_analyze_frame_sequence` result verbatim (`{"ok": True, "task": "analyze_sequence", "timeline": [...], ...}`) or `{"ok": False, "error": str}`. Consumed by SKILL.md Phase 2 (Task 10).
 
@@ -1176,7 +1269,9 @@ In `web/skills/_always_on/tools.py`:
 import logging
 import re
 ```
+
 to
+
 ```python
 import logging
 import math
@@ -1191,6 +1286,7 @@ import tempfile
             "task='analyze_video': analyze a screen-recording video file given video_path — frames are extracted for you "
             "(max 8, evenly spaced); prefer this over extracting frames yourself. "
 ```
+
 (place it before the `"Use analyze_sequence for video keyframe analysis…"` sentence), add `"analyze_video"` to the `task` enum (`["describe", "compare", "extract_data", "assess", "analyze_sequence", "analyze_video"]`), and insert between the `image_paths` and `fields` properties:
 
 ```python
@@ -1296,10 +1392,12 @@ git commit -m "feat: add describe_images analyze_video that extracts frames serv
 ### Task 10: SKILL.md Phase 2 uses `analyze_video`
 
 **Files:**
+
 - Modify: `web/skills/gator-demo-recorder/SKILL.md` (Phase 0/overview line ~15, Phase 2, Phase 5 cleanup lines ~909 and ~918)
 - Modify: `tests/recorder_widget.test.js` (one guard test)
 
 **Interfaces:**
+
 - Consumes: `describe_images(task='analyze_video', video_path=...)` (Task 9) and the completion message format (Task 5).
 
 - [ ] **Step 1: Write the failing test**
@@ -1327,7 +1425,7 @@ In `SKILL.md`:
 
 1. Overview line `Phase 2: ANALYZE            — extract keyframes, describe_images, build scene summary` becomes `Phase 2: ANALYZE            — describe_images(analyze_video), build scene summary`.
 
-2. In Phase 2, replace step 1's sentence and everything from the line starting `2. Get ffmpeg path:` through the line `Returns: `{timeline: [...], summary: "..."}`` (this removes the python snippet, "Step 2 — Analyze frames", and the `analyze_sequence` example) with:
+2. In Phase 2, replace step 1's sentence and everything from the line starting `2. Get ffmpeg path:` through the line `Returns: `{timeline: [...], summary: "..."}``(this removes the python snippet, "Step 2 — Analyze frames", and the`analyze_sequence` example) with:
 
 ```markdown
 2. Proceed immediately — do not ask the user for the path, and do not run ffmpeg or ffprobe yourself.
@@ -1339,17 +1437,18 @@ In `SKILL.md`:
 Returns: `{timeline: [{frame, time_sec, time_label, description}, ...], summary: "..."}`
 ```
 
-and rewrite step 1 to: `1. Extract the video path: it is the text between `"File: "` and the next `" ("` — or, when the message shows no size, up to `". Please"`. Example: `"Recording complete. File: C:\Users\...\final.mp4 (46MB). Please analyze it…"` → path = `C:\Users\...\final.mp4``.
+and rewrite step 1 to: `1. Extract the video path: it is the text between `"File: "`and the next`" ("`— or, when the message shows no size, up to`". Please"`. Example: `"Recording complete. File: C:\Users\...\final.mp4 (46MB). Please analyze it…"`→ path =`C:\Users\...\final.mp4``.
 
 3. Rename `**Step 3 — Build scene summary**` to `**Step 2 — Build scene summary**`.
 
-4. Phase 5: change the delete-intermediates message `Please delete the frames/ and tts_work/ intermediates for the current session.` to `Please delete the tts_work/ intermediates for the current session.`, and change `delete the `frames/` and `tts_work/` directories after delivery` to `delete the `tts_work/` directory after delivery`.
+4. Phase 5: change the delete-intermediates message `Please delete the frames/ and tts_work/ intermediates for the current session.` to `Please delete the tts_work/ intermediates for the current session.`, and change `delete the `frames/`and`tts_work/` directories after delivery` to `delete the `tts_work/` directory after delivery`.
 
 5. Confirm nothing else references the removed pieces:
 
 ```bash
 grep -n "frames/\|Step 3 — Build\|analyze_sequence\|frame_%04d" web/skills/gator-demo-recorder/SKILL.md
 ```
+
 Expected: no output. (`docs/demo-recorder-plan.md` is historical and stays as is.)
 
 - [ ] **Step 4: Run tests to verify they pass**
@@ -1395,6 +1494,7 @@ Record → Pause → Resume → Stop. Expected: one `*_final.mp4` that plays acr
 ## Self-Review
 
 **Spec coverage**
+
 - Item 1 (stale request; border) → Tasks 1–2. Test seam → Task 1.
 - Item 2 backend (clean failed restart, log path) → Task 4; widget feedback → Task 5; runtime confirmation → Task 11 Step 3.
 - Item 3 (stitch stderr, concat cleanup, no silent fallback, no `latest_output.json` on failure) → Task 3; empty `()` and error display → Task 5; path-extraction wording → Tasks 5 and 10.

@@ -30,21 +30,22 @@ Spec: `docs/superpowers/specs/2026-10-19-media-provenance-and-ops-design.md`.
 
 ## File Structure
 
-| File | Action | Responsibility |
-|---|---|---|
-| `web/demo_media.py` | Create | Probing, time validation, ledger, manifest, frames, replace/append, intro, narration timeline, approval check, merge |
-| `web/skills/gator-demo-recorder/tools.py` | Create | Five agent tools over `demo_media`; error-dict wrapping |
-| `web/skills/gator-demo-recorder/scripts/tts_pipeline.py` | Modify | Extended-video temp file goes beside the output |
-| `web/skills/gator-demo-recorder/SKILL.md` | Modify | Truthful Media Claims, Phase 2 pointer, Phase 4 tool call, Phase 5 report rule |
-| `tests/demo_media_ops/` | Create | `__init__.py`, `helpers.py`, `conftest.py`, four `test_demo_media_*.py` files |
-| `tests/approval_transaction/test_skill_contract.py` | Modify | Phase 4 assertion follows the tool-based text |
-| `.github/workflows/tests.yml` | Modify | Install ffmpeg; require it |
+| File                                                     | Action | Responsibility                                                                                                       |
+| -------------------------------------------------------- | ------ | -------------------------------------------------------------------------------------------------------------------- |
+| `web/demo_media.py`                                      | Create | Probing, time validation, ledger, manifest, frames, replace/append, intro, narration timeline, approval check, merge |
+| `web/skills/gator-demo-recorder/tools.py`                | Create | Five agent tools over `demo_media`; error-dict wrapping                                                              |
+| `web/skills/gator-demo-recorder/scripts/tts_pipeline.py` | Modify | Extended-video temp file goes beside the output                                                                      |
+| `web/skills/gator-demo-recorder/SKILL.md`                | Modify | Truthful Media Claims, Phase 2 pointer, Phase 4 tool call, Phase 5 report rule                                       |
+| `tests/demo_media_ops/`                                  | Create | `__init__.py`, `helpers.py`, `conftest.py`, four `test_demo_media_*.py` files                                        |
+| `tests/approval_transaction/test_skill_contract.py`      | Modify | Phase 4 assertion follows the tool-based text                                                                        |
+| `.github/workflows/tests.yml`                            | Modify | Install ffmpeg; require it                                                                                           |
 
 ---
 
 ### Task 1: Probing and time validation
 
 **Files:**
+
 - Create: `web/demo_media.py` (header, binaries, probing, time validation)
 - Create: `tests/demo_media_ops/__init__.py` (empty)
 - Create: `tests/demo_media_ops/helpers.py`
@@ -52,6 +53,7 @@ Spec: `docs/superpowers/specs/2026-10-19-media-provenance-and-ops-design.md`.
 - Test: `tests/demo_media_ops/test_demo_media_ops.py`
 
 **Interfaces:**
+
 - Consumes (SP3 `web/demo_projects.py`): `create_project`, `update_project`, `INDEX_PATH`, `DEFAULT_ROOT`, and `web/config.py` `load_config` / `save_config` (the `store` fixture patches these).
 - Produces: `MediaError(code, message, **detail)` with `.code`, `.detail`, `.to_result() -> {"error": code, "message": ..., **detail}`; `find_binaries() -> (ffmpeg, ffprobe)`; `_run`, `_ffmpeg(args, cwd=None)`; `MediaInfo` and `probe(path) -> MediaInfo` (`duration_sec`, `video_duration_sec`, `audio_duration_sec`, `width`, `height`, `fps`, `fps_expr`, `has_video`, `has_audio`, `size_bytes`, `.to_dict()`); `check_time(value, duration, *, field, rel) -> float` (`0 <= t < duration`); `check_interval(start, end, duration, *, rel) -> (start, end)`; constants `EPS`, `DURATION_TOL`, `SYNC_TOL`, `MAX_FRAMES`, `INTRO_*`, `TTS_SCRIPT`. Test helper `make_video(path, seconds, *, color, size, fps, audio) -> Path` and fixtures `store`, `project` (a project whose raw recording is a 62.2 s silent video).
 
@@ -411,10 +413,12 @@ git commit -m "feat: add probe-backed media helpers with duration-validated seek
 ### Task 2: Project media state, ledger, and manifest
 
 **Files:**
+
 - Modify: `web/demo_media.py` (append the project-helper and manifest sections)
 - Test: `tests/demo_media_ops/test_demo_media_ops.py` (append tests)
 
 **Interfaces:**
+
 - Consumes (Task 1): `probe`, `MediaError`, `MediaInfo`, `MEDIA_SUFFIXES`, `MAX_LEDGER_SUMMARIES`, `_OP_LOCK`, `_EXT_LOCK`, `_now`. Consumes (SP3): `dp.get_active_id`, `dp.project_path`, `dp.resolve_file`, `dp.get_project`, `dp.set_ext`.
 - Produces: `project_for(project_id | None) -> (pid, folder)` (raises `no_project` / `project_not_found`); `project_file(pid, rel) -> Path` (raises `path_outside_project` / `file_not_found`); `rel_of(folder, path) -> str`; `read_media(pid) -> dict`; `update_media(pid, mutate) -> dict`; `raw_rel`, `current_rel(pid, folder) -> str | None` (the `ext.media.current` video only while `ext.media.current_base` equals the project's `raw`); `set_current(pid, folder, rel)`; `record_op(pid, folder, entry) -> dict` (adds `op_id`, `at`; appends to `work/logs/media_ops.jsonl`; keeps the last 50 in `ext.media.ops`); `_next_path`, `_partial`, `_finish(partial, out, expected_sec) -> MediaInfo` (raises `output_verification_failed`), `_out_block`; `manifest(project_id=None) -> {"ok", "project_id", "current", "files", "generated_at"}`.
 
@@ -597,10 +601,12 @@ git commit -m "feat: record media operations in a per-project ledger and manifes
 ### Task 3: Frame inspection that rejects impossible times
 
 **Files:**
+
 - Modify: `web/demo_media.py` (append the frames section)
 - Test: `tests/demo_media_ops/test_demo_media_ops.py` (append tests)
 
 **Interfaces:**
+
 - Consumes (Tasks 1-2): `project_for`, `project_file`, `probe`, `check_time`, `_ffmpeg`, `record_op`, `rel_of`, `_OPTIONS`, `MAX_FRAMES`.
 - Produces: `inspect_frames(project_id, source_rel, times_sec) -> {"ok", "operation": "inspect_frames", "source", "duration_sec", "frames": [{"time_sec", "rel", "path", "bytes"}], "op_id"}`. Rejects the whole call with `out_of_range` (`rejected`, `duration_sec`, `valid_range_sec`, `options`) when any time is outside the probed duration; `too_many_frames` above 8; `no_video`. PNGs are written to `work/frames/<stem>_<t>s.png`.
 
@@ -702,10 +708,12 @@ git commit -m "feat: extract frames only at times inside the real video duration
 ### Task 4: Replace an interval and append a clip with proof of the source
 
 **Files:**
+
 - Modify: `web/demo_media.py` (append the splice section)
 - Test: `tests/demo_media_ops/test_demo_media_ops.py` (append tests)
 
 **Interfaces:**
+
 - Consumes (Tasks 1-3): `project_for`, `project_file`, `probe`, `check_time`, `check_interval`, `current_rel`, `set_current`, `record_op`, `_next_path`, `_partial`, `_finish`, `_out_block`, `_ffmpeg`, `_OP_LOCK`, `_OPTIONS`, `EPS`.
 - Produces:
   - `replace_interval(project_id, start_sec, end_sec, insert_rel, insert_start_sec=0.0, base_rel=None) -> {"ok", "operation": "replace_interval", "output": {"rel", "path", "duration_sec"}, "base": {"rel", "duration_sec"}, "replaced_interval_sec": [s, e], "inserted_from": {"rel", "interval_sec": [a, b]}, "inserted_audio_dropped", "timeline_shifted": False, "op_id"}`. Output duration equals the base duration.
@@ -937,10 +945,12 @@ git commit -m "feat: replace and append video intervals with recorded source pro
 ### Task 5: Intro hold and title card
 
 **Files:**
+
 - Modify: `web/demo_media.py` (append the intro section)
 - Test: `tests/demo_media_ops/test_demo_media_ops.py` (append tests)
 
 **Interfaces:**
+
 - Consumes (Tasks 1-4): `project_for`, `project_file`, `probe`, `_number`, `_next_path`, `_partial`, `_finish`, `_out_block`, `_ffmpeg`, `record_op`, `_OP_LOCK`, `INTRO_*`.
 - Produces: `normalize_intro(intro | None) -> {"mode", "duration_sec", "title"}` (mode `none|hold|card`; duration 0.5-10, default 2.0; title at most 80 characters; `card` requires a title; invalid input raises `bad_argument` with `field` `intro_mode` / `intro_duration_sec` / `intro_title`); `make_intro_video(project_id, video_rel, intro) -> {"ok", "operation": "intro", "intro", "output", "source", "offset_sec", "op_id"}` writing `work/edits/intro_NNN.mp4` that is `duration_sec` longer than the source (`hold` clones the first frame, `card` adds a dark card with the title drawn from a text file).
 
@@ -1071,11 +1081,13 @@ git commit -m "feat: add hold and title-card intros with distinct rendering (#55
 ### Task 6: Narration timeline with intro offset, and the approval check
 
 **Files:**
+
 - Modify: `web/demo_media.py` (append the timeline and approval-loader code)
 - Modify: `tests/demo_media_ops/helpers.py` (append `approve`)
 - Test: `tests/demo_media_ops/test_demo_media_ops.py` (append tests; extend one import)
 
 **Interfaces:**
+
 - Consumes (Tasks 1-5): `normalize_intro`, `_number`, `MediaError`, `_OPTIONS`, `dp`. Consumes (SP2 `web/narration_approval.py`): `canonical_hash(segments, flags) -> str`, `media_fingerprint(path) -> str | None`, `approve(project_id, segments, flags) -> {"approval": {"approval_id", ...}}`, `project.json` `ext.approval = {"current_id", "version", "sha256", "approved_at", "media_fingerprint"}`, record `work/approvals/<id>.json` with `segments` and `flags`.
 - Produces: `build_timeline(segments, source_duration, intro) -> {"intro", "offset_sec", "source_duration_sec", "segments": [{..., "start_at", "final_start_at"}]}` where `final_start_at = start_at + intro duration`; rejects empty text, missing/non-numeric/negative/decreasing starts and starts beyond `source_duration` (`out_of_range`). `load_approved_narration(pid, folder, approval_id=None) -> record` raising `narration_not_approved`, `approval_superseded`, `approval_corrupt`, `approval_stale_media`. Test helper `approve(pid, segments, intro=None) -> approval_id` where `intro` keys become flags `intro_<key>`.
 
@@ -1231,11 +1243,13 @@ git commit -m "feat: shift narration by the intro length and verify the approval
 ### Task 7: `merge_narration` with video extension, sync check, and progress
 
 **Files:**
+
 - Modify: `web/demo_media.py` (append the merge section)
 - Modify: `web/skills/gator-demo-recorder/scripts/tts_pipeline.py` (one line)
 - Test: `tests/demo_media_ops/test_demo_media_merge.py`
 
 **Interfaces:**
+
 - Consumes (Tasks 1-6): `project_for`, `project_file`, `probe`, `current_rel`, `build_timeline`, `make_intro_video`, `load_approved_narration`, `record_op`, `update_media`, `read_media`, `_out_block`, `_run`, `TTS_SCRIPT`, `SYNC_TOL`, `_OP_LOCK`; SP3 `dp.archive_final`, `dp.atomic_write_json`; SP6 `ext["clips"]["timeline"] = {"state", "soundtrack"}` (read only).
 - Produces: `merge_narration(project_id=None, video_rel=None, intro_mode=None, intro_duration_sec=None, intro_title=None, voice=None, approval_id=None) -> {"ok", "operation": "merge_narration", "output": {"rel", "path", "duration_sec", "version"}, "video", "intro": {"mode", "duration_sec", "title", "applied", "source"}, "narration": {"segments", "offset_sec", "first_start_sec"}, "video_extended_by_sec", "video_stream_sec", "audio_stream_sec", "sync_ok": True, "approval_id", "op_id"}`. The intro comes from the tool arguments when `intro_mode` is given (`source: "tool_argument"`), otherwise from the approved flags `intro_mode`, `intro_duration_sec`, `intro_title` (`source: "approved_flags"`). Writes `final/<project name>_v<N>.mp4` after `dp.archive_final`, `work/timeline.json`, `work/narration_final.json`, and `work/logs/merge_progress.json` (`{approval_id, state: running|done|failed, stage, step, total, message, error, updated_at}`). Raises `sync_mismatch` (video and audio streams differ by more than 1.0 s), `output_verification_failed`, `tts_failed`. `_run_tts_pipeline(video, timeline_file, narration_file, out, work_dir, voice, soundtrack=None)` is the seam tests replace; it passes `--soundtrack` only when given. `_soundtrack(pid, folder) -> Path | None` returns the SP6 soundtrack only when `ext.clips.timeline.state == "ready"`.
 
@@ -1535,10 +1549,12 @@ git commit -m "feat: merge approved narration with intro offset, extension repor
 ### Task 8: Skill tools
 
 **Files:**
+
 - Create: `web/skills/gator-demo-recorder/tools.py`
 - Test: `tests/demo_media_ops/test_demo_media_tools.py`
 
 **Interfaces:**
+
 - Consumes (Tasks 1-7): `demo_media.manifest`, `inspect_frames`, `replace_interval`, `append_clip`, `merge_narration`, `MediaError`. Consumes the loader contract in `web/skills/_skill_utils.py`: `TOOL_DEFS`, `TOOL_HANDLERS`, `TOOL_STATUS`, `SKILL_ID`, checked by `validate_tool_contract`.
 - Produces: `SKILL_ID = "gator-demo-recorder"` and five tools whose handler parameter names equal their schema properties: `demo_media_manifest(project_id="")`, `demo_inspect_frames(source, times_sec, project_id="")`, `demo_replace_interval(start_sec, end_sec, insert_source, insert_start_sec=0, base="", project_id="")`, `demo_append_clip(clip, clip_start_sec=0, clip_end_sec=None, base="", project_id="")`, `demo_merge_narration(intro_mode="", intro_duration_sec=None, intro_title="", voice="", video="", approval_id="", project_id="")`. Handlers never raise: `MediaError` becomes `{"error", "message", ...}`, `TimeoutExpired` becomes `ffmpeg_timeout`, anything else `media_op_failed`.
 
@@ -1785,11 +1801,13 @@ git commit -m "feat: expose probe-backed demo media tools to the demo recorder s
 Land this task after SP3, SP2, SP6 and SP7 are merged. Their SKILL.md edits touch Phase 4 and Phase 5; every anchor below is a heading or a sentence, never a line number.
 
 **Files:**
+
 - Modify: `web/skills/gator-demo-recorder/SKILL.md`
 - Modify: `tests/approval_transaction/test_skill_contract.py` (one test)
 - Test: `tests/demo_media_ops/test_demo_media_skill_contract.py`
 
 **Interfaces:**
+
 - Consumes: the five tools from Task 8 and the result fields they return; SP2's trigger-message phrase `approval (appr_\d+_[0-9a-f]{8})`; SP3's contract strings (`demo_projects.json`, `PROJECT_DIR`, `work/narration.json`, `final/`), which this task must not remove, and into which it must not reintroduce `latest-output`, `set-output`, `narration_pending.json` or `gator_demos`.
 - Produces: a "Truthful Media Claims" section, a Phase 2 follow-up paragraph, a Phase 4 that calls `demo_merge_narration`, and a Phase 5 report rule.
 
@@ -1890,7 +1908,7 @@ When you receive `"Narration approved (N segments)..."` or `"✓ Approve..."`:
    - `out_of_range`: quote `message`, `duration_sec` and `options`, and ask which to take.
    - `sync_mismatch`, `output_verification_failed`, `tts_failed`, `ffmpeg_failed`, `ffmpeg_timeout`: report `message` and any measured durations, and offer to retry once or to deliver the video without narration. No file was delivered.
    - Any other `error`: report `message`.
-   Do not retry in a loop and do not describe a video that was not produced.
+     Do not retry in a loop and do not describe a video that was not produced.
 
 If Lemonade TTS is unavailable (preflight `lemonade.ok` is false), tell the user and offer to deliver the video without narration. The TTS endpoint is `/v1/audio/speech` (OpenAI-compatible) and the model is `kokoro-v1` — both confirmed by preflight. Do not probe other endpoints.
 ```
@@ -1953,9 +1971,11 @@ git commit -m "feat: require tool-backed media claims and tool-based narration m
 ### Task 10: Run the real-ffmpeg tests in CI
 
 **Files:**
+
 - Modify: `.github/workflows/tests.yml` (add one step and one env var in the test job)
 
 **Interfaces:**
+
 - Consumes: `GATOR_REQUIRE_FFMPEG=1` makes `tests/demo_media_ops/conftest.py` fail instead of skip when ffmpeg or ffprobe is missing.
 - Produces: ffmpeg and ffprobe on the Ubuntu, Windows and macOS runners.
 
@@ -1964,16 +1984,16 @@ git commit -m "feat: require tool-backed media claims and tool-based narration m
 In `.github/workflows/tests.yml`, directly before the step named `Run tests with coverage`, add:
 
 ```yaml
-      - name: Install ffmpeg
-        shell: bash
-        run: |
-          case "$RUNNER_OS" in
-            Linux) sudo apt-get update && sudo apt-get install -y ffmpeg ;;
-            macOS) brew install ffmpeg ;;
-            Windows) choco install ffmpeg -y --no-progress ;;
-          esac
-          ffmpeg -version | head -1
-          ffprobe -version | head -1
+- name: Install ffmpeg
+  shell: bash
+  run: |
+    case "$RUNNER_OS" in
+      Linux) sudo apt-get update && sudo apt-get install -y ffmpeg ;;
+      macOS) brew install ffmpeg ;;
+      Windows) choco install ffmpeg -y --no-progress ;;
+    esac
+    ffmpeg -version | head -1
+    ffprobe -version | head -1
 ```
 
 - [ ] **Step 2: Require ffmpeg in the test step**
@@ -1981,10 +2001,10 @@ In `.github/workflows/tests.yml`, directly before the step named `Run tests with
 Add the environment variable to the `Run tests with coverage` step:
 
 ```yaml
-      - name: Run tests with coverage
-        env:
-          GATOR_REQUIRE_FFMPEG: '1'
-        run: uv run coverage run --source=web,packaging --omit='*/tests/*' -m pytest tests -q
+- name: Run tests with coverage
+  env:
+    GATOR_REQUIRE_FFMPEG: '1'
+  run: uv run coverage run --source=web,packaging --omit='*/tests/*' -m pytest tests -q
 ```
 
 Keep the existing `run:` line exactly as it is in the file if it differs from the one shown.
@@ -2007,22 +2027,22 @@ git commit -m "ci: install ffmpeg so the demo media tests run on every runner (#
 
 **Spec coverage**
 
-| Spec requirement | Task |
-|---|---|
-| Tool-backed claims; tools not scripts; five tools and result shapes | 4, 5, 7, 8 |
-| Seek times validated against probed duration; 390 s rejected | 1, 3 |
-| Replace proves its source interval; duration kept; append | 4 |
-| Verified outputs (`.partial`, duration check, `output_verification_failed`) | 2, 4 |
-| Ledger `media_ops.jsonl` and `ext["media"]`; `current` honored only while `current_base == raw` | 2, 4 |
-| Intro `none|hold|card`, 0.5-10 s, title limits, distinct hold/card wording | 5 |
-| Intro included in sync before timestamps are computed | 6, 7 |
-| Narration longer than the source extends the video and reports it; temp file beside output | 7 |
-| Approval check against SP2 hash, id, media fingerprint | 6 |
-| Sync tolerance and no delivery on mismatch; versioned finals after `archive_final` | 7 |
-| `merge_progress.json` for SP7; `--soundtrack` only when the SP6 timeline is ready | 7 |
-| Tool contract; schema equals handler signature | 8 |
-| SKILL.md: Truthful Media Claims, Phase 2/4/5; SP2 test updated | 9 |
-| Required tests run in CI | 10 |
+| Spec requirement                                                                                | Task       |
+| ----------------------------------------------------------------------------------------------- | ---------- | --------------------------------------------------------- | --- |
+| Tool-backed claims; tools not scripts; five tools and result shapes                             | 4, 5, 7, 8 |
+| Seek times validated against probed duration; 390 s rejected                                    | 1, 3       |
+| Replace proves its source interval; duration kept; append                                       | 4          |
+| Verified outputs (`.partial`, duration check, `output_verification_failed`)                     | 2, 4       |
+| Ledger `media_ops.jsonl` and `ext["media"]`; `current` honored only while `current_base == raw` | 2, 4       |
+| Intro `none                                                                                     | hold       | card`, 0.5-10 s, title limits, distinct hold/card wording | 5   |
+| Intro included in sync before timestamps are computed                                           | 6, 7       |
+| Narration longer than the source extends the video and reports it; temp file beside output      | 7          |
+| Approval check against SP2 hash, id, media fingerprint                                          | 6          |
+| Sync tolerance and no delivery on mismatch; versioned finals after `archive_final`              | 7          |
+| `merge_progress.json` for SP7; `--soundtrack` only when the SP6 timeline is ready               | 7          |
+| Tool contract; schema equals handler signature                                                  | 8          |
+| SKILL.md: Truthful Media Claims, Phase 2/4/5; SP2 test updated                                  | 9          |
+| Required tests run in CI                                                                        | 10         |
 
 **Placeholder scan:** every code step contains the full code; no step defers content.
 

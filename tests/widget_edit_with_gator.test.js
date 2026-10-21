@@ -484,7 +484,10 @@ function updateSandbox({ editing = true, status = 200, reject = false } = {}) {
 
 test('gatorWidgetUpdateConfirm PATCHes only the html of the edited widget', async () => {
   const { sandbox, btn, label, calls } = updateSandbox();
-  const { gatorWidgetUpdateConfirm } = load(['_activeEditingWidget', 'gatorWidgetUpdateConfirm'], sandbox);
+  const { gatorWidgetUpdateConfirm } = load(
+    ['_activeEditingWidget', 'gatorWidgetUpdateConfirm'],
+    sandbox,
+  );
   await gatorWidgetUpdateConfirm('frame1');
   assert.strictEqual(calls.fetch.length, 1);
   assert.strictEqual(calls.fetch[0].url, '/api/widgets/w1');
@@ -499,7 +502,10 @@ test('gatorWidgetUpdateConfirm PATCHes only the html of the edited widget', asyn
 
 test('gatorWidgetUpdateConfirm reports a deleted widget', async () => {
   const { sandbox, btn, label, calls } = updateSandbox({ status: 404 });
-  const { gatorWidgetUpdateConfirm } = load(['_activeEditingWidget', 'gatorWidgetUpdateConfirm'], sandbox);
+  const { gatorWidgetUpdateConfirm } = load(
+    ['_activeEditingWidget', 'gatorWidgetUpdateConfirm'],
+    sandbox,
+  );
   await gatorWidgetUpdateConfirm('frame1');
   assert.strictEqual(btn.textContent, 'Widget was deleted — use Save as new widget');
   assert.strictEqual(label.textContent, 'Unsaved changes to "Local Use"');
@@ -510,7 +516,10 @@ test('gatorWidgetUpdateConfirm reports a deleted widget', async () => {
 test('gatorWidgetUpdateConfirm lets the user retry after a failure', async () => {
   for (const options of [{ reject: true }, { status: 500 }]) {
     const { sandbox, btn, label, calls } = updateSandbox(options);
-    const { gatorWidgetUpdateConfirm } = load(['_activeEditingWidget', 'gatorWidgetUpdateConfirm'], sandbox);
+    const { gatorWidgetUpdateConfirm } = load(
+      ['_activeEditingWidget', 'gatorWidgetUpdateConfirm'],
+      sandbox,
+    );
     await gatorWidgetUpdateConfirm('frame1');
     assert.strictEqual(btn.textContent, 'Save failed — retry');
     assert.strictEqual(label.textContent, 'Unsaved changes to "Local Use"');
@@ -521,7 +530,10 @@ test('gatorWidgetUpdateConfirm lets the user retry after a failure', async () =>
 
 test('gatorWidgetUpdateConfirm does nothing outside an editing tab', async () => {
   const { sandbox, calls } = updateSandbox({ editing: false });
-  const { gatorWidgetUpdateConfirm } = load(['_activeEditingWidget', 'gatorWidgetUpdateConfirm'], sandbox);
+  const { gatorWidgetUpdateConfirm } = load(
+    ['_activeEditingWidget', 'gatorWidgetUpdateConfirm'],
+    sandbox,
+  );
   await gatorWidgetUpdateConfirm('frame1');
   assert.deepStrictEqual(calls.fetch, []);
 });
@@ -545,7 +557,10 @@ test('_widgetEditReplyNeedsNotice flags editing-tab replies without a widget blo
   const editing = { id: 'a', editingWidget: { widget_id: 'w1', name: 'X' } };
   assert.strictEqual(_widgetEditReplyNeedsNotice(editing, 'I fixed the layout.'), true);
   assert.strictEqual(_widgetEditReplyNeedsNotice(editing, ''), true);
-  assert.strictEqual(_widgetEditReplyNeedsNotice(editing, 'Here:\n```html:widget\n<p>x</p>\n```'), false);
+  assert.strictEqual(
+    _widgetEditReplyNeedsNotice(editing, 'Here:\n```html:widget\n<p>x</p>\n```'),
+    false,
+  );
   assert.strictEqual(_widgetEditReplyNeedsNotice(editing, '```html:live\n<p>x</p>\n```'), false);
   assert.strictEqual(_widgetEditReplyNeedsNotice(editing, '```html\n<p>x</p>\n```'), true);
 });
@@ -557,6 +572,8 @@ test('_widgetEditReplyNeedsNotice stays quiet outside editing tabs', () => {
 });
 
 test('the stream-finalize path shows the notice through the helper', () => {
-  assert.ok(source.includes('_widgetEditReplyNeedsNotice(_tabs.find((t) => t.id === _tabKey), full)'));
+  assert.ok(
+    source.includes('_widgetEditReplyNeedsNotice(_tabs.find((t) => t.id === _tabKey), full)'),
+  );
   assert.ok(source.includes('widget-edit-notice'));
 });

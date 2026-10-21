@@ -27,24 +27,24 @@
 
 ## File Structure
 
-| File | Change | Responsibility |
-|---|---|---|
-| `web/static/app.js` | modify | `gatorWidgetScrollSnapshot` / `gatorWidgetScrollRestore`, wrapped measure in `gatorWidgetResize`; `gatorWidgetShouldReveal` / `gatorWidgetRevealOnce`; `_gatorWidgetRevealHold` |
-| `web/skills/gator-demo-recorder/scripts/tts_pipeline.py` | modify | `_pause_after` sanitiser, `write_progress`, `--progress-file` / `--approval-id` |
-| `web/routes/utils.py` | modify | `reveal` flag on `POST /api/open-file` |
-| `web/demo_project_delivery.py` | create | `project_summary`, `read_progress` |
-| `web/routes/demo_projects.py` | modify | `GET /api/demo-projects/{id}/summary` and `/progress` |
-| `web/static/app.js` (Task 8a) | modify | `gatorDemoBridge` and three parent-handled actions: `gator:demo-summary`, `gator:demo-progress`, `gator:demo-open-folder` |
-| `web/skills/gator-demo-recorder/SKILL.md` | modify | Phase 3 editor (Pause after, tooltip, project-scoped video, merge progress), Phase 4 flags, Phase 5 delivery widget |
-| `tests/widget_resize_scroll.test.js` | create | Task 1 |
-| `tests/widget_reveal_once.test.js` | create | Task 2 |
-| `tests/test_tts_pipeline_pacing.py` | create | Task 3 |
-| `tests/test_tts_pipeline_progress.py` | create | Task 4 |
-| `tests/test_open_file_reveal.py` | create | Task 5 |
-| `tests/demo_project_state/test_delivery.py` | create | Task 6 |
-| `tests/narration_editor_widget.test.js` | create (Task 7), extend (Task 8) | editor widget logic and template checks |
-| `tests/demo_widget_bridge.test.js` | create | Task 8a |
-| `tests/demo_ready_widget.test.js` | create | Task 9 |
+| File                                                     | Change                           | Responsibility                                                                                                                                                                  |
+| -------------------------------------------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `web/static/app.js`                                      | modify                           | `gatorWidgetScrollSnapshot` / `gatorWidgetScrollRestore`, wrapped measure in `gatorWidgetResize`; `gatorWidgetShouldReveal` / `gatorWidgetRevealOnce`; `_gatorWidgetRevealHold` |
+| `web/skills/gator-demo-recorder/scripts/tts_pipeline.py` | modify                           | `_pause_after` sanitiser, `write_progress`, `--progress-file` / `--approval-id`                                                                                                 |
+| `web/routes/utils.py`                                    | modify                           | `reveal` flag on `POST /api/open-file`                                                                                                                                          |
+| `web/demo_project_delivery.py`                           | create                           | `project_summary`, `read_progress`                                                                                                                                              |
+| `web/routes/demo_projects.py`                            | modify                           | `GET /api/demo-projects/{id}/summary` and `/progress`                                                                                                                           |
+| `web/static/app.js` (Task 8a)                            | modify                           | `gatorDemoBridge` and three parent-handled actions: `gator:demo-summary`, `gator:demo-progress`, `gator:demo-open-folder`                                                       |
+| `web/skills/gator-demo-recorder/SKILL.md`                | modify                           | Phase 3 editor (Pause after, tooltip, project-scoped video, merge progress), Phase 4 flags, Phase 5 delivery widget                                                             |
+| `tests/widget_resize_scroll.test.js`                     | create                           | Task 1                                                                                                                                                                          |
+| `tests/widget_reveal_once.test.js`                       | create                           | Task 2                                                                                                                                                                          |
+| `tests/test_tts_pipeline_pacing.py`                      | create                           | Task 3                                                                                                                                                                          |
+| `tests/test_tts_pipeline_progress.py`                    | create                           | Task 4                                                                                                                                                                          |
+| `tests/test_open_file_reveal.py`                         | create                           | Task 5                                                                                                                                                                          |
+| `tests/demo_project_state/test_delivery.py`              | create                           | Task 6                                                                                                                                                                          |
+| `tests/narration_editor_widget.test.js`                  | create (Task 7), extend (Task 8) | editor widget logic and template checks                                                                                                                                         |
+| `tests/demo_widget_bridge.test.js`                       | create                           | Task 8a                                                                                                                                                                         |
+| `tests/demo_ready_widget.test.js`                        | create                           | Task 9                                                                                                                                                                          |
 
 ---
 
@@ -53,10 +53,12 @@
 Root cause: `gatorWidgetResize` collapses the iframe to `height = '0'` to measure it. The browser clamps the chat's `scrollTop` (and the widget's own inner scroll) to the shorter document, and nothing restores them, so every re-measure (including each textarea keystroke that changes height) jumps the view. The fix wraps the measure in a snapshot/restore of every scrolled ancestor and the inner window scroll.
 
 **Files:**
+
 - Modify: `web/static/app.js` (`gatorWidgetResize`, under the `/* ── Widget System` comment)
 - Test: `tests/widget_resize_scroll.test.js`
 
 **Interfaces:**
+
 - Consumes: existing `gatorWidgetResize(iframe)`.
 - Produces: `gatorWidgetScrollSnapshot(iframe) -> { saved: [{el, top}], inner: {win, x, y} | null }`, `gatorWidgetScrollRestore(snap) -> void`. `gatorWidgetResize(iframe)` keeps its signature.
 
@@ -92,7 +94,9 @@ function makeWorld({ scrollers, contentH, innerY }) {
   let win;
   const style = {};
   Object.defineProperty(style, 'height', {
-    get() { return heightStr; },
+    get() {
+      return heightStr;
+    },
     set(v) {
       heightStr = v;
       const px = parseFloat(v) || 0;
@@ -107,15 +111,24 @@ function makeWorld({ scrollers, contentH, innerY }) {
     body: { scrollHeight: contentH, offsetHeight: contentH },
     documentElement: { scrollHeight: contentH },
     head: { appendChild() {} },
-    getElementById() { return null; },
-    createElement() { return {}; },
+    getElementById() {
+      return null;
+    },
+    createElement() {
+      return {};
+    },
   };
   win = {
     scrollX: 0,
     scrollY: innerY || 0,
-    scrollTo(x, y) { this.scrollX = x; this.scrollY = y; },
+    scrollTo(x, y) {
+      this.scrollX = x;
+      this.scrollY = y;
+    },
     document: doc,
-    ResizeObserver: class { observe() {} },
+    ResizeObserver: class {
+      observe() {}
+    },
   };
   // scrollers[0] is the iframe's parent, the last one is the outermost.
   for (let i = 0; i < scrollers.length; i++) {
@@ -127,10 +140,15 @@ function makeWorld({ scrollers, contentH, innerY }) {
     contentDocument: doc,
     contentWindow: win,
   };
-  const ctx = { setTimeout: (fn) => { timers.push(fn); return timers.length; } };
+  const ctx = {
+    setTimeout: (fn) => {
+      timers.push(fn);
+      return timers.length;
+    },
+  };
   const api = vm.runInNewContext(
     code + '\n;({ gatorWidgetResize, gatorWidgetScrollSnapshot, gatorWidgetScrollRestore })',
-    ctx
+    ctx,
   );
   return { iframe, win, timers, api };
 }
@@ -206,16 +224,18 @@ function gatorWidgetScrollSnapshot(iframe) {
     if (el.scrollTop > 0) saved.push({ el, top: el.scrollTop });
   }
   let win = null;
-  try { win = iframe.contentWindow; } catch (_) {}
+  try {
+    win = iframe.contentWindow;
+  } catch (_) {}
   const inner = win && win.scrollY > 0 ? { win, x: win.scrollX, y: win.scrollY } : null;
   return { saved, inner };
 }
 
 function gatorWidgetScrollRestore(snap) {
   for (const s of snap.saved) if (s.el.scrollTop < s.top) s.el.scrollTop = s.top;
-  if (snap.inner && snap.inner.win.scrollY < snap.inner.y) snap.inner.win.scrollTo(snap.inner.x, snap.inner.y);
+  if (snap.inner && snap.inner.win.scrollY < snap.inner.y)
+    snap.inner.win.scrollTo(snap.inner.x, snap.inner.y);
 }
-
 ```
 
 Then edit `gatorWidgetResize` itself. Replace
@@ -277,10 +297,12 @@ git commit -m "fix: preserve chat and widget scroll when widgets re-measure"
 Problem: when the agent streams a replacement editor (e.g. after "Edit narration"), the per-event autoscroll and the post-stream `_pinScrollToBottom` drag the view past the top of the tall widget. The fix reveals the widget's top once, marks the user as "not following" for the rest of the stream, and uses a hold flag so the post-stream pin (which runs after `_userScrolledUp` is reset at stream close) also stays off. The next send clears the hold.
 
 **Files:**
+
 - Modify: `web/static/app.js` (`let _userScrolledUp`, the capture `load` listener near the top of the file, `doSend`, the post-stream pin, and the Widget System section)
 - Test: `tests/widget_reveal_once.test.js`
 
 **Interfaces:**
+
 - Consumes: `gatorWidgetResize(iframe)` (Task 1), existing globals `_chatTaskIds` (Set of streaming tab ids), `_activeTabId`, `_userScrolledUp`, `_pinScrollToBottom`.
 - Produces: `let _gatorWidgetRevealHold`, `gatorWidgetShouldReveal(streaming, following, widgetH, viewportH) -> boolean`, `gatorWidgetRevealOnce(iframe) -> void`.
 
@@ -334,7 +356,10 @@ function world({ streaming, wrapH, viewportH }) {
 }
 
 // Truth table for the pure decision.
-const T = (...a) => vm.runInNewContext(extract('gatorWidgetShouldReveal') + ';gatorWidgetShouldReveal(' + a.join(',') + ')');
+const T = (...a) =>
+  vm.runInNewContext(
+    extract('gatorWidgetShouldReveal') + ';gatorWidgetShouldReveal(' + a.join(',') + ')',
+  );
 assert.strictEqual(T(true, true, 900, 500), true);
 assert.strictEqual(T(false, true, 900, 500), false, 'not streaming');
 assert.strictEqual(T(true, false, 900, 500), false, 'user scrolled up');
@@ -370,14 +395,21 @@ assert.strictEqual(T(true, true, 500, 500), false, 'equal height does not need a
 // Source wiring.
 assert.ok(/let _gatorWidgetRevealHold = false;/.test(src), 'hold flag declared');
 assert.ok(
-  /if \(_activeTabId === requestTabId && !_userScrolledUp && !_gatorWidgetRevealHold\) _pinScrollToBottom\(messages\);/.test(src),
-  'post-stream pin respects the hold'
+  /if \(_activeTabId === requestTabId && !_userScrolledUp && !_gatorWidgetRevealHold\) _pinScrollToBottom\(messages\);/.test(
+    src,
+  ),
+  'post-stream pin respects the hold',
 );
 assert.ok(
-  /const doSend = async \(overridePayload\) => \{\s*_userScrolledUp = false;\s*_gatorWidgetRevealHold = false;/.test(src),
-  'doSend clears the hold'
+  /const doSend = async \(overridePayload\) => \{\s*_userScrolledUp = false;\s*_gatorWidgetRevealHold = false;/.test(
+    src,
+  ),
+  'doSend clears the hold',
 );
-assert.ok(/gatorWidgetResize\(el\);\s*gatorWidgetRevealOnce\(el\);/.test(src), 'load listener reveals once');
+assert.ok(
+  /gatorWidgetResize\(el\);\s*gatorWidgetRevealOnce\(el\);/.test(src),
+  'load listener reveals once',
+);
 
 console.log('widget_reveal_once: PASS');
 ```
@@ -409,10 +441,19 @@ function gatorWidgetRevealOnce(iframe) {
     const wrap = iframe.closest ? iframe.closest('.gator-widget-wrap') : null;
     const msgs = document.getElementById('messages');
     if (!wrap || !msgs || !msgs.contains(wrap)) return;
-    if (!gatorWidgetShouldReveal(_chatTaskIds.has(_activeTabId), !_userScrolledUp, wrap.offsetHeight, msgs.clientHeight)) return;
+    if (
+      !gatorWidgetShouldReveal(
+        _chatTaskIds.has(_activeTabId),
+        !_userScrolledUp,
+        wrap.offsetHeight,
+        msgs.clientHeight,
+      )
+    )
+      return;
     _userScrolledUp = true;
     _gatorWidgetRevealHold = true;
-    msgs.scrollTop = wrap.getBoundingClientRect().top - msgs.getBoundingClientRect().top + msgs.scrollTop;
+    msgs.scrollTop =
+      wrap.getBoundingClientRect().top - msgs.getBoundingClientRect().top + msgs.scrollTop;
   } catch (_) {}
 }
 ```
@@ -426,7 +467,10 @@ if (el && el.classList && el.classList.contains('gator-widget-frame')) gatorWidg
 with
 
 ```js
-if (el && el.classList && el.classList.contains('gator-widget-frame')) { gatorWidgetResize(el); gatorWidgetRevealOnce(el); }
+if (el && el.classList && el.classList.contains('gator-widget-frame')) {
+  gatorWidgetResize(el);
+  gatorWidgetRevealOnce(el);
+}
 ```
 
 4. In `doSend` (grep `const doSend = async (overridePayload) => {`; there are three `_userScrolledUp = false;` sites, edit only the one directly under that line) replace
@@ -453,7 +497,8 @@ if (_activeTabId === requestTabId && !_userScrolledUp) _pinScrollToBottom(messag
 with
 
 ```js
-if (_activeTabId === requestTabId && !_userScrolledUp && !_gatorWidgetRevealHold) _pinScrollToBottom(messages);
+if (_activeTabId === requestTabId && !_userScrolledUp && !_gatorWidgetRevealHold)
+  _pinScrollToBottom(messages);
 ```
 
 - [ ] **Step 4: Run the tests to verify they pass**
@@ -475,10 +520,12 @@ git commit -m "fix: reveal tall replacement widgets once and keep the post-strea
 The editor will send `pause_after` as a number, but narration files can come from anywhere. The pipeline must tolerate strings, junk, negatives, NaN and absurd values.
 
 **Files:**
+
 - Modify: `web/skills/gator-demo-recorder/scripts/tts_pipeline.py`
 - Test: `tests/test_tts_pipeline_pacing.py`
 
 **Interfaces:**
+
 - Consumes: existing `build_synced_audio(narration, out_dir, lemonade_url, model, voice)`.
 - Produces: `PAUSE_MAX = 10.0`, `_pause_after(seg: dict) -> float` (finite, `0.0 <= v <= PAUSE_MAX`).
 
@@ -624,10 +671,12 @@ git commit -m "fix: sanitise pause_after in the TTS pipeline"
 The editor needs to show "Generating speech 2 of 5", "Merging audio and video", "Done", or the failure text. The pipeline writes one small JSON file atomically; the widget polls it (Tasks 6 and 8).
 
 **Files:**
+
 - Modify: `web/skills/gator-demo-recorder/scripts/tts_pipeline.py`
 - Test: `tests/test_tts_pipeline_progress.py`
 
 **Interfaces:**
+
 - Consumes: `build_synced_audio`, `merge_audio_video`, `main()` from the current file (Task 3 already added `_pause_after`).
 - Produces:
   - `write_progress(path, approval_id, state, stage, step=0, total=0, message="", error=None) -> None` (no-op when `path` is falsy; atomic via temp file + `os.replace`). JSON keys: `approval_id, state, stage, step, total, message, error, updated_at` (`updated_at` is `time.time()` seconds).
@@ -905,10 +954,12 @@ git commit -m "feat: report TTS and merge progress to a progress file"
 "Open final folder" should open Explorer with the final video selected. The existing `POST /api/open-file` already handles path checks, the executable deny-list and errors, so it gains an optional `reveal` flag instead of a new route. It is an existing POST route, so the CSRF inventory and `tests/csrf_route_baseline.txt` are untouched.
 
 **Files:**
+
 - Modify: `web/routes/utils.py` (`OpenFileRequest`, `_do_open_file`, `open_file`; locate by `grep -n "class OpenFileRequest\|def _do_open_file\|_do_open_file," web/routes/utils.py`)
 - Test: `tests/test_open_file_reveal.py`
 
 **Interfaces:**
+
 - Consumes: existing `POST /api/open-file` (body `{path}`; returns `{"ok": true}` or `{"ok": false, "reason", "message"}`).
 - Produces: body field `reveal: bool = False`; `_do_open_file(path: str, is_dir: bool = False, reveal: bool = False) -> None`. `reveal` is ignored for directories.
 
@@ -1075,11 +1126,13 @@ git commit -m "feat: open-file can reveal a file in its folder"
 The delivery widget needs the final file, source count and working-file size; the editor needs the latest progress record. Both are read-only, so they are GET routes (no CSRF dependency needed) and live next to SP3's project routes.
 
 **Files:**
+
 - Create: `web/demo_project_delivery.py`
 - Modify: `web/routes/demo_projects.py` (add one import and two routes at the end)
 - Test: `tests/demo_project_state/test_delivery.py`
 
 **Interfaces:**
+
 - Consumes (SP3): `demo_projects.get_project(project_id) -> dict` with `path`, `raw` (absolute path of the current raw video, or `None`), `final_dir`, `final` (absolute path of the newest file in `final/`, or `None`), `segments` (list of absolute source paths); `KeyError` for an unknown id. In `web/routes/demo_projects.py`: `router`, `_get(project_id)` (404 on unknown id). Test fixture `store` from `tests/demo_project_state/conftest.py`.
 - Produces:
   - `delivery.project_summary(project_id) -> {"project_id", "path", "final_dir", "final", "final_rel", "raw_rel", "source_count", "work_bytes"}` where `final_rel` is `"final/<filename>"` or `None`, `raw_rel` is the project-relative POSIX path of the current raw video (or `None` when the project has no raw video; the editor's preview uses it, so no widget-side path maths is needed), `source_count = len(segments)`, `work_bytes` = total file bytes under `<project>/work`.
@@ -1288,10 +1341,12 @@ git commit -m "feat: add demo project summary and progress routes"
 All edits are inside the Phase 3 `html:widget` block of `web/skills/gator-demo-recorder/SKILL.md` (the block containing `Edit Narration Script`). Anchors below are exact strings from that template; locate them with `grep -n`, not line numbers.
 
 **Files:**
+
 - Modify: `web/skills/gator-demo-recorder/SKILL.md` (Phase 3 editor widget and the prose line above it)
 - Test: `tests/narration_editor_widget.test.js` (created here, extended in Task 8)
 
 **Interfaces:**
+
 - Consumes: Task 3's pipeline coercion (`pause_after` in the approved segment objects).
 - Produces (inside the editor widget): `pauseValue(raw) -> number` (0 to 10 in 0.1 steps; garbage, negative or empty gives 0), `segOut(s, text, voice, speed, pauseRaw) -> {start_at, text, voice, speed, pause_after}`, input ids `pa<i>`, tooltip id `pacing-tip`. SP2's `approve()` keeps its `data.map(function(s,i){ return …; })` shape; this task only swaps the `return` line for `segOut(...)`.
 
@@ -1299,7 +1354,7 @@ All edits are inside the Phase 3 `html:widget` block of `web/skills/gator-demo-r
 
 Create `tests/narration_editor_widget.test.js`:
 
-```js
+````js
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
@@ -1307,7 +1362,7 @@ const vm = require('vm');
 
 const skill = fs.readFileSync(
   path.join(__dirname, '..', 'web', 'skills', 'gator-demo-recorder', 'SKILL.md'),
-  'utf8'
+  'utf8',
 );
 const blocks = [...skill.matchAll(/```html:widget\n([\s\S]*?)\n```/g)].map((m) => m[1]);
 const editor = blocks.find((b) => b.includes('Edit Narration Script'));
@@ -1323,7 +1378,7 @@ const plain = (x) => JSON.parse(JSON.stringify(x));
 // pauseValue / segOut
 {
   const { pauseValue, segOut } = vm.runInNewContext(
-    fn('pauseValue') + '\n' + fn('segOut') + '\n({ pauseValue, segOut })'
+    fn('pauseValue') + '\n' + fn('segOut') + '\n({ pauseValue, segOut })',
   );
   assert.strictEqual(pauseValue('1.5'), 1.5);
   assert.strictEqual(pauseValue('abc'), 0);
@@ -1333,14 +1388,20 @@ const plain = (x) => JSON.parse(JSON.stringify(x));
   assert.strictEqual(pauseValue(-3), 0);
   assert.strictEqual(pauseValue(99), 10);
   assert.strictEqual(pauseValue(1.26), 1.3);
-  assert.deepStrictEqual(
-    plain(segOut({ start_at: 4 }, 'hi', 'af_heart', 1, '2')),
-    { start_at: 4, text: 'hi', voice: 'af_heart', speed: 1, pause_after: 2 }
-  );
-  assert.deepStrictEqual(
-    plain(segOut({ start: 5 }, 'x', 'af_nova', 1.1, '')),
-    { start_at: 5, text: 'x', voice: 'af_nova', speed: 1.1, pause_after: 0 }
-  );
+  assert.deepStrictEqual(plain(segOut({ start_at: 4 }, 'hi', 'af_heart', 1, '2')), {
+    start_at: 4,
+    text: 'hi',
+    voice: 'af_heart',
+    speed: 1,
+    pause_after: 2,
+  });
+  assert.deepStrictEqual(plain(segOut({ start: 5 }, 'x', 'af_nova', 1.1, '')), {
+    start_at: 5,
+    text: 'x',
+    voice: 'af_nova',
+    speed: 1.1,
+    pause_after: 0,
+  });
 }
 
 // Template wiring
@@ -1350,12 +1411,14 @@ assert.ok(editor.includes('Use commas and periods for natural breaths'), 'toolti
 assert.ok(!editor.includes('[pause:'), 'no [pause:...] syntax advertised');
 assert.ok(editor.includes("'pa'+i"), 'per-segment pause input id');
 assert.ok(
-  editor.includes("segOut(s, document.getElementById('s'+i).value, voice, speed, document.getElementById('pa'+i).value)"),
-  'approve() goes through segOut'
+  editor.includes(
+    "segOut(s, document.getElementById('s'+i).value, voice, speed, document.getElementById('pa'+i).value)",
+  ),
+  'approve() goes through segOut',
 );
 
 console.log('narration_editor_widget: PASS');
-```
+````
 
 - [ ] **Step 2: Run the test to verify it fails**
 
@@ -1367,57 +1430,146 @@ Expected: FAIL with `Error: pauseValue not found in editor widget`
 3a. CSS — directly after the line `  .btn-seg-preview:hover{border-color:#f97316;color:#f97316}` add:
 
 ```css
-  .seg-pause{display:flex;align-items:center;gap:4px;font-size:.68rem;color:#6b8db5;margin-left:auto}
-  .seg-pause input{width:56px;background:#111827;border:1px solid #1e3a52;border-radius:5px;color:#dbeafe;padding:3px 6px;font-size:.72rem;font-family:inherit}
-  .seg-pause input:focus{outline:none;border-color:#4ade80}
-  .help{position:relative;display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border:1px solid #1e3a52;border-radius:50%;color:#6b8db5;font-size:.7rem;cursor:help}
-  .help:hover,.help:focus{border-color:#f97316;color:#f97316;outline:none}
-  .tip{display:none;position:absolute;top:24px;right:0;width:260px;z-index:5;background:#0f1a28;border:1px solid #1e3a52;border-radius:8px;padding:8px 10px;font-size:.7rem;line-height:1.4;color:#dbeafe;text-align:left;cursor:default}
-  .help:hover .tip,.help:focus .tip,.help:focus-within .tip{display:block}
+.seg-pause {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.68rem;
+  color: #6b8db5;
+  margin-left: auto;
+}
+.seg-pause input {
+  width: 56px;
+  background: #111827;
+  border: 1px solid #1e3a52;
+  border-radius: 5px;
+  color: #dbeafe;
+  padding: 3px 6px;
+  font-size: 0.72rem;
+  font-family: inherit;
+}
+.seg-pause input:focus {
+  outline: none;
+  border-color: #4ade80;
+}
+.help {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: 1px solid #1e3a52;
+  border-radius: 50%;
+  color: #6b8db5;
+  font-size: 0.7rem;
+  cursor: help;
+}
+.help:hover,
+.help:focus {
+  border-color: #f97316;
+  color: #f97316;
+  outline: none;
+}
+.tip {
+  display: none;
+  position: absolute;
+  top: 24px;
+  right: 0;
+  width: 260px;
+  z-index: 5;
+  background: #0f1a28;
+  border: 1px solid #1e3a52;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 0.7rem;
+  line-height: 1.4;
+  color: #dbeafe;
+  text-align: left;
+  cursor: default;
+}
+.help:hover .tip,
+.help:focus .tip,
+.help:focus-within .tip {
+  display: block;
+}
 ```
 
 3b. Tooltip — directly after the line `    <button class="btn-play-all" id="btn-play-all" onclick="playAll()">▶▶ Play all</button>` (still inside `.voice-row`) add:
 
 ```html
-    <span class="help" tabindex="0" role="button" aria-describedby="pacing-tip" aria-label="Pacing tips">?<span class="tip" role="tooltip" id="pacing-tip"><b>Pacing tips</b> — Use commas and periods for natural breaths; use <code>…</code> for a longer, trailing pause. For an exact silent gap after this section, set <b>Pause after</b>.</span></span>
+<span class="help" tabindex="0" role="button" aria-describedby="pacing-tip" aria-label="Pacing tips"
+  >?<span class="tip" role="tooltip" id="pacing-tip"
+    ><b>Pacing tips</b> — Use commas and periods for natural breaths; use <code>…</code> for a
+    longer, trailing pause. For an exact silent gap after this section, set
+    <b>Pause after</b>.</span
+  ></span
+>
 ```
 
 3c. Helpers — insert immediately above the line that starts with `// ── Segments`:
 
 ```js
-function pauseValue(raw){
-  var n=parseFloat(raw);
-  if(!isFinite(n)||n<0){ return 0; }
-  return Math.min(10, Math.round(n*10)/10);
+function pauseValue(raw) {
+  var n = parseFloat(raw);
+  if (!isFinite(n) || n < 0) {
+    return 0;
+  }
+  return Math.min(10, Math.round(n * 10) / 10);
 }
 
-function segOut(s, text, voice, speed, pauseRaw){
-  return {start_at:s.start_at||s.start||0, text:text, voice:voice, speed:speed, pause_after:pauseValue(pauseRaw)};
+function segOut(s, text, voice, speed, pauseRaw) {
+  return {
+    start_at: s.start_at || s.start || 0,
+    text: text,
+    voice: voice,
+    speed: speed,
+    pause_after: pauseValue(pauseRaw),
+  };
 }
-
 ```
 
 3d. Segment builder — directly after the line `  acts.appendChild(pb);` add:
 
 ```js
-  var pl=document.createElement('label'); pl.className='seg-pause';
-  pl.appendChild(document.createTextNode('Pause after (s)'));
-  var pi=document.createElement('input'); pi.type='number'; pi.id='pa'+i;
-  pi.min='0'; pi.max='10'; pi.step='0.1'; pi.value=pauseValue(s.pause_after);
-  pi.oninput=function(){ document.getElementById('dirty'+i).style.display='inline'; };
-  pl.appendChild(pi); acts.appendChild(pl);
+var pl = document.createElement('label');
+pl.className = 'seg-pause';
+pl.appendChild(document.createTextNode('Pause after (s)'));
+var pi = document.createElement('input');
+pi.type = 'number';
+pi.id = 'pa' + i;
+pi.min = '0';
+pi.max = '10';
+pi.step = '0.1';
+pi.value = pauseValue(s.pause_after);
+pi.oninput = function () {
+  document.getElementById('dirty' + i).style.display = 'inline';
+};
+pl.appendChild(pi);
+acts.appendChild(pl);
 ```
 
 3e. `approve()` — replace the single line (SP2 keeps it inside `data.map(function(s,i){ … })`)
 
 ```js
-    return {start_at:s.start_at||s.start||0, text:document.getElementById('s'+i).value, voice:voice, speed:speed};
+return {
+  start_at: s.start_at || s.start || 0,
+  text: document.getElementById('s' + i).value,
+  voice: voice,
+  speed: speed,
+};
 ```
 
 with
 
 ```js
-    return segOut(s, document.getElementById('s'+i).value, voice, speed, document.getElementById('pa'+i).value);
+return segOut(
+  s,
+  document.getElementById('s' + i).value,
+  voice,
+  speed,
+  document.getElementById('pa' + i).value,
+);
 ```
 
 3f. Prose — in the bullet that starts ``- `SEGMENTS_PLACEHOLDER` with a JSON array``, change it to:
@@ -1445,10 +1597,12 @@ git commit -m "feat: add Pause after control and pacing tips to the narration ed
 The editor must stop calling `/api/recorder/latest-output` (SP3 removes it) and instead show the raw recording through the project file route. After SP2 replies that an approval was saved, the editor polls the Task 6 progress route and shows generation state, the failure text, or a stall message, and re-enables Approve on failure or stall. SP2 owns save and approve; this task only adds an independent listener for SP2's reply and never touches SP2's approve transaction.
 
 **Files:**
+
 - Modify: `web/skills/gator-demo-recorder/SKILL.md` (Phase 3 editor widget, the prose line above it, and the Phase 4 `subprocess.run` list)
 - Test: `tests/narration_editor_widget.test.js` (extend)
 
 **Interfaces:**
+
 - Consumes:
   - SP2 editor: `var _PROJECT_ID = 'PROJECT_ID_PLACEHOLDER';`, the button `id="btn-approve"`, and the parent's reply message `{type:'gator:narration-approval-result', ok:true, approval:{approval_id, version, segment_count, reused}}` (the flat shape `{ok, approval_id, …}` is also accepted). SP2's Phase 4 variables `PROJECT_DIR` (a `Path`) and `verdict` (dict with `approval_id`).
   - Task 4 CLI flags; Task 6 `raw_rel` in the summary and `GET /api/demo-projects/{id}/progress`; SP3 `GET /api/demo-projects/{id}/file?rel=` (used only as the `<video>` `src`, a resource load).
@@ -1461,43 +1615,77 @@ In `tests/narration_editor_widget.test.js`, insert the following immediately abo
 
 ```js
 // Precondition from SP2
-assert.ok(editor.includes("var _PROJECT_ID = 'PROJECT_ID_PLACEHOLDER'"), 'SP2 must be merged: editor needs _PROJECT_ID');
-assert.ok(editor.includes('id="btn-approve"'), 'SP2 must be merged: Approve button needs id="btn-approve"');
+assert.ok(
+  editor.includes("var _PROJECT_ID = 'PROJECT_ID_PLACEHOLDER'"),
+  'SP2 must be merged: editor needs _PROJECT_ID',
+);
+assert.ok(
+  editor.includes('id="btn-approve"'),
+  'SP2 must be merged: Approve button needs id="btn-approve"',
+);
 
 // progressView
 {
-  const { progressView } = vm.runInNewContext(
-    fn('progressView') + '\n({ progressView })'
-  );
+  const { progressView } = vm.runInNewContext(fn('progressView') + '\n({ progressView })');
 
   const SINCE = 1000000;
   const rec = (o) => Object.assign({ approval_id: 'a1', updated_at: SINCE / 1000 + 5 }, o);
-  const view = (p, waited) => plain(progressView(p, 'a1', waited === undefined ? 1000 : waited, SINCE));
-  const WAITING = { text: 'Waiting for generation to start…', color: '#6b8db5', stop: false, retry: false };
+  const view = (p, waited) =>
+    plain(progressView(p, 'a1', waited === undefined ? 1000 : waited, SINCE));
+  const WAITING = {
+    text: 'Waiting for generation to start…',
+    color: '#6b8db5',
+    stop: false,
+    retry: false,
+  };
   const STALLED = {
     text: 'Generation has not started yet. Check that the AI Gator agent is still working, or click Approve to retry.',
-    color: '#f87171', stop: true, retry: true,
+    color: '#f87171',
+    stop: true,
+    retry: true,
   };
 
   assert.deepStrictEqual(view({ state: 'none' }), WAITING);
   assert.deepStrictEqual(view(null), WAITING);
+  assert.deepStrictEqual(view(rec({ state: 'running', message: 'Generating speech 2 of 5' })), {
+    text: 'Generating speech 2 of 5',
+    color: '#f97316',
+    stop: false,
+    retry: false,
+  });
+  assert.deepStrictEqual(view(rec({ state: 'done' })), {
+    text: 'Done — your demo video is ready.',
+    color: '#4ade80',
+    stop: true,
+    retry: false,
+  });
+  assert.deepStrictEqual(view(rec({ state: 'failed', error: 'ffmpeg exploded' })), {
+    text: 'Generation failed: ffmpeg exploded',
+    color: '#f87171',
+    stop: true,
+    retry: true,
+  });
   assert.deepStrictEqual(
-    view(rec({ state: 'running', message: 'Generating speech 2 of 5' })),
-    { text: 'Generating speech 2 of 5', color: '#f97316', stop: false, retry: false }
+    view(rec({ state: 'done', updated_at: SINCE / 1000 - 1 })),
+    WAITING,
+    'stale same-id record',
   );
   assert.deepStrictEqual(
-    view(rec({ state: 'done' })),
-    { text: 'Done — your demo video is ready.', color: '#4ade80', stop: true, retry: false }
+    view(rec({ state: 'done', approval_id: 'a2' })),
+    WAITING,
+    'other approval',
   );
-  assert.deepStrictEqual(
-    view(rec({ state: 'failed', error: 'ffmpeg exploded' })),
-    { text: 'Generation failed: ffmpeg exploded', color: '#f87171', stop: true, retry: true }
-  );
-  assert.deepStrictEqual(view(rec({ state: 'done', updated_at: SINCE / 1000 - 1 })), WAITING, 'stale same-id record');
-  assert.deepStrictEqual(view(rec({ state: 'done', approval_id: 'a2' })), WAITING, 'other approval');
   assert.deepStrictEqual(view({ state: 'none' }, 120000), STALLED);
-  assert.deepStrictEqual(view(rec({ state: 'running', approval_id: 'a2' }), 130000), STALLED, 'other id does not mask a stall');
-  assert.strictEqual(view(rec({ state: 'done' }), 130000).text, 'Done — your demo video is ready.', 'a real result wins over the stall timer');
+  assert.deepStrictEqual(
+    view(rec({ state: 'running', approval_id: 'a2' }), 130000),
+    STALLED,
+    'other id does not mask a stall',
+  );
+  assert.strictEqual(
+    view(rec({ state: 'done' }), 130000).text,
+    'Done — your demo video is ready.',
+    'a real result wins over the stall timer',
+  );
 }
 
 // Template and SKILL.md wiring
@@ -1505,12 +1693,17 @@ assert.ok(editor.includes('id="merge-status"'), 'merge status element');
 assert.ok(editor.includes('gator:narration-approval-result'), 'listens for the approval reply');
 assert.ok(editor.includes("'gator:demo-summary'"), 'asks the parent for the project summary');
 assert.ok(editor.includes("'gator:demo-progress'"), 'asks the parent for merge progress');
-assert.ok(editor.includes('gator:demo-summary-result') && editor.includes('gator:demo-progress-result'), 'listens for the parent replies');
+assert.ok(
+  editor.includes('gator:demo-summary-result') && editor.includes('gator:demo-progress-result'),
+  'listens for the parent replies',
+);
 assert.ok(!/fetch\(/.test(editor), 'editor makes no direct backend calls');
 assert.ok(!editor.includes('latest-output'), 'editor no longer uses latest-output');
 assert.ok(
-  /"--progress-file", str\(PROJECT_DIR \/ "work" \/ "logs" \/ "merge_progress\.json"\),\s*"--approval-id", verdict\["approval_id"\]/.test(skill),
-  'Phase 4 passes the progress flags'
+  /"--progress-file", str\(PROJECT_DIR \/ "work" \/ "logs" \/ "merge_progress\.json"\),\s*"--approval-id", verdict\["approval_id"\]/.test(
+    skill,
+  ),
+  'Phase 4 passes the progress flags',
 );
 ```
 
@@ -1525,25 +1718,32 @@ Expected: FAIL with `Error: progressView not found in editor widget` (or the `_P
 
 ```js
 // ── Video preview — summary comes from the parent; the video is a resource load ─
-function requestDemoData(type, projectId){
-  parent.postMessage({type:type, project_id:projectId}, '*');
+function requestDemoData(type, projectId) {
+  parent.postMessage({ type: type, project_id: projectId }, '*');
 }
 
-var _pid=/^demo_\d/.test(_PROJECT_ID)?_PROJECT_ID:'';
-if(_pid){ requestDemoData('gator:demo-summary', _pid); }
+var _pid = /^demo_\d/.test(_PROJECT_ID) ? _PROJECT_ID : '';
+if (_pid) {
+  requestDemoData('gator:demo-summary', _pid);
+}
 
-window.addEventListener('message', function(ev){
-  var m=ev.data||{};
-  if(m.type!=='gator:demo-summary-result' || m.project_id!==_pid){ return; }
-  var rel=m.ok && m.summary && m.summary.raw_rel;
-  if(!rel){ return; }
-  var vp=document.getElementById('video-player');
-  var vs=document.getElementById('video-section');
-  vp.src=_BASE+'/api/demo-projects/'+_pid+'/file?rel='+encodeURIComponent(rel);
-  vp.onerror=function(){ vs.style.display='none'; };
-  vs.style.display='block';
+window.addEventListener('message', function (ev) {
+  var m = ev.data || {};
+  if (m.type !== 'gator:demo-summary-result' || m.project_id !== _pid) {
+    return;
+  }
+  var rel = m.ok && m.summary && m.summary.raw_rel;
+  if (!rel) {
+    return;
+  }
+  var vp = document.getElementById('video-player');
+  var vs = document.getElementById('video-section');
+  vp.src = _BASE + '/api/demo-projects/' + _pid + '/file?rel=' + encodeURIComponent(rel);
+  vp.onerror = function () {
+    vs.style.display = 'none';
+  };
+  vs.style.display = 'block';
 });
-
 ```
 
 3b. Prose — replace the sentence that starts `The raw video path is fetched automatically by the widget` with:
@@ -1555,64 +1755,99 @@ The widget learns the raw video's project-relative path from the parent (`gator:
 3c. Status line — directly after the line containing `id="btn-approve"` (the Approve button) add:
 
 ```html
-  <div class="status" id="merge-status"></div>
+<div class="status" id="merge-status"></div>
 ```
 
 3d. Progress script — insert immediately above the editor's closing `</script>` (after the `approve()` function):
 
 ```js
 // ── Merge progress ────────────────────────────────────────────────────────────
-var _progressTimer=null;
+var _progressTimer = null;
 
-function progressView(p, approvalId, waitedMs, sinceMs){
-  var mine=!!p && p.approval_id===approvalId && (p.updated_at||0)*1000>=sinceMs;
-  if(mine && p.state==='done'){
-    return {text:'Done — your demo video is ready.', color:'#4ade80', stop:true, retry:false};
+function progressView(p, approvalId, waitedMs, sinceMs) {
+  var mine = !!p && p.approval_id === approvalId && (p.updated_at || 0) * 1000 >= sinceMs;
+  if (mine && p.state === 'done') {
+    return { text: 'Done — your demo video is ready.', color: '#4ade80', stop: true, retry: false };
   }
-  if(mine && p.state==='failed'){
-    return {text:'Generation failed: '+(p.error||p.message||'unknown error'), color:'#f87171', stop:true, retry:true};
+  if (mine && p.state === 'failed') {
+    return {
+      text: 'Generation failed: ' + (p.error || p.message || 'unknown error'),
+      color: '#f87171',
+      stop: true,
+      retry: true,
+    };
   }
-  if(mine && p.state==='running'){
-    return {text:p.message||'Generating…', color:'#f97316', stop:false, retry:false};
+  if (mine && p.state === 'running') {
+    return { text: p.message || 'Generating…', color: '#f97316', stop: false, retry: false };
   }
-  if(waitedMs>=120000){
-    return {text:'Generation has not started yet. Check that the AI Gator agent is still working, or click Approve to retry.', color:'#f87171', stop:true, retry:true};
+  if (waitedMs >= 120000) {
+    return {
+      text: 'Generation has not started yet. Check that the AI Gator agent is still working, or click Approve to retry.',
+      color: '#f87171',
+      stop: true,
+      retry: true,
+    };
   }
-  return {text:'Waiting for generation to start…', color:'#6b8db5', stop:false, retry:false};
+  return { text: 'Waiting for generation to start…', color: '#6b8db5', stop: false, retry: false };
 }
 
-function setMergeStatus(text, color){
-  var s=document.getElementById('merge-status');
-  s.textContent=text||''; s.style.color=color||'#6b8db5';
+function setMergeStatus(text, color) {
+  var s = document.getElementById('merge-status');
+  s.textContent = text || '';
+  s.style.color = color || '#6b8db5';
 }
 
-function stopProgress(){
-  if(_progressTimer){ clearInterval(_progressTimer); _progressTimer=null; }
+function stopProgress() {
+  if (_progressTimer) {
+    clearInterval(_progressTimer);
+    _progressTimer = null;
+  }
 }
 
-var _progressApproval=null, _progressSince=0;
+var _progressApproval = null,
+  _progressSince = 0;
 
-function startProgress(approvalId, projectId){
+function startProgress(approvalId, projectId) {
   stopProgress();
-  _progressApproval=approvalId; _progressSince=Date.now();
-  _progressTimer=setInterval(function(){ requestDemoData('gator:demo-progress', projectId); },1500);
+  _progressApproval = approvalId;
+  _progressSince = Date.now();
+  _progressTimer = setInterval(function () {
+    requestDemoData('gator:demo-progress', projectId);
+  }, 1500);
   requestDemoData('gator:demo-progress', projectId);
 }
 
-window.addEventListener('message', function(ev){
-  var m=ev.data||{};
-  if(m.type==='gator:demo-progress-result'){
-    if(!_progressApproval || m.project_id!==_pid){ return; }
-    var v=progressView(m.ok?m.progress:{state:'none'}, _progressApproval, Date.now()-_progressSince, _progressSince);
+window.addEventListener('message', function (ev) {
+  var m = ev.data || {};
+  if (m.type === 'gator:demo-progress-result') {
+    if (!_progressApproval || m.project_id !== _pid) {
+      return;
+    }
+    var v = progressView(
+      m.ok ? m.progress : { state: 'none' },
+      _progressApproval,
+      Date.now() - _progressSince,
+      _progressSince,
+    );
     setMergeStatus(v.text, v.color);
-    if(v.stop){ stopProgress(); }
-    if(v.retry){ document.getElementById('btn-approve').disabled=false; }
+    if (v.stop) {
+      stopProgress();
+    }
+    if (v.retry) {
+      document.getElementById('btn-approve').disabled = false;
+    }
     return;
   }
-  if(m.type!=='gator:narration-approval-result'){ return; }
-  var a=m.approval||m;
-  if(m.ok && a.approval_id && _pid){ startProgress(a.approval_id, _pid); }
-  else { stopProgress(); setMergeStatus('',''); }
+  if (m.type !== 'gator:narration-approval-result') {
+    return;
+  }
+  var a = m.approval || m;
+  if (m.ok && a.approval_id && _pid) {
+    startProgress(a.approval_id, _pid);
+  } else {
+    stopProgress();
+    setMergeStatus('', '');
+  }
 });
 ```
 
@@ -1648,10 +1883,12 @@ git commit -m "feat: show merge progress and errors in the narration editor"
 Widgets must not call the backend themselves: a follow-up PR drops `allow-same-origin` from the widget sandbox and puts an endpoint allow-list on the parent bridge. This task adds exactly three named actions, each with fixed parameters, handled in the parent. The widget supplies only a project id (and, for folders, one of two literal targets); it never supplies a path. The sandbox attribute, `gatorWidgetCspHtml()` and the CSRF handling are not touched.
 
 **Files:**
+
 - Modify: `web/static/app.js` (helpers `GATOR_DEMO_ID_RE`, `GATOR_DEMO_TARGETS`, `gatorWidgetFrameForSource`, `gatorDemoBridge` next to the other `gatorWidget*` helpers; three `case` labels in the `window.addEventListener('message', …)` switch, directly after the `gator:recorder` case, and after SP3's `gator:pick-demo-folder` case if present)
 - Test: `tests/demo_widget_bridge.test.js` (create)
 
 **Interfaces:**
+
 - Consumes: Task 6 `GET /api/demo-projects/{id}/summary` and `/progress`; Task 5 `POST /api/open-file` body `{path, reveal}`; the page's global `fetch` wrapper (attaches the CSRF token; the widget never sees it).
 - Produces (message in → reply to `e.source` only):
   - `{type:'gator:demo-summary', project_id}` → `{type:'gator:demo-summary-result', project_id, ok, summary}` or `{…, ok:false, error}`
@@ -1672,7 +1909,9 @@ const vm = require('vm');
 const source = fs.readFileSync(path.join(__dirname, '..', 'web', 'static', 'app.js'), 'utf8');
 
 function fn(name) {
-  const m = source.match(new RegExp('(?:async )?function ' + name + '\\([^)]*\\)\\s*\\{[\\s\\S]*?\\n\\}'));
+  const m = source.match(
+    new RegExp('(?:async )?function ' + name + '\\([^)]*\\)\\s*\\{[\\s\\S]*?\\n\\}'),
+  );
   if (!m) throw new Error(name + ' not found in app.js');
   return m[0];
 }
@@ -1689,7 +1928,10 @@ function line(re) {
   for (const t of ['gator:demo-summary', 'gator:demo-progress', 'gator:demo-open-folder']) {
     const at = source.indexOf("case '" + t + "':");
     assert(at > rec, t + ' case follows gator:recorder');
-    assert(source.slice(at, at + 160).includes('gatorDemoBridge(d, e)'), t + ' delegates to gatorDemoBridge');
+    assert(
+      source.slice(at, at + 160).includes('gatorDemoBridge(d, e)'),
+      t + ' delegates to gatorDemoBridge',
+    );
   }
 }
 
@@ -1714,7 +1956,7 @@ const api = vm.runInNewContext(
     fn('gatorDemoBridge'),
     '({ gatorWidgetFrameForSource, gatorDemoBridge })',
   ].join('\n'),
-  ctx
+  ctx,
 );
 
 const ok = (body) => ({ ok: true, status: 200, json: () => Promise.resolve(body) });
@@ -1725,27 +1967,53 @@ async function run(d, src) {
   fetchCalls.length = 0;
   const e = { source: { postMessage: (m, o) => sent.push(JSON.parse(JSON.stringify({ m, o }))) } };
   if (src === 'frame') e.source = Object.assign(frameWin, { postMessage: e.source.postMessage });
-  else if (src === 'other') e.source = Object.assign(otherWin, { postMessage: e.source.postMessage });
+  else if (src === 'other')
+    e.source = Object.assign(otherWin, { postMessage: e.source.postMessage });
   else if (src === null) e.source = null;
   await api.gatorDemoBridge(d, e);
   return sent;
 }
 
 (async () => {
-  const SUMMARY = { path: 'C:\\p', final_dir: 'C:\\p\\final', final: 'C:\\p\\final\\AI_Gator_Demo.mp4', final_rel: 'final/AI_Gator_Demo.mp4', raw_rel: 'source/raw.mp4', source_count: 3, work_bytes: 5 };
+  const SUMMARY = {
+    path: 'C:\\p',
+    final_dir: 'C:\\p\\final',
+    final: 'C:\\p\\final\\AI_Gator_Demo.mp4',
+    final_rel: 'final/AI_Gator_Demo.mp4',
+    raw_rel: 'source/raw.mp4',
+    source_count: 3,
+    work_bytes: 5,
+  };
 
   // summary and progress
   routes = { '/api/demo-projects/demo_1/summary': () => ok(SUMMARY) };
   let sent = await run({ type: 'gator:demo-summary', project_id: 'demo_1' }, 'frame');
-  assert.deepStrictEqual(sent, [{ m: { type: 'gator:demo-summary-result', project_id: 'demo_1', ok: true, summary: SUMMARY }, o: '*' }]);
+  assert.deepStrictEqual(sent, [
+    {
+      m: { type: 'gator:demo-summary-result', project_id: 'demo_1', ok: true, summary: SUMMARY },
+      o: '*',
+    },
+  ]);
 
-  routes = { '/api/demo-projects/demo_1/progress': () => ok({ state: 'running', approval_id: 'a1' }) };
+  routes = {
+    '/api/demo-projects/demo_1/progress': () => ok({ state: 'running', approval_id: 'a1' }),
+  };
   sent = await run({ type: 'gator:demo-progress', project_id: 'demo_1' }, 'frame');
-  assert.deepStrictEqual(sent[0].m, { type: 'gator:demo-progress-result', project_id: 'demo_1', ok: true, progress: { state: 'running', approval_id: 'a1' } });
+  assert.deepStrictEqual(sent[0].m, {
+    type: 'gator:demo-progress-result',
+    project_id: 'demo_1',
+    ok: true,
+    progress: { state: 'running', approval_id: 'a1' },
+  });
 
   routes = { '/api/demo-projects/demo_1/summary': () => bad(404) };
   sent = await run({ type: 'gator:demo-summary', project_id: 'demo_1' }, 'frame');
-  assert.deepStrictEqual(sent[0].m, { type: 'gator:demo-summary-result', project_id: 'demo_1', ok: false, error: 'HTTP 404' });
+  assert.deepStrictEqual(sent[0].m, {
+    type: 'gator:demo-summary-result',
+    project_id: 'demo_1',
+    ok: false,
+    error: 'HTTP 404',
+  });
 
   routes = {};
   sent = await run({ type: 'gator:demo-summary', project_id: 'demo_1' }, 'frame');
@@ -1766,32 +2034,71 @@ async function run(d, src) {
   const opens = [];
   routes = {
     '/api/demo-projects/demo_1/summary': () => ok(SUMMARY),
-    '/api/open-file': (o) => { opens.push(JSON.parse(o.body)); return ok({ ok: true }); },
+    '/api/open-file': (o) => {
+      opens.push(JSON.parse(o.body));
+      return ok({ ok: true });
+    },
   };
-  sent = await run({ type: 'gator:demo-open-folder', project_id: 'demo_1', target: 'final', path: 'C:\\Windows\\System32\\calc.exe' }, 'frame');
-  assert.deepStrictEqual(opens[0], { path: 'C:\\p\\final\\AI_Gator_Demo.mp4', reveal: true }, 'final reveals the final video; widget path ignored');
-  assert.deepStrictEqual(sent[0].m, { type: 'gator:demo-open-folder-result', project_id: 'demo_1', ok: true, message: '' });
+  sent = await run(
+    {
+      type: 'gator:demo-open-folder',
+      project_id: 'demo_1',
+      target: 'final',
+      path: 'C:\\Windows\\System32\\calc.exe',
+    },
+    'frame',
+  );
+  assert.deepStrictEqual(
+    opens[0],
+    { path: 'C:\\p\\final\\AI_Gator_Demo.mp4', reveal: true },
+    'final reveals the final video; widget path ignored',
+  );
+  assert.deepStrictEqual(sent[0].m, {
+    type: 'gator:demo-open-folder-result',
+    project_id: 'demo_1',
+    ok: true,
+    message: '',
+  });
 
-  routes['/api/demo-projects/demo_1/summary'] = () => ok(Object.assign({}, SUMMARY, { final: null }));
+  routes['/api/demo-projects/demo_1/summary'] = () =>
+    ok(Object.assign({}, SUMMARY, { final: null }));
   await run({ type: 'gator:demo-open-folder', project_id: 'demo_1', target: 'final' }, 'frame');
-  assert.deepStrictEqual(opens[1], { path: 'C:\\p\\final', reveal: false }, 'no final video: open the final folder');
+  assert.deepStrictEqual(
+    opens[1],
+    { path: 'C:\\p\\final', reveal: false },
+    'no final video: open the final folder',
+  );
 
   routes['/api/demo-projects/demo_1/summary'] = () => ok(SUMMARY);
   await run({ type: 'gator:demo-open-folder', project_id: 'demo_1', target: 'project' }, 'frame');
   assert.deepStrictEqual(opens[2], { path: 'C:\\p', reveal: false });
 
   const before = opens.length;
-  sent = await run({ type: 'gator:demo-open-folder', project_id: 'demo_1', target: 'C:\\Windows' }, 'frame');
+  sent = await run(
+    { type: 'gator:demo-open-folder', project_id: 'demo_1', target: 'C:\\Windows' },
+    'frame',
+  );
   assert.strictEqual(sent[0].m.ok, false);
   assert.strictEqual(fetchCalls.length, 0, 'unknown target makes no request');
   assert.strictEqual(opens.length, before);
 
   routes['/api/open-file'] = () => ok({ ok: false, message: 'That path no longer exists: C:\\p' });
-  sent = await run({ type: 'gator:demo-open-folder', project_id: 'demo_1', target: 'project' }, 'frame');
-  assert.deepStrictEqual(sent[0].m, { type: 'gator:demo-open-folder-result', project_id: 'demo_1', ok: false, message: 'That path no longer exists: C:\\p' });
+  sent = await run(
+    { type: 'gator:demo-open-folder', project_id: 'demo_1', target: 'project' },
+    'frame',
+  );
+  assert.deepStrictEqual(sent[0].m, {
+    type: 'gator:demo-open-folder-result',
+    project_id: 'demo_1',
+    ok: false,
+    message: 'That path no longer exists: C:\\p',
+  });
 
   console.log('demo_widget_bridge: PASS');
-})().catch((err) => { console.error(err); process.exit(1); });
+})().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
 ```
 
 - [ ] **Step 2: Run the test to verify it fails**
@@ -1863,7 +2170,10 @@ async function gatorDemoBridge(d, e) {
       body: JSON.stringify({ path: target, reveal }),
     });
     const od = await orsp.json();
-    reply({ ok: od.ok !== false, message: od.ok === false ? od.message || 'Could not open the folder.' : '' });
+    reply({
+      ok: od.ok !== false,
+      message: od.ok === false ? od.message || 'Could not open the folder.' : '',
+    });
   } catch (err) {
     reply({ ok: false, error: String(err), message: 'Could not open the folder: ' + err });
   }
@@ -1901,10 +2211,12 @@ git commit -m "feat: parent bridge actions for the demo widget summary, progress
 Replaces the Phase 5 widget. "⬇ Download" is removed (it was redundant with the in-widget video and the file now lives in the project's `final/` folder). The widget makes no backend call of its own and never holds or sends a filesystem path. It asks the parent for the project summary (`gator:demo-summary`) and shows `Final: final/AI_Gator_Demo.mp4 · Sources: 3 · Working files: 280 MB`; the final video plays through the project file route as a `<video>` `src` (a resource load). The two folder buttons each send one named action (`gator:demo-open-folder` with `target` `final` or `project`); the parent resolves the path from the project summary and calls `POST /api/open-file` (exempt from the CSRF dependency today via `tests/csrf_route_baseline.txt`; this plan does not change that).
 
 **Files:**
+
 - Modify: `web/skills/gator-demo-recorder/SKILL.md` (Phase 5)
 - Test: `tests/demo_ready_widget.test.js`
 
 **Interfaces:**
+
 - Consumes: Task 8a parent actions `gator:demo-summary` (reply `{type:'gator:demo-summary-result', project_id, ok, summary|error}`, `summary` = `{path, final_dir, final, final_rel, raw_rel, source_count, work_bytes}`) and `gator:demo-open-folder` (message `{type, project_id, target:'final'|'project'}`, reply `{type:'gator:demo-open-folder-result', project_id, ok, message}`); SP3 `GET /api/demo-projects/{id}/file?rel=` (video `src`); SP2's pinned `gator:send-message` form.
 - Produces (inside the widget): `formatBytes(n)`, `summaryLine(s)`, `setOpenStatus(msg)`, `requestOpen(target)`, `openFinal()`, `openProject()`, `handleOpenResult(m)`; placeholder `PROJECT_ID_PLACEHOLDER` (the agent replaces it with `PROJECT_DIR.name`).
 
@@ -1912,7 +2224,7 @@ Replaces the Phase 5 widget. "⬇ Download" is removed (it was redundant with th
 
 Create `tests/demo_ready_widget.test.js`:
 
-```js
+````js
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
@@ -1920,7 +2232,7 @@ const vm = require('vm');
 
 const skill = fs.readFileSync(
   path.join(__dirname, '..', 'web', 'skills', 'gator-demo-recorder', 'SKILL.md'),
-  'utf8'
+  'utf8',
 );
 const blocks = [...skill.matchAll(/```html:widget\n([\s\S]*?)\n```/g)].map((m) => m[1]);
 const widget = blocks.find((b) => b.includes('Demo Ready'));
@@ -1937,13 +2249,19 @@ assert.ok(!/download/i.test(widget), 'no Download button, function or style');
 assert.ok(!widget.includes('latest-output'), 'no latest-output');
 assert.ok(!/fetch\(/.test(widget), 'widget makes no direct backend calls');
 assert.ok(!widget.includes('/api/open-file'), 'widget never calls open-file itself');
-assert.ok(!/window\.top|window\.parent|__CSRF_TOKEN__/.test(widget), 'widget does not reach into the parent');
+assert.ok(
+  !/window\.top|window\.parent|__CSRF_TOKEN__/.test(widget),
+  'widget does not reach into the parent',
+);
 assert.ok(widget.includes("'gator:demo-summary'"), 'asks the parent for the summary');
 assert.ok(widget.includes("'gator:demo-open-folder'"), 'asks the parent to open folders');
 assert.ok(widget.includes('📁 Open final folder'), 'Open final folder button');
 assert.ok(widget.includes('Open project folder'), 'Open project folder button');
 assert.ok(widget.includes("var _PROJECT_ID = 'PROJECT_ID_PLACEHOLDER';"), 'project id placeholder');
-assert.ok(skill.includes('replacing only `PROJECT_ID_PLACEHOLDER`'), 'prose names the one placeholder');
+assert.ok(
+  skill.includes('replacing only `PROJECT_ID_PLACEHOLDER`'),
+  'prose names the one placeholder',
+);
 
 // Pinned sends: every gator:send-message carries pin_skill and project_id.
 {
@@ -1951,7 +2269,10 @@ assert.ok(skill.includes('replacing only `PROJECT_ID_PLACEHOLDER`'), 'prose name
   assert.ok(idxs.length >= 2, 'editNarration and cleanup both send');
   for (const i of idxs) {
     const tail = widget.slice(i, i + 260);
-    assert.ok(tail.includes("pin_skill:'gator-demo-recorder'"), 'pin_skill present: ' + tail.slice(0, 80));
+    assert.ok(
+      tail.includes("pin_skill:'gator-demo-recorder'"),
+      'pin_skill present: ' + tail.slice(0, 80),
+    );
     assert.ok(tail.includes('project_id:_PROJECT_ID'), 'project_id present: ' + tail.slice(0, 80));
   }
 }
@@ -1959,8 +2280,13 @@ assert.ok(skill.includes('replacing only `PROJECT_ID_PLACEHOLDER`'), 'prose name
 // Pure helpers
 const code = [
   "var _pid='demo_1';",
-  fn('formatBytes'), fn('summaryLine'), fn('setOpenStatus'),
-  fn('requestOpen'), fn('openFinal'), fn('openProject'), fn('handleOpenResult'),
+  fn('formatBytes'),
+  fn('summaryLine'),
+  fn('setOpenStatus'),
+  fn('requestOpen'),
+  fn('openFinal'),
+  fn('openProject'),
+  fn('handleOpenResult'),
   '({ formatBytes, summaryLine, openFinal, openProject, handleOpenResult, setPid: function(p){ _pid=p; } })',
 ].join('\n');
 
@@ -1980,29 +2306,45 @@ assert.strictEqual(api.formatBytes(280 * MB), '280 MB');
 assert.strictEqual(api.formatBytes(1.5 * 1024 * MB), '1.5 GB');
 assert.strictEqual(
   api.summaryLine({ final_rel: 'final/AI_Gator_Demo.mp4', source_count: 3, work_bytes: 280 * MB }),
-  'Final: final/AI_Gator_Demo.mp4 · Sources: 3 · Working files: 280 MB'
+  'Final: final/AI_Gator_Demo.mp4 · Sources: 3 · Working files: 280 MB',
 );
 assert.strictEqual(
   api.summaryLine({ final_rel: null, source_count: 0, work_bytes: 0 }),
-  'Final: none · Sources: 0 · Working files: 0 B'
+  'Final: none · Sources: 0 · Working files: 0 B',
 );
 
 // Each button posts one named action with fixed parameters and no path.
 api.openFinal();
-assert.deepStrictEqual(posted[0], { m: { type: 'gator:demo-open-folder', project_id: 'demo_1', target: 'final' }, origin: '*' });
+assert.deepStrictEqual(posted[0], {
+  m: { type: 'gator:demo-open-folder', project_id: 'demo_1', target: 'final' },
+  origin: '*',
+});
 api.openProject();
-assert.deepStrictEqual(posted[1], { m: { type: 'gator:demo-open-folder', project_id: 'demo_1', target: 'project' }, origin: '*' });
+assert.deepStrictEqual(posted[1], {
+  m: { type: 'gator:demo-open-folder', project_id: 'demo_1', target: 'project' },
+  origin: '*',
+});
 
 // The parent's reply drives the status line; replies for other projects are ignored.
 statusEl.textContent = '';
-api.handleOpenResult({ type: 'gator:demo-open-folder-result', project_id: 'demo_1', ok: false, message: 'That path no longer exists: C:\\p' });
+api.handleOpenResult({
+  type: 'gator:demo-open-folder-result',
+  project_id: 'demo_1',
+  ok: false,
+  message: 'That path no longer exists: C:\\p',
+});
 assert.strictEqual(statusEl.textContent, 'That path no longer exists: C:\\p');
 api.handleOpenResult({ type: 'gator:demo-open-folder-result', project_id: 'demo_1', ok: false });
 assert.strictEqual(statusEl.textContent, 'Could not open the folder.');
 api.handleOpenResult({ type: 'gator:demo-open-folder-result', project_id: 'demo_1', ok: true });
 assert.strictEqual(statusEl.textContent, '');
 statusEl.textContent = 'keep';
-api.handleOpenResult({ type: 'gator:demo-open-folder-result', project_id: 'demo_9', ok: false, message: 'other' });
+api.handleOpenResult({
+  type: 'gator:demo-open-folder-result',
+  project_id: 'demo_9',
+  ok: false,
+  message: 'other',
+});
 assert.strictEqual(statusEl.textContent, 'keep', 'reply for another project is ignored');
 
 // No project id: nothing is posted.
@@ -2013,7 +2355,7 @@ api.openProject();
 assert.strictEqual(posted.length, before, 'no request without a project id');
 
 console.log('demo_ready_widget: PASS');
-```
+````
 
 - [ ] **Step 2: Run the test to verify it fails**
 
@@ -2239,7 +2581,12 @@ Open `http://127.0.0.1:8003` in a browser. Use a Demo Recorder run that reaches 
 2. Simulate a failure. With the editor open, run in the browser DevTools console (top frame):
 
 ```js
-document.querySelector('.gator-widget-frame').contentWindow.postMessage({type:'gator:narration-approval-result',ok:true,approval:{approval_id:'a1'}},'*')
+document
+  .querySelector('.gator-widget-frame')
+  .contentWindow.postMessage(
+    { type: 'gator:narration-approval-result', ok: true, approval: { approval_id: 'a1' } },
+    '*',
+  );
 ```
 
 Then immediately write the record (replace the path with the project folder):
@@ -2248,10 +2595,7 @@ Then immediately write the record (replace the path with the project folder):
 python -c "import json,time,sys; open(sys.argv[1],'w').write(json.dumps({'approval_id':'a1','state':'failed','stage':'merge','step':2,'total':2,'message':'Generation failed','error':'ffmpeg exploded','updated_at':time.time()}))" "<project>/work/logs/merge_progress.json"
 ```
 
-Expected: within 2 seconds the status turns red with "Generation failed: ffmpeg exploded" and the Approve button is enabled.
-3. Post the same console message again without writing any file. Expected: "Waiting for generation to start…" for 2 minutes, then the red "Generation has not started yet…" message with Approve enabled.
-4. The raw recording preview in the editor plays (the parent supplies the project-relative path through `gator:demo-summary`; the video loads through `/api/demo-projects/<id>/file`).
-5. In DevTools → Network, filter on `demo-projects`; expected: the `/summary` and `/progress` requests come from the top page (the parent), none from the widget frame.
+Expected: within 2 seconds the status turns red with "Generation failed: ffmpeg exploded" and the Approve button is enabled. 3. Post the same console message again without writing any file. Expected: "Waiting for generation to start…" for 2 minutes, then the red "Generation has not started yet…" message with Approve enabled. 4. The raw recording preview in the editor plays (the parent supplies the project-relative path through `gator:demo-summary`; the video loads through `/api/demo-projects/<id>/file`). 5. In DevTools → Network, filter on `demo-projects`; expected: the `/summary` and `/progress` requests come from the top page (the parent), none from the widget frame.
 
 - [ ] **Step 8: Delivery widget (Tasks 5, 6, 9)**
 
@@ -2262,7 +2606,10 @@ Expected: within 2 seconds the status turns red with "Generation failed: ffmpeg 
 5. In the top-frame DevTools console, post the action from the top window itself (not a widget frame):
 
 ```js
-window.postMessage({type:'gator:demo-open-folder',project_id:'demo_1',target:'project'},'*')
+window.postMessage(
+  { type: 'gator:demo-open-folder', project_id: 'demo_1', target: 'project' },
+  '*',
+);
 ```
 
 Expected: nothing opens and no `/api/open-file` request appears in the Network tab, because the parent ignores messages whose source is not a widget frame.
@@ -2273,18 +2620,17 @@ Expected: nothing opens and no `/api/open-file` request appears in the Network t
 
 **Spec coverage**
 
-| Spec item | Task |
-|---|---|
-| Scroll and caret loss, fixed generically in the widget wrapper (issue #55 item 8, plan D1) | 1, 2 |
-| Per-segment "Pause after" driving `pause_after`, pacing tips, no `[pause:…]`, no probe (item 9, D2) | 3, 7 |
-| Merge progress and error display in the widget (D3) | 4, 6, 8a, 8 |
-| Delivery widget: Open final folder replaces Download, Open project folder, summary line | 5, 6, 8a, 9 |
-| Widgets make no backend calls; three named parent-handled actions, sandbox/CSP/CSRF untouched | 8a, 8, 9, 10 (Step 2) |
-| Intro option UI placeholder only | Out-of-scope section |
-| Project-scoped widgets (`PROJECT_ID_PLACEHOLDER` / `_PROJECT_ID`, no `latest-output`) | 8, 9 |
-| Pinned `gator:send-message` form from SP2 | 9 |
+| Spec item                                                                                           | Task                  |
+| --------------------------------------------------------------------------------------------------- | --------------------- |
+| Scroll and caret loss, fixed generically in the widget wrapper (issue #55 item 8, plan D1)          | 1, 2                  |
+| Per-segment "Pause after" driving `pause_after`, pacing tips, no `[pause:…]`, no probe (item 9, D2) | 3, 7                  |
+| Merge progress and error display in the widget (D3)                                                 | 4, 6, 8a, 8           |
+| Delivery widget: Open final folder replaces Download, Open project folder, summary line             | 5, 6, 8a, 9           |
+| Widgets make no backend calls; three named parent-handled actions, sandbox/CSP/CSRF untouched       | 8a, 8, 9, 10 (Step 2) |
+| Intro option UI placeholder only                                                                    | Out-of-scope section  |
+| Project-scoped widgets (`PROJECT_ID_PLACEHOLDER` / `_PROJECT_ID`, no `latest-output`)               | 8, 9                  |
+| Pinned `gator:send-message` form from SP2                                                           | 9                     |
 
 **Placeholder scan:** no TBD/TODO steps; every code step shows the code; the only deferred item is the SP5 intro control, which is explicitly outside this plan. `PROJECT_ID_PLACEHOLDER` is a runtime template token that SP2 already defines, not a plan placeholder.
 
 **Type consistency:** `gatorWidgetScrollSnapshot` / `gatorWidgetScrollRestore` (Task 1) are used unchanged in Task 2's source text; `_pause_after` and `PAUSE_MAX` (Task 3) are reused as-is in Task 4's `main()`; `write_progress` keys `approval_id, state, stage, step, total, message, error, updated_at` (Task 4) match `read_progress` pass-through (Task 6) and `progressView` field reads (Task 8); `final_rel`, `source_count`, `work_bytes` (Task 6) match `summaryLine` / `applySummary` (Task 9) and `raw_rel` (Task 6) matches the editor's video preview (Task 8); `final`, `final_dir`, `path` (Task 6) are read only by `gatorDemoBridge` (Task 8a); `reveal` (Task 5) matches the `/api/open-file` body built in `gatorDemoBridge` (Task 8a); the message types `gator:demo-summary`, `gator:demo-progress`, `gator:demo-open-folder` and their `-result` replies (Task 8a) match the widget posts and listeners in Tasks 8 and 9 (`summary`, `progress`, `ok`, `message`, `error`, `project_id`); `segOut` / `pauseValue` / `pa<i>` (Task 7) are the only names Task 8 and the approve payload rely on.
-

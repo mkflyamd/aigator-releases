@@ -27,21 +27,21 @@
 
 ## File Structure
 
-| File | Create/Modify | Responsibility |
-|---|---|---|
-| `web/demo_media_probe.py` | Create | Allow-lists, `MediaRejected`, `probe_media` |
-| `web/demo_clips.py` | Create | Registry in `ext["clips"]`: add/remove/reorder/trim, limits, `fingerprint`, `frame_times`, `ClipError` |
-| `web/demo_compose.py` | Create | ffmpeg argv builders, `build`, scheduler, `ensure_current` |
-| `web/routes/demo_clips.py` | Create | `/api/demo-media` routes |
-| `web/app.py` | Modify | import + include the router |
-| `web/static/demo-media.js` | Create | `DemoMedia` global: helpers, XHR upload, clip panel |
-| `web/static/index.html` | Modify | panel container, script tag, file-input `accept` |
-| `web/static/style.css` | Modify | `.demo-media-panel` styles |
-| `web/static/app.js` | Modify | `processFiles` media branch, `_attachDemoMedia`, submit gate |
-| `web/skills/gator-demo-recorder/scripts/tts_pipeline.py` | Modify | `build_merge_argv`, `--soundtrack` |
-| `web/skills/gator-demo-recorder/SKILL.md` | Modify | Import Mode section, Phase 4 soundtrack |
-| `tests/demo_media/{__init__,conftest,test_probe,test_clips,test_compose,test_routes,test_compose_integration,test_skill_clip_rules}.py` | Create | Python tests |
-| `tests/demo_media_ui.test.js` | Create | JS helper tests |
+| File                                                                                                                                    | Create/Modify | Responsibility                                                                                         |
+| --------------------------------------------------------------------------------------------------------------------------------------- | ------------- | ------------------------------------------------------------------------------------------------------ |
+| `web/demo_media_probe.py`                                                                                                               | Create        | Allow-lists, `MediaRejected`, `probe_media`                                                            |
+| `web/demo_clips.py`                                                                                                                     | Create        | Registry in `ext["clips"]`: add/remove/reorder/trim, limits, `fingerprint`, `frame_times`, `ClipError` |
+| `web/demo_compose.py`                                                                                                                   | Create        | ffmpeg argv builders, `build`, scheduler, `ensure_current`                                             |
+| `web/routes/demo_clips.py`                                                                                                              | Create        | `/api/demo-media` routes                                                                               |
+| `web/app.py`                                                                                                                            | Modify        | import + include the router                                                                            |
+| `web/static/demo-media.js`                                                                                                              | Create        | `DemoMedia` global: helpers, XHR upload, clip panel                                                    |
+| `web/static/index.html`                                                                                                                 | Modify        | panel container, script tag, file-input `accept`                                                       |
+| `web/static/style.css`                                                                                                                  | Modify        | `.demo-media-panel` styles                                                                             |
+| `web/static/app.js`                                                                                                                     | Modify        | `processFiles` media branch, `_attachDemoMedia`, submit gate                                           |
+| `web/skills/gator-demo-recorder/scripts/tts_pipeline.py`                                                                                | Modify        | `build_merge_argv`, `--soundtrack`                                                                     |
+| `web/skills/gator-demo-recorder/SKILL.md`                                                                                               | Modify        | Import Mode section, Phase 4 soundtrack                                                                |
+| `tests/demo_media/{__init__,conftest,test_probe,test_clips,test_compose,test_routes,test_compose_integration,test_skill_clip_rules}.py` | Create        | Python tests                                                                                           |
+| `tests/demo_media_ui.test.js`                                                                                                           | Create        | JS helper tests                                                                                        |
 
 Run Python tests with `python -m pytest tests/demo_media -v` from the repo root; JS with `node tests/demo_media_ui.test.js`.
 
@@ -50,12 +50,14 @@ Run Python tests with `python -m pytest tests/demo_media -v` from the repo root;
 ### Task 1: Media probe and validation
 
 **Files:**
+
 - Create: `web/demo_media_probe.py`
 - Create: `tests/demo_media/__init__.py` (empty)
 - Create: `tests/demo_media/conftest.py`
 - Test: `tests/demo_media/test_probe.py`
 
 **Interfaces:**
+
 - Produces (in `demo_media_probe`): the constants above; `class MediaRejected(Exception)` with `.code: str` and `.message: str`; `extension_kind(name: str) -> str | None` (`"video"`, `"audio"` or `None`); `ffprobe_path() -> str | None`; `_run_ffprobe(path: Path) -> dict` (raw ffprobe JSON, raises `MediaRejected`); `probe_media(path, name: str | None = None) -> dict` returning `{"kind", "duration", "width", "height", "has_audio", "video_codec", "audio_codec"}`.
 - Produces (conftest fixtures): `store` (SP3 module with redirected paths), `fake_ffprobe(**kw)` installer (`kind="video"|"audio"`, `duration=10.0`, `width=1920`, `height=1080`, `vcodec="h264"`, `acodec="aac"`, `has_audio=True`, `attached_pic=False`).
 - Consumes: `proc_utils.no_window_kwargs`, `routes.recorder._find_ffprobe` (lazy import).
@@ -352,10 +354,12 @@ git commit -m "feat: validate attached video/audio with an ffprobe allow-list"
 ### Task 2: Clip registry
 
 **Files:**
+
 - Create: `web/demo_clips.py`
 - Test: `tests/demo_media/test_clips.py`
 
 **Interfaces:**
+
 - Consumes: `demo_projects` (`get_project`, `project_path`, `set_ext`), `demo_media_probe.MAX_VIDEO_CLIPS`, `MAX_AUDIO_ASSETS`.
 - Produces (in `demo_clips`): `NAMESPACE = "clips"`, `SPEC_VERSION = 1`, `MAX_FRAMES = 8`, `MIN_FRAME_GAP = 5.0`, `MIN_CLIP_SECONDS = 0.5`, `LOCKED_STAGES = ("narration_approved", "delivered")`; `class ClipError(Exception)` with `.code`, `.message`; `safe_name(name: str) -> str`; `load(pid) -> dict`; `add_item(pid, tmp_path: Path, original_name: str, probe: dict) -> dict`; `remove_item(pid, item_id: str) -> None`; `reorder(pid, ids: list[str]) -> None`; `set_trim(pid, clip_id: str, start: float, end: float | None) -> None`; `effective_duration(clip: dict) -> float`; `fingerprint(pid, reg: dict) -> str`; `frame_times(durations: list[float]) -> list[float]`; `set_timeline(pid, **fields) -> dict`; `abs_path(pid, rel: str) -> Path`.
 
@@ -715,10 +719,12 @@ git commit -m "feat: add clip registry for multi-clip demo projects"
 ### Task 3: Compose argv builders
 
 **Files:**
+
 - Create: `web/demo_compose.py` (pure builders only in this task)
 - Test: `tests/demo_media/test_compose.py`
 
 **Interfaces:**
+
 - Consumes: nothing from earlier tasks.
 - Produces (in `demo_compose`): `TARGET_FPS = 30`, `MAX_OUT_W = 1920`, `MAX_OUT_H = 1080`, `AUDIO_RATE = 48000`; `canvas_size(clips: list[dict]) -> tuple[int, int]` (uses the first clip's `width`/`height`); `video_filter(w: int, h: int) -> str`; `normalize_argv(ffmpeg, src: Path, dst: Path, start: float, length: float, w: int, h: int) -> list[str]`; `normalized_name(clip: dict, src: Path, w: int, h: int) -> str`; `concat_list_text(files: list[Path]) -> str`; `concat_argv(ffmpeg, list_file: Path, dst: Path) -> list[str]`; `soundtrack_argv(ffmpeg, srcs: list[Path], dst: Path) -> list[str]`. Every argv ends with `dst`.
 
@@ -874,10 +880,12 @@ git commit -m "feat: add ffmpeg argv builders for multi-clip timelines"
 ### Task 4: Timeline build and scheduler
 
 **Files:**
+
 - Modify: `web/demo_compose.py` (imports, then append the build and scheduler code)
 - Test: `tests/demo_media/test_build.py`
 
 **Interfaces:**
+
 - Consumes (Task 2, `demo_clips`): `load`, `abs_path`, `fingerprint`, `effective_duration`, `frame_times`, `set_timeline`, `_LOCK`. Consumes (Task 3): `canvas_size`, `normalize_argv`, `normalized_name`, `concat_list_text`, `concat_argv`, `soundtrack_argv`. Consumes (SP3, `demo_projects`): `project_path`, `get_project`, `update_project`.
 - Produces (in `demo_compose`): `ComposeError(Exception)`; `TIMELINE_REL = "work/timeline.mp4"`; `SOUNDTRACK_REL = "work/soundtrack.m4a"`; `_ffmpeg() -> str | None`; `_run(argv: list[str]) -> None` (raises `ComposeError` with the last 400 characters of stderr); `build(pid: str) -> str` returning one of `"idle"`, `"ready"`, `"failed"`, `"superseded"`; `schedule(pid: str) -> None`; `ensure_current(pid: str) -> None`.
 - `schedule` never blocks: one background worker runs `build` and repeats while another `schedule` call arrived during a build or the build reported `"superseded"`.
@@ -1271,11 +1279,13 @@ git commit -m "feat: build and schedule the combined timeline for multi-clip dem
 ### Task 5: HTTP routes
 
 **Files:**
+
 - Create: `web/routes/demo_clips.py`
 - Modify: `web/app.py` (import after line 92, include after line 881; line numbers are those on `main` today and shift, so locate `routes.recorder` instead)
 - Test: `tests/demo_media/test_routes.py`
 
 **Interfaces:**
+
 - Consumes: `demo_clips` (`ClipError`, `LOCKED_STAGES`, `add_item`, `remove_item`, `reorder`, `set_trim`, `load`, `abs_path`), `demo_compose` (`schedule`, `ensure_current`), `demo_media_probe` (`MediaRejected`, `extension_kind`, `probe_media`, `MAX_FILE_BYTES`), `demo_projects` (`get_project`, `get_active_id`, `create_project`), `security.verify_csrf`.
 - Produces (HTTP, prefix `/api/demo-media`): in every success body `clips` is the registry `{version, next_id, clips: [...], audio: [...], timeline: {...}}`. Errors are `{"ok": false, "code", "message"}`.
   - `POST /upload?filename=<name>[&project_id=<id>]` (raw body) returns `{ok, project_id, item, path, clips}` where `path` is the absolute saved file path.
@@ -1630,10 +1640,12 @@ git commit -m "feat: add /api/demo-media routes for clip upload, order, trim and
 ### Task 6: Soundtrack mix in `tts_pipeline.py`
 
 **Files:**
+
 - Modify: `web/skills/gator-demo-recorder/scripts/tts_pipeline.py` (`merge_audio_video`, `main`; add `build_merge_argv` directly above `merge_audio_video`)
 - Test: `tests/demo_media/test_tts_merge.py`
 
 **Interfaces:**
+
 - Produces: `build_merge_argv(ffmpeg, video_path, audio_path, out_path, soundtrack=None) -> list[str]`; `merge_audio_video(video_path, audio_path, out_path, soundtrack=None)`; CLI flag `--soundtrack <path>` (default none).
 - Without a soundtrack the output is today's command plus explicit `-map 0:v:0 -map 1:a:0`, so narration replaces any audio the video carries. With a soundtrack the music bed is mixed under the narration at volume 0.25.
 
@@ -1777,10 +1789,12 @@ git commit -m "feat: mix an optional soundtrack under demo narration"
 ### Task 7: Skill "Import Mode" and Phase 4 soundtrack
 
 **Files:**
+
 - Modify: `web/skills/gator-demo-recorder/SKILL.md` (pipeline intro, new `## Import Mode` section directly above `## Phase 2: Analyze`, Phase 4 command)
 - Test: `tests/demo_media/test_skill_clip_rules.py`
 
 **Interfaces:**
+
 - Consumes: `project.json` `ext["clips"]` from Tasks 2 and 4 (`timeline.state`, `timeline.file`, `timeline.duration`, `timeline.frame_times`, `timeline.clips`, `timeline.error`); `tts_pipeline.py --soundtrack` from Task 6; SP3's `PROJECT_DIR` convention (the project folder).
 - Produces: agent instructions only. The agent reads files and runs ffmpeg/`tts_pipeline.py`; it never calls a mutating `/api/demo-media` route.
 
@@ -1944,10 +1958,12 @@ git commit -m "feat: add Import Mode and soundtrack mixing to the Demo Recorder 
 ### Task 8: `DemoMedia` front-end module
 
 **Files:**
+
 - Create: `web/static/demo-media.js`
 - Test: `tests/demo_media_ui.test.js`
 
 **Interfaces:**
+
 - Consumes (HTTP, from Task 5, base `/api/demo-media`): `POST /upload?filename=&project_id=` (raw body) returns `{ok, project_id, item, path, clips}`; `GET /{pid}` returns `{ok, project_id, name, stage, clips}`; `PUT /{pid}/order` body `{ids}`, `PATCH /{pid}/clips/{cid}` body `{trim_start, trim_end}`, `DELETE /{pid}/items/{iid}` each return `{ok, clips}`. Errors are `{ok: false, code, message}`. In every body `clips` is the registry `{version, next_id, clips: [{id, name, file, duration, width, height, trim_start, trim_end}], audio: [{id, name, file, duration}], timeline: {state, duration, error, ...}}`; `timeline.state` is `idle`, `building`, `ready` or `failed`.
 - Produces (global `const DemoMedia`, loaded as a plain script before `app.js`):
   - `classify(name) -> 'video' | 'audio' | null`
@@ -1995,10 +2011,29 @@ assert.strictEqual(DemoMedia.formatDuration(599.6), '10:00');
 assert.strictEqual(DemoMedia.formatDuration(3725), '62:05');
 
 // parseTrim
-assert.deepStrictEqual(plain(DemoMedia.parseTrim('', '', 10)), { ok: true, trim_start: 0, trim_end: null });
-assert.deepStrictEqual(plain(DemoMedia.parseTrim('1', '6.5', 10)), { ok: true, trim_start: 1, trim_end: 6.5 });
-assert.deepStrictEqual(plain(DemoMedia.parseTrim('2', '', 10)), { ok: true, trim_start: 2, trim_end: null });
-for (const [s, e] of [['x', ''], ['-1', ''], ['0', 'abc'], ['0', '11'], ['2', '2.2'], ['9.8', '']]) {
+assert.deepStrictEqual(plain(DemoMedia.parseTrim('', '', 10)), {
+  ok: true,
+  trim_start: 0,
+  trim_end: null,
+});
+assert.deepStrictEqual(plain(DemoMedia.parseTrim('1', '6.5', 10)), {
+  ok: true,
+  trim_start: 1,
+  trim_end: 6.5,
+});
+assert.deepStrictEqual(plain(DemoMedia.parseTrim('2', '', 10)), {
+  ok: true,
+  trim_start: 2,
+  trim_end: null,
+});
+for (const [s, e] of [
+  ['x', ''],
+  ['-1', ''],
+  ['0', 'abc'],
+  ['0', '11'],
+  ['2', '2.2'],
+  ['9.8', ''],
+]) {
   const r = DemoMedia.parseTrim(s, e, 10);
   assert.strictEqual(r.ok, false, `parseTrim(${s}, ${e}) should be rejected`);
   assert.ok(typeof r.error === 'string' && r.error.length > 0);
@@ -2104,7 +2139,8 @@ const DemoMedia = (() => {
       xhr.setRequestHeader('Content-Type', 'application/octet-stream');
       xhr.setRequestHeader('X-CSRF-Token', window.__CSRF_TOKEN__ || '');
       xhr.upload.onprogress = (ev) => {
-        if (ev.lengthComputable && o.onProgress) o.onProgress(Math.round((ev.loaded * 100) / ev.total));
+        if (ev.lengthComputable && o.onProgress)
+          o.onProgress(Math.round((ev.loaded * 100) / ev.total));
       };
       xhr.onerror = () => reject(new Error('Upload failed: connection error'));
       xhr.onload = () => {
@@ -2144,171 +2180,183 @@ const DemoMedia = (() => {
 In `web/static/demo-media.js`, replace the line `  // PANEL-CONTINUES` with:
 
 ```javascript
-  async function call(method, path, body) {
-    const init = { method, headers: {} };
-    if (body !== undefined) {
-      init.headers['Content-Type'] = 'application/json';
-      init.body = JSON.stringify(body);
-    }
-    const res = await fetch(BASE + '/' + path, init);
-    let data = null;
+async function call(method, path, body) {
+  const init = { method, headers: {} };
+  if (body !== undefined) {
+    init.headers['Content-Type'] = 'application/json';
+    init.body = JSON.stringify(body);
+  }
+  const res = await fetch(BASE + '/' + path, init);
+  let data = null;
+  try {
+    data = await res.json();
+  } catch (_) {
+    data = null;
+  }
+  if (!res.ok || !data || !data.ok) throw new Error(errorMessage(data, res.status));
+  return data;
+}
+
+function el(tag, cls, text) {
+  const node = document.createElement(tag);
+  if (cls) node.className = cls;
+  if (text != null) node.textContent = text;
+  return node;
+}
+
+function iconButton(label, title, disabled, onClick) {
+  const b = el('button', 'demo-media-btn', label);
+  b.type = 'button';
+  b.title = title;
+  b.setAttribute('aria-label', title);
+  b.disabled = !!disabled;
+  b.addEventListener('click', onClick);
+  return b;
+}
+
+function summary(reg) {
+  if (!reg.clips.length)
+    return reg.audio.length ? 'Add a video clip to build the timeline' : 'No clips yet';
+  const tl = reg.timeline || {};
+  if (tl.state === 'ready') return 'Ready - ' + formatDuration(tl.duration) + ' total';
+  if (tl.state === 'failed') return 'Build failed: ' + (tl.error || 'unknown error');
+  return 'Building timeline...';
+}
+
+function needsPoll() {
+  if (!registry || !registry.clips.length) return false;
+  const state = (registry.timeline || {}).state;
+  return state !== 'ready' && state !== 'failed';
+}
+
+function schedulePoll() {
+  clearTimeout(pollTimer);
+  pollTimer = null;
+  if (!needsPoll() || !currentProjectId) return;
+  const pid = currentProjectId;
+  pollTimer = setTimeout(async () => {
     try {
-      data = await res.json();
-    } catch (_) {
-      data = null;
-    }
-    if (!res.ok || !data || !data.ok) throw new Error(errorMessage(data, res.status));
-    return data;
-  }
-
-  function el(tag, cls, text) {
-    const node = document.createElement(tag);
-    if (cls) node.className = cls;
-    if (text != null) node.textContent = text;
-    return node;
-  }
-
-  function iconButton(label, title, disabled, onClick) {
-    const b = el('button', 'demo-media-btn', label);
-    b.type = 'button';
-    b.title = title;
-    b.setAttribute('aria-label', title);
-    b.disabled = !!disabled;
-    b.addEventListener('click', onClick);
-    return b;
-  }
-
-  function summary(reg) {
-    if (!reg.clips.length) return reg.audio.length ? 'Add a video clip to build the timeline' : 'No clips yet';
-    const tl = reg.timeline || {};
-    if (tl.state === 'ready') return 'Ready - ' + formatDuration(tl.duration) + ' total';
-    if (tl.state === 'failed') return 'Build failed: ' + (tl.error || 'unknown error');
-    return 'Building timeline...';
-  }
-
-  function needsPoll() {
-    if (!registry || !registry.clips.length) return false;
-    const state = (registry.timeline || {}).state;
-    return state !== 'ready' && state !== 'failed';
-  }
-
-  function schedulePoll() {
-    clearTimeout(pollTimer);
-    pollTimer = null;
-    if (!needsPoll() || !currentProjectId) return;
-    const pid = currentProjectId;
-    pollTimer = setTimeout(async () => {
-      try {
-        const data = await call('GET', encodeURIComponent(pid));
-        if (pid === currentProjectId) {
-          const changed = JSON.stringify(data.clips) !== JSON.stringify(registry);
-          registry = data.clips;
-          if (changed) render();
-        }
-      } catch (e) {
-        statusText = e.message;
-        render();
-        return;
+      const data = await call('GET', encodeURIComponent(pid));
+      if (pid === currentProjectId) {
+        const changed = JSON.stringify(data.clips) !== JSON.stringify(registry);
+        registry = data.clips;
+        if (changed) render();
       }
-      schedulePoll();
-    }, POLL_MS);
-  }
-
-  async function mutate(method, path, body) {
-    try {
-      const data = await call(method, encodeURIComponent(currentProjectId) + '/' + path, body);
-      registry = data.clips;
-      statusText = '';
     } catch (e) {
       statusText = e.message;
+      render();
+      return;
     }
-    render();
     schedulePoll();
-  }
+  }, POLL_MS);
+}
 
-  function clipRow(clip, ids) {
-    const row = el('div', 'demo-media-row');
-    row.appendChild(el('span', 'demo-media-name', clip.name));
-    row.appendChild(el('span', 'demo-media-dur', formatDuration(clip.duration)));
-    const i = ids.indexOf(clip.id);
-    row.appendChild(iconButton('↑', 'Move ' + clip.name + ' earlier', i === 0, () =>
-      mutate('PUT', 'order', { ids: moveId(ids, clip.id, -1) })));
-    row.appendChild(iconButton('↓', 'Move ' + clip.name + ' later', i === ids.length - 1, () =>
-      mutate('PUT', 'order', { ids: moveId(ids, clip.id, 1) })));
-    const start = el('input', 'demo-media-trim');
-    start.type = 'text';
-    start.value = String(clip.trim_start || 0);
-    start.setAttribute('aria-label', 'Trim start seconds for ' + clip.name);
-    const end = el('input', 'demo-media-trim');
-    end.type = 'text';
-    end.value = clip.trim_end == null ? '' : String(clip.trim_end);
-    end.placeholder = 'end';
-    end.setAttribute('aria-label', 'Trim end seconds for ' + clip.name);
-    const applyTrim = () => {
-      const t = parseTrim(start.value, end.value, clip.duration);
-      if (!t.ok) {
-        statusText = t.error;
-        render();
-        return;
-      }
-      mutate('PATCH', 'clips/' + encodeURIComponent(clip.id), {
-        trim_start: t.trim_start,
-        trim_end: t.trim_end,
-      });
-    };
-    start.addEventListener('change', applyTrim);
-    end.addEventListener('change', applyTrim);
-    row.appendChild(start);
-    row.appendChild(end);
-    row.appendChild(removeButton(clip));
-    return row;
-  }
-
-  function removeButton(item) {
-    return iconButton('✕', 'Remove ' + item.name, false, () =>
-      mutate('DELETE', 'items/' + encodeURIComponent(item.id)));
-  }
-
-  function audioRow(asset) {
-    const row = el('div', 'demo-media-row demo-media-audio');
-    row.appendChild(el('span', 'demo-media-name', '🎵 ' + asset.name));
-    row.appendChild(el('span', 'demo-media-dur', formatDuration(asset.duration)));
-    row.appendChild(removeButton(asset));
-    return row;
-  }
-
-  function render() {
-    if (!panelEl) return;
-    panelEl.textContent = '';
-    const has = registry && (registry.clips.length || registry.audio.length);
-    panelEl.classList.toggle('hidden', !has);
-    if (!has) return;
-    const state = (registry.timeline || {}).state;
-    const label = el('div', 'demo-media-state demo-media-' + (registry.clips.length ? state : 'idle'), summary(registry));
-    label.setAttribute('role', 'status');
-    panelEl.appendChild(label);
-    const ids = registry.clips.map((c) => c.id);
-    registry.clips.forEach((clip) => panelEl.appendChild(clipRow(clip, ids)));
-    registry.audio.forEach((asset) => panelEl.appendChild(audioRow(asset)));
-    if (statusText) {
-      const err = el('div', 'demo-media-error', statusText);
-      err.setAttribute('role', 'alert');
-      panelEl.appendChild(err);
-    }
-  }
-
-  function setProject(projectId, reg) {
-    currentProjectId = projectId;
-    registry = reg;
+async function mutate(method, path, body) {
+  try {
+    const data = await call(method, encodeURIComponent(currentProjectId) + '/' + path, body);
+    registry = data.clips;
     statusText = '';
-    render();
-    schedulePoll();
+  } catch (e) {
+    statusText = e.message;
   }
+  render();
+  schedulePoll();
+}
 
-  function mountPanel(container) {
-    panelEl = container;
-    render();
+function clipRow(clip, ids) {
+  const row = el('div', 'demo-media-row');
+  row.appendChild(el('span', 'demo-media-name', clip.name));
+  row.appendChild(el('span', 'demo-media-dur', formatDuration(clip.duration)));
+  const i = ids.indexOf(clip.id);
+  row.appendChild(
+    iconButton('↑', 'Move ' + clip.name + ' earlier', i === 0, () =>
+      mutate('PUT', 'order', { ids: moveId(ids, clip.id, -1) }),
+    ),
+  );
+  row.appendChild(
+    iconButton('↓', 'Move ' + clip.name + ' later', i === ids.length - 1, () =>
+      mutate('PUT', 'order', { ids: moveId(ids, clip.id, 1) }),
+    ),
+  );
+  const start = el('input', 'demo-media-trim');
+  start.type = 'text';
+  start.value = String(clip.trim_start || 0);
+  start.setAttribute('aria-label', 'Trim start seconds for ' + clip.name);
+  const end = el('input', 'demo-media-trim');
+  end.type = 'text';
+  end.value = clip.trim_end == null ? '' : String(clip.trim_end);
+  end.placeholder = 'end';
+  end.setAttribute('aria-label', 'Trim end seconds for ' + clip.name);
+  const applyTrim = () => {
+    const t = parseTrim(start.value, end.value, clip.duration);
+    if (!t.ok) {
+      statusText = t.error;
+      render();
+      return;
+    }
+    mutate('PATCH', 'clips/' + encodeURIComponent(clip.id), {
+      trim_start: t.trim_start,
+      trim_end: t.trim_end,
+    });
+  };
+  start.addEventListener('change', applyTrim);
+  end.addEventListener('change', applyTrim);
+  row.appendChild(start);
+  row.appendChild(end);
+  row.appendChild(removeButton(clip));
+  return row;
+}
+
+function removeButton(item) {
+  return iconButton('✕', 'Remove ' + item.name, false, () =>
+    mutate('DELETE', 'items/' + encodeURIComponent(item.id)),
+  );
+}
+
+function audioRow(asset) {
+  const row = el('div', 'demo-media-row demo-media-audio');
+  row.appendChild(el('span', 'demo-media-name', '🎵 ' + asset.name));
+  row.appendChild(el('span', 'demo-media-dur', formatDuration(asset.duration)));
+  row.appendChild(removeButton(asset));
+  return row;
+}
+
+function render() {
+  if (!panelEl) return;
+  panelEl.textContent = '';
+  const has = registry && (registry.clips.length || registry.audio.length);
+  panelEl.classList.toggle('hidden', !has);
+  if (!has) return;
+  const state = (registry.timeline || {}).state;
+  const label = el(
+    'div',
+    'demo-media-state demo-media-' + (registry.clips.length ? state : 'idle'),
+    summary(registry),
+  );
+  label.setAttribute('role', 'status');
+  panelEl.appendChild(label);
+  const ids = registry.clips.map((c) => c.id);
+  registry.clips.forEach((clip) => panelEl.appendChild(clipRow(clip, ids)));
+  registry.audio.forEach((asset) => panelEl.appendChild(audioRow(asset)));
+  if (statusText) {
+    const err = el('div', 'demo-media-error', statusText);
+    err.setAttribute('role', 'alert');
+    panelEl.appendChild(err);
   }
+}
+
+function setProject(projectId, reg) {
+  currentProjectId = projectId;
+  registry = reg;
+  statusText = '';
+  render();
+  schedulePoll();
+}
+
+function mountPanel(container) {
+  panelEl = container;
+  render();
+}
 ```
 
 - [ ] **Step 5: Run test to verify it passes**
@@ -2326,12 +2374,14 @@ git commit -m "feat: add DemoMedia front-end helpers, upload and clip panel"
 ### Task 9: Chat wiring (attach, panel, submit gate, tab pin)
 
 **Files:**
+
 - Modify: `web/static/index.html` (panel container near line 1633, file-input `accept` near line 1639, script tags near line 2002)
 - Modify: `web/static/style.css` (append at end of file)
 - Modify: `web/static/app.js` (`initAigatorUpload` / `processFiles` near line 12241, new `_attachDemoMedia` after `_showUploadError`, submit handler near line 12514)
 - Test: `tests/demo_media_ui.test.js` (wiring assertions)
 
 **Interfaces:**
+
 - Consumes: Task 8's `DemoMedia.classify`, `validateLocal`, `upload`, `setProject`, `mountPanel`. From `app.js`: `_showUploadError(el, msg)`, `_wireChipRemove(removeBtn, chip, input)`, `_moveCaretToEnd(input)`, the `input` element constant used by the submit handler. From SP2 (guarded, because the pin helpers only exist once SP2 has landed): `_setTabPin(tabId, {skill, projectId})`, `_DEMO_RECORDER_SKILL`, `_activeTabId`.
 - Produces: a media chip `<span class="pin-ref-chip file-ref-chip" data-media-uploading="1">` that gets `data-file-path` (absolute path from the upload response) when the upload succeeds. `_getInputText()` already turns chips with `data-file-path` into `[File: <path>]`, which is the trigger Import Mode (Task 7) looks for.
 
@@ -2352,7 +2402,10 @@ assert.ok(appJs.includes('Wait for the upload to finish'), 'submit gate message'
 assert.ok(appJs.includes('DemoMedia.mountPanel('), 'panel is mounted');
 assert.ok(indexHtml.includes('id="demo-media-panel"'), 'panel container');
 assert.ok(indexHtml.includes('/static/demo-media.js'), 'script tag');
-assert.ok(indexHtml.includes('.mp4,.mov,.m4v,.webm,.mp3,.m4a,.wav,.aac,.ogg,.flac'), 'file input accepts media');
+assert.ok(
+  indexHtml.includes('.mp4,.mov,.m4v,.webm,.mp3,.m4a,.wav,.aac,.ogg,.flac'),
+  'file input accepts media',
+);
 assert.ok(styleCss.includes('.demo-media-panel'), 'panel styles');
 assert.ok(
   indexHtml.indexOf('/static/demo-media.js') < indexHtml.indexOf('/static/app.js'),
@@ -2370,24 +2423,20 @@ Expected: FAIL with `processFiles routes media files`.
 (a) After the line `<span class="aigator-drop-error hidden" id="aigator-drop-error" role="alert"></span>` and before `<div class="chat-input-row" id="chat-input-row">`, add:
 
 ```html
-          <div
-            id="demo-media-panel"
-            class="demo-media-panel hidden"
-            aria-label="Demo clips"
-          ></div>
+<div id="demo-media-panel" class="demo-media-panel hidden" aria-label="Demo clips"></div>
 ```
 
 (b) In the `aigator-file-input` element, extend `accept` to end with the media extensions:
 
 ```html
-              accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,.docx,.xlsx,.pptx,.doc,.xls,.ppt,.csv,.mp4,.mov,.m4v,.webm,.mp3,.m4a,.wav,.aac,.ogg,.flac"
+accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,.docx,.xlsx,.pptx,.doc,.xls,.ppt,.csv,.mp4,.mov,.m4v,.webm,.mp3,.m4a,.wav,.aac,.ogg,.flac"
 ```
 
 (c) In the script block that writes `app.js`, add the `demo-media.js` line immediately before the `app.js` line:
 
 ```javascript
-      document.write('<scr' + 'ipt src="/static/demo-media.js' + _cb + '"><\/scr' + 'ipt>');
-      document.write('<scr' + 'ipt src="/static/app.js' + _cb + '"><\/scr' + 'ipt>');
+document.write('<scr' + 'ipt src="/static/demo-media.js' + _cb + '"><\/scr' + 'ipt>');
+document.write('<scr' + 'ipt src="/static/app.js' + _cb + '"><\/scr' + 'ipt>');
 ```
 
 - [ ] **Step 4: Append styles**
@@ -2472,8 +2521,8 @@ EOF
 (a) In `initAigatorUpload`, directly after `if (!attachBtn || !fileIn) return;`, add:
 
 ```javascript
-  const mediaPanel = document.getElementById('demo-media-panel');
-  if (mediaPanel && typeof DemoMedia !== 'undefined') DemoMedia.mountPanel(mediaPanel);
+const mediaPanel = document.getElementById('demo-media-panel');
+if (mediaPanel && typeof DemoMedia !== 'undefined') DemoMedia.mountPanel(mediaPanel);
 ```
 
 (b) In `processFiles`, directly after `const ext = file.name.split('.').pop().toLowerCase();` and before the `// Document files` comment, add (`DemoMedia` is a top-level `const` in a classic script, so test it with `typeof`):
@@ -2546,10 +2595,10 @@ function _attachDemoMedia(file, errEl) {
 (d) In the `form.addEventListener('submit', ...)` handler, directly after the `if (_slashDropdown || _mentionDropdown || _pinDropdown || _channelDropdown) { ... return; }` block and before `closeMentionDropdown();`, add:
 
 ```javascript
-  if (input.querySelector('[data-media-uploading]')) {
-    _showUploadError(document.getElementById('aigator-drop-error'), 'Wait for the upload to finish');
-    return;
-  }
+if (input.querySelector('[data-media-uploading]')) {
+  _showUploadError(document.getElementById('aigator-drop-error'), 'Wait for the upload to finish');
+  return;
+}
 ```
 
 - [ ] **Step 6: Run test to verify it passes**
@@ -2577,9 +2626,11 @@ git commit -m "feat: attach demo clips and audio in chat with a clip panel"
 ### Task 10: Real-ffmpeg integration test and full verification
 
 **Files:**
+
 - Test: `tests/demo_media/test_compose_integration.py`
 
 **Interfaces:**
+
 - Consumes: `demo_media_probe.probe_media` / `_run_ffprobe` (Task 1), `demo_clips.add_item` / `set_trim` / `load` (Task 2), `demo_compose.build` / `_ffmpeg` (Task 4), the `store` fixture (Task 1). No new production code.
 
 - [ ] **Step 1: Write the integration test**
@@ -2691,26 +2742,27 @@ git commit -m "test: build a real timeline and soundtrack with ffmpeg"
 
 **Spec coverage** (spec section, then the task that implements it):
 
-| Spec requirement | Task |
-|---|---|
-| Allow-listed extensions, codecs, 2 GiB, 30 min, 8 clips, 4 audio assets, 7680 px; error codes | 1, 2 |
-| Registry in `ext["clips"]`: order, trims, ids never reused, limits | 2 |
-| Locked stages (`narration_approved`, `delivered`) reject edits; timeline writes still allowed | 2, 4 |
-| Normalize to one canvas, concatenate, publish `work/timeline.mp4` as `raw` | 3, 4 |
-| Combined music bed `work/soundtrack.m4a` | 3, 4 |
-| Single-worker scheduler, fingerprint-guarded writes, dirty loop, failed builds not retried unless the fingerprint changes | 4 |
-| `/api/demo-media` routes, CSRF, status codes, implicit-target rule, streaming upload | 5 |
-| Soundtrack mixed under narration in Phase 4 | 6, 7 |
-| Skill Import Mode: `[File: path]` trigger, wait for timeline, frames from `frame_times`, never call the API | 7 |
-| Chat attach, progress, clip panel, reorder/trim/remove, submit blocked while uploading | 8, 9 |
-| Tab pinned to the Demo Recorder skill and project after upload (SP2) | 9 |
-| Works end to end with real ffmpeg | 10 |
+| Spec requirement                                                                                                          | Task |
+| ------------------------------------------------------------------------------------------------------------------------- | ---- |
+| Allow-listed extensions, codecs, 2 GiB, 30 min, 8 clips, 4 audio assets, 7680 px; error codes                             | 1, 2 |
+| Registry in `ext["clips"]`: order, trims, ids never reused, limits                                                        | 2    |
+| Locked stages (`narration_approved`, `delivered`) reject edits; timeline writes still allowed                             | 2, 4 |
+| Normalize to one canvas, concatenate, publish `work/timeline.mp4` as `raw`                                                | 3, 4 |
+| Combined music bed `work/soundtrack.m4a`                                                                                  | 3, 4 |
+| Single-worker scheduler, fingerprint-guarded writes, dirty loop, failed builds not retried unless the fingerprint changes | 4    |
+| `/api/demo-media` routes, CSRF, status codes, implicit-target rule, streaming upload                                      | 5    |
+| Soundtrack mixed under narration in Phase 4                                                                               | 6, 7 |
+| Skill Import Mode: `[File: path]` trigger, wait for timeline, frames from `frame_times`, never call the API               | 7    |
+| Chat attach, progress, clip panel, reorder/trim/remove, submit blocked while uploading                                    | 8, 9 |
+| Tab pinned to the Demo Recorder skill and project after upload (SP2)                                                      | 9    |
+| Works end to end with real ffmpeg                                                                                         | 10   |
 
 Gaps found: none.
 
 **Placeholder scan:** searched the plan for `TBD`, `TODO`, `implement later`, `similar to Task`, and un-coded steps. The only `PANEL-CONTINUES` marker is inside Task 8's Step 3 code and Step 4 tells the engineer to replace it, so it does not survive into the finished file.
 
 **Type consistency:**
+
 - Responses: `clips` in every body is the registry object, so the front end uses `res.clips` (registry), `registry.clips[]`, `registry.audio[]` and `registry.timeline.state` (Task 5 produces, Tasks 8-9 consume). `setProject(projectId, registry)` is called with `res.project_id, res.clips`.
 - Names match across tasks: `DemoMedia.classify`, `validateLocal`, `upload`, `setProject`, `mountPanel` (Task 8 defines, Task 9 uses); `compose.build`, `compose.schedule`, `compose.ensure_current` (Task 4 defines, Tasks 5 and 10 use); `clips.set_trim(pid, cid, start, end)` (Task 2 defines, Tasks 5 and 10 use); `soundtrack.m4a` path (Task 4 produces, Tasks 6, 7 and 10 consume).
 - Error shape: Task 5 returns `{ok: false, code, message}` and Task 8's `errorMessage` reads `message` then `detail` (FastAPI's CSRF 403 uses `detail`).

@@ -983,7 +983,7 @@ When you receive `"Narration approved (N segments, approval appr_<n>_<hash>)..."
    - `out_of_range`: quote `message`, `duration_sec` and `options`, and ask which to take.
    - `sync_mismatch`, `output_verification_failed`, `tts_failed`, `ffmpeg_failed`, `ffmpeg_timeout`: report `message` and any measured durations, and offer to retry once or to deliver the video without narration. No file was delivered.
    - Any other `error`: report `message`.
-   Do not retry in a loop and do not describe a video that was not produced.
+     Do not retry in a loop and do not describe a video that was not produced.
 
 The tool writes its stage to `work/logs/merge_progress.json`; the narration editor polls it through `GET /api/demo-projects/<id>/progress` and shows "Generating speech N of M", "Merging audio and video", "Done", or the error text.
 

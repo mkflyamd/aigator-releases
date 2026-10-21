@@ -93,13 +93,13 @@ python load_approval.py --project-dir <PROJECT_DIR> [--approval-id <id>] [--segm
 
 It prints one JSON object. Exit 0: `{"ok": true, "approval_id", "version", "approved_at", "flags", "segment_count", "project_dir"}` and, with `--segments-out`, writes the segments list (the shape `tts_pipeline.py --narration` already reads). Exit 2: `{"ok": false, "code", "error"}`.
 
-| Condition | `code` | Agent action |
-|---|---|---|
-| no `ext.approval` | `missing` | ask the user to click Approve |
-| `--approval-id` differs from `current_id` | `superseded` | stop; a newer approval exists and its own turn handles it |
-| record unreadable, or its hash differs from `ext.approval.sha256` | `corrupt` | ask the user to re-open the narration editor and approve again |
-| raw recording fingerprint differs from `media_fingerprint` | `stale_media` | ask the user to re-approve against the new recording |
-| otherwise | (ok) | run Phase 4 with the returned segments |
+| Condition                                                         | `code`        | Agent action                                                   |
+| ----------------------------------------------------------------- | ------------- | -------------------------------------------------------------- |
+| no `ext.approval`                                                 | `missing`     | ask the user to click Approve                                  |
+| `--approval-id` differs from `current_id`                         | `superseded`  | stop; a newer approval exists and its own turn handles it      |
+| record unreadable, or its hash differs from `ext.approval.sha256` | `corrupt`     | ask the user to re-open the narration editor and approve again |
+| raw recording fingerprint differs from `media_fingerprint`        | `stale_media` | ask the user to re-approve against the new recording           |
+| otherwise                                                         | (ok)          | run Phase 4 with the returned segments                         |
 
 An "Ask again" replay of an old Phase 4 trigger carries the old approval ID and is refused as `superseded`.
 
@@ -128,18 +128,18 @@ An "Ask again" replay of an old Phase 4 trigger carries the old approval ID and 
 
 ## Files
 
-| File | Change |
-|---|---|
-| `web/narration_approval.py` | new |
-| `web/skill_pin.py` | new |
-| `web/skills/gator-demo-recorder/scripts/load_approval.py` | new |
-| `web/routes/demo_projects.py` | narration route calls `approve()` |
-| `web/routes/recorder.py` | `narration-approved` shim calls `approve()` |
-| `web/routes/chat.py` | `ChatRequest` fields, `_skills_locked`, pin context block |
-| `web/static/app.js` | approval handler, pin state/chip, `doSend` fields |
-| `web/static/style.css` | `.skill-pin-chip` |
-| `web/skills/gator-demo-recorder/SKILL.md` | widget, messages, Phase 4 |
-| `tests/approval_transaction/*`, `tests/narration_approval.test.js` | new |
+| File                                                               | Change                                                    |
+| ------------------------------------------------------------------ | --------------------------------------------------------- |
+| `web/narration_approval.py`                                        | new                                                       |
+| `web/skill_pin.py`                                                 | new                                                       |
+| `web/skills/gator-demo-recorder/scripts/load_approval.py`          | new                                                       |
+| `web/routes/demo_projects.py`                                      | narration route calls `approve()`                         |
+| `web/routes/recorder.py`                                           | `narration-approved` shim calls `approve()`               |
+| `web/routes/chat.py`                                               | `ChatRequest` fields, `_skills_locked`, pin context block |
+| `web/static/app.js`                                                | approval handler, pin state/chip, `doSend` fields         |
+| `web/static/style.css`                                             | `.skill-pin-chip`                                         |
+| `web/skills/gator-demo-recorder/SKILL.md`                          | widget, messages, Phase 4                                 |
+| `tests/approval_transaction/*`, `tests/narration_approval.test.js` | new                                                       |
 
 ## Testing
 

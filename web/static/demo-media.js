@@ -82,7 +82,8 @@ const DemoMedia = (() => {
       xhr.setRequestHeader('Content-Type', 'application/octet-stream');
       xhr.setRequestHeader('X-CSRF-Token', window.__CSRF_TOKEN__ || '');
       xhr.upload.onprogress = (ev) => {
-        if (ev.lengthComputable && o.onProgress) o.onProgress(Math.round((ev.loaded * 100) / ev.total));
+        if (ev.lengthComputable && o.onProgress)
+          o.onProgress(Math.round((ev.loaded * 100) / ev.total));
       };
       xhr.onerror = () => reject(new Error('Upload failed: connection error'));
       xhr.onabort = () => {
@@ -143,7 +144,8 @@ const DemoMedia = (() => {
   }
 
   function summary(reg) {
-    if (!reg.clips.length) return reg.audio.length ? 'Add a video clip to build the timeline' : 'No clips yet';
+    if (!reg.clips.length)
+      return reg.audio.length ? 'Add a video clip to build the timeline' : 'No clips yet';
     const tl = reg.timeline || {};
     if (tl.state === 'ready') return 'Ready - ' + formatDuration(tl.duration) + ' total';
     if (tl.state === 'failed') return 'Build failed: ' + (tl.error || 'unknown error');
@@ -197,10 +199,16 @@ const DemoMedia = (() => {
     const resolution = formatResolution(clip);
     if (resolution) row.appendChild(el('span', 'demo-media-res', resolution));
     const i = ids.indexOf(clip.id);
-    row.appendChild(iconButton('↑', 'Move ' + clip.name + ' earlier', i === 0, () =>
-      mutate('PUT', 'order', { ids: moveId(ids, clip.id, -1) })));
-    row.appendChild(iconButton('↓', 'Move ' + clip.name + ' later', i === ids.length - 1, () =>
-      mutate('PUT', 'order', { ids: moveId(ids, clip.id, 1) })));
+    row.appendChild(
+      iconButton('↑', 'Move ' + clip.name + ' earlier', i === 0, () =>
+        mutate('PUT', 'order', { ids: moveId(ids, clip.id, -1) }),
+      ),
+    );
+    row.appendChild(
+      iconButton('↓', 'Move ' + clip.name + ' later', i === ids.length - 1, () =>
+        mutate('PUT', 'order', { ids: moveId(ids, clip.id, 1) }),
+      ),
+    );
     const start = el('input', 'demo-media-trim');
     start.type = 'text';
     start.value = String(clip.trim_start || 0);
@@ -232,7 +240,8 @@ const DemoMedia = (() => {
 
   function removeButton(item) {
     return iconButton('✕', 'Remove ' + item.name, false, () =>
-      mutate('DELETE', 'items/' + encodeURIComponent(item.id)));
+      mutate('DELETE', 'items/' + encodeURIComponent(item.id)),
+    );
   }
 
   function audioRow(asset) {
@@ -250,7 +259,11 @@ const DemoMedia = (() => {
     panelEl.classList.toggle('hidden', !has);
     if (!has) return;
     const state = (registry.timeline || {}).state;
-    const label = el('div', 'demo-media-state demo-media-' + (registry.clips.length ? state : 'idle'), summary(registry));
+    const label = el(
+      'div',
+      'demo-media-state demo-media-' + (registry.clips.length ? state : 'idle'),
+      summary(registry),
+    );
     label.setAttribute('role', 'status');
     panelEl.appendChild(label);
     const ids = registry.clips.map((c) => c.id);

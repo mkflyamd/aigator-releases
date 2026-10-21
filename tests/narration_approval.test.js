@@ -27,7 +27,9 @@ r = fns._parseNarrationApproval('NARRATION_APPROVED:[{"text":"a"}]');
 assert.deepStrictEqual(plain(r), { segments: [{ text: 'a' }], flags: {}, projectId: null });
 
 // brackets and flag-looking text inside a segment do not confuse the parser
-r = fns._parseNarrationApproval('NARRATION_APPROVED:[{"text":"use ] and PROJECT_ID:evil"}] PROJECT_ID:demo_1');
+r = fns._parseNarrationApproval(
+  'NARRATION_APPROVED:[{"text":"use ] and PROJECT_ID:evil"}] PROJECT_ID:demo_1',
+);
 assert.strictEqual(r.segments[0].text, 'use ] and PROJECT_ID:evil');
 assert.strictEqual(r.projectId, 'demo_1');
 
@@ -56,18 +58,36 @@ const bridgeStart = source.indexOf("case 'gator:send-message'");
 assert(bridgeStart > -1, 'bridge not found');
 const bridge = source.slice(bridgeStart, bridgeStart + 3000);
 assert(/_handleNarrationApproved\(_text, e\.source\)/.test(bridge), 'bridge must call the handler');
-assert(!source.includes('/api/recorder/narration-approved'), 'frontend must not call the legacy route');
-assert(!/sessionStorage\.setItem\('gator_narration/.test(source), 'no sessionStorage fallback writes');
+assert(
+  !source.includes('/api/recorder/narration-approved'),
+  'frontend must not call the legacy route',
+);
+assert(
+  !/sessionStorage\.setItem\('gator_narration/.test(source),
+  'no sessionStorage fallback writes',
+);
 
-const handlerMatch = source.match(/async function _handleNarrationApproved\([^)]*\)\s*\{[\s\S]*?\n\}/);
+const handlerMatch = source.match(
+  /async function _handleNarrationApproved\([^)]*\)\s*\{[\s\S]*?\n\}/,
+);
 assert(handlerMatch, '_handleNarrationApproved not found');
 const handler = handlerMatch[0];
-assert(/await fetch\('\/api\/demo-projects\/' \+ encodeURIComponent\(projectId\) \+ '\/narration'/.test(handler));
+assert(
+  /await fetch\('\/api\/demo-projects\/' \+ encodeURIComponent\(projectId\) \+ '\/narration'/.test(
+    handler,
+  ),
+);
 assert(/if \(!res\.ok\)/.test(handler), 'handler must check res.ok');
 assert(!/\.catch\(\(\) => \{\}\)/.test(handler), 'handler must not swallow errors');
 const okIdx = handler.indexOf('if (!res.ok)');
 const submitIdx = handler.indexOf('_submitApprovalTurn(');
-assert(okIdx > -1 && submitIdx > okIdx, 'chat turn is submitted only after the response is checked');
-assert(/_replyApproval\(source, \{ ok: false/.test(handler), 'failure must be reported to the widget');
+assert(
+  okIdx > -1 && submitIdx > okIdx,
+  'chat turn is submitted only after the response is checked',
+);
+assert(
+  /_replyApproval\(source, \{ ok: false/.test(handler),
+  'failure must be reported to the widget',
+);
 
 console.log('narration_approval: all assertions passed');

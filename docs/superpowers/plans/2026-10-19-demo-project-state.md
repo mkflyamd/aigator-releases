@@ -23,29 +23,31 @@
 
 ## File Structure
 
-| File | Responsibility |
-|---|---|
-| `web/demo_projects.py` (new) | Layout, `project.json`, index, active project, root config, legacy adoption |
-| `web/routes/demo_projects.py` (new) | `/api/demo-projects/*` routes |
-| `web/app.py` (modify, near line 100 and 915) | import and include the router |
-| `web/routes/recorder.py` (modify) | project-aware start/stop/status, shims, serve-file |
-| `shell/main.js`, `shell/preload.js` (modify) | `demo:pick-folder` IPC |
-| `web/static/app.js`, `web/static/index.html` (modify) | `gator:pick-demo-folder` bridge case, Settings → General row |
-| `web/skills/gator-demo-recorder/SKILL.md`, `scripts/*` (modify) | agent uses project folder |
-| `tests/demo_project_state/` (new) | store and route tests |
-| `tests/demo_project_bridge.test.js` (new) | bridge case test |
+| File                                                            | Responsibility                                                              |
+| --------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `web/demo_projects.py` (new)                                    | Layout, `project.json`, index, active project, root config, legacy adoption |
+| `web/routes/demo_projects.py` (new)                             | `/api/demo-projects/*` routes                                               |
+| `web/app.py` (modify, near line 100 and 915)                    | import and include the router                                               |
+| `web/routes/recorder.py` (modify)                               | project-aware start/stop/status, shims, serve-file                          |
+| `shell/main.js`, `shell/preload.js` (modify)                    | `demo:pick-folder` IPC                                                      |
+| `web/static/app.js`, `web/static/index.html` (modify)           | `gator:pick-demo-folder` bridge case, Settings → General row                |
+| `web/skills/gator-demo-recorder/SKILL.md`, `scripts/*` (modify) | agent uses project folder                                                   |
+| `tests/demo_project_state/` (new)                               | store and route tests                                                       |
+| `tests/demo_project_bridge.test.js` (new)                       | bridge case test                                                            |
 
 ---
 
 ### Task 1: Store core — layout, project.json, index, active
 
 **Files:**
+
 - Create: `web/demo_projects.py`
 - Create: `tests/demo_project_state/__init__.py` (empty)
 - Create: `tests/demo_project_state/conftest.py`
 - Test: `tests/demo_project_state/test_store.py`
 
 **Interfaces:**
+
 - Produces (all in `demo_projects`): `DEFAULT_ROOT: Path`, `INDEX_PATH: Path`, `atomic_write_json(path: Path, data: dict) -> None`, `create_project(name: str | None = None, root: Path | None = None) -> dict`, `get_project(project_id: str) -> dict`, `project_path(project_id: str) -> Path`, `update_project(project_id: str, **fields) -> dict`, `set_ext(project_id: str, namespace: str, value: dict) -> dict`, `get_active_id() -> str | None`, `set_active(project_id: str) -> None`, `resolve_file(project_id: str, rel: str) -> Path`, `archive_final(project_id: str) -> list[Path]`, `begin_session(project_id: str | None = None) -> dict`, `save_narration(project_id: str, segments: list, flags: dict) -> dict`.
 - `get_project` returns the `project.json` fields plus `path`, `final_dir`, `final` (abs path of newest file in `final/` or `None`), `raw` (abs or `None`), `segments` (abs). `stage` reads `delivered` when `final` exists and stored stage is `recorded` or `narration_approved`.
 - Consumes: `config.GATOR_DIR`, `config.load_config`, `config.save_config`.
@@ -513,10 +515,12 @@ git commit -m "feat(recorder): add durable demo project store"
 ### Task 2: Root configuration
 
 **Files:**
+
 - Modify: `web/demo_projects.py` (add `set_default_root`)
 - Test: `tests/demo_project_state/test_root.py`
 
 **Interfaces:**
+
 - Produces: `set_default_root(root: str | None) -> Path`. `None` removes the config key and returns `DEFAULT_ROOT`. `get_default_root()` and `_validate_root()` already exist from Task 1.
 
 - [ ] **Step 1: Write the failing tests**
@@ -597,10 +601,12 @@ git commit -m "feat(recorder): configurable demo project root"
 ### Task 3: Legacy folder adoption and project listing
 
 **Files:**
+
 - Modify: `web/demo_projects.py`
 - Test: `tests/demo_project_state/test_legacy.py`
 
 **Interfaces:**
+
 - Produces: `adopt_legacy_folder(folder: Path) -> dict` (returns expanded project), `list_projects() -> list[dict]` (expanded projects, newest `updated_at` first; adopts legacy folders under the default root; drops index entries whose folder is gone).
 - Legacy mapping: `seg_*.mp4` → `source/`; `ffmpeg_log.txt` → `work/logs/`; `<id>_final.mp4` (the old stitched recording) → `source/recording.mp4` and becomes `raw`. Stage `recorded` when a stitched file exists, else `created`. Other files stay where they are.
 
@@ -741,11 +747,13 @@ git commit -m "feat(recorder): adopt legacy flat demo folders into projects"
 ### Task 4: `/api/demo-projects` routes
 
 **Files:**
+
 - Create: `web/routes/demo_projects.py`
 - Modify: `web/app.py` (import near line 100, include near line 915)
 - Test: `tests/demo_project_state/test_routes.py`
 
 **Interfaces:**
+
 - Consumes: everything from Tasks 1-3, `security.verify_csrf`, `security.get_csrf_token(host)`.
 - Produces routes: `GET /api/demo-projects/settings`, `PUT /api/demo-projects/settings`, `GET /api/demo-projects`, `POST /api/demo-projects`, `GET /api/demo-projects/active`, `GET /api/demo-projects/{id}`, `POST /api/demo-projects/{id}/activate`, `POST /api/demo-projects/{id}/narration`, `GET /api/demo-projects/{id}/file?rel=`.
 - Error mapping: unknown ID 404, `ValueError` 400, outside-folder file 403.
@@ -988,10 +996,12 @@ git commit -m "feat(recorder): add /api/demo-projects routes"
 ### Task 5: Recorder wiring
 
 **Files:**
+
 - Modify: `web/routes/recorder.py` (lines are for the reference tree; locate by the quoted code)
 - Test: `tests/demo_project_state/test_recorder_shims.py`
 
 **Interfaces:**
+
 - Consumes: `demo_projects.begin_session`, `get_project`, `update_project`, `get_active_id`, `list_projects`, `save_narration`, `project_path`.
 - Produces in `recorder.py`: `_raw_path() -> Path | None` (`_session_dir / "source" / "recording.mp4"`), `_log_path() -> Path | None` (`_session_dir / "work" / "logs" / "ffmpeg_log.txt"`). `StartRequest.project_id: Optional[str] = None`. Start/stop/status responses gain `project_id`.
 
@@ -1222,6 +1232,7 @@ git commit -m "feat(recorder): record into durable demo projects"
 ### Task 6: Native folder picker, bridge case, Settings row
 
 **Files:**
+
 - Modify: `shell/main.js` (after the `skill:pick-local` handler, which ends near line 4960)
 - Modify: `shell/preload.js` (after `pickLocalSkill`, line 129)
 - Modify: `web/static/app.js` (new `case` after `gator:recorder`, ~line 18311; Settings wiring appended near the existing settings code)
@@ -1229,6 +1240,7 @@ git commit -m "feat(recorder): record into durable demo projects"
 - Test: `tests/demo_project_bridge.test.js`
 
 **Interfaces:**
+
 - Produces: `window.gatorShell.pickDemoFolder(): Promise<{ok: true, path: string} | {ok: false, cancelled: true}>`; postMessage in `{type: 'gator:pick-demo-folder'}`, out `{type: 'gator:pick-demo-folder-result', data}`.
 
 - [ ] **Step 1: Write the failing JS test**
@@ -1330,17 +1342,17 @@ ipcMain.handle('demo:pick-folder', async () => {
 Settings row. `web/static/index.html`, inside `#spanel-general` immediately after `<div class="spanel-title">General</div>` (and its sub line, if present):
 
 ```html
-            <div class="srow" id="demo-root-row">
-              <div class="section-status st-ok"></div>
-              <div class="srow-info">
-                <div class="srow-label">Demo projects folder</div>
-                <div class="srow-sub" id="demo-root-path">Loading…</div>
-              </div>
-              <div class="srow-actions">
-                <button class="btn-secondary" id="demo-root-change">Change</button>
-                <button class="btn-secondary" id="demo-root-reset">Reset</button>
-              </div>
-            </div>
+<div class="srow" id="demo-root-row">
+  <div class="section-status st-ok"></div>
+  <div class="srow-info">
+    <div class="srow-label">Demo projects folder</div>
+    <div class="srow-sub" id="demo-root-path">Loading…</div>
+  </div>
+  <div class="srow-actions">
+    <button class="btn-secondary" id="demo-root-change">Change</button>
+    <button class="btn-secondary" id="demo-root-reset">Reset</button>
+  </div>
+</div>
 ```
 
 `web/static/app.js`, appended near the end of the file:
@@ -1370,7 +1382,9 @@ async function demoRootSet(root) {
 
 document.getElementById('settings-trigger')?.addEventListener('click', demoRootRefresh);
 document.getElementById('demo-root-change')?.addEventListener('click', async () => {
-  const picked = window.gatorShell?.pickDemoFolder ? await window.gatorShell.pickDemoFolder() : null;
+  const picked = window.gatorShell?.pickDemoFolder
+    ? await window.gatorShell.pickDemoFolder()
+    : null;
   if (picked && picked.ok) demoRootSet(picked.path);
 });
 document.getElementById('demo-root-reset')?.addEventListener('click', () => demoRootSet(null));
@@ -1394,11 +1408,13 @@ git commit -m "feat(recorder): native demo folder picker and Settings row"
 ### Task 7: Skill uses the project folder
 
 **Files:**
+
 - Modify: `web/skills/gator-demo-recorder/SKILL.md` (lines 34, 485, 722, 757, 765, 808, 829-834, 881-899)
 - Modify: `web/skills/gator-demo-recorder/scripts/tts_pipeline.py`, `scripts/preflight.py` (only if they contain `gator_demos`, `latest_output` or `set-output`)
 - Test: `tests/demo_project_state/test_skill_no_singletons.py`
 
 **Interfaces:**
+
 - Consumes: `~/.gator/demo_projects.json` (`active_project_id`, `projects[].path`), `<project>/work/narration.json`.
 
 - [ ] **Step 1: Write the failing test**

@@ -31,7 +31,8 @@ const stalledBranch = braceBlock('} else if (msg.stalled) {');
 const bannerBlock = braceBlock('if (_streamExhausted) {');
 const helpers = `${fn('_lastUserRequestText')}\n${fn('_continueRequestText')}`;
 
-const RETRY = 'Note: the previous attempt failed because the call to run_python (code) had missing or invalid arguments.';
+const RETRY =
+  'Note: the previous attempt failed because the call to run_python (code) had missing or invalid arguments.';
 
 function onStalled(msg) {
   const ctx = { msg, _streamExhausted: false, _exhaustedMessage: '', _continueRetryNote: '' };
@@ -40,7 +41,11 @@ function onStalled(msg) {
 }
 
 // stalled event: banner text and retry note are captured
-let ctx = onStalled({ stalled: true, message: 'Gator could not form a valid call to run_python (code)', retry_note: RETRY });
+let ctx = onStalled({
+  stalled: true,
+  message: 'Gator could not form a valid call to run_python (code)',
+  retry_note: RETRY,
+});
 assert.strictEqual(ctx._streamExhausted, true);
 assert.strictEqual(ctx._exhaustedMessage, 'Gator could not form a valid call to run_python (code)');
 assert.strictEqual(ctx._continueRetryNote, RETRY);
@@ -52,12 +57,21 @@ assert.strictEqual(ctx._continueRetryNote, '');
 function clickContinue({ retryNote, history, requestTabId = 'tab-1', activeTabId = 'tab-1' }) {
   const created = [];
   const input = { textContent: '', dispatchEvent() {} };
-  const form = { submits: 0, requestSubmit() { this.submits++; } };
+  const form = {
+    submits: 0,
+    requestSubmit() {
+      this.submits++;
+    },
+  };
   const el = () => {
     const e = { className: '', textContent: '', children: [], listeners: {}, removed: false };
     e.appendChild = (c) => e.children.push(c);
-    e.addEventListener = (type, cb) => { e.listeners[type] = cb; };
-    e.remove = () => { e.removed = true; };
+    e.addEventListener = (type, cb) => {
+      e.listeners[type] = cb;
+    };
+    e.remove = () => {
+      e.removed = true;
+    };
     created.push(e);
     return e;
   };

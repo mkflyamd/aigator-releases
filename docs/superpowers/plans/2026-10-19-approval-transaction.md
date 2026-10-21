@@ -25,36 +25,38 @@ Spec: `docs/superpowers/specs/2026-10-19-approval-transaction-design.md`
 
 ## File Structure
 
-| File | Action | Responsibility |
-|---|---|---|
-| `web/narration_approval.py` | Create | `approve()` transaction, `canonical_hash`, `media_fingerprint`, `ApprovalError` |
-| `web/routes/demo_projects.py` | Modify | SP3 narration route calls `approve()` |
-| `web/routes/recorder.py` | Modify | Legacy `narration-approved` shim calls `approve()` |
-| `web/skills/gator-demo-recorder/scripts/load_approval.py` | Create | Stdlib-only verified loader and CLI used by Phase 4 |
-| `web/skill_pin.py` | Create | `Pin`, `resolve_pin`, `PIN_CONTEXT_PROVIDERS`, `pin_context_block` |
-| `web/routes/chat.py` | Modify | `ChatRequest` pin fields, `_skills_locked`, pin context injection |
-| `web/static/app.js` | Modify | Pure approval/pin helpers, awaited approval handler, pin state and chip, doSend fields |
-| `web/static/style.css` | Modify | `.skill-pin-chip` |
-| `web/skills/gator-demo-recorder/SKILL.md` | Modify | Widget `approve()`, `pin_skill`/`project_id` on messages, `load_approval.py` in Phase 4 |
-| `tests/approval_transaction/conftest.py` | Create | `store` and `client` fixtures |
-| `tests/approval_transaction/test_approval.py` | Create | Transaction unit tests |
-| `tests/approval_transaction/test_routes.py` | Create | Route and shim tests |
-| `tests/approval_transaction/test_load_approval.py` | Create | Loader parity, codes, CLI |
-| `tests/approval_transaction/test_pinning.py` | Create | `resolve_pin`, provider, chat.py source assertions |
-| `tests/approval_transaction/test_skill_contract.py` | Create | SKILL.md contract |
-| `tests/skill_pin.test.js` | Create | Pin state pure functions and send-path source assertions (Task 5) |
-| `tests/narration_approval.test.js` | Create | Approval parsing/trigger pure functions and bridge source assertions (Task 6) |
+| File                                                      | Action | Responsibility                                                                          |
+| --------------------------------------------------------- | ------ | --------------------------------------------------------------------------------------- |
+| `web/narration_approval.py`                               | Create | `approve()` transaction, `canonical_hash`, `media_fingerprint`, `ApprovalError`         |
+| `web/routes/demo_projects.py`                             | Modify | SP3 narration route calls `approve()`                                                   |
+| `web/routes/recorder.py`                                  | Modify | Legacy `narration-approved` shim calls `approve()`                                      |
+| `web/skills/gator-demo-recorder/scripts/load_approval.py` | Create | Stdlib-only verified loader and CLI used by Phase 4                                     |
+| `web/skill_pin.py`                                        | Create | `Pin`, `resolve_pin`, `PIN_CONTEXT_PROVIDERS`, `pin_context_block`                      |
+| `web/routes/chat.py`                                      | Modify | `ChatRequest` pin fields, `_skills_locked`, pin context injection                       |
+| `web/static/app.js`                                       | Modify | Pure approval/pin helpers, awaited approval handler, pin state and chip, doSend fields  |
+| `web/static/style.css`                                    | Modify | `.skill-pin-chip`                                                                       |
+| `web/skills/gator-demo-recorder/SKILL.md`                 | Modify | Widget `approve()`, `pin_skill`/`project_id` on messages, `load_approval.py` in Phase 4 |
+| `tests/approval_transaction/conftest.py`                  | Create | `store` and `client` fixtures                                                           |
+| `tests/approval_transaction/test_approval.py`             | Create | Transaction unit tests                                                                  |
+| `tests/approval_transaction/test_routes.py`               | Create | Route and shim tests                                                                    |
+| `tests/approval_transaction/test_load_approval.py`        | Create | Loader parity, codes, CLI                                                               |
+| `tests/approval_transaction/test_pinning.py`              | Create | `resolve_pin`, provider, chat.py source assertions                                      |
+| `tests/approval_transaction/test_skill_contract.py`       | Create | SKILL.md contract                                                                       |
+| `tests/skill_pin.test.js`                                 | Create | Pin state pure functions and send-path source assertions (Task 5)                       |
+| `tests/narration_approval.test.js`                        | Create | Approval parsing/trigger pure functions and bridge source assertions (Task 6)           |
 
 ---
 
 ### Task 1: Approval transaction module
 
 **Files:**
+
 - Create: `web/narration_approval.py`
 - Create: `tests/approval_transaction/conftest.py`
 - Test: `tests/approval_transaction/test_approval.py`
 
 **Interfaces:**
+
 - Consumes (SP3, `web/demo_projects.py`, imported as `import demo_projects as dp`): `dp.get_project(pid) -> dict` (keys `path`, `raw` absolute or None, `ext`; raises `KeyError` for an unknown id), `dp.update_project(pid, **fields)`, `dp.set_ext(pid, namespace, value)`, `dp.atomic_write_json(path, data)`, `dp.create_project(name=None, root=None) -> dict`, `dp.INDEX_PATH`.
 - Produces:
   - `ApprovalError(ValueError)`
@@ -375,11 +377,13 @@ git commit -m "feat: versioned narration approval transaction"
 ### Task 2: Route and legacy shim wiring
 
 **Files:**
+
 - Modify: `web/routes/demo_projects.py` (the `POST /api/demo-projects/{project_id}/narration` handler)
 - Modify: `web/routes/recorder.py` (the `POST /api/recorder/narration-approved` shim)
 - Test: `tests/approval_transaction/test_routes.py`
 
 **Interfaces:**
+
 - Consumes: `narration_approval.approve`, `narration_approval.ApprovalError` (Task 1); SP3 route helpers `_get(project_id)` and `_bad(exc)` in `web/routes/demo_projects.py`, `NarrationRequest` model with `segments` and `flags`.
 - Produces: both routes return the project dict plus an `approval` summary; invalid input returns 400; unknown project returns 404 (narration route); the shim returns `{"ok": True, "project_id": pid, "approval": {...}}` or a 400 `{"ok": False, "error": ...}`.
 
@@ -507,10 +511,12 @@ git commit -m "feat: route narration approval through the transaction"
 ### Task 3: Verified approval loader for the skill
 
 **Files:**
+
 - Create: `web/skills/gator-demo-recorder/scripts/load_approval.py`
 - Test: `tests/approval_transaction/test_load_approval.py`
 
 **Interfaces:**
+
 - Consumes: the on-disk format from Task 1 (`project.json` `ext.approval`, `work/approvals/<id>.json`, `raw` relative to the project dir). It must not import from `web/` (skill scripts run as a standalone subprocess), so the hash and fingerprint code is duplicated and a parity test guards drift.
 - Produces:
   - `ApprovalError(code, message)` with `code` in `missing | superseded | corrupt | stale_media`
@@ -762,11 +768,13 @@ git commit -m "feat: verified approval loader for the demo recorder skill"
 ### Task 4: Server-side skill pin
 
 **Files:**
+
 - Create: `web/skill_pin.py`
 - Modify: `web/routes/chat.py` (`ChatRequest`; skill-prompt block before `_active_sids = set()`; `_explicit_skill_ids`; four `req.scoped_skill` gates; the `scoped_skill` injection)
 - Test: `tests/approval_transaction/test_pinning.py`
 
 **Interfaces:**
+
 - Consumes: `demo_projects.get_project(pid)` (SP3) for the Demo Recorder context provider; `shared.SKILL_PROMPTS` (dict keyed by skill id) in chat.py.
 - Produces:
   - `Pin(skill: str, project_id: str | None)` frozen dataclass
@@ -969,12 +977,12 @@ from skill_pin import pin_context_block as _pin_context_block, resolve_pin as _r
 
 5g. Replace the four gates:
 
-| Before | After |
-|---|---|
-| `if req.scoped_skill:` followed by the `[classifier] skipped` print | `if _skills_locked:`; the print becomes `print(f"[classifier] skipped — skills locked (scoped_skill={req.scoped_skill!r}, pin={_pin.skill if _pin else None!r})", flush=True)` |
-| `if not _classifier_inherited and not req.scoped_skill:` | `if not _classifier_inherited and not _skills_locked:` |
-| `_image_analysis_requested = not req.scoped_skill and _is_image_analysis_request(_msg_text)` | `_image_analysis_requested = not _skills_locked and _is_image_analysis_request(_msg_text)` |
-| `if not req.scoped_skill:` (the one before `_inferred = _ensure_image_fetch_skill(`) | `if not _skills_locked:` |
+| Before                                                                                       | After                                                                                                                                                                          |
+| -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `if req.scoped_skill:` followed by the `[classifier] skipped` print                          | `if _skills_locked:`; the print becomes `print(f"[classifier] skipped — skills locked (scoped_skill={req.scoped_skill!r}, pin={_pin.skill if _pin else None!r})", flush=True)` |
+| `if not _classifier_inherited and not req.scoped_skill:`                                     | `if not _classifier_inherited and not _skills_locked:`                                                                                                                         |
+| `_image_analysis_requested = not req.scoped_skill and _is_image_analysis_request(_msg_text)` | `_image_analysis_requested = not _skills_locked and _is_image_analysis_request(_msg_text)`                                                                                     |
+| `if not req.scoped_skill:` (the one before `_inferred = _ensure_image_fetch_skill(`)         | `if not _skills_locked:`                                                                                                                                                       |
 
 Update the comment above the classifier ("Skip entirely for scoped requests ... fully controlled by scoped_skill") to say `scoped_skill or a pinned skill`.
 
@@ -1015,11 +1023,13 @@ git commit -m "feat: server-side skill pin with project context"
 ### Task 5: Client pin state, chip, and send fields
 
 **Files:**
+
 - Modify: `web/static/app.js` (pin helpers placed directly above `function _restoreChipsForTab`; call sites in `_restoreChipsForTab`, `doSend`, tab close, and the `gator:send-message` bridge)
 - Modify: `web/static/style.css` (new `.skill-pin-chip` rule directly after the `.chat-chip` rule)
 - Test: `tests/skill_pin.test.js`
 
 **Interfaces:**
+
 - Consumes: server fields from Task 4 (`pinned_skill`, `pinned_project_id` on `/api/chat`); existing app.js globals `_activeTabId`, `_tabs`, `SKILL_MAP`, `finalText`, `requestTabId` (inside `doSend`).
 - Produces (all in app.js, top level):
   - `const _DEMO_RECORDER_SKILL = 'gator-demo-recorder';`
@@ -1091,14 +1101,14 @@ const existing = { skill: DR, projectId: 'demo_1' };
 assert.deepStrictEqual(plain(fns._mergePin(existing, null)), existing);
 assert.strictEqual(fns._mergePin(null, null), null);
 assert.deepStrictEqual(plain(fns._mergePin(existing, { skill: DR, projectId: null })), existing);
-assert.deepStrictEqual(
-  plain(fns._mergePin(existing, { skill: DR, projectId: 'demo_2' })),
-  { skill: DR, projectId: 'demo_2' },
-);
-assert.deepStrictEqual(
-  plain(fns._mergePin(existing, { skill: 'jira', projectId: null })),
-  { skill: 'jira', projectId: null },
-);
+assert.deepStrictEqual(plain(fns._mergePin(existing, { skill: DR, projectId: 'demo_2' })), {
+  skill: DR,
+  projectId: 'demo_2',
+});
+assert.deepStrictEqual(plain(fns._mergePin(existing, { skill: 'jira', projectId: null })), {
+  skill: 'jira',
+  projectId: null,
+});
 
 // _pinForSend: slash commands escape the pin
 assert.strictEqual(fns._pinForSend(null, 'hello'), null);
@@ -1107,10 +1117,14 @@ assert.strictEqual(fns._pinForSend(existing, '/jira list'), null);
 assert.strictEqual(fns._pinForSend(existing, '  /jira list'), null);
 
 // source wiring
-assert(/localStorage\.removeItem\('tab-pin-' \+ tabId\)/.test(source), 'tab close must drop the pin');
+assert(
+  /localStorage\.removeItem\('tab-pin-' \+ tabId\)/.test(source),
+  'tab close must drop the pin',
+);
 assert(/_tabPins\.delete\(tabId\)/.test(source), 'tab close must clear the pin map');
 assert(
-  /pinned_skill: _sendPin\.skill/.test(source) && /pinned_project_id: _sendPin\.projectId/.test(source),
+  /pinned_skill: _sendPin\.skill/.test(source) &&
+    /pinned_project_id: _sendPin\.projectId/.test(source),
   'doSend must send the pin',
 );
 assert(
@@ -1166,7 +1180,9 @@ function _pinForSend(pin, text) {
 function _loadTabPin(tabId) {
   try {
     const v = JSON.parse(localStorage.getItem('tab-pin-' + tabId) || 'null');
-    return v && typeof v.skill === 'string' ? { skill: v.skill, projectId: v.projectId || null } : null;
+    return v && typeof v.skill === 'string'
+      ? { skill: v.skill, projectId: v.projectId || null }
+      : null;
   } catch {
     return null;
   }
@@ -1220,7 +1236,7 @@ function _renderPinChip(tabId) {
 At the end of `_restoreChipsForTab(tabId)`, after `_updatePlaceholder?.();` add:
 
 ```js
-  _renderPinChip(tabId);
+_renderPinChip(tabId);
 ```
 
 - [ ] **Step 5: Clear pin state on tab close**
@@ -1228,8 +1244,8 @@ At the end of `_restoreChipsForTab(tabId)`, after `_updatePlaceholder?.();` add:
 Directly after `localStorage.removeItem('tab-chips-' + tabId);` in the tab-close handler add:
 
 ```js
-    localStorage.removeItem('tab-pin-' + tabId);
-    _tabPins.delete(tabId);
+localStorage.removeItem('tab-pin-' + tabId);
+_tabPins.delete(tabId);
 ```
 
 - [ ] **Step 6: Wire `doSend`**
@@ -1237,7 +1253,7 @@ Directly after `localStorage.removeItem('tab-chips-' + tabId);` in the tab-close
 6a. In `doSend`, after `_ensureAddSkillBtn();` that follows the chip re-add block (the one directly before `_updatePlaceholder();`), add:
 
 ```js
-  _renderPinChip(_activeTabId || _tabs[0]?.id || 'default');
+_renderPinChip(_activeTabId || _tabs[0]?.id || 'default');
 ```
 
 (`requestTabId` is not defined yet at that point, so the expression is repeated.)
@@ -1245,13 +1261,13 @@ Directly after `localStorage.removeItem('tab-chips-' + tabId);` in the tab-close
 6b. Directly after `const requestContextId = requestTabId || 'default';` add:
 
 ```js
-  const _sendPin = _pinForSend(_getTabPin(requestTabId), finalText);
-  const _sendPinFields = _sendPin
-    ? {
-        pinned_skill: _sendPin.skill,
-        ...(_sendPin.projectId ? { pinned_project_id: _sendPin.projectId } : {}),
-      }
-    : {};
+const _sendPin = _pinForSend(_getTabPin(requestTabId), finalText);
+const _sendPinFields = _sendPin
+  ? {
+      pinned_skill: _sendPin.skill,
+      ...(_sendPin.projectId ? { pinned_project_id: _sendPin.projectId } : {}),
+    }
+  : {};
 ```
 
 The source assertion in the test expects the literal text `pinned_skill: _sendPin.skill` and `pinned_project_id: _sendPin.projectId`; keep those exact spellings.
@@ -1265,8 +1281,8 @@ The source assertion in the test expects the literal text `pinned_skill: _sendPi
 In the `case 'gator:send-message'` block, directly before `const input = document.getElementById('chat-input');` that follows the NARRATION_APPROVED `if` block (the generic path), add:
 
 ```js
-      const _pin = _pinFromMessage(d, _text);
-      if (_pin) _setTabPin(_activeTabId, _mergePin(_getTabPin(_activeTabId), _pin));
+const _pin = _pinFromMessage(d, _text);
+if (_pin) _setTabPin(_activeTabId, _mergePin(_getTabPin(_activeTabId), _pin));
 ```
 
 - [ ] **Step 8: Add the CSS**
@@ -1307,10 +1323,12 @@ git commit -m "feat: per-tab skill pin with chip and chat request fields"
 ### Task 6: Awaited approval handler in the widget bridge
 
 **Files:**
+
 - Modify: `web/static/app.js` (new functions directly above `window.addEventListener('message'`; replace the `NARRATION_APPROVED` block in the bridge)
 - Test: `tests/narration_approval.test.js`
 
 **Interfaces:**
+
 - Consumes: Task 5's `_setTabPin`, `_DEMO_RECORDER_SKILL`; Task 2's `POST /api/demo-projects/{id}/narration` returning `{..., approval: {approval_id, segment_count, ...}}`; SP3's `GET /api/demo-projects/active` (404 when none; otherwise a project dict with `project_id`). The existing `window.fetch` wrapper adds `X-CSRF-Token` to same-origin mutating `/api` calls.
 - Produces (app.js, top level):
   - Pure: `_parseNarrationApproval(text) -> {segments, flags, projectId}` (throws on a missing array, bad JSON, or an empty list; `PROJECT_ID` is removed from `flags`), `_approvalTrigger(approval, flags) -> string`
@@ -1352,7 +1370,9 @@ r = fns._parseNarrationApproval('NARRATION_APPROVED:[{"text":"a"}]');
 assert.deepStrictEqual(plain(r), { segments: [{ text: 'a' }], flags: {}, projectId: null });
 
 // brackets and flag-looking text inside a segment do not confuse the parser
-r = fns._parseNarrationApproval('NARRATION_APPROVED:[{"text":"use ] and PROJECT_ID:evil"}] PROJECT_ID:demo_1');
+r = fns._parseNarrationApproval(
+  'NARRATION_APPROVED:[{"text":"use ] and PROJECT_ID:evil"}] PROJECT_ID:demo_1',
+);
 assert.strictEqual(r.segments[0].text, 'use ] and PROJECT_ID:evil');
 assert.strictEqual(r.projectId, 'demo_1');
 
@@ -1381,19 +1401,37 @@ const bridgeStart = source.indexOf("case 'gator:send-message'");
 assert(bridgeStart > -1, 'bridge not found');
 const bridge = source.slice(bridgeStart, bridgeStart + 3000);
 assert(/_handleNarrationApproved\(_text, e\.source\)/.test(bridge), 'bridge must call the handler');
-assert(!source.includes('/api/recorder/narration-approved'), 'frontend must not call the legacy route');
-assert(!/sessionStorage\.setItem\('gator_narration/.test(source), 'no sessionStorage fallback writes');
+assert(
+  !source.includes('/api/recorder/narration-approved'),
+  'frontend must not call the legacy route',
+);
+assert(
+  !/sessionStorage\.setItem\('gator_narration/.test(source),
+  'no sessionStorage fallback writes',
+);
 
-const handlerMatch = source.match(/async function _handleNarrationApproved\([^)]*\)\s*\{[\s\S]*?\n\}/);
+const handlerMatch = source.match(
+  /async function _handleNarrationApproved\([^)]*\)\s*\{[\s\S]*?\n\}/,
+);
 assert(handlerMatch, '_handleNarrationApproved not found');
 const handler = handlerMatch[0];
-assert(/await fetch\('\/api\/demo-projects\/' \+ encodeURIComponent\(projectId\) \+ '\/narration'/.test(handler));
+assert(
+  /await fetch\('\/api\/demo-projects\/' \+ encodeURIComponent\(projectId\) \+ '\/narration'/.test(
+    handler,
+  ),
+);
 assert(/if \(!res\.ok\)/.test(handler), 'handler must check res.ok');
 assert(!/\.catch\(\(\) => \{\}\)/.test(handler), 'handler must not swallow errors');
 const okIdx = handler.indexOf('if (!res.ok)');
 const submitIdx = handler.indexOf('_submitApprovalTurn(');
-assert(okIdx > -1 && submitIdx > okIdx, 'chat turn is submitted only after the response is checked');
-assert(/_replyApproval\(source, \{ ok: false/.test(handler), 'failure must be reported to the widget');
+assert(
+  okIdx > -1 && submitIdx > okIdx,
+  'chat turn is submitted only after the response is checked',
+);
+assert(
+  /_replyApproval\(source, \{ ok: false/.test(handler),
+  'failure must be reported to the widget',
+);
 
 console.log('narration_approval: all assertions passed');
 ```
@@ -1416,7 +1454,10 @@ function _parseNarrationApproval(text) {
   const segments = JSON.parse(raw.slice(start, end + 1));
   if (!Array.isArray(segments) || !segments.length) throw new Error('no segments');
   const flags = {};
-  for (const part of raw.slice(end + 1).trim().split(/\s+/)) {
+  for (const part of raw
+    .slice(end + 1)
+    .trim()
+    .split(/\s+/)) {
     const m = part.match(/^([A-Z_]+):(.+)$/);
     if (m) flags[m[1]] = m[2];
   }
@@ -1478,7 +1519,8 @@ async function _handleNarrationApproved(text, source) {
   }
   try {
     const projectId = parsed.projectId || (await _activeDemoProjectId());
-    if (!projectId) throw new Error('No demo project is active. Record again or reopen the project.');
+    if (!projectId)
+      throw new Error('No demo project is active. Record again or reopen the project.');
     const res = await fetch('/api/demo-projects/' + encodeURIComponent(projectId) + '/narration', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1486,9 +1528,12 @@ async function _handleNarrationApproved(text, source) {
     });
     if (!res.ok) throw new Error(await _errorDetail(res));
     const approval = (await res.json()).approval;
-    if (!approval || !approval.approval_id) throw new Error('The server did not confirm the approval.');
+    if (!approval || !approval.approval_id)
+      throw new Error('The server did not confirm the approval.');
     if (_activeTabId !== tabId) {
-      throw new Error('You switched tabs. Return to the original tab and approve again; nothing is lost.');
+      throw new Error(
+        'You switched tabs. Return to the original tab and approve again; nothing is lost.',
+      );
     }
     _setTabPin(tabId, { skill: _DEMO_RECORDER_SKILL, projectId });
     _replyApproval(source, { ok: true, approval });
@@ -1504,12 +1549,12 @@ async function _handleNarrationApproved(text, source) {
 In `case 'gator:send-message'`, replace the entire `if (_text.startsWith('NARRATION_APPROVED:')) { ... return; }` block and the comment above it (from `// Intercept NARRATION_APPROVED` through that block's closing `return;\n      }`) with:
 
 ```js
-      // Narration approval is a transaction: the handler awaits the server commit
-      // and submits the chat turn only after it succeeds.
-      if (_text.startsWith('NARRATION_APPROVED:')) {
-        _handleNarrationApproved(_text, e.source);
-        return;
-      }
+// Narration approval is a transaction: the handler awaits the server commit
+// and submits the chat turn only after it succeeds.
+if (_text.startsWith('NARRATION_APPROVED:')) {
+  _handleNarrationApproved(_text, e.source);
+  return;
+}
 ```
 
 - [ ] **Step 5: Run the tests**
@@ -1529,10 +1574,12 @@ git commit -m "feat: await narration approval before submitting the chat turn"
 ### Task 7: Skill file edits and contract test
 
 **Files:**
+
 - Modify: `web/skills/gator-demo-recorder/SKILL.md`
 - Test: `tests/approval_transaction/test_skill_contract.py`
 
 **Interfaces:**
+
 - Consumes: widget bridge from Tasks 5-6 (`pin_skill`, `project_id` message fields; `gator:narration-approval-result` reply); `load_approval.py` CLI from Task 3; SP3's "Project folder" section that defines `PROJECT_DIR` in SKILL.md.
 - Produces: SKILL.md that (a) pins every widget message, (b) fills `PROJECT_ID_PLACEHOLDER`, (c) awaits the approval result in the widget, (d) loads narration through `load_approval.py` in Phase 4. It must keep SP3's contract test green: no `narration_pending.json`, and still contains `work/narration.json`, `final/`, `PROJECT_DIR`, `demo_projects.json`.
 
@@ -1599,25 +1646,51 @@ Expected: FAIL on the pin, placeholder and loader tests.
 3a. Recording complete. Replace
 
 ```js
-      try { parent.postMessage({type:'gator:send-message', text:msg},'*'); } catch(e){}
+try {
+  parent.postMessage({ type: 'gator:send-message', text: msg }, '*');
+} catch (e) {}
 ```
 
 with
 
 ```js
-      try { parent.postMessage({type:'gator:send-message', pin_skill:'gator-demo-recorder', project_id:(data&&data.project_id)||'', text:msg},'*'); } catch(e){}
+try {
+  parent.postMessage(
+    {
+      type: 'gator:send-message',
+      pin_skill: 'gator-demo-recorder',
+      project_id: (data && data.project_id) || '',
+      text: msg,
+    },
+    '*',
+  );
+} catch (e) {}
 ```
 
 3b. Re-edit and cleanup in the Phase 5 widget. Replace the two calls so they read:
 
 ```js
-function editNarration(){
-  parent.postMessage({type:'gator:send-message', pin_skill:'gator-demo-recorder', project_id:_PROJECT_ID,
-    text:'NARRATION_REEDIT: Re-show the Phase 3 narration editor widget now.'},'*');
+function editNarration() {
+  parent.postMessage(
+    {
+      type: 'gator:send-message',
+      pin_skill: 'gator-demo-recorder',
+      project_id: _PROJECT_ID,
+      text: 'NARRATION_REEDIT: Re-show the Phase 3 narration editor widget now.',
+    },
+    '*',
+  );
 }
-function cleanup(){
-  parent.postMessage({type:'gator:send-message', pin_skill:'gator-demo-recorder', project_id:_PROJECT_ID,
-    text:'Please delete the frames/ and tts_work/ intermediates for the current session.'},'*');
+function cleanup() {
+  parent.postMessage(
+    {
+      type: 'gator:send-message',
+      pin_skill: 'gator-demo-recorder',
+      project_id: _PROJECT_ID,
+      text: 'Please delete the frames/ and tts_work/ intermediates for the current session.',
+    },
+    '*',
+  );
 }
 ```
 
@@ -1645,27 +1718,39 @@ var _approving = false;
 4e. Replace the whole `approve()` function with:
 
 ```js
-function approve(){
-  if(_approving) return;
-  var voice=getVoice();
-  var speed=getSpeed();
-  var out=data.map(function(s,i){
-    return {start_at:s.start_at||s.start||0, text:document.getElementById('s'+i).value, voice:voice, speed:speed};
+function approve() {
+  if (_approving) return;
+  var voice = getVoice();
+  var speed = getSpeed();
+  var out = data.map(function (s, i) {
+    return {
+      start_at: s.start_at || s.start || 0,
+      text: document.getElementById('s' + i).value,
+      voice: voice,
+      speed: speed,
+    };
   });
-  var pid=/^demo_\d/.test(_PROJECT_ID)?_PROJECT_ID:'';
-  _approving=true;
-  document.getElementById('btn-approve').disabled=true;
-  setStatus('Approving...','#f97316');
-  parent.postMessage({type:'gator:send-message', pin_skill:'gator-demo-recorder', project_id:_PROJECT_ID,
-    text:'NARRATION_APPROVED:'+JSON.stringify(out)+(pid?' PROJECT_ID:'+pid:'')},'*');
+  var pid = /^demo_\d/.test(_PROJECT_ID) ? _PROJECT_ID : '';
+  _approving = true;
+  document.getElementById('btn-approve').disabled = true;
+  setStatus('Approving...', '#f97316');
+  parent.postMessage(
+    {
+      type: 'gator:send-message',
+      pin_skill: 'gator-demo-recorder',
+      project_id: _PROJECT_ID,
+      text: 'NARRATION_APPROVED:' + JSON.stringify(out) + (pid ? ' PROJECT_ID:' + pid : ''),
+    },
+    '*',
+  );
 }
-window.addEventListener('message',function(ev){
-  var m=ev.data;
-  if(ev.source!==parent||!m||m.type!=='gator:narration-approval-result') return;
-  _approving=false;
-  document.getElementById('btn-approve').disabled=false;
-  if(m.ok) setStatus('✓ Approved ('+m.approval.segment_count+' segments)','#4ade80');
-  else setStatus('Approval failed: '+m.error,'#f87171');
+window.addEventListener('message', function (ev) {
+  var m = ev.data;
+  if (ev.source !== parent || !m || m.type !== 'gator:narration-approval-result') return;
+  _approving = false;
+  document.getElementById('btn-approve').disabled = false;
+  if (m.ok) setStatus('✓ Approved (' + m.approval.segment_count + ' segments)', '#4ade80');
+  else setStatus('Approval failed: ' + m.error, '#f87171');
 });
 ```
 
@@ -1722,12 +1807,12 @@ Then the existing `voice = ...` / `speed = ...` lines and the `subprocess.run([.
 ```markdown
 If `load_approval.py` reports `"ok": false`, do NOT generate audio. Act on `code`:
 
-| code | Meaning | What to do |
-|---|---|---|
-| `missing` | No approval is recorded for this project | Tell the user to click Approve in the narration widget. |
-| `superseded` | A newer approval replaced the one in the trigger | Tell the user a newer approval exists and ask them to approve again from the current widget. |
-| `corrupt` | The approval record is unreadable or fails its integrity check | Re-show the Phase 3 widget so the user approves again. |
-| `stale_media` | The recording changed after the user approved | Re-draft the narration against the current recording, re-show the Phase 3 widget, and wait for a new approval. |
+| code          | Meaning                                                        | What to do                                                                                                     |
+| ------------- | -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `missing`     | No approval is recorded for this project                       | Tell the user to click Approve in the narration widget.                                                        |
+| `superseded`  | A newer approval replaced the one in the trigger               | Tell the user a newer approval exists and ask them to approve again from the current widget.                   |
+| `corrupt`     | The approval record is unreadable or fails its integrity check | Re-show the Phase 3 widget so the user approves again.                                                         |
+| `stale_media` | The recording changed after the user approved                  | Re-draft the narration against the current recording, re-show the Phase 3 widget, and wait for a new approval. |
 ```
 
 - [ ] **Step 6: Run the tests**
@@ -1771,6 +1856,7 @@ Expected: `0`.
 - [ ] **Step 5: Manual smoke test in the running app**
 
 Start the app, open it in a browser, and use a project that has a `source/recording.mp4`.
+
 1. Open the Demo Recorder widget, finish a recording, and ask Gator to draft a narration. Expected: the chat tab shows a "Pinned: Demo Recorder ×" chip.
 2. Click Approve. Expected: the button disables and shows "Approving...", then "✓ Approved (N segments)"; the chat turn "Narration approved (N segments, approval appr_1_xxxxxxxx). Please generate TTS and merge." is submitted; the agent runs `load_approval.py` (visible in the tool call) and produces `final/<name>.mp4`.
 3. Edit one sentence in the widget and Approve again. Expected: approval `appr_2_...`; `work/approvals/` holds both records.

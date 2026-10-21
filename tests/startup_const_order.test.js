@@ -19,7 +19,10 @@ for (const name of [
 ]) {
   const decl = source.search(new RegExp('^const ' + name + ' =', 'm'));
   assert.ok(decl >= 0, name + ' is not declared');
-  assert.ok(decl < init, name + ' is declared after the startup Init block (temporal dead zone at load)');
+  assert.ok(
+    decl < init,
+    name + ' is declared after the startup Init block (temporal dead zone at load)',
+  );
 }
 
 console.log('startup_const_order: PASS');

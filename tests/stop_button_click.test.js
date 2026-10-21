@@ -25,9 +25,16 @@ test('_shouldStopFromClick decides from target, position, button and streaming s
   const f = loadPredicate();
   assert.strictEqual(f(ev({}), btn, rect, true), true, 'target is the button');
   assert.strictEqual(f(ev({ target: child }), btn, rect, true), true, 'target is a child');
-  assert.strictEqual(f(ev({ target: other, clientX: 120, clientY: 220 }), btn, rect, true), true,
-    'press/release moved the click to an ancestor, but the point is on the button');
-  assert.strictEqual(f(ev({ target: other, clientX: 10, clientY: 10 }), btn, rect, true), false, 'outside the button');
+  assert.strictEqual(
+    f(ev({ target: other, clientX: 120, clientY: 220 }), btn, rect, true),
+    true,
+    'press/release moved the click to an ancestor, but the point is on the button',
+  );
+  assert.strictEqual(
+    f(ev({ target: other, clientX: 10, clientY: 10 }), btn, rect, true),
+    false,
+    'outside the button',
+  );
   assert.strictEqual(f(ev({}), btn, rect, false), false, 'not streaming');
   assert.strictEqual(f(ev({ button: 2 }), btn, rect, true), false, 'non-primary button');
 });

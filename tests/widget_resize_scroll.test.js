@@ -35,7 +35,9 @@ function makeWorld({ scrollers, frames }) {
   const style = {};
   let heightStr = '';
   Object.defineProperty(style, 'height', {
-    get() { return heightStr; },
+    get() {
+      return heightStr;
+    },
     set(v) {
       heightStr = v;
       const px = parseFloat(v) || 0;
@@ -46,7 +48,12 @@ function makeWorld({ scrollers, frames }) {
     },
   });
   for (let i = 0; i < scrollers.length; i++) scrollers[i].parentElement = scrollers[i + 1] || null;
-  const iframe = { style, parentElement: scrollers[0] || null, dataset: {}, contentWindow: { name: 'w' } };
+  const iframe = {
+    style,
+    parentElement: scrollers[0] || null,
+    dataset: {},
+    contentWindow: { name: 'w' },
+  };
   const ctx = { document: { querySelectorAll: () => frames || [iframe] } };
   const api = vm.runInNewContext(code, ctx);
   return { iframe, api };
@@ -123,18 +130,38 @@ const scroller = (top, other, view) => ({ scrollTop: top, other, view, parentEle
   let contentH = 400;
   let overflowStyle = '';
   const doc = {
-    body: { get scrollHeight() { return contentH; } },
+    body: {
+      get scrollHeight() {
+        return contentH;
+      },
+    },
     documentElement: { getBoundingClientRect: () => ({ height: contentH }) },
-    head: { appendChild(el) { overflowStyle = el.textContent; } },
+    head: {
+      appendChild(el) {
+        overflowStyle = el.textContent;
+      },
+    },
     createElement: () => ({}),
   };
   const listeners = {};
   const ctx = {
     document: doc,
     parent: { postMessage: (m, o) => posted.push({ m: JSON.parse(JSON.stringify(m)), o }) },
-    setTimeout: (fn, ms) => { timers.push({ fn, ms }); },
-    ResizeObserver: class { constructor(cb) { this.cb = cb; } observe(el) { observed.push(el); ctx.fire = this.cb; } },
-    addEventListener: (t, fn) => { listeners[t] = fn; },
+    setTimeout: (fn, ms) => {
+      timers.push({ fn, ms });
+    },
+    ResizeObserver: class {
+      constructor(cb) {
+        this.cb = cb;
+      }
+      observe(el) {
+        observed.push(el);
+        ctx.fire = this.cb;
+      }
+    },
+    addEventListener: (t, fn) => {
+      listeners[t] = fn;
+    },
   };
   const { api } = makeWorld({ scrollers: [] });
   const script = api.gatorWidgetFrameScript();
@@ -142,7 +169,11 @@ const scroller = (top, other, view) => ({ scrollTop: top, other, view, parentEle
   vm.runInNewContext(script, ctx);
   assert.ok(observed.includes(doc.documentElement), 'observes the document element');
   assert.ok(listeners.load, 'measures on load');
-  assert.deepStrictEqual(posted.map((p) => p.m), [{ type: 'gator:resize', height: 402 }], 'reports content height + 2');
+  assert.deepStrictEqual(
+    posted.map((p) => p.m),
+    [{ type: 'gator:resize', height: 402 }],
+    'reports content height + 2',
+  );
   assert.strictEqual(posted[0].o, '*', 'an opaque-origin frame can only post to *');
   timers.forEach((t) => t.fn());
   assert.strictEqual(posted.length, 1, 'an unchanged height is not re-sent');
@@ -151,17 +182,28 @@ const scroller = (top, other, view) => ({ scrollTop: top, other, view, parentEle
   assert.deepStrictEqual(posted[1].m, { type: 'gator:resize', height: 902 }, 'growth is reported');
   contentH = 120;
   ctx.fire();
-  assert.deepStrictEqual(posted[2].m, { type: 'gator:resize', height: 122 }, 'shrinking is reported');
+  assert.deepStrictEqual(
+    posted[2].m,
+    { type: 'gator:resize', height: 122 },
+    'shrinking is reported',
+  );
   contentH = 6000;
   ctx.fire();
-  assert.deepStrictEqual(posted[3].m, { type: 'gator:resize', height: 3000 }, 'reported height is capped');
+  assert.deepStrictEqual(
+    posted[3].m,
+    { type: 'gator:resize', height: 3000 },
+    'reported height is capped',
+  );
   assert.ok(/overflow-y:\s*auto/.test(overflowStyle), 'over the cap the frame scrolls internally');
 }
 
 // 7. No parent code reads into the widget frame any more.
 for (const name of ['gatorWidgetScrollSnapshot', 'gatorWidgetApplyHeight', 'gatorWidgetOnResize']) {
   const body = extract(name);
-  assert.ok(!/contentDocument|contentWindow|ResizeObserver/.test(body), name + ' does not reach into the frame');
+  assert.ok(
+    !/contentDocument|contentWindow|ResizeObserver/.test(body),
+    name + ' does not reach into the frame',
+  );
 }
 assert.ok(!/function gatorWidgetResize\(/.test(src), 'the DOM-reading gatorWidgetResize is gone');
 

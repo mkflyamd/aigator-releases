@@ -32,10 +32,12 @@ Spec: `docs/superpowers/specs/2026-10-19-widget-edit-with-gator-design.md`. Line
 ### Task 1: Tab record carries and persists `editingWidget`
 
 **Files:**
+
 - Modify: `web/static/app.js` (`_saveTabs` ~3919, `createTab` ~4266)
 - Create: `tests/widget_edit_with_gator.test.js`
 
 **Interfaces:**
+
 - Produces: `_newTabRecord(id, opts)` → `{id, title, createdAt, editingWidget?: {widget_id, name}}`; `createTab(opts)` with `opts = {title?: string, editingWidget?: {widget_id: string, name: string}}`; `_activeEditingWidget()` → `{widget_id, name} | null`.
 
 - [ ] **Step 1: Create the test file with its helpers and Task 1 tests**
@@ -275,10 +277,12 @@ git commit -m "feat: persist editingWidget on chat tab records"
 ### Task 2: Hidden widget context for editing tabs
 
 **Files:**
+
 - Modify: `web/static/app.js` (new helpers after `_activeEditingWidget`; send site in `doSend` ~13242)
 - Test: `tests/widget_edit_with_gator.test.js`
 
 **Interfaces:**
+
 - Consumes: `_tabs` (global array of tab records with optional `editingWidget`, Task 1).
 - Produces: `_latestWidgetHtmlFromHistory(hist)` → `string | null`; `_buildWidgetEditSuffix(name, html)` → `string`; `_widgetEditSuffixFor(tabId, hist)` → `Promise<string | null>`.
 
@@ -286,7 +290,7 @@ git commit -m "feat: persist editingWidget on chat tab records"
 
 Append to `tests/widget_edit_with_gator.test.js`:
 
-```js
+````js
 const HISTORY_WITH_WIDGETS = [
   { role: 'user', content: 'make a clock' },
   { role: 'assistant', content: 'v1\n```html:widget\n<div>v1</div>\n```' },
@@ -391,7 +395,7 @@ test('doSend passes the editing-tab suffix as system_prompt_suffix', () => {
     'doSend must build _wSuffix from _widgetEditSuffixFor',
   );
 });
-```
+````
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -402,7 +406,7 @@ Expected: FAIL — `_latestWidgetHtmlFromHistory not found in app.js`, `_buildWi
 
 In `web/static/app.js`, directly after `_activeEditingWidget` (added in Task 1), insert:
 
-```js
+````js
 function _latestWidgetHtmlFromHistory(hist) {
   const fence = /```html:(?:widget|live)\n?([\s\S]*?)```/g;
   for (let i = hist.length - 1; i >= 0; i--) {
@@ -445,21 +449,21 @@ async function _widgetEditSuffixFor(tabId, hist) {
   }
   return html ? _buildWidgetEditSuffix(target.name, html) : null;
 }
-```
+````
 
 Then in `doSend`, replace:
 
 ```js
-      const _wSuffix = window._pendingWidgetSuffix || null;
+const _wSuffix = window._pendingWidgetSuffix || null;
 ```
 
 with:
 
 ```js
-      const _wSuffix =
-        window._pendingWidgetSuffix ||
-        (await _widgetEditSuffixFor(requestContextId, requestHistory)) ||
-        null;
+const _wSuffix =
+  window._pendingWidgetSuffix ||
+  (await _widgetEditSuffixFor(requestContextId, requestHistory)) ||
+  null;
 ```
 
 - [ ] **Step 4: Run the tests to verify they pass**
@@ -479,10 +483,12 @@ git commit -m "feat: send current widget HTML as hidden context in editing tabs"
 ### Task 3: Edit entry point in My Widgets
 
 **Files:**
+
 - Modify: `web/static/app.js` (`GATOR_ACTIONS` ~40–74; `gatorWidgetManagerRender` row HTML ~18390–18397; new `gatorWidgetEditWithGator` after `gatorWidgetDeleteConfirm` ~18163)
 - Test: `tests/widget_edit_with_gator.test.js`
 
 **Interfaces:**
+
 - Consumes: `createTab(opts)` (Task 1), `switchTab(tabId)`, `gatorCloseWidgetManager()`, global `_tabs`.
 - Produces: action `gatorWidgetEditWithGator(widgetId: string, name: string)`.
 
@@ -685,10 +691,12 @@ git commit -m "feat: add Edit with Gator button to the widget manager"
 ### Task 4: Update button and handler
 
 **Files:**
+
 - Modify: `web/static/app.js` (`GATOR_ACTIONS`; toolbar in `renderMarkdown` ~11582–11604; new `gatorWidgetUpdateConfirm` after `gatorWidgetSaveConfirm` ~18099)
 - Test: `tests/widget_edit_with_gator.test.js`
 
 **Interfaces:**
+
 - Consumes: `_activeEditingWidget()` (Task 1), `gatorWidgetHtmlFromId(frameId)`, `gatorWidgetRenderDock()`, `gatorWidgetManagerRender(panel)`.
 - Produces: action `gatorWidgetUpdateConfirm(frameId: string)`; toolbar button `id="${widgetId}-update-btn"`.
 
@@ -696,7 +704,7 @@ git commit -m "feat: add Edit with Gator button to the widget manager"
 
 Append to `tests/widget_edit_with_gator.test.js`:
 
-```js
+````js
 const WIDGET_FENCE = '```html:widget\n<div>hi</div>\n```';
 
 function renderSandbox(editingName) {
@@ -833,7 +841,7 @@ test('gatorWidgetUpdateConfirm does nothing outside an editing tab', async () =>
   await gatorWidgetUpdateConfirm('frame1');
   assert.deepStrictEqual(calls.fetch, []);
 });
-```
+````
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -860,12 +868,12 @@ with:
 In `renderMarkdown`, directly after the `_noSave` constant (ends with `/Demo Ready/i.test(trimmed);`), insert:
 
 ```js
-      const _editTarget = _noSave ? null : _activeEditingWidget();
-      const _updateLabel = _editTarget
-        ? _editTarget.name.length > 20
-          ? _editTarget.name.slice(0, 19) + '…'
-          : _editTarget.name
-        : '';
+const _editTarget = _noSave ? null : _activeEditingWidget();
+const _updateLabel = _editTarget
+  ? _editTarget.name.length > 20
+    ? _editTarget.name.slice(0, 19) + '…'
+    : _editTarget.name
+  : '';
 ```
 
 and replace the Save-button expression:
@@ -1015,6 +1023,7 @@ Stop the dev server (Ctrl+C). If any step above failed, fix it in the task that 
 ## Self-Review
 
 **Spec coverage**
+
 - Pencil button in the manager, new `Edit: <name>` tab, prefilled prompt with caret at end, reuse of an existing editing tab: Task 3.
 - `editingWidget` on the tab record, persisted via `_saveTabs`, `createTab(opts)`: Task 1.
 - Hidden context on every message from the working copy with saved-copy fallback, injected through `system_prompt_suffix`: Task 2.

@@ -37,7 +37,7 @@ Line numbers refer to the reference tree `.claude/worktrees/ref-merged` (commit 
 In `gatorWidgetResize` (`app.js`), keep the collapse-and-measure (it is the one measurement that is right for every widget document) but make it side-effect free:
 
 - `gatorWidgetScrollSnapshot(iframe)` records `scrollTop` for every ancestor of the iframe with `scrollTop > 0` (the chat scroller, a dock panel, any other scroller — each kept separately) and the iframe window's `scrollX/scrollY` when `scrollY > 0` (the widget's own inner scroll).
-- `gatorWidgetScrollRestore(snapshot)` puts back only positions that were clamped *down* (`now < saved`). Growth and browser scroll anchoring are left alone.
+- `gatorWidgetScrollRestore(snapshot)` puts back only positions that were clamped _down_ (`now < saved`). Growth and browser scroll anchoring are left alone.
 - `measure()` becomes `snapshot → existing height logic → restore` in a `try/finally`, synchronously, so no scroll position survives the collapse.
 
 Focus and caret are unaffected by the iframe height; nothing blurs the textarea, so once the scroll is stable the caret stays where the user left it.
@@ -66,11 +66,11 @@ Focus and caret are unaffected by the iframe height; nothing blurs the textarea,
 
 A follow-up PR will drop `allow-same-origin` from the widget sandbox and route widget calls through the parent with an endpoint allow-list. SP7 therefore adds no widget `fetch`, no widget code that reads `window.top` or `parent` (beyond `parent.postMessage`), the parent DOM or `__CSRF_TOKEN__`, and does not change the sandbox attribute, `gatorWidgetCspHtml()` or CSRF handling. Three parent-handled actions go in `app.js` after the `gator:recorder` case (and after SP3's `gator:pick-demo-folder` case when present), each a single named action with fixed parameters:
 
-| Widget posts | Parent does | Parent replies to `e.source` |
-|---|---|---|
-| `{type:'gator:demo-summary', project_id}` | `GET /api/demo-projects/<id>/summary` | `{type:'gator:demo-summary-result', project_id, ok, summary}` or `{ok:false, error}` |
-| `{type:'gator:demo-progress', project_id}` | `GET /api/demo-projects/<id>/progress` | `{type:'gator:demo-progress-result', project_id, ok, progress}` or `{ok:false, error}` |
-| `{type:'gator:demo-open-folder', project_id, target:'final'\|'project'}` | fetches the summary, picks the path, `POST /api/open-file {path, reveal}` | `{type:'gator:demo-open-folder-result', project_id, ok, message}` |
+| Widget posts                                                             | Parent does                                                               | Parent replies to `e.source`                                                           |
+| ------------------------------------------------------------------------ | ------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `{type:'gator:demo-summary', project_id}`                                | `GET /api/demo-projects/<id>/summary`                                     | `{type:'gator:demo-summary-result', project_id, ok, summary}` or `{ok:false, error}`   |
+| `{type:'gator:demo-progress', project_id}`                               | `GET /api/demo-projects/<id>/progress`                                    | `{type:'gator:demo-progress-result', project_id, ok, progress}` or `{ok:false, error}` |
+| `{type:'gator:demo-open-folder', project_id, target:'final'\|'project'}` | fetches the summary, picks the path, `POST /api/open-file {path, reveal}` | `{type:'gator:demo-open-folder-result', project_id, ok, message}`                      |
 
 Parent-side rules: ignore the message unless `e.source` is the `contentWindow` of a `.gator-widget-frame` (`gatorWidgetFrameForSource`); `project_id` must match `/^demo_\d[\w-]*$/`; `target` must be `final` or `project`; every other field in the message, including a widget-supplied `path`, is ignored; reply only to `e.source`; calls go through the page's `fetch` wrapper, which attaches the CSRF token the widget never sees. The logic lives in `gatorDemoBridge(d, e)` and the three `case` labels only delegate to it, so the later allow-list is three entries.
 

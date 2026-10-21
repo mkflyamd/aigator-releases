@@ -36,10 +36,12 @@
 ### Task 1: `tool_repair` helpers
 
 **Files:**
+
 - Create: `web/tool_repair.py`
 - Create: `tests/test_tool_repair.py`
 
 **Interfaces:**
+
 - Consumes: nothing.
 - Produces:
   - `REJECTED_ERRORS: tuple[str, str]`
@@ -277,10 +279,12 @@ git commit -m "feat: add tool_repair helpers describing rejected tool calls"
 ### Task 2: Accurate rejection payload from `execute_tool`
 
 **Files:**
+
 - Modify: `web/app.py` (the `missing_required_params` return in `execute_tool`, ~lines 521-531)
 - Test: `tests/test_tool_repair.py`
 
 **Interfaces:**
+
 - Consumes: nothing from Task 1.
 - Produces: `execute_tool` result `{"error": "missing_required_params", "tool": str, "missing": list[str], "required": list[str], "hint": str}`; the hint contains every required field name.
 
@@ -366,11 +370,13 @@ git commit -m "fix: tell the model which required arguments it omitted"
 ### Task 3: Single-loop repair turn and structured breaker
 
 **Files:**
+
 - Modify: `web/agent_loop.py` (import after the `tool_pipeline` import block; `_NON_RETRYABLE_TOOL_ERRORS` ~232-262; pre-emptive breaker ~850-872; `_bad_tool_streak` init; breaker ~1265-1286; two "circuit breaker + narration cap" comments)
 - Modify: `tests/test_streaming_stall_recovery.py` (delete `test_circuit_breaker_fires_on_streak_1_before_second_llm_call`, lines ~51-106 including its section-header comment; fix docstring item 2)
 - Test: `tests/test_tool_repair.py`
 
 **Interfaces:**
+
 - Consumes: `rejection_summaries`, `stalled_chunk` from Task 1.
 - Produces: `_last_rejections: list[dict]`, a local variable of `_single_agent_loop`, set on every all-bad round; the real breaker yields `stalled_chunk(_last_rejections)`. Task 4 reads `_last_rejections` and `_bad_tool_streak`.
 
@@ -526,10 +532,12 @@ git commit -m "fix: give rejected tool calls one repair turn before stalling"
 ### Task 4: Provider failure after a rejection, and field-naming summaries
 
 **Files:**
+
 - Modify: `web/agent_loop.py` (import line; `_generic_tool_summary`; single-loop exits)
 - Test: `tests/test_tool_repair.py`
 
 **Interfaces:**
+
 - Consumes: `rejection_summary_text`, `stalled_chunk` (Task 1); `_bad_tool_streak`, `_last_rejections` (Task 3).
 - Produces: `_generic_tool_summary(result)` returns `"Rejected <tool>: missing <fields>"` for rejected calls (feeds the `tool_result` event summary and the watchdog's `_last_tool_error`); the single-loop failure exits emit `stalled_chunk(_last_rejections)` when `_bad_tool_streak > 0`.
 
@@ -637,10 +645,12 @@ git commit -m "fix: stall with the failed tool when the provider errors after a 
 ### Task 5: Executor loop
 
 **Files:**
+
 - Modify: `web/agent_loop.py` (`run_three_agent_loop` executor: `_bad_tool_streak` init, breaker, "Executor error" exit)
 - Test: `tests/test_tool_repair.py`
 
 **Interfaces:**
+
 - Consumes: `rejection_summaries`, `stalled_chunk` (Task 1); `invalid_tool_input` already counted (Task 3).
 - Produces: executor `_last_rejections`; breaker and executor-error exit emit `stalled_chunk(_last_rejections)`.
 
@@ -758,10 +768,12 @@ git commit -m "fix: executor loop stalls with the failed tool and fields after o
 ### Task 6: Continue resubmits the original request plus the failure note
 
 **Files:**
+
 - Modify: `web/static/app.js` (`_exhaustedMessage` declaration; `msg.stalled` branch ~13727; banner block ~13873-13896; new helpers above `_pinConfirmCardInView`; `_showBrowserConfirmCard`)
 - Create: `tests/stalled_continue.test.js`
 
 **Interfaces:**
+
 - Consumes: the `stalled` event's `retry_note` string (Task 1).
 - Produces: `_lastUserRequestText(tabId) -> string`; `_continueRequestText(lastUserText, retryNote) -> string`; stream-scoped `_continueRetryNote`.
 
@@ -803,7 +815,8 @@ const stalledBranch = braceBlock('} else if (msg.stalled) {');
 const bannerBlock = braceBlock('if (_streamExhausted) {');
 const helpers = `${fn('_lastUserRequestText')}\n${fn('_continueRequestText')}`;
 
-const RETRY = 'Note: the previous attempt failed because the call to run_python (code) had missing or invalid arguments.';
+const RETRY =
+  'Note: the previous attempt failed because the call to run_python (code) had missing or invalid arguments.';
 
 function onStalled(msg) {
   const ctx = { msg, _streamExhausted: false, _exhaustedMessage: '', _continueRetryNote: '' };
@@ -812,7 +825,11 @@ function onStalled(msg) {
 }
 
 // stalled event: banner text and retry note are captured
-let ctx = onStalled({ stalled: true, message: 'Gator could not form a valid call to run_python (code)', retry_note: RETRY });
+let ctx = onStalled({
+  stalled: true,
+  message: 'Gator could not form a valid call to run_python (code)',
+  retry_note: RETRY,
+});
 assert.strictEqual(ctx._streamExhausted, true);
 assert.strictEqual(ctx._exhaustedMessage, 'Gator could not form a valid call to run_python (code)');
 assert.strictEqual(ctx._continueRetryNote, RETRY);
@@ -824,12 +841,21 @@ assert.strictEqual(ctx._continueRetryNote, '');
 function clickContinue({ retryNote, history, requestTabId = 'tab-1', activeTabId = 'tab-1' }) {
   const created = [];
   const input = { textContent: '', dispatchEvent() {} };
-  const form = { submits: 0, requestSubmit() { this.submits++; } };
+  const form = {
+    submits: 0,
+    requestSubmit() {
+      this.submits++;
+    },
+  };
   const el = () => {
     const e = { className: '', textContent: '', children: [], listeners: {}, removed: false };
     e.appendChild = (c) => e.children.push(c);
-    e.addEventListener = (type, cb) => { e.listeners[type] = cb; };
-    e.remove = () => { e.removed = true; };
+    e.addEventListener = (type, cb) => {
+      e.listeners[type] = cb;
+    };
+    e.remove = () => {
+      e.removed = true;
+    };
     created.push(e);
     return e;
   };
@@ -894,15 +920,15 @@ In `web/static/app.js` (match text exactly; the file may use CRLF line endings �
 1. Declaration — old `  let _exhaustedMessage = '';\n  let _abortCtrl = new AbortController();` → add a line between:
 
 ```js
-  let _exhaustedMessage = '';
-  let _continueRetryNote = '';
-  let _abortCtrl = new AbortController();
+let _exhaustedMessage = '';
+let _continueRetryNote = '';
+let _abortCtrl = new AbortController();
 ```
 
 2. `msg.stalled` branch — after the `_exhaustedMessage = msg.message || '...';` statement add:
 
 ```js
-              _continueRetryNote = typeof msg.retry_note === 'string' ? msg.retry_note : '';
+_continueRetryNote = typeof msg.retry_note === 'string' ? msg.retry_note : '';
 ```
 
 3. Banner block — old:
@@ -954,16 +980,16 @@ function _continueRequestText(lastUserText, retryNote) {
 5. `_showBrowserConfirmCard` — replace
 
 ```js
-  const _lastUserText = (() => {
-    const last = [..._loadTabHistory(_tabId)].reverse().find((e) => e?.role === 'user');
-    return typeof last?.content === 'string' ? last.content : '';
-  })();
+const _lastUserText = (() => {
+  const last = [..._loadTabHistory(_tabId)].reverse().find((e) => e?.role === 'user');
+  return typeof last?.content === 'string' ? last.content : '';
+})();
 ```
 
 with:
 
 ```js
-  const _lastUserText = _lastUserRequestText(_tabId);
+const _lastUserText = _lastUserRequestText(_tabId);
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -993,18 +1019,18 @@ git commit -m "feat: Continue resubmits the original request with the tool-failu
 
 **Spec coverage**
 
-| Spec item | Task |
-|---|---|
-| 1 no repair turn (single loop) | 3 |
-| 2 `invalid_tool_input` not counted | 3 (`_NON_RETRYABLE_TOOL_ERRORS`, `test_schema_violation_counts_as_a_rejected_call`) |
-| 3 banner names tool/fields; breakers emit `stalled` | 1 (`stalled_chunk`), 3 (single), 5 (executor) |
-| 4 provider-failure exits | 4 (single), 5 (executor) |
-| 5 payload `required` + hint | 2 |
-| 6 watchdog summary | 4 (`_generic_tool_summary`) |
-| 7 Continue resubmits request + note, tab guard | 6 |
-| 8 executor one repair turn | 5 (regression guard test) |
-| delete pre-emptive test / docstring | 3 |
-| Retry/Stop, doom-loop untouched | no task touches them |
+| Spec item                                           | Task                                                                                |
+| --------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| 1 no repair turn (single loop)                      | 3                                                                                   |
+| 2 `invalid_tool_input` not counted                  | 3 (`_NON_RETRYABLE_TOOL_ERRORS`, `test_schema_violation_counts_as_a_rejected_call`) |
+| 3 banner names tool/fields; breakers emit `stalled` | 1 (`stalled_chunk`), 3 (single), 5 (executor)                                       |
+| 4 provider-failure exits                            | 4 (single), 5 (executor)                                                            |
+| 5 payload `required` + hint                         | 2                                                                                   |
+| 6 watchdog summary                                  | 4 (`_generic_tool_summary`)                                                         |
+| 7 Continue resubmits request + note, tab guard      | 6                                                                                   |
+| 8 executor one repair turn                          | 5 (regression guard test)                                                           |
+| delete pre-emptive test / docstring                 | 3                                                                                   |
+| Retry/Stop, doom-loop untouched                     | no task touches them                                                                |
 
 **Placeholder scan:** every step carries concrete code or exact edit text; no TBD/"similar to" entries.
 

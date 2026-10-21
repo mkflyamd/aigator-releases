@@ -4219,7 +4219,9 @@ function _pinForSend(pin, text) {
 function _loadTabPin(tabId) {
   try {
     const v = JSON.parse(localStorage.getItem('tab-pin-' + tabId) || 'null');
-    return v && typeof v.skill === 'string' ? { skill: v.skill, projectId: v.projectId || null } : null;
+    return v && typeof v.skill === 'string'
+      ? { skill: v.skill, projectId: v.projectId || null }
+      : null;
   } catch {
     return null;
   }
@@ -8549,16 +8551,24 @@ const _activeStops = new Set();
 function _shouldStopFromClick(e, btn, rect, streaming) {
   if (!streaming || e.button !== 0) return false;
   if (btn.contains(e.target)) return true;
-  return e.clientX >= rect.left && e.clientX <= rect.right &&
-         e.clientY >= rect.top && e.clientY <= rect.bottom;
+  return (
+    e.clientX >= rect.left &&
+    e.clientX <= rect.right &&
+    e.clientY >= rect.top &&
+    e.clientY <= rect.bottom
+  );
 }
-document.addEventListener('click', (e) => {
-  if (!_activeStops.size) return;
-  const streaming = sendBtn.classList.contains('is-streaming');
-  if (!_shouldStopFromClick(e, sendBtn, sendBtn.getBoundingClientRect(), streaming)) return;
-  e.preventDefault();
-  [..._activeStops].forEach((stop) => stop());
-}, true);
+document.addEventListener(
+  'click',
+  (e) => {
+    if (!_activeStops.size) return;
+    const streaming = sendBtn.classList.contains('is-streaming');
+    if (!_shouldStopFromClick(e, sendBtn, sendBtn.getBoundingClientRect(), streaming)) return;
+    e.preventDefault();
+    [..._activeStops].forEach((stop) => stop());
+  },
+  true,
+);
 
 const _COMPACTION_ICON_SVG =
   '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8"/><line x1="10" y1="12" x2="14" y2="12"/></svg>';
@@ -11796,7 +11806,9 @@ function renderMarkdown(raw) {
         `<div class="gator-widget-wrap" id="${widgetId}-wrap">` +
           `<div class="gator-widget-toolbar">` +
           `<span class="gator-widget-label" id="${widgetId}-label">${
-            _editTarget ? 'Unsaved changes to &quot;' + escapeHtml(_updateLabel) + '&quot;' : 'Widget'
+            _editTarget
+              ? 'Unsaved changes to &quot;' + escapeHtml(_updateLabel) + '&quot;'
+              : 'Widget'
           }</span>` +
           `<div class="gator-widget-save-row" id="${widgetId}-save-row" style="display:none;flex:1;gap:4px;align-items:center">` +
           `<input id="${widgetId}-name-input" class="gator-widget-name-input" type="text" placeholder="Widget name..." value="My Widget" />` +
@@ -12806,7 +12818,10 @@ form.addEventListener('submit', async (e) => {
     return;
   }
   if (input.querySelector('[data-media-uploading]')) {
-    _showUploadError(document.getElementById('aigator-drop-error'), 'Wait for the upload to finish');
+    _showUploadError(
+      document.getElementById('aigator-drop-error'),
+      'Wait for the upload to finish',
+    );
     return;
   }
   closeMentionDropdown();
@@ -14152,7 +14167,12 @@ form.addEventListener('submit', async (e) => {
           _submittedHist.push({ role: 'assistant', content: full });
           _saveTabHistory(_tabKey, _submittedHist);
         }
-        if (_widgetEditReplyNeedsNotice(_tabs.find((t) => t.id === _tabKey), full)) {
+        if (
+          _widgetEditReplyNeedsNotice(
+            _tabs.find((t) => t.id === _tabKey),
+            full,
+          )
+        ) {
           const note = document.createElement('div');
           note.className = 'widget-edit-notice';
           note.textContent =
@@ -14259,7 +14279,8 @@ form.addEventListener('submit', async (e) => {
     // _pinScrollToBottom (not a plain scrollTop= line) since it re-applies across
     // several frames/timeouts and on late <img> loads — exactly what a freshly
     // appended image/file chip needs.
-    if (_activeTabId === requestTabId && !_userScrolledUp && !_gatorWidgetRevealHold) _pinScrollToBottom(messages);
+    if (_activeTabId === requestTabId && !_userScrolledUp && !_gatorWidgetRevealHold)
+      _pinScrollToBottom(messages);
     // Refresh usage bar after each response
     _refreshUsageBar();
     clearInterval(_browserPoll);
@@ -18453,10 +18474,19 @@ function gatorWidgetRevealOnce(iframe) {
     const wrap = iframe.closest ? iframe.closest('.gator-widget-wrap') : null;
     const msgs = document.getElementById('messages');
     if (!wrap || !msgs || !msgs.contains(wrap)) return;
-    if (!gatorWidgetShouldReveal(_chatTaskIds.has(_activeTabId), !_userScrolledUp, wrap.offsetHeight, msgs.clientHeight)) return;
+    if (
+      !gatorWidgetShouldReveal(
+        _chatTaskIds.has(_activeTabId),
+        !_userScrolledUp,
+        wrap.offsetHeight,
+        msgs.clientHeight,
+      )
+    )
+      return;
     _userScrolledUp = true;
     _gatorWidgetRevealHold = true;
-    msgs.scrollTop = wrap.getBoundingClientRect().top - msgs.getBoundingClientRect().top + msgs.scrollTop;
+    msgs.scrollTop =
+      wrap.getBoundingClientRect().top - msgs.getBoundingClientRect().top + msgs.scrollTop;
   } catch (_) {}
 }
 
@@ -18496,7 +18526,8 @@ async function gatorRecorderBridge(d, e) {
   const rid = typeof d.rid === 'number' || typeof d.rid === 'string' ? d.rid : undefined;
   const reply = (data) => gatorWidgetReply(e, { type: 'gator:recorder-result', action, rid, data });
   const spec =
-    typeof action === 'string' && Object.prototype.hasOwnProperty.call(GATOR_RECORDER_ACTIONS, action)
+    typeof action === 'string' &&
+    Object.prototype.hasOwnProperty.call(GATOR_RECORDER_ACTIONS, action)
       ? GATOR_RECORDER_ACTIONS[action]
       : null;
   if (!spec) {
@@ -18598,7 +18629,10 @@ async function gatorDemoBridge(d, e) {
       body: JSON.stringify({ path: target, reveal }),
     });
     const od = await orsp.json();
-    reply({ ok: od.ok !== false, message: od.ok === false ? od.message || 'Could not open the folder.' : '' });
+    reply({
+      ok: od.ok !== false,
+      message: od.ok === false ? od.message || 'Could not open the folder.' : '',
+    });
   } catch (err) {
     reply({ ok: false, error: String(err), message: 'Could not open the folder: ' + err });
   }
@@ -18791,7 +18825,10 @@ function _parseNarrationApproval(text) {
   const segments = JSON.parse(raw.slice(start, end + 1));
   if (!Array.isArray(segments) || !segments.length) throw new Error('no segments');
   const flags = {};
-  for (const part of raw.slice(end + 1).trim().split(/\s+/)) {
+  for (const part of raw
+    .slice(end + 1)
+    .trim()
+    .split(/\s+/)) {
     const m = part.match(/^([A-Z_]+):(.+)$/);
     if (m) flags[m[1]] = m[2];
   }
@@ -18853,7 +18890,8 @@ async function _handleNarrationApproved(text, source) {
   }
   try {
     const projectId = parsed.projectId || (await _activeDemoProjectId());
-    if (!projectId) throw new Error('No demo project is active. Record again or reopen the project.');
+    if (!projectId)
+      throw new Error('No demo project is active. Record again or reopen the project.');
     const res = await fetch('/api/demo-projects/' + encodeURIComponent(projectId) + '/narration', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -18861,9 +18899,12 @@ async function _handleNarrationApproved(text, source) {
     });
     if (!res.ok) throw new Error(await _errorDetail(res));
     const approval = (await res.json()).approval;
-    if (!approval || !approval.approval_id) throw new Error('The server did not confirm the approval.');
+    if (!approval || !approval.approval_id)
+      throw new Error('The server did not confirm the approval.');
     if (_activeTabId !== tabId) {
-      throw new Error('You switched tabs. Return to the original tab and approve again; nothing is lost.');
+      throw new Error(
+        'You switched tabs. Return to the original tab and approve again; nothing is lost.',
+      );
     }
     _setTabPin(tabId, { skill: _DEMO_RECORDER_SKILL, projectId });
     _replyApproval(source, { ok: true, approval });
@@ -18953,7 +18994,9 @@ window.addEventListener('message', (e) => {
         reply({ ok: false, error: 'folder picker unavailable' });
         break;
       }
-      pick().then(reply).catch((err) => reply({ ok: false, error: String(err) }));
+      pick()
+        .then(reply)
+        .catch((err) => reply({ ok: false, error: String(err) }));
       break;
     }
     case 'gator:demo-summary':
@@ -19159,7 +19202,9 @@ async function demoRootSet(root) {
 
 document.getElementById('settings-trigger')?.addEventListener('click', demoRootRefresh);
 document.getElementById('demo-root-change')?.addEventListener('click', async () => {
-  const picked = window.gatorShell?.pickDemoFolder ? await window.gatorShell.pickDemoFolder() : null;
+  const picked = window.gatorShell?.pickDemoFolder
+    ? await window.gatorShell.pickDemoFolder()
+    : null;
   if (picked && picked.ok) demoRootSet(picked.path);
 });
 document.getElementById('demo-root-reset')?.addEventListener('click', () => demoRootSet(null));

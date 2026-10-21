@@ -34,10 +34,29 @@ assert.strictEqual(DemoMedia.formatResolution({ width: null, height: null }), ''
 assert.strictEqual(DemoMedia.formatResolution({}), '');
 
 // parseTrim
-assert.deepStrictEqual(plain(DemoMedia.parseTrim('', '', 10)), { ok: true, trim_start: 0, trim_end: null });
-assert.deepStrictEqual(plain(DemoMedia.parseTrim('1', '6.5', 10)), { ok: true, trim_start: 1, trim_end: 6.5 });
-assert.deepStrictEqual(plain(DemoMedia.parseTrim('2', '', 10)), { ok: true, trim_start: 2, trim_end: null });
-for (const [s, e] of [['x', ''], ['-1', ''], ['0', 'abc'], ['0', '11'], ['2', '2.2'], ['9.8', '']]) {
+assert.deepStrictEqual(plain(DemoMedia.parseTrim('', '', 10)), {
+  ok: true,
+  trim_start: 0,
+  trim_end: null,
+});
+assert.deepStrictEqual(plain(DemoMedia.parseTrim('1', '6.5', 10)), {
+  ok: true,
+  trim_start: 1,
+  trim_end: 6.5,
+});
+assert.deepStrictEqual(plain(DemoMedia.parseTrim('2', '', 10)), {
+  ok: true,
+  trim_start: 2,
+  trim_end: null,
+});
+for (const [s, e] of [
+  ['x', ''],
+  ['-1', ''],
+  ['0', 'abc'],
+  ['0', '11'],
+  ['2', '2.2'],
+  ['9.8', ''],
+]) {
   const r = DemoMedia.parseTrim(s, e, 10);
   assert.strictEqual(r.ok, false, `parseTrim(${s}, ${e}) should be rejected`);
   assert.ok(typeof r.error === 'string' && r.error.length > 0);
@@ -68,7 +87,10 @@ assert.ok(appJs.includes('Wait for the upload to finish'), 'submit gate message'
 assert.ok(appJs.includes('DemoMedia.mountPanel('), 'panel is mounted');
 assert.ok(indexHtml.includes('id="demo-media-panel"'), 'panel container');
 assert.ok(indexHtml.includes('/static/demo-media.js'), 'script tag');
-assert.ok(indexHtml.includes('.mp4,.mov,.m4v,.webm,.mp3,.m4a,.wav,.aac,.ogg,.flac'), 'file input accepts media');
+assert.ok(
+  indexHtml.includes('.mp4,.mov,.m4v,.webm,.mp3,.m4a,.wav,.aac,.ogg,.flac'),
+  'file input accepts media',
+);
 assert.ok(styleCss.includes('.demo-media-panel'), 'panel styles');
 assert.ok(
   indexHtml.indexOf('/static/demo-media.js') < indexHtml.indexOf('/static/app.js'),
@@ -113,7 +135,10 @@ const cancelCheck = (async () => {
   const attach = appJs.match(/function _attachDemoMedia\([^)]*\)\s*\{[\s\S]*?\n\}/)[0];
   assert.ok(attach.includes('new AbortController()'), 'each media chip owns an abort controller');
   assert.ok(/signal:\s*\w+\.signal/.test(attach), 'the controller signal reaches the upload');
-  assert.ok(/_wireChipRemove\(removeBtn, chip, input, \(\) => \w+\.abort\(\)\)/.test(attach), 'removing the chip aborts the upload');
+  assert.ok(
+    /_wireChipRemove\(removeBtn, chip, input, \(\) => \w+\.abort\(\)\)/.test(attach),
+    'removing the chip aborts the upload',
+  );
   assert.ok(/AbortError/.test(attach), 'a cancelled upload is not reported as an error');
 })();
 cancelCheck.then(

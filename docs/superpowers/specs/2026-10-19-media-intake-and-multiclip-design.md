@@ -35,15 +35,15 @@ The compose step runs inside the backend because the agent cannot call mutating 
 
 ### Modules
 
-| File | Responsibility |
-|---|---|
-| `web/demo_media_probe.py` | Extension allow-list, `ffprobe` JSON → validated `dict`, `MediaRejected(code, message)`. No project knowledge. |
-| `web/demo_clips.py` | Clip registry in `ext["clips"]`: add / remove / reorder / trim, limits, fingerprint, `frame_times`. FastAPI-free. |
-| `web/demo_compose.py` | ffmpeg argv builders, `build(pid)`, single-worker scheduler, restart recovery (`ensure_current`). FastAPI-free. |
-| `web/routes/demo_clips.py` | HTTP surface under `/api/demo-media`. |
-| `web/static/demo-media.js` | Allow-list, local validation, XHR upload, clip panel, pure helpers (`classify`, `parseTrim`, `moveId`, `formatDuration`). |
-| `web/skills/gator-demo-recorder/scripts/tts_pipeline.py` | `build_merge_argv` with explicit `-map`, optional `--soundtrack`. |
-| `web/skills/gator-demo-recorder/SKILL.md` | "Import Mode" section, Phase 2 and Phase 4 import branches. |
+| File                                                     | Responsibility                                                                                                            |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `web/demo_media_probe.py`                                | Extension allow-list, `ffprobe` JSON → validated `dict`, `MediaRejected(code, message)`. No project knowledge.            |
+| `web/demo_clips.py`                                      | Clip registry in `ext["clips"]`: add / remove / reorder / trim, limits, fingerprint, `frame_times`. FastAPI-free.         |
+| `web/demo_compose.py`                                    | ffmpeg argv builders, `build(pid)`, single-worker scheduler, restart recovery (`ensure_current`). FastAPI-free.           |
+| `web/routes/demo_clips.py`                               | HTTP surface under `/api/demo-media`.                                                                                     |
+| `web/static/demo-media.js`                               | Allow-list, local validation, XHR upload, clip panel, pure helpers (`classify`, `parseTrim`, `moveId`, `formatDuration`). |
+| `web/skills/gator-demo-recorder/scripts/tts_pipeline.py` | `build_merge_argv` with explicit `-map`, optional `--soundtrack`.                                                         |
+| `web/skills/gator-demo-recorder/SKILL.md`                | "Import Mode" section, Phase 2 and Phase 4 import branches.                                                               |
 
 ### Probe constants (`demo_media_probe.py`)
 
@@ -70,20 +70,26 @@ Namespace `clips` (SP5 owns `ext["media"]`; the names do not collide).
   "version": 1,
   "next_id": 3,
   "clips": [
-    {"id": "c1", "name": "intro.mp4", "file": "source/c1_intro.mp4",
-     "duration": 12.3, "width": 1920, "height": 1080, "has_audio": true,
-     "trim_start": 0.0, "trim_end": null}
+    {
+      "id": "c1",
+      "name": "intro.mp4",
+      "file": "source/c1_intro.mp4",
+      "duration": 12.3,
+      "width": 1920,
+      "height": 1080,
+      "has_audio": true,
+      "trim_start": 0.0,
+      "trim_end": null
+    }
   ],
-  "audio": [
-    {"id": "a2", "name": "bed.mp3", "file": "source/a2_bed.mp3", "duration": 95.0}
-  ],
+  "audio": [{ "id": "a2", "name": "bed.mp3", "file": "source/a2_bed.mp3", "duration": 95.0 }],
   "timeline": {
     "state": "idle|building|ready|failed",
     "fingerprint": "<sha1 hex>",
     "file": "work/timeline.mp4",
     "soundtrack": "work/soundtrack.m4a",
     "duration": 30.0,
-    "clips": [{"id": "c1", "name": "intro.mp4", "start": 0.0, "end": 10.0}],
+    "clips": [{ "id": "c1", "name": "intro.mp4", "start": 0.0, "end": 10.0 }],
     "frame_times": [2.5, 7.5, 12.5, 17.5, 22.5, 27.5],
     "error": null
   }
@@ -112,13 +118,13 @@ Constants: `TARGET_FPS = 30`, `MAX_OUT_W = 1920`, `MAX_OUT_H = 1080`, `AUDIO_RAT
 
 ### HTTP surface (`/api/demo-media`)
 
-| Route | Body / query | Result |
-|---|---|---|
-| `POST /upload` | raw body; `?filename=` required; `?project_id=` optional | `{ok, project_id, item, path, clips}` (`path` = absolute saved file) |
-| `GET /{pid}` | | `{ok, project_id, name, stage, clips}` and `ensure_current` |
-| `PUT /{pid}/order` | `{"ids": ["c2","c1"]}` | `{ok, clips}` |
-| `PATCH /{pid}/clips/{cid}` | `{"trim_start": 1.0, "trim_end": 9.5 \| null}` | `{ok, clips}` |
-| `DELETE /{pid}/items/{iid}` | | `{ok, clips}` |
+| Route                       | Body / query                                             | Result                                                               |
+| --------------------------- | -------------------------------------------------------- | -------------------------------------------------------------------- |
+| `POST /upload`              | raw body; `?filename=` required; `?project_id=` optional | `{ok, project_id, item, path, clips}` (`path` = absolute saved file) |
+| `GET /{pid}`                |                                                          | `{ok, project_id, name, stage, clips}` and `ensure_current`          |
+| `PUT /{pid}/order`          | `{"ids": ["c2","c1"]}`                                   | `{ok, clips}`                                                        |
+| `PATCH /{pid}/clips/{cid}`  | `{"trim_start": 1.0, "trim_end": 9.5 \| null}`           | `{ok, clips}`                                                        |
+| `DELETE /{pid}/items/{iid}` |                                                          | `{ok, clips}`                                                        |
 
 In every body, `clips` is the whole registry object `{version, next_id, clips: [...], audio: [...], timeline: {...}}`, not just the clip list.
 
@@ -176,21 +182,21 @@ Trigger: a `[File: <path>]` chip whose extension is in the media lists and whose
 
 `MediaRejected.code` values and HTTP status:
 
-| Code | Status | When |
-|---|---|---|
-| `unsupported_type` | 415 | extension not in `VIDEO_EXTS + AUDIO_EXTS`, or missing `filename` |
-| `tools_missing` | 503 | ffprobe is not installed |
-| `too_large` | 413 | body exceeds `MAX_FILE_BYTES` |
-| `unreadable` | 422 | ffprobe fails or returns no usable JSON |
-| `no_video_stream` / `no_audio_stream` | 422 | extension says video/audio but the stream is absent |
-| `codec_unsupported` | 422 | codec outside the allow-lists |
-| `zero_duration` / `too_long` | 422 | duration ≤ 0 or > `MAX_CLIP_SECONDS` |
-| `too_big_dimensions` | 422 | width or height > `MAX_DIMENSION` |
-| `too_many` | 409 | more than `MAX_VIDEO_CLIPS` clips or `MAX_AUDIO_ASSETS` audio assets |
-| `bad_order` | 422 | `ids` is not a permutation of the clip ids |
-| `bad_trim` | 422 | not `0 ≤ start < end ≤ duration`, or length < 0.5 s |
-| `not_found` | 404 | unknown project or item |
-| `project_locked` | 409 | stage `narration_approved` or `delivered` |
+| Code                                  | Status | When                                                                 |
+| ------------------------------------- | ------ | -------------------------------------------------------------------- |
+| `unsupported_type`                    | 415    | extension not in `VIDEO_EXTS + AUDIO_EXTS`, or missing `filename`    |
+| `tools_missing`                       | 503    | ffprobe is not installed                                             |
+| `too_large`                           | 413    | body exceeds `MAX_FILE_BYTES`                                        |
+| `unreadable`                          | 422    | ffprobe fails or returns no usable JSON                              |
+| `no_video_stream` / `no_audio_stream` | 422    | extension says video/audio but the stream is absent                  |
+| `codec_unsupported`                   | 422    | codec outside the allow-lists                                        |
+| `zero_duration` / `too_long`          | 422    | duration ≤ 0 or > `MAX_CLIP_SECONDS`                                 |
+| `too_big_dimensions`                  | 422    | width or height > `MAX_DIMENSION`                                    |
+| `too_many`                            | 409    | more than `MAX_VIDEO_CLIPS` clips or `MAX_AUDIO_ASSETS` audio assets |
+| `bad_order`                           | 422    | `ids` is not a permutation of the clip ids                           |
+| `bad_trim`                            | 422    | not `0 ≤ start < end ≤ duration`, or length < 0.5 s                  |
+| `not_found`                           | 404    | unknown project or item                                              |
+| `project_locked`                      | 409    | stage `narration_approved` or `delivered`                            |
 
 Responses use `{"ok": false, "code": ..., "message": ...}`. A rejected upload deletes its `.part` file and leaves the registry untouched. A failed ffmpeg run sets `timeline.state = "failed"` with the last 400 characters of stderr in `timeline.error`; the next mutation (which changes the fingerprint) re-schedules, and a plain `GET` does not retry an unchanged failure. Source files are never deleted by a failed build.
 

@@ -34,13 +34,13 @@ First-class tools in `web/skills/gator-demo-recorder/tools.py` backed by one Fas
 
 All tools take an optional `project_id` (default: the active project) and return `{"error": code, "message": ..., ...}` on failure (a truthy `error` marks a tool error for the executor). All paths in arguments and results are project-relative (`source/recording.mp4`).
 
-| Tool | Arguments | Result (success) |
-|---|---|---|
-| `demo_media_manifest` | none | `{ok, current, files:[{rel, duration_sec, width, height, fps, has_video, has_audio, size_bytes}], generated_at}` from ffprobe over `source/`, `work/normalized/`, `work/edits/`, `final/` |
-| `demo_inspect_frames` | `source`, `times_sec` (1-8) | `{ok, source, duration_sec, frames:[{time_sec, rel, path, bytes}], op_id}`; PNGs in `work/frames/` |
-| `demo_replace_interval` | `start_sec`, `end_sec`, `insert_source`, `insert_start_sec=0`, `base=""` | `{ok, output:{rel, path, duration_sec}, base, replaced_interval_sec, inserted_from:{rel, interval_sec}, inserted_audio_dropped, timeline_shifted:false, op_id}` |
-| `demo_append_clip` | `clip`, `clip_start_sec=0`, `clip_end_sec`, `base=""` | `{ok, output, base, appended_from:{rel, interval_sec}, appended_at_sec, inserted_audio_dropped, timeline_shifted:false, op_id}` |
-| `demo_merge_narration` | `intro_mode`, `intro_duration_sec`, `intro_title`, `voice`, `video`, `approval_id` (all optional) | `{ok, output:{rel, path, duration_sec, version}, video, intro:{mode, duration_sec, title, applied, source}, narration:{segments, offset_sec, first_start_sec}, video_extended_by_sec, video_stream_sec, audio_stream_sec, sync_ok:true, approval_id, op_id}` |
+| Tool                    | Arguments                                                                                         | Result (success)                                                                                                                                                                                                                                             |
+| ----------------------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `demo_media_manifest`   | none                                                                                              | `{ok, current, files:[{rel, duration_sec, width, height, fps, has_video, has_audio, size_bytes}], generated_at}` from ffprobe over `source/`, `work/normalized/`, `work/edits/`, `final/`                                                                    |
+| `demo_inspect_frames`   | `source`, `times_sec` (1-8)                                                                       | `{ok, source, duration_sec, frames:[{time_sec, rel, path, bytes}], op_id}`; PNGs in `work/frames/`                                                                                                                                                           |
+| `demo_replace_interval` | `start_sec`, `end_sec`, `insert_source`, `insert_start_sec=0`, `base=""`                          | `{ok, output:{rel, path, duration_sec}, base, replaced_interval_sec, inserted_from:{rel, interval_sec}, inserted_audio_dropped, timeline_shifted:false, op_id}`                                                                                              |
+| `demo_append_clip`      | `clip`, `clip_start_sec=0`, `clip_end_sec`, `base=""`                                             | `{ok, output, base, appended_from:{rel, interval_sec}, appended_at_sec, inserted_audio_dropped, timeline_shifted:false, op_id}`                                                                                                                              |
+| `demo_merge_narration`  | `intro_mode`, `intro_duration_sec`, `intro_title`, `voice`, `video`, `approval_id` (all optional) | `{ok, output:{rel, path, duration_sec, version}, video, intro:{mode, duration_sec, title, applied, source}, narration:{segments, offset_sec, first_start_sec}, video_extended_by_sec, video_stream_sec, audio_stream_sec, sync_ok:true, approval_id, op_id}` |
 
 `base` defaults to the project's current video (see "Current video"). `video` for the merge defaults the same way.
 
@@ -65,7 +65,7 @@ Edits never overwrite the recording. Outputs go to `work/edits/edit_NNN.mp4`; in
   "current": "work/edits/edit_002.mp4",
   "current_base": "source/recording.mp4",
   "output_version": 2,
-  "manifest": {"generated_at": "...", "files": []},
+  "manifest": { "generated_at": "...", "files": [] },
   "ops": []
 }
 ```
@@ -78,11 +78,11 @@ Edits never overwrite the recording. Outputs go to `work/edits/edit_NNN.mp4`; in
 
 Three flat fields, stored in the approved narration `flags` (sub-project 7 sets them; the tool arguments override):
 
-| Field | Values |
-|---|---|
-| `intro_mode` | `none` (default), `hold` (freeze the first frame), `card` (solid title card) |
-| `intro_duration_sec` | 0.5-10, default 2 |
-| `intro_title` | up to 80 characters; required for `card`, optional for `hold` |
+| Field                | Values                                                                       |
+| -------------------- | ---------------------------------------------------------------------------- |
+| `intro_mode`         | `none` (default), `hold` (freeze the first frame), `card` (solid title card) |
+| `intro_duration_sec` | 0.5-10, default 2                                                            |
+| `intro_title`        | up to 80 characters; required for `card`, optional for `hold`                |
 
 User-facing wording is exact: "Hold" freezes the first frame; "Title card" shows a title. The tool never calls a hold a title card.
 

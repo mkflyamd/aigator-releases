@@ -56,7 +56,7 @@ Non-goals: moving an existing project to another root, deleting projects, multi-
   "stage": "recorded",
   "segments": ["source/seg_00.mp4", "source/seg_01.mp4"],
   "raw": "source/recording.mp4",
-  "narration": {"approved_at": "2026-10-19T14:40:00+00:00"},
+  "narration": { "approved_at": "2026-10-19T14:40:00+00:00" },
   "ext": {}
 }
 ```
@@ -97,8 +97,18 @@ def save_narration(project_id: str, segments: list, flags: dict) -> dict
 Index file `~/.gator/demo_projects.json`:
 
 ```json
-{"schema_version": 1, "active_project_id": "demo_20261019_143012",
- "projects": [{"project_id": "demo_20261019_143012", "name": "...", "path": "C:/.../demo_20261019_143012", "updated_at": "..."}]}
+{
+  "schema_version": 1,
+  "active_project_id": "demo_20261019_143012",
+  "projects": [
+    {
+      "project_id": "demo_20261019_143012",
+      "name": "...",
+      "path": "C:/.../demo_20261019_143012",
+      "updated_at": "..."
+    }
+  ]
+}
 ```
 
 The index is the lookup from ID to folder (a project can live under any root). It holds at most 50 entries, most recently updated first. If a folder in the index no longer exists, `list_projects()` drops the entry.
@@ -118,17 +128,17 @@ A folder under the default root matching `demo_\d{8}_\d{6}` with no `project.jso
 
 All under `/api/demo-projects`. Every POST/PUT carries `dependencies=[Depends(verify_csrf)]`.
 
-| Route | Purpose |
-|---|---|
-| `GET /settings` | `{default_root, is_default}` |
-| `PUT /settings` | body `{root: str \| null}`; sets or resets the global default |
-| `GET /` | recent projects, newest first |
-| `POST /` | body `{name?, root?}`; creates and activates a project |
-| `GET /active` | the active project (404 if none) |
-| `GET /{id}` | project with derived `final`, `raw`, absolute paths |
-| `POST /{id}/activate` | makes it the active project |
+| Route                  | Purpose                                                                                 |
+| ---------------------- | --------------------------------------------------------------------------------------- |
+| `GET /settings`        | `{default_root, is_default}`                                                            |
+| `PUT /settings`        | body `{root: str \| null}`; sets or resets the global default                           |
+| `GET /`                | recent projects, newest first                                                           |
+| `POST /`               | body `{name?, root?}`; creates and activates a project                                  |
+| `GET /active`          | the active project (404 if none)                                                        |
+| `GET /{id}`            | project with derived `final`, `raw`, absolute paths                                     |
+| `POST /{id}/activate`  | makes it the active project                                                             |
 | `POST /{id}/narration` | body `{segments, flags}`; writes `work/narration.json`, sets stage `narration_approved` |
-| `GET /{id}/file?rel=` | serves a file inside the project folder (mp4/mp3/m4a), 403 outside it |
+| `GET /{id}/file?rel=`  | serves a file inside the project folder (mp4/mp3/m4a), 403 outside it                   |
 
 `GET /settings` is declared before `GET /{id}`.
 
@@ -141,14 +151,14 @@ Agent-run code cannot hold the CSRF token (by design, `web/security.py`), so the
 
 ### Existing recorder routes
 
-| Existing | New behavior |
-|---|---|
-| `POST /api/recorder/start` | `StartRequest` gains `project_id: str \| None`. With it, the segments continue that project; without it, a project is created under the default root and activated. Segments go to `source/seg_NN.mp4`; the ffmpeg log to `work/logs/ffmpeg_log.txt`. Response keeps `session_dir` (now the project folder) and adds `project_id`. |
-| `POST /api/recorder/stop` | Stitched output goes to `source/recording.mp4`; project stage becomes `recorded`; `segments` and `raw` are saved. Response keeps `path` (the raw recording) and adds `project_id`. It no longer writes `latest_output.json`. |
-| `GET /api/recorder/latest-output` | Returns `{raw, final, timestamp, project_id}` derived from the active project; 404 when there is none. Kept so already-saved widgets keep working. |
-| `POST /api/recorder/set-output` | Removed from the skill. The route remains as a shim that, when `final` is under the active project folder, does nothing further (disk already shows it); otherwise returns 400. |
-| `POST /api/recorder/narration-approved` | Delegates to the project's `narration` route logic for the active project; still writes `~/.gator/narration_pending.json` so older skill copies keep working. |
-| `GET /api/recorder/serve-file` | Allowed set widens from `OUT_DIR` to the folder of any project in the index. |
+| Existing                                | New behavior                                                                                                                                                                                                                                                                                                                       |
+| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /api/recorder/start`              | `StartRequest` gains `project_id: str \| None`. With it, the segments continue that project; without it, a project is created under the default root and activated. Segments go to `source/seg_NN.mp4`; the ffmpeg log to `work/logs/ffmpeg_log.txt`. Response keeps `session_dir` (now the project folder) and adds `project_id`. |
+| `POST /api/recorder/stop`               | Stitched output goes to `source/recording.mp4`; project stage becomes `recorded`; `segments` and `raw` are saved. Response keeps `path` (the raw recording) and adds `project_id`. It no longer writes `latest_output.json`.                                                                                                       |
+| `GET /api/recorder/latest-output`       | Returns `{raw, final, timestamp, project_id}` derived from the active project; 404 when there is none. Kept so already-saved widgets keep working.                                                                                                                                                                                 |
+| `POST /api/recorder/set-output`         | Removed from the skill. The route remains as a shim that, when `final` is under the active project folder, does nothing further (disk already shows it); otherwise returns 400.                                                                                                                                                    |
+| `POST /api/recorder/narration-approved` | Delegates to the project's `narration` route logic for the active project; still writes `~/.gator/narration_pending.json` so older skill copies keep working.                                                                                                                                                                      |
+| `GET /api/recorder/serve-file`          | Allowed set widens from `OUT_DIR` to the folder of any project in the index.                                                                                                                                                                                                                                                       |
 
 `/status` (`recorder.py:984-1021`) adds `project_id`.
 
@@ -169,18 +179,18 @@ Phase 4 writes TTS audio to `PROJECT_DIR/work/tts`, logs to `PROJECT_DIR/work/lo
 
 SP3 changes only these places; SP4 must leave them intact or coordinate:
 
-| Lines (ref tree) | Change |
-|---|---|
-| 21 | `OUT_DIR` stays as the legacy default for `serve-file` fallback only |
-| 95-105 | `_session_dir` / `_session_tag` kept as names, now set from the project (`_session_dir = project folder`, `_session_tag = project_id`) |
-| 655-660 | `_start_segment` writes `source/seg_NN.mp4` and `work/logs/ffmpeg_log.txt` |
-| 756-759 | session creation replaced by `begin_session()` (create or reuse project) |
-| 789-790 | start response `path` and `session_dir` |
-| 937-954 | stop: stitched path and the `_write_latest_output` call |
-| 965-981 | `_write_latest_output` deleted |
-| 984-1021 | `/status` adds `project_id` |
-| 1033-1087 | `latest-output`, `set-output`, `narration-approved` become shims |
-| 1144-1161 | `serve-file` allowed set |
+| Lines (ref tree) | Change                                                                                                                                 |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| 21               | `OUT_DIR` stays as the legacy default for `serve-file` fallback only                                                                   |
+| 95-105           | `_session_dir` / `_session_tag` kept as names, now set from the project (`_session_dir = project folder`, `_session_tag = project_id`) |
+| 655-660          | `_start_segment` writes `source/seg_NN.mp4` and `work/logs/ffmpeg_log.txt`                                                             |
+| 756-759          | session creation replaced by `begin_session()` (create or reuse project)                                                               |
+| 789-790          | start response `path` and `session_dir`                                                                                                |
+| 937-954          | stop: stitched path and the `_write_latest_output` call                                                                                |
+| 965-981          | `_write_latest_output` deleted                                                                                                         |
+| 984-1021         | `/status` adds `project_id`                                                                                                            |
+| 1033-1087        | `latest-output`, `set-output`, `narration-approved` become shims                                                                       |
+| 1144-1161        | `serve-file` allowed set                                                                                                               |
 
 Pause/resume (`801-885`) change only through `_start_segment`.
 

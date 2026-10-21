@@ -43,7 +43,10 @@ function world({ streaming, wrapH, viewportH }) {
 }
 
 // Truth table for the pure decision.
-const T = (...a) => vm.runInNewContext(extract('gatorWidgetShouldReveal') + ';gatorWidgetShouldReveal(' + a.join(',') + ')');
+const T = (...a) =>
+  vm.runInNewContext(
+    extract('gatorWidgetShouldReveal') + ';gatorWidgetShouldReveal(' + a.join(',') + ')',
+  );
 assert.strictEqual(T(true, true, 900, 500), true);
 assert.strictEqual(T(false, true, 900, 500), false, 'not streaming');
 assert.strictEqual(T(true, false, 900, 500), false, 'user scrolled up');
@@ -79,13 +82,20 @@ assert.strictEqual(T(true, true, 500, 500), false, 'equal height does not need a
 // Source wiring.
 assert.ok(/let _gatorWidgetRevealHold = false;/.test(src), 'hold flag declared');
 assert.ok(
-  /if \(_activeTabId === requestTabId && !_userScrolledUp && !_gatorWidgetRevealHold\) _pinScrollToBottom\(messages\);/.test(src),
-  'post-stream pin respects the hold'
+  /if \(_activeTabId === requestTabId && !_userScrolledUp && !_gatorWidgetRevealHold\) _pinScrollToBottom\(messages\);/.test(
+    src,
+  ),
+  'post-stream pin respects the hold',
 );
 assert.ok(
-  /const doSend = async \(overridePayload\) => \{\s*_userScrolledUp = false;\s*_gatorWidgetRevealHold = false;/.test(src),
-  'doSend clears the hold'
+  /const doSend = async \(overridePayload\) => \{\s*_userScrolledUp = false;\s*_gatorWidgetRevealHold = false;/.test(
+    src,
+  ),
+  'doSend clears the hold',
 );
-assert.ok(/gatorWidgetApplyHeight\(frame, h\);[\s\S]*?gatorWidgetRevealOnce\(frame\);/.test(src), 'the first reported size reveals once');
+assert.ok(
+  /gatorWidgetApplyHeight\(frame, h\);[\s\S]*?gatorWidgetRevealOnce\(frame\);/.test(src),
+  'the first reported size reveals once',
+);
 
 console.log('widget_reveal_once: PASS');

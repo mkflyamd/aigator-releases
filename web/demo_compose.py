@@ -44,7 +44,7 @@ def normalized_name(clip: dict, src: Path, w: int, h: int) -> str:
     stat = Path(src).stat()
     key = json.dumps([SPEC_VERSION, stat.st_size, stat.st_mtime_ns,
                       clip["trim_start"], clip["trim_end"], w, h])
-    return f"{clip['id']}_{hashlib.sha1(key.encode('utf-8')).hexdigest()[:8]}.mp4"
+    return f"{clip['id']}_{hashlib.sha1(key.encode('utf-8'), usedforsecurity=False).hexdigest()[:8]}.mp4"
 
 
 def concat_list_text(files: list) -> str:

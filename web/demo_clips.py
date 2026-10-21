@@ -147,7 +147,7 @@ def fingerprint(pid: str, reg: dict) -> str:
     for audio in reg["audio"]:
         stat = abs_path(pid, audio["file"]).stat()
         parts.append(["audio", audio["id"], stat.st_size, stat.st_mtime_ns])
-    return hashlib.sha1(json.dumps(parts).encode("utf-8")).hexdigest()
+    return hashlib.sha1(json.dumps(parts).encode("utf-8"), usedforsecurity=False).hexdigest()
 
 
 def frame_times(durations: list) -> list:

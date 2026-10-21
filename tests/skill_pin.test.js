@@ -57,14 +57,14 @@ const existing = { skill: DR, projectId: 'demo_1' };
 assert.deepStrictEqual(plain(fns._mergePin(existing, null)), existing);
 assert.strictEqual(fns._mergePin(null, null), null);
 assert.deepStrictEqual(plain(fns._mergePin(existing, { skill: DR, projectId: null })), existing);
-assert.deepStrictEqual(
-  plain(fns._mergePin(existing, { skill: DR, projectId: 'demo_2' })),
-  { skill: DR, projectId: 'demo_2' },
-);
-assert.deepStrictEqual(
-  plain(fns._mergePin(existing, { skill: 'jira', projectId: null })),
-  { skill: 'jira', projectId: null },
-);
+assert.deepStrictEqual(plain(fns._mergePin(existing, { skill: DR, projectId: 'demo_2' })), {
+  skill: DR,
+  projectId: 'demo_2',
+});
+assert.deepStrictEqual(plain(fns._mergePin(existing, { skill: 'jira', projectId: null })), {
+  skill: 'jira',
+  projectId: null,
+});
 
 // _pinForSend: slash commands escape the pin
 assert.strictEqual(fns._pinForSend(null, 'hello'), null);
@@ -83,10 +83,14 @@ assert.strictEqual(labelFns._pinLabel('unknown-skill'), 'unknown-skill');
 assert(/_pinLabel\(pin\.skill\)/.test(extract('_renderPinChip')), 'the chip uses _pinLabel');
 
 // source wiring
-assert(/localStorage\.removeItem\('tab-pin-' \+ tabId\)/.test(source), 'tab close must drop the pin');
+assert(
+  /localStorage\.removeItem\('tab-pin-' \+ tabId\)/.test(source),
+  'tab close must drop the pin',
+);
 assert(/_tabPins\.delete\(tabId\)/.test(source), 'tab close must clear the pin map');
 assert(
-  /pinned_skill: _sendPin\.skill/.test(source) && /pinned_project_id: _sendPin\.projectId/.test(source),
+  /pinned_skill: _sendPin\.skill/.test(source) &&
+    /pinned_project_id: _sendPin\.projectId/.test(source),
   'doSend must send the pin',
 );
 assert(
