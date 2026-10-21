@@ -20,7 +20,7 @@ Before calling send_teams_message or teams_open_compose, you MUST:
 When calling the compose tool:
 
 - Pass real email addresses in `to` (e.g. `john.doe@amd.com`), NEVER use `placeholder` or fake values.
-- If you only have a `chat_id` and no emails, pass `chat_id` and leave `to` empty — the UI resolves recipients from the chat.
+- If you only have a `chat_id` and no emails, pass `chat_id` and leave `to` empty — the UI resolves recipients from the chat. Do NOT independently resolve/guess a `to` value alongside an existing `chat_id` "just in case" — a resolution mismatch between the two (e.g. resolving a person's personal email when `chat_id`/`chat_topic` refers to a different identity, like a bot/agent contact of theirs) has caused a real message to go to the wrong person. If a chat_id turns out to be stale, the send will fail with a clear error — re-draft explicitly with a freshly-resolved recipient at that point, rather than pre-emptively attaching one now.
 - Always pass `chat_topic` when you have it — helps the user confirm the target.
 
 ## General Rules

@@ -1,4 +1,6 @@
+import os
 import sys, pathlib
+from pathlib import Path
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent.parent / "web"))
 
@@ -140,6 +142,80 @@ def test_glob_files_truncates(tmp_path, monkeypatch):
     result = _tool_glob_files(pattern="*.txt", base_path=str(tmp_path))
     assert result.get("truncated") is True
     assert len(result["matches"]) == 5
+
+
+def test_glob_files_finds_nested_matches(tmp_path):
+    """Plain filename patterns (no '/' or '\\') must still search recursively —
+    this exercises the new os.walk-based fast path, which must not regress the
+    prior glob.glob(**, recursive=True) behavior for the common case."""
+    from skills.file_ops.tools import _tool_glob_files
+
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "deep.py").write_text("")
+    (tmp_path / "top.py").write_text("")
+    result = _tool_glob_files(pattern="*.py", base_path=str(tmp_path))
+    assert result["count"] == 2
+    names = {os.path.basename(m) for m in result["matches"]}
+    assert names == {"deep.py", "top.py"}
+
+
+def test_is_filesystem_root_detects_real_root():
+    from skills.file_ops.tools import _is_filesystem_root
+
+    real_root = Path(os.path.abspath(os.sep))  # "C:\\" on Windows, "/" on posix
+    assert _is_filesystem_root(real_root) is True
+
+
+def test_is_filesystem_root_false_for_ordinary_dir(tmp_path):
+    from skills.file_ops.tools import _is_filesystem_root
+
+    assert _is_filesystem_root(tmp_path) is False
+
+
+def test_glob_files_rejects_filesystem_root(tmp_path, monkeypatch):
+    """A recursive glob starting at a filesystem root must be refused outright
+    rather than walking the entire disk — this is the exact failure mode that
+    produced a multi-minute apparent hang when a generic skill's instructions
+    told the model to search from a nonexistent path that resolved to '/'."""
+    import skills.file_ops.tools as fo_mod
+    from skills.file_ops.tools import _tool_glob_files
+
+    monkeypatch.setattr(fo_mod, "_is_filesystem_root", lambda p: True)
+    result = _tool_glob_files(pattern="SKILL.md", base_path=str(tmp_path))
+    assert "error" in result
+    assert "filesystem root" in result["error"]
+    assert result["matches"] == []
+
+
+def test_glob_files_stops_at_time_budget(tmp_path, monkeypatch):
+    """A huge tree with zero/sparse matches must not hang indefinitely — the
+    time-budget check must fire even when os.walk yields no matching files,
+    since the prior glob.glob-based implementation only had a check-point
+    per MATCH found, which never runs at all when there are no matches."""
+    import skills.file_ops.tools as fo_mod
+
+    monkeypatch.setattr(fo_mod, "_GLOB_TIME_BUDGET_SECONDS", 1.0)
+    monkeypatch.setattr(fo_mod, "_GLOB_TIME_CHECK_INTERVAL", 1)
+    # Deterministic fake clock instead of relying on real elapsed time: on
+    # fast test hardware the whole tiny walk below can complete within the
+    # OS timer's own resolution, so a real time.monotonic() diff can read as
+    # 0.0 on every check and never exceed the budget — flaky, not wrong.
+    calls = {"n": 0}
+
+    def _fake_monotonic():
+        calls["n"] += 1
+        return 0.0 if calls["n"] == 1 else 100.0
+
+    monkeypatch.setattr(fo_mod.time, "monotonic", _fake_monotonic)
+    from skills.file_ops.tools import _tool_glob_files
+
+    for i in range(5):
+        d = tmp_path / f"d{i}"
+        d.mkdir()
+        (d / "noise.txt").write_text("")
+    result = _tool_glob_files(pattern="NEVER_MATCHES.md", base_path=str(tmp_path))
+    assert result.get("timed_out") is True
+    assert "error" in result
 
 
 # ── grep_files ───────────────────────────────────────────────────────────────

@@ -405,59 +405,15 @@ function _renderStatus(tasks) {
       mainBtn.addEventListener('click', async (e) => {
         e.stopPropagation();
         try {
-          const t = await fetch('/api/tasks/' + task.task_id).then((r) => r.json());
-          const result = t.result || '(no result)';
-
-          // Re-trigger compose pane if the task produced one
-          if (t.pane_data) {
-            try {
-              const pd = typeof t.pane_data === 'string' ? JSON.parse(t.pane_data) : t.pane_data;
-              console.log('[agents-pane] Replaying pane signal:', pd.pane);
-              if (typeof _handlePaneSignal === 'function')
-                _handlePaneSignal(pd.pane, pd.paneData || {});
-            } catch (pe) {
-              console.warn('[agents-pane] pane replay failed:', pe);
-            }
-          }
-
-          const _tabTitle = _truncate(task.prompt || 'Task Result', 40);
-          if (_viewInNewTab) {
-            // New tab: route by the task's context_id when present so the
-            // job's stable conversation history loads in the new tab; else
-            // open a fresh blank tab.
-            if (t.context_id && typeof createTabWithId === 'function') {
-              createTabWithId(t.context_id, _tabTitle);
-            } else if (typeof createTab === 'function') {
-              createTab();
-              if (typeof _tabs !== 'undefined' && typeof _activeTabId !== 'undefined') {
-                const tab = _tabs.find((tb) => tb.id === _activeTabId);
-                if (tab) {
-                  tab.title = _tabTitle;
-                  if (typeof _saveTabs === 'function') _saveTabs();
-                  if (typeof _preserveScrollOnRender !== 'undefined')
-                    _preserveScrollOnRender = true;
-                  if (typeof _renderTabBar === 'function') _renderTabBar();
-                }
-              }
-            }
-          }
-          // "View in this chat" path: render result inline in the current tab
-          // without switching context. The result is preview-only — it lives
-          // in the DOM, not in the saved conversation history for this tab.
-
-          const messages = document.getElementById('messages');
-          if (messages) {
-            const msgDiv = document.createElement('div');
-            msgDiv.className = 'msg assistant';
-            const prose = document.createElement('div');
-            prose.className = 'prose';
-            prose.appendChild(
-              document.createRange().createContextualFragment(renderMarkdown(result)),
-            );
-            msgDiv.appendChild(prose);
-            messages.appendChild(msgDiv);
-            messages.scrollTop = messages.scrollHeight;
-          }
+          // Delegates to the single shared implementation (app.js) rather
+          // than duplicating fetch/pane-replay/tab-switch/result-render/
+          // draft-card logic here — see _openTaskResult's own comment for
+          // why (issue #54: this handler used to have its own copy that had
+          // already drifted from app.js's, and silently never got the HITL
+          // draft-card fix).
+          await _openTaskResult(task.task_id, _viewInNewTab, {
+            tabTitle: _truncate(task.prompt || 'Task Result', 40),
+          });
           closeAgentsPane();
         } catch (err) {
           console.warn('View failed:', err);
@@ -1230,52 +1186,12 @@ function _openJobDetail(job) {
       mainBtn.addEventListener('click', async (e) => {
         e.stopPropagation();
         try {
-          const t = await fetch('/api/tasks/' + run.task_id).then((r) => r.json());
-          const result = t.result || '(no result)';
-          if (t.pane_data) {
-            try {
-              const pd = typeof t.pane_data === 'string' ? JSON.parse(t.pane_data) : t.pane_data;
-              if (typeof _handlePaneSignal === 'function')
-                _handlePaneSignal(pd.pane, pd.paneData || {});
-            } catch (pe) {
-              console.warn('[agents-pane] pane replay failed:', pe);
-            }
-          }
-          const _tabTitle = _truncate(job.name || 'Agent Result', 40);
-          if (_viewInNewTab) {
-            // New tab: route by the task's context_id so the job's stable
-            // conversation loads in the new tab; else open a fresh blank tab.
-            if (t.context_id && typeof createTabWithId === 'function') {
-              createTabWithId(t.context_id, _tabTitle);
-            } else if (typeof createTab === 'function') {
-              createTab();
-              if (typeof _tabs !== 'undefined' && typeof _activeTabId !== 'undefined') {
-                const tab = _tabs.find((tb) => tb.id === _activeTabId);
-                if (tab) {
-                  tab.title = _tabTitle;
-                  if (typeof _saveTabs === 'function') _saveTabs();
-                  if (typeof _preserveScrollOnRender !== 'undefined')
-                    _preserveScrollOnRender = true;
-                  if (typeof _renderTabBar === 'function') _renderTabBar();
-                }
-              }
-            }
-          }
-          // "View in this chat" path: render result inline in the current tab
-          // without switching. Preview-only — not persisted to tab history.
-          const messages = document.getElementById('messages');
-          if (messages) {
-            const msgDiv = document.createElement('div');
-            msgDiv.className = 'msg assistant';
-            const prose = document.createElement('div');
-            prose.className = 'prose';
-            prose.appendChild(
-              document.createRange().createContextualFragment(renderMarkdown(result)),
-            );
-            msgDiv.appendChild(prose);
-            messages.appendChild(msgDiv);
-            messages.scrollTop = messages.scrollHeight;
-          }
+          // Delegates to the single shared implementation (app.js) — see
+          // the matching comment on the other "View in this chat" handler
+          // in this file (issue #54).
+          await _openTaskResult(run.task_id, _viewInNewTab, {
+            tabTitle: _truncate(job.name || 'Agent Result', 40),
+          });
           closeAgentsPane();
         } catch (err) {
           console.warn('View failed:', err);
