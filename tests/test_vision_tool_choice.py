@@ -11,7 +11,7 @@ REJECTION = json.dumps(
     {"type": "error", "error": {"type": "invalid_request_error",
      "message": 'tool_choice: type "tool" and "any" are not supported for this model.'}}
 )
-PROFILE = {"api_key": "aigator-fake-api-key", "anthropic_url": "http://gateway.invalid"}
+PROFILE = {"api_key": "aigator-fake-api-key", "anthropic_url": "http://gateway.invalid"}  # pragma: allowlist secret
 
 
 @pytest.fixture
