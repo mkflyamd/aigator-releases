@@ -663,6 +663,17 @@ const SKILL_REGISTRY = [
       },
     ],
   },
+  {
+    id: 'gator-demo-recorder',
+    label: 'Demo Recorder',
+    icon: '<span style="font-size:1.1em">🎬</span>',
+    chipAlias: 'gator-demo-recorder',
+    category: 'Productivity',
+    chipClass: 'chip-skill',
+    railHidden: true,
+    connected: true,
+    actions: [],
+  },
 ];
 
 // ── Google Workspace service skills ────────────────────────────────────
