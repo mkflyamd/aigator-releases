@@ -57,6 +57,20 @@ _SKILL_REQUEST_RE = _re.compile(
     _re.IGNORECASE | _re.MULTILINE,
 )
 
+# A run of bare tokens that ends the turn, however the model laid it out:
+# "...to see what it asks for./slack /sharepoint /file_ops". The model is told
+# to emit each token alone on a line, but it often glues them to a sentence or
+# puts several on one line; the line-anchored form above misses those and the
+# turn then ends silently. Anchored to the END of the turn so a path mentioned
+# mid-sentence never counts, and each name is still checked against the skill
+# registry by _detect_requested_skills.
+_SKILL_TOKEN = r"/[a-z0-9][a-z0-9_-]*(?=$|[\s/])"
+_TRAILING_SKILL_RUN_RE = _re.compile(
+    rf"(?:^|(?<=[\s.!?:;,)]))((?:{_SKILL_TOKEN}\s*)+)$",
+    _re.IGNORECASE,
+)
+_SKILL_TOKEN_RE = _re.compile(r"/([a-z0-9][a-z0-9_-]*)", _re.IGNORECASE)
+
 # Map user-facing skill names to internal IDs for the auto-activate fallback.
 # Keep this minimal — the only cases where UI label diverges from skill ID.
 _SKILL_NAME_ALIASES = {
@@ -92,8 +106,13 @@ def _detect_requested_skills(turn_text: str, already_active) -> list[str]:
     """
     active = set(already_active or [])
     found: list[str] = []
-    for m in _SKILL_REQUEST_RE.finditer(turn_text or ""):
-        sid = _resolve_skill_id(m.group(1) or m.group(2) or "")
+    text = turn_text or ""
+    names = [m.group(1) or m.group(2) or "" for m in _SKILL_REQUEST_RE.finditer(text)]
+    tail = _TRAILING_SKILL_RUN_RE.search(text.rstrip())
+    if tail:
+        names += _SKILL_TOKEN_RE.findall(tail.group(1))
+    for name in names:
+        sid = _resolve_skill_id(name)
         # Accept a skill if it has a prompt (built-in / installed) OR has tools
         # registered (MCP connections have tools in SKILL_TOOLS_MAP but no
         # SKILL.md prompt). Gated skills still excluded — they require the
@@ -989,7 +1008,10 @@ async def chat(req: ChatRequest):
     import asyncio as _asyncio
     from fastapi.responses import JSONResponse
     from llm import get_provider, get_active_model
-    from routes.config_routes import _get_active_persona_prompt
+    from routes.config_routes import (
+        _get_active_persona_prompt,
+        _get_user_profile_prompt,
+    )
     # Import execute_tool and _tool_toast from the app module (they stay in app.py
     # because they are also used by the lifespan background worker).
     from app import execute_tool as _execute_tool_raw, _tool_toast
@@ -1095,6 +1117,9 @@ async def chat(req: ChatRequest):
     _persona_prompt = _get_active_persona_prompt()
     if _persona_prompt:
         system = _persona_prompt + "\n\n" + system
+    _user_prompt = _get_user_profile_prompt()
+    if _user_prompt:
+        system = _user_prompt + "\n\n" + system
 
     # Inject per-skill prompt instructions — ONLY for explicitly active skills,
     # NOT all always-on skills (those add 10K+ tokens of irrelevant context).
@@ -1296,14 +1321,22 @@ async def chat(req: ChatRequest):
                         f"BOTH personal and SharePoint team notebooks and returns a 'site_id' "
                         f"(empty for personal, non-empty for team). Then pass that site_id to "
                         f"list_onenote_sections / list_onenote_pages / read_onenote_page. "
-                        f"Team notebooks work fine — just always include their site_id."
+                        f"Team notebooks work fine — just always include their site_id. If it returns nothing, call list_onenote_sections with only site_id set to the SharePoint site URL or name (ask the user for it if you do not have it) and match the section name."
                     )
+                    if m.get("site_id"):
+                        _accessibility_note = (
+                            f" This notebook is in a SharePoint team site (site_id: {m['site_id']}). "
+                            f"Pass that site_id to list_onenote_sections / list_onenote_pages / "
+                            f"read_onenote_page / update_onenote_page; you do not need find_onenote_notebook."
+                        )
                     if _kind == "section":
                         _pin_lines.append(f"- OneNote section \"{lbl}\" (in notebook: {_nb}) \u2192 find it using list_onenote_notebooks then list_onenote_sections (match section \"{_title}\" in notebook \"{_nb}\"), then list_onenote_pages to read pages in it. Do NOT search for a page named \"{_title}\".{_accessibility_note}")
                     else:
                         _pin_lines.append(f"- OneNote page \"{lbl}\" (in notebook: {_nb}) \u2192 find it using list_onenote_notebooks/list_onenote_sections/list_onenote_pages (match page title \"{_title}\" in notebook \"{_nb}\"), then read_onenote_page with the resolved id.{_accessibility_note}")
                 else:
-                    _pin_lines.append(f"- OneNote: \"{lbl}\" (page_id: {pid}, notebook: {m.get('notebook','?')}, section: {m.get('section','?')}) \u2192 use update_onenote_page or read with this page_id")
+                    from skills.onenote.state import pin_site_text as _pin_site_text
+                    _site_txt = _pin_site_text(m.get("site_id"))
+                    _pin_lines.append(f"- OneNote: \"{lbl}\" (page_id: {pid}, notebook: {m.get('notebook','?')}, section: {m.get('section','?')}{_site_txt}) \u2192 use update_onenote_page or read with this page_id{' and site_id' if _site_txt else ''}")
             elif s == "onedrive":
                 _od_drive = m.get('drive_id', '')
                 _od_drive_hint = f", drive_id: {_od_drive}" if _od_drive else ""
@@ -1477,11 +1510,11 @@ async def chat(req: ChatRequest):
     # but ONLY inject into prompt if this is the default context (no tabs)
     # to prevent pin bleed across tabs.
     if _context_id == 'default' and not _pins:
-        from skills.onenote.state import pinned_onenote_pages as _pinned_onenote_pages
+        from skills.onenote.state import pinned_onenote_pages as _pinned_onenote_pages, pin_site_text as _pin_site_text
         if _pinned_onenote_pages:
-            pins = "\n".join(f"- \"{p['title']}\" (page_id: {p['page_id']}, notebook: {p.get('notebook','?')}, section: {p.get('section','?')})"
+            pins = "\n".join(f"- \"{p['title']}\" (page_id: {p['page_id']}, notebook: {p.get('notebook','?')}, section: {p.get('section','?')}{_pin_site_text(p.get('site_id'))})"
                              for p in _pinned_onenote_pages.values())
-            system += f"\n\n\U0001f4cc PINNED ONENOTE PAGES (use update_onenote_page with these page_ids directly \u2014 no need to re-navigate):\n{pins}"
+            system += f"\n\n\U0001f4cc PINNED ONENOTE PAGES (use update_onenote_page with these page_ids directly \u2014 no need to re-navigate; when a pin has a site_id, pass it to read_onenote_page and update_onenote_page):\n{pins}"
 
     # Auto-detect skills needed from pinned items — no manual chip required
     _source_skill_map = {"word": "docx", "excel": "excel", "ppt": "ppt"}
@@ -2451,7 +2484,7 @@ async def chat(req: ChatRequest):
                     # Otherwise the cross-tab alert and the in-progress tab
                     # indicator would only clear on the happy path, leaving a
                     # stalled chat silently stuck.
-                    shared.notify_all({"type": "chat_done", "context_id": context_id})
+                    shared.notify_all({"type": "chat_done", "context_id": context_id, "task_id": task_id})
                     # Close the generator ourselves (see comment above). On the
                     # happy path stream() is already exhausted and this is a
                     # cheap no-op; on cancel/error it drives stream()'s own

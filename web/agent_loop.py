@@ -472,6 +472,8 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
     import data_sources
     _SENTINEL = object()
     _source_locks: dict[tuple[str, str], asyncio.Lock] = {}
+    _sources_read: set[str] = set()
+    _source_ids: set[str] = set()
 
     _BROWSER_TOOLS = {"browser_task", "browser_navigate", "browser_search"}
 
@@ -685,6 +687,17 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
         if not _slack_silent and not _rejected:
             status = TOOL_STATUS.get(tc.name, f"⚙️ Running {tc.name}...")
             await event_queue.put({"kind": "status", "status": status})
+        if isinstance(result, dict) and "_draft" in result:
+            _rule = data_sources.blocked_flow(_source_ids, result["_draft"])
+            if _rule:
+                from skills._drafts import pop_draft
+                pop_draft(str(result.get("data", {}).get("draft_id", "")))
+                result = {
+                    "error": "data_flow_blocked",
+                    "rule": _rule,
+                    "hint": ("Your administrator blocks this data flow. Do not retry and do not send the "
+                             "data another way. Tell the user that the policy blocks it."),
+                }
         _is_error = isinstance(result, dict) and bool(result.get("error"))
         _summary_msg = None
         toast = None if failure and failure.terminal else _tool_toast(tc.name, result)
@@ -705,7 +718,17 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
             print(f"[pane-signal] tool {tc.name} emitted pane signal: {result['_pane']}", flush=True)
             await event_queue.put({"kind": "pane", "pane": result["_pane"], "data": result.get("data", {})})
         if isinstance(result, dict) and "_draft" in result:
-            await event_queue.put({"kind": "draft", "draft": result["_draft"], "data": result.get("data", {})})
+            _draft_data = result.get("data", {})
+            await event_queue.put({
+                "kind": "draft", "draft": result["_draft"],
+                "data": {**_draft_data, "sources": sorted(_sources_read),
+                         "sensitive": data_sources.sensitivity_markers(_draft_data)},
+            })
+        elif not _is_error:
+            _read = data_sources.source_for_call(tc.name, tc.inputs)
+            if _read is not None:
+                _sources_read.add(_read.label)
+                _source_ids.add(_read.flow_id)
         if isinstance(result, dict) and "_jira_target_selection" in result:
             await event_queue.put({"kind": "jira_target_selection", "data": result["_jira_target_selection"]})
         if isinstance(result, dict) and "_sandbox_approval" in result:

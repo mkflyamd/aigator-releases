@@ -23,7 +23,7 @@ from skills import _drafts
 
 def _csrf():
     from security import get_csrf_token
-    return get_csrf_token()
+    return get_csrf_token("testserver")
 
 
 def _approve(client, draft_id, body=None):

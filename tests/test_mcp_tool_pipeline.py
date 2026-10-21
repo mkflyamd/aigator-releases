@@ -535,6 +535,43 @@ def test_tool_failure_classification_preserves_meaning(code, category, terminal)
     assert code not in outcome.user_message or category == "transient"
 
 
+@pytest.mark.parametrize(
+    ("msg", "forbidden"),
+    [
+        ("auth_error:nabu:Error calling tool 'nabu_chat': Client error '403 Forbidden' for url 'https://x'", True),
+        ("Forbidden", True),
+        ("auth_error:401:Credentials were rejected by the server.", False),
+        ("403 Forbidden after 401 Unauthorized", False),
+        ("order 14031 not found", False),
+    ],
+)
+def test_forbidden_refusal_is_told_apart_from_a_bad_credential(msg, forbidden):
+    from mcp.manager import _is_forbidden_msg
+
+    assert _is_forbidden_msg(msg) is forbidden
+
+
+def test_forbidden_mcp_refusal_does_not_tell_the_user_to_reconnect():
+    from tool_pipeline import classify_tool_failure
+
+    outcome = classify_tool_failure(
+        {"error": "MCP call failed: 403 Forbidden", "_mcp_forbidden": True}, tool_name="mcp-nabu__nabu_chat"
+    )
+    assert outcome is not None
+    assert outcome.category == "permission" and outcome.terminal is True
+    assert "403" in outcome.user_message
+    assert "authentication is missing" not in outcome.user_message
+
+
+def test_bad_mcp_credential_still_asks_to_reconnect():
+    from tool_pipeline import classify_tool_failure
+
+    outcome = classify_tool_failure(
+        {"error": "MCP call failed: 401", "_mcp_auth_error": True}, tool_name="mcp-x__t"
+    )
+    assert outcome is not None and outcome.category == "authentication"
+
+
 def test_successful_result_text_is_not_classified_as_a_tool_failure():
     from tool_pipeline import classify_tool_failure
 

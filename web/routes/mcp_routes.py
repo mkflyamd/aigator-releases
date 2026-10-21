@@ -9,7 +9,8 @@ import time
 from typing import Literal
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Depends
+from security import verify_csrf
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -102,7 +103,7 @@ def add_connection(req: MCPConnectionRequest):
     return result
 
 
-@router.delete("/api/config/mcp/{connection_id}")
+@router.delete("/api/config/mcp/{connection_id}", dependencies=[Depends(verify_csrf)])
 def delete_connection(connection_id: str):
     result = remove(connection_id)
     if not result.get("ok"):
@@ -857,7 +858,7 @@ def add_custom_app(req: CustomAppRequest):
     return {"ok": True, "app": app}
 
 
-@router.delete("/api/config/custom-apps/{app_id}")
+@router.delete("/api/config/custom-apps/{app_id}", dependencies=[Depends(verify_csrf)])
 def remove_custom_app(app_id: str):
     from config import update_config
     removed = [False]

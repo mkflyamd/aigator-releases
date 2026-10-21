@@ -268,14 +268,15 @@
   }
 
   const _TIER_TOOLTIPS = {
-    Native: 'Built into AI Gator. Fully trusted.',
+    Native: 'Built into AI Gator. Runs with the same access as the app.',
     // Decision #2 (2026-08-07 milestone): "Verified" = listed in a curated
     // marketplace (e.g. Anthropic's claude-plugins-official), NOT reviewed
     // by AI Gator/your admin — hence the consent gate before install.
     Verified:
-      'Listed in a curated marketplace. Not reviewed by AI Gator — you’ll confirm what it does before it installs.',
-    Community: 'Unreviewed. Runs with restricted permissions.',
-    Mine: 'Created by you. Full execution access.',
+      'Listed in a curated marketplace. Not reviewed by AI Gator — you’ll confirm what it does before it installs. Runs in a sandbox: reads only folders you approve, writes only to its own output folder, uses the network only if you approved it.',
+    Community:
+      'Unreviewed. Runs in a sandbox: reads only folders you approve, writes only to its own output folder, uses the network only if you approved it. Shorter time limit.',
+    Mine: 'Created by you. Runs in the same sandbox as other installed skills: reads only folders you approve, writes only to its own output folder, uses the network only if you approved it.',
   };
 
   // Decision #8 (2026-08-07 milestone) coding-class helpers — pure so they're

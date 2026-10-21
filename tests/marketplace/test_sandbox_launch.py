@@ -72,3 +72,13 @@ def test_every_launch_is_logged(fake_sandbox, make_skill_dir, caplog):
     with caplog.at_level(logging.INFO, logger="aigator.skill_audit"):
         _run(skill, Permissions(network=("a.example.com",)))
     assert "skill-launch skill=demo kind=tool network=true declared_hosts=a.example.com" in caplog.text
+
+
+def test_run_folders_are_split_by_tier(tmp_path, monkeypatch):
+    import config
+
+    monkeypatch.setattr(config, "OUTPUTS_DIR", tmp_path)
+    for tier, folder in [("Verified", "verified"), ("Community", "community"), ("Mine", "mine"),
+                         ("community", "community"), ("", "community"), ("Native", "community"),
+                         ("../x", "community")]:
+        assert L.new_run_dir(tier).parent == tmp_path / folder

@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -228,6 +229,9 @@ async def patch_config(request: Request):
         if k in PATCHABLE_CONFIG_KEYS:
             cfg[k] = v
     _save_config(cfg)
+    from log_sanitizer import refresh_privacy_mode
+
+    refresh_privacy_mode()
     # Update in-memory config so changes take effect immediately
     import shared
 
@@ -901,15 +905,29 @@ async def username_status():
 
 # ── Personas ──────────────────────────────────────────────────────────────────
 
+_OLD_PROGRAM_MANAGER = {
+    "name": "Program Manager",
+    "prompt": (
+        "You are helping a **Program Manager** who coordinates cross-team deliverables, "
+        "tracks milestones, writes weekly status updates, and communicates with stakeholders.\n\n"
+        "Prioritize:\n"
+        "- Actionable summaries over raw data\n"
+        "- Status/risk/blocker framing\n"
+        "- Stakeholder-ready formatting (bullets, tables, clear headers)\n"
+        "- Timeline awareness — flag what's late, what's coming up"
+    ),
+}
+
 _DEFAULT_PERSONAS = {
-    "program-manager": {
-        "name": "Program Manager",
+    "technical-program-manager": {
+        "name": "Technical Program Manager",
         "prompt": (
-            "You are helping a **Program Manager** who coordinates cross-team deliverables, "
-            "tracks milestones, writes weekly status updates, and communicates with stakeholders.\n\n"
+            "You are helping a **Technical Program Manager** who coordinates cross-team "
+            "engineering deliverables, tracks milestones and dependencies, writes weekly "
+            "status updates, and communicates with stakeholders and engineering leads.\n\n"
             "Prioritize:\n"
             "- Actionable summaries over raw data\n"
-            "- Status/risk/blocker framing\n"
+            "- Status/risk/blocker framing, with technical dependencies called out\n"
             "- Stakeholder-ready formatting (bullets, tables, clear headers)\n"
             "- Timeline awareness — flag what's late, what's coming up"
         ),
@@ -941,6 +959,19 @@ _DEFAULT_PERSONAS = {
 }
 
 
+def _is_old_program_manager(persona) -> bool:
+    # Compare ASCII only: saved copies can carry a garbled em dash.
+    def ascii_only(text: str) -> str:
+        return re.sub(r"[^\x00-\x7f]", "", text)
+
+    return (
+        isinstance(persona, dict)
+        and persona.get("name") == _OLD_PROGRAM_MANAGER["name"]
+        and ascii_only(persona.get("prompt", ""))
+        == ascii_only(_OLD_PROGRAM_MANAGER["prompt"])
+    )
+
+
 def _get_personas() -> dict:
     cfg = _load_config()
     personas = cfg.get("personas")
@@ -948,6 +979,15 @@ def _get_personas() -> dict:
         cfg["personas"] = dict(_DEFAULT_PERSONAS)
         _save_config(cfg)
         return cfg["personas"]
+    if _is_old_program_manager(personas.get("program-manager")):
+        del personas["program-manager"]
+        personas.setdefault(
+            "technical-program-manager",
+            _DEFAULT_PERSONAS["technical-program-manager"],
+        )
+        if cfg.get("active_persona") == "program-manager":
+            cfg["active_persona"] = "technical-program-manager"
+        _save_config(cfg)
     return personas
 
 
@@ -988,7 +1028,7 @@ async def save_persona(req: dict = Body(...)):
     return {"ok": True, "id": pid}
 
 
-@router.delete("/api/config/persona/{persona_id}")
+@router.delete("/api/config/persona/{persona_id}", dependencies=[Depends(verify_csrf)])
 async def delete_persona(persona_id: str):
     cfg = _load_config()
     personas = cfg.get("personas", {})
@@ -1010,9 +1050,82 @@ async def set_active_persona(req: dict = Body(...)):
     return {"ok": True, "active": pid}
 
 
+# ── User details (who "me" and "myself" mean) ────────────────────────────────
+
+
+class UserProfileRequest(BaseModel):
+    name: str = ""
+    email: str = ""
+
+
+def _signed_in_identity() -> dict:
+    import base64
+    import secure_store
+
+    try:
+        token = (secure_store.get_json("graph/token") or {}).get("access_token", "")
+        payload = token.split(".")[1]
+        payload += "=" * (4 - len(payload) % 4)
+        claims = json.loads(base64.urlsafe_b64decode(payload))
+    except Exception:
+        return {"name": "", "email": ""}
+    email = claims.get("upn") or claims.get("preferred_username") or claims.get("email") or ""
+    return {"name": claims.get("name", ""), "email": email if "@" in email else ""}
+
+
+def _get_user_profile() -> dict:
+    """Saved details win; the signed-in Microsoft account fills any gap."""
+    saved = _load_config().get("user_profile") or {}
+    signed_in = _signed_in_identity()
+    return {
+        "name": saved.get("name") or signed_in["name"],
+        "email": saved.get("email") or signed_in["email"],
+    }
+
+
+def _get_user_profile_prompt() -> str:
+    profile = _get_user_profile()
+    if not profile["name"] and not profile["email"]:
+        return ""
+    who = " ".join(
+        part
+        for part in (profile["name"], f"<{profile['email']}>" if profile["email"] else "")
+        if part
+    )
+    return (
+        f"The user you are helping is {who}. "
+        'When they say "me", "myself" or "my" (for example "email myself"), '
+        "they mean this person; do not ask for these details again."
+    )
+
+
+@router.get("/api/config/user-profile")
+async def get_user_profile():
+    saved = _load_config().get("user_profile") or {}
+    return {"name": saved.get("name", ""), "email": saved.get("email", "")}
+
+
+@router.post("/api/config/user-profile", dependencies=[Depends(verify_csrf)])
+async def save_user_profile(req: UserProfileRequest):
+    name = " ".join(req.name.split())[:100]
+    email = req.email.strip()[:254]
+    if email and ("@" not in email or any(c.isspace() for c in email)):
+        raise HTTPException(status_code=400, detail="Enter a valid email address")
+    cfg = _load_config()
+    cfg["user_profile"] = {"name": name, "email": email}
+    _save_config(cfg)
+    return {"ok": True, "name": name, "email": email}
+
+
 # ── LLM Profiles ─────────────────────────────────────────────────────────────
 
 import uuid as _uuid
+
+_PROFILE_CHECK_DEADLINE = 6  # seconds; covers DNS stalls httpx timeouts don't
+_UNREACHABLE_WARNING = (
+    "Saved, but the endpoint could not be reached yet — check your network/VPN. "
+    "Models will load once it is reachable."
+)
 
 
 def _fetch_profile_models(profile: dict) -> list[str]:
@@ -1200,6 +1313,7 @@ async def list_llm_profiles():
 
 @router.post("/api/config/llm/profiles")
 async def create_or_update_llm_profile(req: dict = Body(...)):
+    import asyncio
     from llm.registry import load_profile
 
     cfg = _load_config()
@@ -1232,7 +1346,19 @@ async def create_or_update_llm_profile(req: dict = Body(...)):
             )
 
     # Validate credentials and fetch live model list
-    models = _fetch_profile_models(profile)
+    # A slow or unreachable endpoint (no VPN, proxy, DNS) must not block a
+    # first-time setup: save the profile and warn. Wrong key / wrong URL still reject.
+    warning = ""
+    try:
+        models = await asyncio.wait_for(
+            asyncio.to_thread(_fetch_profile_models, profile), _PROFILE_CHECK_DEADLINE
+        )
+    except asyncio.TimeoutError:
+        models, warning = [], _UNREACHABLE_WARNING
+    except HTTPException as exc:
+        if exc.status_code not in (502, 504):
+            raise
+        models, warning = [], _UNREACHABLE_WARNING
     profile["models"] = models
 
     # Update in-place if id already exists, otherwise append
@@ -1253,10 +1379,10 @@ async def create_or_update_llm_profile(req: dict = Body(...)):
     else:
         _save_config(cfg)
 
-    return profile
+    return {**profile, "warning": warning} if warning else profile
 
 
-@router.delete("/api/config/llm/profiles/{profile_id}")
+@router.delete("/api/config/llm/profiles/{profile_id}", dependencies=[Depends(verify_csrf)])
 async def delete_llm_profile(profile_id: str):
     cfg = _load_config()
     if cfg.get("llm_active_profile") == profile_id:
@@ -1286,7 +1412,9 @@ async def activate_llm_profile(profile_id: str):
     # Refresh model list + context windows from the live endpoint so the
     # registry has accurate context sizes immediately on activation.
     try:
-        live = await asyncio.to_thread(_fetch_profile_models, profile)
+        live = await asyncio.wait_for(
+            asyncio.to_thread(_fetch_profile_models, profile), _PROFILE_CHECK_DEADLINE
+        )
         if live:
             profile["models"] = live
             _persist_profile_models(profile_id, live, profile.get("model_context_windows"))

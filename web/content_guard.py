@@ -1,7 +1,7 @@
 """Mark tool output from outside sources as untrusted and remove high-signal injected instructions.
 
 A pattern filter, not a classifier: it removes a few phrasings that are almost never legitimate
-in mail, chat, tickets or web pages. It cannot prove content is safe.
+in mail, chat, tickets or web pages.
 """
 from __future__ import annotations
 

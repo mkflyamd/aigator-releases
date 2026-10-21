@@ -15,6 +15,9 @@ import time
 from logging.handlers import QueueHandler, QueueListener
 from pathlib import Path
 
+import file_perms
+from log_sanitizer import sanitize
+
 
 APP_LOG_MAX_BYTES = 5 * 1024 * 1024
 LOG_RETENTION_DAYS = 30
@@ -39,6 +42,12 @@ def _bounded_utf8_tail(data: bytes, limit: int) -> bytes:
     if len(data) <= limit:
         return data.decode("utf-8", "ignore").encode("utf-8")
     return data[-limit:].decode("utf-8", "ignore").encode("utf-8")
+
+
+def _restrict_to_owner(path: Path) -> None:
+    """Logs may hold paths and error text: owner-only. Raises OSError so no record is written unprotected."""
+    file_perms.restrict_to_owner(path.parent, directory=True)
+    file_perms.restrict_to_owner(path)
 
 
 def _normalize_file(path: Path, max_bytes: int) -> None:
@@ -89,7 +98,13 @@ class StrictRotatingFileHandler(logging.Handler):
 
     def _open(self):
         self.filename.parent.mkdir(parents=True, exist_ok=True)
-        return open(self.filename, "ab")
+        stream = open(self.filename, "ab")
+        try:
+            _restrict_to_owner(self.filename)
+        except OSError:
+            stream.close()
+            raise
+        return stream
 
     def _ensure_stream(self):
         if self._stream is None:
@@ -100,13 +115,16 @@ class StrictRotatingFileHandler(logging.Handler):
             self._stream.close()
             self._stream = None
         self.backup.unlink(missing_ok=True)
+        file_perms.forget(self.backup)
         if self.filename.exists():
             self.filename.replace(self.backup)
+        file_perms.forget(self.filename)
+        file_perms.restrict_to_owner(self.backup)
         self._stream = self._open()
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
-            data = (self.format(record) + self.terminator).encode("utf-8", "backslashreplace")
+            data = (sanitize(self.format(record)) + self.terminator).encode("utf-8", "backslashreplace")
             if len(data) > self.max_bytes:
                 budget = max(0, self.max_bytes - len(TRUNCATION_MARKER))
                 data = data[:budget].decode("utf-8", "ignore").encode("utf-8")
@@ -143,6 +161,7 @@ class StrictRotatingFileHandler(logging.Handler):
                 self._stream.close()
                 self._stream = None
             self.filename.unlink(missing_ok=True)
+            file_perms.forget(self.filename)
             self._stream = self._open()
             return True
         finally:

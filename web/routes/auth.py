@@ -433,14 +433,14 @@ async def github_tool(req: GithubToolRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/api/github/pr")
+@router.post("/api/github/pr", dependencies=[Depends(verify_csrf)])
 async def github_get_pr_endpoint(body: dict):
     from skills.github.tools import _github_get_pr
 
     return _github_get_pr(body["owner"], body["repo"], body["pr_number"])
 
 
-@router.post("/api/github/issue")
+@router.post("/api/github/issue", dependencies=[Depends(verify_csrf)])
 async def github_get_issue_endpoint(body: dict):
     from skills.github.tools import _github_get_issue
 

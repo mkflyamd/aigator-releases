@@ -87,6 +87,7 @@ from routes.conversation_routes import router as conversation_router
 from routes.tabs import router as tabs_router
 from routes.marketplace import router as marketplace_router
 from routes.files import router as files_router, cleanup_old_outputs
+from routes.inline_images import router as inline_images_router
 from routes.code_agent import router as code_agent_router
 from routes.updater import router as updater_router
 from routes.mcp_routes import router as mcp_router
@@ -303,6 +304,7 @@ _load_mcp_connections()
 _EMPTY_OK_REQUIRED = {
     ("write_file", "content"),
     ("edit_file", "new_str"),
+    ("update_onenote_page", "content"),
 }
 
 # ── Browser empty-result circuit breaker (context-scoped) ────────────────────
@@ -586,7 +588,12 @@ async def _execute_tool_impl(
             url_key = str(inputs.get("url") or inputs.get("start_url") or inputs.get("task", "")[:80])
             result = _apply_browser_empty_breaker(result, tool_name=name, url_key=url_key, context_id=context_id)
         from tool_result_truncation import truncate_tool_result, maybe_truncate_json_result
-        _NO_TRUNCATE_TOOLS = {"jira_get_project_meta"}
+        # read/update_onenote_page cap their own output
+        _NO_TRUNCATE_TOOLS = {
+            "jira_get_project_meta",
+            "read_onenote_page",
+            "update_onenote_page",
+        }
         if name in _NO_TRUNCATE_TOOLS:
             return result
         if isinstance(result, str):
@@ -760,7 +767,9 @@ async def lifespan(app):
     # Pay tkinter's cold-import + first-window cost now (measured up to ~4s)
     # instead of on the user's first Add-Project/browse click, where a slow
     # first request can outlast a keep-alive timeout and look like a failure.
-    asyncio.create_task(asyncio.to_thread(warmup_native_dialogs))
+    # Skipped on macOS: Tk() off the main thread hung startup on headless runners.
+    if sys.platform != "darwin":
+        asyncio.create_task(asyncio.to_thread(warmup_native_dialogs))
 
     await start_worker(_bg_run_fn)
     await sched.init_scheduler()
@@ -894,6 +903,7 @@ app.include_router(conversation_router)
 app.include_router(tabs_router)
 app.include_router(marketplace_router)
 app.include_router(files_router)
+app.include_router(inline_images_router)
 app.include_router(updater_router)
 app.include_router(mcp_router)
 app.include_router(terminal_router)
@@ -906,6 +916,18 @@ app.include_router(recorder_router)
 app.include_router(code_agent_router, prefix="/api/code_agent")
 
 # ── Middleware ────────────────────────────────────────────────────────────────
+
+@app.middleware("http")
+async def _origin_guard(request, call_next):
+    from fastapi.responses import JSONResponse
+    from security import origin_allowed
+
+    h = request.headers
+    if not origin_allowed(request.method, h.get("host"), h.get("origin"), h.get("referer")):
+        logger.warning("Blocked cross-origin %s %s (origin=%s)", request.method, request.url.path, h.get("origin"))
+        return JSONResponse({"detail": "Cross-origin request blocked"}, status_code=403)
+    return await call_next(request)
+
 
 @app.middleware("http")
 async def _latency_logger(request, call_next):

@@ -379,33 +379,24 @@ class TestOneNoteSkillEncoding:
         assert all_paths, "No Graph call captured"
         assert any("%2F" in p for p in all_paths), f"Literal '/' in paths: {all_paths}"
 
-    def test_update_page_encodes_page_id(self, monkeypatch):
-        import urllib.request as _ur
+    def test_update_page_encodes_page_id(self):
         from skills.onenote import tools as onenote_tools
 
+        gc = MagicMock()
+        gc.get_token.return_value = "aigator-fake-api-key"
+        gc._headers.return_value = {}
         captured_urls = []
 
-        class FakeResp:
-            def read(self): return b""
-            def __enter__(self): return self
-            def __exit__(self, *a): pass
+        def fake_request(method, url, **kw):
+            captured_urls.append(url)
+            return MagicMock()
 
-        def fake_urlopen(req, timeout=None):
-            captured_urls.append(req.full_url)
-            return FakeResp()
-
-        monkeypatch.setattr(_ur, "urlopen", fake_urlopen)
-
-        gc = MagicMock()
-        gc.get_token.return_value = "FAKE"
+        gc._request.side_effect = fake_request
 
         with patch("skills._m365.helpers.get_skill_client", return_value=gc):
-            try:
-                onenote_tools._tool_update_onenote_page(SLASH_ID, "hello")
-            except Exception:
-                pass
+            onenote_tools._tool_update_onenote_page(SLASH_ID, "hello")
 
-        assert captured_urls, "No urllib.request call captured"
+        assert captured_urls, "No Graph call captured"
         assert "%2F" in captured_urls[0], f"Literal '/' in URL: {captured_urls[0]}"
 
     def test_create_page_encodes_section_id(self):

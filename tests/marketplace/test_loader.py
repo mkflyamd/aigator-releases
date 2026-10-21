@@ -42,7 +42,7 @@ def described(monkeypatch):
     """Make describe_skill_tools return a canned answer instead of launching anything."""
     box = {"value": _described(), "calls": []}
 
-    def fake(skill_id, skill_dir, perms):
+    def fake(skill_id, skill_dir, perms, tier=""):
         box["calls"].append((skill_id, perms))
         return box["value"]
 

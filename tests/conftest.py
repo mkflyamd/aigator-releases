@@ -116,6 +116,7 @@ def _hermetic_sandbox_policy(tmp_path, monkeypatch):
     from sandbox import policy
 
     monkeypatch.setattr(policy, "policy_path", lambda: tmp_path / "sandbox-policy.json")
+    monkeypatch.setattr(policy, "_is_posix", lambda: False)
     policy._reset_cache()
     yield
     policy._reset_cache()

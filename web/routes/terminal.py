@@ -279,11 +279,11 @@ class _PosixPty:
         env: dict | None = None,
         cwd: str | None = None,
     ):
-        import pty
         import fcntl
-        import termios
+        import pty
         import struct
         import subprocess
+        import termios
 
         self._pty = pty
         self._fcntl = fcntl
@@ -388,6 +388,13 @@ async def agent_terminal_ws(ws: WebSocket, session_id: str):
     # is_pty_viewed check. Decremented + timestamped in the finally below so a
     # closed tab stops protecting the server once the grace window lapses.
     entry["ws_clients"] = int(entry.get("ws_clients", 0) or 0) + 1
+
+    try:
+        from skills.code_agent.projects import set_active_pty_session
+
+        set_active_pty_session(session_id)
+    except Exception:
+        pass
 
     async def pump_pty_to_ws():
         # Check if this is an in-memory buffer session (no real PTY process)

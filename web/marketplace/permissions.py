@@ -156,6 +156,10 @@ def _mcp_line(name: str, config) -> str:
         shown = _visible(" ".join(str(p) for p in parts))
         if len(shown) > MAX_MCP_LEN:
             shown = shown[:MAX_MCP_LEN] + "\u2026"
+        from sandbox.policy import load_policy
+
+        if load_policy().block_bundle_stdio_mcp:
+            return f"Blocked by your administrator's policy, so it will not start: the MCP server '{safe_name}': {shown}"
         return f"Starts the MCP server '{safe_name}' on your computer (not sandboxed): {shown}"
     url = config.get("url")
     if isinstance(url, str) and url.strip():

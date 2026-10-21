@@ -1,6 +1,7 @@
 """Which data source a tool call touches, and which sources a tab has approved."""
 from __future__ import annotations
 
+import re
 import threading
 import time
 from dataclasses import dataclass
@@ -14,6 +15,7 @@ class Source:
     key: str
     label: str
     kind: str  # "data" or "web"
+    flow_id: str = ""  # id used by the admin blocked_data_flows policy
 
 
 _NATIVE_SOURCES = {
@@ -45,7 +47,7 @@ _DENY_WINDOW_S = 10.0
 def _native_source(tool_name: str) -> Source | None:
     for skill_id, label in _NATIVE_SOURCES.items():
         if tool_name in shared.SKILL_TOOLS_MAP.get(skill_id, ()):
-            return Source(key=f"data:{label}", label=label, kind="data")
+            return Source(key=f"data:{label}", label=label, kind="data", flow_id=skill_id.removeprefix("m365-"))
     return None
 
 
@@ -63,7 +65,7 @@ def _mcp_source(tool_name: str) -> Source | None:
     if best is None:
         return None
     label = _MCP_LABELS.get(best) or f"{best.removeprefix('mcp-')} (MCP server)"
-    return Source(key=f"mcp:{best}", label=label, kind="data")
+    return Source(key=f"mcp:{best}", label=label, kind="data", flow_id="mcp")
 
 
 def source_for_call(tool_name: str, inputs: dict | None) -> Source | None:
@@ -71,7 +73,7 @@ def source_for_call(tool_name: str, inputs: dict | None) -> Source | None:
         host = (urlparse(str((inputs or {}).get("url", ""))).hostname or "").lower()
         if not host:
             return None
-        return Source(key=f"web:{host}", label=f"the website {host}", kind="web")
+        return Source(key=f"web:{host}", label=f"the website {host}", kind="web", flow_id="web")
     return _native_source(tool_name) or _mcp_source(tool_name)
 
 
@@ -110,6 +112,39 @@ def prompt_for(source: Source, tool_name: str, inputs: dict | None = None) -> di
         "allow_label": "Allow for this tab",
         "deny_label": "Deny",
     }
+
+
+def draft_destination(draft_kind: str) -> str:
+    """Integration a draft sends to, e.g. "email-reply" -> "email", "calendar-write" -> "calendar"."""
+    return draft_kind.split("-", 1)[0]
+
+
+def blocked_flow(source_ids, draft_kind: str) -> str | None:
+    """Return the admin-blocked "source>destination" rule this draft would break, or None."""
+    from sandbox.policy import load_policy
+
+    destination = draft_destination(draft_kind)
+    for rule in load_policy().blocked_data_flows:
+        rule_source, rule_destination = rule.split(">")
+        if rule_destination in ("*", destination) and (rule_source == "*" and source_ids or rule_source in source_ids):
+            return rule
+    return None
+
+
+_SENSITIVE_MARKER = re.compile(
+    r"\b(?:highly\s+confidential|confidential|internal\s+use\s+only|proprietary|amd\s+restricted)\b", re.I)
+_SENSITIVE_FIELDS = ("subject", "body", "message", "comment", "description", "summary", "text")
+
+
+def sensitivity_markers(data: dict) -> list[str]:
+    """Classification words found in the draft text, so the approval card can warn the user."""
+    found: dict[str, str] = {}
+    for field in _SENSITIVE_FIELDS:
+        value = data.get(field)
+        if isinstance(value, str):
+            for match in _SENSITIVE_MARKER.finditer(value):
+                found.setdefault(match.group(0).lower(), match.group(0))
+    return sorted(found.values(), key=str.lower)
 
 
 _LOCK = threading.Lock()

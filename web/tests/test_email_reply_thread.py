@@ -10,6 +10,7 @@ the new text to the existing draft body instead of replacing it.
 from unittest.mock import patch, MagicMock
 
 from fastapi.testclient import TestClient
+from security import get_csrf_token
 
 from app import app
 
@@ -53,7 +54,7 @@ def _last_body_patch(gc):
 
 class TestReplyPreservesThread:
     def test_reply_keeps_quoted_original(self):
-        client = TestClient(app)
+        client = TestClient(app, headers={"X-CSRF-Token": get_csrf_token("testserver")})
         gc = _graph_with_draft_body()
         with patch("skills._m365.helpers.get_graph_client", return_value=gc):
             r = client.post(
@@ -71,7 +72,7 @@ class TestReplyPreservesThread:
         ), "new reply text must sit above the quoted thread"
 
     def test_reply_all_keeps_quoted_original(self):
-        client = TestClient(app)
+        client = TestClient(app, headers={"X-CSRF-Token": get_csrf_token("testserver")})
         gc = _graph_with_draft_body()
         with patch("skills._m365.helpers.get_graph_client", return_value=gc):
             r = client.post(
@@ -86,7 +87,7 @@ class TestReplyPreservesThread:
 
 class TestForwardPreservesThread:
     def test_forward_keeps_forwarded_message(self):
-        client = TestClient(app)
+        client = TestClient(app, headers={"X-CSRF-Token": get_csrf_token("testserver")})
         gc = _graph_with_draft_body()
         with patch("skills._m365.helpers.get_graph_client", return_value=gc):
             r = client.post(
@@ -121,13 +122,13 @@ class TestAgentDraftApprovePreservesThread:
 
         return client.post(
             f"/api/drafts/{draft_id}/approve",
-            headers={"X-CSRF-Token": get_csrf_token()},
+            headers={"X-CSRF-Token": get_csrf_token("testserver")},
         )
 
     def test_approve_reply_keeps_quoted_original(self):
         from skills._drafts import create_draft
 
-        client = TestClient(app)
+        client = TestClient(app, headers={"X-CSRF-Token": get_csrf_token("testserver")})
         gc = _graph_with_draft_body()
         did = create_draft(
             "email-reply",
@@ -149,7 +150,7 @@ class TestAgentDraftApprovePreservesThread:
     def test_approve_forward_keeps_forwarded_message(self):
         from skills._drafts import create_draft
 
-        client = TestClient(app)
+        client = TestClient(app, headers={"X-CSRF-Token": get_csrf_token("testserver")})
         gc = _graph_with_draft_body()
         did = create_draft(
             "email-forward",

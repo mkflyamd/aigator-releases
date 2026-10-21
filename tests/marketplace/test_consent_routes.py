@@ -21,7 +21,7 @@ SKILL_FILES = {"SKILL.md": SKILL_MD.encode()}
 
 
 def _headers():
-    return {"X-CSRF-Token": get_csrf_token()}
+    return {"X-CSRF-Token": get_csrf_token("testserver")}
 
 
 @pytest.fixture

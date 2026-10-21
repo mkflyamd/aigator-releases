@@ -93,3 +93,24 @@ def test_cleanup_old_outputs(tmp_outputs):
     cleanup_old_outputs()
     assert not old_dir.exists()
     assert new_dir.exists()
+
+
+def test_cleanup_removes_old_run_folders_inside_tier_folders(tmp_outputs):
+    import os
+    import time
+
+    import routes.files as files_mod
+
+    old = tmp_outputs / "community" / "old1"
+    fresh = tmp_outputs / "community" / "new1"
+    flat_old = tmp_outputs / "flat1"
+    for d in (old, fresh, flat_old):
+        d.mkdir(parents=True)
+    past = time.time() - 48 * 3600
+    for d in (old, flat_old):
+        os.utime(d, (past, past))
+
+    files_mod.cleanup_old_outputs()
+
+    assert not old.exists() and not flat_old.exists()
+    assert fresh.exists() and (tmp_outputs / "community").exists()

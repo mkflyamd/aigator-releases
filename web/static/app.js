@@ -1,4 +1,133 @@
-﻿/* ── Client-side perf instrumentation (ephemeral, in-memory) ──────────────────
+﻿/* ── CSRF: attach X-CSRF-Token to every same-origin mutating /api call ───────
+ * Routes that send, create or delete data require the token. Call sites that
+ * already set the header keep their value; the rest are covered here.
+ */
+(function _initCsrfFetch() {
+  const orig = window.fetch.bind(window);
+  window.fetch = function (input, init) {
+    try {
+      const url = typeof input === 'string' ? input : (input && input.url) || '';
+      const method = String(
+        (init && init.method) || (input && input.method) || 'GET',
+      ).toUpperCase();
+      if (
+        method !== 'GET' &&
+        method !== 'HEAD' &&
+        url.startsWith('/api/') &&
+        window.__CSRF_TOKEN__
+      ) {
+        const h = new Headers(
+          (init && init.headers) || (typeof input === 'object' && input.headers) || undefined,
+        );
+        if (!h.has('X-CSRF-Token')) {
+          h.set('X-CSRF-Token', window.__CSRF_TOKEN__);
+          init = { ...(init || {}), headers: h };
+        }
+      }
+    } catch (_) {
+      /* fall through to the plain call */
+    }
+    return orig(input, init);
+  };
+})();
+
+/* ── Click actions: the Content Security Policy forbids on*= attributes ──────
+ * Markup carries data-call (a name from the allow-list below) and data-args (a
+ * JSON array; {"$el":true} stands for the clicked element). Build the pair with
+ * gatorActionAttrs(). Names outside the list do nothing, so injected markup
+ * cannot call arbitrary functions.
+ */
+const GATOR_ACTIONS = new Set([
+  'ThemeManager.set',
+  'GatorTerminal.toggle',
+  'selectSkill',
+  'openExternal',
+  'removeClosest',
+  '_showAlert',
+  'gatorImageDownload',
+  'gatorImageSave',
+  'gatorOpenWidgetManager',
+  'gatorCloseWidgetManager',
+  'gatorWidgetSavePrompt',
+  'gatorWidgetSaveConfirm',
+  'gatorWidgetSaveCancel',
+  'gatorWidgetOpenFromDb',
+  'gatorWidgetCaptureToggle',
+  'gatorWidgetPinToggle',
+  'gatorWidgetDeleteConfirm',
+  '_loadTeamsThread',
+  '_loadChannelThread',
+  '_loadEmailDetail',
+  '_loadOneNotePageDetail',
+  '_ghSelectPR',
+  '_ghSelectIssue',
+  '_ghSelectRepo',
+  '_ghLoadRepoIssues',
+  '_ghLoadRepoPRs',
+  '_ghAskAboutRepo',
+  '_caSetLeftView',
+  '_caShowFileDiff',
+  '_caDiscardFile',
+  '_caAddLocalProject',
+  '_caAddGitHubProject',
+  '_caShowSessionDropdown',
+]);
+
+function openExternal(url) {
+  if (/^https:\/\//i.test(url)) window.open(url, '_blank');
+}
+
+function removeClosest(el, selector) {
+  el.closest(selector)?.remove();
+}
+
+function gatorActionAttrs(name, args, opts) {
+  const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+  const stop = opts && opts.stop ? ' data-stop="1"' : '';
+  return ` data-call="${esc(name)}" data-args="${esc(JSON.stringify(args || []))}"${stop}`;
+}
+
+(function _initGatorActions() {
+  function resolve(name) {
+    if (!GATOR_ACTIONS.has(name)) return null;
+    const parts = name.split('.');
+    const owner = parts.length > 1 ? window[parts[0]] : window;
+    const fn = owner && owner[parts[parts.length - 1]];
+    return typeof fn === 'function' ? { fn, owner } : null;
+  }
+  document.addEventListener(
+    'click',
+    (event) => {
+      const el = event.target.closest && event.target.closest('[data-call]');
+      if (!el) return;
+      const action = resolve(el.dataset.call);
+      if (!action) return;
+      let args = [];
+      try {
+        args = JSON.parse(el.dataset.args || '[]');
+      } catch (_) {
+        return;
+      }
+      if (el.dataset.stop) event.stopPropagation();
+      action.fn.apply(
+        action.owner,
+        args.map((a) => (a && a.$el ? el : a)),
+      );
+    },
+    true,
+  );
+  // load does not bubble; the capture listener sees widget iframes finish loading.
+  document.addEventListener(
+    'load',
+    (event) => {
+      const el = event.target;
+      if (el && el.classList && el.classList.contains('gator-widget-frame')) gatorWidgetResize(el);
+    },
+    true,
+  );
+})();
+
+/* ── Client-side perf instrumentation (ephemeral, in-memory) ──────────────────
  * Records user-perceived timings (pane open -> first paint, thread open, poll
  * round-trips) into a bounded ring buffer on window.__gatorPerf. Nothing is
  * persisted and no message content is stored — only names + durations. Inspect
@@ -1849,6 +1978,11 @@ function _openSkillPickerDropdown(query) {
     window.openSettingsPanel?.('skills');
   });
   _mentionDropdown.appendChild(mktFooter);
+
+  const refreshHint = document.createElement('div');
+  refreshHint.className = 'slash-refresh-hint';
+  refreshHint.textContent = "Don't see a new skill or MCP? Press Ctrl+R to reload.";
+  _mentionDropdown.appendChild(refreshHint);
 }
 
 // Commit chip only — no action popup
@@ -3977,6 +4111,7 @@ let _tabs = [];
 let _activeTabId = '';
 const _inflightRequests = new Map();
 const _chatTaskIds = new Map(); // tabId -> task_id for the active chat request
+const _locallyFinishedTasks = new Set(); // task ids already cleaned up here; their chat_done is late
 const _tabsWithUpdates = new Set(); // tabIds with completed responses the user hasn't seen
 const _pendingSandboxCards = new Map(); // tabId -> Map(requestId -> card data); drawn again each time the tab is shown
 const _tabsWorking = new Set(); // tabIds with an in-flight request (animated working line)
@@ -6544,6 +6679,7 @@ async function _saveLlmProfile() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(30000),
     });
     const d = await res.json();
     if (!res.ok) {
@@ -6556,6 +6692,7 @@ async function _saveLlmProfile() {
     _llmEditingId = savedId;
     const actRes = await fetch('/api/config/llm/profiles/' + savedId + '/activate', {
       method: 'POST',
+      signal: AbortSignal.timeout(30000),
     });
     if (!actRes.ok) {
       const ad = await actRes.json().catch(() => ({}));
@@ -6567,6 +6704,7 @@ async function _saveLlmProfile() {
     _llmShowError('');
     // Hide the form — we're back to the card list
     _hideLlmForm();
+    if (d.warning) _llmShowCardError(d.warning);
     if (saveBtn) {
       saveBtn.textContent = '\u2713 Activated';
       setTimeout(() => {
@@ -6574,7 +6712,11 @@ async function _saveLlmProfile() {
       }, 2000);
     }
   } catch (err) {
-    _llmShowError(err.message);
+    _llmShowError(
+      err.name === 'TimeoutError'
+        ? 'Timed out waiting for the server. Check your network/VPN and try again.'
+        : err.message,
+    );
   } finally {
     if (saveBtn) {
       saveBtn.disabled = false;
@@ -7057,6 +7199,50 @@ personaDeleteBtn.addEventListener('click', () => {
 
 // Load on startup
 loadPersonas();
+
+/* ── About you (who "me" and "myself" mean) ────────────── */
+const userProfileName = document.getElementById('user-profile-name');
+const userProfileEmail = document.getElementById('user-profile-email');
+const userProfileSaveBtn = document.getElementById('user-profile-save-btn');
+const userProfileMsg = document.getElementById('user-profile-msg');
+
+async function loadUserProfile() {
+  try {
+    const d = await (await fetch('/api/config/user-profile')).json();
+    userProfileName.value = d.name || '';
+    userProfileEmail.value = d.email || '';
+  } catch {}
+}
+
+userProfileSaveBtn.addEventListener('click', async () => {
+  userProfileSaveBtn.disabled = true;
+  userProfileMsg.textContent = 'Saving...';
+  userProfileMsg.style.color = 'var(--text-dim)';
+  try {
+    const res = await fetch('/api/config/user-profile', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: userProfileName.value,
+        email: userProfileEmail.value,
+      }),
+    });
+    const d = await res.json();
+    if (!res.ok) {
+      userProfileMsg.textContent = d.detail || 'Failed';
+      userProfileMsg.style.color = 'var(--danger)';
+    } else {
+      userProfileMsg.textContent = 'Saved';
+      userProfileMsg.style.color = 'var(--success, var(--text-dim))';
+    }
+  } catch (err) {
+    userProfileMsg.textContent = err.message;
+    userProfileMsg.style.color = 'var(--danger)';
+  }
+  userProfileSaveBtn.disabled = false;
+});
+
+loadUserProfile();
 
 // Setup gate — opens Settings drawer on the AI Model tab
 gateSaveBtn.addEventListener('click', () => {
@@ -10141,38 +10327,200 @@ function _wireInlineDraftMentions(editor, service, data) {
   editor.addEventListener('blur', () => setTimeout(close, 150));
 }
 
-function _serializeInlineDraftEditor(editor, service) {
-  const mentions = [];
-  const visit = (node) => {
-    let output = '';
-    node.childNodes.forEach((child) => {
-      if (child.nodeType === Node.TEXT_NODE) {
-        output += service === 'teams' ? escapeHtml(child.textContent) : child.textContent;
-      } else if (child.nodeName === 'BR') output += '\n';
-      else if (child.classList?.contains('gcc-inline-mention')) {
-        const id = child.dataset.mentionId || '';
-        const name = child.dataset.mentionName || '';
-        if (service === 'slack') output += `<@${id}>`;
-        else {
-          const itemid = mentions.length;
-          mentions.push({
-            id: itemid,
-            mentionText: name,
-            mentioned: { user: { id, displayName: name, userIdentityType: 'aadUser' } },
-          });
-          output += `<span itemscope itemtype="http://schema.skype.com/Mention" itemid="${itemid}">${escapeHtml(name)}</span>`;
-        }
-      } else {
-        output += visit(child);
-        if (child.nodeName === 'DIV' || child.nodeName === 'P') output += '\n';
-      }
-    });
-    return output;
+function _draftEditorSeedHtml(data, fallbackText) {
+  // Only cards built by the server-side rich-text tools (which carry format_capabilities) hold sanitized
+  // body_html; drafts restored from older storage may not, so those fall back to escaped text.
+  const html =
+    data && typeof data.body_html === 'string' && Array.isArray(data.format_capabilities)
+      ? data.body_html.trim()
+      : '';
+  if (html) return html;
+  return escapeHtml(String(fallbackText || '')).replace(/\n/g, '<br>');
+}
+
+function _upgradeDraftMentions(editor) {
+  editor.querySelectorAll('span[data-mention-id]').forEach((span) => {
+    if (span.classList.contains('gcc-inline-mention')) return;
+    const service = span.dataset.mentionService === 'slack' ? 'slack' : 'teams';
+    const id = span.dataset.mentionId || '';
+    const name = span.dataset.mentionName || (span.textContent || '').replace(/^[@#]/, '');
+    const chip = _draftMentionChip(service, { name, id });
+    if (id.startsWith('#')) chip.textContent = '#' + name;
+    span.replaceWith(chip);
+  });
+}
+
+function _normalizeDraftLinkUrl(raw) {
+  const url = String(raw || '').trim();
+  if (!url || /[\s"<>]/.test(url)) return '';
+  if (/^(https?:\/\/|mailto:)/i.test(url)) return url;
+  if (/^[a-z][a-z0-9+.-]*:(?!\d)/i.test(url)) return '';
+  if (/^[^@/]+@[^@/]+\.[^@/]+$/.test(url)) return 'mailto:' + url;
+  return 'https://' + url;
+}
+
+function _draftFormatButtons(capabilities) {
+  const allowed = new Set(capabilities || []);
+  return [
+    { cap: 'bold', group: 1, label: 'B', title: 'Bold', command: 'bold' },
+    { cap: 'italic', group: 1, label: 'I', title: 'Italic', command: 'italic' },
+    { cap: 'underline', group: 1, label: 'U', title: 'Underline', command: 'underline' },
+    { cap: 'ul', group: 2, label: '•', title: 'Bulleted list', command: 'insertUnorderedList' },
+    { cap: 'ol', group: 2, label: '1.', title: 'Numbered list', command: 'insertOrderedList' },
+    { cap: 'link', group: 3, label: 'Link', title: 'Link', command: 'link' },
+    { cap: 'code', group: 3, label: '</>', title: 'Code', command: 'code' },
+  ].filter((button) => allowed.has(button.cap));
+}
+
+function _draftToolbarSeparatorBefore(previous, button) {
+  return !!previous && previous.group !== button.group;
+}
+
+function _draftFormatActive(editor, button) {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0 || !editor.contains(sel.anchorNode)) return false;
+  const node = sel.anchorNode.nodeType === 1 ? sel.anchorNode : sel.anchorNode.parentElement;
+  if (button.command === 'link') return !!node?.closest('a');
+  if (button.command === 'code') return !!node?.closest('code');
+  try {
+    return document.queryCommandState(button.command);
+  } catch (_) {
+    return false;
+  }
+}
+
+function _initDraftRichEditor(editor, capabilities) {
+  _upgradeDraftMentions(editor);
+  editor.addEventListener('focus', () => {
+    try {
+      document.execCommand('defaultParagraphSeparator', false, 'p');
+      document.execCommand('styleWithCSS', false, false);
+    } catch (_) {
+      // execCommand options are best effort; the editor still works without them.
+    }
+  });
+  editor.addEventListener('paste', (event) => {
+    const text = event.clipboardData?.getData('text/plain');
+    if (text === undefined) return;
+    event.preventDefault();
+    document.execCommand('insertHTML', false, escapeHtml(text).replace(/\r?\n/g, '<br>'));
+  });
+
+  const buttons = _draftFormatButtons(capabilities);
+  if (!buttons.length) return;
+
+  const toolbar = document.createElement('div');
+  toolbar.className = 'gcc-toolbar';
+  toolbar.setAttribute('role', 'toolbar');
+  toolbar.setAttribute('aria-label', 'Formatting');
+
+  const linkRow = document.createElement('div');
+  linkRow.className = 'gcc-link-row hidden';
+  const linkInput = document.createElement('input');
+  linkInput.type = 'text';
+  linkInput.className = 'gcc-link-input';
+  linkInput.placeholder = 'https://example.com';
+  linkInput.setAttribute('aria-label', 'Link address');
+  const linkAdd = document.createElement('button');
+  linkAdd.type = 'button';
+  linkAdd.className = 'gcc-tool-btn';
+  linkAdd.textContent = 'Add';
+  linkRow.append(linkInput, linkAdd);
+
+  let savedRange = null;
+  const applyLink = () => {
+    const url = _normalizeDraftLinkUrl(linkInput.value);
+    if (!url) {
+      linkInput.setAttribute('aria-invalid', 'true');
+      return;
+    }
+    linkInput.removeAttribute('aria-invalid');
+    editor.focus();
+    const sel = window.getSelection();
+    if (savedRange) {
+      sel.removeAllRanges();
+      sel.addRange(savedRange);
+    }
+    if (!sel.rangeCount || sel.isCollapsed) {
+      document.execCommand(
+        'insertHTML',
+        false,
+        `<a href="${escapeHtml(url)}">${escapeHtml(url)}</a>`,
+      );
+    } else {
+      document.execCommand('createLink', false, url);
+    }
+    linkInput.value = '';
+    linkRow.classList.add('hidden');
   };
-  const output = visit(editor).replace(/\n$/, '');
-  return service === 'teams'
-    ? { text: `<div>${output.replace(/\n/g, '<br>')}</div>`, mentions }
-    : { text: output, mentions: [] };
+  linkInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      applyLink();
+    } else if (event.key === 'Escape') {
+      linkRow.classList.add('hidden');
+      editor.focus();
+    }
+  });
+  linkAdd.addEventListener('click', applyLink);
+
+  const toolButtons = [];
+  const refreshActive = () => {
+    toolButtons.forEach(({ el, button }) => {
+      const active = _draftFormatActive(editor, button);
+      el.classList.toggle('is-active', active);
+      el.setAttribute('aria-pressed', active ? 'true' : 'false');
+    });
+  };
+
+  buttons.forEach((button, index) => {
+    if (_draftToolbarSeparatorBefore(buttons[index - 1], button)) {
+      const sep = document.createElement('span');
+      sep.className = 'gcc-tool-sep';
+      sep.setAttribute('aria-hidden', 'true');
+      toolbar.appendChild(sep);
+    }
+    const el = document.createElement('button');
+    el.type = 'button';
+    el.className = 'gcc-tool-btn';
+    el.dataset.cap = button.cap;
+    el.textContent = button.label;
+    el.title = button.title;
+    el.setAttribute('aria-label', button.title);
+    el.setAttribute('aria-pressed', 'false');
+    el.addEventListener('mousedown', (event) => event.preventDefault());
+    el.addEventListener('click', () => {
+      const sel = window.getSelection();
+      const inEditor = !!sel && sel.rangeCount > 0 && editor.contains(sel.anchorNode);
+      if (button.command === 'link') {
+        savedRange = inEditor ? sel.getRangeAt(0).cloneRange() : null;
+        linkRow.classList.toggle('hidden');
+        if (!linkRow.classList.contains('hidden')) linkInput.focus();
+        return;
+      }
+      editor.focus();
+      if (button.command === 'code') {
+        const selected = inEditor ? sel.toString() : '';
+        document.execCommand('insertHTML', false, `<code>${escapeHtml(selected || 'code')}</code>`);
+      } else {
+        document.execCommand(button.command, false, null);
+      }
+      refreshActive();
+    });
+    toolButtons.push({ el, button });
+    toolbar.appendChild(el);
+  });
+  editor.before(toolbar, linkRow);
+
+  const onSelectionChange = () => {
+    if (!editor.isConnected) {
+      document.removeEventListener('selectionchange', onSelectionChange);
+      return;
+    }
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount > 0 && editor.contains(sel.anchorNode)) refreshActive();
+  };
+  document.addEventListener('selectionchange', onSelectionChange);
 }
 
 function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persist = true } = {}) {
@@ -10230,6 +10578,7 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
       service: 'slack',
       action: 'Announce to ' + (data.channels || ''),
       sendLabel: 'Post',
+      plainEditor: true,
       // An announcement can target multiple channels, so there is no single
       // conversation to open before it is posted.
       viewAvailable: false,
@@ -10361,6 +10710,22 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
       ? `<div class="gcc-workspace">Slack · ${escapeHtml(data.workspace_name)}</div>`
       : '';
   const canOpenNativeApp = typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell;
+  const destinationLabel =
+    {
+      '@outlook': 'Outlook',
+      '@slack': 'Slack',
+      '@teams': 'Microsoft Teams',
+      '@jira': 'Jira',
+      '@gcal': 'Google Calendar',
+    }[config.paneLabel] || '';
+  const sourcesRead = Array.isArray(data.sources) ? data.sources : [];
+  const flowLine = destinationLabel
+    ? `<div class="gcc-flow">Data from: <strong>${sourcesRead.length ? escapeHtml(sourcesRead.join(', ')) : 'no apps read in this request'}</strong> &rarr; Sending to: <strong>${escapeHtml(destinationLabel)}</strong></div>`
+    : '';
+  const sensitiveMarks = Array.isArray(data.sensitive) ? data.sensitive : [];
+  const sensitiveBanner = sensitiveMarks.length
+    ? `<div class="gcc-sensitive" role="alert">Sensitive content: this draft contains <strong>${escapeHtml(sensitiveMarks.join(', '))}</strong>. Check the destination before you approve.</div>`
+    : '';
 
   const card = document.createElement('div');
   card.className = 'message assistant';
@@ -10383,6 +10748,8 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
           <div class="gcc-title">Draft ready for approval</div>
         </div>
         <div class="gcc-body">
+          ${flowLine}
+          ${sensitiveBanner}
           ${
             config.service === 'email'
               ? `
@@ -10407,11 +10774,11 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
               ? `<div class="gcc-fields">${config.customBody}</div>`
               : config.hideEditLink
                 ? ''
-                : config.service === 'slack' || config.service === 'teams'
-                  ? `<div class="gcc-edit-area gcc-mention-editor" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Draft message">${escapeHtml(_editableBody)}</div>`
+                : ['email', 'slack', 'teams'].includes(config.service) && !config.plainEditor
+                  ? `<div class="gcc-edit-area gcc-rich-editor${config.service === 'email' ? '' : ' gcc-mention-editor'}" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Draft message">${_draftEditorSeedHtml(data, _editableBody)}</div>`
                   : `<textarea class="gcc-edit-area" rows="${Math.min(10, Math.max(3, _editableBody.split('\n').length))}">${escapeHtml(_editableBody)}</textarea>`
           }
-          ${config.service === 'slack' && !config.customBody ? '<div class="gcc-mention-hint">Type <strong>@</strong> to mention a Slack person.</div>' : ''}
+          ${config.service === 'slack' && !config.customBody && !config.plainEditor ? '<div class="gcc-mention-hint">Type <strong>@</strong> to mention a Slack person.</div>' : ''}
           ${config.service === 'teams' && !config.customBody ? '<div class="gcc-mention-hint">Type <strong>@</strong> to mention a Teams person.</div>' : ''}
         </div>
         <div class="gcc-actions">
@@ -10452,6 +10819,9 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
   if (inlineMentionEditor && (config.service === 'slack' || config.service === 'teams')) {
     _wireInlineDraftMentions(editArea, config.service, data);
   }
+  if (editArea?.classList.contains('gcc-rich-editor')) {
+    _initDraftRichEditor(editArea, data.format_capabilities || []);
+  }
 
   const jiraEditFields = [...card.querySelectorAll('[data-jira-edit]')];
   jiraEditFields.forEach((el) => {
@@ -10466,23 +10836,15 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
       jiraEditFields.forEach((el) => {
         if (el.value !== el.dataset.orig) editedFields[el.dataset.jiraEdit] = el.value;
       });
-      // Send the EDITED text from the textarea, not the original draft.
-      const inlineMentionPayload =
-        inlineMentionEditor && editArea
-          ? _serializeInlineDraftEditor(editArea, config.service)
-          : null;
-      const editedText = editArea
-        ? inlineMentionPayload
-          ? inlineMentionPayload.text
-          : editArea.value || editArea.textContent || ''
-        : null;
+      // Send the edited content, not the original draft.
+      const richEditor = !!editArea?.classList.contains('gcc-rich-editor');
+      const editedText =
+        editArea && !richEditor ? editArea.value || editArea.textContent || '' : null;
       const _approveBody = JSON.stringify({
         context_id: ownerTabId || _activeTabId || 'default',
+        ...(richEditor ? { edited_html: editArea.innerHTML } : {}),
         ...(editedText !== null ? { edited_message: editedText } : {}),
         ...(Object.keys(editedFields).length ? { edited_fields: editedFields } : {}),
-        ...(inlineMentionPayload?.mentions?.length
-          ? { mentions: inlineMentionPayload.mentions }
-          : {}),
       });
       let res = await fetch('/api/drafts/' + draftId + '/approve', {
         method: 'POST',
@@ -10602,20 +10964,36 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
       try {
         if (config.service === 'email') {
           // Create a real OWA draft via Graph and navigate Outlook to it.
-          // Send the EDITED text from the textarea, same as Approve does,
+          // Send the edited content, same as Approve does,
           // so edits aren't silently dropped when opening in Outlook instead
           // of sending from Gator (a handed-off draft permanently disables
           // Approve, so there is no later chance to apply them).
-          const editedText = editArea ? editArea.value || editArea.textContent || '' : null;
-          const res = await fetch('/api/drafts/' + draftId + '/open-in-outlook', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'X-CSRF-Token': window.__CSRF_TOKEN__ || '',
-            },
-            body: editedText !== null ? JSON.stringify({ edited_message: editedText }) : undefined,
-          });
-          if (!res.ok) throw new Error('HTTP ' + res.status);
+          const outlookEdit = editArea?.classList.contains('gcc-rich-editor')
+            ? { edited_html: editArea.innerHTML }
+            : editArea
+              ? { edited_message: editArea.value || editArea.textContent || '' }
+              : null;
+          const postOpen = () =>
+            fetch('/api/drafts/' + draftId + '/open-in-outlook', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': window.__CSRF_TOKEN__ || '',
+              },
+              body: outlookEdit ? JSON.stringify(outlookEdit) : undefined,
+            });
+          let res = await postOpen();
+          if (res.status === 403) {
+            const _csrf = await fetch('/api/csrf')
+              .then((r) => (r.ok ? r.json() : null))
+              .catch(() => null);
+            if (_csrf?.csrf_token) window.__CSRF_TOKEN__ = _csrf.csrf_token;
+            res = await postOpen();
+          }
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(typeof err.detail === 'string' ? err.detail : 'HTTP ' + res.status);
+          }
           const { url } = await res.json();
           // Enter the native-pane state first so tpState, the divider, and the
           // visible Expand Gator button stay in sync. This may navigate Outlook
@@ -10646,8 +11024,11 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
           await window.gatorShell.navigateSlackPin(data.channel_id);
           editLink.textContent = 'Viewing Slack \u2197';
         }
-      } catch (_err) {
+      } catch (err) {
         editLink.textContent = config.openLabel || 'Open in ' + config.paneLabel;
+        if (config.service === 'email' && err && err.message) {
+          _showConnectivityToast("Couldn't open in Outlook: " + err.message, 'warn');
+        }
       } finally {
         editLink.style.pointerEvents = '';
       }
@@ -10830,6 +11211,113 @@ function _fuzzyFilterCommands(commands, query) {
   return scored.map((x) => x.command);
 }
 
+// Hosts whose https images may render inline in chat. Any other image URL stays a
+// plain link so model output can't beacon data out through an image request.
+const INLINE_IMAGE_HOSTS = ['mcp-platform.amd.com'];
+
+function _isInlineImageUrl(href) {
+  if (href.startsWith('/api/files/')) return !href.includes('..');
+  try {
+    const u = new URL(href.replace(/&amp;/g, '&'));
+    return u.protocol === 'https:' && INLINE_IMAGE_HOSTS.includes(u.hostname);
+  } catch (_) {
+    return false;
+  }
+}
+
+// Swap a failed inline image for an "unavailable" card. Generated images are
+// temporary (links expire, /api/files outputs are deleted after ~24h), so a
+// broken image is expected in older chats and must explain itself.
+function _showBrokenChatImage(img) {
+  const unit = img.closest('.chat-inline-img-wrap') || img;
+  const alt = img.getAttribute('alt') || '';
+  const card = document.createElement('span');
+  card.className = 'chat-img-broken';
+  card.setAttribute('role', 'img');
+  card.setAttribute('aria-label', `Image unavailable${alt ? ': ' + alt : ''}`);
+
+  const text = document.createElement('span');
+  text.className = 'chat-img-broken-text';
+  const title = document.createElement('strong');
+  title.textContent = 'Image unavailable';
+  const hint = document.createElement('span');
+  hint.textContent =
+    (alt ? alt + ' — ' : '') + 'generated images are temporary and may have expired.';
+  text.append(title, hint);
+
+  card.append(text);
+  unit.replaceWith(card);
+}
+
+function _chatImageUrl(btn) {
+  const img = btn.closest('.chat-inline-img-wrap')?.querySelector('img');
+  return (img && (img.dataset.origSrc || img.getAttribute('src'))) || '';
+}
+
+// Briefly relabel an action button with its outcome, then restore it.
+function _flashImageAction(btn, label, ms) {
+  btn.dataset.label = btn.dataset.label || btn.textContent;
+  btn.textContent = label;
+  clearTimeout(btn._flashTimer);
+  btn._flashTimer = setTimeout(() => {
+    btn.textContent = btn.dataset.label;
+    btn.disabled = false;
+  }, ms || 2500);
+}
+
+async function _fetchChatImage(btn) {
+  const resp = await fetch('/api/inline-image?url=' + encodeURIComponent(_chatImageUrl(btn)));
+  if (!resp.ok) throw new Error(String(resp.status));
+  const named = /filename="([^"]+)"/.exec(resp.headers.get('Content-Disposition') || '');
+  return { blob: await resp.blob(), name: named ? named[1] : 'image.png' };
+}
+
+function _downloadBlob(blob, name) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+async function gatorImageDownload(btn) {
+  if (!_chatImageUrl(btn) || btn.disabled) return;
+  btn.disabled = true;
+  try {
+    const { blob, name } = await _fetchChatImage(btn);
+    _downloadBlob(blob, name);
+    _flashImageAction(btn, 'Downloaded');
+  } catch (_) {
+    _flashImageAction(btn, 'Image unavailable', 3500);
+  }
+}
+
+async function gatorImageSave(btn) {
+  const url = _chatImageUrl(btn);
+  if (!url || btn.disabled) return;
+  btn.disabled = true;
+  try {
+    const resp = await fetch('/api/inline-image/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url }),
+    });
+    if (!resp.ok) throw new Error(String(resp.status));
+    const data = await resp.json();
+    if (data.cancelled) {
+      btn.disabled = false;
+      return;
+    }
+    btn.title = 'Saved to ' + data.file_path;
+    _flashImageAction(btn, 'Saved', 3000);
+  } catch (err) {
+    console.error('Save image failed', err);
+    _flashImageAction(btn, 'Save failed', 3500);
+  }
+}
+
 // Inline markdown (runs on already-escaped text)
 function applyInline(html) {
   // Phase 1: stash inline code spans so no other regex touches their content
@@ -10837,6 +11325,30 @@ function applyInline(html) {
   html = html.replace(/`([^`]+)`/g, (_, inner) => {
     codeStash.push(inner);
     return `\x00C${codeStash.length - 1}\x00`;
+  });
+
+  // Images: stash the generated <img> so later passes (Jira keys, bare URLs) can't
+  // rewrite its attributes. Non-allowlisted URLs fall back to a plain link.
+  const imgStash = [];
+  html = html.replace(/!\[(.*?)\]\(((?:https?:\/\/|\/)[^\)"]*)\)/g, (_, alt, href) => {
+    if (!_isInlineImageUrl(href)) return `[${alt}](${href})`;
+    // Remote links are short-lived; the server fetches once, caches, and serves the image.
+    const remote = !href.startsWith('/');
+    const src = remote
+      ? '/api/inline-image?url=' + encodeURIComponent(href.replace(/&amp;/g, '&'))
+      : href;
+    const origAttr = remote ? ` data-orig-src="${href}"` : '';
+    const btn = (action, label, tip) =>
+      `<button type="button" class="chat-img-action" title="${tip}"${gatorActionAttrs(action, [{ $el: true }])}>${label}</button>`;
+    imgStash.push(
+      `<span class="chat-inline-img-wrap is-loading">` +
+        `<img class="chat-inline-img" src="${src}"${origAttr} alt="${alt.replace(/"/g, '&quot;')}" referrerpolicy="no-referrer">` +
+        `<span class="chat-inline-img-actions">` +
+        btn('gatorImageDownload', 'Download', 'Download this image') +
+        btn('gatorImageSave', 'Save as…', 'Choose where to save this image') +
+        `</span></span>`,
+    );
+    return `\x00I${imgStash.length - 1}\x00`;
   });
 
   // Markdown links first — so the URL inside [text](url) is consumed before
@@ -10937,8 +11449,74 @@ function applyInline(html) {
     }
     return `<code>${inner}</code>`;
   });
+  html = html.replace(/\x00I(\d+)\x00/g, (_, i) => imgStash[+i]);
 
   return html;
+}
+// ── end inline images
+
+// Load events don't bubble either; clear the loading placeholder once the image arrives.
+document.addEventListener(
+  'load',
+  (e) => {
+    const t = e.target;
+    if (t instanceof HTMLImageElement && t.classList.contains('chat-inline-img')) {
+      t.closest('.chat-inline-img-wrap')?.classList.remove('is-loading');
+    }
+  },
+  true,
+);
+
+// Error events don't bubble, so listen in the capture phase for every rendered
+// chat image (CSP forbids inline onerror attributes).
+document.addEventListener(
+  'error',
+  (e) => {
+    const t = e.target;
+    if (t instanceof HTMLImageElement && t.classList.contains('chat-inline-img')) {
+      _showBrokenChatImage(t);
+    }
+  },
+  true,
+);
+
+/* A widget runs in a srcdoc frame that inherits the page CSP, which forbids inline
+ * scripts and on*= attributes. Give the widget's own inline scripts the page nonce
+ * and turn its on*= attributes into listeners set up by one nonced script. Scripts
+ * with a src keep no nonce, so they load only from hosts the CSP allows. */
+function gatorWidgetCspHtml(html) {
+  const nonce = window.__CSP_NONCE__;
+  if (!nonce) return html;
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const wired = [];
+  doc.querySelectorAll('*').forEach((el) => {
+    for (const attr of Array.from(el.attributes)) {
+      if (!/^on[a-z]+$/i.test(attr.name)) continue;
+      const mark = `data-gw${wired.length}`;
+      wired.push({
+        mark,
+        event: attr.name.slice(2).toLowerCase(),
+        code: attr.value,
+        tag: el.tagName,
+      });
+      el.removeAttribute(attr.name);
+      el.setAttribute(mark, '');
+    }
+  });
+  doc.querySelectorAll('script:not([src])').forEach((s) => s.setAttribute('nonce', nonce));
+  if (wired.length) {
+    const lines = wired.map((w) => {
+      const target =
+        w.tag === 'BODY' && w.event === 'load' ? 'window' : `document.querySelector('[${w.mark}]')`;
+      const code = w.code.replace(/<\/script/gi, '<\\/script');
+      return `${target}.addEventListener(${JSON.stringify(w.event)},function(event){var r=(function(event){${code}\n}).call(this,event);if(r===false)event.preventDefault();});`;
+    });
+    const s = doc.createElement('script');
+    s.setAttribute('nonce', nonce);
+    s.textContent = lines.join('\n');
+    doc.body.appendChild(s);
+  }
+  return (doc.doctype ? '<!DOCTYPE html>' : '') + doc.documentElement.outerHTML;
 }
 
 function renderMarkdown(raw) {
@@ -10996,8 +11574,8 @@ function renderMarkdown(raw) {
         '::-webkit-scrollbar-thumb{background:#2a4a6b;border-radius:2px}' +
         '::-webkit-scrollbar-thumb:hover{background:#4ade80}' +
         '*{scrollbar-width:thin;scrollbar-color:#2a4a6b transparent}' +
-        `</style><script>window._GATOR="${_gatorOrigin}";<\/script>`;
-      const srcdoc = (normStyle + trimmed).replace(/"/g, '&quot;');
+        `</style><script nonce="${window.__CSP_NONCE__ || ''}">window._GATOR="${_gatorOrigin}";<\/script>`;
+      const srcdoc = (normStyle + gatorWidgetCspHtml(trimmed)).replace(/"/g, '&quot;');
       // Hide the Save button for transient widgets (narration editor, playback)
       // that don't make sense to persist. Detected via data-no-save attribute
       // or known heading text.
@@ -11011,17 +11589,17 @@ function renderMarkdown(raw) {
           `<span class="gator-widget-label" id="${widgetId}-label">Widget</span>` +
           `<div class="gator-widget-save-row" id="${widgetId}-save-row" style="display:none;flex:1;gap:4px;align-items:center">` +
           `<input id="${widgetId}-name-input" class="gator-widget-name-input" type="text" placeholder="Widget name..." value="My Widget" />` +
-          `<button class="gator-widget-btn" onclick="gatorWidgetSaveConfirm('${widgetId}')">✓</button>` +
-          `<button class="gator-widget-btn" onclick="gatorWidgetSaveCancel('${widgetId}')">✕</button>` +
+          `<button class="gator-widget-btn"${gatorActionAttrs('gatorWidgetSaveConfirm', [widgetId])}>✓</button>` +
+          `<button class="gator-widget-btn"${gatorActionAttrs('gatorWidgetSaveCancel', [widgetId])}>✕</button>` +
           `</div>` +
           (_noSave
             ? ''
-            : `<button class="gator-widget-btn" id="${widgetId}-save-btn" onclick="gatorWidgetSavePrompt('${widgetId}')" title="Save widget">&#128190; Save</button>`) +
+            : `<button class="gator-widget-btn" id="${widgetId}-save-btn"${gatorActionAttrs('gatorWidgetSavePrompt', [widgetId])} title="Save widget">&#128190; Save</button>`) +
           `</div>` +
           `<iframe id="${widgetId}" class="gator-widget-frame" sandbox="allow-scripts allow-forms allow-modals allow-pointer-lock allow-same-origin"` +
           ` srcdoc="${srcdoc}"` +
           ` data-src="${encoded}"` +
-          ` onload="gatorWidgetResize(this)" frameborder="0"></iframe>` +
+          ` frameborder="0"></iframe>` +
           `</div>`,
       );
       return `\x00B${idx}\x00`;
@@ -12280,6 +12858,7 @@ form.addEventListener('submit', async (e) => {
     const _stopTaskId = _chatTaskIds.get(_stopTabKey);
     if (_stopTaskId) {
       fetch(`/api/chat/${_stopTaskId}/cancel`, { method: 'POST' }).catch(() => {});
+      _locallyFinishedTasks.add(_stopTaskId);
       _chatTaskIds.delete(_stopTabKey);
       _inflightRequests.delete(_stopTabKey);
     }
@@ -12765,6 +13344,7 @@ form.addEventListener('submit', async (e) => {
             _sawDone = true;
             if (_activeTabId === requestTabId) _isStreaming = false;
             es.close();
+            _locallyFinishedTasks.add(task_id);
             _chatTaskIds.delete(_tabKey);
             _inflightRequests.delete(_tabKey);
             // Fallback only (see chat_done); doSend flushes at its end.
@@ -13187,6 +13767,7 @@ form.addEventListener('submit', async (e) => {
           // EventSource reconnects automatically with Last-Event-ID — only act on permanent close
           if (es.readyState === EventSource.CLOSED) {
             _userScrolledUp = false;
+            _locallyFinishedTasks.add(task_id);
             _chatTaskIds.delete(_tabKey);
             _inflightRequests.delete(_tabKey);
             _setTabWorking(requestTabId, false);
@@ -14381,7 +14962,15 @@ function _initNotificationStream() {
         // The request finished (success, error, or cancel) — clear the in-progress
         // line. This is the reliable signal: it fires from the server's finally even
         // when a stalled/cancelled chat never sent a local [DONE].
-        if (msg.context_id) {
+        // A chat_done for a task this client already finished ([DONE], Stop, or a closed
+        // stream) is late. A newer task may be running on the same tab now, so it must
+        // not clear that task's state, dots or Stop button.
+        const _runningTask = _chatTaskIds.get(msg.context_id);
+        const _lateDone =
+          !!msg.task_id &&
+          (_locallyFinishedTasks.delete(msg.task_id) ||
+            (!!_runningTask && _runningTask !== msg.task_id));
+        if (msg.context_id && !_lateDone) {
           _setTabWorking(msg.context_id, false);
           // Clear the per-tab task tracking so the send button returns to green
           // even if [DONE] was never received (stalled stream, server crash, etc.).
@@ -15444,14 +16033,15 @@ function _showBrowserConfirmCard(msgDiv, { confirm_id, action, title, allow_labe
   }
 
   const body = document.createElement('div');
-  body.style.cssText = 'display: flex; align-items: flex-start; gap: 10px; width: 100%;';
+  body.style.cssText =
+    'display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px 10px; width: 100%;';
 
   const icon = document.createElement('span');
   icon.textContent = text.icon;
   icon.style.cssText = 'font-size: 1.1rem; flex-shrink: 0; margin-top: 2px;';
 
   const textWrap = document.createElement('div');
-  textWrap.style.cssText = 'flex: 1; min-width: 0;';
+  textWrap.style.cssText = 'flex: 1 1 0; min-width: 0;';
 
   const titleEl = document.createElement('div');
   titleEl.style.cssText =
@@ -15466,7 +16056,8 @@ function _showBrowserConfirmCard(msgDiv, { confirm_id, action, title, allow_labe
   textWrap.append(titleEl, detail);
 
   const btnWrap = document.createElement('div');
-  btnWrap.style.cssText = 'display: flex; gap: 6px; flex-shrink: 0; align-items: center;';
+  btnWrap.style.cssText =
+    'display: flex; flex-wrap: wrap; gap: 6px; flex: 1 1 100%; justify-content: flex-end; align-items: center;';
 
   const cancelBtn = document.createElement('button');
   cancelBtn.textContent = text.denyLabel;
@@ -15520,14 +16111,15 @@ function _showFailoverConfirmCard(msgDiv, { consent_id, fallback_model }) {
   card.id = 'failover-confirm-card';
 
   const body = document.createElement('div');
-  body.style.cssText = 'display: flex; align-items: flex-start; gap: 10px; width: 100%;';
+  body.style.cssText =
+    'display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px 10px; width: 100%;';
 
   const icon = document.createElement('span');
   icon.textContent = '⚠️';
   icon.style.cssText = 'font-size: 1.1rem; flex-shrink: 0; margin-top: 2px;';
 
   const textWrap = document.createElement('div');
-  textWrap.style.cssText = 'flex: 1; min-width: 0;';
+  textWrap.style.cssText = 'flex: 1 1 0; min-width: 0;';
 
   const title = document.createElement('div');
   title.style.cssText =
@@ -15541,7 +16133,8 @@ function _showFailoverConfirmCard(msgDiv, { consent_id, fallback_model }) {
   textWrap.append(title, detail);
 
   const btnWrap = document.createElement('div');
-  btnWrap.style.cssText = 'display: flex; gap: 6px; flex-shrink: 0; align-items: center;';
+  btnWrap.style.cssText =
+    'display: flex; flex-wrap: wrap; gap: 6px; flex: 1 1 100%; justify-content: flex-end; align-items: center;';
 
   const cancelBtn = document.createElement('button');
   cancelBtn.textContent = 'Cancel';
@@ -17772,7 +18365,7 @@ async function gatorWidgetManagerRender(panel) {
       `</svg>` +
       `<span id="gwm-title-text">My Widgets</span>` +
       `</div>` +
-      `<button class="gwm-close-btn" onclick="gatorCloseWidgetManager()" title="Close">` +
+      `<button class="gwm-close-btn"${gatorActionAttrs('gatorCloseWidgetManager')} title="Close">` +
       `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">` +
       `<line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/>` +
       `</svg>` +
@@ -17797,10 +18390,10 @@ async function gatorWidgetManagerRender(panel) {
       row.innerHTML =
         `<span class="gator-widget-manager-name" title="${escapeHtml(w.name)}">${escapeHtml(w.name)}</span>` +
         `<div class="gator-widget-manager-actions">` +
-        `<button onclick="gatorWidgetOpenFromDb('${w.widget_id}')" title="Open as floating window">Open</button>` +
-        `<button onclick="gatorWidgetCaptureToggle('${w.widget_id}', ${_hide})" title="${_hide ? 'Hidden during screen share — click to show' : 'Visible during screen share — click to hide'}">${_hide ? gatorEyeOffSvg() : gatorEyeSvg()}</button>` +
-        `<button onclick="gatorWidgetPinToggle('${w.widget_id}', ${w.pinned})" title="${w.pinned ? 'Unpin from rail' : 'Pin to rail'}">${w.pinned ? '★' : '☆'}</button>` +
-        `<button onclick="gatorWidgetDeleteConfirm('${w.widget_id}', '${escapeHtml(w.name).replace(/'/g, "\\'")}')" title="Delete">🗑</button>` +
+        `<button${gatorActionAttrs('gatorWidgetOpenFromDb', [w.widget_id])} title="Open as floating window">Open</button>` +
+        `<button${gatorActionAttrs('gatorWidgetCaptureToggle', [w.widget_id, !!_hide])} title="${_hide ? 'Hidden during screen share — click to show' : 'Visible during screen share — click to hide'}">${_hide ? gatorEyeOffSvg() : gatorEyeSvg()}</button>` +
+        `<button${gatorActionAttrs('gatorWidgetPinToggle', [w.widget_id, !!w.pinned])} title="${w.pinned ? 'Unpin from rail' : 'Pin to rail'}">${w.pinned ? '★' : '☆'}</button>` +
+        `<button${gatorActionAttrs('gatorWidgetDeleteConfirm', [w.widget_id, w.name])} title="Delete">🗑</button>` +
         `</div>`;
       listEl.appendChild(row);
     });

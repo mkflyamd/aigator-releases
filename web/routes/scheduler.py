@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Request, HTTPException
+from fastapi import APIRouter, Request, HTTPException, Depends
+from security import verify_csrf
 from pydantic import BaseModel
 import scheduler as sched
 
@@ -43,7 +44,7 @@ async def get_job(job_id: str):
 
 
 # ── Create job ──────────────────────────────────────────────────────────────
-@router.post("/api/scheduler/jobs")
+@router.post("/api/scheduler/jobs", dependencies=[Depends(verify_csrf)])
 async def create_job(req: CreateJobRequest):
     return await sched.add_job(
         req.name,
@@ -57,7 +58,7 @@ async def create_job(req: CreateJobRequest):
 
 
 # ── Update job (name / prompt) ──────────────────────────────────────────────
-@router.patch("/api/scheduler/jobs/{job_id}")
+@router.patch("/api/scheduler/jobs/{job_id}", dependencies=[Depends(verify_csrf)])
 async def update_job(job_id: str, req: UpdateJobRequest):
     # Resolve tab binding update: explicit clear takes priority; otherwise
     # only forward tab_context_id if provided.
@@ -82,7 +83,7 @@ async def update_job(job_id: str, req: UpdateJobRequest):
 
 
 # ── Delete job ──────────────────────────────────────────────────────────────
-@router.delete("/api/scheduler/jobs/{job_id}")
+@router.delete("/api/scheduler/jobs/{job_id}", dependencies=[Depends(verify_csrf)])
 async def delete_job(job_id: str):
     removed = await sched.remove_job(job_id)
     return {"removed": removed}
@@ -103,7 +104,7 @@ async def resume_job(job_id: str):
 
 
 # ── Run job immediately ────────────────────────────────────────────────────
-@router.post("/api/scheduler/jobs/{job_id}/run-now")
+@router.post("/api/scheduler/jobs/{job_id}/run-now", dependencies=[Depends(verify_csrf)])
 async def run_job_now(job_id: str):
     task_id = await sched.run_job_now(job_id)
     return {"task_id": task_id}

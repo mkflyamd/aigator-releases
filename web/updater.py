@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
+from log_sanitizer import sanitize
 from packaging.version import Version
 
 _log = logging.getLogger(__name__)
@@ -200,7 +201,7 @@ async def download_update() -> None:
         raise
     except Exception as exc:
         _state.state = "error"
-        _state.error = str(exc)
+        _state.error = sanitize(str(exc))
         if tmp_path.exists():
             tmp_path.unlink(missing_ok=True)
 

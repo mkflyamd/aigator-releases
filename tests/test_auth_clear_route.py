@@ -24,7 +24,7 @@ def client():
 def csrf_headers():
     from security import get_csrf_token
 
-    return {"X-CSRF-Token": get_csrf_token()}
+    return {"X-CSRF-Token": get_csrf_token("testserver")}
 
 
 def _seed():

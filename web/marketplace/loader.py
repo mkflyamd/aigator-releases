@@ -257,7 +257,7 @@ def load_skill_tools(skill_id: str, skill_dir: Path, tier: str) -> dict:
         unload_skill_tools(skill_id)
 
     perms = state.approved_permissions(skill_id)
-    described = tool_sandbox.describe_skill_tools(skill_id, skill_dir, perms)
+    described = tool_sandbox.describe_skill_tools(skill_id, skill_dir, perms, tier)
     if not described.get("ok"):
         err = described.get("error") or "the skill's tools could not be read"
         shared.FAILED_SKILLS[skill_id] = err

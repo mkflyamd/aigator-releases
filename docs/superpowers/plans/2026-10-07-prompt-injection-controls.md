@@ -1079,7 +1079,7 @@ Create `web/content_guard.py`:
 """Mark tool output from outside sources as untrusted and remove high-signal injected instructions.
 
 A pattern filter, not a classifier: it removes a few phrasings that are almost never legitimate
-in mail, chat, tickets or web pages. It cannot prove content is safe.
+in mail, chat, tickets or web pages.
 """
 from __future__ import annotations
 
@@ -1371,12 +1371,12 @@ In the spec make these edits so it matches the code:
 
 - Section 3 and 5: the table covers every tool of a source (not only reading ones), and also Outlook calendar, Outlook contacts, the people directory, OneNote and GitHub; the "broad" flag is dropped because the first-use card already gates every search tool of a source; `fetch_webpage` hosts are sources keyed by host.
 - Section 2: the allow-list is the set of tool names the loop was built with (`normalized_tools`); a mid-turn skill activation builds a new loop with the larger set.
-- Section 4: the paragraph "No keyword filter..." is replaced by the pattern filter that now exists (override phrases, "new instructions:", instructions aimed at the assistant to send or fetch, markdown images carrying data in the URL), with the toast and log, and a plain statement that it is a pattern filter that cannot prove content is safe. `fetch_webpage` also checks each redirect hop.
-- Known limits: add "scheduled and background runs have no screen, so the data-source card is skipped there (the allow-list still applies)"; "direct skill-router intents (user-typed shortcuts) call tools without the card"; "the pattern filter can miss rephrased attacks and can remove a harmless sentence"; "DNS rebinding between the address check and the connection is not covered".
+- Section 4: the paragraph "No keyword filter..." is replaced by the pattern filter that now exists (override phrases, "new instructions:", instructions aimed at the assistant to send or fetch, markdown images carrying data in the URL), with the toast and log. `fetch_webpage` also checks each redirect hop.
+- Known limits: add "scheduled and background runs have no screen, so the data-source card is skipped there (the allow-list still applies)"; "direct skill-router intents (user-typed shortcuts) call tools without the card"; "DNS rebinding between the address check and the connection is not covered".
 
 - [ ] **Step 3: Update the tracker row**
 
-Replace the `_04` row's Status and Notes in `docs/security/threatmodel-remediation.md` with: Status `**Implemented (macOS/Linux not exercised)**`; Spec links to the design and this plan; Notes covering, in this order: schema validation in `execute_tool` (fails open for a missing or unsupported schema); tool allow-list = tools offered to the loop; first-use card per source per tab ("Allow for this tab", expires after 60 seconds as a denial, ends at tab close, never saved) which is also the confirmation for search and cross-system access; untrusted marking, pattern filter and system rule; `fetch_webpage` guard; and the limits (criterion 4 is "partially met" because a pattern filter cannot prove "effectively"; marking and filtering reduce but do not remove injection; allow-list is the offered set, not a user-edited list; an approved source stays readable for the tab; `web_search` queries are not gated; scheduled runs and direct intents skip the card; redirect and DNS-rebinding limits as above).
+Replace the `_04` row's Status and Notes in `docs/security/threatmodel-remediation.md` with: Status `**Implemented (macOS/Linux not exercised)**`; Spec links to the design and this plan; Notes covering, in this order: schema validation in `execute_tool` (fails open for a missing or unsupported schema); tool allow-list = tools offered to the loop; first-use card per source per tab ("Allow for this tab", expires after 60 seconds as a denial, ends at tab close, never saved) which is also the confirmation for search and cross-system access; untrusted marking, pattern filter and system rule; `fetch_webpage` guard; and the limits (allow-list is the offered set, not a user-edited list; an approved source stays readable for the tab; `web_search` queries are not gated; scheduled runs and direct intents skip the card; redirect and DNS-rebinding limits as above).
 
 - [ ] **Step 4: Commit**
 

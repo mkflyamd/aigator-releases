@@ -33,7 +33,7 @@ def test_partial_file_keeps_defaults_for_missing_keys(policy_file):
 def test_invalid_file_fails_closed(policy_file, text):
     policy_file.write_text(text)
     assert pol.load_policy() == pol.FAIL_CLOSED_POLICY
-    assert pol.FAIL_CLOSED_POLICY == pol.Policy("enabled", "deny", "strict", True, "deny")
+    assert pol.FAIL_CLOSED_POLICY == pol.Policy("enabled", "deny", "strict", True, "deny", ("Native", "Verified"), True, block_bundle_stdio_mcp=True)
 
 
 @pytest.mark.parametrize("text", [
@@ -112,8 +112,20 @@ def test_policy_paths_per_platform(monkeypatch):
 def test_as_dict():
     assert pol.Policy().as_dict() == {
         "code_runner": "enabled", "network": "ask", "filesystem": "ask", "require_sandbox": False,
-        "saved_permissions": "allow",
+        "saved_permissions": "allow", "marketplace_allowed_tiers": ("Native", "Verified", "Community", "Mine"),
+        "require_pinned_installs": False, "approved_digests": None, "blocked_data_flows": (),
+        "block_bundle_stdio_mcp": False,
     }
+
+
+def test_block_bundle_stdio_mcp_field():
+    from sandbox.policy import parse_policy, DEFAULT_POLICY, FAIL_CLOSED_POLICY
+    assert DEFAULT_POLICY.block_bundle_stdio_mcp is False
+    assert parse_policy('{"block_bundle_stdio_mcp": true}').block_bundle_stdio_mcp is True
+    assert FAIL_CLOSED_POLICY.block_bundle_stdio_mcp is True
+    for bad in ('"yes"', "1", "null", "[]"):
+        with pytest.raises(ValueError):
+            parse_policy('{"block_bundle_stdio_mcp": %s}' % bad)
 
 
 def test_saved_permissions_field():
@@ -124,3 +136,29 @@ def test_saved_permissions_field():
     assert DEFAULT_POLICY.as_dict()["saved_permissions"] == "allow"
     with pytest.raises(ValueError):
         parse_policy('{"saved_permissions": "maybe"}')
+
+
+def test_blocked_data_flows_parse_and_validate():
+    from sandbox.policy import parse_policy
+    assert parse_policy('{"blocked_data_flows": ["email > slack", "*>jira"]}').blocked_data_flows == ("email>slack", "*>jira")
+    assert parse_policy('{"blocked_data_flows": []}').blocked_data_flows == ()
+    for bad in ('"email>"', '["emial>slack"]', '["email>sharepoint"]', '["email"]', '["a>b>c"]', '[1]'):
+        with pytest.raises(ValueError):
+            parse_policy('{"blocked_data_flows": %s}' % bad)
+
+
+def test_blocked_flow_matching(monkeypatch):
+    import data_sources
+    monkeypatch.setattr(pol, "load_policy", lambda: pol.Policy(blocked_data_flows=("email>slack", "web>*", "*>jira")))
+    assert data_sources.blocked_flow({"email"}, "slack-post") == "email>slack"
+    assert data_sources.blocked_flow({"email"}, "teams-message") is None
+    assert data_sources.blocked_flow({"web"}, "email-send") == "web>*"
+    assert data_sources.blocked_flow({"confluence"}, "jira-create") == "*>jira"
+    assert data_sources.blocked_flow(set(), "jira-create") is None
+
+
+def test_sensitivity_markers():
+    import data_sources
+    assert data_sources.sensitivity_markers({"subject": "Roadmap", "body": "AMD Restricted and confidential"}) == [
+        "AMD Restricted", "confidential"]
+    assert data_sources.sensitivity_markers({"body": "lunch at noon"}) == []

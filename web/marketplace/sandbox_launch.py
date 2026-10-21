@@ -27,10 +27,18 @@ def _failed(message: str) -> SkillRun:
     return SkillRun(False, -1, "", "", False, message)
 
 
-def new_run_dir() -> Path:
+TIER_DIRS = ("verified", "community", "mine")
+
+
+def new_run_dir(tier: str = "") -> Path:
+    """A fresh run folder under outputs/<tier>/. An unknown tier gets the least trusted folder.
+
+    The tier folder only keeps outputs organized; it is not a security boundary. Isolation comes from the sandbox permissions and timeout.
+    """
     import config
 
-    run_dir = Path(config.OUTPUTS_DIR) / uuid4().hex[:12]
+    folder = tier.lower() if tier.lower() in TIER_DIRS else "community"
+    run_dir = Path(config.OUTPUTS_DIR) / folder / uuid4().hex[:12]
     run_dir.mkdir(parents=True, exist_ok=True)
     return run_dir
 

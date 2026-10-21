@@ -23,7 +23,7 @@ def client():
 def csrf():
     from security import get_csrf_token
 
-    return {"X-CSRF-Token": get_csrf_token()}
+    return {"X-CSRF-Token": get_csrf_token("testserver")}
 
 
 @pytest.fixture(autouse=True)
@@ -87,7 +87,9 @@ def test_status(client, cfg, monkeypatch):
     assert r.json() == {
         "level": "unavailable", "reason": "install bubblewrap", "opted_out": True,
         "policy": {"code_runner": "enabled", "network": "ask", "filesystem": "ask", "require_sandbox": False,
-                   "saved_permissions": "allow"},
+                   "saved_permissions": "allow", "marketplace_allowed_tiers": ["Native", "Verified", "Community", "Mine"],
+                   "require_pinned_installs": False, "approved_digests": None, "blocked_data_flows": [],
+                   "block_bundle_stdio_mcp": False},
     }
 
 

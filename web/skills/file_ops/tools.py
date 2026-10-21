@@ -17,6 +17,10 @@ SKILL_ID = "file_ops"
 _MAX_READ_BYTES = 5 * 1024 * 1024  # 5 MB
 _MAX_GLOB = 200
 _MAX_GREP = 100
+_MAX_GREP_LINE = 500  # chars kept around a match on a long line
+_MAX_GREP_BYTES = 24 * 1024  # stays under the tool-result inline budget
+_MAX_PAGE_BYTES = 24 * 1024
+
 # glob_files always does a recursive descent from base_path under the hood
 # (both branches below inject/require a literal "**" in the final pattern),
 # and glob.glob(recursive=True) has no built-in bound — it fully walks the
@@ -39,8 +43,46 @@ def _is_filesystem_root(path: Path) -> bool:
     return resolved.parent == resolved
 
 
-def _tool_read_file(path: str, encoding: str = "") -> dict:
-    """Read a file. Returns text content or base64-encoded binary."""
+def _read_page(content: str, offset: int, limit: int) -> dict:
+    lines = content.splitlines()
+    total = len(lines)
+    start = max(int(offset or 1), 1)
+    wanted = int(limit) if limit and int(limit) > 0 else total
+    picked: list[str] = []
+    used = 0
+    line_truncated = False
+    idx = start - 1
+    while idx < total and len(picked) < wanted:
+        line = lines[idx]
+        cost = len(line.encode("utf-8")) + 1
+        if used + cost > _MAX_PAGE_BYTES:
+            if not picked:
+                line = line.encode("utf-8")[:_MAX_PAGE_BYTES].decode("utf-8", errors="ignore")
+                picked.append(line)
+                line_truncated = True
+                idx += 1
+            break
+        picked.append(line)
+        used += cost
+        idx += 1
+    page = {
+        "content": "\n".join(picked),
+        "start_line": start,
+        "end_line": start + len(picked) - 1,
+        "total_lines": total,
+    }
+    if line_truncated:
+        page["line_truncated"] = True
+    if idx < total:
+        page["next_offset"] = idx + 1
+    return page
+
+
+def _tool_read_file(path: str, encoding: str = "", offset: int = 0, limit: int = 0) -> dict:
+    """Read a file. Returns text content or base64-encoded binary.
+
+    offset (1-based line) and limit (lines) return one bounded page of a text file.
+    """
     if is_secrets_path(path):
         return {"error": PROTECTED_MSG}
     p = Path(path)
@@ -72,7 +114,10 @@ def _tool_read_file(path: str, encoding: str = "") -> dict:
         for enc in [encoding] if encoding else ["utf-8", "latin-1"]:
             try:
                 content = p.read_text(encoding=enc)
-                return {"content": content, "size_bytes": size, "mime_type": mime_type}
+                result = {"size_bytes": size, "mime_type": mime_type}
+                if offset or limit:
+                    return {**_read_page(content, offset, limit), **result}
+                return {"content": content, **result}
             except (UnicodeDecodeError, LookupError):
                 continue
 
@@ -272,6 +317,7 @@ def _tool_grep_files(
 
     matches = []
     truncated = False
+    used = 0
     for f in files:
         if is_secrets_path(f):
             continue
@@ -280,13 +326,26 @@ def _tool_grep_files(
         except Exception:
             continue
         for lineno, line in enumerate(lines, start=1):
-            if compiled.search(line):
-                matches.append(
-                    {"file": str(f), "line_number": lineno, "line": line.rstrip()}
+            hit = compiled.search(line)
+            if not hit:
+                continue
+            entry = {"file": str(f), "line_number": lineno, "line": line.rstrip()}
+            if len(entry["line"]) > _MAX_GREP_LINE:
+                start = max(hit.start() - _MAX_GREP_LINE // 4, 0)
+                end = start + _MAX_GREP_LINE
+                entry["line"] = (
+                    ("…" if start else "") + line[start:end] + ("…" if end < len(line) else "")
                 )
-                if len(matches) >= max_results:
-                    truncated = True
-                    break
+                entry["line_truncated"] = True
+            cost = len(entry["line"].encode("utf-8")) + len(entry["file"]) + 64
+            if matches and used + cost > _MAX_GREP_BYTES:
+                truncated = True
+                break
+            used += cost
+            matches.append(entry)
+            if len(matches) >= max_results:
+                truncated = True
+                break
         if truncated:
             break
 
@@ -302,7 +361,9 @@ TOOL_DEFS = [
         "description": (
             "Read a local file. Text files return content string. Binary files "
             "(images, PDFs) return binary=true and base64-encoded content. "
-            "Max file size 5 MB. Do not paste binary base64 into chat."
+            "Max file size 5 MB. Do not paste binary base64 into chat. "
+            "For large text files pass offset and limit to read one page of lines; "
+            "the result's next_offset is the offset of the next page."
         ),
         "input_schema": {
             "type": "object",
@@ -311,6 +372,14 @@ TOOL_DEFS = [
                 "encoding": {
                     "type": "string",
                     "description": "Text encoding override (optional, e.g. 'latin-1')",
+                },
+                "offset": {
+                    "type": "integer",
+                    "description": "1-based line number to start from (optional)",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of lines to return (optional)",
                 },
             },
             "required": ["path"],

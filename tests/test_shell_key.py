@@ -41,13 +41,13 @@ def test_token_endpoints_refuse_wrong_key(client, keyed, path):
 def test_csrf_endpoint_serves_token_with_right_key(client, keyed):
     r = client.get("/api/csrf", headers={HEADER: FAKE})
     assert r.status_code == 200
-    assert r.json()["csrf_token"] == security.get_csrf_token()
+    assert r.json()["csrf_token"] == security.get_csrf_token("testserver")
 
 
 def test_root_serves_page_with_right_key(client, keyed):
     r = client.get("/", headers={HEADER: FAKE})
     assert r.status_code == 200
-    assert security.get_csrf_token() in r.text
+    assert security.get_csrf_token("testserver") in r.text
 
 
 @pytest.mark.parametrize("path", ["/api/csrf", "/"])

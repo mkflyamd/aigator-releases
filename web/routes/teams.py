@@ -11,10 +11,11 @@ import urllib.request
 from collections import OrderedDict as _OD
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 import secure_store
+from security import verify_csrf
 import shared
 
 router = APIRouter()
@@ -2567,7 +2568,7 @@ class TeamsEditRequest(BaseModel):
     ] = []  # newly-pasted images to upload on edit (#112)
 
 
-@router.patch("/api/teams/chats/{chat_id}/messages/{message_id}")
+@router.patch("/api/teams/chats/{chat_id}/messages/{message_id}", dependencies=[Depends(verify_csrf)])
 async def tp_teams_edit_message(chat_id: str, message_id: str, req: TeamsEditRequest):
     """Edit a sent Teams message via Skype chatsvc API (no Chat.ReadWrite scope needed)."""
     try:
@@ -2628,7 +2629,7 @@ async def tp_teams_edit_message(chat_id: str, message_id: str, req: TeamsEditReq
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.delete("/api/teams/chats/{chat_id}/messages/{message_id}")
+@router.delete("/api/teams/chats/{chat_id}/messages/{message_id}", dependencies=[Depends(verify_csrf)])
 async def tp_teams_delete_message(chat_id: str, message_id: str):
     """Delete a sent Teams message via Skype chatsvc API — no Graph scope needed."""
     try:
@@ -2725,7 +2726,7 @@ def _reaction_to_teams_key(reaction: str) -> str:
     return ""  # unknown — caller handles
 
 
-@router.post("/api/teams/chats/{chat_id}/messages/{message_id}/react")
+@router.post("/api/teams/chats/{chat_id}/messages/{message_id}/react", dependencies=[Depends(verify_csrf)])
 async def tp_teams_react(chat_id: str, message_id: str, req: TeamsReactionRequest):
     """Add or remove a reaction via the Skype/chatsvc emotions API — the same call
     native Teams makes. Graph's setReaction only accepts the classic reaction set and
@@ -3074,7 +3075,7 @@ class ChannelCreateRequest(BaseModel):
     membership_type: str = "standard"  # standard | private
 
 
-@router.post("/api/teams/channels")
+@router.post("/api/teams/channels", dependencies=[Depends(verify_csrf)])
 async def tp_create_channel(req: ChannelCreateRequest):
     """Create a new channel in a team."""
     try:
@@ -3166,7 +3167,7 @@ def _upload_images_to_asm(
     return content
 
 
-@router.post("/api/teams/chats/{chat_id}/send")
+@router.post("/api/teams/chats/{chat_id}/send", dependencies=[Depends(verify_csrf)])
 def tp_teams_send(chat_id: str, req: TeamsSendRequest):
     """Send a message to an existing Teams chat via Skype chatsvc API.
 
@@ -3259,7 +3260,7 @@ class TeamsRenameRequest(BaseModel):
     topic: str
 
 
-@router.patch("/api/teams/chats/{chat_id}/rename")
+@router.patch("/api/teams/chats/{chat_id}/rename", dependencies=[Depends(verify_csrf)])
 def tp_teams_rename(chat_id: str, req: TeamsRenameRequest):
     """Rename a Teams group chat topic."""
     topic = req.topic.strip()
@@ -3437,7 +3438,7 @@ def tp_teams_find_by_members(req: TeamsFindByMembersRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/api/teams/chats/{chat_id}/members/add")
+@router.post("/api/teams/chats/{chat_id}/members/add", dependencies=[Depends(verify_csrf)])
 def tp_teams_add_members(chat_id: str, req: TeamsAddMembersRequest):
     """Add members to a Teams group chat by email via Skype chatsvc API.
 
@@ -3524,7 +3525,7 @@ def tp_teams_add_members(chat_id: str, req: TeamsAddMembersRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.delete("/api/teams/chats/{chat_id}/members/{member_mri:path}")
+@router.delete("/api/teams/chats/{chat_id}/members/{member_mri:path}", dependencies=[Depends(verify_csrf)])
 def tp_teams_remove_member(chat_id: str, member_mri: str):
     """Remove a member from a Teams group chat via Skype chatsvc API.
 
@@ -3558,7 +3559,7 @@ class TeamsNewChatRequest(BaseModel):
     mentions: list[dict] = []
 
 
-@router.post("/api/teams/chats/new")
+@router.post("/api/teams/chats/new", dependencies=[Depends(verify_csrf)])
 async def tp_teams_new_chat(req: TeamsNewChatRequest):
     """Send a Teams message — 1:1 or group — entirely via Skype chatsvc API.
 
@@ -3837,7 +3838,7 @@ class TeamsSendMessageRequest(BaseModel):
     ] = []  # Graph-format mentions [{id, mentionText, mentioned: {user: {id, displayName}}}]
 
 
-@router.post("/api/teams/send-message")
+@router.post("/api/teams/send-message", dependencies=[Depends(verify_csrf)])
 async def tp_teams_send_message(req: TeamsSendMessageRequest):
     """Send a Teams message from the compose pane — entirely via Skype chatsvc API.
 
@@ -4317,7 +4318,7 @@ class ChannelSendRequest(BaseModel):
     message: str
 
 
-@router.post("/api/teams/channels/{team_id}/{channel_id}/send")
+@router.post("/api/teams/channels/{team_id}/{channel_id}/send", dependencies=[Depends(verify_csrf)])
 def tp_channel_send(team_id: str, channel_id: str, req: ChannelSendRequest):
     """Send a message to a Teams channel."""
     try:

@@ -121,6 +121,73 @@ async def test_empty_base_url_skips_guard(monkeypatch):
     assert result.get("models") == ["test-model"]
 
 
+# ── Unreachable endpoint must not freeze the event loop ───────────────────────
+
+async def test_profile_save_does_not_block_event_loop(monkeypatch):
+    import asyncio
+    import time
+
+    _stub_config(monkeypatch)
+    monkeypatch.setattr(cr, "_fetch_profile_models", lambda p: (time.sleep(0.6), ["m"])[1])
+
+    ticks = 0
+
+    async def ticker():
+        nonlocal ticks
+        while True:
+            await asyncio.sleep(0.05)
+            ticks += 1
+
+    task = asyncio.create_task(ticker())
+    try:
+        await cr.create_or_update_llm_profile(_make_profile("http://10.7.125.6:8000/v1"))
+    finally:
+        task.cancel()
+
+    assert ticks >= 5, f"event loop was blocked during profile save (ticks={ticks})"
+
+
+@pytest.mark.parametrize("status", [502, 504])
+async def test_unreachable_endpoint_saves_with_warning(status, monkeypatch):
+    cfg = _stub_config(monkeypatch)
+
+    def unreachable(p):
+        raise HTTPException(status_code=status, detail="unreachable")
+
+    monkeypatch.setattr(cr, "_fetch_profile_models", unreachable)
+    result = await cr.create_or_update_llm_profile(_make_profile("http://10.7.125.6:8000/v1"))
+    assert result["models"] == []
+    assert "could not be reached" in result["warning"]
+    assert len(cfg["llm_profiles"]) == 1
+
+
+async def test_stalled_endpoint_hits_deadline_and_saves(monkeypatch):
+    import time
+
+    cfg = _stub_config(monkeypatch)
+    monkeypatch.setattr(cr, "_PROFILE_CHECK_DEADLINE", 0.2)
+    monkeypatch.setattr(cr, "_fetch_profile_models", lambda p: (time.sleep(1), ["m"])[1])
+    started = time.monotonic()
+    result = await cr.create_or_update_llm_profile(_make_profile("http://10.7.125.6:8000/v1"))
+    assert time.monotonic() - started < 0.9
+    assert result["models"] == [] and result["warning"]
+    assert len(cfg["llm_profiles"]) == 1
+
+
+@pytest.mark.parametrize("status", [401, 404])
+async def test_bad_credentials_or_url_still_reject(status, monkeypatch):
+    cfg = _stub_config(monkeypatch)
+
+    def rejected(p):
+        raise HTTPException(status_code=status, detail="nope")
+
+    monkeypatch.setattr(cr, "_fetch_profile_models", rejected)
+    with pytest.raises(HTTPException) as exc:
+        await cr.create_or_update_llm_profile(_make_profile("https://api.example.com/v1"))
+    assert exc.value.status_code == status
+    assert cfg["llm_profiles"] == []
+
+
 # ── LM Studio /api/v0/models URL derivation (real production code) ────────────
 
 def _make_httpx_response(status_code: int, json_body: dict):

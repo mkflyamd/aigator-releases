@@ -1,6 +1,7 @@
 """Calendar route group -- calendar view, event detail, RSVP."""
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
+from security import verify_csrf
 from pydantic import BaseModel
 from urllib.parse import quote as _url_quote
 
@@ -98,7 +99,7 @@ async def tp_calendar_event_detail(event_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/api/calendar/events/{event_id}/respond")
+@router.post("/api/calendar/events/{event_id}/respond", dependencies=[Depends(verify_csrf)])
 async def tp_calendar_respond(event_id: str, req: CalendarRsvpRequest):
     """Accept, decline, or tentatively accept a calendar event."""
     if req.response not in ("accept", "decline", "tentativelyAccept"):
