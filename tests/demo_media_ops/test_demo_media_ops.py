@@ -154,10 +154,24 @@ def test_intro_hold_extends_and_card_draws_title(project):
     make_video(folder / "source" / "short.mp4", 5)
     hold = dm.make_intro_video(pid, "source/short.mp4", {"mode": "hold", "duration_sec": 2})
     assert hold["output"]["duration_sec"] == pytest.approx(7, abs=0.4)
+    if not dm._ffmpeg_has_filter(dm.find_binaries()[0], "drawtext"):
+        pytest.skip("this ffmpeg build has no drawtext filter (for example Homebrew ffmpeg)")
     card = dm.make_intro_video(pid, "source/short.mp4",
                                {"mode": "card", "duration_sec": 2, "title": "Slack: it's 50% done"})
     assert card["output"]["duration_sec"] == pytest.approx(7, abs=0.4)
     assert not list((folder / "work/edits").glob("intro_title.txt"))
+
+
+def test_title_card_without_drawtext_reports_a_clear_error(project, monkeypatch):
+    pid, folder = project
+    make_video(folder / "source" / "short.mp4", 5)
+    monkeypatch.setattr(dm, "_ffmpeg_has_filter", lambda ffmpeg, name: False)
+    with pytest.raises(dm.MediaError) as exc:
+        dm.make_intro_video(pid, "source/short.mp4", {"mode": "card", "duration_sec": 2, "title": "Hello"})
+    assert exc.value.code == "drawtext_unavailable"
+    assert not list((folder / "work/edits").glob("intro_*"))
+    hold = dm.make_intro_video(pid, "source/short.mp4", {"mode": "hold", "duration_sec": 2})
+    assert hold["output"]["duration_sec"] == pytest.approx(7, abs=0.4)
 
 
 def test_normalize_intro_rules():

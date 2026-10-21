@@ -16,6 +16,7 @@ import threading
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 
 import demo_projects as dp
@@ -536,6 +537,12 @@ def normalize_intro(intro: dict | None) -> dict:
     return {"mode": mode, "duration_sec": round(duration, 3), "title": title}
 
 
+@lru_cache(maxsize=None)
+def _ffmpeg_has_filter(ffmpeg: str, name: str) -> bool:
+    out = _run([ffmpeg, "-hide_banner", "-filters"], timeout=30).stdout or ""
+    return re.search(rf"^\s*\S+\s+{re.escape(name)}\s", out, re.MULTILINE) is not None
+
+
 def _find_font() -> str:
     for candidate in _FONT_CANDIDATES:
         if Path(candidate).is_file():
@@ -564,6 +571,12 @@ def make_intro_video(project_id: str | None, video_rel: str, intro: dict) -> dic
         title_file = out.parent / "intro_title.txt"
         font_file = out.parent / "intro_font.ttf"
         if intro["title"]:
+            if not _ffmpeg_has_filter(find_binaries()[0], "drawtext"):
+                raise MediaError(
+                    "drawtext_unavailable",
+                    "This ffmpeg build cannot draw text (no drawtext filter). Use 'hold' without a title, "
+                    "or on macOS install a full build with: brew install ffmpeg-full.",
+                )
             title_file.write_text(intro["title"], encoding="utf-8")
             shutil.copyfile(_find_font(), font_file)
             size = max(14, min(info.height // 14, int(info.width * 0.9 / (0.55 * len(intro["title"])))))
