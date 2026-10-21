@@ -149,8 +149,31 @@ $allModelNames = @($models) + @($Model) | Select-Object -Unique | Where-Object {
 $claudeModels = @($allModelNames | Where-Object { $_ -match "claude" })
 $otherModels  = @($allModelNames | Where-Object { $_ -notmatch "claude" })
 
+# OpenCode auto-enables Anthropic's "adaptive thinking" block-binding beta
+# (thinking.block_binding on the wire) for Claude models whose version is
+# 5.1+ (e.g. Claude-Sonnet-5.5), but AMD's Anthropic-native gateway rejects
+# that field with "thinking.adaptive.block_binding: Extra inputs are not
+# permitted" (confirmed directly against the real gateway with the official
+# anthropic Python SDK: thinking:{type:"adaptive"} alone works fine,
+# thinking:{type:"adaptive",block_binding:{...}} fails every time, with or
+# without the anthropic-beta header). options.thinking.blockBinding=false
+# is OpenCode's opt-out for this - it strips block_binding before the wire.
+# Verified end-to-end against the real gateway (isolated from this
+# machine's ambient OPENCODE_CONFIG_CONTENT env var, which otherwise
+# silently shadows any custom provider and produces misleading
+# "Model not found" / unrelated errors that look like a config problem but
+# aren't): Claude-Sonnet-5, Claude-Sonnet-5.5, and Claude-Haiku-4.5 all
+# responded successfully through opencode itself with this option set, so
+# it's safe to apply to every Claude model rather than special-casing by
+# version.
 $anthropicModelsBlock = @{}
-foreach ($m in $claudeModels) { $anthropicModelsBlock[$m] = @{ name = $m; attachment = $true } }
+foreach ($m in $claudeModels) {
+    $anthropicModelsBlock[$m] = @{
+        name       = $m
+        attachment = $true
+        options    = @{ thinking = @{ blockBinding = $false } }
+    }
+}
 $gatewayModelsBlock = @{}
 foreach ($m in $otherModels) { $gatewayModelsBlock[$m] = @{ name = $m } }
 

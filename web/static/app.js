@@ -3917,6 +3917,10 @@ function _renderTabDrafts(tabId) {
   });
 }
 
+function _renderTabSandboxCards(tabId) {
+  _pendingSandboxCards.get(tabId)?.forEach((data) => _showSandboxApproval(data, tabId));
+}
+
 function _routeDraftToTab(tabId, draft, data) {
   if (!tabId || !draft || !data?.draft_id) return;
   _storeTabDraft(tabId, draft, data);
@@ -3974,6 +3978,7 @@ let _activeTabId = '';
 const _inflightRequests = new Map();
 const _chatTaskIds = new Map(); // tabId -> task_id for the active chat request
 const _tabsWithUpdates = new Set(); // tabIds with completed responses the user hasn't seen
+const _pendingSandboxCards = new Map(); // tabId -> Map(requestId -> card data); drawn again each time the tab is shown
 const _tabsWorking = new Set(); // tabIds with an in-flight request (animated working line)
 let _revealActiveTabOnRender = false; // true = unconditionally scroll active tab into view on next render
 let _preserveScrollOnRender = false; // true = closing a tab; keep scroll position, only nudge if needed
@@ -4210,6 +4215,7 @@ function switchTab(tabId) {
   _saveActiveTabHistory();
   // Swap
   _activeTabId = tabId;
+  setTimeout(() => _flushSandboxFollowUp(tabId), 0);
   history = _loadTabHistory(tabId);
   _restoreChipsForTab(tabId);
   _saveTabs();
@@ -4303,6 +4309,7 @@ function switchTab(tabId) {
   // Pending HITL cards are not ordinary transcript messages. Restore them
   // after tab history so a draft remains attached to its originating tab.
   _renderTabDrafts(tabId);
+  _renderTabSandboxCards(tabId);
   const inflight = _inflightRequests.get(tabId);
   if (inflight?.msgDiv && msgs && !msgs.contains(inflight.msgDiv)) {
     inflight.msgDiv.classList.add('typing');
@@ -4428,6 +4435,8 @@ function closeTab(tabId) {
       _chatTaskIds.delete(tabId);
     }
     _inflightRequests.delete(tabId);
+    _pendingSandboxFollowUps.delete(tabId);
+    _pendingSandboxCards.delete(tabId);
     // Clear pin context and stored state
     fetch(`/api/context/pins?context_id=${tabId}`, { method: 'DELETE' }).catch((err) =>
       console.warn('Tab cleanup fetch failed:', err),
@@ -5405,6 +5414,7 @@ const settingsBackdrop = document.getElementById('settings-backdrop');
 const drawerClose = document.getElementById('drawer-close');
 
 function openDrawer() {
+  if (typeof window._refreshSavedPermissions === 'function') window._refreshSavedPermissions();
   // Shell mode: if a native WebContentsView is tiled beside Gator, hide it so
   // Settings gets the full window. Restore on close. Use tpState.type
   // SYNCHRONOUSLY (not getActiveApp().then()) — the async version raced with
@@ -5823,6 +5833,7 @@ function initSettingsTabs() {
     tabs.forEach((t) => t.classList.toggle('active', t.dataset.tab === tabName));
     panels.forEach((p) => p.classList.toggle('hidden', p.id !== 'spanel-' + tabName));
     localStorage.setItem(STORAGE_KEY, tabName);
+    if (typeof window._refreshSavedPermissions === 'function') window._refreshSavedPermissions();
     // When the Skills tab is activated, lazily mount the marketplace pane into
     // its panel. Subsequent activations are no-ops (mount() is idempotent).
     if (tabName === 'skills') {
@@ -7461,8 +7472,90 @@ const atlassianDot = document.getElementById('atlassian-dot');
 const atlassianDetail = document.getElementById('atlassian-detail');
 const atlassianEmailInput = document.getElementById('atlassian-email-input');
 const atlassianTokenInput = document.getElementById('atlassian-token-input');
-const atlassianJiraUrlInput = document.getElementById('atlassian-jira-url-input');
-const atlassianConfluenceUrlInput = document.getElementById('atlassian-confluence-url-input');
+const atlassianSiteLists = {
+  jira: document.querySelector('#atlassian-jira-sites .site-list'),
+  confluence: document.querySelector('#atlassian-confluence-sites .site-list'),
+};
+const ATLASSIAN_SITE_PLACEHOLDERS = {
+  jira: [
+    'Primary Jira URL (e.g. https://your-org.atlassian.net)',
+    'https://other-org.atlassian.net',
+  ],
+  confluence: [
+    'Primary Confluence URL (e.g. https://your-org.atlassian.net/wiki)',
+    'https://other-org.atlassian.net/wiki',
+  ],
+};
+
+// First row is the primary site; any further rows share its email + token.
+function addAtlassianSiteRow(kind, value = '') {
+  const list = atlassianSiteLists[kind];
+  if (!list) return null;
+  const isPrimary = list.children.length === 0;
+  const row = document.createElement('div');
+  row.className = 'site-row';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'key-field';
+  input.autocomplete = 'off';
+  input.spellcheck = false;
+  input.placeholder = ATLASSIAN_SITE_PLACEHOLDERS[kind][isPrimary ? 0 : 1];
+  input.value = value;
+  row.appendChild(input);
+  if (isPrimary) {
+    const tag = document.createElement('span');
+    tag.className = 'site-row-tag';
+    tag.textContent = 'Primary';
+    row.appendChild(tag);
+  } else {
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'site-remove';
+    remove.title = 'Remove site';
+    remove.setAttribute('aria-label', 'Remove site');
+    remove.textContent = '×';
+    remove.addEventListener('click', () => row.remove());
+    row.appendChild(remove);
+  }
+  list.appendChild(row);
+  return input;
+}
+
+function setAtlassianSites(kind, primary, extras) {
+  const list = atlassianSiteLists[kind];
+  if (!list) return;
+  list.replaceChildren();
+  addAtlassianSiteRow(kind, primary || '');
+  (extras || []).forEach((u) => addAtlassianSiteRow(kind, u));
+}
+
+function atlassianSiteValues(kind) {
+  const list = atlassianSiteLists[kind];
+  if (!list) return [];
+  const [primary = '', ...extras] = Array.from(list.querySelectorAll('input')).map((i) =>
+    i.value.trim(),
+  );
+  return [primary, ...extras.filter(Boolean)];
+}
+
+setAtlassianSites('jira', '', []);
+setAtlassianSites('confluence', '', []);
+document.querySelectorAll('#atlassian-entry .site-add-btn').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    const input = addAtlassianSiteRow(btn.dataset.add);
+    if (input) input.focus();
+  });
+});
+
+async function saveAtlassianExtraSites(kind, urls) {
+  const res = await fetch(`/api/config/${kind}/extra-sites`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ urls }),
+  });
+  const data = await res.json().catch(() => ({}));
+  return res.ok ? '' : data.detail || 'error';
+}
 const atlassianSaveBtn = document.getElementById('atlassian-save-btn');
 const atlassianCloudMcpBtn = document.getElementById('atlassian-cloud-mcp-btn');
 const atlassianAddSiteBtn = document.getElementById('atlassian-add-site-btn');
@@ -7497,9 +7590,8 @@ async function loadAtlassianStatus() {
     // Pre-fill token from stored config (cloud token or PAT)
     const token = cfg.jira_api_token || cfg.jira_pat || cfg.confluence_pat || '';
     if (token) atlassianTokenInput.value = token;
-    // Pre-fill URLs
-    if (jr.base_url) atlassianJiraUrlInput.value = jr.base_url;
-    if (cr.base_url) atlassianConfluenceUrlInput.value = cr.base_url;
+    setAtlassianSites('jira', jr.base_url, jr.extra_base_urls);
+    setAtlassianSites('confluence', cr.base_url, cr.extra_base_urls);
     if (atlassianSaveBtn) atlassianSaveBtn.textContent = ok ? 'Reconnect' : 'Save Direct API';
   } catch {
     /* non-fatal */
@@ -7510,8 +7602,8 @@ loadAtlassianStatus();
 atlassianSaveBtn.addEventListener('click', async () => {
   const email = atlassianEmailInput.value.trim();
   const token = atlassianTokenInput.value.trim();
-  const jiraUrl = atlassianJiraUrlInput.value.trim();
-  const confUrl = atlassianConfluenceUrlInput.value.trim();
+  const [jiraUrl = '', ...jiraExtras] = atlassianSiteValues('jira');
+  const [confUrl = '', ...confExtras] = atlassianSiteValues('confluence');
   if (!email || !token) {
     atlassianMsg.textContent = 'Email and token are required.';
     return;
@@ -7531,6 +7623,18 @@ atlassianSaveBtn.addEventListener('click', async () => {
       }).then((r) => r.json()),
     ]);
     if (jr.ok && cr.ok) {
+      const failures = [];
+      for (const [kind, urls] of [
+        ['jira', jiraExtras],
+        ['confluence', confExtras],
+      ]) {
+        const err = await saveAtlassianExtraSites(kind, urls);
+        if (err) failures.push(`${kind === 'jira' ? 'Jira' : 'Confluence'}: ${err}`);
+      }
+      if (failures.length) {
+        atlassianMsg.textContent = 'Saved, but additional sites failed: ' + failures.join(' | ');
+        return;
+      }
       atlassianMsg.textContent =
         'Direct API connected. Optionally connect Cloud MCP or Rovo MCP below.';
       atlassianDot.className = 'section-status st-ok';
@@ -9157,6 +9261,7 @@ function _adfToPlainText(node) {
 }
 
 const _JIRA_MARKDOWN_FIELDS = new Set(['description', 'comment', 'body']);
+const _JIRA_EDITABLE_NOTE = 'Edit the fields above or just tell me here for changes.';
 
 function _renderJiraFieldValue(key, value) {
   const isMarkdownField = _JIRA_MARKDOWN_FIELDS.has((key || '').toLowerCase());
@@ -9198,15 +9303,43 @@ function _renderJiraFieldValue(key, value) {
   };
 }
 
-function _buildJiraFieldRows(data) {
+// Plain-text seed for an editable Jira field (descriptions may arrive as ADF).
+function _jiraEditSeed(value) {
+  if (typeof value === 'string') return value;
+  return value && typeof value === 'object' ? _adfToPlainText(value) : '';
+}
+
+// An editable field row. `kind` 'line' renders a single-line input, 'text' a textarea.
+// Only fields listed in `editable` get one; the approve handler sends back the ones changed.
+function _jiraEditRow(name, label, value, kind) {
+  const text = _jiraEditSeed(value);
+  const ek = escapeHtml(label);
+  const control =
+    kind === 'line'
+      ? `<input type="text" class="gcc-field-edit" data-jira-edit="${name}" maxlength="255" aria-label="${ek}" value="${escapeHtml(text).replace(/"/g, '&quot;')}">`
+      : `<textarea class="gcc-field-edit" data-jira-edit="${name}" aria-label="${ek}" rows="${Math.min(10, Math.max(3, text.split('\n').length + 1))}">${escapeHtml(text)}</textarea>`;
+  return `<div class="gcc-field-row gcc-field-row--block"><span class="gcc-field-key">${ek}</span><div class="gcc-field-val">${control}</div></div>`;
+}
+
+function _buildJiraFieldRows(data, editable = {}) {
   const rows = [];
   if (data.jira_site?.display_name || data.jira_site?.base_url) {
     rows.push(['Jira site', escapeHtml(data.jira_site.display_name || data.jira_site.base_url)]);
   }
   if (data.issue_key) rows.push(['Issue', escapeHtml(data.issue_key)]);
   if (data.issue_type) rows.push(['Type', escapeHtml(data.issue_type)]);
-  if (data.summary) rows.push(['Summary', '<strong>' + escapeHtml(data.summary) + '</strong>']);
-  if (data.description) {
+  if (editable.summary && data.summary !== undefined) {
+    rows.push(['Summary', _jiraEditRow('summary', 'Summary', data.summary, 'line'), 'edit']);
+  } else if (data.summary) {
+    rows.push(['Summary', '<strong>' + escapeHtml(data.summary) + '</strong>']);
+  }
+  if (editable.description && data.description !== undefined) {
+    rows.push([
+      'Description',
+      _jiraEditRow('description', 'Description', data.description, 'text'),
+      'edit',
+    ]);
+  } else if (data.description) {
     const { html, block } = _renderJiraFieldValue('description', data.description);
     rows.push(['Description', html, block]);
   }
@@ -9221,12 +9354,26 @@ function _buildJiraFieldRows(data) {
   if (data.priority) rows.push(['Priority', escapeHtml(data.priority)]);
   if (data.fields && typeof data.fields === 'object') {
     Object.entries(data.fields).forEach(([key, value]) => {
+      if (editable[key] && (key === 'comment' || key === 'summary' || key === 'description')) {
+        rows.push([
+          key,
+          _jiraEditRow(
+            key,
+            key.charAt(0).toUpperCase() + key.slice(1),
+            value,
+            key === 'summary' ? 'line' : 'text',
+          ),
+          'edit',
+        ]);
+        return;
+      }
       const { html, block } = _renderJiraFieldValue(key, value);
       rows.push([key, html, block]);
     });
   }
   return rows
     .map(([k, v, block]) => {
+      if (block === 'edit') return v;
       const ek = escapeHtml(String(k));
       return block
         ? `<div class="gcc-field-row gcc-field-row--block"><span class="gcc-field-key">${ek}</span><div class="gcc-field-val gcc-field-markdown">${v}</div></div>`
@@ -9304,6 +9451,275 @@ function _showJiraTargetSelection(data, ownerTabId) {
         );
       }
     });
+  });
+  document.getElementById('messages')?.appendChild(card);
+  card.scrollIntoView({ behavior: 'smooth', block: 'end' });
+}
+
+// ── Code-runner sandbox approval card ────────────────────────────────────────
+// Paths and hosts come from the model: they are rendered with textContent
+// only. Approve/Deny go to CSRF-guarded routes the agent loop cannot call;
+// a short chat message then tells the model whether to re-call.
+function _sandboxFollowUpText(decision, requestId, tool = 'run_python') {
+  if (decision !== 'approve') {
+    return `I denied sandbox access request ${requestId}. Do not retry it; continue without that access or tell me what you need.`;
+  }
+  const again =
+    tool === 'run_shell'
+      ? 'Run the same run_shell call again with exactly the same command, cwd, extra_read_paths, extra_write_paths and network_hosts.'
+      : 'Run the same run_python call again with exactly the same extra_read_paths, extra_write_paths and network_hosts.';
+  return `I approved sandbox access request ${requestId}. ${again}`;
+}
+
+// tabId -> follow-up text waiting for that tab's running chat turn to finish
+// (the submit handler ignores sends while the tab is streaming).
+const _pendingSandboxFollowUps = new Map();
+
+async function _sendSandboxFollowUp(tabId, text) {
+  if (tabId !== _activeTabId) {
+    _showConnectivityToast(
+      'Decision saved. Switch to that tab and tell AI Gator to continue.',
+      'info',
+    );
+    return;
+  }
+  if (_chatTaskIds.has(tabId)) {
+    _pendingSandboxFollowUps.set(tabId, text);
+    return;
+  }
+  const input = document.getElementById('chat-input');
+  const form = document.getElementById('chat-form');
+  if (!input || !form) return;
+  // Keep whatever the user is typing: the submit handler reads the composer
+  // now and clears it a microtask later, so put the draft back after a tick.
+  // It also snapshots attached images synchronously, so hide them for the
+  // submit (the follow-up must not carry or consume the user's attachments).
+  const draft = Array.from(input.childNodes);
+  const images = _aigatorImages;
+  input.replaceChildren();
+  input.textContent = text;
+  _aigatorImages = [];
+  try {
+    form.requestSubmit();
+  } finally {
+    _aigatorImages = images;
+  }
+  if (images.length) _renderAigatorPreviews();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  input.replaceChildren(...draft);
+  _updateSendSlot();
+  _updatePlaceholder();
+}
+
+function _flushSandboxFollowUp(tabId) {
+  const text = _pendingSandboxFollowUps.get(tabId);
+  if (!text || tabId !== _activeTabId || _chatTaskIds.has(tabId)) return;
+  _pendingSandboxFollowUps.delete(tabId);
+  _sendSandboxFollowUp(tabId, text).catch((e) => console.warn('[sandbox] follow-up not sent:', e));
+}
+
+function _showSandboxApproval(data, ownerTabId) {
+  const requestId = data && typeof data.request_id === 'string' ? data.request_id : '';
+  if (!requestId) return;
+  // The card belongs to the tab that asked. Keep it for that tab and draw it when the tab is shown,
+  // because a tab's chat is rebuilt from history on every switch.
+  const cardTab = ownerTabId || _activeTabId || 'default';
+  if (!_pendingSandboxCards.has(cardTab)) _pendingSandboxCards.set(cardTab, new Map());
+  _pendingSandboxCards.get(cardTab).set(requestId, data);
+  if (ownerTabId && ownerTabId !== _activeTabId) {
+    _tabsWithUpdates.add(ownerTabId);
+    document
+      .querySelector?.(`.tab-item[data-tab-id="${ownerTabId}"]`)
+      ?.classList.add('tab-has-update');
+    _showConnectivityToast('AI Gator needs your approval in another tab.', 'info');
+    return;
+  }
+  const seen = Array.from(document.querySelectorAll('[data-sandbox-request]')).some(
+    (el) => el.dataset.sandboxRequest === requestId,
+  );
+  if (seen) return;
+  const card = document.createElement('div');
+  card.className = 'message assistant';
+  card.dataset.sandboxRequest = requestId;
+  const bubble = document.createElement('div');
+  bubble.className = 'bubble card-bubble';
+  const box = document.createElement('div');
+  box.className = 'gator-compose-card gator-draft-card';
+  const isShell = data.tool === 'run_shell';
+  const tool = isShell ? 'run_shell' : 'run_python';
+
+  const header = document.createElement('div');
+  header.className = 'gcc-header';
+  const title = document.createElement('div');
+  title.className = 'gcc-title';
+  title.textContent = isShell ? 'AI Gator wants to run a command' : 'Code wants extra access';
+  header.appendChild(title);
+
+  const body = document.createElement('div');
+  body.className = 'gcc-body';
+  if (isShell && typeof data.command === 'string' && data.command) {
+    const row = document.createElement('div');
+    row.className = 'gcc-field-row gcc-field-row--block';
+    const key = document.createElement('span');
+    key.className = 'gcc-field-key';
+    key.textContent = 'Command';
+    const cmd = document.createElement('pre');
+    cmd.className = 'gcc-field-val';
+    cmd.textContent = data.command;
+    row.append(key, cmd);
+    body.appendChild(row);
+  }
+  [
+    ['Read', data.read_paths],
+    ['Read and write', data.write_paths],
+    ['Connect to', data.network_hosts],
+  ].forEach(([label, items]) => {
+    if (!Array.isArray(items) || !items.length) return;
+    const row = document.createElement('div');
+    row.className = 'gcc-field-row gcc-field-row--block';
+    const key = document.createElement('span');
+    key.className = 'gcc-field-key';
+    key.textContent = label;
+    const list = document.createElement('ul');
+    list.className = 'gcc-field-val';
+    items.forEach((item) => {
+      const li = document.createElement('li');
+      li.textContent = String(item);
+      list.appendChild(li);
+    });
+    row.append(key, list);
+    body.appendChild(row);
+  });
+  if (Array.isArray(data.network_hosts) && data.network_hosts.length) {
+    const note = document.createElement('div');
+    note.className = 'gcc-refine';
+    note.textContent = `Approving turns on outbound network for ${isShell ? 'this tab' : 'the runs it covers'}; the host is shown to you but not enforced.`;
+    body.appendChild(note);
+  }
+  if (
+    isShell &&
+    data.saveable === true &&
+    Array.isArray(data.network_hosts) &&
+    data.network_hosts.length
+  ) {
+    const risk = document.createElement('div');
+    risk.className = 'gcc-refine';
+    risk.textContent =
+      'Always allow lets these programs reach any host on the network, not only the ones listed, when working in these folders. Programs such as git and npm run scripts stored in the project, so those scripts get the same access. You can remove it in Settings.';
+    body.appendChild(risk);
+  }
+
+  const actions = document.createElement('div');
+  actions.className = 'gcc-actions';
+  const approve = document.createElement('button');
+  approve.className = 'gcc-approve-btn';
+  approve.textContent = 'Allow for this tab';
+  let always = null;
+  if (isShell && data.saveable === true) {
+    always = document.createElement('button');
+    always.className = 'btn-secondary';
+    always.textContent = 'Always allow this';
+  }
+  let once = null;
+  if (!isShell) {
+    once = document.createElement('button');
+    once.className = 'btn-secondary';
+    once.textContent = 'Allow once';
+  }
+  const deny = document.createElement('button');
+  deny.className = 'btn-secondary';
+  deny.textContent = 'Deny';
+  actions.append(approve, ...(always ? [always] : []), ...(once ? [once] : []), deny);
+
+  const footer = document.createElement('div');
+  footer.className = 'gcc-footer';
+  const footNote = document.createElement('span');
+  footNote.className = 'gcc-refine';
+  footNote.textContent =
+    'Allowed until you close this tab. Unanswered requests expire after 10 minutes.';
+  footer.appendChild(footNote);
+
+  box.append(header, body, actions, footer);
+  bubble.appendChild(box);
+  card.appendChild(bubble);
+
+  const tabId = ownerTabId || _activeTabId || 'default';
+  // The server stored the request under its own context id; send exactly that.
+  const contextId = typeof data.context_id === 'string' ? data.context_id : tabId;
+  const decide = async (decision, scope = 'task') => {
+    if (approve.disabled) return;
+    approve.disabled = true;
+    if (always) always.disabled = true;
+    if (once) once.disabled = true;
+    deny.disabled = true;
+    const post = () =>
+      fetch(`/api/sandbox/requests/${encodeURIComponent(requestId)}/${decision}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': window.__CSRF_TOKEN__ || '',
+        },
+        body: JSON.stringify({
+          context_id: contextId,
+          ...(decision === 'approve' ? { scope } : {}),
+        }),
+      });
+    try {
+      let res = await post();
+      if (res.status === 403) {
+        const fresh = await fetch('/api/csrf')
+          .then((r) => (r.ok ? r.json() : null))
+          .catch(() => null);
+        if (fresh?.csrf_token) window.__CSRF_TOKEN__ = fresh.csrf_token;
+        res = await post();
+      }
+      if (!res.ok) {
+        const detail = await res.json().catch(() => ({}));
+        throw new Error(detail?.detail || `HTTP ${res.status}`);
+      }
+      let outcome = 'Denied.';
+      if (decision === 'approve') {
+        if (scope === 'once') outcome = 'Allowed once.';
+        else if (scope === 'always') {
+          const out = await res.json().catch(() => ({}));
+          outcome =
+            out && out.saved
+              ? 'Always allowed. You can remove this in Settings.'
+              : 'Allowed for this tab (it could not be saved).';
+        } else outcome = 'Allowed for this tab.';
+      }
+      footNote.textContent = outcome;
+      actions.remove();
+      _pendingSandboxCards.get(cardTab)?.delete(requestId);
+      _sendSandboxFollowUp(tabId, _sandboxFollowUpText(decision, requestId, tool)).catch((e) =>
+        console.warn('[sandbox] follow-up not sent:', e),
+      );
+    } catch (err) {
+      approve.disabled = false;
+      if (always) always.disabled = false;
+      if (once) once.disabled = false;
+      deny.disabled = false;
+      // 'warn', not 'error': _showConnectivityToast mutes error toasts.
+      _showConnectivityToast(`Could not record your decision: ${err.message}`, 'warn');
+    }
+  };
+  approve.addEventListener('click', (e) => {
+    e.stopPropagation();
+    decide('approve', 'task');
+  });
+  if (always)
+    always.addEventListener('click', (e) => {
+      e.stopPropagation();
+      decide('approve', 'always');
+    });
+  if (once)
+    once.addEventListener('click', (e) => {
+      e.stopPropagation();
+      decide('approve', 'once');
+    });
+  deny.addEventListener('click', (e) => {
+    e.stopPropagation();
+    decide('deny');
   });
   document.getElementById('messages')?.appendChild(card);
   card.scrollIntoView({ behavior: 'smooth', block: 'end' });
@@ -9845,7 +10261,8 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
       action: (data.issue_type || 'Issue') + ' in ' + (data.project || 'Jira'),
       sendLabel: 'Create issue',
       hideEditLink: true,
-      customBody: _buildJiraFieldRows(data),
+      footerNote: _JIRA_EDITABLE_NOTE,
+      customBody: _buildJiraFieldRows(data, { summary: true, description: true }),
     },
     'jira-update': {
       paneLabel: '@jira',
@@ -9854,7 +10271,8 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
       action: 'Update ' + (data.issue_key || 'Jira issue'),
       sendLabel: 'Apply update',
       hideEditLink: true,
-      customBody: _buildJiraFieldRows(data),
+      footerNote: _JIRA_EDITABLE_NOTE,
+      customBody: _buildJiraFieldRows(data, { summary: true, description: true }),
     },
     'jira-watcher': {
       paneLabel: '@jira',
@@ -9885,11 +10303,15 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
       action: 'Comment on ' + (data.issue_key || 'Jira issue'),
       sendLabel: 'Post comment',
       hideEditLink: true,
-      customBody: _buildJiraFieldRows({
-        issue_key: data.issue_key,
-        jira_site: data.jira_site,
-        fields: { comment: data.comment },
-      }),
+      footerNote: _JIRA_EDITABLE_NOTE,
+      customBody: _buildJiraFieldRows(
+        {
+          issue_key: data.issue_key,
+          jira_site: data.jira_site,
+          fields: { comment: data.comment },
+        },
+        { comment: true },
+      ),
     },
     'jira-transition': {
       paneLabel: '@jira',
@@ -10031,10 +10453,19 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
     _wireInlineDraftMentions(editArea, config.service, data);
   }
 
+  const jiraEditFields = [...card.querySelectorAll('[data-jira-edit]')];
+  jiraEditFields.forEach((el) => {
+    el.dataset.orig = el.value;
+  });
+
   approveBtn.addEventListener('click', async () => {
     approveBtn.disabled = true;
     approveBtn.textContent = config.hideEditLink ? 'Applying\u2026' : 'Sending\u2026';
     try {
+      const editedFields = {};
+      jiraEditFields.forEach((el) => {
+        if (el.value !== el.dataset.orig) editedFields[el.dataset.jiraEdit] = el.value;
+      });
       // Send the EDITED text from the textarea, not the original draft.
       const inlineMentionPayload =
         inlineMentionEditor && editArea
@@ -10048,6 +10479,7 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
       const _approveBody = JSON.stringify({
         context_id: ownerTabId || _activeTabId || 'default',
         ...(editedText !== null ? { edited_message: editedText } : {}),
+        ...(Object.keys(editedFields).length ? { edited_fields: editedFields } : {}),
         ...(inlineMentionPayload?.mentions?.length
           ? { mentions: inlineMentionPayload.mentions }
           : {}),
@@ -11838,6 +12270,7 @@ form.addEventListener('submit', async (e) => {
   const _onStop = () => {
     if (_activeTabId !== requestTabId) return;
     _userStopped = true;
+    _pendingSandboxFollowUps.delete(requestTabId);
     _isStreaming = false; // stops the typing-dots interval (see line ~6089) so the animation halts
     if (_abortCtrl._es) {
       _abortCtrl._es.close();
@@ -12334,6 +12767,8 @@ form.addEventListener('submit', async (e) => {
             es.close();
             _chatTaskIds.delete(_tabKey);
             _inflightRequests.delete(_tabKey);
+            // Fallback only (see chat_done); doSend flushes at its end.
+            setTimeout(() => _flushSandboxFollowUp(requestTabId), 1500);
             _userScrolledUp = false;
             // Auto-wrap bare HTML documents (no code fence) so renderMarkdown
             // produces a widget instead of escaped raw text. This handles the case
@@ -12402,6 +12837,8 @@ form.addEventListener('submit', async (e) => {
               _scheduleRender();
             } else if (msg.browser_confirm) {
               _showBrowserConfirmCard(msgDiv, msg.browser_confirm);
+            } else if (msg.browser_confirm_expired) {
+              _expireConfirmCardById(msg.browser_confirm_expired);
             } else if (msg.failover_confirm) {
               _showFailoverConfirmCard(msgDiv, msg.failover_confirm);
             } else if (msg.browser_hitl) {
@@ -12512,6 +12949,8 @@ form.addEventListener('submit', async (e) => {
               _routeDraftToTab(requestTabId, msg.draft, msg.draftData || {});
             } else if (msg.jira_target_selection) {
               _showJiraTargetSelection(msg.jira_target_selection, requestTabId);
+            } else if (msg.sandbox_approval) {
+              _showSandboxApproval(msg.sandbox_approval, requestTabId);
             } else if (msg.files && Array.isArray(msg.files) && msg.files.length) {
               if (!fileChipsDiv) {
                 fileChipsDiv = document.createElement('div');
@@ -12949,6 +13388,9 @@ form.addEventListener('submit', async (e) => {
     } else {
       _detachStop();
     }
+    // The turn is fully finished for this tab: now a queued sandbox follow-up
+    // can be sent without racing this turn's cleanup.
+    if (!_userStopped) setTimeout(() => _flushSandboxFollowUp(requestTabId), 0);
   };
 
   await doSend();
@@ -13947,6 +14389,9 @@ function _initNotificationStream() {
           // entry and switchTab shows a red stop button on an idle tab.
           _chatTaskIds.delete(msg.context_id);
           _inflightRequests.delete(msg.context_id);
+          // Fallback only: doSend flushes once its tail has run. Flushing here
+          // could submit while that tail (and the old [DONE] cleanup) still runs.
+          setTimeout(() => _flushSandboxFollowUp(msg.context_id), 1500);
           // Only reset _isStreaming and the send button if the finished chat is
           // for the active tab AND no other stream is now running on this tab.
           // The notification stream is global — a chat_done for tab A can arrive
@@ -14907,62 +15352,149 @@ function _renderPermissionCard(msgDiv, msg, prose, onApprove, onDeny) {
 
 /* ── Browser Confirm Gate ────────────────────────────── */
 
-function _showBrowserConfirmCard(msgDiv, { confirm_id, action }) {
-  // Remove any stale confirm card
-  const existing = document.getElementById('browser-confirm-card');
-  if (existing) existing.remove();
+function _confirmCardText({ title, allow_label, deny_label } = {}) {
+  const isSource = Boolean(title);
+  return {
+    title: title || 'Open browser?',
+    allowLabel: allow_label || 'Allow',
+    denyLabel: deny_label || 'Cancel',
+    icon: isSource ? '🔒' : '🌐',
+    isSource,
+  };
+}
+
+// A confirm id the server no longer holds (card expired after 60 s, or already answered).
+function _confirmReplyExpired(resp, data) {
+  return !resp || !resp.ok || Boolean(data && (data.expired || data.ok === false));
+}
+
+// The streamed text re-renders after the card is added and pushes it down, so pin the way the
+// text stream does (several passes). A card blocks the turn, so it ignores the scrolled-up override.
+function _pinConfirmCardInView(card) {
+  const messages = document.getElementById('messages');
+  if (messages && card.isConnected) _pinScrollToBottom(messages);
+}
+
+function _expireConfirmCard(card) {
+  if (!card) return;
+  const askAgain = card._askAgain;
+  const title = card.querySelector('[data-confirm-title]')?.textContent || '';
+  card.replaceChildren();
+  const body = document.createElement('div');
+  body.style.cssText = 'display: flex; align-items: flex-start; gap: 10px; width: 100%;';
+  const textWrap = document.createElement('div');
+  textWrap.style.cssText = 'flex: 1; min-width: 0;';
+  const titleEl = document.createElement('div');
+  titleEl.style.cssText =
+    'font-size: 0.85rem; font-weight: 600; color: var(--text); margin-bottom: 2px;';
+  titleEl.textContent = title ? `${title} (expired)` : 'Request expired';
+  const note = document.createElement('div');
+  note.style.cssText = 'font-size: 0.78rem; color: var(--text-muted);';
+  note.textContent = 'No answer in time, so access was not granted.';
+  textWrap.append(titleEl, note);
+  body.appendChild(textWrap);
+  if (askAgain) {
+    const btn = document.createElement('button');
+    btn.textContent = 'Ask again';
+    btn.style.cssText =
+      'font-size: 0.75rem; padding: 4px 12px; border-radius: 6px; background: var(--accent); color: #000; border: none; cursor: pointer; font-weight: 600; flex-shrink: 0;';
+    btn.addEventListener('click', () => {
+      card.remove();
+      askAgain();
+    });
+    body.appendChild(btn);
+  }
+  card.appendChild(body);
+  _pinConfirmCardInView(card);
+}
+
+function _expireConfirmCardById(confirm_id) {
+  _expireConfirmCard(
+    document.querySelector(`[data-confirm-id="${CSS.escape(String(confirm_id))}"]`),
+  );
+}
+
+function _showBrowserConfirmCard(msgDiv, { confirm_id, action, title, allow_label, deny_label }) {
+  const text = _confirmCardText({ title, allow_label, deny_label });
+  // Source cards keep their own id so two pending cards (two sources) do not replace each other.
+  if (!text.isSource) {
+    // Remove any stale browser confirm card
+    const existing = document.getElementById('browser-confirm-card');
+    if (existing) existing.remove();
+  }
 
   const card = document.createElement('div');
   card.className = 'system-card';
-  card.id = 'browser-confirm-card';
+  card.id = text.isSource ? `source-confirm-${confirm_id}` : 'browser-confirm-card';
+  card.dataset.confirmId = confirm_id;
+  // Re-sends this tab's last request so the gate is raised again with a live card.
+  const _tabId = _activeTabId;
+  const _lastUserText = (() => {
+    const last = [..._loadTabHistory(_tabId)].reverse().find((e) => e?.role === 'user');
+    return typeof last?.content === 'string' ? last.content : '';
+  })();
+  if (_lastUserText) {
+    card._askAgain = () => {
+      const input = document.getElementById('chat-input');
+      const form = document.getElementById('chat-form');
+      if (_tabId !== _activeTabId || !input || !form) return;
+      input.textContent = _lastUserText;
+      form.requestSubmit();
+    };
+  }
 
   const body = document.createElement('div');
   body.style.cssText = 'display: flex; align-items: flex-start; gap: 10px; width: 100%;';
 
   const icon = document.createElement('span');
-  icon.textContent = '\uD83C\uDF10';
+  icon.textContent = text.icon;
   icon.style.cssText = 'font-size: 1.1rem; flex-shrink: 0; margin-top: 2px;';
 
   const textWrap = document.createElement('div');
   textWrap.style.cssText = 'flex: 1; min-width: 0;';
 
-  const title = document.createElement('div');
-  title.style.cssText =
+  const titleEl = document.createElement('div');
+  titleEl.style.cssText =
     'font-size: 0.85rem; font-weight: 600; color: var(--text); margin-bottom: 2px;';
-  title.textContent = 'Open browser?';
+  titleEl.textContent = text.title;
+  titleEl.dataset.confirmTitle = '1';
 
   const detail = document.createElement('div');
   detail.style.cssText = 'font-size: 0.78rem; color: var(--text-muted); word-break: break-word;';
   detail.textContent = action;
 
-  textWrap.append(title, detail);
+  textWrap.append(titleEl, detail);
 
   const btnWrap = document.createElement('div');
   btnWrap.style.cssText = 'display: flex; gap: 6px; flex-shrink: 0; align-items: center;';
 
   const cancelBtn = document.createElement('button');
-  cancelBtn.textContent = 'Cancel';
+  cancelBtn.textContent = text.denyLabel;
   cancelBtn.style.cssText =
     'font-size: 0.75rem; padding: 4px 12px; border-radius: 6px; background: var(--surface3); color: var(--text); border: none; cursor: pointer; font-weight: 600;';
 
   const allowBtn = document.createElement('button');
-  allowBtn.textContent = 'Allow';
+  allowBtn.textContent = text.allowLabel;
   allowBtn.style.cssText =
     'font-size: 0.75rem; padding: 4px 12px; border-radius: 6px; background: var(--accent); color: #000; border: none; cursor: pointer; font-weight: 600;';
 
-  const _dismiss = () => {
-    card.remove();
+  const _answer = async (url) => {
+    cancelBtn.disabled = true;
+    allowBtn.disabled = true;
+    let expired = false;
+    try {
+      const resp = await fetch(url, { method: 'POST' });
+      const data = await resp.json().catch(() => null);
+      expired = _confirmReplyExpired(resp, data);
+    } catch (_) {
+      expired = true;
+    }
+    if (expired) _expireConfirmCard(card);
+    else card.remove();
   };
 
-  cancelBtn.addEventListener('click', async () => {
-    _dismiss();
-    await fetch(`/api/browser/confirm/${confirm_id}/cancel`, { method: 'POST' });
-  });
-
-  allowBtn.addEventListener('click', async () => {
-    _dismiss();
-    await fetch(`/api/browser/confirm/${confirm_id}`, { method: 'POST' });
-  });
+  cancelBtn.addEventListener('click', () => _answer(`/api/browser/confirm/${confirm_id}/cancel`));
+  allowBtn.addEventListener('click', () => _answer(`/api/browser/confirm/${confirm_id}`));
 
   btnWrap.append(cancelBtn, allowBtn);
   body.append(icon, textWrap, btnWrap);
@@ -14974,6 +15506,7 @@ function _showBrowserConfirmCard(msgDiv, { confirm_id, action }) {
   } else {
     msgDiv.appendChild(card);
   }
+  _pinConfirmCardInView(card);
 }
 
 /* ── Failover Consent Gate ───────────────────────────── */
@@ -16264,6 +16797,192 @@ function _initOnReady() {
   const addBtn = document.getElementById('custom-app-add-btn');
   if (addBtn) addBtn.addEventListener('click', _addCustomApp);
   _initGoogleWorkspaceSettings();
+  _initClearCredentialsSettings();
+  _initSandboxSettings();
+  _initSavedPermissions();
+}
+
+function _initClearCredentialsSettings() {
+  const notice = document.getElementById('storage-level-notice');
+  if (notice) {
+    fetch('/api/auth/storage')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        const msg = {
+          'key-file':
+            'Linux keyring not found — credentials are protected at a reduced level (key stored in a user-only file). Install or unlock gnome-keyring or KWallet, then restart AI Gator to upgrade.',
+          unavailable:
+            'Secure credential storage is unavailable, so sign-in tokens cannot be saved. Unlock the system keychain or keyring and restart AI Gator. If the keyring was reset or removed, use Clear stored credentials below (you will need to sign in again).',
+        }[d && d.level];
+        if (msg) {
+          notice.textContent = msg;
+          notice.hidden = false;
+        }
+      })
+      .catch(() => {});
+  }
+  const btn = document.getElementById('clear-credentials-btn');
+  if (!btn) return;
+  btn.addEventListener('click', async () => {
+    if (!confirm('Remove all stored sign-in tokens and API tokens from this computer?')) return;
+    const post = () =>
+      fetch('/api/auth/clear', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': window.__CSRF_TOKEN__ || '',
+        },
+        body: JSON.stringify({ scope: 'all' }),
+      });
+    try {
+      let res = await post();
+      if (res.status === 403) {
+        const _csrf = await fetch('/api/csrf')
+          .then((r) => (r.ok ? r.json() : null))
+          .catch(() => null);
+        if (_csrf?.csrf_token) window.__CSRF_TOKEN__ = _csrf.csrf_token;
+        res = await post();
+      }
+      alert(res.ok ? 'Stored credentials cleared.' : 'Could not clear credentials.');
+    } catch (e) {
+      alert('Could not clear credentials.');
+    }
+  });
+}
+
+function _sandboxNoticeText(status) {
+  if (!status || status.level !== 'unavailable') return '';
+  const reason = status.reason || 'The sandbox could not start.';
+  // opted_out from the server is already the effective value; the policy check
+  // is kept so an older server cannot show "runs without a sandbox" wrongly.
+  const required = !!(status.policy && status.policy.require_sandbox);
+  if (status.opted_out && !required) {
+    return `Code sandbox unavailable: ${reason} Code currently runs without a sandbox because you allowed it below.`;
+  }
+  return `Code sandbox unavailable: ${reason} Running code is blocked until this is fixed.`;
+}
+
+function _initSandboxSettings() {
+  const row = document.getElementById('sandbox-row');
+  const notice = document.getElementById('sandbox-notice');
+  const label = document.getElementById('sandbox-optout-label');
+  const box = document.getElementById('sandbox-optout');
+  if (!row || !notice || !label || !box) return;
+  const refresh = () =>
+    fetch('/api/sandbox/status')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((s) => {
+        const text = _sandboxNoticeText(s);
+        if (!text) {
+          row.style.display = 'none';
+          return;
+        }
+        notice.textContent = text;
+        row.style.display = '';
+        const required = !!(s.policy && s.policy.require_sandbox);
+        label.hidden = required;
+        box.checked = !!s.opted_out && !required;
+      })
+      .catch(() => {});
+  refresh();
+  box.addEventListener('change', async () => {
+    const wanted = box.checked;
+    const post = () =>
+      fetch('/api/sandbox/opt-out', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': window.__CSRF_TOKEN__ || '',
+        },
+        body: JSON.stringify({ opted_out: wanted }),
+      });
+    try {
+      let res = await post();
+      if (res.status === 403) {
+        const fresh = await fetch('/api/csrf')
+          .then((r) => (r.ok ? r.json() : null))
+          .catch(() => null);
+        if (fresh?.csrf_token) window.__CSRF_TOKEN__ = fresh.csrf_token;
+        res = await post();
+      }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    } catch (e) {
+      box.checked = !wanted;
+      _showConnectivityToast('Could not change the code sandbox setting.', 'warn');
+    }
+    refresh();
+  });
+}
+
+function _initSavedPermissions() {
+  const row = document.getElementById('saved-permissions-row');
+  const list = document.getElementById('saved-permissions-list');
+  const clear = document.getElementById('saved-permissions-clear');
+  if (!row || !list || !clear) return;
+  const call = async (method, url) => {
+    const send = () =>
+      fetch(url, { method, headers: { 'X-CSRF-Token': window.__CSRF_TOKEN__ || '' } });
+    let res = await send();
+    if (res.status === 403) {
+      const fresh = await fetch('/api/csrf')
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null);
+      if (fresh?.csrf_token) window.__CSRF_TOKEN__ = fresh.csrf_token;
+      res = await send();
+    }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  };
+  const render = (entries) => {
+    list.replaceChildren();
+    clear.hidden = entries.length === 0;
+    if (!entries.length) {
+      const empty = document.createElement('div');
+      empty.className = 'srow-sub';
+      empty.textContent =
+        'Nothing saved yet. Choose "Always allow this" on a command approval to save one here.';
+      list.appendChild(empty);
+      return;
+    }
+    entries.forEach((entry) => {
+      const item = document.createElement('div');
+      item.className = 'srow-sub saved-permission-item';
+      const text = document.createElement('span');
+      text.textContent = String(entry.description);
+      const remove = document.createElement('button');
+      remove.className = 'btn-secondary';
+      remove.textContent = 'Remove';
+      remove.addEventListener('click', (e) => {
+        e.stopPropagation();
+        act('DELETE', `/api/sandbox/saved-permissions/${encodeURIComponent(entry.id)}`);
+      });
+      item.append(text, remove);
+      list.appendChild(item);
+    });
+  };
+  const refresh = () =>
+    call('GET', '/api/sandbox/saved-permissions')
+      .then((d) => render(Array.isArray(d.entries) ? d.entries : []))
+      .catch(() => {
+        list.replaceChildren();
+        clear.hidden = true;
+        const failed = document.createElement('div');
+        failed.className = 'srow-sub';
+        failed.textContent = 'Could not load saved permissions.';
+        list.appendChild(failed);
+      });
+  const act = (method, url) =>
+    call(method, url)
+      .catch(() => _showConnectivityToast('Could not change saved permissions.', 'warn'))
+      .then(refresh);
+  clear.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (!confirm('Remove all saved command permissions? AI Gator will ask again next time.'))
+      return;
+    act('DELETE', '/api/sandbox/saved-permissions');
+  });
+  window._refreshSavedPermissions = refresh;
+  refresh();
 }
 
 // Called from the shell toolbar when user clicks "Save as app" CTA pill.

@@ -1,5 +1,6 @@
 """Excel skill -- 6 tools."""
 
+from skills._skill_utils import guard_path_args
 import subprocess
 from pathlib import Path
 
@@ -637,3 +638,4 @@ TOOL_HANDLERS = {
     "create_excel": _tool_create_excel,
     "recalc_excel": _tool_recalc_excel,
 }
+TOOL_HANDLERS = guard_path_args(TOOL_HANDLERS, "file_path")

@@ -7,17 +7,43 @@ tests that monkeypatch these can't leak into siblings — the root cause of
 order-dependent failures in test_skill_cap_always_on, test_skill_slash_alias,
 test_turn_telemetry, and shell_runner tests.
 """
+import atexit
 import copy
 import os
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 from unittest.mock import patch
+
+# Redirect the home directory before any web module is imported. Modules such
+# as shared.py call load_config() at import time and config.py binds
+# ~/.gator at import time, so per-test fixtures are too late to keep the suite
+# away from a developer's real config, secrets and token files.
+_SESSION_HOME = tempfile.mkdtemp(prefix="aigator-test-home-")
+for _var in ("HOME", "USERPROFILE"):
+    os.environ[_var] = _SESSION_HOME
+atexit.register(shutil.rmtree, _SESSION_HOME, ignore_errors=True)
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "web"))
 
 import pytest
 
 _JIRA_TEST_URL = "https://ci-default.atlassian.net"
+
+
+@pytest.fixture(autouse=True)
+def _isolated_secure_store(tmp_path, monkeypatch):
+    """Fake reversible backend + temp home so tests never touch real DPAPI or
+    a developer's real ~/.config token files."""
+    import secure_store
+
+    monkeypatch.setattr(secure_store, "_home", lambda: tmp_path / "home")
+    monkeypatch.setattr(secure_store, "_protect", lambda b: b"FAKE:" + b[::-1])
+    monkeypatch.setattr(
+        secure_store, "_unprotect", lambda b: b[len(b"FAKE:"):][::-1]
+    )
+    yield
 
 
 @pytest.fixture(autouse=True)
@@ -82,3 +108,108 @@ def _restore_shared_state():
             config.WORK_DIR = snapshots["config"]["WORK_DIR"]
         if snapshots["config"]["TASKS_DB"] is not None:
             config.TASKS_DB = snapshots["config"]["TASKS_DB"]
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_sandbox_policy(tmp_path, monkeypatch):
+    """Never read the machine-wide sandbox policy (ProgramData, /Library, /etc) in tests."""
+    from sandbox import policy
+
+    monkeypatch.setattr(policy, "policy_path", lambda: tmp_path / "sandbox-policy.json")
+    policy._reset_cache()
+    yield
+    policy._reset_cache()
+
+
+@pytest.fixture(scope="session")
+def windows_container(tmp_path_factory):
+    """Real AppContainer launcher bound to a temporary profile and ledger.
+
+    Creates AppContainer profile AIGator.Test.<hex> (HKCU) and deletes it at
+    the end, revoking every ACE it added (per-run leftovers and the runtime
+    RX grants on the test interpreter's directories)."""
+    if sys.platform != "win32":
+        pytest.skip("AppContainer is Windows only")
+    import uuid
+
+    from sandbox import launcher_windows as lw
+
+    name = f"AIGator.Test.{uuid.uuid4().hex[:8]}"
+    ledger = tmp_path_factory.mktemp("sandbox-ledger") / "grants.json"
+    mp = pytest.MonkeyPatch()
+    mp.setattr(lw, "PROFILE_NAME", name)
+    mp.setattr(lw, "ledger_path", lambda: ledger)
+    try:
+        yield lw
+    finally:
+        lw.sweep_stale_grants()
+        lw.revoke_runtime_grants()
+        lw.delete_profile(name)
+        lw.delete_profile(name + lw.SHELL_PROFILE_SUFFIX)
+        mp.undo()
+
+
+class _FakeSandbox:
+    """Stands in for sandbox.launch_sandboxed. Records every request."""
+
+    def __init__(self):
+        import sandbox
+
+        self.requests = []
+        self.result = sandbox.SandboxResult(returncode=0, stdout="", stderr="", timed_out=False)
+        self.raises = None
+        self.handler = None
+
+    def __call__(self, request):
+        self.requests.append(request)
+        if self.raises is not None:
+            raise self.raises
+        if self.handler is not None:
+            return self.handler(request)
+        return self.result
+
+
+@pytest.fixture
+def fake_sandbox(monkeypatch):
+    import sandbox
+
+    fake = _FakeSandbox()
+    monkeypatch.setattr(sandbox, "launch_sandboxed", fake)
+    return fake
+
+
+@pytest.fixture
+def make_skill_dir(tmp_path):
+    def make(files, name="demo"):
+        root = tmp_path / "skills-under-test" / name
+        for rel, content in files.items():
+            target = root / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content if isinstance(content, bytes) else content.encode("utf-8"))
+        return root
+
+    return make
+
+
+@pytest.fixture
+def passthrough_sandbox(fake_sandbox):
+    """fake_sandbox that really runs the command, unconfined. Tests only: it checks the runner and wrapper logic, not confinement."""
+    import os
+    import subprocess
+
+    import sandbox
+
+    def run(request):
+        env = {**os.environ, **request.env}
+        env.pop("PYTHONPATH", None)
+        try:
+            proc = subprocess.run(
+                list(request.argv), cwd=str(request.cwd), env=env, capture_output=True,
+                text=True, encoding="utf-8", timeout=request.timeout, stdin=subprocess.DEVNULL,
+            )
+        except subprocess.TimeoutExpired:
+            return sandbox.SandboxResult(returncode=-1, stdout="", stderr="", timed_out=True)
+        return sandbox.SandboxResult(returncode=proc.returncode, stdout=proc.stdout, stderr=proc.stderr, timed_out=False)
+
+    fake_sandbox.handler = run
+    return fake_sandbox

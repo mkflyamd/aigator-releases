@@ -1,7 +1,7 @@
 """Slack OAuth token management — PKCE flow and token storage.
 
 MCP transport removed: all Slack API calls now go direct to https://slack.com/api/...
-Auth: OAuth 2.0 with PKCE (user-scoped tokens stored in ~/.config/slack-mcp/token.json)
+Auth: OAuth 2.0 with PKCE (user-scoped tokens stored DPAPI-encrypted via secure_store as "slack/token")
 """
 
 from __future__ import annotations
@@ -9,14 +9,12 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
-import os
 import secrets
 import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from pathlib import Path
 
 # Client ID from the official Slack plugin for Claude Code
 SLACK_OAUTH_CLIENT_ID = "1601185624273.8899143856786"
@@ -35,7 +33,25 @@ SLACK_SCOPES = (
     "channels:read,groups:read,im:read,mpim:read"
 )
 
-TOKEN_FILE = Path.home() / ".config" / "slack-mcp" / "token.json"
+
+
+def _secure_store():
+    import importlib.util
+    import sys
+    from pathlib import Path
+
+    mod = sys.modules.get("secure_store")
+    if mod is None:
+        try:
+            import secure_store as mod  # frozen build / web/ on sys.path
+        except ImportError:
+            path = Path(__file__).resolve().parents[2] / "secure_store.py"
+            spec = importlib.util.spec_from_file_location("secure_store", path)
+            mod = importlib.util.module_from_spec(spec)
+            sys.modules["secure_store"] = mod
+            spec.loader.exec_module(mod)
+    return mod
+
 
 # Serialises concurrent token refresh calls so two threads don't both exchange
 # the refresh token (each exchange invalidates the previous refresh token).
@@ -45,27 +61,21 @@ _REFRESH_LOCK = threading.Lock()
 
 
 def _load_token() -> dict:
-    """Load stored OAuth token from disk."""
-    if TOKEN_FILE.exists():
-        try:
-            return json.loads(TOKEN_FILE.read_text())
-        except (json.JSONDecodeError, KeyError):
-            pass
-    return {}
+    """Load stored Slack OAuth token (DPAPI-encrypted via secure_store).
+
+    A legacy plaintext token file from older versions is migrated and shredded
+    by secure_store on first read.
+    """
+    return _secure_store().get_json("slack/token") or {}
 
 
 def _save_token(data: dict) -> None:
-    """Save OAuth token to disk with restrictive permissions.
+    """Save the Slack OAuth token encrypted at rest.
 
     Also clears the user display-name cache so that workspace switches
     don't serve stale names from the previous workspace.
     """
-    TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
-    TOKEN_FILE.write_text(json.dumps(data, indent=2))
-    try:
-        os.chmod(str(TOKEN_FILE), 0o600)
-    except OSError:
-        pass  # Windows may not support chmod
+    _secure_store().set_json("slack/token", data)
     # Clear the display-name cache — lazy import avoids circular dependency
     try:
         import routes.slack as _slack_routes
@@ -180,27 +190,24 @@ def get_slack_auth_status() -> dict:
 _CALLBACK_PORT = 3118
 _CALLBACK_REDIRECT_URI = f"http://localhost:{_CALLBACK_PORT}/callback"
 
-# Pending PKCE state — persisted to file so it survives app restarts/reloads
-_PKCE_FILE = Path.home() / ".config" / "slack-mcp" / ".pkce_pending.json"
+# Pending PKCE state — persisted (encrypted, secure_store "slack/pkce") so it
+# survives app restarts/reloads
 
 
 def _load_pkce() -> dict:
-    if _PKCE_FILE.exists():
-        try:
-            return json.loads(_PKCE_FILE.read_text())
-        except Exception:
-            pass
-    return {}
+    try:
+        return _secure_store().get_json("slack/pkce") or {}
+    except Exception:
+        return {}
 
 
 def _save_pkce(data: dict) -> None:
-    _PKCE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _PKCE_FILE.write_text(json.dumps(data))
+    _secure_store().set_json("slack/pkce", data)
 
 
 def _clear_pkce() -> None:
     try:
-        _PKCE_FILE.unlink(missing_ok=True)
+        _secure_store().delete("slack/pkce")
     except Exception:
         pass
 

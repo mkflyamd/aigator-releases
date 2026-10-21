@@ -14,7 +14,6 @@ Usage:
 
 import argparse
 import json
-import os
 import re
 import sys
 import threading
@@ -22,33 +21,48 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from pathlib import Path
 
 import httpx
 
 CLIENT_ID = "1fec8e78-bce4-4aaf-ab1b-5451cc387264"  # Teams Desktop — FOCI family-1
-TOKEN_FILE = Path.home() / ".config" / "microsoft-graph" / "token.json"
-SKYPE_TOKEN_FILE = Path.home() / ".config" / "microsoft-graph" / "skype_token.json"
 AUTHZ_URL = "https://teams.microsoft.com/api/authsvc/v1.0/authz"
 
 
 # ── Token management ──────────────────────────────────────────────────────────
+# Tokens live DPAPI-encrypted in secure_store (graph/token, graph/skype_token);
+# legacy plaintext files are migrated and shredded on first read.
+
+
+def _secure_store():
+    import importlib.util
+    from pathlib import Path
+
+    mod = sys.modules.get("secure_store")
+    if mod is None:
+        try:
+            import secure_store as mod  # frozen build / web/ on sys.path
+        except ImportError:
+            path = Path(__file__).resolve().parents[3] / "secure_store.py"
+            spec = importlib.util.spec_from_file_location("secure_store", path)
+            mod = importlib.util.module_from_spec(spec)
+            sys.modules["secure_store"] = mod
+            spec.loader.exec_module(mod)
+    return mod
 
 
 def _load_graph_tokens() -> dict:
-    if not TOKEN_FILE.exists():
+    data = _secure_store().get_json("graph/token")
+    if data is None:
         raise RuntimeError(
             "Not authenticated. Sign in via Settings → Apps → Microsoft 365 first."
         )
-    return json.loads(TOKEN_FILE.read_text())
+    return data
 
 
 def _load_cached_skype_token() -> dict | None:
-    if not SKYPE_TOKEN_FILE.exists():
-        return None
     try:
-        data = json.loads(SKYPE_TOKEN_FILE.read_text())
-        if time.time() < data.get("expires_at", 0) - 300:  # 5-min buffer
+        data = _secure_store().get_json("graph/skype_token")
+        if data and time.time() < data.get("expires_at", 0) - 300:  # 5-min buffer
             return data
     except Exception:
         pass
@@ -58,19 +72,15 @@ def _load_cached_skype_token() -> dict | None:
 def _save_skype_token(
     skype_token: str, messaging_service: str, expires_in: int, global_service: str = ""
 ) -> None:
-    SKYPE_TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
-    SKYPE_TOKEN_FILE.write_text(
-        json.dumps(
-            {
-                "skype_token": skype_token,
-                "messaging_service": messaging_service,
-                "global_service": global_service,
-                "expires_at": time.time() + expires_in,
-            },
-            indent=2,
-        )
+    _secure_store().set_json(
+        "graph/skype_token",
+        {
+            "skype_token": skype_token,
+            "messaging_service": messaging_service,
+            "global_service": global_service,
+            "expires_at": time.time() + expires_in,
+        },
     )
-    os.chmod(str(SKYPE_TOKEN_FILE), 0o600)
 
 
 def _foci_swap(refresh_token: str, tenant_id: str) -> str:

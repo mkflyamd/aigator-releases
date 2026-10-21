@@ -41,7 +41,8 @@ async def test_check_for_update_returns_info_when_newer(tmp_path):
     manifest_response.raise_for_status = MagicMock()
     manifest_response.json.return_value = {
         "version": "1.1.0",
-        "url": "https://example.com/AIGatorInstaller.exe",
+        "url": "https://github.com/mkflyamd/aigator-releases/releases/download/v1.1.0/AIGatorInstaller.exe",
+        "sha256": "a" * 64,
         "notes": "Bug fixes",
     }
 
@@ -60,6 +61,7 @@ async def test_check_for_update_returns_info_when_newer(tmp_path):
 
     assert result is not None
     assert result.version == "1.1.0"
+    assert result.sha256 == "a" * 64
     assert updater._state.state == "available"
 
 
@@ -126,5 +128,321 @@ async def test_check_for_update_skipped_when_no_url(tmp_path):
     with patch.object(updater, "MANIFEST_URL", ""):
         updater._state.state = "idle"
         result = await updater.check_for_update()
+    assert result is None
+    assert updater._state.state == "idle"
+
+
+@pytest.mark.asyncio
+async def test_check_for_update_rejects_untrusted_url(tmp_path):
+    import web.updater as updater
+
+    vf = tmp_path / "version.txt"
+    vf.write_text("1.0.0")
+
+    manifest_response = MagicMock()
+    manifest_response.raise_for_status = MagicMock()
+    manifest_response.json.return_value = {
+        "version": "1.1.0",
+        "url": "https://evil.example.com/AIGatorInstaller.exe",
+        "sha256": "a" * 64,
+        "notes": "",
+    }
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.get = AsyncMock(return_value=manifest_response)
+
+    with (
+        patch.object(updater, "VERSION_FILE", vf),
+        patch.object(updater, "MANIFEST_URL", "https://example.com/latest.json"),
+        patch("web.updater.httpx.AsyncClient", return_value=mock_client),
+    ):
+        updater._state.state = "idle"
+        result = await updater.check_for_update()
+
+    assert result is None
+    assert updater._state.state == "idle"
+
+
+@pytest.mark.asyncio
+async def test_check_for_update_rejects_url_version_mismatch(tmp_path):
+    import web.updater as updater
+
+    vf = tmp_path / "version.txt"
+    vf.write_text("1.0.0")
+
+    manifest_response = MagicMock()
+    manifest_response.raise_for_status = MagicMock()
+    manifest_response.json.return_value = {
+        "version": "99.0.0",
+        "url": "https://github.com/mkflyamd/aigator-releases/releases/download/v1.0.5/AIGatorInstaller.exe",
+        "sha256": "a" * 64,
+        "notes": "",
+    }
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.get = AsyncMock(return_value=manifest_response)
+
+    with (
+        patch.object(updater, "VERSION_FILE", vf),
+        patch.object(updater, "MANIFEST_URL", "https://example.com/latest.json"),
+        patch("web.updater.httpx.AsyncClient", return_value=mock_client),
+    ):
+        updater._state.state = "idle"
+        result = await updater.check_for_update()
+
+    assert result is None
+    assert updater._state.state == "idle"
+
+
+@pytest.mark.asyncio
+async def test_download_update_wrong_signer_sets_error_and_removes_file(tmp_path):
+    import hashlib
+    import web.updater as updater
+
+    content = b"fake-installer-bytes"
+    expected_sha = hashlib.sha256(content).hexdigest()
+
+    updater._state = updater._UpdateState()
+    updater._state.info = updater.UpdateInfo(
+        version="1.1.0",
+        url="https://github.com/mkflyamd/aigator-releases/releases/download/v1.1.0/AIGatorInstaller.exe",
+        sha256=expected_sha,
+        notes="",
+    )
+
+    async def fake_aiter_bytes(chunk_size=65536):
+        yield content
+
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.headers = {}
+    mock_resp.aiter_bytes = fake_aiter_bytes
+
+    mock_stream_ctx = AsyncMock()
+    mock_stream_ctx.__aenter__ = AsyncMock(return_value=mock_resp)
+    mock_stream_ctx.__aexit__ = AsyncMock(return_value=False)
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.stream = MagicMock(return_value=mock_stream_ctx)
+
+    mock_sig_result = MagicMock()
+    mock_sig_result.returncode = 0
+    mock_sig_result.stdout = "Valid|DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF\n"
+
+    with (
+        patch("web.updater.httpx.AsyncClient", return_value=mock_client),
+        patch("web.updater.tempfile.gettempdir", return_value=str(tmp_path)),
+        patch("web.updater.subprocess.run", return_value=mock_sig_result),
+    ):
+        await updater.download_update()
+
+    assert updater._state.state == "error"
+    assert updater._state.error == "untrusted signer"
+    assert not (tmp_path / "AIGatorInstaller.exe").exists()
+
+
+@pytest.mark.asyncio
+async def test_download_update_invalid_signature_status_sets_error(tmp_path):
+    import hashlib
+    import web.updater as updater
+
+    content = b"fake-installer-bytes"
+    expected_sha = hashlib.sha256(content).hexdigest()
+
+    updater._state = updater._UpdateState()
+    updater._state.info = updater.UpdateInfo(
+        version="1.1.0",
+        url="https://github.com/mkflyamd/aigator-releases/releases/download/v1.1.0/AIGatorInstaller.exe",
+        sha256=expected_sha,
+        notes="",
+    )
+
+    async def fake_aiter_bytes(chunk_size=65536):
+        yield content
+
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.headers = {}
+    mock_resp.aiter_bytes = fake_aiter_bytes
+
+    mock_stream_ctx = AsyncMock()
+    mock_stream_ctx.__aenter__ = AsyncMock(return_value=mock_resp)
+    mock_stream_ctx.__aexit__ = AsyncMock(return_value=False)
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.stream = MagicMock(return_value=mock_stream_ctx)
+
+    mock_sig_result = MagicMock()
+    mock_sig_result.returncode = 0
+    mock_sig_result.stdout = "NotSigned|\n"
+
+    with (
+        patch("web.updater.httpx.AsyncClient", return_value=mock_client),
+        patch("web.updater.tempfile.gettempdir", return_value=str(tmp_path)),
+        patch("web.updater.subprocess.run", return_value=mock_sig_result),
+    ):
+        await updater.download_update()
+
+    assert updater._state.state == "error"
+    assert updater._state.error == "invalid signature"
+    assert not (tmp_path / "AIGatorInstaller.exe").exists()
+
+
+@pytest.mark.asyncio
+async def test_download_update_valid_checksum_and_signature_sets_ready(tmp_path):
+    import hashlib
+    import web.updater as updater
+
+    content = b"fake-installer-bytes"
+    expected_sha = hashlib.sha256(content).hexdigest()
+
+    updater._state = updater._UpdateState()
+    updater._state.info = updater.UpdateInfo(
+        version="1.1.0",
+        url="https://github.com/mkflyamd/aigator-releases/releases/download/v1.1.0/AIGatorInstaller.exe",
+        sha256=expected_sha,
+        notes="",
+    )
+
+    async def fake_aiter_bytes(chunk_size=65536):
+        yield content
+
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.headers = {}
+    mock_resp.aiter_bytes = fake_aiter_bytes
+
+    mock_stream_ctx = AsyncMock()
+    mock_stream_ctx.__aenter__ = AsyncMock(return_value=mock_resp)
+    mock_stream_ctx.__aexit__ = AsyncMock(return_value=False)
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.stream = MagicMock(return_value=mock_stream_ctx)
+
+    mock_sig_result = MagicMock()
+    mock_sig_result.returncode = 0
+    mock_sig_result.stdout = f"Valid|{updater.EXPECTED_SIGNING_THUMBPRINT}\n"
+
+    with (
+        patch("web.updater.httpx.AsyncClient", return_value=mock_client),
+        patch("web.updater.tempfile.gettempdir", return_value=str(tmp_path)),
+        patch("web.updater.subprocess.run", return_value=mock_sig_result),
+    ):
+        await updater.download_update()
+
+    assert updater._state.state == "ready"
+    assert updater._state._installer_path == str(tmp_path / "AIGatorInstaller.exe")
+
+
+def _sig_run_result(stdout):
+    result = MagicMock()
+    result.returncode = 0
+    result.stdout = stdout
+    return result
+
+
+def test_verify_signature_accepts_untrusted_root_with_pinned_thumbprint(tmp_path):
+    import web.updater as updater
+
+    out = f"UnknownError|{updater.EXPECTED_SIGNING_THUMBPRINT}\n"
+    with patch("web.updater.subprocess.run", return_value=_sig_run_result(out)):
+        assert updater._verify_authenticode_signature(tmp_path / "x.exe") == (True, "")
+
+
+def test_verify_signature_rejects_untrusted_root_with_other_thumbprint(tmp_path):
+    import web.updater as updater
+
+    out = "UnknownError|311920B31500EFAA691D43B0538F536B4E0261BA\n"
+    with patch("web.updater.subprocess.run", return_value=_sig_run_result(out)):
+        assert updater._verify_authenticode_signature(tmp_path / "x.exe") == (False, "untrusted signer")
+
+
+def test_verify_signature_rejects_hash_mismatch_even_with_pinned_thumbprint(tmp_path):
+    import web.updater as updater
+
+    out = f"HashMismatch|{updater.EXPECTED_SIGNING_THUMBPRINT}\n"
+    with patch("web.updater.subprocess.run", return_value=_sig_run_result(out)):
+        assert updater._verify_authenticode_signature(tmp_path / "x.exe") == (False, "invalid signature")
+
+
+@pytest.mark.asyncio
+async def test_download_update_checksum_mismatch_sets_error_and_removes_file(tmp_path):
+    import web.updater as updater
+
+    updater._state = updater._UpdateState()
+    updater._state.info = updater.UpdateInfo(
+        version="1.1.0",
+        url="https://github.com/mkflyamd/aigator-releases/releases/download/v1.1.0/AIGatorInstaller.exe",
+        sha256="0" * 64,
+        notes="",
+    )
+
+    async def fake_aiter_bytes(chunk_size=65536):
+        yield b"not-the-real-installer-bytes"
+
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.headers = {}
+    mock_resp.aiter_bytes = fake_aiter_bytes
+
+    mock_stream_ctx = AsyncMock()
+    mock_stream_ctx.__aenter__ = AsyncMock(return_value=mock_resp)
+    mock_stream_ctx.__aexit__ = AsyncMock(return_value=False)
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.stream = MagicMock(return_value=mock_stream_ctx)
+
+    with (
+        patch("web.updater.httpx.AsyncClient", return_value=mock_client),
+        patch("web.updater.tempfile.gettempdir", return_value=str(tmp_path)),
+    ):
+        await updater.download_update()
+
+    assert updater._state.state == "error"
+    assert updater._state.error == "checksum mismatch"
+    assert not (tmp_path / "AIGatorInstaller.exe").exists()
+
+
+@pytest.mark.asyncio
+async def test_check_for_update_rejects_malformed_sha256(tmp_path):
+    import web.updater as updater
+
+    vf = tmp_path / "version.txt"
+    vf.write_text("1.0.0")
+
+    manifest_response = MagicMock()
+    manifest_response.raise_for_status = MagicMock()
+    manifest_response.json.return_value = {
+        "version": "1.1.0",
+        "url": "https://github.com/mkflyamd/aigator-releases/releases/download/v1.1.0/AIGatorInstaller.exe",
+        "sha256": "not-a-real-hash",
+        "notes": "",
+    }
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.get = AsyncMock(return_value=manifest_response)
+
+    with (
+        patch.object(updater, "VERSION_FILE", vf),
+        patch.object(updater, "MANIFEST_URL", "https://example.com/latest.json"),
+        patch("web.updater.httpx.AsyncClient", return_value=mock_client),
+    ):
+        updater._state.state = "idle"
+        result = await updater.check_for_update()
+
     assert result is None
     assert updater._state.state == "idle"

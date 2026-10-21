@@ -1,12 +1,12 @@
 ---
 name: Code Runner
-description: Execute Python code in a sandboxed subprocess — produce files, read local filesystem, run calculations, generate images and charts
+description: Execute Python code in an OS sandbox — produce files, run calculations, generate images and charts; reading or writing other local paths or using the network needs the user's approval
 version: '1.1'
 ---
 
 # Code Runner
 
-Use this skill any time you need to execute Python code — whether to produce output files, read the local filesystem, run calculations, or process data.
+Use this skill any time you need to execute Python code — to produce output files, run calculations, process data, or (with the user's approval) read local files.
 
 ## When to use run_python
 
@@ -14,28 +14,34 @@ Use this skill any time you need to execute Python code — whether to produce o
 - User asks what's in a local folder or file (`what is at C:\...`, `list files in ...`, `read this file`)
 - User asks you to run a calculation, transform data, or produce a chart/image
 - A marketplace skill describes a Python API you should call
-- Any task that requires reading from or writing to the local machine
+- A task that needs a local file or folder the user named (request it with `extra_read_paths` / `extra_write_paths`)
 
-## Local filesystem access
+## What the code can access
 
-The subprocess runs on the user's machine and has **full read access** to the local filesystem. Use `pathlib.Path` or `os` to read files and list directories.
+The code runs in an OS sandbox:
+
+- It can read and write only its own `OUTPUT_DIR`, and read the Python/Node runtime and `SKILL_DIR`.
+- It has **no network** and **no access** to the rest of the user's files (home folder, Documents, Downloads, other drives).
+- Its environment contains no tokens or API keys.
+
+If the task really needs more, ask for it in the call:
+
+- `extra_read_paths=[...]` — absolute paths of existing files or folders to read.
+- `extra_write_paths=[...]` — absolute paths of existing folders or files to write.
+- `network_hosts=["host:port", ...]` — destinations to connect to (approval turns on network for the runs it covers).
+
+The first call returns `approval_required` and shows the user an approval card. Tell the user briefly what you asked for and why, then stop and wait. When the user says they approved, call `run_python` again with **exactly the same** code and the same `extra_read_paths`, `extra_write_paths` and `network_hosts` (any difference needs a new approval). The user can allow the access for one run or for the whole tab (until they close it); an access request itself expires after 10 minutes. If the user denies, or the approval expired, do not retry.
+
+Some locations can never be granted, even by the user: drive roots, the home folder itself, `~/.gator`, `~/.ssh`, `~/.aws`, `~/.azure`, `~/.kube`, `~/.gnupg`, `~/.config/gcloud`.
+
+If a run fails with a permission or network error, `stderr` ends with a `[sandbox]` hint: request the access only if the task truly needs it.
 
 ```python
-import os
-# List a directory
-files = os.listdir(r'C:\Users\maykulka\pocs\agenticpoc')
-for f in sorted(files):
-    print(f)
+run_python(
+    code="from pathlib import Path\nprint(Path(r'C:\\Users\\me\\Documents\\notes.txt').read_text(encoding='utf-8'))",
+    extra_read_paths=[r"C:\Users\me\Documents\notes.txt"],
+)
 ```
-
-```python
-from pathlib import Path
-# Read a file
-text = Path(r'C:\some\file.txt').read_text(encoding='utf-8')
-print(text)
-```
-
-**Write operations outside OUTPUT_DIR** will be flagged by the AST scanner and require user confirmation.
 
 ## Critical: each run_python call is a fresh subprocess
 
@@ -59,8 +65,8 @@ output.write_text('hello', encoding='utf-8')
 ## Rules
 
 - **Write output files to `OUTPUT_DIR`** — injected automatically. Never hardcode absolute output paths.
-- Use absolute paths when _reading_ existing local files — the user's path is real.
-- **Editing the user's file? Honor the file they named.** If the user asked you to update an existing file at a path they gave, write back to THAT path (this triggers the expected out-of-`OUTPUT_DIR` HITL confirmation — confirm the path with the user first). Do NOT silently emit a new file in `OUTPUT_DIR` or Downloads when they asked to edit their original. Only create a separate file when they asked for a copy or when no destination exists — and then ASK where, never invent a path.
+- Use absolute paths when _reading_ existing local files — the user's path is real — and list them in `extra_read_paths`.
+- **Editing the user's file? Honor the file they named.** If the user asked you to update an existing file at a path they gave, write back to THAT path: pass it (or its folder) in `extra_write_paths` and wait for the user's approval. Do NOT silently emit a new file in `OUTPUT_DIR` when they asked to edit their original. Only create a separate file when they asked for a copy or when no destination exists — and then ASK where, never invent a path.
 - **Always report where the file landed.** After a successful write, tell the user the resulting file's path/location in your reply: the returned `download_url` for `OUTPUT_DIR` files (in the `files` array), or the full absolute path for files written elsewhere. If the result includes an `output_files` array, those are real paths detected on disk (e.g. a file saved to Downloads) — surface them verbatim. The UI turns local paths into a clickable open-link, so the user never has to hunt for the file.
 - **`OUTPUT_DIR` `download_url` links are TEMPORARY — they expire after ~24 hours.** They're scratch download links, not durable storage. When you hand one back, say so plainly (e.g. "temporary download — save a copy to keep it"). For anything that is a real **deliverable the user will want to keep** (a document, slide, report, export), proactively offer to save a durable copy — to a real local path (Documents/Downloads) or to OneDrive/SharePoint if that's where they want it — rather than leaving them only a link that 404s tomorrow.
 - **Prefer the durable location's link over the temporary one.** If you have already saved the file somewhere permanent (e.g. uploaded it to OneDrive, or wrote it to a real local path the user gave), surface THAT link/path when the user asks "give me the link" — do not hand back the ephemeral `OUTPUT_DIR` `download_url` when a durable copy exists.

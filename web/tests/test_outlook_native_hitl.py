@@ -225,17 +225,13 @@ class TestOpenPinnedEmailResolvesConversationId:
         }
 
         def _get(path, params=None):
-            # New approach: _fetch_message_by_id uses $filter=id eq '...' to avoid
-            # path-segment issues with '/' in message ids.
             if path == "/me/messages":
                 f = params.get("$filter", "") if params else ""
-                # Case 1: direct message id lookup via $filter=id eq
-                if f"id eq '{self.MSG_ID}'" in f:
-                    return {"value": [detail]}
-                # Case 2: id lookup for conv id returns nothing (not a message id)
-                if f"id eq '{self.CONV_ID}'" in f:
-                    return {"value": []}
-                # Case 3: conversationId fallback lookup
+                # Graph does not support $filter on the message id property.
+                if f.startswith("id eq"):
+                    raise Exception(
+                        "Graph API 400: The property 'id' does not support filtering."
+                    )
                 if "conversationId eq" in f:
                     assert "$orderby" not in params, \
                         "conversationId $filter must not be combined with $orderby (Graph 400)"
@@ -244,12 +240,17 @@ class TestOpenPinnedEmailResolvesConversationId:
                         {"id": self.MSG_ID, "receivedDateTime": "2026-07-29T14:30:00Z"},
                     ]}
                 raise AssertionError(f"unexpected $filter: {f}")
-            # Direct path fallback (should not be used for new pins, only old-format)
             if path.startswith("/me/messages/"):
                 seg = path[len("/me/messages/"):]
+                assert "/" not in seg, f"id must be one percent-encoded segment: {seg}"
                 decoded = urllib.parse.unquote(seg)
                 if decoded == self.MSG_ID:
                     return detail
+                if decoded == self.CONV_ID:
+                    raise Exception(
+                        "Graph API 400: ConversationId isn't supported in the "
+                        "context of this operation."
+                    )
                 raise AssertionError(f"unexpected message id segment: {seg}")
             raise AssertionError(f"unexpected Graph GET: {path}")
 
@@ -273,7 +274,7 @@ class TestOpenPinnedEmailResolvesConversationId:
             result = _tool_get_email_detail(self.MSG_ID)
         assert "error" not in result, result
         assert result["id"] == self.MSG_ID
-        # Real message id: resolved via $filter=id eq — no conversationId fallback.
+        # Real message id: read by its encoded path — no conversationId fallback.
         calls = gc.get.call_args_list
         conv_fallback_calls = [
             c for c in calls
@@ -282,3 +283,16 @@ class TestOpenPinnedEmailResolvesConversationId:
         ]
         assert not conv_fallback_calls, \
             "a real message id must not trigger the conversationId fallback"
+
+    def test_message_is_read_by_path_and_never_filtered_on_id(self):
+        from skills.email.tools import _tool_get_email_detail, _fetch_original_email_context
+        gc = self._gc()
+        with patch("skills._m365.helpers.get_graph_client", return_value=gc):
+            assert "error" not in _tool_get_email_detail(self.MSG_ID)
+            assert _fetch_original_email_context(self.MSG_ID)["subject"].startswith("New Time")
+        id_filters = [
+            c for c in gc.get.call_args_list
+            if (c.kwargs.get("params") or (c.args[1] if len(c.args) > 1 else {}) or {})
+            .get("$filter", "").startswith("id eq")
+        ]
+        assert not id_filters, "Graph does not support $filter on id"

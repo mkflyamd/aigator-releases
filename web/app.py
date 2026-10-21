@@ -40,6 +40,7 @@ configure_production_logging()
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from config import load_config as _load_config, save_config as _save_config
+from config import sweep_legacy_secrets
 
 # Run one-time config migration (~/.config/teamspoc → ~/.gator) BEFORE importing
 # shared, which calls load_config() at module import. If migration runs in
@@ -53,7 +54,12 @@ if not _mig.get("ok"):
         _mig.get("error"),
     )
 
+# Migrate any remaining plaintext tokens/PATs into secure_store (never raises).
+# Runs after the config migration above and before shared/PAT-to-env copying.
+sweep_legacy_secrets()
+
 import shared
+from tool_validation import validate_tool_inputs
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +76,7 @@ from routes.calendar import router as calendar_router
 from routes.actions import router as actions_router
 from routes.aigator import router as aigator_router
 from routes.config_routes import router as config_router
+from routes.sandbox_routes import router as sandbox_router
 from routes.auth import router as auth_router
 from routes.health import router as health_router
 from routes.chat import router as chat_router
@@ -435,6 +442,7 @@ async def _execute_tool_impl(
         fn = shared.TOOL_DISPATCH.get(name)
         if fn is None:
             return {"error": f"Unknown tool: {name}"}
+        model_inputs = dict(inputs or {})
         # Inject _context_id for handlers that opt in by accepting it.
         # The LLM never supplies _context_id itself — it's server-injected so
         # tools like get_tab_pins can know "current tab" without the LLM
@@ -466,6 +474,10 @@ async def _execute_tool_impl(
         if not single_dict_arg:
             if context_id is not None and ("_context_id" in accepted or has_var_keyword):
                 inputs = {**inputs, "_context_id": context_id}
+            elif "_context_id" in inputs:
+                # Model-supplied: it would let the model pick which tab's
+                # approvals a tool acts on.
+                inputs = {k: v for k, v in inputs.items() if k != "_context_id"}
             # Strip any kwargs the function doesn't accept to prevent TypeError retries.
             if not has_var_keyword:
                 unknown = set(inputs) - accepted
@@ -515,6 +527,12 @@ async def _execute_tool_impl(
                         "payload size or split it into smaller chunked calls."
                     ),
                 }
+        invalid = validate_tool_inputs(name, model_inputs)
+        if invalid is not None:
+            logging.getLogger(__name__).warning(
+                "execute_tool(%s): invalid input for %s: %s", name, invalid["field"], invalid["reason"]
+            )
+            return invalid
         if asyncio.iscoroutinefunction(fn):
             result = await fn(inputs) if single_dict_arg else await fn(**inputs)
         else:
@@ -668,7 +686,8 @@ async def lifespan(app):
         if intent:
             direct = await execute_direct(intent, execute_tool, user_message=prompt)
             if direct.get("ok"):
-                data_summary = _json.dumps(direct["data"], default=str)
+                import data_sources
+                data_summary = _json.dumps(data_sources.mark_direct_data(intent["tool"], direct["data"]), default=str)
                 if len(data_summary) > 8000:
                     data_summary = data_summary[:8000] + "\n... (truncated)"
                 routed_system = system + "\n\nYou have the data below. Summarize it directly for the user. Do NOT call any tools."
@@ -791,6 +810,10 @@ async def lifespan(app):
     from teams_remote_control import teams_remote_control_loop
     _teams_remote_control_task = asyncio.create_task(teams_remote_control_loop())
 
+    # Remove AppContainer ACEs left by a crashed sandboxed run (Windows; no-op elsewhere).
+    import sandbox as _sandbox
+    asyncio.create_task(asyncio.to_thread(_sandbox.sweep_stale_grants))
+
     # Respawn any spawned preset MCP servers that were orphaned by a restart
     # (e.g. Google Workspace's workspace-mcp process), then start the background
     # supervisor that keeps them alive.
@@ -861,6 +884,7 @@ app.include_router(actions_router)
 app.include_router(aigator_router)
 app.include_router(config_router)
 app.include_router(auth_router)
+app.include_router(sandbox_router)
 app.include_router(health_router)
 app.include_router(chat_router)
 app.include_router(tasks_router)

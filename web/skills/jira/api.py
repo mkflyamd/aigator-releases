@@ -1,13 +1,41 @@
 """Jira REST API client — auto-detects Bearer PAT (Server) or Basic auth (Cloud)."""
 
+import contextvars
 import json
 import os
 import base64
+from contextlib import contextmanager
 from urllib.parse import urlparse
 
 import httpx
 
 JIRA_BASE_URL = os.environ.get("JIRA_BASE_URL", "https://jira.xilinx.com")
+
+# Base URL of an additional Jira site that shares the primary Cloud credentials.
+# Honoured by _jira_auth() only when the primary is Cloud and the URL is a
+# configured extra site, so the shared token can never be sent to another host.
+_active_base: contextvars.ContextVar = contextvars.ContextVar("jira_active_base", default=None)
+
+
+def _canon(url: str) -> str:
+    p = urlparse((url or "").strip())
+    return f"{p.scheme}://{p.netloc}{p.path.rstrip('/')}".lower()
+
+
+@contextmanager
+def use_site(base_url: str | None):
+    """Route jira_api()/jira_browse_url() to base_url inside the block (None = primary)."""
+    token = _active_base.set(base_url or None)
+    try:
+        yield
+    finally:
+        _active_base.reset(token)
+
+
+def _is_configured_extra_site(base_url: str) -> bool:
+    from .mutations import configured_extra_urls
+    return _canon(base_url) in {_canon(u) for u in configured_extra_urls()}
+
 
 # ── Module-level connection pool ──
 _http_pool: httpx.Client | None = None
@@ -31,6 +59,14 @@ def _jira_auth() -> tuple[str, str, bool]:
     api_token = os.environ.get("JIRA_API_TOKEN", "")
     base = os.environ.get("JIRA_BASE_URL", JIRA_BASE_URL)
     is_cloud = "atlassian.net" in base
+    override = _active_base.get()
+    if override and _canon(override) != _canon(base):
+        if pat or not is_cloud or not _is_configured_extra_site(override):
+            raise RuntimeError(
+                "That Jira site is not configured to share the primary Jira credentials. "
+                "Add it under Additional Jira sites in Settings."
+            )
+        base = override.rstrip("/")
     if pat:
         return f"Bearer {pat}", base, is_cloud
     elif email and api_token:
@@ -79,6 +115,23 @@ def jira_api(
         raise RuntimeError(str(e)) from e
 
 
+@contextmanager
+def _target_site(target):
+    """Validate that a builtin-rest target is the primary site or a configured
+    shared-token extra, yielding the base URL to route to (None = primary)."""
+    if getattr(target, "adapter", "") != "builtin-rest":
+        raise RuntimeError("This Jira target is not served by the direct REST adapter.")
+    expected = _canon(str(getattr(target, "base_url", "")))
+    with use_site(None):
+        primary = _canon(jira_browse_url())
+    if expected == primary:
+        yield None
+    elif _is_configured_extra_site(expected):
+        yield expected
+    else:
+        raise RuntimeError("The direct Jira connection changed after this draft was prepared. Re-draft the action.")
+
+
 def jira_api_for_target(target, method: str, path: str, body: dict | None = None) -> dict:
     """Execute a direct REST request only for the draft's captured target.
 
@@ -87,14 +140,9 @@ def jira_api_for_target(target, method: str, path: str, body: dict | None = None
     HTTP call.  Delegating to jira_api() means test patches on jira_api
     and jira_browse_url/jira_is_cloud both take effect correctly.
     """
-    if getattr(target, "adapter", "") != "builtin-rest":
-        raise RuntimeError("This Jira target is not served by the direct REST adapter.")
-    base = jira_browse_url()
-    actual = f"{urlparse(base).scheme}://{urlparse(base).netloc}{urlparse(base).path.rstrip('/')}"
-    expected = str(getattr(target, "base_url", "")).rstrip("/")
-    if actual.lower() != expected.lower():
-        raise RuntimeError("The direct Jira connection changed after this draft was prepared. Re-draft the action.")
-    return jira_api(method, path, body)
+    with _target_site(target) as site:
+        with use_site(site):
+            return jira_api(method, path, body)
 
 
 def jira_browse_url() -> str:
@@ -126,10 +174,6 @@ def jira_upload_attachment_for_target(target, issue_key: str, content: bytes, fi
     Guards that the currently configured Jira site still matches the target
     captured at draft time, then delegates to jira_upload_attachment().
     """
-    if getattr(target, "adapter", "") != "builtin-rest":
-        raise RuntimeError("This Jira target is not served by the direct REST adapter.")
-    base = jira_browse_url()
-    actual = f"{urlparse(base).scheme}://{urlparse(base).netloc}{urlparse(base).path.rstrip('/')}"
-    if actual.lower() != str(getattr(target, "base_url", "")).rstrip("/").lower():
-        raise RuntimeError("The direct Jira connection changed after this draft was prepared. Re-draft the action.")
-    return jira_upload_attachment(issue_key, content, filename, content_type)
+    with _target_site(target) as site:
+        with use_site(site):
+            return jira_upload_attachment(issue_key, content, filename, content_type)

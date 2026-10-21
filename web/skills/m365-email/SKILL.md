@@ -23,6 +23,6 @@ This is an internal library skill, not invoked directly. It is loaded automatica
 
 ## Rules
 
-- Tokens are stored at `~/.config/microsoft-graph/token.json` with mode 0o600.
+- Tokens are stored DPAPI-encrypted in the AI Gator secure store (`~/.gator/secrets/`), never as plaintext JSON.
 - Never log or expose raw access tokens or refresh tokens in output.
 - If authentication fails with AADSTS65002, advise the user to re-authenticate — do not attempt to broaden requested scopes.
