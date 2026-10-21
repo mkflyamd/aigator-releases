@@ -536,6 +536,11 @@ async def _tool_describe_images(task: str, image_paths: list | None = None,
     return {"ok": True, "task": task, "instruction": "Perform the visual analysis now in your response text based on the images in this conversation."}
 
 
+def _is_tool_choice_rejection(status: int, body: str) -> bool:
+    """Some deployments (e.g. Sonnet 5.5 behind the gateway) 400 on a forced tool_choice."""
+    return status == 400 and "tool_choice" in (body or "")
+
+
 def _extract_structured_fields(image_paths: list, fields: list) -> dict | None:
     """Schema-constrained extraction: reads the given image file(s) from disk,
     makes a dedicated gateway-routed vision call with tool_choice pinned to a
@@ -610,14 +615,19 @@ def _extract_structured_fields(image_paths: list, fields: list) -> dict | None:
         base_url=base_url,
         default_headers=extra_headers or None,
     )
+    request = dict(
+        model=model,
+        max_tokens=1024,
+        tools=[extract_tool],
+        messages=[{"role": "user", "content": content}],
+    )
     try:
-        msg = client.messages.create(
-            model=model,
-            max_tokens=1024,
-            tools=[extract_tool],
-            tool_choice={"type": "tool", "name": "extract_fields"},
-            messages=[{"role": "user", "content": content}],
-        )
+        try:
+            msg = client.messages.create(**request, tool_choice={"type": "tool", "name": "extract_fields"})
+        except anthropic.BadRequestError as e:
+            if not _is_tool_choice_rejection(400, str(e)):
+                raise
+            msg = client.messages.create(**request, tool_choice={"type": "auto"})
     except Exception:
         return None
 
@@ -742,11 +752,17 @@ async def _analyze_frame_sequence(image_paths: list, fps: float = 0.2) -> dict |
     try:
         async with httpx.AsyncClient(timeout=120) as client:
             r = await client.post(f"{base_url}/v1/messages", json=payload, headers=headers)
+            if _is_tool_choice_rejection(r.status_code, r.text):
+                payload["tool_choice"] = {"type": "auto"}
+                r = await client.post(f"{base_url}/v1/messages", json=payload, headers=headers)
         if r.status_code >= 400:
             body = r.text
             if len(body) > 500:
                 body = body[:500] + f"...[+{len(body) - 500} chars]"
             _err = f"Gateway returned HTTP {r.status_code} for vision analysis: {body}"
+            if "api_not_supported" in body:
+                _err += (f" The active model ({model}) does not support image input through the gateway; "
+                         "switch to a vision-capable model or attach the images in the chat.")
             _log.error("describe_images.analyze_sequence: %s", _err)
             return {"ok": False, "error": _err}
         msg = r.json()
