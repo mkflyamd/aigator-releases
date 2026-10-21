@@ -82,7 +82,7 @@ assert.strictEqual(T(true, true, 500, 500), false, 'equal height does not need a
 // Source wiring.
 assert.ok(/let _gatorWidgetRevealHold = false;/.test(src), 'hold flag declared');
 assert.ok(
-  /if \(_activeTabId === requestTabId && !_userScrolledUp && !_gatorWidgetRevealHold\) _pinScrollToBottom\(messages\);/.test(
+  /if \(_activeTabId === requestTabId && !_userScrolledUp && !_gatorWidgetRevealHold\)\s*_pinScrollToBottom\(messages\);/.test(
     src,
   ),
   'post-stream pin respects the hold',

@@ -573,7 +573,9 @@ test('_widgetEditReplyNeedsNotice stays quiet outside editing tabs', () => {
 
 test('the stream-finalize path shows the notice through the helper', () => {
   assert.ok(
-    source.includes('_widgetEditReplyNeedsNotice(_tabs.find((t) => t.id === _tabKey), full)'),
+    /_widgetEditReplyNeedsNotice\(\s*_tabs\.find\(\(t\) => t\.id === _tabKey\),\s*full,?\s*\)/.test(
+      source,
+    ),
   );
   assert.ok(source.includes('widget-edit-notice'));
 });
