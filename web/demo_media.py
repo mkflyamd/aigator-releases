@@ -385,11 +385,12 @@ def inspect_frames(project_id: str | None, source_rel: str, times_sec: list) -> 
 
 # ── splice (replace interval, append clip) ───────────────────────────────────
 
-def _assemble(inputs: list[Path], pieces: list[tuple[int, float, float]], info: MediaInfo, out: Path) -> None:
+def _assemble(inputs: list[Path], pieces: list[tuple], info: MediaInfo, out: Path) -> None:
     chains, labels = [], []
-    for n, (idx, a, b) in enumerate(pieces):
+    for n, (idx, a, b, *rest) in enumerate(pieces):
+        speed = rest[0] if rest else 1.0
         chains.append(
-            f"[{idx}:v]trim=start={a:.6f}:end={b:.6f},setpts=PTS-STARTPTS,"
+            f"[{idx}:v]trim=start={a:.6f}:end={b:.6f},setpts=(PTS-STARTPTS)/{speed:.6f},"
             f"scale={info.width}:{info.height}:force_original_aspect_ratio=decrease,"
             f"pad={info.width}:{info.height}:(ow-iw)/2:(oh-ih)/2,fps={info.fps_expr},setsar=1,format=yuv420p[p{n}]"
         )
@@ -513,6 +514,98 @@ def append_clip(project_id: str | None, clip_rel: str, clip_start_sec=0.0, clip_
             "appended_from": appended, "appended_at_sec": round(binfo.duration_sec, 3),
             "inserted_audio_dropped": cinfo.has_audio, "timeline_shifted": False, "op_id": op["op_id"],
         }
+
+# ── retime (cut intervals, speed up an interval) ─────────────────────────────
+
+SPEED_MIN, SPEED_MAX = 1.25, 16.0
+
+
+def _retime(project_id, base_rel, operation: str, plan, detail: dict) -> dict:
+    """Run one edit that changes the recording's length.
+
+    ``plan(duration)`` returns the source pieces as (start, end, speed). The result carries
+    ``time_map``: where each kept piece of the old timeline lands on the new one.
+    """
+    with _OP_LOCK:
+        pid, folder = project_for(project_id)
+        base_rel, base, binfo = _edit_base(pid, folder, base_rel)
+        pieces = plan(binfo.duration_sec, base_rel)
+        time_map, cursor = [], 0.0
+        for a, b, speed in pieces:
+            length = (b - a) / speed
+            time_map.append({"old_sec": [round(a, 3), round(b, 3)],
+                             "new_sec": [round(cursor, 3), round(cursor + length, 3)], "speed": speed})
+            cursor += length
+        out = _next_path(folder, "edits", "edit", ".mp4")
+        partial = _partial(out)
+        try:
+            _assemble([base], [(0, a, b, speed) for a, b, speed in pieces], binfo, partial)
+            oinfo = _finish(partial, out, cursor)
+        finally:
+            partial.unlink(missing_ok=True)
+        block = _out_block(folder, out, oinfo)
+        base_block = {"rel": base_rel, "duration_sec": round(binfo.duration_sec, 3)}
+        op = record_op(pid, folder, {"operation": operation, "base": base_block, **detail,
+                                     "time_map": time_map, "output": block})
+        set_current(pid, folder, block["rel"])
+        return {"ok": True, "operation": operation, "output": block, "base": base_block, **detail,
+                "time_map": time_map, "timeline_shifted": True, "op_id": op["op_id"]}
+
+
+def cut_intervals(project_id: str | None, intervals, base_rel: str | None = None) -> dict:
+    if not isinstance(intervals, list) or not intervals:
+        raise MediaError("bad_argument", "intervals must be a non-empty list of [start_sec, end_sec] pairs.",
+                         field="intervals")
+    cuts: list[tuple[float, float]] = []
+    detail: dict = {}
+
+    def plan(duration: float, rel: str):
+        for pair in intervals:
+            if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+                raise MediaError("bad_argument", "Each interval must be [start_sec, end_sec].", field="intervals")
+            cuts.append(check_interval(pair[0], pair[1], duration, rel=rel))
+        cuts.sort()
+        for (_, prev_end), (next_start, _) in zip(cuts, cuts[1:]):
+            if next_start < prev_end:
+                raise MediaError("overlapping_intervals", "The intervals to cut must not overlap.",
+                                 intervals_sec=[[round(a, 3), round(b, 3)] for a, b in cuts])
+        pieces, cursor = [], 0.0
+        for a, b in cuts:
+            if a - cursor > EPS:
+                pieces.append((cursor, a, 1.0))
+            cursor = b
+        if duration - cursor > EPS:
+            pieces.append((cursor, duration, 1.0))
+        if not pieces:
+            raise MediaError("nothing_left", "Those cuts would remove the whole recording.",
+                             duration_sec=round(duration, 3))
+        detail["cut_intervals_sec"] = [[round(a, 3), round(b, 3)] for a, b in cuts]
+        detail["removed_sec"] = round(sum(b - a for a, b in cuts), 3)
+        return pieces
+
+    return _retime(project_id, base_rel, "cut_intervals", plan, detail)
+
+
+def speed_interval(project_id: str | None, start_sec, end_sec, speed, base_rel: str | None = None) -> dict:
+    factor = _number(speed, "speed")
+    if not SPEED_MIN <= factor <= SPEED_MAX:
+        raise MediaError("bad_argument", f"speed must be between {SPEED_MIN:g} and {SPEED_MAX:g}.",
+                         field="speed", requested=factor)
+    detail: dict = {"speed": factor}
+
+    def plan(duration: float, rel: str):
+        s, e = check_interval(start_sec, end_sec, duration, rel=rel)
+        detail["sped_interval_sec"] = [round(s, 3), round(e, 3)]
+        detail["saved_sec"] = round((e - s) * (1 - 1 / factor), 3)
+        pieces = []
+        if s > EPS:
+            pieces.append((0.0, s, 1.0))
+        pieces.append((s, e, factor))
+        if duration - e > EPS:
+            pieces.append((e, duration, 1.0))
+        return pieces
+
+    return _retime(project_id, base_rel, "speed_interval", plan, detail)
 
 # ── intro (hold first frame / title card) ────────────────────────────────────
 

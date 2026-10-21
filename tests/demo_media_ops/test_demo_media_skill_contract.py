@@ -3,7 +3,7 @@ from pathlib import Path
 SKILL = Path(__file__).resolve().parents[2] / "web" / "skills" / "gator-demo-recorder" / "SKILL.md"
 TEXT = SKILL.read_text(encoding="utf-8")
 TOOLS = ("demo_media_manifest", "demo_inspect_frames", "demo_replace_interval",
-         "demo_append_clip", "demo_merge_narration")
+         "demo_append_clip", "demo_cut_intervals", "demo_speed_interval", "demo_merge_narration")
 MERGE_ERRORS = ("approval_superseded", "narration_not_approved", "approval_corrupt", "approval_stale_media",
                 "out_of_range", "sync_mismatch", "output_verification_failed", "tts_failed")
 
@@ -17,7 +17,8 @@ def test_truthful_media_claims_section_names_every_tool_and_result_field():
     section = _between("## Truthful Media Claims", "## Phase 1")
     for name in TOOLS:
         assert name in section
-    for field in ("inserted_from", "appended_from", "video_extended_by_sec", "out_of_range"):
+    for field in ("inserted_from", "appended_from", "video_extended_by_sec", "out_of_range",
+                  "cut_intervals_sec", "saved_sec", "time_map"):
         assert field in section
 
 
