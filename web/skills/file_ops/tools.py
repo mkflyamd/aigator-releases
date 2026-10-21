@@ -17,6 +17,10 @@ SKILL_ID = "file_ops"
 _MAX_READ_BYTES = 5 * 1024 * 1024  # 5 MB
 _MAX_GLOB = 200
 _MAX_GREP = 100
+_MAX_GREP_LINE = 500  # chars kept around a match on a long line
+_MAX_GREP_BYTES = 24 * 1024  # stays under the tool-result inline budget
+_MAX_PAGE_BYTES = 24 * 1024
+
 # glob_files always does a recursive descent from base_path under the hood
 # (both branches below inject/require a literal "**" in the final pattern),
 # and glob.glob(recursive=True) has no built-in bound — it fully walks the
@@ -37,11 +41,6 @@ def _is_filesystem_root(path: Path) -> bool:
     further parent directory to ascend to."""
     resolved = path.resolve()
     return resolved.parent == resolved
-
-
-_MAX_GREP_LINE = 500  # chars kept around a match on a long line
-_MAX_GREP_BYTES = 24 * 1024  # stays under the tool-result inline budget
-_MAX_PAGE_BYTES = 24 * 1024
 
 
 def _read_page(content: str, offset: int, limit: int) -> dict:
