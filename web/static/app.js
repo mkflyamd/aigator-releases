@@ -18903,11 +18903,20 @@ async function _handleNarrationApproved(text, source) {
     const projectId = parsed.projectId || (await _activeDemoProjectId());
     if (!projectId)
       throw new Error('No demo project is active. Record again or reopen the project.');
-    const res = await fetch('/api/demo-projects/' + encodeURIComponent(projectId) + '/narration', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ segments: parsed.segments, flags: parsed.flags }),
-    });
+    const post = () =>
+      fetch('/api/demo-projects/' + encodeURIComponent(projectId) + '/narration', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ segments: parsed.segments, flags: parsed.flags }),
+      });
+    let res = await post();
+    if (res.status === 403) {
+      const fresh = await fetch('/api/csrf')
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null);
+      if (fresh?.csrf_token) window.__CSRF_TOKEN__ = fresh.csrf_token;
+      res = await post();
+    }
     if (!res.ok) throw new Error(await _errorDetail(res));
     const approval = (await res.json()).approval;
     if (!approval || !approval.approval_id)

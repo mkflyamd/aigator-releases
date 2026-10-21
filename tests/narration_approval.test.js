@@ -73,9 +73,15 @@ const handlerMatch = source.match(
 assert(handlerMatch, '_handleNarrationApproved not found');
 const handler = handlerMatch[0];
 assert(
-  /await fetch\('\/api\/demo-projects\/' \+ encodeURIComponent\(projectId\) \+ '\/narration'/.test(
+  /fetch\(\s*'\/api\/demo-projects\/' \+ encodeURIComponent\(projectId\) \+ '\/narration'/.test(
     handler,
   ),
+);
+assert(
+  /res\.status === 403[\s\S]*?fetch\('\/api\/csrf'\)[\s\S]*?window\.__CSRF_TOKEN__ = fresh\.csrf_token[\s\S]*?res = await post\(\)/.test(
+    handler,
+  ),
+  'a stale CSRF token (backend restarted) must be refreshed and the approval retried once',
 );
 assert(/if \(!res\.ok\)/.test(handler), 'handler must check res.ok');
 assert(!/\.catch\(\(\) => \{\}\)/.test(handler), 'handler must not swallow errors');
