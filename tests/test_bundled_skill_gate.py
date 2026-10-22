@@ -149,3 +149,5 @@ def test_permission_card_is_not_overwritten_by_the_stream_end_render():
     assert src.count("if (_permissionCardShown) return;") == 2
     assert "if (!_permissionCardShown) prose.innerHTML = _renderProse();" in src
     assert "_permissionCardShown = true;\n              _renderPermissionCard(" in src
+    reset = src.index("    _userCollapsedThinking = false;\n    _permissionCardShown = false;")
+    assert src.index("const doSend = async (overridePayload) => {") < reset

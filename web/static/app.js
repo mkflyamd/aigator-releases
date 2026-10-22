@@ -13237,6 +13237,7 @@ form.addEventListener('submit', async (e) => {
     _totalInputTokens = 0;
     _totalOutputTokens = 0;
     _userCollapsedThinking = false;
+    _permissionCardShown = false;
     statusLines = [];
     toastLines = [];
     autoSkills = [];
