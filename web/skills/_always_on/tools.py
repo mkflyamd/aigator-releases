@@ -330,7 +330,7 @@ def _check_fetch_target(url: str) -> dict | None:
     except ValueError:
         return {"error": "Blocked: the URL is not valid."}
     if len(target) > _MAX_FETCH_QUERY:
-        return {"error": f"Blocked: the URL's path and query string together are longer than {_MAX_FETCH_QUERY} characters."}
+        return {"error": f"Blocked: the URL's path and query string together are longer than {_MAX_FETCH_QUERY} characters. Drop the page-title slug or extra parameters, or use the service's own tool (for Confluence, read_confluence_page)."}
     return None
 
 

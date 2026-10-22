@@ -48,6 +48,13 @@ def skill_handler(fn):
         return wrapper
 
 
+def ensure_parent_dir(file_path: str) -> None:
+    """Create the folder a new document is about to be saved into."""
+    from pathlib import Path
+
+    Path(file_path).parent.mkdir(parents=True, exist_ok=True)
+
+
 # ── Protected Locations ─────────────────────────────────────────────────────
 
 _NOT_LOCAL_PREFIXES = ("open:", "onedrive://")
