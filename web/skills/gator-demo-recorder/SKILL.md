@@ -120,6 +120,7 @@ The widget:
 - Calls `GET /api/recorder/screens` on load to populate the screen selector
 - Lets the user pick screen and optionally enter a crop region (x, y, w, h)
 - Record/Pause/Resume/Stop all call the backend API directly via `gator:recorder` postMessage — no agent involvement
+- The first screen or record action shows an Allow prompt above the widget, outside it. The user clicks it once; do not try to work around it
 - After Stop, sends one chat message with the file path
 
 ### Tab navigation note

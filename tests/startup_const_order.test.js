@@ -16,6 +16,10 @@ for (const name of [
   'GATOR_WIDGET_STORE_LIMITS',
   'GATOR_RECORDER_ACTIONS',
   'GATOR_TTS_VOICE_RE',
+  'GATOR_RECORDER_GRANT_IDLE_MS',
+  'GATOR_RECORDER_CONSENT_MS',
+  'gatorRecorderGrants',
+  'gatorRecorderConsents',
 ]) {
   const decl = source.search(new RegExp('^const ' + name + ' =', 'm'));
   assert.ok(decl >= 0, name + ' is not declared');

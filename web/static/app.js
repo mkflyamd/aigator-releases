@@ -55,6 +55,13 @@ const GATOR_RECORDER_ACTIONS = {
   resume: { method: 'POST', params: {} },
   stop: { method: 'POST', params: {} },
 };
+// Widget HTML is model-written, so no widget may change recorder state until the user allows
+// that exact iframe. The grant is keyed to the frame element: closing or re-rendering the
+// widget drops it, and it lapses after GATOR_RECORDER_GRANT_IDLE_MS without recorder traffic.
+const GATOR_RECORDER_GRANT_IDLE_MS = 10 * 60 * 1000;
+const GATOR_RECORDER_CONSENT_MS = 60 * 1000;
+const gatorRecorderGrants = new WeakMap();
+const gatorRecorderConsents = new WeakMap();
 const GATOR_TTS_VOICE_RE = /^[A-Za-z0-9_-]{1,40}$/;
 
 /* ── Click actions: the Content Security Policy forbids on*= attributes ──────
@@ -18531,8 +18538,54 @@ function gatorRecorderParams(spec, given) {
   return out;
 }
 
+function gatorRecorderGranted(frame) {
+  const until = gatorRecorderGrants.get(frame);
+  if (!until || Date.now() > until) {
+    gatorRecorderGrants.delete(frame);
+    return false;
+  }
+  gatorRecorderGrants.set(frame, Date.now() + GATOR_RECORDER_GRANT_IDLE_MS);
+  return true;
+}
+
+function gatorRecorderConsent(frame) {
+  const pending = gatorRecorderConsents.get(frame);
+  if (pending) return pending;
+  const wrap = frame.closest('.gator-widget-wrap');
+  if (!wrap) return Promise.resolve(false);
+  const promise = new Promise((resolve) => {
+    const bar = document.createElement('div');
+    bar.className = 'gator-widget-consent';
+    const text = document.createElement('span');
+    text.textContent =
+      'This widget wants to control screen recording (start, pause, stop). Allow it only if you opened the Demo Recorder.';
+    const allow = document.createElement('button');
+    allow.className = 'gator-widget-btn gator-widget-btn-primary';
+    allow.textContent = 'Allow';
+    const deny = document.createElement('button');
+    deny.className = 'gator-widget-btn';
+    deny.textContent = 'Deny';
+    let timer = null;
+    const settle = (ok) => {
+      clearTimeout(timer);
+      bar.remove();
+      gatorRecorderConsents.delete(frame);
+      if (ok) gatorRecorderGrants.set(frame, Date.now() + GATOR_RECORDER_GRANT_IDLE_MS);
+      resolve(ok);
+    };
+    allow.addEventListener('click', () => settle(true));
+    deny.addEventListener('click', () => settle(false));
+    timer = setTimeout(() => settle(false), GATOR_RECORDER_CONSENT_MS);
+    bar.append(text, allow, deny);
+    wrap.insertBefore(bar, frame);
+  });
+  gatorRecorderConsents.set(frame, promise);
+  return promise;
+}
+
 async function gatorRecorderBridge(d, e) {
-  if (!gatorWidgetFrameForSource(e.source)) return;
+  const frame = gatorWidgetFrameForSource(e.source);
+  if (!frame) return;
   const action = d.action;
   const rid = typeof d.rid === 'number' || typeof d.rid === 'string' ? d.rid : undefined;
   const reply = (data) => gatorWidgetReply(e, { type: 'gator:recorder-result', action, rid, data });
@@ -18548,6 +18601,11 @@ async function gatorRecorderBridge(d, e) {
   const params = gatorRecorderParams(spec, d.params);
   if (!params) {
     reply({ ok: false, error: 'invalid parameters' });
+    return;
+  }
+  const granted = gatorRecorderGranted(frame);
+  if (spec.method === 'POST' && !granted && !(await gatorRecorderConsent(frame))) {
+    reply({ ok: false, error: 'Screen recording was not allowed for this widget.' });
     return;
   }
   const opts = { method: spec.method };
