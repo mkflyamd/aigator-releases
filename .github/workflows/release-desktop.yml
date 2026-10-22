@@ -81,6 +81,9 @@ jobs:
         shell: bash
         run: test -f "dist/backend/${{ matrix.backend_name }}"
 
+      - name: Fetch dictation model
+        run: uv run python tools/fetch_dictation_model.py
+
       - name: Install Electron dependencies
         working-directory: shell
         run: npm ci --ignore-scripts

@@ -29,4 +29,5 @@ openpyxl>=3.1.0
 python-docx
 lxml>=5.0.0
 ddgs>=9.0.0  # zero-key DuckDuckGo search — used by fetch_webpage 403 fallback
+faster-whisper==1.2.1  # local speech-to-text for dictation (CTranslate2, CPU). Model files are bundled separately, see tools/fetch_dictation_model.py
 psutil>=5.9  # reliable pid liveness + port→pid for the opencode registry; without it _pid_alive shells out to tasklist and flashes console windows in the packaged app

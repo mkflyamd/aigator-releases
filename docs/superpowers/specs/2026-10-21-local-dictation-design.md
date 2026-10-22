@@ -46,7 +46,7 @@ mic -> getUserMedia -> AudioWorklet -> 16 kHz mono PCM16 frames
 
 | Unit | Responsibility |
 |---|---|
-| `web/static/speech-capture.js` + `web/static/speech-worklet.js` | Open the mic, downsample to 16 kHz mono PCM16, segment utterances, call a callback per utterance. No DOM, no network. |
+| `web/static/speech-capture.js` + `web/static/speech-worklet.js` | Open the mic at 16 kHz, produce mono PCM16, segment utterances, call a callback per utterance. No DOM, no network. |
 | `web/static/speech.js` (edited) | Keeps `GatorSpeech` API, hotkey, registry, inserters, toasts and stop-on-send. Replaces the `SpeechRecognition` block with the capture unit plus a POST of each utterance. |
 | `web/dictation/engine.py` | `Engine` interface: `load(model_dir)` and `transcribe(pcm16: bytes) -> str`; engine registry keyed by name. |
 | `web/dictation/faster_whisper_engine.py` | The faster-whisper adapter (the only engine in this change). |
@@ -62,7 +62,8 @@ The `GatorSpeech` public API (`wire`, `isSupported`, `stopAll`, `makeFieldInsert
 ### Capture
 
 - `navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } })`.
-- An `AudioWorklet` (module loaded from `/static`) posts Float32 blocks to the page. The page downsamples from the context rate to 16 kHz and converts to PCM16.
+- The `AudioContext` is created at `sampleRate: 16000`, so the browser resamples the mic and no downsampler is needed. Capture fails with a clear error if the context does not run at 16 kHz.
+- An `AudioWorklet` (module loaded from `/static`, zero outputs) posts Float32 blocks to the page, which converts them to PCM16.
 - `isSupported()` becomes: `getUserMedia` and `AudioWorklet` are available.
 
 ### Segmenter
@@ -132,7 +133,7 @@ The backend also runs VAD, so an energy false-trigger yields empty text, not jun
 - `tools/fetch_dictation_model.py` downloads the manifest's active model at the pinned revision into `models/dictation/<dir>/` and fails the build on any SHA-256 mismatch. `models/` is gitignored.
 - `shell/package.json` `extraResources` gains `{ "from": "../models/dictation", "to": "models/dictation" }`.
 - `shell/main.js` sets `AIGATOR_MODELS_DIR` to `<resourcesPath>/models/dictation` in the backend environment when packaged, and to `<repo>/models/dictation` in development.
-- `faster-whisper`, `numpy` and a compatible `av` are added to `web/requirements.txt` and `pyproject.toml` with pinned versions. `av` is imported at module load by faster-whisper and stays in the bundle.
+- `faster-whisper==1.2.1` is added to `web/requirements.txt` and `pyproject.toml`; `uv.lock` resolves its dependencies (`av`, `ctranslate2`, `onnxruntime`, `numpy`). `av` is imported at module load by faster-whisper and stays in the bundle. Only the array path is used (PCM bytes to numpy), so faster-whisper's file-open path, which fails with some `av` versions, is never reached.
 - `packaging/aigator-backend.spec` adds `collect_all` for `faster_whisper`, `ctranslate2` and `onnxruntime` (the Silero VAD model ships as a faster-whisper data file).
 - Third-party notices list Whisper (MIT), the CTranslate2 conversion, faster-whisper (MIT) and CTranslate2 (MIT).
 
@@ -158,12 +159,12 @@ The backend also runs VAD, so an energy false-trigger yields empty text, not jun
 
 - **Python route tests** (fake engine registered in tests): 403 without a CSRF token; 400 for odd length; 413 for oversize; 200 with text from the fake engine; 503 when the engine fails to load; engine is loaded once across calls.
 - **Registry tests:** manifest default resolves; `dictation.model` override resolves; unknown id gives a clear error listing known ids; user-override directory wins over the bundled directory.
-- **JS tests** (`tests/*.test.js` pattern): the segmenter (start threshold, silence hangover, minimum speech, force cut, pre-roll) and the downsampler, fed synthetic PCM.
+- **JS tests** (`tests/*.test.js` pattern): the segmenter (start threshold, silence hangover, minimum speech, force cut, pre-roll) and the float-to-PCM16 conversion, fed synthetic PCM.
 - **Real-model test:** transcribes a short fixture WAV with the bundled model; skipped when the model directory is absent.
 - **Manual end-to-end in Electron:** launch with Chromium's `--use-fake-device-for-media-stream --use-file-for-fake-audio-capture=<wav>`, press Ctrl+Shift+Space in a text field, confirm text appears; repeat with the backend model removed and confirm a toast and a stopped session.
 
 ## Open items (resolved before release, no design change)
 
 - Pre-release evaluation of candidate models on recorded dictation (base.en, distil-small.en, Moonshine small); the winner becomes the manifest `default`.
-- Measure the installer size delta and pin the `av` version.
+- Measure the installer size delta.
 - Confirm the macOS build path (`extraResources`, wheels for arm64).

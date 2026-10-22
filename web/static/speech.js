@@ -1,31 +1,27 @@
 /* GatorSpeech — lightweight speech-to-text (dictation) for AI Gator.
  *
- * Uses the browser's built-in Web Speech API (SpeechRecognition). No
- * dependencies, no API keys, no server calls — recognition is handled by the
- * browser. Works in Chrome/Edge and the packaged tray app (which opens the UI
- * in the default system browser).
+ * Audio is captured in the page (speech-capture.js), split into utterances at
+ * pauses, and each utterance is transcribed locally by the backend
+ * (POST /api/dictation/transcribe). No cloud service is involved.
  *
- * Degrades gracefully: if the API is unavailable, any wired mic button hides
- * itself so the UI is unchanged on unsupported browsers (e.g. Firefox).
+ * Degrades gracefully: if audio capture is unavailable, any wired mic button
+ * hides itself so the UI is unchanged.
  */
 (function () {
   'use strict';
 
-  var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-
   function isSupported() {
-    return !!SR;
+    return !!(window.GatorSpeechCapture && window.GatorSpeechCapture.isSupported());
   }
 
-  // Only one recognition session may run at a time across the whole app.
-  var _active = null; // { rec, button }
+  // Only one dictation session may run at a time across the whole app.
+  var _active = null; // { button }
 
   // Registry of wired mics so the global hotkey can target the focused field.
   var _registry = []; // { control, target, button }
 
   function _stopActive() {
     if (_active) {
-      // Trigger the explicit-stop path in whichever wire() instance owns this mic
       var btn = _active.button;
       if (btn && btn._gatorSpeechControl) {
         try {
@@ -33,15 +29,58 @@
         } catch (e) {
           /* ignore */
         }
-      } else if (_active.rec) {
-        try {
-          _active.rec.abort();
-        } catch (e) {
-          /* ignore */
-        }
       }
       _active = null;
     }
+  }
+
+  function _errorMessage(err) {
+    if (err && (err.name === 'NotAllowedError' || err.name === 'SecurityError')) {
+      return 'Microphone access is blocked. Allow mic permission to use dictation.';
+    }
+    if (err && err.name === 'NotFoundError') return 'No microphone found for dictation.';
+    return 'Dictation failed: ' + ((err && err.message) || 'unknown error');
+  }
+
+  // POST one utterance (Int16Array, 16 kHz mono) and resolve to its text.
+  function _transcribe(pcm) {
+    function post() {
+      return fetch('/api/dictation/transcribe', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'X-CSRF-Token': window.__CSRF_TOKEN__ || '',
+        },
+        body: new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength),
+      });
+    }
+    return post()
+      .then(function (r) {
+        if (r.status !== 403) return r;
+        return fetch('/api/csrf')
+          .then(function (c) {
+            return c.json();
+          })
+          .then(function (j) {
+            if (j && j.csrf_token) window.__CSRF_TOKEN__ = j.csrf_token;
+            return post();
+          });
+      })
+      .then(function (r) {
+        if (r.ok) {
+          return r.json().then(function (j) {
+            return ((j && j.text) || '').trim();
+          });
+        }
+        return r
+          .json()
+          .catch(function () {
+            return {};
+          })
+          .then(function (j) {
+            throw new Error((j && j.detail) || 'HTTP ' + r.status);
+          });
+      });
   }
 
   // Add a leading space before a dictated chunk unless we're at the start or
@@ -123,104 +162,92 @@
     }
     if (button._gatorSpeechWired) return button._gatorSpeechControl;
 
-    var rec = null;
+    var session = null; // { capture, aborted, queue }
     var listening = false;
-    var _userStopped = false; // true only when user explicitly stops
+    var pending = 0; // utterances awaiting transcription
 
     function _setUI(on) {
       button.classList.toggle('listening', on);
       button.setAttribute('aria-pressed', on ? 'true' : 'false');
     }
 
-    function _startRec() {
-      rec = new SR();
-      rec.lang = opts.lang || navigator.language || 'en-US';
-      rec.continuous = true;
-      rec.interimResults = false;
-      rec.maxAlternatives = 1;
+    function _setBusy() {
+      button.classList.toggle('transcribing', pending > 0);
+    }
 
-      rec.onresult = function (e) {
-        for (var i = e.resultIndex; i < e.results.length; i++) {
-          var res = e.results[i];
-          if (res && res.isFinal) {
-            var t = ((res[0] && res[0].transcript) || '').trim();
-            if (t) {
-              try {
-                insertFn(t);
-              } catch (err) {
-                console.error('[GatorSpeech] insert failed', err);
-              }
+    function _enqueue(s, pcm) {
+      pending++;
+      _setBusy();
+      s.queue = s.queue
+        .then(function () {
+          if (s.aborted) return null;
+          return _transcribe(pcm).then(function (text) {
+            if (s.aborted || !text) return;
+            try {
+              insertFn(text);
+            } catch (err) {
+              console.error('[GatorSpeech] insert failed', err);
             }
-          }
-        }
-      };
-      rec.onerror = function (e) {
-        if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
-          _userStopped = true;
-          listening = false;
-          _setUI(false);
-          if (_active && _active.rec === rec) _active = null;
-          _toast(
-            'Microphone access is blocked. Allow mic permission in your browser to use dictation.',
-          );
-        } else if (e.error === 'aborted') {
-          // intentional abort — onend will handle cleanup
-        } else if (e.error === 'no-speech') {
-          // browser fires no-speech then onend — let onend restart if still active
-        } else {
-          console.warn('[GatorSpeech] recognition error:', e.error);
-        }
-      };
-      rec.onend = function () {
-        // Auto-restart on natural pause/timeout unless user explicitly stopped.
-        if (!_userStopped && listening) {
-          try {
-            rec = null;
-            _startRec();
-            return;
-          } catch (err) {
-            console.warn('[GatorSpeech] restart failed', err);
-          }
-        }
-        listening = false;
-        _setUI(false);
-        if (_active && _active.rec === rec) _active = null;
-        rec = null;
-      };
+          });
+        })
+        .catch(function (err) {
+          if (!s.aborted) _fail(s, err);
+        })
+        .then(function () {
+          pending--;
+          _setBusy();
+        });
+    }
 
-      try {
-        rec.start();
-      } catch (err) {
-        console.error('[GatorSpeech] start failed', err);
-        listening = false;
-        _setUI(false);
+    // Stops capture. deliver=true transcribes any phrase still being spoken;
+    // deliver=false drops everything not yet inserted.
+    function _end(deliver) {
+      listening = false;
+      _setUI(false);
+      var s = session;
+      session = null;
+      if (s) {
+        if (s.capture) s.capture.stop(deliver);
+        if (!deliver || !s.capture) s.aborted = true;
       }
+      if (_active && _active.button === button) _active = null;
+    }
+
+    function _fail(s, err) {
+      if (session === s) _end(false);
+      else s.aborted = true;
+      console.warn('[GatorSpeech] dictation error:', err);
+      _toast(_errorMessage(err));
     }
 
     function start() {
       _stopActive();
-      _userStopped = false;
       listening = true;
       _setUI(true);
-      _active = { rec: null, button: button };
-      _startRec();
-      // Keep _active.rec in sync after _startRec assigns rec
-      _active.rec = rec;
+      var s = { capture: null, aborted: false, queue: Promise.resolve() };
+      session = s;
+      _active = { button: button };
+      window.GatorSpeechCapture.start(function (pcm) {
+        _enqueue(s, pcm);
+      })
+        .then(function (cap) {
+          if (s.aborted) {
+            cap.stop(false);
+            return;
+          }
+          s.capture = cap;
+        })
+        .catch(function (err) {
+          _fail(s, err);
+        });
     }
 
     function stop() {
-      _userStopped = true;
-      listening = false;
-      _setUI(false);
-      if (rec) {
-        try {
-          rec.abort();
-        } catch (e) {
-          /* ignore */
-        }
-        rec = null;
-      }
-      if (_active && _active.button === button) _active = null;
+      _end(true);
+    }
+
+    function abort() {
+      _end(false);
     }
 
     button.addEventListener('mousedown', function (e) {
@@ -240,7 +267,13 @@
 
     _setUI(false);
     button._gatorSpeechWired = true;
-    button._gatorSpeechControl = { start: start, stop: stop, toggle: toggle, isSupported: true };
+    button._gatorSpeechControl = {
+      start: start,
+      stop: stop,
+      abort: abort,
+      toggle: toggle,
+      isSupported: true,
+    };
     _registry.push({
       control: button._gatorSpeechControl,
       target: opts.target || null,
@@ -284,12 +317,12 @@
   function stopAll() {
     for (var i = 0; i < _registry.length; i++) {
       try {
-        _registry[i].control.stop();
+        _registry[i].control.abort();
       } catch (e) {
         /* ignore */
       }
     }
-    _stopActive();
+    _active = null;
   }
 
   var SEND_SELECTOR = '#send-btn, .tp-compose-send, .tp-qt-send-btn, .cc-send';
