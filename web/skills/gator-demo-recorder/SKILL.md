@@ -4,7 +4,7 @@ description: Record your screen manually, then analyze, narrate with TTS, and de
 version: '2.0'
 requires:
   - id: code_runner
-    reason: runs the preflight check and reads the demo project folder
+    reason: reads the demo project folder and runs the video tools
   - id: shell_runner
     reason: runs ffmpeg and PowerShell commands while building the demo
 ---
@@ -87,30 +87,9 @@ Every statement about a video's duration, a moment in it, or an edit must come f
 
 ---
 
-## Phase 1: Preflight → Render Widget
+## Phase 1: Render Widget
 
-**Step 1 — Run preflight** before rendering the widget:
-
-```python
-import json, urllib.request
-
-# Runs in Gator's own process. A script run here cannot see the real home folder, PATH or
-# localhost services, so never run preflight.py itself and never ask for its folder.
-with urllib.request.urlopen("http://localhost:8003/api/recorder/preflight", timeout=30) as r:
-    result = json.load(r)
-print(json.dumps(result, indent=2))
-```
-
-This call needs the network approval for `localhost:8003`, like every other call to the recorder API.
-
-**If `result["ready"]` is True** → render the widget immediately.
-
-**If `result["ready"]` is False** → show the user `result["message"]` and the install commands in `result["needs_install"]`. Do not install anything yourself; the user installs it and tries again.
-
-Lemonade (`result["lemonade"]["ok"]`) is **optional** — if False, warn the user that narration
-won't be available but recording and analysis will still work. Do not block on Lemonade.
-
-**Step 2 — Render the widget** (only after ffmpeg confirmed ready):
+Render the widget straight away. Do not run a preflight: a script run in the code sandbox cannot see the real home folder, PATH or Gator's localhost services, so it would wrongly report ffmpeg and Lemonade as missing. Gator checks ffmpeg itself when the user presses Record and returns a clear error if it is missing; relay that error and the install command (`winget install Gyan.FFmpeg` on Windows).
 
 The widget:
 
@@ -993,7 +972,7 @@ When you receive `"Narration approved (N segments, approval appr_<n>_<hash>)..."
 
 The tool writes its stage to `work/logs/merge_progress.json`; the narration editor polls it through `GET /api/demo-projects/<id>/progress` and shows "Generating speech N of M", "Merging audio and video", "Done", or the error text.
 
-If Lemonade TTS is unavailable (preflight `lemonade.ok` is false), tell the user and offer to deliver the video without narration. The TTS endpoint is `/v1/audio/speech` (OpenAI-compatible) and the model is `kokoro-v1` — both confirmed by preflight. Do not probe other endpoints.
+If a narration preview or TTS call reports that Lemonade TTS is not running, tell the user and offer to deliver the video without narration. The TTS endpoint is `/v1/audio/speech` (OpenAI-compatible) and the model is `kokoro-v1` Do not probe other endpoints.
 
 ---
 

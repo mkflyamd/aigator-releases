@@ -153,19 +153,10 @@ def test_permission_card_is_not_overwritten_by_the_stream_end_render():
     assert src.index("const doSend = async (overridePayload) => {") < reset
 
 
-def test_recorder_preflight_runs_in_the_server_and_the_skill_uses_it():
-    from fastapi import FastAPI
-    from fastapi.testclient import TestClient
-    from routes import recorder
-
-    api = FastAPI()
-    api.include_router(recorder.router)
-    body = TestClient(api).get("/api/recorder/preflight").json()
-    assert {"ready", "ffmpeg", "lemonade", "platform"} <= set(body)
-
+def test_recorder_guide_does_not_preflight_from_the_sandbox():
     guide = open(
         os.path.join(os.path.dirname(__file__), "..", "web", "skills", RECORDER, "SKILL.md"), encoding="utf-8"
     ).read()
-    assert "/api/recorder/preflight" in guide
-    assert 'preflight.py")]' not in guide
+    assert "preflight.py" not in guide
+    assert "/api/recorder/preflight" not in guide
     assert ".gator/skills/mine/gator-demo-recorder/scripts" not in guide

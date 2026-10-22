@@ -1040,19 +1040,6 @@ async def recorder_status():
     }
 
 
-@router.get("/api/recorder/preflight")
-def recorder_preflight():
-    """Preflight from the server's own environment. The skill's sandboxed run_python has a
-    redirected home, a filtered PATH and no network, so it cannot see ffmpeg or Lemonade."""
-    import importlib.util
-
-    path = Path(__file__).resolve().parent.parent / "skills" / "gator-demo-recorder" / "scripts" / "preflight.py"
-    spec = importlib.util.spec_from_file_location("gator_demo_preflight", path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod.run_preflight(auto_consent=False)
-
-
 # ── Notify — HUD posts completion message here; frontend polls and injects ────
 
 class NotifyRequest(BaseModel):
