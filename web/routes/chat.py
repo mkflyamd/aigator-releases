@@ -47,6 +47,18 @@ router = APIRouter()
 
 _GATED_DEP_SKILLS: frozenset[str] = frozenset({"shell_runner", "code_runner"})
 
+
+def _is_gated_runner(skill_id: str) -> bool:
+    """A gated runner or one of its aliases (e.g. `code-runner` registers the same tools).
+
+    An alias hands out the same powerful tools, so it must never be self-granted by the model
+    or carried forward as an ordinary skill.
+    """
+    if skill_id in _GATED_DEP_SKILLS:
+        return True
+    tools = shared.SKILL_TOOLS_MAP.get(skill_id)
+    return bool(tools) and any(tools == shared.SKILL_TOOLS_MAP.get(g) for g in _GATED_DEP_SKILLS)
+
 # Detects phrases like "add the @outlook skill", "activate /teams skill",
 # "load the confluence skill" — used to auto-activate the requested skill
 # mid-conversation and retry the LLM call with the expanded toolset.
@@ -119,10 +131,44 @@ def _detect_requested_skills(turn_text: str, already_active) -> list[str]:
         # SKILL.md prompt). Gated skills still excluded — they require the
         # explicit user-approval gate and can't be self-granted by the model.
         _known = sid in shared.SKILL_PROMPTS or sid in shared.SKILL_TOOLS_MAP
-        if (_known and sid not in _GATED_DEP_SKILLS
+        if (_known and not _is_gated_runner(sid)
                 and sid not in active and sid not in found):
             found.append(sid)
     return found
+
+
+_BARE_SKILL_TURN_RE = _re.compile(r"^(?:/[a-z0-9][a-z0-9_-]*\s*)+$", _re.IGNORECASE)
+
+
+def _already_active_skill_requests(turn_text: str, active) -> list[str]:
+    """Skills a model turn asked for when the whole turn is nothing but skill tokens and they
+    are already active. Without this the turn ends empty: the model thinks the skill is off."""
+    text = (turn_text or "").strip()
+    if not _BARE_SKILL_TURN_RE.match(text):
+        return []
+    active = set(active or [])
+    found: list[str] = []
+    for name in _SKILL_TOKEN_RE.findall(text):
+        sid = _resolve_skill_id(name)
+        if sid in active and sid not in found:
+            found.append(sid)
+    return found
+
+
+def _already_active_note(skill_ids: list[str], offered_tool_names) -> str:
+    offered = set(offered_tool_names or ())
+    parts = []
+    for sid in skill_ids:
+        tools = sorted(set(shared.SKILL_TOOLS_MAP.get(sid, ())) & offered)
+        if tools:
+            parts.append(f"/{sid} is already active; its tools are available right now: {', '.join(tools)}")
+        else:
+            parts.append(f"/{sid} is already active but none of its tools can be used in this turn")
+    return (
+        "[System: " + "; ".join(parts) + ". Do not name the skill again. "
+        "Continue the user's original request by calling those tools directly; if a tool is "
+        "unavailable, tell the user plainly what is missing instead of replying with only a skill name.]"
+    )
 
 
 def _silent_turn_fallback(active_skills: list[str]) -> str:
@@ -862,13 +908,28 @@ def _skills_for_tools(tool_names) -> list[str]:
     for name in sorted(set(tool_names or ())):
         candidates = [
             (len(tools), sid) for sid, tools in shared.SKILL_TOOLS_MAP.items()
-            if name in tools and not sid.startswith("_") and sid not in _GATED_DEP_SKILLS
+            if name in tools and not sid.startswith("_") and not _is_gated_runner(sid)
         ]
         if candidates:
             owner = min(candidates)[1]
             if owner not in owners:
                 owners.append(owner)
     return owners
+
+
+def _gated_runners_for_tools(tool_names) -> list[str]:
+    """The shell/code runners whose tools actually ran in this chat.
+
+    A runner is only ever offered after the user approved it, so evidence that its tool ran is
+    evidence of that approval. Naming a skill on a later turn ("use ppt") must not take away the
+    tool the chat was already working with. Never derived from model text, so a model cannot
+    grant itself a runner.
+    """
+    ran = set(tool_names or ())
+    return sorted(
+        sid for sid in _GATED_DEP_SKILLS
+        if ran & set(shared.SKILL_TOOLS_MAP.get(sid, ()))
+    )
 
 
 def _classify_skills_via_llm(message: str, extra_skills: dict | None = None) -> list[str]:
@@ -1572,6 +1633,7 @@ async def chat(req: ChatRequest):
     # fully controlled by scoped_skill or a pinned skill and must not be polluted by URL/keyword
     # detection (e.g. the browser skill firing on a pasted MCP URL).
     _inferred = []
+    _carried_runners: list[str] = []
     _classifier_inherited = False
     from continuation_classifier import classify as _classify, detect_pending as _detect_pending
     if _skills_locked:
@@ -1622,6 +1684,7 @@ async def chat(req: ChatRequest):
         # Carry forward skills from recent history when the current message gives no signal
         # (e.g. "go ahead", "yes", "looks good", "try again"). The frontend stores only text
         # in history (no tool_use blocks), so scan the recent text for skill keywords.
+        _tools_already_run = await shared.conversation_store.recent_tool_names(_context_id)
         if not _inferred:
             def _extract_text(content):
                 if isinstance(content, str):
@@ -1642,9 +1705,7 @@ async def chat(req: ChatRequest):
             ]
             # The history above is text only. The server-side store also knows which tools
             # actually ran, so a chat that used Slack keeps Slack on a short follow-up.
-            _from_tools = _skills_for_tools(
-                await shared.conversation_store.recent_tool_names(_context_id)
-            )
+            _from_tools = _skills_for_tools(_tools_already_run)
             for _sid in _from_tools:
                 if _sid not in _history_skills:
                     _history_skills.append(_sid)
@@ -1655,6 +1716,13 @@ async def chat(req: ChatRequest):
             if _carried:
                 print(f"[skill-detect] carrying forward from history text: {_carried}", flush=True)
                 _inferred = _carried
+
+        # A runner the chat already used stays available whether this message names another
+        # skill ("use ppt") or gives no signal at all ("proceed").
+        _carried_runners = _gated_runners_for_tools(_tools_already_run)
+        if _carried_runners:
+            print(f"[skill-detect] runners already used in this chat stay available: {_carried_runners}", flush=True)
+            _inferred = list(dict.fromkeys([*_inferred, *_carried_runners]))
 
     # A request to describe/recap an existing image needs authenticated image
     # retrieval before the first model turn. Waiting for reactive activation
@@ -1667,7 +1735,7 @@ async def chat(req: ChatRequest):
         )
 
     # Separate context-only skills (auto-detected) from explicitly selected skills
-    _context_only_skills = list(set(_pin_skills + _inferred) - _explicit_skill_ids)
+    _context_only_skills = list(set(_pin_skills + _inferred) - _explicit_skill_ids - set(_carried_runners))
 
     # Exclude 'gator' from tool filtering — it's the default home skill, not a toolset.
     # Its manifest bundles 14 Office tools (Excel/Word/PPT) that shouldn't load on every request.
@@ -1689,6 +1757,7 @@ async def chat(req: ChatRequest):
     # tools, including pptx_apply_theme). Keep them in the active set regardless
     # of rank; only tool-bearing skills compete for the cap slots.
     _cap_exempt = {"fetch_image"} if _image_analysis_requested else set()
+    _cap_exempt |= set(_carried_runners)
     _capped_candidates = [
         s for s in _auto_candidates
         if _marketplace_skill_has_tools(s) and s not in _cap_exempt
@@ -2113,6 +2182,8 @@ async def chat(req: ChatRequest):
             )
 
         _current_loop = _build_loop(_selected_active_tools, system, msgs, _required_names)
+        _loop_tools = _selected_active_tools
+        _loop_required = _required_names
         _current_system = system
         _current_msgs = msgs
         _assistant_text_parts: list[str] = []
@@ -2173,6 +2244,19 @@ async def chat(req: ChatRequest):
                     for _rsid in _turn_reactive_skills:
                         if _rsid not in _new_skills:
                             _new_skills.append(_rsid)
+
+                if not _new_skills and _retry_count < _MAX_AUTO_ACTIVATE_RETRIES and not use_three_agent:
+                    _already = _already_active_skill_requests("".join(_turn_text_parts), _all_active)
+                    if _already:
+                        _note = _already_active_note(_already, {t["name"] for t in _loop_tools})
+                        print(f"[skill-already-active] model asked for {_already}; telling it so and retrying", flush=True)
+                        _current_msgs = list(_current_msgs) + [
+                            {"role": "assistant", "content": "".join(_turn_text_parts).strip()},
+                            {"role": "user", "content": _note},
+                        ]
+                        _current_loop = _build_loop(_loop_tools, _current_system, _current_msgs, _loop_required)
+                        _retry_count += 1
+                        continue
 
                 if not _new_skills:
                     if _held_stall:
@@ -2240,6 +2324,8 @@ async def chat(req: ChatRequest):
                 yield f"data: {_json.dumps({'status': f'⚡ Activating {_labels}...'})}\n\n"
                 print(f"[skill-auto-activate] {_labels} added mid-stream, retrying with {len(_new_tools)} tools", flush=True)
                 _current_loop = _build_loop(_new_tools, _new_system, _new_msgs, _mid_required)
+                _loop_tools = _new_tools
+                _loop_required = _mid_required
                 _current_system = _new_system
                 _current_msgs = _new_msgs
                 _retry_count += 1
