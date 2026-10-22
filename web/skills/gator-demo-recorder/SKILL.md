@@ -404,7 +404,7 @@ function doCrop() {
     btn.disabled = false;
     if (err || !data || data.cancelled) { clearCrop(); return; }
     if (!data.ok) { document.getElementById('crop-label').textContent = 'Error: '+(data.error||''); return; }
-    _crop = {x:data.x, y:data.y, w:data.w, h:data.h};
+    _crop = {x:data.screen_x, y:data.screen_y, w:data.w, h:data.h};
     document.getElementById('crop-label').textContent = data.label;
     document.getElementById('crop-label').style.color = '#f97316';
     btn.textContent = '✕ Clear'; btn.style.borderColor = '#f97316';

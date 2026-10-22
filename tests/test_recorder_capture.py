@@ -264,3 +264,19 @@ def test_screens_without_a_capture_rect_are_used_as_is(monkeypatch):
     monkeypatch.setattr(rec, "_IS_WINDOWS", True)
     argv = _gdigrab_argv(SCREENS, screen_index=1, crop_x=100, crop_y=50, crop_w=640, crop_h=480)
     assert (_flag(argv, "-offset_x"), _flag(argv, "-offset_y"), _flag(argv, "-video_size")) == ("2020", "50", "640x480")
+
+
+def test_border_sits_on_the_selected_display_for_a_screen_relative_crop():
+    left = {"x": -1920, "y": 0, "width": 1920, "height": 1080}
+    crop = {"x": 300, "y": 120, "w": 640, "h": 480}
+    assert rec._border_rect(left, crop) == (-1620, 120, 640, 480)
+    assert rec._border_rect(left, None) == (-1920, 0, 1920, 1080)
+    primary = {"x": 0, "y": 0, "width": 1280, "height": 800}
+    assert rec._border_rect(primary, crop) == (300, 120, 640, 480)
+
+
+def test_widget_sends_the_screen_relative_crop_the_picker_returns():
+    skill = (Path(__file__).parent.parent / "web" / "skills" / "gator-demo-recorder" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    assert "_crop = {x:data.screen_x, y:data.screen_y, w:data.w, h:data.h};" in skill

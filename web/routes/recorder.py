@@ -416,6 +416,13 @@ async def recorder_pick_region(body: dict = Body(default={})):
 
 # ── Recording border overlay ──────────────────────────────────────────────────
 
+def _border_rect(screen: dict, crop: dict | None) -> tuple[int, int, int, int]:
+    """Logical virtual-desktop rect for the border; crop is relative to the screen."""
+    if crop:
+        return screen["x"] + crop["x"], screen["y"] + crop["y"], crop["w"], crop["h"]
+    return screen["x"], screen["y"], screen["width"], screen["height"]
+
+
 def _run_recording_border(screen: dict, crop: dict | None, stop_event: threading.Event, root_ref: list):
     """Show a transparent orange border around the capture area while recording.
 
@@ -430,12 +437,7 @@ def _run_recording_border(screen: dict, crop: dict | None, stop_event: threading
     try:
         import tkinter as tk
 
-        # Border bounds are in logical pixels (same as screen dict — gdigrab
-        # and tkinter both use logical/virtual-desktop coordinates).
-        if crop:
-            bx, by, bw, bh = crop["x"], crop["y"], crop["w"], crop["h"]
-        else:
-            bx, by, bw, bh = screen["x"], screen["y"], screen["width"], screen["height"]
+        bx, by, bw, bh = _border_rect(screen, crop)
 
         BORDER = 4
         root = tk.Tk()
