@@ -2,6 +2,11 @@
 name: Gator Demo Recorder
 description: Record your screen manually, then analyze, narrate with TTS, and deliver a polished MP4.
 version: '2.0'
+requires:
+  - id: code_runner
+    reason: runs the preflight check and reads the demo project folder
+  - id: shell_runner
+    reason: runs ffmpeg and PowerShell commands while building the demo
 ---
 
 # Gator Demo Recorder

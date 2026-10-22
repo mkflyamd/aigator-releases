@@ -590,8 +590,10 @@ async def _execute_tool_impl(
             url_key = str(inputs.get("url") or inputs.get("start_url") or inputs.get("task", "")[:80])
             result = _apply_browser_empty_breaker(result, tool_name=name, url_key=url_key, context_id=context_id)
         from tool_result_truncation import truncate_tool_result, maybe_truncate_json_result
-        # read/update_onenote_page cap their own output
+        # read/update_onenote_page cap their own output. read_skill must hand the model the
+        # whole guide; spilling it to disk sends the model on a file_ops detour to re-read it.
         _NO_TRUNCATE_TOOLS = {
+            "read_skill",
             "jira_get_project_meta",
             "read_onenote_page",
             "update_onenote_page",

@@ -962,15 +962,6 @@ async function _refreshGoogleServiceConnected() {
   } catch (e) {}
 }
 
-function _getUnapprovedDeps(skillId) {
-  const userSkills = window.__USER_SKILLS__ || [];
-  const skill = userSkills.find((s) => s.id === skillId);
-  if (!skill || !Array.isArray(skill.requires)) return [];
-  return skill.requires
-    .filter((r) => _GATED_DEP_IDS.has(r.id) && !_approvedSkillDeps.has(r.id))
-    .map((r) => r.id);
-}
-
 const LAUNCHER_CATEGORIES = [
   { key: 'communication', label: 'Communication', filter: (s) => s.category === 'Communication' },
   { key: 'project', label: 'Project', filter: (s) => s.category === 'Productivity' },
@@ -993,7 +984,6 @@ let _activeChips = [];
 // Per-conversation permission grants for gated dep skills (shell_runner, code_runner).
 // Resets on page load — intentionally per-conversation scope.
 const _approvedSkillDeps = new Set();
-const _GATED_DEP_IDS = new Set(['shell_runner', 'code_runner']);
 
 const RAIL_CONFIRM_SKIP_KEY = 'aigator-live-confirm-skip';
 const AIGATOR_TIP_KEY = 'aigator-tip-dismissed';
@@ -13593,7 +13583,7 @@ form.addEventListener('submit', async (e) => {
             active_people: activePeopleSnapshot,
             context_id: requestContextId,
             model: window._currentModel || '',
-            unapproved_deps: _getUnapprovedDeps(_activeSkillId || ''),
+            approved_deps: [..._approvedSkillDeps],
             ...(_wSuffix ? { system_prompt_suffix: _wSuffix } : {}),
             ..._sendPinFields,
           };
@@ -14078,7 +14068,7 @@ form.addEventListener('submit', async (e) => {
                   // work (history, action bar, suggested actions) runs normally
                   if (!_permissionResendPayload) return;
                   const resendPayload = Object.assign({}, _permissionResendPayload, {
-                    unapproved_deps: [],
+                    approved_deps: [..._approvedSkillDeps],
                   });
                   _permissionResendPayload = null;
                   await doSend(resendPayload);

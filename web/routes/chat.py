@@ -155,7 +155,7 @@ class ChatRequest(BaseModel):
     active_people: list[dict] | None = None  # typed Teams/Slack person chips
     context_id: str = "default"  # tab-scoped context for pins
     model: str = ""  # model selected in prompt bar; sent explicitly so server never relies on global state
-    unapproved_deps: list[str] | None = None  # gated dep IDs not yet approved this conversation
+    approved_deps: list[str] | None = None    # gated dep IDs the user approved this conversation
     system_prompt_suffix: str | None = None   # extra rules appended to system prompt (e.g. wizard scope)
     scoped_skill: str | None = None           # skill ID injected into active_skills for this request
     pinned_skill: str | None = None           # per-tab skill pin (client); activates and locks skill selection
@@ -206,6 +206,59 @@ def _best_capability_group(conn_id: str, message: str) -> str | None:
         None,
     )
     return any_group
+
+
+def _ungranted_gated_deps(req) -> list[str]:
+    """Gated dependency skills the user has not approved in this conversation."""
+    return sorted(_GATED_DEP_SKILLS - set(req.approved_deps or []))
+
+
+def _blocked_gated_deps(skill_ids: list[str], req) -> list[tuple[str, dict]]:
+    """(skill, dep) pairs where an active skill needs a gated dependency nobody approved."""
+    ungranted = set(_ungranted_gated_deps(req))
+    blocked: list[tuple[str, dict]] = []
+    seen: set[str] = set()
+    for sid in skill_ids:
+        for dep in shared.SKILL_DEPENDENCIES_MAP.get(sid, []):
+            if dep["id"] in ungranted and dep["id"] not in seen:
+                seen.add(dep["id"])
+                blocked.append((sid, dep))
+    return blocked
+
+
+def _permission_gate_response(blocked: list[tuple[str, dict]], context_id: str):
+    """Answer the chat POST with a permission_required event instead of running the turn."""
+    import asyncio as _asyncio
+    import uuid as _uuid
+    from fastapi.responses import JSONResponse
+
+    def _dep_label(dep_id: str) -> str:
+        for line in shared.SKILL_PROMPTS.get(dep_id, "").splitlines():
+            if line.startswith("# "):
+                return line[2:].strip()
+        return dep_id.replace("-", " ").title()
+
+    payload = {
+        "type": "permission_required",
+        "skill": blocked[0][0],
+        "deps": [
+            {"id": dep["id"], "label": _dep_label(dep["id"]), "reason": dep["reason"]}
+            for _, dep in blocked
+        ],
+    }
+    chunk = f"data: {json.dumps(payload)}\n\n"
+    task_id = str(_uuid.uuid4())
+    shared.chat_task_store.create_task(task_id, context_id or "default")
+
+    async def _run_permission_gate():
+        try:
+            shared.chat_task_store.append_chunk(task_id, chunk)
+            shared.chat_task_store.append_chunk(task_id, "data: [DONE]\n\n")
+        finally:
+            shared.chat_task_store.mark_done(task_id)
+
+    shared.chat_task_store.track_task(task_id, _asyncio.create_task(_run_permission_gate()))
+    return JSONResponse({"task_id": task_id})
 
 
 def _filter_tools(active_skill: str, has_images: bool, active_skills: list[str] | None = None,
@@ -660,6 +713,14 @@ def _installed_skill_ids_from_message(message: str) -> list[str]:
     matched = []
     for sid in shared.SKILL_PROMPTS:
         if sid in shared._BUILTIN_SKILL_IDS:
+            # Bundled skills have no keywords and are not in the classifier catalog, so a
+            # typed name is their only text trigger. Only kebab-case ids qualify: a bare id
+            # like "email" is an ordinary word, and the gated runners (shell_runner,
+            # code_runner) must never be self-granted by name.
+            if sid.startswith("_") or "-" not in sid:
+                continue
+            if sid in msg_lower or sid.replace("-", " ") in msg_lower:
+                matched.append(sid)
             continue
         # Match by skill ID and its human-readable variants. Plugin ids are
         # namespaced ("amd-skills__local-ai-use"); also match the bare last
@@ -1073,43 +1134,6 @@ async def chat(req: ChatRequest):
             "active_skill": _resolved_plugin,
             "message": slash_cmd["message"],
         })
-
-    # ── Permission gate: block gated dependency skills that haven't been approved ──
-    if req.unapproved_deps and req.active_skill:
-        _all_deps = shared.SKILL_DEPENDENCIES_MAP.get(req.active_skill, [])
-        _blocked_deps = [
-            d for d in _all_deps
-            if d["id"] in req.unapproved_deps and d["id"] in _GATED_DEP_SKILLS
-        ]
-        if _blocked_deps:
-            def _resolve_dep_label(dep_id: str) -> str:
-                prompt_text = shared.SKILL_PROMPTS.get(dep_id, "")
-                for _line in prompt_text.splitlines():
-                    if _line.startswith("# "):
-                        return _line[2:].strip()
-                return dep_id.replace("-", " ").title()
-
-            _deps_payload = [
-                {"id": d["id"], "label": _resolve_dep_label(d["id"]), "reason": d["reason"]}
-                for d in _blocked_deps
-            ]
-
-            _gate_task_id = str(_uuid.uuid4())
-            _gate_context_id = getattr(req, "context_id", None) or "default"
-            shared.chat_task_store.create_task(_gate_task_id, _gate_context_id)
-
-            _perm_chunk = f"data: {json.dumps({'type': 'permission_required', 'skill': req.active_skill, 'deps': _deps_payload})}\n\n"
-
-            async def _run_permission_gate():
-                try:
-                    shared.chat_task_store.append_chunk(_gate_task_id, _perm_chunk)
-                    shared.chat_task_store.append_chunk(_gate_task_id, "data: [DONE]\n\n")
-                finally:
-                    shared.chat_task_store.mark_done(_gate_task_id)
-
-            _gate_bg = _asyncio.create_task(_run_permission_gate())
-            shared.chat_task_store.track_task(_gate_task_id, _gate_bg)
-            return JSONResponse({"task_id": _gate_task_id})
 
     _now = datetime.now()
     system = shared.get_system_prompt().replace("{date}", _now.strftime("%B %d, %Y")).replace(
@@ -1702,6 +1726,12 @@ async def chat(req: ChatRequest):
                 _deps_added.append(_dep)
     if _deps_added:
         print(f"[skill-deps] auto-activated declared dependencies: {_deps_added}", flush=True)
+    # Permission gate: a skill that needs shell_runner/code_runner may not run until the user
+    # approves them — whether the skill came from a tile, a typed name, a pin, or a dependency.
+    _gate_order = [s for s in (req.active_skill, *(req.active_skills or [])) if s] + sorted(_all_active)
+    _blocked = _blocked_gated_deps(_gate_order, req)
+    if _blocked:
+        return _permission_gate_response(_blocked, req.context_id)
     # Google Workspace service skills are registered by mcp.manager as
     # service-specific tool groups. Do not activate the complete 100+ tool
     # connection here: one Gmail/Drive request must not consume the entire
@@ -1719,7 +1749,7 @@ async def chat(req: ChatRequest):
     except Exception:
         pass
     active_tools = _filter_tools(_active_skill_no_gator, req.has_images, _all_active,
-                                  unapproved_deps=req.unapproved_deps, message=_msg_text)
+                                  unapproved_deps=_ungranted_gated_deps(req), message=_msg_text)
     print(f"[tokens] active_skill={req.active_skill} inferred={_inferred} -> {len(active_tools)} tools (of {len(shared.TOOLS)} total)", flush=True)
 
     # Inject skill prompts for auto-detected skills (pins + keywords) and
@@ -2154,7 +2184,7 @@ async def chat(req: ChatRequest):
                 _all_active.extend(_new_skills)
                 _auto_activated_skill_ids.update(_new_skills)
                 _new_tools = _filter_tools(_active_skill_no_gator, req.has_images, _all_active,
-                                           unapproved_deps=req.unapproved_deps, message=_msg_text)
+                                           unapproved_deps=_ungranted_gated_deps(req), message=_msg_text)
                 _mid_required = _required_tool_names(
                     _required_skill_ids, _auto_activated_skill_ids
                 )
