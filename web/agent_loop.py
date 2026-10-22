@@ -221,10 +221,6 @@ def _sse_tool_call_complete(event: dict) -> str:
 def _sse_tool_result(call_id: str, status: str, summary: str) -> str:
     return f"data: {json.dumps({'tool_result': {'call_id': call_id, 'status': status, 'summary': summary}})}\n\n"
 
-def _sse_reactive_skills(skill_ids: list[str]) -> str:
-    """Emitted after a tool result triggers reactive skill activation."""
-    return f"data: {json.dumps({'reactive_skills': skill_ids})}\n\n"
-
 
 _TOOL_CALL_FORWARD_TYPES = ("tool_call_start", "tool_call_progress", "tool_call_complete")
 
@@ -758,8 +754,15 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
                     sid for sid, patterns in _shared.SKILL_ACTIVATES_ON_MAP.items()
                     if any(p in _result_str for p in patterns)
                 ]
-                if _triggered:
-                    await event_queue.put({"kind": "reactive_skills", "skill_ids": _triggered})
+                if _triggered and _offered is not None:
+                    from routes.chat import _GATED_DEP_SKILLS
+                    _new = {
+                        n for sid in _triggered if sid not in _GATED_DEP_SKILLS
+                        for n in _shared.SKILL_TOOLS_MAP.get(sid, ())
+                    } - _offered
+                    if _new:
+                        _offered.update(_new)
+                        await event_queue.put({"kind": "tools_granted", "names": sorted(_new)})
         except Exception:
             pass
         failure = classify_tool_failure(result, tool_name=tc.name)
@@ -1309,8 +1312,6 @@ async def _single_agent_loop(
                     yield f"data: {json.dumps({'failover_confirm': {'consent_id': evt['consent_id'], 'fallback_model': evt['fallback_model']}})}\n\n"
                 elif kind == "files":
                     yield f"data: {json.dumps({'files': evt['files']})}\n\n"
-                elif kind == "reactive_skills":
-                    yield _sse_reactive_skills(evt["skill_ids"])
                 elif kind == "tools_granted":
                     _grant_tools(available_tools, required_tool_names, evt["names"])
             results = await gather_task
@@ -1838,8 +1839,6 @@ async def run_three_agent_loop(
                     yield f"data: {json.dumps({'failover_confirm': {'consent_id': evt['consent_id'], 'fallback_model': evt['fallback_model']}})}\n\n"
                 elif kind == "files":
                     yield f"data: {json.dumps({'files': evt['files']})}\n\n"
-                elif kind == "reactive_skills":
-                    yield _sse_reactive_skills(evt["skill_ids"])
                 elif kind == "tools_granted":
                     _grant_tools(available_tools, required_tool_names, evt["names"])
             results = await gather_task

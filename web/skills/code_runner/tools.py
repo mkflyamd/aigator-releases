@@ -100,6 +100,10 @@ def _in_skill_roots(path: Path) -> bool:
         return False
 
 
+# One line so traceback line numbers do not move. python-pptx 0.6 reads collections.abc without importing it.
+_PREAMBLE_IMPORTS = "from pathlib import Path; import collections.abc"
+
+
 def _find_skill_dir(skill_id: str) -> Path | None:
     """Locate a skill's directory across the known install/search locations.
 
@@ -635,7 +639,7 @@ def _tool_run_python(
             f"import sys as _sys; _sys.path.insert(0, SKILL_DIR)\n"
         )
     preamble = (
-        f"OUTPUT_DIR = {str(run_dir)!r}\n{skill_dir_line}from pathlib import Path\n"
+        f"OUTPUT_DIR = {str(run_dir)!r}\n{skill_dir_line}{_PREAMBLE_IMPORTS}\n"
     )
     full_code = preamble + code
 
