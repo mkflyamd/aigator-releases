@@ -99,12 +99,12 @@ def test_read_skill_hands_over_the_whole_guide_without_spilling_to_disk():
     assert "Phase 1" in text
 
 
-def _chat(monkeypatch, **body):
+def _chat(monkeypatch, classified=(), **body):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
     from routes import chat as chat_routes
 
-    monkeypatch.setattr(chat_routes, "_classify_skills_via_llm", lambda *a, **k: [])
+    monkeypatch.setattr(chat_routes, "_classify_skills_via_llm", lambda *a, **k: list(classified))
     api = FastAPI()
     api.include_router(chat_routes.router)
     client = TestClient(api)
@@ -130,3 +130,22 @@ def test_typing_the_skill_name_asks_for_runner_approval(monkeypatch):
     assert event["type"] == "permission_required"
     assert event["skill"] == RECORDER
     assert {d["id"] for d in event["deps"]} == {"code_runner", "shell_runner"}
+
+
+def test_a_typed_skill_name_is_not_dropped_by_the_auto_skill_cap(monkeypatch):
+    from routes import chat as chat_routes
+
+    crowd = ["code_runner", "shell_runner", "file_ops", "email", "calendar", "teams", "slack"]
+    monkeypatch.setattr(chat_routes, "_available_skill_catalog", lambda: {"mcp-extra": "an installed skill"})
+    monkeypatch.setattr(chat_routes, "_skill_provenance_rank", lambda sid: 4 if sid == RECORDER else 0)
+    task_id = _chat(monkeypatch, classified=crowd)
+    event = json.loads(_first_event(task_id).removeprefix("data: ").strip())
+    assert event["type"] == "permission_required"
+    assert event["skill"] == RECORDER
+
+
+def test_permission_card_is_not_overwritten_by_the_stream_end_render():
+    src = open(os.path.join(os.path.dirname(__file__), "..", "web", "static", "app.js"), encoding="utf-8").read()
+    assert src.count("if (_permissionCardShown) return;") == 2
+    assert "if (!_permissionCardShown) prose.innerHTML = _renderProse();" in src
+    assert "_permissionCardShown = true;\n              _renderPermissionCard(" in src

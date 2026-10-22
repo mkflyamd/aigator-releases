@@ -13151,6 +13151,7 @@ form.addEventListener('submit', async (e) => {
   let toolCallCards = [];
   let fileChipsDiv = null;
   let _streamExhausted = false;
+  let _permissionCardShown = false;
   let _exhaustedMessage = '';
   let _continueRetryNote = '';
   let _abortCtrl = new AbortController();
@@ -13471,6 +13472,7 @@ form.addEventListener('submit', async (e) => {
     let _lastRenderTime = 0;
     const _scheduleRender = () => {
       const now = performance.now();
+      if (_permissionCardShown) return;
       if (now - _lastRenderTime > 50) {
         _lastRenderTime = now;
         prose.innerHTML = _renderProse();
@@ -13481,6 +13483,7 @@ form.addEventListener('submit', async (e) => {
       _pendingRender = true;
       requestAnimationFrame(() => {
         _pendingRender = false;
+        if (_permissionCardShown) return;
         _lastRenderTime = performance.now();
         prose.innerHTML = _renderProse();
         if (_isStreaming && !_dotsPlaceholder.parentElement) prose.appendChild(_dotsPlaceholder);
@@ -13690,7 +13693,7 @@ form.addEventListener('submit', async (e) => {
             }
             // Bare lang tag "html:widget\n..." — renderMarkdown's normalization
             // converts this to a proper fence, so no extra wrapping needed here.
-            prose.innerHTML = _renderProse();
+            if (!_permissionCardShown) prose.innerHTML = _renderProse();
             resolve();
             return;
           }
@@ -14057,6 +14060,7 @@ form.addEventListener('submit', async (e) => {
                 'Gator stopped after a step failed. Click Continue to pick up where it left off.';
               _continueRetryNote = typeof msg.retry_note === 'string' ? msg.retry_note : '';
             } else if (msg.type === 'permission_required') {
+              _permissionCardShown = true;
               _renderPermissionCard(
                 msgDiv,
                 msg,

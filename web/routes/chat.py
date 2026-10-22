@@ -1594,6 +1594,9 @@ async def chat(req: ChatRequest):
         _installed_matches = _installed_skill_ids_from_message(_msg_text)
         if _installed_matches:
             _inferred = list(set(_inferred) | set(_installed_matches))
+            # A skill the user typed by name is as explicit as a tile click: it must not
+            # lose its slot to the provenance cap on auto-detected skills.
+            _explicit_skill_ids |= set(_installed_matches)
         if _inferred:
             print(f"[skill-detect] keywords/installed matched: {_inferred}", flush=True)
         # Build the non-builtin catalog once (MCP connections + installed skills).
