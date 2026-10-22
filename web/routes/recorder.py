@@ -993,6 +993,12 @@ async def recorder_stop():
     if _session_tag:
         try:
             dp.update_project(_session_tag, stage="recorded", segments=_segments, raw=final)
+            # A re-recording replaces source/recording.mp4 at the same path, so an earlier edit of it would still look current.
+            media = dict((dp.get_project(_session_tag).get("ext") or {}).get("media") or {})
+            if "current" in media or "current_base" in media:
+                media.pop("current", None)
+                media.pop("current_base", None)
+                dp.set_ext(_session_tag, "media", media)
         except (KeyError, ValueError):
             pass
 

@@ -27,7 +27,7 @@ def _req(**kw):
 
 def test_recorder_declares_its_gated_dependencies():
     ids = {d["id"] for d in shared.SKILL_DEPENDENCIES_MAP[RECORDER]}
-    assert ids == {"code_runner", "shell_runner"}
+    assert ids == {"code_runner"}
     assert all(d["reason"] for d in shared.SKILL_DEPENDENCIES_MAP[RECORDER])
 
 
@@ -45,19 +45,19 @@ def test_typing_a_runner_or_plain_word_never_activates_a_bundled_skill():
 
 def test_unapproved_runner_blocks_the_recorder():
     blocked = _blocked_gated_deps([RECORDER], _req())
-    assert {dep["id"] for _, dep in blocked} == {"code_runner", "shell_runner"}
+    assert {dep["id"] for _, dep in blocked} == {"code_runner"}
     assert {sid for sid, _ in blocked} == {RECORDER}
 
 
-def test_approving_one_runner_still_blocks_the_other():
+def test_approving_an_unrelated_runner_does_not_unblock_the_recorder():
     blocked = _blocked_gated_deps([RECORDER], _req(approved_deps=["shell_runner"]))
     assert [dep["id"] for _, dep in blocked] == ["code_runner"]
 
 
-def test_approved_runners_unblock_the_recorder():
-    req = _req(approved_deps=["shell_runner", "code_runner"])
+def test_approved_runner_unblocks_the_recorder():
+    req = _req(approved_deps=["code_runner"])
     assert _blocked_gated_deps([RECORDER], req) == []
-    assert _ungranted_gated_deps(req) == []
+    assert _ungranted_gated_deps(req) == ["shell_runner"]
 
 
 def test_a_skill_without_gated_dependencies_is_never_blocked():
@@ -80,7 +80,7 @@ def test_runner_tools_are_withheld_until_approved():
             t["name"]
             for t in _filter_tools(
                 "", False, [RECORDER],
-                unapproved_deps=_ungranted_gated_deps(_req(approved_deps=["shell_runner", "code_runner"])),
+                unapproved_deps=_ungranted_gated_deps(_req(approved_deps=["code_runner"])),
             )
         }
     finally:
@@ -88,7 +88,7 @@ def test_runner_tools_are_withheld_until_approved():
         shared.SKILL_TOOLS_MAP.pop("shell_runner", None)
         shared.SKILL_TOOLS_MAP.pop("code_runner", None)
     assert not {"run_shell", "run_python"} & held
-    assert {"run_shell", "run_python"} <= granted
+    assert "run_python" in granted
 
 
 def test_read_skill_hands_over_the_whole_guide_without_spilling_to_disk():
@@ -129,7 +129,7 @@ def test_typing_the_skill_name_asks_for_runner_approval(monkeypatch):
     event = json.loads(_first_event(task_id).removeprefix("data: ").strip())
     assert event["type"] == "permission_required"
     assert event["skill"] == RECORDER
-    assert {d["id"] for d in event["deps"]} == {"code_runner", "shell_runner"}
+    assert {d["id"] for d in event["deps"]} == {"code_runner"}
 
 
 def test_a_typed_skill_name_is_not_dropped_by_the_auto_skill_cap(monkeypatch):
@@ -154,9 +154,11 @@ def test_permission_card_is_not_overwritten_by_the_stream_end_render():
 
 
 def test_recorder_guide_does_not_preflight_from_the_sandbox():
-    guide = open(
-        os.path.join(os.path.dirname(__file__), "..", "web", "skills", RECORDER, "SKILL.md"), encoding="utf-8"
-    ).read()
+    guide_path = os.path.join(os.path.dirname(__file__), "..", "web", "skills", RECORDER, "SKILL.md")
+    guide = open(guide_path, encoding="utf-8").read()
     assert "preflight.py" not in guide
     assert "/api/recorder/preflight" not in guide
     assert ".gator/skills/mine/gator-demo-recorder/scripts" not in guide
+    assert "/api/recorder/status" not in guide
+    assert "demo_projects.json" not in guide
+    assert not os.path.exists(os.path.join(os.path.dirname(guide_path), "scripts", "preflight.py"))

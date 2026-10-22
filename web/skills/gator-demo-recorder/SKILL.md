@@ -4,9 +4,7 @@ description: Record your screen manually, then analyze, narrate with TTS, and de
 version: '2.0'
 requires:
   - id: code_runner
-    reason: reads the demo project folder and runs the video tools
-  - id: shell_runner
-    reason: runs ffmpeg and PowerShell commands while building the demo
+    reason: reads an imported project's timeline file
 ---
 
 # Gator Demo Recorder
@@ -29,14 +27,7 @@ Phase 5: DELIVER            — report final MP4 path, offer to save to OneDrive
 
 ## Project folder
 
-Every demo lives in its own project folder, chosen by the user (Settings → General, or "Save project to…" when the project is created). Resolve it from the active-project index; never hard-code a path:
-
-```python
-import json, pathlib
-idx = json.loads((pathlib.Path.home() / ".gator" / "demo_projects.json").read_text(encoding="utf-8"))
-proj = next(p for p in idx["projects"] if p["project_id"] == idx["active_project_id"])
-PROJECT_DIR = pathlib.Path(proj["path"])
-```
+Every demo lives in its own project folder, chosen by the user (Settings → General, or "Save project to…" when the project is created). Take it from the `PROJECT_DIR:` line of the `PINNED PROJECT:` block; never hard-code a path. Code you run is sandboxed and cannot read `~/.gator`, so do not try to look the project up there.
 
 Layout: `source/` (recorded segments and `recording.mp4`), `work/` (`narration.json`, `tts/`, `logs/`), `final/` (the delivered video), `previous/` (archived earlier finals).
 
@@ -49,11 +40,10 @@ Layout: `source/` (recorded segments and `recording.mp4`), `work/` (`narration.j
 
 ## CRITICAL RULES — Read first
 
-- **Shell:** always `shell='powershell'` or `shell='cmd'`. Never `shell='bash'`.
-- **ffmpeg:** never search with `Get-ChildItem -Recurse` — it times out. Call `GET /api/recorder/status` — it returns `ffmpeg_path` AND `ffprobe_path` with the exact binary locations. Use those fields directly. Never derive ffprobe from ffmpeg via string replace — the paths differ. If `ffmpeg` is false, tell user: `winget install Gyan.FFmpeg` (Windows), `brew install ffmpeg` (macOS).
+- **ffmpeg:** never run, search for or locate ffmpeg or ffprobe yourself. The `demo_*` tools and `describe_images` find and run them. If one reports ffmpeg missing, relay its message and tell the user: `winget install Gyan.FFmpeg` (Windows), `brew install ffmpeg` (macOS).
 - **File path:** the widget sends `"Recording complete. File: <path> ..."` after Stop. Extract the path from that message directly — **never ask the user for the path**. It is the value between `"File: "` and `" ("` — or, when no size is shown, `". Please"`.
 - **Trigger:** any message matching `"Recording complete. File:"` means the user just stopped recording. Immediately proceed to Phase 2 using the path from the message.
-- **Recording:** the widget calls `/api/recorder/start` and `/api/recorder/stop` directly — **do not invoke ffmpeg manually**. Do not call `run_shell` for record/stop.
+- **Recording:** the widget calls `/api/recorder/start` and `/api/recorder/stop` directly — **do not invoke ffmpeg manually**.
 - **Output size:** never generate more than ~300 lines of output in one turn. Split long work across turns.
 - **NEVER skip Phase 3 (Narration Edit):** you MUST render the editable narration widget with the "✓ Approve & Generate TTS" button and WAIT for the user to click it. Do NOT generate TTS until you receive `"NARRATION_APPROVED:<json>"`. Generating TTS without showing the approval widget is a critical violation — the user must be able to review, edit text, preview voices, and approve before any audio is generated.
 - **Use the EXACT Phase 3 widget template:** do not design your own narration widget. Do not change the message prefix from `NARRATION_APPROVED` to anything else (e.g. `NARRATION_V2_APPROVED` will silently break Phase 4). Do not remove the voice selector, speed selector, preview buttons, or the raw recording video preview from the template. The template is in SKILL.md — copy it verbatim, only replacing `SEGMENTS_PLACEHOLDER` and `PROJECT_ID_PLACEHOLDER`. The video path is fetched automatically.
@@ -469,7 +459,7 @@ The browser uploads each file and builds one combined, trimmed timeline in the b
 - **Never call** `/api/demo-media` routes that change anything (upload, order, trim, delete) — they are for the browser. To change clips, tell the user to use the clips panel.
 - Audio-only attachments are a music bed. If there is no video clip yet, ask the user to attach one.
 
-Run this once per request. It waits for the timeline and prints its path:
+Run this once per request. It waits for the timeline and prints its path. The project folder is outside the code sandbox, so call `run_python` with `extra_read_paths` set to the chip path's grandparent folder (the project folder); the user approves it once.
 
 ```python
 import json, time

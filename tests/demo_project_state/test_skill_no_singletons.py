@@ -14,5 +14,5 @@ def test_skill_has_no_singleton_or_hardcoded_root_references():
 
 def test_skill_documents_project_folder_resolver():
     text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
-    assert "demo_projects.json" in text and "PROJECT_DIR" in text
+    assert "PROJECT_DIR:" in text and "PINNED PROJECT:" in text
     assert "work/narration.json" in text and "final/" in text

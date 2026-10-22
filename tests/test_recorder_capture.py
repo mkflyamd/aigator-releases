@@ -172,6 +172,18 @@ def test_stop_joins_segments_with_concat_and_cleans_up(client, env):
     assert project["stage"] == "recorded" and project["raw"] == body["path"]
 
 
+def test_stopping_a_new_recording_drops_the_edit_of_the_old_one(client, env):
+    started = _start(client)
+    pid = started["project_id"]
+    assert client.post("/api/recorder/stop").json()["ok"] is True
+    dp.set_ext(pid, "media", {"current": "work/edit_1.mp4", "current_base": "source/recording.mp4", "ops": [{"op_id": "a"}]})
+    _start(client, project_id=pid)
+    assert client.post("/api/recorder/stop").json()["ok"] is True
+    media = dp.get_project(pid)["ext"]["media"]
+    assert "current" not in media and "current_base" not in media
+    assert media["ops"] == [{"op_id": "a"}]
+
+
 def test_stop_with_one_segment_needs_no_ffmpeg_run(client, env):
     _start(client)
     body = client.post("/api/recorder/stop").json()
