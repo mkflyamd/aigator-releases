@@ -155,6 +155,15 @@ def _already_active_skill_requests(turn_text: str, active) -> list[str]:
     return found
 
 
+def _with_follow_up(msgs, assistant_text: str, user_note: str) -> list:
+    """The agent loop appends its own assistant turn to msgs in place; only add one if it has not."""
+    out = list(msgs)
+    if not out or out[-1].get("role") != "assistant":
+        out.append({"role": "assistant", "content": assistant_text})
+    out.append({"role": "user", "content": user_note})
+    return out
+
+
 def _already_active_note(skill_ids: list[str], offered_tool_names) -> str:
     offered = set(offered_tool_names or ())
     parts = []
@@ -2250,10 +2259,8 @@ async def chat(req: ChatRequest):
                     if _already:
                         _note = _already_active_note(_already, {t["name"] for t in _loop_tools})
                         print(f"[skill-already-active] model asked for {_already}; telling it so and retrying", flush=True)
-                        _current_msgs = list(_current_msgs) + [
-                            {"role": "assistant", "content": "".join(_turn_text_parts).strip()},
-                            {"role": "user", "content": _note},
-                        ]
+                        _current_msgs = _with_follow_up(
+                            _current_msgs, "".join(_turn_text_parts).strip(), _note)
                         _current_loop = _build_loop(_loop_tools, _current_system, _current_msgs, _loop_required)
                         _retry_count += 1
                         continue
@@ -2315,10 +2322,7 @@ async def chat(req: ChatRequest):
                         "Continue the user's original request using these new tools — do NOT ask them to activate anything."
                     )
                 )
-                _new_msgs = list(_current_msgs) + [
-                    {"role": "assistant", "content": _prior_turn or "[continuing]"},
-                    {"role": "user", "content": _system_follow_up},
-                ]
+                _new_msgs = _with_follow_up(_current_msgs, _prior_turn or "[continuing]", _system_follow_up)
                 for _s in _new_skills:
                     shared.notify_all({"type": "skill_auto_activated", "skill_id": _s})
                 yield f"data: {_json.dumps({'status': f'⚡ Activating {_labels}...'})}\n\n"

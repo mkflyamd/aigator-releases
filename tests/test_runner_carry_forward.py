@@ -126,8 +126,9 @@ def test_the_loop_answers_an_already_active_request_instead_of_ending(runners, m
     calls = []
 
     def fake_loop(**kw):
-        calls.append(kw)
+        calls.append({**kw, "msgs": list(kw["msgs"])})
         said = "/code_runner" if len(calls) == 1 else "Running it now."
+        kw["msgs"].append({"role": "assistant", "content": [{"type": "text", "text": said}]})
 
         async def gen():
             yield f"data: {json.dumps({'token': said})}\n\n"
@@ -150,7 +151,8 @@ def test_the_loop_answers_an_already_active_request_instead_of_ending(runners, m
 
     assert len(calls) == 2, "the empty skill-name turn must be retried, not ended"
     retry = calls[1]["msgs"]
-    assert retry[-2] == {"role": "assistant", "content": "/code_runner"}
+    assert [m["role"] for m in retry[-3:]].count("assistant") == 1
+    assert retry[-2]["role"] == "assistant" and retry[-1]["role"] == "user"
     assert "run_python" in retry[-1]["content"] and "already active" in retry[-1]["content"]
     assert "run_python" in {t["name"] for t in calls[1]["normalized_tools"]}
 

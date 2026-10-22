@@ -7,12 +7,12 @@ const skill = fs.readFileSync(
   path.join(__dirname, '..', 'web', 'skills', 'gator-demo-recorder', 'SKILL.md'),
   'utf8',
 );
-const blocks = [...skill.matchAll(/```html:widget\n([\s\S]*?)\n```/g)].map((m) => m[1]);
+const blocks = [...skill.matchAll(/```html:widget\r?\n([\s\S]*?)\r?\n```/g)].map((m) => m[1]);
 const widget = blocks.find((b) => b.includes('Demo Ready'));
 assert.ok(widget, 'delivery widget found in SKILL.md');
 
 function fn(name) {
-  const m = widget.match(new RegExp('function ' + name + '\\([^)]*\\)\\s*\\{[\\s\\S]*?\\n\\}'));
+  const m = widget.match(new RegExp('function ' + name + '\\([^)]*\\)\\s*\\{[\\s\\S]*?\\r?\\n\\}'));
   if (!m) throw new Error(name + ' not found in delivery widget');
   return m[0];
 }
