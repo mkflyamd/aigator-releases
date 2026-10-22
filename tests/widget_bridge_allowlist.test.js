@@ -77,7 +77,7 @@ const fakeEl = (tag) => ({
 const wrapFor = () => {
   const wrap = {
     bars: [],
-    insertBefore(bar) {
+    appendChild(bar) {
       this.bars.push(bar);
     },
   };
@@ -320,7 +320,12 @@ const flush = () => new Promise((r) => setImmediate(r));
     click(plainFrame, 'Deny');
     await r.p;
     assert.strictEqual(calls.length, 0, action + ' is not sent after Deny');
-    assert.strictEqual(r.out[0].data.ok, false);
+    assert.deepStrictEqual(
+      r.out.map((m) => m.type),
+      ['gator:recorder-waiting', 'gator:recorder-result'],
+      'the widget is told it is waiting before the answer',
+    );
+    assert.strictEqual(r.out[1].data.ok, false);
     assert.ok(bar(plainFrame).removed, 'the prompt is dismissed');
   }
   routes = everyRoute;
@@ -337,6 +342,10 @@ const flush = () => new Promise((r) => setImmediate(r));
       calls.map((c) => [c.method, c.url]),
       [['POST', '/api/recorder/' + action]],
       'the authorized widget can ' + action,
+    );
+    assert.deepStrictEqual(
+      r.out.map((m) => m.type),
+      ['gator:recorder-result'],
     );
   }
   assert.strictEqual(recorderFrame.wrap.bars.length, 0, 'the authorized widget is never prompted');
@@ -387,7 +396,7 @@ const flush = () => new Promise((r) => setImmediate(r));
   timer.fn();
   await t.p;
   assert.strictEqual(calls.length, 0);
-  assert.strictEqual(t.out[0].data.ok, false);
+  assert.strictEqual(t.out[t.out.length - 1].data.ok, false);
   assert.ok(bar(plainFrame).removed);
 
   // Granting one frame does not grant another, and a new frame element starts ungranted.

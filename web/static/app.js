@@ -59,7 +59,7 @@ const GATOR_RECORDER_ACTIONS = {
 // that exact iframe. The grant is keyed to the frame element: closing or re-rendering the
 // widget drops it, and it lapses after GATOR_RECORDER_GRANT_IDLE_MS without recorder traffic.
 const GATOR_RECORDER_GRANT_IDLE_MS = 10 * 60 * 1000;
-const GATOR_RECORDER_CONSENT_MS = 60 * 1000;
+const GATOR_RECORDER_CONSENT_MS = 45 * 1000;
 const gatorRecorderGrants = new WeakMap();
 const gatorRecorderConsents = new WeakMap();
 const GATOR_TTS_VOICE_RE = /^[A-Za-z0-9_-]{1,40}$/;
@@ -18558,7 +18558,7 @@ function gatorRecorderConsent(frame) {
     bar.className = 'gator-widget-consent';
     const text = document.createElement('span');
     text.textContent =
-      'This widget wants to control screen recording (start, pause, stop). Allow it only if you opened the Demo Recorder.';
+      'Allow this widget to record your screen? Only click Allow if you just used the Demo Recorder.';
     const allow = document.createElement('button');
     allow.className = 'gator-widget-btn gator-widget-btn-primary';
     allow.textContent = 'Allow';
@@ -18577,7 +18577,10 @@ function gatorRecorderConsent(frame) {
     deny.addEventListener('click', () => settle(false));
     timer = setTimeout(() => settle(false), GATOR_RECORDER_CONSENT_MS);
     bar.append(text, allow, deny);
-    wrap.insertBefore(bar, frame);
+    wrap.appendChild(bar);
+    try {
+      bar.scrollIntoView({ block: 'nearest' });
+    } catch (_) {}
   });
   gatorRecorderConsents.set(frame, promise);
   return promise;
@@ -18604,9 +18607,12 @@ async function gatorRecorderBridge(d, e) {
     return;
   }
   const granted = gatorRecorderGranted(frame);
-  if (spec.method === 'POST' && !granted && !(await gatorRecorderConsent(frame))) {
-    reply({ ok: false, error: 'Screen recording was not allowed for this widget.' });
-    return;
+  if (spec.method === 'POST' && !granted) {
+    gatorWidgetReply(e, { type: 'gator:recorder-waiting', action, rid });
+    if (!(await gatorRecorderConsent(frame))) {
+      reply({ ok: false, error: 'Screen recording was not allowed for this widget.' });
+      return;
+    }
   }
   const opts = { method: spec.method };
   if (spec.method === 'POST' && Object.keys(params).length) {

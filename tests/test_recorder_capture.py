@@ -280,3 +280,4 @@ def test_widget_sends_the_screen_relative_crop_the_picker_returns():
         encoding="utf-8"
     )
     assert "_crop = {x:data.screen_x, y:data.screen_y, w:data.w, h:data.h};" in skill
+    assert "gator:recorder-waiting" in skill and "Waiting for you to click Allow above" in skill

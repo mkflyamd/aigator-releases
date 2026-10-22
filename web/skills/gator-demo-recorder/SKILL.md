@@ -117,6 +117,7 @@ won't be available but recording and analysis will still work. Do not block on L
 
 The widget:
 
+- Is copied verbatim from the template below, including the `🎬 Demo Recorder` heading — never add the topic, project or recording name to the title
 - Calls `GET /api/recorder/screens` on load to populate the screen selector
 - Lets the user pick screen and optionally enter a crop region (x, y, w, h)
 - Record/Pause/Resume/Stop all call the backend API directly via `gator:recorder` postMessage — no agent involvement
@@ -232,7 +233,12 @@ var _INLINE = window.parent !== window;
 var _rid = 0, _pending = {};
 window.addEventListener('message', function(ev) {
   var m = ev.data;
-  if (ev.source !== parent || !m || m.type !== 'gator:recorder-result') return;
+  if (ev.source !== parent || !m) return;
+  if (m.type === 'gator:recorder-waiting') {
+    if (_pending[m.rid]) document.getElementById('status').textContent = 'Waiting for you to click Allow above...';
+    return;
+  }
+  if (m.type !== 'gator:recorder-result') return;
   var cb = _pending[m.rid];
   if (!cb) return;
   delete _pending[m.rid];

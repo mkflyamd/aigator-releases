@@ -22370,6 +22370,7 @@ body.tab-fullscreen {
 
 /* -- Gator Widget System ---------------------------------------------------- */
 .gator-widget-wrap {
+  position: relative;
   display: flex;
   flex-direction: column;
   margin: 8px 0;
@@ -22436,6 +22437,12 @@ body.tab-fullscreen {
   text-decoration: underline;
 }
 .gator-widget-consent {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 5;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
   display: flex;
   align-items: center;
   gap: 8px;
