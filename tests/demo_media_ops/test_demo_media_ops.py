@@ -1,4 +1,5 @@
 import json
+import types
 
 import pytest
 
@@ -281,3 +282,15 @@ def test_deleted_project_folder_is_project_not_found(project):
     with pytest.raises(dm.MediaError) as exc:
         dm.manifest(pid)
     assert exc.value.code == "project_not_found"
+
+
+def test_probe_falls_back_to_the_nominal_frame_rate(project, monkeypatch, tmp_path):
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"x")
+    streams = {"streams": [{"codec_type": "video", "width": 8, "height": 8, "duration": "2.0",
+                            "avg_frame_rate": "0/0", "r_frame_rate": "30/1"}],
+               "format": {"duration": "2.0"}}
+    monkeypatch.setattr(dm, "find_binaries", lambda: ("ffmpeg", "ffprobe"))
+    monkeypatch.setattr(dm, "_run", lambda cmd: types.SimpleNamespace(returncode=0, stdout=json.dumps(streams), stderr=""))
+    info = dm.probe(clip)
+    assert info.fps == 30.0 and info.fps_expr == "30/1"

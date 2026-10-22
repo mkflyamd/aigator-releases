@@ -145,3 +145,25 @@ def test_pipeline_command_forwards_progress_file_and_soundtrack(project, monkeyp
     assert cmd[cmd.index("--progress-file") + 1] == str(work / "logs" / "merge_progress.json")
     assert cmd[cmd.index("--approval-id") + 1] == "appr_1_abcdef12"
     assert cmd[cmd.index("--soundtrack") + 1] == str(work / "soundtrack.m4a")
+
+
+def test_failed_delivery_leaves_the_previous_final_in_place(project, fake_tts, monkeypatch):
+    pid, folder = project
+    make_video(folder / "source" / "short.mp4", 6)
+    dp.update_project(pid, raw="source/short.mp4")
+    approve(pid, [{"text": "one", "start_at": 0}])
+    fake_tts["audio_sec"] = 4
+    dm.merge_narration(pid)
+
+    real_replace = dm.os.replace
+
+    def failing_replace(src, dst):
+        if Path(src).name == "final_candidate.mp4":
+            raise PermissionError("the final folder is locked")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(dm.os, "replace", failing_replace)
+    with pytest.raises(PermissionError):
+        dm.merge_narration(pid)
+    assert [f.name for f in (folder / "final").iterdir()] == ["Slack_Demo_v1.mp4"]
+    assert not list((folder / "previous").iterdir())

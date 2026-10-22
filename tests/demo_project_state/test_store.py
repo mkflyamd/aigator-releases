@@ -154,3 +154,14 @@ def test_missing_project_folder_raises_key_error(store):
                  lambda: store.set_ext(p["project_id"], "media", {})):
         with pytest.raises(KeyError):
             call()
+
+
+def test_archive_final_can_keep_the_file_just_delivered(store):
+    pid = store.create_project()["project_id"]
+    folder = store.project_path(pid)
+    old, new = folder / "final" / "demo_v1.mp4", folder / "final" / "demo_v2.mp4"
+    old.write_bytes(b"x")
+    new.write_bytes(b"y")
+    moved = store.archive_final(pid, keep=new)
+    assert [m.name.endswith("_demo_v1.mp4") for m in moved] == [True]
+    assert list((folder / "final").iterdir()) == [new]

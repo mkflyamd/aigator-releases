@@ -293,3 +293,41 @@ def test_widget_sends_the_screen_relative_crop_the_picker_returns():
     )
     assert "_crop = {x:data.screen_x, y:data.screen_y, w:data.w, h:data.h};" in skill
     assert "gator:recorder-waiting" in skill and "Waiting for you to click Allow above" in skill
+
+
+def test_start_that_dies_at_once_leaves_no_dead_segment(client, env):
+    env.fail_next_start = True
+    r = client.post("/api/recorder/start", json=CROP)
+    body = r.json()
+    assert r.status_code == 500 and body["ok"] is False
+    assert rec._segments == [] and rec._ffmpeg_proc is None and rec._recording_start is None
+    project = dp.get_project(rec._session_tag)
+    assert project["stage"] == "created" and project["segments"] == []
+
+    retry = _start(client, project_id=rec._session_tag)
+    assert retry["ok"] is True and env.argvs[-1][-1].endswith("seg_00.mp4")
+
+
+def test_stitch_list_escapes_a_quote_in_a_segment_path(env, tmp_path, monkeypatch):
+    listed = {}
+
+    def read_list(cmd, **kwargs):
+        listed["text"] = Path(cmd[cmd.index("-i") + 1]).read_text(encoding="utf-8")
+        Path(cmd[-1]).write_bytes(b"joined")
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(rec.subprocess, "run", read_list)
+    segs = [tmp_path / "it's a demo" / "seg_00.mp4", tmp_path / "plain" / "seg_01.mp4"]
+    rec._stitch_segments("ffmpeg", segs, tmp_path / "out.mp4")
+    assert f"file '{str(segs[0]).replace(chr(39), chr(39) + chr(92) + chr(39) + chr(39))}'" in listed["text"]
+    assert f"file '{segs[1]}'" in listed["text"]
+
+
+def test_serve_file_serves_a_project_file_without_reading_every_project(client, env, monkeypatch):
+    started = _start(client)
+    monkeypatch.setattr(dp, "list_projects", lambda: pytest.fail("serve-file must not re-read every project"))
+    inside = Path(started["session_dir"]) / "source" / "seg_00.mp4"
+    assert client.get("/api/recorder/serve-file", params={"path": str(inside)}).status_code == 200
+    outside = Path(started["session_dir"]).parent.parent / "elsewhere.mp4"
+    outside.write_bytes(b"x")
+    assert client.get("/api/recorder/serve-file", params={"path": str(outside)}).status_code == 403

@@ -799,6 +799,10 @@ async def recorder_start(req: StartRequest = StartRequest()):
 
     await asyncio.sleep(0.6)
     if _ffmpeg_proc.poll() is not None:
+        _segments.pop()
+        _ffmpeg_proc = None
+        _recording_start = None
+        dp.update_project(_session_tag, stage=project.get("stage", "created"), segments=_segments)
         return JSONResponse(status_code=500, content={
             "ok": False,
             "error": "ffmpeg exited immediately — check ffmpeg_log.txt",
@@ -920,9 +924,10 @@ def _stitch_segments(ffmpeg: str, segments: list[Path], out_path: Path) -> Path:
         return out_path
     concat_file = out_path.parent / "concat_list.txt"
     try:
-        with open(concat_file, "w") as f:
+        with open(concat_file, "w", encoding="utf-8") as f:
             for s in segments:
-                f.write(f"file '{s}'\n")
+                escaped = str(s).replace("'", "'\\''")
+                f.write(f"file '{escaped}'\n")
         result = subprocess.run(
             [ffmpeg, "-y", "-f", "concat", "-safe", "0", "-i", str(concat_file),
              "-c", "copy", str(out_path)],
@@ -1174,7 +1179,7 @@ async def recorder_serve_file(path: str):
     Only serves files under the gator_demos output directory or a demo project folder."""
     from fastapi.responses import FileResponse as _FileResponse
     p = Path(path).resolve()
-    roots = [OUT_DIR.resolve()] + [Path(proj["path"]).resolve() for proj in dp.list_projects()]
+    roots = [OUT_DIR.resolve()] + [folder.resolve() for folder in dp.project_folders()]
     if not any(p.is_relative_to(r) for r in roots):
         return JSONResponse(status_code=403, content={"error": "path outside demo projects"})
     if not p.exists():

@@ -165,6 +165,8 @@ def probe(path: Path) -> MediaInfo:
     if not duration:
         raise MediaError("unreadable_media", f"{path.name} has no readable duration.")
     fps, fps_expr = _fps(video.get("avg_frame_rate") if video else None)
+    if not fps and video:
+        fps, fps_expr = _fps(video.get("r_frame_rate"))
     return MediaInfo(
         duration_sec=duration,
         video_duration_sec=video_dur or (duration if video else None),
@@ -863,9 +865,9 @@ def _merge(pid: str, folder: Path, approved: dict, video_rel, intro_mode, intro_
         )
     version = int(read_media(pid).get("output_version", 0)) + 1
     safe = re.sub(r"[^A-Za-z0-9_-]+", "_", dp.get_project(pid).get("name") or pid).strip("_") or pid
-    dp.archive_final(pid)
     final_path = folder / "final" / f"{safe}_v{version}.mp4"
     os.replace(candidate, final_path)
+    dp.archive_final(pid, keep=final_path)
     block = {**_out_block(folder, final_path, probe(final_path)), "version": version}
     extended = round(max(0.0, v_sec - video_info.duration_sec), 3)
     narration = {"segments": len(segments), "offset_sec": timeline["offset_sec"],

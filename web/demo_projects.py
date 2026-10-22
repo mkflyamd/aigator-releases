@@ -89,6 +89,10 @@ def project_path(project_id: str) -> Path:
     raise KeyError(project_id)
 
 
+def project_folders() -> list[Path]:
+    return [Path(entry["path"]) for entry in _read_index()["projects"]]
+
+
 def get_active_id() -> str | None:
     return _read_index().get("active_project_id")
 
@@ -234,12 +238,12 @@ def resolve_file(project_id: str, rel: str) -> Path:
     return p
 
 
-def archive_final(project_id: str) -> list[Path]:
+def archive_final(project_id: str, keep: Path | None = None) -> list[Path]:
     folder = project_path(project_id)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     moved = []
     for f in sorted((folder / "final").glob("*")):
-        if f.is_file():
+        if f.is_file() and f != keep:
             dest = folder / "previous" / f"{stamp}_{f.name}"
             shutil.move(str(f), str(dest))
             moved.append(dest)
