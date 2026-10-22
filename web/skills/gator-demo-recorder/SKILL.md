@@ -92,28 +92,20 @@ Every statement about a video's duration, a moment in it, or an edit must come f
 **Step 1 — Run preflight** before rendering the widget:
 
 ```python
-import subprocess, sys, json
-from pathlib import Path
+import json, urllib.request
 
-# Works for both built-in (web/skills/) and user-installed (~/.gator/skills/) skills
-_skill_dirs = [
-    Path.home() / ".gator/skills/mine/gator-demo-recorder/scripts",
-    Path(__file__).parent / "scripts" if "__file__" in dir() else None,
-    Path.cwd() / "web/skills/gator-demo-recorder/scripts",
-]
-skill_scripts = next((d for d in _skill_dirs if d and d.exists()), _skill_dirs[0])
-r = subprocess.run([sys.executable, str(skill_scripts / "preflight.py")],
-                   capture_output=True, text=True, timeout=30)
-result = json.loads(r.stdout)
+# Runs in Gator's own process. A script run here cannot see the real home folder, PATH or
+# localhost services, so never run preflight.py itself and never ask for its folder.
+with urllib.request.urlopen("http://localhost:8003/api/recorder/preflight", timeout=30) as r:
+    result = json.load(r)
 print(json.dumps(result, indent=2))
 ```
 
+This call needs the network approval for `localhost:8003`, like every other call to the recorder API.
+
 **If `result["ready"]` is True** → render the widget immediately.
 
-**If `result["ready"]` is False** → show the user `result["message"]` and ask for consent.
-
-- If user says yes → re-run with `--auto-consent` flag (installs silently, may take 1-2 min)
-- If user says no → tell them to install manually and try again
+**If `result["ready"]` is False** → show the user `result["message"]` and the install commands in `result["needs_install"]`. Do not install anything yourself; the user installs it and tries again.
 
 Lemonade (`result["lemonade"]["ok"]`) is **optional** — if False, warn the user that narration
 won't be available but recording and analysis will still work. Do not block on Lemonade.
