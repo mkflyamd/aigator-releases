@@ -163,6 +163,12 @@ def is_allowed(context_id: str, key: str) -> bool:
         return (context_id, key) in _ALLOWED
 
 
+def allowed_with_prefix(context_id: str, prefix: str) -> list[str]:
+    """Keys under prefix this tab has approved, with the prefix removed."""
+    with _LOCK:
+        return sorted(k[len(prefix):] for c, k in _ALLOWED if c == context_id and k.startswith(prefix))
+
+
 def deny(context_id: str, key: str) -> None:
     with _LOCK:
         _DENIED[(context_id, key)] = time.monotonic()

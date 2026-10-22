@@ -226,6 +226,25 @@ TOOL_DEFS = [
             "required": [],
         },
     },
+    {
+        "name": "request_skill",
+        "description": (
+            "Ask for a skill whose tools you do not have but need to finish the user's request, for example "
+            "the Python code runner (code_runner) when a skill's instructions need to run code, or a service "
+            "skill such as slack or jira. Give the skill id and a short reason. Skills that run code or "
+            "commands ask the user for approval first; if they decline, tell the user and do not look for "
+            "another way around it. On success the skill's tools become callable in this turn; call "
+            "read_skill for how to use them. Do not use this for a skill whose tools you already have."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "skill": {"type": "string", "description": "Skill id, e.g. code_runner, shell_runner, slack, jira."},
+                "reason": {"type": "string", "description": "One sentence: what you need it for. Shown to the user."},
+            },
+            "required": ["skill", "reason"],
+        },
+    },
 ]
 
 TOOL_STATUS = {
@@ -238,6 +257,7 @@ TOOL_STATUS = {
     "analyze_mcp_server": "\U0001f50e Analyzing MCP server...",
     "connect_mcp_server": "\U0001f517 Connecting MCP server...",
     "mcp_connection_status": "\U0001f50c Checking connection status...",
+    "request_skill": "\U0001f9e9 Requesting a skill...",
 }
 
 
@@ -1149,6 +1169,11 @@ def _tool_mcp_connection_status(filter: str = "") -> dict:
     return {"connections": connections, "message": None}
 
 
+def _tool_request_skill(skill: str = "", reason: str = "") -> dict:
+    """Granting happens in the agent loop, which can show the approval card; reaching here means no chat turn."""
+    return {"error": "request_skill can only be used in a chat turn with a user present."}
+
+
 TOOL_HANDLERS = {
     "describe_images": _tool_describe_images,
     "fetch_webpage": _tool_fetch_webpage,
@@ -1159,4 +1184,5 @@ TOOL_HANDLERS = {
     "analyze_mcp_server": _tool_analyze_mcp_server,
     "connect_mcp_server": _tool_connect_mcp_server,
     "mcp_connection_status": _tool_mcp_connection_status,
+    "request_skill": _tool_request_skill,
 }

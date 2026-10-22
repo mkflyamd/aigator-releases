@@ -263,9 +263,16 @@ def _best_capability_group(conn_id: str, message: str) -> str | None:
     return any_group
 
 
+def _granted_runners(context_id: str | None) -> list[str]:
+    """Runners the user approved on a request_skill card in this tab."""
+    import data_sources
+    return [s for s in data_sources.allowed_with_prefix(context_id or "default", "capability:") if s in _GATED_DEP_SKILLS]
+
+
 def _ungranted_gated_deps(req) -> list[str]:
     """Gated dependency skills the user has not approved in this conversation."""
-    return sorted(_GATED_DEP_SKILLS - set(req.approved_deps or []))
+    approved = set(req.approved_deps or []) | set(_granted_runners(getattr(req, "context_id", None)))
+    return sorted(_GATED_DEP_SKILLS - approved)
 
 
 def _blocked_gated_deps(skill_ids: list[str], req) -> list[tuple[str, dict]]:
@@ -1728,7 +1735,7 @@ async def chat(req: ChatRequest):
 
         # A runner the chat already used stays available whether this message names another
         # skill ("use ppt") or gives no signal at all ("proceed").
-        _carried_runners = _gated_runners_for_tools(_tools_already_run)
+        _carried_runners = list(dict.fromkeys([*_gated_runners_for_tools(_tools_already_run), *_granted_runners(_context_id)]))
         if _carried_runners:
             print(f"[skill-detect] runners already used in this chat stay available: {_carried_runners}", flush=True)
             _inferred = list(dict.fromkeys([*_inferred, *_carried_runners]))

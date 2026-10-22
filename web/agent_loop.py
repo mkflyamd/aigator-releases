@@ -460,6 +460,15 @@ def awaiting_human(context_id: str | None):
             _awaiting_human.pop(context_id, None)
 
 
+def _clean_card_text(value, limit: int) -> str:
+    """Model-controlled text for an approval card: control, bidi and zero-width characters and "|" removed, then cut."""
+    text = re.sub(r"[\x00-\x1f\x7f-\x9f\u2028\u2029\u200b-\u200f\u202a-\u202e\u2060\u2066-\u2069\ufeff|]+", " ", str(value)).strip()
+    return text[:limit] + "..." if len(text) > limit else text
+
+
+_RUNNER_CARD_NAMES = {"code_runner": "the Python code runner", "shell_runner": "the shell runner"}
+
+
 def _result_was_spilled_to_file(result) -> bool:
     text = result if isinstance(result, str) else json.dumps(result, default=str) if isinstance(result, dict) else ""
     return OVERFLOW_MARKER in text
@@ -558,9 +567,7 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
     def _schedule_card_action(inputs: dict) -> str:
         """Card text for a schedule. Every field is model-controlled: each one is cut, stripped of
         control characters and "|", and shown in a fixed order so a long name cannot fake the rest."""
-        def clean(value, limit: int) -> str:
-            text = re.sub(r"[\x00-\x1f\x7f-\x9f\u2028\u2029\u200b-\u200f\u202a-\u202e\u2060\u2066-\u2069\ufeff|]+", " ", str(value)).strip()
-            return text[:limit] + "..." if len(text) > limit else text
+        clean = _clean_card_text
 
         trigger = clean(inputs.get("trigger_type", ""), 20)
         if trigger == "date":
@@ -617,7 +624,81 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
             "Scheduling was not approved",
         )
 
+    async def _grant_requested_skill(tc, event_queue):
+        """request_skill: ask the user for a runner, then offer the skill's tools for the rest of the turn."""
+        import shared as _shared
+        from routes.chat import _GATED_DEP_SKILLS, _filter_tools, _resolve_skill_id
+
+        if not context_id:
+            return await _early_error(
+                tc, event_queue,
+                {
+                    "error": "skill_request_not_allowed_unattended",
+                    "hint": "An unattended run cannot ask for more skills. Tell the user it needs a chat tab.",
+                },
+                "Skill requests are not allowed in an unattended run",
+            )
+        inputs = tc.inputs or {}
+        skill = _resolve_skill_id(_clean_card_text(inputs.get("skill", ""), 60))
+        if not skill or (skill not in _shared.SKILL_TOOLS_MAP and skill not in _shared.SKILL_PROMPTS):
+            return await _early_error(
+                tc, event_queue,
+                {"error": "unknown_skill", "hint": "No skill has that id. Use an id from the skill directory."},
+                "That skill does not exist",
+            )
+        needed: list[str] = [skill]
+        for _ in range(2):
+            for seed in list(needed):
+                needed.extend(d for d in _shared.SKILL_REQUIRES.get(seed, []) if d not in needed and d in _shared.SKILL_PROMPTS)
+        for dep in _shared.SKILL_DEPENDENCIES_MAP.get(skill, []):
+            if dep["id"] not in needed:
+                needed.append(dep["id"])
+        reason = _clean_card_text(inputs.get("reason", ""), 300) or "(no reason given)"
+        for runner in (n for n in needed if n in _GATED_DEP_SKILLS):
+            key = f"capability:{runner}"
+            lock = _source_locks.setdefault((context_id, key), asyncio.Lock())
+            async with lock:
+                if data_sources.is_allowed(context_id, key):
+                    continue
+                if not data_sources.recently_denied(context_id, key):
+                    name = _RUNNER_CARD_NAMES.get(runner, runner)
+                    if await _request_browser_confirm(
+                        f"AI Gator wants to use {name}. It runs code or commands the model writes inside the "
+                        f"AI Gator sandbox; access to other folders or the network is asked separately. "
+                        f"Reason given: {reason}. Allowed for this tab only.",
+                        event_queue, title=f"Allow AI Gator to use {name}?",
+                        allow_label="Allow for this tab", deny_label="Deny",
+                    ):
+                        data_sources.allow(context_id, key)
+                        await event_queue.put({"kind": "status", "status": f"{name}: allowed for this tab"})
+                        continue
+                    data_sources.deny(context_id, key)
+            return await _early_error(
+                tc, event_queue,
+                {
+                    "error": "skill_not_approved",
+                    "skill": skill,
+                    "hint": ("The user did not approve this. Do not retry it or reach the same result another way. "
+                             "Tell the user what you could not do and that it needs their approval."),
+                },
+                f"{skill} was not approved",
+            )
+        names = {t["name"] for t in _filter_tools(None, False, needed, unapproved_deps=[])} - set(_shared._ALWAYS_ON_TOOLS)
+        fresh = names - (_offered or set())
+        if _offered is not None and fresh:
+            _offered.update(fresh)
+            await event_queue.put({"kind": "tools_granted", "names": sorted(fresh)})
+        await event_queue.put({"kind": "tool_result", "call_id": tc.id, "status": "success", "summary": f"{skill} is now available"})
+        return {
+            "granted": True,
+            "skill": skill,
+            "tools": sorted(names),
+            "hint": "These tools are callable now. Call read_skill for this skill if you need its instructions.",
+        }
+
     async def _run_tool_block(tc, event_queue):
+        if tc.name == "request_skill" and (_offered is None or tc.name in _offered):
+            return await _grant_requested_skill(tc, event_queue)
         if _offered is not None and tc.name not in _offered:
             return await _early_error(
                 tc, event_queue,
