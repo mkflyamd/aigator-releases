@@ -122,11 +122,12 @@ TOOL_DEFS = [
     },
     {
         "name": "read_skill",
-        "description": "Read the full capability guide (SKILL.md) and manifest for an installed skill. Call this when the user asks what a skill can do, or when you are about to use a skill's tools for the first time in a session and want to confirm correct usage. Do NOT call this before every single tool use — only when you genuinely need to check capabilities or parameters. skill_id examples: 'calendar', 'excel', 'email'.",
+        "description": "Read the full capability guide (SKILL.md) and manifest for an installed skill. Call this when the user asks what a skill can do, or when you are about to use a skill's tools for the first time in a session and want to confirm correct usage. Do NOT call this before every single tool use — only when you genuinely need to check capabilities or parameters. skill_id examples: 'calendar', 'excel', 'email'. A skill guide that points at its own reference files (references/..., assets/...) is read with the file argument, so no file tool is needed.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "skill_id": {"type": "string", "description": "The skill folder name under /skills/, e.g. 'calendar' or 'excel'"},
+                "file": {"type": "string", "description": "Optional path inside the skill folder to read instead of SKILL.md, e.g. 'references/DESIGN.md'. The guide lists the files a skill ships. Text files only; for a binary asset you get its path."},
             },
             "required": ["skill_id"],
         },
@@ -842,15 +843,45 @@ _SKILL_ALIASES = {"word": "docx", "powerpoint": "ppt", "outlook": "email", "exce
                    "m365-calendar": "calendar"}
 
 
-def _tool_read_skill(skill_id: str) -> dict:
+_SKILL_FILE_TEXT_SUFFIXES = {".md", ".txt", ".py", ".js", ".json", ".css", ".html", ".yaml", ".yml", ".csv", ".toml"}
+_SKILL_FILE_MAX_BYTES = 200_000
+_SKILL_FILE_LISTING_MAX = 60
+
+
+def _skill_files(skill_dir: Path) -> list[str]:
+    files = sorted(
+        f.relative_to(skill_dir).as_posix()
+        for sub in ("references", "assets", "scripts")
+        if (skill_dir / sub).is_dir()
+        for f in (skill_dir / sub).rglob("*") if f.is_file() and "__pycache__" not in f.parts
+    )
+    return files[:_SKILL_FILE_LISTING_MAX]
+
+
+def _read_skill_file(skill_dir: Path, file: str) -> dict:
+    root = skill_dir.resolve()
+    target = (root / file).resolve()
+    if not target.is_relative_to(root):
+        return {"error": "file must be inside the skill folder"}
+    if not target.is_file():
+        return {"error": f"No file '{file}' in this skill.", "files": _skill_files(skill_dir)}
+    if target.suffix.lower() not in _SKILL_FILE_TEXT_SUFFIXES:
+        return {"path": str(target), "note": "Not a text file, so it is not read here. Use this path from a script."}
+    if target.stat().st_size > _SKILL_FILE_MAX_BYTES:
+        return {"path": str(target), "note": f"Larger than {_SKILL_FILE_MAX_BYTES // 1000} KB, so it is not read here."}
+    return {"file": file, "content": target.read_text(encoding="utf-8", errors="replace")}
+
+
+def _tool_read_skill(skill_id: str, file: str = "") -> dict:
     """Return the SKILL.md content for the requested skill so Claude can learn its capabilities."""
     skill_id = _SKILL_ALIASES.get(skill_id.lower(), skill_id)
     web_skills_root = ROOT / "web" / "skills"
     skill_md_path = web_skills_root / skill_id / "SKILL.md"
     result: dict = {}
+    skill_dir: Path | None = None
     if skill_md_path.exists():
-        result["skill_guide"] = skill_md_path.read_text(encoding='utf-8')
-    if not result:
+        skill_dir = skill_md_path.parent
+    else:
         # Also search user skill roots (installed marketplace + ~/.agents/skills)
         from config import USER_SKILL_DIRS
         for root in USER_SKILL_DIRS:
@@ -858,10 +889,17 @@ def _tool_read_skill(skill_id: str) -> dict:
                 continue
             for candidate in root.rglob("SKILL.md"):
                 if candidate.parent.name == skill_id:
-                    result["skill_guide"] = candidate.read_text(encoding='utf-8')
+                    skill_dir = candidate.parent
                     break
-            if result:
+            if skill_dir:
                 break
+    if skill_dir:
+        if file:
+            return _read_skill_file(skill_dir, file)
+        result["skill_guide"] = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
+        listing = _skill_files(skill_dir)
+        if listing:
+            result["files"] = listing
     if not result:
         # Check if this is a registered MCP connection — no SKILL.md needed, describe its tools
         # g-* synthetic skills (g-gmail, g-sheets, etc.) route to the mcp-google-workspace connection

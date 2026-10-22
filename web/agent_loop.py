@@ -18,6 +18,7 @@ from tool_pipeline import (
     select_tools_with_budget,
 )
 from tool_repair import rejection_summaries, rejection_summary_text, stalled_chunk
+from tool_result_truncation import OVERFLOW_MARKER, OVERFLOW_READ_TOOLS
 
 MAX_ITERATIONS = 25
 _COMPACT_THRESHOLD = 0.85      # compact when input_tokens exceed 85% of context window (post-call)
@@ -459,6 +460,20 @@ def awaiting_human(context_id: str | None):
             _awaiting_human.pop(context_id, None)
 
 
+def _result_was_spilled_to_file(result) -> bool:
+    text = result if isinstance(result, str) else json.dumps(result, default=str) if isinstance(result, dict) else ""
+    return OVERFLOW_MARKER in text
+
+
+def _grant_tools(available_tools: list, required_tool_names: set, names) -> None:
+    import shared as _shared
+    have = _offered_tool_names(available_tools)
+    for tool in _shared.TOOLS:
+        if tool.get("name") in names and tool["name"] not in have:
+            available_tools.append(tool)
+    required_tool_names.update(names)
+
+
 def _offered_tool_names(tools) -> frozenset[str]:
     names = set()
     for d in tools or ():
@@ -476,6 +491,7 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
     import content_guard
     import data_sources
     _SENTINEL = object()
+    _offered = set(offered_names) if offered_names is not None else None
     _source_locks: dict[tuple[str, str], asyncio.Lock] = {}
     _sources_read: set[str] = set()
     _source_ids: set[str] = set()
@@ -602,7 +618,7 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
         )
 
     async def _run_tool_block(tc, event_queue):
-        if offered_names is not None and tc.name not in offered_names:
+        if _offered is not None and tc.name not in _offered:
             return await _early_error(
                 tc, event_queue,
                 {
@@ -645,6 +661,11 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
         result = await execute_tool(tc.name, tc.inputs)
         if is_browser:
             await event_queue.put({"kind": "browser_hitl", "state": "done"})
+        if _offered is not None and _result_was_spilled_to_file(result):
+            _new = set(OVERFLOW_READ_TOOLS) - _offered
+            if _new:
+                _offered.update(_new)
+                await event_queue.put({"kind": "tools_granted", "names": sorted(_new)})
         # Reactive skill activation: check the full tool result against ACTIVATES_ON patterns.
         # This runs before the result is summarised so patterns like "[image:" and "images_note"
         # are visible here even though the SSE summary may just say "Completed".
@@ -1209,6 +1230,8 @@ async def _single_agent_loop(
                     yield f"data: {json.dumps({'files': evt['files']})}\n\n"
                 elif kind == "reactive_skills":
                     yield _sse_reactive_skills(evt["skill_ids"])
+                elif kind == "tools_granted":
+                    _grant_tools(available_tools, required_tool_names, evt["names"])
             results = await gather_task
         finally:
             if not gather_task.done():
@@ -1736,6 +1759,8 @@ async def run_three_agent_loop(
                     yield f"data: {json.dumps({'files': evt['files']})}\n\n"
                 elif kind == "reactive_skills":
                     yield _sse_reactive_skills(evt["skill_ids"])
+                elif kind == "tools_granted":
+                    _grant_tools(available_tools, required_tool_names, evt["names"])
             results = await gather_task
         finally:
             if not gather_task.done():

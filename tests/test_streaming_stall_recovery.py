@@ -105,7 +105,7 @@ def test_tool_result_truncation_caps_aggregate_multi_field_output(isolated_outpu
     assert set(out) == {"result"}
     assert "Full output saved to" in out["result"]
     assert "/api/files/" in out["result"]
-    assert "/file_ops" in out["result"]
+    assert "/file_ops" not in out["result"] and "grep_files" in out["result"]
 
 
 def test_tool_result_truncation_preserves_circular_result():
