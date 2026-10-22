@@ -225,3 +225,42 @@ def test_failed_restart_stays_paused_and_can_be_retried(client, env):
     assert retry.json()["ok"] is True
     assert len(rec._segments) == 2
     assert env.argvs[-1][-1].endswith("seg_01.mp4")
+
+
+SCALED = [
+    {"index": 0, "x": 0, "y": 0, "width": 1280, "height": 800, "primary": True,
+     "capture": {"x": 0, "y": 0, "width": 1920, "height": 1200}, "label": "Display 1 (1920x1200)"},
+    {"index": 1, "x": 1920, "y": 0, "width": 1600, "height": 900, "primary": False,
+     "capture": {"x": 2880, "y": 0, "width": 2400, "height": 1350}, "label": "Display 2 (2400x1350)"},
+]
+
+
+def _gdigrab_argv(screens, **req):
+    return rec._build_ffmpeg_cmd("ffmpeg", Path("out.mp4"), rec.StartRequest(**req), screens)
+
+
+def test_full_screen_capture_uses_the_physical_size_not_the_logical_one(monkeypatch):
+    monkeypatch.setattr(rec, "_IS_WINDOWS", True)
+    argv = _gdigrab_argv(SCALED, screen_index=0)
+    assert _flag(argv, "-video_size") == "1920x1200"
+    assert (_flag(argv, "-offset_x"), _flag(argv, "-offset_y")) == ("0", "0")
+
+
+def test_crop_is_scaled_to_physical_pixels_on_the_selected_monitor(monkeypatch):
+    monkeypatch.setattr(rec, "_IS_WINDOWS", True)
+    argv = _gdigrab_argv(SCALED, screen_index=1, crop_x=100, crop_y=50, crop_w=800, crop_h=450)
+    assert (_flag(argv, "-offset_x"), _flag(argv, "-offset_y")) == ("3030", "75")
+    assert _flag(argv, "-video_size") == "1200x674"
+
+
+def test_capture_size_is_always_even_for_yuv420p(monkeypatch):
+    monkeypatch.setattr(rec, "_IS_WINDOWS", True)
+    argv = _gdigrab_argv(SCALED, screen_index=0, crop_x=0, crop_y=0, crop_w=333, crop_h=201)
+    w, h = (int(v) for v in _flag(argv, "-video_size").split("x"))
+    assert w % 2 == 0 and h % 2 == 0
+
+
+def test_screens_without_a_capture_rect_are_used_as_is(monkeypatch):
+    monkeypatch.setattr(rec, "_IS_WINDOWS", True)
+    argv = _gdigrab_argv(SCREENS, screen_index=1, crop_x=100, crop_y=50, crop_w=640, crop_h=480)
+    assert (_flag(argv, "-offset_x"), _flag(argv, "-offset_y"), _flag(argv, "-video_size")) == ("2020", "50", "640x480")

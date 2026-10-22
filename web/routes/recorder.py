@@ -137,16 +137,13 @@ def _file_size(path: Path) -> int:
 # ── Screen enumeration ────────────────────────────────────────────────────────
 
 def _list_screens_windows() -> list[dict]:
-    """Enumerate monitors and return coordinates for gdigrab.
+    """Enumerate monitors on Windows.
 
-    gdigrab uses the virtual desktop coordinate system as reported by
-    EnumDisplayMonitors — these are LOGICAL (DPI-scaled) coordinates on
-    Windows with display scaling. The virtual desktop spans all monitors
-    in logical space. gdigrab's -offset_x/-offset_y/-video_size must all
-    be in this same logical coordinate space.
-
-    We return the raw EnumDisplayMonitors coordinates without scaling.
-    The label shows the logical resolution (what gdigrab will capture at).
+    This process is DPI-unaware, so x/y/width/height are LOGICAL (scaled)
+    coordinates: the space the region picker, the recording border and crop
+    clamping work in. gdigrab captures in PHYSICAL pixels, so each screen also
+    carries "capture", its physical rectangle, and the label shows that size
+    because it is the resolution the recording will have.
     """
     try:
         import ctypes
@@ -157,29 +154,49 @@ def _list_screens_windows() -> list[dict]:
             _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
                         ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
 
-        screens = []
-
         MonitorEnumProc = ctypes.WINFUNCTYPE(
             ctypes.c_bool,
-            ctypes.c_ulong, ctypes.c_ulong,
-            ctypes.POINTER(RECT), ctypes.c_double,
+            ctypes.c_void_p, ctypes.c_void_p,
+            ctypes.POINTER(RECT), ctypes.c_void_p,
         )
 
-        def _cb(hMonitor, hdcMonitor, lprcMonitor, dwData):
-            r = lprcMonitor.contents
-            w = r.right - r.left
-            h = r.bottom - r.top
+        def _enum() -> dict:
+            rects = {}
+
+            def _cb(hMonitor, hdcMonitor, lprcMonitor, dwData):
+                r = lprcMonitor.contents
+                rects[hMonitor] = (r.left, r.top, r.right - r.left, r.bottom - r.top)
+                return True
+
+            user32.EnumDisplayMonitors(None, None, MonitorEnumProc(_cb), 0)
+            return rects
+
+        def _enum_physical() -> dict:
+            try:
+                user32.SetThreadDpiAwarenessContext.restype = ctypes.c_void_p
+                user32.SetThreadDpiAwarenessContext.argtypes = [ctypes.c_void_p]
+                previous = user32.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))
+            except (AttributeError, OSError):
+                return {}
+            if not previous:
+                return {}
+            try:
+                return _enum()
+            finally:
+                user32.SetThreadDpiAwarenessContext(previous)
+
+        physical = _enum_physical()
+        screens = []
+        for handle, (x, y, w, h) in _enum().items():
+            px, py, pw, ph = physical.get(handle, (x, y, w, h))
             screens.append({
                 "index": len(screens),
-                "x": r.left, "y": r.top,
+                "x": x, "y": y,
                 "width": w, "height": h,
-                "label": f"Display {len(screens) + 1} ({w}x{h})",
-                "primary": r.left == 0 and r.top == 0,
+                "capture": {"x": px, "y": py, "width": pw, "height": ph},
+                "label": f"Display {len(screens) + 1} ({pw}x{ph})",
+                "primary": x == 0 and y == 0,
             })
-            return True
-
-        MonitorEnumProcInst = MonitorEnumProc(_cb)
-        user32.EnumDisplayMonitors(None, None, MonitorEnumProcInst, 0)
         return screens
     except Exception:
         return [{"index": 0, "x": 0, "y": 0, "width": 1920, "height": 1080,
@@ -595,45 +612,30 @@ class StartRequest(BaseModel):
 _last_start_req: StartRequest = StartRequest()  # the request the active session started with; resume replays it
 
 
+def _capture_rect(screen: dict, req: StartRequest) -> tuple[int, int, int, int]:
+    """Physical-pixel (x, y, w, h) for gdigrab from a logical screen and crop."""
+    cap = screen.get("capture") or screen
+    sx = cap["width"] / screen["width"]
+    sy = cap["height"] / screen["height"]
+    ow = round((req.crop_w or screen["width"]) * sx)
+    oh = round((req.crop_h or screen["height"]) * sy)
+    return (cap["x"] + round((req.crop_x or 0) * sx),
+            cap["y"] + round((req.crop_y or 0) * sy),
+            max(2, ow - ow % 2), max(2, oh - oh % 2))
+
+
 def _build_ffmpeg_cmd(ffmpeg: str, out_path: Path, req: StartRequest,
                       screens: list[dict]) -> list[str]:
     screen = screens[req.screen_index] if req.screen_index < len(screens) else screens[0]
 
     if _IS_WINDOWS:
-        # gdigrab always operates in physical pixels regardless of the calling
-        # process's DPI awareness. Python's ctypes/GetSystemMetrics return
-        # LOGICAL coordinates when the process is DPI-unaware, which differ
-        # from physical pixels on scaled displays (e.g. 1280x800 logical on a
-        # 1920x1200 physical 150%-scaled screen). Passing logical dimensions as
-        # -video_size causes gdigrab to capture only a fraction of the screen.
-        #
-        # Fix: omit -offset_x/-offset_y/-video_size for full-screen capture so
-        # gdigrab auto-detects the correct physical desktop dimensions. Only add
-        # these flags when a crop region is explicitly requested.
-        has_crop = any(v is not None for v in [req.crop_x, req.crop_y, req.crop_w, req.crop_h])
+        ox, oy, ow, oh = _capture_rect(screen, req)
         cmd = [
             ffmpeg, "-y",
             "-f", "gdigrab",
             "-framerate", str(req.framerate),
-        ]
-        # Always pass -offset_x/-offset_y/-video_size using PHYSICAL pixel
-        # coordinates from _list_screens_windows(). gdigrab works in physical
-        # pixels and needs explicit dimensions — omitting -video_size causes it
-        # to capture the full virtual desktop instead of just the target monitor.
-        ox = screen["x"] + (req.crop_x or 0)
-        oy = screen["y"] + (req.crop_y or 0)
-        ow = req.crop_w or screen["width"]
-        oh = req.crop_h or screen["height"]
-        if ox != 0 or oy != 0 or has_crop:
-            cmd += ["-offset_x", str(ox), "-offset_y", str(oy),
-                    "-video_size", f"{ow}x{oh}"]
-        else:
-            # Primary monitor, full screen, no crop — still pass video_size so
-            # gdigrab encodes at the correct physical resolution rather than
-            # defaulting to the virtual desktop size (which may differ on
-            # multi-monitor setups).
-            cmd += ["-video_size", f"{ow}x{oh}"]
-        cmd += [
+            "-offset_x", str(ox), "-offset_y", str(oy),
+            "-video_size", f"{ow}x{oh}",
             "-i", "desktop",
             "-vcodec", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
             str(out_path),
