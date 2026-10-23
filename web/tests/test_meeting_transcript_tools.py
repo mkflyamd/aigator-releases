@@ -178,3 +178,28 @@ def test_bytes_fetch_returns_raw_content_without_decoding(monkeypatch):
     monkeypatch.setattr(mod, "get_graph_client", lambda: GC())
     assert mod.fetch_transcript_bytes("d", "i", "t") == VTT
     assert seen["url"].startswith("https://graph.microsoft.com/beta/drives/d/items/i/media/transcripts/t/content")
+
+
+REAL_JOIN_URL = (
+    "https://teams.microsoft.com/l/meetup-join/"
+    "19%3ameeting_NTY0ZTcwZTctZjNkYS00Yzg1LWIzYjctZTMwYWY4Y2U0ZTQy%40thread.v2/0"
+    "?context=%7b%22Tid%22%3a%22aigator-fake-tenant%22%7d"
+)
+
+
+def test_chat_id_from_calendar_join_url_as_graph_returns_it():
+    rec = transcripts._tx_load("transcript_recording")
+    assert (
+        rec.chat_id_from_join_url(REAL_JOIN_URL)
+        == "19:meeting_NTY0ZTcwZTctZjNkYS00Yzg1LWIzYjctZTMwYWY4Y2U0ZTQy@thread.v2"
+    )
+
+
+def test_chat_id_from_join_url_unencoded_and_empty():
+    rec = transcripts._tx_load("transcript_recording")
+    assert (
+        rec.chat_id_from_join_url("https://teams.microsoft.com/l/meetup-join/19:meeting_abc@thread.v2/0?x=1")
+        == "19:meeting_abc@thread.v2"
+    )
+    assert rec.chat_id_from_join_url("") is None
+    assert rec.chat_id_from_join_url("https://example.com/none") is None

@@ -171,17 +171,15 @@ def resolve_recordings_from_chat(chat_id: str) -> list[RecordingInfo]:
     return out
 
 
-_MEETING_THREAD_RE = re.compile(r"(19[%:]meeting_[^/?@]+(?:[%@]thread\.v2))")
+_MEETING_THREAD_RE = re.compile(r"(19:meeting_[^/?@]+@thread\.v2)")
 
 
 def chat_id_from_join_url(join_url: str) -> str | None:
     """Extract the meeting chat id (19:meeting_...@thread.v2) from a Teams join URL."""
     if not join_url:
         return None
-    m = _MEETING_THREAD_RE.search(join_url)
-    if not m:
-        return None
-    return urllib.parse.unquote(m.group(1))
+    m = _MEETING_THREAD_RE.search(urllib.parse.unquote(join_url))
+    return m.group(1) if m else None
 
 
 def resolve_recording_from_event(event_id: str) -> RecordingInfo | None:
