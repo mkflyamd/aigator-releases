@@ -9,14 +9,14 @@
 
 The demo recorder is a built-in feature split across four layers:
 
-| Component                                      | Location                                | Ships with             |
-| ---------------------------------------------- | --------------------------------------- | ---------------------- |
-| Recorder backend API                           | `web/routes/recorder.py`                | Gator app (built-in)   |
-| postMessage bridge + hotkeys                   | `web/static/app.js`                     | Gator app (built-in)   |
-| HUD window (floating widget host)              | `shell/main.js`, `shell/hud-preload.js` | Gator app (built-in)   |
-| Skill (widget HTML + TTS pipeline)           | `web/skills/gator-demo-recorder/`       | Gator app (built-in)   |
-| ffmpeg                                         | Runtime install via winget/brew/apt     | Not bundled            |
-| Lemonade TTS                                   | Runtime install via winget/pip          | Not bundled (optional) |
+| Component                          | Location                                | Ships with             |
+| ---------------------------------- | --------------------------------------- | ---------------------- |
+| Recorder backend API               | `web/routes/recorder.py`                | Gator app (built-in)   |
+| postMessage bridge + hotkeys       | `web/static/app.js`                     | Gator app (built-in)   |
+| HUD window (floating widget host)  | `shell/main.js`, `shell/hud-preload.js` | Gator app (built-in)   |
+| Skill (widget HTML + TTS pipeline) | `web/skills/gator-demo-recorder/`       | Gator app (built-in)   |
+| ffmpeg                             | Runtime install via winget/brew/apt     | Not bundled            |
+| Lemonade TTS                       | Runtime install via winget/pip          | Not bundled (optional) |
 
 The skill is a **built-in skill** — auto-discovered by `shared.py` at startup, no marketplace install required. Every user gets it with the app.
 
