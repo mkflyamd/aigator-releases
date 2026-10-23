@@ -522,7 +522,8 @@ _SKILL_KEYWORDS = {
               "send a message", "send message", "message to",
               "dm him", "dm her", "dm them", "dm to",
               "message him", "message her", "message them",
-              "send a dm", "send dm", "chat with", "ping "],
+              "send a dm", "send dm", "chat with", "ping ",
+              "transcript", ".vtt"],
     "slack": ["slack message", "in slack", "on slack", "slack channel",
               "post in slack", "send in slack", "slack conversation"],
     "jira": ["jira", "ticket", "create a ticket", "open a ticket", "jira issue",
@@ -640,7 +641,7 @@ def _infer_skills_from_message(message: str) -> list[str]:
 _CLASSIFY_SKILL_IDS = {
     "email":      "Read/send email, check inbox, search Outlook messages",
     "calendar":   "View schedule, check meetings, book/cancel/reschedule meetings, check availability",
-    "teams":      "Read/send Teams chats, channels, DMs",
+    "teams":      "Read/send Teams chats, channels, DMs; find, read and save Teams meeting transcripts",
     "slack":      "Read/send Slack messages, channels, DMs",
     "jira":       "Search/create/update Jira tickets, bugs, stories",
     "confluence": "Search/read/create Confluence wiki pages",
