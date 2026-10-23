@@ -26,6 +26,17 @@ class SandboxUnavailable(RuntimeError):
     """The platform sandbox cannot run this request; nothing was executed."""
 
 
+class SandboxPathNotGrantable(SandboxUnavailable):
+    """Requested folders the sandbox cannot be given access to on this computer; nothing was executed."""
+
+    def __init__(self, paths):
+        self.paths = [str(p) for p in paths]
+        super().__init__(
+            "The sandbox cannot be given access to " + ", ".join(self.paths) + ". Windows does not let this "
+            "account change permissions there, and sandboxed code cannot read it by default."
+        )
+
+
 class SandboxRunError(RuntimeError):
     """The sandboxed process may already have run when the launcher failed.
 
@@ -110,6 +121,15 @@ def launch_sandboxed(req: SandboxRequest) -> SandboxResult:
     if sandbox_level() != "enforced":
         raise SandboxUnavailable(sandbox_unavailable_reason() or "The sandbox is unavailable.")
     return _launcher().launch(req)
+
+
+def ungrantable_paths(read_paths: Sequence[Path], write_paths: Sequence[Path]) -> list[Path]:
+    """Requested paths the sandbox could never be given access to (Windows only; empty elsewhere)."""
+    if sys.platform != "win32" or sandbox_level() != "enforced":
+        return []
+    from . import launcher_windows
+
+    return launcher_windows.ungrantable_paths(list(read_paths), list(write_paths))
 
 
 def sweep_stale_grants() -> int:

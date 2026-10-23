@@ -437,3 +437,28 @@ def test_a_sandboxed_run_reports_files_saved_to_a_folder_it_was_granted(calls, d
     _launch_writing(monkeypatch, data_dir)
     result = cr_mod._tool_run_python(code="1", extra_write_paths=[str(data_dir)], _context_id="tab-1")
     assert [f["path"] for f in result["output_files"]] == [str(data_dir.resolve() / "chart.png")]
+
+
+def test_ungrantable_folder_is_refused_before_any_approval_is_asked(calls, data_dir, monkeypatch):
+    monkeypatch.setattr(sandbox, "ungrantable_paths", lambda read, write: [data_dir.resolve()])
+    result = cr_mod._tool_run_python(code="print(1)", extra_read_paths=[str(data_dir)], _context_id="tab-1")
+    assert "approval_required" not in result and calls == []
+    assert str(data_dir.resolve()) in result["error"] and "no approval was asked" in result["error"]
+    assert approvals._REQUESTS == {}
+
+
+def test_launch_refusal_for_an_ungrantable_folder_says_so_instead_of_blaming_settings(calls, monkeypatch):
+    def refuse(req):
+        raise sandbox.SandboxPathNotGrantable(["C:/locked"])
+
+    monkeypatch.setattr(sandbox, "launch_sandboxed", refuse)
+    result = cr_mod._tool_run_python(code="print(1)")
+    assert "C:/locked" in result["error"] and "Settings" not in result["error"] and calls == []
+
+
+def test_launch_time_unavailable_does_not_point_at_a_settings_row_that_is_not_shown(calls, monkeypatch):
+    def refuse(req):
+        raise sandbox.SandboxUnavailable("sandbox paused")
+
+    monkeypatch.setattr(sandbox, "launch_sandboxed", refuse)
+    assert "Settings" not in cr_mod._tool_run_python(code="print(1)")["error"]
