@@ -23,8 +23,14 @@ import zipfile
 from pathlib import Path
 
 import defusedxml.minidom
-from office.soffice import get_soffice_env
 from PIL import Image, ImageDraw, ImageFont
+
+# Run directly or imported by the app: the shared office helpers live in skills/_scripts.
+_SHARED_SCRIPTS = str(Path(__file__).resolve().parent.parent.parent / "_scripts")
+if _SHARED_SCRIPTS not in sys.path:
+    sys.path.insert(0, _SHARED_SCRIPTS)
+
+from office.soffice import get_soffice_env, require_soffice  # noqa: E402
 
 THUMBNAIL_WIDTH = 300
 CONVERSION_DPI = 100
@@ -160,7 +166,7 @@ def convert_to_images(pptx_path: Path, temp_dir: Path) -> list[Path]:
 
     result = subprocess.run(
         [
-            "soffice",
+            require_soffice(),
             "--headless",
             "--convert-to",
             "pdf",
