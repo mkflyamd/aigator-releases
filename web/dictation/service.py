@@ -10,6 +10,7 @@ from dictation import engine as engine_mod
 
 MANIFEST_PATH = Path(__file__).with_name("models.json")
 USER_MODELS_DIR = Path.home() / ".gator" / "models" / "dictation"
+SOURCE_MODELS_DIR = Path(__file__).resolve().parents[2] / "models" / "dictation"
 MAX_PCM_BYTES = 640_000  # 20 s of 16 kHz mono PCM16
 
 _lock = threading.Lock()
@@ -48,6 +49,7 @@ def resolve_model_dir(model_id: str) -> Path | None:
     bundled = os.environ.get("AIGATOR_MODELS_DIR")
     if bundled:
         roots.append(Path(bundled))
+    roots.append(SOURCE_MODELS_DIR)
     for root in roots:
         candidate = root / dirname
         if (candidate / "model.bin").is_file():

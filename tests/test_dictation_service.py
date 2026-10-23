@@ -33,11 +33,13 @@ def registry(tmp_path, monkeypatch):
     bundled = tmp_path / "bundled"
     user = tmp_path / "user"
     monkeypatch.setattr(service, "MANIFEST_PATH", mpath)
+    source = tmp_path / "source"
     monkeypatch.setattr(service, "USER_MODELS_DIR", user)
+    monkeypatch.setattr(service, "SOURCE_MODELS_DIR", source)
     monkeypatch.setenv("AIGATOR_MODELS_DIR", str(bundled))
     engine_mod.register_engine("fake", FakeEngine)
     service.reset()
-    yield {"bundled": bundled, "user": user}
+    yield {"bundled": bundled, "user": user, "source": source}
     service.reset()
     engine_mod._ENGINES.pop("fake", None)
 
@@ -79,6 +81,12 @@ def test_user_directory_wins_over_bundled(registry):
     _make_model(registry["bundled"], "m1-dir")
     user_dir = _make_model(registry["user"], "m1-dir")
     assert service.resolve_model_dir("m1") == user_dir
+
+
+def test_source_tree_directory_is_found_without_env_var(registry, monkeypatch):
+    monkeypatch.delenv("AIGATOR_MODELS_DIR")
+    source_dir = _make_model(registry["source"], "m1-dir")
+    assert service.resolve_model_dir("m1") == source_dir
 
 
 def test_switching_model_reloads_engine(registry):
