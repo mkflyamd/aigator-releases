@@ -9686,6 +9686,9 @@ html.material-symbols-ready .tp-mi {
 .tp-qt-mic-btn {
   position: relative;
 }
+.gator-mic-btn.transcribing {
+  opacity: 0.6;
+}
 
 /* â”€â”€ Chat send slot: mic â†” send morph (Cursor-style) â”€â”€â”€â”€â”€â”€â”€ */
 /* Single fixed-size slot â€” mic and send occupy the same space.

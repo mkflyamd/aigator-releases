@@ -45,6 +45,10 @@
       {
         "from": "../tray/aigator_icon.png",
         "to": "tray/aigator_icon.png"
+      },
+      {
+        "from": "../models/dictation",
+        "to": "models/dictation"
       }
     ],
     "directories": {
