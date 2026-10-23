@@ -1,12 +1,16 @@
 """OneNote skill -- 10 tools."""
 
+import html as _htmllib
 import threading
+import time
 import json
 import logging
 import re
 import urllib.request as _ur
 import urllib.error as _ue
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import quote as _url_quote
 
 from . import page_edit as _pe
@@ -124,7 +128,7 @@ TOOL_DEFS = [
     },
     {
         "name": "create_onenote_page",
-        "description": "Create a new page in a OneNote section. Always call list_onenote_notebooks then list_onenote_sections first to get the section_id. If the notebook has no section, call create_onenote_section first. For a section in a SharePoint team notebook pass its site_id.",
+        "description": "Create a new page in a OneNote section. Always call list_onenote_notebooks then list_onenote_sections first to get the section_id. If the notebook has no section, call create_onenote_section first. For a section in a SharePoint team notebook pass its site_id. The page is read back after creation: report it as created only when the result has verified=true. Create pages one at a time, not in parallel.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -587,13 +591,52 @@ def _tool_list_onenote_pages(
 
 
 _write_lock = threading.Lock()
+_THROTTLE_WAITS = (2, 5, 10)
+_VERIFY_WAITS = (0, 1, 2, 4)
 
 
-def _write_request(gc, method: str, url: str, **kwargs):
+def _is_throttled_409(e: Exception) -> bool:
+    return getattr(e, "status_code", 0) == 409 and "simultaneous" in str(e).lower()
+
+
+def _write_request(gc, method: str, url: str, recover=None, retry_throttle=True, **kwargs):
     # Graph answers 409 "too many simultaneous requests" when OneNote writes to one
-    # location overlap, so parallel tool calls are queued one at a time.
+    # location overlap, so writes are queued one at a time and a 409 is retried with
+    # backoff. recover() runs before each retry and returns a response-like object if
+    # the 409'd call actually took effect, so a retry cannot duplicate it.
     with _write_lock:
+        if not retry_throttle:
+            return gc._request(method, url, **kwargs)
+        for wait in _THROTTLE_WAITS:
+            try:
+                return gc._request(method, url, **kwargs)
+            except Exception as e:
+                if not _is_throttled_409(e):
+                    raise
+                found = recover() if recover else None
+                if found is not None:
+                    return found
+                time.sleep(wait)
         return gc._request(method, url, **kwargs)
+
+
+def _body_text(page_html: str) -> str:
+    m = re.search(r"<body[^>]*>(.*)</body>", page_html or "", re.S | re.I)
+    text = re.sub(r"<[^>]+>", " ", m.group(1) if m else "")
+    return " ".join(_htmllib.unescape(text).split())
+
+
+def _page_is_readable(gc, root: str, page_id: str, need_text: bool) -> bool:
+    for wait in _VERIFY_WAITS:
+        if wait:
+            time.sleep(wait)
+        try:
+            page_html = _fetch_page_html(gc, root, page_id)
+        except Exception:
+            continue
+        if not need_text or _body_text(page_html):
+            return True
+    return False
 
 
 def _post_onenote_json(gc, path: str, body: dict, label: str) -> dict:
@@ -675,22 +718,62 @@ def _tool_create_onenote_page(
         )
     safe_title = _html_mod.escape(title)
     page_html = f"<!DOCTYPE html><html><head><title>{safe_title}</title></head><body>{body}</body></html>"
-    # Route through GraphClient._request so Retry-After/429 retry logic applies
-    url = f"https://graph.microsoft.com/v1.0{_onenote_root(site_id)}/sections/{_eid(section_id)}/pages"
+    root = _onenote_root(site_id)
+    url = f"https://graph.microsoft.com/v1.0{root}/sections/{_eid(section_id)}/pages"
+    started = datetime.now(timezone.utc) - timedelta(seconds=5)
+
+    def recover():
+        try:
+            items = _paginate_onenote(
+                gc,
+                f"{root}/sections/{_eid(section_id)}/pages",
+                {
+                    "$top": "20",
+                    "$orderby": "createdDateTime desc",
+                    "$select": "id,title,createdDateTime,links",
+                },
+                max_items=20,
+            )
+        except Exception:
+            return None
+        for item in items:
+            try:
+                made = datetime.fromisoformat(
+                    (item.get("createdDateTime") or "").replace("Z", "+00:00")
+                )
+            except ValueError:
+                continue
+            if made >= started and (item.get("title") or "") in ("", title):
+                return SimpleNamespace(json=lambda item=item: item)
+        return None
+
     resp = _write_request(
         gc,
         "POST",
         url,
+        recover=recover,
         headers={**gc._headers(), "Content-Type": "application/xhtml+xml"},
         content=page_html.encode("utf-8"),
         label=f"onenote/sections/{section_id}/pages",
     )
     result = resp.json()
+    page_id = result.get("id", "")
+    page_url = (result.get("links") or {}).get("oneNoteWebUrl", {}).get("href", "")
+    if not page_id or not _page_is_readable(gc, root, page_id, bool(_body_text(page_html))):
+        return {
+            "created": False,
+            "verified": False,
+            "error": "page_not_readable",
+            "id": page_id,
+            "url": page_url,
+            "hint": "Graph accepted the request but the page could not be read back with its content. Do not report it as created. Check the section with list_onenote_pages, then create the page again once, one page at a time.",
+        }
     return {
         "created": True,
+        "verified": True,
         "title": result.get("title", title),
-        "id": result.get("id", ""),
-        "url": (result.get("links") or {}).get("oneNoteWebUrl", {}).get("href", ""),
+        "id": page_id,
+        "url": page_url,
     }
 
 
@@ -827,6 +910,7 @@ def _tool_update_onenote_page(
             headers={**gc._headers(), "Content-Type": "application/json"},
             content=json.dumps(ops).encode(),
             label=f"onenote/pages/{page_id}/content",
+            retry_throttle=False,
         )
     except Exception as e:
         err = {"error": str(e)}

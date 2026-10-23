@@ -448,9 +448,19 @@ def test_list_sections_resolves_site_name_and_reports_unknown():
 GUID_SITE = "contoso.sharepoint.com,11111111-1111-1111-1111-111111111111,22222222-2222-2222-2222-222222222222"
 
 
+@pytest.fixture(autouse=True)
+def _no_sleep():
+    with patch.object(onenote_tools.time, "sleep", lambda *_: None):
+        yield
+
+
 class CreateGC(FakeGC):
+    read_html = "<html><head><title>T</title></head><body><p>body</p></body></html>"
+
     def _request(self, method, url, **kw):
         self.calls.append((method, url, kw.get("content")))
+        if method == "GET":
+            return FakeResp(self.read_html)
         body = json.loads(kw["content"]) if method == "POST" and kw.get("headers", {}).get("Content-Type") == "application/json" else {}
         resp = FakeResp()
         resp.json = lambda: {"id": "new-id", "displayName": body.get("displayName", ""), "links": {"oneNoteWebUrl": {"href": "https://x/nb"}}}
@@ -523,6 +533,8 @@ def test_parallel_onenote_writes_do_not_overlap():
 
     class SlowGC(CreateGC):
         def _request(self, method, url, **kw):
+            if method != "POST":
+                return super()._request(method, url, **kw)
             active.append(1)
             peak[0] = max(peak[0], len(active))
             time.sleep(0.02)
@@ -537,4 +549,103 @@ def test_parallel_onenote_writes_do_not_overlap():
         ]
         [t.start() for t in threads]
         [t.join() for t in threads]
-    assert len(gc.calls) == 6 and peak[0] == 1
+    assert [c[0] for c in gc.calls].count("POST") == 6 and peak[0] == 1
+
+
+def test_create_page_is_verified_after_read_back():
+    gc = CreateGC()
+    out = _run(onenote_tools._tool_create_onenote_page, gc, "sec1", "T", "body")
+    assert out["created"] is True and out["verified"] is True and out["id"] == "new-id"
+    assert gc.calls[-1][:2] == ("GET", "https://graph.microsoft.com/v1.0/me/onenote/pages/new-id/content")
+
+
+def test_create_page_with_empty_content_is_not_reported_as_created():
+    gc = CreateGC()
+    gc.read_html = "<html><head><title>T</title></head><body></body></html>"
+    out = _run(onenote_tools._tool_create_onenote_page, gc, "sec1", "T", "body")
+    assert out["created"] is False and out["verified"] is False
+    assert out["error"] == "page_not_readable" and out["id"] == "new-id"
+
+
+def test_create_page_that_404s_on_read_is_not_reported_as_created():
+    class Gone(CreateGC):
+        def _request(self, method, url, **kw):
+            if method == "GET":
+                raise RuntimeError("Graph API 404: not found")
+            return super()._request(method, url, **kw)
+
+    out = _run(onenote_tools._tool_create_onenote_page, Gone(), "sec1", "T", "body")
+    assert out["created"] is False and out["verified"] is False
+
+
+def test_create_page_with_empty_body_needs_only_a_readable_page():
+    gc = CreateGC()
+    gc.read_html = "<html><head><title>T</title></head><body></body></html>"
+    out = _run(onenote_tools._tool_create_onenote_page, gc, "sec1", "T", "")
+    assert out["created"] is True and out["verified"] is True
+
+
+class _Throttled(RuntimeError):
+    status_code = 409
+
+
+def _throttled():
+    return _Throttled("Graph API 409: The user account has experienced too many simultaneous requests to the same location")
+
+
+def test_throttled_409_on_create_page_is_retried_once_nothing_was_made():
+    class Flaky(CreateGC):
+        posts = 0
+
+        def _request(self, method, url, **kw):
+            if method == "POST":
+                Flaky.posts += 1
+                if Flaky.posts == 1:
+                    raise _throttled()
+            if method == "GET" and "/sections/" in url:
+                return FakeResp("")
+            return super()._request(method, url, **kw)
+
+    gc = Flaky()
+    with patch.object(onenote_tools, "_paginate_onenote", return_value=[]):
+        out = _run(onenote_tools._tool_create_onenote_page, gc, "sec1", "T", "body")
+    assert out["created"] is True and Flaky.posts == 2
+
+
+def test_throttled_409_that_actually_created_the_page_is_not_retried():
+    from datetime import datetime, timezone
+
+    made = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    class Flaky(CreateGC):
+        posts = 0
+
+        def _request(self, method, url, **kw):
+            if method == "POST":
+                Flaky.posts += 1
+                raise _throttled()
+            return super()._request(method, url, **kw)
+
+    page = {"id": "made-id", "title": "", "createdDateTime": made}
+    gc = Flaky()
+    with patch.object(onenote_tools, "_paginate_onenote", return_value=[page]):
+        out = _run(onenote_tools._tool_create_onenote_page, gc, "sec1", "T", "body")
+    assert Flaky.posts == 1 and out["id"] == "made-id" and out["verified"] is True
+
+
+def test_other_409_and_patch_409_are_not_retried():
+    class Conflict(CreateGC):
+        posts = 0
+
+        def _request(self, method, url, **kw):
+            if method in ("POST", "PATCH"):
+                Conflict.posts += 1
+                raise _throttled() if method == "PATCH" else _Throttled("Graph API 409: name already exists")
+            return super()._request(method, url, **kw)
+
+    with pytest.raises(_Throttled):
+        _run(onenote_tools._tool_create_onenote_section, Conflict(), "nb1", "S")
+    assert Conflict.posts == 1
+    Conflict.posts = 0
+    out = _run(onenote_tools._tool_update_onenote_page, Conflict(), "pg1", "x")
+    assert Conflict.posts == 1 and "error" in out

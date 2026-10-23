@@ -21,7 +21,7 @@ Use this skill when the user wants to browse their OneNote notebooks, read a pag
 - `list_onenote_sections`, `list_onenote_pages` — List sections in a notebook and pages in a section
 - `read_onenote_page` — Read a page, or its editable elements
 - `create_onenote_notebook`, `create_onenote_section` — Create a notebook, or a section in a notebook. A new notebook has no sections: create a section before creating pages
-- `create_onenote_page` — Create a page in a section with a title and body (text or HTML)
+- `create_onenote_page` — Create a page in a section with a title and body (text or HTML). The page is read back; report it as created only when `verified` is true
 - `update_onenote_page` — Append, insert, replace or rename content on an existing page
 - `pin_onenote_page` — Pin a page for quick reference
 
