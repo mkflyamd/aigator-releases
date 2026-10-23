@@ -9,6 +9,7 @@ metadata:
 
 # OneNote Workflow
 
+- "Create a notebook or section" → call create_onenote_notebook (a new notebook has no sections) and/or create_onenote_section, then create_onenote_page with the returned section id. For a team site pass site_id. Never ask the user to create the notebook or section by hand.
 - "Create a page" → call list_onenote_notebooks to find the right notebook, then list_onenote_sections to get the section_id, then create_onenote_page.
 - "Show my notebooks / sections / pages" → call list_onenote_notebooks → list_onenote_sections → list_onenote_pages as needed.
 - "Add to a page" → if the page is pinned, use update_onenote_page directly with the pinned page_id. If not pinned, navigate to find the page_id first, then call update_onenote_page. The default action appends to the end.

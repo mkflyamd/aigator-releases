@@ -441,3 +441,74 @@ def test_list_sections_resolves_site_name_and_reports_unknown():
         assert "sections" in tools._tool_list_onenote_sections(site_id="siloengineering")
         out = tools._tool_list_onenote_sections(site_id="Nope")
     assert "error" in out
+
+
+# ── create notebook / section / page ─────────────────────────────────────────
+
+GUID_SITE = "contoso.sharepoint.com,11111111-1111-1111-1111-111111111111,22222222-2222-2222-2222-222222222222"
+
+
+class CreateGC(FakeGC):
+    def _request(self, method, url, **kw):
+        self.calls.append((method, url, kw.get("content")))
+        body = json.loads(kw["content"]) if method == "POST" and kw.get("headers", {}).get("Content-Type") == "application/json" else {}
+        resp = FakeResp()
+        resp.json = lambda: {"id": "new-id", "displayName": body.get("displayName", ""), "links": {"oneNoteWebUrl": {"href": "https://x/nb"}}}
+        return resp
+
+
+def test_create_notebook_personal():
+    gc = CreateGC()
+    out = _run(onenote_tools._tool_create_onenote_notebook, gc, "AI Gator Onboarding")
+    assert gc.calls[0][:2] == ("POST", "https://graph.microsoft.com/v1.0/me/onenote/notebooks")
+    assert json.loads(gc.calls[0][2]) == {"displayName": "AI Gator Onboarding"}
+    assert out["created"] is True and out["id"] == "new-id" and out["site_id"] == ""
+    assert "create_onenote_section" in out["hint"]
+
+
+def test_create_notebook_on_team_site():
+    gc = CreateGC()
+    _run(onenote_tools._tool_create_onenote_notebook, gc, "Team guide", site_id=GUID_SITE)
+    assert gc.calls[0][1] == "https://graph.microsoft.com/v1.0/sites/contoso.sharepoint.com%2C11111111-1111-1111-1111-111111111111%2C22222222-2222-2222-2222-222222222222/onenote/notebooks"
+
+
+def test_create_section_encodes_notebook_id_and_returns_section_id():
+    gc = CreateGC()
+    out = _run(onenote_tools._tool_create_onenote_section, gc, SLASH_ID, "Onboarding")
+    assert gc.calls[0][1] == "https://graph.microsoft.com/v1.0/me/onenote/notebooks/AAMkAD%2Fitem%2BId%3DxQ%3D%3D/sections"
+    assert json.loads(gc.calls[0][2]) == {"displayName": "Onboarding"}
+    assert out["id"] == "new-id" and out["name"] == "Onboarding"
+
+
+def test_create_section_on_team_site():
+    gc = CreateGC()
+    out = _run(onenote_tools._tool_create_onenote_section, gc, "nb1", "Onboarding", site_id=GUID_SITE)
+    assert "/sites/contoso.sharepoint.com%2C11111111-1111-1111-1111-111111111111%2C22222222-2222-2222-2222-222222222222/onenote/notebooks/nb1/sections" in gc.calls[0][1]
+    assert out["site_id"] == GUID_SITE
+
+
+def test_create_notebook_and_section_need_a_name():
+    assert "error" in onenote_tools._tool_create_onenote_notebook("  ")
+    assert "error" in onenote_tools._tool_create_onenote_section("nb1", "")
+
+
+def test_create_page_routes_to_team_site():
+    gc = CreateGC()
+    _run(onenote_tools._tool_create_onenote_page, gc, "sec1", "T", "body", site_id=GUID_SITE)
+    assert gc.calls[0][1] == "https://graph.microsoft.com/v1.0/sites/contoso.sharepoint.com%2C11111111-1111-1111-1111-111111111111%2C22222222-2222-2222-2222-222222222222/onenote/sections/sec1/pages"
+
+
+def test_create_page_defaults_to_personal_root():
+    gc = CreateGC()
+    _run(onenote_tools._tool_create_onenote_page, gc, "sec1", "T", "body")
+    assert gc.calls[0][1] == "https://graph.microsoft.com/v1.0/me/onenote/sections/sec1/pages"
+
+
+def test_create_tools_are_registered_and_in_manifest():
+    names = {d["name"] for d in onenote_tools.TOOL_DEFS}
+    assert {"create_onenote_notebook", "create_onenote_section"} <= names
+    assert names == set(onenote_tools.TOOL_HANDLERS) == set(onenote_tools.TOOL_STATUS)
+    manifest = json.loads(
+        (onenote_tools.ONENOTE_SKILLS_DIR.parent / "manifest.json").read_text(encoding="utf-8-sig")
+    )
+    assert names == set(manifest["tools"]) | {"find_onenote_notebook"}
