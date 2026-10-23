@@ -9869,13 +9869,13 @@ function _showJiraTargetSelection(data, ownerTabId) {
 // a short chat message then tells the model whether to re-call.
 function _sandboxFollowUpText(decision, requestId, tool = 'run_python') {
   if (decision !== 'approve') {
-    return `I denied sandbox access request ${requestId}. Do not retry it; continue without that access or tell me what you need.`;
+    return `Door closed! I denied sandbox access request ${requestId}. Do not retry it; find a way around without that access, or tell me what you need.`;
   }
   const again =
     tool === 'run_shell'
-      ? 'Run the same run_shell call again with exactly the same command, cwd, extra_read_paths, extra_write_paths and network_hosts.'
-      : 'Run the same run_python call again with exactly the same extra_read_paths, extra_write_paths and network_hosts.';
-  return `I approved sandbox access request ${requestId}. ${again}`;
+      ? 'Go ahead and run the same run_shell call again with exactly the same command, cwd, extra_read_paths, extra_write_paths and network_hosts.'
+      : 'Go ahead and run the same run_python call again with exactly the same extra_read_paths, extra_write_paths and network_hosts.';
+  return `Green light, gator! I approved sandbox access request ${requestId}. ${again}`;
 }
 
 // tabId -> follow-up text waiting for that tab's running chat turn to finish
@@ -13624,6 +13624,13 @@ form.addEventListener('submit', async (e) => {
       }
 
       const { task_id } = await postRes.json();
+      // Stop was pressed while the POST was in flight (skill classification can take seconds):
+      // there was no task id to cancel then, so cancel it now instead of running the turn.
+      if (_userStopped) {
+        fetch(`/api/chat/${task_id}/cancel`, { method: 'POST' }).catch(() => {});
+        _locallyFinishedTasks.add(task_id);
+        throw Object.assign(new Error('stopped before the task started'), { name: 'AbortError' });
+      }
       // The request belongs to the tab that submitted it, even if the user
       // switches tabs before the POST resolves.
       const _tabKey = requestTabId;
