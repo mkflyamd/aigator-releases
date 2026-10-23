@@ -12,11 +12,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Body
+from fastapi import APIRouter, Body, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 import demo_projects as dp
+from security import verify_csrf
 import narration_approval
 
 router = APIRouter()
@@ -236,7 +237,7 @@ async def recorder_screens():
     return {"screens": screens, "last_screen_index": _last_screen_index}
 
 
-@router.post("/api/recorder/select-screen")
+@router.post("/api/recorder/select-screen", dependencies=[Depends(verify_csrf)])
 async def recorder_select_screen(body: dict = Body(default={})):
     """Widget calls this when user changes the screen dropdown so the backend
     remembers the selection for global hotkey starts."""
@@ -389,7 +390,7 @@ def _pick_region_tkinter(screen: dict) -> dict | None:
         return {"error": str(exc)}
 
 
-@router.post("/api/recorder/pick-region")
+@router.post("/api/recorder/pick-region", dependencies=[Depends(verify_csrf)])
 async def recorder_pick_region(body: dict = Body(default={})):
     """Spawn a fullscreen overlay on the given screen for the user to drag-select
     a crop region. Returns {x, y, w, h} in screen coordinates."""
@@ -696,7 +697,7 @@ def _start_segment(ffmpeg: str, req: StartRequest, screens: list[dict],
     return proc, seg_path
 
 
-@router.post("/api/recorder/start")
+@router.post("/api/recorder/start", dependencies=[Depends(verify_csrf)])
 async def recorder_start(req: StartRequest = StartRequest()):
     global _ffmpeg_proc, _recording_path, _recording_start
     global _paused_at, _paused_elapsed, _segments, _session_dir, _session_tag
@@ -829,7 +830,7 @@ async def recorder_start(req: StartRequest = StartRequest()):
 
 # ── Pause ─────────────────────────────────────────────────────────────────────
 
-@router.post("/api/recorder/pause")
+@router.post("/api/recorder/pause", dependencies=[Depends(verify_csrf)])
 async def recorder_pause():
     global _ffmpeg_proc, _paused_at, _paused_elapsed, _recording_start
 
@@ -865,7 +866,7 @@ async def recorder_pause():
 
 # ── Resume ────────────────────────────────────────────────────────────────────
 
-@router.post("/api/recorder/resume")
+@router.post("/api/recorder/resume", dependencies=[Depends(verify_csrf)])
 async def recorder_resume():
     global _ffmpeg_proc, _recording_path, _recording_start, _paused_at, _segments
 
@@ -940,7 +941,7 @@ def _stitch_segments(ffmpeg: str, segments: list[Path], out_path: Path) -> Path:
     return out_path
 
 
-@router.post("/api/recorder/stop")
+@router.post("/api/recorder/stop", dependencies=[Depends(verify_csrf)])
 async def recorder_stop():
     global _ffmpeg_proc, _recording_path, _recording_start
     global _paused_at, _paused_elapsed, _segments, _session_dir, _session_tag

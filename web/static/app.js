@@ -981,10 +981,6 @@ const LAUNCHER_CATEGORIES = [
 let _activeSkillId = null;
 let _activeChips = [];
 
-// Per-conversation permission grants for gated dep skills (shell_runner, code_runner).
-// Resets on page load — intentionally per-conversation scope.
-const _approvedSkillDeps = new Set();
-
 const RAIL_CONFIRM_SKIP_KEY = 'aigator-live-confirm-skip';
 const AIGATOR_TIP_KEY = 'aigator-tip-dismissed';
 
@@ -13587,7 +13583,6 @@ form.addEventListener('submit', async (e) => {
             active_people: activePeopleSnapshot,
             context_id: requestContextId,
             model: window._currentModel || '',
-            approved_deps: [..._approvedSkillDeps],
             ...(_wSuffix ? { system_prompt_suffix: _wSuffix } : {}),
             ..._sendPinFields,
           };
@@ -14074,14 +14069,22 @@ form.addEventListener('submit', async (e) => {
                 msg,
                 prose,
                 async () => {
-                  // Mark all listed deps as approved for this conversation
-                  msg.deps.forEach((d) => _approvedSkillDeps.add(d.id));
+                  // The server records the grant for this tab; the client cannot grant itself.
+                  const grant = await fetch('/api/chat/approve-deps', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ approval_id: msg.approval_id }),
+                  }).catch(() => null);
+                  if (!grant || !grant.ok) {
+                    _permissionResendPayload = null;
+                    prose.textContent =
+                      'That permission request expired before it could be approved. Send your message again.';
+                    return;
+                  }
                   // Re-submit using the saved payload — call doSend fresh so post-stream
                   // work (history, action bar, suggested actions) runs normally
                   if (!_permissionResendPayload) return;
-                  const resendPayload = Object.assign({}, _permissionResendPayload, {
-                    approved_deps: [..._approvedSkillDeps],
-                  });
+                  const resendPayload = _permissionResendPayload;
                   _permissionResendPayload = null;
                   await doSend(resendPayload);
                 },

@@ -176,3 +176,16 @@ def test_a_runner_approved_on_a_card_no_longer_blocks_skills_that_need_it():
     data_sources.allow(ctx, "capability:code_runner")
     assert "code_runner" not in chat_routes._ungranted_gated_deps(req)
     assert "code_runner" in chat_routes._ungranted_gated_deps(SimpleNamespace(approved_deps=[], context_id="other"))
+
+
+@pytest.mark.parametrize("alias", ["code-runner", "python-runner"])
+def test_a_runner_alias_still_asks_for_approval(alias, monkeypatch):
+    monkeypatch.setitem(shared.SKILL_TOOLS_MAP, alias, {"run_python"})
+    cards = []
+    provider = _Provider([_call("request_skill", skill=alias, reason="x"), _call("run_python"), _END])
+    ctx = "ctx-" + uuid.uuid4().hex
+    executed = _run(provider, answer=False, context_id=ctx, cards=cards)
+    assert len(cards) == 1
+    assert executed == []
+    assert "run_python" not in provider.tools_seen[1]
+    assert chat_routes._granted_runners(ctx) == []

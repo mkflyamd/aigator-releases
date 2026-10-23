@@ -103,7 +103,9 @@ def env(monkeypatch, tmp_path):
 def client(env):
     app = FastAPI()
     app.include_router(rec.router)
-    return TestClient(app)
+    from security import get_csrf_token
+
+    return TestClient(app, headers={"X-CSRF-Token": get_csrf_token("testserver")})
 
 
 def _start(client, **overrides):
@@ -331,3 +333,11 @@ def test_serve_file_serves_a_project_file_without_reading_every_project(client, 
     outside = Path(started["session_dir"]).parent.parent / "elsewhere.mp4"
     outside.write_bytes(b"x")
     assert client.get("/api/recorder/serve-file", params={"path": str(outside)}).status_code == 403
+
+
+@pytest.mark.parametrize("action", ["select-screen", "pick-region", "start", "pause", "resume", "stop"])
+def test_capture_controls_reject_a_caller_without_the_csrf_token(env, action):
+    app = FastAPI()
+    app.include_router(rec.router)
+    bare = TestClient(app)
+    assert bare.post(f"/api/recorder/{action}", json={}).status_code == 403

@@ -21,8 +21,9 @@ function widgetScript() {
 }
 
 // 'inline' is a sandboxed chat frame (opaque origin): backend calls go through the
-// parent bridge. 'hud' is the Electron HUD window: parent === window, direct fetch.
-function makeEnv(mode, routes) {
+// parent bridge. 'hud' is the Electron HUD window: parent === window, reads fetch the backend
+// directly and state changes go through hudControls.recorder (main process, user consent).
+function makeEnv(mode, routes, opts = {}) {
   const els = {};
   const el = (id) =>
     els[id] ||
@@ -41,6 +42,7 @@ function makeEnv(mode, routes) {
   const posted = [];
   const fetched = [];
   const bridged = [];
+  const hudCalls = [];
   const listeners = {};
   const answer = (action) =>
     routes[action] || (action === 'screens' ? { screens: [] } : { status: 'idle' });
@@ -66,6 +68,15 @@ function makeEnv(mode, routes) {
   if (mode === 'hud') {
     ctx.parent = ctx;
     ctx.postMessage = (m) => posted.push(m);
+    if (!opts.noHudControls) {
+      ctx.hudControls = {
+        recorder(action, params) {
+          hudCalls.push({ action, params });
+          fetched.push({ action, body: params ? JSON.stringify(params) : undefined });
+          return Promise.resolve(answer(action));
+        },
+      };
+    }
   } else {
     ctx.parent = {
       postMessage: (m) => {
@@ -90,7 +101,7 @@ function makeEnv(mode, routes) {
   vm.createContext(ctx);
   vm.runInContext(widgetScript(), ctx);
   const flush = () => new Promise((r) => setImmediate(r));
-  return { ctx, el, posted, fetched, bridged, listeners, routes, flush };
+  return { ctx, el, posted, fetched, bridged, hudCalls, listeners, routes, flush };
 }
 
 const each = (name, fn) =>
@@ -184,6 +195,39 @@ each(
     assert(!fetched.some((f) => f.action === 'notify'));
   },
 );
+
+test('hud: state changes go through hudControls.recorder and never fetch a POST route', async () => {
+  const { ctx, el, fetched, hudCalls, flush } = makeEnv('hud', {
+    stop: { ok: true, path: 'C:\d\f.mp4', size_bytes: 0 },
+  });
+  await flush();
+  el('sel-screen').value = '2';
+  ctx.onScreenChange();
+  ctx.doRecord();
+  ctx.doStop();
+  await flush();
+  assert.deepStrictEqual(
+    hudCalls.map((c) => c.action),
+    ['select-screen', 'start', 'stop'],
+  );
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(hudCalls[1].params)), {
+    screen_index: 2,
+    force: true,
+  });
+  const posts = ['select-screen', 'pick-region', 'start', 'pause', 'resume', 'stop'];
+  // fetch() is only ever used for reads and the chat notify; every POST above is IPC.
+  const viaFetch = fetched.filter((f) => !hudCalls.some((c) => c.action === f.action));
+  assert(!viaFetch.some((f) => posts.includes(f.action)));
+});
+
+test('hud: without hudControls.recorder a state change fails visibly and sends nothing', async () => {
+  const { ctx, el, fetched, flush } = makeEnv('hud', {}, { noHudControls: true });
+  await flush();
+  ctx.doRecord();
+  await flush();
+  assert.strictEqual(el('status').className, 'status error');
+  assert(!fetched.some((f) => f.action === 'start'));
+});
 
 test('inline: backend calls go through the parent bridge and never fetch', async () => {
   const { ctx, bridged, fetched, posted, flush } = makeEnv('inline', {

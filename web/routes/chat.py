@@ -4,12 +4,13 @@ import json
 import logging
 from datetime import datetime
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from config import load_config as _load_config
 import shared
+from security import verify_csrf
 from skill_pin import pin_context_block as _pin_context_block, resolve_pin as _resolve_pin
 
 import re as _re
@@ -48,16 +49,23 @@ router = APIRouter()
 _GATED_DEP_SKILLS: frozenset[str] = frozenset({"shell_runner", "code_runner"})
 
 
+def _gated_runner_id(skill_id: str) -> str | None:
+    """The gated runner a skill id names, resolving aliases (`code-runner` registers the same tools)."""
+    if skill_id in _GATED_DEP_SKILLS:
+        return skill_id
+    tools = shared.SKILL_TOOLS_MAP.get(skill_id)
+    if not tools:
+        return None
+    return next((g for g in sorted(_GATED_DEP_SKILLS) if tools == shared.SKILL_TOOLS_MAP.get(g)), None)
+
+
 def _is_gated_runner(skill_id: str) -> bool:
-    """A gated runner or one of its aliases (e.g. `code-runner` registers the same tools).
+    """A gated runner or one of its aliases.
 
     An alias hands out the same powerful tools, so it must never be self-granted by the model
     or carried forward as an ordinary skill.
     """
-    if skill_id in _GATED_DEP_SKILLS:
-        return True
-    tools = shared.SKILL_TOOLS_MAP.get(skill_id)
-    return bool(tools) and any(tools == shared.SKILL_TOOLS_MAP.get(g) for g in _GATED_DEP_SKILLS)
+    return _gated_runner_id(skill_id) is not None
 
 # Detects phrases like "add the @outlook skill", "activate /teams skill",
 # "load the confluence skill" — used to auto-activate the requested skill
@@ -210,7 +218,6 @@ class ChatRequest(BaseModel):
     active_people: list[dict] | None = None  # typed Teams/Slack person chips
     context_id: str = "default"  # tab-scoped context for pins
     model: str = ""  # model selected in prompt bar; sent explicitly so server never relies on global state
-    approved_deps: list[str] | None = None    # gated dep IDs the user approved this conversation
     system_prompt_suffix: str | None = None   # extra rules appended to system prompt (e.g. wizard scope)
     scoped_skill: str | None = None           # skill ID injected into active_skills for this request
     pinned_skill: str | None = None           # per-tab skill pin (client); activates and locks skill selection
@@ -270,9 +277,43 @@ def _granted_runners(context_id: str | None) -> list[str]:
 
 
 def _ungranted_gated_deps(req) -> list[str]:
-    """Gated dependency skills the user has not approved in this conversation."""
-    approved = set(req.approved_deps or []) | set(_granted_runners(getattr(req, "context_id", None)))
-    return sorted(_GATED_DEP_SKILLS - approved)
+    """Gated dependency skills the user has not approved in this tab (server-side grants only)."""
+    return sorted(_GATED_DEP_SKILLS - set(_granted_runners(getattr(req, "context_id", None))))
+
+
+_PENDING_DEP_APPROVALS: dict[str, tuple[str, list[str], float]] = {}
+_PENDING_DEP_APPROVAL_TTL = 600.0
+
+
+def _register_dep_approval(context_id: str, dep_ids: list[str]) -> str:
+    """Remember what a permission card asked for, so only that card's approval can grant it."""
+    import secrets
+    import time
+    now = time.monotonic()
+    for stale in [k for k, (_, _, t) in _PENDING_DEP_APPROVALS.items() if now - t > _PENDING_DEP_APPROVAL_TTL]:
+        _PENDING_DEP_APPROVALS.pop(stale, None)
+    approval_id = secrets.token_urlsafe(24)
+    _PENDING_DEP_APPROVALS[approval_id] = (context_id or "default", [d for d in dep_ids if d in _GATED_DEP_SKILLS], now)
+    return approval_id
+
+
+class ApproveDepsRequest(BaseModel):
+    approval_id: str
+
+
+@router.post("/api/chat/approve-deps", dependencies=[Depends(verify_csrf)])
+async def approve_deps(body: ApproveDepsRequest):
+    """The user clicked Allow on a permission card: grant exactly what that card asked for, for its tab."""
+    import time
+    import data_sources
+    from fastapi import HTTPException
+    entry = _PENDING_DEP_APPROVALS.pop(body.approval_id, None)
+    if entry is None or time.monotonic() - entry[2] > _PENDING_DEP_APPROVAL_TTL:
+        raise HTTPException(status_code=404, detail="This permission request has expired. Send the message again.")
+    context_id, dep_ids, _ = entry
+    for dep in dep_ids:
+        data_sources.allow(context_id, f"capability:{dep}")
+    return {"approved": dep_ids}
 
 
 def _blocked_gated_deps(skill_ids: list[str], req) -> list[tuple[str, dict]]:
@@ -302,6 +343,7 @@ def _permission_gate_response(blocked: list[tuple[str, dict]], context_id: str):
 
     payload = {
         "type": "permission_required",
+        "approval_id": _register_dep_approval(context_id, [dep["id"] for _, dep in blocked]),
         "skill": blocked[0][0],
         "deps": [
             {"id": dep["id"], "label": _dep_label(dep["id"]), "reason": dep["reason"]}

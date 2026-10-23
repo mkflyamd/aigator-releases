@@ -5,10 +5,13 @@ import asyncio
 import json
 import os
 import sys
+import uuid
+from types import SimpleNamespace
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "web"))
 
 import app  # noqa: E402
+import data_sources  # noqa: E402
 import shared  # noqa: E402
 from routes.chat import (  # noqa: E402
     ChatRequest,
@@ -23,6 +26,13 @@ RECORDER = "gator-demo-recorder"
 
 def _req(**kw):
     return ChatRequest(message="hi", **kw)
+
+
+def _tab(*approved):
+    ctx = "ctx-" + uuid.uuid4().hex
+    for dep in approved:
+        data_sources.allow(ctx, f"capability:{dep}")
+    return _req(context_id=ctx)
 
 
 def test_recorder_declares_its_gated_dependencies():
@@ -50,12 +60,12 @@ def test_unapproved_runner_blocks_the_recorder():
 
 
 def test_approving_an_unrelated_runner_does_not_unblock_the_recorder():
-    blocked = _blocked_gated_deps([RECORDER], _req(approved_deps=["shell_runner"]))
+    blocked = _blocked_gated_deps([RECORDER], _tab("shell_runner"))
     assert [dep["id"] for _, dep in blocked] == ["code_runner"]
 
 
 def test_approved_runner_unblocks_the_recorder():
-    req = _req(approved_deps=["code_runner"])
+    req = _tab("code_runner")
     assert _blocked_gated_deps([RECORDER], req) == []
     assert _ungranted_gated_deps(req) == ["shell_runner"]
 
@@ -80,7 +90,7 @@ def test_runner_tools_are_withheld_until_approved():
             t["name"]
             for t in _filter_tools(
                 "", False, [RECORDER],
-                unapproved_deps=_ungranted_gated_deps(_req(approved_deps=["code_runner"])),
+                unapproved_deps=_ungranted_gated_deps(_tab("code_runner")),
             )
         }
     finally:
@@ -162,3 +172,39 @@ def test_recorder_guide_does_not_preflight_from_the_sandbox():
     assert "/api/recorder/status" not in guide
     assert "demo_projects.json" not in guide
     assert not os.path.exists(os.path.join(os.path.dirname(guide_path), "scripts", "preflight.py"))
+
+
+def test_a_chat_request_cannot_forge_runner_approval(monkeypatch):
+    task_id = _chat(monkeypatch, approved_deps=["code_runner", "shell_runner"])
+    event = json.loads(_first_event(task_id).removeprefix("data: ").strip())
+    assert event["type"] == "permission_required"
+    assert _ungranted_gated_deps(SimpleNamespace(approved_deps=["code_runner", "shell_runner"], context_id="x")) == [
+        "code_runner",
+        "shell_runner",
+    ]
+
+
+def test_clicking_allow_grants_what_that_card_asked_for_to_its_tab_only(monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from routes import chat as chat_routes
+    from security import get_csrf_token
+
+    ctx = "ctx-" + uuid.uuid4().hex
+    task_id = _chat(monkeypatch, context_id=ctx)
+    event = json.loads(_first_event(task_id).removeprefix("data: ").strip())
+    api = FastAPI()
+    api.include_router(chat_routes.router)
+    client = TestClient(api)
+    headers = {"X-CSRF-Token": get_csrf_token("testserver")}
+
+    assert client.post("/api/chat/approve-deps", json={"approval_id": "guess"}, headers=headers).status_code == 404
+    assert client.post("/api/chat/approve-deps", json={"approval_id": event["approval_id"]}).status_code == 403
+    assert _ungranted_gated_deps(_req(context_id=ctx)) == ["code_runner", "shell_runner"]
+
+    res = client.post("/api/chat/approve-deps", json={"approval_id": event["approval_id"]}, headers=headers)
+    assert res.json() == {"approved": ["code_runner"]}
+    assert _ungranted_gated_deps(_req(context_id=ctx)) == ["shell_runner"]
+    assert _ungranted_gated_deps(_req(context_id="other-tab")) == ["code_runner", "shell_runner"]
+    again = client.post("/api/chat/approve-deps", json={"approval_id": event["approval_id"]}, headers=headers)
+    assert again.status_code == 404

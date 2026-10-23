@@ -11,6 +11,7 @@
 } = require('electron');
 const { applyMediaPermissions } = require('./media-permissions');
 const { applyNavigationPolicy, setToolbarAttacher } = require('./navigation-policy');
+const { createHudRecorder } = require('./hud_recorder');
 const path = require('path');
 const { spawn } = require('child_process');
 const http = require('http');
@@ -5360,6 +5361,32 @@ ipcMain.handle('hud:resize', (e, contentW, contentH) => {
 // A thin drag strip is injected at the top (24px, -webkit-app-region:drag) so
 // the user can move the window without the widget needing to know about it.
 // The window auto-sizes to the widget's content after paint.
+const _hudContentsIds = new Set();
+const _hudRecorder = createHudRecorder({
+  confirm: async (contentsId) => {
+    const { dialog, webContents } = require('electron');
+    const wc = webContents.fromId(contentsId);
+    const owner = wc && !wc.isDestroyed() ? BrowserWindow.fromWebContents(wc) : null;
+    const options = {
+      type: 'warning',
+      buttons: ['Deny', 'Allow'],
+      defaultId: 0,
+      cancelId: 0,
+      title: 'Allow screen recording?',
+      message: 'Allow this widget to record your screen?',
+      detail: 'Only click Allow if you just used the Demo Recorder.',
+    };
+    const { response } = owner
+      ? await dialog.showMessageBox(owner, options)
+      : await dialog.showMessageBox(options);
+    return response === 1;
+  },
+  request: (action, params) => _recorderPost(action, params),
+});
+ipcMain.handle('hud:recorder', (e, action, params) => {
+  if (!_hudContentsIds.has(e.sender.id)) return { ok: false, error: 'not a widget window' };
+  return _hudRecorder.handle(e.sender.id, action, params);
+});
 ipcMain.handle('widget:open-hud', (_e, html, opts) => {
   if (!html || typeof html !== 'string') return { ok: false, error: 'missing html' };
   // opts may carry per-widget flags. hideOnCapture defaults to FALSE — most
@@ -5383,9 +5410,14 @@ ipcMain.handle('widget:open-hud', (_e, html, opts) => {
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
+      // Own session: widget HTML is model-written and must not inherit the
+      // X-AIGator-Shell-Key header that defaultSession adds for the backend origin.
+      partition: 'persist:gator-hud',
       preload: path.join(__dirname, 'hud-preload.js'),
     },
   });
+  const _hudContentsId = hud.webContents.id;
+  _hudContentsIds.add(_hudContentsId);
   // Content protection is OPT-IN per widget (hide_on_capture). Default is
   // VISIBLE during capture — most widgets should show when screen-sharing.
   // When enabled on Windows this uses WDA_EXCLUDEFROMCAPTURE so gdigrab skips
@@ -5397,6 +5429,8 @@ ipcMain.handle('widget:open-hud', (_e, html, opts) => {
   // hold stale size/position data.
   if (_widgetId) _hudByWidgetId.set(_widgetId, hud);
   hud.on('closed', () => {
+    _hudContentsIds.delete(_hudContentsId);
+    _hudRecorder.forget(_hudContentsId);
     _hudMinState.delete(hud);
     _hudMaxState.delete(hud);
     if (_widgetId && _hudByWidgetId.get(_widgetId) === hud) {
@@ -5733,68 +5767,72 @@ app.on('before-quit', () => {
 // Alt+R = Record, Alt+P = Pause/Resume, Alt+S = Stop
 // Registered as global shortcuts so they work even when Gator is in the
 // background (e.g. user is recording another app).
-const RECORDER_PORT = process.env.GATOR_PORT || '8003';
-function _recorderApi(action, body) {
-  const http = require('http');
-  const payload = body || (action === 'start' ? {} : {});
-  const bodyStr = JSON.stringify(payload);
-  const req = http.request({
-    hostname: '127.0.0.1',
-    port: RECORDER_PORT,
-    path: '/api/recorder/' + action,
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(bodyStr) },
-    timeout: 5000,
-  });
-  req.on('error', () => {});
-  req.write(bodyStr);
-  req.end();
-}
-function _recorderStatus(cb) {
-  const http = require('http');
-  http
-    .get(
-      { hostname: '127.0.0.1', port: RECORDER_PORT, path: '/api/recorder/status', timeout: 3000 },
+// Requests go to the backend this shell actually runs (GATOR_URL) with the shell
+// key; mutating calls first fetch a CSRF token for the same Host.
+function _backendRequest(method, pathname, { headers = {}, body, timeoutMs = 5000 } = {}) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(GATOR_URL);
+    const transport = require(u.protocol === 'https:' ? 'https' : 'http');
+    const payload = body === undefined ? null : JSON.stringify(body);
+    const h = { ...headers };
+    if (SHELL_KEY) h['X-AIGator-Shell-Key'] = SHELL_KEY;
+    if (payload !== null) {
+      h['Content-Type'] = 'application/json';
+      h['Content-Length'] = Buffer.byteLength(payload);
+    }
+    const req = transport.request(
+      {
+        hostname: u.hostname,
+        port: u.port,
+        path: pathname,
+        method,
+        headers: h,
+        timeout: timeoutMs,
+      },
       (res) => {
         let d = '';
+        res.setEncoding('utf8');
         res.on('data', (c) => (d += c));
         res.on('end', () => {
           try {
-            cb(JSON.parse(d));
+            resolve(JSON.parse(d));
           } catch {
-            cb(null);
+            reject(new Error('HTTP ' + res.statusCode));
           }
         });
       },
-    )
-    .on('error', () => cb(null));
+    );
+    req.on('error', reject);
+    req.on('timeout', () => req.destroy(new Error('request timed out')));
+    if (payload !== null) req.write(payload);
+    req.end();
+  });
+}
+async function _recorderPost(action, body) {
+  const { csrf_token } = await _backendRequest('GET', '/api/csrf');
+  return _backendRequest('POST', '/api/recorder/' + action, {
+    headers: { 'X-CSRF-Token': csrf_token },
+    body: body || {},
+    timeoutMs: action === 'pick-region' ? 600000 : 5000,
+  });
+}
+function _recorderApi(action, body) {
+  _recorderPost(action, body).catch(() => {});
+}
+function _recorderStatus(cb) {
+  _backendRequest('GET', '/api/recorder/status', { timeoutMs: 3000 })
+    .then(cb)
+    .catch(() => cb(null));
 }
 app.whenReady().then(() => {
   globalShortcut.register('Alt+R', () => {
     // Fetch the last-selected screen from the recorder API so the global
     // hotkey uses the same screen the widget has selected.
-    const http = require('http');
-    http
-      .get(
-        {
-          hostname: '127.0.0.1',
-          port: RECORDER_PORT,
-          path: '/api/recorder/screens',
-          timeout: 3000,
-        },
-        (res) => {
-          let d = '';
-          res.on('data', (c) => (d += c));
-          res.on('end', () => {
-            let screenIndex = 0;
-            try {
-              screenIndex = JSON.parse(d).last_screen_index || 0;
-            } catch {}
-            _recorderApi('start', { screen_index: screenIndex, force: true });
-          });
-        },
+    _backendRequest('GET', '/api/recorder/screens', { timeoutMs: 3000 })
+      .then((s) =>
+        _recorderApi('start', { screen_index: (s && s.last_screen_index) || 0, force: true }),
       )
-      .on('error', () => _recorderApi('start', { force: true }));
+      .catch(() => _recorderApi('start', { force: true }));
   });
   globalShortcut.register('Alt+P', () => {
     _recorderStatus((s) => {

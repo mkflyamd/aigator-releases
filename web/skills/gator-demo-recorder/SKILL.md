@@ -194,7 +194,8 @@ window.addEventListener('load', function() {
 
 // Inline in chat the widget is sandboxed (opaque origin): it cannot call the
 // backend, so each call is a named gator:recorder action handled by the parent.
-// In the floating HUD window (parent === window) it calls the backend directly.
+// In the floating HUD window (parent === window) reads go to the backend directly and
+// state changes go through hudControls.recorder, which asks the user in a native dialog.
 var _INLINE = window.parent !== window;
 var _rid = 0, _pending = {};
 window.addEventListener('message', function(ev) {
@@ -227,9 +228,12 @@ function bridgeCall(action, params, cb) {
 function apiFetch(action, params, cb) {
   if (_INLINE) { bridgeCall(action, params, cb); return; }
   var m = (action==='status'||action==='screens') ? 'GET' : 'POST';
-  var opts = {method:m};
-  if (m==='POST' && params) { opts.body=JSON.stringify(params); opts.headers={'Content-Type':'application/json'}; }
-  fetch(_BASE+'/api/recorder/'+action, opts)
+  if (m==='POST') {
+    if (!window.hudControls || !window.hudControls.recorder) { cb(new Error('recorder controls unavailable'), null); return; }
+    window.hudControls.recorder(action, params || {}).then(function(d){cb(null,d);}).catch(function(e){cb(e,null);});
+    return;
+  }
+  fetch(_BASE+'/api/recorder/'+action)
     .then(function(r){return r.json();})
     .then(function(d){cb(null,d);})
     .catch(function(e){cb(e,null);});

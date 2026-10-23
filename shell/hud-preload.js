@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('hudControls', {
   close: () => ipcRenderer.invoke('hud:close'),
   resizeTo: (w, h) => ipcRenderer.invoke('hud:resize', w, h),
   setCaptureExcluded: (excluded) => ipcRenderer.invoke('hud:set-capture-excluded', excluded),
+  recorder: (action, params) => ipcRenderer.invoke('hud:recorder', action, params),
   onMinimized: (cb) => ipcRenderer.on('hud:minimized', cb),
   onRestored: (cb) => ipcRenderer.on('hud:restored', cb),
   onMaximized: (cb) => ipcRenderer.on('hud:maximized', cb),

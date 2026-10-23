@@ -623,7 +623,7 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
     async def _grant_requested_skill(tc, event_queue):
         """request_skill: ask the user for a runner, then offer the skill's tools for the rest of the turn."""
         import shared as _shared
-        from routes.chat import _GATED_DEP_SKILLS, _filter_tools, _resolve_skill_id
+        from routes.chat import _filter_tools, _gated_runner_id, _resolve_skill_id
 
         if not context_id:
             return await _early_error(
@@ -650,7 +650,8 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
             if dep["id"] not in needed:
                 needed.append(dep["id"])
         reason = _clean_card_text(inputs.get("reason", ""), 300) or "(no reason given)"
-        for runner in (n for n in needed if n in _GATED_DEP_SKILLS):
+        runners = list(dict.fromkeys(r for r in map(_gated_runner_id, needed) if r))
+        for runner in runners:
             key = f"capability:{runner}"
             lock = _source_locks.setdefault((context_id, key), asyncio.Lock())
             async with lock:
@@ -755,9 +756,9 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
                     if any(p in _result_str for p in patterns)
                 ]
                 if _triggered and _offered is not None:
-                    from routes.chat import _GATED_DEP_SKILLS
+                    from routes.chat import _is_gated_runner
                     _new = {
-                        n for sid in _triggered if sid not in _GATED_DEP_SKILLS
+                        n for sid in _triggered if not _is_gated_runner(sid)
                         for n in _shared.SKILL_TOOLS_MAP.get(sid, ())
                     } - _offered
                     if _new:
