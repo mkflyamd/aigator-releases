@@ -411,3 +411,29 @@ def test_run_python_path_offers_enabled_skill_shims_only(calls, monkeypatch):
     path = req.env["PATH"].split(os.pathsep)
     assert path[0] == "/skills/on-skill/bin"
     assert "/skills/off-skill/bin" not in path
+
+
+def _launch_writing(monkeypatch, target):
+    def launch(req):
+        (target / "chart.png").write_bytes(b"png")
+        return sandbox.SandboxResult(returncode=0, stdout="", stderr="", timed_out=False)
+
+    monkeypatch.setattr(sandbox, "launch_sandboxed", launch)
+
+
+def test_a_sandboxed_run_is_not_credited_with_a_file_another_tab_saved_to_downloads(calls, tmp_path, monkeypatch):
+    downloads = tmp_path / "home" / "Downloads"
+    downloads.mkdir(parents=True)
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    _launch_writing(monkeypatch, downloads)
+    result = cr_mod._tool_run_python(code="print(1)", _context_id="tab-1")
+    assert result["error"] is None and "output_files" not in result
+
+
+def test_a_sandboxed_run_reports_files_saved_to_a_folder_it_was_granted(calls, data_dir, monkeypatch):
+    first = cr_mod._tool_run_python(code="1", extra_write_paths=[str(data_dir)], _context_id="tab-1")
+    approvals.decide(first["request_id"], "tab-1", True)
+    _launch_writing(monkeypatch, data_dir)
+    result = cr_mod._tool_run_python(code="1", extra_write_paths=[str(data_dir)], _context_id="tab-1")
+    assert [f["path"] for f in result["output_files"]] == [str(data_dir.resolve() / "chart.png")]
