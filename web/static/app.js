@@ -9869,13 +9869,13 @@ function _showJiraTargetSelection(data, ownerTabId) {
 // a short chat message then tells the model whether to re-call.
 function _sandboxFollowUpText(decision, requestId, tool = 'run_python') {
   if (decision !== 'approve') {
-    return `Door closed! I denied sandbox access request ${requestId}. Do not retry it; find a way around without that access, or tell me what you need.`;
+    return `\u{1F6A7} Sandbox stays closed · I denied sandbox access request ${requestId}. Do not retry it; carry on without that access, or tell me what you need.`;
   }
   const again =
     tool === 'run_shell'
-      ? 'Go ahead and run the same run_shell call again with exactly the same command, cwd, extra_read_paths, extra_write_paths and network_hosts.'
-      : 'Go ahead and run the same run_python call again with exactly the same extra_read_paths, extra_write_paths and network_hosts.';
-  return `Green light, gator! I approved sandbox access request ${requestId}. ${again}`;
+      ? 'Run the same run_shell call again with exactly the same command, cwd, extra_read_paths, extra_write_paths and network_hosts.'
+      : 'Run the same run_python call again with exactly the same extra_read_paths, extra_write_paths and network_hosts.';
+  return `\u{1F3D6}️ Sandbox open · I approved sandbox access request ${requestId}. ${again} \u{1F40A}`;
 }
 
 // tabId -> follow-up text waiting for that tab's running chat turn to finish
