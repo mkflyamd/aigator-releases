@@ -1,5 +1,6 @@
 """OneNote skill -- 10 tools."""
 
+import threading
 import json
 import logging
 import re
@@ -585,8 +586,19 @@ def _tool_list_onenote_pages(
     }
 
 
+_write_lock = threading.Lock()
+
+
+def _write_request(gc, method: str, url: str, **kwargs):
+    # Graph answers 409 "too many simultaneous requests" when OneNote writes to one
+    # location overlap, so parallel tool calls are queued one at a time.
+    with _write_lock:
+        return gc._request(method, url, **kwargs)
+
+
 def _post_onenote_json(gc, path: str, body: dict, label: str) -> dict:
-    return gc._request(
+    return _write_request(
+        gc,
         "POST",
         f"https://graph.microsoft.com/v1.0{path}",
         headers={**gc._headers(), "Content-Type": "application/json"},
@@ -665,7 +677,8 @@ def _tool_create_onenote_page(
     page_html = f"<!DOCTYPE html><html><head><title>{safe_title}</title></head><body>{body}</body></html>"
     # Route through GraphClient._request so Retry-After/429 retry logic applies
     url = f"https://graph.microsoft.com/v1.0{_onenote_root(site_id)}/sections/{_eid(section_id)}/pages"
-    resp = gc._request(
+    resp = _write_request(
+        gc,
         "POST",
         url,
         headers={**gc._headers(), "Content-Type": "application/xhtml+xml"},
@@ -807,7 +820,8 @@ def _tool_update_onenote_page(
                 result["previous_html"] = current[: _pe.MAX_PREVIOUS_HTML]
                 if len(current) > _pe.MAX_PREVIOUS_HTML:
                     result["previous_html_truncated"] = True
-        gc._request(
+        _write_request(
+            gc,
             "PATCH",
             f"https://graph.microsoft.com/v1.0{root}/pages/{_eid(page_id)}/content",
             headers={**gc._headers(), "Content-Type": "application/json"},

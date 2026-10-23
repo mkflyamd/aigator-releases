@@ -512,3 +512,29 @@ def test_create_tools_are_registered_and_in_manifest():
         (onenote_tools.ONENOTE_SKILLS_DIR.parent / "manifest.json").read_text(encoding="utf-8-sig")
     )
     assert names == set(manifest["tools"]) | {"find_onenote_notebook"}
+
+
+def test_parallel_onenote_writes_do_not_overlap():
+    import threading
+    import time
+
+    active = []
+    peak = [0]
+
+    class SlowGC(CreateGC):
+        def _request(self, method, url, **kw):
+            active.append(1)
+            peak[0] = max(peak[0], len(active))
+            time.sleep(0.02)
+            active.pop()
+            return super()._request(method, url, **kw)
+
+    gc = SlowGC()
+    with patch("skills._m365.helpers.get_skill_client", return_value=gc):
+        threads = [
+            threading.Thread(target=onenote_tools._tool_create_onenote_page, args=("sec1", f"P{i}", "b"))
+            for i in range(6)
+        ]
+        [t.start() for t in threads]
+        [t.join() for t in threads]
+    assert len(gc.calls) == 6 and peak[0] == 1
