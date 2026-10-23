@@ -32,6 +32,12 @@ def test_page_has_enforcing_csp_without_inline_script_allowance(monkeypatch):
     assert "ws://127.0.0.1:8000" in _directive(csp, "connect-src")
 
 
+def test_blob_audio_is_allowed_for_widget_voice_previews(monkeypatch):
+    monkeypatch.delenv("AIGATOR_CSP_REPORT_ONLY", raising=False)
+    csp = _page().headers["content-security-policy"]
+    assert "blob:" in _directive(csp, "media-src")
+
+
 def test_every_inline_script_carries_the_response_nonce(monkeypatch):
     monkeypatch.delenv("AIGATOR_CSP_REPORT_ONLY", raising=False)
     response = _page()

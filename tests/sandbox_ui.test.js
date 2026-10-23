@@ -29,7 +29,7 @@ assert.match(followUp('deny', 'abc123'), /denied sandbox access request abc123/)
 assert.match(followUp('deny', 'abc123'), /Do not retry/);
 assert.match(
   followUp('approve', 'abc123', 'run_shell'),
-  /Run the same run_shell call again with exactly the same command, cwd/,
+  /run the same run_shell call again with exactly the same command, cwd/i,
 );
 assert.doesNotMatch(followUp('approve', 'abc123'), /run_shell/);
 
@@ -465,7 +465,7 @@ const flush = async () => {
     context_id: 'tab-1',
     scope: 'task',
   });
-  assert.match(envS.form.sent[0], /Run the same run_shell call again/);
+  assert.match(envS.form.sent[0], /run the same run_shell call again/i);
 
   // Always allow sends scope "always"; an unsaveable request has no such button.
   const envA = makeEnv('tab-1');

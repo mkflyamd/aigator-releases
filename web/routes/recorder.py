@@ -12,11 +12,16 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Body
+from fastapi import APIRouter, Body, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+import demo_projects as dp
+from security import verify_csrf
+import narration_approval
+
 router = APIRouter()
+_IS_WINDOWS = os.name == "nt"
 
 OUT_DIR = Path.home() / "Downloads" / "gator_demos"
 
@@ -31,7 +36,7 @@ def _find_ffmpeg() -> str | None:
     found = shutil.which("ffmpeg")
     if found:
         return found
-    if os.name == "nt":
+    if _IS_WINDOWS:
         winget_base = Path.home() / "AppData/Local/Microsoft/WinGet/Packages"
         if winget_base.exists():
             for candidate in sorted(winget_base.glob("*/*/bin/ffmpeg.exe"), reverse=True):
@@ -55,7 +60,7 @@ def _find_ffmpeg() -> str | None:
 
 def _try_install_ffmpeg() -> str | None:
     """Attempt silent winget install on Windows. Returns path if successful."""
-    if os.name != "nt":
+    if not _IS_WINDOWS:
         return None
     try:
         result = subprocess.run(
@@ -103,6 +108,14 @@ _session_tag: str | None = None
 _border_threads: "list[tuple[threading.Thread, threading.Event, list]]" = []
 _last_screen_index: int = 0  # remembered for global hotkey start
 _last_crop: dict | None = None  # remembered for global hotkey start
+def _raw_path() -> Path | None:
+    return _session_dir / "source" / "recording.mp4" if _session_dir else None
+
+
+def _log_path() -> Path | None:
+    return _session_dir / "work" / "logs" / "ffmpeg_log.txt" if _session_dir else None
+
+
 # Each entry's third element is a 1-item list holding the tkinter root once created,
 # so _stop_recording_border can call root.after(0, root.quit) directly.
 
@@ -125,16 +138,13 @@ def _file_size(path: Path) -> int:
 # ── Screen enumeration ────────────────────────────────────────────────────────
 
 def _list_screens_windows() -> list[dict]:
-    """Enumerate monitors and return coordinates for gdigrab.
+    """Enumerate monitors on Windows.
 
-    gdigrab uses the virtual desktop coordinate system as reported by
-    EnumDisplayMonitors — these are LOGICAL (DPI-scaled) coordinates on
-    Windows with display scaling. The virtual desktop spans all monitors
-    in logical space. gdigrab's -offset_x/-offset_y/-video_size must all
-    be in this same logical coordinate space.
-
-    We return the raw EnumDisplayMonitors coordinates without scaling.
-    The label shows the logical resolution (what gdigrab will capture at).
+    This process is DPI-unaware, so x/y/width/height are LOGICAL (scaled)
+    coordinates: the space the region picker, the recording border and crop
+    clamping work in. gdigrab captures in PHYSICAL pixels, so each screen also
+    carries "capture", its physical rectangle, and the label shows that size
+    because it is the resolution the recording will have.
     """
     try:
         import ctypes
@@ -145,29 +155,49 @@ def _list_screens_windows() -> list[dict]:
             _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
                         ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
 
-        screens = []
-
         MonitorEnumProc = ctypes.WINFUNCTYPE(
             ctypes.c_bool,
-            ctypes.c_ulong, ctypes.c_ulong,
-            ctypes.POINTER(RECT), ctypes.c_double,
+            ctypes.c_void_p, ctypes.c_void_p,
+            ctypes.POINTER(RECT), ctypes.c_void_p,
         )
 
-        def _cb(hMonitor, hdcMonitor, lprcMonitor, dwData):
-            r = lprcMonitor.contents
-            w = r.right - r.left
-            h = r.bottom - r.top
+        def _enum() -> dict:
+            rects = {}
+
+            def _cb(hMonitor, hdcMonitor, lprcMonitor, dwData):
+                r = lprcMonitor.contents
+                rects[hMonitor] = (r.left, r.top, r.right - r.left, r.bottom - r.top)
+                return True
+
+            user32.EnumDisplayMonitors(None, None, MonitorEnumProc(_cb), 0)
+            return rects
+
+        def _enum_physical() -> dict:
+            try:
+                user32.SetThreadDpiAwarenessContext.restype = ctypes.c_void_p
+                user32.SetThreadDpiAwarenessContext.argtypes = [ctypes.c_void_p]
+                previous = user32.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))
+            except (AttributeError, OSError):
+                return {}
+            if not previous:
+                return {}
+            try:
+                return _enum()
+            finally:
+                user32.SetThreadDpiAwarenessContext(previous)
+
+        physical = _enum_physical()
+        screens = []
+        for handle, (x, y, w, h) in _enum().items():
+            px, py, pw, ph = physical.get(handle, (x, y, w, h))
             screens.append({
                 "index": len(screens),
-                "x": r.left, "y": r.top,
+                "x": x, "y": y,
                 "width": w, "height": h,
-                "label": f"Display {len(screens) + 1} ({w}x{h})",
-                "primary": r.left == 0 and r.top == 0,
+                "capture": {"x": px, "y": py, "width": pw, "height": ph},
+                "label": f"Display {len(screens) + 1} ({pw}x{ph})",
+                "primary": x == 0 and y == 0,
             })
-            return True
-
-        MonitorEnumProcInst = MonitorEnumProc(_cb)
-        user32.EnumDisplayMonitors(None, None, MonitorEnumProcInst, 0)
         return screens
     except Exception:
         return [{"index": 0, "x": 0, "y": 0, "width": 1920, "height": 1080,
@@ -197,7 +227,7 @@ def _list_screens_mac() -> list[dict]:
 
 @router.get("/api/recorder/screens")
 async def recorder_screens():
-    if os.name == "nt":
+    if _IS_WINDOWS:
         screens = await asyncio.to_thread(_list_screens_windows)
     elif os.path.exists("/usr/bin/xrandr") or os.path.exists("/usr/local/bin/xrandr"):
         screens = [{"index": 0, "x": 0, "y": 0, "width": 1920, "height": 1080,
@@ -207,7 +237,7 @@ async def recorder_screens():
     return {"screens": screens, "last_screen_index": _last_screen_index}
 
 
-@router.post("/api/recorder/select-screen")
+@router.post("/api/recorder/select-screen", dependencies=[Depends(verify_csrf)])
 async def recorder_select_screen(body: dict = Body(default={})):
     """Widget calls this when user changes the screen dropdown so the backend
     remembers the selection for global hotkey starts."""
@@ -360,12 +390,12 @@ def _pick_region_tkinter(screen: dict) -> dict | None:
         return {"error": str(exc)}
 
 
-@router.post("/api/recorder/pick-region")
+@router.post("/api/recorder/pick-region", dependencies=[Depends(verify_csrf)])
 async def recorder_pick_region(body: dict = Body(default={})):
     """Spawn a fullscreen overlay on the given screen for the user to drag-select
     a crop region. Returns {x, y, w, h} in screen coordinates."""
     screen_index = (body or {}).get("screen_index", 0)
-    if os.name == "nt":
+    if _IS_WINDOWS:
         screens = await asyncio.to_thread(_list_screens_windows)
     else:
         screens = await asyncio.to_thread(_list_screens_mac)
@@ -387,6 +417,13 @@ async def recorder_pick_region(body: dict = Body(default={})):
 
 # ── Recording border overlay ──────────────────────────────────────────────────
 
+def _border_rect(screen: dict, crop: dict | None) -> tuple[int, int, int, int]:
+    """Logical virtual-desktop rect for the border; crop is relative to the screen."""
+    if crop:
+        return screen["x"] + crop["x"], screen["y"] + crop["y"], crop["w"], crop["h"]
+    return screen["x"], screen["y"], screen["width"], screen["height"]
+
+
 def _run_recording_border(screen: dict, crop: dict | None, stop_event: threading.Event, root_ref: list):
     """Show a transparent orange border around the capture area while recording.
 
@@ -401,12 +438,7 @@ def _run_recording_border(screen: dict, crop: dict | None, stop_event: threading
     try:
         import tkinter as tk
 
-        # Border bounds are in logical pixels (same as screen dict — gdigrab
-        # and tkinter both use logical/virtual-desktop coordinates).
-        if crop:
-            bx, by, bw, bh = crop["x"], crop["y"], crop["w"], crop["h"]
-        else:
-            bx, by, bw, bh = screen["x"], screen["y"], screen["width"], screen["height"]
+        bx, by, bw, bh = _border_rect(screen, crop)
 
         BORDER = 4
         root = tk.Tk()
@@ -463,7 +495,7 @@ def _run_recording_border(screen: dict, crop: dict | None, stop_event: threading
 
         canvas.tag_bind("rec_badge", "<Button-1>", _on_badge_click)
 
-        if os.name == "nt":
+        if _IS_WINDOWS:
             import ctypes
 
             # Make window click-through so the user can interact with apps underneath.
@@ -577,47 +609,36 @@ class StartRequest(BaseModel):
     crop_h: Optional[int] = None
     framerate: int = 30
     force: bool = False  # if True, stop any existing recording first
+    project_id: Optional[str] = None
+
+
+_last_start_req: StartRequest = StartRequest()  # the request the active session started with; resume replays it
+
+
+def _capture_rect(screen: dict, req: StartRequest) -> tuple[int, int, int, int]:
+    """Physical-pixel (x, y, w, h) for gdigrab from a logical screen and crop."""
+    cap = screen.get("capture") or screen
+    sx = cap["width"] / screen["width"]
+    sy = cap["height"] / screen["height"]
+    ow = round((req.crop_w or screen["width"]) * sx)
+    oh = round((req.crop_h or screen["height"]) * sy)
+    return (cap["x"] + round((req.crop_x or 0) * sx),
+            cap["y"] + round((req.crop_y or 0) * sy),
+            max(2, ow - ow % 2), max(2, oh - oh % 2))
 
 
 def _build_ffmpeg_cmd(ffmpeg: str, out_path: Path, req: StartRequest,
                       screens: list[dict]) -> list[str]:
     screen = screens[req.screen_index] if req.screen_index < len(screens) else screens[0]
 
-    if os.name == "nt":
-        # gdigrab always operates in physical pixels regardless of the calling
-        # process's DPI awareness. Python's ctypes/GetSystemMetrics return
-        # LOGICAL coordinates when the process is DPI-unaware, which differ
-        # from physical pixels on scaled displays (e.g. 1280x800 logical on a
-        # 1920x1200 physical 150%-scaled screen). Passing logical dimensions as
-        # -video_size causes gdigrab to capture only a fraction of the screen.
-        #
-        # Fix: omit -offset_x/-offset_y/-video_size for full-screen capture so
-        # gdigrab auto-detects the correct physical desktop dimensions. Only add
-        # these flags when a crop region is explicitly requested.
-        has_crop = any(v is not None for v in [req.crop_x, req.crop_y, req.crop_w, req.crop_h])
+    if _IS_WINDOWS:
+        ox, oy, ow, oh = _capture_rect(screen, req)
         cmd = [
             ffmpeg, "-y",
             "-f", "gdigrab",
             "-framerate", str(req.framerate),
-        ]
-        # Always pass -offset_x/-offset_y/-video_size using PHYSICAL pixel
-        # coordinates from _list_screens_windows(). gdigrab works in physical
-        # pixels and needs explicit dimensions — omitting -video_size causes it
-        # to capture the full virtual desktop instead of just the target monitor.
-        ox = screen["x"] + (req.crop_x or 0)
-        oy = screen["y"] + (req.crop_y or 0)
-        ow = req.crop_w or screen["width"]
-        oh = req.crop_h or screen["height"]
-        if ox != 0 or oy != 0 or has_crop:
-            cmd += ["-offset_x", str(ox), "-offset_y", str(oy),
-                    "-video_size", f"{ow}x{oh}"]
-        else:
-            # Primary monitor, full screen, no crop — still pass video_size so
-            # gdigrab encodes at the correct physical resolution rather than
-            # defaulting to the virtual desktop size (which may differ on
-            # multi-monitor setups).
-            cmd += ["-video_size", f"{ow}x{oh}"]
-        cmd += [
+            "-offset_x", str(ox), "-offset_y", str(oy),
+            "-video_size", f"{ow}x{oh}",
             "-i", "desktop",
             "-vcodec", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
             str(out_path),
@@ -654,9 +675,9 @@ def _build_ffmpeg_cmd(ffmpeg: str, out_path: Path, req: StartRequest,
 
 def _start_segment(ffmpeg: str, req: StartRequest, screens: list[dict],
                     seg_index: int) -> tuple[subprocess.Popen, Path]:
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
-    seg_path = _session_dir / f"seg_{seg_index:02d}.mp4"
-    log_path = _session_dir / "ffmpeg_log.txt"
+    seg_path = _session_dir / "source" / f"seg_{seg_index:02d}.mp4"
+    log_path = _log_path()
+    log_path.parent.mkdir(parents=True, exist_ok=True)
     cmd = _build_ffmpeg_cmd(ffmpeg, seg_path, req, screens)
     with open(log_path, "ab") as lf:
         lf.write(f"[cmd seg{seg_index}] {' '.join(str(c) for c in cmd)}\n".encode())
@@ -669,18 +690,18 @@ def _start_segment(ffmpeg: str, req: StartRequest, screens: list[dict],
             stdin=subprocess.DEVNULL,
             stdout=log_handle,
             stderr=subprocess.STDOUT,
-            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
+            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if _IS_WINDOWS else 0,
         )
     finally:
         log_handle.close()
     return proc, seg_path
 
 
-@router.post("/api/recorder/start")
+@router.post("/api/recorder/start", dependencies=[Depends(verify_csrf)])
 async def recorder_start(req: StartRequest = StartRequest()):
     global _ffmpeg_proc, _recording_path, _recording_start
     global _paused_at, _paused_elapsed, _segments, _session_dir, _session_tag
-    global _last_screen_index, _last_crop
+    global _last_screen_index, _last_crop, _last_start_req
 
     # Remember the screen selection so global hotkeys (Alt+R) use the same screen
     _last_screen_index = req.screen_index
@@ -693,7 +714,7 @@ async def recorder_start(req: StartRequest = StartRequest()):
                     "path": str(_recording_path), "elapsed": _elapsed()}
         # force=True — stop the stale recording silently before starting fresh
         try:
-            if os.name == "nt":
+            if _IS_WINDOWS:
                 _ffmpeg_proc.send_signal(signal.CTRL_BREAK_EVENT)
             else:
                 _ffmpeg_proc.terminate()
@@ -723,7 +744,7 @@ async def recorder_start(req: StartRequest = StartRequest()):
             ),
         })
 
-    screens = _list_screens_windows() if os.name == "nt" else _list_screens_mac()
+    screens = _list_screens_windows() if _IS_WINDOWS else _list_screens_mac()
     if not screens:
         screens = [{"index": 0, "x": 0, "y": 0, "width": 1920, "height": 1080,
                     "label": "Display 1", "primary": True}]
@@ -753,15 +774,21 @@ async def recorder_start(req: StartRequest = StartRequest()):
                                          "crop_w": cw, "crop_h": ch})
 
 
-    _session_tag = datetime.now().strftime("demo_%Y%m%d_%H%M%S")
-    _session_dir = OUT_DIR / _session_tag
-    _session_dir.mkdir(parents=True, exist_ok=True)
-    _segments = []
+    try:
+        project = dp.begin_session(req.project_id)
+    except KeyError:
+        return JSONResponse(status_code=404, content={"ok": False, "error": "project not found"})
+    except ValueError as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
+    _session_tag = project["project_id"]
+    _session_dir = Path(project["path"])
+    _segments = [Path(s) for s in project["segments"]]
     _paused_elapsed = 0.0
     _paused_at = None
+    _last_start_req = req
 
     try:
-        proc, seg_path = _start_segment(ffmpeg, req, screens, 0)
+        proc, seg_path = _start_segment(ffmpeg, req, screens, len(_segments))
     except Exception as exc:
         return JSONResponse(status_code=500, content={"ok": False, "error": str(exc)})
 
@@ -769,13 +796,18 @@ async def recorder_start(req: StartRequest = StartRequest()):
     _recording_path = seg_path
     _recording_start = time.monotonic()
     _segments.append(seg_path)
+    dp.update_project(_session_tag, stage="recording", segments=_segments)
 
     await asyncio.sleep(0.6)
     if _ffmpeg_proc.poll() is not None:
+        _segments.pop()
+        _ffmpeg_proc = None
+        _recording_start = None
+        dp.update_project(_session_tag, stage=project.get("stage", "created"), segments=_segments)
         return JSONResponse(status_code=500, content={
             "ok": False,
             "error": "ffmpeg exited immediately — check ffmpeg_log.txt",
-            "log": str(_session_dir / "ffmpeg_log.txt"),
+            "log": str(_log_path()),
         })
 
     # Show orange border around the capture area (excluded from the recording)
@@ -786,7 +818,7 @@ async def recorder_start(req: StartRequest = StartRequest()):
     screen = screens[req.screen_index] if req.screen_index < len(screens) else screens[0]
     return {
         "ok": True, "status": "recording",
-        "path": str(_session_dir / f"{_session_tag}_final.mp4"),
+        "path": str(_raw_path()), "project_id": _session_tag,
         "session_dir": str(_session_dir),
         "pid": _ffmpeg_proc.pid,
         "elapsed": 0,
@@ -798,7 +830,7 @@ async def recorder_start(req: StartRequest = StartRequest()):
 
 # ── Pause ─────────────────────────────────────────────────────────────────────
 
-@router.post("/api/recorder/pause")
+@router.post("/api/recorder/pause", dependencies=[Depends(verify_csrf)])
 async def recorder_pause():
     global _ffmpeg_proc, _paused_at, _paused_elapsed, _recording_start
 
@@ -810,14 +842,14 @@ async def recorder_pause():
     # Windows: can't SIGSTOP ffmpeg — stop the segment cleanly
     elapsed_so_far = _elapsed()
     try:
-        if os.name == "nt":
+        if _IS_WINDOWS:
             _ffmpeg_proc.send_signal(signal.CTRL_BREAK_EVENT)
         else:
             _ffmpeg_proc.send_signal(signal.SIGSTOP)
     except Exception:
         pass
 
-    if os.name == "nt":
+    if _IS_WINDOWS:
         try:
             _ffmpeg_proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
@@ -834,10 +866,7 @@ async def recorder_pause():
 
 # ── Resume ────────────────────────────────────────────────────────────────────
 
-_last_start_req: StartRequest = StartRequest()
-
-
-@router.post("/api/recorder/resume")
+@router.post("/api/recorder/resume", dependencies=[Depends(verify_csrf)])
 async def recorder_resume():
     global _ffmpeg_proc, _recording_path, _recording_start, _paused_at, _segments
 
@@ -848,19 +877,24 @@ async def recorder_resume():
     if not ffmpeg:
         return JSONResponse(status_code=500, content={"ok": False, "error": "ffmpeg not found"})
 
-    if os.name == "nt":
+    if _IS_WINDOWS:
         screens = _list_screens_windows()
         seg_index = len(_segments)
         try:
             proc, seg_path = _start_segment(ffmpeg, _last_start_req, screens, seg_index)
         except Exception as exc:
             return JSONResponse(status_code=500, content={"ok": False, "error": str(exc)})
+        await asyncio.sleep(0.4)
+        if proc.poll() is not None:
+            _ffmpeg_proc = None
+            return JSONResponse(status_code=500, content={
+                "ok": False,
+                "error": "ffmpeg failed to restart — check ffmpeg_log.txt",
+                "log": str(_log_path()),
+            })
         _ffmpeg_proc = proc
         _recording_path = seg_path
         _segments.append(seg_path)
-        await asyncio.sleep(0.4)
-        if _ffmpeg_proc.poll() is not None:
-            return JSONResponse(status_code=500, content={"ok": False, "error": "ffmpeg failed to restart"})
     else:
         screens = _list_screens_mac()
         # POSIX: resume the stopped process
@@ -887,23 +921,27 @@ async def recorder_resume():
 
 def _stitch_segments(ffmpeg: str, segments: list[Path], out_path: Path) -> Path:
     if len(segments) == 1:
-        import shutil as _sh
-        _sh.copy2(segments[0], out_path)
+        shutil.copy2(segments[0], out_path)
         return out_path
     concat_file = out_path.parent / "concat_list.txt"
-    with open(concat_file, "w") as f:
-        for s in segments:
-            f.write(f"file '{s}'\n")
-    subprocess.run(
-        [ffmpeg, "-y", "-f", "concat", "-safe", "0", "-i", str(concat_file),
-         "-c", "copy", str(out_path)],
-        check=True, capture_output=True,
-    )
-    concat_file.unlink(missing_ok=True)
+    try:
+        with open(concat_file, "w", encoding="utf-8") as f:
+            for s in segments:
+                escaped = str(s).replace("'", "'\\''")
+                f.write(f"file '{escaped}'\n")
+        result = subprocess.run(
+            [ffmpeg, "-y", "-f", "concat", "-safe", "0", "-i", str(concat_file),
+             "-c", "copy", str(out_path)],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError((result.stderr or "").strip()[-400:] or f"ffmpeg exited with {result.returncode}")
+    finally:
+        concat_file.unlink(missing_ok=True)
     return out_path
 
 
-@router.post("/api/recorder/stop")
+@router.post("/api/recorder/stop", dependencies=[Depends(verify_csrf)])
 async def recorder_stop():
     global _ffmpeg_proc, _recording_path, _recording_start
     global _paused_at, _paused_elapsed, _segments, _session_dir, _session_tag
@@ -916,7 +954,7 @@ async def recorder_stop():
             return {"ok": False, "error": "Not recording", "status": "idle"}
         elapsed = _elapsed()
         try:
-            if os.name == "nt":
+            if _IS_WINDOWS:
                 _ffmpeg_proc.send_signal(signal.CTRL_BREAK_EVENT)
             else:
                 _ffmpeg_proc.terminate()
@@ -934,49 +972,49 @@ async def recorder_stop():
     await asyncio.sleep(0.5)
 
     ffmpeg = _FFMPEG or _find_ffmpeg()
-    final_path = _session_dir / f"{_session_tag}_final.mp4"
+    final_path = _raw_path()
+    segments = [s for s in _segments if _file_size(s) > 0]
 
-    try:
-        final = await asyncio.to_thread(_stitch_segments, ffmpeg, _segments, final_path)
-        size = _file_size(final)
-    except Exception as exc:
-        # fallback: return last segment
-        final = _segments[-1] if _segments else _recording_path
-        size = _file_size(final) if final else 0
+    error = None
+    final = None
+    if not segments:
+        error = "No video was captured — check ffmpeg_log.txt"
+    else:
+        try:
+            final = await asyncio.to_thread(_stitch_segments, ffmpeg, segments, final_path)
+        except Exception as exc:
+            error = f"Could not join recording segments: {exc}"
 
     _paused_at = None
     _paused_elapsed = 0.0
     _stop_recording_border()
 
-    # Persist the raw recording path server-side so the Phase 3 narration widget
-    # can fetch it via /api/recorder/latest-output without any path embedded in JS.
-    if final:
-        _write_latest_output({"raw": str(final), "final": str(final)})
+    if error:
+        return JSONResponse(status_code=500, content={
+            "ok": False, "status": "idle", "error": error,
+            "segments": [str(s) for s in _segments],
+            "session_dir": str(_session_dir),
+        })
+
+    if _session_tag:
+        try:
+            dp.update_project(_session_tag, stage="recorded", segments=_segments, raw=final)
+            # A re-recording replaces source/recording.mp4 at the same path, so an earlier edit of it would still look current.
+            media = dict((dp.get_project(_session_tag).get("ext") or {}).get("media") or {})
+            if "current" in media or "current_base" in media:
+                media.pop("current", None)
+                media.pop("current_base", None)
+                dp.set_ext(_session_tag, "media", media)
+        except (KeyError, ValueError):
+            pass
 
     return {
-        "ok": True, "status": "idle",
-        "path": str(final) if final else None,
-        "size_bytes": size,
+        "ok": True, "status": "idle", "project_id": _session_tag,
+        "path": str(final),
+        "size_bytes": _file_size(final),
         "elapsed": elapsed,
         "segments": len(_segments),
     }
-
-
-def _write_latest_output(data: dict) -> None:
-    """Write output paths to ~/.gator/latest_output.json for widget fetch."""
-    try:
-        p = Path.home() / ".gator" / "latest_output.json"
-        p.parent.mkdir(exist_ok=True)
-        existing = {}
-        if p.exists():
-            try:
-                existing = json.loads(p.read_text(encoding="utf-8"))
-            except Exception:
-                pass
-        existing.update(data)
-        p.write_text(json.dumps(existing), encoding="utf-8")
-    except Exception:
-        pass
 
 
 # ── Status ────────────────────────────────────────────────────────────────────
@@ -986,12 +1024,12 @@ async def recorder_status():
     global _ffmpeg_proc
     ffmpeg = _FFMPEG or _find_ffmpeg()
     ffprobe = _FFPROBE or _find_ffprobe()
-    log_path = str(_session_dir / "ffmpeg_log.txt") if _session_dir else None
+    log_path = str(_log_path()) if _session_dir else None
 
     if _paused_at is not None:
         return {
-            "status": "paused", "elapsed": _elapsed(), "size_bytes": 0,
-            "path": str(_session_dir / f"{_session_tag}_final.mp4") if _session_dir else None,
+            "status": "paused", "elapsed": _elapsed(), "size_bytes": 0, "project_id": _session_tag,
+            "path": str(_raw_path()) if _session_dir else None,
             "ffmpeg": bool(ffmpeg), "ffmpeg_path": ffmpeg, "ffprobe_path": ffprobe,
             "segments": len(_segments), "log": log_path,
         }
@@ -999,15 +1037,15 @@ async def recorder_status():
     if _ffmpeg_proc is None or _ffmpeg_proc.poll() is not None:
         _ffmpeg_proc = None
         return {
-            "status": "idle", "elapsed": 0, "size_bytes": 0, "path": None,
+            "status": "idle", "elapsed": 0, "size_bytes": 0, "path": None, "project_id": _session_tag,
             "ffmpeg": bool(ffmpeg), "ffmpeg_path": ffmpeg, "ffprobe_path": ffprobe,
             "log": log_path,
         }
 
     size = _file_size(_recording_path) if _recording_path else 0
     return {
-        "status": "recording", "elapsed": _elapsed(), "size_bytes": size,
-        "path": str(_session_dir / f"{_session_tag}_final.mp4") if _session_dir else None,
+        "status": "recording", "elapsed": _elapsed(), "size_bytes": size, "project_id": _session_tag,
+        "path": str(_raw_path()) if _session_dir else None,
         "pid": _ffmpeg_proc.pid,
         "ffmpeg": True, "ffmpeg_path": ffmpeg, "ffprobe_path": ffprobe,
         "segments": len(_segments), "log": log_path,
@@ -1032,19 +1070,16 @@ async def recorder_notify(req: NotifyRequest):
 
 @router.get("/api/recorder/latest-output")
 async def recorder_latest_output():
-    """Return the latest recording/output paths so widgets don't embed paths in JS.
-
-    Returns {raw, final, timestamp} — 'raw' is the raw recording, 'final' is the
-    last merged output (TTS + music). Widgets fetch this on load instead of having
-    the model bake a path string into a JS literal (which causes escaping bugs).
-    """
-    p = Path.home() / ".gator" / "latest_output.json"
-    if not p.exists():
+    """Legacy shim: raw/final of the active demo project."""
+    pid = dp.get_active_id()
+    if not pid:
         return JSONResponse(status_code=404, content={"error": "no output yet"})
     try:
-        return JSONResponse(json.loads(p.read_text(encoding="utf-8")))
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        p = dp.get_project(pid)
+    except KeyError:
+        return JSONResponse(status_code=404, content={"error": "no output yet"})
+    return JSONResponse({"raw": p["raw"], "final": p["final"], "project_id": pid,
+                         "timestamp": p["updated_at"]})
 
 
 class SetOutputRequest(BaseModel):
@@ -1054,11 +1089,14 @@ class SetOutputRequest(BaseModel):
 
 @router.post("/api/recorder/set-output")
 async def recorder_set_output(req: SetOutputRequest):
-    """Called by Phase 4 agent code after TTS/music merge to register the final path."""
-    data: dict = {"final": req.final}
-    if req.raw:
-        data["raw"] = req.raw
-    _write_latest_output(data)
+    """Legacy shim: the deliverable is whatever is in the project's final/ folder."""
+    pid = dp.get_active_id()
+    if not pid:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "no active project"})
+    try:
+        Path(req.final).resolve().relative_to(dp.project_path(pid).resolve())
+    except ValueError:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "final must be inside the project folder"})
     return {"ok": True}
 
 
@@ -1069,31 +1107,26 @@ class NarrationApprovedRequest(BaseModel):
 
 @router.post("/api/recorder/narration-approved")
 async def recorder_narration_approved(req: NarrationApprovedRequest):
-    """Store approved narration segments server-side so the agent can read them.
-
-    Called by the frontend postMessage intercept when the widget's Approve button
-    fires. Writes to ~/.gator/narration_pending.json so the agent can read it via
-    run_python without depending on browser sessionStorage (which is inaccessible
-    to the agent).
-    """
-    gator_dir = Path.home() / ".gator"
-    gator_dir.mkdir(exist_ok=True)
-    pending = gator_dir / "narration_pending.json"
-    pending.write_text(json.dumps({
-        "segments": req.segments,
-        "flags": req.flags,
-        "timestamp": datetime.utcnow().isoformat(),
-    }), encoding="utf-8")
-    return {"ok": True, "path": str(pending)}
+    """Legacy entry point: approve narration on the active project via the transaction."""
+    pid = dp.get_active_id()
+    if not pid:
+        return {"ok": True}
+    try:
+        approval = narration_approval.approve(pid, req.segments, req.flags)["approval"]
+    except narration_approval.ApprovalError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    except KeyError:
+        return JSONResponse({"ok": False, "error": "project not found"}, status_code=404)
+    return {"ok": True, "project_id": pid, "approval": approval}
 
 
 @router.get("/api/recorder/debug")
 async def recorder_debug():
     """Returns current screen list and last ffmpeg log for diagnosing capture issues."""
-    screens = await asyncio.to_thread(_list_screens_windows) if os.name == "nt" else await asyncio.to_thread(_list_screens_mac)
+    screens = await asyncio.to_thread(_list_screens_windows) if _IS_WINDOWS else await asyncio.to_thread(_list_screens_mac)
     log_lines = []
     if _session_dir:
-        log_path = _session_dir / "ffmpeg_log.txt"
+        log_path = _log_path()
         try:
             log_lines = log_path.read_text(errors="replace").splitlines()[-80:]
         except OSError:
@@ -1144,20 +1177,16 @@ async def recorder_tts_preview(body: dict = Body(default={})):
 @router.get("/api/recorder/serve-file")
 async def recorder_serve_file(path: str):
     """Serve a local file (MP4/MP3) by absolute path for inline playback.
-    Only serves files under the gator_demos output directory."""
+    Only serves files under the gator_demos output directory or a demo project folder."""
     from fastapi.responses import FileResponse as _FileResponse
     p = Path(path).resolve()
-    out = OUT_DIR.resolve()
-    # Path traversal check: p must be inside out (a proper parent check,
-    # not a string prefix match which `gator_demos_evil` would bypass)
-    try:
-        p.relative_to(out)
-    except ValueError:
-        return JSONResponse(status_code=403, content={"error": "path outside gator_demos"})
+    roots = [OUT_DIR.resolve()] + [folder.resolve() for folder in dp.project_folders()]
+    if not any(p.is_relative_to(r) for r in roots):
+        return JSONResponse(status_code=403, content={"error": "path outside demo projects"})
     if not p.exists():
         return JSONResponse(status_code=404, content={"error": "file not found"})
     suffix = p.suffix.lower()
-    media = {"mp4": "video/mp4", "mp3": "audio/mpeg", "m4a": "audio/mp4"}.get(suffix[1:], "application/octet-stream")
+    media = {"mp4": "video/mp4", "mp3": "audio/mpeg", "m4a": "audio/mp4", "png": "image/png"}.get(suffix[1:], "application/octet-stream")
     return _FileResponse(str(p), media_type=media)
 
 

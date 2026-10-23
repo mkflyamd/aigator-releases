@@ -196,6 +196,7 @@ async def image_upload_temp(file: UploadFile):
 
 class OpenFileRequest(BaseModel):
     path: str
+    reveal: bool = False
 
 
 BLOCKED_EXTENSIONS = {
@@ -212,11 +213,20 @@ BLOCKED_EXTENSIONS = {
 }
 
 
-def _do_open_file(path: str, is_dir: bool = False) -> None:
+def _do_open_file(path: str, is_dir: bool = False, reveal: bool = False) -> None:
     """Open a file in its default app, or reveal a folder in the OS file manager.
 
     For directories we invoke the file manager explicitly rather than rely on
     os.startfile()'s ambiguous folder handling, which could fail silently."""
+    if reveal and not is_dir:
+        if sys.platform == "win32":
+            subprocess.run(["explorer", "/select," + os.path.normpath(path)], **no_window_kwargs())
+            return
+        if sys.platform == "darwin":
+            subprocess.run(["open", "-R", path])
+            return
+        subprocess.run(["xdg-open", os.path.dirname(path)])
+        return
     if is_dir:
         if sys.platform == "win32":
             subprocess.run(["explorer", os.path.normpath(path)], **no_window_kwargs())
@@ -294,7 +304,7 @@ async def open_file(req: OpenFileRequest):
         p = resolved
     try:
         loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, _do_open_file, str(p), p.is_dir())
+        await loop.run_in_executor(None, _do_open_file, str(p), p.is_dir(), req.reveal)
         return {"ok": True}
     except Exception as e:
         return {"ok": False, "reason": "error", "message": str(e)}

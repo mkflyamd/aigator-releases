@@ -11,6 +11,7 @@ Usage from other modules:
 import asyncio
 import json
 import logging
+import re
 from pathlib import Path
 
 log = logging.getLogger("notify")
@@ -257,6 +258,31 @@ def _parse_skill_requires(path: Path) -> list[str]:
     return []
 
 
+def _parse_skill_dependencies(path: Path) -> list[dict]:
+    """Read the `requires:` entries written as `- id: ... / reason: ...` in SKILL.md frontmatter.
+
+    These are the dependencies that go through the user-approval gate; the string-list form
+    read by _parse_skill_requires only auto-activates a skill and is never gated.
+    """
+    import yaml
+
+    text = path.read_text(encoding="utf-8")
+    m = re.match(r"^---\r?\n(.*?)\r?\n---", text, re.DOTALL)
+    if not m:
+        return []
+    try:
+        raw = (yaml.safe_load(m.group(1)) or {}).get("requires") or []
+    except Exception:
+        return []
+    if not isinstance(raw, list):
+        return []
+    return [
+        {"id": str(r["id"]), "reason": str(r.get("reason", ""))}
+        for r in raw
+        if isinstance(r, dict) and r.get("id")
+    ]
+
+
 _AIGATOR_SKILL_PATH = _WEB_DIR / "skills" / "aigator" / "SKILL.md"
 
 
@@ -296,6 +322,9 @@ for _skill_dir in _skills_root.iterdir():
         _reqs = _parse_skill_requires(_skill_md)
         if _reqs:
             SKILL_REQUIRES[_skill_dir.name] = _reqs
+        _deps = _parse_skill_dependencies(_skill_md)
+        if _deps:
+            SKILL_DEPENDENCIES_MAP[_skill_dir.name] = _deps
         _desc = _parse_skill_description(_skill_md)
         if _desc:
             SKILL_DESCRIPTIONS[_skill_dir.name] = _desc

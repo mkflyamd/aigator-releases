@@ -1,7 +1,10 @@
 """Always-on skill -- 3 tools (always available regardless of active skill)."""
 import json
 import logging
+import math
 import re
+import subprocess
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -49,6 +52,8 @@ TOOL_DEFS = [
             "task='assess': generate a structured assessment report from images in this conversation. "
             "task='analyze_sequence': read a list of video frames from disk (image_paths), label each with its timestamp, "
             "and return a per-frame timeline describing what is visible, what actions are happening, and any text/UI visible. "
+            "task='analyze_video': analyze a screen-recording video file given video_path — frames are extracted for you "
+            "(max 8, evenly spaced); prefer this over extracting frames yourself. "
             "Use analyze_sequence for video keyframe analysis — do NOT ask the user to upload frames, pass image_paths directly."
         ),
         "input_schema": {
@@ -56,7 +61,7 @@ TOOL_DEFS = [
             "properties": {
                 "task": {
                     "type": "string",
-                    "enum": ["describe", "compare", "extract_data", "assess", "analyze_sequence"],
+                    "enum": ["describe", "compare", "extract_data", "assess", "analyze_sequence", "analyze_video"],
                     "description": "What visual analysis task to perform",
                 },
                 "image_paths": {
@@ -68,6 +73,13 @@ TOOL_DEFS = [
                         "For extract_data: paths to images to extract fields from. "
                         "For analyze_sequence: ordered list of video frame paths — each is read, "
                         "labeled with its index/timestamp, and described in the returned timeline."
+                    ),
+                },
+                "video_path": {
+                    "type": "string",
+                    "description": (
+                        "For analyze_video: absolute path of the video file to analyze. "
+                        "Frames are extracted server-side (at most 8, evenly spaced)."
                     ),
                 },
                 "fields": {
@@ -110,11 +122,12 @@ TOOL_DEFS = [
     },
     {
         "name": "read_skill",
-        "description": "Read the full capability guide (SKILL.md) and manifest for an installed skill. Call this when the user asks what a skill can do, or when you are about to use a skill's tools for the first time in a session and want to confirm correct usage. Do NOT call this before every single tool use — only when you genuinely need to check capabilities or parameters. skill_id examples: 'calendar', 'excel', 'email'.",
+        "description": "Read the full capability guide (SKILL.md) and manifest for an installed skill. Call this when the user asks what a skill can do, or when you are about to use a skill's tools for the first time in a session and want to confirm correct usage. Do NOT call this before every single tool use — only when you genuinely need to check capabilities or parameters. skill_id examples: 'calendar', 'excel', 'email'. A skill guide that points at its own reference files (references/..., assets/...) is read with the file argument, so no file tool is needed.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "skill_id": {"type": "string", "description": "The skill folder name under /skills/, e.g. 'calendar' or 'excel'"},
+                "file": {"type": "string", "description": "Optional path inside the skill folder to read instead of SKILL.md, e.g. 'references/DESIGN.md'. The guide lists the files a skill ships. Text files only; for a binary asset you get its path."},
             },
             "required": ["skill_id"],
         },
@@ -213,6 +226,25 @@ TOOL_DEFS = [
             "required": [],
         },
     },
+    {
+        "name": "request_skill",
+        "description": (
+            "Ask for a skill whose tools you do not have but need to finish the user's request, for example "
+            "the Python code runner (code_runner) when a skill's instructions need to run code, or a service "
+            "skill such as slack or jira. Give the skill id and a short reason. Skills that run code or "
+            "commands ask the user for approval first; if they decline, tell the user and do not look for "
+            "another way around it. On success the skill's tools become callable in this turn; call "
+            "read_skill for how to use them. Do not use this for a skill whose tools you already have."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "skill": {"type": "string", "description": "Skill id, e.g. code_runner, shell_runner, slack, jira."},
+                "reason": {"type": "string", "description": "One sentence: what you need it for. Shown to the user."},
+            },
+            "required": ["skill", "reason"],
+        },
+    },
 ]
 
 TOOL_STATUS = {
@@ -225,6 +257,7 @@ TOOL_STATUS = {
     "analyze_mcp_server": "\U0001f50e Analyzing MCP server...",
     "connect_mcp_server": "\U0001f517 Connecting MCP server...",
     "mcp_connection_status": "\U0001f50c Checking connection status...",
+    "request_skill": "\U0001f9e9 Requesting a skill...",
 }
 
 
@@ -317,7 +350,7 @@ def _check_fetch_target(url: str) -> dict | None:
     except ValueError:
         return {"error": "Blocked: the URL is not valid."}
     if len(target) > _MAX_FETCH_QUERY:
-        return {"error": f"Blocked: the URL's path and query string together are longer than {_MAX_FETCH_QUERY} characters."}
+        return {"error": f"Blocked: the URL's path and query string together are longer than {_MAX_FETCH_QUERY} characters. Drop the page-title slug or extra parameters, or use the service's own tool (for Confluence, read_confluence_page)."}
     return None
 
 
@@ -413,13 +446,86 @@ _IMAGE_MEDIA_TYPES = {
     ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
     ".gif": "image/gif", ".webp": "image/webp",
 }
+_MAX_SEQUENCE_FRAMES = 8
+_FRAME_MIN_INTERVAL_SEC = 5
+
+
+def _extract_video_frames(video: Path, ffmpeg: str, ffprobe: str, out_dir: Path) -> tuple[list[str], float]:
+    probe = subprocess.run(
+        [ffprobe, "-v", "error", "-show_entries", "format=duration",
+         "-of", "default=noprint_wrappers=1:nokey=1", str(video)],
+        capture_output=True, text=True,
+    )
+    try:
+        duration = float((probe.stdout or "").strip())
+    except ValueError:
+        duration = 0.0
+    if probe.returncode != 0 or duration <= 0:
+        raise RuntimeError(
+            f"Could not read the video duration with ffprobe: {(probe.stderr or '').strip()[-300:]}")
+    n = min(_MAX_SEQUENCE_FRAMES, max(1, math.ceil(duration / _FRAME_MIN_INTERVAL_SEC)))
+    interval = duration / n
+    paths = []
+    for i in range(n):
+        out = out_dir / f"frame_{i + 1:04d}.png"
+        r = subprocess.run(
+            [ffmpeg, "-y", "-ss", f"{i * interval:.3f}", "-i", str(video), "-frames:v", "1", str(out)],
+            capture_output=True, text=True,
+        )
+        if r.returncode != 0 or not out.exists():
+            raise RuntimeError(
+                f"ffmpeg could not extract a frame at {i * interval:.1f}s: {(r.stderr or '').strip()[-300:]}")
+        paths.append(str(out))
+    return paths, interval
+
+
+async def _analyze_video(video_path: str) -> dict:
+    import asyncio
+    import shutil
+    from routes import recorder as _rec
+
+    video = Path(video_path)
+    if not video.is_file():
+        return {"ok": False, "error": f"Video not found: {video_path}"}
+    ffmpeg = _rec._FFMPEG or _rec._find_ffmpeg()
+    ffprobe = _rec._FFPROBE or _rec._find_ffprobe()
+    if not ffmpeg or not ffprobe:
+        return {"ok": False, "error": (
+            "ffmpeg/ffprobe not found. Install: `winget install Gyan.FFmpeg` (Windows) "
+            "or `brew install ffmpeg` (macOS).")}
+    frames_dir = Path(tempfile.mkdtemp(prefix="gator_frames_"))
+    try:
+        try:
+            paths, interval = await asyncio.to_thread(_extract_video_frames, video, ffmpeg, ffprobe, frames_dir)
+        except RuntimeError as exc:
+            return {"ok": False, "error": str(exc)}
+        result = await _analyze_frame_sequence(paths, 1 / interval)
+    finally:
+        shutil.rmtree(frames_dir, ignore_errors=True)
+    if result is None:
+        return {"ok": False, "error": "Frame analysis failed: no frame could be read."}
+    return result
 
 
 async def _tool_describe_images(task: str, image_paths: list | None = None,
-                               fields: list | None = None, fps: float = 0.2) -> dict:
+                               fields: list | None = None, fps: float = 0.2,
+                               video_path: str | None = None) -> dict:
     from sandbox.paths import PROTECTED_MSG, is_secrets_path
-    if any(isinstance(p, str) and is_secrets_path(p) for p in image_paths or []):
+    candidates = list(image_paths or []) + ([video_path] if video_path else [])
+    if any(isinstance(p, str) and is_secrets_path(p) for p in candidates):
         return {"ok": False, "error": PROTECTED_MSG}
+    if task == "analyze_video":
+        if not video_path:
+            return {"ok": False, "error": "analyze_video requires video_path."}
+        return await _analyze_video(video_path)
+    if task == "analyze_sequence" and len(image_paths or []) > _MAX_SEQUENCE_FRAMES:
+        return {
+            "ok": False,
+            "error": (
+                f"analyze_sequence accepts at most {_MAX_SEQUENCE_FRAMES} frames, got {len(image_paths)}. "
+                "For a video file use task='analyze_video' with video_path."
+            ),
+        }
     if task == "analyze_sequence" and image_paths:
         # Validate image_paths exist on disk BEFORE calling the gateway — the
         # common failure mode used to be masked as "image_paths don't exist"
@@ -451,6 +557,38 @@ async def _tool_describe_images(task: str, image_paths: list | None = None,
     return {"ok": True, "task": task, "instruction": "Perform the visual analysis now in your response text based on the images in this conversation."}
 
 
+def _is_tool_choice_rejection(status: int, body: str) -> bool:
+    """Some deployments (e.g. Sonnet 5.5 behind the gateway) 400 on a forced tool_choice."""
+    return status == 400 and "tool_choice" in (body or "")
+
+
+def _is_vision_unsupported(status: int, body: str) -> bool:
+    """The gateway refused image input for the active model (not every model accepts images)."""
+    if status not in (400, 404, 415, 422):
+        return False
+    b = (body or "").lower()
+    if "api_not_supported" in b:
+        return True
+    return any(w in b for w in ("image", "vision", "multimodal")) and any(
+        w in b for w in ("not support", "unsupported", "not available")
+    )
+
+
+def _vision_unsupported_result(model: str, status: int) -> dict:
+    return {
+        "ok": False,
+        "error_code": "vision_unsupported",
+        "error": (
+            f"Image analysis is not available for the active model ({model}): the gateway rejected "
+            f"image input for it (HTTP {status}). This is a limit of the model/gateway route, not a "
+            "temporary outage, so retrying will not help. Tell the user plainly, and suggest "
+            "switching to a vision-capable model (for example a Claude model) in the model picker, "
+            "or attaching the images directly in the chat. Do NOT retry, and do NOT guess what the "
+            "images show."
+        ),
+    }
+
+
 def _extract_structured_fields(image_paths: list, fields: list) -> dict | None:
     """Schema-constrained extraction: reads the given image file(s) from disk,
     makes a dedicated gateway-routed vision call with tool_choice pinned to a
@@ -458,9 +596,11 @@ def _extract_structured_fields(image_paths: list, fields: list) -> dict | None:
     validated JSON directly — not prose the calling model has to reformat and
     potentially transcribe wrong (e.g. a numeric fee).
 
-    Returns None (not an error dict) on any failure — missing/bad file,
+    Returns None (not an error dict) on most failures — missing/bad file,
     gateway/auth failure, or the model declining to call the tool — so the
-    caller can fall back to the existing prose-based behavior silently.
+    caller can fall back to the existing prose-based behavior silently. The one
+    exception is a model that cannot accept images: that returns a
+    vision_unsupported error, since the prose fallback would be empty too.
     """
     import base64
     import os
@@ -525,14 +665,23 @@ def _extract_structured_fields(image_paths: list, fields: list) -> dict | None:
         base_url=base_url,
         default_headers=extra_headers or None,
     )
+    request = dict(
+        model=model,
+        max_tokens=1024,
+        tools=[extract_tool],
+        messages=[{"role": "user", "content": content}],
+    )
     try:
-        msg = client.messages.create(
-            model=model,
-            max_tokens=1024,
-            tools=[extract_tool],
-            tool_choice={"type": "tool", "name": "extract_fields"},
-            messages=[{"role": "user", "content": content}],
-        )
+        try:
+            msg = client.messages.create(**request, tool_choice={"type": "tool", "name": "extract_fields"})
+        except anthropic.BadRequestError as e:
+            if not _is_tool_choice_rejection(400, str(e)):
+                raise
+            msg = client.messages.create(**request, tool_choice={"type": "auto"})
+    except anthropic.APIStatusError as e:
+        if _is_vision_unsupported(e.status_code, str(e)):
+            return _vision_unsupported_result(model, e.status_code)
+        return None
     except Exception:
         return None
 
@@ -554,7 +703,7 @@ async def _analyze_frame_sequence(image_paths: list, fps: float = 0.2) -> dict |
     from llm.gateway import gateway_headers, get_gateway_url, profile_headers
     from llm.registry import get_active_profile, get_active_model
 
-    MAX_FRAMES = 8
+    MAX_FRAMES = _MAX_SEQUENCE_FRAMES
     image_paths = image_paths[:MAX_FRAMES]
 
     content = []
@@ -657,12 +806,17 @@ async def _analyze_frame_sequence(image_paths: list, fps: float = 0.2) -> dict |
     try:
         async with httpx.AsyncClient(timeout=120) as client:
             r = await client.post(f"{base_url}/v1/messages", json=payload, headers=headers)
+            if _is_tool_choice_rejection(r.status_code, r.text):
+                payload["tool_choice"] = {"type": "auto"}
+                r = await client.post(f"{base_url}/v1/messages", json=payload, headers=headers)
         if r.status_code >= 400:
             body = r.text
             if len(body) > 500:
                 body = body[:500] + f"...[+{len(body) - 500} chars]"
             _err = f"Gateway returned HTTP {r.status_code} for vision analysis: {body}"
             _log.error("describe_images.analyze_sequence: %s", _err)
+            if _is_vision_unsupported(r.status_code, r.text):
+                return _vision_unsupported_result(model, r.status_code)
             return {"ok": False, "error": _err}
         msg = r.json()
     except httpx.TimeoutException as e:
@@ -709,15 +863,45 @@ _SKILL_ALIASES = {"word": "docx", "powerpoint": "ppt", "outlook": "email", "exce
                    "m365-calendar": "calendar"}
 
 
-def _tool_read_skill(skill_id: str) -> dict:
+_SKILL_FILE_TEXT_SUFFIXES = {".md", ".txt", ".py", ".js", ".json", ".css", ".html", ".yaml", ".yml", ".csv", ".toml"}
+_SKILL_FILE_MAX_BYTES = 200_000
+_SKILL_FILE_LISTING_MAX = 60
+
+
+def _skill_files(skill_dir: Path) -> list[str]:
+    files = sorted(
+        f.relative_to(skill_dir).as_posix()
+        for sub in ("references", "assets", "scripts")
+        if (skill_dir / sub).is_dir()
+        for f in (skill_dir / sub).rglob("*") if f.is_file() and "__pycache__" not in f.parts
+    )
+    return files[:_SKILL_FILE_LISTING_MAX]
+
+
+def _read_skill_file(skill_dir: Path, file: str) -> dict:
+    root = skill_dir.resolve()
+    target = (root / file).resolve()
+    if not target.is_relative_to(root):
+        return {"error": "file must be inside the skill folder"}
+    if not target.is_file():
+        return {"error": f"No file '{file}' in this skill.", "files": _skill_files(skill_dir)}
+    if target.suffix.lower() not in _SKILL_FILE_TEXT_SUFFIXES:
+        return {"path": str(target), "note": "Not a text file, so it is not read here. Use this path from a script."}
+    if target.stat().st_size > _SKILL_FILE_MAX_BYTES:
+        return {"path": str(target), "note": f"Larger than {_SKILL_FILE_MAX_BYTES // 1000} KB, so it is not read here."}
+    return {"file": file, "content": target.read_text(encoding="utf-8", errors="replace")}
+
+
+def _tool_read_skill(skill_id: str, file: str = "") -> dict:
     """Return the SKILL.md content for the requested skill so Claude can learn its capabilities."""
     skill_id = _SKILL_ALIASES.get(skill_id.lower(), skill_id)
     web_skills_root = ROOT / "web" / "skills"
     skill_md_path = web_skills_root / skill_id / "SKILL.md"
     result: dict = {}
+    skill_dir: Path | None = None
     if skill_md_path.exists():
-        result["skill_guide"] = skill_md_path.read_text(encoding='utf-8')
-    if not result:
+        skill_dir = skill_md_path.parent
+    else:
         # Also search user skill roots (installed marketplace + ~/.agents/skills)
         from config import USER_SKILL_DIRS
         for root in USER_SKILL_DIRS:
@@ -725,10 +909,17 @@ def _tool_read_skill(skill_id: str) -> dict:
                 continue
             for candidate in root.rglob("SKILL.md"):
                 if candidate.parent.name == skill_id:
-                    result["skill_guide"] = candidate.read_text(encoding='utf-8')
+                    skill_dir = candidate.parent
                     break
-            if result:
+            if skill_dir:
                 break
+    if skill_dir:
+        if file:
+            return _read_skill_file(skill_dir, file)
+        result["skill_guide"] = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
+        listing = _skill_files(skill_dir)
+        if listing:
+            result["files"] = listing
     if not result:
         # Check if this is a registered MCP connection — no SKILL.md needed, describe its tools
         # g-* synthetic skills (g-gmail, g-sheets, etc.) route to the mcp-google-workspace connection
@@ -978,6 +1169,11 @@ def _tool_mcp_connection_status(filter: str = "") -> dict:
     return {"connections": connections, "message": None}
 
 
+def _tool_request_skill(skill: str = "", reason: str = "") -> dict:
+    """Granting happens in the agent loop, which can show the approval card; reaching here means no chat turn."""
+    return {"error": "request_skill can only be used in a chat turn with a user present."}
+
+
 TOOL_HANDLERS = {
     "describe_images": _tool_describe_images,
     "fetch_webpage": _tool_fetch_webpage,
@@ -988,4 +1184,5 @@ TOOL_HANDLERS = {
     "analyze_mcp_server": _tool_analyze_mcp_server,
     "connect_mcp_server": _tool_connect_mcp_server,
     "mcp_connection_status": _tool_mcp_connection_status,
+    "request_skill": _tool_request_skill,
 }

@@ -2,6 +2,9 @@
 name: Gator Demo Recorder
 description: Record your screen manually, then analyze, narrate with TTS, and deliver a polished MP4.
 version: '2.0'
+requires:
+  - id: code_runner
+    reason: reads an imported project's timeline file
 ---
 
 # Gator Demo Recorder
@@ -12,77 +15,79 @@ Record your screen manually using the in-chat widget. After recording, analyze t
 
 ```
 Phase 1: RENDER WIDGET      — user clicks Record / Stop in chat
-Phase 2: ANALYZE            — extract keyframes, describe_images, build scene summary
+Phase 2: ANALYZE            — describe_images(analyze_video), build scene summary
 Phase 3: NARRATION EDIT     — draft script, show editable widget, user approves
-Phase 4: TTS + MERGE        — generate audio via Lemonade, merge with ffmpeg
+Phase 4: TTS + MERGE        — demo_merge_narration: Lemonade audio, merge, verified output
 Phase 5: DELIVER            — report final MP4 path, offer to save to OneDrive
 ```
+
+**Import Mode:** when the user attached existing video or audio instead of recording, skip Phase 1 and follow the Import Mode section below. It produces the same inputs Phase 2 expects.
+
+---
+
+## Project folder
+
+Every demo lives in its own project folder, chosen by the user (Settings → General, or "Save project to…" when the project is created). Take it from the `PROJECT_DIR:` line of the `PINNED PROJECT:` block; never hard-code a path. Code you run is sandboxed and cannot read `~/.gator`, so do not try to look the project up there.
+
+Layout: `source/` (recorded segments and `recording.mp4`), `work/` (`narration.json`, `tts/`, `logs/`), `final/` (the delivered video), `previous/` (archived earlier finals).
+
+- The approved narration is loaded and verified by `demo_merge_narration` (see Phase 4); `work/narration.json` is a mirror, not the source of truth.
+- Write TTS audio and intermediates under `work/tts/` and logs under `work/logs/`.
+- `demo_merge_narration` writes the deliverable as `final/<project name>_v<N>.mp4`. The file's presence in `final/` is the registration — there is nothing to call.
+- Never call a mutating `/api/` route from agent code. Read files and write files only.
 
 ---
 
 ## CRITICAL RULES — Read first
 
-- **Shell:** always `shell='powershell'` or `shell='cmd'`. Never `shell='bash'`.
-- **ffmpeg:** never search with `Get-ChildItem -Recurse` — it times out. Call `GET /api/recorder/status` — it returns `ffmpeg_path` AND `ffprobe_path` with the exact binary locations. Use those fields directly. Never derive ffprobe from ffmpeg via string replace — the paths differ. If `ffmpeg` is false, tell user: `winget install Gyan.FFmpeg` (Windows), `brew install ffmpeg` (macOS).
-- **File path:** the widget sends `"Recording complete. File: <path> ..."` after Stop. Extract the path from that message directly — **never ask the user for the path**. It is always the value between `"File: "` and `" ("`.
+- **ffmpeg:** never run, search for or locate ffmpeg or ffprobe yourself. The `demo_*` tools and `describe_images` find and run them. If one reports ffmpeg missing, relay its message and tell the user: `winget install Gyan.FFmpeg` (Windows), `brew install ffmpeg` (macOS).
+- **File path:** the widget sends `"Recording complete. File: <path> ..."` after Stop. Extract the path from that message directly — **never ask the user for the path**. It is the value between `"File: "` and `" ("` — or, when no size is shown, `". Please"`.
 - **Trigger:** any message matching `"Recording complete. File:"` means the user just stopped recording. Immediately proceed to Phase 2 using the path from the message.
-- **Recording:** the widget calls `/api/recorder/start` and `/api/recorder/stop` directly — **do not invoke ffmpeg manually**. Do not call `run_shell` for record/stop.
+- **Recording:** the widget calls `/api/recorder/start` and `/api/recorder/stop` directly — **do not invoke ffmpeg manually**.
 - **Output size:** never generate more than ~300 lines of output in one turn. Split long work across turns.
 - **NEVER skip Phase 3 (Narration Edit):** you MUST render the editable narration widget with the "✓ Approve & Generate TTS" button and WAIT for the user to click it. Do NOT generate TTS until you receive `"NARRATION_APPROVED:<json>"`. Generating TTS without showing the approval widget is a critical violation — the user must be able to review, edit text, preview voices, and approve before any audio is generated.
-- **Use the EXACT Phase 3 widget template:** do not design your own narration widget. Do not change the message prefix from `NARRATION_APPROVED` to anything else (e.g. `NARRATION_V2_APPROVED` will silently break Phase 4). Do not remove the voice selector, speed selector, preview buttons, or the raw recording video preview from the template. The template is in SKILL.md — copy it verbatim, only replacing `SEGMENTS_PLACEHOLDER`. The video path is fetched automatically.
+- **Use the EXACT Phase 3 widget template:** do not design your own narration widget. Do not change the message prefix from `NARRATION_APPROVED` to anything else (e.g. `NARRATION_V2_APPROVED` will silently break Phase 4). Do not remove the voice selector, speed selector, preview buttons, or the raw recording video preview from the template. The template is in SKILL.md — copy it verbatim, only replacing `SEGMENTS_PLACEHOLDER` and `PROJECT_ID_PLACEHOLDER`. The video path is fetched automatically.
 - **Re-edit flow:** when the user clicks "Edit narration & regenerate" in the Phase 5 delivery widget, go back to Phase 3 and render the **exact same Phase 3 widget template** again (with voice selector, preview buttons, video preview). Do NOT design a custom "v2" editor. Do NOT change the `NARRATION_APPROVED` prefix. The re-edit widget must be identical to the first-pass widget.
-- **Never embed file paths in widget JS.** All file paths go through `/api/recorder/set-output` → `/api/recorder/latest-output`. Widget templates have no `PATH_PLACEHOLDER` strings — they fetch paths from the API on load.
+- **Never embed file paths in widget JS.** Widget templates have no `PATH_PLACEHOLDER` strings — they fetch the active project's paths from `GET /api/demo-projects/active` on load.
 
 ## Audio/Video Quality Rules — Non-negotiable
 
 The final video must be **professional quality**. Apply these without being asked:
 
 - **Audio/video sync:** narration `start_at` timestamps must align with the actual on-screen action. A segment narrating "clicking the button" must start when the click is visible, not 2 seconds before or after. After TTS generation, compare each segment's `start_at` to the video duration — if the narration ends significantly before the video ends (>2s gap), add a closing segment; if narration runs much longer than the video (>3× video duration), shorten the script and re-generate.
-- **Sync validation (always run):** after merge, run ffprobe on both the video stream and audio stream of the output file. Report duration of each. If they differ by more than 1s, explain why (e.g. "video held on last frame for 8s to match 12s narration") and offer to re-edit.
+- **Sync validation:** `demo_merge_narration` measures the video and audio streams of the output and refuses to deliver a file whose durations differ by more than 1s. Report `video_stream_sec` and `audio_stream_sec` from its result; when `video_extended_by_sec` is above 0, say the last frame was held that long.
 - **Segment timing:** `start_at` values must be monotonically increasing and respect the video timeline. Segment 1 at `start_at: 0`, Segment 2 no earlier than `start_at: 2` (give each segment breathing room). Do not bunch all segments at `start_at: 0, 1, 2, 3` for an 8-second video.
 - **Professional pacing:** narration should feel like a polished product demo, not a speed-read. Prefer 3-5 well-paced segments over 8 rushed ones. Each spoken segment should be 1-2 natural sentences (~5-12 seconds of audio). Leave silence at the start (0.5s) and end.
 - **Background music:** when mixing, target narration at -3dB and music at -20dB to -18dB. Music must fade in (0.5s) and fade out (1s before video end). Never let music overpower narration.
 
 ---
 
-## Phase 1: Preflight → Render Widget
+## Truthful Media Claims — Non-negotiable
 
-**Step 1 — Run preflight** before rendering the widget:
+Every statement about a video's duration, a moment in it, or an edit must come from a `demo_*` tool result obtained in this turn. Never estimate, remember, or infer one. Pass `project_id` (the id on the `PINNED PROJECT:` line) to every `demo_*` call.
 
-```python
-import subprocess, sys, json
-from pathlib import Path
+- **Facts first:** call `demo_media_manifest` before stating a duration or listing files.
+- **Moments:** to say what happens at a time, call `demo_inspect_frames` for that time, pass the returned `frames[].path` values to `describe_images`, and describe only what those frames show. Times must be inside `duration_sec`. On `out_of_range`, report its `duration_sec` and `options`; do not retry with another guessed time.
+- **Edits:** use `demo_replace_interval` or `demo_append_clip`. Quote `replaced_interval_sec`, `inserted_from` / `appended_from` and `output.duration_sec` exactly as returned. Say an edit was made only after the result has `ok: true`.
+- **Shortening:** when the user wants a target length, call `demo_media_manifest` for the real duration, inspect frames to find dead time (loading waits, dropdowns), then use `demo_cut_intervals` to remove it or `demo_speed_interval` to fast-forward it. Quote `cut_intervals_sec`, `removed_sec`, `sped_interval_sec`, `saved_sec` and `output.duration_sec` exactly; if the result is still longer than the target, say by how much instead of claiming it fits.
+- **After a cut or speed-up:** narration `start_at` values were written for the old timeline. Move each one through the result's `time_map` (find the entry whose `old_sec` contains it and map it into `new_sec`), reword or drop any segment whose moment was removed, and render the Phase 3 widget again. The earlier approval is stale, so the user must approve again before `demo_merge_narration`.
+- **Narration merge:** `demo_merge_narration` is the only way to produce the final video. Quote `video_extended_by_sec`, `video_stream_sec`, `audio_stream_sec` and `intro` from its result.
+- **Intro wording:** "Hold" freezes the first frame; "Title card" shows the title text on a plain card. Use the word that matches `intro.mode`.
+- **On any `error`:** relay `message` and the measured numbers, offer the listed `options`, and do not claim success.
 
-# Works for both built-in (web/skills/) and user-installed (~/.gator/skills/) skills
-_skill_dirs = [
-    Path.home() / ".gator/skills/mine/gator-demo-recorder/scripts",
-    Path(__file__).parent / "scripts" if "__file__" in dir() else None,
-    Path.cwd() / "web/skills/gator-demo-recorder/scripts",
-]
-skill_scripts = next((d for d in _skill_dirs if d and d.exists()), _skill_dirs[0])
-r = subprocess.run([sys.executable, str(skill_scripts / "preflight.py")],
-                   capture_output=True, text=True, timeout=30)
-result = json.loads(r.stdout)
-print(json.dumps(result, indent=2))
-```
+---
 
-**If `result["ready"]` is True** → render the widget immediately.
+## Phase 1: Render Widget
 
-**If `result["ready"]` is False** → show the user `result["message"]` and ask for consent.
-
-- If user says yes → re-run with `--auto-consent` flag (installs silently, may take 1-2 min)
-- If user says no → tell them to install manually and try again
-
-Lemonade (`result["lemonade"]["ok"]`) is **optional** — if False, warn the user that narration
-won't be available but recording and analysis will still work. Do not block on Lemonade.
-
-**Step 2 — Render the widget** (only after ffmpeg confirmed ready):
+Render the widget straight away. Do not run a preflight: a script run in the code sandbox cannot see the real home folder, PATH or Gator's localhost services, so it would wrongly report ffmpeg and Lemonade as missing. Gator checks ffmpeg itself when the user presses Record and returns a clear error if it is missing; relay that error and the install command (`winget install Gyan.FFmpeg` on Windows).
 
 The widget:
 
+- Is copied verbatim from the template below, including the `🎬 Demo Recorder` heading — never add the topic, project or recording name to the title
 - Calls `GET /api/recorder/screens` on load to populate the screen selector
 - Lets the user pick screen and optionally enter a crop region (x, y, w, h)
 - Record/Pause/Resume/Stop all call the backend API directly via `gator:recorder` postMessage — no agent involvement
+- The first screen or record action shows an Allow prompt above the widget, outside it. The user clicks it once; do not try to work around it
 - After Stop, sends one chat message with the file path
 
 ### Tab navigation note
@@ -160,6 +165,7 @@ The widget lives in the chat iframe. If the user switches to a different Gator t
 // ── Core: all state comes from backend, never from JS variables ──────────────
 var _BASE = window._GATOR || 'http://localhost:8003';
 var _crop = null, _busy = false, _lastStatus = 'idle', _stopPath = '';
+var _actionError = '';
 
 // ── Hide-from-recording toggle ────────────────────────────────────────────────
 // When checked (default), the floating HUD window is excluded from screen
@@ -186,14 +192,61 @@ window.addEventListener('load', function() {
   }
 });
 
+// Inline in chat the widget is sandboxed (opaque origin): it cannot call the
+// backend, so each call is a named gator:recorder action handled by the parent.
+// In the floating HUD window (parent === window) reads go to the backend directly and
+// state changes go through hudControls.recorder, which asks the user in a native dialog.
+var _INLINE = window.parent !== window;
+var _rid = 0, _pending = {};
+window.addEventListener('message', function(ev) {
+  var m = ev.data;
+  if (ev.source !== parent || !m) return;
+  if (m.type === 'gator:recorder-waiting') {
+    if (_pending[m.rid]) document.getElementById('status').textContent = 'Waiting for you to click Allow above...';
+    return;
+  }
+  if (m.type !== 'gator:recorder-result') return;
+  var cb = _pending[m.rid];
+  if (!cb) return;
+  delete _pending[m.rid];
+  cb(null, m.data);
+});
+
+function bridgeCall(action, params, cb) {
+  var id = ++_rid;
+  _pending[id] = cb;
+  var msg = {type:'gator:recorder', action:action, rid:id};
+  if (params) msg.params = params;
+  parent.postMessage(msg, '*');
+  setTimeout(function() {
+    if (!_pending[id]) return;
+    delete _pending[id];
+    cb(new Error('no reply from AI Gator'), null);
+  }, action === 'pick-region' ? 600000 : 60000);
+}
+
 function apiFetch(action, params, cb) {
+  if (_INLINE) { bridgeCall(action, params, cb); return; }
   var m = (action==='status'||action==='screens') ? 'GET' : 'POST';
-  var opts = {method:m};
-  if (m==='POST' && params) { opts.body=JSON.stringify(params); opts.headers={'Content-Type':'application/json'}; }
-  fetch(_BASE+'/api/recorder/'+action, opts)
+  if (m==='POST') {
+    if (!window.hudControls || !window.hudControls.recorder) { cb(new Error('recorder controls unavailable'), null); return; }
+    window.hudControls.recorder(action, params || {}).then(function(d){cb(null,d);}).catch(function(e){cb(e,null);});
+    return;
+  }
+  fetch(_BASE+'/api/recorder/'+action)
     .then(function(r){return r.json();})
     .then(function(d){cb(null,d);})
     .catch(function(e){cb(e,null);});
+}
+
+function actionFailed(err, data, label) {
+  if (!err && data && data.ok) return false;
+  _actionError = label + ': ' + ((data && data.error) || (err && err.message) || 'request failed');
+  if (data && data.session_dir) _actionError += ' (' + data.session_dir + ')';
+  var st = document.getElementById('status');
+  st.className = 'status error';
+  st.textContent = _actionError;
+  return true;
 }
 
 function fmt(s) {
@@ -230,6 +283,7 @@ function render(s) {
     t.className='timer';
     br.disabled=false; bp.disabled=true; bp.style.display=''; bres.style.display='none'; bs.disabled=true;
   }
+  if (_actionError) { st.className = 'status error'; st.textContent = _actionError; }
 }
 
 // ── Poll backend every second — survives tab switches and iframe reloads ──────
@@ -303,13 +357,7 @@ function onScreenChange() {
   clearCrop();
   // Tell the backend which screen is selected so global hotkeys use it
   var si = parseInt(document.getElementById('sel-screen').value) || 0;
-  try {
-    fetch(_BASE + '/api/recorder/select-screen', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ screen_index: si })
-    });
-  } catch(e) {}
+  apiFetch('select-screen', {screen_index: si}, function() {});
 }
 
 function clearCrop() {
@@ -332,7 +380,7 @@ function doCrop() {
     btn.disabled = false;
     if (err || !data || data.cancelled) { clearCrop(); return; }
     if (!data.ok) { document.getElementById('crop-label').textContent = 'Error: '+(data.error||''); return; }
-    _crop = {x:data.x, y:data.y, w:data.w, h:data.h};
+    _crop = {x:data.screen_x, y:data.screen_y, w:data.w, h:data.h};
     document.getElementById('crop-label').textContent = data.label;
     document.getElementById('crop-label').style.color = '#f97316';
     btn.textContent = '✕ Clear'; btn.style.borderColor = '#f97316';
@@ -344,31 +392,28 @@ function doCrop() {
 
 // ── Actions ───────────────────────────────────────────────────────────────────
 function doRecord() {
-  _busy = true; _stopPath = '';
+  _busy = true; _stopPath = ''; _actionError = '';
   var p = {screen_index: parseInt(document.getElementById('sel-screen').value)||0, force:true};
   if (_crop) { p.crop_x=_crop.x; p.crop_y=_crop.y; p.crop_w=_crop.w; p.crop_h=_crop.h; }
   document.getElementById('status').textContent = 'Starting...';
   apiFetch('start', p, function(err, data) {
     _busy = false;
-    if (err || !data || !data.ok) {
-      document.getElementById('status').className = 'status error';
-      document.getElementById('status').textContent = 'Error: ' + ((data&&data.error)||String(err));
-    }
+    actionFailed(err, data, 'Error');
   });
 }
 
 function doPause() {
-  _busy = true;
-  apiFetch('pause', null, function(err, data) { _busy = false; });
+  _busy = true; _actionError = '';
+  apiFetch('pause', null, function(err, data) { _busy = false; actionFailed(err, data, 'Pause error'); });
 }
 
 function doResume() {
-  _busy = true;
-  apiFetch('resume', null, function(err, data) { _busy = false; });
+  _busy = true; _actionError = '';
+  apiFetch('resume', null, function(err, data) { _busy = false; actionFailed(err, data, 'Resume error'); });
 }
 
 function doStop() {
-  _busy = true;
+  _busy = true; _actionError = '';
   document.getElementById('status').textContent = 'Stopping...';
   document.getElementById('btn-stop').disabled = true;
   apiFetch('stop', null, function(err, data) {
@@ -377,7 +422,7 @@ function doStop() {
       _stopPath = data.path || '';
       var mb = data.size_bytes ? (data.size_bytes/1048576).toFixed(1)+'MB' : '';
       document.getElementById('status').className = 'status done';
-      document.getElementById('status').textContent = '✓ Saved ' + mb;
+      document.getElementById('status').textContent = '✓ Saved' + (mb ? ' ' + mb : '');
       document.getElementById('filepath').textContent = _stopPath;
       // Reset crop after each recording so the next Record starts fresh.
       // User can re-select a region if needed — no stale state carried over.
@@ -386,19 +431,19 @@ function doStop() {
       // Inline widget: parent.postMessage triggers the bridge in app.js.
       // HUD widget: parent === window so postMessage goes nowhere — instead
       // POST to /api/recorder/notify which the Gator frontend polls every 2s.
-      var msg = 'Recording complete. File: '+_stopPath+' ('+mb+'). Please analyze it and draft a narration script.';
-      try { parent.postMessage({type:'gator:send-message', text:msg},'*'); } catch(e){}
-      // HUD fallback — always fire, Gator deduplicates if both arrive
-      try {
-        fetch(_BASE+'/api/recorder/notify', {
-          method:'POST',
-          headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({message:msg})
-        });
-      } catch(e){}
+      var msg = 'Recording complete. File: '+_stopPath+(mb ? ' ('+mb+')' : '')+'. Please analyze it and draft a narration script.';
+      try { parent.postMessage({type:'gator:send-message', pin_skill:'gator-demo-recorder', project_id:(data&&data.project_id)||'', text:msg},'*'); } catch(e){}
+      if (!_INLINE) {
+        try {
+          fetch(_BASE+'/api/recorder/notify', {
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({message:msg})
+          });
+        } catch(e){}
+      }
     } else {
-      document.getElementById('status').className = 'status error';
-      document.getElementById('status').textContent = 'Stop error: ' + ((data&&data.error)||'');
+      actionFailed(err, data, 'Stop error');
     }
   });
 }
@@ -409,66 +454,71 @@ function doStop() {
 
 ---
 
+## Import Mode
+
+Use this instead of Phase 1 when the message contains `[File: <path>]` chips whose paths end in a video or audio extension and sit inside a project's `source/` folder (`<PROJECT_DIR>/source/<id>_<name>`), or when the user asks you to narrate footage they already have. There is no recording to wait for.
+
+The browser uploads each file and builds one combined, trimmed timeline in the background. The user orders and trims clips in the clips panel above the chat box. You only read the result: `<PROJECT_DIR>/project.json` holds it under `ext["clips"]` (`clips`, `audio`, and `timeline` with `state`, `file`, `duration`, `frame_times`, `clips`, `error`).
+
+- **Never call** `/api/demo-media` routes that change anything (upload, order, trim, delete) — they are for the browser. To change clips, tell the user to use the clips panel.
+- Audio-only attachments are a music bed. If there is no video clip yet, ask the user to attach one.
+
+Run this once per request. It waits for the timeline and prints its path. The project folder is outside the code sandbox, so call `run_python` with `extra_read_paths` set to the chip path's grandparent folder (the project folder); the user approves it once.
+
+```python
+import json, time
+from pathlib import Path
+
+chip = Path(r"<path inside the [File: ...] chip>")
+PROJECT_DIR = chip.parent.parent
+
+def timeline_state():
+    project = json.loads((PROJECT_DIR / "project.json").read_text(encoding="utf-8"))
+    return project.get("ext", {}).get("clips", {}).get("timeline", {})
+
+tl = timeline_state()
+deadline = time.time() + 600
+while tl.get("state") == "building" and time.time() < deadline:
+    time.sleep(5)
+    tl = timeline_state()
+
+if tl.get("state") == "failed":
+    print("TIMELINE FAILED:", tl.get("error"))
+elif tl.get("state") != "ready":
+    print("TIMELINE NOT READY:", tl.get("state"))
+else:
+    print(f"VIDEO={PROJECT_DIR / tl['file']}")
+    print(f"DURATION={tl['duration']}")
+    print("FRAME_TIMES=", json.dumps(tl["frame_times"]))
+    print("CLIPS=", json.dumps(tl["clips"]))
+```
+
+Outcomes:
+
+- `TIMELINE FAILED` → tell the user the `error` text and stop; they can remove or replace the clip in the panel.
+- `TIMELINE NOT READY` → tell the user no video clip is attached yet, or the build has not started, and stop.
+- Otherwise `VIDEO` is the file Phase 4 merges into (it is also the project's `raw`). Continue at **Phase 2, Step 1** with `video_path` set to `VIDEO`: call `describe_images(task='analyze_video', video_path='<VIDEO>')`. It samples the combined timeline at the moments listed in `frame_times`. Use the `CLIPS` boundaries (`start`/`end` seconds per source clip) to say which clip each frame belongs to in the scene summary, then continue to Phase 3. Do not run ffmpeg yourself.
+- Phase 3 timing: narration `start_at` values are seconds on the combined timeline, so a segment about the second clip starts at or after that clip's `start`.
+- Phase 4: `demo_merge_narration` merges into the project's recording (`VIDEO` is also its `raw`), so pass no `video`. The combined music bed, if any, is `work/soundtrack.m4a`, and `demo_merge_narration` mixes it in automatically once the timeline is ready.
+
+---
+
 ## Phase 2: Analyze
 
 When you receive `"Recording complete. File: <path> ..."`:
 
-1. Extract the video path: it is between `"File: "` and the next `" ("`. Example: `"Recording complete. File: C:\Users\...\final.mp4 (46MB)."` → path = `C:\Users\...\final.mp4`
-2. Get ffmpeg path: `GET /api/recorder/status` → use `ffmpeg_path` field directly. Do not search for ffmpeg any other way.
-3. Proceed immediately — do not ask the user for the path or for ffmpeg location.
+1. Extract the video path: it is the text between `"File: "` and the next `" ("` — or, when the message shows no size, up to `". Please"`. Example: `"Recording complete. File: C:\Users\...\final.mp4 (46MB). Please analyze it…"` → path = `C:\Users\...\final.mp4`
+2. Proceed immediately — do not ask the user for the path, and do not run ffmpeg or ffprobe yourself.
 
-**Step 1 — Extract keyframes** (max 8 frames, evenly spaced):
+**Step 1 — Analyze the video**: call `describe_images(task='analyze_video', video_path='<path>')`. The tool finds ffmpeg/ffprobe, extracts up to 8 evenly spaced keyframes (at least ~5 s apart) into a private temporary folder, analyzes them, and deletes them.
 
-```python
-import subprocess, urllib.request, json
-from pathlib import Path
-
-video = Path(r"<path extracted from message>")
-frames_dir = video.parent / "frames"
-frames_dir.mkdir(exist_ok=True)
-
-status = json.loads(urllib.request.urlopen("http://localhost:8003/api/recorder/status").read())
-ffmpeg = status["ffmpeg_path"]
-ffprobe = status.get("ffprobe_path") or str(Path(ffmpeg).parent / "ffprobe.exe")
-
-# Get duration so we can space frames evenly
-probe = subprocess.run([ffprobe, "-v", "error", "-show_entries", "format=duration",
-  "-of", "default=noprint_wrappers=1:nokey=1", str(video)],
-  capture_output=True, text=True)
-duration = float(probe.stdout.strip() or 30)
-
-# Hard cap: 8 frames max — more causes gateway timeouts (large base64 payload)
-MAX_FRAMES = 8
-interval = max(duration / MAX_FRAMES, 5)
-fps_val = round(1 / interval, 4)
-
-subprocess.run([ffmpeg, "-y", "-i", str(video), "-vf", f"fps={fps_val}",
-  str(frames_dir / "frame_%04d.png")], shell=False, check=True)
-frames = sorted(frames_dir.glob("frame_*.png"))[:MAX_FRAMES]
-print(f"Extracted {len(frames)} frames (every {interval:.1f}s) to {frames_dir}")
-```
-
-**Step 2 — Analyze frames**: call `describe_images` with `task='analyze_sequence'`, passing the frame paths as `image_paths` and `fps` set to `round(1/interval, 4)` from above. **Never pass more than 8 frames** — the gateway times out on larger payloads and hangs the entire backend.
-
-**Do not ask the user to upload or drag-and-drop frames.** `analyze_sequence` reads from disk directly.
-
-Example:
-
-```
-describe_images(
-  task='analyze_sequence',
-  image_paths=[
-    'C:\\...\\frames\\frame_0001.png',
-    'C:\\...\\frames\\frame_0002.png',
-    # up to 8 frames only
-  ],
-  fps=0.0667
-)
-```
+**Do not ask the user to upload or drag-and-drop frames.**
 
 Returns: `{timeline: [{frame, time_sec, time_label, description}, ...], summary: "..."}`
 
-**Step 3 — Build scene summary**: from the extracted data, produce a list of `{time_sec, description}` entries covering the key moments. Show it to the user as a markdown pipe table, then immediately continue to the narration widget without waiting for user input.
+**Step 2 — Build scene summary**: from the extracted data, produce a list of `{time_sec, description}` entries covering the key moments. Show it to the user as a markdown pipe table, then immediately continue to the narration widget without waiting for user input.
+
+**Follow-up inspection:** to look at a specific moment after the first analysis, call `demo_inspect_frames(source='<project-relative path>', times_sec=[...])` (at most 8 times, all inside the video's duration) and pass the returned frame paths to `describe_images`. Do not write your own frame-extraction code.
 
 ---
 
@@ -476,15 +526,16 @@ Returns: `{timeline: [{frame, time_sec, time_label, description}, ...], summary:
 
 Draft a narration script from the scene summary. Each segment has a start time and spoken text.
 
-**You MUST use the exact widget template below verbatim.** Do not design your own widget. Do not change the message format. Do not rename the `NARRATION_APPROVED` prefix. The only modification allowed is replacing `SEGMENTS_PLACEHOLDER` with the narration JSON array.
+**You MUST use the exact widget template below verbatim.** Do not design your own widget. Do not change the message format. Do not rename the `NARRATION_APPROVED` prefix. The only modifications allowed are replacing `SEGMENTS_PLACEHOLDER` with the narration JSON array and `PROJECT_ID_PLACEHOLDER` with the project id.
 
 Replace:
 
-- `SEGMENTS_PLACEHOLDER` with a JSON array of `[{start_at: <seconds>, text: "<spoken text>"}]`
+- `SEGMENTS_PLACEHOLDER` with a JSON array of `[{start_at: <seconds>, text: "<spoken text>"}]`. Each item may also carry an optional `pause_after` (seconds of silence after that segment, 0 to 10) — the widget shows it in the "Pause after" box.
+- `PROJECT_ID_PLACEHOLDER` with the project id from the `PINNED PROJECT:` line of your context (for example `demo_20261019_101500`)
 
-The raw video path is fetched automatically by the widget from `/api/recorder/latest-output` — do NOT embed any file path in the widget HTML.
+The widget learns the raw video's project-relative path from the parent (`gator:demo-summary`) and plays it through the project's file route (`/api/demo-projects/<id>/file`) using the project id — do NOT embed any file path in the widget HTML.
 
-The widget's Approve button sends `NARRATION_APPROVED:<json>` — Phase 4 listens for this exact prefix. Any other prefix (e.g. `NARRATION_V2_APPROVED`) will NOT trigger TTS generation.
+The widget's Approve button sends `NARRATION_APPROVED:<json> PROJECT_ID:<id>` — Phase 4 listens for this exact prefix. The app records the approval first and then starts the Phase 4 turn with the approval id. Any other prefix (e.g. `NARRATION_V2_APPROVED`) will NOT trigger TTS generation.
 
 ```html:widget
 <!DOCTYPE html>
@@ -512,6 +563,14 @@ The widget's Approve button sends `NARRATION_APPROVED:<json>` — Phase 4 listen
   .seg-actions{display:flex;gap:6px;margin-top:4px;align-items:center}
   .btn-seg-preview{background:none;border:1px solid #1e3a52;border-radius:5px;color:#6b8db5;padding:3px 8px;font-size:.7rem;cursor:pointer}
   .btn-seg-preview:hover{border-color:#f97316;color:#f97316}
+  .seg-pause{display:flex;align-items:center;gap:4px;font-size:.68rem;color:#6b8db5;margin-left:auto}
+  .seg-pause input{width:56px;background:#111827;border:1px solid #1e3a52;border-radius:5px;color:#dbeafe;padding:3px 6px;font-size:.72rem;font-family:inherit}
+  .seg-pause input:focus{outline:none;border-color:#4ade80}
+  .seg-pause-hint{color:#f97316;font-weight:600}
+  .help{position:relative;display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border:1px solid #1e3a52;border-radius:50%;color:#6b8db5;font-size:.7rem;cursor:help}
+  .help:hover,.help:focus{border-color:#f97316;color:#f97316;outline:none}
+  .tip{display:none;position:absolute;top:24px;left:0;width:min(260px,calc(100vw - 80px));z-index:5;background:#0f1a28;border:1px solid #1e3a52;border-radius:8px;padding:8px 10px;font-size:.7rem;line-height:1.4;color:#dbeafe;text-align:left;cursor:default}
+  .help:hover .tip,.help:focus .tip,.help:focus-within .tip{display:block}
   .seg-audio{width:100%;margin-top:4px;accent-color:#f97316;display:none}
   .btn-play-all{background:none;border:1px solid #1e3a52;border-radius:6px;color:#6b8db5;padding:5px 12px;font-size:.75rem;cursor:pointer;white-space:nowrap}
   .btn-play-all:hover{border-color:#f97316;color:#f97316}
@@ -548,6 +607,7 @@ The widget's Approve button sends `NARRATION_APPROVED:<json>` — Phase 4 listen
     </select>
     <button class="btn-preview" id="btn-global-preview" onclick="previewGlobal()">▶ Preview voice</button>
     <button class="btn-play-all" id="btn-play-all" onclick="playAll()">▶▶ Play all</button>
+    <span class="help" tabindex="0" role="button" aria-describedby="pacing-tip" aria-label="Pacing tips">?<span class="tip" role="tooltip" id="pacing-tip"><b>Pacing tips</b> — Use commas and periods for natural breaths; use <code>…</code> for a longer, trailing pause. For an exact silent gap after this section, set <b>Pause after</b>.</span></span>
   </div>
   <audio id="global-audio" controls></audio>
   <div class="status" id="status"></div>
@@ -559,12 +619,14 @@ The widget's Approve button sends `NARRATION_APPROVED:<json>` — Phase 4 listen
     <video id="video-player" controls preload="metadata"></video>
   </div>
 
-  <button class="btn-approve" onclick="approve()">✓ Approve & Generate TTS</button>
+  <button id="btn-approve" class="btn-approve" onclick="approve()">✓ Approve & Generate TTS</button>
+  <div class="status" id="merge-status"></div>
 </div>
 <script>
 var _BASE = window._GATOR || 'http://localhost:8003';
 var data = SEGMENTS_PLACEHOLDER;
-var _videoPath = '';
+var _PROJECT_ID = 'PROJECT_ID_PLACEHOLDER';
+var _approving = false;
 
 // ── Voice preview ─────────────────────────────────────────────────────────────
 function getVoice(){ return document.getElementById('sel-voice').value; }
@@ -608,16 +670,31 @@ function previewSeg(i){
   });
 }
 
+// The frame is sandboxed and cannot call the backend; the parent runs the preview.
+var _previewRid=0, _previewPending={};
+
 function fetchPreview(text, voice, cb){
-  fetch(_BASE+'/api/recorder/tts-preview', {
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({text:text, voice:voice, model:'kokoro-v1'})
-  }).then(function(r){
-    if(!r.ok){ return r.json().then(function(d){ cb(null, d.error||r.status); }); }
-    return r.blob().then(function(b){ cb(URL.createObjectURL(b), null); });
-  }).catch(function(e){ cb(null, String(e)); });
+  var id=++_previewRid;
+  _previewPending[id]=cb;
+  parent.postMessage({type:'gator:tts-preview', rid:id, text:text, voice:voice}, '*');
+  setTimeout(function(){
+    var c=_previewPending[id];
+    if(!c){ return; }
+    delete _previewPending[id];
+    c(null, 'no reply from AI Gator');
+  }, 60000);
 }
+
+function onPreviewResult(ev){
+  var m=ev.data;
+  if(ev.source!==parent || !m || m.type!=='gator:tts-preview-result'){ return; }
+  var cb=_previewPending[m.rid];
+  if(!cb){ return; }
+  delete _previewPending[m.rid];
+  if(!m.ok || !m.blob){ cb(null, m.error||'preview failed'); return; }
+  cb(URL.createObjectURL(m.blob), null, m.blob);
+}
+window.addEventListener('message', onPreviewResult);
 
 var _playAllActive=false;
 var _playAllCtx=null;
@@ -638,19 +715,19 @@ function playAll(){
   var voice=getVoice();
   Promise.all(segs.map(function(seg){
     return new Promise(function(resolve){
-      fetchPreview(seg.text, voice, function(url, err){
-        resolve(err||!url ? null : url);
+      fetchPreview(seg.text, voice, function(url, err, blob){
+        resolve(err||!blob ? null : blob);
       });
     });
-  })).then(function(urls){
+  })).then(function(blobs){
     if(!_playAllActive) return;
-    // Fetch each blob and decode to AudioBuffer
+    // Decode each blob to an AudioBuffer
     var ctx=new (window.AudioContext||window.webkitAudioContext)();
     _playAllCtx=ctx;
     setStatus('Decoding audio...','#f97316');
-    return Promise.all(urls.map(function(url){
-      if(!url) return Promise.resolve(null);
-      return fetch(url).then(function(r){ return r.arrayBuffer(); })
+    return Promise.all(blobs.map(function(blob){
+      if(!blob) return Promise.resolve(null);
+      return blob.arrayBuffer()
         .then(function(ab){ return ctx.decodeAudioData(ab); })
         .catch(function(){ return null; });
     }));
@@ -694,6 +771,22 @@ function _stopPlayAll(){
   setStatus('','');
 }
 
+function pauseValue(raw){
+  var n=parseFloat(raw);
+  if(!isFinite(n)||n<0){ return 0; }
+  return Math.min(10, Math.round(n*10)/10);
+}
+
+function pauseHint(raw){
+  if(raw===''||raw==null){ return ''; }
+  var n=parseFloat(raw);
+  return (!isFinite(n)||n<0||n>10) ? 'Limited to 0–10 s' : '';
+}
+
+function segOut(s, text, voice, speed, pauseRaw){
+  return {start_at:s.start_at||s.start||0, text:text, voice:voice, speed:speed, pause_after:pauseValue(pauseRaw)};
+}
+
 // ── Segments ──────────────────────────────────────────────────────────────────
 var c=document.getElementById('segs');
 data.forEach(function(s,i){
@@ -712,37 +805,143 @@ data.forEach(function(s,i){
   pb.id='pb'+i; pb.textContent='▶'; pb.title='Preview this segment';
   pb.onclick=function(){ previewSeg(i); };
   acts.appendChild(pb);
+  var pl=document.createElement('label'); pl.className='seg-pause';
+  pl.appendChild(document.createTextNode('Pause after (s)'));
+  var pi=document.createElement('input'); pi.type='number'; pi.id='pa'+i;
+  pi.min='0'; pi.max='10'; pi.step='0.1'; pi.value=pauseValue(s.pause_after);
+  var ph=document.createElement('span'); ph.className='seg-pause-hint';
+  pi.oninput=function(){ document.getElementById('dirty'+i).style.display='inline'; ph.textContent=pauseHint(pi.value); };
+  pi.onchange=function(){ if(pauseHint(pi.value)){ pi.value=pauseValue(pi.value); } };
+  pl.appendChild(pi); pl.appendChild(ph); acts.appendChild(pl);
   var sa=document.createElement('audio'); sa.controls=true; sa.id='sa'+i;
   sa.className='seg-audio';
   d.appendChild(l); d.appendChild(t); d.appendChild(acts); d.appendChild(sa);
   c.appendChild(d);
 });
 
-// ── Video preview — path fetched from server, never embedded in JS ────────────
-fetch(_BASE+'/api/recorder/latest-output')
-  .then(function(r){ return r.json(); })
-  .then(function(d){
-    _videoPath=d.raw||d.final||'';
-    if(_videoPath){
-      var vp=document.getElementById('video-player');
-      var vs=document.getElementById('video-section');
-      vp.src=_BASE+'/api/recorder/serve-file?path='+encodeURIComponent(_videoPath);
-      vp.onerror=function(){ vs.style.display='none'; };
-      vs.style.display='block';
-    }
-  })
-  .catch(function(){});
+// ── Video preview — summary comes from the parent; the video is a resource load ─
+function requestDemoData(type, projectId){
+  parent.postMessage({type:type, project_id:projectId}, '*');
+}
+
+var _pid=/^demo_\d/.test(_PROJECT_ID)?_PROJECT_ID:'';
+if(_pid){ requestDemoData('gator:demo-summary', _pid); requestDemoData('gator:demo-progress', _pid); }
+
+window.addEventListener('message', function(ev){
+  var m=ev.data||{};
+  if(m.type!=='gator:demo-summary-result' || m.project_id!==_pid){ return; }
+  var rel=m.ok && m.summary && m.summary.raw_rel;
+  if(!rel){ return; }
+  var vp=document.getElementById('video-player');
+  var vs=document.getElementById('video-section');
+  vp.src=_BASE+'/api/demo-projects/'+_pid+'/file?rel='+encodeURIComponent(rel);
+  vp.onerror=function(){ vs.style.display='none'; };
+  vs.style.display='block';
+});
 
 // ── Approve ───────────────────────────────────────────────────────────────────
 function approve(){
+  if(_approving) return;
   var voice=getVoice();
   var speed=getSpeed();
   var out=data.map(function(s,i){
-    return {start_at:s.start_at||s.start||0, text:document.getElementById('s'+i).value, voice:voice, speed:speed};
+    return segOut(s, document.getElementById('s'+i).value, voice, speed, document.getElementById('pa'+i).value);
   });
-  parent.postMessage({type:'gator:send-message',
-    text:'NARRATION_APPROVED:'+JSON.stringify(out)},'*');
+  var pid=/^demo_\d/.test(_PROJECT_ID)?_PROJECT_ID:'';
+  _approving=true;
+  var btn=document.getElementById('btn-approve');
+  btn.disabled=true; btn.textContent='Approving…';
+  parent.postMessage({type:'gator:send-message', pin_skill:'gator-demo-recorder', project_id:pid,
+    text:'NARRATION_APPROVED:'+JSON.stringify(out)+(pid?' PROJECT_ID:'+pid:'')},'*');
 }
+window.addEventListener('message',function(ev){
+  var m=ev.data;
+  if(!m||m.type!=='gator:narration-approval-result') return;
+  var btn=document.getElementById('btn-approve');
+  if(m.ok){
+    btn.textContent='✓ Approved'+(m.approval&&m.approval.version?' (v'+m.approval.version+')':'');
+  }else{
+    _approving=false;
+    btn.disabled=false;
+    btn.textContent='✓ Approve & Generate TTS';
+    alert('Approval failed: '+(m.error||'unknown error'));
+  }
+});
+
+// ── Merge progress ────────────────────────────────────────────────────────────
+var _progressTimer=null;
+
+function progressView(p, approvalId, waitedMs, sinceMs){
+  var mine=!!p && p.approval_id===approvalId && (p.updated_at||0)*1000>=sinceMs;
+  if(mine && p.state==='done'){
+    return {text:'Done — your demo video is ready.', color:'#4ade80', stop:true, retry:false};
+  }
+  if(mine && p.state==='failed'){
+    return {text:'Generation failed: '+(p.error||p.message||'unknown error'), color:'#f87171', stop:true, retry:true};
+  }
+  if(mine && p.state==='running'){
+    return {text:p.message||'Generating…', color:'#f97316', stop:false, retry:false};
+  }
+  if(waitedMs>=120000){
+    return {text:'Generation has not started yet. Check that the AI Gator agent is still working, or click Approve to retry.', color:'#f87171', stop:true, retry:true};
+  }
+  return {text:'Waiting for generation to start…', color:'#6b8db5', stop:false, retry:false};
+}
+
+function setMergeStatus(text, color){
+  var s=document.getElementById('merge-status');
+  s.textContent=text||''; s.style.color=color||'#6b8db5';
+}
+
+function stopProgress(){
+  if(_progressTimer){ clearInterval(_progressTimer); _progressTimer=null; }
+}
+
+var _progressApproval=null, _progressSince=0;
+
+function pollProgress(projectId){
+  _progressTimer=setInterval(function(){ requestDemoData('gator:demo-progress', projectId); },1500);
+  requestDemoData('gator:demo-progress', projectId);
+}
+
+function startProgress(approvalId, projectId){
+  stopProgress();
+  _progressApproval=approvalId; _progressSince=Date.now();
+  pollProgress(projectId);
+}
+
+function resumeProgress(p, projectId){
+  if(!p || p.state!=='running' || !p.approval_id){ return; }
+  var since=(p.updated_at||0)*1000;
+  if(Date.now()-since>=120000){ return; }
+  _approving=true;
+  var btn=document.getElementById('btn-approve');
+  btn.disabled=true; btn.textContent='✓ Approved';
+  stopProgress();
+  _progressApproval=p.approval_id; _progressSince=since;
+  pollProgress(projectId);
+}
+
+window.addEventListener('message', function(ev){
+  var m=ev.data||{};
+  if(m.type==='gator:demo-progress-result'){
+    if(m.project_id!==_pid){ return; }
+    if(!_progressApproval){ resumeProgress(m.ok?m.progress:null, _pid); return; }
+    var v=progressView(m.ok?m.progress:{state:'none'}, _progressApproval, Date.now()-_progressSince, _progressSince);
+    setMergeStatus(v.text, v.color);
+    if(v.stop){ stopProgress(); }
+    if(v.retry){
+      _approving=false;
+      var rb=document.getElementById('btn-approve');
+      rb.disabled=false; rb.textContent='✓ Approve & Generate TTS';
+    }
+    return;
+  }
+  if(m.type!=='gator:narration-approval-result'){ return; }
+  var a=m.approval||m;
+  if(m.ok && a.approval_id && _pid){ startProgress(a.approval_id, _pid); }
+  else { stopProgress(); setMergeStatus('',''); }
+});
 </script>
 </body>
 </html>
@@ -752,93 +951,30 @@ function approve(){
 
 ## Phase 4: TTS + Merge
 
-When you receive `"Narration approved (N segments)..."` or `"✓ Approve..."`:
+When you receive `"Narration approved (N segments, approval appr_<n>_<hash>)..."` or `"✓ Approve..."`:
 
-1. Read the approved segments from `~/.gator/narration_pending.json` — this file is written by the Approve button and contains `{segments: [...], flags: {...}}`. **Always read from this file rather than parsing the trigger message** — the trigger message is just a notification, the actual edited text is in the file. If the file doesn't exist, ask the user to click the Approve button in the widget.
-2. Run `scripts/tts_pipeline.py`:
+1. Call `demo_merge_narration` with `project_id` set to the id on the `PINNED PROJECT:` line. The tool loads the approved narration itself and verifies it; do not read narration files, take segments from the trigger message, or run TTS, ffmpeg or ffprobe yourself. If the trigger message contains `approval (appr_\d+_[0-9a-f]{8})`, pass the captured id as `approval_id`.
+2. Leave `intro_mode` out unless the user asked to change the intro; the approved narration already carries `intro_mode`, `intro_duration_sec` and `intro_title`. "Hold" freezes the first frame and "Title card" shows the title. The tool adds the intro length to every narration start time, so never adjust timestamps yourself.
+3. Handle the result:
+   - `ok: true`: go to Phase 5 with `output.path`. Report `video_extended_by_sec` (when above 0, say the last frame was held that long), the `intro`, and `video_stream_sec` / `audio_stream_sec` exactly as returned.
+   - `approval_superseded`: stop; a newer approval has its own turn.
+   - `narration_not_approved`, `approval_corrupt`, `approval_stale_media`: tell the user the narration must be approved again.
+   - `out_of_range`: quote `message`, `duration_sec` and `options`, and ask which to take.
+   - `sync_mismatch`, `output_verification_failed`, `tts_failed`, `ffmpeg_failed`, `ffmpeg_timeout`: report `message` and any measured durations, and offer to retry once or to deliver the video without narration. No file was delivered.
+   - Any other `error`: report `message`.
+     Do not retry in a loop and do not describe a video that was not produced.
 
-```python
-import subprocess, sys, json, urllib.request
-from pathlib import Path
+The tool writes its stage to `work/logs/merge_progress.json`; the narration editor polls it through `GET /api/demo-projects/<id>/progress` and shows "Generating speech N of M", "Merging audio and video", "Done", or the error text.
 
-video_path = r"<path from 'Recording complete' message>"
-pending = json.loads((Path.home() / ".gator/narration_pending.json").read_text())
-segments = pending["segments"]   # always read from file — has the edited text
-flags = pending.get("flags", {})
-session_dir = Path(video_path).parent
-narration_file = session_dir / "narration.json"
-narration_file.write_text(json.dumps(segments))
-timeline_file = session_dir / "timeline.json"
-timeline_file.write_text(json.dumps({}))
-output_path = session_dir / "final_with_narration.mp4"
-
-# Locate tts_pipeline.py — check both built-in and user-installed locations
-_skill_dirs = [
-    Path.home() / ".gator/skills/mine/gator-demo-recorder/scripts",
-    Path(__file__).parent / "scripts" if "__file__" in dir() else None,
-    Path.cwd() / "web/skills/gator-demo-recorder/scripts",
-]
-skill_dir = next((d for d in _skill_dirs if d and d.exists()), _skill_dirs[0])
-
-voice = segments[0].get("voice", "af_heart") if segments else "af_heart"
-speed = str(segments[0].get("speed", 1.0)) if segments else "1.0"
-
-result = subprocess.run([
-    sys.executable,
-    str(skill_dir / "tts_pipeline.py"),
-    "--video", video_path,
-    "--timeline", str(timeline_file),
-    "--narration", str(narration_file),
-    "--output", str(output_path),
-    "--work-dir", str(session_dir / "tts_work"),
-    "--voice", voice,
-], capture_output=True, text=True, timeout=600, shell=False)
-print(result.stdout[-3000:])
-if result.stderr: print("STDERR:", result.stderr[-500:])
-
-# Always check output regardless of return code — tts_pipeline.py can succeed
-# even with non-zero exit on some platforms
-if output_path.exists():
-    size_mb = output_path.stat().st_size / 1048576
-    print(f"SUCCESS: {output_path} ({size_mb:.1f} MB)")
-    # Register the final path server-side so Phase 5 widget can fetch it
-    # without any path embedded in JS (eliminates backslash-escaping bugs)
-    import urllib.request as _ur2
-    _req = _ur2.Request(
-        'http://localhost:8003/api/recorder/set-output',
-        data=json.dumps({'final': str(output_path), 'raw': video_path}).encode(),
-        headers={'Content-Type': 'application/json'}, method='POST')
-    try: _ur2.urlopen(_req, timeout=5).read()
-    except Exception as e: print(f"Note: set-output failed: {e}")
-else:
-    print(f"ERROR: output file not found at {output_path}")
-```
-
-After running this code:
-
-- If output file exists → immediately proceed to Phase 5 with that path
-- If output file missing → report the stderr and offer to deliver video without narration
-- **Do not stop and ask the user** — check the file yourself and move on
-
-If Lemonade TTS is unavailable (preflight `lemonade.ok` is false), tell the user and offer to deliver the video without narration. The TTS endpoint is `/v1/audio/speech` (OpenAI-compatible) and the model is `kokoro-v1` — both confirmed by preflight. Do not probe other endpoints.
+If a narration preview or TTS call reports that Lemonade TTS is not running, tell the user and offer to deliver the video without narration. The TTS endpoint is `/v1/audio/speech` (OpenAI-compatible) and the model is `kokoro-v1` Do not probe other endpoints.
 
 ---
 
 ## Phase 5: Deliver
 
-Before showing the widget, call `POST /api/recorder/set-output` with the final merged path so the widget can fetch it without any path embedded in JS (eliminates all backslash-escaping bugs):
+The merged video in `PROJECT_DIR / "final"` is the deliverable; the widget finds it from the active project without any path embedded in JS (eliminates all backslash-escaping bugs). `demo_merge_narration` has already moved any earlier file from `final/` into `previous/`.
 
-```python
-import urllib.request, json
-req = urllib.request.Request(
-    'http://localhost:8003/api/recorder/set-output',
-    data=json.dumps({'final': str(output_path), 'raw': video_path}).encode(),
-    headers={'Content-Type': 'application/json'}, method='POST')
-urllib.request.urlopen(req, timeout=5).read()
-print('Output registered.')
-```
-
-Then output this widget verbatim — no placeholders to replace:
+Output this widget verbatim, replacing only `PROJECT_ID_PLACEHOLDER` with the project id (`PROJECT_DIR.name`, the id on the `PINNED PROJECT:` line of your context):
 
 ```html:widget
 <!DOCTYPE html>
@@ -851,11 +987,12 @@ Then output this widget verbatim — no placeholders to replace:
   .panel{background:#1a2332;border:1px solid #1e3a52;border-radius:12px;padding:16px;max-width:560px}
   h3{color:#4ade80;font-size:.9rem;font-weight:700;margin-bottom:10px}
   video{width:100%;border-radius:8px;background:#000;display:block;margin-bottom:10px}
-  .meta{font-size:.72rem;color:#6b8db5;margin-bottom:10px;word-break:break-all}
+  .meta{font-size:.72rem;color:#6b8db5;margin-bottom:6px;word-break:break-all}
+  .status{font-size:.7rem;color:#f87171;margin-bottom:8px;min-height:14px}
   .actions{display:flex;gap:8px;flex-wrap:wrap}
   .btn{padding:8px 14px;border-radius:7px;border:none;font-size:.78rem;font-weight:700;cursor:pointer}
-  .btn-download{background:rgba(74,222,128,.15);border:1px solid rgba(74,222,128,.35);color:#4ade80}
-  .btn-download:hover{background:rgba(74,222,128,.25)}
+  .btn-open{background:rgba(74,222,128,.15);border:1px solid rgba(74,222,128,.35);color:#4ade80}
+  .btn-open:hover{background:rgba(74,222,128,.25)}
   .btn-edit{background:rgba(96,165,250,.1);border:1px solid rgba(96,165,250,.3);color:#60a5fa}
   .btn-edit:hover{background:rgba(96,165,250,.2)}
   .btn-clean{background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);color:#f87171}
@@ -866,53 +1003,104 @@ Then output this widget verbatim — no placeholders to replace:
 <div class="panel">
   <h3>🎬 Demo Ready</h3>
   <video id="vp" controls preload="metadata"></video>
-  <div class="meta" id="meta">Loading...</div>
+  <div class="meta" id="summary">Loading...</div>
+  <div class="meta" id="duration"></div>
+  <div class="status" id="open-status"></div>
   <div class="actions">
-    <button class="btn btn-download" onclick="download()">⬇ Download</button>
+    <button class="btn btn-open" onclick="openFinal()">📁 Open final folder</button>
+    <button class="btn btn-open" onclick="openProject()">Open project folder</button>
     <button class="btn btn-edit" onclick="editNarration()">✏️ Edit narration & regenerate</button>
     <button class="btn btn-clean" onclick="cleanup()">🗑 Delete intermediates</button>
   </div>
 </div>
 <script>
 var _BASE=window._GATOR||'http://localhost:8003';
-var _finalPath='', _encoded='';
+var _PROJECT_ID = 'PROJECT_ID_PLACEHOLDER';
+var _pid=/^demo_\d/.test(_PROJECT_ID)?_PROJECT_ID:'';
 var vp=document.getElementById('vp');
 
-fetch(_BASE+'/api/recorder/latest-output')
-  .then(function(r){ return r.json(); })
-  .then(function(d){
-    _finalPath=d.final||d.raw||'';
-    _encoded=encodeURIComponent(_finalPath);
-    vp.src=_BASE+'/api/recorder/serve-file?path='+_encoded;
-  })
-  .catch(function(e){ document.getElementById('meta').textContent='Error loading: '+e; });
+function formatBytes(n){
+  n=Number(n)||0;
+  if(n<1024){ return n+' B'; }
+  if(n<1048576){ return Math.round(n/1024)+' KB'; }
+  if(n<1073741824){ return Math.round(n/1048576)+' MB'; }
+  return (n/1073741824).toFixed(1)+' GB';
+}
+
+function summaryLine(s){
+  return 'Final: '+(s.final_rel||'none')+' · Sources: '+s.source_count+' · Working files: '+formatBytes(s.work_bytes);
+}
+
+function setOpenStatus(msg){
+  document.getElementById('open-status').textContent=msg||'';
+}
+
+function requestOpen(target){
+  if(!_pid){ return; }
+  setOpenStatus('');
+  parent.postMessage({type:'gator:demo-open-folder', project_id:_pid, target:target}, '*');
+}
+
+function openFinal(){
+  requestOpen('final');
+}
+
+function openProject(){
+  requestOpen('project');
+}
+
+function handleOpenResult(m){
+  if(m.project_id!==_pid){ return; }
+  setOpenStatus(m.ok===false ? (m.message||'Could not open the folder.') : '');
+}
+
+function applySummary(m){
+  if(m.project_id!==_pid){ return; }
+  if(!m.ok || !m.summary){
+    document.getElementById('summary').textContent='Error loading: '+(m.error||'summary unavailable');
+    return;
+  }
+  var s=m.summary;
+  document.getElementById('summary').textContent=summaryLine(s);
+  if(s.final_rel){
+    vp.src=_BASE+'/api/demo-projects/'+_pid+'/file?rel='+encodeURIComponent(s.final_rel);
+  } else {
+    document.getElementById('duration').textContent='No final video was found in this project.';
+  }
+}
+
+window.addEventListener('message', function(ev){
+  var m=ev.data||{};
+  if(m.type==='gator:demo-summary-result'){ applySummary(m); }
+  else if(m.type==='gator:demo-open-folder-result'){ handleOpenResult(m); }
+});
+
+if(!_pid){
+  document.getElementById('summary').textContent='Project not specified — cannot load the final video.';
+} else {
+  parent.postMessage({type:'gator:demo-summary', project_id:_pid}, '*');
+}
 
 vp.onloadedmetadata=function(){
-  document.getElementById('meta').innerHTML=
-    '<span style="color:#6b8db5">'+_finalPath+'</span> — '+Math.round(vp.duration)+'s';
+  document.getElementById('duration').textContent='Duration: '+Math.round(vp.duration)+'s';
 };
 vp.onerror=function(){
-  document.getElementById('meta').textContent='Could not load video. Check path via /api/recorder/latest-output';
+  document.getElementById('duration').textContent='Could not load the final video.';
 };
-function download(){
-  var a=document.createElement('a');
-  a.href=_BASE+'/api/recorder/serve-file?path='+_encoded;
-  a.download=_finalPath.replace(/^.*[\\\/]/,'');
-  document.body.appendChild(a); a.click(); a.remove();
-}
+
 function editNarration(){
-  parent.postMessage({type:'gator:send-message',
+  parent.postMessage({type:'gator:send-message', pin_skill:'gator-demo-recorder', project_id:_PROJECT_ID,
     text:'NARRATION_REEDIT: Re-show the Phase 3 narration editor widget now.'},'*');
 }
 function cleanup(){
-  parent.postMessage({type:'gator:send-message',
-    text:'Please delete the frames/ and tts_work/ intermediates for the current session.'},'*');
+  parent.postMessage({type:'gator:send-message', pin_skill:'gator-demo-recorder', project_id:_PROJECT_ID,
+    text:'Please delete the work/tts intermediates for the current project.'},'*');
 }
 </script>
 </body>
 </html>
 ```
 
-After showing the widget, report the file path and size in plain text for reference.
+After showing the widget, report the file path, size and `output.duration_sec` in plain text. State only facts that the `demo_merge_narration` result contains.
 
-Always clean up: delete the `frames/` and `tts_work/` directories after delivery (user can trigger via Delete intermediates button).
+Always clean up: delete the `work/tts/` directory after delivery (user can trigger via Delete intermediates button).

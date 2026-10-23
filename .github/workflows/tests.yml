@@ -38,7 +38,20 @@ jobs:
       - name: Install locked development dependencies
         run: uv sync --locked
 
+      - name: Install ffmpeg
+        shell: bash
+        run: |
+          case "$RUNNER_OS" in
+            Linux) sudo apt-get update && sudo apt-get install -y ffmpeg ;;
+            macOS) brew install ffmpeg ;;
+            Windows) choco install ffmpeg -y --no-progress ;;
+          esac
+          ffmpeg -version | head -1
+          ffprobe -version | head -1
+
       - name: Run tests with coverage
+        env:
+          GATOR_REQUIRE_FFMPEG: '1'
         run: uv run coverage run --source=web,packaging --omit='*/tests/*' -m pytest tests -q
 
       - name: Create coverage reports

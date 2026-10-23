@@ -128,6 +128,9 @@ contextBridge.exposeInMainWorld('gatorShell', {
   // kind: 'zip' | 'folder'
   pickLocalSkill: (kind) => ipcRenderer.invoke('skill:pick-local', kind),
 
+  // Demo projects — native "Save project to…" folder picker.
+  pickDemoFolder: () => ipcRenderer.invoke('demo:pick-folder'),
+
   // Widget HUD — open a chat-generated HTML widget as an always-on-top
   // floating window that survives navigation. html is the raw HTML string.
   openWidgetHud: (html, opts) => ipcRenderer.invoke('widget:open-hud', html, opts),
