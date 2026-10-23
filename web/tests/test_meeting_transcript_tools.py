@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from skills.teams import tools
+from skills.teams import tools, transcripts
 
 
 VTT = b"WEBVTT\r\n\r\n1\r\n00:00:00.000 --> 00:00:02.000\r\n<v Ann>Budget is approved.</v>\r\n"
@@ -53,8 +53,8 @@ def wired(monkeypatch):
     def fake_load(name):
         return {"transcript_recording": recording, "transcript_beta": beta}[name]
 
-    monkeypatch.setattr(tools, "_tx_load", fake_load)
-    monkeypatch.setattr(tools, "_graph", lambda: state.gc)
+    monkeypatch.setattr(transcripts, "_tx_load", fake_load)
+    monkeypatch.setattr(transcripts, "_graph", lambda: state.gc)
     return state
 
 
@@ -64,7 +64,7 @@ def test_find_returns_transcripts_for_the_event_occurrence(wired):
         "new": [{"id": "T-new", "createdDateTime": "2026-10-19T15:40:00Z", "languageTag": "en-US"}],
         "old": [{"id": "T-old", "createdDateTime": "2026-10-12T16:00:00Z"}],
     }
-    out = tools._tool_find_meeting_transcripts("EV1")
+    out = transcripts._tool_find_meeting_transcripts("EV1")
     assert out["event"]["subject"] == "AMD <> Cohere"
     best = out["recordings"][0]
     assert best["item_id"] == "new" and best["matches_event"] is True
@@ -75,14 +75,14 @@ def test_find_returns_transcripts_for_the_event_occurrence(wired):
 def test_find_without_teams_meeting_reports_no_transcript(wired):
     wired.gc.event = {"subject": "Lunch", "start": {"dateTime": "2026-10-19T15:00:00", "timeZone": "UTC"},
                       "end": {"dateTime": "2026-10-19T16:00:00", "timeZone": "UTC"}}
-    out = tools._tool_find_meeting_transcripts("EV1")
+    out = transcripts._tool_find_meeting_transcripts("EV1")
     assert out["recordings"] == []
     assert "no_transcript" in out["status"]
 
 
 def test_find_recording_without_transcript_lists_empty(wired):
     wired.recs = [rec("new", "2026-10-19T15:40:00Z", has=False)]
-    out = tools._tool_find_meeting_transcripts("EV1")
+    out = transcripts._tool_find_meeting_transcripts("EV1")
     assert out["recordings"][0]["transcripts"] == []
 
 
@@ -114,7 +114,7 @@ class UploadGC:
 
 def test_save_stores_original_bytes_in_week_folder(wired):
     wired.gc = UploadGC()
-    out = tools._tool_save_meeting_transcript(
+    out = transcripts._tool_save_meeting_transcript(
         "d1", "new", "ABCDEFGH-1234", meeting_title="AMD <> Cohere", meeting_start="2026-10-19T15:00:00Z"
     )
     assert out["status"] == "saved"
@@ -129,8 +129,8 @@ def test_save_twice_does_not_duplicate_or_overwrite(wired):
     wired.gc = UploadGC()
     args = ("d1", "new", "ABCDEFGH-1234")
     kw = dict(meeting_title="AMD", meeting_start="2026-10-19T15:00:00Z")
-    first = tools._tool_save_meeting_transcript(*args, **kw)
-    second = tools._tool_save_meeting_transcript(*args, **kw)
+    first = transcripts._tool_save_meeting_transcript(*args, **kw)
+    second = transcripts._tool_save_meeting_transcript(*args, **kw)
     assert first["status"] == "saved" and second["status"] == "exists"
     assert len(wired.gc.files) == 1
 
@@ -138,8 +138,8 @@ def test_save_twice_does_not_duplicate_or_overwrite(wired):
 def test_save_empty_transcript_is_error(wired, monkeypatch):
     wired.gc = UploadGC()
     beta = SimpleNamespace(fetch_transcript_bytes=lambda d, i, t: b"")
-    monkeypatch.setattr(tools, "_tx_load", lambda name: beta)
-    out = tools._tool_save_meeting_transcript(
+    monkeypatch.setattr(transcripts, "_tx_load", lambda name: beta)
+    out = transcripts._tool_save_meeting_transcript(
         "d1", "new", "T1", meeting_title="AMD", meeting_start="2026-10-19T15:00:00Z"
     )
     assert out["status"] == "error" and out["error"] == "empty_transcript"
