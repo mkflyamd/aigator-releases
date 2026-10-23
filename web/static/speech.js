@@ -14,6 +14,9 @@
     return !!(window.GatorSpeechCapture && window.GatorSpeechCapture.isSupported());
   }
 
+  // Dictation toggles on and stays on, so it ends itself after this long without speech.
+  var IDLE_MS = 30000;
+
   // Only one dictation session may run at a time across the whole app.
   var _active = null; // { button }
 
@@ -165,6 +168,22 @@
     var session = null; // { capture, aborted, queue }
     var listening = false;
     var pending = 0; // utterances awaiting transcription
+    var idleTimer = null;
+
+    function _clearIdle() {
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = null;
+    }
+
+    function _armIdle(s) {
+      _clearIdle();
+      idleTimer = setTimeout(function () {
+        idleTimer = null;
+        if (session !== s) return;
+        _end(true);
+        _notice('Dictation stopped after ' + IDLE_MS / 1000 + ' seconds without speech');
+      }, IDLE_MS);
+    }
 
     function _setUI(on) {
       button.classList.toggle('listening', on);
@@ -202,6 +221,7 @@
     // Stops capture. deliver=true transcribes any phrase still being spoken;
     // deliver=false drops everything not yet inserted.
     function _end(deliver) {
+      _clearIdle();
       listening = false;
       _setUI(false);
       var s = session;
@@ -227,7 +247,9 @@
       var s = { capture: null, aborted: false, queue: Promise.resolve() };
       session = s;
       _active = { button: button };
+      _armIdle(s);
       window.GatorSpeechCapture.start(function (pcm) {
+        _armIdle(s);
         _enqueue(s, pcm);
       })
         .then(function (cap) {
@@ -272,6 +294,9 @@
       stop: stop,
       abort: abort,
       toggle: toggle,
+      isListening: function () {
+        return listening;
+      },
       isSupported: true,
     };
     _registry.push({
@@ -325,6 +350,39 @@
     _active = null;
   }
 
+  /* ── Stop dictation when the window is hidden or loses focus ──────────── */
+  // stop() (not abort) so a phrase already spoken still lands in its field.
+  function _stopOnFocusLoss() {
+    var stopped = false;
+    for (var i = 0; i < _registry.length; i++) {
+      var c = _registry[i].control;
+      try {
+        if (c.isListening()) {
+          c.stop();
+          stopped = true;
+        }
+      } catch (e) {
+        /* ignore */
+      }
+    }
+    _active = null;
+    if (stopped) _notice('Dictation stopped because the window lost focus');
+  }
+
+  if (!window.__gatorSpeechFocusHook) {
+    window.__gatorSpeechFocusHook = true;
+    document.addEventListener('visibilitychange', function () {
+      if (document.hidden) _stopOnFocusLoss();
+    });
+    // Focus moving into an iframe (widgets) also fires window blur, but the
+    // document still reports focus then, so only a real loss of focus stops it.
+    window.addEventListener('blur', function () {
+      setTimeout(function () {
+        if (!document.hasFocus()) _stopOnFocusLoss();
+      }, 0);
+    });
+  }
+
   var SEND_SELECTOR = '#send-btn, .tp-compose-send, .tp-qt-send-btn, .cc-send';
 
   if (!window.__gatorSpeechSendHook) {
@@ -344,6 +402,19 @@
       },
       true,
     );
+  }
+
+  // Non-blocking notice for expected stops (the error toast is a modal).
+  function _notice(msg) {
+    if (typeof window._showConnectivityToast === 'function') {
+      try {
+        window._showConnectivityToast(msg, 'info');
+        return;
+      } catch (e) {
+        /* ignore */
+      }
+    }
+    console.info('[GatorSpeech] ' + msg);
   }
 
   function _toast(msg) {
