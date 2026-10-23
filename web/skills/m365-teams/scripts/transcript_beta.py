@@ -43,3 +43,16 @@ def fetch_transcript_content(drive_id: str, item_id: str, transcript_id: str) ->
         extra_headers={"Accept": "text/vtt"},
         base_url=_BETA,
     )
+
+
+def fetch_transcript_bytes(drive_id: str, item_id: str, transcript_id: str) -> bytes:
+    """Fetch the transcript exactly as Graph returns it, with no decoding."""
+    gc = get_graph_client()
+    url = f"{_BETA}/drives/{drive_id}/items/{item_id}/media/transcripts/{transcript_id}/content"
+    resp = gc._request(
+        "GET",
+        url,
+        headers={**gc._headers(), "Accept": "text/vtt"},
+        label="transcript-bytes",
+    )
+    return resp.content
