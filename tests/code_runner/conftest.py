@@ -8,4 +8,8 @@ def _sandbox_off_for_legacy_suite(monkeypatch):
     real `windows_container` fixture."""
     import skills.code_runner.tools as cr_mod
 
+    import sandbox
+
     monkeypatch.setattr(cr_mod, "_sandbox_mode", lambda cfg, policy: ("off", None))
+    # The request-time path check reads real ACLs on Windows; tests that exercise it patch it themselves.
+    monkeypatch.setattr(sandbox, "ungrantable_paths", lambda read, write: [])

@@ -66,7 +66,7 @@ def run_in_sandbox(skill_id: str, kind: str, argv: list[str], skill_dir: Path, r
     try:
         res = sandbox.launch_sandboxed(request)
     except sandbox.SandboxUnavailable as exc:
-        return _failed(cr._unavailable_message(str(exc)))
+        return _failed(cr._launch_refusal_message(exc))
     except sandbox.SandboxRunError:
         return _failed(cr._RUN_ERROR_MSG)
     except OSError as exc:

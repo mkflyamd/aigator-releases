@@ -18,13 +18,15 @@ import ctypes
 import json
 import logging
 import os
+import re
 import stat
 import subprocess
+import tempfile
 import threading
 from pathlib import Path
 from types import SimpleNamespace
 
-from . import RawArg, SandboxRequest, SandboxResult, SandboxRunError, SandboxUnavailable
+from . import RawArg, SandboxPathNotGrantable, SandboxRequest, SandboxResult, SandboxRunError, SandboxUnavailable
 
 _log = logging.getLogger(__name__)
 
@@ -344,6 +346,133 @@ def _revoke(path: Path, sid: str) -> tuple[int, str]:
     return _icacls(path, "/remove:g", f"*{sid}", "/Q")
 
 
+# ── Reading a DACL without side effects ─────────────────────────────────────
+# `icacls <path> /save <file>` writes the DACL as locale-independent SDDL, so the decision to grant
+# or revoke never depends on parsing translated icacls output.
+
+ALL_APPLICATION_PACKAGES = ("AC", "S-1-15-2-1")
+_FILE_GENERIC_READ_EXECUTE = 0x1200A9
+_WRITE_DAC = 0x00040000
+_FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
+_SDDL_RIGHTS = {"GA": 0x10000000, "GR": 0x80000000, "GX": 0x20000000, "FA": 0x1F01FF, "FR": 0x120089, "FX": 0x1200A0}
+
+
+def _parse_sddl_aces(sddl: str) -> list[tuple[str, frozenset[str], int, str]]:
+    """(type, flags, rights mask, trustee) for each ACE in the DACL part of an SDDL string."""
+    start = sddl.find("D:")
+    if start < 0:
+        return []
+    dacl = sddl[start + 2:]
+    end = dacl.find("S:")
+    if end >= 0:
+        dacl = dacl[:end]
+    aces = []
+    for body in re.findall(r"\(([^)]*)\)", dacl):
+        parts = body.split(";")
+        if len(parts) < 6:
+            continue
+        kind, flags, rights, trustee = parts[0], parts[1], parts[2], parts[5]
+        if rights.lower().startswith("0x"):
+            try:
+                mask = int(rights, 16)
+            except ValueError:
+                continue
+        else:
+            mask = 0
+            for i in range(0, len(rights) - 1, 2):
+                mask |= _SDDL_RIGHTS.get(rights[i:i + 2], 0)
+        aces.append((kind, frozenset(flags[i:i + 2] for i in range(0, len(flags), 2)), mask, trustee.upper()))
+    return aces
+
+
+def _dacl_aces(path: Path) -> list[tuple[str, frozenset[str], int, str]] | None:
+    """The DACL of path as parsed ACEs, or None when it could not be read."""
+    fd, tmp = tempfile.mkstemp(suffix=".acl")
+    os.close(fd)
+    try:
+        rc, _out = _icacls(path, "/save", tmp, "/Q")
+        if rc != 0:
+            return None
+        raw = Path(tmp).read_bytes()
+        text = raw.decode("utf-16") if raw[:2] in (b"\xff\xfe", b"\xfe\xff") else raw.decode("utf-16-le", "replace")
+        lines = [line for line in text.splitlines() if line.strip()]
+        return _parse_sddl_aces(lines[-1]) if len(lines) >= 2 else None
+    except (OSError, ValueError):
+        return None
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
+def _ace_present(path: Path, sid: str) -> bool | None:
+    """True when path carries an explicit (not inherited) allow ACE for sid; None when unknown.
+
+    Explicit only: `icacls /remove:g` cannot remove an inherited ACE, so one is never ours to revoke."""
+    aces = _dacl_aces(path)
+    if aces is None:
+        return None
+    return any(kind == "A" and "ID" not in flags and trustee == sid.upper() for kind, flags, _m, trustee in aces)
+
+
+def _grants_read_execute(mask: int) -> bool:
+    if mask & _FILE_GENERIC_READ_EXECUTE == _FILE_GENERIC_READ_EXECUTE:
+        return True
+    return bool(mask & _SDDL_RIGHTS["GA"]) or (
+        bool(mask & (_SDDL_RIGHTS["GR"] | _SDDL_RIGHTS["FR"])) and bool(mask & (_SDDL_RIGHTS["GX"] | _SDDL_RIGHTS["FX"]))
+    )
+
+
+def _container_can_read(path: Path, sid: str | None = None) -> bool:
+    """True when an AppContainer can already read (and run) path without any grant.
+
+    Program Files, Windows and similar folders carry an ALL APPLICATION PACKAGES read ACE. A deny ACE for
+    the same trustees, or any doubt reading the DACL, answers False so the caller keeps the grant path."""
+    aces = _dacl_aces(path)
+    if not aces:
+        return False
+    trustees = {t.upper() for t in ALL_APPLICATION_PACKAGES} | ({sid.upper()} if sid else set())
+    mine = [(kind, flags, mask) for kind, flags, mask, trustee in aces if trustee in trustees]
+    if any(kind == "D" for kind, _f, _m in mine):
+        return False
+    allows = [(flags, mask) for kind, flags, mask in mine if kind == "A" and _grants_read_execute(mask)]
+    self_ok = any("IO" not in flags for flags, _m in allows)
+    if not Path(path).is_dir():
+        return self_ok
+    kids_ok = any("OI" in flags and "CI" in flags for flags, _m in allows)
+    return self_ok and kids_ok
+
+
+def _can_change_acl(path: Path) -> bool:
+    """True when the current user may rewrite path's DACL (opens it for WRITE_DAC; changes nothing)."""
+    k32 = _api().k32
+    handle = k32.CreateFileW(str(path), _WRITE_DAC, 7, None, OPEN_EXISTING, _FILE_FLAG_BACKUP_SEMANTICS, None)
+    if handle in (None, 0, INVALID_HANDLE_VALUE):
+        return False
+    k32.CloseHandle(handle)
+    return True
+
+
+def ungrantable_paths(read_paths: list[Path], write_paths: list[Path]) -> list[Path]:
+    """Requested paths the sandbox could never be given access to, so no approval should be asked for them.
+
+    A read path is fine when AppContainers can already read it or the user can change its ACL; a write path
+    needs the user to be able to change its ACL. Paths that do not exist yet are left to the launcher."""
+    bad: list[Path] = []
+    for path, writable in [(Path(p), False) for p in read_paths] + [(Path(p), True) for p in write_paths]:
+        try:
+            if not path.exists():
+                continue
+            if not writable and _container_can_read(path):
+                continue
+            if not _can_change_acl(path):
+                bad.append(path)
+        except Exception as exc:  # an unreadable answer must not block a request the launcher can still judge
+            _log.warning("sandbox: could not check a requested path (%s)", type(exc).__name__)
+    return bad
+
+
 def _ledger_load() -> dict:
     try:
         data = json.loads(ledger_path().read_text(encoding="utf-8"))
@@ -450,17 +579,26 @@ def _ensure_scratch_grant(sid: str, path: Path) -> bool:
 
 
 def _revoke_ok(sid: str, path: Path) -> bool:
-    """Revoke the SID's ACE on path; True when it is gone (or the path no longer exists)."""
+    """Revoke the SID's ACE on path; True when it is gone (or the path no longer exists).
+
+    The DACL decides, not icacls's exit code: a ledger entry whose ACE was never written (the write-ahead
+    entry of a grant that failed) or is already gone counts as revoked, and a revoke that errors but leaves no
+    ACE behind counts as done. Only an ACE that is still there keeps the entry."""
     try:
         if not Path(path).exists():
             return True
+        if _ace_present(path, sid) is False:
+            return True
         rc, _out = _revoke(path, sid)
+        if rc == 0:
+            return True
+        if _ace_present(path, sid) is False:
+            return True
     except Exception as exc:
         _log.warning("sandbox: revoke failed for a per-run grant (%s); entry kept for the next sweep", type(exc).__name__)
         return False
-    if rc != 0:
-        _log.warning("sandbox: revoke failed for a per-run grant (icacls rc=%s); entry kept for the next sweep", rc)
-    return rc == 0
+    _log.warning("sandbox: revoke failed for a per-run grant (icacls rc=%s); entry kept for the next sweep", rc)
+    return False
 
 
 def _sweep_locked() -> tuple[int, int]:
@@ -699,9 +837,12 @@ def launch(req: SandboxRequest) -> SandboxResult:
         # A failed revoke leaves a live ACE for the shared SID that every later run would inherit.
         _cleared, remaining = _sweep_locked()
         if remaining:
+            stuck = ", ".join(sorted({path for _sid, path in _ledger_load()["per_run"]}))
             raise SandboxUnavailable(
-                "Access granted to an earlier sandboxed run could not be removed, so the sandbox is paused "
-                "until it can be. Check that the folders named in the sandbox ledger are still accessible."
+                "Access granted to an earlier sandboxed run could not be removed from "
+                f"{stuck}, so the sandbox is paused until it can be. Restarting AI Gator retries the removal; "
+                "if it keeps failing, fix the permissions on that folder (the sandbox's access entry must be "
+                "removable by your account)."
             )
         try:
             psid, sid = ensure_profile(PROFILE_NAME + SHELL_PROFILE_SUFFIX if req.scratch_path else PROFILE_NAME)
@@ -715,6 +856,13 @@ def launch(req: SandboxRequest) -> SandboxResult:
             per_run = [(p, perm) for p, perm in per_run if not (perm == "RX" and _covered_by(p, granted))]
             if req.scratch_path is not None and _ensure_scratch_grant(sid, Path(req.scratch_path)):
                 per_run = [(p, perm) for p, perm in per_run if not _covered_by(p, [str(req.scratch_path)])]
+            # Decide what needs a grant before anything is written to the ledger: a folder every AppContainer
+            # can already read (Program Files) needs none, and one whose ACL the user cannot change can never
+            # be granted, so it is refused up front instead of leaving a ledger entry nobody can clear.
+            per_run = [(p, perm) for p, perm in per_run if not (perm == "RX" and _container_can_read(p, sid))]
+            blocked = [p for p, _perm in per_run if not _can_change_acl(p)]
+            if blocked:
+                raise SandboxPathNotGrantable(blocked)
             _scrub_container(sid)
             attempted: list[Path] = []
             try:

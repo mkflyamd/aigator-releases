@@ -302,11 +302,31 @@ _RUN_ERROR_MSG = (
 )
 
 
-def _unavailable_message(reason: str | None) -> str:
+def _unavailable_message(reason: str | None, in_settings: bool = False) -> str:
+    # Settings shows a "Code sandbox" row only when the startup check found the sandbox unavailable.
+    tail = "Tell the user; details are in Settings under Code sandbox." if in_settings else (
+        "Nothing was run. Tell the user what this says; do not retry automatically."
+    )
     return (
         "Code cannot run because the code sandbox is unavailable on this computer. "
-        f"{reason or ''} Tell the user; details are in Settings under Code sandbox."
+        f"{reason or ''} {tail}"
     ).replace("  ", " ")
+
+
+def _not_grantable_message(paths) -> str:
+    return (
+        "The sandbox cannot be given access to " + ", ".join(str(p) for p in paths) + " on this computer: "
+        "Windows does not let this account change permissions there, and sandboxed code cannot read it by "
+        "default. Nothing was run and no approval was asked. Do not request these folders again; use another "
+        "way to get the data (a copy in a folder the user owns), or tell the user it cannot be used."
+    )
+
+
+def _launch_refusal_message(exc: Exception) -> str:
+    """User-facing text for a SandboxUnavailable raised before anything ran."""
+    if isinstance(exc, sandbox.SandboxPathNotGrantable):
+        return _not_grantable_message(exc.paths)
+    return _unavailable_message(str(exc))
 
 
 def _sandbox_mode(cfg: dict, policy) -> tuple[str, str | None]:
@@ -379,6 +399,10 @@ def _check_requested_access(extra_read_paths, extra_write_paths, network_hosts, 
         return {"error": _NETWORK_REFUSED_MSG}
     if (read_paths or write_paths) and policy.filesystem == "strict":
         return {"error": _FS_REFUSED_MSG}
+    # Never ask the user to approve access the sandbox cannot be given.
+    blocked = sandbox.ungrantable_paths(read_paths, write_paths) if (read_paths or write_paths) else []
+    if blocked:
+        return {"error": _not_grantable_message(blocked)}
     return read_paths, write_paths, hosts
 
 
@@ -559,7 +583,7 @@ def _tool_run_python(
         return requested
     mode, reason = _sandbox_mode(cfg, policy)
     if mode == "unavailable":
-        return {"error": _unavailable_message(reason)}
+        return {"error": _unavailable_message(reason, in_settings=True)}
 
     # A frozen desktop sidecar cannot modify its bundled environment. Reject
     # any package-install request up front, even if that package happens to be
@@ -721,7 +745,7 @@ def _tool_run_python(
             try:
                 res = sandbox.launch_sandboxed(request)
             except sandbox.SandboxUnavailable as exc:  # raised before anything ran
-                return fail(_unavailable_message(str(exc)), f"sandbox unavailable: {exc}")
+                return fail(_launch_refusal_message(exc), f"sandbox unavailable: {exc}")
             except sandbox.SandboxRunError as exc:  # the process may already have run
                 return fail(_RUN_ERROR_MSG, f"sandbox run error: {exc}")
             except OSError as exc:  # e.g. grant ledger or launch-time sweep
