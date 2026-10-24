@@ -13152,6 +13152,12 @@ form.addEventListener('submit', async (e) => {
   let _continueRetryNote = '';
   let _abortCtrl = new AbortController();
   _isStreaming = true;
+  // `_isStreaming` is shared by every tab, so another tab finishing flips it off. This turn's
+  // dots and render mode must depend only on this turn: it is live until it ends or its task is dropped.
+  let _streamOver = false;
+  let _streamTaskId = null;
+  const _streamLive = () =>
+    !_streamOver && (_streamTaskId === null || _chatTaskIds.get(requestTabId) === _streamTaskId);
   let _lastTokenAt = Date.now();
   let _widgetFenceStartTime = 0;
   let _userCollapsedThinking = false;
@@ -13164,7 +13170,8 @@ form.addEventListener('submit', async (e) => {
     if (_activeTabId !== requestTabId) return;
     _userStopped = true;
     _pendingSandboxFollowUps.delete(requestTabId);
-    _isStreaming = false; // stops the typing-dots interval (see line ~6089) so the animation halts
+    _isStreaming = false;
+    _streamOver = true; // stops the typing-dots interval so the animation halts
     if (_abortCtrl._es) {
       _abortCtrl._es.close();
       _abortCtrl._es = null;
@@ -13178,6 +13185,11 @@ form.addEventListener('submit', async (e) => {
       _inflightRequests.delete(_stopTabKey);
     }
     fetch('/api/browser/cancel', { method: 'POST' }).catch(() => {});
+    if (_abortCtrl._stopPost) {
+      const release = _abortCtrl._stopPost;
+      _abortCtrl._stopPost = null;
+      release();
+    }
     // EventSource.close() does NOT fire onerror, so the awaiting promise would hang
     // and _resetBtn() would never run — manually resolve so cleanup proceeds and the
     // button returns to send (green) mode.
@@ -13239,6 +13251,8 @@ form.addEventListener('submit', async (e) => {
     autoSkills = [];
     toolCallCards = [];
     _isStreaming = true;
+    _streamOver = false;
+    _streamTaskId = null;
     msgDiv.classList.add('typing');
     setStatus('busy');
     prose.innerHTML = '';
@@ -13295,7 +13309,7 @@ form.addEventListener('submit', async (e) => {
           // Open the outer thinking-block while streaming (unless user
           // manually collapsed it). _userCollapsedThinking is set by the
           // toggle handler installed after each re-render (see below).
-          const _thinkingOpen = _isStreaming && !_userCollapsedThinking ? ' open' : '';
+          const _thinkingOpen = _streamLive() && !_userCollapsedThinking ? ' open' : '';
           html +=
             '<details class="thinking-block"' +
             _thinkingOpen +
@@ -13306,7 +13320,7 @@ form.addEventListener('submit', async (e) => {
             '</details>';
         }
       } else if (thinkingText) {
-        const _thinkingOpen = _isStreaming && !_userCollapsedThinking ? ' open' : '';
+        const _thinkingOpen = _streamLive() && !_userCollapsedThinking ? ' open' : '';
         html +=
           '<details class="thinking-block"' +
           _thinkingOpen +
@@ -13350,7 +13364,7 @@ form.addEventListener('submit', async (e) => {
         }
         html += '</div>';
       }
-      if (_isStreaming && _activeToolNames.size > 0) {
+      if (_streamLive() && _activeToolNames.size > 0) {
         const toolChips = [..._activeToolNames]
           .map((name) => {
             const skill = SKILL_REGISTRY.find((s) => s.id === name);
@@ -13394,11 +13408,11 @@ form.addEventListener('submit', async (e) => {
 
         // Case 3: detect bare HTML doc (no fence) during streaming.
         const _trimmedFull = _fullNorm.trimStart();
-        const _isBareHtmlDoc = _isStreaming && /^<!doctype\s+html/i.test(_trimmedFull);
+        const _isBareHtmlDoc = _streamLive() && /^<!doctype\s+html/i.test(_trimmedFull);
 
         let _renderFullSrc = _fullNorm;
 
-        if (_isStreaming) {
+        if (_streamLive()) {
           if (_isBareHtmlDoc) {
             // Entire content is an in-progress bare HTML doc — replace with skeleton
             _hasSkeleton = true;
@@ -13448,7 +13462,7 @@ form.addEventListener('submit', async (e) => {
           // renderMarkdown escapes HTML — inject skeleton AFTER it runs.
           // Pass _renderFullSrc (normalized) when not streaming so renderMarkdown
           // also benefits from the bare-lang-tag normalization.
-          _rendered = renderMarkdown(_isStreaming ? _renderFull : _renderFullSrc);
+          _rendered = renderMarkdown(_streamLive() ? _renderFull : _renderFullSrc);
           if (_hasSkeleton) {
             _rendered = _rendered.split(_SKEL_TOKEN).join(_skelHtml);
           }
@@ -13473,7 +13487,7 @@ form.addEventListener('submit', async (e) => {
       if (now - _lastRenderTime > 50) {
         _lastRenderTime = now;
         prose.innerHTML = _renderProse();
-        if (_isStreaming && !_dotsPlaceholder.parentElement) prose.appendChild(_dotsPlaceholder);
+        if (_streamLive() && !_dotsPlaceholder.parentElement) prose.appendChild(_dotsPlaceholder);
         return;
       }
       if (_pendingRender) return;
@@ -13483,7 +13497,7 @@ form.addEventListener('submit', async (e) => {
         if (_permissionCardShown) return;
         _lastRenderTime = performance.now();
         prose.innerHTML = _renderProse();
-        if (_isStreaming && !_dotsPlaceholder.parentElement) prose.appendChild(_dotsPlaceholder);
+        if (_streamLive() && !_dotsPlaceholder.parentElement) prose.appendChild(_dotsPlaceholder);
       });
     };
 
@@ -13520,7 +13534,7 @@ form.addEventListener('submit', async (e) => {
     // Toggles visibility only — never adds/removes from DOM, so scrollHeight
     // stays constant and there's no scroll flicker.
     const _dotsInterval = setInterval(() => {
-      if (!_isStreaming) {
+      if (!_streamLive()) {
         clearInterval(_dotsInterval);
         _dotsPlaceholder.remove();
         return;
@@ -13586,11 +13600,28 @@ form.addEventListener('submit', async (e) => {
             ...(_wSuffix ? { system_prompt_suffix: _wSuffix } : {}),
             ..._sendPinFields,
           };
-      const postRes = await fetch('/api/chat', {
+      const _postPromise = fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(_postBody),
       });
+      // Stop pressed while the POST is still pending must not wait for the server: release the
+      // UI now and cancel the task if the POST ever returns one.
+      const _stoppedDuringPost = new Promise((release) => {
+        _abortCtrl._stopPost = () => release(null);
+      });
+      const postRes = await Promise.race([_postPromise, _stoppedDuringPost]);
+      if (!postRes) {
+        _postPromise
+          .then((r) => (r.ok ? r.json() : null))
+          .then((j) => {
+            if (!j?.task_id) return;
+            fetch(`/api/chat/${j.task_id}/cancel`, { method: 'POST' }).catch(() => {});
+            _locallyFinishedTasks.add(j.task_id);
+          })
+          .catch(() => {});
+        throw Object.assign(new Error('stopped before the task started'), { name: 'AbortError' });
+      }
 
       if (!postRes.ok) {
         let detail = '';
@@ -13607,6 +13638,7 @@ form.addEventListener('submit', async (e) => {
         prose.textContent = '';
         prose.insertAdjacentHTML('afterbegin', errHtml);
         prose.querySelector('.retry-btn')?.addEventListener('click', doSend);
+        _streamOver = true;
         if (_activeTabId === requestTabId) _isStreaming = false;
         msgDiv.classList.remove('typing');
         if (_activeTabId === requestTabId) {
@@ -13630,6 +13662,7 @@ form.addEventListener('submit', async (e) => {
       // switches tabs before the POST resolves.
       const _tabKey = requestTabId;
       _chatTaskIds.set(_tabKey, task_id);
+      _streamTaskId = task_id;
       _setTabWorking(requestTabId, true);
 
       // Register msgDiv so switchTab() can re-attach it if the user switches away
@@ -13672,6 +13705,7 @@ form.addEventListener('submit', async (e) => {
                 'AI Gator could not verify response-stream integrity. The displayed answer may be incomplete.';
             }
             _sawDone = true;
+            _streamOver = true;
             if (_activeTabId === requestTabId) _isStreaming = false;
             es.close();
             _locallyFinishedTasks.add(task_id);
@@ -14103,6 +14137,7 @@ form.addEventListener('submit', async (e) => {
 
         es.onerror = () => {
           // Reset streaming state unconditionally so the UI never freezes
+          _streamOver = true;
           if (_activeTabId === requestTabId) _isStreaming = false;
           // EventSource reconnects automatically with Last-Event-ID — only act on permanent close
           if (es.readyState === EventSource.CLOSED) {
@@ -14306,6 +14341,7 @@ form.addEventListener('submit', async (e) => {
       _pinScrollToBottom(messages);
     // Refresh usage bar after each response
     _refreshUsageBar();
+    _streamOver = true;
     clearInterval(_browserPoll);
     clearInterval(_dotsInterval);
     _dotsPlaceholder.remove();
