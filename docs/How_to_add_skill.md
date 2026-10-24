@@ -399,3 +399,9 @@ Both paths go through `/api/marketplace/install-local`, register the skill in
 `installed-skills.json` at **Community** tier, and hot-load `tools.py` if
 present — same as any other install, so the skill shows up in the Installed
 list immediately without a restart.
+
+## Sharing a skill you created
+
+Marketplace pane -> **Installed** -> **Share** on any **Mine** skill downloads it as a
+`<skill-id>.skill` file (a ZIP of the skill folder). Send the file to a colleague; they install it
+with **Choose ZIP/.skill...** above. It installs at **Community** tier on their machine.

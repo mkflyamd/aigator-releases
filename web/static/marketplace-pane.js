@@ -156,6 +156,8 @@
       _uninstall(btn.dataset.skillId);
     } else if (action === 'edit-mine') {
       _editMineSkill(btn.dataset.skillId);
+    } else if (action === 'share-mine') {
+      _shareMineSkill(btn.dataset.skillId);
     } else if (action === 'submit-create') {
       _submitCreate();
     } else if (action === 'mp-import-fetch') {
@@ -1073,6 +1075,13 @@
         editBtn.dataset.action = 'edit-mine';
         editBtn.dataset.skillId = skill.id;
         actions.appendChild(editBtn);
+        const shareBtn = document.createElement('button');
+        shareBtn.className = 'mp-row-btn';
+        shareBtn.textContent = 'Share';
+        shareBtn.title = 'Download this skill as a .skill file to send to a colleague';
+        shareBtn.dataset.action = 'share-mine';
+        shareBtn.dataset.skillId = skill.id;
+        actions.appendChild(shareBtn);
       }
       const removeBtn = document.createElement('button');
       removeBtn.className = 'mp-row-btn mp-row-btn-danger';
@@ -2413,6 +2422,33 @@
         _showAlert('Remove error: ' + err.message, 'error');
       }
     });
+  }
+
+  async function _shareMineSkill(skillId) {
+    try {
+      const resp = await fetch('/api/marketplace/export/' + encodeURIComponent(skillId));
+      if (!resp.ok) {
+        const data = await resp.json().catch(() => ({}));
+        _showAlert('Share failed: ' + _errorMessage(data), 'error');
+        return;
+      }
+      const url = URL.createObjectURL(await resp.blob());
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = skillId + '.skill';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      _showAlert(
+        'Saved ' +
+          skillId +
+          '.skill. Send it to a colleague; they install it from Marketplace → Import → Choose ZIP/.skill.',
+        'success',
+      );
+    } catch (err) {
+      _showAlert('Share error: ' + err.message, 'error');
+    }
   }
 
   async function _editMineSkill(skillId) {
