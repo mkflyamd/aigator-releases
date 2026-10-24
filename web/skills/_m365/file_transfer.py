@@ -45,13 +45,15 @@ def _item_path(drive_id: str, folder_path: str, name: str = "") -> str:
     return f"{_base(drive_id)}/root:/{'/'.join(parts)}" if parts else f"{_base(drive_id)}/root"
 
 
-def ensure_folder(gc, drive_id: str, folder_path: str) -> None:
+def ensure_folder(gc, drive_id: str, folder_path: str) -> list:
+    """Create any missing folders; return [{"path", "web_url"}] for each segment."""
     done = ""
+    chain = []
     for seg in [s for s in folder_path.strip("/").split("/") if s]:
         seg = safe_filename(seg)
         current = f"{done}/{seg}" if done else seg
         try:
-            gc.get(_item_path(drive_id, current))
+            item = gc.get(_item_path(drive_id, current))
         except Exception as e:
             if _status(e) != 404:
                 raise
@@ -61,7 +63,7 @@ def ensure_folder(gc, drive_id: str, folder_path: str) -> None:
                 else f"{_base(drive_id)}/root/children"
             )
             try:
-                gc.post(
+                item = gc.post(
                     parent,
                     {
                         "name": seg,
@@ -72,7 +74,10 @@ def ensure_folder(gc, drive_id: str, folder_path: str) -> None:
             except Exception as e2:
                 if _status(e2) != 409:
                     raise
+                item = gc.get(_item_path(drive_id, current))
+        chain.append({"path": current, "web_url": (item or {}).get("webUrl", "")})
         done = current
+    return chain
 
 
 def _rechunk(pieces: Iterator[bytes], size: int) -> Iterator[bytes]:
@@ -163,7 +168,11 @@ def store(
     name = safe_filename(source.name)
     folder_path = "/".join(safe_filename(s) for s in folder_path.strip("/").split("/") if s)
     try:
-        ensure_folder(gc, drive_id, folder_path)
+        folders = ensure_folder(gc, drive_id, folder_path)
+        folder_info = {
+            "folder_web_url": folders[-1]["web_url"] if folders else "",
+            "folders": folders,
+        }
         try:
             found = gc.get(_item_path(drive_id, folder_path, name))
         except Exception as e:
@@ -173,7 +182,7 @@ def store(
         if found:
             if on_conflict == "fail":
                 return _result("error", error="already_exists", **_existing(found, drive_id))
-            return _result("exists", **_existing(found, drive_id))
+            return _result("exists", **_existing(found, drive_id), **folder_info)
         try:
             if source.size <= SIMPLE_UPLOAD_MAX:
                 item, err, sha = _upload_small(gc, source, drive_id, folder_path, name)
@@ -182,7 +191,7 @@ def store(
         except Exception as e:
             if _status(e) == 409:
                 found = gc.get(_item_path(drive_id, folder_path, name))
-                return _result("exists", **_existing(found, drive_id))
+                return _result("exists", **_existing(found, drive_id), **folder_info)
             raise
     except Exception as e:
         return _result("error", error="transfer_failed", detail=str(e)[:300], name=name)
@@ -201,4 +210,5 @@ def store(
         "saved",
         sha256=sha,
         **{**_existing(item, drive_id), "size": source.size},
+        **folder_info,
     )

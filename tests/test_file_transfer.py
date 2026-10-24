@@ -103,6 +103,19 @@ def test_ensure_folder_creates_each_missing_segment_once():
     assert len([c for c in gc.calls if c[0] == "POST"]) == before
 
 
+def test_ensure_folder_returns_each_folder_link():
+    gc = FakeGC(existing=["Documents"])
+    chain = ft.ensure_folder(gc, "", "Documents/Gator")
+    assert [c["path"] for c in chain] == ["Documents", "Documents/Gator"]
+
+
+def test_store_reports_folder_links():
+    gc = FakeGC(existing=["Documents"])
+    out = ft.store(gc, ft.bytes_source("m.vtt", b"abc"), "Documents")
+    assert [f["path"] for f in out["folders"]] == ["Documents"]
+    assert "folder_web_url" in out
+
+
 def test_ensure_folder_uses_drive_id_when_given():
     gc = FakeGC()
     ft.ensure_folder(gc, "b!abc", "X")
