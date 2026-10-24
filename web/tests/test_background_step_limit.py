@@ -72,4 +72,3 @@ def test_loop_reports_usage_and_its_own_limit_when_exhausted(monkeypatch):
     events = _run_coro(go())
     assert [e["iterations"] for e in events if e.get("exhausted")] == [2]
     assert events[-1]["usage"]["input_tokens"] == 10
-

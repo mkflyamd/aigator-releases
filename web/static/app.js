@@ -9960,7 +9960,8 @@ function _showAskUserCard(data, ownerTabId) {
   const title = document.createElement('div');
   title.className = 'gcc-title';
   const question = typeof data.question === 'string' ? data.question : '';
-  title.textContent = question || (options.length ? 'Pick one, or tell AI Gator what you want' : 'Reply to AI Gator');
+  title.textContent =
+    question || (options.length ? 'Pick one, or tell AI Gator what you want' : 'Reply to AI Gator');
   header.appendChild(title);
   const body = document.createElement('div');
   body.className = 'gcc-body ask-user-body';
@@ -11656,34 +11657,40 @@ function applyInline(html) {
   // Images: stash the generated <img> so later passes (Jira keys, bare URLs) can't
   // rewrite its attributes. Non-allowlisted URLs fall back to a plain link.
   const imgStash = [];
-  html = html.replace(/!\[(.*?)\]\(((?:https?:\/\/|\/)(?:[^()"]|\([^()"]*\))*)\)/g, (_, alt, href) => {
-    if (!_isInlineImageUrl(href)) return `[${alt}](${href})`;
-    // Remote links are short-lived; the server fetches once, caches, and serves the image.
-    const remote = !href.startsWith('/');
-    const src = remote
-      ? '/api/inline-image?url=' + encodeURIComponent(href.replace(/&amp;/g, '&'))
-      : href;
-    const origAttr = remote ? ` data-orig-src="${href}"` : '';
-    const btn = (action, label, tip) =>
-      `<button type="button" class="chat-img-action" title="${tip}"${gatorActionAttrs(action, [{ $el: true }])}>${label}</button>`;
-    imgStash.push(
-      `<span class="chat-inline-img-wrap is-loading">` +
-        `<img class="chat-inline-img" src="${src}"${origAttr} alt="${alt.replace(/"/g, '&quot;')}" referrerpolicy="no-referrer">` +
-        `<span class="chat-inline-img-actions">` +
-        btn('gatorImageDownload', 'Download', 'Download this image') +
-        btn('gatorImageSave', 'Save as…', 'Choose where to save this image') +
-        `</span></span>`,
-    );
-    return `\x00I${imgStash.length - 1}\x00`;
-  });
+  html = html.replace(
+    /!\[(.*?)\]\(((?:https?:\/\/|\/)(?:[^()"]|\([^()"]*\))*)\)/g,
+    (_, alt, href) => {
+      if (!_isInlineImageUrl(href)) return `[${alt}](${href})`;
+      // Remote links are short-lived; the server fetches once, caches, and serves the image.
+      const remote = !href.startsWith('/');
+      const src = remote
+        ? '/api/inline-image?url=' + encodeURIComponent(href.replace(/&amp;/g, '&'))
+        : href;
+      const origAttr = remote ? ` data-orig-src="${href}"` : '';
+      const btn = (action, label, tip) =>
+        `<button type="button" class="chat-img-action" title="${tip}"${gatorActionAttrs(action, [{ $el: true }])}>${label}</button>`;
+      imgStash.push(
+        `<span class="chat-inline-img-wrap is-loading">` +
+          `<img class="chat-inline-img" src="${src}"${origAttr} alt="${alt.replace(/"/g, '&quot;')}" referrerpolicy="no-referrer">` +
+          `<span class="chat-inline-img-actions">` +
+          btn('gatorImageDownload', 'Download', 'Download this image') +
+          btn('gatorImageSave', 'Save as…', 'Choose where to save this image') +
+          `</span></span>`,
+      );
+      return `\x00I${imgStash.length - 1}\x00`;
+    },
+  );
 
   // Markdown links first — so the URL inside [text](url) is consumed before
   // the bare-URL pass runs (prevents double-wrapping).
   // Handles: https://, http://, root-relative (/api/...), mailto:, #fragment
-  html = html.replace(/\[(.*?)\]\(((?:https?:\/\/|mailto:|\/|#)(?:[^()"]|\([^()"]*\))*)\)/g, (_, text, href) => {
-    const isExternal = /^https?:\/\//.test(href);
-    return `<a href="${href}"${isExternal ? ' target="_blank" rel="noopener"' : ''}>${text}</a>`;
-  });
+  html = html.replace(
+    /\[(.*?)\]\(((?:https?:\/\/|mailto:|\/|#)(?:[^()"]|\([^()"]*\))*)\)/g,
+    (_, text, href) => {
+      const isExternal = /^https?:\/\//.test(href);
+      return `<a href="${href}"${isExternal ? ' target="_blank" rel="noopener"' : ''}>${text}</a>`;
+    },
+  );
   // Bare https:// URLs not already inside an HTML attribute
   html = html.replace(
     /(?<![="'>])(https?:\/\/[^\s<>"')\]]+)/g,
@@ -16536,8 +16543,17 @@ function _loadMermaid() {
           startOnLoad: false,
           securityLevel: 'strict',
           theme: 'base',
-          themeVariables: { fontFamily: getComputedStyle(document.body).fontFamily, fontSize: '13px' },
-          flowchart: { curve: 'basis', htmlLabels: true, nodeSpacing: 18, rankSpacing: 44, padding: 10 },
+          themeVariables: {
+            fontFamily: getComputedStyle(document.body).fontFamily,
+            fontSize: '13px',
+          },
+          flowchart: {
+            curve: 'basis',
+            htmlLabels: true,
+            nodeSpacing: 18,
+            rankSpacing: 44,
+            padding: 10,
+          },
         });
         resolve(window.mermaid);
       } catch (e) {
@@ -16556,7 +16572,10 @@ function _loadMermaid() {
 async function _renderConfirmDiagram(box, diagram) {
   try {
     const mermaid = await _loadMermaid();
-    const { svg } = await mermaid.render('confirm-diagram-' + (window.__gatorDiagramSeq = (window.__gatorDiagramSeq || 0) + 1), diagram);
+    const { svg } = await mermaid.render(
+      'confirm-diagram-' + (window.__gatorDiagramSeq = (window.__gatorDiagramSeq || 0) + 1),
+      diagram,
+    );
     box.innerHTML = svg;
     box.style.display = 'block';
   } catch (e) {
@@ -16565,7 +16584,10 @@ async function _renderConfirmDiagram(box, diagram) {
   }
 }
 
-function _showBrowserConfirmCard(msgDiv, { confirm_id, action, title, allow_label, deny_label, diagram }) {
+function _showBrowserConfirmCard(
+  msgDiv,
+  { confirm_id, action, title, allow_label, deny_label, diagram },
+) {
   const text = _confirmCardText({ title, allow_label, deny_label });
   // Source cards keep their own id so two pending cards (two sources) do not replace each other.
   if (!text.isSource) {

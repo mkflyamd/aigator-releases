@@ -92,8 +92,15 @@ const labels = card.all((c) => c.className === 'ask-user-option-label').map((c) 
 assert.strictEqual(labels[0], '<img src=x onerror=alert(1)>', 'label must be plain text');
 
 const title = card.all((c) => c.className === 'gcc-title')[0];
-assert.strictEqual(title.textContent, 'Which notebook?', 'the question is the card title, next to the options');
-assert(card.all((c) => c.className === 'ask-user-hint').length === 1, 'options come with a pick-one hint');
+assert.strictEqual(
+  title.textContent,
+  'Which notebook?',
+  'the question is the card title, next to the options',
+);
+assert(
+  card.all((c) => c.className === 'ask-user-hint').length === 1,
+  'options come with a pick-one hint',
+);
 
 buttons[1].listeners.click({ stopPropagation() {} });
 assert.deepStrictEqual(r.sent, [['tab-1', 'Work Notes']]);
@@ -116,7 +123,11 @@ assert.strictEqual(
   0,
   'a question with no options is a text box only',
 );
-assert.strictEqual(r.messages.children[0].all((c) => c.className === 'ask-user-hint').length, 0, 'no hint without options');
+assert.strictEqual(
+  r.messages.children[0].all((c) => c.className === 'ask-user-hint').length,
+  0,
+  'no hint without options',
+);
 
 r = run(data, { activeTab: 'tab-1', owner: 'tab-2' });
 assert.strictEqual(r.messages.children.length, 0, 'another tab must not get the card');

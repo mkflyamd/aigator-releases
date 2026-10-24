@@ -7,16 +7,35 @@ const vm = require('vm');
 
 const source = fs.readFileSync(path.join(__dirname, '..', 'web', 'static', 'app.js'), 'utf8');
 const pick = (name) => {
-  const m = source.match(new RegExp(String.raw`\n(async )?function ${name}\([^)]*\)\s*\{[\s\S]*?\n\}`));
+  const m = source.match(
+    new RegExp(String.raw`\n(async )?function ${name}\([^)]*\)\s*\{[\s\S]*?\n\}`),
+  );
   assert(m, `${name} not found in app.js`);
   return m[0];
 };
 
 function run(mermaid) {
-  const box = { style: {}, innerHTML: '', removed: false, remove() { this.removed = true; } };
+  const box = {
+    style: {},
+    innerHTML: '',
+    removed: false,
+    remove() {
+      this.removed = true;
+    },
+  };
   const win = { mermaid };
-  const ctx = { window: win, document: { createElement() { throw new Error('script must not load'); } } };
-  vm.runInNewContext(`${pick('_loadMermaid')}\n${pick('_renderConfirmDiagram')}\nthis.go = _renderConfirmDiagram;`, ctx);
+  const ctx = {
+    window: win,
+    document: {
+      createElement() {
+        throw new Error('script must not load');
+      },
+    },
+  };
+  vm.runInNewContext(
+    `${pick('_loadMermaid')}\n${pick('_renderConfirmDiagram')}\nthis.go = _renderConfirmDiagram;`,
+    ctx,
+  );
   return ctx.go(box, 'flowchart TD').then(() => ({ box, win }));
 }
 
@@ -29,11 +48,23 @@ function run(mermaid) {
   assert.strictEqual(ok.box.style.display, 'block', 'box is made visible');
   assert.strictEqual(ok.box.removed, false);
 
-  const bad = await run({ initialize() {}, render: async () => { throw new Error('parse error'); } });
-  assert.strictEqual(bad.box.removed, true, 'a diagram that fails to render is dropped, the text stays');
+  const bad = await run({
+    initialize() {},
+    render: async () => {
+      throw new Error('parse error');
+    },
+  });
+  assert.strictEqual(
+    bad.box.removed,
+    true,
+    'a diagram that fails to render is dropped, the text stays',
+  );
 
   const src = source.match(/function _loadMermaid[\s\S]*?\n\}/)[0];
   assert(src.includes("securityLevel: 'strict'"), 'Mermaid runs in strict mode');
-  assert(src.includes('/static/vendor/mermaid/mermaid.min.js'), 'Mermaid is loaded from the bundled file');
+  assert(
+    src.includes('/static/vendor/mermaid/mermaid.min.js'),
+    'Mermaid is loaded from the bundled file',
+  );
   console.log('confirm_diagram: ok');
 })();

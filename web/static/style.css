@@ -22907,14 +22907,22 @@ body.tab-fullscreen {
   border-top: 1px solid var(--border);
   overflow-x: auto;
 }
-.confirm-diagram svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+.confirm-diagram svg {
+  display: block;
+  margin: 0 auto;
+  max-width: 100%;
+  height: auto;
+}
 .confirm-diagram .node rect,
 .confirm-diagram .node path {
   fill: var(--surface3) !important;
   stroke: var(--border) !important;
   stroke-width: 1px !important;
 }
-.confirm-diagram .node rect { rx: 12px; ry: 12px; }
+.confirm-diagram .node rect {
+  rx: 12px;
+  ry: 12px;
+}
 .confirm-diagram .node.trigger rect,
 .confirm-diagram .node.result rect {
   fill: color-mix(in srgb, var(--accent) 14%, var(--surface)) !important;
@@ -22925,7 +22933,9 @@ body.tab-fullscreen {
   stroke: #d9a441 !important;
   stroke-dasharray: 4 3;
 }
-.confirm-diagram .node.missing rect { stroke: #e5534b !important; }
+.confirm-diagram .node.missing rect {
+  stroke: #e5534b !important;
+}
 .confirm-diagram .nodeLabel,
 .confirm-diagram .nodeLabel b,
 .confirm-diagram foreignObject div {
@@ -22944,4 +22954,7 @@ body.tab-fullscreen {
   opacity: 0.7;
 }
 .confirm-diagram .marker,
-.confirm-diagram .arrowMarkerPath { fill: var(--text-muted) !important; stroke: var(--text-muted) !important; }
+.confirm-diagram .arrowMarkerPath {
+  fill: var(--text-muted) !important;
+  stroke: var(--text-muted) !important;
+}

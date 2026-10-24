@@ -52,6 +52,9 @@ test('stop pressed while /api/chat is still pending releases the UI and cancels 
   assert(after.includes('Promise.race([_postPromise, _stoppedDuringPost])'));
   assert(after.includes('/cancel'), 'a task that arrives after stop is cancelled');
   assert(after.includes("name: 'AbortError'"), 'the normal stopped cleanup path runs');
-  const stop = source.slice(source.indexOf('const _onStop = () => {'), source.indexOf('_activeStops.add(_onStop)'));
+  const stop = source.slice(
+    source.indexOf('const _onStop = () => {'),
+    source.indexOf('_activeStops.add(_onStop)'),
+  );
   assert(stop.includes('_abortCtrl._stopPost'), '_onStop releases the pending POST wait');
 });
