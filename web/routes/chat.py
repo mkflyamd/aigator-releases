@@ -1,5 +1,6 @@
 """Chat route — POST /api/chat streaming endpoint with skill detection and context injection."""
 
+import asyncio
 import json
 import logging
 from datetime import datetime
@@ -845,6 +846,7 @@ def _installed_skill_ids_from_message(message: str) -> list[str]:
 # (in-house) skills have been hit-or-miss while Community-tier skills often come
 # from official vendor sources (Atlassian, Anthropic). Lower rank = kept first.
 _PROVENANCE_RANK = {"user": 0, "enterprise": 1, "verified": 2, "anthropic": 2, "clawhub": 3}
+_CLASSIFY_TIMEOUT_S = 10.0
 _MAX_AUTO_SKILLS = 4  # cap on auto-detected skills per turn (explicit + deps are exempt)
 
 
@@ -1731,7 +1733,16 @@ async def chat(req: ChatRequest):
         _should_classify = _msg_text.strip() and (not _inferred or _extra_catalog)
         if _should_classify:
             print(f"[skill-detect] running LLM classifier (extra={list(_extra_catalog)})...", flush=True)
-            _classified = _classify_skills_via_llm(_msg_text, extra_skills=_extra_catalog or None)
+            # A blocking gateway call here froze the whole event loop (every request, Stop included)
+            # for the SDK's 120s timeout. Keep it off the loop and bounded; no answer means no hint.
+            try:
+                _classified = await asyncio.wait_for(
+                    asyncio.to_thread(_classify_skills_via_llm, _msg_text, _extra_catalog or None),
+                    timeout=_CLASSIFY_TIMEOUT_S,
+                )
+            except asyncio.TimeoutError:
+                print(f"[skill-classify] gave up after {_CLASSIFY_TIMEOUT_S}s", flush=True)
+                _classified = []
             if _classified:
                 # Union keyword + classifier results so we keep the built-in AND
                 # surface the overlapping MCP/installed skill — the LLM then picks

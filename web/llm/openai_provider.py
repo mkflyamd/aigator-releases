@@ -20,6 +20,7 @@ from tool_pipeline import parse_tool_definition_error, project_json_schema
 
 logger = logging.getLogger(__name__)
 _TIMEOUT = 120.0
+_SIMPLE_TIMEOUT = float(os.environ.get("LLM_SIMPLE_TIMEOUT", "15"))
 
 # Max idle seconds before declaring the LLM stream stalled (see comment in
 # anthropic_provider.py for rationale).
@@ -486,8 +487,10 @@ class OpenAIProvider(LLMProvider):
         from llm.registry import get_active_model
         mdl = model or get_active_model() or self._profile.get("active_model", "")
         msgs = [{"role": "user", "content": prompt}]
+        # Short helper calls must never wait out the 120s streaming timeout or retry.
+        client = self._client.with_options(timeout=_SIMPLE_TIMEOUT, max_retries=0)
         try:
-            response = self._client.chat.completions.create(
+            response = client.chat.completions.create(
                 model=mdl, max_tokens=max_tokens, messages=msgs,
             )
         except Exception as err:
@@ -495,7 +498,7 @@ class OpenAIProvider(LLMProvider):
             # retry with max_completion_tokens (same pattern as stream_turn).
             err_str = str(err)
             if "max_tokens" in err_str and "max_completion_tokens" in err_str:
-                response = self._client.chat.completions.create(
+                response = client.chat.completions.create(
                     model=mdl, max_completion_tokens=max_tokens, messages=msgs,
                 )
             else:

@@ -680,6 +680,9 @@ async def lifespan(app):
 
     set_notify_callback(_on_task_done)
 
+    import loop_watchdog
+    loop_watchdog.start(asyncio.get_running_loop())
+
     async def _bg_run_fn(prompt: str, skills: list[str] | None = None):
         import json as _json
         from agent_loop import _single_agent_loop
