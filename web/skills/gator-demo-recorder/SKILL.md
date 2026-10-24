@@ -1,6 +1,7 @@
 ---
 name: Gator Demo Recorder
 description: Record your screen manually, then analyze, narrate with TTS, and deliver a polished MP4.
+classify: false
 version: '2.0'
 requires:
   - id: code_runner

@@ -68,6 +68,54 @@ def _is_gated_runner(skill_id: str) -> bool:
     """
     return _gated_runner_id(skill_id) is not None
 
+
+_TOOL_NAME_IN_TEXT = _re.compile(r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b")
+_SKILL_SLASH_IN_TEXT = _re.compile(r"(?<![\w/.:])/([a-z][a-z0-9_-]*[a-z0-9])\b")
+_BUNDLE_SKILLS = frozenset({"gator", "aigator"})  # home skills that bundle other skills' tools
+
+
+def _skills_that_provide(tools: set[str]) -> list[str]:
+    """Few loadable skills that between them offer these tools, the one covering most first.
+    Aliases and bundles lose to the specific skill; runners and live MCP connections are never chosen."""
+    skills_dir = shared._WEB_DIR / "skills"
+    offered = {
+        s: names & tools for s, names in shared.SKILL_TOOLS_MAP.items()
+        if s in shared.SKILL_PROMPTS and s not in _BUNDLE_SKILLS and not _is_gated_runner(s)
+    }
+    left, out = set(tools), []
+    while left:
+        covering = [s for s, names in offered.items() if names & left]
+        if not covering:
+            break
+        best = min(covering, key=lambda s: (-len(offered[s] & left), s not in shared.SKILL_DESCRIPTIONS,
+                                            len(shared.SKILL_TOOLS_MAP[s]), not (skills_dir / s).is_dir(), s))
+        out.append(best)
+        left -= offered[best]
+    return out
+
+
+def _skill_requires(skill_id: str) -> list[str]:
+    """Skills this one needs loaded with it: its declared `requires:`, plus, for an instruction-only
+    skill, whichever skills own the tools its steps name. A skill's steps are only followable with
+    those tools in hand, and nobody writing a skill should have to know to declare them.
+    A runner is never added here; only the user grants one."""
+    needed = list(shared.SKILL_REQUIRES.get(skill_id, []))
+    if skill_id in shared._BUILTIN_SKILL_IDS:
+        return needed
+    body = shared.SKILL_PROMPTS.get(skill_id, "")
+    named = set(_TOOL_NAME_IN_TEXT.findall(body))
+    named -= shared._ALWAYS_ON_TOOLS | shared.SKILL_TOOLS_MAP.get(skill_id, set())
+    slashed = [s for s in _SKILL_SLASH_IN_TEXT.findall(body) if s in shared.SKILL_PROMPTS and not _is_gated_runner(s)]
+    wanted = dict.fromkeys([*slashed, *_skills_that_provide(named)])
+    return needed + [s for s in wanted if s != skill_id and s not in needed]
+    for name in sorted(set(_TOOL_NAME_IN_TEXT.findall(shared.SKILL_PROMPTS.get(skill_id, "")))):
+        if name in shared._ALWAYS_ON_TOOLS:
+            continue
+        owner = _skill_that_provides(name)
+        if owner and owner != skill_id and owner not in needed and not _is_gated_runner(owner):
+            needed.append(owner)
+    return needed
+
 # Detects phrases like "add the @outlook skill", "activate /teams skill",
 # "load the confluence skill" — used to auto-activate the requested skill
 # mid-conversation and retry the LLM call with the expanded toolset.
@@ -150,11 +198,14 @@ _BARE_SKILL_TURN_RE = _re.compile(r"^(?:/[a-z0-9][a-z0-9_-]*\s*)+$", _re.IGNOREC
 
 
 def _already_active_skill_requests(turn_text: str, active) -> list[str]:
-    """Skills a model turn asked for when the whole turn is nothing but skill tokens and they
-    are already active. Without this the turn ends empty: the model thinks the skill is off."""
-    text = (turn_text or "").strip()
-    if not _BARE_SKILL_TURN_RE.match(text):
-        return []
+    """Already-active skills a model turn asked for on lines that hold only skill tokens.
+    Without this the turn ends without a tool call: the model thinks the skill is off."""
+    bare_lines = [
+        line.strip()
+        for line in (turn_text or "").splitlines()
+        if _BARE_SKILL_TURN_RE.match(line.strip())
+    ]
+    text = "\n".join(bare_lines)
     active = set(active or [])
     found: list[str] = []
     for name in _SKILL_TOKEN_RE.findall(text):
@@ -525,6 +576,10 @@ _SKILL_KEYWORDS = {
               "message him", "message her", "message them",
               "send a dm", "send dm", "chat with", "ping ",
               "transcript", ".vtt"],
+    "skill_manager": ["create a skill", "create skill", "create me a skill", "make a skill", "make me a skill",
+                      "build a skill", "build me a skill", "write a skill", "add a skill", "new skill",
+                      "update the skill", "update my skill", "edit the skill", "edit my skill",
+                      "change the skill", "change my skill", "skill.md"],
     "slack": ["slack message", "in slack", "on slack", "slack channel",
               "post in slack", "send in slack", "slack conversation"],
     "jira": ["jira", "ticket", "create a ticket", "open a ticket", "jira issue",
@@ -639,24 +694,18 @@ def _infer_skills_from_message(message: str) -> list[str]:
 
 # ── LLM-based skill classification (fallback when keywords miss) ──────────
 
-_CLASSIFY_SKILL_IDS = {
-    "email":      "Read/send email, check inbox, search Outlook messages",
-    "calendar":   "View schedule, check meetings, book/cancel/reschedule meetings, check availability",
-    "teams":      "Read/send Teams chats, channels, DMs; find, read and save Teams meeting transcripts",
-    "slack":      "Read/send Slack messages, channels, DMs",
-    "jira":       "Search/create/update Jira tickets, bugs, stories",
-    "confluence": "Search/read/create Confluence wiki pages",
-    "docx":       "Create, read, edit, or fill out Word documents (.docx) — includes filling forms, charts, templates, or tables in a Word file",
-    "excel":      "Create or edit Excel spreadsheets (.xlsx)",
-    "ppt":        "Create or edit PowerPoint presentations (.pptx)",
-    "onenote":    "Read or create OneNote notebook pages",
-    "sharepoint": "Browse SharePoint sites and files",
-    "github":     "Interact with GitHub repos, PRs, issues",
-    "contacts":   "Look up contact details from address book",
-    "browser":     "Open websites, search the web, browse pages, interact with web forms, book flights/hotels online",
-    "code_runner": "Write and execute Python code to produce files, images, GIFs, charts, or other output",
-    "shell_runner": "Run shell commands (PowerShell, bash/WSL, cmd) — git, npm, build scripts, terminal operations",
-    "file_ops":     "Read, write, list, search, and find local files and directories on the user's machine",
+_CLASSIFY_DESC_MAX = 160
+
+# Menu order only — membership comes from the skills. The classifier model picks measurably worse
+# with the menu in alphabetical order (a "make a deck" prompt stopped selecting ppt), so the
+# long-standing order stays; skills not listed here follow, alphabetically.
+_CLASSIFY_ORDER = (
+    "email", "calendar", "teams", "slack", "jira", "confluence", "docx", "excel", "ppt", "onenote",
+    "onedrive", "sharepoint", "github", "contacts", "people", "browser", "code_runner", "shell_runner", "file_ops",
+)
+
+# Google Workspace skills are not built in, so they have no bundled SKILL.md to describe them.
+_EXTERNAL_CLASSIFY_IDS = {
     "g-gmail":      "Read/send Gmail, search inbox, draft, labels, filters (Google Workspace)",
     "g-drive":      "Search/create/share files on Google Drive, import Office files (Google Workspace)",
     "g-calendar":   "Google Calendar events, free/busy, Out of Office, Focus Time (Google Workspace)",
@@ -670,6 +719,22 @@ _CLASSIFY_SKILL_IDS = {
     "g-search":     "Programmable web search via Google Custom Search (Google Workspace)",
     "g-script":     "Write, deploy, run & debug Google Apps Script (Google Workspace)",
 }
+
+
+def _classify_skill_ids() -> dict[str, str]:
+    """The built-in skill menu the classifier chooses from, derived from the skills themselves.
+
+    Every built-in skill that has tools is offered with its SKILL.md description unless its
+    frontmatter says `classify: false`, so a new or renamed skill cannot fall out of the menu.
+    """
+    menu: dict[str, str] = {}
+    rank = {sid: i for i, sid in enumerate(_CLASSIFY_ORDER)}
+    for sid in sorted(shared._BUILTIN_SKILL_IDS, key=lambda s: (rank.get(s, len(rank)), s)):
+        if sid in shared.SKILL_CLASSIFY_OPT_OUT or not shared.SKILL_TOOLS_MAP.get(sid):
+            continue
+        menu[sid] = _sanitize_catalog_text(shared.SKILL_DESCRIPTIONS.get(sid) or sid, max_len=_CLASSIFY_DESC_MAX)
+    menu.update(_EXTERNAL_CLASSIFY_IDS)
+    return menu
 
 
 def _sanitize_catalog_text(s: str, max_len: int = 80) -> str:
@@ -782,7 +847,7 @@ def _available_skill_catalog() -> dict[str, str]:
     catalog: dict[str, str] = {}
     catalog.update(_mcp_catalog())
     catalog.update(_installed_skill_catalog())
-    for sid, desc in _CLASSIFY_SKILL_IDS.items():
+    for sid, desc in _classify_skill_ids().items():
         catalog.setdefault(sid, desc)
     return catalog
 
@@ -848,6 +913,21 @@ def _installed_skill_ids_from_message(message: str) -> list[str]:
 _PROVENANCE_RANK = {"user": 0, "enterprise": 1, "verified": 2, "anthropic": 2, "clawhub": 3}
 _CLASSIFY_TIMEOUT_S = 10.0
 _MAX_AUTO_SKILLS = 4  # cap on auto-detected skills per turn (explicit + deps are exempt)
+# The auto-selected skills of each chat's latest turn; kept so the reply to an ask_user card (often a
+# bare "Create a new notebook") does not lose the skills the question was asked under.
+_LAST_AUTO_SKILLS: dict[str, list[str]] = {}
+_SANDBOX_DECISION_FOLLOW_UP = _re.compile(r"^\W*(?:Approved|Denied) · I (?:approved|denied) sandbox access request ")
+
+
+def _continues_the_previous_turn(message: str, recent_tools: set[str]) -> bool:
+    """A reply to an ask_user card, or the "Approved/Denied" message an approval card sends. Neither
+    carries skill words of its own: the work goes on under the skills the previous turn had."""
+    return "ask_user" in recent_tools or bool(_SANDBOX_DECISION_FOLLOW_UP.match(message.strip()))
+
+
+def _skills_to_resume(context_id: str, already: list[str]) -> list[str]:
+    """The previous turn's skills this turn lacks. A runner is never carried: only the user grants one."""
+    return [s for s in _LAST_AUTO_SKILLS.get(context_id, []) if s not in already and not _is_gated_runner(s)]
 
 
 def _skill_provenance_rank(skill_id: str) -> int:
@@ -860,6 +940,14 @@ def _skill_provenance_rank(skill_id: str) -> int:
     except Exception:
         src = ""
     return _PROVENANCE_RANK.get(src, 3)
+
+
+def _auto_skill_relevance(skill_id: str, message: str, keyword_hits, classified) -> tuple:
+    """Tie-break for the auto-skill cap: more independent signals first, then classifier order."""
+    named = bool(_re.search(rf"\b{_re.escape(skill_id.replace('_', ' '))}\b", (message or "").lower()))
+    signals = named + (skill_id in keyword_hits) + (skill_id in classified)
+    position = classified.index(skill_id) if skill_id in classified else len(classified)
+    return (-signals, position, skill_id)
 
 
 def _is_atlassian_mcp_skill(skill_id: str) -> bool:
@@ -999,7 +1087,7 @@ def _classify_skills_via_llm(message: str, extra_skills: dict | None = None) -> 
     try:
         from llm import get_provider
         provider = get_provider()
-        all_skills = {**_CLASSIFY_SKILL_IDS, **(extra_skills or {})}
+        all_skills = {**_classify_skill_ids(), **(extra_skills or {})}
         skills_text = "\n".join(f"- {sid}: {desc}" for sid, desc in all_skills.items())
         prompt = _CLASSIFY_PROMPT.format(skills=skills_text, message=message)
 
@@ -1711,6 +1799,9 @@ async def chat(req: ChatRequest):
                 shared.task_state_store.update(_context_id, pending=None)
             print(f"[classifier] inheriting skills {_inferred} (bypassing keyword/LLM detection)", flush=True)
 
+    _keyword_hits: list[str] = []
+    _classifier_hits: list[str] = []
+    _answer_carried: list[str] = []
     if not _classifier_inherited and not _skills_locked:
         _inferred = _infer_skills_from_message(_msg_text)
         # Also match installed marketplace skills by name (handles skills absent from static dicts)
@@ -1720,11 +1811,12 @@ async def chat(req: ChatRequest):
             # A skill the user typed by name is as explicit as a tile click: it must not
             # lose its slot to the provenance cap on auto-detected skills.
             _explicit_skill_ids |= set(_installed_matches)
+        _keyword_hits = list(_inferred)
         if _inferred:
             print(f"[skill-detect] keywords/installed matched: {_inferred}", flush=True)
         # Build the non-builtin catalog once (MCP connections + installed skills).
         _extra_catalog = {k: v for k, v in _available_skill_catalog().items()
-                          if k not in _CLASSIFY_SKILL_IDS}
+                          if k not in _classify_skill_ids()}
         # Run the LLM classifier when EITHER no keyword matched, OR a built-in
         # keyword matched but the user also has non-builtin skills available that
         # could overlap (e.g. keyword 'inbox' -> email, but a Gmail MCP exists).
@@ -1744,6 +1836,7 @@ async def chat(req: ChatRequest):
                 print(f"[skill-classify] gave up after {_CLASSIFY_TIMEOUT_S}s", flush=True)
                 _classified = []
             if _classified:
+                _classifier_hits = list(_classified)
                 # Union keyword + classifier results so we keep the built-in AND
                 # surface the overlapping MCP/installed skill — the LLM then picks
                 # (or asks) per the disambiguation rule.
@@ -1787,6 +1880,21 @@ async def chat(req: ChatRequest):
                 print(f"[skill-detect] carrying forward from history text: {_carried}", flush=True)
                 _inferred = _carried
 
+        # A skill whose tools already ran in this chat stays available when this message names another
+        # skill too ("Notebook link only" answers a question about editing a skill, but matches OneNote).
+        _used = [s for s in _skills_for_tools(_tools_already_run) if s not in _inferred]
+        if _used:
+            print(f"[skill-detect] skills already used in this chat stay available: {_used}", flush=True)
+            _inferred = [*_inferred, *_used]
+
+        # The reply to an ask_user card carries no skill words of its own; the question was asked under
+        # the previous turn's skills, and the work continues under them.
+        if _continues_the_previous_turn(_msg_text, await shared.conversation_store.recent_tool_names(_context_id, last_n=4)):
+            _answer_carried = _skills_to_resume(_context_id, _inferred)
+            if _answer_carried:
+                print(f"[skill-detect] answer to a question keeps the skills it was asked under: {_answer_carried}", flush=True)
+                _inferred = [*_inferred, *_answer_carried]
+
         # A runner the chat already used stays available whether this message names another
         # skill ("use ppt") or gives no signal at all ("proceed").
         _carried_runners = list(dict.fromkeys([*_gated_runners_for_tools(_tools_already_run), *_granted_runners(_context_id)]))
@@ -1828,6 +1936,7 @@ async def chat(req: ChatRequest):
     # of rank; only tool-bearing skills compete for the cap slots.
     _cap_exempt = {"fetch_image"} if _image_analysis_requested else set()
     _cap_exempt |= set(_carried_runners)
+    _cap_exempt |= set(_answer_carried)
     _capped_candidates = [
         s for s in _auto_candidates
         if _marketplace_skill_has_tools(s) and s not in _cap_exempt
@@ -1843,12 +1952,21 @@ async def chat(req: ChatRequest):
     _capped_candidates = [s for s in _capped_candidates if s not in _atlassian_mcps]
     _guidance_only = list(set(_guidance_only) | _atlassian_mcps)
     if len(_capped_candidates) > _MAX_AUTO_SKILLS:
-        _ranked = sorted(_capped_candidates, key=_skill_provenance_rank)
+        _ranked = sorted(
+            _capped_candidates,
+            key=lambda s: (
+                _skill_provenance_rank(s),
+                *_auto_skill_relevance(s, _msg_text, _keyword_hits, _classifier_hits),
+            ),
+        )
         _kept = set(_ranked[:_MAX_AUTO_SKILLS])
         _dropped = _ranked[_MAX_AUTO_SKILLS:]
         _all_active = [s for s in _all_active if s in _explicit_skill_ids or s in _kept or s in _guidance_only]
         print(f"[skill-cap] {len(_capped_candidates)} tool-bearing auto-skills -> kept {sorted(_kept)}, "
               f"dropped {_dropped} (provenance-ranked); {len(_guidance_only)} guidance-only exempt: {sorted(_guidance_only)}", flush=True)
+    if len(_LAST_AUTO_SKILLS) > 200:
+        _LAST_AUTO_SKILLS.pop(next(iter(_LAST_AUTO_SKILLS)))
+    _LAST_AUTO_SKILLS[_context_id] = list(_all_active)
     # Inject scoped_skill (e.g. _extension_setup for the wizard) without modifying req.active_skills
     _inject_skill = req.scoped_skill or (_pin.skill if _pin else None)
     if _inject_skill and _inject_skill not in _all_active:
@@ -1857,12 +1975,12 @@ async def chat(req: ChatRequest):
     # One-pass transitive expansion — covers requires-of-requires without deep recursion.
     _deps_added: list[str] = []
     for _seed in list(_all_active):
-        for _dep in shared.SKILL_REQUIRES.get(_seed, []):
+        for _dep in _skill_requires(_seed):
             if _dep in shared.SKILL_PROMPTS and _dep not in _all_active:
                 _all_active.append(_dep)
                 _deps_added.append(_dep)
     for _seed in list(_all_active):  # second pass for transitive
-        for _dep in shared.SKILL_REQUIRES.get(_seed, []):
+        for _dep in _skill_requires(_seed):
             if _dep in shared.SKILL_PROMPTS and _dep not in _all_active:
                 _all_active.append(_dep)
                 _deps_added.append(_dep)
@@ -2270,6 +2388,7 @@ async def chat(req: ChatRequest):
         try:
             while True:
                 _turn_text_parts: list[str] = []
+                _after_last_tool_parts: list[str] = []
                 _done_chunk = None
                 _held_stall = None
                 async for chunk in _current_loop:
@@ -2282,7 +2401,10 @@ async def chat(req: ChatRequest):
                                 _out_tok = _m["usage"].get("output_tokens", 0)
                             elif "token" in _m:
                                 _turn_text_parts.append(_m["token"])
+                                _after_last_tool_parts.append(_m["token"])
                                 _assistant_text_parts.append(_m["token"])
+                            elif "tool_result" in _m:
+                                _after_last_tool_parts.clear()
                         except Exception:
                             pass
                     if chunk.startswith("data: [DONE]"):
@@ -2302,7 +2424,7 @@ async def chat(req: ChatRequest):
                     _new_skills = _detect_requested_skills(_turn_text, _all_active)
 
                 if not _new_skills and _retry_count < _MAX_AUTO_ACTIVATE_RETRIES and not use_three_agent:
-                    _already = _already_active_skill_requests("".join(_turn_text_parts), _all_active)
+                    _already = _already_active_skill_requests("".join(_after_last_tool_parts), _all_active)
                     if _already:
                         _note = _already_active_note(_already, {t["name"] for t in _loop_tools})
                         print(f"[skill-already-active] model asked for {_already}; telling it so and retrying", flush=True)

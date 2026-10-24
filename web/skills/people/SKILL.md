@@ -1,6 +1,6 @@
 ---
 name: people
-description: 'Look up coworkers, org charts, and manager chains using Microsoft Graph API. Use when user asks about people, who is someone, who reports to whom, org structure, manager chain, find someone by name/email, look up a coworker. Keywords: people, org chart, manager, direct reports, coworker, lookup, who is, find person, org chain.'
+description: 'Look up coworkers, org charts, direct reports and manager chains (Microsoft Graph)'
 license: Proprietary
 metadata:
   author: Mayuresh Kulkarni

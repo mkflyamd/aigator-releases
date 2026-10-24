@@ -1,6 +1,6 @@
 ---
 name: Skill Manager
-description: Create, update, and inspect user skills stored in ~/.gator/skills/mine/
+description: Create, edit, read and list the user's own skills (SKILL.md instructions saved in ~/.gator/skills/mine/)
 version: '1.0'
 ---
 
@@ -47,6 +47,7 @@ Returns all installed skills — native built-ins (Native tier) and user-install
 
 ## Rules
 
+- Save or change a skill only with `create_skill` / `update_skill`. They write the file themselves and work even when the code sandbox is paused or unavailable, so never use run_python, run_shell or file tools to write a SKILL.md
 - Never write code files, only SKILL.md markdown
 - Never include frontmatter in `content` — it is generated automatically
 - Always confirm with the user before calling `update_skill` (show them the new content first)

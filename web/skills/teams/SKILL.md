@@ -1,6 +1,6 @@
 ---
 name: teams
-description: 'Microsoft Teams — read chats, send messages, browse channels.'
+description: 'Microsoft Teams — read/send chats, channels, DMs; find, read and save meeting transcripts'
 metadata:
   author: Mayuresh Kulkarni
   version: '1.0'
@@ -61,5 +61,4 @@ the narrow `Chat.ReadWrite` token when needed; everything else uses the M365 sig
 ## Meeting Transcripts
 
 - To get a meeting's transcript from a calendar event, call `find_meeting_transcripts(event_id)` (event ids come from `read_calendar`). Use the recording with `matches_event=true`, then read it with `get_meeting_transcript_*`. If `recordings` is empty or `status` starts with `no_transcript`, tell the user that meeting has no transcript; never write a recap from the title alone.
-- To keep a transcript as a record, call `save_meeting_transcript` with the ids from `find_meeting_transcripts`. It stores the original `.vtt`, unchanged, in the user's own OneDrive (`Documents/Gator Meeting Transcripts/<year>-W<week>/`) and never overwrites. Report it as saved only when `status` is `saved` or `exists`, and give the `web_url`, `size` and `sha256`. Do not share the file.
-- Weekly capture (a scheduled job needs the skills `calendar`, `teams`, `onedrive`, `onenote`): read the week's calendar, and for each meeting with a transcript save the VTT, then create one OneNote section for the week (once) and one page per meeting, one page at a time. Put the recap at the top of the page (date, title, tone line, attendees, tasks, decisions, commitments, open questions, blockers, key points, critical deadlines) and the VTT link, size and sha256 below it. Skip meetings without a transcript and list them in the final reply. Do not send any message to anyone.
+- To keep a transcript as a record, call `save_meeting_transcript` with the ids from `find_meeting_transcripts`. It stores the original `.vtt`, unchanged, in the user's own OneDrive (`Documents/Gator Meeting Transcripts/<year>-W<week>/`) and never overwrites. Report it as saved only when `status` is `saved` or `exists`, and give the `web_url`, `size`, `sha256` and the `transcripts_folder_web_url` link to the folder holding all saved transcripts. Do not share the file.

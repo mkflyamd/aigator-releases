@@ -6,7 +6,8 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "web"))
 
-from routes.chat import _CLASSIFY_SKILL_IDS, _infer_skills_from_message
+import app  # noqa: F401  (loads the skills the classifier menu is built from)
+from routes.chat import _classify_skill_ids, _infer_skills_from_message
 
 
 def test_transcript_messages_select_teams():
@@ -19,7 +20,7 @@ def test_transcript_messages_select_teams():
 
 
 def test_classifier_description_mentions_transcripts():
-    assert "transcript" in _CLASSIFY_SKILL_IDS["teams"].lower()
+    assert "transcript" in _classify_skill_ids()["teams"].lower()
 
 
 def test_existing_selection_unchanged():

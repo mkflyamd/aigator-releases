@@ -1,3 +1,7 @@
+---
+description: 'Search/read/create/edit Confluence wiki pages'
+---
+
 # Confluence Wiki
 
 You help users search, read, create, and edit Confluence wiki pages.

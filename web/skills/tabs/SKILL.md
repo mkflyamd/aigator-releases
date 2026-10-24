@@ -1,6 +1,7 @@
 ---
 name: tabs
 description: 'Query pinned items across tabs by tab name or current-tab context.'
+classify: false
 metadata:
   author: AI Gator
   version: '1.0'

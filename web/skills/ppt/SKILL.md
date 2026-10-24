@@ -1,6 +1,6 @@
 ---
 name: ppt_skill
-description: 'Create, read, and edit PowerPoint presentations via Gator Chat tools.'
+description: 'Create, read, and edit PowerPoint presentations (.pptx) — slides and decks'
 metadata:
   author: Mayuresh Kulkarni
   version: '2.0'

@@ -1,6 +1,6 @@
 ---
 name: Code Runner
-description: Execute Python code in an OS sandbox — produce files, run calculations, generate images and charts; reading or writing other local paths or using the network needs the user's approval
+description: Execute Python code in an OS sandbox — produce files, run calculations, generate images and charts (local paths and network need user approval)
 version: '1.1'
 ---
 

@@ -1,6 +1,7 @@
 ---
 name: pin
 description: 'Pin a Jira issue, Confluence page, or OneDrive file to the current tab by describing it.'
+classify: false
 metadata:
   author: AI Gator
   version: '1.0'

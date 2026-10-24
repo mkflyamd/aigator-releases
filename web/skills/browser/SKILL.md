@@ -1,3 +1,7 @@
+---
+description: 'Open websites, search the web, browse pages, interact with web forms, book flights/hotels online'
+---
+
 ## Purpose
 
 Browse the web, search for information, visit websites, fill forms, and extract data from web pages.
