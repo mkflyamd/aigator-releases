@@ -7,6 +7,8 @@ from pathlib import Path
 RECURRING_OCCURRENCES_CAP = 5
 FULL_FETCH_TOKEN_THRESHOLD = 50_000
 SEARCH_CONTEXT_SECONDS = 30
+# Largest transcript text one read returns; the tool-result cap (32 KB) spills anything bigger to a file.
+MAX_READ_BYTES = 24 * 1024
 
 TRANSCRIPT_CACHE_DIR = Path(
     os.environ.get(

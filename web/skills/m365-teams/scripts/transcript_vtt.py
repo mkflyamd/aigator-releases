@@ -88,6 +88,29 @@ def slice_range(cues: list[Cue], start_sec: float, end_sec: float) -> list[Cue]:
     return [c for c in cues if c.end_sec > start_sec and c.start_sec < end_sec]
 
 
+def bounded_text(cues: list[Cue], max_bytes: int) -> dict:
+    """Join cues into text of at most max_bytes, cutting on a cue boundary.
+
+    When cues are left out, next_start_min is where to resume with a range read.
+    """
+    lines: list[str] = []
+    used = 0
+    for i, c in enumerate(cues):
+        line = c.as_line()
+        size = len(line.encode("utf-8")) + 1
+        if lines and used + size > max_bytes:
+            return {
+                "text": "\n".join(lines),
+                "truncated": True,
+                "cues_returned": len(lines),
+                "cues_left": len(cues) - i,
+                "next_start_min": round(c.start_sec / 60.0, 2),
+            }
+        lines.append(line)
+        used += size
+    return {"text": "\n".join(lines), "truncated": False}
+
+
 def filter_speaker(cues: list[Cue], name: str) -> list[Cue]:
     needle = name.strip().lower()
     return [c for c in cues if needle in c.speaker.lower()]

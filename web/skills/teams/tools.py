@@ -195,7 +195,7 @@ TOOL_DEFS.extend(
     [
         {
             "name": "get_meeting_transcript_full",
-            "description": "Fetch the full speaker-attributed transcript for a meeting recording. Use ONLY when the pinned context indicates the transcript is under the size threshold.",
+            "description": "Fetch the speaker-attributed transcript for a meeting recording, up to about 24 KB per call. If the result has truncated=true, continue with get_meeting_transcript_range starting at next_start_min until truncated is false; never read the saved spill file.",
             "input_schema": {
                 "type": "object",
                 "properties": _TX_INPUTS,
@@ -213,7 +213,7 @@ TOOL_DEFS.extend(
         },
         {
             "name": "get_meeting_transcript_range",
-            "description": "Get the transcript slice between start_min and end_min. Use for whole-meeting reads in chunks.",
+            "description": "Get the transcript slice between start_min and end_min (up to about 24 KB per call). If truncated=true, call again from next_start_min. Use for whole-meeting reads in chunks.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -894,7 +894,7 @@ def _tool_transcript_full(drive_id: str, item_id: str, transcript_id: str) -> di
     vtt = _tx_get_or_cache_vtt(drive_id, item_id, transcript_id)
     cues = tx_vtt.parse_vtt(vtt)
     return {
-        "text": tx_vtt.cues_to_text(cues),
+        **tx_vtt.bounded_text(cues, tx_cfg.MAX_READ_BYTES),
         "size_tokens_estimate": tx_cfg.estimate_tokens_from_vtt_bytes(
             len(vtt.encode("utf-8"))
         ),
@@ -917,6 +917,7 @@ def _tool_transcript_range(
     drive_id: str, item_id: str, transcript_id: str, start_min: float, end_min: float
 ) -> dict:
     tx_vtt = _tx_load("transcript_vtt")
+    tx_cfg = _tx_load("transcript_config")
     vtt = _tx_get_or_cache_vtt(drive_id, item_id, transcript_id)
     cues = tx_vtt.parse_vtt(vtt)
     sliced = tx_vtt.slice_range(cues, start_min * 60.0, end_min * 60.0)
@@ -924,7 +925,7 @@ def _tool_transcript_range(
         "start_min": start_min,
         "end_min": end_min,
         "count": len(sliced),
-        "text": tx_vtt.cues_to_text(sliced),
+        **tx_vtt.bounded_text(sliced, tx_cfg.MAX_READ_BYTES),
     }
 
 
@@ -943,13 +944,14 @@ def _tool_transcript_speaker(
     drive_id: str, item_id: str, transcript_id: str, speaker_name: str
 ) -> dict:
     tx_vtt = _tx_load("transcript_vtt")
+    tx_cfg = _tx_load("transcript_config")
     vtt = _tx_get_or_cache_vtt(drive_id, item_id, transcript_id)
     cues = tx_vtt.parse_vtt(vtt)
     filt = tx_vtt.filter_speaker(cues, speaker_name)
     return {
         "speaker": speaker_name,
         "count": len(filt),
-        "text": tx_vtt.cues_to_text(filt),
+        **tx_vtt.bounded_text(filt, tx_cfg.MAX_READ_BYTES),
     }
 
 
