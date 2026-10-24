@@ -108,13 +108,6 @@ def _skill_requires(skill_id: str) -> list[str]:
     slashed = [s for s in _SKILL_SLASH_IN_TEXT.findall(body) if s in shared.SKILL_PROMPTS and not _is_gated_runner(s)]
     wanted = dict.fromkeys([*slashed, *_skills_that_provide(named)])
     return needed + [s for s in wanted if s != skill_id and s not in needed]
-    for name in sorted(set(_TOOL_NAME_IN_TEXT.findall(shared.SKILL_PROMPTS.get(skill_id, "")))):
-        if name in shared._ALWAYS_ON_TOOLS:
-            continue
-        owner = _skill_that_provides(name)
-        if owner and owner != skill_id and owner not in needed and not _is_gated_runner(owner):
-            needed.append(owner)
-    return needed
 
 # Detects phrases like "add the @outlook skill", "activate /teams skill",
 # "load the confluence skill" — used to auto-activate the requested skill
