@@ -104,6 +104,11 @@ def test_a_bare_skill_turn_for_an_active_skill_is_recognised():
     assert _already_active_skill_requests("  /ppt\n/code_runner ", ["code_runner", "ppt"]) == ["ppt", "code_runner"]
 
 
+def test_a_skill_token_on_its_own_line_inside_prose_is_recognised():
+    turn = "I'll set up the schedule first.\n\n/calendar\n\nI need the calendar skill active.\nNothing will be sent."
+    assert _already_active_skill_requests(turn, ["calendar", "teams"]) == ["calendar"]
+
+
 def test_prose_or_inactive_skills_are_not_treated_as_a_stall():
     assert _already_active_skill_requests("I will use /code_runner for this", ["code_runner"]) == []
     assert _already_active_skill_requests("Done. See ./out/code.py", ["code_runner"]) == []
@@ -155,6 +160,64 @@ def test_the_loop_answers_an_already_active_request_instead_of_ending(runners, m
     assert retry[-2]["role"] == "assistant" and retry[-1]["role"] == "user"
     assert "run_python" in retry[-1]["content"] and "already active" in retry[-1]["content"]
     assert "run_python" in {t["name"] for t in calls[1]["normalized_tools"]}
+
+
+def _run_scripted_loop(monkeypatch, first_run_chunks, expected_calls):
+    import agent_loop
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    calls = []
+
+    def fake_loop(**kw):
+        calls.append({**kw, "msgs": list(kw["msgs"])})
+        chunks = first_run_chunks if len(calls) == 1 else [{"token": "Running it now."}]
+        said = "".join(c.get("token", "") for c in chunks)
+        kw["msgs"].append({"role": "assistant", "content": [{"type": "text", "text": said}]})
+
+        async def gen():
+            for c in chunks:
+                yield f"data: {json.dumps(c)}\n\n"
+            yield "data: [DONE]\n\n"
+
+        return gen()
+
+    ctx = f"carry-{uuid.uuid4().hex}"
+    _seed_run_python(ctx)
+    monkeypatch.setattr(agent_loop, "_single_agent_loop", fake_loop)
+    monkeypatch.setattr(chat_routes, "_classify_skills_via_llm", lambda *a, **k: [])
+    api = FastAPI()
+    api.include_router(chat_routes.router)
+    with TestClient(api) as client:
+        task_id = client.post("/api/chat", json={"message": "proceed", "context_id": ctx}).json()["task_id"]
+        for _ in range(100):
+            if any("[DONE]" in c for c in shared.chat_task_store.get_chunks(task_id)) and len(calls) >= expected_calls:
+                break
+            time.sleep(0.1)
+        time.sleep(0.3)
+    return calls
+
+
+TOOL_DONE = {"tool_result": {"call_id": "c1", "status": "ok", "summary": "read"}}
+
+
+def test_a_skill_line_after_the_last_tool_result_is_retried(runners, monkeypatch):
+    calls = _run_scripted_loop(
+        monkeypatch,
+        [TOOL_DONE, {"token": "Plan first.\n\n/code_runner\n\nI need it active."}],
+        expected_calls=2,
+    )
+    assert len(calls) == 2
+    assert "already active" in calls[1]["msgs"][-1]["content"]
+
+
+def test_a_skill_line_before_later_tool_work_is_not_retried(runners, monkeypatch):
+    calls = _run_scripted_loop(
+        monkeypatch,
+        [{"token": "/code_runner\n"}, TOOL_DONE, {"token": "All done."}],
+        expected_calls=2,
+    )
+    assert len(calls) == 1
 
 
 def test_a_runner_alias_cannot_be_self_granted_or_carried_as_a_plain_skill():

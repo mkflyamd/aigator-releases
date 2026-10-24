@@ -728,8 +728,13 @@ async def lifespan(app):
                 from routes.chat import _classify_skills_via_llm
                 inferred = _classify_skills_via_llm(prompt)
         # Always filter — never fall back to ALL tools
-        active_tools = _filter_tools(None, False, inferred)
-        required_names = set(shared._ALWAYS_ON_TOOLS)
+        active_tools = [t for t in _filter_tools(None, False, inferred) if t.get("name") != "ask_user"]
+        required_names = set(shared._ALWAYS_ON_TOOLS) - {"ask_user"}
+        system += (
+            "\n\nThis is an unattended scheduled run: nobody can answer questions. Never ask one. Use the values "
+            "pinned in the instructions, or a sensible default. If you truly cannot continue, make the first line of "
+            "your reply 'NEEDS YOUR INPUT: <the one question>' and stop."
+        )
         if skills:
             for skill_id in skills:
                 required_names.update(shared.SKILL_TOOLS_MAP.get(skill_id, set()))

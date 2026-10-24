@@ -81,3 +81,50 @@ def test_failure_banner_is_held_back_when_an_auto_activation_retry_follows():
     sent = CHAT_SRC.index("yield _held_stall")
     retry = CHAT_SRC.index("_all_active.extend(_new_skills)")
     assert held < sent < retry, "the banner is only sent when no retry follows"
+
+
+def test_a_skill_already_used_stays_when_the_next_message_names_another():
+    assert "get_skill_content" in shared.SKILL_TOOLS_MAP["skill_manager"]
+    assert _skills_for_tools({"get_skill_content"}) == ["skill_manager"]
+    assert "skills already used in this chat stay available" in CHAT_SRC
+
+
+def test_the_turn_that_asked_a_question_is_seen_in_the_short_look_back():
+    store = ConversationStore()
+    turn = [
+        {"role": "user", "content": "create a skill to recap my meetings"},
+        *_tool_turn("ask_user", "q1"),
+        {"role": "assistant", "content": [{"type": "text", "text": "Which notebook?"}]},
+    ]
+
+    async def run():
+        await store.append("tab", turn)
+        return await store.recent_tool_names("tab", last_n=4)
+
+    assert "ask_user" in asyncio.run(run())
+
+
+def test_the_answer_to_a_question_keeps_the_skills_it_was_asked_under():
+    assert "answer to a question keeps the skills it was asked under" in CHAT_SRC
+    assert "_cap_exempt |= set(_answer_carried)" in CHAT_SRC
+
+
+def test_the_message_an_approval_card_sends_continues_the_previous_turn():
+    from routes.chat import _continues_the_previous_turn as cont
+    approved = "✅ Approved · I approved sandbox access request c707a972. Run the same run_python call again."
+    denied = "\U0001f512 Denied · I denied sandbox access request c707a972. Do not retry it."
+    assert cont(approved, set()) and cont(denied, set())
+    assert cont("Yes, but only meetings with a transcript", {"ask_user"})
+    assert not cont("Approved · the budget for next year", set())
+    assert not cont("recap my meetings", {"read_calendar"})
+
+
+def test_resuming_keeps_every_skill_of_the_previous_turn_but_never_a_runner(monkeypatch):
+    from routes import chat
+    monkeypatch.setitem(chat._LAST_AUTO_SKILLS, "tab-1", ["weekly-meeting-recap", "calendar", "code_runner", "shell_runner", "teams"])
+    assert chat._skills_to_resume("tab-1", ["teams", "file_ops"]) == ["weekly-meeting-recap", "calendar"]
+    assert chat._skills_to_resume("other-tab", []) == []
+
+
+def test_the_skills_of_a_turn_are_recorded_including_ones_typed_by_name():
+    assert "_LAST_AUTO_SKILLS[_context_id] = list(_all_active)" in CHAT_SRC

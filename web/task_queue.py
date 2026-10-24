@@ -244,6 +244,11 @@ async def _run_task(
                     # "[Data from read_calendar]: {...}" leaking into briefings.)
                     if msg.get("phase") == "tool_round":
                         result_parts = []
+                    if msg.get("exhausted"):
+                        result_parts = [
+                            f"Stopped at the {msg.get('iterations')}-step limit before finishing, "
+                            "so there is no final report. Run the task again to continue."
+                        ]
                     if msg.get("phase") == "final":
                         _final_start = len(result_parts)
                     if "token" in msg:

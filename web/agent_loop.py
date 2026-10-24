@@ -17,10 +17,17 @@ from tool_pipeline import (
     sanitize_tool_failure,
     select_tools_with_budget,
 )
-from tool_repair import rejection_summaries, rejection_summary_text, stalled_chunk
+from tool_repair import (
+    LEAKED_CALL_NOTE,
+    leaked_call_stalled_chunk,
+    leaked_tool_call,
+    rejection_summaries,
+    rejection_summary_text,
+    stalled_chunk,
+)
 from tool_result_truncation import OVERFLOW_MARKER, OVERFLOW_READ_TOOLS
 
-MAX_ITERATIONS = 25
+MAX_ITERATIONS = 250
 _COMPACT_THRESHOLD = 0.85      # compact when input_tokens exceed 85% of context window (post-call)
 _PROACTIVE_COMPACT_THRESHOLD = 0.70  # compact proactively when estimated tokens exceed 70% (pre-call)
 _CHARS_PER_TOKEN = 4               # conservative estimate: 4 chars ≈ 1 token
@@ -462,6 +469,8 @@ def _clean_card_text(value, limit: int) -> str:
     return text[:limit] + "..." if len(text) > limit else text
 
 
+_ASK_USER_MAX_OPTIONS = 4
+
 _RUNNER_CARD_NAMES = {"code_runner": "the Python code runner", "shell_runner": "the shell runner"}
 
 
@@ -504,7 +513,7 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
     _BROWSER_TOOLS = {"browser_task", "browser_navigate", "browser_search"}
 
     async def _request_browser_confirm(action: str, event_queue, *, title=None,
-                                       allow_label=None, deny_label=None) -> bool:
+                                       allow_label=None, deny_label=None, diagram=None) -> bool:
         """Suspend execution, ask user to allow/cancel. Returns True if allowed."""
         from browser_agent import _pending_confirms, resolve_browser_confirm
         confirm_id = str(uuid.uuid4())
@@ -513,7 +522,7 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
         _pending_confirms[confirm_id] = (event, result)
         try:
             evt = {"kind": "browser_confirm", "confirm_id": confirm_id, "action": action}
-            for k, v in (("title", title), ("allow_label", allow_label), ("deny_label", deny_label)):
+            for k, v in (("title", title), ("allow_label", allow_label), ("deny_label", deny_label), ("diagram", diagram)):
                 if v:
                     evt[k] = v
             await event_queue.put(evt)
@@ -560,6 +569,51 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
             f"Access to {source.label} was not allowed",
         )
 
+    def _skill_known(skill_id: str) -> bool:
+        import shared as _shared
+        return skill_id in _shared.SKILL_TOOLS_MAP or skill_id in _shared.SKILL_PROMPTS
+
+    def _schedule_skill_view(inputs: dict):
+        """(skills the job has, how many more were cut, [(skill left out, trigger word)]) - all cleaned."""
+        from routes.chat import _SKILL_KEYWORDS, _infer_skills_from_message
+        skills = inputs.get("skills") or []
+        chosen = [_clean_card_text(x, 40) for x in skills[:10]] if isinstance(skills, list) else []
+        extra = max(len(skills) - 10, 0) if isinstance(skills, list) else 0
+        # The model picks skills; keywords in the instructions can show one it left out.
+        prompt_text = str(inputs.get("prompt") or "")
+        lowered = prompt_text.lower()
+        left_out = []
+        for sid in _infer_skills_from_message(prompt_text):
+            if sid in chosen or not _skill_known(sid):
+                continue
+            # The trigger word comes from the keyword table, so the user can see why it was suggested.
+            word = next((k for k in _SKILL_KEYWORDS.get(sid, ()) if k in lowered), None)
+            left_out.append((sid, word))
+        return chosen, extra, left_out[:6]
+
+    def _add_inferred_schedule_skills(inputs) -> None:
+        """An unattended run cannot request a skill, so the job gets every skill its instructions name."""
+        if not isinstance(inputs, dict):
+            return
+        skills = inputs.get("skills")
+        if skills is not None and not isinstance(skills, list):
+            return
+        from routes.chat import _installed_skill_ids_from_message, _is_gated_runner, _skill_requires
+        have = list(skills or [])
+        _, _, left_out = _schedule_skill_view({**inputs, "skills": have})
+        named = [sid for sid in _installed_skill_ids_from_message(str(inputs.get("prompt") or ""))
+                 if sid not in have and _skill_known(sid) and not _is_gated_runner(sid)]
+        # A runner can run code or commands, so only the model's own request and the user's approval add one.
+        extra = [sid for sid, _ in left_out if not _is_gated_runner(sid)]
+        # A skill the instructions name leads the list: it holds the steps the other skills' tools serve.
+        chosen = list(dict.fromkeys([*named, *have, *extra]))
+        for _ in range(2):
+            for sid in list(chosen):
+                chosen.extend(d for d in _skill_requires(sid)
+                              if d not in chosen and _skill_known(d) and not _is_gated_runner(d))
+        if any(sid not in have for sid in chosen):
+            inputs["skills"] = chosen
+
     def _schedule_card_action(inputs: dict) -> str:
         """Card text for a schedule. Every field is model-controlled: each one is cut, stripped of
         control characters and "|", and shown in a fixed order so a long name cannot fake the rest."""
@@ -575,23 +629,74 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
                     f"at hour {clean(inputs.get('cron_hour', '*'), 5)} minute {clean(inputs.get('cron_minute', 0), 5)}")
         else:
             when = trigger or "(not given)"
-        skills = inputs.get("skills") or []
-        if isinstance(skills, list) and skills:
-            skills_text = ", ".join(clean(x, 40) for x in skills[:10])
-            if len(skills) > 10:
-                skills_text += f", and {len(skills) - 10} more"
+        import shared as _shared
+
+        chosen, extra, left_out = _schedule_skill_view(inputs)
+        lines = [f"Name: {clean(inputs.get('name', ''), 80)}", f"Trigger: {when}"]
+        if chosen:
+            lines.append("Skills this job can use (it gets only these tools):")
+            for sid in chosen:
+                # Descriptions come from the skill's own SKILL.md, never from the model.
+                about = clean(_shared.SKILL_DESCRIPTIONS.get(sid, ""), 90) if _skill_known(sid) else "not an installed skill"
+                lines.append(f"  - {sid}: {about}" if about else f"  - {sid}")
+            if extra:
+                lines.append(f"  - and {extra} more")
         else:
-            skills_text = "(none)"
-        parts = [f"Name: {clean(inputs.get('name', ''), 80)}", f"Trigger: {when}", f"Skills: {skills_text}"]
+            lines.append("Skills this job can use: (none)")
+        if left_out:
+            lines.append(
+                "Mentioned in the instructions but NOT included: "
+                + ", ".join(f'{sid} ("{word}")' if word else sid for sid, word in left_out)
+                + ". If the job needs any of them, deny this and tell me which to add."
+            )
         if inputs.get("end_date"):
-            parts.append(f"Ends: {clean(inputs['end_date'], 40)}")
+            lines.append(f"Ends: {clean(inputs['end_date'], 40)}")
         if inputs.get("cron_timezone"):
-            parts.append(f"Timezone: {clean(inputs['cron_timezone'], 40)}")
+            lines.append(f"Timezone: {clean(inputs['cron_timezone'], 40)}")
         if inputs.get("token_budget") is not None:
-            parts.append(f"Token budget: {clean(inputs['token_budget'], 10)}")
-        parts.append("It will run on its own later without asking again")
-        parts.append(f"Instructions (first 300 characters): {clean(inputs.get('prompt', ''), 300)}")
-        return " | ".join(parts)
+            lines.append(f"Token budget: {clean(inputs['token_budget'], 10)}")
+        lines.append("It will run on its own later without asking again")
+        lines.append(f"Instructions (first 300 characters): {clean(inputs.get('prompt') or '', 300)}")
+        return "\n".join(lines)
+
+    def _schedule_card_diagram(inputs: dict) -> str:
+        """Mermaid text for the schedule card. Only labels from cleaned, allow-listed characters are used and
+        node ids are generated here, so model text cannot add nodes, links or directives."""
+        import shared as _shared
+
+        def label(value, limit: int) -> str:
+            return re.sub(r"[^\w .:,()/+-]", "", _clean_card_text(value, limit)).strip() or "?"
+
+        when = "when: " + label(inputs.get("trigger_type") or "not given", 20)
+        if inputs.get("trigger_type") == "cron":
+            when = (f"Every {label(inputs.get('cron_day_of_week') or 'day', 30)} at "
+                    f"{label(inputs.get('cron_hour', '*'), 5)}:{label(str(inputs.get('cron_minute', 0)).zfill(2), 5)}")
+        elif inputs.get("trigger_type") == "interval":
+            when = f"Every {label(inputs.get('interval_minutes', '?'), 10)} minutes"
+        elif inputs.get("trigger_type") == "date":
+            when = "Once at " + label(inputs.get("run_date") or "not given", 40)
+
+        def node(kind: str, node_id: str, title: str, sub: str = "") -> str:
+            # <b>, <small> and <br/> are the only markup; the page styles them (.confirm-diagram in style.css).
+            text = f"<b>{title}</b>" + (f"<br/><small>{sub}</small>" if sub else "")
+            return f'  {node_id}("{text}"):::{kind}'
+
+        chosen, extra, left_out = _schedule_skill_view(inputs)
+        out = ["flowchart LR", node("trigger", "T", when, "Starts the job")]
+        for i, sid in enumerate(chosen):
+            if _skill_known(sid):
+                n = len(_shared.SKILL_TOOLS_MAP.get(sid, ()))
+                out += [node("skill", f"S{i}", label(sid, 40), f"{n} tool{'s' if n != 1 else ''}" if n else ""),
+                        f"  T --> S{i}", f"  S{i} --> R"]
+            else:
+                out += [node("missing", f"S{i}", label(sid, 40), "not installed"), f"  T --> S{i}"]
+        if extra:
+            out += [node("skill", "SX", f"and {extra} more"), "  T --> SX", "  SX --> R"]
+        for i, (sid, word) in enumerate(left_out):
+            sub = f"not included, mentions {label(word, 30)}" if word else "not included"
+            out += [node("leftout", f"L{i}", label(sid, 40), sub), f"  T -.-> L{i}"]
+        out += [node("result", "R", "Report back", "Nothing is sent without approval")]
+        return "\n".join(out)
 
     async def _gate_schedule_task(tc, event_queue):
         """Returns None when the schedule may be created, else the error result."""
@@ -605,9 +710,11 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
                 },
                 "Scheduling is not allowed in an unattended run",
             )
+        _add_inferred_schedule_skills(tc.inputs)
         if await _request_browser_confirm(
             _schedule_card_action(tc.inputs or {}), event_queue,
             title="Allow AI Gator to schedule a task?", allow_label="Allow", deny_label="Deny",
+            diagram=_schedule_card_diagram(tc.inputs or {}),
         ):
             return None
         return await _early_error(
@@ -615,7 +722,8 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
             {
                 "error": "schedule_not_approved",
                 "hint": ("The user did not approve this schedule, so nothing was created. "
-                         "Do not retry it. Tell the user it needs their approval."),
+                         "Do not retry the same schedule. Tell the user nothing was created and ask what to change "
+                         "(for example a skill to add or remove), then propose it again."),
             },
             "Scheduling was not approved",
         )
@@ -623,7 +731,7 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
     async def _grant_requested_skill(tc, event_queue):
         """request_skill: ask the user for a runner, then offer the skill's tools for the rest of the turn."""
         import shared as _shared
-        from routes.chat import _filter_tools, _gated_runner_id, _resolve_skill_id
+        from routes.chat import _filter_tools, _gated_runner_id, _resolve_skill_id, _skill_requires
 
         if not context_id:
             return await _early_error(
@@ -645,7 +753,7 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
         needed: list[str] = [skill]
         for _ in range(2):
             for seed in list(needed):
-                needed.extend(d for d in _shared.SKILL_REQUIRES.get(seed, []) if d not in needed and d in _shared.SKILL_PROMPTS)
+                needed.extend(d for d in _skill_requires(seed) if d not in needed and d in _shared.SKILL_PROMPTS)
         for dep in _shared.SKILL_DEPENDENCIES_MAP.get(skill, []):
             if dep["id"] not in needed:
                 needed.append(dep["id"])
@@ -693,9 +801,44 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
             "hint": "These tools are callable now. Call read_skill for this skill if you need its instructions.",
         }
 
+    async def _ask_the_user(tc, event_queue):
+        """ask_user: show the question card and end the turn; the user's answer arrives as the next message."""
+        if not context_id:
+            return await _early_error(
+                tc, event_queue,
+                {
+                    "error": "ask_user_not_allowed_unattended",
+                    "hint": ("Nobody is here to answer. Decide with the values pinned in your instructions or a sensible "
+                             "default. If you cannot, finish with a first line 'NEEDS YOUR INPUT: <the question>'."),
+                },
+                "Questions are not allowed in an unattended run",
+            )
+        inputs = tc.inputs or {}
+        question = _clean_card_text(inputs.get("question", ""), 400)
+        if not question:
+            return await _early_error(
+                tc, event_queue,
+                {"error": "missing_question", "hint": "Call ask_user with a short, specific question."},
+                "ask_user needs a question",
+            )
+        raw = inputs.get("options")
+        options = []
+        for opt in (raw if isinstance(raw, list) else [])[:_ASK_USER_MAX_OPTIONS]:
+            if not isinstance(opt, dict):
+                continue
+            label = _clean_card_text(opt.get("label", ""), 80)
+            if label:
+                options.append({"label": label, "description": _clean_card_text(opt.get("description", ""), 200)})
+        card = {"ask_id": str(uuid.uuid4()), "question": question, "options": options}
+        await event_queue.put({"kind": "ask_user", "data": card})
+        await event_queue.put({"kind": "tool_result", "call_id": tc.id, "status": "success", "summary": "Waiting for your answer"})
+        return {"asked": True, "_await_answer": card}
+
     async def _run_tool_block(tc, event_queue):
         if tc.name == "request_skill" and (_offered is None or tc.name in _offered):
             return await _grant_requested_skill(tc, event_queue)
+        if tc.name == "ask_user" and (_offered is None or tc.name in _offered):
+            return await _ask_the_user(tc, event_queue)
         if _offered is not None and tc.name not in _offered:
             return await _early_error(
                 tc, event_queue,
@@ -952,6 +1095,7 @@ async def _single_agent_loop(
     available_tools = list(normalized_tools)
     required_tool_names = set(required_tool_names or ())
     _definition_retries = 0
+    _leaked_call_repairs = 0
     # Turn telemetry identifiers, initialized here so static analysis can see
     # they are defined before the first iteration completes.
     _turn_id = ""
@@ -1201,6 +1345,27 @@ async def _single_agent_loop(
         else:
             msgs.append(asst_msg)
 
+        if turn["stop_reason"] != "tool_use" and not turn.get("tool_calls") and leaked_tool_call(turn.get("text")):
+            _repairing = _leaked_call_repairs < 1
+            await _log_turn_end_safe(
+                _turn_id, context_id, task_id, _, "single", model,
+                type(provider).__name__, "leaked_tool_call" if _repairing else "stalled",
+                turn["stop_reason"], _turn_tool_calls, None, None,
+                _total_input, _total_output, _overflow_prunes,
+                _retry_count, _failover_used, _bad_tool_streak,
+                int((time.monotonic() - _turn_start_ts) * 1000),
+                len(msgs), active_skills,
+            )
+            if _repairing:
+                _leaked_call_repairs += 1
+                msgs.append({"role": "user", "content": LEAKED_CALL_NOTE})
+                yield f"data: {json.dumps({'phase': 'tool_round'})}\n\n"
+                continue
+            yield f"data: {json.dumps({'usage': {'input_tokens': _total_input, 'output_tokens': _total_output}})}\n\n"
+            yield leaked_call_stalled_chunk()
+            yield "data: [DONE]\n\n"
+            return
+
         if turn["stop_reason"] != "tool_use":
             yield f"data: {json.dumps({'usage': {'input_tokens': _total_input, 'output_tokens': _total_output}})}\n\n"
             if turn["stop_reason"] == "refusal" and not turn.get("text"):
@@ -1300,12 +1465,14 @@ async def _single_agent_loop(
                     yield f"data: {json.dumps({'jira_target_selection': evt.get('data', {})})}\n\n"
                 elif kind == "sandbox_approval":
                     yield f"data: {json.dumps({'sandbox_approval': evt.get('data', {})})}\n\n"
+                elif kind == "ask_user":
+                    yield f"data: {json.dumps({'ask_user': evt.get('data', {})})}\n\n"
                 elif kind == "toast":
                     yield f"data: {json.dumps({'toast': {'level': evt.get('level', 'info'), 'message': evt.get('message', '')}})}\n\n"
                 elif kind == "browser_hitl":
                     yield f"data: {json.dumps({'browser_hitl': evt['state']})}\n\n"
                 elif kind == "browser_confirm":
-                    _card = {k: evt[k] for k in ("confirm_id", "action", "title", "allow_label", "deny_label") if k in evt}
+                    _card = {k: evt[k] for k in ("confirm_id", "action", "title", "allow_label", "deny_label", "diagram") if k in evt}
                     yield f"data: {json.dumps({'browser_confirm': _card})}\n\n"
                 elif kind == "browser_confirm_expired":
                     yield f"data: {json.dumps({'browser_confirm_expired': evt['confirm_id']})}\n\n"
@@ -1348,11 +1515,33 @@ async def _single_agent_loop(
             yield "data: [DONE]\n\n"
             return
 
+        _question = next((r["_await_answer"] for r in results if isinstance(r, dict) and "_await_answer" in r), None)
+        if _question:
+            results = [{k: v for k, v in r.items() if k != "_await_answer"} if isinstance(r, dict) else r for r in results]
         tool_msg = provider.build_tool_result_message(tool_calls, results)
         if isinstance(tool_msg, list):
             msgs.extend(tool_msg)
         else:
             msgs.append(tool_msg)
+
+        if _question:
+            # The user's reply is the next message; end the turn here instead of calling the model again.
+            _asked = _question["question"]
+            msgs.append({"role": "assistant", "content": [{"type": "text", "text": _asked}]})
+            yield f"data: {json.dumps({'phase': 'tool_round'})}\n\n"
+            yield f"data: {json.dumps({'text': _asked})}\n\n"
+            yield f"data: {json.dumps({'usage': {'input_tokens': _total_input, 'output_tokens': _total_output}})}\n\n"
+            await _log_turn_end_safe(
+                _turn_id, context_id, task_id, _, "single", model,
+                type(provider).__name__, "ask_user", turn["stop_reason"],
+                _summarize_tool_calls(tool_calls, results), None, None,
+                _total_input, _total_output, _overflow_prunes,
+                _retry_count, _failover_used, _bad_tool_streak,
+                int((time.monotonic() - _turn_start_ts) * 1000),
+                len(msgs), active_skills,
+            )
+            yield "data: [DONE]\n\n"
+            return
 
         # Circuit breaker: if every tool call in this round was a non-retryable
         # error (bad params, malformed JSON from on-prem model), increment the
@@ -1401,6 +1590,7 @@ async def _single_agent_loop(
         yield f"data: {json.dumps({'phase': 'tool_round'})}\n\n"
 
     yield f"data: {json.dumps({'exhausted': True, 'iterations': MAX_ITERATIONS, 'message': f'Gator hit its {MAX_ITERATIONS}-step limit before finishing. Click Continue to pick up where it left off.'})}\n\n"
+    yield f"data: {json.dumps({'usage': {'input_tokens': _total_input, 'output_tokens': _total_output}})}\n\n"
     await _log_turn_end_safe(
         _turn_id, context_id, task_id, MAX_ITERATIONS - 1, "single", model,
         type(provider).__name__, "max_iterations", None,
@@ -1575,6 +1765,9 @@ async def run_three_agent_loop(
     _total_input = 0
     _total_output = 0
     required_tool_names = set(required_tool_names or ())
+    # The planner/executor/verifier pipeline has no point to stop and wait for an answer.
+    normalized_tools = [t for t in normalized_tools if "ask_user" not in _offered_tool_names([t])]
+    required_tool_names.discard("ask_user")
     _, _run_all_into_queue, _SENTINEL = _make_tool_runner(
         execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _SLACK_SAFE_MSG,
         context_id=context_id, offered_names=_offered_tool_names(normalized_tools),
@@ -1832,7 +2025,7 @@ async def run_three_agent_loop(
                 elif kind == "browser_hitl":
                     yield f"data: {json.dumps({'browser_hitl': evt['state']})}\n\n"
                 elif kind == "browser_confirm":
-                    _card = {k: evt[k] for k in ("confirm_id", "action", "title", "allow_label", "deny_label") if k in evt}
+                    _card = {k: evt[k] for k in ("confirm_id", "action", "title", "allow_label", "deny_label", "diagram") if k in evt}
                     yield f"data: {json.dumps({'browser_confirm': _card})}\n\n"
                 elif kind == "browser_confirm_expired":
                     yield f"data: {json.dumps({'browser_confirm_expired': evt['confirm_id']})}\n\n"
