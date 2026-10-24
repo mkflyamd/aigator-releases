@@ -44,16 +44,16 @@ mic -> getUserMedia -> AudioWorklet -> 16 kHz mono PCM16 frames
 
 ### Units
 
-| Unit | Responsibility |
-|---|---|
-| `web/static/speech-capture.js` + `web/static/speech-worklet.js` | Open the mic at 16 kHz, produce mono PCM16, segment utterances, call a callback per utterance. No DOM, no network. |
-| `web/static/speech.js` (edited) | Keeps `GatorSpeech` API, hotkey, registry, inserters, toasts and stop-on-send. Replaces the `SpeechRecognition` block with the capture unit plus a POST of each utterance. |
-| `web/dictation/engine.py` | `Engine` interface: `load(model_dir)` and `transcribe(pcm16: bytes) -> str`; engine registry keyed by name. |
-| `web/dictation/faster_whisper_engine.py` | The faster-whisper adapter (the only engine in this change). |
-| `web/dictation/models.json` | Model manifest (see Model registry). |
-| `web/dictation/service.py` | Resolves the active model, locates its directory, lazily loads the engine once, serializes calls. |
-| `web/routes/dictation.py` | The HTTP route. Registered in `web/app.py` with `include_router`. |
-| `tools/fetch_dictation_model.py` | Build-time download of the pinned model with checksum verification. |
+| Unit                                                            | Responsibility                                                                                                                                                             |
+| --------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `web/static/speech-capture.js` + `web/static/speech-worklet.js` | Open the mic at 16 kHz, produce mono PCM16, segment utterances, call a callback per utterance. No DOM, no network.                                                         |
+| `web/static/speech.js` (edited)                                 | Keeps `GatorSpeech` API, hotkey, registry, inserters, toasts and stop-on-send. Replaces the `SpeechRecognition` block with the capture unit plus a POST of each utterance. |
+| `web/dictation/engine.py`                                       | `Engine` interface: `load(model_dir)` and `transcribe(pcm16: bytes) -> str`; engine registry keyed by name.                                                                |
+| `web/dictation/faster_whisper_engine.py`                        | The faster-whisper adapter (the only engine in this change).                                                                                                               |
+| `web/dictation/models.json`                                     | Model manifest (see Model registry).                                                                                                                                       |
+| `web/dictation/service.py`                                      | Resolves the active model, locates its directory, lazily loads the engine once, serializes calls.                                                                          |
+| `web/routes/dictation.py`                                       | The HTTP route. Registered in `web/app.py` with `include_router`.                                                                                                          |
+| `tools/fetch_dictation_model.py`                                | Build-time download of the pinned model with checksum verification.                                                                                                        |
 
 The `GatorSpeech` public API (`wire`, `isSupported`, `stopAll`, `makeFieldInserter`, `makeQuillInserter`, etc.) does not change, so `index.html` and `third-pane.js` are untouched.
 
@@ -118,7 +118,12 @@ The backend also runs VAD, so an energy false-trigger yields empty text, not jun
       "revision": "<pinned commit sha>",
       "license": "MIT",
       "size_mb": 145,
-      "files": { "model.bin": "<sha256>", "config.json": "<sha256>", "tokenizer.json": "<sha256>", "vocabulary.txt": "<sha256>" }
+      "files": {
+        "model.bin": "<sha256>",
+        "config.json": "<sha256>",
+        "tokenizer.json": "<sha256>",
+        "vocabulary.txt": "<sha256>"
+      }
     }
   }
 }
@@ -146,14 +151,14 @@ The backend also runs VAD, so an energy false-trigger yields empty text, not jun
 
 ## Error handling summary
 
-| Condition | Result |
-|---|---|
-| Mic permission denied / no device | Toast, session stops |
-| Model missing or fails to load | 503, toast with reason, session stops |
-| Bad length (odd bytes) | 400 |
-| Over 20 s of audio | 413 |
-| CSRF 403 | Refresh token, retry once, then toast and stop |
-| No speech detected | `{"text": ""}`, nothing inserted |
+| Condition                         | Result                                         |
+| --------------------------------- | ---------------------------------------------- |
+| Mic permission denied / no device | Toast, session stops                           |
+| Model missing or fails to load    | 503, toast with reason, session stops          |
+| Bad length (odd bytes)            | 400                                            |
+| Over 20 s of audio                | 413                                            |
+| CSRF 403                          | Refresh token, retry once, then toast and stop |
+| No speech detected                | `{"text": ""}`, nothing inserted               |
 
 ## Testing
 

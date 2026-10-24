@@ -52,7 +52,8 @@ function makeHarness() {
     clearTimeout(id) {
       timers.delete(id);
     },
-    fetch: () => Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ text: '' }) }),
+    fetch: () =>
+      Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ text: '' }) }),
   };
   vm.createContext(ctx);
   vm.runInContext(source, ctx);

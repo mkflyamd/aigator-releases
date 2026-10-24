@@ -12,8 +12,14 @@ const source = fs.readFileSync(
 );
 const sandbox = { window: {}, navigator: {}, console };
 vm.runInNewContext(source, sandbox);
-const { createSegmenter, floatToInt16, FRAME, SAMPLE_RATE, MAX_UTTERANCE_SAMPLES, MIN_SPEECH_FRAMES } =
-  sandbox.window.GatorSpeechCapture;
+const {
+  createSegmenter,
+  floatToInt16,
+  FRAME,
+  SAMPLE_RATE,
+  MAX_UTTERANCE_SAMPLES,
+  MIN_SPEECH_FRAMES,
+} = sandbox.window.GatorSpeechCapture;
 
 const SPEECH = 4000;
 
@@ -50,7 +56,7 @@ test('utterance includes pre-roll before the first loud frame', () => {
   const { out } = run([signal(1000, 0), signal(600, SPEECH), signal(1500, 0)], 160);
   const first = out[0];
   assert.strictEqual(first[0], 0, 'starts inside the pre-roll silence');
-  assert.ok(first.length > signal(600, 0).length + (SAMPLE_RATE * 0.25));
+  assert.ok(first.length > signal(600, 0).length + SAMPLE_RATE * 0.25);
 });
 
 test('a short blip is dropped', () => {
@@ -68,7 +74,10 @@ test('two phrases separated by a long pause produce two utterances', () => {
 });
 
 test('a short pause inside a phrase does not split it', () => {
-  const { out } = run([signal(800, SPEECH), signal(300, 0), signal(800, SPEECH), signal(1500, 0)], 128);
+  const { out } = run(
+    [signal(800, SPEECH), signal(300, 0), signal(800, SPEECH), signal(1500, 0)],
+    128,
+  );
   assert.strictEqual(out.length, 1);
 });
 
