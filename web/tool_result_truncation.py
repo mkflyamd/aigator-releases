@@ -25,6 +25,9 @@ from uuid import uuid4
 
 _log = logging.getLogger(__name__)
 
+OVERFLOW_MARKER = "Full output saved to:"
+OVERFLOW_READ_TOOLS = ("read_file", "grep_files")
+
 MAX_TOOL_RESULT_BYTES = 32 * 1024  # 32 KB — content beyond this goes to disk
 _PREVIEW_BYTES = 2 * 1024          # 2 KB preview kept inline
 
@@ -101,12 +104,11 @@ def truncate_tool_result(result: object, *, tool_name: str = "") -> object:
         byte_count = len(value.encode("utf-8"))
         preview = value.encode("utf-8")[:_PREVIEW_BYTES].decode("utf-8", errors="replace")
         hint = (
-            f"If read_file or grep_files are unavailable, request /file_ops first. Then use grep_files "
-            f"to find a section, and read_file with offset (line) and limit (lines) to read it."
+            f"Use grep_files to find a section, and read_file with offset (line) and limit (lines) "
+            f"to read it."
             if not tool_name.startswith("run_python")
             else
-            f"If read_file is unavailable, request /file_ops first. Then use read_file with offset/limit "
-            f"to inspect specific sections of the full output."
+            f"Use read_file with offset/limit to inspect specific sections of the full output."
         )
         parts = [
             f"...output truncated ({byte_count:,} bytes, {byte_count // 1024} KB)...",
@@ -194,8 +196,7 @@ def maybe_truncate_json_result(result: object, *, tool_name: str = "") -> object
         f"...output truncated ({byte_count:,} bytes). "
         f"Full output saved to: {path}\n"
         f"{download_line}"
-        f"If read_file or grep_files are unavailable, request /file_ops first. Then use those tools "
-        f"with offset/limit.\n\n"
+        f"Use read_file or grep_files on that path, with offset/limit.\n\n"
         f"--- First {_PREVIEW_BYTES} bytes ---\n{preview}"
         + ("\n... (truncated)" if byte_count > _PREVIEW_BYTES else "")
     )

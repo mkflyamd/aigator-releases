@@ -11,6 +11,7 @@
 } = require('electron');
 const { applyMediaPermissions } = require('./media-permissions');
 const { applyNavigationPolicy, setToolbarAttacher } = require('./navigation-policy');
+const { createHudRecorder } = require('./hud_recorder');
 const path = require('path');
 const { spawn } = require('child_process');
 const http = require('http');
@@ -4963,6 +4964,16 @@ ipcMain.handle('skill:pick-local', async (_e, kind) => {
   return { ok: true, kind: 'folder', name: nodePath.basename(chosen), files };
 });
 
+ipcMain.handle('demo:pick-folder', async () => {
+  const { dialog: _dialog } = require('electron');
+  const { filePaths, canceled } = await _dialog.showOpenDialog(win, {
+    title: 'Save project to…',
+    properties: ['openDirectory', 'createDirectory'],
+  });
+  if (canceled || !filePaths.length) return { ok: false, cancelled: true };
+  return { ok: true, path: filePaths[0] };
+});
+
 // Push maximize state to the toolbar so the button icon toggles correctly.
 // Fires on OS-level maximize/unmaximize (e.g. double-clicking the drag
 // region, Aero Snap, or Win+Up).
@@ -5353,6 +5364,32 @@ ipcMain.handle('hud:resize', (e, contentW, contentH) => {
 // A thin drag strip is injected at the top (24px, -webkit-app-region:drag) so
 // the user can move the window without the widget needing to know about it.
 // The window auto-sizes to the widget's content after paint.
+const _hudContentsIds = new Set();
+const _hudRecorder = createHudRecorder({
+  confirm: async (contentsId) => {
+    const { dialog, webContents } = require('electron');
+    const wc = webContents.fromId(contentsId);
+    const owner = wc && !wc.isDestroyed() ? BrowserWindow.fromWebContents(wc) : null;
+    const options = {
+      type: 'warning',
+      buttons: ['Deny', 'Allow'],
+      defaultId: 0,
+      cancelId: 0,
+      title: 'Allow screen recording?',
+      message: 'Allow this widget to record your screen?',
+      detail: 'Only click Allow if you just used the Demo Recorder.',
+    };
+    const { response } = owner
+      ? await dialog.showMessageBox(owner, options)
+      : await dialog.showMessageBox(options);
+    return response === 1;
+  },
+  request: (action, params) => _recorderPost(action, params),
+});
+ipcMain.handle('hud:recorder', (e, action, params) => {
+  if (!_hudContentsIds.has(e.sender.id)) return { ok: false, error: 'not a widget window' };
+  return _hudRecorder.handle(e.sender.id, action, params);
+});
 ipcMain.handle('widget:open-hud', (_e, html, opts) => {
   if (!html || typeof html !== 'string') return { ok: false, error: 'missing html' };
   // opts may carry per-widget flags. hideOnCapture defaults to FALSE — most
@@ -5376,9 +5413,14 @@ ipcMain.handle('widget:open-hud', (_e, html, opts) => {
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
+      // Own session: widget HTML is model-written and must not inherit the
+      // X-AIGator-Shell-Key header that defaultSession adds for the backend origin.
+      partition: 'persist:gator-hud',
       preload: path.join(__dirname, 'hud-preload.js'),
     },
   });
+  const _hudContentsId = hud.webContents.id;
+  _hudContentsIds.add(_hudContentsId);
   // Content protection is OPT-IN per widget (hide_on_capture). Default is
   // VISIBLE during capture — most widgets should show when screen-sharing.
   // When enabled on Windows this uses WDA_EXCLUDEFROMCAPTURE so gdigrab skips
@@ -5390,6 +5432,8 @@ ipcMain.handle('widget:open-hud', (_e, html, opts) => {
   // hold stale size/position data.
   if (_widgetId) _hudByWidgetId.set(_widgetId, hud);
   hud.on('closed', () => {
+    _hudContentsIds.delete(_hudContentsId);
+    _hudRecorder.forget(_hudContentsId);
     _hudMinState.delete(hud);
     _hudMaxState.delete(hud);
     if (_widgetId && _hudByWidgetId.get(_widgetId) === hud) {
@@ -5431,66 +5475,6 @@ ipcMain.handle('widget:open-hud', (_e, html, opts) => {
   const hudCSS = `<style>
     *{box-sizing:border-box;margin:0;padding:0}
 
-    /* ── Titlebar ── */
-    #_hud_bar{
-      position:fixed;top:0;left:0;right:0;
-      height:32px;
-      background:#111827;
-      border-bottom:1px solid #1e3a52;
-      -webkit-app-region:drag;
-      display:flex;align-items:center;
-      padding:0 8px;
-      z-index:9999;
-      user-select:none;
-    }
-
-    /* Gator favicon */
-    #_hud_icon{
-      width:16px;height:16px;
-      flex-shrink:0;
-      margin-right:7px;
-      object-fit:contain;
-      -webkit-app-region:drag;
-      border-radius:3px;
-    }
-
-    /* Title label */
-    #_hud_label{
-      flex:1;
-      font-family:system-ui,-apple-system,sans-serif;
-      font-size:11px;font-weight:600;
-      color:#94a3b8;
-      letter-spacing:.02em;
-      -webkit-app-region:drag;
-      white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-    }
-
-    /* Control group — ghost until bar is hovered */
-    #_hud_controls{
-      display:flex;align-items:center;gap:2px;
-      -webkit-app-region:no-drag;
-      opacity:.35;
-      transition:opacity .18s;
-    }
-    #_hud_bar:hover #_hud_controls{ opacity:1; }
-
-    /* Individual control button */
-    ._hud_cb{
-      -webkit-app-region:no-drag;
-      appearance:none;-webkit-appearance:none;
-      display:flex;align-items:center;justify-content:center;
-      width:24px;height:24px;
-      background:none;border:none;outline:none;
-      border-radius:5px;
-      color:#6b8db5;
-      cursor:pointer;
-      flex-shrink:0;
-      transition:background .12s,color .12s;
-    }
-    ._hud_cb svg{ width:12px;height:12px;pointer-events:none; }
-    ._hud_cb:hover{ background:rgba(255,255,255,.09);color:#e2e8f0; }
-    #_hud_close:hover{ background:rgba(239,68,68,.85);color:#fff; }
-
     /* ── Widget content area ── */
     html{
       border:1px solid rgba(255,255,255,.10);
@@ -5528,25 +5512,102 @@ ipcMain.handle('widget:open-hud', (_e, html, opts) => {
     body._hud_minimized{
       overflow:hidden;
     }
-    body._hud_minimized > *:not(#_hud_bar){
+    body._hud_minimized > *:not(#_hud_host){
       display:none!important;
     }
     body._hud_minimized{
       padding:0!important;
     }
-    body._hud_minimized #_hud_bar{
+  </style>`;
+
+  // The chrome lives in a shadow root so a widget's own stylesheet (button
+  // padding, svg rules, a fixed header, a universal reset) cannot reach it.
+  // The host's inline !important declarations beat any widget rule aimed at
+  // the host element itself.
+  const hudChromeCSS = `
+    *{box-sizing:border-box;margin:0;padding:0}
+    #_hud_bar{
+      position:absolute;top:0;left:0;right:0;
+      height:32px;
+      background:#111827;
+      border-bottom:1px solid #1e3a52;
+      -webkit-app-region:drag;
+      display:flex;align-items:center;
+      padding:0 8px;
+      user-select:none;
+    }
+    #_hud_icon{
+      width:16px;height:16px;
+      flex-shrink:0;
+      margin-right:7px;
+      object-fit:contain;
+      -webkit-app-region:drag;
+      border-radius:3px;
+    }
+    #_hud_label{
+      flex:1;
+      font-family:system-ui,-apple-system,sans-serif;
+      font-size:11px;font-weight:600;
+      color:#94a3b8;
+      letter-spacing:.02em;
+      -webkit-app-region:drag;
+      white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+    }
+    /* Control group — always legible, brightens when the bar is hovered */
+    #_hud_controls{
+      display:flex;align-items:center;gap:2px;
+      -webkit-app-region:no-drag;
+      opacity:.85;
+      transition:opacity .18s;
+    }
+    #_hud_bar:hover #_hud_controls{ opacity:1; }
+    ._hud_cb{
+      -webkit-app-region:no-drag;
+      appearance:none;-webkit-appearance:none;
+      display:flex;align-items:center;justify-content:center;
+      width:24px;height:24px;
+      background:none;border:none;outline:none;
+      border-radius:5px;
+      color:#6b8db5;
+      cursor:pointer;
+      flex-shrink:0;
+      transition:background .12s,color .12s;
+    }
+    ._hud_cb svg{ width:12px;height:12px;pointer-events:none;fill:none;stroke:currentColor; }
+    ._hud_cb:hover{ background:rgba(255,255,255,.09);color:#e2e8f0; }
+    #_hud_close:hover{ background:rgba(239,68,68,.85);color:#fff; }
+    :host-context(body._hud_minimized) #_hud_bar{
       border-bottom:none;
       border-radius:18px;
       cursor:pointer;
     }
-    body._hud_minimized #_hud_label::after{
+    :host-context(body._hud_minimized) #_hud_label::after{
       content:' — click to restore';
       color:#4a6a8a;
       font-weight:400;
     }
-  </style>`;
+  `;
 
+  const _hudHostStyle = [
+    'all:initial',
+    'display:block',
+    'position:fixed',
+    'top:0',
+    'left:0',
+    'right:0',
+    'height:32px',
+    'z-index:2147483647',
+    'opacity:1',
+    'visibility:visible',
+    'transform:none',
+    'filter:none',
+    'pointer-events:auto',
+  ]
+    .map((d) => d + '!important')
+    .join(';');
   const titlebar =
+    `<div id="_hud_host" style="${_hudHostStyle}"><template shadowrootmode="open">` +
+    `<style>${hudChromeCSS}</style>` +
     `<div id="_hud_bar">` +
     `<img id="_hud_icon" src="${_hudIconUrl}" alt="Gator" draggable="false">` +
     `<span id="_hud_label">Gator Widget</span>` +
@@ -5568,7 +5629,8 @@ ipcMain.handle('widget:open-hud', (_e, html, opts) => {
     `</svg>` +
     `</button>` +
     `</div>` +
-    `</div>`;
+    `</div>` +
+    `</template></div>`;
 
   const gatorScript = `<script>window._GATOR='${GATOR_URL}';<\/script>`;
   const hudStateScript = `<script>
@@ -5631,6 +5693,7 @@ ipcMain.handle('widget:open-hud', (_e, html, opts) => {
     .replace('<body>', '<body>' + titlebar);
   if (!html.includes('<head>')) shell = gatorScript + hudCSS + shell;
   if (!html.includes('<body>')) shell = shell + titlebar;
+  if (!html.includes('</body>')) shell = shell + hudStateScript + resizeScript;
 
   // Write to a temp file so the page has file:// origin — data: origin is
   // opaque/null and Electron blocks fetch() to localhost from null origin.
@@ -5707,68 +5770,72 @@ app.on('before-quit', () => {
 // Alt+R = Record, Alt+P = Pause/Resume, Alt+S = Stop
 // Registered as global shortcuts so they work even when Gator is in the
 // background (e.g. user is recording another app).
-const RECORDER_PORT = process.env.GATOR_PORT || '8003';
-function _recorderApi(action, body) {
-  const http = require('http');
-  const payload = body || (action === 'start' ? {} : {});
-  const bodyStr = JSON.stringify(payload);
-  const req = http.request({
-    hostname: '127.0.0.1',
-    port: RECORDER_PORT,
-    path: '/api/recorder/' + action,
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(bodyStr) },
-    timeout: 5000,
-  });
-  req.on('error', () => {});
-  req.write(bodyStr);
-  req.end();
-}
-function _recorderStatus(cb) {
-  const http = require('http');
-  http
-    .get(
-      { hostname: '127.0.0.1', port: RECORDER_PORT, path: '/api/recorder/status', timeout: 3000 },
+// Requests go to the backend this shell actually runs (GATOR_URL) with the shell
+// key; mutating calls first fetch a CSRF token for the same Host.
+function _backendRequest(method, pathname, { headers = {}, body, timeoutMs = 5000 } = {}) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(GATOR_URL);
+    const transport = require(u.protocol === 'https:' ? 'https' : 'http');
+    const payload = body === undefined ? null : JSON.stringify(body);
+    const h = { ...headers };
+    if (SHELL_KEY) h['X-AIGator-Shell-Key'] = SHELL_KEY;
+    if (payload !== null) {
+      h['Content-Type'] = 'application/json';
+      h['Content-Length'] = Buffer.byteLength(payload);
+    }
+    const req = transport.request(
+      {
+        hostname: u.hostname,
+        port: u.port,
+        path: pathname,
+        method,
+        headers: h,
+        timeout: timeoutMs,
+      },
       (res) => {
         let d = '';
+        res.setEncoding('utf8');
         res.on('data', (c) => (d += c));
         res.on('end', () => {
           try {
-            cb(JSON.parse(d));
+            resolve(JSON.parse(d));
           } catch {
-            cb(null);
+            reject(new Error('HTTP ' + res.statusCode));
           }
         });
       },
-    )
-    .on('error', () => cb(null));
+    );
+    req.on('error', reject);
+    req.on('timeout', () => req.destroy(new Error('request timed out')));
+    if (payload !== null) req.write(payload);
+    req.end();
+  });
+}
+async function _recorderPost(action, body) {
+  const { csrf_token } = await _backendRequest('GET', '/api/csrf');
+  return _backendRequest('POST', '/api/recorder/' + action, {
+    headers: { 'X-CSRF-Token': csrf_token },
+    body: body || {},
+    timeoutMs: action === 'pick-region' ? 600000 : 5000,
+  });
+}
+function _recorderApi(action, body) {
+  _recorderPost(action, body).catch(() => {});
+}
+function _recorderStatus(cb) {
+  _backendRequest('GET', '/api/recorder/status', { timeoutMs: 3000 })
+    .then(cb)
+    .catch(() => cb(null));
 }
 app.whenReady().then(() => {
   globalShortcut.register('Alt+R', () => {
     // Fetch the last-selected screen from the recorder API so the global
     // hotkey uses the same screen the widget has selected.
-    const http = require('http');
-    http
-      .get(
-        {
-          hostname: '127.0.0.1',
-          port: RECORDER_PORT,
-          path: '/api/recorder/screens',
-          timeout: 3000,
-        },
-        (res) => {
-          let d = '';
-          res.on('data', (c) => (d += c));
-          res.on('end', () => {
-            let screenIndex = 0;
-            try {
-              screenIndex = JSON.parse(d).last_screen_index || 0;
-            } catch {}
-            _recorderApi('start', { screen_index: screenIndex, force: true });
-          });
-        },
+    _backendRequest('GET', '/api/recorder/screens', { timeoutMs: 3000 })
+      .then((s) =>
+        _recorderApi('start', { screen_index: (s && s.last_screen_index) || 0, force: true }),
       )
-      .on('error', () => _recorderApi('start', { force: true }));
+      .catch(() => _recorderApi('start', { force: true }));
   });
   globalShortcut.register('Alt+P', () => {
     _recorderStatus((s) => {

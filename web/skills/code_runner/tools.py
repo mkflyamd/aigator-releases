@@ -100,6 +100,10 @@ def _in_skill_roots(path: Path) -> bool:
         return False
 
 
+# One line so traceback line numbers do not move. python-pptx 0.6 reads collections.abc without importing it.
+_PREAMBLE_IMPORTS = "from pathlib import Path; import collections.abc"
+
+
 def _find_skill_dir(skill_id: str) -> Path | None:
     """Locate a skill's directory across the known install/search locations.
 
@@ -635,16 +639,18 @@ def _tool_run_python(
             f"import sys as _sys; _sys.path.insert(0, SKILL_DIR)\n"
         )
     preamble = (
-        f"OUTPUT_DIR = {str(run_dir)!r}\n{skill_dir_line}from pathlib import Path\n"
+        f"OUTPUT_DIR = {str(run_dir)!r}\n{skill_dir_line}{_PREAMBLE_IMPORTS}\n"
     )
     full_code = preamble + code
 
-    # Snapshot ~/Downloads so we can report files the code writes OUTSIDE its
-    # OUTPUT_DIR (run_dir files are already returned via `files` below). This
-    # surfaces e.g. a deck the code saved to Downloads instead of OUTPUT_DIR,
-    # from disk rather than the model's memory (issue #87).
-    _home = Path.home()
-    _watch_dirs = [d for d in (_home / "Downloads",) if d.is_dir()]
+    # Snapshot the folders this run can write outside its OUTPUT_DIR, so a file it saves there is
+    # reported from disk rather than the model's memory (issue #87). A sandboxed run can only write
+    # to folders the user approved for it; watching ~/Downloads regardless credited it with files a
+    # run in another tab wrote there.
+    if mode == "enforced":
+        _watch_dirs = [d for d in write_paths if d.is_dir()]
+    else:
+        _watch_dirs = [d for d in (Path.home() / "Downloads",) if d.is_dir()]
     _before = snapshot_outputs(_watch_dirs)
 
     # Persist the exact executed code (preamble + user code) so the full script

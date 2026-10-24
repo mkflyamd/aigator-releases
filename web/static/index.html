@@ -999,6 +999,18 @@
             <div class="spanel-title">General</div>
             <div class="spanel-sub">Appearance, notifications, and browser behavior</div>
 
+            <div class="srow" id="demo-root-row">
+              <div class="section-status st-ok"></div>
+              <div class="srow-info">
+                <div class="srow-label">Demo projects folder</div>
+                <div class="srow-sub" id="demo-root-path">Loading…</div>
+              </div>
+              <div class="srow-actions">
+                <button class="btn-secondary" id="demo-root-change">Change</button>
+                <button class="btn-secondary" id="demo-root-reset">Reset</button>
+              </div>
+            </div>
+
             <!-- Appearance -->
             <div class="spanel-divider">Appearance</div>
             <div class="srow">
@@ -1381,7 +1393,6 @@
             <rect x="3" y="14" width="7" height="7" rx="1" />
             <rect x="14" y="14" width="7" height="7" rx="1" />
           </svg>
-          <span class="dock-badge hidden" id="dock-widgets-badge">0</span>
         </button>
         <div class="dock-spacer"></div>
         <button class="dock-item" title="Settings" id="dock-settings">
@@ -1631,12 +1642,13 @@
             aria-label="Uploaded images"
           ></div>
           <span class="aigator-drop-error hidden" id="aigator-drop-error" role="alert"></span>
+          <div id="demo-media-panel" class="demo-media-panel hidden" aria-label="Demo clips"></div>
 
           <div class="chat-input-row" id="chat-input-row">
             <input
               id="aigator-file-input"
               type="file"
-              accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,.docx,.xlsx,.pptx,.doc,.xls,.ppt,.csv"
+              accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,.docx,.xlsx,.pptx,.doc,.xls,.ppt,.csv,.mp4,.mov,.m4v,.webm,.mp3,.m4a,.wav,.aac,.ogg,.flac"
               multiple
               style="display: none"
               aria-label="Attach files"
@@ -2000,6 +2012,7 @@
       document.write('<scr' + 'ipt src="/static/onboarding.js' + _cb + '"><\/scr' + 'ipt>');
       document.write('<scr' + 'ipt src="/static/speech-capture.js' + _cb + '"><\/scr' + 'ipt>');
       document.write('<scr' + 'ipt src="/static/speech.js' + _cb + '"><\/scr' + 'ipt>');
+      document.write('<scr' + 'ipt src="/static/demo-media.js' + _cb + '"><\/scr' + 'ipt>');
       document.write('<scr' + 'ipt src="/static/app.js' + _cb + '"><\/scr' + 'ipt>');
       document.write('<scr' + 'ipt src="/static/third-pane.js' + _cb + '"><\/scr' + 'ipt>');
       document.write('<scr' + 'ipt src="/static/agents-pane.js' + _cb + '"><\/scr' + 'ipt>');

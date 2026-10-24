@@ -17,6 +17,8 @@ from tool_pipeline import (
     sanitize_tool_failure,
     select_tools_with_budget,
 )
+from tool_repair import rejection_summaries, rejection_summary_text, stalled_chunk
+from tool_result_truncation import OVERFLOW_MARKER, OVERFLOW_READ_TOOLS
 
 MAX_ITERATIONS = 25
 _COMPACT_THRESHOLD = 0.85      # compact when input_tokens exceed 85% of context window (post-call)
@@ -194,6 +196,9 @@ def _retry_delay(attempt: int, exc: Exception | None = None) -> float:
 
 def _generic_tool_summary(tool_name: str, result: object) -> str:
     """Fallback one-line summary when _tool_toast returns None."""
+    rejected = rejection_summary_text(result)
+    if rejected:
+        return rejected
     if isinstance(result, dict):
         if result.get("error"):
             return f"Error: {str(result['error'])[:80]}"
@@ -216,10 +221,6 @@ def _sse_tool_call_complete(event: dict) -> str:
 def _sse_tool_result(call_id: str, status: str, summary: str) -> str:
     return f"data: {json.dumps({'tool_result': {'call_id': call_id, 'status': status, 'summary': summary}})}\n\n"
 
-def _sse_reactive_skills(skill_ids: list[str]) -> str:
-    """Emitted after a tool result triggers reactive skill activation."""
-    return f"data: {json.dumps({'reactive_skills': skill_ids})}\n\n"
-
 
 _TOOL_CALL_FORWARD_TYPES = ("tool_call_start", "tool_call_progress", "tool_call_complete")
 
@@ -241,6 +242,7 @@ def _forward_tool_call_event(event: dict) -> str:
 # error message back to the model once so it can self-correct, then move on.
 _NON_RETRYABLE_TOOL_ERRORS = (
     "missing_required_params",
+    "invalid_tool_input",
     "missing required",
     "required field",
     "field required",           # pydantic v2 field-level error
@@ -454,6 +456,29 @@ def awaiting_human(context_id: str | None):
             _awaiting_human.pop(context_id, None)
 
 
+def _clean_card_text(value, limit: int) -> str:
+    """Model-controlled text for an approval card: control, bidi and zero-width characters and "|" removed, then cut."""
+    text = re.sub(r"[\x00-\x1f\x7f-\x9f\u2028\u2029\u200b-\u200f\u202a-\u202e\u2060\u2066-\u2069\ufeff|]+", " ", str(value)).strip()
+    return text[:limit] + "..." if len(text) > limit else text
+
+
+_RUNNER_CARD_NAMES = {"code_runner": "the Python code runner", "shell_runner": "the shell runner"}
+
+
+def _result_was_spilled_to_file(result) -> bool:
+    text = result if isinstance(result, str) else json.dumps(result, default=str) if isinstance(result, dict) else ""
+    return OVERFLOW_MARKER in text
+
+
+def _grant_tools(available_tools: list, required_tool_names: set, names) -> None:
+    import shared as _shared
+    have = _offered_tool_names(available_tools)
+    for tool in _shared.TOOLS:
+        if tool.get("name") in names and tool["name"] not in have:
+            available_tools.append(tool)
+    required_tool_names.update(names)
+
+
 def _offered_tool_names(tools) -> frozenset[str]:
     names = set()
     for d in tools or ():
@@ -471,6 +496,7 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
     import content_guard
     import data_sources
     _SENTINEL = object()
+    _offered = set(offered_names) if offered_names is not None else None
     _source_locks: dict[tuple[str, str], asyncio.Lock] = {}
     _sources_read: set[str] = set()
     _source_ids: set[str] = set()
@@ -537,9 +563,7 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
     def _schedule_card_action(inputs: dict) -> str:
         """Card text for a schedule. Every field is model-controlled: each one is cut, stripped of
         control characters and "|", and shown in a fixed order so a long name cannot fake the rest."""
-        def clean(value, limit: int) -> str:
-            text = re.sub(r"[\x00-\x1f\x7f-\x9f\u2028\u2029\u200b-\u200f\u202a-\u202e\u2060\u2066-\u2069\ufeff|]+", " ", str(value)).strip()
-            return text[:limit] + "..." if len(text) > limit else text
+        clean = _clean_card_text
 
         trigger = clean(inputs.get("trigger_type", ""), 20)
         if trigger == "date":
@@ -596,8 +620,83 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
             "Scheduling was not approved",
         )
 
+    async def _grant_requested_skill(tc, event_queue):
+        """request_skill: ask the user for a runner, then offer the skill's tools for the rest of the turn."""
+        import shared as _shared
+        from routes.chat import _filter_tools, _gated_runner_id, _resolve_skill_id
+
+        if not context_id:
+            return await _early_error(
+                tc, event_queue,
+                {
+                    "error": "skill_request_not_allowed_unattended",
+                    "hint": "An unattended run cannot ask for more skills. Tell the user it needs a chat tab.",
+                },
+                "Skill requests are not allowed in an unattended run",
+            )
+        inputs = tc.inputs or {}
+        skill = _resolve_skill_id(_clean_card_text(inputs.get("skill", ""), 60))
+        if not skill or (skill not in _shared.SKILL_TOOLS_MAP and skill not in _shared.SKILL_PROMPTS):
+            return await _early_error(
+                tc, event_queue,
+                {"error": "unknown_skill", "hint": "No skill has that id. Use an id from the skill directory."},
+                "That skill does not exist",
+            )
+        needed: list[str] = [skill]
+        for _ in range(2):
+            for seed in list(needed):
+                needed.extend(d for d in _shared.SKILL_REQUIRES.get(seed, []) if d not in needed and d in _shared.SKILL_PROMPTS)
+        for dep in _shared.SKILL_DEPENDENCIES_MAP.get(skill, []):
+            if dep["id"] not in needed:
+                needed.append(dep["id"])
+        reason = _clean_card_text(inputs.get("reason", ""), 300) or "(no reason given)"
+        runners = list(dict.fromkeys(r for r in map(_gated_runner_id, needed) if r))
+        for runner in runners:
+            key = f"capability:{runner}"
+            lock = _source_locks.setdefault((context_id, key), asyncio.Lock())
+            async with lock:
+                if data_sources.is_allowed(context_id, key):
+                    continue
+                if not data_sources.recently_denied(context_id, key):
+                    name = _RUNNER_CARD_NAMES.get(runner, runner)
+                    if await _request_browser_confirm(
+                        f"AI Gator wants to use {name}. It runs code or commands the model writes inside the "
+                        f"AI Gator sandbox; access to other folders or the network is asked separately. "
+                        f"Reason given: {reason}. Allowed for this tab only.",
+                        event_queue, title=f"Allow AI Gator to use {name}?",
+                        allow_label="Allow for this tab", deny_label="Deny",
+                    ):
+                        data_sources.allow(context_id, key)
+                        await event_queue.put({"kind": "status", "status": f"{name}: allowed for this tab"})
+                        continue
+                    data_sources.deny(context_id, key)
+            return await _early_error(
+                tc, event_queue,
+                {
+                    "error": "skill_not_approved",
+                    "skill": skill,
+                    "hint": ("The user did not approve this. Do not retry it or reach the same result another way. "
+                             "Tell the user what you could not do and that it needs their approval."),
+                },
+                f"{skill} was not approved",
+            )
+        names = {t["name"] for t in _filter_tools(None, False, needed, unapproved_deps=[])} - set(_shared._ALWAYS_ON_TOOLS)
+        fresh = names - (_offered or set())
+        if _offered is not None and fresh:
+            _offered.update(fresh)
+            await event_queue.put({"kind": "tools_granted", "names": sorted(fresh)})
+        await event_queue.put({"kind": "tool_result", "call_id": tc.id, "status": "success", "summary": f"{skill} is now available"})
+        return {
+            "granted": True,
+            "skill": skill,
+            "tools": sorted(names),
+            "hint": "These tools are callable now. Call read_skill for this skill if you need its instructions.",
+        }
+
     async def _run_tool_block(tc, event_queue):
-        if offered_names is not None and tc.name not in offered_names:
+        if tc.name == "request_skill" and (_offered is None or tc.name in _offered):
+            return await _grant_requested_skill(tc, event_queue)
+        if _offered is not None and tc.name not in _offered:
             return await _early_error(
                 tc, event_queue,
                 {
@@ -640,6 +739,11 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
         result = await execute_tool(tc.name, tc.inputs)
         if is_browser:
             await event_queue.put({"kind": "browser_hitl", "state": "done"})
+        if _offered is not None and _result_was_spilled_to_file(result):
+            _new = set(OVERFLOW_READ_TOOLS) - _offered
+            if _new:
+                _offered.update(_new)
+                await event_queue.put({"kind": "tools_granted", "names": sorted(_new)})
         # Reactive skill activation: check the full tool result against ACTIVATES_ON patterns.
         # This runs before the result is summarised so patterns like "[image:" and "images_note"
         # are visible here even though the SSE summary may just say "Completed".
@@ -651,8 +755,15 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
                     sid for sid, patterns in _shared.SKILL_ACTIVATES_ON_MAP.items()
                     if any(p in _result_str for p in patterns)
                 ]
-                if _triggered:
-                    await event_queue.put({"kind": "reactive_skills", "skill_ids": _triggered})
+                if _triggered and _offered is not None:
+                    from routes.chat import _is_gated_runner
+                    _new = {
+                        n for sid in _triggered if not _is_gated_runner(sid)
+                        for n in _shared.SKILL_TOOLS_MAP.get(sid, ())
+                    } - _offered
+                    if _new:
+                        _offered.update(_new)
+                        await event_queue.put({"kind": "tools_granted", "names": sorted(_new)})
         except Exception:
             pass
         failure = classify_tool_failure(result, tool_name=tc.name)
@@ -834,42 +945,19 @@ async def _single_agent_loop(
     _last_round_errors: list[str] = []  # failures from the most recent tool round
     _last_round_had_success = False     # did any tool in that round succeed?
     _bad_tool_streak = 0  # consecutive rounds where ALL tool calls were non-retryable errors
+    _last_rejections: list[dict] = []  # {tool, fields} per failed call in the latest all-bad round
     _doom_loop_history: list[tuple[str, str]] = []  # (tool_name, args_json) for doom loop detection
     _DOOM_LOOP_THRESHOLD = 3  # same tool + same args N times in a row = doom loop
-    _turn_tool_calls: list[dict] = []  # summarized tool calls from the PREVIOUS round (for circuit breaker + narration cap)
+    _turn_tool_calls: list[dict] = []  # summarized tool calls from the PREVIOUS round (for telemetry + narration cap)
     available_tools = list(normalized_tools)
     required_tool_names = set(required_tool_names or ())
     _definition_retries = 0
-    # Retain the previous round's telemetry identifiers for the circuit breaker
-    # at the start of the next iteration. They are initialized here so static
-    # analysis can also see they are defined before that branch.
+    # Turn telemetry identifiers, initialized here so static analysis can see
+    # they are defined before the first iteration completes.
     _turn_id = ""
     _turn_start_ts = time.monotonic()
 
     for _ in range(MAX_ITERATIONS):
-        # Circuit breaker: if the previous round had a bad-tool streak and we are
-        # about to issue a new LLM call, yield a stalled event immediately. This
-        # catches the case where the watchdog kills the LLM call (stall after a
-        # missing_required_params round) before _bad_tool_streak reaches
-        # _MAX_BAD_TOOL_RETRIES — the external cancel bypasses the normal circuit
-        # breaker check, so we pre-empt it here on the next iteration.
-        if _ > 0 and _bad_tool_streak >= 1:
-            _names = ", ".join(
-                str(tc.get("name", "tool")) for tc in (_turn_tool_calls or [{}])
-            ) or "tool"
-            yield f"data: {json.dumps({'stalled': True, 'message': f'Gator could not form valid arguments for {_names} — click Continue to retry or rephrase your request.'})}\n\n"
-            await _log_turn_end_safe(
-                _turn_id, context_id, task_id, _, "single", model,
-                type(provider).__name__, "circuit_breaker", None,
-                _turn_tool_calls,
-                _last_round_errors[0] if _last_round_errors else None, None,
-                _total_input, _total_output, 0,
-                0, False, _bad_tool_streak,
-                int((time.monotonic() - _turn_start_ts) * 1000) if _ > 0 else 0,
-                len(msgs), active_skills,
-            )
-            yield "data: [DONE]\n\n"
-            return
         turn = None
         _overflow_prunes = 0
         _failover_used = False
@@ -1046,6 +1134,8 @@ async def _single_agent_loop(
                             continue
                         else:
                             yield f"data: {json.dumps({'text': 'LLM stream stalled — failover declined.'})}\n\n"
+                            if _bad_tool_streak:
+                                yield stalled_chunk(_last_rejections)
                             await _log_turn_end_safe(
                                 _turn_id, context_id, task_id, _, "single", model,
                                 type(provider).__name__, "llm_error", None,
@@ -1065,6 +1155,8 @@ async def _single_agent_loop(
                     yield f"data: {json.dumps({'text': f'\n\n*(LLM error after partial output — {exc})*'})}\n\n"
                 else:
                     yield f"data: {json.dumps({'text': f'LLM error: {exc}'})}\n\n"
+                if _bad_tool_streak:
+                    yield stalled_chunk(_last_rejections)
                 await _log_turn_end_safe(
                     _turn_id, context_id, task_id, _, "single", model,
                     type(provider).__name__, "llm_error", None,
@@ -1079,6 +1171,8 @@ async def _single_agent_loop(
 
         if turn is None:
             yield f"data: {json.dumps({'text': 'No response from model.'})}\n\n"
+            if _bad_tool_streak:
+                yield stalled_chunk(_last_rejections)
             await _log_turn_end_safe(
                 _turn_id, context_id, task_id, _, "single", model,
                 type(provider).__name__, "llm_error", None,
@@ -1146,7 +1240,7 @@ async def _single_agent_loop(
             return
 
         tool_calls = turn["tool_calls"]
-        _turn_tool_calls = _summarize_tool_calls(tool_calls)  # update for next iteration's circuit breaker + narration cap
+        _turn_tool_calls = _summarize_tool_calls(tool_calls)  # update for next iteration's telemetry + narration cap
         if not tool_calls:
             yield f"data: {json.dumps({'text': 'Model requested tool use with no tool calls.'})}\n\n"
             await _log_turn_end_safe(
@@ -1219,8 +1313,8 @@ async def _single_agent_loop(
                     yield f"data: {json.dumps({'failover_confirm': {'consent_id': evt['consent_id'], 'fallback_model': evt['fallback_model']}})}\n\n"
                 elif kind == "files":
                     yield f"data: {json.dumps({'files': evt['files']})}\n\n"
-                elif kind == "reactive_skills":
-                    yield _sse_reactive_skills(evt["skill_ids"])
+                elif kind == "tools_granted":
+                    _grant_tools(available_tools, required_tool_names, evt["names"])
             results = await gather_task
         finally:
             if not gather_task.done():
@@ -1267,9 +1361,9 @@ async def _single_agent_loop(
         all_non_retryable = results and all(_is_non_retryable_tool_error(r) for r in results)
         if all_non_retryable:
             _bad_tool_streak += 1
+            _last_rejections = rejection_summaries(tool_calls, results)
             if _bad_tool_streak >= _MAX_BAD_TOOL_RETRIES:
-                _names = ", ".join(tc.name for tc in tool_calls)
-                yield f"data: {json.dumps({'text': f'The model could not form valid tool calls for {_names} after {_bad_tool_streak} attempts. Try rephrasing your request or switching to a more capable model.'})}\n\n"
+                yield stalled_chunk(_last_rejections)
                 await _log_turn_end_safe(
                     _turn_id, context_id, task_id, _, "single", model,
                     type(provider).__name__, "circuit_breaker", turn["stop_reason"],
@@ -1577,6 +1671,7 @@ async def run_three_agent_loop(
     ]
     draft_text = ""
     _bad_tool_streak = 0  # consecutive all-bad-tool rounds in executor
+    _last_rejections: list[dict] = []
     available_tools = list(normalized_tools)
     _definition_retries = 0
 
@@ -1684,6 +1779,8 @@ async def run_three_agent_loop(
                         _exec_retry_count = 0
                         continue
                 yield f"data: {json.dumps({'text': f'Executor error: {exc}'})}\n\n"
+                if _bad_tool_streak:
+                    yield stalled_chunk(_last_rejections)
                 await _log_turn_end_safe(
                     turn_telemetry.new_turn_id(), context_id, task_id, _iter, "executor", model,
                     type(provider).__name__, "llm_error", None,
@@ -1743,8 +1840,8 @@ async def run_three_agent_loop(
                     yield f"data: {json.dumps({'failover_confirm': {'consent_id': evt['consent_id'], 'fallback_model': evt['fallback_model']}})}\n\n"
                 elif kind == "files":
                     yield f"data: {json.dumps({'files': evt['files']})}\n\n"
-                elif kind == "reactive_skills":
-                    yield _sse_reactive_skills(evt["skill_ids"])
+                elif kind == "tools_granted":
+                    _grant_tools(available_tools, required_tool_names, evt["names"])
             results = await gather_task
         finally:
             if not gather_task.done():
@@ -1774,9 +1871,9 @@ async def run_three_agent_loop(
         all_non_retryable = results and all(_is_non_retryable_tool_error(r) for r in results)
         if all_non_retryable:
             _bad_tool_streak += 1
+            _last_rejections = rejection_summaries(tool_calls, results)
             if _bad_tool_streak >= _MAX_BAD_TOOL_RETRIES:
-                _names = ", ".join(tc.name for tc in tool_calls)
-                yield f"data: {json.dumps({'text': f'Executor: model could not form valid tool calls for {_names} after {_bad_tool_streak} attempts. Try rephrasing or switching model.'})}\n\n"
+                yield stalled_chunk(_last_rejections)
                 yield f"data: {json.dumps({'usage': {'input_tokens': _total_input, 'output_tokens': _total_output}})}\n\n"
                 await _log_turn_end_safe(
                     turn_telemetry.new_turn_id(), context_id, task_id, _iter, "executor", model,

@@ -40,7 +40,9 @@ def test_ledger_round_trip_and_corrupt_file(tmp_path, monkeypatch):
     lw._ledger_remove_per_run("S-1-15-2-9", tmp_path)
     assert lw._ledger_load()["per_run"] == []
     ledger.write_text("not json")
-    assert lw._ledger_load() == {"runtime": {}, "per_run": [], "scratch": {}, "runtime_born": {}}
+    assert lw._ledger_load() == {
+        "runtime": {}, "per_run": [], "scratch": {}, "runtime_born": {}, "package_children": {},
+    }
 
 
 def test_sweep_revokes_and_clears_ledger_entries(tmp_path, monkeypatch):
@@ -190,7 +192,8 @@ def test_post_start_failures_are_not_reported_as_unavailable():
 
 @pytest.fixture
 def fake(tmp_path, monkeypatch):
-    state = SimpleNamespace(grants=[], revokes=[], scrubs=[], revoke_rc=0, grant_error=None, run_error=None, runs=0)
+    state = SimpleNamespace(grants=[], revokes=[], scrubs=[], revoke_rc=0, grant_error=None, run_error=None, runs=0,
+                           reinherits=[], packages=[])
     run = tmp_path / "run"
     run.mkdir()
     state.run = run
@@ -216,8 +219,14 @@ def fake(tmp_path, monkeypatch):
             raise state.run_error
         return sandbox.SandboxResult(0, "", "", False)
 
+    def reinherit(path):
+        state.reinherits.append(Path(path))
+        return 0, ""
+
     monkeypatch.setattr(lw, "_grant", grant)
     monkeypatch.setattr(lw, "_revoke", revoke)
+    monkeypatch.setattr(lw, "_reinherit", reinherit)
+    monkeypatch.setattr(lw, "_site_package_dirs", lambda: list(state.packages))
     monkeypatch.setattr(lw, "_run_contained", run_contained)
 
     def req(runtime=(), read=(), write=(), cwd=None):
@@ -551,3 +560,62 @@ def test_a_runtime_folder_recorded_by_an_older_ledger_is_granted_again(fake):
     path.write_text(json.dumps(old))
     lw.launch(fake.req(runtime=[skill]))
     assert _rx(fake, skill) == 1
+
+
+def _site(fake):
+    site = fake.tmp / "site-packages"
+    (site / "PIL").mkdir(parents=True)
+    (site / "PIL" / "_imaging.pyd").write_text("x")
+    fake.packages = [site]
+    return site
+
+
+def test_the_first_run_re_applies_inheritance_to_the_whole_site_packages(fake):
+    site = _site(fake)
+    lw.launch(fake.req(runtime=[fake.tmp]))
+    assert fake.reinherits == [site]
+
+
+def test_an_unchanged_site_packages_is_not_touched_again(fake):
+    _site(fake)
+    lw.launch(fake.req(runtime=[fake.tmp]))
+    fake.reinherits.clear()
+    lw.launch(fake.req(runtime=[fake.tmp]))
+    assert fake.reinherits == []
+
+
+def test_a_package_installed_later_is_re_inherited_by_itself(fake):
+    site = _site(fake)
+    lw.launch(fake.req(runtime=[fake.tmp]))
+    fake.reinherits.clear()
+    (site / "pptx").mkdir()
+    (site / "__pycache__").mkdir()
+    lw.launch(fake.req(runtime=[fake.tmp]))
+    assert fake.reinherits == [site / "pptx"]
+
+
+def test_a_package_replaced_in_place_is_re_inherited(fake):
+    site = _site(fake)
+    lw.launch(fake.req(runtime=[fake.tmp]))
+    fake.reinherits.clear()
+    (site / "PIL" / "new.pyd").write_text("y")
+    os.utime(site / "PIL", ns=(1, 1))
+    lw.launch(fake.req(runtime=[fake.tmp]))
+    assert fake.reinherits == [site / "PIL"]
+
+
+def test_a_site_packages_outside_the_granted_runtime_is_left_alone(fake):
+    other = fake.tmp.parent / (fake.tmp.name + "-other")
+    (other / "pkg").mkdir(parents=True)
+    fake.packages = [other]
+    runtime = fake.tmp / "runtime"
+    runtime.mkdir()
+    lw.launch(fake.req(runtime=[runtime]))
+    assert fake.reinherits == []
+
+
+def test_a_failed_refresh_does_not_stop_the_run(fake, monkeypatch):
+    _site(fake)
+    monkeypatch.setattr(lw, "_reinherit", lambda path: (_ for _ in ()).throw(OSError("denied")))
+    lw.launch(fake.req(runtime=[fake.tmp]))
+    assert fake.runs == 1

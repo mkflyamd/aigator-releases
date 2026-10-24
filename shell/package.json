@@ -28,6 +28,8 @@
     "productName": "AI Gator",
     "asar": true,
     "files": [
+      "hud-preload.js",
+      "hud_recorder.js",
       "main.js",
       "media-permissions.js",
       "menu.js",

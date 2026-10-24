@@ -9,14 +9,14 @@
 
 The demo recorder is a built-in feature split across four layers:
 
-| Component                                      | Location                                | Ships with             |
-| ---------------------------------------------- | --------------------------------------- | ---------------------- |
-| Recorder backend API                           | `web/routes/recorder.py`                | Gator app (built-in)   |
-| postMessage bridge + hotkeys                   | `web/static/app.js`                     | Gator app (built-in)   |
-| HUD window (floating widget host)              | `shell/main.js`, `shell/hud-preload.js` | Gator app (built-in)   |
-| Skill (widget HTML + TTS pipeline + preflight) | `web/skills/gator-demo-recorder/`       | Gator app (built-in)   |
-| ffmpeg                                         | Runtime install via winget/brew/apt     | Not bundled            |
-| Lemonade TTS                                   | Runtime install via winget/pip          | Not bundled (optional) |
+| Component                          | Location                                | Ships with             |
+| ---------------------------------- | --------------------------------------- | ---------------------- |
+| Recorder backend API               | `web/routes/recorder.py`                | Gator app (built-in)   |
+| postMessage bridge + hotkeys       | `web/static/app.js`                     | Gator app (built-in)   |
+| HUD window (floating widget host)  | `shell/main.js`, `shell/hud-preload.js` | Gator app (built-in)   |
+| Skill (widget HTML + TTS pipeline) | `web/skills/gator-demo-recorder/`       | Gator app (built-in)   |
+| ffmpeg                             | Runtime install via winget/brew/apt     | Not bundled            |
+| Lemonade TTS                       | Runtime install via winget/pip          | Not bundled (optional) |
 
 The skill is a **built-in skill** — auto-discovered by `shared.py` at startup, no marketplace install required. Every user gets it with the app.
 
@@ -26,7 +26,7 @@ The skill is a **built-in skill** — auto-discovered by `shared.py` at startup,
 User: "/gator-demo-recorder"
   │
   ▼
-Agent reads SKILL.md → runs preflight.py (checks ffmpeg + Lemonade)
+Agent reads SKILL.md
   │
   ▼
 Agent renders recorder widget (Phase 1)
@@ -76,9 +76,10 @@ Agent renders playback widget (Phase 5) — inline video, download, edit
 ### Widget → backend flow
 
 ```
-Inline chat widget (srcdoc iframe, allow-same-origin)
-  → fetch(window._GATOR + '/api/recorder/<action>', ...)
-  → result rendered from response JSON
+Inline chat widget (srcdoc iframe, opaque origin)
+  → postMessage {type:'gator:recorder', action, params, rid} to the parent
+  → parent calls /api/recorder/<action> (allow-listed actions only)
+  → postMessage {type:'gator:recorder-result', rid, data} back to the widget
 
 Floating HUD (BrowserWindow, no parent frame)
   → fetch(window._GATOR + '/api/recorder/<action>', ...)
@@ -120,11 +121,9 @@ Windows DPI scaling causes logical ≠ physical pixels. The recorder uses `GetDe
 
 ## Skill phases
 
-### Phase 1: Preflight → Render Widget
+### Phase 1: Render Widget
 
-1. Run `scripts/preflight.py` — checks ffmpeg + Lemonade TTS availability
-2. If missing, ask user consent → auto-install via winget (Windows) / brew (macOS) / pip (macOS/Linux)
-3. Render recorder widget with screen picker, crop selector, Record/Pause/Stop buttons, hide-from-recording toggle
+1. Render recorder widget with screen picker, crop selector, Record/Pause/Stop buttons, hide-from-recording toggle
 
 ### Phase 2: Analyze
 
@@ -157,14 +156,14 @@ Windows DPI scaling causes logical ≠ physical pixels. The recorder uses `GetDe
 
 ### ffmpeg (required)
 
-- **Runtime install** via preflight: winget (Windows), brew (macOS), apt/dnf/pacman (Linux)
+- **Runtime install**: the user installs it with winget (Windows) or brew (macOS) when Gator reports it missing
 - **Backend fallback**: `_try_install_ffmpeg()` silently attempts winget install if ffmpeg missing when Record is hit
 - **Not bundled** — runtime install works on most machines. If corporate machines block winget, bundle ffmpeg in a future patch (the `_find_ffmpeg()` function already has a bundled-path check ready)
 
 ### Lemonade TTS (optional)
 
-- **Runtime install** via preflight: winget `AMD.LemonadeServer` (Windows), `pip install lemonade-server` (macOS/Linux)
-- **Graceful fallback**: if not installed, preflight reports `lemonade.ok = false`, skill delivers video without narration
+- **Runtime install**: winget `AMD.LemonadeServer` (Windows), `pip install lemonade-server` (macOS/Linux)
+- **Graceful fallback**: if not installed, the tools report it, skill delivers video without narration
 - **Preflight validates the actual TTS endpoint** (`/v1/audio/speech`) with a 3-word test call — not just a TCP check
 - **Never bundle** — Lemonade is NPU-specific on Windows, CPU-only elsewhere; bundling the wrong build would break things
 
