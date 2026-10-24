@@ -94,7 +94,7 @@ class UploadGC:
     def get(self, path, params=None, **kw):
         key = path.split("/root:/", 1)[1] if "/root:/" in path else ""
         if key in self.folders:
-            return {"id": "f", "folder": {}}
+            return {"id": "f", "folder": {}, "webUrl": "https://od/folder/" + key}
         if key in self.files:
             return {"id": "x", "name": key.rsplit("/", 1)[-1], "size": len(self.files[key]), "webUrl": "u"}
         e = Exception("404")
@@ -103,8 +103,9 @@ class UploadGC:
 
     def post(self, path, body):
         parent = path.split("/root:/", 1)[1].rsplit(":/children", 1)[0] if "/root:/" in path else ""
-        self.folders.add(f"{parent}/{body['name']}" if parent else body["name"])
-        return {}
+        key = f"{parent}/{body['name']}" if parent else body["name"]
+        self.folders.add(key)
+        return {"webUrl": "https://od/folder/" + key}
 
     def put_binary(self, path, data, content_type=""):
         key = path.split("/root:/", 1)[1].split(":/content", 1)[0]
@@ -123,6 +124,8 @@ def test_save_stores_original_bytes_in_week_folder(wired):
     key = f"Documents/Gator Meeting Transcripts/2026-W43/2026-10-19 AMD __ Cohere [{short}].vtt"
     assert wired.gc.files[key] == VTT
     assert out["web_url"].startswith("https://od/")
+    assert out["folder_web_url"] == "https://od/folder/Documents/Gator Meeting Transcripts/2026-W43"
+    assert out["transcripts_folder_web_url"] == "https://od/folder/Documents/Gator Meeting Transcripts"
 
 
 def test_save_twice_does_not_duplicate_or_overwrite(wired):
@@ -133,6 +136,7 @@ def test_save_twice_does_not_duplicate_or_overwrite(wired):
     second = transcripts._tool_save_meeting_transcript(*args, **kw)
     assert first["status"] == "saved" and second["status"] == "exists"
     assert len(wired.gc.files) == 1
+    assert second["transcripts_folder_web_url"] == first["transcripts_folder_web_url"] != ""
 
 
 def test_save_empty_transcript_is_error(wired, monkeypatch):
@@ -203,3 +207,34 @@ def test_chat_id_from_join_url_unencoded_and_empty():
     )
     assert rec.chat_id_from_join_url("") is None
     assert rec.chat_id_from_join_url("https://example.com/none") is None
+
+
+@pytest.fixture
+def pacific(monkeypatch):
+    from datetime import timedelta, timezone
+
+    monkeypatch.setattr(transcripts, "_local_tz", lambda: timezone(timedelta(hours=-7)))
+
+
+def test_evening_meeting_is_named_by_local_date(wired, pacific):
+    wired.gc = UploadGC()
+    transcripts._tool_save_meeting_transcript(
+        "d1", "new", "T1", meeting_title="Hyperloom", meeting_start="2026-10-20T00:30:00.0000000"
+    )
+    assert any("/2026-W43/2026-10-19 Hyperloom [" in k for k in wired.gc.files)
+
+
+def test_sunday_evening_meeting_stays_in_its_own_week(wired, pacific):
+    wired.gc = UploadGC()
+    transcripts._tool_save_meeting_transcript(
+        "d1", "new", "T2", meeting_title="Sync", meeting_start="2026-10-26T01:00:00Z"
+    )
+    assert any("/2026-W43/2026-10-25 Sync [" in k for k in wired.gc.files)
+
+
+def test_find_reports_event_times_in_local_time(wired, pacific):
+    wired.gc = FakeGC(event(start="2026-10-20T00:30:00.0000000", end="2026-10-20T01:00:00.0000000"))
+    wired.recs = []
+    out = transcripts._tool_find_meeting_transcripts("EV1")
+    assert out["event"]["start"] == "2026-10-19T17:30:00-07:00"
+    assert out["event"]["end"] == "2026-10-19T18:00:00-07:00"

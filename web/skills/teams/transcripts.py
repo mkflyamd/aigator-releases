@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 _TX_SCRIPTS = Path(__file__).parent.parent / "m365-teams" / "scripts"
+_TX_ROOT_FOLDER = "Gator Meeting Transcripts"
 
 
 def _tx_load(name: str):
@@ -53,7 +54,7 @@ MEETING_TOOL_DEFS = [
     },
     {
         "name": "save_meeting_transcript",
-        "description": "Save the original, unmodified transcript (.vtt) of a meeting into the user's own OneDrive under Documents/Gator Meeting Transcripts/<year>-W<week>/ and return its link. Never overwrites: saving the same transcript again returns status=exists. The file is private to the user; do not share it. Report it as saved only when status=saved or exists.",
+        "description": "Save the original, unmodified transcript (.vtt) of a meeting into the user's own OneDrive under Documents/Gator Meeting Transcripts/<year>-W<week>/ and return its link plus transcripts_folder_web_url, the link to the Gator Meeting Transcripts folder that holds every week. Never overwrites: saving the same transcript again returns status=exists. The file is private to the user; do not share it. Report it as saved only when status=saved or exists.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -61,7 +62,7 @@ MEETING_TOOL_DEFS = [
                 "meeting_title": {"type": "string"},
                 "meeting_start": {
                     "type": "string",
-                    "description": "Meeting start, ISO 8601 (used for the file name and week folder).",
+                    "description": "Meeting start, ISO 8601 (used for the file name and week folder, in the user's local time). Pass the start from find_meeting_transcripts unchanged.",
                 },
                 "folder": {
                     "type": "string",
@@ -91,6 +92,17 @@ def _graph():
     return get_graph_client()
 
 
+def _local_tz():
+    return datetime.now().astimezone().tzinfo
+
+
+def _tx_local_iso(value) -> str:
+    dt = _tx_parse_dt(value)
+    if dt is None:
+        return (value or {}).get("dateTime", "") if isinstance(value, dict) else ""
+    return dt.astimezone(_local_tz()).isoformat(timespec="seconds")
+
+
 def _tx_parse_dt(value) -> datetime | None:
     text = (
         (value or {}).get("dateTime", "") if isinstance(value, dict) else (value or "")
@@ -116,8 +128,8 @@ def _tool_find_meeting_transcripts(event_id: str) -> dict:
     out = {
         "event": {
             "subject": ev.get("subject", ""),
-            "start": (ev.get("start") or {}).get("dateTime", ""),
-            "end": (ev.get("end") or {}).get("dateTime", ""),
+            "start": _tx_local_iso(ev.get("start")),
+            "end": _tx_local_iso(ev.get("end")),
         },
         "recordings": [],
     }
@@ -185,6 +197,7 @@ def _tool_save_meeting_transcript(
     when = _tx_parse_dt(meeting_start)
     if when is None:
         return {"status": "error", "error": "bad_meeting_start"}
+    when = when.astimezone(_local_tz())
     data = _tx_load("transcript_beta").fetch_transcript_bytes(
         drive_id, item_id, transcript_id
     )
@@ -192,12 +205,16 @@ def _tool_save_meeting_transcript(
         return {"status": "error", "error": "empty_transcript"}
     iso = when.isocalendar()
     folder = folder.strip() or (
-        f"Documents/Gator Meeting Transcripts/{iso[0]}-W{iso[1]:02d}"
+        f"Documents/{_TX_ROOT_FOLDER}/{iso[0]}-W{iso[1]:02d}"
     )
     short = hashlib.sha256(transcript_id.encode()).hexdigest()[:8]
     title = (meeting_title or "Meeting").strip()[:80]
     name = f"{when:%Y-%m-%d} {title} [{short}].vtt"
-    return file_transfer.store(_graph(), file_transfer.bytes_source(name, data), folder)
+    out = file_transfer.store(_graph(), file_transfer.bytes_source(name, data), folder)
+    for f in out.get("folders") or []:
+        if f["path"].endswith(_TX_ROOT_FOLDER):
+            out["transcripts_folder_web_url"] = f["web_url"]
+    return out
 
 
 MEETING_TOOL_HANDLERS = {
