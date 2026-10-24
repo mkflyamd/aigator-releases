@@ -681,6 +681,17 @@ const SKILL_REGISTRY = [
     connected: true,
     actions: [],
   },
+  {
+    id: 'skill_manager',
+    label: 'Skill Manager',
+    icon: '<span style="font-size:1.1em">🛠️</span>',
+    chipAlias: 'skill_manager',
+    category: 'Productivity',
+    chipClass: 'chip-skill',
+    railHidden: true,
+    connected: true,
+    actions: [],
+  },
 ];
 
 // ── Google Workspace service skills ────────────────────────────────────
@@ -9921,6 +9932,104 @@ function _flushSandboxFollowUp(tabId) {
   _sendSandboxFollowUp(tabId, text).catch((e) => console.warn('[sandbox] follow-up not sent:', e));
 }
 
+// ── ask_user card ────────────────────────────────────────────────────────────
+// The card carries the question itself, so it stays next to the options however far up the chat the
+// model's reply sits. It offers one-click options plus a free-text box so the user is never stuck. Text
+// comes from the model: textContent only. An answer is sent as the next ordinary chat message.
+function _showAskUserCard(data, ownerTabId) {
+  const askId = data && typeof data.ask_id === 'string' ? data.ask_id : '';
+  if (!askId) return;
+  const tabId = ownerTabId || _activeTabId || 'default';
+  if (tabId !== _activeTabId) {
+    _tabsWithUpdates.add(tabId);
+    document.querySelector?.(`.tab-item[data-tab-id="${tabId}"]`)?.classList.add('tab-has-update');
+    _showConnectivityToast('AI Gator has a question for you in another tab.', 'info');
+    return;
+  }
+  document.querySelectorAll('.ask-user-card').forEach((el) => el.remove());
+  const options = Array.isArray(data.options) ? data.options : [];
+  const card = document.createElement('div');
+  card.className = 'message assistant ask-user-card';
+  card.dataset.askId = askId;
+  const bubble = document.createElement('div');
+  bubble.className = 'bubble card-bubble';
+  const box = document.createElement('div');
+  box.className = 'gator-compose-card gator-draft-card';
+  const header = document.createElement('div');
+  header.className = 'gcc-header';
+  const title = document.createElement('div');
+  title.className = 'gcc-title';
+  const question = typeof data.question === 'string' ? data.question : '';
+  title.textContent = question || (options.length ? 'Pick one, or tell AI Gator what you want' : 'Reply to AI Gator');
+  header.appendChild(title);
+  const body = document.createElement('div');
+  body.className = 'gcc-body ask-user-body';
+  if (question && options.length) {
+    const hint = document.createElement('div');
+    hint.className = 'ask-user-hint';
+    hint.textContent = 'Pick one, or tell AI Gator what you want';
+    body.appendChild(hint);
+  }
+
+  const answer = (text) => {
+    const reply = String(text || '').trim();
+    if (!reply) return;
+    card.remove();
+    _sendSandboxFollowUp(tabId, reply).catch((e) => console.warn('[ask_user] answer not sent:', e));
+  };
+
+  options.forEach((opt) => {
+    if (!opt || typeof opt.label !== 'string' || !opt.label) return;
+    const btn = document.createElement('button');
+    btn.className = 'btn-secondary ask-user-option';
+    const label = document.createElement('span');
+    label.className = 'ask-user-option-label';
+    label.textContent = opt.label;
+    btn.appendChild(label);
+    if (typeof opt.description === 'string' && opt.description) {
+      const desc = document.createElement('span');
+      desc.className = 'ask-user-option-desc';
+      desc.textContent = opt.description;
+      btn.appendChild(desc);
+    }
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      answer(opt.label);
+    });
+    body.appendChild(btn);
+  });
+
+  const row = document.createElement('div');
+  row.className = 'ask-user-chat';
+  const field = document.createElement('input');
+  field.type = 'text';
+  field.className = 'ask-user-input';
+  field.maxLength = 2000;
+  field.placeholder = 'Chat about this…';
+  field.setAttribute('aria-label', 'Reply to AI Gator');
+  const send = document.createElement('button');
+  send.className = 'gcc-approve-btn';
+  send.textContent = 'Send';
+  send.addEventListener('click', (e) => {
+    e.stopPropagation();
+    answer(field.value);
+  });
+  field.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.isComposing) {
+      e.preventDefault();
+      answer(field.value);
+    }
+  });
+  row.append(field, send);
+  body.appendChild(row);
+
+  box.append(header, body);
+  bubble.appendChild(box);
+  card.appendChild(bubble);
+  document.getElementById('messages')?.appendChild(card);
+  card.scrollIntoView({ behavior: 'smooth', block: 'end' });
+}
+
 function _showSandboxApproval(data, ownerTabId) {
   const requestId = data && typeof data.request_id === 'string' ? data.request_id : '';
   if (!requestId) return;
@@ -11547,7 +11656,7 @@ function applyInline(html) {
   // Images: stash the generated <img> so later passes (Jira keys, bare URLs) can't
   // rewrite its attributes. Non-allowlisted URLs fall back to a plain link.
   const imgStash = [];
-  html = html.replace(/!\[(.*?)\]\(((?:https?:\/\/|\/)[^\)"]*)\)/g, (_, alt, href) => {
+  html = html.replace(/!\[(.*?)\]\(((?:https?:\/\/|\/)(?:[^()"]|\([^()"]*\))*)\)/g, (_, alt, href) => {
     if (!_isInlineImageUrl(href)) return `[${alt}](${href})`;
     // Remote links are short-lived; the server fetches once, caches, and serves the image.
     const remote = !href.startsWith('/');
@@ -11571,7 +11680,7 @@ function applyInline(html) {
   // Markdown links first — so the URL inside [text](url) is consumed before
   // the bare-URL pass runs (prevents double-wrapping).
   // Handles: https://, http://, root-relative (/api/...), mailto:, #fragment
-  html = html.replace(/\[(.*?)\]\(((?:https?:\/\/|mailto:|\/|#)[^\)"]*)\)/g, (_, text, href) => {
+  html = html.replace(/\[(.*?)\]\(((?:https?:\/\/|mailto:|\/|#)(?:[^()"]|\([^()"]*\))*)\)/g, (_, text, href) => {
     const isExternal = /^https?:\/\//.test(href);
     return `<a href="${href}"${isExternal ? ' target="_blank" rel="noopener"' : ''}>${text}</a>`;
   });
@@ -12873,6 +12982,7 @@ form.addEventListener('submit', async (e) => {
   const hasImages = imagesSnapshot.length > 0 && imagesSnapshot.every((i) => i.base64);
 
   if (!_canSubmitMessage(finalText, hasFileChips, hasImages)) return;
+  document.querySelectorAll('.ask-user-card').forEach((el) => el.remove());
 
   // A user can press Enter immediately after choosing a file. Wait briefly
   // for the already-started, bounded attachment staging work so the request
@@ -13895,6 +14005,8 @@ form.addEventListener('submit', async (e) => {
               _showJiraTargetSelection(msg.jira_target_selection, requestTabId);
             } else if (msg.sandbox_approval) {
               _showSandboxApproval(msg.sandbox_approval, requestTabId);
+            } else if (msg.ask_user) {
+              _showAskUserCard(msg.ask_user, requestTabId);
             } else if (msg.files && Array.isArray(msg.files) && msg.files.length) {
               if (!fileChipsDiv) {
                 fileChipsDiv = document.createElement('div');
@@ -16410,7 +16522,50 @@ function _expireConfirmCardById(confirm_id) {
   );
 }
 
-function _showBrowserConfirmCard(msgDiv, { confirm_id, action, title, allow_label, deny_label }) {
+// Mermaid is loaded the first time a card has a diagram, so it costs nothing at startup. The diagram text is
+// built by the server from cleaned data; strict mode keeps the library from running scripts or links.
+function _loadMermaid() {
+  if (window.__gatorMermaid) return window.__gatorMermaid;
+  window.__gatorMermaid = new Promise((resolve, reject) => {
+    if (window.mermaid) return resolve(window.mermaid);
+    const el = document.createElement('script');
+    el.src = '/static/vendor/mermaid/mermaid.min.js';
+    el.onload = () => {
+      try {
+        window.mermaid.initialize({
+          startOnLoad: false,
+          securityLevel: 'strict',
+          theme: 'base',
+          themeVariables: { fontFamily: getComputedStyle(document.body).fontFamily, fontSize: '13px' },
+          flowchart: { curve: 'basis', htmlLabels: true, nodeSpacing: 18, rankSpacing: 44, padding: 10 },
+        });
+        resolve(window.mermaid);
+      } catch (e) {
+        reject(e);
+      }
+    };
+    el.onerror = () => reject(new Error('mermaid failed to load'));
+    document.head.appendChild(el);
+  }).catch((e) => {
+    window.__gatorMermaid = null;
+    throw e;
+  });
+  return window.__gatorMermaid;
+}
+
+async function _renderConfirmDiagram(box, diagram) {
+  try {
+    const mermaid = await _loadMermaid();
+    const { svg } = await mermaid.render('confirm-diagram-' + (window.__gatorDiagramSeq = (window.__gatorDiagramSeq || 0) + 1), diagram);
+    box.innerHTML = svg;
+    box.style.display = 'block';
+  } catch (e) {
+    console.warn('Confirm card diagram not shown:', e);
+    box.remove();
+  }
+}
+
+function _showBrowserConfirmCard(msgDiv, { confirm_id, action, title, allow_label, deny_label, diagram }) {
   const text = _confirmCardText({ title, allow_label, deny_label });
   // Source cards keep their own id so two pending cards (two sources) do not replace each other.
   if (!text.isSource) {
@@ -16454,10 +16609,18 @@ function _showBrowserConfirmCard(msgDiv, { confirm_id, action, title, allow_labe
   titleEl.dataset.confirmTitle = '1';
 
   const detail = document.createElement('div');
-  detail.style.cssText = 'font-size: 0.78rem; color: var(--text-muted); word-break: break-word;';
+  detail.style.cssText =
+    'font-size: 0.78rem; color: var(--text-muted); word-break: break-word; white-space: pre-line;';
   detail.textContent = action;
 
   textWrap.append(titleEl, detail);
+  if (diagram) {
+    const diagramBox = document.createElement('div');
+    diagramBox.dataset.confirmDiagram = '1';
+    diagramBox.className = 'confirm-diagram';
+    textWrap.append(diagramBox);
+    _renderConfirmDiagram(diagramBox, diagram);
+  }
 
   const btnWrap = document.createElement('div');
   btnWrap.style.cssText =

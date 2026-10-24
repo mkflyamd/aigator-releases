@@ -6141,6 +6141,44 @@ body.gator-chat-expanded .gator-expand-btn {
   background: #16a34a;
   transform: scale(1.02);
 }
+.ask-user-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ask-user-hint {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+.ask-user-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  text-align: left;
+  width: 100%;
+}
+.ask-user-option-label {
+  font-weight: 600;
+}
+.ask-user-option-desc {
+  font-size: 0.75rem;
+  opacity: 0.75;
+}
+.ask-user-chat {
+  display: flex;
+  gap: 8px;
+}
+.ask-user-input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border, #444);
+  background: transparent;
+  color: inherit;
+  font-size: 0.85rem;
+}
 .gcc-target-url {
   font-weight: 400;
   font-size: 0.75rem;
@@ -22860,3 +22898,50 @@ body.tab-fullscreen {
   color: var(--danger);
   font-weight: 600;
 }
+
+/* Schedule confirm card: workflow diagram (Mermaid SVG), themed from the app tokens so it follows light/dark. */
+.confirm-diagram {
+  display: none;
+  margin-top: 10px;
+  padding: 14px 6px 4px;
+  border-top: 1px solid var(--border);
+  overflow-x: auto;
+}
+.confirm-diagram svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+.confirm-diagram .node rect,
+.confirm-diagram .node path {
+  fill: var(--surface3) !important;
+  stroke: var(--border) !important;
+  stroke-width: 1px !important;
+}
+.confirm-diagram .node rect { rx: 12px; ry: 12px; }
+.confirm-diagram .node.trigger rect,
+.confirm-diagram .node.result rect {
+  fill: color-mix(in srgb, var(--accent) 14%, var(--surface)) !important;
+  stroke: var(--accent) !important;
+}
+.confirm-diagram .node.leftout rect {
+  fill: transparent !important;
+  stroke: #d9a441 !important;
+  stroke-dasharray: 4 3;
+}
+.confirm-diagram .node.missing rect { stroke: #e5534b !important; }
+.confirm-diagram .nodeLabel,
+.confirm-diagram .nodeLabel b,
+.confirm-diagram foreignObject div {
+  color: var(--text) !important;
+  font-weight: 600;
+  line-height: 1.35;
+}
+.confirm-diagram .nodeLabel small {
+  color: var(--text-muted) !important;
+  font-size: 0.82em;
+  font-weight: 400;
+}
+.confirm-diagram .flowchart-link {
+  stroke: var(--text-muted) !important;
+  stroke-width: 1.4px !important;
+  opacity: 0.7;
+}
+.confirm-diagram .marker,
+.confirm-diagram .arrowMarkerPath { fill: var(--text-muted) !important; stroke: var(--text-muted) !important; }
