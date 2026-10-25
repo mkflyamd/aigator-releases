@@ -17,8 +17,10 @@ from skills.excel import tools as xl  # noqa: E402
 
 
 @pytest.fixture
-def recalc_mod():
-    return xl._load_recalc()
+def recalc_mod(monkeypatch):
+    mod = xl._load_recalc()
+    monkeypatch.setattr(mod, "_excel_recalc", lambda *a, **k: False)
+    return mod
 
 
 def _fake_proc(returncode=0, stdout="", stderr=""):
@@ -190,6 +192,102 @@ def test_recalc_does_not_claim_success_when_nothing_was_calculated(recalc_mod, m
     assert "did not calculate any formulas" in recalc_mod.recalc(str(book))["error"]
 
 
+def test_recalc_uses_excel_when_it_does_the_work(recalc_mod, monkeypatch, tmp_path):
+    book = tmp_path / "book.xlsx"
+    _workbook_with_cached_values(book, {"A3": 6})
+    monkeypatch.setattr(recalc_mod, "_excel_recalc", lambda *a, **k: True)
+
+    def no_libreoffice(*a, **k):
+        raise AssertionError("LibreOffice must not run when Excel recalculated")
+
+    monkeypatch.setattr(recalc_mod, "find_soffice", no_libreoffice)
+    monkeypatch.setattr(recalc_mod, "run_basic_macro", no_libreoffice)
+    out = recalc_mod.recalc(str(book))
+    assert out["engine"] == "Excel"
+    assert out["error_summary"]["#DIV/0!"]["locations"] == ["Sheet!A4"]
+
+
+def test_recalc_falls_back_to_libreoffice_when_excel_cannot_be_used(recalc_mod, monkeypatch, tmp_path):
+    book = tmp_path / "book.xlsx"
+    _workbook_with_cached_values(book, {"A3": 6})
+    monkeypatch.setattr(recalc_mod, "find_soffice", lambda: "soffice")
+    monkeypatch.setattr(recalc_mod, "run_basic_macro", lambda *a, **k: _fake_proc())
+    assert recalc_mod.recalc(str(book))["engine"] == "LibreOffice"
+
+
+def test_excel_recalc_is_skipped_off_windows(monkeypatch, tmp_path):
+    mod = xl._load_recalc()
+    monkeypatch.setattr(mod.sys, "platform", "linux")
+    assert mod._excel_recalc(str(tmp_path / "book.xlsx"), 5) is False
+
+
+def test_excel_recalc_kills_excel_when_it_hangs(monkeypatch, tmp_path):
+    pythoncom = pytest.importorskip("pythoncom")
+    win32com_client = pytest.importorskip("win32com.client")
+    mod = xl._load_recalc()
+    monkeypatch.setattr(mod.sys, "platform", "win32")
+    book = tmp_path / "book.xlsx"
+    Workbook().save(book)
+    release = mod.threading.Event()
+
+    class HungApp:
+        Hwnd = 1
+        Visible = False
+        DisplayAlerts = False
+
+        @property
+        def Workbooks(self):
+            release.wait(10)
+            raise RuntimeError("released")
+
+        def Quit(self):
+            pass
+
+    killed = []
+    monkeypatch.setattr(win32com_client, "DispatchEx", lambda name: HungApp())
+    monkeypatch.setattr(mod, "_excel_pid", lambda app: 4242)
+    monkeypatch.setattr(mod.subprocess, "run", lambda cmd, **k: killed.append(cmd))
+    try:
+        assert mod._excel_recalc(str(book), 0.3) is False
+    finally:
+        release.set()
+    assert killed and killed[0][:3] == ["taskkill", "/PID", "4242"]
+
+
+def test_excel_recalc_ignores_a_save_that_did_not_change_the_file(monkeypatch, tmp_path):
+    pytest.importorskip("pythoncom")
+    win32com_client = pytest.importorskip("win32com.client")
+    mod = xl._load_recalc()
+    monkeypatch.setattr(mod.sys, "platform", "win32")
+    book = tmp_path / "book.xlsx"
+    Workbook().save(book)
+
+    class Book:
+        ReadOnly = False
+
+        def Save(self):
+            pass
+
+        def Close(self, save):
+            pass
+
+    class SilentApp:
+        Hwnd = 1
+        Visible = False
+        DisplayAlerts = False
+        Workbooks = type("W", (), {"Open": staticmethod(lambda *a, **k: Book())})
+
+        def CalculateFull(self):
+            pass
+
+        def Quit(self):
+            pass
+
+    monkeypatch.setattr(win32com_client, "DispatchEx", lambda name: SilentApp())
+    monkeypatch.setattr(mod, "_excel_pid", lambda app: 1)
+    assert mod._excel_recalc(str(book), 5) is False
+
+
 def test_recalc_tool_passes_the_missing_libreoffice_message_through(monkeypatch, tmp_path):
     book = tmp_path / "book.xlsx"
     Workbook().save(book)
@@ -204,11 +302,12 @@ def test_recalc_tool_summarises_a_successful_run(monkeypatch):
     class Stub:
         @staticmethod
         def recalc(path, timeout):
-            return {"status": "success", "total_errors": 0, "total_formulas": 4, "error_summary": {}}
+            return {"status": "success", "total_errors": 0, "total_formulas": 4, "error_summary": {}, "engine": "Excel"}
 
     monkeypatch.setattr(xl, "_load_recalc", lambda: Stub)
     assert xl._tool_recalc_excel("book.xlsx") == {
         "ok": True, "status": "success", "total_formulas": 4, "error_count": 0, "error_summary": {},
+        "engine": "Excel",
     }
 
 

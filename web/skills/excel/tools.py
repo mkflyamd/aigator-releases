@@ -606,6 +606,7 @@ def _tool_recalc_excel(file_path: str, timeout: int = 30) -> dict:
         "total_formulas": data.get("total_formulas", 0),
         "error_count": data.get("total_errors", 0),
         "error_summary": data.get("error_summary", {}),
+        "engine": data.get("engine", ""),
     }
 
 

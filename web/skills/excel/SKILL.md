@@ -116,4 +116,4 @@ When building financial models, use these industry-standard colors:
 5. **Confirm column layout** before writing any data to existing workbooks.
 6. **Complete every row** — fill all rows without stopping. Confirm row count when done.
 7. Never tell the user you cannot fill the file — use the tools to do it.
-8. **If recalc_excel reports LibreOffice missing or failing**, tell the user the workbook is saved and its formulas calculate when they open it in Excel. Do not request access to the LibreOffice install folder, run soffice yourself, or retry.
+8. **recalc_excel uses desktop Excel when it is installed (Windows) and LibreOffice otherwise.** If it reports that neither could recalculate, tell the user the workbook is saved and its formulas calculate when they open it in Excel. Do not request access to the LibreOffice install folder, run soffice yourself, or retry.
