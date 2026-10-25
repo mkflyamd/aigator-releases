@@ -4,12 +4,14 @@ import json
 import logging
 from datetime import datetime
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from config import load_config as _load_config
 import shared
+from security import verify_csrf
+from skill_pin import pin_context_block as _pin_context_block, resolve_pin as _resolve_pin
 
 import re as _re
 
@@ -45,6 +47,25 @@ router = APIRouter()
 # ── Pydantic models ───────────────────────────────────────────────────────────
 
 _GATED_DEP_SKILLS: frozenset[str] = frozenset({"shell_runner", "code_runner"})
+
+
+def _gated_runner_id(skill_id: str) -> str | None:
+    """The gated runner a skill id names, resolving aliases (`code-runner` registers the same tools)."""
+    if skill_id in _GATED_DEP_SKILLS:
+        return skill_id
+    tools = shared.SKILL_TOOLS_MAP.get(skill_id)
+    if not tools:
+        return None
+    return next((g for g in sorted(_GATED_DEP_SKILLS) if tools == shared.SKILL_TOOLS_MAP.get(g)), None)
+
+
+def _is_gated_runner(skill_id: str) -> bool:
+    """A gated runner or one of its aliases.
+
+    An alias hands out the same powerful tools, so it must never be self-granted by the model
+    or carried forward as an ordinary skill.
+    """
+    return _gated_runner_id(skill_id) is not None
 
 # Detects phrases like "add the @outlook skill", "activate /teams skill",
 # "load the confluence skill" — used to auto-activate the requested skill
@@ -118,10 +139,53 @@ def _detect_requested_skills(turn_text: str, already_active) -> list[str]:
         # SKILL.md prompt). Gated skills still excluded — they require the
         # explicit user-approval gate and can't be self-granted by the model.
         _known = sid in shared.SKILL_PROMPTS or sid in shared.SKILL_TOOLS_MAP
-        if (_known and sid not in _GATED_DEP_SKILLS
+        if (_known and not _is_gated_runner(sid)
                 and sid not in active and sid not in found):
             found.append(sid)
     return found
+
+
+_BARE_SKILL_TURN_RE = _re.compile(r"^(?:/[a-z0-9][a-z0-9_-]*\s*)+$", _re.IGNORECASE)
+
+
+def _already_active_skill_requests(turn_text: str, active) -> list[str]:
+    """Skills a model turn asked for when the whole turn is nothing but skill tokens and they
+    are already active. Without this the turn ends empty: the model thinks the skill is off."""
+    text = (turn_text or "").strip()
+    if not _BARE_SKILL_TURN_RE.match(text):
+        return []
+    active = set(active or [])
+    found: list[str] = []
+    for name in _SKILL_TOKEN_RE.findall(text):
+        sid = _resolve_skill_id(name)
+        if sid in active and sid not in found:
+            found.append(sid)
+    return found
+
+
+def _with_follow_up(msgs, assistant_text: str, user_note: str) -> list:
+    """The agent loop appends its own assistant turn to msgs in place; only add one if it has not."""
+    out = list(msgs)
+    if not out or out[-1].get("role") != "assistant":
+        out.append({"role": "assistant", "content": assistant_text})
+    out.append({"role": "user", "content": user_note})
+    return out
+
+
+def _already_active_note(skill_ids: list[str], offered_tool_names) -> str:
+    offered = set(offered_tool_names or ())
+    parts = []
+    for sid in skill_ids:
+        tools = sorted(set(shared.SKILL_TOOLS_MAP.get(sid, ())) & offered)
+        if tools:
+            parts.append(f"/{sid} is already active; its tools are available right now: {', '.join(tools)}")
+        else:
+            parts.append(f"/{sid} is already active but none of its tools can be used in this turn")
+    return (
+        "[System: " + "; ".join(parts) + ". Do not name the skill again. "
+        "Continue the user's original request by calling those tools directly; if a tool is "
+        "unavailable, tell the user plainly what is missing instead of replying with only a skill name.]"
+    )
 
 
 def _silent_turn_fallback(active_skills: list[str]) -> str:
@@ -154,9 +218,10 @@ class ChatRequest(BaseModel):
     active_people: list[dict] | None = None  # typed Teams/Slack person chips
     context_id: str = "default"  # tab-scoped context for pins
     model: str = ""  # model selected in prompt bar; sent explicitly so server never relies on global state
-    unapproved_deps: list[str] | None = None  # gated dep IDs not yet approved this conversation
     system_prompt_suffix: str | None = None   # extra rules appended to system prompt (e.g. wizard scope)
     scoped_skill: str | None = None           # skill ID injected into active_skills for this request
+    pinned_skill: str | None = None           # per-tab skill pin (client); activates and locks skill selection
+    pinned_project_id: str | None = None      # project the pinned skill is working on
 
 
 # ── Tool filtering ────────────────────────────────────────────────────────────
@@ -203,6 +268,101 @@ def _best_capability_group(conn_id: str, message: str) -> str | None:
         None,
     )
     return any_group
+
+
+def _granted_runners(context_id: str | None) -> list[str]:
+    """Runners the user approved on a request_skill card in this tab."""
+    import data_sources
+    return [s for s in data_sources.allowed_with_prefix(context_id or "default", "capability:") if s in _GATED_DEP_SKILLS]
+
+
+def _ungranted_gated_deps(req) -> list[str]:
+    """Gated dependency skills the user has not approved in this tab (server-side grants only)."""
+    return sorted(_GATED_DEP_SKILLS - set(_granted_runners(getattr(req, "context_id", None))))
+
+
+_PENDING_DEP_APPROVALS: dict[str, tuple[str, list[str], float]] = {}
+_PENDING_DEP_APPROVAL_TTL = 600.0
+
+
+def _register_dep_approval(context_id: str, dep_ids: list[str]) -> str:
+    """Remember what a permission card asked for, so only that card's approval can grant it."""
+    import secrets
+    import time
+    now = time.monotonic()
+    for stale in [k for k, (_, _, t) in _PENDING_DEP_APPROVALS.items() if now - t > _PENDING_DEP_APPROVAL_TTL]:
+        _PENDING_DEP_APPROVALS.pop(stale, None)
+    approval_id = secrets.token_urlsafe(24)
+    _PENDING_DEP_APPROVALS[approval_id] = (context_id or "default", [d for d in dep_ids if d in _GATED_DEP_SKILLS], now)
+    return approval_id
+
+
+class ApproveDepsRequest(BaseModel):
+    approval_id: str
+
+
+@router.post("/api/chat/approve-deps", dependencies=[Depends(verify_csrf)])
+async def approve_deps(body: ApproveDepsRequest):
+    """The user clicked Allow on a permission card: grant exactly what that card asked for, for its tab."""
+    import time
+    import data_sources
+    from fastapi import HTTPException
+    entry = _PENDING_DEP_APPROVALS.pop(body.approval_id, None)
+    if entry is None or time.monotonic() - entry[2] > _PENDING_DEP_APPROVAL_TTL:
+        raise HTTPException(status_code=404, detail="This permission request has expired. Send the message again.")
+    context_id, dep_ids, _ = entry
+    for dep in dep_ids:
+        data_sources.allow(context_id, f"capability:{dep}")
+    return {"approved": dep_ids}
+
+
+def _blocked_gated_deps(skill_ids: list[str], req) -> list[tuple[str, dict]]:
+    """(skill, dep) pairs where an active skill needs a gated dependency nobody approved."""
+    ungranted = set(_ungranted_gated_deps(req))
+    blocked: list[tuple[str, dict]] = []
+    seen: set[str] = set()
+    for sid in skill_ids:
+        for dep in shared.SKILL_DEPENDENCIES_MAP.get(sid, []):
+            if dep["id"] in ungranted and dep["id"] not in seen:
+                seen.add(dep["id"])
+                blocked.append((sid, dep))
+    return blocked
+
+
+def _permission_gate_response(blocked: list[tuple[str, dict]], context_id: str):
+    """Answer the chat POST with a permission_required event instead of running the turn."""
+    import asyncio as _asyncio
+    import uuid as _uuid
+    from fastapi.responses import JSONResponse
+
+    def _dep_label(dep_id: str) -> str:
+        for line in shared.SKILL_PROMPTS.get(dep_id, "").splitlines():
+            if line.startswith("# "):
+                return line[2:].strip()
+        return dep_id.replace("-", " ").title()
+
+    payload = {
+        "type": "permission_required",
+        "approval_id": _register_dep_approval(context_id, [dep["id"] for _, dep in blocked]),
+        "skill": blocked[0][0],
+        "deps": [
+            {"id": dep["id"], "label": _dep_label(dep["id"]), "reason": dep["reason"]}
+            for _, dep in blocked
+        ],
+    }
+    chunk = f"data: {json.dumps(payload)}\n\n"
+    task_id = str(_uuid.uuid4())
+    shared.chat_task_store.create_task(task_id, context_id or "default")
+
+    async def _run_permission_gate():
+        try:
+            shared.chat_task_store.append_chunk(task_id, chunk)
+            shared.chat_task_store.append_chunk(task_id, "data: [DONE]\n\n")
+        finally:
+            shared.chat_task_store.mark_done(task_id)
+
+    shared.chat_task_store.track_task(task_id, _asyncio.create_task(_run_permission_gate()))
+    return JSONResponse({"task_id": task_id})
 
 
 def _filter_tools(active_skill: str, has_images: bool, active_skills: list[str] | None = None,
@@ -657,6 +817,14 @@ def _installed_skill_ids_from_message(message: str) -> list[str]:
     matched = []
     for sid in shared.SKILL_PROMPTS:
         if sid in shared._BUILTIN_SKILL_IDS:
+            # Bundled skills have no keywords and are not in the classifier catalog, so a
+            # typed name is their only text trigger. Only kebab-case ids qualify: a bare id
+            # like "email" is an ordinary word, and the gated runners (shell_runner,
+            # code_runner) must never be self-granted by name.
+            if sid.startswith("_") or "-" not in sid:
+                continue
+            if sid in msg_lower or sid.replace("-", " ") in msg_lower:
+                matched.append(sid)
             continue
         # Match by skill ID and its human-readable variants. Plugin ids are
         # namespaced ("amd-skills__local-ai-use"); also match the bare last
@@ -798,13 +966,28 @@ def _skills_for_tools(tool_names) -> list[str]:
     for name in sorted(set(tool_names or ())):
         candidates = [
             (len(tools), sid) for sid, tools in shared.SKILL_TOOLS_MAP.items()
-            if name in tools and not sid.startswith("_") and sid not in _GATED_DEP_SKILLS
+            if name in tools and not sid.startswith("_") and not _is_gated_runner(sid)
         ]
         if candidates:
             owner = min(candidates)[1]
             if owner not in owners:
                 owners.append(owner)
     return owners
+
+
+def _gated_runners_for_tools(tool_names) -> list[str]:
+    """The shell/code runners whose tools actually ran in this chat.
+
+    A runner is only ever offered after the user approved it, so evidence that its tool ran is
+    evidence of that approval. Naming a skill on a later turn ("use ppt") must not take away the
+    tool the chat was already working with. Never derived from model text, so a model cannot
+    grant itself a runner.
+    """
+    ran = set(tool_names or ())
+    return sorted(
+        sid for sid in _GATED_DEP_SKILLS
+        if ran & set(shared.SKILL_TOOLS_MAP.get(sid, ()))
+    )
 
 
 def _classify_skills_via_llm(message: str, extra_skills: dict | None = None) -> list[str]:
@@ -1071,43 +1254,6 @@ async def chat(req: ChatRequest):
             "message": slash_cmd["message"],
         })
 
-    # ── Permission gate: block gated dependency skills that haven't been approved ──
-    if req.unapproved_deps and req.active_skill:
-        _all_deps = shared.SKILL_DEPENDENCIES_MAP.get(req.active_skill, [])
-        _blocked_deps = [
-            d for d in _all_deps
-            if d["id"] in req.unapproved_deps and d["id"] in _GATED_DEP_SKILLS
-        ]
-        if _blocked_deps:
-            def _resolve_dep_label(dep_id: str) -> str:
-                prompt_text = shared.SKILL_PROMPTS.get(dep_id, "")
-                for _line in prompt_text.splitlines():
-                    if _line.startswith("# "):
-                        return _line[2:].strip()
-                return dep_id.replace("-", " ").title()
-
-            _deps_payload = [
-                {"id": d["id"], "label": _resolve_dep_label(d["id"]), "reason": d["reason"]}
-                for d in _blocked_deps
-            ]
-
-            _gate_task_id = str(_uuid.uuid4())
-            _gate_context_id = getattr(req, "context_id", None) or "default"
-            shared.chat_task_store.create_task(_gate_task_id, _gate_context_id)
-
-            _perm_chunk = f"data: {json.dumps({'type': 'permission_required', 'skill': req.active_skill, 'deps': _deps_payload})}\n\n"
-
-            async def _run_permission_gate():
-                try:
-                    shared.chat_task_store.append_chunk(_gate_task_id, _perm_chunk)
-                    shared.chat_task_store.append_chunk(_gate_task_id, "data: [DONE]\n\n")
-                finally:
-                    shared.chat_task_store.mark_done(_gate_task_id)
-
-            _gate_bg = _asyncio.create_task(_run_permission_gate())
-            shared.chat_task_store.track_task(_gate_task_id, _gate_bg)
-            return JSONResponse({"task_id": _gate_task_id})
-
     _now = datetime.now()
     system = shared.get_system_prompt().replace("{date}", _now.strftime("%B %d, %Y")).replace(
         "{unix_ts}", str(int(_now.timestamp()))
@@ -1124,12 +1270,17 @@ async def chat(req: ChatRequest):
     # Inject per-skill prompt instructions — ONLY for explicitly active skills,
     # NOT all always-on skills (those add 10K+ tokens of irrelevant context).
     # Auto-detected skills get their prompts injected later (line ~326).
+    _pin = _resolve_pin(req.pinned_skill, req.pinned_project_id, shared.SKILL_PROMPTS,
+                        slash_active=bool(slash_cmd))
+    _skills_locked = bool(req.scoped_skill or _pin)
     _active_sids = set()
     if req.active_skill and req.active_skill in shared.SKILL_PROMPTS:
         _active_sids.add(req.active_skill)
     for _sid in (req.active_skills or []):
         if _sid in shared.SKILL_PROMPTS:
             _active_sids.add(_sid)
+    if _pin:
+        _active_sids.add(_pin.skill)
 
     # Include SKILL.md prompts for dependency skills
     for _primary_sid in list(_active_sids):
@@ -1141,6 +1292,7 @@ async def chat(req: ChatRequest):
     for _sid in sorted(_active_sids):
         system, _plugin_preamble_injected = _append_skill_prompt(system, _sid, _plugin_preamble_injected)
         print(f"[skill-prompt] injected SKILL.md for '{_sid}' ({len(shared.SKILL_PROMPTS[_sid])} chars) [explicit]", flush=True)
+    system += _pin_context_block(_pin)
 
     # When the Code tab is active, tell the main LLM which project/repo it's on
     # so it can answer "which repo are you on?" without saying "I don't have visibility".
@@ -1256,6 +1408,8 @@ async def chat(req: ChatRequest):
         _explicit_skill_ids.add(req.active_skill)
     for _sid in (req.active_skills or []):
         _explicit_skill_ids.add(_sid)
+    if _pin:
+        _explicit_skill_ids.add(_pin.skill)
     if _explicit_skill_ids:
         skill_lines = "\n".join(
             f"  \u2022 {_SKILL_LABELS.get(sid, sid)}"
@@ -1533,15 +1687,16 @@ async def chat(req: ChatRequest):
         _msg_text = ""
 
     # ── Continuation classifier: runs before skill detection ────────────────
-    # Skip entirely for scoped requests (wizard, etc.) — the skill set is
-    # fully controlled by scoped_skill and must not be polluted by URL/keyword
+    # Skip entirely for scoped requests (wizard, etc.) and pinned skills — the skill set is
+    # fully controlled by scoped_skill or a pinned skill and must not be polluted by URL/keyword
     # detection (e.g. the browser skill firing on a pasted MCP URL).
     _inferred = []
+    _carried_runners: list[str] = []
     _classifier_inherited = False
-    if req.scoped_skill:
-        print(f"[classifier] skipped — scoped_skill={req.scoped_skill!r}", flush=True)
+    from continuation_classifier import classify as _classify, detect_pending as _detect_pending
+    if _skills_locked:
+        print(f"[classifier] skipped — skills locked (scoped_skill={req.scoped_skill!r}, pin={_pin.skill if _pin else None!r})", flush=True)
     else:
-        from continuation_classifier import classify as _classify, detect_pending as _detect_pending
         _tab_state = shared.task_state_store.get(_context_id)
         _clf = _classify(_msg_text, _tab_state)
         print(f"[classifier] mode={_clf.mode} reason={_clf.reason}", flush=True)
@@ -1553,12 +1708,15 @@ async def chat(req: ChatRequest):
                 shared.task_state_store.update(_context_id, pending=None)
             print(f"[classifier] inheriting skills {_inferred} (bypassing keyword/LLM detection)", flush=True)
 
-    if not _classifier_inherited and not req.scoped_skill:
+    if not _classifier_inherited and not _skills_locked:
         _inferred = _infer_skills_from_message(_msg_text)
         # Also match installed marketplace skills by name (handles skills absent from static dicts)
         _installed_matches = _installed_skill_ids_from_message(_msg_text)
         if _installed_matches:
             _inferred = list(set(_inferred) | set(_installed_matches))
+            # A skill the user typed by name is as explicit as a tile click: it must not
+            # lose its slot to the provenance cap on auto-detected skills.
+            _explicit_skill_ids |= set(_installed_matches)
         if _inferred:
             print(f"[skill-detect] keywords/installed matched: {_inferred}", flush=True)
         # Build the non-builtin catalog once (MCP connections + installed skills).
@@ -1584,6 +1742,7 @@ async def chat(req: ChatRequest):
         # Carry forward skills from recent history when the current message gives no signal
         # (e.g. "go ahead", "yes", "looks good", "try again"). The frontend stores only text
         # in history (no tool_use blocks), so scan the recent text for skill keywords.
+        _tools_already_run = await shared.conversation_store.recent_tool_names(_context_id)
         if not _inferred:
             def _extract_text(content):
                 if isinstance(content, str):
@@ -1604,9 +1763,7 @@ async def chat(req: ChatRequest):
             ]
             # The history above is text only. The server-side store also knows which tools
             # actually ran, so a chat that used Slack keeps Slack on a short follow-up.
-            _from_tools = _skills_for_tools(
-                await shared.conversation_store.recent_tool_names(_context_id)
-            )
+            _from_tools = _skills_for_tools(_tools_already_run)
             for _sid in _from_tools:
                 if _sid not in _history_skills:
                     _history_skills.append(_sid)
@@ -1618,18 +1775,25 @@ async def chat(req: ChatRequest):
                 print(f"[skill-detect] carrying forward from history text: {_carried}", flush=True)
                 _inferred = _carried
 
+        # A runner the chat already used stays available whether this message names another
+        # skill ("use ppt") or gives no signal at all ("proceed").
+        _carried_runners = list(dict.fromkeys([*_gated_runners_for_tools(_tools_already_run), *_granted_runners(_context_id)]))
+        if _carried_runners:
+            print(f"[skill-detect] runners already used in this chat stay available: {_carried_runners}", flush=True)
+            _inferred = list(dict.fromkeys([*_inferred, *_carried_runners]))
+
     # A request to describe/recap an existing image needs authenticated image
     # retrieval before the first model turn. Waiting for reactive activation
     # after read_teams_chats leaves always-on code_runner as the only apparent
     # downloader, leading to unauthenticated Teams/Graph/Slack 401 attempts.
-    _image_analysis_requested = not req.scoped_skill and _is_image_analysis_request(_msg_text)
-    if not req.scoped_skill:
+    _image_analysis_requested = not _skills_locked and _is_image_analysis_request(_msg_text)
+    if not _skills_locked:
         _inferred = _ensure_image_fetch_skill(
             _msg_text, _inferred, set(shared.SKILL_TOOLS_MAP)
         )
 
     # Separate context-only skills (auto-detected) from explicitly selected skills
-    _context_only_skills = list(set(_pin_skills + _inferred) - _explicit_skill_ids)
+    _context_only_skills = list(set(_pin_skills + _inferred) - _explicit_skill_ids - set(_carried_runners))
 
     # Exclude 'gator' from tool filtering — it's the default home skill, not a toolset.
     # Its manifest bundles 14 Office tools (Excel/Word/PPT) that shouldn't load on every request.
@@ -1651,6 +1815,7 @@ async def chat(req: ChatRequest):
     # tools, including pptx_apply_theme). Keep them in the active set regardless
     # of rank; only tool-bearing skills compete for the cap slots.
     _cap_exempt = {"fetch_image"} if _image_analysis_requested else set()
+    _cap_exempt |= set(_carried_runners)
     _capped_candidates = [
         s for s in _auto_candidates
         if _marketplace_skill_has_tools(s) and s not in _cap_exempt
@@ -1673,8 +1838,9 @@ async def chat(req: ChatRequest):
         print(f"[skill-cap] {len(_capped_candidates)} tool-bearing auto-skills -> kept {sorted(_kept)}, "
               f"dropped {_dropped} (provenance-ranked); {len(_guidance_only)} guidance-only exempt: {sorted(_guidance_only)}", flush=True)
     # Inject scoped_skill (e.g. _extension_setup for the wizard) without modifying req.active_skills
-    if req.scoped_skill and req.scoped_skill not in _all_active:
-        _all_active.append(req.scoped_skill)
+    _inject_skill = req.scoped_skill or (_pin.skill if _pin else None)
+    if _inject_skill and _inject_skill not in _all_active:
+        _all_active.append(_inject_skill)
     # Expand declared dependencies (SKILL.md `requires:` frontmatter).
     # One-pass transitive expansion — covers requires-of-requires without deep recursion.
     _deps_added: list[str] = []
@@ -1690,6 +1856,12 @@ async def chat(req: ChatRequest):
                 _deps_added.append(_dep)
     if _deps_added:
         print(f"[skill-deps] auto-activated declared dependencies: {_deps_added}", flush=True)
+    # Permission gate: a skill that needs shell_runner/code_runner may not run until the user
+    # approves them — whether the skill came from a tile, a typed name, a pin, or a dependency.
+    _gate_order = [s for s in (req.active_skill, *(req.active_skills or [])) if s] + sorted(_all_active)
+    _blocked = _blocked_gated_deps(_gate_order, req)
+    if _blocked:
+        return _permission_gate_response(_blocked, req.context_id)
     # Google Workspace service skills are registered by mcp.manager as
     # service-specific tool groups. Do not activate the complete 100+ tool
     # connection here: one Gmail/Drive request must not consume the entire
@@ -1707,7 +1879,7 @@ async def chat(req: ChatRequest):
     except Exception:
         pass
     active_tools = _filter_tools(_active_skill_no_gator, req.has_images, _all_active,
-                                  unapproved_deps=req.unapproved_deps, message=_msg_text)
+                                  unapproved_deps=_ungranted_gated_deps(req), message=_msg_text)
     print(f"[tokens] active_skill={req.active_skill} inferred={_inferred} -> {len(active_tools)} tools (of {len(shared.TOOLS)} total)", flush=True)
 
     # Inject skill prompts for auto-detected skills (pins + keywords) and
@@ -2068,6 +2240,8 @@ async def chat(req: ChatRequest):
             )
 
         _current_loop = _build_loop(_selected_active_tools, system, msgs, _required_names)
+        _loop_tools = _selected_active_tools
+        _loop_required = _required_names
         _current_system = system
         _current_msgs = msgs
         _assistant_text_parts: list[str] = []
@@ -2084,7 +2258,6 @@ async def chat(req: ChatRequest):
         try:
             while True:
                 _turn_text_parts: list[str] = []
-                _turn_reactive_skills: list[str] = []
                 _done_chunk = None
                 _held_stall = None
                 async for chunk in _current_loop:
@@ -2098,14 +2271,6 @@ async def chat(req: ChatRequest):
                             elif "token" in _m:
                                 _turn_text_parts.append(_m["token"])
                                 _assistant_text_parts.append(_m["token"])
-                            elif "reactive_skills" in _m:
-                                # Reactive skill activation: agent_loop detected ACTIVATES_ON
-                                # patterns in a tool result and emitted the triggered skill IDs.
-                                for _rsid in (_m["reactive_skills"] or []):
-                                    if _rsid not in _all_active and _rsid not in _turn_reactive_skills:
-                                        _turn_reactive_skills.append(_rsid)
-                                # Don't yield this internal event to the client
-                                continue
                         except Exception:
                             pass
                     if chunk.startswith("data: [DONE]"):
@@ -2123,11 +2288,17 @@ async def chat(req: ChatRequest):
                 if _retry_count < _MAX_AUTO_ACTIVATE_RETRIES and not use_three_agent:
                     _turn_text = "".join(_turn_text_parts)
                     _new_skills = _detect_requested_skills(_turn_text, _all_active)
-                    # Reactive activation: skills triggered by ACTIVATES_ON pattern matches
-                    # in tool results (detected by agent_loop, emitted as reactive_skills events)
-                    for _rsid in _turn_reactive_skills:
-                        if _rsid not in _new_skills:
-                            _new_skills.append(_rsid)
+
+                if not _new_skills and _retry_count < _MAX_AUTO_ACTIVATE_RETRIES and not use_three_agent:
+                    _already = _already_active_skill_requests("".join(_turn_text_parts), _all_active)
+                    if _already:
+                        _note = _already_active_note(_already, {t["name"] for t in _loop_tools})
+                        print(f"[skill-already-active] model asked for {_already}; telling it so and retrying", flush=True)
+                        _current_msgs = _with_follow_up(
+                            _current_msgs, "".join(_turn_text_parts).strip(), _note)
+                        _current_loop = _build_loop(_loop_tools, _current_system, _current_msgs, _loop_required)
+                        _retry_count += 1
+                        continue
 
                 if not _new_skills:
                     if _held_stall:
@@ -2142,7 +2313,7 @@ async def chat(req: ChatRequest):
                 _all_active.extend(_new_skills)
                 _auto_activated_skill_ids.update(_new_skills)
                 _new_tools = _filter_tools(_active_skill_no_gator, req.has_images, _all_active,
-                                           unapproved_deps=req.unapproved_deps, message=_msg_text)
+                                           unapproved_deps=_ungranted_gated_deps(req), message=_msg_text)
                 _mid_required = _required_tool_names(
                     _required_skill_ids, _auto_activated_skill_ids
                 )
@@ -2186,15 +2357,14 @@ async def chat(req: ChatRequest):
                         "Continue the user's original request using these new tools — do NOT ask them to activate anything."
                     )
                 )
-                _new_msgs = list(_current_msgs) + [
-                    {"role": "assistant", "content": _prior_turn or "[continuing]"},
-                    {"role": "user", "content": _system_follow_up},
-                ]
+                _new_msgs = _with_follow_up(_current_msgs, _prior_turn or "[continuing]", _system_follow_up)
                 for _s in _new_skills:
                     shared.notify_all({"type": "skill_auto_activated", "skill_id": _s})
                 yield f"data: {_json.dumps({'status': f'⚡ Activating {_labels}...'})}\n\n"
                 print(f"[skill-auto-activate] {_labels} added mid-stream, retrying with {len(_new_tools)} tools", flush=True)
                 _current_loop = _build_loop(_new_tools, _new_system, _new_msgs, _mid_required)
+                _loop_tools = _new_tools
+                _loop_required = _mid_required
                 _current_system = _new_system
                 _current_msgs = _new_msgs
                 _retry_count += 1

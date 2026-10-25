@@ -1,7 +1,7 @@
 """PowerPoint skill -- 4 tools."""
 
 from sandbox.paths import PROTECTED_MSG, is_secrets_path
-from skills._skill_utils import guard_path_args
+from skills._skill_utils import ensure_parent_dir, guard_path_args
 import os
 import contextlib
 import tempfile
@@ -885,6 +885,7 @@ def _tool_create_pptx(file_path: str, slides: list, author: str = "") -> dict:
                 width = Inches(image_def.get("width", 5))
                 slide.shapes.add_picture(image_def["path"], left, top, width=width)
 
+        ensure_parent_dir(file_path)
         prs.save(file_path)
         return {
             "ok": True,

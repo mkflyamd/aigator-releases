@@ -358,10 +358,12 @@ def _ledger_load() -> dict:
     per_run = data.get("per_run") if isinstance(data.get("per_run"), list) else []
     scratch = data.get("scratch") if isinstance(data.get("scratch"), dict) else {}
     born = data.get("runtime_born") if isinstance(data.get("runtime_born"), dict) else {}
+    packages = data.get("package_children") if isinstance(data.get("package_children"), dict) else {}
     if data.get("v") != _LEDGER_VERSION:
         # Grants recorded before creation times were kept cannot be told from stale ones: grant them again.
         runtime, born = {}, {}
-    return {"runtime": runtime, "per_run": per_run, "scratch": scratch, "runtime_born": born}
+    return {"runtime": runtime, "per_run": per_run, "scratch": scratch, "runtime_born": born,
+            "package_children": packages}
 
 
 def _ledger_save(data: dict) -> None:
@@ -425,6 +427,79 @@ def _ensure_runtime_grants(sid: str, paths: list[Path]) -> None:
         if changed:
             data["runtime"][sid] = sorted(done)
             data["runtime_born"][sid] = born
+            _ledger_save(data)
+
+
+def _package_snapshot(directory: Path) -> dict[str, int] | None:
+    """Name -> modified time of each entry directly inside directory (None when it cannot be listed)."""
+    snap: dict[str, int] = {}
+    try:
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                if entry.name == "__pycache__":
+                    continue
+                try:
+                    snap[entry.name] = entry.stat(follow_symlinks=False).st_mtime_ns
+                except OSError:
+                    continue
+    except OSError:
+        return None
+    return snap
+
+
+def _reinherit(path: Path) -> tuple[int, str]:
+    """Re-apply the parent's inheritable ACEs to path and everything under it, as inherited ACEs.
+
+    A file that was moved into place (pip unpacks a wheel in a temp folder and moves it) keeps the
+    temp folder's ACL, so it never receives the sandbox ACE the destination folder carries. Inherited
+    ACEs are removed with the parent's, so a later revoke of the runtime grant still cleans these up."""
+    return _icacls(path, "/inheritance:e", "/T", "/C", "/Q")
+
+
+def _site_package_dirs() -> list[Path]:
+    import site
+
+    dirs: list[str] = []
+    try:
+        dirs += site.getsitepackages()
+    except AttributeError:
+        pass
+    if site.ENABLE_USER_SITE:
+        dirs.append(site.getusersitepackages())
+    return [Path(d) for d in dict.fromkeys(dirs) if os.path.isdir(d)]
+
+
+def _ensure_package_inheritance(sid: str, directories, granted: list[str]) -> None:
+    """Make packages installed after the runtime grant readable by the sandbox.
+
+    The runtime grant is recorded once per folder, so a package installed later (by pip or by hand)
+    would never be seen. The first look at a folder re-applies inheritance to the whole folder; after
+    that, only entries that are new or changed since the last run."""
+    with _LEDGER_LOCK:
+        data = _ledger_load()
+        stored = data["package_children"].setdefault(sid, {})
+        changed = False
+        for directory in directories:
+            directory = Path(directory)
+            key = os.path.normcase(str(directory))
+            if not _covered_by(directory, granted):
+                continue
+            now = _package_snapshot(directory)
+            if now is None:
+                continue
+            before = stored.get(key)
+            if before is None:
+                targets = [directory]
+            else:
+                targets = [directory / name for name, mtime in now.items() if before.get(name) != mtime]
+            for target in targets:
+                rc, out = _reinherit(target)
+                if rc != 0:
+                    _log.warning("sandbox: could not refresh access under %s (icacls rc=%s)", target, rc)
+            if before != now:
+                stored[key] = now
+                changed = True
+        if changed:
             _ledger_save(data)
 
 
@@ -494,6 +569,7 @@ def revoke_runtime_grants() -> int:
                     _revoke(Path(path), sid)
                     count += 1
         data["runtime"] = {}
+        data["package_children"] = {}
         for sid, keys in data["scratch"].items():
             for key in keys:
                 path = key.rsplit("|", 1)[0]
@@ -712,7 +788,11 @@ def launch(req: SandboxRequest) -> SandboxResult:
             # Read access inside a persistently granted runtime directory already exists; granting and
             # then revoking it per run would remove the persistent ACE.
             granted = _ledger_load()["runtime"].get(sid, [])
-            per_run = [(p, perm) for p, perm in per_run if not (perm == "RX" and _covered_by(p, granted))]
+            try:
+                _ensure_package_inheritance(sid, _site_package_dirs(), granted)
+            except Exception as exc:  # a stale package ACL must not stop a run that may not need it
+                _log.warning("sandbox: could not refresh package access (%s)", type(exc).__name__)
+            per_run =[(p, perm) for p, perm in per_run if not (perm == "RX" and _covered_by(p, granted))]
             if req.scratch_path is not None and _ensure_scratch_grant(sid, Path(req.scratch_path)):
                 per_run = [(p, perm) for p, perm in per_run if not _covered_by(p, [str(req.scratch_path)])]
             _scrub_container(sid)

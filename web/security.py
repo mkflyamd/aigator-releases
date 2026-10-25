@@ -171,6 +171,7 @@ def build_csp(nonce: str, host: str) -> str:
         f"style-src 'self' 'unsafe-inline' {_CDN} https://fonts.googleapis.com",
         f"font-src 'self' data: {_CDN} https://fonts.gstatic.com",
         "img-src 'self' data: blob: https:",
+        "media-src 'self' blob:",
         f"connect-src 'self'{ws} {_CDN} http://localhost:8001",
         "worker-src 'self' blob:",
         "object-src 'none'",

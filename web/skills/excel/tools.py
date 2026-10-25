@@ -1,6 +1,6 @@
 """Excel skill -- 6 tools."""
 
-from skills._skill_utils import guard_path_args
+from skills._skill_utils import ensure_parent_dir, guard_path_args
 from pathlib import Path
 
 SCRIPTS_DIR = Path(__file__).parent / "scripts"
@@ -552,6 +552,7 @@ def _tool_create_excel(file_path: str, sheets: list, author: str = "") -> dict:
         if author:
             wb.properties.creator = author
 
+        ensure_parent_dir(file_path)
         wb.save(file_path)
 
         # Attempt formula recalculation if formulas present

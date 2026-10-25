@@ -76,13 +76,7 @@ POST /api/perf/reset
 POST /api/recorder/narration-approved
 POST /api/recorder/notify
 POST /api/recorder/open-widget
-POST /api/recorder/pause
-POST /api/recorder/pick-region
-POST /api/recorder/resume
-POST /api/recorder/select-screen
 POST /api/recorder/set-output
-POST /api/recorder/start
-POST /api/recorder/stop
 POST /api/recorder/tts-preview
 POST /api/scheduler/jobs/{job_id}/pause
 POST /api/scheduler/jobs/{job_id}/resume

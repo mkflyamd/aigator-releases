@@ -98,6 +98,8 @@ from routes.helper import router as helper_router
 from routes.debug_routes import router as debug_router
 from routes.widgets import router as widgets_router
 from routes.recorder import router as recorder_router
+from routes.demo_clips import router as demo_clips_router
+from routes.demo_projects import router as demo_projects_router
 import updater as _updater
 
 # ── Apply config to environment ──────────────────────────────────────────────
@@ -523,10 +525,10 @@ async def _execute_tool_impl(
                     "error": "missing_required_params",
                     "tool": name,
                     "missing": missing,
+                    "required": required,
                     "hint": (
-                        "Required arguments are missing — they were likely truncated "
-                        "because the payload exceeded the output budget. Reduce the "
-                        "payload size or split it into smaller chunked calls."
+                        f"Call {name} again with every required argument: {', '.join(required)}. "
+                        "If a large payload was cut off, split it into smaller calls."
                     ),
                 }
         invalid = validate_tool_inputs(name, model_inputs)
@@ -588,8 +590,10 @@ async def _execute_tool_impl(
             url_key = str(inputs.get("url") or inputs.get("start_url") or inputs.get("task", "")[:80])
             result = _apply_browser_empty_breaker(result, tool_name=name, url_key=url_key, context_id=context_id)
         from tool_result_truncation import truncate_tool_result, maybe_truncate_json_result
-        # read/update_onenote_page cap their own output
+        # read/update_onenote_page cap their own output. read_skill must hand the model the
+        # whole guide; spilling it to disk sends the model on a file_ops detour to re-read it.
         _NO_TRUNCATE_TOOLS = {
+            "read_skill",
             "jira_get_project_meta",
             "read_onenote_page",
             "update_onenote_page",
@@ -622,7 +626,9 @@ def _tool_toast(name: str, result: object) -> dict[str, str] | None:
         )
 
     if result.get("error"):
-        return {"level": "error", "message": str(result["error"])}
+        from tool_repair import rejection_summary_text
+        rejected = rejection_summary_text({**result, "tool": result.get("tool") or name})
+        return {"level": "error", "message": rejected or str(result["error"])}
 
     for key, default in (
         ("deleted", "Couldn't cancel the calendar event."),
@@ -913,6 +919,8 @@ app.include_router(helper_router)
 app.include_router(debug_router)
 app.include_router(widgets_router)
 app.include_router(recorder_router)
+app.include_router(demo_clips_router)
+app.include_router(demo_projects_router)
 app.include_router(code_agent_router, prefix="/api/code_agent")
 
 # ── Middleware ────────────────────────────────────────────────────────────────
