@@ -9,6 +9,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from config import load_config as _load_config
+from conversation_store import index_of_message
 import shared
 from security import verify_csrf
 from skill_pin import pin_context_block as _pin_context_block, resolve_pin as _resolve_pin
@@ -2044,7 +2045,8 @@ async def chat(req: ChatRequest):
         if req.history and not shared.conversation_store.has(context_id):
             await shared.conversation_store.seed(context_id, req.history)
         history_window = await shared.conversation_store.get_window(context_id, model)
-        msgs = history_window + [{"role": "user", "content": req.message}]
+        _turn_user_msg = {"role": "user", "content": req.message}
+        msgs = history_window + [_turn_user_msg]
         token_budget = int(cfg.get("token_budget_per_task", 0) or 0)
         use_three_agent = cfg.get("three_agent_mode", False)
         _in_tok, _out_tok = 0, 0
@@ -2237,6 +2239,7 @@ async def chat(req: ChatRequest):
                 task_id=task_id,
                 active_skills=_all_active,
                 required_tool_names=required_names,
+                turn_user_msg=_turn_user_msg,
             )
 
         _current_loop = _build_loop(_selected_active_tools, system, msgs, _required_names)
@@ -2391,7 +2394,7 @@ async def chat(req: ChatRequest):
             # that the agent loop appended before failing.
             try:
                 _final_msgs = _current_msgs
-                new_turns = _final_msgs[len(history_window):]
+                new_turns = _final_msgs[index_of_message(_final_msgs, _turn_user_msg, len(history_window)):]
                 if new_turns:
                     await shared.conversation_store.append(context_id, new_turns)
             except Exception:

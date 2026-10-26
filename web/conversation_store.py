@@ -119,7 +119,7 @@ class ConversationStore:
             self._last_model.pop(context_id, None)
 
     async def compact(
-        self, context_id: str, provider, model: str
+        self, context_id: str, provider, model: str, current_turn: list[dict] = ()
     ) -> tuple[list[dict], dict | None]:
         """LLM-summarize old turns to reduce context size.
 
@@ -129,6 +129,10 @@ class ConversationStore:
         was nothing to compact. Meta carries `turn_count` and `summary_text` so
         callers can surface a seam marker to the user instead of rewriting
         history silently.
+
+        `current_turn` is the in-flight part of this turn (the user message and
+        any tool rounds so far). It is not stored yet, so it is appended to the
+        returned window untouched, images included, and never written to the store.
         """
         async with self._lock:
             msgs = self._store.get(context_id, [])
@@ -146,10 +150,22 @@ class ConversationStore:
         meta = {"turn_count": len(old_turns), "summary_text": summary_text}
         return [summary_msg] + _truncate_large_assistant_messages(
             _strip_image_blocks(recent)
-        ), meta
+        ) + list(current_turn), meta
 
     def has(self, context_id: str) -> bool:
         return context_id in self._store
+
+
+def index_of_message(msgs: list[dict], target: dict | None, default: int) -> int:
+    """Position of `target` in `msgs` by identity, or `default` if it isn't there.
+
+    The current turn's user message is the anchor for where this turn starts:
+    unlike a length, it stays valid when compaction reshapes the list.
+    """
+    for i, m in enumerate(msgs):
+        if m is target:
+            return i
+    return default
 
 
 _HTML_DOC_RE = __import__("re").compile(
