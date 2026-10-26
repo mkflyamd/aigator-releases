@@ -580,8 +580,9 @@ _SHELL_APPROVAL_MSG = (
 _SHELL_HINT = (
     "[sandbox] This command can only use its working folder and has no network. If it really needs more, "
     "re-call run_shell with cwd, extra_read_paths, extra_write_paths or network_hosts; the user will be "
-    "asked to approve. git push, gh and ssh need credentials the sandbox does not have: ask the user to "
-    "run them, or use the GitHub tools."
+    "asked to approve. git push and ssh need credentials the sandbox does not have: ask the user to "
+    "run them. gh does not work here either: use the github_gh tool, which runs gh outside the sandbox "
+    "with the user's own login (or the other github_* tools)."
 )
 _WINDOWS_SHELL_HINT = (
     "On Windows the sandboxed shell is cmd.exe: dir and git cannot run in it; use the file tools to list "

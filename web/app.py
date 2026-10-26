@@ -129,9 +129,6 @@ if shared.cfg.get("llm_gateway_key_header"):
     os.environ["GATEWAY_KEY_HEADER"] = shared.cfg["llm_gateway_key_header"]
 if shared.cfg.get("llm_gateway_user_field"):
     os.environ["GATEWAY_USER_FIELD"] = shared.cfg["llm_gateway_user_field"]
-if shared.cfg.get("github_token"):
-    os.environ.setdefault("GITHUB_TOKEN", shared.cfg["github_token"])
-    os.environ.setdefault("GITHUB_BASE_URL", shared.cfg.get("github_base_url", ""))
 
 # Corporate proxies (Zscaler, etc.) intercept HTTPS with their own CA, which
 # is in the Windows system trust store but NOT in the bundled cert stores used

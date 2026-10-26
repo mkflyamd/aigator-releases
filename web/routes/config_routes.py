@@ -794,8 +794,6 @@ def save_github(req: GithubConfigRequest):
         username = me.get("login", "")
     except Exception as e:
         raise HTTPException(status_code=401, detail=f"GitHub auth failed: {e}")
-    os.environ["GITHUB_TOKEN"] = token
-    os.environ["GITHUB_BASE_URL"] = base_url
     cfg = _load_config()
     cfg["github_token"] = token
     cfg["github_base_url"] = base_url
@@ -852,8 +850,10 @@ def google_workspace_credentials_status():
 
 @router.get("/api/config/github/status")
 def github_status():
-    token = os.environ.get("GITHUB_TOKEN", "")
-    base_url = os.environ.get("GITHUB_BASE_URL", "")
+    from skills.github.credentials import get_base_url, get_token
+
+    token = get_token()
+    base_url = get_base_url()
     if not token:
         return {"configured": False}
     api_url = (
