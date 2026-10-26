@@ -57,7 +57,8 @@ def _content_chars(content) -> int:
     if isinstance(content, dict):
         if content.get("type") in _MEDIA_BLOCK_TYPES:
             return _MEDIA_BLOCK_TOKENS * _CHARS_PER_TOKEN
-        return _content_chars(content.get("content"))
+        rest = {k: v for k, v in content.items() if k != "content"}
+        return len(str(rest)) + _content_chars(content["content"])
     return sum(_content_chars(b) for b in content)
 
 
@@ -1603,8 +1604,11 @@ async def run_three_agent_loop(
     active_skills: list[str] | None = None,
     required_tool_names: set[str] | None = None,
     swarm_depth: int = 0,
+    turn_user_msg: dict | None = None,
 ) -> AsyncIterator[str]:
     """Planner -> Executor -> Verifier. Emits msg.agent on thinking events."""
+    if turn_user_msg is None and msgs:
+        turn_user_msg = msgs[-1]
     if swarm_depth > _MAX_SWARM_DEPTH:
         yield f"data: {json.dumps({'text': f'Swarm depth limit reached ({_MAX_SWARM_DEPTH}). Nested three-agent mode is not supported — switching to single-agent mode.'})}\n\n"
         async for chunk in _single_agent_loop(
@@ -1614,6 +1618,7 @@ async def run_three_agent_loop(
             _tool_toast=_tool_toast, _SLACK_SAFE_MSG=_SLACK_SAFE_MSG,
             context_id=context_id, task_id=task_id, active_skills=active_skills,
             required_tool_names=required_tool_names,
+            turn_user_msg=turn_user_msg,
         ):
             yield chunk
         return
@@ -1753,9 +1758,8 @@ async def run_three_agent_loop(
                                   _total_input + _total_output)
                         _ctx_limit = _model_context_window(model)
                         if context_id and _u.get("input_tokens", 0) > _ctx_limit * _COMPACT_THRESHOLD:
-                            import shared as _shared
                             yield f"data: {json.dumps({'status': '🗜️ Compacting conversation history...'})}\n\n"
-                            msgs, _compact_meta = await _shared.conversation_store.compact(context_id, provider, model)
+                            _compact_meta = await _compact_in_place(msgs, turn_user_msg, context_id, provider, model)
                             if _compact_meta:
                                 yield f"data: {json.dumps({'compaction': _compact_meta})}\n\n"
                 break

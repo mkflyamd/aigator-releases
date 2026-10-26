@@ -2229,6 +2229,7 @@ async def chat(req: ChatRequest):
                     active_skills=_all_active,
                     required_tool_names=required_names,
                     swarm_depth=swarm_depth,
+                    turn_user_msg=_turn_user_msg,
                 )
             return _single_agent_loop(
                 provider=provider, model=model, system=sys_text, msgs=message_list,

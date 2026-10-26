@@ -191,6 +191,73 @@ def test_in_flight_tool_messages_survive_a_post_call_compaction(monkeypatch):
     assert msgs[-1] == {"role": "assistant", "content": "ANSWER"}
 
 
+def test_text_blocks_next_to_an_image_still_count_toward_the_estimate():
+    text = "x" * 40_000
+    mixed = [{"role": "user", "content": [{"type": "text", "text": text}, _image_block(10)]}]
+    assert agent_loop._estimate_tokens(mixed) >= 10_000
+    nested = [{"role": "user", "content": [{
+        "type": "tool_result", "tool_use_id": "t1",
+        "content": [{"type": "text", "text": text}, _image_block(10)],
+    }]}]
+    assert agent_loop._estimate_tokens(nested) >= 10_000
+
+
+def test_large_text_beside_an_image_triggers_proactive_compaction(monkeypatch):
+    content = [{"type": "text", "text": "x" * 60_000}, _image_block(100)]
+    provider, _, chunks = _run(_history(n=10, size=5), content, 20_000, monkeypatch)
+    assert _compacted(chunks)
+    sent = provider.main_requests[0]
+    assert sent[-1]["role"] == "user"
+    assert sent[-1]["content"] == content
+
+
+def test_three_agent_post_call_compaction_keeps_the_current_turn(monkeypatch):
+    class _ThreeAgentProvider(_Provider):
+        def __init__(self):
+            super().__init__()
+            self.verifier_requests = []
+
+        async def stream_turn(self, model, system, msgs, tools):
+            if system == SUMMARIZER_SYSTEM:
+                async for e in super().stream_turn(model, system, msgs, tools):
+                    yield e
+                return
+            if system.endswith(agent_loop._PLANNER_SUFFIX):
+                yield {"type": "text_delta", "text": "PLAN"}
+                yield {"type": "done", "stop_reason": "end_turn", "tool_calls": [], "raw_content": "PLAN", "usage": {}}
+            elif system.endswith(agent_loop._EXECUTOR_SUFFIX):
+                yield {"type": "text_delta", "text": "DRAFT"}
+                yield {"type": "done", "stop_reason": "end_turn", "tool_calls": [], "raw_content": "DRAFT",
+                       "usage": {"input_tokens": 990}}
+            else:
+                self.verifier_requests.append([dict(m) for m in msgs])
+                yield {"type": "text_delta", "text": "FINAL"}
+                yield {"type": "done", "stop_reason": "end_turn", "tool_calls": [], "raw_content": "FINAL", "usage": {}}
+
+    provider = _ThreeAgentProvider()
+    store = ConversationStore()
+    monkeypatch.setattr(shared, "conversation_store", store)
+    monkeypatch.setattr(agent_loop, "_model_context_window", lambda model: 1000)
+
+    async def go():
+        await store.append("ctx", _history(n=10, size=5))
+        msgs = await store.get_window("ctx", "m") + [{"role": "user", "content": "do the thing"}]
+        chunks = []
+        async for c in agent_loop.run_three_agent_loop(
+            provider=provider, model="m", system="s", msgs=msgs, normalized_tools=[],
+            execute_tool=None, COM_BOUND_TOOLS=set(), TOOL_STATUS={},
+            _tool_toast=lambda *a, **k: None, _SLACK_SAFE_MSG="__safe__", context_id="ctx",
+        ):
+            chunks.append(c)
+        return msgs, chunks
+
+    msgs, chunks = asyncio.run(go())
+    assert _compacted(chunks)
+    assert "SUMMARY OF EARLIER TURNS" in msgs[0]["content"]
+    assert msgs[-1] == {"role": "user", "content": "do the thing"}
+    assert "Original: do the thing" in provider.verifier_requests[0][0]["content"]
+
+
 def test_turn_after_compaction_stays_in_the_callers_message_list(monkeypatch):
     _, msgs, chunks = _run(_history(), "next question", 1000, monkeypatch)
     assert _compacted(chunks)
