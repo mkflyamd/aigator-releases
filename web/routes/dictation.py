@@ -15,9 +15,14 @@ async def transcribe(request: Request):
     declared = request.headers.get("content-length")
     if declared and declared.isdigit() and int(declared) > service.MAX_PCM_BYTES:
         raise HTTPException(status_code=413, detail="audio too long")
-    pcm = await request.body()
-    if len(pcm) > service.MAX_PCM_BYTES:
-        raise HTTPException(status_code=413, detail="audio too long")
+    chunks = []
+    received = 0
+    async for chunk in request.stream():
+        received += len(chunk)
+        if received > service.MAX_PCM_BYTES:
+            raise HTTPException(status_code=413, detail="audio too long")
+        chunks.append(chunk)
+    pcm = b"".join(chunks)
     if len(pcm) % 2:
         raise HTTPException(status_code=400, detail="audio length must be even (PCM16)")
     if not pcm:
