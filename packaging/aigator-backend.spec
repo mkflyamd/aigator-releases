@@ -65,6 +65,13 @@ if sys.platform != "win32":
     hiddenimports += ["cryptography.hazmat.primitives.ciphers.aead"]
     if sys.platform.startswith("linux"):
         hiddenimports += ["secretstorage"] + collect_submodules("jeepney")
+# Skills are loaded with importlib from data files, so PyInstaller never sees
+# their imports. Add every web/ module a skill imports (demo_media was missing
+# from 1.0.10 and silently disabled the Demo Recorder tools).
+sys.path.insert(0, str(root / "packaging"))
+from skill_imports import skill_imported_web_modules
+
+hiddenimports += sorted(skill_imported_web_modules(web))
 hiddenimports += collect_submodules("web")
 hiddenimports += collect_submodules("uvicorn")
 
