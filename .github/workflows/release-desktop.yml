@@ -81,6 +81,9 @@ jobs:
         shell: bash
         run: test -f "dist/backend/${{ matrix.backend_name }}"
 
+      - name: Fetch dictation model
+        run: uv run python tools/fetch_dictation_model.py
+
       - name: Install Electron dependencies
         working-directory: shell
         run: npm ci --ignore-scripts
@@ -229,6 +232,37 @@ jobs:
           print("PTY smoke OK")
           PY
           "${matches[0]}" --run-python "$RUNNER_TEMP/test-pty-spawn.py"
+
+      # Dictation runs faster-whisper (CTranslate2 native libraries plus the Silero
+      # VAD data file) from the model shipped in the installer. None of that is
+      # visible to PyInstaller's graph, so load the bundled model inside the packaged
+      # interpreter and transcribe a second of silence.
+      - name: Smoke-test packaged dictation
+        shell: bash
+        run: |
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            name="aigator-backend.exe"
+          else
+            name="aigator-backend"
+          fi
+          matches=()
+          while IFS= read -r match; do
+            matches+=("$match")
+          done < <(find dist/installers -type f -name "$name")
+          test "${#matches[@]}" -eq 1
+          model_dirs=()
+          while IFS= read -r match; do
+            model_dirs+=("$match")
+          done < <(find dist/installers -type d -name faster-whisper-base.en)
+          test "${#model_dirs[@]}" -eq 1
+          cat > "$RUNNER_TEMP/test-dictation.py" <<'PY'
+          from dictation import service
+
+          assert service.resolve_model_dir(service.active_model_id({})) is not None
+          assert service.transcribe(bytes(32000), cfg={}) == ""
+          print("dictation smoke OK")
+          PY
+          AIGATOR_MODELS_DIR="$(dirname "${model_dirs[0]}")" "${matches[0]}" --run-python "$RUNNER_TEMP/test-dictation.py"
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

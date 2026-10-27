@@ -961,6 +961,9 @@ function startBackend() {
   const backendEnv = {
     ...process.env,
     PYTHONIOENCODING: 'utf-8',
+    AIGATOR_MODELS_DIR: app.isPackaged
+      ? path.join(process.resourcesPath, 'models', 'dictation')
+      : path.join(__dirname, '..', 'models', 'dictation'),
     ...(app.isPackaged ? { AIGATOR_MANAGED_LOGGING: '1' } : {}),
   };
   if (SHELL_KEY) backendEnv.AIGATOR_SHELL_KEY = SHELL_KEY;
