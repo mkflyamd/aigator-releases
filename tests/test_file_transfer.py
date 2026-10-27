@@ -136,10 +136,22 @@ def test_store_small_file_simple_upload_with_sha256():
 
 def test_store_existing_file_is_never_overwritten():
     gc = FakeGC(existing=["Documents"])
-    gc.files["Documents/m.vtt"] = b"original"
+    gc.files["Documents/m.vtt"] = b"old"
     out = ft.store(gc, ft.bytes_source("m.vtt", b"new"), "Documents")
     assert out["status"] == "exists"
-    assert gc.files["Documents/m.vtt"] == b"original"
+    assert gc.files["Documents/m.vtt"] == b"old"
+    assert not any(c[0] == "PUT_BINARY" for c in gc.calls)
+
+
+def test_store_existing_file_of_a_different_size_is_not_reported_as_saved():
+    gc = FakeGC(existing=["Documents"])
+    gc.files["Documents/m.vtt"] = b"partial"
+    out = ft.store(gc, ft.bytes_source("m.vtt", b"the whole file"), "Documents")
+    assert out["status"] == "error"
+    assert out["error"] == "existing_file_size_mismatch"
+    assert out["expected_size"] == len(b"the whole file")
+    assert out["reported_size"] == len(b"partial")
+    assert gc.files["Documents/m.vtt"] == b"partial"
     assert not any(c[0] == "PUT_BINARY" for c in gc.calls)
 
 
@@ -164,10 +176,10 @@ def test_store_race_409_reports_exists_without_overwrite():
         return orig_get(path, params, **kw)
 
     gc.get = racing_get
-    gc.files["Documents/m.vtt"] = b"other"
+    gc.files["Documents/m.vtt"] = b"old"
     out = ft.store(gc, ft.bytes_source("m.vtt", b"new"), "Documents")
     assert out["status"] == "exists"
-    assert gc.files["Documents/m.vtt"] == b"other"
+    assert gc.files["Documents/m.vtt"] == b"old"
 
 
 def test_store_size_mismatch_is_error():

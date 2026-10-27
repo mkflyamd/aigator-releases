@@ -94,8 +94,12 @@ assert(
   'doSend must send the pin',
 );
 assert(
-  (source.match(/\.\.\._sendPinFields/g) || []).length === 2,
-  'pin fields must be in both the resend payload and the post body',
+  (source.match(/\.\.\._sendPinFields/g) || []).length === 1,
+  'pin fields must be in the post body',
+);
+assert(
+  /_permissionResendPayload = _postBody;/.test(source),
+  'the approved retry must re-send the post body, pin fields included',
 );
 
 // The pin chip is drawn whenever the active tab changes or loads, not only in switchTab

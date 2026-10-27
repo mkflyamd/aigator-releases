@@ -5,6 +5,7 @@ import re
 import sys as _txsys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 _TX_SCRIPTS = Path(__file__).parent.parent / "m365-teams" / "scripts"
 _TX_ROOT_FOLDER = "Gator Meeting Transcripts"
@@ -40,7 +41,7 @@ _IDS = {
 MEETING_TOOL_DEFS = [
     {
         "name": "find_meeting_transcripts",
-        "description": "Find the recording and transcripts of a Teams calendar meeting from its calendar event id (from read_calendar). Returns the recordings of that meeting's chat, best match for the event first, each with its transcript ids, ready for get_meeting_transcript_* or save_meeting_transcript. An empty list means the meeting has no transcript (not a Teams meeting, no chat, or transcription was off); say so instead of guessing.",
+        "description": "Find the recording and transcripts of a Teams calendar meeting from its calendar event id (from read_calendar). Returns the recordings of that meeting's chat, best match for the event first, each with its transcript ids, ready for get_meeting_transcript_* or save_meeting_transcript. An empty list with a no_transcript status means the meeting has no transcript (not a Teams meeting, no chat, or transcription was off); say so instead of guessing. An error means the lookup failed: report the failure, never 'no transcript'.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -103,7 +104,22 @@ def _tx_local_iso(value) -> str:
     return dt.astimezone(_local_tz()).isoformat(timespec="seconds")
 
 
+_UTC_NAMES = {"", "utc", "gmt", "etc/utc", "coordinated universal time"}
+
+
+def _tx_zone(name: str):
+    """The zone a Graph calendar time is in; None when the name cannot be resolved."""
+    name = (name or "").strip()
+    if name.lower() in _UTC_NAMES:
+        return timezone.utc
+    try:
+        return ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError):
+        return None
+
+
 def _tx_parse_dt(value) -> datetime | None:
+    zone = value.get("timeZone", "") if isinstance(value, dict) else ""
     text = (
         (value or {}).get("dateTime", "") if isinstance(value, dict) else (value or "")
     )
@@ -115,7 +131,10 @@ def _tx_parse_dt(value) -> datetime | None:
         dt = datetime.fromisoformat(text)
     except ValueError:
         return None
-    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    if dt.tzinfo:
+        return dt
+    tz = _tx_zone(zone)
+    return dt.replace(tzinfo=tz) if tz else None
 
 
 def _tool_find_meeting_transcripts(event_id: str) -> dict:
@@ -123,7 +142,13 @@ def _tool_find_meeting_transcripts(event_id: str) -> dict:
 
     tx_rec = _tx_load("transcript_recording")
     tx_beta = _tx_load("transcript_beta")
-    ev = _graph().get(f"/me/events/{urllib.parse.quote(event_id, safe='')}") or {}
+    ev = (
+        _graph().get(
+            f"/me/events/{urllib.parse.quote(event_id, safe='')}",
+            extra_headers={"Prefer": 'outlook.timezone="UTC"'},
+        )
+        or {}
+    )
     start, end = _tx_parse_dt(ev.get("start")), _tx_parse_dt(ev.get("end"))
     out = {
         "event": {
@@ -139,6 +164,7 @@ def _tool_find_meeting_transcripts(event_id: str) -> dict:
         out["status"] = "no_transcript: not a Teams meeting"
         return out
     rows = []
+    lookup_errors = []
     for r in tx_rec.resolve_recordings_from_chat(chat_id):
         made = _tx_parse_dt(getattr(r, "created_at", ""))
         matches = bool(
@@ -149,7 +175,11 @@ def _tool_find_meeting_transcripts(event_id: str) -> dict:
         )
         distance = abs((made - end).total_seconds()) if made and end else float("inf")
         transcripts = []
-        if r.has_transcript and r.drive_id and r.item_id:
+        if r.has_transcript and not (r.drive_id and r.item_id):
+            lookup_errors.append(
+                f"could not open the recording '{r.title}' in OneDrive to list its transcripts"
+            )
+        elif r.has_transcript:
             try:
                 transcripts = [
                     {
@@ -159,8 +189,9 @@ def _tool_find_meeting_transcripts(event_id: str) -> dict:
                     }
                     for t in tx_beta.list_transcripts(r.drive_id, r.item_id)
                 ]
-            except Exception:
-                transcripts = []
+            except Exception as exc:
+                if getattr(exc, "status_code", 0) != 404:
+                    lookup_errors.append(str(exc)[:300])
         rows.append(
             (
                 not matches,
@@ -179,7 +210,16 @@ def _tool_find_meeting_transcripts(event_id: str) -> dict:
     rows.sort(key=lambda x: (x[0], x[1]))
     out["recordings"] = [r[2] for r in rows]
     if not any(r["transcripts"] for r in out["recordings"]):
-        out["status"] = "no_transcript: no transcript found for this meeting"
+        if lookup_errors:
+            out["error"] = "transcript_lookup_failed"
+            out["detail"] = lookup_errors[0]
+            out["hint"] = (
+                "The lookup failed, so this is not evidence the meeting has no transcript. "
+                "Tell the user what failed (sign in again, wait and retry, or check the network) "
+                "and do not say there is no transcript."
+            )
+        else:
+            out["status"] = "no_transcript: no transcript found for this meeting"
     return out
 
 

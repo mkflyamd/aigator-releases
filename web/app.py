@@ -376,6 +376,17 @@ def _background_has_nonbuiltin_skills(skills: list[str] | None) -> bool:
     )
 
 
+def _direct_intent_in_approved_skills(intent: dict, skills: list[str] | None, prompt: str) -> bool:
+    """A scheduled run may dispatch a direct intent only for a skill the job was approved with."""
+    from routes.chat import _infer_skills_from_message
+
+    approved = list(skills) if skills else _infer_skills_from_message(prompt)
+    allowed = set(shared._ALWAYS_ON_TOOLS)
+    for skill_id in approved:
+        allowed |= shared.SKILL_TOOLS_MAP.get(skill_id, set())
+    return intent.get("skill") in approved or intent.get("tool") in allowed
+
+
 def _tool_execution_outcome(result: object) -> tuple[str, str | None]:
     if not isinstance(result, dict) or not result.get("error"):
         return "success", None
@@ -686,7 +697,10 @@ async def lifespan(app):
     async def _bg_run_fn(prompt: str, skills: list[str] | None = None):
         import json as _json
         from agent_loop import _single_agent_loop
-        from routes.chat import _append_google_account_context, _infer_skills_from_message, _filter_tools
+        from routes.chat import (
+            _GATED_DEP_SKILLS, _append_google_account_context, _filter_tools, _gated_runner_id,
+            _infer_skills_from_message,
+        )
         from skill_router import match_intent, execute_direct
         from tool_pipeline import select_tools_with_budget
         provider = get_provider()
@@ -699,6 +713,8 @@ async def lifespan(app):
         # ── Skill Router: try direct dispatch first ──────────────
         _nonbuiltin_in_play = _background_has_nonbuiltin_skills(skills)
         intent = None if _nonbuiltin_in_play else match_intent(prompt)
+        if intent and not _direct_intent_in_approved_skills(intent, skills, prompt):
+            intent = None
         if intent:
             direct = await execute_direct(intent, execute_tool, user_message=prompt)
             if direct.get("ok"):
@@ -728,7 +744,13 @@ async def lifespan(app):
                 from routes.chat import _classify_skills_via_llm
                 inferred = _classify_skills_via_llm(prompt)
         # Always filter — never fall back to ALL tools
-        active_tools = [t for t in _filter_tools(None, False, inferred) if t.get("name") != "ask_user"]
+        # A runner (Python or shell) runs only if the schedule approval named it; nobody is here to approve one now.
+        _approved_runners = {_gated_runner_id(s) for s in (skills or [])}
+        active_tools = [
+            t for t in _filter_tools(
+                None, False, inferred, unapproved_deps=sorted(_GATED_DEP_SKILLS - _approved_runners)
+            ) if t.get("name") != "ask_user"
+        ]
         required_names = set(shared._ALWAYS_ON_TOOLS) - {"ask_user"}
         system += (
             "\n\nThis is an unattended scheduled run: nobody can answer questions. Never ask one. Use the values "

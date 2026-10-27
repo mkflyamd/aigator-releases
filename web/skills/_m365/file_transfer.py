@@ -105,6 +105,24 @@ def _existing(item: dict, drive_id: str) -> dict:
     }
 
 
+def _existing_result(found: dict, source: Source, drive_id: str, folder_info: dict) -> dict:
+    """The file is already there: report it as saved only when its size is the source's."""
+    if found.get("size") != source.size:
+        return _result(
+            "error",
+            error="existing_file_size_mismatch",
+            expected_size=source.size,
+            reported_size=found.get("size"),
+            hint=(
+                "A file with this name is already in the folder but its size differs from the source, "
+                "so it may be a partial upload. It was not overwritten. Do not report it as saved; "
+                "ask the user to delete or rename it, then save again."
+            ),
+            **_existing(found, drive_id),
+        )
+    return _result("exists", **_existing(found, drive_id), **folder_info)
+
+
 def _upload_small(gc, source, drive_id, folder_path, name):
     data = b"".join(source.open())
     if len(data) != source.size:
@@ -182,7 +200,7 @@ def store(
         if found:
             if on_conflict == "fail":
                 return _result("error", error="already_exists", **_existing(found, drive_id))
-            return _result("exists", **_existing(found, drive_id), **folder_info)
+            return _existing_result(found, source, drive_id, folder_info)
         try:
             if source.size <= SIMPLE_UPLOAD_MAX:
                 item, err, sha = _upload_small(gc, source, drive_id, folder_path, name)
@@ -191,7 +209,7 @@ def store(
         except Exception as e:
             if _status(e) == 409:
                 found = gc.get(_item_path(drive_id, folder_path, name))
-                return _result("exists", **_existing(found, drive_id), **folder_info)
+                return _existing_result(found, source, drive_id, folder_info)
             raise
     except Exception as e:
         return _result("error", error="transfer_failed", detail=str(e)[:300], name=name)

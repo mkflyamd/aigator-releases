@@ -13670,24 +13670,9 @@ form.addEventListener('submit', async (e) => {
     // Pane code kept for future headless/Gator's Browser mode.
     const _browserPoll = setInterval(() => {}, 99999); // no-op placeholder
 
-    // Save payload so the permission_required handler can re-POST without relying on
-    // the (already-cleared) input field.  Built here, before the fetch, so all the
-    // snapshot variables are still in scope.
-    let _permissionResendPayload = {
-      message: messagePayload,
-      history: _sanitizeHistory(history.slice(-10)),
-      has_images: hasImages,
-      image_names: imagesSnapshot.map((i) => i.name),
-      image_paths: imagesSnapshot.map((i) => i.savedPath).filter(Boolean),
-      jira_attachment_uploads: jiraAttachmentUploads,
-      active_skill: _activeSkillId || '',
-      active_skills: activeSkillsSnapshot,
-      active_channels: activeChannelsSnapshot,
-      active_people: activePeopleSnapshot,
-      context_id: requestContextId,
-      model: window._currentModel || '',
-      ..._sendPinFields,
-    };
+    // The exact body POSTed to /api/chat, kept so the permission_required handler can
+    // re-POST an identical request (widget skill and prompt suffix included).
+    let _permissionResendPayload = null;
     try {
       // Step 1: POST to get task_id (fast, returns immediately)
       const _wSkill = window._pendingWidgetSkill || null;
@@ -13717,6 +13702,7 @@ form.addEventListener('submit', async (e) => {
             ...(_wSuffix ? { system_prompt_suffix: _wSuffix } : {}),
             ..._sendPinFields,
           };
+      _permissionResendPayload = _postBody;
       const _postPromise = fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -14255,13 +14241,13 @@ form.addEventListener('submit', async (e) => {
         };
 
         es.onerror = () => {
-          // Reset streaming state unconditionally so the UI never freezes
-          _streamOver = true;
-          if (_activeTabId === requestTabId) _isStreaming = false;
-          // EventSource reconnects automatically with Last-Event-ID — only act on permanent close
+          // EventSource reconnects automatically with Last-Event-ID (readyState CONNECTING);
+          // the stream is only over once it has permanently closed.
           if (es.readyState === EventSource.CLOSED) {
             _userScrolledUp = false;
             _locallyFinishedTasks.add(task_id);
+            _streamOver = true;
+            if (_activeTabId === requestTabId) _isStreaming = false;
             _chatTaskIds.delete(_tabKey);
             _inflightRequests.delete(_tabKey);
             _setTabWorking(requestTabId, false);

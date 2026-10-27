@@ -361,8 +361,14 @@ async def approve_deps(body: ApproveDepsRequest):
     return {"approved": dep_ids}
 
 
+_RUNNER_REASONS = {
+    "code_runner": "Run Python code on your computer.",
+    "shell_runner": "Run shell commands on your computer.",
+}
+
+
 def _blocked_gated_deps(skill_ids: list[str], req) -> list[tuple[str, dict]]:
-    """(skill, dep) pairs where an active skill needs a gated dependency nobody approved."""
+    """(skill, dep) pairs where an active skill is, or needs, a gated runner nobody approved."""
     ungranted = set(_ungranted_gated_deps(req))
     blocked: list[tuple[str, dict]] = []
     seen: set[str] = set()
@@ -371,6 +377,11 @@ def _blocked_gated_deps(skill_ids: list[str], req) -> list[tuple[str, dict]]:
             if dep["id"] in ungranted and dep["id"] not in seen:
                 seen.add(dep["id"])
                 blocked.append((sid, dep))
+    for sid in skill_ids:
+        runner = _gated_runner_id(sid)
+        if runner in ungranted and runner not in seen:
+            seen.add(runner)
+            blocked.append((sid, {"id": runner, "reason": _RUNNER_REASONS.get(runner, "Run code on your computer.")}))
     return blocked
 
 
@@ -431,9 +442,12 @@ def _filter_tools(active_skill: str, has_images: bool, active_skills: list[str] 
     for sid in (active_skills or []):
         if _is_routable(sid):
             primary_ids.add(sid)
-    skill_ids = {sid for sid in primary_ids if sid in shared.SKILL_TOOLS_MAP}
-
     _unapproved = set(unapproved_deps or [])
+    # A runner chosen directly is gated like one pulled in as a dependency.
+    skill_ids = {
+        sid for sid in primary_ids
+        if sid in shared.SKILL_TOOLS_MAP and _gated_runner_id(sid) not in _unapproved
+    }
     # Auto-include approved dependency skills; skip gated deps that are still unapproved.
     for primary_sid in list(primary_ids):
         for dep in shared.SKILL_DEPENDENCIES_MAP.get(primary_sid, []):

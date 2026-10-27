@@ -598,12 +598,16 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
         skills = inputs.get("skills")
         if skills is not None and not isinstance(skills, list):
             return
-        from routes.chat import _installed_skill_ids_from_message, _is_gated_runner, _skill_requires
+        import shared as _shared
+        from routes.chat import (
+            _GATED_DEP_SKILLS, _installed_skill_ids_from_message, _is_gated_runner, _skill_requires,
+        )
         have = list(skills or [])
         _, _, left_out = _schedule_skill_view({**inputs, "skills": have})
         named = [sid for sid in _installed_skill_ids_from_message(str(inputs.get("prompt") or ""))
                  if sid not in have and _skill_known(sid) and not _is_gated_runner(sid)]
-        # A runner can run code or commands, so only the model's own request and the user's approval add one.
+        # A runner can run code or commands, so inference never adds one; the only runners a job gets are
+        # the model's own request and the ones a chosen skill requires, both shown on the card for approval.
         extra = [sid for sid, _ in left_out if not _is_gated_runner(sid)]
         # A skill the instructions name leads the list: it holds the steps the other skills' tools serve.
         chosen = list(dict.fromkeys([*named, *have, *extra]))
@@ -611,6 +615,11 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
             for sid in list(chosen):
                 chosen.extend(d for d in _skill_requires(sid)
                               if d not in chosen and _skill_known(d) and not _is_gated_runner(d))
+        required_runners = (
+            dep["id"] for sid in list(chosen) for dep in _shared.SKILL_DEPENDENCIES_MAP.get(sid, [])
+            if dep["id"] in _GATED_DEP_SKILLS
+        )
+        chosen.extend(r for r in dict.fromkeys(required_runners) if r not in chosen)
         if any(sid not in have for sid in chosen):
             inputs["skills"] = chosen
 
@@ -643,6 +652,20 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
                 lines.append(f"  - and {extra} more")
         else:
             lines.append("Skills this job can use: (none)")
+        from routes.chat import _gated_runner_id
+        runners = [sid for sid in chosen if _gated_runner_id(sid)]
+        if runners:
+            lines.append(
+                "Allowing this also lets the job run code or commands on your computer each time it runs, "
+                "because nobody is there to approve it later: "
+                + ", ".join(
+                    f"{sid} (needed by "
+                    + (", ".join(s for s in chosen if any(d["id"] == sid for d in _shared.SKILL_DEPENDENCIES_MAP.get(s, [])))
+                       or "your request")
+                    + ")"
+                    for sid in runners
+                )
+            )
         if left_out:
             lines.append(
                 "Mentioned in the instructions but NOT included: "
