@@ -11,6 +11,7 @@ import uuid
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "web"))
 
 import app  # noqa: E402,F401
+import data_sources  # noqa: E402
 import pytest  # noqa: E402
 import shared  # noqa: E402
 from routes import chat as chat_routes  # noqa: E402
@@ -41,6 +42,7 @@ def test_only_runners_whose_tools_ran_are_carried(runners):
 
 
 def _seed_run_python(ctx):
+    data_sources.allow(ctx, "capability:code_runner")
     msgs = [
         {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "run_python", "input": {}}]},
         {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]},
