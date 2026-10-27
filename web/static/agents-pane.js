@@ -1244,11 +1244,23 @@ function _openJobDetail(job) {
 /* ── Action handlers ─────────────────────────────────── */
 
 async function _apRunNow(jobId) {
+  const post = () => fetch('/api/scheduler/jobs/' + jobId + '/run-now', { method: 'POST' });
   try {
-    await fetch('/api/scheduler/jobs/' + jobId + '/run-now', { method: 'POST' });
+    let res = await post();
+    if (res.status === 403) {
+      // The CSRF token is per server process; a page loaded before a restart holds a stale one.
+      const fresh = await fetch('/api/csrf')
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null);
+      if (fresh?.csrf_token) window.__CSRF_TOKEN__ = fresh.csrf_token;
+      res = await post();
+    }
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    _showConnectivityToast('Task started. Its result appears under History.', 'success');
     _apRefresh();
   } catch (e) {
     console.warn('Run now failed:', e);
+    _showConnectivityToast('Could not start the task (' + e.message + ').', 'warn');
   }
 }
 

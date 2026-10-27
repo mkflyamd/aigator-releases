@@ -1,6 +1,6 @@
 ---
 name: onedrive
-description: 'Microsoft OneDrive — browse, search, read, upload files.'
+description: 'Microsoft OneDrive — browse, search, read, upload, save and copy files and folders'
 metadata:
   author: Mayuresh Kulkarni
   version: '1.0'

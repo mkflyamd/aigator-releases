@@ -194,6 +194,22 @@ def _parse_skill_description(path: Path) -> str:
     return ""
 
 
+def _parse_skill_classify(path: Path) -> bool:
+    """False when SKILL.md frontmatter sets `classify: false` (internal skill the
+    router must not offer the model as a choice); True otherwise."""
+    text = path.read_text(encoding="utf-8-sig")
+    if not text.startswith("---"):
+        return True
+    end = text.find("---", 3)
+    if end == -1:
+        return True
+    for line in text[3:end].splitlines():
+        stripped = line.strip().lower()
+        if stripped.startswith("classify:"):
+            return stripped.split(":", 1)[1].strip().strip("'\"") != "false"
+    return True
+
+
 def _parse_skill_output_format(path: Path) -> str:
     """Extract the `output:` field from SKILL.md YAML frontmatter.
 
@@ -312,6 +328,10 @@ SKILL_DESCRIPTIONS: dict[str, str] = {}
 # enforcement rule into the system prompt on every turn — stateless, immune
 # to context size, mirrors opencode's per-turn format injection pattern.
 SKILL_OUTPUT_FORMATS: dict[str, str] = {}
+# Built-in skills whose SKILL.md sets `classify: false` — internal helpers the
+# skill classifier menu leaves out. Every other built-in skill with tools is
+# offered, using its frontmatter description.
+SKILL_CLASSIFY_OPT_OUT: set[str] = set()
 _skills_root = _WEB_DIR / "skills"
 for _skill_dir in _skills_root.iterdir():
     if _skill_dir.name.startswith("_") or _skill_dir.name == "aigator":
@@ -328,6 +348,8 @@ for _skill_dir in _skills_root.iterdir():
         _desc = _parse_skill_description(_skill_md)
         if _desc:
             SKILL_DESCRIPTIONS[_skill_dir.name] = _desc
+        if not _parse_skill_classify(_skill_md):
+            SKILL_CLASSIFY_OPT_OUT.add(_skill_dir.name)
         _fmt = _parse_skill_output_format(_skill_md)
         if _fmt:
             SKILL_OUTPUT_FORMATS[_skill_dir.name] = _fmt

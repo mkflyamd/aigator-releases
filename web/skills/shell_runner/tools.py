@@ -780,7 +780,7 @@ def _run_sandboxed(cr, command, shell, cwd, timeout, background, requested, poli
     try:
         res = sandbox.launch_sandboxed(request)
     except sandbox.SandboxUnavailable as exc:
-        return _shell_error(cr._unavailable_message(str(exc)), shell_used, **tags)
+        return _shell_error(cr._launch_refusal_message(exc), shell_used, **tags)
     except sandbox.SandboxRunError:
         return _shell_error(cr._RUN_ERROR_MSG, shell_used, **tags)
     except OSError as exc:
@@ -974,7 +974,7 @@ def _tool_run_shell(
         return _shell_error(requested["error"], _DETECTED_SHELL)
     mode, reason = cr._sandbox_mode(load_config(), policy)
     if mode == "unavailable":
-        return _shell_error(cr._unavailable_message(reason), _DETECTED_SHELL)
+        return _shell_error(cr._unavailable_message(reason, in_settings=True), _DETECTED_SHELL)
     if mode == "off":
         return _run_unsandboxed(command, shell, cwd, timeout, background)
     return _run_sandboxed(cr, command, shell, cwd, timeout, background, requested, policy, _context_id)

@@ -44,3 +44,17 @@ test('stop is dispatched through one delegated listener, not a per-turn button l
   assert(source.includes('_activeStops.add(_onStop)'));
   assert(source.includes('_activeStops.delete(_onStop)'));
 });
+
+test('stop pressed while /api/chat is still pending releases the UI and cancels the late task', () => {
+  const post = source.indexOf("const _postPromise = fetch('/api/chat'");
+  assert(post > 0, 'POST is kept as a promise so stop can race it');
+  const after = source.slice(post, post + 1500);
+  assert(after.includes('Promise.race([_postPromise, _stoppedDuringPost])'));
+  assert(after.includes('/cancel'), 'a task that arrives after stop is cancelled');
+  assert(after.includes("name: 'AbortError'"), 'the normal stopped cleanup path runs');
+  const stop = source.slice(
+    source.indexOf('const _onStop = () => {'),
+    source.indexOf('_activeStops.add(_onStop)'),
+  );
+  assert(stop.includes('_abortCtrl._stopPost'), '_onStop releases the pending POST wait');
+});

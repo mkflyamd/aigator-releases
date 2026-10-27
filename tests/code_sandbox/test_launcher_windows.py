@@ -15,6 +15,15 @@ from sandbox import launcher_windows as lw
 FAKE = "aigator-fake-api-key"
 
 
+@pytest.fixture(autouse=True)
+def _no_real_acl_reads(request, monkeypatch):
+    """Unit tests never run icacls or open real files for WRITE_DAC; tests of the ACL logic patch these."""
+    if "windows_container" in request.fixturenames:
+        return
+    monkeypatch.setattr(lw, "_dacl_aces", lambda path: None)
+    monkeypatch.setattr(lw, "_can_change_acl", lambda path: True)
+
+
 # ── Pure helpers: every OS ───────────────────────────────────────────────────
 
 def test_ace_spec_uses_inheritance_only_for_directories():
@@ -454,6 +463,137 @@ def _probe(lw_mod, layout, read_paths=(), network=False):
     res = lw_mod.launch(req)
     assert res.returncode == 0, res.stderr
     return json.loads(res.stdout.strip().splitlines()[-1])
+
+
+# ── DACL-driven grant and revoke decisions: every OS ──────────────────────────
+
+# Real DACL of C:\Program Files\LibreOffice as written by `icacls /save` (one line of SDDL).
+PROGRAM_FILES_SDDL = (
+    "D:AI(A;ID;FA;;;S-1-5-80-1)(A;CIIOID;GA;;;S-1-5-80-1)(A;ID;FA;;;SY)(A;OICIIOID;GA;;;SY)"
+    "(A;ID;0x1200a9;;;BU)(A;OICIIOID;GXGR;;;BU)(A;ID;0x1200a9;;;AC)(A;OICIIOID;GXGR;;;AC)"
+    "(A;ID;0x1200a9;;;S-1-15-2-2)(A;OICIIOID;GXGR;;;S-1-15-2-2)"
+)
+SID = "S-1-15-2-9"
+
+
+def _aces(sddl):
+    return lambda path: lw._parse_sddl_aces(sddl)
+
+
+def test_sddl_parser_reads_types_flags_rights_and_trustee():
+    aces = lw._parse_sddl_aces(PROGRAM_FILES_SDDL)
+    assert ("A", frozenset({"ID"}), 0x1200A9, "AC") in aces
+    kind, flags, mask, trustee = aces[7]
+    assert (kind, trustee) == ("A", "AC") and flags == {"OI", "CI", "IO", "ID"} and mask & 0x80000000 and mask & 0x20000000
+
+
+def test_a_folder_with_the_all_application_packages_read_ace_needs_no_grant(tmp_path, monkeypatch):
+    monkeypatch.setattr(lw, "_dacl_aces", _aces(PROGRAM_FILES_SDDL))
+    assert lw._container_can_read(tmp_path) is True
+
+
+def test_read_access_is_not_assumed_when_the_ace_is_incomplete_denied_or_unreadable(tmp_path, monkeypatch):
+    only_self = "D:(A;;0x1200a9;;;AC)"
+    deny = PROGRAM_FILES_SDDL + "(D;;FR;;;AC)"
+    only_inherit_only = "D:(A;OICIIO;GXGR;;;AC)"
+    for sddl in (only_self, deny, only_inherit_only):
+        monkeypatch.setattr(lw, "_dacl_aces", _aces(sddl))
+        assert lw._container_can_read(tmp_path) is False, sddl
+    monkeypatch.setattr(lw, "_dacl_aces", lambda path: None)
+    assert lw._container_can_read(tmp_path) is False
+
+
+def test_a_single_file_only_needs_its_own_read_ace(tmp_path, monkeypatch):
+    f = tmp_path / "a.txt"
+    f.write_text("x")
+    monkeypatch.setattr(lw, "_dacl_aces", _aces("D:(A;;0x1200a9;;;AC)"))
+    assert lw._container_can_read(f) is True
+
+
+def test_revoke_treats_an_absent_ace_as_revoked_without_running_icacls(tmp_path, monkeypatch):
+    monkeypatch.setattr(lw, "_dacl_aces", _aces(PROGRAM_FILES_SDDL))
+    monkeypatch.setattr(lw, "_revoke", lambda path, sid: pytest.fail("nothing to revoke"))
+    assert lw._revoke_ok(SID, tmp_path) is True
+
+
+def test_revoke_ignores_inherited_aces_it_could_never_remove(tmp_path, monkeypatch):
+    monkeypatch.setattr(lw, "_dacl_aces", _aces(f"D:(A;ID;FA;;;{SID})"))
+    monkeypatch.setattr(lw, "_revoke", lambda path, sid: pytest.fail("inherited ACEs are not revoked"))
+    assert lw._revoke_ok(SID, tmp_path) is True
+
+
+def test_revoke_keeps_the_entry_only_while_the_ace_is_really_there(tmp_path, monkeypatch):
+    monkeypatch.setattr(lw, "_dacl_aces", _aces(f"D:(A;OICI;M;;;{SID})"))
+    monkeypatch.setattr(lw, "_revoke", lambda path, sid: (5, "denied"))
+    assert lw._revoke_ok(SID, tmp_path) is False
+
+
+def test_revoke_that_errors_but_leaves_no_ace_counts_as_done(tmp_path, monkeypatch):
+    states = iter([f"D:(A;OICI;M;;;{SID})", "D:(A;ID;FA;;;SY)"])
+    monkeypatch.setattr(lw, "_dacl_aces", lambda path: lw._parse_sddl_aces(next(states)))
+    monkeypatch.setattr(lw, "_revoke", lambda path, sid: (1, "partial"))
+    assert lw._revoke_ok(SID, tmp_path) is True
+
+
+def test_a_stale_entry_with_no_ace_behind_it_is_swept_and_the_sandbox_runs(fake, monkeypatch):
+    # The write-ahead ledger entry of a grant icacls refused (a folder the user does not own).
+    program_files = fake.tmp / "Program Files"
+    program_files.mkdir()
+    lw._ledger_add_per_run("S-1-15-2-9", program_files)
+    monkeypatch.setattr(lw, "_dacl_aces", _aces(PROGRAM_FILES_SDDL))
+    fake.revoke_rc = 5
+    lw.launch(fake.req())
+    assert lw._ledger_load()["per_run"] == []
+    assert fake.runs == 1
+
+
+def test_a_folder_every_appcontainer_can_read_is_not_granted_or_ledgered(fake, monkeypatch):
+    program_files = fake.tmp / "Program Files"
+    program_files.mkdir()
+    monkeypatch.setattr(lw, "_dacl_aces", lambda path: lw._parse_sddl_aces(PROGRAM_FILES_SDDL) if Path(path) == program_files else None)
+    lw.launch(fake.req(read=[program_files]))
+    assert str(program_files) not in [g[0] for g in fake.grants]
+    assert fake.revokes == [str(fake.run)]
+    assert fake.runs == 1 and lw._ledger_load()["per_run"] == []
+
+
+def test_a_folder_whose_acl_the_user_cannot_change_is_refused_before_any_ledger_write(fake, monkeypatch):
+    locked = fake.tmp / "locked"
+    locked.mkdir()
+    monkeypatch.setattr(lw, "_can_change_acl", lambda path: Path(path) != locked)
+    with pytest.raises(sandbox.SandboxPathNotGrantable) as info:
+        lw.launch(fake.req(read=[locked]))
+    assert str(locked) in str(info.value) and info.value.paths == [str(locked)]
+    assert isinstance(info.value, sandbox.SandboxUnavailable)
+    assert fake.grants == [] and fake.revokes == [] and fake.runs == 0
+    assert lw._ledger_load()["per_run"] == []
+
+
+def test_ungrantable_paths_lists_only_what_could_never_work(tmp_path, monkeypatch):
+    readable, locked, missing = tmp_path / "readable", tmp_path / "locked", tmp_path / "missing"
+    readable.mkdir()
+    locked.mkdir()
+    monkeypatch.setattr(lw, "_container_can_read", lambda path, sid=None: Path(path) == readable)
+    monkeypatch.setattr(lw, "_can_change_acl", lambda path: False)
+    assert lw.ungrantable_paths([readable, locked, missing], []) == [locked]
+    assert lw.ungrantable_paths([], [readable]) == [readable]  # a write path always needs a changeable ACL
+
+
+def test_the_paused_message_names_the_stuck_folder_and_a_way_forward(fake, monkeypatch):
+    stuck = fake.tmp / "stuck"
+    stuck.mkdir()
+    lw._ledger_add_per_run("S-1-15-2-9", stuck)
+    monkeypatch.setattr(lw, "_dacl_aces", _aces(f"D:(A;OICI;M;;;{SID})"))
+    fake.revoke_rc = 5
+    with pytest.raises(sandbox.SandboxUnavailable) as info:
+        lw.launch(fake.req())
+    assert str(stuck) in str(info.value) and "Restarting AI Gator" in str(info.value)
+    assert "Settings" not in str(info.value)
+
+
+def test_request_time_check_is_a_noop_off_windows(monkeypatch):
+    monkeypatch.setattr(sandbox.sys, "platform", "linux")
+    assert sandbox.ungrantable_paths([Path("/etc")], [Path("/tmp")]) == []
 
 
 @pytest.mark.real_sandbox

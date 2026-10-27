@@ -105,3 +105,25 @@ def test_search_cues_returns_context():
     assert len(hits) == 1
     assert hits[0]["match_index"] == 2
     assert len(hits[0]["context"]) >= 1
+
+
+def test_bounded_text_cuts_on_a_cue_boundary_and_says_where_to_resume():
+    from transcript_vtt import bounded_text
+
+    cues = [Cue(i * 60.0, i * 60.0 + 5, "Alice", "word " * 20) for i in range(10)]
+    whole = bounded_text(cues, 10**6)
+    assert whole["truncated"] is False and whole["text"].count("\n") == 9
+
+    part = bounded_text(cues, 300)
+    assert part["truncated"] is True
+    assert len(part["text"].encode("utf-8")) <= 300
+    assert part["cues_returned"] + part["cues_left"] == 10
+    assert part["next_start_min"] == float(part["cues_returned"])
+    assert part["text"].splitlines()[-1].startswith("[")
+
+
+def test_bounded_text_always_returns_one_cue_even_if_it_is_larger_than_the_limit():
+    from transcript_vtt import bounded_text
+
+    out = bounded_text([Cue(0, 5, "A", "x" * 500), Cue(60, 65, "A", "y")], 100)
+    assert out["cues_returned"] == 1 and out["next_start_min"] == 1.0

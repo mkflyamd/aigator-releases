@@ -1,6 +1,7 @@
 ﻿---
 name: m365-onenote
 description: 'Browse, create and edit notebooks, sections, and pages in Microsoft OneNote via the Graph API.'
+classify: false
 metadata:
   author: AI Gator
   version: '1.0'

@@ -1,6 +1,6 @@
 ---
 name: teams
-description: 'Microsoft Teams — read chats, send messages, browse channels.'
+description: 'Microsoft Teams — read/send chats, channels, DMs; find, read and save meeting transcripts'
 metadata:
   author: Mayuresh Kulkarni
   version: '1.0'
@@ -57,3 +57,8 @@ session has expired — sign in again via Settings → Apps → Microsoft 365."
 Do NOT instruct the user to open DevTools, copy Bearer tokens, or paste
 anything manually. The in-pane overlay (Electron) auto-prompts recapture for
 the narrow `Chat.ReadWrite` token when needed; everything else uses the M365 sign-in.
+
+## Meeting Transcripts
+
+- To get a meeting's transcript from a calendar event, call `find_meeting_transcripts(event_id)` (event ids come from `read_calendar`). Use the recording with `matches_event=true`, then read it with `get_meeting_transcript_*`. If `recordings` is empty or `status` starts with `no_transcript`, tell the user that meeting has no transcript; never write a recap from the title alone.
+- To keep a transcript as a record, call `save_meeting_transcript` with the ids from `find_meeting_transcripts`. It stores the original `.vtt`, unchanged, in the user's own OneDrive (`Documents/Gator Meeting Transcripts/<year>-W<week>/`) and never overwrites. Report it as saved only when `status` is `saved` or `exists`, and give the `web_url`, `size`, `sha256` and the `transcripts_folder_web_url` link to the folder holding all saved transcripts. Do not share the file.

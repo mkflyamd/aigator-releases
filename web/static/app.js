@@ -681,6 +681,17 @@ const SKILL_REGISTRY = [
     connected: true,
     actions: [],
   },
+  {
+    id: 'skill_manager',
+    label: 'Skill Manager',
+    icon: '<span style="font-size:1.1em">🛠️</span>',
+    chipAlias: 'skill_manager',
+    category: 'Productivity',
+    chipClass: 'chip-skill',
+    railHidden: true,
+    connected: true,
+    actions: [],
+  },
 ];
 
 // ── Google Workspace service skills ────────────────────────────────────
@@ -9921,6 +9932,105 @@ function _flushSandboxFollowUp(tabId) {
   _sendSandboxFollowUp(tabId, text).catch((e) => console.warn('[sandbox] follow-up not sent:', e));
 }
 
+// ── ask_user card ────────────────────────────────────────────────────────────
+// The card carries the question itself, so it stays next to the options however far up the chat the
+// model's reply sits. It offers one-click options plus a free-text box so the user is never stuck. Text
+// comes from the model: textContent only. An answer is sent as the next ordinary chat message.
+function _showAskUserCard(data, ownerTabId) {
+  const askId = data && typeof data.ask_id === 'string' ? data.ask_id : '';
+  if (!askId) return;
+  const tabId = ownerTabId || _activeTabId || 'default';
+  if (tabId !== _activeTabId) {
+    _tabsWithUpdates.add(tabId);
+    document.querySelector?.(`.tab-item[data-tab-id="${tabId}"]`)?.classList.add('tab-has-update');
+    _showConnectivityToast('AI Gator has a question for you in another tab.', 'info');
+    return;
+  }
+  document.querySelectorAll('.ask-user-card').forEach((el) => el.remove());
+  const options = Array.isArray(data.options) ? data.options : [];
+  const card = document.createElement('div');
+  card.className = 'message assistant ask-user-card';
+  card.dataset.askId = askId;
+  const bubble = document.createElement('div');
+  bubble.className = 'bubble card-bubble';
+  const box = document.createElement('div');
+  box.className = 'gator-compose-card gator-draft-card';
+  const header = document.createElement('div');
+  header.className = 'gcc-header';
+  const title = document.createElement('div');
+  title.className = 'gcc-title';
+  const question = typeof data.question === 'string' ? data.question : '';
+  title.textContent =
+    question || (options.length ? 'Pick one, or tell AI Gator what you want' : 'Reply to AI Gator');
+  header.appendChild(title);
+  const body = document.createElement('div');
+  body.className = 'gcc-body ask-user-body';
+  if (question && options.length) {
+    const hint = document.createElement('div');
+    hint.className = 'ask-user-hint';
+    hint.textContent = 'Pick one, or tell AI Gator what you want';
+    body.appendChild(hint);
+  }
+
+  const answer = (text) => {
+    const reply = String(text || '').trim();
+    if (!reply) return;
+    card.remove();
+    _sendSandboxFollowUp(tabId, reply).catch((e) => console.warn('[ask_user] answer not sent:', e));
+  };
+
+  options.forEach((opt) => {
+    if (!opt || typeof opt.label !== 'string' || !opt.label) return;
+    const btn = document.createElement('button');
+    btn.className = 'btn-secondary ask-user-option';
+    const label = document.createElement('span');
+    label.className = 'ask-user-option-label';
+    label.textContent = opt.label;
+    btn.appendChild(label);
+    if (typeof opt.description === 'string' && opt.description) {
+      const desc = document.createElement('span');
+      desc.className = 'ask-user-option-desc';
+      desc.textContent = opt.description;
+      btn.appendChild(desc);
+    }
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      answer(opt.label);
+    });
+    body.appendChild(btn);
+  });
+
+  const row = document.createElement('div');
+  row.className = 'ask-user-chat';
+  const field = document.createElement('input');
+  field.type = 'text';
+  field.className = 'ask-user-input';
+  field.maxLength = 2000;
+  field.placeholder = 'Chat about this…';
+  field.setAttribute('aria-label', 'Reply to AI Gator');
+  const send = document.createElement('button');
+  send.className = 'gcc-approve-btn';
+  send.textContent = 'Send';
+  send.addEventListener('click', (e) => {
+    e.stopPropagation();
+    answer(field.value);
+  });
+  field.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.isComposing) {
+      e.preventDefault();
+      answer(field.value);
+    }
+  });
+  row.append(field, send);
+  body.appendChild(row);
+
+  box.append(header, body);
+  bubble.appendChild(box);
+  card.appendChild(bubble);
+  document.getElementById('messages')?.appendChild(card);
+  card.scrollIntoView({ behavior: 'smooth', block: 'end' });
+}
+
 function _showSandboxApproval(data, ownerTabId) {
   const requestId = data && typeof data.request_id === 'string' ? data.request_id : '';
   if (!requestId) return;
@@ -11547,34 +11657,40 @@ function applyInline(html) {
   // Images: stash the generated <img> so later passes (Jira keys, bare URLs) can't
   // rewrite its attributes. Non-allowlisted URLs fall back to a plain link.
   const imgStash = [];
-  html = html.replace(/!\[(.*?)\]\(((?:https?:\/\/|\/)[^\)"]*)\)/g, (_, alt, href) => {
-    if (!_isInlineImageUrl(href)) return `[${alt}](${href})`;
-    // Remote links are short-lived; the server fetches once, caches, and serves the image.
-    const remote = !href.startsWith('/');
-    const src = remote
-      ? '/api/inline-image?url=' + encodeURIComponent(href.replace(/&amp;/g, '&'))
-      : href;
-    const origAttr = remote ? ` data-orig-src="${href}"` : '';
-    const btn = (action, label, tip) =>
-      `<button type="button" class="chat-img-action" title="${tip}"${gatorActionAttrs(action, [{ $el: true }])}>${label}</button>`;
-    imgStash.push(
-      `<span class="chat-inline-img-wrap is-loading">` +
-        `<img class="chat-inline-img" src="${src}"${origAttr} alt="${alt.replace(/"/g, '&quot;')}" referrerpolicy="no-referrer">` +
-        `<span class="chat-inline-img-actions">` +
-        btn('gatorImageDownload', 'Download', 'Download this image') +
-        btn('gatorImageSave', 'Save as…', 'Choose where to save this image') +
-        `</span></span>`,
-    );
-    return `\x00I${imgStash.length - 1}\x00`;
-  });
+  html = html.replace(
+    /!\[(.*?)\]\(((?:https?:\/\/|\/)(?:[^()"]|\([^()"]*\))*)\)/g,
+    (_, alt, href) => {
+      if (!_isInlineImageUrl(href)) return `[${alt}](${href})`;
+      // Remote links are short-lived; the server fetches once, caches, and serves the image.
+      const remote = !href.startsWith('/');
+      const src = remote
+        ? '/api/inline-image?url=' + encodeURIComponent(href.replace(/&amp;/g, '&'))
+        : href;
+      const origAttr = remote ? ` data-orig-src="${href}"` : '';
+      const btn = (action, label, tip) =>
+        `<button type="button" class="chat-img-action" title="${tip}"${gatorActionAttrs(action, [{ $el: true }])}>${label}</button>`;
+      imgStash.push(
+        `<span class="chat-inline-img-wrap is-loading">` +
+          `<img class="chat-inline-img" src="${src}"${origAttr} alt="${alt.replace(/"/g, '&quot;')}" referrerpolicy="no-referrer">` +
+          `<span class="chat-inline-img-actions">` +
+          btn('gatorImageDownload', 'Download', 'Download this image') +
+          btn('gatorImageSave', 'Save as…', 'Choose where to save this image') +
+          `</span></span>`,
+      );
+      return `\x00I${imgStash.length - 1}\x00`;
+    },
+  );
 
   // Markdown links first — so the URL inside [text](url) is consumed before
   // the bare-URL pass runs (prevents double-wrapping).
   // Handles: https://, http://, root-relative (/api/...), mailto:, #fragment
-  html = html.replace(/\[(.*?)\]\(((?:https?:\/\/|mailto:|\/|#)[^\)"]*)\)/g, (_, text, href) => {
-    const isExternal = /^https?:\/\//.test(href);
-    return `<a href="${href}"${isExternal ? ' target="_blank" rel="noopener"' : ''}>${text}</a>`;
-  });
+  html = html.replace(
+    /\[(.*?)\]\(((?:https?:\/\/|mailto:|\/|#)(?:[^()"]|\([^()"]*\))*)\)/g,
+    (_, text, href) => {
+      const isExternal = /^https?:\/\//.test(href);
+      return `<a href="${href}"${isExternal ? ' target="_blank" rel="noopener"' : ''}>${text}</a>`;
+    },
+  );
   // Bare https:// URLs not already inside an HTML attribute
   html = html.replace(
     /(?<![="'>])(https?:\/\/[^\s<>"')\]]+)/g,
@@ -12873,6 +12989,7 @@ form.addEventListener('submit', async (e) => {
   const hasImages = imagesSnapshot.length > 0 && imagesSnapshot.every((i) => i.base64);
 
   if (!_canSubmitMessage(finalText, hasFileChips, hasImages)) return;
+  document.querySelectorAll('.ask-user-card').forEach((el) => el.remove());
 
   // A user can press Enter immediately after choosing a file. Wait briefly
   // for the already-started, bounded attachment staging work so the request
@@ -13152,6 +13269,12 @@ form.addEventListener('submit', async (e) => {
   let _continueRetryNote = '';
   let _abortCtrl = new AbortController();
   _isStreaming = true;
+  // `_isStreaming` is shared by every tab, so another tab finishing flips it off. This turn's
+  // dots and render mode must depend only on this turn: it is live until it ends or its task is dropped.
+  let _streamOver = false;
+  let _streamTaskId = null;
+  const _streamLive = () =>
+    !_streamOver && (_streamTaskId === null || _chatTaskIds.get(requestTabId) === _streamTaskId);
   let _lastTokenAt = Date.now();
   let _widgetFenceStartTime = 0;
   let _userCollapsedThinking = false;
@@ -13164,7 +13287,8 @@ form.addEventListener('submit', async (e) => {
     if (_activeTabId !== requestTabId) return;
     _userStopped = true;
     _pendingSandboxFollowUps.delete(requestTabId);
-    _isStreaming = false; // stops the typing-dots interval (see line ~6089) so the animation halts
+    _isStreaming = false;
+    _streamOver = true; // stops the typing-dots interval so the animation halts
     if (_abortCtrl._es) {
       _abortCtrl._es.close();
       _abortCtrl._es = null;
@@ -13178,6 +13302,11 @@ form.addEventListener('submit', async (e) => {
       _inflightRequests.delete(_stopTabKey);
     }
     fetch('/api/browser/cancel', { method: 'POST' }).catch(() => {});
+    if (_abortCtrl._stopPost) {
+      const release = _abortCtrl._stopPost;
+      _abortCtrl._stopPost = null;
+      release();
+    }
     // EventSource.close() does NOT fire onerror, so the awaiting promise would hang
     // and _resetBtn() would never run — manually resolve so cleanup proceeds and the
     // button returns to send (green) mode.
@@ -13239,6 +13368,8 @@ form.addEventListener('submit', async (e) => {
     autoSkills = [];
     toolCallCards = [];
     _isStreaming = true;
+    _streamOver = false;
+    _streamTaskId = null;
     msgDiv.classList.add('typing');
     setStatus('busy');
     prose.innerHTML = '';
@@ -13295,7 +13426,7 @@ form.addEventListener('submit', async (e) => {
           // Open the outer thinking-block while streaming (unless user
           // manually collapsed it). _userCollapsedThinking is set by the
           // toggle handler installed after each re-render (see below).
-          const _thinkingOpen = _isStreaming && !_userCollapsedThinking ? ' open' : '';
+          const _thinkingOpen = _streamLive() && !_userCollapsedThinking ? ' open' : '';
           html +=
             '<details class="thinking-block"' +
             _thinkingOpen +
@@ -13306,7 +13437,7 @@ form.addEventListener('submit', async (e) => {
             '</details>';
         }
       } else if (thinkingText) {
-        const _thinkingOpen = _isStreaming && !_userCollapsedThinking ? ' open' : '';
+        const _thinkingOpen = _streamLive() && !_userCollapsedThinking ? ' open' : '';
         html +=
           '<details class="thinking-block"' +
           _thinkingOpen +
@@ -13350,7 +13481,7 @@ form.addEventListener('submit', async (e) => {
         }
         html += '</div>';
       }
-      if (_isStreaming && _activeToolNames.size > 0) {
+      if (_streamLive() && _activeToolNames.size > 0) {
         const toolChips = [..._activeToolNames]
           .map((name) => {
             const skill = SKILL_REGISTRY.find((s) => s.id === name);
@@ -13394,11 +13525,11 @@ form.addEventListener('submit', async (e) => {
 
         // Case 3: detect bare HTML doc (no fence) during streaming.
         const _trimmedFull = _fullNorm.trimStart();
-        const _isBareHtmlDoc = _isStreaming && /^<!doctype\s+html/i.test(_trimmedFull);
+        const _isBareHtmlDoc = _streamLive() && /^<!doctype\s+html/i.test(_trimmedFull);
 
         let _renderFullSrc = _fullNorm;
 
-        if (_isStreaming) {
+        if (_streamLive()) {
           if (_isBareHtmlDoc) {
             // Entire content is an in-progress bare HTML doc — replace with skeleton
             _hasSkeleton = true;
@@ -13448,7 +13579,7 @@ form.addEventListener('submit', async (e) => {
           // renderMarkdown escapes HTML — inject skeleton AFTER it runs.
           // Pass _renderFullSrc (normalized) when not streaming so renderMarkdown
           // also benefits from the bare-lang-tag normalization.
-          _rendered = renderMarkdown(_isStreaming ? _renderFull : _renderFullSrc);
+          _rendered = renderMarkdown(_streamLive() ? _renderFull : _renderFullSrc);
           if (_hasSkeleton) {
             _rendered = _rendered.split(_SKEL_TOKEN).join(_skelHtml);
           }
@@ -13473,7 +13604,7 @@ form.addEventListener('submit', async (e) => {
       if (now - _lastRenderTime > 50) {
         _lastRenderTime = now;
         prose.innerHTML = _renderProse();
-        if (_isStreaming && !_dotsPlaceholder.parentElement) prose.appendChild(_dotsPlaceholder);
+        if (_streamLive() && !_dotsPlaceholder.parentElement) prose.appendChild(_dotsPlaceholder);
         return;
       }
       if (_pendingRender) return;
@@ -13483,7 +13614,7 @@ form.addEventListener('submit', async (e) => {
         if (_permissionCardShown) return;
         _lastRenderTime = performance.now();
         prose.innerHTML = _renderProse();
-        if (_isStreaming && !_dotsPlaceholder.parentElement) prose.appendChild(_dotsPlaceholder);
+        if (_streamLive() && !_dotsPlaceholder.parentElement) prose.appendChild(_dotsPlaceholder);
       });
     };
 
@@ -13520,7 +13651,7 @@ form.addEventListener('submit', async (e) => {
     // Toggles visibility only — never adds/removes from DOM, so scrollHeight
     // stays constant and there's no scroll flicker.
     const _dotsInterval = setInterval(() => {
-      if (!_isStreaming) {
+      if (!_streamLive()) {
         clearInterval(_dotsInterval);
         _dotsPlaceholder.remove();
         return;
@@ -13539,24 +13670,9 @@ form.addEventListener('submit', async (e) => {
     // Pane code kept for future headless/Gator's Browser mode.
     const _browserPoll = setInterval(() => {}, 99999); // no-op placeholder
 
-    // Save payload so the permission_required handler can re-POST without relying on
-    // the (already-cleared) input field.  Built here, before the fetch, so all the
-    // snapshot variables are still in scope.
-    let _permissionResendPayload = {
-      message: messagePayload,
-      history: _sanitizeHistory(history.slice(-10)),
-      has_images: hasImages,
-      image_names: imagesSnapshot.map((i) => i.name),
-      image_paths: imagesSnapshot.map((i) => i.savedPath).filter(Boolean),
-      jira_attachment_uploads: jiraAttachmentUploads,
-      active_skill: _activeSkillId || '',
-      active_skills: activeSkillsSnapshot,
-      active_channels: activeChannelsSnapshot,
-      active_people: activePeopleSnapshot,
-      context_id: requestContextId,
-      model: window._currentModel || '',
-      ..._sendPinFields,
-    };
+    // The exact body POSTed to /api/chat, kept so the permission_required handler can
+    // re-POST an identical request (widget skill and prompt suffix included).
+    let _permissionResendPayload = null;
     try {
       // Step 1: POST to get task_id (fast, returns immediately)
       const _wSkill = window._pendingWidgetSkill || null;
@@ -13586,11 +13702,29 @@ form.addEventListener('submit', async (e) => {
             ...(_wSuffix ? { system_prompt_suffix: _wSuffix } : {}),
             ..._sendPinFields,
           };
-      const postRes = await fetch('/api/chat', {
+      _permissionResendPayload = _postBody;
+      const _postPromise = fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(_postBody),
       });
+      // Stop pressed while the POST is still pending must not wait for the server: release the
+      // UI now and cancel the task if the POST ever returns one.
+      const _stoppedDuringPost = new Promise((release) => {
+        _abortCtrl._stopPost = () => release(null);
+      });
+      const postRes = await Promise.race([_postPromise, _stoppedDuringPost]);
+      if (!postRes) {
+        _postPromise
+          .then((r) => (r.ok ? r.json() : null))
+          .then((j) => {
+            if (!j?.task_id) return;
+            fetch(`/api/chat/${j.task_id}/cancel`, { method: 'POST' }).catch(() => {});
+            _locallyFinishedTasks.add(j.task_id);
+          })
+          .catch(() => {});
+        throw Object.assign(new Error('stopped before the task started'), { name: 'AbortError' });
+      }
 
       if (!postRes.ok) {
         let detail = '';
@@ -13607,6 +13741,7 @@ form.addEventListener('submit', async (e) => {
         prose.textContent = '';
         prose.insertAdjacentHTML('afterbegin', errHtml);
         prose.querySelector('.retry-btn')?.addEventListener('click', doSend);
+        _streamOver = true;
         if (_activeTabId === requestTabId) _isStreaming = false;
         msgDiv.classList.remove('typing');
         if (_activeTabId === requestTabId) {
@@ -13630,6 +13765,7 @@ form.addEventListener('submit', async (e) => {
       // switches tabs before the POST resolves.
       const _tabKey = requestTabId;
       _chatTaskIds.set(_tabKey, task_id);
+      _streamTaskId = task_id;
       _setTabWorking(requestTabId, true);
 
       // Register msgDiv so switchTab() can re-attach it if the user switches away
@@ -13672,6 +13808,7 @@ form.addEventListener('submit', async (e) => {
                 'AI Gator could not verify response-stream integrity. The displayed answer may be incomplete.';
             }
             _sawDone = true;
+            _streamOver = true;
             if (_activeTabId === requestTabId) _isStreaming = false;
             es.close();
             _locallyFinishedTasks.add(task_id);
@@ -13861,6 +13998,8 @@ form.addEventListener('submit', async (e) => {
               _showJiraTargetSelection(msg.jira_target_selection, requestTabId);
             } else if (msg.sandbox_approval) {
               _showSandboxApproval(msg.sandbox_approval, requestTabId);
+            } else if (msg.ask_user) {
+              _showAskUserCard(msg.ask_user, requestTabId);
             } else if (msg.files && Array.isArray(msg.files) && msg.files.length) {
               if (!fileChipsDiv) {
                 fileChipsDiv = document.createElement('div');
@@ -14102,12 +14241,13 @@ form.addEventListener('submit', async (e) => {
         };
 
         es.onerror = () => {
-          // Reset streaming state unconditionally so the UI never freezes
-          if (_activeTabId === requestTabId) _isStreaming = false;
-          // EventSource reconnects automatically with Last-Event-ID — only act on permanent close
+          // EventSource reconnects automatically with Last-Event-ID (readyState CONNECTING);
+          // the stream is only over once it has permanently closed.
           if (es.readyState === EventSource.CLOSED) {
             _userScrolledUp = false;
             _locallyFinishedTasks.add(task_id);
+            _streamOver = true;
+            if (_activeTabId === requestTabId) _isStreaming = false;
             _chatTaskIds.delete(_tabKey);
             _inflightRequests.delete(_tabKey);
             _setTabWorking(requestTabId, false);
@@ -14306,6 +14446,7 @@ form.addEventListener('submit', async (e) => {
       _pinScrollToBottom(messages);
     // Refresh usage bar after each response
     _refreshUsageBar();
+    _streamOver = true;
     clearInterval(_browserPoll);
     clearInterval(_dotsInterval);
     _dotsPlaceholder.remove();
@@ -16374,7 +16515,65 @@ function _expireConfirmCardById(confirm_id) {
   );
 }
 
-function _showBrowserConfirmCard(msgDiv, { confirm_id, action, title, allow_label, deny_label }) {
+// Mermaid is loaded the first time a card has a diagram, so it costs nothing at startup. The diagram text is
+// built by the server from cleaned data; strict mode keeps the library from running scripts or links.
+function _loadMermaid() {
+  if (window.__gatorMermaid) return window.__gatorMermaid;
+  window.__gatorMermaid = new Promise((resolve, reject) => {
+    if (window.mermaid) return resolve(window.mermaid);
+    const el = document.createElement('script');
+    el.src = '/static/vendor/mermaid/mermaid.min.js';
+    el.onload = () => {
+      try {
+        window.mermaid.initialize({
+          startOnLoad: false,
+          securityLevel: 'strict',
+          theme: 'base',
+          themeVariables: {
+            fontFamily: getComputedStyle(document.body).fontFamily,
+            fontSize: '13px',
+          },
+          flowchart: {
+            curve: 'basis',
+            htmlLabels: true,
+            nodeSpacing: 18,
+            rankSpacing: 44,
+            padding: 10,
+          },
+        });
+        resolve(window.mermaid);
+      } catch (e) {
+        reject(e);
+      }
+    };
+    el.onerror = () => reject(new Error('mermaid failed to load'));
+    document.head.appendChild(el);
+  }).catch((e) => {
+    window.__gatorMermaid = null;
+    throw e;
+  });
+  return window.__gatorMermaid;
+}
+
+async function _renderConfirmDiagram(box, diagram) {
+  try {
+    const mermaid = await _loadMermaid();
+    const { svg } = await mermaid.render(
+      'confirm-diagram-' + (window.__gatorDiagramSeq = (window.__gatorDiagramSeq || 0) + 1),
+      diagram,
+    );
+    box.innerHTML = svg;
+    box.style.display = 'block';
+  } catch (e) {
+    console.warn('Confirm card diagram not shown:', e);
+    box.remove();
+  }
+}
+
+function _showBrowserConfirmCard(
+  msgDiv,
+  { confirm_id, action, title, allow_label, deny_label, diagram },
+) {
   const text = _confirmCardText({ title, allow_label, deny_label });
   // Source cards keep their own id so two pending cards (two sources) do not replace each other.
   if (!text.isSource) {
@@ -16418,10 +16617,18 @@ function _showBrowserConfirmCard(msgDiv, { confirm_id, action, title, allow_labe
   titleEl.dataset.confirmTitle = '1';
 
   const detail = document.createElement('div');
-  detail.style.cssText = 'font-size: 0.78rem; color: var(--text-muted); word-break: break-word;';
+  detail.style.cssText =
+    'font-size: 0.78rem; color: var(--text-muted); word-break: break-word; white-space: pre-line;';
   detail.textContent = action;
 
   textWrap.append(titleEl, detail);
+  if (diagram) {
+    const diagramBox = document.createElement('div');
+    diagramBox.dataset.confirmDiagram = '1';
+    diagramBox.className = 'confirm-diagram';
+    textWrap.append(diagramBox);
+    _renderConfirmDiagram(diagramBox, diagram);
+  }
 
   const btnWrap = document.createElement('div');
   btnWrap.style.cssText =

@@ -33,6 +33,7 @@ from helpers import get_graph_client  # type: ignore
 
 
 _RECORDING_MSGTYPE = "RichText/Media_CallRecording"
+_MAX_SCAN_PAGES = 10
 _SHARE_HREF_RE = re.compile(
     r'<a\s+href="(https://[^"]*sharepoint\.com[^"]+)"', re.IGNORECASE
 )
@@ -85,10 +86,12 @@ def _parse_recording_message(content: str) -> tuple[str, str, str, bool] | None:
 
 
 def _scan_chat_for_recordings(
-    chat_id: str, limit: int = 50
+    chat_id: str, limit: int = 50, max_pages: int = _MAX_SCAN_PAGES
 ) -> list[tuple[str, str, str, bool, str]]:
     """Read the chat via Skype FOCI and return all recording attachments, newest first.
 
+    Follows the chat's backward links up to `max_pages` pages, so an active recurring
+    meeting chat does not hide its older recordings behind the newest messages.
     Each tuple is (share_url, title, original_name, has_transcript, composetime).
     """
     rc = _load_skype()
@@ -98,8 +101,13 @@ def _scan_chat_for_recordings(
         f"{messaging_service}/users/ME/conversations/{encoded}/messages"
         f"?pageSize={limit}&view=msnp24Equivalent|supportsMessageProperties"
     )
-    data = rc._get(url, skype_token)
-    msgs = data.get("messages", []) or []
+    msgs: list[dict] = []
+    for _ in range(max_pages):
+        data = rc._get(url, skype_token)
+        msgs.extend(data.get("messages", []) or [])
+        url = (data.get("_metadata") or {}).get("backwardLink", "")
+        if not url:
+            break
     msgs.sort(key=lambda m: m.get("composetime", ""), reverse=True)
     out: list[tuple[str, str, str, bool, str]] = []
     for m in msgs:
@@ -171,17 +179,15 @@ def resolve_recordings_from_chat(chat_id: str) -> list[RecordingInfo]:
     return out
 
 
-_MEETING_THREAD_RE = re.compile(r"(19[%:]meeting_[^/?@]+(?:[%@]thread\.v2))")
+_MEETING_THREAD_RE = re.compile(r"(19:meeting_[^/?@]+@thread\.v2)")
 
 
 def chat_id_from_join_url(join_url: str) -> str | None:
     """Extract the meeting chat id (19:meeting_...@thread.v2) from a Teams join URL."""
     if not join_url:
         return None
-    m = _MEETING_THREAD_RE.search(join_url)
-    if not m:
-        return None
-    return urllib.parse.unquote(m.group(1))
+    m = _MEETING_THREAD_RE.search(urllib.parse.unquote(join_url))
+    return m.group(1) if m else None
 
 
 def resolve_recording_from_event(event_id: str) -> RecordingInfo | None:

@@ -107,7 +107,7 @@ def test_unrelated_message_does_not_match_plugin_skill(monkeypatch):
 
 def test_builtin_skills_not_double_listed(monkeypatch):
     """A built-in must not be pulled into the installed catalog by the new
-    plugin-cache pass (built-ins are routed via _CLASSIFY_SKILL_IDS)."""
+    plugin-cache pass (built-ins are routed via _classify_skill_ids)."""
     _inject_plugin_skill(monkeypatch)
     cat = chat._installed_skill_catalog()
     for bid in shared._BUILTIN_SKILL_IDS:

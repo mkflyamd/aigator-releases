@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from urllib.parse import quote
 
 _M365 = Path(__file__).resolve().parents[2] / "_m365"
 if str(_M365) not in sys.path:
@@ -23,11 +24,16 @@ from helpers import get_graph_client  # type: ignore
 _BETA = "https://graph.microsoft.com/beta"
 
 
+def _item_path(drive_id: str, item_id: str) -> str:
+    """Drive-item path with every opaque id encoded, so an id can never add path segments or a query."""
+    return f"/drives/{quote(drive_id, safe='')}/items/{quote(item_id, safe='')}"
+
+
 def list_transcripts(drive_id: str, item_id: str) -> list[dict]:
     """Return raw transcript metadata for a recording (newest first if dated)."""
     gc = get_graph_client()
     data = gc.get(
-        f"/drives/{drive_id}/items/{item_id}/media/transcripts",
+        f"{_item_path(drive_id, item_id)}/media/transcripts",
         base_url=_BETA,
     )
     items = data.get("value", []) if isinstance(data, dict) else []
@@ -39,7 +45,20 @@ def fetch_transcript_content(drive_id: str, item_id: str, transcript_id: str) ->
     """Fetch raw WebVTT for a transcript via the beta drive-item endpoint."""
     gc = get_graph_client()
     return gc.get_text(
-        f"/drives/{drive_id}/items/{item_id}/media/transcripts/{transcript_id}/content",
+        f"{_item_path(drive_id, item_id)}/media/transcripts/{quote(transcript_id, safe='')}/content",
         extra_headers={"Accept": "text/vtt"},
         base_url=_BETA,
     )
+
+
+def fetch_transcript_bytes(drive_id: str, item_id: str, transcript_id: str) -> bytes:
+    """Fetch the transcript exactly as Graph returns it, with no decoding."""
+    gc = get_graph_client()
+    url = f"{_BETA}{_item_path(drive_id, item_id)}/media/transcripts/{quote(transcript_id, safe='')}/content"
+    resp = gc._request(
+        "GET",
+        url,
+        headers={**gc._headers(), "Accept": "text/vtt"},
+        label="transcript-bytes",
+    )
+    return resp.content

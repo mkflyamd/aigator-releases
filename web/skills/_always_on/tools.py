@@ -134,7 +134,7 @@ TOOL_DEFS = [
     },
     {
         "name": "schedule_task",
-        "description": "Create a recurring or one-shot scheduled task. Use when the user asks for something to run at a specific time or on a recurring basis (e.g. 'every Monday at 9am', 'every 30 minutes', 'at 5pm today'). Parse the user's natural language schedule into the structured parameters below.\n\nIMPORTANT — resolve skills BEFORE scheduling: a scheduled task runs unattended later, so it must already know which tools it needs. Determine the skills the prompt requires (email, calendar, teams, slack, jira, etc.). If the request is vague about its data sources — e.g. 'give me a brief', 'daily digest', 'catch me up', 'summarize my day' — do NOT guess or pass an empty skills list. First ASK the user which sources to include (e.g. 'Should the daily brief cover your email, calendar, and Teams?'), then schedule with the confirmed skills. Only skip asking when the needed skills are unambiguous from the request.",
+        "description": "Create a recurring or one-shot scheduled task. Use when the user asks for something to run at a specific time or on a recurring basis (e.g. 'every Monday at 9am', 'every 30 minutes', 'at 5pm today'). Parse the user's natural language schedule into the structured parameters below.\n\nIMPORTANT — resolve skills BEFORE scheduling: a scheduled task runs unattended later, so it must already know which tools it needs. Determine the skills the prompt requires (email, calendar, teams, slack, jira, etc.). If the request is vague about its data sources — e.g. 'give me a brief', 'daily digest', 'catch me up', 'summarize my day' — do NOT guess or pass an empty skills list. First ASK the user which sources to include (e.g. 'Should the daily brief cover your email, calendar, and Teams?'), then schedule with the confirmed skills. Only skip asking when the needed skills are unambiguous from the request.\n\nAlso settle any other open choice (which notebook, folder, account, recipient) with the user via ask_user before scheduling, and write the chosen values into the prompt: the run is unattended and cannot ask.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -245,6 +245,40 @@ TOOL_DEFS = [
             "required": ["skill", "reason"],
         },
     },
+    {
+        "name": "ask_user",
+        "description": (
+            "Stop and ask the user one question when you cannot continue without their answer: the request "
+            "has two or more reasonable readings, a choice only they can make (which notebook, folder, "
+            "account, recipient, scope), or a missing detail you cannot find with your tools. The turn ends "
+            "when you call this; the user's answer arrives as their next message, so do not call other "
+            "tools after it and do not write anything else. Give 2-4 concrete options the user can click "
+            "(put your recommended one first and say why in its description); they can also type a "
+            "different answer. Do not use it for things you can look up, for choices where a sensible "
+            "default exists (use the default and say so), or to ask permission for something already "
+            "requested. It is not available in scheduled or background runs."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "question": {"type": "string", "description": "One short, specific question, written so the user knows exactly what you need."},
+                "options": {
+                    "type": "array",
+                    "maxItems": 4,
+                    "description": "2-4 choices. Recommended option first.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "label": {"type": "string", "description": "Short choice text, sent back as the user's answer."},
+                            "description": {"type": "string", "description": "One line on what this choice means or does."},
+                        },
+                        "required": ["label"],
+                    },
+                },
+            },
+            "required": ["question"],
+        },
+    },
 ]
 
 TOOL_STATUS = {
@@ -258,6 +292,7 @@ TOOL_STATUS = {
     "connect_mcp_server": "\U0001f517 Connecting MCP server...",
     "mcp_connection_status": "\U0001f50c Checking connection status...",
     "request_skill": "\U0001f9e9 Requesting a skill...",
+    "ask_user": "\u2753 Asking you a question...",
 }
 
 
@@ -1174,6 +1209,11 @@ def _tool_request_skill(skill: str = "", reason: str = "") -> dict:
     return {"error": "request_skill can only be used in a chat turn with a user present."}
 
 
+def _tool_ask_user(question: str = "", options: list | None = None) -> dict:
+    """The question card is shown by the agent loop; reaching here means no chat turn."""
+    return {"error": "ask_user can only be used in a chat turn with a user present."}
+
+
 TOOL_HANDLERS = {
     "describe_images": _tool_describe_images,
     "fetch_webpage": _tool_fetch_webpage,
@@ -1185,4 +1225,5 @@ TOOL_HANDLERS = {
     "connect_mcp_server": _tool_connect_mcp_server,
     "mcp_connection_status": _tool_mcp_connection_status,
     "request_skill": _tool_request_skill,
+    "ask_user": _tool_ask_user,
 }

@@ -1,6 +1,6 @@
 ---
 name: excel
-description: 'Microsoft Excel — read, write, create, and recalculate spreadsheets.'
+description: 'Microsoft Excel — read, write, create, and recalculate spreadsheets and workbooks (.xlsx)'
 metadata:
   author: Mayuresh Kulkarni
   version: '2.0'

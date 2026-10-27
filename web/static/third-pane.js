@@ -506,12 +506,19 @@ const _shellDrag = {
   },
 };
 
+// Until /api/config has answered a mode is null. In the shell the default is
+// native, so a click right after a cold start must not fall back to classic.
+function _nativeUnlessClassic(mode) {
+  if (mode !== null) return mode === 'native';
+  return typeof window.gatorShell !== 'undefined' && !!window.gatorShell.isShell;
+}
+
 // ── Native Outlook mode (outlook_pane_mode === 'native') ─────────────────
 // Cached from /api/config. Only when running inside the shell AND enabled does
 // openThirdPane('email') tile the native OWA pane instead of the classic UI.
 let _outlookMode = null; // null=unknown | 'classic' | 'native'
 function _outlookNativeEnabled() {
-  return _outlookMode === 'native';
+  return _nativeUnlessClassic(_outlookMode);
 }
 (function _initOutlookMode() {
   fetch('/api/config')
@@ -540,7 +547,7 @@ function _outlookNativeEnabled() {
 // Graph-API file browser.
 let _onedriveMode = null; // null=unknown | 'classic' | 'native'
 function _onedriveNativeEnabled() {
-  return _onedriveMode === 'native';
+  return _nativeUnlessClassic(_onedriveMode);
 }
 (function _initOnedriveMode() {
   fetch('/api/config')
@@ -569,7 +576,7 @@ function _onedriveNativeEnabled() {
 // notebook browser.
 let _onenoteMode = null; // null=unknown | 'classic' | 'native'
 function _onenoteNativeEnabled() {
-  return _onenoteMode === 'native';
+  return _nativeUnlessClassic(_onenoteMode);
 }
 (function _initOnenoteMode() {
   fetch('/api/config')
@@ -595,7 +602,7 @@ function _onenoteNativeEnabled() {
 // ── Native Confluence mode (confluence_pane_mode === 'native') ──────────
 let _confluenceMode = null;
 function _confluenceNativeEnabled() {
-  return _confluenceMode === 'native';
+  return _nativeUnlessClassic(_confluenceMode);
 }
 (function _initConfluenceMode() {
   fetch('/api/config')
@@ -621,7 +628,7 @@ function _confluenceNativeEnabled() {
 // ── Native Jira mode (jira_pane_mode === 'native') ──────────────────────
 let _jiraMode = null;
 function _jiraNativeEnabled() {
-  return _jiraMode === 'native';
+  return _nativeUnlessClassic(_jiraMode);
 }
 (function _initJiraMode() {
   fetch('/api/config')
@@ -647,7 +654,7 @@ function _jiraNativeEnabled() {
 // ── Native GitHub mode (github_pane_mode === 'native') ──────────────────
 let _githubMode = null;
 function _githubNativeEnabled() {
-  return _githubMode === 'native';
+  return _nativeUnlessClassic(_githubMode);
 }
 (function _initGithubMode() {
   fetch('/api/config')

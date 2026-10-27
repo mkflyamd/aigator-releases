@@ -6,6 +6,12 @@ import re
 import html
 
 from hooks.executor import fire_all_skill_hooks
+from .transcripts import (
+    MEETING_TOOL_DEFS,
+    MEETING_TOOL_HANDLERS,
+    MEETING_TOOL_STATUS,
+    _tx_load,
+)
 
 SKILL_ID = "teams"
 ALWAYS_ON = False
@@ -26,27 +32,6 @@ DIRECT_INTENTS = [
 ]
 
 TEAMS_SKILLS_DIR = Path(__file__).parent.parent / "m365-teams" / "scripts"
-
-# ── Transcript module loader (dynamic, sys.modules-registered for dataclass support) ──
-import importlib.util as _txi
-import sys as _txsys
-
-_TX_SCRIPTS = Path(__file__).parent.parent / "m365-teams" / "scripts"
-
-
-def _tx_load(name: str):
-    mod = _txsys.modules.get(f"_tx_{name}")
-    if mod is not None:
-        return mod
-    spec = _txi.spec_from_file_location(f"_tx_{name}", str(_TX_SCRIPTS / f"{name}.py"))
-    mod = _txi.module_from_spec(spec)
-    # Register before exec so dataclasses resolve cls.__module__ correctly (Py 3.12+)
-    _txsys.modules[f"_tx_{name}"] = mod
-    # Also put scripts dir on sys.path so transcript_cache's `from transcript_config import ...` resolves
-    if str(_TX_SCRIPTS) not in _txsys.path:
-        _txsys.path.insert(0, str(_TX_SCRIPTS))
-    spec.loader.exec_module(mod)
-    return mod
 
 
 TOOL_DEFS = [
@@ -210,7 +195,7 @@ TOOL_DEFS.extend(
     [
         {
             "name": "get_meeting_transcript_full",
-            "description": "Fetch the full speaker-attributed transcript for a meeting recording. Use ONLY when the pinned context indicates the transcript is under the size threshold.",
+            "description": "Fetch the speaker-attributed transcript for a meeting recording, up to about 24 KB per call. If the result has truncated=true, continue with get_meeting_transcript_range starting at next_start_min until truncated is false; never read the saved spill file.",
             "input_schema": {
                 "type": "object",
                 "properties": _TX_INPUTS,
@@ -228,7 +213,7 @@ TOOL_DEFS.extend(
         },
         {
             "name": "get_meeting_transcript_range",
-            "description": "Get the transcript slice between start_min and end_min. Use for whole-meeting reads in chunks.",
+            "description": "Get the transcript slice between start_min and end_min (up to about 24 KB per call). If truncated=true, call again from next_start_min. Use for whole-meeting reads in chunks.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -909,7 +894,7 @@ def _tool_transcript_full(drive_id: str, item_id: str, transcript_id: str) -> di
     vtt = _tx_get_or_cache_vtt(drive_id, item_id, transcript_id)
     cues = tx_vtt.parse_vtt(vtt)
     return {
-        "text": tx_vtt.cues_to_text(cues),
+        **tx_vtt.bounded_text(cues, tx_cfg.MAX_READ_BYTES),
         "size_tokens_estimate": tx_cfg.estimate_tokens_from_vtt_bytes(
             len(vtt.encode("utf-8"))
         ),
@@ -932,6 +917,7 @@ def _tool_transcript_range(
     drive_id: str, item_id: str, transcript_id: str, start_min: float, end_min: float
 ) -> dict:
     tx_vtt = _tx_load("transcript_vtt")
+    tx_cfg = _tx_load("transcript_config")
     vtt = _tx_get_or_cache_vtt(drive_id, item_id, transcript_id)
     cues = tx_vtt.parse_vtt(vtt)
     sliced = tx_vtt.slice_range(cues, start_min * 60.0, end_min * 60.0)
@@ -939,7 +925,7 @@ def _tool_transcript_range(
         "start_min": start_min,
         "end_min": end_min,
         "count": len(sliced),
-        "text": tx_vtt.cues_to_text(sliced),
+        **tx_vtt.bounded_text(sliced, tx_cfg.MAX_READ_BYTES),
     }
 
 
@@ -958,15 +944,19 @@ def _tool_transcript_speaker(
     drive_id: str, item_id: str, transcript_id: str, speaker_name: str
 ) -> dict:
     tx_vtt = _tx_load("transcript_vtt")
+    tx_cfg = _tx_load("transcript_config")
     vtt = _tx_get_or_cache_vtt(drive_id, item_id, transcript_id)
     cues = tx_vtt.parse_vtt(vtt)
     filt = tx_vtt.filter_speaker(cues, speaker_name)
     return {
         "speaker": speaker_name,
         "count": len(filt),
-        "text": tx_vtt.cues_to_text(filt),
+        **tx_vtt.bounded_text(filt, tx_cfg.MAX_READ_BYTES),
     }
 
+
+TOOL_DEFS.extend(MEETING_TOOL_DEFS)
+TOOL_STATUS.update(MEETING_TOOL_STATUS)
 
 TOOL_HANDLERS = {
     "read_channel_messages": _tool_read_channel_messages,
@@ -985,3 +975,5 @@ TOOL_HANDLERS.update(
         "get_meeting_transcript_speaker": _tool_transcript_speaker,
     }
 )
+
+TOOL_HANDLERS.update(MEETING_TOOL_HANDLERS)

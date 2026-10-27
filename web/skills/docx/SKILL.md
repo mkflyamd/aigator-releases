@@ -1,6 +1,6 @@
 ---
 name: docx
-description: 'Create, read, and edit Word documents (.docx) via Gator Chat tools.'
+description: 'Create, read, edit, or fill out Word documents (.docx) — includes filling forms, charts, templates, or tables in a Word file'
 metadata:
   author: Mayuresh Kulkarni
   version: '1.0'

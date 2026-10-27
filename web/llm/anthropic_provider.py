@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 LLM_GATEWAY = LLM_GATEWAY_URL  # re-export for config_routes compatibility
 _TIMEOUT = 120.0  # seconds
+_SIMPLE_TIMEOUT = float(os.environ.get("LLM_SIMPLE_TIMEOUT", "15"))
 
 # Max idle seconds before declaring the LLM stream stalled. The SDK's own
 # read timeout resets on each received chunk, so a gateway that sends one
@@ -720,7 +721,9 @@ class AnthropicProvider(LLMProvider):
         self, prompt: str, model: str | None = None, max_tokens: int = 200
     ) -> str:
         from llm.registry import get_active_model
-        response = self._client.messages.create(
+        # Short helper calls (classifiers, fixers) must never wait out the 120s streaming timeout or retry.
+        client = self._client.with_options(timeout=_SIMPLE_TIMEOUT, max_retries=0)
+        response = client.messages.create(
             model=model or get_active_model() or "Claude-Haiku-4.5",
             max_tokens=max_tokens,
             messages=[{"role": "user", "content": prompt}],

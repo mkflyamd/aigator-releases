@@ -5,7 +5,7 @@ import io
 import logging
 import zipfile
 from pathlib import Path
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel
 
 from config import load_config as _load_config
@@ -631,6 +631,21 @@ async def get_skill_md(skill_id: str):
         "skill_id": skill_id,
         "skill_md": path.read_text(encoding="utf-8"),
     }
+
+
+@router.get("/api/marketplace/export/{skill_id}")
+async def export_mine_skill(skill_id: str):
+    skill_dir = _resolve_mine_skill_md(skill_id).parent
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for f in sorted(skill_dir.rglob("*")):
+            if f.is_file() and not f.is_symlink():
+                zf.write(f, f.relative_to(skill_dir).as_posix())
+    return Response(
+        buf.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{skill_id}.skill"'},
+    )
 
 
 @router.put("/api/marketplace/skill-md/{skill_id}", dependencies=[Depends(verify_csrf)])

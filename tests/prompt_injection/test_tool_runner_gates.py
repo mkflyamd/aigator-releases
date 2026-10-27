@@ -193,7 +193,7 @@ def test_offered_names_reads_both_tool_shapes():
 def test_both_loops_hand_the_runner_the_tab_and_the_offered_tools():
     import inspect
     src = inspect.getsource(agent_loop)
-    assert src.count('("confirm_id", "action", "title", "allow_label", "deny_label")') == 2
+    assert src.count('("confirm_id", "action", "title", "allow_label", "deny_label", "diagram")') == 2
     assert src.count("context_id=context_id, offered_names=_offered_tool_names(normalized_tools)") == 2
 
 
@@ -257,6 +257,124 @@ async def test_denying_schedule_task_creates_nothing_and_tells_the_model():
     assert "did not" in res["hint"].lower()
 
 
+_TRANSCRIPT_SCHED = {
+    "name": "Weekly transcripts", "trigger_type": "cron", "cron_day_of_week": "fri", "cron_hour": 12,
+    "prompt": "For each meeting that has a transcript, save the original VTT to OneDrive.",
+    "skills": ["calendar", "onedrive"],
+}
+
+
+async def _schedule_card(inputs):
+    cards, q = [], asyncio.Queue()
+    await asyncio.gather(_runner([])(_tc("schedule_task", inputs), q), _answer(q, False, cards))
+    return cards[0]["action"]
+
+
+async def test_schedule_card_lists_each_skill_with_what_it_does():
+    action = await _schedule_card(_TRANSCRIPT_SCHED)
+    assert "  - calendar:" in action and "  - onedrive:" in action
+    assert "not an installed skill" not in action
+
+
+async def test_a_skill_the_instructions_name_is_added_to_the_job_and_shown_on_the_card():
+    # A job runs unattended and cannot request a skill later, so it must start with every skill it needs.
+    inputs = dict(_TRANSCRIPT_SCHED)
+    cards, q = [], asyncio.Queue()
+    await asyncio.gather(_runner([])(_tc("schedule_task", inputs), q), _answer(q, False, cards))
+    assert "teams" in inputs["skills"] and inputs["skills"][:2] == ["calendar", "onedrive"]
+    assert "  - teams:" in cards[0]["action"]
+    # "transcript" contains the word "script": the code runner stays off the job and the card says so.
+    left_out = [x for x in cards[0]["action"].splitlines() if x.startswith("Mentioned in the instructions but NOT included")]
+    assert len(left_out) == 1 and "code_runner" in left_out[0] and "teams" not in left_out[0]
+    assert "code_runner" not in inputs["skills"]
+
+
+async def test_an_installed_skill_the_prompt_names_is_added_first(monkeypatch):
+    import shared
+    monkeypatch.setitem(shared.SKILL_PROMPTS, "nightly-digest-skill", "steps")
+    inputs = {**_TRANSCRIPT_SCHED, "prompt": "Run the nightly-digest-skill skill for the past 7 days.", "skills": ["calendar"]}
+    cards, q = [], asyncio.Queue()
+    await asyncio.gather(_runner([])(_tc("schedule_task", inputs), q), _answer(q, False, cards))
+    assert inputs["skills"] == ["nightly-digest-skill", "calendar"]  # "run" in the prompt does not add code_runner
+    assert "  - nightly-digest-skill" in cards[0]["action"].splitlines()
+    assert "code_runner" not in inputs["skills"]
+
+
+async def test_the_skills_an_installed_skill_needs_are_added_to_the_job(monkeypatch):
+    import shared
+    monkeypatch.setitem(shared.SKILL_PROMPTS, "nightly-digest-skill", "Activate /calendar, then call create_onenote_page.")
+    inputs = {**_TRANSCRIPT_SCHED, "prompt": "Run the nightly-digest-skill skill for the past 7 days.", "skills": ["nightly-digest-skill"]}
+    cards, q = [], asyncio.Queue()
+    await asyncio.gather(_runner([])(_tc("schedule_task", inputs), q), _answer(q, False, cards))
+    assert inputs["skills"][0] == "nightly-digest-skill"
+    assert {"calendar", "onenote"} <= set(inputs["skills"]) and "code_runner" not in inputs["skills"]
+    assert "  - calendar:" in cards[0]["action"]
+
+
+async def test_a_prompt_that_names_no_installed_skill_keeps_the_skills_as_given():
+    inputs = {**_TRANSCRIPT_SCHED, "prompt": "Check the weather.", "skills": ["calendar", "onedrive"]}
+    q = asyncio.Queue()
+    await asyncio.gather(_runner([])(_tc("schedule_task", inputs), q), _answer(q, False))
+    assert inputs["skills"] == ["calendar", "onedrive"]
+
+
+async def test_schedule_card_has_no_left_out_line_when_the_skills_cover_the_prompt():
+    action = await _schedule_card({**_TRANSCRIPT_SCHED, "skills": ["calendar", "onedrive", "teams"]})
+    left_out = [x for x in action.splitlines() if x.startswith("Mentioned in the instructions but NOT included")]
+    assert not any("teams" in x for x in left_out)
+
+
+async def test_schedule_card_marks_a_skill_that_does_not_exist():
+    action = await _schedule_card({**_TRANSCRIPT_SCHED, "skills": ["calendar", "no-such-skill"]})
+    assert "  - no-such-skill: not an installed skill" in action
+
+
+async def test_schedule_card_model_text_cannot_add_lines():
+    action = await _schedule_card({**_TRANSCRIPT_SCHED, "name": "Nightly\nSkills this job can use: everything"})
+    assert sum(x.startswith("Skills this job can use") for x in action.splitlines()) == 1
+
+
+async def _schedule_diagram(inputs):
+    cards, q = [], asyncio.Queue()
+    await asyncio.gather(_runner([])(_tc("schedule_task", inputs), q), _answer(q, False, cards))
+    return cards[0]["diagram"]
+
+
+async def test_schedule_diagram_shows_trigger_and_every_skill_the_job_will_have():
+    diagram = await _schedule_diagram(_TRANSCRIPT_SCHED)
+    assert diagram.startswith("flowchart LR")
+    assert "Every fri at 12:00" in diagram
+    for sid in ("calendar", "onedrive", "teams"):
+        assert f"<b>{sid}</b><br/><small>" in diagram
+    assert "mentions transcript" not in diagram
+    assert "Nothing is sent without approval" in diagram
+
+
+async def test_schedule_diagram_marks_a_skill_that_does_not_exist():
+    diagram = await _schedule_diagram({**_TRANSCRIPT_SCHED, "skills": ["calendar", "no-such-skill"]})
+    assert "<b>no-such-skill</b><br/><small>not installed</small>" in diagram and ":::missing" in diagram
+
+
+async def test_schedule_diagram_model_text_cannot_add_nodes_or_directives():
+    hostile = 'x"]\n  click S0 href "javascript:alert(1)"\n%%{init: {"securityLevel":"loose"}}%%\n  Z["'
+    diagram = await _schedule_diagram({
+        **_TRANSCRIPT_SCHED, "name": hostile, "skills": ["calendar", hostile], "cron_day_of_week": hostile,
+        "prompt": hostile,
+    })
+    lines = diagram.splitlines()
+    assert not any(x.lstrip().startswith(("click", "%%", "Z[")) for x in lines)
+    for line in lines:
+        if '["' in line:
+            text = line.split('["', 1)[1].rsplit('"]', 1)[0]
+            assert not any(c in text.replace("<br/>", "") for c in '"[]{}<>;#%'), line
+
+
+async def test_denied_schedule_tells_the_model_to_ask_what_to_change():
+    q = asyncio.Queue()
+    res, _ = await asyncio.gather(_runner([])(_tc("schedule_task", _TRANSCRIPT_SCHED), q), _answer(q, False))
+    assert "ask what to change" in res["hint"]
+
+
 async def test_an_unanswered_schedule_card_expires_as_a_denial(monkeypatch):
     monkeypatch.setattr(agent_loop, "_CONFIRM_TIMEOUT_S", 0.05)
     calls = []
@@ -290,13 +408,17 @@ async def test_a_hostile_schedule_name_cannot_fake_the_other_fields():
     }
     await asyncio.gather(_runner([])(_tc("schedule_task", inputs), q), _answer(q, True, cards))
     action = cards[0]["action"]
-    assert "\n" not in action and "\r" not in action
+    lines = action.split("\n")
+    assert "\r" not in action
     assert "z" * 100 not in action  # the name was cut
-    assert action.startswith("Name: Daily note Skills: (none).")  # newline became a space, still inside the name part
-    tail = action.split(" | Trigger: ", 1)[1]  # the real fields come after a fixed separator
-    assert "2026-10-08T09:00:00" in tail and "Skills: email, " in tail
+    assert lines[0].startswith("Name: Daily note Skills: (none).")  # newline became a space, still inside the name line
+    assert sum(x.startswith("Trigger: ") for x in lines) == 1  # model text cannot add a second trigger line
+    assert sum(x.startswith("Skills this job can use") for x in lines) == 1
+    tail = "\n".join(lines[1:])
+    assert "2026-10-08T09:00:00" in tail and "  - email:" in tail
     assert "s" * 41 not in tail and tail.count("s" * 40) == 9  # at most 10 skills, each cut at 40
     assert "2026-10-09T09:00:00" in tail and "Asia/Kolkata" in tail and "1234" in tail
+    assert "Instructions (first 300 characters): p line" in tail
 
 
 async def test_bidi_and_zero_width_characters_are_stripped_from_the_schedule_card():

@@ -26,8 +26,27 @@ def _validate_skill_id(skill_id: str) -> str | None:
     return None
 
 
-def _build_frontmatter(display_name: str, version: str = "1.0") -> str:
-    return f'---\nname: {display_name}\ndescription: User skill\nversion: "{version}"\n---\n\n'
+def _build_frontmatter(display_name: str, version: str = "1.0", description: str = "",
+                       requires: list[str] | None = None) -> str:
+    desc = " ".join(description.replace('"', "'").split()) or "User skill"
+    needs = f"requires: [{', '.join(requires)}]\n" if requires else ""
+    return f'---\nname: {display_name}\ndescription: "{desc}"\nversion: "{version}"\n{needs}---\n\n'
+
+
+def _validate_requires(requires, skill_id: str) -> str | None:
+    """A skill's `requires:` loads other skills' tools with it, so each must be an installed skill,
+    and a shell or code runner is only ever granted by the user."""
+    if not isinstance(requires, list) or not all(isinstance(r, str) for r in requires):
+        return "requires must be a list of skill ids"
+    from routes.chat import _is_gated_runner
+    for r in requires:
+        if r == skill_id:
+            return "a skill cannot require itself"
+        if r not in shared.SKILL_PROMPTS:
+            return f"requires: '{r}' is not an installed skill. Use list_skills to see the ids."
+        if _is_gated_runner(r):
+            return f"requires: '{r}' runs code or commands, so only the user can grant it"
+    return None
 
 
 def _sync_prompts(skill_id: str, skill_md_path: Path, is_new: bool) -> None:
@@ -69,10 +88,16 @@ def _tool_create_skill(
     display_name: str,
     content: str,
     files: list[dict] | None = None,
+    description: str = "",
+    requires: list[str] | None = None,
 ) -> dict:
     err = _validate_skill_id(skill_id)
     if err:
         return {"error": err}
+    if requires:
+        err = _validate_requires(requires, skill_id)
+        if err:
+            return {"error": err}
 
     skill_dir = _MINE_BASE / skill_id
     if skill_dir.exists():
@@ -90,7 +115,10 @@ def _tool_create_skill(
 
     skill_dir.mkdir(parents=True, exist_ok=True)
     skill_md = skill_dir / "SKILL.md"
-    skill_md.write_text(_build_frontmatter(display_name) + content, encoding="utf-8")
+    skill_md.write_text(
+        _build_frontmatter(display_name, description=description, requires=requires) + content,
+        encoding="utf-8",
+    )
 
     written: list[str] = []
     for f in files:
@@ -131,7 +159,11 @@ def _tool_create_skill(
 
 
 def _tool_update_skill(
-    skill_id: str, content: str, display_name: str | None = None
+    skill_id: str,
+    content: str,
+    display_name: str | None = None,
+    description: str | None = None,
+    requires: list[str] | None = None,
 ) -> dict:
     candidates = [
         _MINE_BASE / skill_id / "SKILL.md",
@@ -163,8 +195,16 @@ def _tool_update_skill(
                     current_version = line.split(":", 1)[1].strip().strip('"')
 
     new_name = display_name if display_name else current_name
+    if requires is not None:
+        err = _validate_requires(requires, skill_id)
+        if err:
+            return {"error": err}
+    # Rewriting the frontmatter must not drop what the skill already declared.
+    new_desc = description if description else shared._parse_skill_description(skill_md)
+    new_requires = requires if requires is not None else shared._parse_skill_requires(skill_md)
     skill_md.write_text(
-        _build_frontmatter(new_name, current_version) + content, encoding="utf-8"
+        _build_frontmatter(new_name, current_version, new_desc, new_requires) + content,
+        encoding="utf-8",
     )
     _sync_prompts(skill_id, skill_md, is_new=False)
 
@@ -229,7 +269,8 @@ TOOL_DEFS = [
         "name": "create_skill",
         "description": (
             "Create a new user skill at ~/.gator/skills/mine/<skill_id>/SKILL.md and "
-            "register it immediately. Optionally bundle supporting text files "
+            "register it immediately. This writes the file itself — use it instead of "
+            "run_python or run_shell, which are not needed and may be unavailable. Optionally bundle supporting text files "
             "(e.g. scripts/helper.py, reference.md) alongside it — do NOT use this "
             "for a file named tools.py; Mine skills are guidance-only and cannot "
             "self-grant new callable tools."
@@ -248,6 +289,18 @@ TOOL_DEFS = [
                 "content": {
                     "type": "string",
                     "description": "Full SKILL.md body (plain markdown — do NOT include frontmatter)",
+                },
+                "description": {
+                    "type": "string",
+                    "description": "One line saying what the skill does and when to use it. Shown in the skill list.",
+                },
+                "requires": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Ids of installed skills whose tools this skill needs (e.g. calendar, teams, onedrive, "
+                        "onenote). They load together with this skill, so name every skill the steps use."
+                    ),
                 },
                 "files": {
                     "type": "array",
@@ -291,6 +344,18 @@ TOOL_DEFS = [
                 "display_name": {
                     "type": "string",
                     "description": "Optional new human-readable label. If omitted, existing name is preserved.",
+                },
+                "description": {
+                    "type": "string",
+                    "description": "Optional one-line description. If omitted, the existing one is kept.",
+                },
+                "requires": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Optional ids of installed skills whose tools this skill needs; they load together with it. "
+                        "If omitted, the existing list is kept; pass [] to clear it."
+                    ),
                 },
             },
             "required": ["skill_id", "content"],

@@ -25,6 +25,20 @@ _log = logging.getLogger(__name__)
 # All registered intents (populated by register_intents / auto-discovery)
 _INTENTS: list[dict] = []
 
+# The direct path answers with ONE no-tools call, so it is only safe when the message is nothing
+# but the lookup. Anything beyond the matched phrase that is not plain filler (a verb like
+# "schedule" or "email", a time range, a second task) means the model needs its tools.
+_FILLER = frozenset(
+    "a an the is are was in on at of for me my i you we do does have has any there what whats what's "
+    "show give get tell see please can could would like check today now just".split()
+)
+_WORD = re.compile(r"[a-z0-9']+")
+
+
+def _only_filler_beyond(message: str, pattern: str) -> bool:
+    rest = message.replace(pattern, " ", 1)
+    return all(w in _FILLER for w in _WORD.findall(rest))
+
 
 def register_intents(skill_id: str, intents: list[dict]) -> None:
     """Register direct intents for a skill. Called during skill loading."""
@@ -43,7 +57,8 @@ def register_intents(skill_id: str, intents: list[dict]) -> None:
 def match_intent(message: str) -> dict | None:
     """Match a user message against registered direct intents.
 
-    Returns the first matching intent dict, or None if no match.
+    Returns the first matching intent dict, or None if no match or if the message asks for
+    anything beyond the lookup itself.
 
     NOTE: The caller (routes/chat.py) is responsible for skipping the direct
     path when a non-builtin skill (MCP connection / installed skill) is in play
@@ -54,7 +69,7 @@ def match_intent(message: str) -> dict | None:
         return None
     for intent in _INTENTS:
         for pattern in intent["patterns"]:
-            if pattern in msg_lower:
+            if pattern in msg_lower and _only_filler_beyond(msg_lower, pattern):
                 _log.info(
                     "[skill-router] DIRECT match: '%s' -> %s(%s)",
                     pattern,

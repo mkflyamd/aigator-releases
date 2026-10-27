@@ -1,6 +1,7 @@
 ---
 name: Code Tutor
 description: Explain code changes in the active project in plain English for non-technical users, on demand
+classify: false
 version: '1.0'
 ---
 
