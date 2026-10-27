@@ -14,9 +14,15 @@ _SHARED_SCRIPTS = str(Path(__file__).resolve().parent.parent.parent / "_scripts"
 if _SHARED_SCRIPTS not in sys.path:
     sys.path.insert(0, _SHARED_SCRIPTS)
 
-from office.soffice import NOT_INSTALLED_MESSAGE, SofficeNotFound, run_basic_macro  # noqa: E402
+from office.soffice import SofficeNotFound, run_basic_macro  # noqa: E402
 
 MACRO_NAME = "AcceptAllTrackedChanges"
+
+NOT_INSTALLED_MESSAGE = (
+    "LibreOffice is not installed on this computer, so the tracked changes could not be accepted here. "
+    "The output file is a copy that still contains the tracked changes; "
+    "open it in Word and use Review > Accept > Accept All Changes."
+)
 
 ACCEPT_CHANGES_MACRO = """<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE script:module PUBLIC "-//OpenOffice.org//DTD OfficeDocument 1.0//EN" "module.dtd">

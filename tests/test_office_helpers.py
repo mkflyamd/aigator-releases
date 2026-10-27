@@ -338,3 +338,22 @@ def test_run_basic_macro_stops_when_libreoffice_cannot_start(monkeypatch, tmp_pa
     monkeypatch.setattr(soffice, "_run", lambda cmd, timeout: calls.append(cmd) or _fake_proc(3, "", "boom"))
     result = soffice.run_basic_macro("<m/>", "Do", str(tmp_path / "b.xlsx"), 20, "unit")
     assert result.returncode == 3 and len(calls) == 1
+
+
+def test_accept_changes_reports_missing_libreoffice_for_a_word_document(monkeypatch, tmp_path):
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("docx_accept_changes", SKILLS / "docx" / "scripts" / "accept_changes.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    def missing(*args, **kwargs):
+        raise soffice.SofficeNotFound("no soffice")
+
+    monkeypatch.setattr(mod, "run_basic_macro", missing)
+    source = tmp_path / "in.docx"
+    source.write_bytes(b"docx")
+    result, message = mod.accept_changes(str(source), str(tmp_path / "out.docx"))
+    assert result is None
+    assert "tracked changes" in message and "Accept All Changes" in message
+    assert "formulas" not in message and "Excel" not in message
