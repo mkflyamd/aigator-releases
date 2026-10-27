@@ -7,17 +7,19 @@ dependencies = [
   "aiosqlite",
   "anthropic",
   "apscheduler>=3.10,<4",
+  "authlib>=1.9.0",
   "beautifulsoup4",
   "browser-use==0.11.13",
   "cairosvg",
   "ddgs>=9.0.0",
   "faster-whisper==1.2.1",
   "fastapi",
+  "filelock>=4.2.1",
   "httpx",
   "jsonschema",
-  "litellm<1.92.0",
   "lxml>=5.0.0",
   "mcp>=1.27.2,<2",
+  "onnxruntime<1.24",
   "openai",
   "openpyxl>=3.1.0",
   "packaging>=24.0",
@@ -52,6 +54,10 @@ dev = [
 
 [tool.uv]
 package = false
+required-environments = [
+  "sys_platform == 'darwin' and platform_machine == 'x86_64'",
+  "sys_platform == 'darwin' and platform_machine == 'arm64'",
+]
 # Load TLS certs from the OS trust store (Windows SChannel) instead of rustls's
 # bundled Mozilla roots. Required on corporate networks with MITM proxies (e.g.
 # AMD_CA.crt) — matches the truststore.inject_into_ssl() the backend uses at

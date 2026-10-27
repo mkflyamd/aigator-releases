@@ -5,6 +5,9 @@ env:
   UV_PREVIEW_FEATURES: malware-check
 
 on:
+  pull_request:
+  push:
+    branches: [main]
   release:
     types: [published]
   workflow_dispatch:

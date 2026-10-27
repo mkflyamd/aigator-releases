@@ -7,6 +7,7 @@ High-signal guidance for agents working in the **AI Gator** repo. Supplement to 
 - **Name**: "AI Gator" — never "POC".
 - **LLM gateway**: every LLM call goes through `web/llm/gateway.py` (`from llm.gateway import ...` works because `web/` is on `sys.path`). Never construct gateway headers/URLs inline. See `docs/gateway-setup.md`.
 - **Commits**: no `Co-Authored-By` lines.
+- **Git verification**: never use `--no-verify` or otherwise bypass, disable, skip, or suppress Git hooks when committing or pushing code, under any circumstances. If a hook fails, fix the failure before continuing.
 - **Human-in-the-loop**: email, Teams, and Slack messages are **draft-only** — never auto-send.
 
 ## Architecture
