@@ -1,8 +1,8 @@
 """GitHub API client — routes to REST API (github.com) or Enterprise MCP server.
 
 Routing logic:
-  - GITHUB_BASE_URL not set or github.com → REST API directly
-  - GITHUB_BASE_URL is a GitHub Enterprise URL → MCP server at GITHUB_MCP_URL
+  - saved GitHub URL not set or github.com → REST API directly
+  - saved GitHub URL is a GitHub Enterprise URL → MCP server at GITHUB_MCP_URL
 
 Set GITHUB_MCP_URL env var to point at your GitHub MCP server endpoint.
 """
@@ -13,21 +13,21 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from . import credentials
+
 
 def _is_enterprise() -> bool:
-    base = os.environ.get("GITHUB_BASE_URL", "")
-    return bool(base) and "github.com" not in base
+    return credentials.is_enterprise()
 
 
 def _rest_base() -> str:
-    base = os.environ.get("GITHUB_BASE_URL", "").rstrip("/")
-    if base and "github.com" not in base:
-        return f"{base}/api/v3"
+    if credentials.is_enterprise():
+        return f"{credentials.get_base_url()}/api/v3"
     return "https://api.github.com"
 
 
 def _token() -> str:
-    t = os.environ.get("GITHUB_TOKEN", "")
+    t = credentials.get_token()
     if not t:
         raise RuntimeError("GitHub credentials not configured — add them in Settings.")
     return t

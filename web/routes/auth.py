@@ -453,7 +453,7 @@ _CLEAR_SCOPES = {
     "graph": ["graph/token", "graph/teams_token", "graph/skype_token"],
     "slack": ["slack/token", "slack/pkce"],
 }
-_PAT_ENV = ("JIRA_API_TOKEN", "JIRA_PAT_TOKEN", "CONFLUENCE_PAT", "GITHUB_TOKEN")
+_PAT_ENV = ("JIRA_API_TOKEN", "JIRA_PAT_TOKEN", "CONFLUENCE_PAT")
 
 
 def _revoke_slack(token: dict) -> None:

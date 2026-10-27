@@ -84,12 +84,14 @@ def test_clear_invalid_scope_is_400(client, csrf_headers):
 
 def test_clear_pats_pops_environment(client, csrf_headers, monkeypatch):
     _seed()
+    monkeypatch.setenv("JIRA_PAT_TOKEN", FAKE)
     monkeypatch.setenv("GITHUB_TOKEN", FAKE)
     r = client.post("/api/auth/clear", json={"scope": "pats"}, headers=csrf_headers)
     assert r.status_code == 200
     import os
 
-    assert "GITHUB_TOKEN" not in os.environ
+    assert "JIRA_PAT_TOKEN" not in os.environ
+    assert os.environ["GITHUB_TOKEN"] == FAKE  # the user's own variable, not ours to remove
     assert secure_store.get("config/jira_pat") is None
     assert secure_store.get_json("graph/token")
 

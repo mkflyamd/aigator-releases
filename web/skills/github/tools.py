@@ -1,6 +1,7 @@
-"""GitHub skill — 11 tools. Uses REST API for github.com, MCP server for Enterprise."""
+"""GitHub skill — REST/gh tools. Uses REST API for github.com, MCP server for Enterprise."""
 
 from .api import github_api
+from .gh_cli import run_gh
 
 SKILL_ID = "github"
 ALWAYS_ON = False
@@ -217,9 +218,29 @@ TOOL_DEFS = [
             "required": [],
         },
     },
+    {
+        "name": "github_gh",
+        "description": "Run the GitHub CLI (gh) on the user's machine with their own gh login. Use it for anything the other github_* tools do not cover: labels, workflow runs and checks, creating or editing PRs and issues, repo views. Pass args as a list without the leading 'gh', e.g. [\"label\", \"list\", \"-R\", \"owner/repo\"] or [\"pr\", \"checks\", \"92\"]. Use this instead of run_shell for gh, which cannot sign in inside the command sandbox. Allowed: issue, pr (no merge), label, run, workflow, release, repo view/list, search, status, and read-only api. Pass text with --body, not a file or template. cwd (optional) is a local repo folder for commands like pr create; a folder other than the AI Gator working folder needs the user's approval in the chat.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "args": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "gh arguments, without the leading 'gh'",
+                },
+                "cwd": {
+                    "type": "string",
+                    "description": "Local folder to run in (optional)",
+                },
+            },
+            "required": ["args"],
+        },
+    },
 ]
 
 TOOL_STATUS = {
+    "github_gh": "🐙 Running gh…",
     "github_list_my_repos": "📁 Loading your repositories…",
     "github_whoami": "🐙 Checking GitHub connection…",
     "github_list_my_issues": "🔴 Loading your GitHub issues…",
@@ -488,7 +509,12 @@ def _github_add_issue_comment(
     )
 
 
+def _github_gh(args: list, cwd: str = None, _context_id: str = "") -> dict:
+    return run_gh(args, cwd, _context_id)
+
+
 TOOL_HANDLERS = {
+    "github_gh": _github_gh,
     "github_whoami": _github_whoami,
     "github_list_my_issues": _github_list_my_issues,
     "github_list_review_requests": _github_list_review_requests,
