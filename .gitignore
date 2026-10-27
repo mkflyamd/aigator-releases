@@ -102,3 +102,5 @@ deckbuild/
 # Test and tooling leftovers
 /pip/
 tests/_test_turn_telemetry.db
+# Bundled dictation model (fetched at build time by tools/fetch_dictation_model.py)
+/models/

@@ -11,13 +11,14 @@ datas = [
     (str(web / "static"), "web/static"),
     (str(web / "skills"), "skills"),
     (str(web / "skills"), "web/skills"),
+    (str(web / "dictation" / "models.json"), "dictation"),
     (str(root / "tray" / "aigator_icon.png"), "tray"),
     (str(root / "version.txt"), "."),
 ]
-hiddenimports = []
+hiddenimports = ["dictation.faster_whisper_engine"]
 binaries = []
 
-for package in ("browser_use", "litellm", "playwright_stealth", "bs4"):
+for package in ("browser_use", "litellm", "playwright_stealth", "bs4", "faster_whisper", "ctranslate2", "onnxruntime"):
     package_datas, package_binaries, package_hiddenimports = collect_all(package)
     datas += package_datas
     binaries += package_binaries
