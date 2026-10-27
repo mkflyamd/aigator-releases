@@ -47,6 +47,10 @@
       {
         "from": "../tray/aigator_icon.png",
         "to": "tray/aigator_icon.png"
+      },
+      {
+        "from": "../models/dictation",
+        "to": "models/dictation"
       }
     ],
     "directories": {
@@ -71,6 +75,9 @@
       ],
       "icon": "../tray/aigator_icon.png",
       "category": "public.app-category.productivity",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "AI Gator uses the microphone for voice dictation. Audio is transcribed on this computer and is not sent anywhere."
+      },
       "artifactName": "AI-Gator-${version}-macOS-${arch}.${ext}"
     },
     "linux": {
