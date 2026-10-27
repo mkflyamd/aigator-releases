@@ -1,13 +1,9 @@
 """Excel skill -- 6 tools."""
 
 from skills._skill_utils import ensure_parent_dir, guard_path_args
-import subprocess
 from pathlib import Path
 
-from proc_utils import no_window_kwargs
-
 SCRIPTS_DIR = Path(__file__).parent / "scripts"
-SHARED_SCRIPTS = Path(__file__).parent.parent / "_scripts"
 RECALC_SCRIPT = SCRIPTS_DIR / "recalc.py"
 
 SKILL_ID = "excel"
@@ -171,7 +167,7 @@ TOOL_DEFS = [
     },
     {
         "name": "recalc_excel",
-        "description": "Recalculate all formulas in an Excel file and scan for errors (#REF!, #DIV/0!, #VALUE!, #N/A, #NAME?, #NULL!, #NUM!). Use after creating or editing workbooks with formulas. Requires LibreOffice installed.",
+        "description": "Recalculate all formulas in an Excel file and scan for errors (#REF!, #DIV/0!, #VALUE!, #N/A, #NAME?, #NULL!, #NUM!). Use after creating or editing workbooks with formulas. Needs LibreOffice; if it is not installed the result says so and the workbook is still valid (formulas calculate when the user opens it in Excel) - tell the user, do not try to install or locate LibreOffice yourself.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -582,53 +578,36 @@ def _tool_create_excel(file_path: str, sheets: list, author: str = "") -> dict:
         return {"error": str(e)}
 
 
+def _load_recalc():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("gator_excel_recalc", RECALC_SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def _tool_recalc_excel(file_path: str, timeout: int = 30) -> dict:
+    # In-process: no separate python.exe to find, and it works the same in the packaged app.
     try:
         if not RECALC_SCRIPT.exists():
             return {
                 "error": "recalc.py script not found. LibreOffice integration not available."
             }
-
-        result = subprocess.run(
-            ["python", str(RECALC_SCRIPT), str(file_path), str(timeout)],
-            capture_output=True,
-            text=True,
-            timeout=timeout + 10,
-            cwd=str(SHARED_SCRIPTS),
-            **no_window_kwargs(),
-        )
-
-        output = result.stdout.strip()
-
-        # Try to parse JSON output from recalc.py
-        try:
-            import json
-
-            data = json.loads(output)
-            return {
-                "ok": True,
-                "status": data.get("status", "unknown"),
-                "total_formulas": data.get("total_formulas", 0),
-                "error_count": data.get("total_errors", 0),
-                "error_summary": data.get("error_summary", {}),
-            }
-        except (json.JSONDecodeError, ValueError):
-            # Non-JSON output — return as message
-            if result.returncode == 0:
-                return {"ok": True, "message": output or "Recalculation completed"}
-            else:
-                return {
-                    "error": output or result.stderr.strip() or "Recalculation failed"
-                }
-
-    except subprocess.TimeoutExpired:
-        return {"error": f"Recalculation timed out after {timeout}s"}
-    except FileNotFoundError:
-        return {
-            "error": "LibreOffice not found. Install LibreOffice for formula recalculation."
-        }
+        data = _load_recalc().recalc(str(file_path), timeout)
     except Exception as e:
         return {"error": str(e)}
+
+    if data.get("error"):
+        return {"error": data["error"], "libreoffice_missing": bool(data.get("libreoffice_missing"))}
+    return {
+        "ok": True,
+        "status": data.get("status", "unknown"),
+        "total_formulas": data.get("total_formulas", 0),
+        "error_count": data.get("total_errors", 0),
+        "error_summary": data.get("error_summary", {}),
+        "engine": data.get("engine", ""),
+    }
 
 
 TOOL_HANDLERS = {
