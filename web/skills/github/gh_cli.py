@@ -6,6 +6,7 @@ user, with the user's own `gh auth login`; the token saved in Settings is a per-
 """
 import os
 import re
+import shlex
 import shutil
 import subprocess
 from urllib.parse import urlparse
@@ -26,8 +27,10 @@ _COMMANDS = {
     "api": set(),
 }
 # Each of these reads a local file into GitHub, redirects the token to another host, or needs a terminal.
-_BLOCKED_FLAGS = {"--body-file", "--input", "--hostname", "--web", "--editor", "--field", "--raw-field"}
-_BLOCKED_SHORT = ("-F", "-w", "-e")
+_BLOCKED_FLAGS = {"--body-file", "--template", "--input", "--hostname", "--web", "--editor", "--field",
+                  "--raw-field"}
+_BLOCKED_SHORT = ("-F", "-w", "-e", "-T")
+_SHORT_CLUSTER = re.compile(r"-[A-Za-z]{2,}")
 _API_FLAGS = {"--jq", "-q", "--paginate", "--slurp", "-i", "--include", "--cache", "--silent",
               "-X", "--method", "-H", "--header"}
 _REPO = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
@@ -70,6 +73,8 @@ def validate(args) -> str | None:
         name = _flag_name(arg)
         if name in _BLOCKED_FLAGS or (not arg.startswith("--") and arg.startswith(_BLOCKED_SHORT)):
             return f"{name} is not available here (use --body with the text instead of a file)."
+        if _SHORT_CLUSTER.fullmatch(arg) and any(f"-{c}" in _BLOCKED_SHORT for c in arg[1:]):
+            return f"{arg} is not available here (pass each short flag separately, and use --body for text)."
         if name in ("-R", "--repo") and not _REPO.fullmatch(_flag_value(args, i)):
             return "--repo must be OWNER/REPO."
         if "://" in arg and (urlparse(arg).scheme != "https" or urlparse(arg).hostname not in _hosts()):
@@ -108,15 +113,47 @@ def _error(message: str) -> dict:
     return {"error": message, "stdout": "", "stderr": "", "exit_code": -1}
 
 
-def run_gh(args, cwd: str | None = None) -> dict:
+_APPROVAL_MSG = (
+    "The user must approve access to this folder first; an approval card is now shown in the chat. Tell the "
+    "user briefly what you asked for and why, then stop and wait. When the user says they approved, call "
+    "github_gh again with exactly the same args and cwd. If they deny, do not retry."
+)
+
+
+def _authorized_cwd(args: list, cwd: str, context_id: str) -> tuple[str | None, dict | None]:
+    """The folder gh may run in, or a result to return as is (a refusal or the user's approval card).
+
+    Same rule as run_shell: the AI Gator working folder is free, any other folder needs the user's approval.
+    """
+    from sandbox.policy import load_policy
+    from skills.code_runner import tools as code_runner
+    from skills.shell_runner import tools as shell_runner
+
+    policy = load_policy()
+    located = shell_runner._locate_cwd(cwd, policy, code_runner)
+    if isinstance(located, str):
+        return None, _error(located)
+    run_cwd, project, _scratch = located
+    if project is None:
+        return str(run_cwd), None
+    gate = shell_runner._shell_gate(code_runner, shlex.join(["gh", *args]), [project], [], [], context_id, policy)
+    if isinstance(gate, dict):
+        if gate.get("approval_required"):
+            gate = {**gate, "message": _APPROVAL_MSG}
+        return None, gate
+    return str(run_cwd), None
+
+
+def run_gh(args, cwd: str | None = None, context_id: str = "") -> dict:
     problem = validate(args)
     if problem:
         return _error(problem)
     gh = shutil.which("gh")
     if not gh:
         return _error("The GitHub CLI (gh) is not installed. Use the github_* tools instead.")
-    if cwd and not os.path.isdir(cwd):
-        return _error(f"cwd is not a folder: {cwd}")
+    cwd, refused = _authorized_cwd(args, cwd or "", context_id)
+    if refused:
+        return refused
     env = _env()
     secret = ""
     source = "gh login"
@@ -128,7 +165,7 @@ def run_gh(args, cwd: str | None = None) -> dict:
         env["GH_ENTERPRISE_TOKEN" if env.get("GH_HOST") else "GH_TOKEN"] = secret
         source = "saved GitHub token"
     try:
-        done = subprocess.run([gh, *args], env=env, cwd=cwd or None, stdin=subprocess.DEVNULL,
+        done = subprocess.run([gh, *args], env=env, cwd=cwd, stdin=subprocess.DEVNULL,
                               capture_output=True, timeout=_TIMEOUT, text=True,
                               encoding="utf-8", errors="replace")
     except subprocess.TimeoutExpired:
