@@ -572,9 +572,10 @@ _SKILL_KEYWORDS = {
                  "what meetings", "meeting today", "meeting tomorrow", "meeting this week",
                  "schedule a meeting", "book a meeting", "cancel meeting", "reschedule",
                  "next meeting", "upcoming meeting", "am i free", "when am i free",
-                 "invite on my outlook", "invite on outlook", "what is the", "what's the",
+                 "invite on my outlook", "invite on outlook",
+                 "what is the meeting", "what's the meeting", "what is the invite", "what's the invite",
                  "am invite", "pm invite", "morning invite", "afternoon invite",
-                 "what is my", "what's on my", "on my calendar", "on my outlook",
+                 "what is my next", "what is my day", "what's on my", "on my calendar", "on my outlook",
                  "my invite", "the invite", "the meeting invite", "calendar invite",
                  "meeting invite", "on my schedule", "today's meetings", "today's invite"],
     "teams": ["teams message", "teams chat", "in teams", "on teams", "teams channel",
@@ -590,6 +591,7 @@ _SKILL_KEYWORDS = {
                       "change the skill", "change my skill", "skill.md"],
     "slack": ["slack message", "in slack", "on slack", "slack channel",
               "post in slack", "send in slack", "slack conversation"],
+    "github": ["github", "pull request", "review request", "gh pr", "gh issue"],
     "jira": ["jira", "ticket", "create a ticket", "open a ticket", "jira issue",
              "bug report", "story point", "sprint", "backlog"],
     "confluence": ["confluence", "wiki page", "confluence page", "knowledge base",
@@ -636,6 +638,29 @@ _SKILL_KEYWORDS = {
 # Confluence even when the words "jira"/"confluence" never appear.
 _JIRA_ISSUE_KEY_RE = _re.compile(r'\b[A-Z][A-Z0-9]+-\d+\b')
 _ATLASSIAN_URL_RE = _re.compile(r'https?://[\w.-]+\.atlassian\.net/\S*', _re.IGNORECASE)
+
+# A link to a service names that service's skill. Without this, ".com" in the link matches the
+# browser skill and the page gets fetched instead of read through the service's own tools.
+_SERVICE_URL_SKILLS = (
+    (_re.compile(r'https?://(?:[\w-]+\.)*github\.com/', _re.IGNORECASE), ("github",)),
+    (_re.compile(r'https?://[\w.-]+-my\.sharepoint\.com/', _re.IGNORECASE), ("onedrive",)),
+    (_re.compile(r'https?://(?:1drv\.ms|onedrive\.live\.com)/', _re.IGNORECASE), ("onedrive",)),
+    (_re.compile(r'https?://(?![\w.-]*-my\.sharepoint\.com)[\w.-]+\.sharepoint\.com/', _re.IGNORECASE),
+     ("sharepoint", "onedrive")),
+    (_re.compile(r'https?://teams\.(?:microsoft|live)\.com/', _re.IGNORECASE), ("teams",)),
+    (_re.compile(r'https?://(?:[\w-]+\.)*slack\.com/', _re.IGNORECASE), ("slack",)),
+)
+# "PR #123" and "owner/repo#123" name a GitHub pull request or issue with no URL.
+_GITHUB_REF_RE = _re.compile(r'\bPRs?\s*#\d+|\b[\w.-]+/[\w.-]+#\d+\b', _re.IGNORECASE)
+
+# Skills whose keywords are everyday words ("create", "run", ".com"). A hit on only these says
+# little about which service the user means, so the LLM classifier still runs.
+_GENERIC_SKILLS = frozenset({"browser", "code_runner", "shell_runner", "file_ops"})
+
+
+def _needs_classifier(inferred: list[str], extra_catalog: dict) -> bool:
+    return not set(inferred) - _GENERIC_SKILLS or bool(extra_catalog)
+
 
 _IMAGE_ANALYSIS_WORDS = frozenset({
     "describe", "recap", "summarize", "analyse", "analyze", "read", "extract", "explain",
@@ -688,6 +713,12 @@ def _infer_skills_from_message(message: str) -> list[str]:
     # Structural: an atlassian.net /wiki/ URL → confluence skill.
     if "confluence" not in found and "/wiki/" in message.lower() and _ATLASSIAN_URL_RE.search(message):
         found.append("confluence")
+
+    for pattern, skill_ids in _SERVICE_URL_SKILLS:
+        if pattern.search(message):
+            found.extend(sid for sid in skill_ids if sid not in found)
+    if "github" not in found and _GITHUB_REF_RE.search(message):
+        found.append("github")
 
     # Briefing intent → a daily/standup "brief" needs the comms+calendar trio.
     _BRIEFING_SIGNALS = ["briefing", "daily brief", "morning brief", "give brief",
@@ -870,6 +901,7 @@ Rules:
 - Return [] if the message is general chat requiring no skills
 - Be generous: if there's any chance a skill is relevant, include it
 - Multiple skills are fine
+- A link or reference to a service means that service's skill, not browser: github.com or "PR #12" -> github, atlassian.net -> jira/confluence, sharepoint.com or 1drv.ms -> onedrive/sharepoint, slack.com -> slack, teams.microsoft.com -> teams, docs.google.com -> the matching g- skill. Add browser only if the user wants a web page that is not one of these
 
 User message: {message}
 
@@ -1825,12 +1857,13 @@ async def chat(req: ChatRequest):
         # Build the non-builtin catalog once (MCP connections + installed skills).
         _extra_catalog = {k: v for k, v in _available_skill_catalog().items()
                           if k not in _classify_skill_ids()}
-        # Run the LLM classifier when EITHER no keyword matched, OR a built-in
-        # keyword matched but the user also has non-builtin skills available that
-        # could overlap (e.g. keyword 'inbox' -> email, but a Gmail MCP exists).
-        # The classifier sees the full catalog and can route to the right service;
-        # without this, a built-in keyword would always win and hide MCP skills.
-        _should_classify = _msg_text.strip() and (not _inferred or _extra_catalog)
+        # Run the LLM classifier when EITHER no specific keyword matched (hits on only
+        # browser/code_runner/shell_runner/file_ops are everyday words, not a service
+        # choice), OR a built-in keyword matched but the user also has non-builtin
+        # skills available that could overlap (e.g. keyword 'inbox' -> email, but a
+        # Gmail MCP exists). The classifier sees the full catalog and can route to the
+        # right service; without this, a built-in keyword would always win and hide MCP skills.
+        _should_classify = _msg_text.strip() and _needs_classifier(_inferred, _extra_catalog)
         if _should_classify:
             print(f"[skill-detect] running LLM classifier (extra={list(_extra_catalog)})...", flush=True)
             # A blocking gateway call here froze the whole event loop (every request, Stop included)

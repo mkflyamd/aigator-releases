@@ -1,6 +1,6 @@
 ---
 name: github
-description: 'GitHub Enterprise — issues, pull requests, code review.'
+description: 'GitHub (github.com and Enterprise): repos, issues, pull requests, code search, code review.'
 metadata:
   author: Mayuresh Kulkarni
   version: '1.0'
