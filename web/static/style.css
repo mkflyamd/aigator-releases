@@ -2673,17 +2673,16 @@ select.llm-select option {
     linear-gradient(var(--surface2), var(--surface2)) padding-box,
     conic-gradient(
         from var(--atlassian-mcp-angle),
-        #4a154b,
-        #36c5f0,
-        #2eb67d,
-        #ecb22e,
-        #e01e5a,
-        #4a154b
+        #14532d,
+        var(--accent2, #22c55e),
+        var(--accent, #4ade80),
+        var(--accent2, #22c55e),
+        #14532d
       )
       border-box !important;
-  color: var(--text, #fff) !important;
+  color: var(--accent, #4ade80) !important;
   opacity: 1 !important;
-  animation: atlassian-mcp-edge-spin 1.15s linear infinite;
+  animation: atlassian-mcp-edge-spin 1.8s linear infinite;
 }
 @keyframes atlassian-mcp-edge-spin {
   to {
@@ -2691,11 +2690,37 @@ select.llm-select option {
   }
 }
 .atlassian-mcp-connect--connected {
-  border-color: #2eb67d !important;
-  color: #2eb67d !important;
+  border-color: var(--accent, #4ade80) !important;
+  color: var(--accent, #4ade80) !important;
   box-shadow:
-    0 0 0 1px rgba(46, 182, 125, 0.25),
-    0 0 12px rgba(46, 182, 125, 0.45);
+    0 0 0 1px rgba(var(--accent-rgb, 74, 222, 128), 0.25),
+    0 0 12px rgba(var(--accent-rgb, 74, 222, 128), 0.45);
+}
+.atlassian-mcp-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.atlassian-mcp-cancel {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 1px solid var(--border, #334155);
+  background: var(--surface, #0b1220);
+  color: var(--text-dim, #94a3b8);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+.atlassian-mcp-cancel:hover {
+  border-color: var(--accent, #4ade80);
+  color: var(--accent, #4ade80);
 }
 
 /* Small button modifier */
