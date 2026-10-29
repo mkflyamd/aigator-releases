@@ -7955,13 +7955,24 @@ const atlassianMsg = document.getElementById('atlassian-msg');
 const jiraDot = atlassianDot;
 const confluenceDot = atlassianDot;
 
-function _setAtlassianMcpConnectState(button, state, label) {
+function _setAtlassianMcpConnectState(button, state, label, onCancel) {
   if (!button) return;
   if (!button.dataset.idleLabel) button.dataset.idleLabel = button.textContent.trim();
   button.classList.toggle('atlassian-mcp-connect--connecting', state === 'connecting');
   button.classList.toggle('atlassian-mcp-connect--connected', state === 'connected');
   button.disabled = state === 'connecting';
   button.textContent = label || button.dataset.idleLabel;
+  button.parentElement.querySelector('.atlassian-mcp-cancel')?.remove();
+  if (state === 'connecting' && onCancel) {
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'atlassian-mcp-cancel';
+    cancel.textContent = '×';
+    cancel.title = 'Cancel';
+    cancel.setAttribute('aria-label', 'Cancel connecting');
+    cancel.addEventListener('click', onCancel);
+    button.parentElement.append(cancel);
+  }
 }
 
 async function loadAtlassianStatus() {
@@ -8025,16 +8036,18 @@ atlassianSaveBtn.addEventListener('click', async () => {
         atlassianMsg.textContent = 'Saved, but additional sites failed: ' + failures.join(' | ');
         return;
       }
-      atlassianMsg.textContent =
-        'Direct API connected. Optionally connect Cloud MCP or Rovo MCP below.';
+      atlassianMsg.textContent = 'Direct API connected.';
       atlassianDot.className = 'section-status st-ok';
       atlassianDetail.textContent = email;
       atlassianSaveBtn.textContent = 'Reconnect';
+      const autoCloudMcp = Boolean(atlassianCloudMcpBtn) && jiraUrl.includes('atlassian.net');
+      if (autoCloudMcp) await connectAtlassianCloudMcp();
       if (typeof _loadMcpConnections === 'function') await _loadMcpConnections();
       if (typeof checkSkillConnectionStatus === 'function') await checkSkillConnectionStatus();
-      setTimeout(() => {
-        atlassianMsg.textContent = '';
-      }, 3000);
+      if (!autoCloudMcp)
+        setTimeout(() => {
+          atlassianMsg.textContent = '';
+        }, 3000);
     } else {
       atlassianMsg.textContent = jr.error || cr.error || 'Save failed.';
     }
@@ -8043,41 +8056,55 @@ atlassianSaveBtn.addEventListener('click', async () => {
   }
 });
 
-if (atlassianCloudMcpBtn)
-  atlassianCloudMcpBtn.addEventListener('click', async () => {
-    _setAtlassianMcpConnectState(atlassianCloudMcpBtn, 'connecting', 'Connecting Cloud MCP…');
-    const directSite = atlassianJiraUrlInput.value.trim().replace(/\/$/, '');
-    const siteLabel = directSite || 'the configured direct API site';
+async function connectAtlassianCloudMcp() {
+  const controller = new AbortController();
+  _setAtlassianMcpConnectState(atlassianCloudMcpBtn, 'connecting', 'Connecting Cloud MCP…', () =>
+    controller.abort(),
+  );
+  let siteLabel = 'the configured direct API site';
+  try {
+    const directSite = (atlassianSiteValues('jira')[0] || '').replace(/\/$/, '');
+    if (directSite) siteLabel = directSite;
     atlassianMsg.textContent =
       `Connecting Cloud MCP with credentials from ${siteLabel}. ` +
       'MCP site is provider-selected…';
-    try {
-      const saved = await fetch('/api/config/atlassian/cloud-mcp', {
-        method: 'POST',
-        headers: { 'X-CSRF-Token': window.__CSRF_TOKEN__ || '' },
-      }).then(async (response) => {
-        const data = await response.json();
-        if (!response.ok || !data.ok)
-          throw new Error(data.detail || data.error || 'Could not connect Cloud MCP');
-        return data;
-      });
-      if (typeof _loadMcpConnections === 'function') await _loadMcpConnections();
-      _setAtlassianMcpConnectState(atlassianCloudMcpBtn, 'connected', 'Cloud MCP Connected ✓');
-      atlassianMsg.textContent =
-        `Cloud MCP connected with ${saved.tool_count || 0} tools. Direct API site: ${siteLabel}. ` +
-        'Cloud MCP has no site selection; use Rovo MCP to choose a specific site.';
-    } catch (error) {
-      _setAtlassianMcpConnectState(atlassianCloudMcpBtn, 'idle');
+    const saved = await fetch('/api/config/atlassian/cloud-mcp', {
+      method: 'POST',
+      headers: { 'X-CSRF-Token': window.__CSRF_TOKEN__ || '' },
+      signal: controller.signal,
+    }).then(async (response) => {
+      const data = await response.json();
+      if (!response.ok || !data.ok)
+        throw new Error(data.detail || data.error || 'Could not connect Cloud MCP');
+      return data;
+    });
+    if (typeof _loadMcpConnections === 'function') await _loadMcpConnections();
+    _setAtlassianMcpConnectState(atlassianCloudMcpBtn, 'connected', 'Cloud MCP Connected ✓');
+    atlassianMsg.textContent =
+      `Cloud MCP connected with ${saved.tool_count || 0} tools. Direct API site: ${siteLabel}. ` +
+      'Cloud MCP has no site selection; use Rovo MCP to choose a specific site.';
+  } catch (error) {
+    _setAtlassianMcpConnectState(atlassianCloudMcpBtn, 'idle');
+    if (controller.signal.aborted) {
+      atlassianMsg.textContent = 'Cloud MCP connection cancelled.';
+      if (typeof _loadMcpConnections === 'function') _loadMcpConnections();
+    } else {
       atlassianMsg.textContent = `Could not connect Cloud MCP: ${error.message || error}`;
     }
-  });
+  }
+}
+
+if (atlassianCloudMcpBtn) atlassianCloudMcpBtn.addEventListener('click', connectAtlassianCloudMcp);
 
 // Rovo MCP is the explicit Atlassian SSO/site-selection path.
 if (atlassianAddSiteBtn)
   atlassianAddSiteBtn.addEventListener('click', async () => {
     const url = 'https://mcp.atlassian.com/v1/mcp';
     let popup = null;
-    _setAtlassianMcpConnectState(atlassianAddSiteBtn, 'connecting', 'Connecting Rovo MCP…');
+    const controller = new AbortController();
+    _setAtlassianMcpConnectState(atlassianAddSiteBtn, 'connecting', 'Connecting Rovo MCP…', () =>
+      controller.abort(),
+    );
     atlassianMsg.textContent = 'Opening Atlassian sign-in…';
     try {
       popup = window.open(
@@ -8089,6 +8116,7 @@ if (atlassianAddSiteBtn)
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url, label: 'Atlassian Rovo' }),
+        signal: controller.signal,
       }).then(async (response) => {
         const data = await response.json();
         if (!response.ok) throw new Error(data.detail || 'Could not start Atlassian sign-in');
@@ -8103,22 +8131,29 @@ if (atlassianAddSiteBtn)
       else popup.location.href = started.authorize_url;
       atlassianMsg.textContent = 'Complete Atlassian sign-in and choose a site…';
       const completed = await new Promise((resolve) => {
+        const finish = (result) => {
+          clearInterval(timer);
+          clearTimeout(deadline);
+          resolve(result);
+        };
         const timer = setInterval(async () => {
           try {
             const state = await fetch(
               '/api/config/mcp/oauth/poll?state=' + encodeURIComponent(started.state),
+              { signal: controller.signal },
             ).then((r) => r.json());
-            if (state.status !== 'pending') {
-              clearInterval(timer);
-              resolve(state);
-            }
+            if (state.status !== 'pending') finish(state);
           } catch (_) {}
         }, 800);
-        setTimeout(() => {
-          clearInterval(timer);
-          resolve({ ok: false, error: 'Sign-in timed out' });
-        }, 300000);
+        const deadline = setTimeout(
+          () => finish({ ok: false, error: 'Sign-in timed out' }),
+          300000,
+        );
+        controller.signal.addEventListener('abort', () =>
+          finish({ ok: false, error: 'Cancelled' }),
+        );
       });
+      if (controller.signal.aborted) throw new Error('Cancelled');
       if (!completed.ok) throw new Error(completed.error || 'Atlassian sign-in did not complete');
       atlassianMsg.textContent = 'Adding selected site…';
       const saved = await fetch('/api/config/mcp', {
@@ -8134,6 +8169,7 @@ if (atlassianAddSiteBtn)
           auth_type: 'oauth2',
           oauth_provider_id: started.provider_id,
         }),
+        signal: controller.signal,
       }).then(async (response) => {
         const data = await response.json();
         if (!response.ok || !data.ok)
@@ -8150,7 +8186,13 @@ if (atlassianAddSiteBtn)
       atlassianMsg.textContent = `Connected. Discovered ${saved.tool_count || 0} Atlassian tools.`;
     } catch (error) {
       _setAtlassianMcpConnectState(atlassianAddSiteBtn, 'idle');
-      atlassianMsg.textContent = `Could not add site: ${error.message || error}`;
+      if (controller.signal.aborted) {
+        if (popup && !popup.closed) popup.close();
+        atlassianMsg.textContent = 'Rovo MCP connection cancelled.';
+        if (typeof _loadMcpConnections === 'function') _loadMcpConnections();
+      } else {
+        atlassianMsg.textContent = `Could not add site: ${error.message || error}`;
+      }
     }
   });
 

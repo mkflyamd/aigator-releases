@@ -463,10 +463,10 @@ def save_jira_pat(req: JiraPatRequest):
             current.pop("jira_api_token", None)
         return current
     _update_config(_commit_jira)
-    # Direct API credentials are intentionally site-specific. Do not silently
-    # create a generic Cloud MCP connection here: that service may choose a
-    # provider-default site rather than this configured base URL. Users opt
-    # into Cloud MCP or Rovo SSO explicitly through their separate controls.
+    # Direct API credentials are intentionally site-specific. Do not create a
+    # generic Cloud MCP connection here: that service may choose a
+    # provider-default site rather than this configured base URL. The Apps UI
+    # connects Cloud MCP as a separate request once both direct saves commit.
     return {"ok": True, "user": display_name, "base_url": base_url}
 
 
