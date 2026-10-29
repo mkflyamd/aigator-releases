@@ -662,9 +662,7 @@ function _githubNativeEnabled() {
     .then((cfg) => {
       _githubMode = cfg.github_pane_mode === 'classic' ? 'classic' : 'native';
     })
-    .catch(() => {
-      _githubMode = 'classic';
-    });
+    .catch(() => {});
   window.addEventListener('storage', (e) => {
     if (e.key === 'github_pane_mode') {
       fetch('/api/config')
@@ -676,6 +674,39 @@ function _githubNativeEnabled() {
     }
   });
 })();
+
+// Apps whose native pane needs a connection saved in Settings → Integrations.
+// When the shell can't open one, send the user to its section instead of
+// leaving a blank pane or a classic fallback.
+const _SETUP_REDIRECTS = {
+  jira: { label: 'Jira', anchor: 'atlassian-detail' },
+  confluence: { label: 'Confluence', anchor: 'atlassian-detail' },
+  github: { label: 'GitHub', anchor: 'github-detail' },
+};
+function _redirectToSetup(type) {
+  const row = _SETUP_REDIRECTS[type];
+  if (!row || tpState.type !== type) return false;
+  closeThirdPane();
+  if (typeof window.openSettingsPanel === 'function') {
+    window.openSettingsPanel('integrations');
+    document.getElementById(row.anchor)?.closest('.srow')?.scrollIntoView({ block: 'start' });
+  }
+  if (typeof window._showConnectivityToast === 'function') {
+    window._showConnectivityToast(
+      "Couldn't open " + row.label + '. Check its connection in Settings.',
+      'info',
+    );
+  }
+  return true;
+}
+function _redirectIfNotShown(type, result) {
+  Promise.resolve(result).then(
+    (shown) => {
+      if (shown === false) _redirectToSetup(type);
+    },
+    () => {},
+  );
+}
 
 /* ── Toggle button: split → Gator full → restore ──────────────────────
  * One button, three states, icon-driven:
@@ -2701,7 +2732,7 @@ function _openThirdPaneImpl(type) {
       if (window.gatorShell.hideOneDrive) window.gatorShell.hideOneDrive();
       if (window.gatorShell.hideOneNote) window.gatorShell.hideOneNote();
       if (window.gatorShell.hideConfluence) window.gatorShell.hideConfluence();
-      window.gatorShell.showJira();
+      _redirectIfNotShown('jira', window.gatorShell.showJira());
       _shellDrag.mount();
       _dividerBtns.show();
       return;
@@ -2719,8 +2750,7 @@ function _openThirdPaneImpl(type) {
       // prettier-ignore
       window.gatorShell.showGitHub().then((shown) => {
           if (!shown) {
-            _githubMode = 'classic';
-            _openThirdPaneImpl('github');
+            _redirectToSetup('github');
             return;
           }
           const pane = document.getElementById('third-pane');
@@ -2739,10 +2769,8 @@ function _openThirdPaneImpl(type) {
           if (window.gatorShell.hideJira) window.gatorShell.hideJira();
           _shellDrag.mount();
           _dividerBtns.show();
-        })
-        .catch(() => {
-          _githubMode = 'classic';
-          _openThirdPaneImpl('github');
+        }, () => {
+          _redirectToSetup('github');
         });
       return;
     }
@@ -2807,7 +2835,7 @@ function _openThirdPaneImpl(type) {
       if (window.gatorShell.hideOneDrive) window.gatorShell.hideOneDrive();
       if (window.gatorShell.hideOneNote) window.gatorShell.hideOneNote();
       if (window.gatorShell.hideJira) window.gatorShell.hideJira();
-      window.gatorShell.showConfluence();
+      _redirectIfNotShown('confluence', window.gatorShell.showConfluence());
       _shellDrag.mount();
       _dividerBtns.show();
       return;
