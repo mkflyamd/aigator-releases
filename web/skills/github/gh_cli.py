@@ -144,7 +144,8 @@ def _authorized_cwd(args: list, cwd: str, context_id: str) -> tuple[str | None, 
     return str(run_cwd), None
 
 
-def run_gh(args, cwd: str | None = None, context_id: str = "") -> dict:
+def run_gh(args, cwd: str | None = None, context_id: str = "", *, max_output: int = _MAX_OUTPUT,
+           use_saved_token: bool = True) -> dict:
     problem = validate(args)
     if problem:
         return _error(problem)
@@ -158,6 +159,8 @@ def run_gh(args, cwd: str | None = None, context_id: str = "") -> dict:
     secret = ""
     source = "gh login"
     if not _logged_in(gh, env):
+        if not use_saved_token:
+            return _error("gh is not signed in on this machine. Run 'gh auth login' once.")
         secret = credentials.get_token()
         if not secret:
             return _error("gh is not signed in on this machine and no GitHub token is connected. "
@@ -175,9 +178,9 @@ def run_gh(args, cwd: str | None = None, context_id: str = "") -> dict:
     out, err = done.stdout, done.stderr
     if secret:
         out, err = out.replace(secret, "***"), err.replace(secret, "***")
-    result = {"stdout": out[:_MAX_OUTPUT], "stderr": err[:_MAX_OUTPUT], "exit_code": done.returncode,
+    result = {"stdout": out[:max_output], "stderr": err[:_MAX_OUTPUT], "exit_code": done.returncode,
               "auth": source}
-    if len(out) > _MAX_OUTPUT:
+    if len(out) > max_output:
         result["truncated"] = True
     if done.returncode:
         result["error"] = f"gh exited with code {done.returncode}: {err.strip()[:500]}"

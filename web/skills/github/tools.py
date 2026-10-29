@@ -406,6 +406,8 @@ def _github_get_pr(owner: str, repo: str, pr_number: int) -> dict:
         "pull_request_read",
         {"method": "get", "owner": owner, "repo": repo, "pullNumber": pr_number},
     )
+    if "error" in result:
+        return result
     reviews = github_api(
         "pull_request_read",
         {
@@ -446,8 +448,6 @@ def _github_get_pr(owner: str, repo: str, pr_number: int) -> dict:
             "pullNumber": pr_number,
         },
     )
-    if "error" in result:
-        return result
     return _slim_pr(
         result,
         reviews.get("reviews", []),

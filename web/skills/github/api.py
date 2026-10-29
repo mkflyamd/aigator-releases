@@ -13,7 +13,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from . import credentials
+from . import credentials, gh_cli
 
 
 def _is_enterprise() -> bool:
@@ -56,9 +56,31 @@ def _rest(path: str, method: str = "GET", body: dict | None = None) -> dict:
             return json.loads(resp.read())
     except urllib.error.HTTPError as e:
         body_text = e.read().decode(errors="ignore")[:500]
-        return {"error": f"GitHub API {e.code}: {body_text}"}
+        failure = {"error": f"GitHub API {e.code}: {body_text}"}
+        if e.code in _ORG_REFUSAL_CODES and method == "GET":
+            return _retry_with_gh_login(path, failure)
+        return failure
     except Exception as e:
         return {"error": f"GitHub API call failed: {e}"}
+
+
+_ORG_REFUSAL_CODES = (401, 403)
+_GH_MAX_OUTPUT = 50_000_000
+
+
+def _retry_with_gh_login(path: str, refused: dict) -> dict:
+    """Orgs can reject the saved token (classic PATs banned, SAML SSO not authorized) while the
+    user's own `gh auth login` works, so a refused read is retried once as that user."""
+    got = gh_cli.run_gh(["api", path.lstrip("/")], max_output=_GH_MAX_OUTPUT, use_saved_token=False)
+    if not got.get("error"):
+        try:
+            return json.loads(got["stdout"])
+        except ValueError:
+            got = {"error": "gh returned output that is not JSON."}
+    owner = path.lstrip("/").split("/")[1:2]
+    sso = f"https://github.com/orgs/{owner[0]}/sso" if path.startswith("/repos/") and owner else ""
+    hint = f" If the organization enforces SAML SSO, authorize your gh login at {sso}." if sso else ""
+    return {"error": f"{refused['error']} | Retry through gh also failed: {got['error']}{hint}"}
 
 
 _PAGE_SIZE = 100
