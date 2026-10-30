@@ -10031,6 +10031,127 @@ function _showAskUserCard(data, ownerTabId) {
   card.scrollIntoView({ behavior: 'smooth', block: 'end' });
 }
 
+// ── GitHub SSO card ──────────────────────────────────────────────────────────
+// An org that enforces SAML SSO refused the user's GitHub sign-in. The card opens the org's
+// authorization page in the system browser; "I've authorized" asks AI Gator to retry the request.
+function _showGithubSsoCard(data, ownerTabId) {
+  const org = data && typeof data.org === 'string' ? data.org : '';
+  let url = '';
+  try {
+    const parsed = new URL(data && data.url);
+    if (parsed.protocol === 'https:') url = parsed.href;
+  } catch (_) {
+    /* invalid link: no card */
+  }
+  if (!org || !url) return;
+  const tabId = ownerTabId || _activeTabId || 'default';
+  if (tabId !== _activeTabId) {
+    _tabsWithUpdates.add(tabId);
+    document.querySelector?.(`.tab-item[data-tab-id="${tabId}"]`)?.classList.add('tab-has-update');
+    _showConnectivityToast('GitHub needs your authorization in another tab.', 'info');
+    return;
+  }
+  document.querySelectorAll('.github-sso-card').forEach((el) => el.remove());
+  const card = document.createElement('div');
+  card.className = 'system-card github-sso-card';
+  const body = document.createElement('div');
+  body.style.cssText =
+    'display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px 10px; width: 100%;';
+  const icon = document.createElement('span');
+  icon.textContent = '🔒';
+  icon.style.cssText = 'font-size: 1.1rem; flex-shrink: 0; margin-top: 2px;';
+  const textWrap = document.createElement('div');
+  textWrap.style.cssText = 'flex: 1 1 0; min-width: 0;';
+  const title = document.createElement('div');
+  title.style.cssText =
+    'font-size: 0.85rem; font-weight: 600; color: var(--text); margin-bottom: 2px;';
+  const account =
+    data && typeof data.account === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(data.account)
+      ? data.account
+      : '';
+  title.textContent = account
+    ? `Authorize GitHub access to ${org} as ${account}?`
+    : `Authorize GitHub access to ${org}?`;
+  const detail = document.createElement('div');
+  detail.style.cssText =
+    'font-size: 0.78rem; color: var(--text-muted); word-break: break-word; white-space: pre-line;';
+  detail.textContent =
+    `${org} requires SSO authorization for your GitHub sign-in. Open the page, authorize GitHub CLI for ${org}, then come back and retry.` +
+    (account
+      ? `\nSign in to github.com as ${account} first. A "404" page means your browser is signed in as a different account.`
+      : '');
+  textWrap.append(title, detail);
+  const btnWrap = document.createElement('div');
+  btnWrap.style.cssText =
+    'display: flex; flex-wrap: wrap; gap: 6px; flex: 1 1 100%; justify-content: flex-end; align-items: center;';
+  const open = document.createElement('button');
+  open.textContent = '1. Open authorization page';
+  const retry = document.createElement('button');
+  retry.textContent = "2. I've authorized, retry";
+  // The step to take now is the green one: Open first, then Retry once the page has been opened.
+  const _setSsoStep = (opened) => {
+    const base = 'font-size: 0.75rem; padding: 4px 12px; border-radius: 6px; border: none; cursor: pointer; font-weight: 600;';
+    const primary = `${base} background: var(--accent); color: #000;`;
+    const secondary = `${base} background: var(--surface3); color: var(--text);`;
+    open.style.cssText = opened ? secondary : primary;
+    retry.style.cssText = opened ? primary : secondary;
+  };
+  _setSsoStep(false);
+  open.addEventListener('click', () => {
+    openExternal(data.url);
+    _setSsoStep(true);
+  });
+  retry.addEventListener('click', () => {
+    card.remove();
+    _sendSandboxFollowUp(
+      tabId,
+      `✅ Authorized · I authorized GitHub SSO for ${org}. Retry the GitHub request that just failed.`,
+    ).catch((err) => console.warn('[github-sso] retry not sent:', err));
+  });
+  btnWrap.append(open, retry);
+  const others = Array.isArray(data.others)
+    ? data.others.filter((a) => typeof a === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(a))
+    : [];
+  if (others.length) {
+    const switchNote = document.createElement('div');
+    switchNote.style.cssText = 'font-size: 0.78rem; color: var(--text-muted); margin-top: 4px;';
+    switchNote.textContent =
+      'Or use another GitHub account signed in on this computer. This changes the default account for the GitHub CLI, including in your terminal.';
+    textWrap.appendChild(switchNote);
+    others.forEach((login) => {
+      const useBtn = document.createElement('button');
+      useBtn.textContent = `Use ${login} and retry`;
+      useBtn.style.cssText =
+        'font-size: 0.75rem; padding: 4px 12px; border-radius: 6px; border: none; cursor: pointer; font-weight: 600; background: var(--surface3); color: var(--text);';
+      useBtn.addEventListener('click', async () => {
+        useBtn.disabled = true;
+        try {
+          const res = await fetch('/api/github/switch-account', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ account: login }),
+          });
+          if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
+        } catch (err) {
+          useBtn.disabled = false;
+          _showConnectivityToast(`Could not switch to ${login}: ${err.message}`, 'error');
+          return;
+        }
+        card.remove();
+        _sendSandboxFollowUp(
+          tabId,
+          `✅ Authorized · I authorized GitHub SSO for ${org} by switching GitHub to ${login}. Retry the GitHub request that just failed.`,
+        ).catch((err) => console.warn('[github-sso] retry not sent:', err));
+      });
+      btnWrap.appendChild(useBtn);
+    });
+  }
+  body.append(icon, textWrap, btnWrap);
+  card.appendChild(body);
+  document.getElementById('messages')?.appendChild(card);
+  _pinConfirmCardInView(card);
+}
+
 function _showSandboxApproval(data, ownerTabId) {
   const requestId = data && typeof data.request_id === 'string' ? data.request_id : '';
   if (!requestId) return;
@@ -13998,6 +14119,8 @@ form.addEventListener('submit', async (e) => {
               _showJiraTargetSelection(msg.jira_target_selection, requestTabId);
             } else if (msg.sandbox_approval) {
               _showSandboxApproval(msg.sandbox_approval, requestTabId);
+            } else if (msg.github_sso) {
+              _showGithubSsoCard(msg.github_sso, requestTabId);
             } else if (msg.ask_user) {
               _showAskUserCard(msg.ask_user, requestTabId);
             } else if (msg.files && Array.isArray(msg.files) && msg.files.length) {

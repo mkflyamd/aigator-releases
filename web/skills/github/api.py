@@ -13,7 +13,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from . import credentials, gh_cli
+from . import credentials, gh_cli, sso
 
 
 def _is_enterprise() -> bool:
@@ -68,6 +68,19 @@ _ORG_REFUSAL_CODES = (401, 403)
 _GH_MAX_OUTPUT = 50_000_000
 
 
+def _read_without_token(path: str):
+    """Public repositories need no sign-in, so a refused token does not block reading them."""
+    req = urllib.request.Request(
+        f"{_rest_base()}{path}",
+        headers={"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read())
+    except Exception:
+        return None
+
+
 def _retry_with_gh_login(path: str, refused: dict) -> dict:
     """Orgs can reject the saved token (classic PATs banned, SAML SSO not authorized) while the
     user's own `gh auth login` works, so a refused read is retried once as that user."""
@@ -77,10 +90,20 @@ def _retry_with_gh_login(path: str, refused: dict) -> dict:
             return json.loads(got["stdout"])
         except ValueError:
             got = {"error": "gh returned output that is not JSON."}
-    owner = path.lstrip("/").split("/")[1:2]
-    sso = f"https://github.com/orgs/{owner[0]}/sso" if path.startswith("/repos/") and owner else ""
-    hint = f" If the organization enforces SAML SSO, authorize your gh login at {sso}." if sso else ""
-    return {"error": f"{refused['error']} | Retry through gh also failed: {got['error']}{hint}"}
+    public = _read_without_token(path)
+    if public is not None:
+        return public
+    owner = path.lstrip("/").split("/")[1:2] if path.startswith("/repos/") else []
+    card = sso.card_for(f"{got['error']} {got.get('stderr', '')}", owner[0] if owner else "")
+    if card:
+        other = sso.read_as_other_account(["api", path.lstrip("/")], max_output=_GH_MAX_OUTPUT)
+        if other:
+            try:
+                return json.loads(other["stdout"])
+            except ValueError:
+                pass
+        return sso.needs_authorization(card)
+    return {"error": f"{refused['error']} | Retry through gh also failed: {got['error']}"}
 
 
 _PAGE_SIZE = 100

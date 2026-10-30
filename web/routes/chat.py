@@ -956,7 +956,10 @@ _MAX_AUTO_SKILLS = 4  # cap on auto-detected skills per turn (explicit + deps ar
 # The auto-selected skills of each chat's latest turn; kept so the reply to an ask_user card (often a
 # bare "Create a new notebook") does not lose the skills the question was asked under.
 _LAST_AUTO_SKILLS: dict[str, list[str]] = {}
-_SANDBOX_DECISION_FOLLOW_UP = _re.compile(r"^\W*(?:Approved|Denied) · I (?:approved|denied) sandbox access request ")
+_SANDBOX_DECISION_FOLLOW_UP = _re.compile(
+    r"^\W*(?:(?:Approved|Denied) · I (?:approved|denied) sandbox access request |"
+    r"Authorized · I authorized GitHub SSO for )"
+)
 
 
 def _continues_the_previous_turn(message: str, recent_tools: set[str]) -> bool:

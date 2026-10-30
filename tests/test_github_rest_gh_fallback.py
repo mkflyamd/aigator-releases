@@ -132,9 +132,7 @@ def test_gh_also_refused_explains_how_to_authorize_the_org(monkeypatch):
 
     result = api._rest("/repos/ROCm/rocm-systems/pulls/482")
 
-    assert "forbids access via a personal access token" in result["error"]
-    assert "SAML enforcement" in result["error"]
-    assert "https://github.com/orgs/ROCm/sso" in result["error"]
+    assert result["_github_sso"]["org"] == "ROCm"
 
 
 def test_unparseable_gh_output_is_reported_not_raised(monkeypatch):

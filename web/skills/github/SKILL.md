@@ -20,3 +20,4 @@ metadata:
 - For "my issues" → call github_list_my_issues.
 - For "my PRs" → call github_list_my_prs.
 - For issue or PR details, parse owner/repo/number from URLs or ask the user if missing.
+- If a result has `_github_sso` or an SSO error, an authorization card is already shown to the user. Follow its `assistant_guidance`: say in one sentence that SSO authorization is needed, do not paste the error or links, call no other tools meanwhile, and retry the same request when the user says they authorized.
