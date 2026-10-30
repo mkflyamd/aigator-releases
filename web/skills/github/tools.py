@@ -1,5 +1,6 @@
 """GitHub skill — REST/gh tools. Uses REST API for github.com, MCP server for Enterprise."""
 
+from . import sso
 from .api import github_api
 from .gh_cli import run_gh
 
@@ -388,8 +389,8 @@ def _slim_pr(pr: dict, reviews: list, checks: list, comments: list, review_comme
          "body": _cap(c.get("body"), _PR_COMMENT_CHARS)}
         for c in review_comments[-_PR_MAX_COMMENTS:]
     ]
-    out["files_total"] = len(files)
-    out["files"] = [
+    out["files_changed_total"] = len(files)
+    out["files_changed"] = [
         {"filename": f.get("filename"), "status": f.get("status"),
          "additions": f.get("additions"), "deletions": f.get("deletions")}
         for f in files[:_PR_MAX_FILES]
@@ -406,6 +407,8 @@ def _github_get_pr(owner: str, repo: str, pr_number: int) -> dict:
         "pull_request_read",
         {"method": "get", "owner": owner, "repo": repo, "pullNumber": pr_number},
     )
+    if "error" in result:
+        return result
     reviews = github_api(
         "pull_request_read",
         {
@@ -446,8 +449,6 @@ def _github_get_pr(owner: str, repo: str, pr_number: int) -> dict:
             "pullNumber": pr_number,
         },
     )
-    if "error" in result:
-        return result
     return _slim_pr(
         result,
         reviews.get("reviews", []),
@@ -510,7 +511,12 @@ def _github_add_issue_comment(
 
 
 def _github_gh(args: list, cwd: str = None, _context_id: str = "") -> dict:
-    return run_gh(args, cwd, _context_id)
+    result = run_gh(args, cwd, _context_id)
+    card = sso.card_for(f"{result.get('error', '')} {result.get('stderr', '')}")
+    if not card:
+        return result
+    other = sso.read_as_other_account(args, cwd=cwd, context_id=_context_id)
+    return other or sso.needs_authorization(card)
 
 
 TOOL_HANDLERS = {

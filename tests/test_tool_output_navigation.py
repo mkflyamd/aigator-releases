@@ -236,10 +236,10 @@ def test_pr_result_keeps_fields_the_pane_reads(pr):
 
 def test_pr_result_drops_bulk_and_caps_text(pr):
     assert "_links" not in pr
-    assert all("patch" not in f for f in pr["files"])
+    assert all("patch" not in f for f in pr["files_changed"])
     assert len(pr["body"]) < 2500
     assert all(len(c["body"]) < 1700 for c in pr["comments"])
-    assert len(pr["files"]) == 100 and pr["files_total"] == 150
+    assert len(pr["files_changed"]) == 100 and pr["files_changed_total"] == 150
     assert len(pr["comments"]) == 30 and pr["comments_total"] == 60
     assert len(pr["review_comments"]) == 1
 

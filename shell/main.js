@@ -11,6 +11,7 @@
 } = require('electron');
 const { applyMediaPermissions } = require('./media-permissions');
 const { applyNavigationPolicy, setToolbarAttacher } = require('./navigation-policy');
+const { resolveAtlassianUrls } = require('./atlassian-urls');
 const { createHudRecorder } = require('./hud_recorder');
 const path = require('path');
 const { spawn } = require('child_process');
@@ -184,6 +185,14 @@ let GITHUB_URL = '';
 let GITHUB_PARTITION = 'persist:github';
 // Fetched once at startup from the backend config.
 let _appConfig = null;
+function _applyAtlassianUrls(data) {
+  const { confluenceUrl, jiraUrl } = resolveAtlassianUrls(data);
+  if (confluenceUrl) CONFLUENCE_URL = confluenceUrl;
+  if (jiraUrl) JIRA_URL = jiraUrl;
+  // APP_HOME_URL snapshots these at definition time (empty), so patch it too.
+  if (CONFLUENCE_URL) APP_HOME_URL.confluence = CONFLUENCE_URL;
+  if (JIRA_URL) APP_HOME_URL.jira = JIRA_URL;
+}
 function _fetchAppConfig() {
   try {
     const url = GATOR_URL.replace(/\/$/, '') + '/api/config';
@@ -191,11 +200,7 @@ function _fetchAppConfig() {
       require('child_process').execSync(`curl -s "${url}"`, { encoding: 'utf-8', timeout: 5000 }),
     );
     _appConfig = data;
-    if (data.confluence_base_url) CONFLUENCE_URL = data.confluence_base_url;
-    if (data.jira_base_url) {
-      JIRA_URL = data.jira_base_url.replace(/\/$/, '');
-      if (!JIRA_URL.endsWith('/jira')) JIRA_URL += '/jira';
-    }
+    _applyAtlassianUrls(data);
     if (data.github_base_url) {
       GITHUB_URL = data.github_base_url.replace(/\/$/, '');
     }
@@ -208,8 +213,6 @@ function _fetchAppConfig() {
     // this, external-pane:show's "dock-click on an already-active app
     // reloads its home URL" recovery (main.js ~4179) silently no-ops for
     // these three forever: `if (home)` is falsy and loadURL() never fires.
-    if (CONFLUENCE_URL) APP_HOME_URL.confluence = CONFLUENCE_URL;
-    if (JIRA_URL) APP_HOME_URL.jira = JIRA_URL;
     if (GITHUB_URL) APP_HOME_URL.github = GITHUB_URL;
     if (data.theme) {
       _effectiveTheme = _resolveTheme(data.theme);
@@ -855,24 +858,7 @@ function normalizeWebUrl(value) {
 let githubViewPromise = null;
 
 async function createGitHubView() {
-  const data = await new Promise((resolve) => {
-    http
-      .get(GATOR_URL.replace(/\/$/, '') + '/api/config', (response) => {
-        let body = '';
-        response.setEncoding('utf8');
-        response.on('data', (chunk) => {
-          body += chunk;
-        });
-        response.on('end', () => {
-          try {
-            resolve(JSON.parse(body));
-          } catch {
-            resolve(null);
-          }
-        });
-      })
-      .on('error', () => resolve(null));
-  });
+  const data = (await _fetchConfigJson()) || {};
   GITHUB_URL = normalizeWebUrl(data.github_base_url);
   if (!GITHUB_URL || !win) return null;
   try {
@@ -931,6 +917,51 @@ async function ensureGitHubView() {
     });
   }
   return githubViewPromise;
+}
+
+// Jira/Confluence views are normally created at startup from /api/config. If the
+// URL wasn't configured yet (connected after launch) or the startup fetch failed,
+// create the view on first use instead of leaving the rail click with no pane.
+let createAtlassianView = null;
+const atlassianViewPromises = {};
+
+function _fetchConfigJson() {
+  return new Promise((resolve) => {
+    http
+      .get(GATOR_URL.replace(/\/$/, '') + '/api/config', (response) => {
+        let body = '';
+        response.setEncoding('utf8');
+        response.on('data', (chunk) => {
+          body += chunk;
+        });
+        response.on('end', () => {
+          try {
+            resolve(JSON.parse(body));
+          } catch {
+            resolve(null);
+          }
+        });
+      })
+      .on('error', () => resolve(null))
+      .setTimeout(5000, function () {
+        this.destroy();
+      });
+  });
+}
+
+async function ensureAtlassianView(appName) {
+  const existing = viewForApp(appName);
+  if (existing && existing.webContents && !existing.webContents.isDestroyed()) return existing;
+  if (!createAtlassianView || !win) return null;
+  if (!atlassianViewPromises[appName]) {
+    atlassianViewPromises[appName] = (async () => {
+      _applyAtlassianUrls(await _fetchConfigJson());
+      return createAtlassianView(appName) || null;
+    })().finally(() => {
+      delete atlassianViewPromises[appName];
+    });
+  }
+  return atlassianViewPromises[appName];
 }
 let pyProc = null;
 
@@ -2341,7 +2372,8 @@ setTimeout(scanAll, 500);
   // Entry URL from /api/config (tenant-specific, e.g. https://amd.atlassian.net/wiki).
   // HITL: classic create/edit forms are preserved ΓÇö confluence-create/confluence-edit
   // pane signals still render the custom form overlay (not the real Confluence editor).
-  if (CONFLUENCE_URL) {
+  function createConfluenceView() {
+    if (confluenceView || !CONFLUENCE_URL) return;
     const confluenceSession = session.fromPartition(CONFLUENCE_PARTITION);
     applyMediaPermissions(confluenceSession);
     confluenceView = new WebContentsView({
@@ -2363,13 +2395,15 @@ setTimeout(scanAll, 500);
     win.contentView.addChildView(confluenceView);
     confluenceView.setBounds({ x: 1599, y: 0, width: 1, height: 900 });
   }
+  createConfluenceView();
 
   // ΓöÇΓöÇ Jira view ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
   // Atlassian Cloud: same SSO pattern as Confluence. persist:jira session.
   // Entry URL from /api/config (e.g. https://amd-hub.atlassian.net/jira).
   // HITL: classic create form is preserved ΓÇö jira-create pane signal still
   // renders the custom form overlay with dynamic fields + agent retry.
-  if (JIRA_URL) {
+  function createJiraView() {
+    if (jiraView || !JIRA_URL) return;
     const jiraSession = session.fromPartition(JIRA_PARTITION);
     applyMediaPermissions(jiraSession);
     jiraView = new WebContentsView({
@@ -2385,6 +2419,7 @@ setTimeout(scanAll, 500);
     win.contentView.addChildView(jiraView);
     jiraView.setBounds({ x: 1599, y: 0, width: 1, height: 900 });
   }
+  createJiraView();
 
   // ΓöÇΓöÇ Jira pin module: inject ONCE on dom-ready ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
   // Two surfaces:
@@ -2397,7 +2432,8 @@ setTimeout(scanAll, 500);
   //   action bar parent:  div containing [data-testid="share-dialog.ui.share-button"]
   //   issue summary:      h1[data-testid="issue.views.issue-base.foundation.summary.heading"]
   //   issue key in URL:   /browse/<KEY>-<NUM>
-  if (jiraView) {
+  function wireJiraPins() {
+    if (!jiraView) return;
     const JIRA_PIN_MODULE = `
 (function() {
   if (window.__gatorPinModule) return;
@@ -2566,6 +2602,7 @@ setTimeout(scanAll, 500);
       jiraView.webContents.executeJavaScript(JIRA_PIN_MODULE).catch(() => {});
     });
   }
+  wireJiraPins();
 
   // ΓöÇΓöÇ Confluence pin module: inline pin on page title links ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
   // Pin appears inline at the start of each page title link on the home page,
@@ -2574,7 +2611,8 @@ setTimeout(scanAll, 500);
   //
   // The page ID is extracted from the href (/pages/<id>/) ΓÇö deterministic.
   // No title search needed ΓÇö agent calls read_confluence_page(page_id=...) directly.
-  if (confluenceView) {
+  function wireConfluencePins() {
+    if (!confluenceView) return;
     const CF_PIN_MODULE = `
 (function() {
   if (window.__gatorPinModule) return;
@@ -2914,6 +2952,20 @@ setTimeout(scanAll, 500);
       confluenceView.webContents.executeJavaScript(CF_PIN_MODULE).catch(() => {});
     });
   }
+  wireConfluencePins();
+
+  createAtlassianView = (appName) => {
+    if (appName === 'jira') {
+      createJiraView();
+      wireJiraPins();
+      _attachToolbarListeners(jiraView, 'jira');
+      return jiraView;
+    }
+    createConfluenceView();
+    wireConfluencePins();
+    _attachToolbarListeners(confluenceView, 'confluence');
+    return confluenceView;
+  };
 
   // ΓöÇΓöÇ GitHub view ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
   // Cookie-based SSO via persist:github. Entry URL from /api/config
@@ -4290,6 +4342,8 @@ function createGenericPane(appConfig) {
 
 ipcMain.handle('external-pane:show', async (_e, appName) => {
   let view = viewForApp(appName);
+  if (!view && (appName === 'jira' || appName === 'confluence'))
+    view = await ensureAtlassianView(appName);
   // Auto-create a generic pane for apps that have a home URL but no pane yet
   // (e.g. Google Workspace service skills g-gmail, g-calendar).
   if (!view && APP_HOME_URL[appName]) {
