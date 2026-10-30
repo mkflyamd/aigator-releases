@@ -10090,7 +10090,8 @@ function _showGithubSsoCard(data, ownerTabId) {
   retry.textContent = "2. I've authorized, retry";
   // The step to take now is the green one: Open first, then Retry once the page has been opened.
   const _setSsoStep = (opened) => {
-    const base = 'font-size: 0.75rem; padding: 4px 12px; border-radius: 6px; border: none; cursor: pointer; font-weight: 600;';
+    const base =
+      'font-size: 0.75rem; padding: 4px 12px; border-radius: 6px; border: none; cursor: pointer; font-weight: 600;';
     const primary = `${base} background: var(--accent); color: #000;`;
     const secondary = `${base} background: var(--surface3); color: var(--text);`;
     open.style.cssText = opened ? secondary : primary;
@@ -10131,7 +10132,8 @@ function _showGithubSsoCard(data, ownerTabId) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ account: login }),
           });
-          if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
+          if (!res.ok)
+            throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
         } catch (err) {
           useBtn.disabled = false;
           _showConnectivityToast(`Could not switch to ${login}: ${err.message}`, 'error');
