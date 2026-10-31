@@ -10176,6 +10176,16 @@ function _availabilityGridAttendeeText(grid) {
   );
 }
 
+function _availabilityGridRepeatText(repeat) {
+  const phrase = {
+    weekdays: 'every weekday',
+    weekly: 'weekly',
+    biweekly: 'every 2 weeks',
+    monthly: 'monthly',
+  }[repeat];
+  return phrase ? ` Make it recurring ${phrase}.` : ' This is a one-time meeting, not recurring.';
+}
+
 function _showAvailabilityGrid(grid, ownerTabId) {
   if (!grid || !Array.isArray(grid.days) || !Array.isArray(grid.people) || !grid.people.length)
     return;
@@ -10233,7 +10243,19 @@ function _showAvailabilityGrid(grid, ownerTabId) {
   const later = textLink('Later weeks ›');
   const headerActions = document.createElement('div');
   headerActions.className = 'ag-header-actions';
-  headerActions.append(hours, later);
+  const repeat = document.createElement('select');
+  repeat.className = 'ag-repeat';
+  repeat.title = 'One time or repeating';
+  [
+    ['none', 'One time'],
+    ['weekdays', 'Every weekday'],
+    ['weekly', 'Weekly'],
+    ['biweekly', 'Every 2 weeks'],
+    ['monthly', 'Monthly'],
+  ].forEach(([value, label]) => repeat.add(new Option(label, value)));
+  repeat.value = [...repeat.options].some((o) => o.value === grid.repeat) ? grid.repeat : 'none';
+  repeat.addEventListener('click', (e) => e.stopPropagation());
+  headerActions.append(repeat, hours, later);
   header.append(title, headerActions);
   const body = document.createElement('div');
   body.className = 'gcc-body';
@@ -10243,6 +10265,7 @@ function _showAvailabilityGrid(grid, ownerTabId) {
   const table = document.createElement('table');
   table.className = 'avail-grid';
 
+  const adding = new Map();
   let picked = null;
   let pickedAt = null;
   let pickedBusy = [];
@@ -10336,6 +10359,17 @@ function _showAvailabilityGrid(grid, ownerTabId) {
         const st = day.rows[pi][k] || '?';
         td.className = `ag-cell ag-s-${st === '?' ? 'u' : st}`;
         td.title = `${person.name || person.email}: ${STATUS[st] || 'No data'}`;
+      });
+    });
+    adding.forEach((label) => {
+      const row = table.insertRow();
+      row.className = 'ag-pending-row';
+      row.appendChild(nameCell(`${label} · adding…`, 'ag-person ag-pending-name'));
+      grid.days.forEach(() => {
+        for (let k = k0; k < k1; k++) {
+          const td = row.insertCell();
+          td.className = 'ag-cell ag-pending' + (k === k0 ? ' ag-day-start' : '');
+        }
       });
     });
   }
@@ -10481,7 +10515,6 @@ function _showAvailabilityGrid(grid, ownerTabId) {
     });
   });
 
-  const adding = new Map();
   const inGrid = (email) => grid.people.some((p) => p.email === email);
   function showAddStatus() {
     const names = [...adding.values()];
@@ -10500,6 +10533,8 @@ function _showAvailabilityGrid(grid, ownerTabId) {
     const label = person.name || email;
     adding.set(email, label);
     showAddStatus();
+    refresh();
+    scroll.scrollTop = scroll.scrollHeight;
     enqueue(async () => {
       try {
         if (inGrid(email)) return;
@@ -10513,12 +10548,12 @@ function _showAvailabilityGrid(grid, ownerTabId) {
           throw new Error('unexpected response');
         grid.days.forEach((d, i) => d.rows.push(days[i].rows[0]));
         grid.people.push({ name: label, email, you: false, optional: false });
-        refresh();
       } catch (err) {
         _showConnectivityToast("Couldn't add that person: " + (err?.message || err), 'warn');
       } finally {
         adding.delete(email);
         showAddStatus();
+        refresh();
       }
     });
   }
@@ -10627,7 +10662,8 @@ function _showAvailabilityGrid(grid, ownerTabId) {
     const reply =
       `Let's do ${picked}.` +
       (pickedBusy.length ? ` ${pickedBusy.join(', ')} not free then; schedule it anyway.` : '') +
-      _availabilityGridAttendeeText(grid);
+      _availabilityGridAttendeeText(grid) +
+      _availabilityGridRepeatText(repeat.value);
     card.remove();
     _sendSandboxFollowUp(tabId, reply).catch((err) =>
       console.warn('[availability grid] pick not sent:', err),

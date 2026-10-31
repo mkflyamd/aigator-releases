@@ -295,6 +295,12 @@ TOOL_DEFS = [
                     "description": "Meeting length in minutes. Default 30.",
                     "default": 30,
                 },
+                "recurrence": {
+                    "type": "string",
+                    "enum": ["none", "weekdays", "weekly", "biweekly", "monthly"],
+                    "description": "Starting choice for the card's One time / repeat selector. Use the cadence the user asked for; omit it (one time) when they did not say. The user can change it on the card and the final choice comes back with the pick.",
+                    "default": "none",
+                },
             },
             "required": ["attendees"],
         },
@@ -792,7 +798,12 @@ def _tool_load_availability_days(
     return {"days": _grid_day_payloads(get_cal_client(), wanted, day_list, get_user_win_tz(), need, now)}
 
 
-def _tool_show_availability_grid(attendees: list, dates: list | None = None, duration_minutes: int = 30) -> dict:
+_GRID_REPEATS = ("none", "weekdays", "weekly", "biweekly", "monthly")
+
+
+def _tool_show_availability_grid(
+    attendees: list, dates: list | None = None, duration_minutes: int = 30, recurrence: str = "none"
+) -> dict:
     from .._m365.helpers import get_cal_client, get_cached_me
     from .helpers import get_user_win_tz
 
@@ -809,6 +820,8 @@ def _tool_show_availability_grid(attendees: list, dates: list | None = None, dur
     ]
     emails = [p["email"] for p in people]
     need = max(1, -(-int(duration_minutes or 30) // _GRID_STEP))
+    repeat = str(recurrence or "none").strip().lower()
+    repeat = repeat if repeat in _GRID_REPEATS else "none"
     days = _grid_day_payloads(gc, emails, _grid_days(dates, now), win_tz, need, now)
     best = []
     for d in days:
@@ -821,6 +834,7 @@ def _tool_show_availability_grid(attendees: list, dates: list | None = None, dur
         "grid_id": f"grid-{int(now.timestamp() * 1000)}",
         "timezone": win_tz,
         "duration_minutes": need * _GRID_STEP,
+        "repeat": repeat,
         "step_minutes": _GRID_STEP,
         "first_minute": 0,
         "work_start_minute": _GRID_WORK_START,

@@ -6166,6 +6166,37 @@ body.gator-chat-expanded .gator-expand-btn {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
 }
+.avail-grid-scroll::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.avail-grid-scroll::-webkit-scrollbar-track,
+.avail-grid-scroll::-webkit-scrollbar-corner {
+  background: var(--surface2);
+}
+.avail-grid-scroll::-webkit-scrollbar-thumb {
+  background: var(--text-dim);
+  border-radius: 5px;
+  border: 2px solid var(--surface2);
+}
+.ag-pending {
+  background: var(--surface2);
+  animation: ag-pending-pulse 1.2s ease-in-out infinite;
+}
+.ag-pending-name .ag-name-text {
+  color: var(--text-dim);
+  font-style: italic;
+}
+@keyframes ag-pending-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ag-pending {
+    animation: none;
+  }
+}
 .avail-grid {
   border-collapse: separate;
   border-spacing: 0;
@@ -6311,8 +6342,17 @@ body.gator-chat-expanded .gator-expand-btn {
 }
 .ag-header-actions {
   display: flex;
+  align-items: center;
   gap: 14px;
   margin-left: auto;
+}
+.ag-repeat {
+  font-size: 0.78rem;
+  padding: 3px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--border, #444);
+  background: var(--surface2);
+  color: inherit;
 }
 .ag-link-disabled {
   opacity: 0.4;

@@ -58,6 +58,14 @@ def test_everyone_free_columns_are_marked_and_one_hour_needs_two_free_halves():
     assert gc.calls[0]["availabilityViewInterval"] == 30
 
 
+def test_repeat_defaults_to_one_time_and_accepts_a_known_cadence():
+    views = {"me@example.com": "0" * 48}
+    base = {"attendees": ["a@example.com"], "dates": ["2030-01-07"]}
+    assert _run(views, **base)[0]["_availability_grid"]["repeat"] == "none"
+    assert _run(views, recurrence="Weekly", **base)[0]["_availability_grid"]["repeat"] == "weekly"
+    assert _run(views, recurrence="every other tuesday", **base)[0]["_availability_grid"]["repeat"] == "none"
+
+
 def test_a_person_with_no_data_does_not_block_and_shows_unknown():
     out, _ = _run({"me@example.com": "0" * 48}, attendees=["ghost@example.com"], dates=["2030-01-07"])
     day = out["_availability_grid"]["days"][0]

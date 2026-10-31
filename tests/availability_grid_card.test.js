@@ -89,4 +89,11 @@ assert.strictEqual(
   ' Required attendees: sherry@example.com. Optional attendees: james@example.com.',
 );
 
+const repeatText = load('_availabilityGridRepeatText');
+assert.strictEqual(repeatText('none'), ' This is a one-time meeting, not recurring.');
+assert.strictEqual(repeatText('weekly'), ' Make it recurring weekly.');
+assert.strictEqual(repeatText('biweekly'), ' Make it recurring every 2 weeks.');
+assert.strictEqual(repeatText('weekdays'), ' Make it recurring every weekday.');
+assert.strictEqual(repeatText(undefined), ' This is a one-time meeting, not recurring.');
+
 console.log('availability_grid_card: ok');
