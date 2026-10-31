@@ -3193,6 +3193,22 @@ setTimeout(scanAll, 500);
   _attachToolbarListeners(slackView, 'slack');
   _attachToolbarListeners(teamsView, 'teams');
   _attachToolbarListeners(outlookView, 'outlook');
+  // Without a handler Electron silently cancels any navigation away from a page with
+  // unsaved changes (the calendar compose form), so the address bar, Back and the
+  // links above all appear dead. Ask the way a browser does.
+  outlookView.webContents.on('will-prevent-unload', (e) => {
+    const { dialog } = require('electron');
+    const leave =
+      dialog.showMessageBoxSync(win, {
+        type: 'question',
+        buttons: ['Leave', 'Stay'],
+        defaultId: 1,
+        cancelId: 1,
+        title: 'Leave this page?',
+        message: 'Changes you made may not be saved.',
+      }) === 0;
+    if (leave) e.preventDefault();
+  });
   for (const ev of ['dom-ready', 'did-navigate', 'did-navigate-in-page']) {
     outlookView.webContents.on(ev, () => _syncOutlookStandaloneNav(outlookView.webContents));
   }

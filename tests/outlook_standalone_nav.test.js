@@ -14,6 +14,13 @@ assert(
   'script is wired to the Outlook view',
 );
 
+assert(
+  /outlookView\.webContents\.on\('will-prevent-unload'[\s\S]*?Leave[\s\S]*?Stay[\s\S]*?e\.preventDefault\(\)/.test(
+    source,
+  ),
+  'leaving a page with unsaved changes asks Leave/Stay instead of silently cancelling',
+);
+
 class FakeEl {
   constructor(tag) {
     this.tag = tag;
