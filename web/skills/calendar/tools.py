@@ -199,7 +199,7 @@ TOOL_DEFS = [
     },
     {
         "name": "draft_calendar_event",
-        "description": "Create a meeting draft card. Nothing is sent: the user presses Open in Outlook to review, edit and send it from Outlook. Call this as soon as the user confirms the meeting details (time, subject, attendees). Do not ask for confirmation more than once.",
+        "description": "Create a meeting draft card. Nothing is sent until the user presses Send invite, or Open in Outlook to review, edit and send it from Outlook. Call this as soon as the user confirms the meeting details (time, subject, attendees). Do not ask for confirmation more than once.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -520,7 +520,7 @@ def _tool_draft_calendar_event(
     return {
         "_draft": "calendar-event",
         "data": {**params, "attendee_local": attendee_local, "draft_id": draft_id},
-        "_user_message": "Meeting draft ready. Press Open in Outlook to review and send it from there.",
+        "_user_message": "Meeting draft ready. Press Send invite to send it, or Open in Outlook to review and edit it first.",
     }
 
 

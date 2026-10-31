@@ -160,13 +160,13 @@ Before passing start/end datetimes to any calendar tool:
 
 ## Event Draft (draft_calendar_event)
 
-Once the user confirms the slot, subject and attendees, call draft_calendar_event directly. It shows a draft card and sends nothing; the user presses **Open in Outlook** to review, edit and send the meeting from Outlook. Do not render a markdown draft block and do not ask for a second confirmation.
+Once the user confirms the slot, subject and attendees, call draft_calendar_event directly. It shows a draft card and sends nothing; the user presses **Send invite** to create the meeting and send the invites, or **Open in Outlook** to review, edit and send it from a new-event window. Do not render a markdown draft block and do not ask for a second confirmation.
 
 Rules:
 
 - Fill every field you know: subject, start, end, required and optional attendees, location, `teams`, recurrence and an HTML body.
 - Recurrence: spell it out plainly in your reply ("Weekly, every Tuesday until Jun 30") and pass the Graph recurrence object.
-- After the card appears, tell the user the meeting is not sent yet and that Open in Outlook lets them change the body or add attendees.
+- After the card appears, tell the user the meeting is not sent yet, that Send invite sends it as drafted, and that Open in Outlook lets them change the body or add attendees first.
 - If the user asks for a change, call draft_calendar_event again with the updated values.
 
 ## Timezones

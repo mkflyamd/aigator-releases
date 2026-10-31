@@ -920,6 +920,18 @@ async def approve_draft(draft_id: str, body: dict = None):
             delivery_result["ok"] = True if matched_link else "partial"
             delivery_result["navigate_to"] = {"app": "jira", "url": target.issue_url(issue_key)}
 
+        elif dtype == "calendar-event":
+            from skills._m365.helpers import get_cal_client
+
+            if not (p.get("attendees") or p.get("optional_attendees")):
+                raise HTTPException(status_code=400, detail="No attendees specified")
+            result = get_cal_client().post("/me/events", _calendar_event_payload(p))
+            delivery_result = {
+                "ok": True,
+                "sent_to": (p.get("attendees") or []) + (p.get("optional_attendees") or []),
+                "event_id": (result or {}).get("id", ""),
+            }
+
         # â”€â”€ Calendar (Google Workspace MCP) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         elif dtype == "calendar-write":
             from mcp.manager import _load_connections, _client_for
@@ -1001,6 +1013,36 @@ async def approve_draft(draft_id: str, body: dict = None):
 
 
 # â”€â”€ open_draft_in_outlook â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+def _calendar_event_payload(params: dict) -> dict:
+    import re
+
+    tz = params.get("timezone", "")
+    event: dict = {
+        "subject": params.get("subject", ""),
+        "start": {"dateTime": params.get("start", ""), "timeZone": tz},
+        "end": {"dateTime": params.get("end", ""), "timeZone": tz},
+    }
+    attendees = [
+        {"emailAddress": {"address": a}, "type": kind}
+        for kind, key in (("required", "attendees"), ("optional", "optional_attendees"))
+        for a in (params.get(key) or [])
+    ]
+    if attendees:
+        event["attendees"] = attendees
+    body = params.get("body") or ""
+    if body:
+        is_html = bool(re.search(r"<\w+[^>]*>", body))
+        event["body"] = {"contentType": "HTML" if is_html else "text", "content": body}
+    if params.get("location"):
+        event["location"] = {"displayName": params["location"]}
+    if params.get("teams"):
+        event["isOnlineMeeting"] = True
+        event["onlineMeetingProvider"] = "teamsForBusiness"
+    if params.get("recurrence"):
+        event["recurrence"] = params["recurrence"]
+    return event
+
 
 def _calendar_compose_url(params: dict) -> str:
     query = {

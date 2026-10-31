@@ -44,17 +44,30 @@ assert(
 );
 assert.strictEqual(when({ start: 'garbage', end: '' }), 'garbage');
 
-// The card config offers only Open in Outlook: no approve button for this type.
+// Like the email card, the calendar card has two buttons: Send invite (explicit click)
+// and Open in Outlook.
 const config = source.match(/'calendar-event': \{[\s\S]*?\n    \},/);
 assert(config, 'calendar-event config present');
-assert(/hideApprove: true/.test(config[0]), 'no approve button');
+assert(!/hideApprove/.test(config[0]), 'approve button is not hidden');
+assert(/sendLabel: 'Send invite'/.test(config[0]), 'Send invite label');
+assert(/openButton: true/.test(config[0]), 'Open button shown next to Send');
 assert(/openLabel: 'Open in Outlook'/.test(config[0]), 'Open in Outlook label');
-assert(/config\.hideApprove\s*\?\s*`<button class="gcc-open-outlook-btn"/.test(source));
+assert(/<button class="gcc-approve-btn"[^`]*\$\{config\.sendLabel \|\| 'Send'\}/.test(source));
+assert(/config\.openButton \? `<button class="gcc-open-outlook-btn"/.test(source));
 
-// The card does not claim an approval or a send: the user sends from Outlook.
+// Nothing is sent until the click, and the title says so.
 assert(/title: 'Meeting draft ready'/.test(config[0]), 'calendar title');
-assert(/flowVerb: 'Opens in'/.test(config[0]), 'calendar flow verb');
+assert(/Nothing is sent until you press Send invite/.test(config[0]), 'footer note');
 assert(/\$\{config\.title \|\| 'Draft ready for approval'\}/.test(source), 'title is configurable');
-assert(/\$\{config\.flowVerb \|\| 'Sending to'\}/.test(source), 'flow verb is configurable');
+
+// Open uses the native-style new-event popout, and Send/Open lock each other out.
+const openHandler = source.match(
+  /openCalendarBtn\.addEventListener\('click'[\s\S]*?\r?\n    \}\);\r?\n/,
+);
+assert(openHandler, 'open handler found');
+assert(/gatorShell\.openOutlookCompose\(url\)/.test(openHandler[0]), 'opens the popout window');
+assert(!/openThirdPane/.test(openHandler[0]), 'does not load the draft into the Outlook pane');
+assert(/approveBtn\.disabled = true/.test(openHandler[0]), 'opened draft cannot also be sent');
+assert(/if \(openCalendarBtn\) openCalendarBtn\.disabled = true;/.test(source), 'Send locks Open');
 
 console.log('calendar_draft_card ok');

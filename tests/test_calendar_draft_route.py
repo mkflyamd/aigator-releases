@@ -1,4 +1,4 @@
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 from urllib.parse import parse_qs, urlparse
 
 from fastapi.testclient import TestClient
@@ -52,8 +52,48 @@ def test_open_marks_handed_off_and_second_open_is_409():
     assert _post(client, f"/api/drafts/{did}/open-in-outlook").status_code == 409
 
 
-def test_approving_a_calendar_draft_is_rejected():
+def test_approving_a_calendar_draft_creates_the_event_once():
     client = TestClient(app)
     did = _draft()
-    res = _post(client, f"/api/drafts/{did}/approve")
-    assert res.status_code == 400
+    gc = MagicMock()
+    gc.post.return_value = {"id": "evt1"}
+    with patch("skills._m365.helpers.get_cal_client", return_value=gc):
+        res = _post(client, f"/api/drafts/{did}/approve")
+    assert res.status_code == 200
+    assert res.json()["ok"] is True
+    path, event = gc.post.call_args.args
+    assert path == "/me/events"
+    assert event["subject"] == "Sync & plan"
+    assert event["start"] == {"dateTime": PARAMS["start"], "timeZone": PARAMS["timezone"]}
+    assert event["end"] == {"dateTime": PARAMS["end"], "timeZone": PARAMS["timezone"]}
+    assert [(a["emailAddress"]["address"], a["type"]) for a in event["attendees"]] == [
+        ("a@x.com", "required"),
+        ("b@y.com", "required"),
+        ("c@z.com", "optional"),
+    ]
+    assert event["body"] == {"contentType": "HTML", "content": PARAMS["body"]}
+    assert event["location"] == {"displayName": "Room 4"}
+    assert event["isOnlineMeeting"] is True
+    assert event["onlineMeetingProvider"] == "teamsForBusiness"
+    assert "recurrence" not in event
+    assert get_draft(did) is None
+
+
+def test_failed_calendar_send_keeps_the_draft_for_retry():
+    client = TestClient(app)
+    did = _draft()
+    gc = MagicMock()
+    gc.post.side_effect = RuntimeError("graph down")
+    with patch("skills._m365.helpers.get_cal_client", return_value=gc):
+        res = _post(client, f"/api/drafts/{did}/approve")
+    assert res.status_code == 500
+    assert get_draft(did)["status"] == "pending"
+
+
+def test_calendar_draft_opened_in_outlook_cannot_also_be_sent():
+    client = TestClient(app)
+    did = _draft()
+    assert _post(client, f"/api/drafts/{did}/open-in-outlook").status_code == 200
+    with patch("skills._m365.helpers.get_cal_client", side_effect=AssertionError("no Graph call")):
+        res = _post(client, f"/api/drafts/{did}/approve")
+    assert res.status_code == 409

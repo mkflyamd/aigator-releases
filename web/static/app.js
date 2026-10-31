@@ -10925,12 +10925,12 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
       paneIcon: '📅',
       service: 'calendar',
       action: 'Meeting invite',
-      hideApprove: true,
       hideEditLink: true,
       title: 'Meeting draft ready',
-      flowVerb: 'Opens in',
+      sendLabel: 'Send invite',
+      openButton: true,
       openLabel: 'Open in Outlook',
-      footerNote: 'Nothing is sent yet. Review and send it from Outlook.',
+      footerNote: 'Nothing is sent until you press Send invite.',
       customBody: _buildCalendarDraftRows(data),
     },
     'email-send': {
@@ -11171,11 +11171,8 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
           ${config.service === 'teams' && !config.customBody ? '<div class="gcc-mention-hint">Type <strong>@</strong> to mention a Teams person.</div>' : ''}
         </div>
         <div class="gcc-actions">
-          ${
-            config.hideApprove
-              ? `<button class="gcc-open-outlook-btn" data-draft-id="${draftId}">${config.openLabel}</button>`
-              : `<button class="gcc-approve-btn" data-draft-id="${draftId}">${config.sendLabel || 'Send'}</button>`
-          }
+          <button class="gcc-approve-btn" data-draft-id="${draftId}">${config.sendLabel || 'Send'}</button>
+          ${config.openButton ? `<button class="gcc-open-outlook-btn" data-draft-id="${draftId}">${config.openLabel}</button>` : ''}
           ${config.showSchedule ? `<button class="gcc-schedule-btn" disabled title="Scheduling \u2014 coming soon">\u23F0</button>` : ''}
           ${
             !config.hideEditLink && config.viewAvailable !== false && canOpenNativeApp
@@ -11222,6 +11219,7 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
   });
 
   const openCalendarBtn = card.querySelector('.gcc-open-outlook-btn');
+  const _applyWording = config.hideEditLink && config.service !== 'calendar';
   if (openCalendarBtn) {
     openCalendarBtn.addEventListener('click', async () => {
       openCalendarBtn.disabled = true;
@@ -11245,14 +11243,16 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
           throw new Error(typeof err.detail === 'string' ? err.detail : 'HTTP ' + res.status);
         }
         const { url } = await res.json();
-        if (canOpenNativeApp && window.gatorShell.openOutlookDraft) {
-          if (typeof openThirdPane === 'function') openThirdPane('email');
-          await window.gatorShell.openOutlookDraft(url);
+        if (canOpenNativeApp && window.gatorShell.openOutlookCompose) {
+          await window.gatorShell.openOutlookCompose(url);
         } else {
           window.open(url, '_blank', 'noopener');
         }
         openCalendarBtn.textContent = 'Opened in Outlook ↗';
         openCalendarBtn.classList.add('gcc-handed-off');
+        approveBtn.disabled = true;
+        approveBtn.textContent = 'Send from Outlook instead';
+        approveBtn.classList.add('gcc-handed-off');
       } catch (err) {
         openCalendarBtn.textContent = config.openLabel;
         openCalendarBtn.disabled = false;
@@ -11263,7 +11263,8 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
 
   approveBtn?.addEventListener('click', async () => {
     approveBtn.disabled = true;
-    approveBtn.textContent = config.hideEditLink ? 'Applying\u2026' : 'Sending\u2026';
+    if (openCalendarBtn) openCalendarBtn.disabled = true;
+    approveBtn.textContent = _applyWording ? 'Applying\u2026' : 'Sending\u2026';
     try {
       const editedFields = {};
       jiraEditFields.forEach((el) => {
@@ -11326,7 +11327,7 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
         throw new Error(friendlyMsg);
       }
       const _json = await res.json().catch(() => ({}));
-      approveBtn.textContent = config.hideEditLink ? 'Applied \u2713' : 'Sent \u2713';
+      approveBtn.textContent = _applyWording ? 'Applied \u2713' : 'Sent \u2713';
       approveBtn.classList.add('gcc-approved');
       _removeTabDraft(ownerTabId, draftId);
       if (editLink) editLink.style.display = 'none';
@@ -11341,6 +11342,7 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
     } catch (e) {
       approveBtn.textContent = 'Failed \u2014 retry?';
       approveBtn.disabled = false;
+      if (openCalendarBtn) openCalendarBtn.disabled = false;
       approveBtn.classList.add('gcc-failed');
       if (e && e.message) {
         const errDiv =
