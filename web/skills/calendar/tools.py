@@ -242,7 +242,7 @@ TOOL_DEFS = [
     },
     {
         "name": "find_meeting_times",
-        "description": "Find available meeting slots with one or more attendees using Microsoft's findMeetingTimes API. Use when the user asks to find a time, schedule a meeting, or wants to know when everyone is free. Call this BEFORE create_calendar_event when a specific time hasn't been agreed on.",
+        "description": "Find available meeting slots with one or more attendees using Microsoft's findMeetingTimes API. Use when the user asks to find a time, schedule a meeting, or wants to know when everyone is free. Call this BEFORE create_calendar_event when a specific time hasn't been agreed on. Each slot carries its timezone and each attendee's local time; state both to the user.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -264,6 +264,11 @@ TOOL_DEFS = [
                     "type": "integer",
                     "description": "Max number of slot suggestions to return. Default 5.",
                     "default": 5,
+                },
+                "ignore_timezones": {
+                    "type": "boolean",
+                    "description": "Set true when the user asks to ignore timezones or attendee working hours. Default false: slots respect each attendee's working hours.",
+                    "default": False,
                 },
             },
             "required": ["attendees"],
@@ -545,9 +550,11 @@ def _tool_find_meeting_times(
     date: str = "",
     duration_minutes: int = 30,
     max_suggestions: int = 5,
+    ignore_timezones: bool = False,
 ) -> dict:
     from .._m365.helpers import get_cal_client
     from .helpers import get_user_win_tz, fmt_cal_time
+    from . import timezones
 
     gc = get_cal_client()
     win_tz = get_user_win_tz()
@@ -556,37 +563,53 @@ def _tool_find_meeting_times(
         day = datetime.fromisoformat(date).replace(tzinfo=local_tz).strftime("%Y-%m-%d")
     else:
         day = (datetime.now(local_tz) + timedelta(days=1)).strftime("%Y-%m-%d")
+    time_constraint = {
+        "timeslots": [
+            {
+                "start": {"dateTime": f"{day}T08:00:00", "timeZone": win_tz},
+                "end": {"dateTime": f"{day}T18:00:00", "timeZone": win_tz},
+            }
+        ]
+    }
+    if ignore_timezones:
+        time_constraint["activityDomain"] = "unrestricted"
     result = gc.post(
         "/me/findMeetingTimes",
         {
             "attendees": [
                 {"emailAddress": {"address": a}, "type": "required"} for a in attendees
             ],
-            "timeConstraint": {
-                "timeslots": [
-                    {
-                        "start": {"dateTime": f"{day}T08:00:00", "timeZone": win_tz},
-                        "end": {"dateTime": f"{day}T18:00:00", "timeZone": win_tz},
-                    }
-                ]
-            },
+            "timeConstraint": time_constraint,
             "meetingDuration": f"PT{duration_minutes}M",
             "maxCandidates": max_suggestions,
         },
     )
+    zones = timezones.attendee_zones(gc, [a.lower() for a in attendees], day, win_tz)
     suggestions = []
     for slot in result.get("meetingTimeSuggestions", []):
         s = slot.get("meetingTimeSlot", {})
+        raw_start = s.get("start", {}).get("dateTime", "")
+        raw_end = s.get("end", {}).get("dateTime", "")
+        slot_tz = s.get("start", {}).get("timeZone") or win_tz
+        local = {}
+        for email, info in zones.items():
+            shown = timezones.fmt_range(raw_start, raw_end, slot_tz, info["timezone"])
+            local[email] = shown or f"{fmt_cal_time(raw_start)} - {fmt_cal_time(raw_end)} {slot_tz}"
         suggestions.append(
             {
-                "start": fmt_cal_time(s.get("start", {}).get("dateTime", "")),
-                "end": fmt_cal_time(s.get("end", {}).get("dateTime", "")),
+                "start": fmt_cal_time(raw_start),
+                "end": fmt_cal_time(raw_end),
+                "timezone": slot_tz,
+                "attendee_local": local,
                 "confidence": round(slot.get("confidence", 0) * 100),
             }
         )
     return {
         "date": day,
         "duration_minutes": duration_minutes,
+        "timezone": win_tz,
+        "ignore_timezones": ignore_timezones,
+        "attendee_timezones": zones,
         "suggestions": suggestions,
     }
 
