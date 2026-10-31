@@ -10107,6 +10107,176 @@ function _showAskUserCard(data, ownerTabId) {
   card.scrollIntoView({ behavior: 'smooth', block: 'end' });
 }
 
+// ── availability grid card ───────────────────────────────────────────────────
+// Outlook Scheduling-Assistant style: people down the side, half-hour columns grouped by day across the
+// top. Columns where everyone is free are highlighted; picking one and pressing "Use this time" sends
+// that slot as the next ordinary chat message. Names come from the model/tool: textContent only.
+function _availabilityGridClock(minute) {
+  const h = Math.floor(minute / 60);
+  const m = minute % 60;
+  return `${h % 12 || 12}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`;
+}
+
+function _availabilityGridSlotText(grid, dayIndex, slotIndex) {
+  const day = grid.days[dayIndex];
+  const [y, mo, d] = day.date.split('-').map(Number);
+  const dayText = new Date(y, mo - 1, d).toLocaleDateString('en-US', {
+    weekday: 'long',
+    month: 'short',
+    day: 'numeric',
+  });
+  const begin = grid.first_minute + slotIndex * grid.step_minutes;
+  const end = begin + grid.duration_minutes;
+  return `${dayText}, ${_availabilityGridClock(begin)} – ${_availabilityGridClock(end)} (${grid.timezone})`;
+}
+
+function _showAvailabilityGrid(grid, ownerTabId) {
+  if (!grid || !Array.isArray(grid.days) || !Array.isArray(grid.people) || !grid.people.length)
+    return;
+  const tabId = ownerTabId || _activeTabId || 'default';
+  if (tabId !== _activeTabId) {
+    _tabsWithUpdates.add(tabId);
+    document.querySelector?.(`.tab-item[data-tab-id="${tabId}"]`)?.classList.add('tab-has-update');
+    _showConnectivityToast(
+      'AI Gator has availability for you to pick from in another tab.',
+      'info',
+    );
+    return;
+  }
+  document.querySelectorAll('.avail-grid-card').forEach((el) => el.remove());
+  const steps = grid.days[0] ? grid.days[0].fit.length : 0;
+  const perHour = Math.max(1, Math.round(60 / grid.step_minutes));
+  const spanSlots = Math.max(1, Math.round(grid.duration_minutes / grid.step_minutes));
+  const STATUS = {
+    f: 'Free',
+    t: 'Tentative',
+    b: 'Busy',
+    o: 'Out of office',
+    w: 'Working elsewhere',
+    '?': 'No data',
+  };
+
+  const card = document.createElement('div');
+  card.className = 'message assistant avail-grid-card';
+  const bubble = document.createElement('div');
+  bubble.className = 'bubble card-bubble';
+  const box = document.createElement('div');
+  box.className = 'gator-compose-card gator-draft-card';
+  const header = document.createElement('div');
+  header.className = 'gcc-header';
+  const title = document.createElement('div');
+  title.className = 'gcc-title';
+  title.textContent = `Pick a time · ${grid.duration_minutes} min · ${grid.timezone}`;
+  header.appendChild(title);
+  const body = document.createElement('div');
+  body.className = 'gcc-body';
+
+  const scroll = document.createElement('div');
+  scroll.className = 'avail-grid-scroll';
+  const table = document.createElement('table');
+  table.className = 'avail-grid';
+
+  const dayRow = table.insertRow();
+  const hourRow = table.insertRow();
+  const corner = (row) => {
+    const th = document.createElement('th');
+    th.className = 'ag-name ag-corner';
+    row.appendChild(th);
+  };
+  corner(dayRow);
+  corner(hourRow);
+  grid.days.forEach((day) => {
+    const th = document.createElement('th');
+    th.className = 'ag-day';
+    th.colSpan = steps;
+    th.textContent = day.label;
+    dayRow.appendChild(th);
+    for (let k = 0; k < steps; k += perHour) {
+      const h = document.createElement('th');
+      h.className = 'ag-hour' + (k === 0 ? ' ag-day-start' : '');
+      h.colSpan = Math.min(perHour, steps - k);
+      h.textContent = _availabilityGridClock(grid.first_minute + k * grid.step_minutes).replace(
+        ':00',
+        '',
+      );
+      hourRow.appendChild(h);
+    }
+  });
+
+  let picked = null;
+  const cellsByDay = grid.days.map(() => []);
+  const addRow = (label, className, cellFor) => {
+    const row = table.insertRow();
+    const name = document.createElement('th');
+    name.className = 'ag-name ' + className;
+    name.textContent = label;
+    name.title = label;
+    row.appendChild(name);
+    grid.days.forEach((day, di) => {
+      for (let k = 0; k < steps; k++) {
+        const td = row.insertCell();
+        cellFor(td, day, di, k);
+        if (k === 0) td.classList.add('ag-day-start');
+      }
+    });
+  };
+
+  addRow('Everyone free', 'ag-all', (td, day, di, k) => {
+    td.className = 'ag-cell ' + (day.fit[k] === '1' ? 'ag-fit' : 'ag-nofit');
+    if (day.fit[k] === '1') {
+      td.title = _availabilityGridSlotText(grid, di, k);
+      td.addEventListener('click', () => pick(di, k));
+      cellsByDay[di][k] = td;
+    }
+  });
+  grid.people.forEach((person, pi) => {
+    addRow(person.you ? 'You' : person.name || person.email, 'ag-person', (td, day, di, k) => {
+      const st = day.rows[pi][k] || '?';
+      td.className = `ag-cell ag-s-${st === '?' ? 'u' : st}`;
+      td.title = `${person.name || person.email}: ${STATUS[st] || 'No data'}`;
+    });
+  });
+  scroll.appendChild(table);
+
+  const footer = document.createElement('div');
+  footer.className = 'ag-footer';
+  const chosen = document.createElement('span');
+  chosen.className = 'ag-chosen';
+  chosen.textContent = 'Click a green column to choose a time';
+  const use = document.createElement('button');
+  use.className = 'gcc-approve-btn';
+  use.textContent = 'Use this time';
+  use.disabled = true;
+  footer.append(chosen, use);
+
+  function pick(di, k) {
+    cellsByDay.forEach((cells) => cells.forEach((c) => c && c.classList.remove('ag-picked')));
+    for (let j = k; j < k + spanSlots && j < steps; j++)
+      cellsByDay[di][j]?.classList.add('ag-picked');
+    picked = _availabilityGridSlotText(grid, di, k);
+    chosen.textContent = picked;
+    use.disabled = false;
+  }
+  use.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (!picked) return;
+    const reply = `Let's do ${picked}.`;
+    card.remove();
+    _sendSandboxFollowUp(tabId, reply).catch((err) =>
+      console.warn('[availability grid] pick not sent:', err),
+    );
+  });
+
+  body.append(scroll, footer);
+  box.append(header, body);
+  bubble.appendChild(box);
+  card.appendChild(bubble);
+  document.getElementById('messages')?.appendChild(card);
+  const firstFit = scroll.querySelector('.ag-fit');
+  if (firstFit) scroll.scrollLeft = Math.max(0, firstFit.offsetLeft - 140);
+  card.scrollIntoView({ behavior: 'smooth', block: 'end' });
+}
+
 function _showSandboxApproval(data, ownerTabId) {
   const requestId = data && typeof data.request_id === 'string' ? data.request_id : '';
   if (!requestId) return;
@@ -14131,6 +14301,8 @@ form.addEventListener('submit', async (e) => {
               _routeDraftToTab(requestTabId, msg.draft, msg.draftData || {});
             } else if (msg.jira_target_selection) {
               _showJiraTargetSelection(msg.jira_target_selection, requestTabId);
+            } else if (msg.availability_grid) {
+              _showAvailabilityGrid(msg.availability_grid, requestTabId);
             } else if (msg.sandbox_approval) {
               _showSandboxApproval(msg.sandbox_approval, requestTabId);
             } else if (msg.ask_user) {

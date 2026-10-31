@@ -275,6 +275,31 @@ TOOL_DEFS = [
         },
     },
     {
+        "name": "show_availability_grid",
+        "description": "Show an Outlook-style availability grid card: people down the side, days and half-hour times across the top, mutual-free times highlighted, and the user clicks a free slot to pick it. Use it to let the user choose a meeting time among the attendees (any meeting, one-off or recurring). The click comes back as the user's next message. After calling it, end your turn with one short sentence; do not also call ask_user.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "attendees": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Attendee email addresses, not including the user",
+                },
+                "dates": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "ISO dates (YYYY-MM-DD) to show, up to 10. Defaults to the next three working days.",
+                },
+                "duration_minutes": {
+                    "type": "integer",
+                    "description": "Meeting length in minutes. Default 30.",
+                    "default": 30,
+                },
+            },
+            "required": ["attendees"],
+        },
+    },
+    {
         "name": "delete_calendar_event",
         "description": "Delete (cancel) a calendar event by its ID. Use when the user asks to cancel or delete a meeting. Requires an event ID \u2014 call read_calendar first if you don't have it.",
         "input_schema": {
@@ -428,6 +453,7 @@ TOOL_STATUS = {
     "update_calendar_event": "\U0001f4c5 Updating calendar event...",
     "draft_calendar_event": "\U0001f4c5 Drafting calendar event...",
     "find_meeting_times": "\U0001f4c5 Finding available slots...",
+    "show_availability_grid": "📅 Building availability grid...",
     "delete_calendar_event": "\U0001f4c5 Cancelling event...",
     "respond_calendar_event": "\U0001f4c5 Updating RSVP...",
     "create_ooo_event": "\U0001f4c5 Creating OOO event...",
@@ -622,6 +648,109 @@ def _tool_find_meeting_times(
         "ignore_timezones": ignore_timezones,
         "attendee_timezones": zones,
         "suggestions": suggestions,
+    }
+
+
+_GRID_FIRST_HOUR = 8
+_GRID_LAST_HOUR = 18
+_GRID_STEP = 30
+_GRID_STATUS = {"0": "f", "1": "t", "2": "b", "3": "o", "4": "w"}
+
+
+def _clock12(minutes: int) -> str:
+    h, m = divmod(minutes, 60)
+    return f"{(h % 12) or 12}:{m:02d} {'AM' if h < 12 else 'PM'}"
+
+
+def _person_name(email: str) -> str:
+    return " ".join(p.capitalize() for p in re.split(r"[._\-]+", email.split("@")[0]) if p)
+
+
+def _grid_days(dates, now: datetime) -> list:
+    days = []
+    for raw in dates or []:
+        try:
+            d = datetime.fromisoformat(str(raw)).date()
+        except ValueError:
+            continue
+        if d not in days:
+            days.append(d)
+    if days:
+        return days[:10]
+    d = now.date()
+    while len(days) < 3:
+        d += timedelta(days=1)
+        if d.weekday() < 5:
+            days.append(d)
+    return days
+
+
+def _tool_show_availability_grid(attendees: list, dates: list | None = None, duration_minutes: int = 30) -> dict:
+    from .._m365.helpers import get_cal_client, get_cached_me
+    from .helpers import get_user_win_tz
+
+    gc = get_cal_client()
+    win_tz = get_user_win_tz()
+    now = datetime.now()
+    me = get_cached_me(gc)
+    my_email = (me.get("mail") or me.get("userPrincipalName") or "").lower()
+    others = [e for e in _parse_email_list(attendees) if e.lower() != my_email]
+    if not others:
+        return {"error": "Give at least one attendee email."}
+    people = [{"name": "You", "email": my_email, "you": True}] + [
+        {"name": _person_name(e), "email": e.lower(), "you": False} for e in others
+    ]
+    emails = [p["email"] for p in people]
+    per_day = (_GRID_LAST_HOUR - _GRID_FIRST_HOUR) * 60 // _GRID_STEP
+    need = max(1, -(-int(duration_minutes or 30) // _GRID_STEP))
+    days = []
+    for day in _grid_days(dates, now):
+        views: dict[str, str] = {}
+        for i in range(0, len(emails), 20):
+            result = gc.post(
+                "/me/calendar/getSchedule",
+                {
+                    "schedules": emails[i : i + 20],
+                    "startTime": {"dateTime": f"{day:%Y-%m-%d}T{_GRID_FIRST_HOUR:02d}:00:00", "timeZone": win_tz},
+                    "endTime": {"dateTime": f"{day:%Y-%m-%d}T{_GRID_LAST_HOUR:02d}:00:00", "timeZone": win_tz},
+                    "availabilityViewInterval": _GRID_STEP,
+                },
+            )
+            for s in result.get("value", []):
+                views[(s.get("scheduleId") or "").lower()] = s.get("availabilityView") or ""
+        rows = []
+        for e in emails:
+            view = views.get(e, "")
+            rows.append("".join(_GRID_STATUS.get(view[k], "?") if k < len(view) else "?" for k in range(per_day)))
+        fit = ""
+        for k in range(per_day):
+            start = datetime.combine(day, datetime.min.time()) + timedelta(minutes=_GRID_FIRST_HOUR * 60 + k * _GRID_STEP)
+            ok = k + need <= per_day and start > now
+            ok = ok and all(r[j] in "f?" for r in rows for j in range(k, min(k + need, per_day)))
+            fit += "1" if ok else "0"
+        days.append({"date": f"{day:%Y-%m-%d}", "label": f"{day:%a %b} {day.day}", "rows": rows, "fit": fit})
+    best = []
+    for d in days:
+        for k, c in enumerate(d["fit"]):
+            if c == "1" and len(best) < 5:
+                begin = _GRID_FIRST_HOUR * 60 + k * _GRID_STEP
+                day = datetime.fromisoformat(d["date"])
+                best.append(f"{day:%A, %b} {day.day}, {_clock12(begin)} - {_clock12(begin + need * _GRID_STEP)}")
+    grid = {
+        "grid_id": f"grid-{int(now.timestamp() * 1000)}",
+        "timezone": win_tz,
+        "duration_minutes": need * _GRID_STEP,
+        "step_minutes": _GRID_STEP,
+        "first_minute": _GRID_FIRST_HOUR * 60,
+        "people": people,
+        "days": days,
+    }
+    return {
+        "_availability_grid": grid,
+        "grid_shown": True,
+        "timezone": win_tz,
+        "mutual_free_examples": best,
+        "message": "An availability grid is on screen. End your turn now with one short sentence; the user clicks a free slot and it comes back as their next message.",
     }
 
 
@@ -1499,6 +1628,7 @@ TOOL_HANDLERS = {
     "update_calendar_event": _tool_update_calendar_event,
     "draft_calendar_event": _tool_draft_calendar_event,
     "find_meeting_times": _tool_find_meeting_times,
+    "show_availability_grid": _tool_show_availability_grid,
     "delete_calendar_event": _tool_delete_calendar_event,
     "respond_calendar_event": _tool_respond_calendar_event,
     "create_ooo_event": _tool_create_ooo_event,

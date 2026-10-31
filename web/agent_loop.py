@@ -1067,6 +1067,9 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
                 _source_ids.add(_read.flow_id)
         if isinstance(result, dict) and "_jira_target_selection" in result:
             await event_queue.put({"kind": "jira_target_selection", "data": result["_jira_target_selection"]})
+        if isinstance(result, dict) and "_availability_grid" in result:
+            await event_queue.put({"kind": "availability_grid", "data": result["_availability_grid"]})
+            result = {k: v for k, v in result.items() if k != "_availability_grid"}
         if isinstance(result, dict) and "_sandbox_approval" in result:
             await event_queue.put({"kind": "sandbox_approval", "data": result["_sandbox_approval"]})
         if isinstance(result, dict) and result.get("files"):
@@ -1552,6 +1555,8 @@ async def _single_agent_loop(
                     yield f"data: {json.dumps({'draft': evt['draft'], 'draftData': evt.get('data', {})})}\n\n"
                 elif kind == "jira_target_selection":
                     yield f"data: {json.dumps({'jira_target_selection': evt.get('data', {})})}\n\n"
+                elif kind == "availability_grid":
+                    yield f"data: {json.dumps({'availability_grid': evt.get('data', {})})}\n\n"
                 elif kind == "sandbox_approval":
                     yield f"data: {json.dumps({'sandbox_approval': evt.get('data', {})})}\n\n"
                 elif kind == "ask_user":
@@ -2110,6 +2115,8 @@ async def run_three_agent_loop(
                     yield f"data: {json.dumps({'draft': evt['draft'], 'draftData': evt.get('data', {})})}\n\n"
                 elif kind == "jira_target_selection":
                     yield f"data: {json.dumps({'jira_target_selection': evt.get('data', {})})}\n\n"
+                elif kind == "availability_grid":
+                    yield f"data: {json.dumps({'availability_grid': evt.get('data', {})})}\n\n"
                 elif kind == "sandbox_approval":
                     yield f"data: {json.dumps({'sandbox_approval': evt.get('data', {})})}\n\n"
                 elif kind == "toast":
