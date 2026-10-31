@@ -55,7 +55,7 @@ def apply(query: str, result: dict, known: dict[str, dict]) -> dict:
     if len(in_context) == 1:
         out["resolved_from_context"] = in_context[0]["email"]
         out["hint"] = (
-            f"{in_context[0]['name'] or in_context[0]['email']} is in the conversation you already read. "
+            "Exactly one match is in the conversation you already read (see resolved_from_context). "
             "Use this person and do not ask which one was meant."
         )
     return out

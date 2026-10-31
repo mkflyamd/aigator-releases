@@ -39,6 +39,7 @@ def test_no_availability_data_gives_no_strip():
 
 
 def _read_chat(graph_members):
+    import skills._m365.helpers  # noqa: F401  imported before the loader is patched
     from skills.teams import tools
 
     mod = types.ModuleType("_teams_read_chats_fake")
@@ -65,14 +66,14 @@ def _read_chat(graph_members):
 def test_chat_read_lists_participants_with_emails():
     result = _read_chat(
         [
-            {"displayName": "James Smith", "email": "James.Smith2@amd.com"},
-            {"displayName": "Sherry Yang", "email": "sherry.yang@amd.com"},
+            {"displayName": "James Smith", "email": "James.Smith2@example.com"},
+            {"displayName": "Sherry Yang", "email": "sherry.yang@example.com"},
             {"displayName": "No Mail"},
         ]
     )
     assert result["chats"][0]["participants"] == [
-        {"name": "James Smith", "email": "james.smith2@amd.com"},
-        {"name": "Sherry Yang", "email": "sherry.yang@amd.com"},
+        {"name": "James Smith", "email": "james.smith2@example.com"},
+        {"name": "Sherry Yang", "email": "sherry.yang@example.com"},
     ]
 
 
