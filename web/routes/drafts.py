@@ -1002,6 +1002,21 @@ async def approve_draft(draft_id: str, body: dict = None):
 
 # â”€â”€ open_draft_in_outlook â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
+def _calendar_compose_url(params: dict) -> str:
+    query = {
+        "path": "/calendar/action/compose",
+        "rru": "addevent",
+        "subject": params.get("subject", ""),
+        "startdt": params.get("start", ""),
+        "enddt": params.get("end", ""),
+        "body": params.get("body", ""),
+        "location": params.get("location", ""),
+        "to": ";".join((params.get("attendees") or []) + (params.get("optional_attendees") or [])),
+    }
+    qs = "&".join(f"{k}={quote(str(v), safe='')}" for k, v in query.items() if v)
+    return f"https://outlook.office.com/calendar/0/deeplink/compose?{qs}"
+
+
 @router.post("/api/drafts/{draft_id}/open-in-outlook", dependencies=[Depends(verify_csrf)])
 async def open_draft_in_outlook(draft_id: str, body: dict = None):
     """Create a real OWA draft from a pending Gator draft and return its URL.
@@ -1054,7 +1069,7 @@ async def open_draft_in_outlook(draft_id: str, body: dict = None):
 
     dtype = draft["type"]
 
-    if dtype not in ("email-send", "email-reply", "email-forward"):
+    if dtype not in ("email-send", "email-reply", "email-forward", "calendar-event"):
         raise HTTPException(
             status_code=400,
             detail=f"Open-in-Outlook not supported for draft type '{dtype}'.",
@@ -1078,6 +1093,12 @@ async def open_draft_in_outlook(draft_id: str, body: dict = None):
             )
         raise HTTPException(status_code=404, detail="Draft not found or expired.")
     p = claimed["params"]
+
+    if dtype == "calendar-event":
+        url = _calendar_compose_url(p)
+        if complete_handoff(draft_id):
+            await _sync_task_draft_status(draft_id, "handed_off")
+        return {"url": url}
 
     if body is not None and "edited_message" in body:
         if dtype == "email-reply":
