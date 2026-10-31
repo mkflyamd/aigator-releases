@@ -1,21 +1,28 @@
 """The availability grid payload: per-person status per half hour, and columns where everyone is free."""
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from unittest.mock import patch
 
 from skills.calendar.tools import _tool_show_availability_grid
 
 
 class _Gc:
-    def __init__(self, views):
+    """Answers each getSchedule with the person's one-day view repeated for every day in the range."""
+
+    def __init__(self, views, dst_shift=False):
         self.views = views
+        self.dst_shift = dst_shift
         self.calls = []
 
     def post(self, path, body):
         self.calls.append(body)
+        first = datetime.fromisoformat(body["startTime"]["dateTime"])
+        last = datetime.fromisoformat(body["endTime"]["dateTime"])
+        n_days = (last - first).days
+        trim = 2 if self.dst_shift and n_days > 1 else 0
         return {
             "value": [
-                {"scheduleId": e, "availabilityView": self.views[e]}
+                {"scheduleId": e, "availabilityView": (self.views[e] * n_days)[: len(self.views[e]) * n_days - trim]}
                 for e in body["schedules"]
                 if e in self.views
             ]
@@ -120,3 +127,47 @@ def test_later_weeks_rejects_a_bad_or_far_future_date():
 
     assert "error" in _tool_load_availability_days(["a@example.com"], "not-a-date")
     assert "error" in _tool_load_availability_days(["a@example.com"], "2999-01-01")
+
+
+def test_consecutive_days_are_read_in_one_call_and_split_per_day():
+    import skills._m365.helpers  # noqa: F401
+    import skills.calendar.helpers  # noqa: F401
+    from skills.calendar.tools import _tool_load_availability_days
+
+    start = date.today() + timedelta(days=30)
+    dates = [(start + timedelta(days=n)).isoformat() for n in range(5)]
+    gc = _Gc({"new@example.com": "0" * 20 + "2" * 4 + "0" * 24})
+    with (
+        patch("skills._m365.helpers.get_cal_client", return_value=gc),
+        patch("skills.calendar.helpers.get_user_win_tz", return_value="Pacific Standard Time"),
+    ):
+        out = _tool_load_availability_days(["new@example.com"], dates=dates)
+    assert len(gc.calls) == 1
+    assert all(d["rows"] == ["f" * 20 + "b" * 4 + "f" * 24] for d in out["days"])
+    assert [d["date"] for d in out["days"]] == dates
+
+
+def test_a_range_with_a_shifted_slot_count_is_read_day_by_day():
+    import skills._m365.helpers  # noqa: F401
+    import skills.calendar.helpers  # noqa: F401
+    from skills.calendar.tools import _tool_load_availability_days
+
+    start = date.today() + timedelta(days=30)
+    dates = [(start + timedelta(days=n)).isoformat() for n in range(3)]
+    gc = _Gc({"new@example.com": "0" * 20 + "2" * 4 + "0" * 24}, dst_shift=True)
+    with (
+        patch("skills._m365.helpers.get_cal_client", return_value=gc),
+        patch("skills.calendar.helpers.get_user_win_tz", return_value="Pacific Standard Time"),
+    ):
+        out = _tool_load_availability_days(["new@example.com"], dates=dates)
+    assert len(gc.calls) == 1 + 3
+    assert all(d["rows"] == ["f" * 20 + "b" * 4 + "f" * 24] for d in out["days"])
+
+
+def test_days_with_a_gap_are_separate_runs():
+    from skills.calendar.tools import _grid_day_runs
+
+    start = date(2030, 1, 7)
+    days = [start + timedelta(days=n) for n in (0, 1, 2, 3, 4, 7, 8)]
+    assert [len(r) for r in _grid_day_runs(days)] == [5, 2]
+    assert [len(r) for r in _grid_day_runs([start + timedelta(days=n) for n in range(9)])] == [7, 2]

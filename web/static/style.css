@@ -6335,6 +6335,17 @@ body.gator-chat-expanded .gator-expand-btn {
   color: inherit;
   font-size: 0.78rem;
 }
+.ag-add-status,
+.ag-suggestion-note {
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+.ag-add-status {
+  margin-left: 8px;
+}
+.ag-suggestion-note {
+  padding: 6px 10px;
+}
 .ag-add-suggestions {
   position: absolute;
   z-index: 10;

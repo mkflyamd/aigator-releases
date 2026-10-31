@@ -692,20 +692,31 @@ def _next_working_days(after, count: int) -> list:
     return days
 
 
+def _grid_day_runs(day_list: list) -> list[list]:
+    """Group days into runs of consecutive dates (at most a week), so one call can cover each run."""
+    runs: list[list] = []
+    for d in day_list:
+        if runs and d - runs[-1][-1] == timedelta(days=1) and len(runs[-1]) < 7:
+            runs[-1].append(d)
+        else:
+            runs.append([d])
+    return runs
+
+
 def _grid_day_payloads(gc, emails: list, day_list: list, win_tz: str, need: int, now: datetime) -> list:
     from concurrent.futures import ThreadPoolExecutor
 
     per_day = _GRID_DAY_SLOTS
 
-    def fetch_views(day) -> dict[str, str]:
+    def fetch_range(first, n_days: int) -> dict[str, str]:
         views: dict[str, str] = {}
         for i in range(0, len(emails), 20):
             result = gc.post(
                 "/me/calendar/getSchedule",
                 {
                     "schedules": emails[i : i + 20],
-                    "startTime": {"dateTime": f"{day:%Y-%m-%d}T00:00:00", "timeZone": win_tz},
-                    "endTime": {"dateTime": f"{day + timedelta(days=1):%Y-%m-%d}T00:00:00", "timeZone": win_tz},
+                    "startTime": {"dateTime": f"{first:%Y-%m-%d}T00:00:00", "timeZone": win_tz},
+                    "endTime": {"dateTime": f"{first + timedelta(days=n_days):%Y-%m-%d}T00:00:00", "timeZone": win_tz},
                     "availabilityViewInterval": _GRID_STEP,
                 },
             )
@@ -713,8 +724,21 @@ def _grid_day_payloads(gc, emails: list, day_list: list, win_tz: str, need: int,
                 views[(s.get("scheduleId") or "").lower()] = s.get("availabilityView") or ""
         return views
 
-    with ThreadPoolExecutor(max_workers=5) as pool:
-        all_views = list(pool.map(fetch_views, day_list))
+    def fetch_run(run: list) -> dict:
+        views = fetch_range(run[0], len(run))
+        expected = per_day * len(run)
+        if len(run) > 1 and any(v and len(v) != expected for v in views.values()):
+            # A daylight-saving change inside the run shifts the slot count; read those days one at a time.
+            return {d: fetch_range(d, 1) for d in run}
+        return {
+            d: {e: v[i * per_day : (i + 1) * per_day] for e, v in views.items()} for i, d in enumerate(run)
+        }
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        by_day: dict = {}
+        for part in pool.map(fetch_run, _grid_day_runs(day_list)):
+            by_day.update(part)
+    all_views = [by_day.get(d, {}) for d in day_list]
     days = []
     for day, views in zip(day_list, all_views):
         rows = []

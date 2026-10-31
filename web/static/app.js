@@ -10351,7 +10351,9 @@ function _showAvailabilityGrid(grid, ownerTabId) {
   addInput.placeholder = 'Name or email';
   const suggestions = document.createElement('div');
   suggestions.className = 'ag-add-suggestions hidden';
-  addBar.append(addLink, addInput, suggestions);
+  const addStatus = document.createElement('span');
+  addStatus.className = 'ag-add-status hidden';
+  addBar.append(addLink, addInput, addStatus, suggestions);
 
   const footer = document.createElement('div');
   footer.className = 'ag-footer';
@@ -10446,62 +10448,113 @@ function _showAvailabilityGrid(grid, ownerTabId) {
   });
   if (showAll) hours.classList.add('hidden');
 
-  later.addEventListener('click', async (e) => {
+  let queue = Promise.resolve();
+  const enqueue = (task) => {
+    const run = queue.then(task, task);
+    queue = run.catch(() => {});
+    return run;
+  };
+
+  later.addEventListener('click', (e) => {
     e.preventDefault();
     e.stopPropagation();
     if (later.classList.contains('ag-link-disabled')) return;
     later.classList.add('ag-link-disabled');
     later.textContent = 'Loading…';
-    try {
-      const days = await postAvailability({
-        emails: grid.people.map((p) => p.email),
-        after_date: grid.days[grid.days.length - 1].date,
-      });
-      const firstNew = grid.days.length;
-      grid.days.push(...days);
-      refresh();
-      const cell = cellsByDay[firstNew]?.[firstShown()]?.[0];
-      if (cell) scroll.scrollLeft = Math.max(0, cell.offsetLeft - 140);
-      if (grid.days.length < MAX_GRID_DAYS) later.classList.remove('ag-link-disabled');
-    } catch (err) {
-      later.classList.remove('ag-link-disabled');
-      _showConnectivityToast("Couldn't load later weeks: " + (err?.message || err), 'warn');
-    }
-    later.textContent = 'Later weeks ›';
+    enqueue(async () => {
+      try {
+        const days = await postAvailability({
+          emails: grid.people.map((p) => p.email),
+          after_date: grid.days[grid.days.length - 1].date,
+        });
+        const firstNew = grid.days.length;
+        grid.days.push(...days);
+        refresh();
+        const cell = cellsByDay[firstNew]?.[firstShown()]?.[0];
+        if (cell) scroll.scrollLeft = Math.max(0, cell.offsetLeft - 140);
+        if (grid.days.length < MAX_GRID_DAYS) later.classList.remove('ag-link-disabled');
+      } catch (err) {
+        later.classList.remove('ag-link-disabled');
+        _showConnectivityToast("Couldn't load later weeks: " + (err?.message || err), 'warn');
+      }
+      later.textContent = 'Later weeks ›';
+    });
   });
 
-  async function addPerson(person) {
-    const email = String(person.email || '').toLowerCase();
-    if (!email || grid.people.some((p) => p.email === email)) return;
-    if (grid.people.length >= MAX_PEOPLE) {
+  const adding = new Map();
+  const inGrid = (email) => grid.people.some((p) => p.email === email);
+  function showAddStatus() {
+    const names = [...adding.values()];
+    addStatus.textContent = names.length ? `Adding ${names.join(', ')}…` : '';
+    addStatus.classList.toggle('hidden', !names.length);
+  }
+  function addPerson(person) {
+    const email = String(person.email || '')
+      .trim()
+      .toLowerCase();
+    if (!email || adding.has(email) || inGrid(email)) return;
+    if (grid.people.length + adding.size >= MAX_PEOPLE) {
       _showConnectivityToast(`A grid can show up to ${MAX_PEOPLE} people.`, 'warn');
       return;
     }
-    try {
-      const days = await postAvailability({
-        emails: [email],
-        dates: grid.days.map((d) => d.date),
-      });
-      grid.days.forEach((d, i) => d.rows.push(days[i].rows[0]));
-      grid.people.push({
-        name: person.name || email,
-        email,
-        you: false,
-        optional: false,
-      });
-      refresh();
-    } catch (err) {
-      _showConnectivityToast("Couldn't add that person: " + (err?.message || err), 'warn');
-    }
+    const label = person.name || email;
+    adding.set(email, label);
+    showAddStatus();
+    enqueue(async () => {
+      try {
+        if (inGrid(email)) return;
+        const dates = grid.days.map((d) => d.date);
+        const days = await postAvailability({ emails: [email], dates });
+        if (
+          !Array.isArray(days) ||
+          days.length !== dates.length ||
+          !days.every((d) => typeof d?.rows?.[0] === 'string')
+        )
+          throw new Error('unexpected response');
+        grid.days.forEach((d, i) => d.rows.push(days[i].rows[0]));
+        grid.people.push({ name: label, email, you: false, optional: false });
+        refresh();
+      } catch (err) {
+        _showConnectivityToast("Couldn't add that person: " + (err?.message || err), 'warn');
+      } finally {
+        adding.delete(email);
+        showAddStatus();
+      }
+    });
   }
+
+  const searchCache = new Map();
+  let searchSeq = 0;
+  let addTimer = null;
   function closeAdd() {
+    searchSeq++;
+    clearTimeout(addTimer);
     addInput.value = '';
     addInput.classList.add('hidden');
     suggestions.classList.add('hidden');
     suggestions.replaceChildren();
     addLink.classList.remove('hidden');
   }
-  let addTimer = null;
+  function showSuggestions(people) {
+    suggestions.replaceChildren();
+    people
+      .filter(
+        (p) => p.email && !inGrid(p.email.toLowerCase()) && !adding.has(p.email.toLowerCase()),
+      )
+      .slice(0, 6)
+      .forEach((p) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'ag-suggestion';
+        b.textContent = `${p.name || p.email} · ${p.email}`;
+        b.addEventListener('click', () => {
+          closeAdd();
+          addPerson(p);
+        });
+        suggestions.appendChild(b);
+      });
+    suggestions.classList.toggle('hidden', !suggestions.childElementCount);
+  }
   addLink.addEventListener('click', (e) => {
     e.preventDefault();
     e.stopPropagation();
@@ -10525,35 +10578,32 @@ function _showAvailabilityGrid(grid, ownerTabId) {
   addInput.addEventListener('input', () => {
     clearTimeout(addTimer);
     const q = addInput.value.trim();
+    const mine = ++searchSeq;
     if (q.length < 2) {
       suggestions.classList.add('hidden');
       suggestions.replaceChildren();
       return;
     }
+    const key = q.toLowerCase();
+    if (searchCache.has(key)) {
+      showSuggestions(searchCache.get(key));
+      return;
+    }
     addTimer = setTimeout(async () => {
+      const note = document.createElement('div');
+      note.className = 'ag-suggestion-note';
+      note.textContent = 'Searching…';
+      suggestions.replaceChildren(note);
+      suggestions.classList.remove('hidden');
       try {
         const res = await fetch(`/api/people/search?q=${encodeURIComponent(q)}&org_only=true`);
         const people = res.ok ? (await res.json()).people || [] : [];
-        suggestions.replaceChildren();
-        people
-          .filter((p) => p.email)
-          .slice(0, 6)
-          .forEach((p) => {
-            const b = document.createElement('button');
-            b.type = 'button';
-            b.className = 'ag-suggestion';
-            b.textContent = `${p.name || p.email} · ${p.email}`;
-            b.addEventListener('click', () => {
-              closeAdd();
-              addPerson(p);
-            });
-            suggestions.appendChild(b);
-          });
-        suggestions.classList.toggle('hidden', !suggestions.childElementCount);
+        if (res.ok) searchCache.set(key, people);
+        if (mine === searchSeq) showSuggestions(people);
       } catch {
-        suggestions.classList.add('hidden');
+        if (mine === searchSeq) suggestions.classList.add('hidden');
       }
-    }, 250);
+    }, 200);
   });
 
   openOutlook.addEventListener('click', async (e) => {
