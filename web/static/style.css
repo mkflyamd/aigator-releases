@@ -6181,9 +6181,9 @@ body.gator-chat-expanded .gator-expand-btn {
   position: sticky;
   left: 0;
   z-index: 2;
-  width: 110px;
-  min-width: 110px;
-  max-width: 110px;
+  width: 170px;
+  min-width: 170px;
+  max-width: 170px;
   padding: 4px 8px;
   text-align: left;
   font-weight: 600;
@@ -6195,6 +6195,29 @@ body.gator-chat-expanded .gator-expand-btn {
 }
 .avail-grid .ag-all {
   color: var(--accent);
+}
+.avail-grid .ag-name-text {
+  display: inline-block;
+  max-width: 95px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+}
+.avail-grid .ag-role {
+  float: right;
+  margin-top: 2px;
+  padding: 0 6px;
+  font-size: 0.62rem;
+  font-weight: 500;
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid var(--border2);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.avail-grid .ag-role-optional {
+  color: var(--warn);
+  border-style: dashed;
 }
 .avail-grid tr:nth-child(1) th {
   position: sticky;
@@ -6282,8 +6305,59 @@ body.gator-chat-expanded .gator-expand-btn {
 }
 .ag-actions {
   display: flex;
-  gap: 8px;
+  align-items: center;
+  gap: 12px;
   margin-left: auto;
+}
+.ag-header-actions {
+  display: flex;
+  gap: 14px;
+  margin-left: auto;
+}
+.ag-link-disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+.ag-add {
+  position: relative;
+  margin-top: 6px;
+}
+.ag-add .hidden,
+.ag-header-actions .hidden {
+  display: none;
+}
+.ag-add-input {
+  width: 220px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border, #444);
+  background: transparent;
+  color: inherit;
+  font-size: 0.78rem;
+}
+.ag-add-suggestions {
+  position: absolute;
+  z-index: 10;
+  left: 0;
+  top: 100%;
+  display: flex;
+  flex-direction: column;
+  min-width: 280px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.ag-suggestion {
+  padding: 6px 10px;
+  text-align: left;
+  font-size: 0.78rem;
+  color: inherit;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+.ag-suggestion:hover {
+  background: var(--surface3);
 }
 .ag-chosen {
   font-size: 0.8rem;

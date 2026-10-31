@@ -651,8 +651,9 @@ def _tool_find_meeting_times(
     }
 
 
-_GRID_FIRST_HOUR = 8
-_GRID_LAST_HOUR = 18
+_GRID_WORK_START = 8 * 60
+_GRID_WORK_END = 18 * 60
+_GRID_DAY_SLOTS = 24 * 60 // 30
 _GRID_STEP = 30
 _GRID_DEFAULT_DAYS = 10
 _GRID_STATUS = {"0": "f", "1": "t", "2": "b", "3": "o", "4": "w"}
@@ -694,7 +695,7 @@ def _next_working_days(after, count: int) -> list:
 def _grid_day_payloads(gc, emails: list, day_list: list, win_tz: str, need: int, now: datetime) -> list:
     from concurrent.futures import ThreadPoolExecutor
 
-    per_day = (_GRID_LAST_HOUR - _GRID_FIRST_HOUR) * 60 // _GRID_STEP
+    per_day = _GRID_DAY_SLOTS
 
     def fetch_views(day) -> dict[str, str]:
         views: dict[str, str] = {}
@@ -703,8 +704,8 @@ def _grid_day_payloads(gc, emails: list, day_list: list, win_tz: str, need: int,
                 "/me/calendar/getSchedule",
                 {
                     "schedules": emails[i : i + 20],
-                    "startTime": {"dateTime": f"{day:%Y-%m-%d}T{_GRID_FIRST_HOUR:02d}:00:00", "timeZone": win_tz},
-                    "endTime": {"dateTime": f"{day:%Y-%m-%d}T{_GRID_LAST_HOUR:02d}:00:00", "timeZone": win_tz},
+                    "startTime": {"dateTime": f"{day:%Y-%m-%d}T00:00:00", "timeZone": win_tz},
+                    "endTime": {"dateTime": f"{day + timedelta(days=1):%Y-%m-%d}T00:00:00", "timeZone": win_tz},
                     "availabilityViewInterval": _GRID_STEP,
                 },
             )
@@ -720,33 +721,50 @@ def _grid_day_payloads(gc, emails: list, day_list: list, win_tz: str, need: int,
         for e in emails:
             view = views.get(e, "")
             rows.append("".join(_GRID_STATUS.get(view[k], "?") if k < len(view) else "?" for k in range(per_day)))
+        open_slots = ""
         fit = ""
         for k in range(per_day):
-            start = datetime.combine(day, datetime.min.time()) + timedelta(minutes=_GRID_FIRST_HOUR * 60 + k * _GRID_STEP)
-            ok = k + need <= per_day and start > now
-            ok = ok and all(r[j] in "f?" for r in rows for j in range(k, min(k + need, per_day)))
+            begin = k * _GRID_STEP
+            start = datetime.combine(day, datetime.min.time()) + timedelta(minutes=begin)
+            eligible = begin >= _GRID_WORK_START and begin + need * _GRID_STEP <= _GRID_WORK_END and start > now
+            open_slots += "1" if eligible else "0"
+            ok = eligible and all(r[j] in "f?" for r in rows for j in range(k, k + need))
             fit += "1" if ok else "0"
-        days.append({"date": f"{day:%Y-%m-%d}", "label": f"{day:%a %b} {day.day}", "rows": rows, "fit": fit})
+        days.append(
+            {"date": f"{day:%Y-%m-%d}", "label": f"{day:%a %b} {day.day}", "rows": rows, "open": open_slots, "fit": fit}
+        )
     return days
 
 
-def _tool_load_availability_days(emails: list, after_date: str, duration_minutes: int = 30, count: int = 10) -> dict:
-    """The next working days after `after_date` for the people already on an availability grid."""
+def _tool_load_availability_days(
+    emails: list, after_date: str = "", duration_minutes: int = 30, count: int = 10, dates: list | None = None
+) -> dict:
+    """Free/busy for people on an availability grid: the given `dates`, else the next working days after `after_date`."""
     from .._m365.helpers import get_cal_client
     from .helpers import get_user_win_tz
 
     now = datetime.now()
-    try:
-        after = datetime.fromisoformat(str(after_date)).date()
-    except ValueError:
-        return {"error": "after_date must be YYYY-MM-DD."}
-    if after > now.date() + timedelta(days=365):
+    if dates:
+        day_list = []
+        for raw in dates[:60]:
+            try:
+                d = datetime.fromisoformat(str(raw)).date()
+            except ValueError:
+                return {"error": "dates must be YYYY-MM-DD."}
+            if d not in day_list:
+                day_list.append(d)
+    else:
+        try:
+            after = datetime.fromisoformat(str(after_date)).date()
+        except ValueError:
+            return {"error": "after_date must be YYYY-MM-DD."}
+        day_list = _next_working_days(after, max(1, min(int(count), _GRID_DEFAULT_DAYS)))
+    if max(day_list) > now.date() + timedelta(days=365):
         return {"error": "That is more than a year ahead."}
     wanted = [e.lower() for e in _parse_email_list(emails)]
     if not wanted:
         return {"error": "Give at least one email."}
     need = max(1, -(-int(duration_minutes or 30) // _GRID_STEP))
-    day_list = _next_working_days(after, max(1, min(int(count), _GRID_DEFAULT_DAYS)))
     return {"days": _grid_day_payloads(get_cal_client(), wanted, day_list, get_user_win_tz(), need, now)}
 
 
@@ -762,8 +780,8 @@ def _tool_show_availability_grid(attendees: list, dates: list | None = None, dur
     others = [e for e in _parse_email_list(attendees) if e.lower() != my_email]
     if not others:
         return {"error": "Give at least one attendee email."}
-    people = [{"name": "You", "email": my_email, "you": True}] + [
-        {"name": _person_name(e), "email": e.lower(), "you": False} for e in others
+    people = [{"name": "You", "email": my_email, "you": True, "optional": False}] + [
+        {"name": _person_name(e), "email": e.lower(), "you": False, "optional": False} for e in others
     ]
     emails = [p["email"] for p in people]
     need = max(1, -(-int(duration_minutes or 30) // _GRID_STEP))
@@ -772,7 +790,7 @@ def _tool_show_availability_grid(attendees: list, dates: list | None = None, dur
     for d in days:
         for k, c in enumerate(d["fit"]):
             if c == "1" and len(best) < 5:
-                begin = _GRID_FIRST_HOUR * 60 + k * _GRID_STEP
+                begin = k * _GRID_STEP
                 day = datetime.fromisoformat(d["date"])
                 best.append(f"{day:%A, %b} {day.day}, {_clock12(begin)} - {_clock12(begin + need * _GRID_STEP)}")
     grid = {
@@ -780,7 +798,9 @@ def _tool_show_availability_grid(attendees: list, dates: list | None = None, dur
         "timezone": win_tz,
         "duration_minutes": need * _GRID_STEP,
         "step_minutes": _GRID_STEP,
-        "first_minute": _GRID_FIRST_HOUR * 60,
+        "first_minute": 0,
+        "work_start_minute": _GRID_WORK_START,
+        "work_end_minute": _GRID_WORK_END,
         "people": people,
         "days": days,
     }

@@ -61,4 +61,32 @@ assert.strictEqual(url.searchParams.get('to'), 'sherry@example.com;james@example
 
 assert(/msg\.availability_grid\)\s*\{\s*_showAvailabilityGrid\(/.test(source), 'SSE handler wired');
 assert(/fetch\('\/api\/calendar\/availability-days'/.test(source), 'later weeks calls the route');
+const fits = load('_availabilityGridFits');
+const open = '0'.repeat(16) + '1'.repeat(20) + '0'.repeat(12);
+const busyAt = (slot) => 'f'.repeat(slot) + 'b' + 'f'.repeat(47 - slot);
+const g2 = {
+  step_minutes: 30,
+  duration_minutes: 60,
+  people: [{ you: true }, { email: 'sherry@example.com', optional: false }],
+  days: [{ open, rows: ['f'.repeat(48), busyAt(20)] }],
+};
+assert.strictEqual(fits(g2, 0, 10), false, 'outside the work window');
+assert.strictEqual(fits(g2, 0, 18), true, 'free in work hours');
+assert.strictEqual(fits(g2, 0, 19), false, 'second half hour busy');
+assert.strictEqual(fits(g2, 0, 20), false, 'first half hour busy');
+g2.people[1].optional = true;
+assert.strictEqual(fits(g2, 0, 20), true, 'an optional person does not block');
+
+const attendeeText = load('_availabilityGridAttendeeText');
+assert.strictEqual(
+  attendeeText({
+    people: [
+      { you: true, email: 'me@example.com' },
+      { email: 'sherry@example.com', optional: false },
+      { email: 'james@example.com', optional: true },
+    ],
+  }),
+  ' Required attendees: sherry@example.com. Optional attendees: james@example.com.',
+);
+
 console.log('availability_grid_card: ok');

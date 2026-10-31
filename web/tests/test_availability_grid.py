@@ -36,29 +36,31 @@ def _run(views, **kw):
 
 
 def test_everyone_free_columns_are_marked_and_one_hour_needs_two_free_halves():
-    me = "0" * 20
-    sherry = "22" + "0" * 17 + "2"
+    me = "0" * 48
+    sherry = "0" * 16 + "22" + "0" * 17 + "2" + "0" * 12
     out, gc = _run({"me@example.com": me, "sherry@example.com": sherry}, attendees=["Sherry@Example.com"], dates=["2030-01-07"], duration_minutes=60)
     grid = out["_availability_grid"]
     assert [p["email"] for p in grid["people"]] == ["me@example.com", "sherry@example.com"]
     assert grid["people"][0]["you"] and grid["people"][1]["name"] == "Sherry"
     day = grid["days"][0]
-    assert day["rows"] == [me.replace("0", "f"), "bb" + "f" * 17 + "b"]
-    assert day["fit"][:2] == "00" and day["fit"][2] == "1"
-    assert day["fit"][17] == "1" and day["fit"][18] == "0" and day["fit"][19] == "0"
+    assert day["rows"] == ["f" * 48, "f" * 16 + "bb" + "f" * 17 + "b" + "f" * 12]
+    assert day["fit"] == "0" * 18 + "1" * 16 + "0" * 14
+    assert grid["first_minute"] == 0 and grid["work_start_minute"] == 480 and grid["work_end_minute"] == 1080
+    assert not grid["people"][1]["optional"]
     assert out["mutual_free_examples"][0] == "Monday, Jan 7, 9:00 AM - 10:00 AM"
     assert gc.calls[0]["availabilityViewInterval"] == 30
 
 
 def test_a_person_with_no_data_does_not_block_and_shows_unknown():
-    out, _ = _run({"me@example.com": "0" * 20}, attendees=["ghost@example.com"], dates=["2030-01-07"])
+    out, _ = _run({"me@example.com": "0" * 48}, attendees=["ghost@example.com"], dates=["2030-01-07"])
     day = out["_availability_grid"]["days"][0]
-    assert day["rows"][1] == "?" * 20
-    assert day["fit"] == "1" * 20
+    assert day["rows"][1] == "?" * 48
+    assert day["fit"] == "0" * 16 + "1" * 20 + "0" * 12
+    assert day["open"] == day["fit"]
 
 
 def test_defaults_to_the_next_ten_working_days():
-    out, _ = _run({"me@example.com": "0" * 20}, attendees=["a@example.com"])
+    out, _ = _run({"me@example.com": "0" * 48}, attendees=["a@example.com"])
     days = out["_availability_grid"]["days"]
     assert len(days) == 10
     assert all(__import__("datetime").date.fromisoformat(d["date"]).weekday() < 5 for d in days)
@@ -66,7 +68,7 @@ def test_defaults_to_the_next_ten_working_days():
 
 def test_explicit_dates_go_past_two_weeks_in_order():
     dates = [f"2030-01-{d:02d}" for d in range(7, 28)]
-    out, _ = _run({"me@example.com": "0" * 20}, attendees=["a@example.com"], dates=dates)
+    out, _ = _run({"me@example.com": "0" * 48}, attendees=["a@example.com"], dates=dates)
     days = out["_availability_grid"]["days"]
     assert [d["date"] for d in days] == dates[:20]
 
@@ -82,7 +84,7 @@ def test_later_weeks_returns_the_next_working_days_after_a_date_in_people_order(
     from skills.calendar.tools import _tool_load_availability_days
 
     after = date.today() + timedelta(days=7)
-    gc = _Gc({"me@example.com": "0" * 20, "sherry@example.com": "2" * 20})
+    gc = _Gc({"me@example.com": "0" * 48, "sherry@example.com": "2" * 48})
     with (
         patch("skills._m365.helpers.get_cal_client", return_value=gc),
         patch("skills.calendar.helpers.get_user_win_tz", return_value="Pacific Standard Time"),
@@ -90,8 +92,27 @@ def test_later_weeks_returns_the_next_working_days_after_a_date_in_people_order(
         out = _tool_load_availability_days(["me@example.com", "sherry@example.com"], after.isoformat(), 30, 3)
     dates = [date.fromisoformat(d["date"]) for d in out["days"]]
     assert len(dates) == 3 and dates == sorted(dates) and all(d > after and d.weekday() < 5 for d in dates)
-    assert out["days"][0]["rows"] == ["f" * 20, "b" * 20]
-    assert out["days"][0]["fit"] == "0" * 20
+    assert out["days"][0]["rows"] == ["f" * 48, "b" * 48]
+    assert out["days"][0]["fit"] == "0" * 48
+    assert out["days"][0]["open"] == "0" * 16 + "1" * 20 + "0" * 12
+
+
+def test_adding_a_person_loads_the_same_dates_in_order():
+    import skills._m365.helpers  # noqa: F401
+    import skills.calendar.helpers  # noqa: F401
+    from skills.calendar.tools import _tool_load_availability_days
+
+    start = date.today() + timedelta(days=30)
+    dates = [(start + timedelta(days=n)).isoformat() for n in (3, 0, 1)]
+    gc = _Gc({"new@example.com": "0" * 48})
+    with (
+        patch("skills._m365.helpers.get_cal_client", return_value=gc),
+        patch("skills.calendar.helpers.get_user_win_tz", return_value="Pacific Standard Time"),
+    ):
+        out = _tool_load_availability_days(["new@example.com"], dates=dates)
+    assert [d["date"] for d in out["days"]] == dates
+    assert all(d["rows"] == ["f" * 48] for d in out["days"])
+    assert gc.calls[0]["endTime"]["dateTime"].endswith("T00:00:00")
 
 
 def test_later_weeks_rejects_a_bad_or_far_future_date():

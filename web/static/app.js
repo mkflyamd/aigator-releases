@@ -10153,6 +10153,29 @@ function _availabilityGridComposeUrl(grid, dayIndex, slotIndex) {
   return `https://outlook.office.com/calendar/0/deeplink/compose?${qs}`;
 }
 
+function _availabilityGridFits(grid, dayIndex, slotIndex) {
+  const day = grid.days[dayIndex];
+  if (day.open[slotIndex] !== '1') return false;
+  const span = Math.max(1, Math.round(grid.duration_minutes / grid.step_minutes));
+  return grid.people.every((person, pi) => {
+    if (person.optional) return true;
+    for (let j = slotIndex; j < slotIndex + span; j++) {
+      if ('tbow'.includes(day.rows[pi][j] || 'f')) return false;
+    }
+    return true;
+  });
+}
+
+function _availabilityGridAttendeeText(grid) {
+  const others = grid.people.filter((p) => !p.you && p.email);
+  const required = others.filter((p) => !p.optional).map((p) => p.email);
+  const optional = others.filter((p) => p.optional).map((p) => p.email);
+  return (
+    (required.length ? ` Required attendees: ${required.join(', ')}.` : '') +
+    (optional.length ? ` Optional attendees: ${optional.join(', ')}.` : '')
+  );
+}
+
 function _showAvailabilityGrid(grid, ownerTabId) {
   if (!grid || !Array.isArray(grid.days) || !Array.isArray(grid.people) || !grid.people.length)
     return;
@@ -10167,10 +10190,15 @@ function _showAvailabilityGrid(grid, ownerTabId) {
     return;
   }
   document.querySelectorAll('.avail-grid-card').forEach((el) => el.remove());
-  const steps = grid.days[0] ? grid.days[0].fit.length : 0;
+  const steps = grid.days[0] ? grid.days[0].open.length : 0;
   const perHour = Math.max(1, Math.round(60 / grid.step_minutes));
   const spanSlots = Math.max(1, Math.round(grid.duration_minutes / grid.step_minutes));
+  const workFirst = Math.round((grid.work_start_minute || 0) / grid.step_minutes);
+  const workLast = grid.work_end_minute
+    ? Math.min(steps, Math.round(grid.work_end_minute / grid.step_minutes))
+    : steps;
   const MAX_GRID_DAYS = 60;
+  const MAX_PEOPLE = 20;
   const STATUS = {
     f: 'Free',
     t: 'Tentative',
@@ -10179,6 +10207,9 @@ function _showAvailabilityGrid(grid, ownerTabId) {
     w: 'Working elsewhere',
     '?': 'No data',
   };
+  grid.people.forEach((p) => {
+    p.optional = Boolean(p.optional);
+  });
 
   const card = document.createElement('div');
   card.className = 'message assistant avail-grid-card';
@@ -10191,7 +10222,19 @@ function _showAvailabilityGrid(grid, ownerTabId) {
   const title = document.createElement('div');
   title.className = 'gcc-title';
   title.textContent = `Pick a time · ${grid.duration_minutes} min · ${grid.timezone}`;
-  header.appendChild(title);
+  const textLink = (label) => {
+    const a = document.createElement('a');
+    a.className = 'gcc-edit-link';
+    a.href = '#';
+    a.textContent = label;
+    return a;
+  };
+  const hours = textLink('Show all hours');
+  const later = textLink('Later weeks ›');
+  const headerActions = document.createElement('div');
+  headerActions.className = 'ag-header-actions';
+  headerActions.append(hours, later);
+  header.append(title, headerActions);
   const body = document.createElement('div');
   body.className = 'gcc-body';
 
@@ -10204,6 +10247,9 @@ function _showAvailabilityGrid(grid, ownerTabId) {
   let pickedAt = null;
   let pickedBusy = [];
   let cellsByDay = [];
+  let showAll = workFirst === 0 && workLast === steps;
+  const firstShown = () => (showAll ? 0 : workFirst);
+  const lastShown = () => (showAll ? steps : workLast);
   const corner = (row) => {
     const th = document.createElement('th');
     th.className = 'ag-name ag-corner';
@@ -10213,6 +10259,8 @@ function _showAvailabilityGrid(grid, ownerTabId) {
   function renderTable() {
     table.replaceChildren();
     cellsByDay = grid.days.map(() => []);
+    const k0 = firstShown();
+    const k1 = lastShown();
     const dayRow = table.insertRow();
     const hourRow = table.insertRow();
     corner(dayRow);
@@ -10220,13 +10268,13 @@ function _showAvailabilityGrid(grid, ownerTabId) {
     grid.days.forEach((day) => {
       const th = document.createElement('th');
       th.className = 'ag-day';
-      th.colSpan = steps;
+      th.colSpan = k1 - k0;
       th.textContent = day.label;
       dayRow.appendChild(th);
-      for (let k = 0; k < steps; k += perHour) {
+      for (let k = k0; k < k1; k += perHour) {
         const h = document.createElement('th');
-        h.className = 'ag-hour' + (k === 0 ? ' ag-day-start' : '');
-        h.colSpan = Math.min(perHour, steps - k);
+        h.className = 'ag-hour' + (k === k0 ? ' ag-day-start' : '');
+        h.colSpan = Math.min(perHour, k1 - k);
         h.textContent = _availabilityGridClock(grid.first_minute + k * grid.step_minutes).replace(
           ':00',
           '',
@@ -10235,30 +10283,56 @@ function _showAvailabilityGrid(grid, ownerTabId) {
       }
     });
 
-    const addRow = (label, className, cellFor) => {
+    const addRow = (nameCell, cellFor) => {
       const row = table.insertRow();
-      const name = document.createElement('th');
-      name.className = 'ag-name ' + className;
-      name.textContent = label;
-      name.title = label;
-      row.appendChild(name);
+      row.appendChild(nameCell);
       grid.days.forEach((day, di) => {
-        for (let k = 0; k < steps; k++) {
+        for (let k = k0; k < k1; k++) {
           const td = row.insertCell();
           cellFor(td, day, di, k);
-          if (k === 0) td.classList.add('ag-day-start');
+          if (k === k0) td.classList.add('ag-day-start');
           (cellsByDay[di][k] = cellsByDay[di][k] || []).push(td);
           td.addEventListener('click', () => pick(di, k));
         }
       });
     };
+    const nameCell = (label, className) => {
+      const th = document.createElement('th');
+      th.className = 'ag-name ' + className;
+      th.title = label;
+      const text = document.createElement('span');
+      text.className = 'ag-name-text';
+      text.textContent = label;
+      th.appendChild(text);
+      return th;
+    };
 
-    addRow('Everyone free', 'ag-all', (td, day, di, k) => {
-      td.className = 'ag-cell ' + (day.fit[k] === '1' ? 'ag-fit' : 'ag-nofit');
-      td.title = _availabilityGridSlotText(grid, di, k);
-    });
+    const anyOptional = grid.people.some((p) => p.optional);
+    addRow(
+      nameCell(anyOptional ? 'Required free' : 'Everyone free', 'ag-all'),
+      (td, day, di, k) => {
+        td.className = 'ag-cell ' + (_availabilityGridFits(grid, di, k) ? 'ag-fit' : 'ag-nofit');
+        td.title = _availabilityGridSlotText(grid, di, k);
+      },
+    );
     grid.people.forEach((person, pi) => {
-      addRow(person.you ? 'You' : person.name || person.email, 'ag-person', (td, day, di, k) => {
+      const th = nameCell(person.you ? 'You' : person.name || person.email, 'ag-person');
+      if (!person.you) {
+        const role = document.createElement('button');
+        role.type = 'button';
+        role.className = 'ag-role' + (person.optional ? ' ag-role-optional' : '');
+        role.textContent = person.optional ? 'Optional' : 'Required';
+        role.title = person.optional
+          ? 'Optional attendee. Click to make required.'
+          : 'Required attendee. Click to make optional.';
+        role.addEventListener('click', (e) => {
+          e.stopPropagation();
+          person.optional = !person.optional;
+          refresh();
+        });
+        th.appendChild(role);
+      }
+      addRow(th, (td, day, di, k) => {
         const st = day.rows[pi][k] || '?';
         td.className = `ag-cell ag-s-${st === '?' ? 'u' : st}`;
         td.title = `${person.name || person.email}: ${STATUS[st] || 'No data'}`;
@@ -10268,34 +10342,40 @@ function _showAvailabilityGrid(grid, ownerTabId) {
   renderTable();
   scroll.appendChild(table);
 
+  const addBar = document.createElement('div');
+  addBar.className = 'ag-add';
+  const addLink = textLink('+ Add person');
+  const addInput = document.createElement('input');
+  addInput.type = 'text';
+  addInput.className = 'ag-add-input hidden';
+  addInput.placeholder = 'Name or email';
+  const suggestions = document.createElement('div');
+  suggestions.className = 'ag-add-suggestions hidden';
+  addBar.append(addLink, addInput, suggestions);
+
   const footer = document.createElement('div');
   footer.className = 'ag-footer';
   const chosen = document.createElement('span');
   chosen.className = 'ag-chosen';
-  chosen.textContent = 'Click any time to choose it (green = everyone is free)';
+  chosen.textContent = 'Click any time to choose it (green = everyone required is free)';
   const use = document.createElement('button');
   use.className = 'gcc-approve-btn';
   use.textContent = 'Use this time';
   use.disabled = true;
-  const openOutlook = document.createElement('button');
-  openOutlook.className = 'gcc-open-outlook-btn';
-  openOutlook.textContent = 'Open in Outlook';
-  openOutlook.disabled = true;
-  const later = document.createElement('button');
-  later.className = 'gcc-open-outlook-btn';
-  later.textContent = 'Later weeks ›';
+  const openOutlook = textLink('Open in Outlook');
+  openOutlook.classList.add('ag-link-disabled');
   const actions = document.createElement('div');
   actions.className = 'ag-actions';
-  actions.append(later, openOutlook, use);
+  actions.append(openOutlook, use);
   footer.append(chosen, actions);
 
   function pick(di, k) {
-    k = Math.max(0, Math.min(k, steps - spanSlots));
+    k = Math.max(firstShown(), Math.min(k, lastShown() - spanSlots));
     cellsByDay.forEach((cols) =>
       cols.forEach((cells) => cells.forEach((c) => c.classList.remove('ag-picked'))),
     );
     for (let j = k; j < k + spanSlots; j++)
-      cellsByDay[di][j].forEach((c) => c.classList.add('ag-picked'));
+      (cellsByDay[di][j] || []).forEach((c) => c.classList.add('ag-picked'));
     picked = _availabilityGridSlotText(grid, di, k);
     pickedAt = { di, k };
     pickedBusy = grid.people
@@ -10304,59 +10384,180 @@ function _showAvailabilityGrid(grid, ownerTabId) {
         for (let j = k; j < k + spanSlots; j++) if ('tbow'.includes(rows[j] || 'f')) return true;
         return false;
       })
-      .map(({ person }) => (person.you ? 'You' : person.name || person.email));
+      .map(({ person }) =>
+        person.you ? 'You' : (person.name || person.email) + (person.optional ? ' (optional)' : ''),
+      );
     chosen.textContent = pickedBusy.length
       ? `${picked} · not free: ${pickedBusy.join(', ')}`
       : picked;
     use.disabled = false;
-    openOutlook.disabled = false;
+    openOutlook.classList.remove('ag-link-disabled');
   }
-  later.addEventListener('click', async (e) => {
+
+  function refresh() {
+    renderTable();
+    if (pickedAt) {
+      if (pickedAt.k >= firstShown() && pickedAt.k + spanSlots <= lastShown())
+        pick(pickedAt.di, pickedAt.k);
+      else {
+        picked = null;
+        pickedAt = null;
+        pickedBusy = [];
+        chosen.textContent = 'Click any time to choose it (green = everyone required is free)';
+        use.disabled = true;
+        openOutlook.classList.add('ag-link-disabled');
+      }
+    }
+  }
+
+  async function postAvailability(payload) {
+    const post = () =>
+      fetch('/api/calendar/availability-days', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': window.__CSRF_TOKEN__ || '',
+        },
+        body: JSON.stringify({ duration_minutes: grid.duration_minutes, ...payload }),
+      });
+    let res = await post();
+    if (res.status === 403) {
+      const csrf = await fetch('/api/csrf')
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null);
+      if (csrf?.csrf_token) window.__CSRF_TOKEN__ = csrf.csrf_token;
+      res = await post();
+    }
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(typeof err.detail === 'string' ? err.detail : 'HTTP ' + res.status);
+    }
+    return (await res.json()).days;
+  }
+
+  hours.addEventListener('click', (e) => {
+    e.preventDefault();
     e.stopPropagation();
-    later.disabled = true;
+    showAll = !showAll;
+    hours.textContent = showAll ? 'Work hours only' : 'Show all hours';
+    refresh();
+    const cell = scroll.querySelector('.ag-fit') || scroll.querySelector('.ag-cell');
+    if (cell) scroll.scrollLeft = Math.max(0, cell.offsetLeft - 140);
+  });
+  if (showAll) hours.classList.add('hidden');
+
+  later.addEventListener('click', async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (later.classList.contains('ag-link-disabled')) return;
+    later.classList.add('ag-link-disabled');
     later.textContent = 'Loading…';
     try {
-      const post = () =>
-        fetch('/api/calendar/availability-days', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-CSRF-Token': window.__CSRF_TOKEN__ || '',
-          },
-          body: JSON.stringify({
-            emails: grid.people.map((p) => p.email),
-            after_date: grid.days[grid.days.length - 1].date,
-            duration_minutes: grid.duration_minutes,
-          }),
-        });
-      let res = await post();
-      if (res.status === 403) {
-        const csrf = await fetch('/api/csrf')
-          .then((r) => (r.ok ? r.json() : null))
-          .catch(() => null);
-        if (csrf?.csrf_token) window.__CSRF_TOKEN__ = csrf.csrf_token;
-        res = await post();
-      }
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(typeof err.detail === 'string' ? err.detail : 'HTTP ' + res.status);
-      }
-      const { days } = await res.json();
+      const days = await postAvailability({
+        emails: grid.people.map((p) => p.email),
+        after_date: grid.days[grid.days.length - 1].date,
+      });
       const firstNew = grid.days.length;
       grid.days.push(...days);
-      renderTable();
-      if (pickedAt) pick(pickedAt.di, pickedAt.k);
-      const cell = cellsByDay[firstNew]?.[0]?.[0];
+      refresh();
+      const cell = cellsByDay[firstNew]?.[firstShown()]?.[0];
       if (cell) scroll.scrollLeft = Math.max(0, cell.offsetLeft - 140);
-      later.disabled = grid.days.length >= MAX_GRID_DAYS;
-      later.textContent = 'Later weeks ›';
+      if (grid.days.length < MAX_GRID_DAYS) later.classList.remove('ag-link-disabled');
     } catch (err) {
-      later.disabled = false;
-      later.textContent = 'Later weeks ›';
+      later.classList.remove('ag-link-disabled');
       _showConnectivityToast("Couldn't load later weeks: " + (err?.message || err), 'warn');
     }
+    later.textContent = 'Later weeks ›';
   });
+
+  async function addPerson(person) {
+    const email = String(person.email || '').toLowerCase();
+    if (!email || grid.people.some((p) => p.email === email)) return;
+    if (grid.people.length >= MAX_PEOPLE) {
+      _showConnectivityToast(`A grid can show up to ${MAX_PEOPLE} people.`, 'warn');
+      return;
+    }
+    try {
+      const days = await postAvailability({
+        emails: [email],
+        dates: grid.days.map((d) => d.date),
+      });
+      grid.days.forEach((d, i) => d.rows.push(days[i].rows[0]));
+      grid.people.push({
+        name: person.name || email,
+        email,
+        you: false,
+        optional: false,
+      });
+      refresh();
+    } catch (err) {
+      _showConnectivityToast("Couldn't add that person: " + (err?.message || err), 'warn');
+    }
+  }
+  function closeAdd() {
+    addInput.value = '';
+    addInput.classList.add('hidden');
+    suggestions.classList.add('hidden');
+    suggestions.replaceChildren();
+    addLink.classList.remove('hidden');
+  }
+  let addTimer = null;
+  addLink.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    addLink.classList.add('hidden');
+    addInput.classList.remove('hidden');
+    addInput.focus();
+  });
+  addInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeAdd();
+    else if (e.key === 'Enter') {
+      const typed = addInput.value.trim();
+      if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(typed)) {
+        closeAdd();
+        addPerson({ email: typed });
+      } else {
+        const first = suggestions.querySelector('button');
+        if (first) first.click();
+      }
+    }
+  });
+  addInput.addEventListener('input', () => {
+    clearTimeout(addTimer);
+    const q = addInput.value.trim();
+    if (q.length < 2) {
+      suggestions.classList.add('hidden');
+      suggestions.replaceChildren();
+      return;
+    }
+    addTimer = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/people/search?q=${encodeURIComponent(q)}&org_only=true`);
+        const people = res.ok ? (await res.json()).people || [] : [];
+        suggestions.replaceChildren();
+        people
+          .filter((p) => p.email)
+          .slice(0, 6)
+          .forEach((p) => {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.className = 'ag-suggestion';
+            b.textContent = `${p.name || p.email} · ${p.email}`;
+            b.addEventListener('click', () => {
+              closeAdd();
+              addPerson(p);
+            });
+            suggestions.appendChild(b);
+          });
+        suggestions.classList.toggle('hidden', !suggestions.childElementCount);
+      } catch {
+        suggestions.classList.add('hidden');
+      }
+    }, 250);
+  });
+
   openOutlook.addEventListener('click', async (e) => {
+    e.preventDefault();
     e.stopPropagation();
     if (!pickedAt) return;
     const url = _availabilityGridComposeUrl(grid, pickedAt.di, pickedAt.k);
@@ -10375,14 +10576,15 @@ function _showAvailabilityGrid(grid, ownerTabId) {
     if (!picked) return;
     const reply =
       `Let's do ${picked}.` +
-      (pickedBusy.length ? ` ${pickedBusy.join(', ')} not free then; schedule it anyway.` : '');
+      (pickedBusy.length ? ` ${pickedBusy.join(', ')} not free then; schedule it anyway.` : '') +
+      _availabilityGridAttendeeText(grid);
     card.remove();
     _sendSandboxFollowUp(tabId, reply).catch((err) =>
       console.warn('[availability grid] pick not sent:', err),
     );
   });
 
-  body.append(scroll, footer);
+  body.append(scroll, addBar, footer);
   box.append(header, body);
   bubble.appendChild(box);
   card.appendChild(bubble);
