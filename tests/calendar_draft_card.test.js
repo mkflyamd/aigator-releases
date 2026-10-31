@@ -70,4 +70,16 @@ assert(!/openThirdPane/.test(openHandler[0]), 'does not load the draft into the 
 assert(/approveBtn\.disabled = true/.test(openHandler[0]), 'opened draft cannot also be sent');
 assert(/if \(openCalendarBtn\) openCalendarBtn\.disabled = true;/.test(source), 'Send locks Open');
 
+// The chat column is narrower than the window, so the card must wrap by itself
+// instead of relying on viewport media queries.
+const css = fs.readFileSync(path.join(__dirname, '..', 'web', 'static', 'style.css'), 'utf8');
+const rule = (sel) => css.match(new RegExp('\\n' + sel + ' \\{([^}]*)\\}'))?.[1] || '';
+assert(/flex-wrap: wrap/.test(rule('\\.gcc-actions')), 'action buttons wrap');
+assert(/flex-wrap: wrap/.test(rule('\\.gcc-field-row')), 'field rows wrap under the label');
+assert(/flex-wrap: wrap/.test(rule('\\.gcc-meta-row')), 'meta rows wrap under the label');
+assert(
+  /\.gcc-approve-btn,\s*\.gcc-open-outlook-btn \{/.test(css),
+  'Open button follows the compact rules',
+);
+
 console.log('calendar_draft_card ok');

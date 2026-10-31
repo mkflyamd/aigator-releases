@@ -6120,8 +6120,9 @@ body.gator-chat-expanded .gator-expand-btn {
 }
 .gcc-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
+  gap: 8px 12px;
   margin: 10px 0 6px;
 }
 .gcc-approve-btn {
@@ -6253,7 +6254,8 @@ body.gator-chat-expanded .gator-expand-btn {
     flex-wrap: wrap;
     align-items: stretch;
   }
-  .gcc-approve-btn {
+  .gcc-approve-btn,
+  .gcc-open-outlook-btn {
     flex: 1 1 auto;
     min-height: 40px;
   }
@@ -6281,7 +6283,8 @@ body.gator-chat-expanded .gator-expand-btn {
   .gcc-title {
     padding-top: 2px;
   }
-  .gcc-approve-btn {
+  .gcc-approve-btn,
+  .gcc-open-outlook-btn {
     flex: 1 1 calc(100% - 48px);
     width: auto;
   }
@@ -6304,7 +6307,8 @@ body.gator-chat-expanded .gator-expand-btn {
 }
 .gcc-meta-row {
   display: flex;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 0 8px;
   font-size: 0.78rem;
   line-height: 1.5;
 }
@@ -6315,7 +6319,7 @@ body.gator-chat-expanded .gator-expand-btn {
 }
 .gcc-meta-val {
   color: var(--text, #e0e0e0);
-  flex: 1 1 auto;
+  flex: 1 1 12rem;
   min-width: 0;
   overflow-wrap: break-word;
 }
@@ -6328,7 +6332,8 @@ body.gator-chat-expanded .gator-expand-btn {
 }
 .gcc-field-row {
   display: flex;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 0 8px;
   font-size: 0.78rem;
   line-height: 1.5;
 }
@@ -6339,7 +6344,7 @@ body.gator-chat-expanded .gator-expand-btn {
 }
 .gcc-field-val {
   color: var(--text, #e0e0e0);
-  flex: 1 1 auto;
+  flex: 1 1 12rem;
   min-width: 0;
   overflow-wrap: break-word;
 }
@@ -6349,7 +6354,11 @@ ul.gcc-field-val {
 }
 .gcc-field-row--block {
   flex-direction: column;
+  flex-wrap: nowrap;
   gap: 2px;
+}
+.gcc-field-row--block .gcc-field-val {
+  flex: 0 1 auto;
 }
 .gcc-field-row--block .gcc-field-key {
   min-width: unset;
