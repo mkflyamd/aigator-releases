@@ -426,7 +426,7 @@ TOOL_STATUS = {
     "read_calendar": "\U0001f4c5 Checking calendar...",
     "get_calendar_event_detail": "\U0001f4c5 Loading event details...",
     "update_calendar_event": "\U0001f4c5 Updating calendar event...",
-    "create_calendar_event": "\U0001f4c5 Creating calendar event...",
+    "draft_calendar_event": "\U0001f4c5 Drafting calendar event...",
     "find_meeting_times": "\U0001f4c5 Finding available slots...",
     "delete_calendar_event": "\U0001f4c5 Cancelling event...",
     "respond_calendar_event": "\U0001f4c5 Updating RSVP...",
