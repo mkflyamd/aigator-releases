@@ -28,7 +28,10 @@ const html = rows({
   teams: true,
   attendee_local: { 'a@x.com': '10:30 PM – 11:00 PM IST' },
 });
-assert(html.includes('Mon, Nov 2') || html.includes('Mon Nov 2') || html.includes('Mon, Nov 02'), html);
+assert(
+  html.includes('Mon, Nov 2') || html.includes('Mon Nov 2') || html.includes('Mon, Nov 02'),
+  html,
+);
 assert(html.includes('9:00 AM – 9:30 AM Pacific Standard Time'), html);
 assert(html.includes('A@x.com') && html.includes('10:30 PM – 11:00 PM IST'), html);
 assert(html.includes('c@z.com') && html.includes('(optional)'), html);
