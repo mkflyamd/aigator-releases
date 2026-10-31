@@ -686,6 +686,35 @@ function _toolbarPushState() {
 // reflects URL changes and loading state live. Called once per view at
 // creation. We also push state from the 500ms nav-state poller (below) so
 // back/forward button enable/disable stays fresh even if events are missed.
+// OWA's calendar compose deeplink is a standalone surface with no left rail, so
+// the pane would be a dead end. Give that page Mail and Calendar links back into
+// the full app. Plain DOM only: OWA enforces Trusted Types.
+const _OUTLOOK_STANDALONE_NAV_SCRIPT = `(function () {
+  var ID = 'gator-outlook-standalone-nav';
+  var existing = document.getElementById(ID);
+  if (location.pathname.indexOf('/deeplink/compose') === -1) {
+    if (existing) existing.remove();
+    return;
+  }
+  if (existing) return;
+  var bar = document.createElement('div');
+  bar.id = ID;
+  bar.style.cssText = 'position:fixed;left:12px;bottom:12px;z-index:2147483647;display:flex;gap:6px;padding:6px;border-radius:8px;background:#0f172a;box-shadow:0 2px 10px rgba(0,0,0,.35);font:12px Segoe UI,sans-serif';
+  [['Mail', '/mail/'], ['Calendar', '/calendar/']].forEach(function (l) {
+    var b = document.createElement('button');
+    b.textContent = l[0];
+    b.style.cssText = 'border:0;border-radius:6px;padding:5px 10px;background:#1f6f3f;color:#fff;cursor:pointer;font:inherit';
+    b.addEventListener('click', function () { location.assign(l[1]); });
+    bar.appendChild(b);
+  });
+  document.body.appendChild(bar);
+})();`;
+
+function _syncOutlookStandaloneNav(wc) {
+  if (!wc || wc.isDestroyed()) return;
+  wc.executeJavaScript(_OUTLOOK_STANDALONE_NAV_SCRIPT).catch(() => {});
+}
+
 function _attachToolbarListeners(view, appName) {
   if (!view || !view.webContents) return;
   const wc = view.webContents;
@@ -3164,6 +3193,9 @@ setTimeout(scanAll, 500);
   _attachToolbarListeners(slackView, 'slack');
   _attachToolbarListeners(teamsView, 'teams');
   _attachToolbarListeners(outlookView, 'outlook');
+  for (const ev of ['dom-ready', 'did-navigate', 'did-navigate-in-page']) {
+    outlookView.webContents.on(ev, () => _syncOutlookStandaloneNav(outlookView.webContents));
+  }
   _attachToolbarListeners(onedriveView, 'onedrive');
   _attachToolbarListeners(onenoteView, 'onenote');
   _attachToolbarListeners(confluenceView, 'confluence');
