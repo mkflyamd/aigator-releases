@@ -288,7 +288,7 @@ TOOL_DEFS = [
                 "dates": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "ISO dates (YYYY-MM-DD) to show, up to 10. Defaults to the next three working days.",
+                    "description": "ISO dates (YYYY-MM-DD) to show, up to 20. Defaults to the next ten working days.",
                 },
                 "duration_minutes": {
                     "type": "integer",
@@ -654,6 +654,7 @@ def _tool_find_meeting_times(
 _GRID_FIRST_HOUR = 8
 _GRID_LAST_HOUR = 18
 _GRID_STEP = 30
+_GRID_DEFAULT_DAYS = 10
 _GRID_STATUS = {"0": "f", "1": "t", "2": "b", "3": "o", "4": "w"}
 
 
@@ -676,9 +677,9 @@ def _grid_days(dates, now: datetime) -> list:
         if d not in days:
             days.append(d)
     if days:
-        return days[:10]
+        return days[:20]
     d = now.date()
-    while len(days) < 3:
+    while len(days) < _GRID_DEFAULT_DAYS:
         d += timedelta(days=1)
         if d.weekday() < 5:
             days.append(d)
@@ -686,6 +687,8 @@ def _grid_days(dates, now: datetime) -> list:
 
 
 def _tool_show_availability_grid(attendees: list, dates: list | None = None, duration_minutes: int = 30) -> dict:
+    from concurrent.futures import ThreadPoolExecutor
+
     from .._m365.helpers import get_cal_client, get_cached_me
     from .helpers import get_user_win_tz
 
@@ -703,8 +706,7 @@ def _tool_show_availability_grid(attendees: list, dates: list | None = None, dur
     emails = [p["email"] for p in people]
     per_day = (_GRID_LAST_HOUR - _GRID_FIRST_HOUR) * 60 // _GRID_STEP
     need = max(1, -(-int(duration_minutes or 30) // _GRID_STEP))
-    days = []
-    for day in _grid_days(dates, now):
+    def fetch_views(day) -> dict[str, str]:
         views: dict[str, str] = {}
         for i in range(0, len(emails), 20):
             result = gc.post(
@@ -718,6 +720,13 @@ def _tool_show_availability_grid(attendees: list, dates: list | None = None, dur
             )
             for s in result.get("value", []):
                 views[(s.get("scheduleId") or "").lower()] = s.get("availabilityView") or ""
+        return views
+
+    day_list = _grid_days(dates, now)
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        all_views = list(pool.map(fetch_views, day_list))
+    days = []
+    for day, views in zip(day_list, all_views):
         rows = []
         for e in emails:
             view = views.get(e, "")

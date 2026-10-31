@@ -6240,9 +6240,17 @@ body.gator-chat-expanded .gator-expand-btn {
 .avail-grid .ag-fit:hover {
   background: var(--accent2);
 }
-.avail-grid .ag-picked {
-  outline: 2px solid var(--text);
-  outline-offset: -2px;
+.avail-grid .ag-cell {
+  cursor: pointer;
+}
+.avail-grid .ag-cell:hover {
+  box-shadow: inset 0 0 0 2px var(--text-dim);
+}
+.avail-grid .ag-picked,
+.avail-grid .ag-picked:hover {
+  box-shadow: inset 0 0 0 2px var(--text);
+}
+.avail-grid .ag-fit.ag-picked {
   background: var(--accent2);
 }
 .avail-grid .ag-s-f {

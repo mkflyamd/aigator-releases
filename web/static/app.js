@@ -10109,8 +10109,9 @@ function _showAskUserCard(data, ownerTabId) {
 
 // ── availability grid card ───────────────────────────────────────────────────
 // Outlook Scheduling-Assistant style: people down the side, half-hour columns grouped by day across the
-// top. Columns where everyone is free are highlighted; picking one and pressing "Use this time" sends
-// that slot as the next ordinary chat message. Names come from the model/tool: textContent only.
+// top. Columns where everyone is free are highlighted, but any column can be picked (the footer names who
+// is not free then); pressing "Use this time" sends that slot as the next ordinary chat message.
+// Names come from the model/tool: textContent only.
 function _availabilityGridClock(minute) {
   const h = Math.floor(minute / 60);
   const m = minute % 60;
@@ -10204,6 +10205,7 @@ function _showAvailabilityGrid(grid, ownerTabId) {
   });
 
   let picked = null;
+  let pickedBusy = [];
   const cellsByDay = grid.days.map(() => []);
   const addRow = (label, className, cellFor) => {
     const row = table.insertRow();
@@ -10217,17 +10219,15 @@ function _showAvailabilityGrid(grid, ownerTabId) {
         const td = row.insertCell();
         cellFor(td, day, di, k);
         if (k === 0) td.classList.add('ag-day-start');
+        (cellsByDay[di][k] = cellsByDay[di][k] || []).push(td);
+        td.addEventListener('click', () => pick(di, k));
       }
     });
   };
 
   addRow('Everyone free', 'ag-all', (td, day, di, k) => {
     td.className = 'ag-cell ' + (day.fit[k] === '1' ? 'ag-fit' : 'ag-nofit');
-    if (day.fit[k] === '1') {
-      td.title = _availabilityGridSlotText(grid, di, k);
-      td.addEventListener('click', () => pick(di, k));
-      cellsByDay[di][k] = td;
-    }
+    td.title = _availabilityGridSlotText(grid, di, k);
   });
   grid.people.forEach((person, pi) => {
     addRow(person.you ? 'You' : person.name || person.email, 'ag-person', (td, day, di, k) => {
@@ -10242,7 +10242,7 @@ function _showAvailabilityGrid(grid, ownerTabId) {
   footer.className = 'ag-footer';
   const chosen = document.createElement('span');
   chosen.className = 'ag-chosen';
-  chosen.textContent = 'Click a green column to choose a time';
+  chosen.textContent = 'Click any time to choose it (green = everyone is free)';
   const use = document.createElement('button');
   use.className = 'gcc-approve-btn';
   use.textContent = 'Use this time';
@@ -10250,17 +10250,31 @@ function _showAvailabilityGrid(grid, ownerTabId) {
   footer.append(chosen, use);
 
   function pick(di, k) {
-    cellsByDay.forEach((cells) => cells.forEach((c) => c && c.classList.remove('ag-picked')));
-    for (let j = k; j < k + spanSlots && j < steps; j++)
-      cellsByDay[di][j]?.classList.add('ag-picked');
+    k = Math.max(0, Math.min(k, steps - spanSlots));
+    cellsByDay.forEach((cols) =>
+      cols.forEach((cells) => cells.forEach((c) => c.classList.remove('ag-picked'))),
+    );
+    for (let j = k; j < k + spanSlots; j++)
+      cellsByDay[di][j].forEach((c) => c.classList.add('ag-picked'));
     picked = _availabilityGridSlotText(grid, di, k);
-    chosen.textContent = picked;
+    pickedBusy = grid.people
+      .map((person, pi) => ({ person, rows: grid.days[di].rows[pi] }))
+      .filter(({ rows }) => {
+        for (let j = k; j < k + spanSlots; j++) if ('tbow'.includes(rows[j] || 'f')) return true;
+        return false;
+      })
+      .map(({ person }) => (person.you ? 'You' : person.name || person.email));
+    chosen.textContent = pickedBusy.length
+      ? `${picked} · not free: ${pickedBusy.join(', ')}`
+      : picked;
     use.disabled = false;
   }
   use.addEventListener('click', (e) => {
     e.stopPropagation();
     if (!picked) return;
-    const reply = `Let's do ${picked}.`;
+    const reply =
+      `Let's do ${picked}.` +
+      (pickedBusy.length ? ` ${pickedBusy.join(', ')} not free then; schedule it anyway.` : '');
     card.remove();
     _sendSandboxFollowUp(tabId, reply).catch((err) =>
       console.warn('[availability grid] pick not sent:', err),

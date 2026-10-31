@@ -56,10 +56,18 @@ def test_a_person_with_no_data_does_not_block_and_shows_unknown():
     assert day["fit"] == "1" * 20
 
 
-def test_defaults_to_the_next_three_working_days():
+def test_defaults_to_the_next_ten_working_days():
     out, _ = _run({"me@example.com": "0" * 20}, attendees=["a@example.com"])
     days = out["_availability_grid"]["days"]
-    assert len(days) == 3
+    assert len(days) == 10
+    assert all(__import__("datetime").date.fromisoformat(d["date"]).weekday() < 5 for d in days)
+
+
+def test_explicit_dates_go_past_two_weeks_in_order():
+    dates = [f"2030-01-{d:02d}" for d in range(7, 28)]
+    out, _ = _run({"me@example.com": "0" * 20}, attendees=["a@example.com"], dates=dates)
+    days = out["_availability_grid"]["days"]
+    assert [d["date"] for d in days] == dates[:20]
 
 
 def test_requires_an_attendee_other_than_the_user():
