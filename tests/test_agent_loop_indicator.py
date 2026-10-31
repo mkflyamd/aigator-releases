@@ -93,6 +93,31 @@ def test_draft_event_lists_the_sources_read_earlier_in_the_turn(monkeypatch):
     assert draft["data"]["draft_id"] == "d1"
 
 
+def test_calendar_draft_lists_the_calendar_even_when_nothing_was_read_this_turn(monkeypatch):
+    import shared
+
+    monkeypatch.setitem(shared.SKILL_TOOLS_MAP, "calendar", ["draft_calendar_event"])
+
+    async def fake_execute(name, inputs, **kw):
+        return {"_draft": "calendar-event", "data": {"draft_id": "d2"}}
+
+    run_tool_block = _build_runner(fake_execute)
+
+    async def _go():
+        q = asyncio.Queue()
+        await run_tool_block(SimpleNamespace(name="draft_calendar_event", inputs={}, id="c1"), q)
+        return [q.get_nowait() for _ in range(q.qsize())]
+
+    loop = asyncio.new_event_loop()
+    try:
+        events = loop.run_until_complete(_go())
+    finally:
+        loop.close()
+        asyncio.set_event_loop(asyncio.new_event_loop())
+    draft = next(e for e in events if e.get("kind") == "draft")
+    assert draft["data"]["sources"] == ["Outlook calendar"]
+
+
 def _run_two_calls(monkeypatch, tmp_path, policy_text):
     import shared
     from sandbox import policy as pol

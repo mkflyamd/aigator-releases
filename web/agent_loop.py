@@ -1044,9 +1044,14 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
             await event_queue.put({"kind": "pane", "pane": result["_pane"], "data": result.get("data", {})})
         if isinstance(result, dict) and "_draft" in result:
             _draft_data = result.get("data", {})
+            _draft_sources = set(_sources_read)
+            if result["_draft"] == "calendar-event":
+                _calendar = data_sources.source_for_call(tc.name, tc.inputs)
+                if _calendar is not None:
+                    _draft_sources.add(_calendar.label)
             await event_queue.put({
                 "kind": "draft", "draft": result["_draft"],
-                "data": {**_draft_data, "sources": sorted(_sources_read),
+                "data": {**_draft_data, "sources": sorted(_draft_sources),
                          "sensitive": data_sources.sensitivity_markers(_draft_data)},
             })
         elif not _is_error:
