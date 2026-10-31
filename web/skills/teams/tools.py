@@ -397,16 +397,15 @@ def _participants(cid: str, messages=(), thread_members=()) -> list:
     return list(people.values())
 
 
-def _thread_members_of(rc, skype_token, messaging_service, cid: str) -> list:
-    """The member list the chat listing carries for one chat, so quiet members are known too."""
+def _thread_members_of(rc, skype_token, messaging_service, cid: str, listed=()) -> list:
+    """The chat's members, including people who have not posted; read from the thread record when the listing has none."""
+    if listed:
+        return list(listed)
     try:
-        chats, _ = rc.list_chats(skype_token, messaging_service, limit=200)
-    except Exception:
+        return rc.read_thread_members(cid, skype_token, messaging_service)
+    except Exception as e:
+        print(f"[teams/participants] thread members of {cid} not readable: {e}", file=sys.stderr, flush=True)
         return []
-    for chat in chats:
-        if chat.get("id") == cid:
-            return chat.get("thread_members") or []
-    return []
 
 
 def _tool_read_teams_chats(
@@ -653,7 +652,11 @@ def _tool_read_teams_chats(
                 "topic": topic,
                 "chat_type": chat.get("type", ""),
                 "contact_email": person_email,
-                "participants": _participants(cid, messages, chat.get("thread_members")),
+                "participants": _participants(
+                    cid,
+                    messages,
+                    _thread_members_of(_rc, skype_token, messaging_service, cid, chat.get("thread_members")),
+                ),
                 "messages": recent,
             }
         )

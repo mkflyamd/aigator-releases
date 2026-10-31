@@ -105,7 +105,7 @@ def test_members_not_readable_falls_back_to_sender_ids_looked_up_in_the_director
     assert people == [{"name": "James Smith", "email": "james.smith2@example.com"}]
 
 
-def test_single_chat_read_includes_members_who_have_not_posted():
+def test_single_chat_read_includes_members_who_have_not_posted_from_the_thread_record():
     import skills._m365.helpers  # noqa: F401
     from skills.teams import tools
 
@@ -116,9 +116,9 @@ def test_single_chat_read_includes_members_who_have_not_posted():
         [{"id": "1", "time": "2026-10-30T10:00:00Z", "from": "Sherry", "from_mri": f"8:orgid:{sender}", "content": "hi"}],
         "",
     )
-    mod.list_chats = lambda *a, **k: (
-        [{"id": "19:abc@thread.v2", "thread_members": [{"id": f"8:orgid:{sender}"}, {"id": f"8:orgid:{quiet}"}]}],
-        "",
+    mod.list_chats = lambda *a, **k: ([{"id": "19:abc@thread.v2", "thread_members": []}], "")
+    mod.read_thread_members = lambda cid, *a, **k: (
+        [{"id": f"8:orgid:{sender}"}, {"id": f"8:orgid:{quiet}"}] if cid == "19:abc@thread.v2" else []
     )
     fake_spec = types.SimpleNamespace(loader=types.SimpleNamespace(exec_module=lambda m: None))
     users = {
