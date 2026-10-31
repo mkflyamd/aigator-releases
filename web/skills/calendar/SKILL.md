@@ -95,7 +95,8 @@ Before passing start/end datetimes to any calendar tool:
 
 ## Recurrence Handling
 
-- When the user requests a repeating meeting (“every day”, “recurring daily”, “weekdays only”, etc.), clarify the cadence **before** calling a tool. Confirm pattern type (daily/weekly/monthly), interval, exact weekdays (if weekly), and end condition (no end, end date, or number of occurrences).
+- When the user requests a repeating meeting (“every day”, “recurring daily”, “weekdays only”, etc.), settle the cadence from the request: pattern type (daily/weekly/monthly), interval, exact weekdays (if weekly), and end condition (no end, end date, or number of occurrences). Use a sensible default for anything not stated (weekly, 30 min, no end) and say so. Ask only about a cadence detail you cannot default.
+- Never ask the user to pick a day or time from slots you made up. Once the attendees are resolved, call `find_meeting_times` first (one call per candidate date: the day they named, or the next three working days if none), then offer real open slots with `ask_user`: recommended slot first, in the user's timezone, with each attendee's local time in the option description. For a weekly series, offer the weekday and time of the next occurrence and note that it repeats.
 - Once confirmed, pass a full Graph recurrence object into `draft_calendar_event` or `update_calendar_event`. Example:
 
   ```json
