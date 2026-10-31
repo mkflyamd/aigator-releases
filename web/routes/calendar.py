@@ -20,6 +20,12 @@ class CalendarRsvpRequest(BaseModel):
     send_response: bool = True
 
 
+class AvailabilityDaysRequest(BaseModel):
+    emails: list[str]
+    after_date: str
+    duration_minutes: int = 30
+
+
 # ── Calendar third-pane endpoints ────────────────────────────────────────────
 
 
@@ -127,3 +133,23 @@ async def tp_calendar_respond(event_id: str, req: CalendarRsvpRequest):
         return {"ok": True}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/api/calendar/availability-days", dependencies=[Depends(verify_csrf)])
+async def tp_calendar_availability_days(req: AvailabilityDaysRequest):
+    """Free/busy for the next working days after `after_date`, for the availability grid's "later" button."""
+    import asyncio
+
+    from skills.calendar.tools import _tool_load_availability_days
+
+    if len(req.emails) > 20:
+        raise HTTPException(status_code=400, detail="Too many people.")
+    try:
+        result = await asyncio.to_thread(
+            _tool_load_availability_days, req.emails, req.after_date, req.duration_minutes
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result

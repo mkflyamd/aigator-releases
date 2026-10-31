@@ -10131,6 +10131,28 @@ function _availabilityGridSlotText(grid, dayIndex, slotIndex) {
   return `${dayText}, ${_availabilityGridClock(begin)} – ${_availabilityGridClock(end)} (${grid.timezone})`;
 }
 
+function _availabilityGridComposeUrl(grid, dayIndex, slotIndex) {
+  const date = grid.days[dayIndex].date;
+  const at = (minute) =>
+    `${date}T${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}:00`;
+  const begin = grid.first_minute + slotIndex * grid.step_minutes;
+  const query = {
+    path: '/calendar/action/compose',
+    rru: 'addevent',
+    startdt: at(begin),
+    enddt: at(begin + grid.duration_minutes),
+    to: grid.people
+      .filter((p) => !p.you && p.email)
+      .map((p) => p.email)
+      .join(';'),
+  };
+  const qs = Object.entries(query)
+    .filter(([, v]) => v)
+    .map(([k, v]) => `${k}=${encodeURIComponent(v)}`)
+    .join('&');
+  return `https://outlook.office.com/calendar/0/deeplink/compose?${qs}`;
+}
+
 function _showAvailabilityGrid(grid, ownerTabId) {
   if (!grid || !Array.isArray(grid.days) || !Array.isArray(grid.people) || !grid.people.length)
     return;
@@ -10148,6 +10170,7 @@ function _showAvailabilityGrid(grid, ownerTabId) {
   const steps = grid.days[0] ? grid.days[0].fit.length : 0;
   const perHour = Math.max(1, Math.round(60 / grid.step_minutes));
   const spanSlots = Math.max(1, Math.round(grid.duration_minutes / grid.step_minutes));
+  const MAX_GRID_DAYS = 60;
   const STATUS = {
     f: 'Free',
     t: 'Tentative',
@@ -10177,65 +10200,72 @@ function _showAvailabilityGrid(grid, ownerTabId) {
   const table = document.createElement('table');
   table.className = 'avail-grid';
 
-  const dayRow = table.insertRow();
-  const hourRow = table.insertRow();
+  let picked = null;
+  let pickedAt = null;
+  let pickedBusy = [];
+  let cellsByDay = [];
   const corner = (row) => {
     const th = document.createElement('th');
     th.className = 'ag-name ag-corner';
     row.appendChild(th);
   };
-  corner(dayRow);
-  corner(hourRow);
-  grid.days.forEach((day) => {
-    const th = document.createElement('th');
-    th.className = 'ag-day';
-    th.colSpan = steps;
-    th.textContent = day.label;
-    dayRow.appendChild(th);
-    for (let k = 0; k < steps; k += perHour) {
-      const h = document.createElement('th');
-      h.className = 'ag-hour' + (k === 0 ? ' ag-day-start' : '');
-      h.colSpan = Math.min(perHour, steps - k);
-      h.textContent = _availabilityGridClock(grid.first_minute + k * grid.step_minutes).replace(
-        ':00',
-        '',
-      );
-      hourRow.appendChild(h);
-    }
-  });
 
-  let picked = null;
-  let pickedBusy = [];
-  const cellsByDay = grid.days.map(() => []);
-  const addRow = (label, className, cellFor) => {
-    const row = table.insertRow();
-    const name = document.createElement('th');
-    name.className = 'ag-name ' + className;
-    name.textContent = label;
-    name.title = label;
-    row.appendChild(name);
-    grid.days.forEach((day, di) => {
-      for (let k = 0; k < steps; k++) {
-        const td = row.insertCell();
-        cellFor(td, day, di, k);
-        if (k === 0) td.classList.add('ag-day-start');
-        (cellsByDay[di][k] = cellsByDay[di][k] || []).push(td);
-        td.addEventListener('click', () => pick(di, k));
+  function renderTable() {
+    table.replaceChildren();
+    cellsByDay = grid.days.map(() => []);
+    const dayRow = table.insertRow();
+    const hourRow = table.insertRow();
+    corner(dayRow);
+    corner(hourRow);
+    grid.days.forEach((day) => {
+      const th = document.createElement('th');
+      th.className = 'ag-day';
+      th.colSpan = steps;
+      th.textContent = day.label;
+      dayRow.appendChild(th);
+      for (let k = 0; k < steps; k += perHour) {
+        const h = document.createElement('th');
+        h.className = 'ag-hour' + (k === 0 ? ' ag-day-start' : '');
+        h.colSpan = Math.min(perHour, steps - k);
+        h.textContent = _availabilityGridClock(grid.first_minute + k * grid.step_minutes).replace(
+          ':00',
+          '',
+        );
+        hourRow.appendChild(h);
       }
     });
-  };
 
-  addRow('Everyone free', 'ag-all', (td, day, di, k) => {
-    td.className = 'ag-cell ' + (day.fit[k] === '1' ? 'ag-fit' : 'ag-nofit');
-    td.title = _availabilityGridSlotText(grid, di, k);
-  });
-  grid.people.forEach((person, pi) => {
-    addRow(person.you ? 'You' : person.name || person.email, 'ag-person', (td, day, di, k) => {
-      const st = day.rows[pi][k] || '?';
-      td.className = `ag-cell ag-s-${st === '?' ? 'u' : st}`;
-      td.title = `${person.name || person.email}: ${STATUS[st] || 'No data'}`;
+    const addRow = (label, className, cellFor) => {
+      const row = table.insertRow();
+      const name = document.createElement('th');
+      name.className = 'ag-name ' + className;
+      name.textContent = label;
+      name.title = label;
+      row.appendChild(name);
+      grid.days.forEach((day, di) => {
+        for (let k = 0; k < steps; k++) {
+          const td = row.insertCell();
+          cellFor(td, day, di, k);
+          if (k === 0) td.classList.add('ag-day-start');
+          (cellsByDay[di][k] = cellsByDay[di][k] || []).push(td);
+          td.addEventListener('click', () => pick(di, k));
+        }
+      });
+    };
+
+    addRow('Everyone free', 'ag-all', (td, day, di, k) => {
+      td.className = 'ag-cell ' + (day.fit[k] === '1' ? 'ag-fit' : 'ag-nofit');
+      td.title = _availabilityGridSlotText(grid, di, k);
     });
-  });
+    grid.people.forEach((person, pi) => {
+      addRow(person.you ? 'You' : person.name || person.email, 'ag-person', (td, day, di, k) => {
+        const st = day.rows[pi][k] || '?';
+        td.className = `ag-cell ag-s-${st === '?' ? 'u' : st}`;
+        td.title = `${person.name || person.email}: ${STATUS[st] || 'No data'}`;
+      });
+    });
+  }
+  renderTable();
   scroll.appendChild(table);
 
   const footer = document.createElement('div');
@@ -10247,7 +10277,17 @@ function _showAvailabilityGrid(grid, ownerTabId) {
   use.className = 'gcc-approve-btn';
   use.textContent = 'Use this time';
   use.disabled = true;
-  footer.append(chosen, use);
+  const openOutlook = document.createElement('button');
+  openOutlook.className = 'gcc-open-outlook-btn';
+  openOutlook.textContent = 'Open in Outlook';
+  openOutlook.disabled = true;
+  const later = document.createElement('button');
+  later.className = 'gcc-open-outlook-btn';
+  later.textContent = 'Later weeks ›';
+  const actions = document.createElement('div');
+  actions.className = 'ag-actions';
+  actions.append(later, openOutlook, use);
+  footer.append(chosen, actions);
 
   function pick(di, k) {
     k = Math.max(0, Math.min(k, steps - spanSlots));
@@ -10257,6 +10297,7 @@ function _showAvailabilityGrid(grid, ownerTabId) {
     for (let j = k; j < k + spanSlots; j++)
       cellsByDay[di][j].forEach((c) => c.classList.add('ag-picked'));
     picked = _availabilityGridSlotText(grid, di, k);
+    pickedAt = { di, k };
     pickedBusy = grid.people
       .map((person, pi) => ({ person, rows: grid.days[di].rows[pi] }))
       .filter(({ rows }) => {
@@ -10268,7 +10309,67 @@ function _showAvailabilityGrid(grid, ownerTabId) {
       ? `${picked} · not free: ${pickedBusy.join(', ')}`
       : picked;
     use.disabled = false;
+    openOutlook.disabled = false;
   }
+  later.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    later.disabled = true;
+    later.textContent = 'Loading…';
+    try {
+      const post = () =>
+        fetch('/api/calendar/availability-days', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': window.__CSRF_TOKEN__ || '',
+          },
+          body: JSON.stringify({
+            emails: grid.people.map((p) => p.email),
+            after_date: grid.days[grid.days.length - 1].date,
+            duration_minutes: grid.duration_minutes,
+          }),
+        });
+      let res = await post();
+      if (res.status === 403) {
+        const csrf = await fetch('/api/csrf')
+          .then((r) => (r.ok ? r.json() : null))
+          .catch(() => null);
+        if (csrf?.csrf_token) window.__CSRF_TOKEN__ = csrf.csrf_token;
+        res = await post();
+      }
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(typeof err.detail === 'string' ? err.detail : 'HTTP ' + res.status);
+      }
+      const { days } = await res.json();
+      const firstNew = grid.days.length;
+      grid.days.push(...days);
+      renderTable();
+      if (pickedAt) pick(pickedAt.di, pickedAt.k);
+      const cell = cellsByDay[firstNew]?.[0]?.[0];
+      if (cell) scroll.scrollLeft = Math.max(0, cell.offsetLeft - 140);
+      later.disabled = grid.days.length >= MAX_GRID_DAYS;
+      later.textContent = 'Later weeks ›';
+    } catch (err) {
+      later.disabled = false;
+      later.textContent = 'Later weeks ›';
+      _showConnectivityToast("Couldn't load later weeks: " + (err?.message || err), 'warn');
+    }
+  });
+  openOutlook.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    if (!pickedAt) return;
+    const url = _availabilityGridComposeUrl(grid, pickedAt.di, pickedAt.k);
+    try {
+      if (typeof window.gatorShell !== 'undefined' && window.gatorShell.openOutlookCompose) {
+        await window.gatorShell.openOutlookCompose(url);
+      } else {
+        window.open(url, '_blank', 'noopener');
+      }
+    } catch (err) {
+      _showConnectivityToast("Couldn't open in Outlook: " + (err?.message || err), 'warn');
+    }
+  });
   use.addEventListener('click', (e) => {
     e.stopPropagation();
     if (!picked) return;

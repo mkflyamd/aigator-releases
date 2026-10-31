@@ -1,5 +1,6 @@
 """The availability grid payload: per-person status per half hour, and columns where everyone is free."""
 
+from datetime import date, timedelta
 from unittest.mock import patch
 
 from skills.calendar.tools import _tool_show_availability_grid
@@ -73,3 +74,28 @@ def test_explicit_dates_go_past_two_weeks_in_order():
 def test_requires_an_attendee_other_than_the_user():
     out, _ = _run({}, attendees=["me@example.com"])
     assert "error" in out
+
+
+def test_later_weeks_returns_the_next_working_days_after_a_date_in_people_order():
+    import skills._m365.helpers  # noqa: F401
+    import skills.calendar.helpers  # noqa: F401
+    from skills.calendar.tools import _tool_load_availability_days
+
+    after = date.today() + timedelta(days=7)
+    gc = _Gc({"me@example.com": "0" * 20, "sherry@example.com": "2" * 20})
+    with (
+        patch("skills._m365.helpers.get_cal_client", return_value=gc),
+        patch("skills.calendar.helpers.get_user_win_tz", return_value="Pacific Standard Time"),
+    ):
+        out = _tool_load_availability_days(["me@example.com", "sherry@example.com"], after.isoformat(), 30, 3)
+    dates = [date.fromisoformat(d["date"]) for d in out["days"]]
+    assert len(dates) == 3 and dates == sorted(dates) and all(d > after and d.weekday() < 5 for d in dates)
+    assert out["days"][0]["rows"] == ["f" * 20, "b" * 20]
+    assert out["days"][0]["fit"] == "0" * 20
+
+
+def test_later_weeks_rejects_a_bad_or_far_future_date():
+    from skills.calendar.tools import _tool_load_availability_days
+
+    assert "error" in _tool_load_availability_days(["a@example.com"], "not-a-date")
+    assert "error" in _tool_load_availability_days(["a@example.com"], "2999-01-01")

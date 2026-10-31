@@ -36,5 +36,29 @@ assert.strictEqual(
   'Tuesday, Jan 8, 5:30 PM – 6:30 PM (Pacific Standard Time)',
 );
 
+const composeUrl = load('_availabilityGridComposeUrl');
+const url = new URL(
+  composeUrl(
+    {
+      ...grid,
+      people: [
+        { you: true, email: 'me@example.com' },
+        { email: 'sherry@example.com' },
+        { email: 'james@example.com' },
+      ],
+    },
+    1,
+    19,
+  ),
+);
+assert.strictEqual(
+  url.origin + url.pathname,
+  'https://outlook.office.com/calendar/0/deeplink/compose',
+);
+assert.strictEqual(url.searchParams.get('startdt'), '2030-01-08T17:30:00');
+assert.strictEqual(url.searchParams.get('enddt'), '2030-01-08T18:00:00');
+assert.strictEqual(url.searchParams.get('to'), 'sherry@example.com;james@example.com');
+
 assert(/msg\.availability_grid\)\s*\{\s*_showAvailabilityGrid\(/.test(source), 'SSE handler wired');
+assert(/fetch\('\/api\/calendar\/availability-days'/.test(source), 'later weeks calls the route');
 console.log('availability_grid_card: ok');

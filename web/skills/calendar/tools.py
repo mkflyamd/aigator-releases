@@ -678,34 +678,24 @@ def _grid_days(dates, now: datetime) -> list:
             days.append(d)
     if days:
         return days[:20]
-    d = now.date()
-    while len(days) < _GRID_DEFAULT_DAYS:
+    return _next_working_days(now.date(), _GRID_DEFAULT_DAYS)
+
+
+def _next_working_days(after, count: int) -> list:
+    days = []
+    d = after
+    while len(days) < count:
         d += timedelta(days=1)
         if d.weekday() < 5:
             days.append(d)
     return days
 
 
-def _tool_show_availability_grid(attendees: list, dates: list | None = None, duration_minutes: int = 30) -> dict:
+def _grid_day_payloads(gc, emails: list, day_list: list, win_tz: str, need: int, now: datetime) -> list:
     from concurrent.futures import ThreadPoolExecutor
 
-    from .._m365.helpers import get_cal_client, get_cached_me
-    from .helpers import get_user_win_tz
-
-    gc = get_cal_client()
-    win_tz = get_user_win_tz()
-    now = datetime.now()
-    me = get_cached_me(gc)
-    my_email = (me.get("mail") or me.get("userPrincipalName") or "").lower()
-    others = [e for e in _parse_email_list(attendees) if e.lower() != my_email]
-    if not others:
-        return {"error": "Give at least one attendee email."}
-    people = [{"name": "You", "email": my_email, "you": True}] + [
-        {"name": _person_name(e), "email": e.lower(), "you": False} for e in others
-    ]
-    emails = [p["email"] for p in people]
     per_day = (_GRID_LAST_HOUR - _GRID_FIRST_HOUR) * 60 // _GRID_STEP
-    need = max(1, -(-int(duration_minutes or 30) // _GRID_STEP))
+
     def fetch_views(day) -> dict[str, str]:
         views: dict[str, str] = {}
         for i in range(0, len(emails), 20):
@@ -722,7 +712,6 @@ def _tool_show_availability_grid(attendees: list, dates: list | None = None, dur
                 views[(s.get("scheduleId") or "").lower()] = s.get("availabilityView") or ""
         return views
 
-    day_list = _grid_days(dates, now)
     with ThreadPoolExecutor(max_workers=5) as pool:
         all_views = list(pool.map(fetch_views, day_list))
     days = []
@@ -738,6 +727,47 @@ def _tool_show_availability_grid(attendees: list, dates: list | None = None, dur
             ok = ok and all(r[j] in "f?" for r in rows for j in range(k, min(k + need, per_day)))
             fit += "1" if ok else "0"
         days.append({"date": f"{day:%Y-%m-%d}", "label": f"{day:%a %b} {day.day}", "rows": rows, "fit": fit})
+    return days
+
+
+def _tool_load_availability_days(emails: list, after_date: str, duration_minutes: int = 30, count: int = 10) -> dict:
+    """The next working days after `after_date` for the people already on an availability grid."""
+    from .._m365.helpers import get_cal_client
+    from .helpers import get_user_win_tz
+
+    now = datetime.now()
+    try:
+        after = datetime.fromisoformat(str(after_date)).date()
+    except ValueError:
+        return {"error": "after_date must be YYYY-MM-DD."}
+    if after > now.date() + timedelta(days=365):
+        return {"error": "That is more than a year ahead."}
+    wanted = [e.lower() for e in _parse_email_list(emails)]
+    if not wanted:
+        return {"error": "Give at least one email."}
+    need = max(1, -(-int(duration_minutes or 30) // _GRID_STEP))
+    day_list = _next_working_days(after, max(1, min(int(count), _GRID_DEFAULT_DAYS)))
+    return {"days": _grid_day_payloads(get_cal_client(), wanted, day_list, get_user_win_tz(), need, now)}
+
+
+def _tool_show_availability_grid(attendees: list, dates: list | None = None, duration_minutes: int = 30) -> dict:
+    from .._m365.helpers import get_cal_client, get_cached_me
+    from .helpers import get_user_win_tz
+
+    gc = get_cal_client()
+    win_tz = get_user_win_tz()
+    now = datetime.now()
+    me = get_cached_me(gc)
+    my_email = (me.get("mail") or me.get("userPrincipalName") or "").lower()
+    others = [e for e in _parse_email_list(attendees) if e.lower() != my_email]
+    if not others:
+        return {"error": "Give at least one attendee email."}
+    people = [{"name": "You", "email": my_email, "you": True}] + [
+        {"name": _person_name(e), "email": e.lower(), "you": False} for e in others
+    ]
+    emails = [p["email"] for p in people]
+    need = max(1, -(-int(duration_minutes or 30) // _GRID_STEP))
+    days = _grid_day_payloads(gc, emails, _grid_days(dates, now), win_tz, need, now)
     best = []
     for d in days:
         for k, c in enumerate(d["fit"]):

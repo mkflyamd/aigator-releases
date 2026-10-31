@@ -6280,6 +6280,11 @@ body.gator-chat-expanded .gator-expand-btn {
   gap: 8px;
   margin-top: 8px;
 }
+.ag-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
 .ag-chosen {
   font-size: 0.8rem;
   color: var(--text-dim);
