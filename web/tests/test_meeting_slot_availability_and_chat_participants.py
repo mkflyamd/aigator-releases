@@ -103,3 +103,42 @@ def test_members_not_readable_falls_back_to_sender_ids_looked_up_in_the_director
             thread_members=[{"id": f"8:orgid:{guid}"}],
         )
     assert people == [{"name": "James Smith", "email": "james.smith2@example.com"}]
+
+
+def test_single_chat_read_includes_members_who_have_not_posted():
+    import skills._m365.helpers  # noqa: F401
+    from skills.teams import tools
+
+    sender, quiet = "11111111-2222-3333-4444-555555555555", "99999999-8888-7777-6666-555555555555"
+    mod = types.ModuleType("_teams_read_chats_fake")
+    mod.get_auth = lambda: ("SKYPE_TOKEN", "https://msgsvc.example")
+    mod.read_messages = lambda *a, **k: (
+        [{"id": "1", "time": "2026-10-30T10:00:00Z", "from": "Sherry", "from_mri": f"8:orgid:{sender}", "content": "hi"}],
+        "",
+    )
+    mod.list_chats = lambda *a, **k: (
+        [{"id": "19:abc@thread.v2", "thread_members": [{"id": f"8:orgid:{sender}"}, {"id": f"8:orgid:{quiet}"}]}],
+        "",
+    )
+    fake_spec = types.SimpleNamespace(loader=types.SimpleNamespace(exec_module=lambda m: None))
+    users = {
+        sender: {"displayName": "Sherry Yang", "mail": "sherry.yang@example.com"},
+        quiet: {"displayName": "James Smith", "mail": "james.smith2@example.com"},
+    }
+
+    class _Gc:
+        def get(self, path, params=None):
+            if path.endswith("/members"):
+                raise RuntimeError("403")
+            return users[path.rsplit("/", 1)[1]]
+
+    with (
+        patch.object(_ilu, "spec_from_file_location", return_value=fake_spec),
+        patch.object(_ilu, "module_from_spec", return_value=mod),
+        patch("skills._m365.helpers.make_teams_gc", return_value=_Gc()),
+    ):
+        result = tools._tool_read_teams_chats(chat_id="19:abc@thread.v2")
+    assert [p["email"] for p in result["chats"][0]["participants"]] == [
+        "sherry.yang@example.com",
+        "james.smith2@example.com",
+    ]

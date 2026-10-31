@@ -397,6 +397,18 @@ def _participants(cid: str, messages=(), thread_members=()) -> list:
     return list(people.values())
 
 
+def _thread_members_of(rc, skype_token, messaging_service, cid: str) -> list:
+    """The member list the chat listing carries for one chat, so quiet members are known too."""
+    try:
+        chats, _ = rc.list_chats(skype_token, messaging_service, limit=200)
+    except Exception:
+        return []
+    for chat in chats:
+        if chat.get("id") == cid:
+            return chat.get("thread_members") or []
+    return []
+
+
 def _tool_read_teams_chats(
     hours: int = 720,
     filter_topic: str = "",
@@ -533,7 +545,9 @@ def _tool_read_teams_chats(
                     {
                         "chat_id": chat_id,
                         "topic": chat_id,
-                        "participants": _participants(chat_id, matched),
+                        "participants": _participants(
+                            chat_id, matched, _thread_members_of(_rc, skype_token, messaging_service, chat_id)
+                        ),
                         "messages": [_normalize(m) for m in matched],
                     }
                 ]
@@ -550,7 +564,9 @@ def _tool_read_teams_chats(
                 {
                     "chat_id": chat_id,
                     "topic": chat_id,
-                    "participants": _participants(chat_id, messages),
+                    "participants": _participants(
+                        chat_id, messages, _thread_members_of(_rc, skype_token, messaging_service, chat_id)
+                    ),
                     "messages": _within_window(messages),
                 }
             ]
