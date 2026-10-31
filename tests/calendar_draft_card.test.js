@@ -15,7 +15,12 @@ function load(name, stubs = {}) {
 
 const escapeHtml = load('escapeHtml');
 const when = load('_calendarDraftWhen', { escapeHtml });
-const rows = load('_buildCalendarDraftRows', { escapeHtml, _calendarDraftWhen: when });
+const recurrenceText = load('_calendarRecurrenceText');
+const rows = load('_buildCalendarDraftRows', {
+  escapeHtml,
+  _calendarDraftWhen: when,
+  _calendarRecurrenceText: recurrenceText,
+});
 
 const html = rows({
   subject: 'Sync',
@@ -50,7 +55,41 @@ const config = source.match(/'calendar-event': \{[\s\S]*?\n    \},/);
 assert(config, 'calendar-event config present');
 assert(!/hideApprove/.test(config[0]), 'approve button is not hidden');
 assert(/sendLabel: 'Send invite'/.test(config[0]), 'Send invite label');
-assert(/openButton: true/.test(config[0]), 'Open button shown next to Send');
+assert(
+  /openButton: !data\.recurrence/.test(config[0]),
+  'Open button shown next to Send, except for recurring drafts (the compose link cannot carry a repeat)',
+);
+
+// Recurring drafts show the real repeat rule, not just "Yes".
+assert.strictEqual(
+  recurrenceText({
+    pattern: { type: 'weekly', interval: 1, daysOfWeek: ['thursday'] },
+    range: { type: 'endDate', startDate: '2026-11-05', endDate: '2026-12-31' },
+  }),
+  'Every week on Thu, until 2026-12-31',
+);
+assert.strictEqual(
+  recurrenceText({ pattern: { type: 'daily', interval: 2 }, range: { type: 'noEnd' } }),
+  'Every 2 days, no end date',
+);
+assert.strictEqual(
+  recurrenceText({
+    pattern: { type: 'absoluteMonthly', interval: 1, dayOfMonth: 15 },
+    range: { type: 'numbered', numberOfOccurrences: 6 },
+  }),
+  'Every month on day 15, 6 times',
+);
+assert.strictEqual(recurrenceText({}), 'Yes');
+const recurringHtml = rows({
+  subject: 'Weekly Sync',
+  start: '2026-11-05T10:00:00',
+  end: '2026-11-05T10:30:00',
+  recurrence: {
+    pattern: { type: 'weekly', interval: 1, daysOfWeek: ['thursday'] },
+    range: { type: 'noEnd' },
+  },
+});
+assert(recurringHtml.includes('Every week on Thu, no end date'), recurringHtml);
 assert(/openLabel: 'Open in Outlook'/.test(config[0]), 'Open in Outlook label');
 assert(/<button class="gcc-approve-btn"[^`]*\$\{config\.sendLabel \|\| 'Send'\}/.test(source));
 assert(/config\.openButton \? `<button class="gcc-open-outlook-btn"/.test(source));

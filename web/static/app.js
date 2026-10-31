@@ -9751,6 +9751,33 @@ function _calendarDraftWhen(data) {
   return escapeHtml(day + ', ' + clock(m[4], m[5]) + ' – ' + clock(e[1], e[2]) + zone);
 }
 
+function _calendarRecurrenceText(rec) {
+  const p = (rec && rec.pattern) || {};
+  const r = (rec && rec.range) || {};
+  const noun = {
+    daily: 'day',
+    weekly: 'week',
+    absoluteMonthly: 'month',
+    relativeMonthly: 'month',
+    absoluteYearly: 'year',
+    relativeYearly: 'year',
+  }[p.type];
+  if (!noun) return 'Yes';
+  const n = Number(p.interval) || 1;
+  const day = (d) => String(d).charAt(0).toUpperCase() + String(d).slice(1, 3);
+  let text = 'Every ' + (n > 1 ? n + ' ' + noun + 's' : noun);
+  if (Array.isArray(p.daysOfWeek) && p.daysOfWeek.length) {
+    text += ' on ' + p.daysOfWeek.map(day).join(', ');
+  }
+  if (p.type === 'absoluteMonthly' && p.dayOfMonth) text += ' on day ' + p.dayOfMonth;
+  if (p.type === 'relativeMonthly' && p.index) text += ' on the ' + p.index;
+  if (r.type === 'endDate' && r.endDate) text += ', until ' + r.endDate;
+  else if (r.type === 'numbered' && r.numberOfOccurrences)
+    text += ', ' + r.numberOfOccurrences + ' times';
+  else if (r.type === 'noEnd') text += ', no end date';
+  return text;
+}
+
 function _buildCalendarDraftRows(data) {
   const local = data.attendee_local || {};
   const person = (email, optional) => {
@@ -9771,7 +9798,7 @@ function _buildCalendarDraftRows(data) {
   if (attendees) rows.push(['Attendees', attendees]);
   if (data.location) rows.push(['Location', escapeHtml(data.location)]);
   rows.push(['Teams meeting', data.teams ? 'Yes' : 'No']);
-  if (data.recurrence) rows.push(['Repeats', 'Yes']);
+  if (data.recurrence) rows.push(['Repeats', escapeHtml(_calendarRecurrenceText(data.recurrence))]);
   return rows
     .map(
       ([k, v]) =>
@@ -10928,7 +10955,7 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
       hideEditLink: true,
       title: 'Meeting draft ready',
       sendLabel: 'Send invite',
-      openButton: true,
+      openButton: !data.recurrence,
       openLabel: 'Open in Outlook',
       footerNote: 'Nothing is sent until you press Send invite.',
       customBody: _buildCalendarDraftRows(data),
