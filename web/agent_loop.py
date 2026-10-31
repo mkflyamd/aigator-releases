@@ -590,7 +590,7 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
 
     async def _ask_source(tc, source, event_queue):
         """Returns None when the source is allowed, else the error result."""
-        lock = _source_locks.setdefault((context_id, source.key), asyncio.Lock())
+        lock = _source_locks.setdefault((context_id, data_sources.approval_key(source)), asyncio.Lock())
         async with lock:
             if data_sources.is_allowed(context_id, source.key):
                 return None
@@ -600,10 +600,10 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
                     text["action"], event_queue, title=text["title"],
                     allow_label=text["allow_label"], deny_label=text["deny_label"],
                 ):
-                    data_sources.allow(context_id, source.key)
-                    await event_queue.put({"kind": "status", "status": f"{source.label}: allowed for this tab"})
+                    data_sources.allow_source(context_id, source)
+                    await event_queue.put({"kind": "status", "status": f"{source.group_label or source.label}: allowed for this tab"})
                     return None
-                data_sources.deny(context_id, source.key)
+                data_sources.deny_source(context_id, source)
         return await _early_error(
             tc, event_queue,
             {
