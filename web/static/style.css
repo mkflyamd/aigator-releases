@@ -6246,6 +6246,20 @@ body.gator-chat-expanded .gator-expand-btn {
   border-radius: 8px;
   cursor: pointer;
 }
+.avail-grid .ag-remove {
+  float: right;
+  margin: 1px 0 0 6px;
+  padding: 0 4px;
+  font-size: 0.85rem;
+  line-height: 1.2;
+  color: var(--text-dim);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+.avail-grid .ag-remove:hover {
+  color: var(--warn);
+}
 .avail-grid .ag-role-optional {
   color: var(--warn);
   border-style: dashed;

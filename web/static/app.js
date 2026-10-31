@@ -10354,6 +10354,19 @@ function _showAvailabilityGrid(grid, ownerTabId) {
           refresh();
         });
         th.appendChild(role);
+        if (grid.people.filter((p) => !p.you).length > 1) {
+          const remove = document.createElement('button');
+          remove.type = 'button';
+          remove.className = 'ag-remove';
+          remove.textContent = '×';
+          remove.title = `Remove ${person.name || person.email} from the grid`;
+          remove.setAttribute('aria-label', remove.title);
+          remove.addEventListener('click', (e) => {
+            e.stopPropagation();
+            removePerson(person);
+          });
+          th.appendChild(remove);
+        }
       }
       addRow(th, (td, day, di, k) => {
         const st = day.rows[pi][k] || '?';
@@ -10427,8 +10440,17 @@ function _showAvailabilityGrid(grid, ownerTabId) {
       ? `${picked} · not free: ${pickedBusy.join(', ')}`
       : picked;
     use.disabled = false;
-    openOutlook.classList.remove('ag-link-disabled');
+    syncOutlookLink();
   }
+
+  function syncOutlookLink() {
+    const repeating = repeat.value !== 'none';
+    openOutlook.classList.toggle('ag-link-disabled', !pickedAt || repeating);
+    openOutlook.title = repeating
+      ? "Outlook's new-event link can't carry a repeat. Use this time and I'll draft the series."
+      : '';
+  }
+  repeat.addEventListener('change', syncOutlookLink);
 
   function refresh() {
     renderTable();
@@ -10441,7 +10463,7 @@ function _showAvailabilityGrid(grid, ownerTabId) {
         pickedBusy = [];
         chosen.textContent = 'Click any time to choose it (green = everyone required is free)';
         use.disabled = true;
-        openOutlook.classList.add('ag-link-disabled');
+        syncOutlookLink();
       }
     }
   }
@@ -10514,6 +10536,16 @@ function _showAvailabilityGrid(grid, ownerTabId) {
       later.textContent = 'Later weeks ›';
     });
   });
+
+  function removePerson(person) {
+    enqueue(async () => {
+      const idx = grid.people.indexOf(person);
+      if (idx < 0 || grid.people.filter((p) => !p.you).length < 2) return;
+      grid.people.splice(idx, 1);
+      grid.days.forEach((d) => d.rows.splice(idx, 1));
+      refresh();
+    });
+  }
 
   const inGrid = (email) => grid.people.some((p) => p.email === email);
   function showAddStatus() {
@@ -10644,7 +10676,7 @@ function _showAvailabilityGrid(grid, ownerTabId) {
   openOutlook.addEventListener('click', async (e) => {
     e.preventDefault();
     e.stopPropagation();
-    if (!pickedAt) return;
+    if (!pickedAt || repeat.value !== 'none') return;
     const url = _availabilityGridComposeUrl(grid, pickedAt.di, pickedAt.k);
     try {
       if (typeof window.gatorShell !== 'undefined' && window.gatorShell.openOutlookCompose) {
