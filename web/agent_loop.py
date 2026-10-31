@@ -552,6 +552,8 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
     """Returns (_run_tool_block, _run_all_into_queue, _SENTINEL) closures."""
     import content_guard
     import data_sources
+    import people_context
+    _people_seen: dict[str, dict] = {}
     _SENTINEL = object()
     _offered = set(offered_names) if offered_names is not None else None
     _source_locks: dict[tuple[str, str], asyncio.Lock] = {}
@@ -951,6 +953,10 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
                 return {"error": "Browser use cancelled by user."}
             await event_queue.put({"kind": "browser_hitl", "state": "active"})
         result = await execute_tool(tc.name, tc.inputs)
+        if tc.name == "search_people":
+            result = people_context.apply(str((tc.inputs or {}).get("query", "")), result, _people_seen)
+        else:
+            people_context.collect(result, _people_seen)
         if is_browser:
             await event_queue.put({"kind": "browser_hitl", "state": "done"})
         if _offered is not None and _result_was_spilled_to_file(result):
@@ -1104,11 +1110,19 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
                     except Exception as exc:
                         results.append({"error": str(exc)})
             else:
-                results = list(await asyncio.gather(
-                    *[_run_tool_block(tc, event_queue) for tc in tool_calls],
-                    return_exceptions=True,
-                ))
-                results = [r if not isinstance(r, Exception) else {"error": str(r)} for r in results]
+                # Name lookups wait for the other calls in the batch, so a chat or thread read in the
+                # same batch has already told us who is in it.
+                waits = [i for i, tc in enumerate(tool_calls) if tc.name == "search_people"]
+                if len(waits) == len(tool_calls):
+                    waits = []
+                results = [None] * len(tool_calls)
+                for group in ([i for i in range(len(tool_calls)) if i not in waits], waits):
+                    done = await asyncio.gather(
+                        *[_run_tool_block(tool_calls[i], event_queue) for i in group],
+                        return_exceptions=True,
+                    )
+                    for i, r in zip(group, done):
+                        results[i] = r if not isinstance(r, Exception) else {"error": str(r)}
         finally:
             await event_queue.put(_SENTINEL)
         return results

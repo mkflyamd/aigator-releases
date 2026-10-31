@@ -50,12 +50,12 @@ Whenever the user names a meeting by day (e.g. "Thursday", "next Monday"):
 
 Determine the attendee input type first, then act accordingly:
 
-| Input type       | Example                   | Action                                                                                                                                                               |
-| ---------------- | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Direct email     | `ram@company.com`         | Use as-is. Skip `search_people`.                                                                                                                                     |
-| @mention         | `@Ram Iyer`               | Treat as already resolved — use the identity the app surfaces for that mention. Skip `search_people`.                                                                |
-| Name only        | `Ram`                     | Call `search_people`. Disambiguate if multiple results (see below).                                                                                                  |
-| Name from a chat | "the people in this chat" | If a Teams chat was read, use its `participants` (name and email). A name that matches exactly one participant is resolved: use that email and skip `search_people`. |
+| Input type                    | Example                      | Action                                                                                                                                                                                               |
+| ----------------------------- | ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Direct email                  | `ram@company.com`            | Use as-is. Skip `search_people`.                                                                                                                                                                     |
+| @mention                      | `@Ram Iyer`                  | Treat as already resolved — use the identity the app surfaces for that mention. Skip `search_people`.                                                                                                |
+| Name only                     | `Ram`                        | Call `search_people`. Disambiguate if multiple results (see below).                                                                                                                                  |
+| Name seen in a chat or thread | `James` (in the pinned chat) | Read the chat or thread first, then call `search_people` after it returns. People from what you read (`participants`) come first; if `resolved_from_context` is set, use that person without asking. |
 
 **When search_people returns multiple matches:**
 

@@ -226,13 +226,25 @@ TOOL_STATUS = {
 }
 
 
+def _mail_participants(messages: list) -> list:
+    """Everyone on the messages (sender, To, Cc) as name and email, so a first name in the mail resolves to the right person."""
+    seen: dict[str, dict] = {}
+    for m in messages:
+        for entry in [m.get("from")] + (m.get("toRecipients") or []) + (m.get("ccRecipients") or []):
+            addr = ((entry or {}).get("emailAddress") or {})
+            email = (addr.get("address") or "").lower()
+            if email and email not in seen:
+                seen[email] = {"name": addr.get("name", ""), "email": email}
+    return list(seen.values())
+
+
 def _tool_read_email(count: int = 10, unread_only: bool = False) -> dict:
     from .._m365.helpers import get_graph_client
 
     gc = get_graph_client()
     params = {
         "$top": count,
-        "$select": "id,subject,from,receivedDateTime,bodyPreview,isRead",
+        "$select": "id,subject,from,toRecipients,ccRecipients,receivedDateTime,bodyPreview,isRead",
         "$orderby": "receivedDateTime desc",
     }
     if unread_only:
@@ -242,6 +254,7 @@ def _tool_read_email(count: int = 10, unread_only: bool = False) -> dict:
         params=params,
     )
     return {
+        "participants": _mail_participants(msgs.get("value", [])),
         "emails": [
             {
                 "id": m.get("id", ""),
@@ -395,7 +408,7 @@ def _tool_search_email(
     gc = get_graph_client()
     params = {
         "$top": str(count),
-        "$select": "id,subject,from,receivedDateTime,isRead,bodyPreview",
+        "$select": "id,subject,from,toRecipients,ccRecipients,receivedDateTime,isRead,bodyPreview",
     }
     # Graph API restrictions:
     #   - $search cannot combine with $orderby or $filter
@@ -433,6 +446,7 @@ def _tool_search_email(
         ]
     return {
         "total": len(messages),
+        "participants": _mail_participants(messages),
         "messages": [
             {
                 "subject": m.get("subject", "(no subject)"),
