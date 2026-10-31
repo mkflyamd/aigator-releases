@@ -3826,13 +3826,15 @@ setTimeout(scanAll, 500);
 
   function _forwardPinFromFrame(readTarget, source) {
     if (!readTarget) return;
+    // Take the pending pin and clear it in ONE script. Reading and clearing in two round trips let
+    // the next 300ms poll read the same pin again while a busy page was slow to run the clear, so one
+    // pin produced several chips and several pin requests.
     readTarget
-      .executeJavaScript('window.__gatorPinCtx || null')
+      .executeJavaScript(
+        '(function(){var c=window.__gatorPinCtx||null;window.__gatorPinCtx=null;return c;})()',
+      )
       .then((ctx) => {
         if (!ctx) return;
-        try {
-          readTarget.executeJavaScript('window.__gatorPinCtx = null;');
-        } catch {}
         if (!gatorView || !gatorView.webContents || gatorView.webContents.isDestroyed()) return;
         // OneNote: the editor subframe cannot see the SharePoint site, but its top
         // frame URL is the Doc.aspx link; the server resolves the team site from it.

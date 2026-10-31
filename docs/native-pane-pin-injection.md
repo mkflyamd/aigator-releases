@@ -208,9 +208,11 @@ time. This handles thread side-panels that open without URL changes.
 ```js
 // Shell polls Slack every 300ms for __gatorPinCtx
 setInterval(() => {
-  slackView.webContents.executeJavaScript('window.__gatorPinCtx || null').then((ctx) => {
+  // Read and clear in ONE script; two round trips let a later poll re-read the same pin.
+  slackView.webContents
+    .executeJavaScript('(function(){var c=window.__gatorPinCtx||null;window.__gatorPinCtx=null;return c;})()')
+    .then((ctx) => {
     if (!ctx) return;
-    slackView.webContents.executeJavaScript('window.__gatorPinCtx = null;');
     // Insert .pin-ref-chip in Gator's #chat-input
     gatorView.webContents.executeJavaScript(`...chip creation...`);
     // ALSO persist to /api/context/pin so it shows in the pin orb
