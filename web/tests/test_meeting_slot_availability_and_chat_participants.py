@@ -81,3 +81,25 @@ def test_chat_read_still_works_when_members_cannot_be_fetched():
     result = _read_chat(None)
     assert result["chats"][0]["participants"] == []
     assert result["chats"][0]["messages"]
+
+
+def test_members_not_readable_falls_back_to_sender_ids_looked_up_in_the_directory():
+    import skills._m365.helpers  # noqa: F401
+    from skills.teams import tools
+
+    guid = "11111111-2222-3333-4444-555555555555"
+
+    class _Gc:
+        def get(self, path, params=None):
+            if path.endswith("/members"):
+                raise RuntimeError("403")
+            assert path == f"/users/{guid}"
+            return {"displayName": "James Smith", "mail": "James.Smith2@example.com"}
+
+    with patch("skills._m365.helpers.make_teams_gc", return_value=_Gc()):
+        people = tools._participants(
+            "19:abc@thread.v2",
+            messages=[{"from_mri": f"8:orgid:{guid}"}, {"from_mri": f"8:orgid:{guid}"}, {"from_mri": "8:live:x"}],
+            thread_members=[{"id": f"8:orgid:{guid}"}],
+        )
+    assert people == [{"name": "James Smith", "email": "james.smith2@example.com"}]
