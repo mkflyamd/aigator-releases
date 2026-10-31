@@ -39,6 +39,16 @@ def test_electron_builder_bundles_backend_and_platform_targets():
     assert set(build["linux"]["target"]) == {"AppImage", "deb"}
 
 
+def test_macos_bundle_is_ad_hoc_signed_after_packaging():
+    # Without a re-sign, the bundle keeps Electron's stale signature and Apple Silicon
+    # Gatekeeper reports "AI Gator is damaged and can't be opened" for downloaded builds.
+    package = json.loads((ROOT / "shell" / "package.json").read_text(encoding="utf-8"))
+    mac = package["build"]["mac"]
+
+    assert mac["identity"] == "-"
+    assert mac["hardenedRuntime"] is False
+
+
 def test_shared_desktop_icon_meets_platform_size_requirements():
     with Image.open(ROOT / "tray" / "aigator_icon.png") as icon:
         assert icon.size == (512, 512)
