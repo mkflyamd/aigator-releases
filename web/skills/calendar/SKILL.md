@@ -34,7 +34,7 @@ metadata:
 
 ## Pre-flight Checks (run BEFORE any calendar tool call)
 
-These three checks are mandatory gates. Do not call create_calendar_event, check_availability, or find_meeting_times until all applicable checks pass.
+These three checks are mandatory gates. Do not call draft_calendar_event, check_availability, or find_meeting_times until all applicable checks pass.
 
 ### 1. Day-of-week ↔ Date Cross-validation
 
@@ -79,12 +79,12 @@ Before passing start/end datetimes to any calendar tool:
 
 ## Calendar Scheduling Workflow
 
-- "Find a time" / "Schedule a meeting with X" → call find_meeting_times first, present the available slots to the user, ask them to confirm the slot + subject + attendees. Once the user confirms, show the **Event Draft** (see below) before calling create_calendar_event.
+- "Find a time" / "Schedule a meeting with X" → call find_meeting_times first, present the available slots to the user, ask them to confirm the slot + subject + attendees. Once the user confirms, call draft_calendar_event (see **Event Draft** below).
 - "Is X available?" → call check_availability (for free/busy view) or find_meeting_times (to get concrete open slots).
 - "Cancel / delete meeting" → call read_calendar first to get the event ID, confirm the right event with the user, then call delete_calendar_event. You MUST call delete_calendar_event and receive `deleted=true` before telling the user the event was deleted. If read_calendar cannot find the event (404 / error), tell the user you could not locate it — do not assume it was already deleted.
 - "I'm OOO / taking PTO" → call create_ooo_event. Ask for dates and who to notify if not specified.
 - Always resolve names to emails via search_people before any calendar tool that takes email addresses.
-- NEVER say "I don't have a tool to create calendar events" — you DO have create_calendar_event. Use it.
+- NEVER say "I don't have a tool to create calendar events" — you DO have draft_calendar_event. Use it.
 
 ## Tool Result Guardrails
 
@@ -96,7 +96,7 @@ Before passing start/end datetimes to any calendar tool:
 ## Recurrence Handling
 
 - When the user requests a repeating meeting (“every day”, “recurring daily”, “weekdays only”, etc.), clarify the cadence **before** calling a tool. Confirm pattern type (daily/weekly/monthly), interval, exact weekdays (if weekly), and end condition (no end, end date, or number of occurrences).
-- Once confirmed, pass a full Graph recurrence object into `create_calendar_event` or `update_calendar_event`. Example:
+- Once confirmed, pass a full Graph recurrence object into `draft_calendar_event` or `update_calendar_event`. Example:
 
   ```json
   {
@@ -133,7 +133,7 @@ Before passing start/end datetimes to any calendar tool:
 
 - Use `read_calendar` to surface the original event and its `event_id`.
 - Call `get_calendar_event_detail` to pull required and optional attendees, location, online meeting info, and the existing agenda text. When the source event is a series master, use the returned `instances` list to grab the right occurrence ID before cloning.
-- Confirm the new date/time and any content tweaks with the user, then populate the **Event Draft** with the retrieved attendee lists (required vs optional) before calling `create_calendar_event`.
+- Confirm the new date/time and any content tweaks with the user, then call `draft_calendar_event` with the retrieved attendee lists (required vs optional).
 
 ## Rescheduling an Existing Event
 
@@ -158,35 +158,18 @@ Before passing start/end datetimes to any calendar tool:
 - The tool will delete the series and send cancellations to all attendees. Only claim success if the response contains `deleted=true` and `series_deleted=true`.
 - If Graph returns `organizer_required`, you cannot remove the series — offer to draft a message asking the organizer to handle the cancellation.
 
-## Event Draft (show before every create_calendar_event call)
+## Event Draft (draft_calendar_event)
 
-Before calling create_calendar_event, always render a structured draft and wait for explicit user approval. Do not send until the user says "send", "looks good", "go ahead", or equivalent.
-
-Format the draft exactly like this:
-
----
-
-📅 **[Title]**
-
-🕐 **When:** Mon May 8, 2:00 – 3:00 PM PDT
-🔁 **Recurrence:** None _(or e.g. "Weekly, every Monday")_
-📍 **Location:** _(room, address, or blank)_
-🔗 **Teams link:** Auto-generated _(or "None")_
-
-👥 **Required:** Name — email@company.com
-👤 **Optional:** Name — email@company.com _(or "None")_
-
-📝 **Body:**
-[Full meeting body / agenda text]
-
----
-
-_Anything to change before I send this?_
+Once the user confirms the slot, subject and attendees, call draft_calendar_event directly. It shows a draft card and sends nothing; the user presses **Open in Outlook** to review, edit and send the meeting from Outlook. Do not render a markdown draft block and do not ask for a second confirmation.
 
 Rules:
 
-- Every field must be present. If a value is unknown or not provided, show it as `—` so the user can spot gaps.
-- Recurrence: spell it out plainly — "Weekly, every Tuesday until Jun 30" — never leave it as a raw API parameter.
-- Teams link: if the tool will auto-generate one, say "Auto-generated"; if not applicable, say "None".
-- Required vs Optional: list each attendee on their own line with resolved name and email. Never collapse into a comma list.
-- After the user requests a change (e.g. "make it 30 min", "add Priya as optional"), update the draft in-place and re-render the full block. Do not call create_calendar_event until the user explicitly approves the final draft.
+- Fill every field you know: subject, start, end, required and optional attendees, location, `teams`, recurrence and an HTML body.
+- Recurrence: spell it out plainly in your reply ("Weekly, every Tuesday until Jun 30") and pass the Graph recurrence object.
+- After the card appears, tell the user the meeting is not sent yet and that Open in Outlook lets them change the body or add attendees.
+- If the user asks for a change, call draft_calendar_event again with the updated values.
+
+## Timezones
+
+- find_meeting_times returns each slot with its timezone and each attendee's local time (`attendee_local`). State the slot in the user's timezone and add each attendee's local time, flagging attendees whose slot falls outside their working hours or on another day.
+- By default slots respect attendee working hours. If the user says to ignore timezones or working hours, call find_meeting_times with `ignore_timezones=true`.

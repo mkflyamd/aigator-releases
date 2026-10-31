@@ -198,8 +198,8 @@ TOOL_DEFS = [
         },
     },
     {
-        "name": "create_calendar_event",
-        "description": "Create a calendar event and send invites to attendees. Call this as soon as the user confirms the meeting details (time, subject, attendees). Do not ask for confirmation more than once.",
+        "name": "draft_calendar_event",
+        "description": "Create a meeting draft card. Nothing is sent: the user presses Open in Outlook to review, edit and send it from Outlook. Call this as soon as the user confirms the meeting details (time, subject, attendees). Do not ask for confirmation more than once.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -242,7 +242,7 @@ TOOL_DEFS = [
     },
     {
         "name": "find_meeting_times",
-        "description": "Find available meeting slots with one or more attendees using Microsoft's findMeetingTimes API. Use when the user asks to find a time, schedule a meeting, or wants to know when everyone is free. Call this BEFORE create_calendar_event when a specific time hasn't been agreed on. Each slot carries its timezone and each attendee's local time; state both to the user.",
+        "description": "Find available meeting slots with one or more attendees using Microsoft's findMeetingTimes API. Use when the user asks to find a time, schedule a meeting, or wants to know when everyone is free. Call this BEFORE draft_calendar_event when a specific time hasn't been agreed on. Each slot carries its timezone and each attendee's local time; state both to the user.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -474,7 +474,7 @@ def _tool_read_calendar(date: str = "", days: int = 1) -> dict:
     }
 
 
-def _tool_create_calendar_event(
+def _tool_draft_calendar_event(
     subject: str,
     start: str,
     end: str,
@@ -485,63 +485,42 @@ def _tool_create_calendar_event(
     teams: bool = False,
     recurrence: dict | None = None,
 ) -> dict:
+    from .._drafts import create_draft
     from .._m365.helpers import get_cal_client
-    from .helpers import get_user_win_tz, fmt_cal_time
+    from .helpers import get_user_win_tz
+    from . import timezones
 
-    gc = get_cal_client()
     win_tz = get_user_win_tz()
-    event = {
+    required = _parse_email_list(attendees)
+    optional = [e for e in _parse_email_list(optional_attendees) if e.lower() not in {r.lower() for r in required}]
+    attendee_local = {}
+    for email, info in timezones.attendee_zones(
+        get_cal_client(), [e.lower() for e in required + optional], start[:10], win_tz
+    ).items():
+        shown = timezones.fmt_range(start, end, win_tz, info["timezone"])
+        if shown:
+            attendee_local[email] = shown
+    params = {
         "subject": subject,
-        "start": {"dateTime": start, "timeZone": win_tz},
-        "end": {"dateTime": end, "timeZone": win_tz},
+        "start": start,
+        "end": end,
+        "timezone": win_tz,
+        "attendees": required,
+        "optional_attendees": optional,
+        "body": body,
+        "location": location,
+        "teams": bool(teams),
+        "recurrence": recurrence,
     }
-    attendee_entries = []
-    seen_addresses = set()
-
-    def _append_attendees(addresses, attendee_type):
-        for email in _parse_email_list(addresses):
-            email = email.strip()
-            if not email:
-                continue
-            key = email.lower()
-            if key in seen_addresses:
-                continue
-            attendee_entries.append(
-                {
-                    "emailAddress": {"address": email},
-                    "type": attendee_type,
-                }
-            )
-            seen_addresses.add(key)
-
-    _append_attendees(attendees, "required")
-    _append_attendees(optional_attendees, "optional")
-
-    if attendee_entries:
-        event["attendees"] = attendee_entries
-
-    if body:
-        # Auto-detect HTML: any tag present → send as HTML so <a>, <br>, etc. render.
-        is_html = bool(re.search(r"<\w+[^>]*>", body))
-        event["body"] = {"contentType": "HTML" if is_html else "text", "content": body}
-    if location:
-        event["location"] = {"displayName": location}
-    if teams:
-        event["isOnlineMeeting"] = True
-        event["onlineMeetingProvider"] = "teamsForBusiness"
-    if recurrence:
-        event["recurrence"] = recurrence
-    try:
-        result = gc.post("/me/events", event)
-    except Exception as ex:
-        return {"created": False, "error": f"Unable to create event: {ex}"}
+    draft_id = create_draft(
+        draft_type="calendar-event",
+        params=params,
+        preview={"subject": subject, "attendees": required + optional},
+    )
     return {
-        "created": True,
-        "subject": result.get("subject", ""),
-        "start": fmt_cal_time(result.get("start", {}).get("dateTime", "")),
-        "end": fmt_cal_time(result.get("end", {}).get("dateTime", "")),
-        "teams_link": (result.get("onlineMeeting") or {}).get("joinUrl", ""),
-        "id": result.get("id", ""),
+        "_draft": "calendar-event",
+        "data": {**params, "attendee_local": attendee_local, "draft_id": draft_id},
+        "_user_message": "Meeting draft ready. Press Open in Outlook to review and send it from there.",
     }
 
 
@@ -1486,7 +1465,7 @@ TOOL_HANDLERS = {
     "read_calendar": _tool_read_calendar,
     "get_calendar_event_detail": _tool_get_calendar_event_detail,
     "update_calendar_event": _tool_update_calendar_event,
-    "create_calendar_event": _tool_create_calendar_event,
+    "draft_calendar_event": _tool_draft_calendar_event,
     "find_meeting_times": _tool_find_meeting_times,
     "delete_calendar_event": _tool_delete_calendar_event,
     "respond_calendar_event": _tool_respond_calendar_event,
