@@ -248,6 +248,34 @@ const okReply = () => ({ drive_id: 'b!d', item_id: '01I', web_url: 'https://w', 
   );
   assert(action && /Transcripts<\/span>/.test(action[0]), 'Teams header action has a text label');
 
+  // Pinning a transcript drops a chip into the composer; unpinning does not.
+  {
+    const pinCode = cut('_createPinBtn') + ';_createPinBtn;';
+    const inserted = [];
+    const pinned = new Set();
+    const ctx = {
+      document: { createElement: (t) => new FakeEl(t) },
+      window: { insertPinChipAtCaret: (p) => inserted.push(p) },
+      _isPinned: (s, i) => pinned.has(s + '::' + i),
+      _togglePin: async (s, i) => {
+        const k = s + '::' + i;
+        pinned.has(k) ? pinned.delete(k) : pinned.add(k);
+      },
+    };
+    const make = vm.runInNewContext(pinCode, ctx);
+    const btn = make('teams_transcript', 'd:i:t', 'Weekly', {}, { chip: true });
+    await btn.listeners.click({ stopPropagation() {}, preventDefault() {} });
+    assert.strictEqual(
+      JSON.stringify(inserted),
+      JSON.stringify([{ source: 'teams_transcript', id: 'd:i:t', label: 'Weekly' }]),
+    );
+    await btn.listeners.click({ stopPropagation() {}, preventDefault() {} });
+    assert.strictEqual(inserted.length, 1, 'unpin inserts no chip');
+    const plain = make('email', 'e1', 'Subject');
+    await plain.listeners.click({ stopPropagation() {}, preventDefault() {} });
+    assert.strictEqual(inserted.length, 1, 'other sources keep their behavior');
+  }
+
   console.log('transcripts_panel ok');
 })().catch((e) => {
   console.error(e);

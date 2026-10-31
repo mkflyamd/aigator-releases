@@ -51,4 +51,10 @@ assert(/hideApprove: true/.test(config[0]), 'no approve button');
 assert(/openLabel: 'Open in Outlook'/.test(config[0]), 'Open in Outlook label');
 assert(/config\.hideApprove\s*\?\s*`<button class="gcc-open-outlook-btn"/.test(source));
 
+// The card does not claim an approval or a send: the user sends from Outlook.
+assert(/title: 'Meeting draft ready'/.test(config[0]), 'calendar title');
+assert(/flowVerb: 'Opens in'/.test(config[0]), 'calendar flow verb');
+assert(/\$\{config\.title \|\| 'Draft ready for approval'\}/.test(source), 'title is configurable');
+assert(/\$\{config\.flowVerb \|\| 'Sending to'\}/.test(source), 'flow verb is configurable');
+
 console.log('calendar_draft_card ok');

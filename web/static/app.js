@@ -2584,8 +2584,8 @@ const _SVG_ICON_SOURCES = new Set([
 
 function _pinSourceIcon(source, size) {
   const px = size || 16;
-  const file = source === 'email' ? 'outlook' : source;
-  if (_SVG_ICON_SOURCES.has(source)) {
+  const file = source === 'email' ? 'outlook' : source === 'teams_transcript' ? 'teams' : source;
+  if (_SVG_ICON_SOURCES.has(source) || source === 'teams_transcript') {
     return `<img src="/static/icons/${file}.svg" width="${px}" height="${px}" style="vertical-align:middle;flex-shrink:0" alt="${source}">`;
   }
   return _OFFICE_ICONS[source] || '\uD83D\uDCCC';
@@ -10927,6 +10927,8 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
       action: 'Meeting invite',
       hideApprove: true,
       hideEditLink: true,
+      title: 'Meeting draft ready',
+      flowVerb: 'Opens in',
       openLabel: 'Open in Outlook',
       footerNote: 'Nothing is sent yet. Review and send it from Outlook.',
       customBody: _buildCalendarDraftRows(data),
@@ -11107,7 +11109,7 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
     }[config.paneLabel] || '';
   const sourcesRead = Array.isArray(data.sources) ? data.sources : [];
   const flowLine = destinationLabel
-    ? `<div class="gcc-flow">Data from: <strong>${sourcesRead.length ? escapeHtml(sourcesRead.join(', ')) : 'no apps read in this request'}</strong> &rarr; Sending to: <strong>${escapeHtml(destinationLabel)}</strong></div>`
+    ? `<div class="gcc-flow">Data from: <strong>${sourcesRead.length ? escapeHtml(sourcesRead.join(', ')) : 'no apps read in this request'}</strong> &rarr; ${config.flowVerb || 'Sending to'}: <strong>${escapeHtml(destinationLabel)}</strong></div>`
     : '';
   const sensitiveMarks = Array.isArray(data.sensitive) ? data.sensitive : [];
   const sensitiveBanner = sensitiveMarks.length
@@ -11132,7 +11134,7 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
             </span>
             <span class="gcc-pane-icon">${config.paneIcon}</span>
           </div>
-          <div class="gcc-title">Draft ready for approval</div>
+          <div class="gcc-title">${config.title || 'Draft ready for approval'}</div>
         </div>
         <div class="gcc-body">
           ${flowLine}

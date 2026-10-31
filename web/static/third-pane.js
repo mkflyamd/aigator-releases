@@ -1705,7 +1705,7 @@ async function _switchPinContext() {
 const _origRefreshPinOrb = typeof _refreshPinOrb === 'function' ? _refreshPinOrb : null;
 
 /* ── Universal Pin Button Helper ─────────────────────── */
-function _createPinBtn(source, id, label, meta = {}) {
+function _createPinBtn(source, id, label, meta = {}, opts = {}) {
   const btn = document.createElement('button');
   btn.className = 'pin-ctx-btn';
   btn.textContent = '\uD83D\uDCCC';
@@ -1721,6 +1721,13 @@ function _createPinBtn(source, id, label, meta = {}) {
     e.stopPropagation();
     e.preventDefault();
     await _togglePin(source, String(id), label, meta);
+    if (
+      opts.chip &&
+      _isPinned(source, String(id)) &&
+      typeof window.insertPinChipAtCaret === 'function'
+    ) {
+      window.insertPinChipAtCaret({ source, id: String(id), label });
+    }
   });
   return btn;
 }
@@ -2000,6 +2007,7 @@ function _buildTranscriptRow(tx, rec, chat, whenStr, opts) {
         `${rec.drive_id}:${rec.item_id}:${tx.id}`,
         labelStr,
         pinMeta,
+        { chip: true },
       ),
     );
   };
