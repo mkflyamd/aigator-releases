@@ -61,7 +61,7 @@ TOOL_DEFS = [
     },
     {
         "name": "read_teams_chats",
-        "description": "Fetch recent Microsoft Teams chat messages. For a request about a specific person, pass their resolved contact email in person_email so the tool returns only that person's matching messages and full chat IDs; do not scan all chats and parse tool output manually.",
+        "description": "Fetch recent Microsoft Teams chat messages. For a request about a specific person, pass their resolved contact email in person_email so the tool returns only that person's matching messages and full chat IDs; do not scan all chats and parse tool output manually. Each chat carries `participants` (name and email) so a first name mentioned in the chat can be resolved to the right person.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -352,6 +352,21 @@ def _tool_read_channel_messages(
     }
 
 
+def _participants(cid: str) -> list:
+    """Who is in the chat (name and email), so a bare first name in it resolves to the right person."""
+    try:
+        from skills._m365.helpers import make_teams_gc
+
+        members = make_teams_gc().get(f"/chats/{cid}/members").get("value", [])
+    except Exception:
+        return []
+    return [
+        {"name": m.get("displayName", ""), "email": (m.get("email") or "").lower()}
+        for m in members
+        if m.get("email")
+    ]
+
+
 def _tool_read_teams_chats(
     hours: int = 720,
     filter_topic: str = "",
@@ -488,6 +503,7 @@ def _tool_read_teams_chats(
                     {
                         "chat_id": chat_id,
                         "topic": chat_id,
+                        "participants": _participants(chat_id),
                         "messages": [_normalize(m) for m in matched],
                     }
                 ]
@@ -504,6 +520,7 @@ def _tool_read_teams_chats(
                 {
                     "chat_id": chat_id,
                     "topic": chat_id,
+                    "participants": _participants(chat_id),
                     "messages": _within_window(messages),
                 }
             ]
@@ -590,6 +607,7 @@ def _tool_read_teams_chats(
                 "topic": topic,
                 "chat_type": chat.get("type", ""),
                 "contact_email": person_email,
+                "participants": _participants(cid),
                 "messages": recent,
             }
         )

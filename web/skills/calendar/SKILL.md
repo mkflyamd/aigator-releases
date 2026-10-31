@@ -50,11 +50,12 @@ Whenever the user names a meeting by day (e.g. "Thursday", "next Monday"):
 
 Determine the attendee input type first, then act accordingly:
 
-| Input type   | Example           | Action                                                                                                |
-| ------------ | ----------------- | ----------------------------------------------------------------------------------------------------- |
-| Direct email | `ram@company.com` | Use as-is. Skip `search_people`.                                                                      |
-| @mention     | `@Ram Iyer`       | Treat as already resolved — use the identity the app surfaces for that mention. Skip `search_people`. |
-| Name only    | `Ram`             | Call `search_people`. Disambiguate if multiple results (see below).                                   |
+| Input type       | Example                   | Action                                                                                                                                                               |
+| ---------------- | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Direct email     | `ram@company.com`         | Use as-is. Skip `search_people`.                                                                                                                                     |
+| @mention         | `@Ram Iyer`               | Treat as already resolved — use the identity the app surfaces for that mention. Skip `search_people`.                                                                |
+| Name only        | `Ram`                     | Call `search_people`. Disambiguate if multiple results (see below).                                                                                                  |
+| Name from a chat | "the people in this chat" | If a Teams chat was read, use its `participants` (name and email). A name that matches exactly one participant is resolved: use that email and skip `search_people`. |
 
 **When search_people returns multiple matches:**
 
@@ -79,7 +80,7 @@ Before passing start/end datetimes to any calendar tool:
 
 ## Calendar Scheduling Workflow
 
-- "Find a time" / "Schedule a meeting with X" → call find_meeting_times first, present the available slots to the user, ask them to confirm the slot + subject + attendees. Once the user confirms, call draft_calendar_event (see **Event Draft** below).
+- "Find a time" / "Schedule a meeting with X" (any meeting, one-off or recurring) → once the attendees are resolved, call find_meeting_times first (one call per candidate date: the day they named, or the next three working days if none). Never ask the user to pick a day or time from slots you made up. Offer the real open slots with `ask_user`, recommended first, in the user's timezone. Each option's description carries the slot's `availability` line exactly as the tool returned it, then each attendee's local time. Once the user confirms the slot, call draft_calendar_event (see **Event Draft** below).
 - "Is X available?" → call check_availability (for free/busy view) or find_meeting_times (to get concrete open slots).
 - "Cancel / delete meeting" → call read_calendar first to get the event ID, confirm the right event with the user, then call delete_calendar_event. You MUST call delete_calendar_event and receive `deleted=true` before telling the user the event was deleted. If read_calendar cannot find the event (404 / error), tell the user you could not locate it — do not assume it was already deleted.
 - "I'm OOO / taking PTO" → call create_ooo_event. Ask for dates and who to notify if not specified.
@@ -96,7 +97,7 @@ Before passing start/end datetimes to any calendar tool:
 ## Recurrence Handling
 
 - When the user requests a repeating meeting (“every day”, “recurring daily”, “weekdays only”, etc.), settle the cadence from the request: pattern type (daily/weekly/monthly), interval, exact weekdays (if weekly), and end condition (no end, end date, or number of occurrences). Use a sensible default for anything not stated (weekly, 30 min, no end) and say so. Ask only about a cadence detail you cannot default.
-- Never ask the user to pick a day or time from slots you made up. Once the attendees are resolved, call `find_meeting_times` first (one call per candidate date: the day they named, or the next three working days if none), then offer real open slots with `ask_user`: recommended slot first, in the user's timezone, with each attendee's local time in the option description. For a weekly series, offer the weekday and time of the next occurrence and note that it repeats.
+- For a weekly series, offer the weekday and time of the next occurrence from real open slots (see **Calendar Scheduling Workflow**) and note that it repeats.
 - Once confirmed, pass a full Graph recurrence object into `draft_calendar_event` or `update_calendar_event`. Example:
 
   ```json

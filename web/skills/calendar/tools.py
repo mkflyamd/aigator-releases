@@ -524,6 +524,37 @@ def _tool_draft_calendar_event(
     }
 
 
+_AVAILABILITY_ICON = {
+    "free": "\U0001f7e2",
+    "tentative": "\U0001f7e1",
+    "workingElsewhere": "\U0001f7e1",
+    "busy": "\U0001f534",
+    "oof": "\U0001f534",
+}
+
+
+def _availability_strip(slot: dict) -> str:
+    """One short line on who is free in a suggested slot. Fixed length: counts, then at most two names that are not free."""
+    people = [("You", slot.get("organizerAvailability"))]
+    for a in slot.get("attendeeAvailability") or []:
+        who = (a.get("attendee") or {}).get("emailAddress") or {}
+        name = (who.get("name") or who.get("address") or "").strip()
+        if ", " in name:
+            name = name.split(", ", 1)[1]
+        people.append((name.split(" ")[0] or "Attendee", a.get("availability")))
+    people = [(n, s) for n, s in people if s]
+    if not people:
+        return ""
+    others = [(n, s) for n, s in people if s != "free"]
+    if not others:
+        return f"\U0001f7e2 All {len(people)} free" if len(people) > 1 else "\U0001f7e2 Free"
+    parts = [f"\U0001f7e2 {len(people) - len(others)} of {len(people)} free"]
+    parts += [f"{_AVAILABILITY_ICON.get(s, chr(0x26AA))} {n} {s}" for n, s in others[:2]]
+    if len(others) > 2:
+        parts.append(f"+{len(others) - 2} more")
+    return " · ".join(parts)
+
+
 def _tool_find_meeting_times(
     attendees: list,
     date: str = "",
@@ -580,6 +611,7 @@ def _tool_find_meeting_times(
                 "end": fmt_cal_time(raw_end),
                 "timezone": slot_tz,
                 "attendee_local": local,
+                "availability": _availability_strip(slot),
                 "confidence": round(slot.get("confidence", 0) * 100),
             }
         )
