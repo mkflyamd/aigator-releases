@@ -6176,6 +6176,8 @@ body.gator-chat-expanded .gator-expand-btn {
   gap: 2px;
   text-align: left;
   width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .ask-user-option-label {
   font-weight: 600;
