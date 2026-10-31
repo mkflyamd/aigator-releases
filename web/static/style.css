@@ -6137,9 +6137,27 @@ body.gator-chat-expanded .gator-expand-btn {
     background 0.2s,
     transform 0.1s;
 }
-.gcc-approve-btn:hover:not(:disabled) {
+.gcc-approve-btn:hover:not(:disabled),
+.gcc-open-outlook-btn:hover:not(:disabled) {
   background: #16a34a;
   transform: scale(1.02);
+}
+.gcc-open-outlook-btn {
+  background: var(--accent, #22c55e);
+  color: #000;
+  border: none;
+  border-radius: 8px;
+  padding: 8px 18px;
+  font-weight: 600;
+  font-size: 0.82rem;
+  cursor: pointer;
+  transition:
+    background 0.2s,
+    transform 0.1s;
+}
+.gcc-open-outlook-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 .ask-user-body {
   display: flex;

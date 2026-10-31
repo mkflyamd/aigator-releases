@@ -9735,6 +9735,55 @@ function _jiraEditRow(name, label, value, kind) {
   return `<div class="gcc-field-row gcc-field-row--block"><span class="gcc-field-key">${ek}</span><div class="gcc-field-val">${control}</div></div>`;
 }
 
+function _calendarDraftWhen(data) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(data.start || '');
+  const e = /T(\d{2}):(\d{2})/.exec(data.end || '');
+  if (!m || !e) return escapeHtml(data.start || '');
+  const clock = (h, min) => {
+    const hour = Number(h);
+    return (hour % 12 || 12) + ':' + min + ' ' + (hour < 12 ? 'AM' : 'PM');
+  };
+  const day = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]))).toLocaleDateString(
+    'en-US',
+    { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' },
+  );
+  const zone = data.timezone ? ' ' + data.timezone : '';
+  return escapeHtml(day + ', ' + clock(m[4], m[5]) + ' – ' + clock(e[1], e[2]) + zone);
+}
+
+function _buildCalendarDraftRows(data) {
+  const local = data.attendee_local || {};
+  const person = (email, optional) => {
+    const shown = local[String(email).toLowerCase()];
+    return (
+      '<div>' +
+      escapeHtml(email) +
+      (optional ? ' <em>(optional)</em>' : '') +
+      (shown ? ' — ' + escapeHtml(shown) : '') +
+      '</div>'
+    );
+  };
+  const attendees = (data.attendees || [])
+    .map((a) => person(a, false))
+    .concat((data.optional_attendees || []).map((a) => person(a, true)))
+    .join('');
+  const rows = [['When', _calendarDraftWhen(data)]];
+  if (attendees) rows.push(['Attendees', attendees]);
+  if (data.location) rows.push(['Location', escapeHtml(data.location)]);
+  rows.push(['Teams meeting', data.teams ? 'Yes' : 'No']);
+  if (data.recurrence) rows.push(['Repeats', 'Yes']);
+  return rows
+    .map(
+      ([k, v]) =>
+        '<div class="gcc-field-row"><span class="gcc-field-key">' +
+        escapeHtml(k) +
+        '</span><span class="gcc-field-val">' +
+        v +
+        '</span></div>',
+    )
+    .join('');
+}
+
 function _buildJiraFieldRows(data, editable = {}) {
   const rows = [];
   if (data.jira_site?.display_name || data.jira_site?.base_url) {
@@ -10871,6 +10920,17 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
       sendLabel: 'Forward',
       openLabel: 'Open draft in Outlook',
     },
+    'calendar-event': {
+      paneLabel: '@outlook',
+      paneIcon: '📅',
+      service: 'calendar',
+      action: 'Meeting invite',
+      hideApprove: true,
+      hideEditLink: true,
+      openLabel: 'Open in Outlook',
+      footerNote: 'Nothing is sent yet. Review and send it from Outlook.',
+      customBody: _buildCalendarDraftRows(data),
+    },
     'email-send': {
       paneLabel: '@outlook',
       paneIcon: '\u2709\uFE0F',
@@ -11109,7 +11169,11 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
           ${config.service === 'teams' && !config.customBody ? '<div class="gcc-mention-hint">Type <strong>@</strong> to mention a Teams person.</div>' : ''}
         </div>
         <div class="gcc-actions">
-          <button class="gcc-approve-btn" data-draft-id="${draftId}">${config.sendLabel || 'Send'}</button>
+          ${
+            config.hideApprove
+              ? `<button class="gcc-open-outlook-btn" data-draft-id="${draftId}">${config.openLabel}</button>`
+              : `<button class="gcc-approve-btn" data-draft-id="${draftId}">${config.sendLabel || 'Send'}</button>`
+          }
           ${config.showSchedule ? `<button class="gcc-schedule-btn" disabled title="Scheduling \u2014 coming soon">\u23F0</button>` : ''}
           ${
             !config.hideEditLink && config.viewAvailable !== false && canOpenNativeApp
@@ -11155,7 +11219,47 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
     el.dataset.orig = el.value;
   });
 
-  approveBtn.addEventListener('click', async () => {
+  const openCalendarBtn = card.querySelector('.gcc-open-outlook-btn');
+  if (openCalendarBtn) {
+    openCalendarBtn.addEventListener('click', async () => {
+      openCalendarBtn.disabled = true;
+      openCalendarBtn.textContent = 'Opening…';
+      try {
+        const postOpen = () =>
+          fetch('/api/drafts/' + draftId + '/open-in-outlook', {
+            method: 'POST',
+            headers: { 'X-CSRF-Token': window.__CSRF_TOKEN__ || '' },
+          });
+        let res = await postOpen();
+        if (res.status === 403) {
+          const _csrf = await fetch('/api/csrf')
+            .then((r) => (r.ok ? r.json() : null))
+            .catch(() => null);
+          if (_csrf?.csrf_token) window.__CSRF_TOKEN__ = _csrf.csrf_token;
+          res = await postOpen();
+        }
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(typeof err.detail === 'string' ? err.detail : 'HTTP ' + res.status);
+        }
+        const { url } = await res.json();
+        if (canOpenNativeApp && window.gatorShell.openOutlookDraft) {
+          if (typeof openThirdPane === 'function') openThirdPane('email');
+          await window.gatorShell.openOutlookDraft(url);
+        } else {
+          window.open(url, '_blank', 'noopener');
+        }
+        openCalendarBtn.textContent = 'Opened in Outlook ↗';
+        openCalendarBtn.classList.add('gcc-handed-off');
+      } catch (err) {
+        openCalendarBtn.textContent = config.openLabel;
+        openCalendarBtn.disabled = false;
+        _showConnectivityToast("Couldn't open in Outlook: " + (err?.message || err), 'warn');
+      }
+    });
+  }
+
+  approveBtn?.addEventListener('click', async () => {
     approveBtn.disabled = true;
     approveBtn.textContent = config.hideEditLink ? 'Applying\u2026' : 'Sending\u2026';
     try {
