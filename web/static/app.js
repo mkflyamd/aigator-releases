@@ -10446,11 +10446,10 @@ function _showAvailabilityGrid(grid, ownerTabId) {
   function syncOutlookLink() {
     const repeating = repeat.value !== 'none';
     openOutlook.classList.toggle('ag-link-disabled', !pickedAt || repeating);
-    openOutlook.title = repeating
-      ? "Outlook's new-event link can't carry a repeat. Use this time and I'll draft the series."
-      : '';
+    openOutlook.textContent = repeating ? 'Open in Outlook (one time only)' : 'Open in Outlook';
   }
   repeat.addEventListener('change', syncOutlookLink);
+  syncOutlookLink();
 
   function refresh() {
     renderTable();
