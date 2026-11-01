@@ -10471,7 +10471,9 @@ function _showAvailabilityGrid(grid, ownerTabId) {
   function syncOutlookLink() {
     const repeating = repeat.value !== 'none';
     openOutlook.classList.toggle('ag-link-disabled', !pickedAt || repeating);
-    openOutlook.textContent = repeating ? 'Open in Outlook (one time only)' : 'Open in Outlook';
+    openOutlook.textContent = repeating
+      ? 'Repeating: use Open in Outlook on the draft after you pick a time'
+      : 'Open in Outlook';
   }
   repeat.addEventListener('change', syncOutlookLink);
   syncOutlookLink();
