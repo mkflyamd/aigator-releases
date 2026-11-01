@@ -13,7 +13,7 @@ WINDOWS_TO_IANA = {
     "Central European Standard Time": "Europe/Warsaw",
     "E. Europe Standard Time": "Europe/Chisinau",
     "GTB Standard Time": "Europe/Bucharest",
-    "FLE Standard Time": "Europe/Kiev",
+    "FLE Standard Time": "Europe/Kyiv",
     "Russian Standard Time": "Europe/Moscow",
     "Turkey Standard Time": "Europe/Istanbul",
     "Israel Standard Time": "Asia/Jerusalem",
