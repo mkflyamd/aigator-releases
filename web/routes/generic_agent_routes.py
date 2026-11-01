@@ -74,7 +74,7 @@ async def generic_agent_terminal(req: GenericAgentTerminalRequest):
         existing = generic_agent.get_active_session(req.project_id, req.agent)
         if existing:
             entry = get_pty_session(existing)
-            if entry and not entry["done"]:
+            if entry and not entry.done:
                 return {"pty_session_id": existing, "created": False}
             # Stale record (process exited, or the in-memory session dict was
             # cleared by a restart) - drop it and fall through to a fresh spawn.
