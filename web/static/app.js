@@ -10874,11 +10874,13 @@ function _showAvailabilityGrid(grid, ownerTabId) {
   use.className = 'gcc-approve-btn';
   use.textContent = 'Use this time';
   use.disabled = true;
-  const openOutlook = textLink('Open in Outlook');
-  openOutlook.classList.add('ag-link-disabled');
+  const openOutlook = document.createElement('button');
+  openOutlook.className = 'gcc-open-outlook-btn';
+  openOutlook.textContent = 'Open in Outlook';
+  openOutlook.disabled = true;
   const actions = document.createElement('div');
   actions.className = 'ag-actions';
-  actions.append(openOutlook, use);
+  actions.append(use, openOutlook);
   footer.append(chosen, actions);
 
   const panel = _availabilityGridRepeatPanel(() => {
@@ -10922,11 +10924,14 @@ function _showAvailabilityGrid(grid, ownerTabId) {
 
   function syncOutlookLink() {
     const repeating = repeat.value !== 'none';
-    openOutlook.classList.toggle('ag-link-disabled', !pickedAt || (repeating && !panel.valid()));
+    openOutlook.classList.remove('gcc-handed-off');
+    openOutlook.disabled = !pickedAt || (repeating && !panel.valid());
     openOutlook.textContent = 'Open in Outlook';
-    openOutlook.title = repeating
-      ? 'Creates the repeating meeting as an unsent draft in Outlook; you send it from there'
-      : '';
+    openOutlook.title = !pickedAt
+      ? 'Choose a time first'
+      : repeating
+        ? 'Creates the repeating meeting as an unsent draft in Outlook; you send it from there'
+        : '';
   }
   repeat.addEventListener('change', () => {
     panel.el.classList.toggle('hidden', repeat.value === 'none');
@@ -11169,13 +11174,13 @@ function _showAvailabilityGrid(grid, ownerTabId) {
   openOutlook.addEventListener('click', async (e) => {
     e.preventDefault();
     e.stopPropagation();
-    if (!pickedAt || openOutlook.classList.contains('ag-link-disabled')) return;
+    if (!pickedAt || openOutlook.disabled) return;
     let url;
     try {
       if (repeat.value === 'none') {
         url = _availabilityGridComposeUrl(grid, pickedAt.di, pickedAt.k);
       } else {
-        openOutlook.classList.add('ag-link-disabled');
+        openOutlook.disabled = true;
         openOutlook.textContent = 'Creating the draft series…';
         const others = grid.people.filter((p) => !p.you && p.email);
         const slot = _availabilityGridSlotTimes(grid, pickedAt.di, pickedAt.k);
@@ -11189,6 +11194,7 @@ function _showAvailabilityGrid(grid, ownerTabId) {
           repeat: panel.spec(),
         }));
         openOutlook.textContent = 'Draft series opened in Outlook';
+        openOutlook.classList.add('gcc-handed-off');
       }
       if (typeof window.gatorShell !== 'undefined' && window.gatorShell.openOutlookCompose) {
         await window.gatorShell.openOutlookCompose(url);

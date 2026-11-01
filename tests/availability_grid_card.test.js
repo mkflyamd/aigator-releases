@@ -74,6 +74,10 @@ assert(
   /postGridJson\('\/api\/calendar\/grid-draft-series'/.test(source),
   'a repeating pick opens a draft series made by the server',
 );
+assert(
+  /openOutlook\.disabled = !pickedAt \|\|/.test(source) && /Choose a time first/.test(source),
+  'Open in Outlook stays disabled with a hint until a time is chosen',
+);
 const fits = load('_availabilityGridFits');
 const open = '0'.repeat(16) + '1'.repeat(20) + '0'.repeat(12);
 const busyAt = (slot) => 'f'.repeat(slot) + 'b' + 'f'.repeat(47 - slot);
