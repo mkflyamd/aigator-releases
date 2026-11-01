@@ -10723,10 +10723,7 @@ function _showAvailabilityGrid(grid, ownerTabId) {
       },
     );
     grid.people.forEach((person, pi) => {
-      const th = nameCell(
-        (person.you ? 'You' : person.name || person.email) + (person.optional ? ' · optional' : ''),
-        'ag-person',
-      );
+      const th = nameCell(person.you ? 'You' : person.name || person.email, 'ag-person');
       addRow(th, (td, day, di, k) => {
         const st = day.rows[pi][k] || '?';
         td.className = `ag-cell ag-s-${st === '?' ? 'u' : st}`;
