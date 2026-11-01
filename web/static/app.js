@@ -10177,11 +10177,14 @@ function _availabilityGridAttendeeText(grid) {
   const optional = others.filter((p) => p.optional).map((p) => p.email);
   return (
     (required.length ? ` Required attendees: ${required.join(', ')}.` : '') +
-    (optional.length ? ` Optional attendees: ${optional.join(', ')}.` : '')
+    (optional.length ? ` Optional attendees: ${optional.join(', ')}.` : '') +
+    (others.length
+      ? ' Invite only these people; anyone removed in the grid is not invited.'
+      : ' There are no other attendees; anyone mentioned earlier was removed in the grid.')
   );
 }
 
-function _availabilityGridRepeatText(spec) {
+function _availabilityGridRepeatText(spec, pickedIso, firstIso) {
   if (!spec || !spec.type) return ' This is a one-time meeting, not recurring.';
   const months = [
     'January',
@@ -10221,7 +10224,64 @@ function _availabilityGridRepeatText(spec) {
       : spec.end === 'count'
         ? `, ending after ${spec.count} occurrences`
         : ', with no end date';
-  return ` Make it recurring ${phrase}${end}.`;
+  let first = '';
+  if (pickedIso && firstIso && firstIso !== pickedIso) {
+    const [y, m, d] = firstIso.split('-').map(Number);
+    const when = new Date(y, m - 1, d).toLocaleDateString('en-US', {
+      weekday: 'long',
+      month: 'short',
+      day: 'numeric',
+    });
+    first = ` The picked day is not on this repeat, so the first meeting is ${when}, at the picked time.`;
+  }
+  return ` Make it recurring ${phrase}${end}.${first}`;
+}
+
+// The first date on or after the picked day that the repeat rule actually lands on.
+function _availabilityGridFirstMeeting(startIso, spec) {
+  const names = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const [y, m, d] = startIso.split('-').map(Number);
+  const interval = spec.interval || 1;
+  const nthDate = (year, month0, weekday, ordinal) => {
+    const dim = new Date(year, month0 + 1, 0).getDate();
+    if (ordinal === 'last') {
+      for (let n = dim; n > 0; n--) if (new Date(year, month0, n).getDay() === weekday) return n;
+    }
+    const first = ((weekday - new Date(year, month0, 1).getDay() + 7) % 7) + 1;
+    return first + 7 * ['first', 'second', 'third', 'fourth'].indexOf(ordinal);
+  };
+  const startWeekday = new Date(y, m - 1, d).getDay();
+  for (let i = 0; i < 36600; i++) {
+    const dt = new Date(y, m - 1, d + i);
+    const dim = new Date(dt.getFullYear(), dt.getMonth() + 1, 0).getDate();
+    const monthsApart = (dt.getFullYear() - y) * 12 + dt.getMonth() - (m - 1);
+    let hit = false;
+    if (spec.type === 'daily')
+      hit = spec.weekdaysOnly ? dt.getDay() > 0 && dt.getDay() < 6 : i % interval === 0;
+    else if (spec.type === 'weekly')
+      hit =
+        Math.floor((i + startWeekday) / 7) % interval === 0 &&
+        (spec.days || []).includes(names[dt.getDay()]);
+    else if (spec.type === 'monthly' && monthsApart % interval === 0)
+      hit =
+        spec.mode === 'nth'
+          ? dt.getDate() ===
+            nthDate(dt.getFullYear(), dt.getMonth(), names.indexOf(spec.weekday), spec.ordinal)
+          : dt.getDate() === Math.min(spec.day, dim);
+    else if (
+      spec.type === 'yearly' &&
+      (dt.getFullYear() - y) % interval === 0 &&
+      dt.getMonth() === spec.month - 1
+    )
+      hit =
+        spec.mode === 'nth'
+          ? dt.getDate() ===
+            nthDate(dt.getFullYear(), dt.getMonth(), names.indexOf(spec.weekday), spec.ordinal)
+          : dt.getDate() === Math.min(spec.day, dim);
+    if (hit)
+      return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+  }
+  return startIso;
 }
 
 function _availabilityGridRepeatPreset(repeat) {
@@ -10415,14 +10475,6 @@ function _availabilityGridRepeatPanel(onChange) {
     const weekday = dayNames[date.getDay()];
     const daysInMonth = new Date(y, m, 0).getDate();
     const ordinal = d + 7 > daysInMonth && d > 21 ? 'last' : ordinals[Math.ceil(d / 7) - 1];
-    startText.textContent =
-      'Starts ' +
-      date.toLocaleDateString(undefined, {
-        weekday: 'short',
-        month: 'short',
-        day: 'numeric',
-        year: 'numeric',
-      });
     if (!touched.has('weekly'))
       weekBoxes.forEach((b) => (b.input.checked = b.input.value === weekday));
     if (!touched.has('monthly')) {
@@ -10437,6 +10489,29 @@ function _availabilityGridRepeatPanel(onChange) {
       yearWeekday.value = weekday;
     }
     if (!touched.has('endDate')) endDateInput.value = isoOf(new Date(y, m - 1 + 6, d));
+    changed();
+  }
+
+  const longDate = (iso) => {
+    const [y, m, d] = iso.split('-').map(Number);
+    return new Date(y, m - 1, d).toLocaleDateString(undefined, {
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+    });
+  };
+  function first() {
+    return startIso ? _availabilityGridFirstMeeting(startIso, spec()) : '';
+  }
+  function changed() {
+    if (startIso) {
+      const firstIso = first();
+      startText.textContent =
+        firstIso === startIso
+          ? 'Starts ' + longDate(startIso)
+          : `First meeting ${longDate(firstIso)} (the picked ${longDate(startIso)} is not on this repeat)`;
+    }
     onChange();
   }
 
@@ -10449,7 +10524,7 @@ function _availabilityGridRepeatPanel(onChange) {
       if (preset.interval) weeklyN.value = String(preset.interval);
       if (preset.weekdaysOnly) dailyWeekday.input.checked = true;
     }
-    onChange();
+    changed();
   }
 
   function spec() {
@@ -10507,15 +10582,15 @@ function _availabilityGridRepeatPanel(onChange) {
     return Boolean(ok);
   }
 
-  el.addEventListener('input', onChange);
-  el.addEventListener('change', onChange);
+  el.addEventListener('input', changed);
+  el.addEventListener('change', changed);
   [monthDayN, monthDayEvery, monthOrd, monthWeekday, monthNthEvery].forEach((c) =>
     c.addEventListener('input', () => touched.add('monthly')),
   );
   [yearMonth, yearDay, yearOrd, yearWeekday, yearNthMonth, yearlyN].forEach((c) =>
     c.addEventListener('input', () => touched.add('yearly')),
   );
-  return { el, setStart, setType, spec, valid };
+  return { el, setStart, setType, spec, valid, first };
 }
 
 function _showAvailabilityGrid(grid, ownerTabId) {
@@ -11074,8 +11149,11 @@ function _showAvailabilityGrid(grid, ownerTabId) {
         openOutlook.classList.add('ag-link-disabled');
         openOutlook.textContent = 'Creating the draft series…';
         const others = grid.people.filter((p) => !p.you && p.email);
+        const slot = _availabilityGridSlotTimes(grid, pickedAt.di, pickedAt.k);
+        const firstDate = panel.first();
         ({ url } = await postGridJson('/api/calendar/grid-draft-series', {
-          ..._availabilityGridSlotTimes(grid, pickedAt.di, pickedAt.k),
+          start: firstDate + slot.start.slice(10),
+          end: firstDate + slot.end.slice(10),
           timezone: grid.timezone,
           attendees: others.filter((p) => !p.optional).map((p) => p.email),
           optional_attendees: others.filter((p) => p.optional).map((p) => p.email),
@@ -11100,7 +11178,9 @@ function _showAvailabilityGrid(grid, ownerTabId) {
       `Let's do ${picked}.` +
       (pickedBusy.length ? ` ${pickedBusy.join(', ')} not free then; schedule it anyway.` : '') +
       _availabilityGridAttendeeText(grid) +
-      _availabilityGridRepeatText(repeat.value === 'none' ? null : panel.spec());
+      (repeat.value === 'none'
+        ? _availabilityGridRepeatText(null)
+        : _availabilityGridRepeatText(panel.spec(), grid.days[pickedAt.di].date, panel.first()));
     card.remove();
     _sendSandboxFollowUp(tabId, reply).catch((err) =>
       console.warn('[availability grid] pick not sent:', err),

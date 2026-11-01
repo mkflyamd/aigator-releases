@@ -99,7 +99,12 @@ assert.strictEqual(
       { email: 'james@example.com', optional: true },
     ],
   }),
-  ' Required attendees: sherry@example.com. Optional attendees: james@example.com.',
+  ' Required attendees: sherry@example.com. Optional attendees: james@example.com.' +
+    ' Invite only these people; anyone removed in the grid is not invited.',
+);
+assert.strictEqual(
+  attendeeText({ people: [{ you: true, email: 'me@example.com' }] }),
+  ' There are no other attendees; anyone mentioned earlier was removed in the grid.',
 );
 
 const repeatText = load('_availabilityGridRepeatText');
@@ -159,6 +164,71 @@ assert.strictEqual(
     ...noEnd,
   }),
   ' Make it recurring every 2 years on the last Friday of March, with no end date.',
+);
+
+const firstMeeting = load('_availabilityGridFirstMeeting');
+// 2026-11-03 is a Tuesday.
+assert.strictEqual(
+  firstMeeting('2026-11-03', {
+    type: 'monthly',
+    mode: 'nth',
+    ordinal: 'second',
+    weekday: 'Monday',
+    interval: 1,
+  }),
+  '2026-11-09',
+);
+assert.strictEqual(
+  firstMeeting('2026-11-03', {
+    type: 'monthly',
+    mode: 'nth',
+    ordinal: 'first',
+    weekday: 'Tuesday',
+    interval: 1,
+  }),
+  '2026-11-03',
+);
+assert.strictEqual(
+  firstMeeting('2026-11-03', { type: 'weekly', interval: 1, days: ['Monday', 'Wednesday'] }),
+  '2026-11-04',
+);
+assert.strictEqual(
+  firstMeeting('2026-11-03', { type: 'weekly', interval: 2, days: ['Monday'] }),
+  '2026-11-16',
+);
+assert.strictEqual(firstMeeting('2026-11-03', { type: 'daily', weekdaysOnly: true }), '2026-11-03');
+assert.strictEqual(firstMeeting('2026-11-07', { type: 'daily', weekdaysOnly: true }), '2026-11-09');
+assert.strictEqual(
+  firstMeeting('2026-11-03', { type: 'monthly', mode: 'day', day: 1, interval: 1 }),
+  '2026-12-01',
+);
+assert.strictEqual(
+  firstMeeting('2026-11-03', {
+    type: 'yearly',
+    mode: 'nth',
+    ordinal: 'last',
+    weekday: 'Friday',
+    month: 3,
+    interval: 1,
+  }),
+  '2027-03-26',
+);
+assert.strictEqual(
+  firstMeeting('2026-11-03', { type: 'yearly', mode: 'date', month: 11, day: 3, interval: 1 }),
+  '2026-11-03',
+);
+assert.strictEqual(
+  repeatText(
+    { type: 'monthly', mode: 'nth', ordinal: 'second', weekday: 'Monday', interval: 1, ...noEnd },
+    '2026-11-03',
+    '2026-11-09',
+  ),
+  ' Make it recurring on the second Monday of every month, with no end date.' +
+    ' The picked day is not on this repeat, so the first meeting is Monday, Nov 9, at the picked time.',
+);
+assert.strictEqual(
+  repeatText({ type: 'daily', interval: 1, ...noEnd }, '2026-11-03', '2026-11-03'),
+  ' Make it recurring every day, with no end date.',
 );
 
 const preset = load('_availabilityGridRepeatPreset');
