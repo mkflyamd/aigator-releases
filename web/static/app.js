@@ -10176,14 +10176,341 @@ function _availabilityGridAttendeeText(grid) {
   );
 }
 
-function _availabilityGridRepeatText(repeat) {
-  const phrase = {
-    weekdays: 'every weekday',
-    weekly: 'weekly',
-    biweekly: 'every 2 weeks',
-    monthly: 'monthly',
-  }[repeat];
-  return phrase ? ` Make it recurring ${phrase}.` : ' This is a one-time meeting, not recurring.';
+function _availabilityGridRepeatText(spec) {
+  if (!spec || !spec.type) return ' This is a one-time meeting, not recurring.';
+  const months = [
+    'January',
+    'February',
+    'March',
+    'April',
+    'May',
+    'June',
+    'July',
+    'August',
+    'September',
+    'October',
+    'November',
+    'December',
+  ];
+  const n = spec.interval || 1;
+  const every = (unit) => (n > 1 ? `every ${n} ${unit}s` : `every ${unit}`);
+  const days = spec.days || [];
+  const dayList =
+    days.length > 1 ? `${days.slice(0, -1).join(', ')} and ${days[days.length - 1]}` : days[0];
+  let phrase;
+  if (spec.type === 'daily') phrase = spec.weekdaysOnly ? 'every weekday' : every('day');
+  else if (spec.type === 'weekly') phrase = `${every('week')} on ${dayList}`;
+  else if (spec.type === 'monthly')
+    phrase =
+      spec.mode === 'nth'
+        ? `on the ${spec.ordinal} ${spec.weekday} of ${every('month')}`
+        : `on day ${spec.day} of ${every('month')}`;
+  else
+    phrase =
+      spec.mode === 'nth'
+        ? `${every('year')} on the ${spec.ordinal} ${spec.weekday} of ${months[spec.month - 1]}`
+        : `${every('year')} on ${months[spec.month - 1]} ${spec.day}`;
+  const end =
+    spec.end === 'date'
+      ? `, ending by ${spec.endDate}`
+      : spec.end === 'count'
+        ? `, ending after ${spec.count} occurrences`
+        : ', with no end date';
+  return ` Make it recurring ${phrase}${end}.`;
+}
+
+function _availabilityGridRepeatPreset(repeat) {
+  return (
+    {
+      daily: { type: 'daily' },
+      weekdays: { type: 'daily', weekdaysOnly: true },
+      weekly: { type: 'weekly' },
+      biweekly: { type: 'weekly', interval: 2 },
+      monthly: { type: 'monthly' },
+      yearly: { type: 'yearly' },
+    }[repeat] || null
+  );
+}
+
+// Outlook's "Appointment Recurrence" choices: pattern per type, then the range.
+function _availabilityGridRepeatPanel(onChange) {
+  const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const monthNames = [
+    'January',
+    'February',
+    'March',
+    'April',
+    'May',
+    'June',
+    'July',
+    'August',
+    'September',
+    'October',
+    'November',
+    'December',
+  ];
+  const ordinals = ['first', 'second', 'third', 'fourth', 'last'];
+  const group = 'agr' + Math.random().toString(36).slice(2);
+  const touched = new Set();
+  let type = 'weekly';
+  let startIso = '';
+
+  const make = (tag, cls, text) => {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text) e.textContent = text;
+    return e;
+  };
+  const row = (...parts) => {
+    const r = make('div', 'ag-rp-row');
+    parts.forEach((p) => r.append(typeof p === 'string' ? document.createTextNode(p) : p));
+    return r;
+  };
+  const num = (value, min, max) => {
+    const i = make('input', 'ag-rp-num');
+    i.type = 'number';
+    i.min = String(min);
+    i.max = String(max);
+    i.value = String(value);
+    return i;
+  };
+  const pick = (options, value) => {
+    const s = make('select', 'ag-rp-select');
+    options.forEach(([v, label]) => s.add(new Option(label, v)));
+    s.value = value;
+    return s;
+  };
+  const radio = (name, value, label, checked) => {
+    const l = make('label', 'ag-rp-radio');
+    const i = make('input');
+    i.type = 'radio';
+    i.name = name;
+    i.value = value;
+    i.checked = checked;
+    l.append(i, document.createTextNode(label));
+    return { label: l, input: i };
+  };
+  const ordOptions = ordinals.map((o) => [o, o]);
+  const dayOptions = dayNames.map((d) => [d, d]);
+  const monthOptions = monthNames.map((m, i) => [String(i + 1), m]);
+
+  // Daily
+  const dailyN = num(1, 1, 999);
+  const dailyEvery = radio(group + 'd', 'every', 'Every ', true);
+  dailyEvery.label.append(dailyN, ' day(s)');
+  const dailyWeekday = radio(group + 'd', 'weekday', 'Every weekday', false);
+  const dailyBlock = make('div', 'ag-rp-block');
+  dailyBlock.append(row(dailyEvery.label), row(dailyWeekday.label));
+  dailyN.addEventListener('input', () => (dailyEvery.input.checked = true));
+
+  // Weekly
+  const weeklyN = num(1, 1, 99);
+  const weekBoxes = dayNames.map((d) => {
+    const l = make('label', 'ag-rp-check');
+    const i = make('input');
+    i.type = 'checkbox';
+    i.value = d;
+    l.title = d;
+    l.append(i, document.createTextNode(d.slice(0, 3)));
+    return { label: l, input: i };
+  });
+  const weeklyBlock = make('div', 'ag-rp-block');
+  weeklyBlock.append(
+    row('Recur every ', weeklyN, ' week(s) on:'),
+    row(...weekBoxes.map((b) => b.label)),
+  );
+  weekBoxes.forEach((b) =>
+    b.input.addEventListener('change', () => {
+      touched.add('weekly');
+      if (!weekBoxes.some((x) => x.input.checked)) b.input.checked = true;
+    }),
+  );
+  weeklyN.addEventListener('input', () => touched.add('weekly'));
+
+  // Monthly
+  const monthDay = radio(group + 'm', 'day', 'Day ', true);
+  const monthDayN = num(1, 1, 31);
+  const monthDayEvery = num(1, 1, 99);
+  monthDay.label.append(monthDayN, ' of every ', monthDayEvery, ' month(s)');
+  const monthNth = radio(group + 'm', 'nth', 'The ', false);
+  const monthOrd = pick(ordOptions, 'first');
+  const monthWeekday = pick(dayOptions, 'Sunday');
+  const monthNthEvery = num(1, 1, 99);
+  monthNth.label.append(monthOrd, monthWeekday, ' of every ', monthNthEvery, ' month(s)');
+  const monthlyBlock = make('div', 'ag-rp-block');
+  monthlyBlock.append(row(monthDay.label), row(monthNth.label));
+  [monthDayN, monthDayEvery].forEach((c) =>
+    c.addEventListener('input', () => (monthDay.input.checked = true)),
+  );
+  [monthOrd, monthWeekday, monthNthEvery].forEach((c) => {
+    c.addEventListener('input', () => (monthNth.input.checked = true));
+  });
+
+  // Yearly
+  const yearlyN = num(1, 1, 99);
+  const yearDate = radio(group + 'y', 'date', 'On: ', true);
+  const yearMonth = pick(monthOptions, '1');
+  const yearDay = num(1, 1, 31);
+  yearDate.label.append(yearMonth, yearDay);
+  const yearNth = radio(group + 'y', 'nth', 'On the: ', false);
+  const yearOrd = pick(ordOptions, 'first');
+  const yearWeekday = pick(dayOptions, 'Sunday');
+  const yearNthMonth = pick(monthOptions, '1');
+  yearNth.label.append(yearOrd, yearWeekday, ' of ', yearNthMonth);
+  const yearlyBlock = make('div', 'ag-rp-block');
+  yearlyBlock.append(
+    row('Recur every ', yearlyN, ' year(s)'),
+    row(yearDate.label),
+    row(yearNth.label),
+  );
+  [yearMonth, yearDay].forEach((c) =>
+    c.addEventListener('input', () => (yearDate.input.checked = true)),
+  );
+  [yearOrd, yearWeekday, yearNthMonth].forEach((c) =>
+    c.addEventListener('input', () => (yearNth.input.checked = true)),
+  );
+
+  // Range
+  const startText = make('span', 'ag-rp-start');
+  const endCount = radio(group + 'e', 'count', 'End after ', true);
+  const countN = num(10, 1, 999);
+  endCount.label.append(countN, ' occurrences');
+  const endDate = radio(group + 'e', 'date', 'End by ', false);
+  const endDateInput = make('input', 'ag-rp-date');
+  endDateInput.type = 'date';
+  endDate.label.append(endDateInput);
+  const endNone = radio(group + 'e', 'none', 'No end date', false);
+  countN.addEventListener('input', () => (endCount.input.checked = true));
+  endDateInput.addEventListener('input', () => {
+    touched.add('endDate');
+    endDate.input.checked = true;
+  });
+  const rangeBlock = make('div', 'ag-rp-block ag-rp-range');
+  rangeBlock.append(row(startText), row(endCount.label), row(endDate.label), row(endNone.label));
+
+  const el = make('div', 'ag-repeat-panel hidden');
+  el.append(dailyBlock, weeklyBlock, monthlyBlock, yearlyBlock, rangeBlock);
+  el.addEventListener('click', (e) => e.stopPropagation());
+
+  const blocks = {
+    daily: dailyBlock,
+    weekly: weeklyBlock,
+    monthly: monthlyBlock,
+    yearly: yearlyBlock,
+  };
+  const endMode = () => [endCount, endDate, endNone].find((r) => r.input.checked).input.value;
+  const clamp = (input, lo, hi) => Math.min(hi, Math.max(lo, parseInt(input.value, 10) || lo));
+  const isoOf = (d) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+  function setStart(iso) {
+    const [y, m, d] = iso.split('-').map(Number);
+    const date = new Date(y, m - 1, d);
+    startIso = iso;
+    const weekday = dayNames[date.getDay()];
+    const daysInMonth = new Date(y, m, 0).getDate();
+    const ordinal = d + 7 > daysInMonth && d > 21 ? 'last' : ordinals[Math.ceil(d / 7) - 1];
+    startText.textContent =
+      'Starts ' +
+      date.toLocaleDateString(undefined, {
+        weekday: 'short',
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+      });
+    if (!touched.has('weekly'))
+      weekBoxes.forEach((b) => (b.input.checked = b.input.value === weekday));
+    if (!touched.has('monthly')) {
+      monthDayN.value = String(d);
+      monthOrd.value = ordinal;
+      monthWeekday.value = weekday;
+    }
+    if (!touched.has('yearly')) {
+      yearMonth.value = yearNthMonth.value = String(m);
+      yearDay.value = String(d);
+      yearOrd.value = ordinal;
+      yearWeekday.value = weekday;
+    }
+    if (!touched.has('endDate')) endDateInput.value = isoOf(new Date(y, m - 1 + 6, d));
+    onChange();
+  }
+
+  function setType(next, preset) {
+    type = next;
+    Object.entries(blocks).forEach(([name, block]) =>
+      block.classList.toggle('hidden', name !== next),
+    );
+    if (preset && preset.type === next) {
+      if (preset.interval) weeklyN.value = String(preset.interval);
+      if (preset.weekdaysOnly) dailyWeekday.input.checked = true;
+    }
+    onChange();
+  }
+
+  function spec() {
+    const base = { type };
+    if (type === 'daily') {
+      if (dailyWeekday.input.checked) Object.assign(base, { weekdaysOnly: true });
+      else Object.assign(base, { interval: clamp(dailyN, 1, 999) });
+    } else if (type === 'weekly') {
+      Object.assign(base, {
+        interval: clamp(weeklyN, 1, 99),
+        days: weekBoxes.filter((b) => b.input.checked).map((b) => b.input.value),
+      });
+    } else if (type === 'monthly') {
+      if (monthNth.input.checked)
+        Object.assign(base, {
+          mode: 'nth',
+          ordinal: monthOrd.value,
+          weekday: monthWeekday.value,
+          interval: clamp(monthNthEvery, 1, 99),
+        });
+      else
+        Object.assign(base, {
+          mode: 'day',
+          day: clamp(monthDayN, 1, 31),
+          interval: clamp(monthDayEvery, 1, 99),
+        });
+    } else if (yearNth.input.checked) {
+      Object.assign(base, {
+        mode: 'nth',
+        ordinal: yearOrd.value,
+        weekday: yearWeekday.value,
+        month: Number(yearNthMonth.value),
+        interval: clamp(yearlyN, 1, 99),
+      });
+    } else {
+      Object.assign(base, {
+        mode: 'date',
+        month: Number(yearMonth.value),
+        day: clamp(yearDay, 1, 31),
+        interval: clamp(yearlyN, 1, 99),
+      });
+    }
+    const end = endMode();
+    return {
+      ...base,
+      end,
+      count: clamp(countN, 1, 999),
+      endDate: endDateInput.value,
+    };
+  }
+
+  function valid() {
+    const ok = endMode() !== 'date' || (endDateInput.value && endDateInput.value > startIso);
+    endDateInput.classList.toggle('ag-rp-invalid', !ok);
+    return Boolean(ok);
+  }
+
+  el.addEventListener('input', onChange);
+  el.addEventListener('change', onChange);
+  [monthDayN, monthDayEvery, monthOrd, monthWeekday, monthNthEvery].forEach((c) =>
+    c.addEventListener('input', () => touched.add('monthly')),
+  );
+  [yearMonth, yearDay, yearOrd, yearWeekday, yearNthMonth, yearlyN].forEach((c) =>
+    c.addEventListener('input', () => touched.add('yearly')),
+  );
+  return { el, setStart, setType, spec, valid };
 }
 
 function _showAvailabilityGrid(grid, ownerTabId) {
@@ -10246,14 +10573,15 @@ function _showAvailabilityGrid(grid, ownerTabId) {
   const repeat = document.createElement('select');
   repeat.className = 'ag-repeat';
   repeat.title = 'One time or repeating';
+  const repeatPreset = _availabilityGridRepeatPreset(grid.repeat);
   [
     ['none', 'One time'],
-    ['weekdays', 'Every weekday'],
+    ['daily', 'Daily'],
     ['weekly', 'Weekly'],
-    ['biweekly', 'Every 2 weeks'],
     ['monthly', 'Monthly'],
+    ['yearly', 'Yearly'],
   ].forEach(([value, label]) => repeat.add(new Option(label, value)));
-  repeat.value = [...repeat.options].some((o) => o.value === grid.repeat) ? grid.repeat : 'none';
+  repeat.value = repeatPreset ? repeatPreset.type : 'none';
   repeat.addEventListener('click', (e) => e.stopPropagation());
   headerActions.append(repeat, hours, later);
   header.append(title, headerActions);
@@ -10276,19 +10604,23 @@ function _showAvailabilityGrid(grid, ownerTabId) {
       const label = person.name || person.email;
       const chip = document.createElement('span');
       chip.className = 'ag-chip' + (person.optional ? ' ag-chip-optional' : '');
-      const name = document.createElement('button');
-      name.type = 'button';
+      const name = document.createElement('span');
       name.className = 'ag-chip-name';
-      name.textContent = label + (person.optional ? ' · optional' : '');
-      name.title = person.optional
-        ? `${person.email} is optional. Click to make required.`
-        : `${person.email} is required. Click to make optional.`;
-      name.addEventListener('click', (e) => {
+      name.textContent = label;
+      name.title = person.email;
+      const role = document.createElement('button');
+      role.type = 'button';
+      role.className = 'ag-chip-role';
+      role.textContent = person.optional ? 'Optional' : 'Required';
+      role.title = person.optional
+        ? `${label} is optional. Click to make required.`
+        : `${label} is required. Click to make optional.`;
+      role.addEventListener('click', (e) => {
         e.stopPropagation();
         person.optional = !person.optional;
         refresh();
       });
-      chip.appendChild(name);
+      chip.append(name, role);
       if (others.length > 1) {
         const remove = document.createElement('button');
         remove.type = 'button';
@@ -10443,6 +10775,17 @@ function _showAvailabilityGrid(grid, ownerTabId) {
   actions.append(openOutlook, use);
   footer.append(chosen, actions);
 
+  const panel = _availabilityGridRepeatPanel(() => syncUse());
+  panel.setStart(grid.days[0].date);
+  if (repeat.value !== 'none') {
+    panel.setType(repeat.value, repeatPreset);
+    panel.el.classList.remove('hidden');
+  }
+
+  function syncUse() {
+    use.disabled = !picked || (repeat.value !== 'none' && !panel.valid());
+  }
+
   function pick(di, k) {
     k = Math.max(firstShown(), Math.min(k, lastShown() - spanSlots));
     cellsByDay.forEach((cols) =>
@@ -10464,7 +10807,7 @@ function _showAvailabilityGrid(grid, ownerTabId) {
     chosen.textContent = pickedBusy.length
       ? `${picked} · not free: ${pickedBusy.join(', ')}`
       : picked;
-    use.disabled = false;
+    panel.setStart(grid.days[di].date);
     syncOutlookLink();
   }
 
@@ -10475,7 +10818,12 @@ function _showAvailabilityGrid(grid, ownerTabId) {
       ? 'Repeating: use Open in Outlook on the draft after you pick a time'
       : 'Open in Outlook';
   }
-  repeat.addEventListener('change', syncOutlookLink);
+  repeat.addEventListener('change', () => {
+    panel.el.classList.toggle('hidden', repeat.value === 'none');
+    if (repeat.value !== 'none') panel.setType(repeat.value);
+    syncOutlookLink();
+    syncUse();
+  });
   syncOutlookLink();
 
   function refresh() {
@@ -10716,19 +11064,19 @@ function _showAvailabilityGrid(grid, ownerTabId) {
   });
   use.addEventListener('click', (e) => {
     e.stopPropagation();
-    if (!picked) return;
+    if (use.disabled || !picked) return;
     const reply =
       `Let's do ${picked}.` +
       (pickedBusy.length ? ` ${pickedBusy.join(', ')} not free then; schedule it anyway.` : '') +
       _availabilityGridAttendeeText(grid) +
-      _availabilityGridRepeatText(repeat.value);
+      _availabilityGridRepeatText(repeat.value === 'none' ? null : panel.spec());
     card.remove();
     _sendSandboxFollowUp(tabId, reply).catch((err) =>
       console.warn('[availability grid] pick not sent:', err),
     );
   });
 
-  body.append(people, scroll, footer);
+  body.append(panel.el, people, scroll, footer);
   box.append(header, body);
   bubble.appendChild(box);
   card.appendChild(bubble);

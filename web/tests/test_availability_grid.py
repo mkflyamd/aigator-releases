@@ -63,6 +63,8 @@ def test_repeat_defaults_to_one_time_and_accepts_a_known_cadence():
     base = {"attendees": ["a@example.com"], "dates": ["2030-01-07"]}
     assert _run(views, **base)[0]["_availability_grid"]["repeat"] == "none"
     assert _run(views, recurrence="Weekly", **base)[0]["_availability_grid"]["repeat"] == "weekly"
+    assert _run(views, recurrence="Yearly", **base)[0]["_availability_grid"]["repeat"] == "yearly"
+    assert _run(views, recurrence="daily", **base)[0]["_availability_grid"]["repeat"] == "daily"
     assert _run(views, recurrence="every other tuesday", **base)[0]["_availability_grid"]["repeat"] == "none"
 
 

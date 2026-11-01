@@ -90,12 +90,72 @@ assert.strictEqual(
 );
 
 const repeatText = load('_availabilityGridRepeatText');
-assert.strictEqual(repeatText('none'), ' This is a one-time meeting, not recurring.');
-assert.strictEqual(repeatText('weekly'), ' Make it recurring weekly.');
-assert.strictEqual(repeatText('biweekly'), ' Make it recurring every 2 weeks.');
-assert.strictEqual(repeatText('weekdays'), ' Make it recurring every weekday.');
+const noEnd = { end: 'none' };
+assert.strictEqual(repeatText(null), ' This is a one-time meeting, not recurring.');
 assert.strictEqual(repeatText(undefined), ' This is a one-time meeting, not recurring.');
+assert.strictEqual(
+  repeatText({ type: 'daily', interval: 1, ...noEnd }),
+  ' Make it recurring every day, with no end date.',
+);
+assert.strictEqual(
+  repeatText({ type: 'daily', weekdaysOnly: true, end: 'count', count: 10 }),
+  ' Make it recurring every weekday, ending after 10 occurrences.',
+);
+assert.strictEqual(
+  repeatText({
+    type: 'weekly',
+    interval: 2,
+    days: ['Monday', 'Wednesday', 'Friday'],
+    end: 'date',
+    endDate: '2027-04-18',
+  }),
+  ' Make it recurring every 2 weeks on Monday, Wednesday and Friday, ending by 2027-04-18.',
+);
+assert.strictEqual(
+  repeatText({ type: 'weekly', interval: 1, days: ['Sunday'], ...noEnd }),
+  ' Make it recurring every week on Sunday, with no end date.',
+);
+assert.strictEqual(
+  repeatText({ type: 'monthly', mode: 'day', day: 15, interval: 1, ...noEnd }),
+  ' Make it recurring on day 15 of every month, with no end date.',
+);
+assert.strictEqual(
+  repeatText({
+    type: 'monthly',
+    mode: 'nth',
+    ordinal: 'first',
+    weekday: 'Sunday',
+    interval: 3,
+    end: 'count',
+    count: 4,
+  }),
+  ' Make it recurring on the first Sunday of every 3 months, ending after 4 occurrences.',
+);
+assert.strictEqual(
+  repeatText({ type: 'yearly', mode: 'date', month: 11, day: 1, interval: 1, ...noEnd }),
+  ' Make it recurring every year on November 1, with no end date.',
+);
+assert.strictEqual(
+  repeatText({
+    type: 'yearly',
+    mode: 'nth',
+    ordinal: 'last',
+    weekday: 'Friday',
+    month: 3,
+    interval: 2,
+    ...noEnd,
+  }),
+  ' Make it recurring every 2 years on the last Friday of March, with no end date.',
+);
 
-assert(/ag-chip-remove/.test(source) && !/ag-role/.test(source), 'people are chips with a remove button');
+const preset = load('_availabilityGridRepeatPreset');
+assert.deepStrictEqual({ ...preset('biweekly') }, { type: 'weekly', interval: 2 });
+assert.deepStrictEqual({ ...preset('weekdays') }, { type: 'daily', weekdaysOnly: true });
+assert.strictEqual(preset('none'), null);
+
+assert(
+  /ag-chip-remove/.test(source) && /ag-chip-role/.test(source) && !/ag-role\b/.test(source),
+  'people are chips with a visible Required/Optional pill and a remove button',
+);
 
 console.log('availability_grid_card: ok');

@@ -297,7 +297,7 @@ TOOL_DEFS = [
                 },
                 "recurrence": {
                     "type": "string",
-                    "enum": ["none", "weekdays", "weekly", "biweekly", "monthly"],
+                    "enum": ["none", "daily", "weekdays", "weekly", "biweekly", "monthly", "yearly"],
                     "description": "Starting choice for the card's One time / repeat selector. Use the cadence the user asked for; omit it (one time) when they did not say. The user can change it on the card and the final choice comes back with the pick.",
                     "default": "none",
                 },
@@ -798,7 +798,7 @@ def _tool_load_availability_days(
     return {"days": _grid_day_payloads(get_cal_client(), wanted, day_list, get_user_win_tz(), need, now)}
 
 
-_GRID_REPEATS = ("none", "weekdays", "weekly", "biweekly", "monthly")
+_GRID_REPEATS = ("none", "daily", "weekdays", "weekly", "biweekly", "monthly", "yearly")
 
 
 def _tool_show_availability_grid(
