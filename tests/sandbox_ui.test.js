@@ -112,6 +112,9 @@ function makeEl(tag) {
       if (this.parent) this.parent.children = this.parent.children.filter((c) => c !== this);
     },
     scrollIntoView() {},
+    focus() {
+      this.focused = true;
+    },
   };
   return el;
 }
@@ -171,6 +174,7 @@ function makeEnv(activeTab) {
   };
   vm.createContext(ctx);
   [
+    '_focusApprovalButton',
     '_sandboxFollowUpText',
     '_sendSandboxFollowUp',
     '_flushSandboxFollowUp',
@@ -231,6 +235,7 @@ const flush = async () => {
     all.some((e) => /Allowed until you close this tab/.test(e._text)),
     'footer states the tab-long lifetime',
   );
+  assert.strictEqual(buttons[0].focused, true, 'Allow is focused so Enter approves');
   await buttons[0].listeners.click({ stopPropagation() {} });
   await flush();
   assert.strictEqual(env.fetches.length, 1);

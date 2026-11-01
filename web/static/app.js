@@ -11437,6 +11437,7 @@ function _showSandboxApproval(data, ownerTabId) {
   });
   document.getElementById('messages')?.appendChild(card);
   card.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  _focusApprovalButton(approve);
 }
 
 // Navigate the relevant native app after a draft is approved and inject
@@ -17745,6 +17746,14 @@ function _continueRequestText(lastUserText, retryNote) {
   return `${lastUserText}\n\n${retryNote}`;
 }
 
+// Puts the Allow button in focus so Enter approves, unless the user is mid-draft in the chat box.
+function _focusApprovalButton(btn) {
+  const input = document.getElementById('chat-input');
+  if (input && document.activeElement === input && input.textContent.trim()) return;
+  btn.dataset.defaultAction = '1';
+  btn.focus({ preventScroll: true });
+}
+
 function _pinConfirmCardInView(card) {
   const messages = document.getElementById('messages');
   if (messages && card.isConnected) _pinScrollToBottom(messages);
@@ -17947,6 +17956,7 @@ function _showBrowserConfirmCard(
     msgDiv.appendChild(card);
   }
   _pinConfirmCardInView(card);
+  _focusApprovalButton(allowBtn);
 }
 
 /* ── Failover Consent Gate ───────────────────────────── */

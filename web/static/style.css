@@ -6169,6 +6169,34 @@ body.gator-chat-expanded .gator-expand-btn {
   border-color: var(--accent, #22c55e);
   cursor: default;
 }
+/* Default action of an approval card: Enter activates it. Soft halo ring and a return-key hint
+   replace the browser's hard outline. */
+button[data-default-action] {
+  transition:
+    box-shadow 0.18s ease,
+    background 0.2s,
+    transform 0.1s;
+}
+button[data-default-action]:focus {
+  outline: none;
+}
+button[data-default-action]:focus:not(:disabled) {
+  box-shadow:
+    0 0 0 2px var(--surface2, #1e293b),
+    0 0 0 4px rgba(var(--accent-rgb), 0.55),
+    0 4px 14px rgba(var(--accent-rgb), 0.3);
+}
+button[data-default-action]:focus:not(:disabled)::after {
+  content: '\21B5';
+  display: inline-block;
+  margin-left: 8px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.14);
+  font-size: 0.78em;
+  line-height: 1.5;
+  vertical-align: 1px;
+}
 .avail-grid-scroll {
   max-height: 320px;
   overflow: auto;
