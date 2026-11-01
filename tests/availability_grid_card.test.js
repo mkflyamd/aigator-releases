@@ -66,7 +66,10 @@ assert.strictEqual(url.searchParams.get('enddt'), '2030-01-08T18:00:00');
 assert.strictEqual(url.searchParams.get('to'), 'sherry@example.com;james@example.com');
 
 assert(/msg\.availability_grid\)\s*\{\s*_showAvailabilityGrid\(/.test(source), 'SSE handler wired');
-assert(/postGridJson\('\/api\/calendar\/availability-days'/.test(source), 'later weeks calls the route');
+assert(
+  /postGridJson\('\/api\/calendar\/availability-days'/.test(source),
+  'later weeks calls the route',
+);
 assert(
   /postGridJson\('\/api\/calendar\/grid-draft-series'/.test(source),
   'a repeating pick opens a draft series made by the server',
