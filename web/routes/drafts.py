@@ -1136,6 +1136,33 @@ async def open_draft_in_outlook(draft_id: str, body: dict = None):
         raise HTTPException(status_code=404, detail="Draft not found or expired.")
     p = claimed["params"]
 
+    if dtype == "calendar-event" and p.get("recurrence"):
+        # Outlook's compose link cannot carry a recurrence, so the series is
+        # created as an unsent draft event (isDraft) and opened from its webLink.
+        try:
+            from skills._m365.helpers import get_cal_client
+
+            created = get_cal_client().post("/me/events", {**_calendar_event_payload(p), "isDraft": True})
+        except Exception as e:
+            status_code = getattr(e, "status_code", None)
+            if isinstance(status_code, int) and (status_code == 0 or status_code >= 500):
+                if complete_handoff(draft_id):
+                    await _sync_task_draft_status(draft_id, "handed_off")
+                raise HTTPException(
+                    status_code=502,
+                    detail=(
+                        f"Outlook may already have created a draft for this meeting, "
+                        f"but Gator could not confirm it ({e}). Check your Outlook "
+                        "calendar — Send invite is disabled for this meeting to avoid a duplicate."
+                    ),
+                )
+            if abort_handoff(draft_id):
+                await _sync_task_draft_status(draft_id, "pending")
+            raise HTTPException(status_code=500, detail=str(e))
+        if complete_handoff(draft_id):
+            await _sync_task_draft_status(draft_id, "handed_off")
+        return {"url": (created or {}).get("webLink") or "https://outlook.office.com/calendar"}
+
     if dtype == "calendar-event":
         url = _calendar_compose_url(p)
         if complete_handoff(draft_id):

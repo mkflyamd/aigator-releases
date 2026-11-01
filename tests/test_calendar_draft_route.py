@@ -52,6 +52,58 @@ def test_open_marks_handed_off_and_second_open_is_409():
     assert _post(client, f"/api/drafts/{did}/open-in-outlook").status_code == 409
 
 
+WEEKLY = {
+    "pattern": {"type": "weekly", "interval": 1, "daysOfWeek": ["monday"]},
+    "range": {"type": "numbered", "startDate": "2026-11-02", "numberOfOccurrences": 4},
+}
+
+
+def _recurring_draft():
+    return create_draft("calendar-event", {**PARAMS, "recurrence": WEEKLY}, {"subject": "Sync & plan"})
+
+
+def test_recurring_open_creates_a_draft_series_and_returns_its_web_link():
+    client = TestClient(app)
+    did = _recurring_draft()
+    gc = MagicMock()
+    gc.post.return_value = {"id": "evt1", "webLink": "https://outlook.office365.com/owa/?itemid=evt1"}
+    with patch("skills._m365.helpers.get_cal_client", return_value=gc):
+        res = _post(client, f"/api/drafts/{did}/open-in-outlook")
+    assert res.status_code == 200
+    assert res.json() == {"url": "https://outlook.office365.com/owa/?itemid=evt1"}
+    path, event = gc.post.call_args.args
+    assert path == "/me/events"
+    assert event["isDraft"] is True
+    assert event["recurrence"] == WEEKLY
+    assert get_draft(did)["status"] == "handed_off"
+
+
+def test_recurring_open_rejected_by_graph_returns_the_draft_to_pending():
+    client = TestClient(app)
+    did = _recurring_draft()
+    gc = MagicMock()
+    err = RuntimeError("bad request")
+    err.status_code = 400
+    gc.post.side_effect = err
+    with patch("skills._m365.helpers.get_cal_client", return_value=gc):
+        res = _post(client, f"/api/drafts/{did}/open-in-outlook")
+    assert res.status_code == 500
+    assert get_draft(did)["status"] == "pending"
+
+
+def test_recurring_open_with_uncertain_failure_is_terminal_so_it_cannot_duplicate():
+    client = TestClient(app)
+    did = _recurring_draft()
+    gc = MagicMock()
+    err = RuntimeError("gateway timeout")
+    err.status_code = 504
+    gc.post.side_effect = err
+    with patch("skills._m365.helpers.get_cal_client", return_value=gc):
+        res = _post(client, f"/api/drafts/{did}/open-in-outlook")
+    assert res.status_code == 502
+    assert get_draft(did)["status"] == "handed_off"
+
+
 def test_approving_a_calendar_draft_creates_the_event_once():
     client = TestClient(app)
     did = _draft()

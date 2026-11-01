@@ -11584,7 +11584,7 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
       hideEditLink: true,
       title: 'Meeting draft ready',
       sendLabel: 'Send invite',
-      openButton: !data.recurrence,
+      openButton: true,
       openLabel: 'Open in Outlook',
       footerNote: 'Nothing is sent until you press Send invite.',
       customBody: _buildCalendarDraftRows(data),

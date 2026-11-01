@@ -169,7 +169,7 @@ Rules:
 - Fill every field you know: subject, start, end, required and optional attendees, location, `teams`, recurrence and an HTML body.
 - Recurrence: spell it out plainly in your reply ("Weekly, every Tuesday until Jun 30") and pass the Graph recurrence object.
 - After the card appears, tell the user the meeting is not sent yet, that Send invite sends it as drafted, and that Open in Outlook lets them change the body or add attendees first.
-- A recurring draft has no Open in Outlook button, because Outlook's new-event link cannot carry a repeat. Tell the user Send invite creates the whole series, and to ask you in chat for any change.
+- For a recurring draft, Open in Outlook creates the whole series as an unsent draft in Outlook, because Outlook's new-event link cannot carry a repeat. Tell the user to press Send there. Send invite in the card still creates and sends the whole series.
 - If the user asks for a change, call draft_calendar_event again with the updated values.
 
 ## Timezones

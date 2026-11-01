@@ -56,8 +56,8 @@ assert(config, 'calendar-event config present');
 assert(!/hideApprove/.test(config[0]), 'approve button is not hidden');
 assert(/sendLabel: 'Send invite'/.test(config[0]), 'Send invite label');
 assert(
-  /openButton: !data\.recurrence/.test(config[0]),
-  'Open button shown next to Send, except for recurring drafts (the compose link cannot carry a repeat)',
+  /openButton: true/.test(config[0]),
+  'Open button shown next to Send, including recurring drafts (opened as a draft series)',
 );
 
 // Recurring drafts show the real repeat rule, not just "Yes".
