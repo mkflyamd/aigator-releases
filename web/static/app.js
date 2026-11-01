@@ -10266,6 +10266,52 @@ function _showAvailabilityGrid(grid, ownerTabId) {
   table.className = 'avail-grid';
 
   const adding = new Map();
+  const chipList = document.createElement('span');
+  chipList.className = 'ag-chip-list';
+
+  function renderChips() {
+    chipList.replaceChildren();
+    const others = grid.people.filter((p) => !p.you);
+    others.forEach((person) => {
+      const label = person.name || person.email;
+      const chip = document.createElement('span');
+      chip.className = 'ag-chip' + (person.optional ? ' ag-chip-optional' : '');
+      const name = document.createElement('button');
+      name.type = 'button';
+      name.className = 'ag-chip-name';
+      name.textContent = label + (person.optional ? ' · optional' : '');
+      name.title = person.optional
+        ? `${person.email} is optional. Click to make required.`
+        : `${person.email} is required. Click to make optional.`;
+      name.addEventListener('click', (e) => {
+        e.stopPropagation();
+        person.optional = !person.optional;
+        refresh();
+      });
+      chip.appendChild(name);
+      if (others.length > 1) {
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'ag-chip-remove';
+        remove.textContent = '×';
+        remove.title = `Remove ${label} from the grid`;
+        remove.setAttribute('aria-label', remove.title);
+        remove.addEventListener('click', (e) => {
+          e.stopPropagation();
+          removePerson(person);
+        });
+        chip.appendChild(remove);
+      }
+      chipList.appendChild(chip);
+    });
+    adding.forEach((label) => {
+      const chip = document.createElement('span');
+      chip.className = 'ag-chip ag-chip-pending';
+      chip.textContent = `${label} · adding…`;
+      chipList.appendChild(chip);
+    });
+  }
+
   let picked = null;
   let pickedAt = null;
   let pickedBusy = [];
@@ -10280,6 +10326,7 @@ function _showAvailabilityGrid(grid, ownerTabId) {
   };
 
   function renderTable() {
+    renderChips();
     table.replaceChildren();
     cellsByDay = grid.days.map(() => []);
     const k0 = firstShown();
@@ -10339,35 +10386,10 @@ function _showAvailabilityGrid(grid, ownerTabId) {
       },
     );
     grid.people.forEach((person, pi) => {
-      const th = nameCell(person.you ? 'You' : person.name || person.email, 'ag-person');
-      if (!person.you) {
-        const role = document.createElement('button');
-        role.type = 'button';
-        role.className = 'ag-role' + (person.optional ? ' ag-role-optional' : '');
-        role.textContent = person.optional ? 'Optional' : 'Required';
-        role.title = person.optional
-          ? 'Optional attendee. Click to make required.'
-          : 'Required attendee. Click to make optional.';
-        role.addEventListener('click', (e) => {
-          e.stopPropagation();
-          person.optional = !person.optional;
-          refresh();
-        });
-        th.appendChild(role);
-        if (grid.people.filter((p) => !p.you).length > 1) {
-          const remove = document.createElement('button');
-          remove.type = 'button';
-          remove.className = 'ag-remove';
-          remove.textContent = '×';
-          remove.title = `Remove ${person.name || person.email} from the grid`;
-          remove.setAttribute('aria-label', remove.title);
-          remove.addEventListener('click', (e) => {
-            e.stopPropagation();
-            removePerson(person);
-          });
-          th.appendChild(remove);
-        }
-      }
+      const th = nameCell(
+        (person.you ? 'You' : person.name || person.email) + (person.optional ? ' · optional' : ''),
+        'ag-person',
+      );
       addRow(th, (td, day, di, k) => {
         const st = day.rows[pi][k] || '?';
         td.className = `ag-cell ag-s-${st === '?' ? 'u' : st}`;
@@ -10401,6 +10423,9 @@ function _showAvailabilityGrid(grid, ownerTabId) {
   const addStatus = document.createElement('span');
   addStatus.className = 'ag-add-status hidden';
   addBar.append(addLink, addInput, addStatus, suggestions);
+  const people = document.createElement('div');
+  people.className = 'ag-people';
+  people.append(chipList, addBar);
 
   const footer = document.createElement('div');
   footer.className = 'ag-footer';
@@ -10701,7 +10726,7 @@ function _showAvailabilityGrid(grid, ownerTabId) {
     );
   });
 
-  body.append(scroll, addBar, footer);
+  body.append(people, scroll, footer);
   box.append(header, body);
   bubble.appendChild(box);
   card.appendChild(bubble);

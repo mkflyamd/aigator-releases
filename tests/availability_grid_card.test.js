@@ -96,4 +96,6 @@ assert.strictEqual(repeatText('biweekly'), ' Make it recurring every 2 weeks.');
 assert.strictEqual(repeatText('weekdays'), ' Make it recurring every weekday.');
 assert.strictEqual(repeatText(undefined), ' This is a one-time meeting, not recurring.');
 
+assert(/ag-chip-remove/.test(source) && !/ag-role/.test(source), 'people are chips with a remove button');
+
 console.log('availability_grid_card: ok');

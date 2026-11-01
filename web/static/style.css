@@ -6221,40 +6221,70 @@ body.gator-chat-expanded .gator-expand-btn {
 }
 .avail-grid .ag-name-text {
   display: inline-block;
-  max-width: 95px;
+  max-width: 150px;
   overflow: hidden;
   text-overflow: ellipsis;
   vertical-align: middle;
 }
-.avail-grid .ag-role {
-  float: right;
-  margin-top: 2px;
-  padding: 0 6px;
-  font-size: 0.62rem;
-  font-weight: 500;
-  color: var(--text-dim);
-  background: transparent;
-  border: 1px solid var(--border2);
-  border-radius: 8px;
-  cursor: pointer;
+.ag-people {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
 }
-.avail-grid .ag-remove {
-  float: right;
-  margin: 1px 0 0 6px;
-  padding: 0 4px;
-  font-size: 0.85rem;
-  line-height: 1.2;
-  color: var(--text-dim);
+.ag-chip-list {
+  display: contents;
+}
+.ag-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  font-size: 0.74rem;
+  color: var(--text);
+  background: var(--surface2);
+  border: 1px solid var(--border2);
+  border-radius: 999px;
+}
+.ag-chip-name,
+.ag-chip-remove {
+  font: inherit;
+  color: inherit;
   background: transparent;
   border: none;
   cursor: pointer;
 }
-.avail-grid .ag-remove:hover {
+.ag-chip-name {
+  padding: 3px 4px 3px 10px;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ag-chip-name:last-child {
+  padding-right: 10px;
+}
+.ag-chip-remove {
+  padding: 3px 8px 3px 2px;
+  color: var(--text-dim);
+}
+.ag-chip-remove:hover {
   color: var(--warn);
 }
-.avail-grid .ag-role-optional {
-  color: var(--warn);
+.ag-chip-optional {
   border-style: dashed;
+  color: var(--text-dim);
+}
+.ag-chip-pending {
+  padding: 3px 10px;
+  color: var(--text-dim);
+  font-style: italic;
+  animation: ag-pending-pulse 1.2s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ag-chip-pending {
+    animation: none;
+  }
 }
 .avail-grid tr:nth-child(1) th {
   position: sticky;
@@ -6400,7 +6430,6 @@ body.gator-chat-expanded .gator-expand-btn {
 }
 .ag-add {
   position: relative;
-  margin-top: 6px;
 }
 .ag-add .hidden,
 .ag-header-actions .hidden {
