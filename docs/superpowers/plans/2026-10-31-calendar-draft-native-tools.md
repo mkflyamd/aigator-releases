@@ -40,11 +40,13 @@
 ### Task 1: One approval for calendar, people and contacts
 
 **Files:**
+
 - Modify: `web/data_sources.py`
 - Modify: `web/agent_loop.py` (`_ask_source`, ~line 591)
 - Test: `tests/prompt_injection/test_data_sources.py`
 
 **Interfaces:**
+
 - Produces: `Source.group_keys: tuple[str, ...]`, `Source.group_label: str`; `data_sources.approval_key(source) -> str`; `data_sources.allow_source(context_id, source) -> None`; `data_sources.deny_source(context_id, source) -> None`.
 
 - [ ] **Step 1: Write failing tests** (append to `tests/prompt_injection/test_data_sources.py`)
@@ -168,10 +170,12 @@ git commit -m "feat: one approval card for calendar, people directory and contac
 ### Task 2: Timezone helpers
 
 **Files:**
+
 - Create: `web/skills/calendar/timezones.py`
 - Test: `tests/test_calendar_timezones.py`
 
 **Interfaces:**
+
 - Produces: `WINDOWS_TO_IANA: dict[str, str]`; `zone(name: str) -> ZoneInfo | None`; `fmt_range(start: str, end: str, from_tz: str, to_tz: str) -> str | None`; `attendee_zones(gc, emails: list[str], day: str, win_tz: str) -> dict[str, dict]` returning `{email_lower: {"timezone": str, "working_hours": str}}` and `{}` on any error.
 
 - [ ] **Step 1: Write failing tests**
@@ -243,10 +247,12 @@ git commit -m "feat: timezone helpers for attendee-local meeting times"
 ### Task 3: Timezone-aware `find_meeting_times`
 
 **Files:**
+
 - Modify: `web/skills/calendar/tools.py` (`find_meeting_times` TOOL_DEF ~243, `_tool_find_meeting_times` ~543)
 - Test: `tests/test_calendar_timezones.py`
 
 **Interfaces:**
+
 - Consumes: `timezones.attendee_zones`, `timezones.fmt_range`.
 - Produces: `_tool_find_meeting_times(attendees, date="", duration_minutes=30, max_suggestions=5, ignore_timezones=False)` returning `{date, duration_minutes, timezone, ignore_timezones, attendee_timezones, suggestions:[{start, end, confidence, timezone, attendee_local:{email: "9:00 AM – 9:30 AM PST"}}]}`.
 
@@ -268,12 +274,14 @@ git commit -m "feat: timezone helpers for attendee-local meeting times"
 ### Task 4: `draft_calendar_event` replaces `create_calendar_event`
 
 **Files:**
+
 - Modify: `web/skills/calendar/tools.py` (TOOL_DEFS ~200-242, `_tool_create_calendar_event` 472-540, TOOL_STATUS ~420, TOOL_HANDLERS 1466)
 - Modify: `web/skills/calendar/SKILL.md` (every `create_calendar_event` mention, and the "Event Draft" section lines ~161-192), `web/skills/aigator/SKILL.md:46`
 - Modify: `tests/test_calendar_invite_parsing.py` (migrate `test_create_event_sends_html_body_when_tags_present`)
 - Test: `tests/test_calendar_draft.py`
 
 **Interfaces:**
+
 - Consumes: `skills._drafts.create_draft(draft_type, params, preview)`; `_parse_email_list`; `timezones.attendee_zones`, `timezones.fmt_range`.
 - Produces: tool `draft_calendar_event(subject, start, end, attendees, optional_attendees=None, body="", location="", teams=False, recurrence=None)` returning `{"_draft": "calendar-event", "data": {subject, start, end, timezone, attendees, optional_attendees, body, location, teams, recurrence, attendee_local, draft_id}, "_user_message": str}`. Draft params hold `subject, start, end, timezone, attendees, optional_attendees, body, location, teams, recurrence`.
 
@@ -298,10 +306,12 @@ git commit -m "feat: timezone helpers for attendee-local meeting times"
 ### Task 5: Open a `calendar-event` draft in Outlook
 
 **Files:**
+
 - Modify: `web/routes/drafts.py` (`open_draft_in_outlook`, gate at ~line 1057)
 - Test: `tests/test_calendar_draft_route.py`
 
 **Interfaces:**
+
 - Consumes: draft params from Task 4.
 - Produces: `POST /api/drafts/{draft_id}/open-in-outlook` returns `{"url": "<compose deeplink>"}` for `calendar-event`; helper `_calendar_compose_url(params: dict) -> str` in `web/routes/drafts.py`.
 
@@ -343,10 +353,12 @@ Change the type gate to allow `calendar-event`; after `claim_for_handoff` (and i
 ### Task 6: `calendar-event` draft card in the chat UI
 
 **Files:**
+
 - Modify: `web/static/app.js` (`_injectDraftApprovalCard` at ~10853: config map, card HTML ~11062-11125, approve listener ~11158, open-in-outlook handler ~11285-11362)
 - Test: `tests/calendar_draft_card.test.js`
 
 **Interfaces:**
+
 - Consumes: draft `data` from Task 4; `POST /api/drafts/{id}/open-in-outlook` from Task 5.
 
 - [ ] **Step 1: Write failing JS test** (vm-extraction pattern of `tests/draft_rich_editor.test.js`): build a card for `calendar-event` data and assert the markup has a `gcc-open-outlook-btn` (or the existing open-in-outlook class), has no `gcc-approve-btn`, and contains the subject, the attendee emails and a per-attendee local time row.
@@ -366,11 +378,13 @@ Change the type gate to allow `calendar-event`; after `claim_for_handoff` (and i
 ### Task 7: Transcript backend — instant list and per-row resolve
 
 **Files:**
+
 - Modify: `web/skills/m365-teams/scripts/transcript_recording.py` (keep `resolve_recordings_from_chat` unchanged; other code and tests depend on it)
 - Modify: `web/routes/teams.py` (~4380-4568)
 - Test: `tests/test_transcript_resolve.py`, `tests/test_teams_transcripts_route.py`
 
 **Interfaces:**
+
 - Produces:
   - `list_recordings_from_chat(chat_id: str) -> list[RecordingInfo]`: scan only, `drive_id=""`, `item_id=""`, `web_url=share_url`.
   - `resolve_share(share_url: str) -> dict`: `{"drive_id","item_id","web_url","error"}` where `error` is `None`, `"expired"` (status 404/410), `"auth"` (401/403) or `"failed"`; successes cached by share URL; the real status is logged with `logging`.
@@ -396,10 +410,12 @@ Change the type gate to allow `calendar-event`; after `claim_for_handoff` (and i
 ### Task 8: Transcript panel — async rows and a visible button label
 
 **Files:**
+
 - Modify: `web/static/third-pane.js` (`_openTranscriptsPanel` ~1742, `_renderTranscriptsList` ~1780, `_buildRecordingRow` ~1806, `_buildTranscriptRow` ~1874, `_renderCalendarTranscriptCard` ~2026, header action `tp-teams-transcripts` ~6653)
 - Test: `tests/transcripts_panel.test.js`
 
 **Interfaces:**
+
 - Consumes: `/recordings` rows with `share_url` and `GET /api/recordings/resolve` from Task 7.
 
 - [ ] **Step 1: Write failing JS test:** with a fake `fetch`, `_renderTranscriptsList` creates a row for every recording before any resolve call finishes; a resolve response with `error: "expired"` renders text containing "expired" and not "sign in"; `error: "auth"` renders the sign-in text; at most 4 resolves run at once; `_renderCalendarTranscriptCard` markup contains a visible text label ("Transcripts") beside the icon.

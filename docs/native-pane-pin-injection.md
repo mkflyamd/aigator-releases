@@ -210,28 +210,30 @@ time. This handles thread side-panels that open without URL changes.
 setInterval(() => {
   // Read and clear in ONE script; two round trips let a later poll re-read the same pin.
   slackView.webContents
-    .executeJavaScript('(function(){var c=window.__gatorPinCtx||null;window.__gatorPinCtx=null;return c;})()')
+    .executeJavaScript(
+      '(function(){var c=window.__gatorPinCtx||null;window.__gatorPinCtx=null;return c;})()',
+    )
     .then((ctx) => {
-    if (!ctx) return;
-    // Insert .pin-ref-chip in Gator's #chat-input
-    gatorView.webContents.executeJavaScript(`...chip creation...`);
-    // ALSO persist to /api/context/pin so it shows in the pin orb
-    // and works with Shift+{ — MUST include context_id (the renderer's
-    // live _activeTabId) or the pin lands in a shared "default" bucket
-    // and leaks across tabs (see §6, Pin Persistence).
-    gatorView.webContents
-      .executeJavaScript(
-        'typeof _activeTabId !== "undefined" && _activeTabId ? _activeTabId : "default"',
-      )
-      .then((activeTabId) => {
-        http.request('/api/context/pin', {
-          method: 'POST',
-          body: { source, id, label, context_id: activeTabId },
+      if (!ctx) return;
+      // Insert .pin-ref-chip in Gator's #chat-input
+      gatorView.webContents.executeJavaScript(`...chip creation...`);
+      // ALSO persist to /api/context/pin so it shows in the pin orb
+      // and works with Shift+{ — MUST include context_id (the renderer's
+      // live _activeTabId) or the pin lands in a shared "default" bucket
+      // and leaks across tabs (see §6, Pin Persistence).
+      gatorView.webContents
+        .executeJavaScript(
+          'typeof _activeTabId !== "undefined" && _activeTabId ? _activeTabId : "default"',
+        )
+        .then((activeTabId) => {
+          http.request('/api/context/pin', {
+            method: 'POST',
+            body: { source, id, label, context_id: activeTabId },
+          });
         });
-      });
-    // After persist confirms, refresh the pin orb:
-    gatorView.webContents.executeJavaScript('_refreshPinOrb(true)');
-  });
+      // After persist confirms, refresh the pin orb:
+      gatorView.webContents.executeJavaScript('_refreshPinOrb(true)');
+    });
 }, 300);
 ```
 
