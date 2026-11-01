@@ -23,6 +23,8 @@ import os
 import re
 import secrets
 import socket
+import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -34,6 +36,21 @@ logger = logging.getLogger("pty_host")
 PROTOCOL_VERSION = 1
 _OUT_PIECE_CHARS = 64 * 1024
 _LINE_LIMIT = 8 * 1024 * 1024
+_REAP_INTERVAL = 30.0
+
+
+def _env_seconds(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, default))
+    except ValueError:
+        return default
+
+
+# With no backend connected this long, the host closes everything and exits, so
+# quitting AI Gator does not leave coding agents running forever.
+ORPHAN_TIMEOUT = _env_seconds("GATOR_PTY_HOST_ORPHAN_SECONDS", 600.0)
+# A session whose process ended and that nobody is attached to is dropped after this.
+DONE_TTL = _env_seconds("GATOR_PTY_HOST_DONE_SECONDS", 1800.0)
 
 
 def state_dir() -> Path:
@@ -57,10 +74,40 @@ class PtyHost:
         self._token = token
         self._spawn = spawn
         self.sessions: dict[str, PtySession] = {}
+        self._connections = 0
+        self._attached: dict[str, int] = {}
+        self._done_since: dict[str, float] = {}
+        self._last_connection = time.time()
+
+    def reap(self, now: float, orphan_timeout: float, done_ttl: float) -> bool:
+        """Drop finished, unwatched sessions. Returns True when the host should exit
+        because no backend has been connected for orphan_timeout."""
+        for sid, session in list(self.sessions.items()):
+            if not session.done or self._attached.get(sid):
+                self._done_since.pop(sid, None)
+                continue
+            since = self._done_since.setdefault(sid, now)
+            if now - since >= done_ttl:
+                self.sessions.pop(sid, None)
+                self._done_since.pop(sid, None)
+                session.close()
+        if self._connections:
+            return False
+        return now - self._last_connection >= orphan_timeout
+
+    def close_all(self) -> None:
+        for session in self.sessions.values():
+            try:
+                session.close()
+            except Exception:
+                logger.exception("closing a session failed")
+        self.sessions.clear()
 
     async def handle(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ) -> None:
+        self._connections += 1
+        attached_id: str | None = None
         pump: asyncio.Task | None = None
         try:
             hello = await self._read(reader)
@@ -106,7 +153,9 @@ class PtyHost:
                         continue
                     if pump is not None:
                         pump.cancel()
-                    attached = session
+                    self._release(attached_id)
+                    attached, attached_id = session, str(msg["id"])
+                    self._attached[attached_id] = self._attached.get(attached_id, 0) + 1
                     pump = await self._attach(session, msg, writer)
                 else:
                     reply = await self._request(op, msg, attached)
@@ -118,7 +167,19 @@ class PtyHost:
         finally:
             if pump is not None:
                 pump.cancel()
+            self._release(attached_id)
+            self._connections -= 1
+            self._last_connection = time.time()
             writer.close()
+
+    def _release(self, sid: str | None) -> None:
+        if sid is None:
+            return
+        left = self._attached.get(sid, 0) - 1
+        if left > 0:
+            self._attached[sid] = left
+        else:
+            self._attached.pop(sid, None)
 
     async def _request(self, op, msg: dict, attached) -> dict:
         loop = asyncio.get_running_loop()
@@ -219,8 +280,9 @@ class PtyHost:
         await writer.drain()
 
 
-def probe(key: str, timeout: float = 1.0) -> dict | None:
-    """Return the state-file info if a host for this key answers a hello."""
+def probe_state(key: str, timeout: float = 1.0) -> tuple[str, dict | None]:
+    """("up", info) if a host for this key answers a hello, ("incompatible", info)
+    if one answers but speaks another protocol version, else ("down", None)."""
     try:
         info = json.loads(host_file(key).read_text(encoding="utf-8"))
         with socket.create_connection(("127.0.0.1", int(info["port"])), timeout) as s:
@@ -234,9 +296,57 @@ def probe(key: str, timeout: float = 1.0) -> dict | None:
                 ).encode()
             )
             reply = json.loads(s.makefile("rb").readline() or b"{}")
-        return info if reply.get("ok") else None
     except (OSError, ValueError, KeyError):
-        return None
+        return "down", None
+    if reply.get("ok"):
+        return "up", info
+    if reply.get("error") == "proto":
+        return "incompatible", info
+    return "down", None
+
+
+def probe(key: str, timeout: float = 1.0) -> dict | None:
+    state, info = probe_state(key, timeout)
+    return info if state == "up" else None
+
+
+def host_command(key: str) -> list[str]:
+    return [sys.executable, str(Path(__file__).resolve()), "--key", key]
+
+
+def launch_detached(key: str, wait: float = 15.0) -> bool:
+    """Start a host that is not a descendant of the caller, wait until it answers,
+    then return. Meant to run in a short-lived launcher process (--detach): once
+    the launcher exits, the host's recorded parent is gone, so a tree kill of the
+    backend (taskkill /T, a dev script walking children) cannot reach it."""
+    log_path = host_log_file(key)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    kwargs: dict = dict(
+        stdin=subprocess.DEVNULL,
+        close_fds=True,
+        cwd=str(Path(__file__).resolve().parent),
+    )
+    with open(log_path, "ab") as log:
+        kwargs.update(stdout=log, stderr=log)
+        if os.name == "nt":
+            flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+            try:
+                # Leave the caller's job object, if it allows it.
+                proc = subprocess.Popen(
+                    host_command(key), creationflags=flags | 0x01000000, **kwargs
+                )
+            except OSError:
+                proc = subprocess.Popen(host_command(key), creationflags=flags, **kwargs)
+        else:
+            proc = subprocess.Popen(host_command(key), start_new_session=True, **kwargs)
+    deadline = time.time() + wait
+    while time.time() < deadline:
+        if probe_state(key)[0] != "down":
+            return True
+        if proc.poll() is not None:
+            return probe_state(key)[0] != "down"
+        time.sleep(0.1)
+    return False
 
 
 def _write_host_file(key: str, info: dict) -> None:
@@ -251,8 +361,19 @@ def _write_host_file(key: str, info: dict) -> None:
     os.replace(tmp, path)
 
 
+async def _reaper(host: PtyHost, stop: asyncio.Event) -> None:
+    while not stop.is_set():
+        await asyncio.sleep(_REAP_INTERVAL)
+        try:
+            if host.reap(time.time(), ORPHAN_TIMEOUT, DONE_TTL):
+                logger.info("no backend connected for %ss; exiting", ORPHAN_TIMEOUT)
+                stop.set()
+        except Exception:
+            logger.exception("reaper failed")
+
+
 async def _amain(key: str) -> None:
-    if probe(key) is not None:
+    if probe_state(key)[0] != "down":
         logger.info("a host for %s is already running; exiting", key)
         return
     token = secrets.token_hex(32)
@@ -272,10 +393,14 @@ async def _amain(key: str) -> None:
         },
     )
     logger.info("pty host %s listening on 127.0.0.1:%s pid %s", key, port, os.getpid())
+    stop = asyncio.Event()
+    reaper = asyncio.create_task(_reaper(host, stop))
     try:
         async with server:
-            await server.serve_forever()
+            await stop.wait()
     finally:
+        reaper.cancel()
+        host.close_all()
         try:
             info = json.loads(host_file(key).read_text(encoding="utf-8"))
             if info.get("pid") == os.getpid():
@@ -287,7 +412,14 @@ async def _amain(key: str) -> None:
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--key", required=True)
+    parser.add_argument(
+        "--detach",
+        action="store_true",
+        help="start a detached host, wait until it answers, and exit",
+    )
     args = parser.parse_args(argv)
+    if args.detach:
+        sys.exit(0 if launch_detached(args.key) else 1)
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",

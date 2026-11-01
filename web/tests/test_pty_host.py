@@ -277,3 +277,111 @@ def test_real_detached_host_keeps_a_session_across_a_backend_restart(
             os.kill(info["pid"], signal.SIGTERM)
         except OSError:
             pass
+
+
+def _bare_host():
+    return PtyHost(TOKEN, spawn=lambda **kwargs: _FakePty())
+
+
+def _add_session(host, sid):
+    pty = _FakePty()
+    host.sessions[sid] = PtySession(pty)
+    return pty
+
+
+def test_reap_drops_finished_sessions_only_after_the_ttl():
+    host = _bare_host()
+    live = _add_session(host, "live")
+    dead = _add_session(host, "dead")
+    dead.end()
+    assert _wait(lambda: host.sessions["dead"].done)
+    host._connections = 1  # a backend is connected, so the host itself stays
+
+    now = time.time()
+    assert host.reap(now, orphan_timeout=600, done_ttl=100) is False
+    assert "dead" in host.sessions  # the clock for it starts now
+    host.reap(now + 99, orphan_timeout=600, done_ttl=100)
+    assert "dead" in host.sessions
+    host.reap(now + 100, orphan_timeout=600, done_ttl=100)
+    assert "dead" not in host.sessions
+    assert "live" in host.sessions
+    live.end()
+
+
+def test_reap_keeps_a_finished_session_someone_is_still_attached_to():
+    host = _bare_host()
+    dead = _add_session(host, "dead")
+    dead.end()
+    assert _wait(lambda: host.sessions["dead"].done)
+    host._connections = 1
+    host._attached["dead"] = 1
+
+    now = time.time()
+    host.reap(now, orphan_timeout=600, done_ttl=10)
+    host.reap(now + 1000, orphan_timeout=600, done_ttl=10)
+    assert "dead" in host.sessions
+
+
+def test_host_asks_to_exit_only_after_no_backend_for_the_orphan_timeout():
+    host = _bare_host()
+    t0 = host._last_connection
+    assert host.reap(t0 + 599, orphan_timeout=600, done_ttl=100) is False
+    assert host.reap(t0 + 600, orphan_timeout=600, done_ttl=100) is True
+    host._connections = 1
+    assert host.reap(t0 + 10_000, orphan_timeout=600, done_ttl=100) is False
+
+
+def test_attach_counts_are_released_when_the_backend_disconnects(host):
+    info, spawned = host
+    _create(info)
+    remote = pty_client.RemotePty(info, "s1")
+    pty_client.host_request(info, {"op": "status", "id": "s1"})
+    remote.detach()
+    # a fresh attach still works after the first connection is gone
+    again = pty_client.RemotePty(info, "s1")
+    spawned[0][1].feed("x")
+    assert again.read() == "x"
+    again.detach()
+
+
+def test_a_host_speaking_another_protocol_is_reported_and_not_replaced(
+    tmp_path, monkeypatch
+):
+    import socket
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setenv("GATOR_PTY_HOST", "1")
+    key = "other-proto"
+
+    server = socket.socket()
+    server.bind(("127.0.0.1", 0))
+    server.listen(5)
+    port = server.getsockname()[1]
+
+    def serve():
+        while True:
+            try:
+                conn, _ = server.accept()
+            except OSError:
+                return
+            with conn:
+                conn.makefile("rb").readline()
+                conn.sendall(b'{"ok": false, "error": "proto", "proto": 99}\n')
+
+    threading.Thread(target=serve, daemon=True).start()
+    pty_host._write_host_file(key, {"pid": 1, "port": port, "token": TOKEN, "proto": 99})
+    launched = []
+    monkeypatch.setattr(pty_client, "_launch_host", lambda k: launched.append(k))
+    try:
+        assert pty_host.probe_state(key)[0] == "incompatible"
+        assert pty_client.ensure_host(key) is None
+        assert launched == []
+    finally:
+        server.close()
+
+
+def test_probe_state_is_down_when_there_is_no_state_file(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    assert pty_host.probe_state("nothing-here") == ("down", None)

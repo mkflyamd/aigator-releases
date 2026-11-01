@@ -15,7 +15,14 @@ import threading
 import time
 from pathlib import Path
 
-from pty_host import PROTOCOL_VERSION, host_file, host_log_file, probe
+from pty_host import (
+    PROTOCOL_VERSION,
+    host_command,
+    host_file,
+    host_log_file,
+    probe,
+    probe_state,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -30,8 +37,8 @@ class HostError(Exception):
 
 def host_enabled() -> bool:
     """GATOR_PTY_HOST=0/1 forces it off/on. By default it is on, except in frozen
-    builds (no python interpreter to launch the host with yet) and under pytest
-    (so tests never leave a detached host behind)."""
+    builds (a lingering host would hold install-dir files open and block updates)
+    and under pytest (so tests never leave a detached host behind)."""
     forced = os.environ.get("GATOR_PTY_HOST")
     if forced in ("0", "1"):
         return forced == "1"
@@ -60,38 +67,25 @@ def find_host(key: str) -> dict | None:
 
 
 def _launch_host(key: str) -> None:
-    script = str(Path(__file__).with_name("pty_host.py"))
-    log_path = host_log_file(key)
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    log = open(log_path, "ab")
-    cmd = [sys.executable, script, "--key", key]
+    """Run the short-lived --detach launcher. The host it starts is orphaned when
+    the launcher exits, so killing the backend's process tree cannot reach it."""
+    cmd = [*host_command(key)[:2], "--detach", "--key", key]
     kwargs: dict = dict(
         stdin=subprocess.DEVNULL,
-        stdout=log,
-        stderr=log,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
         cwd=str(Path(__file__).parent),
-        close_fds=True,
+        timeout=_START_TIMEOUT + 5,
     )
-    try:
-        if os.name == "nt":
-            base = (
-                subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
-            )
-            try:
-                # Leave the backend's job object so the host is not killed with it.
-                subprocess.Popen(
-                    cmd, creationflags=base | 0x01000000, **kwargs
-                )
-            except OSError:
-                subprocess.Popen(cmd, creationflags=base, **kwargs)
-        else:
-            subprocess.Popen(cmd, start_new_session=True, **kwargs)
-    finally:
-        log.close()
+    if os.name == "nt":
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+    subprocess.run(cmd, **kwargs)
 
 
 def ensure_host(key: str) -> dict | None:
-    """Connection info for this instance's host, starting it if needed."""
+    """Connection info for this instance's host, starting it if needed. None means
+    run PTYs in-process: the host could not start, or a host from another version
+    of the app is still running and speaks a different protocol."""
     info = find_host(key)
     if info is not None:
         return info
@@ -99,17 +93,17 @@ def ensure_host(key: str) -> dict | None:
         info = find_host(key)
         if info is not None:
             return info
+        if probe_state(key)[0] == "incompatible":
+            logger.warning("PTY host for %s speaks another protocol; using in-process PTYs", key)
+            return None
         try:
             _launch_host(key)
-        except OSError:
+        except (OSError, subprocess.SubprocessError):
             logger.exception("could not start the PTY host")
             return None
-        deadline = time.time() + _START_TIMEOUT
-        while time.time() < deadline:
-            info = find_host(key)
-            if info is not None:
-                return info
-            time.sleep(0.1)
+        info = find_host(key)
+        if info is not None:
+            return info
     logger.error("PTY host did not come up; see %s", host_log_file(key))
     return None
 
