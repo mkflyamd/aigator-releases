@@ -6166,18 +6166,10 @@ body.gator-chat-expanded .gator-expand-btn {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
 }
-.avail-grid-scroll::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
-}
-.avail-grid-scroll::-webkit-scrollbar-track,
-.avail-grid-scroll::-webkit-scrollbar-corner {
-  background: var(--surface2);
-}
-.avail-grid-scroll::-webkit-scrollbar-thumb {
-  background: var(--text-dim);
-  border-radius: 5px;
-  border: 2px solid var(--surface2);
+/* .messages makes scrollbar-color transparent and it inherits here; set our own so the bar shows */
+.avail-grid-scroll {
+  scrollbar-width: auto;
+  scrollbar-color: var(--text-dim) var(--surface2);
 }
 .ag-pending {
   background: var(--surface2);
@@ -6354,11 +6346,45 @@ body.gator-chat-expanded .gator-expand-btn {
   gap: 12px;
   margin-left: auto;
 }
+.avail-grid-card .gcc-header {
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+.avail-grid-card .gcc-title {
+  flex: 1 1 200px;
+  min-width: 0;
+}
 .ag-header-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 14px;
+  gap: 6px 14px;
   margin-left: auto;
+}
+.avail-grid-card .gcc-edit-link {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  width: auto;
+  min-height: 32px;
+  order: 0;
+  white-space: nowrap;
+}
+.avail-grid-card .ag-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.avail-grid-card .ag-actions .gcc-approve-btn {
+  flex: 0 0 auto;
+  width: auto;
+  white-space: nowrap;
+}
+@media (max-width: 600px) {
+  .avail-grid .ag-name {
+    width: 130px;
+    min-width: 130px;
+    max-width: 130px;
+  }
 }
 .ag-repeat {
   font-size: 0.78rem;
