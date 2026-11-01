@@ -86,6 +86,30 @@ def test_buffer_keeps_only_the_newest_chunks():
     pty.end()
 
 
+def test_offsets_are_characters_so_a_resume_can_start_mid_chunk():
+    pty = _FakePty()
+    session = PtySession(pty)
+    pty.feed("hello ")
+    pty.feed("world")
+    assert _wait(lambda: session.read_from(0)[1] == 11)
+    assert session.read_from(3) == ("lo world", 11)
+    assert session.read_from(6) == ("world", 11)
+    assert session.read_from(11) == ("", 11)
+    pty.end()
+
+
+def test_offsets_continue_from_start_offset_and_old_offsets_clamp_to_the_window():
+    pty = _FakePty()
+    session = PtySession(pty, max_chunks=2, start_offset=100)
+    for chunk in ("aaaa", "bb", "cccccc"):
+        pty.feed(chunk)
+    assert _wait(lambda: session.read_from(0)[1] == 112)
+    assert session.first_offset == 104
+    assert session.read_from(0) == ("bbcccccc", 112)
+    assert session.read_from(106) == ("cccccc", 112)
+    pty.end()
+
+
 def test_session_is_done_once_the_process_ends():
     pty = _FakePty()
     session = PtySession(pty)
@@ -108,7 +132,7 @@ def test_ws_replays_output_produced_while_no_viewer_was_connected(monkeypatch):
     terminal._pty_sessions["sess-replay"] = session
     try:
         pty.feed("printed while the browser was away")
-        assert _wait(lambda: session.read_from(0)[1] == 1)
+        assert _wait(lambda: session.read_from(0)[1] == len("printed while the browser was away"))
         with _client(monkeypatch).websocket_connect(
             "/api/terminal/agent?session_id=sess-replay"
         ) as ws:

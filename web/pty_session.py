@@ -6,6 +6,7 @@ only subscribes and reads from a sequence number; it never touches the PTY.
 """
 
 import asyncio
+import bisect
 import logging
 import threading
 import time
@@ -16,7 +17,9 @@ PTY_BUF_MAX = 5000  # max output chunks retained per session
 
 
 class PtySession:
-    def __init__(self, pty, max_chunks: int = PTY_BUF_MAX):
+    def __init__(
+        self, pty, max_chunks: int = PTY_BUF_MAX, start_offset: int = 0
+    ):
         self.pty = pty
         self.done = False
         # ws_clients / ws_disconnected_at drive is_pty_viewed(): a server is only
@@ -27,8 +30,12 @@ class PtySession:
         self.ws_clients = 0
         self.ws_disconnected_at = time.time()
         self._max_chunks = max_chunks
+        # Positions are absolute character offsets, not chunk indexes, so a
+        # buffer rebuilt from another source (the PTY host) keeps the same
+        # numbering. _starts[i] is the offset of _chunks[i]'s first character.
         self._chunks: list[str] = []
-        self._base_seq = 0
+        self._starts: list[int] = []
+        self._end = start_offset
         self._lock = threading.Lock()
         self._subs: list[tuple[asyncio.AbstractEventLoop, asyncio.Event]] = []
         self._reader = threading.Thread(
@@ -55,10 +62,12 @@ class PtySession:
     def _append(self, data: str) -> None:
         with self._lock:
             self._chunks.append(data)
+            self._starts.append(self._end)
+            self._end += len(data)
             excess = len(self._chunks) - self._max_chunks
             if excess > 0:
                 del self._chunks[:excess]
-                self._base_seq += excess
+                del self._starts[:excess]
         self._notify()
 
     def _notify(self) -> None:
@@ -70,12 +79,22 @@ class PtySession:
             except RuntimeError:
                 pass  # that viewer's event loop is already closed
 
-    def read_from(self, seq: int) -> tuple[str, int]:
-        """Return (output at or after seq, next seq). A seq older than the
-        retained window starts at the oldest retained chunk."""
+    @property
+    def first_offset(self) -> int:
+        """Offset of the oldest retained character."""
         with self._lock:
-            start = max(seq - self._base_seq, 0)
-            return "".join(self._chunks[start:]), self._base_seq + len(self._chunks)
+            return self._starts[0] if self._starts else self._end
+
+    def read_from(self, offset: int) -> tuple[str, int]:
+        """Return (output at or after offset, end offset). An offset older than
+        the retained window starts at the oldest retained character."""
+        with self._lock:
+            if not self._chunks or offset >= self._end:
+                return "", self._end
+            offset = max(offset, self._starts[0])
+            i = bisect.bisect_right(self._starts, offset) - 1
+            head = self._chunks[i][offset - self._starts[i] :]
+            return head + "".join(self._chunks[i + 1 :]), self._end
 
     def subscribe(self, loop: asyncio.AbstractEventLoop) -> asyncio.Event:
         """Event that is set whenever new output arrives or the process ends."""

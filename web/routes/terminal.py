@@ -11,12 +11,15 @@ import json
 import logging
 import os
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+import pty_client
 from pty_session import PtySession
+from pty_spawn import spawn_pty
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -62,10 +65,70 @@ def _find_venv_activate() -> str | None:
 # session_id → PtySession. Each session buffers its own output (reader thread
 # started at creation) so reconnecting clients can replay what they missed.
 _pty_sessions: dict[str, PtySession] = {}
+_adopt_lock = threading.Lock()
 
 
 def get_pty_session(session_id: str) -> PtySession | None:
-    return _pty_sessions.get(session_id)
+    """The registered session, or one adopted from the PTY host. After a backend
+    restart the registry is empty but the host still owns the PTYs, so a lookup
+    that misses asks the host before giving up. Blocking (loopback socket)."""
+    entry = _pty_sessions.get(session_id)
+    if entry is not None:
+        return entry
+    return _adopt_pty_session(session_id)
+
+
+def _adopt_pty_session(session_id: str) -> PtySession | None:
+    if not pty_client.host_enabled():
+        return None
+    with _adopt_lock:
+        entry = _pty_sessions.get(session_id)
+        if entry is not None:
+            return entry
+        info = pty_client.find_host(pty_client.instance_key())
+        if info is None:
+            return None
+        try:
+            status = pty_client.host_request(info, {"op": "status", "id": session_id})
+            if not status.get("exists"):
+                return None
+            remote = pty_client.RemotePty(info, session_id)
+        except pty_client.HostError:
+            logger.exception("could not adopt PTY session %s from the host", session_id)
+            return None
+        entry = PtySession(remote, start_offset=remote.start_offset)
+        _pty_sessions[session_id] = entry
+        return entry
+
+
+def _create_remote_pty_session(
+    session_id, cols, rows, command, env, cwd
+) -> PtySession | None:
+    info = pty_client.ensure_host(pty_client.instance_key())
+    if info is None:
+        return None
+    request = {
+        "op": "create",
+        "id": session_id,
+        "cols": cols,
+        "rows": rows,
+        "command": command,
+        # The host's own environment is stale; send the backend's current one.
+        "env": {**os.environ, **(env or {})},
+        "cwd": os.path.abspath(cwd) if cwd else None,
+    }
+    try:
+        reply = pty_client.host_request(info, request)
+        if reply.get("error") == "exists":
+            pty_client.host_request(info, {"op": "close", "id": session_id})
+            reply = pty_client.host_request(info, request)
+        if not reply.get("ok"):
+            raise RuntimeError(reply.get("error", "PTY host refused the session"))
+        remote = pty_client.RemotePty(info, session_id)
+    except pty_client.HostError:
+        logger.exception("PTY host unavailable; falling back to an in-process PTY")
+        return None
+    return PtySession(remote, start_offset=remote.start_offset)
 
 
 def create_pty_session(
@@ -79,15 +142,19 @@ def create_pty_session(
     """Spawn a PTY and register it under session_id. Returns the session.
 
     Pass `command`/`env` to run a specific process (e.g. `opencode attach`)
-    instead of a bare shell - see _spawn_pty for why direct spawn is used
+    instead of a bare shell - see pty_spawn.spawn_pty for why direct spawn is used
     instead of typing the command into a shell after the fact. `cwd` is
     unused by OpenCode's own attach (it talks to an already-running server
     over HTTP, so the PTY's working directory is irrelevant) - added for
     generic-agent CLIs (Claude Code, Codex, Crush) that operate on "the
     current directory" the way a human would after `cd`-ing into a repo.
     """
-    pty = _spawn_pty(cols=cols, rows=rows, command=command, env=env, cwd=cwd)
-    entry = PtySession(pty)
+    entry = None
+    if pty_client.host_enabled():
+        entry = _create_remote_pty_session(session_id, cols, rows, command, env, cwd)
+    if entry is None:
+        pty = spawn_pty(cols=cols, rows=rows, command=command, env=env, cwd=cwd)
+        entry = PtySession(pty)
     _pty_sessions[session_id] = entry
     return entry
 
@@ -105,7 +172,7 @@ def is_pty_alive(session_id: str) -> bool:
     """True iff a PTY registered under session_id exists and its process is still
     running. Process-liveness only — see is_pty_viewed for the reaper's stronger
     'terminal actually on-screen' signal."""
-    entry = _pty_sessions.get(session_id)
+    entry = get_pty_session(session_id)
     if not entry or entry.done:
         return False
     try:
@@ -135,7 +202,7 @@ def is_pty_viewed(session_id: str, grace_seconds: float = 90.0) -> bool:
 
 def write_pty_session(session_id: str, data: str) -> bool:
     """Write input to a named PTY. Returns False if session not found."""
-    entry = _pty_sessions.get(session_id)
+    entry = get_pty_session(session_id)
     if not entry or entry.done:
         return False
     try:
@@ -143,185 +210,6 @@ def write_pty_session(session_id: str, data: str) -> bool:
         return True
     except Exception:
         return False
-
-
-def _pick_windows_shell() -> str:
-    """Return the best available shell on Windows.
-
-    Prefer pwsh.exe (PowerShell 7) because its Clear-Host emits proper VT
-    sequences through ConPTY so `clear` works in xterm. Fall back to the
-    inbox Windows PowerShell, then cmd.exe.
-
-    Critically, REJECT Microsoft Store app-execution-alias stubs under
-    \\WindowsApps\\. When PowerShell 7 isn't installed for real, Windows still
-    exposes a zero-byte pwsh.exe reparse point there that shutil.which happily
-    returns. Launching it triggers the Store's package-resolution machinery,
-    which on a cold first invocation can stall for many seconds - long enough to
-    blow past the frontend's 30s no-output watchdog, which then kills the pane
-    and the terminal opens blank. The tell-tale symptom: the FIRST terminal of a
-    session is blank, but a second one (after the stub has warmed) works. Real
-    powershell.exe 5.1 always exists at a fixed System32 path, so falling through
-    to it is both faster and reliable. Mirrors WakeGator's rejection of the
-    \\WindowsApps\\ Python stub for the same sandbox reason.
-    """
-    import shutil
-
-    def _real(candidate: str) -> str | None:
-        path = shutil.which(candidate)
-        if not path:
-            return None
-        if "\\windowsapps\\" in path.lower():
-            return None  # Store alias stub - slow/flaky cold-launch, skip it
-        return path
-
-    for candidate in ("pwsh.exe", "powershell.exe", "cmd.exe"):
-        resolved = _real(candidate)
-        if resolved:
-            return resolved
-
-    # Last resort: the inbox PowerShell at its fixed, always-present location,
-    # then COMSPEC. Never returns a bare name that could re-resolve to a stub.
-    system_root = os.environ.get("SystemRoot", r"C:\Windows")
-    inbox_ps = os.path.join(
-        system_root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"
-    )
-    if os.path.exists(inbox_ps):
-        return inbox_ps
-    return os.environ.get("COMSPEC", "cmd.exe")
-
-
-def _spawn_pty(
-    cols: int,
-    rows: int,
-    command: list[str] | None = None,
-    env: dict | None = None,
-    cwd: str | None = None,
-):
-    """Spawn a PTY. Returns a uniform object exposing read/write/resize/close/isalive.
-
-    Runs a bare shell by default (the manual terminal). Pass `command` to run
-    a specific process directly instead — used by the OpenCode terminal to
-    run `opencode attach ...` as the PTY's actual process, rather than typing
-    that command into a shell after the fact. Direct spawn is the reliable
-    option: no dependency on shell-prompt timing, no risk of the command
-    landing in the wrong place if the shell isn't ready yet. `cwd` defaults to
-    None (inherit this process's cwd, exactly today's behavior) for every
-    existing caller - only generic-agent spawns pass it explicitly.
-    """
-    if sys.platform == "win32":
-        from winpty import PtyProcess
-
-        if command:
-            # env=<partial dict> would REPLACE the child's entire environment,
-            # not extend it - found via real testing: passing just
-            # {"OPENCODE_SERVER_PASSWORD": ...} produced a near-silent,
-            # barely-rendering process (missing PATH and everything else a
-            # real program needs). Merge onto the current environment instead,
-            # matching what _PosixPty already does correctly below.
-            proc_env = {**os.environ, **env} if env else None
-            proc = PtyProcess.spawn(
-                command, dimensions=(rows, cols), env=proc_env, cwd=cwd
-            )
-        else:
-            # Prefer PowerShell 7 (pwsh.exe) — its Clear-Host emits proper VT
-            # sequences through ConPTY, so `clear` actually clears the xterm
-            # viewport. Fall back to Windows PowerShell 5.1, then cmd.exe.
-            shell = _pick_windows_shell()
-            proc = PtyProcess.spawn([shell], dimensions=(rows, cols), cwd=cwd)
-        return _WinPtyAdapter(proc)
-    else:
-        return _PosixPty(cols, rows, command=command, env=env, cwd=cwd)
-
-
-class _WinPtyAdapter:
-    def __init__(self, proc):
-        self._p = proc
-
-    def read(self, n: int = 4096) -> str:
-        # pywinpty.read returns str (decoded utf-8 with replacement)
-        return self._p.read(n)
-
-    def write(self, data: str) -> None:
-        self._p.write(data)
-
-    def resize(self, cols: int, rows: int) -> None:
-        self._p.setwinsize(rows, cols)
-
-    def isalive(self) -> bool:
-        return self._p.isalive()
-
-    def close(self) -> None:
-        try:
-            self._p.terminate(force=True)
-        except Exception:
-            pass
-
-
-class _PosixPty:
-    def __init__(
-        self,
-        cols: int,
-        rows: int,
-        command: list[str] | None = None,
-        env: dict | None = None,
-        cwd: str | None = None,
-    ):
-        import fcntl
-        import pty
-        import struct
-        import subprocess
-        import termios
-
-        self._pty = pty
-        self._fcntl = fcntl
-        self._termios = termios
-        self._struct = struct
-
-        master, slave = pty.openpty()
-        # set initial size
-        fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
-
-        argv = command if command else [os.environ.get("SHELL", "/bin/bash")]
-        proc_env = {**os.environ, **env} if env else None
-        self._proc = subprocess.Popen(
-            argv,
-            stdin=slave,
-            stdout=slave,
-            stderr=slave,
-            preexec_fn=os.setsid,
-            close_fds=True,
-            env=proc_env,
-            cwd=cwd,
-        )
-        os.close(slave)
-        self._master = master
-
-    def read(self, n: int = 4096) -> str:
-        data = os.read(self._master, n)
-        return data.decode("utf-8", errors="replace")
-
-    def write(self, data: str) -> None:
-        os.write(self._master, data.encode("utf-8"))
-
-    def resize(self, cols: int, rows: int) -> None:
-        self._fcntl.ioctl(
-            self._master,
-            self._termios.TIOCSWINSZ,
-            self._struct.pack("HHHH", rows, cols, 0, 0),
-        )
-
-    def isalive(self) -> bool:
-        return self._proc.poll() is None
-
-    def close(self) -> None:
-        try:
-            self._proc.terminate()
-        except Exception:
-            pass
-        try:
-            os.close(self._master)
-        except Exception:
-            pass
 
 
 @router.websocket("/api/terminal/agent")
@@ -334,7 +222,9 @@ async def agent_terminal_ws(ws: WebSocket, session_id: str):
 
     Same message protocol as /api/terminal/ws.
     """
-    entry = _pty_sessions.get(session_id)
+    entry = await asyncio.get_running_loop().run_in_executor(
+        None, get_pty_session, session_id
+    )
     if not entry:
         # NOT an exit: the PTY either hasn't been created yet (the client can
         # race the spawn, which squats a pool slot for ~15-20s) or it was
@@ -459,7 +349,7 @@ async def terminal_ws(ws: WebSocket):
 
     # Initial dimensions — client should send a resize immediately after connect,
     # but seed with sane defaults so the shell can start.
-    pty = _spawn_pty(cols=80, rows=24)
+    pty = spawn_pty(cols=80, rows=24)
     loop = asyncio.get_running_loop()
     stop = asyncio.Event()
 
