@@ -17746,10 +17746,21 @@ function _continueRequestText(lastUserText, retryNote) {
   return `${lastUserText}\n\n${retryNote}`;
 }
 
-// Puts the Allow button in focus so Enter approves, unless the user is mid-draft in the chat box.
+// Puts the Allow button in focus so Enter approves. Focus is left alone when the user is typing in
+// any editable field (the chat box counts only when it holds a draft), and Enter/Space are ignored
+// for the first 700 ms so a keypress already in flight cannot approve a card the user has not read.
 function _focusApprovalButton(btn) {
-  const input = document.getElementById('chat-input');
-  if (input && document.activeElement === input && input.textContent.trim()) return;
+  const chatInput = document.getElementById('chat-input');
+  const active = document.activeElement;
+  const typing =
+    active && (active.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName || ''));
+  if (typing && !(active === chatInput && !chatInput.textContent.trim())) return;
+  const armedAt = Date.now() + 700;
+  const hold = (e) => {
+    if ((e.key === 'Enter' || e.key === ' ') && Date.now() < armedAt) e.preventDefault();
+  };
+  btn.addEventListener('keydown', hold);
+  btn.addEventListener('keyup', hold);
   btn.dataset.defaultAction = '1';
   btn.focus({ preventScroll: true });
 }

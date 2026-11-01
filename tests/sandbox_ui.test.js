@@ -128,6 +128,7 @@ function walk(el, out = []) {
 function makeEnv(activeTab) {
   const messages = makeEl('div');
   const input = makeEl('div');
+  input.isContentEditable = true;
   const form = makeEl('form');
   form.submits = 0;
   form.sent = [];
@@ -160,6 +161,8 @@ function makeEnv(activeTab) {
     _pendingSandboxCards: new Map(),
     _tabsWithUpdates: new Set(),
     setTimeout,
+    Date,
+    RegExp,
     Map,
     _showConnectivityToast: (msg, type) => toasts.push({ msg, type }),
     fetch: async (url, opts) => {
@@ -236,6 +239,36 @@ const flush = async () => {
     'footer states the tab-long lifetime',
   );
   assert.strictEqual(buttons[0].focused, true, 'Allow is focused so Enter approves');
+  // A keypress already in flight must not approve a card that just appeared.
+  let prevented = 0;
+  buttons[0].listeners.keydown({ key: 'Enter', preventDefault: () => prevented++ });
+  assert.strictEqual(prevented, 1, 'Enter is ignored right after the card appears');
+  buttons[0].listeners.keydown({ key: 'a', preventDefault: () => prevented++ });
+  assert.strictEqual(prevented, 1, 'other keys are untouched');
+  // Focus is not taken from an editable field the user is typing in.
+  const typingEnv = makeEnv('tab-1');
+  typingEnv.ctx.document.activeElement = { tagName: 'INPUT' };
+  typingEnv.ctx._showSandboxApproval({ ...card, request_id: 'req-typing' }, 'tab-1');
+  assert(
+    !walk(typingEnv.messages).some((e) => e.tag === 'button' && e.focused),
+    'no focus theft from an input',
+  );
+  // An empty chat box does not block focus; a draft does.
+  const emptyEnv = makeEnv('tab-1');
+  emptyEnv.ctx.document.activeElement = emptyEnv.input;
+  emptyEnv.ctx._showSandboxApproval({ ...card, request_id: 'req-empty' }, 'tab-1');
+  assert(
+    walk(emptyEnv.messages).some((e) => e.tag === 'button' && e.focused),
+    'empty chat box still gets the Allow focus',
+  );
+  const draftEnv = makeEnv('tab-1');
+  draftEnv.input.textContent = 'half-typed message';
+  draftEnv.ctx.document.activeElement = draftEnv.input;
+  draftEnv.ctx._showSandboxApproval({ ...card, request_id: 'req-draft' }, 'tab-1');
+  assert(
+    !walk(draftEnv.messages).some((e) => e.tag === 'button' && e.focused),
+    'a draft in the chat box keeps focus',
+  );
   await buttons[0].listeners.click({ stopPropagation() {} });
   await flush();
   assert.strictEqual(env.fetches.length, 1);
