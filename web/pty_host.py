@@ -329,7 +329,10 @@ def launch_detached(key: str, wait: float = 15.0) -> bool:
     with open(log_path, "ab") as log:
         kwargs.update(stdout=log, stderr=log)
         if os.name == "nt":
-            flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+            # Not DETACHED_PROCESS: the venv python.exe stub would then start the
+            # real interpreter with no console to inherit, and Windows opens a
+            # visible one (a stray Windows Terminal tab).
+            flags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
             try:
                 # Leave the caller's job object, if it allows it.
                 proc = subprocess.Popen(
