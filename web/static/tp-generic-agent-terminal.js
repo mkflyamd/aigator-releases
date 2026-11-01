@@ -995,7 +995,9 @@ function _genAgentConnect(sess, retryDelay) {
     '//' +
     location.host +
     '/api/terminal/agent?session_id=' +
-    encodeURIComponent(sess.ptySessionId);
+    encodeURIComponent(sess.ptySessionId) +
+    '&seq=' +
+    (sess._outputSeq || 0);
   const wasRetrying = !!retryDelay;
 
   sess.ws = new WebSocket(url);
@@ -1022,6 +1024,9 @@ function _genAgentConnect(sess, retryDelay) {
       return;
     }
     if (msg.type === 'output') {
+      // Position in the PTY's output stream, so a reconnect resumes after what
+      // this terminal already shows instead of replaying the whole buffer.
+      if (typeof msg.seq === 'number') sess._outputSeq = msg.seq;
       sess._outputChars = (sess._outputChars || 0) + String(msg.data || '').length;
       const hasVisibleOutput = _genAgentIsVisibleOutput(msg.data);
       // A WebSocket opening only proves it reached the backend. Keep retrying

@@ -137,11 +137,44 @@ def test_ws_replays_output_produced_while_no_viewer_was_connected(monkeypatch):
             "/api/terminal/agent?session_id=sess-replay"
         ) as ws:
             msg = json.loads(ws.receive_text())
-            assert msg == {"type": "output", "data": "printed while the browser was away"}
+            replayed = "printed while the browser was away"
+            assert msg == {"type": "output", "data": replayed, "seq": len(replayed)}
             pty.feed("live")
-            assert json.loads(ws.receive_text()) == {"type": "output", "data": "live"}
+            assert json.loads(ws.receive_text()) == {
+                "type": "output",
+                "data": "live",
+                "seq": len(replayed) + 4,
+            }
     finally:
         terminal._pty_sessions.pop("sess-replay", None)
+        pty.end()
+
+
+def test_ws_resumes_after_the_clients_seq_instead_of_replaying_everything(monkeypatch):
+    pty = _FakePty()
+    session = PtySession(pty)
+    terminal._pty_sessions["sess-resume"] = session
+    try:
+        pty.feed("already shown|")
+        pty.feed("missed")
+        assert _wait(lambda: session.read_from(0)[1] == 20)
+        client = _client(monkeypatch)
+        with client.websocket_connect(
+            "/api/terminal/agent?session_id=sess-resume&seq=14"
+        ) as ws:
+            assert json.loads(ws.receive_text()) == {
+                "type": "output",
+                "data": "missed",
+                "seq": 20,
+            }
+        # a seq from some other stream (past this one's end) starts over
+        with client.websocket_connect(
+            "/api/terminal/agent?session_id=sess-resume&seq=9999"
+        ) as ws:
+            msg = json.loads(ws.receive_text())
+            assert msg["data"] == "already shown|missed"
+    finally:
+        terminal._pty_sessions.pop("sess-resume", None)
         pty.end()
 
 

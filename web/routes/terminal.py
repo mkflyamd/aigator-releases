@@ -213,7 +213,7 @@ def write_pty_session(session_id: str, data: str) -> bool:
 
 
 @router.websocket("/api/terminal/agent")
-async def agent_terminal_ws(ws: WebSocket, session_id: str):
+async def agent_terminal_ws(ws: WebSocket, session_id: str, seq: int = 0):
     """Named PTY WebSocket for coding agent sessions.
 
     Connects to an existing named PTY (created by the code agent route).
@@ -244,6 +244,7 @@ async def agent_terminal_ws(ws: WebSocket, session_id: str):
     loop = asyncio.get_running_loop()
     stop = asyncio.Event()
     already_done = entry.done
+    start_seq = seq
 
     # Mark this terminal as on-screen (a live viewer) for the reaper's
     # is_pty_viewed check. Decremented + timestamped in the finally below so a
@@ -259,9 +260,11 @@ async def agent_terminal_ws(ws: WebSocket, session_id: str):
 
     async def pump_pty_to_ws():
         # The session's own reader thread fills the buffer; this only forwards
-        # it. Starting at seq 0 replays what a reconnecting client missed.
+        # it. Starting at the client's last seen seq replays just what it missed;
+        # a fresh terminal (no seq) gets the whole buffer.
         wake = entry.subscribe(loop)
-        seq = 0
+        # A seq past the stream's end belongs to a different stream: start over.
+        seq = start_seq if start_seq <= entry.read_from(start_seq)[1] else 0
         try:
             while not stop.is_set():
                 wake.clear()
@@ -269,7 +272,9 @@ async def agent_terminal_ws(ws: WebSocket, session_id: str):
                 data, seq = entry.read_from(seq)
                 if data:
                     try:
-                        await ws.send_text(json.dumps({"type": "output", "data": data}))
+                        await ws.send_text(
+                            json.dumps({"type": "output", "data": data, "seq": seq})
+                        )
                     except Exception:
                         return
                 if finished:
