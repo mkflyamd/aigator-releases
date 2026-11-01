@@ -36,7 +36,13 @@ assert.strictEqual(
   'Tuesday, Jan 8, 5:30 PM – 6:30 PM (Pacific Standard Time)',
 );
 
-const composeUrl = load('_availabilityGridComposeUrl');
+const slotTimes = load('_availabilityGridSlotTimes');
+assert.deepStrictEqual(
+  { ...slotTimes(grid, 1, 19) },
+  { start: '2030-01-08T17:30:00', end: '2030-01-08T18:00:00' },
+);
+
+const composeUrl = load('_availabilityGridComposeUrl', { _availabilityGridSlotTimes: slotTimes });
 const url = new URL(
   composeUrl(
     {
@@ -60,7 +66,11 @@ assert.strictEqual(url.searchParams.get('enddt'), '2030-01-08T18:00:00');
 assert.strictEqual(url.searchParams.get('to'), 'sherry@example.com;james@example.com');
 
 assert(/msg\.availability_grid\)\s*\{\s*_showAvailabilityGrid\(/.test(source), 'SSE handler wired');
-assert(/fetch\('\/api\/calendar\/availability-days'/.test(source), 'later weeks calls the route');
+assert(/postGridJson\('\/api\/calendar\/availability-days'/.test(source), 'later weeks calls the route');
+assert(
+  /postGridJson\('\/api\/calendar\/grid-draft-series'/.test(source),
+  'a repeating pick opens a draft series made by the server',
+);
 const fits = load('_availabilityGridFits');
 const open = '0'.repeat(16) + '1'.repeat(20) + '0'.repeat(12);
 const busyAt = (slot) => 'f'.repeat(slot) + 'b' + 'f'.repeat(47 - slot);

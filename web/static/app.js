@@ -10131,16 +10131,21 @@ function _availabilityGridSlotText(grid, dayIndex, slotIndex) {
   return `${dayText}, ${_availabilityGridClock(begin)} – ${_availabilityGridClock(end)} (${grid.timezone})`;
 }
 
-function _availabilityGridComposeUrl(grid, dayIndex, slotIndex) {
+function _availabilityGridSlotTimes(grid, dayIndex, slotIndex) {
   const date = grid.days[dayIndex].date;
   const at = (minute) =>
     `${date}T${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}:00`;
   const begin = grid.first_minute + slotIndex * grid.step_minutes;
+  return { start: at(begin), end: at(begin + grid.duration_minutes) };
+}
+
+function _availabilityGridComposeUrl(grid, dayIndex, slotIndex) {
+  const times = _availabilityGridSlotTimes(grid, dayIndex, slotIndex);
   const query = {
     path: '/calendar/action/compose',
     rru: 'addevent',
-    startdt: at(begin),
-    enddt: at(begin + grid.duration_minutes),
+    startdt: times.start,
+    enddt: times.end,
     to: grid.people
       .filter((p) => !p.you && p.email)
       .map((p) => p.email)
@@ -10775,7 +10780,10 @@ function _showAvailabilityGrid(grid, ownerTabId) {
   actions.append(openOutlook, use);
   footer.append(chosen, actions);
 
-  const panel = _availabilityGridRepeatPanel(() => syncUse());
+  const panel = _availabilityGridRepeatPanel(() => {
+    syncUse();
+    syncOutlookLink();
+  });
   panel.setStart(grid.days[0].date);
   if (repeat.value !== 'none') {
     panel.setType(repeat.value, repeatPreset);
@@ -10813,10 +10821,11 @@ function _showAvailabilityGrid(grid, ownerTabId) {
 
   function syncOutlookLink() {
     const repeating = repeat.value !== 'none';
-    openOutlook.classList.toggle('ag-link-disabled', !pickedAt || repeating);
-    openOutlook.textContent = repeating
-      ? 'Repeating: use Open in Outlook on the draft after you pick a time'
-      : 'Open in Outlook';
+    openOutlook.classList.toggle('ag-link-disabled', !pickedAt || (repeating && !panel.valid()));
+    openOutlook.textContent = 'Open in Outlook';
+    openOutlook.title = repeating
+      ? 'Creates the repeating meeting as an unsent draft in Outlook; you send it from there'
+      : '';
   }
   repeat.addEventListener('change', () => {
     panel.el.classList.toggle('hidden', repeat.value === 'none');
@@ -10843,14 +10852,23 @@ function _showAvailabilityGrid(grid, ownerTabId) {
   }
 
   async function postAvailability(payload) {
+    return (
+      await postGridJson('/api/calendar/availability-days', {
+        duration_minutes: grid.duration_minutes,
+        ...payload,
+      })
+    ).days;
+  }
+
+  async function postGridJson(url, payload) {
     const post = () =>
-      fetch('/api/calendar/availability-days', {
+      fetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'X-CSRF-Token': window.__CSRF_TOKEN__ || '',
         },
-        body: JSON.stringify({ duration_minutes: grid.duration_minutes, ...payload }),
+        body: JSON.stringify(payload),
       });
     let res = await post();
     if (res.status === 403) {
@@ -10864,7 +10882,7 @@ function _showAvailabilityGrid(grid, ownerTabId) {
       const err = await res.json().catch(() => ({}));
       throw new Error(typeof err.detail === 'string' ? err.detail : 'HTTP ' + res.status);
     }
-    return (await res.json()).days;
+    return res.json();
   }
 
   hours.addEventListener('click', (e) => {
@@ -11050,15 +11068,31 @@ function _showAvailabilityGrid(grid, ownerTabId) {
   openOutlook.addEventListener('click', async (e) => {
     e.preventDefault();
     e.stopPropagation();
-    if (!pickedAt || repeat.value !== 'none') return;
-    const url = _availabilityGridComposeUrl(grid, pickedAt.di, pickedAt.k);
+    if (!pickedAt || openOutlook.classList.contains('ag-link-disabled')) return;
+    let url;
     try {
+      if (repeat.value === 'none') {
+        url = _availabilityGridComposeUrl(grid, pickedAt.di, pickedAt.k);
+      } else {
+        openOutlook.classList.add('ag-link-disabled');
+        openOutlook.textContent = 'Creating the draft series…';
+        const others = grid.people.filter((p) => !p.you && p.email);
+        ({ url } = await postGridJson('/api/calendar/grid-draft-series', {
+          ..._availabilityGridSlotTimes(grid, pickedAt.di, pickedAt.k),
+          timezone: grid.timezone,
+          attendees: others.filter((p) => !p.optional).map((p) => p.email),
+          optional_attendees: others.filter((p) => p.optional).map((p) => p.email),
+          repeat: panel.spec(),
+        }));
+        openOutlook.textContent = 'Draft series opened in Outlook';
+      }
       if (typeof window.gatorShell !== 'undefined' && window.gatorShell.openOutlookCompose) {
         await window.gatorShell.openOutlookCompose(url);
       } else {
         window.open(url, '_blank', 'noopener');
       }
     } catch (err) {
+      if (!url) syncOutlookLink();
       _showConnectivityToast("Couldn't open in Outlook: " + (err?.message || err), 'warn');
     }
   });
