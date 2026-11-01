@@ -90,6 +90,8 @@ assert(
   'Open button shown next to Send, including recurring drafts (opened as a draft series)',
 );
 
+assert(!/Send from Outlook instead/.test(source), 'handoff keeps the Send invite label');
+
 // Recurring drafts show the real repeat rule, not just "Yes".
 assert.strictEqual(
   recurrenceText({
@@ -150,5 +152,8 @@ assert(
   /\.gcc-approve-btn,\s*\.gcc-open-outlook-btn \{/.test(css),
   'Open button follows the compact rules',
 );
+
+// Send invite is the filled primary button; Open in Outlook is the outlined secondary one.
+assert(/background: transparent/.test(rule('\\.gcc-open-outlook-btn')), 'Open button is outlined');
 
 console.log('calendar_draft_card ok');

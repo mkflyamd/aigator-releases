@@ -12408,8 +12408,9 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
         openCalendarBtn.classList.add('gcc-handed-off');
         jiraEditFields.forEach((el) => (el.disabled = true));
         approveBtn.disabled = true;
-        approveBtn.textContent = 'Send from Outlook instead';
         approveBtn.classList.add('gcc-handed-off');
+        const refine = card.querySelector('.gcc-refine');
+        if (refine) refine.textContent = 'Opened in Outlook. Press Send there to invite attendees.';
       } catch (err) {
         openCalendarBtn.textContent = config.openLabel;
         openCalendarBtn.disabled = false;
