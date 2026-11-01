@@ -16,8 +16,13 @@ function load(name, stubs = {}) {
 const escapeHtml = load('escapeHtml');
 const when = load('_calendarDraftWhen', { escapeHtml });
 const recurrenceText = load('_calendarRecurrenceText');
+const bodyText = load('_calendarBodyText');
+const jiraEditSeed = load('_jiraEditSeed');
+const editRow = load('_jiraEditRow', { escapeHtml, _jiraEditSeed: jiraEditSeed });
 const rows = load('_buildCalendarDraftRows', {
   escapeHtml,
+  _jiraEditRow: editRow,
+  _calendarBodyText: bodyText,
   _calendarDraftWhen: when,
   _calendarRecurrenceText: recurrenceText,
 });
@@ -42,6 +47,31 @@ assert(html.includes('A@x.com') && html.includes('10:30 PM – 11:00 PM IST'), h
 assert(html.includes('c@z.com') && html.includes('(optional)'), html);
 assert(html.includes('Room &lt;4&gt;'), 'location is escaped');
 assert(html.includes('Teams meeting') && html.includes('Yes'), html);
+
+// Title and Message are editable boxes seeded with the draft's values; the body shows as text.
+assert(/<input[^>]*data-jira-edit="subject"[^>]*value="Sync"/.test(html), html);
+assert(/<textarea[^>]*data-jira-edit="body"/.test(html), html);
+const bodied = rows({
+  subject: 'S',
+  start: '2026-11-02T09:00:00',
+  end: '2026-11-02T09:30:00',
+  body: '<p>Agenda &amp; notes</p><ul><li>One</li><li>Two</li></ul>',
+});
+assert(
+  /<textarea[^>]*data-jira-edit="body"[^>]*>Agenda &amp; notes\n- One\n- Two<\/textarea>/.test(
+    bodied,
+  ),
+  bodied,
+);
+
+assert.strictEqual(bodyText('plain & simple'), 'plain & simple');
+assert.strictEqual(bodyText('Line<br>two'), 'Line\ntwo');
+assert.strictEqual(
+  bodyText('<style>p{}</style><div>Hi&nbsp;there</div><div>&lt;ok&gt;</div>'),
+  'Hi there\n<ok>',
+);
+assert.strictEqual(bodyText(''), '');
+assert.strictEqual(bodyText(null), '');
 
 // Afternoon times and an unparsable start fall back sensibly.
 assert(

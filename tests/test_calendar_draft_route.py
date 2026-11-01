@@ -1,6 +1,7 @@
 from unittest.mock import MagicMock, patch
 from urllib.parse import parse_qs, urlparse
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app import app
@@ -149,3 +150,87 @@ def test_calendar_draft_opened_in_outlook_cannot_also_be_sent():
     with patch("skills._m365.helpers.get_cal_client", side_effect=AssertionError("no Graph call")):
         res = _post(client, f"/api/drafts/{did}/approve")
     assert res.status_code == 409
+
+
+def _post_edits(client, path, edits):
+    return client.post(
+        path, headers={"X-CSRF-Token": get_csrf_token("testserver")}, json={"edited_fields": edits}
+    )
+
+
+def test_approving_applies_the_edited_title_and_message_as_plain_text():
+    client = TestClient(app)
+    did = _draft()
+    gc = MagicMock()
+    gc.post.return_value = {"id": "evt1"}
+    edits = {"subject": "  Kickoff  ", "body": "Agenda <b>first</b>\nthen Q&A"}
+    with patch("skills._m365.helpers.get_cal_client", return_value=gc):
+        res = _post_edits(client, f"/api/drafts/{did}/approve", edits)
+    assert res.status_code == 200
+    _, event = gc.post.call_args.args
+    assert event["subject"] == "Kickoff"
+    assert event["body"] == {"contentType": "text", "content": "Agenda <b>first</b>\nthen Q&A"}
+
+
+def test_approving_with_only_a_title_edit_leaves_the_message_untouched():
+    client = TestClient(app)
+    did = _draft()
+    gc = MagicMock()
+    gc.post.return_value = {"id": "evt1"}
+    with patch("skills._m365.helpers.get_cal_client", return_value=gc):
+        res = _post_edits(client, f"/api/drafts/{did}/approve", {"subject": "Kickoff"})
+    assert res.status_code == 200
+    _, event = gc.post.call_args.args
+    assert event["subject"] == "Kickoff"
+    assert event["body"] == {"contentType": "HTML", "content": PARAMS["body"]}
+
+
+def test_open_in_outlook_uses_the_edited_title_and_message():
+    client = TestClient(app)
+    did = _draft()
+    res = _post_edits(client, f"/api/drafts/{did}/open-in-outlook", {"subject": "Kickoff", "body": "Hello"})
+    assert res.status_code == 200
+    q = parse_qs(urlparse(res.json()["url"]).query)
+    assert q["subject"] == ["Kickoff"] and q["body"] == ["Hello"]
+
+
+def test_open_in_outlook_series_uses_the_edited_title_and_message():
+    client = TestClient(app)
+    did = _recurring_draft()
+    gc = MagicMock()
+    gc.post.return_value = {"id": "evt1", "webLink": "https://outlook.office365.com/owa/?itemid=evt1"}
+    with patch("skills._m365.helpers.get_cal_client", return_value=gc):
+        res = _post_edits(client, f"/api/drafts/{did}/open-in-outlook", {"subject": "Kickoff", "body": "Hello"})
+    assert res.status_code == 200
+    _, event = gc.post.call_args.args
+    assert event["subject"] == "Kickoff"
+    assert event["body"] == {"contentType": "text", "content": "Hello"}
+
+
+@pytest.mark.parametrize(
+    "edits",
+    [
+        {"subject": "   "},
+        {"subject": "two\nlines"},
+        {"subject": "x" * 256},
+        {"body": "x" * 32769},
+        {"body": 5},
+        {"location": "Room 9"},
+    ],
+)
+@pytest.mark.parametrize("route", ["approve", "open-in-outlook"])
+def test_invalid_edits_are_rejected_and_the_draft_stays_pending(edits, route):
+    client = TestClient(app)
+    did = _draft()
+    with patch("skills._m365.helpers.get_cal_client", side_effect=AssertionError("no Graph call")):
+        res = _post_edits(client, f"/api/drafts/{did}/{route}", edits)
+    assert res.status_code == 400
+    assert get_draft(did)["status"] == "pending"
+
+
+def test_edited_fields_that_are_not_an_object_are_rejected():
+    client = TestClient(app)
+    did = _draft()
+    res = _post_edits(client, f"/api/drafts/{did}/approve", ["subject"])
+    assert res.status_code == 400
+    assert get_draft(did)["status"] == "pending"

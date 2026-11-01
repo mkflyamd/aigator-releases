@@ -9778,6 +9778,26 @@ function _calendarRecurrenceText(rec) {
   return text;
 }
 
+// A draft's HTML body as plain text for the editable message box.
+function _calendarBodyText(html) {
+  const text = String(html || '');
+  if (!/<\w+[^>]*>/.test(text)) return text;
+  return text
+    .replace(/<(style|script)[\s\S]*?<\/\1>/gi, '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<li[^>]*>/gi, '- ')
+    .replace(/<\/(p|div|li|h[1-6]|tr|ul|ol)>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, '&')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 function _buildCalendarDraftRows(data) {
   const local = data.attendee_local || {};
   const person = (email, optional) => {
@@ -9794,19 +9814,28 @@ function _buildCalendarDraftRows(data) {
     .map((a) => person(a, false))
     .concat((data.optional_attendees || []).map((a) => person(a, true)))
     .join('');
-  const rows = [['When', _calendarDraftWhen(data)]];
+  const rows = [
+    ['Title', _jiraEditRow('subject', 'Title', data.subject || '', 'line'), 'edit'],
+    ['When', _calendarDraftWhen(data)],
+  ];
   if (attendees) rows.push(['Attendees', attendees]);
   if (data.location) rows.push(['Location', escapeHtml(data.location)]);
   rows.push(['Teams meeting', data.teams ? 'Yes' : 'No']);
   if (data.recurrence) rows.push(['Repeats', escapeHtml(_calendarRecurrenceText(data.recurrence))]);
+  rows.push([
+    'Message',
+    _jiraEditRow('body', 'Message', _calendarBodyText(data.body), 'text'),
+    'edit',
+  ]);
   return rows
-    .map(
-      ([k, v]) =>
-        '<div class="gcc-field-row"><span class="gcc-field-key">' +
-        escapeHtml(k) +
-        '</span><span class="gcc-field-val">' +
-        v +
-        '</span></div>',
+    .map(([k, v, edit]) =>
+      edit
+        ? v
+        : '<div class="gcc-field-row"><span class="gcc-field-key">' +
+          escapeHtml(k) +
+          '</span><span class="gcc-field-val">' +
+          v +
+          '</span></div>',
     )
     .join('');
 }
@@ -12210,7 +12239,7 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
   const _editableBody = teamsSeed ? teamsSeed.text : fullBody;
   const bodySnippet = escapeHtml(fullBody.slice(0, 200));
   const recipientInfo = data.to || data.channel || data.recipient || data.channels || '';
-  const subjectLine = data.subject || '';
+  const subjectLine = type === 'calendar-event' ? '' : data.subject || '';
   const workspaceLine =
     config.service === 'slack' && data.workspace_name
       ? `<div class="gcc-workspace">Slack · ${escapeHtml(data.workspace_name)}</div>`
@@ -12342,10 +12371,20 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
       openCalendarBtn.disabled = true;
       openCalendarBtn.textContent = 'Opening…';
       try {
+        const editedFields = {};
+        jiraEditFields.forEach((el) => {
+          if (el.value !== el.dataset.orig) editedFields[el.dataset.jiraEdit] = el.value;
+        });
         const postOpen = () =>
           fetch('/api/drafts/' + draftId + '/open-in-outlook', {
             method: 'POST',
-            headers: { 'X-CSRF-Token': window.__CSRF_TOKEN__ || '' },
+            headers: {
+              'Content-Type': 'application/json',
+              'X-CSRF-Token': window.__CSRF_TOKEN__ || '',
+            },
+            body: JSON.stringify(
+              Object.keys(editedFields).length ? { edited_fields: editedFields } : {},
+            ),
           });
         let res = await postOpen();
         if (res.status === 403) {
@@ -12367,6 +12406,7 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
         }
         openCalendarBtn.textContent = 'Opened in Outlook ↗';
         openCalendarBtn.classList.add('gcc-handed-off');
+        jiraEditFields.forEach((el) => (el.disabled = true));
         approveBtn.disabled = true;
         approveBtn.textContent = 'Send from Outlook instead';
         approveBtn.classList.add('gcc-handed-off');

@@ -223,6 +223,34 @@ def _apply_jira_edits(draft: dict, body: dict | None) -> None:
             p[name] = text
 
 
+_CALENDAR_EDIT_MAX_LEN = {"subject": 255, "body": 32768}
+
+
+def _calendar_edits(body: dict | None) -> dict:
+    """Validates the title and message edits made on a meeting draft card and returns them as params."""
+    edits = (body or {}).get("edited_fields")
+    if edits is None:
+        return {}
+    if not isinstance(edits, dict):
+        raise HTTPException(status_code=400, detail="Edited fields must be an object.")
+    unknown = sorted(set(edits) - set(_CALENDAR_EDIT_MAX_LEN))
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"Field(s) not editable on a meeting draft: {', '.join(unknown)}.")
+    out: dict = {}
+    for name, raw in edits.items():
+        if not isinstance(raw, str):
+            raise HTTPException(status_code=400, detail=f"Edited {name} must be text.")
+        text = raw.strip()
+        if len(text) > _CALENDAR_EDIT_MAX_LEN[name]:
+            raise HTTPException(status_code=400, detail=f"Edited {name} is too long.")
+        if name == "subject" and (not text or "\n" in text):
+            raise HTTPException(status_code=400, detail="Title must be a single line and cannot be empty.")
+        out[name] = text
+        if name == "body":
+            out["body_plain"] = True
+    return out
+
+
 def _direct_read_issue(target, issue_key: str, fields: str = "*all") -> dict:
     from skills.jira.api import jira_api_for_target
     return jira_api_for_target(target, "GET", f"issue/{issue_key}?fields={fields}")
@@ -327,7 +355,10 @@ async def approve_draft(draft_id: str, body: dict = None):
     try:
         dtype = draft["type"]
         p = draft["params"]
-        _apply_jira_edits(draft, body)
+        if dtype == "calendar-event":
+            p.update(_calendar_edits(body))
+        else:
+            _apply_jira_edits(draft, body)
 
         # â”€â”€ Email â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         if dtype == "email-reply":
@@ -1032,7 +1063,7 @@ def _calendar_event_payload(params: dict) -> dict:
         event["attendees"] = attendees
     body = params.get("body") or ""
     if body:
-        is_html = bool(re.search(r"<\w+[^>]*>", body))
+        is_html = not params.get("body_plain") and bool(re.search(r"<\w+[^>]*>", body))
         event["body"] = {"contentType": "HTML" if is_html else "text", "content": body}
     if params.get("location"):
         event["location"] = {"displayName": params["location"]}
@@ -1117,6 +1148,8 @@ async def open_draft_in_outlook(draft_id: str, body: dict = None):
             detail=f"Open-in-Outlook not supported for draft type '{dtype}'.",
         )
 
+    calendar_edits = _calendar_edits(body) if dtype == "calendar-event" else {}
+
     claimed = claim_for_handoff(draft_id)
     if claimed is not None:
         await _sync_task_draft_status(draft_id, "handing_off")
@@ -1135,6 +1168,7 @@ async def open_draft_in_outlook(draft_id: str, body: dict = None):
             )
         raise HTTPException(status_code=404, detail="Draft not found or expired.")
     p = claimed["params"]
+    p.update(calendar_edits)
 
     if dtype == "calendar-event" and p.get("recurrence"):
         # Outlook's compose link cannot carry a recurrence, so the series is
