@@ -1166,35 +1166,72 @@ function createWindow() {
   });
 
   gatorView.webContents.loadURL(GATOR_URL);
-  // A failed main-frame load (backend restarting, or not up yet) shows a
-  // "Reconnecting" page and reloads Gator as soon as /health answers, instead of
-  // stranding the window on a dead page that needs a manual restart.
+  // When the backend is unreachable, show a "Reconnecting" page and reload Gator
+  // as soon as /health answers, instead of stranding the window on a dead page.
   let reconnecting = false;
+  const reconnectGator = (detail) => {
+    if (reconnecting) return;
+    reconnecting = true;
+    gatorView.webContents.loadURL(
+      'data:text/html;charset=utf-8,' +
+        encodeURIComponent(
+          '<!doctype html><html><body style="font:16px system-ui;padding:32px;background:#111827;color:#f8fafc">' +
+            '<h1>Reconnecting to AI Gator&hellip;</h1><p>The local backend is not responding. ' +
+            'This window reloads automatically when it is back.</p><p style="color:#94a3b8">' +
+            String(detail) +
+            '</p></body></html>',
+        ),
+    );
+    waitForBackend(() => {
+      reconnecting = false;
+      if (gatorView && !gatorView.webContents.isDestroyed()) {
+        gatorView.webContents.loadURL(GATOR_URL);
+      }
+    }, Infinity);
+  };
   gatorView.webContents.on(
     'did-fail-load',
     (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
-      if (isMainFrame === false || errorCode === -3 || reconnecting) return;
-      reconnecting = true;
-      gatorView.webContents.loadURL(
-        'data:text/html;charset=utf-8,' +
-          encodeURIComponent(
-            '<!doctype html><html><body style="font:16px system-ui;padding:32px;background:#111827;color:#f8fafc">' +
-              '<h1>Reconnecting to AI Gator&hellip;</h1><p>The local backend is not responding. ' +
-              'This window reloads automatically when it is back.</p><p style="color:#94a3b8">' +
-              String(errorDescription) +
-              ' (' +
-              String(errorCode) +
-              ')</p></body></html>',
-          ),
-      );
-      waitForBackend(() => {
-        reconnecting = false;
-        if (gatorView && !gatorView.webContents.isDestroyed()) {
-          gatorView.webContents.loadURL(GATOR_URL);
-        }
-      }, Infinity);
+      if (isMainFrame === false || errorCode === -3) return;
+      reconnectGator(`${errorDescription} (${errorCode})`);
     },
   );
+  // A page that is already loaded gets no did-fail-load when the backend goes
+  // away, so watch /health too. A restart shorter than the grace period (a dev
+  // hot-reload, a quick tray restart) is left alone so the page keeps its state.
+  const HEALTH_POLL_MS = 3000;
+  const HEALTH_GRACE_FAILURES = 5;
+  let healthFailures = 0;
+  const healthTimer = setInterval(() => {
+    if (!gatorView || gatorView.webContents.isDestroyed()) {
+      clearInterval(healthTimer);
+      return;
+    }
+    if (reconnecting) return;
+    // Only a refused/reset connection counts: a slow answer means a busy backend,
+    // and reloading would not help it.
+    let timedOut = false;
+    const req = http.get(
+      GATOR_URL.replace(/\/$/, '') + '/health',
+      { timeout: 5000 },
+      (response) => {
+        response.resume();
+        healthFailures = 0;
+      },
+    );
+    req.on('timeout', () => {
+      timedOut = true;
+      req.destroy();
+    });
+    req.on('error', () => {
+      if (timedOut) return;
+      healthFailures += 1;
+      if (healthFailures >= HEALTH_GRACE_FAILURES) {
+        healthFailures = 0;
+        reconnectGator('The backend stopped responding.');
+      }
+    });
+  }, HEALTH_POLL_MS);
   // Dismiss the splash screen once the Gator page has finished loading.
   // The page's own #gator-splash (renderer-side prefetch) takes over from here.
   gatorView.webContents.once('did-finish-load', () => {
