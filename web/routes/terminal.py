@@ -66,6 +66,7 @@ def _find_venv_activate() -> str | None:
 # started at creation) so reconnecting clients can replay what they missed.
 _pty_sessions: dict[str, PtySession] = {}
 _adopt_lock = threading.Lock()
+_ADOPT_REPLAY_TIMEOUT = 5.0
 
 
 def get_pty_session(session_id: str) -> PtySession | None:
@@ -97,6 +98,10 @@ def _adopt_pty_session(session_id: str) -> PtySession | None:
             logger.exception("could not adopt PTY session %s from the host", session_id)
             return None
         entry = PtySession(remote, start_offset=remote.start_offset)
+        # The host replays its retained output into the new buffer on a reader
+        # thread. A client resuming at its last seq must not see a short stream
+        # end and mistake it for a different stream, so wait for the replay.
+        entry.wait_for_offset(remote.end_offset, _ADOPT_REPLAY_TIMEOUT)
         _pty_sessions[session_id] = entry
         return entry
 

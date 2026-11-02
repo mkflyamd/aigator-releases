@@ -385,3 +385,106 @@ def test_probe_state_is_down_when_there_is_no_state_file(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     assert pty_host.probe_state("nothing-here") == ("down", None)
+
+
+def _api_client(monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from skills.code_agent import projects
+
+    monkeypatch.setattr(projects, "_load_config", lambda: {})
+    monkeypatch.setattr(projects, "_save_config", lambda cfg: None)
+    app = FastAPI()
+    app.include_router(terminal.router)
+    return TestClient(app)
+
+
+def test_adoption_waits_for_the_host_replay_so_a_resuming_client_keeps_its_seq(
+    host, monkeypatch
+):
+    info, spawned = host
+    _create(info, sid="sess-resume")
+    pty = spawned[0][1]
+    pty.feed("already shown|")
+    pty.feed("missed")
+
+    # The replay reaches the new backend slowly; adoption must still not return
+    # a session whose buffer is shorter than what the client has already seen.
+    real_read = pty_client.RemotePty.read
+
+    def slow_read(self, n=4096):
+        time.sleep(0.2)
+        return real_read(self, n)
+
+    monkeypatch.setattr(pty_client.RemotePty, "read", slow_read)
+    monkeypatch.setattr(pty_client, "host_enabled", lambda: True)
+    monkeypatch.setattr(pty_client, "find_host", lambda key: info)
+    terminal._pty_sessions.pop("sess-resume", None)
+    try:
+        with _api_client(monkeypatch).websocket_connect(
+            "/api/terminal/agent?session_id=sess-resume&seq=14"
+        ) as ws:
+            assert json.loads(ws.receive_text()) == {
+                "type": "output",
+                "data": "missed",
+                "seq": 20,
+            }
+    finally:
+        terminal._pty_sessions.pop("sess-resume", None)
+        pty.end()
+
+
+def test_failed_adoption_does_not_register_a_session(host, monkeypatch):
+    info, _ = host
+    monkeypatch.setattr(pty_client, "host_enabled", lambda: True)
+    monkeypatch.setattr(pty_client, "find_host", lambda key: info)
+
+    def refuse(info, msg):
+        raise pty_client.HostError("host went away")
+
+    monkeypatch.setattr(pty_client, "host_request", refuse)
+    terminal._pty_sessions.pop("sess-gone", None)
+    assert terminal.get_pty_session("sess-gone") is None
+    assert "sess-gone" not in terminal._pty_sessions
+
+
+def test_generic_agent_route_spawns_off_the_event_loop(monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    import generic_agent
+    from routes import generic_agent_routes
+    from security import verify_csrf
+
+    seen = {}
+
+    def fake_create(session_id, **kwargs):
+        try:
+            asyncio.get_running_loop()
+            seen["on_loop"] = True
+        except RuntimeError:
+            seen["on_loop"] = False
+        seen["kwargs"] = kwargs
+
+    monkeypatch.setattr(terminal, "create_pty_session", fake_create)
+    monkeypatch.setattr(generic_agent, "is_supported", lambda agent: True)
+    monkeypatch.setattr(generic_agent, "is_bare_terminal", lambda agent: True)
+    monkeypatch.setattr(generic_agent, "set_active_session", lambda *a: None)
+    app = FastAPI()
+    app.include_router(generic_agent_routes.router)
+    app.dependency_overrides[verify_csrf] = lambda: None
+    reply = TestClient(app).post(
+        "/api/generic-agent/terminal",
+        json={
+            "project_id": "p",
+            "agent": "bash",
+            "repo_path": ".",
+            "force_new": True,
+            "cols": 90,
+            "rows": 30,
+        },
+    )
+    assert reply.status_code == 200 and reply.json()["created"] is True
+    assert seen["on_loop"] is False
+    assert seen["kwargs"]["cols"] == 90 and seen["kwargs"]["rows"] == 30

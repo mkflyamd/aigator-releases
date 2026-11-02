@@ -37,6 +37,7 @@ class PtySession:
         self._starts: list[int] = []
         self._end = start_offset
         self._lock = threading.Lock()
+        self._caught_up = threading.Condition(self._lock)
         self._subs: list[tuple[asyncio.AbstractEventLoop, asyncio.Event]] = []
         self._reader = threading.Thread(
             target=self._read_loop, name="pty-reader", daemon=True
@@ -56,7 +57,9 @@ class PtySession:
         except Exception:
             logger.exception("pty reader failed")
         finally:
-            self.done = True
+            with self._lock:
+                self.done = True
+                self._caught_up.notify_all()
             self._notify()
 
     def _append(self, data: str) -> None:
@@ -68,7 +71,15 @@ class PtySession:
             if excess > 0:
                 del self._chunks[:excess]
                 del self._starts[:excess]
+            self._caught_up.notify_all()
         self._notify()
+
+    def wait_for_offset(self, offset: int, timeout: float) -> bool:
+        """Block until the buffer reaches offset (or the process ends)."""
+        with self._caught_up:
+            return self._caught_up.wait_for(
+                lambda: self._end >= offset or self.done, timeout
+            )
 
     def _notify(self) -> None:
         with self._lock:

@@ -232,7 +232,9 @@ class PtyHost:
         # Subscribe before the first read so output arriving in between is not lost.
         wake = session.subscribe(loop)
         data, end = session.read_from(int(msg.get("offset", 0) or 0))
-        await self._send(writer, {"ok": True, "start": end - len(data)})
+        await self._send(
+            writer, {"ok": True, "start": end - len(data), "end": end}
+        )
         return asyncio.create_task(self._pump(session, wake, data, end, writer))
 
     async def _pump(self, session, wake, data, end, writer) -> None:

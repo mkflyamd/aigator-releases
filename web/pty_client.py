@@ -168,6 +168,7 @@ class RemotePty:
             self._sock.close()
             raise HostError(f"attach failed: {reply.get('error')}")
         self.start_offset = int(reply["start"])
+        self.end_offset = int(reply.get("end", self.start_offset))
         self._sock.settimeout(None)
 
     def read(self, n: int = 4096) -> str:
