@@ -161,6 +161,7 @@ def _office_cases(folder):
         (pp.TOOL_HANDLERS["create_pptx"], {"file_path": target, "slides": []}),
         (pp.TOOL_HANDLERS["read_pptx"], {"file_path": target}),
         (od.TOOL_HANDLERS["download_onedrive_file"], {"file_id": "x", "local_path": target}),
+        (od.TOOL_HANDLERS["file_upload"], {"local_path": target, "dest_drive_id": "d", "dest_folder_id": "f"}),
         (pp.TOOL_HANDLERS["pptx_replace_picture"], {"file_path": target, "slide_locator": 1, "picture_locator": 1, "new_image_path": "x.png"}),
         (pp.TOOL_HANDLERS["pptx_replace_picture"], {"file_path": os.path.join(folder, "..", "a.pptx"), "slide_locator": 1, "picture_locator": 1, "new_image_path": target}),
     ]
