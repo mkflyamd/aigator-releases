@@ -199,7 +199,7 @@ TOOL_DEFS = [
     },
     {
         "name": "draft_calendar_event",
-        "description": "Create a meeting draft card. Nothing is sent until the user presses Send invite, or Open in Outlook to review, edit and send it from Outlook. Call this as soon as the user confirms the meeting details (time, subject, attendees). Do not ask for confirmation more than once.",
+        "description": "Create a meeting draft card. Every meeting gets a Teams link automatically, including in-person ones; do not ask about it. Nothing is sent until the user presses Send invite, or Open in Outlook to review, edit and send it from Outlook. Call this as soon as the user confirms the meeting details (time, subject, attendees). Do not ask for confirmation more than once.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -227,11 +227,6 @@ TOOL_DEFS = [
                     "description": "Meeting description or agenda. ALWAYS use HTML so Outlook recipients can reply with rich formatting. Use <ul><li>...</li></ul> for bullets, <br> for line breaks, <a href='...'>text</a> for links. HTML is detected automatically and sent as HTML contentType.",
                 },
                 "location": {"type": "string", "description": "Optional location name"},
-                "teams": {
-                    "type": "boolean",
-                    "description": "If true, adds a Microsoft Teams meeting link",
-                    "default": False,
-                },
                 "recurrence": {
                     "type": "object",
                     "description": "Graph recurrence object ({pattern, range}). Leave blank for one-off meetings.",
@@ -514,7 +509,6 @@ def _tool_draft_calendar_event(
     optional_attendees: list = None,
     body: str = "",
     location: str = "",
-    teams: bool = False,
     recurrence: dict | None = None,
 ) -> dict:
     from .._drafts import create_draft
@@ -541,7 +535,7 @@ def _tool_draft_calendar_event(
         "optional_attendees": optional,
         "body": body,
         "location": location,
-        "teams": bool(teams),
+        "teams": True,
         "recurrence": recurrence,
     }
     draft_id = create_draft(

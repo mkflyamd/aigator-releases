@@ -30,7 +30,7 @@ def client(monkeypatch):
 
 def _draft(**kw):
     args = dict(subject="Sync", start="2026-11-02T09:00:00", end="2026-11-02T09:30:00",
-                attendees=['"A@x.com"; b@y.com'], body="Agenda", teams=True)
+                attendees=['"A@x.com"; b@y.com'], body="Agenda")
     args.update(kw)
     return cal._tool_draft_calendar_event(**args)
 
@@ -49,6 +49,12 @@ def test_draft_is_stored_and_returned(client):
     assert p["subject"] == "Sync" and p["attendees"] == ["A@x.com", "b@y.com"]
     assert p["timezone"] == "Pacific Standard Time" and p["teams"] is True
     assert out["data"]["attendee_local"]["a@x.com"] == "10:30 PM – 11:00 PM IST"
+
+
+def test_every_draft_gets_a_teams_link_and_the_model_cannot_turn_it_off(client):
+    props = next(t for t in cal.TOOL_DEFS if t["name"] == "draft_calendar_event")["input_schema"]["properties"]
+    assert "teams" not in props
+    assert get_draft(_draft(location="Room 4")["data"]["draft_id"])["params"]["teams"] is True
 
 
 def test_html_body_is_kept(client):
