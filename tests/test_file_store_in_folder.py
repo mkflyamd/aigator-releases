@@ -1,5 +1,7 @@
 import hashlib
 
+import pytest
+
 from skills._m365 import file_transfer as ft
 
 
@@ -100,3 +102,72 @@ def test_unsafe_characters_in_name_are_sanitised(tmp_path):
     ft.store_in_folder(gc, ft.file_source(str(f), name='q3: "plan".txt'), "d", "f")
     assert "%22" not in gc.put_paths[0] and "%3A" not in gc.put_paths[0]
     assert "/q3_%20_plan_.txt:/content" in gc.put_paths[0]
+
+
+class RealisticGC(FakeGC):
+    """Mimics GraphClient._request: an empty headers dict is replaced by the bearer headers."""
+
+    def __init__(self, fail_on_chunk=False):
+        super().__init__()
+        self.fail_on_chunk = fail_on_chunk
+        self.sent = []
+
+    def _request(self, method, url, headers=None, content=None, label=""):
+        hdrs = headers or {"Authorization": "Bearer aigator-fake-api-key"}
+        self.sent.append((method, url, hdrs))
+        if method == "DELETE":
+            return Resp({})
+        if self.fail_on_chunk:
+            raise Err(500, "boom")
+        return Resp({"id": "N2", "name": "big.bin", "size": 1, "webUrl": "https://od/big.bin"})
+
+
+def _delete_calls(gc):
+    return [c for c in gc.sent if c[0] == "DELETE"]
+
+
+def test_cancel_after_chunk_failure_sends_no_authorization(tmp_path, monkeypatch):
+    monkeypatch.setattr(ft, "SIMPLE_UPLOAD_MAX", 4)
+    monkeypatch.setattr(ft, "CHUNK", 4)
+    f = tmp_path / "big.bin"
+    f.write_bytes(b"0123456789")
+    gc = RealisticGC(fail_on_chunk=True)
+    out = ft.store_in_folder(gc, ft.file_source(str(f)), "d", "f")
+    assert out["status"] == "error" and out["error"] == "transfer_failed"
+    deletes = _delete_calls(gc)
+    assert len(deletes) == 1
+    assert deletes[0][1] == "https://upload.example/s1"
+    assert "Authorization" not in deletes[0][2]
+
+
+def test_cancel_after_source_size_mismatch_sends_no_authorization(tmp_path, monkeypatch):
+    monkeypatch.setattr(ft, "SIMPLE_UPLOAD_MAX", 4)
+    monkeypatch.setattr(ft, "CHUNK", 4)
+    f = tmp_path / "big.bin"
+    f.write_bytes(b"0123456789")
+    source = ft.file_source(str(f))
+    source.size = 12  # the file is shorter than declared, so the session is abandoned
+    gc = RealisticGC()
+    out = ft.store_in_folder(gc, source, "d", "f")
+    assert out["status"] == "error" and out["error"] == "source_size_mismatch"
+    deletes = _delete_calls(gc)
+    assert len(deletes) == 1
+    assert "Authorization" not in deletes[0][2]
+
+
+@pytest.mark.parametrize("bad", ["replace", "rename&x=1", "fail\n", ""])
+def test_unsupported_on_conflict_is_rejected_before_any_call(tmp_path, bad):
+    f = tmp_path / "a.txt"
+    f.write_bytes(b"x")
+    gc = FakeGC()
+    with pytest.raises(ValueError):
+        ft.store_in_folder(gc, ft.file_source(str(f)), "d", "f", on_conflict=bad)
+    assert gc.put_paths == [] and gc.sessions == []
+
+
+def test_fail_conflict_is_accepted(tmp_path):
+    f = tmp_path / "a.txt"
+    f.write_bytes(b"x")
+    gc = FakeGC()
+    ft.store_in_folder(gc, ft.file_source(str(f)), "d", "f", on_conflict="fail")
+    assert gc.put_paths[0].endswith("conflictBehavior=fail")
