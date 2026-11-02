@@ -133,7 +133,7 @@ TOOL_DEFS = [
     },
     {
         "name": "update_calendar_event",
-        "description": "Update an existing calendar event in place (reschedule, rename, adjust location/attendees) and send the appropriate update. Prefer this over cancelling and recreating when the user says 'reschedule' or 'move this meeting'.",
+        "description": "Stage an edit to an existing calendar event (reschedule, rename, adjust location/attendees). It shows an approval card with the before/after and changes nothing until the user presses Send update; do not tell the user it was updated. Prefer this over cancelling and recreating when the user says 'reschedule' or 'move this meeting'.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -1472,6 +1472,106 @@ def _normalize_local_datetime(dt_str: str, target_tz) -> str:
         return dt_str
 
 
+_UPDATE_READ_FIELDS = "subject,start,end,location,attendees,isOnlineMeeting,isOrganizer,type,webLink,recurrence"
+
+
+def _attendee_people(entries: list) -> dict:
+    people = {}
+    for entry in entries or []:
+        who = entry.get("emailAddress") or {}
+        address = (who.get("address") or "").strip()
+        if address:
+            people[address.lower()] = {
+                "email": address,
+                "name": who.get("name") or "",
+                "type": entry.get("type") or "required",
+            }
+    return people
+
+
+def _attendee_diff(before: list, after: list) -> dict:
+    old, new = _attendee_people(before), _attendee_people(after)
+    return {
+        "added": [p for key, p in new.items() if key not in old],
+        "removed": [p for key, p in old.items() if key not in new],
+        "moved": [
+            {"email": p["email"], "name": p["name"], "from": old[key]["type"], "to": p["type"]}
+            for key, p in new.items()
+            if key in old and old[key]["type"] != p["type"]
+        ],
+    }
+
+
+def _build_calendar_update(
+    event: dict,
+    win_tz: str,
+    subject: str = "",
+    start: str = "",
+    end: str = "",
+    location: str = "",
+    body: str = "",
+    attendees: list = None,
+    optional_attendees: list = None,
+    teams: bool | None = None,
+    recurrence: dict | None = None,
+    response_requested: bool | None = None,
+) -> dict:
+    """The Graph PATCH payload for the requested edits, with unchanged fields left out."""
+    local_tz = datetime.now().astimezone().tzinfo
+    payload = {}
+
+    if subject and subject != (event.get("subject") or ""):
+        payload["subject"] = subject
+
+    for key, value in (("start", start), ("end", end)):
+        if not value:
+            continue
+        wanted = _normalize_local_datetime(value, local_tz)
+        if wanted[:19] != ((event.get(key) or {}).get("dateTime") or "")[:19]:
+            payload[key] = {"dateTime": wanted, "timeZone": win_tz}
+
+    if location and location != ((event.get("location") or {}).get("displayName") or ""):
+        payload["location"] = {"displayName": location}
+
+    if body:
+        is_html = bool(re.search(r"<\w+[^>]*>", body))
+        payload["body"] = {"contentType": "HTML" if is_html else "text", "content": body}
+
+    entries = []
+    seen = set()
+    for addresses, kind in ((attendees, "required"), (optional_attendees, "optional")):
+        for email in _parse_email_list(addresses):
+            email = email.strip()
+            if email and email.lower() not in seen:
+                entries.append({"emailAddress": {"address": email}, "type": kind})
+                seen.add(email.lower())
+    if entries:
+        # Graph replaces the whole attendees array, so carry over the type the caller left out.
+        keep = {"required": not attendees, "optional": not optional_attendees, "resource": True}
+        for entry in event.get("attendees") or []:
+            who = entry.get("emailAddress") or {}
+            address = (who.get("address") or "").strip()
+            if address and address.lower() not in seen and keep.get(entry.get("type"), False):
+                entries.append({"emailAddress": who, "type": entry["type"]})
+                seen.add(address.lower())
+        diff = _attendee_diff(event.get("attendees"), entries)
+        if diff["added"] or diff["removed"] or diff["moved"]:
+            payload["attendees"] = entries
+
+    if teams is True and not event.get("isOnlineMeeting"):
+        payload["isOnlineMeeting"] = True
+        payload["onlineMeetingProvider"] = "teamsForBusiness"
+    elif teams is False and event.get("isOnlineMeeting"):
+        payload["isOnlineMeeting"] = False
+        payload["onlineMeetingProvider"] = "unknown"
+
+    if response_requested is not None:
+        payload["responseRequested"] = bool(response_requested)
+    if recurrence is not None:
+        payload["recurrence"] = recurrence
+    return payload
+
+
 def _tool_update_calendar_event(
     event_id: str,
     subject: str = "",
@@ -1486,120 +1586,108 @@ def _tool_update_calendar_event(
     send_updates: str = "All",
     response_requested: bool | None = None,
 ) -> dict:
-    """Reschedule or edit an existing event in place."""
+    """Stage an edit to an existing event as a draft card. Nothing changes until the user approves it."""
+    from .._drafts import create_draft
     from .._m365.helpers import get_cal_client
     from .helpers import get_user_win_tz
 
     gc = get_cal_client()
     win_tz = get_user_win_tz()
-    local_tz = datetime.now().astimezone().tzinfo
-
-    update_payload = {}
-
-    if subject:
-        update_payload["subject"] = subject
-
-    if start:
-        update_payload["start"] = {
-            "dateTime": _normalize_local_datetime(start, local_tz),
-            "timeZone": win_tz,
-        }
-    if end:
-        update_payload["end"] = {
-            "dateTime": _normalize_local_datetime(end, local_tz),
-            "timeZone": win_tz,
-        }
-
-    if location:
-        update_payload["location"] = {"displayName": location}
-
-    if body:
-        is_html = bool(re.search(r"<\w+[^>]*>", body))
-        update_payload["body"] = {
-            "contentType": "HTML" if is_html else "text",
-            "content": body,
-        }
-
-    attendee_entries = []
-    seen_addresses = set()
-
-    def _append(addresses, att_type):
-        for email in _parse_email_list(addresses):
-            email = email.strip()
-            if not email:
-                continue
-            key = email.lower()
-            if key in seen_addresses:
-                continue
-            attendee_entries.append(
-                {
-                    "emailAddress": {"address": email},
-                    "type": att_type,
-                }
-            )
-            seen_addresses.add(key)
-
-    _append(attendees, "required")
-    _append(optional_attendees, "optional")
-
-    if attendee_entries:
-        # Graph replaces the whole attendees array, so carry over the type the caller left out.
-        try:
-            current = gc.get(f"/me/events/{_eid(event_id)}", {"$select": "attendees"}).get("attendees") or []
-        except Exception as ex:
-            return {"updated": False, "error": f"Unable to read the current attendees, so nothing was changed: {ex}"}
-        keep = {"required": not attendees, "optional": not optional_attendees, "resource": True}
-        for entry in current:
-            address = ((entry.get("emailAddress") or {}).get("address") or "").strip()
-            if not address or address.lower() in seen_addresses or not keep.get(entry.get("type"), False):
-                continue
-            attendee_entries.append({"emailAddress": entry["emailAddress"], "type": entry["type"]})
-            seen_addresses.add(address.lower())
-        update_payload["attendees"] = attendee_entries
-
-    if teams is True:
-        update_payload["isOnlineMeeting"] = True
-        update_payload["onlineMeetingProvider"] = "teamsForBusiness"
-    elif teams is False:
-        update_payload["isOnlineMeeting"] = False
-        update_payload["onlineMeetingProvider"] = "unknown"
-
-    if response_requested is not None:
-        update_payload["responseRequested"] = bool(response_requested)
-    if recurrence is not None:
-        update_payload["recurrence"] = recurrence
-
-    if not update_payload:
-        return {"updated": False, "note": "No changes provided."}
-
-    normalized_send_updates = _normalize_send_updates(send_updates)
     try:
-        gc.patch(
-            f"/me/events/{_eid(event_id)}?sendUpdates={normalized_send_updates}",
-            update_payload,
+        event = gc.get(
+            f"/me/events/{_eid(event_id)}",
+            {"$select": _UPDATE_READ_FIELDS},
+            extra_headers={"Prefer": f'outlook.timezone="{win_tz}"'},
         )
     except Exception as ex:
-        return {"updated": False, "error": f"Unable to update event: {ex}"}
+        return {"updated": False, "error": f"Unable to read the event, so nothing was changed: {ex}"}
+    if not event.get("isOrganizer", True):
+        return {
+            "updated": False,
+            "error": "You can only edit meetings you organize. Ask the organizer to update the invite.",
+        }
 
-    try:
-        refreshed = gc.get(
-            f"/me/events/{_eid(event_id)}",
-            {
-                "$select": "subject,start,end,location,attendees,isOnlineMeeting,onlineMeetingUrl"
-            },
+    payload = _build_calendar_update(
+        event, win_tz, subject, start, end, location, body,
+        attendees, optional_attendees, teams, recurrence, response_requested,
+    )
+    if not payload:
+        return {"updated": False, "note": "The event already matches those values. Nothing to change."}
+
+    before = {
+        "start": ((event.get("start") or {}).get("dateTime") or "")[:19],
+        "end": ((event.get("end") or {}).get("dateTime") or "")[:19],
+        "subject": event.get("subject", ""),
+        "location": (event.get("location") or {}).get("displayName", ""),
+        "teams": bool(event.get("isOnlineMeeting")),
+    }
+    after = {
+        "start": (payload.get("start") or {}).get("dateTime", before["start"])[:19],
+        "end": (payload.get("end") or {}).get("dateTime", before["end"])[:19],
+        "subject": payload.get("subject", before["subject"]),
+        "location": (payload.get("location") or {}).get("displayName", before["location"]),
+        "teams": payload.get("isOnlineMeeting", before["teams"]),
+    }
+    diff = _attendee_diff(event.get("attendees"), payload.get("attendees", event.get("attendees")))
+    scope = {"seriesMaster": "series", "occurrence": "occurrence", "exception": "occurrence"}.get(event.get("type"), "single")
+    changed = [
+        name
+        for name, hit in (
+            ("subject", "subject" in payload),
+            ("when", "start" in payload or "end" in payload),
+            ("location", "location" in payload),
+            ("body", "body" in payload),
+            ("attendees", "attendees" in payload),
+            ("teams", "isOnlineMeeting" in payload),
+            ("recurrence", "recurrence" in payload),
+            ("response", "responseRequested" in payload),
         )
+        if hit
+    ]
+    card = {
+        "event_id": event_id,
+        "subject": before["subject"],
+        "scope": scope,
+        "timezone": win_tz,
+        "before": before,
+        "after": after,
+        "changed": changed,
+        "added": diff["added"],
+        "removed": diff["removed"],
+        "moved": diff["moved"],
+        "recurrence": payload.get("recurrence"),
+        "notify": _normalize_send_updates(send_updates),
+        "web_link": event.get("webLink") or "",
+    }
+    draft_id = create_draft(
+        draft_type="calendar-update",
+        params={**card, "payload": payload},
+        preview={"subject": before["subject"], "attendees": [p["email"] for p in diff["added"]]},
+    )
+    return {
+        "_draft": "calendar-update",
+        "data": {**card, "draft_id": draft_id},
+        "_user_message": "Meeting update ready. Press Send update to apply it, or Open in Outlook to change it there. Nothing has been changed yet.",
+    }
+
+
+def apply_calendar_update(event_id: str, payload: dict, send_updates: str = "All") -> dict:
+    """PATCH an approved update onto the event and read it back. Raises if Graph refuses."""
+    from .._m365.helpers import get_cal_client
+
+    gc = get_cal_client()
+    gc.patch(f"/me/events/{_eid(event_id)}?sendUpdates={_normalize_send_updates(send_updates)}", payload)
+    try:
+        refreshed = gc.get(f"/me/events/{_eid(event_id)}", {"$select": "subject,start,end,attendees"})
     except Exception:
         refreshed = {}
-
     return {
         "updated": True,
         "event_id": event_id,
-        "subject": refreshed.get("subject", subject),
+        "subject": refreshed.get("subject", ""),
         "start": (refreshed.get("start") or {}).get("dateTime", ""),
         "end": (refreshed.get("end") or {}).get("dateTime", ""),
-        "location": (refreshed.get("location") or {}).get("displayName", ""),
-        "attendee_count": len(refreshed.get("attendees") or attendee_entries),
-        "online_meeting": (refreshed.get("onlineMeetingUrl") or ""),
+        "attendee_count": len(refreshed.get("attendees") or []),
     }
 
 

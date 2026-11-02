@@ -9840,6 +9840,77 @@ function _buildCalendarDraftRows(data) {
     .join('');
 }
 
+function _buildCalendarUpdateRows(data) {
+  const before = data.before || {};
+  const after = data.after || {};
+  const changed = data.changed || [];
+  const has = (k) => changed.includes(k);
+  const zone = data.timezone;
+  const person = (p, suffix) => {
+    const who = p.name && p.name !== p.email ? p.name + ' (' + p.email + ')' : p.email;
+    return '<div>' + escapeHtml(who) + (suffix ? ' <em>' + escapeHtml(suffix) + '</em>' : '') + '</div>';
+  };
+  const kind = (t) => (t === 'optional' ? 'optional' : t === 'resource' ? 'room' : 'required');
+  const change = (from, to) =>
+    '<div><s>' + escapeHtml(from || 'None') + '</s></div><div>' + escapeHtml(to || 'None') + '</div>';
+  const rows = [];
+  rows.push(['Event', escapeHtml(data.subject || '')]);
+  rows.push([
+    'Applies to',
+    data.scope === 'series'
+      ? 'Whole series'
+      : data.scope === 'occurrence'
+        ? 'This occurrence only'
+        : 'This meeting',
+  ]);
+  if (has('when')) {
+    rows.push([
+      'When',
+      '<div><s>' +
+        _calendarDraftWhen({ start: before.start, end: before.end, timezone: zone }) +
+        '</s></div><div>' +
+        _calendarDraftWhen({ start: after.start, end: after.end, timezone: zone }) +
+        '</div>',
+    ]);
+  }
+  if (has('subject')) rows.push(['Title', change(before.subject, after.subject)]);
+  if (has('location')) rows.push(['Location', change(before.location, after.location)]);
+  if (has('teams')) rows.push(['Teams meeting', after.teams ? 'Add' : 'Remove']);
+  if (has('attendees')) {
+    if ((data.added || []).length)
+      rows.push(['Adding', data.added.map((p) => person(p, kind(p.type) === 'required' ? '' : kind(p.type))).join('')]);
+    if ((data.removed || []).length)
+      rows.push(['Removing', data.removed.map((p) => person(p, kind(p.type))).join('')]);
+    if ((data.moved || []).length)
+      rows.push([
+        'Moving',
+        data.moved.map((p) => person(p, kind(p.from) + ' → ' + kind(p.to))).join(''),
+      ]);
+  }
+  if (has('body')) rows.push(['Message', 'Replaced with new text']);
+  if (has('recurrence') && data.recurrence)
+    rows.push(['Repeats', escapeHtml(_calendarRecurrenceText(data.recurrence))]);
+  if (has('response')) rows.push(['Responses', 'Request changed']);
+  rows.push([
+    'Notify',
+    data.notify === 'None'
+      ? 'No one is emailed'
+      : data.notify === 'ExternalGuestsOnly'
+        ? 'External guests only'
+        : 'Everyone on the invite',
+  ]);
+  return rows
+    .map(
+      ([k, v]) =>
+        '<div class="gcc-field-row"><span class="gcc-field-key">' +
+        escapeHtml(k) +
+        '</span><span class="gcc-field-val">' +
+        v +
+        '</span></div>',
+    )
+    .join('');
+}
+
 function _buildJiraFieldRows(data, editable = {}) {
   const rows = [];
   if (data.jira_site?.display_name || data.jira_site?.base_url) {
@@ -12086,6 +12157,21 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
       footerNote: 'Nothing is sent until you press Send invite.',
       customBody: _buildCalendarDraftRows(data),
     },
+    'calendar-update': {
+      paneLabel: '@outlook',
+      paneIcon: '\uD83D\uDCC5',
+      service: 'calendar',
+      action: 'Meeting update',
+      hideEditLink: true,
+      title: 'Meeting update ready',
+      sendLabel: 'Send update',
+      openButton: true,
+      openLabel: 'Open in Outlook',
+      footerNote: 'Nothing changes until you press Send update.',
+      handoffNote: 'Opened in Outlook. Nothing was changed.',
+      applyWording: true,
+      customBody: _buildCalendarUpdateRows(data),
+    },
     'email-send': {
       paneLabel: '@outlook',
       paneIcon: '\u2709\uFE0F',
@@ -12246,7 +12332,7 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
   const _editableBody = teamsSeed ? teamsSeed.text : fullBody;
   const bodySnippet = escapeHtml(fullBody.slice(0, 200));
   const recipientInfo = data.to || data.channel || data.recipient || data.channels || '';
-  const subjectLine = type === 'calendar-event' ? '' : data.subject || '';
+  const subjectLine = type === 'calendar-event' || type === 'calendar-update' ? '' : data.subject || '';
   const workspaceLine =
     config.service === 'slack' && data.workspace_name
       ? `<div class="gcc-workspace">Slack · ${escapeHtml(data.workspace_name)}</div>`
@@ -12372,7 +12458,8 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
   });
 
   const openCalendarBtn = card.querySelector('.gcc-open-outlook-btn');
-  const _applyWording = config.hideEditLink && config.service !== 'calendar';
+  const _applyWording =
+    config.applyWording || (config.hideEditLink && config.service !== 'calendar');
   if (openCalendarBtn) {
     openCalendarBtn.addEventListener('click', async () => {
       openCalendarBtn.disabled = true;
@@ -12417,7 +12504,9 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
         approveBtn.disabled = true;
         approveBtn.classList.add('gcc-handed-off');
         const refine = card.querySelector('.gcc-refine');
-        if (refine) refine.textContent = 'Opened in Outlook. Press Send there to invite attendees.';
+        if (refine)
+          refine.textContent =
+            config.handoffNote || 'Opened in Outlook. Press Send there to invite attendees.';
       } catch (err) {
         openCalendarBtn.textContent = config.openLabel;
         openCalendarBtn.disabled = false;

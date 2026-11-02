@@ -357,7 +357,7 @@ async def approve_draft(draft_id: str, body: dict = None):
         p = draft["params"]
         if dtype == "calendar-event":
             p.update(_calendar_edits(body))
-        else:
+        elif dtype != "calendar-update":
             _apply_jira_edits(draft, body)
 
         # â”€â”€ Email â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -963,6 +963,12 @@ async def approve_draft(draft_id: str, body: dict = None):
                 "event_id": (result or {}).get("id", ""),
             }
 
+        elif dtype == "calendar-update":
+            from skills.calendar.tools import apply_calendar_update
+
+            applied = apply_calendar_update(p["event_id"], p["payload"], p.get("notify", "All"))
+            delivery_result = {"ok": True, **applied}
+
         # â”€â”€ Calendar (Google Workspace MCP) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         elif dtype == "calendar-write":
             from mcp.manager import _load_connections, _client_for
@@ -1143,7 +1149,7 @@ async def open_draft_in_outlook(draft_id: str, body: dict = None):
 
     dtype = draft["type"]
 
-    if dtype not in ("email-send", "email-reply", "email-forward", "calendar-event"):
+    if dtype not in ("email-send", "email-reply", "email-forward", "calendar-event", "calendar-update"):
         raise HTTPException(
             status_code=400,
             detail=f"Open-in-Outlook not supported for draft type '{dtype}'.",
@@ -1170,6 +1176,12 @@ async def open_draft_in_outlook(draft_id: str, body: dict = None):
         raise HTTPException(status_code=404, detail="Draft not found or expired.")
     p = claimed["params"]
     p.update(calendar_edits)
+
+    if dtype == "calendar-update":
+        link = p.get("web_link") or ""
+        if complete_handoff(draft_id):
+            await _sync_task_draft_status(draft_id, "handed_off")
+        return {"url": link if link.startswith("https://") else "https://outlook.office.com/calendar"}
 
     if dtype == "calendar-event" and p.get("recurrence"):
         # Outlook's compose link cannot carry a recurrence, so the series is
