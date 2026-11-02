@@ -48,7 +48,7 @@ async def close_generic_agent_terminal(req: GenericAgentTerminalCloseRequest):
     """
     from routes.terminal import close_pty_session
 
-    close_pty_session(req.pty_session_id)
+    await asyncio.to_thread(close_pty_session, req.pty_session_id)
     if generic_agent.get_active_session(req.project_id, req.agent) == req.pty_session_id:
         generic_agent.clear_active_session(req.project_id, req.agent)
     return {"ok": True}
