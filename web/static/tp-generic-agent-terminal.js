@@ -260,6 +260,18 @@ function _genAgentRenderTabs(tabId) {
     x.textContent = '✕';
     tab.appendChild(label);
     tab.appendChild(restart);
+    if (window.gatorShell && typeof window.gatorShell.popOutTerminal === 'function') {
+      const popOut = document.createElement('button');
+      popOut.type = 'button';
+      popOut.className = 'gtp-tab-restart gtp-tab-popout';
+      popOut.title = 'Open this terminal in its own window';
+      popOut.textContent = '⧉';
+      popOut.addEventListener('click', (e) => {
+        e.stopPropagation();
+        window.gatorShell.popOutTerminal(sess.ptySessionId, sess.label);
+      });
+      tab.appendChild(popOut);
+    }
     tab.appendChild(x);
     tab.addEventListener('click', (e) => {
       if (e.target === x || e.target === restart) return;
@@ -268,7 +280,8 @@ function _genAgentRenderTabs(tabId) {
       _genAgentActivateSession(tabId, id);
     });
     tab.addEventListener('dblclick', (e) => {
-      if (e.target === x || e.target === restart) return;
+      if (e.target === x || e.target === restart || e.target.classList.contains('gtp-tab-popout'))
+        return;
       e.preventDefault();
       e.stopPropagation();
       _genAgentBeginRename(sess, label);

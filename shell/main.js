@@ -4602,6 +4602,37 @@ ipcMain.handle('outlook-pane:navigate-pin', (_e, convId) => {
 // opens in a browser tab. The pin's web URL is passed in from the renderer
 // (p.meta.web_url); if absent, the pane just opens at OneDrive root.
 // Open a specific OWA draft URL in the Outlook WebContentsView.
+// Coding-agent terminal "Pop out": opens one session in its own window, attached
+// to the same PTY session as the main window. The window shares the default
+// session, so the backend's shell-key header is added to its requests too.
+const _terminalPopouts = new Map();
+ipcMain.handle('terminal:pop-out', (e, sessionId, label) => {
+  if (!gatorView || e.sender !== gatorView.webContents) return false;
+  if (typeof sessionId !== 'string' || !/^[A-Za-z0-9_.-]{1,128}$/.test(sessionId)) return false;
+  const existing = _terminalPopouts.get(sessionId);
+  if (existing && !existing.isDestroyed()) {
+    if (existing.isMinimized()) existing.restore();
+    existing.focus();
+    return true;
+  }
+  const popout = new BrowserWindow({
+    width: 1000,
+    height: 640,
+    backgroundColor: '#0b0d12',
+    autoHideMenuBar: true,
+    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
+  });
+  _terminalPopouts.set(sessionId, popout);
+  popout.on('closed', () => _terminalPopouts.delete(sessionId));
+  popout.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  popout.webContents.on('will-navigate', (event) => event.preventDefault());
+  const url = new URL(GATOR_URL.replace(/\/$/, '') + '/static/terminal-popout.html');
+  url.searchParams.set('session_id', sessionId);
+  url.searchParams.set('label', String(label || 'Terminal').slice(0, 80));
+  popout.loadURL(url.toString());
+  return true;
+});
+
 // Called by the 'Open in Outlook' button on Gator draft cards after the
 // backend creates a real Graph draft message and returns its OWA URL.
 ipcMain.handle('outlook-pane:open-draft', async (_e, url) => {

@@ -31,6 +31,7 @@ contextBridge.exposeInMainWorld('gatorShell', {
   getOutlookWidth: () => ipcRenderer.invoke('external-pane:get-width'),
   navigateOutlookPin: (convId) => ipcRenderer.invoke('outlook-pane:navigate-pin', convId),
   openOutlookDraft: (url) => ipcRenderer.invoke('outlook-pane:open-draft', url),
+  popOutTerminal: (sessionId, label) => ipcRenderer.invoke('terminal:pop-out', sessionId, label),
 
   // ── OneDrive ────────────────────────────────────────────────────────
   showOneDrive: () => ipcRenderer.invoke('external-pane:show', 'onedrive'),
