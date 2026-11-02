@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 
 LOCK_RETRY_DELAYS = (3, 6)
-_NO_FALLBACK = ("forbidden", "not_found")
+_NO_FALLBACK = ("forbidden", "not_found", "conflict", "throttled")
 
 
 def _result(status, method=None, original_remains=True, reason=None, dest=None, local_copy=None, **extra):
@@ -54,13 +54,26 @@ def _copied_message(reason):
     return head + " The original is still in place. Gator never deletes files, so the user can remove it themselves."
 
 
+def _found_item(found):
+    return isinstance(found, dict) and "error" not in found and bool(found.get("item_id"))
+
+
+def _safe_local_name(name):
+    """Reduce a (possibly LLM-supplied) name to a bare filename with no path parts."""
+    leaf = name.replace("\\", "/").split("/")[-1]
+    leaf = leaf.replace(":", "").rstrip(". ")
+    return leaf or "file"
+
+
 def _unique_local_path(downloads_dir, name):
     base = Path(downloads_dir)
-    candidate = base / name
+    candidate = base / _safe_local_name(name)
     stem, suffix, n = candidate.stem, candidate.suffix, 1
     while candidate.exists():
         candidate = base / f"{stem} ({n}){suffix}"
         n += 1
+    if candidate.resolve().parent != base.resolve():
+        raise ValueError(f"Refusing to write outside {base}: {candidate}")
     return str(candidate)
 
 
@@ -83,7 +96,7 @@ def _copied_dest(provider, copied, dest_folder, name, size):
             return _dest(meta)
         return {"drive_id": drive_id, "item_id": item_id, "name": name, "web_url": ""}
     found = provider.find_in_folder(dest_folder, name, size)
-    return _dest(found) if found else None
+    return _dest(found) if _found_item(found) else None
 
 
 def transfer(provider, source, dest_folder, mode="move", new_name="", sleep=time.sleep, downloads_dir=None):
@@ -111,7 +124,7 @@ def transfer(provider, source, dest_folder, mode="move", new_name="", sleep=time
     if "error" not in copied:
         if copied.get("status") == "pending":
             found = provider.find_in_folder(dest_folder, name, size)
-            dest = _dest(found) if found else None
+            dest = _dest(found) if _found_item(found) else None
         else:
             dest = _copied_dest(provider, copied, dest_folder, name, size)
         if dest:
@@ -127,13 +140,20 @@ def transfer(provider, source, dest_folder, mode="move", new_name="", sleep=time
     if copied.get("error_code") in _NO_FALLBACK:
         return _failed(copied["error"], copied["error_code"], reason)
 
-    local = _unique_local_path(downloads_dir or Path.home() / "Downloads", name or "file")
+    try:
+        local = _unique_local_path(downloads_dir or Path.home() / "Downloads", name)
+    except ValueError as e:
+        return _failed(str(e), "unknown", reason)
     dl = provider.download(source, local)
     if "error" in dl:
         return _failed(dl["error"], dl.get("error_code", "unknown"), reason)
     up = provider.upload(dl["saved_to"], dest_folder, name)
     if "error" in up:
         return _failed(up["error"], up.get("error_code", "unknown"), reason, local_copy=dl["saved_to"])
+    check = provider.stat({"drive_id": up.get("drive_id", ""), "item_id": up.get("item_id", "")})
+    if "error" in check or check.get("size") != size:
+        why = check.get("error") or f"uploaded size {check.get('size')} does not match original size {size}"
+        return _failed(f"Could not verify the uploaded copy: {why}", "verify_failed", reason, local_copy=dl["saved_to"])
     return _result(
         "copied",
         "download_upload",

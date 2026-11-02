@@ -181,3 +181,72 @@ def test_new_name_is_used_for_lookup_and_upload(tmp_path):
                      download={"saved_to": str(tmp_path / "report.docx")}, upload=up)
     run(p, mode="copy", new_name="renamed.docx", downloads_dir=tmp_path)
     assert ("upload", str(tmp_path / "report.docx"), "renamed.docx") in p.calls
+
+
+STOP_DL = {"error": "stop", "error_code": "unknown"}
+
+
+@pytest.mark.parametrize("new_name,local_name", [
+    ("../x.bat", "x.bat"),
+    ("..\\x.bat", "x.bat"),
+    ("C:/Windows/Temp/a.bat", "a.bat"),
+    ("a:b.txt", "ab.txt"),
+    ("..", "file"),
+])
+def test_local_download_path_stays_inside_downloads_dir(new_name, local_name, tmp_path):
+    p = FakeProvider(copy={"error": "boom", "error_code": "unknown"}, download=STOP_DL)
+    run(p, mode="copy", new_name=new_name, downloads_dir=tmp_path)
+    downloads = [c for c in p.calls if isinstance(c, tuple) and c[0] == "download"]
+    assert downloads == [("download", str(tmp_path / local_name))]
+
+
+def test_remote_new_name_is_passed_to_upload_unchanged(tmp_path):
+    up = {"item_id": "n5", "drive_id": "d2", "name": "a:b.txt", "web_url": "u5"}
+    p = FakeProvider(copy={"error": "boom", "error_code": "unknown"},
+                     download={"saved_to": str(tmp_path / "ab.txt")}, upload=up)
+    run(p, mode="copy", new_name="a:b.txt", downloads_dir=tmp_path)
+    assert ("upload", str(tmp_path / "ab.txt"), "a:b.txt") in p.calls
+
+
+@pytest.mark.parametrize("code", ["conflict", "throttled"])
+def test_copy_conflict_or_throttled_does_not_fall_back(code, tmp_path):
+    p = FakeProvider(copy={"error": "x", "error_code": code})
+    out, _ = run(p, mode="copy", downloads_dir=tmp_path)
+    assert out["status"] == "failed" and out["error_code"] == code
+    assert out["original_remains"] is True
+    assert not any(isinstance(c, tuple) for c in p.calls)
+
+
+def _upload_to_n1(tmp_path, stat_new):
+    up = {"item_id": "n1", "drive_id": "d2", "name": "report.docx", "web_url": "u5"}
+    return FakeProvider(copy={"error": "boom", "error_code": "unknown"},
+                        download={"saved_to": str(tmp_path / "report.docx")}, upload=up,
+                        stat_new=stat_new)
+
+
+def test_upload_size_mismatch_fails_verification(tmp_path):
+    p = _upload_to_n1(tmp_path, {"item_id": "n1", "drive_id": "d2", "name": "report.docx", "web_url": "u5", "size": 3})
+    out, _ = run(p, mode="copy", downloads_dir=tmp_path)
+    assert out["status"] == "failed" and out["error_code"] == "verify_failed"
+    assert out["local_copy"] == str(tmp_path / "report.docx") and out["original_remains"] is True
+
+
+def test_upload_stat_failure_fails_verification(tmp_path):
+    p = _upload_to_n1(tmp_path, {"error": "gone", "error_code": "not_found"})
+    out, _ = run(p, mode="copy", downloads_dir=tmp_path)
+    assert out["status"] == "failed" and out["error_code"] == "verify_failed"
+    assert out["local_copy"] == str(tmp_path / "report.docx") and out["original_remains"] is True
+
+
+def test_upload_verified_by_stat_after_upload(tmp_path):
+    p = _upload_to_n1(tmp_path, None)
+    out, _ = run(p, mode="copy", downloads_dir=tmp_path)
+    assert out["status"] == "copied" and out["method"] == "download_upload"
+    assert p.calls[-1] == "stat"
+
+
+@pytest.mark.parametrize("copy", [{"status": "pending", "monitor_url": "m"}, {"status": "completed"}])
+def test_find_in_folder_error_dict_is_not_a_found_item(copy):
+    p = FakeProvider(copy=copy, find={"error": "list failed", "error_code": "unknown"})
+    out, _ = run(p, mode="copy")
+    assert out["status"] == "pending" and out["dest"] is None
