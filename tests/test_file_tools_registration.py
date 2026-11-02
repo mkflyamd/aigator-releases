@@ -71,6 +71,6 @@ def test_file_upload_missing_local_file_is_a_clean_error(tmp_path):
 
 def test_skill_guide_covers_move_copy_lock_and_upload():
     text = (SKILLS / "onedrive" / "SKILL.md").read_text(encoding="utf-8")
-    for needle in ("file_transfer", "file_upload", "original_remains", "resolve_teams_attachment", "never deletes"):
+    for needle in ("file_transfer", "file_upload", "original_remains", "resolve_teams_attachment", "never deletes", "dest.web_url"):
         assert needle in text, needle
     assert "file_transfer" in (SKILLS / "m365-onedrive" / "SKILL.md").read_text(encoding="utf-8")
