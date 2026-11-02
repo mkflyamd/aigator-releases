@@ -123,15 +123,21 @@ def _create_remote_pty_session(
         "cwd": os.path.abspath(cwd) if cwd else None,
     }
     try:
-        reply = pty_client.host_request(info, request)
+        reply = pty_client.host_request(info, request, pty_client.CREATE_TIMEOUT)
         if reply.get("error") == "exists":
             pty_client.host_request(info, {"op": "close", "id": session_id})
-            reply = pty_client.host_request(info, request)
+            reply = pty_client.host_request(info, request, pty_client.CREATE_TIMEOUT)
         if not reply.get("ok"):
             raise RuntimeError(reply.get("error", "PTY host refused the session"))
         remote = pty_client.RemotePty(info, session_id)
     except pty_client.HostError:
         logger.exception("PTY host unavailable; falling back to an in-process PTY")
+        # The host may have spawned the process even though the reply was lost;
+        # drop it so it does not run on under the same id with no owner.
+        try:
+            pty_client.host_request(info, {"op": "close", "id": session_id})
+        except pty_client.HostError:
+            pass
         return None
     return PtySession(remote, start_offset=remote.start_offset)
 

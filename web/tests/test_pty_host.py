@@ -488,3 +488,46 @@ def test_generic_agent_route_spawns_off_the_event_loop(monkeypatch):
     assert reply.status_code == 200 and reply.json()["created"] is True
     assert seen["on_loop"] is False
     assert seen["kwargs"]["cols"] == 90 and seen["kwargs"]["rows"] == 30
+
+
+def test_failed_host_create_closes_the_host_session_before_falling_back(monkeypatch):
+    info = {"port": 1, "token": TOKEN}
+    sent = []
+
+    def fake_request(info, msg, timeout=5.0):
+        sent.append(msg["op"])
+        if msg["op"] == "create":
+            raise pty_client.HostError("timed out waiting for the host")
+        return {"ok": True}
+
+    monkeypatch.setattr(pty_client, "host_enabled", lambda: True)
+    monkeypatch.setattr(pty_client, "ensure_host", lambda key: info)
+    monkeypatch.setattr(pty_client, "host_request", fake_request)
+    fallback = _FakePty()
+    monkeypatch.setattr(terminal, "spawn_pty", lambda **kw: fallback)
+    try:
+        entry = terminal.create_pty_session("sess-slow", command=["agent"])
+        assert entry.pty is fallback
+        assert sent == ["create", "close"]
+    finally:
+        terminal._pty_sessions.pop("sess-slow", None)
+        fallback.end()
+
+
+def test_create_waits_longer_than_a_normal_host_request(monkeypatch):
+    info = {"port": 1, "token": TOKEN}
+    timeouts = {}
+
+    def fake_request(info, msg, timeout=5.0):
+        timeouts[msg["op"]] = timeout
+        raise pty_client.HostError("stop here")
+
+    monkeypatch.setattr(pty_client, "host_enabled", lambda: True)
+    monkeypatch.setattr(pty_client, "ensure_host", lambda key: info)
+    monkeypatch.setattr(pty_client, "host_request", fake_request)
+    monkeypatch.setattr(terminal, "spawn_pty", lambda **kw: _FakePty())
+    try:
+        terminal.create_pty_session("sess-timeout", command=["agent"])
+    finally:
+        terminal._pty_sessions.pop("sess-timeout", None)
+    assert timeouts["create"] == pty_client.CREATE_TIMEOUT > 5.0

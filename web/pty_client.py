@@ -28,6 +28,8 @@ logger = logging.getLogger(__name__)
 
 _CONNECT_TIMEOUT = 5.0
 _START_TIMEOUT = 15.0
+# Spawning an agent can be slow on a cold start (Windows shell lookup).
+CREATE_TIMEOUT = 30.0
 _spawn_lock = threading.Lock()
 
 
@@ -134,10 +136,10 @@ def _read(reader) -> dict:
     return json.loads(line)
 
 
-def host_request(info: dict, msg: dict) -> dict:
+def host_request(info: dict, msg: dict, timeout: float = _CONNECT_TIMEOUT) -> dict:
     """One request on a short-lived connection."""
     try:
-        sock, reader = _connect(info)
+        sock, reader = _connect(info, timeout)
     except OSError as exc:
         raise HostError(f"cannot reach PTY host: {exc}") from exc
     try:
