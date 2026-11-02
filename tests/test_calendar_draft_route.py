@@ -43,6 +43,14 @@ def test_open_returns_compose_deeplink_with_all_fields():
     assert q["to"] == ["a@x.com;b@y.com;c@z.com"]
     assert q["startdt"] == [PARAMS["start"]] and q["enddt"] == [PARAMS["end"]]
     assert q["body"] == [PARAMS["body"]] and q["location"] == ["Room 4"]
+    assert q["online"] == ["1"]
+
+
+def test_open_without_teams_leaves_the_online_toggle_off():
+    client = TestClient(app)
+    did = create_draft("calendar-event", {**PARAMS, "teams": False}, {"subject": "Sync & plan"})
+    res = _post(client, f"/api/drafts/{did}/open-in-outlook")
+    assert "online" not in parse_qs(urlparse(res.json()["url"]).query)
 
 
 def test_open_marks_handed_off_and_second_open_is_409():

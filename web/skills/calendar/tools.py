@@ -636,7 +636,8 @@ def _tool_find_meeting_times(
         local = {}
         for email, info in zones.items():
             shown = timezones.fmt_range(raw_start, raw_end, slot_tz, info["timezone"])
-            local[email] = shown or f"{fmt_cal_time(raw_start)} - {fmt_cal_time(raw_end)} {slot_tz}"
+            if shown:
+                local[email] = shown
         suggestions.append(
             {
                 "start": fmt_cal_time(raw_start),
@@ -709,6 +710,30 @@ def _grid_day_runs(day_list: list) -> list[list]:
     return runs
 
 
+def _view_index_by_wall_slot(day, win_tz: str) -> list:
+    """Position in a getSchedule view (half hours elapsed since midnight) of each wall-clock half hour of `day`.
+
+    It is the wall-clock slot itself except on a daylight-saving day, where the clock skips or repeats an
+    hour: a skipped half hour has no position (None), and a repeated hour is read at its first pass.
+    """
+    from . import timezones
+
+    tz = timezones.zone(win_tz)
+    if tz is None:
+        return list(range(_GRID_DAY_SLOTS))
+    midnight = datetime.combine(day, datetime.min.time())
+    base = midnight.replace(tzinfo=tz).astimezone(timezone.utc)
+    positions = []
+    for k in range(_GRID_DAY_SLOTS):
+        wall = midnight + timedelta(minutes=k * _GRID_STEP)
+        utc = wall.replace(tzinfo=tz).astimezone(timezone.utc)
+        if utc.astimezone(tz).replace(tzinfo=None) != wall:
+            positions.append(None)
+        else:
+            positions.append(int((utc - base).total_seconds() // (_GRID_STEP * 60)))
+    return positions
+
+
 def _grid_day_payloads(gc, emails: list, day_list: list, win_tz: str, need: int, now: datetime) -> list:
     from concurrent.futures import ThreadPoolExecutor
 
@@ -748,9 +773,10 @@ def _grid_day_payloads(gc, emails: list, day_list: list, win_tz: str, need: int,
     days = []
     for day, views in zip(day_list, all_views):
         rows = []
+        positions = _view_index_by_wall_slot(day, win_tz)
         for e in emails:
             view = views.get(e, "")
-            rows.append("".join(_GRID_STATUS.get(view[k], "?") if k < len(view) else "?" for k in range(per_day)))
+            rows.append("".join(_GRID_STATUS.get(view[p], "?") if p is not None and p < len(view) else "?" for p in positions))
         open_slots = ""
         fit = ""
         for k in range(per_day):

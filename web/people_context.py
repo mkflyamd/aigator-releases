@@ -3,7 +3,12 @@
 Any tool that reads a conversation (Teams chat, email thread, ...) puts `participants`
 ([{"name", "email"}]) in its result. search_people then ranks those people first, so a first name
 mentioned in a chat is not resolved by a global directory search that ignores who is in the chat.
+
+A participant marked "unverified" has a name taken from mail headers, which the sender controls. Such a
+person only counts when the directory search also returns that email.
 """
+
+import re
 
 _MAX_DEPTH = 4
 
@@ -19,8 +24,13 @@ def collect(result, known: dict[str, dict]) -> None:
                 if key == "participants" and isinstance(value, list):
                     for p in value:
                         email = str((p or {}).get("email") or "").strip().lower()
-                        if email and email not in known:
-                            known[email] = {"name": str(p.get("name") or "").strip(), "email": email}
+                        if not email:
+                            continue
+                        entry = {"name": str(p.get("name") or "").strip(), "email": email}
+                        if p.get("unverified"):
+                            entry["unverified"] = True
+                        if email not in known or (known[email].get("unverified") and not entry.get("unverified")):
+                            known[email] = entry
                 else:
                     walk(value, depth + 1)
         elif isinstance(node, list):
@@ -30,10 +40,19 @@ def collect(result, known: dict[str, dict]) -> None:
     walk(result, 0)
 
 
+def _words(text: str) -> set[str]:
+    return set(re.findall(r"[a-z0-9]+", text.lower()))
+
+
 def _matches(query: str, person: dict) -> bool:
-    haystack = f"{person.get('name', '')} {person.get('email', '')}".lower()
-    tokens = [t for t in query.lower().replace(",", " ").split() if t]
-    return bool(tokens) and all(t in haystack for t in tokens)
+    """Every word of the query is a whole word of the name or of the email's local part ("Ann" is not "Anne")."""
+    email = str(person.get("email", "")).lower()
+    query = query.strip().lower()
+    if "@" in query:
+        return query == email
+    words = _words(str(person.get("name", ""))) | _words(email.split("@")[0])
+    wanted = _words(query)
+    return bool(wanted) and wanted <= words
 
 
 def apply(query: str, result: dict, known: dict[str, dict]) -> dict:
@@ -44,11 +63,13 @@ def apply(query: str, result: dict, known: dict[str, dict]) -> dict:
     """
     if not known or not isinstance(result, dict) or result.get("error"):
         return result
-    in_context = [p for p in known.values() if _matches(query, p)]
+    found = {str(p.get("email", "")).lower(): p for p in result.get("people", [])}
+    in_context = [
+        p for p in known.values() if _matches(query, p) and (not p.get("unverified") or p["email"] in found)
+    ]
     if not in_context:
         return result
     emails = {p["email"] for p in in_context}
-    found = {str(p.get("email", "")).lower(): p for p in result.get("people", [])}
     first = [{**found.get(p["email"], {"name": p["name"], "email": p["email"]}), "in_context": True} for p in in_context]
     rest = [p for e, p in found.items() if e not in emails]
     out = {**result, "people": first + rest, "total": len(first) + len(rest)}

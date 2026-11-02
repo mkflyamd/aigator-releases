@@ -181,3 +181,38 @@ def test_days_with_a_gap_are_separate_runs():
     days = [start + timedelta(days=n) for n in (0, 1, 2, 3, 4, 7, 8)]
     assert [len(r) for r in _grid_day_runs(days)] == [5, 2]
     assert [len(r) for r in _grid_day_runs([start + timedelta(days=n) for n in range(9)])] == [7, 2]
+
+
+class _FixedViewGc:
+    def __init__(self, views):
+        self.views = views
+
+    def post(self, path, body):
+        return {"value": [{"scheduleId": e, "availabilityView": self.views[e]} for e in body["schedules"]]}
+
+
+def _eastern_day(day, view):
+    import skills._m365.helpers  # noqa: F401
+    import skills.calendar.helpers  # noqa: F401
+    from skills.calendar.tools import _tool_load_availability_days
+
+    with (
+        patch("skills._m365.helpers.get_cal_client", return_value=_FixedViewGc({"a@example.com": view})),
+        patch("skills.calendar.helpers.get_user_win_tz", return_value="Eastern Standard Time"),
+    ):
+        return _tool_load_availability_days(["a@example.com"], dates=[day])["days"][0]["rows"][0]
+
+
+def test_a_spring_forward_day_reads_each_slot_at_its_elapsed_position():
+    # 23 hours, 46 half hours: 10:00 AM wall time is the 18th half hour elapsed.
+    row = _eastern_day("2027-03-14", "0" * 18 + "2" + "0" * 27)
+    assert row[20] == "b" and row[18] == "f" and row[19] == "f"
+    assert row[4:6] == "??"
+    assert row[:4] == "f" * 4 and len(row) == 48
+
+
+def test_a_fall_back_day_reads_each_slot_at_its_elapsed_position():
+    # 25 hours, 50 half hours: 2:00 AM wall time follows the repeated 1:00 hour, so it is the 7th half hour.
+    row = _eastern_day("2026-11-01", "0" * 6 + "2" + "0" * 43)
+    assert row[4] == "b" and row[6] == "f" and row[2] == "f"
+    assert len(row) == 48

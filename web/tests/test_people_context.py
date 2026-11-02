@@ -70,3 +70,38 @@ def test_search_waits_for_the_chat_read_in_the_same_batch():
         asyncio.set_event_loop(asyncio.new_event_loop())
     assert results[0]["resolved_from_context"] == "james.smith2@example.com"
     assert "chats" in results[1]
+
+
+def test_a_name_matches_whole_words_not_fragments():
+    ann = {"name": "Ann Park", "email": "ann.park@example.com"}
+    joanne = {"name": "Joanne Lee", "email": "joanne.lee@example.com"}
+    known = {}
+    people_context.collect({"participants": [joanne]}, known)
+    assert people_context.apply("Ann", DIRECTORY, known) is DIRECTORY
+    people_context.collect({"participants": [ann]}, known)
+    out = people_context.apply("Ann", DIRECTORY, known)
+    assert out["resolved_from_context"] == "ann.park@example.com"
+    assert people_context.apply("park", DIRECTORY, known)["resolved_from_context"] == "ann.park@example.com"
+    assert people_context.apply("ann.park@example.com", DIRECTORY, known)["resolved_from_context"] == "ann.park@example.com"
+
+
+def test_a_mail_header_name_is_not_resolved_unless_the_directory_returns_that_email():
+    attacker = {"name": "Alice Lee", "email": "attacker@example.net", "unverified": True}
+    real = {"name": "Alice Lee", "email": "alice.lee@example.com"}
+    directory = {"total": 1, "people": [real]}
+    known = {}
+    people_context.collect({"participants": [attacker]}, known)
+    assert people_context.apply("Alice", directory, known) is directory
+
+    colleague = {"name": "Alice Lee", "email": "alice.lee@example.com", "unverified": True}
+    known = {}
+    people_context.collect({"participants": [colleague]}, known)
+    out = people_context.apply("Alice", directory, known)
+    assert out["resolved_from_context"] == "alice.lee@example.com"
+
+
+def test_mail_participants_are_marked_unverified():
+    from skills.email.tools import _mail_participants
+
+    people = _mail_participants([{"from": {"emailAddress": {"name": "Alice Lee", "address": "A@Example.net"}}}])
+    assert people == [{"name": "Alice Lee", "email": "a@example.net", "unverified": True}]

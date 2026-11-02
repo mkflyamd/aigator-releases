@@ -108,3 +108,12 @@ def test_slots_still_returned_when_schedule_lookup_fails(cal, monkeypatch):
     out = cal._tool_find_meeting_times(["a@x.com"], date="2026-11-02")
     assert out["suggestions"][0]["timezone"] == "Pacific Standard Time"
     assert out["attendee_timezones"] == {}
+
+
+def test_an_attendee_zone_that_cannot_be_resolved_gets_no_local_time(cal, monkeypatch):
+    monkeypatch.setattr(
+        tz, "attendee_zones",
+        lambda gc, emails, day, win_tz: {"a@x.com": {"timezone": "Pakistan Standard Time", "working_hours": ""}},
+    )
+    slot = cal._tool_find_meeting_times(["a@x.com"], date="2026-11-02")["suggestions"][0]
+    assert "a@x.com" not in slot["attendee_local"]

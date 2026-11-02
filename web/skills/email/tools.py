@@ -227,14 +227,16 @@ TOOL_STATUS = {
 
 
 def _mail_participants(messages: list) -> list:
-    """Everyone on the messages (sender, To, Cc) as name and email, so a first name in the mail resolves to the right person."""
+    """Everyone on the messages (sender, To, Cc) as name and email, so a first name in the mail resolves to the right person.
+
+    The names come from mail headers, which the sender controls, so they are marked unverified."""
     seen: dict[str, dict] = {}
     for m in messages:
         for entry in [m.get("from")] + (m.get("toRecipients") or []) + (m.get("ccRecipients") or []):
             addr = ((entry or {}).get("emailAddress") or {})
             email = (addr.get("address") or "").lower()
             if email and email not in seen:
-                seen[email] = {"name": addr.get("name", ""), "email": email}
+                seen[email] = {"name": addr.get("name", ""), "email": email, "unverified": True}
     return list(seen.values())
 
 

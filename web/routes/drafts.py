@@ -1084,6 +1084,7 @@ def _calendar_compose_url(params: dict) -> str:
         "enddt": params.get("end", ""),
         "body": params.get("body", ""),
         "location": params.get("location", ""),
+        "online": "1" if params.get("teams") else "",
         "to": ";".join((params.get("attendees") or []) + (params.get("optional_attendees") or [])),
     }
     qs = "&".join(f"{k}={quote(str(v), safe='')}" for k, v in query.items() if v)
