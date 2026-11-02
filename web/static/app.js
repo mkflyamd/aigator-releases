@@ -14209,17 +14209,13 @@ form.addEventListener('submit', async (e) => {
                 prose,
                 async () => {
                   // The server records the grant for this tab; the client cannot grant itself.
-                  const grant = await fetch('/api/chat/approve-deps', {
+                  // A refused grant (restart, expiry) grants nothing: re-sending the same request
+                  // makes the server issue a fresh permission card, so the message is never lost.
+                  await fetch('/api/chat/approve-deps', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ approval_id: msg.approval_id }),
                   }).catch(() => null);
-                  if (!grant || !grant.ok) {
-                    _permissionResendPayload = null;
-                    prose.textContent =
-                      'That permission request expired before it could be approved. Send your message again.';
-                    return;
-                  }
                   // Re-submit using the saved payload — call doSend fresh so post-stream
                   // work (history, action bar, suggested actions) runs normally
                   if (!_permissionResendPayload) return;

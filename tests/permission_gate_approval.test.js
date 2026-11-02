@@ -19,3 +19,11 @@ test('Allow on the permission card posts the server-issued approval id before re
   assert(/method:\s*'POST'/.test(call));
   assert(/approval_id:\s*msg\.approval_id/.test(call));
 });
+
+test('a refused grant re-sends the saved request instead of dropping it', () => {
+  const i = app.indexOf("fetch('/api/chat/approve-deps'");
+  const handler = app.slice(i, i + 1400);
+  assert(!/Send your message again/.test(app), 'no "retype your message" dead end');
+  assert(!/if \(!grant \|\| !grant\.ok\)\s*\{[^}]*return;/.test(handler), 'failed grant must not return early');
+  assert(/doSend\(resendPayload\)/.test(handler), 'saved payload is re-sent');
+});
