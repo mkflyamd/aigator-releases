@@ -180,7 +180,9 @@ def _upload_large(gc, source, drive_id, folder_path, name):
 
 def _cancel(gc, url: str) -> None:
     try:
-        gc._request("DELETE", url, headers={}, label="upload-session-cancel")
+        # Non-empty on purpose: GraphClient._request swaps an empty dict for the bearer headers,
+        # and the upload-session URL is pre-authenticated.
+        gc._request("DELETE", url, headers={"Content-Length": "0"}, label="upload-session-cancel")
     except Exception:
         pass
 
@@ -264,6 +266,8 @@ def store_in_folder(gc, source: Source, drive_id: str, folder_id: str, on_confli
     """Upload into a folder addressed by drive and item ID. Never overwrites: a clash renames."""
     from .._files.errors import classify_graph_error
 
+    if on_conflict not in ("rename", "fail"):
+        raise ValueError(f"on_conflict must be 'rename' or 'fail', got {on_conflict!r}")
     name = safe_filename(source.name)
     item_path = _folder_item_path(drive_id, folder_id, name)
     try:
