@@ -3230,6 +3230,13 @@ setTimeout(scanAll, 500);
 
   _layoutNow();
   win.on('resize', layout);
+  // A pop-out is a window too, so left open it would keep the app and its
+  // backend alive after the main window is gone.
+  win.on('closed', () => {
+    for (const popout of _terminalPopouts.values()) {
+      if (!popout.isDestroyed()) popout.destroy();
+    }
+  });
   _attachMaximizeListener();
 
   // ΓöÇΓöÇ Context capture: watch Slack URL (Teams context is DOM-only) ΓöÇΓöÇΓöÇΓöÇ
@@ -4623,13 +4630,26 @@ ipcMain.handle('terminal:pop-out', (e, sessionId, label) => {
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
   });
   _terminalPopouts.set(sessionId, popout);
-  popout.on('closed', () => _terminalPopouts.delete(sessionId));
+  popout.on('closed', () => {
+    _terminalPopouts.delete(sessionId);
+    if (gatorView && !gatorView.webContents.isDestroyed()) {
+      gatorView.webContents.send('terminal:popout-closed', sessionId);
+    }
+  });
   popout.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   popout.webContents.on('will-navigate', (event) => event.preventDefault());
   const url = new URL(GATOR_URL.replace(/\/$/, '') + '/static/terminal-popout.html');
   url.searchParams.set('session_id', sessionId);
   url.searchParams.set('label', String(label || 'Terminal').slice(0, 80));
   popout.loadURL(url.toString());
+  return true;
+});
+
+ipcMain.handle('terminal:close-pop-out', (e, sessionId) => {
+  if (!gatorView || e.sender !== gatorView.webContents) return false;
+  const popout = _terminalPopouts.get(sessionId);
+  if (!popout || popout.isDestroyed()) return false;
+  popout.close();
   return true;
 });
 

@@ -178,6 +178,27 @@ def test_ws_resumes_after_the_clients_seq_instead_of_replaying_everything(monkey
         pty.end()
 
 
+def test_ws_with_negative_seq_starts_at_the_live_end_without_replay(monkeypatch):
+    pty = _FakePty()
+    session = PtySession(pty)
+    terminal._pty_sessions["sess-live"] = session
+    try:
+        pty.feed("old output")
+        assert _wait(lambda: session.read_from(0)[1] == 10)
+        with _client(monkeypatch).websocket_connect(
+            "/api/terminal/agent?session_id=sess-live&seq=-1"
+        ) as ws:
+            pty.feed("fresh")
+            assert json.loads(ws.receive_text()) == {
+                "type": "output",
+                "data": "fresh",
+                "seq": 15,
+            }
+    finally:
+        terminal._pty_sessions.pop("sess-live", None)
+        pty.end()
+
+
 def test_ws_sends_exit_when_the_process_ends_and_forwards_input(monkeypatch):
     pty = _FakePty()
     session = PtySession(pty)

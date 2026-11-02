@@ -264,7 +264,12 @@ async def agent_terminal_ws(ws: WebSocket, session_id: str, seq: int = 0):
         # a fresh terminal (no seq) gets the whole buffer.
         wake = entry.subscribe(loop)
         # A seq past the stream's end belongs to a different stream: start over.
-        seq = start_seq if start_seq <= entry.read_from(start_seq)[1] else 0
+        # A negative seq means "from now": no replay, only new output.
+        end = entry.read_from(max(start_seq, 0))[1]
+        if start_seq < 0:
+            seq = end
+        else:
+            seq = start_seq if start_seq <= end else 0
         try:
             while not stop.is_set():
                 wake.clear()

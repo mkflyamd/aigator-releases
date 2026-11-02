@@ -8,11 +8,27 @@
   document.title = label + ' - AI Gator';
 
   const statusEl = document.getElementById('status');
+
+  // Same light/dark choice as the in-app terminals (Settings > terminal theme).
+  const DARK = { background: '#0b0d12', foreground: '#d4d4d4', cursor: '#d4d4d4' };
+  const LIGHT = { background: '#ffffff', foreground: '#0f172a', cursor: '#0f172a' };
+  function xtermTheme(setting) {
+    if (setting === 'light') return LIGHT;
+    if (setting === 'auto') {
+      return document.documentElement.getAttribute('data-theme') === 'light' ? LIGHT : DARK;
+    }
+    return DARK;
+  }
+  function applyTheme(theme) {
+    term.options.theme = theme;
+    document.body.style.background = theme.background;
+  }
+
   const term = new Terminal({
     fontFamily: 'Consolas, "Courier New", monospace',
     fontSize: 13,
     cursorBlink: true,
-    theme: { background: '#0b0d12', foreground: '#d4d4d4', cursor: '#d4d4d4' },
+    theme: DARK,
     scrollback: 5000,
     convertEol: false,
   });
@@ -78,6 +94,11 @@
       setTimeout(connect, Math.min(1000 * attempt, 5000));
     };
   }
+
+  fetch('/api/config')
+    .then((r) => (r.ok ? r.json() : {}))
+    .then((cfg) => applyTheme(xtermTheme(cfg.terminal_theme)))
+    .catch(() => {});
 
   term.onData((data) => send({ type: 'input', data }));
   window.addEventListener('resize', refit);
