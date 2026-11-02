@@ -18,5 +18,5 @@ metadata:
 - Read the file_transfer result before answering. status "moved": the file is now only at the destination. status "copied" with original_remains true: the original is still in place. Say so in one sentence, give the reason (reason "locked": the file is open somewhere; reason "not_owner": it is in someone else's OneDrive; otherwise a plain copy), and tell the user they can remove the original themselves. Gator never deletes files, so never offer to delete it. status "pending": the copy is still running in OneDrive; say so and do not retry. status "failed": report the error in plain words.
 - A Teams chat attachment lives in the sender's OneDrive or a SharePoint site, so file_transfer will usually copy it rather than move it. That is expected.
 - "Upload a local file" / "save this file to my OneDrive folder" → file_upload with local_path, dest_drive_id and dest_folder_id. It never overwrites; a name clash gets a numeric suffix.
-- When the result has a dest, give the user its web_url.
+- Give the user the web_url of the file at the destination whenever the result has one (dest.web_url for file_transfer, web_url for file_upload).
 - Always present file names and download URLs to the user.
