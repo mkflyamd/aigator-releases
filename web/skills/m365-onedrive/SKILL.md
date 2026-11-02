@@ -28,3 +28,4 @@ Use this skill when the user wants to browse, find, upload, download, or share f
 - Requires Microsoft 365 authentication — prompt the user to sign in via Settings → Apps → Microsoft 365 if not authenticated.
 - Always confirm the destination path with the user before uploading files.
 - For share links, clarify the access level (view-only vs. edit) with the user before generating the link.
+- To upload into a folder by drive and folder ID, or to move or copy a file between folders or drives, use the onedrive skill's `file_upload` and `file_transfer` tools.

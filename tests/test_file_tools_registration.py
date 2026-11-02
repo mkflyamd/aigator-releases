@@ -1,6 +1,9 @@
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from skills.onedrive import tools as od
+
+SKILLS = Path(__file__).resolve().parent.parent / "web" / "skills"
 
 
 def _def(name):
@@ -64,3 +67,10 @@ def test_file_upload_missing_local_file_is_a_clean_error(tmp_path):
         out = od.TOOL_HANDLERS["file_upload"](
             local_path=str(tmp_path / "missing.docx"), dest_drive_id="d2", dest_folder_id="f2")
     assert out["error_code"] == "not_found" and out["error"]
+
+
+def test_skill_guide_covers_move_copy_lock_and_upload():
+    text = (SKILLS / "onedrive" / "SKILL.md").read_text(encoding="utf-8")
+    for needle in ("file_transfer", "file_upload", "original_remains", "resolve_teams_attachment", "never deletes"):
+        assert needle in text, needle
+    assert "file_transfer" in (SKILLS / "m365-onedrive" / "SKILL.md").read_text(encoding="utf-8")
