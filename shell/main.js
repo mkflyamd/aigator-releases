@@ -1166,21 +1166,33 @@ function createWindow() {
   });
 
   gatorView.webContents.loadURL(GATOR_URL);
+  // A failed main-frame load (backend restarting, or not up yet) shows a
+  // "Reconnecting" page and reloads Gator as soon as /health answers, instead of
+  // stranding the window on a dead page that needs a manual restart.
+  let reconnecting = false;
   gatorView.webContents.on(
     'did-fail-load',
     (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
-      if (isMainFrame === false || errorCode === -3) return;
+      if (isMainFrame === false || errorCode === -3 || reconnecting) return;
+      reconnecting = true;
       gatorView.webContents.loadURL(
         'data:text/html;charset=utf-8,' +
           encodeURIComponent(
             '<!doctype html><html><body style="font:16px system-ui;padding:32px;background:#111827;color:#f8fafc">' +
-              '<h1>AI Gator could not start</h1><p>The local backend did not load.</p><p>' +
+              '<h1>Reconnecting to AI Gator&hellip;</h1><p>The local backend is not responding. ' +
+              'This window reloads automatically when it is back.</p><p style="color:#94a3b8">' +
               String(errorDescription) +
               ' (' +
               String(errorCode) +
               ')</p></body></html>',
           ),
       );
+      waitForBackend(() => {
+        reconnecting = false;
+        if (gatorView && !gatorView.webContents.isDestroyed()) {
+          gatorView.webContents.loadURL(GATOR_URL);
+        }
+      }, Infinity);
     },
   );
   // Dismiss the splash screen once the Gator page has finished loading.
