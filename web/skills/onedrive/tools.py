@@ -1507,6 +1507,7 @@ def _tool_move_onedrive_file(source_drive_id: str, source_item_id: str,
                               new_name: str = "") -> dict:
     """Move a file to a different drive/folder using Graph's native PATCH with parentReference."""
     from .._m365.helpers import get_skill_client
+    from .._files.errors import classify_graph_error
     gc = get_skill_client(ONEDRIVE_SKILLS_DIR)
     patch_body: dict = {
         "parentReference": {
@@ -1522,7 +1523,7 @@ def _tool_move_onedrive_file(source_drive_id: str, source_item_id: str,
             patch_body,
         )
     except Exception as e:
-        return {"error": f"Move failed: {e}"}
+        return {"error": f"Move failed: {e}", "error_code": classify_graph_error(e)}
     pr = result.get("parentReference") or {}
     return {
         "item_id": result.get("id", source_item_id),
@@ -1544,6 +1545,7 @@ def _tool_copy_onedrive_file(source_drive_id: str, source_item_id: str,
     then poll the monitor URL until the copy completes.
     """
     from .._m365.helpers import get_skill_client
+    from .._files.errors import classify_graph_error, classify_status
     import httpx as _httpx
     import json as _json
     import time as _time
@@ -1573,10 +1575,13 @@ def _tool_copy_onedrive_file(source_drive_id: str, source_item_id: str,
             timeout=30,
         )
     except Exception as e:
-        return {"error": f"Copy request failed: {e}"}
+        return {"error": f"Copy request failed: {e}", "error_code": classify_graph_error(e)}
 
     if r.status_code not in (202, 200, 201):
-        return {"error": f"Copy request returned HTTP {r.status_code}: {r.text[:300]}"}
+        return {
+            "error": f"Copy request returned HTTP {r.status_code}: {r.text[:300]}",
+            "error_code": classify_status(r.status_code),
+        }
 
     monitor_url = r.headers.get("Location", "")
     if not monitor_url:
@@ -1591,12 +1596,14 @@ def _tool_copy_onedrive_file(source_drive_id: str, source_item_id: str,
             }
         return {"error": "Copy request did not return a monitor URL. The copy may have succeeded — check the destination folder."}
 
+    last_poll_error = ""
     for _ in range(30):
         _time.sleep(2)
         try:
-            poll = _httpx.get(monitor_url, headers={"Authorization": f"Bearer {token}"}, follow_redirects=True, timeout=15)
+            poll = _httpx.get(monitor_url, follow_redirects=True, timeout=15)
             data = poll.json()
-        except Exception:
+        except Exception as e:
+            last_poll_error = str(e)
             continue
         status = data.get("status", "")
         if status == "completed":
@@ -1609,15 +1616,33 @@ def _tool_copy_onedrive_file(source_drive_id: str, source_item_id: str,
                 "resource_url": resource_url,
             }
         if status in ("failed", "cancelled"):
-            return {"error": f"Copy {status}: {data.get('error', {}).get('message', '')}"}
+            return {
+                "error": f"Copy {status}: {data.get('error', {}).get('message', '')}",
+                "error_code": "unknown",
+            }
+        if not status and data.get("id"):
+            pr = data.get("parentReference") or {}
+            return {
+                "status": "completed",
+                "item_id": data["id"],
+                "dest_drive_id": pr.get("driveId", dest_drive_id),
+                "name": data.get("name", ""),
+            }
 
-    return {"status": "pending", "monitor_url": monitor_url,
-            "note": "Copy still in progress after 60s. Check the destination folder."}
+    out = {
+        "status": "pending",
+        "monitor_url": monitor_url,
+        "note": "Copy still in progress after 60s. Check the destination folder.",
+    }
+    if last_poll_error:
+        out["poll_error"] = last_poll_error
+    return out
 
 
 def _tool_get_onedrive_item(drive_id: str, item_id: str) -> dict:
     """Get metadata for a specific OneDrive/SharePoint item."""
     from .._m365.helpers import get_skill_client
+    from .._files.errors import classify_graph_error
     gc = get_skill_client(ONEDRIVE_SKILLS_DIR)
     try:
         meta = gc.get(
@@ -1625,7 +1650,10 @@ def _tool_get_onedrive_item(drive_id: str, item_id: str) -> dict:
             params={"$select": "id,name,size,createdDateTime,lastModifiedDateTime,webUrl,parentReference,@microsoft.graph.downloadUrl"},
         )
     except Exception as e:
-        return {"error": f"Could not get item {item_id} on drive {drive_id}: {e}"}
+        return {
+            "error": f"Could not get item {item_id} on drive {drive_id}: {e}",
+            "error_code": classify_graph_error(e),
+        }
     pr = meta.get("parentReference") or {}
     return {
         "item_id": meta.get("id", item_id),
