@@ -1226,10 +1226,19 @@ function createWindow() {
     req.on('error', () => {
       if (timedOut) return;
       healthFailures += 1;
-      if (healthFailures >= HEALTH_GRACE_FAILURES) {
-        healthFailures = 0;
-        reconnectGator('The backend stopped responding.');
-      }
+      if (healthFailures < HEALTH_GRACE_FAILURES) return;
+      healthFailures = 0;
+      // Reloading would drop the open coding-agent terminals, which reconnect
+      // to their sessions on their own. Leave a page that has any.
+      gatorView.webContents
+        .executeJavaScript(
+          "typeof _genAgentTerminals !== 'undefined' && " +
+            'Object.values(_genAgentTerminals).some((t) => t && t.sessions && Object.keys(t.sessions).length > 0)',
+        )
+        .catch(() => false)
+        .then((hasTerminals) => {
+          if (!hasTerminals) reconnectGator('The backend stopped responding.');
+        });
     });
   }, HEALTH_POLL_MS);
   // Dismiss the splash screen once the Gator page has finished loading.
