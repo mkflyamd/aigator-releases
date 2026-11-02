@@ -6,7 +6,7 @@ from skills._files.errors import classify_graph_error, classify_status
 @pytest.mark.parametrize(
     "status,code",
     [(423, "locked"), (401, "forbidden"), (403, "forbidden"), (404, "not_found"),
-     (429, "throttled"), (500, "unknown"), (0, "unknown")],
+     (409, "conflict"), (429, "throttled"), (500, "unknown"), (0, "unknown")],
 )
 def test_classify_status(status, code):
     assert classify_status(status) == code
