@@ -1543,6 +1543,18 @@ def _tool_update_calendar_event(
     _append(optional_attendees, "optional")
 
     if attendee_entries:
+        # Graph replaces the whole attendees array, so carry over the type the caller left out.
+        try:
+            current = gc.get(f"/me/events/{_eid(event_id)}", {"$select": "attendees"}).get("attendees") or []
+        except Exception as ex:
+            return {"updated": False, "error": f"Unable to read the current attendees, so nothing was changed: {ex}"}
+        keep = {"required": not attendees, "optional": not optional_attendees, "resource": True}
+        for entry in current:
+            address = ((entry.get("emailAddress") or {}).get("address") or "").strip()
+            if not address or address.lower() in seen_addresses or not keep.get(entry.get("type"), False):
+                continue
+            attendee_entries.append({"emailAddress": entry["emailAddress"], "type": entry["type"]})
+            seen_addresses.add(address.lower())
         update_payload["attendees"] = attendee_entries
 
     if teams is True:
