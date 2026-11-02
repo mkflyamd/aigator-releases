@@ -30,9 +30,35 @@ def _draft():
     return create_draft("calendar-event", dict(PARAMS), {"subject": "Sync & plan"})
 
 
+def _compose_draft(**changes):
+    return create_draft(
+        "calendar-event", {**PARAMS, "optional_attendees": [], **changes}, {"subject": "Sync & plan"}
+    )
+
+
+def test_open_with_an_optional_attendee_creates_a_draft_that_keeps_them_optional():
+    client = TestClient(app)
+    did = create_draft("calendar-event", dict(PARAMS), {"subject": "Sync & plan"})
+    gc = MagicMock()
+    gc.post.return_value = {"id": "evt1", "webLink": "https://outlook.office365.com/owa/?itemid=evt1"}
+    with patch("skills._m365.helpers.get_cal_client", return_value=gc):
+        res = _post(client, f"/api/drafts/{did}/open-in-outlook")
+    assert res.status_code == 200
+    assert res.json() == {"url": "https://outlook.office365.com/owa/?itemid=evt1"}
+    path, event = gc.post.call_args.args
+    assert path == "/me/events" and event["isDraft"] is True
+    assert [(a["emailAddress"]["address"], a["type"]) for a in event["attendees"]] == [
+        ("a@x.com", "required"),
+        ("b@y.com", "required"),
+        ("c@z.com", "optional"),
+    ]
+    assert "recurrence" not in event
+    assert get_draft(did)["status"] == "handed_off"
+
+
 def test_open_returns_compose_deeplink_with_all_fields():
     client = TestClient(app)
-    did = _draft()
+    did = _compose_draft()
     with patch("skills._m365.helpers.get_graph_client", side_effect=AssertionError("no Graph call")):
         res = _post(client, f"/api/drafts/{did}/open-in-outlook")
     assert res.status_code == 200
@@ -40,7 +66,7 @@ def test_open_returns_compose_deeplink_with_all_fields():
     assert url.netloc == "outlook.office.com" and url.path == "/calendar/0/deeplink/compose"
     q = parse_qs(url.query)
     assert q["subject"] == ["Sync & plan"]
-    assert q["to"] == ["a@x.com;b@y.com;c@z.com"]
+    assert q["to"] == ["a@x.com;b@y.com"]
     assert q["startdt"] == [PARAMS["start"]] and q["enddt"] == [PARAMS["end"]]
     assert q["body"] == [PARAMS["body"]] and q["location"] == ["Room 4"]
     assert q["online"] == ["1"]
@@ -48,14 +74,14 @@ def test_open_returns_compose_deeplink_with_all_fields():
 
 def test_open_without_teams_leaves_the_online_toggle_off():
     client = TestClient(app)
-    did = create_draft("calendar-event", {**PARAMS, "teams": False}, {"subject": "Sync & plan"})
+    did = _compose_draft(teams=False)
     res = _post(client, f"/api/drafts/{did}/open-in-outlook")
     assert "online" not in parse_qs(urlparse(res.json()["url"]).query)
 
 
 def test_open_marks_handed_off_and_second_open_is_409():
     client = TestClient(app)
-    did = _draft()
+    did = _compose_draft()
     assert _post(client, f"/api/drafts/{did}/open-in-outlook").status_code == 200
     assert get_draft(did)["status"] == "handed_off"
     assert _post(client, f"/api/drafts/{did}/open-in-outlook").status_code == 409
@@ -153,7 +179,7 @@ def test_failed_calendar_send_keeps_the_draft_for_retry():
 
 def test_calendar_draft_opened_in_outlook_cannot_also_be_sent():
     client = TestClient(app)
-    did = _draft()
+    did = _compose_draft()
     assert _post(client, f"/api/drafts/{did}/open-in-outlook").status_code == 200
     with patch("skills._m365.helpers.get_cal_client", side_effect=AssertionError("no Graph call")):
         res = _post(client, f"/api/drafts/{did}/approve")
@@ -195,7 +221,7 @@ def test_approving_with_only_a_title_edit_leaves_the_message_untouched():
 
 def test_open_in_outlook_uses_the_edited_title_and_message():
     client = TestClient(app)
-    did = _draft()
+    did = _compose_draft()
     res = _post_edits(client, f"/api/drafts/{did}/open-in-outlook", {"subject": "Kickoff", "body": "Hello"})
     assert res.status_code == 200
     q = parse_qs(urlparse(res.json()["url"]).query)

@@ -6256,6 +6256,13 @@ button[data-default-action]:focus:not(:disabled)::after {
 .avail-grid .ag-all {
   color: var(--accent);
 }
+.avail-grid .ag-section {
+  font-size: 0.64rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
 .avail-grid .ag-name-text {
   display: inline-block;
   max-width: 150px;

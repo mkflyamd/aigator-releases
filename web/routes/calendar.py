@@ -142,7 +142,7 @@ class GridSeriesRequest(BaseModel):
     timezone: str
     attendees: list[str] = []
     optional_attendees: list[str] = []
-    repeat: dict
+    repeat: dict | None = None
 
 
 _INDEXES = {"first", "second", "third", "fourth", "last"}
@@ -204,16 +204,18 @@ def _graph_recurrence(spec: dict, start_date: str) -> dict:
 
 @router.post("/api/calendar/grid-draft-series", dependencies=[Depends(verify_csrf)])
 async def tp_calendar_grid_draft_series(req: GridSeriesRequest):
-    """Creates the grid's picked slot as an unsent recurring draft event and returns its Outlook web link."""
+    """Creates the grid's picked slot as an unsent draft event (recurring when a repeat is given) and returns its Outlook web link."""
     import asyncio
 
     from routes.drafts import _calendar_event_payload
     from skills._m365.helpers import get_cal_client
 
-    try:
-        recurrence = _graph_recurrence(req.repeat, req.start[:10])
-    except (ValueError, TypeError) as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    recurrence = None
+    if req.repeat:
+        try:
+            recurrence = _graph_recurrence(req.repeat, req.start[:10])
+        except (ValueError, TypeError) as e:
+            raise HTTPException(status_code=400, detail=str(e))
     if not (req.attendees or req.optional_attendees):
         raise HTTPException(status_code=400, detail="No attendees specified")
     event = _calendar_event_payload(

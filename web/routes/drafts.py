@@ -1188,9 +1188,9 @@ async def open_draft_in_outlook(draft_id: str, body: dict = None):
             await _sync_task_draft_status(draft_id, "handed_off")
         return {"url": link if link.startswith("https://") else "https://outlook.office.com/calendar"}
 
-    if dtype == "calendar-event" and p.get("recurrence"):
-        # Outlook's compose link cannot carry a recurrence, so the series is
-        # created as an unsent draft event (isDraft) and opened from its webLink.
+    if dtype == "calendar-event" and (p.get("recurrence") or p.get("optional_attendees")):
+        # Outlook's compose link cannot carry a recurrence or mark attendees optional,
+        # so the event is created as an unsent draft (isDraft) and opened from its webLink.
         try:
             from skills._m365.helpers import get_cal_client
 

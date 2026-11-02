@@ -100,6 +100,20 @@ def test_route_creates_an_unsent_draft_series_and_returns_its_link():
     assert event["recurrence"]["range"]["startDate"] == "2026-11-03"
 
 
+def test_route_without_a_repeat_creates_a_one_time_draft_with_optional_attendees():
+    gc = MagicMock()
+    gc.post.return_value = {"id": "evt1", "webLink": "https://outlook.office365.com/owa/?itemid=evt1"}
+    with patch("skills._m365.helpers.get_cal_client", return_value=gc):
+        res = _post({k: v for k, v in BODY.items() if k != "repeat"})
+    assert res.status_code == 200
+    event = gc.post.call_args.args[1]
+    assert event["isDraft"] is True and "recurrence" not in event
+    assert [(a["emailAddress"]["address"], a["type"]) for a in event["attendees"]] == [
+        ("a@x.com", "required"),
+        ("c@z.com", "optional"),
+    ]
+
+
 def test_route_rejects_a_bad_repeat_without_calling_graph():
     with patch("skills._m365.helpers.get_cal_client", side_effect=AssertionError("no Graph call")):
         res = _post({**BODY, "repeat": {"type": "weekly", "days": [], "end": "none"}})

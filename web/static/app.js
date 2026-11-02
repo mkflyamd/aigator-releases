@@ -10906,14 +10906,31 @@ function _showAvailabilityGrid(grid, ownerTabId) {
         td.title = _availabilityGridSlotText(grid, di, k);
       },
     );
-    grid.people.forEach((person, pi) => {
+    const sectionRow = (label) => {
+      const row = table.insertRow();
+      row.className = 'ag-section-row';
+      row.appendChild(nameCell(label, 'ag-section'));
+      const fill = row.insertCell();
+      fill.colSpan = grid.days.length * (k1 - k0);
+    };
+    const personRow = (person, pi) => {
       const th = nameCell(person.you ? 'You' : person.name || person.email, 'ag-person');
       addRow(th, (td, day, di, k) => {
         const st = day.rows[pi][k] || '?';
         td.className = `ag-cell ag-s-${st === '?' ? 'u' : st}`;
         td.title = `${person.name || person.email}: ${STATUS[st] || 'No data'}`;
       });
+    };
+    if (anyOptional) sectionRow('Required');
+    grid.people.forEach((person, pi) => {
+      if (!person.optional) personRow(person, pi);
     });
+    if (anyOptional) {
+      sectionRow('Optional');
+      grid.people.forEach((person, pi) => {
+        if (person.optional) personRow(person, pi);
+      });
+    }
     adding.forEach((label) => {
       const row = table.insertRow();
       row.className = 'ag-pending-row';
@@ -11257,23 +11274,28 @@ function _showAvailabilityGrid(grid, ownerTabId) {
     if (!pickedAt || openOutlook.disabled) return;
     let url;
     try {
-      if (repeat.value === 'none') {
+      const others = grid.people.filter((p) => !p.you && p.email);
+      const repeating = repeat.value !== 'none';
+      if (!repeating && !others.some((p) => p.optional)) {
         url = _availabilityGridComposeUrl(grid, pickedAt.di, pickedAt.k);
       } else {
         openOutlook.disabled = true;
-        openOutlook.textContent = 'Creating the draft series…';
-        const others = grid.people.filter((p) => !p.you && p.email);
+        openOutlook.textContent = repeating
+          ? 'Creating the draft series…'
+          : 'Creating the draft…';
         const slot = _availabilityGridSlotTimes(grid, pickedAt.di, pickedAt.k);
-        const firstDate = panel.first();
+        const firstDate = repeating ? panel.first() : grid.days[pickedAt.di].date;
         ({ url } = await postGridJson('/api/calendar/grid-draft-series', {
           start: firstDate + slot.start.slice(10),
           end: firstDate + slot.end.slice(10),
           timezone: grid.timezone,
           attendees: others.filter((p) => !p.optional).map((p) => p.email),
           optional_attendees: others.filter((p) => p.optional).map((p) => p.email),
-          repeat: panel.spec(),
+          repeat: repeating ? panel.spec() : null,
         }));
-        openOutlook.textContent = 'Draft series opened in Outlook';
+        openOutlook.textContent = repeating
+          ? 'Draft series opened in Outlook'
+          : 'Draft opened in Outlook';
         openOutlook.classList.add('gcc-handed-off');
       }
       if (typeof window.gatorShell !== 'undefined' && window.gatorShell.openOutlookCompose) {

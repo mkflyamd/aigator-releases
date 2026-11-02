@@ -75,6 +75,14 @@ assert(
   'a repeating pick opens a draft series made by the server',
 );
 assert(
+  /!repeating && !others\.some\(\(p\) => p\.optional\)/.test(source),
+  'a one-time pick with an optional attendee opens a server-made draft, since the compose link cannot mark anyone optional',
+);
+assert(
+  /sectionRow\('Required'\)[\s\S]*sectionRow\('Optional'\)/.test(source),
+  'once someone is optional the grid rows are grouped under Required and Optional',
+);
+assert(
   /openOutlook\.disabled = !pickedAt \|\|/.test(source) && /Choose a time first/.test(source),
   'Open in Outlook stays disabled with a hint until a time is chosen',
 );
