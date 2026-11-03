@@ -23,6 +23,7 @@ import hashlib
 from pathlib import Path
 import tempfile
 import json
+import re
 import time
 
 from config import load_config
@@ -492,10 +493,8 @@ def discover_rovo_targets() -> list[JiraTarget]:
         client = None
         try:
             client = _client_for(connection, pooled=False)
-            raw = client.call(resource_tool, {})
-            payload = json.loads(raw) if isinstance(raw, str) else raw
-            resources = payload.get("resources", payload) if isinstance(payload, dict) else payload
-            if not isinstance(resources, list):
+            resources = _accessible_resources(client.call(resource_tool, {}))
+            if resources is None:
                 continue
             # Mark this connection as successfully contacted. Its stored targets
             # will be replaced with what discovery returned (even if empty —
@@ -736,6 +735,126 @@ _ROVO_OPERATION_TO_TOOL = {
 }
 
 
+# Gator's operations are fixed; the Rovo tool that serves each is not. The
+# names above are Rovo v1's. Atlassian renamed some for v2 and moved others
+# behind discover/executeRead/executeWrite, so each operation lists the
+# alternative names and Gator uses whichever the connection actually offers.
+_ROVO_OPERATION_ALIASES = {
+    "add_comment": ("addOrEditJiraIssueComment",),
+    "create_link": ("createJiraIssueLink",),
+    "get_projects": ("listJiraProjects",),
+    "get_issue_types": ("listJiraProjectIssueTypesMetadata",),
+}
+_ROVO_WRITE_OPERATIONS = frozenset({"create_issue", "update_issue", "add_comment", "transition_issue", "create_link"})
+# v1 argument name -> v2 argument name, applied only when the resolved tool's
+# own schema lacks the v1 name.
+_ROVO_ARGUMENT_SYNONYMS = {
+    "create_issue": {"issueTypeName": "issueType", "assignee_account_id": "assignee"},
+    "create_link": {"type": "linkType"},
+    "get_projects": {"searchString": "query"},
+}
+# v2 returns a compact issue by default, which omits components and other
+# fields a write is verified against.
+_ROVO_DEFAULT_ARGUMENTS = {"get_issue": {"view": "full"}}
+
+
+def _rovo_tool_candidates(operation: str) -> tuple[str, ...]:
+    return (_ROVO_OPERATION_TO_TOOL[operation], *_ROVO_OPERATION_ALIASES.get(operation, ()))
+
+
+def _parse_rovo_json(raw: object) -> object:
+    """Leading JSON document of a Rovo reply; ``discover`` appends a plain-text trailer after it."""
+    if not isinstance(raw, str):
+        return raw
+    value, _ = json.JSONDecoder().raw_decode(raw.lstrip())
+    return value
+
+
+def _unwrap_rovo_data(value: object) -> object:
+    if isinstance(value, dict) and set(value) == {"data"}:
+        return value["data"]
+    return value
+
+
+def _accessible_resources(raw: object) -> list[dict] | None:
+    """Accessible Jira sites from either Rovo response shape, each with an ``id``."""
+    parsed = _unwrap_rovo_data(_parse_rovo_json(raw))
+    resources = parsed.get("resources", parsed) if isinstance(parsed, dict) else parsed
+    if not isinstance(resources, list):
+        return None
+    return [
+        {**item, "id": str(item.get("id") or item.get("cloudId") or "")}
+        for item in resources if isinstance(item, dict)
+    ]
+
+
+def _tool_property_names(tool: dict) -> set[str]:
+    schema = tool.get("input_schema") or tool.get("inputSchema") or {}
+    properties = schema.get("properties") if isinstance(schema, dict) else None
+    return set(properties) if isinstance(properties, dict) else set()
+
+
+def _hints_contradict(operation: str, hints: object) -> bool:
+    """True when the server's own hints say this tool is the wrong kind of call."""
+    if not isinstance(hints, dict):
+        return False
+    if hints.get("destructiveHint") is True:
+        return True
+    read_only = hints.get("readOnlyHint")
+    return isinstance(read_only, bool) and read_only == (operation in _ROVO_WRITE_OPERATIONS)
+
+
+def _resolve_rovo_tool(operation: str, cached: dict, client) -> tuple[str, set[str], bool]:
+    """Return (tool name, argument names, via executeRead/executeWrite).
+
+    A directly exposed tool is used when present. Otherwise the connection's
+    discover tool is asked, and the operation is accepted only if the server
+    puts it in the execute tier that matches what Gator means to do.
+    """
+    candidates = _rovo_tool_candidates(operation)
+    unsupported = JiraTargetResolutionError(f"The selected Rovo connection does not support {operation.replace('_', ' ')}.")
+    for name in candidates:
+        tool = cached.get(name)
+        if tool is None:
+            continue
+        if _hints_contradict(operation, tool.get("annotations")):
+            raise JiraTargetResolutionError(
+                f"Rovo tool {name} is not a {'write' if operation in _ROVO_WRITE_OPERATIONS else 'read'} operation "
+                f"according to the server, so Gator will not use it for {operation.replace('_', ' ')}."
+            )
+        return name, _tool_property_names(tool), False
+    tier = "executeWrite" if operation in _ROVO_WRITE_OPERATIONS else "executeRead"
+    if "discover" not in cached or tier not in cached:
+        raise unsupported
+    for name in candidates:
+        query = re.sub(r"(?<!^)(?=[A-Z])", " ", name).lower()
+        raw = client.call("discover", {"query": query})
+        found = _unwrap_rovo_data(_parse_rovo_json(raw))
+        for entry in (found.get("results", []) if isinstance(found, dict) else []):
+            if not isinstance(entry, dict) or entry.get("name") != name:
+                continue
+            if entry.get("executeTool") != tier:
+                raise JiraTargetResolutionError(
+                    f"Rovo lists {name} under {entry.get('executeTool')}, not {tier}, so Gator will not use it for "
+                    f"{operation.replace('_', ' ')}."
+                )
+            inputs = {str(i.get("name")) for i in entry.get("inputs", []) if isinstance(i, dict)}
+            return name, inputs, True
+    raise unsupported
+
+
+def _adapt_rovo_arguments(operation: str, arguments: dict | None, properties: set[str]) -> dict:
+    payload = dict(arguments or {})
+    if properties:
+        for old, new in _ROVO_ARGUMENT_SYNONYMS.get(operation, {}).items():
+            if old in payload and old not in properties and new in properties:
+                payload[new] = payload.pop(old)
+        for key, value in _ROVO_DEFAULT_ARGUMENTS.get(operation, {}).items():
+            if key in properties:
+                payload.setdefault(key, value)
+    return payload
+
+
 def rovo_jira_call(target: JiraTarget, operation: str, arguments: dict) -> object:
     """Call one allowlisted Rovo Jira operation for its captured resource.
 
@@ -746,34 +865,37 @@ def rovo_jira_call(target: JiraTarget, operation: str, arguments: dict) -> objec
     """
     if target.adapter != "rovo-mcp":
         raise JiraTargetResolutionError("This operation requires a Rovo-backed Jira target.")
-    tool_name = _ROVO_OPERATION_TO_TOOL.get(operation)
-    if not tool_name:
+    if operation not in _ROVO_OPERATION_TO_TOOL:
         raise JiraTargetResolutionError(f"Rovo does not have a verified adapter for {operation!r}.")
     from mcp.manager import _client_for, _load_connections
     connection = next((c for c in _load_connections() if c.get("id") == target.connection_id and c.get("enabled", True)), None)
     if connection is None:
         raise JiraTargetResolutionError("The selected Rovo connection is no longer available. Reconnect it and re-draft the action.")
-    cached = connection.get("cached_tools", []) or []
-    names = {str(tool.get("name", "")) for tool in cached if isinstance(tool, dict)}
-    if tool_name not in names or "getAccessibleAtlassianResources" not in names:
+    cached = {str(tool.get("name", "")): tool for tool in connection.get("cached_tools", []) or [] if isinstance(tool, dict)}
+    execute_tool = "executeWrite" if operation in _ROVO_WRITE_OPERATIONS else "executeRead"
+    served_directly = any(name in cached for name in _rovo_tool_candidates(operation))
+    served_by_discovery = "discover" in cached and execute_tool in cached
+    if "getAccessibleAtlassianResources" not in cached or not (served_directly or served_by_discovery):
         raise JiraTargetResolutionError(f"The selected Rovo connection does not support {operation.replace('_', ' ')}.")
     client = None
     try:
         client = _client_for(connection, pooled=False)
-        raw_resources = client.call("getAccessibleAtlassianResources", {})
-        parsed = json.loads(raw_resources) if isinstance(raw_resources, str) else raw_resources
-        resources = parsed.get("resources", parsed) if isinstance(parsed, dict) else parsed
-        if not isinstance(resources, list) or not any(
-            isinstance(item, dict) and str(item.get("id", "")) == target.resource_id
+        resources = _accessible_resources(client.call("getAccessibleAtlassianResources", {}))
+        if not any(
+            str(item.get("id", "")) == target.resource_id
             and _canonical_base_url(str(item.get("url", ""))) == target.base_url
-            for item in resources
+            for item in resources or []
         ):
             raise JiraTargetResolutionError("The selected Jira site is no longer accessible through this Rovo connection. Reconnect and re-draft.")
-        payload = dict(arguments or {})
+        tool_name, properties, via_execute = _resolve_rovo_tool(operation, cached, client)
+        payload = _adapt_rovo_arguments(operation, arguments, properties)
         payload["cloudId"] = target.resource_id
-        raw = client.call(tool_name, payload)
+        if via_execute:
+            raw = client.call(execute_tool, {"cloudId": target.resource_id, "name": tool_name, "inputs": payload})
+        else:
+            raw = client.call(tool_name, payload)
         try:
-            return json.loads(raw) if isinstance(raw, str) else raw
+            return _unwrap_rovo_data(_parse_rovo_json(raw))
         except (TypeError, json.JSONDecodeError):
             return raw
     finally:

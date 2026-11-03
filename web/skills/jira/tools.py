@@ -1651,7 +1651,7 @@ def _tool_jira_open_create_form(
                 if isinstance(raw, list):
                     return raw
                 if isinstance(raw, dict):
-                    for k in ("values", "projects", "data"):
+                    for k in ("values", "projects", "issueTypes", "data"):
                         v = raw.get(k)
                         if isinstance(v, list):
                             return v
