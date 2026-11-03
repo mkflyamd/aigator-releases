@@ -8111,6 +8111,8 @@ if (atlassianAddSiteBtn)
       });
       if (controller.signal.aborted) throw new Error('Cancelled');
       if (!completed.ok) throw new Error(completed.error || 'Atlassian sign-in did not complete');
+      // Saving cannot be undone from here, so stop offering cancel once it starts.
+      _setAtlassianMcpConnectState(atlassianAddSiteBtn, 'connecting', 'Connecting Rovo MCP…');
       atlassianMsg.textContent = 'Adding selected site…';
       const saved = await fetch('/api/config/mcp', {
         method: 'POST',
@@ -8125,7 +8127,6 @@ if (atlassianAddSiteBtn)
           auth_type: 'oauth2',
           oauth_provider_id: started.provider_id,
         }),
-        signal: controller.signal,
       }).then(async (response) => {
         const data = await response.json();
         if (!response.ok || !data.ok)

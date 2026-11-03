@@ -23,6 +23,7 @@ import hashlib
 from pathlib import Path
 import tempfile
 import json
+import logging
 import re
 import time
 
@@ -40,6 +41,7 @@ _target_selection_handles: dict[str, tuple[str, str, float]] = {}
 _TARGET_SELECTION_TTL_SECONDS = 5 * 60
 _staged_attachments: dict[str, dict] = {}
 _attachment_lock = RLock()
+_log = logging.getLogger(__name__)
 _probe_cache: dict[tuple, tuple[bool, float]] = {}
 _probe_cache_lock = RLock()
 _PROBE_CACHE_TTL = 60.0
@@ -616,8 +618,11 @@ def resolve_target_for_context(issue_or_url: str = "", context_id: str = "", for
     return resolve_jira_target(issue_or_url, for_write=for_write, _context_id=context_id)
 
 
-def _probe_project(project_key: str, target: JiraTarget, context_id: str = "") -> bool:
-    """Return True if the project exists on target. Never raises; cached like _probe_target."""
+def _probe_project(project_key: str, target: JiraTarget, context_id: str = "") -> bool | None:
+    """True/False if the project does/does not exist on target, None if the probe failed.
+
+    Never raises. Only definite answers are cached, so a transient failure is not remembered.
+    """
     cache_key = (context_id or "", f"project:{project_key}", target.id)
     with _probe_cache_lock:
         cached = _probe_cache.get(cache_key)
@@ -634,7 +639,10 @@ def _probe_project(project_key: str, target: JiraTarget, context_id: str = "") -
         else:
             data = api.jira_api_for_target(target, "GET", f"project/{project_key}")
             found = str(data.get("key", "")).upper() == project_key
-    except Exception:
+    except Exception as exc:
+        if not str(exc).startswith("HTTP 404"):
+            _log.warning("Jira project probe for %s on %s failed", project_key, target.base_url, exc_info=True)
+            return None
         found = False
     with _probe_cache_lock:
         _probe_cache[cache_key] = (found, time.monotonic())
@@ -659,7 +667,7 @@ def resolve_target_for_project(project: str, context_id: str = "") -> JiraTarget
     key = (project or "").strip().upper()
     if not key:
         raise JiraTargetResolutionError("A Jira project key is required to choose the Jira site.")
-    hits = [t for t in targets if _probe_project(key, t, context_id)]
+    hits = [t for t in targets if _probe_project(key, t, context_id) is True]
     if len(hits) == 1:
         return hits[0]
     if not hits:

@@ -853,9 +853,9 @@ def _site_hosting_jql_project(jql: str, preferred, context_id: str):
     if len(keys) != 1 or len(targets) < 2:
         return preferred
     key = keys.pop()
-    if _probe_project(key, preferred, context_id):
+    if _probe_project(key, preferred, context_id) is not False:
         return preferred
-    hits = [t for t in targets if t.id != preferred.id and _probe_project(key, t, context_id)]
+    hits = [t for t in targets if t.id != preferred.id and _probe_project(key, t, context_id) is True]
     return hits[0] if len(hits) == 1 else preferred
 
 
