@@ -8,6 +8,8 @@ from contextlib import nullcontext
 from .api import jira_api, jira_browse_url, jira_is_cloud, use_site
 from .mutations import (
     JiraTargetResolutionError,
+    _probe_project,
+    available_targets,
     compare_jira_fields,
     configured_builtin_target,
     configured_extra_urls,
@@ -744,8 +746,8 @@ def _adf_to_text(node, depth=0) -> str:
 def _tool_jira_get_issue(issue_key: str, _context_id: str = "") -> dict:
     from .mutations import rovo_jira_call
     try:
-        issue_key = _extract_issue_key(issue_key)
-        target = resolve_target_for_context(issue_key, _context_id)
+        reference, issue_key = issue_key, _extract_issue_key(issue_key)
+        target = resolve_target_for_context(reference, _context_id)
     except JiraTargetResolutionError as exc:
         return _target_resolution_result(exc, _context_id)
     if target.adapter == "rovo-mcp":
@@ -841,17 +843,32 @@ def _tool_jira_get_issue(issue_key: str, _context_id: str = "") -> dict:
     }
 
 
+_JQL_PROJECT_RE = re.compile(r"""\bproject\s*=\s*["']?([A-Za-z][A-Za-z0-9_]*)""", re.IGNORECASE)
+
+
+def _site_hosting_jql_project(jql: str, preferred, context_id: str):
+    """Keep `preferred` unless the JQL names one project that only another site hosts."""
+    keys = {key.upper() for key in _JQL_PROJECT_RE.findall(jql or "")}
+    targets = available_targets()
+    if len(keys) != 1 or len(targets) < 2:
+        return preferred
+    key = keys.pop()
+    if _probe_project(key, preferred, context_id):
+        return preferred
+    hits = [t for t in targets if t.id != preferred.id and _probe_project(key, t, context_id)]
+    return hits[0] if len(hits) == 1 else preferred
+
+
 def _tool_jira_search(jql: str, max_results: int = 20, _context_id: str = "") -> dict:
     from .mutations import rovo_jira_call
     try:
-        # A JQL search has no issue key to probe, so with several sites and no
-        # tab selection it runs on the primary direct site.
         target = selected_target_for_context(_context_id)
         if target is None:
             try:
                 target = configured_builtin_target()
             except Exception:
                 target = resolve_target_for_context(context_id=_context_id)
+        target = _site_hosting_jql_project(jql, target, _context_id)
     except JiraTargetResolutionError as exc:
         return _target_resolution_result(exc, _context_id)
     if target.adapter == "rovo-mcp":
@@ -1039,8 +1056,8 @@ def _tool_jira_add_comment(issue_key: str, comment: str, _context_id: str = "") 
     """Stage a comment; approval verifies its returned ID on the same issue."""
     from .mutations import rovo_jira_call
     try:
-        issue_key = _extract_issue_key(issue_key)
-        target = resolve_target_for_context(issue_key, _context_id, for_write=True)
+        reference, issue_key = issue_key, _extract_issue_key(issue_key)
+        target = resolve_target_for_context(reference, _context_id, for_write=True)
         if _context_id:
             select_target_for_context(_context_id, target.id)
         if target.adapter == "rovo-mcp":
@@ -1077,8 +1094,8 @@ def _tool_jira_update_issue(
     """Read/validate and stage an update; approval performs the only write."""
     from .mutations import rovo_jira_call
     try:
-        issue_key = _extract_issue_key(issue_key)
-        target = resolve_target_for_context(issue_key, _context_id, for_write=True)
+        reference, issue_key = issue_key, _extract_issue_key(issue_key)
+        target = resolve_target_for_context(reference, _context_id, for_write=True)
         if _context_id:
             select_target_for_context(_context_id, target.id)
     except JiraTargetResolutionError as exc:
@@ -1214,8 +1231,8 @@ def _tool_jira_add_watcher(
 ) -> dict:
     """Stage an exact-account watcher mutation for HITL approval."""
     try:
-        issue_key = _extract_issue_key(issue_key)
-        target = resolve_target_for_context(issue_key, _context_id, for_write=True)
+        reference, issue_key = issue_key, _extract_issue_key(issue_key)
+        target = resolve_target_for_context(reference, _context_id, for_write=True)
         if _context_id:
             select_target_for_context(_context_id, target.id)
     except JiraTargetResolutionError as exc:
@@ -1247,8 +1264,8 @@ def _tool_jira_stage_attachment(issue_key: str, upload_id: str, _context_id: str
     """Stage an immutable attachment snapshot for approval, never a model path."""
     from .mutations import staged_attachment
     try:
-        issue_key = _extract_issue_key(issue_key)
-        target = resolve_target_for_context(issue_key, _context_id, for_write=True)
+        reference, issue_key = issue_key, _extract_issue_key(issue_key)
+        target = resolve_target_for_context(reference, _context_id, for_write=True)
         if _context_id:
             select_target_for_context(_context_id, target.id)
     except JiraTargetResolutionError as exc:
@@ -1290,8 +1307,8 @@ def _tool_jira_stage_teams_attachment(
     and no local filename/path is returned to the model.
     """
     try:
-        issue_key = _extract_issue_key(issue_key)
-        target = resolve_target_for_context(issue_key, _context_id, for_write=True)
+        reference, issue_key = issue_key, _extract_issue_key(issue_key)
+        target = resolve_target_for_context(reference, _context_id, for_write=True)
         if _context_id:
             select_target_for_context(_context_id, target.id)
     except JiraTargetResolutionError as exc:
@@ -1332,8 +1349,8 @@ def _tool_jira_stage_teams_image(
 ) -> dict:
     """Fetch an authenticated inline Teams image into Jira's opaque staging area."""
     try:
-        issue_key = _extract_issue_key(issue_key)
-        target = resolve_target_for_context(issue_key, _context_id, for_write=True)
+        reference, issue_key = issue_key, _extract_issue_key(issue_key)
+        target = resolve_target_for_context(reference, _context_id, for_write=True)
         if _context_id:
             select_target_for_context(_context_id, target.id)
     except JiraTargetResolutionError as exc:
@@ -1393,8 +1410,8 @@ def _tool_jira_transition(
 ) -> dict:
     from .mutations import rovo_jira_call
     try:
-        issue_key = _extract_issue_key(issue_key)
-        target = resolve_target_for_context(issue_key, _context_id, for_write=True)
+        reference, issue_key = issue_key, _extract_issue_key(issue_key)
+        target = resolve_target_for_context(reference, _context_id, for_write=True)
         if _context_id:
             select_target_for_context(_context_id, target.id)
     except JiraTargetResolutionError as exc:
@@ -1461,8 +1478,8 @@ def _tool_jira_link_issues(
 ) -> dict:
     from .mutations import rovo_jira_call
     try:
-        issue_key = _extract_issue_key(issue_key)
-        target = resolve_target_for_context(issue_key, _context_id, for_write=True)
+        reference, issue_key = issue_key, _extract_issue_key(issue_key)
+        target = resolve_target_for_context(reference, _context_id, for_write=True)
         if _context_id:
             select_target_for_context(_context_id, target.id)
         if target.adapter == "rovo-mcp":

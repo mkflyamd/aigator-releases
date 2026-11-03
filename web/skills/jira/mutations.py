@@ -600,8 +600,17 @@ def selected_target_for_context(context_id: str) -> JiraTarget | None:
 
 
 def resolve_target_for_context(issue_or_url: str = "", context_id: str = "", for_write: bool = False) -> JiraTarget:
-    """Resolve a target using a UI-owned tab selection when one exists."""
+    """Resolve a target using a UI-owned tab selection when one exists.
+
+    A read given a full URL goes to the site that URL names: the user pointed
+    at it explicitly, so an earlier tab selection must not redirect the read.
+    Writes keep the selection and fail closed if the URL names another site.
+    """
     selected = selected_target_for_context(context_id)
+    if selected is not None and not for_write and (issue_or_url or "").startswith(("http://", "https://")):
+        matches = [t for t in available_targets() if _url_matches_target(issue_or_url, t)]
+        if len(matches) == 1:
+            return matches[0]
     if selected is not None:
         return resolve_jira_target(issue_or_url, target_id=selected.id, for_write=for_write)
     return resolve_jira_target(issue_or_url, for_write=for_write, _context_id=context_id)
