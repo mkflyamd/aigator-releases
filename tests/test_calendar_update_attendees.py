@@ -174,6 +174,18 @@ def test_an_event_edited_after_staging_is_not_overwritten():
     assert get_draft(did)["status"] == "pending"
 
 
+def test_a_body_edited_in_outlook_after_staging_is_not_overwritten():
+    client = TestClient(app)
+    did = _staged_draft()
+    edited = {**EVENT, "body": {"contentType": "html", "content": "<p>Agenda added in Outlook</p>"}}
+    gc = MagicMock()
+    gc.get.return_value = edited
+    with patch("skills._m365.helpers.get_cal_client", return_value=gc):
+        res = _post(client, f"/api/drafts/{did}/approve")
+    assert res.status_code == 409
+    gc.patch.assert_not_called()
+
+
 def test_a_failed_update_keeps_the_draft_for_retry():
     client = TestClient(app)
     did = _staged_draft()

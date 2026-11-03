@@ -1466,7 +1466,7 @@ def _normalize_local_datetime(dt_str: str, target_tz) -> str:
         return dt_str
 
 
-_UPDATE_READ_FIELDS = "subject,start,end,location,attendees,isOnlineMeeting,isOrganizer,type,webLink,recurrence"
+_UPDATE_READ_FIELDS = "subject,start,end,location,attendees,body,isOnlineMeeting,isOrganizer,type,webLink,recurrence"
 
 
 def _attendee_people(entries: list) -> dict:
@@ -1675,6 +1675,7 @@ def _event_fingerprint(event: dict) -> dict:
         "start": ((event.get("start") or {}).get("dateTime") or "")[:19],
         "end": ((event.get("end") or {}).get("dateTime") or "")[:19],
         "location": (event.get("location") or {}).get("displayName") or "",
+        "body": (event.get("body") or {}).get("content") or "",
         "attendees": sorted(
             [(a.get("emailAddress") or {}).get("address", "").lower(), a.get("type") or "required"]
             for a in event.get("attendees") or []
