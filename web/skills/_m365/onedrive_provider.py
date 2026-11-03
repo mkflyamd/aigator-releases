@@ -73,13 +73,16 @@ class OneDriveProvider:
             return out
 
     def find_in_folder(self, dest_folder, name, size):
-        """The item called ``name`` in the folder, or None (also when it cannot be looked up)."""
+        """The item called ``name`` in the folder, None when it is not there, or an error result
+        when the folder cannot be looked up."""
         try:
             item = self._client().get(
                 f"/drives/{_q(dest_folder['drive_id'])}/items/{_q(dest_folder['folder_id'])}:/{_q(name)}"
             )
-        except Exception:
-            return None
+        except Exception as e:
+            if http_status(e) == 404:
+                return None
+            return _failure("Could not look in the destination folder", e)
         if not isinstance(item, dict) or not item.get("id"):
             return None
         if size is not None and item.get("size") != size:

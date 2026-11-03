@@ -256,6 +256,7 @@ def test_find_in_folder_error_dict_is_not_a_found_item(copy):
 
 LANDED = {"item_id": "n7", "drive_id": "d2", "name": "report.docx", "web_url": "u7"}
 AMBIGUOUS = {"error": "Copy request failed: timed out", "error_code": "unknown", "ambiguous": True}
+LOOKUP_FAILED = {"error": "lookup failed", "error_code": "unknown"}
 
 
 def _uploads(p):
@@ -283,6 +284,13 @@ def test_definite_copy_refusal_falls_back_to_download_and_upload(copy, tmp_path)
     out, _ = run(p, mode="copy", downloads_dir=tmp_path)
     assert (out["status"], out["method"]) == ("copied", "download_upload")
     assert out["dest"] == up and len(_uploads(p)) == 1
+
+
+def test_failed_snapshot_never_reports_a_later_match_as_the_copy():
+    p = FakeProvider(copy={"status": "pending", "monitor_url": "m"}, find=[LOOKUP_FAILED, LANDED])
+    out, _ = run(p, mode="copy")
+    assert out["status"] == "pending" and out["dest"] is None
+    assert out["original_remains"] is True
 
 
 def test_pending_copy_with_pre_existing_match_stays_pending():

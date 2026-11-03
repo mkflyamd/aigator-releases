@@ -74,14 +74,22 @@ def test_find_in_folder_matches_name_and_size_with_encoded_path():
     assert gc.get.call_args.args[0] == "/drives/d%2F2/items/f%2B2:/a%20b.docx"
 
 
-def test_find_in_folder_none_on_size_mismatch_or_error():
+def test_find_in_folder_none_on_size_mismatch_or_absent():
     p, gc = provider()
     gc.get.return_value = {"id": "X", "name": "a.docx", "size": 99, "webUrl": "u", "parentReference": {}}
     assert p.find_in_folder({"drive_id": "d", "folder_id": "f"}, "a.docx", 10) is None
     gc.get.side_effect = Err(404)
     assert p.find_in_folder({"drive_id": "d", "folder_id": "f"}, "a.docx", 10) is None
+
+
+def test_find_in_folder_lookup_failure_is_an_error_not_absence():
+    p, gc = provider()
+    gc.get.side_effect = Err(500)
+    out = p.find_in_folder({"drive_id": "d", "folder_id": "f"}, "a.docx", 10)
+    assert out["error_code"] == "unknown" and "error" in out
     p, _ = provider(client=_broken_client)
-    assert p.find_in_folder({"drive_id": "d", "folder_id": "f"}, "a.docx", 10) is None
+    out = p.find_in_folder({"drive_id": "d", "folder_id": "f"}, "a.docx", 10)
+    assert "not signed in" in out["error"] and out["error_code"] == "unknown"
 
 
 def test_find_in_folder_none_when_item_has_no_id():
