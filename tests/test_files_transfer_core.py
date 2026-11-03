@@ -40,6 +40,8 @@ class FakeProvider:
 
     def find_in_folder(self, dest, name, size):
         self.calls.append("find")
+        if isinstance(self.find, list):  # scripted: one result per call, the last one repeats
+            return self.find.pop(0) if len(self.find) > 1 else self.find[0]
         return self.find
 
     def download(self, ref, local_path):
@@ -101,12 +103,12 @@ def test_copy_mode_skips_owner_check_and_move():
     p = FakeProvider(copy=DONE)
     out, _ = run(p, mode="copy")
     assert out["status"] == "copied" and out["reason"] is None and out["original_remains"] is True
-    assert p.calls == ["stat", "copy", "stat"]
+    assert p.calls == ["stat", "find", "copy", "stat"]
 
 
 def test_pending_copy_resolved_by_finding_item_in_destination():
     found = {"item_id": "n9", "drive_id": "d2", "name": "report.docx", "web_url": "u9"}
-    p = FakeProvider(copy={"status": "pending", "monitor_url": "m"}, find=found)
+    p = FakeProvider(copy={"status": "pending", "monitor_url": "m"}, find=[None, found])
     out, _ = run(p, mode="copy")
     assert out["status"] == "copied" and out["dest"] == found
 
@@ -250,3 +252,48 @@ def test_find_in_folder_error_dict_is_not_a_found_item(copy):
     p = FakeProvider(copy=copy, find={"error": "list failed", "error_code": "unknown"})
     out, _ = run(p, mode="copy")
     assert out["status"] == "pending" and out["dest"] is None
+
+
+LANDED = {"item_id": "n7", "drive_id": "d2", "name": "report.docx", "web_url": "u7"}
+COPY_ERR = {"error": "monitor poll failed", "error_code": "unknown"}
+
+
+def _uploads(p):
+    return [c for c in p.calls if isinstance(c, tuple) and c[0] == "upload"]
+
+
+def test_copy_error_but_copy_landed_reports_server_copy_without_upload(tmp_path):
+    p = FakeProvider(move=[LOCKED, LOCKED, LOCKED], copy=COPY_ERR, find=[None, LANDED],
+                     download={"saved_to": str(tmp_path / "report.docx")}, upload=MOVED)
+    out, _ = run(p, downloads_dir=tmp_path)
+    assert (out["status"], out["method"], out["reason"]) == ("copied", "server_copy", "locked")
+    assert out["dest"] == LANDED and out["original_remains"] is True
+    assert out["message"] == tr._copied_message("locked")
+    assert _uploads(p) == [] and not any(isinstance(c, tuple) for c in p.calls)
+
+
+def test_copy_error_nothing_at_destination_falls_back(tmp_path):
+    up = {"item_id": "n5", "drive_id": "d2", "name": "report.docx", "web_url": "u5"}
+    p = FakeProvider(copy=COPY_ERR, find=[None, None],
+                     download={"saved_to": str(tmp_path / "report.docx")}, upload=up)
+    out, _ = run(p, mode="copy", downloads_dir=tmp_path)
+    assert (out["status"], out["method"]) == ("copied", "download_upload")
+    assert len(_uploads(p)) == 1
+
+
+def test_copy_error_with_pre_existing_match_falls_back(tmp_path):
+    old = {"item_id": "old1", "drive_id": "d2", "name": "report.docx", "web_url": "u0"}
+    up = {"item_id": "n5", "drive_id": "d2", "name": "report (1).docx", "web_url": "u5"}
+    p = FakeProvider(copy=COPY_ERR, find=[old, old],
+                     download={"saved_to": str(tmp_path / "report.docx")}, upload=up)
+    out, _ = run(p, mode="copy", downloads_dir=tmp_path)
+    assert (out["status"], out["method"]) == ("copied", "download_upload")
+    assert out["dest"] == up and len(_uploads(p)) == 1
+
+
+def test_pending_copy_with_pre_existing_match_stays_pending():
+    old = {"item_id": "old1", "drive_id": "d2", "name": "report.docx", "web_url": "u0"}
+    p = FakeProvider(copy={"status": "pending", "monitor_url": "m"}, find=[old, old])
+    out, _ = run(p, mode="copy")
+    assert out["status"] == "pending" and out["dest"] is None
+    assert not any(isinstance(c, tuple) for c in p.calls)
