@@ -9,7 +9,9 @@ const { test } = require('node:test');
 const css = fs.readFileSync(path.join(__dirname, '..', 'web', 'static', 'style.css'), 'utf8');
 
 function block(selector) {
-  const m = css.match(new RegExp('(^|\\n)' + selector.replace(/[.]/g, '\\.') + '\\s*\\{([^}]*)\\}'));
+  const m = css.match(
+    new RegExp('(^|\\n)' + selector.replace(/[.]/g, '\\.') + '\\s*\\{([^}]*)\\}'),
+  );
   assert(m, selector + ' rule exists');
   return m[2];
 }

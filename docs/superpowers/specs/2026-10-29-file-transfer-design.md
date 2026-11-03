@@ -45,9 +45,9 @@ The four tools are registered in the existing `onedrive` skill (`web/skills/oned
 
 **Tools:**
 
-| Tool | Purpose |
-|---|---|
-| `file_upload` | Upload a local file to a folder ref (path guard applies) |
+| Tool            | Purpose                                                       |
+| --------------- | ------------------------------------------------------------- |
+| `file_upload`   | Upload a local file to a folder ref (path guard applies)      |
 | `file_transfer` | `mode` = `move` or `copy`, source ref, destination folder ref |
 
 Stat and download are not added as new tools: `get_onedrive_item` and `download_onedrive_file` already take `drive_id` + `item_id` and stay the entry points. A neutral `file_info`/`file_download` alias would be pure duplication until a second provider exists; adding one then is a one-function change.
