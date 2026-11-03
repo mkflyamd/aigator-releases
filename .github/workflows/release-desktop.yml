@@ -41,7 +41,7 @@ jobs:
             architecture: x64
             startup_attempts: 360
           - name: macOS arm64
-            os: macos-14
+            os: macos-15
             builder_args: --mac --arm64
             backend_name: aigator-backend
             architecture: arm64
