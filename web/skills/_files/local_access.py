@@ -47,12 +47,16 @@ def require_local_read(
         return checked, {"error": _DENIED_MSG}
     if status == "expired":
         return checked, {"error": _EXPIRED_MSG}
+    label = destination_label()
+    if not label:
+        return checked, {"error": "Could not identify the destination folder, so no approval was requested. "
+                                  "Check the destination and try again."}
     if req is None:
         req = approvals.create(tab, read, [], [], tool=tool, command=destination)
     card = {
         "request_id": req.id, "read_paths": list(req.read_paths), "write_paths": [],
         "network_hosts": [], "context_id": req.context_id, "tool": tool,
-        "destination": destination_label(),
+        "destination": label,
     }
     return checked, {
         "approval_required": True, "request_id": req.id, "read_paths": card["read_paths"],
