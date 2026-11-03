@@ -93,3 +93,11 @@ def test_get_item_error_has_error_code():
     with patch("skills._m365.helpers.get_skill_client", return_value=gc):
         out = od._tool_get_onedrive_item("d1", "i1")
     assert out["error_code"] == "not_found"
+
+
+def test_copy_without_monitor_url_has_error_code(monkeypatch):
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: _Resp(202))
+    with patch("skills._m365.helpers.get_skill_client", return_value=_gc()):
+        out = od._tool_copy_onedrive_file("d1", "i1", "d2", "f2")
+    assert "monitor URL" in out["error"]
+    assert out["error_code"] == "unknown"
