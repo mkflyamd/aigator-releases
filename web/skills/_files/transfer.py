@@ -120,10 +120,13 @@ def transfer(provider, source, dest_folder, mode="move", new_name="", sleep=time
                 return _failed(moved["error"], moved.get("error_code", "unknown"))
             reason = "locked"
 
+    # Snapshot the destination first: a same-name, same-size file that is already there
+    # proves nothing about whether this copy landed.
+    existed_before = _found_item(provider.find_in_folder(dest_folder, name, size))
     copied = provider.copy(source, dest_folder, new_name)
     if "error" not in copied:
         if copied.get("status") == "pending":
-            found = provider.find_in_folder(dest_folder, name, size)
+            found = None if existed_before else provider.find_in_folder(dest_folder, name, size)
             dest = _dest(found) if _found_item(found) else None
         else:
             dest = _copied_dest(provider, copied, dest_folder, name, size)
@@ -139,6 +142,11 @@ def transfer(provider, source, dest_folder, mode="move", new_name="", sleep=time
         )
     if copied.get("error_code") in _NO_FALLBACK:
         return _failed(copied["error"], copied["error_code"], reason)
+    if not existed_before:
+        # The copy may have finished in OneDrive even though it reported an error.
+        found = provider.find_in_folder(dest_folder, name, size)
+        if _found_item(found):
+            return _result("copied", "server_copy", True, reason, _dest(found), message=_copied_message(reason))
 
     try:
         local = _unique_local_path(downloads_dir or Path.home() / "Downloads", name)
