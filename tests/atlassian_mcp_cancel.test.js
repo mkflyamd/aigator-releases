@@ -19,8 +19,11 @@ function between(startMarker, endMarker) {
   return source.slice(start, end);
 }
 
-const helperSource = between('function _setAtlassianMcpConnectState', 'async function loadAtlassianStatus');
-const handlerSource = between("if (atlassianAddSiteBtn)\n", '/* ── GitHub');
+const helperSource = between(
+  'function _setAtlassianMcpConnectState',
+  'async function loadAtlassianStatus',
+);
+const handlerSource = between('if (atlassianAddSiteBtn)\n', '/* ── GitHub');
 
 function makeElement(parent = null) {
   const el = {
@@ -93,7 +96,8 @@ const tick = (ms = 20) => new Promise((r) => setTimeout(r, ms));
     const calls = [];
     const env = makeEnv((url, opts = {}) => {
       calls.push({ url, opts });
-      if (url.includes('oauth/start')) return json({ authorize_url: 'https://auth', state: 's1', provider_id: 'p1' });
+      if (url.includes('oauth/start'))
+        return json({ authorize_url: 'https://auth', state: 's1', provider_id: 'p1' });
       if (url.includes('oauth/poll')) return json({ status: 'pending' });
       throw new Error('unexpected ' + url);
     });
@@ -116,14 +120,23 @@ const tick = (ms = 20) => new Promise((r) => setTimeout(r, ms));
     let finishSave;
     const env = makeEnv((url, opts = {}) => {
       calls.push({ url, opts });
-      if (url.includes('oauth/start')) return json({ authorize_url: 'https://auth', state: 's1', provider_id: 'p1' });
+      if (url.includes('oauth/start'))
+        return json({ authorize_url: 'https://auth', state: 's1', provider_id: 'p1' });
       if (url.includes('oauth/poll')) return json({ status: 'done', ok: true });
-      if (url === '/api/config/mcp') return new Promise((resolve) => (finishSave = () => resolve({ ok: true, json: () => Promise.resolve({ ok: true, tool_count: 3 }) })));
+      if (url === '/api/config/mcp')
+        return new Promise(
+          (resolve) =>
+            (finishSave = () =>
+              resolve({ ok: true, json: () => Promise.resolve({ ok: true, tool_count: 3 }) })),
+        );
       return json({});
     });
     env.button.listeners.click();
     await tick(40);
-    assert(calls.some((c) => c.url === '/api/config/mcp'), 'save started');
+    assert(
+      calls.some((c) => c.url === '/api/config/mcp'),
+      'save started',
+    );
     assert.strictEqual(cancelOf(env), null, '× is not offered while saving');
     assert.strictEqual(env.button.disabled, true);
     const save = calls.find((c) => c.url === '/api/config/mcp');
