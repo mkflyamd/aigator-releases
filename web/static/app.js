@@ -10308,6 +10308,18 @@ function _showSandboxApproval(data, ownerTabId) {
 
   const body = document.createElement('div');
   body.className = 'gcc-body';
+  if (tool === 'file_upload' && typeof data.destination === 'string' && data.destination) {
+    const row = document.createElement('div');
+    row.className = 'gcc-field-row gcc-field-row--block';
+    const key = document.createElement('span');
+    key.className = 'gcc-field-key';
+    key.textContent = 'Upload to';
+    const folder = document.createElement('div');
+    folder.className = 'gcc-field-val';
+    folder.textContent = data.destination;
+    row.append(key, folder);
+    body.appendChild(row);
+  }
   if (isShell && typeof data.command === 'string' && data.command) {
     const row = document.createElement('div');
     row.className = 'gcc-field-row gcc-field-row--block';
@@ -10381,8 +10393,9 @@ function _showSandboxApproval(data, ownerTabId) {
   footer.className = 'gcc-footer';
   const footNote = document.createElement('span');
   footNote.className = 'gcc-refine';
-  footNote.textContent =
-    'Allowed until you close this tab. Unanswered requests expire after 10 minutes.';
+  footNote.textContent = onceOnly
+    ? 'Unanswered requests expire after 10 minutes.'
+    : 'Allowed until you close this tab. Unanswered requests expire after 10 minutes.';
   footer.appendChild(footNote);
 
   box.append(header, body, actions, footer);

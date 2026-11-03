@@ -62,12 +62,47 @@ def test_a_denied_request_is_not_retried_into_an_upload(report, provider):
     provider.upload.assert_not_called()
 
 
-def test_allow_for_this_tab_covers_later_uploads_of_that_file(report, provider):
+def test_an_upload_approval_cannot_be_widened_to_the_tab(report, provider):
     req_id = _upload(report)["request_id"]
-    approvals.decide(req_id, "tab1", True, scope="task")
-    task_grants.add("tab1", [str(report.resolve())], [], [])
+    assert approvals.decide(req_id, "tab1", True, scope="task").scope == "once"
     assert _upload(report)["status"] == "uploaded"
+    assert task_grants.covers("tab1", [str(report.resolve())], [], []) is False
+
+
+def test_a_code_run_grant_does_not_stand_in_for_an_upload_approval(report, provider):
+    task_grants.add("tab1", [str(report.resolve().parent)], [], [])
+    assert _upload(report)["approval_required"] is True
+    provider.upload.assert_not_called()
+
+
+def test_an_approval_holds_only_for_the_destination_it_was_shown(report, provider):
+    req_id = _upload(report)["request_id"]
+    approvals.decide(req_id, "tab1", True)
+    other = od.TOOL_HANDLERS["file_upload"](
+        local_path=str(report), _context_id="tab1", dest_drive_id="d2", dest_folder_id="elsewhere")
+    assert other["approval_required"] is True
+    provider.upload.assert_not_called()
     assert _upload(report)["status"] == "uploaded"
+
+
+def test_the_card_names_the_destination_folder(report, provider):
+    with patch.object(od, "_tool_get_onedrive_item", return_value={"name": "Reports 2026"}):
+        card = _upload(report)["_sandbox_approval"]
+    assert card["destination"] == "Reports 2026"
+
+
+def test_the_upload_reads_the_path_that_was_checked(tmp_path, provider):
+    real = tmp_path / "real.docx"
+    real.write_bytes(b"x")
+    link = tmp_path / "link.docx"
+    try:
+        link.symlink_to(real)
+    except OSError:
+        pytest.skip("symlinks are not available here")
+    approvals.decide(_upload(link)["request_id"], "tab1", True)
+    assert _upload(link)["status"] == "uploaded"
+    assert provider.upload.call_args.args[0] == str(real.resolve())
+    assert provider.upload.call_args.args[2] == "link.docx"
 
 
 def test_an_approval_in_one_tab_does_not_apply_to_another(report, provider):
