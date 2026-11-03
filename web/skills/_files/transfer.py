@@ -120,13 +120,13 @@ def transfer(provider, source, dest_folder, mode="move", new_name="", sleep=time
                 return _failed(moved["error"], moved.get("error_code", "unknown"))
             reason = "locked"
 
-    # Snapshot the destination first: a same-name, same-size file that is already there
-    # proves nothing about whether this copy landed.
-    existed_before = _found_item(provider.find_in_folder(dest_folder, name, size))
+    # Snapshot the destination first. Only a lookup that found nothing (None) lets a later
+    # match count as this copy: a file already there, or a failed lookup, proves nothing.
+    dest_was_empty = provider.find_in_folder(dest_folder, name, size) is None
     copied = provider.copy(source, dest_folder, new_name)
     if "error" not in copied:
         if copied.get("status") == "pending":
-            found = None if existed_before else provider.find_in_folder(dest_folder, name, size)
+            found = provider.find_in_folder(dest_folder, name, size) if dest_was_empty else None
             dest = _dest(found) if _found_item(found) else None
         else:
             dest = _copied_dest(provider, copied, dest_folder, name, size)
