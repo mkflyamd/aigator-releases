@@ -835,15 +835,29 @@ def _reuse_or_compute_skill_id(name: str, transport: str, edit_id: str) -> str:
     return _compute_skill_id(name, edit_id)
 
 
+_TOOL_HINT_KEYS = ("readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint")
+
+
+def _tool_hints(tool: dict) -> dict:
+    annotations = tool.get("annotations")
+    if not isinstance(annotations, dict):
+        return {}
+    return {k: annotations[k] for k in _TOOL_HINT_KEYS if isinstance(annotations.get(k), bool)}
+
+
 def _normalize_tools(raw_tools: list) -> list[dict]:
-    return [
-        {
+    normalized = []
+    for t in raw_tools:
+        entry = {
             "name": t["name"],
             "description": t.get("description", ""),
             "input_schema": t.get("inputSchema") or t.get("input_schema") or {"type": "object", "properties": {}},
         }
-        for t in raw_tools
-    ]
+        hints = _tool_hints(t)
+        if hints:
+            entry["annotations"] = hints
+        normalized.append(entry)
+    return normalized
 
 
 def _build_connection_record(skill_id: str, name: str, transport: str,
