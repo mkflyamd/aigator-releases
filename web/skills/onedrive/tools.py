@@ -1635,7 +1635,10 @@ def _tool_copy_onedrive_file(source_drive_id: str, source_item_id: str,
                 "dest_drive_id": pr.get("driveId", dest_drive_id),
                 "name": data.get("name", ""),
             }
-        return {"error": "Copy request did not return a monitor URL. The copy may have succeeded — check the destination folder."}
+        return {
+            "error": "Copy request did not return a monitor URL. The copy may have succeeded — check the destination folder.",
+            "error_code": "unknown",
+        }
 
     last_poll_error = ""
     for _ in range(30):
