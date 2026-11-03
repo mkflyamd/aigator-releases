@@ -31,7 +31,7 @@ Two Gator chats asked to move a Teams-attached file into a OneDrive folder. The 
 `read/list/search/download/move/copy/get_onedrive_item` and `resolve_teams_attachment` keep their names, arguments and results. Only two changes:
 
 1. `copy_onedrive_file`: poll the monitor URL without `Authorization`, treat a bare item JSON (no `status`) as completed, and surface the last poll error instead of swallowing it.
-2. `move_onedrive_file`, `copy_onedrive_file` and `get_onedrive_item` error dicts gain an additive `error_code` (`locked`, `forbidden`, `not_found`, `throttled`, `unknown`) next to the existing `error` string.
+2. `move_onedrive_file`, `copy_onedrive_file` and `get_onedrive_item` error dicts gain an additive `error_code` (`locked`, `forbidden`, `not_found`, `throttled`, `conflict`, `unknown`) next to the existing `error` string.
 
 ### New file tools
 
@@ -57,7 +57,7 @@ Stat and download are not added as new tools: `get_onedrive_item` and `download_
 1. `copy` mode: server-side copy; if it fails, go to step 4.
 2. `move` mode: if the source drive is another person's OneDrive (Graph `driveType` is `business` or `personal` and its id differs from the user's `/me/drive` id, or the check cannot be made), perform a copy instead and say so (`reason: "not_owner"`). SharePoint libraries (`documentLibrary`) and the user's own drive attempt the native move.
 3. On `locked`, retry the move twice (3s, then 6s). If still locked, do a server-side copy.
-4. If the copy fails with anything other than `forbidden` or `not_found`, download the source to `~/Downloads` (the user's stated fallback, with a numeric suffix if the name is taken, never overwriting a local file) and upload it to the destination folder.
+4. If the copy fails with anything other than `forbidden`, `not_found`, `conflict` or `throttled`, first check the destination for the copy (only if no same-name, same-size file was there before the copy) and report it as a server copy if it landed; otherwise download the source to `~/Downloads` (the user's stated fallback, with a numeric suffix if the name is taken, never overwriting a local file) and upload it to the destination folder. A failed size check after the upload is reported as `verify_failed`.
 5. Verify the destination: confirm the item by ID, or if the copy is still pending list the destination folder for the name and size.
 
 Result:
