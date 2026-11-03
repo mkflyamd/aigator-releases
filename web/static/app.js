@@ -7947,7 +7947,6 @@ async function saveAtlassianExtraSites(kind, urls) {
   return res.ok ? '' : data.detail || 'error';
 }
 const atlassianSaveBtn = document.getElementById('atlassian-save-btn');
-const atlassianCloudMcpBtn = document.getElementById('atlassian-cloud-mcp-btn');
 const atlassianAddSiteBtn = document.getElementById('atlassian-add-site-btn');
 const atlassianMsg = document.getElementById('atlassian-msg');
 
@@ -8040,14 +8039,11 @@ atlassianSaveBtn.addEventListener('click', async () => {
       atlassianDot.className = 'section-status st-ok';
       atlassianDetail.textContent = email;
       atlassianSaveBtn.textContent = 'Reconnect';
-      const autoCloudMcp = Boolean(atlassianCloudMcpBtn) && jiraUrl.includes('atlassian.net');
-      if (autoCloudMcp) await connectAtlassianCloudMcp();
       if (typeof _loadMcpConnections === 'function') await _loadMcpConnections();
       if (typeof checkSkillConnectionStatus === 'function') await checkSkillConnectionStatus();
-      if (!autoCloudMcp)
-        setTimeout(() => {
-          atlassianMsg.textContent = '';
-        }, 3000);
+      setTimeout(() => {
+        atlassianMsg.textContent = '';
+      }, 3000);
     } else {
       atlassianMsg.textContent = jr.error || cr.error || 'Save failed.';
     }
@@ -8055,46 +8051,6 @@ atlassianSaveBtn.addEventListener('click', async () => {
     atlassianMsg.textContent = 'Error: ' + err.message;
   }
 });
-
-async function connectAtlassianCloudMcp() {
-  const controller = new AbortController();
-  _setAtlassianMcpConnectState(atlassianCloudMcpBtn, 'connecting', 'Connecting Cloud MCP…', () =>
-    controller.abort(),
-  );
-  let siteLabel = 'the configured direct API site';
-  try {
-    const directSite = (atlassianSiteValues('jira')[0] || '').replace(/\/$/, '');
-    if (directSite) siteLabel = directSite;
-    atlassianMsg.textContent =
-      `Connecting Cloud MCP with credentials from ${siteLabel}. ` +
-      'MCP site is provider-selected…';
-    const saved = await fetch('/api/config/atlassian/cloud-mcp', {
-      method: 'POST',
-      headers: { 'X-CSRF-Token': window.__CSRF_TOKEN__ || '' },
-      signal: controller.signal,
-    }).then(async (response) => {
-      const data = await response.json();
-      if (!response.ok || !data.ok)
-        throw new Error(data.detail || data.error || 'Could not connect Cloud MCP');
-      return data;
-    });
-    if (typeof _loadMcpConnections === 'function') await _loadMcpConnections();
-    _setAtlassianMcpConnectState(atlassianCloudMcpBtn, 'connected', 'Cloud MCP Connected ✓');
-    atlassianMsg.textContent =
-      `Cloud MCP connected with ${saved.tool_count || 0} tools. Direct API site: ${siteLabel}. ` +
-      'Cloud MCP has no site selection; use Rovo MCP to choose a specific site.';
-  } catch (error) {
-    _setAtlassianMcpConnectState(atlassianCloudMcpBtn, 'idle');
-    if (controller.signal.aborted) {
-      atlassianMsg.textContent = 'Cloud MCP connection cancelled.';
-      if (typeof _loadMcpConnections === 'function') _loadMcpConnections();
-    } else {
-      atlassianMsg.textContent = `Could not connect Cloud MCP: ${error.message || error}`;
-    }
-  }
-}
-
-if (atlassianCloudMcpBtn) atlassianCloudMcpBtn.addEventListener('click', connectAtlassianCloudMcp);
 
 // Rovo MCP is the explicit Atlassian SSO/site-selection path.
 if (atlassianAddSiteBtn)
