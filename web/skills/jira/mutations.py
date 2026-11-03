@@ -906,6 +906,22 @@ def rovo_jira_call(target: JiraTarget, operation: str, arguments: dict) -> objec
                 pass
 
 
+_REST_FIELD_REJECTION = re.compile(r"^HTTP (?:400|422):")
+
+
+def rovo_write_fallback(target: JiraTarget, rest_error: object) -> JiraTarget | None:
+    """Rovo target for the same site when direct REST rejected a write over its fields.
+
+    Only a 400/422 qualifies: Jira applied nothing, so retrying the same
+    approved change cannot duplicate it. Timeouts, 5xx, 401/403 and 404 do not
+    qualify, and the retry never leaves the approved site.
+    """
+
+    if target.adapter != "builtin-rest" or not _REST_FIELD_REJECTION.match(str(rest_error)):
+        return None
+    return next((t for t in _registered_targets() if t.base_url == target.base_url), None)
+
+
 def verified_result(target: JiraTarget, requested: dict, applied: dict, verified: dict) -> dict:
     """Standard success payload. Call only after a target-scoped re-read."""
 

@@ -522,10 +522,10 @@ def _append_jira_instance_context(system: str, active_skill_ids: list[str], cfg:
     return system + (
         f"\n\nJIRA INSTANCE ROUTING: Multiple Jira instances may be connected. "
         + direct_line +
-        f"MCP tools (cloud-atlassian, Rovo) cover other instances for reads only. "
+        f"Rovo MCP tools cover other instances for reads. "
         f"ROUTING RULES (these override general MCP guidance for Jira): "
-        f"(1) READ (any URL or bare key) → always call jira_get_issue first; it handles all connected sites automatically. Call cloud-atlassian/Rovo MCP Jira tools ONLY if jira_get_issue reports the issue was not found or the site is not connected; never call them in parallel with it when the URL matches the native site. "
-        f"(2) WRITE (comment, update, create, transition, watcher, link) → ALWAYS use native jira_* tools only, never MCP tools. Pass the full URL if you have it; bare keys are resolved automatically. "
+        f"(1) READ (any URL or bare key) → always call jira_get_issue first; it handles all connected sites automatically. Call Rovo MCP Jira tools ONLY if jira_get_issue reports the issue was not found or the site is not connected; never call them in parallel with it when the URL matches the native site. "
+        f"(2) WRITE (comment, update, create, transition, watcher, link) → ALWAYS use native jira_* tools, never raw MCP tools. Each write is a draft the user approves. If direct credentials are rejected by Jira for a field change (labels, components, custom fields), Gator retries the same approved change through Rovo on the same site automatically, so do not ask the user to approve again or call Rovo write tools yourself. Pass the full URL if you have it; bare keys are resolved automatically. "
         f"(3) If jira_get_issue returns a 'multiple sites' error → ask the user for the full issue URL. "
         f"(4) Only tell the user the issue was not found after ALL available Jira tools have returned 404/error."
     )

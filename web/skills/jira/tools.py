@@ -130,7 +130,7 @@ TOOL_DEFS = [
         "description": (
             "Get a Jira issue by key or full URL. "
             "This is the primary Jira read tool — it covers ALL connected Jira sites automatically "
-            "(both direct credentials and Rovo/cloud-atlassian connected sites). "
+            "(both direct credentials and Rovo-connected sites). "
             "Always use this tool first for any Jira issue lookup regardless of which site the issue is on. "
             "Do NOT use MCP Jira tools instead of this — they are secondary fallbacks only."
         ),
