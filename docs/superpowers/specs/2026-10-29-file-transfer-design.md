@@ -57,8 +57,8 @@ Stat and download are not added as new tools: `get_onedrive_item` and `download_
 1. `copy` mode: server-side copy; if it fails, go to step 4.
 2. `move` mode: if the source drive is another person's OneDrive (Graph `driveType` is `business` or `personal` and its id differs from the user's `/me/drive` id, or the check cannot be made), perform a copy instead and say so (`reason: "not_owner"`). SharePoint libraries (`documentLibrary`) and the user's own drive attempt the native move.
 3. On `locked`, retry the move twice (3s, then 6s). If still locked, do a server-side copy.
-4. If the copy fails with anything other than `forbidden`, `not_found`, `conflict` or `throttled`, first check the destination for the copy (only if no same-name, same-size file was there before the copy) and report it as a server copy if it landed; otherwise download the source to `~/Downloads` (the user's stated fallback, with a numeric suffix if the name is taken, never overwriting a local file) and upload it to the destination folder. A failed size check after the upload is reported as `verify_failed`.
-5. Verify the destination: confirm the item by ID, or if the copy is still pending list the destination folder for the name and size.
+4. If the copy request got no HTTP answer (timeout, dropped connection, or no monitor URL), the copy may still land, so the result is `pending` with a check-the-destination message and nothing is uploaded. If it was refused with anything other than `forbidden`, `not_found`, `conflict` or `throttled`, download the source to `~/Downloads` (the user's stated fallback, with a numeric suffix if the name is taken, never overwriting a local file) and upload it to the destination folder. A failed size check after the upload is reported as `verify_failed`.
+5. Verify the destination: confirm the item by ID, or if the copy is still pending list the destination folder for the name and size. The folder is checked before the copy too; a match counts as the copy only if that first check found nothing (not a file already there, not a failed lookup).
 
 Result:
 
