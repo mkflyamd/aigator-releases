@@ -11280,9 +11280,7 @@ function _showAvailabilityGrid(grid, ownerTabId) {
         url = _availabilityGridComposeUrl(grid, pickedAt.di, pickedAt.k);
       } else {
         openOutlook.disabled = true;
-        openOutlook.textContent = repeating
-          ? 'Creating the draft series…'
-          : 'Creating the draft…';
+        openOutlook.textContent = repeating ? 'Creating the draft series…' : 'Creating the draft…';
         const slot = _availabilityGridSlotTimes(grid, pickedAt.di, pickedAt.k);
         const firstDate = repeating ? panel.first() : grid.days[pickedAt.di].date;
         ({ url } = await postGridJson('/api/calendar/grid-draft-series', {
