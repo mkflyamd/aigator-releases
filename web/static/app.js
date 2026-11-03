@@ -10077,6 +10077,18 @@ function _showSandboxApproval(data, ownerTabId) {
 
   const body = document.createElement('div');
   body.className = 'gcc-body';
+  if (tool === 'file_upload' && typeof data.destination === 'string' && data.destination) {
+    const row = document.createElement('div');
+    row.className = 'gcc-field-row gcc-field-row--block';
+    const key = document.createElement('span');
+    key.className = 'gcc-field-key';
+    key.textContent = 'Upload to';
+    const folder = document.createElement('div');
+    folder.className = 'gcc-field-val';
+    folder.textContent = data.destination;
+    row.append(key, folder);
+    body.appendChild(row);
+  }
   if (isShell && typeof data.command === 'string' && data.command) {
     const row = document.createElement('div');
     row.className = 'gcc-field-row gcc-field-row--block';
@@ -10133,7 +10145,8 @@ function _showSandboxApproval(data, ownerTabId) {
   actions.className = 'gcc-actions';
   const approve = document.createElement('button');
   approve.className = 'gcc-approve-btn';
-  approve.textContent = 'Allow for this tab';
+  const onceOnly = tool === 'file_upload';
+  approve.textContent = onceOnly ? 'Allow once' : 'Allow for this tab';
   let always = null;
   if (isShell && data.saveable === true) {
     always = document.createElement('button');
@@ -10141,7 +10154,7 @@ function _showSandboxApproval(data, ownerTabId) {
     always.textContent = 'Always allow this';
   }
   let once = null;
-  if (!isShell) {
+  if (!isShell && !onceOnly) {
     once = document.createElement('button');
     once.className = 'btn-secondary';
     once.textContent = 'Allow once';
@@ -10155,8 +10168,9 @@ function _showSandboxApproval(data, ownerTabId) {
   footer.className = 'gcc-footer';
   const footNote = document.createElement('span');
   footNote.className = 'gcc-refine';
-  footNote.textContent =
-    'Allowed until you close this tab. Unanswered requests expire after 10 minutes.';
+  footNote.textContent = onceOnly
+    ? 'Unanswered requests expire after 10 minutes.'
+    : 'Allowed until you close this tab. Unanswered requests expire after 10 minutes.';
   footer.appendChild(footNote);
 
   box.append(header, body, actions, footer);
@@ -10225,7 +10239,7 @@ function _showSandboxApproval(data, ownerTabId) {
   };
   approve.addEventListener('click', (e) => {
     e.stopPropagation();
-    decide('approve', 'task');
+    decide('approve', onceOnly ? 'once' : 'task');
   });
   if (always)
     always.addEventListener('click', (e) => {

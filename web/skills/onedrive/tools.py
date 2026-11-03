@@ -1744,11 +1744,19 @@ def _tool_file_transfer(source_drive_id: str, source_item_id: str,
 def _tool_file_upload(local_path: str, dest_drive_id: str, dest_folder_id: str, name: str = "",
                       _context_id: str = "") -> dict:
     """Upload a local file into a OneDrive/SharePoint folder by ID, never overwriting."""
+    import os
     from .._files.local_access import require_local_read
-    needs_approval = require_local_read(_context_id, local_path, "file_upload")
+
+    def folder_label() -> str:
+        folder = _tool_get_onedrive_item(dest_drive_id, dest_folder_id)
+        return folder.get("name") or "a OneDrive folder"
+
+    path, needs_approval = require_local_read(
+        _context_id, local_path, "file_upload", f"{dest_drive_id}/{dest_folder_id}", folder_label)
     if needs_approval:
         return needs_approval
-    return _od_provider().upload(local_path, {"drive_id": dest_drive_id, "folder_id": dest_folder_id}, name)
+    return _od_provider().upload(
+        path, {"drive_id": dest_drive_id, "folder_id": dest_folder_id}, name or os.path.basename(local_path))
 
 
 TOOL_STATUS.update({

@@ -18,6 +18,8 @@ import uuid
 from dataclasses import dataclass
 
 APPROVAL_TTL_SECONDS = 600
+# An approval for these tools holds only for the exact command (for file_upload, the destination folder).
+COMMAND_BOUND_TOOLS = ("run_shell", "file_upload")
 
 
 class ApprovalError(Exception):
@@ -80,7 +82,7 @@ def create(context_id: str, read_paths, write_paths, network_hosts, now: float |
 def lookup(context_id: str, read_paths, write_paths, network_hosts,
            now: float | None = None, *, tool: str = "run_python",
            command: str = "") -> tuple[str, ApprovalRequest | None]:
-    """Newest request for this tab, this tool (and, for run_shell, this exact command) and exactly this set.
+    """Newest request for this tab, this tool (and, for run_shell and file_upload, this exact command) and exactly this set.
 
     approved -> consumed (removed); denied/expired -> reported once (removed);
     pending -> left in place; no match -> ("none", None).
@@ -91,7 +93,7 @@ def lookup(context_id: str, read_paths, write_paths, network_hosts,
         matches = [
             r for r in _REQUESTS.values()
             if r.context_id == (context_id or "") and r.tool == tool
-            and (tool != "run_shell" or r.command == command)
+            and (tool not in COMMAND_BOUND_TOOLS or r.command == command)
             and _key(r.read_paths, r.write_paths, r.network_hosts) == key
         ]
         if not matches:
@@ -121,7 +123,7 @@ def decide(request_id: str, context_id: str, approve: bool, now: float | None = 
             raise ApprovalError(409, f"This access request was already {req.status}.")
         req.status = "approved" if approve else "denied"
         req.scope = "once"
-        if approve and scope == "task":
+        if approve and scope == "task" and req.tool != "file_upload":
             req.scope = "task"
         elif approve and scope == "always" and req.tool == "run_shell":
             req.scope = "always" if req.saveable and allow_saved else "task"

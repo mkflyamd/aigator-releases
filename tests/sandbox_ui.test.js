@@ -501,7 +501,7 @@ const flush = async () => {
   await flush();
   assert.deepStrictEqual(JSON.parse(envD.fetches[0].opts.body), { context_id: 'tab-1' });
 
-  // A file upload card names the file, offers once or this tab, and asks for file_upload again.
+  // A file upload card names the file and folder, offers only once, and asks for file_upload again.
   const uploadCard = {
     request_id: 'up1',
     tool: 'file_upload',
@@ -509,20 +509,26 @@ const flush = async () => {
     write_paths: [],
     network_hosts: [],
     context_id: 'tab-1',
+    destination: 'Reports 2026',
   };
   const envF = makeEnv('tab-1');
   envF.ctx._showSandboxApproval(uploadCard, 'tab-1');
   const allF = walk(envF.messages);
   assert(allF.some((e) => e.textContent === 'AI Gator wants to read a file to upload it'));
   assert(allF.some((e) => e.textContent === 'C:/Users/me/report.docx'));
+  assert(allF.some((e) => e.textContent === 'Reports 2026'));
   const uploadButtons = allF.filter((e) => e.tag === 'button');
   assert.deepStrictEqual(
     uploadButtons.map((b) => b.textContent),
-    ['Allow for this tab', 'Allow once', 'Deny'],
+    ['Allow once', 'Deny'],
   );
-  await uploadButtons[1].listeners.click({ stopPropagation() {} });
+  await uploadButtons[0].listeners.click({ stopPropagation() {} });
   await flush();
   assert.strictEqual(envF.fetches[0].url, '/api/sandbox/requests/up1/approve');
+  assert.deepStrictEqual(JSON.parse(envF.fetches[0].opts.body), {
+    context_id: 'tab-1',
+    scope: 'once',
+  });
   assert.match(envF.form.sent[0], /run the same file_upload call again/i);
   assert.doesNotMatch(envF.form.sent[0], /run_python/);
 
