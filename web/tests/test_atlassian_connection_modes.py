@@ -31,7 +31,7 @@ def test_cloud_mcp_uses_official_atlassian_server_not_a_company_proxy():
     end = CONFIG.index("class JiraExtraSitesRequest", start)
     route = CONFIG[start:end]
 
-    assert 'ATLASSIAN_MCP_URL = "https://mcp.atlassian.com/v1/mcp"' in CONFIG
+    assert 'ATLASSIAN_MCP_URL = "https://mcp.atlassian.com/v2/mcp"' in CONFIG
     assert '"url": ATLASSIAN_MCP_URL' in route
     assert '"auth_type": "basic"' in route
     assert "amd.com" not in CONFIG[CONFIG.index("ATLASSIAN_MCP_URL =") : end]

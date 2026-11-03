@@ -470,7 +470,7 @@ def save_jira_pat(req: JiraPatRequest):
     return {"ok": True, "user": display_name, "base_url": base_url}
 
 
-ATLASSIAN_MCP_URL = "https://mcp.atlassian.com/v1/mcp"
+ATLASSIAN_MCP_URL = "https://mcp.atlassian.com/v2/mcp"
 
 
 @router.post("/api/config/atlassian/cloud-mcp", dependencies=[Depends(verify_csrf)])
