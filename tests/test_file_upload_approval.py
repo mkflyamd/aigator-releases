@@ -22,7 +22,8 @@ def _clean_state():
 def provider():
     p = MagicMock()
     p.upload.return_value = {"status": "uploaded", "web_url": "u"}
-    with patch.object(od, "_od_provider", return_value=p):
+    folder = {"name": "Reports", "web_url": "https://contoso.sharepoint.com/Reports"}
+    with patch.object(od, "_od_provider", return_value=p),             patch.object(od, "_tool_get_onedrive_item", return_value=folder):
         yield p
 
 
@@ -86,9 +87,18 @@ def test_an_approval_holds_only_for_the_destination_it_was_shown(report, provide
 
 
 def test_the_card_names_the_destination_folder(report, provider):
-    with patch.object(od, "_tool_get_onedrive_item", return_value={"name": "Reports 2026"}):
+    folder = {"name": "Reports 2026", "web_url": "https://contoso.sharepoint.com/Reports%202026"}
+    with patch.object(od, "_tool_get_onedrive_item", return_value=folder):
         card = _upload(report)["_sandbox_approval"]
-    assert card["destination"] == "Reports 2026"
+    assert card["destination"] == "Reports 2026 - https://contoso.sharepoint.com/Reports%202026"
+
+
+def test_no_approval_is_requested_when_the_destination_cannot_be_identified(report, provider):
+    with patch.object(od, "_tool_get_onedrive_item", return_value={"error": "boom"}):
+        out = _upload(report)
+    assert "destination" in out["error"] and "approval_required" not in out
+    assert approvals.lookup("tab1", [str(report.resolve())], [], [], tool="file_upload", command="d2/f2")[1] is None
+    provider.upload.assert_not_called()
 
 
 def test_the_upload_reads_the_path_that_was_checked(tmp_path, provider):

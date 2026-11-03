@@ -1749,7 +1749,9 @@ def _tool_file_upload(local_path: str, dest_drive_id: str, dest_folder_id: str, 
 
     def folder_label() -> str:
         folder = _tool_get_onedrive_item(dest_drive_id, dest_folder_id)
-        return folder.get("name") or "a OneDrive folder"
+        if folder.get("error") or not folder.get("web_url"):
+            return ""
+        return f"{folder.get('name', '')} - {folder['web_url']}"
 
     path, needs_approval = require_local_read(
         _context_id, local_path, "file_upload", f"{dest_drive_id}/{dest_folder_id}", folder_label)
