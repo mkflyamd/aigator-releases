@@ -470,13 +470,16 @@ def save_jira_pat(req: JiraPatRequest):
     return {"ok": True, "user": display_name, "base_url": base_url}
 
 
+ATLASSIAN_MCP_URL = "https://mcp.atlassian.com/v1/mcp"
+
+
 @router.post("/api/config/atlassian/cloud-mcp", dependencies=[Depends(verify_csrf)])
 def connect_atlassian_cloud_mcp():
-    """Create/update the optional API-token Atlassian Cloud MCP connection.
+    """Create/update the optional API-token connection to the official Atlassian MCP server.
 
     This is deliberately separate from saving the direct Jira/Confluence API
-    site. The MCP endpoint exposes a broad catalog but does not currently
-    accept the direct site's base URL as a resource target.
+    site. The MCP server picks from the sites the token can access rather than
+    taking the direct site's base URL as a resource target.
     """
     cfg = _load_config()
     email = cfg.get("jira_email") or cfg.get("confluence_email") or ""
@@ -495,13 +498,20 @@ def connect_atlassian_cloud_mcp():
             "connection_id": "cloud-atlassian",
             "name": "Atlassian Cloud MCP · API token",
             "transport": "http",
-            "url": "https://mcp-platform.amd.com/mcp/cloud_atlassian",
+            "url": ATLASSIAN_MCP_URL,
             "auth_type": "basic",
             "auth_value": f"{email}:{token}",
         }
     )
     if not result.get("ok"):
-        raise HTTPException(status_code=400, detail=result.get("error", "Could not connect Cloud MCP."))
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{result.get('error', 'Could not connect Cloud MCP.')} "
+                "If your Atlassian admin has not enabled API token authentication "
+                "for the Atlassian MCP server, use the Rovo MCP button instead."
+            ),
+        )
     return result
 
 

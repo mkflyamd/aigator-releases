@@ -26,6 +26,18 @@ def test_cloud_mcp_has_explicit_api_token_endpoint():
     assert '"name": "Atlassian Cloud MCP · API token"' in CONFIG
 
 
+def test_cloud_mcp_uses_official_atlassian_server_not_a_company_proxy():
+    start = CONFIG.index("def connect_atlassian_cloud_mcp(")
+    end = CONFIG.index("class JiraExtraSitesRequest", start)
+    route = CONFIG[start:end]
+
+    assert 'ATLASSIAN_MCP_URL = "https://mcp.atlassian.com/v1/mcp"' in CONFIG
+    assert '"url": ATLASSIAN_MCP_URL' in route
+    assert '"auth_type": "basic"' in route
+    assert "amd.com" not in CONFIG[CONFIG.index("ATLASSIAN_MCP_URL =") : end]
+    assert "use the Rovo MCP button instead" in route
+
+
 def test_apps_ui_exposes_explicit_cloud_and_rovo_choices():
     assert "Direct site access" in INDEX
     assert "Optional MCP access" in INDEX
