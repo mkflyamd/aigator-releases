@@ -8055,7 +8055,7 @@ atlassianSaveBtn.addEventListener('click', async () => {
 // Rovo MCP is the explicit Atlassian SSO/site-selection path.
 if (atlassianAddSiteBtn)
   atlassianAddSiteBtn.addEventListener('click', async () => {
-    const url = 'https://mcp.atlassian.com/v1/mcp';
+    const url = 'https://mcp.atlassian.com/v2/mcp';
     let popup = null;
     const controller = new AbortController();
     _setAtlassianMcpConnectState(atlassianAddSiteBtn, 'connecting', 'Connecting Rovo MCP…', () =>
