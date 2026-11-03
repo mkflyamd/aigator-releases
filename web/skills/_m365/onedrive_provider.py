@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 from urllib.parse import quote
 
-from .._files.errors import classify_graph_error
+from .._files.errors import classify_graph_error, http_status
 from . import file_transfer as ft
 
 
@@ -67,7 +67,10 @@ class OneDriveProvider:
                 self._copy(ref["drive_id"], ref["item_id"], dest_folder["drive_id"], dest_folder["folder_id"], new_name)
             )
         except Exception as e:
-            return _failure("Copy failed", e)
+            out = _failure("Copy failed", e)
+            if not http_status(e):
+                out["ambiguous"] = True  # no HTTP answer: the copy may still have been started
+            return out
 
     def find_in_folder(self, dest_folder, name, size):
         """The item called ``name`` in the folder, or None (also when it cannot be looked up)."""

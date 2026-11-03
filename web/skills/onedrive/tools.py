@@ -1616,7 +1616,8 @@ def _tool_copy_onedrive_file(source_drive_id: str, source_item_id: str,
             timeout=30,
         )
     except Exception as e:
-        return {"error": f"Copy request failed: {e}", "error_code": classify_graph_error(e)}
+        # No HTTP answer: Graph may still have accepted the copy.
+        return {"error": f"Copy request failed: {e}", "error_code": classify_graph_error(e), "ambiguous": True}
 
     if r.status_code not in (202, 200, 201):
         return {
@@ -1638,6 +1639,7 @@ def _tool_copy_onedrive_file(source_drive_id: str, source_item_id: str,
         return {
             "error": "Copy request did not return a monitor URL. The copy may have succeeded — check the destination folder.",
             "error_code": "unknown",
+            "ambiguous": True,
         }
 
     last_poll_error = ""

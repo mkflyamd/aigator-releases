@@ -15,8 +15,13 @@ def classify_status(status: int) -> str:
     return "unknown"
 
 
-def classify_graph_error(exc: Exception) -> str:
+def http_status(exc: Exception) -> int:
+    """The HTTP status an exception carries, or 0 when it has none (timeout, dropped connection)."""
     status = getattr(exc, "status_code", None)
     if not status:
         status = getattr(getattr(exc, "response", None), "status_code", 0)
-    return classify_status(int(status or 0))
+    return int(status or 0)
+
+
+def classify_graph_error(exc: Exception) -> str:
+    return classify_status(http_status(exc))

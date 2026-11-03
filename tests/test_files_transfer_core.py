@@ -255,36 +255,30 @@ def test_find_in_folder_error_dict_is_not_a_found_item(copy):
 
 
 LANDED = {"item_id": "n7", "drive_id": "d2", "name": "report.docx", "web_url": "u7"}
-COPY_ERR = {"error": "monitor poll failed", "error_code": "unknown"}
+AMBIGUOUS = {"error": "Copy request failed: timed out", "error_code": "unknown", "ambiguous": True}
 
 
 def _uploads(p):
     return [c for c in p.calls if isinstance(c, tuple) and c[0] == "upload"]
 
 
-def test_copy_error_but_copy_landed_reports_server_copy_without_upload(tmp_path):
-    p = FakeProvider(move=[LOCKED, LOCKED, LOCKED], copy=COPY_ERR, find=[None, LANDED],
+def test_ambiguous_copy_error_is_pending_without_upload(tmp_path):
+    p = FakeProvider(move=[LOCKED, LOCKED, LOCKED], copy=AMBIGUOUS, find=[None, LANDED],
                      download={"saved_to": str(tmp_path / "report.docx")}, upload=MOVED)
     out, _ = run(p, downloads_dir=tmp_path)
-    assert (out["status"], out["method"], out["reason"]) == ("copied", "server_copy", "locked")
-    assert out["dest"] == LANDED and out["original_remains"] is True
-    assert out["message"] == tr._copied_message("locked")
+    assert (out["status"], out["method"], out["reason"]) == ("pending", "server_copy", "locked")
+    assert out["original_remains"] is True and out["dest"] is None
+    assert "destination" in out["message"] and "not retry" in out["message"].lower()
     assert _uploads(p) == [] and not any(isinstance(c, tuple) for c in p.calls)
 
 
-def test_copy_error_nothing_at_destination_falls_back(tmp_path):
+@pytest.mark.parametrize("copy", [
+    {"error": "Copy request returned HTTP 500: oops", "error_code": "unknown"},
+    {"error": "Copy request returned HTTP 423: locked", "error_code": "locked"},
+])
+def test_definite_copy_refusal_falls_back_to_download_and_upload(copy, tmp_path):
     up = {"item_id": "n5", "drive_id": "d2", "name": "report.docx", "web_url": "u5"}
-    p = FakeProvider(copy=COPY_ERR, find=[None, None],
-                     download={"saved_to": str(tmp_path / "report.docx")}, upload=up)
-    out, _ = run(p, mode="copy", downloads_dir=tmp_path)
-    assert (out["status"], out["method"]) == ("copied", "download_upload")
-    assert len(_uploads(p)) == 1
-
-
-def test_copy_error_with_pre_existing_match_falls_back(tmp_path):
-    old = {"item_id": "old1", "drive_id": "d2", "name": "report.docx", "web_url": "u0"}
-    up = {"item_id": "n5", "drive_id": "d2", "name": "report (1).docx", "web_url": "u5"}
-    p = FakeProvider(copy=COPY_ERR, find=[old, old],
+    p = FakeProvider(copy=copy, find=[None, LANDED],
                      download={"saved_to": str(tmp_path / "report.docx")}, upload=up)
     out, _ = run(p, mode="copy", downloads_dir=tmp_path)
     assert (out["status"], out["method"]) == ("copied", "download_upload")

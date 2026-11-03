@@ -238,3 +238,14 @@ def test_tool_error_dicts_without_code_get_unknown():
     p, _ = provider(move=bare, copy=bare, get_item=bare)
     for out in (p.move(SRC, DEST, ""), p.copy(SRC, DEST, ""), p.stat(SRC)):
         assert out == {"error": "boom", "error_code": "unknown"}
+
+
+def test_copy_exception_without_http_status_is_ambiguous():
+    p, _ = provider(copy=MagicMock(side_effect=TimeoutError("timed out")))
+    out = p.copy(SRC, DEST, "")
+    assert out["ambiguous"] is True and out["error_code"] == "unknown"
+
+
+def test_copy_exception_with_http_status_is_not_ambiguous():
+    p, _ = provider(copy=MagicMock(side_effect=Err(500)))
+    assert "ambiguous" not in p.copy(SRC, DEST, "")
