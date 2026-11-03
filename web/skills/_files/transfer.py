@@ -142,11 +142,16 @@ def transfer(provider, source, dest_folder, mode="move", new_name="", sleep=time
         )
     if copied.get("error_code") in _NO_FALLBACK:
         return _failed(copied["error"], copied["error_code"], reason)
-    if not existed_before:
-        # The copy may have finished in OneDrive even though it reported an error.
-        found = provider.find_in_folder(dest_folder, name, size)
-        if _found_item(found):
-            return _result("copied", "server_copy", True, reason, _dest(found), message=_copied_message(reason))
+    if copied.get("ambiguous"):
+        # No HTTP answer: the copy may still land, so uploading too could make a second copy.
+        return _result(
+            "pending",
+            "server_copy",
+            True,
+            reason,
+            error=copied["error"],
+            message="The copy may have finished in OneDrive. Check the destination folder; do not retry the transfer.",
+        )
 
     try:
         local = _unique_local_path(downloads_dir or Path.home() / "Downloads", name)

@@ -69,7 +69,7 @@ def test_copy_request_http_error_has_error_code(monkeypatch):
     with patch("skills._m365.helpers.get_skill_client", return_value=_gc()):
         out = od._tool_copy_onedrive_file("d1", "i1", "d2", "f2")
     assert out["error_code"] == "not_found"
-    assert "404" in out["error"]
+    assert "404" in out["error"] and "ambiguous" not in out
 
 
 def test_move_locked_has_error_code_and_keeps_message():
@@ -100,4 +100,14 @@ def test_copy_without_monitor_url_has_error_code(monkeypatch):
     with patch("skills._m365.helpers.get_skill_client", return_value=_gc()):
         out = od._tool_copy_onedrive_file("d1", "i1", "d2", "f2")
     assert "monitor URL" in out["error"]
-    assert out["error_code"] == "unknown"
+    assert out["error_code"] == "unknown" and out["ambiguous"] is True
+
+
+def test_copy_request_exception_is_ambiguous(monkeypatch):
+    def timeout(*a, **k):
+        raise httpx.ReadTimeout("timed out")
+
+    monkeypatch.setattr(httpx, "post", timeout)
+    with patch("skills._m365.helpers.get_skill_client", return_value=_gc()):
+        out = od._tool_copy_onedrive_file("d1", "i1", "d2", "f2")
+    assert out["error_code"] == "unknown" and out["ambiguous"] is True
