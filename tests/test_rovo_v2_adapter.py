@@ -215,3 +215,20 @@ def test_discover_reply_with_plain_text_trailer_is_parsed():
     trailer = "\n\nalso matched (15 more) - re-run discover with a narrower query:\n  listJiraBoards"
     client.call.side_effect = lambda tool, args: base(tool, args) + (trailer if tool == "discover" else "")
     assert _run("get_projects", {"searchString": "X"}, client) == {"values": []}
+
+
+def test_argument_value_the_schema_enum_rules_out_is_dropped():
+    tools = [_tool("getAccessibleAtlassianResources"), {
+        "name": "getJiraIssue",
+        "input_schema": {"type": "object", "properties": {
+            "cloudId": {}, "issueIdOrKey": {}, "view": {},
+            "responseContentFormat": {"type": "string", "enum": ["markdown", "html"]},
+        }},
+    }]
+    client = _client()
+    _run("get_issue", {"issueIdOrKey": "A-1", "responseContentFormat": "adf"}, client, tools=tools)
+    assert "responseContentFormat" not in _last(client, "getJiraIssue")
+
+    client = _client()
+    _run("get_issue", {"issueIdOrKey": "A-1", "responseContentFormat": "html"}, client, tools=tools)
+    assert _last(client, "getJiraIssue")["responseContentFormat"] == "html"

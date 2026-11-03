@@ -849,7 +849,7 @@ async def approve_draft(draft_id: str, body: dict = None):
                         lambda: jira_api_for_target(target, "POST", f"issue/{issue_key}/comment", {"body": body_value}),
                         _rovo_comment,
                     )
-                comment_id = str(created.get("id", ""))
+                comment_id = str(created.get("id") or created.get("commentId") or "")
                 if target.adapter == "rovo-mcp":
                     read_back = await _read_issue(target, issue_key)
                 else:

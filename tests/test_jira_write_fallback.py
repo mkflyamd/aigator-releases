@@ -204,3 +204,14 @@ def test_rovo_write_fallback_only_for_direct_rest_field_rejections():
         assert rovo_write_fallback(direct, "HTTP 500: {}") is None
         assert rovo_write_fallback(direct, "timed out") is None
         assert rovo_write_fallback(rovo, "HTTP 400: {}") is None
+
+
+def test_comment_id_is_read_from_commentId_when_rovo_v2_omits_id():
+    def _rovo(target, operation, arguments):
+        if operation == "add_comment":
+            return {"message": "Comment added", "commentId": "c1"}
+        return {"data": ISSUE}
+
+    r = _run(_comment_draft(), _rest_rejecting("POST", "comment"), _rovo)
+    assert r.status_code == 200, r.text
+    assert r.json()["verified"]["comment_id"] == "c1" and r.json()["verified"]["present"] is True

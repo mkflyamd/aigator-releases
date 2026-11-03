@@ -797,10 +797,12 @@ def _accessible_resources(raw: object) -> list[dict] | None:
     ]
 
 
-def _tool_property_names(tool: dict) -> set[str]:
+def _tool_properties(tool: dict) -> dict[str, dict]:
     schema = tool.get("input_schema") or tool.get("inputSchema") or {}
     properties = schema.get("properties") if isinstance(schema, dict) else None
-    return set(properties) if isinstance(properties, dict) else set()
+    if not isinstance(properties, dict):
+        return {}
+    return {str(k): v if isinstance(v, dict) else {} for k, v in properties.items()}
 
 
 def _hints_contradict(operation: str, hints: object) -> bool:
@@ -813,8 +815,8 @@ def _hints_contradict(operation: str, hints: object) -> bool:
     return isinstance(read_only, bool) and read_only == (operation in _ROVO_WRITE_OPERATIONS)
 
 
-def _resolve_rovo_tool(operation: str, cached: dict, client) -> tuple[str, set[str], bool]:
-    """Return (tool name, argument names, via executeRead/executeWrite).
+def _resolve_rovo_tool(operation: str, cached: dict, client) -> tuple[str, dict[str, dict], bool]:
+    """Return (tool name, argument schemas by name, via executeRead/executeWrite).
 
     A directly exposed tool is used when present. Otherwise the connection's
     discover tool is asked, and the operation is accepted only if the server
@@ -831,7 +833,7 @@ def _resolve_rovo_tool(operation: str, cached: dict, client) -> tuple[str, set[s
                 f"Rovo tool {name} is not a {'write' if operation in _ROVO_WRITE_OPERATIONS else 'read'} operation "
                 f"according to the server, so Gator will not use it for {operation.replace('_', ' ')}."
             )
-        return name, _tool_property_names(tool), False
+        return name, _tool_properties(tool), False
     tier = "executeWrite" if operation in _ROVO_WRITE_OPERATIONS else "executeRead"
     if "discover" not in cached or tier not in cached:
         raise unsupported
@@ -847,14 +849,21 @@ def _resolve_rovo_tool(operation: str, cached: dict, client) -> tuple[str, set[s
                     f"Rovo lists {name} under {entry.get('executeTool')}, not {tier}, so Gator will not use it for "
                     f"{operation.replace('_', ' ')}."
                 )
-            inputs = {str(i.get("name")) for i in entry.get("inputs", []) if isinstance(i, dict)}
+            inputs = {str(i.get("name")): i for i in entry.get("inputs", []) if isinstance(i, dict)}
             return name, inputs, True
     raise unsupported
 
 
-def _adapt_rovo_arguments(operation: str, arguments: dict | None, properties: set[str]) -> dict:
+def _adapt_rovo_arguments(operation: str, arguments: dict | None, properties: dict[str, dict]) -> dict:
     payload = dict(arguments or {})
     if properties:
+        # A value the tool's own schema enum rules out (v1 took
+        # responseContentFormat "adf"; v2 only markdown/html) is dropped so the
+        # tool's default applies instead of the whole call failing validation.
+        for key in list(payload):
+            allowed = properties.get(key, {}).get("enum")
+            if isinstance(allowed, list) and payload[key] not in allowed:
+                del payload[key]
         for old, new in _ROVO_ARGUMENT_SYNONYMS.get(operation, {}).items():
             if old in payload and old not in properties and new in properties:
                 payload[new] = payload.pop(old)

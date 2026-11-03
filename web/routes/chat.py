@@ -234,15 +234,8 @@ def _already_active_note(skill_ids: list[str], offered_tool_names) -> str:
     )
 
 
-def _silent_turn_fallback(active_skills: list[str]) -> str:
+def _silent_turn_fallback() -> str:
     """User-visible explanation when an otherwise successful stream is empty."""
-    if "cloud-atlassian" in active_skills:
-        return (
-            "Atlassian Cloud MCP is connected, but it did not expose a usable "
-            "site/resource-discovery tool for this request. Use the direct Jira "
-            "& Confluence connection for a configured site, or connect Rovo MCP "
-            "through Atlassian SSO to select a site."
-        )
     return (
         "I could not produce a response for this request. Please retry; "
         "the connection may need to be refreshed."
@@ -2731,7 +2724,7 @@ async def chat(req: ChatRequest):
                                 and not _tool_activity_emitted
                                 and not shared.chat_task_store.is_cancelled(task_id)
                             ):
-                                _fallback = _silent_turn_fallback(_all_active)
+                                _fallback = _silent_turn_fallback()
                                 print(
                                     "[stream] empty completed turn "
                                     f"context={context_id} skills={_all_active}",
