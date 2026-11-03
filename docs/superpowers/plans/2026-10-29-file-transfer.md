@@ -24,27 +24,27 @@
 
 ## File Structure
 
-| File | Action | Responsibility |
-|---|---|---|
-| `web/static/style.css` | modify | `.ask-user-option` wraps instead of overflowing |
-| `web/static/app.js` | modify | Failed permission grant re-sends the message instead of dropping it |
-| `tests/ask_user_option_wrap.test.js` | create | CSS wrap guard |
-| `tests/permission_gate_approval.test.js` | modify | Resend-on-failed-grant guard |
-| `web/skills/_files/__init__.py` | create | Package marker (loader skips `_` dirs) |
-| `web/skills/_files/errors.py` | create | `classify_status`, `classify_graph_error` |
-| `web/skills/_files/transfer.py` | create | Provider-neutral `transfer()` orchestration |
-| `web/skills/_m365/file_transfer.py` | modify | Add `store_in_folder`, `file_source`; generalise private put helpers |
-| `web/skills/_m365/onedrive_provider.py` | create | `OneDriveProvider` implementing the provider interface |
-| `web/skills/onedrive/tools.py` | modify | `error_code` additions, copy poll fix, register `file_upload` and `file_transfer` |
-| `web/skills/onedrive/SKILL.md` | modify | Move/copy/lock/Teams-attachment/upload guidance |
-| `web/skills/m365-onedrive/SKILL.md` | modify | Cross-reference |
-| `tests/test_file_errors.py` | create | Error classification |
-| `tests/test_onedrive_copy_hardening.py` | create | Copy poll fix and `error_code` |
-| `tests/test_file_store_in_folder.py` | create | Upload-by-folder-ID primitives |
-| `tests/test_files_transfer_core.py` | create | Orchestration with a fake provider |
-| `tests/test_onedrive_provider.py` | create | Provider against a fake Graph client |
-| `tests/test_file_tools_registration.py` | create | Tool registration, no-delete guard, guide content |
-| `tests/code_sandbox/test_secrets_guard.py` | modify | Add `file_upload` to the guarded-handler cases |
+| File                                       | Action | Responsibility                                                                    |
+| ------------------------------------------ | ------ | --------------------------------------------------------------------------------- |
+| `web/static/style.css`                     | modify | `.ask-user-option` wraps instead of overflowing                                   |
+| `web/static/app.js`                        | modify | Failed permission grant re-sends the message instead of dropping it               |
+| `tests/ask_user_option_wrap.test.js`       | create | CSS wrap guard                                                                    |
+| `tests/permission_gate_approval.test.js`   | modify | Resend-on-failed-grant guard                                                      |
+| `web/skills/_files/__init__.py`            | create | Package marker (loader skips `_` dirs)                                            |
+| `web/skills/_files/errors.py`              | create | `classify_status`, `classify_graph_error`                                         |
+| `web/skills/_files/transfer.py`            | create | Provider-neutral `transfer()` orchestration                                       |
+| `web/skills/_m365/file_transfer.py`        | modify | Add `store_in_folder`, `file_source`; generalise private put helpers              |
+| `web/skills/_m365/onedrive_provider.py`    | create | `OneDriveProvider` implementing the provider interface                            |
+| `web/skills/onedrive/tools.py`             | modify | `error_code` additions, copy poll fix, register `file_upload` and `file_transfer` |
+| `web/skills/onedrive/SKILL.md`             | modify | Move/copy/lock/Teams-attachment/upload guidance                                   |
+| `web/skills/m365-onedrive/SKILL.md`        | modify | Cross-reference                                                                   |
+| `tests/test_file_errors.py`                | create | Error classification                                                              |
+| `tests/test_onedrive_copy_hardening.py`    | create | Copy poll fix and `error_code`                                                    |
+| `tests/test_file_store_in_folder.py`       | create | Upload-by-folder-ID primitives                                                    |
+| `tests/test_files_transfer_core.py`        | create | Orchestration with a fake provider                                                |
+| `tests/test_onedrive_provider.py`          | create | Provider against a fake Graph client                                              |
+| `tests/test_file_tools_registration.py`    | create | Tool registration, no-delete guard, guide content                                 |
+| `tests/code_sandbox/test_secrets_guard.py` | modify | Add `file_upload` to the guarded-handler cases                                    |
 
 ---
 
@@ -75,10 +75,12 @@ If `docs/superpowers/specs/` or `plans/` does not exist on `main`, `mkdir -p` it
 ### Task 1: Ask-user option card wraps long text
 
 **Files:**
+
 - Modify: `web/static/style.css:6153-6160`
 - Test: `tests/ask_user_option_wrap.test.js` (create)
 
 **Interfaces:**
+
 - Consumes: nothing.
 - Produces: nothing other tasks use.
 
@@ -98,7 +100,9 @@ const { test } = require('node:test');
 const css = fs.readFileSync(path.join(__dirname, '..', 'web', 'static', 'style.css'), 'utf8');
 
 function block(selector) {
-  const m = css.match(new RegExp('(^|\\n)' + selector.replace(/[.]/g, '\\.') + '\\s*\\{([^}]*)\\}'));
+  const m = css.match(
+    new RegExp('(^|\\n)' + selector.replace(/[.]/g, '\\.') + '\\s*\\{([^}]*)\\}'),
+  );
   assert(m, selector + ' rule exists');
   return m[2];
 }
@@ -163,10 +167,12 @@ git commit -m "fix: wrap long text in ask-user option cards"
 ### Task 2: Failed permission grant re-sends instead of dropping the message
 
 **Files:**
+
 - Modify: `web/static/app.js:14210-14229`
 - Test: `tests/permission_gate_approval.test.js`
 
 **Interfaces:**
+
 - Consumes: `/api/chat/approve-deps` (unchanged), `_permissionResendPayload`, `doSend`.
 - Produces: nothing other tasks use.
 
@@ -179,7 +185,10 @@ test('a refused grant re-sends the saved request instead of dropping it', () => 
   const i = app.indexOf("fetch('/api/chat/approve-deps'");
   const handler = app.slice(i, i + 1400);
   assert(!/Send your message again/.test(app), 'no "retype your message" dead end');
-  assert(!/if \(!grant \|\| !grant\.ok\)\s*\{[^}]*return;/.test(handler), 'failed grant must not return early');
+  assert(
+    !/if \(!grant \|\| !grant\.ok\)\s*\{[^}]*return;/.test(handler),
+    'failed grant must not return early',
+  );
   assert(/doSend\(resendPayload\)/.test(handler), 'saved payload is re-sent');
 });
 ```
@@ -229,11 +238,13 @@ git commit -m "fix: re-send the message when a permission grant is refused inste
 ### Task 3: Error classification helper
 
 **Files:**
+
 - Create: `web/skills/_files/__init__.py` (empty)
 - Create: `web/skills/_files/errors.py`
 - Test: `tests/test_file_errors.py` (create)
 
 **Interfaces:**
+
 - Produces: `classify_status(status: int) -> str` and `classify_graph_error(exc: Exception) -> str`. Return one of `"locked" | "forbidden" | "not_found" | "throttled" | "unknown"`.
 
 - [ ] **Step 1: Write the failing test**
@@ -325,10 +336,12 @@ git commit -m "feat: classify Graph failures into locked/forbidden/not_found/thr
 ### Task 4: Harden copy and add `error_code` to existing tool errors
 
 **Files:**
+
 - Modify: `web/skills/onedrive/tools.py` (`_tool_move_onedrive_file` ~L1505, `_tool_copy_onedrive_file` ~L1537, `_tool_get_onedrive_item` ~L1618)
 - Test: `tests/test_onedrive_copy_hardening.py` (create)
 
 **Interfaces:**
+
 - Consumes: `classify_status`, `classify_graph_error` from `skills._files.errors` (Task 3), imported lazily inside each function.
 - Produces: error dicts from these three tools carry `"error_code"` next to `"error"`. A completed copy returns `{"status": "completed", "item_id", "dest_drive_id", ...}`; a copy still running returns `{"status": "pending", "monitor_url", "note"}` plus `"poll_error"` when polling raised.
 
@@ -536,10 +549,12 @@ git commit -m "fix: poll the copy monitor without auth, surface poll errors, add
 ### Task 5: Upload by folder ID in the existing transfer module
 
 **Files:**
+
 - Modify: `web/skills/_m365/file_transfer.py`
 - Test: `tests/test_file_store_in_folder.py` (create); `tests/test_file_transfer.py` and `tests/test_transcript_review_followups.py` must stay green.
 
 **Interfaces:**
+
 - Consumes: existing `Source`, `safe_filename`, `_rechunk`, `_cancel`, `_result`, `_existing`, `SIMPLE_UPLOAD_MAX`, `CHUNK`; `classify_graph_error` from `skills._files.errors`.
 - Produces:
   - `file_source(path: str, name: str = "") -> Source` (streams the local file in `CHUNK` pieces; `size` from `os.stat`).
@@ -799,10 +814,12 @@ git commit -m "feat: upload a local file into a OneDrive folder by drive and fol
 ### Task 6: Provider-neutral transfer orchestration
 
 **Files:**
+
 - Create: `web/skills/_files/transfer.py`
 - Test: `tests/test_files_transfer_core.py` (create)
 
 **Interfaces:**
+
 - Consumes: a provider object with these methods (refs are dicts: `ref = {"drive_id", "item_id"}`, `dest_folder = {"drive_id", "folder_id"}`; every method returns a dict, and on failure a dict containing `"error"` and `"error_code"`):
   - `stat(ref) -> {"item_id","drive_id","name","size","web_url"} | error`
   - `is_foreign_owner(ref) -> bool`
@@ -1173,10 +1190,12 @@ git commit -m "feat: provider-neutral file transfer with locked-file retry and c
 ### Task 7: OneDrive provider
 
 **Files:**
+
 - Create: `web/skills/_m365/onedrive_provider.py`
 - Test: `tests/test_onedrive_provider.py` (create)
 
 **Interfaces:**
+
 - Consumes: the provider contract from Task 6; `ft.store_in_folder` / `ft.file_source` (Task 5); `classify_graph_error` (Task 3); the four existing tool functions, injected.
 - Produces: `OneDriveProvider(*, get_item, download, copy, move, client)` where `get_item(drive_id, item_id)`, `download(file_id=, drive_id=, local_path=)`, `copy(...)`, `move(...)` are the existing `_tool_*` callables (positional order as in `tools.py`) and `client()` returns a Graph client.
 
@@ -1408,11 +1427,13 @@ git commit -m "feat: OneDrive provider for file transfer"
 ### Task 8: Register `file_transfer` and `file_upload` in the onedrive skill
 
 **Files:**
+
 - Modify: `web/skills/onedrive/tools.py` (TOOL_DEFS ~L539, TOOL_STATUS ~L1642, TOOL_HANDLERS ~L1649-1660, new handlers before `TOOL_STATUS.update`)
 - Modify: `tests/code_sandbox/test_secrets_guard.py:163`
 - Test: `tests/test_file_tools_registration.py` (create)
 
 **Interfaces:**
+
 - Consumes: `transfer()` (Task 6), `OneDriveProvider` (Task 7), the existing `_tool_*` functions, `get_skill_client`, `ONEDRIVE_SKILLS_DIR`.
 - Produces: tools `file_transfer(source_drive_id, source_item_id, dest_drive_id, dest_folder_id, mode="move", new_name="")` and `file_upload(local_path, dest_drive_id, dest_folder_id, name="")`.
 
@@ -1626,6 +1647,7 @@ git commit -m "feat: add file_transfer and file_upload tools to the OneDrive ski
 ### Task 9: Skill guides
 
 **Files:**
+
 - Modify: `web/skills/onedrive/SKILL.md`
 - Modify: `web/skills/m365-onedrive/SKILL.md`
 - Test: `tests/test_file_tools_registration.py::test_skill_guide_covers_move_copy_lock_and_upload` (written in Task 8)
@@ -1696,6 +1718,7 @@ Trigger a permission card (ask Gator to run a Python snippet). Before clicking A
 - [ ] **Step 4: Real-tenant locked-file check**
 
 Using a Teams chat that has a `.docx` attachment sent to you:
+
 1. Open the attachment in Word desktop and leave it open.
 2. In Gator: "Move the file attached in <chat> to my OneDrive folder <folder>."
 3. Expected: Gator calls `resolve_teams_attachment` then `file_transfer`; the result is `copied` with `original_remains: true` (reason `not_owner` or `locked`); Gator tells you the original is still in place and does not offer to delete it; the file opens from the returned `web_url`.
@@ -1715,6 +1738,7 @@ Summarise results (tests, screenshots, tenant outcomes) to the user. Do not push
 ## Self-Review
 
 **Spec coverage**
+
 - Existing tools stay; copy poll fix and `error_code` on move/copy/get item: Task 4.
 - Tools in the onedrive skill with lazy imports and neutral core in `_files`: Tasks 6-8.
 - File ref and provider interface: Task 6 (contract) and Task 7 (OneDrive provider).
