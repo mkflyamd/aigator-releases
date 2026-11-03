@@ -9848,11 +9848,17 @@ function _buildCalendarUpdateRows(data) {
   const zone = data.timezone;
   const person = (p, suffix) => {
     const who = p.name && p.name !== p.email ? p.name + ' (' + p.email + ')' : p.email;
-    return '<div>' + escapeHtml(who) + (suffix ? ' <em>' + escapeHtml(suffix) + '</em>' : '') + '</div>';
+    return (
+      '<div>' + escapeHtml(who) + (suffix ? ' <em>' + escapeHtml(suffix) + '</em>' : '') + '</div>'
+    );
   };
   const kind = (t) => (t === 'optional' ? 'optional' : t === 'resource' ? 'room' : 'required');
   const change = (from, to) =>
-    '<div><s>' + escapeHtml(from || 'None') + '</s></div><div>' + escapeHtml(to || 'None') + '</div>';
+    '<div><s>' +
+    escapeHtml(from || 'None') +
+    '</s></div><div>' +
+    escapeHtml(to || 'None') +
+    '</div>';
   const rows = [];
   rows.push(['Event', escapeHtml(data.subject || '')]);
   rows.push([
@@ -9878,7 +9884,10 @@ function _buildCalendarUpdateRows(data) {
   if (has('teams')) rows.push(['Teams meeting', after.teams ? 'Add' : 'Remove']);
   if (has('attendees')) {
     if ((data.added || []).length)
-      rows.push(['Adding', data.added.map((p) => person(p, kind(p.type) === 'required' ? '' : kind(p.type))).join('')]);
+      rows.push([
+        'Adding',
+        data.added.map((p) => person(p, kind(p.type) === 'required' ? '' : kind(p.type))).join(''),
+      ]);
     if ((data.removed || []).length)
       rows.push(['Removing', data.removed.map((p) => person(p, kind(p.type))).join('')]);
     if ((data.moved || []).length)
@@ -12332,7 +12341,8 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
   const _editableBody = teamsSeed ? teamsSeed.text : fullBody;
   const bodySnippet = escapeHtml(fullBody.slice(0, 200));
   const recipientInfo = data.to || data.channel || data.recipient || data.channels || '';
-  const subjectLine = type === 'calendar-event' || type === 'calendar-update' ? '' : data.subject || '';
+  const subjectLine =
+    type === 'calendar-event' || type === 'calendar-update' ? '' : data.subject || '';
   const workspaceLine =
     config.service === 'slack' && data.workspace_name
       ? `<div class="gcc-workspace">Slack · ${escapeHtml(data.workspace_name)}</div>`

@@ -141,7 +141,7 @@ Before passing start/end datetimes to any calendar tool:
 
 1. Use `read_calendar` (and `get_calendar_event_detail` if needed) to let the user pick the exact meeting. For recurring series, choose the specific occurrence ID from the `instances` list.
 2. Confirm the new time range, location, and any other changes.
-3. Call `update_calendar_event` with the new start/end (and any other fields). Default `send_updates` to `All` unless the user explicitly says otherwise. Pass only the attendees being added or changed; the tool keeps everyone else, including optional attendees and rooms.
+3. Call `update_calendar_event` with the new start/end (and any other fields). Default `send_updates` to `All` unless the user explicitly says otherwise. `attendees` and `optional_attendees` are each the complete list for that type, so include everyone who should stay. Leave one out entirely and the tool keeps that type as it is, along with rooms. The card lists anyone being removed.
 4. The tool does not change the event. It shows an approval card with the before/after time, the attendee changes, whether it is this occurrence or the whole series, and who is notified. Tell the user the update is ready and that nothing changes until they press **Send update**. Never say the meeting was already updated.
 5. If the user wants to add or remove people, ask them to tell you in chat and call the tool again, or to press **Open in Outlook** and edit the event there.
 

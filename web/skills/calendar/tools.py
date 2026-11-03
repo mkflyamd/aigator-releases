@@ -1655,7 +1655,7 @@ def _tool_update_calendar_event(
     }
     draft_id = create_draft(
         draft_type="calendar-update",
-        params={**card, "payload": payload},
+        params={**card, "payload": payload, "fingerprint": _event_fingerprint(event)},
         preview={"subject": before["subject"], "attendees": [p["email"] for p in diff["added"]]},
     )
     return {
@@ -1665,11 +1665,46 @@ def _tool_update_calendar_event(
     }
 
 
-def apply_calendar_update(event_id: str, payload: dict, send_updates: str = "All") -> dict:
-    """PATCH an approved update onto the event and read it back. Raises if Graph refuses."""
+class EventChangedError(Exception):
+    """The event no longer matches what the update card was staged against."""
+
+
+def _event_fingerprint(event: dict) -> dict:
+    return {
+        "subject": event.get("subject") or "",
+        "start": ((event.get("start") or {}).get("dateTime") or "")[:19],
+        "end": ((event.get("end") or {}).get("dateTime") or "")[:19],
+        "location": (event.get("location") or {}).get("displayName") or "",
+        "attendees": sorted(
+            [(a.get("emailAddress") or {}).get("address", "").lower(), a.get("type") or "required"]
+            for a in event.get("attendees") or []
+        ),
+    }
+
+
+def apply_calendar_update(
+    event_id: str,
+    payload: dict,
+    send_updates: str = "All",
+    timezone: str = "",
+    fingerprint: dict | None = None,
+) -> dict:
+    """PATCH an approved update onto the event and read it back. Raises if Graph refuses.
+
+    Graph replaces the whole attendee list, so the payload is only safe against the event
+    as it was when staged. If the event changed since, nothing is sent.
+    """
     from .._m365.helpers import get_cal_client
 
     gc = get_cal_client()
+    if fingerprint is not None:
+        headers = {"Prefer": f'outlook.timezone="{timezone}"'} if timezone else None
+        current = gc.get(f"/me/events/{_eid(event_id)}", {"$select": _UPDATE_READ_FIELDS}, extra_headers=headers)
+        if _event_fingerprint(current) != fingerprint:
+            raise EventChangedError(
+                "This meeting changed after the update was prepared, so nothing was applied. "
+                "Ask Gator to prepare the update again."
+            )
     gc.patch(f"/me/events/{_eid(event_id)}?sendUpdates={_normalize_send_updates(send_updates)}", payload)
     try:
         refreshed = gc.get(f"/me/events/{_eid(event_id)}", {"$select": "subject,start,end,attendees"})

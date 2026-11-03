@@ -150,7 +150,7 @@ def test_approving_patches_the_merged_payload_once():
     client = TestClient(app)
     did = _staged_draft()
     gc = MagicMock()
-    gc.get.return_value = {"subject": "Renamed", "start": {}, "end": {}, "attendees": CURRENT}
+    gc.get.return_value = EVENT
     with patch("skills._m365.helpers.get_cal_client", return_value=gc):
         res = _post(client, f"/api/drafts/{did}/approve")
     assert res.status_code == 200 and res.json()["ok"] is True
@@ -161,10 +161,24 @@ def test_approving_patches_the_merged_payload_once():
     assert get_draft(did) is None
 
 
+def test_an_event_edited_after_staging_is_not_overwritten():
+    client = TestClient(app)
+    did = _staged_draft()
+    edited = {**EVENT, "attendees": CURRENT + [_person("added-in-outlook@example.com", "required")]}
+    gc = MagicMock()
+    gc.get.return_value = edited
+    with patch("skills._m365.helpers.get_cal_client", return_value=gc):
+        res = _post(client, f"/api/drafts/{did}/approve")
+    assert res.status_code == 409 and "changed" in res.json()["detail"]
+    gc.patch.assert_not_called()
+    assert get_draft(did)["status"] == "pending"
+
+
 def test_a_failed_update_keeps_the_draft_for_retry():
     client = TestClient(app)
     did = _staged_draft()
     gc = MagicMock()
+    gc.get.return_value = EVENT
     gc.patch.side_effect = RuntimeError("graph down")
     with patch("skills._m365.helpers.get_cal_client", return_value=gc):
         res = _post(client, f"/api/drafts/{did}/approve")

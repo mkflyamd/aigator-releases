@@ -964,9 +964,14 @@ async def approve_draft(draft_id: str, body: dict = None):
             }
 
         elif dtype == "calendar-update":
-            from skills.calendar.tools import apply_calendar_update
+            from skills.calendar.tools import EventChangedError, apply_calendar_update
 
-            applied = apply_calendar_update(p["event_id"], p["payload"], p.get("notify", "All"))
+            try:
+                applied = apply_calendar_update(
+                    p["event_id"], p["payload"], p.get("notify", "All"), p.get("timezone", ""), p.get("fingerprint")
+                )
+            except EventChangedError as e:
+                raise HTTPException(status_code=409, detail=str(e))
             delivery_result = {"ok": True, **applied}
 
         # â”€â”€ Calendar (Google Workspace MCP) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
