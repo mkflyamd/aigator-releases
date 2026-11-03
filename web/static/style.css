@@ -1402,11 +1402,32 @@ body.tab-fullscreen .tab-expand-btn {
 .smodal-brand:hover {
   background: var(--surface2);
 }
-/* Pull the close button flush to the topbar's control x-position. .smodal-header
-   has 1.25rem left padding; the main .topbar uses 0.4rem. Offset by the
-   difference so the X lands at the same screen x as the app's window controls. */
-.smodal-header > .topbar-win-btn {
-  margin-left: -0.85rem;
+/* A labelled Back button, not a window-style X, so it isn't mistaken for quitting the app. */
+.drawer-back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: -0.5rem;
+  padding: 4px 10px 4px 6px;
+  background: none;
+  border: none;
+  border-radius: 7px;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 600;
+  flex-shrink: 0;
+  transition:
+    background 0.2s,
+    color 0.2s;
+}
+.drawer-back-btn:hover {
+  background: var(--surface2);
+  color: var(--text);
+}
+.drawer-back-btn svg {
+  width: 14px;
+  height: 14px;
 }
 .smodal-title {
   font-size: 0.78rem;
