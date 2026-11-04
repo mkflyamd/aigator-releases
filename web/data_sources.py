@@ -152,6 +152,7 @@ def _json_strings(text: str) -> list[str]:
         if isinstance(item, str):
             out.append(item)
         elif isinstance(item, dict):
+            out.extend(k for k in item if isinstance(k, str))
             stack.extend(item.values())
         elif isinstance(item, list):
             stack.extend(item)

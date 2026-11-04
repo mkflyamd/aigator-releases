@@ -153,7 +153,15 @@ def test_a_call_that_fails_on_approval_is_an_error_and_the_draft_stays_pending()
          patch("mcp.manager._client_for", return_value=client):
         response = _approve(draft_id)
     assert response.status_code == 500 and "Jira said no" in response.text
-    assert _drafts.get_draft(draft_id) is not None
+    assert _drafts.get_draft(draft_id)["status"] == "pending"
+
+
+def test_a_classification_word_in_an_argument_name_raises_the_warning():
+    from data_sources import sensitivity_markers
+
+    handlers = _handlers(OFFICIAL, [_tool("executeWrite", **WRITE_HINTS)])
+    result = handlers["executeWrite"](toolName="editJiraIssue", **{"Confidential plans": "Q3 notes"})
+    assert sensitivity_markers(result["data"]) == ["Confidential"]
 
 
 def test_a_classification_word_behind_a_line_break_still_raises_the_warning():
