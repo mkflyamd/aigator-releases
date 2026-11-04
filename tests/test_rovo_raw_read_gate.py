@@ -1,6 +1,6 @@
 """Raw MCP Jira calls: only Atlassian's own server may vouch for a read through its hints.
 
-Writes stay refused on every connection. On the official host the server's
+Writes need an approval card on every connection. On the official host the server's
 readOnlyHint decides; anywhere else a hint proves nothing and the tool name rule applies.
 """
 
@@ -92,8 +92,8 @@ def test_registered_handler_uses_the_hints_end_to_end(monkeypatch):
     client = MagicMock()
     client.call.return_value = '{"data": {"ok": true}}'
     with patch("mcp.manager._client_for", return_value=client):
-        denied = shared.TOOL_DISPATCH[aliases["executeWrite"]]()
-        assert denied.get("terminal") is True and "not yet supported" in denied["error"]
+        parked = shared.TOOL_DISPATCH[aliases["executeWrite"]]()
+        assert parked["_draft"] == "jira-mcp-write" and "terminal" not in parked
         client.call.assert_not_called()
         allowed = shared.TOOL_DISPATCH[aliases["executeRead"]]()
     assert "terminal" not in str(allowed)

@@ -1007,19 +1007,19 @@ async def approve_draft(draft_id: str, body: dict = None):
                 delivery_result["fallback"] = fallback_note
 
         # â”€â”€ Calendar (Google Workspace MCP) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-        elif dtype == "calendar-write":
+        elif dtype in ("calendar-write", "jira-mcp-write"):
             from mcp.manager import _load_connections, _client_for
 
             conn_id = p.get("connection_id", "")
             tool_name = p.get("tool", "")
             tool_args = p.get("arguments", {}) or {}
             if not conn_id or not tool_name:
-                raise HTTPException(status_code=400, detail="Calendar draft missing connection_id or tool")
+                raise HTTPException(status_code=400, detail="Draft missing connection_id or tool")
             conn = next((c for c in _load_connections() if c.get("id") == conn_id), None)
             if conn is None:
                 raise HTTPException(
                     status_code=404,
-                    detail=f"Calendar connection '{conn_id}' no longer exists â€” reconnect and try again.",
+                    detail=f"Connection '{conn_id}' no longer exists â€” reconnect and try again.",
                 )
             client = None
             try:

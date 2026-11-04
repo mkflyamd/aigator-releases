@@ -10941,6 +10941,17 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
       hideEditLink: true,
       sendLabel: 'I approve',
     },
+    'jira-mcp-write': {
+      paneLabel: '@jira',
+      paneIcon: '🎫',
+      service: '',
+      action: data.action || 'Jira change',
+      hideEditLink: true,
+      sendLabel: 'I approve',
+      customBody: _buildJiraFieldRows({
+        fields: { connection: data.connection, tool: data.tool, arguments: data.arguments_text },
+      }),
+    },
     'jira-create': {
       paneLabel: '@jira',
       paneIcon: '\uD83C\uDFAB',

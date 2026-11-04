@@ -22,7 +22,7 @@ Multiple Jira instances may be connected. Each tool's description says which sit
 **For any WRITE (full URL or bare key):**
 
 1. Call the native `jira_*` tool directly (e.g. `jira_add_comment`, `jira_update_issue`). Pass the full URL or bare key — target resolution is automatic.
-2. Never use raw MCP tools for writes. If Jira rejects a field change made with direct credentials (labels, components, custom fields), Gator retries the same approved change through Rovo on the same site automatically; there is no second approval. If a write tool returns "multiple sites", ask the user for the full URL.
+2. Use the native jira_* tools for writes. Only if none covers the change, call the raw MCP write tool; it appears as an approval card and nothing is applied until the user approves. If Jira rejects a field change made with direct credentials (labels, components, custom fields), Gator retries the same approved change through Rovo on the same site automatically; there is no second approval. If a write tool returns "multiple sites", ask the user for the full URL.
 
 ## Write operations — non-negotiable rules (read before any write)
 

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import json
 import logging
 import re
 import threading
@@ -246,6 +247,15 @@ def _is_unverified_jira_mcp_mutation(orig_name: str, conn: dict, hints: dict | N
     return not verb.startswith(_JIRA_READ_ONLY_PREFIXES)
 
 
+_JIRA_WRITE_ARGS_PREVIEW_MAX = 2000
+
+
+def _summarize_jira_write(orig_name: str, kwargs: dict) -> str:
+    """One-line human summary of a raw Jira MCP write for the approval card."""
+    inner = next((str(kwargs[k]) for k in ("toolName", "tool", "operation") if kwargs.get(k)), "")
+    return f"Jira change via {orig_name}" + (f": {inner}" if inner else "")
+
+
 def _is_workspace_mcp(conn: dict) -> bool:
     """True if this connection is the workspace-mcp server (stdio or http)."""
     command = (conn.get("command", "") or "").lower()
@@ -406,17 +416,38 @@ def _register(conn: dict) -> None:
                 # servers only accept the parameters declared in their input schema.
                 kwargs = {k: v for k, v in kwargs.items() if not k.startswith("_")}
                 if _is_unverified_jira_mcp_mutation(orig_name, c, hints):
+                    # A raw Jira write is parked as an approval card, like the
+                    # workspace-mcp writes below: the call only runs from the
+                    # CSRF-gated /api/drafts/{id}/approve endpoint.
+                    from skills._drafts import create_draft
+                    conn_name = c.get("name", c.get("id", ""))
+                    action_summary = _summarize_jira_write(orig_name, kwargs)
+                    arguments_text = json.dumps(kwargs, indent=2, default=str)
+                    if len(arguments_text) > _JIRA_WRITE_ARGS_PREVIEW_MAX:
+                        arguments_text = arguments_text[:_JIRA_WRITE_ARGS_PREVIEW_MAX] + "\n..."
+                    draft_id = create_draft(
+                        draft_type="jira-mcp-write",
+                        params={
+                            "connection_id": c.get("id", ""),
+                            "tool": orig_name,
+                            "arguments": kwargs,
+                        },
+                        preview={"action": action_summary, "connection": conn_name},
+                    )
                     return {
-                        "error": (
-                            "Jira write operations through this MCP connection are not yet "
-                            "supported by AI Gator (writes require a verified approval + read-back "
-                            "step that this connection does not have). "
-                            "This is a hard limitation — do NOT retry the tool. "
-                            "Tell the user to make this change directly in the Jira web UI instead, "
-                            "and stop."
+                        "_draft": "jira-mcp-write",
+                        "data": {
+                            "draft_id": draft_id,
+                            "action": action_summary,
+                            "connection": conn_name,
+                            "tool": orig_name,
+                            "arguments_text": arguments_text,
+                        },
+                        "_user_message": (
+                            f"Jira change ready for your approval: {action_summary}. "
+                            "Click 'I approve' to apply it, or tell me here "
+                            "to change anything first."
                         ),
-                        "target_required": True,
-                        "terminal": True,
                     }
                 # Inject a default limit if the schema declares one and the model omitted it.
                 # Stops "list everything" calls from dumping unbounded JSON into history.
