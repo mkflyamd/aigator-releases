@@ -6,6 +6,7 @@ import logging
 import re
 import threading
 import time
+from urllib.parse import urlparse
 
 import shared
 from config import load_config as _load_config, save_config as _save_config, update_config as _update_config
@@ -190,6 +191,14 @@ _JIRA_READ_ONLY_PREFIXES = (
     "get", "list", "search", "lookup", "find", "read", "view", "fetch",
     "accessible", "metadata", "field", "project", "page", "space",
 )
+# Only Atlassian's own server may vouch for a tool through its readOnlyHint;
+# a hint from any other MCP server proves nothing.
+_ATLASSIAN_MCP_HOST = "mcp.atlassian.com"
+
+
+def _is_official_atlassian_mcp(conn: dict) -> bool:
+    parsed = urlparse(str(conn.get("url") or ""))
+    return parsed.scheme == "https" and (parsed.hostname or "").lower() == _ATLASSIAN_MCP_HOST
 
 
 def _is_atlassian_connection(conn: dict) -> bool:
@@ -201,7 +210,7 @@ def _is_atlassian_connection(conn: dict) -> bool:
     return "atlassian" in blob or "rovo" in blob
 
 
-def _is_unverified_jira_mcp_mutation(orig_name: str, conn: dict) -> bool:
+def _is_unverified_jira_mcp_mutation(orig_name: str, conn: dict, hints: dict | None = None) -> bool:
     """Default-deny dynamic Jira writes until a verified adapter owns them.
 
     A tool is read-only only if its FIRST meaningful word (the verb) starts
@@ -209,6 +218,11 @@ def _is_unverified_jira_mcp_mutation(orig_name: str, conn: dict) -> bool:
     tool names like 'fetchAndTransitionJiraIssue' where 'fetch' appears
     mid-name. The verb is always the first word in both camelCase and
     snake_case naming conventions.
+
+    On the official Atlassian host the server's own hints decide instead: a tool
+    is a read only if it says readOnlyHint and does not say destructive, and a
+    read-looking name does not override a hint that says otherwise. Without
+    hints, or on any other host, the name rule above applies.
     """
     blob = " ".join([
         str(conn.get("name", "")), str(conn.get("url", "")),
@@ -217,6 +231,8 @@ def _is_unverified_jira_mcp_mutation(orig_name: str, conn: dict) -> bool:
     is_jira_connection = any(marker in blob for marker in _JIRA_MCP_MARKERS)
     if not is_jira_connection:
         return False
+    if hints and hints.get("readOnlyHint") is not None and _is_official_atlassian_mcp(conn):
+        return not (hints["readOnlyHint"] is True and hints.get("destructiveHint") is not True)
     import re as _re
     raw = (orig_name or "")
     parts = _re.sub(r'([A-Z])', r'_\1', raw).lower().replace("__", "_").split("_")
@@ -383,13 +399,13 @@ def _register(conn: dict) -> None:
         conn_snapshot = dict(conn)  # closure capture — full record so _client_for has everything
         limit_param = _discover_limit_param(input_schema)
 
-        def _make_handler(orig_name: str, c: dict, limit_param: str | None):
+        def _make_handler(orig_name: str, c: dict, limit_param: str | None, hints: dict):
             def _handler(**kwargs):
                 transport = c.get("transport", "http")
                 # Strip internal server-injected keys (e.g. _context_id) — MCP
                 # servers only accept the parameters declared in their input schema.
                 kwargs = {k: v for k, v in kwargs.items() if not k.startswith("_")}
-                if _is_unverified_jira_mcp_mutation(orig_name, c):
+                if _is_unverified_jira_mcp_mutation(orig_name, c, hints):
                     return {
                         "error": (
                             "Jira write operations through this MCP connection are not yet "
@@ -545,7 +561,7 @@ def _register(conn: dict) -> None:
                                 pass
             return _handler
 
-        shared.TOOL_DISPATCH[namespaced] = _make_handler(orig_name, conn_snapshot, limit_param)
+        shared.TOOL_DISPATCH[namespaced] = _make_handler(orig_name, conn_snapshot, limit_param, _tool_hints(t))
         shared.TOOL_STATUS[namespaced] = f"Calling {name}..."
         tool_names.add(namespaced)
         seen_raw_names.add(orig_name)
