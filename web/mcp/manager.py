@@ -247,9 +247,6 @@ def _is_unverified_jira_mcp_mutation(orig_name: str, conn: dict, hints: dict | N
     return not verb.startswith(_JIRA_READ_ONLY_PREFIXES)
 
 
-_JIRA_WRITE_ARGS_PREVIEW_MAX = 2000
-
-
 def _summarize_jira_write(orig_name: str, kwargs: dict) -> str:
     """One-line human summary of a raw Jira MCP write for the approval card."""
     inner = next((str(kwargs[k]) for k in ("toolName", "tool", "operation") if kwargs.get(k)), "")
@@ -423,8 +420,6 @@ def _register(conn: dict) -> None:
                     conn_name = c.get("name", c.get("id", ""))
                     action_summary = _summarize_jira_write(orig_name, kwargs)
                     arguments_text = json.dumps(kwargs, indent=2, default=str)
-                    if len(arguments_text) > _JIRA_WRITE_ARGS_PREVIEW_MAX:
-                        arguments_text = arguments_text[:_JIRA_WRITE_ARGS_PREVIEW_MAX] + "\n..."
                     draft_id = create_draft(
                         draft_type="jira-mcp-write",
                         params={

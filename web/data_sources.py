@@ -133,7 +133,9 @@ def blocked_flow(source_ids, draft_kind: str) -> str | None:
 
 _SENSITIVE_MARKER = re.compile(
     r"\b(?:highly\s+confidential|confidential|internal\s+use\s+only|proprietary|amd\s+restricted)\b", re.I)
-_SENSITIVE_FIELDS = ("subject", "body", "message", "comment", "description", "summary", "text")
+_SENSITIVE_FIELDS = (
+    "subject", "body", "message", "comment", "description", "summary", "text", "arguments_text",
+)
 
 
 def sensitivity_markers(data: dict) -> list[str]:

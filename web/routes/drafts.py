@@ -1023,8 +1023,9 @@ async def approve_draft(draft_id: str, body: dict = None):
                 )
             client = None
             try:
-                client = _client_for(conn, pooled=False)
-                raw = client.call(tool_name, tool_args)
+                # HTTP MCP clients call asyncio.run() internally, which fails on this event loop.
+                client = await _run_sync(_client_for, conn, pooled=False)
+                raw = await _run_sync(client.call, tool_name, tool_args)
                 delivery_result = {"ok": True, "result": raw if raw else "ok", "tool": tool_name}
             finally:
                 if client is not None:

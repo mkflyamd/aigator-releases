@@ -10948,9 +10948,9 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
       action: data.action || 'Jira change',
       hideEditLink: true,
       sendLabel: 'I approve',
-      customBody: _buildJiraFieldRows({
-        fields: { connection: data.connection, tool: data.tool, arguments: data.arguments_text },
-      }),
+      customBody:
+        _buildJiraFieldRows({ fields: { connection: data.connection, tool: data.tool } }) +
+        `<div class="gcc-field-row gcc-field-row--block"><span class="gcc-field-key">arguments</span><pre class="gcc-field-val" style="max-height:240px;overflow:auto;white-space:pre-wrap;margin:0;">${escapeHtml(data.arguments_text || '')}</pre></div>`,
     },
     'jira-create': {
       paneLabel: '@jira',

@@ -4,6 +4,7 @@ The handler never reaches the MCP client for a write; the call only runs from th
 CSRF-gated /api/drafts/{id}/approve endpoint. Reads pass straight through.
 """
 
+import json
 import pathlib
 import sys
 
@@ -94,11 +95,20 @@ def test_reads_are_not_carded():
     assert "_draft" not in result
 
 
-def test_a_long_argument_preview_is_truncated_but_the_draft_keeps_everything():
+def test_the_card_shows_every_argument_the_approval_will_send():
     handlers = _handlers(OFFICIAL, [_tool("executeWrite", **WRITE_HINTS)])
-    result = handlers["executeWrite"](toolName="editJiraIssue", body="x" * 5000)
-    assert len(result["data"]["arguments_text"]) < 2100
-    assert len(_drafts.get_draft(result["data"]["draft_id"])["params"]["arguments"]["body"]) == 5000
+    result = handlers["executeWrite"](toolName="editJiraIssue", body="x" * 5000 + "TAIL")
+    stored = _drafts.get_draft(result["data"]["draft_id"])["params"]["arguments"]
+    assert json.loads(result["data"]["arguments_text"]) == stored
+    assert "TAIL" in result["data"]["arguments_text"]
+
+
+def test_a_classification_word_in_the_arguments_raises_the_sensitivity_warning():
+    from data_sources import sensitivity_markers
+
+    handlers = _handlers(OFFICIAL, [_tool("executeWrite", **WRITE_HINTS)])
+    result = handlers["executeWrite"](toolName="addComment", body="AMD Restricted roadmap")
+    assert sensitivity_markers(result["data"]) == ["AMD Restricted"]
 
 
 def test_approving_the_card_runs_the_stored_call_once():
@@ -115,6 +125,25 @@ def test_approving_the_card_runs_the_stored_call_once():
     assert _drafts.get_draft(draft_id) is None
 
 
+def test_approval_works_with_a_client_that_needs_its_own_event_loop():
+    import asyncio
+
+    class LoopHungryClient:
+        """Like the HTTP MCP client: call() uses asyncio.run(), which fails on a running loop."""
+
+        def call(self, tool, arguments):
+            asyncio.run(asyncio.sleep(0))
+            return "done"
+
+    handlers = _handlers(OFFICIAL, [_tool("editJiraIssue", **WRITE_HINTS)])
+    draft_id = handlers["editJiraIssue"](issueIdOrKey="ROCMAI-845")["data"]["draft_id"]
+    with patch("mcp.manager._load_connections", return_value=[OFFICIAL]), \
+         patch("mcp.manager._client_for", return_value=LoopHungryClient()):
+        response = _approve(draft_id)
+    assert response.status_code == 200, response.text
+    assert response.json()["result"] == "done"
+
+
 def test_approving_after_the_connection_was_removed_is_refused_without_a_call():
     handlers = _handlers(OFFICIAL, [_tool("executeWrite", **WRITE_HINTS)])
     draft_id = handlers["executeWrite"](toolName="editJiraIssue")["data"]["draft_id"]
@@ -127,4 +156,4 @@ def test_approving_after_the_connection_was_removed_is_refused_without_a_call():
 
 def test_the_card_is_wired_in_the_ui():
     source = (pathlib.Path(__file__).parent.parent / "web" / "static" / "app.js").read_text(encoding="utf-8")
-    assert "'jira-mcp-write': {" in source and "data.arguments_text" in source
+    assert "'jira-mcp-write': {" in source and "escapeHtml(data.arguments_text" in source
