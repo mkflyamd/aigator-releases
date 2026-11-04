@@ -16832,7 +16832,11 @@ function _showBrowserConfirmCard(
 
 /* ── Failover Consent Gate ───────────────────────────── */
 
-function _showFailoverConfirmCard(msgDiv, { consent_id, fallback_model }, ownerTabId) {
+function _showFailoverConfirmCard(
+  msgDiv,
+  { consent_id, fallback_model, card: scopeOpts },
+  ownerTabId,
+) {
   const existing = document.getElementById('failover-confirm-card');
   if (existing) existing.remove();
 
@@ -16866,15 +16870,44 @@ function _showFailoverConfirmCard(msgDiv, { consent_id, fallback_model }, ownerT
   btnWrap.style.cssText =
     'display: flex; flex-wrap: wrap; gap: 6px; flex: 1 1 100%; justify-content: flex-end; align-items: center;';
 
-  const cancelBtn = document.createElement('button');
-  cancelBtn.textContent = 'Cancel';
-  cancelBtn.style.cssText =
-    'font-size: 0.75rem; padding: 4px 12px; border-radius: 6px; background: var(--surface3); color: var(--text); border: none; cursor: pointer; font-weight: 600;';
+  const _btnBase =
+    'font-size: 0.75rem; padding: 4px 12px; border-radius: 6px; cursor: pointer; font-weight: 600;';
+  const _btnPrimary = _btnBase + ' background: var(--accent); color: #000; border: none;';
+  const _btnSecondary = _btnBase + ' background: var(--surface3); color: var(--text); border: none;';
+  const _btnGhost =
+    _btnBase +
+    ' background: transparent; color: var(--text-muted); border: 1px solid var(--border, #374151);';
 
-  const allowBtn = document.createElement('button');
-  allowBtn.textContent = 'Switch';
-  allowBtn.style.cssText =
-    'font-size: 0.75rem; padding: 4px 12px; border-radius: 6px; background: var(--accent); color: #000; border: none; cursor: pointer; font-weight: 600;';
+  const scopeSpecs = _scopeButtonSpecs(scopeOpts);
+
+  const cancelBtn = document.createElement('button');
+  cancelBtn.textContent = scopeSpecs.length ? 'Deny' : 'Cancel';
+  cancelBtn.style.cssText = scopeSpecs.length ? _btnGhost : _btnSecondary;
+
+  const _allow = (scope) => async () => {
+    _dismiss();
+    const init = { method: 'POST' };
+    if (scope) {
+      init.headers = { 'Content-Type': 'application/json' };
+      init.body = JSON.stringify({ scope });
+    }
+    await fetch(`/api/failover/confirm/${consent_id}`, init);
+  };
+  const allowBtns = scopeSpecs.map((spec) => {
+    const btn = document.createElement('button');
+    btn.textContent = spec.label;
+    btn.dataset.scope = spec.scope;
+    btn.style.cssText = spec.primary ? _btnPrimary : _btnSecondary;
+    btn.addEventListener('click', _allow(spec.scope));
+    return btn;
+  });
+  if (!allowBtns.length) {
+    const allowBtn = document.createElement('button');
+    allowBtn.textContent = 'Switch';
+    allowBtn.style.cssText = _btnPrimary;
+    allowBtn.addEventListener('click', _allow());
+    allowBtns.push(allowBtn);
+  }
 
   const _dismiss = () => {
     _resolveTabCard(ownerTabId || _activeTabId, `failover:${consent_id}`);
@@ -16886,12 +16919,8 @@ function _showFailoverConfirmCard(msgDiv, { consent_id, fallback_model }, ownerT
     await fetch(`/api/failover/confirm/${consent_id}/cancel`, { method: 'POST' });
   });
 
-  allowBtn.addEventListener('click', async () => {
-    _dismiss();
-    await fetch(`/api/failover/confirm/${consent_id}`, { method: 'POST' });
-  });
-
-  btnWrap.append(cancelBtn, allowBtn);
+  if (scopeSpecs.length) btnWrap.append(...allowBtns, cancelBtn);
+  else btnWrap.append(cancelBtn, ...allowBtns);
   body.append(icon, textWrap, btnWrap);
   card.appendChild(body);
   const container = document.getElementById('messages');

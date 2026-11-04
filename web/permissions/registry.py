@@ -35,6 +35,9 @@ _STATIC = (
              "high", always_on_card=False),
     Category("capability:code_runner", "Run Python code", "Let the assistant run Python in the sandbox.",
              "high", always_on_card=False),
+    Category("failover", "Switch to the fallback model",
+             "When the main model stalls, resend the conversation to the fallback model instead.",
+             "high", scopes=("always", "tab", "once"), always_on_card=False),
     Category("capability:shell_runner", "Run shell commands", "Let the assistant run shell commands in the sandbox.",
              "high", always_on_card=False),
 )

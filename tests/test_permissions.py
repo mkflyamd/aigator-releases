@@ -236,3 +236,69 @@ def test_high_risk_categories_are_remembered_only_from_settings():
         permissions.set_mode(category, "always")
         assert permissions.decision("tab-2", category) == "allow"
         permissions.set_mode(category, "ask")
+
+
+def test_failover_is_a_category_with_this_tab_and_once_on_its_card():
+    assert permissions.card_options("failover") == {"scopes": ["tab", "once"], "primary": "tab"}
+    permissions.set_mode("failover", "always")
+    assert permissions.decision("tab-1", "failover") == "allow"
+
+
+def _consent(context_id, scope, allowed=True):
+    import asyncio
+
+    import agent_loop
+
+    async def run():
+        consent_id, payload = agent_loop._open_failover_consent(context_id, "fallback-model")
+        waiter = asyncio.ensure_future(agent_loop._await_failover_consent(consent_id, context_id))
+        await asyncio.sleep(0)
+        assert agent_loop.resolve_failover_consent(consent_id, allowed, scope)
+        return payload, await waiter
+
+    return asyncio.run(run())
+
+
+def test_failover_card_carries_the_category_and_scopes():
+    payload, _ = _consent("tab-1", "once")
+    assert payload["category"] == "failover"
+    assert payload["card"] == {"scopes": ["tab", "once"], "primary": "tab"}
+    assert payload["fallback_model"] == "fallback-model"
+
+
+def test_failover_unattended_card_has_no_scopes():
+    import agent_loop
+
+    _, payload = agent_loop._open_failover_consent(None, "fallback-model")
+    assert "card" not in payload
+
+
+def test_failover_allow_in_this_tab_covers_later_stalls_in_that_tab_only():
+    _, switched = _consent("tab-1", "tab")
+    assert switched is True
+    assert permissions.decision("tab-1", "failover") == "allow"
+    assert permissions.decision("tab-2", "failover") == "ask"
+
+
+def test_failover_allow_once_and_deny_grant_nothing():
+    assert _consent("tab-1", "once")[1] is True
+    assert permissions.decision("tab-1", "failover") == "ask"
+    assert _consent("tab-1", None, allowed=False)[1] is False
+    assert permissions.decision("tab-1", "failover") == "ask"
+
+
+def test_failover_always_from_a_card_falls_back_to_this_tab():
+    assert _consent("tab-1", "always")[1] is True
+    assert permissions.decision("tab-2", "failover") == "ask"
+    assert permissions.decision("tab-1", "failover") == "allow"
+
+
+def test_failover_confirm_route_passes_the_scope_and_reports_expiry(client, csrf):
+    import agent_loop
+
+    assert client.post("/api/failover/confirm/nope", headers=csrf).json() == {"ok": False, "expired": True}
+    consent_id, _ = agent_loop._open_failover_consent("tab-1", "fallback-model")
+    assert client.post(f"/api/failover/confirm/{consent_id}", headers=csrf, json={"scope": "tab"}).json() == {"ok": True}
+    assert agent_loop._failover_scopes[consent_id] == "tab"
+    agent_loop._pending_failover_consents.pop(consent_id)
+    agent_loop._failover_scopes.pop(consent_id)

@@ -80,3 +80,11 @@ test('Settings offers only Ask / Always allow per category and a Remove all for 
   assert(/DELETE', '\/api\/permissions\/rules'\)/.test(fn));
   assert(/_initPermissionSettings\(\);\r?\n\}/.test(app));
 });
+
+test('the failover card sends the chosen scope and puts Deny last', () => {
+  const i = app.indexOf('function _showFailoverConfirmCard');
+  const fn = app.slice(i, app.indexOf('/* ── Streaming state', i));
+  assert(/_scopeButtonSpecs\(scopeOpts\)/.test(fn));
+  assert(/JSON\.stringify\(\{ scope \}\)/.test(fn));
+  assert(/btnWrap\.append\(\.\.\.allowBtns, cancelBtn\)/.test(fn));
+});

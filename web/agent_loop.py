@@ -101,43 +101,62 @@ async def _compact_in_place(msgs: list[dict], turn_user_msg, context_id: str, pr
 _pending_failover_consents: dict[str, tuple[asyncio.Event, list[bool]]] = {}
 
 
-def resolve_failover_consent(consent_id: str, allowed: bool) -> None:
-    """Called by REST endpoint to resolve a pending failover consent gate."""
-    if consent_id in _pending_failover_consents:
-        event, result = _pending_failover_consents[consent_id]
-        result.append(allowed)
-        event.set()
+_failover_scopes: dict[str, str] = {}
 
 
-async def _request_failover_consent(
-    fallback_model: str, event_queue: asyncio.Queue | None = None,
-) -> bool:
-    """Suspend execution and ask the user whether to switch to the fallback
-    model. Returns True if the user consents, False if they decline or timeout.
+def resolve_failover_consent(consent_id: str, allowed: bool, scope: str | None = None) -> bool:
+    """Called by REST endpoint to resolve a pending failover consent gate.
 
-    If event_queue is provided (three-agent loop), the consent request is
-    forwarded through the event queue so the agent loop's drain loop can yield
-    it as SSE. If None (single-agent loop), the caller yields the SSE chunk
-    directly before calling this function.
+    `scope` is what the user chose on the card ("always", "tab", "once").
+    Returns False when no such gate is pending (answered already or expired).
     """
+    if consent_id not in _pending_failover_consents:
+        return False
+    event, result = _pending_failover_consents[consent_id]
+    if allowed and scope:
+        _failover_scopes[consent_id] = scope
+    result.append(allowed)
+    event.set()
+    return True
+
+
+def _open_failover_consent(context_id: str | None, fallback_model: str) -> tuple[str, dict]:
+    """Register a pending consent; returns its id and the SSE payload for the card."""
+    import permissions
     consent_id = str(uuid.uuid4())
-    event = asyncio.Event()
-    result: list[bool] = []
-    _pending_failover_consents[consent_id] = (event, result)
+    _pending_failover_consents[consent_id] = (asyncio.Event(), [])
+    payload = {"consent_id": consent_id, "fallback_model": fallback_model}
+    card = permissions.card_options("failover") if context_id else None
+    if card:
+        payload["category"] = "failover"
+        payload["card"] = card
+    return consent_id, payload
+
+
+async def _await_failover_consent(consent_id: str, context_id: str | None) -> bool:
+    """Wait for the user's answer. True only when they switched; records the scope they chose."""
+    import permissions
+    event, result = _pending_failover_consents[consent_id]
     try:
-        if event_queue is not None:
-            await event_queue.put({
-                "kind": "failover_confirm",
-                "consent_id": consent_id,
-                "fallback_model": fallback_model,
-            })
         try:
             await asyncio.wait_for(event.wait(), timeout=120.0)
         except asyncio.TimeoutError:
-            result.append(False)
-        return result[0] if result else False
+            return False
+        if not (result and result[0]):
+            return False
+        if context_id:
+            permissions.apply_scope(context_id, "failover", "", _failover_scopes.get(consent_id), "once")
+        return True
     finally:
         _pending_failover_consents.pop(consent_id, None)
+        _failover_scopes.pop(consent_id, None)
+
+
+def _failover_allowed(context_id: str | None) -> bool:
+    """True when a saved "Always allow" rule or this tab's grant already covers switching to the fallback."""
+    import permissions
+    return permissions.decision(context_id, "failover") == "allow"
+
 
 # Substrings in provider error messages that indicate context-window overflow.
 # When we see one of these, we prune the largest tool result from msgs and retry.
@@ -1384,21 +1403,12 @@ async def _single_agent_loop(
                             "[agent] primary stream stalled (%s) — asking user to consent to fallback %s",
                             exc, _fb_model
                         )
-                        _consent_id = str(uuid.uuid4())
-                        yield f"data: {json.dumps({'failover_confirm': {'consent_id': _consent_id, 'fallback_model': _fb_model}})}\n\n"
-                        _pending_failover_consents[_consent_id] = (asyncio.Event(), [])
-                        try:
-                            await asyncio.wait_for(
-                                _pending_failover_consents[_consent_id][0].wait(),
-                                timeout=120.0
-                            )
-                        except asyncio.TimeoutError:
-                            _pending_failover_consents[_consent_id][1].append(False)
-                        _consented = (
-                            _pending_failover_consents[_consent_id][1][0]
-                            if _pending_failover_consents[_consent_id][1] else False
-                        )
-                        _pending_failover_consents.pop(_consent_id, None)
+                        if _failover_allowed(context_id):
+                            _consented = True
+                        else:
+                            _consent_id, _consent_card = _open_failover_consent(context_id, _fb_model)
+                            yield f"data: {json.dumps({'failover_confirm': _consent_card})}\n\n"
+                            _consented = await _await_failover_consent(_consent_id, context_id)
 
                         if _consented:
                             _failover_used = True
@@ -1606,8 +1616,6 @@ async def _single_agent_loop(
                     yield f"data: {json.dumps({'browser_confirm': _card})}\n\n"
                 elif kind == "browser_confirm_expired":
                     yield f"data: {json.dumps({'browser_confirm_expired': evt['confirm_id']})}\n\n"
-                elif kind == "failover_confirm":
-                    yield f"data: {json.dumps({'failover_confirm': {'consent_id': evt['consent_id'], 'fallback_model': evt['fallback_model']}})}\n\n"
                 elif kind == "files":
                     yield f"data: {json.dumps({'files': evt['files']})}\n\n"
                 elif kind == "tools_granted":
@@ -1815,55 +1823,18 @@ def _chunk_text(text: str, size: int = 4) -> list:
     return chunks
 
 
-async def _handle_stall_with_consent(
-    exc: TimeoutError, provider, model, failover_used: bool,
-    event_queue: asyncio.Queue,
-) -> tuple[object, str, bool] | None:
-    """Handle a TimeoutError by asking the user for failover consent.
-
-    Returns (fallback_provider, fallback_model, True) if the user consents,
-    or None if there's no fallback, failover was already used, or the user
-    declined. The caller is responsible for surfacing the error when None
-    is returned.
-    """
-    if failover_used:
-        return None
+def _stall_fallback(exc: TimeoutError):
+    """The fallback (provider, model) to offer after a stalled stream, or None when there is none."""
     try:
         from llm.registry import get_fallback_provider
         _fb = get_fallback_provider()
     except Exception:
         return None
-    if _fb is None:
-        return None
-    _fb_provider, _fb_model = _fb
-    _log.warning(
-        "[agent] primary stream stalled (%s) — asking user to consent to fallback %s",
-        exc, _fb_model
-    )
-    # Emit the consent request through the event queue
-    consent_id = str(uuid.uuid4())
-    await event_queue.put({
-        "kind": "failover_confirm",
-        "consent_id": consent_id,
-        "fallback_model": _fb_model,
-    })
-    # Suspend and wait for the user's response
-    _pending_failover_consents[consent_id] = (asyncio.Event(), [])
-    try:
-        await asyncio.wait_for(
-            _pending_failover_consents[consent_id][0].wait(),
-            timeout=120.0
+    if _fb is not None:
+        _log.warning(
+            "[agent] primary stream stalled (%s) — asking user to consent to fallback %s", exc, _fb[1]
         )
-    except asyncio.TimeoutError:
-        _pending_failover_consents[consent_id][1].append(False)
-    _consented = (
-        _pending_failover_consents[consent_id][1][0]
-        if _pending_failover_consents[consent_id][1] else False
-    )
-    _pending_failover_consents.pop(consent_id, None)
-    if _consented:
-        return _fb_provider, _fb_model, True
-    return None
+    return _fb
 
 
 _MAX_SWARM_DEPTH = 1  # nested three-agent swarms beyond this depth are rejected
@@ -1948,15 +1919,18 @@ async def run_three_agent_loop(
                 continue
             # Failover consent after retries exhausted
             if isinstance(exc, TimeoutError) and not _failover_used and not plan_text:
-                _eq = asyncio.Queue()
-                _result = await _handle_stall_with_consent(exc, provider, model, _failover_used, _eq)
-                if _result is not None:
-                    _fb_provider, _fb_model, _ = _result
+                _fb = _stall_fallback(exc)
+                _consented = False
+                if _fb is not None:
+                    _fb_provider, _fb_model = _fb
+                    if _failover_allowed(context_id):
+                        _consented = True
+                    else:
+                        _consent_id, _consent_card = _open_failover_consent(context_id, _fb_model)
+                        yield f"data: {json.dumps({'failover_confirm': _consent_card})}\n\n"
+                        _consented = await _await_failover_consent(_consent_id, context_id)
+                if _consented:
                     _failover_used = True
-                    while not _eq.empty():
-                        _evt = _eq.get_nowait()
-                        if _evt.get("kind") == "failover_confirm":
-                            yield f"data: {json.dumps({'failover_confirm': {'consent_id': _evt['consent_id'], 'fallback_model': _evt['fallback_model']}})}\n\n"
                     yield f"data: {json.dumps({'status': f'⚠️ Switching to fallback ({_fb_model})...'})}\n\n"
                     provider = _fb_provider
                     model = _fb_model
@@ -2089,15 +2063,18 @@ async def run_three_agent_loop(
                     continue
                 # Failover consent after retries exhausted
                 if isinstance(exc, TimeoutError) and not _failover_used and not draft_text:
-                    _eq = asyncio.Queue()
-                    _result = await _handle_stall_with_consent(exc, provider, model, _failover_used, _eq)
-                    if _result is not None:
-                        _fb_provider, _fb_model, _ = _result
+                    _fb = _stall_fallback(exc)
+                    _consented = False
+                    if _fb is not None:
+                        _fb_provider, _fb_model = _fb
+                        if _failover_allowed(context_id):
+                            _consented = True
+                        else:
+                            _consent_id, _consent_card = _open_failover_consent(context_id, _fb_model)
+                            yield f"data: {json.dumps({'failover_confirm': _consent_card})}\n\n"
+                            _consented = await _await_failover_consent(_consent_id, context_id)
+                    if _consented:
                         _failover_used = True
-                        while not _eq.empty():
-                            _evt = _eq.get_nowait()
-                            if _evt.get("kind") == "failover_confirm":
-                                yield f"data: {json.dumps({'failover_confirm': {'consent_id': _evt['consent_id'], 'fallback_model': _evt['fallback_model']}})}\n\n"
                         yield f"data: {json.dumps({'status': f'⚠️ Switching to fallback ({_fb_model})...'})}\n\n"
                         provider = _fb_provider
                         model = _fb_model
@@ -2162,8 +2139,6 @@ async def run_three_agent_loop(
                     yield f"data: {json.dumps({'browser_confirm': _card})}\n\n"
                 elif kind == "browser_confirm_expired":
                     yield f"data: {json.dumps({'browser_confirm_expired': evt['confirm_id']})}\n\n"
-                elif kind == "failover_confirm":
-                    yield f"data: {json.dumps({'failover_confirm': {'consent_id': evt['consent_id'], 'fallback_model': evt['fallback_model']}})}\n\n"
                 elif kind == "files":
                     yield f"data: {json.dumps({'files': evt['files']})}\n\n"
                 elif kind == "tools_granted":

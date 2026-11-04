@@ -158,7 +158,8 @@ def test_permission_card_is_not_overwritten_by_the_stream_end_render():
     src = open(os.path.join(os.path.dirname(__file__), "..", "web", "static", "app.js"), encoding="utf-8").read()
     assert src.count("if (_permissionCardShown) return;") == 2
     assert "if (!_permissionCardShown) prose.innerHTML = _renderProse();" in src
-    assert "_permissionCardShown = true;\n              _renderPermissionCard(" in src
+    shown = src.index("_permissionCardShown = true;")
+    assert src.index("_renderPermissionCard(", shown) - shown < 400
     reset = src.index("    _userCollapsedThinking = false;\n    _permissionCardShown = false;")
     assert src.index("const doSend = async (overridePayload) => {") < reset
 
@@ -210,7 +211,8 @@ def test_clicking_allow_grants_what_that_card_asked_for_to_its_tab_only(monkeypa
     assert again.status_code == 404
 
 
-def test_always_allow_on_the_permission_card_saves_a_rule_that_covers_every_tab(monkeypatch):
+def test_the_runner_card_offers_this_tab_only_and_always_allow_lives_in_settings(monkeypatch):
+    import permissions
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
     from routes import chat as chat_routes
@@ -218,12 +220,15 @@ def test_always_allow_on_the_permission_card_saves_a_rule_that_covers_every_tab(
 
     task_id = _chat(monkeypatch, context_id="ctx-" + uuid.uuid4().hex)
     event = json.loads(_first_event(task_id).removeprefix("data: ").strip())
-    assert event["card"]["scopes"] == ["always", "tab"] and event["card"]["primary"] == "tab"
+    assert event["card"]["scopes"] == ["tab"] and event["card"]["primary"] == "tab"
     api = FastAPI()
     api.include_router(chat_routes.router)
     client = TestClient(api)
     headers = {"X-CSRF-Token": get_csrf_token("testserver")}
 
     res = client.post("/api/chat/approve-deps", json={"approval_id": event["approval_id"], "scope": "always"}, headers=headers)
-    assert res.json() == {"approved": ["code_runner"], "scope": "always"}
+    assert res.json() == {"approved": ["code_runner"], "scope": "tab"}
+    assert _ungranted_gated_deps(_req(context_id="a-brand-new-tab")) == ["code_runner", "shell_runner"]
+
+    permissions.set_mode("capability:code_runner", "always")
     assert _ungranted_gated_deps(_req(context_id="a-brand-new-tab")) == ["shell_runner"]
