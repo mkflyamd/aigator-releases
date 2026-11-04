@@ -41,7 +41,7 @@ def _native_categories() -> list[Category]:
     seen: dict[str, Category] = {}
     for label in data_sources._NATIVE_SOURCES.values():
         key = f"data:{label}"
-        seen.setdefault(key, Category(key, label, f"Read {label} on your behalf.", "low"))
+        seen.setdefault(key, Category(key, label, "", "low"))
     return list(seen.values())
 
 

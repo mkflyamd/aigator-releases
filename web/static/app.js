@@ -18283,11 +18283,20 @@ function _initPermissionSettings() {
   };
   const modeRow = (category, persistentAllowed) => {
     const item = document.createElement('div');
-    item.className = 'srow-sub saved-permission-item permission-mode-item';
+    item.className = 'permission-mode-item';
+    const text = document.createElement('div');
+    text.className = 'permission-mode-text';
     const label = document.createElement('span');
     label.className = 'permission-mode-label';
-    label.textContent = String(category.label);
-    label.title = String(category.description || '');
+    const name = String(category.label);
+    label.textContent = name.charAt(0).toUpperCase() + name.slice(1);
+    text.appendChild(label);
+    if (category.description) {
+      const desc = document.createElement('span');
+      desc.className = 'permission-mode-desc';
+      desc.textContent = String(category.description);
+      text.appendChild(desc);
+    }
     const group = document.createElement('div');
     group.className = 'seg-group seg-sm';
     [
@@ -18305,7 +18314,7 @@ function _initPermissionSettings() {
       });
       group.appendChild(btn);
     });
-    item.append(label, group);
+    item.append(text, group);
     return item;
   };
   const render = (data) => {
@@ -18319,6 +18328,12 @@ function _initPermissionSettings() {
       .forEach((c) => list.appendChild(modeRow(c, persistentAllowed)));
     rulesList.replaceChildren();
     const subjectRules = rules.filter((r) => r.subject);
+    if (subjectRules.length) {
+      const head = document.createElement('div');
+      head.className = 'spanel-divider';
+      head.textContent = 'Remembered websites';
+      rulesList.appendChild(head);
+    }
     subjectRules.forEach((rule) => {
       const item = document.createElement('div');
       item.className = 'srow-sub saved-permission-item';
