@@ -75,6 +75,32 @@ def remember(category_id: str, subject: str = "") -> dict:
     return store.add(category.id, rule_subject)
 
 
+def apply_scope(context_id: str, category_id: str, subject: str, scope: str | None, default: str = "tab") -> str:
+    """Record what the user chose on a card and return the scope that took effect.
+
+    A click that names no scope (an older page) gets `default`, what that card's Allow meant before scopes existed.
+
+    "always" falls back to "tab" when the category, policy or store does not allow a saved rule.
+    A category this module does not know gets no grant at all ("once"), so it asks again next time.
+    """
+    if registry.get(category_id) is None:
+        return "once"
+    scope = scope or default
+    if scope == "once":
+        return "once"
+    if scope == "always":
+        try:
+            remember(category_id, subject)
+            return "always"
+        except (ValueError, RuntimeError):
+            pass
+    try:
+        allow_for_tab(context_id, category_id, subject)
+        return "tab"
+    except ValueError:
+        return "once"
+
+
 def set_mode(category_id: str, mode: str) -> None:
     """Settings switch for a whole category: "always" saves its rule, "ask" removes it."""
     category = registry.get(category_id)

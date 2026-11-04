@@ -625,17 +625,27 @@ def _install_payment_guard(tools) -> None:
 _pending_confirms: dict[str, tuple[asyncio.Event, list[bool]]] = {}
 
 
-def resolve_browser_confirm(confirm_id: str, allowed: bool) -> bool:
+_confirm_scopes: dict[str, str] = {}
+
+
+def resolve_browser_confirm(confirm_id: str, allowed: bool, scope: str | None = None) -> bool:
     """Called by REST endpoints to resolve a pending browser confirm gate.
 
+    `scope` is what the user chose on the card ("always", "tab"); the gate decides what it may mean.
     Returns False when no such gate is pending (answered already or expired).
     """
     if confirm_id not in _pending_confirms:
         return False
     event, result = _pending_confirms[confirm_id]
+    if allowed and scope:
+        _confirm_scopes[confirm_id] = scope
     result.append(allowed)
     event.set()
     return True
+
+
+def pop_confirm_scope(confirm_id: str) -> str | None:
+    return _confirm_scopes.pop(confirm_id, None)
 
 
 # Max consecutive steps with no screenshot (proxy for tab-detach cascade).

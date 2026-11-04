@@ -203,8 +203,27 @@ def test_clicking_allow_grants_what_that_card_asked_for_to_its_tab_only(monkeypa
     assert _ungranted_gated_deps(_req(context_id=ctx)) == ["code_runner", "shell_runner"]
 
     res = client.post("/api/chat/approve-deps", json={"approval_id": event["approval_id"]}, headers=headers)
-    assert res.json() == {"approved": ["code_runner"]}
+    assert res.json() == {"approved": ["code_runner"], "scope": "tab"}
     assert _ungranted_gated_deps(_req(context_id=ctx)) == ["shell_runner"]
     assert _ungranted_gated_deps(_req(context_id="other-tab")) == ["code_runner", "shell_runner"]
     again = client.post("/api/chat/approve-deps", json={"approval_id": event["approval_id"]}, headers=headers)
     assert again.status_code == 404
+
+
+def test_always_allow_on_the_permission_card_saves_a_rule_that_covers_every_tab(monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from routes import chat as chat_routes
+    from security import get_csrf_token
+
+    task_id = _chat(monkeypatch, context_id="ctx-" + uuid.uuid4().hex)
+    event = json.loads(_first_event(task_id).removeprefix("data: ").strip())
+    assert event["card"]["scopes"] == ["always", "tab"] and event["card"]["primary"] == "tab"
+    api = FastAPI()
+    api.include_router(chat_routes.router)
+    client = TestClient(api)
+    headers = {"X-CSRF-Token": get_csrf_token("testserver")}
+
+    res = client.post("/api/chat/approve-deps", json={"approval_id": event["approval_id"], "scope": "always"}, headers=headers)
+    assert res.json() == {"approved": ["code_runner"], "scope": "always"}
+    assert _ungranted_gated_deps(_req(context_id="a-brand-new-tab")) == ["shell_runner"]

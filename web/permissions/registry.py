@@ -32,7 +32,6 @@ _STATIC = (
     Category("schedule_task", "Scheduled tasks", "Create tasks that run later on their own.", "high"),
     Category("capability:code_runner", "Run Python code", "Let the assistant run Python in the sandbox.", "high"),
     Category("capability:shell_runner", "Run shell commands", "Let the assistant run shell commands in the sandbox.", "high"),
-    Category("failover", "Switch to a backup model", "Use a fallback model when the selected one is unavailable.", "low"),
 )
 
 

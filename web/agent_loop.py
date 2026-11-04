@@ -552,6 +552,7 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
     """Returns (_run_tool_block, _run_all_into_queue, _SENTINEL) closures."""
     import content_guard
     import data_sources
+    import permissions
     _SENTINEL = object()
     _offered = set(offered_names) if offered_names is not None else None
     _source_locks: dict[tuple[str, str], asyncio.Lock] = {}
@@ -560,10 +561,21 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
 
     _BROWSER_TOOLS = {"browser_task", "browser_navigate", "browser_search"}
 
+    def _allowed_now(category: str, subject: str = "") -> bool:
+        """True when a saved "Always allow" rule or this tab's grant already covers the category."""
+        return permissions.decision(context_id, category, subject) == "allow"
+
+    _SCOPE_NOTE = {"always": "always allowed (change it in Settings)", "tab": "allowed for this tab", "once": "allowed this time"}
+
     async def _request_browser_confirm(action: str, event_queue, *, title=None,
-                                       allow_label=None, deny_label=None, diagram=None) -> bool:
-        """Suspend execution, ask user to allow/cancel. Returns True if allowed."""
-        from browser_agent import _pending_confirms, resolve_browser_confirm
+                                       allow_label=None, deny_label=None, diagram=None,
+                                       category=None, subject="", default_scope="tab") -> str:
+        """Suspend execution, ask user to allow/cancel.
+
+        Returns "" when denied, else the scope that took effect ("always", "tab", "once"),
+        or "allowed" when the card has no permission category.
+        """
+        from browser_agent import _pending_confirms, pop_confirm_scope
         confirm_id = str(uuid.uuid4())
         event = asyncio.Event()
         result: list[bool] = []
@@ -573,6 +585,10 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
             for k, v in (("title", title), ("allow_label", allow_label), ("deny_label", deny_label), ("diagram", diagram)):
                 if v:
                     evt[k] = v
+            card = permissions.card_options(category) if category and context_id else None
+            if card:
+                evt["category"] = category
+                evt["card"] = card
             await event_queue.put(evt)
             try:
                 with awaiting_human(context_id):
@@ -580,28 +596,43 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
             except asyncio.TimeoutError:
                 result.append(False)
                 await event_queue.put({"kind": "browser_confirm_expired", "confirm_id": confirm_id})
-            return result[0] if result else False
+            if not (result and result[0]):
+                return ""
+            if not card:
+                return "allowed"
+            return permissions.apply_scope(context_id, category, subject, pop_confirm_scope(confirm_id), default_scope)
         finally:
             _pending_confirms.pop(confirm_id, None)
+            pop_confirm_scope(confirm_id)
 
     async def _early_error(tc, event_queue, result: dict, summary: str):
         await event_queue.put({"kind": "tool_result", "call_id": tc.id, "status": "error", "summary": summary})
         return result
 
+    def _source_category(source) -> tuple[str, str]:
+        if source.key.startswith("web:"):
+            return "web", source.key[len("web:"):]
+        return source.key, ""
+
+    def _source_allowed(source) -> bool:
+        return data_sources.is_allowed(context_id, source.key) or _allowed_now(*_source_category(source))
+
     async def _ask_source(tc, source, event_queue):
         """Returns None when the source is allowed, else the error result."""
         lock = _source_locks.setdefault((context_id, source.key), asyncio.Lock())
         async with lock:
-            if data_sources.is_allowed(context_id, source.key):
+            if _source_allowed(source):
                 return None
             if not data_sources.recently_denied(context_id, source.key):
                 text = data_sources.prompt_for(source, tc.name, tc.inputs)
-                if await _request_browser_confirm(
+                category, subject = _source_category(source)
+                granted = await _request_browser_confirm(
                     text["action"], event_queue, title=text["title"],
                     allow_label=text["allow_label"], deny_label=text["deny_label"],
-                ):
-                    data_sources.allow(context_id, source.key)
-                    await event_queue.put({"kind": "status", "status": f"{source.label}: allowed for this tab"})
+                    category=category, subject=subject,
+                )
+                if granted:
+                    await event_queue.put({"kind": "status", "status": f"{source.label}: {_SCOPE_NOTE.get(granted, 'allowed')}"})
                     return None
                 data_sources.deny(context_id, source.key)
         return await _early_error(
@@ -782,10 +813,13 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
                 "Scheduling is not allowed in an unattended run",
             )
         _add_inferred_schedule_skills(tc.inputs)
+        if _allowed_now("schedule_task"):
+            return None
         if await _request_browser_confirm(
             _schedule_card_action(tc.inputs or {}), event_queue,
             title="Allow AI Gator to schedule a task?", allow_label="Allow", deny_label="Deny",
             diagram=_schedule_card_diagram(tc.inputs or {}),
+            category="schedule_task", default_scope="once",
         ):
             return None
         return await _early_error(
@@ -834,19 +868,20 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
             key = f"capability:{runner}"
             lock = _source_locks.setdefault((context_id, key), asyncio.Lock())
             async with lock:
-                if data_sources.is_allowed(context_id, key):
+                if data_sources.is_allowed(context_id, key) or _allowed_now(key):
                     continue
                 if not data_sources.recently_denied(context_id, key):
                     name = _RUNNER_CARD_NAMES.get(runner, runner)
-                    if await _request_browser_confirm(
+                    granted = await _request_browser_confirm(
                         f"AI Gator wants to use {name}. It runs code or commands the model writes inside the "
                         f"AI Gator sandbox; access to other folders or the network is asked separately. "
-                        f"Reason given: {reason}. Allowed for this tab only.",
+                        f"Reason given: {reason}.",
                         event_queue, title=f"Allow AI Gator to use {name}?",
                         allow_label="Allow for this tab", deny_label="Deny",
-                    ):
-                        data_sources.allow(context_id, key)
-                        await event_queue.put({"kind": "status", "status": f"{name}: allowed for this tab"})
+                        category=key,
+                    )
+                    if granted:
+                        await event_queue.put({"kind": "status", "status": f"{name}: {_SCOPE_NOTE.get(granted, 'allowed')}"})
                         continue
                     data_sources.deny(context_id, key)
             return await _early_error(
@@ -930,7 +965,7 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
                     return await _early_error(tc, event_queue, {**refusal, "url": url}, refusal["error"])
         if context_id:
             source = data_sources.source_for_call(tc.name, tc.inputs)
-            if source is not None and not data_sources.is_allowed(context_id, source.key):
+            if source is not None and not _source_allowed(source):
                 denied = await _ask_source(tc, source, event_queue)
                 if denied is not None:
                     return denied
@@ -946,7 +981,9 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
                 action = f"Search the web for \"{tc.inputs.get('query', '')}\""
             else:
                 action = tc.inputs.get("task", "Perform a browser task")[:120]
-            confirmed = await _request_browser_confirm(action, event_queue)
+            confirmed = (_allowed_now("browser") and "tab") or await _request_browser_confirm(
+                action, event_queue, category="browser", default_scope="once",
+            )
             if not confirmed:
                 return {"error": "Browser use cancelled by user."}
             await event_queue.put({"kind": "browser_hitl", "state": "active"})
@@ -1542,7 +1579,7 @@ async def _single_agent_loop(
                 elif kind == "browser_hitl":
                     yield f"data: {json.dumps({'browser_hitl': evt['state']})}\n\n"
                 elif kind == "browser_confirm":
-                    _card = {k: evt[k] for k in ("confirm_id", "action", "title", "allow_label", "deny_label", "diagram") if k in evt}
+                    _card = {k: evt[k] for k in ("confirm_id", "action", "title", "allow_label", "deny_label", "diagram", "category", "card") if k in evt}
                     yield f"data: {json.dumps({'browser_confirm': _card})}\n\n"
                 elif kind == "browser_confirm_expired":
                     yield f"data: {json.dumps({'browser_confirm_expired': evt['confirm_id']})}\n\n"
@@ -2098,7 +2135,7 @@ async def run_three_agent_loop(
                 elif kind == "browser_hitl":
                     yield f"data: {json.dumps({'browser_hitl': evt['state']})}\n\n"
                 elif kind == "browser_confirm":
-                    _card = {k: evt[k] for k in ("confirm_id", "action", "title", "allow_label", "deny_label", "diagram") if k in evt}
+                    _card = {k: evt[k] for k in ("confirm_id", "action", "title", "allow_label", "deny_label", "diagram", "category", "card") if k in evt}
                     yield f"data: {json.dumps({'browser_confirm': _card})}\n\n"
                 elif kind == "browser_confirm_expired":
                     yield f"data: {json.dumps({'browser_confirm_expired': evt['confirm_id']})}\n\n"

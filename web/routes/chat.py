@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 from datetime import datetime
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
@@ -317,9 +318,12 @@ def _best_capability_group(conn_id: str, message: str) -> str | None:
 
 
 def _granted_runners(context_id: str | None) -> list[str]:
-    """Runners the user approved on a request_skill card in this tab."""
+    """Runners approved in this tab, or saved with "Always allow"."""
     import data_sources
-    return [s for s in data_sources.allowed_with_prefix(context_id or "default", "capability:") if s in _GATED_DEP_SKILLS]
+    import permissions
+    granted = {s for s in data_sources.allowed_with_prefix(context_id or "default", "capability:") if s in _GATED_DEP_SKILLS}
+    granted.update(g for g in _GATED_DEP_SKILLS if permissions.decision(context_id, f"capability:{g}") == "allow")
+    return sorted(granted)
 
 
 def _ungranted_gated_deps(req) -> list[str]:
@@ -345,6 +349,7 @@ def _register_dep_approval(context_id: str, dep_ids: list[str]) -> str:
 
 class ApproveDepsRequest(BaseModel):
     approval_id: str
+    scope: Literal["always", "tab"] | None = None
 
 
 @router.post("/api/chat/approve-deps", dependencies=[Depends(verify_csrf)])
@@ -352,14 +357,20 @@ async def approve_deps(body: ApproveDepsRequest):
     """The user clicked Allow on a permission card: grant exactly what that card asked for, for its tab."""
     import time
     import data_sources
+    import permissions
     from fastapi import HTTPException
     entry = _PENDING_DEP_APPROVALS.pop(body.approval_id, None)
     if entry is None or time.monotonic() - entry[2] > _PENDING_DEP_APPROVAL_TTL:
         raise HTTPException(status_code=404, detail="This permission request has expired. Send the message again.")
     context_id, dep_ids, _ = entry
+    applied = "tab"
     for dep in dep_ids:
-        data_sources.allow(context_id, f"capability:{dep}")
-    return {"approved": dep_ids}
+        key = f"capability:{dep}"
+        applied = permissions.apply_scope(context_id, key, "", body.scope)
+        if applied == "once":
+            data_sources.allow(context_id, key)
+            applied = "tab"
+    return {"approved": dep_ids, "scope": applied}
 
 
 _RUNNER_REASONS = {
@@ -390,6 +401,7 @@ def _permission_gate_response(blocked: list[tuple[str, dict]], context_id: str):
     """Answer the chat POST with a permission_required event instead of running the turn."""
     import asyncio as _asyncio
     import uuid as _uuid
+    import permissions
     from fastapi.responses import JSONResponse
 
     def _dep_label(dep_id: str) -> str:
@@ -398,6 +410,12 @@ def _permission_gate_response(blocked: list[tuple[str, dict]], context_id: str):
                 return line[2:].strip()
         return dep_id.replace("-", " ").title()
 
+    cards = [c for c in (permissions.card_options(f"capability:{dep['id']}") for _, dep in blocked) if c]
+    card = None
+    if cards:
+        scopes = [sc for sc in cards[0]["scopes"] if all(sc in c["scopes"] for c in cards)]
+        primary = "tab" if any(c["primary"] == "tab" for c in cards) else cards[0]["primary"]
+        card = {"scopes": scopes, "primary": primary if primary in scopes else scopes[0]}
     payload = {
         "type": "permission_required",
         "approval_id": _register_dep_approval(context_id, [dep["id"] for _, dep in blocked]),
@@ -407,6 +425,8 @@ def _permission_gate_response(blocked: list[tuple[str, dict]], context_id: str):
             for _, dep in blocked
         ],
     }
+    if card:
+        payload["card"] = card
     chunk = f"data: {json.dumps(payload)}\n\n"
     task_id = str(_uuid.uuid4())
     shared.chat_task_store.create_task(task_id, context_id or "default")

@@ -145,7 +145,7 @@ def test_card_options_drop_always_when_policy_denies(deny_persistent):
 def test_registry_covers_the_gates():
     ids = {c.id for c in registry.known()}
     assert {"data:Outlook mail", "data:Jira", "data:Slack", "web", "browser", "schedule_task",
-            "capability:code_runner", "capability:shell_runner", "failover"} <= ids
+            "capability:code_runner", "capability:shell_runner"} <= ids
     assert len(ids) == len(registry.known())
 
 
