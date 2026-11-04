@@ -749,6 +749,7 @@ _ROVO_OPERATION_TO_TOOL = {
     "get_projects": "getVisibleJiraProjects",
     "get_issue_types": "getJiraProjectIssueTypesMetadata",
     "get_create_meta": "getJiraIssueTypeMetaWithFields",
+    "search_issues": "searchJiraIssuesUsingJql",
 }
 
 

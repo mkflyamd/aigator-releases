@@ -44,7 +44,7 @@ def _japi(target, method: str, path: str, body: dict | None = None) -> dict:
 def _burl(target) -> str:
     """Browse base URL for the resolved target."""
     base = getattr(target, "base_url", "")
-    if base and base in configured_extra_urls():
+    if base and (getattr(target, "adapter", "") == "rovo-mcp" or base in configured_extra_urls()):
         return base
     return jira_browse_url()
 
@@ -871,19 +871,22 @@ def _tool_jira_search(jql: str, max_results: int = 20, _context_id: str = "") ->
         target = _site_hosting_jql_project(jql, target, _context_id)
     except JiraTargetResolutionError as exc:
         return _target_resolution_result(exc, _context_id)
+    fields = ["summary", "status", "priority", "assignee"]
     if target.adapter == "rovo-mcp":
-        # Rovo does not expose a JQL search endpoint in the verified allowlist.
-        # Fall through to the direct path which will fail with a clear auth error
-        # rather than silently passing the JQL string as an issue key to getJiraIssue.
-        return {"error": f"JQL search is not supported for the Rovo-connected Jira site ({target.base_url}). Provide the full issue URL or use jira_get_issue with a specific issue key.", "site": target.base_url}
-    with _site(target):
-        data = _jira_search_post(
-            jql,
-            max_results=max_results,
-            fields=["summary", "status", "priority", "assignee"],
-        )
+        try:
+            data = rovo_jira_call(
+                target, "search_issues", {"jql": jql, "maxResults": min(int(max_results), 100), "fields": fields}
+            )
+        except JiraTargetResolutionError as exc:
+            return {"error": f"JQL search is not available through the Rovo connection for {target.base_url}: {exc}", "site": target.base_url}
+        if not isinstance(data, dict):
+            return {"error": f"Rovo returned an unreadable JQL search result for {target.base_url}.", "site": target.base_url}
+    else:
+        with _site(target):
+            data = _jira_search_post(jql, max_results=max_results, fields=fields)
     return {
-        "total": data.get("total", 0),
+        "total": data.get("total", len(data.get("issues", []))),
+        **({"more_available": True} if data.get("isLast") is False else {}),
         "issues": [
             {
                 "key": i["key"],
