@@ -539,3 +539,22 @@ async def test_admin_policy_deny_turns_always_into_this_tab(monkeypatch):
     assert cards[0]["card"]["scopes"] == ["tab"]
     assert permissions.decision("tab-z", "data:Outlook mail") == "ask"
     assert ds.is_allowed("tab-a", "data:Outlook mail")
+
+
+async def test_a_call_let_through_by_a_saved_rule_is_tagged_for_telemetry():
+    import permissions
+    from agent_loop import _summarize_tool_calls
+    permissions.remember("data:Outlook mail")
+    tc = _tc("search_email")
+    res = await asyncio.wait_for(_runner([])(tc, asyncio.Queue()), 5)
+    assert res["_permission_telemetry"] == {"approval": "saved", "categories": ["data:Outlook mail"]}
+    (entry,) = _summarize_tool_calls([tc], [res])
+    assert entry["permission"] == {"approval": "saved", "categories": ["data:Outlook mail"]}
+
+
+async def test_a_tab_grant_or_a_fresh_card_is_not_tagged_as_a_saved_rule():
+    calls, q = [], asyncio.Queue()
+    res, _ = await asyncio.gather(_runner(calls)(_tc("search_email"), q), _answer_scope(q, "tab"))
+    assert "_permission_telemetry" not in res
+    again = await asyncio.wait_for(_runner(calls)(_tc("read_email", call_id="c2"), asyncio.Queue()), 5)
+    assert "_permission_telemetry" not in again

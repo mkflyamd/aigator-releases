@@ -45,6 +45,15 @@ def decision(context_id: str | None, category_id: str, subject: str = "") -> str
     return "ask"
 
 
+def covered_by_saved_rule(category_id: str, subject: str = "") -> bool:
+    """True when a saved "Always allow" rule (not a tab grant) is what lets this call through."""
+    category = registry.get(category_id)
+    if category is None or not category.rememberable or not persistent_allowed():
+        return False
+    rule_subject = _rule_subject(category, subject)
+    return bool(rule_subject or not category.subject_scoped) and store.has(category.id, rule_subject)
+
+
 def card_options(category_id: str) -> dict | None:
     """Buttons a card for this category should offer, in display order, and which one leads."""
     category = registry.get(category_id)

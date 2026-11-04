@@ -1,6 +1,7 @@
 """Agentic loop -- single-agent (original) and three-agent (primary) orchestration."""
 import asyncio
 import contextlib
+import contextvars
 import json
 import logging
 import os
@@ -373,6 +374,9 @@ def _any_tool_succeeded(results: list) -> bool:
     return False
 
 
+_saved_rule_hits: contextvars.ContextVar[list[str] | None] = contextvars.ContextVar("saved_rule_hits", default=None)
+
+
 def _summarize_tool_calls(tool_calls: list, results: list | None = None) -> list[dict]:
     """Build a JSON-serializable summary of tool calls for telemetry.
 
@@ -394,6 +398,9 @@ def _summarize_tool_calls(tool_calls: list, results: list | None = None) -> list
             # Code-runner sandbox: one metadata-only record per run (no paths, hosts, code or output).
             if isinstance(r, dict) and isinstance(r.get("_sandbox_telemetry"), dict):
                 entry["sandbox"] = r["_sandbox_telemetry"]
+            # A saved "Always allow" rule skipped a card: category ids only, never the subject or content.
+            if isinstance(r, dict) and isinstance(r.get("_permission_telemetry"), dict):
+                entry["permission"] = r["_permission_telemetry"]
         else:
             entry["success"] = None
         out.append(entry)
@@ -563,7 +570,12 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
 
     def _allowed_now(category: str, subject: str = "") -> bool:
         """True when a saved "Always allow" rule or this tab's grant already covers the category."""
-        return permissions.decision(context_id, category, subject) == "allow"
+        if permissions.decision(context_id, category, subject) != "allow":
+            return False
+        hits = _saved_rule_hits.get()
+        if hits is not None and category not in hits and permissions.covered_by_saved_rule(category, subject):
+            hits.append(category)
+        return True
 
     _SCOPE_NOTE = {"always": "always allowed (change it in Settings)", "tab": "allowed for this tab", "once": "allowed this time"}
 
@@ -941,6 +953,17 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
         return {"asked": True, "_await_answer": card}
 
     async def _run_tool_block(tc, event_queue):
+        hits: list[str] = []
+        token = _saved_rule_hits.set(hits)
+        try:
+            result = await _run_tool_block_gated(tc, event_queue)
+        finally:
+            _saved_rule_hits.reset(token)
+        if hits and isinstance(result, dict):
+            result["_permission_telemetry"] = {"approval": "saved", "categories": list(hits)}
+        return result
+
+    async def _run_tool_block_gated(tc, event_queue):
         if tc.name == "request_skill" and (_offered is None or tc.name in _offered):
             return await _grant_requested_skill(tc, event_queue)
         if tc.name == "ask_user" and (_offered is None or tc.name in _offered):
