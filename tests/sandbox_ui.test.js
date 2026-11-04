@@ -505,7 +505,7 @@ const flush = async () => {
   function makeSettingsEnv(entries) {
     const list = makeEl('div');
     const clear = makeEl('button');
-    clear.hidden = true;
+    clear.disabled = true;
     const row = makeEl('div');
     const byId = {
       'saved-permissions-row': row,
@@ -554,7 +554,7 @@ const flush = async () => {
     'description rendered as text',
   );
   assert(!rows.some((e) => e.tag === 'img'));
-  assert.strictEqual(sEnv.clear.hidden, false);
+  assert.strictEqual(sEnv.clear.disabled, false);
   assert.strictEqual(typeof sEnv.ctx.window._refreshSavedPermissions, 'function');
 
   const removeBtns = walk(sEnv.list).filter((e) => e.tag === 'button');
@@ -576,7 +576,7 @@ const flush = async () => {
   assert(
     sEnv.calls.some((c) => c.method === 'DELETE' && c.url === '/api/sandbox/saved-permissions'),
   );
-  assert.strictEqual(sEnv.clear.hidden, true);
+  assert.strictEqual(sEnv.clear.disabled, true);
   assert(
     walk(sEnv.list).some((e) => /Nothing saved/.test(e.textContent)),
     'empty state shown',
@@ -614,7 +614,7 @@ const flush = async () => {
   );
   assert(!walk(fEnv.list).some((e) => e.textContent === 'second'), 'no stale rows');
   assert(walk(fEnv.list).some((e) => e.textContent === 'Could not load saved permissions.'));
-  assert.strictEqual(fEnv.clear.hidden, true);
+  assert.strictEqual(fEnv.clear.disabled, true);
 
   // A rejected fetch (backend down) shows the same message.
   const rEnv = makeSettingsEnv([{ id: 'e1', description: 'x', created: 1 }]);

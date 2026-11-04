@@ -1844,6 +1844,13 @@ details + .spanel-divider,
 .permission-mode-label {
   flex: 1 1 auto;
 }
+.permission-mode-item .seg-btn {
+  min-width: 96px;
+  text-align: center;
+}
+.permission-mode-item .seg-btn.active {
+  font-weight: 500;
+}
 .srow-tag {
   font-size: 0.68rem;
   font-weight: 500;

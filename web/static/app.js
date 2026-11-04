@@ -6191,6 +6191,8 @@ function initSettingsTabs() {
     panels.forEach((p) => p.classList.toggle('hidden', p.id !== 'spanel-' + tabName));
     localStorage.setItem(STORAGE_KEY, tabName);
     if (typeof window._refreshSavedPermissions === 'function') window._refreshSavedPermissions();
+    if (tabName === 'permissions' && typeof window._refreshPermissionSettings === 'function')
+      window._refreshPermissionSettings();
     // When the Skills tab is activated, lazily mount the marketplace pane into
     // its panel. Subsequent activations are no-ops (mount() is idempotent).
     if (tabName === 'skills') {
@@ -18195,7 +18197,7 @@ function _initSavedPermissions() {
   };
   const render = (entries) => {
     list.replaceChildren();
-    clear.hidden = entries.length === 0;
+    clear.disabled = entries.length === 0;
     if (!entries.length) {
       const empty = document.createElement('div');
       empty.className = 'srow-sub';
@@ -18225,7 +18227,7 @@ function _initSavedPermissions() {
       .then((d) => render(Array.isArray(d.entries) ? d.entries : []))
       .catch(() => {
         list.replaceChildren();
-        clear.hidden = true;
+        clear.disabled = true;
         const failed = document.createElement('div');
         failed.className = 'srow-sub';
         failed.textContent = 'Could not load saved permissions.';
@@ -18332,7 +18334,7 @@ function _initPermissionSettings() {
       item.append(text, remove);
       rulesList.appendChild(item);
     });
-    clear.hidden = rules.length === 0;
+    clear.disabled = rules.length === 0;
   };
   const refresh = () =>
     call('GET', '/api/permissions')
@@ -18340,7 +18342,7 @@ function _initPermissionSettings() {
       .catch(() => {
         list.replaceChildren(note('Could not load permissions.'));
         rulesList.replaceChildren();
-        clear.hidden = true;
+        clear.disabled = true;
       });
   const act = (method, url, body) =>
     call(method, url, body)
