@@ -174,6 +174,7 @@ function makeEnv(activeTab) {
     '_sandboxFollowUpText',
     '_sendSandboxFollowUp',
     '_flushSandboxFollowUp',
+    '_markTabNeedsAttention',
     '_showSandboxApproval',
     '_renderTabSandboxCards',
   ].forEach((n) => vm.runInContext(extract(n), ctx));

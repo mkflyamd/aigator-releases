@@ -60,6 +60,7 @@ assert(
     children: [],
     listeners: {},
     style: {},
+    dataset: {},
     textContent: '',
     removed: false,
     append(...c) {
@@ -81,8 +82,10 @@ assert(
       return { textContent: this._title };
     },
   });
+  const resolvedTabCards = [];
   const expire = vm.runInNewContext(m[0] + ';_expireConfirmCard;', {
     document: { createElement: el },
+    _resolveTabCard: (tab, id) => resolvedTabCards.push([tab, id]),
     _pinConfirmCardInView: (c) => {
       c.pinned = true;
     },
@@ -93,7 +96,10 @@ assert(
   const card = el();
   card._title = 'Allow access to Jira?';
   card._askAgain = () => asked.push(1);
+  card.dataset.ownerTab = 'tab-1';
+  card.dataset.confirmId = 'c1';
   expire(card);
+  assert.deepStrictEqual(resolvedTabCards, [['tab-1', 'c1']], 'an expired card is no longer held for its tab');
   assert.strictEqual(card.pinned, true, 'the expired card must be pinned into view');
   const nodes = flat(card);
   assert(

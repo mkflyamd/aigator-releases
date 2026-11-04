@@ -4176,6 +4176,48 @@ function _renderTabDrafts(tabId) {
   });
 }
 
+function _markTabNeedsAttention(tabId, message) {
+  _tabsWithUpdates.add(tabId);
+  document.querySelector?.(`.tab-item[data-tab-id="${tabId}"]`)?.classList.add('tab-has-update');
+  _showConnectivityToast(message, 'info');
+}
+
+// An approval card belongs to the tab whose turn asked. Another tab only gets a cue; the card is
+// drawn when that tab is shown, because a tab's chat is rebuilt from history on every switch.
+function _routeCardToTab(tabId, cardId, draw) {
+  if (!tabId || !cardId) return;
+  if (!_pendingTabCards.has(tabId)) _pendingTabCards.set(tabId, new Map());
+  _pendingTabCards.get(tabId).set(cardId, { draw, expired: false });
+  if (tabId === _activeTabId) {
+    draw();
+    return;
+  }
+  _markTabNeedsAttention(tabId, 'AI Gator needs your approval in another tab.');
+}
+
+function _resolveTabCard(tabId, cardId) {
+  _pendingTabCards.get(tabId)?.delete(cardId);
+}
+
+function _expireTabCard(tabId, cardId) {
+  const entry = _pendingTabCards.get(tabId)?.get(cardId);
+  if (entry) entry.expired = true;
+}
+
+function _renderTabCards(tabId) {
+  _pendingTabCards.get(tabId)?.forEach((entry, cardId) => {
+    entry.draw();
+    if (entry.expired) _expireConfirmCardById(cardId);
+  });
+}
+
+// The turn is over: a card still waiting can no longer be answered. Expired ones stay to be shown once.
+function _dropStaleTabCards(tabId) {
+  _pendingTabCards.get(tabId)?.forEach((entry, cardId) => {
+    if (!entry.expired) _resolveTabCard(tabId, cardId);
+  });
+}
+
 function _renderTabSandboxCards(tabId) {
   _pendingSandboxCards.get(tabId)?.forEach((data) => _showSandboxApproval(data, tabId));
 }
@@ -4329,6 +4371,7 @@ const _inflightRequests = new Map();
 const _chatTaskIds = new Map(); // tabId -> task_id for the active chat request
 const _locallyFinishedTasks = new Set(); // task ids already cleaned up here; their chat_done is late
 const _tabsWithUpdates = new Set(); // tabIds with completed responses the user hasn't seen
+const _pendingTabCards = new Map(); // tabId -> Map(cardId -> {draw, expired}); drawn again each time the tab is shown
 const _pendingSandboxCards = new Map(); // tabId -> Map(requestId -> card data); drawn again each time the tab is shown
 const _tabsWorking = new Set(); // tabIds with an in-flight request (animated working line)
 let _revealActiveTabOnRender = false; // true = unconditionally scroll active tab into view on next render
@@ -4665,6 +4708,7 @@ function switchTab(tabId) {
   // after tab history so a draft remains attached to its originating tab.
   _renderTabDrafts(tabId);
   _renderTabSandboxCards(tabId);
+  _renderTabCards(tabId);
   const inflight = _inflightRequests.get(tabId);
   if (inflight?.msgDiv && msgs && !msgs.contains(inflight.msgDiv)) {
     inflight.msgDiv.classList.add('typing');
@@ -4792,6 +4836,7 @@ function closeTab(tabId) {
     _inflightRequests.delete(tabId);
     _pendingSandboxFollowUps.delete(tabId);
     _pendingSandboxCards.delete(tabId);
+    _pendingTabCards.delete(tabId);
     // Clear pin context and stored state
     fetch(`/api/context/pins?context_id=${tabId}`, { method: 'DELETE' }).catch((err) =>
       console.warn('Tab cleanup fetch failed:', err),
@@ -10060,11 +10105,7 @@ function _showSandboxApproval(data, ownerTabId) {
   if (!_pendingSandboxCards.has(cardTab)) _pendingSandboxCards.set(cardTab, new Map());
   _pendingSandboxCards.get(cardTab).set(requestId, data);
   if (ownerTabId && ownerTabId !== _activeTabId) {
-    _tabsWithUpdates.add(ownerTabId);
-    document
-      .querySelector?.(`.tab-item[data-tab-id="${ownerTabId}"]`)
-      ?.classList.add('tab-has-update');
-    _showConnectivityToast('AI Gator needs your approval in another tab.', 'info');
+    _markTabNeedsAttention(ownerTabId, 'AI Gator needs your approval in another tab.');
     return;
   }
   const seen = Array.from(document.querySelectorAll('[data-sandbox-request]')).some(
@@ -13903,11 +13944,18 @@ form.addEventListener('submit', async (e) => {
               }
               _scheduleRender();
             } else if (msg.browser_confirm) {
-              _showBrowserConfirmCard(msgDiv, msg.browser_confirm);
+              const _confirm = msg.browser_confirm;
+              _routeCardToTab(requestTabId, _confirm.confirm_id, () =>
+                _showBrowserConfirmCard(msgDiv, _confirm, requestTabId),
+              );
             } else if (msg.browser_confirm_expired) {
+              _expireTabCard(requestTabId, msg.browser_confirm_expired);
               _expireConfirmCardById(msg.browser_confirm_expired);
             } else if (msg.failover_confirm) {
-              _showFailoverConfirmCard(msgDiv, msg.failover_confirm);
+              const _failover = msg.failover_confirm;
+              _routeCardToTab(requestTabId, `failover:${_failover.consent_id}`, () =>
+                _showFailoverConfirmCard(msgDiv, _failover, requestTabId),
+              );
             } else if (msg.browser_hitl) {
               if (msg.browser_hitl === 'active') {
                 // Remove confirm card if it wasn't dismissed (edge case)
@@ -14223,6 +14271,11 @@ form.addEventListener('submit', async (e) => {
               _continueRetryNote = typeof msg.retry_note === 'string' ? msg.retry_note : '';
             } else if (msg.type === 'permission_required') {
               _permissionCardShown = true;
+              if (requestTabId !== _activeTabId)
+                _markTabNeedsAttention(
+                  requestTabId,
+                  'AI Gator needs your approval in another tab.',
+                );
               _renderPermissionCard(
                 msgDiv,
                 msg,
@@ -14494,6 +14547,7 @@ form.addEventListener('submit', async (e) => {
     }
     msgDiv.classList.remove('typing');
     _setTabWorking(requestTabId, false);
+    _dropStaleTabCards(requestTabId);
     if (_activeTabId === requestTabId) {
       _resetBtn();
       setStatus('ready');
@@ -16545,6 +16599,7 @@ function _pinConfirmCardInView(card) {
 
 function _expireConfirmCard(card) {
   if (!card) return;
+  _resolveTabCard(card.dataset.ownerTab, card.dataset.confirmId);
   const askAgain = card._askAgain;
   const title = card.querySelector('[data-confirm-title]')?.textContent || '';
   card.replaceChildren();
@@ -16640,6 +16695,7 @@ async function _renderConfirmDiagram(box, diagram) {
 function _showBrowserConfirmCard(
   msgDiv,
   { confirm_id, action, title, allow_label, deny_label, diagram, card: scopeOpts },
+  ownerTabId,
 ) {
   const text = _confirmCardText({ title, allow_label, deny_label });
   // Source cards keep their own id so two pending cards (two sources) do not replace each other.
@@ -16647,14 +16703,17 @@ function _showBrowserConfirmCard(
     // Remove any stale browser confirm card
     const existing = document.getElementById('browser-confirm-card');
     if (existing) existing.remove();
+  } else if (document.getElementById(`source-confirm-${confirm_id}`)) {
+    return;
   }
 
   const card = document.createElement('div');
   card.className = 'system-card';
   card.id = text.isSource ? `source-confirm-${confirm_id}` : 'browser-confirm-card';
   card.dataset.confirmId = confirm_id;
+  const _tabId = ownerTabId || _activeTabId;
+  card.dataset.ownerTab = _tabId;
   // Re-sends this tab's last request so the gate is raised again with a live card.
-  const _tabId = _activeTabId;
   const _lastUserText = _lastUserRequestText(_tabId);
   if (_lastUserText) {
     card._askAgain = () => {
@@ -16748,7 +16807,10 @@ function _showBrowserConfirmCard(
       expired = true;
     }
     if (expired) _expireConfirmCard(card);
-    else card.remove();
+    else {
+      _resolveTabCard(_tabId, confirm_id);
+      card.remove();
+    }
   };
 
   cancelBtn.addEventListener('click', () => _answer(`/api/browser/confirm/${confirm_id}/cancel`));
@@ -16770,7 +16832,7 @@ function _showBrowserConfirmCard(
 
 /* ── Failover Consent Gate ───────────────────────────── */
 
-function _showFailoverConfirmCard(msgDiv, { consent_id, fallback_model }) {
+function _showFailoverConfirmCard(msgDiv, { consent_id, fallback_model }, ownerTabId) {
   const existing = document.getElementById('failover-confirm-card');
   if (existing) existing.remove();
 
@@ -16815,6 +16877,7 @@ function _showFailoverConfirmCard(msgDiv, { consent_id, fallback_model }) {
     'font-size: 0.75rem; padding: 4px 12px; border-radius: 6px; background: var(--accent); color: #000; border: none; cursor: pointer; font-weight: 600;';
 
   const _dismiss = () => {
+    _resolveTabCard(ownerTabId || _activeTabId, `failover:${consent_id}`);
     card.remove();
   };
 
