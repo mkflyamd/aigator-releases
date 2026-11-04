@@ -9796,8 +9796,9 @@ function _buildJiraFieldRows(data, editable = {}) {
 }
 
 function _showApprovalWarning(approveBtn, result) {
-  const warning = result && result.ok === 'partial' ? result.warning : '';
-  if (!warning) return false;
+  if (!result || result.ok !== 'partial') return false;
+  const warning =
+    result.warning || 'Applied, but Jira did not confirm every change. Check the issue.';
   approveBtn.textContent = 'Applied with a warning';
   const note = document.createElement('div');
   note.className = 'gcc-draft-warning';

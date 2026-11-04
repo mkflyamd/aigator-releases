@@ -26,7 +26,7 @@ Multiple Jira instances may be connected. Each tool's description says which sit
 
 ## Write operations — non-negotiable rules (read before any write)
 
-1. **ALWAYS use native `jira_*` tools** for ANY write (comment, update, create, transition, watcher, link, attachment). Never use raw Rovo MCP tools for writes — they are blocked; Gator reaches Rovo itself when needed.
+1. **ALWAYS use native `jira_*` tools** for ANY write (comment, update, create, transition, watcher, link, attachment). Use a raw Rovo MCP write tool only when no native tool covers the change; it is held as an approval card and nothing is applied until the user approves. Gator reaches Rovo itself when a native write needs it.
 2. **Creating a ticket**: call `jira_get_project_meta` first to find required fields, ask the user for missing values, then call `jira_open_create_form`. Never call `jira_create_issue` directly — it is disabled.
 3. **If a write tool returns a "multiple sites" error**: ask the user to provide the full issue URL so the correct site can be identified unambiguously.
 

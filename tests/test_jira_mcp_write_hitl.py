@@ -144,6 +144,26 @@ def test_approval_works_with_a_client_that_needs_its_own_event_loop():
     assert response.json()["result"] == "done"
 
 
+def test_a_call_that_fails_on_approval_is_an_error_and_the_draft_stays_pending():
+    handlers = _handlers(OFFICIAL, [_tool("editJiraIssue", **WRITE_HINTS)])
+    draft_id = handlers["editJiraIssue"](issueIdOrKey="ROCMAI-845")["data"]["draft_id"]
+    client = MagicMock()
+    client.call.side_effect = RuntimeError("Jira said no")
+    with patch("mcp.manager._load_connections", return_value=[OFFICIAL]), \
+         patch("mcp.manager._client_for", return_value=client):
+        response = _approve(draft_id)
+    assert response.status_code == 500 and "Jira said no" in response.text
+    assert _drafts.get_draft(draft_id) is not None
+
+
+def test_a_classification_word_behind_a_line_break_still_raises_the_warning():
+    from data_sources import sensitivity_markers
+
+    handlers = _handlers(OFFICIAL, [_tool("executeWrite", **WRITE_HINTS)])
+    result = handlers["executeWrite"](toolName="addComment", body="Roadmap notes\nCONFIDENTIAL: Q3 plans")
+    assert sensitivity_markers(result["data"]) == ["CONFIDENTIAL"]
+
+
 def test_approving_after_the_connection_was_removed_is_refused_without_a_call():
     handlers = _handlers(OFFICIAL, [_tool("executeWrite", **WRITE_HINTS)])
     draft_id = handlers["executeWrite"](toolName="editJiraIssue")["data"]["draft_id"]

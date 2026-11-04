@@ -44,8 +44,15 @@ test('a partial result with a warning is shown on the card', () => {
   assert.strictEqual(inserted[0].node.className, 'gcc-draft-warning');
 });
 
-test('a clean, missing or warning-less result leaves the card alone', () => {
-  for (const result of [{ ok: true }, {}, null, { ok: 'partial' }, { ok: true, warning: 'x' }]) {
+test('a partial result with no warning still says so, with a default message', () => {
+  const { shown, approveBtn, inserted } = run({ ok: 'partial' });
+  assert.strictEqual(shown, true);
+  assert.strictEqual(approveBtn.textContent, 'Applied with a warning');
+  assert.match(inserted[0].node.textContent, /did not confirm every change/);
+});
+
+test('a clean or missing result leaves the card alone', () => {
+  for (const result of [{ ok: true }, {}, null, { ok: true, warning: 'x' }]) {
     const { shown, approveBtn, inserted } = run(result);
     assert.strictEqual(shown, false);
     assert.strictEqual(approveBtn.textContent, 'Applied ✓');

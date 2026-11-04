@@ -570,7 +570,7 @@ TOOL_DEFS = [
     {
         "name": "jira_mutate",
         "description": (
-            "Disabled safety placeholder. Raw Jira writes are never available to the model because "
+            "Disabled safety placeholder. Raw Jira REST writes are never available to the model because "
             "they bypass target resolution, user approval, and read-back verification."
         ),
         "input_schema": {
