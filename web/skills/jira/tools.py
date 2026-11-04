@@ -1420,27 +1420,25 @@ def _tool_jira_transition(
     except JiraTargetResolutionError as exc:
         return _target_resolution_result(exc, _context_id)
 
-    if target.adapter == "rovo-mcp":
-        # Rovo's transitionJiraIssue requires a non-empty transition ID.
-        # The Rovo MCP schema does not expose a transitions-list endpoint, so
-        # there is no way to map a name to an ID without direct credentials.
-        # Refuse explicitly rather than staging a draft that will fail at approval.
+    # Expand fields so we can detect required fields (like resolution)
+    try:
+        if target.adapter == "rovo-mcp":
+            transitions = rovo_jira_call(
+                target, "list_transitions", {"issueIdOrKey": issue_key, "expand": "transitions.fields"}
+            )
+        else:
+            transitions = _japi(
+                target, "GET", f"issue/{issue_key}/transitions?expand=transitions.fields"
+            )
+    except JiraTargetResolutionError as exc:
         return {
-            "error": (
-                "Issue transitions are not available for Rovo-connected Jira sites because "
-                "Rovo does not expose a transition-list API. "
-                "Open the issue in your browser to change its status directly."
-            ),
+            "error": f"Issue transitions are not available through the Rovo connection for {target.base_url}: {exc}",
             "unavailable": True,
         }
-
-    # Direct path: expand fields so we can detect required fields (like resolution)
-    try:
-        transitions = _japi(
-            target, "GET", f"issue/{issue_key}/transitions?expand=transitions.fields"
-        )
     except RuntimeError as exc:
         return {"error": str(exc)}
+    if not isinstance(transitions, dict):
+        return {"error": f"Could not read the available transitions for {issue_key}."}
     match = None
     for t in transitions.get("transitions", []):
         if t.get("name", "").lower() == transition_name.lower():

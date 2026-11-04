@@ -878,27 +878,39 @@ async def approve_draft(draft_id: str, body: dict = None):
             from skills.jira.api import jira_api_for_target
             from skills.jira.mutations import (
                 JiraTargetResolutionError,
+                rovo_jira_call,
                 verified_result,
             )
 
             _jira_tab_guard(p, body)
             target = _jira_get_target(p, body)
             issue_key = str(p.get("issue_key", ""))
-
-            # Rovo transition is unsupported: the Rovo schema requires a
-            # non-empty transition ID, and there is no Rovo endpoint to look
-            # one up. A legitimate Rovo transition draft cannot be created by
-            # the staging tool, so reaching this branch for a Rovo target means
-            # the draft was crafted externally â€” refuse it.
-            if target.adapter == "rovo-mcp":
-                raise HTTPException(
-                    status_code=409,
-                    detail="Jira transition is not supported for Rovo-connected sites. Use the Jira browser UI to change issue status.",
-                )
+            comment_warning = ""
 
             try:
-                jira_api_for_target(target, "GET", f"issue/{issue_key}?fields=status")
-                jira_api_for_target(target, "POST", f"issue/{issue_key}/transitions", p["payload"])
+                if target.adapter == "rovo-mcp":
+                    payload = p["payload"]
+                    transition_id = str((payload.get("transition") or {}).get("id") or "")
+                    if not transition_id:
+                        raise HTTPException(status_code=400, detail="Jira transition draft is missing the transition ID.")
+                    arguments = {"issueIdOrKey": issue_key, "transitionId": transition_id}
+                    if payload.get("fields"):
+                        arguments["fields"] = payload["fields"]
+                    await _read_issue(target, issue_key)
+                    await _run_sync(rovo_jira_call, target, "transition_issue", arguments)
+                    # Rovo may drop a comment sent inside the transition, so it goes through the comment tool.
+                    comments = (payload.get("update") or {}).get("comment") or []
+                    comment_body = str(((comments[0] if comments else {}).get("add") or {}).get("body") or "")
+                    if comment_body:
+                        try:
+                            await _run_sync(rovo_jira_call, target, "add_comment", {
+                                "issueIdOrKey": issue_key, "commentBody": comment_body, "contentFormat": "markdown",
+                            })
+                        except Exception as exc:
+                            comment_warning = f"The status changed, but the comment could not be added: {exc}"
+                else:
+                    jira_api_for_target(target, "GET", f"issue/{issue_key}?fields=status")
+                    jira_api_for_target(target, "POST", f"issue/{issue_key}/transitions", p["payload"])
                 read_back = await _read_issue(target, issue_key)
             except JiraTargetResolutionError as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -917,8 +929,10 @@ async def approve_draft(draft_id: str, body: dict = None):
                 applied={"issue_key": issue_key, "transition": p.get("transition_name", "")},
                 verified={"status": status, "expected_status": expected_status, "matched": matched},
             )
-            delivery_result["ok"] = True if matched else "partial"
+            delivery_result["ok"] = True if matched and not comment_warning else "partial"
             delivery_result["navigate_to"] = {"app": "jira", "url": target.issue_url(issue_key)}
+            if comment_warning:
+                delivery_result["warning"] = comment_warning
 
         elif dtype == "jira-link":
             from skills.jira.api import jira_api_for_target

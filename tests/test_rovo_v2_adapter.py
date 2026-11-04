@@ -232,3 +232,27 @@ def test_argument_value_the_schema_enum_rules_out_is_dropped():
     client = _client()
     _run("get_issue", {"issueIdOrKey": "A-1", "responseContentFormat": "html"}, client, tools=tools)
     assert _last(client, "getJiraIssue")["responseContentFormat"] == "html"
+
+
+def test_transition_lookup_goes_through_execute_read_and_the_move_through_the_direct_tool():
+    tools = V2_TOOLS + [_tool("transitionJiraIssue", ("cloudId", "issueIdOrKey", "transitionId", "fields"),
+                              readOnlyHint=False, destructiveHint=False)]
+    entry = _discover_entry("listJiraIssueTransitions", "executeRead", ("cloudId", "issueIdOrKey", "expand"))
+    transitions = {"transitions": [{"id": "21", "name": "In Progress", "to": {"name": "In Progress"}}]}
+    client = _client(discoverable=[entry], responses={"executeRead": {"data": transitions}})
+
+    listed = _run("list_transitions", {"issueIdOrKey": "A-1", "expand": "transitions.fields"}, client, tools=tools)
+    assert listed == transitions
+    sent = _last(client, "executeRead")
+    assert sent["name"] == "listJiraIssueTransitions"
+    assert sent["inputs"] == {"issueIdOrKey": "A-1", "expand": "transitions.fields", "cloudId": CLOUD_ID}
+
+    _run("transition_issue", {"issueIdOrKey": "A-1", "transitionId": "21"}, client, tools=tools)
+    assert _last(client, "transitionJiraIssue") == {"issueIdOrKey": "A-1", "transitionId": "21", "cloudId": CLOUD_ID}
+    assert not any(name == "executeWrite" for name, _ in client.calls)
+
+
+def test_transition_lookup_listed_under_a_write_tier_is_refused():
+    entry = _discover_entry("listJiraIssueTransitions", "executeWrite", ("cloudId",))
+    with pytest.raises(JiraTargetResolutionError, match="not executeRead"):
+        _run("list_transitions", {"issueIdOrKey": "A-1"}, _client(discoverable=[entry]))

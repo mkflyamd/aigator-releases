@@ -750,6 +750,7 @@ _ROVO_OPERATION_TO_TOOL = {
     "get_issue_types": "getJiraProjectIssueTypesMetadata",
     "get_create_meta": "getJiraIssueTypeMetaWithFields",
     "search_issues": "searchJiraIssuesUsingJql",
+    "list_transitions": "listJiraIssueTransitions",
 }
 
 

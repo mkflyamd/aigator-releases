@@ -583,14 +583,14 @@ class TestJiraComment:
 # ── jira-transition: both branches — exact Rovo args ──────────────────────
 
 class TestJiraTransition:
-    def _draft(self, target):
+    def _draft(self, target, payload=None):
         return _drafts.create_draft(
             "jira-transition",
             {
                 "issue_key": "PROJ-1",
                 "transition_name": "In Progress",
                 "expected_status": "In Progress",
-                "payload": {"transition": {"id": "21"}},
+                "payload": payload if payload is not None else {"transition": {"id": "21"}},
                 "jira_target": _target_dict(target),
             },
             {},
@@ -605,18 +605,85 @@ class TestJiraTransition:
         assert r.status_code == 200, r.text
         assert r.json()["verified"]["matched"] is True
 
-    def test_rovo_transition_approval_refused_at_409(self):
-        """Rovo transition cannot be reached via staging (no transition-list API),
-        so any crafted Rovo transition draft must be rejected at approval time."""
+    def _approve_rovo(self, payload, mock_rovo):
         client = TestClient(app)
-        did = self._draft(_rovo_target())
+        did = self._draft(_rovo_target(), payload)
+        direct_api = MagicMock(side_effect=AssertionError("direct REST must not be used for a Rovo site"))
+        with patch("mcp.manager._client_for", return_value=_rovo_mcp_client()), \
+             _rovo_patches(), \
+             patch("skills.jira.api.jira_api_for_target", direct_api), \
+             patch("skills.jira.mutations.rovo_jira_call", side_effect=mock_rovo):
+            return _approve(client, did)
+
+    def test_rovo_transition_runs_by_id_and_is_read_back(self):
+        calls = []
+
+        def mock_rovo(target, operation, arguments):
+            calls.append((operation, dict(arguments)))
+            return {"data": _ROVO_ISSUE}
+
+        r = self._approve_rovo({"transition": {"id": "21"}}, mock_rovo)
+        assert r.status_code == 200, r.text
+        assert [op for op, _ in calls] == ["get_issue", "transition_issue", "get_issue"]
+        assert calls[1][1] == {"issueIdOrKey": "PROJ-1", "transitionId": "21"}
+        assert r.json()["verified"]["matched"] is True and r.json()["ok"] is True
+        assert r.json()["target"]["adapter"] == "rovo-mcp"
+
+    def test_rovo_transition_read_back_that_disagrees_is_partial(self):
+        stale = {"data": {"key": "PROJ-1", "fields": {"status": {"name": "Open"}}}}
+        r = self._approve_rovo(
+            {"transition": {"id": "21"}}, lambda target, operation, arguments: stale)
+        assert r.status_code == 200, r.text
+        assert r.json()["ok"] == "partial" and r.json()["verified"]["matched"] is False
+
+    def test_rovo_transition_sends_fields_and_posts_the_comment_separately(self):
+        calls = []
+
+        def mock_rovo(target, operation, arguments):
+            calls.append((operation, dict(arguments)))
+            return {"data": _ROVO_ISSUE}
+
+        payload = {
+            "transition": {"id": "61"},
+            "fields": {"customfield_10150": {"value": "Duplicate"}},
+            "update": {"comment": [{"add": {"body": "Closing as a dupe."}}]},
+        }
+        r = self._approve_rovo(payload, mock_rovo)
+        assert r.status_code == 200, r.text
+        transition = next(a for op, a in calls if op == "transition_issue")
+        assert transition == {
+            "issueIdOrKey": "PROJ-1", "transitionId": "61",
+            "fields": {"customfield_10150": {"value": "Duplicate"}}}
+        comment = next(a for op, a in calls if op == "add_comment")
+        assert comment["commentBody"] == "Closing as a dupe." and comment["contentFormat"] == "markdown"
+
+    def test_rovo_transition_whose_comment_fails_still_reports_the_status_change(self):
+        def mock_rovo(target, operation, arguments):
+            if operation == "add_comment":
+                raise RuntimeError("comment refused")
+            return {"data": _ROVO_ISSUE}
+
+        payload = {"transition": {"id": "21"}, "update": {"comment": [{"add": {"body": "why"}}]}}
+        r = self._approve_rovo(payload, mock_rovo)
+        assert r.status_code == 200, r.text
+        assert r.json()["ok"] == "partial" and r.json()["verified"]["matched"] is True
+        assert "comment could not be added" in r.json()["warning"]
+
+    def test_rovo_transition_draft_without_an_id_is_rejected_before_any_call(self):
         rovo_call = MagicMock(side_effect=AssertionError("rovo_jira_call must not fire"))
-        with _rovo_patches(), \
-             patch("skills.jira.mutations.rovo_jira_call", rovo_call):
-            r = _approve(client, did)
-        assert r.status_code == 409, r.text
-        assert "not supported" in r.json()["detail"].lower()
+        r = self._approve_rovo({"transition": {}}, rovo_call)
+        assert r.status_code == 400, r.text
         rovo_call.assert_not_called()
+
+    def test_rovo_transition_that_rovo_rejects_is_not_reported_as_done(self):
+        def mock_rovo(target, operation, arguments):
+            if operation == "transition_issue":
+                raise RuntimeError("Transition requires field resolution")
+            return {"data": _ROVO_ISSUE}
+
+        r = self._approve_rovo({"transition": {"id": "51"}}, mock_rovo)
+        assert r.status_code == 502, r.text
+        assert "resolution" in r.json()["detail"]
 
 
 # ── jira-link: both branches — exact Rovo args ────────────────────────────
