@@ -1838,6 +1838,12 @@ details + .spanel-divider,
   align-items: center;
   gap: 8px;
 }
+.permission-mode-item {
+  justify-content: space-between;
+}
+.permission-mode-label {
+  flex: 1 1 auto;
+}
 .srow-tag {
   font-size: 0.68rem;
   font-weight: 500;
@@ -19392,6 +19398,13 @@ body.gator-terminal-vertical .main-resize {
 }
 .permission-allow-btn:hover {
   background: #d97706;
+}
+.permission-secondary-btn {
+  background: #374151;
+  color: #e5e7eb;
+}
+.permission-secondary-btn:hover {
+  background: #4b5563;
 }
 .permission-deny-btn {
   background: transparent;

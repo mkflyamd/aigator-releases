@@ -14225,12 +14225,12 @@ form.addEventListener('submit', async (e) => {
                 msgDiv,
                 msg,
                 prose,
-                async () => {
+                async (scope) => {
                   // The server records the grant for this tab; the client cannot grant itself.
                   const grant = await fetch('/api/chat/approve-deps', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ approval_id: msg.approval_id }),
+                    body: JSON.stringify({ approval_id: msg.approval_id, scope }),
                   }).catch(() => null);
                   if (!grant || !grant.ok) {
                     const retryPayload = _permissionResendPayload;
@@ -16384,6 +16384,30 @@ document.addEventListener('DOMContentLoaded', () => {
   // Future: auto-open pane on page load if browser is active
 });
 
+/* ── Permission scope buttons ────────────────────────── */
+
+function _scopeLabel(scope) {
+  if (scope === 'always') return 'Always allow';
+  if (scope === 'tab') return 'Allow in this tab';
+  return 'Allow once';
+}
+
+// The server sends which scopes a card may offer and which one leads; Deny is added by the caller, last.
+function _scopeButtonSpecs(opts) {
+  const order = ['always', 'tab', 'once'];
+  const scopes =
+    opts && Array.isArray(opts.scopes) ? order.filter((s) => opts.scopes.includes(s)) : [];
+  if (!scopes.length) return [];
+  const lead = scopes.includes(opts.primary) ? opts.primary : scopes[0];
+  return scopes.map((scope) => ({ scope, label: _scopeLabel(scope), primary: scope === lead }));
+}
+
+function _scopeDoneNote(scope) {
+  if (scope === 'always') return 'always allowed (change it in Settings)';
+  if (scope === 'tab') return 'allowed in this tab';
+  return 'allowed this time';
+}
+
 /* ── Skill Permission Gate ───────────────────────────── */
 
 function _renderPermissionCard(msgDiv, msg, prose, onApprove, onDeny) {
@@ -16427,18 +16451,30 @@ function _renderPermissionCard(msgDiv, msg, prose, onApprove, onDeny) {
   const actions = document.createElement('div');
   actions.className = 'permission-card-actions';
 
-  const allowBtn = document.createElement('button');
-  allowBtn.className = 'permission-allow-btn';
-  allowBtn.textContent = 'Allow for this conversation';
-  allowBtn.addEventListener('click', () => {
-    allowBtn.disabled = true;
+  const _approve = (scope) => {
+    actions.querySelectorAll('button').forEach((b) => {
+      b.disabled = true;
+    });
     const depNames = msg.deps.map((d) => d.label || d.id).join(', ');
     while (card.firstChild) card.removeChild(card.firstChild);
     const approved = document.createElement('div');
     approved.className = 'permission-card-approved';
-    approved.textContent = '✓ ' + depNames + ' approved for this conversation';
+    approved.textContent = '✓ ' + depNames + ' ' + _scopeDoneNote(scope || 'tab');
     card.appendChild(approved);
-    onApprove();
+    onApprove(scope);
+  };
+  const scopeSpecs = _scopeButtonSpecs(msg.card);
+  const allowBtns = (
+    scopeSpecs.length ? scopeSpecs : [{ scope: 'tab', label: 'Allow in this tab', primary: true }]
+  ).map((spec) => {
+    const btn = document.createElement('button');
+    btn.className = spec.primary
+      ? 'permission-allow-btn'
+      : 'permission-allow-btn permission-secondary-btn';
+    btn.textContent = spec.label;
+    btn.dataset.scope = spec.scope;
+    btn.addEventListener('click', () => _approve(spec.scope));
+    return btn;
   });
 
   const denyBtn = document.createElement('button');
@@ -16460,7 +16496,7 @@ function _renderPermissionCard(msgDiv, msg, prose, onApprove, onDeny) {
     onDeny();
   });
 
-  actions.appendChild(allowBtn);
+  allowBtns.forEach((b) => actions.appendChild(b));
   actions.appendChild(denyBtn);
   card.appendChild(actions);
 
@@ -16601,7 +16637,7 @@ async function _renderConfirmDiagram(box, diagram) {
 
 function _showBrowserConfirmCard(
   msgDiv,
-  { confirm_id, action, title, allow_label, deny_label, diagram },
+  { confirm_id, action, title, allow_label, deny_label, diagram, card: scopeOpts },
 ) {
   const text = _confirmCardText({ title, allow_label, deny_label });
   // Source cards keep their own id so two pending cards (two sources) do not replace each other.
@@ -16663,22 +16699,47 @@ function _showBrowserConfirmCard(
   btnWrap.style.cssText =
     'display: flex; flex-wrap: wrap; gap: 6px; flex: 1 1 100%; justify-content: flex-end; align-items: center;';
 
+  const scopeSpecs = _scopeButtonSpecs(scopeOpts);
+  const _btnBase =
+    'font-size: 0.75rem; padding: 4px 12px; border-radius: 6px; cursor: pointer; font-weight: 600;';
+  const _btnPrimary = _btnBase + ' background: var(--accent); color: #000; border: none;';
+  const _btnSecondary = _btnBase + ' background: var(--surface3); color: var(--text); border: none;';
+  const _btnGhost =
+    _btnBase +
+    ' background: transparent; color: var(--text-muted); border: 1px solid var(--border, #374151);';
+
   const cancelBtn = document.createElement('button');
-  cancelBtn.textContent = text.denyLabel;
-  cancelBtn.style.cssText =
-    'font-size: 0.75rem; padding: 4px 12px; border-radius: 6px; background: var(--surface3); color: var(--text); border: none; cursor: pointer; font-weight: 600;';
+  cancelBtn.textContent = scopeSpecs.length ? deny_label || 'Deny' : text.denyLabel;
+  cancelBtn.style.cssText = scopeSpecs.length ? _btnGhost : _btnSecondary;
 
-  const allowBtn = document.createElement('button');
-  allowBtn.textContent = text.allowLabel;
-  allowBtn.style.cssText =
-    'font-size: 0.75rem; padding: 4px 12px; border-radius: 6px; background: var(--accent); color: #000; border: none; cursor: pointer; font-weight: 600;';
+  const allowBtns = scopeSpecs.map((spec) => {
+    const btn = document.createElement('button');
+    btn.textContent = spec.label;
+    btn.dataset.scope = spec.scope;
+    btn.style.cssText = spec.primary ? _btnPrimary : _btnSecondary;
+    btn.addEventListener('click', () => _answer(`/api/browser/confirm/${confirm_id}`, spec.scope));
+    return btn;
+  });
+  if (!allowBtns.length) {
+    const allowBtn = document.createElement('button');
+    allowBtn.textContent = text.allowLabel;
+    allowBtn.style.cssText = _btnPrimary;
+    allowBtn.addEventListener('click', () => _answer(`/api/browser/confirm/${confirm_id}`));
+    allowBtns.push(allowBtn);
+  }
 
-  const _answer = async (url) => {
-    cancelBtn.disabled = true;
-    allowBtn.disabled = true;
+  const _answer = async (url, scope) => {
+    btnWrap.querySelectorAll('button').forEach((b) => {
+      b.disabled = true;
+    });
     let expired = false;
     try {
-      const resp = await fetch(url, { method: 'POST' });
+      const init = { method: 'POST' };
+      if (scope) {
+        init.headers = { 'Content-Type': 'application/json' };
+        init.body = JSON.stringify({ scope });
+      }
+      const resp = await fetch(url, init);
       const data = await resp.json().catch(() => null);
       expired = _confirmReplyExpired(resp, data);
     } catch (_) {
@@ -16689,9 +16750,10 @@ function _showBrowserConfirmCard(
   };
 
   cancelBtn.addEventListener('click', () => _answer(`/api/browser/confirm/${confirm_id}/cancel`));
-  allowBtn.addEventListener('click', () => _answer(`/api/browser/confirm/${confirm_id}`));
 
-  btnWrap.append(cancelBtn, allowBtn);
+  // With scope buttons the order is fixed: Always allow, Allow in this tab, Deny.
+  if (scopeSpecs.length) btnWrap.append(...allowBtns, cancelBtn);
+  else btnWrap.append(cancelBtn, ...allowBtns);
   body.append(icon, textWrap, btnWrap);
   card.appendChild(body);
   // Append after msgDiv (not inside it) so card stretches full width
@@ -17997,6 +18059,7 @@ function _initOnReady() {
   _initClearCredentialsSettings();
   _initSandboxSettings();
   _initSavedPermissions();
+  _initPermissionSettings();
 }
 
 function _initClearCredentialsSettings() {
@@ -18179,6 +18242,116 @@ function _initSavedPermissions() {
     act('DELETE', '/api/sandbox/saved-permissions');
   });
   window._refreshSavedPermissions = refresh;
+  refresh();
+}
+
+function _initPermissionSettings() {
+  const row = document.getElementById('permissions-row');
+  const list = document.getElementById('permissions-list');
+  const rulesList = document.getElementById('permissions-rules-list');
+  const clear = document.getElementById('permissions-clear');
+  const adminNote = document.getElementById('permissions-admin-note');
+  if (!row || !list || !rulesList || !clear) return;
+  const call = async (method, url, body) => {
+    const send = () =>
+      fetch(url, {
+        method,
+        headers: {
+          'X-CSRF-Token': window.__CSRF_TOKEN__ || '',
+          ...(body ? { 'Content-Type': 'application/json' } : {}),
+        },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+    let res = await send();
+    if (res.status === 403) {
+      const fresh = await fetch('/api/csrf')
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null);
+      if (fresh?.csrf_token) window.__CSRF_TOKEN__ = fresh.csrf_token;
+      res = await send();
+    }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  };
+  const note = (text) => {
+    const el = document.createElement('div');
+    el.className = 'srow-sub';
+    el.textContent = text;
+    return el;
+  };
+  const modeRow = (category, persistentAllowed) => {
+    const item = document.createElement('div');
+    item.className = 'srow-sub saved-permission-item permission-mode-item';
+    const label = document.createElement('span');
+    label.className = 'permission-mode-label';
+    label.textContent = String(category.label);
+    label.title = String(category.description || '');
+    const group = document.createElement('div');
+    group.className = 'seg-group seg-sm';
+    [
+      ['ask', 'Ask'],
+      ['always', 'Always allow'],
+    ].forEach(([mode, text]) => {
+      const btn = document.createElement('button');
+      btn.className = 'seg-btn' + (category.mode === mode ? ' active' : '');
+      btn.textContent = text;
+      btn.disabled = mode === 'always' && !persistentAllowed;
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (category.mode === mode) return;
+        act('POST', '/api/permissions/mode', { category: category.id, mode });
+      });
+      group.appendChild(btn);
+    });
+    item.append(label, group);
+    return item;
+  };
+  const render = (data) => {
+    const categories = Array.isArray(data.categories) ? data.categories : [];
+    const rules = Array.isArray(data.rules) ? data.rules : [];
+    const persistentAllowed = data.persistent_allowed !== false;
+    if (adminNote) adminNote.hidden = persistentAllowed;
+    list.replaceChildren();
+    categories
+      .filter((c) => c.mode === 'ask' || c.mode === 'always')
+      .forEach((c) => list.appendChild(modeRow(c, persistentAllowed)));
+    rulesList.replaceChildren();
+    const subjectRules = rules.filter((r) => r.subject);
+    subjectRules.forEach((rule) => {
+      const item = document.createElement('div');
+      item.className = 'srow-sub saved-permission-item';
+      const text = document.createElement('span');
+      text.textContent = `${rule.label}: ${rule.subject}`;
+      const remove = document.createElement('button');
+      remove.className = 'btn-secondary';
+      remove.textContent = 'Remove';
+      remove.addEventListener('click', (e) => {
+        e.stopPropagation();
+        act('DELETE', `/api/permissions/rules/${encodeURIComponent(rule.id)}`);
+      });
+      item.append(text, remove);
+      rulesList.appendChild(item);
+    });
+    clear.hidden = rules.length === 0;
+  };
+  const refresh = () =>
+    call('GET', '/api/permissions')
+      .then(render)
+      .catch(() => {
+        list.replaceChildren(note('Could not load permissions.'));
+        rulesList.replaceChildren();
+        clear.hidden = true;
+      });
+  const act = (method, url, body) =>
+    call(method, url, body)
+      .catch(() => _showConnectivityToast('Could not change permissions.', 'warn'))
+      .then(refresh);
+  clear.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (!confirm('Remove every Always allow setting? AI Gator will ask again next time.')) return;
+    act('DELETE', '/api/permissions/rules');
+  });
+  window._refreshPermissionSettings = refresh;
   refresh();
 }
 

@@ -776,6 +776,25 @@
               </div>
             </div>
 
+            <!-- ═══ Permissions (Ask / Always allow per category) ═══ -->
+            <div class="srow integration-row-sep" id="permissions-row">
+              <div class="srow-info">
+                <div class="srow-label">Permissions</div>
+                <div class="srow-sub">
+                  Choose what AI Gator may do without asking. Drafts and sends for email, Teams,
+                  Slack and Jira are always approved by you.
+                </div>
+                <div class="srow-sub" id="permissions-admin-note" hidden>
+                  Your administrator has turned off Always allow.
+                </div>
+                <div id="permissions-list"></div>
+                <div id="permissions-rules-list"></div>
+              </div>
+              <div class="srow-actions">
+                <button id="permissions-clear" class="btn-secondary" hidden>Remove all</button>
+              </div>
+            </div>
+
             <!-- ═══ Google Workspace ═══ -->
             <div class="srow integration-row-sep">
               <div class="section-status st-dim" id="google-ws-dot"></div>
