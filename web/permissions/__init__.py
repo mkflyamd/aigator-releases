@@ -59,7 +59,10 @@ def card_options(category_id: str) -> dict | None:
     category = registry.get(category_id)
     if category is None:
         return None
-    scopes = [s for s in registry.SCOPES if s in category.scopes and (s != "always" or persistent_allowed())]
+    scopes = [
+        s for s in registry.SCOPES
+        if s in category.scopes and (s != "always" or (persistent_allowed() and category.always_on_card))
+    ]
     primary = "always" if category.risk == "low" and "always" in scopes else next((s for s in ("tab", "once") if s in scopes), scopes[0])
     return {"scopes": scopes, "primary": primary}
 
@@ -89,15 +92,17 @@ def apply_scope(context_id: str, category_id: str, subject: str, scope: str | No
 
     A click that names no scope (an older page) gets `default`, what that card's Allow meant before scopes existed.
 
-    "always" falls back to "tab" when the category, policy or store does not allow a saved rule.
+    "always" falls back to "tab" when the category, policy or store does not allow a saved rule, and always for a
+    category whose Always allow lives only in Settings.
     A category this module does not know gets no grant at all ("once"), so it asks again next time.
     """
-    if registry.get(category_id) is None:
+    category = registry.get(category_id)
+    if category is None:
         return "once"
     scope = scope or default
     if scope == "once":
         return "once"
-    if scope == "always":
+    if scope == "always" and category.always_on_card:
         try:
             remember(category_id, subject)
             return "always"

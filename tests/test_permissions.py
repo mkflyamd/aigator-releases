@@ -134,7 +134,7 @@ def test_mode_ask_keeps_a_websites_rule():
 
 def test_card_options_lead_with_always_for_low_risk_and_tab_for_high_risk():
     assert permissions.card_options(JIRA) == {"scopes": ["always", "tab"], "primary": "always"}
-    assert permissions.card_options("browser") == {"scopes": ["always", "tab"], "primary": "tab"}
+    assert permissions.card_options("browser") == {"scopes": ["tab"], "primary": "tab"}
     assert permissions.card_options("nope") is None
 
 
@@ -226,3 +226,13 @@ def test_a_rule_for_a_disconnected_mcp_server_stays_listed(client, csrf):
     body = client.get("/api/permissions").json()
     assert any(c["id"] == "mcp:mcp-gone" for c in body["categories"])
     assert [r["label"] for r in body["rules"]] == ["mcp-gone"]
+
+
+def test_high_risk_categories_are_remembered_only_from_settings():
+    for category in ("browser", "schedule_task", "capability:code_runner", "capability:shell_runner"):
+        assert permissions.card_options(category)["scopes"] == ["tab"]
+        assert permissions.apply_scope("tab-1", category, "", "always") == "tab"
+        assert permissions.decision("tab-2", category) == "ask"
+        permissions.set_mode(category, "always")
+        assert permissions.decision("tab-2", category) == "allow"
+        permissions.set_mode(category, "ask")

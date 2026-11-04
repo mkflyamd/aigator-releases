@@ -19,6 +19,7 @@ class Category:
     risk: str  # "low" = the card leads with "Always allow"; "high" = it leads with "Allow in this tab"
     scopes: tuple[str, ...] = ("always", "tab")
     subject_scoped: bool = False  # "Always allow" remembers one subject (a website), not the whole category
+    always_on_card: bool = True  # False = "Always allow" can only be set in Settings, never from a card
 
     @property
     def rememberable(self) -> bool:
@@ -28,10 +29,14 @@ class Category:
 _STATIC = (
     Category("web", "Websites", "Open web pages the assistant asks for. Each website is remembered separately.",
              "low", subject_scoped=True),
-    Category("browser", "Browser control", "Drive a browser window to search, navigate and complete web tasks.", "high"),
-    Category("schedule_task", "Scheduled tasks", "Create tasks that run later on their own.", "high"),
-    Category("capability:code_runner", "Run Python code", "Let the assistant run Python in the sandbox.", "high"),
-    Category("capability:shell_runner", "Run shell commands", "Let the assistant run shell commands in the sandbox.", "high"),
+    Category("browser", "Browser control", "Drive a browser window to search, navigate and complete web tasks.",
+             "high", always_on_card=False),
+    Category("schedule_task", "Scheduled tasks", "Create tasks that run later on their own.",
+             "high", always_on_card=False),
+    Category("capability:code_runner", "Run Python code", "Let the assistant run Python in the sandbox.",
+             "high", always_on_card=False),
+    Category("capability:shell_runner", "Run shell commands", "Let the assistant run shell commands in the sandbox.",
+             "high", always_on_card=False),
 )
 
 
