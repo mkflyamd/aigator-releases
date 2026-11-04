@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 
 import data_sources
+from sandbox import saved_permissions
 from sandbox.policy import load_policy
 
 from . import registry, store
@@ -52,6 +53,34 @@ def covered_by_saved_rule(category_id: str, subject: str = "") -> bool:
         return False
     rule_subject = _rule_subject(category, subject)
     return bool(rule_subject or not category.subject_scoped) and store.has(category.id, rule_subject)
+
+
+def sandbox_card(tool: str, saveable: bool = False) -> dict:
+    """Buttons for a sandbox access card. "Always allow" only when this request can be saved."""
+    options = card_options(registry.SANDBOX_SHELL if tool == "run_shell" else registry.SANDBOX_PYTHON)
+    if not saveable:
+        options["scopes"] = [s for s in options["scopes"] if s != "always"]
+    if options["primary"] not in options["scopes"]:
+        options["primary"] = options["scopes"][0]
+    return options
+
+
+def list_rules() -> list[dict]:
+    """Every saved "Always allow", including the folder and program sets saved from shell approval cards."""
+    rules = store.list_rules()
+    for entry in saved_permissions.list_entries():
+        rules.append({"id": entry["id"], "category": registry.SANDBOX_SHELL,
+                      "subject": saved_permissions.describe(entry), "created": entry["created"]})
+    return rules
+
+
+def remove_rule(rule_id: str) -> bool:
+    return store.remove(rule_id) or saved_permissions.remove(rule_id)
+
+
+def remove_all_rules() -> None:
+    store.remove_all()
+    saved_permissions.remove_all()
 
 
 def card_options(category_id: str) -> dict | None:

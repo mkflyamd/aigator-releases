@@ -558,3 +558,14 @@ async def test_a_tab_grant_or_a_fresh_card_is_not_tagged_as_a_saved_rule():
     assert "_permission_telemetry" not in res
     again = await asyncio.wait_for(_runner(calls)(_tc("read_email", call_id="c2"), asyncio.Queue()), 5)
     assert "_permission_telemetry" not in again
+
+
+async def test_a_shell_run_covered_by_a_saved_set_is_tagged_with_the_sandbox_category():
+    res = await asyncio.wait_for(
+        _runner([], result={"ok": True, "_sandbox_telemetry": {"approval": "saved"}})(_tc("run_shell"), asyncio.Queue()), 5
+    )
+    assert res["_permission_telemetry"] == {"approval": "saved", "categories": ["sandbox:shell"]}
+    fresh = await asyncio.wait_for(
+        _runner([], result={"ok": True, "_sandbox_telemetry": {"approval": "task_approved"}})(_tc("run_shell", call_id="c2"), asyncio.Queue()), 5
+    )
+    assert "_permission_telemetry" not in fresh

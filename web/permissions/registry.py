@@ -9,6 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 SCOPES = ("always", "tab", "once")
+SANDBOX_SHELL = "sandbox:shell"   # extra folders/network for a shell command; its saved rules live in sandbox/saved_permissions
+SANDBOX_PYTHON = "sandbox:python"
 
 
 @dataclass(frozen=True)
@@ -40,6 +42,11 @@ _STATIC = (
              "high", scopes=("always", "tab", "once"), always_on_card=False),
     Category("capability:shell_runner", "Run shell commands", "Let the assistant run shell commands in the sandbox.",
              "high", always_on_card=False),
+    Category(SANDBOX_SHELL, "Shell command access",
+             "Let shell commands reach extra folders or the network. Each saved set of folders and programs is listed below.",
+             "high", scopes=("always", "tab"), subject_scoped=True),
+    Category(SANDBOX_PYTHON, "Python code access", "Let Python code reach extra folders or the network.",
+             "high", scopes=("tab", "once")),
 )
 
 

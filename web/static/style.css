@@ -1853,10 +1853,6 @@ details + .spanel-divider,
   letter-spacing: 0;
   font-weight: 500;
 }
-#saved-permissions-row {
-  margin-top: 12px;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-}
 .permission-list {
   margin-top: 4px;
 }
@@ -1890,8 +1886,7 @@ details + .spanel-divider,
 .permission-mode-item .seg-group {
   flex-shrink: 0;
 }
-[data-theme='light'] .permission-mode-item + .permission-mode-item,
-[data-theme='light'] #saved-permissions-row {
+[data-theme='light'] .permission-mode-item + .permission-mode-item {
   border-top-color: var(--border);
 }
 .permission-mode-item .seg-btn {

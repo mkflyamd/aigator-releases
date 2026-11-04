@@ -978,6 +978,9 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
             result = await _run_tool_block_gated(tc, event_queue)
         finally:
             _saved_rule_hits.reset(token)
+        telemetry = result.get("_sandbox_telemetry") if isinstance(result, dict) else None
+        if isinstance(telemetry, dict) and telemetry.get("approval") == "saved":
+            hits.append("sandbox:shell")
         if hits and isinstance(result, dict):
             result["_permission_telemetry"] = {"approval": "saved", "categories": list(hits)}
         return result

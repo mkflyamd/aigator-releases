@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 import permissions
-from permissions import registry, store
+from permissions import registry
 from security import verify_csrf
 
 router = APIRouter()
@@ -34,7 +34,7 @@ def _category_json(category: registry.Category, rules: list[dict]) -> dict:
 
 @router.get("/api/permissions")
 def list_permissions():
-    rules = store.list_rules()
+    rules = permissions.list_rules()
     categories = registry.known()
     shown = {c.id for c in categories}
     for rule in rules:  # a rule for a server that is no longer connected stays visible so it can be removed
@@ -68,12 +68,12 @@ def set_permission_mode(body: PermissionModeRequest):
 
 @router.delete("/api/permissions/rules/{rule_id}", dependencies=[Depends(verify_csrf)])
 def remove_permission_rule(rule_id: str):
-    if not store.remove(rule_id):
+    if not permissions.remove_rule(rule_id):
         raise HTTPException(status_code=404, detail="That permission was not found.")
     return {"ok": True}
 
 
 @router.delete("/api/permissions/rules", dependencies=[Depends(verify_csrf)])
 def remove_all_permission_rules():
-    store.remove_all()
+    permissions.remove_all_rules()
     return {"ok": True}

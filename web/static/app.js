@@ -5816,7 +5816,7 @@ const settingsBackdrop = document.getElementById('settings-backdrop');
 const drawerClose = document.getElementById('drawer-close');
 
 function openDrawer() {
-  if (typeof window._refreshSavedPermissions === 'function') window._refreshSavedPermissions();
+  if (typeof window._refreshPermissionSettings === 'function') window._refreshPermissionSettings();
   // Shell mode: if a native WebContentsView is tiled beside Gator, hide it so
   // Settings gets the full window. Restore on close. Use tpState.type
   // SYNCHRONOUSLY (not getActiveApp().then()) — the async version raced with
@@ -6235,7 +6235,6 @@ function initSettingsTabs() {
     tabs.forEach((t) => t.classList.toggle('active', t.dataset.tab === tabName));
     panels.forEach((p) => p.classList.toggle('hidden', p.id !== 'spanel-' + tabName));
     localStorage.setItem(STORAGE_KEY, tabName);
-    if (typeof window._refreshSavedPermissions === 'function') window._refreshSavedPermissions();
     if (tabName === 'permissions' && typeof window._refreshPermissionSettings === 'function')
       window._refreshPermissionSettings();
     // When the Skills tab is activated, lazily mount the marketplace pane into
@@ -10185,25 +10184,19 @@ function _showSandboxApproval(data, ownerTabId) {
 
   const actions = document.createElement('div');
   actions.className = 'gcc-actions';
-  const approve = document.createElement('button');
-  approve.className = 'gcc-approve-btn';
-  approve.textContent = 'Allow for this tab';
-  let always = null;
-  if (isShell && data.saveable === true) {
-    always = document.createElement('button');
-    always.className = 'btn-secondary';
-    always.textContent = 'Always allow this';
-  }
-  let once = null;
-  if (!isShell) {
-    once = document.createElement('button');
-    once.className = 'btn-secondary';
-    once.textContent = 'Allow once';
-  }
+  const scopeSpecs = _scopeButtonSpecs(data.card);
+  if (!scopeSpecs.length) scopeSpecs.push({ scope: 'tab', label: _scopeLabel('tab'), primary: true });
+  const scopeButtons = scopeSpecs.map((spec) => {
+    const btn = document.createElement('button');
+    btn.className = spec.primary ? 'gcc-approve-btn' : 'btn-secondary';
+    btn.textContent = spec.label;
+    btn.dataset.scope = spec.scope;
+    return btn;
+  });
   const deny = document.createElement('button');
   deny.className = 'btn-secondary';
   deny.textContent = 'Deny';
-  actions.append(approve, ...(always ? [always] : []), ...(once ? [once] : []), deny);
+  actions.append(...scopeButtons, deny);
 
   const footer = document.createElement('div');
   footer.className = 'gcc-footer';
@@ -10220,12 +10213,15 @@ function _showSandboxApproval(data, ownerTabId) {
   const tabId = ownerTabId || _activeTabId || 'default';
   // The server stored the request under its own context id; send exactly that.
   const contextId = typeof data.context_id === 'string' ? data.context_id : tabId;
-  const decide = async (decision, scope = 'task') => {
-    if (approve.disabled) return;
-    approve.disabled = true;
-    if (always) always.disabled = true;
-    if (once) once.disabled = true;
-    deny.disabled = true;
+  const setBusy = (busy) => {
+    scopeButtons.forEach((btn) => {
+      btn.disabled = busy;
+    });
+    deny.disabled = busy;
+  };
+  const decide = async (decision, scope = 'tab') => {
+    if (deny.disabled) return;
+    setBusy(true);
     const post = () =>
       fetch(`/api/sandbox/requests/${encodeURIComponent(requestId)}/${decision}`, {
         method: 'POST',
@@ -10269,28 +10265,17 @@ function _showSandboxApproval(data, ownerTabId) {
         console.warn('[sandbox] follow-up not sent:', e),
       );
     } catch (err) {
-      approve.disabled = false;
-      if (always) always.disabled = false;
-      if (once) once.disabled = false;
-      deny.disabled = false;
+      setBusy(false);
       // 'warn', not 'error': _showConnectivityToast mutes error toasts.
       _showConnectivityToast(`Could not record your decision: ${err.message}`, 'warn');
     }
   };
-  approve.addEventListener('click', (e) => {
-    e.stopPropagation();
-    decide('approve', 'task');
-  });
-  if (always)
-    always.addEventListener('click', (e) => {
+  scopeButtons.forEach((btn) =>
+    btn.addEventListener('click', (e) => {
       e.stopPropagation();
-      decide('approve', 'always');
-    });
-  if (once)
-    once.addEventListener('click', (e) => {
-      e.stopPropagation();
-      decide('approve', 'once');
-    });
+      decide('approve', btn.dataset.scope);
+    }),
+  );
   deny.addEventListener('click', (e) => {
     e.stopPropagation();
     decide('deny');
@@ -18152,7 +18137,6 @@ function _initOnReady() {
   _initGoogleWorkspaceSettings();
   _initClearCredentialsSettings();
   _initSandboxSettings();
-  _initSavedPermissions();
   _initPermissionSettings();
 }
 
@@ -18268,77 +18252,6 @@ function _initSandboxSettings() {
   });
 }
 
-function _initSavedPermissions() {
-  const row = document.getElementById('saved-permissions-row');
-  const list = document.getElementById('saved-permissions-list');
-  const clear = document.getElementById('saved-permissions-clear');
-  if (!row || !list || !clear) return;
-  const call = async (method, url) => {
-    const send = () =>
-      fetch(url, { method, headers: { 'X-CSRF-Token': window.__CSRF_TOKEN__ || '' } });
-    let res = await send();
-    if (res.status === 403) {
-      const fresh = await fetch('/api/csrf')
-        .then((r) => (r.ok ? r.json() : null))
-        .catch(() => null);
-      if (fresh?.csrf_token) window.__CSRF_TOKEN__ = fresh.csrf_token;
-      res = await send();
-    }
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return res.json();
-  };
-  const render = (entries) => {
-    list.replaceChildren();
-    clear.disabled = entries.length === 0;
-    if (!entries.length) {
-      const empty = document.createElement('div');
-      empty.className = 'srow-sub';
-      empty.textContent =
-        'Nothing saved yet. Choose "Always allow this" on a command approval to save one here.';
-      list.appendChild(empty);
-      return;
-    }
-    entries.forEach((entry) => {
-      const item = document.createElement('div');
-      item.className = 'srow-sub saved-permission-item';
-      const text = document.createElement('span');
-      text.textContent = String(entry.description);
-      const remove = document.createElement('button');
-      remove.className = 'btn-secondary';
-      remove.textContent = 'Remove';
-      remove.addEventListener('click', (e) => {
-        e.stopPropagation();
-        act('DELETE', `/api/sandbox/saved-permissions/${encodeURIComponent(entry.id)}`);
-      });
-      item.append(text, remove);
-      list.appendChild(item);
-    });
-  };
-  const refresh = () =>
-    call('GET', '/api/sandbox/saved-permissions')
-      .then((d) => render(Array.isArray(d.entries) ? d.entries : []))
-      .catch(() => {
-        list.replaceChildren();
-        clear.disabled = true;
-        const failed = document.createElement('div');
-        failed.className = 'srow-sub';
-        failed.textContent = 'Could not load saved permissions.';
-        list.appendChild(failed);
-      });
-  const act = (method, url) =>
-    call(method, url)
-      .catch(() => _showConnectivityToast('Could not change saved permissions.', 'warn'))
-      .then(refresh);
-  clear.addEventListener('click', (e) => {
-    e.stopPropagation();
-    if (!confirm('Remove all saved command permissions? AI Gator will ask again next time.'))
-      return;
-    act('DELETE', '/api/sandbox/saved-permissions');
-  });
-  window._refreshSavedPermissions = refresh;
-  refresh();
-}
-
 function _initPermissionSettings() {
   const row = document.getElementById('permissions-row');
   const list = document.getElementById('permissions-list');
@@ -18423,7 +18336,7 @@ function _initPermissionSettings() {
     if (subjectRules.length) {
       const head = document.createElement('div');
       head.className = 'spanel-divider';
-      head.textContent = 'Remembered websites';
+      head.textContent = 'Remembered for specific items';
       rulesList.appendChild(head);
     }
     subjectRules.forEach((rule) => {

@@ -19,6 +19,7 @@ from proc_utils import (
     snapshot_outputs,
     diff_outputs,
 )
+import permissions
 import sandbox
 from sandbox import approvals as sandbox_approvals
 from sandbox import task_grants
@@ -442,6 +443,8 @@ def _approval_gate(read_paths, write_paths, hosts, context_id: str, skill_id: st
         "write_paths": list(req.write_paths),
         "network_hosts": list(req.network_hosts),
         "context_id": req.context_id,
+        "category": "sandbox:python",
+        "card": permissions.sandbox_card("run_python"),
     }
     return {
         "approval_required": True,
