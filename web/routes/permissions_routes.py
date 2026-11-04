@@ -32,7 +32,7 @@ def _category_json(category: registry.Category, rules: list[dict]) -> dict:
     }
 
 
-@router.get("/api/permissions")
+@router.get("/api/permissions", dependencies=[Depends(verify_csrf)])
 def list_permissions():
     rules = permissions.list_rules()
     categories = registry.known()

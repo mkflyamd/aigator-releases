@@ -173,12 +173,16 @@ def test_add_is_idempotent():
     assert len(store.list_rules()) == 1
 
 
-def test_list_requires_no_rules_and_shows_categories(client):
-    body = client.get("/api/permissions").json()
+def test_list_requires_no_rules_and_shows_categories(client, csrf):
+    body = client.get("/api/permissions", headers=csrf).json()
     assert body["persistent_allowed"] is True and body["rules"] == []
     by_id = {c["id"]: c for c in body["categories"]}
     assert by_id["browser"]["mode"] == "ask" and by_id["browser"]["card"]["primary"] == "tab"
     assert by_id["web"]["mode"] is None and by_id["web"]["subject_scoped"] is True
+
+
+def test_list_route_requires_csrf_because_it_shows_saved_folders(client):
+    assert client.get("/api/permissions").status_code == 403
 
 
 def test_mode_route_requires_csrf(client):
@@ -189,11 +193,11 @@ def test_mode_route_requires_csrf(client):
 
 def test_mode_route_saves_and_clears(client, csrf):
     assert client.post("/api/permissions/mode", json={"category": "browser", "mode": "always"}, headers=csrf).status_code == 200
-    body = client.get("/api/permissions").json()
+    body = client.get("/api/permissions", headers=csrf).json()
     assert {c["id"]: c["mode"] for c in body["categories"]}["browser"] == "always"
     assert [r["label"] for r in body["rules"]] == ["Browser control"]
     assert client.post("/api/permissions/mode", json={"category": "browser", "mode": "ask"}, headers=csrf).status_code == 200
-    assert client.get("/api/permissions").json()["rules"] == []
+    assert client.get("/api/permissions", headers=csrf).json()["rules"] == []
 
 
 def test_mode_route_rejects_unknown_subject_scoped_and_bad_mode(client, csrf):
@@ -206,7 +210,7 @@ def test_mode_route_rejects_unknown_subject_scoped_and_bad_mode(client, csrf):
 def test_mode_route_refused_when_policy_denies(client, csrf, deny_persistent):
     r = client.post("/api/permissions/mode", json={"category": "browser", "mode": "always"}, headers=csrf)
     assert r.status_code == 409
-    assert client.get("/api/permissions").json()["persistent_allowed"] is False
+    assert client.get("/api/permissions", headers=csrf).json()["persistent_allowed"] is False
 
 
 def test_remove_routes_require_csrf_and_work(client, csrf):
@@ -223,7 +227,7 @@ def test_remove_routes_require_csrf_and_work(client, csrf):
 
 def test_a_rule_for_a_disconnected_mcp_server_stays_listed(client, csrf):
     permissions.remember("mcp:mcp-gone")
-    body = client.get("/api/permissions").json()
+    body = client.get("/api/permissions", headers=csrf).json()
     assert any(c["id"] == "mcp:mcp-gone" for c in body["categories"])
     assert [r["label"] for r in body["rules"]] == ["mcp-gone"]
 
