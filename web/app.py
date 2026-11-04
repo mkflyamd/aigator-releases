@@ -76,6 +76,7 @@ from routes.calendar import router as calendar_router
 from routes.actions import router as actions_router
 from routes.aigator import router as aigator_router
 from routes.config_routes import router as config_router
+from routes.permissions_routes import router as permissions_router
 from routes.sandbox_routes import router as sandbox_router
 from routes.auth import router as auth_router
 from routes.health import router as health_router
@@ -928,6 +929,7 @@ app.include_router(aigator_router)
 app.include_router(config_router)
 app.include_router(auth_router)
 app.include_router(sandbox_router)
+app.include_router(permissions_router)
 app.include_router(health_router)
 app.include_router(chat_router)
 app.include_router(tasks_router)
