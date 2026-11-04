@@ -1435,7 +1435,7 @@ def _tool_jira_transition(
             "error": f"Issue transitions are not available through the Rovo connection for {target.base_url}: {exc}",
             "unavailable": True,
         }
-    except RuntimeError as exc:
+    except (RuntimeError, ValueError) as exc:
         return {"error": str(exc)}
     if not isinstance(transitions, dict):
         return {"error": f"Could not read the available transitions for {issue_key}."}
@@ -1471,7 +1471,10 @@ def _tool_jira_transition(
         {"issue_key": issue_key, "transition_name": transition_name, "expected_status": (match.get("to") or {}).get("name", ""), "payload": payload, "jira_target": target.to_dict(), "context_id": _context_id},
         {"issue_key": issue_key, "transition_name": transition_name, "site": target.public_dict()},
     )
-    return {"_draft": "jira-transition", "data": {"draft_id": draft_id, "issue_key": issue_key, "transition_name": transition_name, "jira_site": target.public_dict()}, "_user_message": "Jira transition is ready for review."}
+    card = {"draft_id": draft_id, "issue_key": issue_key, "transition_name": transition_name, "jira_site": target.public_dict()}
+    if comment:
+        card["comment"] = comment
+    return {"_draft": "jira-transition", "data": card, "_user_message": "Jira transition is ready for review."}
 
 
 def _tool_jira_link_issues(

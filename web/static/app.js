@@ -9795,6 +9795,18 @@ function _buildJiraFieldRows(data, editable = {}) {
     .join('');
 }
 
+function _showApprovalWarning(approveBtn, result) {
+  const warning = result && result.ok === 'partial' ? result.warning : '';
+  if (!warning) return false;
+  approveBtn.textContent = 'Applied with a warning';
+  const note = document.createElement('div');
+  note.className = 'gcc-draft-warning';
+  note.style.cssText = 'font-size:0.82em;margin-top:6px;white-space:pre-wrap;';
+  note.textContent = warning;
+  approveBtn.parentNode.insertBefore(note, approveBtn.nextSibling);
+  return true;
+}
+
 function _showJiraTargetSelection(data, ownerTabId) {
   const targets = Array.isArray(data?.targets) ? data.targets : [];
   if (!targets.length) return;
@@ -10998,7 +11010,10 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
       customBody: _buildJiraFieldRows({
         issue_key: data.issue_key,
         jira_site: data.jira_site,
-        fields: { transition: data.transition_name },
+        fields: {
+          transition: data.transition_name,
+          ...(data.comment ? { comment: data.comment } : {}),
+        },
       }),
     },
     'jira-link': {
@@ -11226,7 +11241,10 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
       // Post-approval navigation: switch to the relevant native app and
       // inject a 'View in [App]' link so the user can get back easily.
       const _nav = _json.navigate_to;
-      if (_nav && typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell) {
+      // A partial result keeps the card open so the user can read what did not go through.
+      if (_showApprovalWarning(approveBtn, _json)) {
+        // nothing else to do
+      } else if (_nav && typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell) {
         _gatorNavAfterApproval(_nav, card);
       } else if (typeof closeThirdPane === 'function') {
         closeThirdPane();

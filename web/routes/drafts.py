@@ -12,6 +12,7 @@ so email.py contains only email-read/inbox/send routes.
 from __future__ import annotations
 
 import asyncio
+import logging
 from functools import partial
 from urllib.parse import quote
 _eid = lambda mid: quote(mid, safe="")  # encode Graph resource ID for path segment
@@ -21,6 +22,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from security import verify_csrf
 
 router = APIRouter()
+_log = logging.getLogger(__name__)
 
 
 _REHYDRATABLE_STATUSES = ("pending", "sending", "handing_off")
@@ -907,6 +909,7 @@ async def approve_draft(draft_id: str, body: dict = None):
                                 "issueIdOrKey": issue_key, "commentBody": comment_body, "contentFormat": "markdown",
                             })
                         except Exception as exc:
+                            _log.warning("Rovo comment on %s failed after its transition: %s", issue_key, exc)
                             comment_warning = f"The status changed, but the comment could not be added: {exc}"
                 else:
                     jira_api_for_target(target, "GET", f"issue/{issue_key}?fields=status")
@@ -917,6 +920,7 @@ async def approve_draft(draft_id: str, body: dict = None):
             except HTTPException:
                 raise
             except Exception as exc:
+                _log.warning("Jira transition on %s could not be verified: %s", issue_key, exc)
                 raise HTTPException(status_code=502, detail=f"Jira transition could not be verified: {exc}") from exc
 
             status = ((read_back.get("fields") or {}).get("status") or {}).get("name", "")

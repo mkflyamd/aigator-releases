@@ -248,6 +248,17 @@ class TestTransitionStaging:
         result = self._stage_rovo(MagicMock(return_value="plain text"))
         assert "_draft" not in result and "Could not read" in result["error"]
 
+    def test_rovo_reply_that_is_not_json_is_an_error_not_a_crash(self):
+        result = self._stage_rovo(MagicMock(side_effect=ValueError("Expecting value: line 1 column 1")))
+        assert "_draft" not in result and "Expecting value" in result["error"]
+
+    def test_the_card_shows_the_comment_the_approval_will_publish(self):
+        rovo_call = MagicMock(return_value={"transitions": [{"id": "41", "name": "Done", "to": {"name": "Done"}}]})
+        with_comment = self._stage_rovo(rovo_call, "Done", "Shipped in 1.2")
+        assert with_comment["data"]["comment"] == "Shipped in 1.2"
+        without = self._stage_rovo(rovo_call, "Done")
+        assert "comment" not in without["data"]
+
 
 # ── link staging ──────────────────────────────────────────────────────────────
 
