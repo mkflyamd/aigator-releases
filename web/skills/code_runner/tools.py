@@ -729,6 +729,7 @@ def _tool_run_python(
     start = time.monotonic()
     try:
         if mode == "enforced":
+            timeout = sandbox.clamp_run_timeout(timeout)
             # Runtime paths become persistent read+execute grants on Windows: every one
             # (interpreter, site-packages, Node, npm root, skill folder) goes through the backstop.
             runtime_paths = _runtime_paths(skill_dir, _npm_root)
@@ -884,7 +885,7 @@ TOOL_DEFS = [
                 },
                 "timeout": {
                     "type": "integer",
-                    "description": "Override execution timeout in seconds (optional)",
+                    "description": "Override execution timeout in seconds, at most 600 in the sandbox (optional)",
                 },
                 "confirmed": {
                     "type": "boolean",

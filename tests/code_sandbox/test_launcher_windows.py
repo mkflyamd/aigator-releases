@@ -26,6 +26,16 @@ def _no_real_acl_reads(request, monkeypatch):
 
 # ── Pure helpers: every OS ───────────────────────────────────────────────────
 
+def test_run_lock_outwaits_the_longest_allowed_run():
+    assert lw._RUN_LOCK_WAIT > sandbox.MAX_RUN_SECONDS
+
+
+def test_run_timeout_is_clamped_to_the_longest_allowed_run():
+    assert sandbox.clamp_run_timeout(60) == 60
+    assert sandbox.clamp_run_timeout(10**6) == sandbox.MAX_RUN_SECONDS
+    assert sandbox.clamp_run_timeout(0) == 1
+
+
 def test_ace_spec_uses_inheritance_only_for_directories():
     assert lw.ace_spec("S-1-15-2-1", "RX", True) == "*S-1-15-2-1:(OI)(CI)RX"
     assert lw.ace_spec("S-1-15-2-1", "M", False) == "*S-1-15-2-1:M"

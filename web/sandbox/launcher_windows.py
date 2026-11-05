@@ -29,7 +29,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from .paths import APP_FOLDER_REFUSAL, protects_app
-from . import RawArg, SandboxPathNotGrantable, SandboxRequest, SandboxResult, SandboxRunError, SandboxUnavailable
+from . import MAX_RUN_SECONDS, RawArg, SandboxPathNotGrantable, SandboxRequest, SandboxResult, SandboxRunError, SandboxUnavailable
 
 _log = logging.getLogger(__name__)
 
@@ -58,7 +58,7 @@ HRESULT_ALREADY_EXISTS = ctypes.c_long(0x800700B7).value
 
 _RUN_LOCK = threading.Lock()
 _LEDGER_LOCK = threading.Lock()
-_RUN_LOCK_WAIT = 300.0
+_RUN_LOCK_WAIT = float(MAX_RUN_SECONDS + 120)
 _LEDGER_LOCK_WAIT = 120.0
 _API: SimpleNamespace | None = None
 _LEDGER_VERSION = 2

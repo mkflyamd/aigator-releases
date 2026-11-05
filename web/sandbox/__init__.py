@@ -55,6 +55,14 @@ class RawArg(str):
     for cmd /s /c must be passed verbatim. Other platforms treat it as a plain str."""
 
 
+# The longest a single sandboxed run may last; the Windows run lock waits for this plus a margin.
+MAX_RUN_SECONDS = 600
+
+
+def clamp_run_timeout(timeout: int) -> int:
+    return max(1, min(int(timeout), MAX_RUN_SECONDS))
+
+
 @dataclass(frozen=True)
 class SandboxRequest:
     argv: list[str]            # command to run (python/node + script)

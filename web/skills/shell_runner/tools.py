@@ -980,7 +980,7 @@ def _tool_run_shell(
         return _shell_error(cr._unavailable_message(reason, in_settings=True), _DETECTED_SHELL)
     if mode == "off":
         return _run_unsandboxed(command, shell, cwd, timeout, background)
-    return _run_sandboxed(cr, command, shell, cwd, timeout, background, requested, policy, _context_id)
+    return _run_sandboxed(cr, command, shell, cwd, sandbox.clamp_run_timeout(timeout), background, requested, policy, _context_id)
 
 
 TOOL_DEFS = [
@@ -1024,7 +1024,7 @@ TOOL_DEFS = [
                 },
                 "timeout": {
                     "type": "integer",
-                    "description": "Timeout in seconds — default 60 (optional). Ignored when background=true.",
+                    "description": "Timeout in seconds — default 60, at most 600 in the sandbox (optional). Ignored when background=true.",
                 },
                 "background": {
                     "type": "boolean",
