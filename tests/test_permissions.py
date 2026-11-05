@@ -158,6 +158,16 @@ def test_unreadable_store_means_no_rules_and_is_not_overwritten(blob):
     assert secure_store.get_json("permissions/rules") == blob
 
 
+def test_a_blob_that_cannot_be_decrypted_is_not_overwritten_by_the_next_always_allow():
+    secure_store.set_json("permissions/rules", {"version": 1, "rules": []})
+    blob = secure_store._path("permissions/rules")
+    blob.write_bytes(b"not a valid blob")
+    assert permissions.decision("tab-1", JIRA) == "ask"
+    with pytest.raises(RuntimeError):
+        store.add(JIRA)
+    assert blob.read_bytes() == b"not a valid blob"
+
+
 def test_malformed_rules_are_dropped():
     secure_store.set_json("permissions/rules", {"version": 1, "rules": [
         {"id": "a", "category": JIRA, "subject": "", "created": 1.0},

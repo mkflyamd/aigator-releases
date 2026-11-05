@@ -34,7 +34,8 @@ def _load() -> list[dict] | None:
         _log.warning("permission rules unreadable (%s); treating as none", type(exc).__name__)
         return None
     if data is None:
-        return []
+        # A blob that is there but cannot be read must not look like "no rules", or the next save erases it.
+        return None if secure_store.exists(_NAME) else []
     if not isinstance(data, dict) or data.get("version") != _VERSION or not isinstance(data.get("rules"), list):
         return None
     return [r for r in data["rules"] if _valid(r)]
