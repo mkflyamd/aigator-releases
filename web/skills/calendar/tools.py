@@ -296,6 +296,14 @@ TOOL_DEFS = [
                     "description": "Starting choice for the card's One time / repeat selector. Use the cadence the user asked for; omit it (one time) when they did not say. The user can change it on the card and the final choice comes back with the pick.",
                     "default": "none",
                 },
+                "subject": {
+                    "type": "string",
+                    "description": "Meeting title, when the user gave one. Pre-fills the card's Title box.",
+                },
+                "body": {
+                    "type": "string",
+                    "description": "Meeting message or agenda, when the user gave one. Pre-fills the card's Message box.",
+                },
             },
             "required": ["attendees"],
         },
@@ -787,7 +795,12 @@ def _grid_day_payloads(gc, emails: list, day_list: list, win_tz: str, need: int,
 
 
 def _tool_load_availability_days(
-    emails: list, after_date: str = "", duration_minutes: int = 30, count: int = 10, dates: list | None = None
+    emails: list,
+    after_date: str = "",
+    duration_minutes: int = 30,
+    count: int = 10,
+    dates: list | None = None,
+    with_zones: bool = False,
 ) -> dict:
     """Free/busy for people on an availability grid: the given `dates`, else the next working days after `after_date`."""
     from .._m365.helpers import get_cal_client
@@ -815,14 +828,26 @@ def _tool_load_availability_days(
     if not wanted:
         return {"error": "Give at least one email."}
     need = max(1, -(-int(duration_minutes or 30) // _GRID_STEP))
-    return {"days": _grid_day_payloads(get_cal_client(), wanted, day_list, get_user_win_tz(), need, now)}
+    gc, win_tz = get_cal_client(), get_user_win_tz()
+    out: dict = {"days": _grid_day_payloads(gc, wanted, day_list, win_tz, need, now)}
+    if with_zones:
+        from . import timezones
+
+        found = timezones.attendee_zones(gc, wanted, day_list[0].isoformat(), win_tz)
+        out["zones"] = {email: info["timezone"] for email, info in found.items()}
+    return out
 
 
 _GRID_REPEATS = ("none", "daily", "weekdays", "weekly", "biweekly", "monthly", "yearly")
 
 
 def _tool_show_availability_grid(
-    attendees: list, dates: list | None = None, duration_minutes: int = 30, recurrence: str = "none"
+    attendees: list,
+    dates: list | None = None,
+    duration_minutes: int = 30,
+    recurrence: str = "none",
+    subject: str = "",
+    body: str = "",
 ) -> dict:
     from .._m365.helpers import get_cal_client, get_cached_me
     from .helpers import get_user_win_tz
@@ -843,6 +868,12 @@ def _tool_show_availability_grid(
     repeat = str(recurrence or "none").strip().lower()
     repeat = repeat if repeat in _GRID_REPEATS else "none"
     days = _grid_day_payloads(gc, emails, _grid_days(dates, now), win_tz, need, now)
+    from . import timezones
+
+    found = timezones.attendee_zones(gc, emails[1:], days[0]["date"] if days else "", win_tz)
+    for person in people:
+        if person["email"] in found:
+            person["timezone"] = found[person["email"]]["timezone"]
     best = []
     for d in days:
         for k, c in enumerate(d["fit"]):
@@ -855,6 +886,8 @@ def _tool_show_availability_grid(
         "timezone": win_tz,
         "duration_minutes": need * _GRID_STEP,
         "repeat": repeat,
+        "subject": str(subject or ""),
+        "body": str(body or ""),
         "step_minutes": _GRID_STEP,
         "first_minute": 0,
         "work_start_minute": _GRID_WORK_START,

@@ -29,11 +29,32 @@ class _Gc:
         }
 
 
-def _run(views, **kw):
+class _ZoneGc(_Gc):
+    """Adds working hours to the one-hour getSchedule that reads each person's time zone."""
+
+    def __init__(self, views, zones):
+        super().__init__(views)
+        self.zones = zones
+
+    def post(self, path, body):
+        out = super().post(path, body)
+        if body.get("availabilityViewInterval") == 60:
+            for item in out["value"]:
+                zone = self.zones.get(item["scheduleId"])
+                if zone:
+                    item["workingHours"] = {
+                        "timeZone": {"name": zone},
+                        "startTime": "08:00:00.0000000",
+                        "endTime": "17:00:00.0000000",
+                    }
+        return out
+
+
+def _run(views, gc=None, **kw):
     import skills._m365.helpers  # noqa: F401
     import skills.calendar.helpers  # noqa: F401
 
-    gc = _Gc(views)
+    gc = gc or _Gc(views)
     with (
         patch("skills._m365.helpers.get_cal_client", return_value=gc),
         patch("skills._m365.helpers.get_cached_me", return_value={"mail": "me@example.com"}),
@@ -216,3 +237,47 @@ def test_a_fall_back_day_reads_each_slot_at_its_elapsed_position():
     row = _eastern_day("2026-11-01", "0" * 6 + "2" + "0" * 43)
     assert row[4] == "b" and row[6] == "f" and row[2] == "f"
     assert len(row) == 48
+
+
+def test_people_carry_their_time_zone_from_working_hours():
+    views = {e: "0" * 48 for e in ("me@example.com", "tej@example.com", "faisal@example.com", "ghost@example.com")}
+    gc = _ZoneGc(views, {"tej@example.com": "Central Standard Time", "faisal@example.com": "GMT Standard Time"})
+    out, _ = _run(
+        views,
+        gc=gc,
+        attendees=["tej@example.com", "faisal@example.com", "ghost@example.com"],
+        dates=["2030-01-07"],
+    )
+    zones = {p["email"]: p.get("timezone") for p in out["_availability_grid"]["people"]}
+    assert zones == {
+        "me@example.com": None,
+        "tej@example.com": "Central Standard Time",
+        "faisal@example.com": "GMT Standard Time",
+        "ghost@example.com": None,
+    }
+
+
+def test_the_grid_carries_the_title_and_message_it_was_given():
+    views = {"me@example.com": "0" * 48}
+    base = {"attendees": ["a@example.com"], "dates": ["2030-01-07"]}
+    grid = _run(views, subject="Design sync", body="Agenda: roadmap", **base)[0]["_availability_grid"]
+    assert grid["subject"] == "Design sync" and grid["body"] == "Agenda: roadmap"
+    grid = _run(views, **base)[0]["_availability_grid"]
+    assert grid["subject"] == "" and grid["body"] == ""
+
+
+def test_adding_a_person_can_return_their_zone():
+    import skills._m365.helpers  # noqa: F401
+    import skills.calendar.helpers  # noqa: F401
+    from skills.calendar.tools import _tool_load_availability_days
+
+    dates = [(date.today() + timedelta(days=30)).isoformat()]
+    gc = _ZoneGc({"new@example.com": "0" * 48}, {"new@example.com": "Arabian Standard Time"})
+    with (
+        patch("skills._m365.helpers.get_cal_client", return_value=gc),
+        patch("skills.calendar.helpers.get_user_win_tz", return_value="Pacific Standard Time"),
+    ):
+        with_zones = _tool_load_availability_days(["new@example.com"], dates=dates, with_zones=True)
+        without = _tool_load_availability_days(["new@example.com"], dates=dates)
+    assert with_zones["zones"] == {"new@example.com": "Arabian Standard Time"}
+    assert "zones" not in without
