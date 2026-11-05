@@ -1102,8 +1102,11 @@ def _gated_runners_for_tools(tool_names) -> list[str]:
     )
 
 
-def _classify_skills_via_llm(message: str, extra_skills: dict | None = None) -> list[str]:
-    """Use a fast LLM call to classify which skills a message needs."""
+def _classify_skills_via_llm(message: str, extra_skills: dict | None = None) -> list[str] | None:
+    """Use a fast LLM call to classify which skills a message needs.
+
+    [] means the model answered that none are needed; None means it gave no usable answer.
+    """
     import re as _re
     try:
         from llm import get_provider
@@ -1124,7 +1127,7 @@ def _classify_skills_via_llm(message: str, extra_skills: dict | None = None) -> 
         print(f"[skill-classify] LLM returned no JSON array: '{text}'", flush=True)
     except Exception as exc:
         print(f"[skill-classify] LLM classification failed: {exc}", flush=True)
-    return []
+    return None
 
 
 # ── Chat stream + cancel endpoints ───────────────────────────────────────────
@@ -1835,6 +1838,11 @@ async def chat(req: ChatRequest):
         _keyword_hits = list(_inferred)
         if _inferred:
             print(f"[skill-detect] keywords/installed matched: {_inferred}", flush=True)
+        # A runner picked by a bare word ("run", "create", "build") is only a guess: those words sit
+        # in any pasted draft or summary. Whether the user wants something run is the classifier's
+        # call, because a runner that is wrongly picked ends the turn at the permission card.
+        _runner_guesses = [s for s in _inferred if _is_gated_runner(s) and s not in _explicit_skill_ids]
+        _inferred = [s for s in _inferred if s not in _runner_guesses]
         # Build the non-builtin catalog once (MCP connections + installed skills).
         _extra_catalog = {k: v for k, v in _available_skill_catalog().items()
                           if k not in _classify_skill_ids()}
@@ -1843,7 +1851,7 @@ async def chat(req: ChatRequest):
         # could overlap (e.g. keyword 'inbox' -> email, but a Gmail MCP exists).
         # The classifier sees the full catalog and can route to the right service;
         # without this, a built-in keyword would always win and hide MCP skills.
-        _should_classify = _msg_text.strip() and (not _inferred or _extra_catalog)
+        _should_classify = _msg_text.strip() and (not _inferred or _extra_catalog or _runner_guesses)
         if _should_classify:
             print(f"[skill-detect] running LLM classifier (extra={list(_extra_catalog)})...", flush=True)
             # A blocking gateway call here froze the whole event loop (every request, Stop included)
@@ -1855,7 +1863,12 @@ async def chat(req: ChatRequest):
                 )
             except asyncio.TimeoutError:
                 print(f"[skill-classify] gave up after {_CLASSIFY_TIMEOUT_S}s", flush=True)
-                _classified = []
+                _classified = None
+            if _classified is None and _runner_guesses:
+                # No answer either way, so a real request to run something still gets its card.
+                _inferred = list(dict.fromkeys([*_inferred, *_runner_guesses]))
+            elif _runner_guesses and not set(_runner_guesses) & set(_classified or ()):
+                print(f"[skill-detect] words suggested {_runner_guesses}, but the request does not ask to run anything", flush=True)
             if _classified:
                 _classifier_hits = list(_classified)
                 # Union keyword + classifier results so we keep the built-in AND
