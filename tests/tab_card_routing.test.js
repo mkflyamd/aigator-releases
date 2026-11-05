@@ -32,6 +32,7 @@ function setup(activeTabId) {
     '_expireTabCard',
     '_renderTabCards',
     '_dropStaleTabCards',
+    '_dropSurvivingTabCards',
   ];
   vm.runInNewContext(
     `${names.map(pick).join('\n')}\nthis.api = { ${names.join(', ')} };`,
@@ -100,5 +101,29 @@ test('the browser, source and failover cards are routed through the tab and draw
 
 test('a permission card from a turn in another tab flags that tab', () => {
   const i = app.indexOf("msg.type === 'permission_required'");
-  assert(/_markTabNeedsAttention\(\s*requestTabId/.test(app.slice(i, i + 400)));
+  assert(/_routeCardToTab\(requestTabId, _permCardId/.test(app.slice(i, i + 4000)));
+});
+
+test('a card that re-sends the request when answered survives the end of its turn and is drawn on return', () => {
+  const { ctx, api } = setup('B');
+  let drawn = 0;
+  api._routeCardToTab('A', 'permission:p1', () => drawn++, { survivesTurn: true });
+  api._routeCardToTab('A', 'waiting', () => {});
+  api._dropStaleTabCards('A');
+  assert.deepStrictEqual([...ctx._pendingTabCards.get('A').keys()], ['permission:p1']);
+  api._renderTabCards('A');
+  assert.strictEqual(drawn, 1);
+});
+
+test('a new turn in the tab drops a surviving card; answering it drops it too', () => {
+  const { ctx, api } = setup('B');
+  api._routeCardToTab('A', 'permission:p1', () => {}, { survivesTurn: true });
+  api._routeCardToTab('A', 'permission:p2', () => {}, { survivesTurn: true });
+  api._resolveTabCard('A', 'permission:p2');
+  api._dropSurvivingTabCards('A');
+  assert.strictEqual(ctx._pendingTabCards.get('A').size, 0);
+});
+
+test('the permission card is routed to its tab and outlives the turn', () => {
+  assert(/_routeCardToTab\(requestTabId, _permCardId, _drawPermissionCard, \{ survivesTurn: true \}\)/.test(app));
 });

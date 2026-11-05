@@ -4184,10 +4184,10 @@ function _markTabNeedsAttention(tabId, message) {
 
 // An approval card belongs to the tab whose turn asked. Another tab only gets a cue; the card is
 // drawn when that tab is shown, because a tab's chat is rebuilt from history on every switch.
-function _routeCardToTab(tabId, cardId, draw) {
+function _routeCardToTab(tabId, cardId, draw, { survivesTurn = false } = {}) {
   if (!tabId || !cardId) return;
   if (!_pendingTabCards.has(tabId)) _pendingTabCards.set(tabId, new Map());
-  _pendingTabCards.get(tabId).set(cardId, { draw, expired: false });
+  _pendingTabCards.get(tabId).set(cardId, { draw, expired: false, survivesTurn });
   if (tabId === _activeTabId) {
     draw();
     return;
@@ -4212,9 +4212,17 @@ function _renderTabCards(tabId) {
 }
 
 // The turn is over: a card still waiting can no longer be answered. Expired ones stay to be shown once.
+// Cards that re-send the request when answered (survivesTurn) stay until answered or a new turn starts.
 function _dropStaleTabCards(tabId) {
   _pendingTabCards.get(tabId)?.forEach((entry, cardId) => {
-    if (!entry.expired) _resolveTabCard(tabId, cardId);
+    if (!entry.expired && !entry.survivesTurn) _resolveTabCard(tabId, cardId);
+  });
+}
+
+// A new turn started in the tab: a card that outlived its own turn can no longer be answered usefully.
+function _dropSurvivingTabCards(tabId) {
+  _pendingTabCards.get(tabId)?.forEach((entry, cardId) => {
+    if (entry.survivesTurn) _resolveTabCard(tabId, cardId);
   });
 }
 
@@ -13409,6 +13417,7 @@ form.addEventListener('submit', async (e) => {
     _totalOutputTokens = 0;
     _userCollapsedThinking = false;
     _permissionCardShown = false;
+    _dropSurvivingTabCards(requestTabId);
     statusLines = [];
     toastLines = [];
     autoSkills = [];
@@ -14256,51 +14265,68 @@ form.addEventListener('submit', async (e) => {
               _continueRetryNote = typeof msg.retry_note === 'string' ? msg.retry_note : '';
             } else if (msg.type === 'permission_required') {
               _permissionCardShown = true;
-              if (requestTabId !== _activeTabId)
-                _markTabNeedsAttention(
-                  requestTabId,
-                  'AI Gator needs your approval in another tab.',
-                );
-              _renderPermissionCard(
-                msgDiv,
-                msg,
-                prose,
-                async (scope) => {
-                  // The server records the grant for this tab; the client cannot grant itself.
-                  const grant = await fetch('/api/chat/approve-deps', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ approval_id: msg.approval_id, scope }),
-                  }).catch(() => null);
-                  if (!grant || !grant.ok) {
-                    const retryPayload = _permissionResendPayload;
-                    _permissionResendPayload = null;
-                    prose.textContent =
-                      'That permission request expired before it could be approved. ';
-                    if (retryPayload) {
-                      const again = document.createElement('button');
-                      again.className = 'permission-allow-btn';
-                      again.textContent = 'Ask again';
-                      again.addEventListener('click', () => {
-                        again.disabled = true;
-                        doSend(retryPayload);
-                      });
-                      prose.appendChild(again);
+              const _permCardId = `permission:${msg.approval_id}`;
+              // The card outlives the turn that asked: answering it re-sends the request. It is drawn
+              // again into the tab's chat each time that tab is shown, because the chat is rebuilt
+              // from history on every switch.
+              const _drawPermissionCard = () => {
+                let host = msgDiv;
+                let hostProse = prose;
+                if (!(msgDiv.isConnected && prose.isConnected)) {
+                  host = document.createElement('div');
+                  host.className = 'message assistant';
+                  const hostBubble = document.createElement('div');
+                  hostBubble.className = 'bubble';
+                  hostProse = document.createElement('div');
+                  hostProse.className = 'prose';
+                  hostBubble.appendChild(hostProse);
+                  host.appendChild(hostBubble);
+                  document.getElementById('messages')?.appendChild(host);
+                }
+                _renderPermissionCard(
+                  host,
+                  msg,
+                  hostProse,
+                  async (scope) => {
+                    _resolveTabCard(requestTabId, _permCardId);
+                    // The server records the grant for this tab; the client cannot grant itself.
+                    const grant = await fetch('/api/chat/approve-deps', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ approval_id: msg.approval_id, scope }),
+                    }).catch(() => null);
+                    if (!grant || !grant.ok) {
+                      const retryPayload = _permissionResendPayload;
+                      _permissionResendPayload = null;
+                      hostProse.textContent =
+                        'That permission request expired before it could be approved. ';
+                      if (retryPayload) {
+                        const again = document.createElement('button');
+                        again.className = 'permission-allow-btn';
+                        again.textContent = 'Ask again';
+                        again.addEventListener('click', () => {
+                          again.disabled = true;
+                          doSend(retryPayload);
+                        });
+                        hostProse.appendChild(again);
+                      }
+                      return;
                     }
-                    return;
-                  }
-                  // Re-submit using the saved payload — call doSend fresh so post-stream
-                  // work (history, action bar, suggested actions) runs normally
-                  if (!_permissionResendPayload) return;
-                  const resendPayload = _permissionResendPayload;
-                  _permissionResendPayload = null;
-                  await doSend(resendPayload);
-                },
-                () => {
-                  // Deny: card already replaced with hard-stop message, nothing else to do
-                  _permissionResendPayload = null;
-                },
-              );
+                    // Re-submit using the saved payload — call doSend fresh so post-stream
+                    // work (history, action bar, suggested actions) runs normally
+                    if (!_permissionResendPayload) return;
+                    const resendPayload = _permissionResendPayload;
+                    _permissionResendPayload = null;
+                    await doSend(resendPayload);
+                  },
+                  () => {
+                    // Deny: card already replaced with hard-stop message, nothing else to do
+                    _resolveTabCard(requestTabId, _permCardId);
+                    _permissionResendPayload = null;
+                  },
+                );
+              };
+              _routeCardToTab(requestTabId, _permCardId, _drawPermissionCard, { survivesTurn: true });
             }
             if (_activeTabId === _tabKey && !_userScrolledUp)
               messages.scrollTop = messages.scrollHeight;
