@@ -16719,7 +16719,7 @@ function _showBrowserConfirmCard(
   }
 
   const card = document.createElement('div');
-  card.className = 'system-card';
+  card.className = 'system-card confirm-card';
   card.id = text.isSource ? `source-confirm-${confirm_id}` : 'browser-confirm-card';
   card.dataset.confirmId = confirm_id;
   const _tabId = ownerTabId || _activeTabId;
@@ -16737,25 +16737,22 @@ function _showBrowserConfirmCard(
   }
 
   const body = document.createElement('div');
-  body.style.cssText =
-    'display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px 10px; width: 100%;';
+  body.className = 'confirm-card-body';
 
   const icon = document.createElement('span');
   icon.textContent = text.icon;
-  icon.style.cssText = 'font-size: 1.1rem; flex-shrink: 0; margin-top: 2px;';
+  icon.className = 'confirm-card-icon';
 
   const textWrap = document.createElement('div');
-  textWrap.style.cssText = 'flex: 1 1 0; min-width: 0;';
+  textWrap.className = 'confirm-card-text';
 
   const titleEl = document.createElement('div');
-  titleEl.style.cssText =
-    'font-size: 0.85rem; font-weight: 600; color: var(--text); margin-bottom: 2px;';
+  titleEl.className = 'confirm-card-title';
   titleEl.textContent = text.title;
   titleEl.dataset.confirmTitle = '1';
 
   const detail = document.createElement('div');
-  detail.style.cssText =
-    'font-size: 0.78rem; color: var(--text-muted); word-break: break-word; white-space: pre-line;';
+  detail.className = 'confirm-card-detail';
   detail.textContent = action;
 
   textWrap.append(titleEl, detail);
@@ -16768,34 +16765,30 @@ function _showBrowserConfirmCard(
   }
 
   const btnWrap = document.createElement('div');
-  btnWrap.style.cssText =
-    'display: flex; flex-wrap: wrap; gap: 6px; flex: 1 1 100%; justify-content: flex-end; align-items: center;';
+  btnWrap.className = 'confirm-card-actions';
 
   const scopeSpecs = _scopeButtonSpecs(scopeOpts);
-  const _btnBase =
-    'font-size: 0.75rem; padding: 4px 12px; border-radius: 6px; cursor: pointer; font-weight: 600;';
-  const _btnPrimary = _btnBase + ' background: var(--accent); color: #000; border: none;';
-  const _btnSecondary = _btnBase + ' background: var(--surface3); color: var(--text); border: none;';
-  const _btnGhost =
-    _btnBase +
-    ' background: transparent; color: var(--text-muted); border: 1px solid var(--border, #374151);';
 
   const cancelBtn = document.createElement('button');
   cancelBtn.textContent = scopeSpecs.length ? deny_label || 'Deny' : text.denyLabel;
-  cancelBtn.style.cssText = scopeSpecs.length ? _btnGhost : _btnSecondary;
+  cancelBtn.className = scopeSpecs.length
+    ? 'confirm-card-btn confirm-card-btn-ghost'
+    : 'confirm-card-btn';
 
   const allowBtns = scopeSpecs.map((spec) => {
     const btn = document.createElement('button');
     btn.textContent = spec.label;
     btn.dataset.scope = spec.scope;
-    btn.style.cssText = spec.primary ? _btnPrimary : _btnSecondary;
+    btn.className = spec.primary
+      ? 'confirm-card-btn confirm-card-btn-primary'
+      : 'confirm-card-btn';
     btn.addEventListener('click', () => _answer(`/api/browser/confirm/${confirm_id}`, spec.scope));
     return btn;
   });
   if (!allowBtns.length) {
     const allowBtn = document.createElement('button');
     allowBtn.textContent = text.allowLabel;
-    allowBtn.style.cssText = _btnPrimary;
+    allowBtn.className = 'confirm-card-btn confirm-card-btn-primary';
     allowBtn.addEventListener('click', () => _answer(`/api/browser/confirm/${confirm_id}`));
     allowBtns.push(allowBtn);
   }
