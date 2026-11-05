@@ -45,7 +45,7 @@ These always ask, with no Always allow button.
 ## Rules that apply to everything
 
 1. Check order: admin policy, then saved Always allow rule, then this-tab grant, then a card.
-2. Background and scheduled runs always ask. A saved rule never widens what an unattended run may do.
+2. Always allow rules for permissions and websites never apply to background runs, which keep their existing restrictions. A saved shell set applies to scheduled runs as it did before.
 3. The admin setting `persistent_permissions: deny` hides Always allow everywhere and ignores saved rules. The admin setting `saved_permissions` also controls saved shell sets.
 4. A card only appears in the tab that asked. A card for another tab waits for that tab.
 5. Removing a rule in Settings takes effect on the next call, with no refresh.
