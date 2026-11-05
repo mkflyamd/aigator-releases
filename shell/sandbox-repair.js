@@ -7,7 +7,7 @@
 // grant ledger cannot hide the entries.
 
 const crypto = require('crypto');
-const path = require('path');
+const path = require('path').win32;
 const { execFileSync } = require('child_process');
 
 const PROFILE_NAMES = ['AIGator.CodeRunner', 'AIGator.CodeRunner.Shell'];
