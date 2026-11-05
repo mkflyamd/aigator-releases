@@ -92,6 +92,11 @@ def test_timeouts_come_from_config_by_tier(monkeypatch):
     assert T._timeout_for("Verified") == 60
 
 
+def test_a_configured_timeout_is_capped_at_the_longest_sandbox_run(monkeypatch):
+    monkeypatch.setattr(config, "load_config", lambda: {"code_runner_timeout_verified": 10**6})
+    assert T._timeout_for("Verified") == sandbox.MAX_RUN_SECONDS
+
+
 def test_the_run_folder_is_removed_after_every_call(passthrough_sandbox, make_skill_dir):
     skill = make_skill_dir({"tools.py": NOOP})
     before = _outputs()
