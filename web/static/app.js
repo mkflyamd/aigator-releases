@@ -4,30 +4,48 @@
  */
 (function _initCsrfFetch() {
   const orig = window.fetch.bind(window);
-  window.fetch = function (input, init) {
+  let refreshing = null;
+  // The token changes whenever the backend restarts, so a page that stayed open holds a stale one.
+  const refreshToken = () => {
+    refreshing =
+      refreshing ||
+      orig('/api/csrf')
+        .then((r) => (r.ok ? r.json() : null))
+        .then((j) => (j && j.csrf_token) || null)
+        .catch(() => null)
+        .finally(() => {
+          refreshing = null;
+        });
+    return refreshing;
+  };
+  window.fetch = async function (input, init) {
+    let sentToken = null;
     try {
       const url = typeof input === 'string' ? input : (input && input.url) || '';
       const method = String(
         (init && init.method) || (input && input.method) || 'GET',
       ).toUpperCase();
-      if (
-        method !== 'GET' &&
-        method !== 'HEAD' &&
-        url.startsWith('/api/') &&
-        window.__CSRF_TOKEN__
-      ) {
+      if (method !== 'GET' && method !== 'HEAD' && url.startsWith('/api/')) {
         const h = new Headers(
           (init && init.headers) || (typeof input === 'object' && input.headers) || undefined,
         );
-        if (!h.has('X-CSRF-Token')) {
+        if (!h.has('X-CSRF-Token') && window.__CSRF_TOKEN__) {
           h.set('X-CSRF-Token', window.__CSRF_TOKEN__);
           init = { ...(init || {}), headers: h };
         }
+        if (h.has('X-CSRF-Token') && typeof input === 'string') sentToken = h.get('X-CSRF-Token');
       }
     } catch (_) {
       /* fall through to the plain call */
     }
-    return orig(input, init);
+    const res = await orig(input, init);
+    if (res.status !== 403 || sentToken === null) return res;
+    const fresh = await refreshToken();
+    if (!fresh || fresh === sentToken) return res;
+    window.__CSRF_TOKEN__ = fresh;
+    const h = new Headers((init && init.headers) || undefined);
+    h.set('X-CSRF-Token', fresh);
+    return orig(input, { ...(init || {}), headers: h });
   };
 })();
 
