@@ -29,11 +29,14 @@ class SandboxUnavailable(RuntimeError):
 class SandboxPathNotGrantable(SandboxUnavailable):
     """Requested folders the sandbox cannot be given access to on this computer; nothing was executed."""
 
-    def __init__(self, paths):
+    def __init__(self, paths, reason=None):
         self.paths = [str(p) for p in paths]
+        self.reason = reason
         super().__init__(
-            "The sandbox cannot be given access to " + ", ".join(self.paths) + ". Windows does not let this "
-            "account change permissions there, and sandboxed code cannot read it by default."
+            reason or (
+                "The sandbox cannot be given access to " + ", ".join(self.paths) + ". Windows does not let this "
+                "account change permissions there, and sandboxed code cannot read it by default."
+            )
         )
 
 

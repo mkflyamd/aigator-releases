@@ -318,11 +318,13 @@ def _unavailable_message(reason: str | None, in_settings: bool = False) -> str:
     ).replace("  ", " ")
 
 
-def _not_grantable_message(paths) -> str:
+def _not_grantable_message(paths, reason: str | None = None) -> str:
+    why = reason or (
+        "Windows does not let this account change permissions there, and sandboxed code cannot read it by default."
+    )
     return (
         "The sandbox cannot be given access to " + ", ".join(str(p) for p in paths) + " on this computer: "
-        "Windows does not let this account change permissions there, and sandboxed code cannot read it by "
-        "default. Nothing was run and no approval was asked. Do not request these folders again; use another "
+        f"{why} Nothing was run and no approval was asked. Do not request these folders again; use another "
         "way to get the data (a copy in a folder the user owns), or tell the user it cannot be used."
     )
 
@@ -330,7 +332,7 @@ def _not_grantable_message(paths) -> str:
 def _launch_refusal_message(exc: Exception) -> str:
     """User-facing text for a SandboxUnavailable raised before anything ran."""
     if isinstance(exc, sandbox.SandboxPathNotGrantable):
-        return _not_grantable_message(exc.paths)
+        return _not_grantable_message(exc.paths, getattr(exc, "reason", None))
     return _unavailable_message(str(exc))
 
 

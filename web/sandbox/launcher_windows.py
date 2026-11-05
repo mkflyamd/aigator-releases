@@ -26,6 +26,7 @@ import threading
 from pathlib import Path
 from types import SimpleNamespace
 
+from .paths import APP_FOLDER_REFUSAL, protects_app
 from . import RawArg, SandboxPathNotGrantable, SandboxRequest, SandboxResult, SandboxRunError, SandboxUnavailable
 
 _log = logging.getLogger(__name__)
@@ -900,6 +901,9 @@ def _same_path(a: Path, b: str) -> bool:
 def launch(req: SandboxRequest) -> SandboxResult:
     with _RUN_LOCK:
         runtime, per_run = acl_grants(req)
+        shielded = [p for p, _perm in per_run if protects_app(p)]
+        if shielded:
+            raise SandboxPathNotGrantable(shielded, reason=APP_FOLDER_REFUSAL)
         runtime_dirs = [str(path) for path, _perm in runtime]
         for path, perm in runtime + per_run + ([(Path(req.scratch_path), "M")] if req.scratch_path else []):
             try:

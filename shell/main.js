@@ -965,6 +965,7 @@ function startBackend() {
       ? path.join(process.resourcesPath, 'models', 'dictation')
       : path.join(__dirname, '..', 'models', 'dictation'),
     ...(app.isPackaged ? { AIGATOR_MANAGED_LOGGING: '1' } : {}),
+    AIGATOR_APP_DIR: path.dirname(process.execPath),
   };
   if (SHELL_KEY) backendEnv.AIGATOR_SHELL_KEY = SHELL_KEY;
   if (app.isPackaged && !IS_WINDOWS) {

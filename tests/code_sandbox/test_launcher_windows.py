@@ -759,3 +759,33 @@ def test_a_failed_refresh_does_not_stop_the_run(fake, monkeypatch):
     monkeypatch.setattr(lw, "_reinherit", lambda path: (_ for _ in ()).throw(OSError("denied")))
     lw.launch(fake.req(runtime=[fake.tmp]))
     assert fake.runs == 1
+
+
+# ── Program-folder guard and cross-process locks ─────────────────────────────
+
+def _req(tmp_path, **kw):
+    work = tmp_path / "work"
+    work.mkdir(exist_ok=True)
+    base = dict(argv=["python", "-c", "pass"], cwd=work, env={}, timeout=5, network=False,
+                read_paths=[], write_paths=[], runtime_paths=[])
+    base.update(kw)
+    return SandboxRequest(**base)
+
+
+def test_launch_refuses_a_grant_over_the_app_folders(tmp_path, monkeypatch):
+    monkeypatch.setattr(lw, "ledger_path", lambda: tmp_path / "ledger" / "g.json")
+    monkeypatch.setattr(lw, "protects_app", lambda p: Path(p) == tmp_path / "app")
+    monkeypatch.setattr(lw, "_grant", lambda *a: pytest.fail("no ACE may be written"))
+    with pytest.raises(sandbox.SandboxPathNotGrantable) as err:
+        lw.launch(_req(tmp_path, read_paths=[tmp_path / "app"]))
+    assert "AI Gator" in err.value.reason
+    assert not (tmp_path / "ledger" / "g.json").exists()
+
+
+def test_launch_does_not_guard_runtime_paths(tmp_path, monkeypatch):
+    monkeypatch.setattr(lw, "ledger_path", lambda: tmp_path / "ledger" / "g.json")
+    monkeypatch.setattr(lw, "protects_app", lambda p: True)
+    with pytest.raises(sandbox.SandboxPathNotGrantable):
+        lw.launch(_req(tmp_path, runtime_paths=[tmp_path / "rt"]))  # cwd is still per-run, so it is refused
+    assert lw.acl_grants(_req(tmp_path, runtime_paths=[tmp_path / "rt"]))[0] == [(tmp_path / "rt", "RX")]
+
