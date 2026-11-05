@@ -186,8 +186,20 @@ function typeInAddressBar(typed, { beforeUnload, listener }) {
   assert(/session\.fromPartition\(OUTLOOK_PARTITION\)/.test(popout[0]), 'uses the Outlook session');
   assert(/attachToolbarToWindow\(compose\)/.test(popout[0]), 'has the browser toolbar');
   assert(/_confirmLeaveOutlookPage\(e, compose\)/.test(popout[0]), 'asks before discarding edits');
+  assert(
+    /compose\.on\('closed'[\s\S]*?\.send\('outlook-pane:compose-closed', String\(url\)\)/.test(
+      popout[0],
+    ),
+    'tells the opener when the compose window closes',
+  );
   const preload = fs.readFileSync(path.join(__dirname, '..', 'shell', 'preload.js'), 'utf8');
   assert(/openOutlookCompose:[^\n]*outlook-pane:open-compose-window/.test(preload));
+  assert(
+    /onOutlookComposeClosed:[\s\S]*?ipcRenderer\.on\('outlook-pane:compose-closed'[\s\S]*?ipcRenderer\.removeListener\('outlook-pane:compose-closed'/.test(
+      preload,
+    ),
+    'preload exposes a subscription that can be removed',
+  );
 
   console.log('outlook_standalone_nav ok');
 })();

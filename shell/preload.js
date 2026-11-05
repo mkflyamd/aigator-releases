@@ -32,6 +32,11 @@ contextBridge.exposeInMainWorld('gatorShell', {
   navigateOutlookPin: (convId) => ipcRenderer.invoke('outlook-pane:navigate-pin', convId),
   openOutlookDraft: (url) => ipcRenderer.invoke('outlook-pane:open-draft', url),
   openOutlookCompose: (url) => ipcRenderer.invoke('outlook-pane:open-compose-window', url),
+  onOutlookComposeClosed: (callback) => {
+    const listener = (_event, url) => callback(url);
+    ipcRenderer.on('outlook-pane:compose-closed', listener);
+    return () => ipcRenderer.removeListener('outlook-pane:compose-closed', listener);
+  },
 
   // ── OneDrive ────────────────────────────────────────────────────────
   showOneDrive: () => ipcRenderer.invoke('external-pane:show', 'onedrive'),

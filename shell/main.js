@@ -4625,7 +4625,7 @@ function _isOutlookComposeUrl(url) {
 
 // Opens a draft meeting the way native Outlook does: its own "new event" window
 // on the Outlook session, with the browser toolbar, beside the Gator window.
-ipcMain.handle('outlook-pane:open-compose-window', (_e, url) => {
+ipcMain.handle('outlook-pane:open-compose-window', (event, url) => {
   if (!_isOutlookComposeUrl(url)) return false;
   const iconPath = IS_MAC
     ? path.join(__dirname, '..', 'tray', 'aigator_icon.png')
@@ -4646,6 +4646,10 @@ ipcMain.handle('outlook-pane:open-compose-window', (_e, url) => {
   applyNavigationPolicy(compose, { name: 'outlook-compose', homeHosts: OUTLOOK_HOME_HOSTS });
   attachToolbarToWindow(compose);
   compose.webContents.on('will-prevent-unload', (e) => _confirmLeaveOutlookPage(e, compose));
+  const opener = event.sender;
+  compose.on('closed', () => {
+    if (!opener.isDestroyed()) opener.send('outlook-pane:compose-closed', String(url));
+  });
   compose.loadURL(String(url));
   return true;
 });
