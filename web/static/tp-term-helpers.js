@@ -102,7 +102,7 @@ function _ocSpawnTerm(sess) {
 }
 
 function _ocFit(sess) {
-  if (!sess || !sess.fitAddon || !sess.term) return;
+  if (!sess || !sess.fitAddon || !sess.term || sess._parked) return;
   const el = sess.container;
   if (!el || !el.offsetParent || el.clientWidth < 40) return;
   const prevCols = sess.term.cols;

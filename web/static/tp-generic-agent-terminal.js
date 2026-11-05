@@ -260,6 +260,20 @@ function _genAgentRenderTabs(tabId) {
     x.textContent = '✕';
     tab.appendChild(label);
     tab.appendChild(restart);
+    if (window.gatorShell && typeof window.gatorShell.popOutTerminal === 'function') {
+      const popOut = document.createElement('button');
+      popOut.type = 'button';
+      popOut.className = 'gtp-tab-restart gtp-tab-popout';
+      popOut.title = 'Open this terminal in its own window';
+      popOut.textContent = '⧉';
+      popOut.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (await window.gatorShell.popOutTerminal(sess.ptySessionId, sess.label)) {
+          _genAgentParkForPopout(sess);
+        }
+      });
+      tab.appendChild(popOut);
+    }
     tab.appendChild(x);
     tab.addEventListener('click', (e) => {
       if (e.target === x || e.target === restart) return;
@@ -268,7 +282,8 @@ function _genAgentRenderTabs(tabId) {
       _genAgentActivateSession(tabId, id);
     });
     tab.addEventListener('dblclick', (e) => {
-      if (e.target === x || e.target === restart) return;
+      if (e.target === x || e.target === restart || e.target.classList.contains('gtp-tab-popout'))
+        return;
       e.preventDefault();
       e.stopPropagation();
       _genAgentBeginRename(sess, label);
@@ -437,6 +452,7 @@ function _genAgentCloseSession(tabId, ptyId, backendAlreadyClosed = false) {
   // Unlike a project switch, an explicit × means close the process too, so
   // this session cannot be reattached and resurrect its tab later.
   if (!backendAlreadyClosed) void _genAgentCloseBackendSession(state, closing);
+  if (closing && closing._parked) void window.gatorShell.closeTerminalPopout(ptyId);
   _genAgentDetachSession(tabId, ptyId);
   state.order = state.order.filter((id) => id !== ptyId);
   if (state.order.length === 0) {
@@ -985,6 +1001,63 @@ function _genAgentArmNoOutputWatchdog(sess) {
   }, _GENAGENT_NO_OUTPUT_TIMEOUT_MS);
 }
 
+// A PTY has one size, so a terminal shown in two windows garbles whichever
+// window did not set it. While a tab is popped out the pop-out owns the PTY:
+// this tab disconnects, stops resizing, and shows a placeholder.
+function _genAgentParkForPopout(sess) {
+  if (sess._parked || !sess.container) return;
+  sess._parked = true;
+  clearTimeout(sess._noOutputTimer);
+  try {
+    sess.ws && sess.ws.close();
+  } catch (_) {}
+  const overlay = document.createElement('div');
+  overlay.className = 'oc-restart-overlay';
+  const msg = document.createElement('div');
+  msg.className = 'oc-restart-msg';
+  msg.textContent = 'This terminal is open in a separate window.';
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'oc-restart-btn';
+  btn.textContent = 'Bring back';
+  btn.addEventListener('click', () => {
+    btn.disabled = true;
+    void window.gatorShell.closeTerminalPopout(sess.ptySessionId).then((closed) => {
+      if (!closed) _genAgentUnparkFromPopout(sess);
+    });
+  });
+  overlay.appendChild(msg);
+  overlay.appendChild(btn);
+  sess.container.appendChild(overlay);
+  sess._popoutOverlay = overlay;
+}
+
+// The pop-out is gone. Start from a blank screen at this tab's own size and
+// from the live end of the output, then force the app to redraw itself.
+function _genAgentUnparkFromPopout(sess) {
+  if (!sess._parked) return;
+  sess._parked = false;
+  if (sess._popoutOverlay) sess._popoutOverlay.remove();
+  sess._popoutOverlay = null;
+  if (!sess.term || sess._closing || sess._dead) return;
+  sess.term.reset();
+  sess._outputSeq = -1;
+  sess._retryAttempt = 0;
+  sess._redrawOnOpen = true;
+  _genAgentConnect(sess, 0);
+}
+
+function _genAgentOnPopoutClosed(ptySessionId) {
+  Object.values(_genAgentTerminals).forEach((state) => {
+    const sess = state.sessions && state.sessions[ptySessionId];
+    if (sess) _genAgentUnparkFromPopout(sess);
+  });
+}
+
+if (window.gatorShell && typeof window.gatorShell.onTerminalPopoutClosed === 'function') {
+  window.gatorShell.onTerminalPopoutClosed(_genAgentOnPopoutClosed);
+}
+
 // WebSocket connect/reconnect - same shape as _ocConnect: the exit vs.
 // transient-drop distinction, backoff, and restart affordance are generically
 // useful, not OpenCode-specific.
@@ -995,7 +1068,9 @@ function _genAgentConnect(sess, retryDelay) {
     '//' +
     location.host +
     '/api/terminal/agent?session_id=' +
-    encodeURIComponent(sess.ptySessionId);
+    encodeURIComponent(sess.ptySessionId) +
+    '&seq=' +
+    (sess._outputSeq || 0);
   const wasRetrying = !!retryDelay;
 
   sess.ws = new WebSocket(url);
@@ -1011,6 +1086,15 @@ function _genAgentConnect(sess, retryDelay) {
       }
     }
     _ocFit(sess);
+    if (sess._redrawOnOpen && sess.term) {
+      // Back from a pop-out: the PTY may already be this size, and a resize to
+      // the same size makes no app redraw. Nudge it so the app repaints.
+      sess._redrawOnOpen = false;
+      const { cols, rows } = sess.term;
+      const resize = (c) => sess.ws.send(JSON.stringify({ type: 'resize', cols: c, rows }));
+      resize(Math.max(cols - 1, 2));
+      resize(cols);
+    }
     sess.term && sess.term.focus();
     if (!sess._hasOutput) _genAgentArmNoOutputWatchdog(sess);
   };
@@ -1022,6 +1106,9 @@ function _genAgentConnect(sess, retryDelay) {
       return;
     }
     if (msg.type === 'output') {
+      // Position in the PTY's output stream, so a reconnect resumes after what
+      // this terminal already shows instead of replaying the whole buffer.
+      if (typeof msg.seq === 'number') sess._outputSeq = msg.seq;
       sess._outputChars = (sess._outputChars || 0) + String(msg.data || '').length;
       const hasVisibleOutput = _genAgentIsVisibleOutput(msg.data);
       // A WebSocket opening only proves it reached the backend. Keep retrying
@@ -1066,7 +1153,7 @@ function _genAgentConnect(sess, retryDelay) {
     /* onclose handles retry */
   };
   sess.ws.onclose = () => {
-    if (!sess.term || sess._closing || sess._dead) return;
+    if (!sess.term || sess._closing || sess._dead || sess._parked) return;
     const attempt = (sess._retryAttempt || 0) + 1;
     sess._retryAttempt = attempt;
     const next = Math.min(500 * attempt, 8000);
@@ -1078,7 +1165,7 @@ function _genAgentConnect(sess, retryDelay) {
         's…]\x1b[0m\r\n',
     );
     setTimeout(() => {
-      if (!sess.term || sess._closing || sess._dead) return;
+      if (!sess.term || sess._closing || sess._dead || sess._parked) return;
       _genAgentConnect(sess, next);
     }, next);
   };

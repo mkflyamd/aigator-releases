@@ -35,10 +35,11 @@ Adding a skill needs **zero changes to `app.py`** — drop `web/skills/<name>/` 
 
 ## Dev commands
 
-Windows one-shot (clears stale procs, starts hot-reload backend, waits for `/health`, opens Electron with `--remote-debugging-port=9222`):
+Windows one-shot (clears the stale backend, starts hot-reload backend, waits for `/health`, opens Electron with `--remote-debugging-port=9222` if no shell is open for that port; an open shell stays and reconnects on its own):
 
 ```powershell
 .\launch-dev.ps1                 # dev backend + shell on :8003
+.\launch-dev.ps1 -Shell          # also close and relaunch the shell window
 .\launch-dev.ps1 -Port 8002 -DebugPort 9223
 ```
 

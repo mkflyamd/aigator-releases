@@ -11,6 +11,8 @@ never needed to know which of those callers it's serving.
 
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
@@ -46,7 +48,7 @@ async def close_generic_agent_terminal(req: GenericAgentTerminalCloseRequest):
     """
     from routes.terminal import close_pty_session
 
-    close_pty_session(req.pty_session_id)
+    await asyncio.to_thread(close_pty_session, req.pty_session_id)
     if generic_agent.get_active_session(req.project_id, req.agent) == req.pty_session_id:
         generic_agent.clear_active_session(req.project_id, req.agent)
     return {"ok": True}
@@ -73,14 +75,14 @@ async def generic_agent_terminal(req: GenericAgentTerminalRequest):
     if not req.force_new:
         existing = generic_agent.get_active_session(req.project_id, req.agent)
         if existing:
-            entry = get_pty_session(existing)
-            if entry and not entry["done"]:
+            entry = await asyncio.to_thread(get_pty_session, existing)
+            if entry and not entry.done:
                 return {"pty_session_id": existing, "created": False}
             # Stale record (process exited, or the in-memory session dict was
             # cleared by a restart) - drop it and fall through to a fresh spawn.
             # close_pty_session is idempotent even if the process already
             # exited on its own (matches _spawn_attach_pty's cleanup pattern).
-            close_pty_session(existing)
+            await asyncio.to_thread(close_pty_session, existing)
             generic_agent.clear_active_session(req.project_id, req.agent)
 
     env = None
@@ -135,10 +137,16 @@ async def generic_agent_terminal(req: GenericAgentTerminalRequest):
     # Use the frontend's measured dimensions if provided (non-zero), so TUI
     # apps (Crush, Claude Code) spawn at the correct size and don't garble on
     # the late resize. Fall back to create_pty_session's defaults otherwise.
-    if req.cols > 0 and req.rows > 0:
-        create_pty_session(pty_session_id, cols=req.cols, rows=req.rows,
-                           command=command, env=env, cwd=req.repo_path)
-    else:
-        create_pty_session(pty_session_id, command=command, env=env, cwd=req.repo_path)
+    # Spawning talks to the PTY host over a socket and may start it, so it
+    # runs off the event loop.
+    size = {"cols": req.cols, "rows": req.rows} if req.cols > 0 and req.rows > 0 else {}
+    await asyncio.to_thread(
+        create_pty_session,
+        pty_session_id,
+        command=command,
+        env=env,
+        cwd=req.repo_path,
+        **size,
+    )
     generic_agent.set_active_session(req.project_id, req.agent, pty_session_id)
     return {"pty_session_id": pty_session_id, "created": True}

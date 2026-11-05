@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>AI Gator terminal</title>
+    <link rel="stylesheet" href="/static/vendor/xterm/xterm.css" />
+    <script>
+      (function () {
+        var t = localStorage.getItem('gator-theme-effective');
+        document.documentElement.setAttribute('data-theme', t === 'light' ? 'light' : 'dark');
+      })();
+    </script>
+    <style>
+      :root {
+        --border2: #2a4a6b;
+        --text-dim: #6b8db5;
+        --warn: #f59e0b;
+      }
+      [data-theme='light'] {
+        --border2: #94a3b8;
+        --text-dim: #475569;
+        --warn: #d97706;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #0b0d12;
+        overflow: hidden;
+        font-family:
+          -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif;
+      }
+      #term {
+        position: absolute;
+        inset: 6px;
+      }
+      .xterm {
+        height: 100%;
+      }
+      .xterm-viewport {
+        background-color: transparent !important;
+      }
+      .xterm-viewport::-webkit-scrollbar {
+        width: 4px;
+        height: 4px;
+      }
+      .xterm-viewport::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      .xterm-viewport::-webkit-scrollbar-thumb {
+        background: var(--border2);
+        border-radius: 4px;
+      }
+      .xterm-viewport {
+        scrollbar-width: thin;
+        scrollbar-color: var(--border2) transparent;
+      }
+      #status {
+        position: absolute;
+        right: 10px;
+        bottom: 8px;
+        font-size: 0.78rem;
+        color: var(--warn);
+        pointer-events: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="term"></div>
+    <div id="status"></div>
+    <script src="/static/vendor/xterm/xterm.js"></script>
+    <script src="/static/vendor/xterm/addon-fit.js"></script>
+    <script src="/static/terminal-popout.js"></script>
+  </body>
+</html>
