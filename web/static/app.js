@@ -10248,11 +10248,13 @@ function _availabilityGridSlotTimes(grid, dayIndex, slotIndex) {
   return { start: at(begin), end: at(begin + grid.duration_minutes) };
 }
 
-function _availabilityGridComposeUrl(grid, dayIndex, slotIndex) {
+function _availabilityGridComposeUrl(grid, dayIndex, slotIndex, details) {
   const times = _availabilityGridSlotTimes(grid, dayIndex, slotIndex);
   const query = {
     path: '/calendar/action/compose',
     rru: 'addevent',
+    subject: (details && details.subject) || '',
+    body: (details && details.body) || '',
     startdt: times.start,
     enddt: times.end,
     to: grid.people
@@ -10291,6 +10293,36 @@ function _availabilityGridAttendeeText(grid) {
       ? ' Invite only these people; anyone removed in the grid is not invited.'
       : ' There are no other attendees; anyone mentioned earlier was removed in the grid.')
   );
+}
+
+function _availabilityGridDetailsText(details) {
+  const subject = String((details && details.subject) || '').trim();
+  const message = String((details && details.body) || '').trim();
+  return (
+    (subject ? ` Meeting title: ${subject}.` : '') + (message ? ` Meeting message: ${message}` : '')
+  );
+}
+
+function _availabilityGridZoneLines(zones, grid) {
+  const names = new Map(grid.people.map((p) => [p.email, p.name || p.email]));
+  return (Array.isArray(zones) ? zones : []).map(
+    (z) => `${z.label} · ${(z.people || []).map((e) => names.get(e) || e).join(', ')}`,
+  );
+}
+
+// Calls onClosed once the shell reports that the compose window opened for `url` was closed.
+// Outside the Electron shell there is no signal, so the caller gets its button back at once.
+function _watchOutlookComposeClosed(url, onClosed) {
+  const shell = window.gatorShell;
+  if (!shell || !shell.isShell || !shell.onOutlookComposeClosed) {
+    onClosed();
+    return;
+  }
+  const stop = shell.onOutlookComposeClosed((closedUrl) => {
+    if (closedUrl !== url) return;
+    stop();
+    onClosed();
+  });
 }
 
 function _availabilityGridRepeatText(spec, pickedIso, firstIso) {

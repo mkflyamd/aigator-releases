@@ -65,6 +65,70 @@ assert.strictEqual(url.searchParams.get('startdt'), '2030-01-08T17:30:00');
 assert.strictEqual(url.searchParams.get('enddt'), '2030-01-08T18:00:00');
 assert.strictEqual(url.searchParams.get('to'), 'sherry@example.com;james@example.com');
 
+const detailed = new URL(
+  composeUrl(
+    { ...grid, people: [{ you: true, email: 'me@example.com' }, { email: 'sherry@example.com' }] },
+    1,
+    19,
+    { subject: 'Design sync', body: 'Agenda & notes' },
+  ),
+);
+assert.strictEqual(detailed.searchParams.get('subject'), 'Design sync');
+assert.strictEqual(detailed.searchParams.get('body'), 'Agenda & notes');
+assert.strictEqual(url.searchParams.get('subject'), null, 'no details, no subject parameter');
+
+const detailsText = load('_availabilityGridDetailsText');
+assert.strictEqual(detailsText({}), '');
+assert.strictEqual(detailsText({ subject: ' Sync ', body: '' }), ' Meeting title: Sync.');
+assert.strictEqual(
+  detailsText({ subject: 'Sync', body: 'Line one\nLine two' }),
+  ' Meeting title: Sync. Meeting message: Line one\nLine two',
+);
+
+const zoneLines = load('_availabilityGridZoneLines');
+assert.deepStrictEqual(
+  [
+    ...zoneLines(
+      [
+        { label: '11:00 AM – 11:30 AM CST', people: ['aswin@example.com', 'tej@example.com'] },
+        { label: '5:00 PM – 5:30 PM GMT', people: ['faisal@example.com', 'x@example.com'] },
+      ],
+      {
+        people: [
+          { you: true, email: 'me@example.com' },
+          { name: 'Aswin', email: 'aswin@example.com' },
+          { name: 'Tej', email: 'tej@example.com' },
+          { name: 'Faisal', email: 'faisal@example.com' },
+        ],
+      },
+    ),
+  ],
+  ['11:00 AM – 11:30 AM CST · Aswin, Tej', '5:00 PM – 5:30 PM GMT · Faisal, x@example.com'],
+);
+assert.deepStrictEqual([...zoneLines(null, { people: [] })], []);
+
+let fire = null;
+const shell = {
+  isShell: true,
+  onOutlookComposeClosed(cb) {
+    fire = cb;
+    return () => {
+      fire = null;
+    };
+  },
+};
+const watch = load('_watchOutlookComposeClosed', { window: { gatorShell: shell } });
+let closed = 0;
+watch('https://outlook.office.com/a', () => closed++);
+fire('https://outlook.office.com/other');
+assert.strictEqual(closed, 0, 'another window closing is ignored');
+fire('https://outlook.office.com/a');
+assert.strictEqual(closed, 1, 'its own window closing re-enables the button');
+assert.strictEqual(fire, null, 'and unsubscribes');
+const watchPlain = load('_watchOutlookComposeClosed', { window: {} });
+watchPlain('https://outlook.office.com/a', () => closed++);
+assert.strictEqual(closed, 2, 'without the shell the button is ready straight away');
+
 assert(/msg\.availability_grid\)\s*\{\s*_showAvailabilityGrid\(/.test(source), 'SSE handler wired');
 assert(
   /postGridJson\('\/api\/calendar\/availability-days'/.test(source),
