@@ -81,14 +81,29 @@ test('no redirect when the user already switched to another app', async () => {
   assert.deepStrictEqual(calls.panels, []);
 });
 
-test('a non-boolean or rejected result does not redirect', async () => {
+test('a non-boolean result does not redirect', async () => {
   const { sandbox, calls } = harness('jira');
   vm.runInContext(`_redirectIfNotShown('jira', undefined)`, sandbox);
-  vm.runInContext(`_redirectIfNotShown('jira', Promise.reject(new Error('ipc')))`, sandbox);
   await settle();
   assert.strictEqual(calls.closed, 0);
   assert.deepStrictEqual(calls.panels, []);
 });
+
+for (const [type, label, section] of [
+  ['jira', 'Jira', 'atlassian-detail'],
+  ['confluence', 'Confluence', 'atlassian-detail'],
+]) {
+  test(`${type}: a rejected shell call sends the user to its Settings section`, async () => {
+    const { sandbox, calls } = harness(type);
+    vm.runInContext(`_redirectIfNotShown('${type}', Promise.reject(new Error('ipc')))`, sandbox);
+    await settle();
+    assert.strictEqual(calls.closed, 1);
+    assert.deepStrictEqual(calls.panels, ['integrations']);
+    assert.deepStrictEqual(calls.scrolled, [section]);
+    assert.strictEqual(calls.toasts.length, 1);
+    assert(calls.toasts[0].msg.includes(label));
+  });
+}
 
 test('third pane uses the redirect for Jira, Confluence and GitHub native branches', () => {
   assert(source.includes("_redirectIfNotShown('jira', window.gatorShell.showJira())"));

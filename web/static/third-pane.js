@@ -704,7 +704,9 @@ function _redirectIfNotShown(type, result) {
     (shown) => {
       if (shown === false) _redirectToSetup(type);
     },
-    () => {},
+    () => {
+      _redirectToSetup(type);
+    },
   );
 }
 
