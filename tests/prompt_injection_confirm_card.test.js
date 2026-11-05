@@ -99,7 +99,11 @@ assert(
   card.dataset.ownerTab = 'tab-1';
   card.dataset.confirmId = 'c1';
   expire(card);
-  assert.deepStrictEqual(resolvedTabCards, [['tab-1', 'c1']], 'an expired card is no longer held for its tab');
+  assert.deepStrictEqual(
+    resolvedTabCards,
+    [['tab-1', 'c1']],
+    'an expired card is no longer held for its tab',
+  );
   assert.strictEqual(card.pinned, true, 'the expired card must be pinned into view');
   const nodes = flat(card);
   assert(
