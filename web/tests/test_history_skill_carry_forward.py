@@ -128,3 +128,16 @@ def test_resuming_keeps_every_skill_of_the_previous_turn_but_never_a_runner(monk
 
 def test_the_skills_of_a_turn_are_recorded_including_ones_typed_by_name():
     assert "_LAST_AUTO_SKILLS[_context_id] = list(_all_active)" in CHAT_SRC
+
+
+def test_a_draft_in_the_history_does_not_bring_back_a_runner_nobody_approved():
+    from routes.chat import _skills_named_in_history
+    draft = "Hi Hamed, I will create the invite and run a demo of the image generation and build steps. Schedule a meeting."
+    skills = _skills_named_in_history(draft.lower())
+    assert not {"code_runner", "shell_runner"} & set(skills)
+    assert "calendar" in skills or "email" in skills or skills == [], skills
+
+
+def test_history_text_still_brings_back_ordinary_skills():
+    from routes.chat import _skills_named_in_history
+    assert "calendar" in _skills_named_in_history("schedule a meeting for tuesday")

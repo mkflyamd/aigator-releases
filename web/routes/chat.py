@@ -1074,6 +1074,19 @@ def _skills_for_tools(tool_names) -> list[str]:
     return owners
 
 
+def _skills_named_in_history(recent_text: str) -> list[str]:
+    """Skills whose keywords appear in the recent chat text, for a follow-up that names none.
+
+    The shell/code runners are left out: their keywords ("create", "run", "image") appear in any
+    long draft, and a runner nobody approved would end the turn at the permission card. A runner
+    the chat really used is carried by _gated_runners_for_tools instead.
+    """
+    return [
+        sid for sid, kws in _SKILL_KEYWORDS.items()
+        if not _is_gated_runner(sid) and any(kw in recent_text for kw in kws)
+    ]
+
+
 def _gated_runners_for_tools(tool_names) -> list[str]:
     """The shell/code runners whose tools actually ran in this chat.
 
@@ -1870,10 +1883,7 @@ async def chat(req: ChatRequest):
                 _extract_text(m.get("content", ""))
                 for m in req.history[-6:]
             ).lower()
-            _history_skills = [
-                sid for sid, kws in _SKILL_KEYWORDS.items()
-                if any(kw in _recent_text for kw in kws)
-            ]
+            _history_skills = _skills_named_in_history(_recent_text)
             # The history above is text only. The server-side store also knows which tools
             # actually ran, so a chat that used Slack keeps Slack on a short follow-up.
             _from_tools = _skills_for_tools(_tools_already_run)
