@@ -25,6 +25,7 @@ class AvailabilityDaysRequest(BaseModel):
     after_date: str = ""
     dates: list[str] = []
     duration_minutes: int = 30
+    zones: bool = False
 
 
 # ── Calendar third-pane endpoints ────────────────────────────────────────────
@@ -143,6 +144,8 @@ class GridSeriesRequest(BaseModel):
     attendees: list[str] = []
     optional_attendees: list[str] = []
     repeat: dict | None = None
+    subject: str = ""
+    body: str = ""
 
 
 _INDEXES = {"first", "second", "third", "fourth", "last"}
@@ -226,6 +229,8 @@ async def tp_calendar_grid_draft_series(req: GridSeriesRequest):
             "attendees": req.attendees,
             "optional_attendees": req.optional_attendees,
             "recurrence": recurrence,
+            "subject": req.subject,
+            "body": req.body,
         }
     )
     event["isDraft"] = True
@@ -247,10 +252,33 @@ async def tp_calendar_availability_days(req: AvailabilityDaysRequest):
         raise HTTPException(status_code=400, detail="Too many people.")
     try:
         result = await asyncio.to_thread(
-            _tool_load_availability_days, req.emails, req.after_date, req.duration_minutes, 10, req.dates
+            _tool_load_availability_days, req.emails, req.after_date, req.duration_minutes, 10, req.dates, req.zones
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     if "error" in result:
         raise HTTPException(status_code=400, detail=result["error"])
     return result
+
+
+class SlotZonesRequest(BaseModel):
+    start: str
+    end: str
+    timezone: str
+    zones: dict[str, str] = {}
+
+
+@router.post("/api/calendar/slot-zones", dependencies=[Depends(verify_csrf)])
+async def tp_calendar_slot_zones(req: SlotZonesRequest):
+    """The picked slot as clock times in each attendee's zone, grouped by identical result. No Graph call."""
+    from skills.calendar import timezones
+
+    if len(req.zones) > 40:
+        raise HTTPException(status_code=400, detail="Too many people.")
+    own = timezones.fmt_range(req.start, req.end, req.timezone, req.timezone)
+    groups: dict[str, list[str]] = {}
+    for email, zone in req.zones.items():
+        label = timezones.fmt_range(req.start, req.end, req.timezone, zone)
+        if label and label != own:
+            groups.setdefault(label, []).append(email)
+    return [{"label": label, "people": people} for label, people in groups.items()]

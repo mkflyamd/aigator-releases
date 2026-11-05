@@ -127,3 +127,14 @@ def test_route_tells_the_user_to_check_outlook_when_graph_fails():
         res = _post(BODY)
     assert res.status_code == 502
     assert "Check your calendar" in res.json()["detail"]
+
+
+def test_route_carries_the_title_and_message_into_the_draft():
+    gc = MagicMock()
+    gc.post.return_value = {"id": "evt1", "webLink": "https://outlook.office365.com/owa/?itemid=evt1"}
+    with patch("skills._m365.helpers.get_cal_client", return_value=gc):
+        res = _post({**BODY, "subject": "Design sync", "body": "Agenda: roadmap"})
+    assert res.status_code == 200
+    event = gc.post.call_args.args[1]
+    assert event["subject"] == "Design sync"
+    assert event["body"] == {"contentType": "text", "content": "Agenda: roadmap"}
