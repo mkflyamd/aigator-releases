@@ -88,3 +88,97 @@ test('the failover card sends the chosen scope and puts Deny last', () => {
   assert(/JSON\.stringify\(\{ scope \}\)/.test(fn));
   assert(/btnWrap\.append\(\.\.\.allowBtns, cancelBtn\)/.test(fn));
 });
+
+function settingsHarness({ confirmAnswer = true, getOk = true } = {}) {
+  const makeEl = () => {
+    const el = {
+      children: [],
+      listeners: {},
+      textContent: '',
+      disabled: false,
+      hidden: false,
+      className: '',
+      appendChild(c) {
+        el.children.push(c);
+        return c;
+      },
+      append(...cs) {
+        el.children.push(...cs);
+      },
+      replaceChildren(...cs) {
+        el.children = cs;
+      },
+      addEventListener(type, fn) {
+        el.listeners[type] = fn;
+      },
+    };
+    return el;
+  };
+  const els = Object.fromEntries(
+    [
+      'permissions-row',
+      'permissions-list',
+      'permissions-rules-list',
+      'permissions-clear',
+      'permissions-admin-note',
+    ].map((id) => [id, makeEl()]),
+  );
+  const calls = [];
+  const sandbox = {
+    window: {},
+    document: { getElementById: (id) => els[id], createElement: makeEl },
+    fetch: async (url, opts) => {
+      calls.push([opts.method, url]);
+      if (opts.method === 'GET') {
+        return getOk
+          ? {
+              ok: true,
+              status: 200,
+              json: async () => ({
+                categories: [],
+                rules: [{ id: 'r1', label: 'Web', subject: 'x.com' }],
+              }),
+            }
+          : { ok: false, status: 500, json: async () => ({}) };
+      }
+      return { ok: true, status: 200, json: async () => ({}) };
+    },
+    confirm: () => confirmAnswer,
+    _showConnectivityToast: () => {},
+  };
+  vm.runInNewContext(`${pick('_initPermissionSettings')}\n_initPermissionSettings();`, sandbox);
+  const settle = () => new Promise((r) => setTimeout(r, 0));
+  return { els, calls, settle };
+}
+
+test('cancelling the Remove all confirmation sends no DELETE', async () => {
+  const { els, calls, settle } = settingsHarness({ confirmAnswer: false });
+  await settle();
+  els['permissions-clear'].listeners.click({ stopPropagation() {} });
+  await settle();
+  assert.deepStrictEqual(
+    calls.filter(([method]) => method === 'DELETE'),
+    [],
+  );
+});
+
+test('confirming Remove all deletes every rule', async () => {
+  const { els, calls, settle } = settingsHarness({ confirmAnswer: true });
+  await settle();
+  els['permissions-clear'].listeners.click({ stopPropagation() {} });
+  await settle();
+  assert.deepStrictEqual(
+    calls.filter(([method]) => method === 'DELETE'),
+    [['DELETE', '/api/permissions/rules']],
+  );
+});
+
+test('a failed permissions load shows a message and leaves Remove all disabled', async () => {
+  const { els, settle } = settingsHarness({ getOk: false });
+  await settle();
+  assert.strictEqual(
+    els['permissions-list'].children[0].textContent,
+    'Could not load permissions.',
+  );
+  assert.strictEqual(els['permissions-clear'].disabled, true);
+});
