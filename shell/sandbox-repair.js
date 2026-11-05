@@ -35,7 +35,12 @@ function ancestors(startDir) {
 }
 
 function defaultRun(file, args) {
-  return execFileSync(file, args, { encoding: 'utf8', windowsHide: true, timeout: 10000, stdio: ['ignore', 'pipe', 'ignore'] });
+  return execFileSync(file, args, {
+    encoding: 'utf8',
+    windowsHide: true,
+    timeout: 10000,
+    stdio: ['ignore', 'pipe', 'ignore'],
+  });
 }
 
 function icaclsExe() {

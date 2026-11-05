@@ -10193,7 +10193,8 @@ function _showSandboxApproval(data, ownerTabId) {
   const actions = document.createElement('div');
   actions.className = 'gcc-actions';
   const scopeSpecs = _scopeButtonSpecs(data.card);
-  if (!scopeSpecs.length) scopeSpecs.push({ scope: 'tab', label: _scopeLabel('tab'), primary: true });
+  if (!scopeSpecs.length)
+    scopeSpecs.push({ scope: 'tab', label: _scopeLabel('tab'), primary: true });
   const scopeButtons = scopeSpecs.map((spec) => {
     const btn = document.createElement('button');
     btn.className = spec.primary ? 'gcc-approve-btn' : 'btn-secondary';
@@ -14326,7 +14327,9 @@ form.addEventListener('submit', async (e) => {
                   },
                 );
               };
-              _routeCardToTab(requestTabId, _permCardId, _drawPermissionCard, { survivesTurn: true });
+              _routeCardToTab(requestTabId, _permCardId, _drawPermissionCard, {
+                survivesTurn: true,
+              });
             }
             if (_activeTabId === _tabKey && !_userScrolledUp)
               messages.scrollTop = messages.scrollHeight;
@@ -16779,9 +16782,7 @@ function _showBrowserConfirmCard(
     const btn = document.createElement('button');
     btn.textContent = spec.label;
     btn.dataset.scope = spec.scope;
-    btn.className = spec.primary
-      ? 'confirm-card-btn confirm-card-btn-primary'
-      : 'confirm-card-btn';
+    btn.className = spec.primary ? 'confirm-card-btn confirm-card-btn-primary' : 'confirm-card-btn';
     btn.addEventListener('click', () => _answer(`/api/browser/confirm/${confirm_id}`, spec.scope));
     return btn;
   });
@@ -16877,7 +16878,8 @@ function _showFailoverConfirmCard(
   const _btnBase =
     'font-size: 0.75rem; padding: 4px 12px; border-radius: 6px; cursor: pointer; font-weight: 600;';
   const _btnPrimary = _btnBase + ' background: var(--accent); color: #000; border: none;';
-  const _btnSecondary = _btnBase + ' background: var(--surface3); color: var(--text); border: none;';
+  const _btnSecondary =
+    _btnBase + ' background: var(--surface3); color: var(--text); border: none;';
   const _btnGhost =
     _btnBase +
     ' background: transparent; color: var(--text-muted); border: 1px solid var(--border, #374151);';

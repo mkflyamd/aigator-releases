@@ -34,10 +34,7 @@ function setup(activeTabId) {
     '_dropStaleTabCards',
     '_dropSurvivingTabCards',
   ];
-  vm.runInNewContext(
-    `${names.map(pick).join('\n')}\nthis.api = { ${names.join(', ')} };`,
-    ctx,
-  );
+  vm.runInNewContext(`${names.map(pick).join('\n')}\nthis.api = { ${names.join(', ')} };`, ctx);
   return { ctx, api: ctx.api, log };
 }
 
@@ -125,5 +122,9 @@ test('a new turn in the tab drops a surviving card; answering it drops it too', 
 });
 
 test('the permission card is routed to its tab and outlives the turn', () => {
-  assert(/_routeCardToTab\(requestTabId, _permCardId, _drawPermissionCard, \{ survivesTurn: true \}\)/.test(app));
+  assert(
+    /_routeCardToTab\(requestTabId, _permCardId, _drawPermissionCard, \{ survivesTurn: true \}\)/.test(
+      app,
+    ),
+  );
 });

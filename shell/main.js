@@ -21,9 +21,14 @@ const fs = require('fs');
 // Electron's GPU and renderer processes die at launch. The fix is applied once, then the app restarts.
 if (process.platform === 'win32' && !process.env.AIGATOR_SANDBOX_REPAIRED) {
   try {
-    const repaired = require('./sandbox-repair').repairSandboxGrants({ startDir: path.dirname(process.execPath) });
+    const repaired = require('./sandbox-repair').repairSandboxGrants({
+      startDir: path.dirname(process.execPath),
+    });
     if (repaired.length) {
-      console.warn('Removed stray sandbox access entries from:', repaired.map((r) => r.dir).join(', '));
+      console.warn(
+        'Removed stray sandbox access entries from:',
+        repaired.map((r) => r.dir).join(', '),
+      );
       process.env.AIGATOR_SANDBOX_REPAIRED = '1';
       app.relaunch();
       app.exit(0);
