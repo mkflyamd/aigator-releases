@@ -123,7 +123,7 @@ test('a new turn in the tab drops a surviving card; answering it drops it too', 
 
 test('the permission card is routed to its tab and outlives the turn', () => {
   assert(
-    /_routeCardToTab\(requestTabId, _permCardId, _drawPermissionCard, \{ survivesTurn: true \}\)/.test(
+    /_routeCardToTab\(requestTabId, _permCardId, _drawPermissionCard, \{\s*survivesTurn: true,?\s*\}\)/.test(
       app,
     ),
   );
