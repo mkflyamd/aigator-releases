@@ -10282,6 +10282,13 @@ function _availabilityGridFits(grid, dayIndex, slotIndex) {
   });
 }
 
+function _availabilityGridInitialPick(grid) {
+  const pick = grid.pick;
+  if (!pick) return null;
+  const di = grid.days.findIndex((d) => d.date === pick.date);
+  return di < 0 ? null : { di, k: Math.round(pick.minute / grid.step_minutes) };
+}
+
 function _availabilityGridAttendeeText(grid) {
   const others = grid.people.filter((p) => !p.you && p.email);
   const required = others.filter((p) => !p.optional).map((p) => p.email);
@@ -10869,7 +10876,10 @@ function _showAvailabilityGrid(grid, ownerTabId) {
   let pickedAt = null;
   let pickedBusy = [];
   let cellsByDay = [];
-  let showAll = workFirst === 0 && workLast === steps;
+  const start = _availabilityGridInitialPick(grid);
+  const fullDay = workFirst === 0 && workLast === steps;
+  let showAll =
+    fullDay || Boolean(start && (start.k < workFirst || start.k + spanSlots > workLast));
   const firstShown = () => (showAll ? 0 : workFirst);
   const lastShown = () => (showAll ? steps : workLast);
   const corner = (row) => {
@@ -11001,9 +11011,14 @@ function _showAvailabilityGrid(grid, ownerTabId) {
   const subjectField = details.querySelector('[data-jira-edit="subject"]');
   const bodyField = details.querySelector('[data-jira-edit="body"]');
   subjectField.value = grid.subject || '';
-  bodyField.value = grid.body || '';
+  const bodyText = _calendarBodyText(grid.body);
+  bodyField.value = bodyText;
   const detailFields = [subjectField, bodyField];
   const detailValues = () => ({ subject: subjectField.value.trim(), body: bodyField.value.trim() });
+  const seriesDetails = () =>
+    bodyField.value === bodyText && grid.body
+      ? { subject: subjectField.value.trim(), body: grid.body }
+      : { ...detailValues(), body_plain: true };
   let openedUrl = '';
   let zoneSeq = 0;
   const SAME_INVITE_NOTE =
@@ -11218,7 +11233,8 @@ function _showAvailabilityGrid(grid, ownerTabId) {
     const cell = scroll.querySelector('.ag-fit') || scroll.querySelector('.ag-cell');
     if (cell) scroll.scrollLeft = Math.max(0, cell.offsetLeft - 140);
   });
-  if (showAll) hours.classList.add('hidden');
+  if (fullDay) hours.classList.add('hidden');
+  else if (showAll) hours.textContent = 'Work hours only';
 
   let queue = Promise.resolve();
   const enqueue = (task) => {
@@ -11434,7 +11450,7 @@ function _showAvailabilityGrid(grid, ownerTabId) {
           attendees: others.filter((p) => !p.optional).map((p) => p.email),
           optional_attendees: others.filter((p) => p.optional).map((p) => p.email),
           repeat: repeating ? panel.spec() : null,
-          ...detailValues(),
+          ...seriesDetails(),
         }));
       }
       await launchOutlook(url);
@@ -11469,7 +11485,8 @@ function _showAvailabilityGrid(grid, ownerTabId) {
   bubble.appendChild(box);
   card.appendChild(bubble);
   document.getElementById('messages')?.appendChild(card);
-  const firstFit = scroll.querySelector('.ag-fit');
+  if (start) pick(start.di, start.k);
+  const firstFit = scroll.querySelector('.ag-picked') || scroll.querySelector('.ag-fit');
   if (firstFit) scroll.scrollLeft = Math.max(0, firstFit.offsetLeft - 140);
   card.scrollIntoView({ behavior: 'smooth', block: 'end' });
 }

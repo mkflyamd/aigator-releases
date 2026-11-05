@@ -329,7 +329,9 @@ assert(
   'a one-time Open in Outlook carries the title and message',
 );
 assert(
-  /postGridJson\('\/api\/calendar\/grid-draft-series', \{[\s\S]*?\.\.\.detailValues\(\)/.test(card),
+  /postGridJson\('\/api\/calendar\/grid-draft-series', \{[\s\S]*?\.\.\.seriesDetails\(\)/.test(
+    card,
+  ),
   'a server-made draft carries the title and message',
 );
 assert(
@@ -353,3 +355,23 @@ assert(
 );
 
 console.log('availability_grid_card: ok');
+
+// The grid opens with the server's pick selected, even outside work hours, and the Message shows as text.
+const initialPick = load('_availabilityGridInitialPick');
+const pickGrid = {
+  step_minutes: 30,
+  days: [{ date: '2030-01-07' }, { date: '2030-01-08' }],
+  pick: { date: '2030-01-08', minute: 1080 },
+};
+assert.deepStrictEqual({ ...initialPick(pickGrid) }, { di: 1, k: 36 });
+assert.strictEqual(initialPick({ ...pickGrid, pick: null }), null);
+assert.strictEqual(initialPick({ ...pickGrid, pick: { date: '2031-01-01', minute: 0 } }), null);
+assert.strictEqual(initialPick({ step_minutes: 30, days: [] }), null);
+
+assert(
+  /const bodyText = _calendarBodyText\(grid\.body\);\s*bodyField\.value = bodyText;/.test(source),
+  'the Message box shows the HTML body as text',
+);
+assert(/body_plain: true/.test(source), 'an edited Message goes out as plain text');
+assert(/const start = _availabilityGridInitialPick\(grid\)/.test(source), 'grid reads the pick');
+assert(/pick\(start\.di, start\.k\)/.test(source), 'grid opens with the pick selected');

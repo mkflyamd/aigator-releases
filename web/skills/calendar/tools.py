@@ -304,6 +304,10 @@ TOOL_DEFS = [
                     "type": "string",
                     "description": "Meeting message or agenda, when the user gave one. Pre-fills the card's Message box.",
                 },
+                "start_time": {
+                    "type": "string",
+                    "description": "Time of day the user asked for, 24-hour HH:MM in the user's own time zone (6 PM is 18:00). The card opens with that time selected on the first of `dates` where everyone is free; without it, on the first time everyone is free.",
+                },
             },
             "required": ["attendees"],
         },
@@ -841,6 +845,26 @@ def _tool_load_availability_days(
 _GRID_REPEATS = ("none", "daily", "weekdays", "weekly", "biweekly", "monthly", "yearly")
 
 
+def _grid_pick(days: list, need: int, start_time: str, now: datetime) -> dict | None:
+    """The slot the grid opens on: the asked-for time of day, else the first slot everyone is free for."""
+    match = re.fullmatch(r"\s*(\d{1,2}):(\d{2})\s*", str(start_time or ""))
+    asked = int(match.group(1)) * 60 + int(match.group(2)) if match else None
+    if asked is not None and (asked >= 24 * 60 or asked % _GRID_STEP):
+        asked = None
+    if asked is not None:
+        k = asked // _GRID_STEP
+        for d in days:
+            begin = datetime.fromisoformat(d["date"]) + timedelta(minutes=asked)
+            free = all(r[j] in "f?" for r in d["rows"] for j in range(k, k + need)) if k + need <= len(d["rows"][0]) else False
+            if free and begin > now:
+                return {"date": d["date"], "minute": asked}
+    for d in days:
+        k = d["fit"].find("1")
+        if k >= 0:
+            return {"date": d["date"], "minute": k * _GRID_STEP}
+    return None
+
+
 def _tool_show_availability_grid(
     attendees: list,
     dates: list | None = None,
@@ -848,6 +872,7 @@ def _tool_show_availability_grid(
     recurrence: str = "none",
     subject: str = "",
     body: str = "",
+    start_time: str = "",
 ) -> dict:
     from .._m365.helpers import get_cal_client, get_cached_me
     from .helpers import get_user_win_tz
@@ -894,13 +919,14 @@ def _tool_show_availability_grid(
         "work_end_minute": _GRID_WORK_END,
         "people": people,
         "days": days,
+        "pick": _grid_pick(days, need, start_time, now),
     }
     return {
         "_availability_grid": grid,
         "grid_shown": True,
         "timezone": win_tz,
         "mutual_free_examples": best,
-        "message": "An availability grid is on screen. End your turn now with one short sentence; the user clicks a free slot and it comes back as their next message.",
+        "message": "An availability grid is on screen. End your turn now with one short sentence; a time is already selected (the one asked for if everyone is free, otherwise the first mutual slot) and the user can change it; their choice comes back as their next message.",
     }
 
 

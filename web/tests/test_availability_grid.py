@@ -281,3 +281,36 @@ def test_adding_a_person_can_return_their_zone():
         without = _tool_load_availability_days(["new@example.com"], dates=dates)
     assert with_zones["zones"] == {"new@example.com": "Arabian Standard Time"}
     assert "zones" not in without
+
+
+def _free_except(*slots):
+    return "".join("2" if i in slots else "0" for i in range(48))
+
+
+def test_the_grid_opens_on_the_first_slot_everyone_is_free():
+    out, _ = _run({"me@example.com": "0" * 48, "sam@example.com": "0" * 48}, attendees=["sam@example.com"], dates=["2030-01-07"])
+    assert out["_availability_grid"]["pick"] == {"date": "2030-01-07", "minute": 480}
+
+
+def test_the_grid_opens_on_the_asked_time_even_outside_work_hours():
+    views = {"me@example.com": "0" * 48, "sam@example.com": "0" * 48}
+    out, _ = _run(views, attendees=["sam@example.com"], dates=["2030-01-07", "2030-01-08"], start_time="18:00")
+    assert out["_availability_grid"]["pick"] == {"date": "2030-01-07", "minute": 1080}
+
+
+def test_the_grid_falls_back_when_someone_is_busy_at_the_asked_time():
+    views = {"me@example.com": "0" * 48, "sam@example.com": _free_except(36)}
+    out, _ = _run(views, attendees=["sam@example.com"], dates=["2030-01-07"], start_time="18:00")
+    assert out["_availability_grid"]["pick"] == {"date": "2030-01-07", "minute": 480}
+
+
+def test_the_grid_falls_back_when_the_asked_time_is_not_a_time():
+    views = {"me@example.com": "0" * 48, "sam@example.com": "0" * 48}
+    out, _ = _run(views, attendees=["sam@example.com"], dates=["2030-01-07"], start_time="evening")
+    assert out["_availability_grid"]["pick"] == {"date": "2030-01-07", "minute": 480}
+
+
+def test_the_grid_has_no_pick_when_nobody_fits():
+    views = {"me@example.com": "2" * 48, "sam@example.com": "0" * 48}
+    out, _ = _run(views, attendees=["sam@example.com"], dates=["2030-01-07"])
+    assert out["_availability_grid"]["pick"] is None

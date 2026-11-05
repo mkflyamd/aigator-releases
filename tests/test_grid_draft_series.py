@@ -138,3 +138,13 @@ def test_route_carries_the_title_and_message_into_the_draft():
     event = gc.post.call_args.args[1]
     assert event["subject"] == "Design sync"
     assert event["body"] == {"contentType": "text", "content": "Agenda: roadmap"}
+
+
+@pytest.mark.parametrize("plain, content_type", [(False, "HTML"), (True, "text")])
+def test_route_sends_html_unless_the_message_was_edited_as_plain_text(plain, content_type):
+    gc = MagicMock()
+    gc.post.return_value = {"id": "evt1", "webLink": "https://outlook.office365.com/owa/?itemid=evt1"}
+    with patch("skills._m365.helpers.get_cal_client", return_value=gc):
+        res = _post({**BODY, "body": "<p>Agenda</p>", "body_plain": plain})
+    assert res.status_code == 200
+    assert gc.post.call_args.args[1]["body"] == {"contentType": content_type, "content": "<p>Agenda</p>"}

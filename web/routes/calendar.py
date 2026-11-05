@@ -146,6 +146,7 @@ class GridSeriesRequest(BaseModel):
     repeat: dict | None = None
     subject: str = ""
     body: str = ""
+    body_plain: bool = False
 
 
 _INDEXES = {"first", "second", "third", "fourth", "last"}
@@ -231,6 +232,7 @@ async def tp_calendar_grid_draft_series(req: GridSeriesRequest):
             "recurrence": recurrence,
             "subject": req.subject,
             "body": req.body,
+            "body_plain": req.body_plain,
         }
     )
     event["isDraft"] = True
