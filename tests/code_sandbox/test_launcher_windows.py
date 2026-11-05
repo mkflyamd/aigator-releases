@@ -789,3 +789,36 @@ def test_launch_does_not_guard_runtime_paths(tmp_path, monkeypatch):
         lw.launch(_req(tmp_path, runtime_paths=[tmp_path / "rt"]))  # cwd is still per-run, so it is refused
     assert lw.acl_grants(_req(tmp_path, runtime_paths=[tmp_path / "rt"]))[0] == [(tmp_path / "rt", "RX")]
 
+
+@pytest.mark.skipif(sys.platform != "win32", reason="OS file locks are the Windows ledger lock")
+def test_file_lock_blocks_a_second_process_until_released(tmp_path, monkeypatch):
+    import subprocess
+    monkeypatch.setattr(lw, "ledger_path", lambda: tmp_path / "g.json")
+    probe = (
+        "import sys, pathlib; from sandbox import launcher_windows as lw; "
+        f"lw.ledger_path = lambda: pathlib.Path(r'{tmp_path}') / 'g.json'; "
+        "\ntry:\n    with lw._file_lock('x.lock', 0.3): print('got')\n"
+        "except Exception as e: print(type(e).__name__)"
+    )
+    env = {**os.environ, "PYTHONPATH": str(Path(lw.__file__).resolve().parents[1])}
+    with lw._file_lock("x.lock", 1):
+        held = subprocess.run([sys.executable, "-c", probe], env=env, capture_output=True, text=True)
+    free = subprocess.run([sys.executable, "-c", probe], env=env, capture_output=True, text=True)
+    assert held.stdout.strip() == "SandboxUnavailable"
+    assert free.stdout.strip() == "got"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="OS file locks are the Windows ledger lock")
+def test_two_processes_adding_ledger_entries_lose_none(tmp_path):
+    import subprocess
+    worker = (
+        "import sys, pathlib; from sandbox import launcher_windows as lw; "
+        f"lw.ledger_path = lambda: pathlib.Path(r'{tmp_path}') / 'g.json'; "
+        "tag = sys.argv[1]\n"
+        "for i in range(25): lw._ledger_add_per_run('S-1-15-2-5', pathlib.Path(f'C:/x/{tag}{i}'))"
+    )
+    env = {**os.environ, "PYTHONPATH": str(Path(lw.__file__).resolve().parents[1])}
+    procs = [subprocess.Popen([sys.executable, "-c", worker, tag], env=env) for tag in "ab"]
+    assert [p.wait(timeout=120) for p in procs] == [0, 0]
+    entries = json.loads((tmp_path / "g.json").read_text())["per_run"]
+    assert len(entries) == 50
