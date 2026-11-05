@@ -515,7 +515,7 @@ def _github_gh(args: list, cwd: str = None, _context_id: str = "") -> dict:
     card = sso.card_for(f"{result.get('error', '')} {result.get('stderr', '')}")
     if not card:
         return result
-    other = sso.read_as_other_account(args, cwd=cwd, context_id=_context_id)
+    other = sso.read_as_other_account(args, cwd=cwd, context_id=_context_id, folder_approved=True)
     return other or sso.needs_authorization(card)
 
 

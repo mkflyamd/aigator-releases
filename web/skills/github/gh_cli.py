@@ -135,10 +135,12 @@ _APPROVAL_MSG = (
 )
 
 
-def _authorized_cwd(args: list, cwd: str, context_id: str) -> tuple[str | None, dict | None]:
+def _authorized_cwd(args: list, cwd: str, context_id: str, approved: bool = False) -> tuple[str | None, dict | None]:
     """The folder gh may run in, or a result to return as is (a refusal or the user's approval card).
 
     Same rule as run_shell: the AI Gator working folder is free, any other folder needs the user's approval.
+    `approved` is for a retry of a command that already passed this check: a once-only approval is used up by
+    the first run, so checking again would ask the user a second time.
     """
     from sandbox.policy import load_policy
     from skills.code_runner import tools as code_runner
@@ -149,7 +151,7 @@ def _authorized_cwd(args: list, cwd: str, context_id: str) -> tuple[str | None, 
     if isinstance(located, str):
         return None, _error(located)
     run_cwd, project, _scratch = located
-    if project is None:
+    if project is None or approved:
         return str(run_cwd), None
     gate = shell_runner._shell_gate(code_runner, shlex.join(["gh", *args]), [project], [], [], context_id, policy)
     if isinstance(gate, dict):
@@ -217,14 +219,14 @@ def switch_account(login: str) -> dict:
 
 
 def run_gh(args, cwd: str | None = None, context_id: str = "", *, max_output: int = _MAX_OUTPUT,
-           use_saved_token: bool = True, as_account: str = "") -> dict:
+           use_saved_token: bool = True, as_account: str = "", folder_approved: bool = False) -> dict:
     problem = validate(args)
     if problem:
         return _error(problem)
     gh = shutil.which("gh")
     if not gh:
         return _error("The GitHub CLI (gh) is not installed. Use the github_* tools instead.")
-    cwd, refused = _authorized_cwd(args, cwd or "", context_id)
+    cwd, refused = _authorized_cwd(args, cwd or "", context_id, folder_approved)
     if refused:
         return refused
     env = _env()

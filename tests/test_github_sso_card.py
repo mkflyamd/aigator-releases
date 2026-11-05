@@ -289,6 +289,36 @@ def test_other_account_token_never_leaks_into_the_result(monkeypatch):
     assert OTHER_TOKEN not in json.dumps(result)
 
 
+def _approved_folder(tmp_path, args):
+    proj = (tmp_path / "proj").resolve()
+    proj.mkdir(exist_ok=True)
+    first = gh_tools._github_gh(args, str(proj), "tab")
+    approvals.decide(first["_sandbox_approval"]["request_id"], "tab", True)
+    return str(proj)
+
+
+def test_other_account_retry_in_an_approved_folder_does_not_ask_again(monkeypatch, tmp_path):
+    args = ["pr", "view", "6335", "-R", "ROCm/aiter", "--json", "number"]
+    _two_accounts(monkeypatch, works_for=("maykulka_amdeng",))
+    proj = _approved_folder(tmp_path, args)
+
+    result = gh_tools._github_gh(args, proj, "tab")
+
+    assert result["auth"] == "gh login (maykulka_amdeng)"
+    assert "approval_required" not in result
+
+
+def test_sso_card_is_shown_in_an_approved_folder_when_no_other_account_can_read(monkeypatch, tmp_path):
+    args = ["pr", "view", "6335", "-R", "ROCm/aiter", "--json", "number"]
+    _two_accounts(monkeypatch)
+    proj = _approved_folder(tmp_path, args)
+
+    result = gh_tools._github_gh(args, proj, "tab")
+
+    assert result["_github_sso"]["org"] == "ROCm"
+    assert "approval_required" not in result
+
+
 def test_card_lists_the_other_accounts_when_none_can_read(monkeypatch):
     _refused_rest(monkeypatch)
     _two_accounts(monkeypatch)
