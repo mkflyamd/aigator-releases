@@ -68,9 +68,16 @@ def test_a_request_to_run_something_still_asks_for_permission(monkeypatch):
     assert "skills" not in seen
 
 
-def test_when_the_classifier_gives_no_answer_the_guess_stands(monkeypatch):
-    seen, card = _send(monkeypatch, CODE_REQUEST, classified=None)
-    assert card and card["type"] == "permission_required"
+def test_when_the_classifier_gives_no_answer_a_guess_does_not_stop_the_turn(monkeypatch):
+    seen, card = _send(monkeypatch, DRAFT_REQUEST, classified=None)
+    assert card is None
+    assert "code_runner" not in seen["skills"]
+
+
+def test_the_model_can_still_ask_for_a_runner_when_none_was_offered():
+    names = {t["name"] for t in chat_routes._filter_tools(None, False, [], unapproved_deps=[])}
+    assert "request_skill" in names
+    assert "run_python" not in names
 
 
 def test_other_skills_from_words_are_kept_when_only_the_runner_is_dropped(monkeypatch):

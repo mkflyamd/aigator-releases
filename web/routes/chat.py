@@ -1116,7 +1116,7 @@ def _classify_skills_via_llm(message: str, extra_skills: dict | None = None) -> 
         prompt = _CLASSIFY_PROMPT.format(skills=skills_text, message=message)
 
         from llm import get_active_model
-        text = provider.simple_complete(prompt, model=get_active_model() or "Claude-Haiku-4.5", max_tokens=100)
+        text = provider.simple_complete(prompt, model=get_active_model() or "Claude-Haiku-4.5", max_tokens=400)
         # Parse JSON array from response
         match = _re.search(r'\[.*?\]', text)
         if match:
@@ -1864,11 +1864,11 @@ async def chat(req: ChatRequest):
             except asyncio.TimeoutError:
                 print(f"[skill-classify] gave up after {_CLASSIFY_TIMEOUT_S}s", flush=True)
                 _classified = None
-            if _classified is None and _runner_guesses:
-                # No answer either way, so a real request to run something still gets its card.
-                _inferred = list(dict.fromkeys([*_inferred, *_runner_guesses]))
-            elif _runner_guesses and not set(_runner_guesses) & set(_classified or ()):
-                print(f"[skill-detect] words suggested {_runner_guesses}, but the request does not ask to run anything", flush=True)
+            if _runner_guesses and not set(_runner_guesses) & set(_classified or ()):
+                # A guess is never worth ending the turn at a permission card. If the model does need to
+                # run something it asks mid-turn with request_skill, and the user sees the same card then.
+                print(f"[skill-detect] words suggested {_runner_guesses}, not confirmed as a request to run anything; "
+                      "the model can still ask with request_skill", flush=True)
             if _classified:
                 _classifier_hits = list(_classified)
                 # Union keyword + classifier results so we keep the built-in AND
