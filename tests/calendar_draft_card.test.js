@@ -136,7 +136,18 @@ const openHandler = source.match(
   /openCalendarBtn\.addEventListener\('click'[\s\S]*?\r?\n    \}\);\r?\n/,
 );
 assert(openHandler, 'open handler found');
-assert(/gatorShell\.openOutlookCompose\(url\)/.test(openHandler[0]), 'opens the popout window');
+assert(/openInOutlookWindow\(url\)/.test(openHandler[0]), 'opens the popout window');
+assert(
+  /async function openInOutlookWindow\(url\) \{[\s\S]*?gatorShell\.openOutlookCompose\(url\)[\s\S]*?_watchOutlookComposeClosed\(url,/.test(
+    source,
+  ),
+  'popout helper opens the window and watches for it closing',
+);
+assert(/if \(handedOffUrl\)/.test(openHandler[0]), 'reopens the stored URL without a second draft');
+assert(
+  /handedOffUrl = url;[\s\S]*?approveBtn\.disabled = true;/.test(openHandler[0]),
+  'hand-off is remembered and Send invite stays blocked',
+);
 assert(!/openThirdPane/.test(openHandler[0]), 'does not load the draft into the Outlook pane');
 assert(/approveBtn\.disabled = true/.test(openHandler[0]), 'opened draft cannot also be sent');
 assert(/if \(openCalendarBtn\) openCalendarBtn\.disabled = true;/.test(source), 'Send locks Open');

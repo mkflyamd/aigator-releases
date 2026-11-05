@@ -10994,6 +10994,21 @@ function _showAvailabilityGrid(grid, ownerTabId) {
   people.className = 'ag-people';
   people.append(chipList, addBar);
 
+  const details = document.createElement('div');
+  details.className = 'ag-details';
+  details.innerHTML =
+    _jiraEditRow('subject', 'Title', '', 'line') + _jiraEditRow('body', 'Message', '', 'text');
+  const subjectField = details.querySelector('[data-jira-edit="subject"]');
+  const bodyField = details.querySelector('[data-jira-edit="body"]');
+  subjectField.value = grid.subject || '';
+  bodyField.value = grid.body || '';
+  const detailFields = [subjectField, bodyField];
+  const detailValues = () => ({ subject: subjectField.value.trim(), body: bodyField.value.trim() });
+  let openedUrl = '';
+  let zoneSeq = 0;
+  const SAME_INVITE_NOTE =
+    "Opens a new invite. If you already sent it in Outlook, don't send it again.";
+
   const footer = document.createElement('div');
   footer.className = 'ag-footer';
   const chosen = document.createElement('span');
@@ -11010,9 +11025,15 @@ function _showAvailabilityGrid(grid, ownerTabId) {
   const actions = document.createElement('div');
   actions.className = 'ag-actions';
   actions.append(use, openOutlook);
-  footer.append(chosen, actions);
+  const zoneBox = document.createElement('div');
+  zoneBox.className = 'ag-zones';
+  const chosenBox = document.createElement('div');
+  chosenBox.className = 'ag-chosen-box';
+  chosenBox.append(chosen, zoneBox);
+  footer.append(chosenBox, actions);
 
   const panel = _availabilityGridRepeatPanel(() => {
+    forgetOpened();
     syncUse();
     syncOutlookLink();
   });
@@ -11028,6 +11049,7 @@ function _showAvailabilityGrid(grid, ownerTabId) {
 
   function pick(di, k) {
     k = Math.max(firstShown(), Math.min(k, lastShown() - spanSlots));
+    const sameSlot = pickedAt && pickedAt.di === di && pickedAt.k === k;
     cellsByDay.forEach((cols) =>
       cols.forEach((cells) => cells.forEach((c) => c.classList.remove('ag-picked'))),
     );
@@ -11048,10 +11070,73 @@ function _showAvailabilityGrid(grid, ownerTabId) {
       ? `${picked} · not free: ${pickedBusy.join(', ')}`
       : picked;
     panel.setStart(grid.days[di].date);
+    if (!sameSlot) forgetOpened();
     syncOutlookLink();
+    showZones(di, k);
+  }
+
+  async function showZones(di, k) {
+    const mine = ++zoneSeq;
+    zoneBox.replaceChildren();
+    const zones = {};
+    grid.people.forEach((p) => {
+      if (!p.you && p.email && p.timezone) zones[p.email] = p.timezone;
+    });
+    if (!Object.keys(zones).length) return;
+    try {
+      const slot = _availabilityGridSlotTimes(grid, di, k);
+      const lines = await postGridJson('/api/calendar/slot-zones', {
+        start: slot.start,
+        end: slot.end,
+        timezone: grid.timezone,
+        zones,
+      });
+      if (mine !== zoneSeq) return;
+      _availabilityGridZoneLines(lines, grid).forEach((text) => {
+        const line = document.createElement('div');
+        line.textContent = text;
+        zoneBox.appendChild(line);
+      });
+    } catch {
+      // The zone lines are a convenience; the chosen time above still shows.
+    }
+  }
+
+  function showOpened(url) {
+    openedUrl = url;
+    detailFields.forEach((el) => (el.disabled = true));
+    openOutlook.disabled = true;
+    openOutlook.textContent = 'Opened in Outlook ↗';
+    openOutlook.classList.add('gcc-handed-off');
+    _watchOutlookComposeClosed(url, () => {
+      if (openedUrl !== url) return;
+      openOutlook.disabled = false;
+      openOutlook.textContent = 'Open in Outlook ↗';
+      openOutlook.classList.remove('gcc-handed-off');
+      openOutlook.title = url.includes('/deeplink/compose')
+        ? SAME_INVITE_NOTE
+        : 'Opens the draft you already created in Outlook';
+    });
+  }
+
+  async function launchOutlook(url) {
+    openedUrl = url;
+    if (typeof window.gatorShell !== 'undefined' && window.gatorShell.openOutlookCompose) {
+      await window.gatorShell.openOutlookCompose(url);
+    } else {
+      window.open(url, '_blank', 'noopener');
+    }
+    showOpened(url);
+  }
+
+  function forgetOpened() {
+    if (!openedUrl) return;
+    openedUrl = '';
+    detailFields.forEach((el) => (el.disabled = false));
   }
 
   function syncOutlookLink() {
+    if (openedUrl) return;
     const repeating = repeat.value !== 'none';
     openOutlook.classList.remove('gcc-handed-off');
     openOutlook.disabled = !pickedAt || (repeating && !panel.valid());
@@ -11065,6 +11150,7 @@ function _showAvailabilityGrid(grid, ownerTabId) {
   repeat.addEventListener('change', () => {
     panel.el.classList.toggle('hidden', repeat.value === 'none');
     if (repeat.value !== 'none') panel.setType(repeat.value);
+    forgetOpened();
     syncOutlookLink();
     syncUse();
   });
@@ -11080,7 +11166,10 @@ function _showAvailabilityGrid(grid, ownerTabId) {
         pickedAt = null;
         pickedBusy = [];
         chosen.textContent = 'Click any time to choose it (green = everyone required is free)';
+        zoneSeq++;
+        zoneBox.replaceChildren();
         use.disabled = true;
+        forgetOpened();
         syncOutlookLink();
       }
     }
@@ -11198,7 +11287,13 @@ function _showAvailabilityGrid(grid, ownerTabId) {
       try {
         if (inGrid(email)) return;
         const dates = grid.days.map((d) => d.date);
-        const days = await postAvailability({ emails: [email], dates });
+        const result = await postGridJson('/api/calendar/availability-days', {
+          duration_minutes: grid.duration_minutes,
+          emails: [email],
+          dates,
+          zones: true,
+        });
+        const days = result.days;
         if (
           !Array.isArray(days) ||
           days.length !== dates.length ||
@@ -11206,7 +11301,14 @@ function _showAvailabilityGrid(grid, ownerTabId) {
         )
           throw new Error('unexpected response');
         grid.days.forEach((d, i) => d.rows.push(days[i].rows[0]));
-        grid.people.push({ name: label, email, you: false, optional: false });
+        const timezone = result.zones && result.zones[email];
+        grid.people.push({
+          name: label,
+          email,
+          you: false,
+          optional: false,
+          ...(timezone ? { timezone } : {}),
+        });
       } catch (err) {
         _showConnectivityToast("Couldn't add that person: " + (err?.message || err), 'warn');
       } finally {
@@ -11304,12 +11406,22 @@ function _showAvailabilityGrid(grid, ownerTabId) {
     e.preventDefault();
     e.stopPropagation();
     if (!pickedAt || openOutlook.disabled) return;
+    if (openedUrl) {
+      openOutlook.disabled = true;
+      try {
+        await launchOutlook(openedUrl);
+      } catch (err) {
+        openOutlook.disabled = false;
+        _showConnectivityToast("Couldn't open in Outlook: " + (err?.message || err), 'warn');
+      }
+      return;
+    }
     let url;
     try {
       const others = grid.people.filter((p) => !p.you && p.email);
       const repeating = repeat.value !== 'none';
       if (!repeating && !others.some((p) => p.optional)) {
-        url = _availabilityGridComposeUrl(grid, pickedAt.di, pickedAt.k);
+        url = _availabilityGridComposeUrl(grid, pickedAt.di, pickedAt.k, detailValues());
       } else {
         openOutlook.disabled = true;
         openOutlook.textContent = repeating ? 'Creating the draft series…' : 'Creating the draft…';
@@ -11322,19 +11434,16 @@ function _showAvailabilityGrid(grid, ownerTabId) {
           attendees: others.filter((p) => !p.optional).map((p) => p.email),
           optional_attendees: others.filter((p) => p.optional).map((p) => p.email),
           repeat: repeating ? panel.spec() : null,
+          ...detailValues(),
         }));
-        openOutlook.textContent = repeating
-          ? 'Draft series opened in Outlook'
-          : 'Draft opened in Outlook';
-        openOutlook.classList.add('gcc-handed-off');
       }
-      if (typeof window.gatorShell !== 'undefined' && window.gatorShell.openOutlookCompose) {
-        await window.gatorShell.openOutlookCompose(url);
-      } else {
-        window.open(url, '_blank', 'noopener');
-      }
+      await launchOutlook(url);
     } catch (err) {
       if (!url) syncOutlookLink();
+      else {
+        openOutlook.disabled = false;
+        openOutlook.textContent = 'Open in Outlook ↗';
+      }
       _showConnectivityToast("Couldn't open in Outlook: " + (err?.message || err), 'warn');
     }
   });
@@ -11347,14 +11456,15 @@ function _showAvailabilityGrid(grid, ownerTabId) {
       _availabilityGridAttendeeText(grid) +
       (repeat.value === 'none'
         ? _availabilityGridRepeatText(null)
-        : _availabilityGridRepeatText(panel.spec(), grid.days[pickedAt.di].date, panel.first()));
+        : _availabilityGridRepeatText(panel.spec(), grid.days[pickedAt.di].date, panel.first())) +
+      _availabilityGridDetailsText(detailValues());
     card.remove();
     _sendSandboxFollowUp(tabId, reply).catch((err) =>
       console.warn('[availability grid] pick not sent:', err),
     );
   });
 
-  body.append(panel.el, people, scroll, footer);
+  body.append(panel.el, people, scroll, details, footer);
   box.append(header, body);
   bubble.appendChild(box);
   card.appendChild(bubble);
@@ -12523,8 +12633,39 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
   const _applyWording =
     config.applyWording || (config.hideEditLink && config.service !== 'calendar');
   if (openCalendarBtn) {
+    let handedOffUrl = '';
+    const SAME_INVITE_NOTE =
+      "Opens a new invite. If you already sent it in Outlook, don't send it again.";
+    const reopenReady = () => {
+      openCalendarBtn.textContent = config.openLabel + ' ↗';
+      openCalendarBtn.classList.remove('gcc-handed-off');
+      openCalendarBtn.title = handedOffUrl.includes('/deeplink/compose')
+        ? SAME_INVITE_NOTE
+        : 'Opens the draft you already created in Outlook';
+      openCalendarBtn.disabled = false;
+    };
+    async function openInOutlookWindow(url) {
+      if (canOpenNativeApp && window.gatorShell.openOutlookCompose) {
+        await window.gatorShell.openOutlookCompose(url);
+      } else {
+        window.open(url, '_blank', 'noopener');
+      }
+      openCalendarBtn.textContent = 'Opened in Outlook ↗';
+      openCalendarBtn.classList.add('gcc-handed-off');
+      openCalendarBtn.disabled = true;
+      _watchOutlookComposeClosed(url, reopenReady);
+    }
     openCalendarBtn.addEventListener('click', async () => {
       openCalendarBtn.disabled = true;
+      if (handedOffUrl) {
+        try {
+          await openInOutlookWindow(handedOffUrl);
+        } catch (err) {
+          reopenReady();
+          _showConnectivityToast("Couldn't open in Outlook: " + (err?.message || err), 'warn');
+        }
+        return;
+      }
       openCalendarBtn.textContent = 'Opening…';
       try {
         const editedFields = {};
@@ -12555,13 +12696,7 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
           throw new Error(typeof err.detail === 'string' ? err.detail : 'HTTP ' + res.status);
         }
         const { url } = await res.json();
-        if (canOpenNativeApp && window.gatorShell.openOutlookCompose) {
-          await window.gatorShell.openOutlookCompose(url);
-        } else {
-          window.open(url, '_blank', 'noopener');
-        }
-        openCalendarBtn.textContent = 'Opened in Outlook ↗';
-        openCalendarBtn.classList.add('gcc-handed-off');
+        handedOffUrl = url;
         jiraEditFields.forEach((el) => (el.disabled = true));
         approveBtn.disabled = true;
         approveBtn.classList.add('gcc-handed-off');
@@ -12569,9 +12704,13 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
         if (refine)
           refine.textContent =
             config.handoffNote || 'Opened in Outlook. Press Send there to invite attendees.';
+        await openInOutlookWindow(url);
       } catch (err) {
-        openCalendarBtn.textContent = config.openLabel;
-        openCalendarBtn.disabled = false;
+        if (handedOffUrl) reopenReady();
+        else {
+          openCalendarBtn.textContent = config.openLabel;
+          openCalendarBtn.disabled = false;
+        }
         _showConnectivityToast("Couldn't open in Outlook: " + (err?.message || err), 'warn');
       }
     });

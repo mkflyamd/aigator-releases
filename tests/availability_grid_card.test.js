@@ -317,4 +317,39 @@ assert(
   'people are chips with a visible Required/Optional pill and a remove button',
 );
 
+const gridCard = source.match(/function _showAvailabilityGrid\([\s\S]*?\r?\n\}\r?\n/);
+assert(gridCard, 'grid card found');
+const card = gridCard[0];
+assert(
+  /_jiraEditRow\('subject', 'Title'[\s\S]*_jiraEditRow\('body', 'Message'/.test(card),
+  'the grid has Title and Message boxes',
+);
+assert(
+  /_availabilityGridComposeUrl\(grid, pickedAt\.di, pickedAt\.k, detailValues\(\)\)/.test(card),
+  'a one-time Open in Outlook carries the title and message',
+);
+assert(
+  /postGridJson\('\/api\/calendar\/grid-draft-series', \{[\s\S]*?\.\.\.detailValues\(\)/.test(card),
+  'a server-made draft carries the title and message',
+);
+assert(
+  /_availabilityGridDetailsText\(detailValues\(\)\)/.test(card),
+  'Use this time hands the title and message to the model',
+);
+assert(
+  /postGridJson\('\/api\/calendar\/slot-zones'/.test(card) &&
+    /_availabilityGridZoneLines\(/.test(card),
+  'picking a slot shows the time in each attendee zone',
+);
+assert(/zones: true/.test(card), 'adding a person also loads their zone');
+assert(
+  /_watchOutlookComposeClosed\(url,/.test(card) && /if \(openedUrl\)/.test(card),
+  'Open in Outlook comes back after the window closes and reopens the stored URL',
+);
+assert(!/Draft opened in Outlook|Draft series opened in Outlook/.test(card), 'no stuck label');
+assert(
+  card.indexOf('let openedUrl') < card.indexOf('_availabilityGridRepeatPanel(() =>'),
+  'state used by syncOutlookLink is declared before the repeat panel callback can run',
+);
+
 console.log('availability_grid_card: ok');

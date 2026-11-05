@@ -6595,6 +6595,20 @@ button[data-default-action]:focus:not(:disabled)::after {
   color: var(--text-dim);
   overflow-wrap: anywhere;
 }
+.ag-chosen-box {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.ag-zones {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+.ag-details {
+  margin-top: 8px;
+}
 .ask-user-body {
   display: flex;
   flex-direction: column;
