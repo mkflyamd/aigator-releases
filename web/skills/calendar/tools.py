@@ -83,7 +83,7 @@ def _normalize_send_updates(value: str | None) -> str:
 TOOL_DEFS = [
     {
         "name": "read_calendar",
-        "description": "Fetch calendar events for a specific date or date range. Use when user asks about their schedule, meetings, calendar, what's on for a day, or any day-specific plans (today, tomorrow, Monday, next week, etc.).",
+        "description": "Fetch calendar events for a specific date or date range. Use when user asks about their schedule, meetings, calendar, what's on for a day, or any day-specific plans (today, tomorrow, Monday, next week, etc.). Each event has a date field. If the result has truncated=true, later days are missing: read them with a later date and a smaller days value.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -481,36 +481,53 @@ def _tool_read_calendar(date: str = "", days: int = 1) -> dict:
 
     gc = get_cal_client()
     start, end = cal_day_range_utc(date, days)
-    events = gc.get(
+    headers = {"Prefer": f'outlook.timezone="{get_user_win_tz()}"'}
+    page = gc.get(
         "/me/calendarView",
         params={
             "startDateTime": start.isoformat().replace("+00:00", "Z"),
             "endDateTime": end.isoformat().replace("+00:00", "Z"),
-            "$top": "20",
+            "$top": str(_CALENDAR_PAGE_SIZE),
             "$select": "id,subject,start,end,location,isAllDay,organizer,isOrganizer,seriesMasterId,type",
             "$orderby": "start/dateTime",
         },
-        extra_headers={"Prefer": f'outlook.timezone="{get_user_win_tz()}"'},
+        extra_headers=headers,
     )
-    return {
-        "events": [
-            {
-                "id": e.get("id", ""),
-                "subject": e.get("subject", "(no subject)"),
-                "start": fmt_cal_time(e.get("start", {}).get("dateTime", "")),
-                "end": fmt_cal_time(e.get("end", {}).get("dateTime", "")),
-                "location": e.get("location", {}).get("displayName", ""),
-                "isAllDay": e.get("isAllDay", False),
-                "organizer": e.get("organizer", {})
-                .get("emailAddress", {})
-                .get("name", ""),
-                "isOrganizer": e.get("isOrganizer", False),
-                "seriesMasterId": e.get("seriesMasterId", ""),
-                "type": e.get("type", ""),
-            }
-            for e in events.get("value", [])
-        ]
-    }
+    raw = list(page.get("value", []))
+    while page.get("@odata.nextLink") and len(raw) < _CALENDAR_MAX_EVENTS:
+        page = gc.get_absolute(page["@odata.nextLink"], extra_headers=headers)
+        raw.extend(page.get("value", []))
+    events = [
+        {
+            "id": e.get("id", ""),
+            "subject": e.get("subject", "(no subject)"),
+            "date": e.get("start", {}).get("dateTime", "")[:10],
+            "start": fmt_cal_time(e.get("start", {}).get("dateTime", "")),
+            "end": fmt_cal_time(e.get("end", {}).get("dateTime", "")),
+            "location": e.get("location", {}).get("displayName", ""),
+            "isAllDay": e.get("isAllDay", False),
+            "organizer": e.get("organizer", {})
+            .get("emailAddress", {})
+            .get("name", ""),
+            "isOrganizer": e.get("isOrganizer", False),
+            "seriesMasterId": e.get("seriesMasterId", ""),
+            "type": e.get("type", ""),
+        }
+        for e in raw
+    ]
+    result = {"events": events}
+    if page.get("@odata.nextLink"):
+        last = events[-1]["date"] if events else ""
+        result["truncated"] = True
+        result["note"] = (
+            f"Only the first {len(events)} events are shown (up to {last}); later days are missing. "
+            "Read the remaining days with a later date and a smaller days value."
+        )
+    return result
+
+
+_CALENDAR_PAGE_SIZE = 100
+_CALENDAR_MAX_EVENTS = 200
 
 
 def _tool_draft_calendar_event(
