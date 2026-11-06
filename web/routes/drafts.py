@@ -12,6 +12,7 @@ so email.py contains only email-read/inbox/send routes.
 from __future__ import annotations
 
 import asyncio
+import re
 from functools import partial
 from urllib.parse import quote
 _eid = lambda mid: quote(mid, safe="")  # encode Graph resource ID for path segment
@@ -225,6 +226,46 @@ def _apply_jira_edits(draft: dict, body: dict | None) -> None:
 
 _CALENDAR_EDIT_MAX_LEN = {"subject": 255, "body": 32768}
 
+_REPLY_RECIPIENT_MAX = 50
+_EMAIL_ADDRESS_RE = re.compile(r"^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$")
+
+
+def _reply_recipient_edits(body: dict | None) -> dict:
+    """Validates the To and CC edits made on a reply card and returns them as to_override / cc_override."""
+    edits = (body or {}).get("edited_recipients")
+    if edits is None:
+        return {}
+    if not isinstance(edits, dict):
+        raise HTTPException(status_code=400, detail="Edited recipients must be an object.")
+    unknown = sorted(set(edits) - {"to", "cc"})
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"Field(s) not editable on a reply: {', '.join(unknown)}.")
+    out: dict = {}
+    for field, raw in edits.items():
+        if not isinstance(raw, list) or not all(isinstance(a, str) for a in raw):
+            raise HTTPException(status_code=400, detail=f"Edited {field} must be a list of email addresses.")
+        addresses: list[str] = []
+        for address in (a.strip() for a in raw):
+            if not _EMAIL_ADDRESS_RE.match(address):
+                raise HTTPException(status_code=400, detail=f"'{address}' is not a valid email address.")
+            if address.lower() not in (a.lower() for a in addresses):
+                addresses.append(address)
+        if len(addresses) > _REPLY_RECIPIENT_MAX:
+            raise HTTPException(status_code=400, detail=f"A reply can have up to {_REPLY_RECIPIENT_MAX} {field.upper()} recipients.")
+        if field == "to" and not addresses:
+            raise HTTPException(status_code=400, detail="A reply needs at least one To recipient.")
+        out[f"{field}_override"] = addresses
+    return out
+
+
+def _reply_recipient_patch(params: dict) -> dict:
+    """Graph fields for the To/CC the user changed on the card; empty when they left the recipients alone."""
+    patch: dict = {}
+    for field, graph_field in (("to", "toRecipients"), ("cc", "ccRecipients")):
+        if f"{field}_override" in params:
+            patch[graph_field] = [{"emailAddress": {"address": a}} for a in params[f"{field}_override"]]
+    return patch
+
 
 def _calendar_edits(body: dict | None) -> dict:
     """Validates the title and message edits made on a meeting draft card and returns them as params."""
@@ -359,6 +400,8 @@ async def approve_draft(draft_id: str, body: dict = None):
             p.update(_calendar_edits(body))
         elif dtype != "calendar-update":
             _apply_jira_edits(draft, body)
+        if dtype == "email-reply":
+            p.update(_reply_recipient_edits(body))
 
         # â”€â”€ Email â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         if dtype == "email-reply":
@@ -385,7 +428,7 @@ async def approve_draft(draft_id: str, body: dict = None):
             ).get("content", "")
             gc.patch(
                 f"/me/messages/{_eid(draft_msg_id)}",
-                {"body": {"contentType": "HTML", "content": body_html + quoted}},
+                {"body": {"contentType": "HTML", "content": body_html + quoted}, **_reply_recipient_patch(p)},
             )
             gc.post(f"/me/messages/{_eid(draft_msg_id)}/send", {})
             delivery_result = {"ok": True, "action": action.replace("create", "").lower()}
@@ -1161,6 +1204,7 @@ async def open_draft_in_outlook(draft_id: str, body: dict = None):
         )
 
     calendar_edits = _calendar_edits(body) if dtype == "calendar-event" else {}
+    recipient_edits = _reply_recipient_edits(body) if dtype == "email-reply" else {}
 
     claimed = claim_for_handoff(draft_id)
     if claimed is not None:
@@ -1181,6 +1225,7 @@ async def open_draft_in_outlook(draft_id: str, body: dict = None):
         raise HTTPException(status_code=404, detail="Draft not found or expired.")
     p = claimed["params"]
     p.update(calendar_edits)
+    p.update(recipient_edits)
 
     if dtype == "calendar-update":
         link = p.get("web_link") or ""
@@ -1262,7 +1307,10 @@ async def open_draft_in_outlook(draft_id: str, body: dict = None):
             msg_id = reply_draft.get("id", "")
             body_html = _email_fragment(p, "body")
             quoted = (gc.get(f"/me/messages/{_eid(msg_id)}", {"$select": "body"}).get("body") or {}).get("content", "")
-            gc.patch(f"/me/messages/{_eid(msg_id)}", {"body": {"contentType": "HTML", "content": body_html + quoted}})
+            gc.patch(
+                f"/me/messages/{_eid(msg_id)}",
+                {"body": {"contentType": "HTML", "content": body_html + quoted}, **_reply_recipient_patch(p)},
+            )
 
         else:  # email-forward
             try:

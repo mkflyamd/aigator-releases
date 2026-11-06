@@ -6774,6 +6774,32 @@ button[data-default-action]:focus:not(:disabled)::after {
   min-width: 0;
   overflow-wrap: break-word;
 }
+.gcc-recipient-val {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+.gcc-recipient-add {
+  padding: 0;
+  font: inherit;
+  font-size: 0.74rem;
+  color: var(--accent);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+.gcc-recipient-add:hover {
+  text-decoration: underline;
+}
+.gcc-recipients-locked .ag-chip-remove,
+.gcc-recipients-locked .gcc-recipient-add,
+.gcc-recipients-locked .ag-add-input {
+  display: none;
+}
+.gcc-recipients-locked .ag-chip-name {
+  padding-right: 10px;
+}
 
 .gcc-fields {
   display: flex;

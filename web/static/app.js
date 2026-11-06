@@ -12329,6 +12329,182 @@ function _initDraftRichEditor(editor, capabilities) {
   document.addEventListener('selectionchange', onSelectionChange);
 }
 
+const _REPLY_RECIPIENT_MAX = 50;
+const _REPLY_EMAIL_RE = /^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/;
+
+function _buildReplyRecipientRows(data) {
+  const clean = (list) =>
+    (Array.isArray(list) ? list : [])
+      .map((p) => ({ name: p.name || '', email: String(p.email || '').trim() }))
+      .filter((p) => p.email);
+  const lists = { to: clean(data.to_people), cc: clean(data.cc_people) };
+  const keyOf = (p) => p.email.toLowerCase();
+  const original = { to: lists.to.map(keyOf).sort(), cc: lists.cc.map(keyOf).sort() };
+  const listed = (email) =>
+    ['to', 'cc'].some((f) => lists[f].some((p) => keyOf(p) === email.toLowerCase()));
+  const count = () => lists.to.length + lists.cc.length;
+  const refreshers = [];
+
+  function buildRow(field, label) {
+    const row = document.createElement('div');
+    row.className = 'gcc-meta-row gcc-recipient-row';
+    const key = document.createElement('span');
+    key.className = 'gcc-meta-key';
+    key.textContent = label;
+    const val = document.createElement('span');
+    val.className = 'gcc-meta-val gcc-recipient-val';
+    const chips = document.createElement('span');
+    chips.className = 'ag-chip-list';
+    const addBar = document.createElement('div');
+    addBar.className = 'ag-add';
+    const addLink = document.createElement('button');
+    addLink.type = 'button';
+    addLink.className = 'gcc-recipient-add';
+    addLink.textContent = `+ Add to ${label}`;
+    const addInput = document.createElement('input');
+    addInput.type = 'text';
+    addInput.className = 'ag-add-input hidden';
+    addInput.placeholder = 'Name or email';
+    const suggestions = document.createElement('div');
+    suggestions.className = 'ag-add-suggestions hidden';
+    addBar.append(addLink, addInput, suggestions);
+    val.append(chips, addBar);
+    row.append(key, val);
+
+    function render() {
+      chips.replaceChildren();
+      lists[field].forEach((person) => {
+        const chip = document.createElement('span');
+        chip.className = 'ag-chip';
+        const name = document.createElement('span');
+        name.className = 'ag-chip-name';
+        name.textContent = person.name || person.email;
+        name.title = person.email;
+        chip.appendChild(name);
+        if (field === 'cc' || lists.to.length > 1) {
+          const remove = document.createElement('button');
+          remove.type = 'button';
+          remove.className = 'ag-chip-remove';
+          remove.textContent = '×';
+          remove.title = `Remove ${person.name || person.email} from ${label}`;
+          remove.setAttribute('aria-label', remove.title);
+          remove.addEventListener('click', () => {
+            lists[field].splice(lists[field].indexOf(person), 1);
+            refreshers.forEach((fn) => fn());
+          });
+          chip.appendChild(remove);
+        }
+        chips.appendChild(chip);
+      });
+    }
+    refreshers.push(render);
+
+    function addPerson(person) {
+      const email = String(person.email || '').trim();
+      if (!_REPLY_EMAIL_RE.test(email) || listed(email)) return;
+      if (count() >= _REPLY_RECIPIENT_MAX) {
+        _showConnectivityToast(
+          `A reply can have up to ${_REPLY_RECIPIENT_MAX} recipients.`,
+          'warn',
+        );
+        return;
+      }
+      lists[field].push({ name: person.name || '', email });
+      refreshers.forEach((fn) => fn());
+    }
+
+    let searchSeq = 0;
+    let addTimer = null;
+    function closeAdd() {
+      searchSeq++;
+      clearTimeout(addTimer);
+      addInput.value = '';
+      addInput.classList.add('hidden');
+      suggestions.classList.add('hidden');
+      suggestions.replaceChildren();
+      addLink.classList.remove('hidden');
+    }
+    function showSuggestions(people) {
+      suggestions.replaceChildren();
+      people
+        .filter((p) => p.email && !listed(p.email))
+        .slice(0, 6)
+        .forEach((p) => {
+          const b = document.createElement('button');
+          b.type = 'button';
+          b.className = 'ag-suggestion';
+          b.textContent = `${p.name || p.email} · ${p.email}`;
+          b.addEventListener('click', () => {
+            closeAdd();
+            addPerson(p);
+          });
+          suggestions.appendChild(b);
+        });
+      suggestions.classList.toggle('hidden', !suggestions.childElementCount);
+    }
+    addLink.addEventListener('click', () => {
+      addLink.classList.add('hidden');
+      addInput.classList.remove('hidden');
+      addInput.focus();
+    });
+    addInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') closeAdd();
+      else if (e.key === 'Enter') {
+        e.preventDefault();
+        const typed = addInput.value.trim();
+        if (_REPLY_EMAIL_RE.test(typed)) {
+          closeAdd();
+          addPerson({ email: typed });
+        } else {
+          suggestions.querySelector('button')?.click();
+        }
+      }
+    });
+    addInput.addEventListener('input', () => {
+      clearTimeout(addTimer);
+      const q = addInput.value.trim();
+      const mine = ++searchSeq;
+      if (q.length < 2) {
+        suggestions.classList.add('hidden');
+        suggestions.replaceChildren();
+        return;
+      }
+      addTimer = setTimeout(async () => {
+        const note = document.createElement('div');
+        note.className = 'ag-suggestion-note';
+        note.textContent = 'Searching…';
+        suggestions.replaceChildren(note);
+        suggestions.classList.remove('hidden');
+        try {
+          const res = await fetch(`/api/people/search?q=${encodeURIComponent(q)}`);
+          const people = res.ok ? (await res.json()).people || [] : [];
+          if (mine === searchSeq) showSuggestions(people);
+        } catch {
+          if (mine === searchSeq) suggestions.classList.add('hidden');
+        }
+      }, 200);
+    });
+    render();
+    return row;
+  }
+
+  const rows = [buildRow('to', 'To'), buildRow('cc', 'CC')];
+  return {
+    rows,
+    edits() {
+      const out = {};
+      ['to', 'cc'].forEach((f) => {
+        const now = lists[f].map(keyOf).sort();
+        if (now.join('\n') !== original[f].join('\n')) out[f] = lists[f].map((p) => p.email);
+      });
+      return Object.keys(out).length ? out : null;
+    },
+    lock(locked = true) {
+      rows.forEach((row) => row.classList.toggle('gcc-recipients-locked', locked));
+    },
+  };
+}
+
 function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persist = true } = {}) {
   const draftId = data.draft_id;
   if (persist) _storeTabDraft(ownerTabId, type, data);
@@ -12567,6 +12743,8 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
   if (draftId) card.dataset.draftId = draftId;
   card.dataset.draftType = type;
   card.dataset.ownerTabId = ownerTabId || '';
+  const replyRecipients =
+    type === 'email-reply' && Array.isArray(data.to_people) ? _buildReplyRecipientRows(data) : null;
   card.innerHTML = `
     <div class="bubble card-bubble">
       <div class="gator-compose-card gator-draft-card">
@@ -12589,8 +12767,12 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
             config.service === 'email'
               ? `
             <div class="gcc-meta-rows">
-              <div class="gcc-meta-row"><span class="gcc-meta-key">To</span><span class="gcc-meta-val">${escapeHtml(data.to || '')}</span></div>
-              ${data.cc ? `<div class="gcc-meta-row"><span class="gcc-meta-key">CC</span><span class="gcc-meta-val">${escapeHtml(data.cc)}</span></div>` : ''}
+              ${
+                replyRecipients
+                  ? '<div class="gcc-recipient-slot"></div>'
+                  : `<div class="gcc-meta-row"><span class="gcc-meta-key">To</span><span class="gcc-meta-val">${escapeHtml(data.to || '')}</span></div>
+              ${data.cc ? `<div class="gcc-meta-row"><span class="gcc-meta-key">CC</span><span class="gcc-meta-val">${escapeHtml(data.cc)}</span></div>` : ''}`
+              }
               ${data.subject ? `<div class="gcc-meta-row"><span class="gcc-meta-key">Subject</span><span class="gcc-meta-val"><strong>${escapeHtml(data.subject)}</strong></span></div>` : ''}
             </div>
           `
@@ -12633,6 +12815,12 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
       </div>
     </div>`;
 
+  const recipientSlot = card.querySelector('.gcc-recipient-slot');
+  if (recipientSlot && replyRecipients) recipientSlot.replaceWith(...replyRecipients.rows);
+  const recipientEdits = () => {
+    const edits = replyRecipients?.edits();
+    return edits ? { edited_recipients: edits } : {};
+  };
   const approveBtn = card.querySelector('.gcc-approve-btn');
   const editLink = card.querySelector('.gcc-edit-link');
   const editArea = card.querySelector('.gcc-edit-area');
@@ -12753,6 +12941,7 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
 
   approveBtn?.addEventListener('click', async () => {
     approveBtn.disabled = true;
+    replyRecipients?.lock();
     if (openCalendarBtn) openCalendarBtn.disabled = true;
     approveBtn.textContent = _applyWording ? 'Applying\u2026' : 'Sending\u2026';
     try {
@@ -12769,6 +12958,7 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
         ...(richEditor ? { edited_html: editArea.innerHTML } : {}),
         ...(editedText !== null ? { edited_message: editedText } : {}),
         ...(Object.keys(editedFields).length ? { edited_fields: editedFields } : {}),
+        ...recipientEdits(),
       });
       let res = await fetch('/api/drafts/' + draftId + '/approve', {
         method: 'POST',
@@ -12832,6 +13022,7 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
     } catch (e) {
       approveBtn.textContent = 'Failed \u2014 retry?';
       approveBtn.disabled = false;
+      replyRecipients?.lock(false);
       if (openCalendarBtn) openCalendarBtn.disabled = false;
       approveBtn.classList.add('gcc-failed');
       if (e && e.message) {
@@ -12893,11 +13084,13 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
           // so edits aren't silently dropped when opening in Outlook instead
           // of sending from Gator (a handed-off draft permanently disables
           // Approve, so there is no later chance to apply them).
-          const outlookEdit = editArea?.classList.contains('gcc-rich-editor')
+          const bodyEdit = editArea?.classList.contains('gcc-rich-editor')
             ? { edited_html: editArea.innerHTML }
             : editArea
               ? { edited_message: editArea.value || editArea.textContent || '' }
               : null;
+          const outlookEdit =
+            bodyEdit || replyRecipients?.edits() ? { ...bodyEdit, ...recipientEdits() } : null;
           const postOpen = () =>
             fetch('/api/drafts/' + draftId + '/open-in-outlook', {
               method: 'POST',
@@ -12920,6 +13113,7 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
             throw new Error(typeof err.detail === 'string' ? err.detail : 'HTTP ' + res.status);
           }
           const { url } = await res.json();
+          replyRecipients?.lock();
           // Enter the native-pane state first so tpState, the divider, and the
           // visible Expand Gator button stay in sync. This may navigate Outlook
           // home when it is already active, so it must happen before loading the

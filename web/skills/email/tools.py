@@ -300,6 +300,48 @@ def _tool_send_email(
     )
 
 
+def _people_of(recipients) -> list[dict]:
+    people = []
+    for r in recipients or []:
+        address = (r.get("emailAddress") or {}).get("address", "")
+        if address:
+            people.append({"name": (r.get("emailAddress") or {}).get("name", ""), "email": address})
+    return people
+
+
+def _my_email_address() -> str:
+    from .._m365.helpers import get_cached_me, get_graph_client
+
+    try:
+        me = get_cached_me(get_graph_client())
+    except Exception:
+        return ""
+    return (me.get("mail") or me.get("userPrincipalName") or "").strip().lower()
+
+
+def _reply_recipients(orig: dict, reply_all: bool, me: str) -> tuple[list[dict], list[dict]]:
+    """The To and CC Outlook gives a reply: the sender (or, on your own message, its recipients), minus you."""
+    sender = {"name": orig["from_name"], "email": orig["from_addr"]}
+    me = (me or "").lower()
+    if me and sender["email"].lower() == me:
+        to, cc = orig["to_people"], orig["cc_people"] if reply_all else []
+    else:
+        to = [sender, *orig["to_people"]] if reply_all else [sender]
+        cc = orig["cc_people"] if reply_all else []
+    seen = {me}
+
+    def keep(people):
+        kept = []
+        for p in people:
+            key = p["email"].lower()
+            if key and key not in seen:
+                seen.add(key)
+                kept.append(p)
+        return kept
+
+    return keep(to), keep(cc)
+
+
 def _fetch_original_email_context(message_id: str) -> dict:
     """Fetch subject + sender from original email for reply/forward context."""
     from .._m365.helpers import get_graph_client
@@ -320,6 +362,8 @@ def _fetch_original_email_context(message_id: str) -> dict:
                 r.get("emailAddress", {}).get("address", "")
                 for r in msg.get("ccRecipients", [])
             ],
+            "to_people": _people_of(msg.get("toRecipients")),
+            "cc_people": _people_of(msg.get("ccRecipients")),
         }
     except Exception as ex:
         import logging
@@ -333,6 +377,8 @@ def _fetch_original_email_context(message_id: str) -> dict:
             "from_name": "",
             "to_recipients": [],
             "cc_recipients": [],
+            "to_people": [],
+            "cc_people": [],
         }
 
 
@@ -344,6 +390,7 @@ def _tool_reply_email(message_id: str, body: str, reply_all: bool = False) -> di
     orig = _fetch_original_email_context(message_id)
     subject = f"Re: {orig['subject']}" if orig["subject"] else ""
     body_html = rich.normalize(body)
+    to_people, cc_people = _reply_recipients(orig, reply_all, _my_email_address())
     draft_id = create_draft(
         draft_type="email-reply",
         params={"message_id": message_id, "body": body, "body_html": body_html, "reply_all": reply_all},
@@ -351,6 +398,8 @@ def _tool_reply_email(message_id: str, body: str, reply_all: bool = False) -> di
             "action": action,
             "subject": subject,
             "from": orig["from_name"] or orig["from_addr"],
+            "to": [p["email"] for p in to_people],
+            "cc": [p["email"] for p in cc_people],
         },
     )
     return {
@@ -360,8 +409,11 @@ def _tool_reply_email(message_id: str, body: str, reply_all: bool = False) -> di
             "action": action,
             "message_id": message_id,
             "subject": subject,
-            "to": orig["from_addr"],
-            "to_names": orig["from_name"],
+            "to": ", ".join(p["email"] for p in to_people),
+            "to_names": ", ".join(p["name"] or p["email"] for p in to_people),
+            "cc": ", ".join(p["email"] for p in cc_people),
+            "to_people": to_people,
+            "cc_people": cc_people,
             "body": body,
             "body_snippet": body[:200],
             **rich.rich_payload("email", body_html),
