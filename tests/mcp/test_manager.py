@@ -1093,3 +1093,19 @@ def test_args_hint_masks_value_following_password_flag():
     assert out[3] == "--token"
     assert out[4] != "tok-abc"
     assert "tok-abc" not in out[4]
+
+
+def test_normalize_tools_keeps_server_declared_hints():
+    from mcp.manager import _normalize_tools
+    raw = [
+        {"name": "readIt", "inputSchema": {"type": "object"},
+         "annotations": {"title": "Read it", "readOnlyHint": True, "destructiveHint": False}},
+        {"name": "dropIt", "annotations": {"destructiveHint": True, "readOnlyHint": False, "extra": "x"}},
+        {"name": "plain"},
+        {"name": "junk", "annotations": {"readOnlyHint": "yes"}},
+    ]
+    out = {t["name"]: t for t in _normalize_tools(raw)}
+    assert out["readIt"]["annotations"] == {"readOnlyHint": True, "destructiveHint": False}
+    assert out["dropIt"]["annotations"] == {"destructiveHint": True, "readOnlyHint": False}
+    assert "annotations" not in out["plain"]
+    assert "annotations" not in out["junk"]

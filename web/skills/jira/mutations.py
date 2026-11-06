@@ -23,6 +23,8 @@ import hashlib
 from pathlib import Path
 import tempfile
 import json
+import logging
+import re
 import time
 
 from config import load_config
@@ -39,6 +41,7 @@ _target_selection_handles: dict[str, tuple[str, str, float]] = {}
 _TARGET_SELECTION_TTL_SECONDS = 5 * 60
 _staged_attachments: dict[str, dict] = {}
 _attachment_lock = RLock()
+_log = logging.getLogger(__name__)
 _probe_cache: dict[tuple, tuple[bool, float]] = {}
 _probe_cache_lock = RLock()
 _PROBE_CACHE_TTL = 60.0
@@ -492,10 +495,8 @@ def discover_rovo_targets() -> list[JiraTarget]:
         client = None
         try:
             client = _client_for(connection, pooled=False)
-            raw = client.call(resource_tool, {})
-            payload = json.loads(raw) if isinstance(raw, str) else raw
-            resources = payload.get("resources", payload) if isinstance(payload, dict) else payload
-            if not isinstance(resources, list):
+            resources = _accessible_resources(client.call(resource_tool, {}))
+            if resources is None:
                 continue
             # Mark this connection as successfully contacted. Its stored targets
             # will be replaced with what discovery returned (even if empty —
@@ -601,15 +602,27 @@ def selected_target_for_context(context_id: str) -> JiraTarget | None:
 
 
 def resolve_target_for_context(issue_or_url: str = "", context_id: str = "", for_write: bool = False) -> JiraTarget:
-    """Resolve a target using a UI-owned tab selection when one exists."""
+    """Resolve a target using a UI-owned tab selection when one exists.
+
+    A read given a full URL goes to the site that URL names: the user pointed
+    at it explicitly, so an earlier tab selection must not redirect the read.
+    Writes keep the selection and fail closed if the URL names another site.
+    """
     selected = selected_target_for_context(context_id)
+    if selected is not None and not for_write and (issue_or_url or "").startswith(("http://", "https://")):
+        matches = [t for t in available_targets() if _url_matches_target(issue_or_url, t)]
+        if len(matches) == 1:
+            return matches[0]
     if selected is not None:
         return resolve_jira_target(issue_or_url, target_id=selected.id, for_write=for_write)
     return resolve_jira_target(issue_or_url, for_write=for_write, _context_id=context_id)
 
 
-def _probe_project(project_key: str, target: JiraTarget, context_id: str = "") -> bool:
-    """Return True if the project exists on target. Never raises; cached like _probe_target."""
+def _probe_project(project_key: str, target: JiraTarget, context_id: str = "") -> bool | None:
+    """True/False if the project does/does not exist on target, None if the probe failed.
+
+    Never raises. Only definite answers are cached, so a transient failure is not remembered.
+    """
     cache_key = (context_id or "", f"project:{project_key}", target.id)
     with _probe_cache_lock:
         cached = _probe_cache.get(cache_key)
@@ -626,7 +639,10 @@ def _probe_project(project_key: str, target: JiraTarget, context_id: str = "") -
         else:
             data = api.jira_api_for_target(target, "GET", f"project/{project_key}")
             found = str(data.get("key", "")).upper() == project_key
-    except Exception:
+    except Exception as exc:
+        if not str(exc).startswith("HTTP 404"):
+            _log.warning("Jira project probe for %s on %s failed", project_key, target.base_url, exc_info=True)
+            return None
         found = False
     with _probe_cache_lock:
         _probe_cache[cache_key] = (found, time.monotonic())
@@ -651,7 +667,7 @@ def resolve_target_for_project(project: str, context_id: str = "") -> JiraTarget
     key = (project or "").strip().upper()
     if not key:
         raise JiraTargetResolutionError("A Jira project key is required to choose the Jira site.")
-    hits = [t for t in targets if _probe_project(key, t, context_id)]
+    hits = [t for t in targets if _probe_project(key, t, context_id) is True]
     if len(hits) == 1:
         return hits[0]
     if not hits:
@@ -733,7 +749,138 @@ _ROVO_OPERATION_TO_TOOL = {
     "get_projects": "getVisibleJiraProjects",
     "get_issue_types": "getJiraProjectIssueTypesMetadata",
     "get_create_meta": "getJiraIssueTypeMetaWithFields",
+    "search_issues": "searchJiraIssuesUsingJql",
+    "list_transitions": "listJiraIssueTransitions",
 }
+
+
+# Gator's operations are fixed; the Rovo tool that serves each is not. The
+# names above are Rovo v1's. Atlassian renamed some for v2 and moved others
+# behind discover/executeRead/executeWrite, so each operation lists the
+# alternative names and Gator uses whichever the connection actually offers.
+_ROVO_OPERATION_ALIASES = {
+    "add_comment": ("addOrEditJiraIssueComment",),
+    "create_link": ("createJiraIssueLink",),
+    "get_projects": ("listJiraProjects",),
+    "get_issue_types": ("listJiraProjectIssueTypesMetadata",),
+}
+_ROVO_WRITE_OPERATIONS = frozenset({"create_issue", "update_issue", "add_comment", "transition_issue", "create_link"})
+# v1 argument name -> v2 argument name, applied only when the resolved tool's
+# own schema lacks the v1 name.
+_ROVO_ARGUMENT_SYNONYMS = {
+    "create_issue": {"issueTypeName": "issueType", "assignee_account_id": "assignee"},
+    "create_link": {"type": "linkType"},
+    "get_projects": {"searchString": "query"},
+}
+# v2 returns a compact issue by default, which omits components and other
+# fields a write is verified against.
+_ROVO_DEFAULT_ARGUMENTS = {"get_issue": {"view": "full"}}
+
+
+def _rovo_tool_candidates(operation: str) -> tuple[str, ...]:
+    return (_ROVO_OPERATION_TO_TOOL[operation], *_ROVO_OPERATION_ALIASES.get(operation, ()))
+
+
+def _parse_rovo_json(raw: object) -> object:
+    """Leading JSON document of a Rovo reply; ``discover`` appends a plain-text trailer after it."""
+    if not isinstance(raw, str):
+        return raw
+    value, _ = json.JSONDecoder().raw_decode(raw.lstrip())
+    return value
+
+
+def _unwrap_rovo_data(value: object) -> object:
+    if isinstance(value, dict) and set(value) == {"data"}:
+        return value["data"]
+    return value
+
+
+def _accessible_resources(raw: object) -> list[dict] | None:
+    """Accessible Jira sites from either Rovo response shape, each with an ``id``."""
+    parsed = _unwrap_rovo_data(_parse_rovo_json(raw))
+    resources = parsed.get("resources", parsed) if isinstance(parsed, dict) else parsed
+    if not isinstance(resources, list):
+        return None
+    return [
+        {**item, "id": str(item.get("id") or item.get("cloudId") or "")}
+        for item in resources if isinstance(item, dict)
+    ]
+
+
+def _tool_properties(tool: dict) -> dict[str, dict]:
+    schema = tool.get("input_schema") or tool.get("inputSchema") or {}
+    properties = schema.get("properties") if isinstance(schema, dict) else None
+    if not isinstance(properties, dict):
+        return {}
+    return {str(k): v if isinstance(v, dict) else {} for k, v in properties.items()}
+
+
+def _hints_contradict(operation: str, hints: object) -> bool:
+    """True when the server's own hints say this tool is the wrong kind of call."""
+    if not isinstance(hints, dict):
+        return False
+    if hints.get("destructiveHint") is True:
+        return True
+    read_only = hints.get("readOnlyHint")
+    return isinstance(read_only, bool) and read_only == (operation in _ROVO_WRITE_OPERATIONS)
+
+
+def _resolve_rovo_tool(operation: str, cached: dict, client) -> tuple[str, dict[str, dict], bool]:
+    """Return (tool name, argument schemas by name, via executeRead/executeWrite).
+
+    A directly exposed tool is used when present. Otherwise the connection's
+    discover tool is asked, and the operation is accepted only if the server
+    puts it in the execute tier that matches what Gator means to do.
+    """
+    candidates = _rovo_tool_candidates(operation)
+    unsupported = JiraTargetResolutionError(f"The selected Rovo connection does not support {operation.replace('_', ' ')}.")
+    for name in candidates:
+        tool = cached.get(name)
+        if tool is None:
+            continue
+        if _hints_contradict(operation, tool.get("annotations")):
+            raise JiraTargetResolutionError(
+                f"Rovo tool {name} is not a {'write' if operation in _ROVO_WRITE_OPERATIONS else 'read'} operation "
+                f"according to the server, so Gator will not use it for {operation.replace('_', ' ')}."
+            )
+        return name, _tool_properties(tool), False
+    tier = "executeWrite" if operation in _ROVO_WRITE_OPERATIONS else "executeRead"
+    if "discover" not in cached or tier not in cached:
+        raise unsupported
+    for name in candidates:
+        query = re.sub(r"(?<!^)(?=[A-Z])", " ", name).lower()
+        raw = client.call("discover", {"query": query})
+        found = _unwrap_rovo_data(_parse_rovo_json(raw))
+        for entry in (found.get("results", []) if isinstance(found, dict) else []):
+            if not isinstance(entry, dict) or entry.get("name") != name:
+                continue
+            if entry.get("executeTool") != tier:
+                raise JiraTargetResolutionError(
+                    f"Rovo lists {name} under {entry.get('executeTool')}, not {tier}, so Gator will not use it for "
+                    f"{operation.replace('_', ' ')}."
+                )
+            inputs = {str(i.get("name")): i for i in entry.get("inputs", []) if isinstance(i, dict)}
+            return name, inputs, True
+    raise unsupported
+
+
+def _adapt_rovo_arguments(operation: str, arguments: dict | None, properties: dict[str, dict]) -> dict:
+    payload = dict(arguments or {})
+    if properties:
+        # A value the tool's own schema enum rules out (v1 took
+        # responseContentFormat "adf"; v2 only markdown/html) is dropped so the
+        # tool's default applies instead of the whole call failing validation.
+        for key in list(payload):
+            allowed = properties.get(key, {}).get("enum")
+            if isinstance(allowed, list) and payload[key] not in allowed:
+                del payload[key]
+        for old, new in _ROVO_ARGUMENT_SYNONYMS.get(operation, {}).items():
+            if old in payload and old not in properties and new in properties:
+                payload[new] = payload.pop(old)
+        for key, value in _ROVO_DEFAULT_ARGUMENTS.get(operation, {}).items():
+            if key in properties:
+                payload.setdefault(key, value)
+    return payload
 
 
 def rovo_jira_call(target: JiraTarget, operation: str, arguments: dict) -> object:
@@ -746,34 +893,37 @@ def rovo_jira_call(target: JiraTarget, operation: str, arguments: dict) -> objec
     """
     if target.adapter != "rovo-mcp":
         raise JiraTargetResolutionError("This operation requires a Rovo-backed Jira target.")
-    tool_name = _ROVO_OPERATION_TO_TOOL.get(operation)
-    if not tool_name:
+    if operation not in _ROVO_OPERATION_TO_TOOL:
         raise JiraTargetResolutionError(f"Rovo does not have a verified adapter for {operation!r}.")
     from mcp.manager import _client_for, _load_connections
     connection = next((c for c in _load_connections() if c.get("id") == target.connection_id and c.get("enabled", True)), None)
     if connection is None:
         raise JiraTargetResolutionError("The selected Rovo connection is no longer available. Reconnect it and re-draft the action.")
-    cached = connection.get("cached_tools", []) or []
-    names = {str(tool.get("name", "")) for tool in cached if isinstance(tool, dict)}
-    if tool_name not in names or "getAccessibleAtlassianResources" not in names:
+    cached = {str(tool.get("name", "")): tool for tool in connection.get("cached_tools", []) or [] if isinstance(tool, dict)}
+    execute_tool = "executeWrite" if operation in _ROVO_WRITE_OPERATIONS else "executeRead"
+    served_directly = any(name in cached for name in _rovo_tool_candidates(operation))
+    served_by_discovery = "discover" in cached and execute_tool in cached
+    if "getAccessibleAtlassianResources" not in cached or not (served_directly or served_by_discovery):
         raise JiraTargetResolutionError(f"The selected Rovo connection does not support {operation.replace('_', ' ')}.")
     client = None
     try:
         client = _client_for(connection, pooled=False)
-        raw_resources = client.call("getAccessibleAtlassianResources", {})
-        parsed = json.loads(raw_resources) if isinstance(raw_resources, str) else raw_resources
-        resources = parsed.get("resources", parsed) if isinstance(parsed, dict) else parsed
-        if not isinstance(resources, list) or not any(
-            isinstance(item, dict) and str(item.get("id", "")) == target.resource_id
+        resources = _accessible_resources(client.call("getAccessibleAtlassianResources", {}))
+        if not any(
+            str(item.get("id", "")) == target.resource_id
             and _canonical_base_url(str(item.get("url", ""))) == target.base_url
-            for item in resources
+            for item in resources or []
         ):
             raise JiraTargetResolutionError("The selected Jira site is no longer accessible through this Rovo connection. Reconnect and re-draft.")
-        payload = dict(arguments or {})
+        tool_name, properties, via_execute = _resolve_rovo_tool(operation, cached, client)
+        payload = _adapt_rovo_arguments(operation, arguments, properties)
         payload["cloudId"] = target.resource_id
-        raw = client.call(tool_name, payload)
+        if via_execute:
+            raw = client.call(execute_tool, {"cloudId": target.resource_id, "name": tool_name, "inputs": payload})
+        else:
+            raw = client.call(tool_name, payload)
         try:
-            return json.loads(raw) if isinstance(raw, str) else raw
+            return _unwrap_rovo_data(_parse_rovo_json(raw))
         except (TypeError, json.JSONDecodeError):
             return raw
     finally:
@@ -782,6 +932,22 @@ def rovo_jira_call(target: JiraTarget, operation: str, arguments: dict) -> objec
                 client.close()
             except Exception:
                 pass
+
+
+_REST_FIELD_REJECTION = re.compile(r"^HTTP (?:400|422):")
+
+
+def rovo_write_fallback(target: JiraTarget, rest_error: object) -> JiraTarget | None:
+    """Rovo target for the same site when direct REST rejected a write over its fields.
+
+    Only a 400/422 qualifies: Jira applied nothing, so retrying the same
+    approved change cannot duplicate it. Timeouts, 5xx, 401/403 and 404 do not
+    qualify, and the retry never leaves the approved site.
+    """
+
+    if target.adapter != "builtin-rest" or not _REST_FIELD_REJECTION.match(str(rest_error)):
+        return None
+    return next((t for t in _registered_targets() if t.base_url == target.base_url), None)
 
 
 def verified_result(target: JiraTarget, requested: dict, applied: dict, verified: dict) -> dict:

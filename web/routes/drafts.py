@@ -12,6 +12,7 @@ so email.py contains only email-read/inbox/send routes.
 from __future__ import annotations
 
 import asyncio
+import logging
 from functools import partial
 from urllib.parse import quote
 _eid = lambda mid: quote(mid, safe="")  # encode Graph resource ID for path segment
@@ -21,6 +22,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from security import verify_csrf
 
 router = APIRouter()
+_log = logging.getLogger(__name__)
 
 
 _REHYDRATABLE_STATUSES = ("pending", "sending", "handing_off")
@@ -247,6 +249,23 @@ async def _read_issue(target, issue_key: str, fields: str = "*all") -> dict:
     if target.adapter == "rovo-mcp":
         return await _rovo_read_issue(target, issue_key)
     raise HTTPException(status_code=409, detail=f"Unknown adapter {target.adapter!r} on Jira target.")
+
+
+async def _write_with_rovo_fallback(target, rest_write, rovo_write):
+    """Run a direct-REST write; if Jira rejects its fields, retry once through
+    Rovo on the same site. Returns (result, target_used, fallback_note|None)."""
+    from skills.jira.mutations import rovo_write_fallback
+    try:
+        return rest_write(), target, None
+    except RuntimeError as exc:
+        fallback = rovo_write_fallback(target, exc)
+        if fallback is None:
+            raise
+        try:
+            result = await rovo_write(fallback)
+        except Exception as rovo_exc:
+            raise RuntimeError(f"{exc} (retried through Rovo, which also failed: {rovo_exc})") from exc
+        return result, fallback, {"from": target.adapter, "to": fallback.adapter, "reason": str(exc)[:300]}
 
 
 # â”€â”€ approve_draft â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -501,56 +520,72 @@ async def approve_draft(draft_id: str, body: dict = None):
             target = _jira_get_target(p, body)
             is_cloud = target.is_cloud
 
-            fields: dict = {
-                "project": {"key": p["project"]},
-                "summary": p["summary"],
-                "issuetype": {"name": p["issue_type"]},
-            }
-            if p.get("description"):
-                if target.adapter == "rovo-mcp":
-                    fields["description"] = p["description"]
-                else:
-                    try:
-                        fields["description"] = _build_adf_doc(p["description"]) if is_cloud else p["description"]
-                    except Exception:
-                        fields["description"] = p["description"]
-            if p.get("priority"):
-                fields["priority"] = {"name": p["priority"]}
-            if p.get("assignee_account_id"):
-                fields["assignee"] = (
-                    {"accountId": p["assignee_account_id"]} if is_cloud
-                    else {"name": p["assignee_account_id"]}
-                )
-            if p.get("parent_key"):
-                if is_cloud:
-                    fields["parent"] = {"key": p["parent_key"]}
-                else:
-                    fields["customfield_10008"] = {"key": p["parent_key"]}
-            if p.get("extra_fields") and isinstance(p["extra_fields"], dict):
-                fields.update(p["extra_fields"])
+            def _create_fields(for_target) -> dict:
+                built: dict = {
+                    "project": {"key": p["project"]},
+                    "summary": p["summary"],
+                    "issuetype": {"name": p["issue_type"]},
+                }
+                if p.get("description"):
+                    if for_target.adapter == "rovo-mcp":
+                        built["description"] = p["description"]
+                    else:
+                        try:
+                            built["description"] = _build_adf_doc(p["description"]) if for_target.is_cloud else p["description"]
+                        except Exception:
+                            built["description"] = p["description"]
+                if p.get("priority"):
+                    built["priority"] = {"name": p["priority"]}
+                if p.get("assignee_account_id"):
+                    built["assignee"] = (
+                        {"accountId": p["assignee_account_id"]} if for_target.is_cloud
+                        else {"name": p["assignee_account_id"]}
+                    )
+                if p.get("parent_key"):
+                    if for_target.is_cloud:
+                        built["parent"] = {"key": p["parent_key"]}
+                    else:
+                        built["customfield_10008"] = {"key": p["parent_key"]}
+                if p.get("extra_fields") and isinstance(p["extra_fields"], dict):
+                    built.update(p["extra_fields"])
+                return built
 
+            async def _rovo_create(rovo_target, rovo_fields: dict):
+                additional = {k: v for k, v in rovo_fields.items()
+                              if k not in {"project", "issuetype", "summary", "description", "parent", "assignee"}}
+                rovo_args: dict = {
+                    "projectKey": p["project"],
+                    "issueTypeName": p["issue_type"],
+                    "summary": p["summary"],
+                    "contentFormat": "markdown",
+                }
+                if p.get("description"):
+                    rovo_args["description"] = p["description"]
+                if p.get("parent_key"):
+                    rovo_args["parent"] = p["parent_key"]
+                if p.get("assignee_account_id"):
+                    rovo_args["assignee_account_id"] = p["assignee_account_id"]
+                if additional:
+                    rovo_args["additional_fields"] = additional
+                raw = await _run_sync(rovo_jira_call, rovo_target, "create_issue", rovo_args)
+                return raw.get("data", raw) if isinstance(raw, dict) else {}
+
+            fields = _create_fields(target)
+            fallback_note = None
             try:
                 if target.adapter == "rovo-mcp":
-                    additional = {k: v for k, v in fields.items()
-                                  if k not in {"project", "issuetype", "summary", "description", "parent", "assignee"}}
-                    rovo_args: dict = {
-                        "projectKey": p["project"],
-                        "issueTypeName": p["issue_type"],
-                        "summary": p["summary"],
-                        "contentFormat": "markdown",
-                    }
-                    if p.get("description"):
-                        rovo_args["description"] = p["description"]
-                    if p.get("parent_key"):
-                        rovo_args["parent"] = p["parent_key"]
-                    if p.get("assignee_account_id"):
-                        rovo_args["assignee_account_id"] = p["assignee_account_id"]
-                    if additional:
-                        rovo_args["additional_fields"] = additional
-                    raw = await _run_sync(rovo_jira_call, target, "create_issue", rovo_args)
-                    created_obj = raw.get("data", raw) if isinstance(raw, dict) else {}
+                    created_obj = await _rovo_create(target, fields)
                 else:
-                    created_obj = jira_api_for_target(target, "POST", "issue", {"fields": fields})
+                    async def _rovo_create_for(rovo_target):
+                        return await _rovo_create(rovo_target, _create_fields(rovo_target))
+
+                    created_obj, target, fallback_note = await _write_with_rovo_fallback(
+                        target,
+                        lambda: jira_api_for_target(target, "POST", "issue", {"fields": fields}),
+                        _rovo_create_for,
+                    )
+                    if fallback_note:
+                        fields = _create_fields(target)
             except JiraTargetResolutionError as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
             except RuntimeError as exc:
@@ -608,6 +643,8 @@ async def approve_draft(draft_id: str, body: dict = None):
                 "not_verified": rejected,
                 "navigate_to": {"app": "jira", "url": issue_url},
             })
+            if fallback_note:
+                delivery_result["fallback"] = fallback_note
 
         elif dtype == "jira-update":
             from skills.jira.api import jira_api_for_target
@@ -628,10 +665,18 @@ async def approve_draft(draft_id: str, body: dict = None):
             try:
                 # Pre-read: confirms issue still exists on this target before writing.
                 await _read_issue(target, issue_key)
+                fallback_note = None
                 if target.adapter == "rovo-mcp":
                     await _run_sync(rovo_jira_call, target, "update_issue", {"issueIdOrKey": issue_key, "fields": fields})
                 else:
-                    jira_api_for_target(target, "PUT", f"issue/{issue_key}", {"fields": fields})
+                    async def _rovo_update(rovo_target):
+                        return await _run_sync(rovo_jira_call, rovo_target, "update_issue", {"issueIdOrKey": issue_key, "fields": fields})
+
+                    _, target, fallback_note = await _write_with_rovo_fallback(
+                        target,
+                        lambda: jira_api_for_target(target, "PUT", f"issue/{issue_key}", {"fields": fields}),
+                        _rovo_update,
+                    )
                 read_back = await _read_issue(target, issue_key)
             except JiraTargetResolutionError as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -654,6 +699,8 @@ async def approve_draft(draft_id: str, body: dict = None):
                 "not_verified": rejected,
                 "navigate_to": {"app": "jira", "url": target.issue_url(issue_key)},
             })
+            if fallback_note:
+                delivery_result["fallback"] = fallback_note
 
         elif dtype == "jira-watcher":
             from skills.jira.api import jira_api_for_target
@@ -784,20 +831,30 @@ async def approve_draft(draft_id: str, body: dict = None):
             issue_key = str(p.get("issue_key", ""))
             comment_text = str(p.get("comment", ""))
 
+            fallback_note = None
+
+            async def _rovo_comment(rovo_target):
+                raw = await _run_sync(rovo_jira_call, rovo_target, "add_comment", {
+                    "issueIdOrKey": issue_key,
+                    "commentBody": comment_text,
+                    "contentFormat": "markdown",
+                })
+                return raw.get("data", raw) if isinstance(raw, dict) else {}
+
             try:
                 if target.adapter == "rovo-mcp":
-                    raw = await _run_sync(rovo_jira_call, target, "add_comment", {
-                        "issueIdOrKey": issue_key,
-                        "commentBody": comment_text,
-                        "contentFormat": "markdown",
-                    })
-                    created = raw.get("data", raw) if isinstance(raw, dict) else {}
-                    comment_id = str(created.get("id", ""))
-                    read_back = await _read_issue(target, issue_key)
+                    created = await _rovo_comment(target)
                 else:
                     body_value = _build_adf_comment(comment_text) if target.is_cloud else comment_text
-                    created = jira_api_for_target(target, "POST", f"issue/{issue_key}/comment", {"body": body_value})
-                    comment_id = str(created.get("id", ""))
+                    created, target, fallback_note = await _write_with_rovo_fallback(
+                        target,
+                        lambda: jira_api_for_target(target, "POST", f"issue/{issue_key}/comment", {"body": body_value}),
+                        _rovo_comment,
+                    )
+                comment_id = str(created.get("id") or created.get("commentId") or "")
+                if target.adapter == "rovo-mcp":
+                    read_back = await _read_issue(target, issue_key)
+                else:
                     read_back = jira_api_for_target(target, "GET", f"issue/{issue_key}?fields=comment")
             except JiraTargetResolutionError as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -816,38 +873,54 @@ async def approve_draft(draft_id: str, body: dict = None):
             )
             delivery_result["ok"] = True if found else "partial"
             delivery_result["navigate_to"] = {"app": "jira", "url": target.issue_url(issue_key)}
+            if fallback_note:
+                delivery_result["fallback"] = fallback_note
 
         elif dtype == "jira-transition":
             from skills.jira.api import jira_api_for_target
             from skills.jira.mutations import (
                 JiraTargetResolutionError,
+                rovo_jira_call,
                 verified_result,
             )
 
             _jira_tab_guard(p, body)
             target = _jira_get_target(p, body)
             issue_key = str(p.get("issue_key", ""))
-
-            # Rovo transition is unsupported: the Rovo schema requires a
-            # non-empty transition ID, and there is no Rovo endpoint to look
-            # one up. A legitimate Rovo transition draft cannot be created by
-            # the staging tool, so reaching this branch for a Rovo target means
-            # the draft was crafted externally â€” refuse it.
-            if target.adapter == "rovo-mcp":
-                raise HTTPException(
-                    status_code=409,
-                    detail="Jira transition is not supported for Rovo-connected sites. Use the Jira browser UI to change issue status.",
-                )
+            comment_warning = ""
 
             try:
-                jira_api_for_target(target, "GET", f"issue/{issue_key}?fields=status")
-                jira_api_for_target(target, "POST", f"issue/{issue_key}/transitions", p["payload"])
+                if target.adapter == "rovo-mcp":
+                    payload = p["payload"]
+                    transition_id = str((payload.get("transition") or {}).get("id") or "")
+                    if not transition_id:
+                        raise HTTPException(status_code=400, detail="Jira transition draft is missing the transition ID.")
+                    arguments = {"issueIdOrKey": issue_key, "transitionId": transition_id}
+                    if payload.get("fields"):
+                        arguments["fields"] = payload["fields"]
+                    await _read_issue(target, issue_key)
+                    await _run_sync(rovo_jira_call, target, "transition_issue", arguments)
+                    # Rovo may drop a comment sent inside the transition, so it goes through the comment tool.
+                    comments = (payload.get("update") or {}).get("comment") or []
+                    comment_body = str(((comments[0] if comments else {}).get("add") or {}).get("body") or "")
+                    if comment_body:
+                        try:
+                            await _run_sync(rovo_jira_call, target, "add_comment", {
+                                "issueIdOrKey": issue_key, "commentBody": comment_body, "contentFormat": "markdown",
+                            })
+                        except Exception as exc:
+                            _log.warning("Rovo comment on %s failed after its transition: %s", issue_key, exc)
+                            comment_warning = f"The status changed, but the comment could not be added: {exc}"
+                else:
+                    jira_api_for_target(target, "GET", f"issue/{issue_key}?fields=status")
+                    jira_api_for_target(target, "POST", f"issue/{issue_key}/transitions", p["payload"])
                 read_back = await _read_issue(target, issue_key)
             except JiraTargetResolutionError as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
             except HTTPException:
                 raise
             except Exception as exc:
+                _log.warning("Jira transition on %s could not be verified: %s", issue_key, exc)
                 raise HTTPException(status_code=502, detail=f"Jira transition could not be verified: {exc}") from exc
 
             status = ((read_back.get("fields") or {}).get("status") or {}).get("name", "")
@@ -860,8 +933,10 @@ async def approve_draft(draft_id: str, body: dict = None):
                 applied={"issue_key": issue_key, "transition": p.get("transition_name", "")},
                 verified={"status": status, "expected_status": expected_status, "matched": matched},
             )
-            delivery_result["ok"] = True if matched else "partial"
+            delivery_result["ok"] = True if matched and not comment_warning else "partial"
             delivery_result["navigate_to"] = {"app": "jira", "url": target.issue_url(issue_key)}
+            if comment_warning:
+                delivery_result["warning"] = comment_warning
 
         elif dtype == "jira-link":
             from skills.jira.api import jira_api_for_target
@@ -879,17 +954,26 @@ async def approve_draft(draft_id: str, body: dict = None):
 
             try:
                 await _read_issue(target, issue_key)   # pre-read confirms issue exists
-                if target.adapter == "rovo-mcp":
+                fallback_note = None
+
+                async def _rovo_link(rovo_target):
                     payload_raw = p.get("payload") or {}
                     rovo_inward = str((payload_raw.get("inwardIssue") or {}).get("key", "") or other_key)
                     rovo_outward = str((payload_raw.get("outwardIssue") or {}).get("key", "") or issue_key)
-                    await _run_sync(rovo_jira_call, target, "create_link", {
+                    return await _run_sync(rovo_jira_call, rovo_target, "create_link", {
                         "inwardIssue": rovo_inward,
                         "outwardIssue": rovo_outward,
                         "type": link_type,
                     })
+
+                if target.adapter == "rovo-mcp":
+                    await _rovo_link(target)
                 else:
-                    jira_api_for_target(target, "POST", "issueLink", p["payload"])
+                    _, target, fallback_note = await _write_with_rovo_fallback(
+                        target,
+                        lambda: jira_api_for_target(target, "POST", "issueLink", p["payload"]),
+                        _rovo_link,
+                    )
                 read_back = await _read_issue(target, issue_key)
             except JiraTargetResolutionError as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -919,26 +1003,29 @@ async def approve_draft(draft_id: str, body: dict = None):
             )
             delivery_result["ok"] = True if matched_link else "partial"
             delivery_result["navigate_to"] = {"app": "jira", "url": target.issue_url(issue_key)}
+            if fallback_note:
+                delivery_result["fallback"] = fallback_note
 
         # â”€â”€ Calendar (Google Workspace MCP) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-        elif dtype == "calendar-write":
+        elif dtype in ("calendar-write", "jira-mcp-write"):
             from mcp.manager import _load_connections, _client_for
 
             conn_id = p.get("connection_id", "")
             tool_name = p.get("tool", "")
             tool_args = p.get("arguments", {}) or {}
             if not conn_id or not tool_name:
-                raise HTTPException(status_code=400, detail="Calendar draft missing connection_id or tool")
+                raise HTTPException(status_code=400, detail="Draft missing connection_id or tool")
             conn = next((c for c in _load_connections() if c.get("id") == conn_id), None)
             if conn is None:
                 raise HTTPException(
                     status_code=404,
-                    detail=f"Calendar connection '{conn_id}' no longer exists â€” reconnect and try again.",
+                    detail=f"Connection '{conn_id}' no longer exists â€” reconnect and try again.",
                 )
             client = None
             try:
-                client = _client_for(conn, pooled=False)
-                raw = client.call(tool_name, tool_args)
+                # HTTP MCP clients call asyncio.run() internally, which fails on this event loop.
+                client = await _run_sync(_client_for, conn, pooled=False)
+                raw = await _run_sync(client.call, tool_name, tool_args)
                 delivery_result = {"ok": True, "result": raw if raw else "ok", "tool": tool_name}
             finally:
                 if client is not None:

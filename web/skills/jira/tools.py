@@ -8,6 +8,8 @@ from contextlib import nullcontext
 from .api import jira_api, jira_browse_url, jira_is_cloud, use_site
 from .mutations import (
     JiraTargetResolutionError,
+    _probe_project,
+    available_targets,
     compare_jira_fields,
     configured_builtin_target,
     configured_extra_urls,
@@ -42,7 +44,7 @@ def _japi(target, method: str, path: str, body: dict | None = None) -> dict:
 def _burl(target) -> str:
     """Browse base URL for the resolved target."""
     base = getattr(target, "base_url", "")
-    if base and base in configured_extra_urls():
+    if base and (getattr(target, "adapter", "") == "rovo-mcp" or base in configured_extra_urls()):
         return base
     return jira_browse_url()
 
@@ -130,7 +132,7 @@ TOOL_DEFS = [
         "description": (
             "Get a Jira issue by key or full URL. "
             "This is the primary Jira read tool — it covers ALL connected Jira sites automatically "
-            "(both direct credentials and Rovo/cloud-atlassian connected sites). "
+            "(both direct credentials and Rovo-connected sites). "
             "Always use this tool first for any Jira issue lookup regardless of which site the issue is on. "
             "Do NOT use MCP Jira tools instead of this — they are secondary fallbacks only."
         ),
@@ -568,7 +570,7 @@ TOOL_DEFS = [
     {
         "name": "jira_mutate",
         "description": (
-            "Disabled safety placeholder. Raw Jira writes are never available to the model because "
+            "Disabled safety placeholder. Raw Jira REST writes are never available to the model because "
             "they bypass target resolution, user approval, and read-back verification."
         ),
         "input_schema": {
@@ -744,8 +746,8 @@ def _adf_to_text(node, depth=0) -> str:
 def _tool_jira_get_issue(issue_key: str, _context_id: str = "") -> dict:
     from .mutations import rovo_jira_call
     try:
-        issue_key = _extract_issue_key(issue_key)
-        target = resolve_target_for_context(issue_key, _context_id)
+        reference, issue_key = issue_key, _extract_issue_key(issue_key)
+        target = resolve_target_for_context(reference, _context_id)
     except JiraTargetResolutionError as exc:
         return _target_resolution_result(exc, _context_id)
     if target.adapter == "rovo-mcp":
@@ -841,32 +843,50 @@ def _tool_jira_get_issue(issue_key: str, _context_id: str = "") -> dict:
     }
 
 
+_JQL_PROJECT_RE = re.compile(r"""\bproject\s*=\s*["']?([A-Za-z][A-Za-z0-9_]*)""", re.IGNORECASE)
+
+
+def _site_hosting_jql_project(jql: str, preferred, context_id: str):
+    """Keep `preferred` unless the JQL names one project that only another site hosts."""
+    keys = {key.upper() for key in _JQL_PROJECT_RE.findall(jql or "")}
+    targets = available_targets()
+    if len(keys) != 1 or len(targets) < 2:
+        return preferred
+    key = keys.pop()
+    if _probe_project(key, preferred, context_id) is not False:
+        return preferred
+    hits = [t for t in targets if t.id != preferred.id and _probe_project(key, t, context_id) is True]
+    return hits[0] if len(hits) == 1 else preferred
+
+
 def _tool_jira_search(jql: str, max_results: int = 20, _context_id: str = "") -> dict:
     from .mutations import rovo_jira_call
     try:
-        # A JQL search has no issue key to probe, so with several sites and no
-        # tab selection it runs on the primary direct site.
         target = selected_target_for_context(_context_id)
         if target is None:
             try:
                 target = configured_builtin_target()
             except Exception:
                 target = resolve_target_for_context(context_id=_context_id)
+        target = _site_hosting_jql_project(jql, target, _context_id)
     except JiraTargetResolutionError as exc:
         return _target_resolution_result(exc, _context_id)
+    fields = ["summary", "status", "priority", "assignee"]
     if target.adapter == "rovo-mcp":
-        # Rovo does not expose a JQL search endpoint in the verified allowlist.
-        # Fall through to the direct path which will fail with a clear auth error
-        # rather than silently passing the JQL string as an issue key to getJiraIssue.
-        return {"error": f"JQL search is not supported for the Rovo-connected Jira site ({target.base_url}). Provide the full issue URL or use jira_get_issue with a specific issue key.", "site": target.base_url}
-    with _site(target):
-        data = _jira_search_post(
-            jql,
-            max_results=max_results,
-            fields=["summary", "status", "priority", "assignee"],
-        )
+        try:
+            data = rovo_jira_call(
+                target, "search_issues", {"jql": jql, "maxResults": min(int(max_results), 100), "fields": fields}
+            )
+        except JiraTargetResolutionError as exc:
+            return {"error": f"JQL search is not available through the Rovo connection for {target.base_url}: {exc}", "site": target.base_url}
+        if not isinstance(data, dict):
+            return {"error": f"Rovo returned an unreadable JQL search result for {target.base_url}.", "site": target.base_url}
+    else:
+        with _site(target):
+            data = _jira_search_post(jql, max_results=max_results, fields=fields)
     return {
-        "total": data.get("total", 0),
+        "total": data.get("total", len(data.get("issues", []))),
+        **({"more_available": True} if data.get("isLast") is False else {}),
         "issues": [
             {
                 "key": i["key"],
@@ -1039,8 +1059,8 @@ def _tool_jira_add_comment(issue_key: str, comment: str, _context_id: str = "") 
     """Stage a comment; approval verifies its returned ID on the same issue."""
     from .mutations import rovo_jira_call
     try:
-        issue_key = _extract_issue_key(issue_key)
-        target = resolve_target_for_context(issue_key, _context_id, for_write=True)
+        reference, issue_key = issue_key, _extract_issue_key(issue_key)
+        target = resolve_target_for_context(reference, _context_id, for_write=True)
         if _context_id:
             select_target_for_context(_context_id, target.id)
         if target.adapter == "rovo-mcp":
@@ -1077,8 +1097,8 @@ def _tool_jira_update_issue(
     """Read/validate and stage an update; approval performs the only write."""
     from .mutations import rovo_jira_call
     try:
-        issue_key = _extract_issue_key(issue_key)
-        target = resolve_target_for_context(issue_key, _context_id, for_write=True)
+        reference, issue_key = issue_key, _extract_issue_key(issue_key)
+        target = resolve_target_for_context(reference, _context_id, for_write=True)
         if _context_id:
             select_target_for_context(_context_id, target.id)
     except JiraTargetResolutionError as exc:
@@ -1214,8 +1234,8 @@ def _tool_jira_add_watcher(
 ) -> dict:
     """Stage an exact-account watcher mutation for HITL approval."""
     try:
-        issue_key = _extract_issue_key(issue_key)
-        target = resolve_target_for_context(issue_key, _context_id, for_write=True)
+        reference, issue_key = issue_key, _extract_issue_key(issue_key)
+        target = resolve_target_for_context(reference, _context_id, for_write=True)
         if _context_id:
             select_target_for_context(_context_id, target.id)
     except JiraTargetResolutionError as exc:
@@ -1247,8 +1267,8 @@ def _tool_jira_stage_attachment(issue_key: str, upload_id: str, _context_id: str
     """Stage an immutable attachment snapshot for approval, never a model path."""
     from .mutations import staged_attachment
     try:
-        issue_key = _extract_issue_key(issue_key)
-        target = resolve_target_for_context(issue_key, _context_id, for_write=True)
+        reference, issue_key = issue_key, _extract_issue_key(issue_key)
+        target = resolve_target_for_context(reference, _context_id, for_write=True)
         if _context_id:
             select_target_for_context(_context_id, target.id)
     except JiraTargetResolutionError as exc:
@@ -1290,8 +1310,8 @@ def _tool_jira_stage_teams_attachment(
     and no local filename/path is returned to the model.
     """
     try:
-        issue_key = _extract_issue_key(issue_key)
-        target = resolve_target_for_context(issue_key, _context_id, for_write=True)
+        reference, issue_key = issue_key, _extract_issue_key(issue_key)
+        target = resolve_target_for_context(reference, _context_id, for_write=True)
         if _context_id:
             select_target_for_context(_context_id, target.id)
     except JiraTargetResolutionError as exc:
@@ -1332,8 +1352,8 @@ def _tool_jira_stage_teams_image(
 ) -> dict:
     """Fetch an authenticated inline Teams image into Jira's opaque staging area."""
     try:
-        issue_key = _extract_issue_key(issue_key)
-        target = resolve_target_for_context(issue_key, _context_id, for_write=True)
+        reference, issue_key = issue_key, _extract_issue_key(issue_key)
+        target = resolve_target_for_context(reference, _context_id, for_write=True)
         if _context_id:
             select_target_for_context(_context_id, target.id)
     except JiraTargetResolutionError as exc:
@@ -1393,34 +1413,32 @@ def _tool_jira_transition(
 ) -> dict:
     from .mutations import rovo_jira_call
     try:
-        issue_key = _extract_issue_key(issue_key)
-        target = resolve_target_for_context(issue_key, _context_id, for_write=True)
+        reference, issue_key = issue_key, _extract_issue_key(issue_key)
+        target = resolve_target_for_context(reference, _context_id, for_write=True)
         if _context_id:
             select_target_for_context(_context_id, target.id)
     except JiraTargetResolutionError as exc:
         return _target_resolution_result(exc, _context_id)
 
-    if target.adapter == "rovo-mcp":
-        # Rovo's transitionJiraIssue requires a non-empty transition ID.
-        # The Rovo MCP schema does not expose a transitions-list endpoint, so
-        # there is no way to map a name to an ID without direct credentials.
-        # Refuse explicitly rather than staging a draft that will fail at approval.
+    # Expand fields so we can detect required fields (like resolution)
+    try:
+        if target.adapter == "rovo-mcp":
+            transitions = rovo_jira_call(
+                target, "list_transitions", {"issueIdOrKey": issue_key, "expand": "transitions.fields"}
+            )
+        else:
+            transitions = _japi(
+                target, "GET", f"issue/{issue_key}/transitions?expand=transitions.fields"
+            )
+    except JiraTargetResolutionError as exc:
         return {
-            "error": (
-                "Issue transitions are not available for Rovo-connected Jira sites because "
-                "Rovo does not expose a transition-list API. "
-                "Open the issue in your browser to change its status directly."
-            ),
+            "error": f"Issue transitions are not available through the Rovo connection for {target.base_url}: {exc}",
             "unavailable": True,
         }
-
-    # Direct path: expand fields so we can detect required fields (like resolution)
-    try:
-        transitions = _japi(
-            target, "GET", f"issue/{issue_key}/transitions?expand=transitions.fields"
-        )
-    except RuntimeError as exc:
+    except (RuntimeError, ValueError) as exc:
         return {"error": str(exc)}
+    if not isinstance(transitions, dict):
+        return {"error": f"Could not read the available transitions for {issue_key}."}
     match = None
     for t in transitions.get("transitions", []):
         if t.get("name", "").lower() == transition_name.lower():
@@ -1453,7 +1471,10 @@ def _tool_jira_transition(
         {"issue_key": issue_key, "transition_name": transition_name, "expected_status": (match.get("to") or {}).get("name", ""), "payload": payload, "jira_target": target.to_dict(), "context_id": _context_id},
         {"issue_key": issue_key, "transition_name": transition_name, "site": target.public_dict()},
     )
-    return {"_draft": "jira-transition", "data": {"draft_id": draft_id, "issue_key": issue_key, "transition_name": transition_name, "jira_site": target.public_dict()}, "_user_message": "Jira transition is ready for review."}
+    card = {"draft_id": draft_id, "issue_key": issue_key, "transition_name": transition_name, "jira_site": target.public_dict()}
+    if comment:
+        card["comment"] = comment
+    return {"_draft": "jira-transition", "data": card, "_user_message": "Jira transition is ready for review."}
 
 
 def _tool_jira_link_issues(
@@ -1461,8 +1482,8 @@ def _tool_jira_link_issues(
 ) -> dict:
     from .mutations import rovo_jira_call
     try:
-        issue_key = _extract_issue_key(issue_key)
-        target = resolve_target_for_context(issue_key, _context_id, for_write=True)
+        reference, issue_key = issue_key, _extract_issue_key(issue_key)
+        target = resolve_target_for_context(reference, _context_id, for_write=True)
         if _context_id:
             select_target_for_context(_context_id, target.id)
         if target.adapter == "rovo-mcp":
@@ -1651,7 +1672,7 @@ def _tool_jira_open_create_form(
                 if isinstance(raw, list):
                     return raw
                 if isinstance(raw, dict):
-                    for k in ("values", "projects", "data"):
+                    for k in ("values", "projects", "issueTypes", "data"):
                         v = raw.get(k)
                         if isinstance(v, list):
                             return v

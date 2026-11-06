@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import concurrent.futures
+import json
 import logging
 import re
 import threading
 import time
+from urllib.parse import urlparse
 
 import shared
 from config import load_config as _load_config, save_config as _save_config, update_config as _update_config
@@ -190,6 +192,14 @@ _JIRA_READ_ONLY_PREFIXES = (
     "get", "list", "search", "lookup", "find", "read", "view", "fetch",
     "accessible", "metadata", "field", "project", "page", "space",
 )
+# Only Atlassian's own server may vouch for a tool through its readOnlyHint;
+# a hint from any other MCP server proves nothing.
+_ATLASSIAN_MCP_HOST = "mcp.atlassian.com"
+
+
+def _is_official_atlassian_mcp(conn: dict) -> bool:
+    parsed = urlparse(str(conn.get("url") or ""))
+    return parsed.scheme == "https" and (parsed.hostname or "").lower() == _ATLASSIAN_MCP_HOST
 
 
 def _is_atlassian_connection(conn: dict) -> bool:
@@ -201,7 +211,7 @@ def _is_atlassian_connection(conn: dict) -> bool:
     return "atlassian" in blob or "rovo" in blob
 
 
-def _is_unverified_jira_mcp_mutation(orig_name: str, conn: dict) -> bool:
+def _is_unverified_jira_mcp_mutation(orig_name: str, conn: dict, hints: dict | None = None) -> bool:
     """Default-deny dynamic Jira writes until a verified adapter owns them.
 
     A tool is read-only only if its FIRST meaningful word (the verb) starts
@@ -209,6 +219,11 @@ def _is_unverified_jira_mcp_mutation(orig_name: str, conn: dict) -> bool:
     tool names like 'fetchAndTransitionJiraIssue' where 'fetch' appears
     mid-name. The verb is always the first word in both camelCase and
     snake_case naming conventions.
+
+    On the official Atlassian host the server's own hints decide instead: a tool
+    is a read only if it says readOnlyHint and does not say destructive, and a
+    read-looking name does not override a hint that says otherwise. Without
+    hints, or on any other host, the name rule above applies.
     """
     blob = " ".join([
         str(conn.get("name", "")), str(conn.get("url", "")),
@@ -217,6 +232,8 @@ def _is_unverified_jira_mcp_mutation(orig_name: str, conn: dict) -> bool:
     is_jira_connection = any(marker in blob for marker in _JIRA_MCP_MARKERS)
     if not is_jira_connection:
         return False
+    if hints and hints.get("readOnlyHint") is not None and _is_official_atlassian_mcp(conn):
+        return not (hints["readOnlyHint"] is True and hints.get("destructiveHint") is not True)
     import re as _re
     raw = (orig_name or "")
     parts = _re.sub(r'([A-Z])', r'_\1', raw).lower().replace("__", "_").split("_")
@@ -228,6 +245,12 @@ def _is_unverified_jira_mcp_mutation(orig_name: str, conn: dict) -> bool:
     _NAMESPACE_TOKENS = frozenset({"jira", "atlassian", "rovo", "mcp"})
     verb = next((p for p in parts if p not in _NAMESPACE_TOKENS), parts[0])
     return not verb.startswith(_JIRA_READ_ONLY_PREFIXES)
+
+
+def _summarize_jira_write(orig_name: str, kwargs: dict) -> str:
+    """One-line human summary of a raw Jira MCP write for the approval card."""
+    inner = next((str(kwargs[k]) for k in ("toolName", "tool", "operation") if kwargs.get(k)), "")
+    return f"Jira change via {orig_name}" + (f": {inner}" if inner else "")
 
 
 def _is_workspace_mcp(conn: dict) -> bool:
@@ -383,24 +406,43 @@ def _register(conn: dict) -> None:
         conn_snapshot = dict(conn)  # closure capture — full record so _client_for has everything
         limit_param = _discover_limit_param(input_schema)
 
-        def _make_handler(orig_name: str, c: dict, limit_param: str | None):
+        def _make_handler(orig_name: str, c: dict, limit_param: str | None, hints: dict):
             def _handler(**kwargs):
                 transport = c.get("transport", "http")
                 # Strip internal server-injected keys (e.g. _context_id) — MCP
                 # servers only accept the parameters declared in their input schema.
                 kwargs = {k: v for k, v in kwargs.items() if not k.startswith("_")}
-                if _is_unverified_jira_mcp_mutation(orig_name, c):
+                if _is_unverified_jira_mcp_mutation(orig_name, c, hints):
+                    # A raw Jira write is parked as an approval card, like the
+                    # workspace-mcp writes below: the call only runs from the
+                    # CSRF-gated /api/drafts/{id}/approve endpoint.
+                    from skills._drafts import create_draft
+                    conn_name = c.get("name", c.get("id", ""))
+                    action_summary = _summarize_jira_write(orig_name, kwargs)
+                    arguments_text = json.dumps(kwargs, indent=2, default=str)
+                    draft_id = create_draft(
+                        draft_type="jira-mcp-write",
+                        params={
+                            "connection_id": c.get("id", ""),
+                            "tool": orig_name,
+                            "arguments": kwargs,
+                        },
+                        preview={"action": action_summary, "connection": conn_name},
+                    )
                     return {
-                        "error": (
-                            "Jira write operations through this MCP connection are not yet "
-                            "supported by AI Gator (writes require a verified approval + read-back "
-                            "step that this connection does not have). "
-                            "This is a hard limitation — do NOT retry the tool. "
-                            "Tell the user to make this change directly in the Jira web UI instead, "
-                            "and stop."
+                        "_draft": "jira-mcp-write",
+                        "data": {
+                            "draft_id": draft_id,
+                            "action": action_summary,
+                            "connection": conn_name,
+                            "tool": orig_name,
+                            "arguments_text": arguments_text,
+                        },
+                        "_user_message": (
+                            f"Jira change ready for your approval: {action_summary}. "
+                            "Click 'I approve' to apply it, or tell me here "
+                            "to change anything first."
                         ),
-                        "target_required": True,
-                        "terminal": True,
                     }
                 # Inject a default limit if the schema declares one and the model omitted it.
                 # Stops "list everything" calls from dumping unbounded JSON into history.
@@ -545,7 +587,7 @@ def _register(conn: dict) -> None:
                                 pass
             return _handler
 
-        shared.TOOL_DISPATCH[namespaced] = _make_handler(orig_name, conn_snapshot, limit_param)
+        shared.TOOL_DISPATCH[namespaced] = _make_handler(orig_name, conn_snapshot, limit_param, _tool_hints(t))
         shared.TOOL_STATUS[namespaced] = f"Calling {name}..."
         tool_names.add(namespaced)
         seen_raw_names.add(orig_name)
@@ -835,15 +877,29 @@ def _reuse_or_compute_skill_id(name: str, transport: str, edit_id: str) -> str:
     return _compute_skill_id(name, edit_id)
 
 
+_TOOL_HINT_KEYS = ("readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint")
+
+
+def _tool_hints(tool: dict) -> dict:
+    annotations = tool.get("annotations")
+    if not isinstance(annotations, dict):
+        return {}
+    return {k: annotations[k] for k in _TOOL_HINT_KEYS if isinstance(annotations.get(k), bool)}
+
+
 def _normalize_tools(raw_tools: list) -> list[dict]:
-    return [
-        {
+    normalized = []
+    for t in raw_tools:
+        entry = {
             "name": t["name"],
             "description": t.get("description", ""),
             "input_schema": t.get("inputSchema") or t.get("input_schema") or {"type": "object", "properties": {}},
         }
-        for t in raw_tools
-    ]
+        hints = _tool_hints(t)
+        if hints:
+            entry["annotations"] = hints
+        normalized.append(entry)
+    return normalized
 
 
 def _build_connection_record(skill_id: str, name: str, transport: str,

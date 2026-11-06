@@ -199,20 +199,65 @@ class TestTransitionStaging:
         draft = _drafts.get_draft(result["data"]["draft_id"])
         assert draft["params"]["payload"]["transition"]["id"] == "21"
 
-    def test_rovo_returns_unavailable_not_draft(self):
-        """Rovo transition is unsupported: no transition-list API exists in Rovo schema."""
+    def _stage_rovo(self, rovo_call, name="Closed", comment=""):
         direct_api = MagicMock(side_effect=AssertionError("jira_api must not be called for rovo target"))
-        rovo_call = MagicMock(side_effect=AssertionError("rovo_jira_call must not be called either"))
         with _patch_resolve(_rovo_target()), \
              patch("skills.jira.tools.jira_api", direct_api), \
              patch("skills.jira.mutations.rovo_jira_call", rovo_call):
             from skills.jira.tools import _tool_jira_transition
-            result = _tool_jira_transition("PROJ-1", "Done")
+            return _tool_jira_transition("PROJ-1", name, comment)
+
+    def test_rovo_looks_up_the_transition_id_through_rovo_and_stages_a_draft(self):
+        transitions = {"transitions": [
+            {"id": "41", "name": "In Progress", "to": {"name": "In Progress"}, "fields": {}},
+            {"id": "61", "name": "Rejected", "to": {"name": "Rejected"}, "fields": {
+                "customfield_10150": {"required": True, "allowedValues": [{"name": "Duplicate", "id": "1"}]}}},
+        ]}
+        rovo_call = MagicMock(return_value=transitions)
+        result = self._stage_rovo(rovo_call, "rejected", "Dupe of PROJ-9")
+        assert result.get("_draft") == "jira-transition"
+        rovo_call.assert_called_once()
+        _, operation, arguments = rovo_call.call_args.args
+        assert operation == "list_transitions"
+        assert arguments == {"issueIdOrKey": "PROJ-1", "expand": "transitions.fields"}
+        draft = _drafts.get_draft(result["data"]["draft_id"])
+        assert draft["params"]["jira_target"]["adapter"] == "rovo-mcp"
+        assert draft["params"]["expected_status"] == "Rejected"
+        assert draft["params"]["payload"] == {
+            "transition": {"id": "61"},
+            "fields": {"customfield_10150": {"name": "Duplicate"}},
+            "update": {"comment": [{"add": {"body": "Dupe of PROJ-9"}}]},
+        }
+
+    def test_rovo_unknown_transition_name_lists_what_is_available_and_stages_nothing(self):
+        rovo_call = MagicMock(return_value={"transitions": [{"id": "41", "name": "In Progress"}]})
+        result = self._stage_rovo(rovo_call, "Done")
+        assert "_draft" not in result
+        assert "not found" in result["error"] and "In Progress" in result["error"]
+
+    def test_rovo_connection_that_cannot_list_transitions_returns_unavailable_not_draft(self):
+        from skills.jira.mutations import JiraTargetResolutionError
+        rovo_call = MagicMock(side_effect=JiraTargetResolutionError(
+            "The selected Rovo connection does not support list transitions."))
+        result = self._stage_rovo(rovo_call)
         assert "_draft" not in result
         assert result.get("unavailable") is True
-        assert "not available" in result.get("error", "").lower()
-        direct_api.assert_not_called()
-        rovo_call.assert_not_called()
+        assert "does not support list transitions" in result["error"]
+
+    def test_rovo_unreadable_transition_list_stages_nothing(self):
+        result = self._stage_rovo(MagicMock(return_value="plain text"))
+        assert "_draft" not in result and "Could not read" in result["error"]
+
+    def test_rovo_reply_that_is_not_json_is_an_error_not_a_crash(self):
+        result = self._stage_rovo(MagicMock(side_effect=ValueError("Expecting value: line 1 column 1")))
+        assert "_draft" not in result and "Expecting value" in result["error"]
+
+    def test_the_card_shows_the_comment_the_approval_will_publish(self):
+        rovo_call = MagicMock(return_value={"transitions": [{"id": "41", "name": "Done", "to": {"name": "Done"}}]})
+        with_comment = self._stage_rovo(rovo_call, "Done", "Shipped in 1.2")
+        assert with_comment["data"]["comment"] == "Shipped in 1.2"
+        without = self._stage_rovo(rovo_call, "Done")
+        assert "comment" not in without["data"]
 
 
 # ── link staging ──────────────────────────────────────────────────────────────

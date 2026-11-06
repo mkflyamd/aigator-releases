@@ -234,15 +234,8 @@ def _already_active_note(skill_ids: list[str], offered_tool_names) -> str:
     )
 
 
-def _silent_turn_fallback(active_skills: list[str]) -> str:
+def _silent_turn_fallback() -> str:
     """User-visible explanation when an otherwise successful stream is empty."""
-    if "cloud-atlassian" in active_skills:
-        return (
-            "Atlassian Cloud MCP is connected, but it did not expose a usable "
-            "site/resource-discovery tool for this request. Use the direct Jira "
-            "& Confluence connection for a configured site, or connect Rovo MCP "
-            "through Atlassian SSO to select a site."
-        )
     return (
         "I could not produce a response for this request. Please retry; "
         "the connection may need to be refreshed."
@@ -522,10 +515,10 @@ def _append_jira_instance_context(system: str, active_skill_ids: list[str], cfg:
     return system + (
         f"\n\nJIRA INSTANCE ROUTING: Multiple Jira instances may be connected. "
         + direct_line +
-        f"MCP tools (cloud-atlassian, Rovo) cover other instances for reads only. "
+        f"Rovo MCP tools cover other instances for reads. "
         f"ROUTING RULES (these override general MCP guidance for Jira): "
-        f"(1) READ (any URL or bare key) → always call jira_get_issue first; it handles all connected sites automatically. Call cloud-atlassian/Rovo MCP Jira tools ONLY if jira_get_issue reports the issue was not found or the site is not connected; never call them in parallel with it when the URL matches the native site. "
-        f"(2) WRITE (comment, update, create, transition, watcher, link) → ALWAYS use native jira_* tools only, never MCP tools. Pass the full URL if you have it; bare keys are resolved automatically. "
+        f"(1) READ (any URL or bare key) → always call jira_get_issue first; it handles all connected sites automatically. Call Rovo MCP Jira tools ONLY if jira_get_issue reports the issue was not found or the site is not connected; never call them in parallel with it when the URL matches the native site. "
+        f"(2) WRITE (comment, update, create, transition, watcher, link) → use the native jira_* tools whenever one covers the change. If none does, a raw Jira MCP write tool is allowed: it is held as an approval card and nothing is applied until the user clicks approve. Each write is a draft the user approves. If direct credentials are rejected by Jira for a field change (labels, components, custom fields), Gator retries the same approved change through Rovo on the same site automatically, so do not ask the user to approve again or call Rovo write tools yourself. Pass the full URL if you have it; bare keys are resolved automatically. "
         f"(3) If jira_get_issue returns a 'multiple sites' error → ask the user for the full issue URL. "
         f"(4) Only tell the user the issue was not found after ALL available Jira tools have returned 404/error."
     )
@@ -2767,7 +2760,7 @@ async def chat(req: ChatRequest):
                                 and not _tool_activity_emitted
                                 and not shared.chat_task_store.is_cancelled(task_id)
                             ):
-                                _fallback = _silent_turn_fallback(_all_active)
+                                _fallback = _silent_turn_fallback()
                                 print(
                                     "[stream] empty completed turn "
                                     f"context={context_id} skills={_all_active}",
