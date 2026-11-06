@@ -255,6 +255,22 @@
                 </svg> </span
               >Tools
             </button>
+            <button class="smodal-tab" data-tab="permissions" title="Permissions">
+              <span class="tab-icon tab-icon-svg">
+                <svg
+                  width="18"
+                  height="18"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                </svg> </span
+              >Access
+            </button>
             <button class="smodal-tab" data-tab="general">
               <span class="tab-icon">⊞</span>General
             </button>
@@ -760,22 +776,6 @@
               </div>
             </div>
 
-            <!-- ═══ Saved command permissions ═══ -->
-            <div class="srow integration-row-sep" id="saved-permissions-row">
-              <div class="srow-info">
-                <div class="srow-label">Saved permissions</div>
-                <div class="srow-sub">
-                  Commands you chose "Always allow this" for. Remove one and AI Gator asks again.
-                </div>
-                <div id="saved-permissions-list"></div>
-              </div>
-              <div class="srow-actions">
-                <button id="saved-permissions-clear" class="btn-secondary" hidden>
-                  Remove all
-                </button>
-              </div>
-            </div>
-
             <!-- ═══ Google Workspace ═══ -->
             <div class="srow integration-row-sep">
               <div class="section-status st-dim" id="google-ws-dot"></div>
@@ -1212,6 +1212,29 @@
                   <div class="srow-sub" id="storage-loading">Loading…</div>
                 </div>
               </div>
+            </div>
+          </div>
+
+          <!-- Permissions panel -->
+          <div class="smodal-panel hidden" id="spanel-permissions">
+            <div class="spanel-title">Permissions</div>
+            <div class="spanel-sub">
+              Choose what AI Gator may do without asking. Drafts and sends for email, Teams, Slack
+              and Jira are always approved by you.
+            </div>
+
+            <div id="permissions-row">
+              <div class="spanel-divider perm-divider">
+                <span>Allowed without asking</span>
+                <button id="permissions-clear" class="btn-secondary" disabled>
+                  Reset all to Ask
+                </button>
+              </div>
+              <div class="srow-sub" id="permissions-admin-note" hidden>
+                Your administrator has turned off Always allow.
+              </div>
+              <div id="permissions-list" class="permission-list"></div>
+              <div id="permissions-rules-list"></div>
             </div>
           </div>
 

@@ -4,30 +4,48 @@
  */
 (function _initCsrfFetch() {
   const orig = window.fetch.bind(window);
-  window.fetch = function (input, init) {
+  let refreshing = null;
+  // The token changes whenever the backend restarts, so a page that stayed open holds a stale one.
+  const refreshToken = () => {
+    refreshing =
+      refreshing ||
+      orig('/api/csrf')
+        .then((r) => (r.ok ? r.json() : null))
+        .then((j) => (j && j.csrf_token) || null)
+        .catch(() => null)
+        .finally(() => {
+          refreshing = null;
+        });
+    return refreshing;
+  };
+  window.fetch = async function (input, init) {
+    let sentToken = null;
     try {
       const url = typeof input === 'string' ? input : (input && input.url) || '';
       const method = String(
         (init && init.method) || (input && input.method) || 'GET',
       ).toUpperCase();
-      if (
-        method !== 'GET' &&
-        method !== 'HEAD' &&
-        url.startsWith('/api/') &&
-        window.__CSRF_TOKEN__
-      ) {
+      if (method !== 'GET' && method !== 'HEAD' && url.startsWith('/api/')) {
         const h = new Headers(
           (init && init.headers) || (typeof input === 'object' && input.headers) || undefined,
         );
-        if (!h.has('X-CSRF-Token')) {
+        if (!h.has('X-CSRF-Token') && window.__CSRF_TOKEN__) {
           h.set('X-CSRF-Token', window.__CSRF_TOKEN__);
           init = { ...(init || {}), headers: h };
         }
+        if (h.has('X-CSRF-Token') && typeof input === 'string') sentToken = h.get('X-CSRF-Token');
       }
     } catch (_) {
       /* fall through to the plain call */
     }
-    return orig(input, init);
+    const res = await orig(input, init);
+    if (res.status !== 403 || sentToken === null) return res;
+    const fresh = await refreshToken();
+    if (!fresh || fresh === sentToken) return res;
+    window.__CSRF_TOKEN__ = fresh;
+    const h = new Headers((init && init.headers) || undefined);
+    h.set('X-CSRF-Token', fresh);
+    return orig(input, { ...(init || {}), headers: h });
   };
 })();
 
@@ -4158,6 +4176,56 @@ function _renderTabDrafts(tabId) {
   });
 }
 
+function _markTabNeedsAttention(tabId, message) {
+  _tabsWithUpdates.add(tabId);
+  document.querySelector?.(`.tab-item[data-tab-id="${tabId}"]`)?.classList.add('tab-has-update');
+  _showConnectivityToast(message, 'info');
+}
+
+// An approval card belongs to the tab whose turn asked. Another tab only gets a cue; the card is
+// drawn when that tab is shown, because a tab's chat is rebuilt from history on every switch.
+function _routeCardToTab(tabId, cardId, draw, { survivesTurn = false } = {}) {
+  if (!tabId || !cardId) return;
+  if (!_pendingTabCards.has(tabId)) _pendingTabCards.set(tabId, new Map());
+  _pendingTabCards.get(tabId).set(cardId, { draw, expired: false, survivesTurn });
+  if (tabId === _activeTabId) {
+    draw();
+    return;
+  }
+  _markTabNeedsAttention(tabId, 'AI Gator needs your approval in another tab.');
+}
+
+function _resolveTabCard(tabId, cardId) {
+  _pendingTabCards.get(tabId)?.delete(cardId);
+}
+
+function _expireTabCard(tabId, cardId) {
+  const entry = _pendingTabCards.get(tabId)?.get(cardId);
+  if (entry) entry.expired = true;
+}
+
+function _renderTabCards(tabId) {
+  _pendingTabCards.get(tabId)?.forEach((entry, cardId) => {
+    entry.draw();
+    if (entry.expired) _expireConfirmCardById(cardId);
+  });
+}
+
+// The turn is over: a card still waiting can no longer be answered. Expired ones stay to be shown once.
+// Cards that re-send the request when answered (survivesTurn) stay until answered or a new turn starts.
+function _dropStaleTabCards(tabId) {
+  _pendingTabCards.get(tabId)?.forEach((entry, cardId) => {
+    if (!entry.expired && !entry.survivesTurn) _resolveTabCard(tabId, cardId);
+  });
+}
+
+// A new turn started in the tab: a card that outlived its own turn can no longer be answered usefully.
+function _dropSurvivingTabCards(tabId) {
+  _pendingTabCards.get(tabId)?.forEach((entry, cardId) => {
+    if (entry.survivesTurn) _resolveTabCard(tabId, cardId);
+  });
+}
+
 function _renderTabSandboxCards(tabId) {
   _pendingSandboxCards.get(tabId)?.forEach((data) => _showSandboxApproval(data, tabId));
 }
@@ -4311,6 +4379,7 @@ const _inflightRequests = new Map();
 const _chatTaskIds = new Map(); // tabId -> task_id for the active chat request
 const _locallyFinishedTasks = new Set(); // task ids already cleaned up here; their chat_done is late
 const _tabsWithUpdates = new Set(); // tabIds with completed responses the user hasn't seen
+const _pendingTabCards = new Map(); // tabId -> Map(cardId -> {draw, expired}); drawn again each time the tab is shown
 const _pendingSandboxCards = new Map(); // tabId -> Map(requestId -> card data); drawn again each time the tab is shown
 const _tabsWorking = new Set(); // tabIds with an in-flight request (animated working line)
 let _revealActiveTabOnRender = false; // true = unconditionally scroll active tab into view on next render
@@ -4647,6 +4716,7 @@ function switchTab(tabId) {
   // after tab history so a draft remains attached to its originating tab.
   _renderTabDrafts(tabId);
   _renderTabSandboxCards(tabId);
+  _renderTabCards(tabId);
   const inflight = _inflightRequests.get(tabId);
   if (inflight?.msgDiv && msgs && !msgs.contains(inflight.msgDiv)) {
     inflight.msgDiv.classList.add('typing');
@@ -4774,6 +4844,7 @@ function closeTab(tabId) {
     _inflightRequests.delete(tabId);
     _pendingSandboxFollowUps.delete(tabId);
     _pendingSandboxCards.delete(tabId);
+    _pendingTabCards.delete(tabId);
     // Clear pin context and stored state
     fetch(`/api/context/pins?context_id=${tabId}`, { method: 'DELETE' }).catch((err) =>
       console.warn('Tab cleanup fetch failed:', err),
@@ -5753,7 +5824,7 @@ const settingsBackdrop = document.getElementById('settings-backdrop');
 const drawerClose = document.getElementById('drawer-close');
 
 function openDrawer() {
-  if (typeof window._refreshSavedPermissions === 'function') window._refreshSavedPermissions();
+  if (typeof window._refreshPermissionSettings === 'function') window._refreshPermissionSettings();
   // Shell mode: if a native WebContentsView is tiled beside Gator, hide it so
   // Settings gets the full window. Restore on close. Use tpState.type
   // SYNCHRONOUSLY (not getActiveApp().then()) — the async version raced with
@@ -6172,7 +6243,8 @@ function initSettingsTabs() {
     tabs.forEach((t) => t.classList.toggle('active', t.dataset.tab === tabName));
     panels.forEach((p) => p.classList.toggle('hidden', p.id !== 'spanel-' + tabName));
     localStorage.setItem(STORAGE_KEY, tabName);
-    if (typeof window._refreshSavedPermissions === 'function') window._refreshSavedPermissions();
+    if (tabName === 'permissions' && typeof window._refreshPermissionSettings === 'function')
+      window._refreshPermissionSettings();
     // When the Skills tab is activated, lazily mount the marketplace pane into
     // its panel. Subsequent activations are no-ops (mount() is idempotent).
     if (tabName === 'skills') {
@@ -10163,11 +10235,7 @@ function _showSandboxApproval(data, ownerTabId) {
   if (!_pendingSandboxCards.has(cardTab)) _pendingSandboxCards.set(cardTab, new Map());
   _pendingSandboxCards.get(cardTab).set(requestId, data);
   if (ownerTabId && ownerTabId !== _activeTabId) {
-    _tabsWithUpdates.add(ownerTabId);
-    document
-      .querySelector?.(`.tab-item[data-tab-id="${ownerTabId}"]`)
-      ?.classList.add('tab-has-update');
-    _showConnectivityToast('AI Gator needs your approval in another tab.', 'info');
+    _markTabNeedsAttention(ownerTabId, 'AI Gator needs your approval in another tab.');
     return;
   }
   const seen = Array.from(document.querySelectorAll('[data-sandbox-request]')).some(
@@ -10247,25 +10315,20 @@ function _showSandboxApproval(data, ownerTabId) {
 
   const actions = document.createElement('div');
   actions.className = 'gcc-actions';
-  const approve = document.createElement('button');
-  approve.className = 'gcc-approve-btn';
-  approve.textContent = 'Allow for this tab';
-  let always = null;
-  if (isShell && data.saveable === true) {
-    always = document.createElement('button');
-    always.className = 'btn-secondary';
-    always.textContent = 'Always allow this';
-  }
-  let once = null;
-  if (!isShell) {
-    once = document.createElement('button');
-    once.className = 'btn-secondary';
-    once.textContent = 'Allow once';
-  }
+  const scopeSpecs = _scopeButtonSpecs(data.card);
+  if (!scopeSpecs.length)
+    scopeSpecs.push({ scope: 'tab', label: _scopeLabel('tab'), primary: true });
+  const scopeButtons = scopeSpecs.map((spec) => {
+    const btn = document.createElement('button');
+    btn.className = spec.primary ? 'gcc-approve-btn' : 'btn-secondary';
+    btn.textContent = spec.label;
+    btn.dataset.scope = spec.scope;
+    return btn;
+  });
   const deny = document.createElement('button');
   deny.className = 'btn-secondary';
   deny.textContent = 'Deny';
-  actions.append(approve, ...(always ? [always] : []), ...(once ? [once] : []), deny);
+  actions.append(...scopeButtons, deny);
 
   const footer = document.createElement('div');
   footer.className = 'gcc-footer';
@@ -10282,12 +10345,15 @@ function _showSandboxApproval(data, ownerTabId) {
   const tabId = ownerTabId || _activeTabId || 'default';
   // The server stored the request under its own context id; send exactly that.
   const contextId = typeof data.context_id === 'string' ? data.context_id : tabId;
-  const decide = async (decision, scope = 'task') => {
-    if (approve.disabled) return;
-    approve.disabled = true;
-    if (always) always.disabled = true;
-    if (once) once.disabled = true;
-    deny.disabled = true;
+  const setBusy = (busy) => {
+    scopeButtons.forEach((btn) => {
+      btn.disabled = busy;
+    });
+    deny.disabled = busy;
+  };
+  const decide = async (decision, scope = 'tab') => {
+    if (deny.disabled) return;
+    setBusy(true);
     const post = () =>
       fetch(`/api/sandbox/requests/${encodeURIComponent(requestId)}/${decision}`, {
         method: 'POST',
@@ -10331,28 +10397,17 @@ function _showSandboxApproval(data, ownerTabId) {
         console.warn('[sandbox] follow-up not sent:', e),
       );
     } catch (err) {
-      approve.disabled = false;
-      if (always) always.disabled = false;
-      if (once) once.disabled = false;
-      deny.disabled = false;
+      setBusy(false);
       // 'warn', not 'error': _showConnectivityToast mutes error toasts.
       _showConnectivityToast(`Could not record your decision: ${err.message}`, 'warn');
     }
   };
-  approve.addEventListener('click', (e) => {
-    e.stopPropagation();
-    decide('approve', 'task');
-  });
-  if (always)
-    always.addEventListener('click', (e) => {
+  scopeButtons.forEach((btn) =>
+    btn.addEventListener('click', (e) => {
       e.stopPropagation();
-      decide('approve', 'always');
-    });
-  if (once)
-    once.addEventListener('click', (e) => {
-      e.stopPropagation();
-      decide('approve', 'once');
-    });
+      decide('approve', btn.dataset.scope);
+    }),
+  );
   deny.addEventListener('click', (e) => {
     e.stopPropagation();
     decide('deny');
@@ -13486,6 +13541,7 @@ form.addEventListener('submit', async (e) => {
     _totalOutputTokens = 0;
     _userCollapsedThinking = false;
     _permissionCardShown = false;
+    _dropSurvivingTabCards(requestTabId);
     statusLines = [];
     toastLines = [];
     autoSkills = [];
@@ -14006,11 +14062,18 @@ form.addEventListener('submit', async (e) => {
               }
               _scheduleRender();
             } else if (msg.browser_confirm) {
-              _showBrowserConfirmCard(msgDiv, msg.browser_confirm);
+              const _confirm = msg.browser_confirm;
+              _routeCardToTab(requestTabId, _confirm.confirm_id, () =>
+                _showBrowserConfirmCard(msgDiv, _confirm, requestTabId),
+              );
             } else if (msg.browser_confirm_expired) {
+              _expireTabCard(requestTabId, msg.browser_confirm_expired);
               _expireConfirmCardById(msg.browser_confirm_expired);
             } else if (msg.failover_confirm) {
-              _showFailoverConfirmCard(msgDiv, msg.failover_confirm);
+              const _failover = msg.failover_confirm;
+              _routeCardToTab(requestTabId, `failover:${_failover.consent_id}`, () =>
+                _showFailoverConfirmCard(msgDiv, _failover, requestTabId),
+              );
             } else if (msg.browser_hitl) {
               if (msg.browser_hitl === 'active') {
                 // Remove confirm card if it wasn't dismissed (edge case)
@@ -14328,35 +14391,70 @@ form.addEventListener('submit', async (e) => {
               _continueRetryNote = typeof msg.retry_note === 'string' ? msg.retry_note : '';
             } else if (msg.type === 'permission_required') {
               _permissionCardShown = true;
-              _renderPermissionCard(
-                msgDiv,
-                msg,
-                prose,
-                async () => {
-                  // The server records the grant for this tab; the client cannot grant itself.
-                  const grant = await fetch('/api/chat/approve-deps', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ approval_id: msg.approval_id }),
-                  }).catch(() => null);
-                  if (!grant || !grant.ok) {
+              const _permCardId = `permission:${msg.approval_id}`;
+              // The card outlives the turn that asked: answering it re-sends the request. It is drawn
+              // again into the tab's chat each time that tab is shown, because the chat is rebuilt
+              // from history on every switch.
+              const _drawPermissionCard = () => {
+                let host = msgDiv;
+                let hostProse = prose;
+                if (!(msgDiv.isConnected && prose.isConnected)) {
+                  host = document.createElement('div');
+                  host.className = 'message assistant';
+                  const hostBubble = document.createElement('div');
+                  hostBubble.className = 'bubble';
+                  hostProse = document.createElement('div');
+                  hostProse.className = 'prose';
+                  hostBubble.appendChild(hostProse);
+                  host.appendChild(hostBubble);
+                  document.getElementById('messages')?.appendChild(host);
+                }
+                _renderPermissionCard(
+                  host,
+                  msg,
+                  hostProse,
+                  async (scope) => {
+                    _resolveTabCard(requestTabId, _permCardId);
+                    // The server records the grant for this tab; the client cannot grant itself.
+                    const grant = await fetch('/api/chat/approve-deps', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ approval_id: msg.approval_id, scope }),
+                    }).catch(() => null);
+                    if (!grant || !grant.ok) {
+                      const retryPayload = _permissionResendPayload;
+                      _permissionResendPayload = null;
+                      hostProse.textContent =
+                        'That permission request expired before it could be approved. ';
+                      if (retryPayload) {
+                        const again = document.createElement('button');
+                        again.className = 'permission-allow-btn';
+                        again.textContent = 'Ask again';
+                        again.addEventListener('click', () => {
+                          again.disabled = true;
+                          doSend(retryPayload);
+                        });
+                        hostProse.appendChild(again);
+                      }
+                      return;
+                    }
+                    // Re-submit using the saved payload — call doSend fresh so post-stream
+                    // work (history, action bar, suggested actions) runs normally
+                    if (!_permissionResendPayload) return;
+                    const resendPayload = _permissionResendPayload;
                     _permissionResendPayload = null;
-                    prose.textContent =
-                      'That permission request expired before it could be approved. Send your message again.';
-                    return;
-                  }
-                  // Re-submit using the saved payload — call doSend fresh so post-stream
-                  // work (history, action bar, suggested actions) runs normally
-                  if (!_permissionResendPayload) return;
-                  const resendPayload = _permissionResendPayload;
-                  _permissionResendPayload = null;
-                  await doSend(resendPayload);
-                },
-                () => {
-                  // Deny: card already replaced with hard-stop message, nothing else to do
-                  _permissionResendPayload = null;
-                },
-              );
+                    await doSend(resendPayload);
+                  },
+                  () => {
+                    // Deny: card already replaced with hard-stop message, nothing else to do
+                    _resolveTabCard(requestTabId, _permCardId);
+                    _permissionResendPayload = null;
+                  },
+                );
+              };
+              _routeCardToTab(requestTabId, _permCardId, _drawPermissionCard, {
+                survivesTurn: true,
+              });
             }
             if (_activeTabId === _tabKey && !_userScrolledUp)
               messages.scrollTop = messages.scrollHeight;
@@ -14588,6 +14686,7 @@ form.addEventListener('submit', async (e) => {
     }
     msgDiv.classList.remove('typing');
     _setTabWorking(requestTabId, false);
+    _dropStaleTabCards(requestTabId);
     if (_activeTabId === requestTabId) {
       _resetBtn();
       setStatus('ready');
@@ -16480,6 +16579,30 @@ document.addEventListener('DOMContentLoaded', () => {
   // Future: auto-open pane on page load if browser is active
 });
 
+/* ── Permission scope buttons ────────────────────────── */
+
+function _scopeLabel(scope) {
+  if (scope === 'always') return 'Always allow';
+  if (scope === 'tab') return 'Allow in this tab';
+  return 'Allow once';
+}
+
+// The server sends which scopes a card may offer and which one leads; Deny is added by the caller, last.
+function _scopeButtonSpecs(opts) {
+  const order = ['always', 'tab', 'once'];
+  const scopes =
+    opts && Array.isArray(opts.scopes) ? order.filter((s) => opts.scopes.includes(s)) : [];
+  if (!scopes.length) return [];
+  const lead = scopes.includes(opts.primary) ? opts.primary : scopes[0];
+  return scopes.map((scope) => ({ scope, label: _scopeLabel(scope), primary: scope === lead }));
+}
+
+function _scopeDoneNote(scope) {
+  if (scope === 'always') return 'always allowed (change it in Settings)';
+  if (scope === 'tab') return 'allowed in this tab';
+  return 'allowed this time';
+}
+
 /* ── Skill Permission Gate ───────────────────────────── */
 
 function _renderPermissionCard(msgDiv, msg, prose, onApprove, onDeny) {
@@ -16523,18 +16646,30 @@ function _renderPermissionCard(msgDiv, msg, prose, onApprove, onDeny) {
   const actions = document.createElement('div');
   actions.className = 'permission-card-actions';
 
-  const allowBtn = document.createElement('button');
-  allowBtn.className = 'permission-allow-btn';
-  allowBtn.textContent = 'Allow for this conversation';
-  allowBtn.addEventListener('click', () => {
-    allowBtn.disabled = true;
+  const _approve = (scope) => {
+    actions.querySelectorAll('button').forEach((b) => {
+      b.disabled = true;
+    });
     const depNames = msg.deps.map((d) => d.label || d.id).join(', ');
     while (card.firstChild) card.removeChild(card.firstChild);
     const approved = document.createElement('div');
     approved.className = 'permission-card-approved';
-    approved.textContent = '✓ ' + depNames + ' approved for this conversation';
+    approved.textContent = '✓ ' + depNames + ' ' + _scopeDoneNote(scope || 'tab');
     card.appendChild(approved);
-    onApprove();
+    onApprove(scope);
+  };
+  const scopeSpecs = _scopeButtonSpecs(msg.card);
+  const allowBtns = (
+    scopeSpecs.length ? scopeSpecs : [{ scope: 'tab', label: 'Allow in this tab', primary: true }]
+  ).map((spec) => {
+    const btn = document.createElement('button');
+    btn.className = spec.primary
+      ? 'permission-allow-btn'
+      : 'permission-allow-btn permission-secondary-btn';
+    btn.textContent = spec.label;
+    btn.dataset.scope = spec.scope;
+    btn.addEventListener('click', () => _approve(spec.scope));
+    return btn;
   });
 
   const denyBtn = document.createElement('button');
@@ -16556,7 +16691,7 @@ function _renderPermissionCard(msgDiv, msg, prose, onApprove, onDeny) {
     onDeny();
   });
 
-  actions.appendChild(allowBtn);
+  allowBtns.forEach((b) => actions.appendChild(b));
   actions.appendChild(denyBtn);
   card.appendChild(actions);
 
@@ -16603,6 +16738,7 @@ function _pinConfirmCardInView(card) {
 
 function _expireConfirmCard(card) {
   if (!card) return;
+  _resolveTabCard(card.dataset.ownerTab, card.dataset.confirmId);
   const askAgain = card._askAgain;
   const title = card.querySelector('[data-confirm-title]')?.textContent || '';
   card.replaceChildren();
@@ -16697,7 +16833,8 @@ async function _renderConfirmDiagram(box, diagram) {
 
 function _showBrowserConfirmCard(
   msgDiv,
-  { confirm_id, action, title, allow_label, deny_label, diagram },
+  { confirm_id, action, title, allow_label, deny_label, diagram, card: scopeOpts },
+  ownerTabId,
 ) {
   const text = _confirmCardText({ title, allow_label, deny_label });
   // Source cards keep their own id so two pending cards (two sources) do not replace each other.
@@ -16705,14 +16842,17 @@ function _showBrowserConfirmCard(
     // Remove any stale browser confirm card
     const existing = document.getElementById('browser-confirm-card');
     if (existing) existing.remove();
+  } else if (document.getElementById(`source-confirm-${confirm_id}`)) {
+    return;
   }
 
   const card = document.createElement('div');
-  card.className = 'system-card';
+  card.className = 'system-card confirm-card';
   card.id = text.isSource ? `source-confirm-${confirm_id}` : 'browser-confirm-card';
   card.dataset.confirmId = confirm_id;
+  const _tabId = ownerTabId || _activeTabId;
+  card.dataset.ownerTab = _tabId;
   // Re-sends this tab's last request so the gate is raised again with a live card.
-  const _tabId = _activeTabId;
   const _lastUserText = _lastUserRequestText(_tabId);
   if (_lastUserText) {
     card._askAgain = () => {
@@ -16725,25 +16865,22 @@ function _showBrowserConfirmCard(
   }
 
   const body = document.createElement('div');
-  body.style.cssText =
-    'display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px 10px; width: 100%;';
+  body.className = 'confirm-card-body';
 
   const icon = document.createElement('span');
   icon.textContent = text.icon;
-  icon.style.cssText = 'font-size: 1.1rem; flex-shrink: 0; margin-top: 2px;';
+  icon.className = 'confirm-card-icon';
 
   const textWrap = document.createElement('div');
-  textWrap.style.cssText = 'flex: 1 1 0; min-width: 0;';
+  textWrap.className = 'confirm-card-text';
 
   const titleEl = document.createElement('div');
-  titleEl.style.cssText =
-    'font-size: 0.85rem; font-weight: 600; color: var(--text); margin-bottom: 2px;';
+  titleEl.className = 'confirm-card-title';
   titleEl.textContent = text.title;
   titleEl.dataset.confirmTitle = '1';
 
   const detail = document.createElement('div');
-  detail.style.cssText =
-    'font-size: 0.78rem; color: var(--text-muted); word-break: break-word; white-space: pre-line;';
+  detail.className = 'confirm-card-detail';
   detail.textContent = action;
 
   textWrap.append(titleEl, detail);
@@ -16756,38 +16893,61 @@ function _showBrowserConfirmCard(
   }
 
   const btnWrap = document.createElement('div');
-  btnWrap.style.cssText =
-    'display: flex; flex-wrap: wrap; gap: 6px; flex: 1 1 100%; justify-content: flex-end; align-items: center;';
+  btnWrap.className = 'confirm-card-actions';
+
+  const scopeSpecs = _scopeButtonSpecs(scopeOpts);
 
   const cancelBtn = document.createElement('button');
-  cancelBtn.textContent = text.denyLabel;
-  cancelBtn.style.cssText =
-    'font-size: 0.75rem; padding: 4px 12px; border-radius: 6px; background: var(--surface3); color: var(--text); border: none; cursor: pointer; font-weight: 600;';
+  cancelBtn.textContent = scopeSpecs.length ? deny_label || 'Deny' : text.denyLabel;
+  cancelBtn.className = scopeSpecs.length
+    ? 'confirm-card-btn confirm-card-btn-ghost'
+    : 'confirm-card-btn';
 
-  const allowBtn = document.createElement('button');
-  allowBtn.textContent = text.allowLabel;
-  allowBtn.style.cssText =
-    'font-size: 0.75rem; padding: 4px 12px; border-radius: 6px; background: var(--accent); color: #000; border: none; cursor: pointer; font-weight: 600;';
+  const allowBtns = scopeSpecs.map((spec) => {
+    const btn = document.createElement('button');
+    btn.textContent = spec.label;
+    btn.dataset.scope = spec.scope;
+    btn.className = spec.primary ? 'confirm-card-btn confirm-card-btn-primary' : 'confirm-card-btn';
+    btn.addEventListener('click', () => _answer(`/api/browser/confirm/${confirm_id}`, spec.scope));
+    return btn;
+  });
+  if (!allowBtns.length) {
+    const allowBtn = document.createElement('button');
+    allowBtn.textContent = text.allowLabel;
+    allowBtn.className = 'confirm-card-btn confirm-card-btn-primary';
+    allowBtn.addEventListener('click', () => _answer(`/api/browser/confirm/${confirm_id}`));
+    allowBtns.push(allowBtn);
+  }
 
-  const _answer = async (url) => {
-    cancelBtn.disabled = true;
-    allowBtn.disabled = true;
+  const _answer = async (url, scope) => {
+    btnWrap.querySelectorAll('button').forEach((b) => {
+      b.disabled = true;
+    });
     let expired = false;
     try {
-      const resp = await fetch(url, { method: 'POST' });
+      const init = { method: 'POST' };
+      if (scope) {
+        init.headers = { 'Content-Type': 'application/json' };
+        init.body = JSON.stringify({ scope });
+      }
+      const resp = await fetch(url, init);
       const data = await resp.json().catch(() => null);
       expired = _confirmReplyExpired(resp, data);
     } catch (_) {
       expired = true;
     }
     if (expired) _expireConfirmCard(card);
-    else card.remove();
+    else {
+      _resolveTabCard(_tabId, confirm_id);
+      card.remove();
+    }
   };
 
   cancelBtn.addEventListener('click', () => _answer(`/api/browser/confirm/${confirm_id}/cancel`));
-  allowBtn.addEventListener('click', () => _answer(`/api/browser/confirm/${confirm_id}`));
 
-  btnWrap.append(cancelBtn, allowBtn);
+  // With scope buttons the order is fixed: Always allow, Allow in this tab, Deny.
+  if (scopeSpecs.length) btnWrap.append(...allowBtns, cancelBtn);
+  else btnWrap.append(cancelBtn, ...allowBtns);
   body.append(icon, textWrap, btnWrap);
   card.appendChild(body);
   // Append after msgDiv (not inside it) so card stretches full width
@@ -16802,7 +16962,11 @@ function _showBrowserConfirmCard(
 
 /* ── Failover Consent Gate ───────────────────────────── */
 
-function _showFailoverConfirmCard(msgDiv, { consent_id, fallback_model }) {
+function _showFailoverConfirmCard(
+  msgDiv,
+  { consent_id, fallback_model, card: scopeOpts },
+  ownerTabId,
+) {
   const existing = document.getElementById('failover-confirm-card');
   if (existing) existing.remove();
 
@@ -16836,17 +17000,48 @@ function _showFailoverConfirmCard(msgDiv, { consent_id, fallback_model }) {
   btnWrap.style.cssText =
     'display: flex; flex-wrap: wrap; gap: 6px; flex: 1 1 100%; justify-content: flex-end; align-items: center;';
 
-  const cancelBtn = document.createElement('button');
-  cancelBtn.textContent = 'Cancel';
-  cancelBtn.style.cssText =
-    'font-size: 0.75rem; padding: 4px 12px; border-radius: 6px; background: var(--surface3); color: var(--text); border: none; cursor: pointer; font-weight: 600;';
+  const _btnBase =
+    'font-size: 0.75rem; padding: 4px 12px; border-radius: 6px; cursor: pointer; font-weight: 600;';
+  const _btnPrimary = _btnBase + ' background: var(--accent); color: #000; border: none;';
+  const _btnSecondary =
+    _btnBase + ' background: var(--surface3); color: var(--text); border: none;';
+  const _btnGhost =
+    _btnBase +
+    ' background: transparent; color: var(--text-muted); border: 1px solid var(--border, #374151);';
 
-  const allowBtn = document.createElement('button');
-  allowBtn.textContent = 'Switch';
-  allowBtn.style.cssText =
-    'font-size: 0.75rem; padding: 4px 12px; border-radius: 6px; background: var(--accent); color: #000; border: none; cursor: pointer; font-weight: 600;';
+  const scopeSpecs = _scopeButtonSpecs(scopeOpts);
+
+  const cancelBtn = document.createElement('button');
+  cancelBtn.textContent = scopeSpecs.length ? 'Deny' : 'Cancel';
+  cancelBtn.style.cssText = scopeSpecs.length ? _btnGhost : _btnSecondary;
+
+  const _allow = (scope) => async () => {
+    _dismiss();
+    const init = { method: 'POST' };
+    if (scope) {
+      init.headers = { 'Content-Type': 'application/json' };
+      init.body = JSON.stringify({ scope });
+    }
+    await fetch(`/api/failover/confirm/${consent_id}`, init);
+  };
+  const allowBtns = scopeSpecs.map((spec) => {
+    const btn = document.createElement('button');
+    btn.textContent = spec.label;
+    btn.dataset.scope = spec.scope;
+    btn.style.cssText = spec.primary ? _btnPrimary : _btnSecondary;
+    btn.addEventListener('click', _allow(spec.scope));
+    return btn;
+  });
+  if (!allowBtns.length) {
+    const allowBtn = document.createElement('button');
+    allowBtn.textContent = 'Switch';
+    allowBtn.style.cssText = _btnPrimary;
+    allowBtn.addEventListener('click', _allow());
+    allowBtns.push(allowBtn);
+  }
 
   const _dismiss = () => {
+    _resolveTabCard(ownerTabId || _activeTabId, `failover:${consent_id}`);
     card.remove();
   };
 
@@ -16855,12 +17050,8 @@ function _showFailoverConfirmCard(msgDiv, { consent_id, fallback_model }) {
     await fetch(`/api/failover/confirm/${consent_id}/cancel`, { method: 'POST' });
   });
 
-  allowBtn.addEventListener('click', async () => {
-    _dismiss();
-    await fetch(`/api/failover/confirm/${consent_id}`, { method: 'POST' });
-  });
-
-  btnWrap.append(cancelBtn, allowBtn);
+  if (scopeSpecs.length) btnWrap.append(...allowBtns, cancelBtn);
+  else btnWrap.append(cancelBtn, ...allowBtns);
   body.append(icon, textWrap, btnWrap);
   card.appendChild(body);
   const container = document.getElementById('messages');
@@ -18092,7 +18283,7 @@ function _initOnReady() {
   _initGoogleWorkspaceSettings();
   _initClearCredentialsSettings();
   _initSandboxSettings();
-  _initSavedPermissions();
+  _initPermissionSettings();
 }
 
 function _initClearCredentialsSettings() {
@@ -18207,14 +18398,23 @@ function _initSandboxSettings() {
   });
 }
 
-function _initSavedPermissions() {
-  const row = document.getElementById('saved-permissions-row');
-  const list = document.getElementById('saved-permissions-list');
-  const clear = document.getElementById('saved-permissions-clear');
-  if (!row || !list || !clear) return;
-  const call = async (method, url) => {
+function _initPermissionSettings() {
+  const row = document.getElementById('permissions-row');
+  const list = document.getElementById('permissions-list');
+  const rulesList = document.getElementById('permissions-rules-list');
+  const clear = document.getElementById('permissions-clear');
+  const adminNote = document.getElementById('permissions-admin-note');
+  if (!row || !list || !rulesList || !clear) return;
+  const call = async (method, url, body) => {
     const send = () =>
-      fetch(url, { method, headers: { 'X-CSRF-Token': window.__CSRF_TOKEN__ || '' } });
+      fetch(url, {
+        method,
+        headers: {
+          'X-CSRF-Token': window.__CSRF_TOKEN__ || '',
+          ...(body ? { 'Content-Type': 'application/json' } : {}),
+        },
+        body: body ? JSON.stringify(body) : undefined,
+      });
     let res = await send();
     if (res.status === 403) {
       const fresh = await fetch('/api/csrf')
@@ -18226,55 +18426,100 @@ function _initSavedPermissions() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return res.json();
   };
-  const render = (entries) => {
-    list.replaceChildren();
-    clear.hidden = entries.length === 0;
-    if (!entries.length) {
-      const empty = document.createElement('div');
-      empty.className = 'srow-sub';
-      empty.textContent =
-        'Nothing saved yet. Choose "Always allow this" on a command approval to save one here.';
-      list.appendChild(empty);
-      return;
+  const note = (text) => {
+    const el = document.createElement('div');
+    el.className = 'srow-sub';
+    el.textContent = text;
+    return el;
+  };
+  const modeRow = (category, persistentAllowed) => {
+    const item = document.createElement('div');
+    item.className = 'permission-mode-item';
+    const text = document.createElement('div');
+    text.className = 'permission-mode-text';
+    const label = document.createElement('span');
+    label.className = 'permission-mode-label';
+    const name = String(category.label);
+    label.textContent = name.charAt(0).toUpperCase() + name.slice(1);
+    text.appendChild(label);
+    if (category.description) {
+      const desc = document.createElement('span');
+      desc.className = 'permission-mode-desc';
+      desc.textContent = String(category.description);
+      text.appendChild(desc);
     }
-    entries.forEach((entry) => {
+    const group = document.createElement('div');
+    group.className = 'seg-group seg-sm';
+    [
+      ['ask', 'Ask'],
+      ['always', 'Always allow'],
+    ].forEach(([mode, text]) => {
+      const btn = document.createElement('button');
+      btn.className = 'seg-btn' + (category.mode === mode ? ' active' : '');
+      btn.textContent = text;
+      btn.disabled = mode === 'always' && !persistentAllowed;
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (category.mode === mode) return;
+        act('POST', '/api/permissions/mode', { category: category.id, mode });
+      });
+      group.appendChild(btn);
+    });
+    item.append(text, group);
+    return item;
+  };
+  const render = (data) => {
+    const categories = Array.isArray(data.categories) ? data.categories : [];
+    const rules = Array.isArray(data.rules) ? data.rules : [];
+    const persistentAllowed = data.persistent_allowed !== false;
+    if (adminNote) adminNote.hidden = persistentAllowed;
+    list.replaceChildren();
+    categories
+      .filter((c) => c.mode === 'ask' || c.mode === 'always')
+      .forEach((c) => list.appendChild(modeRow(c, persistentAllowed)));
+    rulesList.replaceChildren();
+    const subjectRules = rules.filter((r) => r.subject);
+    if (subjectRules.length) {
+      const head = document.createElement('div');
+      head.className = 'spanel-divider';
+      head.textContent = 'Remembered for specific items';
+      rulesList.appendChild(head);
+    }
+    subjectRules.forEach((rule) => {
       const item = document.createElement('div');
       item.className = 'srow-sub saved-permission-item';
       const text = document.createElement('span');
-      text.textContent = String(entry.description);
+      text.textContent = `${rule.label}: ${rule.subject}`;
       const remove = document.createElement('button');
       remove.className = 'btn-secondary';
       remove.textContent = 'Remove';
       remove.addEventListener('click', (e) => {
         e.stopPropagation();
-        act('DELETE', `/api/sandbox/saved-permissions/${encodeURIComponent(entry.id)}`);
+        act('DELETE', `/api/permissions/rules/${encodeURIComponent(rule.id)}`);
       });
       item.append(text, remove);
-      list.appendChild(item);
+      rulesList.appendChild(item);
     });
+    clear.disabled = rules.length === 0;
   };
   const refresh = () =>
-    call('GET', '/api/sandbox/saved-permissions')
-      .then((d) => render(Array.isArray(d.entries) ? d.entries : []))
+    call('GET', '/api/permissions')
+      .then(render)
       .catch(() => {
-        list.replaceChildren();
-        clear.hidden = true;
-        const failed = document.createElement('div');
-        failed.className = 'srow-sub';
-        failed.textContent = 'Could not load saved permissions.';
-        list.appendChild(failed);
+        list.replaceChildren(note('Could not load permissions.'));
+        rulesList.replaceChildren();
+        clear.disabled = true;
       });
-  const act = (method, url) =>
-    call(method, url)
-      .catch(() => _showConnectivityToast('Could not change saved permissions.', 'warn'))
+  const act = (method, url, body) =>
+    call(method, url, body)
+      .catch(() => _showConnectivityToast('Could not change permissions.', 'warn'))
       .then(refresh);
   clear.addEventListener('click', (e) => {
     e.stopPropagation();
-    if (!confirm('Remove all saved command permissions? AI Gator will ask again next time.'))
-      return;
-    act('DELETE', '/api/sandbox/saved-permissions');
+    if (!confirm('Remove every Always allow setting? AI Gator will ask again next time.')) return;
+    act('DELETE', '/api/permissions/rules');
   });
-  window._refreshSavedPermissions = refresh;
+  window._refreshPermissionSettings = refresh;
   refresh();
 }
 

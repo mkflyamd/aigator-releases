@@ -98,9 +98,8 @@ def prompt_for(source: Source, tool_name: str, inputs: dict | None = None) -> di
         url = str((inputs or {}).get("url", ""))
         if len(url) > _CARD_URL_MAX:
             url = url[:_CARD_URL_MAX] + "..."
-        shown = f" Address: {url}" if url else ""
-        action = (f"AI Gator wants to open {source.label}, which this tab has not used yet.{shown} "
-                  "Allowed for this tab only.")
+        shown = "\nAddress: " + url if url else ""
+        action = f"AI Gator wants to open {source.label}, which this tab has not used yet.{shown}"
     else:
         action = (
             f"AI Gator wants to use {source.label} (tool: {tool_name}). "

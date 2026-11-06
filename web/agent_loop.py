@@ -1,6 +1,7 @@
 """Agentic loop -- single-agent (original) and three-agent (primary) orchestration."""
 import asyncio
 import contextlib
+import contextvars
 import json
 import logging
 import os
@@ -100,43 +101,62 @@ async def _compact_in_place(msgs: list[dict], turn_user_msg, context_id: str, pr
 _pending_failover_consents: dict[str, tuple[asyncio.Event, list[bool]]] = {}
 
 
-def resolve_failover_consent(consent_id: str, allowed: bool) -> None:
-    """Called by REST endpoint to resolve a pending failover consent gate."""
-    if consent_id in _pending_failover_consents:
-        event, result = _pending_failover_consents[consent_id]
-        result.append(allowed)
-        event.set()
+_failover_scopes: dict[str, str] = {}
 
 
-async def _request_failover_consent(
-    fallback_model: str, event_queue: asyncio.Queue | None = None,
-) -> bool:
-    """Suspend execution and ask the user whether to switch to the fallback
-    model. Returns True if the user consents, False if they decline or timeout.
+def resolve_failover_consent(consent_id: str, allowed: bool, scope: str | None = None) -> bool:
+    """Called by REST endpoint to resolve a pending failover consent gate.
 
-    If event_queue is provided (three-agent loop), the consent request is
-    forwarded through the event queue so the agent loop's drain loop can yield
-    it as SSE. If None (single-agent loop), the caller yields the SSE chunk
-    directly before calling this function.
+    `scope` is what the user chose on the card ("always", "tab", "once").
+    Returns False when no such gate is pending (answered already or expired).
     """
+    if consent_id not in _pending_failover_consents:
+        return False
+    event, result = _pending_failover_consents[consent_id]
+    if allowed and scope:
+        _failover_scopes[consent_id] = scope
+    result.append(allowed)
+    event.set()
+    return True
+
+
+def _open_failover_consent(context_id: str | None, fallback_model: str) -> tuple[str, dict]:
+    """Register a pending consent; returns its id and the SSE payload for the card."""
+    import permissions
     consent_id = str(uuid.uuid4())
-    event = asyncio.Event()
-    result: list[bool] = []
-    _pending_failover_consents[consent_id] = (event, result)
+    _pending_failover_consents[consent_id] = (asyncio.Event(), [])
+    payload = {"consent_id": consent_id, "fallback_model": fallback_model}
+    card = permissions.card_options("failover") if context_id else None
+    if card:
+        payload["category"] = "failover"
+        payload["card"] = card
+    return consent_id, payload
+
+
+async def _await_failover_consent(consent_id: str, context_id: str | None) -> bool:
+    """Wait for the user's answer. True only when they switched; records the scope they chose."""
+    import permissions
+    event, result = _pending_failover_consents[consent_id]
     try:
-        if event_queue is not None:
-            await event_queue.put({
-                "kind": "failover_confirm",
-                "consent_id": consent_id,
-                "fallback_model": fallback_model,
-            })
         try:
             await asyncio.wait_for(event.wait(), timeout=120.0)
         except asyncio.TimeoutError:
-            result.append(False)
-        return result[0] if result else False
+            return False
+        if not (result and result[0]):
+            return False
+        if context_id:
+            permissions.apply_scope(context_id, "failover", "", _failover_scopes.get(consent_id), "once")
+        return True
     finally:
         _pending_failover_consents.pop(consent_id, None)
+        _failover_scopes.pop(consent_id, None)
+
+
+def _failover_allowed(context_id: str | None) -> bool:
+    """True when a saved "Always allow" rule or this tab's grant already covers switching to the fallback."""
+    import permissions
+    return permissions.decision(context_id, "failover") == "allow"
+
 
 # Substrings in provider error messages that indicate context-window overflow.
 # When we see one of these, we prune the largest tool result from msgs and retry.
@@ -373,6 +393,9 @@ def _any_tool_succeeded(results: list) -> bool:
     return False
 
 
+_saved_rule_hits: contextvars.ContextVar[list[str] | None] = contextvars.ContextVar("saved_rule_hits", default=None)
+
+
 def _summarize_tool_calls(tool_calls: list, results: list | None = None) -> list[dict]:
     """Build a JSON-serializable summary of tool calls for telemetry.
 
@@ -394,6 +417,9 @@ def _summarize_tool_calls(tool_calls: list, results: list | None = None) -> list
             # Code-runner sandbox: one metadata-only record per run (no paths, hosts, code or output).
             if isinstance(r, dict) and isinstance(r.get("_sandbox_telemetry"), dict):
                 entry["sandbox"] = r["_sandbox_telemetry"]
+            # A saved "Always allow" rule skipped a card: category ids only, never the subject or content.
+            if isinstance(r, dict) and isinstance(r.get("_permission_telemetry"), dict):
+                entry["permission"] = r["_permission_telemetry"]
         else:
             entry["success"] = None
         out.append(entry)
@@ -552,6 +578,7 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
     """Returns (_run_tool_block, _run_all_into_queue, _SENTINEL) closures."""
     import content_guard
     import data_sources
+    import permissions
     _SENTINEL = object()
     _offered = set(offered_names) if offered_names is not None else None
     _source_locks: dict[tuple[str, str], asyncio.Lock] = {}
@@ -560,10 +587,26 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
 
     _BROWSER_TOOLS = {"browser_task", "browser_navigate", "browser_search"}
 
+    def _allowed_now(category: str, subject: str = "") -> bool:
+        """True when a saved "Always allow" rule or this tab's grant already covers the category."""
+        if permissions.decision(context_id, category, subject) != "allow":
+            return False
+        hits = _saved_rule_hits.get()
+        if hits is not None and category not in hits and permissions.covered_by_saved_rule(category, subject):
+            hits.append(category)
+        return True
+
+    _SCOPE_NOTE = {"always": "always allowed (change it in Settings)", "tab": "allowed for this tab", "once": "allowed this time"}
+
     async def _request_browser_confirm(action: str, event_queue, *, title=None,
-                                       allow_label=None, deny_label=None, diagram=None) -> bool:
-        """Suspend execution, ask user to allow/cancel. Returns True if allowed."""
-        from browser_agent import _pending_confirms, resolve_browser_confirm
+                                       allow_label=None, deny_label=None, diagram=None,
+                                       category=None, subject="", default_scope="tab") -> str:
+        """Suspend execution, ask user to allow/cancel.
+
+        Returns "" when denied, else the scope that took effect ("always", "tab", "once"),
+        or "allowed" when the card has no permission category.
+        """
+        from browser_agent import _pending_confirms, pop_confirm_scope
         confirm_id = str(uuid.uuid4())
         event = asyncio.Event()
         result: list[bool] = []
@@ -573,6 +616,10 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
             for k, v in (("title", title), ("allow_label", allow_label), ("deny_label", deny_label), ("diagram", diagram)):
                 if v:
                     evt[k] = v
+            card = permissions.card_options(category) if category and context_id else None
+            if card:
+                evt["category"] = category
+                evt["card"] = card
             await event_queue.put(evt)
             try:
                 with awaiting_human(context_id):
@@ -580,28 +627,43 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
             except asyncio.TimeoutError:
                 result.append(False)
                 await event_queue.put({"kind": "browser_confirm_expired", "confirm_id": confirm_id})
-            return result[0] if result else False
+            if not (result and result[0]):
+                return ""
+            if not card:
+                return "allowed"
+            return permissions.apply_scope(context_id, category, subject, pop_confirm_scope(confirm_id), default_scope)
         finally:
             _pending_confirms.pop(confirm_id, None)
+            pop_confirm_scope(confirm_id)
 
     async def _early_error(tc, event_queue, result: dict, summary: str):
         await event_queue.put({"kind": "tool_result", "call_id": tc.id, "status": "error", "summary": summary})
         return result
 
+    def _source_category(source) -> tuple[str, str]:
+        if source.key.startswith("web:"):
+            return "web", source.key[len("web:"):]
+        return source.key, ""
+
+    def _source_allowed(source) -> bool:
+        return data_sources.is_allowed(context_id, source.key) or _allowed_now(*_source_category(source))
+
     async def _ask_source(tc, source, event_queue):
         """Returns None when the source is allowed, else the error result."""
         lock = _source_locks.setdefault((context_id, source.key), asyncio.Lock())
         async with lock:
-            if data_sources.is_allowed(context_id, source.key):
+            if _source_allowed(source):
                 return None
             if not data_sources.recently_denied(context_id, source.key):
                 text = data_sources.prompt_for(source, tc.name, tc.inputs)
-                if await _request_browser_confirm(
+                category, subject = _source_category(source)
+                granted = await _request_browser_confirm(
                     text["action"], event_queue, title=text["title"],
                     allow_label=text["allow_label"], deny_label=text["deny_label"],
-                ):
-                    data_sources.allow(context_id, source.key)
-                    await event_queue.put({"kind": "status", "status": f"{source.label}: allowed for this tab"})
+                    category=category, subject=subject,
+                )
+                if granted:
+                    await event_queue.put({"kind": "status", "status": f"{source.label}: {_SCOPE_NOTE.get(granted, 'allowed')}"})
                     return None
                 data_sources.deny(context_id, source.key)
         return await _early_error(
@@ -782,10 +844,13 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
                 "Scheduling is not allowed in an unattended run",
             )
         _add_inferred_schedule_skills(tc.inputs)
+        if _allowed_now("schedule_task"):
+            return None
         if await _request_browser_confirm(
             _schedule_card_action(tc.inputs or {}), event_queue,
             title="Allow AI Gator to schedule a task?", allow_label="Allow", deny_label="Deny",
             diagram=_schedule_card_diagram(tc.inputs or {}),
+            category="schedule_task", default_scope="once",
         ):
             return None
         return await _early_error(
@@ -834,19 +899,20 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
             key = f"capability:{runner}"
             lock = _source_locks.setdefault((context_id, key), asyncio.Lock())
             async with lock:
-                if data_sources.is_allowed(context_id, key):
+                if data_sources.is_allowed(context_id, key) or _allowed_now(key):
                     continue
                 if not data_sources.recently_denied(context_id, key):
                     name = _RUNNER_CARD_NAMES.get(runner, runner)
-                    if await _request_browser_confirm(
+                    granted = await _request_browser_confirm(
                         f"AI Gator wants to use {name}. It runs code or commands the model writes inside the "
                         f"AI Gator sandbox; access to other folders or the network is asked separately. "
-                        f"Reason given: {reason}. Allowed for this tab only.",
+                        f"Reason given: {reason}.",
                         event_queue, title=f"Allow AI Gator to use {name}?",
                         allow_label="Allow for this tab", deny_label="Deny",
-                    ):
-                        data_sources.allow(context_id, key)
-                        await event_queue.put({"kind": "status", "status": f"{name}: allowed for this tab"})
+                        category=key,
+                    )
+                    if granted:
+                        await event_queue.put({"kind": "status", "status": f"{name}: {_SCOPE_NOTE.get(granted, 'allowed')}"})
                         continue
                     data_sources.deny(context_id, key)
             return await _early_error(
@@ -906,6 +972,20 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
         return {"asked": True, "_await_answer": card}
 
     async def _run_tool_block(tc, event_queue):
+        hits: list[str] = []
+        token = _saved_rule_hits.set(hits)
+        try:
+            result = await _run_tool_block_gated(tc, event_queue)
+        finally:
+            _saved_rule_hits.reset(token)
+        telemetry = result.get("_sandbox_telemetry") if isinstance(result, dict) else None
+        if isinstance(telemetry, dict) and telemetry.get("approval") == "saved":
+            hits.append("sandbox:shell")
+        if hits and isinstance(result, dict):
+            result["_permission_telemetry"] = {"approval": "saved", "categories": list(hits)}
+        return result
+
+    async def _run_tool_block_gated(tc, event_queue):
         if tc.name == "request_skill" and (_offered is None or tc.name in _offered):
             return await _grant_requested_skill(tc, event_queue)
         if tc.name == "ask_user" and (_offered is None or tc.name in _offered):
@@ -930,7 +1010,7 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
                     return await _early_error(tc, event_queue, {**refusal, "url": url}, refusal["error"])
         if context_id:
             source = data_sources.source_for_call(tc.name, tc.inputs)
-            if source is not None and not data_sources.is_allowed(context_id, source.key):
+            if source is not None and not _source_allowed(source):
                 denied = await _ask_source(tc, source, event_queue)
                 if denied is not None:
                     return denied
@@ -946,7 +1026,9 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
                 action = f"Search the web for \"{tc.inputs.get('query', '')}\""
             else:
                 action = tc.inputs.get("task", "Perform a browser task")[:120]
-            confirmed = await _request_browser_confirm(action, event_queue)
+            confirmed = (_allowed_now("browser") and "tab") or await _request_browser_confirm(
+                action, event_queue, category="browser", default_scope="once",
+            )
             if not confirmed:
                 return {"error": "Browser use cancelled by user."}
             await event_queue.put({"kind": "browser_hitl", "state": "active"})
@@ -1326,21 +1408,12 @@ async def _single_agent_loop(
                             "[agent] primary stream stalled (%s) — asking user to consent to fallback %s",
                             exc, _fb_model
                         )
-                        _consent_id = str(uuid.uuid4())
-                        yield f"data: {json.dumps({'failover_confirm': {'consent_id': _consent_id, 'fallback_model': _fb_model}})}\n\n"
-                        _pending_failover_consents[_consent_id] = (asyncio.Event(), [])
-                        try:
-                            await asyncio.wait_for(
-                                _pending_failover_consents[_consent_id][0].wait(),
-                                timeout=120.0
-                            )
-                        except asyncio.TimeoutError:
-                            _pending_failover_consents[_consent_id][1].append(False)
-                        _consented = (
-                            _pending_failover_consents[_consent_id][1][0]
-                            if _pending_failover_consents[_consent_id][1] else False
-                        )
-                        _pending_failover_consents.pop(_consent_id, None)
+                        if _failover_allowed(context_id):
+                            _consented = True
+                        else:
+                            _consent_id, _consent_card = _open_failover_consent(context_id, _fb_model)
+                            yield f"data: {json.dumps({'failover_confirm': _consent_card})}\n\n"
+                            _consented = await _await_failover_consent(_consent_id, context_id)
 
                         if _consented:
                             _failover_used = True
@@ -1546,12 +1619,10 @@ async def _single_agent_loop(
                 elif kind == "browser_hitl":
                     yield f"data: {json.dumps({'browser_hitl': evt['state']})}\n\n"
                 elif kind == "browser_confirm":
-                    _card = {k: evt[k] for k in ("confirm_id", "action", "title", "allow_label", "deny_label", "diagram") if k in evt}
+                    _card = {k: evt[k] for k in ("confirm_id", "action", "title", "allow_label", "deny_label", "diagram", "category", "card") if k in evt}
                     yield f"data: {json.dumps({'browser_confirm': _card})}\n\n"
                 elif kind == "browser_confirm_expired":
                     yield f"data: {json.dumps({'browser_confirm_expired': evt['confirm_id']})}\n\n"
-                elif kind == "failover_confirm":
-                    yield f"data: {json.dumps({'failover_confirm': {'consent_id': evt['consent_id'], 'fallback_model': evt['fallback_model']}})}\n\n"
                 elif kind == "files":
                     yield f"data: {json.dumps({'files': evt['files']})}\n\n"
                 elif kind == "tools_granted":
@@ -1759,55 +1830,18 @@ def _chunk_text(text: str, size: int = 4) -> list:
     return chunks
 
 
-async def _handle_stall_with_consent(
-    exc: TimeoutError, provider, model, failover_used: bool,
-    event_queue: asyncio.Queue,
-) -> tuple[object, str, bool] | None:
-    """Handle a TimeoutError by asking the user for failover consent.
-
-    Returns (fallback_provider, fallback_model, True) if the user consents,
-    or None if there's no fallback, failover was already used, or the user
-    declined. The caller is responsible for surfacing the error when None
-    is returned.
-    """
-    if failover_used:
-        return None
+def _stall_fallback(exc: TimeoutError):
+    """The fallback (provider, model) to offer after a stalled stream, or None when there is none."""
     try:
         from llm.registry import get_fallback_provider
         _fb = get_fallback_provider()
     except Exception:
         return None
-    if _fb is None:
-        return None
-    _fb_provider, _fb_model = _fb
-    _log.warning(
-        "[agent] primary stream stalled (%s) — asking user to consent to fallback %s",
-        exc, _fb_model
-    )
-    # Emit the consent request through the event queue
-    consent_id = str(uuid.uuid4())
-    await event_queue.put({
-        "kind": "failover_confirm",
-        "consent_id": consent_id,
-        "fallback_model": _fb_model,
-    })
-    # Suspend and wait for the user's response
-    _pending_failover_consents[consent_id] = (asyncio.Event(), [])
-    try:
-        await asyncio.wait_for(
-            _pending_failover_consents[consent_id][0].wait(),
-            timeout=120.0
+    if _fb is not None:
+        _log.warning(
+            "[agent] primary stream stalled (%s) — asking user to consent to fallback %s", exc, _fb[1]
         )
-    except asyncio.TimeoutError:
-        _pending_failover_consents[consent_id][1].append(False)
-    _consented = (
-        _pending_failover_consents[consent_id][1][0]
-        if _pending_failover_consents[consent_id][1] else False
-    )
-    _pending_failover_consents.pop(consent_id, None)
-    if _consented:
-        return _fb_provider, _fb_model, True
-    return None
+    return _fb
 
 
 _MAX_SWARM_DEPTH = 1  # nested three-agent swarms beyond this depth are rejected
@@ -1892,15 +1926,18 @@ async def run_three_agent_loop(
                 continue
             # Failover consent after retries exhausted
             if isinstance(exc, TimeoutError) and not _failover_used and not plan_text:
-                _eq = asyncio.Queue()
-                _result = await _handle_stall_with_consent(exc, provider, model, _failover_used, _eq)
-                if _result is not None:
-                    _fb_provider, _fb_model, _ = _result
+                _fb = _stall_fallback(exc)
+                _consented = False
+                if _fb is not None:
+                    _fb_provider, _fb_model = _fb
+                    if _failover_allowed(context_id):
+                        _consented = True
+                    else:
+                        _consent_id, _consent_card = _open_failover_consent(context_id, _fb_model)
+                        yield f"data: {json.dumps({'failover_confirm': _consent_card})}\n\n"
+                        _consented = await _await_failover_consent(_consent_id, context_id)
+                if _consented:
                     _failover_used = True
-                    while not _eq.empty():
-                        _evt = _eq.get_nowait()
-                        if _evt.get("kind") == "failover_confirm":
-                            yield f"data: {json.dumps({'failover_confirm': {'consent_id': _evt['consent_id'], 'fallback_model': _evt['fallback_model']}})}\n\n"
                     yield f"data: {json.dumps({'status': f'⚠️ Switching to fallback ({_fb_model})...'})}\n\n"
                     provider = _fb_provider
                     model = _fb_model
@@ -2033,15 +2070,18 @@ async def run_three_agent_loop(
                     continue
                 # Failover consent after retries exhausted
                 if isinstance(exc, TimeoutError) and not _failover_used and not draft_text:
-                    _eq = asyncio.Queue()
-                    _result = await _handle_stall_with_consent(exc, provider, model, _failover_used, _eq)
-                    if _result is not None:
-                        _fb_provider, _fb_model, _ = _result
+                    _fb = _stall_fallback(exc)
+                    _consented = False
+                    if _fb is not None:
+                        _fb_provider, _fb_model = _fb
+                        if _failover_allowed(context_id):
+                            _consented = True
+                        else:
+                            _consent_id, _consent_card = _open_failover_consent(context_id, _fb_model)
+                            yield f"data: {json.dumps({'failover_confirm': _consent_card})}\n\n"
+                            _consented = await _await_failover_consent(_consent_id, context_id)
+                    if _consented:
                         _failover_used = True
-                        while not _eq.empty():
-                            _evt = _eq.get_nowait()
-                            if _evt.get("kind") == "failover_confirm":
-                                yield f"data: {json.dumps({'failover_confirm': {'consent_id': _evt['consent_id'], 'fallback_model': _evt['fallback_model']}})}\n\n"
                         yield f"data: {json.dumps({'status': f'⚠️ Switching to fallback ({_fb_model})...'})}\n\n"
                         provider = _fb_provider
                         model = _fb_model
@@ -2104,12 +2144,10 @@ async def run_three_agent_loop(
                 elif kind == "browser_hitl":
                     yield f"data: {json.dumps({'browser_hitl': evt['state']})}\n\n"
                 elif kind == "browser_confirm":
-                    _card = {k: evt[k] for k in ("confirm_id", "action", "title", "allow_label", "deny_label", "diagram") if k in evt}
+                    _card = {k: evt[k] for k in ("confirm_id", "action", "title", "allow_label", "deny_label", "diagram", "category", "card") if k in evt}
                     yield f"data: {json.dumps({'browser_confirm': _card})}\n\n"
                 elif kind == "browser_confirm_expired":
                     yield f"data: {json.dumps({'browser_confirm_expired': evt['confirm_id']})}\n\n"
-                elif kind == "failover_confirm":
-                    yield f"data: {json.dumps({'failover_confirm': {'consent_id': evt['consent_id'], 'fallback_model': evt['fallback_model']}})}\n\n"
                 elif kind == "files":
                     yield f"data: {json.dumps({'files': evt['files']})}\n\n"
                 elif kind == "tools_granted":

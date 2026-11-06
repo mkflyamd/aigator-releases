@@ -14,6 +14,7 @@ from uuid import uuid4
 
 import sandbox
 from sandbox import approvals as sandbox_approvals
+import permissions
 from sandbox import saved_permissions, task_grants
 from sandbox.command_programs import programs_in
 from sandbox.paths import PathNotGrantable, is_within, normalize_grant_paths
@@ -689,19 +690,21 @@ def _shell_gate(cr, command, read_paths, write_paths, hosts, context_id, policy)
     if task_grants.covers(tab, read_s, write_s, hosts):
         return "task_approved"
     programs = programs_in(command)
-    if policy.saved_permissions != "deny" and saved_permissions.covers(read_s, write_s, hosts, programs):
+    saved_ok = policy.saved_permissions != "deny" and permissions.persistent_allowed()
+    if saved_ok and saved_permissions.covers(read_s, write_s, hosts, programs):
         return "saved"
     if req is None:
         req = sandbox_approvals.create(
             tab, read_s, write_s, hosts, tool="run_shell", command=command,
             programs=None if programs is None else tuple(sorted(programs)),
-            saveable=bool(programs) and policy.saved_permissions != "deny",
+            saveable=bool(programs) and saved_ok,
         )
     card = {
         "request_id": req.id, "read_paths": list(req.read_paths), "write_paths": list(req.write_paths),
         "network_hosts": list(req.network_hosts), "context_id": req.context_id, "tool": "run_shell",
         "command": req.command[:2000], "saveable": bool(req.saveable),
-        "programs": list(req.programs or ()),
+        "programs": list(req.programs or ()), "category": "sandbox:shell",
+        "card": permissions.sandbox_card("run_shell", bool(req.saveable)),
     }
     return {
         "approval_required": True, "request_id": req.id, "read_paths": card["read_paths"],
@@ -977,7 +980,7 @@ def _tool_run_shell(
         return _shell_error(cr._unavailable_message(reason, in_settings=True), _DETECTED_SHELL)
     if mode == "off":
         return _run_unsandboxed(command, shell, cwd, timeout, background)
-    return _run_sandboxed(cr, command, shell, cwd, timeout, background, requested, policy, _context_id)
+    return _run_sandboxed(cr, command, shell, cwd, sandbox.clamp_run_timeout(timeout), background, requested, policy, _context_id)
 
 
 TOOL_DEFS = [
@@ -1021,7 +1024,7 @@ TOOL_DEFS = [
                 },
                 "timeout": {
                     "type": "integer",
-                    "description": "Timeout in seconds — default 60 (optional). Ignored when background=true.",
+                    "description": "Timeout in seconds — default 60, at most 600 in the sandbox (optional). Ignored when background=true.",
                 },
                 "background": {
                     "type": "boolean",

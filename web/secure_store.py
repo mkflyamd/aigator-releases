@@ -497,6 +497,11 @@ def get(name: str) -> str | None:
         return _migrate_legacy(name)
 
 
+def exists(name: str) -> bool:
+    with _LOCK:
+        return _path(name).exists()
+
+
 def set(name: str, value: str) -> None:  # noqa: A001 - public API name
     path = _path(name)
     with _LOCK:

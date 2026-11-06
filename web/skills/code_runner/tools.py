@@ -19,6 +19,7 @@ from proc_utils import (
     snapshot_outputs,
     diff_outputs,
 )
+import permissions
 import sandbox
 from sandbox import approvals as sandbox_approvals
 from sandbox import task_grants
@@ -317,11 +318,13 @@ def _unavailable_message(reason: str | None, in_settings: bool = False) -> str:
     ).replace("  ", " ")
 
 
-def _not_grantable_message(paths) -> str:
+def _not_grantable_message(paths, reason: str | None = None) -> str:
+    why = reason or (
+        "Windows does not let this account change permissions there, and sandboxed code cannot read it by default."
+    )
     return (
         "The sandbox cannot be given access to " + ", ".join(str(p) for p in paths) + " on this computer: "
-        "Windows does not let this account change permissions there, and sandboxed code cannot read it by "
-        "default. Nothing was run and no approval was asked. Do not request these folders again; use another "
+        f"{why} Nothing was run and no approval was asked. Do not request these folders again; use another "
         "way to get the data (a copy in a folder the user owns), or tell the user it cannot be used."
     )
 
@@ -329,7 +332,7 @@ def _not_grantable_message(paths) -> str:
 def _launch_refusal_message(exc: Exception) -> str:
     """User-facing text for a SandboxUnavailable raised before anything ran."""
     if isinstance(exc, sandbox.SandboxPathNotGrantable):
-        return _not_grantable_message(exc.paths)
+        return _not_grantable_message(exc.paths, getattr(exc, "reason", None))
     return _unavailable_message(str(exc))
 
 
@@ -442,6 +445,8 @@ def _approval_gate(read_paths, write_paths, hosts, context_id: str, skill_id: st
         "write_paths": list(req.write_paths),
         "network_hosts": list(req.network_hosts),
         "context_id": req.context_id,
+        "category": "sandbox:python",
+        "card": permissions.sandbox_card("run_python"),
     }
     return {
         "approval_required": True,
@@ -724,6 +729,7 @@ def _tool_run_python(
     start = time.monotonic()
     try:
         if mode == "enforced":
+            timeout = sandbox.clamp_run_timeout(timeout)
             # Runtime paths become persistent read+execute grants on Windows: every one
             # (interpreter, site-packages, Node, npm root, skill folder) goes through the backstop.
             runtime_paths = _runtime_paths(skill_dir, _npm_root)
@@ -879,7 +885,7 @@ TOOL_DEFS = [
                 },
                 "timeout": {
                     "type": "integer",
-                    "description": "Override execution timeout in seconds (optional)",
+                    "description": "Override execution timeout in seconds, at most 600 in the sandbox (optional)",
                 },
                 "confirmed": {
                     "type": "boolean",
