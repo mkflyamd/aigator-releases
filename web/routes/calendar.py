@@ -211,8 +211,7 @@ async def tp_calendar_grid_draft_series(req: GridSeriesRequest):
     """Creates the grid's picked slot as an unsent draft event (recurring when a repeat is given) and returns its Outlook web link."""
     import asyncio
 
-    from routes.drafts import _calendar_event_payload
-    from skills._m365.helpers import get_cal_client
+    from skills.calendar.events import NoAttendeesError, create_meeting
 
     recurrence = None
     if req.repeat:
@@ -220,24 +219,21 @@ async def tp_calendar_grid_draft_series(req: GridSeriesRequest):
             recurrence = _graph_recurrence(req.repeat, req.start[:10])
         except (ValueError, TypeError) as e:
             raise HTTPException(status_code=400, detail=str(e))
-    if not (req.attendees or req.optional_attendees):
-        raise HTTPException(status_code=400, detail="No attendees specified")
-    event = _calendar_event_payload(
-        {
-            "start": req.start,
-            "end": req.end,
-            "timezone": req.timezone,
-            "attendees": req.attendees,
-            "optional_attendees": req.optional_attendees,
-            "recurrence": recurrence,
-            "subject": req.subject,
-            "body": req.body,
-            "body_plain": req.body_plain,
-        }
-    )
-    event["isDraft"] = True
+    params = {
+        "start": req.start,
+        "end": req.end,
+        "timezone": req.timezone,
+        "attendees": req.attendees,
+        "optional_attendees": req.optional_attendees,
+        "recurrence": recurrence,
+        "subject": req.subject,
+        "body": req.body,
+        "body_plain": req.body_plain,
+    }
     try:
-        created = await asyncio.to_thread(lambda: get_cal_client().post("/me/events", event))
+        created = await asyncio.to_thread(create_meeting, params)
+    except NoAttendeesError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Outlook did not create the draft ({e}). Check your calendar before trying again.")
     return {"url": (created or {}).get("webLink") or "https://outlook.office.com/calendar"}

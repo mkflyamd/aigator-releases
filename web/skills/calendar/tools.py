@@ -1190,6 +1190,7 @@ def _tool_create_ooo_event(
     body: str = "",
 ) -> dict:
     from .._m365.helpers import get_cal_client
+    from .events import create_event
     from .helpers import get_user_win_tz
 
     gc = get_cal_client()
@@ -1215,7 +1216,7 @@ def _tool_create_ooo_event(
         ]
     if body:
         event["body"] = {"contentType": "text", "content": body}
-    result = gc.post("/me/events", event)
+    result = create_event(event, deliver=True)
     event_id = result.get("id", "")
     date_label = start_date if start_date == end_date else f"{start_date} to {end_date}"
     return {
