@@ -5,6 +5,7 @@ verification rules live here once.
 """
 
 import hashlib
+import os
 import re
 import urllib.parse
 from dataclasses import dataclass
@@ -123,19 +124,19 @@ def _existing_result(found: dict, source: Source, drive_id: str, folder_info: di
     return _result("exists", **_existing(found, drive_id), **folder_info)
 
 
-def _upload_small(gc, source, drive_id, folder_path, name):
+def _put_small(gc, source, item_path, conflict):
     data = b"".join(source.open())
     if len(data) != source.size:
         return None, "source_size_mismatch", hashlib.sha256(data).hexdigest()
-    path = _item_path(drive_id, folder_path, name) + ":/content?@microsoft.graph.conflictBehavior=fail"
+    path = item_path + f":/content?@microsoft.graph.conflictBehavior={conflict}"
     item = gc.put_binary(path, data)
     return item, "", hashlib.sha256(data).hexdigest()
 
 
-def _upload_large(gc, source, drive_id, folder_path, name):
+def _put_large(gc, source, item_path, conflict, name):
     session = gc.post(
-        _item_path(drive_id, folder_path, name) + ":/createUploadSession",
-        {"item": {"@microsoft.graph.conflictBehavior": "fail", "name": name}},
+        item_path + ":/createUploadSession",
+        {"item": {"@microsoft.graph.conflictBehavior": conflict, "name": name}},
     )
     url = session["uploadUrl"]
     digest = hashlib.sha256()
@@ -169,9 +170,19 @@ def _upload_large(gc, source, drive_id, folder_path, name):
     return item, "", digest.hexdigest()
 
 
+def _upload_small(gc, source, drive_id, folder_path, name):
+    return _put_small(gc, source, _item_path(drive_id, folder_path, name), "fail")
+
+
+def _upload_large(gc, source, drive_id, folder_path, name):
+    return _put_large(gc, source, _item_path(drive_id, folder_path, name), "fail", name)
+
+
 def _cancel(gc, url: str) -> None:
     try:
-        gc._request("DELETE", url, headers={}, label="upload-session-cancel")
+        # Non-empty on purpose: GraphClient._request swaps an empty dict for the bearer headers,
+        # and the upload-session URL is pre-authenticated.
+        gc._request("DELETE", url, headers={"Content-Length": "0"}, label="upload-session-cancel")
     except Exception:
         pass
 
@@ -230,3 +241,58 @@ def store(
         **{**_existing(item, drive_id), "size": source.size},
         **folder_info,
     )
+
+
+def file_source(path: str, name: str = "") -> Source:
+    p = os.path.expanduser(path)
+
+    def _open():
+        with open(p, "rb") as f:
+            while True:
+                block = f.read(CHUNK)
+                if not block:
+                    return
+                yield block
+
+    return Source(name=name or os.path.basename(p), size=os.path.getsize(p), open=_open)
+
+
+def _folder_item_path(drive_id: str, folder_id: str, name: str) -> str:
+    q = lambda v: urllib.parse.quote(v or "", safe="")  # noqa: E731 - graph client keeps '%' as-is
+    return f"/drives/{q(drive_id)}/items/{q(folder_id)}:/{q(name)}"
+
+
+def store_in_folder(gc, source: Source, drive_id: str, folder_id: str, on_conflict: str = "rename") -> dict:
+    """Upload into a folder addressed by drive and item ID. Never overwrites: a clash renames."""
+    from .._files.errors import classify_graph_error
+
+    if on_conflict not in ("rename", "fail"):
+        raise ValueError(f"on_conflict must be 'rename' or 'fail', got {on_conflict!r}")
+    name = safe_filename(source.name)
+    item_path = _folder_item_path(drive_id, folder_id, name)
+    try:
+        if source.size <= SIMPLE_UPLOAD_MAX:
+            item, err, sha = _put_small(gc, source, item_path, on_conflict)
+        else:
+            item, err, sha = _put_large(gc, source, item_path, on_conflict, name)
+    except Exception as e:
+        return _result(
+            "error",
+            error="transfer_failed",
+            detail=str(e)[:300],
+            error_code=classify_graph_error(e),
+            name=name,
+        )
+    if err:
+        return _result("error", error=err, error_code="unknown", name=name)
+    if (item or {}).get("size") != source.size:
+        return _result(
+            "error",
+            error="size_mismatch",
+            error_code="unknown",
+            name=name,
+            expected_size=source.size,
+            reported_size=(item or {}).get("size"),
+            hint="The stored file does not match the source size. Do not report it as saved.",
+        )
+    return _result("saved", sha256=sha, **{**_existing(item, drive_id), "size": source.size})
