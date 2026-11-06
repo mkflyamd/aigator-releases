@@ -12,6 +12,10 @@ import re
 
 _MAX_DEPTH = 4
 
+# Only these built-in tools build `participants` themselves. Output from browser, MCP, plugin or any
+# other tool is shaped by outside parties and must never decide who a bare name resolves to.
+TRUSTED_TOOLS = frozenset({"read_email", "search_email", "read_teams_chats"})
+
 
 def collect(result, known: dict[str, dict]) -> None:
     """Add every participant found in a tool result to `known` (keyed by lowercase email)."""

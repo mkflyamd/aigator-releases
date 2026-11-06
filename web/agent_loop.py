@@ -955,7 +955,7 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
         result = await execute_tool(tc.name, tc.inputs)
         if tc.name == "search_people":
             result = people_context.apply(str((tc.inputs or {}).get("query", "")), result, _people_seen)
-        else:
+        elif tc.name in people_context.TRUSTED_TOOLS:
             people_context.collect(result, _people_seen)
         if is_browser:
             await event_queue.put({"kind": "browser_hitl", "state": "done"})
