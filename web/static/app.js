@@ -14815,7 +14815,15 @@ form.addEventListener('submit', async (e) => {
     : {};
   const requestHistory = history;
 
-  requestHistory.push({ role: 'user', content: finalText });
+  // This text copy is what the server rebuilds the chat from after a restart, so the saved image path rides along.
+  const _imageNote = imagesSnapshot
+    .filter((i) => i.savedPath)
+    .map((i) => `[attached image: ${i.name || 'image'}, saved at ${i.savedPath}]`)
+    .join('\n');
+  requestHistory.push({
+    role: 'user',
+    content: _imageNote ? `${finalText}\n\n${_imageNote}` : finalText,
+  });
   _saveTabHistory(requestTabId, requestHistory);
   // Trim display store to match surviving user turns in the history window
   const _survivingUserTurns = requestHistory
