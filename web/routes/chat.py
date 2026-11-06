@@ -1130,6 +1130,23 @@ def _classify_skills_via_llm(message: str, extra_skills: dict | None = None) -> 
     return None
 
 
+def _with_image_path_note(message, paths: list[str] | None, names: list[str] | None):
+    """Add the saved file paths as text next to attached images.
+
+    Image blocks are stripped from earlier turns, so this note is what lets the model find the file later.
+    """
+    if not isinstance(message, list) or not paths:
+        return message
+    if not any(isinstance(b, dict) and b.get("type") in ("image", "document") for b in message):
+        return message
+    lines = []
+    for i, path in enumerate(paths):
+        name = (names or [])[i] if i < len(names or []) else ""
+        lines.append(f"[attached image: {name or 'image'}, saved at {path}]")
+    lines.append("Call describe_images with a saved path to look at an attached image again.")
+    return [*message, {"type": "text", "text": "\n".join(lines)}]
+
+
 # ── Chat stream + cancel endpoints ───────────────────────────────────────────
 
 _HEARTBEAT_AFTER_INTERVALS = 3   # ~45s of silence before the first visible heartbeat (15s * 3)
@@ -2205,7 +2222,7 @@ async def chat(req: ChatRequest):
         if req.history and not shared.conversation_store.has(context_id):
             await shared.conversation_store.seed(context_id, req.history)
         history_window = await shared.conversation_store.get_window(context_id, model)
-        _turn_user_msg = {"role": "user", "content": req.message}
+        _turn_user_msg = {"role": "user", "content": _with_image_path_note(req.message, req.image_paths, req.image_names)}
         msgs = history_window + [_turn_user_msg]
         token_budget = int(cfg.get("token_budget_per_task", 0) or 0)
         use_three_agent = cfg.get("three_agent_mode", False)
