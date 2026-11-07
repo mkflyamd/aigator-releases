@@ -151,6 +151,14 @@ jobs:
           assert health["status"] == "ok"
           assert health["version"] == sys.argv[2]
           assert health["api_contract"] == "2026-08-17-pins-chat-v1"
+          # A skill whose import fails is dropped silently at runtime; here it is a
+          # packaging bug (a module missing from the bundle). Contract mismatches
+          # are reported separately and do not drop the skill.
+          import_failures = {
+              name: error for name, error in health["failed_skills"].items()
+              if not error.startswith("tool contract mismatch")
+          }
+          assert not import_failures, f"skills failed to import in packaged build: {import_failures}"
           PY
           context_id="release-smoke-${{ matrix.architecture }}"
           pin_payload="$(printf '{\"source\":\"teams\",\"id\":\"release-smoke\",\"label\":\"Release smoke\",\"context_id\":\"%s\",\"meta\":{}}' "$context_id")"

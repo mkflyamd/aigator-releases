@@ -1072,6 +1072,8 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
             result = {k: v for k, v in result.items() if k != "_availability_grid"}
         if isinstance(result, dict) and "_sandbox_approval" in result:
             await event_queue.put({"kind": "sandbox_approval", "data": result["_sandbox_approval"]})
+        if isinstance(result, dict) and "_github_sso" in result:
+            await event_queue.put({"kind": "github_sso", "data": result["_github_sso"]})
         if isinstance(result, dict) and result.get("files"):
             await event_queue.put({"kind": "files", "files": result["files"]})
         # Cross-skill nudge: a tool may return `suggested_next` — a list of
@@ -1559,6 +1561,8 @@ async def _single_agent_loop(
                     yield f"data: {json.dumps({'availability_grid': evt.get('data', {})})}\n\n"
                 elif kind == "sandbox_approval":
                     yield f"data: {json.dumps({'sandbox_approval': evt.get('data', {})})}\n\n"
+                elif kind == "github_sso":
+                    yield f"data: {json.dumps({'github_sso': evt.get('data', {})})}\n\n"
                 elif kind == "ask_user":
                     yield f"data: {json.dumps({'ask_user': evt.get('data', {})})}\n\n"
                 elif kind == "toast":
@@ -2119,6 +2123,8 @@ async def run_three_agent_loop(
                     yield f"data: {json.dumps({'availability_grid': evt.get('data', {})})}\n\n"
                 elif kind == "sandbox_approval":
                     yield f"data: {json.dumps({'sandbox_approval': evt.get('data', {})})}\n\n"
+                elif kind == "github_sso":
+                    yield f"data: {json.dumps({'github_sso': evt.get('data', {})})}\n\n"
                 elif kind == "toast":
                     yield f"data: {json.dumps({'toast': {'level': evt.get('level', 'info'), 'message': evt.get('message', '')}})}\n\n"
                 elif kind == "browser_hitl":

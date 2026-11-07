@@ -151,7 +151,7 @@ const ids = (items) => [...items.map((i) => i.data.draft_id)];
 // A draft handed to Outlook is forgotten, for both the email and calendar cards.
 {
   const handoffs = source.match(
-    /(handedOffUrl = url;|const \{ url \} = await res\.json\(\);\n\s+lockHeader\(\);)\s*\n?\s*_removeTabDraft\(ownerTabId, draftId\);/g,
+    /(handedOffUrl = url;|const \{ url \} = await res\.json\(\);\r?\n\s+lockHeader\(\);)\s*\n?\s*_removeTabDraft\(ownerTabId, draftId\);/g,
   );
   assert.strictEqual(
     (handoffs || []).length,
