@@ -3,6 +3,7 @@
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 import re
+import sys
 import html
 
 from hooks.executor import fire_all_skill_hooks
@@ -61,7 +62,7 @@ TOOL_DEFS = [
     },
     {
         "name": "read_teams_chats",
-        "description": "Fetch recent Microsoft Teams chat messages. For a request about a specific person, pass their resolved contact email in person_email so the tool returns only that person's matching messages and full chat IDs; do not scan all chats and parse tool output manually.",
+        "description": "Fetch recent Microsoft Teams chat messages. For a request about a specific person, pass their resolved contact email in person_email so the tool returns only that person's matching messages and full chat IDs; do not scan all chats and parse tool output manually. Each chat carries `participants` (name and email) so a first name mentioned in the chat can be resolved to the right person.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -352,6 +353,61 @@ def _tool_read_channel_messages(
     }
 
 
+_GUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE)
+
+
+def _participants(cid: str, messages=(), thread_members=()) -> list:
+    """Who is in the chat (name and email), so a bare first name in it resolves to the right person.
+
+    The chat-members endpoint needs a Graph scope the token may lack; when it fails, the people are
+    found from the ids of the chat's members and message senders instead, looked up in the directory.
+    """
+    from skills._m365.helpers import make_teams_gc
+
+    try:
+        gc = make_teams_gc()
+    except Exception as e:
+        print(f"[teams/participants] no Graph client: {e}", file=sys.stderr, flush=True)
+        return []
+    try:
+        members = gc.get(f"/chats/{cid}/members").get("value", [])
+        found = [
+            {"name": m.get("displayName", ""), "email": (m.get("email") or "").lower()}
+            for m in members
+            if m.get("email")
+        ]
+        if found:
+            return found
+    except Exception as e:
+        print(f"[teams/participants] members of {cid} not readable, using sender ids: {e}", file=sys.stderr, flush=True)
+    ids: list[str] = []
+    for raw in [*(str(m.get("id") or m.get("mri") or "") for m in thread_members or ()), *(str(m.get("from_mri") or "") for m in messages or ())]:
+        match = _GUID_RE.search(raw)
+        if match and match.group(0).lower() not in ids:
+            ids.append(match.group(0).lower())
+    people: dict[str, dict] = {}
+    for uid in ids[:25]:
+        try:
+            user = gc.get(f"/users/{uid}", params={"$select": "displayName,mail,userPrincipalName"})
+        except Exception:
+            continue
+        email = (user.get("mail") or user.get("userPrincipalName") or "").lower()
+        if email and email not in people:
+            people[email] = {"name": user.get("displayName", ""), "email": email}
+    return list(people.values())
+
+
+def _thread_members_of(rc, skype_token, messaging_service, cid: str, listed=()) -> list:
+    """The chat's members, including people who have not posted; read from the thread record when the listing has none."""
+    if listed:
+        return list(listed)
+    try:
+        return rc.read_thread_members(cid, skype_token, messaging_service)
+    except Exception as e:
+        print(f"[teams/participants] thread members of {cid} not readable: {e}", file=sys.stderr, flush=True)
+        return []
+
+
 def _tool_read_teams_chats(
     hours: int = 720,
     filter_topic: str = "",
@@ -488,6 +544,9 @@ def _tool_read_teams_chats(
                     {
                         "chat_id": chat_id,
                         "topic": chat_id,
+                        "participants": _participants(
+                            chat_id, matched, _thread_members_of(_rc, skype_token, messaging_service, chat_id)
+                        ),
                         "messages": [_normalize(m) for m in matched],
                     }
                 ]
@@ -504,6 +563,9 @@ def _tool_read_teams_chats(
                 {
                     "chat_id": chat_id,
                     "topic": chat_id,
+                    "participants": _participants(
+                        chat_id, messages, _thread_members_of(_rc, skype_token, messaging_service, chat_id)
+                    ),
                     "messages": _within_window(messages),
                 }
             ]
@@ -590,6 +652,11 @@ def _tool_read_teams_chats(
                 "topic": topic,
                 "chat_type": chat.get("type", ""),
                 "contact_email": person_email,
+                "participants": _participants(
+                    cid,
+                    messages,
+                    _thread_members_of(_rc, skype_token, messaging_service, cid, chat.get("thread_members")),
+                ),
                 "messages": recent,
             }
         )

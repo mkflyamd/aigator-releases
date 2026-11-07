@@ -1738,7 +1738,7 @@ async function _switchPinContext() {
 const _origRefreshPinOrb = typeof _refreshPinOrb === 'function' ? _refreshPinOrb : null;
 
 /* ── Universal Pin Button Helper ─────────────────────── */
-function _createPinBtn(source, id, label, meta = {}) {
+function _createPinBtn(source, id, label, meta = {}, opts = {}) {
   const btn = document.createElement('button');
   btn.className = 'pin-ctx-btn';
   btn.textContent = '\uD83D\uDCCC';
@@ -1754,6 +1754,13 @@ function _createPinBtn(source, id, label, meta = {}) {
     e.stopPropagation();
     e.preventDefault();
     await _togglePin(source, String(id), label, meta);
+    if (
+      opts.chip &&
+      _isPinned(source, String(id)) &&
+      typeof window.insertPinChipAtCaret === 'function'
+    ) {
+      window.insertPinChipAtCaret({ source, id: String(id), label });
+    }
   });
   return btn;
 }
@@ -1810,18 +1817,62 @@ async function _openTranscriptsPanel(chat, opts) {
   await _renderTranscriptsList(body, chat, opts);
 }
 
-async function _renderTranscriptsList(bodyEl, chat, opts) {
-  let resp = null;
+const _TX_LIST_TTL = 300000;
+const _TX_RESOLVE_CONCURRENCY = 4;
+const _txListCache = new Map(); // chat id → { ts, recs }
+
+async function _txRunPool(tasks, limit) {
+  let next = 0;
+  const worker = async () => {
+    while (next < tasks.length) {
+      const task = tasks[next++];
+      try {
+        await task();
+      } catch (_) {
+        /* each task reports its own failure in its row */
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, tasks.length) }, worker));
+}
+
+function _txResolveMessage(error) {
+  if (error === 'expired')
+    return 'Recording expired or deleted — its transcript is no longer available.';
+  if (error === 'auth') return 'Transcript available — sign in (Settings) to load it.';
+  return "Couldn't load this transcript. Close and reopen the list to retry.";
+}
+
+async function _txResolveShare(shareUrl) {
   try {
-    const r = await fetch(`/api/teams/chats/${encodeURIComponent(chat.id)}/recordings`);
-    if (r.ok) resp = await r.json();
+    const r = await fetch(`/api/recordings/resolve?share_url=${encodeURIComponent(shareUrl)}`);
+    if (r.ok) return await r.json();
   } catch (_) {
-    /* ignore */
+    /* fall through */
+  }
+  return { error: 'failed' };
+}
+
+async function _renderTranscriptsList(bodyEl, chat, opts) {
+  let recs = null;
+  const cached = _txListCache.get(chat.id);
+  if (cached && Date.now() - cached.ts < _TX_LIST_TTL) {
+    recs = cached.recs;
+  } else {
+    try {
+      const r = await fetch(`/api/teams/chats/${encodeURIComponent(chat.id)}/recordings`);
+      if (r.ok) {
+        recs = ((await r.json()) || {}).recordings || [];
+        if (recs.length) _txListCache.set(chat.id, { ts: Date.now(), recs });
+      }
+    } catch (_) {
+      /* ignore */
+    }
   }
 
   bodyEl.innerHTML = '';
 
-  const recs = (resp && resp.recordings) || [];
+  recs = recs || [];
   if (recs.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'tp-tx-empty';
@@ -1831,12 +1882,21 @@ async function _renderTranscriptsList(bodyEl, chat, opts) {
     return;
   }
 
+  const loaders = [];
   for (const rec of recs) {
-    bodyEl.appendChild(await _buildRecordingRow(rec, chat, opts));
+    const { row, load } = _buildRecordingRow(rec, chat, opts);
+    bodyEl.appendChild(row);
+    if (load) {
+      loaders.push(async () => {
+        if (bodyEl.isConnected === false) return;
+        await load();
+      });
+    }
   }
+  await _txRunPool(loaders, _TX_RESOLVE_CONCURRENCY);
 }
 
-async function _buildRecordingRow(rec, chat, opts) {
+function _buildRecordingRow(rec, chat, opts) {
   const row = document.createElement('div');
   row.className = 'tp-tx-row';
 
@@ -1865,46 +1925,51 @@ async function _buildRecordingRow(rec, chat, opts) {
   }
   row.appendChild(head);
 
-  if (!rec.has_transcript) return row;
+  if (!rec.has_transcript) return { row, load: null };
 
-  // Transcript children for this recording
   const txList = document.createElement('div');
   txList.className = 'tp-tx-row-list';
   txList.textContent = 'Loading transcripts…';
   row.appendChild(txList);
 
-  // When Graph is unavailable the recording is still surfaced (detection comes from
-  // the URIObject) but drive/item ids are empty, so the VTT can't be fetched. Show a
-  // clear sign-in hint instead of the misleading "no transcript available yet".
-  if (!rec.drive_id || !rec.item_id) {
-    txList.textContent = 'Transcript available — sign in (Settings) to load it.';
-    return row;
-  }
+  // The list paints from Skype data alone (date, has_transcript, share link). The
+  // drive/item ids needed to read the VTT come from a per-row resolve, run by the
+  // caller's worker pool.
+  const load = async () => {
+    let target = rec;
+    if (!rec.drive_id || !rec.item_id) {
+      const res = await _txResolveShare(rec.share_url || rec.web_url);
+      if (res.error || !res.drive_id || !res.item_id) {
+        txList.textContent = _txResolveMessage(res.error || 'failed');
+        return;
+      }
+      target = { ...rec, drive_id: res.drive_id, item_id: res.item_id, web_url: res.web_url };
+    }
 
-  let tResp = null;
-  try {
-    const r = await fetch(
-      `/api/recordings/${encodeURIComponent(rec.drive_id)}/${encodeURIComponent(rec.item_id)}/transcripts`,
-    );
-    if (r.ok) tResp = await r.json();
-  } catch (_) {
-    /* ignore */
-  }
+    let tResp = null;
+    try {
+      const r = await fetch(
+        `/api/recordings/${encodeURIComponent(target.drive_id)}/${encodeURIComponent(target.item_id)}/transcripts`,
+      );
+      if (r.ok) tResp = await r.json();
+    } catch (_) {
+      /* ignore */
+    }
 
-  txList.innerHTML = '';
-  const items = (tResp && tResp.transcripts) || [];
-  if (items.length === 0) {
-    txList.textContent = '(no transcript available yet)';
-    return row;
-  }
-
-  for (const tx of items) {
-    txList.appendChild(await _buildTranscriptRow(tx, rec, chat, whenStr, opts));
-  }
-  return row;
+    txList.innerHTML = '';
+    const items = (tResp && tResp.transcripts) || [];
+    if (items.length === 0) {
+      txList.textContent = '(no transcript available yet)';
+      return;
+    }
+    for (const tx of items) {
+      txList.appendChild(_buildTranscriptRow(tx, target, chat, whenStr, opts));
+    }
+  };
+  return { row, load };
 }
 
-async function _buildTranscriptRow(tx, rec, chat, whenStr, opts) {
+function _buildTranscriptRow(tx, rec, chat, whenStr, opts) {
   const item = document.createElement('div');
   item.className = 'tp-tx-item';
 
@@ -1940,52 +2005,56 @@ async function _buildTranscriptRow(tx, rec, chat, whenStr, opts) {
 
   item.appendChild(actions);
 
-  // Best-effort header fetch for duration/speakers/tokens + pin meta
-  try {
-    const hr = await fetch(
-      `/api/recordings/${encodeURIComponent(rec.drive_id)}/${encodeURIComponent(rec.item_id)}/transcripts/${encodeURIComponent(tx.id)}/header`,
-    );
-    if (hr.ok) {
-      const header = await hr.json();
-      const mins = Math.round((header.duration_sec || 0) / 60);
-      const spkCount = Object.keys(header.speakers || {}).length;
-      sub.textContent = `${mins} min · ${spkCount} speaker${spkCount === 1 ? '' : 's'}`;
-      const labelStr = `${chat.topic || rec.title || 'Meeting'} · ${whenStr}`;
-      const pinMeta = {
-        duration_min: mins,
-        occurred_at: rec.created_at || tx.created,
-        speaker_count: spkCount,
-        size_tokens_estimate: header.size_tokens_estimate || 0,
-      };
-      pinHolder.appendChild(
-        _createPinBtn(
-          'teams_transcript',
-          `${rec.drive_id}:${rec.item_id}:${tx.id}`,
-          labelStr,
-          pinMeta,
-        ),
+  // The header download (full VTT parse for duration/speakers/tokens) only runs once
+  // the row is on screen, so a long history doesn't download every transcript.
+  let headerStarted = false;
+  const loadHeader = async () => {
+    if (headerStarted) return;
+    headerStarted = true;
+    let labelStr = `${chat.topic || rec.title || 'Meeting'} · ${whenStr}`;
+    let pinMeta = { occurred_at: rec.created_at || tx.created };
+    try {
+      const hr = await fetch(
+        `/api/recordings/${encodeURIComponent(rec.drive_id)}/${encodeURIComponent(rec.item_id)}/transcripts/${encodeURIComponent(tx.id)}/header`,
       );
-    } else {
+      if (hr.ok) {
+        const header = await hr.json();
+        const mins = Math.round((header.duration_sec || 0) / 60);
+        const spkCount = Object.keys(header.speakers || {}).length;
+        sub.textContent = `${mins} min · ${spkCount} speaker${spkCount === 1 ? '' : 's'}`;
+        pinMeta = {
+          duration_min: mins,
+          occurred_at: rec.created_at || tx.created,
+          speaker_count: spkCount,
+          size_tokens_estimate: header.size_tokens_estimate || 0,
+        };
+      } else {
+        sub.textContent = '—';
+      }
+    } catch (_) {
       sub.textContent = '—';
-      pinHolder.appendChild(
-        _createPinBtn(
-          'teams_transcript',
-          `${rec.drive_id}:${rec.item_id}:${tx.id}`,
-          `${chat.topic || 'Meeting'} · ${whenStr}`,
-          { occurred_at: rec.created_at || tx.created },
-        ),
-      );
     }
-  } catch (_) {
-    sub.textContent = '—';
     pinHolder.appendChild(
       _createPinBtn(
         'teams_transcript',
         `${rec.drive_id}:${rec.item_id}:${tx.id}`,
-        `${chat.topic || 'Meeting'} · ${whenStr}`,
-        { occurred_at: rec.created_at || tx.created },
+        labelStr,
+        pinMeta,
+        { chip: true },
       ),
     );
+  };
+
+  if (typeof IntersectionObserver === 'function') {
+    const io = new IntersectionObserver((entries) => {
+      if (entries.some((e) => e.isIntersecting)) {
+        io.disconnect();
+        loadHeader();
+      }
+    });
+    io.observe(item);
+  } else {
+    loadHeader();
   }
 
   return item;
@@ -2064,7 +2133,8 @@ async function _renderCalendarTranscriptCard(mountEl, eventId, meetingTopic, joi
   btn.className = 'tp-qt-btn tp-call-btn tp-cal-tx-btn';
   btn.title = 'View meeting transcripts';
   btn.setAttribute('aria-label', 'View meeting transcripts');
-  btn.innerHTML = '<span class="material-symbols-outlined tp-mi">speaker_notes</span>';
+  btn.innerHTML =
+    '<span class="material-symbols-outlined tp-mi">speaker_notes</span><span class="tp-btn-label">Transcripts</span>';
   btn.addEventListener('click', () => {
     // Stay on the Calendar pane — do NOT call openThirdPane('teams'). With
     // native Teams (a separate Electron WebContentsView, not rendered inside
@@ -6683,7 +6753,8 @@ function renderTeamsThread(messages, chat, myId, data, { skipScrollToBottom = fa
     if (_hdrIsMeeting) {
       actions.push({
         kind: 'icon',
-        iconHtml: '<span class="material-symbols-outlined tp-mi">speaker_notes</span>',
+        iconHtml:
+          '<span class="material-symbols-outlined tp-mi">speaker_notes</span><span class="tp-btn-label">Transcripts</span>',
         id: 'tp-teams-transcripts',
         title: 'Meeting transcripts',
         onClick: () => _openTranscriptsPanel(chat),

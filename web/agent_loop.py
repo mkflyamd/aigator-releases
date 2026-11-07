@@ -552,6 +552,8 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
     """Returns (_run_tool_block, _run_all_into_queue, _SENTINEL) closures."""
     import content_guard
     import data_sources
+    import people_context
+    _people_seen: dict[str, dict] = {}
     _SENTINEL = object()
     _offered = set(offered_names) if offered_names is not None else None
     _source_locks: dict[tuple[str, str], asyncio.Lock] = {}
@@ -590,7 +592,7 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
 
     async def _ask_source(tc, source, event_queue):
         """Returns None when the source is allowed, else the error result."""
-        lock = _source_locks.setdefault((context_id, source.key), asyncio.Lock())
+        lock = _source_locks.setdefault((context_id, data_sources.approval_key(source)), asyncio.Lock())
         async with lock:
             if data_sources.is_allowed(context_id, source.key):
                 return None
@@ -600,10 +602,10 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
                     text["action"], event_queue, title=text["title"],
                     allow_label=text["allow_label"], deny_label=text["deny_label"],
                 ):
-                    data_sources.allow(context_id, source.key)
-                    await event_queue.put({"kind": "status", "status": f"{source.label}: allowed for this tab"})
+                    data_sources.allow_source(context_id, source)
+                    await event_queue.put({"kind": "status", "status": f"{source.group_label or source.label}: allowed for this tab"})
                     return None
-                data_sources.deny(context_id, source.key)
+                data_sources.deny_source(context_id, source)
         return await _early_error(
             tc, event_queue,
             {
@@ -951,6 +953,10 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
                 return {"error": "Browser use cancelled by user."}
             await event_queue.put({"kind": "browser_hitl", "state": "active"})
         result = await execute_tool(tc.name, tc.inputs)
+        if tc.name == "search_people":
+            result = people_context.apply(str((tc.inputs or {}).get("query", "")), result, _people_seen)
+        elif tc.name in people_context.TRUSTED_TOOLS:
+            people_context.collect(result, _people_seen)
         if is_browser:
             await event_queue.put({"kind": "browser_hitl", "state": "done"})
         if _offered is not None and _result_was_spilled_to_file(result):
@@ -1044,9 +1050,14 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
             await event_queue.put({"kind": "pane", "pane": result["_pane"], "data": result.get("data", {})})
         if isinstance(result, dict) and "_draft" in result:
             _draft_data = result.get("data", {})
+            _draft_sources = set(_sources_read)
+            if result["_draft"] in ("calendar-event", "calendar-update"):
+                _calendar = data_sources.source_for_call(tc.name, tc.inputs)
+                if _calendar is not None:
+                    _draft_sources.add(_calendar.label)
             await event_queue.put({
                 "kind": "draft", "draft": result["_draft"],
-                "data": {**_draft_data, "sources": sorted(_sources_read),
+                "data": {**_draft_data, "sources": sorted(_draft_sources),
                          "sensitive": data_sources.sensitivity_markers(_draft_data)},
             })
         elif not _is_error:
@@ -1056,6 +1067,9 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
                 _source_ids.add(_read.flow_id)
         if isinstance(result, dict) and "_jira_target_selection" in result:
             await event_queue.put({"kind": "jira_target_selection", "data": result["_jira_target_selection"]})
+        if isinstance(result, dict) and "_availability_grid" in result:
+            await event_queue.put({"kind": "availability_grid", "data": result["_availability_grid"]})
+            result = {k: v for k, v in result.items() if k != "_availability_grid"}
         if isinstance(result, dict) and "_sandbox_approval" in result:
             await event_queue.put({"kind": "sandbox_approval", "data": result["_sandbox_approval"]})
         if isinstance(result, dict) and "_github_sso" in result:
@@ -1101,11 +1115,19 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
                     except Exception as exc:
                         results.append({"error": str(exc)})
             else:
-                results = list(await asyncio.gather(
-                    *[_run_tool_block(tc, event_queue) for tc in tool_calls],
-                    return_exceptions=True,
-                ))
-                results = [r if not isinstance(r, Exception) else {"error": str(r)} for r in results]
+                # Name lookups wait for the other calls in the batch, so a chat or thread read in the
+                # same batch has already told us who is in it.
+                waits = [i for i, tc in enumerate(tool_calls) if tc.name == "search_people"]
+                if len(waits) == len(tool_calls):
+                    waits = []
+                results = [None] * len(tool_calls)
+                for group in ([i for i in range(len(tool_calls)) if i not in waits], waits):
+                    done = await asyncio.gather(
+                        *[_run_tool_block(tool_calls[i], event_queue) for i in group],
+                        return_exceptions=True,
+                    )
+                    for i, r in zip(group, done):
+                        results[i] = r if not isinstance(r, Exception) else {"error": str(r)}
         finally:
             await event_queue.put(_SENTINEL)
         return results
@@ -1535,6 +1557,8 @@ async def _single_agent_loop(
                     yield f"data: {json.dumps({'draft': evt['draft'], 'draftData': evt.get('data', {})})}\n\n"
                 elif kind == "jira_target_selection":
                     yield f"data: {json.dumps({'jira_target_selection': evt.get('data', {})})}\n\n"
+                elif kind == "availability_grid":
+                    yield f"data: {json.dumps({'availability_grid': evt.get('data', {})})}\n\n"
                 elif kind == "sandbox_approval":
                     yield f"data: {json.dumps({'sandbox_approval': evt.get('data', {})})}\n\n"
                 elif kind == "github_sso":
@@ -2095,6 +2119,8 @@ async def run_three_agent_loop(
                     yield f"data: {json.dumps({'draft': evt['draft'], 'draftData': evt.get('data', {})})}\n\n"
                 elif kind == "jira_target_selection":
                     yield f"data: {json.dumps({'jira_target_selection': evt.get('data', {})})}\n\n"
+                elif kind == "availability_grid":
+                    yield f"data: {json.dumps({'availability_grid': evt.get('data', {})})}\n\n"
                 elif kind == "sandbox_approval":
                     yield f"data: {json.dumps({'sandbox_approval': evt.get('data', {})})}\n\n"
                 elif kind == "github_sso":

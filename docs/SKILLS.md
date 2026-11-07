@@ -201,7 +201,7 @@ Token lasts ~1 hour. Repeat step 1-4 when expired. Do **not** paste tokens in ch
 | ----------------- | ---------------------------------------------------------------------------- |
 | `m365-teams`      | Send Teams chat messages by email. Send-only (read blocked by tenant policy) |
 | `m365-email`      | List, search, read, send, and reply to Outlook email via Graph API           |
-| `m365-calendar`   | View events, check availability, find meeting times, create/cancel meetings  |
+| `m365-calendar`   | View events, check availability, find meeting times, cancel meetings         |
 | `m365-contacts`   | Manage personal Outlook address book (add, look up, edit contacts)           |
 | `m365-onedrive`   | Browse, upload, download, search, and share OneDrive files                   |
 | `m365-onenote`    | Read and create OneNote notebooks, sections, and pages                       |

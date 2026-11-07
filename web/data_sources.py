@@ -16,6 +16,8 @@ class Source:
     label: str
     kind: str  # "data" or "web"
     flow_id: str = ""  # id used by the admin blocked_data_flows policy
+    group_keys: tuple = ()  # approving this source approves all of these keys together
+    group_label: str = ""
 
 
 _NATIVE_SOURCES = {
@@ -33,6 +35,8 @@ _NATIVE_SOURCES = {
     "slack": "Slack",
     "github": "GitHub",
 }
+_SCHEDULING = ("calendar", "people", "contacts")
+_SCHEDULING_LABEL = "Outlook calendar, the people directory and Outlook contacts"
 _MCP_LABELS = {
     "mcp-google-workspace": "Google Workspace",
     "cloud-atlassian": "Atlassian (Jira and Confluence)",
@@ -47,7 +51,12 @@ _DENY_WINDOW_S = 10.0
 def _native_source(tool_name: str) -> Source | None:
     for skill_id, label in _NATIVE_SOURCES.items():
         if tool_name in shared.SKILL_TOOLS_MAP.get(skill_id, ()):
-            return Source(key=f"data:{label}", label=label, kind="data", flow_id=skill_id.removeprefix("m365-"))
+            grouped = skill_id in _SCHEDULING
+            return Source(
+                key=f"data:{label}", label=label, kind="data", flow_id=skill_id.removeprefix("m365-"),
+                group_keys=tuple(f"data:{_NATIVE_SOURCES[s]}" for s in _SCHEDULING) if grouped else (),
+                group_label=_SCHEDULING_LABEL if grouped else "",
+            )
     return None
 
 
@@ -103,11 +112,11 @@ def prompt_for(source: Source, tool_name: str, inputs: dict | None = None) -> di
                   "Allowed for this tab only.")
     else:
         action = (
-            f"AI Gator wants to use {source.label} (tool: {tool_name}). "
+            f"AI Gator wants to use {source.group_label or source.label} (tool: {tool_name}). "
             "This stays allowed until you close this tab."
         )
     return {
-        "title": f"Allow access to {source.label}?",
+        "title": f"Allow access to {source.group_label or source.label}?",
         "action": action,
         "allow_label": "Allow for this tab",
         "deny_label": "Deny",
@@ -172,6 +181,20 @@ def allowed_with_prefix(context_id: str, prefix: str) -> list[str]:
 def deny(context_id: str, key: str) -> None:
     with _LOCK:
         _DENIED[(context_id, key)] = time.monotonic()
+
+
+def approval_key(source: Source) -> str:
+    return source.group_keys[0] if source.group_keys else source.key
+
+
+def allow_source(context_id: str, source: Source) -> None:
+    for key in source.group_keys or (source.key,):
+        allow(context_id, key)
+
+
+def deny_source(context_id: str, source: Source) -> None:
+    for key in source.group_keys or (source.key,):
+        deny(context_id, key)
 
 
 def recently_denied(context_id: str, key: str, window_s: float = _DENY_WINDOW_S) -> bool:

@@ -204,6 +204,13 @@ def _get(url: str, skype_token: str) -> dict:
     return skype_get_json(url, skype_token)
 
 
+def read_thread_members(chat_id: str, skype_token: str, messaging_service: str) -> list:
+    """Every member of a chat from its thread record; the chat listing carries none on some tenants."""
+    data = _get(f"{messaging_service}/threads/{urllib.parse.quote(chat_id, safe='')}", skype_token)
+    members = data.get("members") if isinstance(data, dict) else None
+    return members if isinstance(members, list) else []
+
+
 def _strip_html(text: str) -> str:
     import html as _html
 

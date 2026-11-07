@@ -20,6 +20,14 @@ class CalendarRsvpRequest(BaseModel):
     send_response: bool = True
 
 
+class AvailabilityDaysRequest(BaseModel):
+    emails: list[str]
+    after_date: str = ""
+    dates: list[str] = []
+    duration_minutes: int = 30
+    zones: bool = False
+
+
 # ── Calendar third-pane endpoints ────────────────────────────────────────────
 
 
@@ -127,3 +135,148 @@ async def tp_calendar_respond(event_id: str, req: CalendarRsvpRequest):
         return {"ok": True}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+class GridSeriesRequest(BaseModel):
+    start: str
+    end: str
+    timezone: str
+    attendees: list[str] = []
+    optional_attendees: list[str] = []
+    repeat: dict | None = None
+    subject: str = ""
+    body: str = ""
+    body_plain: bool = False
+
+
+_INDEXES = {"first", "second", "third", "fourth", "last"}
+
+
+def _graph_recurrence(spec: dict, start_date: str) -> dict:
+    """Turns the availability grid's repeat choice into a Graph recurrence object."""
+    kind = spec.get("type")
+    interval = int(spec.get("interval") or 1)
+    if not 1 <= interval <= 999:
+        raise ValueError("Repeat interval is out of range.")
+    day = lambda name: str(name).lower()
+    index = spec.get("ordinal")
+    if kind == "daily" and spec.get("weekdaysOnly"):
+        pattern = {"type": "weekly", "interval": 1, "daysOfWeek": ["monday", "tuesday", "wednesday", "thursday", "friday"]}
+    elif kind == "daily":
+        pattern = {"type": "daily", "interval": interval}
+    elif kind == "weekly":
+        days = [day(d) for d in spec.get("days") or []]
+        if not days:
+            raise ValueError("Pick at least one weekday.")
+        pattern = {"type": "weekly", "interval": interval, "daysOfWeek": days, "firstDayOfWeek": "sunday"}
+    elif kind == "monthly" and spec.get("mode") == "nth":
+        if index not in _INDEXES:
+            raise ValueError("Unknown week of the month.")
+        pattern = {"type": "relativeMonthly", "interval": interval, "daysOfWeek": [day(spec.get("weekday"))], "index": index}
+    elif kind == "monthly":
+        pattern = {"type": "absoluteMonthly", "interval": interval, "dayOfMonth": int(spec.get("day") or 1)}
+    elif kind == "yearly" and spec.get("mode") == "nth":
+        if index not in _INDEXES:
+            raise ValueError("Unknown week of the month.")
+        pattern = {
+            "type": "relativeYearly",
+            "interval": interval,
+            "daysOfWeek": [day(spec.get("weekday"))],
+            "index": index,
+            "month": int(spec.get("month") or 1),
+        }
+    elif kind == "yearly":
+        pattern = {
+            "type": "absoluteYearly",
+            "interval": interval,
+            "dayOfMonth": int(spec.get("day") or 1),
+            "month": int(spec.get("month") or 1),
+        }
+    else:
+        raise ValueError("Unknown repeat type.")
+    end = spec.get("end")
+    if end == "date" and spec.get("endDate"):
+        rng = {"type": "endDate", "startDate": start_date, "endDate": spec["endDate"]}
+    elif end == "count":
+        rng = {"type": "numbered", "startDate": start_date, "numberOfOccurrences": max(1, int(spec.get("count") or 1))}
+    elif end == "none":
+        rng = {"type": "noEnd", "startDate": start_date}
+    else:
+        raise ValueError("Choose when the repeat ends.")
+    return {"pattern": pattern, "range": rng}
+
+
+@router.post("/api/calendar/grid-draft-series", dependencies=[Depends(verify_csrf)])
+async def tp_calendar_grid_draft_series(req: GridSeriesRequest):
+    """Creates the grid's picked slot as an unsent draft event (recurring when a repeat is given) and returns its Outlook web link."""
+    import asyncio
+
+    from skills.calendar.events import NoAttendeesError, create_meeting
+
+    recurrence = None
+    if req.repeat:
+        try:
+            recurrence = _graph_recurrence(req.repeat, req.start[:10])
+        except (ValueError, TypeError) as e:
+            raise HTTPException(status_code=400, detail=str(e))
+    params = {
+        "start": req.start,
+        "end": req.end,
+        "timezone": req.timezone,
+        "attendees": req.attendees,
+        "optional_attendees": req.optional_attendees,
+        "recurrence": recurrence,
+        "subject": req.subject,
+        "body": req.body,
+        "body_plain": req.body_plain,
+    }
+    try:
+        created = await asyncio.to_thread(create_meeting, params)
+    except NoAttendeesError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Outlook did not create the draft ({e}). Check your calendar before trying again.")
+    return {"url": (created or {}).get("webLink") or "https://outlook.office.com/calendar"}
+
+
+@router.post("/api/calendar/availability-days", dependencies=[Depends(verify_csrf)])
+async def tp_calendar_availability_days(req: AvailabilityDaysRequest):
+    """Free/busy for the availability grid's "later weeks" button (after_date) and "add person" (dates)."""
+    import asyncio
+
+    from skills.calendar.tools import _tool_load_availability_days
+
+    if len(req.emails) > 20:
+        raise HTTPException(status_code=400, detail="Too many people.")
+    try:
+        result = await asyncio.to_thread(
+            _tool_load_availability_days, req.emails, req.after_date, req.duration_minutes, 10, req.dates, req.zones
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
+class SlotZonesRequest(BaseModel):
+    start: str
+    end: str
+    timezone: str
+    zones: dict[str, str] = {}
+
+
+@router.post("/api/calendar/slot-zones", dependencies=[Depends(verify_csrf)])
+async def tp_calendar_slot_zones(req: SlotZonesRequest):
+    """The picked slot as clock times in each attendee's zone, grouped by identical result. No Graph call."""
+    from skills.calendar import timezones
+
+    if len(req.zones) > 40:
+        raise HTTPException(status_code=400, detail="Too many people.")
+    own = timezones.fmt_range(req.start, req.end, req.timezone, req.timezone)
+    groups: dict[str, list[str]] = {}
+    for email, zone in req.zones.items():
+        label = timezones.fmt_range(req.start, req.end, req.timezone, zone)
+        if label and label != own:
+            groups.setdefault(label, []).append(email)
+    return [{"label": label, "people": people} for label, people in groups.items()]

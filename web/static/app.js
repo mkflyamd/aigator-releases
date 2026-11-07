@@ -4,30 +4,48 @@
  */
 (function _initCsrfFetch() {
   const orig = window.fetch.bind(window);
-  window.fetch = function (input, init) {
+  let refreshing = null;
+  // The token changes whenever the backend restarts, so a page that stayed open holds a stale one.
+  const refreshToken = () => {
+    refreshing =
+      refreshing ||
+      orig('/api/csrf')
+        .then((r) => (r.ok ? r.json() : null))
+        .then((j) => (j && j.csrf_token) || null)
+        .catch(() => null)
+        .finally(() => {
+          refreshing = null;
+        });
+    return refreshing;
+  };
+  window.fetch = async function (input, init) {
+    let sentToken = null;
     try {
       const url = typeof input === 'string' ? input : (input && input.url) || '';
       const method = String(
         (init && init.method) || (input && input.method) || 'GET',
       ).toUpperCase();
-      if (
-        method !== 'GET' &&
-        method !== 'HEAD' &&
-        url.startsWith('/api/') &&
-        window.__CSRF_TOKEN__
-      ) {
+      if (method !== 'GET' && method !== 'HEAD' && url.startsWith('/api/')) {
         const h = new Headers(
           (init && init.headers) || (typeof input === 'object' && input.headers) || undefined,
         );
-        if (!h.has('X-CSRF-Token')) {
+        if (!h.has('X-CSRF-Token') && window.__CSRF_TOKEN__) {
           h.set('X-CSRF-Token', window.__CSRF_TOKEN__);
           init = { ...(init || {}), headers: h };
         }
+        if (h.has('X-CSRF-Token') && typeof input === 'string') sentToken = h.get('X-CSRF-Token');
       }
     } catch (_) {
       /* fall through to the plain call */
     }
-    return orig(input, init);
+    const res = await orig(input, init);
+    if (res.status !== 403 || sentToken === null) return res;
+    const fresh = await refreshToken();
+    if (!fresh || fresh === sentToken) return res;
+    window.__CSRF_TOKEN__ = fresh;
+    const h = new Headers((init && init.headers) || undefined);
+    h.set('X-CSRF-Token', fresh);
+    return orig(input, { ...(init || {}), headers: h });
   };
 })();
 
@@ -2584,8 +2602,8 @@ const _SVG_ICON_SOURCES = new Set([
 
 function _pinSourceIcon(source, size) {
   const px = size || 16;
-  const file = source === 'email' ? 'outlook' : source;
-  if (_SVG_ICON_SOURCES.has(source)) {
+  const file = source === 'email' ? 'outlook' : source === 'teams_transcript' ? 'teams' : source;
+  if (_SVG_ICON_SOURCES.has(source) || source === 'teams_transcript') {
     return `<img src="/static/icons/${file}.svg" width="${px}" height="${px}" style="vertical-align:middle;flex-shrink:0" alt="${source}">`;
   }
   return _OFFICE_ICONS[source] || '\uD83D\uDCCC';
@@ -4132,11 +4150,39 @@ function _saveTabDrafts(tabId, drafts) {
   }
 }
 
+function _draftTurnKey(m) {
+  const content = typeof m?.content === 'string' ? m.content : JSON.stringify(m?.content ?? '');
+  return (m?.role || '') + ':' + content.slice(0, 80);
+}
+
+// Where a draft belongs in the chat: the history length when it was drafted (the index of the
+// reply about to be saved) plus the message before it, so the spot survives old messages rolling off.
+function _draftAnchor(tabId) {
+  const hist = tabId === _activeTabId ? history : _loadTabHistory(tabId);
+  if (!hist.length) return null;
+  return { index: hist.length, prev: _draftTurnKey(hist[hist.length - 1]) };
+}
+
+// The message a draft card renders after: the reply to its turn, or the turn's user message if
+// the reply is not saved yet. -1 when the turn is gone or the draft has no position.
+function _draftAfterIndex(hist, anchor) {
+  if (!anchor) return -1;
+  let turn = -1;
+  hist.forEach((m, i) => {
+    if (_draftTurnKey(m) !== anchor.prev) return;
+    if (turn < 0 || Math.abs(i - (anchor.index - 1)) < Math.abs(turn - (anchor.index - 1)))
+      turn = i;
+  });
+  if (turn < 0) return -1;
+  return hist[turn + 1]?.role === 'assistant' ? turn + 1 : turn;
+}
+
 function _storeTabDraft(tabId, draft, data) {
   if (!tabId || !data?.draft_id) return;
   const drafts = _loadTabDrafts(tabId);
-  const descriptor = { draft, data, created_at: Date.now() };
   const existing = drafts.findIndex((item) => item.data?.draft_id === data.draft_id);
+  const anchor = (existing >= 0 && drafts[existing].anchor) || _draftAnchor(tabId);
+  const descriptor = { draft, data, created_at: Date.now(), anchor };
   if (existing >= 0) drafts[existing] = descriptor;
   else drafts.push(descriptor);
   _saveTabDrafts(tabId, drafts);
@@ -4150,12 +4196,31 @@ function _removeTabDraft(tabId, draftId) {
   );
 }
 
-function _renderTabDrafts(tabId) {
+function _placeTabDrafts(tabId, hist) {
+  const byIndex = new Map();
+  const rest = [];
   _loadTabDrafts(tabId).forEach((item) => {
+    const at = _draftAfterIndex(hist, item.anchor);
+    if (at < 0) rest.push(item);
+    else byIndex.set(at, [...(byIndex.get(at) || []), item]);
+  });
+  return { byIndex, rest };
+}
+
+function _renderDraftItems(tabId, items, scroll) {
+  items.forEach((item) => {
     const draftId = item.data?.draft_id;
     if (!draftId || document.querySelector(`[data-draft-id="${draftId}"]`)) return;
-    _injectDraftApprovalCard(item.draft, item.data, { ownerTabId: tabId, persist: false });
+    _injectDraftApprovalCard(item.draft, item.data, {
+      ownerTabId: tabId,
+      persist: false,
+      scroll,
+    });
   });
+}
+
+function _renderTabDrafts(tabId) {
+  _renderDraftItems(tabId, _loadTabDrafts(tabId), true);
 }
 
 function _renderTabSandboxCards(tabId) {
@@ -4592,6 +4657,7 @@ function switchTab(tabId) {
   // Restore messages from history
   const msgs = document.getElementById('messages');
   const savedScroll = parseInt(localStorage.getItem('tab-scroll-' + tabId) || '-1');
+  const _tabDrafts = _placeTabDrafts(tabId, history);
   if (!history.length) {
     _showChatOrOnboarding();
   } else {
@@ -4631,6 +4697,8 @@ function switchTab(tabId) {
         .forEach((cm) => {
           msgs.appendChild(_buildCompactionMarker(cm.turnCount, cm.summaryText));
         });
+      // Pending draft cards are not transcript messages; restore each one under the turn it was drafted in.
+      _renderDraftItems(tabId, _tabDrafts.byIndex.get(idx) || [], false);
     });
     _refreshRetryVisibility();
     if (savedScroll >= 0) {
@@ -4643,9 +4711,7 @@ function switchTab(tabId) {
       _pinScrollToBottom(msgs);
     }
   }
-  // Pending HITL cards are not ordinary transcript messages. Restore them
-  // after tab history so a draft remains attached to its originating tab.
-  _renderTabDrafts(tabId);
+  _renderDraftItems(tabId, _tabDrafts.rest, false);
   _renderTabSandboxCards(tabId);
   const inflight = _inflightRequests.get(tabId);
   if (inflight?.msgDiv && msgs && !msgs.contains(inflight.msgDiv)) {
@@ -9735,6 +9801,191 @@ function _jiraEditRow(name, label, value, kind) {
   return `<div class="gcc-field-row gcc-field-row--block"><span class="gcc-field-key">${ek}</span><div class="gcc-field-val">${control}</div></div>`;
 }
 
+function _calendarDraftWhen(data) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(data.start || '');
+  const e = /T(\d{2}):(\d{2})/.exec(data.end || '');
+  if (!m || !e) return escapeHtml(data.start || '');
+  const clock = (h, min) => {
+    const hour = Number(h);
+    return (hour % 12 || 12) + ':' + min + ' ' + (hour < 12 ? 'AM' : 'PM');
+  };
+  const day = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]))).toLocaleDateString(
+    'en-US',
+    { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' },
+  );
+  const zone = data.timezone ? ' ' + data.timezone : '';
+  return escapeHtml(day + ', ' + clock(m[4], m[5]) + ' – ' + clock(e[1], e[2]) + zone);
+}
+
+function _calendarRecurrenceText(rec) {
+  const p = (rec && rec.pattern) || {};
+  const r = (rec && rec.range) || {};
+  const noun = {
+    daily: 'day',
+    weekly: 'week',
+    absoluteMonthly: 'month',
+    relativeMonthly: 'month',
+    absoluteYearly: 'year',
+    relativeYearly: 'year',
+  }[p.type];
+  if (!noun) return 'Yes';
+  const n = Number(p.interval) || 1;
+  const day = (d) => String(d).charAt(0).toUpperCase() + String(d).slice(1, 3);
+  let text = 'Every ' + (n > 1 ? n + ' ' + noun + 's' : noun);
+  if (Array.isArray(p.daysOfWeek) && p.daysOfWeek.length) {
+    text += ' on ' + p.daysOfWeek.map(day).join(', ');
+  }
+  if (p.type === 'absoluteMonthly' && p.dayOfMonth) text += ' on day ' + p.dayOfMonth;
+  if (p.type === 'relativeMonthly' && p.index) text += ' on the ' + p.index;
+  if (r.type === 'endDate' && r.endDate) text += ', until ' + r.endDate;
+  else if (r.type === 'numbered' && r.numberOfOccurrences)
+    text += ', ' + r.numberOfOccurrences + ' times';
+  else if (r.type === 'noEnd') text += ', no end date';
+  return text;
+}
+
+// A draft's HTML body as plain text for the editable message box.
+function _calendarBodyText(html) {
+  const text = String(html || '');
+  if (!/<\w+[^>]*>/.test(text)) return text;
+  return text
+    .replace(/<(style|script)[\s\S]*?<\/\1>/gi, '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<li[^>]*>/gi, '- ')
+    .replace(/<\/(p|div|li|h[1-6]|tr|ul|ol)>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, '&')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function _buildCalendarDraftRows(data) {
+  const local = data.attendee_local || {};
+  const person = (email, optional) => {
+    const shown = local[String(email).toLowerCase()];
+    return (
+      '<div>' +
+      escapeHtml(email) +
+      (optional ? ' <em>(optional)</em>' : '') +
+      (shown ? ' — ' + escapeHtml(shown) : '') +
+      '</div>'
+    );
+  };
+  const attendees = (data.attendees || [])
+    .map((a) => person(a, false))
+    .concat((data.optional_attendees || []).map((a) => person(a, true)))
+    .join('');
+  const rows = [
+    ['Title', _jiraEditRow('subject', 'Title', data.subject || '', 'line'), 'edit'],
+    ['When', _calendarDraftWhen(data)],
+  ];
+  if (attendees) rows.push(['Attendees', attendees]);
+  if (data.location) rows.push(['Location', escapeHtml(data.location)]);
+  rows.push(['Teams meeting', data.teams ? 'Yes' : 'No']);
+  if (data.recurrence) rows.push(['Repeats', escapeHtml(_calendarRecurrenceText(data.recurrence))]);
+  rows.push([
+    'Message',
+    _jiraEditRow('body', 'Message', _calendarBodyText(data.body), 'text'),
+    'edit',
+  ]);
+  return rows
+    .map(([k, v, edit]) =>
+      edit
+        ? v
+        : '<div class="gcc-field-row"><span class="gcc-field-key">' +
+          escapeHtml(k) +
+          '</span><span class="gcc-field-val">' +
+          v +
+          '</span></div>',
+    )
+    .join('');
+}
+
+function _buildCalendarUpdateRows(data) {
+  const before = data.before || {};
+  const after = data.after || {};
+  const changed = data.changed || [];
+  const has = (k) => changed.includes(k);
+  const zone = data.timezone;
+  const person = (p, suffix) => {
+    const who = p.name && p.name !== p.email ? p.name + ' (' + p.email + ')' : p.email;
+    return (
+      '<div>' + escapeHtml(who) + (suffix ? ' <em>' + escapeHtml(suffix) + '</em>' : '') + '</div>'
+    );
+  };
+  const kind = (t) => (t === 'optional' ? 'optional' : t === 'resource' ? 'room' : 'required');
+  const change = (from, to) =>
+    '<div><s>' +
+    escapeHtml(from || 'None') +
+    '</s></div><div>' +
+    escapeHtml(to || 'None') +
+    '</div>';
+  const rows = [];
+  rows.push(['Event', escapeHtml(data.subject || '')]);
+  rows.push([
+    'Applies to',
+    data.scope === 'series'
+      ? 'Whole series'
+      : data.scope === 'occurrence'
+        ? 'This occurrence only'
+        : 'This meeting',
+  ]);
+  if (has('when')) {
+    rows.push([
+      'When',
+      '<div><s>' +
+        _calendarDraftWhen({ start: before.start, end: before.end, timezone: zone }) +
+        '</s></div><div>' +
+        _calendarDraftWhen({ start: after.start, end: after.end, timezone: zone }) +
+        '</div>',
+    ]);
+  }
+  if (has('subject')) rows.push(['Title', change(before.subject, after.subject)]);
+  if (has('location')) rows.push(['Location', change(before.location, after.location)]);
+  if (has('teams')) rows.push(['Teams meeting', after.teams ? 'Add' : 'Remove']);
+  if (has('attendees')) {
+    if ((data.added || []).length)
+      rows.push([
+        'Adding',
+        data.added.map((p) => person(p, kind(p.type) === 'required' ? '' : kind(p.type))).join(''),
+      ]);
+    if ((data.removed || []).length)
+      rows.push(['Removing', data.removed.map((p) => person(p, kind(p.type))).join('')]);
+    if ((data.moved || []).length)
+      rows.push([
+        'Moving',
+        data.moved.map((p) => person(p, kind(p.from) + ' → ' + kind(p.to))).join(''),
+      ]);
+  }
+  if (has('body')) rows.push(['Message', 'Replaced with new text']);
+  if (has('recurrence') && data.recurrence)
+    rows.push(['Repeats', escapeHtml(_calendarRecurrenceText(data.recurrence))]);
+  if (has('response')) rows.push(['Responses', 'Request changed']);
+  rows.push([
+    'Notify',
+    data.notify === 'None'
+      ? 'No one is emailed'
+      : data.notify === 'ExternalGuestsOnly'
+        ? 'External guests only'
+        : 'Everyone on the invite',
+  ]);
+  return rows
+    .map(
+      ([k, v]) =>
+        '<div class="gcc-field-row"><span class="gcc-field-key">' +
+        escapeHtml(k) +
+        '</span><span class="gcc-field-val">' +
+        v +
+        '</span></div>',
+    )
+    .join('');
+}
+
 function _buildJiraFieldRows(data, editable = {}) {
   const rows = [];
   if (data.jira_site?.display_name || data.jira_site?.base_url) {
@@ -10028,6 +10279,1281 @@ function _showAskUserCard(data, ownerTabId) {
   bubble.appendChild(box);
   card.appendChild(bubble);
   document.getElementById('messages')?.appendChild(card);
+  card.scrollIntoView({ behavior: 'smooth', block: 'end' });
+}
+
+// ── availability grid card ───────────────────────────────────────────────────
+// Outlook Scheduling-Assistant style: people down the side, half-hour columns grouped by day across the
+// top. Columns where everyone is free are highlighted, but any column can be picked (the footer names who
+// is not free then); pressing "Use this time" sends that slot as the next ordinary chat message.
+// Names come from the model/tool: textContent only.
+function _availabilityGridClock(minute) {
+  const h = Math.floor(minute / 60);
+  const m = minute % 60;
+  return `${h % 12 || 12}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`;
+}
+
+function _availabilityGridSlotText(grid, dayIndex, slotIndex) {
+  const day = grid.days[dayIndex];
+  const [y, mo, d] = day.date.split('-').map(Number);
+  const dayText = new Date(y, mo - 1, d).toLocaleDateString('en-US', {
+    weekday: 'long',
+    month: 'short',
+    day: 'numeric',
+  });
+  const begin = grid.first_minute + slotIndex * grid.step_minutes;
+  const end = begin + grid.duration_minutes;
+  return `${dayText}, ${_availabilityGridClock(begin)} – ${_availabilityGridClock(end)} (${grid.timezone})`;
+}
+
+function _availabilityGridSlotTimes(grid, dayIndex, slotIndex) {
+  const date = grid.days[dayIndex].date;
+  const at = (minute) =>
+    `${date}T${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}:00`;
+  const begin = grid.first_minute + slotIndex * grid.step_minutes;
+  return { start: at(begin), end: at(begin + grid.duration_minutes) };
+}
+
+function _availabilityGridComposeUrl(grid, dayIndex, slotIndex, details) {
+  const times = _availabilityGridSlotTimes(grid, dayIndex, slotIndex);
+  const query = {
+    path: '/calendar/action/compose',
+    rru: 'addevent',
+    subject: (details && details.subject) || '',
+    body: (details && details.body) || '',
+    startdt: times.start,
+    enddt: times.end,
+    to: grid.people
+      .filter((p) => !p.you && p.email)
+      .map((p) => p.email)
+      .join(';'),
+  };
+  const qs = Object.entries(query)
+    .filter(([, v]) => v)
+    .map(([k, v]) => `${k}=${encodeURIComponent(v)}`)
+    .join('&');
+  return `https://outlook.office.com/calendar/0/deeplink/compose?${qs}`;
+}
+
+function _availabilityGridFits(grid, dayIndex, slotIndex) {
+  const day = grid.days[dayIndex];
+  if (day.open[slotIndex] !== '1') return false;
+  const span = Math.max(1, Math.round(grid.duration_minutes / grid.step_minutes));
+  return grid.people.every((person, pi) => {
+    if (person.optional) return true;
+    for (let j = slotIndex; j < slotIndex + span; j++) {
+      if ('tbow'.includes(day.rows[pi][j] || 'f')) return false;
+    }
+    return true;
+  });
+}
+
+function _availabilityGridInitialPick(grid) {
+  const pick = grid.pick;
+  if (!pick) return null;
+  const di = grid.days.findIndex((d) => d.date === pick.date);
+  return di < 0 ? null : { di, k: Math.round(pick.minute / grid.step_minutes) };
+}
+
+function _availabilityGridAttendeeText(grid) {
+  const others = grid.people.filter((p) => !p.you && p.email);
+  const required = others.filter((p) => !p.optional).map((p) => p.email);
+  const optional = others.filter((p) => p.optional).map((p) => p.email);
+  return (
+    (required.length ? ` Required attendees: ${required.join(', ')}.` : '') +
+    (optional.length ? ` Optional attendees: ${optional.join(', ')}.` : '') +
+    (others.length
+      ? ' Invite only these people; anyone removed in the grid is not invited.'
+      : ' There are no other attendees; anyone mentioned earlier was removed in the grid.')
+  );
+}
+
+function _availabilityGridDetailsText(details) {
+  const subject = String((details && details.subject) || '').trim();
+  const message = String((details && details.body) || '').trim();
+  return (
+    (subject ? ` Meeting title: ${subject}.` : '') + (message ? ` Meeting message: ${message}` : '')
+  );
+}
+
+function _availabilityGridZoneLines(zones, grid) {
+  const names = new Map(grid.people.map((p) => [p.email, p.name || p.email]));
+  return (Array.isArray(zones) ? zones : []).map(
+    (z) => `${z.label} · ${(z.people || []).map((e) => names.get(e) || e).join(', ')}`,
+  );
+}
+
+// Calls onClosed once the shell reports that the compose window opened for `url` was closed.
+// Outside the Electron shell there is no signal, so the caller gets its button back at once.
+function _watchOutlookComposeClosed(url, onClosed) {
+  const shell = window.gatorShell;
+  if (!shell || !shell.isShell || !shell.onOutlookComposeClosed) {
+    onClosed();
+    return;
+  }
+  const stop = shell.onOutlookComposeClosed((closedUrl) => {
+    if (closedUrl !== url) return;
+    stop();
+    onClosed();
+  });
+}
+
+function _availabilityGridRepeatText(spec, pickedIso, firstIso) {
+  if (!spec || !spec.type) return ' This is a one-time meeting, not recurring.';
+  const months = [
+    'January',
+    'February',
+    'March',
+    'April',
+    'May',
+    'June',
+    'July',
+    'August',
+    'September',
+    'October',
+    'November',
+    'December',
+  ];
+  const n = spec.interval || 1;
+  const every = (unit) => (n > 1 ? `every ${n} ${unit}s` : `every ${unit}`);
+  const days = spec.days || [];
+  const dayList =
+    days.length > 1 ? `${days.slice(0, -1).join(', ')} and ${days[days.length - 1]}` : days[0];
+  let phrase;
+  if (spec.type === 'daily') phrase = spec.weekdaysOnly ? 'every weekday' : every('day');
+  else if (spec.type === 'weekly') phrase = `${every('week')} on ${dayList}`;
+  else if (spec.type === 'monthly')
+    phrase =
+      spec.mode === 'nth'
+        ? `on the ${spec.ordinal} ${spec.weekday} of ${every('month')}`
+        : `on day ${spec.day} of ${every('month')}`;
+  else
+    phrase =
+      spec.mode === 'nth'
+        ? `${every('year')} on the ${spec.ordinal} ${spec.weekday} of ${months[spec.month - 1]}`
+        : `${every('year')} on ${months[spec.month - 1]} ${spec.day}`;
+  const end =
+    spec.end === 'date'
+      ? `, ending by ${spec.endDate}`
+      : spec.end === 'count'
+        ? `, ending after ${spec.count} occurrences`
+        : ', with no end date';
+  let first = '';
+  if (pickedIso && firstIso && firstIso !== pickedIso) {
+    const [y, m, d] = firstIso.split('-').map(Number);
+    const when = new Date(y, m - 1, d).toLocaleDateString('en-US', {
+      weekday: 'long',
+      month: 'short',
+      day: 'numeric',
+    });
+    first = ` The picked day is not on this repeat, so the first meeting is ${when}, at the picked time.`;
+  }
+  return ` Make it recurring ${phrase}${end}.${first}`;
+}
+
+// The first date on or after the picked day that the repeat rule actually lands on.
+function _availabilityGridFirstMeeting(startIso, spec) {
+  const names = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const [y, m, d] = startIso.split('-').map(Number);
+  const interval = spec.interval || 1;
+  const nthDate = (year, month0, weekday, ordinal) => {
+    const dim = new Date(year, month0 + 1, 0).getDate();
+    if (ordinal === 'last') {
+      for (let n = dim; n > 0; n--) if (new Date(year, month0, n).getDay() === weekday) return n;
+    }
+    const first = ((weekday - new Date(year, month0, 1).getDay() + 7) % 7) + 1;
+    return first + 7 * ['first', 'second', 'third', 'fourth'].indexOf(ordinal);
+  };
+  const startWeekday = new Date(y, m - 1, d).getDay();
+  for (let i = 0; i < 36600; i++) {
+    const dt = new Date(y, m - 1, d + i);
+    const dim = new Date(dt.getFullYear(), dt.getMonth() + 1, 0).getDate();
+    const monthsApart = (dt.getFullYear() - y) * 12 + dt.getMonth() - (m - 1);
+    let hit = false;
+    if (spec.type === 'daily')
+      hit = spec.weekdaysOnly ? dt.getDay() > 0 && dt.getDay() < 6 : i % interval === 0;
+    else if (spec.type === 'weekly')
+      hit =
+        Math.floor((i + startWeekday) / 7) % interval === 0 &&
+        (spec.days || []).includes(names[dt.getDay()]);
+    else if (spec.type === 'monthly' && monthsApart % interval === 0)
+      hit =
+        spec.mode === 'nth'
+          ? dt.getDate() ===
+            nthDate(dt.getFullYear(), dt.getMonth(), names.indexOf(spec.weekday), spec.ordinal)
+          : dt.getDate() === Math.min(spec.day, dim);
+    else if (
+      spec.type === 'yearly' &&
+      (dt.getFullYear() - y) % interval === 0 &&
+      dt.getMonth() === spec.month - 1
+    )
+      hit =
+        spec.mode === 'nth'
+          ? dt.getDate() ===
+            nthDate(dt.getFullYear(), dt.getMonth(), names.indexOf(spec.weekday), spec.ordinal)
+          : dt.getDate() === Math.min(spec.day, dim);
+    if (hit)
+      return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+  }
+  return startIso;
+}
+
+function _availabilityGridRepeatPreset(repeat) {
+  return (
+    {
+      daily: { type: 'daily' },
+      weekdays: { type: 'daily', weekdaysOnly: true },
+      weekly: { type: 'weekly' },
+      biweekly: { type: 'weekly', interval: 2 },
+      monthly: { type: 'monthly' },
+      yearly: { type: 'yearly' },
+    }[repeat] || null
+  );
+}
+
+// Outlook's "Appointment Recurrence" choices: pattern per type, then the range.
+function _availabilityGridRepeatPanel(onChange) {
+  const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const monthNames = [
+    'January',
+    'February',
+    'March',
+    'April',
+    'May',
+    'June',
+    'July',
+    'August',
+    'September',
+    'October',
+    'November',
+    'December',
+  ];
+  const ordinals = ['first', 'second', 'third', 'fourth', 'last'];
+  const group = 'agr' + Math.random().toString(36).slice(2);
+  const touched = new Set();
+  let type = 'weekly';
+  let startIso = '';
+
+  const make = (tag, cls, text) => {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text) e.textContent = text;
+    return e;
+  };
+  const row = (...parts) => {
+    const r = make('div', 'ag-rp-row');
+    parts.forEach((p) => r.append(typeof p === 'string' ? document.createTextNode(p) : p));
+    return r;
+  };
+  const num = (value, min, max) => {
+    const i = make('input', 'ag-rp-num');
+    i.type = 'number';
+    i.min = String(min);
+    i.max = String(max);
+    i.value = String(value);
+    return i;
+  };
+  const pick = (options, value) => {
+    const s = make('select', 'ag-rp-select');
+    options.forEach(([v, label]) => s.add(new Option(label, v)));
+    s.value = value;
+    return s;
+  };
+  const radio = (name, value, label, checked) => {
+    const l = make('label', 'ag-rp-radio');
+    const i = make('input');
+    i.type = 'radio';
+    i.name = name;
+    i.value = value;
+    i.checked = checked;
+    l.append(i, document.createTextNode(label));
+    return { label: l, input: i };
+  };
+  const ordOptions = ordinals.map((o) => [o, o]);
+  const dayOptions = dayNames.map((d) => [d, d]);
+  const monthOptions = monthNames.map((m, i) => [String(i + 1), m]);
+
+  // Daily
+  const dailyN = num(1, 1, 999);
+  const dailyEvery = radio(group + 'd', 'every', 'Every ', true);
+  dailyEvery.label.append(dailyN, ' day(s)');
+  const dailyWeekday = radio(group + 'd', 'weekday', 'Every weekday', false);
+  const dailyBlock = make('div', 'ag-rp-block');
+  dailyBlock.append(row(dailyEvery.label), row(dailyWeekday.label));
+  dailyN.addEventListener('input', () => (dailyEvery.input.checked = true));
+
+  // Weekly
+  const weeklyN = num(1, 1, 99);
+  const weekBoxes = dayNames.map((d) => {
+    const l = make('label', 'ag-rp-check');
+    const i = make('input');
+    i.type = 'checkbox';
+    i.value = d;
+    l.title = d;
+    l.append(i, document.createTextNode(d.slice(0, 3)));
+    return { label: l, input: i };
+  });
+  const weeklyBlock = make('div', 'ag-rp-block');
+  weeklyBlock.append(
+    row('Recur every ', weeklyN, ' week(s) on:'),
+    row(...weekBoxes.map((b) => b.label)),
+  );
+  weekBoxes.forEach((b) =>
+    b.input.addEventListener('change', () => {
+      touched.add('weekly');
+      if (!weekBoxes.some((x) => x.input.checked)) b.input.checked = true;
+    }),
+  );
+  weeklyN.addEventListener('input', () => touched.add('weekly'));
+
+  // Monthly
+  const monthDay = radio(group + 'm', 'day', 'Day ', true);
+  const monthDayN = num(1, 1, 31);
+  const monthDayEvery = num(1, 1, 99);
+  monthDay.label.append(monthDayN, ' of every ', monthDayEvery, ' month(s)');
+  const monthNth = radio(group + 'm', 'nth', 'The ', false);
+  const monthOrd = pick(ordOptions, 'first');
+  const monthWeekday = pick(dayOptions, 'Sunday');
+  const monthNthEvery = num(1, 1, 99);
+  monthNth.label.append(monthOrd, monthWeekday, ' of every ', monthNthEvery, ' month(s)');
+  const monthlyBlock = make('div', 'ag-rp-block');
+  monthlyBlock.append(row(monthDay.label), row(monthNth.label));
+  [monthDayN, monthDayEvery].forEach((c) =>
+    c.addEventListener('input', () => (monthDay.input.checked = true)),
+  );
+  [monthOrd, monthWeekday, monthNthEvery].forEach((c) => {
+    c.addEventListener('input', () => (monthNth.input.checked = true));
+  });
+
+  // Yearly
+  const yearlyN = num(1, 1, 99);
+  const yearDate = radio(group + 'y', 'date', 'On: ', true);
+  const yearMonth = pick(monthOptions, '1');
+  const yearDay = num(1, 1, 31);
+  yearDate.label.append(yearMonth, yearDay);
+  const yearNth = radio(group + 'y', 'nth', 'On the: ', false);
+  const yearOrd = pick(ordOptions, 'first');
+  const yearWeekday = pick(dayOptions, 'Sunday');
+  const yearNthMonth = pick(monthOptions, '1');
+  yearNth.label.append(yearOrd, yearWeekday, ' of ', yearNthMonth);
+  const yearlyBlock = make('div', 'ag-rp-block');
+  yearlyBlock.append(
+    row('Recur every ', yearlyN, ' year(s)'),
+    row(yearDate.label),
+    row(yearNth.label),
+  );
+  [yearMonth, yearDay].forEach((c) =>
+    c.addEventListener('input', () => (yearDate.input.checked = true)),
+  );
+  [yearOrd, yearWeekday, yearNthMonth].forEach((c) =>
+    c.addEventListener('input', () => (yearNth.input.checked = true)),
+  );
+
+  // Range
+  const startText = make('span', 'ag-rp-start');
+  const endCount = radio(group + 'e', 'count', 'End after ', true);
+  const countN = num(10, 1, 999);
+  endCount.label.append(countN, ' occurrences');
+  const endDate = radio(group + 'e', 'date', 'End by ', false);
+  const endDateInput = make('input', 'ag-rp-date');
+  endDateInput.type = 'date';
+  endDate.label.append(endDateInput);
+  const endNone = radio(group + 'e', 'none', 'No end date', false);
+  countN.addEventListener('input', () => (endCount.input.checked = true));
+  endDateInput.addEventListener('input', () => {
+    touched.add('endDate');
+    endDate.input.checked = true;
+  });
+  const rangeBlock = make('div', 'ag-rp-block ag-rp-range');
+  rangeBlock.append(row(startText), row(endCount.label), row(endDate.label), row(endNone.label));
+
+  const el = make('div', 'ag-repeat-panel hidden');
+  el.append(dailyBlock, weeklyBlock, monthlyBlock, yearlyBlock, rangeBlock);
+  el.addEventListener('click', (e) => e.stopPropagation());
+
+  const blocks = {
+    daily: dailyBlock,
+    weekly: weeklyBlock,
+    monthly: monthlyBlock,
+    yearly: yearlyBlock,
+  };
+  const endMode = () => [endCount, endDate, endNone].find((r) => r.input.checked).input.value;
+  const clamp = (input, lo, hi) => Math.min(hi, Math.max(lo, parseInt(input.value, 10) || lo));
+  const isoOf = (d) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+  function setStart(iso) {
+    const [y, m, d] = iso.split('-').map(Number);
+    const date = new Date(y, m - 1, d);
+    startIso = iso;
+    const weekday = dayNames[date.getDay()];
+    const daysInMonth = new Date(y, m, 0).getDate();
+    const ordinal = d + 7 > daysInMonth && d > 21 ? 'last' : ordinals[Math.ceil(d / 7) - 1];
+    if (!touched.has('weekly'))
+      weekBoxes.forEach((b) => (b.input.checked = b.input.value === weekday));
+    if (!touched.has('monthly')) {
+      monthDayN.value = String(d);
+      monthOrd.value = ordinal;
+      monthWeekday.value = weekday;
+    }
+    if (!touched.has('yearly')) {
+      yearMonth.value = yearNthMonth.value = String(m);
+      yearDay.value = String(d);
+      yearOrd.value = ordinal;
+      yearWeekday.value = weekday;
+    }
+    if (!touched.has('endDate')) endDateInput.value = isoOf(new Date(y, m - 1 + 6, d));
+    changed();
+  }
+
+  const longDate = (iso) => {
+    const [y, m, d] = iso.split('-').map(Number);
+    return new Date(y, m - 1, d).toLocaleDateString(undefined, {
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+    });
+  };
+  function first() {
+    return startIso ? _availabilityGridFirstMeeting(startIso, spec()) : '';
+  }
+  function changed() {
+    if (startIso) {
+      const firstIso = first();
+      startText.textContent =
+        firstIso === startIso
+          ? 'Starts ' + longDate(startIso)
+          : `First meeting ${longDate(firstIso)} (the picked ${longDate(startIso)} is not on this repeat)`;
+    }
+    onChange();
+  }
+
+  function setType(next, preset) {
+    type = next;
+    Object.entries(blocks).forEach(([name, block]) =>
+      block.classList.toggle('hidden', name !== next),
+    );
+    if (preset && preset.type === next) {
+      if (preset.interval) weeklyN.value = String(preset.interval);
+      if (preset.weekdaysOnly) dailyWeekday.input.checked = true;
+    }
+    changed();
+  }
+
+  function spec() {
+    const base = { type };
+    if (type === 'daily') {
+      if (dailyWeekday.input.checked) Object.assign(base, { weekdaysOnly: true });
+      else Object.assign(base, { interval: clamp(dailyN, 1, 999) });
+    } else if (type === 'weekly') {
+      Object.assign(base, {
+        interval: clamp(weeklyN, 1, 99),
+        days: weekBoxes.filter((b) => b.input.checked).map((b) => b.input.value),
+      });
+    } else if (type === 'monthly') {
+      if (monthNth.input.checked)
+        Object.assign(base, {
+          mode: 'nth',
+          ordinal: monthOrd.value,
+          weekday: monthWeekday.value,
+          interval: clamp(monthNthEvery, 1, 99),
+        });
+      else
+        Object.assign(base, {
+          mode: 'day',
+          day: clamp(monthDayN, 1, 31),
+          interval: clamp(monthDayEvery, 1, 99),
+        });
+    } else if (yearNth.input.checked) {
+      Object.assign(base, {
+        mode: 'nth',
+        ordinal: yearOrd.value,
+        weekday: yearWeekday.value,
+        month: Number(yearNthMonth.value),
+        interval: clamp(yearlyN, 1, 99),
+      });
+    } else {
+      Object.assign(base, {
+        mode: 'date',
+        month: Number(yearMonth.value),
+        day: clamp(yearDay, 1, 31),
+        interval: clamp(yearlyN, 1, 99),
+      });
+    }
+    const end = endMode();
+    return {
+      ...base,
+      end,
+      count: clamp(countN, 1, 999),
+      endDate: endDateInput.value,
+    };
+  }
+
+  function valid() {
+    const ok = endMode() !== 'date' || (endDateInput.value && endDateInput.value > startIso);
+    endDateInput.classList.toggle('ag-rp-invalid', !ok);
+    return Boolean(ok);
+  }
+
+  el.addEventListener('input', changed);
+  el.addEventListener('change', changed);
+  [monthDayN, monthDayEvery, monthOrd, monthWeekday, monthNthEvery].forEach((c) =>
+    c.addEventListener('input', () => touched.add('monthly')),
+  );
+  [yearMonth, yearDay, yearOrd, yearWeekday, yearNthMonth, yearlyN].forEach((c) =>
+    c.addEventListener('input', () => touched.add('yearly')),
+  );
+  return { el, setStart, setType, spec, valid, first };
+}
+
+function _showAvailabilityGrid(grid, ownerTabId) {
+  if (!grid || !Array.isArray(grid.days) || !Array.isArray(grid.people) || !grid.people.length)
+    return;
+  const tabId = ownerTabId || _activeTabId || 'default';
+  if (tabId !== _activeTabId) {
+    _tabsWithUpdates.add(tabId);
+    document.querySelector?.(`.tab-item[data-tab-id="${tabId}"]`)?.classList.add('tab-has-update');
+    _showConnectivityToast(
+      'AI Gator has availability for you to pick from in another tab.',
+      'info',
+    );
+    return;
+  }
+  document.querySelectorAll('.avail-grid-card').forEach((el) => el.remove());
+  const steps = grid.days[0] ? grid.days[0].open.length : 0;
+  const perHour = Math.max(1, Math.round(60 / grid.step_minutes));
+  const spanSlots = Math.max(1, Math.round(grid.duration_minutes / grid.step_minutes));
+  const workFirst = Math.round((grid.work_start_minute || 0) / grid.step_minutes);
+  const workLast = grid.work_end_minute
+    ? Math.min(steps, Math.round(grid.work_end_minute / grid.step_minutes))
+    : steps;
+  const MAX_GRID_DAYS = 60;
+  const MAX_PEOPLE = 20;
+  const STATUS = {
+    f: 'Free',
+    t: 'Tentative',
+    b: 'Busy',
+    o: 'Out of office',
+    w: 'Working elsewhere',
+    '?': 'No data',
+  };
+  grid.people.forEach((p) => {
+    p.optional = Boolean(p.optional);
+  });
+
+  const card = document.createElement('div');
+  card.className = 'message assistant avail-grid-card';
+  const bubble = document.createElement('div');
+  bubble.className = 'bubble card-bubble';
+  const box = document.createElement('div');
+  box.className = 'gator-compose-card gator-draft-card';
+  const header = document.createElement('div');
+  header.className = 'gcc-header';
+  const title = document.createElement('div');
+  title.className = 'gcc-title';
+  title.textContent = `Pick a time · ${grid.duration_minutes} min · ${grid.timezone}`;
+  const textLink = (label) => {
+    const a = document.createElement('a');
+    a.className = 'gcc-edit-link';
+    a.href = '#';
+    a.textContent = label;
+    return a;
+  };
+  const hours = textLink('Show all hours');
+  const later = textLink('Later weeks ›');
+  const headerActions = document.createElement('div');
+  headerActions.className = 'ag-header-actions';
+  const repeat = document.createElement('select');
+  repeat.className = 'ag-repeat';
+  repeat.title = 'One time or repeating';
+  const repeatPreset = _availabilityGridRepeatPreset(grid.repeat);
+  [
+    ['none', 'One time'],
+    ['daily', 'Daily'],
+    ['weekly', 'Weekly'],
+    ['monthly', 'Monthly'],
+    ['yearly', 'Yearly'],
+  ].forEach(([value, label]) => repeat.add(new Option(label, value)));
+  repeat.value = repeatPreset ? repeatPreset.type : 'none';
+  repeat.addEventListener('click', (e) => e.stopPropagation());
+  headerActions.append(repeat, hours, later);
+  header.append(title, headerActions);
+  const body = document.createElement('div');
+  body.className = 'gcc-body';
+
+  const scroll = document.createElement('div');
+  scroll.className = 'avail-grid-scroll';
+  const table = document.createElement('table');
+  table.className = 'avail-grid';
+
+  const adding = new Map();
+  const chipList = document.createElement('span');
+  chipList.className = 'ag-chip-list';
+
+  function renderChips() {
+    chipList.replaceChildren();
+    const others = grid.people.filter((p) => !p.you);
+    others.forEach((person) => {
+      const label = person.name || person.email;
+      const chip = document.createElement('span');
+      chip.className = 'ag-chip' + (person.optional ? ' ag-chip-optional' : '');
+      const name = document.createElement('span');
+      name.className = 'ag-chip-name';
+      name.textContent = label;
+      name.title = person.email;
+      const role = document.createElement('button');
+      role.type = 'button';
+      role.className = 'ag-chip-role';
+      role.textContent = person.optional ? 'Optional' : 'Required';
+      role.title = person.optional
+        ? `${label} is optional. Click to make required.`
+        : `${label} is required. Click to make optional.`;
+      role.addEventListener('click', (e) => {
+        e.stopPropagation();
+        person.optional = !person.optional;
+        refresh();
+      });
+      chip.append(name, role);
+      if (others.length > 1) {
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'ag-chip-remove';
+        remove.textContent = '×';
+        remove.title = `Remove ${label} from the grid`;
+        remove.setAttribute('aria-label', remove.title);
+        remove.addEventListener('click', (e) => {
+          e.stopPropagation();
+          removePerson(person);
+        });
+        chip.appendChild(remove);
+      }
+      chipList.appendChild(chip);
+    });
+    adding.forEach((label) => {
+      const chip = document.createElement('span');
+      chip.className = 'ag-chip ag-chip-pending';
+      chip.textContent = `${label} · adding…`;
+      chipList.appendChild(chip);
+    });
+  }
+
+  let picked = null;
+  let pickedAt = null;
+  let pickedBusy = [];
+  let cellsByDay = [];
+  const start = _availabilityGridInitialPick(grid);
+  const fullDay = workFirst === 0 && workLast === steps;
+  let showAll =
+    fullDay || Boolean(start && (start.k < workFirst || start.k + spanSlots > workLast));
+  const firstShown = () => (showAll ? 0 : workFirst);
+  const lastShown = () => (showAll ? steps : workLast);
+  const corner = (row) => {
+    const th = document.createElement('th');
+    th.className = 'ag-name ag-corner';
+    row.appendChild(th);
+  };
+
+  function renderTable() {
+    renderChips();
+    table.replaceChildren();
+    cellsByDay = grid.days.map(() => []);
+    const k0 = firstShown();
+    const k1 = lastShown();
+    const dayRow = table.insertRow();
+    const hourRow = table.insertRow();
+    corner(dayRow);
+    corner(hourRow);
+    grid.days.forEach((day) => {
+      const th = document.createElement('th');
+      th.className = 'ag-day';
+      th.colSpan = k1 - k0;
+      th.textContent = day.label;
+      dayRow.appendChild(th);
+      for (let k = k0; k < k1; k += perHour) {
+        const h = document.createElement('th');
+        h.className = 'ag-hour' + (k === k0 ? ' ag-day-start' : '');
+        h.colSpan = Math.min(perHour, k1 - k);
+        h.textContent = _availabilityGridClock(grid.first_minute + k * grid.step_minutes).replace(
+          ':00',
+          '',
+        );
+        hourRow.appendChild(h);
+      }
+    });
+
+    const addRow = (nameCell, cellFor) => {
+      const row = table.insertRow();
+      row.appendChild(nameCell);
+      grid.days.forEach((day, di) => {
+        for (let k = k0; k < k1; k++) {
+          const td = row.insertCell();
+          cellFor(td, day, di, k);
+          if (k === k0) td.classList.add('ag-day-start');
+          (cellsByDay[di][k] = cellsByDay[di][k] || []).push(td);
+          td.addEventListener('click', () => pick(di, k));
+        }
+      });
+    };
+    const nameCell = (label, className) => {
+      const th = document.createElement('th');
+      th.className = 'ag-name ' + className;
+      th.title = label;
+      const text = document.createElement('span');
+      text.className = 'ag-name-text';
+      text.textContent = label;
+      th.appendChild(text);
+      return th;
+    };
+
+    const anyOptional = grid.people.some((p) => p.optional);
+    addRow(
+      nameCell(anyOptional ? 'Required free' : 'Everyone free', 'ag-all'),
+      (td, day, di, k) => {
+        td.className = 'ag-cell ' + (_availabilityGridFits(grid, di, k) ? 'ag-fit' : 'ag-nofit');
+        td.title = _availabilityGridSlotText(grid, di, k);
+      },
+    );
+    const sectionRow = (label) => {
+      const row = table.insertRow();
+      row.className = 'ag-section-row';
+      row.appendChild(nameCell(label, 'ag-section'));
+      const fill = row.insertCell();
+      fill.colSpan = grid.days.length * (k1 - k0);
+    };
+    const personRow = (person, pi) => {
+      const th = nameCell(person.you ? 'You' : person.name || person.email, 'ag-person');
+      addRow(th, (td, day, di, k) => {
+        const st = day.rows[pi][k] || '?';
+        td.className = `ag-cell ag-s-${st === '?' ? 'u' : st}`;
+        td.title = `${person.name || person.email}: ${STATUS[st] || 'No data'}`;
+      });
+    };
+    if (anyOptional) sectionRow('Required');
+    grid.people.forEach((person, pi) => {
+      if (!person.optional) personRow(person, pi);
+    });
+    if (anyOptional) {
+      sectionRow('Optional');
+      grid.people.forEach((person, pi) => {
+        if (person.optional) personRow(person, pi);
+      });
+    }
+    adding.forEach((label) => {
+      const row = table.insertRow();
+      row.className = 'ag-pending-row';
+      row.appendChild(nameCell(`${label} · adding…`, 'ag-person ag-pending-name'));
+      grid.days.forEach(() => {
+        for (let k = k0; k < k1; k++) {
+          const td = row.insertCell();
+          td.className = 'ag-cell ag-pending' + (k === k0 ? ' ag-day-start' : '');
+        }
+      });
+    });
+  }
+  renderTable();
+  scroll.appendChild(table);
+
+  const addBar = document.createElement('div');
+  addBar.className = 'ag-add';
+  const addLink = textLink('+ Add person');
+  const addInput = document.createElement('input');
+  addInput.type = 'text';
+  addInput.className = 'ag-add-input hidden';
+  addInput.placeholder = 'Name or email';
+  const suggestions = document.createElement('div');
+  suggestions.className = 'ag-add-suggestions hidden';
+  const addStatus = document.createElement('span');
+  addStatus.className = 'ag-add-status hidden';
+  addBar.append(addLink, addInput, addStatus, suggestions);
+  const people = document.createElement('div');
+  people.className = 'ag-people';
+  people.append(chipList, addBar);
+
+  const details = document.createElement('div');
+  details.className = 'ag-details';
+  details.innerHTML =
+    _jiraEditRow('subject', 'Title', '', 'line') + _jiraEditRow('body', 'Message', '', 'text');
+  const subjectField = details.querySelector('[data-jira-edit="subject"]');
+  const bodyField = details.querySelector('[data-jira-edit="body"]');
+  subjectField.value = grid.subject || '';
+  const bodyText = _calendarBodyText(grid.body);
+  bodyField.value = bodyText;
+  const detailFields = [subjectField, bodyField];
+  const detailValues = () => ({ subject: subjectField.value.trim(), body: bodyField.value.trim() });
+  const seriesDetails = () =>
+    bodyField.value === bodyText && grid.body
+      ? { subject: subjectField.value.trim(), body: grid.body }
+      : { ...detailValues(), body_plain: true };
+  let openedUrl = '';
+  let zoneSeq = 0;
+  const SAME_INVITE_NOTE =
+    "Opens a new invite. If you already sent it in Outlook, don't send it again.";
+
+  const footer = document.createElement('div');
+  footer.className = 'ag-footer';
+  const chosen = document.createElement('span');
+  chosen.className = 'ag-chosen';
+  chosen.textContent = 'Click any time to choose it (green = everyone required is free)';
+  const use = document.createElement('button');
+  use.className = 'gcc-approve-btn';
+  use.textContent = 'Use this time';
+  use.disabled = true;
+  const openOutlook = document.createElement('button');
+  openOutlook.className = 'gcc-open-outlook-btn';
+  openOutlook.textContent = 'Open in Outlook';
+  openOutlook.disabled = true;
+  const actions = document.createElement('div');
+  actions.className = 'ag-actions';
+  actions.append(use, openOutlook);
+  const zoneBox = document.createElement('div');
+  zoneBox.className = 'ag-zones';
+  const chosenBox = document.createElement('div');
+  chosenBox.className = 'ag-chosen-box';
+  chosenBox.append(chosen, zoneBox);
+  footer.append(chosenBox, actions);
+
+  const panel = _availabilityGridRepeatPanel(() => {
+    forgetOpened();
+    syncUse();
+    syncOutlookLink();
+  });
+  panel.setStart(grid.days[0].date);
+  if (repeat.value !== 'none') {
+    panel.setType(repeat.value, repeatPreset);
+    panel.el.classList.remove('hidden');
+  }
+
+  function syncUse() {
+    use.disabled = !picked || (repeat.value !== 'none' && !panel.valid());
+  }
+
+  function pick(di, k) {
+    k = Math.max(firstShown(), Math.min(k, lastShown() - spanSlots));
+    const sameSlot = pickedAt && pickedAt.di === di && pickedAt.k === k;
+    cellsByDay.forEach((cols) =>
+      cols.forEach((cells) => cells.forEach((c) => c.classList.remove('ag-picked'))),
+    );
+    for (let j = k; j < k + spanSlots; j++)
+      (cellsByDay[di][j] || []).forEach((c) => c.classList.add('ag-picked'));
+    picked = _availabilityGridSlotText(grid, di, k);
+    pickedAt = { di, k };
+    pickedBusy = grid.people
+      .map((person, pi) => ({ person, rows: grid.days[di].rows[pi] }))
+      .filter(({ rows }) => {
+        for (let j = k; j < k + spanSlots; j++) if ('tbow'.includes(rows[j] || 'f')) return true;
+        return false;
+      })
+      .map(({ person }) =>
+        person.you ? 'You' : (person.name || person.email) + (person.optional ? ' (optional)' : ''),
+      );
+    chosen.textContent = pickedBusy.length
+      ? `${picked} · not free: ${pickedBusy.join(', ')}`
+      : picked;
+    panel.setStart(grid.days[di].date);
+    if (!sameSlot) forgetOpened();
+    syncOutlookLink();
+    showZones(di, k);
+  }
+
+  async function showZones(di, k) {
+    const mine = ++zoneSeq;
+    zoneBox.replaceChildren();
+    const zones = {};
+    grid.people.forEach((p) => {
+      if (!p.you && p.email && p.timezone) zones[p.email] = p.timezone;
+    });
+    if (!Object.keys(zones).length) return;
+    try {
+      const slot = _availabilityGridSlotTimes(grid, di, k);
+      const lines = await postGridJson('/api/calendar/slot-zones', {
+        start: slot.start,
+        end: slot.end,
+        timezone: grid.timezone,
+        zones,
+      });
+      if (mine !== zoneSeq) return;
+      _availabilityGridZoneLines(lines, grid).forEach((text) => {
+        const line = document.createElement('div');
+        line.textContent = text;
+        zoneBox.appendChild(line);
+      });
+    } catch {
+      // The zone lines are a convenience; the chosen time above still shows.
+    }
+  }
+
+  function showOpened(url) {
+    openedUrl = url;
+    detailFields.forEach((el) => (el.disabled = true));
+    openOutlook.disabled = true;
+    openOutlook.textContent = 'Opened in Outlook ↗';
+    openOutlook.classList.add('gcc-handed-off');
+    _watchOutlookComposeClosed(url, () => {
+      if (openedUrl !== url) return;
+      openOutlook.disabled = false;
+      openOutlook.textContent = 'Open in Outlook ↗';
+      openOutlook.classList.remove('gcc-handed-off');
+      openOutlook.title = url.includes('/deeplink/compose')
+        ? SAME_INVITE_NOTE
+        : 'Opens the draft you already created in Outlook';
+    });
+  }
+
+  async function launchOutlook(url) {
+    openedUrl = url;
+    if (typeof window.gatorShell !== 'undefined' && window.gatorShell.openOutlookCompose) {
+      await window.gatorShell.openOutlookCompose(url);
+    } else {
+      window.open(url, '_blank', 'noopener');
+    }
+    showOpened(url);
+  }
+
+  function forgetOpened() {
+    if (!openedUrl) return;
+    openedUrl = '';
+    detailFields.forEach((el) => (el.disabled = false));
+  }
+
+  function syncOutlookLink() {
+    if (openedUrl) return;
+    const repeating = repeat.value !== 'none';
+    openOutlook.classList.remove('gcc-handed-off');
+    openOutlook.disabled = !pickedAt || (repeating && !panel.valid());
+    openOutlook.textContent = 'Open in Outlook';
+    openOutlook.title = !pickedAt
+      ? 'Choose a time first'
+      : repeating
+        ? 'Creates the repeating meeting as an unsent draft in Outlook; you send it from there'
+        : '';
+  }
+  repeat.addEventListener('change', () => {
+    panel.el.classList.toggle('hidden', repeat.value === 'none');
+    if (repeat.value !== 'none') panel.setType(repeat.value);
+    forgetOpened();
+    syncOutlookLink();
+    syncUse();
+  });
+  syncOutlookLink();
+
+  function refresh() {
+    renderTable();
+    if (pickedAt) {
+      if (pickedAt.k >= firstShown() && pickedAt.k + spanSlots <= lastShown())
+        pick(pickedAt.di, pickedAt.k);
+      else {
+        picked = null;
+        pickedAt = null;
+        pickedBusy = [];
+        chosen.textContent = 'Click any time to choose it (green = everyone required is free)';
+        zoneSeq++;
+        zoneBox.replaceChildren();
+        use.disabled = true;
+        forgetOpened();
+        syncOutlookLink();
+      }
+    }
+  }
+
+  async function postAvailability(payload) {
+    return (
+      await postGridJson('/api/calendar/availability-days', {
+        duration_minutes: grid.duration_minutes,
+        ...payload,
+      })
+    ).days;
+  }
+
+  async function postGridJson(url, payload) {
+    const post = () =>
+      fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': window.__CSRF_TOKEN__ || '',
+        },
+        body: JSON.stringify(payload),
+      });
+    let res = await post();
+    if (res.status === 403) {
+      const csrf = await fetch('/api/csrf')
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null);
+      if (csrf?.csrf_token) window.__CSRF_TOKEN__ = csrf.csrf_token;
+      res = await post();
+    }
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(typeof err.detail === 'string' ? err.detail : 'HTTP ' + res.status);
+    }
+    return res.json();
+  }
+
+  hours.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    showAll = !showAll;
+    hours.textContent = showAll ? 'Work hours only' : 'Show all hours';
+    refresh();
+    const cell = scroll.querySelector('.ag-fit') || scroll.querySelector('.ag-cell');
+    if (cell) scroll.scrollLeft = Math.max(0, cell.offsetLeft - 140);
+  });
+  if (fullDay) hours.classList.add('hidden');
+  else if (showAll) hours.textContent = 'Work hours only';
+
+  let queue = Promise.resolve();
+  const enqueue = (task) => {
+    const run = queue.then(task, task);
+    queue = run.catch(() => {});
+    return run;
+  };
+
+  later.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (later.classList.contains('ag-link-disabled')) return;
+    later.classList.add('ag-link-disabled');
+    later.textContent = 'Loading…';
+    enqueue(async () => {
+      try {
+        const days = await postAvailability({
+          emails: grid.people.map((p) => p.email),
+          after_date: grid.days[grid.days.length - 1].date,
+        });
+        const firstNew = grid.days.length;
+        grid.days.push(...days);
+        refresh();
+        const cell = cellsByDay[firstNew]?.[firstShown()]?.[0];
+        if (cell) scroll.scrollLeft = Math.max(0, cell.offsetLeft - 140);
+        if (grid.days.length < MAX_GRID_DAYS) later.classList.remove('ag-link-disabled');
+      } catch (err) {
+        later.classList.remove('ag-link-disabled');
+        _showConnectivityToast("Couldn't load later weeks: " + (err?.message || err), 'warn');
+      }
+      later.textContent = 'Later weeks ›';
+    });
+  });
+
+  function removePerson(person) {
+    enqueue(async () => {
+      const idx = grid.people.indexOf(person);
+      if (idx < 0 || grid.people.filter((p) => !p.you).length < 2) return;
+      grid.people.splice(idx, 1);
+      grid.days.forEach((d) => d.rows.splice(idx, 1));
+      refresh();
+    });
+  }
+
+  const inGrid = (email) => grid.people.some((p) => p.email === email);
+  function showAddStatus() {
+    const names = [...adding.values()];
+    addStatus.textContent = names.length ? `Adding ${names.join(', ')}…` : '';
+    addStatus.classList.toggle('hidden', !names.length);
+  }
+  function addPerson(person) {
+    const email = String(person.email || '')
+      .trim()
+      .toLowerCase();
+    if (!email || adding.has(email) || inGrid(email)) return;
+    if (grid.people.length + adding.size >= MAX_PEOPLE) {
+      _showConnectivityToast(`A grid can show up to ${MAX_PEOPLE} people.`, 'warn');
+      return;
+    }
+    const label = person.name || email;
+    adding.set(email, label);
+    showAddStatus();
+    refresh();
+    scroll.scrollTop = scroll.scrollHeight;
+    enqueue(async () => {
+      try {
+        if (inGrid(email)) return;
+        const dates = grid.days.map((d) => d.date);
+        const result = await postGridJson('/api/calendar/availability-days', {
+          duration_minutes: grid.duration_minutes,
+          emails: [email],
+          dates,
+          zones: true,
+        });
+        const days = result.days;
+        if (
+          !Array.isArray(days) ||
+          days.length !== dates.length ||
+          !days.every((d) => typeof d?.rows?.[0] === 'string')
+        )
+          throw new Error('unexpected response');
+        grid.days.forEach((d, i) => d.rows.push(days[i].rows[0]));
+        const timezone = result.zones && result.zones[email];
+        grid.people.push({
+          name: label,
+          email,
+          you: false,
+          optional: false,
+          ...(timezone ? { timezone } : {}),
+        });
+      } catch (err) {
+        _showConnectivityToast("Couldn't add that person: " + (err?.message || err), 'warn');
+      } finally {
+        adding.delete(email);
+        showAddStatus();
+        refresh();
+      }
+    });
+  }
+
+  const searchCache = new Map();
+  let searchSeq = 0;
+  let addTimer = null;
+  function closeAdd() {
+    searchSeq++;
+    clearTimeout(addTimer);
+    addInput.value = '';
+    addInput.classList.add('hidden');
+    suggestions.classList.add('hidden');
+    suggestions.replaceChildren();
+    addLink.classList.remove('hidden');
+  }
+  function showSuggestions(people) {
+    suggestions.replaceChildren();
+    people
+      .filter(
+        (p) => p.email && !inGrid(p.email.toLowerCase()) && !adding.has(p.email.toLowerCase()),
+      )
+      .slice(0, 6)
+      .forEach((p) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'ag-suggestion';
+        b.textContent = `${p.name || p.email} · ${p.email}`;
+        b.addEventListener('click', () => {
+          closeAdd();
+          addPerson(p);
+        });
+        suggestions.appendChild(b);
+      });
+    suggestions.classList.toggle('hidden', !suggestions.childElementCount);
+  }
+  addLink.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    addLink.classList.add('hidden');
+    addInput.classList.remove('hidden');
+    addInput.focus();
+  });
+  addInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeAdd();
+    else if (e.key === 'Enter') {
+      const typed = addInput.value.trim();
+      if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(typed)) {
+        closeAdd();
+        addPerson({ email: typed });
+      } else {
+        const first = suggestions.querySelector('button');
+        if (first) first.click();
+      }
+    }
+  });
+  addInput.addEventListener('input', () => {
+    clearTimeout(addTimer);
+    const q = addInput.value.trim();
+    const mine = ++searchSeq;
+    if (q.length < 2) {
+      suggestions.classList.add('hidden');
+      suggestions.replaceChildren();
+      return;
+    }
+    const key = q.toLowerCase();
+    if (searchCache.has(key)) {
+      showSuggestions(searchCache.get(key));
+      return;
+    }
+    addTimer = setTimeout(async () => {
+      const note = document.createElement('div');
+      note.className = 'ag-suggestion-note';
+      note.textContent = 'Searching…';
+      suggestions.replaceChildren(note);
+      suggestions.classList.remove('hidden');
+      try {
+        const res = await fetch(`/api/people/search?q=${encodeURIComponent(q)}&org_only=true`);
+        const people = res.ok ? (await res.json()).people || [] : [];
+        if (res.ok) searchCache.set(key, people);
+        if (mine === searchSeq) showSuggestions(people);
+      } catch {
+        if (mine === searchSeq) suggestions.classList.add('hidden');
+      }
+    }, 200);
+  });
+
+  openOutlook.addEventListener('click', async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!pickedAt || openOutlook.disabled) return;
+    if (openedUrl) {
+      openOutlook.disabled = true;
+      try {
+        await launchOutlook(openedUrl);
+      } catch (err) {
+        openOutlook.disabled = false;
+        _showConnectivityToast("Couldn't open in Outlook: " + (err?.message || err), 'warn');
+      }
+      return;
+    }
+    let url;
+    try {
+      const others = grid.people.filter((p) => !p.you && p.email);
+      const repeating = repeat.value !== 'none';
+      if (!repeating && !others.some((p) => p.optional)) {
+        url = _availabilityGridComposeUrl(grid, pickedAt.di, pickedAt.k, detailValues());
+      } else {
+        openOutlook.disabled = true;
+        openOutlook.textContent = repeating ? 'Creating the draft series…' : 'Creating the draft…';
+        const slot = _availabilityGridSlotTimes(grid, pickedAt.di, pickedAt.k);
+        const firstDate = repeating ? panel.first() : grid.days[pickedAt.di].date;
+        ({ url } = await postGridJson('/api/calendar/grid-draft-series', {
+          start: firstDate + slot.start.slice(10),
+          end: firstDate + slot.end.slice(10),
+          timezone: grid.timezone,
+          attendees: others.filter((p) => !p.optional).map((p) => p.email),
+          optional_attendees: others.filter((p) => p.optional).map((p) => p.email),
+          repeat: repeating ? panel.spec() : null,
+          ...seriesDetails(),
+        }));
+      }
+      await launchOutlook(url);
+    } catch (err) {
+      if (!url) syncOutlookLink();
+      else {
+        openOutlook.disabled = false;
+        openOutlook.textContent = 'Open in Outlook ↗';
+      }
+      _showConnectivityToast("Couldn't open in Outlook: " + (err?.message || err), 'warn');
+    }
+  });
+  use.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (use.disabled || !picked) return;
+    const reply =
+      `Let's do ${picked}.` +
+      (pickedBusy.length ? ` ${pickedBusy.join(', ')} not free then; schedule it anyway.` : '') +
+      _availabilityGridAttendeeText(grid) +
+      (repeat.value === 'none'
+        ? _availabilityGridRepeatText(null)
+        : _availabilityGridRepeatText(panel.spec(), grid.days[pickedAt.di].date, panel.first())) +
+      _availabilityGridDetailsText(detailValues());
+    card.remove();
+    _sendSandboxFollowUp(tabId, reply).catch((err) =>
+      console.warn('[availability grid] pick not sent:', err),
+    );
+  });
+
+  body.append(panel.el, people, scroll, details, footer);
+  box.append(header, body);
+  bubble.appendChild(box);
+  card.appendChild(bubble);
+  document.getElementById('messages')?.appendChild(card);
+  if (start) pick(start.di, start.k);
+  const firstFit = scroll.querySelector('.ag-picked') || scroll.querySelector('.ag-fit');
+  if (firstFit) scroll.scrollLeft = Math.max(0, firstFit.offsetLeft - 140);
   card.scrollIntoView({ behavior: 'smooth', block: 'end' });
 }
 
@@ -10359,6 +11885,7 @@ function _showSandboxApproval(data, ownerTabId) {
   });
   document.getElementById('messages')?.appendChild(card);
   card.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  _focusApprovalButton(approve);
 }
 
 // Navigate the relevant native app after a draft is approved and inject
@@ -10973,7 +12500,192 @@ function _initDraftRichEditor(editor, capabilities) {
   document.addEventListener('selectionchange', onSelectionChange);
 }
 
-function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persist = true } = {}) {
+const _REPLY_RECIPIENT_MAX = 50;
+const _REPLY_EMAIL_RE = /^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/;
+
+function _buildReplyRecipientRows(data) {
+  const clean = (list) =>
+    (Array.isArray(list) ? list : [])
+      .map((p) => ({ name: p.name || '', email: String(p.email || '').trim() }))
+      .filter((p) => p.email);
+  const lists = { to: clean(data.to_people), cc: clean(data.cc_people) };
+  const keyOf = (p) => p.email.toLowerCase();
+  const original = { to: lists.to.map(keyOf).sort(), cc: lists.cc.map(keyOf).sort() };
+  const listed = (email) =>
+    ['to', 'cc'].some((f) => lists[f].some((p) => keyOf(p) === email.toLowerCase()));
+  const count = () => lists.to.length + lists.cc.length;
+  const refreshers = [];
+  const closers = [];
+  let locked = false;
+
+  function buildRow(field, label) {
+    const row = document.createElement('div');
+    row.className = 'gcc-meta-row gcc-recipient-row';
+    const key = document.createElement('span');
+    key.className = 'gcc-meta-key';
+    key.textContent = label;
+    const val = document.createElement('span');
+    val.className = 'gcc-meta-val gcc-recipient-val';
+    const chips = document.createElement('span');
+    chips.className = 'ag-chip-list';
+    const addBar = document.createElement('div');
+    addBar.className = 'ag-add';
+    const addLink = document.createElement('button');
+    addLink.type = 'button';
+    addLink.className = 'gcc-recipient-add';
+    addLink.textContent = `+ Add to ${label}`;
+    const addInput = document.createElement('input');
+    addInput.type = 'text';
+    addInput.className = 'ag-add-input hidden';
+    addInput.placeholder = 'Name or email';
+    const suggestions = document.createElement('div');
+    suggestions.className = 'ag-add-suggestions hidden';
+    addBar.append(addLink, addInput, suggestions);
+    val.append(chips, addBar);
+    row.append(key, val);
+
+    function render() {
+      chips.replaceChildren();
+      row.classList.toggle('gcc-recipient-empty', !lists[field].length);
+      addLink.textContent = lists[field].length ? '+ Add' : `+ Add ${label}`;
+      lists[field].forEach((person) => {
+        const chip = document.createElement('span');
+        chip.className = 'ag-chip';
+        const name = document.createElement('span');
+        name.className = 'ag-chip-name';
+        name.textContent = person.name || person.email;
+        name.title = person.email;
+        chip.appendChild(name);
+        if (field === 'cc' || lists.to.length > 1) {
+          const remove = document.createElement('button');
+          remove.type = 'button';
+          remove.className = 'ag-chip-remove';
+          remove.textContent = '×';
+          remove.title = `Remove ${person.name || person.email} from ${label}`;
+          remove.setAttribute('aria-label', remove.title);
+          remove.addEventListener('click', () => {
+            lists[field].splice(lists[field].indexOf(person), 1);
+            refreshers.forEach((fn) => fn());
+          });
+          chip.appendChild(remove);
+        }
+        chips.appendChild(chip);
+      });
+    }
+    refreshers.push(render);
+
+    function addPerson(person) {
+      const email = String(person.email || '').trim();
+      if (locked || !_REPLY_EMAIL_RE.test(email) || listed(email)) return;
+      if (count() >= _REPLY_RECIPIENT_MAX) {
+        _showConnectivityToast(
+          `A reply can have up to ${_REPLY_RECIPIENT_MAX} recipients.`,
+          'warn',
+        );
+        return;
+      }
+      lists[field].push({ name: person.name || '', email });
+      refreshers.forEach((fn) => fn());
+    }
+
+    let searchSeq = 0;
+    let addTimer = null;
+    function closeAdd() {
+      searchSeq++;
+      clearTimeout(addTimer);
+      addInput.value = '';
+      addInput.classList.add('hidden');
+      suggestions.classList.add('hidden');
+      suggestions.replaceChildren();
+      addLink.classList.remove('hidden');
+    }
+    closers.push(closeAdd);
+    function showSuggestions(people) {
+      suggestions.replaceChildren();
+      people
+        .filter((p) => p.email && !listed(p.email))
+        .slice(0, 6)
+        .forEach((p) => {
+          const b = document.createElement('button');
+          b.type = 'button';
+          b.className = 'ag-suggestion';
+          b.textContent = `${p.name || p.email} · ${p.email}`;
+          b.addEventListener('click', () => {
+            closeAdd();
+            addPerson(p);
+          });
+          suggestions.appendChild(b);
+        });
+      suggestions.classList.toggle('hidden', !suggestions.childElementCount);
+    }
+    addLink.addEventListener('click', () => {
+      addLink.classList.add('hidden');
+      addInput.classList.remove('hidden');
+      addInput.focus();
+    });
+    addInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') closeAdd();
+      else if (e.key === 'Enter') {
+        e.preventDefault();
+        const typed = addInput.value.trim();
+        if (_REPLY_EMAIL_RE.test(typed)) {
+          closeAdd();
+          addPerson({ email: typed });
+        } else {
+          suggestions.querySelector('button')?.click();
+        }
+      }
+    });
+    addInput.addEventListener('input', () => {
+      clearTimeout(addTimer);
+      const q = addInput.value.trim();
+      const mine = ++searchSeq;
+      suggestions.classList.add('hidden');
+      suggestions.replaceChildren();
+      if (q.length < 2) return;
+      addTimer = setTimeout(async () => {
+        const note = document.createElement('div');
+        note.className = 'ag-suggestion-note';
+        note.textContent = 'Searching…';
+        suggestions.replaceChildren(note);
+        suggestions.classList.remove('hidden');
+        try {
+          const res = await fetch(`/api/people/search?q=${encodeURIComponent(q)}`);
+          const people = res.ok ? (await res.json()).people || [] : [];
+          if (mine === searchSeq) showSuggestions(people);
+        } catch {
+          if (mine === searchSeq) suggestions.classList.add('hidden');
+        }
+      }, 200);
+    });
+    render();
+    return row;
+  }
+
+  const rows = [buildRow('to', 'To'), buildRow('cc', 'CC')];
+  return {
+    rows,
+    edits() {
+      const out = {};
+      ['to', 'cc'].forEach((f) => {
+        const now = lists[f].map(keyOf).sort();
+        if (now.join('\n') !== original[f].join('\n')) out[f] = lists[f].map((p) => p.email);
+      });
+      return Object.keys(out).length ? out : null;
+    },
+    lock(lockIt = true) {
+      locked = lockIt;
+      if (locked) closers.forEach((close) => close());
+      rows.forEach((row) => row.classList.toggle('gcc-recipients-locked', locked));
+    },
+  };
+}
+
+function _injectDraftApprovalCard(
+  type,
+  data,
+  { ownerTabId = _activeTabId, persist = true, scroll = true } = {},
+) {
   const draftId = data.draft_id;
   if (persist) _storeTabDraft(ownerTabId, type, data);
   if (draftId && document.querySelector(`[data-draft-id="${draftId}"]`)) return;
@@ -10993,6 +12705,34 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
       action: 'Forward',
       sendLabel: 'Forward',
       openLabel: 'Open draft in Outlook',
+    },
+    'calendar-event': {
+      paneLabel: '@outlook',
+      paneIcon: '📅',
+      service: 'calendar',
+      action: 'Meeting invite',
+      hideEditLink: true,
+      title: 'Meeting draft ready',
+      sendLabel: 'Send invite',
+      openButton: true,
+      openLabel: 'Open in Outlook',
+      footerNote: 'Nothing is sent until you press Send invite.',
+      customBody: _buildCalendarDraftRows(data),
+    },
+    'calendar-update': {
+      paneLabel: '@outlook',
+      paneIcon: '\uD83D\uDCC5',
+      service: 'calendar',
+      action: 'Meeting update',
+      hideEditLink: true,
+      title: 'Meeting update ready',
+      sendLabel: 'Send update',
+      openButton: true,
+      openLabel: 'Open in Outlook',
+      footerNote: 'Nothing changes until you press Send update.',
+      handoffNote: 'Opened in Outlook. Nothing was changed.',
+      applyWording: true,
+      customBody: _buildCalendarUpdateRows(data),
     },
     'email-send': {
       paneLabel: '@outlook',
@@ -11154,7 +12894,8 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
   const _editableBody = teamsSeed ? teamsSeed.text : fullBody;
   const bodySnippet = escapeHtml(fullBody.slice(0, 200));
   const recipientInfo = data.to || data.channel || data.recipient || data.channels || '';
-  const subjectLine = data.subject || '';
+  const subjectLine =
+    type === 'calendar-event' || type === 'calendar-update' ? '' : data.subject || '';
   const workspaceLine =
     config.service === 'slack' && data.workspace_name
       ? `<div class="gcc-workspace">Slack · ${escapeHtml(data.workspace_name)}</div>`
@@ -11169,9 +12910,10 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
       '@gcal': 'Google Calendar',
     }[config.paneLabel] || '';
   const sourcesRead = Array.isArray(data.sources) ? data.sources : [];
-  const flowLine = destinationLabel
-    ? `<div class="gcc-flow">Data from: <strong>${sourcesRead.length ? escapeHtml(sourcesRead.join(', ')) : 'no apps read in this request'}</strong> &rarr; Sending to: <strong>${escapeHtml(destinationLabel)}</strong></div>`
-    : '';
+  const flowLine =
+    destinationLabel && sourcesRead.length
+      ? `<div class="gcc-flow">Data from: <strong>${escapeHtml(sourcesRead.join(', '))}</strong> &rarr; ${config.flowVerb || 'Sending to'}: <strong>${escapeHtml(destinationLabel)}</strong></div>`
+      : '';
   const sensitiveMarks = Array.isArray(data.sensitive) ? data.sensitive : [];
   const sensitiveBanner = sensitiveMarks.length
     ? `<div class="gcc-sensitive" role="alert">Sensitive content: this draft contains <strong>${escapeHtml(sensitiveMarks.join(', '))}</strong>. Check the destination before you approve.</div>`
@@ -11182,6 +12924,10 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
   if (draftId) card.dataset.draftId = draftId;
   card.dataset.draftType = type;
   card.dataset.ownerTabId = ownerTabId || '';
+  const replyRecipients =
+    (type === 'email-reply' || type === 'email-send') && Array.isArray(data.to_people)
+      ? _buildReplyRecipientRows(data)
+      : null;
   card.innerHTML = `
     <div class="bubble card-bubble">
       <div class="gator-compose-card gator-draft-card">
@@ -11195,7 +12941,7 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
             </span>
             <span class="gcc-pane-icon">${config.paneIcon}</span>
           </div>
-          <div class="gcc-title">Draft ready for approval</div>
+          <div class="gcc-title">${config.title || 'Draft ready for approval'}</div>
         </div>
         <div class="gcc-body">
           ${flowLine}
@@ -11204,9 +12950,19 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
             config.service === 'email'
               ? `
             <div class="gcc-meta-rows">
-              <div class="gcc-meta-row"><span class="gcc-meta-key">To</span><span class="gcc-meta-val">${escapeHtml(data.to || '')}</span></div>
-              ${data.cc ? `<div class="gcc-meta-row"><span class="gcc-meta-key">CC</span><span class="gcc-meta-val">${escapeHtml(data.cc)}</span></div>` : ''}
-              ${data.subject ? `<div class="gcc-meta-row"><span class="gcc-meta-key">Subject</span><span class="gcc-meta-val"><strong>${escapeHtml(data.subject)}</strong></span></div>` : ''}
+              ${
+                replyRecipients
+                  ? '<div class="gcc-recipient-slot"></div>'
+                  : `<div class="gcc-meta-row"><span class="gcc-meta-key">To</span><span class="gcc-meta-val">${escapeHtml(data.to || '')}</span></div>
+              ${data.cc ? `<div class="gcc-meta-row"><span class="gcc-meta-key">CC</span><span class="gcc-meta-val">${escapeHtml(data.cc)}</span></div>` : ''}`
+              }
+              ${
+                type === 'email-send'
+                  ? '<div class="gcc-meta-row"><span class="gcc-meta-key">Subject</span><span class="gcc-meta-val"><input type="text" class="gcc-subject-input" maxlength="255" aria-label="Subject"></span></div>'
+                  : data.subject
+                    ? `<div class="gcc-meta-row"><span class="gcc-meta-key">Subject</span><span class="gcc-meta-val"><strong>${escapeHtml(data.subject)}</strong></span></div>`
+                    : ''
+              }
             </div>
           `
               : config.service === 'teams'
@@ -11233,6 +12989,7 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
         </div>
         <div class="gcc-actions">
           <button class="gcc-approve-btn" data-draft-id="${draftId}">${config.sendLabel || 'Send'}</button>
+          ${config.openButton ? `<button class="gcc-open-outlook-btn" data-draft-id="${draftId}">${config.openLabel}</button>` : ''}
           ${config.showSchedule ? `<button class="gcc-schedule-btn" disabled title="Scheduling \u2014 coming soon">\u23F0</button>` : ''}
           ${
             !config.hideEditLink && config.viewAvailable !== false && canOpenNativeApp
@@ -11247,6 +13004,27 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
       </div>
     </div>`;
 
+  const recipientSlot = card.querySelector('.gcc-recipient-slot');
+  if (recipientSlot && replyRecipients) recipientSlot.replaceWith(...replyRecipients.rows);
+  const subjectInput = card.querySelector('.gcc-subject-input');
+  if (subjectInput) {
+    subjectInput.value = data.subject || '';
+    subjectInput.addEventListener('blur', () => {
+      if (!subjectInput.value.trim()) subjectInput.value = data.subject || '';
+    });
+  }
+  const headerEdits = () => {
+    const edits = replyRecipients?.edits();
+    const subject = subjectInput?.value.trim();
+    return {
+      ...(edits ? { edited_recipients: edits } : {}),
+      ...(subject && subject !== (data.subject || '').trim() ? { edited_subject: subject } : {}),
+    };
+  };
+  const lockHeader = (locked = true) => {
+    replyRecipients?.lock(locked);
+    if (subjectInput) subjectInput.disabled = locked;
+  };
   const approveBtn = card.querySelector('.gcc-approve-btn');
   const editLink = card.querySelector('.gcc-edit-link');
   const editArea = card.querySelector('.gcc-edit-area');
@@ -11278,9 +13056,99 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
     el.dataset.orig = el.value;
   });
 
-  approveBtn.addEventListener('click', async () => {
+  const openCalendarBtn = card.querySelector('.gcc-open-outlook-btn');
+  const _applyWording =
+    config.applyWording || (config.hideEditLink && config.service !== 'calendar');
+  if (openCalendarBtn) {
+    let handedOffUrl = '';
+    const SAME_INVITE_NOTE =
+      "Opens a new invite. If you already sent it in Outlook, don't send it again.";
+    const reopenReady = () => {
+      openCalendarBtn.textContent = config.openLabel + ' ↗';
+      openCalendarBtn.classList.remove('gcc-handed-off');
+      openCalendarBtn.title = handedOffUrl.includes('/deeplink/compose')
+        ? SAME_INVITE_NOTE
+        : 'Opens the draft you already created in Outlook';
+      openCalendarBtn.disabled = false;
+    };
+    async function openInOutlookWindow(url) {
+      if (canOpenNativeApp && window.gatorShell.openOutlookCompose) {
+        await window.gatorShell.openOutlookCompose(url);
+      } else {
+        window.open(url, '_blank', 'noopener');
+      }
+      openCalendarBtn.textContent = 'Opened in Outlook ↗';
+      openCalendarBtn.classList.add('gcc-handed-off');
+      openCalendarBtn.disabled = true;
+      _watchOutlookComposeClosed(url, reopenReady);
+    }
+    openCalendarBtn.addEventListener('click', async () => {
+      openCalendarBtn.disabled = true;
+      if (handedOffUrl) {
+        try {
+          await openInOutlookWindow(handedOffUrl);
+        } catch (err) {
+          reopenReady();
+          _showConnectivityToast("Couldn't open in Outlook: " + (err?.message || err), 'warn');
+        }
+        return;
+      }
+      openCalendarBtn.textContent = 'Opening…';
+      try {
+        const editedFields = {};
+        jiraEditFields.forEach((el) => {
+          if (el.value !== el.dataset.orig) editedFields[el.dataset.jiraEdit] = el.value;
+        });
+        const postOpen = () =>
+          fetch('/api/drafts/' + draftId + '/open-in-outlook', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-CSRF-Token': window.__CSRF_TOKEN__ || '',
+            },
+            body: JSON.stringify(
+              Object.keys(editedFields).length ? { edited_fields: editedFields } : {},
+            ),
+          });
+        let res = await postOpen();
+        if (res.status === 403) {
+          const _csrf = await fetch('/api/csrf')
+            .then((r) => (r.ok ? r.json() : null))
+            .catch(() => null);
+          if (_csrf?.csrf_token) window.__CSRF_TOKEN__ = _csrf.csrf_token;
+          res = await postOpen();
+        }
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(typeof err.detail === 'string' ? err.detail : 'HTTP ' + res.status);
+        }
+        const { url } = await res.json();
+        handedOffUrl = url;
+        _removeTabDraft(ownerTabId, draftId);
+        jiraEditFields.forEach((el) => (el.disabled = true));
+        approveBtn.disabled = true;
+        approveBtn.classList.add('gcc-handed-off');
+        const refine = card.querySelector('.gcc-refine');
+        if (refine)
+          refine.textContent =
+            config.handoffNote || 'Opened in Outlook. Press Send there to invite attendees.';
+        await openInOutlookWindow(url);
+      } catch (err) {
+        if (handedOffUrl) reopenReady();
+        else {
+          openCalendarBtn.textContent = config.openLabel;
+          openCalendarBtn.disabled = false;
+        }
+        _showConnectivityToast("Couldn't open in Outlook: " + (err?.message || err), 'warn');
+      }
+    });
+  }
+
+  approveBtn?.addEventListener('click', async () => {
     approveBtn.disabled = true;
-    approveBtn.textContent = config.hideEditLink ? 'Applying\u2026' : 'Sending\u2026';
+    lockHeader();
+    if (openCalendarBtn) openCalendarBtn.disabled = true;
+    approveBtn.textContent = _applyWording ? 'Applying\u2026' : 'Sending\u2026';
     try {
       const editedFields = {};
       jiraEditFields.forEach((el) => {
@@ -11295,6 +13163,7 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
         ...(richEditor ? { edited_html: editArea.innerHTML } : {}),
         ...(editedText !== null ? { edited_message: editedText } : {}),
         ...(Object.keys(editedFields).length ? { edited_fields: editedFields } : {}),
+        ...headerEdits(),
       });
       let res = await fetch('/api/drafts/' + draftId + '/approve', {
         method: 'POST',
@@ -11343,7 +13212,7 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
         throw new Error(friendlyMsg);
       }
       const _json = await res.json().catch(() => ({}));
-      approveBtn.textContent = config.hideEditLink ? 'Applied \u2713' : 'Sent \u2713';
+      approveBtn.textContent = _applyWording ? 'Applied \u2713' : 'Sent \u2713';
       approveBtn.classList.add('gcc-approved');
       _removeTabDraft(ownerTabId, draftId);
       if (editLink) editLink.style.display = 'none';
@@ -11358,6 +13227,8 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
     } catch (e) {
       approveBtn.textContent = 'Failed \u2014 retry?';
       approveBtn.disabled = false;
+      lockHeader(false);
+      if (openCalendarBtn) openCalendarBtn.disabled = false;
       approveBtn.classList.add('gcc-failed');
       if (e && e.message) {
         const errDiv =
@@ -11418,11 +13289,14 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
           // so edits aren't silently dropped when opening in Outlook instead
           // of sending from Gator (a handed-off draft permanently disables
           // Approve, so there is no later chance to apply them).
-          const outlookEdit = editArea?.classList.contains('gcc-rich-editor')
+          const bodyEdit = editArea?.classList.contains('gcc-rich-editor')
             ? { edited_html: editArea.innerHTML }
             : editArea
               ? { edited_message: editArea.value || editArea.textContent || '' }
               : null;
+          const headerEdit = headerEdits();
+          const outlookEdit =
+            bodyEdit || Object.keys(headerEdit).length ? { ...bodyEdit, ...headerEdit } : null;
           const postOpen = () =>
             fetch('/api/drafts/' + draftId + '/open-in-outlook', {
               method: 'POST',
@@ -11445,6 +13319,8 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
             throw new Error(typeof err.detail === 'string' ? err.detail : 'HTTP ' + res.status);
           }
           const { url } = await res.json();
+          lockHeader();
+          _removeTabDraft(ownerTabId, draftId);
           // Enter the native-pane state first so tpState, the divider, and the
           // visible Expand Gator button stay in sync. This may navigate Outlook
           // home when it is already active, so it must happen before loading the
@@ -11485,7 +13361,7 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
     });
 
   document.getElementById('messages').appendChild(card);
-  card.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  if (scroll) card.scrollIntoView({ behavior: 'smooth', block: 'end' });
 }
 
 function addMessage(role, html) {
@@ -13340,7 +15216,15 @@ form.addEventListener('submit', async (e) => {
     : {};
   const requestHistory = history;
 
-  requestHistory.push({ role: 'user', content: finalText });
+  // This text copy is what the server rebuilds the chat from after a restart, so the saved image path rides along.
+  const _imageNote = imagesSnapshot
+    .filter((i) => i.savedPath)
+    .map((i) => `[attached image: ${i.name || 'image'}, saved at ${i.savedPath}]`)
+    .join('\n');
+  requestHistory.push({
+    role: 'user',
+    content: _imageNote ? `${finalText}\n\n${_imageNote}` : finalText,
+  });
   _saveTabHistory(requestTabId, requestHistory);
   // Trim display store to match surviving user turns in the history window
   const _survivingUserTurns = requestHistory
@@ -14119,6 +16003,8 @@ form.addEventListener('submit', async (e) => {
               _routeDraftToTab(requestTabId, msg.draft, msg.draftData || {});
             } else if (msg.jira_target_selection) {
               _showJiraTargetSelection(msg.jira_target_selection, requestTabId);
+            } else if (msg.availability_grid) {
+              _showAvailabilityGrid(msg.availability_grid, requestTabId);
             } else if (msg.sandbox_approval) {
               _showSandboxApproval(msg.sandbox_approval, requestTabId);
             } else if (msg.github_sso) {
@@ -16596,6 +18482,25 @@ function _continueRequestText(lastUserText, retryNote) {
   return `${lastUserText}\n\n${retryNote}`;
 }
 
+// Puts the Allow button in focus so Enter approves. Focus is left alone when the user is typing in
+// any editable field (the chat box counts only when it holds a draft), and Enter/Space are ignored
+// for the first 700 ms so a keypress already in flight cannot approve a card the user has not read.
+function _focusApprovalButton(btn) {
+  const chatInput = document.getElementById('chat-input');
+  const active = document.activeElement;
+  const typing =
+    active && (active.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName || ''));
+  if (typing && !(active === chatInput && !chatInput.textContent.trim())) return;
+  const armedAt = Date.now() + 700;
+  const hold = (e) => {
+    if ((e.key === 'Enter' || e.key === ' ') && Date.now() < armedAt) e.preventDefault();
+  };
+  btn.addEventListener('keydown', hold);
+  btn.addEventListener('keyup', hold);
+  btn.dataset.defaultAction = '1';
+  btn.focus({ preventScroll: true });
+}
+
 function _pinConfirmCardInView(card) {
   const messages = document.getElementById('messages');
   if (messages && card.isConnected) _pinScrollToBottom(messages);
@@ -16798,6 +18703,7 @@ function _showBrowserConfirmCard(
     msgDiv.appendChild(card);
   }
   _pinConfirmCardInView(card);
+  _focusApprovalButton(allowBtn);
 }
 
 /* ── Failover Consent Gate ───────────────────────────── */
