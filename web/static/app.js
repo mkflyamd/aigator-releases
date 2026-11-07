@@ -4150,11 +4150,39 @@ function _saveTabDrafts(tabId, drafts) {
   }
 }
 
+function _draftTurnKey(m) {
+  const content = typeof m?.content === 'string' ? m.content : JSON.stringify(m?.content ?? '');
+  return (m?.role || '') + ':' + content.slice(0, 80);
+}
+
+// Where a draft belongs in the chat: the history length when it was drafted (the index of the
+// reply about to be saved) plus the message before it, so the spot survives old messages rolling off.
+function _draftAnchor(tabId) {
+  const hist = tabId === _activeTabId ? history : _loadTabHistory(tabId);
+  if (!hist.length) return null;
+  return { index: hist.length, prev: _draftTurnKey(hist[hist.length - 1]) };
+}
+
+// The message a draft card renders after: the reply to its turn, or the turn's user message if
+// the reply is not saved yet. -1 when the turn is gone or the draft has no position.
+function _draftAfterIndex(hist, anchor) {
+  if (!anchor) return -1;
+  let turn = -1;
+  hist.forEach((m, i) => {
+    if (_draftTurnKey(m) !== anchor.prev) return;
+    if (turn < 0 || Math.abs(i - (anchor.index - 1)) < Math.abs(turn - (anchor.index - 1)))
+      turn = i;
+  });
+  if (turn < 0) return -1;
+  return hist[turn + 1]?.role === 'assistant' ? turn + 1 : turn;
+}
+
 function _storeTabDraft(tabId, draft, data) {
   if (!tabId || !data?.draft_id) return;
   const drafts = _loadTabDrafts(tabId);
-  const descriptor = { draft, data, created_at: Date.now() };
   const existing = drafts.findIndex((item) => item.data?.draft_id === data.draft_id);
+  const anchor = (existing >= 0 && drafts[existing].anchor) || _draftAnchor(tabId);
+  const descriptor = { draft, data, created_at: Date.now(), anchor };
   if (existing >= 0) drafts[existing] = descriptor;
   else drafts.push(descriptor);
   _saveTabDrafts(tabId, drafts);
@@ -4168,12 +4196,31 @@ function _removeTabDraft(tabId, draftId) {
   );
 }
 
-function _renderTabDrafts(tabId) {
+function _placeTabDrafts(tabId, hist) {
+  const byIndex = new Map();
+  const rest = [];
   _loadTabDrafts(tabId).forEach((item) => {
+    const at = _draftAfterIndex(hist, item.anchor);
+    if (at < 0) rest.push(item);
+    else byIndex.set(at, [...(byIndex.get(at) || []), item]);
+  });
+  return { byIndex, rest };
+}
+
+function _renderDraftItems(tabId, items, scroll) {
+  items.forEach((item) => {
     const draftId = item.data?.draft_id;
     if (!draftId || document.querySelector(`[data-draft-id="${draftId}"]`)) return;
-    _injectDraftApprovalCard(item.draft, item.data, { ownerTabId: tabId, persist: false });
+    _injectDraftApprovalCard(item.draft, item.data, {
+      ownerTabId: tabId,
+      persist: false,
+      scroll,
+    });
   });
+}
+
+function _renderTabDrafts(tabId) {
+  _renderDraftItems(tabId, _loadTabDrafts(tabId), true);
 }
 
 function _renderTabSandboxCards(tabId) {
@@ -4610,6 +4657,7 @@ function switchTab(tabId) {
   // Restore messages from history
   const msgs = document.getElementById('messages');
   const savedScroll = parseInt(localStorage.getItem('tab-scroll-' + tabId) || '-1');
+  const _tabDrafts = _placeTabDrafts(tabId, history);
   if (!history.length) {
     _showChatOrOnboarding();
   } else {
@@ -4649,6 +4697,8 @@ function switchTab(tabId) {
         .forEach((cm) => {
           msgs.appendChild(_buildCompactionMarker(cm.turnCount, cm.summaryText));
         });
+      // Pending draft cards are not transcript messages; restore each one under the turn it was drafted in.
+      _renderDraftItems(tabId, _tabDrafts.byIndex.get(idx) || [], false);
     });
     _refreshRetryVisibility();
     if (savedScroll >= 0) {
@@ -4661,9 +4711,7 @@ function switchTab(tabId) {
       _pinScrollToBottom(msgs);
     }
   }
-  // Pending HITL cards are not ordinary transcript messages. Restore them
-  // after tab history so a draft remains attached to its originating tab.
-  _renderTabDrafts(tabId);
+  _renderDraftItems(tabId, _tabDrafts.rest, false);
   _renderTabSandboxCards(tabId);
   const inflight = _inflightRequests.get(tabId);
   if (inflight?.msgDiv && msgs && !msgs.contains(inflight.msgDiv)) {
@@ -12505,7 +12553,11 @@ function _buildReplyRecipientRows(data) {
   };
 }
 
-function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persist = true } = {}) {
+function _injectDraftApprovalCard(
+  type,
+  data,
+  { ownerTabId = _activeTabId, persist = true, scroll = true } = {},
+) {
   const draftId = data.draft_id;
   if (persist) _storeTabDraft(ownerTabId, type, data);
   if (draftId && document.querySelector(`[data-draft-id="${draftId}"]`)) return;
@@ -12920,6 +12972,7 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
         }
         const { url } = await res.json();
         handedOffUrl = url;
+        _removeTabDraft(ownerTabId, draftId);
         jiraEditFields.forEach((el) => (el.disabled = true));
         approveBtn.disabled = true;
         approveBtn.classList.add('gcc-handed-off');
@@ -13114,6 +13167,7 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
           }
           const { url } = await res.json();
           replyRecipients?.lock();
+          _removeTabDraft(ownerTabId, draftId);
           // Enter the native-pane state first so tpState, the divider, and the
           // visible Expand Gator button stay in sync. This may navigate Outlook
           // home when it is already active, so it must happen before loading the
@@ -13154,7 +13208,7 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
     });
 
   document.getElementById('messages').appendChild(card);
-  card.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  if (scroll) card.scrollIntoView({ behavior: 'smooth', block: 'end' });
 }
 
 function addMessage(role, html) {
