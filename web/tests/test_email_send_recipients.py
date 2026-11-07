@@ -183,10 +183,9 @@ class TestFailedSendDoesNotKeepEdits:
         assert _addresses(msg["ccRecipients"]) == ["cy@amd.com"]
 
 
-class TestRecurringMeetingWithoutAttendeesOpensInOutlook:
-    def test_it_is_created_as_a_plain_event_instead_of_failing(self):
+class TestRecurringMeetingWithoutAttendees:
+    def test_opening_it_in_outlook_is_refused_and_creates_nothing(self):
         gc = MagicMock()
-        gc.post.return_value = {"id": "EV1", "webLink": "https://outlook.office.com/calendar/item/EV1"}
         draft_id = create_draft(
             "calendar-event",
             {
@@ -201,8 +200,11 @@ class TestRecurringMeetingWithoutAttendeesOpensInOutlook:
             },
             {},
         )
+        client = TestClient(app)
         with patch("skills._m365.helpers.get_cal_client", return_value=gc):
-            r = _post(TestClient(app), draft_id, "open-in-outlook")
-        assert r.status_code == 200, r.text
-        assert r.json()["url"] == "https://outlook.office.com/calendar/item/EV1"
-        assert "isDraft" not in gc.post.call_args.args[1]
+            r = _post(client, draft_id, "open-in-outlook")
+        assert r.status_code == 400, r.text
+        gc.post.assert_not_called()
+        from skills._drafts import get_draft
+
+        assert get_draft(draft_id)["status"] == "pending", "the card can still be used"

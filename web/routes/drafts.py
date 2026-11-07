@@ -1261,12 +1261,13 @@ async def open_draft_in_outlook(draft_id: str, body: dict = None):
         # Outlook's compose link cannot carry a recurrence or mark attendees optional,
         # so the event is created as an unsent draft (isDraft) and opened from its webLink.
         try:
-            from skills.calendar.events import create_event, create_meeting, event_payload
+            from skills.calendar.events import NoAttendeesError, create_meeting
 
-            if p.get("attendees") or p.get("optional_attendees"):
-                created = create_meeting(p)
-            else:
-                created = create_event(event_payload(p))
+            created = create_meeting(p)
+        except NoAttendeesError as e:
+            if abort_handoff(draft_id):
+                await _sync_task_draft_status(draft_id, "pending")
+            raise HTTPException(status_code=400, detail="A recurring meeting needs at least one attendee to open in Outlook as a draft.")
         except Exception as e:
             status_code = getattr(e, "status_code", None)
             if isinstance(status_code, int) and (status_code == 0 or status_code >= 500):
