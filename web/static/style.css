@@ -6817,7 +6817,8 @@ button[data-default-action]:focus:not(:disabled)::after {
 }
 .gcc-recipients-locked .ag-chip-remove,
 .gcc-recipients-locked .gcc-recipient-add,
-.gcc-recipients-locked .ag-add-input {
+.gcc-recipients-locked .ag-add-input,
+.gcc-recipients-locked .ag-add-suggestions {
   display: none;
 }
 .gcc-recipients-locked .ag-chip-name {

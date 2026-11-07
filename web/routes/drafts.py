@@ -282,6 +282,25 @@ def _fold_send_recipients(params: dict) -> None:
             params[field] = ", ".join(override)
 
 
+_HEADER_KEYS = ("to", "cc", "subject")
+
+
+def _reset_header_edits(draft: dict) -> None:
+    """Puts To/CC/Subject back to what the draft was created with, so each attempt applies only the edits it carries.
+
+    A failed send keeps the stored draft, and the card sends no edit once the user reverts one, so an
+    edit applied by an earlier attempt must not outlive it."""
+    p = draft["params"]
+    baseline = draft.setdefault("header_baseline", {k: p[k] for k in _HEADER_KEYS if k in p})
+    p.pop("to_override", None)
+    p.pop("cc_override", None)
+    for key in _HEADER_KEYS:
+        if key in baseline:
+            p[key] = baseline[key]
+        else:
+            p.pop(key, None)
+
+
 def _reply_recipient_patch(params: dict) -> dict:
     """Graph fields for the To/CC the user changed on the card; empty when they left the recipients alone."""
     patch: dict = {}
@@ -425,6 +444,7 @@ async def approve_draft(draft_id: str, body: dict = None):
         elif dtype != "calendar-update":
             _apply_jira_edits(draft, body)
         if dtype in ("email-reply", "email-send"):
+            _reset_header_edits(draft)
             p.update(_reply_recipient_edits(body))
         if dtype == "email-send":
             p.update(_send_subject_edit(body))
@@ -1223,6 +1243,8 @@ async def open_draft_in_outlook(draft_id: str, body: dict = None):
             )
         raise HTTPException(status_code=404, detail="Draft not found or expired.")
     p = claimed["params"]
+    if dtype in ("email-reply", "email-send"):
+        _reset_header_edits(claimed)
     p.update(calendar_edits)
     p.update(recipient_edits)
     p.update(subject_edit)
@@ -1239,9 +1261,12 @@ async def open_draft_in_outlook(draft_id: str, body: dict = None):
         # Outlook's compose link cannot carry a recurrence or mark attendees optional,
         # so the event is created as an unsent draft (isDraft) and opened from its webLink.
         try:
-            from skills.calendar.events import create_meeting
+            from skills.calendar.events import create_event, create_meeting, event_payload
 
-            created = create_meeting(p)
+            if p.get("attendees") or p.get("optional_attendees"):
+                created = create_meeting(p)
+            else:
+                created = create_event(event_payload(p))
         except Exception as e:
             status_code = getattr(e, "status_code", None)
             if isinstance(status_code, int) and (status_code == 0 or status_code >= 500):

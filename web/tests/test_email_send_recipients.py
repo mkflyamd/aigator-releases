@@ -140,3 +140,69 @@ class TestEditedSubject:
             r = _post(TestClient(app), _compose(), "open-in-outlook", {"edited_subject": "New subject"})
         assert r.status_code == 200, r.text
         assert gc.post.call_args_list[0].args[1]["subject"] == "New subject"
+
+
+class TestFailedSendDoesNotKeepEdits:
+    def test_an_edit_reverted_after_a_failed_send_is_not_sent_on_the_retry(self):
+        client = TestClient(app)
+        draft_id = _compose()
+        failing = MagicMock()
+        failing.post.side_effect = RuntimeError("Graph is down")
+        with patch("skills._m365.helpers.get_graph_client", return_value=failing):
+            first = _post(
+                client,
+                draft_id,
+                "approve",
+                {"edited_recipients": {"to": ["ann@amd.com", "new@amd.com"], "cc": []}, "edited_subject": "Changed"},
+            )
+        assert first.status_code != 200
+        retry = MagicMock()
+        with patch("skills._m365.helpers.get_graph_client", return_value=retry):
+            second = _post(client, draft_id, "approve", {"edited_message": "Hello"})
+        assert second.status_code == 200, second.text
+        msg = retry.post.call_args.args[1]["message"]
+        assert _addresses(msg["toRecipients"]) == ["ann@amd.com", "bob@amd.com"]
+        assert _addresses(msg["ccRecipients"]) == ["cy@amd.com"]
+        assert msg["subject"] == "Update"
+
+    def test_an_edit_reverted_after_a_failed_handoff_is_not_used_on_the_retry(self):
+        client = TestClient(app)
+        draft_id = _compose()
+        failing = MagicMock()
+        failing.post.side_effect = RuntimeError("Graph is down")
+        with patch("skills._m365.helpers.get_graph_client", return_value=failing):
+            first = _post(client, draft_id, "open-in-outlook", {"edited_recipients": {"to": ["new@amd.com"], "cc": []}})
+        assert first.status_code != 200
+        retry = MagicMock()
+        retry.post.return_value = {"id": "DRAFT1", "webLink": "https://outlook.office.com/mail/x"}
+        with patch("skills._m365.helpers.get_graph_client", return_value=retry):
+            second = _post(client, draft_id, "open-in-outlook", {})
+        assert second.status_code == 200, second.text
+        msg = retry.post.call_args_list[0].args[1]
+        assert _addresses(msg["toRecipients"]) == ["ann@amd.com", "bob@amd.com"]
+        assert _addresses(msg["ccRecipients"]) == ["cy@amd.com"]
+
+
+class TestRecurringMeetingWithoutAttendeesOpensInOutlook:
+    def test_it_is_created_as_a_plain_event_instead_of_failing(self):
+        gc = MagicMock()
+        gc.post.return_value = {"id": "EV1", "webLink": "https://outlook.office.com/calendar/item/EV1"}
+        draft_id = create_draft(
+            "calendar-event",
+            {
+                "subject": "Focus time",
+                "start": "2026-11-09T09:00:00",
+                "end": "2026-11-09T10:00:00",
+                "timezone": "UTC",
+                "recurrence": {
+                    "pattern": {"type": "daily", "interval": 1},
+                    "range": {"type": "noEnd", "startDate": "2026-11-09"},
+                },
+            },
+            {},
+        )
+        with patch("skills._m365.helpers.get_cal_client", return_value=gc):
+            r = _post(TestClient(app), draft_id, "open-in-outlook")
+        assert r.status_code == 200, r.text
+        assert r.json()["url"] == "https://outlook.office.com/calendar/item/EV1"
+        assert "isDraft" not in gc.post.call_args.args[1]

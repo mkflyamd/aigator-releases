@@ -12515,6 +12515,8 @@ function _buildReplyRecipientRows(data) {
     ['to', 'cc'].some((f) => lists[f].some((p) => keyOf(p) === email.toLowerCase()));
   const count = () => lists.to.length + lists.cc.length;
   const refreshers = [];
+  const closers = [];
+  let locked = false;
 
   function buildRow(field, label) {
     const row = document.createElement('div');
@@ -12574,7 +12576,7 @@ function _buildReplyRecipientRows(data) {
 
     function addPerson(person) {
       const email = String(person.email || '').trim();
-      if (!_REPLY_EMAIL_RE.test(email) || listed(email)) return;
+      if (locked || !_REPLY_EMAIL_RE.test(email) || listed(email)) return;
       if (count() >= _REPLY_RECIPIENT_MAX) {
         _showConnectivityToast(
           `A reply can have up to ${_REPLY_RECIPIENT_MAX} recipients.`,
@@ -12597,6 +12599,7 @@ function _buildReplyRecipientRows(data) {
       suggestions.replaceChildren();
       addLink.classList.remove('hidden');
     }
+    closers.push(closeAdd);
     function showSuggestions(people) {
       suggestions.replaceChildren();
       people
@@ -12637,11 +12640,9 @@ function _buildReplyRecipientRows(data) {
       clearTimeout(addTimer);
       const q = addInput.value.trim();
       const mine = ++searchSeq;
-      if (q.length < 2) {
-        suggestions.classList.add('hidden');
-        suggestions.replaceChildren();
-        return;
-      }
+      suggestions.classList.add('hidden');
+      suggestions.replaceChildren();
+      if (q.length < 2) return;
       addTimer = setTimeout(async () => {
         const note = document.createElement('div');
         note.className = 'ag-suggestion-note';
@@ -12672,7 +12673,9 @@ function _buildReplyRecipientRows(data) {
       });
       return Object.keys(out).length ? out : null;
     },
-    lock(locked = true) {
+    lock(lockIt = true) {
+      locked = lockIt;
+      if (locked) closers.forEach((close) => close());
       rows.forEach((row) => row.classList.toggle('gcc-recipients-locked', locked));
     },
   };

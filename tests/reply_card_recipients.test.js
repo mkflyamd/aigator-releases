@@ -214,6 +214,44 @@ const json = (v) => JSON.stringify(v);
   ed.lock(false);
   assert(ed.rows.every((r) => !r.classList.contains('gcc-recipients-locked')));
 
+  // Enter never adds a suggestion left over from an earlier query.
+  {
+    const stale = setup({ people: [{ name: 'Bob Ong', email: 'bob@amd.com' }] });
+    const edStale = stale.build({ to_people: [person('ann@amd.com')], cc_people: [] });
+    const [staleTo] = edStale.rows;
+    addLink(staleTo).click();
+    const staleInput = addInput(staleTo);
+    staleInput.value = 'bo';
+    staleInput.fire('input');
+    await stale.timers[0]();
+    assert.strictEqual(staleTo.find((c) => c.classes.has('ag-suggestion')).length, 1);
+    staleInput.value = 'xq';
+    staleInput.fire('input');
+    assert.strictEqual(staleTo.find((c) => c.classes.has('ag-suggestion')).length, 0);
+    staleInput.fire('keydown', { key: 'Enter' });
+    assert.strictEqual(edStale.edits(), null, 'the stale Bob Ong was not added');
+  }
+
+  // Once locked for sending, a suggestion click adds no one and the add box closes.
+  {
+    const locked = setup({ people: [{ name: 'Dee Lee', email: 'dee@amd.com' }] });
+    const edLocked = locked.build({ to_people: [person('ann@amd.com')], cc_people: [] });
+    const [lockedTo] = edLocked.rows;
+    addLink(lockedTo).click();
+    const lockedInput = addInput(lockedTo);
+    lockedInput.value = 'dee';
+    lockedInput.fire('input');
+    await locked.timers[0]();
+    const pending = lockedTo.find((c) => c.classes.has('ag-suggestion'))[0];
+    edLocked.lock();
+    assert.strictEqual(lockedTo.find((c) => c.classes.has('ag-suggestion')).length, 0);
+    pending.click();
+    assert.strictEqual(edLocked.edits(), null, 'a late click while sending adds no one');
+    edLocked.lock(false);
+    enter(lockedTo, 'dee@amd.com');
+    assert.strictEqual(json(edLocked.edits()), json({ to: ['ann@amd.com', 'dee@amd.com'] }));
+  }
+
   // The recipient cap matches the server's.
   const cap = setup();
   const many = Array.from({ length: 50 }, (_, i) => person(`p${i}@amd.com`));

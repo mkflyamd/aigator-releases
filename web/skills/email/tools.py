@@ -314,7 +314,8 @@ def _my_email_address() -> str:
 
     try:
         me = get_cached_me(get_graph_client())
-    except Exception:
+    except Exception as ex:
+        print(f"[email.reply] could not look up your address, so it is not removed from a reply: {ex}", flush=True)
         return ""
     return (me.get("mail") or me.get("userPrincipalName") or "").strip().lower()
 
