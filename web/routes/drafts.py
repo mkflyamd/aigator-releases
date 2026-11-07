@@ -239,7 +239,7 @@ def _reply_recipient_edits(body: dict | None) -> dict:
         raise HTTPException(status_code=400, detail="Edited recipients must be an object.")
     unknown = sorted(set(edits) - {"to", "cc"})
     if unknown:
-        raise HTTPException(status_code=400, detail=f"Field(s) not editable on a reply: {', '.join(unknown)}.")
+        raise HTTPException(status_code=400, detail=f"Field(s) not editable here: {', '.join(unknown)}.")
     out: dict = {}
     for field, raw in edits.items():
         if not isinstance(raw, list) or not all(isinstance(a, str) for a in raw):
@@ -251,11 +251,19 @@ def _reply_recipient_edits(body: dict | None) -> dict:
             if address.lower() not in (a.lower() for a in addresses):
                 addresses.append(address)
         if len(addresses) > _REPLY_RECIPIENT_MAX:
-            raise HTTPException(status_code=400, detail=f"A reply can have up to {_REPLY_RECIPIENT_MAX} {field.upper()} recipients.")
+            raise HTTPException(status_code=400, detail=f"An email can have up to {_REPLY_RECIPIENT_MAX} {field.upper()} recipients.")
         if field == "to" and not addresses:
-            raise HTTPException(status_code=400, detail="A reply needs at least one To recipient.")
+            raise HTTPException(status_code=400, detail="An email needs at least one To recipient.")
         out[f"{field}_override"] = addresses
     return out
+
+
+def _fold_send_recipients(params: dict) -> None:
+    """A new email sends from comma-separated to/cc strings, so the people edited on the card replace them."""
+    for field in ("to", "cc"):
+        override = params.pop(f"{field}_override", None)
+        if override is not None:
+            params[field] = ", ".join(override)
 
 
 def _reply_recipient_patch(params: dict) -> dict:
@@ -400,8 +408,10 @@ async def approve_draft(draft_id: str, body: dict = None):
             p.update(_calendar_edits(body))
         elif dtype != "calendar-update":
             _apply_jira_edits(draft, body)
-        if dtype == "email-reply":
+        if dtype in ("email-reply", "email-send"):
             p.update(_reply_recipient_edits(body))
+        if dtype == "email-send":
+            _fold_send_recipients(p)
 
         # â”€â”€ Email â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         if dtype == "email-reply":
@@ -1175,7 +1185,7 @@ async def open_draft_in_outlook(draft_id: str, body: dict = None):
         )
 
     calendar_edits = _calendar_edits(body) if dtype == "calendar-event" else {}
-    recipient_edits = _reply_recipient_edits(body) if dtype == "email-reply" else {}
+    recipient_edits = _reply_recipient_edits(body) if dtype in ("email-reply", "email-send") else {}
 
     claimed = claim_for_handoff(draft_id)
     if claimed is not None:
@@ -1197,6 +1207,8 @@ async def open_draft_in_outlook(draft_id: str, body: dict = None):
     p = claimed["params"]
     p.update(calendar_edits)
     p.update(recipient_edits)
+    if dtype == "email-send":
+        _fold_send_recipients(p)
 
     if dtype == "calendar-update":
         link = p.get("web_link") or ""

@@ -12796,7 +12796,9 @@ function _injectDraftApprovalCard(
   card.dataset.draftType = type;
   card.dataset.ownerTabId = ownerTabId || '';
   const replyRecipients =
-    type === 'email-reply' && Array.isArray(data.to_people) ? _buildReplyRecipientRows(data) : null;
+    (type === 'email-reply' || type === 'email-send') && Array.isArray(data.to_people)
+      ? _buildReplyRecipientRows(data)
+      : null;
   card.innerHTML = `
     <div class="bubble card-bubble">
       <div class="gator-compose-card gator-draft-card">

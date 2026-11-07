@@ -733,9 +733,16 @@ def _tool_email_open_compose(
             "subject": subject,
         },
     )
+    def people(addresses: str, names: str = "") -> list[dict]:
+        emails = [a.strip() for a in addresses.split(",") if a.strip()]
+        named = [n.strip() for n in names.split(",")]
+        return [{"name": named[i] if len(named) == len(emails) else "", "email": e} for i, e in enumerate(emails)]
+
     data = {
         "to": to,
         "to_names": to_names,
+        "to_people": people(to, to_names),
+        "cc_people": people(cc),
         "subject": subject,
         "body": body,
         "cc": cc,

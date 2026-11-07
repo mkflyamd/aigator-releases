@@ -207,8 +207,12 @@ const json = (v) => JSON.stringify(v);
   assert.strictEqual(cap.toasts.length, 1, 'a 51st recipient is refused with a message');
   assert.strictEqual(full.rows[1].find((c) => c.classes.has('ag-chip-name')).length, 0);
 
-  // The card uses the editor for replies and sends only what changed, on both paths.
-  assert(/type === 'email-reply' && Array\.isArray\(data\.to_people\)/.test(source));
+  // The card uses the editor for replies and new emails, and sends only what changed, on both paths.
+  assert(
+    /\(type === 'email-reply' \|\| type === 'email-send'\) &&\s*Array\.isArray\(data\.to_people\)/.test(
+      source,
+    ),
+  );
   assert(
     /\.\.\.recipientEdits\(\),\s*\}\);\s*let res = await fetch\('\/api\/drafts\/' \+ draftId \+ '\/approve'/.test(
       source,
