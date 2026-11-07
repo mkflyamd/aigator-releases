@@ -169,6 +169,21 @@ const json = (v) => JSON.stringify(v);
   assert.strictEqual(ed.edits(), null);
 }
 
+// An empty CC line collapses to a single "+ Add CC" link instead of a blank row.
+{
+  const { build } = setup();
+  const ed = build({ to_people: [person('ann@amd.com')], cc_people: [] });
+  const [to, cc] = ed.rows;
+  assert(cc.classes.has('gcc-recipient-empty'));
+  assert.strictEqual(addLink(cc).textContent, '+ Add CC');
+  assert(!to.classes.has('gcc-recipient-empty'));
+  enter(cc, 'new@amd.com');
+  assert(!cc.classes.has('gcc-recipient-empty'));
+  assert.strictEqual(addLink(cc).textContent, '+ Add');
+  removeButtons(cc)[0].click();
+  assert(cc.classes.has('gcc-recipient-empty'), 'removing the last CC person collapses the row');
+}
+
 // Typing a name searches people; picking a suggestion adds that person.
 (async () => {
   const { build, timers, fetched } = setup({
@@ -214,14 +229,19 @@ const json = (v) => JSON.stringify(v);
     ),
   );
   assert(
-    /\.\.\.recipientEdits\(\),\s*\}\);\s*let res = await fetch\('\/api\/drafts\/' \+ draftId \+ '\/approve'/.test(
+    /\.\.\.headerEdits\(\),\s*\}\);\s*let res = await fetch\('\/api\/drafts\/' \+ draftId \+ '\/approve'/.test(
       source,
     ),
   );
+  assert(/\{ \.\.\.bodyEdit, \.\.\.headerEdit \}/.test(source), 'open-in-outlook sends edits');
+
+  // A new email's subject is a text box whose edit rides along; the data-flow line needs a source.
   assert(
-    /\{ \.\.\.bodyEdit, \.\.\.recipientEdits\(\) \}/.test(source),
-    'open-in-outlook sends edits',
+    /type === 'email-send'\s*\?\s*'<div class="gcc-meta-row">[^']*gcc-subject-input/.test(source),
   );
+  assert(/edited_subject: subject/.test(source));
+  assert(/destinationLabel && sourcesRead\.length/.test(source));
+  assert(!/no apps read in this request/.test(source), 'no empty data-flow line');
 
   console.log('reply_card_recipients ok');
 })().catch((e) => {

@@ -115,3 +115,28 @@ class TestOpenInOutlookKeepsEditedRecipients:
         assert path == "/me/messages"
         assert _addresses(msg["toRecipients"]) == ["ann@amd.com"]
         assert _addresses(msg["ccRecipients"]) == ["di@amd.com"]
+
+
+class TestEditedSubject:
+    def test_the_edited_subject_is_what_gets_sent(self):
+        r, gc = _send({"edited_subject": "  Updated: recordings  "})
+        assert r.status_code == 200, r.text
+        assert gc.post.call_args.args[1]["message"]["subject"] == "Updated: recordings"
+
+    def test_an_untouched_card_keeps_its_subject(self):
+        r, gc = _send({"edited_message": "Hello"})
+        assert gc.post.call_args.args[1]["message"]["subject"] == "Update"
+
+    def test_bad_subjects_are_rejected_before_anything_is_sent(self):
+        for subject in ["", "   ", "two\nlines", "x" * 256, 5]:
+            r, gc = _send({"edited_subject": subject})
+            assert r.status_code == 400, (subject, r.text)
+            assert not gc.post.called, subject
+
+    def test_the_outlook_draft_has_the_edited_subject(self):
+        gc = MagicMock()
+        gc.post.return_value = {"id": "DRAFT1", "webLink": "https://outlook.office.com/mail/x"}
+        with patch("skills._m365.helpers.get_graph_client", return_value=gc):
+            r = _post(TestClient(app), _compose(), "open-in-outlook", {"edited_subject": "New subject"})
+        assert r.status_code == 200, r.text
+        assert gc.post.call_args_list[0].args[1]["subject"] == "New subject"

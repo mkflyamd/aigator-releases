@@ -258,6 +258,22 @@ def _reply_recipient_edits(body: dict | None) -> dict:
     return out
 
 
+_SUBJECT_MAX = 255
+
+
+def _send_subject_edit(body: dict | None) -> dict:
+    """Validates a subject edited on a new-email card and returns it as the subject param."""
+    subject = (body or {}).get("edited_subject")
+    if subject is None:
+        return {}
+    if not isinstance(subject, str) or not subject.strip():
+        raise HTTPException(status_code=400, detail="The subject can't be empty.")
+    subject = subject.strip()
+    if len(subject) > _SUBJECT_MAX or "\n" in subject or "\r" in subject:
+        raise HTTPException(status_code=400, detail=f"The subject must be one line of up to {_SUBJECT_MAX} characters.")
+    return {"subject": subject}
+
+
 def _fold_send_recipients(params: dict) -> None:
     """A new email sends from comma-separated to/cc strings, so the people edited on the card replace them."""
     for field in ("to", "cc"):
@@ -411,6 +427,7 @@ async def approve_draft(draft_id: str, body: dict = None):
         if dtype in ("email-reply", "email-send"):
             p.update(_reply_recipient_edits(body))
         if dtype == "email-send":
+            p.update(_send_subject_edit(body))
             _fold_send_recipients(p)
 
         # â”€â”€ Email â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -1186,6 +1203,7 @@ async def open_draft_in_outlook(draft_id: str, body: dict = None):
 
     calendar_edits = _calendar_edits(body) if dtype == "calendar-event" else {}
     recipient_edits = _reply_recipient_edits(body) if dtype in ("email-reply", "email-send") else {}
+    subject_edit = _send_subject_edit(body) if dtype == "email-send" else {}
 
     claimed = claim_for_handoff(draft_id)
     if claimed is not None:
@@ -1207,6 +1225,7 @@ async def open_draft_in_outlook(draft_id: str, body: dict = None):
     p = claimed["params"]
     p.update(calendar_edits)
     p.update(recipient_edits)
+    p.update(subject_edit)
     if dtype == "email-send":
         _fold_send_recipients(p)
 

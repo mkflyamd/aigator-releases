@@ -12421,6 +12421,8 @@ function _buildReplyRecipientRows(data) {
 
     function render() {
       chips.replaceChildren();
+      row.classList.toggle('gcc-recipient-empty', !lists[field].length);
+      addLink.textContent = lists[field].length ? '+ Add' : `+ Add ${label}`;
       lists[field].forEach((person) => {
         const chip = document.createElement('span');
         chip.className = 'ag-chip';
@@ -12782,9 +12784,10 @@ function _injectDraftApprovalCard(
       '@gcal': 'Google Calendar',
     }[config.paneLabel] || '';
   const sourcesRead = Array.isArray(data.sources) ? data.sources : [];
-  const flowLine = destinationLabel
-    ? `<div class="gcc-flow">Data from: <strong>${sourcesRead.length ? escapeHtml(sourcesRead.join(', ')) : 'no apps read in this request'}</strong> &rarr; ${config.flowVerb || 'Sending to'}: <strong>${escapeHtml(destinationLabel)}</strong></div>`
-    : '';
+  const flowLine =
+    destinationLabel && sourcesRead.length
+      ? `<div class="gcc-flow">Data from: <strong>${escapeHtml(sourcesRead.join(', '))}</strong> &rarr; ${config.flowVerb || 'Sending to'}: <strong>${escapeHtml(destinationLabel)}</strong></div>`
+      : '';
   const sensitiveMarks = Array.isArray(data.sensitive) ? data.sensitive : [];
   const sensitiveBanner = sensitiveMarks.length
     ? `<div class="gcc-sensitive" role="alert">Sensitive content: this draft contains <strong>${escapeHtml(sensitiveMarks.join(', '))}</strong>. Check the destination before you approve.</div>`
@@ -12827,7 +12830,13 @@ function _injectDraftApprovalCard(
                   : `<div class="gcc-meta-row"><span class="gcc-meta-key">To</span><span class="gcc-meta-val">${escapeHtml(data.to || '')}</span></div>
               ${data.cc ? `<div class="gcc-meta-row"><span class="gcc-meta-key">CC</span><span class="gcc-meta-val">${escapeHtml(data.cc)}</span></div>` : ''}`
               }
-              ${data.subject ? `<div class="gcc-meta-row"><span class="gcc-meta-key">Subject</span><span class="gcc-meta-val"><strong>${escapeHtml(data.subject)}</strong></span></div>` : ''}
+              ${
+                type === 'email-send'
+                  ? '<div class="gcc-meta-row"><span class="gcc-meta-key">Subject</span><span class="gcc-meta-val"><input type="text" class="gcc-subject-input" maxlength="255" aria-label="Subject"></span></div>'
+                  : data.subject
+                    ? `<div class="gcc-meta-row"><span class="gcc-meta-key">Subject</span><span class="gcc-meta-val"><strong>${escapeHtml(data.subject)}</strong></span></div>`
+                    : ''
+              }
             </div>
           `
               : config.service === 'teams'
@@ -12871,9 +12880,24 @@ function _injectDraftApprovalCard(
 
   const recipientSlot = card.querySelector('.gcc-recipient-slot');
   if (recipientSlot && replyRecipients) recipientSlot.replaceWith(...replyRecipients.rows);
-  const recipientEdits = () => {
+  const subjectInput = card.querySelector('.gcc-subject-input');
+  if (subjectInput) {
+    subjectInput.value = data.subject || '';
+    subjectInput.addEventListener('blur', () => {
+      if (!subjectInput.value.trim()) subjectInput.value = data.subject || '';
+    });
+  }
+  const headerEdits = () => {
     const edits = replyRecipients?.edits();
-    return edits ? { edited_recipients: edits } : {};
+    const subject = subjectInput?.value.trim();
+    return {
+      ...(edits ? { edited_recipients: edits } : {}),
+      ...(subject && subject !== (data.subject || '').trim() ? { edited_subject: subject } : {}),
+    };
+  };
+  const lockHeader = (locked = true) => {
+    replyRecipients?.lock(locked);
+    if (subjectInput) subjectInput.disabled = locked;
   };
   const approveBtn = card.querySelector('.gcc-approve-btn');
   const editLink = card.querySelector('.gcc-edit-link');
@@ -12996,7 +13020,7 @@ function _injectDraftApprovalCard(
 
   approveBtn?.addEventListener('click', async () => {
     approveBtn.disabled = true;
-    replyRecipients?.lock();
+    lockHeader();
     if (openCalendarBtn) openCalendarBtn.disabled = true;
     approveBtn.textContent = _applyWording ? 'Applying\u2026' : 'Sending\u2026';
     try {
@@ -13013,7 +13037,7 @@ function _injectDraftApprovalCard(
         ...(richEditor ? { edited_html: editArea.innerHTML } : {}),
         ...(editedText !== null ? { edited_message: editedText } : {}),
         ...(Object.keys(editedFields).length ? { edited_fields: editedFields } : {}),
-        ...recipientEdits(),
+        ...headerEdits(),
       });
       let res = await fetch('/api/drafts/' + draftId + '/approve', {
         method: 'POST',
@@ -13077,7 +13101,7 @@ function _injectDraftApprovalCard(
     } catch (e) {
       approveBtn.textContent = 'Failed \u2014 retry?';
       approveBtn.disabled = false;
-      replyRecipients?.lock(false);
+      lockHeader(false);
       if (openCalendarBtn) openCalendarBtn.disabled = false;
       approveBtn.classList.add('gcc-failed');
       if (e && e.message) {
@@ -13144,8 +13168,9 @@ function _injectDraftApprovalCard(
             : editArea
               ? { edited_message: editArea.value || editArea.textContent || '' }
               : null;
+          const headerEdit = headerEdits();
           const outlookEdit =
-            bodyEdit || replyRecipients?.edits() ? { ...bodyEdit, ...recipientEdits() } : null;
+            bodyEdit || Object.keys(headerEdit).length ? { ...bodyEdit, ...headerEdit } : null;
           const postOpen = () =>
             fetch('/api/drafts/' + draftId + '/open-in-outlook', {
               method: 'POST',
@@ -13168,7 +13193,7 @@ function _injectDraftApprovalCard(
             throw new Error(typeof err.detail === 'string' ? err.detail : 'HTTP ' + res.status);
           }
           const { url } = await res.json();
-          replyRecipients?.lock();
+          lockHeader();
           _removeTabDraft(ownerTabId, draftId);
           // Enter the native-pane state first so tpState, the divider, and the
           // visible Expand Gator button stay in sync. This may navigate Outlook

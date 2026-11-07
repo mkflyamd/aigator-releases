@@ -6792,6 +6792,29 @@ button[data-default-action]:focus:not(:disabled)::after {
 .gcc-recipient-add:hover {
   text-decoration: underline;
 }
+.gcc-recipient-empty .gcc-meta-key {
+  visibility: hidden;
+}
+.gcc-subject-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 2px 6px;
+  font: inherit;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.gcc-subject-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.gcc-subject-input:disabled {
+  background: transparent;
+  border-color: transparent;
+  opacity: 1;
+}
 .gcc-recipients-locked .ag-chip-remove,
 .gcc-recipients-locked .gcc-recipient-add,
 .gcc-recipients-locked .ag-add-input {
