@@ -8058,8 +8058,11 @@ if (atlassianAddSiteBtn)
     const url = 'https://mcp.atlassian.com/v2/mcp';
     let popup = null;
     const controller = new AbortController();
-    _setAtlassianMcpConnectState(atlassianAddSiteBtn, 'connecting', 'Connecting Atlassian MCP…', () =>
-      controller.abort(),
+    _setAtlassianMcpConnectState(
+      atlassianAddSiteBtn,
+      'connecting',
+      'Connecting Atlassian MCP…',
+      () => controller.abort(),
     );
     atlassianMsg.textContent = 'Opening Atlassian sign-in…';
     try {
@@ -9804,12 +9807,12 @@ function _showApprovalWarning(approveBtn, result) {
     lines.push(
       'The direct Jira API rejected this change' +
         (fallback.reason ? ' (' + fallback.reason + ')' : '') +
-        ', so it was applied through the Atlassian MCP on the same site.'
+        ', so it was applied through the Atlassian MCP on the same site.',
     );
   }
   if (partial) {
     lines.push(
-      result.warning || 'Applied, but Jira did not confirm every change. Check the issue.'
+      result.warning || 'Applied, but Jira did not confirm every change. Check the issue.',
     );
   }
   approveBtn.textContent = partial ? 'Applied with a warning' : 'Applied via Atlassian MCP';

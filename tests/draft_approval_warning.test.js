@@ -56,7 +56,10 @@ test('a write that fell back to the Atlassian MCP says so, even when nothing els
   const { shown, approveBtn, inserted } = run({ ok: true, fallback });
   assert.strictEqual(shown, true);
   assert.strictEqual(approveBtn.textContent, 'Applied via Atlassian MCP');
-  assert.match(inserted[0].node.textContent, /direct Jira API rejected this change \(HTTP 400: labels\)/);
+  assert.match(
+    inserted[0].node.textContent,
+    /direct Jira API rejected this change \(HTTP 400: labels\)/,
+  );
   assert.match(inserted[0].node.textContent, /Atlassian MCP on the same site/);
 });
 
