@@ -98,3 +98,10 @@ def test_registered_handler_uses_the_hints_end_to_end(monkeypatch):
         allowed = shared.TOOL_DISPATCH[aliases["executeRead"]]()
     assert "terminal" not in str(allowed)
     client.call.assert_called_once()
+
+
+def test_a_connection_saved_under_the_old_product_name_stays_gated():
+    legacy = {"name": "Rovo", "url": "https://proxy.example.com/sse"}
+    assert manager._is_atlassian_connection(legacy)
+    assert blocked("createJiraIssue", legacy)
+    assert not blocked("getJiraIssue", legacy)

@@ -187,7 +187,10 @@ _WORKSPACE_MCP_MARKERS = ("workspace-mcp", "workspace_mcp")
 # handlers cannot be allowed to become an unreviewed Jira write path.  This is
 # intentionally conservative: a false positive leaves a write unavailable;
 # a false negative could mutate the wrong Jira site without a verified draft.
-_JIRA_MCP_MARKERS = ("atlassian", "jira")
+# Connections saved before the rename may carry the old product name instead of "atlassian";
+# they must stay gated, so the old name is matched here and nowhere else.
+_LEGACY_ATLASSIAN_NAME = "rovo"
+_JIRA_MCP_MARKERS = ("atlassian", "jira", _LEGACY_ATLASSIAN_NAME)
 _JIRA_READ_ONLY_PREFIXES = (
     "get", "list", "search", "lookup", "find", "read", "view", "fetch",
     "accessible", "metadata", "field", "project", "page", "space",
@@ -208,7 +211,7 @@ def _is_atlassian_connection(conn: dict) -> bool:
         str(conn.get("name", "")), str(conn.get("url", "")),
         str(conn.get("command", "")), " ".join(map(str, conn.get("args", []))),
     ]).lower()
-    return "atlassian" in blob
+    return "atlassian" in blob or _LEGACY_ATLASSIAN_NAME in blob
 
 
 def _is_unverified_jira_mcp_mutation(orig_name: str, conn: dict, hints: dict | None = None) -> bool:
@@ -242,7 +245,7 @@ def _is_unverified_jira_mcp_mutation(orig_name: str, conn: dict, hints: dict | N
         return True
     # Skip leading namespace/service tokens (jira, atlassian, mcp) to
     # find the actual verb. e.g. jira_get_issue_clean → verb is 'get'.
-    _NAMESPACE_TOKENS = frozenset({"jira", "atlassian", "mcp"})
+    _NAMESPACE_TOKENS = frozenset({"jira", "atlassian", _LEGACY_ATLASSIAN_NAME, "mcp"})
     verb = next((p for p in parts if p not in _NAMESPACE_TOKENS), parts[0])
     return not verb.startswith(_JIRA_READ_ONLY_PREFIXES)
 
