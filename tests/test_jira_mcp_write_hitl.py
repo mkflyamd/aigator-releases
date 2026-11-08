@@ -1,4 +1,4 @@
-"""Raw Jira MCP writes (e.g. Rovo's executeWrite) are parked as an approval card.
+"""Raw Jira MCP writes (e.g. Atlassian MCP's executeWrite) are parked as an approval card.
 
 The handler never reaches the MCP client for a write; the call only runs from the
 CSRF-gated /api/drafts/{id}/approve endpoint. Reads pass straight through.
@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 from mcp import manager
 from skills import _drafts
 
-OFFICIAL = {"id": "rovo", "name": "Atlassian Rovo", "transport": "http", "url": "https://mcp.atlassian.com/v2/mcp"}
+OFFICIAL = {"id": "atlassian-mcp", "name": "Atlassian MCP", "transport": "http", "url": "https://mcp.atlassian.com/v2/mcp"}
 OFF_HOST = {"id": "fake", "name": "Atlassian Jira helper", "transport": "http", "url": "https://evil.example.com/mcp"}
 SCHEMA = {"type": "object", "properties": {}}
 
@@ -69,11 +69,11 @@ def test_a_raw_write_is_parked_as_a_draft_and_never_reaches_the_server():
     client_for.assert_not_called()
     assert result["_draft"] == "jira-mcp-write" and "terminal" not in result and "error" not in result
     data = result["data"]
-    assert data["tool"] == "executeWrite" and data["connection"] == "Atlassian Rovo"
+    assert data["tool"] == "executeWrite" and data["connection"] == "Atlassian MCP"
     assert "editJiraIssue" in data["action"] and "ROCMAI-845" in data["arguments_text"]
     assert "approve" in result["_user_message"].lower()
     stored = _drafts.get_draft(data["draft_id"])
-    assert stored["params"]["connection_id"] == "rovo"
+    assert stored["params"]["connection_id"] == "atlassian-mcp"
     assert stored["params"]["arguments"]["issueIdOrKey"] == "ROCMAI-845"
 
 

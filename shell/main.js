@@ -1059,14 +1059,14 @@ function createWindow() {
 
   // ΓöÇΓöÇ Gator view ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
   // Gator has no explicit partition, so it (and any window.open() popup it
-  // spawns ΓÇö e.g. MCP OAuth connect flows like Atlassian/Rovo, Slack, Google ΓÇö
+  // spawns ΓÇö e.g. MCP OAuth connect flows like Atlassian, Slack, Google ΓÇö
   // see mcp_add_modal.js / extension_setup_modal.js) runs on Electron's
   // session.defaultSession and shares its User-Agent.
   //
   // Same class of problem as Teams (see buildNonElectronUA above): several
   // OAuth/identity providers detect and reject sign-in from a UA containing
   // "Electron/x.x.x" as a non-standard/embedded browser. Confirmed via the
-  // Atlassian/Rovo MCP "Connect" flow ΓÇö OAuth signup fails from the Electron
+  // Atlassian MCP "Connect" flow ΓÇö OAuth signup fails from the Electron
   // shell ("Signup failed") but works fine from a normal Chrome tab hitting
   // the same Gator URL. Stripping the Electron token fixes it there and
   // preemptively avoids the same failure for any future MCP whose OAuth
@@ -1086,7 +1086,7 @@ function createWindow() {
   // which is what an OAuth provider's server-side UA check actually inspects
   // ΓÇö so it's the mechanism that must work for this fix to matter. Scoped to
   // gatorSession, so it also covers any window.open() popup spawned from
-  // Gator's page that shares this session (e.g. MCP OAuth: Atlassian/Rovo,
+  // Gator's page that shares this session (e.g. MCP OAuth: Atlassian,
   // Slack, Google ΓÇö see mcp_add_modal.js / extension_setup_modal.js).
   gatorSession.webRequest.onBeforeSendHeaders((details, callback) => {
     details.requestHeaders['User-Agent'] = gatorUA;

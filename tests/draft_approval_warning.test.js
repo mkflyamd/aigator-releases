@@ -51,6 +51,25 @@ test('a partial result with no warning still says so, with a default message', (
   assert.match(inserted[0].node.textContent, /did not confirm every change/);
 });
 
+test('a write that fell back to the Atlassian MCP says so, even when nothing else is wrong', () => {
+  const fallback = { from: 'builtin-rest', to: 'atlassian-mcp', reason: 'HTTP 400: labels' };
+  const { shown, approveBtn, inserted } = run({ ok: true, fallback });
+  assert.strictEqual(shown, true);
+  assert.strictEqual(approveBtn.textContent, 'Applied via Atlassian MCP');
+  assert.match(inserted[0].node.textContent, /direct Jira API rejected this change \(HTTP 400: labels\)/);
+  assert.match(inserted[0].node.textContent, /Atlassian MCP on the same site/);
+});
+
+test('a fallback that also ended partial shows both lines', () => {
+  const { approveBtn, inserted } = run({
+    ok: 'partial',
+    warning: 'comment failed',
+    fallback: { from: 'builtin-rest', to: 'atlassian-mcp', reason: 'HTTP 422' },
+  });
+  assert.strictEqual(approveBtn.textContent, 'Applied with a warning');
+  assert.match(inserted[0].node.textContent, /Atlassian MCP on the same site\.\ncomment failed$/);
+});
+
 test('a clean or missing result leaves the card alone', () => {
   for (const result of [{ ok: true }, {}, null, { ok: true, warning: 'x' }]) {
     const { shown, approveBtn, inserted } = run(result);

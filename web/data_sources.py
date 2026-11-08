@@ -36,7 +36,6 @@ _NATIVE_SOURCES = {
 }
 _MCP_LABELS = {
     "mcp-google-workspace": "Google Workspace",
-    "cloud-atlassian": "Atlassian (Jira and Confluence)",
 }
 _NOT_MCP_IDS = frozenset(_NATIVE_SOURCES) | {"_always_on", "_extension_setup"}
 _WEB_TOOLS = frozenset({"fetch_webpage", "web_search"})

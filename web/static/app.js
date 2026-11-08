@@ -8052,13 +8052,13 @@ atlassianSaveBtn.addEventListener('click', async () => {
   }
 });
 
-// Rovo MCP is the explicit Atlassian SSO/site-selection path.
+// Atlassian MCP is the explicit Atlassian SSO/site-selection path.
 if (atlassianAddSiteBtn)
   atlassianAddSiteBtn.addEventListener('click', async () => {
     const url = 'https://mcp.atlassian.com/v2/mcp';
     let popup = null;
     const controller = new AbortController();
-    _setAtlassianMcpConnectState(atlassianAddSiteBtn, 'connecting', 'Connecting Rovo MCP…', () =>
+    _setAtlassianMcpConnectState(atlassianAddSiteBtn, 'connecting', 'Connecting Atlassian MCP…', () =>
       controller.abort(),
     );
     atlassianMsg.textContent = 'Opening Atlassian sign-in…';
@@ -8071,7 +8071,7 @@ if (atlassianAddSiteBtn)
       const started = await fetch('/api/config/mcp/oauth/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url, label: 'Atlassian Rovo' }),
+        body: JSON.stringify({ url, label: 'Atlassian MCP' }),
         signal: controller.signal,
       }).then(async (response) => {
         const data = await response.json();
@@ -8112,17 +8112,17 @@ if (atlassianAddSiteBtn)
       if (controller.signal.aborted) throw new Error('Cancelled');
       if (!completed.ok) throw new Error(completed.error || 'Atlassian sign-in did not complete');
       // Saving cannot be undone from here, so stop offering cancel once it starts.
-      _setAtlassianMcpConnectState(atlassianAddSiteBtn, 'connecting', 'Connecting Rovo MCP…');
+      _setAtlassianMcpConnectState(atlassianAddSiteBtn, 'connecting', 'Connecting Atlassian MCP…');
       atlassianMsg.textContent = 'Adding selected site…';
       const saved = await fetch('/api/config/mcp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         // Each OAuth site selection needs a distinct connection identity. A
         // fixed name caused the connection manager to reuse/overwrite the first
-        // Rovo record when a user added Hub and non-Hub sites.
+        // Atlassian MCP record when a user added Hub and non-Hub sites.
         body: JSON.stringify({
           transport: 'http',
-          name: `Atlassian Rovo · ${String(started.provider_id || '').slice(-6) || 'site'}`,
+          name: `Atlassian MCP · ${String(started.provider_id || '').slice(-6) || 'site'}`,
           url,
           auth_type: 'oauth2',
           oauth_provider_id: started.provider_id,
@@ -8139,13 +8139,13 @@ if (atlassianAddSiteBtn)
       });
       if (typeof _loadMcpConnections === 'function') await _loadMcpConnections();
       if (typeof checkSkillConnectionStatus === 'function') await checkSkillConnectionStatus();
-      _setAtlassianMcpConnectState(atlassianAddSiteBtn, 'connected', 'Rovo MCP Connected ✓');
+      _setAtlassianMcpConnectState(atlassianAddSiteBtn, 'connected', 'Atlassian MCP Connected ✓');
       atlassianMsg.textContent = `Connected. Discovered ${saved.tool_count || 0} Atlassian tools.`;
     } catch (error) {
       _setAtlassianMcpConnectState(atlassianAddSiteBtn, 'idle');
       if (controller.signal.aborted) {
         if (popup && !popup.closed) popup.close();
-        atlassianMsg.textContent = 'Rovo MCP connection cancelled.';
+        atlassianMsg.textContent = 'Atlassian MCP connection cancelled.';
         if (typeof _loadMcpConnections === 'function') _loadMcpConnections();
       } else {
         atlassianMsg.textContent = `Could not add site: ${error.message || error}`;
@@ -9796,14 +9796,27 @@ function _buildJiraFieldRows(data, editable = {}) {
 }
 
 function _showApprovalWarning(approveBtn, result) {
-  if (!result || result.ok !== 'partial') return false;
-  const warning =
-    result.warning || 'Applied, but Jira did not confirm every change. Check the issue.';
-  approveBtn.textContent = 'Applied with a warning';
+  const partial = !!result && result.ok === 'partial';
+  const fallback = !!result && !!result.fallback ? result.fallback : null;
+  if (!partial && !fallback) return false;
+  const lines = [];
+  if (fallback) {
+    lines.push(
+      'The direct Jira API rejected this change' +
+        (fallback.reason ? ' (' + fallback.reason + ')' : '') +
+        ', so it was applied through the Atlassian MCP on the same site.'
+    );
+  }
+  if (partial) {
+    lines.push(
+      result.warning || 'Applied, but Jira did not confirm every change. Check the issue.'
+    );
+  }
+  approveBtn.textContent = partial ? 'Applied with a warning' : 'Applied via Atlassian MCP';
   const note = document.createElement('div');
   note.className = 'gcc-draft-warning';
   note.style.cssText = 'font-size:0.82em;margin-top:6px;white-space:pre-wrap;';
-  note.textContent = warning;
+  note.textContent = lines.join('\n');
   approveBtn.parentNode.insertBefore(note, approveBtn.nextSibling);
   return true;
 }
@@ -17399,7 +17412,7 @@ async function _loadMcpConnections() {
     const data = await res.json();
     const connections = data.connections || [];
     // The page-load bootstrap is only a snapshot. Connections added through
-    // specialized flows (notably Atlassian Rovo OAuth) used to refresh the
+    // specialized flows (notably Atlassian MCP OAuth) used to refresh the
     // Settings list but not SKILL_REGISTRY, so the backend could auto-select
     // the MCP while the / picker required Ctrl+R to see it. Reconcile every
     // enabled, tool-bearing connection into the live slash-skill registry.

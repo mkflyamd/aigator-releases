@@ -510,15 +510,17 @@ def _append_jira_instance_context(system: str, active_skill_ids: list[str], cfg:
             f"The native jira_* tools use direct credentials for {direct_url}. "
         )
         if direct_url else
-        "Native jira_* tools are available and handle all connected Jira sites including Rovo-connected ones via HITL approval. "
+        "Native jira_* tools are available and handle all connected Jira sites including Atlassian MCP-connected ones via HITL approval. "
     )
     return system + (
         f"\n\nJIRA INSTANCE ROUTING: Multiple Jira instances may be connected. "
         + direct_line +
-        f"Rovo MCP tools cover other instances for reads. "
+        f"Atlassian MCP tools cover other instances for reads. "
+        f"CONNECTOR PRIORITY (invariant, reads and writes): 1) the direct Atlassian API through the native jira_* tools; "
+        f"2) the official Atlassian MCP; 3) any other connector or tool, only as a final fallback after both cannot do it. "
         f"ROUTING RULES (these override general MCP guidance for Jira): "
-        f"(1) READ (any URL or bare key) → always call jira_get_issue first; it handles all connected sites automatically. Call Rovo MCP Jira tools ONLY if jira_get_issue reports the issue was not found or the site is not connected; never call them in parallel with it when the URL matches the native site. "
-        f"(2) WRITE (comment, update, create, transition, watcher, link) → use the native jira_* tools whenever one covers the change. If none does, a raw Jira MCP write tool is allowed: it is held as an approval card and nothing is applied until the user clicks approve. Each write is a draft the user approves. If direct credentials are rejected by Jira for a field change (labels, components, custom fields), Gator retries the same approved change through Rovo on the same site automatically, so do not ask the user to approve again or call Rovo write tools yourself. Pass the full URL if you have it; bare keys are resolved automatically. "
+        f"(1) READ (any URL or bare key) → always call jira_get_issue first; it handles all connected sites automatically. Call Atlassian MCP Jira tools ONLY if jira_get_issue reports the issue was not found or the site is not connected; never call them in parallel with it when the URL matches the native site. "
+        f"(2) WRITE (comment, update, create, transition, watcher, link) → use the native jira_* tools whenever one covers the change. If none does, a raw Jira MCP write tool is allowed: it is held as an approval card and nothing is applied until the user clicks approve. Each write is a draft the user approves. If direct credentials are rejected by Jira for a field change (labels, components, custom fields), Gator retries the same approved change through the official Atlassian MCP on the same site, tells the user it did, and does not need a second approval, so do not ask the user to approve again or call Atlassian MCP write tools yourself. Pass the full URL if you have it; bare keys are resolved automatically. "
         f"(3) If jira_get_issue returns a 'multiple sites' error → ask the user for the full issue URL. "
         f"(4) Only tell the user the issue was not found after ALL available Jira tools have returned 404/error."
     )
@@ -952,9 +954,9 @@ def _auto_skill_relevance(skill_id: str, message: str, keyword_hits, classified)
 
 
 def _is_atlassian_mcp_skill(skill_id: str) -> bool:
-    """True if skill_id is a dynamic MCP connection for an Atlassian/Rovo service."""
+    """True if skill_id is a dynamic MCP connection for an Atlassian service."""
     sid = (skill_id or "").lower()
-    return any(m in sid for m in ("atlassian", "rovo", "confluence", "cloud-atlassian"))
+    return any(m in sid for m in ("atlassian", "confluence"))
 
 
 def _marketplace_skill_has_tools(skill_id: str) -> bool:
@@ -1943,11 +1945,11 @@ async def chat(req: ChatRequest):
         if _marketplace_skill_has_tools(s) and s not in _cap_exempt
     ]
     _guidance_only = [s for s in _auto_candidates if s not in _capped_candidates]
-    # Atlassian MCP connections (Rovo, cloud-atlassian, hub, etc.) are complementary
+    # Atlassian MCP connections are complementary
     # to each other — each covers a different site. When any Jira/Atlassian skill is
     # active, exempt all Atlassian MCP connections from the cap so the model always
-    # has access to every connected Jira site. Without this, the Rovo connection that
-    # covers amd-hub gets dropped when cloud-atlassian + jira + browser are also active.
+    # has access to every connected Jira site. Without this, a connection that covers
+    # one site gets dropped when other Atlassian MCP connections + jira + browser are active.
     _has_jira = any("jira" in s or "atlassian" in s or "confluence" in s for s in _all_active)
     _atlassian_mcps = {s for s in _capped_candidates if _is_atlassian_mcp_skill(s)} if _has_jira else set()
     _capped_candidates = [s for s in _capped_candidates if s not in _atlassian_mcps]

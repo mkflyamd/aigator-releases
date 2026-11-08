@@ -1,4 +1,4 @@
-"""Regression coverage for explicit direct and Rovo MCP setup."""
+"""Regression coverage for explicit direct and Atlassian MCP setup."""
 
 from pathlib import Path
 
@@ -28,12 +28,12 @@ def test_no_api_token_cloud_mcp_remains():
     assert "amd.com" not in CONFIG
 
 
-def test_apps_ui_exposes_direct_and_rovo_choices():
+def test_apps_ui_exposes_direct_and_atlassian_mcp_choices():
     assert "Direct site access" in INDEX
     assert "Optional MCP access" in INDEX
-    assert "Connect Rovo MCP" in INDEX
+    assert "Connect Atlassian MCP" in INDEX
     assert "choose a site" in INDEX
-    assert "Rovo MCP is the explicit Atlassian SSO/site-selection path" in APP
+    assert "Atlassian MCP is the explicit Atlassian SSO/site-selection path" in APP
 
 
 def test_connecting_animation_uses_gator_greens_only():
@@ -58,9 +58,9 @@ def test_connecting_mcp_buttons_offer_cancel():
     assert ".atlassian-mcp-cancel {" in STYLE
     assert "position: absolute" in STYLE[STYLE.index(".atlassian-mcp-cancel {") :][:300]
 
-    rovo = APP[APP.index("atlassianAddSiteBtn.addEventListener('click'") : APP.index("/* ── GitHub")]
-    assert "new AbortController()" in rovo
-    assert "popup.close()" in rovo
+    connect_handler = APP[APP.index("atlassianAddSiteBtn.addEventListener('click'") : APP.index("/* ── GitHub")]
+    assert "new AbortController()" in connect_handler
+    assert "popup.close()" in connect_handler
 
 
 def test_mcp_buttons_have_connecting_and_connected_feedback():
@@ -68,6 +68,6 @@ def test_mcp_buttons_have_connecting_and_connected_feedback():
     assert "_setAtlassianMcpConnectState" in APP
     assert "atlassian-mcp-connect--connecting" in APP
     assert "atlassian-mcp-connect--connected" in APP
-    assert "Rovo MCP Connected ✓" in APP
+    assert "Atlassian MCP Connected ✓" in APP
     assert "@property --atlassian-mcp-angle" in STYLE
     assert "atlassian-mcp-edge-spin" in STYLE

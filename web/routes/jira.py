@@ -105,10 +105,10 @@ def bind_jira_navigation(req: JiraNavigationRequest):
 
 @router.post("/api/jira/targets/discover", dependencies=[Depends(verify_csrf)])
 def discover_jira_targets():
-    """Refresh Rovo Jira sites from live, authenticated MCP discovery."""
-    from skills.jira.mutations import discover_rovo_targets
+    """Refresh Atlassian MCP Jira sites from live, authenticated MCP discovery."""
+    from skills.jira.mutations import discover_atlassian_mcp_targets
 
-    targets = discover_rovo_targets()
+    targets = discover_atlassian_mcp_targets()
     return {"ok": True, "targets": [target.public_dict() for target in targets]}
 
 

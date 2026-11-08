@@ -15,7 +15,7 @@ import pytest
 import shared
 from mcp import manager
 
-OFFICIAL = {"id": "rovo", "name": "Atlassian Rovo", "url": "https://mcp.atlassian.com/v2/mcp"}
+OFFICIAL = {"id": "atlassian-mcp", "name": "Atlassian MCP", "url": "https://mcp.atlassian.com/v2/mcp"}
 READ = {"readOnlyHint": True, "destructiveHint": False}
 WRITE = {"readOnlyHint": False, "destructiveHint": False}
 DESTRUCTIVE = {"readOnlyHint": False, "destructiveHint": True}
@@ -85,7 +85,7 @@ def test_registered_handler_uses_the_hints_end_to_end(monkeypatch):
     manager._register(conn)
     aliases = {
         raw: alias
-        for alias in shared.SKILL_TOOLS_MAP["rovo"]
+        for alias in shared.SKILL_TOOLS_MAP["atlassian-mcp"]
         for raw in ("executeRead", "executeWrite")
         if raw.lower() in alias.lower()
     }

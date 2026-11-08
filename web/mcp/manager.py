@@ -183,11 +183,11 @@ _GATED_TOOLS_CONDITIONAL = frozenset({
 # "workspace-mcp". For HTTP transport, match on known hostnames.
 _WORKSPACE_MCP_MARKERS = ("workspace-mcp", "workspace_mcp")
 
-# Rovo/Atlassian MCP tools are discovered dynamically, so their generated
+# Atlassian MCP tools are discovered dynamically, so their generated
 # handlers cannot be allowed to become an unreviewed Jira write path.  This is
 # intentionally conservative: a false positive leaves a write unavailable;
 # a false negative could mutate the wrong Jira site without a verified draft.
-_JIRA_MCP_MARKERS = ("atlassian", "rovo", "jira")
+_JIRA_MCP_MARKERS = ("atlassian", "jira")
 _JIRA_READ_ONLY_PREFIXES = (
     "get", "list", "search", "lookup", "find", "read", "view", "fetch",
     "accessible", "metadata", "field", "project", "page", "space",
@@ -208,7 +208,7 @@ def _is_atlassian_connection(conn: dict) -> bool:
         str(conn.get("name", "")), str(conn.get("url", "")),
         str(conn.get("command", "")), " ".join(map(str, conn.get("args", []))),
     ]).lower()
-    return "atlassian" in blob or "rovo" in blob
+    return "atlassian" in blob
 
 
 def _is_unverified_jira_mcp_mutation(orig_name: str, conn: dict, hints: dict | None = None) -> bool:
@@ -240,9 +240,9 @@ def _is_unverified_jira_mcp_mutation(orig_name: str, conn: dict, hints: dict | N
     parts = [p for p in parts if p]
     if not parts:
         return True
-    # Skip leading namespace/service tokens (jira, atlassian, rovo, mcp) to
+    # Skip leading namespace/service tokens (jira, atlassian, mcp) to
     # find the actual verb. e.g. jira_get_issue_clean → verb is 'get'.
-    _NAMESPACE_TOKENS = frozenset({"jira", "atlassian", "rovo", "mcp"})
+    _NAMESPACE_TOKENS = frozenset({"jira", "atlassian", "mcp"})
     verb = next((p for p in parts if p not in _NAMESPACE_TOKENS), parts[0])
     return not verb.startswith(_JIRA_READ_ONLY_PREFIXES)
 
@@ -510,7 +510,7 @@ def _register(conn: dict) -> None:
                     # that stale state as soon as a normal MCP call proves the
                     # connection is usable.
                     _mark_health_result(c.get("id", ""), ok=True)
-                    # Some MCP servers (e.g. cloud-atlassian) return an empty string
+                    # Some MCP servers return an empty string
                     # for successful mutations (POST/DELETE with no response body).
                     # Return a success sentinel so the LLM doesn't misread "" as failure
                     # and retry — causing duplicate comments/actions.

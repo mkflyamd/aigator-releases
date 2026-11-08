@@ -1,4 +1,4 @@
-// The Rovo connect button's × must cancel while signing in, and must not be offered once the
+// The Atlassian MCP connect button's × must cancel while signing in, and must not be offered once the
 // site is being saved (the server keeps what it saved, so "cancelled" would be a lie).
 // The real helper and click handler are cut out of app.js and run against a stub DOM.
 
@@ -61,7 +61,7 @@ function makeEnv(fetchImpl) {
   const wrap = makeElement();
   const button = makeElement(wrap);
   wrap.children.push(button);
-  button.textContent = 'Connect Rovo MCP';
+  button.textContent = 'Connect Atlassian MCP';
   const ctx = {
     atlassianAddSiteBtn: button,
     atlassianMsg: { textContent: '' },
@@ -110,7 +110,7 @@ const tick = (ms = 20) => new Promise((r) => setTimeout(r, ms));
     await tick();
     assert.strictEqual(cancelOf(env), null, '× is gone after cancel');
     assert.strictEqual(env.button.disabled, false);
-    assert.strictEqual(env.atlassianMsg.textContent, 'Rovo MCP connection cancelled.');
+    assert.strictEqual(env.atlassianMsg.textContent, 'Atlassian MCP connection cancelled.');
     assert(!calls.some((c) => c.url === '/api/config/mcp'), 'nothing was saved');
   }
 

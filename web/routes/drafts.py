@@ -100,7 +100,7 @@ async def _sync_task_draft_status(draft_id: str, status: str) -> None:
 async def _run_sync(fn, *args, **kwargs):
     """Run a synchronous function in a thread — same pattern as execute_tool in app.py.
 
-    rovo_jira_call and MCP client.call() use asyncio.run() internally which
+    atlassian_mcp_jira_call and MCP client.call() use asyncio.run() internally which
     raises RuntimeError when called from a running event loop (FastAPI async
     handlers). asyncio.to_thread() gives the function its own thread with no
     running event loop, matching how the agent loop dispatches tool calls.
@@ -230,9 +230,9 @@ def _direct_read_issue(target, issue_key: str, fields: str = "*all") -> dict:
     return jira_api_for_target(target, "GET", f"issue/{issue_key}?fields={fields}")
 
 
-async def _rovo_read_issue(target, issue_key: str) -> dict:
-    from skills.jira.mutations import rovo_jira_call
-    raw = await _run_sync(rovo_jira_call, target, "get_issue", {
+async def _atlassian_mcp_read_issue(target, issue_key: str) -> dict:
+    from skills.jira.mutations import atlassian_mcp_jira_call
+    raw = await _run_sync(atlassian_mcp_jira_call, target, "get_issue", {
         "issueIdOrKey": issue_key,
         "fields": ["*all"],
         "responseContentFormat": "adf",
@@ -246,25 +246,25 @@ async def _read_issue(target, issue_key: str, fields: str = "*all") -> dict:
     """Read an issue from whichever transport owns the target. No fallback."""
     if target.adapter == "builtin-rest":
         return _direct_read_issue(target, issue_key, fields)
-    if target.adapter == "rovo-mcp":
-        return await _rovo_read_issue(target, issue_key)
+    if target.adapter == "atlassian-mcp":
+        return await _atlassian_mcp_read_issue(target, issue_key)
     raise HTTPException(status_code=409, detail=f"Unknown adapter {target.adapter!r} on Jira target.")
 
 
-async def _write_with_rovo_fallback(target, rest_write, rovo_write):
+async def _write_with_atlassian_mcp_fallback(target, rest_write, atlassian_mcp_write):
     """Run a direct-REST write; if Jira rejects its fields, retry once through
-    Rovo on the same site. Returns (result, target_used, fallback_note|None)."""
-    from skills.jira.mutations import rovo_write_fallback
+    Atlassian MCP on the same site. Returns (result, target_used, fallback_note|None)."""
+    from skills.jira.mutations import atlassian_mcp_write_fallback
     try:
         return rest_write(), target, None
     except RuntimeError as exc:
-        fallback = rovo_write_fallback(target, exc)
+        fallback = atlassian_mcp_write_fallback(target, exc)
         if fallback is None:
             raise
         try:
-            result = await rovo_write(fallback)
-        except Exception as rovo_exc:
-            raise RuntimeError(f"{exc} (retried through Rovo, which also failed: {rovo_exc})") from exc
+            result = await atlassian_mcp_write(fallback)
+        except Exception as atlassian_mcp_exc:
+            raise RuntimeError(f"{exc} (retried through Atlassian MCP, which also failed: {atlassian_mcp_exc})") from exc
         return result, fallback, {"from": target.adapter, "to": fallback.adapter, "reason": str(exc)[:300]}
 
 
@@ -511,7 +511,7 @@ async def approve_draft(draft_id: str, body: dict = None):
             from skills.jira.mutations import (
                 JiraTargetResolutionError,
                 compare_jira_fields,
-                rovo_jira_call,
+                atlassian_mcp_jira_call,
                 verified_result,
             )
             from skills.jira.tools import _build_adf_doc
@@ -527,7 +527,7 @@ async def approve_draft(draft_id: str, body: dict = None):
                     "issuetype": {"name": p["issue_type"]},
                 }
                 if p.get("description"):
-                    if for_target.adapter == "rovo-mcp":
+                    if for_target.adapter == "atlassian-mcp":
                         built["description"] = p["description"]
                     else:
                         try:
@@ -550,39 +550,39 @@ async def approve_draft(draft_id: str, body: dict = None):
                     built.update(p["extra_fields"])
                 return built
 
-            async def _rovo_create(rovo_target, rovo_fields: dict):
-                additional = {k: v for k, v in rovo_fields.items()
+            async def _atlassian_mcp_create(atlassian_mcp_target, atlassian_mcp_fields: dict):
+                additional = {k: v for k, v in atlassian_mcp_fields.items()
                               if k not in {"project", "issuetype", "summary", "description", "parent", "assignee"}}
-                rovo_args: dict = {
+                atlassian_mcp_args: dict = {
                     "projectKey": p["project"],
                     "issueTypeName": p["issue_type"],
                     "summary": p["summary"],
                     "contentFormat": "markdown",
                 }
                 if p.get("description"):
-                    rovo_args["description"] = p["description"]
+                    atlassian_mcp_args["description"] = p["description"]
                 if p.get("parent_key"):
-                    rovo_args["parent"] = p["parent_key"]
+                    atlassian_mcp_args["parent"] = p["parent_key"]
                 if p.get("assignee_account_id"):
-                    rovo_args["assignee_account_id"] = p["assignee_account_id"]
+                    atlassian_mcp_args["assignee_account_id"] = p["assignee_account_id"]
                 if additional:
-                    rovo_args["additional_fields"] = additional
-                raw = await _run_sync(rovo_jira_call, rovo_target, "create_issue", rovo_args)
+                    atlassian_mcp_args["additional_fields"] = additional
+                raw = await _run_sync(atlassian_mcp_jira_call, atlassian_mcp_target, "create_issue", atlassian_mcp_args)
                 return raw.get("data", raw) if isinstance(raw, dict) else {}
 
             fields = _create_fields(target)
             fallback_note = None
             try:
-                if target.adapter == "rovo-mcp":
-                    created_obj = await _rovo_create(target, fields)
+                if target.adapter == "atlassian-mcp":
+                    created_obj = await _atlassian_mcp_create(target, fields)
                 else:
-                    async def _rovo_create_for(rovo_target):
-                        return await _rovo_create(rovo_target, _create_fields(rovo_target))
+                    async def _atlassian_mcp_create_for(atlassian_mcp_target):
+                        return await _atlassian_mcp_create(atlassian_mcp_target, _create_fields(atlassian_mcp_target))
 
-                    created_obj, target, fallback_note = await _write_with_rovo_fallback(
+                    created_obj, target, fallback_note = await _write_with_atlassian_mcp_fallback(
                         target,
                         lambda: jira_api_for_target(target, "POST", "issue", {"fields": fields}),
-                        _rovo_create_for,
+                        _atlassian_mcp_create_for,
                     )
                     if fallback_note:
                         fields = _create_fields(target)
@@ -651,7 +651,7 @@ async def approve_draft(draft_id: str, body: dict = None):
             from skills.jira.mutations import (
                 JiraTargetResolutionError,
                 compare_jira_fields,
-                rovo_jira_call,
+                atlassian_mcp_jira_call,
                 verified_result,
             )
 
@@ -666,16 +666,16 @@ async def approve_draft(draft_id: str, body: dict = None):
                 # Pre-read: confirms issue still exists on this target before writing.
                 await _read_issue(target, issue_key)
                 fallback_note = None
-                if target.adapter == "rovo-mcp":
-                    await _run_sync(rovo_jira_call, target, "update_issue", {"issueIdOrKey": issue_key, "fields": fields})
+                if target.adapter == "atlassian-mcp":
+                    await _run_sync(atlassian_mcp_jira_call, target, "update_issue", {"issueIdOrKey": issue_key, "fields": fields})
                 else:
-                    async def _rovo_update(rovo_target):
-                        return await _run_sync(rovo_jira_call, rovo_target, "update_issue", {"issueIdOrKey": issue_key, "fields": fields})
+                    async def _atlassian_mcp_update(atlassian_mcp_target):
+                        return await _run_sync(atlassian_mcp_jira_call, atlassian_mcp_target, "update_issue", {"issueIdOrKey": issue_key, "fields": fields})
 
-                    _, target, fallback_note = await _write_with_rovo_fallback(
+                    _, target, fallback_note = await _write_with_atlassian_mcp_fallback(
                         target,
                         lambda: jira_api_for_target(target, "PUT", f"issue/{issue_key}", {"fields": fields}),
-                        _rovo_update,
+                        _atlassian_mcp_update,
                     )
                 read_back = await _read_issue(target, issue_key)
             except JiraTargetResolutionError as exc:
@@ -716,18 +716,18 @@ async def approve_draft(draft_id: str, body: dict = None):
             if not issue_key or not account_id:
                 raise HTTPException(status_code=400, detail="Jira watcher draft is missing the issue or account ID.")
 
-            if target.adapter == "rovo-mcp":
-                # Rovo schema does not expose a watcher API â€” refuse explicitly.
+            if target.adapter == "atlassian-mcp":
+                # Atlassian MCP schema does not expose a watcher API â€” refuse explicitly.
                 delivery_result = verified_result(
                     target,
                     requested={"operation": "add_watcher", "issue_key": issue_key, "account_id": account_id},
                     applied={},
-                    verified={"unavailable": True, "reason": "Rovo does not expose a watcher API."},
+                    verified={"unavailable": True, "reason": "Atlassian MCP does not expose a watcher API."},
                 )
                 delivery_result.update({
                     "ok": False,
                     "issue_key": issue_key,
-                    "error": "Watcher management is not available for Rovo-connected Jira sites.",
+                    "error": "Watcher management is not available for Atlassian MCP-connected Jira sites.",
                     "navigate_to": {"app": "jira", "url": target.issue_url(issue_key)},
                 })
             else:
@@ -771,17 +771,17 @@ async def approve_draft(draft_id: str, body: dict = None):
             _jira_tab_guard(p, body)
             target = _jira_get_target(p, body)
 
-            if target.adapter == "rovo-mcp":
-                # Rovo schema does not expose a file attachment API â€” refuse explicitly.
+            if target.adapter == "atlassian-mcp":
+                # Atlassian MCP schema does not expose a file attachment API â€” refuse explicitly.
                 delivery_result = verified_result(
                     target,
                     requested={"operation": "attach_file", "issue_key": p.get("issue_key", "")},
                     applied={},
-                    verified={"unavailable": True, "reason": "Rovo does not expose a file attachment API."},
+                    verified={"unavailable": True, "reason": "Atlassian MCP does not expose a file attachment API."},
                 )
                 delivery_result.update({
                     "ok": False,
-                    "error": "File attachment is not available for Rovo-connected Jira sites.",
+                    "error": "File attachment is not available for Atlassian MCP-connected Jira sites.",
                 })
             else:
                 try:
@@ -821,7 +821,7 @@ async def approve_draft(draft_id: str, body: dict = None):
             from skills.jira.api import jira_api_for_target
             from skills.jira.mutations import (
                 JiraTargetResolutionError,
-                rovo_jira_call,
+                atlassian_mcp_jira_call,
                 verified_result,
             )
             from skills.jira.tools import _build_adf_comment
@@ -833,8 +833,8 @@ async def approve_draft(draft_id: str, body: dict = None):
 
             fallback_note = None
 
-            async def _rovo_comment(rovo_target):
-                raw = await _run_sync(rovo_jira_call, rovo_target, "add_comment", {
+            async def _atlassian_mcp_comment(atlassian_mcp_target):
+                raw = await _run_sync(atlassian_mcp_jira_call, atlassian_mcp_target, "add_comment", {
                     "issueIdOrKey": issue_key,
                     "commentBody": comment_text,
                     "contentFormat": "markdown",
@@ -842,17 +842,17 @@ async def approve_draft(draft_id: str, body: dict = None):
                 return raw.get("data", raw) if isinstance(raw, dict) else {}
 
             try:
-                if target.adapter == "rovo-mcp":
-                    created = await _rovo_comment(target)
+                if target.adapter == "atlassian-mcp":
+                    created = await _atlassian_mcp_comment(target)
                 else:
                     body_value = _build_adf_comment(comment_text) if target.is_cloud else comment_text
-                    created, target, fallback_note = await _write_with_rovo_fallback(
+                    created, target, fallback_note = await _write_with_atlassian_mcp_fallback(
                         target,
                         lambda: jira_api_for_target(target, "POST", f"issue/{issue_key}/comment", {"body": body_value}),
-                        _rovo_comment,
+                        _atlassian_mcp_comment,
                     )
                 comment_id = str(created.get("id") or created.get("commentId") or "")
-                if target.adapter == "rovo-mcp":
+                if target.adapter == "atlassian-mcp":
                     read_back = await _read_issue(target, issue_key)
                 else:
                     read_back = jira_api_for_target(target, "GET", f"issue/{issue_key}?fields=comment")
@@ -880,7 +880,7 @@ async def approve_draft(draft_id: str, body: dict = None):
             from skills.jira.api import jira_api_for_target
             from skills.jira.mutations import (
                 JiraTargetResolutionError,
-                rovo_jira_call,
+                atlassian_mcp_jira_call,
                 verified_result,
             )
 
@@ -890,7 +890,7 @@ async def approve_draft(draft_id: str, body: dict = None):
             comment_warning = ""
 
             try:
-                if target.adapter == "rovo-mcp":
+                if target.adapter == "atlassian-mcp":
                     payload = p["payload"]
                     transition_id = str((payload.get("transition") or {}).get("id") or "")
                     if not transition_id:
@@ -899,17 +899,17 @@ async def approve_draft(draft_id: str, body: dict = None):
                     if payload.get("fields"):
                         arguments["fields"] = payload["fields"]
                     await _read_issue(target, issue_key)
-                    await _run_sync(rovo_jira_call, target, "transition_issue", arguments)
-                    # Rovo may drop a comment sent inside the transition, so it goes through the comment tool.
+                    await _run_sync(atlassian_mcp_jira_call, target, "transition_issue", arguments)
+                    # Atlassian MCP may drop a comment sent inside the transition, so it goes through the comment tool.
                     comments = (payload.get("update") or {}).get("comment") or []
                     comment_body = str(((comments[0] if comments else {}).get("add") or {}).get("body") or "")
                     if comment_body:
                         try:
-                            await _run_sync(rovo_jira_call, target, "add_comment", {
+                            await _run_sync(atlassian_mcp_jira_call, target, "add_comment", {
                                 "issueIdOrKey": issue_key, "commentBody": comment_body, "contentFormat": "markdown",
                             })
                         except Exception as exc:
-                            _log.warning("Rovo comment on %s failed after its transition: %s", issue_key, exc)
+                            _log.warning("Atlassian MCP comment on %s failed after its transition: %s", issue_key, exc)
                             comment_warning = f"The status changed, but the comment could not be added: {exc}"
                 else:
                     jira_api_for_target(target, "GET", f"issue/{issue_key}?fields=status")
@@ -942,7 +942,7 @@ async def approve_draft(draft_id: str, body: dict = None):
             from skills.jira.api import jira_api_for_target
             from skills.jira.mutations import (
                 JiraTargetResolutionError,
-                rovo_jira_call,
+                atlassian_mcp_jira_call,
                 verified_result,
             )
 
@@ -956,23 +956,23 @@ async def approve_draft(draft_id: str, body: dict = None):
                 await _read_issue(target, issue_key)   # pre-read confirms issue exists
                 fallback_note = None
 
-                async def _rovo_link(rovo_target):
+                async def _atlassian_mcp_link(atlassian_mcp_target):
                     payload_raw = p.get("payload") or {}
-                    rovo_inward = str((payload_raw.get("inwardIssue") or {}).get("key", "") or other_key)
-                    rovo_outward = str((payload_raw.get("outwardIssue") or {}).get("key", "") or issue_key)
-                    return await _run_sync(rovo_jira_call, rovo_target, "create_link", {
-                        "inwardIssue": rovo_inward,
-                        "outwardIssue": rovo_outward,
+                    atlassian_mcp_inward = str((payload_raw.get("inwardIssue") or {}).get("key", "") or other_key)
+                    atlassian_mcp_outward = str((payload_raw.get("outwardIssue") or {}).get("key", "") or issue_key)
+                    return await _run_sync(atlassian_mcp_jira_call, atlassian_mcp_target, "create_link", {
+                        "inwardIssue": atlassian_mcp_inward,
+                        "outwardIssue": atlassian_mcp_outward,
                         "type": link_type,
                     })
 
-                if target.adapter == "rovo-mcp":
-                    await _rovo_link(target)
+                if target.adapter == "atlassian-mcp":
+                    await _atlassian_mcp_link(target)
                 else:
-                    _, target, fallback_note = await _write_with_rovo_fallback(
+                    _, target, fallback_note = await _write_with_atlassian_mcp_fallback(
                         target,
                         lambda: jira_api_for_target(target, "POST", "issueLink", p["payload"]),
-                        _rovo_link,
+                        _atlassian_mcp_link,
                     )
                 read_back = await _read_issue(target, issue_key)
             except JiraTargetResolutionError as exc:

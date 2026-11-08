@@ -2,10 +2,10 @@
 
 Each staging tool must:
   - Call resolve_target_for_context (not resolve_builtin_target) so it sees both adapters.
-  - For builtin-rest targets: use jira_api for pre-reads, never rovo_jira_call.
-  - For rovo-mcp targets: use rovo_jira_call for pre-reads, never jira_api.
-  - For watcher and attachment on rovo-mcp: return explicit unavailable error, never draft.
-  - For create on rovo-mcp: proceed to draft with rovo-mcp target stored in params.
+  - For builtin-rest targets: use jira_api for pre-reads, never atlassian_mcp_jira_call.
+  - For atlassian-mcp targets: use atlassian_mcp_jira_call for pre-reads, never jira_api.
+  - For watcher and attachment on atlassian-mcp: return explicit unavailable error, never draft.
+  - For create on atlassian-mcp: proceed to draft with atlassian-mcp target stored in params.
 """
 
 import pathlib
@@ -30,11 +30,11 @@ def _direct_target():
     )
 
 
-def _rovo_target():
+def _atlassian_mcp_target():
     return JiraTarget(
-        id="rovo:conn-1:cloud-1",
+        id="atlassian-mcp:conn-1:cloud-1",
         base_url="https://jira.example.com",
-        adapter="rovo-mcp",
+        adapter="atlassian-mcp",
         is_cloud=True,
         connection_id="conn-1",
         resource_id="cloud-1",
@@ -45,10 +45,10 @@ def _patch_resolve(target):
     return patch("skills.jira.tools.resolve_target_for_context", return_value=target)
 
 
-def _patch_rovo_call(side_effect=None):
+def _patch_atlassian_mcp_call(side_effect=None):
     default = {"data": {"fields": {}, "key": "PROJ-1"}}
     return patch(
-        "skills.jira.mutations.rovo_jira_call",
+        "skills.jira.mutations.atlassian_mcp_jira_call",
         return_value=default if side_effect is None else None,
         side_effect=side_effect,
     )
@@ -61,33 +61,33 @@ def setup_function(function):
 # ── comment staging ─────────────────────────────────────────────────────────
 
 class TestCommentStaging:
-    def test_direct_uses_jira_api_not_rovo(self):
+    def test_direct_uses_jira_api_not_atlassian_mcp(self):
         direct_api = MagicMock(return_value={"fields": {}})
-        rovo_call = MagicMock(side_effect=AssertionError("rovo must not be called for direct target"))
+        atlassian_mcp_call = MagicMock(side_effect=AssertionError("mcp must not be called for direct target"))
         with _patch_resolve(_direct_target()), \
              patch("skills.jira.tools.jira_api", direct_api), \
-             patch("skills.jira.mutations.rovo_jira_call", rovo_call):
+             patch("skills.jira.mutations.atlassian_mcp_jira_call", atlassian_mcp_call):
             from skills.jira.tools import _tool_jira_add_comment
             result = _tool_jira_add_comment("PROJ-1", "Good work.")
         assert result.get("_draft") == "jira-comment"
-        rovo_call.assert_not_called()
+        atlassian_mcp_call.assert_not_called()
 
-    def test_rovo_uses_rovo_call_not_jira_api(self):
-        direct_api = MagicMock(side_effect=AssertionError("jira_api must not be called for rovo target"))
-        with _patch_resolve(_rovo_target()), \
+    def test_atlassian_mcp_uses_atlassian_mcp_call_not_jira_api(self):
+        direct_api = MagicMock(side_effect=AssertionError("jira_api must not be called for mcp target"))
+        with _patch_resolve(_atlassian_mcp_target()), \
              patch("skills.jira.tools.jira_api", direct_api), \
-             _patch_rovo_call():
+             _patch_atlassian_mcp_call():
             from skills.jira.tools import _tool_jira_add_comment
             result = _tool_jira_add_comment("PROJ-1", "LGTM.")
         assert result.get("_draft") == "jira-comment"
         direct_api.assert_not_called()
 
-    def test_rovo_draft_stores_rovo_target(self):
-        with _patch_resolve(_rovo_target()), _patch_rovo_call():
+    def test_atlassian_mcp_draft_stores_atlassian_mcp_target(self):
+        with _patch_resolve(_atlassian_mcp_target()), _patch_atlassian_mcp_call():
             from skills.jira.tools import _tool_jira_add_comment
             result = _tool_jira_add_comment("PROJ-1", "Note.")
         draft = _drafts.get_draft(result["data"]["draft_id"])
-        assert draft["params"]["jira_target"]["adapter"] == "rovo-mcp"
+        assert draft["params"]["jira_target"]["adapter"] == "atlassian-mcp"
 
 
 # ── update staging ───────────────────────────────────────────────────────────
@@ -95,31 +95,31 @@ class TestCommentStaging:
 class TestUpdateStaging:
     def test_direct_uses_jira_api(self):
         direct_api = MagicMock(return_value={"fields": {}})
-        rovo_call = MagicMock(side_effect=AssertionError("rovo must not be called for direct target"))
+        atlassian_mcp_call = MagicMock(side_effect=AssertionError("mcp must not be called for direct target"))
         with _patch_resolve(_direct_target()), \
              patch("skills.jira.tools.jira_api", direct_api), \
-             patch("skills.jira.mutations.rovo_jira_call", rovo_call):
+             patch("skills.jira.mutations.atlassian_mcp_jira_call", atlassian_mcp_call):
             from skills.jira.tools import _tool_jira_update_issue
             result = _tool_jira_update_issue("PROJ-1", summary="New summary")
         assert result.get("_draft") == "jira-update"
-        rovo_call.assert_not_called()
+        atlassian_mcp_call.assert_not_called()
 
-    def test_rovo_uses_rovo_call_for_pre_read(self):
-        direct_api = MagicMock(side_effect=AssertionError("jira_api must not be called for rovo target"))
-        with _patch_resolve(_rovo_target()), \
+    def test_atlassian_mcp_uses_atlassian_mcp_call_for_pre_read(self):
+        direct_api = MagicMock(side_effect=AssertionError("jira_api must not be called for mcp target"))
+        with _patch_resolve(_atlassian_mcp_target()), \
              patch("skills.jira.tools.jira_api", direct_api), \
-             _patch_rovo_call():
+             _patch_atlassian_mcp_call():
             from skills.jira.tools import _tool_jira_update_issue
-            result = _tool_jira_update_issue("PROJ-1", summary="Rovo update")
+            result = _tool_jira_update_issue("PROJ-1", summary="Atlassian MCP update")
         assert result.get("_draft") == "jira-update"
         direct_api.assert_not_called()
 
-    def test_rovo_draft_stores_rovo_target(self):
-        with _patch_resolve(_rovo_target()), _patch_rovo_call():
+    def test_atlassian_mcp_draft_stores_atlassian_mcp_target(self):
+        with _patch_resolve(_atlassian_mcp_target()), _patch_atlassian_mcp_call():
             from skills.jira.tools import _tool_jira_update_issue
             result = _tool_jira_update_issue("PROJ-1", summary="x")
         draft = _drafts.get_draft(result["data"]["draft_id"])
-        assert draft["params"]["jira_target"]["adapter"] == "rovo-mcp"
+        assert draft["params"]["jira_target"]["adapter"] == "atlassian-mcp"
 
 
 # ── watcher staging ──────────────────────────────────────────────────────────
@@ -132,16 +132,16 @@ class TestWatcherStaging:
             result = _tool_jira_add_watcher("PROJ-1", "acc-42")
         assert result.get("_draft") == "jira-watcher"
 
-    def test_rovo_returns_unavailable_not_draft(self):
-        rovo_call = MagicMock(side_effect=AssertionError("rovo must not be called for unsupported op"))
-        with _patch_resolve(_rovo_target()), \
-             patch("skills.jira.mutations.rovo_jira_call", rovo_call):
+    def test_atlassian_mcp_returns_unavailable_not_draft(self):
+        atlassian_mcp_call = MagicMock(side_effect=AssertionError("mcp must not be called for unsupported op"))
+        with _patch_resolve(_atlassian_mcp_target()), \
+             patch("skills.jira.mutations.atlassian_mcp_jira_call", atlassian_mcp_call):
             from skills.jira.tools import _tool_jira_add_watcher
             result = _tool_jira_add_watcher("PROJ-1", "acc-42")
         assert "_draft" not in result
         assert result.get("unavailable") is True
         assert "not available" in result.get("error", "").lower()
-        rovo_call.assert_not_called()
+        atlassian_mcp_call.assert_not_called()
 
 
 # ── attachment staging ────────────────────────────────────────────────────────
@@ -157,25 +157,25 @@ class TestAttachmentStaging:
             result = _tool_jira_stage_attachment("PROJ-1", staged["upload_id"])
         assert result.get("_draft") == "jira-attachment"
 
-    def test_rovo_returns_unavailable_not_draft(self):
-        rovo_call = MagicMock(side_effect=AssertionError("rovo must not be called"))
-        with _patch_resolve(_rovo_target()), \
-             patch("skills.jira.mutations.rovo_jira_call", rovo_call):
+    def test_atlassian_mcp_returns_unavailable_not_draft(self):
+        atlassian_mcp_call = MagicMock(side_effect=AssertionError("mcp must not be called"))
+        with _patch_resolve(_atlassian_mcp_target()), \
+             patch("skills.jira.mutations.atlassian_mcp_jira_call", atlassian_mcp_call):
             from skills.jira.tools import _tool_jira_stage_attachment
             result = _tool_jira_stage_attachment("PROJ-1", "any-id")
         assert "_draft" not in result
         assert result.get("unavailable") is True
-        rovo_call.assert_not_called()
+        atlassian_mcp_call.assert_not_called()
 
-    def test_rovo_teams_attachment_returns_unavailable(self):
-        with _patch_resolve(_rovo_target()):
+    def test_atlassian_mcp_teams_attachment_returns_unavailable(self):
+        with _patch_resolve(_atlassian_mcp_target()):
             from skills.jira.tools import _tool_jira_stage_teams_attachment
             result = _tool_jira_stage_teams_attachment("PROJ-1", "chat-1", "msg-1")
         assert result.get("unavailable") is True
         assert "_draft" not in result
 
-    def test_rovo_teams_image_returns_unavailable(self):
-        with _patch_resolve(_rovo_target()):
+    def test_atlassian_mcp_teams_image_returns_unavailable(self):
+        with _patch_resolve(_atlassian_mcp_target()):
             from skills.jira.tools import _tool_jira_stage_teams_image
             result = _tool_jira_stage_teams_image("PROJ-1", "https://teams.microsoft.com/img.png")
         assert result.get("unavailable") is True
@@ -188,40 +188,40 @@ class TestTransitionStaging:
     def test_direct_uses_jira_api_to_lookup_transition(self):
         transitions_resp = {"transitions": [{"id": "21", "name": "In Progress", "to": {"name": "In Progress"}}]}
         direct_api = MagicMock(return_value=transitions_resp)
-        rovo_call = MagicMock(side_effect=AssertionError("rovo must not be called for direct target"))
+        atlassian_mcp_call = MagicMock(side_effect=AssertionError("mcp must not be called for direct target"))
         with _patch_resolve(_direct_target()), \
              patch("skills.jira.tools.jira_api", direct_api), \
-             patch("skills.jira.mutations.rovo_jira_call", rovo_call):
+             patch("skills.jira.mutations.atlassian_mcp_jira_call", atlassian_mcp_call):
             from skills.jira.tools import _tool_jira_transition
             result = _tool_jira_transition("PROJ-1", "In Progress")
         assert result.get("_draft") == "jira-transition"
-        rovo_call.assert_not_called()
+        atlassian_mcp_call.assert_not_called()
         draft = _drafts.get_draft(result["data"]["draft_id"])
         assert draft["params"]["payload"]["transition"]["id"] == "21"
 
-    def _stage_rovo(self, rovo_call, name="Closed", comment=""):
-        direct_api = MagicMock(side_effect=AssertionError("jira_api must not be called for rovo target"))
-        with _patch_resolve(_rovo_target()), \
+    def _stage_atlassian_mcp(self, atlassian_mcp_call, name="Closed", comment=""):
+        direct_api = MagicMock(side_effect=AssertionError("jira_api must not be called for mcp target"))
+        with _patch_resolve(_atlassian_mcp_target()), \
              patch("skills.jira.tools.jira_api", direct_api), \
-             patch("skills.jira.mutations.rovo_jira_call", rovo_call):
+             patch("skills.jira.mutations.atlassian_mcp_jira_call", atlassian_mcp_call):
             from skills.jira.tools import _tool_jira_transition
             return _tool_jira_transition("PROJ-1", name, comment)
 
-    def test_rovo_looks_up_the_transition_id_through_rovo_and_stages_a_draft(self):
+    def test_atlassian_mcp_looks_up_the_transition_id_through_atlassian_mcp_and_stages_a_draft(self):
         transitions = {"transitions": [
             {"id": "41", "name": "In Progress", "to": {"name": "In Progress"}, "fields": {}},
             {"id": "61", "name": "Rejected", "to": {"name": "Rejected"}, "fields": {
                 "customfield_10150": {"required": True, "allowedValues": [{"name": "Duplicate", "id": "1"}]}}},
         ]}
-        rovo_call = MagicMock(return_value=transitions)
-        result = self._stage_rovo(rovo_call, "rejected", "Dupe of PROJ-9")
+        atlassian_mcp_call = MagicMock(return_value=transitions)
+        result = self._stage_atlassian_mcp(atlassian_mcp_call, "rejected", "Dupe of PROJ-9")
         assert result.get("_draft") == "jira-transition"
-        rovo_call.assert_called_once()
-        _, operation, arguments = rovo_call.call_args.args
+        atlassian_mcp_call.assert_called_once()
+        _, operation, arguments = atlassian_mcp_call.call_args.args
         assert operation == "list_transitions"
         assert arguments == {"issueIdOrKey": "PROJ-1", "expand": "transitions.fields"}
         draft = _drafts.get_draft(result["data"]["draft_id"])
-        assert draft["params"]["jira_target"]["adapter"] == "rovo-mcp"
+        assert draft["params"]["jira_target"]["adapter"] == "atlassian-mcp"
         assert draft["params"]["expected_status"] == "Rejected"
         assert draft["params"]["payload"] == {
             "transition": {"id": "61"},
@@ -229,34 +229,34 @@ class TestTransitionStaging:
             "update": {"comment": [{"add": {"body": "Dupe of PROJ-9"}}]},
         }
 
-    def test_rovo_unknown_transition_name_lists_what_is_available_and_stages_nothing(self):
-        rovo_call = MagicMock(return_value={"transitions": [{"id": "41", "name": "In Progress"}]})
-        result = self._stage_rovo(rovo_call, "Done")
+    def test_atlassian_mcp_unknown_transition_name_lists_what_is_available_and_stages_nothing(self):
+        atlassian_mcp_call = MagicMock(return_value={"transitions": [{"id": "41", "name": "In Progress"}]})
+        result = self._stage_atlassian_mcp(atlassian_mcp_call, "Done")
         assert "_draft" not in result
         assert "not found" in result["error"] and "In Progress" in result["error"]
 
-    def test_rovo_connection_that_cannot_list_transitions_returns_unavailable_not_draft(self):
+    def test_atlassian_mcp_connection_that_cannot_list_transitions_returns_unavailable_not_draft(self):
         from skills.jira.mutations import JiraTargetResolutionError
-        rovo_call = MagicMock(side_effect=JiraTargetResolutionError(
-            "The selected Rovo connection does not support list transitions."))
-        result = self._stage_rovo(rovo_call)
+        atlassian_mcp_call = MagicMock(side_effect=JiraTargetResolutionError(
+            "The selected Atlassian MCP connection does not support list transitions."))
+        result = self._stage_atlassian_mcp(atlassian_mcp_call)
         assert "_draft" not in result
         assert result.get("unavailable") is True
         assert "does not support list transitions" in result["error"]
 
-    def test_rovo_unreadable_transition_list_stages_nothing(self):
-        result = self._stage_rovo(MagicMock(return_value="plain text"))
+    def test_atlassian_mcp_unreadable_transition_list_stages_nothing(self):
+        result = self._stage_atlassian_mcp(MagicMock(return_value="plain text"))
         assert "_draft" not in result and "Could not read" in result["error"]
 
-    def test_rovo_reply_that_is_not_json_is_an_error_not_a_crash(self):
-        result = self._stage_rovo(MagicMock(side_effect=ValueError("Expecting value: line 1 column 1")))
+    def test_atlassian_mcp_reply_that_is_not_json_is_an_error_not_a_crash(self):
+        result = self._stage_atlassian_mcp(MagicMock(side_effect=ValueError("Expecting value: line 1 column 1")))
         assert "_draft" not in result and "Expecting value" in result["error"]
 
     def test_the_card_shows_the_comment_the_approval_will_publish(self):
-        rovo_call = MagicMock(return_value={"transitions": [{"id": "41", "name": "Done", "to": {"name": "Done"}}]})
-        with_comment = self._stage_rovo(rovo_call, "Done", "Shipped in 1.2")
+        atlassian_mcp_call = MagicMock(return_value={"transitions": [{"id": "41", "name": "Done", "to": {"name": "Done"}}]})
+        with_comment = self._stage_atlassian_mcp(atlassian_mcp_call, "Done", "Shipped in 1.2")
         assert with_comment["data"]["comment"] == "Shipped in 1.2"
-        without = self._stage_rovo(rovo_call, "Done")
+        without = self._stage_atlassian_mcp(atlassian_mcp_call, "Done")
         assert "comment" not in without["data"]
 
 
@@ -265,40 +265,40 @@ class TestTransitionStaging:
 class TestLinkStaging:
     def test_direct_uses_jira_api_for_pre_reads(self):
         direct_api = MagicMock(return_value={"fields": {"issuelinks": []}})
-        rovo_call = MagicMock(side_effect=AssertionError("rovo must not be called for direct target"))
+        atlassian_mcp_call = MagicMock(side_effect=AssertionError("mcp must not be called for direct target"))
         with _patch_resolve(_direct_target()), \
              patch("skills.jira.tools.jira_api", direct_api), \
-             patch("skills.jira.mutations.rovo_jira_call", rovo_call):
+             patch("skills.jira.mutations.atlassian_mcp_jira_call", atlassian_mcp_call):
             from skills.jira.tools import _tool_jira_link_issues
             result = _tool_jira_link_issues("PROJ-1", "OTHER-2", "blocks")
         assert result.get("_draft") == "jira-link"
-        rovo_call.assert_not_called()
+        atlassian_mcp_call.assert_not_called()
 
-    def test_rovo_uses_rovo_call_for_pre_read(self):
-        direct_api = MagicMock(side_effect=AssertionError("jira_api must not be called for rovo target"))
-        with _patch_resolve(_rovo_target()), \
+    def test_atlassian_mcp_uses_atlassian_mcp_call_for_pre_read(self):
+        direct_api = MagicMock(side_effect=AssertionError("jira_api must not be called for mcp target"))
+        with _patch_resolve(_atlassian_mcp_target()), \
              patch("skills.jira.tools.jira_api", direct_api), \
-             _patch_rovo_call():
+             _patch_atlassian_mcp_call():
             from skills.jira.tools import _tool_jira_link_issues
             result = _tool_jira_link_issues("PROJ-1", "OTHER-2", "blocks")
         assert result.get("_draft") == "jira-link"
         direct_api.assert_not_called()
 
-    def test_rovo_draft_stores_rovo_target(self):
-        with _patch_resolve(_rovo_target()), _patch_rovo_call():
+    def test_atlassian_mcp_draft_stores_atlassian_mcp_target(self):
+        with _patch_resolve(_atlassian_mcp_target()), _patch_atlassian_mcp_call():
             from skills.jira.tools import _tool_jira_link_issues
             result = _tool_jira_link_issues("PROJ-1", "OTHER-2", "Relates")
         draft = _drafts.get_draft(result["data"]["draft_id"])
-        assert draft["params"]["jira_target"]["adapter"] == "rovo-mcp"
+        assert draft["params"]["jira_target"]["adapter"] == "atlassian-mcp"
 
 
 # ── create staging (open_create_form) ─────────────────────────────────────────
 
-def _rovo_create_meta_mock():
-    """Side-effect for rovo_jira_call during create staging validation.
+def _atlassian_mcp_create_meta_mock():
+    """Side-effect for atlassian_mcp_jira_call during create staging validation.
 
-    Argument shapes and response structures match the real Rovo MCP schemas
-    read from mcp-rovo-mcp cached_tools in config.json.bak.20260812134253:
+    Argument shapes and response structures match the real Atlassian MCP schemas
+    read from mcp-atlassian-mcp cached_tools in config.json.bak.20260812134253:
 
       getVisibleJiraProjects:          cloudId (injected) + optional searchString
       getJiraProjectIssueTypesMetadata: cloudId (injected) + projectIdOrKey (required)
@@ -333,63 +333,63 @@ class TestCreateStaging:
         assert draft["params"]["jira_target"]["adapter"] == "builtin-rest"
         assert draft["params"]["is_cloud"] is True   # target.is_cloud, not jira_is_cloud()
 
-    def test_rovo_creates_draft_with_rovo_target(self):
-        with patch("skills.jira.tools.resolve_target_for_project", return_value=_rovo_target()), \
-             _patch_rovo_call(side_effect=_rovo_create_meta_mock()):
+    def test_atlassian_mcp_creates_draft_with_atlassian_mcp_target(self):
+        with patch("skills.jira.tools.resolve_target_for_project", return_value=_atlassian_mcp_target()), \
+             _patch_atlassian_mcp_call(side_effect=_atlassian_mcp_create_meta_mock()):
             from skills.jira.tools import _tool_jira_open_create_form
-            result = _tool_jira_open_create_form(project="PROJ", summary="Rovo story", issue_type="Story")
+            result = _tool_jira_open_create_form(project="PROJ", summary="Atlassian MCP story", issue_type="Story")
         assert result.get("_draft") == "jira-create", result
         draft = _drafts.get_draft(result["data"]["draft_id"])
-        assert draft["params"]["jira_target"]["adapter"] == "rovo-mcp"
+        assert draft["params"]["jira_target"]["adapter"] == "atlassian-mcp"
         assert draft["params"]["is_cloud"] is True   # target.is_cloud, not jira_is_cloud()
 
-    def test_rovo_create_does_not_call_jira_api(self):
-        direct_api = MagicMock(side_effect=AssertionError("jira_api must not be called for rovo target"))
-        with patch("skills.jira.tools.resolve_target_for_project", return_value=_rovo_target()), \
+    def test_atlassian_mcp_create_does_not_call_jira_api(self):
+        direct_api = MagicMock(side_effect=AssertionError("jira_api must not be called for mcp target"))
+        with patch("skills.jira.tools.resolve_target_for_project", return_value=_atlassian_mcp_target()), \
              patch("skills.jira.tools.jira_api", direct_api), \
-             _patch_rovo_call(side_effect=_rovo_create_meta_mock()):
+             _patch_atlassian_mcp_call(side_effect=_atlassian_mcp_create_meta_mock()):
             from skills.jira.tools import _tool_jira_open_create_form
             result = _tool_jira_open_create_form(project="PROJ", summary="s", issue_type="Task")
         assert result.get("_draft") == "jira-create", result
         direct_api.assert_not_called()
 
-    def test_rovo_create_validates_project_key(self):
+    def test_atlassian_mcp_create_validates_project_key(self):
         """Unknown project must fail before staging, not at approval time."""
-        with patch("skills.jira.tools.resolve_target_for_project", return_value=_rovo_target()), \
-             _patch_rovo_call(side_effect=_rovo_create_meta_mock()):
+        with patch("skills.jira.tools.resolve_target_for_project", return_value=_atlassian_mcp_target()), \
+             _patch_atlassian_mcp_call(side_effect=_atlassian_mcp_create_meta_mock()):
             from skills.jira.tools import _tool_jira_open_create_form
             result = _tool_jira_open_create_form(project="UNKNOWN", summary="s", issue_type="Task")
         assert "_draft" not in result
         assert "not found" in result.get("error", "").lower()
 
-    def test_rovo_create_validates_issue_type(self):
+    def test_atlassian_mcp_create_validates_issue_type(self):
         """Unknown issue type must fail before staging."""
-        with patch("skills.jira.tools.resolve_target_for_project", return_value=_rovo_target()), \
-             _patch_rovo_call(side_effect=_rovo_create_meta_mock()):
+        with patch("skills.jira.tools.resolve_target_for_project", return_value=_atlassian_mcp_target()), \
+             _patch_atlassian_mcp_call(side_effect=_atlassian_mcp_create_meta_mock()):
             from skills.jira.tools import _tool_jira_open_create_form
             result = _tool_jira_open_create_form(project="PROJ", summary="s", issue_type="InvalidType")
         assert "_draft" not in result
         assert "not available" in result.get("error", "").lower()
 
-    def test_rovo_create_uses_target_is_cloud_not_global(self):
+    def test_atlassian_mcp_create_uses_target_is_cloud_not_global(self):
         """is_cloud in the staged draft must come from target, not jira_is_cloud()."""
         server_target = MagicMock()
-        server_target.is_cloud = False  # Server DC target via Rovo
-        server_target.adapter = "rovo-mcp"
+        server_target.is_cloud = False  # Server DC target vian Atlassian MCP
+        server_target.adapter = "atlassian-mcp"
         server_target.resource_id = "cloud-1"
         server_target.connection_id = "conn-1"
         server_target.base_url = "https://jira.example.com"
-        server_target.id = "rovo:conn-1:cloud-1"
-        server_target.to_dict.return_value = {"adapter": "rovo-mcp", "is_cloud": False,
+        server_target.id = "atlassian-mcp:conn-1:cloud-1"
+        server_target.to_dict.return_value = {"adapter": "atlassian-mcp", "is_cloud": False,
                                                "base_url": "https://jira.example.com",
-                                               "id": "rovo:conn-1:cloud-1",
+                                               "id": "atlassian-mcp:conn-1:cloud-1",
                                                "connection_id": "conn-1", "resource_id": "cloud-1",
                                                "display_name": "", "capabilities": []}
-        server_target.public_dict.return_value = {"adapter": "rovo-mcp", "is_cloud": False,
+        server_target.public_dict.return_value = {"adapter": "atlassian-mcp", "is_cloud": False,
                                                    "base_url": "https://jira.example.com"}
         with patch("skills.jira.tools.resolve_target_for_project", return_value=server_target), \
              patch("skills.jira.tools.jira_is_cloud", return_value=True), \
-             _patch_rovo_call(side_effect=_rovo_create_meta_mock()):
+             _patch_atlassian_mcp_call(side_effect=_atlassian_mcp_create_meta_mock()):
             from skills.jira.tools import _tool_jira_open_create_form
             result = _tool_jira_open_create_form(project="PROJ", summary="s", issue_type="Task")
         assert result.get("_draft") == "jira-create", result
@@ -398,18 +398,18 @@ class TestCreateStaging:
             "must use target.is_cloud=False, not global jira_is_cloud()=True"
 
 
-# ── allowlist regression: rovo_jira_call operation-map layer ─────────────────
+# ── allowlist regression: atlassian_mcp_jira_call operation-map layer ─────────────────
 #
 # These tests mock only at the MCP client layer (_load_connections, _client_for)
-# so rovo_jira_call runs its real body, including the _ROVO_OPERATION_TO_TOOL
+# so atlassian_mcp_jira_call runs its real body, including the _ATLASSIAN_MCP_OPERATION_TO_TOOL
 # lookup and the cached_tools availability check.  If either mapping is removed
-# from _ROVO_OPERATION_TO_TOOL the test fails before any client call is made.
+# from _ATLASSIAN_MCP_OPERATION_TO_TOOL the test fails before any client call is made.
 
-_ROVO_CONN_WITH_META_TOOLS = [{
+_ATLASSIAN_MCP_CONN_WITH_META_TOOLS = [{
     "id": "conn-1",
     "enabled": True,
     "cached_tools": [
-        # Real tool names from mcp-rovo-mcp cached_tools (https://mcp.atlassian.com/v1/mcp)
+        # Real tool names from mcp-atlassian-mcp cached_tools (https://mcp.atlassian.com/v1/mcp)
         {"name": "getVisibleJiraProjects"},
         {"name": "getJiraProjectIssueTypesMetadata"},
         {"name": "getJiraIssueTypeMetaWithFields"},
@@ -425,9 +425,9 @@ _RESOURCES_PAYLOAD = '{"resources": [{"id": "cloud-1", "url": "https://jira.exam
 def _mcp_client_for_meta():
     """MCP client mock whose .call() returns real-schema-matching shapes.
 
-    Schemas sourced from the mcp-rovo-mcp connection in config.json.bak.20260812134253:
+    Schemas sourced from the mcp-atlassian-mcp connection in config.json.bak.20260812134253:
       getVisibleJiraProjects:
-        required: cloudId (injected by rovo_jira_call)
+        required: cloudId (injected by atlassian_mcp_jira_call)
         optional: searchString, action, startAt, maxResults, expandIssueTypes
       getJiraProjectIssueTypesMetadata:
         required: cloudId (injected), projectIdOrKey
@@ -466,47 +466,47 @@ def _mcp_client_for_meta():
     return mc
 
 
-class TestRovoAllowlistRegression:
-    """Verify that get_projects and get_issue_types are in _ROVO_OPERATION_TO_TOOL.
+class TestAtlassianMcpAllowlistRegression:
+    """Verify that get_projects and get_issue_types are in _ATLASSIAN_MCP_OPERATION_TO_TOOL.
 
-    Each test calls the real rovo_jira_call; only _load_connections and
+    Each test calls the real atlassian_mcp_jira_call; only _load_connections and
     _client_for are mocked at the MCP layer.  Removing either mapping from
-    _ROVO_OPERATION_TO_TOOL causes rovo_jira_call to raise
-    JiraTargetResolutionError('Rovo does not have a verified adapter for ...'),
+    _ATLASSIAN_MCP_OPERATION_TO_TOOL causes atlassian_mcp_jira_call to raise
+    JiraTargetResolutionError('Atlassian MCP does not have a verified adapter for ...'),
     which propagates as an error result before any draft is created.
     """
 
     def _target(self):
-        return _rovo_target()
+        return _atlassian_mcp_target()
 
     def test_get_projects_is_in_allowlist(self):
-        """rovo_jira_call('get_projects') must resolve to getVisibleJiraProjects.
+        """atlassian_mcp_jira_call('get_projects') must resolve to getVisibleJiraProjects.
 
-        Tool name sourced from mcp-rovo-mcp cached_tools in config.json.bak.20260812134253
+        Tool name sourced from mcp-atlassian-mcp cached_tools in config.json.bak.20260812134253
         (https://mcp.atlassian.com/v1/mcp).
         """
-        from skills.jira.mutations import _ROVO_OPERATION_TO_TOOL
-        assert "get_projects" in _ROVO_OPERATION_TO_TOOL, \
-            "'get_projects' must be in _ROVO_OPERATION_TO_TOOL"
-        assert _ROVO_OPERATION_TO_TOOL["get_projects"] == "getVisibleJiraProjects", \
-            "must map to getVisibleJiraProjects (real Rovo tool name)"
+        from skills.jira.mutations import _ATLASSIAN_MCP_OPERATION_TO_TOOL
+        assert "get_projects" in _ATLASSIAN_MCP_OPERATION_TO_TOOL, \
+            "'get_projects' must be in _ATLASSIAN_MCP_OPERATION_TO_TOOL"
+        assert _ATLASSIAN_MCP_OPERATION_TO_TOOL["get_projects"] == "getVisibleJiraProjects", \
+            "must map to getVisibleJiraProjects (real Atlassian MCP tool name)"
 
     def test_get_issue_types_is_in_allowlist(self):
-        """rovo_jira_call('get_issue_types') must resolve to getJiraProjectIssueTypesMetadata.
+        """atlassian_mcp_jira_call('get_issue_types') must resolve to getJiraProjectIssueTypesMetadata.
 
-        Tool name sourced from mcp-rovo-mcp cached_tools in config.json.bak.20260812134253.
+        Tool name sourced from mcp-atlassian-mcp cached_tools in config.json.bak.20260812134253.
         """
-        from skills.jira.mutations import _ROVO_OPERATION_TO_TOOL
-        assert "get_issue_types" in _ROVO_OPERATION_TO_TOOL, \
-            "'get_issue_types' must be in _ROVO_OPERATION_TO_TOOL"
-        assert _ROVO_OPERATION_TO_TOOL["get_issue_types"] == "getJiraProjectIssueTypesMetadata", \
-            "must map to getJiraProjectIssueTypesMetadata (real Rovo tool name)"
+        from skills.jira.mutations import _ATLASSIAN_MCP_OPERATION_TO_TOOL
+        assert "get_issue_types" in _ATLASSIAN_MCP_OPERATION_TO_TOOL, \
+            "'get_issue_types' must be in _ATLASSIAN_MCP_OPERATION_TO_TOOL"
+        assert _ATLASSIAN_MCP_OPERATION_TO_TOOL["get_issue_types"] == "getJiraProjectIssueTypesMetadata", \
+            "must map to getJiraProjectIssueTypesMetadata (real Atlassian MCP tool name)"
 
     def test_create_staging_passes_through_real_allowlist(self):
-        """End-to-end: create staging goes through rovo_jira_call's real operation
+        """End-to-end: create staging goes through atlassian_mcp_jira_call's real operation
         map. If either mapping is absent the call raises before returning a draft."""
         with patch("skills.jira.tools.resolve_target_for_project", return_value=self._target()), \
-             patch("mcp.manager._load_connections", return_value=_ROVO_CONN_WITH_META_TOOLS), \
+             patch("mcp.manager._load_connections", return_value=_ATLASSIAN_MCP_CONN_WITH_META_TOOLS), \
              patch("mcp.manager._client_for", return_value=_mcp_client_for_meta()):
             from skills.jira.tools import _tool_jira_open_create_form
             result = _tool_jira_open_create_form(
@@ -514,15 +514,15 @@ class TestRovoAllowlistRegression:
             )
         assert result.get("_draft") == "jira-create", (
             f"Expected draft but got: {result}. "
-            "If this fails with 'verified adapter' the operation is missing from _ROVO_OPERATION_TO_TOOL."
+            "If this fails with 'verified adapter' the operation is missing from _ATLASSIAN_MCP_OPERATION_TO_TOOL."
         )
         draft = _drafts.get_draft(result["data"]["draft_id"])
-        assert draft["params"]["jira_target"]["adapter"] == "rovo-mcp"
+        assert draft["params"]["jira_target"]["adapter"] == "atlassian-mcp"
 
     def test_create_staging_fails_on_unknown_project_through_real_allowlist(self):
-        """Unknown project should fail closed via the real rovo_jira_call path."""
+        """Unknown project should fail closed via the real atlassian_mcp_jira_call path."""
         with patch("skills.jira.tools.resolve_target_for_project", return_value=self._target()), \
-             patch("mcp.manager._load_connections", return_value=_ROVO_CONN_WITH_META_TOOLS), \
+             patch("mcp.manager._load_connections", return_value=_ATLASSIAN_MCP_CONN_WITH_META_TOOLS), \
              patch("mcp.manager._client_for", return_value=_mcp_client_for_meta()):
             from skills.jira.tools import _tool_jira_open_create_form
             result = _tool_jira_open_create_form(
@@ -532,9 +532,9 @@ class TestRovoAllowlistRegression:
         assert "not found" in result.get("error", "").lower()
 
     def test_create_staging_fails_on_unknown_issue_type_through_real_allowlist(self):
-        """Unknown issue type should fail closed via the real rovo_jira_call path."""
+        """Unknown issue type should fail closed via the real atlassian_mcp_jira_call path."""
         with patch("skills.jira.tools.resolve_target_for_project", return_value=self._target()), \
-             patch("mcp.manager._load_connections", return_value=_ROVO_CONN_WITH_META_TOOLS), \
+             patch("mcp.manager._load_connections", return_value=_ATLASSIAN_MCP_CONN_WITH_META_TOOLS), \
              patch("mcp.manager._client_for", return_value=_mcp_client_for_meta()):
             from skills.jira.tools import _tool_jira_open_create_form
             result = _tool_jira_open_create_form(

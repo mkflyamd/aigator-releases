@@ -1,6 +1,6 @@
-"""rovo_jira_call must work against whichever Rovo tool set the connection exposes.
+"""atlassian_mcp_jira_call must work against whichever Atlassian MCP tool set the connection exposes.
 
-Rovo v1 has one named tool per action. v2 renames some, moves others behind
+Atlassian MCP v1 has one named tool per action. v2 renames some, moves others behind
 discover/executeRead/executeWrite, wraps responses in {"data": ...} and calls
 the site id ``cloudId``. The server's own read/write hints and execute tiers
 decide whether an operation may be served by a given tool.
@@ -19,7 +19,7 @@ from skills.jira.mutations import (
     JiraTarget,
     JiraTargetResolutionError,
     _accessible_resources,
-    rovo_jira_call,
+    atlassian_mcp_jira_call,
 )
 
 SITE = "https://amd.atlassian.net"
@@ -28,7 +28,7 @@ CLOUD_ID = "cloud-1"
 
 def _target():
     return JiraTarget(
-        id=f"rovo:conn-1:{CLOUD_ID}", base_url=SITE, adapter="rovo-mcp", is_cloud=True,
+        id=f"atlassian-mcp:conn-1:{CLOUD_ID}", base_url=SITE, adapter="atlassian-mcp", is_cloud=True,
         connection_id="conn-1", resource_id=CLOUD_ID,
     )
 
@@ -81,7 +81,7 @@ def _run(operation, arguments, client, tools=V2_TOOLS):
     connection = {"id": "conn-1", "enabled": True, "cached_tools": tools}
     with patch("mcp.manager._load_connections", return_value=[connection]), \
          patch("mcp.manager._client_for", return_value=client):
-        return rovo_jira_call(_target(), operation, arguments)
+        return atlassian_mcp_jira_call(_target(), operation, arguments)
 
 
 def _last(client, tool):

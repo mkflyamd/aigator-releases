@@ -464,7 +464,7 @@ def save_jira_pat(req: JiraPatRequest):
         return current
     _update_config(_commit_jira)
     # Direct API credentials are intentionally site-specific. Do not create an
-    # MCP connection here; Rovo MCP is connected separately through Atlassian SSO.
+    # MCP connection here; Atlassian MCP is connected separately through Atlassian SSO.
     return {"ok": True, "user": display_name, "base_url": base_url}
 
 
