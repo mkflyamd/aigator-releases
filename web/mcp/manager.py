@@ -245,7 +245,7 @@ def _is_unverified_jira_mcp_mutation(orig_name: str, conn: dict, hints: dict | N
         return True
     # Skip leading namespace/service tokens (jira, atlassian, mcp) to
     # find the actual verb. e.g. jira_get_issue_clean → verb is 'get'.
-    _NAMESPACE_TOKENS = frozenset({"jira", "atlassian", _LEGACY_ATLASSIAN_NAME, "mcp"})
+    _NAMESPACE_TOKENS = frozenset({"jira", "atlassian", "mcp"})
     verb = next((p for p in parts if p not in _NAMESPACE_TOKENS), parts[0])
     return not verb.startswith(_JIRA_READ_ONLY_PREFIXES)
 

@@ -105,3 +105,4 @@ def test_a_connection_saved_under_the_old_product_name_stays_gated():
     assert manager._is_atlassian_connection(legacy)
     assert blocked("createJiraIssue", legacy)
     assert not blocked("getJiraIssue", legacy)
+    assert blocked("rovo_fetch_and_transition_issue", legacy)
