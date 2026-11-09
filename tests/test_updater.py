@@ -30,102 +30,150 @@ def test_version_comparison_newer_triggers_update():
     assert not Version("1.0.0") > Version("1.0.0")
 
 
+SHA_A = "a" * 64
+SHA_B = "b" * 64
+CHECKSUMS = (
+    f"{SHA_A}  AI-Gator-1.1.0-Linux-x64.AppImage\n"
+    f"{SHA_B}  AI-Gator-1.1.0-Windows-x64.exe\n"
+    f"{SHA_A}  AI-Gator-1.1.0-macOS-arm64.dmg\n"
+)
+WINDOWS_URL = "https://github.com/mkflyamd/aigator-releases/releases/download/v1.1.0/AI-Gator-1.1.0-Windows-x64.exe"
+
+
+def _mock_checksums_client(text=None, error=None):
+    response = MagicMock()
+    response.raise_for_status = MagicMock()
+    response.text = text
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.get = AsyncMock(return_value=response, side_effect=error)
+    return mock_client
+
+
+async def _run_check(tmp_path, current, client, first_signed=None):
+    import web.updater as updater
+
+    vf = tmp_path / "version.txt"
+    vf.write_text(current)
+    updater._state = updater._UpdateState()
+    with (
+        patch.object(updater, "VERSION_FILE", vf),
+        patch.object(updater, "FIRST_SIGNED_VERSION", first_signed),
+        patch.object(updater.sys, "platform", "win32"),
+        patch("web.updater.httpx.AsyncClient", return_value=client),
+    ):
+        return await updater.check_for_update()
+
+
+def test_parse_checksums_finds_windows_installer():
+    import web.updater as updater
+
+    assert updater.parse_checksums(CHECKSUMS) == ("1.1.0", "AI-Gator-1.1.0-Windows-x64.exe", SHA_B)
+
+
+def test_parse_checksums_accepts_binary_mode_marker():
+    import web.updater as updater
+
+    text = f"{SHA_B} *AI-Gator-1.1.0-Windows-x64.exe\n"
+    assert updater.parse_checksums(text) == ("1.1.0", "AI-Gator-1.1.0-Windows-x64.exe", SHA_B)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "",
+        f"{SHA_A}  AI-Gator-1.1.0-macOS-arm64.dmg\n",
+        "not-a-hash  AI-Gator-1.1.0-Windows-x64.exe\n",
+        f"{SHA_A}  evil/AI-Gator-1.1.0-Windows-x64.exe\n",
+        f"{SHA_A}  AI-Gator-1.1.0-Windows-x64.exe.sig\n",
+    ],
+)
+def test_parse_checksums_rejects_invalid(text):
+    import web.updater as updater
+
+    assert updater.parse_checksums(text) is None
+
+
 @pytest.mark.asyncio
 async def test_check_for_update_returns_info_when_newer(tmp_path):
     import web.updater as updater
 
-    vf = tmp_path / "version.txt"
-    vf.write_text("1.0.0")
-
-    manifest_response = MagicMock()
-    manifest_response.raise_for_status = MagicMock()
-    manifest_response.json.return_value = {
-        "version": "1.1.0",
-        "url": "https://github.com/mkflyamd/aigator-releases/releases/download/v1.1.0/AIGatorInstaller.exe",
-        "sha256": "a" * 64,
-        "notes": "Bug fixes",
-    }
-
-    mock_client = AsyncMock()
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
-    mock_client.get = AsyncMock(return_value=manifest_response)
-
-    with (
-        patch.object(updater, "VERSION_FILE", vf),
-        patch.object(updater, "MANIFEST_URL", "https://example.com/latest.json"),
-        patch("web.updater.httpx.AsyncClient", return_value=mock_client),
-    ):
-        updater._state.state = "idle"
-        result = await updater.check_for_update()
+    result = await _run_check(tmp_path, "1.0.9", _mock_checksums_client(CHECKSUMS))
 
     assert result is not None
     assert result.version == "1.1.0"
-    assert result.sha256 == "a" * 64
+    assert result.sha256 == SHA_B
+    assert result.url == WINDOWS_URL
     assert updater._state.state == "available"
+
+
+@pytest.mark.asyncio
+async def test_check_for_update_detects_double_digit_patch_release(tmp_path):
+    text = f"{SHA_B}  AI-Gator-1.0.10-Windows-x64.exe\n"
+
+    result = await _run_check(tmp_path, "1.0.9", _mock_checksums_client(text))
+
+    assert result is not None and result.version == "1.0.10"
+
+
+@pytest.mark.asyncio
+async def test_check_for_update_install_unsupported_until_signed_version(tmp_path):
+    result = await _run_check(tmp_path, "1.0.9", _mock_checksums_client(CHECKSUMS))
+    assert result.install_supported is False
+
+
+@pytest.mark.asyncio
+async def test_check_for_update_install_supported_from_first_signed_version(tmp_path):
+    result = await _run_check(tmp_path, "1.0.9", _mock_checksums_client(CHECKSUMS), first_signed="1.1.0")
+    assert result.install_supported is True
+
+
+@pytest.mark.asyncio
+async def test_check_for_update_install_unsupported_below_first_signed_version(tmp_path):
+    result = await _run_check(tmp_path, "1.0.9", _mock_checksums_client(CHECKSUMS), first_signed="1.2.0")
+    assert result.install_supported is False
 
 
 @pytest.mark.asyncio
 async def test_check_for_update_returns_none_when_current(tmp_path):
     import web.updater as updater
 
-    vf = tmp_path / "version.txt"
-    vf.write_text("1.1.0")
-
-    manifest_response = MagicMock()
-    manifest_response.raise_for_status = MagicMock()
-    manifest_response.json.return_value = {
-        "version": "1.1.0",
-        "url": "https://example.com/AIGatorInstaller.exe",
-        "notes": "",
-    }
-
-    mock_client = AsyncMock()
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
-    mock_client.get = AsyncMock(return_value=manifest_response)
-
-    with (
-        patch.object(updater, "VERSION_FILE", vf),
-        patch.object(updater, "MANIFEST_URL", "https://example.com/latest.json"),
-        patch("web.updater.httpx.AsyncClient", return_value=mock_client),
-    ):
-        updater._state.state = "idle"
-        result = await updater.check_for_update()
+    result = await _run_check(tmp_path, "1.1.0", _mock_checksums_client(CHECKSUMS))
 
     assert result is None
     assert updater._state.state == "up_to_date"
 
 
 @pytest.mark.asyncio
-async def test_check_for_update_silent_on_network_error(tmp_path):
+async def test_check_for_update_logs_and_stays_idle_on_network_error(tmp_path, caplog):
     import web.updater as updater
 
-    vf = tmp_path / "version.txt"
-    vf.write_text("1.0.0")
+    client = _mock_checksums_client(error=Exception("connection refused"))
+    with caplog.at_level("WARNING"):
+        result = await _run_check(tmp_path, "1.0.9", client)
 
-    mock_client = AsyncMock()
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
-    mock_client.get = AsyncMock(side_effect=Exception("connection refused"))
+    assert result is None
+    assert updater._state.state == "idle"
+    assert "Update check failed" in caplog.text
 
-    with (
-        patch.object(updater, "VERSION_FILE", vf),
-        patch.object(updater, "MANIFEST_URL", "https://example.com/latest.json"),
-        patch("web.updater.httpx.AsyncClient", return_value=mock_client),
-    ):
-        updater._state.state = "idle"
-        result = await updater.check_for_update()
+
+@pytest.mark.asyncio
+async def test_check_for_update_idle_when_release_has_no_windows_installer(tmp_path):
+    import web.updater as updater
+
+    text = f"{SHA_A}  AI-Gator-1.1.0-macOS-arm64.dmg\n"
+    result = await _run_check(tmp_path, "1.0.9", _mock_checksums_client(text))
 
     assert result is None
     assert updater._state.state == "idle"
 
 
 @pytest.mark.asyncio
-async def test_check_for_update_skipped_when_no_url(tmp_path):
+async def test_check_for_update_skipped_when_no_url():
     import web.updater as updater
 
-    with patch.object(updater, "MANIFEST_URL", ""):
+    with patch.object(updater, "CHECKSUMS_URL", ""):
         updater._state.state = "idle"
         result = await updater.check_for_update()
     assert result is None
@@ -133,69 +181,52 @@ async def test_check_for_update_skipped_when_no_url(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_check_for_update_rejects_untrusted_url(tmp_path):
+async def test_check_for_update_skipped_off_windows():
     import web.updater as updater
 
-    vf = tmp_path / "version.txt"
-    vf.write_text("1.0.0")
-
-    manifest_response = MagicMock()
-    manifest_response.raise_for_status = MagicMock()
-    manifest_response.json.return_value = {
-        "version": "1.1.0",
-        "url": "https://evil.example.com/AIGatorInstaller.exe",
-        "sha256": "a" * 64,
-        "notes": "",
-    }
-
-    mock_client = AsyncMock()
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
-    mock_client.get = AsyncMock(return_value=manifest_response)
-
-    with (
-        patch.object(updater, "VERSION_FILE", vf),
-        patch.object(updater, "MANIFEST_URL", "https://example.com/latest.json"),
-        patch("web.updater.httpx.AsyncClient", return_value=mock_client),
-    ):
-        updater._state.state = "idle"
-        result = await updater.check_for_update()
-
-    assert result is None
+    updater._state = updater._UpdateState()
+    with patch.object(updater.sys, "platform", "darwin"):
+        assert await updater.check_for_update() is None
     assert updater._state.state == "idle"
 
 
 @pytest.mark.asyncio
-async def test_check_for_update_rejects_url_version_mismatch(tmp_path):
+async def test_download_update_refused_when_install_unsupported():
     import web.updater as updater
 
-    vf = tmp_path / "version.txt"
-    vf.write_text("1.0.0")
+    updater._state = updater._UpdateState()
+    updater._state.info = updater.UpdateInfo(version="1.1.0", url=WINDOWS_URL, sha256=SHA_B, notes="")
 
-    manifest_response = MagicMock()
-    manifest_response.raise_for_status = MagicMock()
-    manifest_response.json.return_value = {
-        "version": "99.0.0",
-        "url": "https://github.com/mkflyamd/aigator-releases/releases/download/v1.0.5/AIGatorInstaller.exe",
-        "sha256": "a" * 64,
-        "notes": "",
-    }
+    await updater.download_update()
 
-    mock_client = AsyncMock()
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
-    mock_client.get = AsyncMock(return_value=manifest_response)
+    assert updater._state.state == "error"
+    assert "not available" in updater._state.error
 
-    with (
-        patch.object(updater, "VERSION_FILE", vf),
-        patch.object(updater, "MANIFEST_URL", "https://example.com/latest.json"),
-        patch("web.updater.httpx.AsyncClient", return_value=mock_client),
-    ):
-        updater._state.state = "idle"
-        result = await updater.check_for_update()
 
-    assert result is None
-    assert updater._state.state == "idle"
+def test_install_script_stops_app_then_runs_installer_silently():
+    import web.updater as updater
+
+    installer = "C:\\Temp\\O'Brien\\AIGatorInstaller.exe"
+    script = updater._install_script(installer, "C:\\Users\\x\\AppData\\Local\\Programs\\AI Gator")
+
+    assert "'C:\\Temp\\O''Brien\\AIGatorInstaller.exe'" in script
+    assert "'/S','--updated','--force-run'" in script
+    assert script.index("Stop-Process") < script.index("Start-Process")
+
+
+def test_launch_installer_refuses_when_not_packaged(tmp_path):
+    import web.updater as updater
+
+    installer = tmp_path / "AIGatorInstaller.exe"
+    installer.write_bytes(b"x")
+    updater._state = updater._UpdateState()
+    updater._state._installer_path = str(installer)
+
+    with patch("web.updater.subprocess.Popen") as popen:
+        updater.launch_installer()
+
+    popen.assert_not_called()
+    assert updater._state.state == "error"
 
 
 @pytest.mark.asyncio
@@ -209,9 +240,10 @@ async def test_download_update_wrong_signer_sets_error_and_removes_file(tmp_path
     updater._state = updater._UpdateState()
     updater._state.info = updater.UpdateInfo(
         version="1.1.0",
-        url="https://github.com/mkflyamd/aigator-releases/releases/download/v1.1.0/AIGatorInstaller.exe",
+        url="https://github.com/mkflyamd/aigator-releases/releases/download/v1.1.0/AI-Gator-1.1.0-Windows-x64.exe",
         sha256=expected_sha,
         notes="",
+        install_supported=True,
     )
 
     async def fake_aiter_bytes(chunk_size=65536):
@@ -258,9 +290,10 @@ async def test_download_update_invalid_signature_status_sets_error(tmp_path):
     updater._state = updater._UpdateState()
     updater._state.info = updater.UpdateInfo(
         version="1.1.0",
-        url="https://github.com/mkflyamd/aigator-releases/releases/download/v1.1.0/AIGatorInstaller.exe",
+        url="https://github.com/mkflyamd/aigator-releases/releases/download/v1.1.0/AI-Gator-1.1.0-Windows-x64.exe",
         sha256=expected_sha,
         notes="",
+        install_supported=True,
     )
 
     async def fake_aiter_bytes(chunk_size=65536):
@@ -307,9 +340,10 @@ async def test_download_update_valid_checksum_and_signature_sets_ready(tmp_path)
     updater._state = updater._UpdateState()
     updater._state.info = updater.UpdateInfo(
         version="1.1.0",
-        url="https://github.com/mkflyamd/aigator-releases/releases/download/v1.1.0/AIGatorInstaller.exe",
+        url="https://github.com/mkflyamd/aigator-releases/releases/download/v1.1.0/AI-Gator-1.1.0-Windows-x64.exe",
         sha256=expected_sha,
         notes="",
+        install_supported=True,
     )
 
     async def fake_aiter_bytes(chunk_size=65536):
@@ -382,9 +416,10 @@ async def test_download_update_checksum_mismatch_sets_error_and_removes_file(tmp
     updater._state = updater._UpdateState()
     updater._state.info = updater.UpdateInfo(
         version="1.1.0",
-        url="https://github.com/mkflyamd/aigator-releases/releases/download/v1.1.0/AIGatorInstaller.exe",
+        url="https://github.com/mkflyamd/aigator-releases/releases/download/v1.1.0/AI-Gator-1.1.0-Windows-x64.exe",
         sha256="0" * 64,
         notes="",
+        install_supported=True,
     )
 
     async def fake_aiter_bytes(chunk_size=65536):
@@ -413,36 +448,3 @@ async def test_download_update_checksum_mismatch_sets_error_and_removes_file(tmp
     assert updater._state.state == "error"
     assert updater._state.error == "checksum mismatch"
     assert not (tmp_path / "AIGatorInstaller.exe").exists()
-
-
-@pytest.mark.asyncio
-async def test_check_for_update_rejects_malformed_sha256(tmp_path):
-    import web.updater as updater
-
-    vf = tmp_path / "version.txt"
-    vf.write_text("1.0.0")
-
-    manifest_response = MagicMock()
-    manifest_response.raise_for_status = MagicMock()
-    manifest_response.json.return_value = {
-        "version": "1.1.0",
-        "url": "https://github.com/mkflyamd/aigator-releases/releases/download/v1.1.0/AIGatorInstaller.exe",
-        "sha256": "not-a-real-hash",
-        "notes": "",
-    }
-
-    mock_client = AsyncMock()
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
-    mock_client.get = AsyncMock(return_value=manifest_response)
-
-    with (
-        patch.object(updater, "VERSION_FILE", vf),
-        patch.object(updater, "MANIFEST_URL", "https://example.com/latest.json"),
-        patch("web.updater.httpx.AsyncClient", return_value=mock_client),
-    ):
-        updater._state.state = "idle"
-        result = await updater.check_for_update()
-
-    assert result is None
-    assert updater._state.state == "idle"

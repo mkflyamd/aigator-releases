@@ -17,6 +17,8 @@ def get_update_status():
         "notes": s.info.notes if s.info else None,
         "progress": s.progress,
         "error": s.error,
+        "install_supported": bool(s.info and s.info.install_supported),
+        "release_url": updater.RELEASE_PAGE_URL,
     }
 
 
@@ -26,6 +28,8 @@ async def start_download():
         return {"ok": False, "reason": "No update available"}
     if updater._state.info is None:
         return {"ok": False, "reason": "No update available"}
+    if not updater._state.info.install_supported:
+        return {"ok": False, "reason": "In-app install is not available for this release"}
     updater._state.state = "downloading"
     asyncio.create_task(updater.download_update())
     return {"ok": True}

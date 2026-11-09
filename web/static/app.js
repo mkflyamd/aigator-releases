@@ -17145,6 +17145,7 @@ document.addEventListener('DOMContentLoaded', _refreshUsageBar);
   // so the toast re-appears when the state transitions (e.g. downloading → ready).
   let _softDismissedState = null;
   let _installing = false;
+  let _autoInstall = false;
 
   function _btn(label, bgColor, onClick) {
     const b = document.createElement('button');
@@ -17217,12 +17218,25 @@ document.addEventListener('DOMContentLoaded', _refreshUsageBar);
 
     if (data.state === 'available') {
       toast.appendChild(_span('Update available \u2014 v' + (data.version || '')));
-      toast.appendChild(_btn('Download', '#89b4fa', _otaDownload));
+      if (data.install_supported) {
+        toast.appendChild(_btn('Install', '#a6e3a1', _otaInstallNow));
+      } else {
+        toast.appendChild(
+          _btn('Download', '#89b4fa', function () {
+            openExternal(data.release_url);
+          }),
+        );
+      }
       toast.appendChild(_xBtn(_otaDismiss));
     } else if (data.state === 'downloading') {
       toast.appendChild(_span('Downloading update\u2026 ' + (data.progress || 0) + '%'));
       toast.appendChild(_xBtn(_otaDismiss));
     } else if (data.state === 'ready') {
+      if (_autoInstall) {
+        _autoInstall = false;
+        _otaInstall();
+        return;
+      }
       toast.appendChild(_span('Update ready'));
       toast.appendChild(_btn('Install & Restart', '#a6e3a1', _otaInstall));
       toast.appendChild(_xBtn(_otaDismiss));
@@ -17252,6 +17266,14 @@ document.addEventListener('DOMContentLoaded', _refreshUsageBar);
     try {
       await fetch('/api/update/download', { method: 'POST' });
     } catch (_) {}
+  }
+
+  // One-click install: download, then install as soon as the download is verified.
+  async function _otaInstallNow() {
+    _autoInstall = true;
+    _lastState = 'downloading';
+    await _otaDownload();
+    _checkUpdate();
   }
 
   function _sleep(ms) {
@@ -17295,7 +17317,7 @@ document.addEventListener('DOMContentLoaded', _refreshUsageBar);
 
   async function _otaInstall() {
     _installing = true;
-    _setToastMessage('Updating\u2026 this can take up to a minute.');
+    _setToastMessage('Updating\u2026 this can take a few minutes.');
     try {
       fetch('/api/update/install', { method: 'POST' });
     } catch (_) {}
@@ -17307,7 +17329,7 @@ document.addEventListener('DOMContentLoaded', _refreshUsageBar);
       return;
     }
     _setToastMessage('Installing\u2026 reconnecting when ready.');
-    const cameBack = await _waitForServerUp(120000);
+    const cameBack = await _waitForServerUp(300000);
     if (cameBack) {
       // Clear OTA session flags so the post-restart page starts clean.
       sessionStorage.removeItem('ota-dismissed');
