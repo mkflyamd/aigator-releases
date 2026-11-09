@@ -84,6 +84,8 @@ def test_incomplete_grid_repeat_is_rejected(spec):
 def test_route_creates_an_unsent_draft_series_and_returns_its_link():
     gc = MagicMock()
     gc.post.return_value = {"id": "evt1", "webLink": "https://outlook.office365.com/owa/?itemid=evt1"}
+
+    gc.get.return_value = {"isDraft": True}
     with patch("skills._m365.helpers.get_cal_client", return_value=gc):
         res = _post(BODY)
     assert res.status_code == 200
@@ -103,6 +105,8 @@ def test_route_creates_an_unsent_draft_series_and_returns_its_link():
 def test_route_without_a_repeat_creates_a_one_time_draft_with_optional_attendees():
     gc = MagicMock()
     gc.post.return_value = {"id": "evt1", "webLink": "https://outlook.office365.com/owa/?itemid=evt1"}
+
+    gc.get.return_value = {"isDraft": True}
     with patch("skills._m365.helpers.get_cal_client", return_value=gc):
         res = _post({k: v for k, v in BODY.items() if k != "repeat"})
     assert res.status_code == 200
@@ -132,6 +136,8 @@ def test_route_tells_the_user_to_check_outlook_when_graph_fails():
 def test_route_carries_the_title_and_message_into_the_draft():
     gc = MagicMock()
     gc.post.return_value = {"id": "evt1", "webLink": "https://outlook.office365.com/owa/?itemid=evt1"}
+
+    gc.get.return_value = {"isDraft": True}
     with patch("skills._m365.helpers.get_cal_client", return_value=gc):
         res = _post({**BODY, "subject": "Design sync", "body": "Agenda: roadmap"})
     assert res.status_code == 200
@@ -144,6 +150,8 @@ def test_route_carries_the_title_and_message_into_the_draft():
 def test_route_sends_html_unless_the_message_was_edited_as_plain_text(plain, content_type):
     gc = MagicMock()
     gc.post.return_value = {"id": "evt1", "webLink": "https://outlook.office365.com/owa/?itemid=evt1"}
+
+    gc.get.return_value = {"isDraft": True}
     with patch("skills._m365.helpers.get_cal_client", return_value=gc):
         res = _post({**BODY, "body": "<p>Agenda</p>", "body_plain": plain})
     assert res.status_code == 200

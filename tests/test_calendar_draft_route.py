@@ -41,6 +41,8 @@ def test_open_with_an_optional_attendee_creates_a_draft_that_keeps_them_optional
     did = create_draft("calendar-event", dict(PARAMS), {"subject": "Sync & plan"})
     gc = MagicMock()
     gc.post.return_value = {"id": "evt1", "webLink": "https://outlook.office365.com/owa/?itemid=evt1"}
+
+    gc.get.return_value = {"isDraft": True}
     with patch("skills._m365.helpers.get_cal_client", return_value=gc):
         res = _post(client, f"/api/drafts/{did}/open-in-outlook")
     assert res.status_code == 200
@@ -102,6 +104,8 @@ def test_recurring_open_creates_a_draft_series_and_returns_its_web_link():
     did = _recurring_draft()
     gc = MagicMock()
     gc.post.return_value = {"id": "evt1", "webLink": "https://outlook.office365.com/owa/?itemid=evt1"}
+
+    gc.get.return_value = {"isDraft": True}
     with patch("skills._m365.helpers.get_cal_client", return_value=gc):
         res = _post(client, f"/api/drafts/{did}/open-in-outlook")
     assert res.status_code == 200
@@ -144,6 +148,8 @@ def test_approving_a_calendar_draft_creates_the_event_once():
     did = _draft()
     gc = MagicMock()
     gc.post.return_value = {"id": "evt1"}
+
+    gc.get.return_value = {"isDraft": True}
     with patch("skills._m365.helpers.get_cal_client", return_value=gc):
         res = _post(client, f"/api/drafts/{did}/approve")
     assert res.status_code == 200
@@ -197,6 +203,8 @@ def test_approving_applies_the_edited_title_and_message_as_plain_text():
     did = _draft()
     gc = MagicMock()
     gc.post.return_value = {"id": "evt1"}
+
+    gc.get.return_value = {"isDraft": True}
     edits = {"subject": "  Kickoff  ", "body": "Agenda <b>first</b>\nthen Q&A"}
     with patch("skills._m365.helpers.get_cal_client", return_value=gc):
         res = _post_edits(client, f"/api/drafts/{did}/approve", edits)
@@ -211,6 +219,8 @@ def test_approving_with_only_a_title_edit_leaves_the_message_untouched():
     did = _draft()
     gc = MagicMock()
     gc.post.return_value = {"id": "evt1"}
+
+    gc.get.return_value = {"isDraft": True}
     with patch("skills._m365.helpers.get_cal_client", return_value=gc):
         res = _post_edits(client, f"/api/drafts/{did}/approve", {"subject": "Kickoff"})
     assert res.status_code == 200
@@ -233,6 +243,8 @@ def test_open_in_outlook_series_uses_the_edited_title_and_message():
     did = _recurring_draft()
     gc = MagicMock()
     gc.post.return_value = {"id": "evt1", "webLink": "https://outlook.office365.com/owa/?itemid=evt1"}
+
+    gc.get.return_value = {"isDraft": True}
     with patch("skills._m365.helpers.get_cal_client", return_value=gc):
         res = _post_edits(client, f"/api/drafts/{did}/open-in-outlook", {"subject": "Kickoff", "body": "Hello"})
     assert res.status_code == 200

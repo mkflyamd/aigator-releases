@@ -256,4 +256,3 @@ class TestRecurringMeetingHeldAsDraft:
         from skills._drafts import get_draft
 
         assert get_draft(draft_id)["status"] == "handed_off"
-
