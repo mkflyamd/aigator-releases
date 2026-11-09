@@ -32,30 +32,32 @@ Spec: `docs/superpowers/specs/2026-11-05-availability-grid-zones-title-reopen-de
 
 ## File Structure
 
-| File | Change |
-|---|---|
-| `web/skills/calendar/tools.py` | `show_availability_grid` schema and function gain `subject`, `body`; grid people get `timezone`; `_tool_load_availability_days` gains `with_zones` |
-| `web/routes/calendar.py` | `AvailabilityDaysRequest.zones`; `GridSeriesRequest.subject/body`; new `POST /api/calendar/slot-zones` |
-| `shell/main.js` | `outlook-pane:open-compose-window` sends `outlook-pane:compose-closed` |
-| `shell/preload.js` | `onOutlookComposeClosed(callback)` returning an unsubscribe function |
-| `web/static/app.js` | pure helpers, grid Title/Message/zone lines/reopen, draft card reopen |
-| `web/static/style.css` | `.ag-details`, `.ag-chosen-box`, `.ag-zones` |
-| `web/tests/test_availability_grid.py` | zone and subject/body tests |
-| `tests/test_grid_slot_zones.py` (new) | slot-zones route and availability-days `zones` flag |
-| `tests/test_grid_draft_series.py` | subject/body reach the Graph event |
-| `tests/outlook_standalone_nav.test.js` | close IPC and preload asserts |
-| `tests/availability_grid_card.test.js` | helper tests and source asserts for the grid |
-| `tests/calendar_draft_card.test.js` | reopen asserts; open-handler assert moves to the helper |
+| File                                   | Change                                                                                                                                             |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `web/skills/calendar/tools.py`         | `show_availability_grid` schema and function gain `subject`, `body`; grid people get `timezone`; `_tool_load_availability_days` gains `with_zones` |
+| `web/routes/calendar.py`               | `AvailabilityDaysRequest.zones`; `GridSeriesRequest.subject/body`; new `POST /api/calendar/slot-zones`                                             |
+| `shell/main.js`                        | `outlook-pane:open-compose-window` sends `outlook-pane:compose-closed`                                                                             |
+| `shell/preload.js`                     | `onOutlookComposeClosed(callback)` returning an unsubscribe function                                                                               |
+| `web/static/app.js`                    | pure helpers, grid Title/Message/zone lines/reopen, draft card reopen                                                                              |
+| `web/static/style.css`                 | `.ag-details`, `.ag-chosen-box`, `.ag-zones`                                                                                                       |
+| `web/tests/test_availability_grid.py`  | zone and subject/body tests                                                                                                                        |
+| `tests/test_grid_slot_zones.py` (new)  | slot-zones route and availability-days `zones` flag                                                                                                |
+| `tests/test_grid_draft_series.py`      | subject/body reach the Graph event                                                                                                                 |
+| `tests/outlook_standalone_nav.test.js` | close IPC and preload asserts                                                                                                                      |
+| `tests/availability_grid_card.test.js` | helper tests and source asserts for the grid                                                                                                       |
+| `tests/calendar_draft_card.test.js`    | reopen asserts; open-handler assert moves to the helper                                                                                            |
 
 ---
 
 ### Task 1: Server puts time zones, Title and Message on the grid payload
 
 **Files:**
+
 - Modify: `web/skills/calendar/tools.py` (schema ~273-302, `_tool_load_availability_days` ~789-818, `_tool_show_availability_grid` ~824-871)
 - Test: `web/tests/test_availability_grid.py`
 
 **Interfaces:**
+
 - Consumes: `timezones.attendee_zones(gc, emails, day, win_tz) -> {email_lower: {"timezone": str, "working_hours": str}}` (already exists in `web/skills/calendar/timezones.py`).
 - Produces: `grid.people[i].timezone` (Windows zone name, present only when known; never on "You"); `grid.subject`, `grid.body` (strings, `""` when not given); `_tool_load_availability_days(emails, after_date="", duration_minutes=30, count=10, dates=None, with_zones=False)` returns `{"days": [...], "zones": {email: zone_name}}` when `with_zones` is true, else only `{"days": [...]}`.
 
@@ -244,11 +246,13 @@ git commit -m "feat: availability grid carries attendee time zones and an option
 ### Task 2: Server routes: slot-zones, availability-days zones flag, grid-draft-series subject and body
 
 **Files:**
+
 - Modify: `web/routes/calendar.py` (`AvailabilityDaysRequest` ~23, `GridSeriesRequest` ~139, `tp_calendar_grid_draft_series` ~205-236, `tp_calendar_availability_days` ~239-256)
 - Create: `tests/test_grid_slot_zones.py`
 - Test: `tests/test_grid_draft_series.py`
 
 **Interfaces:**
+
 - Consumes: `timezones.fmt_range(start, end, from_tz, to_tz) -> str | None`; `_tool_load_availability_days(..., with_zones)` from Task 1.
 - Produces:
   - `POST /api/calendar/slot-zones`, body `{start, end, timezone, zones: {email: zone_name}}`, returns a JSON list `[{"label": "11:00 AM – 11:30 AM CST", "people": [email, ...]}]` in first-appearance order. The grid's own line and unknown zones are omitted. `people` holds the request's email keys; the client maps them to display names.
@@ -429,10 +433,12 @@ git commit -m "feat: slot-zones route and title and message on grid draft series
 ### Task 3: Shell tells the renderer when the compose window closes
 
 **Files:**
+
 - Modify: `shell/main.js` (~4628-4651), `shell/preload.js` (after line 34)
 - Test: `tests/outlook_standalone_nav.test.js` (~183-190)
 
 **Interfaces:**
+
 - Produces: IPC event `outlook-pane:compose-closed` with the original URL string, sent to the window that called `outlook-pane:open-compose-window`. `window.gatorShell.onOutlookComposeClosed(callback)` calls `callback(url)` for each close and returns a function that unsubscribes.
 
 - [ ] **Step 1: Write the failing test**
@@ -440,21 +446,21 @@ git commit -m "feat: slot-zones route and title and message on grid draft series
 In `tests/outlook_standalone_nav.test.js`, after the existing `assert(/_confirmLeaveOutlookPage\(e, compose\)/...)` line and before `const preload = ...`, add the popout assert; after the existing preload `openOutlookCompose` assert, add the preload asserts:
 
 ```js
-  assert(
-    /compose\.on\('closed'[\s\S]*?\.send\('outlook-pane:compose-closed', String\(url\)\)/.test(
-      popout[0],
-    ),
-    'tells the opener when the compose window closes',
-  );
+assert(
+  /compose\.on\('closed'[\s\S]*?\.send\('outlook-pane:compose-closed', String\(url\)\)/.test(
+    popout[0],
+  ),
+  'tells the opener when the compose window closes',
+);
 ```
 
 ```js
-  assert(
-    /onOutlookComposeClosed:[\s\S]*?ipcRenderer\.on\('outlook-pane:compose-closed'[\s\S]*?ipcRenderer\.removeListener\('outlook-pane:compose-closed'/.test(
-      preload,
-    ),
-    'preload exposes a subscription that can be removed',
-  );
+assert(
+  /onOutlookComposeClosed:[\s\S]*?ipcRenderer\.on\('outlook-pane:compose-closed'[\s\S]*?ipcRenderer\.removeListener\('outlook-pane:compose-closed'/.test(
+    preload,
+  ),
+  'preload exposes a subscription that can be removed',
+);
 ```
 
 - [ ] **Step 2: Run the test to verify it fails**
@@ -467,10 +473,10 @@ Expected: FAIL with `tells the opener when the compose window closes`.
 In `shell/main.js`, change the handler signature `(_e, url)` to `(event, url)` and add the close hook just before `compose.loadURL(String(url));`:
 
 ```js
-  const opener = event.sender;
-  compose.on('closed', () => {
-    if (!opener.isDestroyed()) opener.send('outlook-pane:compose-closed', String(url));
-  });
+const opener = event.sender;
+compose.on('closed', () => {
+  if (!opener.isDestroyed()) opener.send('outlook-pane:compose-closed', String(url));
+});
 ```
 
 In `shell/preload.js`, after the `openOutlookCompose` line add:
@@ -501,10 +507,12 @@ git commit -m "feat: shell reports when the Outlook compose window closes"
 ### Task 4: Pure JS helpers
 
 **Files:**
+
 - Modify: `web/static/app.js` (helpers near `_availabilityGridComposeUrl` ~10251 and `_availabilityGridAttendeeText` ~10283)
 - Test: `tests/availability_grid_card.test.js`
 
 **Interfaces:**
+
 - Produces (top-level functions in `app.js`):
   - `_availabilityGridComposeUrl(grid, dayIndex, slotIndex, details)`: same as today; `details` is optional `{subject, body}`, which become `subject` and `body` query parameters when non-empty.
   - `_availabilityGridDetailsText(details) -> string`: `" Meeting title: X."` and/or `" Meeting message: Y"` (no trailing period after the message), `""` when both are empty.
@@ -614,7 +622,9 @@ Add after `_availabilityGridAttendeeText`:
 function _availabilityGridDetailsText(details) {
   const subject = String((details && details.subject) || '').trim();
   const message = String((details && details.body) || '').trim();
-  return (subject ? ` Meeting title: ${subject}.` : '') + (message ? ` Meeting message: ${message}` : '');
+  return (
+    (subject ? ` Meeting title: ${subject}.` : '') + (message ? ` Meeting message: ${message}` : '')
+  );
 }
 
 function _availabilityGridZoneLines(zones, grid) {
@@ -658,10 +668,12 @@ git commit -m "feat: grid helpers for compose details, zone lines, and the Outlo
 ### Task 5: Grid card UI: Title and Message, zone lines, reopen
 
 **Files:**
+
 - Modify: `web/static/app.js` (`_showAvailabilityGrid` ~10705-11333), `web/static/style.css` (near `.ag-chosen` ~6593)
 - Test: `tests/availability_grid_card.test.js` (source asserts)
 
 **Interfaces:**
+
 - Consumes: Task 4 helpers; `_jiraEditRow(name, label, value, kind)` and `_jiraEditSeed`; `POST /api/calendar/slot-zones`; `POST /api/calendar/availability-days` with `zones: true`; `POST /api/calendar/grid-draft-series` with `subject`/`body`; `window.gatorShell.openOutlookCompose`.
 - Produces: the grid card behaviour described in the spec sections 1-3.
 
@@ -716,62 +728,62 @@ Expected: FAIL with `the grid has Title and Message boxes`.
 (a) Immediately before `const footer = document.createElement('div');` (~line 10965) add the fields and shared state:
 
 ```js
-  const details = document.createElement('div');
-  details.className = 'ag-details';
-  details.innerHTML =
-    _jiraEditRow('subject', 'Title', grid.subject || '', 'line') +
-    _jiraEditRow('body', 'Message', grid.body || '', 'text');
-  const detailFields = [...details.querySelectorAll('[data-jira-edit]')];
-  const detailValues = () => ({
-    subject: details.querySelector('[data-jira-edit="subject"]').value.trim(),
-    body: details.querySelector('[data-jira-edit="body"]').value.trim(),
-  });
-  let openedUrl = '';
-  let zoneSeq = 0;
-  const SAME_INVITE_NOTE =
-    "Opens a new invite. If you already sent it in Outlook, don't send it again.";
+const details = document.createElement('div');
+details.className = 'ag-details';
+details.innerHTML =
+  _jiraEditRow('subject', 'Title', grid.subject || '', 'line') +
+  _jiraEditRow('body', 'Message', grid.body || '', 'text');
+const detailFields = [...details.querySelectorAll('[data-jira-edit]')];
+const detailValues = () => ({
+  subject: details.querySelector('[data-jira-edit="subject"]').value.trim(),
+  body: details.querySelector('[data-jira-edit="body"]').value.trim(),
+});
+let openedUrl = '';
+let zoneSeq = 0;
+const SAME_INVITE_NOTE =
+  "Opens a new invite. If you already sent it in Outlook, don't send it again.";
 ```
 
 (b) Replace `footer.append(chosen, actions);` with:
 
 ```js
-  const chosenBox = document.createElement('div');
-  chosenBox.className = 'ag-chosen-box';
-  const zoneBox = document.createElement('div');
-  zoneBox.className = 'ag-zones';
-  chosenBox.append(chosen, zoneBox);
-  footer.append(chosenBox, actions);
+const chosenBox = document.createElement('div');
+chosenBox.className = 'ag-chosen-box';
+const zoneBox = document.createElement('div');
+zoneBox.className = 'ag-zones';
+chosenBox.append(chosen, zoneBox);
+footer.append(chosenBox, actions);
 ```
 
 (c) Add the zone loader next to `pick()` and call it at the end of `pick()` (after `syncOutlookLink();`), and clear it in `refresh()`'s "picked cleared" branch:
 
 ```js
-  async function showZones(di, k) {
-    const mine = ++zoneSeq;
-    zoneBox.replaceChildren();
-    const zones = {};
-    grid.people.forEach((p) => {
-      if (!p.you && p.email && p.timezone) zones[p.email] = p.timezone;
+async function showZones(di, k) {
+  const mine = ++zoneSeq;
+  zoneBox.replaceChildren();
+  const zones = {};
+  grid.people.forEach((p) => {
+    if (!p.you && p.email && p.timezone) zones[p.email] = p.timezone;
+  });
+  if (!Object.keys(zones).length) return;
+  try {
+    const slot = _availabilityGridSlotTimes(grid, di, k);
+    const lines = await postGridJson('/api/calendar/slot-zones', {
+      start: slot.start,
+      end: slot.end,
+      timezone: grid.timezone,
+      zones,
     });
-    if (!Object.keys(zones).length) return;
-    try {
-      const slot = _availabilityGridSlotTimes(grid, di, k);
-      const lines = await postGridJson('/api/calendar/slot-zones', {
-        start: slot.start,
-        end: slot.end,
-        timezone: grid.timezone,
-        zones,
-      });
-      if (mine !== zoneSeq) return;
-      _availabilityGridZoneLines(lines, grid).forEach((text) => {
-        const line = document.createElement('div');
-        line.textContent = text;
-        zoneBox.appendChild(line);
-      });
-    } catch {
-      // The zone lines are a convenience; the chosen time above still shows.
-    }
+    if (mine !== zoneSeq) return;
+    _availabilityGridZoneLines(lines, grid).forEach((text) => {
+      const line = document.createElement('div');
+      line.textContent = text;
+      zoneBox.appendChild(line);
+    });
+  } catch {
+    // The zone lines are a convenience; the chosen time above still shows.
   }
+}
 ```
 
 In `pick()` add `showZones(di, k);` as the last statement. In `refresh()`'s else-branch (where `picked = null;`) add `zoneSeq++; zoneBox.replaceChildren();`.
@@ -779,89 +791,89 @@ In `pick()` add `showZones(di, k);` as the last statement. In `refresh()`'s else
 (d) In `syncOutlookLink()` add at the top (after `const repeating = ...`):
 
 ```js
-    openedUrl = '';
-    detailFields.forEach((el) => (el.disabled = false));
+openedUrl = '';
+detailFields.forEach((el) => (el.disabled = false));
 ```
 
 (e) Add the open helpers right after `syncOutlookLink()` / the `repeat.addEventListener('change', ...)` block:
 
 ```js
-  function showOpened(url) {
-    openedUrl = url;
-    detailFields.forEach((el) => (el.disabled = true));
-    openOutlook.disabled = true;
-    openOutlook.textContent = 'Opened in Outlook ↗';
-    openOutlook.classList.add('gcc-handed-off');
-    _watchOutlookComposeClosed(url, () => {
-      if (openedUrl !== url) return;
-      openOutlook.disabled = false;
-      openOutlook.textContent = 'Open in Outlook ↗';
-      openOutlook.classList.remove('gcc-handed-off');
-      openOutlook.title = url.includes('/deeplink/compose')
-        ? SAME_INVITE_NOTE
-        : 'Opens the draft you already created in Outlook';
-    });
-  }
+function showOpened(url) {
+  openedUrl = url;
+  detailFields.forEach((el) => (el.disabled = true));
+  openOutlook.disabled = true;
+  openOutlook.textContent = 'Opened in Outlook ↗';
+  openOutlook.classList.add('gcc-handed-off');
+  _watchOutlookComposeClosed(url, () => {
+    if (openedUrl !== url) return;
+    openOutlook.disabled = false;
+    openOutlook.textContent = 'Open in Outlook ↗';
+    openOutlook.classList.remove('gcc-handed-off');
+    openOutlook.title = url.includes('/deeplink/compose')
+      ? SAME_INVITE_NOTE
+      : 'Opens the draft you already created in Outlook';
+  });
+}
 
-  async function launchOutlook(url) {
-    openedUrl = url;
-    if (typeof window.gatorShell !== 'undefined' && window.gatorShell.openOutlookCompose) {
-      await window.gatorShell.openOutlookCompose(url);
-    } else {
-      window.open(url, '_blank', 'noopener');
-    }
-    showOpened(url);
+async function launchOutlook(url) {
+  openedUrl = url;
+  if (typeof window.gatorShell !== 'undefined' && window.gatorShell.openOutlookCompose) {
+    await window.gatorShell.openOutlookCompose(url);
+  } else {
+    window.open(url, '_blank', 'noopener');
   }
+  showOpened(url);
+}
 ```
 
 (f) Replace the whole `openOutlook.addEventListener('click', ...)` handler with:
 
 ```js
-  openOutlook.addEventListener('click', async (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (!pickedAt || openOutlook.disabled) return;
-    if (openedUrl) {
-      openOutlook.disabled = true;
-      try {
-        await launchOutlook(openedUrl);
-      } catch (err) {
-        openOutlook.disabled = false;
-        _showConnectivityToast("Couldn't open in Outlook: " + (err?.message || err), 'warn');
-      }
-      return;
-    }
-    let url;
+openOutlook.addEventListener('click', async (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  if (!pickedAt || openOutlook.disabled) return;
+  if (openedUrl) {
+    openOutlook.disabled = true;
     try {
-      const others = grid.people.filter((p) => !p.you && p.email);
-      const repeating = repeat.value !== 'none';
-      if (!repeating && !others.some((p) => p.optional)) {
-        url = _availabilityGridComposeUrl(grid, pickedAt.di, pickedAt.k, detailValues());
-      } else {
-        openOutlook.disabled = true;
-        openOutlook.textContent = repeating ? 'Creating the draft series…' : 'Creating the draft…';
-        const slot = _availabilityGridSlotTimes(grid, pickedAt.di, pickedAt.k);
-        const firstDate = repeating ? panel.first() : grid.days[pickedAt.di].date;
-        ({ url } = await postGridJson('/api/calendar/grid-draft-series', {
-          start: firstDate + slot.start.slice(10),
-          end: firstDate + slot.end.slice(10),
-          timezone: grid.timezone,
-          attendees: others.filter((p) => !p.optional).map((p) => p.email),
-          optional_attendees: others.filter((p) => p.optional).map((p) => p.email),
-          repeat: repeating ? panel.spec() : null,
-          ...detailValues(),
-        }));
-      }
-      await launchOutlook(url);
+      await launchOutlook(openedUrl);
     } catch (err) {
-      if (!url) syncOutlookLink();
-      else {
-        openOutlook.disabled = false;
-        openOutlook.textContent = 'Open in Outlook ↗';
-      }
+      openOutlook.disabled = false;
       _showConnectivityToast("Couldn't open in Outlook: " + (err?.message || err), 'warn');
     }
-  });
+    return;
+  }
+  let url;
+  try {
+    const others = grid.people.filter((p) => !p.you && p.email);
+    const repeating = repeat.value !== 'none';
+    if (!repeating && !others.some((p) => p.optional)) {
+      url = _availabilityGridComposeUrl(grid, pickedAt.di, pickedAt.k, detailValues());
+    } else {
+      openOutlook.disabled = true;
+      openOutlook.textContent = repeating ? 'Creating the draft series…' : 'Creating the draft…';
+      const slot = _availabilityGridSlotTimes(grid, pickedAt.di, pickedAt.k);
+      const firstDate = repeating ? panel.first() : grid.days[pickedAt.di].date;
+      ({ url } = await postGridJson('/api/calendar/grid-draft-series', {
+        start: firstDate + slot.start.slice(10),
+        end: firstDate + slot.end.slice(10),
+        timezone: grid.timezone,
+        attendees: others.filter((p) => !p.optional).map((p) => p.email),
+        optional_attendees: others.filter((p) => p.optional).map((p) => p.email),
+        repeat: repeating ? panel.spec() : null,
+        ...detailValues(),
+      }));
+    }
+    await launchOutlook(url);
+  } catch (err) {
+    if (!url) syncOutlookLink();
+    else {
+      openOutlook.disabled = false;
+      openOutlook.textContent = 'Open in Outlook ↗';
+    }
+    _showConnectivityToast("Couldn't open in Outlook: " + (err?.message || err), 'warn');
+  }
+});
 ```
 
 (g) In the `use` click handler, append the details to the end of `reply`:
@@ -874,21 +886,27 @@ In `pick()` add `showZones(di, k);` as the last statement. In `refresh()`'s else
 (h) In `addPerson`, replace the `postAvailability` call so it also asks for the zone, and store it:
 
 ```js
-        const dates = grid.days.map((d) => d.date);
-        const result = await postGridJson('/api/calendar/availability-days', {
-          duration_minutes: grid.duration_minutes,
-          emails: [email],
-          dates,
-          zones: true,
-        });
-        const days = result.days;
+const dates = grid.days.map((d) => d.date);
+const result = await postGridJson('/api/calendar/availability-days', {
+  duration_minutes: grid.duration_minutes,
+  emails: [email],
+  dates,
+  zones: true,
+});
+const days = result.days;
 ```
 
 and replace the `grid.people.push(...)` line with:
 
 ```js
-        const timezone = result.zones && result.zones[email];
-        grid.people.push({ name: label, email, you: false, optional: false, ...(timezone ? { timezone } : {}) });
+const timezone = result.zones && result.zones[email];
+grid.people.push({
+  name: label,
+  email,
+  you: false,
+  optional: false,
+  ...(timezone ? { timezone } : {}),
+});
 ```
 
 (i) Change the final append to place the fields above the footer: `body.append(panel.el, people, scroll, details, footer);`
@@ -919,12 +937,13 @@ Expected: both exit 0.
 - [ ] **Step 5: Try it in the browser**
 
 Start the app (`dev.ps1` or the repo's normal dev start), ask the agent to "find a time with <two colleagues in different zones>", and check on the grid card:
+
 1. Title and Message boxes sit above the footer, pre-filled when the agent supplied them.
 2. Picking a slot shows one line per other zone under the chosen-slot text; adding a person via "+ Add person" gives them a zone line on the next pick.
 3. Open in Outlook (one-off) opens a compose window with title and message filled in; the button reads "Opened in Outlook ↗" and is disabled; after closing the window it reads "Open in Outlook ↗", the tooltip carries the new-invite note, and a click reopens it.
 4. With a repeat or an optional attendee: one draft is created; closing the window and clicking again reopens the same draft, and no second draft appears in Outlook.
 5. Picking a different slot resets the button and unlocks Title and Message.
-Check the browser console for errors. If the shell is not available, say so; do not claim the close signal was tested.
+   Check the browser console for errors. If the shell is not available, say so; do not claim the close signal was tested.
 
 - [ ] **Step 6: Commit**
 
@@ -939,10 +958,12 @@ git commit -m "feat: availability grid shows attendee time zones, has Title and 
 ### Task 6: Calendar draft card reopens after the Outlook window closes
 
 **Files:**
+
 - Modify: `web/static/app.js` (`openCalendarBtn` block ~12490-12546)
 - Test: `tests/calendar_draft_card.test.js` (~139-141)
 
 **Interfaces:**
+
 - Consumes: `_watchOutlookComposeClosed(url, onClosed)` from Task 4; `config.openLabel`; `canOpenNativeApp`; `jiraEditFields`; `approveBtn`.
 - Produces: after the first successful hand-off the button reopens the stored URL with no server call; Send invite stays disabled.
 
@@ -981,48 +1002,48 @@ Expected: FAIL with `opens the popout window`.
 In `web/static/app.js`, inside `if (openCalendarBtn) {`, add before the `openCalendarBtn.addEventListener('click', ...)` line:
 
 ```js
-    let handedOffUrl = '';
-    const reopenReady = () => {
-      openCalendarBtn.disabled = false;
-      openCalendarBtn.textContent = config.openLabel + ' ↗';
-      openCalendarBtn.classList.remove('gcc-handed-off');
-      openCalendarBtn.title = handedOffUrl.includes('/deeplink/compose')
-        ? "Opens a new invite. If you already sent it in Outlook, don't send it again."
-        : 'Opens the draft you already created in Outlook';
-    };
-    async function openInOutlookWindow(url) {
-      if (canOpenNativeApp && window.gatorShell.openOutlookCompose) {
-        await window.gatorShell.openOutlookCompose(url);
-      } else {
-        window.open(url, '_blank', 'noopener');
-      }
-      openCalendarBtn.textContent = 'Opened in Outlook ↗';
-      openCalendarBtn.classList.add('gcc-handed-off');
-      _watchOutlookComposeClosed(url, reopenReady);
-    }
+let handedOffUrl = '';
+const reopenReady = () => {
+  openCalendarBtn.disabled = false;
+  openCalendarBtn.textContent = config.openLabel + ' ↗';
+  openCalendarBtn.classList.remove('gcc-handed-off');
+  openCalendarBtn.title = handedOffUrl.includes('/deeplink/compose')
+    ? "Opens a new invite. If you already sent it in Outlook, don't send it again."
+    : 'Opens the draft you already created in Outlook';
+};
+async function openInOutlookWindow(url) {
+  if (canOpenNativeApp && window.gatorShell.openOutlookCompose) {
+    await window.gatorShell.openOutlookCompose(url);
+  } else {
+    window.open(url, '_blank', 'noopener');
+  }
+  openCalendarBtn.textContent = 'Opened in Outlook ↗';
+  openCalendarBtn.classList.add('gcc-handed-off');
+  _watchOutlookComposeClosed(url, reopenReady);
+}
 ```
 
 At the top of the click handler, before `openCalendarBtn.disabled = true;`, add:
 
 ```js
-      if (handedOffUrl) {
-        openCalendarBtn.disabled = true;
-        try {
-          await openInOutlookWindow(handedOffUrl);
-        } catch (err) {
-          reopenReady();
-          _showConnectivityToast("Couldn't open in Outlook: " + (err?.message || err), 'warn');
-        }
-        return;
-      }
+if (handedOffUrl) {
+  openCalendarBtn.disabled = true;
+  try {
+    await openInOutlookWindow(handedOffUrl);
+  } catch (err) {
+    reopenReady();
+    _showConnectivityToast("Couldn't open in Outlook: " + (err?.message || err), 'warn');
+  }
+  return;
+}
 ```
 
 Replace the block from `const { url } = await res.json();` through `openCalendarBtn.classList.add('gcc-handed-off');` with:
 
 ```js
-        const { url } = await res.json();
-        handedOffUrl = url;
-        await openInOutlookWindow(url);
+const { url } = await res.json();
+handedOffUrl = url;
+await openInOutlookWindow(url);
 ```
 
 Leave the lines that follow (`jiraEditFields.forEach(... disabled = true)`, `approveBtn.disabled = true`, `approveBtn.classList.add('gcc-handed-off')`, the `refine` note) unchanged. In the existing `catch`, the first-click failure path keeps its current behaviour except it must not discard the stored URL: leave `openCalendarBtn.textContent = config.openLabel; openCalendarBtn.disabled = false;` as is (a later click then reopens the stored URL if the server already handed off, or asks the server again if it had not).
@@ -1057,6 +1078,7 @@ python -m pytest web/tests tests -q -x
 npm --prefix shell test
 npx prettier --check web/static/app.js web/static/style.css shell/main.js shell/preload.js tests/availability_grid_card.test.js tests/calendar_draft_card.test.js tests/outlook_standalone_nav.test.js
 ```
+
 Expected: all pass. Fix any failure at its cause (for example a test that counted `getSchedule` calls on the grid tool), then re-run.
 
 - [ ] **Step 2: Spec coverage check**
