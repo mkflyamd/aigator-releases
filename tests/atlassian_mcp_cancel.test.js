@@ -123,6 +123,7 @@ const tick = (ms = 20) => new Promise((r) => setTimeout(r, ms));
       if (url.includes('oauth/start'))
         return json({ authorize_url: 'https://auth', state: 's1', provider_id: 'p1' });
       if (url.includes('oauth/poll')) return json({ status: 'done', ok: true });
+      if (url === '/api/config/mcp' && !opts.method) return json({ connections: [] });
       if (url === '/api/config/mcp')
         return new Promise(
           (resolve) =>
@@ -133,14 +134,12 @@ const tick = (ms = 20) => new Promise((r) => setTimeout(r, ms));
     });
     env.button.listeners.click();
     await tick(40);
-    assert(
-      calls.some((c) => c.url === '/api/config/mcp'),
-      'save started',
-    );
+    const save = calls.find((c) => c.url === '/api/config/mcp' && c.opts.method === 'POST');
+    assert(save, 'save started');
     assert.strictEqual(cancelOf(env), null, '× is not offered while saving');
     assert.strictEqual(env.button.disabled, true);
-    const save = calls.find((c) => c.url === '/api/config/mcp');
     assert.strictEqual(save.opts.signal, undefined, 'save request cannot be aborted');
+    assert.strictEqual(JSON.parse(save.opts.body).name, 'Atlassian MCP');
     finishSave();
     await tick(40);
     assert(env.atlassianMsg.textContent.startsWith('Connected.'));
