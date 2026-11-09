@@ -12,6 +12,14 @@ class NoAttendeesError(ValueError):
     pass
 
 
+class NotHeldAsDraftError(RuntimeError):
+    """Graph created the event but did not keep it as an unsent draft, so invites may have gone out."""
+
+    def __init__(self, event: dict):
+        super().__init__("The meeting was created but is not an unsent draft")
+        self.event = event
+
+
 def event_payload(params: dict) -> dict:
     tz = params.get("timezone", "")
     event: dict = {
@@ -45,9 +53,19 @@ def create_event(event: dict, *, deliver: bool = False) -> dict:
     from skills._m365.helpers import get_cal_client
 
     body = dict(event)
-    if body.get("attendees") and not deliver:
+    hold = bool(body.get("attendees")) and not deliver
+    if hold:
         body["isDraft"] = True
-    return get_cal_client().post("/me/events", body)
+    gc = get_cal_client()
+    created = gc.post("/me/events", body)
+    if hold:
+        try:
+            saved = gc.get(f"/me/events/{(created or {}).get('id', '')}", params={"$select": "isDraft"})
+        except Exception:
+            saved = None
+        if (saved or {}).get("isDraft") is not True:
+            raise NotHeldAsDraftError(created or {})
+    return created
 
 
 def create_meeting(params: dict, *, deliver: bool = False) -> dict:

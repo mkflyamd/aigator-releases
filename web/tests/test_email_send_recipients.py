@@ -208,3 +208,52 @@ class TestRecurringMeetingWithoutAttendees:
         from skills._drafts import get_draft
 
         assert get_draft(draft_id)["status"] == "pending", "the card can still be used"
+
+
+class TestRecurringMeetingHeldAsDraft:
+    def _recurring(self):
+        return create_draft(
+            "calendar-event",
+            {
+                "subject": "Weekly sync",
+                "start": "2026-11-09T09:00:00",
+                "end": "2026-11-09T10:00:00",
+                "timezone": "UTC",
+                "attendees": ["ann@amd.com"],
+                "recurrence": {
+                    "pattern": {"type": "weekly", "interval": 1, "daysOfWeek": ["monday"]},
+                    "range": {"type": "noEnd", "startDate": "2026-11-09"},
+                },
+            },
+            {},
+        )
+
+    def test_a_held_draft_opens_from_its_web_link(self):
+        gc = MagicMock()
+        gc.post.return_value = {"id": "evt", "webLink": "https://outlook.office.com/calendar/item/evt"}
+        gc.get.return_value = {"isDraft": True}
+        draft_id = self._recurring()
+        with patch("skills._m365.helpers.get_cal_client", return_value=gc):
+            r = _post(TestClient(app), draft_id, "open-in-outlook")
+        assert r.status_code == 200, r.text
+        assert r.json()["url"] == "https://outlook.office.com/calendar/item/evt"
+        assert gc.post.call_args.args[1]["isDraft"] is True
+
+    def test_a_meeting_not_held_as_a_draft_is_not_opened_and_cannot_be_created_again(self):
+        gc = MagicMock()
+        gc.post.return_value = {"id": "evt", "webLink": "https://outlook.office.com/calendar/item/evt"}
+        gc.get.return_value = {"isDraft": False}
+        draft_id = self._recurring()
+        client = TestClient(app)
+        with patch("skills._m365.helpers.get_cal_client", return_value=gc):
+            r = _post(client, draft_id, "open-in-outlook")
+            again = _post(client, draft_id, "open-in-outlook")
+        assert r.status_code == 502, r.text
+        assert "invites may have gone out" in r.json()["detail"]
+        assert "outlook.office.com" not in r.text
+        assert again.status_code != 200
+        assert gc.post.call_count == 1, "the retry created no second event"
+        from skills._drafts import get_draft
+
+        assert get_draft(draft_id)["status"] == "handed_off"
+

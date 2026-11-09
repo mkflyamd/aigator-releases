@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from skills.calendar.events import NoAttendeesError, create_event, create_meeting
+from skills.calendar.events import NoAttendeesError, NotHeldAsDraftError, create_event, create_meeting
 
 WEB = Path(__file__).resolve().parent.parent
 SERVICE = WEB / "skills" / "calendar" / "events.py"
@@ -35,6 +35,7 @@ def test_only_the_calendar_events_service_posts_to_me_events():
 def _post(**kw):
     gc = MagicMock()
     gc.post.return_value = {"id": "evt"}
+    gc.get.return_value = {"isDraft": True}
     with patch("skills._m365.helpers.get_cal_client", return_value=gc):
         create_meeting(PARAMS, **kw)
     path, event = gc.post.call_args.args
@@ -63,3 +64,37 @@ def test_a_meeting_needs_an_attendee_and_makes_no_graph_call():
         with pytest.raises(NoAttendeesError):
             create_meeting({**PARAMS, "attendees": [], "optional_attendees": []})
     gc.post.assert_not_called()
+
+
+def _held(saved=None, read_error=None):
+    gc = MagicMock()
+    gc.post.return_value = {"id": "evt"}
+    if read_error:
+        gc.get.side_effect = read_error
+    else:
+        gc.get.return_value = saved
+    return gc
+
+
+@pytest.mark.parametrize("saved", [{"isDraft": False}, {}, None])
+def test_a_meeting_graph_did_not_hold_as_a_draft_is_refused(saved):
+    with patch("skills._m365.helpers.get_cal_client", return_value=_held(saved)):
+        with pytest.raises(NotHeldAsDraftError):
+            create_meeting(PARAMS)
+
+
+def test_a_failed_read_back_is_treated_as_not_confirmed():
+    with patch("skills._m365.helpers.get_cal_client", return_value=_held(read_error=RuntimeError("503"))):
+        with pytest.raises(NotHeldAsDraftError):
+            create_meeting(PARAMS)
+
+
+def test_the_draft_is_read_back_by_id_and_a_delivered_meeting_is_not():
+    gc = _held({"isDraft": True})
+    with patch("skills._m365.helpers.get_cal_client", return_value=gc):
+        create_meeting(PARAMS)
+    assert gc.get.call_args.args[0] == "/me/events/evt"
+    gc = _held({"isDraft": False})
+    with patch("skills._m365.helpers.get_cal_client", return_value=gc):
+        create_meeting(PARAMS, deliver=True)
+    gc.get.assert_not_called()

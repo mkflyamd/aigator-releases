@@ -1348,9 +1348,19 @@ async def open_draft_in_outlook(draft_id: str, body: dict = None):
         # Outlook's compose link cannot carry a recurrence or mark attendees optional,
         # so the event is created as an unsent draft (isDraft) and opened from its webLink.
         try:
-            from skills.calendar.events import NoAttendeesError, create_meeting
+            from skills.calendar.events import NoAttendeesError, NotHeldAsDraftError, create_meeting
 
             created = create_meeting(p)
+        except NotHeldAsDraftError:
+            if complete_handoff(draft_id):
+                await _sync_task_draft_status(draft_id, "handed_off")
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "The meeting was created, but Outlook did not keep it as an unsent draft, so "
+                    "invites may have gone out. Check your Outlook calendar — Gator will not open it."
+                ),
+            )
         except NoAttendeesError as e:
             if abort_handoff(draft_id):
                 await _sync_task_draft_status(draft_id, "pending")
