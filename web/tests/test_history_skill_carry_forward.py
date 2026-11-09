@@ -64,7 +64,7 @@ def test_internal_gated_and_unknown_tools_bring_nothing_back():
 
 
 def test_the_smallest_owning_skill_is_chosen():
-    both = [(sid, tools) for sid, tools in shared.SKILL_TOOLS_MAP.items() if sid.startswith("mcp-cloud-atlassian")]
+    both = [(sid, tools) for sid, tools in shared.SKILL_TOOLS_MAP.items() if sid.startswith("mcp-atlassian")]
     for sid, tools in both:
         for t in list(tools)[:1]:
             owners = [(len(x), s) for s, x in shared.SKILL_TOOLS_MAP.items()

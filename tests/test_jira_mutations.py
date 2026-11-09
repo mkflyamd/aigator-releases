@@ -62,10 +62,10 @@ def test_staged_attachment_rejects_content_swap(monkeypatch, tmp_path):
         mutations.staged_attachment(staged["upload_id"])
 
 
-def test_dynamic_rovo_tools_default_deny_unknown_writes():
+def test_dynamic_atlassian_mcp_tools_default_deny_unknown_writes():
     from mcp.manager import _is_unverified_jira_mcp_mutation
 
-    connection = {"id": "atlassian", "name": "Rovo Atlassian", "url": "https://mcp.atlassian.com"}
+    connection = {"id": "atlassian", "name": "Atlassian MCP Atlassian", "url": "https://mcp.atlassian.com"}
     # Read tools — must NOT be blocked
     assert not _is_unverified_jira_mcp_mutation("getJiraIssue", connection)
     assert not _is_unverified_jira_mcp_mutation("lookupJiraAccountId", connection)
@@ -141,9 +141,9 @@ def test_bare_key_waterfalls_and_fails_when_not_found_on_any_site(monkeypatch):
     monkeypatch.setattr(
         "skills.jira.mutations.load_config",
         lambda: {"jira_targets": [{
-            "id": "rovo:primary:cloud-1",
+            "id": "atlassian-mcp:primary:cloud-1",
             "base_url": "https://other.example.com",
-            "adapter": "rovo-mcp",
+            "adapter": "atlassian-mcp",
             "is_cloud": True,
             "connection_id": "primary",
             "resource_id": "cloud-1",
@@ -163,34 +163,34 @@ def test_bare_key_waterfall_returns_first_hit(monkeypatch):
     monkeypatch.setattr(
         "skills.jira.mutations.load_config",
         lambda: {"jira_targets": [{
-            "id": "rovo:primary:cloud-1",
+            "id": "atlassian-mcp:primary:cloud-1",
             "base_url": "https://other.example.com",
-            "adapter": "rovo-mcp",
+            "adapter": "atlassian-mcp",
             "is_cloud": True,
             "connection_id": "primary",
             "resource_id": "cloud-1",
         }]},
     )
-    # builtin-rest probe fails, rovo probe succeeds
+    # builtin-rest probe fails, mcp probe succeeds
     def _mock_probe(key, target, context_id=""):
-        return target.adapter == "rovo-mcp"
+        return target.adapter == "atlassian-mcp"
     monkeypatch.setattr("skills.jira.mutations._probe_target", _mock_probe)
 
     target = resolve_jira_target("PROJ-123")
-    assert target.adapter == "rovo-mcp"
+    assert target.adapter == "atlassian-mcp"
     assert target.base_url == "https://other.example.com"
 
 
-def test_url_resolves_the_matching_registered_rovo_target(monkeypatch):
+def test_url_resolves_the_matching_registered_atlassian_mcp_target(monkeypatch):
     monkeypatch.setattr("skills.jira.api.jira_browse_url", lambda: "https://hub.example.com")
     monkeypatch.setattr("skills.jira.api.jira_is_cloud", lambda: True)
     monkeypatch.setattr("mcp.manager._load_connections", lambda: [{"id": "primary"}])
     monkeypatch.setattr(
         "skills.jira.mutations.load_config",
         lambda: {"jira_targets": [{
-            "id": "rovo:primary:cloud-1",
+            "id": "atlassian-mcp:primary:cloud-1",
             "base_url": "https://other.example.com",
-            "adapter": "rovo-mcp",
+            "adapter": "atlassian-mcp",
             "is_cloud": True,
             "connection_id": "primary",
             "resource_id": "cloud-1",
@@ -199,8 +199,8 @@ def test_url_resolves_the_matching_registered_rovo_target(monkeypatch):
 
     target = resolve_jira_target("https://other.example.com/browse/PROJ-123")
 
-    assert target.id == "rovo:primary:cloud-1"
-    assert target.adapter == "rovo-mcp"
+    assert target.id == "atlassian-mcp:primary:cloud-1"
+    assert target.adapter == "atlassian-mcp"
 
 
 def test_verified_result_keeps_internal_target_ids_out_of_tool_payload(monkeypatch):
@@ -233,19 +233,19 @@ def test_selected_target_is_scoped_to_its_tab(monkeypatch):
     assert selected_target_for_context("tab-two") is None
 
 
-def test_builtin_suppresses_rovo_for_same_site(monkeypatch):
-    """When builtin-rest and rovo-mcp share a base_url, builtin wins and bare-key resolution is unambiguous."""
+def test_builtin_suppresses_atlassian_mcp_for_same_site(monkeypatch):
+    """When builtin-rest and atlassian-mcp share a base_url, builtin wins and bare-key resolution is unambiguous."""
     monkeypatch.setattr("skills.jira.api.jira_browse_url", lambda: "https://amd.atlassian.net")
     monkeypatch.setattr("skills.jira.api.jira_is_cloud", lambda: True)
-    monkeypatch.setattr("mcp.manager._load_connections", lambda: [{"id": "conn-rovo"}])
+    monkeypatch.setattr("mcp.manager._load_connections", lambda: [{"id": "conn-atlassian-mcp"}])
     monkeypatch.setattr(
         "skills.jira.mutations.load_config",
         lambda: {"jira_targets": [{
-            "id": "rovo:conn-rovo:cloud-amd",
+            "id": "atlassian-mcp:conn-atlassian-mcp:cloud-amd",
             "base_url": "https://amd.atlassian.net",
-            "adapter": "rovo-mcp",
+            "adapter": "atlassian-mcp",
             "is_cloud": True,
-            "connection_id": "conn-rovo",
+            "connection_id": "conn-atlassian-mcp",
             "resource_id": "cloud-amd",
         }]},
     )
@@ -263,9 +263,9 @@ def test_two_sites_same_issue_key_waterfalls(monkeypatch):
     monkeypatch.setattr(
         "skills.jira.mutations.load_config",
         lambda: {"jira_targets": [{
-            "id": "rovo:conn-b:cloud-b",
+            "id": "atlassian-mcp:conn-b:cloud-b",
             "base_url": "https://site-b.atlassian.net",
-            "adapter": "rovo-mcp",
+            "adapter": "atlassian-mcp",
             "is_cloud": True,
             "connection_id": "conn-b",
             "resource_id": "cloud-b",
@@ -280,17 +280,17 @@ def test_two_sites_same_issue_key_waterfalls(monkeypatch):
     assert target.base_url == "https://site-a.atlassian.net"
 
 
-def test_full_url_binds_to_rovo_site_not_builtin(monkeypatch):
-    """A URL for the Rovo site must resolve to the Rovo target, not the builtin."""
+def test_full_url_binds_to_atlassian_mcp_site_not_builtin(monkeypatch):
+    """A URL for the Atlassian MCP site must resolve to the Atlassian MCP target, not the builtin."""
     monkeypatch.setattr("skills.jira.api.jira_browse_url", lambda: "https://site-a.atlassian.net")
     monkeypatch.setattr("skills.jira.api.jira_is_cloud", lambda: True)
     monkeypatch.setattr("mcp.manager._load_connections", lambda: [{"id": "conn-b"}])
     monkeypatch.setattr(
         "skills.jira.mutations.load_config",
         lambda: {"jira_targets": [{
-            "id": "rovo:conn-b:cloud-b",
+            "id": "atlassian-mcp:conn-b:cloud-b",
             "base_url": "https://site-b.atlassian.net",
-            "adapter": "rovo-mcp",
+            "adapter": "atlassian-mcp",
             "is_cloud": True,
             "connection_id": "conn-b",
             "resource_id": "cloud-b",
@@ -298,7 +298,7 @@ def test_full_url_binds_to_rovo_site_not_builtin(monkeypatch):
     )
 
     target = resolve_jira_target("https://site-b.atlassian.net/browse/SAME-42")
-    assert target.adapter == "rovo-mcp"
+    assert target.adapter == "atlassian-mcp"
     assert target.base_url == "https://site-b.atlassian.net"
 
 
@@ -310,9 +310,9 @@ def test_full_url_mismatching_both_sites_fails_closed(monkeypatch):
     monkeypatch.setattr(
         "skills.jira.mutations.load_config",
         lambda: {"jira_targets": [{
-            "id": "rovo:conn-b:cloud-b",
+            "id": "atlassian-mcp:conn-b:cloud-b",
             "base_url": "https://site-b.atlassian.net",
-            "adapter": "rovo-mcp",
+            "adapter": "atlassian-mcp",
             "is_cloud": True,
             "connection_id": "conn-b",
             "resource_id": "cloud-b",
@@ -331,18 +331,18 @@ def test_target_from_draft_refuses_changed_connection(monkeypatch):
     monkeypatch.setattr(
         "skills.jira.mutations.load_config",
         lambda: {"jira_targets": [{
-            "id": "rovo:new-conn:cloud-1",
+            "id": "atlassian-mcp:new-conn:cloud-1",
             "base_url": "https://other.example.com",
-            "adapter": "rovo-mcp",
+            "adapter": "atlassian-mcp",
             "is_cloud": True,
             "connection_id": "new-conn",
             "resource_id": "cloud-1",
         }]},
     )
     draft_target = {
-        "id": "rovo:old-conn:cloud-1",   # connection_id mismatch
+        "id": "atlassian-mcp:old-conn:cloud-1",   # connection_id mismatch
         "base_url": "https://other.example.com",
-        "adapter": "rovo-mcp",
+        "adapter": "atlassian-mcp",
         "is_cloud": True,
         "connection_id": "old-conn",
         "resource_id": "cloud-1",
@@ -411,26 +411,26 @@ def test_picker_handle_consumed_only_once(monkeypatch):
         select_target_handle("tab-C", handle)  # second consume: must fail
 
 
-def test_rovo_call_refuses_unknown_operation():
-    from skills.jira.mutations import JiraTarget, rovo_jira_call
+def test_atlassian_mcp_call_refuses_unknown_operation():
+    from skills.jira.mutations import JiraTarget, atlassian_mcp_jira_call
     target = JiraTarget(
-        id="rovo:c:r", base_url="https://x.atlassian.net",
-        adapter="rovo-mcp", is_cloud=True,
+        id="atlassian-mcp:c:r", base_url="https://x.atlassian.net",
+        adapter="atlassian-mcp", is_cloud=True,
         connection_id="c", resource_id="r",
     )
     with pytest.raises(JiraTargetResolutionError, match="verified adapter"):
-        rovo_jira_call(target, "delete_issue", {})
+        atlassian_mcp_jira_call(target, "delete_issue", {})
 
 
-def test_rovo_call_refuses_builtin_target():
-    from skills.jira.mutations import JiraTarget, rovo_jira_call
+def test_atlassian_mcp_call_refuses_builtin_target():
+    from skills.jira.mutations import JiraTarget, atlassian_mcp_jira_call
     target = JiraTarget(
         id="builtin:https://x.atlassian.net",
         base_url="https://x.atlassian.net",
         adapter="builtin-rest", is_cloud=True,
     )
-    with pytest.raises(JiraTargetResolutionError, match="Rovo-backed"):
-        rovo_jira_call(target, "get_issue", {})
+    with pytest.raises(JiraTargetResolutionError, match="Atlassian MCP-backed"):
+        atlassian_mcp_jira_call(target, "get_issue", {})
 
 
 def test_discovery_failed_connection_preserves_existing_targets(monkeypatch):
@@ -438,12 +438,12 @@ def test_discovery_failed_connection_preserves_existing_targets(monkeypatch):
     its previously stored targets. Only a successful re-discovery or an explicit
     connection removal may change the stored target set."""
     from unittest.mock import MagicMock
-    from skills.jira.mutations import discover_rovo_targets
+    from skills.jira.mutations import discover_atlassian_mcp_targets
 
     existing_target = {
-        "id": "rovo:conn-good:cloud-1",
+        "id": "atlassian-mcp:conn-good:cloud-1",
         "base_url": "https://good.atlassian.net",
-        "adapter": "rovo-mcp",
+        "adapter": "atlassian-mcp",
         "is_cloud": True,
         "connection_id": "conn-good",
         "resource_id": "cloud-1",
@@ -451,9 +451,9 @@ def test_discovery_failed_connection_preserves_existing_targets(monkeypatch):
         "capabilities": ["read"],
     }
     existing_target_failing = {
-        "id": "rovo:conn-bad:cloud-2",
+        "id": "atlassian-mcp:conn-bad:cloud-2",
         "base_url": "https://bad.atlassian.net",
-        "adapter": "rovo-mcp",
+        "adapter": "atlassian-mcp",
         "is_cloud": True,
         "connection_id": "conn-bad",
         "resource_id": "cloud-2",
@@ -497,7 +497,7 @@ def test_discovery_failed_connection_preserves_existing_targets(monkeypatch):
     monkeypatch.setattr("mcp.manager._load_connections", lambda: [conn_good, conn_bad])
     monkeypatch.setattr("mcp.manager._client_for", _fake_client_for)
 
-    result = discover_rovo_targets()
+    result = discover_atlassian_mcp_targets()
 
     # conn-good succeeded — its fresh target should be in the result
     assert any(t.connection_id == "conn-good" for t in result)
@@ -515,7 +515,7 @@ def test_discovery_failed_connection_preserves_existing_targets(monkeypatch):
 def test_discovery_deduplicates_same_resource_across_connections(monkeypatch):
     """Two connections exposing the same cloud resource produce only one stored target."""
     from unittest.mock import MagicMock
-    from skills.jira.mutations import discover_rovo_targets
+    from skills.jira.mutations import discover_atlassian_mcp_targets
 
     saved: list = []
 
@@ -546,7 +546,7 @@ def test_discovery_deduplicates_same_resource_across_connections(monkeypatch):
                         lambda: [_make_conn("conn-a"), _make_conn("conn-b")])
     monkeypatch.setattr("mcp.manager._client_for", _fake_client_for)
 
-    result = discover_rovo_targets()
+    result = discover_atlassian_mcp_targets()
 
     # Two connections × one shared resource = two JiraTarget objects returned by discover
     assert len(result) == 2
@@ -570,7 +570,7 @@ def test_discovery_deduplicates_same_resource_across_connections(monkeypatch):
     monkeypatch.setattr("mcp.manager._load_connections",
                         lambda: [_make_conn("conn-same"), _make_conn("conn-same")])
 
-    discover_rovo_targets()
+    discover_atlassian_mcp_targets()
     saved2_ids = [e.get("id") for e in saved2]
     assert len(saved2_ids) == len(set(saved2_ids)), \
         "Duplicate stable IDs must not be persisted even if the same connection appears twice"
@@ -579,12 +579,12 @@ def test_discovery_deduplicates_same_resource_across_connections(monkeypatch):
 def test_discovery_removed_connection_erases_its_targets(monkeypatch):
     """A connection removed from mcp_connections must have its targets removed."""
     from unittest.mock import MagicMock
-    from skills.jira.mutations import discover_rovo_targets
+    from skills.jira.mutations import discover_atlassian_mcp_targets
 
     orphan_target = {
-        "id": "rovo:conn-removed:cloud-9",
+        "id": "atlassian-mcp:conn-removed:cloud-9",
         "base_url": "https://gone.atlassian.net",
-        "adapter": "rovo-mcp",
+        "adapter": "atlassian-mcp",
         "is_cloud": True,
         "connection_id": "conn-removed",
         "resource_id": "cloud-9",
@@ -603,7 +603,7 @@ def test_discovery_removed_connection_erases_its_targets(monkeypatch):
     monkeypatch.setattr("config.update_config", _fake_update_config)
     monkeypatch.setattr("mcp.manager._load_connections", lambda: [])
 
-    discover_rovo_targets()
+    discover_atlassian_mcp_targets()
 
     removed_ids = [e.get("connection_id") for e in saved]
     assert "conn-removed" not in removed_ids, (
