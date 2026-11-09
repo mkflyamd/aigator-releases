@@ -36,6 +36,15 @@ def test_apps_ui_exposes_direct_and_atlassian_mcp_choices():
     assert "Atlassian MCP is the explicit Atlassian SSO/site-selection path" in APP
 
 
+def test_saved_atlassian_mcp_connection_gets_a_clean_name():
+    start = APP.index("async function _nextAtlassianMcpName")
+    helper = APP[start : APP.index("async function loadAtlassianStatus", start)]
+    assert "'Atlassian MCP'" in helper
+    assert "`Atlassian MCP ${n}`" in helper
+    assert "name: await _nextAtlassianMcpName()," in APP
+    assert "provider_id || '').slice" not in APP
+
+
 def test_connecting_animation_uses_gator_greens_only():
     start = STYLE.index(".atlassian-mcp-connect--connecting {")
     end = STYLE.index("@keyframes atlassian-mcp-edge-spin", start)

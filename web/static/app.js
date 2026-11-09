@@ -7974,6 +7974,19 @@ function _setAtlassianMcpConnectState(button, state, label, onCancel) {
   }
 }
 
+async function _nextAtlassianMcpName() {
+  let names = [];
+  try {
+    const list = await fetch('/api/config/mcp').then((r) => r.json());
+    names = (list.connections || []).map((c) => String(c.name || ''));
+  } catch (_) {}
+  const taken = new Set(names);
+  if (!taken.has('Atlassian MCP')) return 'Atlassian MCP';
+  let n = 2;
+  while (taken.has(`Atlassian MCP ${n}`)) n++;
+  return `Atlassian MCP ${n}`;
+}
+
 async function loadAtlassianStatus() {
   try {
     const [jr, cr, cfg] = await Promise.all([
@@ -8120,12 +8133,11 @@ if (atlassianAddSiteBtn)
       const saved = await fetch('/api/config/mcp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        // Each OAuth site selection needs a distinct connection identity. A
-        // fixed name caused the connection manager to reuse/overwrite the first
-        // Atlassian MCP record when a user added Hub and non-Hub sites.
+        // Each site selection is its own connection, so later ones get a number
+        // ("Atlassian MCP 2") to keep the names in the list and the "/" menu apart.
         body: JSON.stringify({
           transport: 'http',
-          name: `Atlassian MCP · ${String(started.provider_id || '').slice(-6) || 'site'}`,
+          name: await _nextAtlassianMcpName(),
           url,
           auth_type: 'oauth2',
           oauth_provider_id: started.provider_id,
