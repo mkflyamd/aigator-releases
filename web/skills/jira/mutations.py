@@ -8,8 +8,8 @@ after a read from that same target confirms the requested state.
 
 MCP-backed Jira sites are deliberately not silently mapped to the built-in
 credentials.  An MCP resource needs an explicit adapter before it is allowed
-to mutate anything; this prevents a request for amd.atlassian.net from being
-sent to a configured amd-hub.atlassian.net account.
+to mutate anything; this prevents a request for one Atlassian site from being
+sent to a different site's configured account.
 """
 
 from __future__ import annotations
@@ -23,6 +23,8 @@ import hashlib
 from pathlib import Path
 import tempfile
 import json
+import logging
+import re
 import time
 
 from config import load_config
@@ -39,6 +41,7 @@ _target_selection_handles: dict[str, tuple[str, str, float]] = {}
 _TARGET_SELECTION_TTL_SECONDS = 5 * 60
 _staged_attachments: dict[str, dict] = {}
 _attachment_lock = RLock()
+_log = logging.getLogger(__name__)
 _probe_cache: dict[tuple, tuple[bool, float]] = {}
 _probe_cache_lock = RLock()
 _PROBE_CACHE_TTL = 60.0
@@ -187,6 +190,34 @@ def _extra_builtin_targets(primary: JiraTarget) -> list[JiraTarget]:
     ]
 
 
+# Connector priority is invariant for every Jira read and write:
+#   1. the direct Atlassian API ("builtin-rest")
+#   2. the official Atlassian MCP ("atlassian-mcp")
+#   3. any other connector or tool, only as a final fallback
+# What a connector reports it can do (capability discovery) never reorders this.
+CONNECTOR_PRIORITY = ("builtin-rest", "atlassian-mcp")
+
+
+def connector_rank(adapter: str) -> int:
+    """Position of an adapter in CONNECTOR_PRIORITY; anything unlisted ranks last."""
+
+    try:
+        return CONNECTOR_PRIORITY.index(adapter)
+    except ValueError:
+        return len(CONNECTOR_PRIORITY)
+
+
+def _migrate_legacy_target(entry: dict) -> dict:
+    """Targets saved before the adapter was renamed keep working: the old "rovo-mcp" name maps to "atlassian-mcp"."""
+
+    if entry.get("adapter") != "rovo-mcp":
+        return entry
+    migrated = {**entry, "adapter": "atlassian-mcp"}
+    if str(migrated.get("id", "")).startswith("rovo:"):
+        migrated["id"] = "atlassian-mcp:" + migrated["id"][len("rovo:"):]
+    return migrated
+
+
 def _registered_targets() -> list[JiraTarget]:
     """Load validated non-legacy Jira targets registered by a connector.
 
@@ -206,8 +237,8 @@ def _registered_targets() -> list[JiraTarget]:
         if not isinstance(raw, dict):
             continue
         try:
-            target = JiraTarget(**raw)
-            if (target.adapter != "rovo-mcp" or not target.connection_id
+            target = JiraTarget(**_migrate_legacy_target(raw))
+            if (target.adapter != "atlassian-mcp" or not target.connection_id
                     or not target.resource_id or target.connection_id not in connection_ids
                     or target.id in seen_ids):
                 continue
@@ -225,10 +256,10 @@ def _registered_targets() -> list[JiraTarget]:
 def available_targets() -> list[JiraTarget]:
     """Return all configured targets without treating any one as a fallback.
 
-    When builtin-rest and a rovo-mcp target share the same base_url, the
-    builtin-rest target takes precedence and the Rovo duplicate is suppressed.
+    When builtin-rest and a atlassian-mcp target share the same base_url, the
+    builtin-rest target takes precedence and the Atlassian MCP duplicate is suppressed.
     This prevents bare-key resolution from becoming ambiguous when the user
-    configures direct credentials for a site that Rovo also exposes.
+    configures direct credentials for a site that Atlassian MCP also exposes.
     """
 
     targets = _registered_targets()
@@ -241,7 +272,7 @@ def available_targets() -> list[JiraTarget]:
         direct_urls = {t.base_url for t in direct}
         targets = [t for t in targets if t.base_url not in direct_urls]
         targets = direct + targets
-    return targets
+    return sorted(targets, key=lambda t: connector_rank(t.adapter))
 
 
 def target_selection_event(context_id: str, detail: str = "") -> dict:
@@ -338,8 +369,8 @@ def _probe_target(issue_key: str, target: "JiraTarget", context_id: str = "") ->
             if time.monotonic() - ts < _PROBE_CACHE_TTL:
                 return found
     try:
-        if target.adapter == "rovo-mcp":
-            raw = rovo_jira_call(target, "get_issue", {"issueIdOrKey": issue_key})
+        if target.adapter == "atlassian-mcp":
+            raw = atlassian_mcp_jira_call(target, "get_issue", {"issueIdOrKey": issue_key})
             data = raw.get("data", raw) if isinstance(raw, dict) else {}
             found = bool(data.get("key") or data.get("id"))
         else:
@@ -363,14 +394,18 @@ def flush_probe_cache_for_target(target_id: str) -> None:
 def _waterfall_resolve(issue_key: str, targets: "list[JiraTarget]", for_write: bool = False, context_id: str = "") -> "JiraTarget":
     """Try each target in order and return the first one that has the issue.
 
-    builtin-rest targets are tried before rovo-mcp so direct credentials
+    builtin-rest targets are tried before atlassian-mcp so direct credentials
     (which support full write capabilities) are preferred when available.
 
     for_write=True: if the issue is found on more than one site, refuse with
     an error asking the user to supply the full URL — silently picking a site
     for a mutation risks writing to the wrong project.
     """
-    ordered = sorted(targets, key=lambda t: 0 if t.adapter == "builtin-rest" else 1)
+    ordered = sorted(targets, key=lambda t: connector_rank(t.adapter))
+    if not for_write:
+        first = next((t for t in ordered if _probe_target(issue_key, t, context_id)), None)
+        if first is not None:
+            return first
     hits = [target for target in ordered if _probe_target(issue_key, target, context_id)]
     if not hits:
         raise JiraTargetResolutionError(
@@ -453,8 +488,8 @@ def staged_attachment(upload_id: str) -> dict:
     return verified
 
 
-def discover_rovo_targets() -> list[JiraTarget]:
-    """Discover Jira resources from authenticated Rovo MCP connections.
+def discover_atlassian_mcp_targets() -> list[JiraTarget]:
+    """Discover Jira resources from authenticated Atlassian MCP connections.
 
     Per-connection semantics:
     - A connection that responds successfully: its targets fully replace any
@@ -465,7 +500,7 @@ def discover_rovo_targets() -> list[JiraTarget]:
     - A connection that has been removed from mcp_connections entirely: its
       stored targets ARE removed, since the owning connection no longer exists.
 
-    This means a temporary OAuth expiry never silently erases Rovo targets.
+    This means a temporary OAuth expiry never silently erases Atlassian MCP targets.
     Only a successful re-discovery of that connection (returning a different
     resource set) or an explicit connection removal can change its targets.
     """
@@ -492,10 +527,8 @@ def discover_rovo_targets() -> list[JiraTarget]:
         client = None
         try:
             client = _client_for(connection, pooled=False)
-            raw = client.call(resource_tool, {})
-            payload = json.loads(raw) if isinstance(raw, str) else raw
-            resources = payload.get("resources", payload) if isinstance(payload, dict) else payload
-            if not isinstance(resources, list):
+            resources = _accessible_resources(client.call(resource_tool, {}))
+            if resources is None:
                 continue
             # Mark this connection as successfully contacted. Its stored targets
             # will be replaced with what discovery returned (even if empty —
@@ -517,8 +550,8 @@ def discover_rovo_targets() -> list[JiraTarget]:
                 except JiraTargetResolutionError:
                     continue
                 discovered.append(JiraTarget(
-                    id=f"rovo:{conn_id}:{resource_id}",
-                    base_url=base_url, adapter="rovo-mcp", is_cloud=True,
+                    id=f"atlassian-mcp:{conn_id}:{resource_id}",
+                    base_url=base_url, adapter="atlassian-mcp", is_cloud=True,
                     connection_id=conn_id, resource_id=resource_id,
                     display_name=str(resource.get("name") or resource.get("title") or base_url),
                     capabilities=tuple(capabilities),
@@ -539,8 +572,10 @@ def discover_rovo_targets() -> list[JiraTarget]:
         seen_ids: set[str] = set()
         kept: list[dict] = []
         for entry in existing:
-            if not isinstance(entry, dict) or entry.get("adapter") != "rovo-mcp":
-                # Non-Rovo entries (builtin-rest, etc.) are never touched here.
+            if isinstance(entry, dict):
+                entry = _migrate_legacy_target(entry)
+            if not isinstance(entry, dict) or entry.get("adapter") != "atlassian-mcp":
+                # Non-MCP entries (builtin-rest, etc.) are never touched here.
                 entry_id = entry.get("id", "") if isinstance(entry, dict) else ""
                 if entry_id not in seen_ids:
                     seen_ids.add(entry_id)
@@ -601,23 +636,35 @@ def selected_target_for_context(context_id: str) -> JiraTarget | None:
 
 
 def resolve_target_for_context(issue_or_url: str = "", context_id: str = "", for_write: bool = False) -> JiraTarget:
-    """Resolve a target using a UI-owned tab selection when one exists."""
+    """Resolve a target using a UI-owned tab selection when one exists.
+
+    A read given a full URL goes to the site that URL names: the user pointed
+    at it explicitly, so an earlier tab selection must not redirect the read.
+    Writes keep the selection and fail closed if the URL names another site.
+    """
     selected = selected_target_for_context(context_id)
+    if selected is not None and not for_write and (issue_or_url or "").startswith(("http://", "https://")):
+        matches = [t for t in available_targets() if _url_matches_target(issue_or_url, t)]
+        if len(matches) == 1:
+            return matches[0]
     if selected is not None:
         return resolve_jira_target(issue_or_url, target_id=selected.id, for_write=for_write)
     return resolve_jira_target(issue_or_url, for_write=for_write, _context_id=context_id)
 
 
-def _probe_project(project_key: str, target: JiraTarget, context_id: str = "") -> bool:
-    """Return True if the project exists on target. Never raises; cached like _probe_target."""
+def _probe_project(project_key: str, target: JiraTarget, context_id: str = "") -> bool | None:
+    """True/False if the project does/does not exist on target, None if the probe failed.
+
+    Never raises. Only definite answers are cached, so a transient failure is not remembered.
+    """
     cache_key = (context_id or "", f"project:{project_key}", target.id)
     with _probe_cache_lock:
         cached = _probe_cache.get(cache_key)
         if cached is not None and time.monotonic() - cached[1] < _PROBE_CACHE_TTL:
             return cached[0]
     try:
-        if target.adapter == "rovo-mcp":
-            raw = rovo_jira_call(target, "get_projects", {"searchString": project_key})
+        if target.adapter == "atlassian-mcp":
+            raw = atlassian_mcp_jira_call(target, "get_projects", {"searchString": project_key})
             items = raw if isinstance(raw, list) else (
                 next((raw.get(k) for k in ("values", "projects", "data") if isinstance(raw.get(k), list)), [])
                 if isinstance(raw, dict) else []
@@ -626,7 +673,10 @@ def _probe_project(project_key: str, target: JiraTarget, context_id: str = "") -
         else:
             data = api.jira_api_for_target(target, "GET", f"project/{project_key}")
             found = str(data.get("key", "")).upper() == project_key
-    except Exception:
+    except Exception as exc:
+        if not str(exc).startswith("HTTP 404"):
+            _log.warning("Jira project probe for %s on %s failed", project_key, target.base_url, exc_info=True)
+            return None
         found = False
     with _probe_cache_lock:
         _probe_cache[cache_key] = (found, time.monotonic())
@@ -651,7 +701,7 @@ def resolve_target_for_project(project: str, context_id: str = "") -> JiraTarget
     key = (project or "").strip().upper()
     if not key:
         raise JiraTargetResolutionError("A Jira project key is required to choose the Jira site.")
-    hits = [t for t in targets if _probe_project(key, t, context_id)]
+    hits = [t for t in targets if _probe_project(key, t, context_id) is True]
     if len(hits) == 1:
         return hits[0]
     if not hits:
@@ -677,8 +727,8 @@ def resolve_builtin_target(issue_or_url: str = "", context_id: str = "") -> Jira
     target = resolve_target_for_context(issue_or_url, context_id)
     if target.adapter != "builtin-rest":
         raise JiraTargetResolutionError(
-            f"{target.base_url} is connected through Rovo. This direct Jira action cannot use it yet; "
-            "use the Rovo-backed action after selecting that Jira site."
+            f"{target.base_url} is connected through Atlassian MCP. This direct Jira action cannot use it yet; "
+            "use the Atlassian MCP-backed action after selecting that Jira site."
         )
     return target
 
@@ -705,7 +755,7 @@ def target_from_draft(raw: dict, context_id: str = "") -> JiraTarget:
     except TypeError as exc:
         raise JiraTargetResolutionError("Jira draft target is malformed. Re-draft the action.") from exc
     canonical = _canonical_base_url(target.base_url)
-    if canonical != target.base_url or target.adapter not in {"builtin-rest", "rovo-mcp"}:
+    if canonical != target.base_url or target.adapter not in {"builtin-rest", "atlassian-mcp"}:
         raise JiraTargetResolutionError(
             "Jira draft target is not a supported verified-mutation adapter. Re-draft after selecting a connected Jira site."
         )
@@ -722,7 +772,7 @@ def target_from_draft(raw: dict, context_id: str = "") -> JiraTarget:
     return target
 
 
-_ROVO_OPERATION_TO_TOOL = {
+_ATLASSIAN_MCP_OPERATION_TO_TOOL = {
     "get_issue": "getJiraIssue",
     "create_issue": "createJiraIssue",
     "update_issue": "editJiraIssue",
@@ -733,47 +783,181 @@ _ROVO_OPERATION_TO_TOOL = {
     "get_projects": "getVisibleJiraProjects",
     "get_issue_types": "getJiraProjectIssueTypesMetadata",
     "get_create_meta": "getJiraIssueTypeMetaWithFields",
+    "search_issues": "searchJiraIssuesUsingJql",
+    "list_transitions": "listJiraIssueTransitions",
 }
 
 
-def rovo_jira_call(target: JiraTarget, operation: str, arguments: dict) -> object:
-    """Call one allowlisted Rovo Jira operation for its captured resource.
+# Gator's operations are fixed; the Atlassian MCP tool that serves each is not. The
+# names above are Atlassian MCP v1's. Atlassian renamed some for v2 and moved others
+# behind discover/executeRead/executeWrite, so each operation lists the
+# alternative names and Gator uses whichever the connection actually offers.
+_ATLASSIAN_MCP_OPERATION_ALIASES = {
+    "add_comment": ("addOrEditJiraIssueComment",),
+    "create_link": ("createJiraIssueLink",),
+    "get_projects": ("listJiraProjects",),
+    "get_issue_types": ("listJiraProjectIssueTypesMetadata",),
+}
+_ATLASSIAN_MCP_WRITE_OPERATIONS = frozenset({"create_issue", "update_issue", "add_comment", "transition_issue", "create_link"})
+# v1 argument name -> v2 argument name, applied only when the resolved tool's
+# own schema lacks the v1 name.
+_ATLASSIAN_MCP_ARGUMENT_SYNONYMS = {
+    "create_issue": {"issueTypeName": "issueType", "assignee_account_id": "assignee"},
+    "create_link": {"type": "linkType"},
+    "get_projects": {"searchString": "query"},
+}
+# v2 returns a compact issue by default, which omits components and other
+# fields a write is verified against.
+_ATLASSIAN_MCP_DEFAULT_ARGUMENTS = {"get_issue": {"view": "full"}}
+
+
+def _atlassian_mcp_tool_candidates(operation: str) -> tuple[str, ...]:
+    return (_ATLASSIAN_MCP_OPERATION_TO_TOOL[operation], *_ATLASSIAN_MCP_OPERATION_ALIASES.get(operation, ()))
+
+
+def _parse_atlassian_mcp_json(raw: object) -> object:
+    """Leading JSON document of an Atlassian MCP reply; ``discover`` appends a plain-text trailer after it."""
+    if not isinstance(raw, str):
+        return raw
+    value, _ = json.JSONDecoder().raw_decode(raw.lstrip())
+    return value
+
+
+def _unwrap_atlassian_mcp_data(value: object) -> object:
+    if isinstance(value, dict) and set(value) == {"data"}:
+        return value["data"]
+    return value
+
+
+def _accessible_resources(raw: object) -> list[dict] | None:
+    """Accessible Jira sites from either Atlassian MCP response shape, each with an ``id``."""
+    parsed = _unwrap_atlassian_mcp_data(_parse_atlassian_mcp_json(raw))
+    resources = parsed.get("resources", parsed) if isinstance(parsed, dict) else parsed
+    if not isinstance(resources, list):
+        return None
+    return [
+        {**item, "id": str(item.get("id") or item.get("cloudId") or "")}
+        for item in resources if isinstance(item, dict)
+    ]
+
+
+def _tool_properties(tool: dict) -> dict[str, dict]:
+    schema = tool.get("input_schema") or tool.get("inputSchema") or {}
+    properties = schema.get("properties") if isinstance(schema, dict) else None
+    if not isinstance(properties, dict):
+        return {}
+    return {str(k): v if isinstance(v, dict) else {} for k, v in properties.items()}
+
+
+def _hints_contradict(operation: str, hints: object) -> bool:
+    """True when the server's own hints say this tool is the wrong kind of call."""
+    if not isinstance(hints, dict):
+        return False
+    if hints.get("destructiveHint") is True:
+        return True
+    read_only = hints.get("readOnlyHint")
+    return isinstance(read_only, bool) and read_only == (operation in _ATLASSIAN_MCP_WRITE_OPERATIONS)
+
+
+def _resolve_atlassian_mcp_tool(operation: str, cached: dict, client) -> tuple[str, dict[str, dict], bool]:
+    """Return (tool name, argument schemas by name, via executeRead/executeWrite).
+
+    A directly exposed tool is used when present. Otherwise the connection's
+    discover tool is asked, and the operation is accepted only if the server
+    puts it in the execute tier that matches what Gator means to do.
+    """
+    candidates = _atlassian_mcp_tool_candidates(operation)
+    unsupported = JiraTargetResolutionError(f"The selected Atlassian MCP connection does not support {operation.replace('_', ' ')}.")
+    for name in candidates:
+        tool = cached.get(name)
+        if tool is None:
+            continue
+        if _hints_contradict(operation, tool.get("annotations")):
+            raise JiraTargetResolutionError(
+                f"Atlassian MCP tool {name} is not a {'write' if operation in _ATLASSIAN_MCP_WRITE_OPERATIONS else 'read'} operation "
+                f"according to the server, so Gator will not use it for {operation.replace('_', ' ')}."
+            )
+        return name, _tool_properties(tool), False
+    tier = "executeWrite" if operation in _ATLASSIAN_MCP_WRITE_OPERATIONS else "executeRead"
+    if "discover" not in cached or tier not in cached:
+        raise unsupported
+    for name in candidates:
+        query = re.sub(r"(?<!^)(?=[A-Z])", " ", name).lower()
+        raw = client.call("discover", {"query": query})
+        found = _unwrap_atlassian_mcp_data(_parse_atlassian_mcp_json(raw))
+        for entry in (found.get("results", []) if isinstance(found, dict) else []):
+            if not isinstance(entry, dict) or entry.get("name") != name:
+                continue
+            if entry.get("executeTool") != tier:
+                raise JiraTargetResolutionError(
+                    f"Atlassian MCP lists {name} under {entry.get('executeTool')}, not {tier}, so Gator will not use it for "
+                    f"{operation.replace('_', ' ')}."
+                )
+            inputs = {str(i.get("name")): i for i in entry.get("inputs", []) if isinstance(i, dict)}
+            return name, inputs, True
+    raise unsupported
+
+
+def _adapt_atlassian_mcp_arguments(operation: str, arguments: dict | None, properties: dict[str, dict]) -> dict:
+    payload = dict(arguments or {})
+    if properties:
+        # A value the tool's own schema enum rules out (v1 took
+        # responseContentFormat "adf"; v2 only markdown/html) is dropped so the
+        # tool's default applies instead of the whole call failing validation.
+        for key in list(payload):
+            allowed = properties.get(key, {}).get("enum")
+            if isinstance(allowed, list) and payload[key] not in allowed:
+                del payload[key]
+        for old, new in _ATLASSIAN_MCP_ARGUMENT_SYNONYMS.get(operation, {}).items():
+            if old in payload and old not in properties and new in properties:
+                payload[new] = payload.pop(old)
+        for key, value in _ATLASSIAN_MCP_DEFAULT_ARGUMENTS.get(operation, {}).items():
+            if key in properties:
+                payload.setdefault(key, value)
+    return payload
+
+
+def atlassian_mcp_jira_call(target: JiraTarget, operation: str, arguments: dict) -> object:
+    """Call one allowlisted Atlassian MCP Jira operation for its captured resource.
 
     The connection and accessible-resource list are read again at execution
     time. This picks up refreshed OAuth while refusing a disconnected or
     reauthorized connection whose resource no longer belongs to the draft.
     No operation is inferred from a model-provided tool name.
     """
-    if target.adapter != "rovo-mcp":
-        raise JiraTargetResolutionError("This operation requires a Rovo-backed Jira target.")
-    tool_name = _ROVO_OPERATION_TO_TOOL.get(operation)
-    if not tool_name:
-        raise JiraTargetResolutionError(f"Rovo does not have a verified adapter for {operation!r}.")
+    if target.adapter != "atlassian-mcp":
+        raise JiraTargetResolutionError("This operation requires an Atlassian MCP-backed Jira target.")
+    if operation not in _ATLASSIAN_MCP_OPERATION_TO_TOOL:
+        raise JiraTargetResolutionError(f"Atlassian MCP does not have a verified adapter for {operation!r}.")
     from mcp.manager import _client_for, _load_connections
     connection = next((c for c in _load_connections() if c.get("id") == target.connection_id and c.get("enabled", True)), None)
     if connection is None:
-        raise JiraTargetResolutionError("The selected Rovo connection is no longer available. Reconnect it and re-draft the action.")
-    cached = connection.get("cached_tools", []) or []
-    names = {str(tool.get("name", "")) for tool in cached if isinstance(tool, dict)}
-    if tool_name not in names or "getAccessibleAtlassianResources" not in names:
-        raise JiraTargetResolutionError(f"The selected Rovo connection does not support {operation.replace('_', ' ')}.")
+        raise JiraTargetResolutionError("The selected Atlassian MCP connection is no longer available. Reconnect it and re-draft the action.")
+    cached = {str(tool.get("name", "")): tool for tool in connection.get("cached_tools", []) or [] if isinstance(tool, dict)}
+    execute_tool = "executeWrite" if operation in _ATLASSIAN_MCP_WRITE_OPERATIONS else "executeRead"
+    served_directly = any(name in cached for name in _atlassian_mcp_tool_candidates(operation))
+    served_by_discovery = "discover" in cached and execute_tool in cached
+    if "getAccessibleAtlassianResources" not in cached or not (served_directly or served_by_discovery):
+        raise JiraTargetResolutionError(f"The selected Atlassian MCP connection does not support {operation.replace('_', ' ')}.")
     client = None
     try:
         client = _client_for(connection, pooled=False)
-        raw_resources = client.call("getAccessibleAtlassianResources", {})
-        parsed = json.loads(raw_resources) if isinstance(raw_resources, str) else raw_resources
-        resources = parsed.get("resources", parsed) if isinstance(parsed, dict) else parsed
-        if not isinstance(resources, list) or not any(
-            isinstance(item, dict) and str(item.get("id", "")) == target.resource_id
+        resources = _accessible_resources(client.call("getAccessibleAtlassianResources", {}))
+        if not any(
+            str(item.get("id", "")) == target.resource_id
             and _canonical_base_url(str(item.get("url", ""))) == target.base_url
-            for item in resources
+            for item in resources or []
         ):
-            raise JiraTargetResolutionError("The selected Jira site is no longer accessible through this Rovo connection. Reconnect and re-draft.")
-        payload = dict(arguments or {})
+            raise JiraTargetResolutionError("The selected Jira site is no longer accessible through this Atlassian MCP connection. Reconnect and re-draft.")
+        tool_name, properties, via_execute = _resolve_atlassian_mcp_tool(operation, cached, client)
+        payload = _adapt_atlassian_mcp_arguments(operation, arguments, properties)
         payload["cloudId"] = target.resource_id
-        raw = client.call(tool_name, payload)
+        if via_execute:
+            raw = client.call(execute_tool, {"cloudId": target.resource_id, "name": tool_name, "inputs": payload})
+        else:
+            raw = client.call(tool_name, payload)
         try:
-            return json.loads(raw) if isinstance(raw, str) else raw
+            return _unwrap_atlassian_mcp_data(_parse_atlassian_mcp_json(raw))
         except (TypeError, json.JSONDecodeError):
             return raw
     finally:
@@ -782,6 +966,24 @@ def rovo_jira_call(target: JiraTarget, operation: str, arguments: dict) -> objec
                 client.close()
             except Exception:
                 pass
+
+
+_REST_FIELD_REJECTION = re.compile(r"^HTTP (?:400|422):")
+
+
+def atlassian_mcp_write_fallback(target: JiraTarget, rest_error: object) -> JiraTarget | None:
+    """The one sanctioned step from the direct API to the Atlassian MCP.
+
+    The direct API is always attempted first. Only a 400/422 rejection of the
+    write's fields qualifies: Jira applied nothing, so retrying the same
+    approved change cannot duplicate it. Timeouts, 5xx, 401/403 and 404 do not
+    qualify, the retry never leaves the approved site, and the approval
+    response reports that it happened.
+    """
+
+    if target.adapter != "builtin-rest" or not _REST_FIELD_REJECTION.match(str(rest_error)):
+        return None
+    return next((t for t in _registered_targets() if t.base_url == target.base_url), None)
 
 
 def verified_result(target: JiraTarget, requested: dict, applied: dict, verified: dict) -> dict:

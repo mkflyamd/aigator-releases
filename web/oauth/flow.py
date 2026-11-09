@@ -34,7 +34,7 @@ from .provider import OAuthProvider
 #
 # start_flow() now derives the actual redirect_uri from the request that hit
 # THIS instance (see mcp_routes.oauth_start's `app_origin`), so OAuth works no
-# matter which port Gator is served from — DCR providers (e.g. Atlassian/Rovo)
+# matter which port Gator is served from — DCR providers (e.g. Atlassian)
 # auto-register the new redirect_uri as needed (see oauth/dcr.py).
 #
 # This constant remains as: (1) the fallback when no app_origin is available,
