@@ -1,7 +1,6 @@
 """Download an image shown inline in chat."""
 
 import pathlib
-import re
 
 import httpx
 import pytest
@@ -12,9 +11,19 @@ from routes import inline_images
 from security import get_csrf_token
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 32
-REMOTE = (
-    "https://mcp-platform.amd.com/mcp/txt2img/images/a42668ca.png?token=abc.def&x=1"
-)
+REMOTE = "https://images.example/mcp/txt2img/images/a42668ca.png?token=abc.def&x=1"
+
+
+def _connections(*conns):
+    return {"mcp_connections": list(conns)}
+
+
+IMAGE_MCP = {"id": "mcp-img", "url": "https://images.example/mcp", "transport": "http"}
+
+
+@pytest.fixture(autouse=True)
+def connected_image_mcp(monkeypatch):
+    monkeypatch.setattr(inline_images, "load_config", lambda: _connections(IMAGE_MCP))
 
 
 @pytest.fixture
@@ -65,11 +74,11 @@ def test_download_allowlisted_remote_image(client, remote):
     "url",
     [
         "https://evil.example/p.png",
-        "https://mcp-platform.amd.com.evil.example/x.png",
-        "https://mcp-platform.amd.com@evil.example/x.png",
-        "https://user:aigator-fake-api-key@mcp-platform.amd.com/x.png",  # pragma: allowlist secret
-        "http://mcp-platform.amd.com/x.png",
-        "https://mcp-platform.amd.com:8443/x.png",
+        "https://images.example.evil.example/x.png",
+        "https://images.example@evil.example/x.png",
+        "https://user:aigator-fake-api-key@images.example/x.png",  # pragma: allowlist secret
+        "http://images.example/x.png",
+        "https://images.example:8443/x.png",
         "file:///C:/Windows/win.ini",
         "/api/other/endpoint",
         "/api/files/run1/../../secret.png",
@@ -175,11 +184,33 @@ def test_save_requires_csrf_token(outputs, picker):
     assert picker[0] == []
 
 
-def test_backend_allowlist_matches_frontend():
-    app_js = (pathlib.Path(__file__).parent.parent / "static" / "app.js").read_text(
-        encoding="utf-8"
+def test_hosts_come_from_enabled_https_http_mcp_connections(monkeypatch):
+    conns = _connections(
+        IMAGE_MCP,
+        {"id": "off", "url": "https://off.example/mcp", "enabled": False},
+        {"id": "plain", "url": "http://plain.example/mcp"},
+        {"id": "local", "transport": "stdio", "command": "npx", "args": ["x"]},
+        {"id": "blank", "url": ""},
     )
-    m = re.search(r"const INLINE_IMAGE_HOSTS = \[([^\]]*)\]", app_js)
-    assert m, "INLINE_IMAGE_HOSTS not found in app.js"
-    frontend = set(re.findall(r"'([^']+)'", m.group(1)))
-    assert frontend == set(inline_images.INLINE_IMAGE_HOSTS)
+    monkeypatch.setattr(inline_images, "load_config", lambda: conns)
+    assert inline_images.inline_image_hosts() == {"images.example"}
+
+
+def test_no_connected_mcp_means_no_remote_images(client, remote, monkeypatch):
+    monkeypatch.setattr(inline_images, "load_config", lambda: _connections())
+    assert client.get("/api/inline-image", params={"url": REMOTE}).status_code == 400
+    assert remote == []
+
+
+def test_a_disabled_connection_does_not_allow_its_host(client, remote, monkeypatch):
+    off = {**IMAGE_MCP, "enabled": False}
+    monkeypatch.setattr(inline_images, "load_config", lambda: _connections(off))
+    assert client.get("/api/inline-image", params={"url": REMOTE}).status_code == 400
+    assert remote == []
+
+
+def test_no_company_host_is_built_in():
+    root = pathlib.Path(__file__).parent.parent
+    for rel in ("routes/inline_images.py", "static/app.js"):
+        text = (root / rel).read_text(encoding="utf-8")
+        assert "mcp-platform" not in text, rel
