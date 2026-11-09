@@ -7947,7 +7947,6 @@ async function saveAtlassianExtraSites(kind, urls) {
   return res.ok ? '' : data.detail || 'error';
 }
 const atlassianSaveBtn = document.getElementById('atlassian-save-btn');
-const atlassianCloudMcpBtn = document.getElementById('atlassian-cloud-mcp-btn');
 const atlassianAddSiteBtn = document.getElementById('atlassian-add-site-btn');
 const atlassianMsg = document.getElementById('atlassian-msg');
 
@@ -7955,13 +7954,37 @@ const atlassianMsg = document.getElementById('atlassian-msg');
 const jiraDot = atlassianDot;
 const confluenceDot = atlassianDot;
 
-function _setAtlassianMcpConnectState(button, state, label) {
+function _setAtlassianMcpConnectState(button, state, label, onCancel) {
   if (!button) return;
   if (!button.dataset.idleLabel) button.dataset.idleLabel = button.textContent.trim();
   button.classList.toggle('atlassian-mcp-connect--connecting', state === 'connecting');
   button.classList.toggle('atlassian-mcp-connect--connected', state === 'connected');
   button.disabled = state === 'connecting';
   button.textContent = label || button.dataset.idleLabel;
+  button.parentElement.querySelector('.atlassian-mcp-cancel')?.remove();
+  if (state === 'connecting' && onCancel) {
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'atlassian-mcp-cancel';
+    cancel.textContent = '×';
+    cancel.title = 'Cancel';
+    cancel.setAttribute('aria-label', 'Cancel connecting');
+    cancel.addEventListener('click', onCancel);
+    button.parentElement.append(cancel);
+  }
+}
+
+async function _nextAtlassianMcpName() {
+  let names = [];
+  try {
+    const list = await fetch('/api/config/mcp').then((r) => r.json());
+    names = (list.connections || []).map((c) => String(c.name || ''));
+  } catch (_) {}
+  const taken = new Set(names);
+  if (!taken.has('Atlassian MCP')) return 'Atlassian MCP';
+  let n = 2;
+  while (taken.has(`Atlassian MCP ${n}`)) n++;
+  return `Atlassian MCP ${n}`;
 }
 
 async function loadAtlassianStatus() {
@@ -8025,8 +8048,7 @@ atlassianSaveBtn.addEventListener('click', async () => {
         atlassianMsg.textContent = 'Saved, but additional sites failed: ' + failures.join(' | ');
         return;
       }
-      atlassianMsg.textContent =
-        'Direct API connected. Optionally connect Cloud MCP or Rovo MCP below.';
+      atlassianMsg.textContent = 'Direct API connected.';
       atlassianDot.className = 'section-status st-ok';
       atlassianDetail.textContent = email;
       atlassianSaveBtn.textContent = 'Reconnect';
@@ -8043,41 +8065,18 @@ atlassianSaveBtn.addEventListener('click', async () => {
   }
 });
 
-if (atlassianCloudMcpBtn)
-  atlassianCloudMcpBtn.addEventListener('click', async () => {
-    _setAtlassianMcpConnectState(atlassianCloudMcpBtn, 'connecting', 'Connecting Cloud MCP…');
-    const directSite = atlassianJiraUrlInput.value.trim().replace(/\/$/, '');
-    const siteLabel = directSite || 'the configured direct API site';
-    atlassianMsg.textContent =
-      `Connecting Cloud MCP with credentials from ${siteLabel}. ` +
-      'MCP site is provider-selected…';
-    try {
-      const saved = await fetch('/api/config/atlassian/cloud-mcp', {
-        method: 'POST',
-        headers: { 'X-CSRF-Token': window.__CSRF_TOKEN__ || '' },
-      }).then(async (response) => {
-        const data = await response.json();
-        if (!response.ok || !data.ok)
-          throw new Error(data.detail || data.error || 'Could not connect Cloud MCP');
-        return data;
-      });
-      if (typeof _loadMcpConnections === 'function') await _loadMcpConnections();
-      _setAtlassianMcpConnectState(atlassianCloudMcpBtn, 'connected', 'Cloud MCP Connected ✓');
-      atlassianMsg.textContent =
-        `Cloud MCP connected with ${saved.tool_count || 0} tools. Direct API site: ${siteLabel}. ` +
-        'Cloud MCP has no site selection; use Rovo MCP to choose a specific site.';
-    } catch (error) {
-      _setAtlassianMcpConnectState(atlassianCloudMcpBtn, 'idle');
-      atlassianMsg.textContent = `Could not connect Cloud MCP: ${error.message || error}`;
-    }
-  });
-
-// Rovo MCP is the explicit Atlassian SSO/site-selection path.
+// Atlassian MCP is the explicit Atlassian SSO/site-selection path.
 if (atlassianAddSiteBtn)
   atlassianAddSiteBtn.addEventListener('click', async () => {
-    const url = 'https://mcp.atlassian.com/v1/mcp';
+    const url = 'https://mcp.atlassian.com/v2/mcp';
     let popup = null;
-    _setAtlassianMcpConnectState(atlassianAddSiteBtn, 'connecting', 'Connecting Rovo MCP…');
+    const controller = new AbortController();
+    _setAtlassianMcpConnectState(
+      atlassianAddSiteBtn,
+      'connecting',
+      'Connecting Atlassian MCP…',
+      () => controller.abort(),
+    );
     atlassianMsg.textContent = 'Opening Atlassian sign-in…';
     try {
       popup = window.open(
@@ -8088,7 +8087,8 @@ if (atlassianAddSiteBtn)
       const started = await fetch('/api/config/mcp/oauth/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url, label: 'Atlassian Rovo' }),
+        body: JSON.stringify({ url, label: 'Atlassian MCP' }),
+        signal: controller.signal,
       }).then(async (response) => {
         const data = await response.json();
         if (!response.ok) throw new Error(data.detail || 'Could not start Atlassian sign-in');
@@ -8103,33 +8103,41 @@ if (atlassianAddSiteBtn)
       else popup.location.href = started.authorize_url;
       atlassianMsg.textContent = 'Complete Atlassian sign-in and choose a site…';
       const completed = await new Promise((resolve) => {
+        const finish = (result) => {
+          clearInterval(timer);
+          clearTimeout(deadline);
+          resolve(result);
+        };
         const timer = setInterval(async () => {
           try {
             const state = await fetch(
               '/api/config/mcp/oauth/poll?state=' + encodeURIComponent(started.state),
+              { signal: controller.signal },
             ).then((r) => r.json());
-            if (state.status !== 'pending') {
-              clearInterval(timer);
-              resolve(state);
-            }
+            if (state.status !== 'pending') finish(state);
           } catch (_) {}
         }, 800);
-        setTimeout(() => {
-          clearInterval(timer);
-          resolve({ ok: false, error: 'Sign-in timed out' });
-        }, 300000);
+        const deadline = setTimeout(
+          () => finish({ ok: false, error: 'Sign-in timed out' }),
+          300000,
+        );
+        controller.signal.addEventListener('abort', () =>
+          finish({ ok: false, error: 'Cancelled' }),
+        );
       });
+      if (controller.signal.aborted) throw new Error('Cancelled');
       if (!completed.ok) throw new Error(completed.error || 'Atlassian sign-in did not complete');
+      // Saving cannot be undone from here, so stop offering cancel once it starts.
+      _setAtlassianMcpConnectState(atlassianAddSiteBtn, 'connecting', 'Connecting Atlassian MCP…');
       atlassianMsg.textContent = 'Adding selected site…';
       const saved = await fetch('/api/config/mcp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        // Each OAuth site selection needs a distinct connection identity. A
-        // fixed name caused the connection manager to reuse/overwrite the first
-        // Rovo record when a user added Hub and non-Hub sites.
+        // Each site selection is its own connection, so later ones get a number
+        // ("Atlassian MCP 2") to keep the names in the list and the "/" menu apart.
         body: JSON.stringify({
           transport: 'http',
-          name: `Atlassian Rovo · ${String(started.provider_id || '').slice(-6) || 'site'}`,
+          name: await _nextAtlassianMcpName(),
           url,
           auth_type: 'oauth2',
           oauth_provider_id: started.provider_id,
@@ -8146,11 +8154,17 @@ if (atlassianAddSiteBtn)
       });
       if (typeof _loadMcpConnections === 'function') await _loadMcpConnections();
       if (typeof checkSkillConnectionStatus === 'function') await checkSkillConnectionStatus();
-      _setAtlassianMcpConnectState(atlassianAddSiteBtn, 'connected', 'Rovo MCP Connected ✓');
+      _setAtlassianMcpConnectState(atlassianAddSiteBtn, 'connected', 'Atlassian MCP Connected ✓');
       atlassianMsg.textContent = `Connected. Discovered ${saved.tool_count || 0} Atlassian tools.`;
     } catch (error) {
       _setAtlassianMcpConnectState(atlassianAddSiteBtn, 'idle');
-      atlassianMsg.textContent = `Could not add site: ${error.message || error}`;
+      if (controller.signal.aborted) {
+        if (popup && !popup.closed) popup.close();
+        atlassianMsg.textContent = 'Atlassian MCP connection cancelled.';
+        if (typeof _loadMcpConnections === 'function') _loadMcpConnections();
+      } else {
+        atlassianMsg.textContent = `Could not add site: ${error.message || error}`;
+      }
     }
   });
 
@@ -9796,6 +9810,32 @@ function _buildJiraFieldRows(data, editable = {}) {
     .join('');
 }
 
+function _showApprovalWarning(approveBtn, result) {
+  const partial = !!result && result.ok === 'partial';
+  const fallback = !!result && !!result.fallback ? result.fallback : null;
+  if (!partial && !fallback) return false;
+  const lines = [];
+  if (fallback) {
+    lines.push(
+      'The direct Jira API rejected this change' +
+        (fallback.reason ? ' (' + fallback.reason + ')' : '') +
+        ', so it was applied through the Atlassian MCP on the same site.',
+    );
+  }
+  if (partial) {
+    lines.push(
+      result.warning || 'Applied, but Jira did not confirm every change. Check the issue.',
+    );
+  }
+  approveBtn.textContent = partial ? 'Applied with a warning' : 'Applied via Atlassian MCP';
+  const note = document.createElement('div');
+  note.className = 'gcc-draft-warning';
+  note.style.cssText = 'font-size:0.82em;margin-top:6px;white-space:pre-wrap;';
+  note.textContent = lines.join('\n');
+  approveBtn.parentNode.insertBefore(note, approveBtn.nextSibling);
+  return true;
+}
+
 function _showJiraTargetSelection(data, ownerTabId) {
   const targets = Array.isArray(data?.targets) ? data.targets : [];
   if (!targets.length) return;
@@ -11053,6 +11093,17 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
       hideEditLink: true,
       sendLabel: 'I approve',
     },
+    'jira-mcp-write': {
+      paneLabel: '@jira',
+      paneIcon: '🎫',
+      service: '',
+      action: data.action || 'Jira change',
+      hideEditLink: true,
+      sendLabel: 'I approve',
+      customBody:
+        _buildJiraFieldRows({ fields: { connection: data.connection, tool: data.tool } }) +
+        `<div class="gcc-field-row gcc-field-row--block"><span class="gcc-field-key">arguments</span><pre class="gcc-field-val" style="max-height:240px;overflow:auto;white-space:pre-wrap;margin:0;">${escapeHtml(data.arguments_text || '')}</pre></div>`,
+    },
     'jira-create': {
       paneLabel: '@jira',
       paneIcon: '\uD83C\uDFAB',
@@ -11122,7 +11173,10 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
       customBody: _buildJiraFieldRows({
         issue_key: data.issue_key,
         jira_site: data.jira_site,
-        fields: { transition: data.transition_name },
+        fields: {
+          transition: data.transition_name,
+          ...(data.comment ? { comment: data.comment } : {}),
+        },
       }),
     },
     'jira-link': {
@@ -11350,7 +11404,10 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
       // Post-approval navigation: switch to the relevant native app and
       // inject a 'View in [App]' link so the user can get back easily.
       const _nav = _json.navigate_to;
-      if (_nav && typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell) {
+      // A partial result keeps the card open so the user can read what did not go through.
+      if (_showApprovalWarning(approveBtn, _json)) {
+        // nothing else to do
+      } else if (_nav && typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell) {
         _gatorNavAfterApproval(_nav, card);
       } else if (typeof closeThirdPane === 'function') {
         closeThirdPane();
@@ -17504,7 +17561,7 @@ async function _loadMcpConnections() {
     const data = await res.json();
     const connections = data.connections || [];
     // The page-load bootstrap is only a snapshot. Connections added through
-    // specialized flows (notably Atlassian Rovo OAuth) used to refresh the
+    // specialized flows (notably Atlassian MCP OAuth) used to refresh the
     // Settings list but not SKILL_REGISTRY, so the backend could auto-select
     // the MCP while the / picker required Ctrl+R to see it. Reconcile every
     // enabled, tool-bearing connection into the live slash-skill registry.

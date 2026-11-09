@@ -1,7 +1,7 @@
 """Tests for Anthropic provider tool-schema normalization.
 
 Regression: MCP-sourced tools can declare an older JSON Schema draft in
-input_schema.$schema (Atlassian's Rovo MCP declares draft-07 on all 31 tools).
+input_schema.$schema (Atlassian's MCP declares draft-07 on all 31 tools).
 The API/gateway requires draft 2020-12 and rejects the whole request with
 '400 input_schema: JSON schema is invalid' — one bad $schema poisons every
 tool in the request. normalize_tool_schema must strip the declaration (the API
@@ -128,8 +128,8 @@ def test_non_dict_input_schema_is_rejected():
         p.normalize_tool_schema({"name": "t", "description": "d", "input_schema": []})
 
 
-def test_real_rovo_tool_schema_normalizes():
-    """Smoke test with a real Rovo MCP schema shape (draft-07 + anyOf)."""
+def test_real_atlassian_mcp_tool_schema_normalizes():
+    """Smoke test with a real Atlassian MCP schema shape (draft-07 + anyOf)."""
     p = _provider()
     tool = {
         "name": "getConfluenceSpaces",

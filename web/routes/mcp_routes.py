@@ -730,7 +730,7 @@ def oauth_start(req: _OAuthStartRequest, request: Request):
         flow_app_origin = ""  # start_flow() falls back to CALLBACK_URI
     else:
         # DCR path — auto-register with the OAuth server. Unlike BYOC, DCR
-        # providers (e.g. Atlassian/Rovo) self-register whatever redirect_uri
+        # providers (e.g. Atlassian) self-register whatever redirect_uri
         # we ask for (see oauth/dcr.py), so it's safe — and necessary — to use
         # THIS request's actual origin instead of a fixed port. This is what
         # makes OAuth work correctly from any Gator instance/port (primary,
