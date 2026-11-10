@@ -348,3 +348,66 @@ async def test_legacy_tool_table_without_new_columns_gives_zeros(env):
     assert await usage_report.report_pending(CFG, today=TODAY) == 1
     f = graph.posts[0][1]["fields"]
     assert (f["ToolRuns"], f["ToolErrors"], f["McpToolRuns"]) == (3, 0, 0)
+
+
+def _details(graph):
+    return json.loads(graph.posts[0][1]["fields"]["Details"])
+
+
+async def test_details_break_down_models_and_skills(env):
+    db, graph = env
+    _add(db, "usage_log", "2026-11-08", 1)
+    _sql(db, "INSERT INTO turn_log (context_id, provider, model, active_skills, created_at) VALUES (?, ?, ?, ?, ?)", [
+        ("c1", "P", "m1", json.dumps(["teams", "email"]), D8),
+        ("c1", "P", "m1", json.dumps(["teams", "my-private-skill"]), D8),
+        ("c2", "P", "m2", "[]", D8),
+        ("c3", "", "", "[]", D8),
+    ])
+    await usage_report.report_pending(CFG, today=TODAY)
+    d = _details(graph)
+    assert d["models"] == {"P/m1": 2, "P/m2": 1}
+    assert d["skills"] == {"teams": 2, "email": 1, "custom": 1}
+
+
+async def test_details_break_down_tools_and_errors(env):
+    db, graph = env
+    _sql(db, "INSERT INTO tool_call_log (created_at, tool_name, is_mcp, outcome, error_code) VALUES (?, ?, ?, ?, ?)", [
+        (D8, "read_file", 0, "success", None),
+        (D8, "read_file", 0, "error", "tool_error"),
+        (D8, "run_python", 0, "cancelled", None),
+        (D8, "srv_tool", 1, "success", None),
+        (D8, "srv_tool", 1, "error", "mcp_error"),
+        (D8, "<tool>", 0, "error", "<tool>"),
+    ])
+    await usage_report.report_pending(CFG, today=TODAY)
+    d = _details(graph)
+    assert d["tools"] == {"read_file": 2, "run_python": 1, "mcp": 2}
+    assert d["errors"] == {"tool_error": 1, "mcp_error": 1}
+
+
+async def test_details_never_name_user_added_skills_or_mcp_tools(env):
+    db, graph = env
+    _sql(db, "INSERT INTO tool_call_log (created_at, tool_name, is_mcp) VALUES (?, ?, ?)", [(D8, "private_srv_tool", 1)])
+    _sql(db, "INSERT INTO turn_log (context_id, provider, model, active_skills, created_at) VALUES (?, ?, ?, ?, ?)", [
+        ("c1", "P", "m1", json.dumps(["my-private-skill"]), D8),
+    ])
+    await usage_report.report_pending(CFG, today=TODAY)
+    text = graph.posts[0][1]["fields"]["Details"]
+    assert "private" not in text
+
+
+async def test_details_list_only_the_top_ten_tools(env):
+    db, graph = env
+    rows = [(D8, f"t{i:02d}", 0) for i in range(12) for _ in range(12 - i)]
+    _sql(db, "INSERT INTO tool_call_log (created_at, tool_name, is_mcp) VALUES (?, ?, ?)", rows)
+    await usage_report.report_pending(CFG, today=TODAY)
+    tools = _details(graph)["tools"]
+    assert len(tools) == 10
+    assert "t00" in tools and "t10" not in tools and "t11" not in tools
+
+
+async def test_details_are_empty_objects_when_there_is_nothing_to_break_down(env):
+    db, graph = env
+    _add(db, "usage_log", "2026-11-08", 1)
+    await usage_report.report_pending(CFG, today=TODAY)
+    assert graph.posts[0][1]["fields"]["Details"] == '{"errors":{},"models":{},"skills":{},"tools":{}}'

@@ -8,6 +8,7 @@ import asyncio
 import base64
 import json
 import logging
+import re
 import sqlite3
 import sys
 import uuid
@@ -24,6 +25,8 @@ STATE_FILE = GATOR_DIR / "usage_report.json"
 MAX_AGE_DAYS = 7
 _REPORT_INTERVAL_S = 24 * 60 * 60
 _SENT_KEYS_KEPT = 60
+_MAX_TOP_TOOLS = 10
+_PLAIN_NAME = re.compile(r"^[A-Za-z0-9_.-]+$")
 _SIGNAL_FIELDS = (
     "InputTokens", "OutputTokens", "Conversations", "BackgroundTasks", "ToolErrors",
     "McpToolRuns", "LlmErrors", "Failovers", "Drafts", "AvgTurnMs",
@@ -129,16 +132,77 @@ def _blank_signals() -> dict:
 
 def _signals_by_day(since_day: str) -> dict[str, dict]:
     """Return {day: signal fields} for UTC days on or after *since_day*. Missing tables or columns give zeros."""
+    builtin = _builtin_skills()
     scalars: dict[str, dict] = {}
+    details: dict[str, dict] = {}
+
+    def detail(day: str) -> dict:
+        return details.setdefault(day, _blank_details())
+
     con = sqlite3.connect(f"file:{TASKS_DB}?mode=ro", uri=True)
     try:
         for field, expr, table, cond in _SCALAR_SIGNALS:
             sql = f"SELECT substr(created_at, 1, 10), {expr} FROM {table} WHERE created_at >= ? {cond} GROUP BY 1"
             for day, value in _query(con, sql, (since_day,)):
                 scalars.setdefault(day, _blank_signals())[field] = value or 0
+
+        for day, provider, model, n in _query(
+            con,
+            "SELECT substr(created_at, 1, 10), provider, model, COUNT(*) FROM turn_log "
+            "WHERE created_at >= ? GROUP BY 1, 2, 3",
+            (since_day,),
+        ):
+            if provider or model:
+                detail(day)["models"][f"{provider}/{model}"] = n
+
+        for day, raw in _query(
+            con,
+            "SELECT substr(created_at, 1, 10), active_skills FROM turn_log "
+            "WHERE created_at >= ? AND active_skills IS NOT NULL",
+            (since_day,),
+        ):
+            try:
+                names = json.loads(raw)
+            except ValueError:
+                continue
+            if not isinstance(names, list):
+                continue
+            skills = detail(day)["skills"]
+            for name in names:
+                key = name if isinstance(name, str) and name in builtin else "custom"
+                skills[key] = skills.get(key, 0) + 1
+
+        for day, name, n in _query(
+            con,
+            "SELECT substr(created_at, 1, 10), tool_name, COUNT(*) FROM tool_call_log "
+            "WHERE created_at >= ? AND is_mcp = 0 GROUP BY 1, 2 ORDER BY 3 DESC",
+            (since_day,),
+        ):
+            tools = detail(day)["tools"]
+            if _PLAIN_NAME.match(name or "") and len(tools) < _MAX_TOP_TOOLS:
+                tools[name] = n
+
+        for day, code, n in _query(
+            con,
+            "SELECT substr(created_at, 1, 10), error_code, COUNT(*) FROM tool_call_log "
+            "WHERE created_at >= ? AND outcome = 'error' AND error_code IS NOT NULL GROUP BY 1, 2",
+            (since_day,),
+        ):
+            if _PLAIN_NAME.match(code):
+                detail(day)["errors"][code] = n
     finally:
         con.close()
-    return scalars
+
+    for day, sig in scalars.items():
+        if sig["McpToolRuns"]:
+            detail(day)["tools"]["mcp"] = sig["McpToolRuns"]
+
+    result: dict[str, dict] = {}
+    for day in scalars.keys() | details.keys():
+        sig = dict(scalars.get(day) or _blank_signals())
+        sig["Details"] = _details_json(details.get(day) or _blank_details())
+        result[day] = sig
+    return result
 
 
 def _share_id(link: str) -> str:
