@@ -13,62 +13,65 @@ Out: any dashboard or read path in Gator. Admins use a SharePoint view, Excel, o
 
 The Microsoft account email from `web/identity.py` (see the identity spec). With no Microsoft sign-in there is no identity and nothing is sent.
 
-A day is active when the user sent at least one chat message or ran at least one tool. An inactive day sends no row.
+A day is active when the user sent at least one chat message or ran at least one tool. An inactive day sends no row. Only complete past UTC days are sent, up to 7 days back.
 
 ## What is sent
 
-Counts only. Never message text, file names, tool arguments, or connector tokens.
+Counts only. Never message text, file names, or tool arguments.
 
 | Column | Value |
 |---|---|
 | `Title` | key `email|date` (lowercase email, `YYYY-MM-DD`), unique |
 | `Email` | identity email |
 | `ReportDate` | the UTC date |
-| `OS` | Windows or macOS |
+| `OS` | Windows, macOS or Linux |
 | `AppVersion` | contents of `version.txt` |
-| `InstallId` | random UUID created once per install, stored in the data dir |
-| `Messages` | chat messages sent that day |
-| `ToolRuns` | tool runs that day |
-| `Connectors` | names of connected providers, for example `microsoft,slack` |
+| `InstallId` | random UUID created once per install |
+| `Messages` | chat responses that day: `usage_log` rows with source `chat` or `chat-direct` |
+| `ToolRuns` | `tool_call_log` rows that day |
 
 "Created By" is stamped by SharePoint from the token, so the sender cannot forge another user's rows.
 
 ## Component: `web/usage_report.py`
 
+The counts are read from `tasks.db`, which already records them. There are no new counters.
+
 | Function | Purpose |
 |---|---|
-| `record_message()` | Adds 1 to today's message count. |
-| `record_tool_run()` | Adds 1 to today's tool-run count. |
-| `report_pending() -> None` | Sends each unsent past day with activity. Never raises. |
-| `run_usage_report_loop()` | Background loop: runs `report_pending()` at startup and then once a day. Started beside `_logging_retention_loop`. |
+| `report_pending(cfg, today=None) -> int` | Sends each unsent active past day. Returns the number of rows sent. Never raises. |
+| `run_usage_report_loop(cfg)` | Background loop: `report_pending` at startup, then once a day. Started and cancelled in `app.py`'s lifespan. |
 
-- Daily counts live in a small JSON file in the data dir, keyed by date. Counters contain numbers only.
-- `report_pending()` posts to `POST /sites/{site}/lists/{list}/items` with the Graph token from the existing `graph_client` refresh logic. The site and list IDs come from config as `usage_list_site_id` and `usage_list_id`. With either unset, the loop does nothing.
-- A day is marked sent after a 201, or after a duplicate-key rejection (the row already exists).
-- Any other failure leaves the day unsent. It is retried on the next run. Days older than 7 days are dropped.
+- State lives in `~/.gator/usage_report.json`: the `InstallId` and the `email|date` keys already sent (last 60).
+- Config keys, with the shipped list as the default: `usage_list_site_id`, `usage_list_id`, `usage_list_link`. Setting the site or list ID to an empty string turns reporting off.
+- The Graph token comes from `GraphClient` (the existing refresh logic). The row is created with `POST /sites/{site}/lists/{list}/items`.
+- A day is marked sent after a successful create, or after a duplicate-key rejection (the row already exists).
+- On a 403 the code opens the list's sharing link once (`GET /shares/{id}/list`) and retries once. This gives a user access through the org-wide link.
+- Any other failure stops the run and leaves the remaining days unsent. They are retried at the next run, and a day older than 7 days is never sent.
 - Failures are logged at warning level with no token values and never surface to the user.
 
 ## List setup
 
-The existing "Gator Usage" list is used. Required changes before the first release that reports:
+The existing "Gator Usage" list is used. Gator's token can write rows but not change the list schema, so these are done in SharePoint:
 
 - Add an `AppVersion` single-line-text column.
 - Index `Title` and turn on "Enforce unique values". This makes a repeat send fail harmlessly.
-- Item-level permissions: "Create items and edit items created by the user" and "Read items created by the user".
-- Every Gator user needs permission to add items to the list. Other admins get full control of the same list.
+- Item-level permissions (List settings, Advanced settings): Read access "Read items that were created by the user"; Create and Edit access "Create items and edit items created by the user".
+- Every Gator user needs permission to add items. They get it from the org-wide "Can edit items" sharing link. Other admins get full control of the same list.
 
 ## Errors
 
-- No Microsoft token or expired refresh: nothing is sent, and the day stays pending.
-- Graph 403 or 404: logged, the day stays pending.
-- Network failure: same as above.
+- No Microsoft token or expired refresh: nothing is sent, and the days stay pending.
+- Graph 403 after opening the link, 404, or a network failure: logged, and the days stay pending.
 
 ## Tests
 
-- Message and tool-run counters accumulate per day.
-- A past active day is sent once, with the expected fields and a lowercase `email|date` key.
-- A 201 or a duplicate-key response marks the day sent.
-- Other failures leave the day pending, and a day older than 7 days is dropped.
-- An inactive day sends nothing.
-- Without an identity, or without the list IDs in config, nothing is sent.
-- No message text, file names, or tool arguments appear in any payload.
+`tests/test_usage_report.py` and `tests/test_identity.py` cover:
+
+- Messages count only chat sources, and tool runs count from `tool_call_log`.
+- An active past day is sent once, with a lowercase `email|date` key and exactly the columns above.
+- Today, background-only days and days older than 7 days are not sent.
+- A duplicate-key response marks the day sent. Other failures leave it pending.
+- A 403 opens the link and retries once. Without a link it is a plain failure.
+- Without an identity, or with the list IDs unset, nothing is sent.
+- A missing `tool_call_log` table still reports messages.
+- `InstallId` is stable across runs.

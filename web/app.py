@@ -838,6 +838,11 @@ async def lifespan(app):
         _updater.run_update_check_loop(shared.cfg)
     )
 
+    import usage_report
+    _usage_report_task = asyncio.create_task(
+        usage_report.run_usage_report_loop(shared.cfg)
+    )
+
     async def _catalog_sync_loop():
         from marketplace.registry import refresh_catalog, _CATALOG_REFRESH_HOURS
         cfg = shared.cfg
@@ -868,6 +873,7 @@ async def lifespan(app):
 
     stop_supervisor()
     _update_check_task.cancel()
+    _usage_report_task.cancel()
     _cleanup_task.cancel()
     _logging_retention_task.cancel()
     _catalog_sync_task.cancel()
