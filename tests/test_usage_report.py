@@ -461,3 +461,11 @@ async def test_details_drop_models_with_unplain_or_overlong_names(env):
     ])
     await usage_report.report_pending(CFG, today=TODAY)
     assert _details(graph)["models"] == {"P/m1": 1, "P/" + "m" * 64: 1}
+
+
+def test_builtin_tools_exclude_namespaced_marketplace_and_mcp_names(monkeypatch):
+    import shared
+
+    monkeypatch.setattr(usage_report, "_builtin_skills", lambda: {"email"})
+    monkeypatch.setattr(shared, "SKILL_TOOLS_MAP", {"email": {"read_calendar", "email__evil_tool", "mcp-srv-tool"}})
+    assert usage_report._builtin_tools() == {"read_calendar"}

@@ -127,7 +127,8 @@ def _builtin_tools() -> set[str]:
     names: set[str] = set()
     for skill_id in _builtin_skills() | {"_always_on"}:
         names |= set(shared.SKILL_TOOLS_MAP.get(skill_id, ()))
-    return names
+    # A marketplace or MCP skill whose id collides with a built-in id can add names under that key; theirs are namespaced.
+    return {n for n in names if "__" not in n and not n.startswith("mcp-")}
 
 
 def _blank_details() -> dict:
