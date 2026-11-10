@@ -29,6 +29,18 @@ Counts only. Never message text, file names, or tool arguments.
 | `InstallId` | random UUID created once per install |
 | `Messages` | chat responses that day: `usage_log` rows with source `chat` or `chat-direct` |
 | `ToolRuns` | `tool_call_log` rows that day |
+| `InputTokens`, `OutputTokens` | sum of `usage_log` tokens that day |
+| `Conversations` | distinct `context_id` in `turn_log` that day |
+| `BackgroundTasks` | `tasks` rows created that day |
+| `ToolErrors` | `tool_call_log` rows whose `outcome` is `error` (cancelled and rejected are user actions, not errors) |
+| `McpToolRuns` | `tool_call_log` rows with `is_mcp` set |
+| `LlmErrors` | `turn_log` rows with an `llm_error` |
+| `Failovers` | `turn_log` rows with `failover_used` set |
+| `Drafts` | `task_drafts` rows created that day |
+| `AvgTurnMs` | average `turn_log.duration_ms` that day |
+| `Details` | JSON text of counts: `models` (turns per `provider/model`), `skills` (turns with each built-in skill active, from `turn_log.active_skills`), `tools` (top 10 built-in tools by runs), `errors` (tool errors per `error_code`) |
+
+Names in `Details` are limited to built-in tools and skills. User-added MCP servers are counted under `mcp` and user-made skills under `custom`, never by name. A missing table or column gives zeros, as `tool_call_log` does for `ToolRuns`. These signals do not change which days are active.
 
 "Created By" is stamped by SharePoint from the token, so the sender cannot forge another user's rows.
 
@@ -43,7 +55,7 @@ The counts are read from `tasks.db`, which already records them. There are no ne
 
 - State lives in `~/.gator/usage_report.json`: the `InstallId` and the `email|date` keys already sent (last 60).
 - Config keys in `config.json`: `usage_list_site_id`, `usage_list_id`, `usage_list_link`. Nothing is shipped in the source. Reporting is off until both the site ID and the list ID are set.
-- While reporting is on, `/health` returns `usage_reporting: true` and the About dialog shows: "Daily chat and tool-run counts are reported under your Microsoft email. No message content is sent."
+- While reporting is on, `/health` returns `usage_reporting: true` and the About dialog shows: "May collect issues and usage to improve AI Gator."
 - The Graph token comes from `GraphClient` (the existing refresh logic). The row is created with `POST /sites/{site}/lists/{list}/items`.
 - A day is marked sent after a successful create, or after a duplicate-key rejection (the row already exists).
 - On a 403 the code opens the list's sharing link once (`GET /shares/{id}/list`) and retries once. This gives a user access through the org-wide link.
@@ -55,6 +67,7 @@ The counts are read from `tasks.db`, which already records them. There are no ne
 The existing "Gator Usage" list is used. Gator's token can write rows but not change the list schema, so these are done in SharePoint:
 
 - Add an `AppVersion` single-line-text column.
+- Add number columns `InputTokens`, `OutputTokens`, `Conversations`, `BackgroundTasks`, `ToolErrors`, `McpToolRuns`, `LlmErrors`, `Failovers`, `Drafts`, `AvgTurnMs`, and a multiple-lines-of-plain-text column `Details`.
 - Index `Title` and turn on "Enforce unique values". This makes a repeat send fail harmlessly.
 - Item-level permissions (List settings, Advanced settings): Read access "Read items that were created by the user"; Create and Edit access "Create items and edit items created by the user".
 - Every Gator user needs permission to add items. They get it from the org-wide "Can edit items" sharing link. Other admins get full control of the same list.
@@ -76,3 +89,6 @@ The existing "Gator Usage" list is used. Gator's token can write rows but not ch
 - Without an identity, or with the list IDs unset, nothing is sent.
 - A missing `tool_call_log` table still reports messages.
 - `InstallId` is stable across runs.
+- Each new signal is counted from `tasks.db` for its day, and missing tables or columns give zeros.
+- Background-only days stay inactive with the new signals present.
+- `Details` never contains user-added MCP server or skill names.
