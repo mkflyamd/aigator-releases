@@ -26,6 +26,8 @@ MAX_AGE_DAYS = 7
 _REPORT_INTERVAL_S = 24 * 60 * 60
 _SENT_KEYS_KEPT = 60
 _MAX_TOP_TOOLS = 10
+_MAX_MODEL_PART = 64
+_TOOL_PLACEHOLDER = "<tool>"
 _PLAIN_NAME = re.compile(r"^[A-Za-z0-9_.-]+$")
 _SIGNAL_FIELDS = (
     "InputTokens", "OutputTokens", "Conversations", "BackgroundTasks", "ToolErrors",
@@ -118,6 +120,16 @@ def _builtin_skills() -> set[str]:
     return {p.name for p in root.iterdir() if p.is_dir() and not p.name.startswith("_")}
 
 
+def _builtin_tools() -> set[str]:
+    """Names of tools shipped with the app, so user-added (marketplace) tools are never named."""
+    import shared
+
+    names: set[str] = set()
+    for skill_id in _builtin_skills() | {"_always_on"}:
+        names |= set(shared.SKILL_TOOLS_MAP.get(skill_id, ()))
+    return names
+
+
 def _blank_details() -> dict:
     return {"models": {}, "skills": {}, "tools": {}, "errors": {}}
 
@@ -133,6 +145,7 @@ def _blank_signals() -> dict:
 def _signals_by_day(since_day: str) -> dict[str, dict]:
     """Return {day: signal fields} for UTC days on or after *since_day*. Missing tables or columns give zeros."""
     builtin = _builtin_skills()
+    builtin_tools = _builtin_tools()
     scalars: dict[str, dict] = {}
     details: dict[str, dict] = {}
 
@@ -152,7 +165,10 @@ def _signals_by_day(since_day: str) -> dict[str, dict]:
             "WHERE created_at >= ? GROUP BY 1, 2, 3",
             (since_day,),
         ):
-            if provider or model:
+            if all(
+                isinstance(part, str) and len(part) <= _MAX_MODEL_PART and _PLAIN_NAME.match(part)
+                for part in (provider, model)
+            ):
                 detail(day)["models"][f"{provider}/{model}"] = n
 
         for day, raw in _query(
@@ -172,15 +188,23 @@ def _signals_by_day(since_day: str) -> dict[str, dict]:
                 key = name if isinstance(name, str) and name in builtin else "custom"
                 skills[key] = skills.get(key, 0) + 1
 
+        named: dict[str, list[tuple[int, str]]] = {}
         for day, name, n in _query(
             con,
             "SELECT substr(created_at, 1, 10), tool_name, COUNT(*) FROM tool_call_log "
-            "WHERE created_at >= ? AND is_mcp = 0 GROUP BY 1, 2 ORDER BY 3 DESC",
+            "WHERE created_at >= ? AND is_mcp = 0 GROUP BY 1, 2",
             (since_day,),
         ):
-            tools = detail(day)["tools"]
-            if _PLAIN_NAME.match(name or "") and len(tools) < _MAX_TOP_TOOLS:
-                tools[name] = n
+            if name == _TOOL_PLACEHOLDER:
+                continue
+            if name in builtin_tools and _PLAIN_NAME.match(name):
+                named.setdefault(day, []).append((n, name))
+            else:
+                tools = detail(day)["tools"]
+                tools["custom"] = tools.get("custom", 0) + n
+        for day, pairs in named.items():
+            pairs.sort(key=lambda pair: (-pair[0], pair[1]))
+            detail(day)["tools"].update({name: n for n, name in pairs[:_MAX_TOP_TOOLS]})
 
         for day, code, n in _query(
             con,

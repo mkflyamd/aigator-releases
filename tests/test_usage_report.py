@@ -73,6 +73,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(usage_report, "_graph_client", lambda: graph)
     monkeypatch.setattr(usage_report, "_app_version", lambda: "9.9.9")
     monkeypatch.setattr(usage_report, "_builtin_skills", lambda: {"teams", "email"})
+    monkeypatch.setattr(usage_report, "_builtin_tools", lambda: {"read_calendar", "fetch_webpage"})
     return db, graph
 
 
@@ -302,9 +303,9 @@ async def test_background_tasks_and_drafts_count_for_their_day(env):
 async def test_tool_errors_count_only_error_outcome_and_mcp_runs_are_counted(env):
     db, graph = env
     _sql(db, "INSERT INTO tool_call_log (created_at, tool_name, is_mcp, outcome, error_code) VALUES (?, ?, ?, ?, ?)", [
-        (D8, "read_file", 0, "success", None),
-        (D8, "read_file", 0, "error", "tool_error"),
-        (D8, "run_python", 0, "cancelled", None),
+        (D8, "read_calendar", 0, "success", None),
+        (D8, "read_calendar", 0, "error", "tool_error"),
+        (D8, "fetch_webpage", 0, "cancelled", None),
         (D8, "srv_tool", 1, "success", None),
         (D8, "srv_tool", 1, "error", "mcp_error"),
     ])
@@ -372,16 +373,16 @@ async def test_details_break_down_models_and_skills(env):
 async def test_details_break_down_tools_and_errors(env):
     db, graph = env
     _sql(db, "INSERT INTO tool_call_log (created_at, tool_name, is_mcp, outcome, error_code) VALUES (?, ?, ?, ?, ?)", [
-        (D8, "read_file", 0, "success", None),
-        (D8, "read_file", 0, "error", "tool_error"),
-        (D8, "run_python", 0, "cancelled", None),
+        (D8, "read_calendar", 0, "success", None),
+        (D8, "read_calendar", 0, "error", "tool_error"),
+        (D8, "fetch_webpage", 0, "cancelled", None),
         (D8, "srv_tool", 1, "success", None),
         (D8, "srv_tool", 1, "error", "mcp_error"),
         (D8, "<tool>", 0, "error", "<tool>"),
     ])
     await usage_report.report_pending(CFG, today=TODAY)
     d = _details(graph)
-    assert d["tools"] == {"read_file": 2, "run_python": 1, "mcp": 2}
+    assert d["tools"] == {"read_calendar": 2, "fetch_webpage": 1, "mcp": 2}
     assert d["errors"] == {"tool_error": 1, "mcp_error": 1}
 
 
@@ -396,8 +397,9 @@ async def test_details_never_name_user_added_skills_or_mcp_tools(env):
     assert "private" not in text
 
 
-async def test_details_list_only_the_top_ten_tools(env):
+async def test_details_list_only_the_top_ten_tools(env, monkeypatch):
     db, graph = env
+    monkeypatch.setattr(usage_report, "_builtin_tools", lambda: {f"t{i:02d}" for i in range(12)})
     rows = [(D8, f"t{i:02d}", 0) for i in range(12) for _ in range(12 - i)]
     _sql(db, "INSERT INTO tool_call_log (created_at, tool_name, is_mcp) VALUES (?, ?, ?)", rows)
     await usage_report.report_pending(CFG, today=TODAY)
@@ -411,3 +413,43 @@ async def test_details_are_empty_objects_when_there_is_nothing_to_break_down(env
     _add(db, "usage_log", "2026-11-08", 1)
     await usage_report.report_pending(CFG, today=TODAY)
     assert graph.posts[0][1]["fields"]["Details"] == '{"errors":{},"models":{},"skills":{},"tools":{}}'
+
+
+async def test_details_count_non_builtin_tools_as_custom_without_naming_them(env):
+    db, graph = env
+    _sql(db, "INSERT INTO tool_call_log (created_at, tool_name, is_mcp) VALUES (?, ?, ?)", [
+        (D8, "acme_secret_tool", 0),
+        (D8, "acme_secret_tool", 0),
+        (D8, "other-market-tool", 0),
+        (D8, "has space", 0),
+        (D8, "<tool>", 0),
+        (D8, "fetch_webpage", 0),
+    ])
+    await usage_report.report_pending(CFG, today=TODAY)
+    d = _details(graph)
+    assert d["tools"] == {"fetch_webpage": 1, "custom": 4}
+    assert "acme" not in graph.posts[0][1]["fields"]["Details"]
+
+
+async def test_details_ties_at_the_top_ten_cutoff_are_deterministic(env, monkeypatch):
+    db, graph = env
+    names = [f"t{i:02d}" for i in range(12)]
+    monkeypatch.setattr(usage_report, "_builtin_tools", lambda: set(names))
+    _sql(db, "INSERT INTO tool_call_log (created_at, tool_name, is_mcp) VALUES (?, ?, ?)",
+         [(D8, n, 0) for n in reversed(names)])
+    await usage_report.report_pending(CFG, today=TODAY)
+    assert sorted(_details(graph)["tools"]) == names[:10]
+
+
+async def test_details_drop_models_with_unplain_or_overlong_names(env):
+    db, graph = env
+    _add(db, "usage_log", "2026-11-08", 1)
+    _sql(db, "INSERT INTO turn_log (context_id, provider, model, active_skills, created_at) VALUES (?, ?, ?, ?, ?)", [
+        ("c1", "P", "m1", "[]", D8),
+        ("c2", "P", "my private model", "[]", D8),
+        ("c3", "bad provider", "m1", "[]", D8),
+        ("c4", "P", "m" * 65, "[]", D8),
+        ("c5", "P", "m" * 64, "[]", D8),
+    ])
+    await usage_report.report_pending(CFG, today=TODAY)
+    assert _details(graph)["models"] == {"P/m1": 1, "P/" + "m" * 64: 1}
