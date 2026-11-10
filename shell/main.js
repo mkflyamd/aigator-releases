@@ -1197,23 +1197,81 @@ function createWindow() {
   });
 
   gatorView.webContents.loadURL(GATOR_URL);
+  // When the backend is unreachable, show a "Reconnecting" page and reload Gator
+  // as soon as /health answers, instead of stranding the window on a dead page.
+  let reconnecting = false;
+  const reconnectGator = (detail) => {
+    if (reconnecting) return;
+    reconnecting = true;
+    gatorView.webContents.loadURL(
+      'data:text/html;charset=utf-8,' +
+        encodeURIComponent(
+          '<!doctype html><html><body style="font:16px system-ui;padding:32px;background:#111827;color:#f8fafc">' +
+            '<h1>Reconnecting to AI Gator&hellip;</h1><p>The local backend is not responding. ' +
+            'This window reloads automatically when it is back.</p><p style="color:#94a3b8">' +
+            String(detail) +
+            '</p></body></html>',
+        ),
+    );
+    waitForBackend(() => {
+      reconnecting = false;
+      if (gatorView && !gatorView.webContents.isDestroyed()) {
+        gatorView.webContents.loadURL(GATOR_URL);
+      }
+    }, Infinity);
+  };
   gatorView.webContents.on(
     'did-fail-load',
     (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
       if (isMainFrame === false || errorCode === -3) return;
-      gatorView.webContents.loadURL(
-        'data:text/html;charset=utf-8,' +
-          encodeURIComponent(
-            '<!doctype html><html><body style="font:16px system-ui;padding:32px;background:#111827;color:#f8fafc">' +
-              '<h1>AI Gator could not start</h1><p>The local backend did not load.</p><p>' +
-              String(errorDescription) +
-              ' (' +
-              String(errorCode) +
-              ')</p></body></html>',
-          ),
-      );
+      reconnectGator(`${errorDescription} (${errorCode})`);
     },
   );
+  // A page that is already loaded gets no did-fail-load when the backend goes
+  // away, so watch /health too. A restart shorter than the grace period (a dev
+  // hot-reload, a quick tray restart) is left alone so the page keeps its state.
+  const HEALTH_POLL_MS = 3000;
+  const HEALTH_GRACE_FAILURES = 5;
+  let healthFailures = 0;
+  const healthTimer = setInterval(() => {
+    if (!gatorView || gatorView.webContents.isDestroyed()) {
+      clearInterval(healthTimer);
+      return;
+    }
+    if (reconnecting) return;
+    // Only a refused/reset connection counts: a slow answer means a busy backend,
+    // and reloading would not help it.
+    let timedOut = false;
+    const req = http.get(
+      GATOR_URL.replace(/\/$/, '') + '/health',
+      { timeout: 5000 },
+      (response) => {
+        response.resume();
+        healthFailures = 0;
+      },
+    );
+    req.on('timeout', () => {
+      timedOut = true;
+      req.destroy();
+    });
+    req.on('error', () => {
+      if (timedOut) return;
+      healthFailures += 1;
+      if (healthFailures < HEALTH_GRACE_FAILURES) return;
+      healthFailures = 0;
+      // Reloading would drop the open coding-agent terminals, which reconnect
+      // to their sessions on their own. Leave a page that has any.
+      gatorView.webContents
+        .executeJavaScript(
+          "typeof _genAgentTerminals !== 'undefined' && " +
+            'Object.values(_genAgentTerminals).some((t) => t && t.sessions && Object.keys(t.sessions).length > 0)',
+        )
+        .catch(() => false)
+        .then((hasTerminals) => {
+          if (!hasTerminals) reconnectGator('The backend stopped responding.');
+        });
+    });
+  }, HEALTH_POLL_MS);
   // Dismiss the splash screen once the Gator page has finished loading.
   // The page's own #gator-splash (renderer-side prefetch) takes over from here.
   gatorView.webContents.once('did-finish-load', () => {
@@ -3224,6 +3282,13 @@ setTimeout(scanAll, 500);
 
   _layoutNow();
   win.on('resize', layout);
+  // A pop-out is a window too, so left open it would keep the app and its
+  // backend alive after the main window is gone.
+  win.on('closed', () => {
+    for (const popout of _terminalPopouts.values()) {
+      if (!popout.isDestroyed()) popout.destroy();
+    }
+  });
   _attachMaximizeListener();
 
   // ΓöÇΓöÇ Context capture: watch Slack URL (Teams context is DOM-only) ΓöÇΓöÇΓöÇΓöÇ
@@ -4598,6 +4663,50 @@ ipcMain.handle('outlook-pane:navigate-pin', (_e, convId) => {
 // opens in a browser tab. The pin's web URL is passed in from the renderer
 // (p.meta.web_url); if absent, the pane just opens at OneDrive root.
 // Open a specific OWA draft URL in the Outlook WebContentsView.
+// Coding-agent terminal "Pop out": opens one session in its own window, attached
+// to the same PTY session as the main window. The window shares the default
+// session, so the backend's shell-key header is added to its requests too.
+const _terminalPopouts = new Map();
+ipcMain.handle('terminal:pop-out', (e, sessionId, label) => {
+  if (!gatorView || e.sender !== gatorView.webContents) return false;
+  if (typeof sessionId !== 'string' || !/^[A-Za-z0-9_.-]{1,128}$/.test(sessionId)) return false;
+  const existing = _terminalPopouts.get(sessionId);
+  if (existing && !existing.isDestroyed()) {
+    if (existing.isMinimized()) existing.restore();
+    existing.focus();
+    return true;
+  }
+  const popout = new BrowserWindow({
+    width: 1000,
+    height: 640,
+    backgroundColor: '#0b0d12',
+    autoHideMenuBar: true,
+    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
+  });
+  _terminalPopouts.set(sessionId, popout);
+  popout.on('closed', () => {
+    _terminalPopouts.delete(sessionId);
+    if (gatorView && !gatorView.webContents.isDestroyed()) {
+      gatorView.webContents.send('terminal:popout-closed', sessionId);
+    }
+  });
+  popout.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  popout.webContents.on('will-navigate', (event) => event.preventDefault());
+  const url = new URL(GATOR_URL.replace(/\/$/, '') + '/static/terminal-popout.html');
+  url.searchParams.set('session_id', sessionId);
+  url.searchParams.set('label', String(label || 'Terminal').slice(0, 80));
+  popout.loadURL(url.toString());
+  return true;
+});
+
+ipcMain.handle('terminal:close-pop-out', (e, sessionId) => {
+  if (!gatorView || e.sender !== gatorView.webContents) return false;
+  const popout = _terminalPopouts.get(sessionId);
+  if (!popout || popout.isDestroyed()) return false;
+  popout.close();
+  return true;
+});
+
 // Called by the 'Open in Outlook' button on Gator draft cards after the
 // backend creates a real Graph draft message and returns its OWA URL.
 ipcMain.handle('outlook-pane:open-draft', async (_e, url) => {
