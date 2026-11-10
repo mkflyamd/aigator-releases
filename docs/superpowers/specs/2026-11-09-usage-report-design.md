@@ -19,26 +19,26 @@ A day is active when the user sent at least one chat message or ran at least one
 
 Counts only. Never message text, file names, or tool arguments.
 
-| Column | Value |
-|---|---|
-| `Title` | key `email|date` (lowercase email, `YYYY-MM-DD`), unique |
-| `Email` | identity email |
-| `ReportDate` | the UTC date |
-| `OS` | Windows, macOS or Linux |
-| `AppVersion` | contents of `version.txt` |
-| `InstallId` | random UUID created once per install |
-| `Messages` | chat responses that day: `usage_log` rows with source `chat` or `chat-direct` |
-| `ToolRuns` | `tool_call_log` rows that day |
-| `InputTokens`, `OutputTokens` | sum of `usage_log` tokens that day |
-| `Conversations` | distinct `context_id` in `turn_log` that day |
-| `BackgroundTasks` | `tasks` rows created that day |
-| `ToolErrors` | `tool_call_log` rows whose `outcome` is `error` (cancelled and rejected are user actions, not errors) |
-| `McpToolRuns` | `tool_call_log` rows with `is_mcp` set |
-| `LlmErrors` | `turn_log` rows with an `llm_error` |
-| `Failovers` | `turn_log` rows with `failover_used` set |
-| `Drafts` | `task_drafts` rows created that day |
-| `AvgTurnMs` | average `turn_log.duration_ms` that day |
-| `Details` | JSON text of counts: `models` (turns per `provider/model`), `skills` (turns with each built-in skill active, from `turn_log.active_skills`), `tools` (top 10 built-in tools by runs), `errors` (tool errors per `error_code`) |
+| Column                        | Value                                                                                                                                                                                                                         |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
+| `Title`                       | key `email                                                                                                                                                                                                                    | date`(lowercase email,`YYYY-MM-DD`), unique |
+| `Email`                       | identity email                                                                                                                                                                                                                |
+| `ReportDate`                  | the UTC date                                                                                                                                                                                                                  |
+| `OS`                          | Windows, macOS or Linux                                                                                                                                                                                                       |
+| `AppVersion`                  | contents of `version.txt`                                                                                                                                                                                                     |
+| `InstallId`                   | random UUID created once per install                                                                                                                                                                                          |
+| `Messages`                    | chat responses that day: `usage_log` rows with source `chat` or `chat-direct`                                                                                                                                                 |
+| `ToolRuns`                    | `tool_call_log` rows that day                                                                                                                                                                                                 |
+| `InputTokens`, `OutputTokens` | sum of `usage_log` tokens that day                                                                                                                                                                                            |
+| `Conversations`               | distinct `context_id` in `turn_log` that day                                                                                                                                                                                  |
+| `BackgroundTasks`             | `tasks` rows created that day                                                                                                                                                                                                 |
+| `ToolErrors`                  | `tool_call_log` rows whose `outcome` is `error` (cancelled and rejected are user actions, not errors)                                                                                                                         |
+| `McpToolRuns`                 | `tool_call_log` rows with `is_mcp` set                                                                                                                                                                                        |
+| `LlmErrors`                   | `turn_log` rows with an `llm_error`                                                                                                                                                                                           |
+| `Failovers`                   | `turn_log` rows with `failover_used` set                                                                                                                                                                                      |
+| `Drafts`                      | `task_drafts` rows created that day                                                                                                                                                                                           |
+| `AvgTurnMs`                   | average `turn_log.duration_ms` that day                                                                                                                                                                                       |
+| `Details`                     | JSON text of counts: `models` (turns per `provider/model`), `skills` (turns with each built-in skill active, from `turn_log.active_skills`), `tools` (top 10 built-in tools by runs), `errors` (tool errors per `error_code`) |
 
 Names in `Details` are limited to built-in tools and skills. User-added MCP servers are counted under `mcp` and user-made skills under `custom`, never by name. A missing table or column gives zeros, as `tool_call_log` does for `ToolRuns`. These signals do not change which days are active.
 
@@ -48,10 +48,10 @@ Names in `Details` are limited to built-in tools and skills. User-added MCP serv
 
 The counts are read from `tasks.db`, which already records them. There are no new counters.
 
-| Function | Purpose |
-|---|---|
-| `report_pending(cfg, today=None) -> int` | Sends each unsent active past day. Returns the number of rows sent. Never raises. |
-| `run_usage_report_loop(cfg)` | Background loop: `report_pending` at startup, then once a day. Started and cancelled in `app.py`'s lifespan. |
+| Function                                 | Purpose                                                                                                      |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `report_pending(cfg, today=None) -> int` | Sends each unsent active past day. Returns the number of rows sent. Never raises.                            |
+| `run_usage_report_loop(cfg)`             | Background loop: `report_pending` at startup, then once a day. Started and cancelled in `app.py`'s lifespan. |
 
 - State lives in `~/.gator/usage_report.json`: the `InstallId` and the `email|date` keys already sent (last 60).
 - Config keys in `config.json`: `usage_list_site_id`, `usage_list_id`, `usage_list_link`. Nothing is shipped in the source. Reporting is off until both the site ID and the list ID are set.

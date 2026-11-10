@@ -31,15 +31,14 @@
 ### Task 1: Spec corrections and the About wording commit
 
 **Files:**
+
 - Modify: `docs/superpowers/specs/2026-11-09-usage-report-design.md`
 - Commit also: `web/static/index.html` (already edited)
 
 - [ ] **Step 1: Correct the `ToolErrors` definition**
 
 In the spec's table, replace
-`| \`ToolErrors\` | \`tool_call_log\` rows whose \`outcome\` is not success |`
-with
-`| \`ToolErrors\` | \`tool_call_log\` rows whose \`outcome\` is \`error\` (cancelled and rejected are user actions, not errors) |`
+`| \`ToolErrors\` | \`tool_call_log\` rows whose \`outcome\` is not success |`with`| \`ToolErrors\` | \`tool_call_log\` rows whose \`outcome\` is \`error\` (cancelled and rejected are user actions, not errors) |`
 
 - [ ] **Step 2: Correct the `skills` wording**
 
@@ -61,10 +60,12 @@ Run `git status` afterwards. Expected: clean.
 ### Task 2: Numeric signals
 
 **Files:**
+
 - Modify: `tests/test_usage_report.py` (fixture at lines 50-63, payload test at lines 227-233, new tests appended)
 - Modify: `web/usage_report.py` (imports, new constants and functions, `report_pending` lines 128-147)
 
 **Interfaces:**
+
 - Produces: `usage_report._signals_by_day(since_day: str) -> dict[str, dict]` where each value has the ten numeric keys plus `"Details"` (a JSON string; blank `{"errors":{},"models":{},"skills":{},"tools":{}}` until Task 3).
 - Produces: `usage_report._blank_signals() -> dict` (same shape, all zeros).
 - Produces: `usage_report._builtin_skills() -> set[str]` (used by Task 3 and monkeypatched in tests).
@@ -323,10 +324,12 @@ git commit -m "feat: daily usage row adds token, conversation, task, draft, erro
 ### Task 3: Details breakdowns
 
 **Files:**
+
 - Modify: `tests/test_usage_report.py` (append tests)
 - Modify: `web/usage_report.py` (`_signals_by_day`, one constant, `import re`)
 
 **Interfaces:**
+
 - Consumes: `_signals_by_day`, `_blank_details`, `_details_json`, `_builtin_skills`, `_blank_signals`, `_query` from Task 2.
 - Produces: `Details` JSON string with keys `models`, `skills`, `tools`, `errors`, each a `{name: count}` object.
 

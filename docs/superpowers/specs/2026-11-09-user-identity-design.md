@@ -8,10 +8,10 @@ The consumer is the daily usage report (`web/usage_report.py`, see the usage-rep
 
 ## Component: `web/identity.py`
 
-| Function | Purpose |
-|---|---|
+| Function                         | Purpose                                                                                                                                                                 |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `email_from_token(token) -> str` | Reads the token claims and returns the lowercased email from `upn`, then `preferred_username`, then `email`. Returns `""` for a malformed token or a claim without `@`. |
-| `get_identity() -> dict \| None` | Reads the stored `graph/token` and returns `{"id": email, "name": name}`, or `None` when there is no token or no email. |
+| `get_identity() -> dict \| None` | Reads the stored `graph/token` and returns `{"id": email, "name": name}`, or `None` when there is no token or no email.                                                 |
 
 Nothing extra is stored. The stored access token keeps its claims after it expires, so the identity stays available until the user signs out.
 
