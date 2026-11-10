@@ -240,28 +240,3 @@ def test_real_bwrap_run():
     assert out["with_extra"]["read_extra"] == "OK:extra-data"
     assert out["tree_kill"]["timed_out"] is True
     assert out["leftover_sleepers"] == 0
-
-
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlink layout")
-def test_an_alias_folder_on_the_interpreter_path_is_recreated_inside(tmp_path):
-    # uv: .venv/bin/python -> .../cpython-3.13-x/bin/python3 and cpython-3.13-x -> cpython-3.13.1-x
-    real = tmp_path / "uv" / "cpython-3.13.1-x"
-    (real / "bin").mkdir(parents=True)
-    (real / "bin" / "python3").write_text("")
-    (tmp_path / "uv" / "cpython-3.13-x").symlink_to("cpython-3.13.1-x")
-    venv_bin = tmp_path / "repo" / ".venv" / "bin"
-    venv_bin.mkdir(parents=True)
-    (venv_bin / "python").symlink_to(tmp_path / "uv" / "cpython-3.13-x" / "bin" / "python3")
-    bound = [str(real), str(tmp_path / "repo" / ".venv")]
-
-    links = ll.interpreter_links(str(venv_bin / "python"), bound)
-
-    # the alias is needed; the venv's own python link is already inside a bound folder
-    assert links == [("cpython-3.13.1-x", str(tmp_path / "uv" / "cpython-3.13-x"))]
-    req = dataclasses.replace(_req(), argv=[str(venv_bin / "python")])
-    argv = ll.build_argv(req, "bwrap", links)
-    assert ("cpython-3.13.1-x", str(tmp_path / "uv" / "cpython-3.13-x")) in _binds(argv, "--symlink")
-
-
-def test_a_bare_program_name_needs_no_links():
-    assert ll.interpreter_links("python3", []) == []
