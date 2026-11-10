@@ -436,7 +436,15 @@ async def test_details_ties_at_the_top_ten_cutoff_are_deterministic(env, monkeyp
     names = [f"t{i:02d}" for i in range(12)]
     monkeypatch.setattr(usage_report, "_builtin_tools", lambda: set(names))
     _sql(db, "INSERT INTO tool_call_log (created_at, tool_name, is_mcp) VALUES (?, ?, ?)",
-         [(D8, n, 0) for n in reversed(names)])
+         [(D8, n, 0) for n in names])
+    real_query = usage_report._query
+
+    def reversed_tool_rows(con, sql, params):
+        rows = real_query(con, sql, params)
+        return rows[::-1] if "tool_name" in sql else rows
+
+    # SQLite returns GROUP BY rows in name order; hand them over reversed so only the explicit sort can order them.
+    monkeypatch.setattr(usage_report, "_query", reversed_tool_rows)
     await usage_report.report_pending(CFG, today=TODAY)
     assert sorted(_details(graph)["tools"]) == names[:10]
 
