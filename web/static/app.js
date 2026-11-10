@@ -11718,15 +11718,24 @@ function _fuzzyFilterCommands(commands, query) {
   return scored.map((x) => x.command);
 }
 
-// Hosts whose https images may render inline in chat. Any other image URL stays a
-// plain link so model output can't beacon data out through an image request.
-const INLINE_IMAGE_HOSTS = ['mcp-platform.amd.com'];
+// Hosts whose https images may render inline in chat: the https MCP servers the user
+// has connected. Any other image URL stays a plain link so model output can't beacon
+// data out through an image request. Mirrors inline_image_hosts() on the server.
+const INLINE_IMAGE_HOSTS = new Set();
+
+window.registerInlineImageHost = function (url) {
+  try {
+    const u = new URL(url);
+    if (u.protocol === 'https:') INLINE_IMAGE_HOSTS.add(u.hostname);
+  } catch (_) {}
+};
+(window.__MCP_SKILLS__ || []).forEach((c) => window.registerInlineImageHost(c.url));
 
 function _isInlineImageUrl(href) {
   if (href.startsWith('/api/files/')) return !href.includes('..');
   try {
     const u = new URL(href.replace(/&amp;/g, '&'));
-    return u.protocol === 'https:' && INLINE_IMAGE_HOSTS.includes(u.hostname);
+    return u.protocol === 'https:' && INLINE_IMAGE_HOSTS.has(u.hostname);
   } catch (_) {
     return false;
   }
@@ -17586,6 +17595,7 @@ async function _loadMcpConnections() {
     connections.forEach((connection) => {
       if (connection.enabled !== false && Number(connection.tool_count || 0) > 0) {
         window.registerMcpSkill(connection.id, connection.name || connection.id);
+        window.registerInlineImageHost(connection.url_hint || '');
       }
     });
     _renderMcpConnections(connections);
