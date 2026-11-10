@@ -270,8 +270,7 @@ def test_a_bare_program_name_needs_no_links():
 def test_launch_does_not_recreate_a_link_that_lives_in_a_system_etc_bind(monkeypatch):
     # /etc/alternatives is bound by build_argv itself, so a program reached through it needs no --symlink
     _stub_bwrap(monkeypatch)
-    real_islink = os.path.islink
-    monkeypatch.setattr(ll.os.path, "islink", lambda p: p == "/etc/alternatives/python3" or real_islink(p))
+    monkeypatch.setattr(ll.os.path, "islink", lambda p: p == "/etc/alternatives/python3")
     monkeypatch.setattr(ll.os, "readlink", lambda p: "/usr/bin/python3.12")
     seen = []
     monkeypatch.setattr(ll, "run_process_group", lambda argv, *a: seen.append(argv))
