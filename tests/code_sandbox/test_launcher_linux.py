@@ -265,3 +265,43 @@ def test_an_alias_folder_on_the_interpreter_path_is_recreated_inside(tmp_path):
 
 def test_a_bare_program_name_needs_no_links():
     assert ll.interpreter_links("python3", []) == []
+
+
+def test_launch_does_not_recreate_a_link_that_lives_in_a_system_etc_bind(monkeypatch):
+    # /etc/alternatives is bound by build_argv itself, so a program reached through it needs no --symlink
+    _stub_bwrap(monkeypatch)
+    real_islink = os.path.islink
+    monkeypatch.setattr(ll.os.path, "islink", lambda p: p == "/etc/alternatives/python3" or real_islink(p))
+    monkeypatch.setattr(ll.os, "readlink", lambda p: "/usr/bin/python3.12")
+    seen = []
+    monkeypatch.setattr(ll, "run_process_group", lambda argv, *a: seen.append(argv))
+    ll.launch(dataclasses.replace(_req(), argv=["/etc/alternatives/python3", "code.py"]))
+    assert _binds(seen[0], "--symlink") == []
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="creating symlinks needs a privilege on Windows")
+def test_launch_recreates_every_alias_in_a_chain_of_links(monkeypatch, tmp_path):
+    (tmp_path / "real" / "bin").mkdir(parents=True)
+    (tmp_path / "real" / "bin" / "python3").write_text("")
+    (tmp_path / "b").symlink_to(tmp_path / "real")
+    (tmp_path / "a").symlink_to(tmp_path / "b")
+    _stub_bwrap(monkeypatch)
+    seen = []
+    monkeypatch.setattr(ll, "run_process_group", lambda argv, *a: seen.append(argv))
+    req = dataclasses.replace(_req(), argv=[str(tmp_path / "a" / "bin" / "python3")],
+                              cwd=tmp_path / "work", runtime_paths=[tmp_path / "real"],
+                              read_paths=[], write_paths=[])
+    ll.launch(req)
+    assert {link for _, link in _binds(seen[0], "--symlink")} == {str(tmp_path / "a"), str(tmp_path / "b")}
+
+
+def test_launch_unreadable_program_path_is_unavailable_and_runs_nothing(monkeypatch):
+    _stub_bwrap(monkeypatch)
+
+    def unreadable(*a, **k):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(ll, "interpreter_links", unreadable)
+    monkeypatch.setattr(ll, "run_process_group", lambda *a, **k: pytest.fail("process must not start"))
+    with pytest.raises(ll.SandboxUnavailable):
+        ll.launch(_req())

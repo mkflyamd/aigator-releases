@@ -121,10 +121,15 @@ def launch(req: SandboxRequest) -> SandboxResult:
         read_paths=[_real(p) for p in req.read_paths],
         write_paths=[_real(p) for p in req.write_paths],
     )
+    etc = (*ETC_RO_PATHS, *NETWORK_ETC_RO_PATHS) if real.network else ETC_RO_PATHS
     bound = [str(p) for p in (real.cwd, *real.runtime_paths, *real.read_paths, *real.write_paths)]
-    bound += [p for p in SYSTEM_RO_PATHS]
+    bound += [*SYSTEM_RO_PATHS, *etc]
     try:
-        argv = build_argv(real, bwrap, interpreter_links(real.argv[0], bound))
+        links = interpreter_links(real.argv[0], bound)
+    except OSError as exc:
+        raise SandboxUnavailable(f"The program's path could not be read ({type(exc).__name__}).") from exc
+    try:
+        argv = build_argv(real, bwrap, links)
     except ValueError as exc:
         raise SandboxUnavailable(f"A sandbox path was refused: {exc}") from exc
     try:
