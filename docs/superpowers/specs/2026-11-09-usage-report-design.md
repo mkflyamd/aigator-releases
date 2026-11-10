@@ -42,7 +42,8 @@ The counts are read from `tasks.db`, which already records them. There are no ne
 | `run_usage_report_loop(cfg)` | Background loop: `report_pending` at startup, then once a day. Started and cancelled in `app.py`'s lifespan. |
 
 - State lives in `~/.gator/usage_report.json`: the `InstallId` and the `email|date` keys already sent (last 60).
-- Config keys, with the shipped list as the default: `usage_list_site_id`, `usage_list_id`, `usage_list_link`. Setting the site or list ID to an empty string turns reporting off.
+- Config keys in `config.json`: `usage_list_site_id`, `usage_list_id`, `usage_list_link`. Nothing is shipped in the source. Reporting is off until both the site ID and the list ID are set.
+- While reporting is on, `/health` returns `usage_reporting: true` and the About dialog shows: "Daily chat and tool-run counts are reported under your Microsoft email. No message content is sent."
 - The Graph token comes from `GraphClient` (the existing refresh logic). The row is created with `POST /sites/{site}/lists/{list}/items`.
 - A day is marked sent after a successful create, or after a duplicate-key rejection (the row already exists).
 - On a 403 the code opens the list's sharing link once (`GET /shares/{id}/list`) and retries once. This gives a user access through the org-wide link.

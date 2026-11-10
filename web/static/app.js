@@ -6473,14 +6473,14 @@ function openAbout() {
   aboutModal.classList.remove('hidden');
   requestAnimationFrame(() => aboutModal.classList.add('is-open'));
   const versionEl = document.getElementById('about-version');
-  if (versionEl && !versionEl.textContent) {
-    fetch('/health')
-      .then((r) => r.json())
-      .then((d) => {
-        versionEl.textContent = 'v' + (d.version || '');
-      })
-      .catch(() => {});
-  }
+  const usageNoteEl = document.getElementById('about-usage-note');
+  fetch('/health')
+    .then((r) => r.json())
+    .then((d) => {
+      if (versionEl && !versionEl.textContent) versionEl.textContent = 'v' + (d.version || '');
+      if (usageNoteEl) usageNoteEl.classList.toggle('hidden', !d.usage_reporting);
+    })
+    .catch(() => {});
 }
 function closeAbout() {
   aboutModal.classList.remove('is-open');

@@ -190,6 +190,20 @@ async def test_unset_list_ids_disable_reporting(env):
     assert graph.posts == []
 
 
+async def test_reporting_is_off_without_config(env):
+    db, graph = env
+    _add(db, "usage_log", "2026-11-08", 1)
+    assert await usage_report.report_pending({}, today=TODAY) == 0
+    assert await usage_report.report_pending(None, today=TODAY) == 0
+    assert graph.posts == []
+
+
+def test_is_enabled_needs_both_ids():
+    assert usage_report.is_enabled(CFG)
+    assert not usage_report.is_enabled({})
+    assert not usage_report.is_enabled({"usage_list_site_id": "aigator-fake-site"})
+
+
 async def test_missing_tool_table_still_reports_messages(env):
     db, graph = env
     con = sqlite3.connect(db)

@@ -19,14 +19,15 @@ from log_sanitizer import sanitize
 
 _log = logging.getLogger(__name__)
 
-USAGE_SITE_ID = "amdcloud-my.sharepoint.com,10682248-af0e-4cf7-afaa-4644bb76721b,b6568823-c240-4e3f-9366-e7de15790fa6"
-USAGE_LIST_ID = "8c849f55-edf0-4117-8f3c-cba1e6164241"
-USAGE_LIST_LINK = "https://amdcloud-my.sharepoint.com/:l:/g/personal/maykulka_amd_com/JABVn4SM8O0XQY88y6HmFkJBARBWnKxSLXMJiUGH98lkULA?e=oaVZ4p"
-
 STATE_FILE = GATOR_DIR / "usage_report.json"
 MAX_AGE_DAYS = 7
 _REPORT_INTERVAL_S = 24 * 60 * 60
 _SENT_KEYS_KEPT = 60
+
+
+def is_enabled(cfg: dict | None) -> bool:
+    cfg = cfg or {}
+    return bool(cfg.get("usage_list_site_id") and cfg.get("usage_list_id"))
 
 
 def _graph_client():
@@ -113,12 +114,11 @@ def _send(gc, site: str, list_id: str, link: str, fields: dict) -> str:
 
 async def report_pending(cfg: dict | None = None, today: date | None = None) -> int:
     """Send each unsent active past day (up to MAX_AGE_DAYS back). Returns rows sent. Never raises."""
-    cfg = cfg or {}
-    site = cfg.get("usage_list_site_id", USAGE_SITE_ID)
-    list_id = cfg.get("usage_list_id", USAGE_LIST_ID)
-    link = cfg.get("usage_list_link", USAGE_LIST_LINK)
-    if not site or not list_id:
+    if not is_enabled(cfg):
         return 0
+    site = cfg["usage_list_site_id"]
+    list_id = cfg["usage_list_id"]
+    link = cfg.get("usage_list_link", "")
     try:
         gc = await asyncio.to_thread(_graph_client)
         email = email_from_token(await asyncio.to_thread(gc.get_token))
