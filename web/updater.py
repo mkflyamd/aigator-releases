@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import logging
+import os
 import re
 import subprocess
 import sys
@@ -28,6 +29,7 @@ _ALLOWED_INSTALLER_URL_RE = re.compile(
     r"^https://github\.com/mkflyamd/aigator-releases/releases/download/v([^/]+)/AI-Gator-\1-Windows-x64\.exe$"
 )
 _WINDOWS_ASSET_RE = re.compile(r"^AI-Gator-(\d+(?:\.\d+)*)-Windows-x64\.exe$")
+_ANY_ASSET_RE = re.compile(r"^AI-Gator-(\d+(?:\.\d+)*)-[A-Za-z0-9_.-]+$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 # In-app install runs only for releases signed with the pinned cert. Set this to
@@ -95,14 +97,33 @@ def parse_checksums(text: str) -> tuple[str, str, str] | None:
     return None
 
 
+def parse_release_version(text: str) -> str | None:
+    """Return the version of the first AI Gator asset listed in a sha256sum-format
+    file, whatever its platform."""
+    for line in text.splitlines():
+        parts = line.strip().split(None, 1)
+        if len(parts) != 2:
+            continue
+        match = _ANY_ASSET_RE.match(parts[1].lstrip("*"))
+        if match:
+            return match.group(1)
+    return None
+
+
 def _install_supported(version: str) -> bool:
-    return FIRST_SIGNED_VERSION is not None and Version(version) >= Version(FIRST_SIGNED_VERSION)
+    return (
+        sys.platform == "win32"
+        and FIRST_SIGNED_VERSION is not None
+        and Version(version) >= Version(FIRST_SIGNED_VERSION)
+    )
 
 
 async def check_for_update() -> UpdateInfo | None:
     """Read the latest release's checksums and compare versions. Returns UpdateInfo
-    if newer, else None. Failures are logged and leave the state idle."""
-    if not CHECKSUMS_URL or sys.platform != "win32":
+    if newer, else None. Failures are logged and leave the state idle. Only Windows
+    gets an installer entry; other platforms are told a release exists and link to
+    its page."""
+    if not CHECKSUMS_URL:
         return None
     if _state.state in ("downloading", "ready"):
         return None
@@ -112,15 +133,23 @@ async def check_for_update() -> UpdateInfo | None:
             resp = await client.get(CHECKSUMS_URL)
             resp.raise_for_status()
             text = resp.text
-        entry = parse_checksums(text)
-        if entry is None:
-            _log.warning("Update check: no Windows installer in the latest release checksums")
-            _state.state = "idle"
-            return None
-        version, name, sha256 = entry
+        if sys.platform == "win32":
+            entry = parse_checksums(text)
+            if entry is None:
+                _log.warning("Update check: no Windows installer in the latest release checksums")
+                _state.state = "idle"
+                return None
+            version, name, sha256 = entry
+        else:
+            version = parse_release_version(text)
+            if version is None:
+                _log.warning("Update check: no AI Gator assets in the latest release checksums")
+                _state.state = "idle"
+                return None
+            name, sha256 = "", ""
         if Version(version) > Version(get_current_version()):
-            url = f"https://github.com/mkflyamd/aigator-releases/releases/download/v{version}/{name}"
-            if not _ALLOWED_INSTALLER_URL_RE.match(url):
+            url = f"https://github.com/mkflyamd/aigator-releases/releases/download/v{version}/{name}" if name else ""
+            if url and not _ALLOWED_INSTALLER_URL_RE.match(url):
                 _log.warning("Rejecting update v%s: untrusted source URL", version)
                 _state.state = "idle"
                 return None
@@ -241,33 +270,40 @@ async def download_update() -> None:
             tmp_path.unlink(missing_ok=True)
 
 
-def _ps_quote(value: str) -> str:
-    return "'" + value.replace("'", "''") + "'"
+_APP_EXE_NAME = "AI Gator.exe"
 
-
-def _install_script(installer: str, app_dir: str) -> str:
-    """PowerShell run detached: stop the running app and its backend (which are
-    holding the install files), then run the installer silently and relaunch."""
-    return (
-        "Start-Sleep -Seconds 1; "
-        f"$dir = {_ps_quote(app_dir)}; "
-        "Get-Process | Where-Object { $_.Id -ne $PID -and $_.Path -and "
-        "$_.Path.StartsWith($dir, [StringComparison]::OrdinalIgnoreCase) } | "
-        "Stop-Process -Force -ErrorAction SilentlyContinue; "
-        "Start-Sleep -Seconds 2; "
-        f"Start-Process -FilePath {_ps_quote(installer)} -ArgumentList '/S','--updated','--force-run' -Wait"
-    )
+# Paths reach PowerShell through the environment, so no quoting rules apply to them.
+_INSTALL_SCRIPT = (
+    "Start-Sleep -Seconds 1; "
+    "$dir = $env:AIGATOR_APP_DIR.TrimEnd('\\') + '\\'; "
+    "Get-Process | Where-Object { $_.Id -ne $PID -and $_.Path -and "
+    "$_.Path.StartsWith($dir, [StringComparison]::OrdinalIgnoreCase) } | "
+    "Stop-Process -Force -ErrorAction SilentlyContinue; "
+    "Start-Sleep -Seconds 2; "
+    "try { "
+    "$p = Start-Process -FilePath $env:AIGATOR_INSTALLER -ArgumentList '/S','--updated','--force-run' "
+    "-Wait -PassThru -ErrorAction Stop; "
+    "$ok = ($p.ExitCode -eq 0); $why = 'installer exit code ' + $p.ExitCode "
+    "} catch { $ok = $false; $why = $_.Exception.Message }; "
+    "if (-not $ok) { "
+    "Add-Content -LiteralPath $env:AIGATOR_UPDATE_LOG -Value ((Get-Date -Format o) + ' update failed: ' + $why); "
+    "Start-Process -FilePath ($dir + $env:AIGATOR_APP_EXE) "
+    "}"
+)
 
 
 def launch_installer() -> None:
     """Hand the verified installer to a detached helper that closes the app,
-    installs silently and relaunches. This process is stopped by the helper."""
+    installs silently and relaunches. If the installer fails, the helper logs the
+    failure and relaunches the installed app. This process is stopped by the helper."""
     path = _state._installer_path
     if not path or not Path(path).exists():
+        _log.warning("Install requested but the installer file is missing")
         _state.state = "error"
         _state.error = "Installer file not found"
         return
     if not getattr(sys, "frozen", False):
+        _log.warning("Install requested outside the packaged app")
         _state.state = "error"
         _state.error = "Install is only available in the packaged app"
         return
@@ -282,8 +318,16 @@ def launch_installer() -> None:
         | subprocess.CREATE_NEW_PROCESS_GROUP
         | subprocess.CREATE_BREAKAWAY_FROM_JOB
     )
+    kwargs["env"] = {
+        **os.environ,
+        "AIGATOR_INSTALLER": path,
+        "AIGATOR_APP_DIR": app_dir,
+        "AIGATOR_APP_EXE": _APP_EXE_NAME,
+        "AIGATOR_UPDATE_LOG": str(Path(path).with_suffix(".log")),
+    }
+    _log.info("Launching update installer %s", path)
     subprocess.Popen(
-        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", _install_script(path, app_dir)],
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", _INSTALL_SCRIPT],
         **kwargs,
     )
 

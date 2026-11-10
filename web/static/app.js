@@ -17241,6 +17241,7 @@ document.addEventListener('DOMContentLoaded', _refreshUsageBar);
       toast.appendChild(_btn('Install & Restart', '#a6e3a1', _otaInstall));
       toast.appendChild(_xBtn(_otaDismiss));
     } else if (data.state === 'error') {
+      _autoInstall = false;
       toast.appendChild(_span('Update download failed'));
       toast.appendChild(_btn('Retry', '#f38ba8', _otaDownload));
       toast.appendChild(_xBtn(_otaDismiss));
@@ -17264,15 +17265,19 @@ document.addEventListener('DOMContentLoaded', _refreshUsageBar);
     _downloadInitiated = true;
     sessionStorage.setItem('ota-download-initiated', '1');
     try {
-      await fetch('/api/update/download', { method: 'POST' });
-    } catch (_) {}
+      const r = await fetch('/api/update/download', { method: 'POST' });
+      const data = await r.json();
+      return data.ok === true;
+    } catch (_) {
+      return false;
+    }
   }
 
   // One-click install: download, then install as soon as the download is verified.
   async function _otaInstallNow() {
     _autoInstall = true;
     _lastState = 'downloading';
-    await _otaDownload();
+    if (!(await _otaDownload())) _autoInstall = false;
     _checkUpdate();
   }
 

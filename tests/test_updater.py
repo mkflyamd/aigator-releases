@@ -51,7 +51,7 @@ def _mock_checksums_client(text=None, error=None):
     return mock_client
 
 
-async def _run_check(tmp_path, current, client, first_signed=None):
+async def _run_check(tmp_path, current, client, first_signed=None, platform="win32"):
     import web.updater as updater
 
     vf = tmp_path / "version.txt"
@@ -60,7 +60,7 @@ async def _run_check(tmp_path, current, client, first_signed=None):
     with (
         patch.object(updater, "VERSION_FILE", vf),
         patch.object(updater, "FIRST_SIGNED_VERSION", first_signed),
-        patch.object(updater.sys, "platform", "win32"),
+        patch.object(updater.sys, "platform", platform),
         patch("web.updater.httpx.AsyncClient", return_value=client),
     ):
         return await updater.check_for_update()
@@ -180,14 +180,43 @@ async def test_check_for_update_skipped_when_no_url():
     assert updater._state.state == "idle"
 
 
+@pytest.mark.parametrize("platform", ["darwin", "linux"])
 @pytest.mark.asyncio
-async def test_check_for_update_skipped_off_windows():
+async def test_check_for_update_off_windows_reports_release_without_install(tmp_path, platform):
     import web.updater as updater
 
-    updater._state = updater._UpdateState()
-    with patch.object(updater.sys, "platform", "darwin"):
-        assert await updater.check_for_update() is None
+    text = f"{SHA_A}  AI-Gator-1.1.0-macOS-arm64.dmg\n"
+    result = await _run_check(tmp_path, "1.0.9", _mock_checksums_client(text), first_signed="1.0.0", platform=platform)
+
+    assert result is not None
+    assert result.version == "1.1.0"
+    assert result.install_supported is False
+    assert updater._state.state == "available"
+
+
+@pytest.mark.asyncio
+async def test_check_for_update_off_windows_idle_when_no_assets(tmp_path):
+    import web.updater as updater
+
+    result = await _run_check(tmp_path, "1.0.9", _mock_checksums_client("junk\n"), platform="darwin")
+
+    assert result is None
     assert updater._state.state == "idle"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (f"{SHA_A}  AI-Gator-1.1.0-macOS-arm64.dmg\n", "1.1.0"),
+        (f"{SHA_A} *AI-Gator-2.0.1-Linux-x64.AppImage\n", "2.0.1"),
+        ("", None),
+        (f"{SHA_A}  other-1.1.0.dmg\n", None),
+    ],
+)
+def test_parse_release_version(text, expected):
+    import web.updater as updater
+
+    assert updater.parse_release_version(text) == expected
 
 
 @pytest.mark.asyncio
@@ -206,15 +235,54 @@ async def test_download_update_refused_when_install_unsupported():
 def test_install_script_stops_app_then_runs_installer_silently():
     import web.updater as updater
 
-    installer = "C:\\Temp\\O'Brien\\AIGatorInstaller.exe"
-    script = updater._install_script(installer, "C:\\Users\\x\\AppData\\Local\\Programs\\AI Gator")
+    script = updater._INSTALL_SCRIPT
 
-    assert "'C:\\Temp\\O''Brien\\AIGatorInstaller.exe'" in script
+    assert "$env:AIGATOR_INSTALLER" in script
     assert "'/S','--updated','--force-run'" in script
     assert script.index("Stop-Process") < script.index("Start-Process")
 
 
-def test_launch_installer_refuses_when_not_packaged(tmp_path):
+def test_install_script_relaunches_app_and_logs_when_installer_fails():
+    import web.updater as updater
+
+    script = updater._INSTALL_SCRIPT
+    failure = script[script.index("if (-not $ok)") :]
+
+    assert "$env:AIGATOR_UPDATE_LOG" in failure
+    assert "$env:AIGATOR_APP_EXE" in failure
+    assert "Start-Process" in failure
+
+
+def test_install_script_process_filter_is_anchored_to_the_app_directory():
+    import web.updater as updater
+
+    assert "TrimEnd('\\') + '\\'" in updater._INSTALL_SCRIPT
+
+
+def test_launch_installer_passes_paths_in_environment_not_script(tmp_path):
+    import web.updater as updater
+
+    installer = tmp_path / "O'Brien ’s" / "AIGatorInstaller.exe"
+    installer.parent.mkdir()
+    installer.write_bytes(b"x")
+    updater._state = updater._UpdateState()
+    updater._state._installer_path = str(installer)
+
+    with (
+        patch.object(updater.sys, "frozen", True, create=True),
+        patch.object(updater.sys, "executable", str(tmp_path / "app" / "resources" / "backend" / "aigator-backend.exe")),
+        patch("web.updater.subprocess.Popen") as popen,
+    ):
+        updater.launch_installer()
+
+    args, kwargs = popen.call_args
+    assert str(installer) not in args[0][-1]
+    assert kwargs["env"]["AIGATOR_INSTALLER"] == str(installer)
+    assert kwargs["env"]["AIGATOR_APP_DIR"] == str((tmp_path / "app").resolve())
+    assert kwargs["env"]["AIGATOR_UPDATE_LOG"] == str(installer.with_suffix(".log"))
+
+
+def test_launch_installer_refuses_when_not_packaged(tmp_path, caplog):
     import web.updater as updater
 
     installer = tmp_path / "AIGatorInstaller.exe"
@@ -222,11 +290,12 @@ def test_launch_installer_refuses_when_not_packaged(tmp_path):
     updater._state = updater._UpdateState()
     updater._state._installer_path = str(installer)
 
-    with patch("web.updater.subprocess.Popen") as popen:
+    with caplog.at_level("WARNING"), patch("web.updater.subprocess.Popen") as popen:
         updater.launch_installer()
 
     popen.assert_not_called()
     assert updater._state.state == "error"
+    assert "outside the packaged app" in caplog.text
 
 
 @pytest.mark.asyncio
