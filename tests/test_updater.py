@@ -271,6 +271,9 @@ def test_launch_installer_passes_paths_in_environment_not_script(tmp_path):
     with (
         patch.object(updater.sys, "frozen", True, create=True),
         patch.object(updater.sys, "executable", str(tmp_path / "app" / "resources" / "backend" / "aigator-backend.exe")),
+        patch.object(updater.subprocess, "DETACHED_PROCESS", 0x8, create=True),
+        patch.object(updater.subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200, create=True),
+        patch.object(updater.subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0x1000000, create=True),
         patch("web.updater.subprocess.Popen") as popen,
     ):
         updater.launch_installer()
