@@ -12,6 +12,7 @@ import sqlite3
 import sys
 import uuid
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 
 from config import GATOR_DIR, TASKS_DB
 from identity import email_from_token
@@ -23,6 +24,22 @@ STATE_FILE = GATOR_DIR / "usage_report.json"
 MAX_AGE_DAYS = 7
 _REPORT_INTERVAL_S = 24 * 60 * 60
 _SENT_KEYS_KEPT = 60
+_SIGNAL_FIELDS = (
+    "InputTokens", "OutputTokens", "Conversations", "BackgroundTasks", "ToolErrors",
+    "McpToolRuns", "LlmErrors", "Failovers", "Drafts", "AvgTurnMs",
+)
+_SCALAR_SIGNALS = (
+    ("InputTokens", "COALESCE(SUM(input_tokens), 0)", "usage_log", ""),
+    ("OutputTokens", "COALESCE(SUM(output_tokens), 0)", "usage_log", ""),
+    ("Conversations", "COUNT(DISTINCT context_id)", "turn_log", ""),
+    ("BackgroundTasks", "COUNT(*)", "tasks", ""),
+    ("ToolErrors", "COUNT(*)", "tool_call_log", "AND outcome = 'error'"),
+    ("McpToolRuns", "COUNT(*)", "tool_call_log", "AND is_mcp = 1"),
+    ("LlmErrors", "COUNT(*)", "turn_log", "AND llm_error IS NOT NULL AND llm_error != ''"),
+    ("Failovers", "COUNT(*)", "turn_log", "AND failover_used != 0"),
+    ("Drafts", "COUNT(*)", "task_drafts", ""),
+    ("AvgTurnMs", "CAST(ROUND(AVG(duration_ms)) AS INTEGER)", "turn_log", "AND duration_ms IS NOT NULL"),
+)
 
 
 def is_enabled(cfg: dict | None) -> bool:
@@ -86,6 +103,44 @@ def _counts_by_day(since_day: str) -> dict[str, list[int]]:
     return days
 
 
+def _query(con: sqlite3.Connection, sql: str, params: tuple) -> list:
+    try:
+        return con.execute(sql, params).fetchall()
+    except sqlite3.OperationalError:
+        return []
+
+
+def _builtin_skills() -> set[str]:
+    root = Path(__file__).parent / "skills"
+    return {p.name for p in root.iterdir() if p.is_dir() and not p.name.startswith("_")}
+
+
+def _blank_details() -> dict:
+    return {"models": {}, "skills": {}, "tools": {}, "errors": {}}
+
+
+def _details_json(details: dict) -> str:
+    return json.dumps(details, separators=(",", ":"), sort_keys=True)
+
+
+def _blank_signals() -> dict:
+    return {**{name: 0 for name in _SIGNAL_FIELDS}, "Details": _details_json(_blank_details())}
+
+
+def _signals_by_day(since_day: str) -> dict[str, dict]:
+    """Return {day: signal fields} for UTC days on or after *since_day*. Missing tables or columns give zeros."""
+    scalars: dict[str, dict] = {}
+    con = sqlite3.connect(f"file:{TASKS_DB}?mode=ro", uri=True)
+    try:
+        for field, expr, table, cond in _SCALAR_SIGNALS:
+            sql = f"SELECT substr(created_at, 1, 10), {expr} FROM {table} WHERE created_at >= ? {cond} GROUP BY 1"
+            for day, value in _query(con, sql, (since_day,)):
+                scalars.setdefault(day, _blank_signals())[field] = value or 0
+    finally:
+        con.close()
+    return scalars
+
+
 def _share_id(link: str) -> str:
     return "u!" + base64.urlsafe_b64encode(link.encode()).decode().rstrip("=")
 
@@ -125,7 +180,9 @@ async def report_pending(cfg: dict | None = None, today: date | None = None) -> 
         if not email:
             return 0
         today = today or datetime.now(timezone.utc).date()
-        days = await asyncio.to_thread(_counts_by_day, (today - timedelta(days=MAX_AGE_DAYS)).isoformat())
+        since = (today - timedelta(days=MAX_AGE_DAYS)).isoformat()
+        days = await asyncio.to_thread(_counts_by_day, since)
+        signals = await asyncio.to_thread(_signals_by_day, since)
         state = _load_state()
         sent_keys = set(state["sent"])
         version = _app_version()
@@ -145,6 +202,7 @@ async def report_pending(cfg: dict | None = None, today: date | None = None) -> 
                 "Messages": messages,
                 "ToolRuns": tool_runs,
             }
+            fields.update(signals.get(day) or _blank_signals())
             try:
                 outcome = await asyncio.to_thread(_send, gc, site, list_id, link, fields)
             except Exception as exc:

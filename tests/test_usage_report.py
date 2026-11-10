@@ -51,8 +51,20 @@ class FakeGraph:
 def env(tmp_path, monkeypatch):
     db = tmp_path / "tasks.db"
     con = sqlite3.connect(db)
-    con.execute("CREATE TABLE usage_log (id INTEGER PRIMARY KEY, source TEXT, created_at TEXT)")
-    con.execute("CREATE TABLE tool_call_log (id INTEGER PRIMARY KEY, created_at TEXT, tool_name TEXT)")
+    con.execute(
+        "CREATE TABLE usage_log (id INTEGER PRIMARY KEY, source TEXT, "
+        "input_tokens INTEGER, output_tokens INTEGER, created_at TEXT)"
+    )
+    con.execute(
+        "CREATE TABLE tool_call_log (id INTEGER PRIMARY KEY, created_at TEXT, tool_name TEXT, "
+        "is_mcp INTEGER DEFAULT 0, outcome TEXT DEFAULT 'success', error_code TEXT)"
+    )
+    con.execute(
+        "CREATE TABLE turn_log (id INTEGER PRIMARY KEY, context_id TEXT, provider TEXT, model TEXT, "
+        "llm_error TEXT, failover_used INTEGER DEFAULT 0, duration_ms INTEGER, active_skills TEXT, created_at TEXT)"
+    )
+    con.execute("CREATE TABLE tasks (task_id INTEGER PRIMARY KEY, created_at TEXT)")
+    con.execute("CREATE TABLE task_drafts (draft_id INTEGER PRIMARY KEY, created_at TEXT)")
     con.commit()
     con.close()
     monkeypatch.setattr(usage_report, "TASKS_DB", db)
@@ -60,6 +72,7 @@ def env(tmp_path, monkeypatch):
     graph = FakeGraph()
     monkeypatch.setattr(usage_report, "_graph_client", lambda: graph)
     monkeypatch.setattr(usage_report, "_app_version", lambda: "9.9.9")
+    monkeypatch.setattr(usage_report, "_builtin_skills", lambda: {"teams", "email"})
     return db, graph
 
 
@@ -71,6 +84,13 @@ def _add(db, table, day, n=1, source="chat"):
             con.execute("INSERT INTO usage_log (source, created_at) VALUES (?, ?)", (source, ts))
         else:
             con.execute("INSERT INTO tool_call_log (created_at, tool_name) VALUES (?, 'x')", (ts,))
+    con.commit()
+    con.close()
+
+
+def _sql(db, sql, rows):
+    con = sqlite3.connect(db)
+    con.executemany(sql, rows)
     con.commit()
     con.close()
 
@@ -230,4 +250,101 @@ async def test_payload_has_only_the_expected_columns(env):
     await usage_report.report_pending(CFG, today=TODAY)
     assert set(graph.posts[0][1]["fields"]) == {
         "Title", "Email", "ReportDate", "OS", "AppVersion", "InstallId", "Messages", "ToolRuns",
+        "InputTokens", "OutputTokens", "Conversations", "BackgroundTasks", "ToolErrors",
+        "McpToolRuns", "LlmErrors", "Failovers", "Drafts", "AvgTurnMs", "Details",
     }
+
+
+D8 = "2026-11-08T10:00:00.000000+00:00"
+
+
+async def test_token_sums_include_every_source(env):
+    db, graph = env
+    _sql(db, "INSERT INTO usage_log (source, input_tokens, output_tokens, created_at) VALUES (?, ?, ?, ?)", [
+        ("chat", 100, 10, D8),
+        ("background", 50, 5, D8),
+        ("chat", 7, 1, "2026-11-09T10:00:00.000000+00:00"),
+    ])
+    await usage_report.report_pending(CFG, today=TODAY)
+    f = graph.posts[0][1]["fields"]
+    assert (f["InputTokens"], f["OutputTokens"]) == (150, 15)
+
+
+async def test_turn_signals(env):
+    db, graph = env
+    _add(db, "usage_log", "2026-11-08", 1)
+    _sql(db, "INSERT INTO turn_log (context_id, provider, model, llm_error, failover_used, duration_ms, "
+             "active_skills, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", [
+        ("c1", "P", "m1", None, 0, 100, "[]", D8),
+        ("c1", "P", "m1", "boom", 1, 200, "[]", D8),
+        ("c2", "P", "m2", "", 0, 300, "[]", D8),
+    ])
+    await usage_report.report_pending(CFG, today=TODAY)
+    f = graph.posts[0][1]["fields"]
+    assert f["Conversations"] == 2
+    assert f["LlmErrors"] == 1
+    assert f["Failovers"] == 1
+    assert f["AvgTurnMs"] == 200
+
+
+async def test_background_tasks_and_drafts_count_for_their_day(env):
+    db, graph = env
+    _add(db, "usage_log", "2026-11-08", 1)
+    _sql(db, "INSERT INTO tasks (task_id, created_at) VALUES (?, ?)", [
+        (1, D8), (2, D8), (3, "2026-11-07T10:00:00.000000+00:00"),
+    ])
+    _sql(db, "INSERT INTO task_drafts (draft_id, created_at) VALUES (?, ?)", [(1, D8)])
+    await usage_report.report_pending(CFG, today=TODAY)
+    f = graph.posts[0][1]["fields"]
+    assert (f["BackgroundTasks"], f["Drafts"]) == (2, 1)
+
+
+async def test_tool_errors_count_only_error_outcome_and_mcp_runs_are_counted(env):
+    db, graph = env
+    _sql(db, "INSERT INTO tool_call_log (created_at, tool_name, is_mcp, outcome, error_code) VALUES (?, ?, ?, ?, ?)", [
+        (D8, "read_file", 0, "success", None),
+        (D8, "read_file", 0, "error", "tool_error"),
+        (D8, "run_python", 0, "cancelled", None),
+        (D8, "srv_tool", 1, "success", None),
+        (D8, "srv_tool", 1, "error", "mcp_error"),
+    ])
+    await usage_report.report_pending(CFG, today=TODAY)
+    f = graph.posts[0][1]["fields"]
+    assert (f["ToolRuns"], f["ToolErrors"], f["McpToolRuns"]) == (5, 2, 2)
+
+
+async def test_signal_only_day_is_not_active(env):
+    db, graph = env
+    _sql(db, "INSERT INTO turn_log (context_id, provider, model, created_at) VALUES (?, ?, ?, ?)", [("c1", "P", "m1", D8)])
+    _sql(db, "INSERT INTO tasks (task_id, created_at) VALUES (?, ?)", [(1, D8)])
+    _sql(db, "INSERT INTO task_drafts (draft_id, created_at) VALUES (?, ?)", [(1, D8)])
+    assert await usage_report.report_pending(CFG, today=TODAY) == 0
+    assert graph.posts == []
+
+
+async def test_missing_signal_tables_give_zeros(env):
+    db, graph = env
+    con = sqlite3.connect(db)
+    for table in ("turn_log", "tasks", "task_drafts"):
+        con.execute(f"DROP TABLE {table}")
+    con.commit()
+    con.close()
+    _add(db, "usage_log", "2026-11-08", 2)
+    assert await usage_report.report_pending(CFG, today=TODAY) == 1
+    f = graph.posts[0][1]["fields"]
+    assert f["Messages"] == 2
+    for name in ("Conversations", "BackgroundTasks", "LlmErrors", "Failovers", "Drafts", "AvgTurnMs"):
+        assert f[name] == 0
+
+
+async def test_legacy_tool_table_without_new_columns_gives_zeros(env):
+    db, graph = env
+    con = sqlite3.connect(db)
+    con.execute("DROP TABLE tool_call_log")
+    con.execute("CREATE TABLE tool_call_log (id INTEGER PRIMARY KEY, created_at TEXT, tool_name TEXT)")
+    con.commit()
+    con.close()
+    _add(db, "tool_call_log", "2026-11-08", 3)
+    assert await usage_report.report_pending(CFG, today=TODAY) == 1
+    f = graph.posts[0][1]["fields"]
+    assert (f["ToolRuns"], f["ToolErrors"], f["McpToolRuns"]) == (3, 0, 0)
