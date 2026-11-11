@@ -536,6 +536,47 @@ TOOL_DEFS.extend([
             "required": ["drive_id", "item_id"],
         },
     },
+    {
+        "name": "file_transfer",
+        "description": (
+            "Move or copy a OneDrive/SharePoint file into a folder, including a Teams attachment. "
+            "Use this instead of move_onedrive_file/copy_onedrive_file when the user asks to move or copy a file: "
+            "if the file is locked (open in Word or Teams) or lives in someone else's OneDrive, it copies instead and "
+            "tells you so. Gator never deletes files, so when original_remains is true the original is still in place "
+            "and the user can remove it themselves. Result: status (moved|copied|pending|failed), method, "
+            "original_remains, reason (locked|not_owner|null), dest {drive_id,item_id,name,web_url}, local_copy, message."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "source_drive_id": {"type": "string", "description": "Drive ID of the source file"},
+                "source_item_id": {"type": "string", "description": "Item ID of the source file"},
+                "dest_drive_id": {"type": "string", "description": "Drive ID of the destination folder"},
+                "dest_folder_id": {"type": "string", "description": "Item ID of the destination folder"},
+                "mode": {"type": "string", "enum": ["move", "copy"], "description": "move (default) or copy"},
+                "new_name": {"type": "string", "description": "Optional new filename at the destination"},
+            },
+            "required": ["source_drive_id", "source_item_id", "dest_drive_id", "dest_folder_id"],
+        },
+    },
+    {
+        "name": "file_upload",
+        "description": (
+            "Upload a local file into a OneDrive/SharePoint folder identified by drive_id and folder item ID. "
+            "Never overwrites: if the name is taken the upload is renamed. Handles large files. "
+            "Returns item_id, drive_id, name, web_url, size. Use list_onedrive_files to find folder IDs."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "local_path": {"type": "string", "description": "Path of the local file to upload"},
+                "dest_drive_id": {"type": "string", "description": "Drive ID of the destination folder"},
+                "dest_folder_id": {"type": "string", "description": "Item ID of the destination folder"},
+                "name": {"type": "string", "description": "Optional file name at the destination. Omit to keep the local name."},
+            },
+            "required": ["local_path", "dest_drive_id", "dest_folder_id"],
+        },
+    },
 ])
 
 TOOL_STATUS = {
@@ -1507,6 +1548,7 @@ def _tool_move_onedrive_file(source_drive_id: str, source_item_id: str,
                               new_name: str = "") -> dict:
     """Move a file to a different drive/folder using Graph's native PATCH with parentReference."""
     from .._m365.helpers import get_skill_client
+    from .._files.errors import classify_graph_error
     gc = get_skill_client(ONEDRIVE_SKILLS_DIR)
     patch_body: dict = {
         "parentReference": {
@@ -1522,7 +1564,7 @@ def _tool_move_onedrive_file(source_drive_id: str, source_item_id: str,
             patch_body,
         )
     except Exception as e:
-        return {"error": f"Move failed: {e}"}
+        return {"error": f"Move failed: {e}", "error_code": classify_graph_error(e)}
     pr = result.get("parentReference") or {}
     return {
         "item_id": result.get("id", source_item_id),
@@ -1544,6 +1586,7 @@ def _tool_copy_onedrive_file(source_drive_id: str, source_item_id: str,
     then poll the monitor URL until the copy completes.
     """
     from .._m365.helpers import get_skill_client
+    from .._files.errors import classify_graph_error, classify_status
     import httpx as _httpx
     import json as _json
     import time as _time
@@ -1573,10 +1616,14 @@ def _tool_copy_onedrive_file(source_drive_id: str, source_item_id: str,
             timeout=30,
         )
     except Exception as e:
-        return {"error": f"Copy request failed: {e}"}
+        # No HTTP answer: Graph may still have accepted the copy.
+        return {"error": f"Copy request failed: {e}", "error_code": classify_graph_error(e), "ambiguous": True}
 
     if r.status_code not in (202, 200, 201):
-        return {"error": f"Copy request returned HTTP {r.status_code}: {r.text[:300]}"}
+        return {
+            "error": f"Copy request returned HTTP {r.status_code}: {r.text[:300]}",
+            "error_code": classify_status(r.status_code),
+        }
 
     monitor_url = r.headers.get("Location", "")
     if not monitor_url:
@@ -1589,14 +1636,20 @@ def _tool_copy_onedrive_file(source_drive_id: str, source_item_id: str,
                 "dest_drive_id": pr.get("driveId", dest_drive_id),
                 "name": data.get("name", ""),
             }
-        return {"error": "Copy request did not return a monitor URL. The copy may have succeeded — check the destination folder."}
+        return {
+            "error": "Copy request did not return a monitor URL. The copy may have succeeded — check the destination folder.",
+            "error_code": "unknown",
+            "ambiguous": True,
+        }
 
+    last_poll_error = ""
     for _ in range(30):
         _time.sleep(2)
         try:
-            poll = _httpx.get(monitor_url, headers={"Authorization": f"Bearer {token}"}, follow_redirects=True, timeout=15)
+            poll = _httpx.get(monitor_url, follow_redirects=True, timeout=15)
             data = poll.json()
-        except Exception:
+        except Exception as e:
+            last_poll_error = str(e)
             continue
         status = data.get("status", "")
         if status == "completed":
@@ -1609,15 +1662,33 @@ def _tool_copy_onedrive_file(source_drive_id: str, source_item_id: str,
                 "resource_url": resource_url,
             }
         if status in ("failed", "cancelled"):
-            return {"error": f"Copy {status}: {data.get('error', {}).get('message', '')}"}
+            return {
+                "error": f"Copy {status}: {data.get('error', {}).get('message', '')}",
+                "error_code": "unknown",
+            }
+        if not status and data.get("id"):
+            pr = data.get("parentReference") or {}
+            return {
+                "status": "completed",
+                "item_id": data["id"],
+                "dest_drive_id": pr.get("driveId", dest_drive_id),
+                "name": data.get("name", ""),
+            }
 
-    return {"status": "pending", "monitor_url": monitor_url,
-            "note": "Copy still in progress after 60s. Check the destination folder."}
+    out = {
+        "status": "pending",
+        "monitor_url": monitor_url,
+        "note": "Copy still in progress after 60s. Check the destination folder.",
+    }
+    if last_poll_error:
+        out["poll_error"] = last_poll_error
+    return out
 
 
 def _tool_get_onedrive_item(drive_id: str, item_id: str) -> dict:
     """Get metadata for a specific OneDrive/SharePoint item."""
     from .._m365.helpers import get_skill_client
+    from .._files.errors import classify_graph_error
     gc = get_skill_client(ONEDRIVE_SKILLS_DIR)
     try:
         meta = gc.get(
@@ -1625,7 +1696,10 @@ def _tool_get_onedrive_item(drive_id: str, item_id: str) -> dict:
             params={"$select": "id,name,size,createdDateTime,lastModifiedDateTime,webUrl,parentReference,@microsoft.graph.downloadUrl"},
         )
     except Exception as e:
-        return {"error": f"Could not get item {item_id} on drive {drive_id}: {e}"}
+        return {
+            "error": f"Could not get item {item_id} on drive {drive_id}: {e}",
+            "error_code": classify_graph_error(e),
+        }
     pr = meta.get("parentReference") or {}
     return {
         "item_id": meta.get("id", item_id),
@@ -1639,11 +1713,61 @@ def _tool_get_onedrive_item(drive_id: str, item_id: str) -> dict:
     }
 
 
+def _od_provider():
+    from .._m365.helpers import get_skill_client
+    from .._m365.onedrive_provider import OneDriveProvider
+
+    # The raw download tool, not the guarded handler: transfer() already confines its path to Downloads.
+    return OneDriveProvider(
+        get_item=_tool_get_onedrive_item,
+        download=_tool_download_onedrive_file,
+        copy=_tool_copy_onedrive_file,
+        move=_tool_move_onedrive_file,
+        client=lambda: get_skill_client(ONEDRIVE_SKILLS_DIR),
+    )
+
+
+def _tool_file_transfer(source_drive_id: str, source_item_id: str,
+                        dest_drive_id: str, dest_folder_id: str,
+                        mode: str = "move", new_name: str = "") -> dict:
+    """Move or copy a file into a folder, copying instead when the source is locked."""
+    from .._files.transfer import transfer
+    return transfer(
+        _od_provider(),
+        {"drive_id": source_drive_id, "item_id": source_item_id},
+        {"drive_id": dest_drive_id, "folder_id": dest_folder_id},
+        mode=mode,
+        new_name=new_name,
+    )
+
+
+def _tool_file_upload(local_path: str, dest_drive_id: str, dest_folder_id: str, name: str = "",
+                      _context_id: str = "") -> dict:
+    """Upload a local file into a OneDrive/SharePoint folder by ID, never overwriting."""
+    import os
+    from .._files.local_access import require_local_read
+
+    def folder_label() -> str:
+        folder = _tool_get_onedrive_item(dest_drive_id, dest_folder_id)
+        if folder.get("error") or not folder.get("web_url"):
+            return ""
+        return f"{folder.get('name', '')} - {folder['web_url']}"
+
+    path, needs_approval = require_local_read(
+        _context_id, local_path, "file_upload", f"{dest_drive_id}/{dest_folder_id}", folder_label)
+    if needs_approval:
+        return needs_approval
+    return _od_provider().upload(
+        path, {"drive_id": dest_drive_id, "folder_id": dest_folder_id}, name or os.path.basename(local_path))
+
+
 TOOL_STATUS.update({
     "resolve_teams_attachment": "\U0001f4ce Resolving Teams attachment...",
     "move_onedrive_file": "\U0001f4c2 Moving file...",
     "copy_onedrive_file": "\U0001f4cb Copying file...",
     "get_onedrive_item": "\U0001f50d Getting item metadata...",
+    "file_transfer": "\U0001f500 Transferring file...",
+    "file_upload": "\U0001f4e4 Uploading file...",
 })
 
 TOOL_HANDLERS = {
@@ -1655,6 +1779,12 @@ TOOL_HANDLERS = {
     "move_onedrive_file": _tool_move_onedrive_file,
     "copy_onedrive_file": _tool_copy_onedrive_file,
     "get_onedrive_item": _tool_get_onedrive_item,
+    "file_transfer": _tool_file_transfer,
 }
 TOOL_HANDLERS.update(guard_path_args(
-    {"download_onedrive_file": _tool_download_onedrive_file}, "local_path"))
+    {
+        "download_onedrive_file": _tool_download_onedrive_file,
+        "file_upload": _tool_file_upload,
+    },
+    "local_path",
+))
