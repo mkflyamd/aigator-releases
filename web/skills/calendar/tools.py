@@ -976,7 +976,7 @@ def _tool_delete_calendar_event(
     try:
         event = get_cal_client().get(
             f"/me/events/{_eid(event_id)}",
-            {"$select": "id,subject,isOrganizer,type,attendees,start,end,webLink"},
+            {"$select": "id,subject,isOrganizer,type,organizer,attendees,start,end,webLink"},
             extra_headers={"Prefer": f'outlook.timezone="{win_tz}"'},
         )
     except Exception as ex:
@@ -986,10 +986,13 @@ def _tool_delete_calendar_event(
     if not event:
         return {"deleted": False, "not_found": True, "error": _EVENT_GONE}
     kind = ((event or {}).get("type") or "").lower()
+    organizer = (((event.get("organizer") or {}).get("emailAddress") or {}).get("address") or "").lower()
     people = [
         {"name": who.get("name") or "", "email": who["address"]}
-        for a in (event or {}).get("attendees") or []
-        if a.get("type") != "resource" and (who := a.get("emailAddress") or {}).get("address")
+        for a in event.get("attendees") or []
+        if a.get("type") != "resource"
+        and (who := a.get("emailAddress") or {}).get("address")
+        and who["address"].lower() != organizer
     ]
     if not event.get("isOrganizer") or not people or (kind == "seriesmaster" and not delete_series):
         return apply_calendar_cancel(event_id, comment, delete_series, send_updates)

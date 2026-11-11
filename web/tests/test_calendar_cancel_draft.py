@@ -161,3 +161,12 @@ def test_an_event_that_is_gone_or_empty_cancels_nothing():
         result = _stage_with(gc)
         assert result["deleted"] is False and result["not_found"] is True
         gc.delete.assert_not_called()
+
+
+def test_a_meeting_whose_only_attendee_is_the_organizer_is_cancelled_without_a_card():
+    me = {"emailAddress": {"name": "Me", "address": "Me@amd.com"}, "type": "required"}
+    organizer = {"emailAddress": {"name": "Me", "address": "me@amd.com"}}
+    result, gc = _stage(_event(attendees=[me], organizer=organizer))
+    assert "_draft" not in result
+    assert result["deleted"] is True
+    gc.delete.assert_called_once()
