@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from urllib.parse import urlparse
 
 import shared
+from permissions import actions
 
 
 @dataclass(frozen=True)
@@ -17,6 +18,8 @@ class Source:
     label: str
     kind: str  # "data" or "web"
     flow_id: str = ""  # id used by the admin blocked_data_flows policy
+    action: str = ""  # permissions.actions type the grant is filed under; "" for websites
+    per_call: bool = False  # True = no tab or saved grant exists, every call gets its own card
 
 
 _NATIVE_SOURCES = {
@@ -44,14 +47,30 @@ _BROWSER_TOOLS = frozenset({"browser_task", "browser_navigate", "browser_search"
 _DENY_WINDOW_S = 10.0
 
 
-def _native_source(tool_name: str) -> Source | None:
+def _data_source(prefix: str, label: str, flow_id: str, gate: str | None) -> Source:
+    if gate is None:
+        return Source(key=f"{prefix}:{actions.IRREVERSIBLE}", label=label, kind="data", flow_id=flow_id,
+                      action=actions.IRREVERSIBLE, per_call=True)
+    return Source(key=f"{prefix}:{gate}", label=label, kind="data", flow_id=flow_id, action=gate)
+
+
+def _native_source(tool_name: str, inputs: dict | None = None) -> Source | None:
     for skill_id, label in _NATIVE_SOURCES.items():
         if tool_name in shared.SKILL_TOOLS_MAP.get(skill_id, ()):
-            return Source(key=f"data:{label}", label=label, kind="data", flow_id=skill_id.removeprefix("m365-"))
+            return _data_source(f"data:{label}", label, skill_id.removeprefix("m365-"),
+                                actions.gate_action(tool_name, inputs))
     return None
 
 
-def _mcp_source(tool_name: str) -> Source | None:
+def _mcp_gate(tool_name: str, inputs: dict | None) -> str | None:
+    """The action type an MCP call is filed under. Only a tool the server says is read-only, or one that is parked
+    as an approval card, can be remembered; everything else asks on every call."""
+    classify = shared.MCP_TOOL_CLASSIFIERS.get(tool_name)
+    kind = classify(inputs or {}) if classify else "other"
+    return {"read": actions.READ, "draft": actions.WRITE_PRIVATE}.get(kind)
+
+
+def _mcp_source(tool_name: str, inputs: dict | None = None) -> Source | None:
     if "__" not in tool_name:
         return None
     # An MCP server is registered under its own skill id plus smaller synthetic
@@ -65,7 +84,7 @@ def _mcp_source(tool_name: str) -> Source | None:
     if best is None:
         return None
     label = _MCP_LABELS.get(best) or f"{best.removeprefix('mcp-')} (MCP server)"
-    return Source(key=f"mcp:{best}", label=label, kind="data", flow_id="mcp")
+    return _data_source(f"mcp:{best}", label, "mcp", _mcp_gate(tool_name, inputs))
 
 
 def source_for_call(tool_name: str, inputs: dict | None) -> Source | None:
@@ -74,7 +93,7 @@ def source_for_call(tool_name: str, inputs: dict | None) -> Source | None:
         if not host:
             return None
         return Source(key=f"web:{host}", label=f"the website {host}", kind="web", flow_id="web")
-    return _native_source(tool_name) or _mcp_source(tool_name)
+    return _native_source(tool_name, inputs) or _mcp_source(tool_name, inputs)
 
 
 def is_untrusted(tool_name: str) -> bool:
@@ -93,6 +112,17 @@ def mark_direct_data(tool_name: str, data):
 _CARD_URL_MAX = 200
 
 
+_DETAIL_MAX = 300
+_STAYS_ALLOWED = "This stays allowed until you close this tab."
+
+
+def _call_details(inputs: dict | None) -> str:
+    if not inputs:
+        return ""
+    text = json.dumps(inputs, default=str, ensure_ascii=False)
+    return "\nDetails: " + (text if len(text) <= _DETAIL_MAX else text[:_DETAIL_MAX] + "...")
+
+
 def prompt_for(source: Source, tool_name: str, inputs: dict | None = None) -> dict:
     if source.kind == "web":
         url = str((inputs or {}).get("url", ""))
@@ -100,11 +130,27 @@ def prompt_for(source: Source, tool_name: str, inputs: dict | None = None) -> di
             url = url[:_CARD_URL_MAX] + "..."
         shown = "\nAddress: " + url if url else ""
         action = f"AI Gator wants to open {source.label}, which this tab has not used yet.{shown}"
+    elif source.per_call:
+        return {
+            "title": f"Allow this change in {source.label}?",
+            "action": (
+                f"AI Gator wants to make a change in {source.label} (tool: {tool_name}) that notifies other people "
+                f"or cannot be undone. You are asked every time.{_call_details(inputs)}"
+            ),
+            "allow_label": "Allow this time",
+            "deny_label": "Deny",
+        }
+    elif source.action == actions.READ:
+        action = f"AI Gator wants to read from {source.label} (tool: {tool_name}). {_STAYS_ALLOWED}"
     else:
-        action = (
-            f"AI Gator wants to use {source.label} (tool: {tool_name}). "
-            "This stays allowed until you close this tab."
-        )
+        what = ("save a draft or a private change in" if source.action == actions.WRITE_PRIVATE
+                else "change shared content in")
+        return {
+            "title": f"Allow changes in {source.label}?",
+            "action": f"AI Gator wants to {what} {source.label} (tool: {tool_name}). {_STAYS_ALLOWED}",
+            "allow_label": "Allow for this tab",
+            "deny_label": "Deny",
+        }
     return {
         "title": f"Allow access to {source.label}?",
         "action": action,

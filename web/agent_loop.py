@@ -646,6 +646,8 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
         return source.key, ""
 
     def _source_allowed(source) -> bool:
+        if source.per_call:
+            return False
         return data_sources.is_allowed(context_id, source.key) or _allowed_now(*_source_category(source))
 
     async def _ask_source(tc, source, event_queue):
@@ -660,7 +662,7 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
                 granted = await _request_browser_confirm(
                     text["action"], event_queue, title=text["title"],
                     allow_label=text["allow_label"], deny_label=text["deny_label"],
-                    category=category, subject=subject,
+                    category=None if source.per_call else category, subject=subject,
                 )
                 if granted:
                     await event_queue.put({"kind": "status", "status": f"{source.label}: {_SCOPE_NOTE.get(granted, 'allowed')}"})

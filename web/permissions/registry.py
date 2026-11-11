@@ -1,12 +1,14 @@
 """Every kind of permission AI Gator can ask for, and what its card may offer.
 
-A category id is also its per-tab grant key in data_sources ("data:Jira", "web:<host>",
-"capability:code_runner", "mcp:<connection>"). A new gate adds one entry here; the
+A category id is also its per-tab grant key in data_sources ("data:Jira:read", "web:<host>",
+"capability:code_runner", "mcp:<connection>:read"). A new gate adds one entry here; the
 Settings page and the card buttons are built from this list.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
+
+from . import actions
 
 SCOPES = ("always", "tab", "once")
 SANDBOX_SHELL = "sandbox:shell"   # extra folders/network for a shell command; its saved rules live in sandbox/saved_permissions
@@ -50,19 +52,36 @@ _STATIC = (
 )
 
 
+def _action_category(prefix: str, name: str, action: str) -> Category:
+    return Category(f"{prefix}:{action}", f"{name}: {actions.PHRASE[action]}", actions.DESCRIPTION[action],
+                    "high" if action == actions.WRITE_PUBLIC else "low")
+
+
 def _native_categories() -> list[Category]:
     import data_sources
+    import shared
 
-    seen: dict[str, Category] = {}
-    for label in data_sources._NATIVE_SOURCES.values():
-        key = f"data:{label}"
-        seen.setdefault(key, Category(key, label, "", "low"))
-    return list(seen.values())
+    found: dict[str, set[str]] = {}
+    for skill_id, label in data_sources._NATIVE_SOURCES.items():
+        kinds = found.setdefault(label, set())
+        for tool in shared.SKILL_TOOLS_MAP.get(skill_id, ()):
+            kinds |= actions.gate_actions_possible(tool)
+    categories = []
+    for label, kinds in found.items():
+        for action in actions.REMEMBERABLE:
+            if action in kinds:
+                categories.append(_action_category(f"data:{label}", label, action))
+    return categories
 
 
-def mcp_category(category_id: str, label: str = "") -> Category:
-    name = label or category_id.removeprefix("mcp:")
-    return Category(category_id, name, f"Use the {name} MCP server on your behalf.", "low")
+def mcp_category(category_id: str, label: str = "") -> Category | None:
+    """An MCP server's category is "mcp:<connection>:<action type>". Only a server's read-only tools and the tools it
+    parks as drafts have one; every other MCP tool asks on every call."""
+    server, _, action = category_id.rpartition(":")
+    if action not in (actions.READ, actions.WRITE_PRIVATE) or not server.removeprefix("mcp:") or not server.startswith("mcp:"):
+        return None
+    name = label or f"{server.removeprefix('mcp:')} (MCP server)"
+    return _action_category(server, name, action)
 
 
 def known() -> list[Category]:
@@ -74,6 +93,4 @@ def get(category_id: str, label: str = "") -> Category | None:
     for category in known():
         if category.id == category_id:
             return category
-    if category_id.startswith("mcp:") and len(category_id) > len("mcp:"):
-        return mcp_category(category_id, label)
-    return None
+    return mcp_category(category_id, label)
