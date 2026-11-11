@@ -45,6 +45,8 @@ def event_payload(params: dict) -> dict:
         event["onlineMeetingProvider"] = "teamsForBusiness"
     if params.get("recurrence"):
         event["recurrence"] = params["recurrence"]
+    if params.get("ooo"):
+        event.update(isAllDay=True, showAs="oof", responseRequested=False, isReminderOn=False)
     return event
 
 

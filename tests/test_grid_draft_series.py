@@ -17,6 +17,15 @@ BODY = {
 }
 
 
+@pytest.fixture(autouse=True)
+def _forget_grid_drafts():
+    from routes import calendar
+
+    calendar._grid_drafts.clear()
+    yield
+    calendar._grid_drafts.clear()
+
+
 def _post(body):
     return TestClient(app).post(
         "/api/calendar/grid-draft-series", headers={"X-CSRF-Token": get_csrf_token("testserver")}, json=body
@@ -156,3 +165,53 @@ def test_route_sends_html_unless_the_message_was_edited_as_plain_text(plain, con
         res = _post({**BODY, "body": "<p>Agenda</p>", "body_plain": plain})
     assert res.status_code == 200
     assert gc.post.call_args.args[1]["body"] == {"contentType": content_type, "content": "<p>Agenda</p>"}
+
+
+def test_route_tells_the_user_not_to_retry_when_the_event_was_not_held_as_a_draft():
+    gc = MagicMock()
+    gc.post.return_value = {"id": "evt1", "webLink": "https://outlook.office365.com/owa/?itemid=evt1"}
+    gc.get.return_value = {"isDraft": False}
+    with patch("skills._m365.helpers.get_cal_client", return_value=gc):
+        res = _post(BODY)
+    assert res.status_code == 502
+    detail = res.json()["detail"]
+    assert "invites may have gone out" in detail and "do not try again" in detail
+    assert "before trying again" not in detail
+    assert "outlook.office365.com" not in res.text
+
+
+def test_the_same_pick_sent_twice_creates_one_event_and_returns_the_same_link():
+    gc = MagicMock()
+    gc.post.return_value = {"id": "evt1", "webLink": "https://outlook.office365.com/owa/?itemid=evt1"}
+    gc.get.return_value = {"isDraft": True}
+    with patch("skills._m365.helpers.get_cal_client", return_value=gc):
+        first = _post(BODY)
+        second = _post(BODY)
+    assert first.status_code == second.status_code == 200
+    assert first.json() == second.json()
+    assert gc.post.call_count == 1
+
+
+def test_a_different_pick_still_creates_its_own_event():
+    gc = MagicMock()
+    gc.post.return_value = {"id": "evt1", "webLink": "https://outlook.office365.com/owa/?itemid=evt1"}
+    gc.get.return_value = {"isDraft": True}
+    with patch("skills._m365.helpers.get_cal_client", return_value=gc):
+        _post(BODY)
+        _post({**BODY, "start": "2026-11-04T09:00:00", "end": "2026-11-04T09:30:00"})
+    assert gc.post.call_count == 2
+
+
+def test_a_retry_after_a_failure_is_allowed_but_a_not_held_refusal_is_replayed_without_another_create():
+    gc = MagicMock()
+    gc.post.side_effect = [RuntimeError("gateway timeout"), {"id": "evt1", "webLink": "https://x/evt1"}]
+    gc.get.return_value = {"isDraft": False}
+    with patch("skills._m365.helpers.get_cal_client", return_value=gc):
+        assert _post(BODY).status_code == 502
+        assert gc.post.call_count == 1
+        second = _post(BODY)
+        assert second.status_code == 502 and "do not try again" in second.json()["detail"]
+        assert gc.post.call_count == 2
+        third = _post(BODY)
+    assert third.status_code == 502 and "do not try again" in third.json()["detail"]
+    assert gc.post.call_count == 2

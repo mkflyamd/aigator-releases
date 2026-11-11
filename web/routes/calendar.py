@@ -5,6 +5,7 @@ from security import verify_csrf
 from pydantic import BaseModel
 from urllib.parse import quote as _url_quote
 
+import json
 import shared
 
 router = APIRouter()
@@ -206,12 +207,45 @@ def _graph_recurrence(spec: dict, start_date: str) -> dict:
     return {"pattern": pattern, "range": rng}
 
 
+_GRID_DRAFT_TTL_SECONDS = 600
+_GRID_DRAFT_MAX = 100
+_grid_drafts: dict[str, tuple[float, dict | HTTPException]] = {}
+_grid_drafts_lock = None
+
+
+def _remembered_grid_draft(key: str):
+    import time
+
+    now = time.monotonic()
+    for stale in [k for k, (t, _) in _grid_drafts.items() if now - t > _GRID_DRAFT_TTL_SECONDS]:
+        del _grid_drafts[stale]
+    hit = _grid_drafts.get(key)
+    return hit[1] if hit else None
+
+
+def _remember_grid_draft(key: str, outcome) -> None:
+    import time
+
+    while len(_grid_drafts) >= _GRID_DRAFT_MAX:
+        del _grid_drafts[next(iter(_grid_drafts))]
+    _grid_drafts[key] = (time.monotonic(), outcome)
+
+
 @router.post("/api/calendar/grid-draft-series", dependencies=[Depends(verify_csrf)])
 async def tp_calendar_grid_draft_series(req: GridSeriesRequest):
-    """Creates the grid's picked slot as an unsent draft event (recurring when a repeat is given) and returns its Outlook web link."""
-    import asyncio
+    """Creates the grid's picked slot as an unsent draft event (recurring when a repeat is given) and returns its Outlook web link.
 
-    from skills.calendar.events import NoAttendeesError, create_meeting
+    The same pick sent again within ten minutes (a double click, or a retry after a timeout) gets the first
+    result back instead of creating another event.
+    """
+    import asyncio
+    import hashlib
+
+    from skills.calendar.events import NoAttendeesError, NotHeldAsDraftError, create_meeting
+
+    global _grid_drafts_lock
+    if _grid_drafts_lock is None:
+        _grid_drafts_lock = asyncio.Lock()
 
     recurrence = None
     if req.repeat:
@@ -230,13 +264,29 @@ async def tp_calendar_grid_draft_series(req: GridSeriesRequest):
         "body": req.body,
         "body_plain": req.body_plain,
     }
-    try:
-        created = await asyncio.to_thread(create_meeting, params)
-    except NoAttendeesError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Outlook did not create the draft ({e}). Check your calendar before trying again.")
-    return {"url": (created or {}).get("webLink") or "https://outlook.office.com/calendar"}
+    key = hashlib.sha256(json.dumps(params, sort_keys=True, default=str).encode()).hexdigest()
+    async with _grid_drafts_lock:
+        outcome = _remembered_grid_draft(key)
+        if outcome is None:
+            try:
+                created = await asyncio.to_thread(create_meeting, params)
+                outcome = {"url": (created or {}).get("webLink") or "https://outlook.office.com/calendar"}
+            except NoAttendeesError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            except NotHeldAsDraftError:
+                outcome = HTTPException(
+                    status_code=502,
+                    detail=(
+                        "The meeting was created, but Outlook did not keep it as an unsent draft, so invites "
+                        "may have gone out. Check your Outlook calendar and do not try again."
+                    ),
+                )
+            except Exception as e:
+                raise HTTPException(status_code=502, detail=f"Outlook did not create the draft ({e}). Check your calendar before trying again.")
+            _remember_grid_draft(key, outcome)
+    if isinstance(outcome, HTTPException):
+        raise outcome
+    return outcome
 
 
 @router.post("/api/calendar/availability-days", dependencies=[Depends(verify_csrf)])

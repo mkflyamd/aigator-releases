@@ -9816,6 +9816,20 @@ function _jiraEditRow(name, label, value, kind) {
 }
 
 function _calendarDraftWhen(data) {
+  if (data.ooo) {
+    const first = /^(\d{4})-(\d{2})-(\d{2})/.exec(data.start || '');
+    const after = /^(\d{4})-(\d{2})-(\d{2})/.exec(data.end || '');
+    if (first && after) {
+      const label = (y, mo, d, back) =>
+        new Date(Date.UTC(Number(y), Number(mo) - 1, Number(d) - back)).toLocaleDateString(
+          'en-US',
+          { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' },
+        );
+      const from = label(first[1], first[2], first[3], 0);
+      const to = label(after[1], after[2], after[3], 1);
+      return escapeHtml((from === to ? from : from + ' – ' + to) + ', all day');
+    }
+  }
   const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(data.start || '');
   const e = /T(\d{2}):(\d{2})/.exec(data.end || '');
   if (!m || !e) return escapeHtml(data.start || '');

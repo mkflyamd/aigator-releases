@@ -375,7 +375,7 @@ TOOL_DEFS = [
     },
     {
         "name": "create_ooo_event",
-        "description": "Create an Out of Office (OOO/PTO) all-day event on the user's calendar. Marks the user as OOF and optionally notifies colleagues (shows as Free on their calendars, no response required).",
+        "description": "Create an Out of Office (OOO/PTO) all-day event on the user's calendar and mark the user as OOF. With notify, it prepares an invite for colleagues as a draft the user must approve before anything is sent.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -698,6 +698,14 @@ def _person_name(email: str) -> str:
     return " ".join(p.capitalize() for p in re.split(r"[._\-]+", email.split("@")[0]) if p)
 
 
+def _mailbox_now(win_tz: str) -> datetime:
+    """The current time on the mailbox's clock, without a zone, to compare with the grid's mailbox-local slots."""
+    from . import timezones
+
+    zone = timezones.zone(win_tz)
+    return datetime.now(zone).replace(tzinfo=None) if zone else datetime.now()
+
+
 def _grid_days(dates, now: datetime) -> list:
     days = []
     for raw in dates or []:
@@ -827,7 +835,8 @@ def _tool_load_availability_days(
     from .._m365.helpers import get_cal_client
     from .helpers import get_user_win_tz
 
-    now = datetime.now()
+    win_tz = get_user_win_tz()
+    now = _mailbox_now(win_tz)
     if dates:
         day_list = []
         for raw in dates[:60]:
@@ -849,7 +858,7 @@ def _tool_load_availability_days(
     if not wanted:
         return {"error": "Give at least one email."}
     need = max(1, -(-int(duration_minutes or 30) // _GRID_STEP))
-    gc, win_tz = get_cal_client(), get_user_win_tz()
+    gc = get_cal_client()
     out: dict = {"days": _grid_day_payloads(gc, wanted, day_list, win_tz, need, now)}
     if with_zones:
         from . import timezones
@@ -896,7 +905,7 @@ def _tool_show_availability_grid(
 
     gc = get_cal_client()
     win_tz = get_user_win_tz()
-    now = datetime.now()
+    now = _mailbox_now(win_tz)
     me = get_cached_me(gc)
     my_email = (me.get("mail") or me.get("userPrincipalName") or "").lower()
     others = [e for e in _parse_email_list(attendees) if e.lower() != my_email]
@@ -924,7 +933,7 @@ def _tool_show_availability_grid(
                 day = datetime.fromisoformat(d["date"])
                 best.append(f"{day:%A, %b} {day.day}, {_clock12(begin)} - {_clock12(begin + need * _GRID_STEP)}")
     grid = {
-        "grid_id": f"grid-{int(now.timestamp() * 1000)}",
+        "grid_id": f"grid-{int(datetime.now().timestamp() * 1000)}",
         "timezone": win_tz,
         "duration_minutes": need * _GRID_STEP,
         "repeat": repeat,
@@ -1189,8 +1198,9 @@ def _tool_create_ooo_event(
     subject: str = "",
     body: str = "",
 ) -> dict:
+    from .._drafts import create_draft
     from .._m365.helpers import get_cal_client
-    from .events import create_event
+    from .events import create_event, event_payload
     from .helpers import get_user_win_tz
 
     gc = get_cal_client()
@@ -1201,31 +1211,38 @@ def _tool_create_ooo_event(
     end_midnight = (
         datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
     ).strftime("%Y-%m-%dT00:00:00")
-    event = {
+    invitees = list(dict.fromkeys(a.strip() for a in (notify or []) if a and a.strip()))
+    params = {
         "subject": subject,
-        "isAllDay": True,
-        "start": {"dateTime": f"{start_date}T00:00:00", "timeZone": win_tz},
-        "end": {"dateTime": end_midnight, "timeZone": win_tz},
-        "showAs": "oof",
-        "responseRequested": False,
-        "isReminderOn": False,
+        "start": f"{start_date}T00:00:00",
+        "end": end_midnight,
+        "timezone": win_tz,
+        "attendees": [],
+        "optional_attendees": invitees,
+        "body": body,
+        "body_plain": True,
+        "ooo": True,
     }
-    if notify:
-        event["attendees"] = [
-            {"emailAddress": {"address": a}, "type": "optional"} for a in notify if a
-        ]
-    if body:
-        event["body"] = {"contentType": "text", "content": body}
-    result = create_event(event, deliver=True)
-    event_id = result.get("id", "")
     date_label = start_date if start_date == end_date else f"{start_date} to {end_date}"
+    if invitees:
+        draft_id = create_draft(
+            draft_type="calendar-event",
+            params=params,
+            preview={"subject": subject, "attendees": invitees},
+        )
+        return {
+            "_draft": "calendar-event",
+            "data": {**params, "draft_id": draft_id},
+            "_user_message": "Out-of-office invite ready. Press Send invite to notify them, or Open in Outlook to review it first.",
+        }
+    result = create_event(event_payload(params))
     return {
         "created": True,
         "subject": subject,
         "dates": date_label,
         "your_calendar": "Out of Office",
-        "notified": notify or [],
-        "id": event_id,
+        "notified": [],
+        "id": result.get("id", ""),
     }
 
 

@@ -142,3 +142,41 @@ def test_single_chat_read_includes_members_who_have_not_posted_from_the_thread_r
         "sherry.yang@example.com",
         "james.smith2@example.com",
     ]
+
+
+def test_directory_lookups_are_capped_and_stop_when_graph_throttles():
+    import skills._m365.helpers  # noqa: F401
+    from skills.teams import tools
+
+    guids = [f"{i:08d}-2222-3333-4444-555555555555" for i in range(30)]
+    calls = []
+
+    class _Throttled(RuntimeError):
+        status_code = 429
+
+    class _Gc:
+        def get(self, path, params=None):
+            if path.endswith("/members"):
+                raise RuntimeError("403")
+            calls.append(path)
+            if len(calls) == 3:
+                raise _Throttled("Too Many Requests")
+            return {"displayName": "P", "mail": f"p{len(calls)}@example.com"}
+
+    with patch("skills._m365.helpers.make_teams_gc", return_value=_Gc()):
+        people = tools._participants("19:abc@thread.v2", messages=[{"from_mri": f"8:orgid:{g}"} for g in guids])
+    assert len(calls) == 3, "no more lookups after a 429"
+    assert [p["email"] for p in people] == ["p1@example.com", "p2@example.com"]
+
+    calls.clear()
+
+    class _Fine:
+        def get(self, path, params=None):
+            if path.endswith("/members"):
+                raise RuntimeError("403")
+            calls.append(path)
+            return {"displayName": "P", "mail": f"p{len(calls)}@example.com"}
+
+    with patch("skills._m365.helpers.make_teams_gc", return_value=_Fine()):
+        tools._participants("19:abc@thread.v2", messages=[{"from_mri": f"8:orgid:{g}"} for g in guids])
+    assert len(calls) == tools._DIRECTORY_LOOKUP_MAX

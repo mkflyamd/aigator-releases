@@ -314,3 +314,15 @@ def test_the_grid_has_no_pick_when_nobody_fits():
     views = {"me@example.com": "2" * 48, "sam@example.com": "0" * 48}
     out, _ = _run(views, attendees=["sam@example.com"], dates=["2030-01-07"])
     assert out["_availability_grid"]["pick"] is None
+
+
+def test_the_grids_now_is_the_mailbox_clock_not_the_computers():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from skills.calendar.tools import _mailbox_now
+
+    expected = datetime.now(ZoneInfo("Asia/Tokyo")).replace(tzinfo=None)
+    got = _mailbox_now("Tokyo Standard Time")
+    assert got.tzinfo is None and abs((got - expected).total_seconds()) < 5
+    assert _mailbox_now("No Such Zone").tzinfo is None

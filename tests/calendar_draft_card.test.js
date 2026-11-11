@@ -168,3 +168,8 @@ assert(
 assert(/background: transparent/.test(rule('\\.gcc-open-outlook-btn')), 'Open button is outlined');
 
 console.log('calendar_draft_card ok');
+
+const oooOne = when({ ooo: true, start: '2026-11-12T00:00:00', end: '2026-11-13T00:00:00' });
+assert(/Nov 12/.test(oooOne) && oooOne.includes('all day') && !oooOne.includes('13'), oooOne);
+const oooMany = when({ ooo: true, start: '2026-11-12T00:00:00', end: '2026-11-16T00:00:00' });
+assert(/Nov 12/.test(oooMany) && /Nov 15/.test(oooMany) && oooMany.includes('all day'), oooMany);

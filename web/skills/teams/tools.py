@@ -356,6 +356,9 @@ def _tool_read_channel_messages(
 _GUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE)
 
 
+_DIRECTORY_LOOKUP_MAX = 10
+
+
 def _participants(cid: str, messages=(), thread_members=()) -> list:
     """Who is in the chat (name and email), so a bare first name in it resolves to the right person.
 
@@ -386,10 +389,12 @@ def _participants(cid: str, messages=(), thread_members=()) -> list:
         if match and match.group(0).lower() not in ids:
             ids.append(match.group(0).lower())
     people: dict[str, dict] = {}
-    for uid in ids[:25]:
+    for uid in ids[:_DIRECTORY_LOOKUP_MAX]:
         try:
             user = gc.get(f"/users/{uid}", params={"$select": "displayName,mail,userPrincipalName"})
-        except Exception:
+        except Exception as e:
+            if getattr(e, "status_code", None) == 429:
+                break
             continue
         email = (user.get("mail") or user.get("userPrincipalName") or "").lower()
         if email and email not in people:
