@@ -235,15 +235,8 @@ def _already_active_note(skill_ids: list[str], offered_tool_names) -> str:
     )
 
 
-def _silent_turn_fallback(active_skills: list[str]) -> str:
+def _silent_turn_fallback() -> str:
     """User-visible explanation when an otherwise successful stream is empty."""
-    if "cloud-atlassian" in active_skills:
-        return (
-            "Atlassian Cloud MCP is connected, but it did not expose a usable "
-            "site/resource-discovery tool for this request. Use the direct Jira "
-            "& Confluence connection for a configured site, or connect Rovo MCP "
-            "through Atlassian SSO to select a site."
-        )
     return (
         "I could not produce a response for this request. Please retry; "
         "the connection may need to be refreshed."
@@ -537,15 +530,17 @@ def _append_jira_instance_context(system: str, active_skill_ids: list[str], cfg:
             f"The native jira_* tools use direct credentials for {direct_url}. "
         )
         if direct_url else
-        "Native jira_* tools are available and handle all connected Jira sites including Rovo-connected ones via HITL approval. "
+        "Native jira_* tools are available and handle all connected Jira sites including Atlassian MCP-connected ones via HITL approval. "
     )
     return system + (
         f"\n\nJIRA INSTANCE ROUTING: Multiple Jira instances may be connected. "
         + direct_line +
-        f"MCP tools (cloud-atlassian, Rovo) cover other instances for reads only. "
+        f"Atlassian MCP tools cover other instances for reads. "
+        f"CONNECTOR PRIORITY (invariant, reads and writes): 1) the direct Atlassian API through the native jira_* tools; "
+        f"2) the official Atlassian MCP; 3) any other connector or tool, only as a final fallback after both cannot do it. "
         f"ROUTING RULES (these override general MCP guidance for Jira): "
-        f"(1) READ (any URL or bare key) → always call jira_get_issue first; it handles all connected sites automatically. Call cloud-atlassian/Rovo MCP Jira tools ONLY if jira_get_issue reports the issue was not found or the site is not connected; never call them in parallel with it when the URL matches the native site. "
-        f"(2) WRITE (comment, update, create, transition, watcher, link) → ALWAYS use native jira_* tools only, never MCP tools. Pass the full URL if you have it; bare keys are resolved automatically. "
+        f"(1) READ (any URL or bare key) → always call jira_get_issue first; it handles all connected sites automatically. Call Atlassian MCP Jira tools ONLY if jira_get_issue reports the issue was not found or the site is not connected; never call them in parallel with it when the URL matches the native site. "
+        f"(2) WRITE (comment, update, create, transition, watcher, link) → use the native jira_* tools whenever one covers the change. If none does, a raw Jira MCP write tool is allowed: it is held as an approval card and nothing is applied until the user clicks approve. Each write is a draft the user approves. If direct credentials are rejected by Jira for a field change (labels, components, custom fields), Gator retries the same approved change through the official Atlassian MCP on the same site, tells the user it did, and does not need a second approval, so do not ask the user to approve again or call Atlassian MCP write tools yourself. Pass the full URL if you have it; bare keys are resolved automatically. "
         f"(3) If jira_get_issue returns a 'multiple sites' error → ask the user for the full issue URL. "
         f"(4) Only tell the user the issue was not found after ALL available Jira tools have returned 404/error."
     )
@@ -592,9 +587,10 @@ _SKILL_KEYWORDS = {
                  "what meetings", "meeting today", "meeting tomorrow", "meeting this week",
                  "schedule a meeting", "book a meeting", "cancel meeting", "reschedule",
                  "next meeting", "upcoming meeting", "am i free", "when am i free",
-                 "invite on my outlook", "invite on outlook", "what is the", "what's the",
+                 "invite on my outlook", "invite on outlook",
+                 "what is the meeting", "what's the meeting", "what is the invite", "what's the invite",
                  "am invite", "pm invite", "morning invite", "afternoon invite",
-                 "what is my", "what's on my", "on my calendar", "on my outlook",
+                 "what is my next", "what is my day", "what's on my", "on my calendar", "on my outlook",
                  "my invite", "the invite", "the meeting invite", "calendar invite",
                  "meeting invite", "on my schedule", "today's meetings", "today's invite"],
     "teams": ["teams message", "teams chat", "in teams", "on teams", "teams channel",
@@ -610,6 +606,7 @@ _SKILL_KEYWORDS = {
                       "change the skill", "change my skill", "skill.md"],
     "slack": ["slack message", "in slack", "on slack", "slack channel",
               "post in slack", "send in slack", "slack conversation"],
+    "github": ["github", "pull request", "review request", "gh pr", "gh issue"],
     "jira": ["jira", "ticket", "create a ticket", "open a ticket", "jira issue",
              "bug report", "story point", "sprint", "backlog"],
     "confluence": ["confluence", "wiki page", "confluence page", "knowledge base",
@@ -656,6 +653,29 @@ _SKILL_KEYWORDS = {
 # Confluence even when the words "jira"/"confluence" never appear.
 _JIRA_ISSUE_KEY_RE = _re.compile(r'\b[A-Z][A-Z0-9]+-\d+\b')
 _ATLASSIAN_URL_RE = _re.compile(r'https?://[\w.-]+\.atlassian\.net/\S*', _re.IGNORECASE)
+
+# A link to a service names that service's skill. Without this, ".com" in the link matches the
+# browser skill and the page gets fetched instead of read through the service's own tools.
+_SERVICE_URL_SKILLS = (
+    (_re.compile(r'https?://(?:[\w-]+\.)*github\.com/', _re.IGNORECASE), ("github",)),
+    (_re.compile(r'https?://[\w.-]+-my\.sharepoint\.com/', _re.IGNORECASE), ("onedrive",)),
+    (_re.compile(r'https?://(?:1drv\.ms|onedrive\.live\.com)/', _re.IGNORECASE), ("onedrive",)),
+    (_re.compile(r'https?://(?![\w.-]*-my\.sharepoint\.com)[\w.-]+\.sharepoint\.com/', _re.IGNORECASE),
+     ("sharepoint", "onedrive")),
+    (_re.compile(r'https?://teams\.(?:microsoft|live)\.com/', _re.IGNORECASE), ("teams",)),
+    (_re.compile(r'https?://(?:[\w-]+\.)*slack\.com/', _re.IGNORECASE), ("slack",)),
+)
+# "PR #123" and "owner/repo#123" name a GitHub pull request or issue with no URL.
+_GITHUB_REF_RE = _re.compile(r'\bPRs?\s*#\d+|\b[\w.-]+/[\w.-]+#\d+\b', _re.IGNORECASE)
+
+# Skills whose keywords are everyday words ("create", "run", ".com"). A hit on only these says
+# little about which service the user means, so the LLM classifier still runs.
+_GENERIC_SKILLS = frozenset({"browser", "code_runner", "shell_runner", "file_ops"})
+
+
+def _needs_classifier(inferred: list[str], extra_catalog: dict) -> bool:
+    return not set(inferred) - _GENERIC_SKILLS or bool(extra_catalog)
+
 
 _IMAGE_ANALYSIS_WORDS = frozenset({
     "describe", "recap", "summarize", "analyse", "analyze", "read", "extract", "explain",
@@ -708,6 +728,12 @@ def _infer_skills_from_message(message: str) -> list[str]:
     # Structural: an atlassian.net /wiki/ URL → confluence skill.
     if "confluence" not in found and "/wiki/" in message.lower() and _ATLASSIAN_URL_RE.search(message):
         found.append("confluence")
+
+    for pattern, skill_ids in _SERVICE_URL_SKILLS:
+        if pattern.search(message):
+            found.extend(sid for sid in skill_ids if sid not in found)
+    if "github" not in found and _GITHUB_REF_RE.search(message):
+        found.append("github")
 
     # Briefing intent → a daily/standup "brief" needs the comms+calendar trio.
     _BRIEFING_SIGNALS = ["briefing", "daily brief", "morning brief", "give brief",
@@ -890,6 +916,7 @@ Rules:
 - Return [] if the message is general chat requiring no skills
 - Be generous: if there's any chance a skill is relevant, include it
 - Multiple skills are fine
+- A link or reference to a service means that service's skill, not browser: github.com or "PR #12" -> github, atlassian.net -> jira/confluence, sharepoint.com or 1drv.ms -> onedrive/sharepoint, slack.com -> slack, teams.microsoft.com -> teams, docs.google.com -> the matching g- skill. Add browser only if the user wants a web page that is not one of these
 
 User message: {message}
 
@@ -944,7 +971,10 @@ _MAX_AUTO_SKILLS = 4  # cap on auto-detected skills per turn (explicit + deps ar
 # The auto-selected skills of each chat's latest turn; kept so the reply to an ask_user card (often a
 # bare "Create a new notebook") does not lose the skills the question was asked under.
 _LAST_AUTO_SKILLS: dict[str, list[str]] = {}
-_SANDBOX_DECISION_FOLLOW_UP = _re.compile(r"^\W*(?:Approved|Denied) · I (?:approved|denied) sandbox access request ")
+_SANDBOX_DECISION_FOLLOW_UP = _re.compile(
+    r"^\W*(?:(?:Approved|Denied) · I (?:approved|denied) sandbox access request |"
+    r"Authorized · I authorized GitHub SSO for )"
+)
 
 
 def _continues_the_previous_turn(message: str, recent_tools: set[str]) -> bool:
@@ -979,9 +1009,9 @@ def _auto_skill_relevance(skill_id: str, message: str, keyword_hits, classified)
 
 
 def _is_atlassian_mcp_skill(skill_id: str) -> bool:
-    """True if skill_id is a dynamic MCP connection for an Atlassian/Rovo service."""
+    """True if skill_id is a dynamic MCP connection for an Atlassian service."""
     sid = (skill_id or "").lower()
-    return any(m in sid for m in ("atlassian", "rovo", "confluence", "cloud-atlassian"))
+    return any(m in sid for m in ("atlassian", "confluence"))
 
 
 def _marketplace_skill_has_tools(skill_id: str) -> bool:
@@ -1845,12 +1875,13 @@ async def chat(req: ChatRequest):
         # Build the non-builtin catalog once (MCP connections + installed skills).
         _extra_catalog = {k: v for k, v in _available_skill_catalog().items()
                           if k not in _classify_skill_ids()}
-        # Run the LLM classifier when EITHER no keyword matched, OR a built-in
-        # keyword matched but the user also has non-builtin skills available that
-        # could overlap (e.g. keyword 'inbox' -> email, but a Gmail MCP exists).
-        # The classifier sees the full catalog and can route to the right service;
-        # without this, a built-in keyword would always win and hide MCP skills.
-        _should_classify = _msg_text.strip() and (not _inferred or _extra_catalog)
+        # Run the LLM classifier when EITHER no specific keyword matched (hits on only
+        # browser/code_runner/shell_runner/file_ops are everyday words, not a service
+        # choice), OR a built-in keyword matched but the user also has non-builtin
+        # skills available that could overlap (e.g. keyword 'inbox' -> email, but a
+        # Gmail MCP exists). The classifier sees the full catalog and can route to the
+        # right service; without this, a built-in keyword would always win and hide MCP skills.
+        _should_classify = _msg_text.strip() and _needs_classifier(_inferred, _extra_catalog)
         if _should_classify:
             print(f"[skill-detect] running LLM classifier (extra={list(_extra_catalog)})...", flush=True)
             # A blocking gateway call here froze the whole event loop (every request, Stop included)
@@ -1970,11 +2001,11 @@ async def chat(req: ChatRequest):
         if _marketplace_skill_has_tools(s) and s not in _cap_exempt
     ]
     _guidance_only = [s for s in _auto_candidates if s not in _capped_candidates]
-    # Atlassian MCP connections (Rovo, cloud-atlassian, hub, etc.) are complementary
+    # Atlassian MCP connections are complementary
     # to each other — each covers a different site. When any Jira/Atlassian skill is
     # active, exempt all Atlassian MCP connections from the cap so the model always
-    # has access to every connected Jira site. Without this, the Rovo connection that
-    # covers amd-hub gets dropped when cloud-atlassian + jira + browser are also active.
+    # has access to every connected Jira site. Without this, a connection that covers
+    # one site gets dropped when other Atlassian MCP connections + jira + browser are active.
     _has_jira = any("jira" in s or "atlassian" in s or "confluence" in s for s in _all_active)
     _atlassian_mcps = {s for s in _capped_candidates if _is_atlassian_mcp_skill(s)} if _has_jira else set()
     _capped_candidates = [s for s in _capped_candidates if s not in _atlassian_mcps]
@@ -2751,7 +2782,7 @@ async def chat(req: ChatRequest):
                                 and not _tool_activity_emitted
                                 and not shared.chat_task_store.is_cancelled(task_id)
                             ):
-                                _fallback = _silent_turn_fallback(_all_active)
+                                _fallback = _silent_turn_fallback()
                                 print(
                                     "[stream] empty completed turn "
                                     f"context={context_id} skills={_all_active}",

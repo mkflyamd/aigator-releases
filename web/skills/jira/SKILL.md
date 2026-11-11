@@ -13,20 +13,22 @@ metadata:
 
 Multiple Jira instances may be connected. Each tool's description says which site it covers.
 
+**Connector priority (every read and write, never reordered):** 1) the direct Atlassian API through the native `jira_*` tools; 2) the official Atlassian MCP; 3) any other connector or tool, only as a final fallback when neither of the first two can do it. What a connector reports it can do does not change this order.
+
 **For any READ (full URL or bare key):**
 
-1. Call `jira_get_issue` — it handles all connected sites automatically including Rovo.
-2. Call MCP Jira tools (cloud-atlassian, Rovo) ONLY if `jira_get_issue` reports the issue was not found or the site is not connected. Do not call them in parallel when the URL matches a native site.
+1. Call `jira_get_issue` — it handles all connected sites automatically including Atlassian MCP.
+2. Call Atlassian MCP Jira tools ONLY if `jira_get_issue` reports the issue was not found or the site is not connected. Do not call them in parallel when the URL matches a native site.
 3. Only tell the user the issue was not found after ALL tools have returned 404/error.
 
 **For any WRITE (full URL or bare key):**
 
 1. Call the native `jira_*` tool directly (e.g. `jira_add_comment`, `jira_update_issue`). Pass the full URL or bare key — target resolution is automatic.
-2. Never use MCP tools for writes. If a write tool returns "multiple sites", ask the user for the full URL.
+2. Use the native `jira_*` tools for writes. Only if none covers the change, call the raw MCP write tool; it appears as an approval card and nothing is applied until the user approves. If Jira rejects a field change made with direct credentials (labels, components, custom fields), Gator retries the same approved change through Atlassian MCP on the same site automatically; there is no second approval. If a write tool returns "multiple sites", ask the user for the full URL.
 
 ## Write operations — non-negotiable rules (read before any write)
 
-1. **ALWAYS use native `jira_*` tools** for ANY write (comment, update, create, transition, watcher, link, attachment). Never use MCP tools (cloud-atlassian, Rovo) for writes — they are blocked.
+1. **ALWAYS use native `jira_*` tools** for ANY write (comment, update, create, transition, watcher, link, attachment). Use a raw Atlassian MCP write tool only when no native tool covers the change; it is held as an approval card and nothing is applied until the user approves. Gator reaches Atlassian MCP itself when a native write needs it.
 2. **Creating a ticket**: call `jira_get_project_meta` first to find required fields, ask the user for missing values, then call `jira_open_create_form`. Never call `jira_create_issue` directly — it is disabled.
 3. **If a write tool returns a "multiple sites" error**: ask the user to provide the full issue URL so the correct site can be identified unambiguously.
 

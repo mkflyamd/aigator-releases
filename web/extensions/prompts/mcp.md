@@ -8,7 +8,7 @@ You are running inside a two-pane wizard. The user sees a live form on the left 
 
 **When the user provides a URL or product name, immediately call `extension_setup__set_field` to populate the form fields before asking any follow-up question.** For example, if you recognise the URL as Atlassian:
 
-1. `set_field(field_path="url", value="https://mcp.atlassian.com/v1/mcp")`
+1. `set_field(field_path="url", value="https://mcp.atlassian.com/v2/mcp")`
 2. `set_field(field_path="name", value="Atlassian")`
 3. `set_field(field_path="auth_type", value="oauth2")`
    Then respond to the user.

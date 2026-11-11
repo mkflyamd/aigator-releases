@@ -8019,7 +8019,6 @@ async function saveAtlassianExtraSites(kind, urls) {
   return res.ok ? '' : data.detail || 'error';
 }
 const atlassianSaveBtn = document.getElementById('atlassian-save-btn');
-const atlassianCloudMcpBtn = document.getElementById('atlassian-cloud-mcp-btn');
 const atlassianAddSiteBtn = document.getElementById('atlassian-add-site-btn');
 const atlassianMsg = document.getElementById('atlassian-msg');
 
@@ -8027,13 +8026,37 @@ const atlassianMsg = document.getElementById('atlassian-msg');
 const jiraDot = atlassianDot;
 const confluenceDot = atlassianDot;
 
-function _setAtlassianMcpConnectState(button, state, label) {
+function _setAtlassianMcpConnectState(button, state, label, onCancel) {
   if (!button) return;
   if (!button.dataset.idleLabel) button.dataset.idleLabel = button.textContent.trim();
   button.classList.toggle('atlassian-mcp-connect--connecting', state === 'connecting');
   button.classList.toggle('atlassian-mcp-connect--connected', state === 'connected');
   button.disabled = state === 'connecting';
   button.textContent = label || button.dataset.idleLabel;
+  button.parentElement.querySelector('.atlassian-mcp-cancel')?.remove();
+  if (state === 'connecting' && onCancel) {
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'atlassian-mcp-cancel';
+    cancel.textContent = '×';
+    cancel.title = 'Cancel';
+    cancel.setAttribute('aria-label', 'Cancel connecting');
+    cancel.addEventListener('click', onCancel);
+    button.parentElement.append(cancel);
+  }
+}
+
+async function _nextAtlassianMcpName() {
+  let names = [];
+  try {
+    const list = await fetch('/api/config/mcp').then((r) => r.json());
+    names = (list.connections || []).map((c) => String(c.name || ''));
+  } catch (_) {}
+  const taken = new Set(names);
+  if (!taken.has('Atlassian MCP')) return 'Atlassian MCP';
+  let n = 2;
+  while (taken.has(`Atlassian MCP ${n}`)) n++;
+  return `Atlassian MCP ${n}`;
 }
 
 async function loadAtlassianStatus() {
@@ -8097,8 +8120,7 @@ atlassianSaveBtn.addEventListener('click', async () => {
         atlassianMsg.textContent = 'Saved, but additional sites failed: ' + failures.join(' | ');
         return;
       }
-      atlassianMsg.textContent =
-        'Direct API connected. Optionally connect Cloud MCP or Rovo MCP below.';
+      atlassianMsg.textContent = 'Direct API connected.';
       atlassianDot.className = 'section-status st-ok';
       atlassianDetail.textContent = email;
       atlassianSaveBtn.textContent = 'Reconnect';
@@ -8115,41 +8137,18 @@ atlassianSaveBtn.addEventListener('click', async () => {
   }
 });
 
-if (atlassianCloudMcpBtn)
-  atlassianCloudMcpBtn.addEventListener('click', async () => {
-    _setAtlassianMcpConnectState(atlassianCloudMcpBtn, 'connecting', 'Connecting Cloud MCP…');
-    const directSite = atlassianJiraUrlInput.value.trim().replace(/\/$/, '');
-    const siteLabel = directSite || 'the configured direct API site';
-    atlassianMsg.textContent =
-      `Connecting Cloud MCP with credentials from ${siteLabel}. ` +
-      'MCP site is provider-selected…';
-    try {
-      const saved = await fetch('/api/config/atlassian/cloud-mcp', {
-        method: 'POST',
-        headers: { 'X-CSRF-Token': window.__CSRF_TOKEN__ || '' },
-      }).then(async (response) => {
-        const data = await response.json();
-        if (!response.ok || !data.ok)
-          throw new Error(data.detail || data.error || 'Could not connect Cloud MCP');
-        return data;
-      });
-      if (typeof _loadMcpConnections === 'function') await _loadMcpConnections();
-      _setAtlassianMcpConnectState(atlassianCloudMcpBtn, 'connected', 'Cloud MCP Connected ✓');
-      atlassianMsg.textContent =
-        `Cloud MCP connected with ${saved.tool_count || 0} tools. Direct API site: ${siteLabel}. ` +
-        'Cloud MCP has no site selection; use Rovo MCP to choose a specific site.';
-    } catch (error) {
-      _setAtlassianMcpConnectState(atlassianCloudMcpBtn, 'idle');
-      atlassianMsg.textContent = `Could not connect Cloud MCP: ${error.message || error}`;
-    }
-  });
-
-// Rovo MCP is the explicit Atlassian SSO/site-selection path.
+// Atlassian MCP is the explicit Atlassian SSO/site-selection path.
 if (atlassianAddSiteBtn)
   atlassianAddSiteBtn.addEventListener('click', async () => {
-    const url = 'https://mcp.atlassian.com/v1/mcp';
+    const url = 'https://mcp.atlassian.com/v2/mcp';
     let popup = null;
-    _setAtlassianMcpConnectState(atlassianAddSiteBtn, 'connecting', 'Connecting Rovo MCP…');
+    const controller = new AbortController();
+    _setAtlassianMcpConnectState(
+      atlassianAddSiteBtn,
+      'connecting',
+      'Connecting Atlassian MCP…',
+      () => controller.abort(),
+    );
     atlassianMsg.textContent = 'Opening Atlassian sign-in…';
     try {
       popup = window.open(
@@ -8160,7 +8159,8 @@ if (atlassianAddSiteBtn)
       const started = await fetch('/api/config/mcp/oauth/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url, label: 'Atlassian Rovo' }),
+        body: JSON.stringify({ url, label: 'Atlassian MCP' }),
+        signal: controller.signal,
       }).then(async (response) => {
         const data = await response.json();
         if (!response.ok) throw new Error(data.detail || 'Could not start Atlassian sign-in');
@@ -8175,33 +8175,41 @@ if (atlassianAddSiteBtn)
       else popup.location.href = started.authorize_url;
       atlassianMsg.textContent = 'Complete Atlassian sign-in and choose a site…';
       const completed = await new Promise((resolve) => {
+        const finish = (result) => {
+          clearInterval(timer);
+          clearTimeout(deadline);
+          resolve(result);
+        };
         const timer = setInterval(async () => {
           try {
             const state = await fetch(
               '/api/config/mcp/oauth/poll?state=' + encodeURIComponent(started.state),
+              { signal: controller.signal },
             ).then((r) => r.json());
-            if (state.status !== 'pending') {
-              clearInterval(timer);
-              resolve(state);
-            }
+            if (state.status !== 'pending') finish(state);
           } catch (_) {}
         }, 800);
-        setTimeout(() => {
-          clearInterval(timer);
-          resolve({ ok: false, error: 'Sign-in timed out' });
-        }, 300000);
+        const deadline = setTimeout(
+          () => finish({ ok: false, error: 'Sign-in timed out' }),
+          300000,
+        );
+        controller.signal.addEventListener('abort', () =>
+          finish({ ok: false, error: 'Cancelled' }),
+        );
       });
+      if (controller.signal.aborted) throw new Error('Cancelled');
       if (!completed.ok) throw new Error(completed.error || 'Atlassian sign-in did not complete');
+      // Saving cannot be undone from here, so stop offering cancel once it starts.
+      _setAtlassianMcpConnectState(atlassianAddSiteBtn, 'connecting', 'Connecting Atlassian MCP…');
       atlassianMsg.textContent = 'Adding selected site…';
       const saved = await fetch('/api/config/mcp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        // Each OAuth site selection needs a distinct connection identity. A
-        // fixed name caused the connection manager to reuse/overwrite the first
-        // Rovo record when a user added Hub and non-Hub sites.
+        // Each site selection is its own connection, so later ones get a number
+        // ("Atlassian MCP 2") to keep the names in the list and the "/" menu apart.
         body: JSON.stringify({
           transport: 'http',
-          name: `Atlassian Rovo · ${String(started.provider_id || '').slice(-6) || 'site'}`,
+          name: await _nextAtlassianMcpName(),
           url,
           auth_type: 'oauth2',
           oauth_provider_id: started.provider_id,
@@ -8218,11 +8226,17 @@ if (atlassianAddSiteBtn)
       });
       if (typeof _loadMcpConnections === 'function') await _loadMcpConnections();
       if (typeof checkSkillConnectionStatus === 'function') await checkSkillConnectionStatus();
-      _setAtlassianMcpConnectState(atlassianAddSiteBtn, 'connected', 'Rovo MCP Connected ✓');
+      _setAtlassianMcpConnectState(atlassianAddSiteBtn, 'connected', 'Atlassian MCP Connected ✓');
       atlassianMsg.textContent = `Connected. Discovered ${saved.tool_count || 0} Atlassian tools.`;
     } catch (error) {
       _setAtlassianMcpConnectState(atlassianAddSiteBtn, 'idle');
-      atlassianMsg.textContent = `Could not add site: ${error.message || error}`;
+      if (controller.signal.aborted) {
+        if (popup && !popup.closed) popup.close();
+        atlassianMsg.textContent = 'Atlassian MCP connection cancelled.';
+        if (typeof _loadMcpConnections === 'function') _loadMcpConnections();
+      } else {
+        atlassianMsg.textContent = `Could not add site: ${error.message || error}`;
+      }
     }
   });
 
@@ -9868,6 +9882,32 @@ function _buildJiraFieldRows(data, editable = {}) {
     .join('');
 }
 
+function _showApprovalWarning(approveBtn, result) {
+  const partial = !!result && result.ok === 'partial';
+  const fallback = !!result && !!result.fallback ? result.fallback : null;
+  if (!partial && !fallback) return false;
+  const lines = [];
+  if (fallback) {
+    lines.push(
+      'The direct Jira API rejected this change' +
+        (fallback.reason ? ' (' + fallback.reason + ')' : '') +
+        ', so it was applied through the Atlassian MCP on the same site.',
+    );
+  }
+  if (partial) {
+    lines.push(
+      result.warning || 'Applied, but Jira did not confirm every change. Check the issue.',
+    );
+  }
+  approveBtn.textContent = partial ? 'Applied with a warning' : 'Applied via Atlassian MCP';
+  const note = document.createElement('div');
+  note.className = 'gcc-draft-warning';
+  note.style.cssText = 'font-size:0.82em;margin-top:6px;white-space:pre-wrap;';
+  note.textContent = lines.join('\n');
+  approveBtn.parentNode.insertBefore(note, approveBtn.nextSibling);
+  return true;
+}
+
 function _showJiraTargetSelection(data, ownerTabId) {
   const targets = Array.isArray(data?.targets) ? data.targets : [];
   if (!targets.length) return;
@@ -10101,6 +10141,129 @@ function _showAskUserCard(data, ownerTabId) {
   card.appendChild(bubble);
   document.getElementById('messages')?.appendChild(card);
   card.scrollIntoView({ behavior: 'smooth', block: 'end' });
+}
+
+// ── GitHub SSO card ──────────────────────────────────────────────────────────
+// An org that enforces SAML SSO refused the user's GitHub sign-in. The card opens the org's
+// authorization page in the system browser; "I've authorized" asks AI Gator to retry the request.
+function _showGithubSsoCard(data, ownerTabId) {
+  const org = data && typeof data.org === 'string' ? data.org : '';
+  let url = '';
+  try {
+    const parsed = new URL(data && data.url);
+    if (parsed.protocol === 'https:') url = parsed.href;
+  } catch (_) {
+    /* invalid link: no card */
+  }
+  if (!org || !url) return;
+  const tabId = ownerTabId || _activeTabId || 'default';
+  if (tabId !== _activeTabId) {
+    _tabsWithUpdates.add(tabId);
+    document.querySelector?.(`.tab-item[data-tab-id="${tabId}"]`)?.classList.add('tab-has-update');
+    _showConnectivityToast('GitHub needs your authorization in another tab.', 'info');
+    return;
+  }
+  document.querySelectorAll('.github-sso-card').forEach((el) => el.remove());
+  const card = document.createElement('div');
+  card.className = 'system-card github-sso-card';
+  const body = document.createElement('div');
+  body.style.cssText =
+    'display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px 10px; width: 100%;';
+  const icon = document.createElement('span');
+  icon.textContent = '🔒';
+  icon.style.cssText = 'font-size: 1.1rem; flex-shrink: 0; margin-top: 2px;';
+  const textWrap = document.createElement('div');
+  textWrap.style.cssText = 'flex: 1 1 0; min-width: 0;';
+  const title = document.createElement('div');
+  title.style.cssText =
+    'font-size: 0.85rem; font-weight: 600; color: var(--text); margin-bottom: 2px;';
+  const account =
+    data && typeof data.account === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(data.account)
+      ? data.account
+      : '';
+  title.textContent = account
+    ? `Authorize GitHub access to ${org} as ${account}?`
+    : `Authorize GitHub access to ${org}?`;
+  const detail = document.createElement('div');
+  detail.style.cssText =
+    'font-size: 0.78rem; color: var(--text-muted); word-break: break-word; white-space: pre-line;';
+  detail.textContent =
+    `${org} requires SSO authorization for your GitHub sign-in. Open the page, authorize GitHub CLI for ${org}, then come back and retry.` +
+    (account
+      ? `\nSign in to github.com as ${account} first. A "404" page means your browser is signed in as a different account.`
+      : '');
+  textWrap.append(title, detail);
+  const btnWrap = document.createElement('div');
+  btnWrap.style.cssText =
+    'display: flex; flex-wrap: wrap; gap: 6px; flex: 1 1 100%; justify-content: flex-end; align-items: center;';
+  const open = document.createElement('button');
+  open.textContent = '1. Open authorization page';
+  const retry = document.createElement('button');
+  retry.textContent = "2. I've authorized, retry";
+  // The step to take now is the green one: Open first, then Retry once the page has been opened.
+  const _setSsoStep = (opened) => {
+    const base =
+      'font-size: 0.75rem; padding: 4px 12px; border-radius: 6px; border: none; cursor: pointer; font-weight: 600;';
+    const primary = `${base} background: var(--accent); color: #000;`;
+    const secondary = `${base} background: var(--surface3); color: var(--text);`;
+    open.style.cssText = opened ? secondary : primary;
+    retry.style.cssText = opened ? primary : secondary;
+  };
+  _setSsoStep(false);
+  open.addEventListener('click', () => {
+    openExternal(data.url);
+    _setSsoStep(true);
+  });
+  retry.addEventListener('click', () => {
+    card.remove();
+    _sendSandboxFollowUp(
+      tabId,
+      `✅ Authorized · I authorized GitHub SSO for ${org}. Retry the GitHub request that just failed.`,
+    ).catch((err) => console.warn('[github-sso] retry not sent:', err));
+  });
+  btnWrap.append(open, retry);
+  const others = Array.isArray(data.others)
+    ? data.others.filter((a) => typeof a === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(a))
+    : [];
+  if (others.length) {
+    const switchNote = document.createElement('div');
+    switchNote.style.cssText = 'font-size: 0.78rem; color: var(--text-muted); margin-top: 4px;';
+    switchNote.textContent =
+      'Or use another GitHub account signed in on this computer. This changes the default account for the GitHub CLI, including in your terminal.';
+    textWrap.appendChild(switchNote);
+    others.forEach((login) => {
+      const useBtn = document.createElement('button');
+      useBtn.textContent = `Use ${login} and retry`;
+      useBtn.style.cssText =
+        'font-size: 0.75rem; padding: 4px 12px; border-radius: 6px; border: none; cursor: pointer; font-weight: 600; background: var(--surface3); color: var(--text);';
+      useBtn.addEventListener('click', async () => {
+        useBtn.disabled = true;
+        try {
+          const res = await fetch('/api/github/switch-account', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ account: login }),
+          });
+          if (!res.ok)
+            throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
+        } catch (err) {
+          useBtn.disabled = false;
+          _showConnectivityToast(`Could not switch to ${login}: ${err.message}`, 'error');
+          return;
+        }
+        card.remove();
+        _sendSandboxFollowUp(
+          tabId,
+          `✅ Authorized · I authorized GitHub SSO for ${org} by switching GitHub to ${login}. Retry the GitHub request that just failed.`,
+        ).catch((err) => console.warn('[github-sso] retry not sent:', err));
+      });
+      btnWrap.appendChild(useBtn);
+    });
+  }
+  body.append(icon, textWrap, btnWrap);
+  card.appendChild(body);
+  document.getElementById('messages')?.appendChild(card);
+  _pinConfirmCardInView(card);
 }
 
 function _showSandboxApproval(data, ownerTabId) {
@@ -10985,6 +11148,17 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
       hideEditLink: true,
       sendLabel: 'I approve',
     },
+    'jira-mcp-write': {
+      paneLabel: '@jira',
+      paneIcon: '🎫',
+      service: '',
+      action: data.action || 'Jira change',
+      hideEditLink: true,
+      sendLabel: 'I approve',
+      customBody:
+        _buildJiraFieldRows({ fields: { connection: data.connection, tool: data.tool } }) +
+        `<div class="gcc-field-row gcc-field-row--block"><span class="gcc-field-key">arguments</span><pre class="gcc-field-val" style="max-height:240px;overflow:auto;white-space:pre-wrap;margin:0;">${escapeHtml(data.arguments_text || '')}</pre></div>`,
+    },
     'jira-create': {
       paneLabel: '@jira',
       paneIcon: '\uD83C\uDFAB',
@@ -11054,7 +11228,10 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
       customBody: _buildJiraFieldRows({
         issue_key: data.issue_key,
         jira_site: data.jira_site,
-        fields: { transition: data.transition_name },
+        fields: {
+          transition: data.transition_name,
+          ...(data.comment ? { comment: data.comment } : {}),
+        },
       }),
     },
     'jira-link': {
@@ -11282,7 +11459,10 @@ function _injectDraftApprovalCard(type, data, { ownerTabId = _activeTabId, persi
       // Post-approval navigation: switch to the relevant native app and
       // inject a 'View in [App]' link so the user can get back easily.
       const _nav = _json.navigate_to;
-      if (_nav && typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell) {
+      // A partial result keeps the card open so the user can read what did not go through.
+      if (_showApprovalWarning(approveBtn, _json)) {
+        // nothing else to do
+      } else if (_nav && typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell) {
         _gatorNavAfterApproval(_nav, card);
       } else if (typeof closeThirdPane === 'function') {
         closeThirdPane();
@@ -14061,6 +14241,8 @@ form.addEventListener('submit', async (e) => {
               _showJiraTargetSelection(msg.jira_target_selection, requestTabId);
             } else if (msg.sandbox_approval) {
               _showSandboxApproval(msg.sandbox_approval, requestTabId);
+            } else if (msg.github_sso) {
+              _showGithubSsoCard(msg.github_sso, requestTabId);
             } else if (msg.ask_user) {
               _showAskUserCard(msg.ask_user, requestTabId);
             } else if (msg.files && Array.isArray(msg.files) && msg.files.length) {
@@ -17154,6 +17336,7 @@ document.addEventListener('DOMContentLoaded', _refreshUsageBar);
   // so the toast re-appears when the state transitions (e.g. downloading → ready).
   let _softDismissedState = null;
   let _installing = false;
+  let _autoInstall = false;
 
   function _btn(label, bgColor, onClick) {
     const b = document.createElement('button');
@@ -17226,16 +17409,30 @@ document.addEventListener('DOMContentLoaded', _refreshUsageBar);
 
     if (data.state === 'available') {
       toast.appendChild(_span('Update available \u2014 v' + (data.version || '')));
-      toast.appendChild(_btn('Download', '#89b4fa', _otaDownload));
+      if (data.install_supported) {
+        toast.appendChild(_btn('Install', '#a6e3a1', _otaInstallNow));
+      } else {
+        toast.appendChild(
+          _btn('Download', '#89b4fa', function () {
+            openExternal(data.release_url);
+          }),
+        );
+      }
       toast.appendChild(_xBtn(_otaDismiss));
     } else if (data.state === 'downloading') {
       toast.appendChild(_span('Downloading update\u2026 ' + (data.progress || 0) + '%'));
       toast.appendChild(_xBtn(_otaDismiss));
     } else if (data.state === 'ready') {
+      if (_autoInstall) {
+        _autoInstall = false;
+        _otaInstall();
+        return;
+      }
       toast.appendChild(_span('Update ready'));
       toast.appendChild(_btn('Install & Restart', '#a6e3a1', _otaInstall));
       toast.appendChild(_xBtn(_otaDismiss));
     } else if (data.state === 'error') {
+      _autoInstall = false;
       toast.appendChild(_span('Update download failed'));
       toast.appendChild(_btn('Retry', '#f38ba8', _otaDownload));
       toast.appendChild(_xBtn(_otaDismiss));
@@ -17259,8 +17456,20 @@ document.addEventListener('DOMContentLoaded', _refreshUsageBar);
     _downloadInitiated = true;
     sessionStorage.setItem('ota-download-initiated', '1');
     try {
-      await fetch('/api/update/download', { method: 'POST' });
-    } catch (_) {}
+      const r = await fetch('/api/update/download', { method: 'POST' });
+      const data = await r.json();
+      return data.ok === true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  // One-click install: download, then install as soon as the download is verified.
+  async function _otaInstallNow() {
+    _autoInstall = true;
+    _lastState = 'downloading';
+    if (!(await _otaDownload())) _autoInstall = false;
+    _checkUpdate();
   }
 
   function _sleep(ms) {
@@ -17304,7 +17513,7 @@ document.addEventListener('DOMContentLoaded', _refreshUsageBar);
 
   async function _otaInstall() {
     _installing = true;
-    _setToastMessage('Updating\u2026 this can take up to a minute.');
+    _setToastMessage('Updating\u2026 this can take a few minutes.');
     try {
       fetch('/api/update/install', { method: 'POST' });
     } catch (_) {}
@@ -17316,7 +17525,7 @@ document.addEventListener('DOMContentLoaded', _refreshUsageBar);
       return;
     }
     _setToastMessage('Installing\u2026 reconnecting when ready.');
-    const cameBack = await _waitForServerUp(120000);
+    const cameBack = await _waitForServerUp(300000);
     if (cameBack) {
       // Clear OTA session flags so the post-restart page starts clean.
       sessionStorage.removeItem('ota-dismissed');
@@ -17561,7 +17770,7 @@ async function _loadMcpConnections() {
     const data = await res.json();
     const connections = data.connections || [];
     // The page-load bootstrap is only a snapshot. Connections added through
-    // specialized flows (notably Atlassian Rovo OAuth) used to refresh the
+    // specialized flows (notably Atlassian MCP OAuth) used to refresh the
     // Settings list but not SKILL_REGISTRY, so the backend could auto-select
     // the MCP while the / picker required Ctrl+R to see it. Reconcile every
     // enabled, tool-bearing connection into the live slash-skill registry.

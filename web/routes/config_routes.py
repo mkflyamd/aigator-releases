@@ -463,46 +463,9 @@ def save_jira_pat(req: JiraPatRequest):
             current.pop("jira_api_token", None)
         return current
     _update_config(_commit_jira)
-    # Direct API credentials are intentionally site-specific. Do not silently
-    # create a generic Cloud MCP connection here: that service may choose a
-    # provider-default site rather than this configured base URL. Users opt
-    # into Cloud MCP or Rovo SSO explicitly through their separate controls.
+    # Direct API credentials are intentionally site-specific. Do not create an
+    # MCP connection here; Atlassian MCP is connected separately through Atlassian SSO.
     return {"ok": True, "user": display_name, "base_url": base_url}
-
-
-@router.post("/api/config/atlassian/cloud-mcp", dependencies=[Depends(verify_csrf)])
-def connect_atlassian_cloud_mcp():
-    """Create/update the optional API-token Atlassian Cloud MCP connection.
-
-    This is deliberately separate from saving the direct Jira/Confluence API
-    site. The MCP endpoint exposes a broad catalog but does not currently
-    accept the direct site's base URL as a resource target.
-    """
-    cfg = _load_config()
-    email = cfg.get("jira_email") or cfg.get("confluence_email") or ""
-    token = cfg.get("jira_api_token") or cfg.get("confluence_pat") or ""
-    base_url = cfg.get("jira_base_url") or cfg.get("confluence_base_url") or ""
-    if not email or not token or "atlassian.net" not in base_url:
-        raise HTTPException(
-            status_code=400,
-            detail="Save a Jira & Confluence Cloud API-token connection before enabling Cloud MCP.",
-        )
-
-    from mcp.manager import add_or_update
-
-    result = add_or_update(
-        {
-            "connection_id": "cloud-atlassian",
-            "name": "Atlassian Cloud MCP · API token",
-            "transport": "http",
-            "url": "https://mcp-platform.amd.com/mcp/cloud_atlassian",
-            "auth_type": "basic",
-            "auth_value": f"{email}:{token}",
-        }
-    )
-    if not result.get("ok"):
-        raise HTTPException(status_code=400, detail=result.get("error", "Could not connect Cloud MCP."))
-    return result
 
 
 class JiraExtraSitesRequest(BaseModel):
