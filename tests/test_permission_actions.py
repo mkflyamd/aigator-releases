@@ -160,7 +160,7 @@ async def test_the_same_irreversible_tool_asks_again_on_the_next_call():
     assert len(cards) == 2
 
 
-async def test_choosing_tab_or_always_on_an_irreversible_card_remembers_nothing():
+async def test_an_irreversible_card_remembers_nothing_even_if_a_tab_or_always_answer_arrives():
     calls, cards, q = [], [], asyncio.Queue()
     await asyncio.gather(_runner(calls)(_tc("delete_contact", {"contact_id": "c1"}), q), _answer(q, "always", cards))
     assert not ds.allowed_with_prefix("tab-a", "data:")
@@ -175,17 +175,28 @@ async def test_reading_an_app_does_not_unlock_writing_to_it():
     assert cards and cards[0]["title"] == "Allow changes in Outlook mail?"
 
 
-def _hints_classifier(hints, name="tool"):
+ATLASSIAN = {"name": "atlassian", "url": "https://mcp.atlassian.com/v1/sse"}
+OTHER = {"name": "srv", "url": "https://mcp.example.test"}
+
+
+def _hints_classifier(hints, conn=ATLASSIAN, name="getJiraIssue"):
     from mcp.manager import _make_classifier
 
-    return _make_classifier(name, {"name": "srv", "url": "https://mcp.example.test"}, hints)
+    return _make_classifier(name, conn, hints)
+
+
+def test_a_read_only_hint_is_trusted_only_from_the_official_atlassian_host():
+    assert _hints_classifier({"readOnlyHint": True})({}) == "read"
+    assert _hints_classifier({"readOnlyHint": True}, OTHER)({}) == "other"
+    assert _hints_classifier({"readOnlyHint": True}, {"name": "x", "url": "http://mcp.atlassian.com/"})({}) == "other"
 
 
 def test_an_mcp_tool_is_read_only_only_when_the_server_declares_it():
     assert _hints_classifier({"readOnlyHint": True})({}) == "read"
     assert _hints_classifier({})({}) == "other"
-    assert _hints_classifier({"readOnlyHint": False})({}) == "other"
-    assert _hints_classifier({"readOnlyHint": True, "destructiveHint": True})({}) == "other"
+    assert _hints_classifier({"readOnlyHint": False})({}) != "read"
+    assert _hints_classifier({"readOnlyHint": True, "destructiveHint": True})({}) != "read"
+    assert _hints_classifier({"readOnlyHint": False}, OTHER)({}) == "other"
 
 
 def test_an_mcp_tool_with_no_classifier_asks_every_call():
@@ -214,8 +225,8 @@ def test_mcp_calls_are_filed_by_what_the_server_declares(monkeypatch):
         assert source.per_call and source.key == "mcp:mcp-srv:irreversible"
 
 
-def test_a_long_call_says_how_much_of_it_the_card_does_not_show():
+def test_the_card_shows_every_argument_of_the_call():
     inputs = {"attendees": [f"person{i}@example.test" for i in range(200)]}
     details = ds._call_details(inputs)
-    assert "more characters not shown" in details
+    assert "person199@example.test" in details and "not shown" not in details
     assert ds._call_details({"event_id": "e1"}) == '\nDetails: {"event_id": "e1"}'

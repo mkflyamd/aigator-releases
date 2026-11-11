@@ -42,7 +42,7 @@ Some tools depend on the call. Creating a calendar event or an out-of-office eve
 
 ## MCP tools
 
-An MCP tool is a read only when its server declares `readOnlyHint: true` and does not declare `destructiveHint: true`. Everything else from an MCP server asks every time. Tools that AI Gator parks as approval drafts (gated Google Workspace writes, unverified Jira writes) are filed under the server's "Write to private" permission, and the draft card remains the per-call approval. An MCP server can be granted read and, for drafts, save drafts. It can never be granted anything that sends or changes shared content.
+An MCP tool is a read only when its server declares `readOnlyHint: true`, does not declare `destructiveHint: true`, and is Atlassian's own server (`mcp.atlassian.com` over https). A hint from any other server proves nothing, so everything else from an MCP server asks every time. Tools that AI Gator parks as approval drafts (gated Google Workspace writes, unverified Jira writes) are filed under the server's "Write to private" permission, and the draft card remains the per-call approval. An MCP server can be granted read and, for drafts, save drafts. It can never be granted anything that sends or changes shared content.
 
 ## Button meanings
 
