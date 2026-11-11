@@ -178,4 +178,3 @@ The tables list every built-in tool of the connected apps. The tool names in `we
 | ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Read                            | `github_get_issue`, `github_get_pr`, `github_list_issues`, `github_list_my_issues`, `github_list_my_prs`, `github_list_my_repos`, `github_list_review_requests`, `github_search_code`, `github_search_repos`, `github_whoami` |
 | Not reversible, asks every time | `github_add_issue_comment`, `github_create_issue`, `github_gh`                                                                                                                                                                |
-
