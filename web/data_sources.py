@@ -112,7 +112,7 @@ def mark_direct_data(tool_name: str, data):
 _CARD_URL_MAX = 200
 
 
-_DETAIL_MAX = 300
+_DETAIL_MAX = 1200
 _STAYS_ALLOWED = "This stays allowed until you close this tab."
 
 
@@ -120,7 +120,9 @@ def _call_details(inputs: dict | None) -> str:
     if not inputs:
         return ""
     text = json.dumps(inputs, default=str, ensure_ascii=False)
-    return "\nDetails: " + (text if len(text) <= _DETAIL_MAX else text[:_DETAIL_MAX] + "...")
+    if len(text) > _DETAIL_MAX:
+        text = f"{text[:_DETAIL_MAX]}... ({len(text) - _DETAIL_MAX} more characters not shown)"
+    return "\nDetails: " + text
 
 
 def prompt_for(source: Source, tool_name: str, inputs: dict | None = None) -> dict:

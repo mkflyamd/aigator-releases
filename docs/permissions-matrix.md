@@ -10,22 +10,23 @@ Every tool, built in or from an MCP server, has one of four action types.
 | -------------------------------- | ----------------------------------------------------------------------------------------------------- | ------------ | ------------------------------------------------------------------------------- |
 | Read                             | Changes nothing anywhere.                                                                             | Yes          | Search mail, read a Jira issue, list OneDrive files.                            |
 | Write to private                 | Changes only things the user alone sees.                                                              | Yes          | Open a draft in the compose window, create a contact, create a OneNote page.    |
-| Write to public (reversible)     | Changes something others can see, and the app keeps real version history or a recycle bin to undo it. | Yes          | Edit a Confluence page, move a OneDrive file, update a Jira issue field.        |
+| Write to public (reversible)     | Changes something others can see, and the app keeps real version history or a recycle bin to undo it. | Yes          | Move a OneDrive file, edit a OneNote page.                                      |
 | Write to public (not reversible) | Others are notified or see it in a way that cannot be undone.                                         | Never        | Send a message, send or cancel an invite, comment on an issue, delete for good. |
 
-Always allow is granted per app plus action type. "Always allow read for Outlook mail" does not allow writing to Outlook mail, and allowing changes in Confluence does not allow anything in Jira.
+Always allow is granted per app plus action type. "Always allow read for Outlook mail" does not allow writing to Outlook mail, and allowing changes in OneNote does not allow anything in OneDrive.
 
 Settings → Permissions lists one row per app and action type, using the same words as the table above.
 
 ## Notifying someone is not reversible
 
-A change that notifies another person counts as not reversible, even when the content can be deleted afterwards. A notification, an email or a chat message has already been seen by then. This covers:
+A change that notifies another person counts as not reversible, even when the content can be deleted afterwards. A notification, an email or a chat message has already been seen by then. Jira and Confluence changes notify watchers and nothing in AI Gator suppresses that, so they count too. This covers:
 
 - sending, replying to and forwarding email
 - Teams and Slack messages
 - calendar invites, added attendees, cancellations and responses
 - @mentions and comments that notify watchers
 - GitHub issues and comments
+- Jira and Confluence changes that notify watchers
 - permanent deletes
 
 Teams and Slack messages are therefore not reversible, which is what keeps them draft-only. CLAUDE.md requires that email, Teams and Slack messages never auto-send.
@@ -150,20 +151,20 @@ The tables list every built-in tool of the connected apps. The tool names in `we
 
 ### Jira
 
-| Action type                  | Tools                                                                                                                                                                                                                          |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Read                         | `jira_get`, `jira_get_epic_children`, `jira_get_issue`, `jira_get_issue_links`, `jira_get_project_meta`, `jira_list_fields`, `jira_list_link_types`, `jira_search`, `jira_search_user`, `jira_show_issues`, `list_jira_issues` |
-| Write to private             | `jira_open_create_form`, `jira_stage_teams_attachment`, `jira_stage_teams_image`, `jira_update_form_fields`                                                                                                                    |
-| Write to public (reversible) | `jira_link_issues`, `jira_transition`, `jira_update_issue`                                                                                                                                                                     |
-| Not reversible, draft card   | `jira_add_comment`, `jira_add_remote_link`, `jira_add_watcher`, `jira_create_issue`, `jira_mutate`, `jira_stage_attachment`, `jira_unlink_issues`                                                                              |
+| Action type                     | Tools                                                                                                                                                                                                                          |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Read                            | `jira_get`, `jira_get_epic_children`, `jira_get_issue`, `jira_get_issue_links`, `jira_get_project_meta`, `jira_list_fields`, `jira_list_link_types`, `jira_search`, `jira_search_user`, `jira_show_issues`, `list_jira_issues` |
+| Write to private                | `jira_open_create_form`, `jira_stage_teams_attachment`, `jira_stage_teams_image`, `jira_update_form_fields`                                                                                                                    |
+| Not reversible, draft card      | `jira_add_comment`, `jira_add_remote_link`, `jira_add_watcher`, `jira_create_issue`, `jira_mutate`, `jira_stage_attachment`, `jira_unlink_issues`                                                                              |
+| Not reversible, asks every time | `jira_link_issues`, `jira_transition`, `jira_update_issue`                                                                                                                                                                     |
 
 ### Confluence
 
-| Action type                  | Tools                                                                                                                                                                                      |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Read                         | `confluence_show_pages`, `get_confluence_child_pages`, `get_confluence_edit_context`, `get_confluence_page_outline`, `list_confluence_spaces`, `read_confluence_page`, `search_confluence` |
-| Write to private             | `confluence_open_create_form`, `confluence_open_edit_form`                                                                                                                                 |
-| Write to public (reversible) | `create_confluence_page`, `patch_confluence_page`, `update_confluence_page`                                                                                                                |
+| Action type                     | Tools                                                                                                                                                                                      |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Read                            | `confluence_show_pages`, `get_confluence_child_pages`, `get_confluence_edit_context`, `get_confluence_page_outline`, `list_confluence_spaces`, `read_confluence_page`, `search_confluence` |
+| Write to private                | `confluence_open_create_form`, `confluence_open_edit_form`                                                                                                                                 |
+| Not reversible, asks every time | `create_confluence_page`, `patch_confluence_page`, `update_confluence_page`                                                                                                                |
 
 ### Slack
 

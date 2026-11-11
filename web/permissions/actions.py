@@ -63,8 +63,6 @@ confluence_open_create_form confluence_open_edit_form
 
 _WRITE_PUBLIC_TOOLS = """
 move_onedrive_file copy_onedrive_file update_onenote_page
-create_confluence_page patch_confluence_page update_confluence_page
-jira_update_issue jira_transition jira_link_issues
 """.split()
 
 # Tools that only prepare a draft (or are refused outright). The draft's approval card is the per-call approval.
@@ -74,11 +72,14 @@ jira_add_comment jira_add_watcher jira_stage_attachment
 jira_create_issue jira_add_remote_link jira_unlink_issues jira_mutate
 """.split())
 
-# Tools that act the moment they are called, so each call gets its own approval card.
+# Tools that act the moment they are called, so each call gets its own approval card. Jira and Confluence changes
+# notify watchers and nothing here suppresses that, so they are not reversible.
 _ASK_EVERY_TIME_TOOLS = """
 add_calendar_attendees update_calendar_event delete_calendar_event respond_calendar_event
 create_calendar_event create_ooo_event delete_contact
 github_create_issue github_add_issue_comment github_gh
+create_confluence_page patch_confluence_page update_confluence_page
+jira_update_issue jira_transition jira_link_issues
 """.split()
 
 BUILTIN_ACTIONS: dict[str, str] = {

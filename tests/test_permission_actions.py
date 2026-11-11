@@ -58,7 +58,8 @@ def test_messages_and_notifying_jira_changes_are_irreversible_and_draft_backed(t
 
 @pytest.mark.parametrize("tool", ["delete_calendar_event", "respond_calendar_event", "update_calendar_event",
                                   "add_calendar_attendees", "delete_contact", "github_create_issue",
-                                  "github_add_issue_comment"])
+                                  "github_add_issue_comment", "jira_update_issue", "jira_transition",
+                                  "jira_link_issues", "update_confluence_page", "create_confluence_page"])
 def test_direct_irreversible_tools_have_no_remembered_gate(tool):
     assert actions.BUILTIN_ACTIONS[tool] == actions.IRREVERSIBLE
     assert actions.gate_action(tool) is None
@@ -80,7 +81,7 @@ def test_github_gh_is_read_only_only_for_a_read_command():
 def test_reading_and_private_and_reversible_writes_can_be_remembered():
     assert actions.gate_action("search_email") == actions.READ
     assert actions.gate_action("create_onenote_page") == actions.WRITE_PRIVATE
-    assert actions.gate_action("update_confluence_page") == actions.WRITE_PUBLIC
+    assert actions.gate_action("update_onenote_page") == actions.WRITE_PUBLIC
 
 
 def test_no_category_is_offered_for_the_irreversible_type():
@@ -93,7 +94,7 @@ def test_no_category_is_offered_for_the_irreversible_type():
 def test_each_app_lists_a_category_per_action_type_its_tools_can_use():
     ids = {c.id for c in registry.known()}
     assert {"data:Outlook mail:read", "data:Outlook mail:write_private", "data:Outlook calendar:read",
-            "data:Outlook calendar:write_private", "data:Confluence:write_public",
+            "data:Outlook calendar:write_private", "data:OneNote:write_public",
             "data:GitHub:read"} <= ids
     assert "data:Outlook mail:write_public" not in ids
 
@@ -134,6 +135,9 @@ def _allow_everything_else_for(label):
     ("delete_contact", {"contact_id": "c1"}, "Outlook contacts"),
     ("github_create_issue", {"repo": "o/r", "title": "x"}, "GitHub"),
     ("github_add_issue_comment", {"repo": "o/r", "number": 1, "body": "x"}, "GitHub"),
+    ("jira_update_issue", {"issue_key": "AB-1"}, "Jira"),
+    ("jira_transition", {"issue_key": "AB-1"}, "Jira"),
+    ("update_confluence_page", {"page_id": "1"}, "Confluence"),
 ])
 async def test_an_irreversible_tool_still_asks_when_every_other_category_for_the_app_is_always_allowed(
         tool, inputs, label):
@@ -208,3 +212,10 @@ def test_mcp_calls_are_filed_by_what_the_server_declares(monkeypatch):
     for name in ("srv__send", "srv__plain"):
         source = ds.source_for_call(name, {})
         assert source.per_call and source.key == "mcp:mcp-srv:irreversible"
+
+
+def test_a_long_call_says_how_much_of_it_the_card_does_not_show():
+    inputs = {"attendees": [f"person{i}@example.test" for i in range(200)]}
+    details = ds._call_details(inputs)
+    assert "more characters not shown" in details
+    assert ds._call_details({"event_id": "e1"}) == '\nDetails: {"event_id": "e1"}'
