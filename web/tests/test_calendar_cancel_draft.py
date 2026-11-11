@@ -133,3 +133,31 @@ def test_approving_an_event_that_is_gone_says_so_and_keeps_the_card_retryable():
     assert "no longer exists" in r.json()["detail"]
     assert get_draft(result["data"]["draft_id"]) is not None
     gc.delete.assert_not_called()
+
+
+def _stage_with(gc):
+    with patch("skills._m365.helpers.get_cal_client", return_value=gc), patch(
+        "skills.calendar.helpers.get_user_win_tz", return_value="Pacific Standard Time"
+    ):
+        return _tool_delete_calendar_event("evt1")
+
+
+def test_a_failed_pre_read_cancels_nothing():
+    gc = MagicMock()
+    gc.get.side_effect = RuntimeError("503")
+    result = _stage_with(gc)
+    assert result["deleted"] is False
+    assert "503" in result["error"]
+    gc.delete.assert_not_called()
+    gc.post.assert_not_called()
+
+
+def test_an_event_that_is_gone_or_empty_cancels_nothing():
+    gone = MagicMock()
+    gone.get.side_effect = _Gone("gone")
+    empty = MagicMock()
+    empty.get.return_value = None
+    for gc in (gone, empty):
+        result = _stage_with(gc)
+        assert result["deleted"] is False and result["not_found"] is True
+        gc.delete.assert_not_called()

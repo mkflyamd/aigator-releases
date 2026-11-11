@@ -6,6 +6,7 @@ if any other file posts to /me/events.
 """
 
 import re
+from urllib.parse import quote
 
 
 class NoAttendeesError(ValueError):
@@ -62,7 +63,7 @@ def create_event(event: dict, *, deliver: bool = False) -> dict:
     created = gc.post("/me/events", body)
     if hold:
         try:
-            saved = gc.get(f"/me/events/{(created or {}).get('id', '')}", params={"$select": "isDraft"})
+            saved = gc.get(f"/me/events/{quote((created or {}).get('id', ''), safe='')}", params={"$select": "isDraft"})
         except Exception:
             saved = None
         if (saved or {}).get("isDraft") is not True:

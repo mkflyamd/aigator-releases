@@ -98,3 +98,11 @@ def test_the_draft_is_read_back_by_id_and_a_delivered_meeting_is_not():
     with patch("skills._m365.helpers.get_cal_client", return_value=gc):
         create_meeting(PARAMS, deliver=True)
     gc.get.assert_not_called()
+
+
+def test_a_graph_id_with_slash_plus_or_equals_is_read_back_as_one_path_segment():
+    gc = _held({"isDraft": True})
+    gc.post.return_value = {"id": "AAA/bb+cc=="}
+    with patch("skills._m365.helpers.get_cal_client", return_value=gc):
+        create_meeting(PARAMS)
+    assert gc.get.call_args.args[0] == "/me/events/AAA%2Fbb%2Bcc%3D%3D"

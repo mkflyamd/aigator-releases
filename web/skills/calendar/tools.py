@@ -956,6 +956,9 @@ def _tool_show_availability_grid(
     }
 
 
+_EVENT_GONE = "This event no longer exists — it may have been deleted or cancelled."
+
+
 def _tool_delete_calendar_event(
     event_id: str,
     comment: str = "",
@@ -976,15 +979,19 @@ def _tool_delete_calendar_event(
             {"$select": "id,subject,isOrganizer,type,attendees,start,end,webLink"},
             extra_headers={"Prefer": f'outlook.timezone="{win_tz}"'},
         )
-    except Exception:
-        return apply_calendar_cancel(event_id, comment, delete_series, send_updates)
+    except Exception as ex:
+        if getattr(ex, "status_code", 0) == 404:
+            return {"deleted": False, "not_found": True, "error": _EVENT_GONE}
+        return {"deleted": False, "error": f"Unable to load event: {ex}"}
+    if not event:
+        return {"deleted": False, "not_found": True, "error": _EVENT_GONE}
     kind = ((event or {}).get("type") or "").lower()
     people = [
         {"name": who.get("name") or "", "email": who["address"]}
         for a in (event or {}).get("attendees") or []
         if a.get("type") != "resource" and (who := a.get("emailAddress") or {}).get("address")
     ]
-    if not event or not event.get("isOrganizer") or not people or (kind == "seriesmaster" and not delete_series):
+    if not event.get("isOrganizer") or not people or (kind == "seriesmaster" and not delete_series):
         return apply_calendar_cancel(event_id, comment, delete_series, send_updates)
 
     card = {
