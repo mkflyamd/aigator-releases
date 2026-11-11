@@ -1051,7 +1051,7 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
         if isinstance(result, dict) and "_draft" in result:
             _draft_data = result.get("data", {})
             _draft_sources = set(_sources_read)
-            if result["_draft"] in ("calendar-event", "calendar-update"):
+            if result["_draft"] in ("calendar-event", "calendar-update", "calendar-cancel"):
                 _calendar = data_sources.source_for_call(tc.name, tc.inputs)
                 if _calendar is not None:
                     _draft_sources.add(_calendar.label)

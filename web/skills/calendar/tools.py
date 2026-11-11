@@ -314,7 +314,7 @@ TOOL_DEFS = [
     },
     {
         "name": "delete_calendar_event",
-        "description": "Delete (cancel) a calendar event by its ID. Use when the user asks to cancel or delete a meeting. Requires an event ID \u2014 call read_calendar first if you don't have it.",
+        "description": "Delete (cancel) a calendar event by its ID. Use when the user asks to cancel or delete a meeting. Requires an event ID \u2014 call read_calendar first if you don't have it. When attendees would be notified, this prepares a cancellation card the user must approve; the event is not cancelled until they do.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -962,6 +962,62 @@ def _tool_delete_calendar_event(
     delete_series: bool = False,
     send_updates: str = "All",
 ) -> dict:
+    """Stage a cancellation as a draft card when it would email attendees. Nothing is cancelled until the user approves it."""
+    from .._drafts import create_draft
+    from .._m365.helpers import get_cal_client
+    from .helpers import get_user_win_tz
+
+    if _normalize_send_updates(send_updates) == "None":
+        return apply_calendar_cancel(event_id, comment, delete_series, send_updates)
+    win_tz = get_user_win_tz()
+    try:
+        event = get_cal_client().get(
+            f"/me/events/{_eid(event_id)}",
+            {"$select": "id,subject,isOrganizer,type,attendees,start,end,webLink"},
+            extra_headers={"Prefer": f'outlook.timezone="{win_tz}"'},
+        )
+    except Exception:
+        return apply_calendar_cancel(event_id, comment, delete_series, send_updates)
+    kind = ((event or {}).get("type") or "").lower()
+    people = [
+        {"name": who.get("name") or "", "email": who["address"]}
+        for a in (event or {}).get("attendees") or []
+        if a.get("type") != "resource" and (who := a.get("emailAddress") or {}).get("address")
+    ]
+    if not event or not event.get("isOrganizer") or not people or (kind == "seriesmaster" and not delete_series):
+        return apply_calendar_cancel(event_id, comment, delete_series, send_updates)
+
+    card = {
+        "event_id": event_id,
+        "subject": event.get("subject", ""),
+        "scope": "series" if delete_series else ("occurrence" if kind in ("occurrence", "exception") else "single"),
+        "timezone": win_tz,
+        "start": ((event.get("start") or {}).get("dateTime") or "")[:19],
+        "end": ((event.get("end") or {}).get("dateTime") or "")[:19],
+        "attendees": people,
+        "comment": (comment or "").strip(),
+        "notify": _normalize_send_updates(send_updates),
+        "delete_series": bool(delete_series),
+    }
+    draft_id = create_draft(
+        draft_type="calendar-cancel",
+        params=card,
+        preview={"subject": card["subject"], "attendees": [p["email"] for p in people]},
+    )
+    return {
+        "_draft": "calendar-cancel",
+        "data": {**card, "draft_id": draft_id},
+        "_user_message": "Cancellation ready. Press Send cancellation to cancel the meeting and notify attendees. Nothing has been cancelled yet.",
+    }
+
+
+def apply_calendar_cancel(
+    event_id: str,
+    comment: str = "",
+    delete_series: bool = False,
+    send_updates: str = "All",
+) -> dict:
+    """Cancel an event the user organizes and read it back. Returns deleted=False with an error when it could not."""
     from .._m365.helpers import get_cal_client
 
     gc = get_cal_client()

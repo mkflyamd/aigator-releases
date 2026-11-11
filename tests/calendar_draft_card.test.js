@@ -19,6 +19,7 @@ const recurrenceText = load('_calendarRecurrenceText');
 const bodyText = load('_calendarBodyText');
 const jiraEditSeed = load('_jiraEditSeed');
 const editRow = load('_jiraEditRow', { escapeHtml, _jiraEditSeed: jiraEditSeed });
+const cancelRows = load('_buildCalendarCancelRows', { escapeHtml, _calendarDraftWhen: when });
 const rows = load('_buildCalendarDraftRows', {
   escapeHtml,
   _jiraEditRow: editRow,
@@ -173,3 +174,23 @@ const oooOne = when({ ooo: true, start: '2026-11-12T00:00:00', end: '2026-11-13T
 assert(/Nov 12/.test(oooOne) && oooOne.includes('all day') && !oooOne.includes('13'), oooOne);
 const oooMany = when({ ooo: true, start: '2026-11-12T00:00:00', end: '2026-11-16T00:00:00' });
 assert(/Nov 12/.test(oooMany) && /Nov 15/.test(oooMany) && oooMany.includes('all day'), oooMany);
+
+const cancelHtml = cancelRows({
+  subject: 'Sync <1>',
+  scope: 'series',
+  start: '2026-11-02T09:00:00',
+  end: '2026-11-02T09:30:00',
+  timezone: 'Pacific Standard Time',
+  attendees: [
+    { name: 'Ann', email: 'ann@amd.com' },
+    { name: '', email: 'bob@amd.com' },
+  ],
+  comment: 'Moving <b>soon</b>',
+});
+assert(cancelHtml.includes('Sync &lt;1&gt;') && cancelHtml.includes('Whole series'), cancelHtml);
+assert(
+  cancelHtml.includes('Ann (ann@amd.com)') && cancelHtml.includes('>bob@amd.com<'),
+  cancelHtml,
+);
+assert(cancelHtml.includes('Moving &lt;b&gt;soon&lt;/b&gt;'), 'note is escaped');
+assert(!cancelRows({ subject: 'S', attendees: [] }).includes('Note to attendees'), 'no empty note');

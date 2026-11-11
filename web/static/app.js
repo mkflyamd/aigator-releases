@@ -10014,6 +10014,42 @@ function _buildCalendarUpdateRows(data) {
     .join('');
 }
 
+function _buildCalendarCancelRows(data) {
+  const who = (p) => (p.name && p.name !== p.email ? p.name + ' (' + p.email + ')' : p.email);
+  const rows = [
+    ['Event', escapeHtml(data.subject || '')],
+    [
+      'Cancels',
+      data.scope === 'series'
+        ? 'Whole series'
+        : data.scope === 'occurrence'
+          ? 'This occurrence only'
+          : 'This meeting',
+    ],
+  ];
+  if (data.start)
+    rows.push([
+      'When',
+      _calendarDraftWhen({ start: data.start, end: data.end, timezone: data.timezone }),
+    ]);
+  rows.push([
+    'Notifying',
+    (data.attendees || []).map((p) => '<div>' + escapeHtml(who(p)) + '</div>').join(''),
+  ]);
+  if (data.comment) rows.push(['Note to attendees', escapeHtml(data.comment)]);
+  if (data.notify === 'ExternalGuestsOnly') rows.push(['Notify', 'External guests only']);
+  return rows
+    .map(
+      ([k, v]) =>
+        '<div class="gcc-field-row"><span class="gcc-field-key">' +
+        escapeHtml(k) +
+        '</span><span class="gcc-field-val">' +
+        v +
+        '</span></div>',
+    )
+    .join('');
+}
+
 function _buildJiraFieldRows(data, editable = {}) {
   const rows = [];
   if (data.jira_site?.display_name || data.jira_site?.base_url) {
@@ -12788,6 +12824,19 @@ function _injectDraftApprovalCard(
       applyWording: true,
       customBody: _buildCalendarUpdateRows(data),
     },
+    'calendar-cancel': {
+      paneLabel: '@outlook',
+      paneIcon: '📅',
+      service: 'calendar',
+      action: 'Meeting cancellation',
+      hideEditLink: true,
+      title: 'Cancellation ready',
+      sendLabel: 'Send cancellation',
+      busyLabel: 'Cancelling…',
+      doneLabel: 'Cancelled ✓',
+      footerNote: 'Nothing is cancelled until you press Send cancellation.',
+      customBody: _buildCalendarCancelRows(data),
+    },
     'email-send': {
       paneLabel: '@outlook',
       paneIcon: '\u2709\uFE0F',
@@ -12963,7 +13012,9 @@ function _injectDraftApprovalCard(
   const bodySnippet = escapeHtml(fullBody.slice(0, 200));
   const recipientInfo = data.to || data.channel || data.recipient || data.channels || '';
   const subjectLine =
-    type === 'calendar-event' || type === 'calendar-update' ? '' : data.subject || '';
+    type === 'calendar-event' || type === 'calendar-update' || type === 'calendar-cancel'
+      ? ''
+      : data.subject || '';
   const workspaceLine =
     config.service === 'slack' && data.workspace_name
       ? `<div class="gcc-workspace">Slack · ${escapeHtml(data.workspace_name)}</div>`
@@ -13216,7 +13267,8 @@ function _injectDraftApprovalCard(
     approveBtn.disabled = true;
     lockHeader();
     if (openCalendarBtn) openCalendarBtn.disabled = true;
-    approveBtn.textContent = _applyWording ? 'Applying\u2026' : 'Sending\u2026';
+    approveBtn.textContent =
+      config.busyLabel || (_applyWording ? 'Applying\u2026' : 'Sending\u2026');
     try {
       const editedFields = {};
       jiraEditFields.forEach((el) => {
@@ -13280,7 +13332,8 @@ function _injectDraftApprovalCard(
         throw new Error(friendlyMsg);
       }
       const _json = await res.json().catch(() => ({}));
-      approveBtn.textContent = _applyWording ? 'Applied \u2713' : 'Sent \u2713';
+      approveBtn.textContent =
+        config.doneLabel || (_applyWording ? 'Applied \u2713' : 'Sent \u2713');
       approveBtn.classList.add('gcc-approved');
       _removeTabDraft(ownerTabId, draftId);
       if (editLink) editLink.style.display = 'none';

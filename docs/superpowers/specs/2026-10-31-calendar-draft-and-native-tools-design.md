@@ -16,7 +16,7 @@ The calendar skill (`web/skills/calendar/tools.py`) is already native. Keep `rea
 
 - The agent has no tool that calls `POST /me/events` for a meeting. Invites go out only when the user presses Send in Outlook.
 - `update_calendar_event` creates a `calendar-update` draft: a read-only before/after card whose Send update button is the only thing that PATCHes the event, with Open in Outlook linking to the event's `webLink`.
-- `create_ooo_event`, `delete_calendar_event`, `add_calendar_attendees` and `respond_calendar_event` keep their current confirmation rules.
+- `create_ooo_event` and `delete_calendar_event` stage a card when attendees would be notified. `add_calendar_attendees` and `respond_calendar_event` keep their current confirmation rules.
 
 ## 1a. One-click approvals
 

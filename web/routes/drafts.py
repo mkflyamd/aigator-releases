@@ -460,7 +460,7 @@ async def approve_draft(draft_id: str, body: dict = None):
         p = draft["params"]
         if dtype == "calendar-event":
             p.update(_calendar_edits(body))
-        elif dtype != "calendar-update":
+        elif dtype not in ("calendar-update", "calendar-cancel"):
             _apply_jira_edits(draft, body)
         if dtype in ("email-reply", "email-send"):
             _reset_header_edits(draft)
@@ -1150,6 +1150,20 @@ async def approve_draft(draft_id: str, body: dict = None):
             except EventChangedError as e:
                 raise HTTPException(status_code=409, detail=str(e))
             delivery_result = {"ok": True, **applied}
+
+        elif dtype == "calendar-cancel":
+            from skills.calendar.tools import apply_calendar_cancel
+
+            cancelled = apply_calendar_cancel(
+                p["event_id"], p.get("comment", ""), p.get("delete_series", False), p.get("notify", "All")
+            )
+            if not cancelled.get("deleted"):
+                refused = cancelled.get("not_found") or cancelled.get("organizer_required")
+                raise HTTPException(
+                    status_code=409 if refused else 502,
+                    detail=cancelled.get("error") or "The meeting was not cancelled.",
+                )
+            delivery_result = {"ok": True, **cancelled}
 
         # â”€â”€ Calendar (Google Workspace MCP) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         elif dtype in ("calendar-write", "jira-mcp-write"):
