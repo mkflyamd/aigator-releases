@@ -58,7 +58,7 @@ async def test_first_use_of_a_source_asks_then_remembers_for_the_tab():
     assert res.get("ok") is True and calls == ["search_email"]
     assert cards[0]["title"] == "Allow access to Outlook mail?"
     assert cards[0]["allow_label"] == "Allow for this tab" and cards[0]["deny_label"] == "Deny"
-    assert ds.is_allowed("tab-a", "data:Outlook mail")
+    assert ds.is_allowed("tab-a", "data:Outlook mail:read")
     await asyncio.wait_for(run(_tc("read_email", call_id="c2"), asyncio.Queue()), 5)  # no card, would hang
     assert calls == ["search_email", "read_email"]
 
@@ -70,7 +70,7 @@ async def test_deny_returns_an_error_and_does_not_run_the_tool():
     assert res["error"] == "data_source_denied" and "Jira" in res["source"]
     assert "do not retry" in res["hint"].lower()
     assert calls == []
-    assert not ds.is_allowed("tab-a", "data:Jira")
+    assert not ds.is_allowed("tab-a", "data:Jira:read")
 
 
 async def test_a_denied_source_is_not_asked_again_straight_away():
@@ -82,12 +82,12 @@ async def test_a_denied_source_is_not_asked_again_straight_away():
 
 
 async def test_another_tab_must_ask_again():
-    ds.allow("tab-a", "data:Slack")
+    ds.allow("tab-a", "data:Slack:read")
     calls, q = [], asyncio.Queue()
     run = _runner(calls, context_id="tab-b")
     res, _ = await asyncio.gather(run(_tc("slack_search_users"), q), _answer(q, True))
     assert res.get("ok") is True
-    assert ds.is_allowed("tab-b", "data:Slack")
+    assert ds.is_allowed("tab-b", "data:Slack:read")
 
 
 async def test_parallel_calls_to_one_new_source_share_one_card():
@@ -167,7 +167,7 @@ async def test_the_confirm_route_passes_the_chosen_scope_to_the_gate():
 
     res, reply = await asyncio.gather(_runner([])(_tc("search_email"), q), click())
     assert reply == {"ok": True} and res.get("ok") is True
-    assert permissions.decision("tab-z", "data:Outlook mail") == "allow"
+    assert permissions.decision("tab-z", "data:Outlook mail:read") == "allow"
 
 
 async def test_no_card_without_a_tab_or_for_tools_with_no_source():
@@ -464,7 +464,7 @@ async def _answer_scope(queue, scope, cards=None):
 async def test_a_data_source_card_offers_scope_buttons_with_always_leading():
     cards, q = [], asyncio.Queue()
     await asyncio.gather(_runner([])(_tc("search_email"), q), _answer(q, True, cards))
-    assert cards[0]["category"] == "data:Outlook mail"
+    assert cards[0]["category"] == "data:Outlook mail:read"
     assert cards[0]["card"] == {"scopes": ["always", "tab"], "primary": "always"}
 
 
@@ -472,8 +472,8 @@ async def test_always_on_a_source_card_saves_a_rule_so_a_new_tab_is_not_asked():
     import permissions
     calls, q = [], asyncio.Queue()
     await asyncio.gather(_runner(calls)(_tc("search_email"), q), _answer_scope(q, "always"))
-    assert permissions.decision("tab-z", "data:Outlook mail") == "allow"
-    assert not ds.is_allowed("tab-a", "data:Outlook mail")
+    assert permissions.decision("tab-z", "data:Outlook mail:read") == "allow"
+    assert not ds.is_allowed("tab-a", "data:Outlook mail:read")
     res = await asyncio.wait_for(_runner(calls, context_id="tab-z")(_tc("read_email", call_id="c2"), asyncio.Queue()), 5)
     assert res.get("ok") is True and calls == ["search_email", "read_email"]
 
@@ -482,22 +482,22 @@ async def test_tab_on_a_source_card_does_not_save_a_rule():
     import permissions
     q = asyncio.Queue()
     await asyncio.gather(_runner([])(_tc("search_email"), q), _answer_scope(q, "tab"))
-    assert ds.is_allowed("tab-a", "data:Outlook mail")
-    assert permissions.decision("tab-z", "data:Outlook mail") == "ask"
+    assert ds.is_allowed("tab-a", "data:Outlook mail:read")
+    assert permissions.decision("tab-z", "data:Outlook mail:read") == "ask"
 
 
 async def test_once_on_a_card_allows_the_call_without_remembering_it():
     calls, q = [], asyncio.Queue()
     res, _ = await asyncio.gather(_runner(calls)(_tc("search_email"), q), _answer_scope(q, "once"))
     assert res.get("ok") is True and calls == ["search_email"]
-    assert not ds.is_allowed("tab-a", "data:Outlook mail")
+    assert not ds.is_allowed("tab-a", "data:Outlook mail:read")
 
 
 def test_a_saved_rule_never_applies_to_an_unattended_run():
     import permissions
-    permissions.remember("data:Outlook mail")
-    assert permissions.decision(None, "data:Outlook mail") == "ask"
-    assert permissions.decision("", "data:Outlook mail") == "ask"
+    permissions.remember("data:Outlook mail:read")
+    assert permissions.decision(None, "data:Outlook mail:read") == "ask"
+    assert permissions.decision("", "data:Outlook mail:read") == "ask"
 
 
 async def test_a_saved_website_rule_covers_that_host_only():
@@ -537,19 +537,19 @@ async def test_admin_policy_deny_turns_always_into_this_tab(monkeypatch):
     cards, q = [], asyncio.Queue()
     await asyncio.gather(_runner([])(_tc("search_email"), q), _answer_scope(q, "always", cards))
     assert cards[0]["card"]["scopes"] == ["tab"]
-    assert permissions.decision("tab-z", "data:Outlook mail") == "ask"
-    assert ds.is_allowed("tab-a", "data:Outlook mail")
+    assert permissions.decision("tab-z", "data:Outlook mail:read") == "ask"
+    assert ds.is_allowed("tab-a", "data:Outlook mail:read")
 
 
 async def test_a_call_let_through_by_a_saved_rule_is_tagged_for_telemetry():
     import permissions
     from agent_loop import _summarize_tool_calls
-    permissions.remember("data:Outlook mail")
+    permissions.remember("data:Outlook mail:read")
     tc = _tc("search_email")
     res = await asyncio.wait_for(_runner([])(tc, asyncio.Queue()), 5)
-    assert res["_permission_telemetry"] == {"approval": "saved", "categories": ["data:Outlook mail"]}
+    assert res["_permission_telemetry"] == {"approval": "saved", "categories": ["data:Outlook mail:read"]}
     (entry,) = _summarize_tool_calls([tc], [res])
-    assert entry["permission"] == {"approval": "saved", "categories": ["data:Outlook mail"]}
+    assert entry["permission"] == {"approval": "saved", "categories": ["data:Outlook mail:read"]}
 
 
 async def test_a_tab_grant_or_a_fresh_card_is_not_tagged_as_a_saved_rule():

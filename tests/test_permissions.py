@@ -13,7 +13,7 @@ from app import app
 from permissions import registry, store
 from sandbox.policy import Policy
 
-JIRA = "data:Jira"
+JIRA = "data:Jira:read"
 
 
 @pytest.fixture(autouse=True)
@@ -102,9 +102,9 @@ def test_web_tab_grant_matches_the_data_sources_host_key():
 
 
 def test_mcp_category_is_built_from_the_connection_id():
-    permissions.remember("mcp:mcp-google-workspace")
-    assert permissions.decision("tab-1", "mcp:mcp-google-workspace") == "allow"
-    assert permissions.decision("tab-1", "mcp:mcp-other") == "ask"
+    permissions.remember("mcp:mcp-google-workspace:read")
+    assert permissions.decision("tab-1", "mcp:mcp-google-workspace:read") == "allow"
+    assert permissions.decision("tab-1", "mcp:mcp-other:read") == "ask"
     assert registry.get("mcp:") is None
 
 
@@ -144,7 +144,7 @@ def test_card_options_drop_always_when_policy_denies(deny_persistent):
 
 def test_registry_covers_the_gates():
     ids = {c.id for c in registry.known()}
-    assert {"data:Outlook mail", "data:Jira", "data:Slack", "web", "browser", "schedule_task",
+    assert {"data:Outlook mail:read", "data:Jira:read", "data:Slack:read", "web", "browser", "schedule_task",
             "capability:code_runner", "capability:shell_runner"} <= ids
     assert len(ids) == len(registry.known())
 
@@ -236,10 +236,10 @@ def test_remove_routes_require_csrf_and_work(client, csrf):
 
 
 def test_a_rule_for_a_disconnected_mcp_server_stays_listed(client, csrf):
-    permissions.remember("mcp:mcp-gone")
+    permissions.remember("mcp:mcp-gone:read")
     body = client.get("/api/permissions", headers=csrf).json()
-    assert any(c["id"] == "mcp:mcp-gone" for c in body["categories"])
-    assert [r["label"] for r in body["rules"]] == ["mcp-gone"]
+    assert any(c["id"] == "mcp:mcp-gone:read" for c in body["categories"])
+    assert [r["label"] for r in body["rules"]] == ["mcp-gone (MCP server): read"]
 
 
 def test_high_risk_categories_are_remembered_only_from_settings():
