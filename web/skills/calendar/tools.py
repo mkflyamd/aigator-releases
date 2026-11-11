@@ -1063,14 +1063,14 @@ def apply_calendar_cancel(
             return {
                 "deleted": False,
                 "not_found": True,
-                "error": "This event no longer exists — it may have been deleted or cancelled.",
+                "error": _EVENT_GONE,
             }
         return {"deleted": False, "error": f"Unable to load event: {ex}"}
     if not event:
         return {
             "deleted": False,
             "not_found": True,
-            "error": "This event no longer exists — it may have been deleted or cancelled.",
+            "error": _EVENT_GONE,
         }
     if not event.get("isOrganizer", False):
         return {
@@ -1448,7 +1448,7 @@ def _tool_get_calendar_event_detail(
         if status_code == 404:
             return {
                 "not_found": True,
-                "error": "This event no longer exists — it may have been deleted or cancelled.",
+                "error": _EVENT_GONE,
             }
         return {"error": f"Unable to load event: {ex}"}
 
