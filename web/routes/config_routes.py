@@ -64,7 +64,7 @@ class UsernameRequest(BaseModel):
 
 
 @router.post("/api/config/apikey")
-async def save_api_key(req: ApiKeyRequest):
+def save_api_key(req: ApiKeyRequest):
     from llm import get_active_model, reset_provider
     from llm.gateway import get_gateway_url, gateway_headers
     import httpx
@@ -1392,7 +1392,7 @@ async def activate_llm_profile(profile_id: str):
 
 
 @router.get("/api/config/llm/profiles/{profile_id}/models")
-async def get_llm_profile_models(profile_id: str):
+def get_llm_profile_models(profile_id: str):
     cfg = _load_config()
     profiles: list = cfg.get("llm_profiles", [])
     profile = next((p for p in profiles if p.get("id") == profile_id), None)

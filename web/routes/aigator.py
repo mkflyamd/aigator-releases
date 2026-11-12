@@ -66,7 +66,7 @@ class AigatorDocxCreateRequest(BaseModel):
 
 
 @router.post("/api/aigator/update-pptx", dependencies=[Depends(verify_csrf)])
-async def aigator_update_pptx(req: AigatorPptxRequest):
+def aigator_update_pptx(req: AigatorPptxRequest):
     from skills.ppt.tools import _tool_update_pptx
 
     result = _tool_update_pptx(
@@ -117,7 +117,7 @@ async def aigator_create_pptx(req: AigatorPptxCreateRequest):
 
 
 @router.post("/api/aigator/update-docx", dependencies=[Depends(verify_csrf)])
-async def aigator_update_docx(req: AigatorDocxUpdateRequest):
+def aigator_update_docx(req: AigatorDocxUpdateRequest):
     from skills.docx.tools import _tool_update_docx
 
     result = _tool_update_docx(

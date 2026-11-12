@@ -1,6 +1,7 @@
 """Teams route group — extracted from app.py."""
 
 # reload-trigger
+import asyncio
 import json
 import re
 import threading
@@ -177,7 +178,7 @@ def _fetch_presence(mris: list[str]) -> dict[str, dict]:
 
 
 @router.get("/api/teams/presence")
-async def tp_get_presence():
+def tp_get_presence():
     """Get current user's Teams presence via UPS endpoint."""
     try:
         my_mri = _get_my_mri()
@@ -197,7 +198,7 @@ class PresenceBatchRequest(BaseModel):
 
 
 @router.post("/api/teams/presence/batch")
-async def tp_get_presence_batch(req: PresenceBatchRequest):
+def tp_get_presence_batch(req: PresenceBatchRequest):
     """Batch-fetch presence for other users' MRIs. Returns {mri: {availability,...}}."""
     try:
         # De-dup and cap to keep the UPS payload bounded
@@ -212,7 +213,7 @@ class PresenceSetRequest(BaseModel):
 
 
 @router.post("/api/teams/presence")
-async def tp_set_presence(req: PresenceSetRequest):
+def tp_set_presence(req: PresenceSetRequest):
     """Set current user's Teams presence via UPS forceavailability endpoint."""
     if req.availability not in _PRESENCE_AVAILABILITIES:
         raise HTTPException(
@@ -2472,8 +2473,8 @@ async def tp_teams_proxy_image(url: str):
         if not auth_headers:
             from skills._m365.helpers import make_teams_gc
 
-            gc = make_teams_gc()
-            bearer = gc.get_token()
+            gc = await asyncio.to_thread(make_teams_gc)
+            bearer = await asyncio.to_thread(gc.get_token)
             if bearer:
                 auth_headers["Authorization"] = f"Bearer {bearer}"
         async with httpx.AsyncClient(timeout=10) as client:
@@ -2569,7 +2570,7 @@ class TeamsEditRequest(BaseModel):
 
 
 @router.patch("/api/teams/chats/{chat_id}/messages/{message_id}", dependencies=[Depends(verify_csrf)])
-async def tp_teams_edit_message(chat_id: str, message_id: str, req: TeamsEditRequest):
+def tp_teams_edit_message(chat_id: str, message_id: str, req: TeamsEditRequest):
     """Edit a sent Teams message via Skype chatsvc API (no Chat.ReadWrite scope needed)."""
     try:
         _rc = _get_skype_module()
@@ -2894,7 +2895,7 @@ def _graph_user_body(gc) -> dict:
 
 
 @router.post("/api/teams/chats/{chat_id}/mark-read")
-async def tp_teams_mark_read(chat_id: str):
+def tp_teams_mark_read(chat_id: str):
     """Mark a chat as read — Skype horizon + Graph viewpoint so both paths stay in sync (#123)."""
     import time as _time
 
@@ -2938,7 +2939,7 @@ class TeamsMarkUnreadRequest(BaseModel):
 
 
 @router.post("/api/teams/chats/{chat_id}/mark-unread")
-async def tp_teams_mark_unread(
+def tp_teams_mark_unread(
     chat_id: str, req: TeamsMarkUnreadRequest = TeamsMarkUnreadRequest()
 ):
     """Mark a chat as unread — Skype horizon + Graph viewpoint so both paths stay in sync (#123).
@@ -3014,7 +3015,7 @@ async def tp_teams_mark_unread(
 
 
 @router.get("/api/people/card/{aad_id}")
-async def get_person_card(aad_id: str):
+def get_person_card(aad_id: str):
     """Return profile + manager info for a person by AAD GUID. Used for @mention click cards."""
     try:
         from skills._m365.helpers import GraphClient
@@ -3052,7 +3053,7 @@ async def get_person_card(aad_id: str):
 
 
 @router.get("/api/teams/joined-teams")
-async def tp_joined_teams():
+def tp_joined_teams():
     """List teams the current user is a member of."""
     try:
         from skills._m365.helpers import make_teams_gc
@@ -3076,7 +3077,7 @@ class ChannelCreateRequest(BaseModel):
 
 
 @router.post("/api/teams/channels", dependencies=[Depends(verify_csrf)])
-async def tp_create_channel(req: ChannelCreateRequest):
+def tp_create_channel(req: ChannelCreateRequest):
     """Create a new channel in a team."""
     try:
         from skills._m365.helpers import make_teams_gc
@@ -3560,7 +3561,7 @@ class TeamsNewChatRequest(BaseModel):
 
 
 @router.post("/api/teams/chats/new", dependencies=[Depends(verify_csrf)])
-async def tp_teams_new_chat(req: TeamsNewChatRequest):
+def tp_teams_new_chat(req: TeamsNewChatRequest):
     """Send a Teams message — 1:1 or group — entirely via Skype chatsvc API.
 
     No Chat.Create / Chat.Read Graph scopes needed.
@@ -3978,7 +3979,7 @@ async def tp_teams_send_message(req: TeamsSendMessageRequest):
         new_req = TeamsNewChatRequest(
             to=to_emails, message=req.message, mentions=req.mentions
         )
-        result = await tp_teams_new_chat(new_req)
+        result = await asyncio.to_thread(tp_teams_new_chat, new_req)
         return {
             "sent": True,
             "chat_id": result.get("chat_id", ""),
@@ -3991,7 +3992,7 @@ async def tp_teams_send_message(req: TeamsSendMessageRequest):
 
 
 @router.get("/api/teams/channels/{team_id}/{channel_id}/messages")
-async def tp_channel_messages(team_id: str, channel_id: str, top: int = 50):
+def tp_channel_messages(team_id: str, channel_id: str, top: int = 50):
     """Fetch messages from a Teams channel using Skype chatsvc (same as native Teams).
 
     Native Teams does NOT use Graph /teams/{id}/channels/{id}/messages \u2014 that requires
