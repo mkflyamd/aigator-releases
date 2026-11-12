@@ -18,7 +18,7 @@ SRC = (pathlib.Path(__file__).parent.parent / "routes" / "teams.py").read_text(
 
 class TestReactEndpointUsesGraph:
     def test_react_endpoint_uses_skype_chatsvc_emotions(self):
-        react_start = SRC.find("async def tp_teams_react(")
+        react_start = SRC.find("def tp_teams_react(")
         assert react_start != -1
         fn_body = SRC[react_start : react_start + 3000]
         assert "name=emotions" in fn_body, (
@@ -27,7 +27,7 @@ class TestReactEndpointUsesGraph:
         )
 
     def test_react_endpoint_uses_put_for_add_and_delete_for_remove(self):
-        react_start = SRC.find("async def tp_teams_react(")
+        react_start = SRC.find("def tp_teams_react(")
         assert react_start != -1
         fn_body = SRC[react_start : react_start + 3000]
         assert "_httpx.put(url" in fn_body, (
@@ -38,7 +38,7 @@ class TestReactEndpointUsesGraph:
         )
 
     def test_react_endpoint_uses_graph_token(self):
-        react_start = SRC.find("async def tp_teams_react(")
+        react_start = SRC.find("def tp_teams_react(")
         assert react_start != -1
         fn_body = SRC[react_start : react_start + 3000]
         assert "_get_graph_token" in fn_body or "Authorization" in fn_body, (
@@ -46,7 +46,7 @@ class TestReactEndpointUsesGraph:
         )
 
     def test_react_endpoint_sends_emotions_key(self):
-        react_start = SRC.find("async def tp_teams_react(")
+        react_start = SRC.find("def tp_teams_react(")
         assert react_start != -1
         fn_body = SRC[react_start : react_start + 3000]
         assert '"emotions": {"key": key' in fn_body, (

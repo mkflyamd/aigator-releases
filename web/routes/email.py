@@ -1,5 +1,7 @@
 """Email route group -- inbox, message detail, reply, forward, send, drafts, delta sync."""
 
+import threading
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from urllib.parse import quote as _url_quote
@@ -188,6 +190,9 @@ _FOLDER_MAP = {
 }
 
 
+_EMAIL_DELTA_LOCK = threading.RLock()
+
+
 @router.get("/api/email/inbox")
 def tp_email_inbox(
     skip: int = 0,
@@ -197,6 +202,14 @@ def tp_email_inbox(
     folder: str = "inbox",
 ):
     """Inbox / Sent / Drafts list with filter, pagination, and optional delta sync (inbox only)."""
+    if delta and folder.lower() == "inbox":
+        # Routes run in the threadpool; serialize the read-merge-write of the shared delta state.
+        with _EMAIL_DELTA_LOCK:
+            return _email_inbox(skip, top, filter, delta, folder)
+    return _email_inbox(skip, top, filter, delta, folder)
+
+
+def _email_inbox(skip: int, top: int, filter: str, delta: bool, folder: str):
     folder_lower = folder.lower()
     if folder_lower not in _FOLDER_MAP:
         raise HTTPException(

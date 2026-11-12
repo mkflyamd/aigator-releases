@@ -12,6 +12,7 @@ from security import verify_csrf
 from pydantic import BaseModel
 
 from config import (
+    _CONFIG_LOCK,
     load_config as _load_config,
     save_config as _save_config,
     update_config as _update_config,
@@ -110,11 +111,12 @@ def save_api_key(req: ApiKeyRequest):
 
     os.environ["ANTHROPIC_API_KEY"] = key
     reset_provider("anthropic")
-    cfg = _load_config()
-    cfg["api_key"] = key
-    if user_id:
-        cfg["gateway_user_id"] = user_id
-    _save_config(cfg)
+    with _CONFIG_LOCK:
+        cfg = _load_config()
+        cfg["api_key"] = key
+        if user_id:
+            cfg["gateway_user_id"] = user_id
+        _save_config(cfg)
     return {"ok": True}
 
 

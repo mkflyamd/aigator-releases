@@ -48,3 +48,11 @@ def test_missing_timezone_field_is_not_cached(monkeypatch):
 
     assert cal_helpers.get_user_win_tz() == "UTC"
     assert cal_helpers._user_win_tz_cache is None
+
+
+def test_null_settings_body_is_not_cached(monkeypatch):
+    client = _Client(None)
+    monkeypatch.setattr(cal_helpers, "get_cal_client", lambda: client)
+
+    assert cal_helpers.get_user_win_tz() == "UTC"
+    assert cal_helpers._user_win_tz_cache is None

@@ -15,7 +15,7 @@ def get_user_win_tz() -> str:
         settings = gc.get("/me/mailboxSettings")
     except Exception:
         return "UTC"
-    tz = settings.get("timeZone")
+    tz = (settings or {}).get("timeZone")
     if not tz:
         return "UTC"
     _user_win_tz_cache = tz

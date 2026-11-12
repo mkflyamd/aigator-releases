@@ -45,6 +45,25 @@ def _own_nodes(func):
                 stack.append(child)
 
 
+def _aliases(tree):
+    """Map every imported local name to its real dotted name (`import httpx as _httpx`, `from time import sleep`)."""
+    out = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for a in node.names:
+                if a.asname:
+                    out[a.asname] = a.name
+        elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
+            for a in node.names:
+                out[a.asname or a.name] = f"{node.module}.{a.name}"
+    return out
+
+
+def _resolve(dotted, aliases):
+    head, sep, rest = dotted.partition(".")
+    return aliases[head] + sep + rest if head in aliases else dotted
+
+
 def _client_names(func):
     names = set()
     for node in _own_nodes(func):
@@ -55,8 +74,9 @@ def _client_names(func):
     return names
 
 
-def _direct_blocking(func):
+def _direct_blocking(func, aliases=None):
     """Return a description of each blocking call made directly by `func`, or []."""
+    aliases = aliases or {}
     clients = _client_names(func)
     found = []
     for node in _own_nodes(func):
@@ -65,10 +85,12 @@ def _direct_blocking(func):
         target = node.func
         dotted = _dotted(target)
         if dotted:
-            module, _, attr = dotted.rpartition(".")
+            resolved = _resolve(dotted, aliases)
+            module, _, attr = resolved.rpartition(".")
             if attr in BLOCKING_MODULE_CALLS.get(module, ()):
                 found.append((node.lineno, dotted))
                 continue
+            module, _, attr = dotted.rpartition(".")
             if module in clients:
                 found.append((node.lineno, f"Graph client .{attr}()"))
                 continue
@@ -94,13 +116,19 @@ def _parse(path):
 def _sync_blocking_functions():
     """Names of sync functions anywhere under web/ that (transitively, via plain-name calls) block."""
     defs = {}
+    aliases = {}
     for path in WEB.rglob("*.py"):
         if "tests" in path.relative_to(WEB).parts:
             continue
-        for node in ast.walk(_parse(path)):
+        tree = _parse(path)
+        file_aliases = _aliases(tree)
+        for node in ast.walk(tree):
             if isinstance(node, ast.FunctionDef):
                 defs.setdefault(node.name, []).append(node)
-    blocking = {name for name, nodes in defs.items() if any(_direct_blocking(n) for n in nodes)}
+                aliases[id(node)] = file_aliases
+    blocking = {
+        name for name, nodes in defs.items() if any(_direct_blocking(n, aliases[id(n)]) for n in nodes)
+    }
     changed = True
     while changed:
         changed = False
@@ -115,10 +143,12 @@ def _violations():
     blocking = _sync_blocking_functions()
     out = []
     for path in sorted(ROUTES.glob("*.py")):
-        for node in ast.walk(_parse(path)):
+        tree = _parse(path)
+        file_aliases = _aliases(tree)
+        for node in ast.walk(tree):
             if not isinstance(node, ast.AsyncFunctionDef):
                 continue
-            for lineno, what in _direct_blocking(node):
+            for lineno, what in _direct_blocking(node, file_aliases):
                 out.append(f"{path.name}:{lineno} {node.name} calls {what}")
             local_defs = {
                 n.name for n in ast.walk(node) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n is not node
@@ -148,6 +178,27 @@ def test_scan_sees_the_known_blocking_shapes():
     funcs = {n.name: n for n in ast.parse(src).body}
     assert _direct_blocking(funcs["route"])
     assert not _direct_blocking(funcs["ok"])
+
+
+def test_scan_resolves_import_aliases():
+    src = "\n".join(
+        [
+            "import httpx as _httpx",
+            "from time import sleep",
+            "async def aliased():",
+            "    _httpx.post('https://example.invalid')",
+            "async def bare():",
+            "    sleep(1)",
+            "async def clean():",
+            "    await asyncio.sleep(1)",
+        ]
+    )
+    tree = ast.parse(src)
+    funcs = {n.name: n for n in tree.body if isinstance(n, ast.AsyncFunctionDef)}
+    aliases = _aliases(tree)
+    assert _direct_blocking(funcs["aliased"], aliases)
+    assert _direct_blocking(funcs["bare"], aliases)
+    assert not _direct_blocking(funcs["clean"], aliases)
 
 
 def test_async_routes_do_not_block_the_event_loop():

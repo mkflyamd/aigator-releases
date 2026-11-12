@@ -40,6 +40,9 @@ logger = logging.getLogger(__name__)
 # (e.g., during marketplace bulk-install) are the realistic concurrency case.
 _INSTALL_INDEX_LOCK = threading.Lock()
 
+# Serializes the exists-check/swap of a plugin bundle directory between parallel installs.
+_BUNDLE_SWAP_LOCK = threading.Lock()
+
 
 def _safe_skill_dir(base: Path, *parts: str) -> Path:
     """Resolve path and assert it stays under base. Raises ValueError if not."""
@@ -98,15 +101,16 @@ def _replace_plugin_bundle_directory(plugin_dir: Path, files: dict[str, bytes]) 
         _write_files_atomically(staging, files)
         if not _discover_bundled_skill_dirs(staging):
             raise ValueError("No SKILL.md found in staged plugin bundle")
-        if plugin_dir.exists():
-            os.replace(plugin_dir, backup)
-            moved_old = True
-        try:
-            os.replace(staging, plugin_dir)
-        except Exception:
-            if moved_old and backup.exists() and not plugin_dir.exists():
-                os.replace(backup, plugin_dir)
-            raise
+        with _BUNDLE_SWAP_LOCK:
+            if plugin_dir.exists():
+                os.replace(plugin_dir, backup)
+                moved_old = True
+            try:
+                os.replace(staging, plugin_dir)
+            except Exception:
+                if moved_old and backup.exists() and not plugin_dir.exists():
+                    os.replace(backup, plugin_dir)
+                raise
         if moved_old:
             try:
                 shutil.rmtree(backup)
@@ -306,17 +310,18 @@ def install_skill_md(
         logger.warning("Skill install write failed for %s: %s", skill_id, exc)
         return {"ok": False, "error": f"Install failed: {exc}"}
 
-    entries = [e for e in load_installed() if e.get("id") != skill_id]
-    entries.append(
-        {
-            "id": skill_id,
-            "version": version,
-            "tier": tier,
-            "installed_at": datetime.now(timezone.utc).isoformat(),
-            "has_tools": (skill_dir / "tools.py").exists(),
-        }
-    )
-    save_installed(entries)
+    with _INSTALL_INDEX_LOCK:
+        entries = [e for e in load_installed() if e.get("id") != skill_id]
+        entries.append(
+            {
+                "id": skill_id,
+                "version": version,
+                "tier": tier,
+                "installed_at": datetime.now(timezone.utc).isoformat(),
+                "has_tools": (skill_dir / "tools.py").exists(),
+            }
+        )
+        save_installed(entries)
     return {
         "ok": True,
         "skill_id": skill_id,
@@ -528,10 +533,12 @@ def uninstall_skill(skill_id: str) -> dict:
             shutil.rmtree(plugin_cache_dir)
             removed = True
 
-    new_entries = [e for e in entries if e.get("id") != skill_id]
-    if not removed and len(new_entries) == len(entries):
-        return {"ok": False, "error": f"Skill '{skill_id}' not found"}
-    save_installed(new_entries)
+    with _INSTALL_INDEX_LOCK:
+        entries = load_installed()
+        new_entries = [e for e in entries if e.get("id") != skill_id]
+        if not removed and len(new_entries) == len(entries):
+            return {"ok": False, "error": f"Skill '{skill_id}' not found"}
+        save_installed(new_entries)
     return {"ok": True, "skill_id": skill_id}
 
 
@@ -559,18 +566,19 @@ def create_user_skill(name: str, description: str, instructions: str) -> dict:
         f"# {safe_name}\n\n{safe_instructions}\n"
     )
     (skill_dir / "SKILL.md").write_text(skill_md, encoding="utf-8")
-    entries = [e for e in load_installed() if e.get("id") != skill_id]
-    entries.append(
-        {
-            "id": skill_id,
-            "version": "1.0",
-            "tier": "Mine",
-            "installed_at": datetime.now(timezone.utc).isoformat(),
-            "has_tools": False,
-            "display_name": name,
-        }
-    )
-    save_installed(entries)
+    with _INSTALL_INDEX_LOCK:
+        entries = [e for e in load_installed() if e.get("id") != skill_id]
+        entries.append(
+            {
+                "id": skill_id,
+                "version": "1.0",
+                "tier": "Mine",
+                "installed_at": datetime.now(timezone.utc).isoformat(),
+                "has_tools": False,
+                "display_name": name,
+            }
+        )
+        save_installed(entries)
     return {"ok": True, "skill_id": skill_id}
 
 

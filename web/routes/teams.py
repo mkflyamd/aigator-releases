@@ -2631,7 +2631,7 @@ def tp_teams_edit_message(chat_id: str, message_id: str, req: TeamsEditRequest):
 
 
 @router.delete("/api/teams/chats/{chat_id}/messages/{message_id}", dependencies=[Depends(verify_csrf)])
-async def tp_teams_delete_message(chat_id: str, message_id: str):
+def tp_teams_delete_message(chat_id: str, message_id: str):
     """Delete a sent Teams message via Skype chatsvc API — no Graph scope needed."""
     try:
         import httpx as _httpx
@@ -2728,7 +2728,7 @@ def _reaction_to_teams_key(reaction: str) -> str:
 
 
 @router.post("/api/teams/chats/{chat_id}/messages/{message_id}/react", dependencies=[Depends(verify_csrf)])
-async def tp_teams_react(chat_id: str, message_id: str, req: TeamsReactionRequest):
+def tp_teams_react(chat_id: str, message_id: str, req: TeamsReactionRequest):
     """Add or remove a reaction via the Skype/chatsvc emotions API — the same call
     native Teams makes. Graph's setReaction only accepts the classic reaction set and
     rejects extended emojis (➕, 🙊, etc.); chatsvc accepts the full catalog.
@@ -3898,7 +3898,8 @@ async def tp_teams_send_message(req: TeamsSendMessageRequest):
                 if skype_mentions:
                     body["properties"] = {"mentions": json.dumps(skype_mentions)}
             _fp_hdrs = {"X-Skypetoken": skype_token, "Content-Type": "application/json"}
-            resp = _httpx.post(
+            resp = await asyncio.to_thread(
+                _httpx.post,
                 f"{messaging_service}/users/ME/conversations/{encoded_chat}/messages",
                 headers=_fp_hdrs,
                 json=body,
@@ -3911,7 +3912,8 @@ async def tp_teams_send_message(req: TeamsSendMessageRequest):
                         f"[teams-send] fast path LocationLookupFailed — retrying via global",
                         flush=True,
                     )
-                    resp = _httpx.post(
+                    resp = await asyncio.to_thread(
+                        _httpx.post,
                         f"{global_svc}/users/ME/conversations/{encoded_chat}/messages",
                         headers=_fp_hdrs,
                         json=body,

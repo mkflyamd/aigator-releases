@@ -23,8 +23,11 @@ class _SlowGraph:
 
 async def test_slow_graph_call_does_not_block_other_requests(monkeypatch):
     import skills._m365.helpers as m365_helpers
+    import skills.calendar.helpers as cal_helpers
 
+    monkeypatch.setattr(cal_helpers, "_user_win_tz_cache", None)
     monkeypatch.setattr(m365_helpers, "get_cal_client", lambda: _SlowGraph())
+    monkeypatch.setattr(cal_helpers, "get_cal_client", lambda: _SlowGraph())
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         slow = asyncio.create_task(
