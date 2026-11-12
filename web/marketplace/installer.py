@@ -43,6 +43,10 @@ _INSTALL_INDEX_LOCK = threading.Lock()
 # Serializes the exists-check/swap of a plugin bundle directory between parallel installs.
 _BUNDLE_SWAP_LOCK = threading.Lock()
 
+# Keeps a skill's files and its installed-skills.json entry consistent between parallel
+# install, uninstall and create requests. Always taken before _INSTALL_INDEX_LOCK.
+_SKILL_OPS_LOCK = threading.RLock()
+
 
 def _safe_skill_dir(base: Path, *parts: str) -> Path:
     """Resolve path and assert it stays under base. Raises ValueError if not."""
@@ -295,38 +299,39 @@ def install_skill_md(
     except ValueError as exc:
         return {"ok": False, "error": str(exc)}
 
-    # Only remove a directory this call created if the write fails.
-    created_now = not skill_dir.exists()
-    try:
-        skill_dir.mkdir(parents=True, exist_ok=True)
-        _write_files_atomically(skill_dir, files)
-    except ValueError as exc:
-        if created_now:
-            shutil.rmtree(skill_dir, ignore_errors=True)
-        return {"ok": False, "error": str(exc)}
-    except Exception as exc:
-        if created_now:
-            shutil.rmtree(skill_dir, ignore_errors=True)
-        logger.warning("Skill install write failed for %s: %s", skill_id, exc)
-        return {"ok": False, "error": f"Install failed: {exc}"}
+    with _SKILL_OPS_LOCK:
+        # Only remove a directory this call created if the write fails.
+        created_now = not skill_dir.exists()
+        try:
+            skill_dir.mkdir(parents=True, exist_ok=True)
+            _write_files_atomically(skill_dir, files)
+        except ValueError as exc:
+            if created_now:
+                shutil.rmtree(skill_dir, ignore_errors=True)
+            return {"ok": False, "error": str(exc)}
+        except Exception as exc:
+            if created_now:
+                shutil.rmtree(skill_dir, ignore_errors=True)
+            logger.warning("Skill install write failed for %s: %s", skill_id, exc)
+            return {"ok": False, "error": f"Install failed: {exc}"}
 
-    with _INSTALL_INDEX_LOCK:
-        entries = [e for e in load_installed() if e.get("id") != skill_id]
-        entries.append(
-            {
-                "id": skill_id,
-                "version": version,
-                "tier": tier,
-                "installed_at": datetime.now(timezone.utc).isoformat(),
-                "has_tools": (skill_dir / "tools.py").exists(),
-            }
-        )
-        save_installed(entries)
-    return {
-        "ok": True,
-        "skill_id": skill_id,
-        "permissions": declared_permissions(files).to_dict(),
-    }
+        with _INSTALL_INDEX_LOCK:
+            entries = [e for e in load_installed() if e.get("id") != skill_id]
+            entries.append(
+                {
+                    "id": skill_id,
+                    "version": version,
+                    "tier": tier,
+                    "installed_at": datetime.now(timezone.utc).isoformat(),
+                    "has_tools": (skill_dir / "tools.py").exists(),
+                }
+            )
+            save_installed(entries)
+        return {
+            "ok": True,
+            "skill_id": skill_id,
+            "permissions": declared_permissions(files).to_dict(),
+        }
 
 
 def _install_github_folder(
@@ -487,6 +492,12 @@ def _teardown_plugin_mcp(plugin_id: str) -> None:
 
 
 def uninstall_skill(skill_id: str) -> dict:
+    """Uninstall a skill or plugin bundle by id (serialized against installs)."""
+    with _SKILL_OPS_LOCK:
+        return _uninstall_skill_unlocked(skill_id)
+
+
+def _uninstall_skill_unlocked(skill_id: str) -> dict:
     """Uninstall a skill or a plugin bundle by id.
 
     For a plugin bundle install (has a "skill_ids" field — see
@@ -550,36 +561,37 @@ def _slugify(name: str) -> str:
 
 def create_user_skill(name: str, description: str, instructions: str) -> dict:
     skill_id = _slugify(name)
-    skill_dir = INSTALLED_SKILLS_DIR / "mine" / skill_id
-    skill_dir.mkdir(parents=True, exist_ok=True)
-    safe_name = name.replace("\n", " ").replace("\r", " ")
-    safe_desc = description.replace("\n", " ").replace("\r", " ")
-    safe_instructions = instructions.replace("\r\n", "\n")
-    # Prevent premature frontmatter close
-    safe_instructions = "\n".join(
-        line if line.strip() != "---" else "\\---"
-        for line in safe_instructions.split("\n")
-    )
-    skill_md = (
-        f"---\nname: {safe_name}\ndescription: {safe_desc}\n"
-        f'metadata:\n  author: user\n  version: "1.0"\n  format: agentskills-1.0\n---\n\n'
-        f"# {safe_name}\n\n{safe_instructions}\n"
-    )
-    (skill_dir / "SKILL.md").write_text(skill_md, encoding="utf-8")
-    with _INSTALL_INDEX_LOCK:
-        entries = [e for e in load_installed() if e.get("id") != skill_id]
-        entries.append(
-            {
-                "id": skill_id,
-                "version": "1.0",
-                "tier": "Mine",
-                "installed_at": datetime.now(timezone.utc).isoformat(),
-                "has_tools": False,
-                "display_name": name,
-            }
+    with _SKILL_OPS_LOCK:
+        skill_dir = INSTALLED_SKILLS_DIR / "mine" / skill_id
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        safe_name = name.replace("\n", " ").replace("\r", " ")
+        safe_desc = description.replace("\n", " ").replace("\r", " ")
+        safe_instructions = instructions.replace("\r\n", "\n")
+        # Prevent premature frontmatter close
+        safe_instructions = "\n".join(
+            line if line.strip() != "---" else "\\---"
+            for line in safe_instructions.split("\n")
         )
-        save_installed(entries)
-    return {"ok": True, "skill_id": skill_id}
+        skill_md = (
+            f"---\nname: {safe_name}\ndescription: {safe_desc}\n"
+            f'metadata:\n  author: user\n  version: "1.0"\n  format: agentskills-1.0\n---\n\n'
+            f"# {safe_name}\n\n{safe_instructions}\n"
+        )
+        (skill_dir / "SKILL.md").write_text(skill_md, encoding="utf-8")
+        with _INSTALL_INDEX_LOCK:
+            entries = [e for e in load_installed() if e.get("id") != skill_id]
+            entries.append(
+                {
+                    "id": skill_id,
+                    "version": "1.0",
+                    "tier": "Mine",
+                    "installed_at": datetime.now(timezone.utc).isoformat(),
+                    "has_tools": False,
+                    "display_name": name,
+                }
+            )
+            save_installed(entries)
+        return {"ok": True, "skill_id": skill_id}
 
 
 def install_plugin(

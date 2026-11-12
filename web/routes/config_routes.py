@@ -1,5 +1,6 @@
 """Configuration routes — API key, model, Jira, Confluence, GitHub, username, personas."""
 
+import asyncio
 import json
 import os
 import re
@@ -12,7 +13,6 @@ from security import verify_csrf
 from pydantic import BaseModel
 
 from config import (
-    _CONFIG_LOCK,
     load_config as _load_config,
     save_config as _save_config,
     update_config as _update_config,
@@ -65,7 +65,7 @@ class UsernameRequest(BaseModel):
 
 
 @router.post("/api/config/apikey")
-def save_api_key(req: ApiKeyRequest):
+async def save_api_key(req: ApiKeyRequest):
     from llm import get_active_model, reset_provider
     from llm.gateway import get_gateway_url, gateway_headers
     import httpx
@@ -85,7 +85,8 @@ def save_api_key(req: ApiKeyRequest):
             "anthropic-version": "2023-06-01",
             **gateway_headers(key),
         }
-        resp = httpx.post(
+        resp = await asyncio.to_thread(
+            httpx.post,
             f"{get_gateway_url()}/v1/messages",
             headers=headers,
             json={
@@ -111,12 +112,11 @@ def save_api_key(req: ApiKeyRequest):
 
     os.environ["ANTHROPIC_API_KEY"] = key
     reset_provider("anthropic")
-    with _CONFIG_LOCK:
-        cfg = _load_config()
-        cfg["api_key"] = key
-        if user_id:
-            cfg["gateway_user_id"] = user_id
-        _save_config(cfg)
+    cfg = _load_config()
+    cfg["api_key"] = key
+    if user_id:
+        cfg["gateway_user_id"] = user_id
+    _save_config(cfg)
     return {"ok": True}
 
 

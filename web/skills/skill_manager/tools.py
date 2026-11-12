@@ -6,7 +6,7 @@ from pathlib import Path
 
 import shared
 from config import INSTALLED_SKILLS_DIR, AGENTS_SKILLS_DIR
-from marketplace.installer import load_installed, save_installed
+from marketplace.installer import _INSTALL_INDEX_LOCK, load_installed, save_installed
 
 SKILL_ID = "skill_manager"
 ALWAYS_ON = True
@@ -128,18 +128,19 @@ def _tool_create_skill(
         target.write_text(f.get("content", ""), encoding="utf-8")
         written.append(rel)
 
-    entries = load_installed()
-    entries.append(
-        {
-            "id": skill_id,
-            "version": "1.0",
-            "tier": "Mine",
-            "installed_at": datetime.now(timezone.utc).isoformat(),
-            "has_tools": False,
-            "display_name": display_name,
-        }
-    )
-    save_installed(entries)
+    with _INSTALL_INDEX_LOCK:
+        entries = load_installed()
+        entries.append(
+            {
+                "id": skill_id,
+                "version": "1.0",
+                "tier": "Mine",
+                "installed_at": datetime.now(timezone.utc).isoformat(),
+                "has_tools": False,
+                "display_name": display_name,
+            }
+        )
+        save_installed(entries)
 
     _sync_prompts(skill_id, skill_md, is_new=True)
     shared.notify_all(
@@ -209,12 +210,13 @@ def _tool_update_skill(
     _sync_prompts(skill_id, skill_md, is_new=False)
 
     if display_name and display_name != current_name:
-        entries = load_installed()
-        for entry in entries:
-            if entry.get("id") == skill_id:
-                entry["display_name"] = display_name
-                break
-        save_installed(entries)
+        with _INSTALL_INDEX_LOCK:
+            entries = load_installed()
+            for entry in entries:
+                if entry.get("id") == skill_id:
+                    entry["display_name"] = display_name
+                    break
+            save_installed(entries)
         shared.notify_all(
             {
                 "type": "skill_renamed",
