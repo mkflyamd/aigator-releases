@@ -24,6 +24,8 @@ A user asks AI Gator to edit a local web project (for example a Slidev deck in
 ## Rules
 1. **Scope.** The path is used only for `run_shell(background=true)` while the
    sandbox is on. Foreground commands stay sandboxed exactly as today.
+   `background=true` combined with `extra_read_paths`, `extra_write_paths` or
+   `network_hosts` is refused, because those only apply to sandboxed runs.
 2. **Ask every time.** Each start needs a new approval. There is no Always
    allow and no Allow in this tab. The approval is for this tab, one use, and
    this exact command, folder and shell. Gator runs exactly the approved
@@ -31,45 +33,65 @@ A user asks AI Gator to edit a local web project (for example a Slidev deck in
 3. **Admin policy.** If `policy.require_sandbox` is true (this includes the
    fail-closed policy), the call is refused and no card is shown. The message
    tells the user to start the server in their own terminal.
-4. **Folder taint.** The call is refused, with no card, if earlier in this app
-   session AI Gator could have planted code that the server would run:
+4. **Folder taint.** The call is refused, with no card, if AI Gator could have
+   planted code in the folder that the server would run. Taint is recorded
+   when:
    - a sandboxed `run_shell` or `run_python` run had write access to the
-     folder, a folder inside it, or a folder that contains it; or
-   - `write_file` or `edit_file` changed a code or config file in that folder
-     tree.
+     folder, a folder inside it, or a folder that contains it (this includes
+     a sandboxed `npm install`); or
+   - `write_file` or `edit_file` changed any file in that folder tree other
+     than a content file.
 
-   The refusal message tells the user to start the server in their own
-   terminal. Code and config files are files named `package.json`,
-   `package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, `.npmrc`, or any file
-   ending in `.js .cjs .mjs .ts .cts .mts .jsx .tsx .vue .svelte .json .py .sh
-   .cmd .bat .ps1`, or any file whose name starts with `.env`. Content files
-   (`.md`, `.css`, images, fonts) do not taint, so editing slides keeps working.
-   Taint is in memory and is cleared when AI Gator restarts. A sandboxed
-   `npm install` in the folder also taints it, so for a project without
-   `node_modules` the refusal message tells the user to run the install and
-   the server in their own terminal.
-5. **Steering.** The `run_shell` description tells the model to change project
-   files with `write_file`/`edit_file`, not with shell or Python, because a
-   sandboxed write to the folder blocks the dev server.
-6. **Lifetime.** All background processes started by AI Gator are stopped when
-   the app shuts down. The existing cap (10), orphan cleanup at startup,
+   Content files are the only files that do not taint: `.md`, `.txt`, `.css`,
+   images (`.png .jpg .jpeg .gif .webp .svg .ico`) and fonts
+   (`.woff .woff2 .ttf .otf`). Everything else taints (an allowlist, so a
+   new file type fails safe). Editing `slides.md`, CSS and images keeps the
+   Slidev flow working.
+
+   Taint is **persistent**. It is stored in a small JSON file in the AI Gator
+   data folder (where `bg-pids.json` lives) and survives restarts, so a file
+   planted in one session is still refused in the next. A missing file means
+   no taint. An unreadable or corrupt file means every folder is treated as
+   tainted (fail closed). There is no UI to clear it in v1; deleting the file
+   clears it.
+
+   The refusal message tells the user to run the install and the server in
+   their own terminal.
+5. **Steering.** The `run_shell` description tells the model to inspect a
+   project with `list_dir`, `read_file` and `grep_files`, to change project
+   files with `write_file`/`edit_file`, and to use `run_shell` with the
+   project as cwd only for install and build. Any sandboxed shell run with the
+   project as cwd taints it, even a read-only `dir`, because the project is
+   always granted write access (`_run_sandboxed`).
+6. **Unattended runs.** Scheduled and other unattended runs are refused for
+   this path. An approval needs a human in a tab.
+7. **Command shown in full.** The card shows the whole command. A command
+   longer than the card's limit (2000 characters) is refused instead of
+   truncated, so the user never approves text they cannot see.
+8. **Lifetime.** All background processes started by AI Gator are stopped
+   when AI Gator closes. The existing cap (10), orphan cleanup at startup,
    `check_shell_process` and `stop_shell_process` stay as they are.
-7. **Telemetry.** Metadata only, through `sandbox.telemetry_record`, with mode
-   `"outside"` and the decision (`requested`, `approved`, `denied`, `refused`).
-   No command, paths or output are recorded.
+9. **Environment.** The background process gets the user's environment minus
+   AI Gator's own secrets and tokens.
+10. **Telemetry.** Metadata only, through `sandbox.telemetry_record` with
+    `level="outside"` and the decision in `approval` (`requested`, `approved`,
+    `denied`, `refused`). No command, paths or output are recorded.
 
-Out of scope for v1: sandboxed build plus static preview, URL detection beyond
-the log, and port management.
+Out of scope for v1: sandboxed build plus static preview, port management,
+and a UI to clear taint.
 
 ## Design
 
 ### Taint tracking — `web/sandbox/taint.py` (new)
 - `mark_folder(path)`: records a folder that a sandboxed run could write.
-- `mark_file(path)`: records the file's parent folder if the file is code or
-  config (rule 4).
+- `mark_file(path)`: records the file's parent folder unless the file is a
+  content file (rule 4).
 - `is_tainted(folder) -> bool`: true if any recorded folder is equal to,
-  inside, or contains `folder` (`is_within` both ways, `normcase`).
-- `_reset()` for tests. Module-level set behind a lock.
+  inside, or contains `folder` (`is_within` both ways, `normcase`), or if the
+  store is unreadable.
+- Persistence: load on first use, write through on each new entry (atomic
+  replace). Entries are normalized absolute folder paths. `_reset()` clears
+  the in-memory copy and the file for tests.
 
 Callers:
 - `shell_runner/tools.py::_run_sandboxed` marks every path in `write_paths`
@@ -82,89 +104,127 @@ Callers:
 `_run_sandboxed` stops refusing `background=True` and calls a new
 `_run_outside(cr, command, shell, cwd, policy, context_id)`:
 
-1. If `policy.require_sandbox`, refuse (rule 3).
+1. Refuse if `policy.require_sandbox` (rule 3), if the run is unattended
+   (rule 6), if extra paths or hosts were passed (rule 1), or if the command
+   is over 2000 characters (rule 7).
 2. Resolve the folder with the existing `_locate_cwd`. An empty cwd is refused
    ("pass the project folder as cwd"). A string error is returned as is.
 3. If `taint.is_tainted(folder)`, refuse (rule 4).
 4. Look up an approval with `sandbox_approvals.lookup(tab, [], [folder], [],
    tool="run_shell_outside", command=command)`:
    - `approved` → `_spawn_background(command, argv_prefix, shell_used,
-     str(folder))`, where argv_prefix and shell_used come from the same shell
-     resolution `_run_unsandboxed` uses. The resolution is moved into a small
-     helper and shared.
+     str(folder))` with the scrubbed environment (rule 9). argv_prefix and
+     shell_used come from the same shell resolution `_run_unsandboxed` uses.
+     The resolution is moved into a small helper and shared.
    - `denied`/`expired` → the existing denied and expired messages.
    - `pending` → return the card again.
    - none → create a request with `tool="run_shell_outside"` and return
      `approval_required` with a `_sandbox_approval` card that has
-     `"outside": true`.
+     `"tool": "run_shell"` and `"outside": true`, so the existing shell
+     follow-up text applies.
 
-The command must be identical between the request and the run. The shell is
-part of what is approved: it is included in the stored command string as
-`"<shell_used>\n<command>"`.
+The taint check in step 3 runs before the approval lookup, so a file written
+between the card and the approval still blocks the start.
+
+The request stores the command and the shell separately (a `shell` field on
+the request), and `lookup` matches both. The card shows only the command.
 
 ### Approval store — `web/sandbox/approvals.py`
-- `lookup` matches the exact command for `run_shell_outside` too, as it does
-  for `run_shell`.
+- `lookup` matches the exact command (and shell) for `run_shell_outside` too,
+  as it does for `run_shell`.
 - `decide` forces `scope="once"` for `run_shell_outside`, whatever scope the
-  client sent.
+  client sent. Without this, a `task` scope would make `_decide` add the
+  folder to `task_grants`, which would silently widen later sandboxed runs.
 
 `/api/sandbox/requests/{id}/approve` and `/deny` are reused unchanged
 (CSRF-guarded already). No new routes.
 
-### Shutdown — `web/app.py`
-In the lifespan shutdown, after `stop_worker()`, call a new
-`shell_runner.tools.stop_all_background()`. It runs the same tree-kill
-`_tool_stop_shell_process` uses on every running entry in `_BG_REGISTRY`. It is
-best effort and never raises.
+### Stop and shutdown — `web/skills/shell_runner/tools.py`, `web/app.py`, `shell/main.js`
+- `stop_all_background()` runs the same tree-kill `_tool_stop_shell_process`
+  uses on every running entry in `_BG_REGISTRY`. Best effort, never raises.
+- `web/app.py` lifespan shutdown calls it after `stop_worker()`.
+- Electron stops the backend with `pyProc.kill()` (`shell/main.js`), which on
+  Windows is a hard kill, so the lifespan hook does not run. Before that
+  call, the quit path reads the pid file in the data folder and runs
+  `taskkill /PID <pid> /T /F` for each entry that still matches its recorded
+  command, using the same match check as `cleanup_orphan_bg_procs`.
+- The startup orphan sweep stays as the last backstop.
+
+### Stop route hardening — `web/routes/tasks.py`
+`POST /api/shell/background-processes/{pid}/stop`:
+- gets `dependencies=[Depends(verify_csrf)]` and is removed from
+  `tests/csrf_route_baseline.txt`;
+- refuses (404) any pid that is not in `_BG_REGISTRY`. Today
+  `_tool_stop_shell_process` will terminate any pid and its children.
+
+`web/static/agents-pane.js` (the existing caller, which posts without a
+token) is changed to send the CSRF token the same way the sandbox card does,
+including the 403 refresh-and-retry.
 
 ### Frontend — `web/static/app.js`
 `_showSandboxApproval` checks `card.outside`:
 - Title "Run outside the sandbox". It shows the command (monospace), the
   folder, and "Runs outside the sandbox with your full access. AI Gator stops
   it when you close the app."
-- Only **Run** (approve with scope once) and **Deny**. No scope choice.
+- The generic "Read and write" rows, the network note and the "Allowed until
+  you close this tab" footnote are not shown. After a decision the card says
+  "Started" or "Denied".
+- Only **Run** (approve, scope once) and **Deny**. No scope choice.
 
-The background-start tool result gets a small status card. It shows the first
-`http://localhost:<port>` or `http://127.0.0.1:<port>` URL in the log tail.
-The backend extracts the URL and returns it as `url` in the
-`run_shell(background=true)` result, after a short wait for the log (up to 5s).
-The card has **Open**, which opens the URL in the system browser through the
-existing external-link path, and **Stop**, which calls
-`POST /api/shell/background-processes/{pid}/stop`. If no URL is found, the card
-says "Running (pid N)" with Stop only. The card checks
-`GET /api/shell/background-processes` every 5 s while it is visible and shows
+The `run_shell(background=true)` result carries a `url` field. The backend
+reads the log for up to 5 s, strips ANSI escape codes, and returns the first
+match of `^https?://(localhost|127\.0\.0\.1):\d+` (anchored so a host such as
+`localhost.evil.com` cannot match). The result reaches the UI through the
+existing tool-result path in the chat stream; the plan names the exact event.
+
+The status card shows "Running at <url>" with **Open** and **Stop**. If there
+is no url it says "Running (pid N)" with Stop only. It checks
+`GET /api/shell/background-processes` every 5 s while visible and shows
 "Stopped" once the pid is gone.
 
-### Stop route hardening — `web/routes/tasks.py`
-`POST /api/shell/background-processes/{pid}/stop` is given
-`dependencies=[Depends(verify_csrf)]` and removed from
-`tests/csrf_route_baseline.txt`.
+`openExternal` accepts only `https://`, so **Open** uses its own narrow path:
+it opens a URL only if it matches the same localhost pattern, in the system
+browser through the Electron external-open bridge.
 
 ### Docs
-`docs/security/threatmodel-remediation.md`, H_06 row: one factual sentence.
-"A long-running background command can run outside the sandbox only after a
-per-run approval of the exact command and folder. It is refused when the
-policy requires the sandbox or when AI Gator changed code in that folder
-during the session."
+`docs/security/threatmodel-remediation.md`, H_06 row: the statement that
+background commands are refused is edited to say that a long-running
+background command can run outside the sandbox only after a per-run approval
+of the exact command and folder, and is refused when the policy requires the
+sandbox or when AI Gator has changed or could have changed code in that
+folder.
 
 ## Tests
 - `require_sandbox` → refused, no request created.
-- A tainted folder (sandboxed write to the folder, a parent, or a child, or a
-  `write_file` to `package.json` or `vite.config.ts`) → refused. A `write_file`
-  to `slides.md` or `style.css` → not tainted.
+- Unattended run → refused. `background=true` with extra paths or hosts →
+  refused. A command over 2000 characters → refused.
+- Taint: a sandboxed write to the folder, a parent, or a child taints it. A
+  `write_file` to `package.json`, `vite.config.ts`, `mkdocs.yml` or `x.mdx`
+  taints it. A `write_file` to `slides.md` or `style.css` does not. A
+  read-only sandboxed `dir` with the project as cwd taints it.
+- Taint persists: after `_reset` of the in-memory copy only, the folder is
+  still tainted. A corrupt file → every folder tainted.
+- A file written between the card and the approval → the start is refused.
 - First call → `approval_required` with `outside: true`. Approve, then a call
   with the same command spawns once, with the cwd equal to the folder. A
   second call asks again.
 - A different command, shell or folder after approval → no match, new card.
+  An approval for tab A cannot be used by tab B.
 - `decide` with `scope="always"` or `"task"` on `run_shell_outside` → stored
   as once. No `task_grants` or `saved_permissions` entry is added.
-- `stop_all_background` kills every running entry (mock Popen).
-- Foreground sandboxed `run_shell` is unchanged (existing suites pass).
+- The spawned environment has no AI Gator secrets or tokens.
+- `stop_all_background` kills every running entry (mock Popen). The stop route
+  returns 404 for a pid that is not in `_BG_REGISTRY`.
 - `tests/test_csrf_route_inventory.py` passes with the stop route removed from
   the baseline and nothing added.
-- URL extraction picks the first localhost URL from a Vite/Slidev-style log and
-  returns no `url` when there is none.
-- JS: the outside card renders only Run and Deny; the status card shows Open
-  only when a URL was found.
-- Manual: Slidev deck start, open, live edit of `slides.md`, Stop, and app
-  close kills `node.exe`.
+- URL extraction picks the first localhost URL from a coloured Vite/Slidev
+  log, ignores `http://localhost.evil.com:80`, and returns no `url` when
+  there is none.
+- JS: the outside card renders only Run and Deny and hides the generic rows.
+  The status card shows Open only when a URL was found. `agents-pane.js`
+  sends the CSRF token on stop.
+- Manual: the model explores the deck with `list_dir`/`read_file`, edits
+  `slides.md`, starts the server, Open works, live edit shows in the browser,
+  Stop works, and closing the app leaves no `node.exe` running. Then write a
+  `package.json` with `write_file`, restart AI Gator, and confirm the start is
+  refused.
