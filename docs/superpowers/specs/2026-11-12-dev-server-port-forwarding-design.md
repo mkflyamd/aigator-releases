@@ -34,7 +34,14 @@ browser -> 127.0.0.1:P (AI Gator listener) -> relay pipes -> relay (sandbox) -> 
 - The relay is a Python script. Node's piped `child_process` hangs in the
   sandbox, Python's does not.
 - The relay also starts the dev server as its child, so the relay and the
-  server share one sandbox process tree and one Job Object.
+  server share one sandbox process tree and one Job Object. This is required:
+  loopback works only inside one launch's process tree. Two separate sandbox
+  launches with the same profile cannot reach each other (verified).
+- A program under `C:\Program Files` is readable from inside the sandbox only if
+  it carries an ALL APPLICATION PACKAGES access entry. A default Node install
+  does not, and the user cannot change that ACL. The launcher's first process
+  starts fine, but the relay's child `node.exe` fails with Access denied. So a
+  tool the sandbox cannot read is copied to a folder it can (see Runtime copy).
 
 ## Rules
 1. **Scope.** Windows only in v1. `run_shell(background=true)` is allowed while
@@ -89,6 +96,16 @@ Started as `python relay.py -- <argv of the user's command>`. Stdlib only.
 - On `OPEN(conn, port)` it dials `localhost:port`, then forwards `DATA` both
   ways until either side sends `CLOSE`.
 - A reader thread per direction. Frames are written under one lock.
+
+### Runtime copy — `web/sandbox/runtime_copy.py` (new)
+For a background run, the first word of the command and `npm`/`npx` resolve
+through `PATH`. If the resolved tool's folder is not readable by the container
+(`launcher_windows._container_can_read` is false and `_can_change_acl` is false),
+the folder is copied once to `~/.gator/sandbox/runtime/<name>-<version>/` and
+that copy is put first in the relay's `PATH` and granted read and execute
+through `runtime_paths`. For Node this copies the install folder (about 100 MB).
+Nothing is copied when the tool is already readable, for example a user-owned
+Node under `%LOCALAPPDATA%` or Python.
 
 ### Wire format — `web/sandbox/wire.py` (new, shared)
 Frame: `!BII` (type, connection id, payload length), then the payload. Types:
@@ -183,8 +200,23 @@ port to it. The server never runs with user access.
   passes with the route removed from the baseline and nothing added.
 - JS: the background card line, the status card with and without url, and
   `agents-pane.js` sending the CSRF token on stop.
-- Windows only, run on a real machine: `launch` via `start_sandboxed` of the
-  relay and a Vite+React dev server, the page loads through the forwarded port,
-  HMR updates after an edit, Stop ends `node.exe`, and killing the backend
-  process also ends it.
+- Runtime copy: a tool folder the container cannot read is copied once and
+  put first in `PATH`, a readable one is not copied, and a second run reuses
+  the copy.
+- Windows only, run on a real machine: `start_sandboxed` of the relay and a
+  Vite+React dev server started with `npm run dev`, the page loads through the
+  forwarded port, HMR updates after an edit, Stop ends `node.exe`, and killing
+  the backend process also ends it.
+
+## Spike results (2026-11-12, Windows, scratch scripts)
+- Vite+React under a Python supervisor inside the sandbox, with a readable copy
+  of Node: `node.exe vite.js` gave 200 for `/`, `/src/main.jsx` and
+  `/@vite/client` in 2s, and `npm run dev` through `cmd` gave 200 for `/` in 3s.
+- Same server, a second separate sandbox launch as client: connection timed
+  out. Plain Python server and client in two launches: refused. Same tree works.
+- Default Node under `C:\Program Files\nodejs`: the container cannot list the
+  folder and a child `node.exe` start gives Access denied.
+- Not yet verified: the streaming launcher (stdin pipe, no wait) carrying
+  frames, and the Job Object ending the tree when the backend dies. These are
+  the first tasks of the plan.
 - Manual: the Slidev deck end to end through the Gator chat.
