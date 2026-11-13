@@ -672,6 +672,9 @@ class TestRealAppContainer:
             "fs.realpath(process.cwd(), (e, p) => console.log('ASYNC:' + (e ? e.code : p)));\n"
             "cp.exec('echo hi', (e) => console.log('EXEC:' + (e ? e.code : 'ran')));\n"
             "try { cp.execSync('echo hi'); } catch (e) { console.log('EXECSYNC:' + e.code); }\n"
+            "const c = cp.spawn('cmd', ['/c', 'echo hi']);\n"
+            "c.stdout.on('data', () => {});\n"
+            "c.on('error', (e) => console.log('SPAWN:' + e.code));\n"
             "console.log('REACHED_END');\n",
             encoding="utf-8",
         )
@@ -683,6 +686,7 @@ class TestRealAppContainer:
         assert not res.timed_out, "a piped child spawn hung the process"
         assert "SYNC:" in out and "ASYNC:" in out and "ASYNC:EPERM" not in out, out + res.stderr
         assert "EXEC:EPERM" in out and "EXECSYNC:EPERM" in out and "REACHED_END" in out, out + res.stderr
+        assert "SPAWN:EPERM" in out, out + res.stderr
 
     def test_overhead_after_runtime_grants_exist(self, windows_container, layout):
         _probe(windows_container, layout)

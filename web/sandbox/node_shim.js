@@ -3,6 +3,7 @@
 const fs = require('fs');
 const cp = require('child_process');
 const { EventEmitter } = require('events');
+const { PassThrough, Writable } = require('stream');
 
 // The JS realpath lstat()s every path component including the drive root, which an AppContainer
 // cannot read. The native realpath does not.
@@ -52,11 +53,19 @@ function usesPipe(stdio) {
 function failedChild(err, callback) {
   const child = new EventEmitter();
   child.pid = undefined;
-  child.stdin = child.stdout = child.stderr = null;
+  child.stdin = new Writable({ write: (_chunk, _enc, done) => done() });
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
   child.kill = () => false;
   process.nextTick(() => {
-    if (callback) callback(err, '', '');
-    else child.emit('error', err);
+    child.stdout.end();
+    child.stderr.end();
+    if (callback) {
+      callback(err, '', '');
+      return;
+    }
+    child.emit('error', err);
+    child.emit('close', -1, null);
   });
   return child;
 }
