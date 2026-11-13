@@ -118,3 +118,4 @@ def test_spec_bundles_sandbox_modules():
     for name in ("sandbox", "sandbox.policy", "sandbox.paths", "sandbox.approvals",
                  "sandbox.launcher_windows", "sandbox.launcher_macos", "sandbox.launcher_linux"):
         assert f'"{name}"' in spec
+    assert '"node_shim.js"' in spec
