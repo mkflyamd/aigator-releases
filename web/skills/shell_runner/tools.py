@@ -577,6 +577,9 @@ _SHELL_APPROVAL_MSG = (
     "call run_shell again with exactly the same command, cwd, extra_read_paths, extra_write_paths and "
     "network_hosts. If they deny, do not retry."
 )
+_BG_APPROVAL_MSG = _SHELL_APPROVAL_MSG.replace(
+    "extra_write_paths and network_hosts", "extra_write_paths, network_hosts and background=true"
+)
 _SHELL_HINT = (
     "[sandbox] This command can only use its working folder and has no network. If it really needs more, "
     "re-call run_shell with cwd, extra_read_paths, extra_write_paths or network_hosts; the user will be "
@@ -668,9 +671,9 @@ def _locate_cwd(cwd: str, policy, cr):
     return project, project, scratch
 
 
-def _shell_gate(cr, command, read_paths, write_paths, hosts, context_id, policy):
+def _shell_gate(cr, command, read_paths, write_paths, hosts, context_id, policy, background=False):
     """An approval decision string (None when no access was needed), or a result dict to return as is."""
-    if not (read_paths or write_paths or hosts):
+    if not background and not (read_paths or write_paths or hosts):
         return None
     tab = context_id or "default"
     read_s, write_s = [str(p) for p in read_paths], [str(p) for p in write_paths]
@@ -679,23 +682,28 @@ def _shell_gate(cr, command, read_paths, write_paths, hosts, context_id, policy)
         return sandbox.telemetry_record("", "run_shell", "enforced", bool(hosts),
                                         len(read_paths), len(write_paths), decision)
 
-    status, req = sandbox_approvals.lookup(tab, read_s, write_s, hosts, tool="run_shell", command=command)
+    status, req = sandbox_approvals.lookup(tab, read_s, write_s, hosts, tool="run_shell", command=command,
+                                           background=background)
     if status == "approved":
+        if background:
+            return "approved"
         return {"once": "approved", "task": "task_approved", "always": "saved_created"}[req.scope]
     if status == "denied":
         return _shell_error(cr._DENIED_MSG, _sandbox_telemetry=telemetry("denied"))
     if status == "expired":
         return _shell_error(cr._EXPIRED_MSG, _sandbox_telemetry=telemetry("expired"))
-    if task_grants.covers(tab, read_s, write_s, hosts):
-        return "task_approved"
     programs = programs_in(command)
-    if policy.saved_permissions != "deny" and saved_permissions.covers(read_s, write_s, hosts, programs):
-        return "saved"
+    if not background:
+        if task_grants.covers(tab, read_s, write_s, hosts):
+            return "task_approved"
+        if policy.saved_permissions != "deny" and saved_permissions.covers(read_s, write_s, hosts, programs):
+            return "saved"
     if req is None:
         req = sandbox_approvals.create(
             tab, read_s, write_s, hosts, tool="run_shell", command=command,
             programs=None if programs is None else tuple(sorted(programs)),
-            saveable=bool(programs) and policy.saved_permissions != "deny",
+            saveable=not background and bool(programs) and policy.saved_permissions != "deny",
+            background=background,
         )
     card = {
         "request_id": req.id, "read_paths": list(req.read_paths), "write_paths": list(req.write_paths),
@@ -703,10 +711,12 @@ def _shell_gate(cr, command, read_paths, write_paths, hosts, context_id, policy)
         "command": req.command[:2000], "saveable": bool(req.saveable),
         "programs": list(req.programs or ()),
     }
+    if background:
+        card["background"] = True
     return {
         "approval_required": True, "request_id": req.id, "read_paths": card["read_paths"],
         "write_paths": card["write_paths"], "network_hosts": card["network_hosts"],
-        "message": _SHELL_APPROVAL_MSG, "_sandbox_approval": card,
+        "message": _BG_APPROVAL_MSG if background else _SHELL_APPROVAL_MSG, "_sandbox_approval": card,
         "_sandbox_telemetry": telemetry("requested"),
     }
 

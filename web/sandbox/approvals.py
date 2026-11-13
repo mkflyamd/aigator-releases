@@ -40,6 +40,7 @@ class ApprovalRequest:
     programs: tuple[str, ...] | None = None
     saveable: bool = False
     scope: str = "once"  # once | task | always (always: run_shell only); set by decide
+    background: bool = False  # a long-running run_shell started with background=true; never saved or task-wide
 
 
 _LOCK = threading.Lock()
@@ -63,13 +64,15 @@ def _purge(now: float) -> None:
 
 
 def create(context_id: str, read_paths, write_paths, network_hosts, now: float | None = None, *,
-           tool: str = "run_python", command: str = "", programs=None, saveable: bool = False) -> ApprovalRequest:
+           tool: str = "run_python", command: str = "", programs=None, saveable: bool = False,
+           background: bool = False) -> ApprovalRequest:
     now = time.time() if now is None else now
     req = ApprovalRequest(
         id=uuid.uuid4().hex, context_id=context_id or "",
         read_paths=tuple(str(p) for p in read_paths), write_paths=tuple(str(p) for p in write_paths),
         network_hosts=tuple(network_hosts), created_at=now,
         tool=tool, command=command, programs=None if programs is None else tuple(programs), saveable=saveable,
+        background=background,
     )
     with _LOCK:
         _purge(now)
@@ -79,7 +82,7 @@ def create(context_id: str, read_paths, write_paths, network_hosts, now: float |
 
 def lookup(context_id: str, read_paths, write_paths, network_hosts,
            now: float | None = None, *, tool: str = "run_python",
-           command: str = "") -> tuple[str, ApprovalRequest | None]:
+           command: str = "", background: bool = False) -> tuple[str, ApprovalRequest | None]:
     """Newest request for this tab, this tool (and, for run_shell, this exact command) and exactly this set.
 
     approved -> consumed (removed); denied/expired -> reported once (removed);
@@ -92,6 +95,7 @@ def lookup(context_id: str, read_paths, write_paths, network_hosts,
             r for r in _REQUESTS.values()
             if r.context_id == (context_id or "") and r.tool == tool
             and (tool != "run_shell" or r.command == command)
+            and r.background == background
             and _key(r.read_paths, r.write_paths, r.network_hosts) == key
         ]
         if not matches:
@@ -121,9 +125,9 @@ def decide(request_id: str, context_id: str, approve: bool, now: float | None = 
             raise ApprovalError(409, f"This access request was already {req.status}.")
         req.status = "approved" if approve else "denied"
         req.scope = "once"
-        if approve and scope == "task":
+        if approve and scope == "task" and not req.background:
             req.scope = "task"
-        elif approve and scope == "always" and req.tool == "run_shell":
+        elif approve and scope == "always" and req.tool == "run_shell" and not req.background:
             req.scope = "always" if req.saveable and allow_saved else "task"
         return req
 

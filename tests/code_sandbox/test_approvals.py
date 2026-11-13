@@ -120,3 +120,16 @@ def test_lookup_is_bound_to_tool_and_shell_command():
     assert approvals.lookup("t", R, [], [], now=102.0, tool="run_shell", command="git pull") == ("approved", shell)
     assert approvals.lookup("t", R, [], [], now=102.0, tool="run_shell", command="git pull") == ("none", None)
     assert approvals.lookup("t", R, [], [], now=102.0) == ("approved", py)
+
+
+def test_background_request_is_matched_separately():
+    fg = approvals.create("t", R, [], [], now=100.0, tool="run_shell", command="npm run dev", programs=("npm",), saveable=True)
+    bg = approvals.create("t", R, [], [], now=100.0, tool="run_shell", command="npm run dev", background=True)
+    assert approvals.lookup("t", R, [], [], now=101.0, tool="run_shell", command="npm run dev", background=True)[1].id == bg.id
+    assert approvals.lookup("t", R, [], [], now=101.0, tool="run_shell", command="npm run dev")[1].id == fg.id
+
+
+@pytest.mark.parametrize("scope", ["task", "always"])
+def test_background_approval_never_widens_beyond_once(scope):
+    bg = approvals.create("t", R, [], [], now=100.0, tool="run_shell", command="npm run dev", background=True)
+    assert approvals.decide(bg.id, "t", True, now=101.0, scope=scope).scope == "once"

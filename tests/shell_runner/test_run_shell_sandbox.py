@@ -231,3 +231,24 @@ def test_run_shell_path_offers_enabled_skill_shims_only(env):
     path = env.fake.requests[0].env["PATH"].split(os.pathsep)
     assert path[0] == "/skills/on-skill/bin"
     assert "/skills/off-skill/bin" not in path
+
+
+def test_background_gate_asks_even_with_no_paths_and_approval_is_single_use(env):
+    from sandbox import approvals as sandbox_approvals
+
+    policy = sh.load_policy()
+    saved_before = saved_permissions.list_entries()
+    out = sh._shell_gate(cr, "npm run dev", [], [], [], "tab", policy, background=True)
+    assert out["approval_required"] is True
+    assert out["message"] == sh._BG_APPROVAL_MSG and "background=true" in out["message"]
+    card = out["_sandbox_approval"]
+    assert card["background"] is True and card["saveable"] is False
+    sandbox_approvals.decide(out["request_id"], "tab", True, scope="always")
+    assert sh._shell_gate(cr, "npm run dev", [], [], [], "tab", policy, background=True) == "approved"
+    again = sh._shell_gate(cr, "npm run dev", [], [], [], "tab", policy, background=True)
+    assert isinstance(again, dict) and again["approval_required"] is True
+    assert task_grants._GRANTS == [] and saved_permissions.list_entries() == saved_before
+
+
+def test_foreground_gate_is_unchanged_when_nothing_is_requested(env):
+    assert sh._shell_gate(cr, "echo hi", [], [], [], "tab", sh.load_policy()) is None
