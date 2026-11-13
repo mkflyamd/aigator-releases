@@ -6,10 +6,29 @@ const { EventEmitter } = require('events');
 
 // The JS realpath lstat()s every path component including the drive root, which an AppContainer
 // cannot read. The native realpath does not.
+// If even the native call is denied, fall back to the absolute path (symlinks are already preserved).
+const path = require('path');
 const syncNative = fs.realpathSync.native;
 const asyncNative = fs.realpath.native;
-fs.realpathSync = Object.assign((...a) => syncNative(...a), { native: syncNative });
-fs.realpath = Object.assign((...a) => asyncNative(...a), { native: asyncNative });
+const denied = (e) => e && (e.code === 'EPERM' || e.code === 'EACCES');
+fs.realpathSync = Object.assign(
+  (p, ...rest) => {
+    try {
+      return syncNative(p, ...rest);
+    } catch (e) {
+      if (denied(e)) return path.resolve(String(p));
+      throw e;
+    }
+  },
+  { native: syncNative },
+);
+fs.realpath = Object.assign(
+  (p, ...rest) => {
+    const cb = rest.pop();
+    asyncNative(p, ...rest, (e, r) => (denied(e) ? cb(null, path.resolve(String(p))) : cb(e, r)));
+  },
+  { native: asyncNative },
+);
 
 // libuv creates \\.\pipe\uv\... pipes for a child's piped stdio. An AppContainer is denied that
 // namespace and libuv retries forever, hanging the whole event loop. Fail fast instead.
