@@ -54,6 +54,33 @@ def test_both_stream_loops_forward_sandbox_approval():
     assert src.count("yield f\"data: {json.dumps({'sandbox_approval': evt.get('data', {})})}\\n\\n\"") == 2
 
 
+def test_runner_emits_dev_server_event():
+    info = {"pid": 4242, "url": "http://127.0.0.1:3030", "command": "npm run dev"}
+
+    async def fake_execute(name, inputs, **kw):
+        return {"background": True, "pid": 4242, "url": info["url"], "_dev_server": info}
+
+    run_tool_block, _, _ = _make_tool_runner(fake_execute, set(), {}, lambda n, r: None, "__slack_safe__")
+
+    async def go():
+        q = asyncio.Queue()
+        await run_tool_block(SimpleNamespace(name="run_shell", inputs={"command": "npm run dev"}, id="c1"), q)
+        return [q.get_nowait() for _ in range(q.qsize())]
+
+    loop = asyncio.new_event_loop()
+    try:
+        events = loop.run_until_complete(go())
+    finally:
+        loop.close()
+        asyncio.set_event_loop(asyncio.new_event_loop())
+    assert {"kind": "dev_server", "data": info} in events
+
+
+def test_both_stream_loops_forward_dev_server():
+    src = (pathlib.Path(__file__).parent.parent / "web" / "agent_loop.py").read_text(encoding="utf-8")
+    assert src.count("yield f\"data: {json.dumps({'dev_server': evt.get('data', {})})}\\n\\n\"") == 2
+
+
 def _capture_run_python(monkeypatch):
     import shared
 
