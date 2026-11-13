@@ -501,6 +501,34 @@ const flush = async () => {
   await flush();
   assert.deepStrictEqual(JSON.parse(envD.fetches[0].opts.body), { context_id: 'tab-1' });
 
+  // A background run says where the server will be reachable, and its Allow button does not
+  // claim a tab-long grant (the server keeps a background approval single-use).
+  const envB = makeEnv('tab-1');
+  envB.ctx._showSandboxApproval(
+    { ...shellCard, request_id: 'sh5', background: true, saveable: false, network_hosts: [] },
+    'tab-1',
+  );
+  const allB = walk(envB.messages);
+  assert(
+    allB.some((e) => e._text === 'Runs in the sandbox and is made available at localhost.'),
+    'background card says it is made available at localhost',
+  );
+  assert.deepStrictEqual(
+    allB.filter((e) => e.tag === 'button').map((b) => b.textContent),
+    ['Allow', 'Deny'],
+  );
+  assert(!allB.some((e) => /Allowed until you close this tab/.test(e._text)));
+  assert(
+    !allS.some((e) => /made available at localhost/.test(e._text)),
+    'a plain command card does not say it',
+  );
+  await allB.filter((e) => e.tag === 'button')[0].listeners.click({ stopPropagation() {} });
+  await flush();
+  assert.deepStrictEqual(JSON.parse(envB.fetches[0].opts.body), {
+    context_id: 'tab-1',
+    scope: 'once',
+  });
+
   // ── Settings: Saved permissions ──
   function makeSettingsEnv(entries) {
     const list = makeEl('div');

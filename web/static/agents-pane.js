@@ -267,7 +267,7 @@ function _renderBackgroundProcs(procs) {
       stopBtn.disabled = true;
       stopBtn.textContent = 'Stopping…';
       try {
-        await fetch(`/api/shell/background-processes/${proc.pid}/stop`, { method: 'POST' });
+        await _postBackgroundStop(proc.pid);
         await _apRefresh();
       } catch (_) {
         stopBtn.disabled = false;

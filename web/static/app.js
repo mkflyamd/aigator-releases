@@ -10223,6 +10223,7 @@ function _showSandboxApproval(data, ownerTabId) {
   box.className = 'gator-compose-card gator-draft-card';
   const isShell = data.tool === 'run_shell';
   const tool = isShell ? 'run_shell' : 'run_python';
+  const isBackground = isShell && data.background === true;
 
   const header = document.createElement('div');
   header.className = 'gcc-header';
@@ -10284,12 +10285,18 @@ function _showSandboxApproval(data, ownerTabId) {
       'Always allow lets these programs reach any host on the network, not only the ones listed, when working in these folders. Programs such as git and npm run scripts stored in the project, so those scripts get the same access. You can remove it in Settings.';
     body.appendChild(risk);
   }
+  if (isBackground) {
+    const where = document.createElement('div');
+    where.className = 'gcc-refine';
+    where.textContent = 'Runs in the sandbox and is made available at localhost.';
+    body.appendChild(where);
+  }
 
   const actions = document.createElement('div');
   actions.className = 'gcc-actions';
   const approve = document.createElement('button');
   approve.className = 'gcc-approve-btn';
-  approve.textContent = 'Allow for this tab';
+  approve.textContent = isBackground ? 'Allow' : 'Allow for this tab';
   let always = null;
   if (isShell && data.saveable === true) {
     always = document.createElement('button');
@@ -10311,8 +10318,9 @@ function _showSandboxApproval(data, ownerTabId) {
   footer.className = 'gcc-footer';
   const footNote = document.createElement('span');
   footNote.className = 'gcc-refine';
-  footNote.textContent =
-    'Allowed until you close this tab. Unanswered requests expire after 10 minutes.';
+  footNote.textContent = isBackground
+    ? 'Unanswered requests expire after 10 minutes.'
+    : 'Allowed until you close this tab. Unanswered requests expire after 10 minutes.';
   footer.appendChild(footNote);
 
   box.append(header, body, actions, footer);
@@ -10362,7 +10370,7 @@ function _showSandboxApproval(data, ownerTabId) {
             out && out.saved
               ? 'Always allowed. You can remove this in Settings.'
               : 'Allowed for this tab (it could not be saved).';
-        } else outcome = 'Allowed for this tab.';
+        } else outcome = isBackground ? 'Allowed.' : 'Allowed for this tab.';
       }
       footNote.textContent = outcome;
       actions.remove();
@@ -10381,7 +10389,7 @@ function _showSandboxApproval(data, ownerTabId) {
   };
   approve.addEventListener('click', (e) => {
     e.stopPropagation();
-    decide('approve', 'task');
+    decide('approve', isBackground ? 'once' : 'task');
   });
   if (always)
     always.addEventListener('click', (e) => {
@@ -10397,6 +10405,117 @@ function _showSandboxApproval(data, ownerTabId) {
     e.stopPropagation();
     decide('deny');
   });
+  document.getElementById('messages')?.appendChild(card);
+  card.scrollIntoView({ behavior: 'smooth', block: 'end' });
+}
+
+async function _postBackgroundStop(pid) {
+  const post = () =>
+    fetch(`/api/shell/background-processes/${encodeURIComponent(pid)}/stop`, {
+      method: 'POST',
+      headers: { 'X-CSRF-Token': window.__CSRF_TOKEN__ || '' },
+    });
+  let res = await post();
+  if (res.status === 403) {
+    // The token is per server process; a page loaded before a restart holds a stale one.
+    const fresh = await fetch('/api/csrf')
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null);
+    if (fresh?.csrf_token) window.__CSRF_TOKEN__ = fresh.csrf_token;
+    res = await post();
+  }
+  return res;
+}
+
+function _devServerUrl(url) {
+  return typeof url === 'string' && /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\]):\d{1,5}(\/|$)/.test(url)
+    ? url
+    : '';
+}
+
+function _showDevServerCard(data, ownerTabId) {
+  const pid = data && Number.isInteger(data.pid) ? data.pid : 0;
+  if (!pid) return;
+  if (ownerTabId && ownerTabId !== _activeTabId) {
+    _showConnectivityToast('A dev server started in another tab.', 'info');
+    return;
+  }
+  const seen = Array.from(document.querySelectorAll('[data-dev-server-pid]')).some(
+    (el) => el.dataset.devServerPid === String(pid),
+  );
+  if (seen) return;
+  const url = _devServerUrl(data.url);
+
+  const card = document.createElement('div');
+  card.className = 'message assistant';
+  card.dataset.devServerPid = String(pid);
+  const bubble = document.createElement('div');
+  bubble.className = 'bubble card-bubble';
+  const box = document.createElement('div');
+  box.className = 'gator-compose-card gator-draft-card';
+  const header = document.createElement('div');
+  header.className = 'gcc-header';
+  const title = document.createElement('div');
+  title.className = 'gcc-title';
+  title.textContent = url ? `Running at ${url}` : `Running (pid ${pid})`;
+  header.appendChild(title);
+
+  const actions = document.createElement('div');
+  actions.className = 'gcc-actions';
+  let openLink = null;
+  if (url) {
+    openLink = document.createElement('a');
+    openLink.className = 'btn-secondary';
+    openLink.href = url;
+    openLink.target = '_blank';
+    openLink.rel = 'noopener noreferrer';
+    openLink.textContent = 'Open';
+    actions.appendChild(openLink);
+  }
+  const stop = document.createElement('button');
+  stop.className = 'btn-secondary';
+  stop.textContent = 'Stop';
+  actions.appendChild(stop);
+
+  box.append(header, actions);
+  bubble.appendChild(box);
+  card.appendChild(bubble);
+
+  let timer = null;
+  const markStopped = () => {
+    clearInterval(timer);
+    title.textContent = 'Stopped';
+    stop.remove();
+    if (openLink) openLink.remove();
+  };
+  stop.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    stop.disabled = true;
+    try {
+      const res = await _postBackgroundStop(pid);
+      if (!res.ok && res.status !== 404) throw new Error(`HTTP ${res.status}`);
+      markStopped();
+    } catch (err) {
+      stop.disabled = false;
+      _showConnectivityToast(`Could not stop the server: ${err.message}`, 'warn');
+    }
+  });
+  timer = setInterval(async () => {
+    if (!card.isConnected) {
+      clearInterval(timer);
+      return;
+    }
+    try {
+      const res = await fetch('/api/shell/background-processes');
+      if (!res.ok) return;
+      const body = await res.json();
+      const alive = (body.processes || []).some((p) => p.pid === pid && p.running);
+      if (!alive) markStopped();
+    } catch (_) {
+      /* the next tick tries again */
+    }
+  }, 5000);
+
   document.getElementById('messages')?.appendChild(card);
   card.scrollIntoView({ behavior: 'smooth', block: 'end' });
 }
@@ -14178,6 +14297,8 @@ form.addEventListener('submit', async (e) => {
               _showJiraTargetSelection(msg.jira_target_selection, requestTabId);
             } else if (msg.sandbox_approval) {
               _showSandboxApproval(msg.sandbox_approval, requestTabId);
+            } else if (msg.dev_server) {
+              _showDevServerCard(msg.dev_server, requestTabId);
             } else if (msg.github_sso) {
               _showGithubSsoCard(msg.github_sso, requestTabId);
             } else if (msg.ask_user) {
