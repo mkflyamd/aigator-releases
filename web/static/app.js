@@ -10037,7 +10037,6 @@ function _buildCalendarCancelRows(data) {
     (data.attendees || []).map((p) => '<div>' + escapeHtml(who(p)) + '</div>').join(''),
   ]);
   if (data.comment) rows.push(['Note to attendees', escapeHtml(data.comment)]);
-  if (data.notify === 'ExternalGuestsOnly') rows.push(['Notify', 'External guests only']);
   return rows
     .map(
       ([k, v]) =>

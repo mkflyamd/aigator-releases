@@ -47,6 +47,7 @@ def _client(event):
 
     gc.get.side_effect = get
     gc.delete.side_effect = delete
+    gc.post.side_effect = delete
     return gc
 
 
@@ -77,7 +78,7 @@ def test_cancelling_a_meeting_with_attendees_makes_a_card_and_cancels_nothing():
     params = get_draft(result["data"]["draft_id"])["params"]
     assert params["comment"] == "Moving to next week"
     assert params["attendees"] == [{"name": "Ann", "email": "ann@amd.com"}]
-    assert params["scope"] == "single" and params["notify"] == "All"
+    assert params["scope"] == "single" and "notify" not in params
 
 
 def test_rooms_alone_do_not_count_as_people_to_notify():
@@ -89,13 +90,16 @@ def test_rooms_alone_do_not_count_as_people_to_notify():
 def test_a_meeting_with_no_attendees_is_deleted_directly():
     result, gc = _stage(_event(attendees=[]))
     assert result["deleted"] is True
-    gc.delete.assert_called_once()
+    assert gc.delete.call_args.args == ("/me/events/evt1",)
+    gc.post.assert_not_called()
 
 
-def test_telling_no_one_deletes_directly():
-    result, gc = _stage(send_updates="None")
-    assert result["deleted"] is True
-    assert gc.delete.call_args.args[0].endswith("sendUpdates=None")
+def test_send_updates_none_still_makes_a_card_because_graph_always_notifies():
+    for mode in ("None", "SendToNone", "ExternalGuestsOnly"):
+        result, gc = _stage(send_updates=mode)
+        assert result["_draft"] == "calendar-cancel"
+        gc.delete.assert_not_called()
+        gc.post.assert_not_called()
 
 
 def test_a_meeting_the_user_does_not_organize_is_refused_without_a_card():
@@ -120,8 +124,28 @@ def test_approving_cancels_the_meeting_and_notifies_attendees():
     gc = _client(_event())
     r = _approve(result["data"]["draft_id"], gc)
     assert r.status_code == 200, r.text
-    assert gc.delete.call_args.args[0] == "/me/events/evt1?sendUpdates=All"
+    gc.delete.assert_not_called()
     assert gc.post.call_args.args == ("/me/events/evt1/cancel", {"Comment": "Moving to next week"})
+
+
+def test_approving_without_a_note_still_cancels_through_the_cancel_action():
+    result, _ = _stage()
+    gc = _client(_event())
+    r = _approve(result["data"]["draft_id"], gc)
+    assert r.status_code == 200, r.text
+    gc.delete.assert_not_called()
+    assert gc.post.call_args.args == ("/me/events/evt1/cancel", {"Comment": ""})
+
+
+def test_a_failing_cancel_action_reports_not_cancelled_and_keeps_the_card():
+    result, _ = _stage(comment="Moving")
+    gc = _client(_event())
+    gc.post.side_effect = RuntimeError("boom")
+    r = _approve(result["data"]["draft_id"], gc)
+    assert r.status_code == 502
+    assert "boom" in r.json()["detail"]
+    assert get_draft(result["data"]["draft_id"]) is not None
+    gc.delete.assert_not_called()
 
 
 def test_approving_an_event_that_is_gone_says_so_and_keeps_the_card_retryable():

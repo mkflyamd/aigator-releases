@@ -1154,9 +1154,7 @@ async def approve_draft(draft_id: str, body: dict = None):
         elif dtype == "calendar-cancel":
             from skills.calendar.tools import apply_calendar_cancel
 
-            cancelled = apply_calendar_cancel(
-                p["event_id"], p.get("comment", ""), p.get("delete_series", False), p.get("notify", "All")
-            )
+            cancelled = apply_calendar_cancel(p["event_id"], p.get("comment", ""), p.get("delete_series", False))
             if not cancelled.get("deleted"):
                 refused = cancelled.get("not_found") or cancelled.get("organizer_required")
                 raise HTTPException(

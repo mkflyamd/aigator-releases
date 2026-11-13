@@ -342,7 +342,7 @@ TOOL_DEFS = [
                         "SendToAllAndSaveCopy",
                         "SendToNone",
                     ],
-                    "description": "Who should receive cancellation emails. Legacy Outlook values map to Graph's All/ExternalGuestsOnly/None set. Defaults to All.",
+                    "description": "Ignored. Graph always sends a cancellation to attendees when an organizer cancels a meeting.",
                     "default": "All",
                 },
             },
@@ -965,13 +965,11 @@ def _tool_delete_calendar_event(
     delete_series: bool = False,
     send_updates: str = "All",
 ) -> dict:
-    """Stage a cancellation as a draft card when it would email attendees. Nothing is cancelled until the user approves it."""
+    """Stage a cancellation as a draft card when it would email attendees. Nothing is cancelled until the user approves it. send_updates is accepted for older callers; Graph always notifies attendees."""
     from .._drafts import create_draft
     from .._m365.helpers import get_cal_client
     from .helpers import get_user_win_tz
 
-    if _normalize_send_updates(send_updates) == "None":
-        return apply_calendar_cancel(event_id, comment, delete_series, send_updates)
     win_tz = get_user_win_tz()
     try:
         event = get_cal_client().get(
@@ -986,16 +984,9 @@ def _tool_delete_calendar_event(
     if not event:
         return {"deleted": False, "not_found": True, "error": _EVENT_GONE}
     kind = ((event or {}).get("type") or "").lower()
-    organizer = (((event.get("organizer") or {}).get("emailAddress") or {}).get("address") or "").lower()
-    people = [
-        {"name": who.get("name") or "", "email": who["address"]}
-        for a in event.get("attendees") or []
-        if a.get("type") != "resource"
-        and (who := a.get("emailAddress") or {}).get("address")
-        and who["address"].lower() != organizer
-    ]
+    people = _attendees_to_notify(event)
     if not event.get("isOrganizer") or not people or (kind == "seriesmaster" and not delete_series):
-        return apply_calendar_cancel(event_id, comment, delete_series, send_updates)
+        return apply_calendar_cancel(event_id, comment, delete_series)
 
     card = {
         "event_id": event_id,
@@ -1006,7 +997,6 @@ def _tool_delete_calendar_event(
         "end": ((event.get("end") or {}).get("dateTime") or "")[:19],
         "attendees": people,
         "comment": (comment or "").strip(),
-        "notify": _normalize_send_updates(send_updates),
         "delete_series": bool(delete_series),
     }
     draft_id = create_draft(
@@ -1021,18 +1011,27 @@ def _tool_delete_calendar_event(
     }
 
 
+def _attendees_to_notify(event: dict) -> list[dict]:
+    """Attendees other than rooms and the organizer, who receive a cancellation."""
+    organizer = (((event.get("organizer") or {}).get("emailAddress") or {}).get("address") or "").lower()
+    return [
+        {"name": who.get("name") or "", "email": who["address"]}
+        for a in event.get("attendees") or []
+        if a.get("type") != "resource"
+        and (who := a.get("emailAddress") or {}).get("address")
+        and who["address"].lower() != organizer
+    ]
+
+
 def apply_calendar_cancel(
     event_id: str,
     comment: str = "",
     delete_series: bool = False,
-    send_updates: str = "All",
 ) -> dict:
     """Cancel an event the user organizes and read it back. Returns deleted=False with an error when it could not."""
     from .._m365.helpers import get_cal_client
 
     gc = get_cal_client()
-
-    normalized_send_updates = _normalize_send_updates(send_updates)
 
     def _parse_dt(dt_str: str) -> datetime | None:
         """Return a timezone-aware UTC datetime if possible."""
@@ -1058,7 +1057,7 @@ def apply_calendar_cancel(
     try:
         event = gc.get(
             f"/me/events/{_eid(event_id)}",
-            {"$select": "id,subject,isOrganizer,type,seriesMasterId,start"},
+            {"$select": "id,subject,isOrganizer,type,seriesMasterId,start,organizer,attendees"},
         )
     except Exception as ex:
         status_code = getattr(ex, "status_code", 0)
@@ -1104,11 +1103,15 @@ def apply_calendar_cancel(
         delete_target = series_master_id
         is_series_master = True
 
-    # DELETE first — removes the event from the organizer's calendar and sends
-    # cancellation emails to attendees (when sendUpdates=All).
+    # Graph's /cancel is the only call that carries the organizer's note to
+    # attendees, and it also notifies them. A plain DELETE is used when nobody
+    # needs telling. Both remove the event from the organizer's calendar.
     delete_succeeded = False
     try:
-        gc.delete(f"/me/events/{_eid(delete_target)}?sendUpdates={normalized_send_updates}")
+        if _attendees_to_notify(event):
+            gc.post(f"/me/events/{_eid(delete_target)}/cancel", {"Comment": (comment or "").strip()})
+        else:
+            gc.delete(f"/me/events/{_eid(delete_target)}")
         delete_succeeded = True
     except Exception as ex:
         status_code = getattr(ex, "status_code", 0)
@@ -1119,18 +1122,9 @@ def apply_calendar_cancel(
         else:
             return {
                 "deleted": False,
-                "error": f"Unable to delete event: {ex}",
+                "error": f"Unable to cancel event: {ex}",
                 "subject": event.get("subject", ""),
             }
-
-    # If the caller included a comment, send a cancel notification so attendees
-    # see the reason.  This is best-effort — the event is already deleted above.
-    cancel_comment = (comment or "").strip()
-    if cancel_comment and delete_succeeded:
-        try:
-            gc.post(f"/me/events/{_eid(delete_target)}/cancel", {"Comment": cancel_comment})
-        except Exception:
-            pass  # event already deleted; cancel may 404 — that's fine
 
     # ── Verification ──────────────────────────────────────────────────
     # Confirm the event is actually gone before reporting success.
@@ -1142,7 +1136,7 @@ def apply_calendar_cancel(
         if remaining and not remaining.get("isCancelled", False):
             return {
                 "deleted": False,
-                "error": "Graph still shows this event as active after DELETE. Try again or cancel it manually in Outlook.",
+                "error": "Graph still shows this event as active after cancelling it. Try again or cancel it manually in Outlook.",
                 "subject": event.get("subject", ""),
             }
         if remaining and remaining.get("isCancelled", False):
