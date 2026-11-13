@@ -268,14 +268,17 @@ async def list_background_processes():
             "elapsed_s": round(time.time() - e.get("started_at", time.time())),
             "log_file": e.get("log_file", ""),
             "shell_used": e.get("shell_used", ""),
+            "url": getattr(popen, "url", None),
         })
     return {"processes": procs, "count": len(procs)}
 
 
-@router.post("/api/shell/background-processes/{pid}/stop")
+@router.post("/api/shell/background-processes/{pid}/stop", dependencies=[Depends(verify_csrf)])
 async def stop_background_process(pid: int):
     """Stop a specific background process by PID."""
-    from skills.shell_runner.tools import _tool_stop_shell_process
+    from skills.shell_runner.tools import _BG_REGISTRY, _tool_stop_shell_process
     import asyncio
+    if pid not in _BG_REGISTRY:
+        raise HTTPException(status_code=404, detail="Unknown background process")
     result = await asyncio.to_thread(_tool_stop_shell_process, pid)
     return result

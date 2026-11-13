@@ -82,7 +82,6 @@ POST /api/scheduler/jobs/{job_id}/pause
 POST /api/scheduler/jobs/{job_id}/resume
 POST /api/server/restart
 POST /api/server/stop
-POST /api/shell/background-processes/{pid}/stop
 POST /api/slack/channel-seen
 POST /api/slack/resolve-members
 POST /api/slack/users-seen
