@@ -137,7 +137,7 @@ def aigator_update_docx(req: AigatorDocxUpdateRequest):
 
 
 @router.post("/api/aigator/create-docx", dependencies=[Depends(verify_csrf)])
-async def aigator_create_docx(req: AigatorDocxCreateRequest):
+def aigator_create_docx(req: AigatorDocxCreateRequest):
     from skills.docx.tools import _tool_create_docx
 
     result = _tool_create_docx(

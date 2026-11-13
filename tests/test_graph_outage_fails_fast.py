@@ -18,8 +18,8 @@ GraphAPIError = gcm.GraphAPIError
 GraphClient = gcm.GraphClient
 
 
-def _response(status: int) -> httpx.Response:
-    return httpx.Response(status, request=httpx.Request("GET", gcm.GRAPH_BASE + "/x"))
+def _response(status: int, headers: dict | None = None) -> httpx.Response:
+    return httpx.Response(status, headers=headers, request=httpx.Request("GET", gcm.GRAPH_BASE + "/x"))
 
 
 class _Pool:
@@ -29,7 +29,8 @@ class _Pool:
 
     def request(self, method, url, **kw):
         self.calls += 1
-        return _response(self.statuses.pop(0) if self.statuses else 200)
+        self.last_kwargs = kw
+        return _response(self.statuses.pop(0) if self.statuses else 200, getattr(self, "headers", None))
 
 
 @pytest.fixture
@@ -126,3 +127,58 @@ def test_retries_stop_when_the_time_budget_is_spent(client, monkeypatch):
     with pytest.raises(GraphAPIError):
         client._request("GET", URL, label="inbox")
     assert pool.calls == 1
+
+
+def test_a_long_retry_after_is_not_slept_through(client, monkeypatch):
+    slept = []
+    monkeypatch.setattr(gcm.time, "sleep", slept.append)
+    pool = _Pool([429, 429, 429])
+    pool.headers = {"Retry-After": "300"}
+    _use(monkeypatch, pool)
+    with pytest.raises(GraphAPIError):
+        client._request("GET", URL, label="inbox")
+    assert pool.calls == 1
+    assert sum(slept) < gcm._RETRY_BUDGET_S
+
+
+def test_a_short_retry_after_is_still_honoured(client, monkeypatch):
+    slept = []
+    monkeypatch.setattr(gcm.time, "sleep", slept.append)
+    pool = _Pool([429])
+    pool.headers = {"Retry-After": "2"}
+    _use(monkeypatch, pool)
+    client._request("GET", URL, label="inbox")
+    assert pool.calls == 2
+    assert slept == [2]
+
+
+def test_reads_use_a_short_read_timeout_and_writes_keep_the_client_default(client, monkeypatch):
+    pool = _Pool([])
+    _use(monkeypatch, pool)
+    client._request("GET", URL, label="inbox")
+    assert pool.last_kwargs["timeout"].read == gcm._READ_TIMEOUT_S
+    client._request("POST", URL, label="send")
+    assert pool.last_kwargs["timeout"] is httpx.USE_CLIENT_DEFAULT
+
+
+def test_requests_beyond_the_in_flight_cap_are_refused_instead_of_queued(client, monkeypatch):
+    pool = _Pool([])
+    _use(monkeypatch, pool)
+    held = [gcm._gate.semaphore.acquire() for _ in range(gcm._MAX_IN_FLIGHT)]
+    try:
+        with pytest.raises(GraphAPIError) as err:
+            client._request("GET", URL, label="inbox")
+    finally:
+        for _ in held:
+            gcm._gate.semaphore.release()
+    assert err.value.status_code == 503
+    assert pool.calls == 0
+    client._request("GET", URL, label="inbox")
+    assert pool.calls == 1
+
+
+def test_every_copy_of_the_module_shares_one_in_flight_cap():
+    other_spec = importlib.util.spec_from_file_location("graph_client_second_copy", SRC)
+    other = importlib.util.module_from_spec(other_spec)
+    other_spec.loader.exec_module(other)
+    assert other._gate is gcm._gate

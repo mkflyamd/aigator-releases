@@ -2459,7 +2459,7 @@ async def tp_teams_proxy_image(url: str):
         skype_token_val: str = ""
         try:
             _rc = _get_skype_module()
-            skype_token_val, _ = _rc.get_auth()
+            skype_token_val, _ = await asyncio.to_thread(_rc.get_auth)
         except Exception:
             pass
         if skype_token_val:
@@ -3850,7 +3850,7 @@ async def tp_teams_send_message(req: TeamsSendMessageRequest):
 
     try:
         _rc = _get_skype_module()
-        skype_token, messaging_service = _rc.get_auth()
+        skype_token, messaging_service = await asyncio.to_thread(_rc.get_auth)
         if not skype_token:
             raise HTTPException(
                 status_code=503,

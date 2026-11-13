@@ -2,8 +2,9 @@
 
 Microsoft Graph calls (sync httpx client, 60s read timeout, retries with time.sleep) must run in
 FastAPI's threadpool: make the route a plain `def`, or wrap the call in `await asyncio.to_thread(...)`.
-This scan flags any `async def` in web/routes/ that calls a Graph client, a known-blocking HTTP
-primitive, or a sync function that does (followed by plain-name calls across web/).
+This scan flags any `async def` in web/routes/ and web/app.py that calls a Graph client, a token
+fetch, a model call, a subprocess wait, a known-blocking HTTP primitive, a handler picked out of a
+`*HANDLERS` dict, or a sync function that does (followed by plain-name calls across web/).
 """
 
 import ast
@@ -11,10 +12,12 @@ import builtins
 import pathlib
 
 WEB = pathlib.Path(__file__).parent.parent / "web"
-ROUTES = WEB / "routes"
+SCANNED = [*sorted((WEB / "routes").glob("*.py")), WEB / "app.py"]
 
-CLIENT_FACTORIES = {"get_graph_client", "get_cal_client", "get_skill_client", "GraphClient"}
+CLIENT_FACTORIES = {"get_graph_client", "get_cal_client", "get_skill_client", "make_teams_gc", "GraphClient"}
+BLOCKING_ATTR_CALLS = {"get_auth", "get_teams_token", "simple_complete"}
 BLOCKING_MODULE_CALLS = {
+    "subprocess": {"run", "call", "check_call", "check_output"},
     "requests": {"get", "post", "put", "patch", "delete", "head", "request"},
     "httpx": {"get", "post", "put", "patch", "delete", "head", "request", "stream"},
     "urllib.request": {"urlopen"},
@@ -74,16 +77,43 @@ def _client_names(func):
     return names
 
 
+def _handler_names(func):
+    """Local names bound to a handler looked up in a `*HANDLERS` dict (`h = TOOL_HANDLERS.get(name)`)."""
+    names = set()
+    for node in _own_nodes(func):
+        if not isinstance(node, ast.Assign):
+            continue
+        value = node.value
+        if isinstance(value, ast.Call):
+            value = value.func.value if isinstance(value.func, ast.Attribute) else None
+        elif isinstance(value, ast.Subscript):
+            value = value.value
+        if value is not None and "handlers" in (_dotted(value) or "").lower():
+            names.update(t.id for t in node.targets if isinstance(t, ast.Name))
+    return names
+
+
 def _direct_blocking(func, aliases=None):
     """Return a description of each blocking call made directly by `func`, or []."""
     aliases = aliases or {}
     clients = _client_names(func)
+    handlers = _handler_names(func)
     found = []
     for node in _own_nodes(func):
         if not isinstance(node, ast.Call):
             continue
         target = node.func
         dotted = _dotted(target)
+        called = target.attr if isinstance(target, ast.Attribute) else getattr(target, "id", "")
+        if called in BLOCKING_ATTR_CALLS:
+            found.append((node.lineno, dotted or called))
+            continue
+        if called in ("wait", "communicate") and "proc" in (_dotted(target.value) or "").lower():
+            found.append((node.lineno, f"{dotted} (waits on a subprocess)"))
+            continue
+        if isinstance(target, ast.Name) and target.id in handlers:
+            found.append((node.lineno, f"{target.id}() (a sync handler picked from a dict)"))
+            continue
         if dotted:
             resolved = _resolve(dotted, aliases)
             module, _, attr = resolved.rpartition(".")
@@ -142,7 +172,7 @@ def _sync_blocking_functions():
 def _violations():
     blocking = _sync_blocking_functions()
     out = []
-    for path in sorted(ROUTES.glob("*.py")):
+    for path in SCANNED:
         tree = _parse(path)
         file_aliases = _aliases(tree)
         for node in ast.walk(tree):
@@ -152,6 +182,9 @@ def _violations():
                 out.append(f"{path.name}:{lineno} {node.name} calls {what}")
             local_defs = {
                 n.name for n in ast.walk(node) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n is not node
+            }
+            local_defs |= {
+                t.id for n in _own_nodes(node) if isinstance(n, ast.Assign) for t in n.targets if isinstance(t, ast.Name)
             }
             for call in _own_nodes(node):
                 if (
@@ -199,6 +232,33 @@ def test_scan_resolves_import_aliases():
     assert _direct_blocking(funcs["aliased"], aliases)
     assert _direct_blocking(funcs["bare"], aliases)
     assert not _direct_blocking(funcs["clean"], aliases)
+
+
+def test_scan_sees_token_fetches_model_calls_subprocesses_and_dict_dispatch():
+    src = "\n".join(
+        [
+            "async def token():",
+            "    skype_token, _ = _rc.get_auth()",
+            "async def model():",
+            "    provider.simple_complete('hi')",
+            "async def run():",
+            "    subprocess.run(['gh'])",
+            "async def stop():",
+            "    _ffmpeg_proc.wait(timeout=5)",
+            "async def dispatch():",
+            "    handler = TOOL_HANDLERS.get(name)",
+            "    return handler(**args)",
+            "async def clean():",
+            "    await asyncio.to_thread(_rc.get_auth)",
+            "    await asyncio.sleep(1)",
+            "    await event.wait()",
+        ]
+    )
+    tree = ast.parse(src)
+    funcs = {n.name: n for n in tree.body}
+    for name in ("token", "model", "run", "stop", "dispatch"):
+        assert _direct_blocking(funcs[name], _aliases(tree)), name
+    assert not _direct_blocking(funcs["clean"], _aliases(tree))
 
 
 def test_async_routes_do_not_block_the_event_loop():

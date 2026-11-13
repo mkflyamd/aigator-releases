@@ -7673,8 +7673,9 @@ deviceStartBtn.addEventListener('click', async () => {
 });
 
 function _pollDeviceCode(deviceCode, url) {
-  clearInterval(_devicePollTimer);
-  _devicePollTimer = setInterval(async () => {
+  clearTimeout(_devicePollTimer);
+  const pollOnce = async () => {
+    let keepPolling = true;
     try {
       const res = await fetch('/api/auth/device/poll', {
         method: 'POST',
@@ -7683,7 +7684,7 @@ function _pollDeviceCode(deviceCode, url) {
       });
       const d = await res.json();
       if (d.ok) {
-        clearInterval(_devicePollTimer);
+        keepPolling = false;
         deviceCodeBox.classList.add('hidden');
         deviceMsg.textContent = '✓ Signed in successfully';
         deviceMsg.style.color = 'var(--success)';
@@ -7698,7 +7699,7 @@ function _pollDeviceCode(deviceCode, url) {
           _showConnectivityToast('Microsoft 365 sign-in successful', 'success');
         }
       } else if (!d.pending) {
-        clearInterval(_devicePollTimer);
+        keepPolling = false;
         deviceCodeBox.classList.add('hidden');
         deviceMsg.textContent = '✗ ' + (d.error || 'Sign-in failed');
         deviceMsg.style.color = 'var(--danger)';
@@ -7710,7 +7711,9 @@ function _pollDeviceCode(deviceCode, url) {
     } catch {
       /* network hiccup, keep polling */
     }
-  }, 5000);
+    if (keepPolling) _devicePollTimer = setTimeout(pollOnce, 5000);
+  };
+  _devicePollTimer = setTimeout(pollOnce, 5000);
 }
 
 /* ── Slack OAuth Sign-in ─────────────────────────────── */

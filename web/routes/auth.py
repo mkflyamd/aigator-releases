@@ -408,7 +408,9 @@ def device_auth_poll(req: DeviceCodePollRequest):
             except Exception as _e:
                 _logger.warning("Could not read stored token after auth: %s", _e)
             return {"ok": True, "message": result["message"]}
-        return {"ok": False, "pending": True}
+        if result.get("status") == "pending":
+            return {"ok": False, "pending": True}
+        return {"ok": False, "pending": False, "error": result.get("error", "Sign-in failed")}
     except Exception as e:
         msg = str(e)
         if "authorization_pending" in msg:
@@ -420,7 +422,7 @@ def device_auth_poll(req: DeviceCodePollRequest):
 
 
 @router.post("/api/github/tool")
-async def github_tool(req: GithubToolRequest):
+def github_tool(req: GithubToolRequest):
     """Direct tool dispatch for GitHub pane -- bypasses the full agentic loop."""
     from skills.github.tools import TOOL_HANDLERS as _gh_handlers
 

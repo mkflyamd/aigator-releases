@@ -203,9 +203,14 @@ def tp_email_inbox(
 ):
     """Inbox / Sent / Drafts list with filter, pagination, and optional delta sync (inbox only)."""
     if delta and folder.lower() == "inbox":
-        # Routes run in the threadpool; serialize the read-merge-write of the shared delta state.
-        with _EMAIL_DELTA_LOCK:
-            return _email_inbox(skip, top, filter, delta, folder)
+        # Routes run in the threadpool, so only one delta sync at a time may touch the shared delta
+        # state. A poll that arrives meanwhile gets a plain fetch instead of queueing behind the lock.
+        if _EMAIL_DELTA_LOCK.acquire(blocking=False):
+            try:
+                return _email_inbox(skip, top, filter, delta, folder)
+            finally:
+                _EMAIL_DELTA_LOCK.release()
+        return _email_inbox(skip, top, filter, False, folder)
     return _email_inbox(skip, top, filter, delta, folder)
 
 
