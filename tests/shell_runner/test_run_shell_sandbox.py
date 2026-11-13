@@ -1,4 +1,7 @@
+import json
 import os
+import subprocess
+import sys
 import types
 from pathlib import Path
 
@@ -6,7 +9,7 @@ import pytest
 
 import config
 import sandbox
-from sandbox import approvals, saved_permissions, task_grants
+from sandbox import approvals, runtime_copy, saved_permissions, task_grants
 from sandbox.policy import Policy
 from skills.code_runner import tools as cr
 from skills.shell_runner import tools as sh
@@ -137,9 +140,171 @@ def test_policy_disabled_and_network_deny(env):
     assert "error" in _run(network_hosts=["a.example:443"]) and env.fake.requests == []
 
 
-def test_background_refused_when_enforced(env):
-    env.mp.setattr(sh, "_spawn_background", lambda *a, **k: pytest.fail("must not spawn"))
-    assert "error" in _run(background=True) and env.fake.requests == []
+class _FakeForwarded:
+    def __init__(self, proc, log_file, on_close=None):
+        self.pid = 4242
+        self.url = "http://127.0.0.1:3030"
+        self.terminated = False
+
+    def start(self):
+        return self
+
+    def wait_ready(self, timeout):
+        return True
+
+    def poll(self):
+        return None
+
+    def terminate(self):
+        self.terminated = True
+
+
+@pytest.fixture
+def bg(env):
+    started = []
+
+    def fake_start(request):
+        started.append(request)
+        return types.SimpleNamespace(pid=4242, terminate=lambda: None)
+
+    relay = env.tmp / "relay" / "relay.py"
+    env.mp.setattr(sh, "_bg_sandbox_supported", lambda: True)
+    env.mp.setattr(sh, "ForwardedProcess", _FakeForwarded)
+    env.mp.setattr(sh, "_bg_log_path", lambda: env.tmp / "bg.log")
+    env.mp.setattr(sandbox, "start_sandboxed", fake_start)
+    env.mp.setattr(sandbox, "container_readable", lambda p: True)
+    env.mp.setattr(runtime_copy, "readable_copies", lambda *a, **k: [])
+    env.mp.setattr(runtime_copy, "install_relay", lambda root=None: relay)
+    yield types.SimpleNamespace(started=started, relay=relay)
+    sh._BG_REGISTRY.pop(4242, None)
+
+
+def test_background_refused_where_the_platform_cannot_stream(env):
+    env.mp.setattr(sh, "_bg_sandbox_supported", lambda: False)
+    out = _run(background=True)
+    assert sh._BACKGROUND_REFUSED_MSG in out["error"] and env.fake.requests == []
+
+
+def test_background_asks_first_and_starts_nothing_until_approved(env, bg):
+    proj = _project(env)
+    first = _run("npm run dev", background=True, cwd=str(proj))
+    assert first["approval_required"] is True
+    assert first["_sandbox_approval"]["background"] is True
+    assert bg.started == []
+    approvals.decide(first["request_id"], "tab", True)
+    out = _run("npm run dev", background=True, cwd=str(proj))
+    assert out["url"] == "http://127.0.0.1:3030" and out["pid"] == 4242 and out["background"] is True
+    assert out["_dev_server"] == {"pid": 4242, "url": "http://127.0.0.1:3030", "command": "npm run dev"}
+    assert out["sandbox"] == "enforced" and "_sandbox_telemetry" in out
+    assert sh._BG_REGISTRY[4242]["sandboxed"] is True
+    request = bg.started[0]
+    assert json.loads(request.env["AIGATOR_RELAY_COMMAND"])[-1] == "npm run dev"
+    assert request.cwd == proj and request.network is False and request.timeout == 0
+    assert bg.relay.parent in request.runtime_paths
+    assert env.fake.requests == []
+
+
+def test_background_unattended_is_refused(env, bg):
+    out = _run("npm run dev", background=True, _context_id="")
+    assert "cannot run unattended" in out["error"] and bg.started == []
+
+
+def test_background_cap_is_enforced(env, bg):
+    sh._BG_REGISTRY[7001] = {"popen": _FakeForwarded(None, ""), "command": "x", "started_at": 0, "log_file": ""}
+    try:
+        env.mp.setattr(sh, "_MAX_BG_PROCS", 1)
+        proj = _project(env)
+        first = _run("npm run dev", background=True, cwd=str(proj))
+        approvals.decide(first["request_id"], "tab", True)
+        out = _run("npm run dev", background=True, cwd=str(proj))
+        assert out["error"] == "BACKGROUND_PROCESS_CAP_REACHED" and bg.started == []
+    finally:
+        sh._BG_REGISTRY.pop(7001, None)
+
+
+def test_background_runtime_copy_failure_runs_nothing(env, bg):
+    def boom(*a, **k):
+        raise runtime_copy.RuntimeCopyError("Node is too large to copy.")
+
+    env.mp.setattr(runtime_copy, "readable_copies", boom)
+    proj = _project(env)
+    first = _run("npm run dev", background=True, cwd=str(proj))
+    approvals.decide(first["request_id"], "tab", True)
+    out = _run("npm run dev", background=True, cwd=str(proj))
+    assert "Node is too large to copy." in out["error"] and bg.started == []
+
+
+def test_background_without_a_url_yet_says_so(env, bg):
+    env.mp.setattr(_FakeForwarded, "wait_ready", lambda self, timeout: False)
+    proj = _project(env)
+    first = _run("npm run dev", background=True, cwd=str(proj))
+    approvals.decide(first["request_id"], "tab", True)
+    out = _run("npm run dev", background=True, cwd=str(proj))
+    assert "url" not in out and "no URL yet" in out["message"] and out["pid"] == 4242
+    assert out["_dev_server"]["url"] is None
+
+
+def test_background_that_exits_before_printing_an_address_is_an_error(env, bg):
+    env.mp.setattr(_FakeForwarded, "wait_ready", lambda self, timeout: False)
+    env.mp.setattr(_FakeForwarded, "poll", lambda self: 1)
+    (env.tmp / "bg.log").write_text("boom: port in use", encoding="utf-8")
+    proj = _project(env)
+    first = _run("npm run dev", background=True, cwd=str(proj))
+    approvals.decide(first["request_id"], "tab", True)
+    out = _run("npm run dev", background=True, cwd=str(proj))
+    assert "exited with code 1" in out["error"] and "port in use" in out["error"]
+
+
+def test_stop_refuses_a_pid_that_was_not_started_by_run_shell():
+    out = sh._tool_stop_shell_process(999999)
+    assert out["stopped"] is False and "was not started by run_shell" in out["message"]
+
+
+def test_stop_terminates_a_sandboxed_entry():
+    fake = _FakeForwarded(None, "")
+    sh._BG_REGISTRY[4243] = {"popen": fake, "command": "npm run dev", "sandboxed": True}
+    try:
+        out = sh._tool_stop_shell_process(4243)
+        assert out["stopped"] is True and fake.terminated is True
+    finally:
+        sh._BG_REGISTRY.pop(4243, None)
+
+
+def _sleeper():
+    return subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+
+
+def _record(pidfile, pid, command):
+    pidfile.write_text(json.dumps({str(pid): {"command": command, "log_file": "", "started_at": 0}}))
+
+
+def test_orphan_cleanup_leaves_a_pid_alone_when_the_command_does_not_match(env):
+    proc = _sleeper()
+    try:
+        pidfile = env.tmp / "bg-pids.json"
+        env.mp.setattr(sh, "_bg_pid_file", lambda: pidfile)
+        _record(pidfile, proc.pid, "npm run dev")
+        sh.cleanup_orphan_bg_procs()
+        with pytest.raises(subprocess.TimeoutExpired):
+            proc.wait(timeout=2)
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+def test_orphan_cleanup_kills_a_pid_whose_command_matches(env):
+    proc = _sleeper()
+    try:
+        pidfile = env.tmp / "bg-pids.json"
+        env.mp.setattr(sh, "_bg_pid_file", lambda: pidfile)
+        _record(pidfile, proc.pid, '-c "import time; time.sleep(30)"')
+        sh.cleanup_orphan_bg_procs()
+        proc.wait(timeout=10)
+        assert proc.poll() is not None
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
 
 
 def test_delete_still_blocked_first(env):

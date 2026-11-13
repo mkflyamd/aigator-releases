@@ -2,6 +2,7 @@
 
 import functools
 import itertools
+import json
 import os
 import re
 import shutil
@@ -14,7 +15,8 @@ from uuid import uuid4
 
 import sandbox
 from sandbox import approvals as sandbox_approvals
-from sandbox import saved_permissions, task_grants
+from sandbox import runtime_copy, saved_permissions, task_grants
+from sandbox.forward import ForwardedProcess
 from sandbox.command_programs import programs_in
 from sandbox.paths import PathNotGrantable, is_within, normalize_grant_paths
 from sandbox.policy import load_policy
@@ -235,6 +237,11 @@ def _remove_bg_pid(pid: int):
     except Exception:
         pass
 
+
+def _norm_cmd(text: str) -> str:
+    return re.sub(r"[\s\"\\']+", "", text or "")
+
+
 def cleanup_orphan_bg_procs():
     """Called at server startup — kill any background PIDs that survived a restart."""
     import json, psutil
@@ -249,6 +256,9 @@ def cleanup_orphan_bg_procs():
         pid = int(pid_str)
         try:
             proc = psutil.Process(pid)
+            recorded = _norm_cmd(info.get("command", ""))
+            if not recorded or recorded not in _norm_cmd(" ".join(proc.cmdline())):
+                continue
             # Only kill if it's actually still running and looks like a bg task
             if proc.is_running() and proc.status() != psutil.STATUS_ZOMBIE:
                 import logging
@@ -317,6 +327,23 @@ _MAX_BG_PROCS = 10
 _BG_SPAWN_LOCK = threading.Lock()
 
 
+def _bg_cap_error(shell_used: str) -> dict | None:
+    running_procs = [
+        {"pid": pid, "command": e.get("command", "")[:80],
+         "started_at": e.get("started_at", 0), "log_file": e.get("log_file", "")}
+        for pid, e in _BG_REGISTRY.items()
+        if e.get("popen") and e["popen"].poll() is None and not e.get("stopped")
+    ]
+    if len(running_procs) < _MAX_BG_PROCS:
+        return None
+    return {
+        "error": "BACKGROUND_PROCESS_CAP_REACHED",
+        "cap": _MAX_BG_PROCS,
+        "running": running_procs,
+        "background": True, "pid": 0, "log_file": "", "shell_used": shell_used,
+    }
+
+
 def _spawn_background(
     command: str, argv_prefix: list, shell_used: str, cwd_path: str
 ) -> dict:
@@ -328,20 +355,9 @@ def _spawn_background(
 
 def _spawn_background_locked(command: str, argv_prefix: list, shell_used: str, cwd_path: str) -> dict:
     """Actual spawn logic — must only be called while holding _BG_SPAWN_LOCK."""
-    # Count currently running background processes
-    running_procs = [
-        {"pid": pid, "command": e.get("command", "")[:80],
-         "started_at": e.get("started_at", 0), "log_file": e.get("log_file", "")}
-        for pid, e in _BG_REGISTRY.items()
-        if e.get("popen") and e["popen"].poll() is None and not e.get("stopped")
-    ]
-    if len(running_procs) >= _MAX_BG_PROCS:
-        return {
-            "error": "BACKGROUND_PROCESS_CAP_REACHED",
-            "cap": _MAX_BG_PROCS,
-            "running": running_procs,
-            "background": True, "pid": 0, "log_file": "", "shell_used": shell_used,
-        }
+    capped = _bg_cap_error(shell_used)
+    if capped:
+        return capped
     try:
         log_path = _bg_log_path()
     except OSError as exc:
@@ -490,6 +506,16 @@ def _tool_stop_shell_process(pid: int) -> dict:
     server). Never raises; every psutil call is guarded."""
     pid = int(pid)
     entry = _BG_REGISTRY.get(pid)
+    if entry is None:
+        return {
+            "stopped": False,
+            "pid": pid,
+            "message": f"Process {pid} was not started by run_shell(background=true), so it will not be stopped.",
+        }
+    if entry.get("sandboxed"):
+        entry["popen"].terminate()
+        entry["stopped"] = True
+        return {"stopped": True, "pid": pid, "message": f"Stopped process {pid} and its child processes."}
 
     try:
         import psutil
@@ -571,6 +597,17 @@ _BACKGROUND_REFUSED_MSG = (
     "Background commands are not available while the command sandbox is on. Run the command in the "
     "foreground with a timeout, or ask the user to start it themselves."
 )
+_BG_READY_TIMEOUT = 30
+_BG_UNATTENDED_MSG = (
+    "A background command needs a person in a chat tab to approve it and to use the forwarded port, so it "
+    "cannot run unattended. Do not retry."
+)
+
+
+def _bg_sandbox_supported() -> bool:
+    return os.name == "nt"
+
+
 _SHELL_APPROVAL_MSG = (
     "The user must approve this access first; an approval card is now shown in the chat. Tell the user "
     "briefly what access you asked for and why, then stop and wait. When the user says they approved, "
@@ -729,8 +766,10 @@ def _with_shell_hint(cr, stderr: str) -> str:
 
 
 def _run_sandboxed(cr, command, shell, cwd, timeout, background, requested, policy, context_id) -> dict:
-    if background:
+    if background and not _bg_sandbox_supported():
         return _shell_error(_BACKGROUND_REFUSED_MSG)
+    if background and not context_id:
+        return _shell_error(_BG_UNATTENDED_MSG)
     picked = _sandbox_shell(shell)
     if isinstance(picked, str):
         return _shell_error(picked, shell)
@@ -747,13 +786,24 @@ def _run_sandboxed(cr, command, shell, cwd, timeout, background, requested, poli
     if project is not None and project not in write_paths:
         write_paths = [*write_paths, project]
 
-    gate = _shell_gate(cr, command, read_paths, write_paths, hosts, context_id, policy)
+    gate = _shell_gate(cr, command, read_paths, write_paths, hosts, context_id, policy, background=background)
     if isinstance(gate, dict):
         return gate
     approval = gate
 
     npm_root = _npm_global_root()
     runtime_paths = cr._runtime_paths(None, npm_root)
+    copies: list = []
+    relay = None
+    if background:
+        try:
+            runtime_paths = [p for p in runtime_paths if sandbox.container_readable(p)]
+            copies = runtime_copy.readable_copies(
+                command, os.environ.get("PATH", ""), sandbox.container_readable, runtime_copy.runtime_dir())
+            relay = runtime_copy.install_relay()
+        except runtime_copy.RuntimeCopyError as exc:
+            return _shell_error(f"{exc} Nothing was run.", shell_used)
+        runtime_paths = [*runtime_paths, *copies, relay.parent]
     if any(cr._runtime_path_refused(p) for p in runtime_paths):
         return _shell_error("The command sandbox refused to start because a runtime folder is not allowed. "
                             "Nothing was run. Tell the user; do not retry automatically.", shell_used)
@@ -779,6 +829,15 @@ def _run_sandboxed(cr, command, shell, cwd, timeout, background, requested, poli
     telemetry = sandbox.telemetry_record(run_id, "run_shell", "enforced", bool(hosts),
                                          len(read_paths), len(write_paths), approval)
     tags = {"sandbox": "enforced", "_sandbox_telemetry": telemetry}
+    if background:
+        relay_env = sandbox.build_env(os.environ, env_dir, npm_root, path_prepend=[*copies, *cr._skill_bin_dirs()])
+        relay_env["AIGATOR_RELAY_COMMAND"] = json.dumps(argv_prefix + [command])
+        request = sandbox.SandboxRequest(
+            argv=cr._python_command(relay), cwd=run_cwd, env=relay_env, runtime_paths=runtime_paths,
+            read_paths=list(read_paths), write_paths=sandbox_write, network=bool(hosts), timeout=0,
+            scratch_path=scratch,
+        )
+        return _start_background(cr, request, command, shell_used, env_dir, in_scratch, tags)
     watch_dirs = watched_output_dirs(str(run_cwd))
     before = snapshot_outputs(watch_dirs)
     request = sandbox.SandboxRequest(
@@ -815,6 +874,59 @@ def _run_sandboxed(cr, command, shell, cwd, timeout, background, requested, poli
         reason = " ".join(tail[-3:]) if tail else ""
         result["error"] = (f"Command exited with code {res.returncode}: {reason}" if reason
                            else f"Command exited with code {res.returncode}")
+    return result
+
+
+def _start_background(cr, request, command, shell_used, env_dir, in_scratch, tags) -> dict:
+    cleanup = None if in_scratch else (lambda: shutil.rmtree(env_dir, ignore_errors=True))
+    handed_off = False
+    try:
+        with _BG_SPAWN_LOCK:
+            capped = _bg_cap_error(shell_used)
+            if capped:
+                return {**capped, **tags}
+            try:
+                log_path = _bg_log_path()
+            except OSError as exc:
+                return _shell_error(f"Could not prepare background log dir: {exc}", shell_used,
+                                    background=True, pid=0, log_file="", **tags)
+            try:
+                proc = sandbox.start_sandboxed(request)
+            except sandbox.SandboxUnavailable as exc:
+                return _shell_error(cr._launch_refusal_message(exc), shell_used, **tags)
+            except sandbox.SandboxRunError:
+                return _shell_error(cr._RUN_ERROR_MSG, shell_used, **tags)
+            except (NotImplementedError, OSError) as exc:
+                return _shell_error(f"Could not start the command in the sandbox ({type(exc).__name__}). "
+                                    "Nothing was run.", shell_used, **tags)
+            try:
+                fp = ForwardedProcess(proc, str(log_path), on_close=cleanup).start()
+            except OSError as exc:
+                proc.terminate()
+                return _shell_error(f"Could not open background log file: {exc}", shell_used,
+                                    background=True, pid=0, log_file=str(log_path), **tags)
+            handed_off = True
+            _BG_REGISTRY[fp.pid] = {
+                "popen": fp, "command": command, "log_file": str(log_path), "cwd": str(request.cwd),
+                "shell_used": shell_used, "started_at": time.time(), "sandboxed": True,
+            }
+    finally:
+        if cleanup and not handed_off:
+            cleanup()
+
+    result = {"background": True, "pid": fp.pid, "log_file": str(log_path), "shell_used": shell_used, **tags}
+    if fp.wait_ready(_BG_READY_TIMEOUT):
+        result["url"] = fp.url
+        result["_dev_server"] = {"pid": fp.pid, "url": fp.url, "command": command[:200]}
+        result["message"] = (f"Started in the sandbox and available at {fp.url}. Tell the user this address. "
+                             f"Use stop_shell_process({fp.pid}) to stop it.")
+    elif fp.poll() is None:
+        result["_dev_server"] = {"pid": fp.pid, "url": None, "command": command[:200]}
+        result["message"] = (f"Started in the sandbox (pid {fp.pid}), no URL yet. "
+                             f"Use check_shell_process({fp.pid}).")
+    else:
+        tail = _read_log_tail(str(log_path))
+        result["error"] = f"The command exited with code {fp.poll()} before it printed a local address. {tail}".strip()
     return result
 
 
@@ -1004,14 +1116,16 @@ TOOL_DEFS = [
             "To work in a project folder (cwd), read or write other folders, or reach the network, pass cwd, "
             "extra_read_paths, extra_write_paths or network_hosts: the call returns approval_required and the user "
             "approves in the chat; call again with exactly the same values only after the user says they approved. "
-            "background=true is not available with the sandbox on. "
-            "Use file_ops tools for simple read/write/list — use run_shell when you need a full command pipeline. "
-            "Only when the sandbox is off: for a long-running process that does not exit on its own — an LLM "
+            "Inspect a project with list_dir, read_file and grep_files and change it with write_file or edit_file; "
+            "use run_shell when you need a full command pipeline. "
+            "For a long-running process that does not exit on its own — an LLM "
             'inference server, a dev server (`npm run dev`), a foreground `docker run`, or `ssh host "<server>"` — '
             "set background=true. It returns "
             "immediately with a pid + log_file instead of blocking until timeout. Then use check_shell_process(pid) "
             "to confirm it started (e.g. look for a 'listening on port' line in log_tail) and stop_shell_process(pid) "
-            "to stop it."
+            "to stop it. On Windows with the sandbox on, background=true runs the command in the sandbox after the "
+            "user approves it, forwards the first localhost port the command prints, and returns url once the "
+            "server prints its address (it waits up to 30s). Tell the user the url so they can open it."
         ),
         "input_schema": {
             "type": "object",
@@ -1036,9 +1150,9 @@ TOOL_DEFS = [
                 "background": {
                     "type": "boolean",
                     "description": (
-                        "Only when the sandbox is off (refused with the sandbox on): run the command "
-                        "detached/non-blocking instead of waiting for it to exit. Use for servers "
-                        "and other long-running processes. Returns immediately with {pid, log_file} — poll with "
+                        "Run the command detached/non-blocking instead of waiting for it to exit. Use for servers "
+                        "and other long-running processes. With the sandbox on (Windows) it needs a person in a "
+                        "chat tab, shows the approval card, and returns {pid, log_file, url}. Poll with "
                         "check_shell_process, stop with stop_shell_process. Default false."
                     ),
                 },
