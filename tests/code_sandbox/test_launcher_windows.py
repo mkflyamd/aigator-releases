@@ -677,7 +677,7 @@ class TestRealAppContainer:
         )
         res = windows_container.launch(SandboxRequest(
             argv=[node, str(run / "probe.js")], cwd=run, env=build_env(os.environ, run, None),
-            runtime_paths=[Path(node).parent], read_paths=[], write_paths=[], network=False, timeout=60,
+            runtime_paths=[Path(node).parent], read_paths=[], write_paths=[run], network=False, timeout=60,
         ))
         out = res.stdout
         assert not res.timed_out, "a piped child spawn hung the process"
