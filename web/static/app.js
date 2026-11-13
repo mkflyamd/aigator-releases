@@ -15455,12 +15455,29 @@ fetch('/api/teams/chats')
     return d.innerHTML;
   }
 
+  // A slow backend must not stack polls: the browser allows ~6 connections per host,
+  // and hung polls would starve the chat stream.
+  function _pollOnce(fn) {
+    let running = false;
+    return async () => {
+      if (running) return;
+      running = true;
+      try {
+        await fn();
+      } finally {
+        running = false;
+      }
+    };
+  }
+
   // ── Teams notification polling (every 60s, global) ──
   window.window._teamsNotifBackoff = false;
-  setInterval(async () => {
+  setInterval(_pollOnce(async () => {
     if (window._teamsNotifBackoff) return; // Skip while auth is broken
     try {
-      const res = await fetch('/api/teams/chats?delta=true');
+      const res = await fetch('/api/teams/chats?delta=true', {
+        signal: AbortSignal.timeout(15000),
+      });
       if (res.status === 401 || res.status === 403) {
         window._teamsNotifBackoff = true; // Stop polling until token is refreshed
         console.warn('[notif] Teams auth failed — pausing notifications until token refresh');
@@ -15508,12 +15525,14 @@ fetch('/api/teams/chats')
         }
       });
     } catch {}
-  }, 60000);
+  }), 60000);
 
   // ── Email notification polling (every 90s, global) ──
-  setInterval(async () => {
+  setInterval(_pollOnce(async () => {
     try {
-      const res = await fetch('/api/email/inbox?top=10&delta=true');
+      const res = await fetch('/api/email/inbox?top=10&delta=true', {
+        signal: AbortSignal.timeout(15000),
+      });
       if (!res.ok) return;
       const data = await res.json();
       const messages = data.messages || [];
@@ -15541,7 +15560,7 @@ fetch('/api/teams/chats')
       // Update known set
       _lastEmailUnread = new Set(messages.filter((m) => !m.is_read).map((m) => m.id));
     } catch {}
-  }, 90000);
+  }), 90000);
 })();
 
 /* ── Notification SSE subscription ─────────────────── */
