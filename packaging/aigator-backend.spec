@@ -14,6 +14,8 @@ datas = [
     (str(web / "dictation" / "models.json"), "dictation"),
     (str(root / "tray" / "aigator_icon.png"), "tray"),
     (str(root / "version.txt"), "."),
+    (str(web / "sandbox" / "relay.py"), "sandbox"),
+    (str(web / "sandbox" / "wire.py"), "sandbox"),
 ]
 hiddenimports = ["dictation.faster_whisper_engine"]
 binaries = []
@@ -56,6 +58,7 @@ hiddenimports += ["httpx_sse", "sse_starlette", "secure_store"]
 hiddenimports += [
     "sandbox", "sandbox.policy", "sandbox.paths", "sandbox.approvals",
     "sandbox.launcher_windows", "sandbox.launcher_macos", "sandbox.launcher_linux",
+    "sandbox.wire", "sandbox.forward", "sandbox.runtime_copy",
 ]
 if sys.platform != "win32":
     from PyInstaller.utils.hooks import copy_metadata

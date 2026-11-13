@@ -407,3 +407,17 @@ def test_linux_deb_depends_on_bubblewrap_and_docs_explain_it():
     from web.sandbox.launcher_linux import BWRAP_BLOCKED
 
     assert "Linux: bubblewrap" in BWRAP_BLOCKED
+
+
+def test_packaged_backend_ships_the_sandbox_relay_and_docs_match():
+    spec = (ROOT / "packaging" / "aigator-backend.spec").read_text(encoding="utf-8")
+    for name in ("relay.py", "wire.py"):
+        assert f'(str(web / "sandbox" / "{name}"), "sandbox")' in spec
+    for module in ("sandbox.wire", "sandbox.forward", "sandbox.runtime_copy"):
+        assert f'"{module}"' in spec
+
+    build = (ROOT / "docs" / "BUILD_INSTRUCTIONS.md").read_text(encoding="utf-8")
+    threat = (ROOT / "docs" / "security" / "threatmodel-remediation.md").read_text(encoding="utf-8")
+    assert "is refused while the sandbox is enforced" not in build
+    assert "background commands are refused" not in threat
+    assert "forwards one loopback port" in threat
