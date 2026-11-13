@@ -74,7 +74,7 @@ def _words(segment: str) -> list[str]:
 
 
 def _is_bare(name: str) -> bool:
-    return bool(name) and name not in (".", "..") and not any(c in name for c in "/\:")
+    return bool(name) and name not in (".", "..") and not any(c in name for c in r"/\:")
 
 
 def tool_names(command: str) -> list[str]:

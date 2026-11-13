@@ -40,7 +40,7 @@ def test_unknown_program_is_skipped(tmp_path):
     ("npx vite", ["npx", "node"]),
     ("npm i && npm run dev", ["npm", "node"]),
     ('"python" -m http.server', ["python"]),
-    ('"C:\Program Files\nodejs\node.exe" x', ["C:\Program Files\nodejs\node.exe"]),
+    (r'"C:\Program Files\nodejs\node.exe" x', [r"C:\Program Files\nodejs\node.exe"]),
     ("node server.js 2>&1", ["node"]),
     ("node a.js 2>&1 && npm run dev", ["node", "npm"]),
     ("NODE_ENV=production node server.js", ["node"]),
