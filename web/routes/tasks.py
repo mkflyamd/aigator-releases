@@ -255,7 +255,7 @@ async def list_background_processes():
     from skills.shell_runner.tools import _BG_REGISTRY
     import time
     procs = []
-    for pid, e in _BG_REGISTRY.items():
+    for pid, e in list(_BG_REGISTRY.items()):
         popen = e.get("popen")
         if popen is None or e.get("stopped"):
             continue

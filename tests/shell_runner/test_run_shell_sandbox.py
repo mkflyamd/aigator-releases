@@ -282,6 +282,16 @@ def test_stop_terminates_a_sandboxed_entry():
         sh._BG_REGISTRY.pop(4243, None)
 
 
+def test_check_reports_the_forwarded_url_of_a_sandboxed_entry():
+    sh._BG_REGISTRY[4244] = {"popen": _FakeForwarded(None, ""), "command": "npm run dev", "sandboxed": True}
+    try:
+        out = sh._tool_check_shell_process(4244)
+        assert out["running"] is True
+        assert out["url"] == "http://127.0.0.1:3030" and out["listen_port"] == 3030
+    finally:
+        sh._BG_REGISTRY.pop(4244, None)
+
+
 def _sleeper():
     return subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
 

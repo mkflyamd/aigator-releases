@@ -200,10 +200,9 @@ def _has_delete_command(command: str) -> bool:
 # Code's own run_in_background design.
 #
 # Registry is in-memory/module-level and session-scoped: it is lost on app
-# restart. A process started before a restart keeps running (it's detached),
-# but check_shell_process/stop_shell_process fall back to psutil-only,
-# best-effort handling for pids not present in the registry (see below) — the
-# log_file/command fields just won't be known.
+# restart. A process started before a restart keeps running (it's detached);
+# check_shell_process reports psutil-only liveness for pids not in the registry,
+# and stop_shell_process refuses them.
 _BG_REGISTRY: dict[int, dict] = {}
 _BG_LOG_COUNTER = itertools.count(1)
 
@@ -495,6 +494,9 @@ def _tool_check_shell_process(pid: int) -> dict:
         "command": entry.get("command", "") if entry else "",
         "log_tail": _read_log_tail(log_file),
     }
+    if entry and entry.get("sandboxed"):
+        result["url"] = getattr(popen, "url", None)
+        result["listen_port"] = getattr(popen, "listen_port", None)
     if note:
         result["note"] = note
     return result
@@ -529,8 +531,7 @@ def _tool_stop_shell_process(pid: int) -> dict:
     try:
         proc = psutil.Process(pid)
     except psutil.NoSuchProcess:
-        if entry is not None:
-            entry["stopped"] = True
+        entry["stopped"] = True
         return {
             "stopped": True,
             "pid": pid,
@@ -572,18 +573,15 @@ def _tool_stop_shell_process(pid: int) -> dict:
     except Exception:
         pass
 
-    if entry is not None:
-        # Reflect the exit into our Popen record (reaps the child on POSIX so
-        # it doesn't linger as a zombie) so a subsequent check_shell_process
-        # sees running=False/exit_code immediately instead of racing psutil.
-        if entry.get("popen") is not None:
-            try:
-                entry["popen"].poll()
-            except Exception:
-                pass
-        entry["stopped"] = (
-            True  # mark, don't drop — check_shell_process still needs log_file/command
-        )
+    # Reflect the exit into our Popen record (reaps the child on POSIX so
+    # it doesn't linger as a zombie) so a subsequent check_shell_process
+    # sees running=False/exit_code immediately instead of racing psutil.
+    if entry.get("popen") is not None:
+        try:
+            entry["popen"].poll()
+        except Exception:
+            pass
+    entry["stopped"] = True  # mark, don't drop — check_shell_process still needs log_file/command
 
     _remove_bg_pid(pid)
     return {
