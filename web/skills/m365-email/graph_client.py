@@ -40,6 +40,49 @@ def _get_http_pool() -> httpx.Client:
     return _http_pool_local.client
 
 
+# ── Outage cooldown ────────────────────────────────────────────────────────────
+# A read that exhausts its retries on 5xx/network errors makes the same endpoint fail immediately
+# for a while, so a chat turn that keeps calling the tool is not held for another full retry cycle.
+_OUTAGE_COOLDOWN_S = 60
+_RETRY_BUDGET_S = 45
+_outage_lock = threading.Lock()
+_outage_until: dict[str, float] = {}
+
+
+def _outage_key(method: str, url: str) -> str | None:
+    if method != "GET":
+        return None
+    return urllib.parse.urlsplit(url).path
+
+
+def _outage_remaining(key: str | None) -> int:
+    if key is None:
+        return 0
+    with _outage_lock:
+        left = _outage_until.get(key, 0.0) - time.monotonic()
+        if left <= 0:
+            _outage_until.pop(key, None)
+            return 0
+        return int(left) + 1
+
+
+def _outage_start(key: str | None) -> None:
+    if key is not None:
+        with _outage_lock:
+            _outage_until[key] = time.monotonic() + _OUTAGE_COOLDOWN_S
+
+
+def _outage_clear(key: str | None) -> None:
+    if key is not None:
+        with _outage_lock:
+            _outage_until.pop(key, None)
+
+
+def _reset_outage_state() -> None:
+    with _outage_lock:
+        _outage_until.clear()
+
+
 # ── Module-level lock: prevents concurrent threads from double-refreshing token ─
 _token_refresh_lock = threading.Lock()
 # Microsoft Teams Desktop public client -- request only narrow scopes; the token
@@ -314,10 +357,21 @@ class GraphClient:
         hdrs = headers or self._headers()
         pool = _get_http_pool()
         last_err: Exception | None = None
+        outage_key = _outage_key(method, url)
+        left = _outage_remaining(outage_key)
+        if left:
+            raise GraphAPIError(
+                f"Microsoft Graph is not responding for {outage_key} (it failed repeatedly "
+                f"just now; skipping it for {left}s). Do not call this tool again this turn: "
+                "tell the user the service is unavailable and offer to try again later.",
+                status_code=503,
+            )
+        started = time.monotonic()
         for attempt in range(1, self._MAX_RETRIES + 1):
             try:
                 resp = pool.request(method, url, headers=hdrs, content=content)
                 resp.raise_for_status()
+                _outage_clear(outage_key)
                 # Log mutating operations at INFO so they're visible; reads at DEBUG
                 _lvl = (
                     logging.INFO
@@ -334,6 +388,11 @@ class GraphClient:
                 if code in (429, 502, 503, 504) and attempt < self._MAX_RETRIES:
                     retry_after = int(e.response.headers.get("Retry-After", "30"))
                     wait = min(retry_after, 300) if code == 429 else min(2**attempt, 15)
+                else:
+                    wait = None
+                if wait is not None and (
+                    code == 429 or time.monotonic() - started + wait < _RETRY_BUDGET_S
+                ):
                     log.warning(
                         "Graph %d on %s %s — retrying in %ds (%d/%d)",
                         code,
@@ -346,6 +405,8 @@ class GraphClient:
                     time.sleep(wait)
                     last_err = e
                     continue
+                if code in (502, 503, 504):
+                    _outage_start(outage_key)
                 parsed = self._extract_graph_error(code, body)
                 # 404 (not found) and 403 (scope missing) are often expected —
                 # log at debug to avoid noisy warnings the caller handles anyway.
@@ -363,10 +424,12 @@ class GraphClient:
                     self._MAX_RETRIES,
                     e,
                 )
-                if attempt < self._MAX_RETRIES:
-                    time.sleep(min(2**attempt, 10))
+                wait = min(2**attempt, 10)
+                if attempt < self._MAX_RETRIES and time.monotonic() - started + wait < _RETRY_BUDGET_S:
+                    time.sleep(wait)
                     last_err = e
                     continue
+                _outage_start(outage_key)
                 raise GraphAPIError(f"Network error on {method} {label}: {e}") from e
         raise GraphThrottleError(
             f"Graph {method} {label} throttled after {self._MAX_RETRIES} retries"
