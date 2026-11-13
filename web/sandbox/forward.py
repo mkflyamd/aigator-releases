@@ -22,6 +22,8 @@ MAX_CONNS = 64
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 _URL = re.compile(r"https?://(?:localhost|127\.0\.0\.1|\[::1\]):(\d{1,5})(?!\w)")
 _SCAN_TAIL = 8192
+# Backend, watchdog, recorder, OAuth callbacks, CDP and MCP config ports AI Gator itself uses.
+RESERVED_PORTS = frozenset({3118, 8000, 8001, 8002, 8003, 8080, 8765, 9224, 9225})
 
 
 def strip_ansi(text: str) -> str:
@@ -44,6 +46,7 @@ class ForwardedProcess:
         self._on_close = on_close
         self.url: str | None = None
         self.listen_port: int | None = None
+        self.forward_error: str | None = None
         self.exit_code: int | None = None
         self.closed = threading.Event()
         self._ready = threading.Event()
@@ -169,7 +172,8 @@ class ForwardedProcess:
 
     async def _listen(self, port: int) -> None:
         try:
-            for candidate in (port, 0):
+            candidates = (0,) if port in RESERVED_PORTS else (port, 0)
+            for candidate in candidates:
                 try:
                     server = await asyncio.start_server(self._accept, "127.0.0.1", candidate)
                 except OSError:
@@ -181,6 +185,9 @@ class ForwardedProcess:
                 self.listen_port = server.sockets[0].getsockname()[1]
                 self.url = f"http://127.0.0.1:{self.listen_port}"
                 break
+            else:
+                self.forward_error = f"AI Gator could not open a local port to forward port {port}."
+                _log.warning("forward: %s", self.forward_error)
         finally:
             self._ready.set()
 

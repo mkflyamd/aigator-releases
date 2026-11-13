@@ -920,6 +920,10 @@ def _start_background(cr, request, command, shell_used, env_dir, in_scratch, tag
         result["_dev_server"] = {"pid": fp.pid, "url": fp.url, "command": command[:200]}
         result["message"] = (f"Started in the sandbox and available at {fp.url}. Tell the user this address. "
                              f"Use stop_shell_process({fp.pid}) to stop it.")
+    elif fp.poll() is None and fp.forward_error:
+        result["_dev_server"] = {"pid": fp.pid, "url": None, "command": command[:200]}
+        result["message"] = (f"Started in the sandbox (pid {fp.pid}), but its port could not be forwarded: "
+                             f"{fp.forward_error} Tell the user, and use stop_shell_process({fp.pid}) to stop it.")
     elif fp.poll() is None:
         result["_dev_server"] = {"pid": fp.pid, "url": None, "command": command[:200]}
         result["message"] = (f"Started in the sandbox (pid {fp.pid}), no URL yet. "

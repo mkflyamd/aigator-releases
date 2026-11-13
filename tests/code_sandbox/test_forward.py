@@ -61,6 +61,32 @@ def test_prefers_the_dev_server_port(forward_server):
     assert fp.listen_port == port
 
 
+def test_reserved_ports_include_the_fixed_callback_and_backend_ports():
+    assert {3118, 8000, 8001, 8002, 8003, 8080} <= forward.RESERVED_PORTS
+
+
+def test_never_binds_a_reserved_port(forward_server, monkeypatch):
+    port = free_port()
+    monkeypatch.setattr(forward, "RESERVED_PORTS", frozenset({port}))
+    fp, _ = forward_server("print-only", port=port)
+    assert fp.listen_port not in (None, port)
+    assert fp.url == f"http://127.0.0.1:{fp.listen_port}"
+
+
+def test_bind_failure_is_reported(tmp_path, monkeypatch):
+    async def refuse(*_a, **_k):
+        raise OSError("no ports")
+
+    monkeypatch.setattr(forward.asyncio, "start_server", refuse)
+    popen = start_relay([sys.executable, "-u", str(write_server(tmp_path)), "print-only", str(free_port())])
+    fp = ForwardedProcess(popen, str(tmp_path / "log.txt")).start()
+    try:
+        assert fp.wait_ready(15) is False
+        assert fp.url is None and fp.forward_error
+    finally:
+        fp.terminate()
+
+
 def test_many_connections_at_once(forward_server):
     fp, _ = forward_server()
     with ThreadPoolExecutor(10) as pool:

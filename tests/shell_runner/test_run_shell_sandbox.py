@@ -144,6 +144,8 @@ class _FakeForwarded:
     def __init__(self, proc, log_file, on_close=None):
         self.pid = 4242
         self.url = "http://127.0.0.1:3030"
+        self.listen_port = 3030
+        self.forward_error = None
         self.terminated = False
 
     def start(self):
@@ -242,6 +244,16 @@ def test_background_without_a_url_yet_says_so(env, bg):
     out = _run("npm run dev", background=True, cwd=str(proj))
     assert "url" not in out and "no URL yet" in out["message"] and out["pid"] == 4242
     assert out["_dev_server"]["url"] is None
+
+
+def test_background_whose_port_could_not_be_forwarded_says_so(env, bg):
+    env.mp.setattr(_FakeForwarded, "wait_ready", lambda self, timeout: False)
+    env.mp.setattr(_FakeForwarded, "start", lambda self: setattr(self, "forward_error", "no port") or self)
+    proj = _project(env)
+    first = _run("npm run dev", background=True, cwd=str(proj))
+    approvals.decide(first["request_id"], "tab", True)
+    out = _run("npm run dev", background=True, cwd=str(proj))
+    assert "could not be forwarded" in out["message"] and "check_shell_process" not in out["message"]
 
 
 def test_background_that_exits_before_printing_an_address_is_an_error(env, bg):
