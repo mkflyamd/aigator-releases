@@ -125,7 +125,12 @@ const click = { stopPropagation() {} };
 
   // Only plain localhost origins pass; look-alike hosts and other schemes do not.
   const probe = makeEnv();
-  for (const ok of [url, 'http://localhost:5173/', 'http://[::1]:8080', 'https://localhost:443/x']) {
+  for (const ok of [
+    url,
+    'http://localhost:5173/',
+    'http://[::1]:8080',
+    'https://localhost:443/x',
+  ]) {
     assert.strictEqual(probe.ctx._devServerUrl(ok), ok);
   }
   for (const bad of [
@@ -228,7 +233,9 @@ const click = { stopPropagation() {} };
   assert.strictEqual(titleOf(gone), 'Stopped');
 
   // A url that shows up later (or on a fallback port) gets an Open link from the poll; bad urls do not.
-  const late = makeEnv({ processes: [{ pid: 7, running: true, url: 'http://localhost.evil.com:80' }] });
+  const late = makeEnv({
+    processes: [{ pid: 7, running: true, url: 'http://localhost.evil.com:80' }],
+  });
   late.ctx._showDevServerCard({ pid: 7, url: null }, 'tab-1');
   await late.timers[0].fn();
   assert.strictEqual(titleOf(late), 'Running (pid 7)');
@@ -239,7 +246,9 @@ const click = { stopPropagation() {} };
   assert.strictEqual(linkOf(late).href, url);
   assert.strictEqual(linkOf(late).rel, 'noopener noreferrer');
   assert.deepStrictEqual(
-    walk(late.messages).filter((e) => e.tag === 'a' || e.tag === 'button').map((e) => e.textContent),
+    walk(late.messages)
+      .filter((e) => e.tag === 'a' || e.tag === 'button')
+      .map((e) => e.textContent),
     ['Open', 'Stop'],
   );
   late.state.processes = [{ pid: 7, running: true, url: 'http://127.0.0.1:51234' }];
@@ -326,7 +335,10 @@ const click = { stopPropagation() {} };
   pane.state.stopStatus = 200;
   await paneStop.listeners.click(click);
   assert.strictEqual(refreshed, 1);
-  assert(!/innerHTML|\.on[a-z]+\s*=|setAttribute\(\s*['"]on/.test(paneMatch[0]), 'agents pane renders without innerHTML or inline handlers');
+  assert(
+    !/innerHTML|\.on[a-z]+\s*=|setAttribute\(\s*['"]on/.test(paneMatch[0]),
+    'agents pane renders without innerHTML or inline handlers',
+  );
 
   // Wiring and safety.
   for (const name of ['_postBackgroundStop', '_devServerUrl', '_showDevServerCard']) {

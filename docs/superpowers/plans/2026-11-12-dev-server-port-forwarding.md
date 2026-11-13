@@ -44,21 +44,21 @@ Spec: `docs/superpowers/specs/2026-11-12-dev-server-port-forwarding-design.md`
 
 ## File structure
 
-| File | Change | Responsibility |
-|---|---|---|
-| `web/sandbox/wire.py` | create | Frame encode/decode shared by relay and forwarder (stdlib only) |
-| `web/sandbox/relay.py` | create | Runs in the sandbox: starts the command, pumps output as LOG, carries loopback connections |
-| `web/sandbox/forward.py` | create | Backend: `ForwardedProcess`, port detection, asyncio listener |
-| `web/sandbox/runtime_copy.py` | create | Readable copies of tool folders the container cannot read; installs the relay |
-| `web/sandbox/launcher_windows.py` | modify | Held-grant bookkeeping, `_prepare`/`_finish`, streaming `_run_contained`, `SandboxProcess`, `start`, `readable_or_grantable` |
-| `web/sandbox/__init__.py` | modify | `start_sandboxed`, `container_readable` |
-| `web/sandbox/approvals.py` | modify | `background` flag on requests |
-| `web/skills/shell_runner/tools.py` | modify | Gate, `_start_background`, stop guard, orphan check, tool text |
-| `web/routes/tasks.py`, `tests/csrf_route_baseline.txt` | modify | Stop route CSRF + 404; list route `url` |
-| `web/agent_loop.py` | modify | `dev_server` event and two SSE forwarders |
-| `web/static/app.js`, `web/static/agents-pane.js` | modify | Card line, status card, CSRF stop |
-| `packaging/aigator-backend.spec`, `docs/BUILD_INSTRUCTIONS.md`, `docs/security/threatmodel-remediation.md` | modify | Frozen build files and docs |
-| `tests/code_sandbox/*`, `tests/shell_runner/*`, `tests/*.test.js` | create/modify | Tests per task |
+| File                                                                                                       | Change        | Responsibility                                                                                                               |
+| ---------------------------------------------------------------------------------------------------------- | ------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `web/sandbox/wire.py`                                                                                      | create        | Frame encode/decode shared by relay and forwarder (stdlib only)                                                              |
+| `web/sandbox/relay.py`                                                                                     | create        | Runs in the sandbox: starts the command, pumps output as LOG, carries loopback connections                                   |
+| `web/sandbox/forward.py`                                                                                   | create        | Backend: `ForwardedProcess`, port detection, asyncio listener                                                                |
+| `web/sandbox/runtime_copy.py`                                                                              | create        | Readable copies of tool folders the container cannot read; installs the relay                                                |
+| `web/sandbox/launcher_windows.py`                                                                          | modify        | Held-grant bookkeeping, `_prepare`/`_finish`, streaming `_run_contained`, `SandboxProcess`, `start`, `readable_or_grantable` |
+| `web/sandbox/__init__.py`                                                                                  | modify        | `start_sandboxed`, `container_readable`                                                                                      |
+| `web/sandbox/approvals.py`                                                                                 | modify        | `background` flag on requests                                                                                                |
+| `web/skills/shell_runner/tools.py`                                                                         | modify        | Gate, `_start_background`, stop guard, orphan check, tool text                                                               |
+| `web/routes/tasks.py`, `tests/csrf_route_baseline.txt`                                                     | modify        | Stop route CSRF + 404; list route `url`                                                                                      |
+| `web/agent_loop.py`                                                                                        | modify        | `dev_server` event and two SSE forwarders                                                                                    |
+| `web/static/app.js`, `web/static/agents-pane.js`                                                           | modify        | Card line, status card, CSRF stop                                                                                            |
+| `packaging/aigator-backend.spec`, `docs/BUILD_INSTRUCTIONS.md`, `docs/security/threatmodel-remediation.md` | modify        | Frozen build files and docs                                                                                                  |
+| `tests/code_sandbox/*`, `tests/shell_runner/*`, `tests/*.test.js`                                          | create/modify | Tests per task                                                                                                               |
 
 Test commands: Python `python -m pytest <path> -v` (from the worktree root; `pythonpath = web .`). JS `node tests/<name>.test.js`.
 
@@ -67,10 +67,12 @@ Test commands: Python `python -m pytest <path> -v` (from the worktree root; `pyt
 ### Task 1: Wire format
 
 **Files:**
+
 - Create: `web/sandbox/wire.py`
 - Test: `tests/code_sandbox/test_wire.py`
 
 **Interfaces:**
+
 - Consumes: nothing.
 - Produces: `wire.OPEN, DATA, CLOSE, LOG, EXIT` (ints 1..5), `wire.MAX_PAYLOAD`, `wire.HEADER_SIZE`, `wire.WireError(ValueError)`, `wire.encode(kind, conn, payload=b"") -> bytes`, `wire.Decoder().feed(data) -> list[tuple[int, int, bytes]]`, `wire.open_payload(port)`, `wire.parse_open(payload) -> int`, `wire.exit_payload(code)`, `wire.parse_exit(payload) -> int`, `wire.read_some(stream, n) -> bytes`.
 
@@ -231,11 +233,13 @@ git commit -m "feat: add the relay wire format"
 ### Task 2: Relay (runs in the sandbox) and test support
 
 **Files:**
+
 - Create: `web/sandbox/relay.py`
 - Create: `tests/code_sandbox/relay_support.py`
 - Test: `tests/code_sandbox/test_relay.py`
 
 **Interfaces:**
+
 - Consumes: Task 1 `wire`.
 - Produces: `relay.py` script contract: env var `AIGATOR_RELAY_COMMAND` (JSON argv list); stdin/stdout carry wire frames; stdout LOG frames (conn 0) carry the child's merged output; one EXIT frame when the child ends; stdin EOF kills the child and ends the relay with code 0; a malformed frame ends it with code 2. Test helpers in `relay_support`: `RELAY` (Path), `start_relay(argv) -> Popen`, `free_port() -> int`, `wait_for(pred, timeout=10) -> bool`, `http_get(port, path="/", timeout=15) -> (head: bytes, body: bytes)`, `RelayClient(argv)` with `.proc`, `.send(kind, conn, payload=b"")`, `.collect(until, timeout=15) -> list[frame]`, `.close()`, and `write_server(folder) -> Path` (a tiny dev server script run as `python -u dev_server.py <mode> <port>`; modes `serve`, `print-only`, `exit3`; paths `/` `/slow` `/hang` `/big`).
 
@@ -667,10 +671,12 @@ git commit -m "feat: add the in-sandbox relay"
 ### Task 3: Forwarder (backend side) and port detection
 
 **Files:**
+
 - Create: `web/sandbox/forward.py`
 - Test: `tests/code_sandbox/test_forward.py`
 
 **Interfaces:**
+
 - Consumes: Task 1 `wire`; Task 2 `relay_support` (`write_server`, `start_relay`, `free_port`, `wait_for`, `http_get`).
 - Produces: `forward.detect_port(text) -> int | None`, `forward.strip_ansi`, `forward.MAX_CONNS = 64`, and `forward.ForwardedProcess(proc, log_file, on_close=None)` where `proc` has `pid`, `stdin`, `stdout`, `poll()`, `terminate()`. Methods: `.start() -> self`, `.wait_ready(timeout) -> bool` (True when `url` is set), `.poll() -> int | None`, `.terminate()`. Attributes: `pid`, `url` (`http://127.0.0.1:<listen_port>` or None), `listen_port`, `exit_code`, `closed` (threading.Event, set after full shutdown and after `on_close` ran).
 
@@ -1144,11 +1150,13 @@ git commit -m "feat: add the dev server port forwarder"
 ### Task 4: Streaming sandbox launcher and `start_sandboxed`
 
 **Files:**
+
 - Modify: `web/sandbox/launcher_windows.py` (imports and constants near the top; `_LEDGER_LOCK` at line 57; `_sweep_locked` at 679; `_run_contained` at 733; `launch` at 900 to the end of the file)
 - Modify: `web/sandbox/__init__.py` (add after `launch_sandboxed`, lines 120-123)
 - Test: append to `tests/code_sandbox/test_launcher_windows.py`; create `tests/code_sandbox/test_start_sandboxed.py`
 
 **Interfaces:**
+
 - Consumes: existing `launcher_windows` helpers (`acl_grants`, `ensure_profile`, `_grant`, `_revoke_ok`, `_scrub_container`, `_ledger_*`, `_api`), `SandboxRequest`, `SandboxUnavailable`, `SandboxRunError`, `SandboxPathNotGrantable`.
 - Produces:
   - `launcher_windows.start(req: SandboxRequest) -> SandboxProcess`. Same profile, grants and Job Object as `launch`, but stdin is a pipe, it returns right after `ResumeThread`, and the grants stay in place until the process exits.
@@ -1328,6 +1336,7 @@ def _unhold(sid: str, path) -> None:
         kept = [[sid, path] for sid, path in entries
                 if _is_held(sid, path) or not _revoke_ok(sid, Path(path))]
 ```
+
 ```python
         return len(entries) - len(kept), sum(1 for sid, path in kept if not _is_held(sid, path))
 ```
@@ -1592,9 +1601,11 @@ git commit -m "feat: start long-running sandboxed processes that hold their gran
 This task proves the two things the spike did not: frames really flow through the streaming launcher's stdin and stdout pipes, and the Job Object ends the whole tree. It carries no production code, so there is no red step; if it fails, the bug is in Task 2 or Task 4 and must be fixed there, at the root.
 
 **Files:**
+
 - Test: `tests/code_sandbox/test_forward_real_sandbox.py`
 
 **Interfaces:**
+
 - Consumes: `windows_container` (session fixture in `tests/conftest.py`; it yields the `launcher_windows` module with a throwaway AppContainer profile and ledger), `launcher_windows.start`, `ForwardedProcess` (Task 3), `relay_support.write_server`, `free_port`, `http_get` (Task 2).
 - Produces: nothing.
 
@@ -1684,10 +1695,12 @@ git commit -m "test: verify the streaming sandbox path and tree kill in a real A
 ### Task 6: Readable copies of tools the sandbox cannot read
 
 **Files:**
+
 - Create: `web/sandbox/runtime_copy.py`
 - Test: `tests/code_sandbox/test_runtime_copy.py`
 
 **Interfaces:**
+
 - Consumes: the stdlib only. The `usable` callback passed in is `sandbox.container_readable` (Task 4).
 - Produces:
   - `runtime_copy.RuntimeCopyError(RuntimeError)`, `runtime_copy.MAX_COPY_BYTES = 1024 ** 3`.
@@ -1892,11 +1905,13 @@ git commit -m "feat: copy tools the sandbox cannot read to a folder it can"
 ### Task 7: Background approvals and the shell gate
 
 **Files:**
+
 - Modify: `web/sandbox/approvals.py` (dataclass line 42, `create` 65-77, `lookup` 80-106, `decide` 124-127)
 - Modify: `web/skills/shell_runner/tools.py` (add `_BG_APPROVAL_MSG` after line 579; `_shell_gate` 671-711)
 - Test: `tests/code_sandbox/test_approvals.py` (append), `tests/shell_runner/test_run_shell_sandbox.py` (append)
 
 **Interfaces:**
+
 - Consumes: existing `approvals.create/lookup/decide`, `_shell_gate`.
 - Produces:
   - `approvals.ApprovalRequest.background: bool = False`; `approvals.create(..., background=False)`; `approvals.lookup(..., background=False)` matches only requests with the same `background` value. `approvals.decide` leaves a background approval at `scope == "once"` whatever scope was asked for, so it never creates a task grant or a saved permission.
@@ -1965,6 +1980,7 @@ def create(context_id: str, read_paths, write_paths, network_hosts, now: float |
            tool: str = "run_python", command: str = "", programs=None, saveable: bool = False,
            background: bool = False) -> ApprovalRequest:
 ```
+
 ```python
         tool=tool, command=command, programs=None if programs is None else tuple(programs), saveable=saveable,
         background=background,
@@ -2062,10 +2078,12 @@ git commit -m "feat: approval requests for background shell commands"
 ### Task 8: Start background commands in the sandbox
 
 **Files:**
+
 - Modify: `web/skills/shell_runner/tools.py` (imports, constants, `cleanup_orphan_bg_procs`, `_spawn_background_locked`, `_tool_stop_shell_process`, `_run_sandboxed`, `TOOL_DEFS`)
 - Modify: `tests/shell_runner/test_run_shell_sandbox.py` (replace `test_background_refused_when_enforced`, add the background tests)
 
 **Interfaces:**
+
 - Consumes: `ForwardedProcess(proc, log_file, on_close=None)` with `.start()`, `.wait_ready(timeout) -> bool`, `.url`, `.pid`, `.poll()`, `.terminate()` (Task 3); `sandbox.start_sandboxed(request)` and `sandbox.container_readable(path) -> bool` (Task 4); `runtime_copy.readable_copies(command, search_path, usable, root)`, `runtime_copy.runtime_dir()`, `runtime_copy.install_relay()`, `runtime_copy.RuntimeCopyError` (Task 6); `_shell_gate(..., background=False)` (Task 7); the relay reads its command from `AIGATOR_RELAY_COMMAND` (Task 2).
 - Produces: `_run_sandboxed` returns `{"background": True, "pid", "log_file", "shell_used", "url", "_dev_server": {"pid", "url", "command"}, ...}` for a started background command (Task 9 reads `url` through the registry entry's `popen`, Task 10 reads `_dev_server`); `_BG_REGISTRY[pid]` entries with `"sandboxed": True`; `_tool_stop_shell_process` refuses a pid that is not in `_BG_REGISTRY`.
 
@@ -2588,11 +2606,13 @@ git commit -m "feat: run background shell commands in the sandbox and forward th
 ### Task 9: Guard the stop route and list the forwarded url
 
 **Files:**
+
 - Modify: `web/routes/tasks.py:252-281`
 - Modify: `tests/csrf_route_baseline.txt` (delete line 85)
 - Create: `tests/test_background_process_routes.py`
 
 **Interfaces:**
+
 - Consumes: `_BG_REGISTRY` entries from Task 8, whose `popen` is a `ForwardedProcess` with a `url` attribute (plain `Popen` objects have none).
 - Produces: `GET /api/shell/background-processes` items carry `"url": str | None`; `POST /api/shell/background-processes/{pid}/stop` needs the CSRF token and returns 404 for a pid that is not in `_BG_REGISTRY` (Task 11 sends the token and reads `url`).
 
@@ -2715,10 +2735,12 @@ git commit -m "feat: require the CSRF token to stop a background process and lis
 ### Task 10: Send the dev server result to the chat stream
 
 **Files:**
+
 - Modify: `web/agent_loop.py:1059-1060` (tool runner), `web/agent_loop.py:1538-1539` and `web/agent_loop.py:2098-2099` (the two SSE forwarders)
 - Test: `tests/test_agent_loop_sandbox.py`
 
 **Interfaces:**
+
 - Consumes: a tool result with `"_dev_server": {"pid": int, "url": str | None, "command": str}` (Task 8).
 - Produces: an SSE message `{"dev_server": {"pid", "url", "command"}}` on both chat streams (Task 11 renders it).
 
@@ -2790,12 +2812,14 @@ git commit -m "feat: stream the started dev server to the chat"
 ### Task 11: Frontend: background card line, running-server card, CSRF-aware Stop
 
 **Files:**
+
 - Modify: `web/static/app.js` (`_showSandboxApproval` ~10197-10402; new functions placed directly after it; SSE chain at ~14179)
 - Modify: `web/static/agents-pane.js:270` (Stop button)
 - Create: `tests/dev_server_card.test.js`
 - Modify: `tests/sandbox_ui.test.js` (add a background-card block before the `// ── Settings: Saved permissions ──` line)
 
 **Interfaces:**
+
 - Consumes: the `_sandbox_approval` card payload with `background: true` (Task 7); the chat stream message `{"dev_server": {"pid": int, "url": str|null, "command": str}}` (Task 10); `GET /api/shell/background-processes` returning `{"processes": [{"pid", "running", ...}], "count"}` and `POST /api/shell/background-processes/{pid}/stop` (Task 9).
 - Produces (all plain top-level function declarations in `app.js`, so `agents-pane.js`, loaded after it, sees them):
   - `async function _postBackgroundStop(pid)`: POSTs the stop route with `X-CSRF-Token`; on 403 refreshes the token from `/api/csrf` and retries once; returns the `Response`.
@@ -2927,7 +2951,12 @@ const click = { stopPropagation() {} };
 
   // Only plain localhost origins pass; look-alike hosts and other schemes do not.
   const probe = makeEnv();
-  for (const ok of [url, 'http://localhost:5173/', 'http://[::1]:8080', 'https://localhost:443/x']) {
+  for (const ok of [
+    url,
+    'http://localhost:5173/',
+    'http://[::1]:8080',
+    'https://localhost:443/x',
+  ]) {
     assert.strictEqual(probe.ctx._devServerUrl(ok), ok);
   }
   for (const bad of [
@@ -3087,29 +3116,29 @@ const click = { stopPropagation() {} };
 In `tests/sandbox_ui.test.js`, replace the single line `  // ── Settings: Saved permissions ──` with this block followed by that same line:
 
 ```js
-  // A background run says where the server will be reachable, and its Allow button does not
-  // claim a tab-long grant (the server keeps a background approval single-use).
-  const envB = makeEnv('tab-1');
-  envB.ctx._showSandboxApproval(
-    { ...shellCard, request_id: 'sh5', background: true, saveable: false, network_hosts: [] },
-    'tab-1',
-  );
-  const allB = walk(envB.messages);
-  assert(
-    allB.some((e) => e._text === 'Runs in the sandbox and is made available at localhost.'),
-    'background card says it is made available at localhost',
-  );
-  assert.deepStrictEqual(
-    allB.filter((e) => e.tag === 'button').map((b) => b.textContent),
-    ['Allow', 'Deny'],
-  );
-  assert(!allB.some((e) => /Allowed until you close this tab/.test(e._text)));
-  assert(
-    !allS.some((e) => /made available at localhost/.test(e._text)),
-    'a plain command card does not say it',
-  );
+// A background run says where the server will be reachable, and its Allow button does not
+// claim a tab-long grant (the server keeps a background approval single-use).
+const envB = makeEnv('tab-1');
+envB.ctx._showSandboxApproval(
+  { ...shellCard, request_id: 'sh5', background: true, saveable: false, network_hosts: [] },
+  'tab-1',
+);
+const allB = walk(envB.messages);
+assert(
+  allB.some((e) => e._text === 'Runs in the sandbox and is made available at localhost.'),
+  'background card says it is made available at localhost',
+);
+assert.deepStrictEqual(
+  allB.filter((e) => e.tag === 'button').map((b) => b.textContent),
+  ['Allow', 'Deny'],
+);
+assert(!allB.some((e) => /Allowed until you close this tab/.test(e._text)));
+assert(
+  !allS.some((e) => /made available at localhost/.test(e._text)),
+  'a plain command card does not say it',
+);
 
-  // ── Settings: Saved permissions ──
+// ── Settings: Saved permissions ──
 ```
 
 - [ ] **Step 2: Run the tests to see them fail**
@@ -3127,32 +3156,32 @@ All edits in `web/static/app.js`.
 3a. In `_showSandboxApproval`, directly after `const tool = isShell ? 'run_shell' : 'run_python';` add:
 
 ```js
-  const isBackground = isShell && data.background === true;
+const isBackground = isShell && data.background === true;
 ```
 
 3b. Directly after the `body.appendChild(risk);` block (the closing `}` of the `if` that adds the Always-allow risk note, before `const actions = document.createElement('div');`) add:
 
 ```js
-  if (isBackground) {
-    const where = document.createElement('div');
-    where.className = 'gcc-refine';
-    where.textContent = 'Runs in the sandbox and is made available at localhost.';
-    body.appendChild(where);
-  }
+if (isBackground) {
+  const where = document.createElement('div');
+  where.className = 'gcc-refine';
+  where.textContent = 'Runs in the sandbox and is made available at localhost.';
+  body.appendChild(where);
+}
 ```
 
 3c. Replace `approve.textContent = 'Allow for this tab';` with:
 
 ```js
-  approve.textContent = isBackground ? 'Allow' : 'Allow for this tab';
+approve.textContent = isBackground ? 'Allow' : 'Allow for this tab';
 ```
 
 3d. Replace the `footNote.textContent = ...` statement (the two-line one that starts `footNote.textContent =` and ends `'Allowed until you close this tab. Unanswered requests expire after 10 minutes.';`) with:
 
 ```js
-  footNote.textContent = isBackground
-    ? 'Unanswered requests expire after 10 minutes.'
-    : 'Allowed until you close this tab. Unanswered requests expire after 10 minutes.';
+footNote.textContent = isBackground
+  ? 'Unanswered requests expire after 10 minutes.'
+  : 'Allowed until you close this tab. Unanswered requests expire after 10 minutes.';
 ```
 
 3e. Replace `} else outcome = 'Allowed for this tab.';` with:
@@ -3183,7 +3212,8 @@ async function _postBackgroundStop(pid) {
 }
 
 function _devServerUrl(url) {
-  return typeof url === 'string' && /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\]):\d{1,5}(\/|$)/.test(url)
+  return typeof url === 'string' &&
+    /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\]):\d{1,5}(\/|$)/.test(url)
     ? url
     : '';
 }
@@ -3293,13 +3323,13 @@ add:
 3h. In `web/static/agents-pane.js` line 270 replace
 
 ```js
-        await fetch(`/api/shell/background-processes/${proc.pid}/stop`, { method: 'POST' });
+await fetch(`/api/shell/background-processes/${proc.pid}/stop`, { method: 'POST' });
 ```
 
 with
 
 ```js
-        await _postBackgroundStop(proc.pid);
+await _postBackgroundStop(proc.pid);
 ```
 
 - [ ] **Step 4: Run the tests to see them pass**
@@ -3320,12 +3350,14 @@ git commit -m "feat: show a running dev server card with Open and Stop"
 ### Task 12: Ship the relay in the packaged backend and update the docs
 
 **Files:**
+
 - Modify: `packaging/aigator-backend.spec` (datas ~9-17, sandbox hiddenimports ~54-59)
 - Modify: `docs/BUILD_INSTRUCTIONS.md:311`
 - Modify: `docs/security/threatmodel-remediation.md:16` (only the phrase "background commands are refused")
 - Test: `tests/test_desktop_packaging.py`
 
 **Interfaces:**
+
 - Consumes: `runtime_copy.install_relay()` (Task 6) reads `relay.py` and `wire.py` from the folder of `runtime_copy.py`. In a frozen build that folder is `_MEIPASS/sandbox/`, so both files must be data files there. They are also listed as imports of the backend so the forwarder side (`sandbox.wire`, `sandbox.forward`, `sandbox.runtime_copy`) is in the bundle.
 - Produces: nothing used by later tasks.
 
@@ -3419,26 +3451,27 @@ git commit -m "feat: ship the sandbox relay in the packaged backend and update t
 
 **Spec coverage** (each spec item and the task that implements it):
 
-| Spec item | Task |
-|---|---|
-| Wire format, 64 KB cap, frame split, malformed frame | 1 |
-| Relay: starts the command, `LOG`/`EXIT`, `OPEN`/`DATA`/`CLOSE`, one writer lock | 2 |
-| Forwarder: reader thread, log file, port detection, listener on `127.0.0.1`, same port or free port, 64 connection cap, event loop never blocked, `url`/`ready` | 3 |
-| Streaming launcher `start_sandboxed`, Job Object, other platforms `NotImplementedError` | 4 |
-| Real AppContainer run: frames over the pipes, tree ends with the handle (the two items the spec lists as unverified) | 5 |
-| Runtime copy of unreadable tool folders, reuse, `PATH` first, relay install | 6 |
-| Same gate and card, exact command, no task or saved coverage, never "Always" | 7 |
-| `run_shell(background=true)` in the sandbox, unattended refusal, 10 process cap, 30 s wait, no-url and early-exit results, stop guard, tool text, telemetry (`sandbox.telemetry_record`, no new fields) | 8 |
-| Orphan cleanup verifies the command line | 8 |
-| Stop route CSRF and 404, baseline line removed, list carries `url` | 9 |
-| Result reaches the chat stream | 10 |
-| Card line, status card (Open, Stop, poll, Stopped), Open restricted to localhost, `agents-pane.js` Stop with CSRF retry | 11 |
-| Packaging of `relay.py`/`wire.py`, H_06 row, `BUILD_INSTRUCTIONS.md` | 12 |
-| Windows-only test on a real machine (dev server reachable, Stop ends `node.exe`, backend kill ends it) | 5 (relay path); the Slidev run through the chat is the manual check in the spec |
+| Spec item                                                                                                                                                                                               | Task                                                                            |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| Wire format, 64 KB cap, frame split, malformed frame                                                                                                                                                    | 1                                                                               |
+| Relay: starts the command, `LOG`/`EXIT`, `OPEN`/`DATA`/`CLOSE`, one writer lock                                                                                                                         | 2                                                                               |
+| Forwarder: reader thread, log file, port detection, listener on `127.0.0.1`, same port or free port, 64 connection cap, event loop never blocked, `url`/`ready`                                         | 3                                                                               |
+| Streaming launcher `start_sandboxed`, Job Object, other platforms `NotImplementedError`                                                                                                                 | 4                                                                               |
+| Real AppContainer run: frames over the pipes, tree ends with the handle (the two items the spec lists as unverified)                                                                                    | 5                                                                               |
+| Runtime copy of unreadable tool folders, reuse, `PATH` first, relay install                                                                                                                             | 6                                                                               |
+| Same gate and card, exact command, no task or saved coverage, never "Always"                                                                                                                            | 7                                                                               |
+| `run_shell(background=true)` in the sandbox, unattended refusal, 10 process cap, 30 s wait, no-url and early-exit results, stop guard, tool text, telemetry (`sandbox.telemetry_record`, no new fields) | 8                                                                               |
+| Orphan cleanup verifies the command line                                                                                                                                                                | 8                                                                               |
+| Stop route CSRF and 404, baseline line removed, list carries `url`                                                                                                                                      | 9                                                                               |
+| Result reaches the chat stream                                                                                                                                                                          | 10                                                                              |
+| Card line, status card (Open, Stop, poll, Stopped), Open restricted to localhost, `agents-pane.js` Stop with CSRF retry                                                                                 | 11                                                                              |
+| Packaging of `relay.py`/`wire.py`, H_06 row, `BUILD_INSTRUCTIONS.md`                                                                                                                                    | 12                                                                              |
+| Windows-only test on a real machine (dev server reachable, Stop ends `node.exe`, backend kill ends it)                                                                                                  | 5 (relay path); the Slidev run through the chat is the manual check in the spec |
 
 **Placeholder scan:** no "TBD", "TODO", "similar to Task N" or code-less steps. Every code step shows the code or the exact replacement text.
 
 **Type consistency:**
+
 - Wire kinds and `encode`/`decode`/`FrameDecoder` names come from Task 1 and are used unchanged in Tasks 2 and 3.
 - `ForwardedProcess(proc, log_path, on_close=None).start()`, `.wait_ready(timeout) -> bool`, `.url`, `.pid`, `.poll()`, `.terminate()` (Task 3) are what Tasks 8 and 9 call and what the Task 8 fake implements.
 - `SandboxProcess` and `start_sandboxed(request)` (Task 4) are what Task 3's forwarder wraps and Task 8 calls.
@@ -3451,4 +3484,3 @@ git commit -m "feat: ship the sandbox relay in the packaged backend and update t
 **Gaps found and fixed in this review:** added the "no URL yet" and "exited before printing an address" tests to Task 8, because the spec requires both results and nothing covered them.
 
 **Order note:** after Task 9 the stop route needs the CSRF token. The agents pane already gets the token from the page's global `fetch` wrapper, so Stop keeps working between Tasks 9 and 11. Task 11 only adds the stale-token retry.
-

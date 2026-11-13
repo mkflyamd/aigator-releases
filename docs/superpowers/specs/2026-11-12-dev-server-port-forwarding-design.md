@@ -1,6 +1,7 @@
 # Preview a dev server from the sandbox with port forwarding
 
 ## Use case
+
 A user asks AI Gator to edit a local web project (for example a Slidev deck in
 `Documents\Gator\gator-source`) and preview it live. Today that cannot work:
 
@@ -9,6 +10,7 @@ A user asks AI Gator to edit a local web project (for example a Slidev deck in
   from the browser. Loopback is isolated, so a request from outside times out.
 
 ## Desired experience
+
 1. The user asks "start the deck so I can preview it".
 2. AI Gator shows the normal sandbox approval card for the command and folder.
 3. On approval, the server starts inside the sandbox. A status card shows
@@ -20,6 +22,7 @@ The server never leaves the sandbox. AI Gator only forwards a localhost port to
 it.
 
 ## How it works
+
 Loopback works between processes inside the same AppContainer (verified, with
 `network=False` too). So a small relay process inside the sandbox can reach the
 dev server, and the relay talks to AI Gator over its stdin and stdout pipes,
@@ -44,6 +47,7 @@ browser -> 127.0.0.1:P (AI Gator listener) -> relay pipes -> relay (sandbox) -> 
   tool the sandbox cannot read is copied to a folder it can (see Runtime copy).
 
 ## Rules
+
 1. **Scope.** Windows only in v1. `run_shell(background=true)` is allowed while
    the sandbox is on, and always runs sandboxed. Foreground commands are
    unchanged. On other platforms, and when the sandbox is off, background
@@ -73,9 +77,11 @@ static build preview, and a UI to choose the port.
 ## Design
 
 ### Streaming launcher — `web/sandbox/launcher_windows.py`
+
 New `start_sandboxed(request) -> SandboxProcess` next to `launch_sandboxed`. It
 reuses the same profile, ACL grants, environment and Job Object setup as
 `_run_contained`, with three differences:
+
 - stdin is a pipe (not `NUL`);
 - it returns right after `ResumeThread` instead of waiting for exit;
 - it returns a handle that owns the process, the job and the pipes.
@@ -89,7 +95,9 @@ Other platforms get a `start_sandboxed` that raises `NotImplementedError`, and
 `run_shell` keeps its current refusal there.
 
 ### Relay — `web/sandbox/relay.py` (new, runs inside the sandbox)
+
 Started as `python relay.py -- <argv of the user's command>`. Stdlib only.
+
 - Starts the command (`cwd` is the project folder, stdin `NUL`, stdout and
   stderr merged) and pumps its output to Gator as `LOG` frames. When the command
   exits it sends `EXIT` with the code and stops.
@@ -98,6 +106,7 @@ Started as `python relay.py -- <argv of the user's command>`. Stdlib only.
 - A reader thread per direction. Frames are written under one lock.
 
 ### Runtime copy — `web/sandbox/runtime_copy.py` (new)
+
 For a background run, the first word of the command and `npm`/`npx` resolve
 through `PATH`. If the resolved tool's folder is not readable by the container
 (`launcher_windows._container_can_read` is false and `_can_change_acl` is false),
@@ -108,6 +117,7 @@ Nothing is copied when the tool is already readable, for example a user-owned
 Node under `%LOCALAPPDATA%` or Python.
 
 ### Wire format — `web/sandbox/wire.py` (new, shared)
+
 Frame: `!BII` (type, connection id, payload length), then the payload. Types:
 `OPEN` (payload: port), `DATA`, `CLOSE`, `LOG`, `EXIT`. Max payload 64 KB.
 Both ends share this module. The framing follows the pattern in the MIT
@@ -115,7 +125,9 @@ project hello-127. We write our own because that package needs Python 3.14 or
 newer, and AI Gator supports 3.12 and 3.13.
 
 ### Forwarder — `web/sandbox/forward.py` (new, runs in the backend)
+
 `ForwardedProcess` wraps a `SandboxProcess`:
+
 - A reader thread decodes frames from the relay's stdout. `LOG` frames go to
   the same log file `check_shell_process` already reads. `DATA`/`CLOSE` go to
   the matching connection. `EXIT` marks the process stopped.
@@ -130,6 +142,7 @@ newer, and AI Gator supports 3.12 and 3.13.
   background-process listing.
 
 ### Shell tool — `web/skills/shell_runner/tools.py`
+
 - `_run_sandboxed` stops refusing `background=True` when the platform supports
   `start_sandboxed`. It goes through the existing approval lookup unchanged
   (including the exact-command match), then starts the relay.
@@ -149,12 +162,14 @@ newer, and AI Gator supports 3.12 and 3.13.
   card shows the final command.
 
 ### Orphan cleanup — `web/skills/shell_runner/tools.py`
+
 `cleanup_orphan_bg_procs` kills any pid listed in `bg-pids.json`, a file in a
 folder the sandbox can write. It now verifies that the process command line
 still matches the recorded command before killing. Sandboxed entries never
 write to that file.
 
 ### Stop route — `web/routes/tasks.py`, `web/static/agents-pane.js`
+
 `POST /api/shell/background-processes/{pid}/stop` gets
 `dependencies=[Depends(verify_csrf)]` and is removed from
 `tests/csrf_route_baseline.txt`. It returns 404 for a pid that is not in
@@ -162,6 +177,7 @@ write to that file.
 card does, with the 403 refresh and retry.
 
 ### Frontend — `web/static/app.js`
+
 - The sandbox card shows the extra line from rule 2 when the request is a
   background run.
 - The tool result carries `url`. A status card shows "Running at <url>" with
@@ -173,12 +189,14 @@ card does, with the 403 refresh and retry.
   http(s) links to the system browser, so no new bridge is needed.
 
 ### Docs
+
 `docs/security/threatmodel-remediation.md`, H_06 row: background commands are
 no longer refused. A long-running background command runs inside the sandbox
 under the same approval as a foreground run, and AI Gator forwards a loopback
 port to it. The server never runs with user access.
 
 ## Tests
+
 - Wire: encode and decode round trip, a frame split across reads, an oversized
   payload is rejected.
 - Relay and forwarder, using a plain Python `http.server` child and no real
@@ -209,6 +227,7 @@ port to it. The server never runs with user access.
   the backend process also ends it.
 
 ## Spike results (2026-11-12, Windows, scratch scripts)
+
 - Vite+React under a Python supervisor inside the sandbox, with a readable copy
   of Node: `node.exe vite.js` gave 200 for `/`, `/src/main.jsx` and
   `/@vite/client` in 2s, and `npm run dev` through `cmd` gave 200 for `/` in 3s.

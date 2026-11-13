@@ -10428,7 +10428,8 @@ async function _postBackgroundStop(pid) {
 }
 
 function _devServerUrl(url) {
-  return typeof url === 'string' && /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\]):\d{1,5}(\/|$)/.test(url)
+  return typeof url === 'string' &&
+    /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\]):\d{1,5}(\/|$)/.test(url)
     ? url
     : '';
 }

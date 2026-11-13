@@ -114,7 +114,7 @@ def _tree_size(folder: Path) -> int:
 
 
 def _copy_once(folder: Path, root: Path) -> Path:
-    digest = hashlib.sha1(os.path.normcase(str(folder)).encode("utf-8")).hexdigest()[:8]
+    digest = hashlib.sha1(os.path.normcase(str(folder)).encode("utf-8"), usedforsecurity=False).hexdigest()[:8]
     target = root / f"{folder.name}-{int(folder.stat().st_mtime)}-{digest}"
     partial = target.with_name(target.name + ".partial")
     with _COPY_LOCK:
