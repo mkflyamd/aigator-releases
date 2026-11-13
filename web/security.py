@@ -24,12 +24,15 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import os
 import re
 import secrets
 from urllib.parse import urlsplit
 
 from fastapi import Header, HTTPException, Request
+
+logger = logging.getLogger(__name__)
 
 _TOKEN: bytes | None = None
 _SHELL_KEY: str | None = os.environ.pop("AIGATOR_SHELL_KEY", "") or None
@@ -205,3 +208,17 @@ def origin_allowed(method: str, host: str | None, origin: str | None, referer: s
         and bool(host)
         and parsed.netloc.lower() == host.lower()
     )
+
+
+def websocket_origin_allowed(host: str | None, origin: str | None) -> bool:
+    # The HTTP origin guard never sees websocket scope, so handshakes get the same rule as a POST.
+    return origin_allowed("WEBSOCKET", host, origin, None)
+
+
+async def refuse_cross_origin_websocket(ws) -> bool:
+    """Close a cross-origin handshake before accept; returns True when refused."""
+    if websocket_origin_allowed(ws.headers.get("host"), ws.headers.get("origin")):
+        return False
+    logger.warning("Blocked cross-origin websocket %s (origin=%s)", ws.url.path, ws.headers.get("origin"))
+    await ws.close(code=1008)
+    return True

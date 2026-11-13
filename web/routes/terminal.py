@@ -16,6 +16,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from security import refuse_cross_origin_websocket
+
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
@@ -347,6 +349,8 @@ async def agent_terminal_ws(ws: WebSocket, session_id: str):
 
     Same message protocol as /api/terminal/ws.
     """
+    if await refuse_cross_origin_websocket(ws):
+        return
     entry = _pty_sessions.get(session_id)
     if not entry:
         # NOT an exit: the PTY either hasn't been created yet (the client can
@@ -530,6 +534,8 @@ async def terminal_ws(ws: WebSocket):
       {"type": "output", "data": "<text>"}
       {"type": "exit"}
     """
+    if await refuse_cross_origin_websocket(ws):
+        return
     await ws.accept()
 
     # Initial dimensions — client should send a resize immediately after connect,
