@@ -30,7 +30,9 @@ def test_build_env_windows_keeps_allow_list_and_drops_tokens(tmp_path):
     for key in ("TEMP", "TMP", "LOCALAPPDATA", "APPDATA", "USERPROFILE"):
         assert env[key] == str(tmp_path)
     assert env["NODE_PATH"] == r"C:\npm\node_modules"
-    assert env["NODE_OPTIONS"] == "--preserve-symlinks --preserve-symlinks-main"
+    shim = tmp_path / ".gator" / "node-shim.js"
+    assert env["NODE_OPTIONS"] == f'--preserve-symlinks --preserve-symlinks-main --require="{shim.as_posix()}"'
+    assert "asyncNative" in shim.read_text(encoding="utf-8")
     assert env["PYTHONIOENCODING"] == "utf-8"
     assert FAKE not in env.values()
     assert not any("TOKEN" in k or "KEY" in k for k in env)

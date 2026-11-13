@@ -657,6 +657,33 @@ class TestRealAppContainer:
         assert _probe(windows_container, layout, network=True)["net_external"].startswith("OK")
         assert _probe(windows_container, layout)["net_external"].startswith("DENIED")
 
+    def test_node_shim_keeps_realpath_working_and_piped_spawns_from_hanging(self, windows_container, tmp_path):
+        import shutil
+
+        node = shutil.which("node")
+        if not node:
+            pytest.skip("node is not installed")
+        run = tmp_path / "run"
+        run.mkdir()
+        (run / "probe.js").write_text(
+            "const fs = require('fs');\n"
+            "const cp = require('child_process');\n"
+            "console.log('SYNC:' + fs.realpathSync(process.cwd()));\n"
+            "fs.realpath(process.cwd(), (e, p) => console.log('ASYNC:' + (e ? e.code : p)));\n"
+            "cp.exec('echo hi', (e) => console.log('EXEC:' + (e ? e.code : 'ran')));\n"
+            "try { cp.execSync('echo hi'); } catch (e) { console.log('EXECSYNC:' + e.code); }\n"
+            "console.log('REACHED_END');\n",
+            encoding="utf-8",
+        )
+        res = windows_container.launch(SandboxRequest(
+            argv=[node, str(run / "probe.js")], cwd=run, env=build_env(os.environ, run, None),
+            runtime_paths=[Path(node).parent], read_paths=[], write_paths=[], network=False, timeout=60,
+        ))
+        out = res.stdout
+        assert not res.timed_out, "a piped child spawn hung the process"
+        assert "SYNC:" in out and "ASYNC:" in out and "ASYNC:EPERM" not in out, out + res.stderr
+        assert "EXEC:EPERM" in out and "EXECSYNC:EPERM" in out and "REACHED_END" in out, out + res.stderr
+
     def test_overhead_after_runtime_grants_exist(self, windows_container, layout):
         _probe(windows_container, layout)
         started = time.monotonic()
