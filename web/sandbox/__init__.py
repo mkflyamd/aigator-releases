@@ -156,6 +156,20 @@ _POSIX_ENV = ("PATH", "LANG", "LC_ALL", "LC_CTYPE")
 # Node in an AppContainer fails with `EPERM lstat 'C:\'` unless symlinks are
 # preserved (spike, 2026-10-05). NODE_OPTIONS reaches Node started by user code.
 _NODE_OPTIONS_WINDOWS = "--preserve-symlinks --preserve-symlinks-main"
+# Preloaded into Node on Windows (NODE_OPTIONS --require). The AppContainer cannot read the drive
+# root, so Node's JS realpath fails with EPERM, and libuv hangs creating piped child stdio.
+# node_shim.js routes realpath to the native implementation and fails piped spawns fast.
+_NODE_SHIM = Path(__file__).with_name("node_shim.js")
+_NODE_SHIM_RELPATH = (".gator", "node-shim.js")
+
+
+def _node_options_windows(run_dir: Path) -> str:
+    """Windows NODE_OPTIONS preloading the shim, copied into a hidden run-dir subfolder (not listed as output)."""
+    shim = run_dir.joinpath(*_NODE_SHIM_RELPATH)
+    shim.parent.mkdir(parents=True, exist_ok=True)
+    shim.write_text(_NODE_SHIM.read_text(encoding="utf-8"), encoding="utf-8", newline="\n")
+    # Forward slashes: NODE_OPTIONS treats a backslash inside quotes as an escape.
+    return f'{_NODE_OPTIONS_WINDOWS} --require="{shim.as_posix()}"'
 
 
 def build_env(parent: Mapping[str, str], run_dir: Path, node_path: str | None,
@@ -168,7 +182,7 @@ def build_env(parent: Mapping[str, str], run_dir: Path, node_path: str | None,
         env = {k: upper[k] for k in _WINDOWS_ENV if k in upper}
         for key in _WINDOWS_RUN_DIR_ENV:
             env[key] = str(run_dir)
-        env["NODE_OPTIONS"] = _NODE_OPTIONS_WINDOWS
+        env["NODE_OPTIONS"] = _node_options_windows(run_dir)
     else:
         env = {k: parent[k] for k in _POSIX_ENV if k in parent}
         env["HOME"] = str(run_dir)
