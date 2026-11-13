@@ -113,8 +113,8 @@ class ForwardedProcess:
                         self.exit_code = wire.parse_exit(payload)
                         self._shutdown()
                         return
-        except (OSError, ValueError):
-            pass
+        except (OSError, ValueError) as exc:
+            _log.warning("forward: relay stream ended (%s)", type(exc).__name__)
         try:
             self._proc.terminate()
         except OSError:
@@ -142,8 +142,8 @@ class ForwardedProcess:
         try:
             self._log_handle.write(payload)
             self._log_handle.flush()
-        except (OSError, ValueError):
-            pass
+        except (OSError, ValueError) as exc:
+            _log.warning("forward: log write failed (%s)", type(exc).__name__)
         if self._dev_port is not None:
             return
         self._scan += self._decoder.decode(payload)
@@ -242,8 +242,8 @@ class ForwardedProcess:
         loop = self._loop
         try:
             asyncio.run_coroutine_threadsafe(self._close_all(), loop).result(3)
-        except Exception:
-            pass
+        except Exception as exc:
+            _log.warning("forward: closing connections failed (%s)", type(exc).__name__)
         try:
             loop.call_soon_threadsafe(loop.stop)
         except RuntimeError:
@@ -252,11 +252,10 @@ class ForwardedProcess:
         deadline = time.monotonic() + 2
         while self._proc.poll() is None and time.monotonic() < deadline:
             time.sleep(0.05)
-        if self._proc.poll() is None:
-            try:
-                self._proc.terminate()
-            except OSError:
-                pass
+        try:
+            self._proc.terminate()
+        except OSError:
+            pass
         try:
             self._log_handle.close()
         except (OSError, ValueError):

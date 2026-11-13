@@ -153,6 +153,42 @@ def test_malformed_frame_closes_the_process(tmp_path):
     assert proc.terminated
 
 
+class _BlockingStdout:
+    def __init__(self):
+        self.release = threading.Event()
+
+    def read(self, n):
+        self.release.wait(10)
+        return b""
+
+
+class _ExitedProc:
+    pid = 1
+
+    def __init__(self):
+        import io
+        self.stdin = io.BytesIO()
+        self.stdout = _BlockingStdout()
+        self.terminate_calls = 0
+
+    def poll(self):
+        return 0
+
+    def terminate(self):
+        self.terminate_calls += 1
+
+
+def test_terminate_reaches_the_process_even_if_it_already_exited(tmp_path):
+    proc = _ExitedProc()
+    fp = ForwardedProcess(proc, str(tmp_path / "log.txt")).start()
+    try:
+        fp.terminate()
+        assert fp.closed.is_set()
+        assert proc.terminate_calls >= 1
+    finally:
+        proc.stdout.release.set()
+
+
 @pytest.mark.parametrize("text,expected", [
     ("\x1b[32m➜\x1b[39m  \x1b[1mLocal\x1b[22m:   \x1b[36mhttp://localhost:\x1b[1m5173\x1b[22m/\x1b[39m", 5173),
     ("see http://localhost.evil.com:80/", None),
