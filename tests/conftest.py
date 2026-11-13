@@ -147,6 +147,7 @@ def windows_container(tmp_path_factory):
         lw.revoke_runtime_grants()
         lw.delete_profile(name)
         lw.delete_profile(name + lw.SHELL_PROFILE_SUFFIX)
+        lw.delete_profile(name + lw.SERVER_PROFILE_SUFFIX)
         mp.undo()
 
 

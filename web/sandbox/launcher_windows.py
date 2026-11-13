@@ -7,7 +7,10 @@ reused. Runtime directories get a persistent inheritable read+execute ACE for
 its SID, granted once and recorded in the ledger (re-granting ~30k files costs
 ~8.5 s each way). The run folder and user-approved extras are granted for one
 run and revoked in `finally`; runs are serialized so one run's grants are
-never visible to another. Every per-run grant is written to the ledger before
+never visible to another. Long-running processes (start()) use their own
+profile (SERVER_PROFILE_SUFFIX) and keep their per-run grants until they exit,
+so a foreground run's SID can never reach, widen or revoke a live server's
+grants. Every per-run grant is written to the ledger before
 icacls runs; sweep_stale_grants() (server startup) revokes leftovers of a
 crashed run. icacls works without admin because the user owns these paths
 (per-user install). System32 is covered by ALL APPLICATION PACKAGES.
@@ -33,6 +36,7 @@ _log = logging.getLogger(__name__)
 
 PROFILE_NAME = "AIGator.CodeRunner"
 SHELL_PROFILE_SUFFIX = ".Shell"  # run_shell's profile, so a persistent grant on the scratch folder is not shared with run_python
+SERVER_PROFILE_SUFFIX = ".Server"  # start()'s profile: a held process's grants are never shared with a foreground run
 INTERNET_CLIENT_SID = "S-1-15-3-1"
 
 PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES = 0x00020009
@@ -334,11 +338,15 @@ def _container_folder(sid: str) -> Path | None:
             a.ole32.CoTaskMemFree(ptr)
 
 
+def _profile_names() -> tuple[str, str, str]:
+    return PROFILE_NAME, PROFILE_NAME + SHELL_PROFILE_SUFFIX, PROFILE_NAME + SERVER_PROFILE_SUFFIX
+
+
 def _container_dir_ok(folder: Path) -> bool:
     """Only Packages/<this profile>/AC, with neither it nor its parent a link, may be emptied."""
     return (
         folder.name.lower() == "ac"
-        and folder.parent.name.lower() in (PROFILE_NAME.lower(), (PROFILE_NAME + SHELL_PROFILE_SUFFIX).lower())
+        and folder.parent.name.lower() in {name.lower() for name in _profile_names()}
         and folder.parent.parent.name.lower() == "packages"
         and not _is_link(folder)
         and not _is_link(folder.parent)
@@ -764,7 +772,7 @@ def _valid(handle) -> bool:
 
 
 def _run_contained(argv: list[str], cwd: Path, env: dict[str, str], psid, timeout: int, network: bool,
-                   stream: bool = False) -> SandboxResult:
+                   stream: bool = False) -> SandboxResult | _Started:
     a = _api()
     k32, wt, HANDLE = a.k32, a.wt, a.HANDLE
     sa = a.SECURITY_ATTRIBUTES(ctypes.sizeof(a.SECURITY_ATTRIBUTES), None, True)
@@ -959,6 +967,9 @@ class _Prepared:
 
 
 def _release(sid: str, paths, unhold: bool = False) -> None:
+    """Revoke the SID's per-run grants on paths. Holds are keyed by SID and only start() takes them, on the
+    server profile's SID, so a foreground run (another SID) is never held back here; the check only keeps a
+    grant that another live server on the same server SID still needs."""
     for path in paths:
         try:
             if unhold:
@@ -985,7 +996,11 @@ def _finish(prep: _Prepared) -> None:
         prep.free_sid()
 
 
-def _prepare(req: SandboxRequest) -> _Prepared:
+def _launch_profile(req: SandboxRequest) -> str:
+    return PROFILE_NAME + SHELL_PROFILE_SUFFIX if req.scratch_path else PROFILE_NAME
+
+
+def _prepare(req: SandboxRequest, profile: str) -> _Prepared:
     """Give the sandbox its access for one run. The caller holds _RUN_LOCK."""
     runtime, per_run = acl_grants(req)
     runtime_dirs = [str(path) for path, _perm in runtime]
@@ -1006,7 +1021,7 @@ def _prepare(req: SandboxRequest) -> _Prepared:
             "permissions on that folder (the sandbox's access entry must be removable by your account)."
         )
     try:
-        psid, sid = ensure_profile(PROFILE_NAME + SHELL_PROFILE_SUFFIX if req.scratch_path else PROFILE_NAME)
+        psid, sid = ensure_profile(profile)
     except OSError as exc:
         raise SandboxUnavailable(f"Windows could not create the AppContainer sandbox profile ({exc}).") from exc
     prep = _Prepared(psid, sid)
@@ -1040,7 +1055,7 @@ def _prepare(req: SandboxRequest) -> _Prepared:
 
 def launch(req: SandboxRequest) -> SandboxResult:
     with _RUN_LOCK:
-        prep = _prepare(req)
+        prep = _prepare(req, _launch_profile(req))
         try:
             return _run_contained(req.argv, req.cwd, req.env, prep.psid, req.timeout, req.network)
         finally:
@@ -1094,7 +1109,11 @@ class SandboxProcess:
 
     def _watch(self) -> None:
         a = _api()
-        a.k32.WaitForSingleObject(a.wt.HANDLE(self._proc), INFINITE)
+        if a.k32.WaitForSingleObject(a.wt.HANDLE(self._proc), INFINITE) == WAIT_FAILED:
+            _log.warning("sandbox: waiting for a long-running process failed (winerror %s); ending it",
+                         ctypes.get_last_error())
+            self._close_job()
+            a.k32.WaitForSingleObject(a.wt.HANDLE(self._proc), 5000)
         code = a.wt.DWORD()
         a.k32.GetExitCodeProcess(a.wt.HANDLE(self._proc), ctypes.byref(code))
         self._close_job()  # the pipes stay open so the reader can drain the last output
@@ -1110,7 +1129,7 @@ class SandboxProcess:
 def start(req: SandboxRequest) -> SandboxProcess:
     """Start a long-running sandboxed process. Its grants are released when it exits."""
     with _RUN_LOCK:
-        prep = _prepare(req)
+        prep = _prepare(req, PROFILE_NAME + SERVER_PROFILE_SUFFIX)
         try:
             started = _run_contained(req.argv, req.cwd, req.env, prep.psid, req.timeout, req.network, stream=True)
         except BaseException:
@@ -1132,7 +1151,8 @@ def start(req: SandboxRequest) -> SandboxProcess:
 
 
 def readable_or_grantable(path: Path) -> bool:
-    psid, sid = ensure_profile(PROFILE_NAME + SHELL_PROFILE_SUFFIX)
+    """Whether start()'s profile can read path now, or the user could grant it."""
+    psid, sid = ensure_profile(PROFILE_NAME + SERVER_PROFILE_SUFFIX)
     try:
         return _container_can_read(path, sid) or _can_change_acl(path)
     finally:

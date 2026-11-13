@@ -902,3 +902,166 @@ def test_terminate_after_the_process_exited_is_safe_and_output_stays_readable(mo
         assert f.exits == [1]
     finally:
         _winapi.CloseHandle(f.child_in)
+
+
+# ---- start() runs under its own AppContainer profile (fix round 1) ----
+_SIDS = {"base": "S-1-15-2-1001", ".Shell": "S-1-15-2-1002", ".Server": "S-1-15-2-1003"}
+
+
+def _per_profile(fake, monkeypatch):
+    """Give each profile name its own SID and record every icacls grant/revoke with the SID it targets."""
+    fake.names, fake.acl = [], []
+
+    def ensure_profile(name):
+        fake.names.append(name)
+        suffix = name[len(lw.PROFILE_NAME):] or "base"
+        return None, _SIDS[suffix]
+
+    def grant(path, sid, perm):
+        fake.acl.append(("grant", sid, str(path), perm))
+        return 0, ""
+
+    def revoke(path, sid):
+        fake.acl.append(("revoke", sid, str(path)))
+        return 0, ""
+
+    monkeypatch.setattr(lw, "ensure_profile", ensure_profile)
+    monkeypatch.setattr(lw, "_grant", grant)
+    monkeypatch.setattr(lw, "_revoke", revoke)
+
+
+def _sids(fake, op):
+    return {entry[1] for entry in fake.acl if entry[0] == op}
+
+
+def test_start_uses_the_server_profile_and_launch_selection_is_unchanged(fake, monkeypatch):
+    _streaming(monkeypatch)
+    _per_profile(fake, monkeypatch)
+    fake.scratch = fake.tmp / "work"
+    fake.scratch.mkdir()
+    lw.start(_scratch_req(fake, fake.scratch))
+    lw.start(fake.req())
+    lw.launch(_scratch_req(fake, fake.scratch))
+    lw.launch(fake.req())
+    server = lw.PROFILE_NAME + lw.SERVER_PROFILE_SUFFIX
+    assert fake.names == [server, server, lw.PROFILE_NAME + lw.SHELL_PROFILE_SUFFIX, lw.PROFILE_NAME]
+
+
+def test_a_foreground_run_never_touches_a_held_server_grant(fake, monkeypatch):
+    _streaming(monkeypatch)
+    _per_profile(fake, monkeypatch)
+    spy = lw.start(fake.req(write=[fake.run]))
+    server_entries = [e for e in lw._ledger_load()["per_run"] if e[0] == _SIDS[".Server"]]
+    assert server_entries and _sids(fake, "grant") == {_SIDS[".Server"]}
+    fake.acl.clear()
+    assert lw.launch(fake.req(write=[fake.run])) == "done"
+    # The foreground run gets and loses its own entry; the server's SID is never granted or revoked.
+    assert _sids(fake, "grant") == {_SIDS["base"]}
+    assert _sids(fake, "revoke") == {_SIDS["base"]}
+    assert lw._ledger_load()["per_run"] == server_entries
+    fake.acl.clear()
+    spy.on_exit()
+    assert _sids(fake, "revoke") == {_SIDS[".Server"]}
+    assert lw._ledger_load()["per_run"] == []
+
+
+def test_a_foreground_run_cannot_widen_a_held_server_grant(fake, monkeypatch):
+    _streaming(monkeypatch)
+    _per_profile(fake, monkeypatch)
+    project = fake.tmp / "project"
+    project.mkdir()
+    spy = lw.start(fake.req(read=[project]))
+    lw.launch(fake.req(write=[project]))
+    on_project = [e for e in fake.acl if e[2] == str(project)]
+    assert ("grant", _SIDS[".Server"], str(project), "RX") in on_project
+    assert ("grant", _SIDS["base"], str(project), "M") in on_project
+    assert ("revoke", _SIDS["base"], str(project)) in on_project
+    # Nothing ever gave the server's SID more than read on the project.
+    assert [e for e in on_project if e[1] == _SIDS[".Server"] and e[0] == "grant"] == [
+        ("grant", _SIDS[".Server"], str(project), "RX")]
+    spy.on_exit()
+
+
+def test_the_sweep_still_skips_a_live_servers_grants(fake, monkeypatch):
+    _streaming(monkeypatch)
+    _per_profile(fake, monkeypatch)
+    spy = lw.start(fake.req(write=[fake.run]))
+    held = lw._ledger_load()["per_run"]
+    fake.acl.clear()
+    assert lw.sweep_stale_grants() == 0
+    assert fake.acl == []
+    assert lw._ledger_load()["per_run"] == held
+    spy.on_exit()
+    assert lw.sweep_stale_grants() == 0
+    assert lw._ledger_load()["per_run"] == []
+
+
+def test_two_servers_share_the_server_profile_and_count_their_holds(fake, monkeypatch):
+    _streaming(monkeypatch)
+    _per_profile(fake, monkeypatch)
+    first = lw.start(fake.req(write=[fake.run]))
+    second = lw.start(fake.req(write=[fake.run]))
+    fake.acl.clear()
+    first.on_exit()
+    assert _sids(fake, "revoke") == set()
+    assert lw._ledger_load()["per_run"]
+    second.on_exit()
+    assert _sids(fake, "revoke") == {_SIDS[".Server"]}
+    assert lw._ledger_load()["per_run"] == []
+
+
+def test_readable_or_grantable_checks_the_server_profile(monkeypatch, tmp_path):
+    names, seen = [], []
+    monkeypatch.setattr(lw, "ensure_profile", lambda name: (names.append(name), (None, "S-1-15-2-77"))[1])
+    monkeypatch.setattr(lw, "_api", lambda: SimpleNamespace(adv=SimpleNamespace(FreeSid=lambda p: None)))
+    monkeypatch.setattr(lw, "_container_can_read", lambda path, sid: seen.append(sid) or True)
+    assert lw.readable_or_grantable(tmp_path) is True
+    assert names == [lw.PROFILE_NAME + lw.SERVER_PROFILE_SUFFIX]
+    assert seen == ["S-1-15-2-77"]
+
+
+def test_the_server_profiles_storage_is_scrubbed_like_the_others(tmp_path, monkeypatch):
+    ac = tmp_path / "Packages" / (lw.PROFILE_NAME + lw.SERVER_PROFILE_SUFFIX) / "AC"
+    (ac / "sub").mkdir(parents=True)
+    (ac / "top.txt").write_text("leaked")
+    monkeypatch.setattr(lw, "_container_folder", lambda sid: ac)
+    lw._scrub_container("S-1-15-2-9")
+    assert ac.is_dir() and list(ac.iterdir()) == []
+
+
+def test_the_test_profile_fixture_deletes_the_server_profile_too():
+    src = (Path(__file__).parents[1] / "conftest.py").read_text(encoding="utf-8")
+    assert "lw.delete_profile(name + lw.SERVER_PROFILE_SUFFIX)" in src
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="SandboxProcess wraps Windows handles")
+def test_a_failed_wait_ends_the_tree_before_releasing_its_grants(monkeypatch, caplog):
+    import _winapi
+    import ctypes.wintypes as wt
+
+    calls, waits = [], []
+
+    def wait(handle, ms):
+        waits.append(ms)
+        return lw.WAIT_FAILED if len(waits) == 1 else 0
+
+    def exit_code(handle, ref):
+        ref._obj.value = 1
+
+    k32 = _NS(WaitForSingleObject=wait, GetExitCodeProcess=exit_code,
+              TerminateJobObject=lambda handle, code: calls.append(("terminate_job", handle.value)),
+              CloseHandle=lambda handle: calls.append(("close", handle.value)))
+    monkeypatch.setattr(lw, "_api", lambda: _NS(k32=k32, wt=wt))
+    out_rd, child_out = _winapi.CreatePipe(None, 0)
+    child_in, in_wr = _winapi.CreatePipe(None, 0)
+    exits = []
+    try:
+        proc = lw.SandboxProcess(lw._Started(_PROC, _JOB, out_rd, in_wr, 99),
+                                 on_exit=lambda: exits.append(list(calls)))
+        assert proc.wait(5) == 1
+        assert exits and ("terminate_job", _JOB) in exits[0]
+        assert "waiting for a long-running process failed" in caplog.text
+        proc.terminate()
+    finally:
+        _winapi.CloseHandle(child_out)
+        _winapi.CloseHandle(child_in)
