@@ -77,6 +77,13 @@ def _unique_local_path(downloads_dir, name):
     return str(candidate)
 
 
+def _discard_local(path):
+    try:
+        Path(path).unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 def _move_with_lock_retry(provider, source, dest_folder, new_name, sleep):
     moved = provider.move(source, dest_folder, new_name)
     for delay in LOCK_RETRY_DELAYS:
@@ -167,12 +174,5 @@ def transfer(provider, source, dest_folder, mode="move", new_name="", sleep=time
     if "error" in check or check.get("size") != size:
         why = check.get("error") or f"uploaded size {check.get('size')} does not match original size {size}"
         return _failed(f"Could not verify the uploaded copy: {why}", "verify_failed", reason, local_copy=dl["saved_to"])
-    return _result(
-        "copied",
-        "download_upload",
-        True,
-        reason,
-        _dest(up),
-        local_copy=dl["saved_to"],
-        message=_copied_message(reason) + f" A local copy is at {dl['saved_to']}.",
-    )
+    _discard_local(dl["saved_to"])
+    return _result("copied", "download_upload", True, reason, _dest(up), message=_copied_message(reason))

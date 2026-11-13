@@ -136,6 +136,16 @@ def test_download_exception_maps_to_error_code(tmp_path):
     p, _ = provider(download=dl)
     out = p.download({"drive_id": "d", "item_id": "i"}, str(tmp_path / "a.docx"))
     assert out["error_code"] == "locked" and "error" in out
+    assert not (tmp_path / "a.docx").exists()
+
+
+def test_failed_download_removes_the_placeholder_it_created(tmp_path):
+    dl = MagicMock(return_value={"error": "Got HTML instead of file bytes"})
+    p, _ = provider(download=dl)
+    target = tmp_path / "a.docx"
+    out = p.download({"drive_id": "d", "item_id": "i"}, str(target))
+    assert "error" in out and "placeholder" not in out["error"]
+    assert not target.exists()
 
 
 def test_download_error_dict_without_code_gets_unknown(tmp_path):

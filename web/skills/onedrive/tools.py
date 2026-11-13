@@ -544,7 +544,7 @@ TOOL_DEFS.extend([
             "if the file is locked (open in Word or Teams) or lives in someone else's OneDrive, it copies instead and "
             "tells you so. Gator never deletes files, so when original_remains is true the original is still in place "
             "and the user can remove it themselves. Result: status (moved|copied|pending|failed), method, "
-            "original_remains, reason (locked|not_owner|null), dest {drive_id,item_id,name,web_url}, local_copy, message."
+            "original_remains, reason (locked|not_owner|null), dest {drive_id,item_id,name,web_url}, local_copy (only set when a failed upload leaves the downloaded file), message."
         ),
         "input_schema": {
             "type": "object",

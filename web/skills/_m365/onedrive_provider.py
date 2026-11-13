@@ -114,7 +114,7 @@ class OneDriveProvider:
         except Exception as e:
             out = _failure("Download failed", e)
         if "error" in out:
-            out["error"] += f" (an empty placeholder file was left at {dest})"
+            dest.unlink(missing_ok=True)
         return out
 
     def upload(self, local_path, dest_folder, name=""):

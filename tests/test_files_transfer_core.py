@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from skills._files import transfer as tr
@@ -46,6 +48,8 @@ class FakeProvider:
 
     def download(self, ref, local_path):
         self.calls.append(("download", local_path))
+        if "saved_to" in (self.download_result or {}):
+            Path(self.download_result["saved_to"]).write_bytes(b"x" * 10)
         return self.download_result
 
     def upload(self, local_path, dest, name):
@@ -126,7 +130,8 @@ def test_copy_error_falls_back_to_download_and_upload(tmp_path):
                      download={"saved_to": str(tmp_path / "report.docx")}, upload=up)
     out, _ = run(p, mode="copy", downloads_dir=tmp_path)
     assert (out["status"], out["method"]) == ("copied", "download_upload")
-    assert out["local_copy"] == str(tmp_path / "report.docx") and out["dest"] == up
+    assert out["local_copy"] is None and out["dest"] == up
+    assert not (tmp_path / "report.docx").exists()
     assert ("download", str(tmp_path / "report.docx")) in p.calls
     assert ("upload", str(tmp_path / "report.docx"), "report.docx") in p.calls
 
@@ -155,6 +160,7 @@ def test_upload_failure_after_download_reports_local_copy(tmp_path):
     out, _ = run(p, mode="copy", downloads_dir=tmp_path)
     assert out["status"] == "failed" and out["local_copy"] == str(tmp_path / "report.docx")
     assert out["original_remains"] is True
+    assert (tmp_path / "report.docx").exists()
 
 
 def test_download_failure_fails_the_transfer(tmp_path):
@@ -231,6 +237,7 @@ def test_upload_size_mismatch_fails_verification(tmp_path):
     out, _ = run(p, mode="copy", downloads_dir=tmp_path)
     assert out["status"] == "failed" and out["error_code"] == "verify_failed"
     assert out["local_copy"] == str(tmp_path / "report.docx") and out["original_remains"] is True
+    assert (tmp_path / "report.docx").exists()
 
 
 def test_upload_stat_failure_fails_verification(tmp_path):
@@ -238,6 +245,7 @@ def test_upload_stat_failure_fails_verification(tmp_path):
     out, _ = run(p, mode="copy", downloads_dir=tmp_path)
     assert out["status"] == "failed" and out["error_code"] == "verify_failed"
     assert out["local_copy"] == str(tmp_path / "report.docx") and out["original_remains"] is True
+    assert (tmp_path / "report.docx").exists()
 
 
 def test_upload_verified_by_stat_after_upload(tmp_path):
@@ -299,3 +307,18 @@ def test_pending_copy_with_pre_existing_match_stays_pending():
     out, _ = run(p, mode="copy")
     assert out["status"] == "pending" and out["dest"] is None
     assert not any(isinstance(c, tuple) for c in p.calls)
+
+
+def test_verified_upload_removes_the_local_copy_and_does_not_mention_it(tmp_path):
+    p = _upload_to_n1(tmp_path, None)
+    out, _ = run(p, mode="copy", downloads_dir=tmp_path)
+    assert out["status"] == "copied" and out["local_copy"] is None
+    assert list(tmp_path.iterdir()) == []
+    assert "local copy" not in out["message"].lower()
+
+
+def test_a_local_copy_that_is_already_gone_does_not_fail_a_verified_transfer(tmp_path):
+    p = _upload_to_n1(tmp_path, None)
+    p.upload = lambda local_path, dest, name: (Path(local_path).unlink(), p.upload_result)[1]
+    out, _ = run(p, mode="copy", downloads_dir=tmp_path)
+    assert out["status"] == "copied" and out["local_copy"] is None
