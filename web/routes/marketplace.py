@@ -306,7 +306,7 @@ def _install_claude_plugins_official(
 
 
 @router.get("/api/marketplace/catalog")
-async def get_catalog():
+def get_catalog():
     cfg = _load_config()
     if not cfg.get("marketplace_enabled", True):
         return {"skills": [], "disabled": True}
@@ -409,7 +409,7 @@ async def get_installed():
 
 
 @router.post("/api/marketplace/preview")
-async def preview_skill(req: PreviewRequest):
+def preview_skill(req: PreviewRequest):
     """Fetch metadata for a URL-imported skill without writing to disk."""
     from marketplace import github_fetcher
 
@@ -486,7 +486,7 @@ async def preview_skill(req: PreviewRequest):
 
 
 @router.post("/api/marketplace/install", dependencies=[Depends(verify_csrf)])
-async def install_skill(req: InstallRequest):
+def install_skill(req: InstallRequest):
     if not req.skill_id:
         raise HTTPException(status_code=400, detail="skill_id is required")
 
@@ -589,7 +589,7 @@ async def install_skill(req: InstallRequest):
 
 
 @router.delete("/api/marketplace/uninstall/{skill_id}", dependencies=[Depends(verify_csrf)])
-async def uninstall(skill_id: str):
+def uninstall(skill_id: str):
     result = uninstall_skill(skill_id)
     if not result.get("ok"):
         error_msg = result.get("error", "")
@@ -659,7 +659,7 @@ async def update_skill_md(skill_id: str, req: UpdateSkillMdRequest):
 
 
 @router.post("/api/marketplace/create", dependencies=[Depends(verify_csrf)])
-async def create_skill(req: CreateSkillRequest):
+def create_skill(req: CreateSkillRequest):
     if not req.name.strip():
         raise HTTPException(status_code=400, detail="name is required")
     result = create_user_skill(
@@ -686,7 +686,7 @@ class LocalInstallRequest(BaseModel):
 
 
 @router.post("/api/marketplace/install-local", dependencies=[Depends(verify_csrf)])
-async def install_local(req: LocalInstallRequest):
+def install_local(req: LocalInstallRequest):
     """Install a skill from a local ZIP file or folder selected via the
     native file dialog. The Electron main process reads the file(s) and
     sends them as base64 so no filesystem access is needed here.

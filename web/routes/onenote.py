@@ -237,7 +237,9 @@ async def context_pin(req: ContextPinRequest):
     # Upgrade OneDrive pins to a real Graph id at pin time when possible, so the
     # persisted pin resolves directly instead of relying on a read-time search.
     if req.source == "onedrive":
-        item_id, meta = _resolve_onedrive_pin(item_id, req.label, meta)
+        item_id, meta = await asyncio.to_thread(
+            _resolve_onedrive_pin, item_id, req.label, meta
+        )
     # A team-notebook pin arrives with the SharePoint page URL; resolve its
     # site once here so the model is handed site_id instead of having to find it.
     if req.source == "onenote" and meta.get("web_url") and not meta.get("site_id"):

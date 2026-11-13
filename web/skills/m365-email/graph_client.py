@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 import threading
+import types
 import httpx
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
@@ -38,6 +39,68 @@ def _get_http_pool() -> httpx.Client:
             follow_redirects=True,
         )
     return _http_pool_local.client
+
+
+# ── In-flight cap ──────────────────────────────────────────────────────────────
+# Slow Graph calls hold a threadpool thread for their whole duration. Capping how many can be in
+# flight at once, and refusing the rest immediately instead of queueing them on threads, keeps
+# threads free for static files and every other route during an outage.
+# This module is executed once per wrapper (see skills/_m365/helpers.py), so the semaphore lives in
+# a process-wide holder in sys.modules that all copies share.
+_MAX_IN_FLIGHT = 24
+_READ_TIMEOUT_S = 20.0
+
+
+def _make_gate() -> types.ModuleType:
+    gate = types.ModuleType("_aigator_graph_gate")
+    gate.semaphore = threading.BoundedSemaphore(_MAX_IN_FLIGHT)
+    return gate
+
+
+_gate = sys.modules.setdefault("_aigator_graph_gate", _make_gate())
+
+
+# ── Outage cooldown ────────────────────────────────────────────────────────────
+# A read that exhausts its retries on 5xx/network errors makes the same endpoint fail immediately
+# for a while, so a chat turn that keeps calling the tool is not held for another full retry cycle.
+_OUTAGE_COOLDOWN_S = 60
+_RETRY_BUDGET_S = 45
+_outage_lock = threading.Lock()
+_outage_until: dict[str, float] = {}
+
+
+def _outage_key(method: str, url: str) -> str | None:
+    if method != "GET":
+        return None
+    return urllib.parse.urlsplit(url).path
+
+
+def _outage_remaining(key: str | None) -> int:
+    if key is None:
+        return 0
+    with _outage_lock:
+        left = _outage_until.get(key, 0.0) - time.monotonic()
+        if left <= 0:
+            _outage_until.pop(key, None)
+            return 0
+        return int(left) + 1
+
+
+def _outage_start(key: str | None) -> None:
+    if key is not None:
+        with _outage_lock:
+            _outage_until[key] = time.monotonic() + _OUTAGE_COOLDOWN_S
+
+
+def _outage_clear(key: str | None) -> None:
+    if key is not None:
+        with _outage_lock:
+            _outage_until.pop(key, None)
+
+
+def _reset_outage_state() -> None:
+    with _outage_lock:
+        _outage_until.clear()
 
 
 # ── Module-level lock: prevents concurrent threads from double-refreshing token ─
@@ -206,50 +269,45 @@ class GraphClient:
         }
 
     def complete_auth(self, device_code: str) -> dict[str, str]:
+        """One token request. Returns status "pending" until the user finishes signing in."""
         tid = self._tenant_id or "organizations"
         url = f"https://login.microsoftonline.com/{tid}/oauth2/v2.0/token"
-        for _ in range(24):
-            data = urllib.parse.urlencode(
-                {
-                    "client_id": self._client_id,
-                    "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
-                    "device_code": device_code,
-                }
-            ).encode()
-            req = urllib.request.Request(url, data=data, method="POST")
-            try:
-                with urllib.request.urlopen(req, timeout=30) as resp:
-                    d = json.loads(resp.read())
-                self._access_token = d["access_token"]
-                self._refresh_token = d.get("refresh_token", "")
-                self._expires_at = time.time() + d.get("expires_in", 3600) - 60
-                try:
-                    payload = d["access_token"].split(".")[1]
-                    payload += "=" * (4 - len(payload) % 4)
-                    claims = json.loads(base64.b64decode(payload))
-                    self._tenant_id = claims.get("tid", tid)
-                except Exception:
-                    pass
-                self._save_token()
-                return {
-                    "status": "ok",
-                    "message": "Authentication successful! Tokens saved.",
-                    "token_file": "secure_store:graph/token",
-                    "scopes": d.get("scope", ""),
-                }
-            except urllib.error.HTTPError as e:
-                body = json.loads(e.read())
-                err = body.get("error", "")
-                if err == "authorization_pending":
-                    time.sleep(5)
-                    continue
-                return {
-                    "status": "error",
-                    "error": f"{err}: {body.get('error_description', '')[:200]}",
-                }
+        data = urllib.parse.urlencode(
+            {
+                "client_id": self._client_id,
+                "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+                "device_code": device_code,
+            }
+        ).encode()
+        req = urllib.request.Request(url, data=data, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                d = json.loads(resp.read())
+        except urllib.error.HTTPError as e:
+            body = json.loads(e.read())
+            err = body.get("error", "")
+            if err in ("authorization_pending", "slow_down"):
+                return {"status": "pending"}
+            return {
+                "status": "error",
+                "error": f"{err}: {body.get('error_description', '')[:200]}",
+            }
+        self._access_token = d["access_token"]
+        self._refresh_token = d.get("refresh_token", "")
+        self._expires_at = time.time() + d.get("expires_in", 3600) - 60
+        try:
+            payload = d["access_token"].split(".")[1]
+            payload += "=" * (4 - len(payload) % 4)
+            claims = json.loads(base64.b64decode(payload))
+            self._tenant_id = claims.get("tid", tid)
+        except Exception:
+            pass
+        self._save_token()
         return {
-            "status": "error",
-            "error": "Timed out waiting for user sign-in. Run auth again.",
+            "status": "ok",
+            "message": "Authentication successful! Tokens saved.",
+            "token_file": "secure_store:graph/token",
+            "scopes": d.get("scope", ""),
         }
 
     def _headers(self) -> dict[str, str]:
@@ -310,14 +368,53 @@ class GraphClient:
         content: bytes | None = None,
         label: str = "",
     ) -> httpx.Response:
-        """Central request method with retry logic and connection pooling."""
+        """Central request method: caps in-flight Graph calls, then retries with connection pooling."""
+        semaphore = _gate.semaphore
+        if not semaphore.acquire(blocking=False):
+            raise GraphAPIError(
+                "Microsoft Graph requests are backing up (too many are already waiting on it). "
+                "Try again in a moment.",
+                status_code=503,
+            )
+        try:
+            return self._request_with_retries(
+                method, url, headers=headers, content=content, label=label
+            )
+        finally:
+            semaphore.release()
+
+    def _request_with_retries(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: dict | None = None,
+        content: bytes | None = None,
+        label: str = "",
+    ) -> httpx.Response:
         hdrs = headers or self._headers()
         pool = _get_http_pool()
         last_err: Exception | None = None
+        outage_key = _outage_key(method, url)
+        left = _outage_remaining(outage_key)
+        if left:
+            raise GraphAPIError(
+                f"Microsoft Graph is not responding for {outage_key} (it failed repeatedly "
+                f"just now; skipping it for {left}s). Do not call this tool again this turn: "
+                "tell the user the service is unavailable and offer to try again later.",
+                status_code=503,
+            )
+        started = time.monotonic()
+        timeout = (
+            httpx.Timeout(30.0, read=_READ_TIMEOUT_S) if method == "GET" else httpx.USE_CLIENT_DEFAULT
+        )
         for attempt in range(1, self._MAX_RETRIES + 1):
             try:
-                resp = pool.request(method, url, headers=hdrs, content=content)
+                resp = pool.request(
+                    method, url, headers=hdrs, content=content, timeout=timeout
+                )
                 resp.raise_for_status()
+                _outage_clear(outage_key)
                 # Log mutating operations at INFO so they're visible; reads at DEBUG
                 _lvl = (
                     logging.INFO
@@ -334,6 +431,9 @@ class GraphClient:
                 if code in (429, 502, 503, 504) and attempt < self._MAX_RETRIES:
                     retry_after = int(e.response.headers.get("Retry-After", "30"))
                     wait = min(retry_after, 300) if code == 429 else min(2**attempt, 15)
+                else:
+                    wait = None
+                if wait is not None and time.monotonic() - started + wait < _RETRY_BUDGET_S:
                     log.warning(
                         "Graph %d on %s %s — retrying in %ds (%d/%d)",
                         code,
@@ -346,6 +446,8 @@ class GraphClient:
                     time.sleep(wait)
                     last_err = e
                     continue
+                if code in (502, 503, 504):
+                    _outage_start(outage_key)
                 parsed = self._extract_graph_error(code, body)
                 # 404 (not found) and 403 (scope missing) are often expected —
                 # log at debug to avoid noisy warnings the caller handles anyway.
@@ -363,10 +465,12 @@ class GraphClient:
                     self._MAX_RETRIES,
                     e,
                 )
-                if attempt < self._MAX_RETRIES:
-                    time.sleep(min(2**attempt, 10))
+                wait = min(2**attempt, 10)
+                if attempt < self._MAX_RETRIES and time.monotonic() - started + wait < _RETRY_BUDGET_S:
+                    time.sleep(wait)
                     last_err = e
                     continue
+                _outage_start(outage_key)
                 raise GraphAPIError(f"Network error on {method} {label}: {e}") from e
         raise GraphThrottleError(
             f"Graph {method} {label} throttled after {self._MAX_RETRIES} retries"

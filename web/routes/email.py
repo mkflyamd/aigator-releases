@@ -1,5 +1,7 @@
 """Email route group -- inbox, message detail, reply, forward, send, drafts, delta sync."""
 
+import threading
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from urllib.parse import quote as _url_quote
@@ -125,7 +127,7 @@ class EmailSendRequest(BaseModel):
 
 
 @router.post("/api/actions/email")
-async def action_email():
+def action_email():
     try:
         gc = GraphClient()
         inbox = gc.get("/me/mailFolders/inbox")
@@ -156,7 +158,7 @@ async def action_email():
 
 
 @router.post("/api/actions/email/read")
-async def action_email_read(req: EmailReadRequest):
+def action_email_read(req: EmailReadRequest):
     try:
         gc = GraphClient()
         msg = gc.get(
@@ -188,8 +190,11 @@ _FOLDER_MAP = {
 }
 
 
+_EMAIL_DELTA_LOCK = threading.RLock()
+
+
 @router.get("/api/email/inbox")
-async def tp_email_inbox(
+def tp_email_inbox(
     skip: int = 0,
     top: int = 50,
     filter: str = "all",
@@ -197,6 +202,19 @@ async def tp_email_inbox(
     folder: str = "inbox",
 ):
     """Inbox / Sent / Drafts list with filter, pagination, and optional delta sync (inbox only)."""
+    if delta and folder.lower() == "inbox":
+        # Routes run in the threadpool, so only one delta sync at a time may touch the shared delta
+        # state. A poll that arrives meanwhile gets a plain fetch instead of queueing behind the lock.
+        if _EMAIL_DELTA_LOCK.acquire(blocking=False):
+            try:
+                return _email_inbox(skip, top, filter, delta, folder)
+            finally:
+                _EMAIL_DELTA_LOCK.release()
+        return _email_inbox(skip, top, filter, False, folder)
+    return _email_inbox(skip, top, filter, delta, folder)
+
+
+def _email_inbox(skip: int, top: int, filter: str, delta: bool, folder: str):
     folder_lower = folder.lower()
     if folder_lower not in _FOLDER_MAP:
         raise HTTPException(
@@ -241,13 +259,13 @@ async def tp_email_inbox(
 
         # -- Delta sync path --
         if "email" in shared._delta_unsupported:
-            return await tp_email_inbox(skip, top, filter, delta=False)
+            return tp_email_inbox(skip, top, filter, delta=False)
 
         state = shared._delta_state.get("email")
 
         # Cold start: no delta state yet -- use fast non-delta path first
         if not state or not state.get("delta_link"):
-            return await tp_email_inbox(skip, top, filter, delta=False)
+            return tp_email_inbox(skip, top, filter, delta=False)
 
         if state and state.get("delta_link"):
             # Incremental sync
@@ -258,7 +276,7 @@ async def tp_email_inbox(
                     if "410" in str(e):
                         # Delta token expired -- fall back to initial sync
                         shared._delta_state.pop("email", None)
-                        return await tp_email_inbox(skip, top, filter, delta=True)
+                        return tp_email_inbox(skip, top, filter, delta=True)
                     raise
                 _apply_delta_changes(state, result)
                 while "@odata.nextLink" in result:
@@ -288,7 +306,7 @@ async def tp_email_inbox(
                         flush=True,
                     )
                     shared._delta_state.pop("email", None)
-                    return await tp_email_inbox(skip, top, filter, delta=False)
+                    return tp_email_inbox(skip, top, filter, delta=False)
                 state = {
                     "delta_link": result.get("@odata.deltaLink", ""),
                     "items": all_items,
@@ -300,7 +318,7 @@ async def tp_email_inbox(
                 shared._delta_unsupported.add("email")
                 shared._save_delta_unsupported()
                 print(f"[email] Delta not supported -- disabling: {e}", flush=True)
-                return await tp_email_inbox(skip, top, filter, delta=False)
+                return tp_email_inbox(skip, top, filter, delta=False)
 
         # Cap stored items to prevent unbounded growth
         if len(state["items"]) > shared._DELTA_MAX_ITEMS:
@@ -569,7 +587,7 @@ def tp_email_message(message_id: str):
 
 
 @router.post("/api/email/messages/{message_id}/respond", dependencies=[Depends(verify_csrf)])
-async def tp_email_respond(message_id: str, req: MeetingRespondRequest):
+def tp_email_respond(message_id: str, req: MeetingRespondRequest):
     """Accept, decline, or tentatively accept a meeting invite.
 
     RSVP only works on the calendar EVENT (/me/events/{id}/accept), never on the
@@ -739,7 +757,7 @@ async def tp_email_respond(message_id: str, req: MeetingRespondRequest):
 
 
 @router.post("/api/email/messages/{message_id}/markread")
-async def tp_email_markread(message_id: str, req: MarkReadRequest):
+def tp_email_markread(message_id: str, req: MarkReadRequest):
     """Mark an email as read or unread."""
     try:
         gc = GraphClient()

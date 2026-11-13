@@ -24,6 +24,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 
 ROOT = Path(__file__).parent.parent
@@ -667,6 +668,11 @@ def _tool_toast(name: str, result: object) -> dict[str, str] | None:
 
 @asynccontextmanager
 async def lifespan(app):
+    # asyncio.to_thread (Graph calls, agent tools, prefetch) shares one default executor that is only
+    # cpu+4 workers; size it explicitly so a few slow calls cannot starve the rest.
+    asyncio.get_running_loop().set_default_executor(
+        ThreadPoolExecutor(max_workers=32, thread_name_prefix="aigator-default")
+    )
     # Migration runs at module import (above `import shared`) — it must happen
     # before shared.cfg is populated by load_config().
     from task_queue import start_worker, stop_worker, set_notify_callback
@@ -740,7 +746,7 @@ async def lifespan(app):
             inferred = _infer_skills_from_message(prompt)
             if not inferred and prompt.strip():
                 from routes.chat import _classify_skills_via_llm
-                inferred = _classify_skills_via_llm(prompt)
+                inferred = await asyncio.to_thread(_classify_skills_via_llm, prompt)
         # Always filter — never fall back to ALL tools
         # A runner (Python or shell) runs only if the schedule approval named it; nobody is here to approve one now.
         _approved_runners = {_gated_runner_id(s) for s in (skills or [])}
@@ -796,7 +802,7 @@ async def lifespan(app):
 
     # Clean up orphaned Chrome processes from previous sessions
     from browser_agent import _kill_orphaned_chrome, shutdown_browser
-    _kill_orphaned_chrome()
+    await asyncio.to_thread(_kill_orphaned_chrome)
 
     # Pay tkinter's cold-import + first-window cost now (measured up to ~4s)
     # instead of on the user's first Add-Project/browse click, where a slow

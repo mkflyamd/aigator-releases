@@ -718,7 +718,7 @@ async def recorder_start(req: StartRequest = StartRequest()):
                 _ffmpeg_proc.send_signal(signal.CTRL_BREAK_EVENT)
             else:
                 _ffmpeg_proc.terminate()
-            _ffmpeg_proc.wait(timeout=5)
+            await asyncio.to_thread(_ffmpeg_proc.wait, timeout=5)
         except Exception:
             pass
         _ffmpeg_proc = None
@@ -731,7 +731,7 @@ async def recorder_start(req: StartRequest = StartRequest()):
     ffmpeg = _FFMPEG or _find_ffmpeg()
     if not ffmpeg:
         # Try silent runtime install via winget before giving up
-        ffmpeg = _try_install_ffmpeg()
+        ffmpeg = await asyncio.to_thread(_try_install_ffmpeg)
     if not ffmpeg:
         return JSONResponse(status_code=500, content={
             "ok": False,
@@ -744,7 +744,7 @@ async def recorder_start(req: StartRequest = StartRequest()):
             ),
         })
 
-    screens = _list_screens_windows() if _IS_WINDOWS else _list_screens_mac()
+    screens = await asyncio.to_thread(_list_screens_windows if _IS_WINDOWS else _list_screens_mac)
     if not screens:
         screens = [{"index": 0, "x": 0, "y": 0, "width": 1920, "height": 1080,
                     "label": "Display 1", "primary": True}]
@@ -851,7 +851,7 @@ async def recorder_pause():
 
     if _IS_WINDOWS:
         try:
-            _ffmpeg_proc.wait(timeout=5)
+            await asyncio.to_thread(_ffmpeg_proc.wait, timeout=5)
         except subprocess.TimeoutExpired:
             _ffmpeg_proc.kill()
         _ffmpeg_proc = None
@@ -896,7 +896,7 @@ async def recorder_resume():
         _recording_path = seg_path
         _segments.append(seg_path)
     else:
-        screens = _list_screens_mac()
+        screens = await asyncio.to_thread(_list_screens_mac)
         # POSIX: resume the stopped process
         try:
             _ffmpeg_proc.send_signal(signal.SIGCONT)
@@ -959,7 +959,7 @@ async def recorder_stop():
             else:
                 _ffmpeg_proc.terminate()
             try:
-                _ffmpeg_proc.wait(timeout=8)
+                await asyncio.to_thread(_ffmpeg_proc.wait, timeout=8)
             except subprocess.TimeoutExpired:
                 _ffmpeg_proc.kill()
         except Exception:
