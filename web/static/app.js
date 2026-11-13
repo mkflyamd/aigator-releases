@@ -15472,95 +15472,101 @@ fetch('/api/teams/chats')
 
   // ── Teams notification polling (every 60s, global) ──
   window.window._teamsNotifBackoff = false;
-  setInterval(_pollOnce(async () => {
-    if (window._teamsNotifBackoff) return; // Skip while auth is broken
-    try {
-      const res = await fetch('/api/teams/chats?delta=true', {
-        signal: AbortSignal.timeout(15000),
-      });
-      if (res.status === 401 || res.status === 403) {
-        window._teamsNotifBackoff = true; // Stop polling until token is refreshed
-        console.warn('[notif] Teams auth failed — pausing notifications until token refresh');
-        // Re-enable after 5 minutes (user may have recaptured token)
-        setTimeout(() => {
-          window._teamsNotifBackoff = false;
-        }, 300000);
-        return;
-      }
-      if (!res.ok) return;
-      const data = await res.json();
-      const chats = data.chats || [];
-
-      // Update badge
-      const unread = chats.filter((c) => (c.unread_count || 0) > 0).length;
-      if (typeof updateRailBadge === 'function') updateRailBadge('teams', unread);
-
-      if (!_notifReady) {
-        // First poll — seed state, don't notify
-        chats.forEach((c) => {
-          if (c.unread_count > 0) _lastTeamsUnread.set(c.id, c.last_message_time);
+  setInterval(
+    _pollOnce(async () => {
+      if (window._teamsNotifBackoff) return; // Skip while auth is broken
+      try {
+        const res = await fetch('/api/teams/chats?delta=true', {
+          signal: AbortSignal.timeout(15000),
         });
-        _notifReady = true;
-        return;
-      }
+        if (res.status === 401 || res.status === 403) {
+          window._teamsNotifBackoff = true; // Stop polling until token is refreshed
+          console.warn('[notif] Teams auth failed — pausing notifications until token refresh');
+          // Re-enable after 5 minutes (user may have recaptured token)
+          setTimeout(() => {
+            window._teamsNotifBackoff = false;
+          }, 300000);
+          return;
+        }
+        if (!res.ok) return;
+        const data = await res.json();
+        const chats = data.chats || [];
 
-      // Detect NEW unread (wasn't unread before, or has newer message)
-      chats.forEach((c) => {
-        if ((c.unread_count || 0) > 0) {
-          const prevTime = _lastTeamsUnread.get(c.id);
-          if (!prevTime || c.last_message_time > prevTime) {
+        // Update badge
+        const unread = chats.filter((c) => (c.unread_count || 0) > 0).length;
+        if (typeof updateRailBadge === 'function') updateRailBadge('teams', unread);
+
+        if (!_notifReady) {
+          // First poll — seed state, don't notify
+          chats.forEach((c) => {
+            if (c.unread_count > 0) _lastTeamsUnread.set(c.id, c.last_message_time);
+          });
+          _notifReady = true;
+          return;
+        }
+
+        // Detect NEW unread (wasn't unread before, or has newer message)
+        chats.forEach((c) => {
+          if ((c.unread_count || 0) > 0) {
+            const prevTime = _lastTeamsUnread.get(c.id);
+            if (!prevTime || c.last_message_time > prevTime) {
+              _showNotification(
+                `Teams: ${c.topic || 'Chat'}`,
+                `${c.last_sender || 'Someone'}: ${(c.last_message || '').slice(0, 80)}`,
+                '/static/icons/teams.svg',
+                () => {
+                  if (typeof openThirdPane === 'function') openThirdPane('teams');
+                  if (typeof tpLoadDetail === 'function') setTimeout(() => tpLoadDetail(c.id), 300);
+                },
+              );
+            }
+            _lastTeamsUnread.set(c.id, c.last_message_time);
+          } else {
+            _lastTeamsUnread.delete(c.id);
+          }
+        });
+      } catch {}
+    }),
+    60000,
+  );
+
+  // ── Email notification polling (every 90s, global) ──
+  setInterval(
+    _pollOnce(async () => {
+      try {
+        const res = await fetch('/api/email/inbox?top=10&delta=true', {
+          signal: AbortSignal.timeout(15000),
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        const messages = data.messages || [];
+        const totalUnread = data.total_unread || 0;
+
+        // Update badge
+        if (typeof updateRailBadge === 'function') updateRailBadge('email', totalUnread);
+
+        if (!_notifReady) return; // Wait for Teams poll to seed first
+
+        // Detect NEW unread emails
+        messages.forEach((m) => {
+          if (!m.is_read && !_lastEmailUnread.has(m.id)) {
             _showNotification(
-              `Teams: ${c.topic || 'Chat'}`,
-              `${c.last_sender || 'Someone'}: ${(c.last_message || '').slice(0, 80)}`,
-              '/static/icons/teams.svg',
+              `Email: ${m.from_name || m.from_email || 'Unknown'}`,
+              m.subject || '(no subject)',
+              '/static/icons/outlook.svg',
               () => {
-                if (typeof openThirdPane === 'function') openThirdPane('teams');
-                if (typeof tpLoadDetail === 'function') setTimeout(() => tpLoadDetail(c.id), 300);
+                if (typeof openThirdPane === 'function') openThirdPane('email');
+                if (typeof tpLoadDetail === 'function') setTimeout(() => tpLoadDetail(m.id), 300);
               },
             );
           }
-          _lastTeamsUnread.set(c.id, c.last_message_time);
-        } else {
-          _lastTeamsUnread.delete(c.id);
-        }
-      });
-    } catch {}
-  }), 60000);
-
-  // ── Email notification polling (every 90s, global) ──
-  setInterval(_pollOnce(async () => {
-    try {
-      const res = await fetch('/api/email/inbox?top=10&delta=true', {
-        signal: AbortSignal.timeout(15000),
-      });
-      if (!res.ok) return;
-      const data = await res.json();
-      const messages = data.messages || [];
-      const totalUnread = data.total_unread || 0;
-
-      // Update badge
-      if (typeof updateRailBadge === 'function') updateRailBadge('email', totalUnread);
-
-      if (!_notifReady) return; // Wait for Teams poll to seed first
-
-      // Detect NEW unread emails
-      messages.forEach((m) => {
-        if (!m.is_read && !_lastEmailUnread.has(m.id)) {
-          _showNotification(
-            `Email: ${m.from_name || m.from_email || 'Unknown'}`,
-            m.subject || '(no subject)',
-            '/static/icons/outlook.svg',
-            () => {
-              if (typeof openThirdPane === 'function') openThirdPane('email');
-              if (typeof tpLoadDetail === 'function') setTimeout(() => tpLoadDetail(m.id), 300);
-            },
-          );
-        }
-      });
-      // Update known set
-      _lastEmailUnread = new Set(messages.filter((m) => !m.is_read).map((m) => m.id));
-    } catch {}
-  }), 90000);
+        });
+        // Update known set
+        _lastEmailUnread = new Set(messages.filter((m) => !m.is_read).map((m) => m.id));
+      } catch {}
+    }),
+    90000,
+  );
 })();
 
 /* ── Notification SSE subscription ─────────────────── */
