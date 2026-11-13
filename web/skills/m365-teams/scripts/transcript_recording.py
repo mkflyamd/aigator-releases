@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import base64
 import importlib.util
+import logging
 import re
 import sys
 import urllib.parse
@@ -31,6 +32,7 @@ if str(_M365) not in sys.path:
     sys.path.insert(0, str(_M365))
 from helpers import get_graph_client  # type: ignore
 
+log = logging.getLogger(__name__)
 
 _RECORDING_MSGTYPE = "RichText/Media_CallRecording"
 _MAX_SCAN_PAGES = 10
@@ -138,6 +140,55 @@ def _resolve_share_to_drive_item(share_url: str) -> tuple[str, str, str]:
     item = gc.get(f"/shares/{urllib.parse.quote(share_id, safe='!')}/driveItem")
     parent = (item or {}).get("parentReference") or {}
     return parent.get("driveId", ""), item.get("id", ""), item.get("webUrl", "")
+
+
+_SHARE_CACHE: dict[str, dict] = {}
+
+
+def resolve_share(share_url: str) -> dict:
+    """Resolve one share URL to drive/item ids. `error` says why it failed, if it did."""
+    cached = _SHARE_CACHE.get(share_url)
+    if cached:
+        return dict(cached)
+    try:
+        drive_id, item_id, web_url = _resolve_share_to_drive_item(share_url)
+    except Exception as e:
+        status = getattr(e, "status_code", None)
+        log.info("resolve share link failed (status=%s): %s", status, e)
+        if status in (404, 410):
+            error = "expired"
+        elif status in (401, 403):
+            error = "auth"
+        else:
+            error = "failed"
+        return {"drive_id": "", "item_id": "", "web_url": share_url, "error": error}
+    out = {
+        "drive_id": drive_id,
+        "item_id": item_id,
+        "web_url": web_url or share_url,
+        "error": None,
+    }
+    _SHARE_CACHE[share_url] = out
+    return dict(out)
+
+
+def list_recordings_from_chat(chat_id: str) -> list[RecordingInfo]:
+    """All recordings posted in a meeting chat, newest first, without any Graph call."""
+    return [
+        RecordingInfo(
+            drive_id="",
+            item_id="",
+            title=title,
+            original_name=original_name,
+            has_transcript=has_transcript,
+            share_url=share_url,
+            web_url=share_url,
+            created_at=composetime,
+        )
+        for share_url, title, original_name, has_transcript, composetime in (
+            _scan_chat_for_recordings(chat_id)
+        )
+    ]
 
 
 def resolve_recording_from_chat(chat_id: str) -> RecordingInfo | None:

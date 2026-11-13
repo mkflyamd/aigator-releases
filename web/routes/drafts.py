@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from functools import partial
 from urllib.parse import quote
 _eid = lambda mid: quote(mid, safe="")  # encode Graph resource ID for path segment
@@ -225,6 +226,117 @@ def _apply_jira_edits(draft: dict, body: dict | None) -> None:
             p[name] = text
 
 
+_CALENDAR_EDIT_MAX_LEN = {"subject": 255, "body": 32768}
+
+_REPLY_RECIPIENT_MAX = 50
+_EMAIL_ADDRESS_RE = re.compile(r"^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$")
+
+
+def _reply_recipient_edits(body: dict | None) -> dict:
+    """Validates the To and CC edits made on a reply card and returns them as to_override / cc_override."""
+    edits = (body or {}).get("edited_recipients")
+    if edits is None:
+        return {}
+    if not isinstance(edits, dict):
+        raise HTTPException(status_code=400, detail="Edited recipients must be an object.")
+    unknown = sorted(set(edits) - {"to", "cc"})
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"Field(s) not editable here: {', '.join(unknown)}.")
+    out: dict = {}
+    for field, raw in edits.items():
+        if not isinstance(raw, list) or not all(isinstance(a, str) for a in raw):
+            raise HTTPException(status_code=400, detail=f"Edited {field} must be a list of email addresses.")
+        addresses: list[str] = []
+        for address in (a.strip() for a in raw):
+            if not _EMAIL_ADDRESS_RE.match(address):
+                raise HTTPException(status_code=400, detail=f"'{address}' is not a valid email address.")
+            if address.lower() not in (a.lower() for a in addresses):
+                addresses.append(address)
+        if len(addresses) > _REPLY_RECIPIENT_MAX:
+            raise HTTPException(status_code=400, detail=f"An email can have up to {_REPLY_RECIPIENT_MAX} {field.upper()} recipients.")
+        if field == "to" and not addresses:
+            raise HTTPException(status_code=400, detail="An email needs at least one To recipient.")
+        out[f"{field}_override"] = addresses
+    return out
+
+
+_SUBJECT_MAX = 255
+
+
+def _send_subject_edit(body: dict | None) -> dict:
+    """Validates a subject edited on a new-email card and returns it as the subject param."""
+    subject = (body or {}).get("edited_subject")
+    if subject is None:
+        return {}
+    if not isinstance(subject, str) or not subject.strip():
+        raise HTTPException(status_code=400, detail="The subject can't be empty.")
+    subject = subject.strip()
+    if len(subject) > _SUBJECT_MAX or "\n" in subject or "\r" in subject:
+        raise HTTPException(status_code=400, detail=f"The subject must be one line of up to {_SUBJECT_MAX} characters.")
+    return {"subject": subject}
+
+
+def _fold_send_recipients(params: dict) -> None:
+    """A new email sends from comma-separated to/cc strings, so the people edited on the card replace them."""
+    for field in ("to", "cc"):
+        override = params.pop(f"{field}_override", None)
+        if override is not None:
+            params[field] = ", ".join(override)
+
+
+_HEADER_KEYS = ("to", "cc", "subject")
+
+
+def _reset_header_edits(draft: dict) -> None:
+    """Puts To/CC/Subject back to what the draft was created with, so each attempt applies only the edits it carries.
+
+    A failed send keeps the stored draft, and the card sends no edit once the user reverts one, so an
+    edit applied by an earlier attempt must not outlive it."""
+    p = draft["params"]
+    baseline = draft.setdefault("header_baseline", {k: p[k] for k in _HEADER_KEYS if k in p})
+    p.pop("to_override", None)
+    p.pop("cc_override", None)
+    for key in _HEADER_KEYS:
+        if key in baseline:
+            p[key] = baseline[key]
+        else:
+            p.pop(key, None)
+
+
+def _reply_recipient_patch(params: dict) -> dict:
+    """Graph fields for the To/CC the user changed on the card; empty when they left the recipients alone."""
+    patch: dict = {}
+    for field, graph_field in (("to", "toRecipients"), ("cc", "ccRecipients")):
+        if f"{field}_override" in params:
+            patch[graph_field] = [{"emailAddress": {"address": a}} for a in params[f"{field}_override"]]
+    return patch
+
+
+def _calendar_edits(body: dict | None) -> dict:
+    """Validates the title and message edits made on a meeting draft card and returns them as params."""
+    edits = (body or {}).get("edited_fields")
+    if edits is None:
+        return {}
+    if not isinstance(edits, dict):
+        raise HTTPException(status_code=400, detail="Edited fields must be an object.")
+    unknown = sorted(set(edits) - set(_CALENDAR_EDIT_MAX_LEN))
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"Field(s) not editable on a meeting draft: {', '.join(unknown)}.")
+    out: dict = {}
+    for name, raw in edits.items():
+        if not isinstance(raw, str):
+            raise HTTPException(status_code=400, detail=f"Edited {name} must be text.")
+        text = raw.strip()
+        if len(text) > _CALENDAR_EDIT_MAX_LEN[name]:
+            raise HTTPException(status_code=400, detail=f"Edited {name} is too long.")
+        if name == "subject" and (not text or "\n" in text):
+            raise HTTPException(status_code=400, detail="Title must be a single line and cannot be empty.")
+        out[name] = text
+        if name == "body":
+            out["body_plain"] = True
+    return out
+
+
 def _direct_read_issue(target, issue_key: str, fields: str = "*all") -> dict:
     from skills.jira.api import jira_api_for_target
     return jira_api_for_target(target, "GET", f"issue/{issue_key}?fields={fields}")
@@ -346,7 +458,16 @@ async def approve_draft(draft_id: str, body: dict = None):
     try:
         dtype = draft["type"]
         p = draft["params"]
-        _apply_jira_edits(draft, body)
+        if dtype == "calendar-event":
+            p.update(_calendar_edits(body))
+        elif dtype not in ("calendar-update", "calendar-cancel"):
+            _apply_jira_edits(draft, body)
+        if dtype in ("email-reply", "email-send"):
+            _reset_header_edits(draft)
+            p.update(_reply_recipient_edits(body))
+        if dtype == "email-send":
+            p.update(_send_subject_edit(body))
+            _fold_send_recipients(p)
 
         # â”€â”€ Email â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         if dtype == "email-reply":
@@ -373,7 +494,7 @@ async def approve_draft(draft_id: str, body: dict = None):
             ).get("content", "")
             gc.patch(
                 f"/me/messages/{_eid(draft_msg_id)}",
-                {"body": {"contentType": "HTML", "content": body_html + quoted}},
+                {"body": {"contentType": "HTML", "content": body_html + quoted}, **_reply_recipient_patch(p)},
             )
             gc.post(f"/me/messages/{_eid(draft_msg_id)}/send", {})
             delivery_result = {"ok": True, "action": action.replace("create", "").lower()}
@@ -1006,6 +1127,42 @@ async def approve_draft(draft_id: str, body: dict = None):
             if fallback_note:
                 delivery_result["fallback"] = fallback_note
 
+        elif dtype == "calendar-event":
+            from skills.calendar.events import NoAttendeesError, create_meeting
+
+            try:
+                result = create_meeting(p, deliver=True)
+            except NoAttendeesError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            delivery_result = {
+                "ok": True,
+                "sent_to": (p.get("attendees") or []) + (p.get("optional_attendees") or []),
+                "event_id": (result or {}).get("id", ""),
+            }
+
+        elif dtype == "calendar-update":
+            from skills.calendar.tools import EventChangedError, apply_calendar_update
+
+            try:
+                applied = apply_calendar_update(
+                    p["event_id"], p["payload"], p.get("notify", "All"), p.get("timezone", ""), p.get("fingerprint")
+                )
+            except EventChangedError as e:
+                raise HTTPException(status_code=409, detail=str(e))
+            delivery_result = {"ok": True, **applied}
+
+        elif dtype == "calendar-cancel":
+            from skills.calendar.tools import apply_calendar_cancel
+
+            cancelled = apply_calendar_cancel(p["event_id"], p.get("comment", ""), p.get("delete_series", False))
+            if not cancelled.get("deleted"):
+                refused = cancelled.get("not_found") or cancelled.get("organizer_required")
+                raise HTTPException(
+                    status_code=409 if refused else 502,
+                    detail=cancelled.get("error") or "The meeting was not cancelled.",
+                )
+            delivery_result = {"ok": True, **cancelled}
+
         # â”€â”€ Calendar (Google Workspace MCP) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         elif dtype in ("calendar-write", "jira-mcp-write"):
             from mcp.manager import _load_connections, _client_for
@@ -1089,6 +1246,22 @@ async def approve_draft(draft_id: str, body: dict = None):
 
 # â”€â”€ open_draft_in_outlook â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
+def _calendar_compose_url(params: dict) -> str:
+    query = {
+        "path": "/calendar/action/compose",
+        "rru": "addevent",
+        "subject": params.get("subject", ""),
+        "startdt": params.get("start", ""),
+        "enddt": params.get("end", ""),
+        "body": params.get("body", ""),
+        "location": params.get("location", ""),
+        "online": "1" if params.get("teams") else "",
+        "to": ";".join((params.get("attendees") or []) + (params.get("optional_attendees") or [])),
+    }
+    qs = "&".join(f"{k}={quote(str(v), safe='')}" for k, v in query.items() if v)
+    return f"https://outlook.office.com/calendar/0/deeplink/compose?{qs}"
+
+
 @router.post("/api/drafts/{draft_id}/open-in-outlook", dependencies=[Depends(verify_csrf)])
 async def open_draft_in_outlook(draft_id: str, body: dict = None):
     """Create a real OWA draft from a pending Gator draft and return its URL.
@@ -1141,11 +1314,15 @@ async def open_draft_in_outlook(draft_id: str, body: dict = None):
 
     dtype = draft["type"]
 
-    if dtype not in ("email-send", "email-reply", "email-forward"):
+    if dtype not in ("email-send", "email-reply", "email-forward", "calendar-event", "calendar-update"):
         raise HTTPException(
             status_code=400,
             detail=f"Open-in-Outlook not supported for draft type '{dtype}'.",
         )
+
+    calendar_edits = _calendar_edits(body) if dtype == "calendar-event" else {}
+    recipient_edits = _reply_recipient_edits(body) if dtype in ("email-reply", "email-send") else {}
+    subject_edit = _send_subject_edit(body) if dtype == "email-send" else {}
 
     claimed = claim_for_handoff(draft_id)
     if claimed is not None:
@@ -1165,6 +1342,66 @@ async def open_draft_in_outlook(draft_id: str, body: dict = None):
             )
         raise HTTPException(status_code=404, detail="Draft not found or expired.")
     p = claimed["params"]
+    if dtype in ("email-reply", "email-send"):
+        _reset_header_edits(claimed)
+    p.update(calendar_edits)
+    p.update(recipient_edits)
+    p.update(subject_edit)
+    if dtype == "email-send":
+        _fold_send_recipients(p)
+
+    if dtype == "calendar-update":
+        link = p.get("web_link") or ""
+        if complete_handoff(draft_id):
+            await _sync_task_draft_status(draft_id, "handed_off")
+        return {"url": link if link.startswith("https://") else "https://outlook.office.com/calendar"}
+
+    if dtype == "calendar-event" and (p.get("recurrence") or p.get("optional_attendees")):
+        # Outlook's compose link cannot carry a recurrence or mark attendees optional,
+        # so the event is created as an unsent draft (isDraft) and opened from its webLink.
+        try:
+            from skills.calendar.events import NoAttendeesError, NotHeldAsDraftError, create_meeting
+
+            created = create_meeting(p)
+        except NotHeldAsDraftError:
+            if complete_handoff(draft_id):
+                await _sync_task_draft_status(draft_id, "handed_off")
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "The meeting was created, but Outlook did not keep it as an unsent draft, so "
+                    "invites may have gone out. Check your Outlook calendar — Gator will not open it."
+                ),
+            )
+        except NoAttendeesError as e:
+            if abort_handoff(draft_id):
+                await _sync_task_draft_status(draft_id, "pending")
+            raise HTTPException(status_code=400, detail="A recurring meeting needs at least one attendee to open in Outlook as a draft.")
+        except Exception as e:
+            status_code = getattr(e, "status_code", None)
+            if isinstance(status_code, int) and (status_code == 0 or status_code >= 500):
+                if complete_handoff(draft_id):
+                    await _sync_task_draft_status(draft_id, "handed_off")
+                raise HTTPException(
+                    status_code=502,
+                    detail=(
+                        f"Outlook may already have created a draft for this meeting, "
+                        f"but Gator could not confirm it ({e}). Check your Outlook "
+                        "calendar — Send invite is disabled for this meeting to avoid a duplicate."
+                    ),
+                )
+            if abort_handoff(draft_id):
+                await _sync_task_draft_status(draft_id, "pending")
+            raise HTTPException(status_code=500, detail=str(e))
+        if complete_handoff(draft_id):
+            await _sync_task_draft_status(draft_id, "handed_off")
+        return {"url": (created or {}).get("webLink") or "https://outlook.office.com/calendar"}
+
+    if dtype == "calendar-event":
+        url = _calendar_compose_url(p)
+        if complete_handoff(draft_id):
+            await _sync_task_draft_status(draft_id, "handed_off")
+        return {"url": url}
 
     if body is not None and "edited_message" in body:
         if dtype == "email-reply":
@@ -1207,7 +1444,10 @@ async def open_draft_in_outlook(draft_id: str, body: dict = None):
             msg_id = reply_draft.get("id", "")
             body_html = _email_fragment(p, "body")
             quoted = (gc.get(f"/me/messages/{_eid(msg_id)}", {"$select": "body"}).get("body") or {}).get("content", "")
-            gc.patch(f"/me/messages/{_eid(msg_id)}", {"body": {"contentType": "HTML", "content": body_html + quoted}})
+            gc.patch(
+                f"/me/messages/{_eid(msg_id)}",
+                {"body": {"contentType": "HTML", "content": body_html + quoted}, **_reply_recipient_patch(p)},
+            )
 
         else:  # email-forward
             try:

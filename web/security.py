@@ -67,6 +67,7 @@ SENSITIVE_ROUTES: frozenset[str] = frozenset({
     "POST /api/aigator/update-excel",
     "POST /api/aigator/update-pptx",
     "POST /api/calendar/events/{event_id}/respond",
+    "POST /api/calendar/grid-draft-series",
     "DELETE /api/config/custom-apps/{app_id}",
     "DELETE /api/config/llm/profiles/{profile_id}",
     "DELETE /api/config/mcp/{connection_id}",
