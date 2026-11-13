@@ -112,11 +112,12 @@ async def save_api_key(req: ApiKeyRequest):
 
     os.environ["ANTHROPIC_API_KEY"] = key
     reset_provider("anthropic")
-    cfg = _load_config()
-    cfg["api_key"] = key
-    if user_id:
-        cfg["gateway_user_id"] = user_id
-    _save_config(cfg)
+    def _apply(cfg):
+        cfg["api_key"] = key
+        if user_id:
+            cfg["gateway_user_id"] = user_id
+
+    _update_config(_apply)
     return {"ok": True}
 
 

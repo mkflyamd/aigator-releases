@@ -6,7 +6,7 @@ from pathlib import Path
 
 import shared
 from config import INSTALLED_SKILLS_DIR, AGENTS_SKILLS_DIR
-from marketplace.installer import _INSTALL_INDEX_LOCK, load_installed, save_installed
+from marketplace.installer import _INSTALL_INDEX_LOCK, load_installed, save_installed, skill_ops_serialized
 
 SKILL_ID = "skill_manager"
 ALWAYS_ON = True
@@ -83,6 +83,7 @@ def _validate_bundle_path(skill_dir: Path, rel_path: str) -> str | None:
     return None
 
 
+@skill_ops_serialized
 def _tool_create_skill(
     skill_id: str,
     display_name: str,
@@ -159,6 +160,7 @@ def _tool_create_skill(
     }
 
 
+@skill_ops_serialized
 def _tool_update_skill(
     skill_id: str,
     content: str,

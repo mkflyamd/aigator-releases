@@ -1,5 +1,6 @@
 """Install, uninstall, and create SKILL.md-only marketplace skills."""
 
+import functools
 import io
 import json
 import logging
@@ -46,6 +47,17 @@ _BUNDLE_SWAP_LOCK = threading.Lock()
 # Keeps a skill's files and its installed-skills.json entry consistent between parallel
 # install, uninstall and create requests. Always taken before _INSTALL_INDEX_LOCK.
 _SKILL_OPS_LOCK = threading.RLock()
+
+
+def skill_ops_serialized(fn):
+    """Run `fn` holding _SKILL_OPS_LOCK so skill file and index changes never interleave."""
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        with _SKILL_OPS_LOCK:
+            return fn(*args, **kwargs)
+
+    return wrapper
 
 
 def _safe_skill_dir(base: Path, *parts: str) -> Path:
@@ -334,6 +346,7 @@ def install_skill_md(
         }
 
 
+@skill_ops_serialized
 def _install_github_folder(
     install_url: str,
     skill_id: str,
@@ -594,6 +607,7 @@ def create_user_skill(name: str, description: str, instructions: str) -> dict:
         return {"ok": True, "skill_id": skill_id}
 
 
+@skill_ops_serialized
 def install_plugin(
     plugin_id: str,
     version: str,
@@ -1525,6 +1539,7 @@ def get_claude_plugins_official_capabilities(entry: dict) -> dict:
     }
 
 
+@skill_ops_serialized
 def install_claude_plugins_official_plugin(
     entry: dict,
     consented: bool = False,
@@ -1919,6 +1934,7 @@ def get_github_url_capabilities(install_url: str) -> dict:
     }
 
 
+@skill_ops_serialized
 def install_github_url_plugin(
     install_url: str,
     plugin_id: str,
@@ -2028,6 +2044,7 @@ def install_github_url_plugin(
     }
 
 
+@skill_ops_serialized
 def install_github_url(
     install_url: str,
     skill_id: str,

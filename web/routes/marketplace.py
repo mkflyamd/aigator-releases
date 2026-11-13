@@ -659,7 +659,7 @@ async def update_skill_md(skill_id: str, req: UpdateSkillMdRequest):
 
 
 @router.post("/api/marketplace/create", dependencies=[Depends(verify_csrf)])
-async def create_skill(req: CreateSkillRequest):
+def create_skill(req: CreateSkillRequest):
     if not req.name.strip():
         raise HTTPException(status_code=400, detail="name is required")
     result = create_user_skill(
