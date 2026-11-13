@@ -201,6 +201,7 @@ def test_background_asks_first_and_starts_nothing_until_approved(env, bg):
     assert sh._BG_REGISTRY[4242]["sandboxed"] is True
     request = bg.started[0]
     assert json.loads(request.env["AIGATOR_RELAY_COMMAND"])[-1] == "npm run dev"
+    assert request.env["PYTHONUNBUFFERED"] == "1"
     assert request.cwd == proj and request.network is False and request.timeout == 0
     assert bg.relay.parent in request.runtime_paths
     assert env.fake.requests == []

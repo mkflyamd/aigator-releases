@@ -570,7 +570,8 @@ def _born(path: Path) -> int | None:
 
 def _ensure_runtime_grants(sid: str, paths: list[Path]) -> None:
     """Persistent read/execute grants. A folder's creation time is recorded with its grant, so a folder
-    that was deleted and recreated (a reinstalled skill) is granted again instead of trusted as done.
+    that was deleted and recreated (a reinstalled skill) is granted again instead of trusted as done, and so
+    is one whose ACE is no longer on it although the ledger says it was granted.
     """
     with _LEDGER_LOCK:
         data = _ledger_load()
@@ -580,7 +581,7 @@ def _ensure_runtime_grants(sid: str, paths: list[Path]) -> None:
         for path in paths:
             key = os.path.normcase(str(path))
             now = _born(path)
-            if key in done and (now is None or born.get(key) == now):
+            if key in done and (now is None or born.get(key) == now) and _ace_present(path, sid) is not False:
                 continue
             rc, out = _grant(path, sid, "RX")
             if rc == 0:

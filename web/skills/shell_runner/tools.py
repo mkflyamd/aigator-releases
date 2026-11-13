@@ -830,6 +830,7 @@ def _run_sandboxed(cr, command, shell, cwd, timeout, background, requested, poli
     if background:
         relay_env = sandbox.build_env(os.environ, env_dir, npm_root, path_prepend=[*copies, *cr._skill_bin_dirs()])
         relay_env["AIGATOR_RELAY_COMMAND"] = json.dumps(argv_prefix + [command])
+        relay_env["PYTHONUNBUFFERED"] = "1"
         request = sandbox.SandboxRequest(
             argv=cr._python_command(relay), cwd=run_cwd, env=relay_env, runtime_paths=runtime_paths,
             read_paths=list(read_paths), write_paths=sandbox_write, network=bool(hosts), timeout=0,

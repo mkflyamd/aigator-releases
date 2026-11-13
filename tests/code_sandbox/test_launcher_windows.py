@@ -690,6 +690,24 @@ def test_a_runtime_folder_is_granted_again_when_it_was_recreated(fake):
     assert _rx(fake, skill) == 2
 
 
+def test_a_runtime_folder_whose_ace_vanished_is_granted_again(fake, monkeypatch):
+    skill = fake.tmp / "skill"
+    skill.mkdir()
+    lw.launch(fake.req(runtime=[skill]))
+    monkeypatch.setattr(lw, "_ace_present", lambda path, sid: False)
+    lw.launch(fake.req(runtime=[skill]))
+    assert _rx(fake, skill) == 2
+
+
+def test_a_runtime_folder_whose_acl_cannot_be_read_stays_trusted(fake, monkeypatch):
+    skill = fake.tmp / "skill"
+    skill.mkdir()
+    lw.launch(fake.req(runtime=[skill]))
+    monkeypatch.setattr(lw, "_ace_present", lambda path, sid: None)
+    lw.launch(fake.req(runtime=[skill]))
+    assert _rx(fake, skill) == 1
+
+
 def test_a_runtime_folder_recorded_by_an_older_ledger_is_granted_again(fake):
     skill = fake.tmp / "skill"
     skill.mkdir()
