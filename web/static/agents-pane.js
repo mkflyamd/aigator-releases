@@ -259,6 +259,18 @@ function _renderBackgroundProcs(procs) {
     info.appendChild(meta);
     card.appendChild(info);
 
+    const openUrl = _devServerUrl(proc.url);
+    if (openUrl) {
+      const open = document.createElement('a');
+      open.className = 'ap-card-btn';
+      open.href = openUrl;
+      open.target = '_blank';
+      open.rel = 'noopener noreferrer';
+      open.textContent = 'Open';
+      open.style.cssText = 'flex-shrink:0;text-decoration:none';
+      card.appendChild(open);
+    }
+
     const stopBtn = document.createElement('button');
     stopBtn.className = 'ap-card-btn';
     stopBtn.textContent = '■ Stop';
@@ -267,11 +279,13 @@ function _renderBackgroundProcs(procs) {
       stopBtn.disabled = true;
       stopBtn.textContent = 'Stopping…';
       try {
-        await _postBackgroundStop(proc.pid);
+        const res = await _postBackgroundStop(proc.pid);
+        if (!res.ok && res.status !== 404) throw new Error(`HTTP ${res.status}`);
         await _apRefresh();
-      } catch (_) {
+      } catch (err) {
         stopBtn.disabled = false;
         stopBtn.textContent = '■ Stop';
+        _showConnectivityToast(`Could not stop the process: ${err.message}`, 'warn');
       }
     });
     card.appendChild(stopBtn);

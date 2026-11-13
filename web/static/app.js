@@ -10444,7 +10444,7 @@ function _showDevServerCard(data, ownerTabId) {
     (el) => el.dataset.devServerPid === String(pid),
   );
   if (seen) return;
-  const url = _devServerUrl(data.url);
+  let url = _devServerUrl(data.url);
 
   const card = document.createElement('div');
   card.className = 'message assistant';
@@ -10463,19 +10463,24 @@ function _showDevServerCard(data, ownerTabId) {
   const actions = document.createElement('div');
   actions.className = 'gcc-actions';
   let openLink = null;
-  if (url) {
-    openLink = document.createElement('a');
-    openLink.className = 'btn-secondary';
-    openLink.href = url;
-    openLink.target = '_blank';
-    openLink.rel = 'noopener noreferrer';
-    openLink.textContent = 'Open';
-    actions.appendChild(openLink);
-  }
   const stop = document.createElement('button');
   stop.className = 'btn-secondary';
   stop.textContent = 'Stop';
   actions.appendChild(stop);
+  const showUrl = (next) => {
+    url = next;
+    title.textContent = `Running at ${url}`;
+    if (!openLink) {
+      openLink = document.createElement('a');
+      openLink.className = 'btn-secondary';
+      openLink.target = '_blank';
+      openLink.rel = 'noopener noreferrer';
+      openLink.textContent = 'Open';
+      actions.insertBefore(openLink, stop);
+    }
+    openLink.href = url;
+  };
+  if (url) showUrl(url);
 
   box.append(header, actions);
   bubble.appendChild(box);
@@ -10484,6 +10489,8 @@ function _showDevServerCard(data, ownerTabId) {
   let timer = null;
   const markStopped = () => {
     clearInterval(timer);
+    // A recycled pid must be able to draw a fresh card.
+    delete card.dataset.devServerPid;
     title.textContent = 'Stopped';
     stop.remove();
     if (openLink) openLink.remove();
@@ -10509,8 +10516,11 @@ function _showDevServerCard(data, ownerTabId) {
       const res = await fetch('/api/shell/background-processes');
       if (!res.ok) return;
       const body = await res.json();
-      const alive = (body.processes || []).some((p) => p.pid === pid && p.running);
-      if (!alive) markStopped();
+      if (!stop.isConnected) return;
+      const entry = (body.processes || []).find((p) => p.pid === pid && p.running);
+      if (!entry) return markStopped();
+      const polled = _devServerUrl(entry.url);
+      if (polled && polled !== url) showUrl(polled);
     } catch (_) {
       /* the next tick tries again */
     }

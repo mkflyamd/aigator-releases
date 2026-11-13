@@ -26,6 +26,7 @@ function makeEl(tag) {
     tag,
     children: [],
     dataset: {},
+    style: {},
     listeners: {},
     className: '',
     disabled: false,
@@ -48,6 +49,12 @@ function makeEl(tag) {
     },
     append(...cs) {
       cs.forEach((c) => this.appendChild(c));
+    },
+    insertBefore(c, ref) {
+      const i = this.children.indexOf(ref);
+      this.children.splice(i < 0 ? this.children.length : i, 0, c);
+      c.parent = this;
+      return c;
     },
     addEventListener(type, fn) {
       this.listeners[type] = fn;
@@ -220,6 +227,33 @@ const click = { stopPropagation() {} };
   await gone.timers[0].fn();
   assert.strictEqual(titleOf(gone), 'Stopped');
 
+  // A url that shows up later (or on a fallback port) gets an Open link from the poll; bad urls do not.
+  const late = makeEnv({ processes: [{ pid: 7, running: true, url: 'http://localhost.evil.com:80' }] });
+  late.ctx._showDevServerCard({ pid: 7, url: null }, 'tab-1');
+  await late.timers[0].fn();
+  assert.strictEqual(titleOf(late), 'Running (pid 7)');
+  assert.strictEqual(linkOf(late), undefined);
+  late.state.processes = [{ pid: 7, running: true, url }];
+  await late.timers[0].fn();
+  assert.strictEqual(titleOf(late), `Running at ${url}`);
+  assert.strictEqual(linkOf(late).href, url);
+  assert.strictEqual(linkOf(late).rel, 'noopener noreferrer');
+  assert.deepStrictEqual(
+    walk(late.messages).filter((e) => e.tag === 'a' || e.tag === 'button').map((e) => e.textContent),
+    ['Open', 'Stop'],
+  );
+  late.state.processes = [{ pid: 7, running: true, url: 'http://127.0.0.1:51234' }];
+  await late.timers[0].fn();
+  assert.strictEqual(linkOf(late).href, 'http://127.0.0.1:51234');
+  assert.strictEqual(walk(late.messages).filter((e) => e.tag === 'a').length, 1);
+
+  // A stopped card frees its pid so a recycled pid draws a new card.
+  const again = makeEnv();
+  again.ctx._showDevServerCard({ pid: 7, url }, 'tab-1');
+  await buttonsOf(again)[0].listeners.click(click);
+  again.ctx._showDevServerCard({ pid: 7, url }, 'tab-1');
+  assert.strictEqual(again.messages.children.length, 2);
+
   // A card that left the page stops polling; a failed poll changes nothing.
   const left = makeEnv();
   left.ctx._showDevServerCard({ pid: 7, url }, 'tab-1');
@@ -259,6 +293,40 @@ const click = { stopPropagation() {} };
   );
   assert.strictEqual(seen[0].token, 'aigator-fake-api-key');
   assert.strictEqual(seen[2].token, 'fresh-token');
+
+  // Agents pane: an Open link only for a localhost url, and a failed Stop says so.
+  const paneMatch = panes.match(/function _renderBackgroundProcs\([^)]*\)\s*\{[\s\S]*?\n\}/);
+  assert(paneMatch, '_renderBackgroundProcs not found in agents-pane.js');
+  const pane = makeEnv();
+  const paneList = makeEl('div');
+  let refreshed = 0;
+  pane.ctx.document.getElementById = (id) => (id === 'ap-bg-list' ? paneList : null);
+  pane.ctx._apRefresh = async () => {
+    refreshed += 1;
+  };
+  pane.ctx.Math = Math;
+  vm.runInContext(paneMatch[0], pane.ctx);
+  pane.ctx._renderBackgroundProcs([
+    { pid: 7, running: true, command: 'npm run dev', url },
+    { pid: 8, running: true, command: 'evil', url: 'http://localhost.evil.com:80' },
+  ]);
+  const paneLinks = walk(paneList).filter((e) => e.tag === 'a');
+  assert.strictEqual(paneLinks.length, 1);
+  assert.strictEqual(paneLinks[0].href, url);
+  assert.strictEqual(paneLinks[0].target, '_blank');
+  assert.strictEqual(paneLinks[0].rel, 'noopener noreferrer');
+  assert.strictEqual(paneLinks[0].textContent, 'Open');
+  const paneStop = walk(paneList).filter((e) => e.tag === 'button')[0];
+  pane.state.stopStatus = 500;
+  await paneStop.listeners.click(click);
+  assert.strictEqual(paneStop.disabled, false);
+  assert.strictEqual(refreshed, 0);
+  assert.strictEqual(pane.toasts.length, 1);
+  assert.strictEqual(pane.toasts[0].type, 'warn');
+  pane.state.stopStatus = 200;
+  await paneStop.listeners.click(click);
+  assert.strictEqual(refreshed, 1);
+  assert(!/innerHTML|\.on[a-z]+\s*=|setAttribute\(\s*['"]on/.test(paneMatch[0]), 'agents pane renders without innerHTML or inline handlers');
 
   // Wiring and safety.
   for (const name of ['_postBackgroundStop', '_devServerUrl', '_showDevServerCard']) {
