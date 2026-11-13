@@ -123,6 +123,22 @@ def launch_sandboxed(req: SandboxRequest) -> SandboxResult:
     return _launcher().launch(req)
 
 
+def start_sandboxed(req):
+    if sandbox_level() != "enforced":
+        raise SandboxUnavailable(sandbox_unavailable_reason() or "The sandbox is unavailable.")
+    start = getattr(_launcher(), "start", None)
+    if start is None:
+        raise NotImplementedError("Long-running sandboxed processes are only supported on Windows.")
+    return start(req)
+
+
+def container_readable(path) -> bool:
+    if sys.platform != "win32" or sandbox_level() != "enforced":
+        return True
+    from . import launcher_windows
+    return launcher_windows.readable_or_grantable(Path(path))
+
+
 def ungrantable_paths(read_paths: Sequence[Path], write_paths: Sequence[Path]) -> list[Path]:
     """Requested paths the sandbox could never be given access to (Windows only; empty elsewhere)."""
     if sys.platform != "win32" or sandbox_level() != "enforced":

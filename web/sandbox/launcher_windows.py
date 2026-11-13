@@ -23,6 +23,7 @@ import stat
 import subprocess
 import tempfile
 import threading
+from collections import namedtuple
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -49,12 +50,43 @@ WAIT_TIMEOUT = 258
 WAIT_FAILED = 0xFFFFFFFF
 SE_GROUP_ENABLED = 0x4
 GENERIC_READ = 0x80000000
+GENERIC_WRITE = 0x40000000
+INFINITE = 0xFFFFFFFF
 FILE_SHARE_READ_WRITE = 0x3
 OPEN_EXISTING = 3
 HRESULT_ALREADY_EXISTS = ctypes.c_long(0x800700B7).value
 
 _RUN_LOCK = threading.Lock()
-_LEDGER_LOCK = threading.Lock()
+_LEDGER_LOCK = threading.RLock()
+_HELD: dict[tuple[str, str], int] = {}
+_Started = namedtuple("_Started", "proc job out_rd in_wr pid")
+
+
+def _held_key(sid: str, path) -> tuple[str, str]:
+    return (sid, os.path.normcase(str(path)))
+
+
+def _is_held(sid: str, path) -> bool:
+    with _LEDGER_LOCK:
+        return _held_key(sid, path) in _HELD
+
+
+def _hold(sid: str, path) -> None:
+    with _LEDGER_LOCK:
+        key = _held_key(sid, path)
+        _HELD[key] = _HELD.get(key, 0) + 1
+
+
+def _unhold(sid: str, path) -> None:
+    with _LEDGER_LOCK:
+        key = _held_key(sid, path)
+        count = _HELD.get(key, 0)
+        if count <= 1:
+            _HELD.pop(key, None)
+        else:
+            _HELD[key] = count - 1
+
+
 _API: SimpleNamespace | None = None
 _LEDGER_VERSION = 2
 
@@ -681,11 +713,12 @@ def _sweep_locked() -> tuple[int, int]:
     with _LEDGER_LOCK:
         data = _ledger_load()
         entries = list(data["per_run"])
-        kept = [[sid, path] for sid, path in entries if not _revoke_ok(sid, Path(path))]
+        kept = [[sid, path] for sid, path in entries
+                if _is_held(sid, path) or not _revoke_ok(sid, Path(path))]
         if entries:
             data["per_run"] = kept
             _ledger_save(data)
-        return len(entries) - len(kept), len(kept)
+        return len(entries) - len(kept), sum(1 for sid, path in kept if not _is_held(sid, path))
 
 
 def sweep_stale_grants() -> int:
@@ -730,7 +763,8 @@ def _valid(handle) -> bool:
     return handle.value not in (None, 0, INVALID_HANDLE_VALUE)
 
 
-def _run_contained(argv: list[str], cwd: Path, env: dict[str, str], psid, timeout: int, network: bool) -> SandboxResult:
+def _run_contained(argv: list[str], cwd: Path, env: dict[str, str], psid, timeout: int, network: bool,
+                   stream: bool = False) -> SandboxResult:
     a = _api()
     k32, wt, HANDLE = a.k32, a.wt, a.HANDLE
     sa = a.SECURITY_ATTRIBUTES(ctypes.sizeof(a.SECURITY_ATTRIBUTES), None, True)
@@ -753,11 +787,11 @@ def _run_contained(argv: list[str], cwd: Path, env: dict[str, str], psid, timeou
             k32.CloseHandle(handle)
         handle.value = None
 
-    def pipe():
+    def pipe(parent_reads=True):
         rd, wr = own(HANDLE()), own(HANDLE())
         if not k32.CreatePipe(ctypes.byref(rd), ctypes.byref(wr), ctypes.byref(sa), 0):
             raise ctypes.WinError(ctypes.get_last_error())
-        k32.SetHandleInformation(rd, HANDLE_FLAG_INHERIT, 0)
+        k32.SetHandleInformation(rd if parent_reads else wr, HANDLE_FLAG_INHERIT, 0)
         return rd, wr
 
     proc, thread, job = own(HANDLE()), own(HANDLE()), own(HANDLE())
@@ -773,12 +807,20 @@ def _run_contained(argv: list[str], cwd: Path, env: dict[str, str], psid, timeou
                 close(handle)
 
     try:
-        out_rd, out_wr = pipe()
-        err_rd, err_wr = pipe()
-        hin = own(HANDLE(k32.CreateFileW("NUL", GENERIC_READ, FILE_SHARE_READ_WRITE, ctypes.byref(sa),
-                                         OPEN_EXISTING, 0, None)))
-        if not _valid(hin):
-            raise ctypes.WinError(ctypes.get_last_error())
+        if stream:
+            out_rd, out_wr = pipe()
+            hin, in_wr = pipe(parent_reads=False)
+            err_wr = own(HANDLE(k32.CreateFileW("NUL", GENERIC_WRITE, FILE_SHARE_READ_WRITE, ctypes.byref(sa),
+                                                OPEN_EXISTING, 0, None)))
+            if not _valid(err_wr):
+                raise ctypes.WinError(ctypes.get_last_error())
+        else:
+            out_rd, out_wr = pipe()
+            err_rd, err_wr = pipe()
+            hin = own(HANDLE(k32.CreateFileW("NUL", GENERIC_READ, FILE_SHARE_READ_WRITE, ctypes.byref(sa),
+                                             OPEN_EXISTING, 0, None)))
+            if not _valid(hin):
+                raise ctypes.WinError(ctypes.get_last_error())
 
         caps = None
         if network:
@@ -832,6 +874,12 @@ def _run_contained(argv: list[str], cwd: Path, env: dict[str, str], psid, timeou
         if k32.ResumeThread(thread) == WAIT_FAILED:
             raise ctypes.WinError(ctypes.get_last_error())
         resumed = True
+        if stream:
+            started = _Started(proc.value, job.value, out_rd.value, in_wr.value, pi.dwProcessId)
+            for handle in (proc, job, out_rd, in_wr):
+                handle.value = None
+            finished = True
+            return started
 
         out_chunks: list[bytes] = []
         err_chunks: list[bytes] = []
@@ -897,70 +945,195 @@ def _same_path(a: Path, b: str) -> bool:
     return _covered_by(a, [b]) and _covered_by(Path(b), [str(a)])
 
 
+class _Prepared:
+    def __init__(self, psid, sid):
+        self.psid, self.sid = psid, sid
+        self.attempted: list[Path] = []
+        self.scrubbed = False
+        self._freed = False
+
+    def free_sid(self) -> None:
+        if not self._freed:
+            self._freed = True
+            _api().adv.FreeSid(self.psid)
+
+
+def _release(sid: str, paths, unhold: bool = False) -> None:
+    for path in paths:
+        try:
+            if unhold:
+                _unhold(sid, path)
+            if _is_held(sid, path):
+                continue
+            if _revoke_ok(sid, path):
+                _ledger_remove_per_run(sid, path)
+        except Exception as exc:
+            _log.warning("sandbox: could not update the grant ledger (%s)", type(exc).__name__)
+
+
+def _release_locked(sid: str, paths) -> None:
+    with _RUN_LOCK:
+        _release(sid, paths, unhold=True)
+
+
+def _finish(prep: _Prepared) -> None:
+    try:
+        _release(prep.sid, prep.attempted)
+        if prep.scrubbed:
+            _scrub_container(prep.sid)
+    finally:
+        prep.free_sid()
+
+
+def _prepare(req: SandboxRequest) -> _Prepared:
+    """Give the sandbox its access for one run. The caller holds _RUN_LOCK."""
+    runtime, per_run = acl_grants(req)
+    runtime_dirs = [str(path) for path, _perm in runtime]
+    for path, _perm in runtime + per_run + ([(Path(req.scratch_path), "M")] if req.scratch_path else []):
+        try:
+            _check_icacls_path(str(path))
+        except ValueError as exc:
+            raise SandboxUnavailable(str(exc)) from exc
+    for path, perm in per_run:
+        if perm != "RX" and any(_same_path(path, d) for d in runtime_dirs):
+            raise SandboxUnavailable(f"{path} is a runtime directory and cannot also be a writable path.")
+    _cleared, remaining = _sweep_locked()
+    if remaining:
+        stuck = ", ".join(sorted({path for sid, path in _ledger_load()["per_run"] if not _is_held(sid, path)}))
+        raise SandboxUnavailable(
+            f"Access granted to an earlier sandboxed run could not be removed from {stuck}, so the sandbox "
+            "is paused until it can be. Restarting AI Gator retries the removal; if it keeps failing, fix the "
+            "permissions on that folder (the sandbox's access entry must be removable by your account)."
+        )
+    try:
+        psid, sid = ensure_profile(PROFILE_NAME + SHELL_PROFILE_SUFFIX if req.scratch_path else PROFILE_NAME)
+    except OSError as exc:
+        raise SandboxUnavailable(f"Windows could not create the AppContainer sandbox profile ({exc}).") from exc
+    prep = _Prepared(psid, sid)
+    try:
+        _ensure_runtime_grants(sid, [path for path, _perm in runtime])
+        granted = _ledger_load()["runtime"].get(sid, [])
+        try:
+            _ensure_package_inheritance(sid, _site_package_dirs(), granted)
+        except Exception as exc:
+            _log.warning("sandbox: could not refresh package access (%s)", type(exc).__name__)
+        per_run = [(p, perm) for p, perm in per_run if not (perm == "RX" and _covered_by(p, granted))]
+        if req.scratch_path is not None and _ensure_scratch_grant(sid, Path(req.scratch_path)):
+            per_run = [(p, perm) for p, perm in per_run if not _covered_by(p, [str(req.scratch_path)])]
+        per_run = [(p, perm) for p, perm in per_run if not (perm == "RX" and _container_can_read(p, sid))]
+        blocked = [p for p, _perm in per_run if not _can_change_acl(p)]
+        if blocked:
+            raise SandboxPathNotGrantable(blocked)
+        _scrub_container(sid)
+        prep.scrubbed = True
+        for path, perm in per_run:
+            _ledger_add_per_run(sid, path)
+            prep.attempted.append(path)
+            rc, out = _grant(path, sid, perm)
+            if rc != 0:
+                raise SandboxUnavailable(f"The sandbox could not be given access to {path} ({out}).")
+        return prep
+    except BaseException:
+        _finish(prep)
+        raise
+
+
 def launch(req: SandboxRequest) -> SandboxResult:
     with _RUN_LOCK:
-        runtime, per_run = acl_grants(req)
-        runtime_dirs = [str(path) for path, _perm in runtime]
-        for path, perm in runtime + per_run + ([(Path(req.scratch_path), "M")] if req.scratch_path else []):
-            try:
-                _check_icacls_path(str(path))
-            except ValueError as exc:
-                raise SandboxUnavailable(str(exc)) from exc
-        for path, perm in per_run:
-            if perm != "RX" and any(_same_path(path, d) for d in runtime_dirs):
-                # Revoking the per-run ACE would also delete the persistent runtime ACE on the same directory.
-                raise SandboxUnavailable(f"{path} is a runtime directory and cannot also be a writable path.")
-        # A failed revoke leaves a live ACE for the shared SID that every later run would inherit.
-        _cleared, remaining = _sweep_locked()
-        if remaining:
-            stuck = ", ".join(sorted({path for _sid, path in _ledger_load()["per_run"]}))
-            raise SandboxUnavailable(
-                "Access granted to an earlier sandboxed run could not be removed from "
-                f"{stuck}, so the sandbox is paused until it can be. Restarting AI Gator retries the removal; "
-                "if it keeps failing, fix the permissions on that folder (the sandbox's access entry must be "
-                "removable by your account)."
-            )
+        prep = _prepare(req)
         try:
-            psid, sid = ensure_profile(PROFILE_NAME + SHELL_PROFILE_SUFFIX if req.scratch_path else PROFILE_NAME)
-        except OSError as exc:
-            raise SandboxUnavailable(f"Windows could not create the AppContainer sandbox profile ({exc}).") from exc
-        try:
-            _ensure_runtime_grants(sid, [path for path, _perm in runtime])
-            # Read access inside a persistently granted runtime directory already exists; granting and
-            # then revoking it per run would remove the persistent ACE.
-            granted = _ledger_load()["runtime"].get(sid, [])
-            try:
-                _ensure_package_inheritance(sid, _site_package_dirs(), granted)
-            except Exception as exc:  # a stale package ACL must not stop a run that may not need it
-                _log.warning("sandbox: could not refresh package access (%s)", type(exc).__name__)
-            per_run =[(p, perm) for p, perm in per_run if not (perm == "RX" and _covered_by(p, granted))]
-            if req.scratch_path is not None and _ensure_scratch_grant(sid, Path(req.scratch_path)):
-                per_run = [(p, perm) for p, perm in per_run if not _covered_by(p, [str(req.scratch_path)])]
-            # Decide what needs a grant before anything is written to the ledger: a folder every AppContainer
-            # can already read (Program Files) needs none, and one whose ACL the user cannot change can never
-            # be granted, so it is refused up front instead of leaving a ledger entry nobody can clear.
-            per_run = [(p, perm) for p, perm in per_run if not (perm == "RX" and _container_can_read(p, sid))]
-            blocked = [p for p, _perm in per_run if not _can_change_acl(p)]
-            if blocked:
-                raise SandboxPathNotGrantable(blocked)
-            _scrub_container(sid)
-            attempted: list[Path] = []
-            try:
-                for path, perm in per_run:
-                    _ledger_add_per_run(sid, path)
-                    attempted.append(path)
-                    rc, out = _grant(path, sid, perm)
-                    if rc != 0:
-                        raise SandboxUnavailable(f"The sandbox could not be given access to {path} ({out}).")
-                return _run_contained(req.argv, req.cwd, req.env, psid, req.timeout, req.network)
-            finally:
-                for path in attempted:
-                    # A failed revoke keeps its ledger entry so the startup sweep retries it.
-                    try:
-                        if _revoke_ok(sid, path):
-                            _ledger_remove_per_run(sid, path)
-                    except Exception as exc:  # one failure must not skip the other revokes or the scrub
-                        _log.warning("sandbox: could not update the grant ledger (%s)", type(exc).__name__)
-                _scrub_container(sid)
+            return _run_contained(req.argv, req.cwd, req.env, prep.psid, req.timeout, req.network)
         finally:
-            _api().adv.FreeSid(psid)
+            _finish(prep)
+
+
+class SandboxProcess:
+    def __init__(self, started, on_exit):
+        import msvcrt
+
+        self.pid = started.pid
+        self.stdout = os.fdopen(msvcrt.open_osfhandle(started.out_rd, os.O_RDONLY | os.O_BINARY), "rb")
+        self.stdin = os.fdopen(msvcrt.open_osfhandle(started.in_wr, os.O_WRONLY | os.O_BINARY), "wb")
+        self._proc, self._job = started.proc, started.job
+        self._on_exit = on_exit
+        self._returncode: int | None = None
+        self._done = threading.Event()
+        self._lock = threading.Lock()
+        self._pipes_closed = False
+        threading.Thread(target=self._watch, daemon=True).start()
+
+    def terminate(self) -> None:
+        """End the whole tree and close the pipes. Idempotent, thread-safe and safe after the process exited."""
+        self._close_job()
+        with self._lock:
+            if self._pipes_closed:
+                return
+            self._pipes_closed = True
+        for stream in (self.stdin, self.stdout):
+            try:
+                stream.close()
+            except (OSError, ValueError):
+                pass
+
+    def _close_job(self) -> None:
+        """Close the Job Object exactly once; kill-on-close ends every process in it."""
+        with self._lock:
+            job, self._job = self._job, None
+        if job is not None:
+            a = _api()
+            a.k32.TerminateJobObject(a.wt.HANDLE(job), 1)
+            a.k32.CloseHandle(a.wt.HANDLE(job))
+
+    def poll(self) -> int | None:
+        return self._returncode
+
+    def wait(self, timeout: float | None = None) -> int:
+        if not self._done.wait(timeout):
+            raise subprocess.TimeoutExpired("sandboxed process", timeout)
+        return self._returncode
+
+    def _watch(self) -> None:
+        a = _api()
+        a.k32.WaitForSingleObject(a.wt.HANDLE(self._proc), INFINITE)
+        code = a.wt.DWORD()
+        a.k32.GetExitCodeProcess(a.wt.HANDLE(self._proc), ctypes.byref(code))
+        self._close_job()  # the pipes stay open so the reader can drain the last output
+        a.k32.CloseHandle(a.wt.HANDLE(self._proc))
+        self._returncode = int(code.value)
+        try:
+            self._on_exit()
+        except Exception as exc:
+            _log.warning("sandbox: could not release a finished run (%s)", type(exc).__name__)
+        self._done.set()
+
+
+def start(req: SandboxRequest) -> SandboxProcess:
+    """Start a long-running sandboxed process. Its grants are released when it exits."""
+    with _RUN_LOCK:
+        prep = _prepare(req)
+        try:
+            started = _run_contained(req.argv, req.cwd, req.env, prep.psid, req.timeout, req.network, stream=True)
+        except BaseException:
+            _finish(prep)
+            raise
+        for path in prep.attempted:
+            _hold(prep.sid, path)
+        prep.free_sid()
+    sid, paths = prep.sid, list(prep.attempted)
+    try:
+        return SandboxProcess(started, on_exit=lambda: _release_locked(sid, paths))
+    except BaseException:
+        a = _api()
+        a.k32.TerminateJobObject(a.wt.HANDLE(started.job), 1)
+        a.k32.CloseHandle(a.wt.HANDLE(started.job))
+        a.k32.CloseHandle(a.wt.HANDLE(started.proc))
+        _release_locked(sid, paths)
+        raise
+
+
+def readable_or_grantable(path: Path) -> bool:
+    psid, sid = ensure_profile(PROFILE_NAME + SHELL_PROFILE_SUFFIX)
+    try:
+        return _container_can_read(path, sid) or _can_change_acl(path)
+    finally:
+        _api().adv.FreeSid(psid)

@@ -759,3 +759,146 @@ def test_a_failed_refresh_does_not_stop_the_run(fake, monkeypatch):
     monkeypatch.setattr(lw, "_reinherit", lambda path: (_ for _ in ()).throw(OSError("denied")))
     lw.launch(fake.req(runtime=[fake.tmp]))
     assert fake.runs == 1
+
+
+# ---- start(): long-running sandboxed process ----
+from types import SimpleNamespace as _NS
+
+from sandbox import SandboxRunError as _SandboxRunError
+
+_STARTED = lw._Started(1, 2, 3, 4, 99)
+
+
+class _Spy:
+    def __init__(self, started, on_exit):
+        self.started, self.on_exit = started, on_exit
+
+
+def _streaming(monkeypatch, result="done"):
+    lw._HELD.clear()
+    monkeypatch.setattr(lw, "SandboxProcess", _Spy)
+    monkeypatch.setattr(lw, "_run_contained", lambda *a, stream=False, **k: _STARTED if stream else result)
+
+
+def test_start_holds_grants_until_the_process_exits(fake, monkeypatch):
+    _streaming(monkeypatch)
+    spy = lw.start(fake.req(write=[fake.run]))
+    held = lw._ledger_load()["per_run"]
+    assert held and fake.revokes == []
+    spy.on_exit()
+    assert len(fake.revokes) == len(held)
+    assert lw._ledger_load()["per_run"] == []
+
+
+def test_later_foreground_launch_leaves_held_grants_alone(fake, monkeypatch):
+    _streaming(monkeypatch)
+    spy = lw.start(fake.req(write=[fake.run]))
+    held = {tuple(e) for e in lw._ledger_load()["per_run"]}
+    assert lw.launch(fake.req(write=[fake.run])) == "done"
+    assert fake.revokes == []
+    assert {tuple(e) for e in lw._ledger_load()["per_run"]} == held
+    spy.on_exit()
+    assert lw._ledger_load()["per_run"] == []
+
+
+def test_start_frees_the_profile_sid_once(fake, monkeypatch):
+    _streaming(monkeypatch)
+    freed = []
+    monkeypatch.setattr(lw, "_api", lambda: _NS(adv=_NS(FreeSid=freed.append)))
+    lw.start(fake.req(write=[fake.run]))
+    assert freed == [None]
+
+
+def test_start_failure_releases_everything(fake, monkeypatch):
+    lw._HELD.clear()
+
+    def boom(*a, **k):
+        raise lw._run_error(True, "x")
+
+    monkeypatch.setattr(lw, "_run_contained", boom)
+    with pytest.raises(_SandboxRunError):
+        lw.start(fake.req(write=[fake.run]))
+    assert fake.revokes
+    assert lw._ledger_load()["per_run"] == []
+    assert lw._HELD == {}
+
+
+# ---- SandboxProcess.terminate(): idempotent, thread-safe, safe after exit ----
+import threading as _threading
+
+_PROC, _JOB = 101, 102
+
+
+def _fake_process(monkeypatch):
+    """A SandboxProcess over real pipes and a fake process/job: killing the job ends the process."""
+    import _winapi
+    import ctypes.wintypes as wt
+
+    exited = _threading.Event()
+    calls = []
+
+    def wait(handle, ms):
+        exited.wait()
+        return 0
+
+    def exit_code(handle, ref):
+        ref._obj.value = 7
+
+    def kill(handle, code):
+        calls.append(("terminate_job", handle.value))
+        exited.set()
+
+    k32 = _NS(WaitForSingleObject=wait, GetExitCodeProcess=exit_code, TerminateJobObject=kill,
+              CloseHandle=lambda handle: calls.append(("close", handle.value)))
+    monkeypatch.setattr(lw, "_api", lambda: _NS(k32=k32, wt=wt))
+    out_rd, child_out = _winapi.CreatePipe(None, 0)
+    child_in, in_wr = _winapi.CreatePipe(None, 0)
+    exits = []
+    proc = lw.SandboxProcess(lw._Started(_PROC, _JOB, out_rd, in_wr, 99), on_exit=lambda: exits.append(1))
+    return _NS(proc=proc, exited=exited, calls=calls, exits=exits, child_out=child_out, child_in=child_in)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="SandboxProcess wraps Windows handles")
+def test_terminate_from_many_threads_closes_everything_once(monkeypatch):
+    import _winapi
+
+    f = _fake_process(monkeypatch)
+    try:
+        threads = [_threading.Thread(target=f.proc.terminate) for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(5)
+        assert f.proc.wait(5) == 7
+        f.proc.terminate()
+        assert f.calls.count(("terminate_job", _JOB)) == 1
+        assert f.calls.count(("close", _JOB)) == 1
+        assert f.calls.count(("close", _PROC)) == 1
+        assert f.proc.stdout.closed and f.proc.stdin.closed
+        assert f.exits == [1]
+    finally:
+        _winapi.CloseHandle(f.child_out)
+        _winapi.CloseHandle(f.child_in)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="SandboxProcess wraps Windows handles")
+def test_terminate_after_the_process_exited_is_safe_and_output_stays_readable(monkeypatch):
+    import _winapi
+
+    f = _fake_process(monkeypatch)
+    try:
+        _winapi.WriteFile(f.child_out, b"last words")
+        _winapi.CloseHandle(f.child_out)
+        f.exited.set()
+        assert f.proc.wait(5) == 7
+        assert f.proc.poll() == 7
+        assert f.calls.count(("close", _JOB)) == 1
+        assert f.proc.stdout.read() == b"last words"
+        f.proc.terminate()
+        f.proc.terminate()
+        assert f.calls.count(("close", _JOB)) == 1
+        assert f.calls.count(("close", _PROC)) == 1
+        assert f.proc.stdout.closed and f.proc.stdin.closed
+        assert f.exits == [1]
+    finally:
+        _winapi.CloseHandle(f.child_in)
