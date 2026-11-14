@@ -2646,7 +2646,7 @@ async function openPinDropdown(query) {
 }
 
 // Build a canonical pin-ref chip element (icon + label, no X button).
-// Single source of truth for chip markup so every insertion path — the Shift+{
+// Single source of truth for chip markup so every insertion path — the Shift+?
 // dropdown AND the Electron shell's Slack/Teams pin forwarder — produces an
 // identical-looking chip. pin: { source, id, label }.
 function buildPinChipEl(pin) {
@@ -2666,7 +2666,7 @@ function buildPinChipEl(pin) {
 }
 
 // Insert a pin chip at the current caret in the chat composer, exactly as the
-// Shift+{ dropdown does (no trailing line/space, no X button). Called by the
+// Shift+? dropdown does (no trailing line/space, no X button). Called by the
 // Electron shell's pin forwarder via executeJavaScript so shell-pinned chips
 // match dropdown-pinned chips. Returns 'ok' | 'no input'.
 window.insertPinChipAtCaret = function (pin) {
@@ -2697,7 +2697,7 @@ window.insertPinChipAtCaret = function (pin) {
 
 function commitPinMention(pin) {
   closePinDropdown();
-  _replaceAtHashInInput('{', () => buildPinChipEl(pin));
+  _replaceAtHashInInput('?', () => buildPinChipEl(pin));
 }
 
 /* ── @ mention dropdown ──────────────────────────────── */
@@ -5432,7 +5432,7 @@ async function _showPinPopover() {
   backdrop.className = 'pin-popover-backdrop';
   const popover = document.createElement('div');
   popover.className = 'pin-popover';
-  popover.innerHTML = `<div class="pin-popover-header"><span class="pin-popover-title">\uD83D\uDC0A Gator's Context</span><span class="pin-popover-count"></span><button class="pin-popover-close">&times;</button></div><div class="pin-popover-hint"><span class="guide-key">Shift+{</span> in the prompt to reference a pinned item</div><div class="pin-popover-list"></div>`;
+  popover.innerHTML = `<div class="pin-popover-header"><span class="pin-popover-title">\uD83D\uDC0A Gator's Context</span><span class="pin-popover-count"></span><button class="pin-popover-close">&times;</button></div><div class="pin-popover-hint"><span class="guide-key">Shift+?</span> in the prompt to reference a pinned item</div><div class="pin-popover-list"></div>`;
   document.body.appendChild(backdrop);
   main.appendChild(popover);
   const onEsc = (e) => {
@@ -5699,7 +5699,7 @@ async function _showPinPopover() {
         }
       });
       // ✦ Insert pin reference into chat input — uses the canonical helper so
-      // the chip is identical to Shift+{ and shell-pinned chips (icon+label,
+      // the chip is identical to Shift+? and shell-pinned chips (icon+label,
       // no X, no trailing line/space).
       card.querySelector('.pin-card-ask').addEventListener('click', () => {
         if (typeof window.insertPinChipAtCaret === 'function') {
@@ -9109,7 +9109,7 @@ function _replaceAtHashInInput(trigger, chipFactory) {
         ? /^#[\w-]*/
         : trigger === '/'
           ? /^\/[\w-]*/
-          : /^\{[^}\n]*/;
+          : /^\?\S*/;
   const afterQuery = text.slice(idx).replace(triggerRegex, '');
   const chip = chipFactory();
   const parent = node.parentNode;
@@ -9360,13 +9360,13 @@ input.addEventListener('input', () => {
   }
   _closeSlashDropdown();
 
-  // { trigger: open pin reference dropdown
-  const braceIdx = val.lastIndexOf('{');
-  if (braceIdx !== -1) {
-    const beforeBrace = val[braceIdx - 1];
-    if (_isTriggerBoundary(beforeBrace)) {
-      const afterBrace = val.slice(braceIdx + 1);
-      const query = (afterBrace.match(/^[^}\n]*/) || [''])[0];
+  // ? trigger: open pin reference dropdown (at start or after a space; a space
+  // after the ? ends it, so a sentence like "ok ? yes" never captures Enter)
+  const questionIdx = val.lastIndexOf('?');
+  if (questionIdx !== -1) {
+    const beforeQuestion = val[questionIdx - 1];
+    const query = val.slice(questionIdx + 1);
+    if (_isTriggerBoundary(beforeQuestion) && !/\s/.test(query)) {
       closeMentionDropdown();
       closeChannelDropdown();
       openPinDropdown(query);
@@ -17920,7 +17920,7 @@ _loadMcpConnections();
   }
 
   // ── Content fade: dim guide hints once the user has typed, NOT on focus.
-  // The hints (/, @, Shift+{, open file) are discovery affordances — most useful
+  // The hints (/, @, Shift+?, open file) are discovery affordances — most useful
   // when the box is focused-but-empty (about to type). Keep them readable then;
   // recede only after there's content so they don't compete with what's typed.
   if (chatInput && guideBar) {

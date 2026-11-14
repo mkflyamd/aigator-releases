@@ -5342,7 +5342,7 @@ body.gator-chat-expanded .gator-expand-btn {
 }
 
 /* Top action strip â€” model selector + terminal/code toggles. Used to also
-   hold the discovery hints (/, @, Ctrl+O, Shift+{) sharing this one row with
+   hold the discovery hints (/, @, Ctrl+O, Shift+?) sharing this one row with
    real buttons - crowded even before the OpenCode session toggle joined it,
    and got worse as the pane narrows (container queries could only hide the
    hints, never the buttons, so the row still fought for space). Hints moved

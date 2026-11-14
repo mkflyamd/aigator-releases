@@ -3848,7 +3848,7 @@ setTimeout(scanAll, 500);
         var pinLabel = ctx.label || ctx.channel || ctx.id || source;
         var pinKind = ctx.kind || 'channel';
         // Insert the chip via Gator's own canonical helper so shell-pinned
-        // chips are IDENTICAL to Shift+{ dropdown chips (same icon+label, no X
+        // chips are IDENTICAL to Shift+? dropdown chips (same icon+label, no X
         // button, no trailing line/space). See window.insertPinChipAtCaret in
         // web/static/app.js. Also keep _nativeSlack._currentCtx in sync for
         // Slack so the send handler has the live context.

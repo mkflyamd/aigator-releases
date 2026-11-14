@@ -306,7 +306,7 @@ const OB_STEPS = [
     color: '#4ade80',
     act: 'done',
     description:
-      '<ul class="ob-bullets"><li>Type <code>/skill</code> to activate any skill or pick an action</li><li>Use <code>@</code> to mention a colleague</li><li><strong>Pin</strong> items for context, <code>Shift+{</code> to reference</li><li>Explore the <strong>skill bar</strong> on the left for more</li></ul>',
+      '<ul class="ob-bullets"><li>Type <code>/skill</code> to activate any skill or pick an action</li><li>Use <code>@</code> to mention a colleague</li><li><strong>Pin</strong> items for context, <code>Shift+?</code> to reference</li><li>Explore the <strong>skill bar</strong> on the left for more</li></ul>',
     skillId: null,
     simulated: null,
     tryPrompt: null,
@@ -410,7 +410,7 @@ function _obRenderDone() {
     '<li>Type <code>/skill</code> to activate any skill or pick an action</li>',
     '<li>Use <code>@</code> to mention a colleague in context</li>',
     '<li>Pin items to give Gator context for follow-up questions</li>',
-    '<li>Press <code>Shift+{</code> to open the pin panel</li>',
+    '<li>Press <code>Shift+?</code> to open the pin panel</li>',
     '</ul>',
     '</div>',
     '</div>',

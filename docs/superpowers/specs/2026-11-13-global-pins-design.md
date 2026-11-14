@@ -33,7 +33,7 @@ Let a user mark a pinned item as **global** from the pin orb popover. A global p
 - When at least one global pin exists, the list shows a "Global" group above a "This tab" group. With none, the list looks as it does today.
 - × on a global card asks "Remove from all tabs?" before deleting, and sends `scope=global`.
 - List rendering moves into a function so the popover re-renders after a toggle without closing. A toggle updates the cached pin list locally (the badge count is unchanged), so no refetch or flicker.
-- Badge count, the `Shift+{` dropdown, the agent prompt (`routes/chat.py`), the scheduler, and the tab/OneDrive tools read through `get_pins` and need no changes.
+- Badge count, the `Shift+?` dropdown, the agent prompt (`routes/chat.py`), the scheduler, and the tab/OneDrive tools read through `get_pins` and need no changes.
 
 ## Tests
 

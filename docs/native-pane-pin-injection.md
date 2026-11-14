@@ -214,7 +214,7 @@ setInterval(() => {
     // Insert .pin-ref-chip in Gator's #chat-input
     gatorView.webContents.executeJavaScript(`...chip creation...`);
     // ALSO persist to /api/context/pin so it shows in the pin orb
-    // and works with Shift+{ — MUST include context_id (the renderer's
+    // and works with Shift+? — MUST include context_id (the renderer's
     // live _activeTabId) or the pin lands in a shared "default" bucket
     // and leaks across tabs (see §6, Pin Persistence).
     gatorView.webContents
@@ -237,12 +237,12 @@ The pin chip uses the existing contract: `dataset.pinSource='slack'`,
 `dataset.pinId='channel:thread_ts:msg_ts'`. Gator's send handler reads these
 at `app.js:6653`.
 
-### 6. Pin Persistence (Pin Orb + Shift+{)
+### 6. Pin Persistence (Pin Orb + Shift+?)
 
 Pin clicks do TWO things:
 
 1. **Immediate**: insert a `.pin-ref-chip` in the composer (one-shot, for the current message)
-2. **Persistent**: POST to `/api/context/pin` (saved to disk, shows in pin orb badge, works with Shift+{)
+2. **Persistent**: POST to `/api/context/pin` (saved to disk, shows in pin orb badge, works with Shift+?)
 
 **Per-tab scoping (fixed — do not regress this):** an earlier version of this
 forwarder omitted `context_id` from the POST body, so every shell-mode Slack
@@ -440,9 +440,9 @@ the machine-readable `[Pin: source:id]` format. This is handled in
 There are THREE code paths that insert a `.pin-ref-chip` into the composer, and
 they MUST produce identical chips or users notice the difference (we shipped a
 bug where shell-inserted chips had an extra `×` remove-button and forced a new
-line, while Shift+{ chips did not):
+line, while Shift+? chips did not):
 
-1. **Shift+{ dropdown** → `commitPinMention()` in `app.js`.
+1. **Shift+? dropdown** → `commitPinMention()` in `app.js`.
 2. **Shell pin forwarder** (Slack/Teams pin button) → the shell calls a Gator
    page function via `executeJavaScript`.
 3. **Pin orb "Insert into chat" (✦) button** → the orb card handler.
@@ -1221,7 +1221,7 @@ Pin plumbing:
 - [ ] Pin chip uses `dataset.pinSource` + `dataset.pinId` contract
 - [ ] Pin persisted to `/api/context/pin` **with `context_id` set to the
       renderer's live active tab id** (never a hardcoded `"default"`) — so it
-      shows in the pin orb + Shift+{ scoped to the correct tab only
+      shows in the pin orb + Shift+? scoped to the correct tab only
 - [ ] Pin orb refreshed after persist (`_refreshPinOrb(true)`)
 - [ ] Pin label uses the MESSAGE TEXT (not a generic chat title) so pins are
       distinguishable — for Teams, `div[id="content-<mid>"]` innerText (M-selectors)
