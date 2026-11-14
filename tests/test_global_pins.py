@@ -75,6 +75,18 @@ class TestGlobalState:
         assert state.set_pin_scope("jira", "NOPE", "global", "tabA")["moved"] is False
         assert state.set_pin_scope("jira", "NOPE", "tab", "tabA")["moved"] is False
 
+    def test_failed_write_reports_not_moved_and_rolls_back(self, monkeypatch):
+        _pin("tabA")
+        monkeypatch.setattr(state, "_save", lambda: False)
+        assert state.set_pin_scope("jira", "KEY-1", "global", "tabA")["moved"] is False
+        assert "jira::KEY-1" in state.pinned_contexts["tabA"]
+        assert "jira::KEY-1" not in state.pinned_contexts.get(state.GLOBAL_CONTEXT_ID, {})
+
+    def test_save_replaces_the_file_atomically(self):
+        _pin("tabA")
+        assert not state._PINS_FILE.with_name("pinned_contexts.json.tmp").exists()
+        assert "KEY-1" in state._PINS_FILE.read_text(encoding="utf-8")
+
     def test_promote_is_idempotent(self):
         _pin("tabA")
         state.set_pin_scope("jira", "KEY-1", "global", "tabA")

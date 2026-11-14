@@ -9523,6 +9523,8 @@ input.addEventListener('keydown', (e) => {
     });
     return;
   }
+  // Enter with nothing highlighted is a plain send (e.g. a message ending in " ?")
+  if (_pinDropdown && e.key === 'Enter' && _pinFocusIdx < 0) closePinDropdown();
   // Pin dropdown navigation
   if (_pinDropdown) {
     const items = _pinDropdown.querySelectorAll('.skill-mention-item');
