@@ -1,0 +1,4 @@
+Error: litellm.BudgetExceededError: Budget has been exceeded! Current cost: 50.0, Max budget: 50.0
+ExceededBudget: User over budget
+429 Too Many Requests
+Error: rate limit exceeded, retry later
