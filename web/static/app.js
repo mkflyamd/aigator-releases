@@ -4444,7 +4444,13 @@ function _deriveTitle(hist) {
   const first = hist.find((m) => m.role === 'user');
   if (!first) return 'New Chat';
   const text = typeof first.content === 'string' ? first.content : '';
-  return text.replace(/@\w+/g, '').trim().slice(0, 25) || 'New Chat';
+  return _stripPinTokens(text.replace(/@\w+/g, '')).slice(0, 25) || 'New Chat';
+}
+
+function _stripPinTokens(t) {
+  return String(t)
+    .replace(/\[Pin:[^\]]*(\]|$)/g, '')
+    .trim();
 }
 
 function _showChatOrOnboarding() {
@@ -5443,7 +5449,8 @@ async function _showPinPopover() {
   document.addEventListener('keydown', onEsc);
 
   const contextId = _activeTabId || 'default';
-  const tabName = (_tabs.find((t) => t.id === contextId)?.title || 'this tab').slice(0, 30);
+  const tabName =
+    _stripPinTokens(_tabs.find((t) => t.id === contextId)?.title || '').slice(0, 30) || 'this tab';
   let scopeNote = '';
   let pins;
   if (_cachedPinsContextId === contextId && Array.isArray(_cachedPins)) {
@@ -5702,7 +5709,9 @@ async function _showPinPopover() {
       });
       // Globe: global pins show in every tab; turning it off keeps the pin on this tab only
       card.querySelector('.pin-card-scope').title =
-        p.scope === 'global' ? 'Make tab-only (keeps it on \u201C' + tabName + '\u201D)' : 'Make global';
+        p.scope === 'global'
+          ? 'Make tab-only (keeps it on \u201C' + tabName + '\u201D)'
+          : 'Make global';
       card.querySelector('.pin-card-scope').addEventListener('click', async (e) => {
         const btn = e.currentTarget;
         btn.disabled = true;
