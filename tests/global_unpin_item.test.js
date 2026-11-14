@@ -20,7 +20,7 @@ function makeCtx(pins, response) {
     _syncAllPinUI: () => {
       calls.sync += 1;
     },
-    escapeHtml: (s) => String(s).replace(/</g, '&lt;'),
+    escapeHtml: (s) => String(s).replace(/</g, '&lt;').replace(/>/g, '&gt;'),
     _showConfirmModal: (title, body, label, onConfirm) =>
       calls.modal.push({ title, body, label, onConfirm }),
     fetch: async (url, opts) => {
@@ -44,7 +44,7 @@ function makeCtx(pins, response) {
     assert.strictEqual(calls.fetch.length, 0);
     assert.strictEqual(calls.modal.length, 1);
     assert.strictEqual(calls.modal[0].title, 'Remove global pin');
-    assert(calls.modal[0].body.includes('&lt;b>x&lt;/b>'), 'label must be escaped');
+    assert(calls.modal[0].body.includes('&lt;b&gt;x&lt;/b&gt;'), 'label must be escaped');
     assert(ctx._pinnedItemsCache.has('slack::C1'));
     await calls.modal[0].onConfirm();
     assert.strictEqual(calls.fetch.length, 1);
