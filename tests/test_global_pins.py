@@ -4,7 +4,10 @@ import sys
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "web"))
 
 import pytest
+from fastapi.testclient import TestClient
 
+from app import app
+from security import get_csrf_token
 from skills.context import state
 
 
@@ -105,3 +108,97 @@ class TestGlobalState:
         _pin("tabB", item_id="KEY-2", label="Local")
         state.clear_pins("tabB")
         assert [p["id"] for p in state.get_pins("tabB")] == ["KEY-1"]
+
+
+def _csrf():
+    return {"X-CSRF-Token": get_csrf_token("testserver")}
+
+
+def _client():
+    return TestClient(app)
+
+
+def _post_pin(client, ctx="tabA", item_id="KEY-1", label="Epic"):
+    r = client.post(
+        "/api/context/pin",
+        json={"source": "jira", "id": item_id, "label": label, "meta": {}, "context_id": ctx},
+    )
+    assert r.status_code == 200, r.text
+
+
+class TestGlobalRoutes:
+    def test_scope_route_requires_csrf(self):
+        client = _client()
+        _post_pin(client)
+        r = client.post(
+            "/api/context/pin/scope",
+            json={"source": "jira", "id": "KEY-1", "scope": "global", "context_id": "tabA"},
+        )
+        assert r.status_code == 403
+
+    def test_scope_round_trip(self):
+        client = _client()
+        _post_pin(client)
+        r = client.post(
+            "/api/context/pin/scope",
+            headers=_csrf(),
+            json={"source": "jira", "id": "KEY-1", "scope": "global", "context_id": "tabA"},
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["moved"] is True
+        seen_from_b = client.get("/api/context/pins", params={"context_id": "tabB"}).json()
+        assert [p["id"] for p in seen_from_b] == ["KEY-1"]
+        assert seen_from_b[0]["scope"] == "global"
+
+        r = client.post(
+            "/api/context/pin/scope",
+            headers=_csrf(),
+            json={"source": "jira", "id": "KEY-1", "scope": "tab", "context_id": "tabB"},
+        )
+        assert r.json()["moved"] is True
+        b = client.get("/api/context/pins", params={"context_id": "tabB"}).json()
+        assert [p["id"] for p in b] == ["KEY-1"]
+        assert "scope" not in b[0]
+        assert client.get("/api/context/pins", params={"context_id": "tabA"}).json() == []
+
+    def test_scope_route_rejects_unknown_scope(self):
+        r = _client().post(
+            "/api/context/pin/scope",
+            headers=_csrf(),
+            json={"source": "jira", "id": "KEY-1", "scope": "everywhere", "context_id": "tabA"},
+        )
+        assert r.status_code == 422
+
+    def test_unpin_with_global_scope_removes_from_all_tabs(self):
+        client = _client()
+        _post_pin(client)
+        client.post(
+            "/api/context/pin/scope",
+            headers=_csrf(),
+            json={"source": "jira", "id": "KEY-1", "scope": "global", "context_id": "tabA"},
+        )
+        r = client.delete(
+            "/api/context/pin/jira/KEY-1",
+            headers=_csrf(),
+            params={"context_id": "tabB", "scope": "global"},
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["unpinned"] is True
+        for tab in ("tabA", "tabB"):
+            assert client.get("/api/context/pins", params={"context_id": tab}).json() == []
+
+    def test_clone_copies_only_the_tabs_own_pins(self):
+        client = _client()
+        _post_pin(client, item_id="KEY-1")
+        client.post(
+            "/api/context/pin/scope",
+            headers=_csrf(),
+            json={"source": "jira", "id": "KEY-1", "scope": "global", "context_id": "tabA"},
+        )
+        _post_pin(client, item_id="KEY-2", label="Local")
+        r = client.post(
+            "/api/context/pins/clone",
+            json={"from_context_id": "tabA", "to_context_id": "tabC"},
+        )
+        assert r.json() == {"ok": True, "cloned": 1}
+        assert [p["id"] for p in state.get_pins("tabC", include_global=False)] == ["KEY-2"]
