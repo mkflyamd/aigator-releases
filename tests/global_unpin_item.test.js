@@ -3,7 +3,10 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 
-const source = fs.readFileSync(path.join(__dirname, '..', 'web', 'static', 'third-pane.js'), 'utf8');
+const source = fs.readFileSync(
+  path.join(__dirname, '..', 'web', 'static', 'third-pane.js'),
+  'utf8',
+);
 const m = source.match(/async function _unpinItem\([^)]*\)\s*\{[\s\S]*?\n\}/);
 assert(m, '_unpinItem not found in third-pane.js');
 
@@ -18,7 +21,8 @@ function makeCtx(pins, response) {
       calls.sync += 1;
     },
     escapeHtml: (s) => String(s).replace(/</g, '&lt;'),
-    _showConfirmModal: (title, body, label, onConfirm) => calls.modal.push({ title, body, label, onConfirm }),
+    _showConfirmModal: (title, body, label, onConfirm) =>
+      calls.modal.push({ title, body, label, onConfirm }),
     fetch: async (url, opts) => {
       calls.fetch.push({ url, opts });
       return { ok: true, json: async () => response };

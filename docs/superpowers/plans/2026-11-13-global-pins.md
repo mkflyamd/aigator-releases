@@ -42,10 +42,12 @@ Run Python tests from the repo root with `uv run pytest -q <path>`; JS tests wit
 ### Task 1: Global bucket in pin state
 
 **Files:**
+
 - Modify: `web/skills/context/state.py`
 - Create: `tests/test_global_pins.py` (state tests here; route tests are added in Task 2)
 
 **Interfaces:**
+
 - Produces (used by Task 2):
   - `GLOBAL_CONTEXT_ID: str = "__global__"`
   - `get_pins(context_id: str = "default", include_global: bool = True) -> list[dict]` -- global entries first, each a copy with `"scope": "global"`; tab entries untagged; an item in both appears once (as global). `include_global=False` or `context_id == GLOBAL_CONTEXT_ID` returns only that bucket.
@@ -184,11 +186,14 @@ GLOBAL_CONTEXT_ID = "__global__"
 3b. Replace `get_pins`:
 
 old:
+
 ```python
 def get_pins(context_id: str = "default") -> list[dict]:
     return list(pinned_contexts.get(context_id, {}).values())
 ```
+
 new:
+
 ```python
 def get_pins(context_id: str = "default", include_global: bool = True) -> list[dict]:
     tab_entries = pinned_contexts.get(context_id, {})
@@ -202,6 +207,7 @@ def get_pins(context_id: str = "default", include_global: bool = True) -> list[d
 3c. Replace `remove_pin` with `set_pin_scope` + the scoped `remove_pin`:
 
 old:
+
 ```python
 def remove_pin(source: str, item_id: str, context_id: str = "default") -> dict:
     key = f"{source}::{item_id}"
@@ -209,7 +215,9 @@ def remove_pin(source: str, item_id: str, context_id: str = "default") -> dict:
     _save()
     return {"unpinned": bool(removed), "source": source, "id": item_id}
 ```
+
 new:
+
 ```python
 def set_pin_scope(
     source: str, item_id: str, scope: str, context_id: str = "default"
@@ -255,10 +263,12 @@ git commit -m "Add global pin bucket and scope moves to pin state"
 ### Task 2: Scope route, scoped unpin, clone excludes global
 
 **Files:**
+
 - Modify: `web/routes/onenote.py` (imports near line 8; models near `ContextPinRequest`; `/api/context/pin*` routes)
 - Modify: `tests/test_global_pins.py` (append route tests)
 
 **Interfaces:**
+
 - Consumes (from Task 1): `set_pin_scope(source, item_id, scope, context_id)`, `remove_pin(source, item_id, context_id, scope)`, `get_pins(context_id, include_global)`.
 - Produces (used by Task 3 frontend):
   - `POST /api/context/pin/scope` -- JSON body `{source, id, scope: "global"|"tab", context_id}`; CSRF required; returns `{"moved": bool, "scope": str, "source": str, "id": str}`; 422 on a bad `scope`.
@@ -411,7 +421,9 @@ async def context_unpin(source: str, item_id: str, context_id: str = "default"):
 
     result = remove_pin(source, item_id, context_id)
 ```
+
 with:
+
 ```python
 async def context_unpin(
     source: str,
@@ -449,12 +461,14 @@ git commit -m "Add pin scope route, scoped unpin, and keep global pins out of ta
 ### Task 3: Pin orb popover -- globe toggle and Global / This tab groups
 
 **Files:**
+
 - Modify: `web/static/app.js` (`_showPinPopover`, currently starting near line 5414)
 - Modify: `web/static/style.css` (pin card rules, near `.pin-card-remove:hover`)
 - Modify: `docs/superpowers/specs/2026-11-13-global-pins-design.md` (one line, see Step 7)
 - Create: `tests/global_pins_group.test.js`
 
 **Interfaces:**
+
 - Consumes (from Task 2): `POST /api/context/pin/scope` (body `{source, id, scope, context_id}`, returns `{moved}`), `DELETE /api/context/pin/{source}/{id}?context_id=..&scope=global`, and pins from `GET /api/context/pins` carrying `scope: "global"` for global ones. The page's fetch wrapper adds the CSRF header automatically for same-origin mutating calls.
 - Produces: `_groupPinsByScope(pins) -> { globals: Pin[], locals: Pin[] }` (top-level function in `app.js`, order-preserving).
 
@@ -508,7 +522,6 @@ function _groupPinsByScope(pins) {
     locals: list.filter((p) => p.scope !== 'global'),
   };
 }
-
 ```
 
 Run: `node --test tests/global_pins_group.test.js` -- Expected: PASS.
@@ -522,7 +535,9 @@ All edits are inside `_showPinPopover`. Before each single-line anchor edit, con
 ```js
     pins.forEach((p) => {
 ```
+
 with:
+
 ```js
     const addCard = (p) => {
 ```
@@ -530,50 +545,60 @@ with:
 4b. Add the globe button to the card template. After the line
 
 ```js
-        <button class="pin-card-btn pin-card-ask" title="Insert into chat">✦</button>
+<button class="pin-card-btn pin-card-ask" title="Insert into chat">
+  ✦
+</button>
 ```
+
 add:
+
 ```js
-        <button class="pin-card-btn pin-card-scope${p.scope === 'global' ? ' is-global' : ''}" title="${p.scope === 'global' ? 'Make tab-only' : 'Make global'}" aria-pressed="${p.scope === 'global'}">🌐</button>
+<button
+  class="pin-card-btn pin-card-scope${p.scope === 'global' ? ' is-global' : ''}"
+  title="${p.scope === 'global' ? 'Make tab-only' : 'Make global'}"
+  aria-pressed="${p.scope === 'global'}"
+>
+  🌐
+</button>
 ```
 
 4c. Add the scope toggle handler directly above the line `      // × Unpin`:
 
 ```js
-      // Globe: global pins show in every tab; turning it off keeps the pin on this tab only
-      card.querySelector('.pin-card-scope').addEventListener('click', async (e) => {
-        const btn = e.currentTarget;
-        btn.disabled = true;
-        const toGlobal = p.scope !== 'global';
-        let moved = false;
-        try {
-          const res = await fetch('/api/context/pin/scope', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              source: p.source,
-              id: p.id,
-              scope: toGlobal ? 'global' : 'tab',
-              context_id: contextId,
-            }),
-          });
-          moved = res.ok && !!(await res.json().catch(() => ({}))).moved;
-        } catch {
-          moved = false;
-        }
-        if (!moved) {
-          btn.disabled = false;
-          return;
-        }
-        _cachedPins = _cachedPins.map((pin) => {
-          if (!(pin.source === p.source && String(pin.id) === String(p.id))) return pin;
-          const next = { ...pin };
-          if (toGlobal) next.scope = 'global';
-          else delete next.scope;
-          return next;
-        });
-        renderPins();
-      });
+// Globe: global pins show in every tab; turning it off keeps the pin on this tab only
+card.querySelector('.pin-card-scope').addEventListener('click', async (e) => {
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  const toGlobal = p.scope !== 'global';
+  let moved = false;
+  try {
+    const res = await fetch('/api/context/pin/scope', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        source: p.source,
+        id: p.id,
+        scope: toGlobal ? 'global' : 'tab',
+        context_id: contextId,
+      }),
+    });
+    moved = res.ok && !!(await res.json().catch(() => ({}))).moved;
+  } catch {
+    moved = false;
+  }
+  if (!moved) {
+    btn.disabled = false;
+    return;
+  }
+  _cachedPins = _cachedPins.map((pin) => {
+    if (!(pin.source === p.source && String(pin.id) === String(p.id))) return pin;
+    const next = { ...pin };
+    if (toGlobal) next.scope = 'global';
+    else delete next.scope;
+    return next;
+  });
+  renderPins();
+});
 ```
 
 4d. Delete scope and confirm. Replace the URL line in the x handler:
@@ -581,7 +606,9 @@ add:
 ```js
           `/api/context/pin/${p.source}/${encodeURIComponent(p.id)}?context_id=${contextId}`,
 ```
+
 with:
+
 ```js
           `/api/context/pin/${p.source}/${encodeURIComponent(p.id)}?context_id=${contextId}${p.scope === 'global' ? '&scope=global' : ''}`,
 ```
@@ -589,60 +616,62 @@ with:
 Then, directly after the line `        const removeBtn = card.querySelector('.pin-card-remove');` insert:
 
 ```js
-        const confirmed = removeBtn.dataset.confirmed === '1';
-        delete removeBtn.dataset.confirmed;
-        if (p.scope === 'global' && !confirmed) {
-          _showConfirmModal(
-            'Remove global pin',
-            `Remove "${escapeHtml(p.label)}" from all tabs?`,
-            'Remove',
-            () => {
-              removeBtn.dataset.confirmed = '1';
-              removeBtn.click();
-            },
-          );
-          return;
-        }
+const confirmed = removeBtn.dataset.confirmed === '1';
+delete removeBtn.dataset.confirmed;
+if (p.scope === 'global' && !confirmed) {
+  _showConfirmModal(
+    'Remove global pin',
+    `Remove "${escapeHtml(p.label)}" from all tabs?`,
+    'Remove',
+    () => {
+      removeBtn.dataset.confirmed = '1';
+      removeBtn.click();
+    },
+  );
+  return;
+}
 ```
 
 4e. Replace the post-removal DOM update. Old (inside the x handler, after the card fade styles):
 
 ```js
-        setTimeout(() => {
-          card.remove();
-          // Update badge locally from the already-correct _cachedPins — no network fetch needed
-          const orb = document.getElementById('pin-orb');
-          const badge = document.getElementById('pin-orb-badge');
-          const count = Array.isArray(_cachedPins) ? _cachedPins.length : 0;
-          if (badge) {
-            badge.textContent = count;
-            badge.classList.toggle('hidden', count === 0);
-          }
-          if (orb) {
-            orb.classList.toggle('has-pins', count > 0);
-          }
-          if (countEl)
-            countEl.textContent = list.children.length
-              ? `${list.children.length} item${list.children.length !== 1 ? 's' : ''}`
-              : '';
-          if (!list.children.length) {
-            const empty = document.createElement('div');
-            empty.className = 'pin-popover-empty';
-            const icon = document.createElement('div');
-            icon.style.cssText = 'font-size:1.4rem;margin-bottom:.4rem';
-            icon.textContent = '🐊';
-            empty.appendChild(icon);
-            empty.appendChild(document.createTextNode('All clear! No items pinned.'));
-            list.replaceChildren(empty);
-          }
-        }, 200);
+setTimeout(() => {
+  card.remove();
+  // Update badge locally from the already-correct _cachedPins — no network fetch needed
+  const orb = document.getElementById('pin-orb');
+  const badge = document.getElementById('pin-orb-badge');
+  const count = Array.isArray(_cachedPins) ? _cachedPins.length : 0;
+  if (badge) {
+    badge.textContent = count;
+    badge.classList.toggle('hidden', count === 0);
+  }
+  if (orb) {
+    orb.classList.toggle('has-pins', count > 0);
+  }
+  if (countEl)
+    countEl.textContent = list.children.length
+      ? `${list.children.length} item${list.children.length !== 1 ? 's' : ''}`
+      : '';
+  if (!list.children.length) {
+    const empty = document.createElement('div');
+    empty.className = 'pin-popover-empty';
+    const icon = document.createElement('div');
+    icon.style.cssText = 'font-size:1.4rem;margin-bottom:.4rem';
+    icon.textContent = '🐊';
+    empty.appendChild(icon);
+    empty.appendChild(document.createTextNode('All clear! No items pinned.'));
+    list.replaceChildren(empty);
+  }
+}, 200);
 ```
+
 New:
+
 ```js
-        setTimeout(() => {
-          syncBadge();
-          renderPins();
-        }, 200);
+setTimeout(() => {
+  syncBadge();
+  renderPins();
+}, 200);
 ```
 
 4f. Close out the loop and define `syncBadge` / `renderPins`. Replace:
@@ -652,7 +681,9 @@ New:
     });
   } catch {
 ```
+
 with:
+
 ```js
       list.appendChild(card);
     };
@@ -744,7 +775,9 @@ In `docs/superpowers/specs/2026-11-13-global-pins-design.md`, replace
 ```
 - List rendering moves into a function so the popover re-renders after a toggle without closing. After each toggle, call `_refreshPinOrb(true)`.
 ```
+
 with
+
 ```
 - List rendering moves into a function so the popover re-renders after a toggle without closing. A toggle updates the cached pin list locally (the badge count is unchanged), so no refetch or flicker.
 ```
