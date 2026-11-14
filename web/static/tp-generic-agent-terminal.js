@@ -260,6 +260,16 @@ function _genAgentRenderTabs(tabId) {
     x.textContent = '✕';
     tab.appendChild(label);
     tab.appendChild(restart);
+    const handoff = document.createElement('button');
+    handoff.type = 'button';
+    handoff.className = 'gtp-tab-restart gtp-tab-handoff';
+    handoff.title = 'Continue this session in another agent';
+    handoff.textContent = '↪';
+    handoff.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (window.agentHandoff) window.agentHandoff.openDialog({ tabId, sess });
+    });
+    tab.appendChild(handoff);
     if (window.gatorShell && typeof window.gatorShell.popOutTerminal === 'function') {
       const popOut = document.createElement('button');
       popOut.type = 'button';
@@ -276,13 +286,18 @@ function _genAgentRenderTabs(tabId) {
     }
     tab.appendChild(x);
     tab.addEventListener('click', (e) => {
-      if (e.target === x || e.target === restart) return;
+      if (e.target === x || e.target === restart || e.target === handoff) return;
       if (label.isContentEditable) return; // don't activate while renaming
       if (typeof _caCloseFileDiffIfOpen === 'function') _caCloseFileDiffIfOpen();
       _genAgentActivateSession(tabId, id);
     });
     tab.addEventListener('dblclick', (e) => {
-      if (e.target === x || e.target === restart || e.target.classList.contains('gtp-tab-popout'))
+      if (
+        e.target === x ||
+        e.target === restart ||
+        e.target.classList.contains('gtp-tab-popout') ||
+        e.target.classList.contains('gtp-tab-handoff')
+      )
         return;
       e.preventDefault();
       e.stopPropagation();
@@ -431,7 +446,7 @@ async function _genAgentCloseBackendSession(state, sess) {
       method: 'DELETE',
       headers,
       body: JSON.stringify({
-        agent: state.agent,
+        agent: sess.agent || state.agent,
         project_id: state.projectId,
         pty_session_id: sess.ptySessionId,
       }),
@@ -480,8 +495,9 @@ async function _genAgentRestartSession(tabId, ptyId) {
     return false;
   }
   _genAgentCloseSession(tabId, ptyId, true);
-  _genAgentStart(tabId, state.agent, state.projectId, state.repoPath, {
+  _genAgentStart(tabId, sess.agent || state.agent, state.projectId, state.repoPath, {
     forceNew: hadOthers,
+    keepStateAgent: sess.agent !== state.agent,
   });
   return true;
 }
@@ -595,7 +611,8 @@ async function _genAgentStart(tabId, agent, projectId, repoPath, opts) {
   const state = _genAgentEnsureTermsContainer(tabId);
   if (!state) return;
   if (state._starting) return;
-  state.agent = agent;
+  const stateAgent = opts.keepStateAgent ? state.agent : agent;
+  state.agent = stateAgent;
   state.projectId = projectId;
   state.repoPath = repoPath;
   _genAgentHideStartPrompt(tabId);
@@ -659,6 +676,7 @@ async function _genAgentStart(tabId, agent, projectId, repoPath, opts) {
               force_new: !!opts.forceNew,
               cols: dims.cols,
               rows: dims.rows,
+              handoff_id: opts.handoffId,
             }),
           })
         : await fetch('/api/generic-agent/terminal', {
@@ -671,6 +689,7 @@ async function _genAgentStart(tabId, agent, projectId, repoPath, opts) {
               force_new: !!opts.forceNew,
               cols: dims.cols,
               rows: dims.rows,
+              handoff_id: opts.handoffId,
             }),
           });
     if (!resp.ok) {
@@ -686,7 +705,7 @@ async function _genAgentStart(tabId, agent, projectId, repoPath, opts) {
     // this tab to a different project OR a different agent while the request
     // was in flight (both replace/repoint this tab's state).
     const current = _genAgentTerminals[_caSessionKey(tabId)];
-    if (!current || current.projectId !== projectId || current.agent !== agent) {
+    if (!current || current.projectId !== projectId || current.agent !== stateAgent) {
       // Clean up the pre-created terminal
       try {
         sess.term && sess.term.dispose();
@@ -719,6 +738,10 @@ async function _genAgentStart(tabId, agent, projectId, repoPath, opts) {
     state.order.push(data.pty_session_id);
     state.activeId = data.pty_session_id;
     _genAgentConnect(sess);
+    if (data.handoff_prompt && window.agentHandoff) {
+      sess._handedOffAt = Date.now();
+      void window.agentHandoff.deliver(sess, data.handoff_prompt);
+    }
     _ocGuardSize(sess);
     _genAgentRenderTabs(tabId);
   } catch (err) {
@@ -731,7 +754,7 @@ async function _genAgentStart(tabId, agent, projectId, repoPath, opts) {
     } catch (_) {}
     _genAgentHideLoadingState(tabId, container);
     const current = _genAgentTerminals[_caSessionKey(tabId)];
-    if (current && current.projectId === projectId && current.agent === agent) {
+    if (current && current.projectId === projectId && current.agent === stateAgent) {
       // Clear the in-flight flag BEFORE re-rendering: _genAgentShowStartPrompt
       // reads _starting to decide whether the button renders busy (disabled +
       // spinning), and the finally below runs after this render. Without this,
@@ -745,7 +768,7 @@ async function _genAgentStart(tabId, agent, projectId, repoPath, opts) {
       if (current.order.length === 0) {
         _genAgentShowStartPrompt(
           tabId,
-          agent,
+          stateAgent,
           projectId,
           repoPath,
           (err && err.message) || 'Could not start ' + agent,
@@ -1110,6 +1133,10 @@ function _genAgentConnect(sess, retryDelay) {
       // this terminal already shows instead of replaying the whole buffer.
       if (typeof msg.seq === 'number') sess._outputSeq = msg.seq;
       sess._outputChars = (sess._outputChars || 0) + String(msg.data || '').length;
+      sess._lastOutputAt = Date.now();
+      if (window.agentLimitDetect && window.agentHandoff) {
+        window.agentLimitDetect.feed(sess, msg.data, (s) => agentHandoff.offerOnLimit(s));
+      }
       const hasVisibleOutput = _genAgentIsVisibleOutput(msg.data);
       // A WebSocket opening only proves it reached the backend. Keep retrying
       // through `notready` responses until the PTY produces real visible
