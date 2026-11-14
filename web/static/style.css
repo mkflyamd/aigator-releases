@@ -23008,11 +23008,20 @@ body.tab-fullscreen {
   stroke: var(--text-muted) !important;
 }
 
-.agent-handoff-toast {
+.agent-handoff-toasts {
   position: fixed;
   bottom: 1.2rem;
   left: 50%;
   transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  z-index: 100001;
+  pointer-events: none;
+}
+.agent-handoff-toast {
+  pointer-events: auto;
   display: flex;
   align-items: center;
   gap: 0.6rem;
@@ -23020,17 +23029,17 @@ body.tab-fullscreen {
   border-radius: 8px;
   font-size: 0.82rem;
   color: #fff;
-  z-index: 9999;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
 }
 .agent-handoff-toast-success {
-  background: #16a34a;
+  background: var(--success);
 }
 .agent-handoff-toast-warn {
-  background: #b45309;
+  background: var(--warn);
 }
 .agent-handoff-toast-offer {
-  background: #2563eb;
+  background: var(--accent);
+  color: var(--bg);
 }
 .agent-handoff-toast-btn,
 .agent-handoff-toast-close {
@@ -23046,14 +23055,14 @@ body.tab-fullscreen {
   position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, 0.45);
-  z-index: 9998;
+  z-index: 100000;
   display: flex;
   align-items: center;
   justify-content: center;
 }
 .agent-handoff-dialog {
-  background: var(--bg, #1e1e1e);
-  color: var(--text, #eee);
+  background: var(--surface);
+  color: var(--text);
   border-radius: 10px;
   padding: 1.1rem 1.3rem;
   width: min(440px, 92vw);
@@ -23091,7 +23100,7 @@ body.tab-fullscreen {
 }
 .agent-handoff-warning {
   font-size: 0.72rem;
-  color: #f59e0b;
+  color: var(--warn);
   margin-left: 1.4rem;
 }
 .agent-handoff-actions {
@@ -23109,9 +23118,9 @@ body.tab-fullscreen {
   cursor: pointer;
 }
 .agent-handoff-btn-primary {
-  background: #2563eb;
-  border-color: #2563eb;
-  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg);
 }
 .agent-handoff-btn:disabled {
   opacity: 0.5;

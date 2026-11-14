@@ -75,5 +75,11 @@ const ESC = String.fromCharCode(27);
     await h.draftPrompt({ ws: { readyState: 3 } }, 'x', () => true, opts),
     'failed',
   );
+  // error detail: only a non-empty string detail is shown; FastAPI validation arrays fall back
+  assert.strictEqual(h.errorDetail({ detail: 'Nope' }, 'fb'), 'Nope');
+  assert.strictEqual(h.errorDetail({ detail: [{ loc: ['body'], msg: 'bad' }] }, 'fb'), 'fb');
+  assert.strictEqual(h.errorDetail({ detail: '' }, 'fb'), 'fb');
+  assert.strictEqual(h.errorDetail({}, 'fb'), 'fb');
+  assert.strictEqual(h.errorDetail(null, 'fb'), 'fb');
   console.log('agent_handoff_ui ok');
 })();

@@ -28,6 +28,10 @@
     return targets.filter((t) => !(excludeSource && t.agent === sourceAgent));
   }
 
+  function errorDetail(body, fallback) {
+    return body && typeof body.detail === 'string' && body.detail ? body.detail : fallback;
+  }
+
   function targetWarning(target) {
     return target.gateway_routed
       ? ''
@@ -79,6 +83,22 @@
     return el;
   }
 
+  function toastStack() {
+    let stack = document.getElementById('agent-handoff-toasts');
+    if (!stack) {
+      stack = h('div', 'agent-handoff-toasts');
+      stack.id = 'agent-handoff-toasts';
+      document.body.appendChild(stack);
+    }
+    return stack;
+  }
+
+  function removeToast(el) {
+    const stack = el.parentNode;
+    el.remove();
+    if (stack && !stack.children.length) stack.remove();
+  }
+
   function showToast(message, tone, actions) {
     const el = h('div', 'agent-handoff-toast agent-handoff-toast-' + tone);
     el.setAttribute('role', 'status');
@@ -87,7 +107,7 @@
       const b = h('button', 'agent-handoff-toast-btn', a.label);
       b.type = 'button';
       b.addEventListener('click', () => {
-        el.remove();
+        removeToast(el);
         if (a.onClick) a.onClick();
       });
       el.appendChild(b);
@@ -95,10 +115,10 @@
     const close = h('button', 'agent-handoff-toast-close', '✕');
     close.type = 'button';
     close.title = 'Dismiss';
-    close.addEventListener('click', () => el.remove());
+    close.addEventListener('click', () => removeToast(el));
     el.appendChild(close);
-    document.body.appendChild(el);
-    if (tone === 'success') setTimeout(() => el.remove(), 8000);
+    toastStack().appendChild(el);
+    if (tone === 'success') setTimeout(() => removeToast(el), 8000);
     return el;
   }
 
@@ -111,20 +131,37 @@
 
   async function deliver(sess, prompt) {
     const label = agentLabel(sess.agent);
-    const outcome = await draftPrompt(sess, prompt, sessionProbe);
+    const copyAction = [{ label: 'Copy prompt', onClick: () => copyPrompt(prompt) }];
+    let outcome;
+    try {
+      outcome = await draftPrompt(sess, prompt, sessionProbe);
+    } catch (_) {
+      outcome = 'failed';
+    }
     if (outcome === 'delivered') {
       showToast('Handoff drafted in ' + label + '. Review it and press Enter to send.', 'success');
+    } else if (outcome === 'failed') {
+      showToast(
+        label + ' terminal connection is closed, so the handoff prompt was not pasted.',
+        'warn',
+        copyAction,
+      );
     } else {
       showToast(
         'Could not confirm ' + label + ' was ready, so the handoff prompt was not pasted.',
         'warn',
-        [{ label: 'Copy prompt', onClick: () => copyPrompt(prompt) }],
+        copyAction,
       );
     }
     return outcome;
   }
 
+  let dialogSeq = 0;
+  let dialogBusy = false;
+
   function renderDialog(prep, sess, state, tabId, excludeSource) {
+    dialogSeq += 1;
+    const radioName = 'agent-handoff-target-' + dialogSeq;
     const overlay = h('div', 'agent-handoff-overlay');
     const box = h('div', 'agent-handoff-dialog');
     box.setAttribute('role', 'dialog');
@@ -174,7 +211,7 @@
         const row = h('label', 'agent-handoff-target');
         const radio = document.createElement('input');
         radio.type = 'radio';
-        radio.name = 'agent-handoff-target';
+        radio.name = radioName;
         radio.value = t.agent;
         radio.checked = t.agent === selected;
         radio.addEventListener('change', () => (selected = t.agent));
@@ -218,42 +255,57 @@
   }
 
   async function openDialog(opts) {
+    if (dialogBusy || document.querySelector('.agent-handoff-overlay')) return;
     const state = _genAgentTerminals[_caSessionKey(opts.tabId)];
     if (!state || !opts.sess || !opts.sess.ptySessionId) return;
-    const doFetch = typeof _ocFetch === 'function' ? _ocFetch : fetch;
-    let prep;
+    dialogBusy = true;
     try {
-      const headers = await _caHeadersAsync();
-      const resp = await doFetch('/api/generic-agent/handoff/prepare', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          agent: opts.sess.agent,
-          project_id: state.projectId,
-          repo_path: state.repoPath,
-          pty_session_id: opts.sess.ptySessionId,
-        }),
-      });
-      const body = await resp.json().catch(() => ({}));
-      if (!resp.ok) {
-        showToast(body.detail || 'Could not prepare the handoff.', 'warn');
+      const doFetch = typeof _ocFetch === 'function' ? _ocFetch : fetch;
+      let prep;
+      try {
+        const headers = await _caHeadersAsync();
+        const resp = await doFetch('/api/generic-agent/handoff/prepare', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            agent: opts.sess.agent,
+            project_id: state.projectId,
+            repo_path: state.repoPath,
+            pty_session_id: opts.sess.ptySessionId,
+          }),
+        });
+        const body = await resp.json().catch(() => ({}));
+        if (!resp.ok) {
+          showToast(errorDetail(body, 'Could not prepare the handoff.'), 'warn');
+          return;
+        }
+        prep = body;
+      } catch (_) {
+        showToast('Could not prepare the handoff.', 'warn');
         return;
       }
-      prep = body;
-    } catch (_) {
-      showToast('Could not prepare the handoff.', 'warn');
-      return;
+      renderDialog(prep, opts.sess, state, opts.tabId, !!opts.excludeSource);
+    } finally {
+      dialogBusy = false;
     }
-    renderDialog(prep, opts.sess, state, opts.tabId, !!opts.excludeSource);
   }
 
+  const offerToasts = new WeakMap();
+
   function offerOnLimit(sess) {
-    showToast(agentLabel(sess.agent) + ' looks out of usage. Continue in another agent?', 'offer', [
-      {
-        label: 'Continue in…',
-        onClick: () => openDialog({ tabId: sess.tabId, sess, excludeSource: true }),
-      },
-    ]);
+    const existing = offerToasts.get(sess);
+    if (existing && existing.isConnected) return;
+    const toast = showToast(
+      agentLabel(sess.agent) + ' looks out of usage. Continue in another agent?',
+      'offer',
+      [
+        {
+          label: 'Continue in…',
+          onClick: () => openDialog({ tabId: sess.tabId, sess, excludeSource: true }),
+        },
+      ],
+    );
+    offerToasts.set(sess, toast);
   }
 
   const api = {
@@ -261,6 +313,7 @@
     isInputReady,
     visibleTargets,
     targetWarning,
+    errorDetail,
     waitForReady,
     draftPrompt,
     showToast,
