@@ -5507,7 +5507,7 @@ async function _showPinPopover() {
       <div class="pin-card-actions">
         <button class="pin-card-btn pin-card-open" title="Open">&#8599;</button>
         <button class="pin-card-btn pin-card-ask" title="Insert into chat">\u2726</button>
-        <button class="pin-card-btn pin-card-scope${p.scope === 'global' ? ' is-global' : ''}" title="${p.scope === 'global' ? 'Make tab-only (keeps it on &quot;' + escapeHtml(tabName) + '&quot;)' : 'Make global'}" aria-pressed="${p.scope === 'global'}">\uD83C\uDF10</button>
+        <button class="pin-card-btn pin-card-scope${p.scope === 'global' ? ' is-global' : ''}" aria-pressed="${p.scope === 'global'}">\uD83C\uDF10</button>
         <button class="pin-card-btn pin-card-remove" title="Unpin">&times;</button>
       </div>`;
       // ↗ Open item in its native pane (or browser for external sources)
@@ -5701,6 +5701,8 @@ async function _showPinPopover() {
         cleanup();
       });
       // Globe: global pins show in every tab; turning it off keeps the pin on this tab only
+      card.querySelector('.pin-card-scope').title =
+        p.scope === 'global' ? 'Make tab-only (keeps it on \u201C' + tabName + '\u201D)' : 'Make global';
       card.querySelector('.pin-card-scope').addEventListener('click', async (e) => {
         const btn = e.currentTarget;
         btn.disabled = true;
