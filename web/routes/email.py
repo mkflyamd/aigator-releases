@@ -313,7 +313,7 @@ def _email_inbox(skip: int, top: int, filter: str, delta: bool, folder: str):
                 }
                 shared._delta_state["email"] = state
             except Exception as e:
-                if "401" in str(e) or "403" in str(e):
+                if "401" in str(e) or "403" in str(e) or getattr(e, "status_code", None) in (429, 503):
                     raise
                 shared._delta_unsupported.add("email")
                 shared._save_delta_unsupported()

@@ -697,8 +697,16 @@ def _start_segment(ffmpeg: str, req: StartRequest, screens: list[dict],
     return proc, seg_path
 
 
+_start_lock = asyncio.Lock()
+
+
 @router.post("/api/recorder/start", dependencies=[Depends(verify_csrf)])
 async def recorder_start(req: StartRequest = StartRequest()):
+    async with _start_lock:
+        return await _recorder_start_locked(req)
+
+
+async def _recorder_start_locked(req: StartRequest):
     global _ffmpeg_proc, _recording_path, _recording_start
     global _paused_at, _paused_elapsed, _segments, _session_dir, _session_tag
     global _last_screen_index, _last_crop, _last_start_req
