@@ -1331,6 +1331,11 @@ body.tab-fullscreen .tab-expand-btn {
   color: var(--text-dim);
   padding: 0.35rem 0.6rem 0.2rem;
 }
+.pin-scope-note {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  padding: 0.3rem 0.6rem;
+}
 .pin-popover-empty {
   padding: 1.4rem;
   text-align: center;

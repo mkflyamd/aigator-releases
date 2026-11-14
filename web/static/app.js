@@ -5443,6 +5443,8 @@ async function _showPinPopover() {
   document.addEventListener('keydown', onEsc);
 
   const contextId = _activeTabId || 'default';
+  const tabName = (_tabs.find((t) => t.id === contextId)?.title || 'this tab').slice(0, 30);
+  let scopeNote = '';
   let pins;
   if (_cachedPinsContextId === contextId && Array.isArray(_cachedPins)) {
     pins = _cachedPins;
@@ -5505,7 +5507,7 @@ async function _showPinPopover() {
       <div class="pin-card-actions">
         <button class="pin-card-btn pin-card-open" title="Open">&#8599;</button>
         <button class="pin-card-btn pin-card-ask" title="Insert into chat">\u2726</button>
-        <button class="pin-card-btn pin-card-scope${p.scope === 'global' ? ' is-global' : ''}" title="${p.scope === 'global' ? 'Make tab-only' : 'Make global'}" aria-pressed="${p.scope === 'global'}">\uD83C\uDF10</button>
+        <button class="pin-card-btn pin-card-scope${p.scope === 'global' ? ' is-global' : ''}" title="${p.scope === 'global' ? 'Make tab-only (keeps it on &quot;' + escapeHtml(tabName) + '&quot;)' : 'Make global'}" aria-pressed="${p.scope === 'global'}">\uD83C\uDF10</button>
         <button class="pin-card-btn pin-card-remove" title="Unpin">&times;</button>
       </div>`;
       // ↗ Open item in its native pane (or browser for external sources)
@@ -5730,6 +5732,7 @@ async function _showPinPopover() {
           else delete next.scope;
           return next;
         });
+        scopeNote = toGlobal ? '' : 'Now only on \u201C' + tabName + '\u201D';
         renderPins();
       });
       // × Unpin
@@ -5808,6 +5811,13 @@ async function _showPinPopover() {
         list.replaceChildren(empty);
         return;
       }
+      if (scopeNote) {
+        const note = document.createElement('div');
+        note.className = 'pin-scope-note';
+        note.textContent = scopeNote;
+        list.appendChild(note);
+        scopeNote = '';
+      }
       const { globals, locals } = _groupPinsByScope(current);
       const addGroup = (title, items) => {
         if (globals.length && items.length) {
@@ -5819,7 +5829,7 @@ async function _showPinPopover() {
         items.forEach(addCard);
       };
       addGroup('Global', globals);
-      addGroup('This tab', locals);
+      addGroup('This tab \u00B7 ' + tabName, locals);
     };
 
     renderPins();
