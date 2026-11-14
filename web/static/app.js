@@ -5508,8 +5508,8 @@ async function _showPinPopover() {
       card.innerHTML = `
       <div class="pin-card-icon">${cfg.icon}</div>
       <div class="pin-card-body">
-        <div class="pin-card-label" title="${escapeHtml(p.label)}">${escapeHtml(p.label)}</div>
-        <div class="pin-card-meta" title="${escapeHtml(cfg.label)}${meta ? ' \u00B7 ' + escapeHtml(meta) : ''}">${escapeHtml(cfg.label)}${meta ? ' \u00B7 ' + escapeHtml(meta) : ''}</div>
+        <div class="pin-card-label">${escapeHtml(p.label)}</div>
+        <div class="pin-card-meta">${escapeHtml(cfg.label)}${meta ? ' \u00B7 ' + escapeHtml(meta) : ''}</div>
       </div>
       <div class="pin-card-actions">
         <button class="pin-card-btn pin-card-open" title="Open">&#8599;</button>
@@ -5707,6 +5707,9 @@ async function _showPinPopover() {
         }
         cleanup();
       });
+      // Titles go through the DOM: escapeHtml leaves quotes intact, so they cannot sit in an attribute
+      card.querySelector('.pin-card-label').title = p.label;
+      card.querySelector('.pin-card-meta').title = cfg.label + (meta ? ' \u00B7 ' + meta : '');
       // Globe: global pins show in every tab; turning it off keeps the pin on this tab only
       card.querySelector('.pin-card-scope').title =
         p.scope === 'global'
