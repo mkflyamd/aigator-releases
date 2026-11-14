@@ -689,6 +689,9 @@ async def lifespan(app):
 
     set_notify_callback(_on_task_done)
 
+    import agent_handoff
+    await asyncio.to_thread(agent_handoff.purge_expired)
+
     import loop_watchdog
     loop_watchdog.start(asyncio.get_running_loop())
 

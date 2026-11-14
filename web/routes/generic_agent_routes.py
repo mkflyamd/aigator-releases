@@ -16,6 +16,7 @@ import asyncio
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+import agent_handoff
 import generic_agent
 from security import verify_csrf
 
@@ -29,6 +30,14 @@ class GenericAgentTerminalRequest(BaseModel):
     force_new: bool = False  # "+" opens another independent process, never reattach
     cols: int = 0  # initial terminal dimensions — sent by the frontend so the
     rows: int = 0  # PTY spawns at the right size before the TUI app paints
+    handoff_id: str | None = None  # continue a prior session; always a new process
+
+
+class HandoffPrepareRequest(BaseModel):
+    agent: str
+    project_id: str
+    repo_path: str
+    pty_session_id: str
 
 
 class GenericAgentTerminalCloseRequest(BaseModel):
@@ -54,6 +63,31 @@ async def close_generic_agent_terminal(req: GenericAgentTerminalCloseRequest):
     return {"ok": True}
 
 
+@router.post("/api/generic-agent/handoff/prepare", dependencies=[Depends(verify_csrf)])
+async def prepare_agent_handoff(req: HandoffPrepareRequest):
+    if not generic_agent.is_supported(req.agent):
+        raise HTTPException(status_code=400, detail=f"Unknown agent: {req.agent!r}")
+    try:
+        record = await asyncio.to_thread(
+            agent_handoff.prepare_handoff,
+            req.agent, req.project_id, req.repo_path, req.pty_session_id,
+        )
+    except agent_handoff.NothingToHandOff:
+        raise HTTPException(status_code=422, detail="Nothing to hand off from this session.")
+    return {
+        "handoff_id": record["handoff_id"],
+        "source_agent": record["source_agent"],
+        "source_kind": record["source_kind"],
+        "last_user_message": record["last_user_message"],
+        "snapshot_bytes": record["snapshot_bytes"],
+        "redactions": record["redactions"],
+        "targets": [
+            {"agent": a, "label": label, "gateway_routed": routed}
+            for a, label, routed in agent_handoff.TARGETS
+        ],
+    }
+
+
 @router.post("/api/generic-agent/terminal", dependencies=[Depends(verify_csrf)])
 async def generic_agent_terminal(req: GenericAgentTerminalRequest):
     """Reattach this project's live session if one exists, else spawn fresh.
@@ -72,7 +106,14 @@ async def generic_agent_terminal(req: GenericAgentTerminalRequest):
     if not generic_agent.is_supported(req.agent):
         raise HTTPException(status_code=400, detail=f"Unknown agent: {req.agent!r}")
 
-    if not req.force_new:
+    handoff = None
+    if req.handoff_id:
+        handoff = await asyncio.to_thread(agent_handoff.load_handoff, req.handoff_id)
+        if handoff is None:
+            raise HTTPException(status_code=404, detail="Handoff expired or not found.")
+    force_new = req.force_new or handoff is not None
+
+    if not force_new:
         existing = generic_agent.get_active_session(req.project_id, req.agent)
         if existing:
             entry = await asyncio.to_thread(get_pty_session, existing)
@@ -149,4 +190,17 @@ async def generic_agent_terminal(req: GenericAgentTerminalRequest):
         **size,
     )
     generic_agent.set_active_session(req.project_id, req.agent, pty_session_id)
-    return {"pty_session_id": pty_session_id, "created": True}
+    result = {"pty_session_id": pty_session_id, "created": True}
+    if handoff is not None:
+        agent_handoff.log_event(
+            "launched",
+            project_id=req.project_id,
+            source=handoff["source_agent"],
+            target=req.agent,
+            source_kind=handoff["source_kind"],
+            snapshot_bytes=handoff["snapshot_bytes"],
+            redactions=handoff["redactions"],
+            gateway_routed=agent_handoff.is_gateway_routed(req.agent),
+        )
+        result["handoff_prompt"] = handoff["prompt"]
+    return result
