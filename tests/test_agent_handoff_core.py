@@ -34,7 +34,7 @@ def test_redact_token_shapes_derived_from_fake_key():
 
 
 def test_redact_unterminated_private_key_runs_to_end_of_text():
-    text = "before\n-----BEGIN RSA PRIVATE KEY-----\n" + FAKE + "\nMIIEowIBAAKCAQEA" + "A" * 500
+    text = "before\n-----BEGIN RSA PRIVATE KEY-----\n" + FAKE + "\n" + FAKE * 25
     out, n = ah.redact(text)
     assert out == "before\n[REDACTED]" and n == 1
 
@@ -71,7 +71,7 @@ def test_redact_generic_assignments_keep_the_name():
 
 
 def test_redact_generic_assignment_skips_short_values_and_names_alone():
-    for text in ("password=abc1234", "token_count = compute(x)", "the token: ok", "secret:"):
+    for text in (f"password={FAKE[:7]}", "token_count = compute(x)", "the token: ok", "secret:"):
         assert ah.redact(text) == (text, 0), text
 
 
@@ -82,7 +82,7 @@ def test_redact_is_idempotent_and_does_not_recount_placeholders():
 
 
 def test_redact_removes_every_configured_key():
-    out, n = ah.redact(f"a {FAKE} b {SK} c", api_key=[FAKE, SK, "short"])
+    out, n = ah.redact(f"a {FAKE} b {SK} c", api_key=[FAKE, SK, "x"])
     assert FAKE not in out and out == "a [REDACTED] b [REDACTED] c" and n == 2
 
 
