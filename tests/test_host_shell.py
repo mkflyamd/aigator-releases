@@ -235,3 +235,54 @@ def test_cancel_route(client, csrf):
     assert host_requests.lookup(req.id, "tab-1")[0] == "denied"
     run = client.post(f"/api/host-shell/{req.id}/run", json={"context_id": "tab-1"}, headers=csrf)
     assert run.status_code == 409
+
+
+# --- review findings -----------------------------------------------------
+
+def test_host_env_drops_app_injected_credentials():
+    env = host_requests.host_env({
+        "PATH": "/bin", "PATHEXT": ".EXE", "CONFLUENCE_PAT": "aigator-fake-api-key",  # pragma: allowlist secret
+        "JIRA_PAT_TOKEN": "x", "JIRA_EMAIL": "a@b.c", "GATEWAY_USER_ID": "u", "LLM_GATEWAY_URL": "http://g",
+        "SESSION_COOKIE": "x",
+    })
+    assert set(env) == {"PATH", "PATHEXT"}
+
+
+def test_default_working_folder_is_created(tmp_path, monkeypatch):
+    import config
+
+    missing = tmp_path / "missing" / "work"
+    monkeypatch.setattr(config, "WORK_DIR", missing)
+    out = shell_tools._tool_run_on_host(command="echo ok", reason="t", _context_id="tab-1")
+    assert "error" not in out
+    assert missing.is_dir()
+
+
+@pytest.mark.parametrize("command", [
+    'for f in build/*; do rm -rf "$f"; done',
+    "if true; then rm -rf build; fi",
+    "ls | xargs rm",
+    "(rm -rf build)",
+    "{ rm -rf build; }",
+])
+def test_delete_inside_compound_commands_is_refused(tmp_path, command):
+    out = _propose(tmp_path, command=command)
+    assert "error" in out
+    assert not host_requests._REQUESTS
+
+
+def test_run_host_request_runs_the_command_as_typed(tmp_path, monkeypatch):
+    seen = {}
+
+    def fake_run(argv, **kwargs):
+        seen["argv"] = argv
+        import subprocess
+
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(shell_tools.subprocess, "run", fake_run)
+    monkeypatch.setattr(shell_tools.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(shell_tools.sys, "executable", "C:/app/aigator.exe")
+    req = host_requests.create("tab-1", "python3 --version", str(tmp_path), "bash" if shell_tools.os.name != "nt" else "powershell", "", 30)
+    shell_tools.run_host_request(req)
+    assert seen["argv"][-1] == "python3 --version"

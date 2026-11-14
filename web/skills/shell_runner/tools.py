@@ -141,6 +141,12 @@ _HEREDOC_RE = re.compile(
     re.DOTALL | re.MULTILINE,
 )
 
+# Words that can precede the real command in a statement (loop bodies, conditionals, wrappers)
+_COMMAND_PREFIXES = {
+    "sudo", "command", "exec", "time", "nohup", "xargs",
+    "do", "then", "else", "elif", "if", "while", "until", "!", "{", "(",
+}
+
 # Shell statement separators — split command into individual statements
 _STATEMENT_SEP_RE = re.compile(r"(?:;|&&|\|\||\||\n|\r)")
 
@@ -168,13 +174,13 @@ def _find_delete_command(command: str):
         while idx < len(tokens) and (
             "=" in tokens[idx]
             and not tokens[idx].startswith(("-", "/"))
-            or tokens[idx] in ("sudo", "command", "exec", "time", "nohup")
+            or tokens[idx] in _COMMAND_PREFIXES
         ):
             idx += 1
         if idx >= len(tokens):
             continue
         raw = tokens[idx]
-        first = raw.lower().lstrip("\\/")
+        first = raw.lower().lstrip("\\/({")
         # Handle path-prefixed commands like /usr/bin/rm or ./rm
         first = first.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
         if first in _DELETE_COMMANDS:
@@ -808,12 +814,12 @@ def _run_sandboxed(cr, command, shell, cwd, timeout, background, requested, poli
     return result
 
 
-def _run_unsandboxed(command, shell, cwd, timeout, background, env=None) -> dict:
+def _run_unsandboxed(command, shell, cwd, timeout, background, env=None, as_typed=False) -> dict:
     # Windows auto-correct: `python3` doesn't exist on Windows (it opens the
     # Microsoft Store stub). The model often uses `python3` out of habit from
     # Linux/macOS. Replace with `python` on Windows only — `python` is the
     # correct command on Windows (python.org installer adds it to PATH).
-    if sys.platform == "win32":
+    if sys.platform == "win32" and not as_typed:
         command = re.sub(r'\bpython3\b', 'python', command)
 
     # Resolve which shell to use
@@ -853,7 +859,8 @@ def _run_unsandboxed(command, shell, cwd, timeout, background, env=None) -> dict
         argv_prefix = _DETECTED_ARGV
         shell_used = _DETECTED_SHELL
 
-    command = _route_frozen_python(command, shell_used)
+    if not as_typed:
+        command = _route_frozen_python(command, shell_used)
 
     # When the caller targets a specific project, honor it. Otherwise default to
     # an app-owned scratch dir (~/.gator/work) instead of the user's home/repo,
@@ -1004,7 +1011,7 @@ def _tail(text: str) -> str:
 def run_host_request(req) -> dict:
     """Run an approved request outside the sandbox with the user's own environment (secrets removed)."""
     result = _run_unsandboxed(req.command, req.shell, req.cwd, req.timeout, False,
-                              env=host_requests.host_env(os.environ))
+                              env=host_requests.host_env(os.environ), as_typed=True)
     result["stdout"] = _tail(result.get("stdout") or "")
     result["stderr"] = _tail(result.get("stderr") or "")
     result["ran_on"] = "host"
@@ -1048,6 +1055,10 @@ def _tool_run_on_host(
     else:
         from config import WORK_DIR
 
+        try:
+            WORK_DIR.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            return _shell_error("The default working folder cannot be created. Pass cwd.")
         cwd = str(WORK_DIR)
     if not shell and os.name == "nt":
         shell = "powershell"

@@ -19,7 +19,10 @@ REQUEST_TTL_SECONDS = 600
 RESULT_TTL_SECONDS = 1800
 OUTPUT_LIMIT = 20_000
 
-_SECRET_NAME = re.compile(r"TOKEN|SECRET|PASSW|CREDENTIAL|KEY|^AIGATOR", re.IGNORECASE)
+_SECRET_NAME = re.compile(
+    r"TOKEN|SECRET|PASSW|CREDENTIAL|KEY|COOKIE|(?:^|_)PAT(?:$|_)|^(?:AIGATOR|GATEWAY|LLM_GATEWAY|JIRA|CONFLUENCE)",
+    re.IGNORECASE,
+)
 
 _RISKS = (
     ("Pushes commits to a remote", re.compile(r"\bgit\b[^\n;|&]*?\bpush\b", re.IGNORECASE)),
