@@ -331,3 +331,10 @@ def test_the_card_stays_on_one_line_and_hides_text_direction_tricks_and_invisibl
     details = ds._call_details({"to": "a@b.c" + "".join(tricks) + " fake line"})
     assert chr(10) not in details[1:]
     assert not any(ch in details for ch in tricks)
+
+
+def test_an_argument_name_is_cleaned_and_capped_like_its_value():
+    tricks = "".join(chr(c) for c in (0x202E, 0x2028, 0x200B))
+    details = ds._call_details({"to" + tricks + "x" * 500: "v"})
+    assert not any(ch in details for ch in tricks)
+    assert len(details) < ds._CARD_KEY_MAX + 40

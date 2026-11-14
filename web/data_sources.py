@@ -116,6 +116,7 @@ _STAYS_ALLOWED = "This stays allowed until you close this tab."
 
 
 _CARD_VALUE_MAX = 1000
+_CARD_KEY_MAX = 100
 _CONTROL_CHARS = re.compile(
     r"[\x00-\x08\x0b-\x1f\x7f-\x9f\u200b-\u200f\u2028\u2029\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]")
 
@@ -130,7 +131,8 @@ def _call_details(inputs: dict | None) -> str:
         text = _CONTROL_CHARS.sub(" ", json.dumps(value, default=str, ensure_ascii=False))
         if len(text) > _CARD_VALUE_MAX:
             text = f"{text[:_CARD_VALUE_MAX]}... ({len(text) - _CARD_VALUE_MAX} more characters not shown)"
-        parts.append(f"{json.dumps(str(key), ensure_ascii=False)}: {text}")
+        name = _CONTROL_CHARS.sub(" ", json.dumps(str(key), ensure_ascii=False))[:_CARD_KEY_MAX]
+        parts.append(f"{name}: {text}")
     return "\nDetails: {" + ", ".join(parts) + "}"
 
 
