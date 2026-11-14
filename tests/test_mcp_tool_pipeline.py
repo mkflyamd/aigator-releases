@@ -486,7 +486,7 @@ def test_background_selected_google_skill_bypasses_builtin_direct_router():
     import app
 
     assert app._background_has_nonbuiltin_skills(["g-gmail"])
-    assert app._background_has_nonbuiltin_skills(["mcp-rovo-mcp"])
+    assert app._background_has_nonbuiltin_skills(["mcp-atlassian-mcp"])
     assert not app._background_has_nonbuiltin_skills(["email"])
 
 

@@ -28,6 +28,7 @@
     "productName": "AI Gator",
     "asar": true,
     "files": [
+      "atlassian-urls.js",
       "hud-preload.js",
       "hud_recorder.js",
       "main.js",
@@ -75,6 +76,8 @@
       ],
       "icon": "../tray/aigator_icon.png",
       "category": "public.app-category.productivity",
+      "identity": "-",
+      "hardenedRuntime": false,
       "extendInfo": {
         "NSMicrophoneUsageDescription": "AI Gator uses the microphone for voice dictation. Audio is transcribed on this computer and is not sent anywhere."
       },

@@ -51,8 +51,8 @@ def _jira_browse_url_default():
     """Ensure jira_browse_url() succeeds in CI where JIRA_BASE_URL is not set.
 
     Uses a URL that differs from every test target URL so the synthesized
-    builtin target never deduplicates away a rovo-mcp target that shares
-    its base_url (e.g. https://jira.example.com used by Rovo test targets).
+    builtin target never deduplicates away a atlassian-mcp target that shares
+    its base_url (e.g. https://jira.example.com used by Atlassian MCP test targets).
     """
     if os.environ.get("JIRA_BASE_URL"):
         yield

@@ -13,7 +13,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from . import credentials
+from . import credentials, gh_cli, sso
 
 
 def _is_enterprise() -> bool:
@@ -56,9 +56,54 @@ def _rest(path: str, method: str = "GET", body: dict | None = None) -> dict:
             return json.loads(resp.read())
     except urllib.error.HTTPError as e:
         body_text = e.read().decode(errors="ignore")[:500]
-        return {"error": f"GitHub API {e.code}: {body_text}"}
+        failure = {"error": f"GitHub API {e.code}: {body_text}"}
+        if e.code in _ORG_REFUSAL_CODES and method == "GET":
+            return _retry_with_gh_login(path, failure)
+        return failure
     except Exception as e:
         return {"error": f"GitHub API call failed: {e}"}
+
+
+_ORG_REFUSAL_CODES = (401, 403)
+_GH_MAX_OUTPUT = 50_000_000
+
+
+def _read_without_token(path: str):
+    """Public repositories need no sign-in, so a refused token does not block reading them."""
+    req = urllib.request.Request(
+        f"{_rest_base()}{path}",
+        headers={"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read())
+    except Exception:
+        return None
+
+
+def _retry_with_gh_login(path: str, refused: dict) -> dict:
+    """Orgs can reject the saved token (classic PATs banned, SAML SSO not authorized) while the
+    user's own `gh auth login` works, so a refused read is retried once as that user."""
+    got = gh_cli.run_gh(["api", path.lstrip("/")], max_output=_GH_MAX_OUTPUT, use_saved_token=False)
+    if not got.get("error"):
+        try:
+            return json.loads(got["stdout"])
+        except ValueError:
+            got = {"error": "gh returned output that is not JSON."}
+    public = _read_without_token(path)
+    if public is not None:
+        return public
+    owner = path.lstrip("/").split("/")[1:2] if path.startswith("/repos/") else []
+    card = sso.card_for(f"{got['error']} {got.get('stderr', '')}", owner[0] if owner else "")
+    if card:
+        other = sso.read_as_other_account(["api", path.lstrip("/")], max_output=_GH_MAX_OUTPUT)
+        if other:
+            try:
+                return json.loads(other["stdout"])
+            except ValueError:
+                pass
+        return sso.needs_authorization(card)
+    return {"error": f"{refused['error']} | Retry through gh also failed: {got['error']}"}
 
 
 _PAGE_SIZE = 100

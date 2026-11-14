@@ -1,6 +1,7 @@
 """Which data source a tool call touches, and which sources a tab has approved."""
 from __future__ import annotations
 
+import json
 import re
 import threading
 import time
@@ -35,7 +36,6 @@ _NATIVE_SOURCES = {
 }
 _MCP_LABELS = {
     "mcp-google-workspace": "Google Workspace",
-    "cloud-atlassian": "Atlassian (Jira and Confluence)",
 }
 _NOT_MCP_IDS = frozenset(_NATIVE_SOURCES) | {"_always_on", "_extension_setup"}
 _WEB_TOOLS = frozenset({"fetch_webpage", "web_search"})
@@ -133,7 +133,29 @@ def blocked_flow(source_ids, draft_kind: str) -> str | None:
 
 _SENSITIVE_MARKER = re.compile(
     r"\b(?:highly\s+confidential|confidential|internal\s+use\s+only|proprietary|amd\s+restricted)\b", re.I)
-_SENSITIVE_FIELDS = ("subject", "body", "message", "comment", "description", "summary", "text")
+_SENSITIVE_FIELDS = (
+    "subject", "body", "message", "comment", "description", "summary", "text", "arguments_text",
+)
+
+
+def _json_strings(text: str) -> list[str]:
+    """The string values inside JSON text, unescaped, so a \\n cannot hide a word boundary."""
+    try:
+        parsed = json.loads(text)
+    except ValueError:
+        return [text]
+    out: list[str] = []
+    stack = [parsed]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, str):
+            out.append(item)
+        elif isinstance(item, dict):
+            out.extend(k for k in item if isinstance(k, str))
+            stack.extend(item.values())
+        elif isinstance(item, list):
+            stack.extend(item)
+    return out
 
 
 def sensitivity_markers(data: dict) -> list[str]:
@@ -142,8 +164,10 @@ def sensitivity_markers(data: dict) -> list[str]:
     for field in _SENSITIVE_FIELDS:
         value = data.get(field)
         if isinstance(value, str):
-            for match in _SENSITIVE_MARKER.finditer(value):
-                found.setdefault(match.group(0).lower(), match.group(0))
+            texts = _json_strings(value) if field == "arguments_text" else [value]
+            for text in texts:
+                for match in _SENSITIVE_MARKER.finditer(text):
+                    found.setdefault(match.group(0).lower(), match.group(0))
     return sorted(found.values(), key=str.lower)
 
 

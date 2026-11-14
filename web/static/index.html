@@ -162,17 +162,19 @@
     <div class="settings-backdrop hidden" id="settings-backdrop"></div>
     <div class="settings-drawer hidden" id="settings-drawer">
       <div class="smodal-header">
-        <button class="topbar-win-btn win-close" id="drawer-close" title="Close settings">
+        <button class="drawer-back-btn" id="drawer-close" title="Back to chat">
           <svg
             viewBox="0 0 24 24"
             fill="none"
             stroke="currentColor"
             stroke-width="2.5"
             stroke-linecap="round"
+            stroke-linejoin="round"
           >
-            <line x1="6" y1="6" x2="18" y2="18" />
-            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="19" y1="12" x2="5" y2="12" />
+            <polyline points="12 19 5 12 12 5" />
           </svg>
+          <span>Back</span>
         </button>
         <button class="smodal-brand" id="settings-home-btn" title="Back to chat">
           <div class="logo-wrap">
@@ -633,25 +635,19 @@
                 <button id="atlassian-save-btn" class="btn-primary">Save Direct API</button>
               </div>
               <div class="key-hint" style="margin: 14px 0 6px">
-                <strong>Optional MCP access</strong> — Cloud MCP has a broad tool catalog using this
-                API token but uses a provider-selected site (no site picker); Rovo MCP uses
-                Atlassian SSO and lets you choose a site.
+                <strong>Optional MCP access</strong> — Atlassian MCP uses Atlassian SSO and lets you
+                choose a site.
               </div>
               <div class="key-row connection-save-row">
-                <button
-                  id="atlassian-cloud-mcp-btn"
-                  class="btn-secondary atlassian-mcp-connect"
-                  type="button"
-                >
-                  Connect Cloud MCP · API token (default site)
-                </button>
-                <button
-                  id="atlassian-add-site-btn"
-                  class="btn-secondary atlassian-mcp-connect"
-                  type="button"
-                >
-                  Connect Rovo MCP (SSO &amp; choose site)
-                </button>
+                <span class="atlassian-mcp-wrap">
+                  <button
+                    id="atlassian-add-site-btn"
+                    class="btn-secondary atlassian-mcp-connect"
+                    type="button"
+                  >
+                    Connect Atlassian MCP (SSO &amp; choose site)
+                  </button>
+                </span>
               </div>
             </div>
 

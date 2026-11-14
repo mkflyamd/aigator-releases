@@ -447,6 +447,20 @@ async def github_get_issue_endpoint(body: dict):
     return _github_get_issue(body["owner"], body["repo"], body["issue_number"])
 
 
+class GithubSwitchRequest(BaseModel):
+    account: str
+
+
+@router.post("/api/github/switch-account", dependencies=[Depends(verify_csrf)])
+async def github_switch_account(req: GithubSwitchRequest):
+    from skills.github import gh_cli
+
+    result = await asyncio.to_thread(gh_cli.switch_account, req.account)
+    if not result["ok"]:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
 # ── Clear stored credentials ──────────────────────────────────────────────────
 
 _CLEAR_SCOPES = {

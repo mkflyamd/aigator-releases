@@ -701,7 +701,7 @@ class AnthropicProvider(LLMProvider):
         Tools are authored in Anthropic-native format ({name, description,
         input_schema}), so the shape is already correct. But MCP-sourced tools
         can declare an older JSON Schema draft in input_schema.$schema (e.g.
-        Atlassian's Rovo MCP declares draft-07), which the API/gateway rejects
+        Atlassian's MCP declares draft-07), which the API/gateway rejects
         with '400 input_schema: JSON schema is invalid. It must match JSON
         Schema draft 2020-12' — poisoning the whole request even though only
         one tool is at fault. Strip the $schema declaration (the API applies

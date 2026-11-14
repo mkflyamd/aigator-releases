@@ -39,6 +39,16 @@ def test_electron_builder_bundles_backend_and_platform_targets():
     assert set(build["linux"]["target"]) == {"AppImage", "deb"}
 
 
+def test_macos_bundle_is_ad_hoc_signed_after_packaging():
+    # Without a re-sign, the bundle keeps Electron's stale signature and Apple Silicon
+    # Gatekeeper reports "AI Gator is damaged and can't be opened" for downloaded builds.
+    package = json.loads((ROOT / "shell" / "package.json").read_text(encoding="utf-8"))
+    mac = package["build"]["mac"]
+
+    assert mac["identity"] == "-"
+    assert mac["hardenedRuntime"] is False
+
+
 def test_shared_desktop_icon_meets_platform_size_requirements():
     with Image.open(ROOT / "tray" / "aigator_icon.png") as icon:
         assert icon.size == (512, 512)
@@ -326,7 +336,7 @@ def test_github_pane_normalizes_urls_and_reports_load_failures():
     assert "githubView.setVisible(false)" in main
 
 
-def test_github_pane_refreshes_config_and_falls_back_when_unavailable():
+def test_github_pane_refreshes_config_and_redirects_to_setup_when_unavailable():
     main = (ROOT / "shell" / "main.js").read_text(encoding="utf-8")
     pane = (ROOT / "web" / "static" / "third-pane.js").read_text(encoding="utf-8")
 
@@ -341,8 +351,8 @@ def test_github_pane_refreshes_config_and_falls_back_when_unavailable():
     assert "return true" in main
     assert ".showGitHub()" in pane
     assert ".then((shown) =>" in pane
-    assert "_githubMode = 'classic'" in pane
-    assert "_openThirdPaneImpl('github')" in pane
+    assert "_redirectToSetup('github')" in pane
+    assert "_githubMode = 'classic'" not in pane
 
 
 def test_github_navigation_allows_the_configured_enterprise_host():

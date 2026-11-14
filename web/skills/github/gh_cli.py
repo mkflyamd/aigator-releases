@@ -4,6 +4,7 @@ The sandbox cannot reach the OS keyring, so `gh` there is never signed in. Here 
 user, with the user's own `gh auth login`; the token saved in Settings is a per-process fallback
 (never an exported variable) used only when `gh` is not signed in for the target host.
 """
+import json
 import os
 import re
 import shlex
@@ -36,6 +37,20 @@ _API_FLAGS = {"--jq", "-q", "--paginate", "--slurp", "-i", "--include", "--cache
 _REPO = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 _TOKEN_VARS = ("GITHUB_TOKEN", "GH_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "GH_ENTERPRISE_TOKEN")
 _MAX_OUTPUT = 20000
+_LOGIN = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9_-]*[A-Za-z0-9])?")
+# Commands that only read, so they may be retried as another signed-in account.
+_READ_ONLY = {
+    "pr": {"list", "view", "checks", "diff", "status"},
+    "issue": {"list", "view", "status"},
+    "label": {"list"},
+    "run": {"list", "view"},
+    "workflow": {"list", "view"},
+    "release": {"list", "view"},
+    "repo": {"view", "list"},
+    "search": None,
+    "status": None,
+    "api": None,
+}
 _TIMEOUT = 120
 
 
@@ -120,10 +135,12 @@ _APPROVAL_MSG = (
 )
 
 
-def _authorized_cwd(args: list, cwd: str, context_id: str) -> tuple[str | None, dict | None]:
+def _authorized_cwd(args: list, cwd: str, context_id: str, approved: bool = False) -> tuple[str | None, dict | None]:
     """The folder gh may run in, or a result to return as is (a refusal or the user's approval card).
 
     Same rule as run_shell: the AI Gator working folder is free, any other folder needs the user's approval.
+    `approved` is for a retry of a command that already passed this check: a once-only approval is used up by
+    the first run, so checking again would ask the user a second time.
     """
     from sandbox.policy import load_policy
     from skills.code_runner import tools as code_runner
@@ -134,7 +151,7 @@ def _authorized_cwd(args: list, cwd: str, context_id: str) -> tuple[str | None, 
     if isinstance(located, str):
         return None, _error(located)
     run_cwd, project, _scratch = located
-    if project is None:
+    if project is None or approved:
         return str(run_cwd), None
     gate = shell_runner._shell_gate(code_runner, shlex.join(["gh", *args]), [project], [], [], context_id, policy)
     if isinstance(gate, dict):
@@ -144,20 +161,88 @@ def _authorized_cwd(args: list, cwd: str, context_id: str) -> tuple[str | None, 
     return str(run_cwd), None
 
 
-def run_gh(args, cwd: str | None = None, context_id: str = "") -> dict:
+def is_read_only(args) -> bool:
+    if validate(args) or args[0] not in _READ_ONLY:
+        return False
+    subs = _READ_ONLY[args[0]]
+    return subs is None or args[1] in subs
+
+
+def _host() -> str:
+    return _env().get("GH_HOST") or "github.com"
+
+
+def accounts() -> list[dict]:
+    """Every login gh knows on the target host: [{"login", "active"}]. Never includes tokens."""
+    gh = shutil.which("gh")
+    if not gh:
+        return []
+    try:
+        done = subprocess.run([gh, "auth", "status", "--hostname", _host(), "--json", "hosts"], env=_env(),
+                              stdin=subprocess.DEVNULL, capture_output=True, timeout=20, text=True,
+                              encoding="utf-8", errors="replace")
+        entries = json.loads(done.stdout)["hosts"].get(_host(), [])
+        return [{"login": e["login"], "active": bool(e.get("active"))} for e in entries
+                if _LOGIN.fullmatch(str(e.get("login", "")))]
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
+        return []
+
+
+def other_accounts() -> list[str]:
+    return [a["login"] for a in accounts() if not a["active"]]
+
+
+def _account_token(gh: str, env: dict, login: str) -> str:
+    try:
+        done = subprocess.run([gh, "auth", "token", "--hostname", _host(), "--user", login], env=env,
+                              stdin=subprocess.DEVNULL, capture_output=True, timeout=20, text=True,
+                              encoding="utf-8", errors="replace")
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return done.stdout.strip() if done.returncode == 0 else ""
+
+
+def switch_account(login: str) -> dict:
+    """Make `login` the account gh uses everywhere on this machine, only for a login gh already holds."""
+    if not _LOGIN.fullmatch(login or "") or login not in [a["login"] for a in accounts()]:
+        return {"ok": False, "error": "That account is not signed in to the GitHub CLI on this computer."}
+    gh = shutil.which("gh")
+    try:
+        done = subprocess.run([gh, "auth", "switch", "--hostname", _host(), "--user", login], env=_env(),
+                              stdin=subprocess.DEVNULL, capture_output=True, timeout=20, text=True,
+                              encoding="utf-8", errors="replace")
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {"ok": False, "error": f"Could not switch accounts: {exc}"}
+    if done.returncode:
+        return {"ok": False, "error": f"Could not switch accounts: {done.stderr.strip()[:300]}"}
+    return {"ok": True, "account": login}
+
+
+def run_gh(args, cwd: str | None = None, context_id: str = "", *, max_output: int = _MAX_OUTPUT,
+           use_saved_token: bool = True, as_account: str = "", folder_approved: bool = False) -> dict:
     problem = validate(args)
     if problem:
         return _error(problem)
     gh = shutil.which("gh")
     if not gh:
         return _error("The GitHub CLI (gh) is not installed. Use the github_* tools instead.")
-    cwd, refused = _authorized_cwd(args, cwd or "", context_id)
+    cwd, refused = _authorized_cwd(args, cwd or "", context_id, folder_approved)
     if refused:
         return refused
     env = _env()
     secret = ""
     source = "gh login"
-    if not _logged_in(gh, env):
+    if as_account:
+        if not _LOGIN.fullmatch(as_account):
+            return _error("Not a valid GitHub login.")
+        secret = _account_token(gh, env, as_account)
+        if not secret:
+            return _error(f"gh has no sign-in for {as_account} on this machine.")
+        env["GH_ENTERPRISE_TOKEN" if env.get("GH_HOST") else "GH_TOKEN"] = secret
+        source = f"gh login ({as_account})"
+    elif not _logged_in(gh, env):
+        if not use_saved_token:
+            return _error("gh is not signed in on this machine. Run 'gh auth login' once.")
         secret = credentials.get_token()
         if not secret:
             return _error("gh is not signed in on this machine and no GitHub token is connected. "
@@ -175,9 +260,9 @@ def run_gh(args, cwd: str | None = None, context_id: str = "") -> dict:
     out, err = done.stdout, done.stderr
     if secret:
         out, err = out.replace(secret, "***"), err.replace(secret, "***")
-    result = {"stdout": out[:_MAX_OUTPUT], "stderr": err[:_MAX_OUTPUT], "exit_code": done.returncode,
+    result = {"stdout": out[:max_output], "stderr": err[:_MAX_OUTPUT], "exit_code": done.returncode,
               "auth": source}
-    if len(out) > _MAX_OUTPUT:
+    if len(out) > max_output:
         result["truncated"] = True
     if done.returncode:
         result["error"] = f"gh exited with code {done.returncode}: {err.strip()[:500]}"
