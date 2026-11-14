@@ -1,6 +1,7 @@
 """Handoff routes: prepare, launch with handoff_id, gateway env, CSRF."""
 
 import logging
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
@@ -93,15 +94,35 @@ def test_launch_with_handoff_crush_gets_crush_env(handoff_env, spawned):
     assert "CRUSH_GLOBAL_CONFIG" in spawned[-1]["env"]
 
 
-def test_handoff_always_spawns_new_process(handoff_env, spawned, monkeypatch):
+@pytest.fixture
+def live_existing(spawned, monkeypatch):
+    """A tracked, live PTY for ("demo", "opencode-bare") so the reuse path is active."""
+    import routes.terminal as terminal
+
+    monkeypatch.setattr(generic_agent, "_active_sessions", {("demo", "opencode-bare"): "existing"})
+    monkeypatch.setattr(
+        terminal, "get_pty_session",
+        lambda sid: SimpleNamespace(done=False) if sid == "existing" else None,
+    )
+    monkeypatch.setattr(terminal, "close_pty_session", lambda sid: None)
+
+
+OPENCODE_LAUNCH = {"agent": "opencode-bare", "project_id": "demo", "repo_path": "/r", "force_new": False}
+
+
+def test_live_session_is_reused_without_handoff(handoff_env, live_existing, spawned):
+    r = _app().post("/api/generic-agent/terminal", json=OPENCODE_LAUNCH)
+    assert r.json() == {"pty_session_id": "existing", "created": False}
+    assert spawned == []
+
+
+def test_handoff_always_spawns_new_process(handoff_env, live_existing, spawned):
     client = _app()
     hid = client.post("/api/generic-agent/handoff/prepare", json=BODY).json()["handoff_id"]
-    generic_agent.set_active_session("demo", "opencode-bare", "existing")
-    r = client.post("/api/generic-agent/terminal", json={
-        "agent": "opencode-bare", "project_id": "demo", "repo_path": "/r",
-        "handoff_id": hid, "force_new": False,
-    })
-    assert r.json()["created"] is True and spawned[-1]["session_id"] != "existing"
+    r = client.post("/api/generic-agent/terminal", json={**OPENCODE_LAUNCH, "handoff_id": hid})
+    data = r.json()
+    assert data["created"] is True and data["pty_session_id"] != "existing"
+    assert len(spawned) == 1 and spawned[0]["session_id"] == data["pty_session_id"]
 
 
 def test_unknown_handoff_is_404_and_spawns_nothing(handoff_env, spawned):
