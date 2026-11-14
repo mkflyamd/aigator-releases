@@ -83,6 +83,8 @@ SENSITIVE_ROUTES: frozenset[str] = frozenset({
     "DELETE /api/extensions/setup/{session_id}",
     "POST /api/github/issue",
     "POST /api/github/pr",
+    "POST /api/host-shell/{request_id}/cancel",
+    "POST /api/host-shell/{request_id}/run",
     "POST /api/jira/issue/{issue_key}/assign",
     "POST /api/jira/issue/{issue_key}/comment",
     "POST /api/jira/issue/{issue_key}/transition",
