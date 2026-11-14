@@ -95,6 +95,16 @@ class TestGlobalState:
         assert state.get_pins("tabA") == []
         assert state.get_pins("tabB") == []
 
+    def test_remove_with_global_scope_also_clears_other_tabs_own_copies(self):
+        _pin("tabA")
+        _pin("tabB")
+        state.set_pin_scope("jira", "KEY-1", "global", "tabA")
+        result = state.remove_pin("jira", "KEY-1", "tabC", scope="global")
+        assert result["unpinned"] is True
+        assert state.get_pins("tabA") == []
+        assert state.get_pins("tabB") == []
+        assert state.get_pins("tabC") == []
+
     def test_remove_with_tab_scope_leaves_global_alone(self):
         _pin("tabA")
         state.set_pin_scope("jira", "KEY-1", "global", "tabA")
@@ -186,6 +196,25 @@ class TestGlobalRoutes:
         assert r.json()["unpinned"] is True
         for tab in ("tabA", "tabB"):
             assert client.get("/api/context/pins", params={"context_id": tab}).json() == []
+
+    def test_unpin_without_scope_leaves_global_pin_in_place(self):
+        client = _client()
+        _post_pin(client)
+        client.post(
+            "/api/context/pin/scope",
+            headers=_csrf(),
+            json={"source": "jira", "id": "KEY-1", "scope": "global", "context_id": "tabA"},
+        )
+        r = client.delete(
+            "/api/context/pin/jira/KEY-1",
+            headers=_csrf(),
+            params={"context_id": "tabB"},
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["unpinned"] is False
+        pins = client.get("/api/context/pins", params={"context_id": "tabB"}).json()
+        assert [p["id"] for p in pins] == ["KEY-1"]
+        assert pins[0]["scope"] == "global"
 
     def test_clone_copies_only_the_tabs_own_pins(self):
         client = _client()

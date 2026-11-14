@@ -105,10 +105,14 @@ def remove_pin(
     source: str, item_id: str, context_id: str = "default", scope: str = "tab"
 ) -> dict:
     key = f"{source}::{item_id}"
-    bucket = GLOBAL_CONTEXT_ID if scope == "global" else context_id
-    removed = pinned_contexts.get(bucket, {}).pop(key, None)
+    # Global removal also drops tabs' own copies, which get_pins hides behind the global pin
+    buckets = list(pinned_contexts) if scope == "global" else [context_id]
+    removed = False
+    for bucket in buckets:
+        if pinned_contexts.get(bucket, {}).pop(key, None) is not None:
+            removed = True
     _save()
-    return {"unpinned": bool(removed), "source": source, "id": item_id}
+    return {"unpinned": removed, "source": source, "id": item_id}
 
 
 def clear_pins(context_id: str = "default") -> dict:
