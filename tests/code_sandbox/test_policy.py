@@ -33,7 +33,7 @@ def test_partial_file_keeps_defaults_for_missing_keys(policy_file):
 def test_invalid_file_fails_closed(policy_file, text):
     policy_file.write_text(text)
     assert pol.load_policy() == pol.FAIL_CLOSED_POLICY
-    assert pol.FAIL_CLOSED_POLICY == pol.Policy("enabled", "deny", "strict", True, "deny", ("Native", "Verified"), True, block_bundle_stdio_mcp=True)
+    assert pol.FAIL_CLOSED_POLICY == pol.Policy("enabled", "deny", "strict", True, "deny", ("Native", "Verified"), True, block_bundle_stdio_mcp=True, host_shell="deny")
 
 
 @pytest.mark.parametrize("text", [
@@ -112,7 +112,7 @@ def test_policy_paths_per_platform(monkeypatch):
 def test_as_dict():
     assert pol.Policy().as_dict() == {
         "code_runner": "enabled", "network": "ask", "filesystem": "ask", "require_sandbox": False,
-        "saved_permissions": "allow", "marketplace_allowed_tiers": ("Native", "Verified", "Community", "Mine"),
+        "saved_permissions": "allow", "host_shell": "allow", "marketplace_allowed_tiers": ("Native", "Verified", "Community", "Mine"),
         "require_pinned_installs": False, "approved_digests": None, "blocked_data_flows": (),
         "block_bundle_stdio_mcp": False,
     }
