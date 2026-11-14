@@ -10916,7 +10916,7 @@ html.material-symbols-ready .tp-mi {
 .confirm-modal-overlay {
   position: fixed;
   inset: 0;
-  z-index: 9000;
+  z-index: 10001;
   background: rgba(0, 0, 0, 0.45);
   display: flex;
   align-items: center;
