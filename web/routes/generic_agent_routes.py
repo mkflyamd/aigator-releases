@@ -108,7 +108,9 @@ async def generic_agent_terminal(req: GenericAgentTerminalRequest):
 
     handoff = None
     if req.handoff_id:
-        handoff = await asyncio.to_thread(agent_handoff.load_handoff, req.handoff_id)
+        if req.agent not in {a for a, _, _ in agent_handoff.TARGETS}:
+            raise HTTPException(status_code=400, detail=f"{req.agent!r} cannot continue a handoff.")
+        handoff =await asyncio.to_thread(agent_handoff.load_handoff, req.handoff_id)
         if handoff is None:
             raise HTTPException(status_code=404, detail="Handoff expired or not found.")
     force_new = req.force_new or handoff is not None

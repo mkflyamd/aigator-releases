@@ -27,9 +27,10 @@ def _app(override_csrf=True):
 @pytest.fixture
 def handoff_env(tmp_path, monkeypatch):
     monkeypatch.setattr(ah, "HANDOFF_DIR", tmp_path / "h")
-    monkeypatch.setattr(ah, "_active_api_key", lambda: FAKE)
+    monkeypatch.setattr(ah, "_configured_api_keys", lambda: [FAKE])
+    monkeypatch.setattr(ah, "_session_started_at", lambda sid: None)
     monkeypatch.setattr(ah, "find_transcript", lambda agent, cwd, home=None: None)
-    monkeypatch.setattr(ah, "capture_pane", lambda sid: f"pane output {FAKE}")
+    monkeypatch.setattr(ah, "capture_pane", lambda sid, red=None: f"pane output {FAKE}")
 
 
 @pytest.fixture
@@ -61,7 +62,7 @@ def test_prepare_returns_preview_and_targets(handoff_env):
 
 
 def test_prepare_nothing_to_hand_off_is_422(handoff_env, monkeypatch):
-    monkeypatch.setattr(ah, "capture_pane", lambda sid: "")
+    monkeypatch.setattr(ah, "capture_pane", lambda sid, red=None: "")
     r = _app().post("/api/generic-agent/handoff/prepare", json=BODY)
     assert r.status_code == 422
     assert r.json()["detail"] == "Nothing to hand off from this session."
@@ -130,6 +131,20 @@ def test_unknown_handoff_is_404_and_spawns_nothing(handoff_env, spawned):
         "agent": "opencode-bare", "project_id": "demo", "repo_path": "/r", "handoff_id": "0" * 32,
     })
     assert r.status_code == 404 and spawned == []
+
+
+def test_handoff_to_a_non_target_agent_is_400_and_loads_and_spawns_nothing(handoff_env, spawned, monkeypatch):
+    client = _app()
+    hid = client.post("/api/generic-agent/handoff/prepare", json=BODY).json()["handoff_id"]
+
+    def fail(_hid):
+        raise AssertionError("must not load the handoff")
+
+    monkeypatch.setattr(ah, "load_handoff", fail)
+    r = client.post("/api/generic-agent/terminal", json={
+        "agent": "terminal", "project_id": "demo", "repo_path": "/r", "handoff_id": hid,
+    })
+    assert r.status_code == 400 and spawned == []
 
 
 def test_launch_logs_target_and_gateway_flag(handoff_env, spawned, caplog):

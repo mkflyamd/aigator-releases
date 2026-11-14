@@ -690,7 +690,10 @@ async def lifespan(app):
     set_notify_callback(_on_task_done)
 
     import agent_handoff
-    await asyncio.to_thread(agent_handoff.purge_expired)
+    try:
+        await asyncio.to_thread(agent_handoff.purge_expired)
+    except Exception as exc:
+        logger.warning("agent handoff purge failed: %s", type(exc).__name__)
 
     import loop_watchdog
     loop_watchdog.start(asyncio.get_running_loop())

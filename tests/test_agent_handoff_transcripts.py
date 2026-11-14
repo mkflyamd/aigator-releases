@@ -8,6 +8,7 @@ import agent_handoff as ah
 import pytest
 
 FAKE = "aigator-fake-api-key"
+SK = "sk-" + FAKE
 
 
 def _jsonl(path, rows):
@@ -34,6 +35,43 @@ def test_codex_transcript_matches_session_meta_cwd(tmp_path):
     _jsonl(sessions / "rollout-b.jsonl", [{"type": "session_meta", "payload": {"cwd": "\\\\?\\C:\\Repo"}}])
     found = ah.find_transcript("codex", r"c:\repo", home=tmp_path)
     assert found is not None and found.name == "rollout-b.jsonl"
+
+
+def test_codex_scan_skips_first_lines_that_are_not_objects(tmp_path):
+    sessions = tmp_path / ".codex" / "sessions" / "2026" / "11" / "14"
+    sessions.mkdir(parents=True)
+    for name, first in (("rollout-a.jsonl", "[1,2]"), ("rollout-b.jsonl", "5"), ("rollout-c.jsonl", '"x"')):
+        (sessions / name).write_text(first + "\n", encoding="utf-8")
+    (sessions / "rollout-d.jsonl").write_text(
+        json.dumps({"type": "session_meta", "payload": "not a dict"}) + "\n", encoding="utf-8"
+    )
+    _jsonl(sessions / "rollout-e.jsonl", [{"type": "session_meta", "payload": {"cwd": "/r"}}])
+    for f in sessions.glob("rollout-[a-d].jsonl"):
+        os.utime(f, (time.time() + 60,) * 2)  # newest first, so the scan hits them first
+    found = ah.find_transcript("codex", "/r", home=tmp_path)
+    assert found is not None and found.name == "rollout-e.jsonl"
+
+
+def test_render_skips_json_lines_that_are_not_objects(tmp_path):
+    f = tmp_path / "s.jsonl"
+    f.write_text(
+        "[1,2]\n5\n\"x\"\nnull\n"
+        + json.dumps({"type": "user", "message": {"content": "keep me"}}) + "\n"
+        + json.dumps({"type": "user", "message": "not a dict"}) + "\n",
+        encoding="utf-8",
+    )
+    text, last_user, _ = ah.render_transcript("claude", f)
+    assert "## User\nkeep me" in text and last_user == "keep me"
+    c = tmp_path / "rollout.jsonl"
+    c.write_text(
+        "[1]\n7\n"
+        + json.dumps({"type": "response_item", "payload": "nope"}) + "\n"
+        + json.dumps({"type": "response_item", "payload": {"type": "message", "role": "user",
+            "content": [{"type": "input_text", "text": "add pins"}]}}) + "\n",
+        encoding="utf-8",
+    )
+    text, last_user, _ = ah.render_transcript("codex", c)
+    assert "## User\nadd pins" in text and last_user == "add pins"
 
 
 def test_other_agents_have_no_transcript(tmp_path):
@@ -93,15 +131,69 @@ def test_render_bounds_to_tail(tmp_path, monkeypatch):
     assert len(text) < 200
 
 
-def test_capture_pane_strips_and_bounds(monkeypatch):
-    class Fake:
-        def read_from(self, offset):
-            return "\x1b[31m" + "a" * 50_000 + "\x1b[0m", 50_000
+def test_one_line_redacts_before_cutting_at_200():
+    red = ah.Redactor([FAKE])
+    out = ah._one_line("a" * 195 + FAKE, red)
+    assert "aigat" not in out and out == "a" * 195 + "[REDACTED]"[:5]
+    out = ah._one_line("a" * 197 + SK, ah.Redactor([SK]))
+    assert "sk-" not in out
 
+
+def test_clip_redacts_before_cutting_at_message_limit():
+    key_across_edge = "a" * (ah.MESSAGE_MAX_CHARS - 5) + FAKE + "tail"
+    out = ah._clip(key_across_edge, ah.Redactor([FAKE]))
+    assert "aigat" not in out and out.endswith(" [truncated]")
+    sk_across_edge = "a" * (ah.MESSAGE_MAX_CHARS - 4) + SK + "tail"
+    assert "sk-" not in ah._clip(sk_across_edge, ah.Redactor([SK]))
+
+
+def test_bound_redacts_before_keeping_the_tail(monkeypatch):
+    monkeypatch.setattr(ah, "SNAPSHOT_MAX_CHARS", 100)
+    text = "x" * 50 + FAKE + "y" * 90  # the 100-char tail starts 10 chars inside the key
+    out = ah._bound(text, ah.Redactor([FAKE]))
+    assert "api-key" not in out and "ke-api" not in out and out.endswith("y" * 90)
+    text = "x" * 50 + SK + "y" * 90
+    assert "api-key" not in ah._bound(text, ah.Redactor([SK]))
+
+
+def test_render_redacts_tool_input_cut_by_the_200_char_clip(tmp_path):
+    f = tmp_path / "s.jsonl"
+    long_pad = "p" * 170
+    _jsonl(f, [{"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "name": "Bash", "input": {"command": long_pad + " " + FAKE}},
+    ]}}])
+    text, _, _ = ah.render_transcript("claude", f, ah.Redactor([FAKE]))
+    assert "aigat" not in text and FAKE not in text
+
+
+class _FakePane:
+    def __init__(self, raw):
+        self.raw = raw
+
+    def read_from(self, offset):
+        return self.raw, len(self.raw)
+
+
+def test_capture_pane_strips_and_bounds(monkeypatch):
     from routes import terminal
-    monkeypatch.setattr(terminal, "get_pty_session", lambda sid: Fake())
+    monkeypatch.setattr(
+        terminal, "get_pty_session", lambda sid: _FakePane("\x1b[31m" + "a" * 50_000 + "\x1b[0m")
+    )
     out = ah.capture_pane("s1")
     assert len(out) == ah.CAPTURE_MAX_CHARS and "\x1b" not in out
+
+
+@pytest.mark.parametrize("key", [FAKE, SK])
+def test_capture_pane_redacts_a_key_straddling_the_tail_edge(monkeypatch, key):
+    from routes import terminal
+
+    cut = 10  # the final 36000 chars begin 10 chars into the key
+    raw = "a" * 5000 + key + "b" * (ah.CAPTURE_MAX_CHARS - cut)
+    monkeypatch.setattr(terminal, "get_pty_session", lambda sid: _FakePane(raw))
+    red = ah.Redactor([key])
+    out = ah.capture_pane("s1", red)
+    assert "api-key" not in out and "ke-api" not in out
+    assert len(out) <= ah.CAPTURE_MAX_CHARS and red.count == 1
 
 
 def test_capture_pane_unknown_session_is_empty(monkeypatch):
@@ -127,6 +219,44 @@ def test_load_handoff_rejects_bad_ids(tmp_path, monkeypatch):
     monkeypatch.setattr(ah, "HANDOFF_DIR", tmp_path)
     assert ah.load_handoff("../../etc/passwd") is None
     assert ah.load_handoff("0" * 32) is None
+    assert ah.load_handoff("0" * 32 + "\n") is None
+    (tmp_path / ("0" * 32 + ".json")).write_text("{}", encoding="utf-8")
+    assert ah.load_handoff("0" * 32 + "\n") is None  # would resolve to the file above without fullmatch
+
+
+def test_save_handoff_redacts_a_key_across_the_last_message_clip(tmp_path, monkeypatch):
+    monkeypatch.setattr(ah, "HANDOFF_DIR", tmp_path / "h")
+    last_user = "a" * (ah.MESSAGE_MAX_CHARS - 5) + FAKE + "tail"
+    rec = ah.save_handoff(
+        source_agent="claude", project_id="demo", cwd="/r", source_kind="capture",
+        text="x", last_user=last_user, last_assistant=last_user, api_key=FAKE,
+    )
+    assert "aigat" not in rec["last_user_message"] and "aigat" not in rec["prompt"]
+
+
+def test_load_handoff_treats_old_records_as_expired(tmp_path, monkeypatch):
+    monkeypatch.setattr(ah, "HANDOFF_DIR", tmp_path / "h")
+    rec = ah.save_handoff(
+        source_agent="claude", project_id="demo", cwd="/r", source_kind="capture",
+        text="hello", last_user="", last_assistant="",
+    )
+    record = tmp_path / "h" / f"{rec['handoff_id']}.json"
+    os.utime(record, (time.time() - ah.HANDOFF_TTL_SECONDS + 3600,) * 2)
+    assert ah.load_handoff(rec["handoff_id"]) == rec
+    os.utime(record, (time.time() - ah.HANDOFF_TTL_SECONDS - 60,) * 2)
+    assert ah.load_handoff(rec["handoff_id"]) is None
+
+
+def test_purge_expired_swallows_listing_errors(monkeypatch):
+    class Unreadable:
+        def is_dir(self):
+            return True
+
+        def iterdir(self):
+            raise PermissionError("denied")
+
+    monkeypatch.setattr(ah, "HANDOFF_DIR", Unreadable())
+    assert ah.purge_expired() == 0
 
 
 def test_purge_expired_removes_only_old_files(tmp_path, monkeypatch):
@@ -139,19 +269,100 @@ def test_purge_expired_removes_only_old_files(tmp_path, monkeypatch):
     assert not old.exists() and new.exists()
 
 
-def test_prepare_handoff_falls_back_to_capture(tmp_path, monkeypatch):
+def _prepare_env(tmp_path, monkeypatch, keys=()):
     monkeypatch.setattr(ah, "HANDOFF_DIR", tmp_path / "h")
-    monkeypatch.setattr(ah, "_active_api_key", lambda: FAKE)
+    monkeypatch.setattr(ah, "_configured_api_keys", lambda: list(keys))
+    monkeypatch.setattr(ah, "_session_started_at", lambda sid: None)
+
+
+def test_prepare_handoff_redacts_every_configured_key(tmp_path, monkeypatch):
+    _prepare_env(tmp_path, monkeypatch, [FAKE, SK])
     monkeypatch.setattr(ah, "find_transcript", lambda agent, cwd, home=None: None)
-    monkeypatch.setattr(ah, "capture_pane", lambda sid: f"pane {FAKE}")
+    monkeypatch.setattr(ah, "capture_pane", lambda sid, red=None: red(f"one {FAKE} two {SK}"))
+    rec = ah.prepare_handoff("crush", "demo", "/r", "s1")
+    snap = (tmp_path / "h" / f"{rec['handoff_id']}.txt").read_text(encoding="utf-8")
+    assert snap == "one [REDACTED] two [REDACTED]" and rec["redactions"] == 2
+
+
+def test_prepare_handoff_falls_back_to_capture(tmp_path, monkeypatch):
+    _prepare_env(tmp_path, monkeypatch, [FAKE])
+    monkeypatch.setattr(ah, "find_transcript", lambda agent, cwd, home=None: None)
+    monkeypatch.setattr(ah, "capture_pane", lambda sid, red=None: f"pane {FAKE}")
     rec = ah.prepare_handoff("opencode-bare", "demo", "/r", "s1")
     assert rec["source_kind"] == "capture" and rec["redactions"] == 1
 
 
 def test_prepare_handoff_empty_everything_raises(tmp_path, monkeypatch):
-    monkeypatch.setattr(ah, "HANDOFF_DIR", tmp_path / "h")
-    monkeypatch.setattr(ah, "_active_api_key", lambda: None)
+    _prepare_env(tmp_path, monkeypatch)
     monkeypatch.setattr(ah, "find_transcript", lambda agent, cwd, home=None: None)
-    monkeypatch.setattr(ah, "capture_pane", lambda sid: "  ")
+    monkeypatch.setattr(ah, "capture_pane", lambda sid, red=None: "  ")
     with pytest.raises(ah.NothingToHandOff):
         ah.prepare_handoff("crush", "demo", "/r", "s1")
+
+
+def test_prepare_handoff_uses_transcript_and_counts_its_redactions(tmp_path, monkeypatch):
+    _prepare_env(tmp_path, monkeypatch, [FAKE])
+    f = tmp_path / "s.jsonl"
+    _jsonl(f, [{"type": "user", "message": {"content": f"use {FAKE}"}}])
+    monkeypatch.setattr(ah, "find_transcript", lambda agent, cwd, home=None: f)
+    monkeypatch.setattr(ah, "capture_pane", lambda sid, red=None: "should not be used")
+    rec = ah.prepare_handoff("claude", "demo", "/r", "s1")
+    snap = (tmp_path / "h" / f"{rec['handoff_id']}.txt").read_text(encoding="utf-8")
+    assert rec["source_kind"] == "transcript" and FAKE not in snap and "[REDACTED]" in snap
+    assert rec["redactions"] == 2  # the snapshot line and the last-user message
+
+
+def test_prepare_handoff_falls_back_to_capture_when_rendering_raises(tmp_path, monkeypatch):
+    _prepare_env(tmp_path, monkeypatch)
+    f = tmp_path / "s.jsonl"
+    _jsonl(f, [{"type": "user", "message": {"content": "hi"}}])
+    monkeypatch.setattr(ah, "find_transcript", lambda agent, cwd, home=None: f)
+
+    def boom(agent, path, red=None):
+        raise AttributeError("'list' object has no attribute 'get'")
+
+    monkeypatch.setattr(ah, "render_transcript", boom)
+    monkeypatch.setattr(ah, "capture_pane", lambda sid, red=None: "pane text")
+    rec = ah.prepare_handoff("claude", "demo", "/r", "s1")
+    assert rec["source_kind"] == "capture"
+
+
+def test_prepare_handoff_ignores_a_transcript_older_than_the_session(tmp_path, monkeypatch):
+    _prepare_env(tmp_path, monkeypatch)
+    f = tmp_path / "s.jsonl"
+    _jsonl(f, [{"type": "user", "message": {"content": "an older tab's work"}}])
+    now = time.time()
+    os.utime(f, (now - 3600,) * 2)
+    monkeypatch.setattr(ah, "_session_started_at", lambda sid: now - 60)
+    monkeypatch.setattr(ah, "find_transcript", lambda agent, cwd, home=None: f)
+    monkeypatch.setattr(ah, "capture_pane", lambda sid, red=None: "pane text")
+    assert ah.prepare_handoff("claude", "demo", "/r", "s1")["source_kind"] == "capture"
+    os.utime(f, (now - 62,) * 2)  # within the slack of the session start
+    assert ah.prepare_handoff("claude", "demo", "/r", "s1")["source_kind"] == "transcript"
+    os.utime(f, (now - 30,) * 2)
+    assert ah.prepare_handoff("claude", "demo", "/r", "s1")["source_kind"] == "transcript"
+
+
+def test_session_started_at_reads_the_pty_session(monkeypatch):
+    from routes import terminal
+
+    monkeypatch.setattr(terminal, "get_pty_session", lambda sid: _FakePane("x"))
+    assert ah._session_started_at("s1") is None
+    pane = _FakePane("x")
+    pane.created_at = 123.5
+    monkeypatch.setattr(terminal, "get_pty_session", lambda sid: pane)
+    assert ah._session_started_at("s1") == 123.5
+    monkeypatch.setattr(terminal, "get_pty_session", lambda sid: None)
+    assert ah._session_started_at("s1") is None
+
+
+def test_pty_session_records_its_start_time():
+    from pty_session import PtySession
+
+    class DeadPty:
+        def isalive(self):
+            return False
+
+    before = time.time()
+    s = PtySession(DeadPty())
+    assert before <= s.created_at <= time.time()
