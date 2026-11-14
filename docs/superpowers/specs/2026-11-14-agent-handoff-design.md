@@ -8,13 +8,16 @@ Continue the work of one coding-agent terminal in a new terminal running a diffe
 - The new agent is launched through the same code path as any other AI Gator agent terminal, so the enterprise gateway swap applies automatically.
 - The handoff prompt never auto-submits.
 - Credentials in the source session are redacted before the new agent can read them.
+- When an agent terminal shows that its usage limit was hit, AI Gator offers the handoff.
+- Every handoff leaves a record in the backend log of what moved between which agents.
 
 ## Non-goals
 
 - Converting one agent's native session format into another's.
 - LLM-generated summaries (they need a model call and lose commands and decisions).
-- Moving sessions between machines.
+- Mobile and remote handoff, and moving sessions between machines (separate plan).
 - Adding gateway routing for Claude Code and Codex (tracked separately).
+- Automatic failover. The offer is always a prompt the user accepts.
 
 ## Background
 
@@ -52,6 +55,25 @@ frontend            ->  attaches WS, waits until the TUI is input-ready, writes 
 - Targets that are not gateway-routed (claude, codex) show an inline warning: "Runs on its own configuration, outside the AI Gator gateway."
 - Drafting: the prompt is written to the PTY as a bracketed paste with no trailing newline, only after the TUI is input-ready. A short readiness wait per agent is part of the implementation plan. If readiness is not observed within the timeout, show a warning toast with a Copy prompt button. A success toast is shown only when readiness was observed.
 
+### Usage-limit offer
+
+**`web/static/agent-limit-detect.js`** (new). The terminal tab already receives every output chunk over its WebSocket, so detection runs in the browser with no new server endpoint.
+- A per-agent list of patterns is matched against the ANSI-stripped tail of recent output (last 2 KB, re-evaluated per chunk). Patterns cover each agent's own limit message and the gateway's budget-exceeded and 429 responses, which is the enterprise case for OpenCode and Crush.
+- On a match, a toast reads "`<Agent>` looks out of usage. Continue in another agent?" The action opens the handoff dialog with the source agent excluded.
+- The offer is shown once per session until the output shows the agent working again. It is dismissible, and it is not shown for a pane that was itself created by a handoff in the last minute.
+- A false positive costs one dismissible toast. Nothing is launched or sent without the user choosing a target and accepting the draft.
+- Pattern fixtures are text captured from real limit messages, stored under `web/tests/fixtures/limit_messages/`.
+
+### Handoff events in the backend log
+
+`web/agent_handoff.py` logs one line through the standard backend logger at each of two points, after `prepare` succeeds and after the launch route returns the prompt:
+
+```
+agent_handoff stage=prepared|launched project=<project_id> source=<agent> target=<agent|-> source_kind=transcript|capture snapshot_bytes=<n> redactions=<n> gateway_routed=<true|false|->
+```
+
+No prompt text, transcript text or file paths are logged. The log's existing 5 MiB rotation and 30-day cleanup apply.
+
 ### Prompt template
 
 Ported in structure from Orca, reworded for AI Gator:
@@ -82,8 +104,18 @@ Ported in structure from Orca, reworded for AI Gator:
 
 - Unit: `redact` (active profile key using `aigator-fake-api-key`, each token shape, no false positives on ordinary code), `find_transcript` against fixture directories, `build_prompt` fencing when paths or captures contain backticks, snapshot expiry.
 - Route: `prepare` and `terminal` with `handoff_id` return the prompt and apply the target's gateway env (assert `OPENCODE_CONFIG_CONTENT` and `GATOR_OPENCODE_KEY` are present for `opencode-bare`, `CRUSH_GLOBAL_CONFIG` for `crush`), `tests/test_csrf_route_inventory.py` passes with the new route, and an unknown `handoff_id` returns 404.
+- Limit offer: each pattern fixture matches its agent and none match ordinary output of the other agents; one offer per limit event; the dialog opens with the source agent excluded.
+- Log: `prepared` and `launched` lines carry the fields above and never contain the snapshot text, the prompt, or `aigator-fake-api-key`.
 - Frontend: the prompt is written without a newline; the success toast appears only after readiness; Copy prompt appears on timeout.
 - Manual: Claude Code to OpenCode on an enterprise gateway profile; OpenCode to Codex; usage-limit toggle hides the source agent.
+
+## Relationship to issue #76 (sync pinned context into coding agents)
+
+#76 keeps an agent's pinned context current through a local MCP server and a per-terminal `context_id`. Handoff moves a session's history once. They share the agent terminal tab, the launch route and the idea of a per-terminal identity, and they stay separate features.
+
+- A terminal created by a handoff should inherit the source terminal's `context_id` once #76 defines it, so pins follow the work. The launch route is the single place that assigns it, so no handoff code changes beyond passing the value through.
+- If #76's MCP server ships, the handoff snapshot can be served through it and the draft reduced to "read the handoff with the Gator tool". That would replace PTY drafting for agents that connect to it. It is not part of this spec.
+- The two differ on delivery: #76 wants updates without pasting into the terminal, while handoff drafts once into the composer for the user to review and send. Both leave the user in control of the first turn; #76's automatic new turn on a pin change is a separate decision for that RFC.
 
 ## Open items for the implementation plan
 
