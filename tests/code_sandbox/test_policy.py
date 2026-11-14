@@ -33,7 +33,7 @@ def test_partial_file_keeps_defaults_for_missing_keys(policy_file):
 def test_invalid_file_fails_closed(policy_file, text):
     policy_file.write_text(text)
     assert pol.load_policy() == pol.FAIL_CLOSED_POLICY
-    assert pol.FAIL_CLOSED_POLICY == pol.Policy("enabled", "deny", "strict", True, "deny", ("Native", "Verified"), True, block_bundle_stdio_mcp=True)
+    assert pol.FAIL_CLOSED_POLICY == pol.Policy("enabled", "deny", "strict", True, "deny", ("Native", "Verified"), True, block_bundle_stdio_mcp=True, persistent_permissions="deny")
 
 
 @pytest.mark.parametrize("text", [
@@ -112,7 +112,8 @@ def test_policy_paths_per_platform(monkeypatch):
 def test_as_dict():
     assert pol.Policy().as_dict() == {
         "code_runner": "enabled", "network": "ask", "filesystem": "ask", "require_sandbox": False,
-        "saved_permissions": "allow", "marketplace_allowed_tiers": ("Native", "Verified", "Community", "Mine"),
+        "saved_permissions": "allow", "persistent_permissions": "allow",
+        "marketplace_allowed_tiers": ("Native", "Verified", "Community", "Mine"),
         "require_pinned_installs": False, "approved_digests": None, "blocked_data_flows": (),
         "block_bundle_stdio_mcp": False,
     }
@@ -136,6 +137,15 @@ def test_saved_permissions_field():
     assert DEFAULT_POLICY.as_dict()["saved_permissions"] == "allow"
     with pytest.raises(ValueError):
         parse_policy('{"saved_permissions": "maybe"}')
+
+
+def test_persistent_permissions_field():
+    from sandbox.policy import parse_policy, DEFAULT_POLICY, FAIL_CLOSED_POLICY
+    assert DEFAULT_POLICY.persistent_permissions == "allow"
+    assert parse_policy('{"persistent_permissions": "deny"}').persistent_permissions == "deny"
+    assert FAIL_CLOSED_POLICY.persistent_permissions == "deny"
+    with pytest.raises(ValueError):
+        parse_policy('{"persistent_permissions": "maybe"}')
 
 
 def test_blocked_data_flows_parse_and_validate():

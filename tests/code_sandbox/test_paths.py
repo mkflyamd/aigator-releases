@@ -1,8 +1,17 @@
+import os
 from pathlib import Path
 
 import pytest
 
-from sandbox.paths import PathNotGrantable, check_grantable, is_within, normalize_grant_paths, normalize_hosts
+from sandbox.paths import (
+    APP_DIR_ENV,
+    PathNotGrantable,
+    check_grantable,
+    is_within,
+    normalize_grant_paths,
+    normalize_hosts,
+    protects_app,
+)
 
 
 @pytest.fixture
@@ -319,3 +328,56 @@ def test_remote_drive_check_fails_closed(monkeypatch):
     assert paths._is_remote_drive(Path("C:/x")) is False
     monkeypatch.setattr(paths, "_drive_type", lambda root: 4)  # DRIVE_REMOTE
     assert paths._is_remote_drive(Path("C:/x")) is True
+
+
+# ── AI Gator's own program folders ───────────────────────────────────────────
+
+windows_only = pytest.mark.skipif(os.name != "nt", reason="the Electron folder guard applies on Windows")
+
+
+@pytest.fixture
+def app_dir(tmp_path, monkeypatch):
+    d = tmp_path / "Programs" / "AI Gator"
+    d.mkdir(parents=True)
+    monkeypatch.setenv(APP_DIR_ENV, str(d))
+    return d.resolve()
+
+
+@windows_only
+@pytest.mark.parametrize("rel", ["", "resources", "resources/backend"])
+def test_app_folder_and_its_subfolders_are_not_grantable(app_dir, home, rel):
+    target = app_dir / rel
+    target.mkdir(parents=True, exist_ok=True)
+    with pytest.raises(PathNotGrantable, match="program files"):
+        check_grantable(target, home)
+
+
+@windows_only
+def test_every_ancestor_of_the_app_folder_is_not_grantable(app_dir, home):
+    with pytest.raises(PathNotGrantable):
+        check_grantable(app_dir.parent, home)
+    with pytest.raises(PathNotGrantable):
+        check_grantable(app_dir.parent.parent, home)
+
+
+@windows_only
+def test_a_sibling_of_the_app_folder_is_grantable(app_dir, home):
+    sibling = app_dir.parent / "Other"
+    sibling.mkdir()
+    assert protects_app(sibling) is False
+
+
+@windows_only
+def test_source_repo_root_and_electron_folder_are_not_grantable(home):
+    repo = Path(__file__).resolve().parents[2]
+    assert protects_app(repo) is True
+    assert protects_app(repo / "shell") is True
+    assert protects_app(repo / "shell" / "node_modules") is True
+    assert protects_app(repo / "web") is False
+    assert protects_app(repo / "tests") is False
+
+
+@pytest.mark.skipif(os.name == "nt", reason="checks the non-Windows no-op")
+def test_the_guard_is_a_no_op_off_windows(tmp_path, monkeypatch):
+    monkeypatch.setenv(APP_DIR_ENV, str(tmp_path))
+    assert protects_app(tmp_path) is False

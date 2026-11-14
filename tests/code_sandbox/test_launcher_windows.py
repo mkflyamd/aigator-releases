@@ -26,6 +26,16 @@ def _no_real_acl_reads(request, monkeypatch):
 
 # ── Pure helpers: every OS ───────────────────────────────────────────────────
 
+def test_run_lock_outwaits_the_longest_allowed_run():
+    assert lw._RUN_LOCK_WAIT > sandbox.MAX_RUN_SECONDS
+
+
+def test_run_timeout_is_clamped_to_the_longest_allowed_run():
+    assert sandbox.clamp_run_timeout(60) == 60
+    assert sandbox.clamp_run_timeout(10**6) == sandbox.MAX_RUN_SECONDS
+    assert sandbox.clamp_run_timeout(0) == 1
+
+
 def test_ace_spec_uses_inheritance_only_for_directories():
     assert lw.ace_spec("S-1-15-2-1", "RX", True) == "*S-1-15-2-1:(OI)(CI)RX"
     assert lw.ace_spec("S-1-15-2-1", "M", False) == "*S-1-15-2-1:M"
@@ -759,3 +769,66 @@ def test_a_failed_refresh_does_not_stop_the_run(fake, monkeypatch):
     monkeypatch.setattr(lw, "_reinherit", lambda path: (_ for _ in ()).throw(OSError("denied")))
     lw.launch(fake.req(runtime=[fake.tmp]))
     assert fake.runs == 1
+
+
+# ── Program-folder guard and cross-process locks ─────────────────────────────
+
+def _req(tmp_path, **kw):
+    work = tmp_path / "work"
+    work.mkdir(exist_ok=True)
+    base = dict(argv=["python", "-c", "pass"], cwd=work, env={}, timeout=5, network=False,
+                read_paths=[], write_paths=[], runtime_paths=[])
+    base.update(kw)
+    return SandboxRequest(**base)
+
+
+def test_launch_refuses_a_grant_over_the_app_folders(tmp_path, monkeypatch):
+    monkeypatch.setattr(lw, "ledger_path", lambda: tmp_path / "ledger" / "g.json")
+    monkeypatch.setattr(lw, "protects_app", lambda p: Path(p) == tmp_path / "app")
+    monkeypatch.setattr(lw, "_grant", lambda *a: pytest.fail("no ACE may be written"))
+    with pytest.raises(sandbox.SandboxPathNotGrantable) as err:
+        lw.launch(_req(tmp_path, read_paths=[tmp_path / "app"]))
+    assert "AI Gator" in err.value.reason
+    assert not (tmp_path / "ledger" / "g.json").exists()
+
+
+def test_launch_does_not_guard_runtime_paths(tmp_path, monkeypatch):
+    monkeypatch.setattr(lw, "ledger_path", lambda: tmp_path / "ledger" / "g.json")
+    monkeypatch.setattr(lw, "protects_app", lambda p: True)
+    with pytest.raises(sandbox.SandboxPathNotGrantable):
+        lw.launch(_req(tmp_path, runtime_paths=[tmp_path / "rt"]))  # cwd is still per-run, so it is refused
+    assert lw.acl_grants(_req(tmp_path, runtime_paths=[tmp_path / "rt"]))[0] == [(tmp_path / "rt", "RX")]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="OS file locks are the Windows ledger lock")
+def test_file_lock_blocks_a_second_process_until_released(tmp_path, monkeypatch):
+    import subprocess
+    monkeypatch.setattr(lw, "ledger_path", lambda: tmp_path / "g.json")
+    probe = (
+        "import sys, pathlib; from sandbox import launcher_windows as lw; "
+        f"lw.ledger_path = lambda: pathlib.Path(r'{tmp_path}') / 'g.json'; "
+        "\ntry:\n    with lw._file_lock('x.lock', 0.3): print('got')\n"
+        "except Exception as e: print(type(e).__name__)"
+    )
+    env = {**os.environ, "PYTHONPATH": str(Path(lw.__file__).resolve().parents[1])}
+    with lw._file_lock("x.lock", 1):
+        held = subprocess.run([sys.executable, "-c", probe], env=env, capture_output=True, text=True)
+    free = subprocess.run([sys.executable, "-c", probe], env=env, capture_output=True, text=True)
+    assert held.stdout.strip() == "SandboxUnavailable"
+    assert free.stdout.strip() == "got"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="OS file locks are the Windows ledger lock")
+def test_two_processes_adding_ledger_entries_lose_none(tmp_path):
+    import subprocess
+    worker = (
+        "import sys, pathlib; from sandbox import launcher_windows as lw; "
+        f"lw.ledger_path = lambda: pathlib.Path(r'{tmp_path}') / 'g.json'; "
+        "tag = sys.argv[1]\n"
+        "for i in range(25): lw._ledger_add_per_run('S-1-15-2-5', pathlib.Path(f'C:/x/{tag}{i}'))"
+    )
+    env = {**os.environ, "PYTHONPATH": str(Path(lw.__file__).resolve().parents[1])}
+    procs = [subprocess.Popen([sys.executable, "-c", worker, tag], env=env) for tag in "ab"]
+    assert [p.wait(timeout=120) for p in procs] == [0, 0]
+    entries = json.loads((tmp_path / "g.json").read_text())["per_run"]
+    assert len(entries) == 50

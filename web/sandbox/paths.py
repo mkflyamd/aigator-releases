@@ -16,6 +16,12 @@ HOME_DENY = (
 MAC_DATA_VOLUME = "/System/Volumes/Data"
 _DRIVE_RE = re.compile(r"[A-Za-z]:(?:\\.*)?", re.DOTALL)
 
+APP_DIR_ENV = "AIGATOR_APP_DIR"
+APP_FOLDER_REFUSAL = (
+    "Giving the sandbox access there would stop AI Gator from starting. "
+    "Choose a folder that is separate from the AI Gator install or source folder."
+)
+
 _HOST_RE = re.compile(r"(?:\[[0-9a-f:.]+\]|[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?):([0-9]{1,5})")
 
 
@@ -110,8 +116,32 @@ def _with_data_volume(paths: list[Path]) -> list[Path]:
     return [*paths, *extra]
 
 
+def app_protected_dirs() -> list[Path]:
+    """Folders that hold AI Gator's own Electron files (the shell sets APP_DIR_ENV to its executable's folder)."""
+    dirs = []
+    env = os.environ.get(APP_DIR_ENV)
+    if env:
+        dirs.append(Path(env))
+    root = Path(__file__).resolve().parents[2]
+    dirs += [root / "shell", root / "electron"]
+    return dirs
+
+
+def protects_app(path: Path) -> bool:
+    """Windows only: a sandbox ACE on, above or inside an Electron folder makes Electron crash on launch."""
+    if os.name != "nt":
+        return False
+    path = _plain(Path(path))
+    return any(is_within(form, path) or is_within(path, form)
+               for app_dir in app_protected_dirs() for form in _forms(app_dir))
+
+
 def check_grantable(path: Path, home: Path) -> None:
     path = _plain(path)
+    if protects_app(path):
+        raise PathNotGrantable(
+            f"{path} contains or is inside the AI Gator program files. {APP_FOLDER_REFUSAL}"
+        )
     if path.parent == path:
         raise PathNotGrantable(f"{path} is a filesystem or drive root and can never be granted.")
     if any(is_within(h, path) for h in _with_data_volume([home])):

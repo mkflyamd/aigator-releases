@@ -18,6 +18,27 @@ const { spawn } = require('child_process');
 const http = require('http');
 const fs = require('fs');
 
+// Remove stray sandbox access entries above this program before any window opens: with one present,
+// Electron's GPU and renderer processes die at launch. The fix is applied once, then the app restarts.
+if (process.platform === 'win32' && !process.env.AIGATOR_SANDBOX_REPAIRED) {
+  try {
+    const repaired = require('./sandbox-repair').repairSandboxGrants({
+      startDir: path.dirname(process.execPath),
+    });
+    if (repaired.length) {
+      console.warn(
+        'Removed stray sandbox access entries from:',
+        repaired.map((r) => r.dir).join(', '),
+      );
+      process.env.AIGATOR_SANDBOX_REPAIRED = '1';
+      app.relaunch();
+      app.exit(0);
+    }
+  } catch (err) {
+    console.warn('Sandbox access repair skipped:', err && err.message);
+  }
+}
+
 // AI Gator ΓÇö Electron shell with tiled WebContentsViews.
 //
 // Why tiled (not overlapping): WebContentsView is a composited surface. When
@@ -996,6 +1017,7 @@ function startBackend() {
       ? path.join(process.resourcesPath, 'models', 'dictation')
       : path.join(__dirname, '..', 'models', 'dictation'),
     ...(app.isPackaged ? { AIGATOR_MANAGED_LOGGING: '1' } : {}),
+    AIGATOR_APP_DIR: path.dirname(process.execPath),
   };
   if (SHELL_KEY) backendEnv.AIGATOR_SHELL_KEY = SHELL_KEY;
   if (app.isPackaged && !IS_WINDOWS) {
