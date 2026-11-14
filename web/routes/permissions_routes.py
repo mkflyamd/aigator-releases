@@ -47,7 +47,7 @@ def list_permissions():
     return {
         "persistent_allowed": permissions.persistent_allowed(),
         "categories": [_category_json(c, rules) for c in categories],
-        "rules": [{"id": r["id"], "category": r["category"], "label": labels.get(r["category"], r["category"]),
+        "rules": [{"id": r["id"], "category": r["category"], "label": labels.get(r["category"], f'{r["category"]} (obsolete)'),
                    "subject": r["subject"], "created": r["created"]} for r in rules],
     }
 

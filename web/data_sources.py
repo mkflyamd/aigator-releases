@@ -115,10 +115,23 @@ _CARD_URL_MAX = 200
 _STAYS_ALLOWED = "This stays allowed until you close this tab."
 
 
+_CARD_VALUE_MAX = 1000
+_CONTROL_CHARS = re.compile(
+    r"[\x00-\x08\x0b-\x1f\x7f-\x9f\u200b-\u200f\u2028\u2029\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]")
+
+
 def _call_details(inputs: dict | None) -> str:
+    """The call's arguments for the approval card, on one line. Each value is cut on its own, so a long value cannot
+    push a later argument such as the recipient out of sight."""
     if not inputs:
         return ""
-    return "\nDetails: " + json.dumps(inputs, default=str, ensure_ascii=False)
+    parts = []
+    for key, value in inputs.items():
+        text = _CONTROL_CHARS.sub(" ", json.dumps(value, default=str, ensure_ascii=False))
+        if len(text) > _CARD_VALUE_MAX:
+            text = f"{text[:_CARD_VALUE_MAX]}... ({len(text) - _CARD_VALUE_MAX} more characters not shown)"
+        parts.append(f"{json.dumps(str(key), ensure_ascii=False)}: {text}")
+    return "\nDetails: {" + ", ".join(parts) + "}"
 
 
 def prompt_for(source: Source, tool_name: str, inputs: dict | None = None) -> dict:

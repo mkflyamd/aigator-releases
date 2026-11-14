@@ -38,11 +38,11 @@ A not-reversible tool is never remembered or allowed for a tab. It does one of t
 - Draft card. The tool only prepares a draft or is refused. The draft's approval card is the per-call approval, and the access gate in front of it is the app's "Write to private" permission.
 - Asks every time. The tool acts as soon as it runs, so each call gets its own card with only Allow this time and Deny.
 
-Some tools depend on the call. Creating a calendar event or an out-of-office event with nobody to notify is a private write. Running `gh` with a read-only command is a read. Any other call to these tools is not reversible.
+Some tools depend on the call. Creating a calendar event or an out-of-office event with nobody to notify is a private write. Running `gh` with a read-only command is a read. Moving or copying a OneDrive file within one drive is a reversible shared write, and into another drive is not reversible. Creating a OneNote notebook, section or page with a `site_id` is a reversible shared write, because a team notebook is visible to others. Any other call to these tools is not reversible.
 
 ## MCP tools
 
-An MCP tool is a read only when its server declares `readOnlyHint: true`, does not declare `destructiveHint: true`, and is Atlassian's own server (`mcp.atlassian.com` over https). A hint from any other server proves nothing, so everything else from an MCP server asks every time. Tools that AI Gator parks as approval drafts (gated Google Workspace writes, unverified Jira writes) are filed under the server's "Write to private" permission, and the draft card remains the per-call approval. An MCP server can be granted read and, for drafts, save drafts. It can never be granted anything that sends or changes shared content.
+An MCP tool is a read when its server declares `readOnlyHint: true` and does not declare `destructiveHint: true`. Everything else from an MCP server asks every time. Tools that AI Gator parks as approval drafts (gated Google Workspace writes, unverified Jira writes) are filed under the server's "Write to private" permission, and the draft card remains the per-call approval. An MCP server can be granted read and, for drafts, save drafts. It can never be granted anything that sends or changes shared content.
 
 ## Button meanings
 
@@ -87,7 +87,7 @@ These always ask, with no Always allow button.
 ## Rules that apply to everything
 
 1. Check order: admin policy, then saved Always allow rule, then this-tab grant, then a card.
-2. Always allow rules never apply to background runs, which keep their existing restrictions. A saved shell set applies to scheduled runs as it did before.
+2. Always allow rules never apply to background runs, which keep their existing restrictions. A call that asks every time is refused in a background run, because nobody is there to approve it; a tool that only stages an approval draft still works. A saved shell set applies to scheduled runs as it did before.
 3. The admin setting `persistent_permissions: deny` hides Always allow everywhere and ignores saved rules. The admin setting `saved_permissions` also controls saved shell sets.
 4. A card only appears in the tab that asked. A card for another tab waits for that tab.
 5. Removing a rule in Settings takes effect on the next call, with no refresh.
@@ -139,24 +139,23 @@ The tables list every built-in tool of the connected apps. The tool names in `we
 | Action type                  | Tools                                                                                                                                                                                                                                                  |
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Read                         | `download_onedrive_file`, `get_onedrive_item`, `list_onedrive_files`, `list_sharepoint_drives`, `list_sharepoint_files`, `list_sharepoint_sites`, `read_onedrive_file`, `resolve_teams_attachment`, `search_onedrive_files`, `search_sharepoint_sites` |
-| Write to public (reversible) | `copy_onedrive_file`, `move_onedrive_file`                                                                                                                                                                                                             |
+| Write to public (reversible) | `copy_onedrive_file`, `move_onedrive_file` (within one drive; across drives not reversible, asks every time)                                                                                                                                           |
 
 ### OneNote
 
 | Action type                  | Tools                                                                                                                 |
 | ---------------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | Read                         | `find_onenote_notebook`, `list_onenote_notebooks`, `list_onenote_pages`, `list_onenote_sections`, `read_onenote_page` |
-| Write to private             | `create_onenote_notebook`, `create_onenote_page`, `create_onenote_section`, `pin_onenote_page`                        |
-| Write to public (reversible) | `update_onenote_page`                                                                                                 |
+| Write to private             | `create_onenote_notebook`, `create_onenote_page`, `create_onenote_section` (without `site_id`), `pin_onenote_page`    |
+| Write to public (reversible) | `update_onenote_page`, and the three create tools with a `site_id`                                                    |
 
 ### Jira
 
-| Action type                     | Tools                                                                                                                                                                                                                          |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Read                            | `jira_get`, `jira_get_epic_children`, `jira_get_issue`, `jira_get_issue_links`, `jira_get_project_meta`, `jira_list_fields`, `jira_list_link_types`, `jira_search`, `jira_search_user`, `jira_show_issues`, `list_jira_issues` |
-| Write to private                | `jira_open_create_form`, `jira_stage_teams_attachment`, `jira_stage_teams_image`, `jira_update_form_fields`                                                                                                                    |
-| Not reversible, draft card      | `jira_add_comment`, `jira_add_remote_link`, `jira_add_watcher`, `jira_create_issue`, `jira_mutate`, `jira_stage_attachment`, `jira_unlink_issues`                                                                              |
-| Not reversible, asks every time | `jira_link_issues`, `jira_transition`, `jira_update_issue`                                                                                                                                                                     |
+| Action type                | Tools                                                                                                                                                                                                                          |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Read                       | `jira_get`, `jira_get_epic_children`, `jira_get_issue`, `jira_get_issue_links`, `jira_get_project_meta`, `jira_list_fields`, `jira_list_link_types`, `jira_search`, `jira_search_user`, `jira_show_issues`, `list_jira_issues` |
+| Write to private           | `jira_open_create_form`, `jira_stage_teams_attachment`, `jira_stage_teams_image`, `jira_update_form_fields`                                                                                                                    |
+| Not reversible, draft card | `jira_add_comment`, `jira_add_remote_link`, `jira_add_watcher`, `jira_create_issue`, `jira_link_issues`, `jira_mutate`, `jira_stage_attachment`, `jira_transition`, `jira_unlink_issues`, `jira_update_issue`                  |
 
 ### Confluence
 

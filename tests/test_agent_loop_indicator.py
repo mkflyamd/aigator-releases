@@ -67,10 +67,10 @@ def test_draft_event_lists_the_sources_read_earlier_in_the_turn(monkeypatch):
     import shared
 
     monkeypatch.setitem(shared.SKILL_TOOLS_MAP, "jira", ["jira_get_issue"])
-    monkeypatch.setitem(shared.SKILL_TOOLS_MAP, "slack", ["slack_draft"])
+    monkeypatch.setitem(shared.SKILL_TOOLS_MAP, "slack", ["slack_send_message"])
 
     async def fake_execute(name, inputs, **kw):
-        if name == "slack_draft":
+        if name == "slack_send_message":
             return {"_draft": "slack-post", "data": {"draft_id": "d1"}}
         return {"result": "ok"}
 
@@ -79,7 +79,7 @@ def test_draft_event_lists_the_sources_read_earlier_in_the_turn(monkeypatch):
     async def _go():
         q = asyncio.Queue()
         await run_tool_block(SimpleNamespace(name="jira_get_issue", inputs={}, id="c1"), q)
-        await run_tool_block(SimpleNamespace(name="slack_draft", inputs={}, id="c2"), q)
+        await run_tool_block(SimpleNamespace(name="slack_send_message", inputs={}, id="c2"), q)
         return [q.get_nowait() for _ in range(q.qsize())]
 
     loop = asyncio.new_event_loop()
@@ -103,10 +103,10 @@ def _run_two_calls(monkeypatch, tmp_path, policy_text):
     monkeypatch.setattr(pol, "policy_path", lambda: policy_file)
     pol._reset_cache()
     monkeypatch.setitem(shared.SKILL_TOOLS_MAP, "jira", ["jira_get_issue"])
-    monkeypatch.setitem(shared.SKILL_TOOLS_MAP, "slack", ["slack_draft"])
+    monkeypatch.setitem(shared.SKILL_TOOLS_MAP, "slack", ["slack_send_message"])
 
     async def fake_execute(name, inputs, **kw):
-        if name == "slack_draft":
+        if name == "slack_send_message":
             from skills._drafts import create_draft
             draft_id = create_draft("slack-post", {}, {})
             return {"_draft": "slack-post", "data": {"draft_id": draft_id, "body": "This is Confidential"}}
@@ -117,7 +117,7 @@ def _run_two_calls(monkeypatch, tmp_path, policy_text):
     async def _go():
         q = asyncio.Queue()
         await run_tool_block(SimpleNamespace(name="jira_get_issue", inputs={}, id="c1"), q)
-        await run_tool_block(SimpleNamespace(name="slack_draft", inputs={}, id="c2"), q)
+        await run_tool_block(SimpleNamespace(name="slack_send_message", inputs={}, id="c2"), q)
         return [q.get_nowait() for _ in range(q.qsize())]
 
     loop = asyncio.new_event_loop()

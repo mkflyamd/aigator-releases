@@ -1016,6 +1016,20 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
                 denied = await _ask_source(tc, source, event_queue)
                 if denied is not None:
                     return denied
+        else:
+            source = data_sources.source_for_call(tc.name, tc.inputs)
+            if source is not None and source.per_call:
+                return await _early_error(
+                    tc, event_queue,
+                    {
+                        "error": "irreversible_not_allowed_unattended",
+                        "tool": tc.name,
+                        "hint": ("This change notifies other people or cannot be undone, and nobody is here to approve "
+                                 "it. Prepare a draft instead, or finish with a first line "
+                                 "'NEEDS YOUR INPUT: <what needs approval>'."),
+                    },
+                    f"{tc.name} needs a human's approval and is not allowed in an unattended run",
+                )
         if tc.name == "schedule_task":
             blocked = await _gate_schedule_task(tc, event_queue)
             if blocked is not None:

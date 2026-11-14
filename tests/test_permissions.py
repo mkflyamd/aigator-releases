@@ -242,6 +242,12 @@ def test_a_rule_for_a_disconnected_mcp_server_stays_listed(client, csrf):
     assert [r["label"] for r in body["rules"]] == ["mcp-gone (MCP server): read"]
 
 
+def test_a_rule_saved_under_the_old_category_format_is_listed_as_obsolete(client, csrf):
+    store.add("data:Outlook mail")
+    body = client.get("/api/permissions", headers=csrf).json()
+    assert [r["label"] for r in body["rules"]] == ["data:Outlook mail (obsolete)"]
+
+
 def test_high_risk_categories_are_remembered_only_from_settings():
     for category in ("browser", "schedule_task", "capability:code_runner", "capability:shell_runner"):
         assert permissions.card_options(category)["scopes"] == ["tab"]

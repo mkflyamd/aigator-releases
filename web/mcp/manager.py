@@ -340,14 +340,13 @@ def _make_classifier(orig_name: str, conn: dict, hints: dict):
     """What a call to this tool does, for the permission gate.
 
     "draft": the call is parked as an approval card, so that card is the per-call approval.
-    "read": the server declares the tool read-only and is one whose hints are trusted (Atlassian's own host).
+    "read": the server declares the tool read-only and does not declare it destructive.
     "other": anything else, which asks on every call.
     """
     def _classify(kwargs: dict) -> str:
         if _is_unverified_jira_mcp_mutation(orig_name, conn, hints) or _is_gated_tool(orig_name, kwargs or {}, conn):
             return "draft"
-        if (_is_official_atlassian_mcp(conn) and hints.get("readOnlyHint") is True
-                and hints.get("destructiveHint") is not True):
+        if hints.get("readOnlyHint") is True and hints.get("destructiveHint") is not True:
             return "read"
         return "other"
     return _classify
