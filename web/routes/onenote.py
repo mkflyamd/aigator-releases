@@ -6,6 +6,7 @@ import re
 import time
 from pathlib import Path
 from urllib.parse import quote as _url_quote
+from typing import Literal
 
 
 def _eid(v: str) -> str:
@@ -103,6 +104,13 @@ class ContextPinRequest(BaseModel):
     id: str
     label: str
     meta: dict = {}
+    context_id: str = "default"
+
+
+class ContextPinScopeRequest(BaseModel):
+    source: str
+    id: str
+    scope: Literal["global", "tab"]
     context_id: str = "default"
 
 
@@ -261,6 +269,13 @@ async def context_pin(req: ContextPinRequest):
     return result
 
 
+@router.post("/api/context/pin/scope", dependencies=[Depends(verify_csrf)])
+async def context_pin_scope(req: ContextPinScopeRequest):
+    from skills.context.state import set_pin_scope
+
+    return set_pin_scope(req.source, req.id, req.scope, req.context_id)
+
+
 @router.get("/api/context/pins")
 async def context_list_pins(context_id: str = "default"):
     from skills.context.state import get_pins
@@ -269,10 +284,15 @@ async def context_list_pins(context_id: str = "default"):
 
 
 @router.delete("/api/context/pin/{source}/{item_id:path}", dependencies=[Depends(verify_csrf)])
-async def context_unpin(source: str, item_id: str, context_id: str = "default"):
+async def context_unpin(
+    source: str,
+    item_id: str,
+    context_id: str = "default",
+    scope: Literal["tab", "global"] = "tab",
+):
     from skills.context.state import remove_pin
 
-    result = remove_pin(source, item_id, context_id)
+    result = remove_pin(source, item_id, context_id, scope)
     # Sync legacy state
     if source == "onenote":
         from skills.onenote.state import pinned_onenote_pages
@@ -294,7 +314,7 @@ async def context_clone_pins(req: dict = Body(...)):
     target_ctx = req.get("to_context_id")
     if not target_ctx:
         return {"ok": False, "error": "to_context_id is required"}
-    pins = get_pins(source_ctx)
+    pins = get_pins(source_ctx, include_global=False)
     for p in pins:
         set_pin(p["source"], p["id"], p["label"], p.get("meta", {}), target_ctx)
     return {"ok": True, "cloned": len(pins)}
