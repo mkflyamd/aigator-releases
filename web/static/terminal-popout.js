@@ -81,6 +81,11 @@
         if (typeof msg.seq === 'number') seq = msg.seq;
         attempt = 0;
         term.write(msg.data);
+      } else if (msg.type === 'truncated') {
+        term.reset();
+        const { cols, rows } = term;
+        send({ type: 'resize', cols: Math.max(cols - 1, 2), rows });
+        send({ type: 'resize', cols, rows });
       } else if (msg.type === 'exit') {
         ended = true;
         term.write('\r\n\x1b[33m[' + (msg.data || 'Session ended') + ']\x1b[0m\r\n');

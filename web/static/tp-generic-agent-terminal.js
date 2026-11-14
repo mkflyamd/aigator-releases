@@ -1130,6 +1130,17 @@ function _genAgentConnect(sess, retryDelay) {
       } else {
         sess.term && sess.term.write(msg.data);
       }
+    } else if (msg.type === 'truncated') {
+      // The replay starts mid-stream (the buffer dropped older output), so what
+      // follows can open inside an escape sequence. Clear the screen and nudge
+      // the size so the TUI repaints itself in full.
+      if (sess.term) {
+        sess.term.reset();
+        const { cols, rows } = sess.term;
+        const resize = (c) => sess.ws.send(JSON.stringify({ type: 'resize', cols: c, rows }));
+        resize(Math.max(cols - 1, 2));
+        resize(cols);
+      }
     } else if (msg.type === 'notready') {
       // Transient: PTY not spawned yet, or reaped while we held its id. Do NOT
       // set _dead — onclose then runs the normal backoff reconnect. After a few

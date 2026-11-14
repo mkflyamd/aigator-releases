@@ -53,3 +53,12 @@ def test_popped_out_tab_gives_up_the_pty_and_takes_it_back_when_the_window_close
     assert "popout.destroy()" in main
     # Returning joins at the live end (seq=-1) instead of replaying stale output.
     assert "sess._outputSeq = -1" in tab
+
+
+def test_both_clients_repaint_when_the_server_reports_a_truncated_replay():
+    for name in ("tp-generic-agent-terminal.js", "terminal-popout.js"):
+        js = _read("web", "static", name)
+        assert "msg.type === 'truncated'" in js, name
+        branch = js.split("msg.type === 'truncated'", 1)[1].split("msg.type ===", 1)[0]
+        assert ".reset()" in branch, name
+        assert "cols - 1" in branch and "type: 'resize'" in branch, name

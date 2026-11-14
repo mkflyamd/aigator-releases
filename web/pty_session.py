@@ -28,6 +28,8 @@ class PtySession:
         # sessions start "recently seen" so the reaper's normal last_activity
         # grace covers the pre-connect window.
         self.ws_clients = 0
+        # The viewer whose window size the PTY follows: the last one to attach or type.
+        self.size_owner = None
         self.ws_disconnected_at = time.time()
         self._max_chunks = max_chunks
         # Positions are absolute character offsets, not chunk indexes, so a

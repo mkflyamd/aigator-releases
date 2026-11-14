@@ -261,6 +261,7 @@ async def agent_terminal_ws(ws: WebSocket, session_id: str, seq: int = 0):
     # is_pty_viewed check. Decremented + timestamped in the finally below so a
     # closed tab stops protecting the server once the grace window lapses.
     entry.ws_clients += 1
+    entry.size_owner = ws
 
     try:
         from skills.code_agent.projects import set_active_pty_session
@@ -281,6 +282,14 @@ async def agent_terminal_ws(ws: WebSocket, session_id: str, seq: int = 0):
             seq = end
         else:
             seq = start_seq if start_seq <= end else 0
+        # The replay begins mid-stream when the buffer has already dropped what
+        # this client would have seen next; tell it so it can repaint.
+        if seq < entry.first_offset:
+            try:
+                await ws.send_text(json.dumps({"type": "truncated"}))
+            except Exception:
+                entry.unsubscribe(wake)
+                return
         try:
             while not stop.is_set():
                 wake.clear()
@@ -326,11 +335,13 @@ async def agent_terminal_ws(ws: WebSocket, session_id: str, seq: int = 0):
             if mtype == "input":
                 data = msg.get("data", "")
                 if data:
+                    entry.size_owner = ws
                     try:
                         entry.write(data)
                     except Exception:
                         break
-            elif mtype == "resize":
+            elif mtype == "resize" and entry.size_owner in (None, ws):
+                entry.size_owner = ws
                 try:
                     entry.resize(int(msg.get("cols", 80)), int(msg.get("rows", 24)))
                 except Exception:
@@ -342,6 +353,8 @@ async def agent_terminal_ws(ws: WebSocket, session_id: str, seq: int = 0):
     finally:
         stop.set()
         pump_task.cancel()
+        if entry.size_owner is ws:
+            entry.size_owner = None
         # This viewer is gone; record when so is_pty_viewed's grace window starts.
         # The session (and its reader) keeps running; only the viewer count
         # drops. Guard against a popped entry (close raced the disconnect).

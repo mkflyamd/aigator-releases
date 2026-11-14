@@ -199,6 +199,84 @@ def test_ws_with_negative_seq_starts_at_the_live_end_without_replay(monkeypatch)
         pty.end()
 
 
+def test_ws_flags_a_fresh_attach_whose_replay_starts_mid_stream(monkeypatch):
+    pty = _FakePty()
+    session = PtySession(pty, max_chunks=2)
+    terminal._pty_sessions["sess-trim"] = session
+    try:
+        for chunk in ("aaaa", "bb", "cccccc"):
+            pty.feed(chunk)
+        assert _wait(lambda: session.read_from(0)[1] == 12)
+        client = _client(monkeypatch)
+        with client.websocket_connect("/api/terminal/agent?session_id=sess-trim") as ws:
+            assert json.loads(ws.receive_text()) == {"type": "truncated"}
+            assert json.loads(ws.receive_text()) == {
+                "type": "output",
+                "data": "bbcccccc",
+                "seq": 12,
+            }
+        # a client whose last seen offset was trimmed away also lost output
+        with client.websocket_connect(
+            "/api/terminal/agent?session_id=sess-trim&seq=2"
+        ) as ws:
+            assert json.loads(ws.receive_text()) == {"type": "truncated"}
+        # a client that is still inside the window gets a clean resume
+        with client.websocket_connect(
+            "/api/terminal/agent?session_id=sess-trim&seq=6"
+        ) as ws:
+            assert json.loads(ws.receive_text())["type"] == "output"
+    finally:
+        terminal._pty_sessions.pop("sess-trim", None)
+        pty.end()
+
+
+def test_ws_does_not_flag_an_untrimmed_or_live_attach(monkeypatch):
+    pty = _FakePty()
+    session = PtySession(pty, max_chunks=2)
+    terminal._pty_sessions["sess-notrim"] = session
+    try:
+        for chunk in ("aaaa", "bb", "cccccc"):
+            pty.feed(chunk)
+        assert _wait(lambda: session.read_from(0)[1] == 12)
+        with _client(monkeypatch).websocket_connect(
+            "/api/terminal/agent?session_id=sess-notrim&seq=-1"
+        ) as ws:
+            pty.feed("x")
+            assert json.loads(ws.receive_text())["type"] == "output"
+    finally:
+        terminal._pty_sessions.pop("sess-notrim", None)
+        pty.end()
+
+
+def test_only_the_viewer_that_last_attached_or_typed_resizes_the_pty(monkeypatch):
+    pty = _FakePty()
+    session = PtySession(pty)
+    terminal._pty_sessions["sess-owner"] = session
+    try:
+        client = _client(monkeypatch)
+        with client.websocket_connect(
+            "/api/terminal/agent?session_id=sess-owner"
+        ) as first:
+            first.send_text(json.dumps({"type": "resize", "cols": 100, "rows": 30}))
+            assert _wait(lambda: pty.size == (100, 30))
+            with client.websocket_connect(
+                "/api/terminal/agent?session_id=sess-owner"
+            ) as second:
+                second.send_text(json.dumps({"type": "resize", "cols": 60, "rows": 20}))
+                assert _wait(lambda: pty.size == (60, 20))
+                # the earlier viewer is no longer the size owner
+                first.send_text(json.dumps({"type": "resize", "cols": 90, "rows": 25}))
+                first.send_text(json.dumps({"type": "input", "data": "x"}))
+                assert _wait(lambda: pty.written == ["x"])
+                assert pty.size == (60, 20)
+                # typing takes ownership back
+                first.send_text(json.dumps({"type": "resize", "cols": 90, "rows": 25}))
+                assert _wait(lambda: pty.size == (90, 25))
+    finally:
+        terminal._pty_sessions.pop("sess-owner", None)
+        pty.end()
+
+
 def test_ws_sends_exit_when_the_process_ends_and_forwards_input(monkeypatch):
     pty = _FakePty()
     session = PtySession(pty)
