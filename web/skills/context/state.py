@@ -7,6 +7,8 @@ from pathlib import Path
 
 _PINS_FILE = Path.home() / ".config" / "gator" / "pinned_contexts.json"
 
+GLOBAL_CONTEXT_ID = "__global__"
+
 
 def _load() -> dict[str, dict[str, dict]]:
     try:
@@ -31,8 +33,13 @@ def _save():
 pinned_contexts: dict[str, dict[str, dict]] = _load()
 
 
-def get_pins(context_id: str = "default") -> list[dict]:
-    return list(pinned_contexts.get(context_id, {}).values())
+def get_pins(context_id: str = "default", include_global: bool = True) -> list[dict]:
+    tab_entries = pinned_contexts.get(context_id, {})
+    global_entries = pinned_contexts.get(GLOBAL_CONTEXT_ID, {})
+    if not include_global or context_id == GLOBAL_CONTEXT_ID or not global_entries:
+        return list(tab_entries.values())
+    tab_only = [e for k, e in tab_entries.items() if k not in global_entries]
+    return [{**e, "scope": "global"} for e in global_entries.values()] + tab_only
 
 
 def find_slack_channel_for_ts(message_ts: str) -> str:
@@ -77,9 +84,29 @@ def set_pin(
     }
 
 
-def remove_pin(source: str, item_id: str, context_id: str = "default") -> dict:
+def set_pin_scope(
+    source: str, item_id: str, scope: str, context_id: str = "default"
+) -> dict:
     key = f"{source}::{item_id}"
-    removed = pinned_contexts.get(context_id, {}).pop(key, None)
+    if scope == "global":
+        src_id, dst_id = context_id, GLOBAL_CONTEXT_ID
+    else:
+        src_id, dst_id = GLOBAL_CONTEXT_ID, context_id
+    entry = pinned_contexts.get(src_id, {}).pop(key, None)
+    if entry is not None:
+        pinned_contexts.setdefault(dst_id, {})[key] = entry
+    moved = key in pinned_contexts.get(dst_id, {})
+    if moved:
+        _save()
+    return {"moved": moved, "scope": scope, "source": source, "id": item_id}
+
+
+def remove_pin(
+    source: str, item_id: str, context_id: str = "default", scope: str = "tab"
+) -> dict:
+    key = f"{source}::{item_id}"
+    bucket = GLOBAL_CONTEXT_ID if scope == "global" else context_id
+    removed = pinned_contexts.get(bucket, {}).pop(key, None)
     _save()
     return {"unpinned": bool(removed), "source": source, "id": item_id}
 
