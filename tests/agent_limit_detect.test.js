@@ -56,4 +56,17 @@ assert(d.detect('claude', ESC + '[31mClaude usage limit reached' + ESC + '[0m'))
   d.feed(later, '429 Too Many Requests', () => (offers += 1), 10000 + 61000);
   assert.strictEqual(offers, 1);
 }
+
+// feed: text shown inside the handoff window cannot trigger an offer after the window
+{
+  const sess = { agent: 'crush', _handedOffAt: 10000 };
+  let offers = 0;
+  const onLimit = () => (offers += 1);
+  d.feed(sess, '429 Too Many Requests', onLimit, 10000 + 1000);
+  assert.strictEqual(offers, 0);
+  d.feed(sess, '.', onLimit, 10000 + 70000);
+  assert.strictEqual(offers, 0, 'stale text from the window must not be offered later');
+  d.feed(sess, '429 Too Many Requests', onLimit, 10000 + 71000);
+  assert.strictEqual(offers, 1);
+}
 console.log('agent_limit_detect ok');

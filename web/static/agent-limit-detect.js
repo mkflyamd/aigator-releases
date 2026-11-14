@@ -55,7 +55,10 @@
       return false;
     }
     if (!hit) return false;
-    if (sess._handedOffAt && t - sess._handedOffAt < SUPPRESS_AFTER_HANDOFF_MS) return false;
+    if (sess._handedOffAt && t - sess._handedOffAt < SUPPRESS_AFTER_HANDOFF_MS) {
+      sess._limitTail = '';
+      return false;
+    }
     sess._limitOffered = true;
     sess._limitSince = 0;
     onLimit(sess);
