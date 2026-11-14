@@ -11,10 +11,62 @@ const ESC = String.fromCharCode(27);
   assert(!/[\r\n]$/.test(out));
 }
 
+// bracketed paste: ESC, C0 controls (except newline and tab), DEL and C1 are all stripped
+{
+  const C1_CSI = String.fromCharCode(0x9b);
+  const hostile =
+    'a' + String.fromCharCode(0, 1, 7, 8, 11, 12, 14, 26, 27, 31, 127, 0x80, 0x9b, 0x9f) + 'b';
+  assert.strictEqual(h.bracketedPaste(hostile), ESC + '[200~ab' + ESC + '[201~');
+  assert.strictEqual(
+    h.bracketedPaste('x\ty\nz' + C1_CSI + '201~'),
+    ESC + '[200~x\ty\nz201~' + ESC + '[201~',
+    'newline and tab survive, a one-character CSI does not',
+  );
+  assert.strictEqual(h.bracketedPaste('x\r\ny\rz'), ESC + '[200~x\ny\nz' + ESC + '[201~');
+}
+
+// bracketed-paste mode tracking: 2004h on, 2004l off, sequences split across chunks
+{
+  const on = ESC + '[?2004h';
+  const off = ESC + '[?2004l';
+  let s = h.trackBracketedPaste(null, 'banner');
+  assert.strictEqual(s.enabled, false);
+  s = h.trackBracketedPaste(s, 'x' + on + 'y');
+  assert.strictEqual(s.enabled, true);
+  s = h.trackBracketedPaste(s, 'plain output');
+  assert.strictEqual(s.enabled, true, 'stays on until it is turned off');
+  s = h.trackBracketedPaste(s, off);
+  assert.strictEqual(s.enabled, false);
+  s = h.trackBracketedPaste(s, on + 'more' + off + on);
+  assert.strictEqual(s.enabled, true, 'the last toggle in a chunk wins');
+  // split at every possible boundary
+  for (let i = 1; i < on.length; i += 1) {
+    let t = h.trackBracketedPaste(null, 'prompt' + on.slice(0, i));
+    assert.strictEqual(t.enabled, false);
+    t = h.trackBracketedPaste(t, on.slice(i));
+    assert.strictEqual(t.enabled, true, 'split at ' + i);
+    let u = h.trackBracketedPaste(t, off.slice(0, i));
+    u = h.trackBracketedPaste(u, off.slice(i));
+    assert.strictEqual(u.enabled, false, 'off split at ' + i);
+  }
+  assert(h.trackBracketedPaste(null, 'x'.repeat(5000)).tail.length <= 8, 'tail stays small');
+}
+
+// start-in-flight accessor: reads the terminal module without touching its internals
+{
+  delete globalThis._genAgentStartInFlight;
+  assert.strictEqual(h.startInFlight('tab'), false, 'no terminal module means not busy');
+  globalThis._genAgentStartInFlight = (tabId) => tabId === 'busy';
+  assert.strictEqual(h.startInFlight('busy'), true);
+  assert.strictEqual(h.startInFlight('idle'), false);
+  delete globalThis._genAgentStartInFlight;
+}
+
 // readiness: output seen, quiet for 800 ms, painted rows; OpenCode also needs a TUI frame
 {
   const base = {
     agent: 'claude',
+    bracketedPaste: true,
     outputChars: 500,
     lastOutputAt: 1000,
     paintedRows: 5,
@@ -22,6 +74,12 @@ const ESC = String.fromCharCode(27);
   };
   assert.strictEqual(h.isInputReady(base, 1799), false);
   assert.strictEqual(h.isInputReady(base, 1800), true);
+  assert.strictEqual(
+    h.isInputReady({ ...base, bracketedPaste: false }, 5000),
+    false,
+    'a target that has not enabled bracketed paste would submit the prompt on its first newline',
+  );
+  assert.strictEqual(h.isInputReady({ ...base, bracketedPaste: undefined }, 5000), false);
   assert.strictEqual(h.isInputReady({ ...base, outputChars: 0 }, 5000), false);
   assert.strictEqual(h.isInputReady({ ...base, paintedRows: 1 }, 5000), false);
   assert.strictEqual(h.isInputReady({ ...base, agent: 'opencode-bare' }, 5000), false);

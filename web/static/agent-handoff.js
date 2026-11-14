@@ -11,12 +11,38 @@
   const READY_TIMEOUT_MS = 20000;
   const WS_OPEN = 1;
 
+  // Everything a terminal could act on is dropped: ESC (so the text cannot end
+  // the paste early), the other C0 controls except newline and tab, DEL, and the
+  // C1 range (U+009B is a one-character CSI). A drafted prompt is never submitted.
+  const CONTROL_CHARS = new RegExp('[\\u0000-\\u0008\\u000b-\\u001f\\u007f-\\u009f]', 'g');
+
   function bracketedPaste(text) {
-    const clean = String(text).split(ESC).join('').replace(/\r\n?/g, '\n');
+    const clean = String(text).replace(/\r\n?/g, '\n').replace(CONTROL_CHARS, '');
     return PASTE_START + clean + PASTE_END;
   }
 
+  const BRACKETED_ON = ESC + '[?2004h';
+  const BRACKETED_OFF = ESC + '[?2004l';
+  const BRACKETED_TAIL_CHARS = 8;
+
+  // Tracks whether the program in the terminal has turned bracketed paste on.
+  // `prev` is { enabled, tail } from the last chunk; the tail lets a sequence
+  // split across two chunks be recognised.
+  function trackBracketedPaste(prev, chunk) {
+    const before = prev || { enabled: false, tail: '' };
+    const text = before.tail + String(chunk);
+    const on = text.lastIndexOf(BRACKETED_ON);
+    const off = text.lastIndexOf(BRACKETED_OFF);
+    return {
+      enabled: on === -1 && off === -1 ? !!before.enabled : on > off,
+      tail: text.slice(-BRACKETED_TAIL_CHARS),
+    };
+  }
+
+  // Without bracketed paste the target would read the prompt's newlines as Enter
+  // and submit it, so a target that has not enabled it is never ready.
   function isInputReady(s, now) {
+    if (!s.bracketedPaste) return false;
     if (!s.outputChars || !s.lastOutputAt) return false;
     if (now - s.lastOutputAt < READY_QUIET_MS) return false;
     if (s.paintedRows < 2) return false;
@@ -67,6 +93,7 @@
     return isInputReady(
       {
         agent: sess.agent,
+        bracketedPaste: !!sess._bracketedPaste,
         outputChars: sess._outputChars,
         lastOutputAt: sess._lastOutputAt,
         paintedRows: _genAgentPaintedRowCount(sess),
@@ -159,6 +186,11 @@
   let dialogSeq = 0;
   let dialogBusy = false;
 
+  // Whether the terminal module is still starting an agent for this tab.
+  function startInFlight(tabId) {
+    return typeof _genAgentStartInFlight === 'function' && !!_genAgentStartInFlight(tabId);
+  }
+
   function renderDialog(prep, sess, state, tabId, excludeSource) {
     dialogSeq += 1;
     const radioName = 'agent-handoff-target-' + dialogSeq;
@@ -240,8 +272,14 @@
     });
     go.addEventListener('click', () => {
       const target = selected;
-      close();
       if (!target) return;
+      // _genAgentStart silently returns while another start is in flight, so
+      // check first and keep the dialog open rather than closing it on a no-op.
+      if (startInFlight(tabId)) {
+        showToast('Another agent is still starting. Try again in a moment.', 'warn');
+        return;
+      }
+      close();
       _genAgentStart(tabId, target, state.projectId, state.repoPath, {
         forceNew: true,
         handoffId: prep.handoff_id,
@@ -280,11 +318,13 @@
           return;
         }
         prep = body;
+        // A malformed 200 (missing fields) throws here, so it gets the same toast.
+        renderDialog(prep, opts.sess, state, opts.tabId, !!opts.excludeSource);
       } catch (_) {
+        document.querySelectorAll('.agent-handoff-overlay').forEach((el) => el.remove());
         showToast('Could not prepare the handoff.', 'warn');
         return;
       }
-      renderDialog(prep, opts.sess, state, opts.tabId, !!opts.excludeSource);
     } finally {
       dialogBusy = false;
     }
@@ -310,6 +350,8 @@
 
   const api = {
     bracketedPaste,
+    trackBracketedPaste,
+    startInFlight,
     isInputReady,
     visibleTargets,
     targetWarning,

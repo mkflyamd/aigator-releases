@@ -837,6 +837,12 @@ function _genAgentAttachTerminal(tabId, ptySessionId, agent) {
 
 const _GENAGENT_OPENCODE_PAINT_STABLE_MS = 600;
 
+// Read-only view of "a start is in flight for this tab", for agent-handoff.js.
+function _genAgentStartInFlight(tabId) {
+  const state = _genAgentTerminals[_caSessionKey(tabId)];
+  return !!(state && state._starting);
+}
+
 function _genAgentPaintedRowCount(sess) {
   const term = sess && sess.term;
   const buffer = term && term.buffer && term.buffer.active;
@@ -1134,6 +1140,16 @@ function _genAgentConnect(sess, retryDelay) {
       if (typeof msg.seq === 'number') sess._outputSeq = msg.seq;
       sess._outputChars = (sess._outputChars || 0) + String(msg.data || '').length;
       sess._lastOutputAt = Date.now();
+      if (window.agentHandoff) {
+        // Whether the agent has switched bracketed paste on (ESC[?2004h); the
+        // handoff prompt is only drafted into a terminal that has.
+        const paste = agentHandoff.trackBracketedPaste(
+          { enabled: sess._bracketedPaste, tail: sess._bracketedPasteTail || '' },
+          msg.data,
+        );
+        sess._bracketedPaste = paste.enabled;
+        sess._bracketedPasteTail = paste.tail;
+      }
       if (window.agentLimitDetect && window.agentHandoff) {
         window.agentLimitDetect.feed(sess, msg.data, (s) => agentHandoff.offerOnLimit(s));
       }
