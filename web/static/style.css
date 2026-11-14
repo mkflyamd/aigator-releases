@@ -1315,6 +1315,22 @@ body.tab-fullscreen .tab-expand-btn {
   color: var(--danger);
   background: rgba(239, 68, 68, 0.1);
 }
+.pin-card-scope:hover {
+  color: var(--accent);
+  background: rgba(96, 165, 250, 0.12);
+}
+.pin-card-scope.is-global {
+  color: var(--accent);
+  background: rgba(74, 222, 128, 0.15);
+}
+.pin-group-title {
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  padding: 0.35rem 0.6rem 0.2rem;
+}
 .pin-popover-empty {
   padding: 1.4rem;
   text-align: center;
