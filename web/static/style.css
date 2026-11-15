@@ -21662,7 +21662,42 @@ body.tab-fullscreen {
 .ah-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 4px;
+}
+.ah-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  font: inherit;
+  font-size: 15px;
+  line-height: 1;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-sub);
+  cursor: pointer;
+}
+.ah-icon-btn svg {
+  width: 16px;
+  height: 16px;
+}
+.ah-icon-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.ah-icon-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.ah-icon-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+  background: transparent;
+  color: var(--text-sub);
 }
 .ah-btn {
   font: inherit;
@@ -21681,11 +21716,6 @@ body.tab-fullscreen {
 .ah-btn:focus-visible {
   outline: 1px solid var(--accent);
   outline-offset: 1px;
-}
-.ah-btn-primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--surface);
 }
 /* Light theme: the accent and warn tokens are only 2.7-3.3:1 as small text on white or the
    row highlight, so the history panel darkens them. */

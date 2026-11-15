@@ -374,14 +374,49 @@
     if (row.id) loadPreview(row);
   }
 
+  // The terminal prompt icon from the terminal tab icon set, built with createElementNS.
+  function terminalIcon() {
+    const NS = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('fill', 'none');
+    svg.setAttribute('stroke', 'currentColor');
+    svg.setAttribute('stroke-width', '2');
+    svg.setAttribute('stroke-linecap', 'round');
+    svg.setAttribute('stroke-linejoin', 'round');
+    svg.setAttribute('aria-hidden', 'true');
+    ['m5 8 5 4-5 4', 'M13 17h6'].forEach((d) => {
+      const path = document.createElementNS(NS, 'path');
+      path.setAttribute('d', d);
+      svg.appendChild(path);
+    });
+    return svg;
+  }
+
+  // A live row's terminal is the one on screen, so Go to terminal has nothing to do.
+  function rowViewing(row) {
+    if (!row.ptySessionId) return false;
+    return isViewing(liveSessions().find((t) => t.ptySessionId === row.ptySessionId));
+  }
+
   function actionButton(row, action) {
     const spec = {
-      go: ['Go to terminal', true, goToTerminal],
-      resume: ['Resume', true, resume],
-      handoff: ['Continue in another agent…', false, handoff],
+      go: [terminalIcon, 'Go to terminal', goToTerminal],
+      resume: ['▶', 'Resume', resume],
+      handoff: ['↪', 'Hand off to another agent', handoff],
     }[action];
-    const btn = el('button', 'ah-btn' + (spec[1] ? ' ah-btn-primary' : ''), spec[0]);
+    const btn = el('button', 'ah-icon-btn');
     btn.type = 'button';
+    btn.dataset.action = action;
+    if (typeof spec[0] === 'function') btn.appendChild(spec[0]());
+    else btn.textContent = spec[0];
+    btn.title = spec[1];
+    btn.setAttribute('aria-label', spec[1]);
+    if (action === 'go' && rowViewing(row)) {
+      btn.disabled = true;
+      btn.title = 'Already open';
+      btn.setAttribute('aria-label', 'Go to terminal (already open)');
+    }
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
       spec[2](row);
@@ -483,7 +518,11 @@
       target.button >= 0
         ? item.querySelectorAll('button')[target.button]
         : item.querySelector('.ah-row');
-    if (next) next.focus();
+    if (next && !next.disabled) next.focus();
+    else {
+      const row = item.querySelector('.ah-row');
+      if (row) row.focus();
+    }
   }
 
   function render() {
@@ -503,7 +542,14 @@
       context().project && context().project.name,
       groups.map((g) => [
         g.key,
-        g.rows.map((r) => [r.key, r.state, r.title, r.ptySessionId, metaLine(r, now, agentName)]),
+        g.rows.map((r) => [
+          r.key,
+          r.state,
+          r.title,
+          r.ptySessionId,
+          metaLine(r, now, agentName),
+          rowViewing(r),
+        ]),
       ]),
     ]);
     if (sig === ui.sig && list.childNodes.length) return;

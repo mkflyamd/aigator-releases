@@ -78,3 +78,42 @@ def test_rebuilding_the_list_keeps_keyboard_focus_on_the_same_row_and_button():
     assert "item.dataset.key = row.key;" in HISTORY
     assert "const focused = focusedTarget(list);" in HISTORY
     assert "restoreFocus(list, focused);" in HISTORY
+
+
+def test_row_actions_are_icon_only_buttons_with_tooltips_and_labels():
+    for label in ("Resume", "Hand off to another agent", "Go to terminal"):
+        assert f"'{label}'" in HISTORY
+    assert "btn.title = " in HISTORY
+    assert "btn.setAttribute('aria-label', " in HISTORY
+    assert "resume: ['▶'," in HISTORY
+    assert "handoff: ['↪'," in HISTORY
+    assert "createElementNS" in HISTORY
+    assert "Continue in another agent" not in HISTORY
+
+
+def test_go_to_terminal_is_disabled_while_that_terminal_is_on_screen():
+    assert "btn.disabled = true;" in HISTORY
+    assert "'Already open'" in HISTORY
+    assert "'Go to terminal (already open)'" in HISTORY
+    assert "isViewing(" in HISTORY.split("function rowViewing")[1].split("function ")[0]
+    # the state is part of the render signature so the 2s tick refreshes it
+    sig = HISTORY.split("const sig = JSON.stringify([")[1].split("if (sig === ui.sig")[0]
+    assert "rowViewing(r)" in sig
+
+
+def test_restoring_focus_skips_a_button_that_became_disabled():
+    assert "!next.disabled" in HISTORY.split("function restoreFocus")[1].split("function ")[0]
+
+
+def test_history_has_no_solid_primary_button_variant():
+    assert "ah-btn-primary" not in HISTORY
+    assert "ah-btn-primary" not in CSS
+
+
+def test_icon_buttons_are_ghost_buttons_and_retry_keeps_a_text_button():
+    block = CSS.split("/* agent session history: start */")[1].split("/* agent session history: end */")[0]
+    assert ".ah-icon-btn" in block
+    assert ".ah-icon-btn:focus-visible" in block
+    assert ".ah-icon-btn:disabled" in block
+    assert "el('button', 'ah-btn', 'Retry')" in HISTORY
+    assert re.search(r"\.ah-btn\s*\{", block)
