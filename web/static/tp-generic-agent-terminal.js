@@ -1356,6 +1356,7 @@ function _genAgentConnect(sess, retryDelay) {
 
   sess.ws = new WebSocket(url);
   sess.ws.onopen = () => {
+    _ocNoteEcho(sess);
     _genAgentClearReconnecting(sess);
     if (wasRetrying && sess._retryAttempt) {
       // Don't write [reconnected] text into the terminal - for TUI apps like
@@ -1392,8 +1393,10 @@ function _genAgentConnect(sess, retryDelay) {
       // this terminal already shows instead of replaying the whole buffer.
       if (typeof msg.seq === 'number') sess._outputSeq = msg.seq;
       sess._outputChars = (sess._outputChars || 0) + String(msg.data || '').length;
-      sess._lastOutputAt = Date.now();
-      if (window.agentHistory && agentHistory.isViewing(sess)) sess._viewedAt = sess._lastOutputAt;
+      if (Date.now() >= (sess._quietUntil || 0)) {
+        sess._lastOutputAt = Date.now();
+        if (window.agentHistory && agentHistory.isViewing(sess)) sess._viewedAt = sess._lastOutputAt;
+      }
       if (window.agentHandoff) {
         // Whether the agent has switched bracketed paste on (ESC[?2004h); the
         // handoff prompt is only drafted into a terminal that has.

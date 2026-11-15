@@ -3,7 +3,7 @@
 (function (root) {
   'use strict';
 
-  const WORKING_MS = 3000;
+  const WORKING_MS = 12000;
   const GROUPS = [
     { key: 'needs_you', title: 'Needs you' },
     { key: 'working', title: 'Working' },

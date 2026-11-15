@@ -32,28 +32,33 @@ const at = (m, d, hh, mm) => new Date(2026, m, d, hh, mm).getTime() / 1000;
 
 // live state: working, needs you, done
 {
-  assert.strictEqual(h.WORKING_MS, 3000);
+  assert.strictEqual(h.WORKING_MS, 12000);
   assert.strictEqual(h.liveState({}, NOW), 'done', 'no output yet');
   assert.strictEqual(h.liveState({ _lastOutputAt: NOW - 1000, _viewedAt: 0 }, NOW), 'working');
   assert.strictEqual(h.liveState({ _lastOutputAt: NOW - 1000, _viewedAt: NOW }, NOW), 'working');
   assert.strictEqual(
-    h.liveState({ _lastOutputAt: NOW - 5000, _viewedAt: NOW - 9000 }, NOW),
+    h.liveState({ _lastOutputAt: NOW - 8000, _viewedAt: 0 }, NOW),
+    'working',
+    'a pause shorter than the hold stays Working',
+  );
+  assert.strictEqual(
+    h.liveState({ _lastOutputAt: NOW - 20000, _viewedAt: NOW - 30000 }, NOW),
     'needs_you',
   );
-  assert.strictEqual(h.liveState({ _lastOutputAt: NOW - 5000 }, NOW), 'needs_you', 'never viewed');
+  assert.strictEqual(h.liveState({ _lastOutputAt: NOW - 20000 }, NOW), 'needs_you', 'never viewed');
   assert.strictEqual(
-    h.liveState({ _lastOutputAt: NOW - 5000, _viewedAt: NOW - 4000 }, NOW),
+    h.liveState({ _lastOutputAt: NOW - 20000, _viewedAt: NOW - 15000 }, NOW),
     'done',
   );
   assert.strictEqual(
-    h.liveState({ _lastOutputAt: NOW - 5000, _viewedAt: NOW - 5000 }, NOW),
+    h.liveState({ _lastOutputAt: NOW - 20000, _viewedAt: NOW - 20000 }, NOW),
     'done',
   );
 }
 
 // needsYou looks only at live terminals
 {
-  const quiet = { _lastOutputAt: NOW - 5000, _viewedAt: 0 };
+  const quiet = { _lastOutputAt: NOW - 20000, _viewedAt: 0 };
   const busy = { _lastOutputAt: NOW - 500, _viewedAt: 0 };
   assert.strictEqual(h.needsYou([busy, quiet], NOW), true);
   assert.strictEqual(h.needsYou([busy], NOW), false);
@@ -93,7 +98,7 @@ const term = (pty, agent, out, viewed) => ({
     }),
   ];
   const terminals = [
-    term('p3', 'claude', NOW - 9000, NOW - 20000),
+    term('p3', 'claude', NOW - 15000, NOW - 30000),
     term('p9', 'codex', NOW - 1000, 0),
     term('p10', 'terminal', NOW - 1000, 0),
   ];
@@ -175,7 +180,7 @@ const term = (pty, agent, out, viewed) => ({
     rec('c', 'claude', 'Old spike', at(10, 1, 10, 0), { branch: 'spike' }),
     rec('d', 'claude', 'Yesterday task', at(10, 14, 10, 0)),
   ];
-  const rows = h.buildRows(sessions, [term('p1', 'claude', NOW - 9000, 0)], NOW);
+  const rows = h.buildRows(sessions, [term('p1', 'claude', NOW - 20000, 0)], NOW);
   const all = h.filterGroups(rows, '');
   assert.deepStrictEqual(
     all.map((g) => g.key),

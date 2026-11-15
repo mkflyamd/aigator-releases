@@ -24,6 +24,18 @@ def test_output_in_the_viewed_terminal_counts_as_seen():
     assert "if (window.agentHistory && agentHistory.isViewing(sess)) sess._viewedAt = sess._lastOutputAt;" in TERM
 
 
+def test_echo_and_repaint_output_does_not_count_as_working():
+    helpers = (STATIC / "tp-term-helpers.js").read_text(encoding="utf-8")
+    assert "if (Date.now() >= (sess._quietUntil || 0)) {" in TERM
+    assert TERM.index("if (Date.now() >= (sess._quietUntil || 0)) {") < TERM.index("sess._lastOutputAt = Date.now();")
+    on_open = TERM.index("sess.ws.onopen = () => {")
+    assert "_ocNoteEcho(sess);" in TERM[on_open : on_open + 120]
+    on_data = helpers.index("sess.term.onData((data) => {")
+    assert "_ocNoteEcho(sess);" in helpers[on_data : helpers.index("type: 'input'", on_data)]
+    resize = helpers.index("type: 'resize'")
+    assert "_ocNoteEcho(sess);" in helpers[resize - 120 : resize]
+
+
 def test_handoff_dialog_takes_a_stored_session():
     assert "opts.stored" in HANDOFF
     assert "keepStateAgent: !!state.agent" in HANDOFF
