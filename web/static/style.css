@@ -21640,6 +21640,14 @@ body.tab-fullscreen {
 .ah-item.ah-state-needs_you.is-previewed::before {
   background: var(--warn);
 }
+/* The amber row surface costs contrast: brighten the meta ink and, in light, deepen the
+   warn ink so meta, pill and note stay at least 4.5:1 when the row is hovered. */
+.ah-item.ah-state-needs_you .ah-meta {
+  color: color-mix(in srgb, var(--text-dim) 80%, var(--text));
+}
+[data-theme='light'] .ah-item.ah-state-needs_you {
+  --ah-warn-ink: color-mix(in srgb, var(--warn) 60%, black);
+}
 .ah-row {
   display: flex;
   align-items: center;
