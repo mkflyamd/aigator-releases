@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 import agent_handoff
+import agent_sessions
 import generic_agent
 from security import verify_csrf
 
@@ -31,6 +32,7 @@ class GenericAgentTerminalRequest(BaseModel):
     cols: int = 0  # initial terminal dimensions — sent by the frontend so the
     rows: int = 0  # PTY spawns at the right size before the TUI app paints
     handoff_id: str | None = None  # continue a prior session; always a new process
+    resume_id: str | None = None  # reopen a stored session in its own agent; always a new process
 
 
 class HandoffPrepareRequest(BaseModel):
@@ -119,6 +121,18 @@ async def generic_agent_terminal(req: GenericAgentTerminalRequest):
     if not generic_agent.is_supported(req.agent):
         raise HTTPException(status_code=400, detail=f"Unknown agent: {req.agent!r}")
 
+    resume = None
+    if req.resume_id:
+        if req.handoff_id:
+            raise HTTPException(status_code=400, detail="A session cannot be resumed and handed off at once.")
+        if req.agent not in ("claude", "codex"):
+            raise HTTPException(status_code=400, detail=f"{req.agent!r} cannot resume a session.")
+        if not agent_sessions.SESSION_ID_RE.match(req.resume_id):
+            raise HTTPException(status_code=400, detail="Invalid session id.")
+        resume = await asyncio.to_thread(agent_sessions.find_session, req.repo_path, req.agent, req.resume_id)
+        if resume is None:
+            raise HTTPException(status_code=404, detail="Session not found in this project.")
+
     handoff = None
     if req.handoff_id:
         if req.agent == generic_agent.TERMINAL_AGENT:
@@ -126,7 +140,7 @@ async def generic_agent_terminal(req: GenericAgentTerminalRequest):
         handoff = await asyncio.to_thread(agent_handoff.load_handoff, req.handoff_id)
         if handoff is None:
             raise HTTPException(status_code=404, detail="Handoff expired or not found.")
-    force_new = req.force_new or handoff is not None
+    force_new = req.force_new or handoff is not None or resume is not None
 
     if not force_new:
         existing = generic_agent.get_active_session(req.project_id, req.agent)
@@ -175,7 +189,22 @@ async def generic_agent_terminal(req: GenericAgentTerminalRequest):
             raise HTTPException(status_code=500, detail=str(exc))
     else:
         binding = generic_agent.effective_binding(req.agent)
-        command = generic_agent.build_command(req.agent, req.repo_path, binding[0] if binding else ())
+        extra = binding[0] if binding else ()
+        if resume is not None:
+            command = generic_agent.build_resume_command(
+                req.agent,
+                resume["cwd"] if resume["source"] != "windows" else req.repo_path,
+                resume["id"],
+                resume["source"],
+                extra,
+            )
+            if not command:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"This session cannot be resumed here: '{req.agent}' is not available where it was recorded.",
+                )
+        else:
+            command = generic_agent.build_command(req.agent, req.repo_path, extra)
         if not command:
             _install_hint = {
                 "codex": "npm install -g @openai/codex",
@@ -194,7 +223,10 @@ async def generic_agent_terminal(req: GenericAgentTerminalRequest):
 
     pty_session_id = generic_agent.new_session_id()
     if command:
-        command = generic_agent.pin_session(req.agent, command, pty_session_id)
+        if resume is not None:
+            command = generic_agent.pin_resume(req.agent, command, pty_session_id, resume["id"])
+        else:
+            command = generic_agent.pin_session(req.agent, command, pty_session_id)
     # Use the frontend's measured dimensions if provided (non-zero), so TUI
     # apps (Crush, Claude Code) spawn at the correct size and don't garble on
     # the late resize. Fall back to create_pty_session's defaults otherwise.
