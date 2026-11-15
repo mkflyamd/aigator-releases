@@ -4,7 +4,7 @@
 // ── State ──────────────────────────────────────────────────────────────────────
 let _caProjects = []; // [{name, repo_path, source}]
 let _caActiveProject = null; // active project name string (global to this browser tab)
-let _caLeftView = 'scm'; // 'scm' | 'explorer' — which view the left pane shows
+let _caLeftView = 'scm'; // 'scm' | 'explorer' | 'history' — which view the left pane shows
 let _caOpenDiffFile = null; // repo-relative path of the file currently open in the right pane (if a Changes diff), else null
 
 // Terminal theme: 'dark' (default), 'light', 'auto' (follows Gator UI theme).
@@ -107,6 +107,7 @@ function _initCodeAgentPane() {
     leftCol.style.display = '';
     // Render source control panel into the left column
     leftCol.innerHTML = _caSourceControlPanel();
+    if (_caLeftView !== 'scm') _caSetLeftView(_caLeftView);
   }
   const rightCol = document.getElementById('tp-right-col');
   if (rightCol) {
@@ -163,12 +164,20 @@ function _initCodeAgentPane() {
 }
 
 // ── Source Control Panel (left column) ────────────────────────────────────────
+const _CA_TAB_ICON_FILES =
+  '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
+const _CA_TAB_ICON_CHANGES =
+  '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="8" r="2.5"/><path d="M6 8.5v7"/><path d="M18 10.5c0 4-5 4-9 5"/></svg>';
+const _CA_TAB_ICON_HISTORY =
+  '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/></svg>';
+
 function _caSourceControlPanel() {
   return `
     <div class="ca-sc-panel">
       <div class="ca-sc-viewtabs">
-        <button class="ca-sc-viewtab active" id="ca-viewtab-scm"${gatorActionAttrs('_caSetLeftView', ['scm'])}>Source Control</button>
-        <button class="ca-sc-viewtab" id="ca-viewtab-explorer"${gatorActionAttrs('_caSetLeftView', ['explorer'])}>Explorer</button>
+        <button class="ca-sc-viewtab" id="ca-viewtab-explorer" title="Files" aria-label="Files"${gatorActionAttrs('_caSetLeftView', ['explorer'])}>${_CA_TAB_ICON_FILES}</button>
+        <button class="ca-sc-viewtab active" id="ca-viewtab-scm" title="Changes" aria-label="Changes"${gatorActionAttrs('_caSetLeftView', ['scm'])}>${_CA_TAB_ICON_CHANGES}</button>
+        <button class="ca-sc-viewtab" id="ca-viewtab-history" title="History" aria-label="History"${gatorActionAttrs('_caSetLeftView', ['history'])}>${_CA_TAB_ICON_HISTORY}</button>
       </div>
       <div id="ca-scm-view" class="ca-scm-view">
         <div class="ca-sc-section-wrapper">
@@ -187,26 +196,40 @@ function _caSourceControlPanel() {
           <div class="ca-sc-loading"></div>
         </div>
       </div>
+      <div id="ca-hist-view" class="ca-hist-view" style="display:none">
+        <div class="ah-search">
+          <input
+            id="ca-hist-search"
+            type="search"
+            placeholder="Search this project's sessions"
+            aria-label="Search this project's sessions"
+            autocomplete="off"
+          />
+        </div>
+        <div id="ca-hist-list" class="ah-list" role="list"></div>
+      </div>
     </div>`;
 }
 
-// ── Left pane view toggle (Source Control ↔ Explorer) ───────────────────────
+// ── Left pane view toggle (Source Control / Explorer / History) ─────────────
 function _caSetLeftView(view) {
-  const scmView = document.getElementById('ca-scm-view');
-  const feView = document.getElementById('ca-fe-view');
-  if (!scmView || !feView) return;
-  const showExplorer = view === 'explorer';
-  _caLeftView = showExplorer ? 'explorer' : 'scm';
-  scmView.style.display = showExplorer ? 'none' : '';
-  feView.style.display = showExplorer ? '' : 'none';
-  document.getElementById('ca-viewtab-scm')?.classList.toggle('active', !showExplorer);
-  document.getElementById('ca-viewtab-explorer')?.classList.toggle('active', showExplorer);
-  if (showExplorer) _caLoadFileTree('', document.getElementById('ca-fe-root'), 0);
+  const panes = { scm: 'ca-scm-view', explorer: 'ca-fe-view', history: 'ca-hist-view' };
+  if (!panes[view]) view = 'scm';
+  if (!Object.values(panes).every((id) => document.getElementById(id))) return;
+  _caLeftView = view;
+  Object.entries(panes).forEach(([name, id]) => {
+    document.getElementById(id).style.display = name === view ? '' : 'none';
+    document.getElementById('ca-viewtab-' + name)?.classList.toggle('active', name === view);
+  });
+  if (view === 'explorer') _caLoadFileTree('', document.getElementById('ca-fe-root'), 0);
+  if (view === 'history' && window.agentHistory) agentHistory.show();
 }
 
 function _caLeftViewRefresh() {
   if (_caLeftView === 'explorer') {
     _caLoadFileTree('', document.getElementById('ca-fe-root'), 0);
+  } else if (_caLeftView === 'history') {
+    if (window.agentHistory) agentHistory.refresh();
   } else {
     _caRefreshSourceControl(true);
   }

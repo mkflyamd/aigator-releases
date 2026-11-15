@@ -1,10 +1,15 @@
 """Source-string wiring checks for the agent history UI (the DOM paths need a real browser)."""
 
+import re
 from pathlib import Path
 
 STATIC = Path(__file__).resolve().parent.parent / "web" / "static"
 TERM = (STATIC / "tp-generic-agent-terminal.js").read_text(encoding="utf-8")
 HANDOFF = (STATIC / "agent-handoff.js").read_text(encoding="utf-8")
+CODE = (STATIC / "tp-code-agent.js").read_text(encoding="utf-8")
+INDEX = (STATIC / "index.html").read_text(encoding="utf-8")
+CSS = (STATIC / "style.css").read_text(encoding="utf-8")
+HISTORY = (STATIC / "agent-history.js").read_text(encoding="utf-8")
 
 
 def test_spawn_requests_carry_the_resume_id():
@@ -23,3 +28,42 @@ def test_handoff_dialog_takes_a_stored_session():
     assert "opts.stored" in HANDOFF
     assert "keepStateAgent: !!state.agent" in HANDOFF
     assert "_genAgentEnsureTermsContainer(opts.tabId)" in HANDOFF
+
+
+def test_left_panel_has_three_icon_tabs():
+    for name in ("explorer", "scm", "history"):
+        assert f'id="ca-viewtab-{name}"' in CODE
+        assert f"gatorActionAttrs('_caSetLeftView', ['{name}'])" in CODE
+    for label in ("Files", "Changes", "History"):
+        assert f'aria-label="{label}"' in CODE
+        assert f'title="{label}"' in CODE
+    assert ">Source Control</button>" not in CODE
+    assert ">Explorer</button>" not in CODE
+
+
+def test_history_pane_markup_is_in_the_left_panel():
+    for el in ('id="ca-hist-view"', 'id="ca-hist-search"', 'id="ca-hist-list"'):
+        assert el in CODE
+
+
+def test_switching_views_covers_history_and_survives_a_pane_rebuild():
+    assert "agentHistory.show()" in CODE
+    assert "agentHistory.refresh()" in CODE
+    assert "if (_caLeftView !== 'scm') _caSetLeftView(_caLeftView);" in CODE
+
+
+def test_history_script_loads_after_handoff_and_before_the_terminal_module():
+    h, a, t = (INDEX.index(n) for n in ("agent-handoff.js", "agent-history.js", "tp-generic-agent-terminal.js"))
+    assert h < a < t
+
+
+def test_history_styles_use_theme_variables_only():
+    block = CSS.split("/* agent session history: start */")[1].split("/* agent session history: end */")[0]
+    assert ".ah-row" in block and ".ca-hist-view" in block
+    assert not re.search(r"#[0-9a-fA-F]{3,8}\b|rgba?\(", block)
+
+
+def test_history_panel_never_builds_markup_from_session_text():
+    ctl = HISTORY.split("Browser panel")[1]
+    assert "innerHTML" not in ctl
+    assert "insertAdjacentHTML" not in ctl
