@@ -238,18 +238,23 @@
     function renderTargets() {
       list.textContent = '';
       const shown = visibleTargets(prep.targets, sess.agent, excludeBox.checked);
-      if (!shown.some((t) => t.agent === selected)) selected = shown.length ? shown[0].agent : null;
+      if (!shown.some((t) => t.agent === selected && t.installed !== false)) {
+        const first = shown.find((t) => t.installed !== false);
+        selected = first ? first.agent : null;
+      }
       shown.forEach((t) => {
+        const missing = t.installed === false;
         const row = h('label', 'agent-handoff-target');
         const radio = document.createElement('input');
         radio.type = 'radio';
         radio.name = radioName;
         radio.value = t.agent;
         radio.checked = t.agent === selected;
+        radio.disabled = missing;
         radio.addEventListener('change', () => (selected = t.agent));
         row.appendChild(radio);
-        row.appendChild(document.createTextNode(' ' + t.label));
-        const warning = targetWarning(t);
+        row.appendChild(document.createTextNode(' ' + t.label + (missing ? ' (not installed)' : '')));
+        const warning = missing ? null : targetWarning(t);
         if (warning) row.appendChild(h('div', 'agent-handoff-warning', warning));
         list.appendChild(row);
       });

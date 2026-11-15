@@ -158,3 +158,48 @@ def test_launch_logs_target_and_gateway_flag(handoff_env, spawned, caplog):
     assert len(lines) == 1
     assert "source=claude target=opencode-bare" in lines[0] and "gateway_routed=true" in lines[0]
     assert FAKE not in lines[0] and "pane output" not in lines[0]
+
+
+def test_installed_route_reports_each_launchable_agent(monkeypatch):
+    monkeypatch.setattr(generic_agent, "find_agent_binary", lambda agent: "/bin/x" if agent == "claude" else None)
+    monkeypatch.setattr(generic_agent, "build_opencode_bare_command", lambda repo: None)
+    r = _app().get("/api/generic-agent/installed")
+    assert r.status_code == 200
+    installed = r.json()["installed"]
+    assert {a: installed[a] for a in ("claude", "codex", "crush", "opencode-bare", "terminal")} == {
+        "claude": True,
+        "codex": False,
+        "crush": False,
+        "opencode-bare": False,
+        "terminal": True,
+    }
+    assert installed["pi"] is False and set(generic_agent.EXTRA_AGENTS) <= set(installed)
+
+
+def test_extra_agents_resolve_by_primary_name_or_alias(monkeypatch):
+    on_path = {"cbc": "/bin/cbc", "pi": "/bin/pi"}
+    monkeypatch.setattr(generic_agent.shutil, "which", lambda name: on_path.get(name))
+    assert generic_agent.build_command("pi") == ["/bin/pi"]
+    assert generic_agent.build_command("codebuddy") == ["/bin/cbc"]
+    assert generic_agent.build_command("gemini") is None
+
+
+def test_extra_agents_never_carry_workspace_trust_flags():
+    for agent, (_, argv, _) in generic_agent.EXTRA_AGENTS.items():
+        assert not any("trust" in part for part in argv), agent
+        assert generic_agent.is_supported(agent)
+
+
+def test_installed_check_is_not_cached(monkeypatch):
+    found = {"codex": None}
+    monkeypatch.setattr(generic_agent, "find_agent_binary", lambda agent: found.get(agent))
+    assert generic_agent.is_installed("codex") is False
+    found["codex"] = "/bin/codex"
+    assert generic_agent.is_installed("codex") is True
+
+
+def test_prepare_marks_each_target_installed(handoff_env, monkeypatch):
+    monkeypatch.setattr(generic_agent, "is_installed", lambda agent: agent != "crush")
+    data = _app().post("/api/generic-agent/handoff/prepare", json=BODY).json()
+    installed = {t["agent"]: t["installed"] for t in data["targets"]}
+    assert installed == {"claude": True, "codex": True, "crush": False, "opencode-bare": True}

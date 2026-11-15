@@ -39,9 +39,88 @@ function _genAgentLoadingId(tabId) {
 // the primary/default OpenCode path (see tp-code-agent.js's _CA_AGENT_LABELS
 // comment for #156 context) — plain "OpenCode", not the old "(bare test)"
 // A/B-test label.
-const _GEN_AGENT_LABEL_OVERRIDES = { 'opencode-bare': 'OpenCode' };
+const _GEN_EXTRA_AGENT_LABELS = {
+  'openclaude': 'OpenClaude',
+  'grok': 'Grok',
+  'copilot': 'GitHub Copilot',
+  'mimo-code': 'MiMo Code',
+  'ante': 'Ante',
+  'trae': 'Trae',
+  'muse': 'Muse',
+  'dsh': 'DeepSeek Harness',
+  'qoder': 'Qoder CLI',
+  'qoder-cn': 'Qoder CLI China',
+  'zcode': 'ZCode',
+  'pi': 'Pi',
+  'omp': 'OMP',
+  'prime-agent': 'Prime Agent',
+  'gemini': 'Gemini',
+  'antigravity': 'Antigravity',
+  'aider': 'Aider',
+  'goose': 'Goose',
+  'amp': 'Amp',
+  'kilo': 'Kilocode',
+  'kiro': 'Kiro',
+  'aug': 'Auggie',
+  'autohand': 'Autohand Code',
+  'cline': 'Cline',
+  'codebuff': 'Codebuff',
+  'freebuff': 'Freebuff',
+  'command-code': 'Command Code',
+  'continue': 'Continue',
+  'cursor': 'Cursor',
+  'droid': 'Droid',
+  'kimi': 'Kimi',
+  'mistral-vibe': 'Mistral Vibe',
+  'qwen-code': 'Qwen Code',
+  'rovo': 'Rovo Dev',
+  'hermes': 'Hermes',
+  'devin': 'Devin',
+  'openclaw': 'OpenClaw',
+  'codebuddy': 'CodeBuddy',
+  'jcode': 'JCode',
+};
+const _GEN_AGENT_LABEL_OVERRIDES = { 'opencode-bare': 'OpenCode', ..._GEN_EXTRA_AGENT_LABELS };
 function _genAgentLabel(agent) {
   return _GEN_AGENT_LABEL_OVERRIDES[agent] || agent.charAt(0).toUpperCase() + agent.slice(1);
+}
+
+// Agent marks follow Orca's approach: inline SVG that takes the theme colour
+// (Claude keeps its brand orange), a bundled PNG for Crush, no network fetch.
+const _GEN_AGENT_ICON_HTML = {
+  claude:
+    '<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path fill="#D97757" d="M4.709 15.955l4.72-2.647.08-.23-.08-.128H9.2l-.79-.048-2.698-.073-2.339-.097-2.266-.122-.571-.121L0 11.784l.055-.352.48-.321.686.06 1.52.103 2.278.158 1.652.097 2.449.255h.389l.055-.157-.134-.098-.103-.097-2.358-1.596-2.552-1.688-1.336-.972-.724-.491-.364-.462-.158-1.008.656-.722.881.06.225.061.893.686 1.908 1.476 2.491 1.833.365.304.145-.103.019-.073-.164-.274-1.355-2.446-1.446-2.49-.644-1.032-.17-.619a2.97 2.97 0 01-.104-.729L6.283.134 6.696 0l.996.134.42.364.62 1.414 1.002 2.229 1.555 3.03.456.898.243.832.091.255h.158V9.01l.128-1.706.237-2.095.23-2.695.08-.76.376-.91.747-.492.584.28.48.685-.067.444-.286 1.851-.559 2.903-.364 1.942h.212l.243-.242.985-1.306 1.652-2.064.73-.82.85-.904.547-.431h1.033l.76 1.129-.34 1.166-1.064 1.347-.881 1.142-1.264 1.7-.79 1.36.073.11.188-.02 2.856-.606 1.543-.28 1.841-.315.833.388.091.395-.328.807-1.969.486-2.309.462-3.439.813-.042.03.049.061 1.549.146.662.036h1.622l3.02.225.79.522.474.638-.079.485-1.215.62-1.64-.389-3.829-.91-1.312-.329h-.182v.11l1.093 1.068 2.006 1.81 2.509 2.33.127.578-.322.455-.34-.049-2.205-1.657-.851-.747-1.926-1.62h-.128v.17l.444.649 2.345 3.521.122 1.08-.17.353-.608.213-.668-.122-1.374-1.925-1.415-2.167-1.143-1.943-.14.08-.674 7.254-.316.37-.729.28-.607-.461-.322-.747.322-1.476.389-1.924.315-1.53.286-1.9.17-.632-.012-.042-.14.018-1.434 1.967-2.18 2.945-1.726 1.845-.414.164-.717-.37.067-.662.401-.589 2.388-3.036 1.44-1.882.93-1.086-.006-.158h-.055L4.132 18.56l-1.13.146-.487-.456.061-.746.231-.243 1.908-1.312-.006.006z"/></svg>',
+  codex:
+    '<svg viewBox="0 0 24 24" fill="currentColor" fill-rule="evenodd" xmlns="http://www.w3.org/2000/svg"><path d="M9.205 8.658v-2.26c0-.19.072-.333.238-.428l4.543-2.616c.619-.357 1.356-.523 2.117-.523 2.854 0 4.662 2.212 4.662 4.566 0 .167 0 .357-.024.547l-4.71-2.759a.797.797 0 00-.856 0l-5.97 3.473zm10.609 8.8V12.06c0-.333-.143-.57-.429-.737l-5.97-3.473 1.95-1.118a.433.433 0 01.476 0l4.543 2.617c1.309.76 2.189 2.378 2.189 3.948 0 1.808-1.07 3.473-2.76 4.163zM7.802 12.703l-1.95-1.142c-.167-.095-.239-.238-.239-.428V5.899c0-2.545 1.95-4.472 4.591-4.472 1 0 1.927.333 2.712.928L8.23 5.067c-.285.166-.428.404-.428.737v6.898zM12 15.128l-2.795-1.57v-3.33L12 8.658l2.795 1.57v3.33L12 15.128zm1.796 7.23c-1 0-1.927-.332-2.712-.927l4.686-2.712c.285-.166.428-.404.428-.737v-6.898l1.974 1.142c.167.095.238.238.238.428v5.233c0 2.545-1.974 4.472-4.614 4.472zm-5.637-5.303l-4.544-2.617c-1.308-.761-2.188-2.378-2.188-3.948A4.482 4.482 0 014.21 6.327v5.423c0 .333.143.571.428.738l5.947 3.449-1.95 1.118a.432.432 0 01-.476 0zm-.262 3.9c-2.688 0-4.662-2.021-4.662-4.519 0-.19.024-.38.047-.57l4.686 2.71c.286.167.571.167.856 0l5.97-3.448v2.26c0 .19-.07.333-.237.428l-4.543 2.616c-.619.357-1.356.523-2.117.523zm5.899 2.83a5.947 5.947 0 005.827-4.756C22.287 18.339 24 15.84 24 13.296c0-1.665-.713-3.282-1.998-4.448.119-.5.19-.999.19-1.498 0-3.401-2.759-5.947-5.946-5.947-.642 0-1.26.095-1.88.31A5.962 5.962 0 0010.205 0a5.947 5.947 0 00-5.827 4.757C1.713 5.447 0 7.945 0 10.49c0 1.666.713 3.283 1.998 4.448-.119.5-.19 1-.19 1.499 0 3.401 2.759 5.946 5.946 5.946.642 0 1.26-.095 1.88-.309a5.96 5.96 0 004.162 1.713z"/></svg>',
+  crush: '<img src="/static/icons/agents/crush.png" alt="" />',
+  pi: '<svg viewBox="0 0 800 800" xmlns="http://www.w3.org/2000/svg"><path fill="currentColor" fill-rule="evenodd" d="M165.29 165.29 H517.36 V400 H400 V517.36 H282.65 V634.72 H165.29 Z M282.65 282.65 V400 H400 V282.65 Z"/><path fill="currentColor" d="M517.36 400 H634.72 V634.72 H517.36 Z"/></svg>',
+  omp: '<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg"><path fill="oklch(0.62 0.21 295)" d="M10 14h44v9H43v33h-9V23h-9v22h-9V23H10z"/></svg>',
+  aider: '<svg viewBox="0 0 436 436" xmlns="http://www.w3.org/2000/svg"><g transform="translate(0,436) scale(0.1,-0.1)" fill="currentColor" stroke="none"><path d="M0 2180 l0 -2180 2180 0 2180 0 0 2180 0 2180 -2180 0 -2180 0 0 -2180z m2705 1818 c20 -20 28 -121 30 -398 l2 -305 216 -5 c118 -3 218 -8 222 -12 3 -3 10 -46 15 -95 5 -48 16 -126 25 -172 17 -86 17 -81 -17 -233 -14 -67 -13 -365 2 -438 21 -100 22 -159 5 -247 -24 -122 -24 -363 1 -458 23 -88 23 -213 1 -330 -9 -49 -17 -109 -17 -132 l0 -43 203 0 c111 0 208 -4 216 -9 10 -6 18 -51 27 -148 8 -76 16 -152 20 -168 7 -39 -23 -361 -37 -387 -10 -18 -21 -19 -214 -16 -135 2 -208 7 -215 14 -22 22 -33 301 -21 501 6 102 8 189 5 194 -8 13 -417 12 -431 -2 -12 -12 -8 -146 8 -261 8 -55 8 -95 1 -140 -6 -35 -14 -99 -17 -143 -9 -123 -14 -141 -41 -154 -18 -8 -217 -11 -679 -11 l-653 0 -11 33 c-31 97 -43 336 -27 533 5 56 6 113 2 128 l-6 26 -194 0 c-211 0 -252 4 -261 28 -12 33 -17 392 -6 522 15 186 -2 174 260 180 115 3 213 8 217 12 4 4 1 52 -5 105 -7 54 -17 130 -22 168 -7 56 -5 91 11 171 10 55 22 130 26 166 4 36 10 72 15 79 7 12 128 15 665 19 l658 5 8 30 c5 18 4 72 -3 130 -12 115 -7 346 11 454 10 61 10 75 -1 82 -8 5 -300 9 -650 9 l-636 0 -27 25 c-18 16 -26 34 -26 57 0 18 -5 87 -10 153 -10 128 5 449 22 472 5 7 26 13 46 15 78 6 1281 3 1287 -4z"/><path d="M1360 1833 c0 -5 -1 -164 -3 -356 l-2 -347 625 -1 c704 -1 708 -1 722 7 5 4 7 20 4 38 -29 141 -32 491 -6 595 9 38 8 45 -7 57 -15 11 -139 13 -675 14 -362 0 -658 -3 -658 -7z"/></g></svg>',
+  'opencode-bare':
+    '<svg viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M320 224V352H192V224H320Z" fill="currentColor" fill-opacity="0.28"/><path fill-rule="evenodd" clip-rule="evenodd" d="M384 416H128V96H384V416ZM320 160H192V352H320V160Z" fill="currentColor"/></svg>',
+  terminal:
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" xmlns="http://www.w3.org/2000/svg"><path d="m5 8 5 4-5 4"/><path d="M13 17h6"/></svg>',
+};
+// Orca's bundled favicons for the other catalog agents (qoder-cn shares qoder's);
+// anything without a mark falls back to its first letter.
+const _GEN_AGENT_PNG_ICONS = ['amp', 'ante', 'antigravity', 'aug', 'autohand', 'cline', 'codebuddy', 'codebuff', 'command-code', 'continue', 'copilot', 'cursor', 'devin', 'droid', 'dsh', 'freebuff', 'gemini', 'goose', 'grok', 'hermes', 'jcode', 'kilo', 'kimi', 'kiro', 'mimo-code', 'mistral-vibe', 'muse', 'openclaude', 'openclaw', 'prime-agent', 'qoder', 'qwen-code', 'rovo', 'trae', 'zcode'];
+const _GEN_AGENT_ICON_FILE = { 'qoder-cn': 'qoder' };
+function _genAgentIconHtml(agent) {
+  if (_GEN_AGENT_ICON_HTML[agent]) return _GEN_AGENT_ICON_HTML[agent];
+  const file = _GEN_AGENT_ICON_FILE[agent] || agent;
+  if (_GEN_AGENT_PNG_ICONS.includes(file))
+    return '<img src="/static/icons/agents/' + file + '.png" alt="" />';
+  return '';
+}
+function _genAgentTabIcon(agent) {
+  const icon = document.createElement('span');
+  icon.className = 'gtp-tab-icon';
+  icon.dataset.agent = agent;
+  icon.setAttribute('aria-hidden', 'true');
+  const html = _genAgentIconHtml(agent);
+  if (html) icon.innerHTML = html;
+  else icon.textContent = _genAgentLabel(agent).charAt(0);
+  return icon;
 }
 
 function _genAgentEnsureTermsContainer(tabId) {
@@ -226,10 +305,9 @@ function _genAgentRenderTabs(tabId) {
   const scroll = strip.querySelector('.gtp-tabs-scroll');
   const newBtn = scroll && scroll.querySelector('.gtp-tab-new');
   if (!scroll || !newBtn) return;
-  newBtn.onclick = () => {
-    if (typeof _caCloseFileDiffIfOpen === 'function') _caCloseFileDiffIfOpen();
-    _genAgentNewSession(tabId);
-  };
+  newBtn.title = 'New terminal…';
+  newBtn.setAttribute('aria-haspopup', 'menu');
+  newBtn.onclick = () => _genAgentOpenNewMenu(tabId, newBtn);
   [...scroll.querySelectorAll('.gtp-tab')].forEach((el) => el.remove());
   state.order.forEach((id) => {
     const sess = state.sessions[id];
@@ -258,6 +336,7 @@ function _genAgentRenderTabs(tabId) {
     x.className = 'gtp-tab-close';
     x.title = 'Close';
     x.textContent = '✕';
+    tab.appendChild(_genAgentTabIcon(sess.agent || state.agent));
     tab.appendChild(label);
     tab.appendChild(restart);
     const handoff = document.createElement('button');
@@ -426,11 +505,129 @@ function _genAgentActivateSession(tabId, ptyId) {
     }, 20);
 }
 
-// "+" - always spawns an independent new process of the project's agent.
-function _genAgentNewSession(tabId) {
+// "+" menu choice - always spawns an independent new process of the chosen
+// agent. state.agent stays the project's agent so a cold reopen is unchanged.
+function _genAgentNewSession(tabId, agent) {
   const state = _genAgentTerminals[_caSessionKey(tabId)];
   if (!state || !state.agent) return;
-  _genAgentStart(tabId, state.agent, state.projectId, state.repoPath, { forceNew: true });
+  _genAgentStart(tabId, agent, state.projectId, state.repoPath, {
+    forceNew: true,
+    keepStateAgent: true,
+  });
+}
+
+const _GEN_NEW_TAB_AGENTS = ['claude', 'codex', 'crush', 'opencode-bare', 'terminal'];
+
+function _genAgentCloseNewMenu() {
+  document.querySelectorAll('.gtp-new-menu').forEach((el) => {
+    if (typeof el._close === 'function') el._close();
+    else el.remove();
+  });
+}
+
+// "+" opens this menu; the active tab's agent is pre-focused so Enter repeats it.
+function _genAgentOpenNewMenu(tabId, anchor) {
+  if (document.querySelector('.gtp-new-menu')) {
+    _genAgentCloseNewMenu();
+    return;
+  }
+  const menu = document.createElement('div');
+  menu.className = 'gtp-new-menu';
+  menu.setAttribute('role', 'menu');
+  menu.setAttribute('aria-label', 'New terminal with');
+  const items = [];
+  const addItem = (agent) => {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'gtp-new-menu-item';
+    item.setAttribute('role', 'menuitem');
+    item.appendChild(_genAgentTabIcon(agent));
+    const name = document.createElement('span');
+    name.className = 'gtp-new-menu-label';
+    name.textContent = _genAgentLabel(agent);
+    item.appendChild(name);
+    item.addEventListener('click', () => {
+      close();
+      if (typeof _caCloseFileDiffIfOpen === 'function') _caCloseFileDiffIfOpen();
+      _genAgentNewSession(tabId, agent);
+    });
+    menu.appendChild(item);
+    items.push(item);
+    return item;
+  };
+  _GEN_NEW_TAB_AGENTS.forEach(addItem);
+  const onOutside = (e) => {
+    if (!menu.contains(e.target) && !anchor.contains(e.target)) close();
+  };
+  const onKey = (e) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      close();
+      anchor.focus();
+    } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const enabled = items.filter((i) => !i.disabled);
+      if (!enabled.length) return;
+      const at = enabled.indexOf(document.activeElement);
+      const step = e.key === 'ArrowDown' ? 1 : -1;
+      enabled[(at + step + enabled.length) % enabled.length].focus();
+    }
+  };
+  function close() {
+    menu.remove();
+    document.removeEventListener('mousedown', onOutside, true);
+    document.removeEventListener('keydown', onKey, true);
+    anchor.setAttribute('aria-expanded', 'false');
+  }
+  menu._close = close;
+  document.addEventListener('mousedown', onOutside, true);
+  document.addEventListener('keydown', onKey, true);
+  document.body.appendChild(menu);
+  const rect = anchor.getBoundingClientRect();
+  const left = Math.min(rect.left, window.innerWidth - menu.offsetWidth - 4);
+  menu.style.left = Math.max(4, left) + 'px';
+  menu.style.top = rect.bottom + 2 + 'px';
+  anchor.setAttribute('aria-expanded', 'true');
+  const state = _genAgentTerminals[_caSessionKey(tabId)];
+  const active = state && _genAgentActiveSess(state);
+  const current = (active && active.agent) || (state && state.agent);
+  (items[_GEN_NEW_TAB_AGENTS.indexOf(current)] || items[0]).focus();
+  void _genAgentMarkMissingInMenu(menu, items, addItem);
+}
+
+// Rows open enabled and are disabled once the check returns, so a slow or
+// failed lookup never blocks starting an agent. Other catalog agents are
+// listed below the core ones only when they are installed.
+async function _genAgentMarkMissingInMenu(menu, items, addItem) {
+  let installed;
+  try {
+    const doFetch = typeof _ocFetch === 'function' ? _ocFetch : fetch;
+    const headers = await _caHeadersAsync();
+    const resp = await doFetch('/api/generic-agent/installed', { headers });
+    if (!resp.ok) return;
+    installed = (await resp.json()).installed || {};
+  } catch (_) {
+    return;
+  }
+  if (!menu.isConnected) return;
+  items.forEach((item, i) => {
+    if (installed[_GEN_NEW_TAB_AGENTS[i]] !== false) return;
+    item.disabled = true;
+    item.querySelector('.gtp-new-menu-label').textContent =
+      _genAgentLabel(_GEN_NEW_TAB_AGENTS[i]) + ' (not installed)';
+  });
+  const extras = Object.keys(_GEN_EXTRA_AGENT_LABELS).filter((a) => installed[a] === true);
+  if (extras.length) {
+    const sep = document.createElement('div');
+    sep.className = 'gtp-new-menu-sep';
+    sep.setAttribute('role', 'separator');
+    menu.appendChild(sep);
+    extras.forEach(addItem);
+  }
+  if (document.activeElement && document.activeElement.disabled) {
+    const first = items.find((item) => !item.disabled);
+    if (first) first.focus();
+  }
 }
 
 // "✕" - detach one session; activate a neighbor, or fall back to the start
@@ -1104,6 +1301,7 @@ function _genAgentConnect(sess, retryDelay) {
 
   sess.ws = new WebSocket(url);
   sess.ws.onopen = () => {
+    _genAgentClearReconnecting(sess);
     if (wasRetrying && sess._retryAttempt) {
       // Don't write [reconnected] text into the terminal - for TUI apps like
       // opencode it injects text into the alternate screen and corrupts the
@@ -1211,13 +1409,7 @@ function _genAgentConnect(sess, retryDelay) {
     const attempt = (sess._retryAttempt || 0) + 1;
     sess._retryAttempt = attempt;
     const next = Math.min(500 * attempt, 8000);
-    sess.term.write(
-      '\r\n\x1b[33m[disconnected — reconnecting (attempt ' +
-        attempt +
-        ') in ' +
-        Math.round(next / 1000) +
-        's…]\x1b[0m\r\n',
-    );
+    _genAgentShowReconnecting(sess, attempt);
     setTimeout(() => {
       if (!sess.term || sess._closing || sess._dead || sess._parked) return;
       _genAgentConnect(sess, next);
@@ -1225,8 +1417,29 @@ function _genAgentConnect(sess, retryDelay) {
   };
 }
 
+// A transient banner, not text in the xterm buffer: written text outlived the
+// reconnect and read as a permanent disconnect (and corrupts TUI screens).
+function _genAgentShowReconnecting(sess, attempt) {
+  if (!sess.container) return;
+  let banner = sess.container.querySelector('.gtp-reconnect-banner');
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.className = 'gtp-reconnect-banner';
+    banner.setAttribute('role', 'status');
+    sess.container.appendChild(banner);
+  }
+  banner.textContent =
+    attempt > 1 ? 'Reconnecting… (attempt ' + attempt + ')' : 'Reconnecting…';
+}
+
+function _genAgentClearReconnecting(sess) {
+  const banner = sess.container && sess.container.querySelector('.gtp-reconnect-banner');
+  if (banner) banner.remove();
+}
+
 function _genAgentShowRestartOverlay(sess, reason) {
   if (!sess.container) return;
+  _genAgentClearReconnecting(sess);
   if (sess.container.querySelector('.oc-restart-overlay')) return;
   // A process can exit before its first visible paint. In that case the
   // cold-start loading layer is still present at z-index 10 and otherwise

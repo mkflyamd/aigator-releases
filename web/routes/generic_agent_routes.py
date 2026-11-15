@@ -82,10 +82,22 @@ async def prepare_agent_handoff(req: HandoffPrepareRequest):
         "snapshot_bytes": record["snapshot_bytes"],
         "redactions": record["redactions"],
         "targets": [
-            {"agent": a, "label": label, "gateway_routed": routed}
+            {
+                "agent": a,
+                "label": label,
+                "gateway_routed": routed,
+                "installed": generic_agent.is_installed(a),
+            }
             for a, label, routed in agent_handoff.TARGETS
         ],
     }
+
+
+@router.get("/api/generic-agent/installed")
+async def installed_generic_agents():
+    agents = generic_agent.launchable_agents()
+    found = await asyncio.to_thread(lambda: [generic_agent.is_installed(a) for a in agents])
+    return {"installed": dict(zip(agents, found))}
 
 
 @router.post("/api/generic-agent/terminal", dependencies=[Depends(verify_csrf)])

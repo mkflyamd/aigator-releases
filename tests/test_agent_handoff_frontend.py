@@ -41,6 +41,55 @@ def test_restart_and_close_use_the_session_agent():
     assert "keepStateAgent: sess.agent !== state.agent" in TERM
 
 
+def test_plus_opens_the_agent_menu_and_keeps_the_project_agent():
+    assert "newBtn.onclick = () => _genAgentOpenNewMenu(tabId, newBtn);" in TERM
+    assert "gtp-tab-new-menu" not in TERM
+    assert "_genAgentStart(tabId, agent, state.projectId, state.repoPath, {" in TERM
+    assert "keepStateAgent: true," in TERM
+    assert "_genAgentNewSession(tabId, agent)" in TERM
+
+
+def test_new_tab_menu_lists_every_launchable_agent():
+    assert (
+        "const _GEN_NEW_TAB_AGENTS = ['claude', 'codex', 'crush', 'opencode-bare', 'terminal'];"
+        in TERM
+    )
+    assert "item.appendChild(_genAgentTabIcon(agent));" in TERM
+    assert "(items[_GEN_NEW_TAB_AGENTS.indexOf(current)] || items[0]).focus();" in TERM
+
+
+def test_each_tab_shows_its_own_agent_icon():
+    assert "tab.appendChild(_genAgentTabIcon(sess.agent || state.agent));" in TERM
+    icon_map = TERM.split("const _GEN_AGENT_ICON_HTML")[1].split("function _genAgentTabIcon")[0]
+    for key in ("claude:", "codex:", "crush:", "'opencode-bare':", "terminal:"):
+        assert key in icon_map
+    assert "/static/icons/agents/crush.png" in TERM
+    assert (STATIC / "icons" / "agents" / "crush.png").is_file()
+
+
+def test_every_extra_agent_has_a_label_and_an_icon():
+    import re
+    import sys
+
+    sys.path.insert(0, str(STATIC.parent))
+    import generic_agent
+
+    labels = dict(re.findall(r"^  '([\w-]+)': '([^']+)',$", TERM, re.M))
+    for agent, (label, _, _) in generic_agent.EXTRA_AGENTS.items():
+        assert labels.get(agent) == label, agent
+    pngs = set(re.search(r"_GEN_AGENT_PNG_ICONS = \[(.*?)\];", TERM).group(1).replace("'", "").split(", "))
+    for agent in pngs:
+        assert (STATIC / "icons" / "agents" / f"{agent}.png").is_file(), agent
+    assert (STATIC / "icons" / "agents" / "qoder.png").is_file()
+    no_png = set(generic_agent.EXTRA_AGENTS) - pngs
+    assert no_png == {"pi", "omp", "aider", "qoder-cn"}
+
+
+def test_menu_lists_installed_extras_below_the_core_agents():
+    assert "extras.forEach(addItem);" in TERM
+    assert "installed[a] === true" in TERM
+
+
 def test_output_feeds_limit_detector_and_activity_clock():
     assert "sess._lastOutputAt = Date.now();" in TERM
     assert "agentLimitDetect.feed(sess, msg.data, (s) => agentHandoff.offerOnLimit(s))" in TERM
@@ -86,3 +135,11 @@ def test_malformed_prepare_response_is_caught_with_the_dialog_render():
     assert inner.index("prep = body;") < inner.index("renderDialog(prep") < inner.index("} catch (_) {")
     assert inner.index("} finally {") > inner.index("renderDialog(prep")
     assert "dialogBusy = false;" in inner
+
+
+def test_reconnect_shows_a_transient_banner_not_text_in_the_terminal():
+    assert "[disconnected" not in TERM
+    assert "_genAgentShowReconnecting(sess, attempt);" in TERM
+    opened = TERM.index("sess.ws.onopen = () => {")
+    assert TERM.index("_genAgentClearReconnecting(sess);", opened) < TERM.index("_ocFit(sess);", opened)
+    assert ".gtp-reconnect-banner" in (STATIC / "style.css").read_text(encoding="utf-8")
