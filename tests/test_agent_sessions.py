@@ -158,6 +158,7 @@ PROJECT = "C:\\work\\app"
 @pytest.fixture(autouse=True)
 def _clear_cache():
     ags._CACHE.clear()
+    ags._WSL.clear()
     yield
 
 
@@ -321,3 +322,80 @@ def test_scan_skips_a_transcript_that_vanishes_between_stat_and_read(tmp_path, m
     assert [r["id"] for r in ags.scan_project(PROJECT, homes=[home_for(tmp_path)])] == ["ok"]
     monkeypatch.setattr(ags, "parse_claude", real)
     assert [r["id"] for r in ags.scan_project(PROJECT, homes=[home_for(tmp_path)])] == ["gone", "ok"]
+
+
+def test_wsl_cwd_maps_windows_and_unc_paths():
+    assert ags.wsl_cwd("C:\\work\\app", "Ubuntu") == "/mnt/c/work/app"
+    assert ags.wsl_cwd("d:/Data/", "Ubuntu") == "/mnt/d/Data"
+    assert ags.wsl_cwd("C:\\", "Ubuntu") == "/mnt/c"
+    assert ags.wsl_cwd("\\\\?\\C:\\work\\app", "Ubuntu") == "/mnt/c/work/app"
+    assert ags.wsl_cwd("\\\\wsl.localhost\\Ubuntu\\home\\me\\proj", "ubuntu") == "/home/me/proj"
+    assert ags.wsl_cwd("\\\\wsl$\\Ubuntu\\home\\me", "Ubuntu") == "/home/me"
+    assert ags.wsl_cwd("\\\\wsl.localhost\\Debian\\home\\me", "Ubuntu") is None
+    assert ags.wsl_cwd("\\\\server\\share\\p", "Ubuntu") is None
+
+
+def test_mnt_paths_compare_case_insensitively():
+    assert ags._same_dir("/mnt/c/Work/App", "/mnt/c/work/app")
+    assert not ags._same_dir("/home/me/App", "/home/me/app")
+
+
+def test_wsl_homes_lists_user_homes_and_installed_agents(monkeypatch, tmp_path):
+    monkeypatch.setattr(ags.generic_agent, "wsl_agents", lambda: ("Ubuntu", {"claude": "claude"}))
+    monkeypatch.setattr(ags, "_wsl_user_homes", lambda distro: [tmp_path])
+    homes, agents = ags.wsl_homes("C:\\work\\app")
+    assert agents == ("claude",)
+    assert homes == [ags.SourceHome("wsl:Ubuntu", tmp_path, "/mnt/c/work/app")]
+
+
+def test_wsl_homes_is_empty_without_wsl_or_agents(monkeypatch, tmp_path):
+    monkeypatch.setattr(ags, "_wsl_user_homes", lambda distro: [tmp_path])
+    monkeypatch.setattr(ags.generic_agent, "wsl_agents", lambda: (None, {}))
+    assert ags.wsl_homes("C:\\work\\app") == ([], ())
+    monkeypatch.setattr(ags.generic_agent, "wsl_agents", lambda: ("Ubuntu", {}))
+    assert ags.wsl_homes("C:\\work\\app") == ([], ())
+    monkeypatch.setattr(ags.generic_agent, "wsl_agents", lambda: ("Ubuntu", {"claude": "claude"}))
+    assert ags.wsl_homes("E:\\elsewhere")[0][0].cwd == "/mnt/e/elsewhere"
+    assert ags.wsl_homes("\\\\server\\share\\p") == ([], ())
+
+
+def test_scan_reads_wsl_sessions_recorded_with_mnt_paths(tmp_path):
+    sh = ags.SourceHome("wsl:Ubuntu", tmp_path, "/mnt/c/work/app")
+    rec = {**claude_user("from wsl"), "cwd": "/mnt/c/work/app"}
+    put_claude(tmp_path, "w1", [rec], slug="-mnt-c-work-app")
+    out = ags.scan_project(PROJECT, homes=[sh], agents=("claude",))
+    assert [(r["id"], r["source"]) for r in out] == [("w1", "wsl:Ubuntu")]
+
+
+def test_codex_scan_skips_compressed_rollouts(tmp_path):
+    p = put_codex(tmp_path, "x1", [codex_meta_line(id="x1"), codex_msg("user", "hi")])
+    p.rename(str(p) + ".zst")
+    assert ags.scan_project(PROJECT, homes=[home_for(tmp_path)], agents=("codex",)) == []
+
+
+def test_wsl_sessions_never_blocks_and_serves_the_cached_result(monkeypatch, tmp_path):
+    sh = ags.SourceHome("wsl:Ubuntu", tmp_path, "/mnt/c/work/app")
+    rec = {**claude_user("from wsl"), "cwd": "/mnt/c/work/app"}
+    put_claude(tmp_path, "w1", [rec], slug="-mnt-c-work-app")
+    monkeypatch.setattr(ags, "wsl_homes", lambda repo: ([sh], ("claude",)))
+    monkeypatch.setattr(ags.generic_agent, "_stale_while_revalidate", lambda key, refresh: refresh())
+    first, pending = ags.wsl_sessions(PROJECT)
+    assert (first, pending) == ([], True)
+    second, pending = ags.wsl_sessions(PROJECT)
+    assert [r["id"] for r in second] == ["w1"]
+    assert pending is False
+    assert [r["id"] for r in ags.cached_wsl_records(PROJECT)] == ["w1"]
+
+
+def test_wsl_sessions_without_wsl_settles_to_empty(monkeypatch):
+    monkeypatch.setattr(ags, "wsl_homes", lambda repo: ([], ()))
+    monkeypatch.setattr(ags.generic_agent, "_stale_while_revalidate", lambda key, refresh: refresh())
+    ags.wsl_sessions(PROJECT)
+    assert ags.wsl_sessions(PROJECT) == ([], False)
+
+
+def test_find_session_also_searches_cached_wsl_records(tmp_path):
+    ags._WSL[PROJECT] = (0.0, [{**mk("claude", "w1", 100, "wsl:Ubuntu"), "cwd": "/mnt/c/work/app"}])
+    found = ags.find_session(PROJECT, "claude", "w1", homes=[home_for(tmp_path)])
+    assert found["source"] == "wsl:Ubuntu"
+    assert ags.find_session(PROJECT, "codex", "w1", homes=[home_for(tmp_path)]) is None

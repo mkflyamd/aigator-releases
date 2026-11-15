@@ -10,11 +10,13 @@ import json
 import os
 import re
 import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
 import agent_handoff as ah
+import generic_agent
 
 HEAD_BYTES = 256 * 1024
 TAIL_BYTES = 256 * 1024
@@ -26,6 +28,7 @@ MAX_CODEX_SCAN = 2000
 PREVIEW_EXCHANGES = 6
 PREVIEW_CHARS = 600
 AGENTS = ("claude", "codex")
+WSL_TTL_SECONDS = 30
 
 _REMINDER = re.compile(r"<system-reminder>.*?</system-reminder>", re.S)
 _SKIP_PREFIXES = (
@@ -246,7 +249,7 @@ def _norm_dir(path: str) -> str:
     if s.startswith("//?/"):
         s = s[4:]
     s = s.rstrip("/") or "/"
-    if re.match(r"^[A-Za-z]:", s) or s.startswith("//"):
+    if re.match(r"^[A-Za-z]:", s) or s.startswith("//") or s.startswith("/mnt/"):
         s = s.lower()
     return s
 
@@ -348,8 +351,8 @@ def scan_project(repo_path: str, *, homes=None, agents=AGENTS) -> list[dict]:
 
 
 def find_session(repo_path: str, agent: str, session_id: str, *, homes=None) -> dict | None:
-    for rec in scan_project(repo_path, homes=homes, agents=(agent,)):
-        if rec["id"] == session_id:
+    for rec in [*scan_project(repo_path, homes=homes, agents=(agent,)), *cached_wsl_records(repo_path)]:
+        if rec["agent"] == agent and rec["id"] == session_id:
             return rec
     return None
 
@@ -406,3 +409,55 @@ def preview(rec: dict) -> list[dict]:
             merged.append({"role": m[0], "text": m[1]})
     red = ah.Redactor(ah._configured_api_keys())
     return [{"role": m["role"], "text": red(m["text"])[:PREVIEW_CHARS]} for m in merged[-PREVIEW_EXCHANGES:]]
+
+
+_WSL: dict[str, tuple[float, list[dict]]] = {}
+
+
+def wsl_cwd(repo_path: str, distro: str) -> str | None:
+    p = (repo_path or "").replace("\\", "/")
+    if p.startswith("//?/"):
+        p = p[4:]
+    unc = re.match(r"^//(?:wsl\.localhost|wsl\$)/([^/]+)(/.*)?$", p, re.I)
+    if unc:
+        return (unc.group(2) or "/") if unc.group(1).lower() == distro.lower() else None
+    drive = re.match(r"^([A-Za-z]):(/.*)?$", p)
+    if drive:
+        return f"/mnt/{drive.group(1).lower()}{drive.group(2) or ''}".rstrip("/")
+    return None
+
+
+def _wsl_user_homes(distro: str) -> list[Path]:
+    try:
+        return [Path(d.path) for d in os.scandir(rf"\\wsl.localhost\{distro}\home") if d.is_dir()]
+    except OSError:
+        return []
+
+
+def wsl_homes(repo_path: str) -> tuple[list[SourceHome], tuple[str, ...]]:
+    distro, found = generic_agent.wsl_agents()
+    agents = tuple(a for a in AGENTS if a in found)
+    cwd = wsl_cwd(repo_path, distro) if distro else None
+    if not distro or not agents or not cwd:
+        return [], ()
+    return [SourceHome(f"wsl:{distro}", home, cwd) for home in _wsl_user_homes(distro)], agents
+
+
+def _refresh_wsl(repo_path: str) -> None:
+    homes, agents = wsl_homes(repo_path)
+    records = scan_project(repo_path, homes=homes, agents=agents) if homes else []
+    _WSL[repo_path] = (time.monotonic(), records)
+
+
+def wsl_sessions(repo_path: str) -> tuple[list[dict], bool]:
+    """(cached WSL records, pending). Never waits on WSL: a stale or missing entry
+    is refreshed on a background thread and the next call sees the result."""
+    hit = _WSL.get(repo_path)
+    if hit is None or time.monotonic() - hit[0] > WSL_TTL_SECONDS:
+        generic_agent._stale_while_revalidate(f"wsl-sessions:{repo_path}", lambda: _refresh_wsl(repo_path))
+    return (list(hit[1]) if hit else []), hit is None
+
+
+def cached_wsl_records(repo_path: str) -> list[dict]:
+    hit = _WSL.get(repo_path)
+    return list(hit[1]) if hit else []
