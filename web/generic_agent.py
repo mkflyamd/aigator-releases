@@ -444,6 +444,27 @@ def new_session_id() -> str:
     return str(uuid.uuid4())
 
 
+# Claude Code is launched with a session id Gator chose, so a handoff reads that
+# conversation's transcript and not whichever one in the folder is newest.
+_pinned_sessions: dict[str, str] = {}
+
+
+def pin_session(agent: str, command: list[str], pty_session_id: str) -> list[str]:
+    if agent != "claude" or not command or Path(command[0]).stem.lower() == "wsl":
+        return command
+    transcript_id = str(uuid.uuid4())
+    _pinned_sessions[pty_session_id] = transcript_id
+    return [*command, "--session-id", transcript_id]
+
+
+def pinned_session_id(pty_session_id: str) -> str | None:
+    return _pinned_sessions.get(pty_session_id)
+
+
+def unpin_session(pty_session_id: str) -> None:
+    _pinned_sessions.pop(pty_session_id, None)
+
+
 def build_opencode_bare_command(repo_path: str) -> list[str] | None:
     """argv for a single bare `opencode` process rooted at repo_path — no
     `serve`, no `attach`. None if opencode can't be found (mirrors

@@ -142,3 +142,18 @@ def test_argv_bindings_do_not_apply_to_agents_that_only_exist_in_wsl(monkeypatch
     monkeypatch.setattr(generic_agent, "find_agent_binary", lambda agent: "C:/bin/pi.cmd")
     assert generic_agent.effective_binding("pi") == binding
     assert generic_agent.build_command("pi", "", binding[0]) == ["C:/bin/pi.cmd", "-e", "C:/x.mjs"]
+
+
+def test_claude_is_launched_with_a_session_id_that_a_handoff_can_look_up():
+    cmd = generic_agent.pin_session("claude", ["claude.exe"], "pty-1")
+    assert cmd[:2] == ["claude.exe", "--session-id"]
+    assert generic_agent.pinned_session_id("pty-1") == cmd[2]
+    generic_agent.unpin_session("pty-1")
+    assert generic_agent.pinned_session_id("pty-1") is None
+
+
+def test_only_native_claude_launches_are_pinned():
+    assert generic_agent.pin_session("codex", ["codex.exe"], "pty-2") == ["codex.exe"]
+    assert generic_agent.pin_session("claude", ["wsl.exe", "claude"], "pty-3") == ["wsl.exe", "claude"]
+    assert generic_agent.pinned_session_id("pty-2") is None
+    assert generic_agent.pinned_session_id("pty-3") is None

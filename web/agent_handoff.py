@@ -200,28 +200,54 @@ def _claude_slug(cwd: str) -> str:
     return re.sub(r"[^A-Za-z0-9]", "-", cwd)
 
 
-def _find_claude_transcript(cwd: str, home: Path) -> Path | None:
+# A transcript created before this PTY started belongs to another session.
+SESSION_START_SLACK_SECONDS = 5
+
+
+def _born(f: Path) -> float:
+    st = f.stat()
+    return getattr(st, "st_birthtime", st.st_ctime)
+
+
+def _only_this_session(files: list[Path], started_at: float | None) -> Path | None:
+    """The transcript belonging to one terminal session. Without a pinned id the
+    only evidence is timing: a single transcript created since the terminal
+    started is ours; none or several means we cannot tell, so no guess is made."""
+    if started_at is None:
+        return files[0] if files else None
+    mine = [f for f in files if _born(f) >= started_at - SESSION_START_SLACK_SECONDS]
+    return mine[0] if len(mine) == 1 else None
+
+
+def _find_claude_transcript(
+    cwd: str, home: Path, session_id: str | None = None, started_at: float | None = None
+) -> Path | None:
     root = home / ".claude" / "projects"
     if not root.is_dir():
         return None
     want = _claude_slug(cwd).lower()
-    best: tuple[float, Path] | None = None
+    files: list[Path] = []
     for d in root.iterdir():
         if not d.is_dir() or d.name.lower() != want:
             continue
-        for f in d.glob("*.jsonl"):
-            mtime = f.stat().st_mtime
-            if best is None or mtime > best[0]:
-                best = (mtime, f)
-    return best[1] if best else None
+        if session_id:
+            exact = d / f"{session_id}.jsonl"
+            if exact.is_file():
+                return exact
+            continue
+        files.extend(d.glob("*.jsonl"))
+    if session_id:
+        return None
+    return _only_this_session(sorted(files, key=lambda f: f.stat().st_mtime, reverse=True), started_at)
 
 
-def _find_codex_transcript(cwd: str, home: Path) -> Path | None:
+def _find_codex_transcript(cwd: str, home: Path, started_at: float | None = None) -> Path | None:
     root = home / ".codex" / "sessions"
     if not root.is_dir():
         return None
     files = sorted(root.rglob("rollout-*.jsonl"), key=lambda f: f.stat().st_mtime, reverse=True)
     want = _norm_path(cwd)
+    matches: list[Path] = []
     for f in files[:50]:
         try:
             with f.open(encoding="utf-8") as fh:
@@ -233,16 +259,23 @@ def _find_codex_transcript(cwd: str, home: Path) -> Path | None:
         payload = meta.get("payload")
         cwd_seen = payload.get("cwd") if isinstance(payload, dict) else None
         if isinstance(cwd_seen, str) and _norm_path(cwd_seen) == want:
-            return f
-    return None
+            matches.append(f)
+    return _only_this_session(matches, started_at)
 
 
-def find_transcript(agent: str, cwd: str, home: Path | None = None) -> Path | None:
+def find_transcript(
+    agent: str,
+    cwd: str,
+    home: Path | None = None,
+    *,
+    session_id: str | None = None,
+    started_at: float | None = None,
+) -> Path | None:
     home = home or Path.home()
     if agent == "claude":
-        return _find_claude_transcript(cwd, home)
+        return _find_claude_transcript(cwd, home, session_id, started_at)
     if agent == "codex":
-        return _find_codex_transcript(cwd, home)
+        return _find_codex_transcript(cwd, home, started_at)
     return None
 
 
@@ -452,10 +485,6 @@ def _configured_api_keys() -> list[str]:
     return keys
 
 
-# A transcript last written before this PTY started belongs to another session.
-SESSION_START_SLACK_SECONDS = 5
-
-
 def _session_started_at(pty_session_id: str) -> float | None:
     try:
         from routes.terminal import get_pty_session
@@ -466,21 +495,18 @@ def _session_started_at(pty_session_id: str) -> float | None:
     return started if isinstance(started, (int, float)) else None
 
 
-def _transcript_is_current(transcript: Path, pty_session_id: str) -> bool:
-    started = _session_started_at(pty_session_id)
-    if started is None:
-        return True
-    try:
-        return transcript.stat().st_mtime >= started - SESSION_START_SLACK_SECONDS
-    except OSError:
-        return False
-
-
 def prepare_handoff(agent: str, project_id: str, cwd: str, pty_session_id: str) -> dict:
     red = Redactor(_configured_api_keys())
     text, last_user, last_assistant, kind = "", "", "", "capture"
-    transcript = find_transcript(agent, cwd)
-    if transcript is not None and _transcript_is_current(transcript, pty_session_id):
+    import generic_agent
+
+    transcript = find_transcript(
+        agent,
+        cwd,
+        session_id=generic_agent.pinned_session_id(pty_session_id),
+        started_at=_session_started_at(pty_session_id),
+    )
+    if transcript is not None:
         try:
             text, last_user, last_assistant = render_transcript(agent, transcript, red)
             kind = "transcript"

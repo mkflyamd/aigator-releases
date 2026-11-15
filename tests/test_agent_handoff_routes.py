@@ -34,7 +34,7 @@ def handoff_env(tmp_path, monkeypatch):
     monkeypatch.setattr(ah, "HANDOFF_DIR", tmp_path / "h")
     monkeypatch.setattr(ah, "_configured_api_keys", lambda: [FAKE])
     monkeypatch.setattr(ah, "_session_started_at", lambda sid: None)
-    monkeypatch.setattr(ah, "find_transcript", lambda agent, cwd, home=None: None)
+    monkeypatch.setattr(ah, "find_transcript", lambda agent, cwd, home=None, **kw: None)
     monkeypatch.setattr(ah, "capture_pane", lambda sid, red=None: f"pane output {FAKE}")
 
 

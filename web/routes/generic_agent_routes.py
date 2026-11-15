@@ -58,6 +58,7 @@ async def close_generic_agent_terminal(req: GenericAgentTerminalCloseRequest):
     from routes.terminal import close_pty_session
 
     await asyncio.to_thread(close_pty_session, req.pty_session_id)
+    generic_agent.unpin_session(req.pty_session_id)
     if generic_agent.get_active_session(req.project_id, req.agent) == req.pty_session_id:
         generic_agent.clear_active_session(req.project_id, req.agent)
     return {"ok": True}
@@ -192,6 +193,8 @@ async def generic_agent_terminal(req: GenericAgentTerminalRequest):
         env = generic_agent.with_wsl_env(command, binding[1] if binding else None)
 
     pty_session_id = generic_agent.new_session_id()
+    if command:
+        command = generic_agent.pin_session(req.agent, command, pty_session_id)
     # Use the frontend's measured dimensions if provided (non-zero), so TUI
     # apps (Crush, Claude Code) spawn at the correct size and don't garble on
     # the late resize. Fall back to create_pty_session's defaults otherwise.

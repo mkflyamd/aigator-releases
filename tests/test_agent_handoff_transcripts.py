@@ -277,7 +277,7 @@ def _prepare_env(tmp_path, monkeypatch, keys=()):
 
 def test_prepare_handoff_redacts_every_configured_key(tmp_path, monkeypatch):
     _prepare_env(tmp_path, monkeypatch, [FAKE, SK])
-    monkeypatch.setattr(ah, "find_transcript", lambda agent, cwd, home=None: None)
+    monkeypatch.setattr(ah, "find_transcript", lambda agent, cwd, home=None, **kw: None)
     monkeypatch.setattr(ah, "capture_pane", lambda sid, red=None: red(f"one {FAKE} two {SK}"))
     rec = ah.prepare_handoff("crush", "demo", "/r", "s1")
     snap = (tmp_path / "h" / f"{rec['handoff_id']}.txt").read_text(encoding="utf-8")
@@ -286,7 +286,7 @@ def test_prepare_handoff_redacts_every_configured_key(tmp_path, monkeypatch):
 
 def test_prepare_handoff_falls_back_to_capture(tmp_path, monkeypatch):
     _prepare_env(tmp_path, monkeypatch, [FAKE])
-    monkeypatch.setattr(ah, "find_transcript", lambda agent, cwd, home=None: None)
+    monkeypatch.setattr(ah, "find_transcript", lambda agent, cwd, home=None, **kw: None)
     monkeypatch.setattr(ah, "capture_pane", lambda sid, red=None: f"pane {FAKE}")
     rec = ah.prepare_handoff("opencode-bare", "demo", "/r", "s1")
     assert rec["source_kind"] == "capture" and rec["redactions"] == 1
@@ -294,7 +294,7 @@ def test_prepare_handoff_falls_back_to_capture(tmp_path, monkeypatch):
 
 def test_prepare_handoff_empty_everything_raises(tmp_path, monkeypatch):
     _prepare_env(tmp_path, monkeypatch)
-    monkeypatch.setattr(ah, "find_transcript", lambda agent, cwd, home=None: None)
+    monkeypatch.setattr(ah, "find_transcript", lambda agent, cwd, home=None, **kw: None)
     monkeypatch.setattr(ah, "capture_pane", lambda sid, red=None: "  ")
     with pytest.raises(ah.NothingToHandOff):
         ah.prepare_handoff("crush", "demo", "/r", "s1")
@@ -304,7 +304,7 @@ def test_prepare_handoff_uses_transcript_and_counts_its_redactions(tmp_path, mon
     _prepare_env(tmp_path, monkeypatch, [FAKE])
     f = tmp_path / "s.jsonl"
     _jsonl(f, [{"type": "user", "message": {"content": f"use {FAKE}"}}])
-    monkeypatch.setattr(ah, "find_transcript", lambda agent, cwd, home=None: f)
+    monkeypatch.setattr(ah, "find_transcript", lambda agent, cwd, home=None, **kw: f)
     monkeypatch.setattr(ah, "capture_pane", lambda sid, red=None: "should not be used")
     rec = ah.prepare_handoff("claude", "demo", "/r", "s1")
     snap = (tmp_path / "h" / f"{rec['handoff_id']}.txt").read_text(encoding="utf-8")
@@ -316,7 +316,7 @@ def test_prepare_handoff_falls_back_to_capture_when_rendering_raises(tmp_path, m
     _prepare_env(tmp_path, monkeypatch)
     f = tmp_path / "s.jsonl"
     _jsonl(f, [{"type": "user", "message": {"content": "hi"}}])
-    monkeypatch.setattr(ah, "find_transcript", lambda agent, cwd, home=None: f)
+    monkeypatch.setattr(ah, "find_transcript", lambda agent, cwd, home=None, **kw: f)
 
     def boom(agent, path, red=None):
         raise AttributeError("'list' object has no attribute 'get'")
@@ -327,20 +327,60 @@ def test_prepare_handoff_falls_back_to_capture_when_rendering_raises(tmp_path, m
     assert rec["source_kind"] == "capture"
 
 
-def test_prepare_handoff_ignores_a_transcript_older_than_the_session(tmp_path, monkeypatch):
+def test_prepare_handoff_passes_the_pinned_id_and_start_time_to_the_lookup(tmp_path, monkeypatch):
+    import generic_agent
+
     _prepare_env(tmp_path, monkeypatch)
     f = tmp_path / "s.jsonl"
-    _jsonl(f, [{"type": "user", "message": {"content": "an older tab's work"}}])
-    now = time.time()
-    os.utime(f, (now - 3600,) * 2)
-    monkeypatch.setattr(ah, "_session_started_at", lambda sid: now - 60)
-    monkeypatch.setattr(ah, "find_transcript", lambda agent, cwd, home=None: f)
+    _jsonl(f, [{"type": "user", "message": {"content": "this tab's work"}}])
+    seen = {}
+
+    def fake_find(agent, cwd, home=None, **kw):
+        seen.update(kw)
+        return f
+
+    monkeypatch.setattr(ah, "_session_started_at", lambda sid: 100.0)
+    monkeypatch.setattr(ah, "find_transcript", fake_find)
+    monkeypatch.setattr(generic_agent, "pinned_session_id", lambda sid: "abc")
+    assert ah.prepare_handoff("claude", "demo", "/r", "s1")["source_kind"] == "transcript"
+    assert seen == {"session_id": "abc", "started_at": 100.0}
+
+
+def test_prepare_handoff_reads_the_pane_when_no_transcript_is_attributable(tmp_path, monkeypatch):
+    _prepare_env(tmp_path, monkeypatch)
+    monkeypatch.setattr(ah, "find_transcript", lambda agent, cwd, home=None, **kw: None)
     monkeypatch.setattr(ah, "capture_pane", lambda sid, red=None: "pane text")
     assert ah.prepare_handoff("claude", "demo", "/r", "s1")["source_kind"] == "capture"
-    os.utime(f, (now - 62,) * 2)  # within the slack of the session start
-    assert ah.prepare_handoff("claude", "demo", "/r", "s1")["source_kind"] == "transcript"
-    os.utime(f, (now - 30,) * 2)
-    assert ah.prepare_handoff("claude", "demo", "/r", "s1")["source_kind"] == "transcript"
+
+
+def _claude_dir(home, cwd="/r"):
+    d = home / ".claude" / "projects" / ah._claude_slug(cwd)
+    d.mkdir(parents=True)
+    return d
+
+
+def test_a_pinned_claude_session_beats_a_newer_transcript_from_another_session(tmp_path):
+    d = _claude_dir(tmp_path)
+    mine = d / "aaaa.jsonl"
+    other = d / "bbbb.jsonl"
+    _jsonl(mine, [{"type": "user", "message": {"content": "mine"}}])
+    _jsonl(other, [{"type": "user", "message": {"content": "other tab"}}])
+    os.utime(mine, (time.time() - 600,) * 2)
+    assert ah.find_transcript("claude", "/r", tmp_path, session_id="aaaa") == mine
+    assert ah.find_transcript("claude", "/r", tmp_path, session_id="cccc") is None
+
+
+def test_an_unpinned_lookup_needs_exactly_one_transcript_since_the_session_started(tmp_path, monkeypatch):
+    d = _claude_dir(tmp_path)
+    one = d / "one.jsonl"
+    two = d / "two.jsonl"
+    _jsonl(one, [{"type": "user", "message": {"content": "x"}}])
+    monkeypatch.setattr(ah, "_born", lambda f: {"one.jsonl": 1000.0, "two.jsonl": 1010.0}[f.name])
+    assert ah.find_transcript("claude", "/r", tmp_path, started_at=990.0) == one
+    assert ah.find_transcript("claude", "/r", tmp_path, started_at=1500.0) is None
+    _jsonl(two, [{"type": "user", "message": {"content": "y"}}])
+    assert ah.find_transcript("claude", "/r", tmp_path, started_at=990.0) is None
+    assert ah.find_transcript("claude", "/r", tmp_path, started_at=1008.0) == two
 
 
 def test_session_started_at_reads_the_pty_session(monkeypatch):
