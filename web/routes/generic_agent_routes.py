@@ -12,6 +12,7 @@ never needed to know which of those callers it's serving.
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -39,7 +40,8 @@ class HandoffPrepareRequest(BaseModel):
     agent: str
     project_id: str
     repo_path: str
-    pty_session_id: str
+    pty_session_id: str | None = None  # a live terminal...
+    session_id: str | None = None  # ...or a stored session from the history panel
 
 
 class GenericAgentTerminalCloseRequest(BaseModel):
@@ -70,11 +72,28 @@ async def close_generic_agent_terminal(req: GenericAgentTerminalCloseRequest):
 async def prepare_agent_handoff(req: HandoffPrepareRequest):
     if not generic_agent.is_supported(req.agent):
         raise HTTPException(status_code=400, detail=f"Unknown agent: {req.agent!r}")
+    if bool(req.pty_session_id) == bool(req.session_id):
+        raise HTTPException(status_code=400, detail="Give either pty_session_id or session_id.")
     try:
-        record = await asyncio.to_thread(
-            agent_handoff.prepare_handoff,
-            req.agent, req.project_id, req.repo_path, req.pty_session_id,
-        )
+        if req.session_id:
+            if req.agent not in ("claude", "codex"):
+                raise HTTPException(status_code=400, detail=f"{req.agent!r} has no stored sessions.")
+            if not agent_sessions.SESSION_ID_RE.match(req.session_id):
+                raise HTTPException(status_code=400, detail="Invalid session id.")
+            stored = await asyncio.to_thread(
+                agent_sessions.find_session, req.repo_path, req.agent, req.session_id
+            )
+            if stored is None:
+                raise HTTPException(status_code=404, detail="Session not found in this project.")
+            record = await asyncio.to_thread(
+                agent_handoff.prepare_handoff_from_transcript,
+                req.agent, req.project_id, req.repo_path, Path(stored["path"]),
+            )
+        else:
+            record = await asyncio.to_thread(
+                agent_handoff.prepare_handoff,
+                req.agent, req.project_id, req.repo_path, req.pty_session_id,
+            )
     except agent_handoff.NothingToHandOff:
         raise HTTPException(status_code=422, detail="Nothing to hand off from this session.")
     return {
