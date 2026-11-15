@@ -132,13 +132,11 @@ def agent_label(agent: str) -> str:
 def is_gateway_routed(agent: str) -> bool:
     if agent in GATEWAY_ROUTED:
         return True
-    if agent == "claude":
-        return gateway_binding(agent) is not None
     if agent == "codex":
         from llm.registry import get_active_profile
 
         return codex_config_routes_to_gateway(get_active_profile())
-    return False
+    return effective_binding(agent) is not None
 
 
 def handoff_targets() -> list[dict]:
@@ -349,7 +347,7 @@ def launchable_agents() -> list[str]:
     return [*core, OPENCODE_BARE_AGENT, TERMINAL_AGENT, *EXTRA_AGENTS]
 
 
-def build_command(agent: str, repo_path: str = "") -> list[str] | None:
+def build_command(agent: str, repo_path: str = "", extra_args: tuple[str, ...] = ()) -> list[str] | None:
     """Full argv to spawn for this agent, with the resolved absolute binary
     path in place of the bare name (matches OpenCode's own build_opencode_
     command pattern of never relying on child-process PATH resolution)."""
@@ -359,7 +357,7 @@ def build_command(agent: str, repo_path: str = "") -> list[str] | None:
     resolved = find_agent_binary(agent)
     if not resolved:
         return _wsl_command(agent, repo_path) if _wsl_capable(agent) else None
-    return [resolved, *argv[1:]]
+    return [resolved, *argv[1:], *extra_args]
 
 
 # (project_id, agent) -> pty_session_id of that project+agent's current
@@ -697,14 +695,104 @@ def _claude_env_from_profile(profile: dict, models: list[str]) -> dict[str, str]
     return env
 
 
-def gateway_binding(agent: str) -> dict[str, str] | None:
-    """Env that routes this agent through the active profile's gateway, or None
-    when it can't be bound (the agent then starts on the user's own config)."""
+_PI_EXTENSION_DIR = Path.home() / ".gator" / "pi"
+
+
+def _pi_extension_source(profile: dict, models: list[str]) -> str:
+    """A Pi extension registering the gateway as providers, so Pi's own
+    ~/.pi/agent configuration stays untouched."""
+    import json
+
+    from llm.gateway import normalize_openai_base_url, profile_headers
+    from llm.registry import context_window
+
+    headers = {
+        name: ("GATOR_GATEWAY_KEY" if name == profile.get("api_key_header") else value)
+        for name, value in profile_headers(profile).items()
+    }
+
+    def entries(ids: list[str]) -> list[dict]:
+        return [
+            {"id": m, "name": m, "input": ["text", "image"], "contextWindow": context_window(m), "maxTokens": 16384, "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}}
+            for m in ids
+        ]
+
+    providers = {}
+    anthropic_url = (profile.get("anthropic_url") or "").strip().rstrip("/")
+    if anthropic_url.endswith("/v1"):
+        anthropic_url = anthropic_url[: -len("/v1")]
+    claude = [m for m in models if "claude" in m.lower()]
+    if anthropic_url and claude:
+        providers["gator-anthropic"] = {
+            "name": "AI Gator (Anthropic)",
+            "baseUrl": anthropic_url,
+            "api": "anthropic-messages",
+            "apiKey": "GATOR_GATEWAY_KEY",
+            "headers": headers,
+            "models": entries(claude),
+        }
+    others = [m for m in models if "claude" not in m.lower()]
+    openai_url = normalize_openai_base_url(profile.get("base_url") or "")
+    if openai_url and others:
+        providers["gator-gateway"] = {
+            "name": "AI Gator",
+            "baseUrl": openai_url,
+            "api": "openai-completions",
+            "apiKey": "GATOR_GATEWAY_KEY",
+            "headers": headers,
+            "models": entries(others),
+        }
+    body = "".join(
+        f"  pi.registerProvider({json.dumps(name)}, {json.dumps(cfg)});\n"
+        for name, cfg in providers.items()
+    )
+    return f"export default function (pi) {{\n{body}}}\n"
+
+
+def _pi_binding_from_profile(
+    profile: dict, models: list[str]
+) -> tuple[tuple[str, ...], dict[str, str]] | None:
+    if not profile.get("api_key"):
+        return None
+    source = _pi_extension_source(profile, models)
+    if "registerProvider" not in source:
+        return None
+    active = profile.get("active_model", "")
+    default = active if active in models else models[0]
+    provider = "gator-anthropic" if "claude" in default.lower() else "gator-gateway"
+    if f'"{provider}"' not in source:
+        provider = "gator-gateway" if provider == "gator-anthropic" else "gator-anthropic"
+        default = next(
+            m for m in models if ("claude" in m.lower()) == (provider == "gator-anthropic")
+        )
+    _PI_EXTENSION_DIR.mkdir(parents=True, exist_ok=True)
+    extension = _PI_EXTENSION_DIR / "gateway.mjs"
+    extension.write_text(source, encoding="utf-8")
+    args = ("-e", str(extension), "--provider", provider, "--model", default)
+    return args, {"GATOR_GATEWAY_KEY": profile["api_key"]}
+
+
+def gateway_binding(agent: str) -> tuple[tuple[str, ...], dict[str, str]] | None:
+    """Extra argv and env that route this agent through the active profile's
+    gateway, or None when it can't be bound (the agent then starts on the
+    user's own config)."""
     from llm.registry import get_active_profile, available_models
 
     if agent == "claude":
-        return _claude_env_from_profile(get_active_profile(), available_models())
+        env = _claude_env_from_profile(get_active_profile(), available_models())
+        return ((), env) if env else None
+    if agent == "pi":
+        return _pi_binding_from_profile(get_active_profile(), available_models())
     return None
+
+
+def effective_binding(agent: str) -> tuple[tuple[str, ...], dict[str, str]] | None:
+    """gateway_binding, minus agents whose argv would have to cross into WSL
+    (Windows paths mean nothing there)."""
+    binding = gateway_binding(agent)
+    if binding and binding[0] and not find_agent_binary(agent):
+        return None
+    return binding
 
 
 def with_wsl_env(command: list[str] | None, env: dict[str, str] | None) -> dict[str, str] | None:

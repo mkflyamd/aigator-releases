@@ -173,7 +173,8 @@ async def generic_agent_terminal(req: GenericAgentTerminalRequest):
         except RuntimeError as exc:
             raise HTTPException(status_code=500, detail=str(exc))
     else:
-        command = generic_agent.build_command(req.agent, req.repo_path)
+        binding = generic_agent.effective_binding(req.agent)
+        command = generic_agent.build_command(req.agent, req.repo_path, binding[0] if binding else ())
         if not command:
             _install_hint = {
                 "codex": "npm install -g @openai/codex",
@@ -188,7 +189,7 @@ async def generic_agent_terminal(req: GenericAgentTerminalRequest):
                 ),
             )
         # No gateway config for the profile -> launch on the user's own setup.
-        env = generic_agent.with_wsl_env(command, generic_agent.gateway_binding(req.agent))
+        env = generic_agent.with_wsl_env(command, binding[1] if binding else None)
 
     pty_session_id = generic_agent.new_session_id()
     # Use the frontend's measured dimensions if provided (non-zero), so TUI

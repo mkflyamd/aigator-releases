@@ -84,8 +84,12 @@ def spawned(monkeypatch):
     calls = []
     monkeypatch.setattr("routes.terminal.create_pty_session", lambda sid, **kw: calls.append(kw))
     monkeypatch.setattr(generic_agent, "wsl_agents", lambda: (None, {}))
-    monkeypatch.setattr(generic_agent, "build_command", lambda agent, repo="": [agent])
-    monkeypatch.setattr(generic_agent, "gateway_binding", lambda agent: {"ANTHROPIC_API_KEY": FAKE} if agent == "claude" else None)
+    monkeypatch.setattr(generic_agent, "build_command", lambda agent, repo="", extra=(): [agent])
+    monkeypatch.setattr(
+        generic_agent,
+        "gateway_binding",
+        lambda agent: ((), {"ANTHROPIC_API_KEY": FAKE}) if agent == "claude" else None,
+    )
     return calls
 
 
@@ -103,3 +107,38 @@ def test_installed_route_reports_which_installed_agents_are_gateway_routed(monke
     monkeypatch.setattr(generic_agent, "is_gateway_routed", lambda a: a == "claude")
     body = _app().get("/api/generic-agent/installed").json()
     assert body["gateway_routed"] == {"claude": True, "pi": False}
+
+
+def test_pi_gets_an_extension_registering_both_gateway_providers(tmp_path, monkeypatch):
+    monkeypatch.setattr(generic_agent, "_PI_EXTENSION_DIR", tmp_path)
+    args, env = generic_agent._pi_binding_from_profile(PROFILE, MODELS)
+    assert args == ("-e", str(tmp_path / "gateway.mjs"), "--provider", "gator-anthropic", "--model", "Claude-Sonnet-5")
+    assert env == {"GATOR_GATEWAY_KEY": FAKE}
+    source = (tmp_path / "gateway.mjs").read_text(encoding="utf-8")
+    assert source.count("pi.registerProvider(") == 2
+    assert '"baseUrl": "https://gw.example.com/Anthropic"' in source
+    assert '"baseUrl": "https://gw.example.com/Unified/v1"' in source
+    assert '"Ocp-Apim-Subscription-Key": "GATOR_GATEWAY_KEY"' in source
+    assert FAKE not in source
+
+
+def test_pi_defaults_to_an_available_provider_when_the_active_model_has_none(tmp_path, monkeypatch):
+    monkeypatch.setattr(generic_agent, "_PI_EXTENSION_DIR", tmp_path)
+    profile = {**PROFILE, "anthropic_url": "", "active_model": "Claude-Sonnet-5"}
+    args, _ = generic_agent._pi_binding_from_profile(profile, MODELS)
+    assert args[-4:] == ("--provider", "gator-gateway", "--model", "gpt-5.5")
+
+
+def test_pi_is_unbound_without_a_key(tmp_path, monkeypatch):
+    monkeypatch.setattr(generic_agent, "_PI_EXTENSION_DIR", tmp_path)
+    assert generic_agent._pi_binding_from_profile({**PROFILE, "api_key": ""}, MODELS) is None
+
+
+def test_argv_bindings_do_not_apply_to_agents_that_only_exist_in_wsl(monkeypatch):
+    binding = (("-e", "C:/x.mjs"), {"K": "v"})
+    monkeypatch.setattr(generic_agent, "gateway_binding", lambda agent: binding)
+    monkeypatch.setattr(generic_agent, "find_agent_binary", lambda agent: None)
+    assert generic_agent.effective_binding("pi") is None
+    monkeypatch.setattr(generic_agent, "find_agent_binary", lambda agent: "C:/bin/pi.cmd")
+    assert generic_agent.effective_binding("pi") == binding
+    assert generic_agent.build_command("pi", "", binding[0]) == ["C:/bin/pi.cmd", "-e", "C:/x.mjs"]

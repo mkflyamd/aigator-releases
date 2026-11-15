@@ -52,7 +52,7 @@ def spawned(monkeypatch):
         generic_agent, "build_opencode_bare_env",
         lambda: {"OPENCODE_CONFIG_CONTENT": "{}", "GATOR_OPENCODE_KEY": FAKE},
     )
-    monkeypatch.setattr(generic_agent, "build_command", lambda agent, repo="": [agent])
+    monkeypatch.setattr(generic_agent, "build_command", lambda agent, repo="", extra=(): [agent])
     monkeypatch.setattr(generic_agent, "build_crush_env", lambda: {"CRUSH_GLOBAL_CONFIG": "/c", "GATOR_CRUSH_KEY": FAKE})
     return calls
 
@@ -225,7 +225,7 @@ def test_prepare_lists_installed_extras_but_not_missing_ones(handoff_env, monkey
 
 def test_extra_agent_can_receive_a_handoff(handoff_env, monkeypatch):
     prepared = _app().post("/api/generic-agent/handoff/prepare", json=BODY).json()
-    monkeypatch.setattr(generic_agent, "build_command", lambda agent, repo="": ["pi"])
+    monkeypatch.setattr(generic_agent, "build_command", lambda agent, repo="", extra=(): ["pi"])
     monkeypatch.setattr("routes.terminal.create_pty_session", lambda *a, **k: None)
     r = _app().post(
         "/api/generic-agent/terminal",
