@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 import threading
 import time
 from dataclasses import dataclass
@@ -29,6 +30,7 @@ PREVIEW_EXCHANGES = 6
 PREVIEW_CHARS = 600
 AGENTS = ("claude", "codex")
 WSL_TTL_SECONDS = 30
+WORKTREE_TTL_SECONDS = 30
 
 _REMINDER = re.compile(r"<system-reminder>.*?</system-reminder>", re.S)
 _SKIP_PREFIXES = (
@@ -360,8 +362,33 @@ def _scan_codex(sh: SourceHome) -> list[dict]:
 _SCANNERS = {"claude": _scan_claude, "codex": _scan_codex}
 
 
+_WORKTREES: dict[str, tuple[float, list[str]]] = {}
+
+
+def project_dirs(repo_path: str) -> list[str]:
+    """The project folder plus its git worktrees, when repo_path is the repo's main
+    folder: sessions run in a worktree belong to the project they branch from."""
+    hit = _WORKTREES.get(repo_path)
+    if hit and time.monotonic() - hit[0] < WORKTREE_TTL_SECONDS:
+        return list(hit[1])
+    dirs = [repo_path]
+    try:
+        proc = subprocess.run(
+            ["git", "-C", repo_path, "worktree", "list", "--porcelain"],
+            capture_output=True, text=True, timeout=5, check=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        listed = [line[len("worktree "):].strip() for line in proc.stdout.splitlines() if line.startswith("worktree ")]
+        if listed and _same_dir(listed[0], repo_path):
+            dirs += [os.path.normpath(p) for p in listed[1:]]
+    except (OSError, subprocess.SubprocessError):
+        pass
+    _WORKTREES[repo_path] = (time.monotonic(), dirs)
+    return list(dirs)
+
+
 def windows_homes(repo_path: str) -> list[SourceHome]:
-    return [SourceHome("windows", Path.home(), repo_path)]
+    return [SourceHome("windows", Path.home(), d) for d in project_dirs(repo_path)]
 
 
 def scan_project(repo_path: str, *, homes=None, agents=AGENTS) -> list[dict]:
@@ -461,10 +488,13 @@ def _wsl_user_homes(distro: str) -> list[Path]:
 def wsl_homes(repo_path: str) -> tuple[list[SourceHome], tuple[str, ...]]:
     distro, found = generic_agent.wsl_agents()
     agents = tuple(a for a in AGENTS if a in found)
-    cwd = wsl_cwd(repo_path, distro) if distro else None
-    if not distro or not agents or not cwd:
+    if not distro or not agents:
         return [], ()
-    return [SourceHome(f"wsl:{distro}", home, cwd) for home in _wsl_user_homes(distro)], agents
+    cwds = [c for c in (wsl_cwd(d, distro) for d in project_dirs(repo_path)) if c]
+    if not cwds:
+        return [], ()
+    homes = _wsl_user_homes(distro)
+    return [SourceHome(f"wsl:{distro}", home, cwd) for cwd in cwds for home in homes], agents
 
 
 def _refresh_wsl(repo_path: str) -> None:

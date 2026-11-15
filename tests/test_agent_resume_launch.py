@@ -54,6 +54,13 @@ def test_resume_spawns_the_resume_command_and_pins_the_session(env):
     assert generic_agent.pinned_session_id(r.json()["pty_session_id"]) == "abc-1"
 
 
+def test_resume_of_a_worktree_session_spawns_in_that_worktree(env, monkeypatch, tmp_path):
+    rec = {"id": "abc-1", "agent": "claude", "source": "windows", "cwd": str(tmp_path)}
+    monkeypatch.setattr(ags, "find_session", lambda repo, agent, sid, **kw: rec)
+    client().post("/api/generic-agent/terminal", json=BODY)
+    assert env["spawn"][-1]["cwd"] == str(tmp_path)
+
+
 def test_resume_always_spawns_even_when_a_live_session_exists(env, monkeypatch):
     import routes.terminal as terminal
     from types import SimpleNamespace

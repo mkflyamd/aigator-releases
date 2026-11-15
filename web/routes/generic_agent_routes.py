@@ -262,12 +262,15 @@ async def generic_agent_terminal(req: GenericAgentTerminalRequest):
     # Spawning talks to the PTY host over a socket and may start it, so it
     # runs off the event loop.
     size = {"cols": req.cols, "rows": req.rows} if req.cols > 0 and req.rows > 0 else {}
+    spawn_cwd = req.repo_path
+    if resume is not None and resume["source"] == "windows" and Path(resume["cwd"]).is_dir():
+        spawn_cwd = resume["cwd"]  # a worktree session resumes in its own worktree
     await asyncio.to_thread(
         create_pty_session,
         pty_session_id,
         command=command,
         env=env,
-        cwd=req.repo_path,
+        cwd=spawn_cwd,
         **size,
     )
     generic_agent.set_active_session(req.project_id, req.agent, pty_session_id)

@@ -1,5 +1,6 @@
 import json
 import os
+import subprocess
 
 import pytest
 
@@ -167,6 +168,7 @@ PROJECT = "C:\\work\\app"
 def _clear_cache():
     ags._CACHE.clear()
     ags._WSL.clear()
+    ags._WORKTREES.clear()
     yield
 
 
@@ -432,6 +434,50 @@ def test_codex_roots_add_the_project_folder_only_for_windows_homes(tmp_path):
     assert roots[1].parent.name == ".codex"
     wsl = ags.SourceHome("wsl:Ubuntu", tmp_path, "/mnt/c/work/app")
     assert ags._codex_roots(wsl) == [tmp_path / ".codex" / "sessions"]
+
+
+def _git(cwd, *args):
+    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)
+
+
+@pytest.fixture
+def repo_with_worktree(tmp_path):
+    main = tmp_path / "main"
+    main.mkdir()
+    _git(main, "init", "-q")
+    _git(main, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "i")
+    wt = tmp_path / "wt"
+    _git(main, "worktree", "add", "-q", str(wt), "-b", "feat")
+    ags._WORKTREES.clear()
+    return main, wt
+
+
+def test_project_dirs_adds_worktrees_to_the_main_folder(repo_with_worktree):
+    main, wt = repo_with_worktree
+    dirs = ags.project_dirs(str(main))
+    assert len(dirs) == 2 and dirs[0] == str(main)
+    assert ags._same_dir(dirs[1], str(wt))
+
+
+def test_project_dirs_of_a_worktree_or_plain_folder_is_just_itself(repo_with_worktree, tmp_path):
+    _main, wt = repo_with_worktree
+    assert ags.project_dirs(str(wt)) == [str(wt)]
+    assert ags.project_dirs(str(tmp_path / "nowhere")) == [str(tmp_path / "nowhere")]
+
+
+def test_windows_homes_scan_each_worktree(repo_with_worktree):
+    main, wt = repo_with_worktree
+    homes = ags.windows_homes(str(main))
+    assert [h.source for h in homes] == ["windows", "windows"]
+    assert ags._same_dir(homes[1].cwd, str(wt))
+
+
+def test_wsl_homes_cover_each_worktree(monkeypatch, tmp_path):
+    monkeypatch.setattr(ags.generic_agent, "wsl_agents", lambda: ("Ubuntu", {"claude": "claude"}))
+    monkeypatch.setattr(ags, "_wsl_user_homes", lambda distro: [tmp_path])
+    monkeypatch.setattr(ags, "project_dirs", lambda repo: ["C:\\work\\app", "C:\\work\\app-wt"])
+    homes, _ = ags.wsl_homes("C:\\work\\app")
+    assert [h.cwd for h in homes] == ["/mnt/c/work/app", "/mnt/c/work/app-wt"]
 
 
 def test_wsl_sessions_never_blocks_and_serves_the_cached_result(monkeypatch, tmp_path):
