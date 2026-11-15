@@ -167,9 +167,9 @@ function _caSourceControlPanel() {
   return `
     <div class="ca-sc-panel">
       <div class="ca-sc-viewtabs">
-        <button class="ca-sc-viewtab" id="ca-viewtab-explorer" title="Files" aria-label="Files"${gatorActionAttrs('_caSetLeftView', ['explorer'])}>${_CA_TAB_ICON_FILES}</button>
-        <button class="ca-sc-viewtab active" id="ca-viewtab-scm" title="Changes" aria-label="Changes"${gatorActionAttrs('_caSetLeftView', ['scm'])}>${_CA_TAB_ICON_CHANGES}</button>
-        <button class="ca-sc-viewtab" id="ca-viewtab-history" title="History" aria-label="History"${gatorActionAttrs('_caSetLeftView', ['history'])}>${_CA_TAB_ICON_HISTORY}</button>
+        <button class="ca-sc-viewtab" id="ca-viewtab-explorer" aria-pressed="false" title="Files" aria-label="Files"${gatorActionAttrs('_caSetLeftView', ['explorer'])}>${_CA_TAB_ICON_FILES}</button>
+        <button class="ca-sc-viewtab active" id="ca-viewtab-scm" aria-pressed="true" title="Changes" aria-label="Changes"${gatorActionAttrs('_caSetLeftView', ['scm'])}>${_CA_TAB_ICON_CHANGES}</button>
+        <button class="ca-sc-viewtab" id="ca-viewtab-history" aria-pressed="false" title="History" aria-label="History"${gatorActionAttrs('_caSetLeftView', ['history'])}>${_CA_TAB_ICON_HISTORY}</button>
       </div>
       <div id="ca-scm-view" class="ca-scm-view">
         <div class="ca-sc-section-wrapper">
@@ -198,7 +198,7 @@ function _caSourceControlPanel() {
             autocomplete="off"
           />
         </div>
-        <div id="ca-hist-list" class="ah-list" role="list"></div>
+        <div id="ca-hist-list" class="ah-list"></div>
       </div>
     </div>`;
 }
@@ -211,7 +211,9 @@ function _caSetLeftView(view) {
   _caLeftView = view;
   Object.entries(panes).forEach(([name, id]) => {
     document.getElementById(id).style.display = name === view ? '' : 'none';
-    document.getElementById('ca-viewtab-' + name)?.classList.toggle('active', name === view);
+    const tab = document.getElementById('ca-viewtab-' + name);
+    tab?.classList.toggle('active', name === view);
+    tab?.setAttribute('aria-pressed', String(name === view));
   });
   if (view === 'explorer') _caLoadFileTree('', document.getElementById('ca-fe-root'), 0);
   if (view === 'history' && window.agentHistory) agentHistory.show();

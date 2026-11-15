@@ -154,7 +154,7 @@ def _codex_message(o: dict):
 def parse_claude(path: Path, st) -> dict | None:
     """A session record for one Claude transcript, or None when it is not a user session."""
     session_id = path.stem
-    if not SESSION_ID_RE.match(session_id):
+    if not SESSION_ID_RE.fullmatch(session_id):
         return None
     head = _read_head(path)
     tail = _read_tail(path, st.st_size) if st.st_size > HEAD_BYTES else head
@@ -209,7 +209,7 @@ def parse_codex(path: Path, st) -> dict | None:
         return None
     session_id = meta.get("id")
     cwd = meta.get("cwd")
-    if not isinstance(session_id, str) or not SESSION_ID_RE.match(session_id) or not isinstance(cwd, str):
+    if not isinstance(session_id, str) or not SESSION_ID_RE.fullmatch(session_id) or not isinstance(cwd, str):
         return None
     source = meta.get("source")
     if isinstance(source, dict) and "subagent" in source:
@@ -297,7 +297,10 @@ def _scan_claude(sh: SourceHome) -> list[dict]:
                 continue
             for e in os.scandir(d.path):
                 if e.name.endswith(".jsonl") and e.is_file():
-                    files.append((e.stat(), Path(e.path)))
+                    try:
+                        files.append((e.stat(), Path(e.path)))
+                    except OSError:
+                        continue  # vanished between scandir and stat
     except OSError:
         pass
     files.sort(key=lambda f: f[0].st_mtime, reverse=True)

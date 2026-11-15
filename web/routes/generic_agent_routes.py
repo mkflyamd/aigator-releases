@@ -78,7 +78,7 @@ async def prepare_agent_handoff(req: HandoffPrepareRequest):
         if req.session_id:
             if req.agent not in ("claude", "codex"):
                 raise HTTPException(status_code=400, detail=f"{req.agent!r} has no stored sessions.")
-            if not agent_sessions.SESSION_ID_RE.match(req.session_id):
+            if not agent_sessions.SESSION_ID_RE.fullmatch(req.session_id):
                 raise HTTPException(status_code=400, detail="Invalid session id.")
             stored = await asyncio.to_thread(
                 agent_sessions.find_session, req.repo_path, req.agent, req.session_id
@@ -146,7 +146,7 @@ async def generic_agent_terminal(req: GenericAgentTerminalRequest):
             raise HTTPException(status_code=400, detail="A session cannot be resumed and handed off at once.")
         if req.agent not in ("claude", "codex"):
             raise HTTPException(status_code=400, detail=f"{req.agent!r} cannot resume a session.")
-        if not agent_sessions.SESSION_ID_RE.match(req.resume_id):
+        if not agent_sessions.SESSION_ID_RE.fullmatch(req.resume_id):
             raise HTTPException(status_code=400, detail="Invalid session id.")
         resume = await asyncio.to_thread(agent_sessions.find_session, req.repo_path, req.agent, req.resume_id)
         if resume is None:

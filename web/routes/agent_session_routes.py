@@ -59,7 +59,7 @@ async def list_agent_sessions(project_name: str, pty: list[str] = Query(default=
 
 @router.get("/api/agent-sessions/{agent}/{session_id}/preview")
 async def preview_agent_session(agent: str, session_id: str, project_name: str):
-    if agent not in agent_sessions.AGENTS or not agent_sessions.SESSION_ID_RE.match(session_id):
+    if agent not in agent_sessions.AGENTS or not agent_sessions.SESSION_ID_RE.fullmatch(session_id):
         raise HTTPException(status_code=400, detail="Unknown agent or session id.")
     repo_path = _repo_path(project_name)
 

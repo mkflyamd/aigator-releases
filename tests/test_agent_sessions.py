@@ -137,6 +137,14 @@ def test_codex_record_and_context_skip(tmp_path):
     assert rec["started_at"] == pytest.approx(1794736800.0, abs=1)
 
 
+def test_session_ids_with_a_trailing_newline_are_rejected(tmp_path):
+    assert ags.SESSION_ID_RE.fullmatch("019a-aaaa")
+    assert not ags.SESSION_ID_RE.fullmatch("019a-aaaa\n")
+    msgs = [codex_msg("user", "Fix the flaky login test")]
+    assert parse_x(tmp_path, [codex_meta_line(id="019a-aaaa"), *msgs]) is not None
+    assert parse_x(tmp_path, [codex_meta_line(id="019a-aaaa\n"), *msgs]) is None
+
+
 def test_codex_hides_subagent_noid_and_empty(tmp_path):
     sub = codex_meta_line(source={"subagent": {"thread_spawn": {}}})
     assert parse_x(tmp_path, [sub, codex_msg("user", "hi")]) is None
@@ -322,6 +330,30 @@ def test_scan_skips_a_transcript_that_vanishes_between_stat_and_read(tmp_path, m
     assert [r["id"] for r in ags.scan_project(PROJECT, homes=[home_for(tmp_path)])] == ["ok"]
     monkeypatch.setattr(ags, "parse_claude", real)
     assert [r["id"] for r in ags.scan_project(PROJECT, homes=[home_for(tmp_path)])] == ["gone", "ok"]
+
+
+def test_scan_skips_a_transcript_that_vanishes_between_scandir_and_stat(tmp_path, monkeypatch):
+    put_claude(tmp_path, "gone", [claude_user("deleted")], mtime=1_700_000_002)
+    put_claude(tmp_path, "ok", [claude_user("fine")], mtime=1_700_000_001)
+    real = os.scandir
+
+    class Vanished:
+        def __init__(self, entry):
+            self.name, self.path = entry.name, entry.path
+
+        def is_file(self):
+            return True
+
+        def stat(self):
+            raise FileNotFoundError(self.path)
+
+    def scandir(path):
+        if not str(path).endswith("C--work-app"):
+            return real(path)
+        return [Vanished(e) if e.name == "gone.jsonl" else e for e in real(path)]
+
+    monkeypatch.setattr(ags.os, "scandir", scandir)
+    assert [r["id"] for r in ags.scan_project(PROJECT, homes=[home_for(tmp_path)])] == ["ok"]
 
 
 def test_wsl_cwd_maps_windows_and_unc_paths():

@@ -345,7 +345,7 @@
       load();
       return;
     }
-    ui.notice[row.key] = 'Could not resume this session. It may have been deleted.';
+    ui.notice[row.key] = 'Could not resume this session.';
     render();
     load();
   }
@@ -477,6 +477,10 @@
   }
 
   function showFlyout(row) {
+    if (!panelVisible()) {
+      hideFlyout();
+      return;
+    }
     clearTimeout(fly.showTimer);
     clearTimeout(fly.hideTimer);
     fly.showTimer = fly.hideTimer = null;
@@ -529,6 +533,10 @@
 
   function paintFlyout(key) {
     if (!fly.key || fly.key !== key) return;
+    if (!panelVisible()) {
+      hideFlyout();
+      return;
+    }
     const row = fly.row;
     const item = itemFor(key);
     const panel = document.getElementById('ca-hist-view');
@@ -678,6 +686,13 @@
     item.setAttribute('role', 'listitem');
     const head = el('div', 'ah-row');
     head.tabIndex = 0;
+    const pill = statePill(row);
+    const text = metaLine(row, now, agentName);
+    head.setAttribute('role', 'group');
+    head.setAttribute(
+      'aria-label',
+      [row.title, pill && pill.textContent, text].filter(Boolean).join(', '),
+    );
     const lead = el('span', 'ah-lead');
     if (typeof _genAgentTabIcon === 'function') lead.appendChild(_genAgentTabIcon(row.agent));
     if (row.state === 'needs_you' || row.state === 'working') {
@@ -688,11 +703,9 @@
     const main = el('span', 'ah-main');
     const top = el('span', 'ah-top');
     top.appendChild(el('span', 'ah-title', row.title));
-    const pill = statePill(row);
     if (pill) top.appendChild(pill);
     main.appendChild(top);
     // The time is the last part of the meta line; keep it whole and let the branch truncate.
-    const text = metaLine(row, now, agentName);
     const cut = text.lastIndexOf(' · ');
     const meta = el('span', 'ah-meta');
     meta.appendChild(el('span', 'ah-meta-lead', text.slice(0, cut)));
@@ -784,6 +797,9 @@
     groups.forEach((g) => {
       const section = el('div', 'ah-group ah-group-' + g.key);
       const label = el('div', 'ah-group-label');
+      label.id = 'ah-group-label-' + g.key;
+      section.setAttribute('role', 'list');
+      section.setAttribute('aria-labelledby', label.id);
       label.appendChild(el('span', 'ah-group-name', g.title));
       label.appendChild(el('span', 'ah-group-count', String(g.rows.length)));
       section.appendChild(label);

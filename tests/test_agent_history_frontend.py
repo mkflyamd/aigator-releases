@@ -194,3 +194,32 @@ def test_new_motion_respects_reduced_motion():
     block = _history_css()
     reduced = block.split("@media (prefers-reduced-motion: reduce)")[1]
     assert ".ah-flyout" in reduced and ".ah-actions" in reduced
+
+
+def test_history_list_has_a_valid_list_structure_and_named_rows():
+    assert 'id="ca-hist-list" class="ah-list"></div>' in CODE  # no role on the container
+    assert "section.setAttribute('role', 'list');" in HISTORY
+    assert "label.id = 'ah-group-label-' + g.key;" in HISTORY
+    assert "section.setAttribute('aria-labelledby', label.id);" in HISTORY
+    row = HISTORY.split("function buildRow(")[1].split("function ")[0]
+    assert "item.setAttribute('role', 'listitem');" in row
+    assert "head.setAttribute('role', 'group');" in row
+    assert "'aria-label'," in row
+
+
+def test_left_view_tabs_expose_which_pane_is_active():
+    assert 'id="ca-viewtab-scm" aria-pressed="true"' in CODE
+    for name in ("explorer", "history"):
+        assert f'id="ca-viewtab-{name}" aria-pressed="false"' in CODE
+    assert "tab?.setAttribute('aria-pressed', String(name === view));" in CODE
+
+
+def test_resume_failure_note_does_not_guess_the_cause():
+    assert "'Could not resume this session.'" in HISTORY
+    assert "may have been deleted" not in HISTORY
+
+
+def test_the_preview_card_never_paints_while_the_panel_is_hidden():
+    for fn in ("function showFlyout", "function paintFlyout"):
+        body = HISTORY.split(fn)[1].split("function ")[0]
+        assert "if (!panelVisible()) {" in body
