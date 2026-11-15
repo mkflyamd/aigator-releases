@@ -529,6 +529,7 @@ function _genAgentActivateSession(tabId, ptyId) {
   });
   _genAgentUpdateActiveTab(tabId);
   const sess = state.sessions[ptyId];
+  if (sess) sess._viewedAt = Date.now();
   if (sess && sess.term)
     setTimeout(() => {
       _ocFit(sess);
@@ -926,6 +927,7 @@ async function _genAgentStart(tabId, agent, projectId, repoPath, opts) {
               cols: dims.cols,
               rows: dims.rows,
               handoff_id: opts.handoffId,
+              resume_id: opts.resumeId,
             }),
           })
         : await fetch('/api/generic-agent/terminal', {
@@ -939,6 +941,7 @@ async function _genAgentStart(tabId, agent, projectId, repoPath, opts) {
               cols: dims.cols,
               rows: dims.rows,
               handoff_id: opts.handoffId,
+              resume_id: opts.resumeId,
             }),
           });
     if (!resp.ok) {
@@ -1390,6 +1393,7 @@ function _genAgentConnect(sess, retryDelay) {
       if (typeof msg.seq === 'number') sess._outputSeq = msg.seq;
       sess._outputChars = (sess._outputChars || 0) + String(msg.data || '').length;
       sess._lastOutputAt = Date.now();
+      if (window.agentHistory && agentHistory.isViewing(sess)) sess._viewedAt = sess._lastOutputAt;
       if (window.agentHandoff) {
         // Whether the agent has switched bracketed paste on (ESC[?2004h); the
         // handoff prompt is only drafted into a terminal that has.
