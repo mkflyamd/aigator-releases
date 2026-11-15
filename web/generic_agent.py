@@ -33,6 +33,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -191,6 +192,7 @@ def find_agent_binary(agent: str) -> str | None:
 _WSL_TTL_SECONDS = 60
 _WSL_PROBE_TIMEOUT = 20
 _wsl_cache: tuple[float, tuple[str | None, dict[str, str]]] = (0.0, (None, {}))
+_wsl_first_probe = threading.Lock()
 
 
 def _wsl_capable(agent: str) -> bool:
@@ -259,41 +261,89 @@ def _wsl_probe() -> tuple[str | None, dict[str, str]]:
     return distro, found
 
 
-def wsl_agents() -> tuple[str | None, dict[str, str]]:
+_refresh_lock = threading.Lock()
+_refreshing: set[str] = set()
+
+
+def _stale_while_revalidate(key: str, refresh) -> None:
+    """Re-run `refresh` off-thread so a caller holding an expired cache entry is
+    never made to wait on a WSL cold start."""
+    with _refresh_lock:
+        if key in _refreshing:
+            return
+        _refreshing.add(key)
+
+    def run():
+        try:
+            refresh()
+        finally:
+            with _refresh_lock:
+                _refreshing.discard(key)
+
+    threading.Thread(target=run, daemon=True, name=f"gator-{key}-refresh").start()
+
+
+def _refresh_wsl_cache() -> None:
     global _wsl_cache
+    _wsl_cache = (time.monotonic(), _wsl_probe())
+
+
+def wsl_agents() -> tuple[str | None, dict[str, str]]:
     stamp, value = _wsl_cache
-    if time.monotonic() - stamp > _WSL_TTL_SECONDS or not stamp:
-        value = _wsl_probe()
-        _wsl_cache = (time.monotonic(), value)
+    if not stamp:
+        with _wsl_first_probe:
+            if not _wsl_cache[0]:
+                _refresh_wsl_cache()
+        return _wsl_cache[1]
+    if time.monotonic() - stamp > _WSL_TTL_SECONDS:
+        _stale_while_revalidate("wsl", _refresh_wsl_cache)
     return value
 
 
 _codex_cfg_cache: tuple[float, str] = (0.0, "")
 
 
-def _codex_config_text() -> str:
-    """The user's Codex config.toml: the Windows file when Codex is installed
-    on Windows, otherwise the one inside the WSL distro that has it."""
-    global _codex_cfg_cache
-    stamp, text = _codex_cfg_cache
-    if stamp and time.monotonic() - stamp <= _WSL_TTL_SECONDS:
-        return text
-    text = ""
+def _read_codex_config() -> str:
     if find_agent_binary("codex"):
         home = os.environ.get("CODEX_HOME") or str(Path.home() / ".codex")
         try:
-            text = (Path(home) / "config.toml").read_text(encoding="utf-8")
+            return (Path(home) / "config.toml").read_text(encoding="utf-8")
         except OSError:
-            pass
-    else:
-        distro, found = wsl_agents()
-        if distro and "codex" in found:
-            text = _wsl_run(
-                ["-d", distro, "--", "bash"],
-                'cat "${CODEX_HOME:-$HOME/.codex}/config.toml" 2>/dev/null; exit 0',
-            ) or ""
-    _codex_cfg_cache = (time.monotonic(), text)
+            return ""
+    distro, found = wsl_agents()
+    if distro and "codex" in found:
+        return _wsl_run(
+            ["-d", distro, "--", "bash"],
+            'cat "${CODEX_HOME:-$HOME/.codex}/config.toml" 2>/dev/null; exit 0',
+        ) or ""
+    return ""
+
+
+def _refresh_codex_config() -> None:
+    global _codex_cfg_cache
+    _codex_cfg_cache = (time.monotonic(), _read_codex_config())
+
+
+def _codex_config_text() -> str:
+    """The user's Codex config.toml: the Windows file when Codex is installed
+    on Windows, otherwise the one inside the WSL distro that has it."""
+    stamp, text = _codex_cfg_cache
+    if not stamp:
+        _refresh_codex_config()
+        return _codex_cfg_cache[1]
+    if time.monotonic() - stamp > _WSL_TTL_SECONDS:
+        _stale_while_revalidate("codex-config", _refresh_codex_config)
     return text
+
+
+def warm_agent_caches() -> None:
+    """Probe WSL and read Codex's config in the background at startup, so the
+    first "+" menu or handoff dialog does not pay for a WSL cold start."""
+    def run():
+        wsl_agents()
+        _codex_config_text()
+
+    threading.Thread(target=run, daemon=True, name="gator-agent-warmup").start()
 
 
 def codex_config_routes_to_gateway(profile: dict) -> bool:
@@ -332,7 +382,7 @@ def _wsl_command(agent: str, repo_path: str) -> list[str] | None:
 def is_installed(agent: str) -> bool:
     """Whether this agent can be spawned right now. The Windows PATH is checked
     per call so an agent installed mid-session shows up without a restart; WSL is
-    probed at most once a minute because it can boot the distro."""
+    probed in the background at most once a minute because it can boot the distro."""
     if agent == TERMINAL_AGENT:
         return True
     if agent == OPENCODE_BARE_AGENT:

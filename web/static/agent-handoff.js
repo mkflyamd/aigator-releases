@@ -330,7 +330,6 @@
           row.classList.toggle('is-missing', missing);
           if (typeof _genAgentTabIcon === 'function') row.appendChild(_genAgentTabIcon(t.agent));
           row.appendChild(h('span', 'agent-handoff-option-name', t.label));
-          if (t.agent === sess.agent) row.appendChild(h('span', 'agent-handoff-chip', 'Current'));
           if (!missing) {
             row.addEventListener('click', () => {
               select(t.agent);

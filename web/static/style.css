@@ -23207,8 +23207,18 @@ body.tab-fullscreen {
   max-height: min(40vh, 18rem);
   overflow-y: auto;
   scrollbar-width: thin;
-  scrollbar-color: rgba(127, 127, 127, 0.5) transparent;
+  scrollbar-color: var(--border2) transparent;
   margin-top: 0.2rem;
+}
+.agent-handoff-targets::-webkit-scrollbar {
+  width: 4px;
+}
+.agent-handoff-targets::-webkit-scrollbar-track {
+  background: transparent;
+}
+.agent-handoff-targets::-webkit-scrollbar-thumb {
+  background: var(--border2);
+  border-radius: 2px;
 }
 .agent-handoff-group-title {
   position: sticky;
@@ -23245,14 +23255,6 @@ body.tab-fullscreen {
 }
 .agent-handoff-option.is-missing:hover {
   background: transparent;
-}
-.agent-handoff-chip {
-  margin-left: auto;
-  padding: 0 6px;
-  border-radius: 999px;
-  border: 1px solid currentColor;
-  font-size: 0.65rem;
-  opacity: 0.7;
 }
 .agent-handoff-empty {
   padding: 0.8rem 0.5rem;

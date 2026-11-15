@@ -863,6 +863,10 @@ async def lifespan(app):
     import sandbox as _sandbox
     asyncio.create_task(asyncio.to_thread(_sandbox.sweep_stale_grants))
 
+    # Probe WSL for coding agents now so the first agent menu or handoff dialog is instant.
+    import generic_agent as _generic_agent
+    _generic_agent.warm_agent_caches()
+
     # Respawn any spawned preset MCP servers that were orphaned by a restart
     # (e.g. Google Workspace's workspace-mcp process), then start the background
     # supervisor that keeps them alive.
