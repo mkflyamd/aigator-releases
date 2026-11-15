@@ -21687,6 +21687,16 @@ body.tab-fullscreen {
   border-color: var(--accent);
   color: var(--surface);
 }
+/* Light theme: the accent and warn tokens are only 2.7-3.3:1 as small text on white or the
+   row highlight, so the history panel darkens them. */
+[data-theme='light'] .ah-msg-assistant .ah-role,
+[data-theme='light'] .ah-group-working .ah-group-label {
+  color: color-mix(in srgb, var(--accent) 70%, black);
+}
+[data-theme='light'] .ah-group-needs_you .ah-group-label,
+[data-theme='light'] .ah-note-warn {
+  color: color-mix(in srgb, var(--warn) 80%, black);
+}
 .ah-empty,
 .ah-foot {
   padding: 16px 14px;

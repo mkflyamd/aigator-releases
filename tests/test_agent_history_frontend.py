@@ -67,3 +67,14 @@ def test_history_panel_never_builds_markup_from_session_text():
     ctl = HISTORY.split("Browser panel")[1]
     assert "innerHTML" not in ctl
     assert "insertAdjacentHTML" not in ctl
+
+
+def test_a_project_switch_clears_the_old_rows_straight_away():
+    branch = HISTORY.split("if (ui.project !== project.name) {")[1].split("ui.wslPolls = 0;")[1][:40]
+    assert branch.strip().startswith("render();")
+
+
+def test_rebuilding_the_list_keeps_keyboard_focus_on_the_same_row_and_button():
+    assert "item.dataset.key = row.key;" in HISTORY
+    assert "const focused = focusedTarget(list);" in HISTORY
+    assert "restoreFocus(list, focused);" in HISTORY

@@ -244,6 +244,7 @@
       ui.previews = {};
       ui.notice = {};
       ui.wslPolls = 0;
+      render();
     }
     ui.busy = true;
     ui.fetchedAt = Date.now();
@@ -420,6 +421,7 @@
   function buildRow(row, now) {
     const open = ui.openKey === row.key;
     const item = el('div', 'ah-item' + (open ? ' open' : ''));
+    item.dataset.key = row.key;
     item.setAttribute('role', 'listitem');
     const head = el('div', 'ah-row ah-state-' + row.state);
     head.tabIndex = 0;
@@ -462,6 +464,28 @@
     return 'No agent sessions in this project yet.';
   }
 
+  // render() rebuilds the list, which drops focus; remember the row or button that had it.
+  function focusedTarget(list) {
+    const a = document.activeElement;
+    const item = a && list.contains(a) ? a.closest('.ah-item') : null;
+    if (!item) return null;
+    const at = Array.from(item.querySelectorAll('button')).indexOf(a);
+    return { key: item.dataset.key, button: at };
+  }
+
+  function restoreFocus(list, target) {
+    if (!target) return;
+    const item = Array.from(list.querySelectorAll('.ah-item')).find(
+      (i) => i.dataset.key === target.key,
+    );
+    if (!item) return;
+    const next =
+      target.button >= 0
+        ? item.querySelectorAll('button')[target.button]
+        : item.querySelector('.ah-row');
+    if (next) next.focus();
+  }
+
   function render() {
     const list = document.getElementById('ca-hist-list');
     if (!list) return;
@@ -485,6 +509,7 @@
     if (sig === ui.sig && list.childNodes.length) return;
     ui.sig = sig;
     const top = list.scrollTop;
+    const focused = focusedTarget(list);
     list.textContent = '';
     groups.forEach((g) => {
       const section = el('div', 'ah-group ah-group-' + g.key);
@@ -505,6 +530,7 @@
     if (ui.wslPending && ui.wslPolls < WSL_POLL_MAX)
       list.appendChild(el('div', 'ah-foot', 'Checking WSL…'));
     list.scrollTop = top;
+    restoreFocus(list, focused);
   }
 
   function bindSearch() {
