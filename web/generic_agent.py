@@ -28,7 +28,12 @@ accepted below for the other agents).
 """
 from __future__ import annotations
 
+import os
+import shlex
 import shutil
+import subprocess
+import sys
+import time
 import uuid
 from pathlib import Path
 
@@ -105,6 +110,56 @@ TERMINAL_AGENT = "terminal"
 OPENCODE_BARE_AGENT = "opencode-bare"
 
 
+CORE_AGENT_LABELS = {
+    "claude": "Claude Code",
+    "codex": "Codex",
+    "crush": "Crush",
+    OPENCODE_BARE_AGENT: "OpenCode",
+}
+# Agents whose launch always injects the AI Gator gateway config. Claude Code is
+# routed when the profile has an Anthropic endpoint, and Codex when its own
+# config already points at the gateway; everything else runs on whatever
+# configuration the user already has.
+GATEWAY_ROUTED = frozenset({"crush", OPENCODE_BARE_AGENT})
+
+
+def agent_label(agent: str) -> str:
+    if agent == TERMINAL_AGENT:
+        return "Terminal"
+    return CORE_AGENT_LABELS.get(agent) or EXTRA_AGENT_LABELS.get(agent) or agent
+
+
+def is_gateway_routed(agent: str) -> bool:
+    if agent in GATEWAY_ROUTED:
+        return True
+    if agent == "claude":
+        return gateway_binding(agent) is not None
+    if agent == "codex":
+        from llm.registry import get_active_profile
+
+        return codex_config_routes_to_gateway(get_active_profile())
+    return False
+
+
+def handoff_targets() -> list[dict]:
+    """Every agent a session can be continued in: the core agents (listed even
+    when missing, so the dialog can say so) then the other catalog agents that
+    are installed."""
+    targets = []
+    for a in [*CORE_AGENT_LABELS, *EXTRA_AGENTS]:
+        installed = is_installed(a)
+        if installed or a in CORE_AGENT_LABELS:
+            targets.append(
+                {
+                    "agent": a,
+                    "label": agent_label(a),
+                    "gateway_routed": is_gateway_routed(a),
+                    "installed": installed,
+                }
+            )
+    return targets
+
+
 def is_supported(agent: str) -> bool:
     return agent in SUPPORTED_AGENTS or agent == TERMINAL_AGENT or agent == OPENCODE_BARE_AGENT
 
@@ -132,14 +187,161 @@ def find_agent_binary(agent: str) -> str | None:
     return None
 
 
+# Agents installed inside WSL rather than on the Windows PATH. Crush is left out
+# because its gateway config is a Windows file path; OpenCode is not in
+# SUPPORTED_AGENTS at all.
+_WSL_TTL_SECONDS = 60
+_WSL_PROBE_TIMEOUT = 20
+_wsl_cache: tuple[float, tuple[str | None, dict[str, str]]] = (0.0, (None, {}))
+
+
+def _wsl_capable(agent: str) -> bool:
+    return agent in SUPPORTED_AGENTS and agent != "crush"
+
+
+def _wsl_run(args: list[str], script: str | None = None) -> str | None:
+    try:
+        proc = subprocess.run(
+            ["wsl.exe", *args],
+            input=script.encode() if script is not None else None,
+            capture_output=True,
+            timeout=_WSL_PROBE_TIMEOUT,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return proc.stdout.decode("utf-8", "replace") if proc.returncode == 0 else None
+
+
+def _wsl_default_distro() -> str | None:
+    # `wsl -l` writes UTF-16, so it is decoded from the raw bytes.
+    try:
+        proc = subprocess.run(
+            ["wsl.exe", "-l", "-q"],
+            capture_output=True,
+            timeout=_WSL_PROBE_TIMEOUT,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    for name in proc.stdout.decode("utf-16-le", "replace").lstrip("\ufeff").split():
+        if not name.startswith("docker-desktop"):
+            return name
+    return None
+
+
+def _wsl_probe() -> tuple[str | None, dict[str, str]]:
+    """(distro, {agent id: executable name}) for catalog agents found inside the
+    default WSL distro. Hits under /mnt are the Windows PATH leaking in, which the
+    Windows lookup already covers."""
+    if sys.platform != "win32" or not shutil.which("wsl.exe"):
+        return None, {}
+    distro = _wsl_default_distro()
+    if not distro:
+        return None, {}
+    names: dict[str, str] = {}
+    for agent in SUPPORTED_AGENTS:
+        if _wsl_capable(agent):
+            for name in (SUPPORTED_AGENTS[agent][0], *(EXTRA_AGENTS[agent][2] if agent in EXTRA_AGENTS else ())):
+                names[name] = agent
+    script = 'for n in %s; do p=$(command -v "$n") && echo "$n=$p"; done; exit 0' % " ".join(shlex.quote(n) for n in names)
+    # A cold distro can return nothing on the first call, so try twice.
+    out = ""
+    for _ in range(2):
+        # The script goes in on stdin: wsl.exe runs its argv through a shell that
+        # would expand the loop's $variables before bash sees them.
+        out = _wsl_run(["-d", distro, "--", "bash", "-l"], script) or ""
+        if "=" in out:
+            break
+    found: dict[str, str] = {}
+    for line in out.splitlines():
+        name, _, path = line.strip().partition("=")
+        if name in names and path.startswith("/") and not path.startswith("/mnt/"):
+            found.setdefault(names[name], name)
+    return distro, found
+
+
+def wsl_agents() -> tuple[str | None, dict[str, str]]:
+    global _wsl_cache
+    stamp, value = _wsl_cache
+    if time.monotonic() - stamp > _WSL_TTL_SECONDS or not stamp:
+        value = _wsl_probe()
+        _wsl_cache = (time.monotonic(), value)
+    return value
+
+
+_codex_cfg_cache: tuple[float, str] = (0.0, "")
+
+
+def _codex_config_text() -> str:
+    """The user's Codex config.toml: the Windows file when Codex is installed
+    on Windows, otherwise the one inside the WSL distro that has it."""
+    global _codex_cfg_cache
+    stamp, text = _codex_cfg_cache
+    if stamp and time.monotonic() - stamp <= _WSL_TTL_SECONDS:
+        return text
+    text = ""
+    if find_agent_binary("codex"):
+        home = os.environ.get("CODEX_HOME") or str(Path.home() / ".codex")
+        try:
+            text = (Path(home) / "config.toml").read_text(encoding="utf-8")
+        except OSError:
+            pass
+    else:
+        distro, found = wsl_agents()
+        if distro and "codex" in found:
+            text = _wsl_run(
+                ["-d", distro, "--", "bash"],
+                'cat "${CODEX_HOME:-$HOME/.codex}/config.toml" 2>/dev/null; exit 0',
+            ) or ""
+    _codex_cfg_cache = (time.monotonic(), text)
+    return text
+
+
+def codex_config_routes_to_gateway(profile: dict) -> bool:
+    """Whether Codex's own config selects a provider hosted on the profile's
+    gateway (AMD's Codex build is set up this way and refuses other providers,
+    so AI Gator leaves its launch alone)."""
+    import tomllib
+    from urllib.parse import urlparse
+
+    gateway_hosts = {
+        urlparse(profile.get(k) or "").hostname
+        for k in ("base_url", "anthropic_url")
+    } - {None}
+    if not gateway_hosts:
+        return False
+    try:
+        cfg = tomllib.loads(_codex_config_text())
+    except tomllib.TOMLDecodeError:
+        return False
+    provider = (cfg.get("model_providers") or {}).get(cfg.get("model_provider", ""), {})
+    return urlparse(provider.get("base_url") or "").hostname in gateway_hosts
+
+
+def _wsl_command(agent: str, repo_path: str) -> list[str] | None:
+    distro, found = wsl_agents()
+    name = found.get(agent)
+    if not distro or not name:
+        return None
+    argv = [name, *SUPPORTED_AGENTS[agent][1:]]
+    cmd = ["wsl.exe", "-d", distro]
+    if repo_path:
+        cmd += ["--cd", repo_path]
+    return [*cmd, "--", "bash", "-lc", "exec " + shlex.join(argv)]
+
+
 def is_installed(agent: str) -> bool:
-    """Whether this agent can be spawned right now. Checked per call, not cached,
-    so an agent installed mid-session shows up without a restart."""
+    """Whether this agent can be spawned right now. The Windows PATH is checked
+    per call so an agent installed mid-session shows up without a restart; WSL is
+    probed at most once a minute because it can boot the distro."""
     if agent == TERMINAL_AGENT:
         return True
     if agent == OPENCODE_BARE_AGENT:
         return build_opencode_bare_command("") is not None
-    return find_agent_binary(agent) is not None
+    if find_agent_binary(agent) is not None:
+        return True
+    return _wsl_capable(agent) and agent in wsl_agents()[1]
 
 
 def launchable_agents() -> list[str]:
@@ -147,7 +349,7 @@ def launchable_agents() -> list[str]:
     return [*core, OPENCODE_BARE_AGENT, TERMINAL_AGENT, *EXTRA_AGENTS]
 
 
-def build_command(agent: str) -> list[str] | None:
+def build_command(agent: str, repo_path: str = "") -> list[str] | None:
     """Full argv to spawn for this agent, with the resolved absolute binary
     path in place of the bare name (matches OpenCode's own build_opencode_
     command pattern of never relying on child-process PATH resolution)."""
@@ -156,7 +358,7 @@ def build_command(agent: str) -> list[str] | None:
         return None
     resolved = find_agent_binary(agent)
     if not resolved:
-        return None
+        return _wsl_command(agent, repo_path) if _wsl_capable(agent) else None
     return [resolved, *argv[1:]]
 
 
@@ -459,3 +661,56 @@ def build_crush_env() -> dict[str, str]:
         "CRUSH_GLOBAL_CONFIG": str(_CRUSH_CONFIG_DIR),
         "GATOR_CRUSH_KEY": profile["api_key"],
     }
+
+
+def _claude_env_from_profile(profile: dict, models: list[str]) -> dict[str, str] | None:
+    """Env that points Claude Code at the profile's Anthropic-native gateway
+    URL, or None when the profile has no key or no Anthropic endpoint."""
+    from llm.gateway import profile_headers
+
+    anthropic_url = (profile.get("anthropic_url") or "").strip().rstrip("/")
+    if not profile.get("api_key") or not anthropic_url:
+        return None
+    # Claude Code appends /v1/messages itself.
+    if anthropic_url.endswith("/v1"):
+        anthropic_url = anthropic_url[: -len("/v1")]
+
+    claude_models = [m for m in models if "claude" in m.lower()]
+    active = profile.get("active_model", "")
+    default = active if active in claude_models else (claude_models[0] if claude_models else "")
+
+    def _family(name: str) -> str:
+        return next((m for m in claude_models if name in m.lower()), default)
+
+    headers = profile_headers(profile)
+    env = {
+        "ANTHROPIC_BASE_URL": anthropic_url,
+        "ANTHROPIC_API_KEY": profile["api_key"],
+        "ANTHROPIC_CUSTOM_HEADERS": "\n".join(f"{k}: {v}" for k, v in headers.items()),
+    }
+    if default:
+        env["ANTHROPIC_MODEL"] = default
+        env["ANTHROPIC_DEFAULT_OPUS_MODEL"] = _family("opus")
+        env["ANTHROPIC_DEFAULT_SONNET_MODEL"] = _family("sonnet")
+        env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = _family("haiku")
+        env["ANTHROPIC_SMALL_FAST_MODEL"] = _family("haiku")
+    return env
+
+
+def gateway_binding(agent: str) -> dict[str, str] | None:
+    """Env that routes this agent through the active profile's gateway, or None
+    when it can't be bound (the agent then starts on the user's own config)."""
+    from llm.registry import get_active_profile, available_models
+
+    if agent == "claude":
+        return _claude_env_from_profile(get_active_profile(), available_models())
+    return None
+
+
+def with_wsl_env(command: list[str] | None, env: dict[str, str] | None) -> dict[str, str] | None:
+    """Agents launched inside WSL only see Windows variables named in WSLENV."""
+    if not env or not command or os.path.basename(command[0]).lower() != "wsl.exe":
+        return env
+    names = [k for k in env if k != "WSLENV"]
+    existing = os.environ.get("WSLENV", "")
+    return {**env, "WSLENV": ":".join(filter(None, [existing, *names]))}

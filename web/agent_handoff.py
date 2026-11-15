@@ -17,6 +17,8 @@ import uuid
 from collections.abc import Iterable
 from pathlib import Path
 
+import generic_agent
+
 _log = logging.getLogger("agent_handoff")
 
 HANDOFF_DIR = Path.home() / ".gator" / "handoffs"
@@ -25,19 +27,7 @@ CAPTURE_MAX_CHARS = 36_000
 SNAPSHOT_MAX_CHARS = 400_000
 MESSAGE_MAX_CHARS = 2_000
 
-# (agent id, label, routed through the AI Gator gateway)
-TARGETS = (
-    ("claude", "Claude Code", False),
-    ("codex", "Codex", False),
-    ("crush", "Crush", True),
-    ("opencode-bare", "OpenCode", True),
-)
-AGENT_LABELS = {a: label for a, label, _ in TARGETS}
-AGENT_LABELS["terminal"] = "Terminal"
-
-
-def is_gateway_routed(agent: str) -> bool:
-    return any(a == agent and routed for a, _, routed in TARGETS)
+is_gateway_routed = generic_agent.is_gateway_routed
 
 
 _NOT_YET_REDACTED = r"(?!\[REDACTED\])"
@@ -148,7 +138,7 @@ def build_prompt(
     last_user: str = "",
     last_assistant: str = "",
 ) -> str:
-    label = AGENT_LABELS.get(source_agent, source_agent)
+    label = generic_agent.agent_label(source_agent)
     one_line_cwd = re.sub(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]", " ", cwd)
     parts = [
         f"Continue work from a prior {label} session. The prior session is read-only context.",

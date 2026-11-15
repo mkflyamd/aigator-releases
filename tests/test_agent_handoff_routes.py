@@ -24,6 +24,11 @@ def _app(override_csrf=True):
     return TestClient(app)
 
 
+@pytest.fixture(autouse=True)
+def no_wsl(monkeypatch):
+    monkeypatch.setattr(generic_agent, "wsl_agents", lambda: (None, {}))
+
+
 @pytest.fixture
 def handoff_env(tmp_path, monkeypatch):
     monkeypatch.setattr(ah, "HANDOFF_DIR", tmp_path / "h")
@@ -47,12 +52,13 @@ def spawned(monkeypatch):
         generic_agent, "build_opencode_bare_env",
         lambda: {"OPENCODE_CONFIG_CONTENT": "{}", "GATOR_OPENCODE_KEY": FAKE},
     )
-    monkeypatch.setattr(generic_agent, "build_command", lambda agent: [agent])
+    monkeypatch.setattr(generic_agent, "build_command", lambda agent, repo="": [agent])
     monkeypatch.setattr(generic_agent, "build_crush_env", lambda: {"CRUSH_GLOBAL_CONFIG": "/c", "GATOR_CRUSH_KEY": FAKE})
     return calls
 
 
-def test_prepare_returns_preview_and_targets(handoff_env):
+def test_prepare_returns_preview_and_targets(handoff_env, monkeypatch):
+    monkeypatch.setattr(generic_agent, "is_installed", lambda agent: agent in generic_agent.CORE_AGENT_LABELS)
     r = _app().post("/api/generic-agent/handoff/prepare", json=BODY)
     assert r.status_code == 200
     data = r.json()
@@ -199,7 +205,30 @@ def test_installed_check_is_not_cached(monkeypatch):
 
 
 def test_prepare_marks_each_target_installed(handoff_env, monkeypatch):
-    monkeypatch.setattr(generic_agent, "is_installed", lambda agent: agent != "crush")
+    monkeypatch.setattr(generic_agent, "is_installed", lambda agent: agent in {"claude", "codex", "opencode-bare"})
     data = _app().post("/api/generic-agent/handoff/prepare", json=BODY).json()
     installed = {t["agent"]: t["installed"] for t in data["targets"]}
     assert installed == {"claude": True, "codex": True, "crush": False, "opencode-bare": True}
+
+
+def test_prepare_lists_installed_extras_but_not_missing_ones(handoff_env, monkeypatch):
+    monkeypatch.setattr(
+        generic_agent, "is_installed", lambda agent: agent in {"claude", "pi"}
+    )
+    data = _app().post("/api/generic-agent/handoff/prepare", json=BODY).json()
+    by_agent = {t["agent"]: t for t in data["targets"]}
+    assert "pi" in by_agent and "aider" not in by_agent
+    assert by_agent["pi"]["label"] == "Pi"
+    assert by_agent["pi"]["gateway_routed"] is False
+    assert by_agent["codex"]["installed"] is False
+
+
+def test_extra_agent_can_receive_a_handoff(handoff_env, monkeypatch):
+    prepared = _app().post("/api/generic-agent/handoff/prepare", json=BODY).json()
+    monkeypatch.setattr(generic_agent, "build_command", lambda agent, repo="": ["pi"])
+    monkeypatch.setattr("routes.terminal.create_pty_session", lambda *a, **k: None)
+    r = _app().post(
+        "/api/generic-agent/terminal",
+        json={"agent": "pi", "project_id": "demo", "repo_path": "/r", "handoff_id": prepared["handoff_id"]},
+    )
+    assert r.status_code == 200 and r.json()["created"] is True

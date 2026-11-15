@@ -516,7 +516,7 @@ function _genAgentNewSession(tabId, agent) {
   });
 }
 
-const _GEN_NEW_TAB_AGENTS = ['claude', 'codex', 'crush', 'opencode-bare', 'terminal'];
+const _GEN_NEW_TAB_AGENTS = ['claude', 'codex', 'crush', 'opencode-bare'];
 
 function _genAgentCloseNewMenu() {
   document.querySelectorAll('.gtp-new-menu').forEach((el) => {
@@ -536,7 +536,7 @@ function _genAgentOpenNewMenu(tabId, anchor) {
   menu.setAttribute('role', 'menu');
   menu.setAttribute('aria-label', 'New terminal with');
   const items = [];
-  const addItem = (agent) => {
+  const addItem = (agent, before = null) => {
     const item = document.createElement('button');
     item.type = 'button';
     item.className = 'gtp-new-menu-item';
@@ -551,11 +551,19 @@ function _genAgentOpenNewMenu(tabId, anchor) {
       if (typeof _caCloseFileDiffIfOpen === 'function') _caCloseFileDiffIfOpen();
       _genAgentNewSession(tabId, agent);
     });
-    menu.appendChild(item);
+    item.dataset.agent = agent;
+    menu.insertBefore(item, before);
     items.push(item);
     return item;
   };
-  _GEN_NEW_TAB_AGENTS.forEach(addItem);
+  _GEN_NEW_TAB_AGENTS.forEach((agent) => addItem(agent));
+  // Detected agents are inserted above this divider; the plain shell stays
+  // below it for people who want their own machine's setup.
+  const divider = document.createElement('div');
+  divider.className = 'gtp-new-menu-sep';
+  divider.setAttribute('role', 'separator');
+  menu.appendChild(divider);
+  addItem('terminal');
   const onOutside = (e) => {
     if (!menu.contains(e.target) && !anchor.contains(e.target)) close();
   };
@@ -591,8 +599,8 @@ function _genAgentOpenNewMenu(tabId, anchor) {
   const state = _genAgentTerminals[_caSessionKey(tabId)];
   const active = state && _genAgentActiveSess(state);
   const current = (active && active.agent) || (state && state.agent);
-  (items[_GEN_NEW_TAB_AGENTS.indexOf(current)] || items[0]).focus();
-  void _genAgentMarkMissingInMenu(menu, items, addItem);
+  (items.find((item) => item.dataset.agent === current) || items[0]).focus();
+  void _genAgentMarkMissingInMenu(menu, items, (agent) => addItem(agent, divider));
 }
 
 // Rows open enabled and are disabled once the check returns, so a slow or
@@ -600,30 +608,37 @@ function _genAgentOpenNewMenu(tabId, anchor) {
 // listed below the core ones only when they are installed.
 async function _genAgentMarkMissingInMenu(menu, items, addItem) {
   let installed;
+  let routed;
   try {
     const doFetch = typeof _ocFetch === 'function' ? _ocFetch : fetch;
     const headers = await _caHeadersAsync();
     const resp = await doFetch('/api/generic-agent/installed', { headers });
     if (!resp.ok) return;
-    installed = (await resp.json()).installed || {};
+    const body = await resp.json();
+    installed = body.installed || {};
+    routed = body.gateway_routed || {};
   } catch (_) {
     return;
   }
   if (!menu.isConnected) return;
-  items.forEach((item, i) => {
-    if (installed[_GEN_NEW_TAB_AGENTS[i]] !== false) return;
+  items.slice().forEach((item) => {
+    const agent = item.dataset.agent;
+    if (installed[agent] !== false) return;
     item.disabled = true;
     item.querySelector('.gtp-new-menu-label').textContent =
-      _genAgentLabel(_GEN_NEW_TAB_AGENTS[i]) + ' (not installed)';
+      _genAgentLabel(agent) + ' (not installed)';
   });
-  const extras = Object.keys(_GEN_EXTRA_AGENT_LABELS).filter((a) => installed[a] === true);
-  if (extras.length) {
-    const sep = document.createElement('div');
-    sep.className = 'gtp-new-menu-sep';
-    sep.setAttribute('role', 'separator');
-    menu.appendChild(sep);
-    extras.forEach(addItem);
-  }
+  Object.keys(_GEN_EXTRA_AGENT_LABELS)
+    .filter((a) => installed[a] === true)
+    .forEach(addItem);
+  items.forEach((item) => {
+    if (item.disabled || routed[item.dataset.agent] !== false) return;
+    const badge = document.createElement('span');
+    badge.className = 'gtp-new-menu-badge';
+    badge.textContent = 'Unmanaged';
+    badge.title = 'Runs on its own configuration, outside the AI Gator gateway';
+    item.appendChild(badge);
+  });
   if (document.activeElement && document.activeElement.disabled) {
     const first = items.find((item) => !item.disabled);
     if (first) first.focus();

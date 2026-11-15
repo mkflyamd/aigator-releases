@@ -51,11 +51,11 @@ def test_plus_opens_the_agent_menu_and_keeps_the_project_agent():
 
 def test_new_tab_menu_lists_every_launchable_agent():
     assert (
-        "const _GEN_NEW_TAB_AGENTS = ['claude', 'codex', 'crush', 'opencode-bare', 'terminal'];"
+        "const _GEN_NEW_TAB_AGENTS = ['claude', 'codex', 'crush', 'opencode-bare'];"
         in TERM
     )
     assert "item.appendChild(_genAgentTabIcon(agent));" in TERM
-    assert "(items[_GEN_NEW_TAB_AGENTS.indexOf(current)] || items[0]).focus();" in TERM
+    assert "items.find((item) => item.dataset.agent === current) || items[0]" in TERM
 
 
 def test_each_tab_shows_its_own_agent_icon():
@@ -86,7 +86,8 @@ def test_every_extra_agent_has_a_label_and_an_icon():
 
 
 def test_menu_lists_installed_extras_below_the_core_agents():
-    assert "extras.forEach(addItem);" in TERM
+    assert "addItem(agent, divider)" in TERM
+    assert "addItem('terminal');" in TERM
     assert "installed[a] === true" in TERM
 
 
@@ -143,3 +144,16 @@ def test_reconnect_shows_a_transient_banner_not_text_in_the_terminal():
     opened = TERM.index("sess.ws.onopen = () => {")
     assert TERM.index("_genAgentClearReconnecting(sess);", opened) < TERM.index("_ocFit(sess);", opened)
     assert ".gtp-reconnect-banner" in (STATIC / "style.css").read_text(encoding="utf-8")
+
+
+def test_dialog_target_list_scrolls_when_many_agents_are_detected():
+    css = (STATIC / "style.css").read_text(encoding="utf-8")
+    assert ".agent-handoff-targets {" in css
+    assert "Hide ' + agentLabel(sess.agent) + ' (current agent)'" in HANDOFF
+
+
+def test_menu_badges_installed_agents_that_run_outside_the_gateway():
+    assert "routed = body.gateway_routed || {};" in TERM
+    assert "routed[item.dataset.agent] !== false" in TERM
+    assert "badge.textContent = 'Unmanaged';" in TERM
+    assert ".gtp-new-menu-badge" in (STATIC / "style.css").read_text(encoding="utf-8")

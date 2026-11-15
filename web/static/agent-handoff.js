@@ -220,7 +220,7 @@
     excludeBox.type = 'checkbox';
     excludeBox.checked = !!excludeSource;
     excludeLabel.appendChild(excludeBox);
-    excludeLabel.appendChild(document.createTextNode(' Hide ' + agentLabel(sess.agent)));
+    excludeLabel.appendChild(document.createTextNode(' Hide ' + agentLabel(sess.agent) + ' (current agent)'));
     box.appendChild(excludeLabel);
 
     const list = h('div', 'agent-handoff-targets');

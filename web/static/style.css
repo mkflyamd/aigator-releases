@@ -23202,3 +23202,15 @@ body.tab-fullscreen {
   font-size: 0.75rem;
   pointer-events: none;
 }
+.agent-handoff-targets {
+  max-height: 40vh;
+  overflow-y: auto;
+}
+.gtp-new-menu-badge {
+  margin-left: auto;
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  font-size: 0.65rem;
+  opacity: 0.7;
+}

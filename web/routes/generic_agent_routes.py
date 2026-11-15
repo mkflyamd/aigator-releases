@@ -81,15 +81,7 @@ async def prepare_agent_handoff(req: HandoffPrepareRequest):
         "last_user_message": record["last_user_message"],
         "snapshot_bytes": record["snapshot_bytes"],
         "redactions": record["redactions"],
-        "targets": [
-            {
-                "agent": a,
-                "label": label,
-                "gateway_routed": routed,
-                "installed": generic_agent.is_installed(a),
-            }
-            for a, label, routed in agent_handoff.TARGETS
-        ],
+        "targets": await asyncio.to_thread(generic_agent.handoff_targets),
     }
 
 
@@ -97,7 +89,15 @@ async def prepare_agent_handoff(req: HandoffPrepareRequest):
 async def installed_generic_agents():
     agents = generic_agent.launchable_agents()
     found = await asyncio.to_thread(lambda: [generic_agent.is_installed(a) for a in agents])
-    return {"installed": dict(zip(agents, found))}
+    installed = dict(zip(agents, found))
+    routed = await asyncio.to_thread(
+        lambda: {
+            a: generic_agent.is_gateway_routed(a)
+            for a, ok in installed.items()
+            if ok and a != generic_agent.TERMINAL_AGENT
+        }
+    )
+    return {"installed": installed, "gateway_routed": routed}
 
 
 @router.post("/api/generic-agent/terminal", dependencies=[Depends(verify_csrf)])
@@ -120,7 +120,7 @@ async def generic_agent_terminal(req: GenericAgentTerminalRequest):
 
     handoff = None
     if req.handoff_id:
-        if req.agent not in {a for a, _, _ in agent_handoff.TARGETS}:
+        if req.agent == generic_agent.TERMINAL_AGENT:
             raise HTTPException(status_code=400, detail=f"{req.agent!r} cannot continue a handoff.")
         handoff = await asyncio.to_thread(agent_handoff.load_handoff, req.handoff_id)
         if handoff is None:
@@ -162,7 +162,7 @@ async def generic_agent_terminal(req: GenericAgentTerminalRequest):
         # config injected via a generated crushrc (CRUSH_GLOBAL_CONFIG env) —
         # see generic_agent.build_crush_env. No bundled binary; install via
         # `winget install charmbracelet.crush`.
-        command = generic_agent.build_command(req.agent)
+        command = generic_agent.build_command(req.agent, req.repo_path)
         if not command:
             raise HTTPException(
                 status_code=500,
@@ -173,7 +173,7 @@ async def generic_agent_terminal(req: GenericAgentTerminalRequest):
         except RuntimeError as exc:
             raise HTTPException(status_code=500, detail=str(exc))
     else:
-        command = generic_agent.build_command(req.agent)
+        command = generic_agent.build_command(req.agent, req.repo_path)
         if not command:
             _install_hint = {
                 "codex": "npm install -g @openai/codex",
@@ -187,6 +187,8 @@ async def generic_agent_terminal(req: GenericAgentTerminalRequest):
                     "and restart AI Gator."
                 ),
             )
+        # No gateway config for the profile -> launch on the user's own setup.
+        env = generic_agent.with_wsl_env(command, generic_agent.gateway_binding(req.agent))
 
     pty_session_id = generic_agent.new_session_id()
     # Use the frontend's measured dimensions if provided (non-zero), so TUI
