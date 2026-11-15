@@ -142,11 +142,28 @@
     })).filter((g) => g.rows.length);
   }
 
+  // Where the preview card goes: just right of the panel, level with the row, never off
+  // screen. Falls back to the panel's left, then to overlapping it. Rects are in viewport px.
+  function flyoutPlacement(anchor, panel, card, view) {
+    const GAP = 8;
+    const EDGE = 8;
+    let left = panel.right + GAP;
+    if (left + card.width > view.width - EDGE) {
+      const before = panel.left - GAP - card.width;
+      left = before >= EDGE ? before : Math.max(EDGE, view.width - EDGE - card.width);
+    }
+    const top = Math.max(EDGE, Math.min(anchor.top, view.height - EDGE - card.height));
+    return { left, top };
+  }
+
   // ── Browser panel ────────────────────────────────────────────────────────
   const FETCH_MS = 15000;
   const TICK_MS = 2000;
   const WSL_POLL_MS = 2000;
   const WSL_POLL_MAX = 5;
+  const HOVER_MS = 300;
+  const GRACE_MS = 150;
+  const PREVIEW_DEBOUNCE_MS = 200;
 
   const ui = {
     sessions: [],
@@ -159,10 +176,25 @@
     busy: false,
     fetchedAt: 0,
     query: '',
-    openKey: null,
     previews: {},
     notice: {},
+    rows: new Map(),
     sig: '',
+  };
+
+  // The hover/focus preview card. key is the row it shows; hover is the row under the
+  // pointer; dismissed is a row closed with Escape, kept shut until the pointer or focus leaves.
+  const fly = {
+    key: null,
+    row: null,
+    hover: null,
+    dismissed: null,
+    closedAt: 0,
+    showTimer: null,
+    hideTimer: null,
+    fetchTimer: null,
+    rendering: false,
+    scrollTop: 0,
   };
 
   function agentName(agent) {
@@ -229,6 +261,7 @@
   async function load() {
     const { project } = context();
     if (!project) {
+      hideFlyout();
       ui.project = null;
       ui.sessions = [];
       ui.loaded = true;
@@ -237,10 +270,10 @@
     }
     if (ui.busy) return;
     if (ui.project !== project.name) {
+      hideFlyout();
       ui.project = project.name;
       ui.sessions = [];
       ui.loaded = false;
-      ui.openKey = null;
       ui.previews = {};
       ui.notice = {};
       ui.wslPolls = 0;
@@ -334,7 +367,7 @@
     const prev = ui.previews[row.key];
     if (!prev || prev.status !== 'ok') {
       ui.previews[row.key] = { status: 'loading' };
-      render();
+      paintFlyout(row.key);
     }
     let result;
     try {
@@ -358,26 +391,17 @@
     } catch (_) {
       result = { status: 'error', message: 'Could not load the preview.' };
     }
+    if (ui.project !== project.name) return;
+    result.at = Date.now();
     ui.previews[row.key] = result;
-    render();
+    paintFlyout(row.key);
   }
 
-  function toggleOpen(row) {
-    if (ui.openKey === row.key) {
-      ui.openKey = null;
-      render();
-      return;
-    }
-    ui.openKey = row.key;
-    delete ui.notice[row.key];
-    render();
-    if (row.id) loadPreview(row);
-  }
-
-  // The terminal prompt icon from the terminal tab icon set, built with createElementNS.
-  function terminalIcon() {
+  // A stroked line icon built with createElementNS (no markup strings).
+  function lineIcon(cls, paths) {
     const NS = 'http://www.w3.org/2000/svg';
     const svg = document.createElementNS(NS, 'svg');
+    if (cls) svg.setAttribute('class', cls);
     svg.setAttribute('viewBox', '0 0 24 24');
     svg.setAttribute('fill', 'none');
     svg.setAttribute('stroke', 'currentColor');
@@ -385,12 +409,234 @@
     svg.setAttribute('stroke-linecap', 'round');
     svg.setAttribute('stroke-linejoin', 'round');
     svg.setAttribute('aria-hidden', 'true');
-    ['m5 8 5 4-5 4', 'M13 17h6'].forEach((d) => {
+    paths.forEach((d) => {
       const path = document.createElementNS(NS, 'path');
       path.setAttribute('d', d);
       svg.appendChild(path);
     });
     return svg;
+  }
+
+  // The terminal prompt icon from the terminal tab icon set.
+  function terminalIcon() {
+    return lineIcon('', ['m5 8 5 4-5 4', 'M13 17h6']);
+  }
+
+  function searchIcon() {
+    return lineIcon('ah-search-icon', [
+      'M10.5 4a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13z',
+      'm20 20-4.7-4.7',
+    ]);
+  }
+
+  // ── Preview card ─────────────────────────────────────────────────────────
+  function flyoutEl() {
+    let card = document.getElementById('ah-flyout');
+    if (!card) {
+      card = el('div', 'ah-flyout');
+      card.id = 'ah-flyout';
+      card.setAttribute('role', 'tooltip');
+      document.body.appendChild(card);
+    }
+    return card;
+  }
+
+  function itemFor(key) {
+    const list = document.getElementById('ca-hist-list');
+    if (!list || !key) return null;
+    return Array.from(list.querySelectorAll('.ah-item')).find((i) => i.dataset.key === key) || null;
+  }
+
+  function markRow(key, on) {
+    const item = itemFor(key);
+    if (!item) return;
+    item.classList.toggle('is-previewed', on);
+    const head = item.querySelector('.ah-row');
+    if (on) head.setAttribute('aria-describedby', 'ah-flyout');
+    else head.removeAttribute('aria-describedby');
+  }
+
+  function hideFlyout() {
+    clearTimeout(fly.showTimer);
+    clearTimeout(fly.hideTimer);
+    clearTimeout(fly.fetchTimer);
+    fly.showTimer = fly.hideTimer = fly.fetchTimer = null;
+    if (!fly.key) return;
+    markRow(fly.key, false);
+    fly.key = null;
+    fly.row = null;
+    fly.closedAt = Date.now();
+    const card = document.getElementById('ah-flyout');
+    if (card) card.classList.remove('is-open');
+  }
+
+  function previewFresh(key) {
+    const pv = ui.previews[key];
+    if (!pv) return false;
+    return pv.status === 'loading' || (pv.status === 'ok' && Date.now() - pv.at < FETCH_MS);
+  }
+
+  function showFlyout(row) {
+    clearTimeout(fly.showTimer);
+    clearTimeout(fly.hideTimer);
+    fly.showTimer = fly.hideTimer = null;
+    if (fly.key !== row.key) {
+      if (fly.key) markRow(fly.key, false);
+      clearTimeout(fly.fetchTimer);
+      fly.fetchTimer = null;
+    }
+    fly.key = row.key;
+    fly.row = row;
+    markRow(row.key, true);
+    paintFlyout(row.key);
+    // Debounced so sweeping the pointer down the list only fetches where it settles.
+    if (row.id && !previewFresh(row.key) && !fly.fetchTimer) {
+      fly.fetchTimer = setTimeout(() => {
+        fly.fetchTimer = null;
+        if (fly.key === row.key) loadPreview(row);
+      }, PREVIEW_DEBOUNCE_MS);
+    }
+  }
+
+  function statePill(row) {
+    if (row.state !== 'needs_you' && row.state !== 'working') return null;
+    const text = row.state === 'needs_you' ? 'Needs you' : 'Working';
+    return el('span', 'ah-pill ah-pill-' + row.state, text);
+  }
+
+  function previewBody(row) {
+    const body = el('div', 'ah-fly-body');
+    const pv = ui.previews[row.key];
+    if (!row.id) {
+      body.appendChild(el('div', 'ah-note', 'Live session. Its preview appears once it is saved.'));
+    } else if (!pv || pv.status === 'loading') {
+      body.appendChild(el('div', 'ah-note', 'Loading preview…'));
+    } else if (pv.status === 'error') {
+      body.appendChild(el('div', 'ah-note', pv.message));
+    } else if (!pv.messages.length) {
+      body.appendChild(el('div', 'ah-note', 'Nothing to preview yet.'));
+    } else {
+      pv.messages.forEach((m) => {
+        const user = m.role === 'user';
+        const msg = el('div', 'ah-msg ' + (user ? 'ah-msg-user' : 'ah-msg-assistant'));
+        msg.appendChild(el('span', 'ah-role', user ? 'You' : 'Agent'));
+        msg.appendChild(el('span', 'ah-text', m.text));
+        body.appendChild(msg);
+      });
+    }
+    return body;
+  }
+
+  function paintFlyout(key) {
+    if (!fly.key || fly.key !== key) return;
+    const row = fly.row;
+    const item = itemFor(key);
+    const panel = document.getElementById('ca-hist-view');
+    if (!item || !panel) {
+      hideFlyout();
+      return;
+    }
+    const card = flyoutEl();
+    card.textContent = '';
+    const head = el('div', 'ah-fly-head');
+    const top = el('div', 'ah-fly-top');
+    top.appendChild(el('div', 'ah-fly-title', row.title));
+    const pill = statePill(row);
+    if (pill) top.appendChild(pill);
+    head.appendChild(top);
+    head.appendChild(el('div', 'ah-fly-meta', metaLine(row, Date.now(), agentName)));
+    card.appendChild(head);
+    const body = previewBody(row);
+    card.appendChild(body);
+    body.classList.toggle('is-clipped', body.scrollHeight > body.clientHeight + 1);
+    const pos = flyoutPlacement(
+      item.getBoundingClientRect(),
+      panel.getBoundingClientRect(),
+      { width: card.offsetWidth, height: card.offsetHeight },
+      { width: window.innerWidth, height: window.innerHeight },
+    );
+    card.style.left = pos.left + 'px';
+    card.style.top = pos.top + 'px';
+    card.classList.add('is-open');
+  }
+
+  // The pointer moved onto a row (key) or off the rows (null). The first card waits
+  // HOVER_MS; once one is showing, or was just closed, moving to the next row swaps at once.
+  function pointAt(key) {
+    if (key === fly.hover) return;
+    fly.hover = key;
+    clearTimeout(fly.showTimer);
+    fly.showTimer = null;
+    if (fly.dismissed && fly.dismissed !== key) fly.dismissed = null;
+    if (!key) {
+      if (fly.key && !fly.hideTimer) fly.hideTimer = setTimeout(hideFlyout, GRACE_MS);
+      return;
+    }
+    if (key === fly.dismissed) return;
+    const open = () => {
+      const row = ui.rows.get(key);
+      if (row) showFlyout(row);
+    };
+    if (fly.key || Date.now() - fly.closedAt < GRACE_MS) open();
+    else fly.showTimer = setTimeout(open, HOVER_MS);
+  }
+
+  function focusRow(key) {
+    const row = ui.rows.get(key);
+    if (row && key !== fly.dismissed) showFlyout(row);
+  }
+
+  function blurRow(key) {
+    if (fly.dismissed === key) fly.dismissed = null;
+    if (fly.key === key && fly.hover !== key) hideFlyout();
+  }
+
+  function rowKey(node) {
+    const item = node && node.closest ? node.closest('.ah-item') : null;
+    return item ? item.dataset.key : null;
+  }
+
+  // Listeners live on the list (and document), not on rows, so tick re-renders keep them.
+  function bindList() {
+    const list = document.getElementById('ca-hist-list');
+    if (!list || list.dataset.bound) return;
+    list.dataset.bound = '1';
+    list.addEventListener('mouseover', (e) => pointAt(rowKey(e.target)));
+    list.addEventListener('mouseleave', () => pointAt(null));
+    list.addEventListener('focusin', (e) => {
+      if (!fly.rendering) focusRow(rowKey(e.target));
+    });
+    list.addEventListener('focusout', (e) => {
+      if (fly.rendering || rowKey(e.relatedTarget) === rowKey(e.target)) return;
+      blurRow(rowKey(e.target));
+    });
+    list.addEventListener('scroll', () => {
+      if (list.scrollTop === fly.scrollTop) return;
+      fly.scrollTop = list.scrollTop;
+      hideFlyout();
+    });
+    if (!document.documentElement.dataset.ahEscape) {
+      document.documentElement.dataset.ahEscape = '1';
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && fly.key) {
+          fly.dismissed = fly.key;
+          hideFlyout();
+        }
+      });
+    }
+  }
+
+  // After a rebuild, point the card at the new row element, or close it if the row is gone.
+  function syncFlyout() {
+    if (!fly.key) return;
+    const row = ui.rows.get(fly.key);
+    if (!row || !itemFor(fly.key)) {
+      hideFlyout();
+      return;
+    }
+    fly.row = row;
+    markRow(fly.key, true);
+    paintFlyout(fly.key);
   }
 
   // A live row's terminal is the one on screen, so Go to terminal has nothing to do.
@@ -405,7 +651,7 @@
       resume: ['▶', 'Resume', resume],
       handoff: ['↪', 'Hand off to another agent', handoff],
     }[action];
-    const btn = el('button', 'ah-icon-btn');
+    const btn = el('button', 'ah-icon-btn ah-chip-' + action);
     btn.type = 'button';
     btn.dataset.action = action;
     if (typeof spec[0] === 'function') btn.appendChild(spec[0]());
@@ -424,68 +670,41 @@
     return btn;
   }
 
-  function buildDetail(row) {
-    const box = el('div', 'ah-detail');
-    if (row.id) {
-      const pv = ui.previews[row.key];
-      const body = el('div', 'ah-preview');
-      if (!pv || pv.status === 'loading') {
-        body.appendChild(el('div', 'ah-note', 'Loading preview…'));
-      } else if (pv.status === 'error') {
-        body.appendChild(el('div', 'ah-note', pv.message));
-      } else if (!pv.messages.length) {
-        body.appendChild(el('div', 'ah-note', 'Nothing to preview yet.'));
-      } else {
-        pv.messages.forEach((m) => {
-          const user = m.role === 'user';
-          const msg = el('div', 'ah-msg ' + (user ? 'ah-msg-user' : 'ah-msg-assistant'));
-          msg.appendChild(el('span', 'ah-role', user ? 'You' : 'Agent'));
-          msg.appendChild(el('span', 'ah-text', m.text));
-          body.appendChild(msg);
-        });
-      }
-      box.appendChild(body);
-    }
-    if (ui.notice[row.key]) box.appendChild(el('div', 'ah-note ah-note-warn', ui.notice[row.key]));
-    const bar = el('div', 'ah-actions');
-    rowActions(row).forEach((a) => bar.appendChild(actionButton(row, a)));
-    box.appendChild(bar);
-    return box;
-  }
-
+  // A row is a card: agent tile, title with a state pill, meta line, and (after a failed
+  // resume) an amber note. Its action chips sit over the right end, shown on hover or focus.
   function buildRow(row, now) {
-    const open = ui.openKey === row.key;
-    const item = el('div', 'ah-item' + (open ? ' open' : ''));
+    const item = el('div', 'ah-item ah-state-' + row.state);
     item.dataset.key = row.key;
     item.setAttribute('role', 'listitem');
-    const head = el('div', 'ah-row ah-state-' + row.state);
+    const head = el('div', 'ah-row');
     head.tabIndex = 0;
-    head.setAttribute('role', 'button');
-    head.setAttribute('aria-expanded', open ? 'true' : 'false');
-    head.title = row.title;
     const lead = el('span', 'ah-lead');
+    if (typeof _genAgentTabIcon === 'function') lead.appendChild(_genAgentTabIcon(row.agent));
     if (row.state === 'needs_you' || row.state === 'working') {
       const dot = el('span', 'ah-dot ah-dot-' + row.state);
-      dot.setAttribute('role', 'img');
-      dot.setAttribute('aria-label', row.state === 'needs_you' ? 'Needs you' : 'Working');
+      dot.setAttribute('aria-hidden', 'true');
       lead.appendChild(dot);
-    } else if (typeof _genAgentTabIcon === 'function') {
-      lead.appendChild(_genAgentTabIcon(row.agent));
     }
     const main = el('span', 'ah-main');
-    main.appendChild(el('span', 'ah-title', row.title));
-    main.appendChild(el('span', 'ah-meta', metaLine(row, now, agentName)));
+    const top = el('span', 'ah-top');
+    top.appendChild(el('span', 'ah-title', row.title));
+    const pill = statePill(row);
+    if (pill) top.appendChild(pill);
+    main.appendChild(top);
+    // The time is the last part of the meta line; keep it whole and let the branch truncate.
+    const text = metaLine(row, now, agentName);
+    const cut = text.lastIndexOf(' · ');
+    const meta = el('span', 'ah-meta');
+    meta.appendChild(el('span', 'ah-meta-lead', text.slice(0, cut)));
+    meta.appendChild(el('span', 'ah-meta-when', text.slice(cut)));
+    main.appendChild(meta);
+    if (ui.notice[row.key]) main.appendChild(el('span', 'ah-row-note', ui.notice[row.key]));
     head.appendChild(lead);
     head.appendChild(main);
-    head.addEventListener('click', () => toggleOpen(row));
-    head.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault();
-        toggleOpen(row);
-      }
-    });
     item.appendChild(head);
-    if (open) item.appendChild(buildDetail(row));
+    const bar = el('div', 'ah-actions');
+    rowActions(row).forEach((a) => bar.appendChild(actionButton(row, a)));
+    item.appendChild(bar);
     return item;
   }
 
@@ -518,8 +737,13 @@
       target.button >= 0
         ? item.querySelectorAll('button')[target.button]
         : item.querySelector('.ah-row');
-    if (next && !next.disabled) next.focus();
-    else {
+    if (next && !next.disabled) {
+      // Rebuilt chips are hidden until :focus-within applies, and a hidden button cannot
+      // take focus, so reveal them for the focus call.
+      item.classList.add('ah-restoring');
+      next.focus();
+      item.classList.remove('ah-restoring');
+    } else {
       const row = item.querySelector('.ah-row');
       if (row) row.focus();
     }
@@ -531,14 +755,12 @@
     const now = Date.now();
     const rows = buildRows(ui.sessions, liveSessions(), now, agentName);
     const groups = filterGroups(rows, ui.query);
+    ui.rows = new Map(rows.map((r) => [r.key, r]));
     const sig = JSON.stringify([
       ui.error,
       ui.loaded,
       ui.wslPending && ui.wslPolls < WSL_POLL_MAX,
       ui.query,
-      ui.openKey,
-      ui.openKey && ui.previews[ui.openKey],
-      ui.openKey && ui.notice[ui.openKey],
       context().project && context().project.name,
       groups.map((g) => [
         g.key,
@@ -549,6 +771,7 @@
           r.ptySessionId,
           metaLine(r, now, agentName),
           rowViewing(r),
+          ui.notice[r.key] || '',
         ]),
       ]),
     ]);
@@ -556,10 +779,14 @@
     ui.sig = sig;
     const top = list.scrollTop;
     const focused = focusedTarget(list);
+    fly.rendering = true;
     list.textContent = '';
     groups.forEach((g) => {
       const section = el('div', 'ah-group ah-group-' + g.key);
-      section.appendChild(el('div', 'ah-group-label', g.title));
+      const label = el('div', 'ah-group-label');
+      label.appendChild(el('span', 'ah-group-name', g.title));
+      label.appendChild(el('span', 'ah-group-count', String(g.rows.length)));
+      section.appendChild(label);
       g.rows.forEach((r) => section.appendChild(buildRow(r, now)));
       list.appendChild(section);
     });
@@ -576,13 +803,17 @@
     if (ui.wslPending && ui.wslPolls < WSL_POLL_MAX)
       list.appendChild(el('div', 'ah-foot', 'Checking WSL…'));
     list.scrollTop = top;
+    fly.scrollTop = list.scrollTop;
     restoreFocus(list, focused);
+    fly.rendering = false;
+    syncFlyout();
   }
 
   function bindSearch() {
     const input = document.getElementById('ca-hist-search');
     if (!input || input.dataset.bound) return;
     input.dataset.bound = '1';
+    if (input.parentElement) input.parentElement.insertBefore(searchIcon(), input);
     input.value = ui.query;
     input.addEventListener('input', () => {
       ui.query = input.value;
@@ -592,19 +823,25 @@
 
   function show() {
     bindSearch();
+    bindList();
+    ui.notice = {};
     ui.wslPolls = 0;
     render();
     load();
   }
 
   function refresh() {
+    ui.notice = {};
     ui.wslPolls = 0;
     load();
   }
 
   function tick() {
     updateDot();
-    if (!panelVisible()) return;
+    if (!panelVisible()) {
+      hideFlyout();
+      return;
+    }
     const { project } = context();
     if (!project || ui.project !== project.name || Date.now() - ui.fetchedAt > FETCH_MS) load();
     else render();
@@ -623,6 +860,7 @@
     metaLine,
     rowActions,
     filterGroups,
+    flyoutPlacement,
     show,
     refresh,
     updateDot,

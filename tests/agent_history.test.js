@@ -217,4 +217,41 @@ const term = (pty, agent, out, viewed) => ({
   );
 }
 
+// preview card placement: right of the panel, top-aligned with the row, kept on screen
+{
+  const panel = { left: 56, right: 316 };
+  const card = { width: 360, height: 200 };
+  const view = { width: 1400, height: 800 };
+  assert.deepStrictEqual(
+    h.flyoutPlacement({ top: 120 }, panel, card, view),
+    { left: 324, top: 120 },
+    'beside the panel, level with the row',
+  );
+  assert.deepStrictEqual(
+    h.flyoutPlacement({ top: 700 }, panel, card, view),
+    { left: 324, top: 592 },
+    'a row near the bottom pulls the card up so it stays on screen',
+  );
+  assert.strictEqual(
+    h.flyoutPlacement({ top: -30 }, panel, card, view).top,
+    8,
+    'a row scrolled partly off the top keeps the card below the edge',
+  );
+  assert.deepStrictEqual(
+    h.flyoutPlacement({ top: 120 }, { left: 1000, right: 1260 }, card, view),
+    { left: 632, top: 120 },
+    'no room on the right puts the card on the left of the panel',
+  );
+  assert.deepStrictEqual(
+    h.flyoutPlacement({ top: 120 }, { left: 40, right: 300 }, card, { width: 600, height: 800 }),
+    { left: 232, top: 120 },
+    'no room on either side overlaps the panel but stays inside the window',
+  );
+  assert.strictEqual(
+    h.flyoutPlacement({ top: 120 }, panel, { width: 360, height: 900 }, view).top,
+    8,
+    'a card taller than the window starts at the top edge',
+  );
+}
+
 console.log('agent_history: ok');

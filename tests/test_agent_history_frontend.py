@@ -102,7 +102,11 @@ def test_go_to_terminal_is_disabled_while_that_terminal_is_on_screen():
 
 
 def test_restoring_focus_skips_a_button_that_became_disabled():
-    assert "!next.disabled" in HISTORY.split("function restoreFocus")[1].split("function ")[0]
+    restore = HISTORY.split("function restoreFocus")[1].split("function ")[0]
+    assert "!next.disabled" in restore
+    # rebuilt chips are hidden until :focus-within, so they are revealed for the focus call
+    assert "item.classList.add('ah-restoring');" in restore
+    assert ".ah-item.ah-restoring .ah-actions" in CSS
 
 
 def test_history_has_no_solid_primary_button_variant():
@@ -110,16 +114,83 @@ def test_history_has_no_solid_primary_button_variant():
     assert "ah-btn-primary" not in CSS
 
 
-def test_icon_buttons_are_ghost_buttons_and_retry_keeps_a_text_button():
-    block = CSS.split("/* agent session history: start */")[1].split("/* agent session history: end */")[0]
-    assert ".ah-icon-btn" in block
+def _history_css():
+    return CSS.split("/* agent session history: start */")[1].split("/* agent session history: end */")[0]
+
+
+def test_row_actions_are_tinted_chips_with_their_own_hue_and_retry_keeps_a_text_button():
+    block = _history_css()
+    assert "el('button', 'ah-icon-btn ah-chip-' + action)" in HISTORY
+    for chip in (".ah-chip-resume", ".ah-chip-handoff", ".ah-chip-go"):
+        assert chip in block
+    # Handoff gets a hue other than the green accent so it never blends with Resume
+    handoff = block.split(".ah-chip-handoff {")[1].split("}")[0]
+    assert "--ah-chip: var(--ah-handoff)" in handoff
     assert ".ah-icon-btn:focus-visible" in block
-    assert ".ah-icon-btn:disabled" in block
-    # .ah-detail already paints --bg-hover, so the button hover fill must differ from it
+    # the hover fill is a stronger tint than the resting chip, never the row surface token
     hover = block.split(".ah-icon-btn:hover {")[1].split("}")[0]
-    assert "background: color-mix(in srgb, var(--text)" in hover
+    assert "color-mix(in srgb, var(--ah-chip) 26%" in hover
     assert "var(--bg-hover)" not in hover
-    # the disabled rule comes after hover so a disabled button shows no hover fill
+    # the disabled rule comes after hover so a disabled chip shows no hover fill
+    disabled = block.split(".ah-icon-btn:disabled {")[1].split("}")[0]
+    assert "background: transparent" in disabled
     assert block.index(".ah-icon-btn:disabled") > block.index(".ah-icon-btn:hover")
     assert "el('button', 'ah-btn', 'Retry')" in HISTORY
     assert re.search(r"\.ah-btn\s*\{", block)
+
+
+def test_rows_no_longer_expand_in_place():
+    for gone in ("buildDetail", "toggleOpen", "openKey", "aria-expanded", "ah-detail"):
+        assert gone not in HISTORY
+    assert "ah-detail" not in _history_css()
+
+
+def test_the_preview_is_one_tooltip_card_outside_the_list():
+    assert "const HOVER_MS = 300;" in HISTORY
+    assert "card.setAttribute('role', 'tooltip');" in HISTORY
+    assert "document.body.appendChild(card);" in HISTORY
+    assert "setAttribute('aria-describedby', 'ah-flyout')" in HISTORY
+    assert "removeAttribute('aria-describedby')" in HISTORY
+    block = _history_css()
+    rules = re.findall(r"\n\.ah-flyout \{([^}]*)\}", block)
+    assert any("position: fixed" in r and "pointer-events: none" in r for r in rules)
+
+
+def test_the_preview_card_hides_on_escape_blur_scroll_and_project_switch():
+    assert "e.key === 'Escape'" in HISTORY
+    assert "list.addEventListener('focusout'" in HISTORY
+    assert "list.addEventListener('scroll'" in HISTORY
+    assert "list.addEventListener('mouseleave'" in HISTORY
+    switch = HISTORY.split("if (ui.project !== project.name) {")[1].split("render();")[0]
+    assert "hideFlyout();" in switch
+    tick = HISTORY.split("function tick()")[1].split("function ")[0]
+    assert "hideFlyout();" in tick
+
+
+def test_the_preview_fetch_is_debounced_and_cached():
+    assert "PREVIEW_DEBOUNCE_MS" in HISTORY
+    assert "ui.previews[row.key]" in HISTORY
+    assert "loadPreview(" in HISTORY.split("function showFlyout")[1].split("function ")[0]
+
+
+def test_chips_live_on_the_row_and_appear_on_hover_or_focus():
+    assert "rowActions(row).forEach((a) => bar.appendChild(actionButton(row, a)));" in HISTORY
+    block = _history_css()
+    assert ".ah-item:hover .ah-actions" in block
+    assert ".ah-item:focus-within .ah-actions" in block
+    actions = block.split(".ah-actions {")[1].split("}")[0]
+    assert "position: absolute" in actions
+    assert "visibility: hidden" in actions
+
+
+def test_a_resume_failure_shows_as_a_note_under_the_row_meta():
+    row = HISTORY.split("function buildRow(")[1].split("function ")[0]
+    assert "el('span', 'ah-row-note', ui.notice[row.key])" in row
+    sig = HISTORY.split("const sig = JSON.stringify([")[1].split("if (sig === ui.sig")[0]
+    assert "ui.notice[r.key]" in sig
+
+
+def test_new_motion_respects_reduced_motion():
+    block = _history_css()
+    reduced = block.split("@media (prefers-reduced-motion: reduce)")[1]
+    assert ".ah-flyout" in reduced and ".ah-actions" in reduced
