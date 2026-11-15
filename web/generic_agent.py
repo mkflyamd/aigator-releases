@@ -41,6 +41,56 @@ SUPPORTED_AGENTS: dict[str, list[str]] = {
     "crush": ["crush"],
 }
 
+# Further terminal agents, using Orca's agent catalog (stablyai/orca, MIT) for
+# ids and executable names: id -> (label, argv, alternate executable names).
+# They are plain PATH-resolved terminals with no gateway wiring, and the "+"
+# menu lists one only when it is installed. OpenCode is the PATH-resolved, gateway-
+# routed "opencode-bare" agent, so there are no separate opencode entries here. Orca's workspace-trust flags
+# (command-code --trust, muse --trust-workspace) are deliberately left out.
+EXTRA_AGENTS: dict[str, tuple[str, list[str], tuple[str, ...]]] = {
+    "openclaude": ("OpenClaude", ["openclaude"], ()),
+    "grok": ("Grok", ["grok"], ()),
+    "copilot": ("GitHub Copilot", ["copilot"], ()),
+    "mimo-code": ("MiMo Code", ["mimo"], ()),
+    "ante": ("Ante", ["ante"], ()),
+    "trae": ("Trae", ["traecli"], ()),
+    "muse": ("Muse", ["muse"], ()),
+    "dsh": ("DeepSeek Harness", ["dsh-tui", "."], ("dst",)),
+    "qoder": ("Qoder CLI", ["qodercli"], ("qoder",)),
+    "qoder-cn": ("Qoder CLI China", ["qoderclicn"], ("qodercn",)),
+    "zcode": ("ZCode", ["zcode"], ()),
+    "pi": ("Pi", ["pi"], ()),
+    "omp": ("OMP", ["omp"], ()),
+    "prime-agent": ("Prime Agent", ["prime-agent"], ()),
+    "gemini": ("Gemini", ["gemini"], ()),
+    "antigravity": ("Antigravity", ["agy"], ()),
+    "aider": ("Aider", ["aider"], ()),
+    "goose": ("Goose", ["goose"], ()),
+    "amp": ("Amp", ["amp"], ()),
+    "kilo": ("Kilocode", ["kilo"], ()),
+    "kiro": ("Kiro", ["kiro-cli", "chat", "--tui"], ()),
+    "aug": ("Auggie", ["auggie"], ()),
+    "autohand": ("Autohand Code", ["autohand"], ()),
+    "cline": ("Cline", ["cline"], ()),
+    "codebuff": ("Codebuff", ["codebuff"], ()),
+    "freebuff": ("Freebuff", ["freebuff"], ()),
+    "command-code": ("Command Code", ["command-code"], ()),
+    "continue": ("Continue", ["cn"], ()),
+    "cursor": ("Cursor", ["cursor-agent"], ()),
+    "droid": ("Droid", ["droid"], ()),
+    "kimi": ("Kimi", ["kimi"], ("kimi-code",)),
+    "mistral-vibe": ("Mistral Vibe", ["vibe"], ("mistral-vibe",)),
+    "qwen-code": ("Qwen Code", ["qwen"], ()),
+    "rovo": ("Rovo Dev", ["acli", "rovodev", "run"], ()),
+    "hermes": ("Hermes", ["hermes", "--tui"], ()),
+    "devin": ("Devin", ["devin"], ()),
+    "openclaw": ("OpenClaw", ["openclaw"], ()),
+    "codebuddy": ("CodeBuddy", ["codebuddy"], ("cbc",)),
+    "jcode": ("JCode", ["jcode"], ()),
+}
+SUPPORTED_AGENTS.update({agent: argv for agent, (_, argv, _) in EXTRA_AGENTS.items()})
+EXTRA_AGENT_LABELS: dict[str, str] = {agent: label for agent, (label, _, _) in EXTRA_AGENTS.items()}
+
 # A bare shell in the project directory - the maximally-flexible fallback for
 # a tool not in SUPPORTED_AGENTS (or no tool at all), rather than maintaining
 # an ever-growing fixed list. Not in SUPPORTED_AGENTS since it needs no
@@ -49,10 +99,9 @@ SUPPORTED_AGENTS: dict[str, list[str]] = {
 # already spawns, just scoped to a specific repo instead of Gator's own cwd.
 TERMINAL_AGENT = "terminal"
 
-# Bare-process OpenCode test (see module docstring). Not in SUPPORTED_AGENTS
-# since its binary is bundled (found via instance_manager.find_bundled_
-# opencode), not PATH-resolved, and it needs Gator's gateway config injected
-# via env — build_opencode_bare_command/_env below handle both.
+# Bare-process OpenCode (see module docstring). Not in SUPPORTED_AGENTS since it
+# needs Gator's gateway config injected via env - build_opencode_bare_command/
+# _env below handle both. The binary is PATH-resolved like claude/codex/crush.
 OPENCODE_BARE_AGENT = "opencode-bare"
 
 
@@ -75,7 +124,27 @@ def find_agent_binary(agent: str) -> str | None:
     argv = SUPPORTED_AGENTS.get(agent)
     if not argv:
         return None
-    return shutil.which(argv[0])
+    aliases = EXTRA_AGENTS[agent][2] if agent in EXTRA_AGENTS else ()
+    for name in (argv[0], *aliases):
+        found = shutil.which(name)
+        if found:
+            return found
+    return None
+
+
+def is_installed(agent: str) -> bool:
+    """Whether this agent can be spawned right now. Checked per call, not cached,
+    so an agent installed mid-session shows up without a restart."""
+    if agent == TERMINAL_AGENT:
+        return True
+    if agent == OPENCODE_BARE_AGENT:
+        return build_opencode_bare_command("") is not None
+    return find_agent_binary(agent) is not None
+
+
+def launchable_agents() -> list[str]:
+    core = [a for a in SUPPORTED_AGENTS if a not in EXTRA_AGENTS]
+    return [*core, OPENCODE_BARE_AGENT, TERMINAL_AGENT, *EXTRA_AGENTS]
 
 
 def build_command(agent: str) -> list[str] | None:
@@ -130,14 +199,8 @@ def build_opencode_bare_command(repo_path: str) -> list[str] | None:
     `serve`, no `attach`. None if opencode can't be found (mirrors
     build_command's contract for the route layer's "not installed" error).
 
-    Resolution order:
-      1. PATH via shutil.which("opencode") — same model as crush/codex/claude.
-         This is what makes it work in the PACKAGED app: find_bundled_opencode()
-         computes a path relative to __file__, which in a PyInstaller onefile
-         build lands in the %TEMP%\\_MEI… extraction dir and never resolves. PATH
-         has no such problem, so a user-installed `opencode` just works.
-      2. Bundled binary via find_bundled_opencode() — the dev fallback, where the
-         repo ships node\\opencode.cmd next to web/ (WakeGator provisions it).
+    Resolved on PATH via shutil.which("opencode"), same as claude/codex/crush -
+    install with `npm install -g opencode-ai`. AI Gator does not bundle or pin it.
 
     No --session resume: a lost/restarted PTY just starts a fresh OpenCode
     session, same tradeoff _active_sessions already documents for every other
@@ -148,12 +211,6 @@ def build_opencode_bare_command(repo_path: str) -> list[str] | None:
     resolved = shutil.which("opencode")
     if resolved:
         return [_wrap_windows_cmd(resolved), repo_path]
-
-    from skills.opencode_agent.binary import find_bundled_opencode
-
-    bundled = find_bundled_opencode()
-    if bundled:
-        return [str(bundled), repo_path]
     return None
 
 
@@ -234,8 +291,7 @@ def build_opencode_bare_env() -> dict[str, str]:
     # shadows custom providers and produces misleading errors that look
     # like a config/compat problem but aren't): Claude-Sonnet-5,
     # Claude-Sonnet-5.5, and Claude-Haiku-4.5 all responded successfully
-    # with this option set, including against this exact bundled binary
-    # (not just the global npm install), so it's safe on every Claude model.
+    # with this option set, including against the global npm install, so it's safe on every Claude model.
     provider = {}
     enabled_providers = []
     if claude_models:
