@@ -367,12 +367,12 @@ def codex_config_routes_to_gateway(profile: dict) -> bool:
     return urlparse(provider.get("base_url") or "").hostname in gateway_hosts
 
 
-def _wsl_command(agent: str, repo_path: str) -> list[str] | None:
+def _wsl_command(agent: str, repo_path: str, resume_args: tuple[str, ...] = ()) -> list[str] | None:
     distro, found = wsl_agents()
     name = found.get(agent)
     if not distro or not name:
         return None
-    argv = [name, *SUPPORTED_AGENTS[agent][1:]]
+    argv = [name, *SUPPORTED_AGENTS[agent][1:], *resume_args]
     cmd = ["wsl.exe", "-d", distro]
     if repo_path:
         cmd += ["--cd", repo_path]
@@ -408,6 +408,33 @@ def build_command(agent: str, repo_path: str = "", extra_args: tuple[str, ...] =
     if not resolved:
         return _wsl_command(agent, repo_path) if _wsl_capable(agent) else None
     return [resolved, *argv[1:], *extra_args]
+
+
+_RESUME_VERBS = {"claude": ("--resume",), "codex": ("resume",)}
+
+
+def build_resume_command(
+    agent: str,
+    repo_path: str,
+    session_id: str,
+    source: str = "windows",
+    extra_args: tuple[str, ...] = (),
+) -> list[str] | None:
+    """argv that reopens a stored session in the agent's own resume mode, in the
+    place the session lives. A WSL session resumes inside its distro with the
+    Linux path, never a UNC path."""
+    verb = _RESUME_VERBS.get(agent)
+    if not verb:
+        return None
+    if source == "windows":
+        resolved = find_agent_binary(agent)
+        if not resolved:
+            return None
+        return [resolved, *SUPPORTED_AGENTS[agent][1:], *extra_args, *verb, session_id]
+    distro, _found = wsl_agents()
+    if not distro or source != f"wsl:{distro}":
+        return None
+    return _wsl_command(agent, repo_path, (*verb, session_id))
 
 
 # (project_id, agent) -> pty_session_id of that project+agent's current
@@ -455,6 +482,12 @@ def pin_session(agent: str, command: list[str], pty_session_id: str) -> list[str
     transcript_id = str(uuid.uuid4())
     _pinned_sessions[pty_session_id] = transcript_id
     return [*command, "--session-id", transcript_id]
+
+
+def pin_resume(agent: str, command: list[str], pty_session_id: str, session_id: str) -> list[str]:
+    if agent == "claude" and command and Path(command[0]).stem.lower() != "wsl":
+        _pinned_sessions[pty_session_id] = session_id
+    return command
 
 
 def pinned_session_id(pty_session_id: str) -> str | None:
