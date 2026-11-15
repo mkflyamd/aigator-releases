@@ -93,6 +93,7 @@ from routes.updater import router as updater_router
 from routes.mcp_routes import router as mcp_router
 from routes.terminal import router as terminal_router
 from routes.generic_agent_routes import router as generic_agent_router
+from routes.agent_session_routes import router as agent_session_router
 from routes.extension_setup import router as extension_setup_router
 from routes.helper import router as helper_router
 from routes.debug_routes import router as debug_router
@@ -952,6 +953,7 @@ app.include_router(updater_router)
 app.include_router(mcp_router)
 app.include_router(terminal_router)
 app.include_router(generic_agent_router)
+app.include_router(agent_session_router)
 app.include_router(extension_setup_router)
 app.include_router(helper_router)
 app.include_router(debug_router)
