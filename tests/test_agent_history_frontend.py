@@ -115,5 +115,11 @@ def test_icon_buttons_are_ghost_buttons_and_retry_keeps_a_text_button():
     assert ".ah-icon-btn" in block
     assert ".ah-icon-btn:focus-visible" in block
     assert ".ah-icon-btn:disabled" in block
+    # .ah-detail already paints --bg-hover, so the button hover fill must differ from it
+    hover = block.split(".ah-icon-btn:hover {")[1].split("}")[0]
+    assert "background: color-mix(in srgb, var(--text)" in hover
+    assert "var(--bg-hover)" not in hover
+    # the disabled rule comes after hover so a disabled button shows no hover fill
+    assert block.index(".ah-icon-btn:disabled") > block.index(".ah-icon-btn:hover")
     assert "el('button', 'ah-btn', 'Retry')" in HISTORY
     assert re.search(r"\.ah-btn\s*\{", block)
