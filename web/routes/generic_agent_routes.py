@@ -24,6 +24,16 @@ from security import verify_csrf
 
 router = APIRouter()
 
+_INSTALL_HINTS = {
+    "codex": "npm install -g @openai/codex",
+    "claude": "npm install -g @anthropic-ai/claude-code",
+}
+
+
+def _install_hint_for(agent: str) -> str:
+    hint = _INSTALL_HINTS.get(agent)
+    return f" ({hint})" if hint else ""
+
 
 class GenericAgentTerminalRequest(BaseModel):
     agent: str
@@ -218,18 +228,18 @@ async def generic_agent_terminal(req: GenericAgentTerminalRequest):
                 extra,
             )
             if not command:
-                raise HTTPException(
-                    status_code=409,
-                    detail=f"This session cannot be resumed here: '{req.agent}' is not available where it was recorded.",
-                )
+                if resume["source"] == "windows" and not generic_agent.find_agent_binary(req.agent):
+                    detail = (
+                        f"This session was recorded on Windows, but '{req.agent}' is not "
+                        f"installed there{_install_hint_for(req.agent)}. Install it and restart AI Gator."
+                    )
+                else:
+                    detail = f"This session cannot be resumed here: '{req.agent}' is not available where it was recorded."
+                raise HTTPException(status_code=409, detail=detail)
         else:
             command = generic_agent.build_command(req.agent, req.repo_path, extra)
         if not command:
-            _install_hint = {
-                "codex": "npm install -g @openai/codex",
-                "claude": "npm install -g @anthropic-ai/claude-code",
-            }.get(req.agent)
-            hint = f" ({_install_hint})" if _install_hint else ""
+            hint = _install_hint_for(req.agent)
             raise HTTPException(
                 status_code=500,
                 detail=(
