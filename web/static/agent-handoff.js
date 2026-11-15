@@ -50,8 +50,32 @@
     return true;
   }
 
-  function visibleTargets(targets, sourceAgent, excludeSource) {
-    return targets.filter((t) => !(excludeSource && t.agent === sourceAgent));
+  const SEARCH_THRESHOLD = 6;
+
+  // Sections in display order. The agent being left stays selectable (a fresh
+  // context in the same agent is legitimate) but sorts after the others.
+  function groupTargets(targets, sourceAgent, query) {
+    const q = String(query || '').trim().toLowerCase();
+    const matches = targets.filter(
+      (t) => !q || t.label.toLowerCase().includes(q) || t.agent.toLowerCase().includes(q),
+    );
+    const ordered = matches
+      .filter((t) => t.agent !== sourceAgent)
+      .concat(matches.filter((t) => t.agent === sourceAgent));
+    const installed = ordered.filter((t) => t.installed !== false);
+    return [
+      { key: 'routed', title: 'Through AI Gator', items: installed.filter((t) => t.gateway_routed) },
+      { key: 'own', title: 'Own configuration', items: installed.filter((t) => !t.gateway_routed) },
+      { key: 'missing', title: 'Not installed', items: ordered.filter((t) => t.installed === false) },
+    ].filter((sec) => sec.items.length);
+  }
+
+  function defaultTarget(targets, sourceAgent) {
+    const usable = targets.filter((t) => t.installed !== false);
+    const first = groupTargets(usable, sourceAgent, '')
+      .flatMap((sec) => sec.items)
+      .find((t) => t.agent !== sourceAgent);
+    return first || usable[0] || null;
   }
 
   function errorDetail(body, fallback) {
@@ -191,9 +215,9 @@
     return typeof _genAgentStartInFlight === 'function' && !!_genAgentStartInFlight(tabId);
   }
 
-  function renderDialog(prep, sess, state, tabId, excludeSource) {
+  function renderDialog(prep, sess, state, tabId) {
     dialogSeq += 1;
-    const radioName = 'agent-handoff-target-' + dialogSeq;
+    const listId = 'agent-handoff-list-' + dialogSeq;
     const overlay = h('div', 'agent-handoff-overlay');
     const box = h('div', 'agent-handoff-dialog');
     box.setAttribute('role', 'dialog');
@@ -215,16 +239,27 @@
       box.appendChild(h('pre', 'agent-handoff-last', prep.last_user_message.slice(0, 300)));
     }
 
-    const excludeLabel = h('label', 'agent-handoff-exclude');
-    const excludeBox = document.createElement('input');
-    excludeBox.type = 'checkbox';
-    excludeBox.checked = !!excludeSource;
-    excludeLabel.appendChild(excludeBox);
-    excludeLabel.appendChild(document.createTextNode(' Hide ' + agentLabel(sess.agent) + ' (current agent)'));
-    box.appendChild(excludeLabel);
+    const search = document.createElement('input');
+    search.type = 'search';
+    search.className = 'agent-handoff-search';
+    search.placeholder = 'Search agents…';
+    search.setAttribute('role', 'combobox');
+    search.setAttribute('aria-label', 'Search agents');
+    search.setAttribute('aria-controls', listId);
+    search.setAttribute('aria-expanded', 'true');
+    search.autocomplete = 'off';
+    search.spellcheck = false;
+    const searchable = prep.targets.length > SEARCH_THRESHOLD;
+    if (searchable) box.appendChild(search);
 
     const list = h('div', 'agent-handoff-targets');
+    list.id = listId;
+    list.setAttribute('role', 'listbox');
+    list.setAttribute('aria-label', 'Agents');
     box.appendChild(list);
+    const note = h('div', 'agent-handoff-note');
+    note.setAttribute('aria-live', 'polite');
+    box.appendChild(note);
     const actions = h('div', 'agent-handoff-actions');
     const cancel = h('button', 'agent-handoff-btn', 'Cancel');
     cancel.type = 'button';
@@ -234,48 +269,16 @@
     actions.appendChild(go);
     box.appendChild(actions);
 
-    let selected = null;
-    function renderTargets() {
-      list.textContent = '';
-      const shown = visibleTargets(prep.targets, sess.agent, excludeBox.checked);
-      if (!shown.some((t) => t.agent === selected && t.installed !== false)) {
-        const first = shown.find((t) => t.installed !== false);
-        selected = first ? first.agent : null;
-      }
-      shown.forEach((t) => {
-        const missing = t.installed === false;
-        const row = h('label', 'agent-handoff-target');
-        const radio = document.createElement('input');
-        radio.type = 'radio';
-        radio.name = radioName;
-        radio.value = t.agent;
-        radio.checked = t.agent === selected;
-        radio.disabled = missing;
-        radio.addEventListener('change', () => (selected = t.agent));
-        row.appendChild(radio);
-        row.appendChild(document.createTextNode(' ' + t.label + (missing ? ' (not installed)' : '')));
-        const warning = missing ? null : targetWarning(t);
-        if (warning) row.appendChild(h('div', 'agent-handoff-warning', warning));
-        list.appendChild(row);
-      });
-      go.disabled = !selected;
-    }
-    excludeBox.addEventListener('change', renderTargets);
-    renderTargets();
+    const initial = defaultTarget(prep.targets, sess.agent);
+    let selected = initial ? initial.agent : null;
+    let visible = [];
 
-    const close = () => {
+    function close() {
       overlay.remove();
       document.removeEventListener('keydown', onKey);
-    };
-    const onKey = (e) => {
-      if (e.key === 'Escape') close();
-    };
-    document.addEventListener('keydown', onKey);
-    cancel.addEventListener('click', close);
-    overlay.addEventListener('click', (e) => {
-      if (e.target === overlay) close();
-    });
-    go.addEventListener('click', () => {
+    }
+
+    function begin() {
       const target = selected;
       if (!target) return;
       // _genAgentStart silently returns while another start is in flight, so
@@ -290,11 +293,95 @@
         handoffId: prep.handoff_id,
         keepStateAgent: true,
       });
+    }
+
+    function select(agent) {
+      selected = agent;
+      list.querySelectorAll('.agent-handoff-option').forEach((el) => {
+        const on = el.dataset.agent === agent;
+        el.classList.toggle('is-selected', on);
+        el.setAttribute('aria-selected', on ? 'true' : 'false');
+        if (on) {
+          search.setAttribute('aria-activedescendant', el.id);
+          el.scrollIntoView({ block: 'nearest' });
+        }
+      });
+      const t = prep.targets.find((x) => x.agent === agent);
+      note.textContent = t ? targetWarning(t) : '';
+      go.disabled = !t;
+    }
+
+    function renderTargets() {
+      list.textContent = '';
+      const sections = groupTargets(prep.targets, sess.agent, search.value);
+      visible = sections.flatMap((sec) => sec.items).filter((t) => t.installed !== false);
+      sections.forEach((sec) => {
+        const group = h('div', 'agent-handoff-group');
+        group.setAttribute('role', 'group');
+        group.setAttribute('aria-label', sec.title);
+        group.appendChild(h('div', 'agent-handoff-group-title', sec.title));
+        sec.items.forEach((t) => {
+          const missing = t.installed === false;
+          const row = h('div', 'agent-handoff-option');
+          row.id = listId + '-' + t.agent;
+          row.dataset.agent = t.agent;
+          row.setAttribute('role', 'option');
+          row.setAttribute('aria-disabled', missing ? 'true' : 'false');
+          row.classList.toggle('is-missing', missing);
+          if (typeof _genAgentTabIcon === 'function') row.appendChild(_genAgentTabIcon(t.agent));
+          row.appendChild(h('span', 'agent-handoff-option-name', t.label));
+          if (t.agent === sess.agent) row.appendChild(h('span', 'agent-handoff-chip', 'Current'));
+          if (!missing) {
+            row.addEventListener('click', () => {
+              select(t.agent);
+              if (searchable) search.focus();
+            });
+            row.addEventListener('dblclick', () => {
+              select(t.agent);
+              begin();
+            });
+          }
+          group.appendChild(row);
+        });
+        list.appendChild(group);
+      });
+      if (!sections.length) list.appendChild(h('div', 'agent-handoff-empty', 'No agents match.'));
+      if (!visible.some((t) => t.agent === selected)) selected = visible.length ? visible[0].agent : null;
+      select(selected);
+    }
+
+    function move(delta) {
+      if (!visible.length) return;
+      const i = visible.findIndex((t) => t.agent === selected);
+      const next = Math.max(0, Math.min(visible.length - 1, i + delta));
+      select(visible[next].agent);
+    }
+
+    const onKey = (e) => {
+      if (e.key === 'Escape') {
+        close();
+      } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        move(e.key === 'ArrowDown' ? 1 : -1);
+      } else if (e.key === 'Enter' && e.target !== cancel && e.target !== go) {
+        e.preventDefault();
+        begin();
+      }
+    };
+
+    search.addEventListener('input', renderTargets);
+    renderTargets();
+    document.addEventListener('keydown', onKey);
+    cancel.addEventListener('click', close);
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) close();
     });
+    go.addEventListener('click', begin);
 
     overlay.appendChild(box);
     document.body.appendChild(overlay);
-    go.focus();
+    if (searchable) search.focus();
+    else go.focus();
   }
 
   async function openDialog(opts) {
@@ -324,7 +411,7 @@
         }
         prep = body;
         // A malformed 200 (missing fields) throws here, so it gets the same toast.
-        renderDialog(prep, opts.sess, state, opts.tabId, !!opts.excludeSource);
+        renderDialog(prep, opts.sess, state, opts.tabId);
       } catch (_) {
         document.querySelectorAll('.agent-handoff-overlay').forEach((el) => el.remove());
         showToast('Could not prepare the handoff.', 'warn');
@@ -346,7 +433,7 @@
       [
         {
           label: 'Continue in…',
-          onClick: () => openDialog({ tabId: sess.tabId, sess, excludeSource: true }),
+          onClick: () => openDialog({ tabId: sess.tabId, sess }),
         },
       ],
     );
@@ -358,7 +445,8 @@
     trackBracketedPaste,
     startInFlight,
     isInputReady,
-    visibleTargets,
+    groupTargets,
+    defaultTarget,
     targetWarning,
     errorDetail,
     waitForReady,

@@ -89,23 +89,28 @@ const ESC = String.fromCharCode(27);
   );
 }
 
-// targets and warnings
+// targets, grouping, and warnings
 {
   const targets = [
-    { agent: 'claude', label: 'Claude Code', gateway_routed: false },
-    { agent: 'crush', label: 'Crush', gateway_routed: true },
+    { agent: 'claude', label: 'Claude Code', gateway_routed: true, installed: true },
+    { agent: 'crush', label: 'Crush', gateway_routed: true, installed: true },
+    { agent: 'cursor', label: 'Cursor', gateway_routed: false, installed: true },
+    { agent: 'codex', label: 'Codex', gateway_routed: false, installed: false },
   ];
-  assert.deepStrictEqual(
-    h.visibleTargets(targets, 'claude', true).map((t) => t.agent),
-    ['crush'],
-  );
-  assert.deepStrictEqual(
-    h.visibleTargets(targets, 'claude', false).map((t) => t.agent),
-    ['claude', 'crush'],
-  );
+  const ids = (sections) => sections.map((s) => [s.key, s.items.map((t) => t.agent)]);
+  assert.deepStrictEqual(ids(h.groupTargets(targets, 'claude', '')), [
+    ['routed', ['crush', 'claude']],
+    ['own', ['cursor']],
+    ['missing', ['codex']],
+  ]);
+  assert.deepStrictEqual(ids(h.groupTargets(targets, 'claude', ' CU')), [['own', ['cursor']]]);
+  assert.deepStrictEqual(h.groupTargets(targets, 'claude', 'zzz'), []);
+  assert.strictEqual(h.defaultTarget(targets, 'claude').agent, 'crush');
+  assert.strictEqual(h.defaultTarget(targets.slice(0, 1), 'claude').agent, 'claude');
+  assert.strictEqual(h.defaultTarget([targets[3]], 'claude'), null);
   assert.strictEqual(h.targetWarning(targets[1]), '');
   assert.strictEqual(
-    h.targetWarning(targets[0]),
+    h.targetWarning(targets[2]),
     'Runs on its own configuration, outside the AI Gator gateway.',
   );
 }

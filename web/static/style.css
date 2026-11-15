@@ -23088,21 +23088,6 @@ body.tab-fullscreen {
   border-radius: 6px;
   margin: 0 0 0.6rem;
 }
-.agent-handoff-exclude {
-  display: block;
-  font-size: 0.8rem;
-  margin: 0.4rem 0;
-}
-.agent-handoff-target {
-  display: block;
-  padding: 0.3rem 0;
-  font-size: 0.85rem;
-}
-.agent-handoff-warning {
-  font-size: 0.72rem;
-  color: var(--warn);
-  margin-left: 1.4rem;
-}
 .agent-handoff-actions {
   display: flex;
   justify-content: flex-end;
@@ -23202,9 +23187,83 @@ body.tab-fullscreen {
   font-size: 0.75rem;
   pointer-events: none;
 }
+.agent-handoff-search {
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0.2rem 0 0.4rem;
+  padding: 0.4rem 0.6rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: inherit;
+  font: inherit;
+  font-size: 0.85rem;
+}
+.agent-handoff-search:focus {
+  outline: none;
+  border-color: var(--accent);
+}
 .agent-handoff-targets {
-  max-height: 40vh;
+  max-height: min(40vh, 18rem);
   overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(127, 127, 127, 0.5) transparent;
+  margin-top: 0.2rem;
+}
+.agent-handoff-group-title {
+  position: sticky;
+  z-index: 1;
+  top: 0;
+  background: var(--surface);
+  padding: 0.35rem 0.5rem 0.2rem;
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.65;
+}
+.agent-handoff-option {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.4rem 0.5rem;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  font-size: 0.85rem;
+  cursor: pointer;
+  user-select: none;
+}
+.agent-handoff-option:hover {
+  background: rgba(127, 127, 127, 0.14);
+}
+.agent-handoff-option.is-selected {
+  background: rgba(127, 127, 127, 0.18);
+  border-color: var(--accent);
+}
+.agent-handoff-option.is-missing {
+  opacity: 0.45;
+  cursor: default;
+}
+.agent-handoff-option.is-missing:hover {
+  background: transparent;
+}
+.agent-handoff-chip {
+  margin-left: auto;
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  font-size: 0.65rem;
+  opacity: 0.7;
+}
+.agent-handoff-empty {
+  padding: 0.8rem 0.5rem;
+  font-size: 0.8rem;
+  opacity: 0.65;
+}
+.agent-handoff-note {
+  min-height: 1.1rem;
+  margin-top: 0.45rem;
+  font-size: 0.72rem;
+  color: var(--warn);
 }
 .gtp-new-menu-badge {
   margin-left: auto;

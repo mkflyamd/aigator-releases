@@ -125,8 +125,9 @@ def test_continue_checks_for_a_start_in_flight_before_closing():
     assert "function _genAgentStartInFlight(tabId)" in TERM
     assert "state && state._starting" in TERM
     assert "_genAgentStartInFlight(tabId)" in HANDOFF
-    click = HANDOFF.index("go.addEventListener('click'")
-    block = HANDOFF[click : HANDOFF.index("overlay.appendChild(box);", click)]
+    assert "go.addEventListener('click', begin);" in HANDOFF
+    begin = HANDOFF.index("function begin()")
+    block = HANDOFF[begin : HANDOFF.index("function select(", begin)]
     assert block.index("startInFlight(tabId)") < block.index("close();")
     assert "Another agent is still starting. Try again in a moment." in block
 
@@ -146,10 +147,15 @@ def test_reconnect_shows_a_transient_banner_not_text_in_the_terminal():
     assert ".gtp-reconnect-banner" in (STATIC / "style.css").read_text(encoding="utf-8")
 
 
-def test_dialog_target_list_scrolls_when_many_agents_are_detected():
+def test_dialog_is_a_searchable_listbox_with_no_hide_checkbox():
     css = (STATIC / "style.css").read_text(encoding="utf-8")
     assert ".agent-handoff-targets {" in css
-    assert "Hide ' + agentLabel(sess.agent) + ' (current agent)'" in HANDOFF
+    assert "overflow-y: auto" in css
+    assert "setAttribute('role', 'listbox')" in HANDOFF
+    assert "search.setAttribute('role', 'combobox')" in HANDOFF
+    assert "(current agent)" not in HANDOFF
+    assert "type = 'checkbox'" not in HANDOFF
+    assert "type = 'radio'" not in HANDOFF
 
 
 def test_menu_badges_installed_agents_that_run_outside_the_gateway():
