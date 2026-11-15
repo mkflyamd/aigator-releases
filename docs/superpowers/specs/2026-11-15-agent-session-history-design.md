@@ -77,7 +77,7 @@ Gator already owns the terminals it launches, so live state needs no hooks:
 - **Needs you**: the agent has gone quiet since the user last viewed that tab. Opening the tab clears it.
 - Sessions started outside Gator have no terminal in Gator, so they show only as past.
 
-Live sessions join the stored list through the Claude session id Gator pins at launch (`generic_agent.pinned_session_id`). Codex and other agents without a pinned id join by start time: the rollout created within 5 seconds before the terminal's `created_at`, only when exactly one matches.
+Live sessions join the stored list through the Claude session id Gator pins at launch (`generic_agent.pinned_session_id`). Codex and other agents without a pinned id join by start time: the rollout whose start falls from 5 seconds before to 120 seconds after the terminal's `created_at`, only when exactly one unclaimed Windows rollout matches. Codex writes its first line when the first prompt is sent, so a rollout can start well after the terminal opens.
 
 ## Data sources
 
@@ -102,6 +102,14 @@ Known gaps, handled quietly:
 - Resume must pass the agent its own WSL path, never a UNC path (Orca #24408: an agent started an empty session). The project's Windows folder is also mapped to its `/mnt/c/...` form to match the `cwd` recorded by WSL sessions.
 - Codex compresses rollouts idle for 7+ days to `.jsonl.zst` (Orca #40312). Skip them quietly unless a decompressor is already available.
 - The distro is stopped or slow: show Windows sessions only; no spinner, no error.
+
+## Implementation notes
+
+- Hidden Claude sessions: `isSidechain`, and any whose first `entrypoint` starts with `sdk` (headless runs that are not user conversations).
+- The head read is 256 KB, because a session can open with a very large hook line before the first user message. The tail read is 256 KB.
+- A live row is "working" while its terminal printed within the last 3 seconds. After that it is "needs you" until the user views the tab, then "done".
+- List titles are redacted as well as previews, because a pasted secret can be the first user message.
+- Codex Desktop often opens with a generic prompt, so its titles can read the same ("Review this change…"). The branch and time on the second line tell them apart.
 
 ## Session record (Workboard compatibility)
 
