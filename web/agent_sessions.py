@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
@@ -18,6 +20,12 @@ HEAD_BYTES = 256 * 1024
 TAIL_BYTES = 256 * 1024
 TITLE_MAX = 120
 SESSION_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,80}$")
+MAX_SESSIONS = 200
+MAX_FILES = 300
+MAX_CODEX_SCAN = 2000
+PREVIEW_EXCHANGES = 6
+PREVIEW_CHARS = 600
+AGENTS = ("claude", "codex")
 
 _REMINDER = re.compile(r"<system-reminder>.*?</system-reminder>", re.S)
 _SKIP_PREFIXES = (
@@ -224,3 +232,177 @@ def parse_codex(path: Path, st) -> dict | None:
         "path": str(path),
         "cwd": cwd,
     }
+
+
+@dataclass(frozen=True)
+class SourceHome:
+    source: str
+    home: Path
+    cwd: str
+
+
+def _norm_dir(path: str) -> str:
+    s = (path or "").replace("\\", "/")
+    if s.startswith("//?/"):
+        s = s[4:]
+    s = s.rstrip("/") or "/"
+    if re.match(r"^[A-Za-z]:", s) or s.startswith("//"):
+        s = s.lower()
+    return s
+
+
+def _same_dir(a: str, b: str) -> bool:
+    return _norm_dir(a) == _norm_dir(b)
+
+
+def _slug(cwd: str) -> str:
+    if cwd.startswith("\\\\?\\"):
+        cwd = cwd[4:]
+    return re.sub(r"[^A-Za-z0-9]", "-", cwd).lower()
+
+
+_MISS = object()
+_CACHE: dict = {}
+_CACHE_LOCK = threading.Lock()
+_CACHE_MAX = 4000
+
+
+def _cached(kind: str, path: Path, st, parse):
+    """Parse once per (kind, path, mtime, size). A file that cannot be read is skipped, not cached."""
+    key = (kind, str(path), st.st_mtime_ns, st.st_size)
+    with _CACHE_LOCK:
+        hit = _CACHE.get(key, _MISS)
+    if hit is not _MISS:
+        return hit
+    try:
+        value = parse(path, st)
+    except (OSError, ValueError):
+        return None
+    with _CACHE_LOCK:
+        if len(_CACHE) >= _CACHE_MAX:
+            _CACHE.clear()
+        _CACHE[key] = value
+    return value
+
+
+def _scan_claude(sh: SourceHome) -> list[dict]:
+    slug = _slug(sh.cwd)
+    files = []
+    try:
+        for d in os.scandir(sh.home / ".claude" / "projects"):
+            if not d.is_dir() or d.name.lower() != slug:
+                continue
+            for e in os.scandir(d.path):
+                if e.name.endswith(".jsonl") and e.is_file():
+                    files.append((e.stat(), Path(e.path)))
+    except OSError:
+        pass
+    files.sort(key=lambda f: f[0].st_mtime, reverse=True)
+    out = []
+    for st, p in files[:MAX_FILES]:
+        rec = _cached("claude", p, st, parse_claude)
+        if rec and _same_dir(rec["cwd"], sh.cwd):
+            out.append(dict(rec, source=sh.source))
+    return out
+
+
+def _scan_codex(sh: SourceHome) -> list[dict]:
+    files = []
+    for dirpath, _dirs, names in os.walk(sh.home / ".codex" / "sessions"):
+        for name in names:
+            if name.startswith("rollout-") and name.endswith(".jsonl"):
+                p = os.path.join(dirpath, name)
+                try:
+                    files.append((os.stat(p), Path(p)))
+                except OSError:
+                    continue
+    files.sort(key=lambda f: f[0].st_mtime, reverse=True)
+    out = []
+    for st, p in files[:MAX_CODEX_SCAN]:
+        meta = _cached("codex-meta", p, st, lambda path, _st: codex_meta(path))
+        if not meta or not _same_dir(str(meta.get("cwd") or ""), sh.cwd):
+            continue
+        rec = _cached("codex", p, st, parse_codex)
+        if rec:
+            out.append(dict(rec, source=sh.source))
+        if len(out) >= MAX_FILES:
+            break
+    return out
+
+
+_SCANNERS = {"claude": _scan_claude, "codex": _scan_codex}
+
+
+def windows_homes(repo_path: str) -> list[SourceHome]:
+    return [SourceHome("windows", Path.home(), repo_path)]
+
+
+def scan_project(repo_path: str, *, homes=None, agents=AGENTS) -> list[dict]:
+    homes = windows_homes(repo_path) if homes is None else homes
+    out: list[dict] = []
+    for sh in homes:
+        for agent in agents:
+            out.extend(_SCANNERS[agent](sh))
+    out.sort(key=lambda r: r["last_active_at"], reverse=True)
+    return out[:MAX_SESSIONS]
+
+
+def find_session(repo_path: str, agent: str, session_id: str, *, homes=None) -> dict | None:
+    for rec in scan_project(repo_path, homes=homes, agents=(agent,)):
+        if rec["id"] == session_id:
+            return rec
+    return None
+
+
+_JOIN_BEFORE = 5
+_JOIN_AFTER = 120
+
+
+def join_live(records: list[dict], live: list[dict]) -> list[dict]:
+    """Attach each live terminal to its stored session: by pinned id, else by start time."""
+    out = [dict(r) for r in records]
+    timed = []
+    for lv in live:
+        if lv.get("session_id"):
+            for r in out:
+                if r["agent"] == lv["agent"] and r["id"] == lv["session_id"]:
+                    r["pty_session_id"] = lv["pty_session_id"]
+        else:
+            timed.append(lv)
+    candidates = []
+    for lv in timed:
+        lo, hi = lv["created_at"] - _JOIN_BEFORE, lv["created_at"] + _JOIN_AFTER
+        candidates.append([
+            i for i, r in enumerate(out)
+            if r["agent"] == lv["agent"] and r["source"] == "windows"
+            and "pty_session_id" not in r and lo <= r["started_at"] <= hi
+        ])
+    for lv, cands in zip(timed, candidates):
+        if len(cands) != 1:
+            continue
+        if sum(cands[0] in other for other in candidates) == 1:
+            out[cands[0]]["pty_session_id"] = lv["pty_session_id"]
+    return out
+
+
+_PUBLIC_KEYS = ("id", "agent", "title", "branch", "started_at", "last_active_at", "state", "source", "pty_session_id")
+
+
+def public(rec: dict) -> dict:
+    return {k: rec[k] for k in _PUBLIC_KEYS if k in rec}
+
+
+def preview(rec: dict) -> list[dict]:
+    path = Path(rec["path"])
+    extract = _claude_message if rec["agent"] == "claude" else _codex_message
+    merged: list[dict] = []
+    for o in _read_tail(path, path.stat().st_size):
+        m = extract(o)
+        if not m:
+            continue
+        if merged and merged[-1]["role"] == m[0]:
+            merged[-1]["text"] += " " + m[1]
+        else:
+            merged.append({"role": m[0], "text": m[1]})
+    red = ah.Redactor(ah._configured_api_keys())
+    return [{"role": m["role"], "text": red(m["text"])[:PREVIEW_CHARS]} for m in merged[-PREVIEW_EXCHANGES:]]

@@ -1,4 +1,5 @@
 import json
+import os
 
 import pytest
 
@@ -149,3 +150,174 @@ def test_codex_meta_reads_only_the_first_line(tmp_path):
     assert ags.codex_meta(p)["cwd"] == "C:\\work\\app"
     p2 = jl(tmp_path / "rollout-y.jsonl", [{"type": "event_msg"}])
     assert ags.codex_meta(p2) is None
+
+
+PROJECT = "C:\\work\\app"
+
+
+@pytest.fixture(autouse=True)
+def _clear_cache():
+    ags._CACHE.clear()
+    yield
+
+
+def home_for(tmp_path):
+    return ags.SourceHome("windows", tmp_path, PROJECT)
+
+
+def put_claude(home, sid, objs, slug="C--work-app", mtime=None):
+    d = home / ".claude" / "projects" / slug
+    d.mkdir(parents=True, exist_ok=True)
+    p = jl(d / f"{sid}.jsonl", objs)
+    if mtime:
+        os.utime(p, (mtime, mtime))
+    return p
+
+
+def put_codex(home, sid, objs, mtime=None):
+    d = home / ".codex" / "sessions" / "2026" / "11" / "15"
+    d.mkdir(parents=True, exist_ok=True)
+    p = jl(d / f"rollout-2026-11-15T10-00-00-{sid}.jsonl", objs)
+    if mtime:
+        os.utime(p, (mtime, mtime))
+    return p
+
+
+def test_same_dir_ignores_case_slashes_and_long_prefix():
+    assert ags._same_dir("C:\\Work\\App", "c:/work/app/")
+    assert ags._same_dir("\\\\?\\C:\\work\\app", "C:\\work\\app")
+    assert ags._same_dir("//Server/Share/p", "\\\\server\\share\\P")
+    assert not ags._same_dir("/home/me/App", "/home/me/app")
+    assert not ags._same_dir("C:\\work\\app", "C:\\work\\app2")
+
+
+def test_scan_finds_this_projects_sessions_newest_first(tmp_path):
+    put_claude(tmp_path, "c-old", [claude_user("old one")], mtime=1_700_000_000)
+    put_codex(tmp_path, "x-new", [codex_meta_line(id="x-new"), codex_msg("user", "new one")], mtime=1_800_000_000)
+    put_claude(tmp_path, "c-other", [claude_user("elsewhere")], slug="C--other-app")
+    put_codex(tmp_path, "x-other", [codex_meta_line(id="x-other", cwd="C:\\other"), codex_msg("user", "nope")])
+    recs = ags.scan_project(PROJECT, homes=[home_for(tmp_path)])
+    assert [r["id"] for r in recs] == ["x-new", "c-old"]
+    assert {r["source"] for r in recs} == {"windows"}
+
+
+def test_scan_matches_slug_case_insensitively_but_rejects_slug_collisions(tmp_path):
+    put_claude(tmp_path, "same", [claude_user("mine")], slug="c--WORK-app")
+    collide = {**claude_user("not mine"), "cwd": "C:\\work-app"}
+    put_claude(tmp_path, "collide", [collide])
+    recs = ags.scan_project(PROJECT, homes=[home_for(tmp_path)])
+    assert [r["id"] for r in recs] == ["same"]
+
+
+def test_scan_respects_agent_filter_and_cap(tmp_path, monkeypatch):
+    put_claude(tmp_path, "c1", [claude_user("one")], mtime=1_700_000_001)
+    put_claude(tmp_path, "c2", [claude_user("two")], mtime=1_700_000_002)
+    put_codex(tmp_path, "x1", [codex_meta_line(id="x1"), codex_msg("user", "three")], mtime=1_700_000_003)
+    assert [r["id"] for r in ags.scan_project(PROJECT, homes=[home_for(tmp_path)], agents=("claude",))] == ["c2", "c1"]
+    monkeypatch.setattr(ags, "MAX_SESSIONS", 2)
+    assert [r["id"] for r in ags.scan_project(PROJECT, homes=[home_for(tmp_path)])] == ["x1", "c2"]
+
+
+def test_scan_missing_agent_directories_give_an_empty_list(tmp_path):
+    assert ags.scan_project(PROJECT, homes=[home_for(tmp_path)]) == []
+
+
+def test_scan_parses_each_unchanged_file_once(tmp_path, monkeypatch):
+    p = put_claude(tmp_path, "c1", [claude_user("one")])
+    calls = []
+    real = ags.parse_claude
+    monkeypatch.setattr(ags, "parse_claude", lambda path, st: calls.append(1) or real(path, st))
+    ags.scan_project(PROJECT, homes=[home_for(tmp_path)])
+    ags.scan_project(PROJECT, homes=[home_for(tmp_path)])
+    assert len(calls) == 1
+    with open(p, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(claude_assistant("more")) + "\n")
+    ags.scan_project(PROJECT, homes=[home_for(tmp_path)])
+    assert len(calls) == 2
+
+
+def test_find_session_returns_the_record_or_none(tmp_path):
+    put_claude(tmp_path, "c1", [claude_user("one")])
+    h = [home_for(tmp_path)]
+    assert ags.find_session(PROJECT, "claude", "c1", homes=h)["title"] == "one"
+    assert ags.find_session(PROJECT, "claude", "nope", homes=h) is None
+    assert ags.find_session(PROJECT, "codex", "c1", homes=h) is None
+
+
+def mk(agent, sid, started, source="windows"):
+    return {"id": sid, "agent": agent, "title": "t", "branch": "", "started_at": started,
+            "last_active_at": started, "state": "done", "source": source, "path": "p", "cwd": "c"}
+
+
+def test_join_by_pinned_id():
+    live = [{"agent": "claude", "pty_session_id": "p1", "session_id": "s2", "created_at": 150}]
+    out = ags.join_live([mk("claude", "s1", 100), mk("claude", "s2", 200)], live)
+    assert [r.get("pty_session_id") for r in out] == [None, "p1"]
+
+
+def test_join_by_start_time_needs_exactly_one_unclaimed_windows_candidate():
+    live = [{"agent": "codex", "pty_session_id": "p1", "session_id": None, "created_at": 1000}]
+    one = [mk("codex", "a", 1030), mk("codex", "b", 5000)]
+    assert ags.join_live(one, live)[0]["pty_session_id"] == "p1"
+    assert "pty_session_id" not in one[0]
+    two = [mk("codex", "a", 1030), mk("codex", "b", 1040)]
+    assert all("pty_session_id" not in r for r in ags.join_live(two, live))
+    assert "pty_session_id" not in ags.join_live([mk("codex", "a", 1030, "wsl:Ubuntu")], live)[0]
+    assert "pty_session_id" not in ags.join_live([mk("codex", "a", 994)], live)[0]
+    assert ags.join_live([mk("codex", "a", 995)], live)[0]["pty_session_id"] == "p1"
+    assert ags.join_live([mk("codex", "a", 1120)], live)[0]["pty_session_id"] == "p1"
+    assert "pty_session_id" not in ags.join_live([mk("codex", "a", 1121)], live)[0]
+
+
+def test_join_skips_a_rollout_wanted_by_two_terminals():
+    live = [
+        {"agent": "codex", "pty_session_id": "p1", "session_id": None, "created_at": 1000},
+        {"agent": "codex", "pty_session_id": "p2", "session_id": None, "created_at": 1010},
+    ]
+    assert all("pty_session_id" not in r for r in ags.join_live([mk("codex", "a", 1030)], live))
+
+
+def test_public_strips_internal_fields():
+    rec = {**mk("claude", "s1", 100), "pty_session_id": "p1"}
+    pub = ags.public(rec)
+    assert set(pub) == {"id", "agent", "title", "branch", "started_at", "last_active_at",
+                        "state", "source", "pty_session_id"}
+    assert "path" not in pub and "cwd" not in pub
+    assert "pty_session_id" not in ags.public(mk("claude", "s1", 100))
+
+
+def test_preview_merges_turns_redacts_and_caps(tmp_path, monkeypatch):
+    monkeypatch.setattr(ags.ah, "_configured_api_keys", lambda: ["aigator-fake-api-key"])
+    objs = []
+    for i in range(5):
+        objs += [claude_user(f"question {i}"), claude_assistant(f"answer {i}")]
+    objs.append(claude_assistant("key is aigator-fake-api-key " + "z" * 700))
+    p = jl(tmp_path / "s.jsonl", objs)
+    msgs = ags.preview({"agent": "claude", "path": str(p)})
+    assert len(msgs) == ags.PREVIEW_EXCHANGES
+    assert msgs[0] == {"role": "user", "text": "question 2"}
+    assert msgs[-1]["role"] == "assistant"
+    assert "aigator-fake-api-key" not in msgs[-1]["text"]
+    assert "[REDACTED]" in msgs[-1]["text"]
+    assert len(msgs[-1]["text"]) <= ags.PREVIEW_CHARS
+
+
+def test_preview_of_a_deleted_file_raises(tmp_path):
+    with pytest.raises(OSError):
+        ags.preview({"agent": "claude", "path": str(tmp_path / "gone.jsonl")})
+
+
+def test_scan_skips_a_transcript_that_vanishes_between_stat_and_read(tmp_path, monkeypatch):
+    put_claude(tmp_path, "gone", [claude_user("locked")], mtime=1_700_000_002)
+    put_claude(tmp_path, "ok", [claude_user("fine")], mtime=1_700_000_001)
+    real = ags.parse_claude
+
+    def flaky(path, st):
+        if path.stem == "gone":
+            raise PermissionError("locked")
+        return real(path, st)
+
+    monkeypatch.setattr(ags, "parse_claude", flaky)
+    assert [r["id"] for r in ags.scan_project(PROJECT, homes=[home_for(tmp_path)])] == ["ok"]
+    monkeypatch.setattr(ags, "parse_claude", real)
+    assert [r["id"] for r in ags.scan_project(PROJECT, homes=[home_for(tmp_path)])] == ["gone", "ok"]
