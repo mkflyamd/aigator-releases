@@ -312,25 +312,46 @@ def _scan_claude(sh: SourceHome) -> list[dict]:
     return out
 
 
+def _codex_roots(sh: SourceHome) -> list[Path]:
+    """Codex keeps rollouts under ~/.codex, but a Codex run from WSL on a Windows
+    project can keep them in the project's own .codex folder instead."""
+    roots = [sh.home / ".codex" / "sessions"]
+    if sh.source == "windows":
+        roots.append(Path(sh.cwd) / ".codex" / "sessions")
+    return roots
+
+
+def _codex_source(sh: SourceHome, cwd: str) -> str | None:
+    if _same_dir(cwd, sh.cwd):
+        return sh.source
+    linux_cwd = wsl_cwd(sh.cwd, "") if sh.source == "windows" else None
+    if linux_cwd and _same_dir(cwd, linux_cwd):
+        distro = generic_agent.wsl_agents()[0]
+        return f"wsl:{distro}" if distro else None
+    return None
+
+
 def _scan_codex(sh: SourceHome) -> list[dict]:
     files = []
-    for dirpath, _dirs, names in os.walk(sh.home / ".codex" / "sessions"):
-        for name in names:
-            if name.startswith("rollout-") and name.endswith(".jsonl"):
-                p = os.path.join(dirpath, name)
-                try:
-                    files.append((os.stat(p), Path(p)))
-                except OSError:
-                    continue
+    for root in _codex_roots(sh):
+        for dirpath, _dirs, names in os.walk(root):
+            for name in names:
+                if name.startswith("rollout-") and name.endswith(".jsonl"):
+                    p = os.path.join(dirpath, name)
+                    try:
+                        files.append((os.stat(p), Path(p)))
+                    except OSError:
+                        continue
     files.sort(key=lambda f: f[0].st_mtime, reverse=True)
     out = []
     for st, p in files[:MAX_CODEX_SCAN]:
         meta = _cached("codex-meta", p, st, lambda path, _st: codex_meta(path))
-        if not meta or not _same_dir(str(meta.get("cwd") or ""), sh.cwd):
+        source = _codex_source(sh, str(meta.get("cwd") or "")) if meta else None
+        if not source:
             continue
         rec = _cached("codex", p, st, parse_codex)
         if rec:
-            out.append(dict(rec, source=sh.source))
+            out.append(dict(rec, source=source))
         if len(out) >= MAX_FILES:
             break
     return out

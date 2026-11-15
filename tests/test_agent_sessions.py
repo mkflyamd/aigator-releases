@@ -405,6 +405,35 @@ def test_codex_scan_skips_compressed_rollouts(tmp_path):
     assert ags.scan_project(PROJECT, homes=[home_for(tmp_path)], agents=("codex",)) == []
 
 
+def test_codex_scan_reads_the_project_local_codex_folder(monkeypatch, tmp_path):
+    proj = tmp_path / "proj"
+    monkeypatch.setattr(ags, "_codex_roots", lambda sh: [proj / ".codex" / "sessions"])
+    monkeypatch.setattr(ags.generic_agent, "wsl_agents", lambda: ("Ubuntu", {"codex": "codex"}))
+    msgs = [codex_msg("user", "hello")]
+    put_codex(proj, "w1", [codex_meta_line(id="w1", cwd="/mnt/c/work/app"), *msgs])
+    put_codex(proj, "n1", [codex_meta_line(id="n1", cwd="C:\\work\\app"), *msgs])
+    put_codex(proj, "o1", [codex_meta_line(id="o1", cwd="/mnt/c/work/other"), *msgs])
+    out = ags.scan_project(PROJECT, homes=[home_for(tmp_path)], agents=("codex",))
+    assert sorted((r["id"], r["source"]) for r in out) == [("n1", "windows"), ("w1", "wsl:Ubuntu")]
+
+
+def test_codex_scan_hides_a_linux_path_session_when_wsl_is_absent(monkeypatch, tmp_path):
+    proj = tmp_path / "proj"
+    monkeypatch.setattr(ags, "_codex_roots", lambda sh: [proj / ".codex" / "sessions"])
+    monkeypatch.setattr(ags.generic_agent, "wsl_agents", lambda: (None, {}))
+    put_codex(proj, "w1", [codex_meta_line(id="w1", cwd="/mnt/c/work/app"), codex_msg("user", "hello")])
+    assert ags.scan_project(PROJECT, homes=[home_for(tmp_path)], agents=("codex",)) == []
+
+
+def test_codex_roots_add_the_project_folder_only_for_windows_homes(tmp_path):
+    win = ags.SourceHome("windows", tmp_path, "C:\\work\\app")
+    roots = ags._codex_roots(win)
+    assert len(roots) == 2 and roots[0] == tmp_path / ".codex" / "sessions"
+    assert roots[1].parent.name == ".codex"
+    wsl = ags.SourceHome("wsl:Ubuntu", tmp_path, "/mnt/c/work/app")
+    assert ags._codex_roots(wsl) == [tmp_path / ".codex" / "sessions"]
+
+
 def test_wsl_sessions_never_blocks_and_serves_the_cached_result(monkeypatch, tmp_path):
     sh = ags.SourceHome("wsl:Ubuntu", tmp_path, "/mnt/c/work/app")
     rec = {**claude_user("from wsl"), "cwd": "/mnt/c/work/app"}
