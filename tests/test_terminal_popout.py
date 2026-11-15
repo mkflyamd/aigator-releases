@@ -24,7 +24,12 @@ def test_popout_page_follows_the_gator_style_guide():
     assert "scrollbar-color: var(--border2) transparent" in html
     # Same light/dark terminal theme choice as the in-app terminals.
     assert "gator-theme-effective" in html
-    assert "terminal_theme" in js
+    # The app theme is the single source of truth: the palette comes from the
+    # document's data-theme, and a flip in the main window re-applies it.
+    assert "terminal_theme" not in js
+    assert "getAttribute('data-theme') === 'light'" in js
+    assert "e.key === 'gator-theme-effective'" in js
+    assert "addEventListener('storage'" in js
 
 
 def test_pop_out_button_is_wired_from_the_tab_to_the_shell():
