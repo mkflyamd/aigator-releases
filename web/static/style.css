@@ -23069,24 +23069,51 @@ body.tab-fullscreen {
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
 }
 .agent-handoff-dialog h3 {
-  margin: 0 0 0.5rem;
+  margin: 0 0 0.7rem;
   font-size: 1rem;
 }
-.agent-handoff-meta,
 .agent-handoff-label {
-  font-size: 0.75rem;
-  opacity: 0.75;
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.65;
   margin-bottom: 0.3rem;
 }
-.agent-handoff-last {
-  max-height: 6rem;
-  overflow: auto;
-  white-space: pre-wrap;
+.agent-handoff-section {
+  margin: 0.9rem 0 0.2rem;
+}
+.agent-handoff-carry {
+  background: rgba(127, 127, 127, 0.1);
+  border-radius: 8px;
+  padding: 0.5rem 0.65rem;
+}
+.agent-handoff-from {
+  display: flex;
+  align-items: center;
   font-size: 0.78rem;
-  background: rgba(127, 127, 127, 0.15);
-  padding: 0.4rem 0.5rem;
-  border-radius: 6px;
-  margin: 0 0 0.6rem;
+}
+.agent-handoff-meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-handoff-last {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.3rem;
+  font-size: 0.78rem;
+  cursor: default;
+}
+.agent-handoff-last-key {
+  flex: none;
+  opacity: 0.6;
+}
+.agent-handoff-last-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .agent-handoff-actions {
   display: flex;

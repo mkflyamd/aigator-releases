@@ -158,6 +158,14 @@ def test_dialog_is_a_searchable_listbox_with_no_hide_checkbox():
     assert "type = 'radio'" not in HANDOFF
 
 
+def test_dialog_shows_a_one_line_last_message_ahead_of_the_picker():
+    css = (STATIC / "style.css").read_text(encoding="utf-8")
+    assert "oneLine(prep.last_user_message)" in HANDOFF
+    assert "last.title = " in HANDOFF
+    assert HANDOFF.index("agent-handoff-carry") < HANDOFF.index("'Continue in'")
+    assert ".agent-handoff-last-text {" in css and "text-overflow: ellipsis" in css
+
+
 def test_menu_badges_installed_agents_that_run_outside_the_gateway():
     assert "routed = body.gateway_routed || {};" in TERM
     assert "routed[item.dataset.agent] !== false" in TERM

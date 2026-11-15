@@ -70,6 +70,17 @@
     ].filter((sec) => sec.items.length);
   }
 
+  const PREVIEW_CHARS = 300;
+
+  // The last message as a single line for the dialog; the CSS ellipsis does the
+  // visual truncation, this only collapses newlines and bounds the DOM text.
+  function oneLine(text) {
+    return String(text || '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, PREVIEW_CHARS);
+  }
+
   function defaultTarget(targets, sourceAgent) {
     const usable = targets.filter((t) => t.installed !== false);
     const first = groupTargets(usable, sourceAgent, '')
@@ -223,21 +234,34 @@
     box.setAttribute('role', 'dialog');
     box.setAttribute('aria-modal', 'true');
     box.setAttribute('aria-label', 'Continue in another agent');
-    box.appendChild(h('h3', null, 'Continue in…'));
+    box.appendChild(h('h3', null, 'Hand off to another agent'));
 
+    // What travels: secondary context, kept compact so the choice below leads.
     const kb = Math.max(1, Math.round(prep.snapshot_bytes / 1024));
+    const carry = h('div', 'agent-handoff-carry');
+    carry.appendChild(h('div', 'agent-handoff-label', 'Carrying over'));
+    const from = h('div', 'agent-handoff-from');
+    if (typeof _genAgentTabIcon === 'function') from.appendChild(_genAgentTabIcon(sess.agent));
     let meta =
       agentLabel(sess.agent) +
-      ' session · ' +
+      ' · ' +
+      (prep.source_kind === 'transcript' ? 'transcript' : 'terminal capture') +
+      ' · ' +
       kb +
-      ' KB · ' +
-      (prep.source_kind === 'transcript' ? 'transcript' : 'terminal capture');
+      ' KB';
     if (prep.redactions) meta += ' · ' + prep.redactions + ' credential(s) redacted';
-    box.appendChild(h('div', 'agent-handoff-meta', meta));
-    if (prep.last_user_message) {
-      box.appendChild(h('div', 'agent-handoff-label', 'Last message in the prior session'));
-      box.appendChild(h('pre', 'agent-handoff-last', prep.last_user_message.slice(0, 300)));
+    from.appendChild(h('span', 'agent-handoff-meta', meta));
+    carry.appendChild(from);
+    const lastLine = oneLine(prep.last_user_message);
+    if (lastLine) {
+      const last = h('div', 'agent-handoff-last');
+      last.appendChild(h('span', 'agent-handoff-last-key', 'Last message'));
+      last.appendChild(h('span', 'agent-handoff-last-text', lastLine));
+      last.title = String(prep.last_user_message).trim().slice(0, 600);
+      carry.appendChild(last);
     }
+    box.appendChild(carry);
+    box.appendChild(h('div', 'agent-handoff-label agent-handoff-section', 'Continue in'));
 
     const search = document.createElement('input');
     search.type = 'search';
@@ -445,6 +469,7 @@
     startInFlight,
     isInputReady,
     groupTargets,
+    oneLine,
     defaultTarget,
     targetWarning,
     errorDetail,

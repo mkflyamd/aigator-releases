@@ -108,6 +108,9 @@ const ESC = String.fromCharCode(27);
   assert.strictEqual(h.defaultTarget(targets, 'claude').agent, 'crush');
   assert.strictEqual(h.defaultTarget(targets.slice(0, 1), 'claude').agent, 'claude');
   assert.strictEqual(h.defaultTarget([targets[3]], 'claude'), null);
+  assert.strictEqual(h.oneLine('  fix the\n\n  bug\tnow '), 'fix the bug now');
+  assert.strictEqual(h.oneLine(null), '');
+  assert.strictEqual(h.oneLine('x'.repeat(500)).length, 300);
   assert.strictEqual(h.targetWarning(targets[1]), '');
   assert.strictEqual(
     h.targetWarning(targets[2]),
