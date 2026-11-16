@@ -50,7 +50,7 @@ _TOKEN_PATTERNS = [
     (re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}"), "[REDACTED]"),
     (re.compile(r"\beyJ[A-Za-z0-9_-]{4,}\.eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}"), "[REDACTED]"),
     # The password part of a URL's user info is redacted; the rest of the URL stays.
-    (re.compile(r"(://[^\s/:@]{1,128}:)\S{1,256}(@)"), r"\1[REDACTED]\2"),
+    (re.compile(r"(://[^\s/:@]{1,128}:)[^\s/]{1,256}(@)"), r"\1[REDACTED]\2"),
     (
         re.compile(
             r"(?i)((?:aws[_-]?)?secret[_-]?access[_-]?key[\"']?[ \t]*[:=][ \t]*)"
