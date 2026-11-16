@@ -519,13 +519,23 @@ function _caRenderSourceControl(status, log) {
     const syncBadge =
       log.ahead || log.behind ? ` <span class="ca-sc-sync">${aheadHtml}${behindHtml}</span>` : '';
     if (commitsLabel) {
-      const wtBadge = _caSelectedWorktree(_caActiveProject)
-        ? ' <span class="gtp-tab-wt" title="Showing a worktree of this project">worktree</span>'
-        : '';
-      commitsLabel.innerHTML =
-        `<button type="button" class="ca-sc-branch-btn" title="Switch branch or worktree" aria-haspopup="menu"${gatorActionAttrs('_caShowBranchMenu', [{ $el: true }])}>${_caEsc(log.branch || 'main')} ▾</button>` +
-        wtBadge +
-        syncBadge;
+      const branchBtn = document.createElement('button');
+      branchBtn.type = 'button';
+      branchBtn.className = 'ca-sc-branch-btn';
+      branchBtn.title = 'Switch branch or worktree';
+      branchBtn.setAttribute('aria-haspopup', 'menu');
+      branchBtn.dataset.call = '_caShowBranchMenu';
+      branchBtn.dataset.args = JSON.stringify([{ $el: true }]);
+      branchBtn.textContent = (log.branch || 'main') + ' ▾';
+      commitsLabel.replaceChildren(branchBtn);
+      if (_caSelectedWorktree(_caActiveProject)) {
+        const wtBadge = document.createElement('span');
+        wtBadge.className = 'gtp-tab-wt';
+        wtBadge.title = 'Showing a worktree of this project';
+        wtBadge.textContent = 'worktree';
+        commitsLabel.append(' ', wtBadge);
+      }
+      if (syncBadge) commitsLabel.insertAdjacentHTML('beforeend', syncBadge);
       commitsLabel.style.display = '';
     }
     if (commitsEl) {

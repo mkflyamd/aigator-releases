@@ -99,6 +99,7 @@ def test_changes_header_branch_button_opens_the_branch_and_worktree_menu():
 
 def test_git_views_are_keyed_and_fetched_per_selected_folder():
     assert "_caCacheKey(_caActiveProject)" in SCRIPT
+    assert "codeBranchHelpers.folderKey(project, _caSelectedWorktree(project))" in SCRIPT
     assert "_caApiUrl('git/status', _project)" in SCRIPT
     assert "worktree: _caSelectedWorktree(_caActiveProject)" in SCRIPT
 

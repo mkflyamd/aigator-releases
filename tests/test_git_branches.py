@@ -190,3 +190,10 @@ def test_resolve_worktree_accepts_listed_paths_only(repo, tmp_path):
     with pytest.raises(gb.GitOpError) as e:
         gb.resolve_worktree(str(repo), str(tmp_path))
     assert e.value.status == 400
+
+
+def test_delete_branch_refuses_the_default_branch_when_it_is_not_current(repo):
+    git(repo, "checkout", "-b", "feature")
+    with pytest.raises(gb.GitOpError) as e:
+        gb.delete_branch(str(repo), "main")
+    assert e.value.code == "default_branch"

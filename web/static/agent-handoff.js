@@ -333,7 +333,7 @@
         return;
       }
       close();
-      _genAgentStart(tabId, target, project.projectId, project.repoPath, {
+      _genAgentStart(tabId, target, project.projectId, _genAgentFolder(state), {
         forceNew: true,
         handoffId: prep.handoff_id,
         keepStateAgent: !!state.agent,

@@ -182,3 +182,7 @@ def test_menu_badges_installed_agents_that_run_outside_the_gateway():
     assert "routed[item.dataset.agent] !== false" in TERM
     assert "badge.textContent = 'Unmanaged';" in TERM
     assert ".gtp-new-menu-badge" in (STATIC / "style.css").read_text(encoding="utf-8")
+
+
+def test_handoff_starts_the_new_agent_in_the_selected_worktree():
+    assert "_genAgentStart(tabId, target, project.projectId, _genAgentFolder(state), {" in HANDOFF
