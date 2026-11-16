@@ -333,27 +333,52 @@ def _codex_source(sh: SourceHome, cwd: str) -> str | None:
     return None
 
 
-def _parse_codex_imports(path: Path, _st) -> frozenset:
+_IMPORT_SETTLE_SECONDS = 120
+
+
+def _parse_codex_imports(path: Path, _st) -> dict:
     with open(path, "r", encoding="utf-8") as fh:
         data = json.load(fh)
     records = data.get("records") if isinstance(data, dict) else None
-    ids = (r.get("imported_thread_id") for r in records or () if isinstance(r, dict))
-    return frozenset(i for i in ids if isinstance(i, str))
+    return {
+        r["imported_thread_id"]: float(r.get("imported_at") or 0)
+        for r in records or ()
+        if isinstance(r, dict) and isinstance(r.get("imported_thread_id"), str)
+    }
 
 
-def _codex_imported_ids(sh: SourceHome) -> frozenset:
+def _codex_imports(sh: SourceHome) -> dict:
     """Codex Desktop copies other agents' transcripts (Claude's, here) into new Codex
-    threads. The original already has its own History row, so the copy is a duplicate."""
+    threads and records each in this ledger: thread id -> import time."""
     path = sh.home / ".codex" / "external_agent_session_imports.json"
     try:
         st = path.stat()
     except OSError:
-        return frozenset()
-    return _cached("codex-imports", path, st, _parse_codex_imports) or frozenset()
+        return {}
+    return _cached("codex-imports", path, st, _parse_codex_imports) or {}
+
+
+def _continued_in_codex(path: Path, st, imported_at: float) -> bool:
+    """True when the user took an imported thread on in Codex, making it Codex work."""
+    cutoff = imported_at + _IMPORT_SETTLE_SECONDS
+    for o in _read_tail(path, st.st_size):
+        m = _codex_message(o)
+        if m and m[0] == "user" and (_epoch(o.get("timestamp")) or 0) > cutoff:
+            return True
+    return False
+
+
+def _is_import_copy(p: Path, st, thread_id, imports: dict) -> bool:
+    """An untouched copy of another agent's session: the original already has its own
+    History row, so the copy would only repeat it."""
+    if thread_id not in imports:
+        return False
+    continued = _cached("codex-continued", p, st, lambda path, s: _continued_in_codex(path, s, imports[thread_id]))
+    return not continued
 
 
 def _scan_codex(sh: SourceHome) -> list[dict]:
-    imported = _codex_imported_ids(sh)
+    imports = _codex_imports(sh)
     files = []
     for root in _codex_roots(sh):
         for dirpath, _dirs, names in os.walk(root):
@@ -369,7 +394,7 @@ def _scan_codex(sh: SourceHome) -> list[dict]:
     for st, p in files[:MAX_CODEX_SCAN]:
         meta = _cached("codex-meta", p, st, lambda path, _st: codex_meta(path))
         source = _codex_source(sh, str(meta.get("cwd") or "")) if meta else None
-        if not source or meta.get("id") in imported:
+        if not source or _is_import_copy(p, st, meta.get("id"), imports):
             continue
         rec = _cached("codex", p, st, parse_codex)
         if rec:

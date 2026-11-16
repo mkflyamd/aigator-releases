@@ -1,6 +1,7 @@
 import json
 import os
 import subprocess
+from datetime import datetime, timezone
 
 import pytest
 
@@ -411,10 +412,22 @@ def test_codex_scan_hides_threads_copied_from_another_agent(tmp_path):
     msgs = [codex_msg("user", "Review this change for security vulnerabilities.")]
     put_codex(tmp_path, "i1", [codex_meta_line(id="i1"), *msgs])
     put_codex(tmp_path, "k1", [codex_meta_line(id="k1"), *msgs])
-    imports = {"records": [{"imported_thread_id": "i1", "title": "Review"}, "junk", {"title": "no id"}]}
+    imports = {"records": [{"imported_thread_id": "i1", "imported_at": 1_000}, "junk", {"title": "no id"}]}
     (tmp_path / ".codex" / "external_agent_session_imports.json").write_text(json.dumps(imports), encoding="utf-8")
     out = ags.scan_project(PROJECT, homes=[home_for(tmp_path)], agents=("codex",))
     assert [r["id"] for r in out] == ["k1"]
+
+
+def test_codex_scan_keeps_an_imported_thread_the_user_continued_in_codex(tmp_path):
+    later = {**codex_msg("user", "now fix the bug"), "timestamp": "2026-11-15T12:00:00.000Z"}
+    put_codex(tmp_path, "i1", [codex_meta_line(id="i1"), codex_msg("user", "imported question"), later])
+    put_codex(tmp_path, "i2", [codex_meta_line(id="i2"), codex_msg("user", "imported question")])
+    imported_at = datetime(2026, 11, 15, 10, 0, tzinfo=timezone.utc).timestamp()
+    records = [{"imported_thread_id": i, "imported_at": imported_at} for i in ("i1", "i2")]
+    (tmp_path / ".codex" / "external_agent_session_imports.json").write_text(
+        json.dumps({"records": records}), encoding="utf-8")
+    out = ags.scan_project(PROJECT, homes=[home_for(tmp_path)], agents=("codex",))
+    assert [r["id"] for r in out] == ["i1"]
 
 
 def test_codex_scan_survives_a_corrupt_import_list(tmp_path):
