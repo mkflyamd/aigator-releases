@@ -235,3 +235,8 @@ def test_the_preview_card_never_paints_while_the_panel_is_hidden():
     for fn in ("function showFlyout", "function paintFlyout"):
         body = HISTORY.split(fn)[1].split("function ")[0]
         assert "if (!panelVisible()) {" in body
+
+
+def test_tab_label_shows_its_full_name_on_hover():
+    assert "label.title = sess.label;" in TERM
+    assert "labelEl.title = sess.label;" in TERM

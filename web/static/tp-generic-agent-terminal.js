@@ -355,6 +355,7 @@ function _genAgentRenderTabs(tabId) {
     const label = document.createElement('span');
     label.className = 'gtp-tab-label';
     label.textContent = sess.label;
+    label.title = sess.label;
     // Always-visible escape hatch, agnostic to which agent this tab runs
     // (Claude Code CLI, Codex, Crush, bare Terminal) — mirrors the same fix
     // in tp-term-helpers.js. Real gap: the existing recovery affordances
@@ -482,6 +483,7 @@ function _genAgentBeginRename(sess, labelEl) {
       sess.userLabel = next;
     }
     labelEl.textContent = sess.label;
+    labelEl.title = sess.label;
     window.getSelection().removeAllRanges();
   };
   const onKey = (e) => {
