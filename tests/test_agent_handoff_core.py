@@ -74,9 +74,10 @@ def test_redact_url_password_keeps_the_rest_of_the_url():
     url, n = ah.redact(f"git clone https://user:{FAKE}@example.com/repo.git")
     assert url == "git clone https://user:[REDACTED]@example.com/repo.git" and n == 1
     assert ah.redact("see https://example.com:8080/path")[1] == 0
-    for password in (f"{FAKE}/tail", f"{FAKE}@tail"):
-        out, n = ah.redact(f"postgres://user:{password}@db.local/app")
-        assert out == "postgres://user:[REDACTED]@db.local/app" and n == 1, password
+    out, n = ah.redact(f"postgres://user:{FAKE}@tail@db.local/app")
+    assert out == "postgres://user:[REDACTED]@db.local/app" and n == 1
+    keep = f"https://user:{FAKE}@host.local/path?to=a@b"
+    assert ah.redact(keep)[0] == "https://user:[REDACTED]@host.local/path?to=a@b"
 
 
 def test_redact_url_password_scan_is_linear():
