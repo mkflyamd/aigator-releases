@@ -23764,6 +23764,12 @@ body.tab-fullscreen {
   margin-right: 6px;
   color: var(--text);
 }
+.gtp-tab .gtp-tab-icon {
+  position: relative;
+}
+.gtp-tab .ah-dot {
+  box-shadow: none;
+}
 .gtp-tab-icon svg,
 .gtp-tab-icon img {
   display: block;

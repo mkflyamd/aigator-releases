@@ -262,6 +262,35 @@
     btn.setAttribute('aria-label', text);
   }
 
+  function applyTabState(tabEl, term, nowMs) {
+    const icon = tabEl && tabEl.querySelector('.gtp-tab-icon');
+    if (!icon) return;
+    const state = term && term.agent !== 'terminal' ? liveState(term, nowMs) : 'done';
+    const want = state === 'needs_you' || state === 'working' ? 'ah-dot ah-dot-' + state : '';
+    const dot = icon.querySelector('.ah-dot');
+    if (!want) {
+      if (dot) dot.remove();
+    } else if (dot) {
+      if (dot.className !== want) dot.className = want;
+    } else {
+      const created = document.createElement('span');
+      created.className = want;
+      created.setAttribute('aria-hidden', 'true');
+      icon.appendChild(created);
+    }
+  }
+
+  function updateTabDots() {
+    if (typeof _genAgentHeaderTabStripId !== 'function') return;
+    const st = terminalState(context().tabId);
+    const scroll = document.querySelector('#' + _genAgentHeaderTabStripId() + ' .gtp-tabs-scroll');
+    if (!st || !scroll) return;
+    const now = Date.now();
+    scroll.querySelectorAll('.gtp-tab').forEach((tabEl) => {
+      applyTabState(tabEl, st.sessions[tabEl.dataset.sid], now);
+    });
+  }
+
   function el(tag, cls, text) {
     const node = document.createElement(tag);
     if (cls) node.className = cls;
@@ -883,6 +912,7 @@
 
   function tick() {
     updateDot();
+    updateTabDots();
     if (!panelVisible()) {
       hideFlyout();
       return;
@@ -910,6 +940,7 @@
     show,
     refresh,
     updateDot,
+    applyTabState,
     isViewing,
     liveSessions,
   };

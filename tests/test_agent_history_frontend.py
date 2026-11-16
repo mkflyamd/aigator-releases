@@ -237,6 +237,12 @@ def test_the_preview_card_never_paints_while_the_panel_is_hidden():
         assert "if (!panelVisible()) {" in body
 
 
+def test_terminal_tabs_use_the_history_state_dot():
+    assert "window.agentHistory.applyTabState(tab, sess, Date.now());" in TERM
+    assert "updateTabDots();" in HISTORY
+    assert ".gtp-tab .gtp-tab-icon {" in CSS
+
+
 def test_tab_label_shows_its_full_name_on_hover():
     assert "label.title = sess.label;" in TERM
     assert "labelEl.title = sess.label;" in TERM

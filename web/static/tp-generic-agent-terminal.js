@@ -375,6 +375,7 @@ function _genAgentRenderTabs(tabId) {
     x.title = 'Close';
     x.textContent = '✕';
     tab.appendChild(_genAgentTabIcon(sess.agent || state.agent));
+    if (window.agentHistory) window.agentHistory.applyTabState(tab, sess, Date.now());
     tab.appendChild(label);
     tab.appendChild(restart);
     const handoff = document.createElement('button');

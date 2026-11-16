@@ -282,4 +282,41 @@ const term = (pty, agent, out, viewed) => ({
   assert.strictEqual(fresh.label, 'Codex 1');
 }
 
+// a terminal tab shows the same dot as its history row, from the same state helper
+{
+  const makeEl = (cls) => {
+    const kids = [];
+    return {
+      className: cls || '',
+      children: kids,
+      appendChild(c) {
+        kids.push(c);
+        c.parent = this;
+      },
+      remove() {
+        this.parent.children.splice(this.parent.children.indexOf(this), 1);
+      },
+      setAttribute() {},
+      querySelector(sel) {
+        return kids.find((k) => k.className.split(' ').includes(sel.slice(1))) || null;
+      },
+    };
+  };
+  global.document = { createElement: () => makeEl() };
+  const icon = makeEl('gtp-tab-icon');
+  const tab = { querySelector: (sel) => (sel === '.gtp-tab-icon' ? icon : null) };
+  const dotClass = () => (icon.children[0] ? icon.children[0].className : '');
+
+  h.applyTabState(tab, term('p1', 'claude', NOW - 1000, 0), NOW);
+  assert.strictEqual(dotClass(), 'ah-dot ah-dot-working');
+  h.applyTabState(tab, term('p1', 'claude', NOW - 60000, NOW - 120000), NOW);
+  assert.strictEqual(dotClass(), 'ah-dot ah-dot-needs_you');
+  assert.strictEqual(icon.children.length, 1, 'the dot is reused, not duplicated');
+  h.applyTabState(tab, term('p1', 'claude', NOW - 60000, NOW), NOW);
+  assert.strictEqual(icon.children.length, 0, 'a done session has no dot');
+  h.applyTabState(tab, term('p2', 'terminal', NOW - 1000, 0), NOW);
+  assert.strictEqual(icon.children.length, 0, 'a bare terminal never shows a dot');
+  delete global.document;
+}
+
 console.log('agent_history: ok');
