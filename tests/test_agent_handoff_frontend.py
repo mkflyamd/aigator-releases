@@ -117,6 +117,12 @@ def test_readiness_requires_bracketed_paste():
     assert "draftPrompt(sess, prompt, sessionProbe)" in HANDOFF
 
 
+def test_readiness_clock_ignores_the_working_indicator_quiet_window():
+    # output right after a connect or resize must still count, or a fast-painting target never looks ready
+    assert "lastOutputAt: sess._lastRawOutputAt," in HANDOFF
+    assert TERM.index("sess._lastRawOutputAt = Date.now();") < TERM.index("if (Date.now() >= (sess._quietUntil || 0)) {")
+
+
 def test_paste_text_is_stripped_of_terminal_controls():
     assert r"\\u0000-\\u0008\\u000b-\\u001f\\u007f-\\u009f" in HANDOFF
     assert "replace(CONTROL_CHARS, '')" in HANDOFF

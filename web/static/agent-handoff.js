@@ -151,7 +151,7 @@
         agent: sess.agent,
         bracketedPaste: !!sess._bracketedPaste,
         outputChars: sess._outputChars,
-        lastOutputAt: sess._lastOutputAt,
+        lastOutputAt: sess._lastRawOutputAt,
         paintedRows: _genAgentPaintedRowCount(sess),
         frameReady: _genAgentOpenCodeFrameIsReady(sess),
       },
