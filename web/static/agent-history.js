@@ -121,7 +121,7 @@
   }
 
   function rowActions(row) {
-    return row.ptySessionId ? ['go'] : ['resume', 'handoff'];
+    return row.ptySessionId ? ['go', 'handoff'] : ['resume', 'handoff'];
   }
 
   function filterGroups(rows, query) {
@@ -353,6 +353,11 @@
   function handoff(row) {
     const { tabId, project } = context();
     if (!project || !window.agentHandoff) return;
+    if (row.ptySessionId) {
+      const sess = liveSessions().find((t) => t.ptySessionId === row.ptySessionId);
+      if (sess) window.agentHandoff.openDialog({ tabId, sess });
+      return;
+    }
     window.agentHandoff.openDialog({
       tabId,
       sess: { agent: row.agent },

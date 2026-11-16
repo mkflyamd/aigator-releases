@@ -168,7 +168,7 @@ const term = (pty, agent, out, viewed) => ({
 
 // actions
 {
-  assert.deepStrictEqual(h.rowActions({ ptySessionId: 'p1' }), ['go']);
+  assert.deepStrictEqual(h.rowActions({ ptySessionId: 'p1' }), ['go', 'handoff']);
   assert.deepStrictEqual(h.rowActions({ ptySessionId: null }), ['resume', 'handoff']);
 }
 
