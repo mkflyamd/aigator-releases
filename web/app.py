@@ -740,7 +740,7 @@ async def lifespan(app):
             inferred = _infer_skills_from_message(prompt)
             if not inferred and prompt.strip():
                 from routes.chat import _classify_skills_via_llm
-                inferred = _classify_skills_via_llm(prompt)
+                inferred = _classify_skills_via_llm(prompt) or []
         # Always filter — never fall back to ALL tools
         # A runner (Python or shell) runs only if the schedule approval named it; nobody is here to approve one now.
         _approved_runners = {_gated_runner_id(s) for s in (skills or [])}
