@@ -333,7 +333,27 @@ def _codex_source(sh: SourceHome, cwd: str) -> str | None:
     return None
 
 
+def _parse_codex_imports(path: Path, _st) -> frozenset:
+    with open(path, "r", encoding="utf-8") as fh:
+        data = json.load(fh)
+    records = data.get("records") if isinstance(data, dict) else None
+    ids = (r.get("imported_thread_id") for r in records or () if isinstance(r, dict))
+    return frozenset(i for i in ids if isinstance(i, str))
+
+
+def _codex_imported_ids(sh: SourceHome) -> frozenset:
+    """Codex Desktop copies other agents' transcripts (Claude's, here) into new Codex
+    threads. The original already has its own History row, so the copy is a duplicate."""
+    path = sh.home / ".codex" / "external_agent_session_imports.json"
+    try:
+        st = path.stat()
+    except OSError:
+        return frozenset()
+    return _cached("codex-imports", path, st, _parse_codex_imports) or frozenset()
+
+
 def _scan_codex(sh: SourceHome) -> list[dict]:
+    imported = _codex_imported_ids(sh)
     files = []
     for root in _codex_roots(sh):
         for dirpath, _dirs, names in os.walk(root):
@@ -349,7 +369,7 @@ def _scan_codex(sh: SourceHome) -> list[dict]:
     for st, p in files[:MAX_CODEX_SCAN]:
         meta = _cached("codex-meta", p, st, lambda path, _st: codex_meta(path))
         source = _codex_source(sh, str(meta.get("cwd") or "")) if meta else None
-        if not source:
+        if not source or meta.get("id") in imported:
             continue
         rec = _cached("codex", p, st, parse_codex)
         if rec:

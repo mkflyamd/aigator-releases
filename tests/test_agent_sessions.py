@@ -407,6 +407,23 @@ def test_codex_scan_skips_compressed_rollouts(tmp_path):
     assert ags.scan_project(PROJECT, homes=[home_for(tmp_path)], agents=("codex",)) == []
 
 
+def test_codex_scan_hides_threads_copied_from_another_agent(tmp_path):
+    msgs = [codex_msg("user", "Review this change for security vulnerabilities.")]
+    put_codex(tmp_path, "i1", [codex_meta_line(id="i1"), *msgs])
+    put_codex(tmp_path, "k1", [codex_meta_line(id="k1"), *msgs])
+    imports = {"records": [{"imported_thread_id": "i1", "title": "Review"}, "junk", {"title": "no id"}]}
+    (tmp_path / ".codex" / "external_agent_session_imports.json").write_text(json.dumps(imports), encoding="utf-8")
+    out = ags.scan_project(PROJECT, homes=[home_for(tmp_path)], agents=("codex",))
+    assert [r["id"] for r in out] == ["k1"]
+
+
+def test_codex_scan_survives_a_corrupt_import_list(tmp_path):
+    put_codex(tmp_path, "k1", [codex_meta_line(id="k1"), codex_msg("user", "hi")])
+    (tmp_path / ".codex" / "external_agent_session_imports.json").write_text("{not json", encoding="utf-8")
+    out = ags.scan_project(PROJECT, homes=[home_for(tmp_path)], agents=("codex",))
+    assert [r["id"] for r in out] == ["k1"]
+
+
 def test_codex_scan_reads_the_project_local_codex_folder(monkeypatch, tmp_path):
     proj = tmp_path / "proj"
     monkeypatch.setattr(ags, "_codex_roots", lambda sh: [proj / ".codex" / "sessions"])
