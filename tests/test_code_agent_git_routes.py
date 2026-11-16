@@ -119,3 +119,16 @@ def test_discard_runs_inside_the_chosen_worktree(client):
     r = post(client, "discard", file="a.txt", worktree=path)
     assert r.status_code == 200
     assert (Path(path) / "a.txt").read_text() == "one\n"
+
+
+def test_branch_routes_act_on_the_chosen_worktree(client):
+    path = post(client, "worktree", branch="feature").json()["path"]
+    git(client.repo, "branch", "other")
+    assert post(client, "checkout", name="other", worktree=path).status_code == 200
+    inside = client.get(
+        "/api/code_agent/git/branches", params={"project_name": "demo", "worktree": path}
+    ).json()
+    assert inside["current"] == "other"
+    assert client.get("/api/code_agent/git/branches", params={"project_name": "demo"}).json()["current"] == "main"
+    assert post(client, "branch", name="made-here", worktree=path).status_code == 200
+    assert post(client, "checkout", name="main", worktree=str(client.repo.parent)).status_code == 400

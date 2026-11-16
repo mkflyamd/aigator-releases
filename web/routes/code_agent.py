@@ -67,12 +67,14 @@ class SetProjectAgentRequest(BaseModel):
 class BranchRequest(BaseModel):
     project_name: str
     name: str
+    worktree: str = ""
 
 
 class CheckoutRequest(BaseModel):
     project_name: str
     name: str
     confirm_dirty: bool = False
+    worktree: str = ""
 
 
 class WorktreeAddRequest(BaseModel):
@@ -118,7 +120,7 @@ async def _repo_for(proj: dict, worktree: str = "") -> str:
         raise _git_http_error(exc)
 
 
-async def _git_op(project_name: str, fn, *args):
+async def _git_op(project_name: str, fn, *args, worktree: str = ""):
     from skills.code_agent.projects import get_project
 
     proj = get_project(project_name)
@@ -126,8 +128,9 @@ async def _git_op(project_name: str, fn, *args):
         raise HTTPException(
             status_code=404, detail=f"Project not found: {project_name}"
         )
+    repo = await _repo_for(proj, worktree)
     try:
-        return await asyncio.to_thread(fn, proj["repo_path"], *args)
+        return await asyncio.to_thread(fn, repo, *args)
     except git_branches.GitOpError as exc:
         raise _git_http_error(exc)
 
@@ -605,8 +608,8 @@ async def git_discard(req: DiscardFileRequest):
 
 
 @router.get("/git/branches")
-async def git_branches_list(project_name: str):
-    return await _git_op(project_name, git_branches.list_branches)
+async def git_branches_list(project_name: str, worktree: str = ""):
+    return await _git_op(project_name, git_branches.list_branches, worktree=worktree)
 
 
 @router.get("/git/worktrees")
@@ -616,19 +619,21 @@ async def git_worktrees_list(project_name: str):
 
 @router.post("/git/checkout", dependencies=[Depends(verify_csrf)])
 async def git_checkout(req: CheckoutRequest):
-    await _git_op(req.project_name, git_branches.checkout, req.name, req.confirm_dirty)
+    await _git_op(
+        req.project_name, git_branches.checkout, req.name, req.confirm_dirty, worktree=req.worktree
+    )
     return {"current": req.name}
 
 
 @router.post("/git/branch", dependencies=[Depends(verify_csrf)])
 async def git_branch_create(req: BranchRequest):
-    await _git_op(req.project_name, git_branches.create_branch, req.name)
+    await _git_op(req.project_name, git_branches.create_branch, req.name, worktree=req.worktree)
     return {"current": req.name}
 
 
 @router.delete("/git/branch", dependencies=[Depends(verify_csrf)])
 async def git_branch_delete(req: BranchRequest):
-    await _git_op(req.project_name, git_branches.delete_branch, req.name)
+    await _git_op(req.project_name, git_branches.delete_branch, req.name, worktree=req.worktree)
     return {"deleted": req.name}
 
 
