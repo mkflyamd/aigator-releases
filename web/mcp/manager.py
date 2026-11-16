@@ -336,6 +336,22 @@ def _discover_limit_param(input_schema: dict) -> str | None:
     return None
 
 
+def _make_classifier(orig_name: str, conn: dict, hints: dict):
+    """What a call to this tool does, for the permission gate.
+
+    "draft": the call is parked as an approval card, so that card is the per-call approval.
+    "read": the server declares the tool read-only and does not declare it destructive.
+    "other": anything else, which asks on every call.
+    """
+    def _classify(kwargs: dict) -> str:
+        if _is_unverified_jira_mcp_mutation(orig_name, conn, hints) or _is_gated_tool(orig_name, kwargs or {}, conn):
+            return "draft"
+        if hints.get("readOnlyHint") is True and hints.get("destructiveHint") is not True:
+            return "read"
+        return "other"
+    return _classify
+
+
 def _register(conn: dict) -> None:
     """Register a connection's cached tools into shared registries."""
     skill_id = conn["id"]
@@ -591,6 +607,7 @@ def _register(conn: dict) -> None:
             return _handler
 
         shared.TOOL_DISPATCH[namespaced] = _make_handler(orig_name, conn_snapshot, limit_param, _tool_hints(t))
+        shared.MCP_TOOL_CLASSIFIERS[namespaced] = _make_classifier(orig_name, conn_snapshot, _tool_hints(t))
         shared.TOOL_STATUS[namespaced] = f"Calling {name}..."
         tool_names.add(namespaced)
         seen_raw_names.add(orig_name)
@@ -621,6 +638,8 @@ def _unregister(skill_id: str) -> None:
     for key in list(shared.TOOL_STATUS):
         if key in exact_names:
             del shared.TOOL_STATUS[key]
+    for key in exact_names:
+        shared.MCP_TOOL_CLASSIFIERS.pop(key, None)
     shared.SKILL_TOOLS_MAP.pop(skill_id, None)
     if skill_id == "mcp-google-workspace":
         for synthetic_id in (

@@ -69,6 +69,7 @@ TOOL_DISPATCH: dict = {}
 TOOL_STATUS: dict[str, str] = {}
 SKILL_TOOLS_MAP: dict[str, set[str]] = {}
 MCP_TOOL_DIAGNOSTICS: dict[str, dict] = {}
+MCP_TOOL_CLASSIFIERS: dict = {}  # MCP tool alias -> callable(kwargs) -> "read" | "draft" | "other"
 SKILL_DEPENDENCIES_MAP: dict[
     str, list[dict]
 ] = {}  # skill_id -> [{"id": ..., "reason": ...}]
