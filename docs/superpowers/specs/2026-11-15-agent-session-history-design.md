@@ -77,7 +77,7 @@ Gator already owns the terminals it launches, so live state needs no hooks:
 - **Needs you**: the agent has gone quiet since the user last viewed that tab. Opening the tab clears it.
 - Sessions started outside Gator have no terminal in Gator, so they show only as past.
 
-Live sessions join the stored list through the session id Gator knows for the terminal (`generic_agent.linked_session_id`): the id pinned at launch for Windows Claude, or the id of the session a terminal was resumed from, for any agent. Terminals with no known id (new Codex terminals, WSL Claude) join by start time: the rollout whose start falls from 5 seconds before to 120 seconds after the terminal's `created_at`, only when exactly one unclaimed Windows rollout matches. Codex writes its first line when the first prompt is sent, so a rollout can start well after the terminal opens.
+Live sessions join the stored list through the session id Gator knows for the terminal (`generic_agent.linked_session_id`): the id pinned at launch for Claude (Windows or WSL), or the id of the session a terminal was resumed from, for any agent. Terminals with no known id (new Codex terminals) join by start time: the rollout whose start falls from 5 seconds before to 120 seconds after the terminal's `created_at`, only when exactly one unclaimed Windows rollout matches. Codex writes its first line when the first prompt is sent, so a rollout can start well after the terminal opens.
 
 ## Data sources
 
@@ -136,7 +136,7 @@ New `web/agent_sessions.py`:
 
 Routes, in `web/routes/generic_agent_routes.py` or a sibling module:
 
-- `GET /api/agent-sessions?project_name=`: the list, with live state merged in from `generic_agent`.
+- `GET /api/agent-sessions?project_name=&pty=<agent>:<pty id>...`: the list, with the live terminals in the `pty` parameter, with live state merged in from `generic_agent`.
 - `GET /api/agent-sessions/{agent}/{id}/preview`: the last exchanges, redacted.
 - Resume uses the existing `POST /api/generic-agent/terminal` with a new `resume_id` field. That route already requires `verify_csrf`, so no new mutating route is added. The id is validated against the scanned list for this project (never passed to a shell unchecked). Resuming a session that already has a live terminal returns that terminal; otherwise the launch is a new process.
 - `POST /api/generic-agent/handoff/prepare` also accepts a stored `session_id` (read by `agent_handoff.prepare_handoff_from_transcript`), so "Continue in another agent…" works for past sessions. Before, it needed a live terminal id.

@@ -45,7 +45,7 @@ class GenericAgentTerminalRequest(BaseModel):
     cols: int = 0  # initial terminal dimensions — sent by the frontend so the
     rows: int = 0  # PTY spawns at the right size before the TUI app paints
     handoff_id: str | None = None  # continue a prior session; always a new process
-    resume_id: str | None = None  # reopen a stored session in its own agent; always a new process
+    resume_id: str | None = None  # reopen a stored session in its own agent; reuses its live terminal if it has one
 
 
 class HandoffPrepareRequest(BaseModel):

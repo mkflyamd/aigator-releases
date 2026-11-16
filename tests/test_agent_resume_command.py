@@ -41,7 +41,7 @@ def test_pin_resume_records_the_claude_session_id(monkeypatch):
 
 def test_pin_resume_keeps_wsl_and_other_agents_out_of_the_handoff_pin(monkeypatch):
     monkeypatch.setattr(ga, "_pinned_sessions", {})
-    monkeypatch.setattr(ga, "_resumed_sessions", {})
+    monkeypatch.setattr(ga, "_linked_sessions", {})
     ga.pin_resume("claude", ["wsl.exe", "-d", "Ubuntu"], "pty2", "abc-1")
     ga.pin_resume("codex", ["C:\\bin\\codex.exe", "resume", "x"], "pty3", "x")
     assert ga.pinned_session_id("pty2") is None
@@ -52,7 +52,7 @@ def test_pin_resume_keeps_wsl_and_other_agents_out_of_the_handoff_pin(monkeypatc
 
 def test_unpin_clears_the_resume_link_and_the_session_lookup(monkeypatch):
     monkeypatch.setattr(ga, "_pinned_sessions", {})
-    monkeypatch.setattr(ga, "_resumed_sessions", {})
+    monkeypatch.setattr(ga, "_linked_sessions", {})
     ga.pin_resume("codex", ["C:\\bin\\codex.exe", "resume", "x"], "pty3", "x")
     assert ga.ptys_for_session("codex", "x") == ["pty3"]
     assert ga.ptys_for_session("claude", "x") == []

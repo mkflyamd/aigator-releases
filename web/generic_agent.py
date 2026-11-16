@@ -476,22 +476,29 @@ def new_session_id() -> str:
 _pinned_sessions: dict[str, str] = {}
 
 
+# Every terminal whose stored session Gator knows (resumed, or a WSL Claude launch), whatever
+# the agent, so the history panel can link it. Kept apart from _pinned_sessions, which handoff
+# reads for native Claude only.
+_linked_sessions: dict[str, tuple[str, str]] = {}
+
+
 def pin_session(agent: str, command: list[str], pty_session_id: str) -> list[str]:
-    if agent != "claude" or not command or Path(command[0]).stem.lower() == "wsl":
+    if agent != "claude" or not command:
         return command
     transcript_id = str(uuid.uuid4())
+    if Path(command[0]).stem.lower() == "wsl":
+        # Handoff keeps looking WSL transcripts up unpinned; only the history link is recorded.
+        if command[-2:-1] != ["-lc"]:
+            return command
+        _linked_sessions[pty_session_id] = (agent, transcript_id)
+        return [*command[:-1], f"{command[-1]} --session-id {transcript_id}"]
     _pinned_sessions[pty_session_id] = transcript_id
     return [*command, "--session-id", transcript_id]
 
 
-# Every resumed terminal, whatever the agent, so the history panel can link it to its
-# stored session. Kept apart from _pinned_sessions, which handoff reads for Claude only.
-_resumed_sessions: dict[str, tuple[str, str]] = {}
-
-
 def pin_resume(agent: str, command: list[str], pty_session_id: str, session_id: str) -> list[str]:
     if command:
-        _resumed_sessions[pty_session_id] = (agent, session_id)
+        _linked_sessions[pty_session_id] = (agent, session_id)
         if agent == "claude" and Path(command[0]).stem.lower() != "wsl":
             _pinned_sessions[pty_session_id] = session_id
     return command
@@ -502,12 +509,12 @@ def pinned_session_id(pty_session_id: str) -> str | None:
 
 
 def linked_session_id(pty_session_id: str) -> str | None:
-    resumed = _resumed_sessions.get(pty_session_id)
-    return resumed[1] if resumed else _pinned_sessions.get(pty_session_id)
+    linked = _linked_sessions.get(pty_session_id)
+    return linked[1] if linked else _pinned_sessions.get(pty_session_id)
 
 
 def ptys_for_session(agent: str, session_id: str) -> list[str]:
-    found = [pty for pty, (a, sid) in _resumed_sessions.items() if a == agent and sid == session_id]
+    found = [pty for pty, (a, sid) in _linked_sessions.items() if a == agent and sid == session_id]
     if agent == "claude":
         found += [pty for pty, sid in _pinned_sessions.items() if sid == session_id and pty not in found]
     return found
@@ -515,7 +522,7 @@ def ptys_for_session(agent: str, session_id: str) -> list[str]:
 
 def unpin_session(pty_session_id: str) -> None:
     _pinned_sessions.pop(pty_session_id, None)
-    _resumed_sessions.pop(pty_session_id, None)
+    _linked_sessions.pop(pty_session_id, None)
 
 
 def build_opencode_bare_command(repo_path: str) -> list[str] | None:

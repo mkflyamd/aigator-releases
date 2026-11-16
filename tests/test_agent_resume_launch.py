@@ -27,7 +27,7 @@ def env(monkeypatch):
     monkeypatch.setattr(generic_agent, "wsl_agents", lambda: (None, {}))
     monkeypatch.setattr(generic_agent, "effective_binding", lambda agent: (("-c", "x=1"), {"K": "v"}))
     monkeypatch.setattr(generic_agent, "_pinned_sessions", {})
-    monkeypatch.setattr(generic_agent, "_resumed_sessions", {})
+    monkeypatch.setattr(generic_agent, "_linked_sessions", {})
     monkeypatch.setattr(generic_agent, "_active_sessions", {})
     monkeypatch.setattr(
         ags, "find_session",
