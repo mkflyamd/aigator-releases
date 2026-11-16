@@ -130,7 +130,7 @@ def test_crush_hooks_need_a_recent_crush(monkeypatch, version_output, expected):
 
 
 def test_crush_crushrc_includes_hooks_only_when_supported(monkeypatch):
-    profile = {"api_key": "aigator-fake-api-key", "api_key_header": "x-api-key", "anthropic_url": "https://gw"}
+    profile = {"api_key": "aigator-fake-api-key", "api_key_header": "x-api-key", "anthropic_url": "https://gw"}  # pragma: allowlist secret
     monkeypatch.setattr(generic_agent, "find_agent_binary", lambda agent: "crush.exe")
     monkeypatch.setattr(agent_state, "crush_supports_hooks", lambda exe: True)
     assert "hook add TurnEnd " in generic_agent._build_crushrc(profile, ["claude-sonnet"])

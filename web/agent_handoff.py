@@ -522,11 +522,13 @@ def _session_started_at(pty_session_id: str) -> float | None:
     return started if isinstance(started, (int, float)) else None
 
 
-def _crush_handoff_text(cwd: str, started_at: float | None, red: Redactor) -> tuple[str, str, str]:
+def _crush_handoff_text(
+    cwd: str, started_at: float | None, known_id: str | None, red: Redactor
+) -> tuple[str, str, str]:
     """Crush repaints a full-screen UI, so the pane is unreadable; its own database is not."""
     import agent_session_stores
 
-    found = agent_session_stores.latest_crush_session(cwd, started_at)
+    found = agent_session_stores.latest_crush_session(cwd, started_at, known_id)
     if found is None:
         return "", "", ""
     try:
@@ -542,7 +544,9 @@ def prepare_handoff(agent: str, project_id: str, cwd: str, pty_session_id: str) 
     import generic_agent
 
     if agent == "crush":
-        text, last_user, last_assistant = _crush_handoff_text(cwd, _session_started_at(pty_session_id), red)
+        text, last_user, last_assistant = _crush_handoff_text(
+            cwd, _session_started_at(pty_session_id), generic_agent.linked_session_id(pty_session_id), red
+        )
         if text.strip():
             return _save_prepared(
                 agent=agent, project_id=project_id, cwd=cwd, kind="transcript", text=text,

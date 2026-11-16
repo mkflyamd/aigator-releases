@@ -135,22 +135,32 @@ SESSION_START_SLACK_SECONDS = 5
 TRANSCRIPT_MESSAGE_LIMIT = 2000
 
 
-def latest_crush_session(cwd: str, since: float | None) -> tuple[Path, str] | None:
-    """The newest top-level Crush session touched since a terminal started, or None."""
+def latest_crush_session(cwd: str, since: float | None, known_id: str | None = None) -> tuple[Path, str] | None:
+    """A terminal's own Crush session, or None when it cannot be told apart from another terminal's.
+
+    A terminal that resumed a session knows its id. Otherwise the project database is shared by every
+    Crush terminal in the folder, so the session is only returned when exactly one top-level session
+    was touched since this terminal started.
+    """
     db = _crush_db(cwd)
     if not db.is_file():
         return None
     floor = 0 if since is None else since - SESSION_START_SLACK_SECONDS
     try:
         with _open(db) as con:
-            row = con.execute(
+            if known_id:
+                row = con.execute(
+                    "SELECT id FROM sessions WHERE id = ? AND message_count > 0", (known_id,)
+                ).fetchone()
+                return (db, row[0]) if row else None
+            rows = con.execute(
                 "SELECT id FROM sessions WHERE parent_session_id IS NULL AND message_count > 0 "
-                "AND updated_at >= ? ORDER BY updated_at DESC LIMIT 1",
+                "AND updated_at >= ? LIMIT 2",
                 (floor,),
-            ).fetchone()
+            ).fetchall()
     except (sqlite3.Error, OSError):
         return None
-    return (db, row[0]) if row else None
+    return (db, rows[0][0]) if len(rows) == 1 else None
 
 
 def transcript_crush(db: Path, session_id: str) -> list[tuple[str, str]]:

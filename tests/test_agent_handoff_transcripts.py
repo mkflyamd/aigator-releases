@@ -5,6 +5,7 @@ import os
 import time
 
 import agent_handoff as ah
+import generic_agent
 import pytest
 
 FAKE = "aigator-fake-api-key"
@@ -469,6 +470,33 @@ def test_crush_handoff_picks_the_session_active_since_this_terminal_started(tmp_
     rec = ah.prepare_handoff("crush", "demo", cwd, "s1")
     snap = (tmp_path / "h" / "h" / f"{rec['handoff_id']}.txt").read_text(encoding="utf-8")
     assert "this tab" in snap and "an old chat" not in snap
+
+
+def test_crush_handoff_does_not_guess_between_two_sessions_active_since_start(tmp_path, monkeypatch):
+    _prepare_env(tmp_path / "h", monkeypatch)
+    cwd = _crush_project(
+        tmp_path / "proj",
+        [("mine", None, "Mine", 1, 300, 400), ("other", None, "Other", 1, 310, 420)],
+        _crush_msgs("mine", ("user", [_text("this tab")])) + _crush_msgs("other", ("user", [_text("another terminal")])),
+    )
+    monkeypatch.setattr(ah, "_session_started_at", lambda sid: 290.0)
+    monkeypatch.setattr(ah, "capture_pane", lambda sid, red=None: "pane text")
+    rec = ah.prepare_handoff("crush", "demo", cwd, "s1")
+    assert rec["source_kind"] == "capture"
+
+
+def test_crush_handoff_uses_the_session_this_terminal_resumed(tmp_path, monkeypatch):
+    _prepare_env(tmp_path / "h", monkeypatch)
+    cwd = _crush_project(
+        tmp_path / "proj",
+        [("mine", None, "Mine", 1, 10, 20), ("other", None, "Other", 1, 310, 420)],
+        _crush_msgs("mine", ("user", [_text("this tab")])) + _crush_msgs("other", ("user", [_text("another terminal")])),
+    )
+    monkeypatch.setattr(ah, "_session_started_at", lambda sid: 290.0)
+    monkeypatch.setattr(generic_agent, "linked_session_id", lambda sid: "mine" if sid == "s1" else None)
+    rec = ah.prepare_handoff("crush", "demo", cwd, "s1")
+    snap = (tmp_path / "h" / "h" / f"{rec['handoff_id']}.txt").read_text(encoding="utf-8")
+    assert "this tab" in snap and "another terminal" not in snap
 
 
 def test_crush_handoff_falls_back_to_the_pane_without_a_session_since_start(tmp_path, monkeypatch):
