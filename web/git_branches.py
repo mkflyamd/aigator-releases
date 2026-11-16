@@ -198,4 +198,8 @@ def remove_worktree(repo: str, path: str) -> None:
         raise GitOpError(409, "main_worktree", "You cannot remove the project's main folder.")
     proc = _git(listed[0]["path"], "worktree", "remove", match["path"])
     if proc.returncode != 0:
+        if _git(match["path"], "status", "--porcelain").stdout.strip():
+            raise GitOpError(
+                409, "remove_refused", "This worktree has uncommitted changes. Commit or discard them first."
+            )
         raise GitOpError(409, "remove_refused", _reason(proc))

@@ -179,6 +179,8 @@ def test_remove_worktree_refuses_a_dirty_tree(repo):
     with pytest.raises(gb.GitOpError) as e:
         gb.remove_worktree(str(repo), made["path"])
     assert e.value.status == 409 and Path(made["path"]).exists()
+    assert "--force" not in e.value.message
+    assert "uncommitted" in e.value.message
 
 
 def test_resolve_worktree_accepts_listed_paths_only(repo, tmp_path):

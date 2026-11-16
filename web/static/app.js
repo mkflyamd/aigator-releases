@@ -106,6 +106,7 @@ const GATOR_ACTIONS = new Set([
   '_caAddLocalProject',
   '_caAddGitHubProject',
   '_caShowSessionDropdown',
+  '_caShowBranchMenu',
 ]);
 
 function openExternal(url) {

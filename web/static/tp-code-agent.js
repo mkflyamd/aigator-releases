@@ -144,7 +144,7 @@ function _initCodeAgentPane() {
     if (_caActiveProject && typeof _activeTabId !== 'undefined') {
       const _proj = _caProjects.find((p) => p.name === _caActiveProject);
       if (_proj && _proj.repo_path) {
-        _caShowAgentStartOrTerminal(_activeTabId, _proj, _proj.repo_path);
+        _caShowAgentStartOrTerminal(_activeTabId, _proj, _caActiveFolder(_proj));
       }
     }
   };
@@ -254,7 +254,82 @@ function _caLeftViewRefresh() {
 // its own) - Gator has no way to know when to invalidate automatically, so
 // caching for the browser session and relying on the existing refresh
 // button as the manual escape hatch is the simplest correct fix.
-const _caGitCache = {}; // project name -> {status, log, sig}
+const _caGitCache = {}; // project|folder key -> {status, log, sig}
+const _caWorktreeSel = {}; // project name -> selected worktree path ('' / absent = project folder)
+const _caWorktreeLists = {}; // project name -> worktrees from the last fetch
+const _caBranchOf = {}; // project name -> branch shown for its selected folder
+
+function _caSelectedWorktree(project) {
+  return _caWorktreeSel[project] || '';
+}
+
+function _caCacheKey(project) {
+  return window.codeBranchHelpers.folderKey(project, _caSelectedWorktree(project));
+}
+
+// Read-route URL for the project's selected folder (the project itself, or one of its worktrees).
+function _caApiUrl(path, project, extra) {
+  const wt = _caSelectedWorktree(project);
+  return (
+    `/api/code_agent/${path}?project_name=${encodeURIComponent(project)}` +
+    (wt ? `&worktree=${encodeURIComponent(wt)}` : '') +
+    (extra || '')
+  );
+}
+
+// Folder that views and new terminals should use: the selected worktree, else the project folder.
+function _caActiveFolder(project) {
+  const p = typeof project === 'string' ? _caProjects.find((x) => x.name === project) : project;
+  if (!p) return '';
+  return _caSelectedWorktree(p.name) || p.repo_path || '';
+}
+
+// Branch and worktree-ness of a terminal's folder, for tab tooltips and badges.
+function _caFolderInfo(projectName, cwd) {
+  const h = window.codeBranchHelpers;
+  const proj = _caProjects.find((p) => p.name === projectName);
+  const hit = (_caWorktreeLists[projectName] || []).find((w) => h.sameFolder(w.path, cwd));
+  return {
+    branch: hit ? hit.branch || '' : '',
+    inWorktree: !!proj && h.isWorktreeFolder(cwd, proj.repo_path),
+  };
+}
+
+async function _caRefreshWorktrees(project) {
+  let list;
+  try {
+    const r = await fetch(`/api/code_agent/git/worktrees?project_name=${encodeURIComponent(project)}`);
+    if (!r.ok) return;
+    list = (await r.json()).worktrees || [];
+  } catch (_) {
+    return;
+  }
+  const changed = JSON.stringify(list) !== JSON.stringify(_caWorktreeLists[project] || []);
+  _caWorktreeLists[project] = list;
+  const sel = _caSelectedWorktree(project);
+  if (sel && !list.some((w) => window.codeBranchHelpers.sameFolder(w.path, sel))) {
+    // The worktree was removed outside Gator: fall back to the project folder.
+    delete _caWorktreeSel[project];
+    if (project === _caActiveProject) _caRefreshSourceControl(true);
+  }
+  if (changed && typeof _genAgentRenderTabs === 'function' && typeof _activeTabId !== 'undefined') {
+    _genAgentRenderTabs(_activeTabId);
+  }
+}
+
+// Point the Changes and Files views (and new terminals) at a worktree; '' means the project folder.
+function _caSelectWorktree(project, path) {
+  const main = (_caWorktreeLists[project] || []).find((w) => w.is_main);
+  const target = !path || (main && window.codeBranchHelpers.sameFolder(main.path, path)) ? '' : path;
+  if (_caSelectedWorktree(project) === target) return;
+  if (target) _caWorktreeSel[project] = target;
+  else delete _caWorktreeSel[project];
+  if (project !== _caActiveProject) return;
+  if (_caOpenDiffFile) _caCloseFileDiff('ca-file-diff-view');
+  _caRefreshSourceControl(true);
+  const tree = document.getElementById('ca-fe-root');
+  if (tree) _caLoadFileTree('', tree, 0);
+}
 
 // Cheap signature of everything _caRenderSourceControl actually draws - lets
 // the background poller below skip re-rendering (and thus flickering) when a
@@ -275,7 +350,8 @@ function _caGitSig(status, log) {
 
 function _caRefreshSourceControl(force) {
   if (!_caActiveProject) return;
-  const cached = _caGitCache[_caActiveProject];
+  _caRefreshWorktrees(_caActiveProject);
+  const cached = _caGitCache[_caCacheKey(_caActiveProject)];
   if (cached && !force) {
     _caRenderSourceControl(cached.status, cached.log);
     return;
@@ -289,20 +365,22 @@ function _caRefreshSourceControl(force) {
     commitsEl.style.display = 'none';
   }
   const _project = _caActiveProject;
+  const _key = _caCacheKey(_project);
   Promise.all([
-    fetch(`/api/code_agent/git/status?project_name=${encodeURIComponent(_project)}`).then((r) =>
+    fetch(_caApiUrl('git/status', _project)).then((r) =>
       r.ok ? r.json() : null,
     ),
-    fetch(`/api/code_agent/git/log?project_name=${encodeURIComponent(_project)}`).then((r) =>
+    fetch(_caApiUrl('git/log', _project)).then((r) =>
       r.ok ? r.json() : null,
     ),
   ])
     .then(([status, log]) => {
-      _caGitCache[_project] = { status, log, sig: _caGitSig(status, log) };
+      _caGitCache[_key] = { status, log, sig: _caGitSig(status, log) };
       // The user may have switched to a different project while this was in
       // flight - still cache the result for later, but don't render stale
       // data over whatever's now showing.
-      if (_project === _caActiveProject) _caRenderSourceControl(status, log);
+      if (_project === _caActiveProject && _key === _caCacheKey(_project))
+        _caRenderSourceControl(status, log);
     })
     .catch(() => {
       if (_project === _caActiveProject && filesEl)
@@ -347,20 +425,22 @@ function _caStartSourceControlPolling() {
       return;
     }
     const _project = _caActiveProject;
+    const _key = _caCacheKey(_project);
+    _caRefreshWorktrees(_project);
     Promise.all([
-      fetch(`/api/code_agent/git/status?project_name=${encodeURIComponent(_project)}`).then((r) =>
+      fetch(_caApiUrl('git/status', _project)).then((r) =>
         r.ok ? r.json() : null,
       ),
-      fetch(`/api/code_agent/git/log?project_name=${encodeURIComponent(_project)}`).then((r) =>
+      fetch(_caApiUrl('git/log', _project)).then((r) =>
         r.ok ? r.json() : null,
       ),
     ])
       .then(([status, log]) => {
-        if (_project !== _caActiveProject) return; // switched away while in flight
+        if (_project !== _caActiveProject || _key !== _caCacheKey(_project)) return; // switched away while in flight
         const newSig = _caGitSig(status, log);
-        const cached = _caGitCache[_project];
+        const cached = _caGitCache[_key];
         if (cached && cached.sig === newSig) return; // nothing changed - skip render, no flicker
-        _caGitCache[_project] = { status, log, sig: newSig };
+        _caGitCache[_key] = { status, log, sig: newSig };
         _caRenderSourceControl(status, log);
       })
       .catch(() => {})
@@ -430,6 +510,10 @@ function _caRenderSourceControl(status, log) {
   if (log) {
     // Cache branch name so _caRenderRefBadges can highlight the active branch
     window._caCurrentBranch = log.branch || '';
+    if (_caBranchOf[_caActiveProject] !== (log.branch || '')) {
+      _caBranchOf[_caActiveProject] = log.branch || '';
+      _caRenderProjectSwitcher(_caActiveProject, _caProjects);
+    }
     // Header: branch name + ahead/behind indicator
     const aheadHtml = log.ahead
       ? `<span class="ca-sc-sync-local" title="${log.ahead} unpushed commit${log.ahead !== 1 ? 's' : ''}">↑${log.ahead}</span>`
@@ -440,7 +524,13 @@ function _caRenderSourceControl(status, log) {
     const syncBadge =
       log.ahead || log.behind ? ` <span class="ca-sc-sync">${aheadHtml}${behindHtml}</span>` : '';
     if (commitsLabel) {
-      commitsLabel.innerHTML = _caEsc(log.branch || 'main') + syncBadge;
+      const wtBadge = _caSelectedWorktree(_caActiveProject)
+        ? ' <span class="gtp-tab-wt" title="Showing a worktree of this project">worktree</span>'
+        : '';
+      commitsLabel.innerHTML =
+        `<button type="button" class="ca-sc-branch-btn" title="Switch branch or worktree" aria-haspopup="menu"${gatorActionAttrs('_caShowBranchMenu', [{ $el: true }])}>${_caEsc(log.branch || 'main')} ▾</button>` +
+        wtBadge +
+        syncBadge;
       commitsLabel.style.display = '';
     }
     if (commitsEl) {
@@ -600,7 +690,11 @@ function _caShowFileDiff(file, staged) {
   _caMountFileHeaderChip(file, diffId);
 
   fetch(
-    `/api/code_agent/git/diff?project_name=${encodeURIComponent(_caActiveProject)}&file=${encodeURIComponent(file)}&staged=${staged}`,
+    _caApiUrl(
+      'git/diff',
+      _caActiveProject,
+      `&file=${encodeURIComponent(file)}&staged=${staged}`,
+    ),
   )
     .then((r) => r.json())
     .then((data) => {
@@ -707,7 +801,11 @@ function _caDiscardFile(file, status) {
         fetch('/api/code_agent/git/discard', {
           method: 'POST',
           headers: hdrs,
-          body: JSON.stringify({ project_name: _caActiveProject, file }),
+          body: JSON.stringify({
+            project_name: _caActiveProject,
+            file,
+            worktree: _caSelectedWorktree(_caActiveProject),
+          }),
         })
           .then(async (r) => ({ ok: r.ok, data: await r.json().catch(() => ({})) }))
           .then(({ ok, data }) => {
@@ -732,7 +830,7 @@ function _caLoadFileTree(relPath, container) {
   if (!_caActiveProject || !container) return;
   container.innerHTML = '<div class="ca-sc-loading"></div>';
   fetch(
-    `/api/code_agent/files/tree?project_name=${encodeURIComponent(_caActiveProject)}&path=${encodeURIComponent(relPath)}`,
+    _caApiUrl('files/tree', _caActiveProject, `&path=${encodeURIComponent(relPath)}`),
   )
     .then((r) => (r.ok ? r.json() : Promise.reject()))
     .then((data) => {
@@ -812,7 +910,7 @@ function _caBuildFileTreeRow(entry, depth) {
 // what "the current state of this file" means), otherwise a read-only view.
 function _caOpenExplorerFile(file) {
   if (!_caActiveProject) return;
-  const status = _caGitCache[_caActiveProject]?.status;
+  const status = _caGitCache[_caCacheKey(_caActiveProject)]?.status;
   const staged = (status?.staged || []).find((f) => f.file === file);
   const unstaged = (status?.unstaged || []).find((f) => f.file === file);
   const untracked = (status?.untracked || []).find((f) => f.file === file);
@@ -849,7 +947,7 @@ function _caShowFileContent(file) {
   _caMountFileHeaderChip(file, diffId);
 
   fetch(
-    `/api/code_agent/file/content?project_name=${encodeURIComponent(_caActiveProject)}&file=${encodeURIComponent(file)}`,
+    _caApiUrl('file/content', _caActiveProject, `&file=${encodeURIComponent(file)}`),
   )
     .then((r) => r.json())
     .then((data) => {
@@ -954,8 +1052,11 @@ function _caRenderProjectSwitcher(activeProject, allProjects) {
   chip.setAttribute('aria-haspopup', 'menu');
   // "● project ▾": the dot signals a project is active. Which agent a terminal
   // runs is chosen in the tab strip's "+" menu, so it is not shown here.
-  chip.textContent = proj ? '● ' + proj.name + ' ▾' : 'Select project ▾';
-  chip.title = proj ? 'Project: ' + proj.name + ' — click to switch' : 'Select a project to work on';
+  const branch = proj ? _caBranchOf[proj.name] || '' : '';
+  chip.textContent = proj ? '● ' + proj.name + (branch ? ' · ' + branch : '') + ' ▾' : 'Select project ▾';
+  chip.title = proj
+    ? 'Project: ' + proj.name + (branch ? ' on ' + branch : '') + ' — click to switch'
+    : 'Select a project to work on';
   chip.onclick = _caShowSessionDropdown;
   chip.onkeydown = (e) => {
     if (e.key === 'Enter' || e.key === ' ') {
@@ -1538,6 +1639,293 @@ function _caShowSessionDropdown() {
   setTimeout(() => document.addEventListener('click', onOutside), 0);
 }
 
+// ── Branch and worktree menu ───────────────────────────────────────────────────
+// Opened from the branch button in the Changes header. Every action goes through
+// the git routes, which refuse anything unsafe (dirty switch, unmerged delete,
+// current/default branch, dirty worktree); the menu shows git's reason and, for a
+// dirty switch, offers an explicit "Switch anyway".
+async function _caShowBranchMenu(anchor) {
+  const open = document.querySelector('.ca-branch-menu');
+  if (open) {
+    open._close();
+    return;
+  }
+  const project = _caActiveProject;
+  const h = window.codeBranchHelpers;
+  if (!project || !h) return;
+
+  const mkButton = (text, cls) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = cls;
+    b.textContent = text;
+    return b;
+  };
+  const menu = document.createElement('div');
+  menu.className = 'gtp-new-menu ca-branch-menu';
+  menu.setAttribute('role', 'menu');
+  menu.setAttribute('aria-label', 'Branches and worktrees');
+  const search = document.createElement('input');
+  search.type = 'search';
+  search.className = 'ca-branch-search';
+  search.placeholder = 'Find or create a branch';
+  search.setAttribute('aria-label', 'Find or create a branch');
+  search.autocomplete = 'off';
+  const list = document.createElement('div');
+  list.className = 'ca-branch-list';
+  const note = document.createElement('div');
+  note.className = 'ca-branch-note';
+  note.setAttribute('role', 'status');
+  menu.append(search, list, note);
+
+  let branches = null;
+  let worktrees = [];
+  let busy = false;
+  const folder = () => _caSelectedWorktree(project);
+  const say = (text) => {
+    note.replaceChildren();
+    note.textContent = text || '';
+  };
+  const ask = (message, yesLabel, onYes) => {
+    note.replaceChildren();
+    const msg = document.createElement('div');
+    msg.textContent = message;
+    const actions = document.createElement('div');
+    actions.className = 'ca-branch-note-actions';
+    const yes = mkButton(yesLabel, 'ca-branch-note-yes');
+    const no = mkButton('Cancel', 'ca-branch-note-no');
+    yes.onclick = () => {
+      say('');
+      onYes();
+    };
+    no.onclick = () => say('');
+    actions.append(yes, no);
+    note.append(msg, actions);
+    yes.focus();
+  };
+
+  async function call(method, path, body) {
+    const headers = await _caHeadersAsync();
+    const resp = await _caFetchWithCsrfRetry('/api/code_agent/' + path, {
+      method,
+      headers,
+      body: JSON.stringify({ project_name: project, ...body }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    const d = typeof data.detail === 'string' ? { message: data.detail } : data.detail || {};
+    return { ok: resp.ok, code: d.code || '', message: d.message || 'Something went wrong.', data };
+  }
+
+  async function act(method, path, body, done, refused) {
+    if (busy) return;
+    busy = true;
+    say('Working…');
+    let res;
+    try {
+      res = await call(method, path, body);
+    } catch (_) {
+      res = { ok: false, code: '', message: 'Could not reach the server.' };
+    }
+    busy = false;
+    if (res.ok) {
+      say('');
+      await done(res.data);
+    } else if (!(refused && refused(res))) {
+      say(res.message);
+    }
+  }
+
+  async function load() {
+    const get = (url) =>
+      fetch(url)
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null);
+    const [b, w] = await Promise.all([
+      get(_caApiUrl('git/branches', project)),
+      get(`/api/code_agent/git/worktrees?project_name=${encodeURIComponent(project)}`),
+    ]);
+    if (!menu.isConnected) return;
+    branches = b;
+    worktrees = (w && w.worktrees) || [];
+    if (w) _caWorktreeLists[project] = worktrees;
+    render();
+  }
+  const afterChange = async () => {
+    _caRefreshSourceControl(true);
+    _caRefreshWorktrees(project);
+    await load();
+  };
+
+  function checkout(name, confirmDirty) {
+    act(
+      'POST',
+      'git/checkout',
+      { name, confirm_dirty: !!confirmDirty, worktree: folder() },
+      afterChange,
+      (res) => {
+        if (res.code !== 'dirty') return false;
+        ask(res.message, 'Switch anyway', () => checkout(name, true));
+        return true;
+      },
+    );
+  }
+  const createBranch = (name) => act('POST', 'git/branch', { name, worktree: folder() }, afterChange);
+  const deleteBranch = (name) =>
+    ask(`Delete branch ${name}? Git only deletes it when its work is merged.`, 'Delete', () =>
+      act('DELETE', 'git/branch', { name, worktree: folder() }, afterChange),
+    );
+  const addWorktree = (branch) =>
+    act('POST', 'git/worktree', { branch }, async (data) => {
+      await _caRefreshWorktrees(project);
+      _caSelectWorktree(project, data.path);
+      close();
+    });
+  const removeWorktree = (w) =>
+    ask(`Remove the worktree ${w.label}? Its folder is deleted; the branch is kept.`, 'Remove', () =>
+      act('DELETE', 'git/worktree', { path: w.path }, async () => {
+        if (h.sameFolder(folder(), w.path)) _caSelectWorktree(project, '');
+        await afterChange();
+      }),
+    );
+
+  function itemRow(item) {
+    const el = document.createElement('div');
+    el.className = 'gtp-new-menu-item ca-branch-row';
+    el.setAttribute('role', 'menuitem');
+    el.tabIndex = -1;
+    const mark = document.createElement('span');
+    mark.className = 'ca-branch-mark';
+    mark.setAttribute('aria-hidden', 'true');
+    const text = document.createElement('span');
+    text.className = 'ca-branch-name';
+    el.append(mark, text);
+    const extra = (label, title, fn) => {
+      const b = mkButton(label, 'ca-branch-act');
+      b.title = title;
+      b.setAttribute('aria-label', title);
+      b.onclick = (e) => {
+        e.stopPropagation();
+        fn();
+      };
+      el.append(b);
+    };
+
+    if (item.kind === 'worktree') {
+      mark.textContent = item.selected ? '✓' : '';
+      text.textContent = item.label + (item.isMain ? ' · project folder' : '');
+      text.title = item.path;
+      el.onclick = () => {
+        _caSelectWorktree(project, item.path);
+        close();
+      };
+      if (item.removable) extra('×', 'Remove worktree', () => removeWorktree(item));
+    } else if (item.kind === 'branch') {
+      mark.textContent = item.current ? '✓' : '';
+      text.textContent = item.name;
+      const where = (branches.local.find((b) => b.name === item.name) || {}).worktree;
+      if (item.inWorktree && !item.current) {
+        text.title = 'Checked out in ' + where;
+        const tag = document.createElement('span');
+        tag.className = 'ca-branch-tag';
+        tag.textContent = 'worktree';
+        el.insertBefore(tag, null);
+      }
+      el.onclick = () => {
+        if (item.current) return close();
+        if (item.inWorktree) {
+          _caSelectWorktree(project, where);
+          return close();
+        }
+        checkout(item.name);
+      };
+      if (!item.inWorktree) extra('Worktree', 'Open this branch in a new worktree', () => addWorktree(item.name));
+      if (item.deletable) extra('×', 'Delete branch', () => deleteBranch(item.name));
+    } else if (item.kind === 'remote') {
+      text.textContent = item.name;
+      el.onclick = () => checkout(item.name);
+    } else {
+      text.textContent = `Create branch "${item.name}"`;
+      el.onclick = () => createBranch(item.name);
+      extra('Worktree', 'Create it in a new worktree', () => addWorktree(item.name));
+    }
+    return el;
+  }
+
+  function render() {
+    list.replaceChildren();
+    if (!branches) {
+      const e = document.createElement('div');
+      e.className = 'ca-branch-empty';
+      e.textContent = 'Branches are not available for this project.';
+      list.append(e);
+      return;
+    }
+    const sections = h.buildBranchMenu({ branches, worktrees, selected: folder(), query: search.value });
+    if (!sections.length) {
+      const e = document.createElement('div');
+      e.className = 'ca-branch-empty';
+      e.textContent = 'No matches';
+      list.append(e);
+      return;
+    }
+    sections.forEach((sec) => {
+      const t = document.createElement('div');
+      t.className = 'ca-branch-section';
+      t.textContent = sec.title;
+      list.append(t);
+      sec.items.forEach((item) => list.append(itemRow(item)));
+    });
+  }
+
+  function close() {
+    menu.remove();
+    document.removeEventListener('click', onOutside);
+    document.removeEventListener('keydown', onKey, true);
+  }
+  menu._close = close;
+  function onOutside(e) {
+    // composedPath still lists the menu when the clicked button was just removed from it.
+    const path = e.composedPath();
+    if (!path.includes(menu) && !(anchor && path.includes(anchor))) close();
+  }
+  function onKey(e) {
+    if (!menu.isConnected) {
+      close();
+      return;
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      close();
+      if (anchor && anchor.isConnected) anchor.focus();
+    } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const items = [search, ...menu.querySelectorAll('.ca-branch-row')];
+      const at = items.indexOf(document.activeElement);
+      const step = e.key === 'ArrowDown' ? 1 : -1;
+      items[(at + step + items.length) % items.length].focus();
+    } else if (e.key === 'Enter' && document.activeElement?.classList.contains('ca-branch-row')) {
+      e.preventDefault();
+      document.activeElement.click();
+    }
+  }
+
+  const loading = document.createElement('div');
+  loading.className = 'ca-branch-empty';
+  loading.textContent = 'Loading…';
+  list.append(loading);
+  search.addEventListener('input', render);
+  document.body.appendChild(menu);
+  const rect = anchor.getBoundingClientRect();
+  menu.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - menu.offsetWidth - 8)) + 'px';
+  menu.style.top = rect.bottom + 4 + 'px';
+  menu.style.maxHeight =
+    Math.max(160, Math.min(window.innerHeight - rect.bottom - 12, window.innerHeight * 0.7)) + 'px';
+  search.focus();
+  document.addEventListener('keydown', onKey, true);
+  setTimeout(() => document.addEventListener('click', onOutside), 0);
+  await load();
+}
+
 function _caSetActiveProject(name) {
   document.querySelector('.ca-project-dropdown')?.remove();
 
@@ -1584,7 +1972,7 @@ function _caSetActiveProject(name) {
     const _proj = _caProjects.find((p) => p.name === name);
     if (_proj && _proj.repo_path) {
       // Guided: show the Start/Resume prompt (no auto cold-spawn on select).
-      _caShowAgentStartOrTerminal(_activeTabId, _proj, _proj.repo_path);
+      _caShowAgentStartOrTerminal(_activeTabId, _proj, _caActiveFolder(_proj));
     }
   }
 }
