@@ -31,7 +31,7 @@ def _live_terminals(pty: list[str]) -> list[dict]:
         agent, _, pty_id = item.partition(":")
         if agent not in agent_sessions.AGENTS or not pty_id:
             continue
-        session_id = generic_agent.pinned_session_id(pty_id)
+        session_id = generic_agent.linked_session_id(pty_id)
         created_at = agent_handoff._session_started_at(pty_id)
         if session_id is None and created_at is None:
             continue

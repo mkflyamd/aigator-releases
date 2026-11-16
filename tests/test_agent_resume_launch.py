@@ -27,6 +27,7 @@ def env(monkeypatch):
     monkeypatch.setattr(generic_agent, "wsl_agents", lambda: (None, {}))
     monkeypatch.setattr(generic_agent, "effective_binding", lambda agent: (("-c", "x=1"), {"K": "v"}))
     monkeypatch.setattr(generic_agent, "_pinned_sessions", {})
+    monkeypatch.setattr(generic_agent, "_resumed_sessions", {})
     monkeypatch.setattr(generic_agent, "_active_sessions", {})
     monkeypatch.setattr(
         ags, "find_session",
@@ -95,3 +96,38 @@ def test_resume_that_cannot_run_here_is_409(env, monkeypatch):
     r = client().post("/api/generic-agent/terminal", json=BODY)
     assert r.status_code == 409
     assert env["spawn"] == []
+
+
+def test_resuming_a_session_that_is_already_live_reuses_its_terminal(env, monkeypatch):
+    import routes.terminal as terminal
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(terminal, "get_pty_session", lambda sid: SimpleNamespace(done=False))
+    c = client()
+    first = c.post("/api/generic-agent/terminal", json=BODY).json()
+    second = c.post("/api/generic-agent/terminal", json=BODY).json()
+    assert first["created"] is True
+    assert second == {"pty_session_id": first["pty_session_id"], "created": False}
+    assert len(env["spawn"]) == 1
+
+
+def test_resuming_after_the_terminal_exited_spawns_again(env, monkeypatch):
+    import routes.terminal as terminal
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(terminal, "get_pty_session", lambda sid: SimpleNamespace(done=True))
+    c = client()
+    c.post("/api/generic-agent/terminal", json=BODY)
+    assert c.post("/api/generic-agent/terminal", json=BODY).json()["created"] is True
+    assert len(env["spawn"]) == 2
+
+
+def test_a_resumed_codex_terminal_is_linked_to_its_session(env, monkeypatch):
+    monkeypatch.setattr(
+        ags, "find_session",
+        lambda repo, agent, sid, **kw: {"id": sid, "agent": agent, "source": "windows", "cwd": repo},
+    )
+    r = client().post("/api/generic-agent/terminal", json={**BODY, "agent": "codex", "resume_id": "x1"})
+    pty = r.json()["pty_session_id"]
+    assert generic_agent.linked_session_id(pty) == "x1"
+    assert generic_agent.pinned_session_id(pty) is None

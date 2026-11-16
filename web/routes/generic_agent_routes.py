@@ -24,6 +24,8 @@ from security import verify_csrf
 
 router = APIRouter()
 
+_resume_lock = asyncio.Lock()
+
 _INSTALL_HINTS = {
     "codex": "npm install -g @openai/codex",
     "claude": "npm install -g @anthropic-ai/claude-code",
@@ -134,6 +136,14 @@ async def installed_generic_agents():
 
 @router.post("/api/generic-agent/terminal", dependencies=[Depends(verify_csrf)])
 async def generic_agent_terminal(req: GenericAgentTerminalRequest):
+    if not req.resume_id:
+        return await _open_terminal(req)
+    # Serialised so two quick clicks on Resume cannot both find no live terminal and spawn twice.
+    async with _resume_lock:
+        return await _open_terminal(req)
+
+
+async def _open_terminal(req: GenericAgentTerminalRequest):
     """Reattach this project's live session if one exists, else spawn fresh.
 
     Unlike OpenCode's ensure_instance()+attach split, there's no separate
@@ -161,6 +171,10 @@ async def generic_agent_terminal(req: GenericAgentTerminalRequest):
         resume = await asyncio.to_thread(agent_sessions.find_session, req.repo_path, req.agent, req.resume_id)
         if resume is None:
             raise HTTPException(status_code=404, detail="Session not found in this project.")
+        for live_id in generic_agent.ptys_for_session(req.agent, resume["id"]):
+            entry = await asyncio.to_thread(get_pty_session, live_id)
+            if entry and not entry.done:
+                return {"pty_session_id": live_id, "created": False}
 
     handoff = None
     if req.handoff_id:

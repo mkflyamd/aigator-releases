@@ -32,7 +32,7 @@ def env(monkeypatch):
         lambda name: {"name": name, "repo_path": "C:\\work\\app"} if name == "demo" else None,
     )
     monkeypatch.setattr(generic_agent, "is_installed", lambda a: a in ("claude", "codex"))
-    monkeypatch.setattr(generic_agent, "pinned_session_id", lambda pty: "c1" if pty == "p1" else None)
+    monkeypatch.setattr(generic_agent, "linked_session_id", lambda pty: "c1" if pty == "p1" else None)
     monkeypatch.setattr(ags, "wsl_sessions", lambda repo: ([], False))
     monkeypatch.setattr(ags, "cached_wsl_records", lambda repo: [])
     monkeypatch.setattr(ah, "_configured_api_keys", lambda: [FAKE])
