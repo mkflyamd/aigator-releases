@@ -338,12 +338,19 @@ def _codex_source(sh: SourceHome, cwd: str) -> str | None:
 _IMPORT_SETTLE_SECONDS = 120
 
 
+def _import_time(value) -> float:
+    """Seconds since the epoch; Codex may write milliseconds. Anything else is 0 (unknown)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0.0
+    return value / 1000 if value > 1e11 else float(value)
+
+
 def _parse_codex_imports(path: Path, _st) -> dict:
     with open(path, "r", encoding="utf-8") as fh:
         data = json.load(fh)
     records = data.get("records") if isinstance(data, dict) else None
     return {
-        r["imported_thread_id"]: float(r.get("imported_at") or 0)
+        r["imported_thread_id"]: _import_time(r.get("imported_at"))
         for r in records or ()
         if isinstance(r, dict) and isinstance(r.get("imported_thread_id"), str)
     }
@@ -361,12 +368,19 @@ def _codex_imports(sh: SourceHome) -> dict:
 
 
 def _continued_in_codex(path: Path, st, imported_at: float) -> bool:
-    """True when the user took an imported thread on in Codex, making it Codex work."""
+    """True when the user took an imported thread on in Codex, making it Codex work.
+    Reads the whole rollout line by line: the first post-import user turn can sit far
+    from the tail once the thread has grown."""
     cutoff = imported_at + _IMPORT_SETTLE_SECONDS
-    for o in _read_tail(path, st.st_size):
-        m = _codex_message(o)
-        if m and m[0] == "user" and (_epoch(o.get("timestamp")) or 0) > cutoff:
-            return True
+    with open(path, "r", encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            try:
+                o = json.loads(line)
+            except ValueError:
+                continue
+            m = _codex_message(o) if isinstance(o, dict) else None
+            if m and m[0] == "user" and (_epoch(o.get("timestamp")) or 0) > cutoff:
+                return True
     return False
 
 
@@ -375,8 +389,11 @@ def _is_import_copy(p: Path, st, thread_id, imports: dict) -> bool:
     History row, so the copy would only repeat it."""
     if thread_id not in imports:
         return False
-    continued = _cached("codex-continued", p, st, lambda path, s: _continued_in_codex(path, s, imports[thread_id]))
-    return not continued
+    imported_at = imports[thread_id]
+    continued = _cached(
+        f"codex-continued:{imported_at}", p, st, lambda path, s: _continued_in_codex(path, s, imported_at)
+    )
+    return continued is False  # an unreadable rollout stays listed rather than vanishing
 
 
 def _scan_codex(sh: SourceHome) -> list[dict]:
