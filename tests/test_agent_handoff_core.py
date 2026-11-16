@@ -70,13 +70,28 @@ def test_redact_generic_assignments_keep_the_name():
         assert out == want and n == 1, raw
 
 
-def test_redact_url_password_and_aws_secret_key_keep_their_context():
-    url, n = ah.redact("git clone https://user:hunter2pass@example.com/repo.git")
+def test_redact_url_password_keeps_the_rest_of_the_url():
+    url, n = ah.redact(f"git clone https://user:{FAKE}@example.com/repo.git")
     assert url == "git clone https://user:[REDACTED]@example.com/repo.git" and n == 1
     assert ah.redact("see https://example.com:8080/path")[1] == 0
-    key, n = ah.redact("aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCY")
-    assert key == "aws_secret_access_key = [REDACTED]" and n == 1
-    assert ah.redact("SecretAccessKey: short")[1] == 0
+    for password in (f"{FAKE}/tail", f"{FAKE}@tail"):
+        out, n = ah.redact(f"postgres://user:{password}@db.local/app")
+        assert out == "postgres://user:[REDACTED]@db.local/app" and n == 1, password
+
+
+def test_redact_url_password_scan_is_linear():
+    text = "a." * 200_000 + "://a:" * 20_000
+    start = time.perf_counter()
+    ah.redact(text)
+    assert time.perf_counter() - start < 2.0
+
+
+def test_redact_aws_secret_access_key_values_from_eight_characters():
+    for name in ("AWS_SECRET_ACCESS_KEY", "aws_secret_access_key", "SecretAccessKey"):
+        out, n = ah.redact(f"{name}={FAKE}")
+        assert out == f"{name}=[REDACTED]" and n == 1, name
+    assert ah.redact(f"AWS_SECRET_ACCESS_KEY={FAKE[:8]}") == ("AWS_SECRET_ACCESS_KEY=[REDACTED]", 1)
+    assert ah.redact(f"AWS_SECRET_ACCESS_KEY={FAKE[:7]}")[1] == 0
 
 
 def test_redact_generic_assignment_skips_short_values_and_names_alone():
