@@ -155,7 +155,7 @@ function _genAgentTabIcon(agent) {
   icon.dataset.agent = agent;
   icon.setAttribute('aria-hidden', 'true');
   const html = _genAgentIconHtml(agent);
-  if (html) icon.innerHTML = html;
+  if (html) icon.append(...new DOMParser().parseFromString(html, 'text/html').body.childNodes);
   else icon.textContent = _genAgentLabel(agent).charAt(0);
   return icon;
 }

@@ -70,6 +70,15 @@ def test_redact_generic_assignments_keep_the_name():
         assert out == want and n == 1, raw
 
 
+def test_redact_url_password_and_aws_secret_key_keep_their_context():
+    url, n = ah.redact("git clone https://user:hunter2pass@example.com/repo.git")
+    assert url == "git clone https://user:[REDACTED]@example.com/repo.git" and n == 1
+    assert ah.redact("see https://example.com:8080/path")[1] == 0
+    key, n = ah.redact("aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCY")
+    assert key == "aws_secret_access_key = [REDACTED]" and n == 1
+    assert ah.redact("SecretAccessKey: short")[1] == 0
+
+
 def test_redact_generic_assignment_skips_short_values_and_names_alone():
     for text in (f"password={FAKE[:7]}", "token_count = compute(x)", "the token: ok", "secret:"):
         assert ah.redact(text) == (text, 0), text
