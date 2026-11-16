@@ -29,10 +29,10 @@ A user's agent work is scattered across tools. Sessions live in each agent's own
 
 The left panel's two text tabs ("Source Control", "Explorer") become three icon tabs, each with a tooltip and an accessible name:
 
-| Tab | Icon | Meaning |
-| --- | --- | --- |
-| Files | folder | the file explorer |
-| Changes | git branch | source control |
+| Tab     | Icon                    | Meaning               |
+| ------- | ----------------------- | --------------------- |
+| Files   | folder                  | the file explorer     |
+| Changes | git branch              | source control        |
 | History | clock with a back arrow | agent session history |
 
 The History tab shows an amber dot while any session in this project needs the user. Icons use `currentColor` so they follow the theme.
@@ -83,10 +83,10 @@ Live sessions join the stored list through the Claude session id Gator pins at l
 
 Nothing new is stored. The list is built from the agents' own files for this project's folder.
 
-| Agent | Location | Project match |
-| --- | --- | --- |
+| Agent       | Location                               | Project match                                                                           |
+| ----------- | -------------------------------------- | --------------------------------------------------------------------------------------- |
 | Claude Code | `~/.claude/projects/<slug>/<id>.jsonl` | slug from the folder (`re.sub(r"[^A-Za-z0-9]", "-", cwd)`), compared case-insensitively |
-| Codex | `~/.codex/sessions/**/rollout-*.jsonl` | `cwd` in the first line's `session_meta` payload |
+| Codex       | `~/.codex/sessions/**/rollout-*.jsonl` | `cwd` in the first line's `session_meta` payload                                        |
 
 Only the head and tail of each file are read: the head for cwd, branch, version and first user message; the tail for the last exchange and last-activity time. A file's modified time is the session's time.
 

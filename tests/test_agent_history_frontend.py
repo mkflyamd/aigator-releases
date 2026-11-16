@@ -21,7 +21,7 @@ def test_activating_a_session_marks_it_viewed():
 
 
 def test_output_in_the_viewed_terminal_counts_as_seen():
-    assert "if (window.agentHistory && agentHistory.isViewing(sess)) sess._viewedAt = sess._lastOutputAt;" in TERM
+    assert "agentHistory.isViewing(sess))\n          sess._viewedAt = sess._lastOutputAt;" in TERM
 
 
 def test_echo_and_repaint_output_does_not_count_as_working():

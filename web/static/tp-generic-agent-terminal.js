@@ -1396,7 +1396,8 @@ function _genAgentConnect(sess, retryDelay) {
       sess._lastRawOutputAt = Date.now();
       if (Date.now() >= (sess._quietUntil || 0)) {
         sess._lastOutputAt = Date.now();
-        if (window.agentHistory && agentHistory.isViewing(sess)) sess._viewedAt = sess._lastOutputAt;
+        if (window.agentHistory && agentHistory.isViewing(sess))
+          sess._viewedAt = sess._lastOutputAt;
       }
       if (window.agentHandoff) {
         // Whether the agent has switched bracketed paste on (ESC[?2004h); the

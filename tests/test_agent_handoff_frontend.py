@@ -74,7 +74,7 @@ def test_every_extra_agent_has_a_label_and_an_icon():
     sys.path.insert(0, str(STATIC.parent))
     import generic_agent
 
-    label_map = TERM.split("const _GEN_EXTRA_AGENT_LABELS = {")[1].split(chr(10) + "};")[0]
+    label_map = TERM.split("const _GEN_EXTRA_AGENT_LABELS = {")[1].split("\n};")[0]
     labels = dict(re.findall(r"^  '?([\w-]+)'?: '([^']+)',$", label_map, re.M))
     for agent, (label, _, _) in generic_agent.EXTRA_AGENTS.items():
         assert labels.get(agent) == label, agent
