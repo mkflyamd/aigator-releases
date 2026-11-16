@@ -169,7 +169,11 @@ const term = (pty, agent, out, viewed) => ({
 // actions
 {
   assert.deepStrictEqual(h.rowActions({ ptySessionId: 'p1' }), ['go', 'handoff']);
-  assert.deepStrictEqual(h.rowActions({ ptySessionId: null }), ['resume', 'handoff']);
+  assert.deepStrictEqual(h.rowActions({ agent: 'claude', ptySessionId: null }), ['resume', 'handoff']);
+  assert.deepStrictEqual(h.rowActions({ agent: 'codex', ptySessionId: null }), ['resume', 'handoff']);
+  // Crush and OpenCode keep no transcript file to build a handoff from.
+  assert.deepStrictEqual(h.rowActions({ agent: 'crush', ptySessionId: null }), ['resume']);
+  assert.deepStrictEqual(h.rowActions({ agent: 'opencode-bare', ptySessionId: null }), ['resume']);
 }
 
 // filtering and grouping

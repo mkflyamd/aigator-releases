@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sqlite3
 import subprocess
 import threading
 import time
@@ -17,6 +18,7 @@ from datetime import datetime
 from pathlib import Path
 
 import agent_handoff as ah
+import agent_session_stores
 import generic_agent
 
 HEAD_BYTES = 256 * 1024
@@ -28,7 +30,7 @@ MAX_FILES = 300
 MAX_CODEX_SCAN = 2000
 PREVIEW_EXCHANGES = 6
 PREVIEW_CHARS = 600
-AGENTS = ("claude", "codex")
+AGENTS = ("claude", "codex", *agent_session_stores.SCANNERS)
 WSL_TTL_SECONDS = 30
 WORKTREE_TTL_SECONDS = 30
 
@@ -404,7 +406,25 @@ def _scan_codex(sh: SourceHome) -> list[dict]:
     return out
 
 
-_SCANNERS = {"claude": _scan_claude, "codex": _scan_codex}
+def _store_scanner(agent: str):
+    scan = agent_session_stores.SCANNERS[agent]
+
+    def run(sh: SourceHome) -> list[dict]:
+        if sh.source != "windows":
+            return []
+        return [
+            dict(rec, agent=agent, source=sh.source, title=_clip(real_user_text(rec["title"])) or "Untitled session")
+            for rec in scan(sh.home, sh.cwd, _same_dir)
+        ]
+
+    return run
+
+
+_SCANNERS = {
+    "claude": _scan_claude,
+    "codex": _scan_codex,
+    **{agent: _store_scanner(agent) for agent in agent_session_stores.SCANNERS},
+}
 
 
 _WORKTREES: dict[str, tuple[float, list[str]]] = {}
@@ -491,18 +511,31 @@ def public(rec: dict) -> dict:
     return {k: rec[k] for k in _PUBLIC_KEYS if k in rec}
 
 
-def preview(rec: dict) -> list[dict]:
+def _transcript_messages(rec: dict) -> list[tuple[str, str]]:
     path = Path(rec["path"])
     extract = _claude_message if rec["agent"] == "claude" else _codex_message
+    return [m for m in map(extract, _read_tail(path, path.stat().st_size)) if m]
+
+
+def _store_messages(rec: dict) -> list[tuple[str, str]]:
+    read = agent_session_stores.PREVIEWERS[rec["agent"]]
+    try:
+        pairs = read(Path(rec["path"]), rec["id"], PREVIEW_EXCHANGES * 4)
+    except sqlite3.Error as exc:
+        raise OSError(str(exc)) from exc
+    return [(role, real_user_text(text) if role == "user" else " ".join(text.split())) for role, text in pairs]
+
+
+def preview(rec: dict) -> list[dict]:
+    messages = _store_messages(rec) if rec["agent"] in agent_session_stores.PREVIEWERS else _transcript_messages(rec)
     merged: list[dict] = []
-    for o in _read_tail(path, path.stat().st_size):
-        m = extract(o)
-        if not m:
+    for role, text in messages:
+        if not text:
             continue
-        if merged and merged[-1]["role"] == m[0]:
-            merged[-1]["text"] += " " + m[1]
+        if merged and merged[-1]["role"] == role:
+            merged[-1]["text"] += " " + text
         else:
-            merged.append({"role": m[0], "text": m[1]})
+            merged.append({"role": role, "text": text})
     red = ah.Redactor(ah._configured_api_keys())
     return [{"role": m["role"], "text": red(m["text"])[:PREVIEW_CHARS]} for m in merged[-PREVIEW_EXCHANGES:]]
 

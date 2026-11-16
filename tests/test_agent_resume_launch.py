@@ -84,7 +84,7 @@ def test_resume_of_a_wsl_session_runs_in_its_distro_with_the_linux_path(env, mon
 
 def test_resume_rejects_bad_requests(env):
     c = client()
-    assert c.post("/api/generic-agent/terminal", json={**BODY, "agent": "crush"}).status_code == 400
+    assert c.post("/api/generic-agent/terminal", json={**BODY, "agent": "aider"}).status_code == 400
     assert c.post("/api/generic-agent/terminal", json={**BODY, "resume_id": "bad id"}).status_code == 400
     assert c.post("/api/generic-agent/terminal", json={**BODY, "handoff_id": "f" * 32}).status_code == 400
     assert c.post("/api/generic-agent/terminal", json={**BODY, "resume_id": "missing"}).status_code == 404
@@ -120,6 +120,33 @@ def test_resuming_after_the_terminal_exited_spawns_again(env, monkeypatch):
     c.post("/api/generic-agent/terminal", json=BODY)
     assert c.post("/api/generic-agent/terminal", json=BODY).json()["created"] is True
     assert len(env["spawn"]) == 2
+
+
+def test_a_resumed_crush_terminal_keeps_the_gateway_env_and_links_its_session(env, monkeypatch):
+    monkeypatch.setattr(generic_agent, "build_crush_env", lambda: {"CRUSH_GLOBAL_CONFIG": "cfg"})
+    r = client().post("/api/generic-agent/terminal", json={**BODY, "agent": "crush"})
+    assert r.status_code == 200
+    assert env["resume"][-1]["agent"] == "crush" and env["resume"][-1]["id"] == "abc-1"
+    spawn = env["spawn"][-1]
+    assert spawn["command"] == ["C:\\bin\\crush.exe", "--resume", "abc-1"]
+    assert spawn["env"] == {"CRUSH_GLOBAL_CONFIG": "cfg"}
+    assert generic_agent.linked_session_id(r.json()["pty_session_id"]) == "abc-1"
+
+
+def test_a_resumed_opencode_terminal_passes_the_session_to_the_bare_command(env, monkeypatch):
+    seen = []
+
+    def fake_bare(repo_path, session_id=None):
+        seen.append((repo_path, session_id))
+        return ["C:\\bin\\opencode.exe", "--session", session_id, repo_path]
+
+    monkeypatch.setattr(generic_agent, "build_opencode_bare_command", fake_bare)
+    monkeypatch.setattr(generic_agent, "build_opencode_bare_env", lambda: {"OPENCODE_CONFIG_CONTENT": "{}"})
+    r = client().post("/api/generic-agent/terminal", json={**BODY, "agent": "opencode-bare"})
+    assert r.status_code == 200
+    assert seen == [("C:\\work\\app", "abc-1")]
+    assert env["spawn"][-1]["env"] == {"OPENCODE_CONFIG_CONTENT": "{}"}
+    assert generic_agent.linked_session_id(r.json()["pty_session_id"]) == "abc-1"
 
 
 def test_a_resumed_codex_terminal_is_linked_to_its_session(env, monkeypatch):

@@ -414,7 +414,16 @@ def build_command(agent: str, repo_path: str = "", extra_args: tuple[str, ...] =
     return [resolved, *argv[1:], *extra_args]
 
 
-_RESUME_VERBS = {"claude": ("--resume",), "codex": ("resume",)}
+_RESUME_VERBS = {
+    "claude": ("--resume",),
+    "codex": ("resume",),
+    "crush": ("--session",),
+    OPENCODE_BARE_AGENT: ("--session",),
+}
+
+
+def can_resume(agent: str) -> bool:
+    return agent in _RESUME_VERBS
 
 
 def build_resume_command(
@@ -529,7 +538,7 @@ def unpin_session(pty_session_id: str) -> None:
     _linked_sessions.pop(pty_session_id, None)
 
 
-def build_opencode_bare_command(repo_path: str) -> list[str] | None:
+def build_opencode_bare_command(repo_path: str, session_id: str | None = None) -> list[str] | None:
     """argv for a single bare `opencode` process rooted at repo_path — no
     `serve`, no `attach`. None if opencode can't be found (mirrors
     build_command's contract for the route layer's "not installed" error).
@@ -537,16 +546,17 @@ def build_opencode_bare_command(repo_path: str) -> list[str] | None:
     Resolved on PATH via shutil.which("opencode"), same as claude/codex/crush -
     install with `npm install -g opencode-ai`. AI Gator does not bundle or pin it.
 
-    No --session resume: a lost/restarted PTY just starts a fresh OpenCode
-    session, same tradeoff _active_sessions already documents for every other
-    agent here.
+    A lost/restarted PTY just starts a fresh OpenCode session, same tradeoff
+    _active_sessions already documents for every other agent here; only a
+    History "Resume" passes session_id.
     """
     import shutil
 
     resolved = shutil.which("opencode")
-    if resolved:
-        return [_wrap_windows_cmd(resolved), repo_path]
-    return None
+    if not resolved:
+        return None
+    resume = [*_RESUME_VERBS[OPENCODE_BARE_AGENT], session_id] if session_id else []
+    return [_wrap_windows_cmd(resolved), *resume, repo_path]
 
 
 def _wrap_windows_cmd(path: str) -> str:

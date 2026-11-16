@@ -87,6 +87,10 @@ Nothing new is stored. The list is built from the agents' own files for this pro
 | ----------- | -------------------------------------- | --------------------------------------------------------------------------------------- |
 | Claude Code | `~/.claude/projects/<slug>/<id>.jsonl` | slug from the folder (`re.sub(r"[^A-Za-z0-9]", "-", cwd)`), compared case-insensitively |
 | Codex       | `~/.codex/sessions/**/rollout-*.jsonl` | `cwd` in the first line's `session_meta` payload                                        |
+| Crush       | `<project>/.crush/crush.db`            | the database lives in the project folder (and in each git worktree's folder)            |
+| OpenCode    | `~/.local/share/opencode/opencode.db`  | the session's `directory` column, compared with the project folder and its worktrees    |
+
+Crush and OpenCode keep sessions in SQLite, which Gator opens read-only with a short timeout. Both list top-level sessions only (no subagent or archived sessions) and hide sessions with no messages. An untitled session takes its first user message as the title. They resume with `crush --session <id>` and `opencode --session <id> <folder>`. Neither keeps a transcript file, so a stored session of either has Resume but no Hand off; a live terminal can still be handed off. WSL sessions of these agents are not listed.
 
 Only the head and tail of each file are read: the head for cwd, branch, version and first user message; the tail for the last exchange and last-activity time. A file's modified time is the session's time.
 
@@ -109,7 +113,7 @@ Known gaps, handled quietly:
 - The head read is 256 KB, because a session can open with a very large hook line before the first user message. The tail read is 256 KB.
 - A live row is "working" while its terminal printed within the last 12 seconds. After that it is "needs you" until the user views the tab, then "done".
 - List titles are redacted as well as previews, because a pasted secret can be the first user message.
-- Codex Desktop often opens with a generic prompt, so its titles can read the same ("Review this change…"). The branch and time on the second line tell them apart.
+- Codex Desktop copies Claude transcripts into new Codex threads and lists each copy in `~/.codex/external_agent_session_imports.json`. A copy the user never continued in Codex is hidden, because its original already has a row; one the user continued stays.
 
 ## Session record (Workboard compatibility)
 
@@ -129,7 +133,7 @@ The three states are the future Kanban columns (Needs you, Working, Done). A Wor
 
 New `web/agent_sessions.py`:
 
-- Scans Claude and Codex files for the project (Windows, plus WSL in the background) and returns session records.
+- Scans Claude, Codex, Crush and OpenCode data for the project (Windows, plus WSL in the background) and returns session records.
 - Reads head and tail only; caches by `(path, mtime, size)`; caps at the 200 newest; runs off the event loop; stale-while-revalidate.
 - Unreadable or half-written files are skipped silently.
 - Reuses `agent_handoff` for redaction and transcript parsing, not copies of it.

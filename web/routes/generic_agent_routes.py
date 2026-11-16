@@ -164,7 +164,7 @@ async def _open_terminal(req: GenericAgentTerminalRequest):
     if req.resume_id:
         if req.handoff_id:
             raise HTTPException(status_code=400, detail="A session cannot be resumed and handed off at once.")
-        if req.agent not in ("claude", "codex"):
+        if not generic_agent.can_resume(req.agent):
             raise HTTPException(status_code=400, detail=f"{req.agent!r} cannot resume a session.")
         if not agent_sessions.SESSION_ID_RE.fullmatch(req.resume_id):
             raise HTTPException(status_code=400, detail="Invalid session id.")
@@ -202,7 +202,11 @@ async def _open_terminal(req: GenericAgentTerminalRequest):
     if generic_agent.is_bare_terminal(req.agent):
         command = None  # deliberate - _spawn_pty's bare-shell path, not an error
     elif generic_agent.is_opencode_bare(req.agent):
-        command = generic_agent.build_opencode_bare_command(req.repo_path)
+        command = (
+            generic_agent.build_opencode_bare_command(req.repo_path, resume["id"])
+            if resume is not None
+            else generic_agent.build_opencode_bare_command(req.repo_path)
+        )
         if not command:
             raise HTTPException(
                 status_code=500,
@@ -220,7 +224,10 @@ async def _open_terminal(req: GenericAgentTerminalRequest):
         # config injected via a generated crushrc (CRUSH_GLOBAL_CONFIG env) —
         # see generic_agent.build_crush_env. No bundled binary; install via
         # `winget install charmbracelet.crush`.
-        command = generic_agent.build_command(req.agent, req.repo_path)
+        if resume is not None:
+            command = generic_agent.build_resume_command(req.agent, req.repo_path, resume["id"], resume["source"])
+        else:
+            command = generic_agent.build_command(req.agent, req.repo_path)
         if not command:
             raise HTTPException(
                 status_code=500,

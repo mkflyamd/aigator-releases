@@ -135,8 +135,11 @@
     return parts.join(' · ');
   }
 
+  const TRANSCRIPT_AGENTS = ['claude', 'codex'];
+
   function rowActions(row) {
-    return row.ptySessionId ? ['go', 'handoff'] : ['resume', 'handoff'];
+    if (row.ptySessionId) return ['go', 'handoff'];
+    return TRANSCRIPT_AGENTS.includes(row.agent) ? ['resume', 'handoff'] : ['resume'];
   }
 
   function filterGroups(rows, query) {

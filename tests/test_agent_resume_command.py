@@ -7,7 +7,8 @@ def test_windows_resume_commands(monkeypatch):
     assert ga.build_resume_command("codex", "C:\\w", "019a", extra_args=("-c", "x=1")) == [
         "C:\\bin\\codex.exe", "-c", "x=1", "resume", "019a",
     ]
-    assert ga.build_resume_command("crush", "C:\\w", "x") is None
+    assert ga.build_resume_command("crush", "C:\\w", "x") == ["C:\\bin\\crush.exe", "--session", "x"]
+    assert ga.build_resume_command("aider", "C:\\w", "x") is None
     assert ga.build_resume_command("claude", "C:\\w", "abc-1", source="elsewhere") is None
 
 
