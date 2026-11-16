@@ -28,10 +28,14 @@ def make_share_link(folder: dict) -> str:
 def parse_share_link(url: str) -> dict:
     if not isinstance(url, str) or len(url) > _MAX_LINK:
         raise _invalid()
-    parts = urlparse(url)
+    try:
+        parts = urlparse(url)
+        query = parse_qs(parts.query)
+    except ValueError:
+        raise _invalid() from None
     if parts.scheme != "aigator" or parts.netloc != "share" or parts.path not in ("", "/"):
         raise _invalid()
-    values = parse_qs(parts.query).get("d") or []
+    values = query.get("d") or []
     if len(values) != 1 or not values[0]:
         raise _invalid()
     encoded = values[0]

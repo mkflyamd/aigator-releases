@@ -31,6 +31,8 @@ def test_link_round_trips():
         "aigator://share?d=%%%",
         "aigator://share?d=abc&d=def",
         "aigator://share?x=1",
+        "aigator://[share?d=abc",
+        "aigator://share]?d=abc",
     ],
 )
 def test_bad_links_are_refused(url):
