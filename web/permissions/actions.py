@@ -62,7 +62,7 @@ confluence_open_create_form confluence_open_edit_form
 """.split()
 
 _WRITE_PUBLIC_TOOLS = """
-update_onenote_page
+update_onenote_page file_upload file_transfer
 """.split()
 
 # Tools that only prepare a draft (or are refused outright). The draft's approval card is the per-call approval.
@@ -123,6 +123,24 @@ def _drive_move_action(inputs: dict) -> str:
     return WRITE_PUBLIC if source and source == str(inputs.get("dest_drive_id") or "").strip() else IRREVERSIBLE
 
 
+_own_drive_ids: set[str] = set()
+
+
+def note_own_drive(drive_id: str) -> None:
+    """Remember the id of the signed-in user's own OneDrive. Reading it takes a network call, which a permission check
+    must not make, so the OneDrive skill reports it whenever a call to that drive has already revealed it."""
+    if isinstance(drive_id, str) and drive_id.strip():
+        _own_drive_ids.add(drive_id.strip())
+
+
+def _file_transfer_action(inputs: dict) -> str:
+    """A file moved or copied into the user's own OneDrive is seen by nobody else. Into a shared, Teams or SharePoint
+    folder it becomes visible to others, yet version history and the recycle bin can undo it and nobody is notified.
+    A destination not known to be the user's own counts as shared."""
+    dest = str(inputs.get("dest_drive_id") or "").strip()
+    return WRITE_PRIVATE if dest and dest in _own_drive_ids else WRITE_PUBLIC
+
+
 def _onenote_create_action(inputs: dict) -> str:
     """A notebook, section or page created with a site_id lives in a team notebook that others can see."""
     return WRITE_PUBLIC if _has_value(inputs.get("site_id")) else WRITE_PRIVATE
@@ -135,6 +153,7 @@ _BY_INPUTS = {
     "github_gh": (_gh_action, (READ, IRREVERSIBLE)),
     "move_onedrive_file": (_drive_move_action, (WRITE_PUBLIC, IRREVERSIBLE)),
     "copy_onedrive_file": (_drive_move_action, (WRITE_PUBLIC, IRREVERSIBLE)),
+    "file_transfer": (_file_transfer_action, (WRITE_PRIVATE, WRITE_PUBLIC)),
     "create_onenote_notebook": (_onenote_create_action, (WRITE_PRIVATE, WRITE_PUBLIC)),
     "create_onenote_section": (_onenote_create_action, (WRITE_PRIVATE, WRITE_PUBLIC)),
     "create_onenote_page": (_onenote_create_action, (WRITE_PRIVATE, WRITE_PUBLIC)),

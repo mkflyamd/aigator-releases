@@ -57,6 +57,8 @@ def covered_by_saved_rule(category_id: str, subject: str = "") -> bool:
 
 def sandbox_card(tool: str, saveable: bool = False) -> dict:
     """Buttons for a sandbox access card. "Always allow" only when this request can be saved."""
+    if tool == "file_upload":
+        return {"scopes": ["once"], "primary": "once"}
     options = card_options(registry.SANDBOX_SHELL if tool == "run_shell" else registry.SANDBOX_PYTHON)
     if not saveable:
         options["scopes"] = [s for s in options["scopes"] if s != "always"]

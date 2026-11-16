@@ -338,3 +338,27 @@ def test_an_argument_name_is_cleaned_and_capped_like_its_value():
     details = ds._call_details({"to" + tricks + "x" * 500: "v"})
     assert not any(ch in details for ch in tricks)
     assert len(details) < ds._CARD_KEY_MAX + 40
+
+
+def test_a_file_upload_is_a_reversible_public_write_whatever_the_destination():
+    assert actions.action_for_call("file_upload", {"dest_drive_id": "d1"}) == actions.WRITE_PUBLIC
+    assert actions.gate_action("file_upload") == actions.WRITE_PUBLIC
+    assert actions.gate_actions_possible("file_upload") == {actions.WRITE_PUBLIC}
+
+
+def test_a_file_transfer_into_the_users_own_onedrive_is_private_and_into_any_other_drive_is_public(monkeypatch):
+    monkeypatch.setattr(actions, "_own_drive_ids", set())
+    call = {"source_drive_id": "teams", "dest_drive_id": "mine"}
+    assert actions.action_for_call("file_transfer", call) == actions.WRITE_PUBLIC
+    actions.note_own_drive("mine")
+    assert actions.action_for_call("file_transfer", call) == actions.WRITE_PRIVATE
+    assert actions.action_for_call("file_transfer", {**call, "dest_drive_id": "site"}) == actions.WRITE_PUBLIC
+    assert actions.action_for_call("file_transfer", {}) == actions.WRITE_PUBLIC
+    assert actions.gate_action("file_transfer", call) == actions.WRITE_PRIVATE
+    assert actions.gate_actions_possible("file_transfer") == {actions.WRITE_PRIVATE, actions.WRITE_PUBLIC}
+
+
+def test_a_blank_drive_id_is_never_taken_for_the_users_own_drive(monkeypatch):
+    monkeypatch.setattr(actions, "_own_drive_ids", set())
+    actions.note_own_drive("  ")
+    assert actions.action_for_call("file_transfer", {"dest_drive_id": ""}) == actions.WRITE_PUBLIC
