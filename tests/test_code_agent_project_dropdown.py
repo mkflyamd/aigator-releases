@@ -1,4 +1,4 @@
-"""Regression checks for the Code project/agent session dropdown."""
+"""Regression checks for the Code Projects menu, chip, empty state and left-view wiring."""
 
 from pathlib import Path
 
@@ -24,3 +24,72 @@ def test_project_dropdown_flips_above_chip_when_below_space_is_smaller():
     assert "const spaceAbove" in dropdown
     assert "const openBelow = spaceBelow >= spaceAbove" in dropdown
     assert "dropdown.style.maxHeight = availableHeight" in dropdown
+
+
+def _between(start, end):
+    return SCRIPT.split(start, 1)[1].split(end, 1)[0]
+
+
+def test_project_chip_shows_only_the_project_and_the_attention_count():
+    chip = _between("function _caRenderProjectSwitcher", "// ── Topbar population")
+    assert "_CA_AGENT_LABELS" not in SCRIPT
+    assert "'● ' + proj.name + ' ▾'" in chip
+    assert "' · '" not in chip
+    assert "attn.id = 'ca-topbar-attn'" in chip
+    assert "agentHistory.updateDot()" in chip
+
+
+def test_projects_menu_lists_recent_searches_and_opens_a_folder():
+    menu = _between("function _caShowSessionDropdown()", "function _caSetActiveProject")
+    assert "CODING AGENT" not in menu
+    assert "Add app" not in menu
+    assert "'Open folder…'" in menu
+    assert "codePickerHelpers" in menu
+    assert "helpers.sortProjects" in menu and "helpers.filterProjects" in menu
+    assert "'Recent'" in menu and "'All projects'" in menu
+    assert "setAttribute('role', 'menu')" in menu
+    assert "setAttribute('role', 'menuitem')" in menu
+
+
+def test_removing_a_project_confirms_inline_and_never_offers_the_open_one():
+    menu = _between("function _caShowSessionDropdown()", "function _caSetActiveProject")
+    assert "Remove from Gator? Your files are not touched." in menu
+    current = menu.split("if (isCurrent) {", 1)[1].split("} else {", 1)[0]
+    assert "ca-project-remove" not in current
+    remove = _between("async function _caRemoveProject", "const _CA_RECENT_COUNT")
+    assert "method: 'DELETE'" in remove
+    assert "_caFetchWithCsrfRetry" in remove
+
+
+def test_agent_chosen_in_the_plus_menu_is_remembered_as_the_project_default():
+    remember = _between("async function _caRememberProjectAgent", "function _caOpenProject")
+    assert "'/api/code_agent/projects/agent'" in remember
+    assert "method: 'PUT'" in remember
+    assert "_caFetchWithCsrfRetry" in remember
+
+
+def test_left_view_defaults_to_history_and_persists_per_project():
+    assert "let _caLeftView = 'history';" in SCRIPT
+    assert "const _CA_LEFT_VIEWS = ['history', 'scm', 'explorer'];" in SCRIPT
+    assert "'gator.codeagent.leftview.'" in SCRIPT
+    assert "_caSetLeftView(_caStoredLeftView(name))" in SCRIPT
+
+
+def test_empty_state_asks_to_open_a_project_folder():
+    empty = _between("function _caEmptyState()", "function _caNoProjectSelectedState")
+    assert "Open a project folder" in empty
+    assert "Connect your first app" not in empty
+
+
+def test_picker_helpers_load_before_the_code_agent_script():
+    index = (ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
+    assert index.index("code-picker-helpers.js") < index.index("tp-code-agent.js")
+
+
+def test_tab_strip_supports_drag_and_keyboard_reorder():
+    term = (ROOT / "web" / "static" / "tp-generic-agent-terminal.js").read_text(encoding="utf-8")
+    assert "codePickerHelpers.moveTab" in term
+    assert "codePickerHelpers.stepTab" in term
+    assert "'Move left'" in term and "'Move right'" in term
+    assert "e.altKey" in term
+    assert ".gtp-drop-before" in STYLE and ".gtp-drop-after" in STYLE

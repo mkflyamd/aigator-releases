@@ -66,6 +66,16 @@ const at = (m, d, hh, mm) => new Date(2026, m, d, hh, mm).getTime() / 1000;
   assert.strictEqual(h.needsYou(undefined, NOW), false);
 }
 
+// attentionCount counts live terminals that need you
+{
+  const quiet = { _lastOutputAt: NOW - 20000, _viewedAt: 0 };
+  const seen = { _lastOutputAt: NOW - 20000, _viewedAt: NOW - 1000 };
+  const busy = { _lastOutputAt: NOW - 500, _viewedAt: 0 };
+  assert.strictEqual(h.attentionCount([quiet, quiet, seen, busy], NOW), 2);
+  assert.strictEqual(h.attentionCount([], NOW), 0);
+  assert.strictEqual(h.attentionCount(undefined, NOW), 0);
+}
+
 const rec = (id, agent, title, last, extra) =>
   Object.assign(
     {

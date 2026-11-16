@@ -49,6 +49,8 @@ def test_left_panel_has_three_icon_tabs():
     for label in ("Files", "Changes", "History"):
         assert f'aria-label="{label}"' in CODE
         assert f'title="{label}"' in CODE
+    order = [CODE.index(f'id="ca-viewtab-{name}"') for name in ("history", "scm", "explorer")]
+    assert order == sorted(order)
     assert ">Source Control</button>" not in CODE
     assert ">Explorer</button>" not in CODE
 
@@ -61,7 +63,7 @@ def test_history_pane_markup_is_in_the_left_panel():
 def test_switching_views_covers_history_and_survives_a_pane_rebuild():
     assert "agentHistory.show()" in CODE
     assert "agentHistory.refresh()" in CODE
-    assert "if (_caLeftView !== 'scm') _caSetLeftView(_caLeftView);" in CODE
+    assert "if (_caLeftView !== 'history') _caSetLeftView(_caLeftView);" in CODE
 
 
 def test_history_script_loads_after_handoff_and_before_the_terminal_module():
@@ -220,8 +222,8 @@ def test_history_list_has_a_valid_list_structure_and_named_rows():
 
 
 def test_left_view_tabs_expose_which_pane_is_active():
-    assert 'id="ca-viewtab-scm" aria-pressed="true"' in CODE
-    for name in ("explorer", "history"):
+    assert 'id="ca-viewtab-history" aria-pressed="true"' in CODE
+    for name in ("scm", "explorer"):
         assert f'id="ca-viewtab-{name}" aria-pressed="false"' in CODE
     assert "tab?.setAttribute('aria-pressed', String(name === view));" in CODE
 

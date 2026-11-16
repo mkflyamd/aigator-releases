@@ -363,7 +363,13 @@ body {
 .ca-tb-chip-area {
   flex: 1;
   min-width: 0;
+  display: flex;
+  align-items: center;
   white-space: nowrap;
+  overflow: hidden;
+}
+.ca-tb-chip-area > .ca-session-chip {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -20758,12 +20764,27 @@ body.tab-fullscreen {
 .ca-project-switcher:hover {
   opacity: 0.75;
 }
-/* Combined session chip â€” shows "â— project Â· Agent â–¾". Wider than the old
-   single-purpose pill (it carries both pieces of state) but still truncates
-   gracefully via the overflow/ellipsis above. The "Â·" separator reads as
-   "project Â· agent" at a glance. */
+/* Project chip: "● project ▾", truncating via the overflow/ellipsis above. */
 .ca-session-chip {
   max-width: 240px;
+}
+.ca-session-chip:focus-visible {
+  outline: 1px solid var(--accent, #4ade80);
+  outline-offset: 2px;
+}
+.ca-topbar-attn {
+  flex: none;
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--warn);
+  border: 1px solid var(--warn);
+}
+.ca-topbar-attn[hidden] {
+  display: none;
 }
 .ca-sc-project-area {
   display: flex;
@@ -20804,8 +20825,7 @@ body.tab-fullscreen {
 .ca-project-add {
   color: var(--text-dim, #6b8db5);
 }
-/* Section headers (PROJECT / CODING AGENT) inside the unified dropdown â€”
-   muted, all-caps, non-interactive labels grouping the choices below. */
+/* Group headers (Recent / All projects) inside the Projects menu. */
 .ca-project-section {
   padding: 6px 14px 4px;
   font-size: 10px;
@@ -20814,6 +20834,160 @@ body.tab-fullscreen {
   text-transform: uppercase;
   color: var(--text-sub, #4a6a8a);
   cursor: default;
+}
+.ca-project-search {
+  display: block;
+  box-sizing: border-box;
+  width: calc(100% - 16px);
+  margin: 8px;
+  padding: 6px 10px;
+  font-size: 13px;
+  color: var(--text, #dbeafe);
+  background: var(--surface3, #1f2d40);
+  border: 1px solid var(--border2, #2a4a6b);
+  border-radius: 6px;
+}
+.ca-project-search:focus {
+  outline: none;
+  border-color: var(--accent, #4ade80);
+}
+.ca-project-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 220px;
+}
+.ca-project-row:focus-visible,
+.ca-project-add:focus-visible {
+  outline: 1px solid var(--accent, #4ade80);
+  outline-offset: -2px;
+  background: var(--surface3, #1f2d40);
+}
+.ca-project-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: transparent;
+}
+.ca-project-item--active .ca-project-dot {
+  background: var(--accent, #4ade80);
+}
+.ca-project-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+.ca-project-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ca-project-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--text-dim, #6b8db5);
+}
+.ca-project-remove {
+  flex: none;
+  visibility: hidden;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--text-dim, #6b8db5);
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.ca-project-row:hover .ca-project-remove,
+.ca-project-row:focus-within .ca-project-remove {
+  visibility: visible;
+}
+.ca-project-remove:hover,
+.ca-project-remove:focus-visible {
+  visibility: visible;
+  color: var(--text, #dbeafe);
+  background: var(--surface2, #1a2332);
+}
+.ca-project-confirm {
+  cursor: default;
+}
+.ca-project-confirm-msg {
+  font-size: 12px;
+  line-height: 1.4;
+  margin-bottom: 6px;
+}
+.ca-project-confirm-actions {
+  display: flex;
+  gap: 6px;
+}
+.ca-project-confirm-actions button {
+  padding: 3px 10px;
+  font-size: 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--text, #dbeafe);
+  background: transparent;
+  border: 1px solid var(--border2, #2a4a6b);
+}
+.ca-project-confirm-actions .ca-project-confirm-yes {
+  color: #0b0d12;
+  background: var(--accent, #4ade80);
+  border-color: transparent;
+}
+[data-theme='light'] .ca-project-confirm-actions .ca-project-confirm-yes {
+  color: #fff;
+}
+.ca-project-confirm-actions button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* Empty state actions */
+.ca-btn-primary {
+  background: var(--accent, #4ade80);
+  color: #0b0d12;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 18px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+[data-theme='light'] .ca-btn-primary {
+  color: #fff;
+}
+.ca-btn-primary:hover {
+  opacity: 0.85;
+}
+.ca-btn-link {
+  background: none;
+  border: none;
+  padding: 8px 6px;
+  font-size: 12px;
+  color: var(--text-dim, #6b8db5);
+  cursor: pointer;
+}
+.ca-btn-link:hover {
+  color: var(--text, #dbeafe);
+  text-decoration: underline;
+}
+
+/* Terminal tab drag-to-reorder: a line marks the drop side. */
+.gtp-tab.gtp-tab-dragging {
+  opacity: 0.5;
+}
+.gtp-tab.gtp-drop-before {
+  box-shadow: inset 2px 0 0 var(--accent, #4ade80);
+}
+.gtp-tab.gtp-drop-after {
+  box-shadow: inset -2px 0 0 var(--accent, #4ade80);
 }
 
 /* Change card */
@@ -22528,6 +22702,19 @@ body.tab-fullscreen {
   cursor: default;
   opacity: 0.75;
 }
+.oc-start-other {
+  margin-top: 4px;
+  background: none;
+  border: none;
+  padding: 4px 8px;
+  font-size: 0.78rem;
+  color: var(--text-dim, #94a3b8);
+  cursor: pointer;
+}
+.oc-start-other:hover {
+  color: var(--text, #dbeafe);
+  text-decoration: underline;
+}
 .oc-start-btn-spinner {
   display: none;
   width: 12px;
@@ -23909,6 +24096,9 @@ body.tab-fullscreen {
   margin-top: 0.45rem;
   font-size: 0.72rem;
   color: var(--warn);
+}
+.gtp-new-menu-label {
+  margin-right: 14px;
 }
 .gtp-new-menu-badge {
   margin-left: auto;

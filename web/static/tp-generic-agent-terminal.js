@@ -34,11 +34,8 @@ function _genAgentLoadingId(tabId) {
 }
 
 // Agent ids with a multi-word/special-cased display label (default is just
-// capitalize-first-letter, e.g. "claude" -> "Claude"). Keep in sync with
-// tp-code-agent.js's _CA_AGENT_LABELS for the same id. opencode-bare is now
-// the primary/default OpenCode path (see tp-code-agent.js's _CA_AGENT_LABELS
-// comment for #156 context) — plain "OpenCode", not the old "(bare test)"
-// A/B-test label.
+// capitalize-first-letter, e.g. "claude" -> "Claude"). opencode-bare is the
+// primary OpenCode path, so it reads plain "OpenCode".
 const _GEN_EXTRA_AGENT_LABELS = {
   openclaude: 'OpenClaude',
   grok: 'Grok',
@@ -327,6 +324,8 @@ function _genAgentSyncHeaderTabStripOnTabSwitch(tabId) {
   else _genAgentRemoveHeaderTabStrip();
 }
 
+let _genAgentDragId = null; // pty id of the tab being dragged, else null
+
 function _genAgentRenderTabs(tabId) {
   const state = _genAgentTerminals[_caSessionKey(tabId)];
   if (!state || state.order.filter((id) => state.sessions[id]).length === 0) {
@@ -401,8 +400,74 @@ function _genAgentRenderTabs(tabId) {
       tab.remove();
       _genAgentCloseSession(tabId, id);
     });
+    tab.tabIndex = 0;
+    tab.draggable = true;
+    tab.addEventListener('dragstart', (e) => {
+      if (label.isContentEditable || e.target !== tab) {
+        e.preventDefault();
+        return;
+      }
+      _genAgentDragId = id;
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', String(id));
+      tab.classList.add('gtp-tab-dragging');
+    });
+    tab.addEventListener('dragover', (e) => {
+      if (_genAgentDragId === null || _genAgentDragId === id) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      const side = _genAgentDropSide(tab, e.clientX);
+      tab.classList.toggle('gtp-drop-before', side === 'before');
+      tab.classList.toggle('gtp-drop-after', side === 'after');
+    });
+    tab.addEventListener('dragleave', () => {
+      tab.classList.remove('gtp-drop-before', 'gtp-drop-after');
+    });
+    tab.addEventListener('drop', (e) => {
+      if (_genAgentDragId === null) return;
+      e.preventDefault();
+      const from = _genAgentDragId;
+      const side = _genAgentDropSide(tab, e.clientX);
+      _genAgentDragId = null;
+      _genAgentSetOrder(tabId, window.codePickerHelpers.moveTab(state.order, from, id, side));
+    });
+    tab.addEventListener('dragend', () => {
+      _genAgentDragId = null;
+      scroll
+        .querySelectorAll('.gtp-tab')
+        .forEach((el) => el.classList.remove('gtp-tab-dragging', 'gtp-drop-before', 'gtp-drop-after'));
+    });
+    tab.addEventListener('keydown', (e) => {
+      if (!e.altKey || e.target !== tab) return;
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      e.preventDefault();
+      _genAgentMoveTab(tabId, id, e.key === 'ArrowLeft' ? -1 : 1);
+    });
     scroll.insertBefore(tab, newBtn);
   });
+}
+
+function _genAgentDropSide(tab, clientX) {
+  const rect = tab.getBoundingClientRect();
+  return clientX < rect.left + rect.width / 2 ? 'before' : 'after';
+}
+
+// Re-renders the strip in the new order; focusId keeps keyboard focus on a moved tab.
+function _genAgentSetOrder(tabId, order, focusId) {
+  const state = _genAgentTerminals[_caSessionKey(tabId)];
+  if (!state) return;
+  state.order = order;
+  _genAgentRenderTabs(tabId);
+  if (!focusId) return;
+  const selector =
+    '#' + _genAgentHeaderTabStripId() + ' .gtp-tab[data-sid="' + CSS.escape(String(focusId)) + '"]';
+  document.querySelector(selector)?.focus();
+}
+
+function _genAgentMoveTab(tabId, id, delta) {
+  const state = _genAgentTerminals[_caSessionKey(tabId)];
+  if (!state) return;
+  _genAgentSetOrder(tabId, window.codePickerHelpers.stepTab(state.order, id, delta), id);
 }
 
 // Toggle the .active class on existing tab DOM elements — like terminal.js's
@@ -493,6 +558,13 @@ function _genAgentOpenTabMenu(tabId, id, anchor) {
         }
       },
     });
+  }
+  const at = state.order.indexOf(id);
+  if (at > 0) {
+    actions.push({ label: 'Move left', run: () => _genAgentMoveTab(tabId, id, -1) });
+  }
+  if (at >= 0 && at < state.order.length - 1) {
+    actions.push({ label: 'Move right', run: () => _genAgentMoveTab(tabId, id, 1) });
   }
   actions.push({
     label: 'Restart session',
@@ -629,6 +701,7 @@ function _genAgentOpenNewMenu(tabId, anchor) {
   menu.className = 'gtp-new-menu';
   menu.setAttribute('role', 'menu');
   menu.setAttribute('aria-label', 'New terminal with');
+  const state = _genAgentTerminals[_caSessionKey(tabId)];
   const items = [];
   const addItem = (agent, before = null) => {
     const item = document.createElement('button');
@@ -644,8 +717,18 @@ function _genAgentOpenNewMenu(tabId, anchor) {
       close();
       if (typeof _caCloseFileDiffIfOpen === 'function') _caCloseFileDiffIfOpen();
       _genAgentNewSession(tabId, agent);
+      if (agent !== 'terminal' && typeof _caRememberProjectAgent === 'function') {
+        _caRememberProjectAgent(state && state.projectId, agent);
+      }
     });
     item.dataset.agent = agent;
+    if (state && agent === state.agent) {
+      const badge = document.createElement('span');
+      badge.className = 'gtp-new-menu-badge';
+      badge.textContent = 'Default';
+      badge.title = 'Used when this project opens with no terminal running';
+      item.appendChild(badge);
+    }
     menu.insertBefore(item, before);
     items.push(item);
     return item;
@@ -690,7 +773,6 @@ function _genAgentOpenNewMenu(tabId, anchor) {
   menu.style.left = Math.max(4, left) + 'px';
   menu.style.top = rect.bottom + 2 + 'px';
   anchor.setAttribute('aria-expanded', 'true');
-  const state = _genAgentTerminals[_caSessionKey(tabId)];
   const active = state && _genAgentActiveSess(state);
   const current = (active && active.agent) || (state && state.agent);
   (items.find((item) => item.dataset.agent === current) || items[0]).focus();
@@ -854,7 +936,13 @@ function _genAgentShowStartPrompt(tabId, agent, projectId, repoPath, errMsg) {
     escapeHtml(busy ? busyLabel : idleLabel) +
     '</span>' +
     '</button>' +
+    (isBareTerminal || busy
+      ? ''
+      : '<button type="button" class="oc-start-other" aria-haspopup="menu">Use a different agent</button>') +
     '</div>';
+  el.querySelector('.oc-start-other')?.addEventListener('click', (e) =>
+    _genAgentOpenNewMenu(tabId, e.currentTarget),
+  );
   const btn = el.querySelector('.oc-start-btn');
   btn.addEventListener('click', () => {
     if (btn.disabled) return;
