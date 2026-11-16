@@ -6,11 +6,19 @@ Endpoints:
   PUT  /api/code_agent/projects/active — set active project
   DELETE /api/code_agent/projects/{name} — remove a project from the list (folder untouched)
   GET  /api/code_agent/git/status      — git status for a project
+  GET  /api/code_agent/git/branches    — local and remote branches
+  GET  /api/code_agent/git/worktrees   — the project's git worktrees
+  POST /api/code_agent/git/checkout    — switch branch (409 if uncommitted changes, unless confirmed)
+  POST/DELETE /api/code_agent/git/branch    — create / delete a branch (never forced)
+  POST/DELETE /api/code_agent/git/worktree  — add / remove a worktree (never forced)
   GET  /api/code_agent/git/log         — recent commits
   GET  /api/code_agent/git/diff        — file diff
   POST /api/code_agent/git/discard     — discard a file's changes (restore to HEAD)
   GET  /api/code_agent/files/tree      — one directory level, for the file explorer
   GET  /api/code_agent/file/content    — read-only file content, for the file explorer
+
+The read routes (status, log, diff, files, file content) and discard take an optional
+`worktree` folder, which must be one of the project's listed git worktrees.
 
 Shared by the source-control panel and the OpenCode dispatch flow
 (see web/routes/opencode_routes.py) — the native chat-driven tool-loop
@@ -28,6 +36,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+import git_branches
 from proc_utils import no_window_kwargs
 from security import verify_csrf
 
@@ -55,9 +64,31 @@ class SetProjectAgentRequest(BaseModel):
     agent: str
 
 
+class BranchRequest(BaseModel):
+    project_name: str
+    name: str
+
+
+class CheckoutRequest(BaseModel):
+    project_name: str
+    name: str
+    confirm_dirty: bool = False
+
+
+class WorktreeAddRequest(BaseModel):
+    project_name: str
+    branch: str
+
+
+class WorktreeRemoveRequest(BaseModel):
+    project_name: str
+    path: str
+
+
 class DiscardFileRequest(BaseModel):
     project_name: str
     file: str
+    worktree: str = ""
 
 
 def _resolve_repo_path(repo: str, rel: str) -> Path:
@@ -68,6 +99,37 @@ def _resolve_repo_path(repo: str, rel: str) -> Path:
     full = (repo_root / rel).resolve() if rel else repo_root
     full.relative_to(repo_root)  # raises ValueError if outside
     return full
+
+
+def _git_http_error(exc: git_branches.GitOpError) -> HTTPException:
+    return HTTPException(
+        status_code=exc.status, detail={"code": exc.code, "message": exc.message}
+    )
+
+
+async def _repo_for(proj: dict, worktree: str = "") -> str:
+    """The project folder, or one of its git worktrees when `worktree` is given."""
+    repo = proj["repo_path"]
+    if not worktree:
+        return repo
+    try:
+        return await asyncio.to_thread(git_branches.resolve_worktree, repo, worktree)
+    except git_branches.GitOpError as exc:
+        raise _git_http_error(exc)
+
+
+async def _git_op(project_name: str, fn, *args):
+    from skills.code_agent.projects import get_project
+
+    proj = get_project(project_name)
+    if not proj:
+        raise HTTPException(
+            status_code=404, detail=f"Project not found: {project_name}"
+        )
+    try:
+        return await asyncio.to_thread(fn, proj["repo_path"], *args)
+    except git_branches.GitOpError as exc:
+        raise _git_http_error(exc)
 
 
 # ── GET /projects ─────────────────────────────────────────────────────────────
@@ -167,7 +229,7 @@ async def set_project_agent(req: SetProjectAgentRequest):
 
 
 @router.get("/git/status")
-async def git_status(project_name: str):
+async def git_status(project_name: str, worktree: str = ""):
     """Get local git status for a project: staged, unstaged, untracked files."""
     from skills.code_agent.projects import get_project
 
@@ -176,7 +238,7 @@ async def git_status(project_name: str):
         raise HTTPException(
             status_code=404, detail=f"Project not found: {project_name}"
         )
-    repo = proj["repo_path"]
+    repo = await _repo_for(proj, worktree)
     try:
         result = await asyncio.to_thread(
             subprocess.run,
@@ -213,7 +275,7 @@ async def git_status(project_name: str):
 
 
 @router.get("/git/log")
-async def git_log(project_name: str, limit: int = 50):
+async def git_log(project_name: str, limit: int = 50, worktree: str = ""):
     """Get recent local commits + ref decorations (local branches, remote refs, HEAD)."""
     from skills.code_agent.projects import get_project
 
@@ -222,7 +284,7 @@ async def git_log(project_name: str, limit: int = 50):
         raise HTTPException(
             status_code=404, detail=f"Project not found: {project_name}"
         )
-    repo = proj["repo_path"]
+    repo = await _repo_for(proj, worktree)
     try:
         # ── 1. Commits with decorated refs ───────────────────────────────────
         # %D gives "HEAD -> main, origin/main, origin/HEAD" style decoration per commit.
@@ -394,7 +456,9 @@ async def git_log(project_name: str, limit: int = 50):
 
 
 @router.get("/git/diff")
-async def git_diff(project_name: str, file: str, staged: bool = False):
+async def git_diff(
+    project_name: str, file: str, staged: bool = False, worktree: str = ""
+):
     """Get unified diff for a file (staged or working tree)."""
     from skills.code_agent.projects import get_project
     from pathlib import Path
@@ -404,7 +468,7 @@ async def git_diff(project_name: str, file: str, staged: bool = False):
         raise HTTPException(
             status_code=404, detail=f"Project not found: {project_name}"
         )
-    repo = proj["repo_path"]
+    repo = await _repo_for(proj, worktree)
     # Security: file must be inside repo
     try:
         full = (Path(repo) / file).resolve()
@@ -468,7 +532,7 @@ async def git_discard(req: DiscardFileRequest):
         raise HTTPException(
             status_code=404, detail=f"Project not found: {req.project_name}"
         )
-    repo = proj["repo_path"]
+    repo = await _repo_for(proj, req.worktree)
     try:
         _resolve_repo_path(repo, req.file)
     except ValueError:
@@ -537,11 +601,53 @@ async def git_discard(req: DiscardFileRequest):
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+# ── Branches and worktrees ────────────────────────────────────────────────────
+
+
+@router.get("/git/branches")
+async def git_branches_list(project_name: str):
+    return await _git_op(project_name, git_branches.list_branches)
+
+
+@router.get("/git/worktrees")
+async def git_worktrees_list(project_name: str):
+    return {"worktrees": await _git_op(project_name, git_branches.list_worktrees)}
+
+
+@router.post("/git/checkout", dependencies=[Depends(verify_csrf)])
+async def git_checkout(req: CheckoutRequest):
+    await _git_op(req.project_name, git_branches.checkout, req.name, req.confirm_dirty)
+    return {"current": req.name}
+
+
+@router.post("/git/branch", dependencies=[Depends(verify_csrf)])
+async def git_branch_create(req: BranchRequest):
+    await _git_op(req.project_name, git_branches.create_branch, req.name)
+    return {"current": req.name}
+
+
+@router.delete("/git/branch", dependencies=[Depends(verify_csrf)])
+async def git_branch_delete(req: BranchRequest):
+    await _git_op(req.project_name, git_branches.delete_branch, req.name)
+    return {"deleted": req.name}
+
+
+@router.post("/git/worktree", dependencies=[Depends(verify_csrf)])
+async def git_worktree_add(req: WorktreeAddRequest):
+    return await _git_op(req.project_name, git_branches.add_worktree, req.branch)
+
+
+@router.delete("/git/worktree", dependencies=[Depends(verify_csrf)])
+async def git_worktree_remove(req: WorktreeRemoveRequest):
+    await _git_op(req.project_name, git_branches.remove_worktree, req.path)
+    return {"removed": req.path}
+
+
 # ── GET /files/tree ────────────────────────────────────────────────────────────
 
 
 @router.get("/files/tree")
-async def files_tree(project_name: str, path: str = ""):
+async def files_tree(project_name: str, path: str = "", worktree: str = ""):
     """List one directory level (files + subdirectories) for the file explorer.
     Lazily called per-folder as the user expands the tree, mirroring the
     Confluence page-tree pattern in third-pane.js."""
@@ -552,7 +658,7 @@ async def files_tree(project_name: str, path: str = ""):
         raise HTTPException(
             status_code=404, detail=f"Project not found: {project_name}"
         )
-    repo = proj["repo_path"]
+    repo = await _repo_for(proj, worktree)
     try:
         target = _resolve_repo_path(repo, path)
     except ValueError:
@@ -590,7 +696,7 @@ async def files_tree(project_name: str, path: str = ""):
 
 
 @router.get("/file/content")
-async def file_content(project_name: str, file: str):
+async def file_content(project_name: str, file: str, worktree: str = ""):
     """Read-only file content for the file explorer (not a diff)."""
     from skills.code_agent.projects import get_project
 
@@ -599,7 +705,7 @@ async def file_content(project_name: str, file: str):
         raise HTTPException(
             status_code=404, detail=f"Project not found: {project_name}"
         )
-    repo = proj["repo_path"]
+    repo = await _repo_for(proj, worktree)
     try:
         full = _resolve_repo_path(repo, file)
     except ValueError:
