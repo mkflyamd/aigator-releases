@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import time
 from pathlib import Path
 
 from proc_utils import no_window_kwargs
@@ -74,9 +75,10 @@ def _sanitize_name(name: str) -> str:
 
 
 def list_projects() -> list[dict]:
-    """Return list of project dicts for all saved projects."""
+    """Return saved projects, most recently opened first; never-opened ones keep saved order."""
     cfg = _load_config()
-    return [{"name": name, **meta} for name, meta in cfg.get("projects", {}).items()]
+    items = [{"name": name, **meta} for name, meta in cfg.get("projects", {}).items()]
+    return sorted(items, key=lambda p: p.get("last_opened", 0), reverse=True)
 
 
 def get_project(name: str) -> dict | None:
@@ -97,7 +99,31 @@ def set_active_project(name: str) -> None:
     """Set active project in config.json. Persists across server restarts."""
     cfg = _load_config()
     cfg["active_project"] = name
+    meta = cfg.get("projects", {}).get(name)
+    if meta is not None:
+        meta["last_opened"] = time.time()
     _save_config(cfg)
+
+
+def remove_project(name: str) -> None:
+    """Forget a project. Never deletes the project's folder or a clone with content;
+    only Gator's own empty metadata folder is removed."""
+    safe_name = _sanitize_name(name)
+    cfg = _load_config()
+    projects = cfg.get("projects", {})
+    if safe_name not in projects:
+        raise ValueError(f"Project not found: {safe_name}")
+    del projects[safe_name]
+    if cfg.get("active_project") == safe_name:
+        remaining = sorted(
+            projects, key=lambda n: projects[n].get("last_opened", 0), reverse=True
+        )
+        cfg["active_project"] = remaining[0] if remaining else None
+    _save_config(cfg)
+    try:
+        (PROJECTS_DIR / safe_name).rmdir()
+    except OSError:
+        pass
 
 
 def set_project_agent(name: str, agent: str) -> None:
