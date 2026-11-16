@@ -70,7 +70,12 @@ assert.strictEqual(h.tabTooltip('Claude', '', false), 'Claude');
 
 // selecting a worktree marks it instead of main
 {
-  const m = h.buildBranchMenu({ branches, worktrees, selected: 'c:/r/proj-worktrees/feat', query: '' });
+  const m = h.buildBranchMenu({
+    branches,
+    worktrees,
+    selected: 'c:/r/proj-worktrees/feat',
+    query: '',
+  });
   assert.deepStrictEqual(
     m[0].items.map((r) => r.selected),
     [false, true, false],
@@ -79,7 +84,11 @@ assert.strictEqual(h.tabTooltip('Claude', '', false), 'Claude');
 
 // the default branch is never deletable even when not current
 {
-  const b = { ...branches, current: 'feat', local: branches.local.map((x) => ({ ...x, current: x.name === 'feat' })) };
+  const b = {
+    ...branches,
+    current: 'feat',
+    local: branches.local.map((x) => ({ ...x, current: x.name === 'feat' })),
+  };
   const loc = h.buildBranchMenu({ branches: b, worktrees, selected: '', query: '' })[1].items;
   assert.strictEqual(loc.find((r) => r.name === 'main').deletable, false);
 }

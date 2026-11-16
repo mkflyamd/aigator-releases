@@ -70,7 +70,8 @@
     if (localItems.length) out.push({ title: 'Local branches', items: localItems });
     if (remoteItems.length) out.push({ title: 'Remote branches', items: remoteItems });
     const taken = locals.some((b) => b.name.toLowerCase() === q.toLowerCase());
-    if (q && !taken && validNewName(q)) out.push({ title: 'Create', items: [{ kind: 'create', name: q }] });
+    if (q && !taken && validNewName(q))
+      out.push({ title: 'Create', items: [{ kind: 'create', name: q }] });
     return out;
   }
 

@@ -687,7 +687,9 @@ function _genAgentActivateSession(tabId, ptyId) {
 
 // Folder new terminals open in: the worktree selected in Changes, else the project folder.
 function _genAgentFolder(state) {
-  return (typeof _caActiveFolder === 'function' && _caActiveFolder(state.projectId)) || state.repoPath;
+  return (
+    (typeof _caActiveFolder === 'function' && _caActiveFolder(state.projectId)) || state.repoPath
+  );
 }
 
 // "+" menu choice - always spawns an independent new process of the chosen
@@ -902,10 +904,16 @@ async function _genAgentRestartSession(tabId, ptyId) {
     return false;
   }
   _genAgentCloseSession(tabId, ptyId, true);
-  _genAgentStart(tabId, sess.agent || state.agent, state.projectId, sess.cwd || _genAgentFolder(state), {
-    forceNew: hadOthers,
-    keepStateAgent: sess.agent !== state.agent,
-  });
+  _genAgentStart(
+    tabId,
+    sess.agent || state.agent,
+    state.projectId,
+    sess.cwd || _genAgentFolder(state),
+    {
+      forceNew: hadOthers,
+      keepStateAgent: sess.agent !== state.agent,
+    },
+  );
   return true;
 }
 
@@ -972,7 +980,8 @@ function _genAgentShowStartPrompt(tabId, agent, projectId, repoPath, errMsg) {
     // button synchronously before its first await, so calling it in the same
     // tick would never let the busy state paint.
     // The worktree can change after this prompt was drawn, so resolve the folder on click.
-    const folder = (typeof _caActiveFolder === 'function' && _caActiveFolder(projectId)) || repoPath;
+    const folder =
+      (typeof _caActiveFolder === 'function' && _caActiveFolder(projectId)) || repoPath;
     setTimeout(() => _genAgentStart(tabId, agent, projectId, folder), 0);
   });
 }

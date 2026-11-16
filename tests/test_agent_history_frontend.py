@@ -246,5 +246,5 @@ def test_terminal_tabs_use_the_history_state_dot():
 
 
 def test_tab_label_shows_its_full_name_on_hover():
-    assert "label.title = sess.label;" in TERM
+    assert "tabTooltip(sess.label" in TERM
     assert "labelEl.title = sess.label;" in TERM
