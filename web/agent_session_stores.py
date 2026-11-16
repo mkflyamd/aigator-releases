@@ -131,6 +131,53 @@ def preview_crush(db: Path, session_id: str, limit: int) -> list[tuple[str, str]
     return [p for p in pairs if p[1]]
 
 
+SESSION_START_SLACK_SECONDS = 5
+TRANSCRIPT_MESSAGE_LIMIT = 2000
+
+
+def latest_crush_session(cwd: str, since: float | None) -> tuple[Path, str] | None:
+    """The newest top-level Crush session touched since a terminal started, or None."""
+    db = _crush_db(cwd)
+    if not db.is_file():
+        return None
+    floor = 0 if since is None else since - SESSION_START_SLACK_SECONDS
+    try:
+        with _open(db) as con:
+            row = con.execute(
+                "SELECT id FROM sessions WHERE parent_session_id IS NULL AND message_count > 0 "
+                "AND updated_at >= ? ORDER BY updated_at DESC LIMIT 1",
+                (floor,),
+            ).fetchone()
+    except (sqlite3.Error, OSError):
+        return None
+    return (db, row[0]) if row else None
+
+
+def transcript_crush(db: Path, session_id: str) -> list[tuple[str, str]]:
+    """A session's turns in order as (role, text); a tool call is ("tool", "name: input")."""
+    with _open(db) as con:
+        rows = con.execute(
+            "SELECT role, parts FROM messages WHERE session_id = ? AND role IN ('user', 'assistant') "
+            "ORDER BY created_at DESC LIMIT ?",
+            (session_id, TRANSCRIPT_MESSAGE_LIMIT),
+        ).fetchall()
+    out: list[tuple[str, str]] = []
+    for role, parts in reversed(rows):
+        try:
+            items = json.loads(parts)
+        except (TypeError, ValueError):
+            continue
+        for p in items if isinstance(items, list) else ():
+            data = p.get("data") if isinstance(p, dict) else None
+            if not isinstance(data, dict):
+                continue
+            if p.get("type") == "text" and isinstance(data.get("text"), str) and data["text"].strip():
+                out.append((role, data["text"].strip()))
+            elif p.get("type") == "tool_call":
+                out.append(("tool", f"{data.get('name', '?')}: {data.get('input', '')}"))
+    return out
+
+
 def preview_opencode(db: Path, session_id: str, limit: int) -> list[tuple[str, str]]:
     with _open(db) as con:
         messages = con.execute(
