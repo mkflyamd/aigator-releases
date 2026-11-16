@@ -175,6 +175,36 @@ def is_opencode_bare(agent: str) -> bool:
     return agent == OPENCODE_BARE_AGENT
 
 
+def _windows_registry_path() -> str:
+    """The PATH Windows would give a freshly started process (machine + user).
+    A running server keeps the PATH it started with, so an install made since
+    (winget, npm -g) is only visible here."""
+    if sys.platform != "win32":
+        return ""
+    import winreg
+
+    keys = (
+        (winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"),
+        (winreg.HKEY_CURRENT_USER, "Environment"),
+    )
+    parts = []
+    for hive, sub in keys:
+        try:
+            with winreg.OpenKey(hive, sub) as key:
+                parts.append(os.path.expandvars(winreg.QueryValueEx(key, "Path")[0]))
+        except OSError:
+            continue
+    return os.pathsep.join(parts)
+
+
+def _which(name: str) -> str | None:
+    found = shutil.which(name)
+    if found:
+        return found
+    registry_path = _windows_registry_path()
+    return shutil.which(name, path=registry_path) if registry_path else None
+
+
 def find_agent_binary(agent: str) -> str | None:
     """Resolve the agent's binary on PATH. None if not installed - the route
     layer turns this into a clear "not installed" error rather than a
@@ -184,7 +214,7 @@ def find_agent_binary(agent: str) -> str | None:
         return None
     aliases = EXTRA_AGENTS[agent][2] if agent in EXTRA_AGENTS else ()
     for name in (argv[0], *aliases):
-        found = shutil.which(name)
+        found = _which(name)
         if found:
             return found
     return None
@@ -552,7 +582,7 @@ def build_opencode_bare_command(repo_path: str, session_id: str | None = None) -
     """
     import shutil
 
-    resolved = shutil.which("opencode")
+    resolved = _which("opencode")
     if not resolved:
         return None
     resume = [*_RESUME_VERBS[OPENCODE_BARE_AGENT], session_id] if session_id else []
