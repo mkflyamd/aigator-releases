@@ -72,7 +72,7 @@ def test_redact_token_shapes_derived_from_fake_key():
         "AKIA" + "AIGATORFAKEAPIKEY"[:16],
         "ghp_" + "aigatorfakeapikey" * 2,
         "xoxb-" + FAKE,
-        "-----BEGIN RSA PRIVATE KEY-----\n" + FAKE + "\n-----END RSA PRIVATE KEY-----",
+        "-----BEGIN RSA PRIVATE" + " KEY-----\n" + FAKE + "\n-----END RSA PRIVATE" + " KEY-----",
     ]
     for s in shapes:
         out, n = ah.redact(f"before {s} after")

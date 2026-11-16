@@ -55,7 +55,9 @@
   // Sections in display order. The agent being left stays selectable (a fresh
   // context in the same agent is legitimate) but sorts after the others.
   function groupTargets(targets, sourceAgent, query) {
-    const q = String(query || '').trim().toLowerCase();
+    const q = String(query || '')
+      .trim()
+      .toLowerCase();
     const matches = targets.filter(
       (t) => !q || t.label.toLowerCase().includes(q) || t.agent.toLowerCase().includes(q),
     );
@@ -64,9 +66,17 @@
       .concat(matches.filter((t) => t.agent === sourceAgent));
     const installed = ordered.filter((t) => t.installed !== false);
     return [
-      { key: 'routed', title: 'Through AI Gator', items: installed.filter((t) => t.gateway_routed) },
+      {
+        key: 'routed',
+        title: 'Through AI Gator',
+        items: installed.filter((t) => t.gateway_routed),
+      },
       { key: 'own', title: 'Own configuration', items: installed.filter((t) => !t.gateway_routed) },
-      { key: 'missing', title: 'Not installed', items: ordered.filter((t) => t.installed === false) },
+      {
+        key: 'missing',
+        title: 'Not installed',
+        items: ordered.filter((t) => t.installed === false),
+      },
     ].filter((sec) => sec.items.length);
   }
 
@@ -369,7 +379,8 @@
         list.appendChild(group);
       });
       if (!sections.length) list.appendChild(h('div', 'agent-handoff-empty', 'No agents match.'));
-      if (!visible.some((t) => t.agent === selected)) selected = visible.length ? visible[0].agent : null;
+      if (!visible.some((t) => t.agent === selected))
+        selected = visible.length ? visible[0].agent : null;
       select(selected);
     }
 

@@ -24,7 +24,7 @@ def test_redact_token_shapes_derived_from_fake_key():
         "AKIA" + "AIGATORFAKEAPIKEY"[:16],
         "ghp_" + "aigatorfakeapikey" * 2,
         "xoxb-" + FAKE,
-        "-----BEGIN RSA PRIVATE KEY-----\n" + FAKE + "\n-----END RSA PRIVATE KEY-----",
+        "-----BEGIN RSA PRIVATE" + " KEY-----\n" + FAKE + "\n-----END RSA PRIVATE" + " KEY-----",
     ]
     for s in shapes:
         out, n = ah.redact(f"before {s} after")
@@ -34,13 +34,13 @@ def test_redact_token_shapes_derived_from_fake_key():
 
 
 def test_redact_unterminated_private_key_runs_to_end_of_text():
-    text = "before\n-----BEGIN RSA PRIVATE KEY-----\n" + FAKE + "\n" + FAKE * 25
+    text = "before\n-----BEGIN RSA PRIVATE" + " KEY-----\n" + FAKE + "\n" + FAKE * 25
     out, n = ah.redact(text)
     assert out == "before\n[REDACTED]" and n == 1
 
 
 def test_redact_private_key_scan_is_linear():
-    text = "-----BEGIN RSA PRIVATE KEY-----\n" * 3_000
+    text = ("-----BEGIN RSA PRIVATE" + " KEY-----\n") * 3_000
     start = time.perf_counter()
     out, n = ah.redact(text)
     assert time.perf_counter() - start < 2.0

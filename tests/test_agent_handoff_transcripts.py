@@ -29,11 +29,20 @@ def test_claude_transcript_missing_returns_none(tmp_path):
     assert ah.find_transcript("claude", "/x/y", home=tmp_path) is None
 
 
-def test_codex_transcript_matches_session_meta_cwd(tmp_path):
+@pytest.mark.skipif(os.name != "nt", reason="Windows path spelling only exists on Windows")
+def test_codex_transcript_matches_windows_cwd_spellings(tmp_path):
     sessions = tmp_path / ".codex" / "sessions" / "2026" / "11" / "14"
     _jsonl(sessions / "rollout-a.jsonl", [{"type": "session_meta", "payload": {"cwd": r"C:\other"}}])
     _jsonl(sessions / "rollout-b.jsonl", [{"type": "session_meta", "payload": {"cwd": "\\\\?\\C:\\Repo"}}])
     found = ah.find_transcript("codex", r"c:\repo", home=tmp_path)
+    assert found is not None and found.name == "rollout-b.jsonl"
+
+def test_codex_transcript_matches_session_meta_cwd(tmp_path):
+    sessions = tmp_path / ".codex" / "sessions" / "2026" / "11" / "14"
+    repo = tmp_path / "repo"
+    _jsonl(sessions / "rollout-a.jsonl", [{"type": "session_meta", "payload": {"cwd": str(tmp_path / "other")}}])
+    _jsonl(sessions / "rollout-b.jsonl", [{"type": "session_meta", "payload": {"cwd": str(repo)}}])
+    found = ah.find_transcript("codex", str(repo), home=tmp_path)
     assert found is not None and found.name == "rollout-b.jsonl"
 
 

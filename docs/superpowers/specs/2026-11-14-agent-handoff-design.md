@@ -39,6 +39,7 @@ frontend            ->  attaches WS, waits until the TUI is input-ready, writes 
 ### Components
 
 **`web/agent_handoff.py`** (new). Pure functions plus one small store.
+
 - `find_transcript(agent, cwd)`: Claude Code returns the newest `*.jsonl` in `~/.claude/projects/<cwd-slug>/`; Codex returns the newest `~/.codex/sessions/**/rollout-*.jsonl` whose recorded cwd matches. Other agents return `None`.
 - `capture_pane(pty_session_id)`: the source pane's PTY buffer, ANSI/OSC-stripped and tail-bounded. Used when `find_transcript` returns `None` (OpenCode, Crush, bare terminal).
 - `write_snapshot(text)`: redacts, then writes to `~/.gator/handoffs/<handoff_id>.txt`. For a transcript source, text is the user and assistant turns in order with each tool call reduced to one line.
@@ -47,10 +48,12 @@ frontend            ->  attaches WS, waits until the TUI is input-ready, writes 
 - Snapshots older than 7 days are deleted at app start.
 
 **`web/routes/generic_agent_routes.py`**.
+
 - New `POST /api/generic-agent/handoff/prepare` with `dependencies=[Depends(verify_csrf)]`. It returns a preview (source agent, transcript or capture, last user message, byte size) and, per target, whether it is gateway-routed.
 - `GenericAgentTerminalRequest` gains optional `handoff_id`. When set, the route loads the stored prompt and returns it as `handoff_prompt`. Agent selection, command and env building are unchanged.
 
 **`web/static/tp-generic-agent-terminal.js`**.
+
 - "Continue in…" button next to `↻` and `⧉` (~lines 250-277). It opens a dialog (built in `web/static/agent-handoff.js`) with the preview, an agent list from `generic_agent` (claude, codex, crush, opencode-bare), and an "exclude source agent" toggle for the usage-limit case.
 - A handoff tab keeps its own `sess.agent`; `_genAgentStart` takes `keepStateAgent` so the project's agent is not overwritten, and restart/close use the session's agent.
 - Targets that are not gateway-routed (claude, codex) show an inline warning: "Runs on its own configuration, outside the AI Gator gateway."
@@ -59,6 +62,7 @@ frontend            ->  attaches WS, waits until the TUI is input-ready, writes 
 ### Usage-limit offer
 
 **`web/static/agent-limit-detect.js`** (new). The terminal tab already receives every output chunk over its WebSocket, so detection runs in the browser with no new server endpoint.
+
 - A per-agent list of patterns is matched against the ANSI-stripped tail of recent output (last 2 KB, re-evaluated per chunk). Patterns cover each agent's own limit message and the gateway's budget-exceeded and 429 responses, which is the enterprise case for OpenCode and Crush.
 - On a match, a toast reads "`<Agent>` looks out of usage. Continue in another agent?" The action opens the handoff dialog with the source agent excluded.
 - The offer is shown once per session until the output shows the agent working again. It is dismissible, and it is not shown for a pane that was itself created by a handoff in the last minute.
