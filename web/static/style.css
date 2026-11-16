@@ -23751,9 +23751,6 @@ body.tab-fullscreen {
   opacity: 0.5;
   cursor: not-allowed;
 }
-.gtp-tab-handoff {
-  font-size: 0.8rem;
-}
 .gtp-tab-icon {
   display: inline-flex;
   align-items: center;

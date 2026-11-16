@@ -14,11 +14,15 @@ def test_scripts_load_before_terminal_module():
     assert limit < terminal and handoff < terminal
 
 
-def test_tab_has_continue_button_excluded_from_tab_gestures():
-    assert "gtp-tab-handoff" in TERM
-    assert "agentHandoff.openDialog" in TERM
-    assert "e.target.classList.contains('gtp-tab-handoff')" in TERM
-    assert "e.target === handoff" in TERM
+def test_tab_kebab_menu_lists_hand_off_then_open_then_restart():
+    assert "kebab.className = 'gtp-tab-restart gtp-tab-kebab';" in TERM
+    assert "e.target === x || e.target === kebab" in TERM
+    assert "gtp-tab-handoff" not in TERM and "gtp-tab-popout" not in TERM
+    menu = TERM[TERM.index("function _genAgentOpenTabMenu"):TERM.index("function _genAgentForceRestartTab")]
+    order = [menu.index(label) for label in ("Hand off to another agent", "Open in its own window", "Restart session")]
+    assert order == sorted(order)
+    assert "agentHandoff.openDialog({ tabId, sess })" in menu
+    assert "_genAgentForceRestartTab(tabId, id, null)" in menu
 
 
 def test_start_sends_handoff_id_and_delivers_prompt():
