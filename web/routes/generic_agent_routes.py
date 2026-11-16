@@ -19,6 +19,7 @@ from pydantic import BaseModel
 
 import agent_handoff
 import agent_sessions
+import agent_state
 import generic_agent
 from security import verify_csrf
 
@@ -277,6 +278,9 @@ async def _open_terminal(req: GenericAgentTerminalRequest):
             command = generic_agent.pin_resume(req.agent, command, pty_session_id, resume["id"])
         else:
             command = generic_agent.pin_session(req.agent, command, pty_session_id)
+    if not agent_state.is_wsl_command(command):
+        env = {**(env or {}), **agent_state.launch_env(pty_session_id)}
+        command = agent_state.with_claude_hooks(req.agent, command)
     # Use the frontend's measured dimensions if provided (non-zero), so TUI
     # apps (Crush, Claude Code) spawn at the correct size and don't garble on
     # the late resize. Fall back to create_pty_session's defaults otherwise.
