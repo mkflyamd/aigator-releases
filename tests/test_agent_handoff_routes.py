@@ -200,7 +200,7 @@ def test_installed_route_reports_each_launchable_agent(monkeypatch):
 
 def test_extra_agents_resolve_by_primary_name_or_alias(monkeypatch):
     on_path = {"cbc": "/bin/cbc", "pi": "/bin/pi"}
-    monkeypatch.setattr(generic_agent.shutil, "which", lambda name: on_path.get(name))
+    monkeypatch.setattr(generic_agent.shutil, "which", lambda name, path=None: on_path.get(name) if path is None else None)
     assert generic_agent.build_command("pi") == ["/bin/pi"]
     assert generic_agent.build_command("codebuddy") == ["/bin/cbc"]
     assert generic_agent.build_command("gemini") is None
