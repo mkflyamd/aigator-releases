@@ -259,4 +259,27 @@ const term = (pty, agent, out, viewed) => ({
   );
 }
 
+// tab names follow the history title; a name the user typed on the tab wins both ways
+{
+  const sessions = [
+    rec('s1', 'claude', 'Fix the login bug', at(10, 15, 9, 0), { pty_session_id: 'p1' }),
+  ];
+  const t1 = { ...term('p1', 'claude', NOW, 0), label: 'Claude 1' };
+  const rows = h.buildRows(sessions, [t1], NOW);
+  assert.strictEqual(h.syncTabLabels(rows, [t1]), true);
+  assert.strictEqual(t1.label, 'Fix the login bug');
+  assert.strictEqual(h.syncTabLabels(rows, [t1]), false, 'nothing to do once in sync');
+
+  const t2 = { ...term('p1', 'claude', NOW, 0), label: 'Mine', userLabel: 'Mine' };
+  const renamed = h.buildRows(sessions, [t2], NOW);
+  assert.strictEqual(renamed[0].title, 'Mine', 'a tab rename shows in history');
+  assert.strictEqual(h.syncTabLabels(renamed, [t2]), false);
+  assert.strictEqual(t2.label, 'Mine');
+
+  const fresh = { ...term('p9', 'codex', NOW, 0), label: 'Codex 1' };
+  const live = h.buildRows([], [fresh], NOW);
+  assert.strictEqual(h.syncTabLabels(live, [fresh]), false, 'no stored session, keep the tab name');
+  assert.strictEqual(fresh.label, 'Codex 1');
+}
+
 console.log('agent_history: ok');

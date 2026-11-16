@@ -477,7 +477,10 @@ function _genAgentBeginRename(sess, labelEl) {
     labelEl.classList.remove('editing');
     _genAgentEditing = false;
     const next = labelEl.textContent.trim();
-    if (commit && next) sess.label = next;
+    if (commit && next) {
+      sess.label = next;
+      sess.userLabel = next;
+    }
     labelEl.textContent = sess.label;
     window.getSelection().removeAllRanges();
   };

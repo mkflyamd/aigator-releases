@@ -70,7 +70,7 @@
         key: s.agent + ':' + s.id,
         id: s.id,
         agent: s.agent,
-        title: s.title,
+        title: (term && term.userLabel) || s.title,
         branch: s.branch || '',
         source: s.source,
         lastActive,
@@ -87,7 +87,7 @@
         key: 'live:' + pty,
         id: null,
         agent: term.agent,
-        title: 'New ' + label(term.agent) + ' session',
+        title: term.userLabel || 'New ' + label(term.agent) + ' session',
         branch: '',
         source: 'windows',
         lastActive,
@@ -97,6 +97,21 @@
       });
     });
     return rows;
+  }
+
+  function syncTabLabels(rows, terminals) {
+    const byPty = new Map();
+    (terminals || []).forEach((t) => {
+      if (t.ptySessionId) byPty.set(t.ptySessionId, t);
+    });
+    let changed = false;
+    (rows || []).forEach((r) => {
+      const term = r.id && r.ptySessionId ? byPty.get(r.ptySessionId) : null;
+      if (!term || term.userLabel || !r.title || term.label === r.title) return;
+      term.label = r.title;
+      changed = true;
+    });
+    return changed;
   }
 
   function shortAge(ts, nowMs) {
@@ -771,7 +786,16 @@
     const list = document.getElementById('ca-hist-list');
     if (!list) return;
     const now = Date.now();
-    const rows = buildRows(ui.sessions, liveSessions(), now, agentName);
+    const live = liveSessions();
+    const rows = buildRows(ui.sessions, live, now, agentName);
+    if (
+      syncTabLabels(rows, live) &&
+      typeof _genAgentEditing !== 'undefined' &&
+      !_genAgentEditing &&
+      typeof _genAgentRenderTabs === 'function'
+    ) {
+      _genAgentRenderTabs(context().tabId);
+    }
     const groups = filterGroups(rows, ui.query);
     ui.rows = new Map(rows.map((r) => [r.key, r]));
     const sig = JSON.stringify([
@@ -877,6 +901,7 @@
     liveState,
     needsYou,
     buildRows,
+    syncTabLabels,
     shortAge,
     metaLine,
     rowActions,
