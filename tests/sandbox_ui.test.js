@@ -512,6 +512,7 @@ const flush = async () => {
     network_hosts: [],
     context_id: 'tab-1',
     destination: 'Reports 2026',
+    card: { scopes: ['once'], primary: 'once' },
   };
   const envF = makeEnv('tab-1');
   envF.ctx._showSandboxApproval(uploadCard, 'tab-1');
@@ -533,6 +534,9 @@ const flush = async () => {
   });
   assert.match(envF.form.sent[0], /run the same file_upload call again/i);
   assert.doesNotMatch(envF.form.sent[0], /run_python/);
+  assert(
+    !walk(envF.messages).some((e) => /Allowed until you close this tab/.test(e.textContent || '')),
+  );
 
   console.log('sandbox_ui: all assertions passed');
 })().catch((err) => {

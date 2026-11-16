@@ -135,3 +135,8 @@ def test_files_under_the_ai_gator_outputs_folder_need_no_approval(tmp_path, prov
 def test_a_missing_file_is_left_to_the_tool_to_report(tmp_path, provider):
     provider.upload.return_value = {"error": "not found", "error_code": "not_found"}
     assert _upload(tmp_path / "gone.docx")["error_code"] == "not_found"
+
+
+def test_the_card_offers_only_allow_once_and_never_a_tab_or_saved_grant(report, provider):
+    card = _upload(report)["_sandbox_approval"]["card"]
+    assert card == {"scopes": ["once"], "primary": "once"}

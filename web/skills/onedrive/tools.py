@@ -1137,6 +1137,10 @@ def _tool_list_onedrive_files(path: str = "", count: int = 50, drive_id: str = "
     for item in data.get("value", []):
         is_folder = "folder" in item
         parent_reference = item.get("parentReference") or {}
+        if not drive_id:
+            from permissions import actions as _permission_actions
+
+            _permission_actions.note_own_drive(parent_reference.get("driveId", ""))
         items.append(
             {
                 "name": item.get("name", ""),

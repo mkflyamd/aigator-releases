@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 from collections.abc import Callable
 
+import permissions
 from config import OUTPUTS_DIR
 from sandbox import approvals
 from sandbox.paths import PathNotGrantable, is_within, normalize_grant_paths
@@ -56,7 +57,7 @@ def require_local_read(
     card = {
         "request_id": req.id, "read_paths": list(req.read_paths), "write_paths": [],
         "network_hosts": [], "context_id": req.context_id, "tool": tool,
-        "destination": label,
+        "destination": label, "card": permissions.sandbox_card(tool),
     }
     return checked, {
         "approval_required": True, "request_id": req.id, "read_paths": card["read_paths"],

@@ -51,6 +51,9 @@ class OneDriveProvider:
             mine = gc.get("/me/drive", params={"$select": "id"})
         except Exception:
             return True
+        from permissions import actions
+
+        actions.note_own_drive(mine.get("id", ""))
         return drive.get("driveType") in ("business", "personal") and drive.get("id") != mine.get("id")
 
     def move(self, ref, dest_folder, new_name):

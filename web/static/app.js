@@ -10377,6 +10377,7 @@ function _showSandboxApproval(data, ownerTabId) {
   const scopeSpecs = _scopeButtonSpecs(data.card);
   if (!scopeSpecs.length)
     scopeSpecs.push({ scope: 'tab', label: _scopeLabel('tab'), primary: true });
+  const onceOnly = scopeSpecs.length === 1 && scopeSpecs[0].scope === 'once';
   const scopeButtons = scopeSpecs.map((spec) => {
     const btn = document.createElement('button');
     btn.className = spec.primary ? 'gcc-approve-btn' : 'btn-secondary';
