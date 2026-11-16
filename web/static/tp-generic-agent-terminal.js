@@ -435,7 +435,9 @@ function _genAgentRenderTabs(tabId) {
       _genAgentDragId = null;
       scroll
         .querySelectorAll('.gtp-tab')
-        .forEach((el) => el.classList.remove('gtp-tab-dragging', 'gtp-drop-before', 'gtp-drop-after'));
+        .forEach((el) =>
+          el.classList.remove('gtp-tab-dragging', 'gtp-drop-before', 'gtp-drop-after'),
+        );
     });
     tab.addEventListener('keydown', (e) => {
       if (!e.altKey || e.target !== tab) return;

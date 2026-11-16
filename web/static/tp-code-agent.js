@@ -955,7 +955,9 @@ function _caRenderProjectSwitcher(activeProject, allProjects) {
   // "● project ▾": the dot signals a project is active. Which agent a terminal
   // runs is chosen in the tab strip's "+" menu, so it is not shown here.
   chip.textContent = proj ? '● ' + proj.name + ' ▾' : 'Select project ▾';
-  chip.title = proj ? 'Project: ' + proj.name + ' — click to switch' : 'Select a project to work on';
+  chip.title = proj
+    ? 'Project: ' + proj.name + ' — click to switch'
+    : 'Select a project to work on';
   chip.onclick = _caShowSessionDropdown;
   chip.onkeydown = (e) => {
     if (e.key === 'Enter' || e.key === ' ') {
@@ -1412,7 +1414,8 @@ function _caShowSessionDropdown() {
   const projectRow = (p) => {
     const isCurrent = p.name === _caActiveProject;
     const row = document.createElement('div');
-    row.className = 'ca-project-item ca-project-row' + (isCurrent ? ' ca-project-item--active' : '');
+    row.className =
+      'ca-project-item ca-project-row' + (isCurrent ? ' ca-project-item--active' : '');
     row.setAttribute('role', 'menuitem');
     row.tabIndex = -1;
     const dot = document.createElement('span');
@@ -1605,9 +1608,14 @@ function _caLoadProjects() {
           url.searchParams.delete('open_project');
           history.replaceState({}, '', url);
         } catch (_) {}
-      } else if (!_caActiveProject) {
+      } else {
+        // The open project may have been removed in another window; drop it so the
+        // no-project states show instead of a blank pane.
+        if (_caActiveProject && !_caProjects.some((p) => p.name === _caActiveProject))
+          _caActiveProject = null;
         // Auto-select if only one project exists
-        _caActiveProject = _caProjects.length === 1 ? _caProjects[0].name : null;
+        if (!_caActiveProject)
+          _caActiveProject = _caProjects.length === 1 ? _caProjects[0].name : null;
       }
       // NOTE: no fire-and-forget /api/opencode/warm here anymore. Guided start
       // means OpenCode only spawns on an explicit user click (Start/Resume), so

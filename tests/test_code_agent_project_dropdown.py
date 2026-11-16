@@ -93,3 +93,8 @@ def test_tab_strip_supports_drag_and_keyboard_reorder():
     assert "'Move left'" in term and "'Move right'" in term
     assert "e.altKey" in term
     assert ".gtp-drop-before" in STYLE and ".gtp-drop-after" in STYLE
+
+
+def test_loading_projects_drops_an_active_project_that_no_longer_exists():
+    load = _between("function _caLoadProjects()", "function _caAddLocalProject")
+    assert "_caProjects.some((p) => p.name === _caActiveProject)" in load
