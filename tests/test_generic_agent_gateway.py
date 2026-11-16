@@ -11,8 +11,8 @@ from security import verify_csrf
 FAKE = "aigator-fake-api-key"
 MODELS = ["Claude-Opus-5", "Claude-Sonnet-5", "Claude-Haiku-4-5", "gpt-5.5"]
 PROFILE = {
-    "api_key": FAKE,
-    "api_key_header": "Ocp-Apim-Subscription-Key",
+    "api_key": FAKE,  # pragma: allowlist secret
+    "api_key_header": "Ocp-Apim-Subscription-Key",  # pragma: allowlist secret
     "anthropic_url": "https://gw.example.com/Anthropic/v1/",
     "base_url": "https://gw.example.com/Unified",
     "user_id": "someone",

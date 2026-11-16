@@ -798,7 +798,7 @@ def _pi_extension_source(profile: dict, models: list[str]) -> str:
             "name": "AI Gator (Anthropic)",
             "baseUrl": anthropic_url,
             "api": "anthropic-messages",
-            "apiKey": "GATOR_GATEWAY_KEY",
+            "apiKey": "GATOR_GATEWAY_KEY",  # pragma: allowlist secret
             "headers": headers,
             "models": entries(claude),
         }
@@ -809,7 +809,7 @@ def _pi_extension_source(profile: dict, models: list[str]) -> str:
             "name": "AI Gator",
             "baseUrl": openai_url,
             "api": "openai-completions",
-            "apiKey": "GATOR_GATEWAY_KEY",
+            "apiKey": "GATOR_GATEWAY_KEY",  # pragma: allowlist secret
             "headers": headers,
             "models": entries(others),
         }
