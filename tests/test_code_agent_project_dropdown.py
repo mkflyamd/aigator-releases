@@ -120,3 +120,7 @@ def test_terminals_start_in_the_worktree_selected_when_the_user_clicks():
     assert "_caActiveFolder(projectId)" in prompt
     assert "setTimeout(() => _genAgentStart(tabId, agent, projectId, folder), 0)" in prompt
 
+
+def test_loading_projects_drops_an_active_project_that_no_longer_exists():
+    load = _between("function _caLoadProjects()", "function _caAddLocalProject")
+    assert "_caProjects.some((p) => p.name === _caActiveProject)" in load
