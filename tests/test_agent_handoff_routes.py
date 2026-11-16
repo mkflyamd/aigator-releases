@@ -153,6 +153,22 @@ def test_handoff_to_a_non_target_agent_is_400_and_loads_and_spawns_nothing(hando
     assert r.status_code == 400 and spawned == []
 
 
+def test_handoff_to_an_agent_outside_the_target_list_is_400(handoff_env, spawned, monkeypatch):
+    client = _app()
+    hid = client.post("/api/generic-agent/handoff/prepare", json=BODY).json()["handoff_id"]
+    monkeypatch.setattr(ah, "load_handoff", lambda _hid: pytest.fail("must not load the handoff"))
+    monkeypatch.setattr(generic_agent, "is_handoff_target", lambda a: False)
+    r = client.post("/api/generic-agent/terminal", json={
+        "agent": "codex", "project_id": "demo", "repo_path": "/r", "handoff_id": hid,
+    })
+    assert r.status_code == 400 and spawned == []
+
+
+def test_only_listed_agents_are_handoff_targets():
+    assert all(generic_agent.is_handoff_target(t["agent"]) for t in generic_agent.handoff_targets())
+    assert not generic_agent.is_handoff_target("terminal")
+
+
 def test_launch_logs_target_and_gateway_flag(handoff_env, spawned, caplog):
     client = _app()
     hid = client.post("/api/generic-agent/handoff/prepare", json=BODY).json()["handoff_id"]

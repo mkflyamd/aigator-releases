@@ -56,7 +56,7 @@ frontend            ->  attaches WS, waits until the TUI is input-ready, writes 
 
 - "Continue in…" button next to `↻` and `⧉` (~lines 250-277). It opens a dialog (built in `web/static/agent-handoff.js`) with the preview, an agent list from `generic_agent` (claude, codex, crush, opencode-bare), and an "exclude source agent" toggle for the usage-limit case.
 - A handoff tab keeps its own `sess.agent`; `_genAgentStart` takes `keepStateAgent` so the project's agent is not overwritten, and restart/close use the session's agent.
-- Targets that are not gateway-routed (claude, codex) show an inline warning: "Runs on its own configuration, outside the AI Gator gateway."
+- Targets that are not gateway-routed show an inline warning (claude is routed when the active profile has an Anthropic endpoint, codex when its own config points at the gateway): "Runs on its own configuration, outside the AI Gator gateway."
 - Drafting: the prompt is written to the PTY as a bracketed paste with no trailing newline, only after the TUI is input-ready. A short readiness wait per agent is part of the implementation plan. If readiness is not observed within the timeout, show a warning toast with a Copy prompt button. A success toast is shown only when readiness was observed.
 
 ### Usage-limit offer

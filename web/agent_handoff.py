@@ -49,6 +49,16 @@ _TOKEN_PATTERNS = [
     (re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}"), "[REDACTED]"),
     (re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}"), "[REDACTED]"),
     (re.compile(r"\beyJ[A-Za-z0-9_-]{4,}\.eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}"), "[REDACTED]"),
+    # The password part of a URL's user info is redacted; the rest of the URL stays.
+    (re.compile(r"(\b[a-z][a-z0-9+.-]*://[^\s/:@]+:)[^\s/@]+(@)", re.I), r"\1[REDACTED]\2"),
+    (
+        re.compile(
+            r"(?i)((?:aws[_-]?)?secret[_-]?access[_-]?key[\"']?[ \t]*[:=][ \t]*)"
+            + _NOT_YET_REDACTED
+            + r"\S{8,}"
+        ),
+        r"\1[REDACTED]",
+    ),
     # Header and assignment forms keep the name and redact only the value.
     (re.compile(r"(?i)(\bx-api-key[ \t]*:[ \t]*)" + _NOT_YET_REDACTED + r"\S+"), r"\1[REDACTED]"),
     (

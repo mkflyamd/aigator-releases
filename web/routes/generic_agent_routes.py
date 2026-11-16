@@ -121,7 +121,7 @@ async def generic_agent_terminal(req: GenericAgentTerminalRequest):
 
     handoff = None
     if req.handoff_id:
-        if req.agent == generic_agent.TERMINAL_AGENT:
+        if not generic_agent.is_handoff_target(req.agent):
             raise HTTPException(status_code=400, detail=f"{req.agent!r} cannot continue a handoff.")
         handoff = await asyncio.to_thread(agent_handoff.load_handoff, req.handoff_id)
         if handoff is None:

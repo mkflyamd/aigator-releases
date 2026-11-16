@@ -159,6 +159,10 @@ def handoff_targets() -> list[dict]:
     return targets
 
 
+def is_handoff_target(agent: str) -> bool:
+    return agent in CORE_AGENT_LABELS or agent in EXTRA_AGENTS
+
+
 def is_supported(agent: str) -> bool:
     return agent in SUPPORTED_AGENTS or agent == TERMINAL_AGENT or agent == OPENCODE_BARE_AGENT
 
