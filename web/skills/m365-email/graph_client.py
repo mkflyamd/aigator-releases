@@ -417,6 +417,11 @@ class GraphClient:
         resp = self._request("GET", url, headers=headers, label=path)
         return resp.text
 
+    def get_bytes(self, path: str) -> bytes:
+        """GET returning raw response bytes (for file content endpoints)."""
+        url = f"{GRAPH_BASE}{self._encode_path(path)}"
+        return self._request("GET", url, headers=self._headers(), label=path).content
+
     def _encode_path(self, path: str) -> str:
         """Percent-encode a Graph path while preserving structural characters.
 
@@ -464,14 +469,18 @@ class GraphClient:
         )
 
     def put_binary(
-        self, path: str, data: bytes, content_type: str = "application/octet-stream"
+        self,
+        path: str,
+        data: bytes,
+        content_type: str = "application/octet-stream",
+        extra_headers: dict[str, str] | None = None,
     ) -> Any:
         """Upload raw bytes via PUT — used for OneDrive simple upload (<4 MB).
 
         Sent once: if the answer is lost the file may already be stored, and a repeat would store it again as
         ``name (1)``. The caller decides how to check the destination."""
         url = f"{GRAPH_BASE}{self._encode_path(path)}"
-        headers = {**self._headers(), "Content-Type": content_type}
+        headers = {**self._headers(), "Content-Type": content_type, **(extra_headers or {})}
         resp = self._request("PUT", url, headers=headers, content=data, label=path, retry_unanswered=False)
         return resp.json() if resp.content else {"status": "ok"}
 

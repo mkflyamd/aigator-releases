@@ -8,7 +8,7 @@ def classify_status(status: int) -> str:
         return "forbidden"
     if status == 404:
         return "not_found"
-    if status == 409:
+    if status in (409, 412):
         return "conflict"
     if status == 429:
         return "throttled"
