@@ -300,7 +300,7 @@ def _strip_image_blocks(messages: list[dict]) -> list[dict]:
         if not kept:
             # All blocks were images — replace with a text placeholder so the
             # turn boundary is preserved (empty content is invalid for the API).
-            kept = [{"type": "text", "text": "[image attached in original message]"}]
+            kept = [{"type": "text", "text": "[image attached in original message; it is no longer visible, so ask the user to re-send it if you need it]"}]
         result.append({**msg, "content": kept})
     return result
 
