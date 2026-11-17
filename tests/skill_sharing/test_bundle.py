@@ -35,7 +35,7 @@ def test_zip_entries_use_fixed_timestamp_and_mode():
 
 
 def test_bundle_sha256_is_hex_sha256():
-    assert bundle.bundle_sha256(b"abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    assert bundle.bundle_sha256(b"abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"  # pragma: allowlist secret
 
 
 @pytest.mark.parametrize(
