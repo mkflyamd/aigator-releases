@@ -87,12 +87,55 @@ def _mcp_source(tool_name: str, inputs: dict | None = None) -> Source | None:
     return _data_source(f"mcp:{best}", label, "mcp", _mcp_gate(tool_name, inputs))
 
 
+# Tools that run a command, start a sign-in or probe a server on the model's say-so. Each call gets its own card and is
+# refused in an unattended run. tool -> (label, card title, what the call does).
+_PER_CALL_TOOLS = {
+    "connect_mcp_server": (
+        "an MCP server connection",
+        "Connect this MCP server?",
+        "connect an MCP server. A local command is started on this computer with your access, and a web address "
+        "receives any credential given here",
+    ),
+    "extension_setup__test_connection": (
+        "the extension setup",
+        "Test this connection?",
+        "test the connection filled in on the setup form. This starts the command or contacts the address entered there",
+    ),
+    "extension_setup__start_oauth_flow": (
+        "the extension setup",
+        "Start this sign-in?",
+        "start a sign-in with the server at the address below",
+    ),
+}
+_HIDDEN_ON_CARD = {"connect_mcp_server": frozenset({"auth_value"})}
+URL_TOOLS = frozenset({"fetch_webpage", "extension_setup__fetch_doc"})
+
+
+def _is_public_image_fetch(tool_name: str, inputs: dict | None) -> bool:
+    """fetch_image reaches Microsoft, Teams and Slack with the user's own sign-in; any other address is a website."""
+    if tool_name != "fetch_image":
+        return False
+    inputs = inputs or {}
+    url = str(inputs.get("url") or "")
+    if not url.startswith(("http://", "https://")) or (inputs.get("page_id") and inputs.get("filename")):
+        return False
+    from skills.fetch_image.tools import _detect_source
+    return _detect_source(url) == "auto"
+
+
+def fetches_website(tool_name: str, inputs: dict | None) -> bool:
+    return tool_name in URL_TOOLS or _is_public_image_fetch(tool_name, inputs)
+
+
 def source_for_call(tool_name: str, inputs: dict | None) -> Source | None:
-    if tool_name == "fetch_webpage":
+    if fetches_website(tool_name, inputs):
         host = (urlparse(str((inputs or {}).get("url", ""))).hostname or "").lower()
         if not host:
             return None
         return Source(key=f"web:{host}", label=f"the website {host}", kind="web", flow_id="web")
+    if tool_name in _PER_CALL_TOOLS:
+        return Source(key=f"setup:{tool_name}", label=_PER_CALL_TOOLS[tool_name][0], kind="data",
+                      action=actions.IRREVERSIBLE, per_call=True)
     return _native_source(tool_name, inputs) or _mcp_source(tool_name, inputs)
 
 
@@ -118,16 +161,34 @@ _STAYS_ALLOWED = "This stays allowed until you close this tab."
 _CARD_VALUE_MAX = 1000
 _CARD_KEY_MAX = 100
 _CONTROL_CHARS = re.compile(
-    r"[\x00-\x08\x0b-\x1f\x7f-\x9f\u200b-\u200f\u2028\u2029\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]")
+    r"[\x00-\x08\x0b-\x1f\x7f-\x9f\u200b-\u200f\u2028\u2029\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff\u061c\u180e\u00ad]")
 
 
-def _call_details(inputs: dict | None) -> str:
+def _schema_keys(tool_name: str) -> frozenset | None:
+    """The arguments a built-in tool declares. Anything else the model adds is dropped before the tool runs, so it
+    stays off the card. None when the tool declares none, or is an MCP tool whose server receives every argument."""
+    if "__" in tool_name and not tool_name.startswith("extension_setup__"):
+        return None
+    for tool in shared.TOOLS:
+        if tool.get("name") == tool_name:
+            props = (tool.get("input_schema") or {}).get("properties")
+            return frozenset(props) if isinstance(props, dict) and props else None
+    return None
+
+
+def _call_details(inputs: dict | None, tool_name: str = "") -> str:
     """The call's arguments for the approval card, on one line. Each value is cut on its own, so a long value cannot
     push a later argument such as the recipient out of sight."""
     if not inputs:
         return ""
+    declared = _schema_keys(tool_name) if tool_name else None
+    hidden = _HIDDEN_ON_CARD.get(tool_name, ())
     parts = []
     for key, value in inputs.items():
+        if declared is not None and key not in declared:
+            continue
+        if key in hidden:
+            value = "(hidden)" if value else ""
         text = _CONTROL_CHARS.sub(" ", json.dumps(value, default=str, ensure_ascii=False))
         if len(text) > _CARD_VALUE_MAX:
             text = f"{text[:_CARD_VALUE_MAX]}... ({len(text) - _CARD_VALUE_MAX} more characters not shown)"
@@ -143,12 +204,21 @@ def prompt_for(source: Source, tool_name: str, inputs: dict | None = None) -> di
             url = url[:_CARD_URL_MAX] + "..."
         shown = "\nAddress: " + url if url else ""
         action = f"AI Gator wants to open {source.label}, which this tab has not used yet.{shown}"
+    elif source.per_call and tool_name in _PER_CALL_TOOLS:
+        _label, title, what = _PER_CALL_TOOLS[tool_name]
+        return {
+            "title": title,
+            "action": (f"AI Gator wants to {what} (tool: {tool_name}). You are asked every time."
+                       f"{_call_details(inputs, tool_name)}"),
+            "allow_label": "Allow this time",
+            "deny_label": "Deny",
+        }
     elif source.per_call:
         return {
             "title": f"Allow this change in {source.label}?",
             "action": (
                 f"AI Gator wants to make a change in {source.label} (tool: {tool_name}) that notifies other people "
-                f"or cannot be undone. You are asked every time.{_call_details(inputs)}"
+                f"or cannot be undone. You are asked every time.{_call_details(inputs, tool_name)}"
             ),
             "allow_label": "Allow this time",
             "deny_label": "Deny",

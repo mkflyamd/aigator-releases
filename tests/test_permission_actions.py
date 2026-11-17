@@ -42,7 +42,7 @@ def test_the_action_table_names_only_tools_that_exist():
 # Built-in tools outside the data-source apps. None asks through a data-source card: shell, code, browser, file and
 # Office tools have their own capability or sandbox cards; the rest act only on local state or fetch a public page.
 NO_GATE = frozenset("""
-connect_mcp_server read_skill list_schedules fetch_webpage web_search analyze_mcp_server schedule_task ask_user
+read_skill list_schedules fetch_webpage web_search analyze_mcp_server schedule_task ask_user
 request_skill describe_images mcp_connection_status
 browser_navigate browser_task browser_search
 get_code_changes run_python run_shell stop_shell_process check_shell_process
@@ -54,21 +54,28 @@ fetch_image read_file write_file grep_files list_dir glob_files edit_file
 demo_speed_interval demo_merge_narration demo_replace_interval demo_append_clip demo_media_manifest
 demo_inspect_frames demo_cut_intervals
 pin_item get_tab_pins get_skill_content list_skills update_skill create_skill
+extension_setup__set_field extension_setup__get_field extension_setup__highlight_field
+extension_setup__show_instruction_panel extension_setup__normalize_input extension_setup__mark_done
+extension_setup__fetch_doc
 """.split())
 
 
 def _every_built_in_tool():
-    return {t for tools in shared.SKILL_TOOLS_MAP.values() for t in tools if "__" not in t}
+    """Every tool AI Gator ships: all but the ones a connected MCP server or an installed marketplace skill brings."""
+    return {t for tools in shared.SKILL_TOOLS_MAP.values() for t in tools
+            if "__" not in t or ds._mcp_source(t) is None}
 
 
 def test_every_built_in_tool_is_classified_or_reviewed_as_having_no_data_source():
-    unreviewed = sorted(_every_built_in_tool() - set(actions.BUILTIN_ACTIONS) - NO_GATE)
+    unreviewed = sorted(_every_built_in_tool() - set(actions.BUILTIN_ACTIONS) - NO_GATE - set(ds._PER_CALL_TOOLS))
     assert not unreviewed, f"classify in web/permissions/actions.py, or add to NO_GATE here after review: {unreviewed}"
 
 
 def test_the_no_gate_list_names_only_unclassified_tools_that_exist():
     assert sorted(NO_GATE - _every_built_in_tool()) == []
     assert sorted(NO_GATE & set(actions.BUILTIN_ACTIONS)) == []
+    assert sorted(NO_GATE & set(ds._PER_CALL_TOOLS)) == []
+    assert sorted(set(ds._PER_CALL_TOOLS) - _every_built_in_tool()) == []
 
 
 def test_every_action_type_is_one_of_the_four():
@@ -338,3 +345,95 @@ def test_an_argument_name_is_cleaned_and_capped_like_its_value():
     details = ds._call_details({"to" + tricks + "x" * 500: "v"})
     assert not any(ch in details for ch in tricks)
     assert len(details) < ds._CARD_KEY_MAX + 40
+
+
+def test_the_wizard_tools_are_part_of_the_checked_set():
+    assert {"extension_setup__fetch_doc", "extension_setup__test_connection"} <= _every_built_in_tool()
+
+
+@pytest.mark.parametrize("tool,inputs", [
+    ("connect_mcp_server", {"transport": "stdio", "name": "x", "command": "node", "args": ["srv.js"]}),
+    ("extension_setup__test_connection", {"session_id": "s1"}),
+    ("extension_setup__start_oauth_flow", {"session_id": "s1", "url": "https://mcp.example.test"}),
+])
+async def test_a_tool_that_starts_a_command_or_a_sign_in_asks_on_every_call(tool, inputs):
+    calls, cards, q = [], [], asyncio.Queue()
+    run = _runner(calls)
+    res, _ = await asyncio.gather(run(_tc(tool, inputs), q), _answer(q, "always", cards))
+    assert res.get("ok") is True and calls == [tool]
+    assert cards[0]["allow_label"] == "Allow this time" and cards[0].get("category") is None
+    q2 = asyncio.Queue()
+    await asyncio.gather(run(_tc(tool, inputs, "c2"), q2), _answer(q2, "tab", cards))
+    assert len(cards) == 2 and not ds.allowed_with_prefix("tab-a", "setup:")
+
+
+@pytest.mark.parametrize("tool", ["connect_mcp_server", "extension_setup__test_connection",
+                                  "extension_setup__start_oauth_flow"])
+async def test_an_unattended_run_cannot_start_a_command_or_a_sign_in(tool):
+    calls = []
+    res = await _runner(calls, context_id=None)(_tc(tool, {"name": "x"}), asyncio.Queue())
+    assert res["error"] == "irreversible_not_allowed_unattended" and calls == []
+
+
+def test_the_connect_card_shows_the_command_and_address_but_not_the_credential():
+    inputs = {"transport": "http", "name": "x", "url": "https://mcp.example.test", "auth_type": "bearer",
+              "auth_value": "aigator-fake-api-key"}
+    card = ds.prompt_for(ds.source_for_call("connect_mcp_server", inputs), "connect_mcp_server", inputs)
+    assert card["title"] == "Connect this MCP server?"
+    assert "https://mcp.example.test" in card["action"] and "aigator-fake-api-key" not in card["action"]
+    stdio = {"transport": "stdio", "name": "x", "command": "node", "args": ["srv.js"], "env": {"A": "b"}}
+    assert '"command": "node"' in ds._call_details(stdio, "connect_mcp_server")
+
+
+def test_fetching_an_image_from_a_public_address_asks_like_opening_the_website():
+    source = ds.source_for_call("fetch_image", {"url": "https://img.example.test/a.png"})
+    assert source.key == "web:img.example.test" and not source.per_call
+
+
+@pytest.mark.parametrize("inputs", [
+    {"url": "https://graph.microsoft.com/v1.0/x"},
+    {"url": "https://files.slack.com/x.png"},
+    {"url": "slack-file:F123"},
+    {"page_id": "1", "filename": "a.png"},
+    {"url": "https://img.example.test/a.png", "page_id": "1", "filename": "a.png"},
+])
+def test_fetching_an_image_with_the_users_own_sign_in_needs_no_website_card(inputs):
+    assert ds.source_for_call("fetch_image", inputs) is None
+
+
+def test_the_wizard_doc_fetch_asks_like_opening_the_website():
+    source = ds.source_for_call("extension_setup__fetch_doc", {"url": "https://docs.example.test/setup"})
+    assert source.key == "web:docs.example.test"
+
+
+def test_a_card_hides_text_direction_and_soft_hyphen_characters_that_only_look_empty():
+    tricks = [chr(c) for c in (0x061C, 0x180E, 0x00AD)]
+    details = ds._call_details({"to": "a@b.c" + "".join(tricks) + "d"})
+    assert not any(ch in details for ch in tricks)
+
+
+def test_a_built_in_tools_card_lists_only_the_arguments_the_tool_takes():
+    inputs = {"event_id": "e1", "padding": "x" * 50, "note": "Reply is fine"}
+    declared = ds._schema_keys("delete_calendar_event")
+    assert declared and "event_id" in declared
+    details = ds._call_details(inputs, "delete_calendar_event")
+    assert '"event_id": "e1"' in details and "padding" not in details and "note" not in details
+
+
+def test_an_mcp_tools_card_lists_every_argument_because_the_server_receives_every_one(monkeypatch):
+    monkeypatch.setitem(shared.SKILL_TOOLS_MAP, "mcp-srv", ["srv__send"])
+    monkeypatch.setattr(shared, "TOOLS", [*shared.TOOLS, {"name": "srv__send", "input_schema": {"properties": {"a": {}}}}])
+    assert ds._schema_keys("srv__send") is None
+    assert '"extra": 1' in ds._call_details({"a": 1, "extra": 1}, "srv__send")
+
+
+async def test_the_wizard_doc_fetch_refuses_a_url_that_could_carry_data_out_before_asking():
+    calls = []
+    url = "https://docs.example.test/p?d=" + "a" * 400
+    res = await _runner(calls)(_tc("extension_setup__fetch_doc", {"url": url}), asyncio.Queue())
+    assert "error" in res and calls == []
+
+
+def test_an_image_url_with_a_page_id_but_no_filename_is_still_fetched_from_the_website():
+    source = ds.source_for_call("fetch_image", {"url": "https://img.example.test/a.png", "page_id": "1"})
+    assert source.key == "web:img.example.test"

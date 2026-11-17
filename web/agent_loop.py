@@ -1002,7 +1002,7 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
                 },
                 f"{tc.name} is not available in this conversation",
             )
-        if tc.name == "fetch_webpage":
+        if tc.name in data_sources.URL_TOOLS:
             # Refuse a private or internal target before asking the user to approve it.
             url = (tc.inputs or {}).get("url")
             if isinstance(url, str) and url.startswith(("http://", "https://")):
@@ -1149,7 +1149,7 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
             })
         elif not _is_error:
             _read = data_sources.source_for_call(tc.name, tc.inputs)
-            if _read is not None:
+            if _read is not None and _read.flow_id:
                 _sources_read.add(_read.label)
                 _source_ids.add(_read.flow_id)
         if isinstance(result, dict) and "_jira_target_selection" in result:
