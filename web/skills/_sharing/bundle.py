@@ -6,14 +6,17 @@ import re
 import zipfile
 from pathlib import Path
 
-from marketplace.permissions import declared_permissions, files_digest
+from marketplace.permissions import declared_permissions, files_digest, summarize_package
 from marketplace.registry import _parse_skill_md_frontmatter
 
 from .errors import ShareError
 
 SCHEMA = 1
 _FIXED_TIME = (1980, 1, 1, 0, 0, 0)
-_SCRIPT_SUFFIXES = (".py", ".sh", ".ps1", ".bat", ".cmd", ".exe", ".js")
+_SCRIPT_SUFFIXES = (
+    ".py", ".sh", ".ps1", ".bat", ".cmd", ".exe", ".js",
+    ".vbs", ".wsf", ".psm1", ".mjs", ".cjs", ".rb", ".pl", ".dll", ".jar", ".msi", ".com",
+)
 _SKIP_DIRS = {"__pycache__", ".git"}
 _SHARE_NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
 _RESERVED_NAMES = {"mine"}
@@ -43,10 +46,14 @@ def bundle_sha256(data: bytes) -> str:
 
 
 def has_scripts(files: dict[str, bytes]) -> bool:
+    summary = summarize_package(files)
+    if summary["has_tools"] or summary["hooks"] or summary["bin"] or summary["mcp_servers"]:
+        return True
     for path in files:
-        if path.startswith(("scripts/", "bin/")) or "/scripts/" in path or "/bin/" in path:
+        lowered = path.lower()
+        if lowered.startswith(("scripts/", "bin/")) or "/scripts/" in lowered or "/bin/" in lowered:
             return True
-        if path.lower().endswith(_SCRIPT_SUFFIXES):
+        if lowered.endswith(_SCRIPT_SUFFIXES):
             return True
     return False
 
