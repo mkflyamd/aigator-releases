@@ -16,6 +16,16 @@ Use this skill to run terminal commands — git operations, npm/pip builds, batc
 - User asks to run a .py, .ps1, or .sh script via command line
 - Any task that requires a full terminal operation
 
+## When run_shell cannot do it: run_on_host
+
+Some commands cannot work inside the sandbox: node, npm, git or gh installed under Program Files, sign-in prompts, anything that needs the user's own network, VPN, proxy, certificates or credentials, and publishing or pushing the user asked for. For these, call `run_on_host` instead of asking the user to open a terminal and paste.
+
+- It shows the user a card with the exact command, folder and shell. Nothing runs until they click Run. They can click Cancel.
+- Give a one-sentence `reason` that says why the command is needed and why it cannot run in the sandbox.
+- After calling it, stop and wait. When the user says they ran it, call `host_command_result` with the `request_id` to read stdout, stderr and the exit code. If they cancelled, do not propose it again.
+- One foreground command that ends by itself. No servers, no interactive prompts. Delete operations are refused.
+- Try `run_shell` first for ordinary build and scratch work; use `run_on_host` when the sandbox is the obstacle.
+
 ## Prefer file_ops for simple file tasks
 
 Use read_file, write_file, list_dir from file_ops instead of run_shell when you only need to read or list files. run_shell is for operations that need the full shell environment.
