@@ -1,5 +1,6 @@
 import os
 import shutil
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -70,6 +71,31 @@ def test_install_node_shim_restores_a_tampered_copy_and_ignores_envs_without_it(
     assert shim.read_text(encoding="utf-8") == original
     sandbox.install_node_shim(sandbox.build_env({}, tmp_path / "other", None, platform="linux"))
     assert not (tmp_path / "other").exists()
+
+
+@pytest.mark.parametrize("plant", ["file_at_gator", "dir_at_shim", "read_only_shim", "link_at_gator"])
+def test_install_node_shim_recovers_from_whatever_sandboxed_code_planted(tmp_path, plant):
+    env = sandbox.build_env({}, tmp_path, None, platform="win32")
+    gator, shim = tmp_path / ".gator", tmp_path / ".gator" / "node-shim.js"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    if plant == "file_at_gator":
+        gator.write_text("x", encoding="utf-8")
+    elif plant == "dir_at_shim":
+        (shim / "sub").mkdir(parents=True)
+        (shim / "sub" / "f.txt").write_text("x", encoding="utf-8")
+    elif plant == "read_only_shim":
+        gator.mkdir()
+        shim.write_text("x", encoding="utf-8")
+        shim.chmod(stat.S_IREAD)
+    else:
+        try:
+            os.symlink(outside, gator, target_is_directory=True)
+        except OSError:
+            pytest.skip("cannot create symlinks here")
+    sandbox.install_node_shim(env)
+    assert "asyncNative" in shim.read_text(encoding="utf-8")
+    assert not list(outside.iterdir())
 
 
 def test_build_env_posix(tmp_path):

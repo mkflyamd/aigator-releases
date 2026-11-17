@@ -12,7 +12,9 @@ from __future__ import annotations
 import logging
 import os
 import re
+import shutil
 import signal
+import stat
 import subprocess
 import sys
 import threading
@@ -181,8 +183,32 @@ def install_node_shim(env: Mapping[str, str]) -> None:
     if match is None:
         return
     shim = Path(match.group(1))
-    shim.parent.mkdir(parents=True, exist_ok=True)
+    parent = shim.parent
+    if _is_link(parent) or (parent.exists() and not parent.is_dir()):
+        _remove_planted(parent)
+    parent.mkdir(parents=True, exist_ok=True)
+    if _is_link(shim) or shim.exists():
+        _remove_planted(shim)
     shim.write_text(_NODE_SHIM.read_text(encoding="utf-8"), encoding="utf-8", newline="\n")
+
+
+def _is_link(path: Path) -> bool:
+    return os.path.islink(path) or os.path.isjunction(path)
+
+
+def _remove_planted(path: Path) -> None:
+    """Remove whatever sandboxed code left at path (file, read-only file, hard link, directory, or a link
+    that would send our write outside the run folder) so the shim can always be rewritten."""
+    if _is_link(path):
+        try:
+            os.unlink(path)
+        except OSError:  # Windows removes a directory link or junction with rmdir
+            os.rmdir(path)
+    elif path.is_dir():
+        shutil.rmtree(path, onexc=lambda func, p, _exc: (os.chmod(p, stat.S_IWRITE), func(p)))
+    else:
+        os.chmod(path, stat.S_IWRITE)
+        path.unlink()
 
 
 def build_env(parent: Mapping[str, str], run_dir: Path, node_path: str | None,
