@@ -67,15 +67,15 @@ def _every_built_in_tool():
 
 
 def test_every_built_in_tool_is_classified_or_reviewed_as_having_no_data_source():
-    unreviewed = sorted(_every_built_in_tool() - set(actions.BUILTIN_ACTIONS) - NO_GATE - set(ds._PER_CALL_TOOLS))
+    unreviewed = sorted(_every_built_in_tool() - set(actions.BUILTIN_ACTIONS) - NO_GATE - set(ds.PER_CALL_TOOLS))
     assert not unreviewed, f"classify in web/permissions/actions.py, or add to NO_GATE here after review: {unreviewed}"
 
 
 def test_the_no_gate_list_names_only_unclassified_tools_that_exist():
     assert sorted(NO_GATE - _every_built_in_tool()) == []
     assert sorted(NO_GATE & set(actions.BUILTIN_ACTIONS)) == []
-    assert sorted(NO_GATE & set(ds._PER_CALL_TOOLS)) == []
-    assert sorted(set(ds._PER_CALL_TOOLS) - _every_built_in_tool()) == []
+    assert sorted(NO_GATE & set(ds.PER_CALL_TOOLS)) == []
+    assert sorted(set(ds.PER_CALL_TOOLS) - _every_built_in_tool()) == []
 
 
 def test_every_action_type_is_one_of_the_four():
@@ -454,3 +454,25 @@ async def test_the_wizard_doc_fetch_refuses_a_url_that_could_carry_data_out_befo
 def test_an_image_url_with_a_page_id_but_no_filename_is_still_fetched_from_the_website():
     source = ds.source_for_call("fetch_image", {"url": "https://img.example.test/a.png", "page_id": "1"})
     assert source.key == "web:img.example.test"
+
+
+async def test_a_setup_card_is_shown_only_after_the_calls_before_it_in_the_batch_finish():
+    finished = []
+
+    async def execute_tool(name, inputs):
+        await asyncio.sleep(0.05)
+        finished.append(name)
+        return {"ok": True}
+
+    _, run_all, _ = _make_tool_runner(execute_tool, frozenset(), {}, lambda n, r: None, "safe", context_id="tab-a")
+    queue = asyncio.Queue()
+    calls = [_tc("extension_setup__set_field", {"session_id": "s1", "field_path": "url", "value": "x"}, "c1"),
+             _tc("extension_setup__test_connection", {"session_id": "s1"}, "c2")]
+    task = asyncio.create_task(run_all(calls, queue))
+    while True:
+        evt = await asyncio.wait_for(queue.get(), 5)
+        if evt["kind"] == "browser_confirm":
+            break
+    assert finished == ["extension_setup__set_field"]
+    resolve_browser_confirm(evt["confirm_id"], False, "once")
+    await task

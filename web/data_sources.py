@@ -89,7 +89,7 @@ def _mcp_source(tool_name: str, inputs: dict | None = None) -> Source | None:
 
 # Tools that run a command, start a sign-in or probe a server on the model's say-so. Each call gets its own card and is
 # refused in an unattended run. tool -> (label, card title, what the call does).
-_PER_CALL_TOOLS = {
+PER_CALL_TOOLS = {
     "connect_mcp_server": (
         "an MCP server connection",
         "Connect this MCP server?",
@@ -133,8 +133,8 @@ def source_for_call(tool_name: str, inputs: dict | None) -> Source | None:
         if not host:
             return None
         return Source(key=f"web:{host}", label=f"the website {host}", kind="web", flow_id="web")
-    if tool_name in _PER_CALL_TOOLS:
-        return Source(key=f"setup:{tool_name}", label=_PER_CALL_TOOLS[tool_name][0], kind="data",
+    if tool_name in PER_CALL_TOOLS:
+        return Source(key=f"setup:{tool_name}", label=PER_CALL_TOOLS[tool_name][0], kind="data",
                       action=actions.IRREVERSIBLE, per_call=True)
     return _native_source(tool_name, inputs) or _mcp_source(tool_name, inputs)
 
@@ -193,7 +193,7 @@ def _call_details(inputs: dict | None, tool_name: str = "") -> str:
     if not inputs:
         return ""
     shown = _shown_keys(tool_name) if tool_name else None
-    setup = tool_name in _PER_CALL_TOOLS
+    setup = tool_name in PER_CALL_TOOLS
     if setup:
         inputs = _setup_view(tool_name, inputs)
     parts = []
@@ -217,8 +217,8 @@ def prompt_for(source: Source, tool_name: str, inputs: dict | None = None) -> di
             url = url[:_CARD_URL_MAX] + "..."
         shown = "\nAddress: " + url if url else ""
         action = f"AI Gator wants to open {source.label}, which this tab has not used yet.{shown}"
-    elif source.per_call and tool_name in _PER_CALL_TOOLS:
-        _label, title, what = _PER_CALL_TOOLS[tool_name]
+    elif source.per_call and tool_name in PER_CALL_TOOLS:
+        _label, title, what = PER_CALL_TOOLS[tool_name]
         return {
             "title": title,
             "action": (f"AI Gator wants to {what} (tool: {tool_name}). You are asked every time."

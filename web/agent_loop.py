@@ -1191,7 +1191,9 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
     async def _run_all_into_queue(tool_calls, event_queue):
         try:
             has_com = any(tc.name in COM_BOUND_TOOLS for tc in tool_calls)
-            if has_com or len(tool_calls) == 1:
+            # A setup call's card shows the form draft, so no sibling call may edit it between card and run.
+            has_setup = any(tc.name in data_sources.PER_CALL_TOOLS for tc in tool_calls)
+            if has_com or has_setup or len(tool_calls) == 1:
                 results = []
                 for tc in tool_calls:
                     try:
