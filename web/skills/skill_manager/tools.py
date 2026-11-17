@@ -158,6 +158,11 @@ def _tool_create_skill(
     }
 
 
+def _received_from_a_share(skill_id: str) -> bool:
+    entry = next((e for e in load_installed() if e.get("id") == skill_id), None)
+    return bool(entry and entry.get("share_source") and entry.get("tier") != "Mine")
+
+
 def _tool_update_skill(
     skill_id: str,
     content: str,
@@ -180,6 +185,12 @@ def _tool_update_skill(
             }
         return {
             "error": f"Skill '{skill_id}' not found. Use list_skills to see available skills."
+        }
+
+    if _received_from_a_share(skill_id):
+        return {
+            "error": f"Skill '{skill_id}' was shared with you, so it is read-only. "
+            "Ask the author for a new version, or write your own skill with create_skill."
         }
 
     existing = skill_md.read_text(encoding="utf-8")
