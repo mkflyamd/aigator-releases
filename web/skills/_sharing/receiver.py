@@ -54,6 +54,11 @@ def _fetch(provider, ref: dict, version: int | None) -> dict:
         raise ShareError("not_found", f"Version {wanted} of this shared skill is incomplete.")
     manifest, zip_bytes = manifest_read[0], bundle_read[0]
     _check_manifest(manifest, wanted)
+    listed = next((v for v in doc["versions"] if v.get("version") == wanted), None)
+    if listed is None:
+        raise ShareError("invalid", "This shared skill's version list is damaged, so it was not opened.")
+    if listed.get("files_digest") != manifest["files_digest"]:
+        raise ShareError("tampered", "The published version does not match its manifest.")
 
     if bundle.bundle_sha256(zip_bytes) != manifest["bundle_sha256"]:
         raise ShareError("tampered", "The downloaded skill does not match what the author published.")
