@@ -15,6 +15,22 @@ _spec.loader.exec_module(audit)
 
 TODAY = date(2026, 11, 17)
 PICOMATCH_GHSA = "GHSA-fc5q-39xc-vjpf"
+LIVE_POLICY = dict(audit.ACCEPTED_ADVISORIES)
+TEST_POLICY = {
+    PICOMATCH_GHSA: {
+        "package": "picomatch",
+        "severity": "high",
+        "reason": "test reason",
+        "owner": "test owner",
+        "review_by": date(2026, 12, 17),
+        "tracking": "https://example.invalid/issues/1",
+    },
+}
+
+
+@pytest.fixture(autouse=True)
+def _fixed_policy(monkeypatch):
+    monkeypatch.setattr(audit, "ACCEPTED_ADVISORIES", TEST_POLICY)
 
 
 def advisory(ghsa, name, severity="high"):
@@ -81,6 +97,10 @@ def test_only_accepted_picomatch_advisory_passes_with_waiver(capsys):
     assert f"Advisory: {PICOMATCH_GHSA}" in out
     assert "Package: picomatch" in out
     assert "Review by: 2026-12-17" in out
+    assert "Reason: test reason" in out
+    assert "Owner: test owner" in out
+    assert "Tracking: https://example.invalid/issues/1" in out
+    assert "Affected packages: fdir, picomatch, tinyglobby" in out
     assert "Blocking vulnerabilities: 0" in out
 
 
@@ -205,18 +225,104 @@ def test_unreadable_lockfile_fails_closed(tmp_path):
         audit.load_dev_nodes(tmp_path / "missing.json")
 
 
-def test_real_lockfile_marks_picomatch_dev_only():
-    assert "node_modules/picomatch" in audit.load_dev_nodes()
+def test_live_waivers_cover_only_dev_packages_in_the_real_lockfile():
+    dev_nodes = audit.load_dev_nodes()
+    for waiver in LIVE_POLICY.values():
+        assert f"node_modules/{waiver['package']}" in dev_nodes
+
+
+def test_waiver_refused_when_npm_lists_no_installed_copies():
+    vulns = picomatch_tree()
+    vulns["picomatch"]["nodes"] = []
+    result = evaluate(report(vulns))
+    assert [a.id for a in result.blocking] == [PICOMATCH_GHSA]
+
+
+def test_non_ghsa_advisory_url_is_never_waived():
+    vulns = picomatch_tree()
+    vulns["picomatch"]["via"][0]["url"] = f"https://npmjs.com/advisories/{PICOMATCH_GHSA}"
+    result = evaluate(report(vulns))
+    assert [a.id for a in result.blocking] == [f"https://npmjs.com/advisories/{PICOMATCH_GHSA}"]
+
+
+def test_low_and_info_findings_do_not_block():
+    vulns = {
+        "a": entry("a", "low", [advisory("GHSA-aaaa-bbbb-cccc", "a", "low")]),
+        "b": entry("b", "info", [advisory("GHSA-dddd-eeee-ffff", "b", "info")]),
+    }
+    result = evaluate(report(vulns))
+    assert result.blocking == [] and result.waived == []
+
+
+def test_critical_count_mismatch_fails():
+    bad = report(picomatch_tree())
+    bad["metadata"]["vulnerabilities"]["critical"] = 1
+    with pytest.raises(audit.AuditError, match="metadata reports"):
+        evaluate(bad)
+
+
+def test_waiver_warns_before_expiry(capsys):
+    result = evaluate(report(picomatch_tree()), today=date(2026, 12, 10))
+    assert result.blocking == []
+    audit.report_npm_audit(result)
+    assert "WARNING: Waiver for GHSA-fc5q-39xc-vjpf expires in 7 day(s)" in capsys.readouterr().out
+
+
+def test_no_expiry_warning_well_before_review_date():
+    result = evaluate(report(picomatch_tree()))
+    assert not any("expires in" in note for note in result.notes)
 
 
 def _fake_npm(monkeypatch, returncode=1, stdout="", stderr=""):
+    calls = []
+
+    def fake_run(*args, **kwargs):
+        calls.append((args, kwargs))
+        return subprocess.CompletedProcess(args, returncode, stdout, stderr)
+
     monkeypatch.setattr(audit, "load_dev_nodes", lambda: ALL_DEV)
     monkeypatch.setattr(audit.shutil, "which", lambda _: "npm")
-    monkeypatch.setattr(
-        audit.subprocess,
-        "run",
-        lambda *a, **k: subprocess.CompletedProcess(a, returncode, stdout, stderr),
-    )
+    monkeypatch.setattr(audit.subprocess, "run", fake_run)
+    return calls
+
+
+def test_npm_runs_lockfile_only_json_audit_with_timeout(monkeypatch):
+    calls = _fake_npm(monkeypatch, stdout=json.dumps(report({})))
+    audit.check_npm(TODAY)
+    (args, kwargs), = calls
+    assert args[0] == ["npm", "audit", "--package-lock-only", "--json"]
+    assert kwargs["timeout"] == audit.NPM_TIMEOUT_SECONDS
+    assert kwargs["cwd"] == ROOT / "shell"
+
+
+@pytest.mark.parametrize("uv_rc, npm_vulns, expected", [
+    (1, {}, 1),
+    (0, {"lodash": entry("lodash", "high", [advisory("GHSA-aaaa-bbbb-cccc", "lodash")])}, 1),
+    (0, None, 0),
+])
+def test_main_combines_uv_and_npm_results(monkeypatch, uv_rc, npm_vulns, expected):
+    _fake_npm(monkeypatch, stdout=json.dumps(report(picomatch_tree() if npm_vulns is None else npm_vulns)))
+    monkeypatch.setattr(audit, "run", lambda command: uv_rc)
+    monkeypatch.setattr(audit, "date", FixedDate)
+    assert audit.main() == expected
+
+
+class FixedDate(date):
+    @classmethod
+    def today(cls):
+        return TODAY
+
+
+class DayAfterReview(date):
+    @classmethod
+    def today(cls):
+        return date(2026, 12, 18)
+
+
+def test_check_npm_defaults_to_today(monkeypatch):
+    _fake_npm(monkeypatch, stdout=json.dumps(report(picomatch_tree())))
+    monkeypatch.setattr(audit, "date", DayAfterReview)
+    assert audit.check_npm() == 1
 
 
 def test_check_npm_fails_with_blocking_finding(monkeypatch, capsys):
@@ -250,9 +356,10 @@ def test_npm_network_failure_fails(monkeypatch, capsys):
     assert "failed closed" in capsys.readouterr().out
 
 
-def test_npm_crash_fails(monkeypatch):
-    _fake_npm(monkeypatch, returncode=254, stderr="boom")
+def test_npm_crash_fails_even_with_a_passing_report(monkeypatch, capsys):
+    _fake_npm(monkeypatch, returncode=254, stdout=json.dumps(report(picomatch_tree())), stderr="boom")
     assert audit.check_npm(TODAY) == 1
+    assert "exited with 254" in capsys.readouterr().out
 
 
 def test_npm_non_json_output_fails(monkeypatch):
@@ -271,7 +378,9 @@ def test_check_npm_passes_with_only_waived_finding(monkeypatch):
 
 
 def test_waiver_records_required_fields():
-    for ghsa, waiver in audit.ACCEPTED_ADVISORIES.items():
+    for ghsa, waiver in LIVE_POLICY.items():
+        assert waiver["severity"] in audit.BLOCKING_SEVERITIES
+        assert waiver["owner"] != "TBD"
         assert audit.GHSA_URL.match(f"https://github.com/advisories/{ghsa}")
         assert waiver["package"] and waiver["reason"] and waiver["owner"]
         assert isinstance(waiver["review_by"], date)

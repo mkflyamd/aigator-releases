@@ -13,6 +13,7 @@ KNOWN_SEVERITIES = {"info", "low", "moderate", "high", "critical"}
 GHSA_URL = re.compile(r"^https://github\.com/advisories/(GHSA(?:-[0-9a-z]{4}){3})$")
 
 NPM_TIMEOUT_SECONDS = 300
+EXPIRY_WARNING_DAYS = 14
 
 # Each entry waives exactly one GHSA for exactly one package, at exactly the
 # reviewed severity, only while every installed copy is a dev dependency, until
@@ -191,6 +192,12 @@ def evaluate_npm_audit(report: object, today: date, dev_nodes: set[str]) -> Audi
             blocking.add(advisory)
         else:
             waived[advisory] = packages
+            days_left = (waiver["review_by"] - today).days
+            if days_left <= EXPIRY_WARNING_DAYS:
+                notes.append(
+                    f"Waiver for {advisory.id} expires in {days_left} day(s) on "
+                    f"{waiver['review_by'].isoformat()}; renew or remove it."
+                )
 
     matched = {a.id for a in affected}
     for advisory_id in sorted(ACCEPTED_ADVISORIES.keys() - matched):
