@@ -9,6 +9,7 @@ suppresses that. No-op on non-Windows platforms.
 
 import logging
 import os
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -21,6 +22,31 @@ def no_window_kwargs() -> dict:
     if sys.platform == "win32":
         return {"creationflags": subprocess.CREATE_NO_WINDOW}
     return {}
+
+
+def group_kwargs() -> dict:
+    """Popen kwargs that start the child in its own process group (Windows) or session (POSIX), with no console window."""
+    if sys.platform == "win32":
+        return {"creationflags": subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP}
+    return {"start_new_session": True}
+
+
+def kill_process_tree(proc: subprocess.Popen) -> None:
+    """Kill a child started with group_kwargs() and everything it spawned."""
+    if sys.platform == "win32":
+        subprocess.run(
+            ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+            capture_output=True, check=False, creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    else:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+    try:
+        proc.kill()
+    except OSError:
+        pass
 
 
 # ── Output-file reporter ─────────────────────────────────────────────────────

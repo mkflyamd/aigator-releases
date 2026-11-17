@@ -11829,6 +11829,191 @@ function _showGithubSsoCard(data, ownerTabId) {
   _pinConfirmCardInView(card);
 }
 
+// Card for run_on_host: the user reads the exact command, then clicks Run (it runs on their
+// computer, outside the sandbox) or Cancel. The model can only create the request.
+function _renderHostCommandCard(data, requestId, cardTab, tabId) {
+  const card = document.createElement('div');
+  card.className = 'message assistant';
+  card.dataset.sandboxRequest = requestId;
+  const bubble = document.createElement('div');
+  bubble.className = 'bubble card-bubble';
+  const box = document.createElement('div');
+  box.className = 'gator-compose-card gator-draft-card';
+
+  const header = document.createElement('div');
+  header.className = 'gcc-header';
+  const title = document.createElement('div');
+  title.className = 'gcc-title';
+  title.textContent = 'AI Gator wants you to run a command';
+  header.appendChild(title);
+
+  const body = document.createElement('div');
+  body.className = 'gcc-body';
+  const addRow = (label, value, asPre, wrap) => {
+    if (typeof value !== 'string' || !value) return;
+    const row = document.createElement('div');
+    row.className = 'gcc-field-row gcc-field-row--block';
+    const key = document.createElement('span');
+    key.className = 'gcc-field-key';
+    key.textContent = label;
+    const val = document.createElement(asPre ? 'pre' : 'span');
+    val.className = wrap ? 'gcc-field-val gcc-field-val--wrap' : 'gcc-field-val';
+    val.textContent = value;
+    row.append(key, val);
+    body.appendChild(row);
+  };
+  const lineCount = typeof data.command === 'string' ? data.command.split(/\r?\n/).length : 0;
+  addRow('Why', data.reason, false);
+  addRow('Command', data.command, true, true);
+  if (lineCount > 1) {
+    const lines = document.createElement('div');
+    lines.className = 'gcc-refine';
+    lines.textContent = `This command has ${lineCount} lines. Read all of them before you click Run.`;
+    body.appendChild(lines);
+  }
+  addRow('Folder', data.cwd, false);
+  addRow('Shell', data.shell, false);
+  if (Array.isArray(data.risks) && data.risks.length) {
+    const warn = document.createElement('div');
+    warn.className = 'gcc-refine';
+    warn.textContent = `Check carefully: ${data.risks.join('; ')}.`;
+    body.appendChild(warn);
+  }
+  if (data.cwd_is_ai_workspace) {
+    const work = document.createElement('div');
+    work.className = 'gcc-refine';
+    work.textContent =
+      "This is AI Gator's own working folder. Files in it were written by the AI, so a script here runs code the AI wrote.";
+    body.appendChild(work);
+  }
+  const removed = Number(data.env_removed) || 0;
+  if (removed > 0) {
+    const env = document.createElement('div');
+    env.className = 'gcc-refine';
+    env.textContent = `${removed} environment variable${removed === 1 ? '' : 's'} removed (tokens, keys and passwords stay out of the command).`;
+    body.appendChild(env);
+  }
+  const note = document.createElement('div');
+  note.className = 'gcc-refine';
+  note.textContent =
+    'Runs as you on this computer, outside the sandbox, with your own tools, sign-in and network.';
+  body.appendChild(note);
+  const output = document.createElement('pre');
+  output.className = 'gcc-field-val gcc-field-val--wrap';
+  output.hidden = true;
+  body.appendChild(output);
+
+  const actions = document.createElement('div');
+  actions.className = 'gcc-actions';
+  const run = document.createElement('button');
+  run.className = 'gcc-approve-btn';
+  run.textContent = 'Run';
+  const cancel = document.createElement('button');
+  cancel.className = 'btn-secondary';
+  cancel.textContent = 'Cancel';
+  actions.append(run, cancel);
+
+  const footer = document.createElement('div');
+  footer.className = 'gcc-footer';
+  const footNote = document.createElement('span');
+  footNote.className = 'gcc-refine';
+  footNote.textContent = 'Unanswered requests expire after 10 minutes.';
+  footer.appendChild(footNote);
+
+  box.append(header, body, actions, footer);
+  bubble.appendChild(box);
+  card.appendChild(bubble);
+
+  const contextId = typeof data.context_id === 'string' ? data.context_id : tabId;
+  const send = async (action) => {
+    const post = () =>
+      fetch(`/api/host-shell/${encodeURIComponent(requestId)}/${action}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': window.__CSRF_TOKEN__ || '',
+        },
+        body: JSON.stringify({ context_id: contextId }),
+      });
+    let res = await post();
+    if (res.status === 403) {
+      const fresh = await fetch('/api/csrf')
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null);
+      if (fresh?.csrf_token) window.__CSRF_TOKEN__ = fresh.csrf_token;
+      res = await post();
+    }
+    if (!res.ok) {
+      const detail = await res.json().catch(() => ({}));
+      throw new Error(detail?.detail || `HTTP ${res.status}`);
+    }
+    return res.json();
+  };
+  let running = false;
+  const decide = async (action) => {
+    if (run.disabled) return;
+    run.disabled = true;
+    if (action === 'run') {
+      running = true;
+      cancel.textContent = 'Stop';
+      footNote.textContent = 'Running...';
+    } else {
+      cancel.disabled = true;
+    }
+    try {
+      const out = await send(action);
+      actions.remove();
+      _pendingSandboxCards.get(cardTab)?.delete(requestId);
+      if (action === 'cancel') {
+        footNote.textContent = 'Cancelled.';
+        _sendSandboxFollowUp(
+          tabId,
+          `Cancelled. I did not run command request ${requestId}. Do not retry it; carry on without it, or ask me what I want.`,
+        ).catch((e) => console.warn('[host-shell] follow-up not sent:', e));
+        return;
+      }
+      const result = out.result || {};
+      const text = [result.stdout, result.stderr, result.error].filter(Boolean).join('\n');
+      output.textContent = text || '(no output)';
+      output.hidden = false;
+      footNote.textContent =
+        result.exit_code === 0
+          ? 'Finished (exit code 0).'
+          : `Finished (exit code ${result.exit_code}).`;
+      _sendSandboxFollowUp(
+        tabId,
+        `I ran command request ${requestId}. Call host_command_result with that request_id to read the output.`,
+      ).catch((e) => console.warn('[host-shell] follow-up not sent:', e));
+    } catch (err) {
+      running = false;
+      run.disabled = false;
+      cancel.disabled = false;
+      cancel.textContent = 'Cancel';
+      footNote.textContent = 'Unanswered requests expire after 10 minutes.';
+      _showConnectivityToast(`Could not record your decision: ${err.message}`, 'warn');
+    }
+  };
+  run.addEventListener('click', (e) => {
+    e.stopPropagation();
+    decide('run');
+  });
+  cancel.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (!running) {
+      decide('cancel');
+      return;
+    }
+    cancel.disabled = true;
+    footNote.textContent = 'Stopping...';
+    send('cancel').catch((err) => {
+      cancel.disabled = false;
+      _showConnectivityToast(`Could not stop the command: ${err.message}`, 'warn');
+    });
+  });
+  document.getElementById('messages')?.appendChild(card);
+  card.scrollIntoView({ behavior: 'smooth', block: 'end' });
+}
+
 function _showSandboxApproval(data, ownerTabId) {
   const requestId = data && typeof data.request_id === 'string' ? data.request_id : '';
   if (!requestId) return;
@@ -11845,6 +12030,10 @@ function _showSandboxApproval(data, ownerTabId) {
     (el) => el.dataset.sandboxRequest === requestId,
   );
   if (seen) return;
+  if (data.tool === 'run_on_host') {
+    _renderHostCommandCard(data, requestId, cardTab, ownerTabId || _activeTabId || 'default');
+    return;
+  }
   const card = document.createElement('div');
   card.className = 'message assistant';
   card.dataset.sandboxRequest = requestId;

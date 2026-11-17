@@ -15,12 +15,14 @@ from uuid import uuid4
 import sandbox
 from sandbox import approvals as sandbox_approvals
 import permissions
-from sandbox import saved_permissions, task_grants
+from sandbox import host_requests, saved_permissions, task_grants
 from sandbox.command_programs import programs_in
 from sandbox.paths import PathNotGrantable, is_within, normalize_grant_paths
 from sandbox.policy import load_policy
 
 from proc_utils import (
+    group_kwargs,
+    kill_process_tree,
     no_window_kwargs,
     watched_output_dirs,
     snapshot_outputs,
@@ -142,6 +144,14 @@ _HEREDOC_RE = re.compile(
     re.DOTALL | re.MULTILINE,
 )
 
+# Words that can precede the real command in a statement (loop bodies, conditionals, wrappers)
+_COMMAND_PREFIXES = {
+    "sudo", "command", "exec", "time", "nohup", "xargs",
+    "do", "then", "else", "elif", "if", "while", "until", "!", "{", "(",
+}
+# Wrapper options that take a separate value (xargs -I {}, sudo -u root), so the value is not mistaken for the command
+_PREFIX_VALUE_FLAGS = {"-i", "-I", "-n", "-P", "-L", "-s", "-d", "-E", "-a", "-u", "-g", "-C", "-h", "-p"}
+
 # Shell statement separators — split command into individual statements
 _STATEMENT_SEP_RE = re.compile(r"(?:;|&&|\|\||\||\n|\r)")
 
@@ -166,16 +176,19 @@ def _find_delete_command(command: str):
         # Strip leading env-var assignments and sudo/command prefixes
         tokens = stmt.split()
         idx = 0
-        while idx < len(tokens) and (
-            "=" in tokens[idx]
-            and not tokens[idx].startswith(("-", "/"))
-            or tokens[idx] in ("sudo", "command", "exec", "time", "nohup")
-        ):
-            idx += 1
+        while idx < len(tokens):
+            if "=" in tokens[idx] and not tokens[idx].startswith(("-", "/")):
+                idx += 1
+            elif tokens[idx] in _COMMAND_PREFIXES:
+                idx += 1
+                while idx < len(tokens) and tokens[idx].startswith("-"):
+                    idx += 2 if tokens[idx] in _PREFIX_VALUE_FLAGS else 1
+            else:
+                break
         if idx >= len(tokens):
             continue
         raw = tokens[idx]
-        first = raw.lower().lstrip("\\/")
+        first = raw.lower().lstrip("\\/({")
         # Handle path-prefixed commands like /usr/bin/rm or ./rm
         first = first.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
         if first in _DELETE_COMMANDS:
@@ -811,12 +824,34 @@ def _run_sandboxed(cr, command, shell, cwd, timeout, background, requested, poli
     return result
 
 
-def _run_unsandboxed(command, shell, cwd, timeout, background) -> dict:
+def _run_captured(argv, cwd, env, timeout, on_start=None):
+    """Run argv to completion in its own process group; on timeout kill the whole tree, not just the shell."""
+    proc = subprocess.Popen(
+        argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, encoding="utf-8", errors="replace", **group_kwargs(),
+    )
+    if on_start is not None:
+        on_start(proc)
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        kill_process_tree(proc)
+        try:
+            proc.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            for stream in (proc.stdout, proc.stderr):
+                stream.close()
+            proc.wait()
+        raise
+    return proc.returncode, out, err
+
+
+def _run_unsandboxed(command, shell, cwd, timeout, background, env=None, as_typed=False, on_start=None) -> dict:
     # Windows auto-correct: `python3` doesn't exist on Windows (it opens the
     # Microsoft Store stub). The model often uses `python3` out of habit from
     # Linux/macOS. Replace with `python` on Windows only — `python` is the
     # correct command on Windows (python.org installer adds it to PATH).
-    if sys.platform == "win32":
+    if sys.platform == "win32" and not as_typed:
         command = re.sub(r'\bpython3\b', 'python', command)
 
     # Resolve which shell to use
@@ -856,7 +891,8 @@ def _run_unsandboxed(command, shell, cwd, timeout, background) -> dict:
         argv_prefix = _DETECTED_ARGV
         shell_used = _DETECTED_SHELL
 
-    command = _route_frozen_python(command, shell_used)
+    if not as_typed:
+        command = _route_frozen_python(command, shell_used)
 
     # When the caller targets a specific project, honor it. Otherwise default to
     # an app-owned scratch dir (~/.gator/work) instead of the user's home/repo,
@@ -885,38 +921,29 @@ def _run_unsandboxed(command, shell, cwd, timeout, background) -> dict:
 
     start = time.monotonic()
     try:
-        proc = subprocess.run(
-            argv_prefix + [command],
-            cwd=cwd_path,
-            capture_output=True,
-            timeout=timeout,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            **no_window_kwargs(),
-        )
+        returncode, stdout, stderr = _run_captured(argv_prefix + [command], cwd_path, env, timeout, on_start)
         elapsed_ms = int((time.monotonic() - start) * 1000)
         result = {
-            "stdout": proc.stdout or "",
-            "stderr": proc.stderr or "",
-            "exit_code": proc.returncode,
+            "stdout": stdout or "",
+            "stderr": stderr or "",
+            "exit_code": returncode,
             "shell_used": shell_used,
             "runtime_ms": elapsed_ms,
         }
         _new_files = diff_outputs(_before, _watch_dirs)
         if _new_files:
             result["output_files"] = _new_files
-        if proc.returncode != 0:
+        if returncode != 0:
             # Include the actual failure text, not just the exit code — the stall
             # banner in agent_loop.py truncates this to 160 chars, so lead with the
             # part that explains *why* the command failed. stderr is usually where
             # that lives; some tools (e.g. npm) only print the reason to stdout.
-            _tail = (proc.stderr or proc.stdout or "").strip().splitlines()
+            _tail = (stderr or stdout or "").strip().splitlines()
             _reason = " ".join(_tail[-3:]) if _tail else ""
             result["error"] = (
-                f"Command exited with code {proc.returncode}: {_reason}"
+                f"Command exited with code {returncode}: {_reason}"
                 if _reason
-                else f"Command exited with code {proc.returncode}"
+                else f"Command exited with code {returncode}"
             )
         return result
 
@@ -981,6 +1008,119 @@ def _tool_run_shell(
     if mode == "off":
         return _run_unsandboxed(command, shell, cwd, timeout, background)
     return _run_sandboxed(cr, command, shell, cwd, sandbox.clamp_run_timeout(timeout), background, requested, policy, _context_id)
+
+
+# ── run_on_host: a command the user runs on their own machine by clicking Run ──
+_HOST_COMMAND_MAX = 4000
+_HOST_DISABLED_MSG = (
+    "Running commands on the user's computer is turned off by their administrator. Do not retry. "
+    "Tell the user the exact command and ask them to run it themselves."
+)
+_HOST_AWAITING_MSG = (
+    "A card showing this exact command is now in the chat; nothing has run. Tell the user in one sentence "
+    "what it does and why, then stop and wait. When the user says they ran it, call host_command_result "
+    "with this request_id to read the output. If they decline, do not retry."
+)
+
+
+def _tail(text: str) -> str:
+    limit = host_requests.OUTPUT_LIMIT
+    if len(text) <= limit:
+        return text
+    return f"[first {len(text) - limit} characters omitted]\n" + text[-limit:]
+
+
+def run_host_request(req) -> dict:
+    """Run an approved request outside the sandbox with the user's own environment (secrets removed)."""
+    result = _run_unsandboxed(req.command, req.shell, req.cwd, req.timeout, False,
+                              env=host_requests.host_env(os.environ), as_typed=True,
+                              on_start=lambda proc: host_requests.attach(req.id, proc))
+    result["stdout"] = _tail(result.get("stdout") or "")
+    result["stderr"] = _tail(result.get("stderr") or "")
+    result["ran_on"] = "host"
+    result["cwd"] = req.cwd
+    return result
+
+
+def _tool_run_on_host(
+    command: str,
+    shell: str = "",
+    cwd: str = "",
+    reason: str = "",
+    timeout: int = 120,
+    _context_id: str = "",
+) -> dict:
+    """Ask the user to run a command on their own computer. Nothing runs until they click Run."""
+    from config import WORK_DIR
+
+    if not _context_id:
+        return _shell_error("run_on_host needs a person to click Run, so it cannot be used in an unattended run.")
+    policy = load_policy()
+    if policy.require_sandbox or policy.host_shell == "deny":
+        return _shell_error(_HOST_DISABLED_MSG)
+    command = command.strip() if isinstance(command, str) else ""
+    if not command:
+        return _shell_error("command is required.")
+    if len(command) > _HOST_COMMAND_MAX:
+        return _shell_error(
+            f"The command is longer than {_HOST_COMMAND_MAX} characters, so the user cannot review it on the card. "
+            "Write it to a script file and run the script instead.")
+    if host_requests.has_hidden_characters(command) or host_requests.has_hidden_characters(str(cwd or "")):
+        return _shell_error(
+            "The command or folder contains control, escape, bidirectional or zero-width characters, which the user "
+            "cannot see on the card. Send plain text only.")
+    token, position = _find_delete_command(command)
+    if token is not None:
+        return _shell_error(
+            f"Delete operations are blocked: matched command '{token}' at position {position}. "
+            "Ask the user to run this command manually.", _DETECTED_SHELL)
+    if shell not in ("", "bash", "powershell", "cmd"):
+        return _shell_error("shell must be bash, powershell or cmd.")
+    if cwd:
+        folder = Path(str(cwd)).expanduser()
+        if not folder.is_dir():
+            return _shell_error(f"The working folder does not exist: {cwd}")
+        cwd = str(folder.resolve())
+    else:
+        try:
+            WORK_DIR.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            return _shell_error("The default working folder cannot be created. Pass cwd.")
+        cwd = str(WORK_DIR)
+    if not shell and os.name == "nt":
+        shell = "powershell"
+    try:
+        timeout = max(1, min(int(timeout), 600))
+    except (TypeError, ValueError):
+        timeout = 120
+    reason = host_requests.strip_hidden_characters(str(reason or ""))[:500]
+    req = host_requests.create(_context_id, command, cwd, shell, reason, timeout)
+    environment = dict(os.environ)
+    card = {
+        "request_id": req.id, "context_id": req.context_id, "tool": "run_on_host", "command": req.command,
+        "cwd": req.cwd, "shell": req.shell or _DETECTED_SHELL, "reason": req.reason,
+        "risks": list(req.risks), "timeout": req.timeout,
+        "cwd_is_ai_workspace": Path(req.cwd) == Path(WORK_DIR).resolve(),
+        "env_removed": len(environment) - len(host_requests.host_env(environment)),
+    }
+    return {"status": "awaiting_user_click", "request_id": req.id, "message": _HOST_AWAITING_MSG,
+            "_sandbox_approval": card}
+
+
+def _tool_host_command_result(request_id: str, _context_id: str = "") -> dict:
+    """What happened to a command proposed with run_on_host."""
+    status, req = host_requests.lookup(str(request_id or ""), _context_id)
+    if status == "none":
+        return _shell_error("No such command request in this tab. Do not retry; propose the command again.")
+    if status == "expired":
+        return _shell_error("The user did not click Run within 10 minutes. Propose the command again only if they ask.")
+    if status == "pending":
+        return {"status": "pending", "message": "The user has not clicked Run yet. Wait for them; do not propose it again."}
+    if status == "running":
+        return {"status": "running", "message": "The command is still running. Ask the user to tell you when it finishes."}
+    if status == "denied":
+        return {"status": "denied", "message": "The user declined to run it. Do not retry; carry on without it or ask what they want."}
+    return {**(req.result or {}), "status": "done"}
 
 
 TOOL_DEFS = [
@@ -1089,16 +1229,63 @@ TOOL_DEFS = [
             "required": ["pid"],
         },
     },
+    {
+        "name": "run_on_host",
+        "description": (
+            "Propose a command for the user to run on their own computer, outside the sandbox, as themselves, with "
+            "their own PATH, installed tools, git and GitHub sign-in, VPN, proxy and corporate certificates. "
+            "Nothing runs until the user reads the exact command and working folder on a card in the chat and "
+            "clicks Run. Use it when run_shell cannot do the job: node, npm, git or gh that the sandbox cannot start, "
+            "sign-in prompts, anything that needs the user's network or credentials, publishing or pushing the "
+            "user asked for. Try run_shell first for ordinary build or scratch work. One foreground command that "
+            "ends by itself; no servers, no interactive prompts. Never propose a command that deletes files; common "
+            "delete spellings are filtered out, and the card the user reads is the real safeguard. "
+            "After proposing, stop and wait. When the user says they ran it, call host_command_result with the "
+            "request_id. Never propose the same command twice."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "command": {"type": "string", "description": "The exact command line to run."},
+                "cwd": {"type": "string", "description": "Existing folder to run in. Defaults to the app working folder."},
+                "shell": {
+                    "type": "string",
+                    "enum": ["bash", "powershell", "cmd"],
+                    "description": "Shell to use. Defaults to PowerShell on Windows and the detected shell elsewhere.",
+                },
+                "reason": {"type": "string", "description": "One sentence for the user: why this command, and why it cannot run in the sandbox."},
+                "timeout": {"type": "integer", "description": "Seconds before the command is stopped. Default 120, maximum 600."},
+            },
+            "required": ["command", "reason"],
+        },
+    },
+    {
+        "name": "host_command_result",
+        "description": (
+            "Get the outcome of a command proposed with run_on_host: its stdout, stderr and exit code once the user "
+            "has clicked Run, or whether it is still waiting, was declined or expired. Call it only after the user "
+            "says they ran it or asks what happened."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"request_id": {"type": "string", "description": "The request_id returned by run_on_host."}},
+            "required": ["request_id"],
+        },
+    },
 ]
 
 TOOL_STATUS = {
     "run_shell": "Running shell command...",
     "check_shell_process": "Checking background process...",
     "stop_shell_process": "Stopping background process...",
+    "run_on_host": "Preparing a command for you to run...",
+    "host_command_result": "Reading the command result...",
 }
 
 TOOL_HANDLERS = {
     "run_shell": _tool_run_shell,
     "check_shell_process": _tool_check_shell_process,
     "stop_shell_process": _tool_stop_shell_process,
+    "run_on_host": _tool_run_on_host,
+    "host_command_result": _tool_host_command_result,
 }
