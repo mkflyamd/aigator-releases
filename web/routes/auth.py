@@ -351,7 +351,7 @@ async def auth_status():
 
 
 @router.post("/api/auth/device/start")
-async def device_auth_start():
+def device_auth_start():
     from skills._m365.helpers import GraphClient
 
     try:
@@ -369,7 +369,7 @@ async def device_auth_start():
 
 
 @router.post("/api/auth/device/poll")
-async def device_auth_poll(req: DeviceCodePollRequest):
+def device_auth_poll(req: DeviceCodePollRequest):
     from skills._m365.helpers import GraphClient, reset_graph_client
     import logging as _log
 
@@ -408,7 +408,9 @@ async def device_auth_poll(req: DeviceCodePollRequest):
             except Exception as _e:
                 _logger.warning("Could not read stored token after auth: %s", _e)
             return {"ok": True, "message": result["message"]}
-        return {"ok": False, "pending": True}
+        if result.get("status") == "pending":
+            return {"ok": False, "pending": True}
+        return {"ok": False, "pending": False, "error": result.get("error", "Sign-in failed")}
     except Exception as e:
         msg = str(e)
         if "authorization_pending" in msg:
@@ -420,7 +422,7 @@ async def device_auth_poll(req: DeviceCodePollRequest):
 
 
 @router.post("/api/github/tool")
-async def github_tool(req: GithubToolRequest):
+def github_tool(req: GithubToolRequest):
     """Direct tool dispatch for GitHub pane -- bypasses the full agentic loop."""
     from skills.github.tools import TOOL_HANDLERS as _gh_handlers
 
@@ -434,14 +436,14 @@ async def github_tool(req: GithubToolRequest):
 
 
 @router.post("/api/github/pr", dependencies=[Depends(verify_csrf)])
-async def github_get_pr_endpoint(body: dict):
+def github_get_pr_endpoint(body: dict):
     from skills.github.tools import _github_get_pr
 
     return _github_get_pr(body["owner"], body["repo"], body["pr_number"])
 
 
 @router.post("/api/github/issue", dependencies=[Depends(verify_csrf)])
-async def github_get_issue_endpoint(body: dict):
+def github_get_issue_endpoint(body: dict):
     from skills.github.tools import _github_get_issue
 
     return _github_get_issue(body["owner"], body["repo"], body["issue_number"])

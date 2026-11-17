@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 from datetime import datetime
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
@@ -310,9 +311,12 @@ def _best_capability_group(conn_id: str, message: str) -> str | None:
 
 
 def _granted_runners(context_id: str | None) -> list[str]:
-    """Runners the user approved on a request_skill card in this tab."""
+    """Runners approved in this tab, or saved with "Always allow"."""
     import data_sources
-    return [s for s in data_sources.allowed_with_prefix(context_id or "default", "capability:") if s in _GATED_DEP_SKILLS]
+    import permissions
+    granted = {s for s in data_sources.allowed_with_prefix(context_id or "default", "capability:") if s in _GATED_DEP_SKILLS}
+    granted.update(g for g in _GATED_DEP_SKILLS if permissions.decision(context_id, f"capability:{g}") == "allow")
+    return sorted(granted)
 
 
 def _ungranted_gated_deps(req) -> list[str]:
@@ -338,6 +342,7 @@ def _register_dep_approval(context_id: str, dep_ids: list[str]) -> str:
 
 class ApproveDepsRequest(BaseModel):
     approval_id: str
+    scope: Literal["always", "tab"] | None = None
 
 
 @router.post("/api/chat/approve-deps", dependencies=[Depends(verify_csrf)])
@@ -345,14 +350,20 @@ async def approve_deps(body: ApproveDepsRequest):
     """The user clicked Allow on a permission card: grant exactly what that card asked for, for its tab."""
     import time
     import data_sources
+    import permissions
     from fastapi import HTTPException
     entry = _PENDING_DEP_APPROVALS.pop(body.approval_id, None)
     if entry is None or time.monotonic() - entry[2] > _PENDING_DEP_APPROVAL_TTL:
         raise HTTPException(status_code=404, detail="This permission request has expired. Send the message again.")
     context_id, dep_ids, _ = entry
+    applied = "tab"
     for dep in dep_ids:
-        data_sources.allow(context_id, f"capability:{dep}")
-    return {"approved": dep_ids}
+        key = f"capability:{dep}"
+        applied = permissions.apply_scope(context_id, key, "", body.scope)
+        if applied == "once":
+            data_sources.allow(context_id, key)
+            applied = "tab"
+    return {"approved": dep_ids, "scope": applied}
 
 
 _RUNNER_REASONS = {
@@ -383,6 +394,7 @@ def _permission_gate_response(blocked: list[tuple[str, dict]], context_id: str):
     """Answer the chat POST with a permission_required event instead of running the turn."""
     import asyncio as _asyncio
     import uuid as _uuid
+    import permissions
     from fastapi.responses import JSONResponse
 
     def _dep_label(dep_id: str) -> str:
@@ -391,6 +403,12 @@ def _permission_gate_response(blocked: list[tuple[str, dict]], context_id: str):
                 return line[2:].strip()
         return dep_id.replace("-", " ").title()
 
+    cards = [c for c in (permissions.card_options(f"capability:{dep['id']}") for _, dep in blocked) if c]
+    card = None
+    if cards:
+        scopes = [sc for sc in cards[0]["scopes"] if all(sc in c["scopes"] for c in cards)]
+        primary = "tab" if any(c["primary"] == "tab" for c in cards) else cards[0]["primary"]
+        card = {"scopes": scopes, "primary": primary if primary in scopes else scopes[0]}
     payload = {
         "type": "permission_required",
         "approval_id": _register_dep_approval(context_id, [dep["id"] for _, dep in blocked]),
@@ -400,6 +418,8 @@ def _permission_gate_response(blocked: list[tuple[str, dict]], context_id: str):
             for _, dep in blocked
         ],
     }
+    if card:
+        payload["card"] = card
     chunk = f"data: {json.dumps(payload)}\n\n"
     task_id = str(_uuid.uuid4())
     shared.chat_task_store.create_task(task_id, context_id or "default")
@@ -1104,6 +1124,19 @@ def _skills_for_tools(tool_names) -> list[str]:
     return owners
 
 
+def _skills_named_in_history(recent_text: str) -> list[str]:
+    """Skills whose keywords appear in the recent chat text, for a follow-up that names none.
+
+    The shell/code runners are left out: their keywords ("create", "run", "image") appear in any
+    long draft, and a runner nobody approved would end the turn at the permission card. A runner
+    the chat really used is carried by _gated_runners_for_tools instead.
+    """
+    return [
+        sid for sid, kws in _SKILL_KEYWORDS.items()
+        if not _is_gated_runner(sid) and any(kw in recent_text for kw in kws)
+    ]
+
+
 def _gated_runners_for_tools(tool_names) -> list[str]:
     """The shell/code runners whose tools actually ran in this chat.
 
@@ -1119,8 +1152,11 @@ def _gated_runners_for_tools(tool_names) -> list[str]:
     )
 
 
-def _classify_skills_via_llm(message: str, extra_skills: dict | None = None) -> list[str]:
-    """Use a fast LLM call to classify which skills a message needs."""
+def _classify_skills_via_llm(message: str, extra_skills: dict | None = None) -> list[str] | None:
+    """Use a fast LLM call to classify which skills a message needs.
+
+    [] means the model answered that none are needed; None means it gave no usable answer.
+    """
     import re as _re
     try:
         from llm import get_provider
@@ -1130,7 +1166,7 @@ def _classify_skills_via_llm(message: str, extra_skills: dict | None = None) -> 
         prompt = _CLASSIFY_PROMPT.format(skills=skills_text, message=message)
 
         from llm import get_active_model
-        text = provider.simple_complete(prompt, model=get_active_model() or "Claude-Haiku-4.5", max_tokens=100)
+        text = provider.simple_complete(prompt, model=get_active_model() or "Claude-Haiku-4.5", max_tokens=400)
         # Parse JSON array from response
         match = _re.search(r'\[.*?\]', text)
         if match:
@@ -1141,7 +1177,24 @@ def _classify_skills_via_llm(message: str, extra_skills: dict | None = None) -> 
         print(f"[skill-classify] LLM returned no JSON array: '{text}'", flush=True)
     except Exception as exc:
         print(f"[skill-classify] LLM classification failed: {exc}", flush=True)
-    return []
+    return None
+
+
+def _with_image_path_note(message, paths: list[str] | None, names: list[str] | None):
+    """Add the saved file paths as text next to attached images.
+
+    Image blocks are stripped from earlier turns, so this note is what lets the model find the file later.
+    """
+    if not isinstance(message, list) or not paths:
+        return message
+    if not any(isinstance(b, dict) and b.get("type") in ("image", "document") for b in message):
+        return message
+    lines = []
+    for i, path in enumerate(paths):
+        name = (names or [])[i] if i < len(names or []) else ""
+        lines.append(f"[attached image: {name or 'image'}, saved at {path}]")
+    lines.append("Call describe_images with a saved path to look at an attached image again.")
+    return [*message, {"type": "text", "text": "\n".join(lines)}]
 
 
 # ── Chat stream + cancel endpoints ───────────────────────────────────────────
@@ -1852,6 +1905,11 @@ async def chat(req: ChatRequest):
         _keyword_hits = list(_inferred)
         if _inferred:
             print(f"[skill-detect] keywords/installed matched: {_inferred}", flush=True)
+        # A runner picked by a bare word ("run", "create", "build") is only a guess: those words sit
+        # in any pasted draft or summary. Whether the user wants something run is the classifier's
+        # call, because a runner that is wrongly picked ends the turn at the permission card.
+        _runner_guesses = [s for s in _inferred if _is_gated_runner(s) and s not in _explicit_skill_ids]
+        _inferred = [s for s in _inferred if s not in _runner_guesses]
         # Build the non-builtin catalog once (MCP connections + installed skills).
         _extra_catalog = {k: v for k, v in _available_skill_catalog().items()
                           if k not in _classify_skill_ids()}
@@ -1861,7 +1919,7 @@ async def chat(req: ChatRequest):
         # skills available that could overlap (e.g. keyword 'inbox' -> email, but a
         # Gmail MCP exists). The classifier sees the full catalog and can route to the
         # right service; without this, a built-in keyword would always win and hide MCP skills.
-        _should_classify = _msg_text.strip() and _needs_classifier(_inferred, _extra_catalog)
+        _should_classify = _msg_text.strip() and (_needs_classifier(_inferred, _extra_catalog) or _runner_guesses)
         if _should_classify:
             print(f"[skill-detect] running LLM classifier (extra={list(_extra_catalog)})...", flush=True)
             # A blocking gateway call here froze the whole event loop (every request, Stop included)
@@ -1873,7 +1931,12 @@ async def chat(req: ChatRequest):
                 )
             except asyncio.TimeoutError:
                 print(f"[skill-classify] gave up after {_CLASSIFY_TIMEOUT_S}s", flush=True)
-                _classified = []
+                _classified = None
+            if _runner_guesses and not set(_runner_guesses) & set(_classified or ()):
+                # A guess is never worth ending the turn at a permission card. If the model does need to
+                # run something it asks mid-turn with request_skill, and the user sees the same card then.
+                print(f"[skill-detect] words suggested {_runner_guesses}, not confirmed as a request to run anything; "
+                      "the model can still ask with request_skill", flush=True)
             if _classified:
                 _classifier_hits = list(_classified)
                 # Union keyword + classifier results so we keep the built-in AND
@@ -1901,10 +1964,7 @@ async def chat(req: ChatRequest):
                 _extract_text(m.get("content", ""))
                 for m in req.history[-6:]
             ).lower()
-            _history_skills = [
-                sid for sid, kws in _SKILL_KEYWORDS.items()
-                if any(kw in _recent_text for kw in kws)
-            ]
+            _history_skills = _skills_named_in_history(_recent_text)
             # The history above is text only. The server-side store also knows which tools
             # actually ran, so a chat that used Slack keeps Slack on a short follow-up.
             _from_tools = _skills_for_tools(_tools_already_run)
@@ -2213,7 +2273,7 @@ async def chat(req: ChatRequest):
         if req.history and not shared.conversation_store.has(context_id):
             await shared.conversation_store.seed(context_id, req.history)
         history_window = await shared.conversation_store.get_window(context_id, model)
-        _turn_user_msg = {"role": "user", "content": req.message}
+        _turn_user_msg = {"role": "user", "content": _with_image_path_note(req.message, req.image_paths, req.image_names)}
         msgs = history_window + [_turn_user_msg]
         token_budget = int(cfg.get("token_budget_per_task", 0) or 0)
         use_three_agent = cfg.get("three_agent_mode", False)

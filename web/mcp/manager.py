@@ -195,8 +195,8 @@ _JIRA_READ_ONLY_PREFIXES = (
     "get", "list", "search", "lookup", "find", "read", "view", "fetch",
     "accessible", "metadata", "field", "project", "page", "space",
 )
-# Only Atlassian's own server may vouch for a tool through its readOnlyHint;
-# a hint from any other MCP server proves nothing.
+# The Jira write guard below lets only Atlassian's own server vouch for a tool through its readOnlyHint.
+# The permission cards take a readOnlyHint from any server as the server's own claim (see _classify).
 _ATLASSIAN_MCP_HOST = "mcp.atlassian.com"
 
 
@@ -334,6 +334,22 @@ def _discover_limit_param(input_schema: dict) -> str | None:
             if isinstance(spec, dict) and spec.get("type") in ("integer", "number", None):
                 return name
     return None
+
+
+def _make_classifier(orig_name: str, conn: dict, hints: dict):
+    """What a call to this tool does, for the permission gate.
+
+    "draft": the call is parked as an approval card, so that card is the per-call approval.
+    "read": the server declares the tool read-only and does not declare it destructive.
+    "other": anything else, which asks on every call.
+    """
+    def _classify(kwargs: dict) -> str:
+        if _is_unverified_jira_mcp_mutation(orig_name, conn, hints) or _is_gated_tool(orig_name, kwargs or {}, conn):
+            return "draft"
+        if hints.get("readOnlyHint") is True and hints.get("destructiveHint") is not True:
+            return "read"
+        return "other"
+    return _classify
 
 
 def _register(conn: dict) -> None:
@@ -591,6 +607,7 @@ def _register(conn: dict) -> None:
             return _handler
 
         shared.TOOL_DISPATCH[namespaced] = _make_handler(orig_name, conn_snapshot, limit_param, _tool_hints(t))
+        shared.MCP_TOOL_CLASSIFIERS[namespaced] = _make_classifier(orig_name, conn_snapshot, _tool_hints(t))
         shared.TOOL_STATUS[namespaced] = f"Calling {name}..."
         tool_names.add(namespaced)
         seen_raw_names.add(orig_name)
@@ -621,6 +638,8 @@ def _unregister(skill_id: str) -> None:
     for key in list(shared.TOOL_STATUS):
         if key in exact_names:
             del shared.TOOL_STATUS[key]
+    for key in exact_names:
+        shared.MCP_TOOL_CLASSIFIERS.pop(key, None)
     shared.SKILL_TOOLS_MAP.pop(skill_id, None)
     if skill_id == "mcp-google-workspace":
         for synthetic_id in (

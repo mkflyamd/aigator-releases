@@ -60,6 +60,7 @@ assert(
     children: [],
     listeners: {},
     style: {},
+    dataset: {},
     textContent: '',
     removed: false,
     append(...c) {
@@ -81,8 +82,10 @@ assert(
       return { textContent: this._title };
     },
   });
+  const resolvedTabCards = [];
   const expire = vm.runInNewContext(m[0] + ';_expireConfirmCard;', {
     document: { createElement: el },
+    _resolveTabCard: (tab, id) => resolvedTabCards.push([tab, id]),
     _pinConfirmCardInView: (c) => {
       c.pinned = true;
     },
@@ -93,7 +96,14 @@ assert(
   const card = el();
   card._title = 'Allow access to Jira?';
   card._askAgain = () => asked.push(1);
+  card.dataset.ownerTab = 'tab-1';
+  card.dataset.confirmId = 'c1';
   expire(card);
+  assert.deepStrictEqual(
+    resolvedTabCards,
+    [['tab-1', 'c1']],
+    'an expired card is no longer held for its tab',
+  );
   assert.strictEqual(card.pinned, true, 'the expired card must be pinned into view');
   const nodes = flat(card);
   assert(
@@ -118,6 +128,10 @@ const showFn = source.match(/function _showBrowserConfirmCard\([\s\S]*?\n\}\s*\n
 assert(
   showFn && /_pinConfirmCardInView\(card\)/.test(showFn[0]),
   'a new card must be pinned into view like the text stream',
+);
+assert(
+  showFn && /_focusApprovalButton\(allowBtn\)/.test(showFn[0]),
+  'a new card focuses Allow so Enter approves',
 );
 const pinFn = source.match(/function _pinConfirmCardInView\([\s\S]*?\n\}/);
 assert(
