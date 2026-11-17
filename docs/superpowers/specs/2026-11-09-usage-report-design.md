@@ -57,7 +57,7 @@ The counts are read from `tasks.db`, which already records them. There are no ne
 - Config keys in `config.json`: `usage_list_site_id`, `usage_list_id`, `usage_list_link`. Nothing is shipped in the source. Reporting is off until both the site ID and the list ID are set.
 - While reporting is on, `/health` returns `usage_reporting: true` and the About dialog shows: "May collect issues and usage to improve AI Gator."
 - The Graph token comes from `GraphClient` (the existing refresh logic). The row is created with `POST /sites/{site}/lists/{list}/items`.
-- A day is marked sent after a successful create, or after a duplicate-key rejection (the row already exists).
+- A day is marked sent after a successful create, or after a duplicate-key rejection (the row already exists, which only happens if the list enforces unique titles).
 - On a 403 the code opens the list's sharing link once (`GET /shares/{id}/list`) and retries once. This gives a user access through the org-wide link.
 - Any other failure stops the run and leaves the remaining days unsent. They are retried at the next run, and a day older than 7 days is never sent.
 - Failures are logged at warning level with no token values and never surface to the user.
@@ -92,7 +92,7 @@ The existing "Gator Usage" list is used. Gator's token can write rows but not ch
 - Messages count only chat sources, and tool runs count from `tool_call_log`.
 - An active past day is sent once, with a lowercase `email|date` key and exactly the columns above.
 - Today, background-only days and days older than 7 days are not sent.
-- A duplicate-key response marks the day sent. Other failures leave it pending.
+- A duplicate-key response marks the day sent. Other failures leave it pending. Without a unique index the list simply accepts the row.
 - A 403 opens the link and retries once. Without a link it is a plain failure.
 - Without an identity, or with the list IDs unset, nothing is sent.
 - A missing `tool_call_log` table still reports messages.

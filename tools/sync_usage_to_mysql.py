@@ -11,19 +11,23 @@ Needs: pip install pymysql cryptography
 Environment:
     AIGATOR_USAGE_SITE_ID, AIGATOR_USAGE_LIST_ID   SharePoint site and list (or --site / --list)
     AIGATOR_USAGE_DB_PASSWORD                      password of the MySQL user (never a flag)
-    AIGATOR_USAGE_DB_HOST / _PORT / _USER / _NAME  default atldbmyd-028-005 / 3306 / aigator_usage_user_rw / aigator_usage
+    AIGATOR_USAGE_DB_HOST, _USER, _NAME            MySQL host, user and database (or --db-host / --db-user / --db-name)
+    AIGATOR_USAGE_DB_PORT                          default 3306
 
 Safe to re-run: a row already in MySQL for the same (email, report_date) is left untouched.
 """
 
 import argparse
 import json
+import logging
 import os
 import sys
 from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "web"))
+
+log = logging.getLogger(__name__)
 
 TABLE = "usage_daily"
 PAGE_SIZE = 200
@@ -62,13 +66,13 @@ INSERT = (
 def _number(value) -> int:
     try:
         return int(float(value or 0))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return 0
 
 
 def _details(value) -> str:
     try:
-        return json.dumps(json.loads(value or "{}"), separators=(",", ":"), sort_keys=True)
+        return json.dumps(json.loads(value or "{}"), separators=(",", ":"), sort_keys=True, allow_nan=False)
     except (TypeError, ValueError):
         return "{}"
 
@@ -85,7 +89,8 @@ def creator_addresses(gc, user: dict, cache: dict) -> set[str]:
         if user.get("id"):
             try:
                 profile = gc.get(f"/users/{user['id']}", {"$select": "userPrincipalName,mail,proxyAddresses"})
-            except Exception:
+            except Exception as exc:
+                log.warning("Could not look up creator %s; keeping only their item address: %s", user["id"], exc)
                 profile = {}
             found |= {str(profile.get(name) or "").lower() for name in ("userPrincipalName", "mail")} - {""}
             found |= {
@@ -152,6 +157,8 @@ def _connect(args):
         database=args.db_name,
         charset="utf8mb4",
         connect_timeout=15,
+        read_timeout=60,
+        write_timeout=60,
     )
 
 
@@ -177,10 +184,10 @@ def _parse(argv) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--site", default=env("AIGATOR_USAGE_SITE_ID", ""))
     parser.add_argument("--list", dest="list_id", default=env("AIGATOR_USAGE_LIST_ID", ""))
-    parser.add_argument("--db-host", default=env("AIGATOR_USAGE_DB_HOST", "atldbmyd-028-005"))
+    parser.add_argument("--db-host", default=env("AIGATOR_USAGE_DB_HOST", ""))
     parser.add_argument("--db-port", type=int, default=int(env("AIGATOR_USAGE_DB_PORT", "3306")))
-    parser.add_argument("--db-user", default=env("AIGATOR_USAGE_DB_USER", "aigator_usage_user_rw"))
-    parser.add_argument("--db-name", default=env("AIGATOR_USAGE_DB_NAME", "aigator_usage"))
+    parser.add_argument("--db-user", default=env("AIGATOR_USAGE_DB_USER", ""))
+    parser.add_argument("--db-name", default=env("AIGATOR_USAGE_DB_NAME", ""))
     parser.add_argument("--dry-run", action="store_true", help="read the list and report; do not touch MySQL")
     parser.add_argument("--create-table", action="store_true", help="run CREATE TABLE IF NOT EXISTS first (needs CREATE rights)")
     parser.add_argument("--print-schema", action="store_true", help="print the CREATE TABLE statement and exit")
@@ -194,6 +201,9 @@ def main(argv=None) -> int:
         return 0
     if not (args.site and args.list_id):
         print("Set --site and --list (or AIGATOR_USAGE_SITE_ID and AIGATOR_USAGE_LIST_ID).", file=sys.stderr)
+        return 2
+    if not args.dry_run and not (args.db_host and args.db_user and args.db_name):
+        print("Set AIGATOR_USAGE_DB_HOST, _USER and _NAME (or --db-host, --db-user, --db-name).", file=sys.stderr)
         return 2
     if not args.dry_run and not os.environ.get("AIGATOR_USAGE_DB_PASSWORD"):
         print("Set AIGATOR_USAGE_DB_PASSWORD in your environment.", file=sys.stderr)

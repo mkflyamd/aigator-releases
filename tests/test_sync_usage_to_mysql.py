@@ -125,10 +125,38 @@ def test_failed_profile_lookup_keeps_only_the_creator_mail():
                 raise RuntimeError("403")
             return super().get(path, params)
 
-    item = _item("alias@amd.com|2026-11-09", creator="first.last@amd.com")
-    item["createdBy"]["user"]["id"] = "u1"
-    rows, skipped = sync.fetch_rows(Failing([{"value": [item]}]), "site", "list")
-    assert rows == [] and skipped == 1
+    alias = _item("alias@amd.com|2026-11-09", creator="first.last@amd.com")
+    own = _item("first.last@amd.com|2026-11-09")
+    for item in (alias, own):
+        item["createdBy"]["user"] = {"id": "u1", "email": "first.last@amd.com"}
+    rows, skipped = sync.fetch_rows(Failing([{"value": [alias, own]}]), "site", "list")
+    assert [row[0] for row in rows] == ["first.last@amd.com"] and skipped == 1
+
+
+def test_repeat_title_in_one_batch_keeps_the_first_values():
+    first, second = _item(Messages=1), _item(Messages=9)
+    rows, _ = sync.fetch_rows(FakeGraph([{"value": [first, second]}]), "site", "list")
+    connection = FakeConnection()
+    sync.load(connection, rows, create_table=False)
+    assert [row[sync.COLUMNS.index("messages")] for row in connection.store["table"].values()] == [1]
+
+
+def test_overflowing_and_non_finite_values_load_as_zero_and_empty():
+    row = dict(zip(sync.COLUMNS, _row(_item(Messages=float("inf"), Details='{"a": NaN}'))))
+    assert (row["messages"], row["details"]) == (0, "{}")
+
+
+def test_password_cannot_be_passed_as_a_flag():
+    with pytest.raises(SystemExit):
+        sync.main(["--site", "s", "--list", "l", "--db-password", "aigator-fake-api-key"])
+
+
+def test_sync_needs_database_host_user_and_name(monkeypatch, capsys):
+    for name in ("HOST", "USER", "NAME"):
+        monkeypatch.delenv(f"AIGATOR_USAGE_DB_{name}", raising=False)
+    monkeypatch.setenv("AIGATOR_USAGE_DB_PASSWORD", "aigator-fake-api-key")
+    assert sync.main(["--site", "s", "--list", "l"]) == 2
+    assert "AIGATOR_USAGE_DB_HOST" in capsys.readouterr().err
 
 
 def test_row_survives_blank_and_malformed_fields():
@@ -195,7 +223,7 @@ def test_dry_run_reads_list_without_password_or_database(monkeypatch, capsys):
 
 def test_sync_needs_a_password(monkeypatch, capsys):
     monkeypatch.delenv("AIGATOR_USAGE_DB_PASSWORD", raising=False)
-    assert sync.main(["--site", "s", "--list", "l"]) == 2
+    assert sync.main(["--site", "s", "--list", "l", "--db-host", "h", "--db-user", "u", "--db-name", "d"]) == 2
     assert "AIGATOR_USAGE_DB_PASSWORD" in capsys.readouterr().err
 
 
@@ -205,5 +233,5 @@ def test_sync_end_to_end_reports_new_rows(monkeypatch, capsys):
     monkeypatch.setattr(sync, "_graph_client", lambda: FakeGraph([{"value": [_item()]}]))
     monkeypatch.setattr(sync, "_connect", lambda args: connection)
     connection.close = lambda: None
-    assert sync.main(["--site", "s", "--list", "l"]) == 0
+    assert sync.main(["--site", "s", "--list", "l", "--db-host", "h", "--db-user", "u", "--db-name", "d"]) == 0
     assert "0 -> 1 rows (1 new)" in capsys.readouterr().out
