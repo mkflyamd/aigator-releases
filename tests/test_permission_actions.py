@@ -435,7 +435,7 @@ def test_a_tool_that_takes_every_argument_shows_every_argument_on_its_card(monke
 def test_the_connection_test_card_shows_the_form_it_will_run_and_hides_credentials():
     from extensions.tools import _SESSIONS
     sid = _SESSIONS.create("mcp", {"command": "node", "args": ["srv.js"], "url": "https://mcp.example.test",
-                                   "headers": "Authorization: aigator-fake-api-key", "api_key": "aigator-fake-api-key"})
+                                   "headers": "Authorization: aigator-fake-api-key", "api_key": "aigator-fake-api-key"})  # pragma: allowlist secret
     details = ds._call_details({"session_id": sid}, "extension_setup__test_connection")
     assert '"command": "node"' in details and "https://mcp.example.test" in details
     assert "aigator-fake-api-key" not in details and "session_id" not in details
