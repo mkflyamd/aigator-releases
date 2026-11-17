@@ -1609,10 +1609,11 @@ function _caLoadProjects() {
           history.replaceState({}, '', url);
         } catch (_) {}
       } else {
-        // The open project may have been removed in another window; drop it so the
-        // no-project states show instead of a blank pane.
+        // The open project may have been removed in another window. Follow the server's
+        // active pointer (it moves to the next most recent) so chat and this view agree;
+        // with none left the no-project states show instead of a blank pane.
         if (_caActiveProject && !_caProjects.some((p) => p.name === _caActiveProject))
-          _caActiveProject = null;
+          _caActiveProject = _caProjects.some((p) => p.name === data.active) ? data.active : null;
         // Auto-select if only one project exists
         if (!_caActiveProject)
           _caActiveProject = _caProjects.length === 1 ? _caProjects[0].name : null;
