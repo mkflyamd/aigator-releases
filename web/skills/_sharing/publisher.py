@@ -96,7 +96,6 @@ def publish(provider, skill_id: str, *, author: str, root: dict | None = None, p
         else:
             provider.write_json_replace(folder, "skill.json", new_doc, etag)
 
-    provider.grant_read(folder, list(people))
     skill_state.update_entry(
         skill_id,
         {
@@ -109,6 +108,7 @@ def publish(provider, skill_id: str, *, author: str, root: dict | None = None, p
             "published_digest": digest,
         },
     )
+    provider.grant_read(folder, list(people))
     return {
         "skill_id": skill_id,
         "version": version,
