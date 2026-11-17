@@ -1,6 +1,5 @@
 """Review and install a shared skill. Nothing is trusted except the digest the user approved."""
 
-import re
 from pathlib import Path
 
 from marketplace import installer
@@ -15,8 +14,6 @@ from .publisher import checked_doc
 
 MAX_BUNDLE_BYTES = MAX_TOTAL_BYTES + 1024 * 1024  # the extraction cap plus zip overhead
 _NATIVE_DIR = Path(__file__).resolve().parent.parent
-_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
-_RESERVED_IDS = {"mine"}
 _COLLISION_TEXT = {
     "mine": "You already have a skill of your own with this name.",
     "installed": "A skill with this name is already installed.",
@@ -33,9 +30,7 @@ def _check_manifest(manifest, version: int) -> None:
         isinstance(manifest, dict)
         and manifest.get("schema") == bundle.SCHEMA
         and manifest.get("version") == version
-        and isinstance(manifest.get("name"), str)
-        and bool(_ID.match(manifest["name"]))
-        and manifest["name"] not in _RESERVED_IDS
+        and bundle.valid_share_name(manifest.get("name"))
         and isinstance(manifest.get("bundle_sha256"), str)
         and isinstance(manifest.get("files_digest"), str)
     )

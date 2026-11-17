@@ -55,6 +55,8 @@ def publish(provider, skill_id: str, *, author: str, root: dict | None = None, p
     entry = skill_state.get_entry(skill_id)
     if not entry or entry.get("tier") != "Mine" or entry.get("id") != skill_id:
         raise ShareError("not_mine", "Only skills you created can be shared.")
+    if not bundle.valid_share_name(skill_id):
+        raise ShareError("invalid", f'The skill name "{skill_id[:80]}" cannot be shared. {bundle.INVALID_NAME_MESSAGE}')
     skill_dir = installer.INSTALLED_SKILLS_DIR / "mine" / skill_id
     if not skill_dir.is_dir():
         raise ShareError("not_found", "The skill's files could not be found.")

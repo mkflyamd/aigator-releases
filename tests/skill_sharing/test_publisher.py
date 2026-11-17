@@ -100,6 +100,25 @@ def test_a_chosen_root_is_used_on_the_first_publish(provider, make_mine):
     assert provider.child_folder(chosen, skill_id, create=False)["folder_id"] == out["folder"]["folder_id"]
 
 
+@pytest.mark.parametrize("name", ["a" * 65, "mine"])
+def test_a_name_the_receiver_would_refuse_is_not_published(provider, make_mine, name):
+    skill_id = make_mine(name)
+    assert skill_id == name
+    with pytest.raises(ShareError) as err:
+        publisher.publish(provider, skill_id, author="A", people=["bob@example.com"])
+    assert err.value.code == "invalid"
+    assert "64" in err.value.message
+    assert provider.writes == []
+    assert provider.folders == {}
+    assert provider.grants == []
+
+
+def test_a_64_character_name_still_publishes(provider, make_mine):
+    skill_id = make_mine("a" * 64)
+    out = publisher.publish(provider, skill_id, author="A")
+    assert out["version"] == 1
+
+
 def test_only_mine_skills_can_be_published(provider, skills_dir):
     installer.save_installed([{"id": "someone-elses", "tier": "Community", "version": "1"}])
     with pytest.raises(ShareError) as err:
