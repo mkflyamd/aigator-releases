@@ -104,6 +104,8 @@ SENSITIVE_ROUTES: frozenset[str] = frozenset({
     "DELETE /api/scheduler/jobs/{job_id}",
     "PATCH /api/scheduler/jobs/{job_id}",
     "POST /api/scheduler/jobs/{job_id}/run-now",
+    "POST /api/skills/share/install",
+    "POST /api/skills/share/publish",
     "POST /api/slack/channels/{channel_id}/post",
     "POST /api/slack/channels/{channel_id}/send",
     "POST /api/slack/dm",
