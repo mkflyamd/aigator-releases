@@ -124,12 +124,12 @@ def _existing_result(found: dict, source: Source, drive_id: str, folder_info: di
     return _result("exists", **_existing(found, drive_id), **folder_info)
 
 
-def _put_small(gc, source, item_path, conflict):
+def _put_small(gc, source, item_path, conflict, headers=None):
     data = b"".join(source.open())
     if len(data) != source.size:
         return None, "source_size_mismatch", hashlib.sha256(data).hexdigest()
     path = item_path + f":/content?@microsoft.graph.conflictBehavior={conflict}"
-    item = gc.put_binary(path, data)
+    item = gc.put_binary(path, data, extra_headers=headers) if headers else gc.put_binary(path, data)
     return item, "", hashlib.sha256(data).hexdigest()
 
 
@@ -262,19 +262,19 @@ def _folder_item_path(drive_id: str, folder_id: str, name: str) -> str:
     return f"/drives/{q(drive_id)}/items/{q(folder_id)}:/{q(name)}"
 
 
-def store_in_folder(gc, source: Source, drive_id: str, folder_id: str, on_conflict: str = "rename") -> dict:
-    """Upload into a folder addressed by drive and item ID. Never overwrites: a clash renames."""
+def _store_in_folder(gc, source: Source, drive_id: str, folder_id: str, conflict: str, if_match: str = "") -> dict:
     from .._files.errors import classify_graph_error
 
-    if on_conflict not in ("rename", "fail"):
-        raise ValueError(f"on_conflict must be 'rename' or 'fail', got {on_conflict!r}")
     name = safe_filename(source.name)
+    if if_match and source.size > SIMPLE_UPLOAD_MAX:
+        return _result("error", error="if_match_needs_small_file", error_code="unknown", name=name)
     item_path = _folder_item_path(drive_id, folder_id, name)
     try:
         if source.size <= SIMPLE_UPLOAD_MAX:
-            item, err, sha = _put_small(gc, source, item_path, on_conflict)
+            headers = {"If-Match": if_match} if if_match else None
+            item, err, sha = _put_small(gc, source, item_path, conflict, headers)
         else:
-            item, err, sha = _put_large(gc, source, item_path, on_conflict, name)
+            item, err, sha = _put_large(gc, source, item_path, conflict, name)
     except Exception as e:
         return _result(
             "error",
@@ -296,3 +296,16 @@ def store_in_folder(gc, source: Source, drive_id: str, folder_id: str, on_confli
             hint="The stored file does not match the source size. Do not report it as saved.",
         )
     return _result("saved", sha256=sha, **{**_existing(item, drive_id), "size": source.size})
+
+
+def store_in_folder(gc, source: Source, drive_id: str, folder_id: str, on_conflict: str = "rename") -> dict:
+    """Upload into a folder addressed by drive and item ID. Never overwrites: a clash renames."""
+    if on_conflict not in ("rename", "fail"):
+        raise ValueError(f"on_conflict must be 'rename' or 'fail', got {on_conflict!r}")
+    return _store_in_folder(gc, source, drive_id, folder_id, on_conflict)
+
+
+def replace_in_folder(gc, source: Source, drive_id: str, folder_id: str, if_match: str = "") -> dict:
+    """Upload into a folder, replacing a file of the same name. With ``if_match`` (an eTag) the
+    replace fails with error_code ``conflict`` when the stored file changed since it was read."""
+    return _store_in_folder(gc, source, drive_id, folder_id, "replace", if_match)
