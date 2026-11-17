@@ -444,8 +444,11 @@ def test_the_connection_test_card_shows_the_form_it_will_run_and_hides_credentia
 async def test_the_wizard_doc_fetch_refuses_a_url_that_could_carry_data_out_before_asking():
     calls = []
     url = "https://docs.example.test/p?d=" + "a" * 400
-    res = await _runner(calls)(_tc("extension_setup__fetch_doc", {"url": url}), asyncio.Queue())
+    q = asyncio.Queue()
+    res = await asyncio.wait_for(_runner(calls)(_tc("extension_setup__fetch_doc", {"url": url}), q), 5)
     assert "error" in res and calls == []
+    assert q.get_nowait()["kind"] == "tool_result"
+    assert q.empty(), "no confirm card for a target that is refused anyway"
 
 
 def test_an_image_url_with_a_page_id_but_no_filename_is_still_fetched_from_the_website():
