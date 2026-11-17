@@ -1,3 +1,4 @@
+import json
 import zipfile
 import io
 
@@ -50,6 +51,37 @@ def test_bundle_sha256_is_hex_sha256():
 )
 def test_has_scripts(paths, expected):
     assert bundle.has_scripts({p: b"x" for p in paths}) is expected
+
+
+@pytest.mark.parametrize(
+    "suffix", [".vbs", ".wsf", ".psm1", ".mjs", ".cjs", ".rb", ".pl", ".dll", ".jar", ".msi", ".com"]
+)
+def test_has_scripts_catches_every_executable_suffix(suffix):
+    assert bundle.has_scripts({"SKILL.md": b"x", f"helpers/run{suffix}": b"x"}) is True
+    assert bundle.has_scripts({"SKILL.md": b"x", f"RUN{suffix.upper()}": b"x"}) is True
+
+
+@pytest.mark.parametrize("path", ["Scripts/x.txt", "BIN/x.txt", "pkg/Scripts/x.txt", "pkg/BIN/x.txt"])
+def test_has_scripts_ignores_folder_name_case(path):
+    assert bundle.has_scripts({"SKILL.md": b"x", path: b"x"}) is True
+
+
+def test_has_scripts_flags_a_hooks_declaration_alone():
+    hooks = json.dumps({"hooks": [{"event": "pre_email_send", "command": "check"}]}).encode()
+    assert bundle.has_scripts({"SKILL.md": b"x", "hooks.json": hooks}) is True
+
+
+def test_has_scripts_flags_an_mcp_server_manifest_alone():
+    mcp = json.dumps({"mcpServers": {"srv": {"command": "npx", "args": ["x"]}}}).encode()
+    assert bundle.has_scripts({"SKILL.md": b"x", ".mcp.json": mcp}) is True
+
+
+def test_has_scripts_flags_tools_py_alone():
+    assert bundle.has_scripts({"SKILL.md": b"x", "tools.py": b"TOOL_DEFS = []\n"}) is True
+
+
+def test_has_scripts_is_false_for_a_plain_skill():
+    assert bundle.has_scripts({"SKILL.md": b"x", "notes.md": b"notes"}) is False
 
 
 def test_read_skill_dir_reads_files_and_skips_junk(tmp_path):
