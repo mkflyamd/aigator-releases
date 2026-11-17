@@ -167,7 +167,11 @@ def _node_options_windows(run_dir: Path) -> str:
     """Windows NODE_OPTIONS preloading the shim, copied into a hidden run-dir subfolder (not listed as output)."""
     shim = run_dir.joinpath(*_NODE_SHIM_RELPATH)
     shim.parent.mkdir(parents=True, exist_ok=True)
-    shim.write_text(_NODE_SHIM.read_text(encoding="utf-8"), encoding="utf-8", newline="\n")
+    source = _NODE_SHIM.read_text(encoding="utf-8")
+    if not shim.is_file() or shim.read_text(encoding="utf-8") != source:
+        tmp = shim.with_name(f"{shim.name}.{os.getpid()}.tmp")
+        tmp.write_text(source, encoding="utf-8", newline="\n")
+        os.replace(tmp, shim)
     # Forward slashes: NODE_OPTIONS treats a backslash inside quotes as an escape.
     return f'{_NODE_OPTIONS_WINDOWS} --require="{shim.as_posix()}"'
 

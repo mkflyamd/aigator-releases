@@ -43,11 +43,10 @@ function blockedError() {
 }
 
 function usesPipe(stdio) {
-  if (stdio === undefined || stdio === null || stdio === 'pipe') return true;
-  if (typeof stdio === 'string') return false;
-  return Array.from({ length: 3 }, (_, i) => stdio[i]).some(
-    (s) => s === undefined || s === null || s === 'pipe' || s === 'overlapped',
-  );
+  const isPipe = (s) =>
+    s === undefined || s === null || s === 'pipe' || s === 'overlapped' || s === 'ipc';
+  if (typeof stdio === 'string' || stdio === undefined || stdio === null) return isPipe(stdio);
+  return Array.from({ length: Math.max(3, stdio.length || 0) }, (_, i) => stdio[i]).some(isPipe);
 }
 
 function failedChild(err, callback) {
@@ -60,10 +59,7 @@ function failedChild(err, callback) {
   process.nextTick(() => {
     child.stdout.end();
     child.stderr.end();
-    if (callback) {
-      callback(err, '', '');
-      return;
-    }
+    if (callback) child.once('error', (e) => callback(e, '', ''));
     child.emit('error', err);
     child.emit('close', -1, null);
   });
