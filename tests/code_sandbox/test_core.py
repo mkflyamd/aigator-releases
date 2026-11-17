@@ -1,4 +1,6 @@
 import os
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -30,10 +32,39 @@ def test_build_env_windows_keeps_allow_list_and_drops_tokens(tmp_path):
     for key in ("TEMP", "TMP", "LOCALAPPDATA", "APPDATA", "USERPROFILE"):
         assert env[key] == str(tmp_path)
     assert env["NODE_PATH"] == r"C:\npm\node_modules"
-    assert env["NODE_OPTIONS"] == "--preserve-symlinks --preserve-symlinks-main"
+    shim = tmp_path / ".gator" / "node-shim.js"
+    assert env["NODE_OPTIONS"] == f'--preserve-symlinks --preserve-symlinks-main --require="{shim.as_posix()}"'
+    assert "asyncNative" in shim.read_text(encoding="utf-8")
     assert env["PYTHONIOENCODING"] == "utf-8"
     assert FAKE not in env.values()
     assert not any("TOKEN" in k or "KEY" in k for k in env)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_node_shim_blocks_piped_spawns_and_closes_callback_form(tmp_path):
+    probe = tmp_path / "probe.js"
+    probe.write_text(
+        "const cp = require('child_process'); const ev = [];\n"
+        "cp.exec('x', (e) => ev.push('cb:' + e.code)).on('close', () => ev.push('close'));\n"
+        "cp.spawn('x', [], { stdio: 'overlapped' }).on('error', () => ev.push('overlapped'));\n"
+        "cp.spawn('x', [], { stdio: ['inherit', 'inherit', 'inherit', 'ipc'] }).on('error', () => ev.push('ipc'));\n"
+        "setTimeout(() => console.log(ev.join(',')), 50);\n",
+        encoding="utf-8",
+    )
+    shim = Path(sandbox.__file__).with_name("node_shim.js")
+    out = subprocess.run(
+        ["node", "--require", str(shim), str(probe)], capture_output=True, text=True, timeout=30, check=True,
+    ).stdout.strip()
+    assert out == "cb:EPERM,close,overlapped,ipc"
+
+
+def test_node_shim_copy_is_not_rewritten_when_unchanged(tmp_path):
+    sandbox.build_env({}, tmp_path, None, platform="win32")
+    shim = tmp_path / ".gator" / "node-shim.js"
+    before = shim.stat().st_mtime_ns
+    sandbox.build_env({}, tmp_path, None, platform="win32")
+    assert shim.stat().st_mtime_ns == before
+    assert not list(shim.parent.glob("*.tmp"))
 
 
 def test_build_env_posix(tmp_path):
@@ -116,3 +147,4 @@ def test_spec_bundles_sandbox_modules():
     for name in ("sandbox", "sandbox.policy", "sandbox.paths", "sandbox.approvals",
                  "sandbox.launcher_windows", "sandbox.launcher_macos", "sandbox.launcher_linux"):
         assert f'"{name}"' in spec
+    assert '"node_shim.js"' in spec
