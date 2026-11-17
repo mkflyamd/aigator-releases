@@ -60,6 +60,9 @@ def reset_graph_client() -> None:
     Call this after a successful complete_auth() to pick up the new token."""
     global _gc_instance
     _gc_instance = None
+    from permissions import actions
+
+    actions.forget_own_drive()
 
 
 _skill_client_class_cache: dict = {}

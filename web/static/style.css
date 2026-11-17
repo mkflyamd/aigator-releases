@@ -6809,10 +6809,12 @@ button[data-default-action]:focus:not(:disabled)::after {
 }
 .ask-user-option-label {
   font-weight: 600;
+  overflow-wrap: anywhere;
 }
 .ask-user-option-desc {
   font-size: 0.75rem;
   opacity: 0.75;
+  overflow-wrap: anywhere;
 }
 .ask-user-chat {
   display: flex;

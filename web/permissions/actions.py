@@ -62,7 +62,7 @@ confluence_open_create_form confluence_open_edit_form
 """.split()
 
 _WRITE_PUBLIC_TOOLS = """
-update_onenote_page
+update_onenote_page file_upload
 """.split()
 
 # Tools that only prepare a draft (or are refused outright). The draft's approval card is the per-call approval.
@@ -80,7 +80,7 @@ add_calendar_attendees update_calendar_event delete_calendar_event respond_calen
 create_ooo_event delete_contact
 github_create_issue github_add_issue_comment github_gh
 create_confluence_page patch_confluence_page update_confluence_page
-move_onedrive_file copy_onedrive_file
+file_transfer move_onedrive_file copy_onedrive_file
 """.split()
 
 BUILTIN_ACTIONS: dict[str, str] = {
@@ -118,6 +118,50 @@ def _drive_move_action(inputs: dict) -> str:
     return WRITE_PUBLIC if source and source == str(inputs.get("dest_drive_id") or "").strip() else IRREVERSIBLE
 
 
+_own_drive_id = ""
+
+
+def note_own_drive(drive_id: str) -> None:
+    """Remember the id of the signed-in user's own OneDrive. Reading it takes a network call, which a permission check
+    must not make. Only the OneDrive skill may call this, and only with the id Graph returned for /me/drive, never with
+    an id the model or a listing supplied: an id noted here makes writes into that drive count as private."""
+    global _own_drive_id
+    _own_drive_id = drive_id.strip() if isinstance(drive_id, str) else ""
+
+
+def forget_own_drive() -> None:
+    """Drop the remembered id, as on sign-in or sign-out, so one account's drive is never taken for another's."""
+    note_own_drive("")
+
+
+def _is_own_drive(drive_id) -> bool:
+    drive_id = str(drive_id or "").strip()
+    return bool(drive_id) and drive_id == _own_drive_id
+
+
+def _file_transfer_action(inputs: dict) -> str:
+    """One rule for file_transfer, move_onedrive_file and copy_onedrive_file. Private only when nobody else can lose
+    or gain sight of the file: it lands in the user's own OneDrive, and it either is a copy or leaves the user's own
+    OneDrive too. A move out of a shared, Teams or SharePoint drive takes the file away from the people who use it
+    there, so it is judged as a move between drives. Everything else follows _drive_move_action. A destination not
+    known to be the user's own is not private, and a missing mode counts as a move."""
+    if _is_own_drive(inputs.get("dest_drive_id")):
+        mode = str(inputs.get("mode") or "move").strip().lower()
+        if mode == "copy" or _is_own_drive(inputs.get("source_drive_id")):
+            return WRITE_PRIVATE
+    return _drive_move_action(inputs)
+
+
+def _move_action(inputs: dict) -> str:
+    """The older move tool does what file_transfer does in move mode, so it is judged the same way."""
+    return _file_transfer_action({**inputs, "mode": "move"})
+
+
+def _copy_action(inputs: dict) -> str:
+    """The older copy tool does what file_transfer does in copy mode, so it is judged the same way."""
+    return _file_transfer_action({**inputs, "mode": "copy"})
+
+
 def _onenote_create_action(inputs: dict) -> str:
     """A notebook, section or page created with a site_id lives in a team notebook that others can see."""
     return WRITE_PUBLIC if _has_value(inputs.get("site_id")) else WRITE_PRIVATE
@@ -127,8 +171,9 @@ def _onenote_create_action(inputs: dict) -> str:
 _BY_INPUTS = {
     "create_ooo_event": (_ooo_action, (WRITE_PRIVATE, IRREVERSIBLE)),
     "github_gh": (_gh_action, (READ, IRREVERSIBLE)),
-    "move_onedrive_file": (_drive_move_action, (WRITE_PUBLIC, IRREVERSIBLE)),
-    "copy_onedrive_file": (_drive_move_action, (WRITE_PUBLIC, IRREVERSIBLE)),
+    "move_onedrive_file": (_move_action, (WRITE_PRIVATE, WRITE_PUBLIC, IRREVERSIBLE)),
+    "copy_onedrive_file": (_copy_action, (WRITE_PRIVATE, WRITE_PUBLIC, IRREVERSIBLE)),
+    "file_transfer": (_file_transfer_action, (WRITE_PRIVATE, WRITE_PUBLIC, IRREVERSIBLE)),
     "create_onenote_notebook": (_onenote_create_action, (WRITE_PRIVATE, WRITE_PUBLIC)),
     "create_onenote_section": (_onenote_create_action, (WRITE_PRIVATE, WRITE_PUBLIC)),
     "create_onenote_page": (_onenote_create_action, (WRITE_PRIVATE, WRITE_PUBLIC)),

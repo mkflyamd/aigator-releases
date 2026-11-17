@@ -109,15 +109,28 @@ def test_a_meeting_draft_is_backed_by_its_card_and_the_availability_grid_only_re
     assert actions.gate_action("show_availability_grid", {"attendees": ["a@b.c"]}) == actions.READ
 
 
-def test_a_file_moved_within_one_drive_can_be_undone_and_one_moved_across_drives_cannot():
-    same = {"source_drive_id": "d1", "dest_drive_id": "d1"}
-    for tool in ("move_onedrive_file", "copy_onedrive_file"):
-        assert actions.action_for_call(tool, same) == actions.WRITE_PUBLIC
-        assert actions.action_for_call(tool, {**same, "dest_drive_id": "d2"}) == actions.IRREVERSIBLE
-        assert actions.action_for_call(tool, {"source_drive_id": "d1"}) == actions.IRREVERSIBLE
-        assert actions.action_for_call(tool, {}) == actions.IRREVERSIBLE
-        assert actions.gate_action(tool, {**same, "dest_drive_id": "d2"}) is None
-        assert actions.gate_actions_possible(tool) == {actions.WRITE_PUBLIC}
+def test_the_older_move_and_copy_tools_are_judged_exactly_like_file_transfer():
+    cases = [
+        {},
+        {"source_drive_id": "d1", "dest_drive_id": "d1"},
+        {"source_drive_id": "d1", "dest_drive_id": "d2"},
+        {"source_drive_id": "mine", "dest_drive_id": "mine"},
+        {"source_drive_id": "d1", "dest_drive_id": "mine"},
+    ]
+    for own in ("", "mine"):
+        actions.note_own_drive(own)
+        for call in cases:
+            assert actions.action_for_call("move_onedrive_file", call) == actions.action_for_call(
+                "file_transfer", {**call, "mode": "move"})
+            assert actions.action_for_call("copy_onedrive_file", call) == actions.action_for_call(
+                "file_transfer", {**call, "mode": "copy"})
+    for tool in ("move_onedrive_file", "copy_onedrive_file", "file_transfer"):
+        across = {"source_drive_id": "d1", "dest_drive_id": "d2"}
+        assert actions.action_for_call(tool, across) == actions.IRREVERSIBLE
+        assert actions.gate_action(tool, across) is None
+        within = {"source_drive_id": "d1", "dest_drive_id": "d1"}
+        assert actions.action_for_call(tool, within) == actions.WRITE_PUBLIC
+        assert actions.gate_actions_possible(tool) == {actions.WRITE_PRIVATE, actions.WRITE_PUBLIC}
 
 
 def test_onenote_created_in_a_team_site_is_visible_to_others():
@@ -200,6 +213,7 @@ def _allow_everything_else_for(label):
     ("github_add_issue_comment", {"repo": "o/r", "number": 1, "body": "x"}, "GitHub"),
     ("update_calendar_event", {"event_id": "e1"}, "Outlook calendar"),
     ("move_onedrive_file", {"source_drive_id": "d1", "dest_drive_id": "d2"}, "SharePoint and OneDrive"),
+    ("file_transfer", {"source_drive_id": "d1", "dest_drive_id": "d2"}, "SharePoint and OneDrive"),
     ("update_confluence_page", {"page_id": "1"}, "Confluence"),
 ])
 async def test_an_irreversible_tool_still_asks_when_every_other_category_for_the_app_is_always_allowed(
@@ -242,6 +256,23 @@ async def test_an_unattended_run_refuses_a_call_that_needs_its_own_approval():
     calls = []
     res = await _runner(calls, context_id=None)(_tc("delete_calendar_event", {"event_id": "e1"}), asyncio.Queue())
     assert res["error"] == "irreversible_not_allowed_unattended" and calls == []
+
+
+@pytest.mark.parametrize("tool", ["file_transfer", "move_onedrive_file", "copy_onedrive_file"])
+async def test_an_unattended_run_never_moves_or_copies_a_file_into_another_drive(tool):
+    calls = []
+    call = {"source_drive_id": "teams", "source_item_id": "i", "dest_drive_id": "site", "dest_folder_id": "f"}
+    res = await _runner(calls, context_id=None)(_tc(tool, call), asyncio.Queue())
+    assert res["error"] == "irreversible_not_allowed_unattended" and calls == []
+
+
+async def test_an_unattended_run_may_still_copy_a_file_into_the_users_own_onedrive():
+    actions.note_own_drive("mine")
+    calls = []
+    call = {"source_drive_id": "teams", "source_item_id": "i", "dest_drive_id": "mine", "dest_folder_id": "f",
+            "mode": "copy"}
+    res = await _runner(calls, context_id=None)(_tc("file_transfer", call), asyncio.Queue())
+    assert res.get("ok") is True and calls == ["file_transfer"]
 
 
 async def test_an_unattended_run_can_still_stage_a_draft_for_an_irreversible_action():
@@ -342,6 +373,78 @@ def test_an_argument_name_is_cleaned_and_capped_like_its_value():
     details = ds._call_details({"to" + tricks + "x" * 500: "v"})
     assert not any(ch in details for ch in tricks)
     assert len(details) < ds._CARD_KEY_MAX + 40
+
+
+def test_a_file_upload_is_a_reversible_public_write_whatever_the_destination():
+    assert actions.action_for_call("file_upload", {"dest_drive_id": "d1"}) == actions.WRITE_PUBLIC
+    assert actions.gate_action("file_upload") == actions.WRITE_PUBLIC
+    assert actions.gate_actions_possible("file_upload") == {actions.WRITE_PUBLIC}
+
+
+@pytest.fixture(autouse=True)
+def _no_remembered_own_drive():
+    actions.forget_own_drive()
+    yield
+    actions.forget_own_drive()
+
+
+def test_a_file_transfer_into_the_users_own_onedrive_is_private_and_into_any_other_drive_is_irreversible():
+    call = {"source_drive_id": "teams", "dest_drive_id": "mine", "mode": "copy"}
+    assert actions.action_for_call("file_transfer", call) == actions.IRREVERSIBLE
+    actions.note_own_drive("mine")
+    assert actions.action_for_call("file_transfer", call) == actions.WRITE_PRIVATE
+    assert actions.action_for_call("file_transfer", {**call, "dest_drive_id": "site"}) == actions.IRREVERSIBLE
+    assert actions.action_for_call("file_transfer", {**call, "source_drive_id": "site", "dest_drive_id": "site"}) == (
+        actions.WRITE_PUBLIC)
+    assert actions.action_for_call("file_transfer", {}) == actions.IRREVERSIBLE
+    assert actions.gate_action("file_transfer", call) == actions.WRITE_PRIVATE
+    assert actions.gate_action("file_transfer", {**call, "dest_drive_id": "site"}) is None
+    assert actions.gate_actions_possible("file_transfer") == {actions.WRITE_PRIVATE, actions.WRITE_PUBLIC}
+
+
+def test_a_move_out_of_a_shared_drive_is_not_private_even_into_the_users_own_onedrive():
+    actions.note_own_drive("mine")
+    move = {"source_drive_id": "teams", "dest_drive_id": "mine"}
+    assert actions.action_for_call("file_transfer", move) == actions.IRREVERSIBLE
+    assert actions.action_for_call("file_transfer", {**move, "mode": "move"}) == actions.IRREVERSIBLE
+    assert actions.action_for_call("file_transfer", {**move, "mode": "copy"}) == actions.WRITE_PRIVATE
+    assert actions.action_for_call("file_transfer", {**move, "source_drive_id": "mine"}) == actions.WRITE_PRIVATE
+
+
+def test_a_blank_drive_id_is_never_taken_for_the_users_own_drive():
+    actions.note_own_drive("  ")
+    assert actions.action_for_call("file_transfer", {"dest_drive_id": "", "mode": "copy"}) == actions.IRREVERSIBLE
+    assert actions.action_for_call("file_transfer", {"dest_drive_id": "  ", "mode": "copy"}) == actions.IRREVERSIBLE
+
+
+def test_forgetting_the_own_drive_makes_it_public_again():
+    actions.note_own_drive("mine")
+    actions.forget_own_drive()
+    assert actions.action_for_call("file_transfer", {"dest_drive_id": "mine", "mode": "copy"}) == actions.IRREVERSIBLE
+
+
+def test_a_second_account_replaces_the_first_ones_drive():
+    actions.note_own_drive("a")
+    actions.note_own_drive("b")
+    assert actions.action_for_call("file_transfer", {"dest_drive_id": "a", "mode": "copy"}) == actions.IRREVERSIBLE
+    assert actions.action_for_call("file_transfer", {"dest_drive_id": "b", "mode": "copy"}) == actions.WRITE_PRIVATE
+
+
+def test_the_approval_category_follows_the_destination_through_the_data_source_gate():
+    actions.note_own_drive("mine")
+    own = ds.source_for_call("file_transfer", {"source_drive_id": "mine", "dest_drive_id": "mine"})
+    shared = ds.source_for_call("file_transfer", {"source_drive_id": "mine", "dest_drive_id": "teams"})
+    assert own.key.endswith(":write_private")
+    assert shared.per_call
+    assert own.key != shared.key
+
+
+def test_signing_out_or_in_forgets_the_own_drive():
+    from skills._m365 import helpers
+
+    actions.note_own_drive("mine")
+    helpers.reset_graph_client()
+    assert actions.action_for_call("file_transfer", {"dest_drive_id": "mine", "mode": "copy"}) == actions.IRREVERSIBLE
 
 
 def test_the_wizard_tools_are_part_of_the_checked_set():

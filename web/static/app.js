@@ -10276,9 +10276,12 @@ function _sandboxFollowUpText(decision, requestId, tool = 'run_python') {
     return `\u{1F512} Denied · I denied sandbox access request ${requestId}. Do not retry it; carry on without that access, or tell me what you need.`;
   }
   const again =
-    tool === 'run_shell'
-      ? 'Run the same run_shell call again with exactly the same command, cwd, extra_read_paths, extra_write_paths and network_hosts.'
-      : 'Run the same run_python call again with exactly the same extra_read_paths, extra_write_paths and network_hosts.';
+    {
+      run_shell:
+        'Run the same run_shell call again with exactly the same command, cwd, extra_read_paths, extra_write_paths and network_hosts.',
+      file_upload: 'Run the same file_upload call again with exactly the same arguments.',
+    }[tool] ||
+    'Run the same run_python call again with exactly the same extra_read_paths, extra_write_paths and network_hosts.';
   return `✅ Approved · I approved sandbox access request ${requestId}. ${again}`;
 }
 
@@ -11850,17 +11853,33 @@ function _showSandboxApproval(data, ownerTabId) {
   const box = document.createElement('div');
   box.className = 'gator-compose-card gator-draft-card';
   const isShell = data.tool === 'run_shell';
-  const tool = isShell ? 'run_shell' : 'run_python';
+  const tool = ['run_shell', 'file_upload'].includes(data.tool) ? data.tool : 'run_python';
 
   const header = document.createElement('div');
   header.className = 'gcc-header';
   const title = document.createElement('div');
   title.className = 'gcc-title';
-  title.textContent = isShell ? 'AI Gator wants to run a command' : 'Code wants extra access';
+  const titles = {
+    run_shell: 'AI Gator wants to run a command',
+    file_upload: 'AI Gator wants to read a file to upload it',
+  };
+  title.textContent = titles[tool] || 'Code wants extra access';
   header.appendChild(title);
 
   const body = document.createElement('div');
   body.className = 'gcc-body';
+  if (tool === 'file_upload' && typeof data.destination === 'string' && data.destination) {
+    const row = document.createElement('div');
+    row.className = 'gcc-field-row gcc-field-row--block';
+    const key = document.createElement('span');
+    key.className = 'gcc-field-key';
+    key.textContent = 'Upload to';
+    const folder = document.createElement('div');
+    folder.className = 'gcc-field-val';
+    folder.textContent = data.destination;
+    row.append(key, folder);
+    body.appendChild(row);
+  }
   if (isShell && typeof data.command === 'string' && data.command) {
     const row = document.createElement('div');
     row.className = 'gcc-field-row gcc-field-row--block';
@@ -11918,6 +11937,7 @@ function _showSandboxApproval(data, ownerTabId) {
   const scopeSpecs = _scopeButtonSpecs(data.card);
   if (!scopeSpecs.length)
     scopeSpecs.push({ scope: 'tab', label: _scopeLabel('tab'), primary: true });
+  const onceOnly = scopeSpecs.length === 1 && scopeSpecs[0].scope === 'once';
   const scopeButtons = scopeSpecs.map((spec) => {
     const btn = document.createElement('button');
     btn.className = spec.primary ? 'gcc-approve-btn' : 'btn-secondary';
@@ -11934,8 +11954,9 @@ function _showSandboxApproval(data, ownerTabId) {
   footer.className = 'gcc-footer';
   const footNote = document.createElement('span');
   footNote.className = 'gcc-refine';
-  footNote.textContent =
-    'Allowed until you close this tab. Unanswered requests expire after 10 minutes.';
+  footNote.textContent = onceOnly
+    ? 'Unanswered requests expire after 10 minutes.'
+    : 'Allowed until you close this tab. Unanswered requests expire after 10 minutes.';
   footer.appendChild(footNote);
 
   box.append(header, body, actions, footer);
