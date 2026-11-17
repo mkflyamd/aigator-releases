@@ -107,7 +107,7 @@ _PER_CALL_TOOLS = {
         "start a sign-in with the server at the address below",
     ),
 }
-_HIDDEN_ON_CARD = {"connect_mcp_server": frozenset({"auth_value"})}
+_SECRET_NAME = re.compile(r"auth|token|secret|password|header|key|credential", re.IGNORECASE)
 URL_TOOLS = frozenset({"fetch_webpage", "extension_setup__fetch_doc"})
 
 
@@ -164,16 +164,27 @@ _CONTROL_CHARS = re.compile(
     r"[\x00-\x08\x0b-\x1f\x7f-\x9f\u200b-\u200f\u2028\u2029\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff\u061c\u180e\u00ad]")
 
 
-def _schema_keys(tool_name: str) -> frozenset | None:
-    """The arguments a built-in tool declares. Anything else the model adds is dropped before the tool runs, so it
-    stays off the card. None when the tool declares none, or is an MCP tool whose server receives every argument."""
-    if "__" in tool_name and not tool_name.startswith("extension_setup__"):
+def _shown_keys(tool_name: str) -> frozenset | None:
+    """The arguments that reach the tool, by the same rule execute_tool applies. None when it takes all of them."""
+    fn = shared.TOOL_DISPATCH.get(tool_name)
+    if fn is None:
         return None
-    for tool in shared.TOOLS:
-        if tool.get("name") == tool_name:
-            props = (tool.get("input_schema") or {}).get("properties")
-            return frozenset(props) if isinstance(props, dict) and props else None
-    return None
+    try:
+        _params, accepted, has_var_keyword, single_dict_arg = shared.handler_arguments(fn)
+    except (TypeError, ValueError):
+        return None
+    return None if has_var_keyword or single_dict_arg else frozenset(accepted)
+
+
+def _setup_view(tool_name: str, inputs: dict) -> dict:
+    """What a setup call acts on: for a connection test, the form it will run rather than the session id."""
+    if tool_name != "extension_setup__test_connection":
+        return inputs
+    try:
+        from extensions.tools import _SESSIONS
+        return _SESSIONS.get(str(inputs.get("session_id")))
+    except Exception:
+        return inputs
 
 
 def _call_details(inputs: dict | None, tool_name: str = "") -> str:
@@ -181,13 +192,15 @@ def _call_details(inputs: dict | None, tool_name: str = "") -> str:
     push a later argument such as the recipient out of sight."""
     if not inputs:
         return ""
-    declared = _schema_keys(tool_name) if tool_name else None
-    hidden = _HIDDEN_ON_CARD.get(tool_name, ())
+    shown = _shown_keys(tool_name) if tool_name else None
+    setup = tool_name in _PER_CALL_TOOLS
+    if setup:
+        inputs = _setup_view(tool_name, inputs)
     parts = []
     for key, value in inputs.items():
-        if declared is not None and key not in declared:
+        if shown is not None and key not in shown:
             continue
-        if key in hidden:
+        if setup and _SECRET_NAME.search(str(key)):
             value = "(hidden)" if value else ""
         text = _CONTROL_CHARS.sub(" ", json.dumps(value, default=str, ensure_ascii=False))
         if len(text) > _CARD_VALUE_MAX:

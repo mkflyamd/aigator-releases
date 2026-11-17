@@ -412,19 +412,36 @@ def test_a_card_hides_text_direction_and_soft_hyphen_characters_that_only_look_e
     assert not any(ch in details for ch in tricks)
 
 
-def test_a_built_in_tools_card_lists_only_the_arguments_the_tool_takes():
+def test_a_built_in_tools_card_lists_only_the_arguments_that_reach_the_tool():
     inputs = {"event_id": "e1", "padding": "x" * 50, "note": "Reply is fine"}
-    declared = ds._schema_keys("delete_calendar_event")
-    assert declared and "event_id" in declared
+    assert "event_id" in ds._shown_keys("delete_calendar_event")
     details = ds._call_details(inputs, "delete_calendar_event")
     assert '"event_id": "e1"' in details and "padding" not in details and "note" not in details
 
 
-def test_an_mcp_tools_card_lists_every_argument_because_the_server_receives_every_one(monkeypatch):
-    monkeypatch.setitem(shared.SKILL_TOOLS_MAP, "mcp-srv", ["srv__send"])
-    monkeypatch.setattr(shared, "TOOLS", [*shared.TOOLS, {"name": "srv__send", "input_schema": {"properties": {"a": {}}}}])
-    assert ds._schema_keys("srv__send") is None
-    assert '"extra": 1' in ds._call_details({"a": 1, "extra": 1}, "srv__send")
+def test_an_argument_the_tool_takes_but_does_not_declare_still_shows_on_the_card(monkeypatch):
+    def handler(a, hidden=None):
+        return {}
+    monkeypatch.setitem(shared.TOOL_DISPATCH, "plain_tool", handler)
+    details = ds._call_details({"a": 1, "hidden": "x", "dropped": 2}, "plain_tool")
+    assert '"hidden": "x"' in details and "dropped" not in details
+
+
+def test_a_tool_that_takes_every_argument_shows_every_argument_on_its_card(monkeypatch):
+    monkeypatch.setitem(shared.TOOL_DISPATCH, "srv__send", lambda **kw: {})
+    monkeypatch.setitem(shared.TOOL_DISPATCH, "whole_dict_tool", lambda args: {})
+    for tool in ("srv__send", "whole_dict_tool"):
+        assert ds._shown_keys(tool) is None
+        assert '"extra": 1' in ds._call_details({"a": 1, "extra": 1}, tool)
+
+
+def test_the_connection_test_card_shows_the_form_it_will_run_and_hides_credentials():
+    from extensions.tools import _SESSIONS
+    sid = _SESSIONS.create("mcp", {"command": "node", "args": ["srv.js"], "url": "https://mcp.example.test",
+                                   "headers": "Authorization: aigator-fake-api-key", "api_key": "aigator-fake-api-key"})
+    details = ds._call_details({"session_id": sid}, "extension_setup__test_connection")
+    assert '"command": "node"' in details and "https://mcp.example.test" in details
+    assert "aigator-fake-api-key" not in details and "session_id" not in details
 
 
 async def test_the_wizard_doc_fetch_refuses_a_url_that_could_carry_data_out_before_asking():
