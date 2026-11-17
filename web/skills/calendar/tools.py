@@ -83,7 +83,7 @@ def _normalize_send_updates(value: str | None) -> str:
 TOOL_DEFS = [
     {
         "name": "read_calendar",
-        "description": "Fetch calendar events for a specific date or date range. Use when user asks about their schedule, meetings, calendar, what's on for a day, or any day-specific plans (today, tomorrow, Monday, next week, etc.).",
+        "description": "Fetch calendar events for a specific date or date range. Use when user asks about their schedule, meetings, calendar, what's on for a day, or any day-specific plans (today, tomorrow, Monday, next week, etc.). Each event has a date field. If the result has truncated=true, later days are missing: read them with a later date and a smaller days value.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -133,7 +133,7 @@ TOOL_DEFS = [
     },
     {
         "name": "update_calendar_event",
-        "description": "Update an existing calendar event in place (reschedule, rename, adjust location/attendees) and send the appropriate update. Prefer this over cancelling and recreating when the user says 'reschedule' or 'move this meeting'.",
+        "description": "Stage an edit to an existing calendar event (reschedule, rename, adjust location/attendees). It shows an approval card with the before/after and changes nothing until the user presses Send update; do not tell the user it was updated. Prefer this over cancelling and recreating when the user says 'reschedule' or 'move this meeting'.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -198,8 +198,8 @@ TOOL_DEFS = [
         },
     },
     {
-        "name": "create_calendar_event",
-        "description": "Create a calendar event and send invites to attendees. Call this as soon as the user confirms the meeting details (time, subject, attendees). Do not ask for confirmation more than once.",
+        "name": "draft_calendar_event",
+        "description": "Create a meeting draft card. Every meeting gets a Teams link automatically, including in-person ones; do not ask about it. Nothing is sent until the user presses Send invite, or Open in Outlook to review, edit and send it from Outlook. Call this as soon as the user confirms the meeting details (time, subject, attendees). Do not ask for confirmation more than once.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -227,11 +227,6 @@ TOOL_DEFS = [
                     "description": "Meeting description or agenda. ALWAYS use HTML so Outlook recipients can reply with rich formatting. Use <ul><li>...</li></ul> for bullets, <br> for line breaks, <a href='...'>text</a> for links. HTML is detected automatically and sent as HTML contentType.",
                 },
                 "location": {"type": "string", "description": "Optional location name"},
-                "teams": {
-                    "type": "boolean",
-                    "description": "If true, adds a Microsoft Teams meeting link",
-                    "default": False,
-                },
                 "recurrence": {
                     "type": "object",
                     "description": "Graph recurrence object ({pattern, range}). Leave blank for one-off meetings.",
@@ -242,7 +237,7 @@ TOOL_DEFS = [
     },
     {
         "name": "find_meeting_times",
-        "description": "Find available meeting slots with one or more attendees using Microsoft's findMeetingTimes API. Use when the user asks to find a time, schedule a meeting, or wants to know when everyone is free. Call this BEFORE create_calendar_event when a specific time hasn't been agreed on.",
+        "description": "Find available meeting slots with one or more attendees using Microsoft's findMeetingTimes API. Use when the user asks to find a time, schedule a meeting, or wants to know when everyone is free. Call this BEFORE draft_calendar_event when a specific time hasn't been agreed on. Each slot carries its timezone and each attendee's local time; state both to the user.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -265,13 +260,61 @@ TOOL_DEFS = [
                     "description": "Max number of slot suggestions to return. Default 5.",
                     "default": 5,
                 },
+                "ignore_timezones": {
+                    "type": "boolean",
+                    "description": "Set true when the user asks to ignore timezones or attendee working hours. Default false: slots respect each attendee's working hours.",
+                    "default": False,
+                },
+            },
+            "required": ["attendees"],
+        },
+    },
+    {
+        "name": "show_availability_grid",
+        "description": "Show an Outlook-style availability grid card: people down the side, days and half-hour times across the top, mutual-free times highlighted, and the user clicks a free slot to pick it. Use it to let the user choose a meeting time among the attendees (any meeting, one-off or recurring). The click comes back as the user's next message. After calling it, end your turn with one short sentence; do not also call ask_user.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "attendees": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Attendee email addresses, not including the user",
+                },
+                "dates": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "ISO dates (YYYY-MM-DD) to show, up to 20. Defaults to the next ten working days.",
+                },
+                "duration_minutes": {
+                    "type": "integer",
+                    "description": "Meeting length in minutes. Default 30.",
+                    "default": 30,
+                },
+                "recurrence": {
+                    "type": "string",
+                    "enum": ["none", "daily", "weekdays", "weekly", "biweekly", "monthly", "yearly"],
+                    "description": "Starting choice for the card's One time / repeat selector. Use the cadence the user asked for; omit it (one time) when they did not say. The user can change it on the card and the final choice comes back with the pick.",
+                    "default": "none",
+                },
+                "subject": {
+                    "type": "string",
+                    "description": "Meeting title, when the user gave one. Pre-fills the card's Title box.",
+                },
+                "body": {
+                    "type": "string",
+                    "description": "Meeting message or agenda, when the user gave one. Pre-fills the card's Message box.",
+                },
+                "start_time": {
+                    "type": "string",
+                    "description": "Time of day the user asked for, 24-hour HH:MM in the user's own time zone (6 PM is 18:00). The card opens with that time selected on the first of `dates` where everyone is free; without it, on the first time everyone is free.",
+                },
             },
             "required": ["attendees"],
         },
     },
     {
         "name": "delete_calendar_event",
-        "description": "Delete (cancel) a calendar event by its ID. Use when the user asks to cancel or delete a meeting. Requires an event ID \u2014 call read_calendar first if you don't have it.",
+        "description": "Delete (cancel) a calendar event by its ID. Use when the user asks to cancel or delete a meeting. Requires an event ID \u2014 call read_calendar first if you don't have it. When attendees would be notified, this prepares a cancellation card the user must approve; the event is not cancelled until they do.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -299,7 +342,7 @@ TOOL_DEFS = [
                         "SendToAllAndSaveCopy",
                         "SendToNone",
                     ],
-                    "description": "Who should receive cancellation emails. Legacy Outlook values map to Graph's All/ExternalGuestsOnly/None set. Defaults to All.",
+                    "description": "Ignored. Graph always sends a cancellation to attendees when an organizer cancels a meeting.",
                     "default": "All",
                 },
             },
@@ -332,7 +375,7 @@ TOOL_DEFS = [
     },
     {
         "name": "create_ooo_event",
-        "description": "Create an Out of Office (OOO/PTO) all-day event on the user's calendar. Marks the user as OOF and optionally notifies colleagues (shows as Free on their calendars, no response required).",
+        "description": "Create an Out of Office (OOO/PTO) all-day event on the user's calendar and mark the user as OOF. With notify, it prepares an invite for colleagues as a draft the user must approve before anything is sent.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -421,8 +464,9 @@ TOOL_STATUS = {
     "read_calendar": "\U0001f4c5 Checking calendar...",
     "get_calendar_event_detail": "\U0001f4c5 Loading event details...",
     "update_calendar_event": "\U0001f4c5 Updating calendar event...",
-    "create_calendar_event": "\U0001f4c5 Creating calendar event...",
+    "draft_calendar_event": "\U0001f4c5 Drafting calendar event...",
     "find_meeting_times": "\U0001f4c5 Finding available slots...",
+    "show_availability_grid": "📅 Building availability grid...",
     "delete_calendar_event": "\U0001f4c5 Cancelling event...",
     "respond_calendar_event": "\U0001f4c5 Updating RSVP...",
     "create_ooo_event": "\U0001f4c5 Creating OOO event...",
@@ -437,39 +481,56 @@ def _tool_read_calendar(date: str = "", days: int = 1) -> dict:
 
     gc = get_cal_client()
     start, end = cal_day_range_utc(date, days)
-    events = gc.get(
+    headers = {"Prefer": f'outlook.timezone="{get_user_win_tz()}"'}
+    page = gc.get(
         "/me/calendarView",
         params={
             "startDateTime": start.isoformat().replace("+00:00", "Z"),
             "endDateTime": end.isoformat().replace("+00:00", "Z"),
-            "$top": "20",
+            "$top": str(_CALENDAR_PAGE_SIZE),
             "$select": "id,subject,start,end,location,isAllDay,organizer,isOrganizer,seriesMasterId,type",
             "$orderby": "start/dateTime",
         },
-        extra_headers={"Prefer": f'outlook.timezone="{get_user_win_tz()}"'},
+        extra_headers=headers,
     )
-    return {
-        "events": [
-            {
-                "id": e.get("id", ""),
-                "subject": e.get("subject", "(no subject)"),
-                "start": fmt_cal_time(e.get("start", {}).get("dateTime", "")),
-                "end": fmt_cal_time(e.get("end", {}).get("dateTime", "")),
-                "location": e.get("location", {}).get("displayName", ""),
-                "isAllDay": e.get("isAllDay", False),
-                "organizer": e.get("organizer", {})
-                .get("emailAddress", {})
-                .get("name", ""),
-                "isOrganizer": e.get("isOrganizer", False),
-                "seriesMasterId": e.get("seriesMasterId", ""),
-                "type": e.get("type", ""),
-            }
-            for e in events.get("value", [])
-        ]
-    }
+    raw = list(page.get("value", []))
+    while page.get("@odata.nextLink") and len(raw) < _CALENDAR_MAX_EVENTS:
+        page = gc.get_absolute(page["@odata.nextLink"], extra_headers=headers)
+        raw.extend(page.get("value", []))
+    events = [
+        {
+            "id": e.get("id", ""),
+            "subject": e.get("subject", "(no subject)"),
+            "date": e.get("start", {}).get("dateTime", "")[:10],
+            "start": fmt_cal_time(e.get("start", {}).get("dateTime", "")),
+            "end": fmt_cal_time(e.get("end", {}).get("dateTime", "")),
+            "location": e.get("location", {}).get("displayName", ""),
+            "isAllDay": e.get("isAllDay", False),
+            "organizer": e.get("organizer", {})
+            .get("emailAddress", {})
+            .get("name", ""),
+            "isOrganizer": e.get("isOrganizer", False),
+            "seriesMasterId": e.get("seriesMasterId", ""),
+            "type": e.get("type", ""),
+        }
+        for e in raw
+    ]
+    result = {"events": events}
+    if page.get("@odata.nextLink"):
+        last = events[-1]["date"] if events else ""
+        result["truncated"] = True
+        result["note"] = (
+            f"Only the first {len(events)} events are shown (up to {last}); later days are missing. "
+            "Read the remaining days with a later date and a smaller days value."
+        )
+    return result
 
 
-def _tool_create_calendar_event(
+_CALENDAR_PAGE_SIZE = 100
+_CALENDAR_MAX_EVENTS = 200
+
+
+def _tool_draft_calendar_event(
     subject: str,
     start: str,
     end: str,
@@ -477,67 +538,76 @@ def _tool_create_calendar_event(
     optional_attendees: list = None,
     body: str = "",
     location: str = "",
-    teams: bool = False,
     recurrence: dict | None = None,
 ) -> dict:
+    from .._drafts import create_draft
     from .._m365.helpers import get_cal_client
-    from .helpers import get_user_win_tz, fmt_cal_time
+    from .helpers import get_user_win_tz
+    from . import timezones
 
-    gc = get_cal_client()
     win_tz = get_user_win_tz()
-    event = {
+    required = _parse_email_list(attendees)
+    optional = [e for e in _parse_email_list(optional_attendees) if e.lower() not in {r.lower() for r in required}]
+    attendee_local = {}
+    for email, info in timezones.attendee_zones(
+        get_cal_client(), [e.lower() for e in required + optional], start[:10], win_tz
+    ).items():
+        shown = timezones.fmt_range(start, end, win_tz, info["timezone"])
+        if shown:
+            attendee_local[email] = shown
+    params = {
         "subject": subject,
-        "start": {"dateTime": start, "timeZone": win_tz},
-        "end": {"dateTime": end, "timeZone": win_tz},
+        "start": start,
+        "end": end,
+        "timezone": win_tz,
+        "attendees": required,
+        "optional_attendees": optional,
+        "body": body,
+        "location": location,
+        "teams": True,
+        "recurrence": recurrence,
     }
-    attendee_entries = []
-    seen_addresses = set()
-
-    def _append_attendees(addresses, attendee_type):
-        for email in _parse_email_list(addresses):
-            email = email.strip()
-            if not email:
-                continue
-            key = email.lower()
-            if key in seen_addresses:
-                continue
-            attendee_entries.append(
-                {
-                    "emailAddress": {"address": email},
-                    "type": attendee_type,
-                }
-            )
-            seen_addresses.add(key)
-
-    _append_attendees(attendees, "required")
-    _append_attendees(optional_attendees, "optional")
-
-    if attendee_entries:
-        event["attendees"] = attendee_entries
-
-    if body:
-        # Auto-detect HTML: any tag present → send as HTML so <a>, <br>, etc. render.
-        is_html = bool(re.search(r"<\w+[^>]*>", body))
-        event["body"] = {"contentType": "HTML" if is_html else "text", "content": body}
-    if location:
-        event["location"] = {"displayName": location}
-    if teams:
-        event["isOnlineMeeting"] = True
-        event["onlineMeetingProvider"] = "teamsForBusiness"
-    if recurrence:
-        event["recurrence"] = recurrence
-    try:
-        result = gc.post("/me/events", event)
-    except Exception as ex:
-        return {"created": False, "error": f"Unable to create event: {ex}"}
+    draft_id = create_draft(
+        draft_type="calendar-event",
+        params=params,
+        preview={"subject": subject, "attendees": required + optional},
+    )
     return {
-        "created": True,
-        "subject": result.get("subject", ""),
-        "start": fmt_cal_time(result.get("start", {}).get("dateTime", "")),
-        "end": fmt_cal_time(result.get("end", {}).get("dateTime", "")),
-        "teams_link": (result.get("onlineMeeting") or {}).get("joinUrl", ""),
-        "id": result.get("id", ""),
+        "_draft": "calendar-event",
+        "data": {**params, "attendee_local": attendee_local, "draft_id": draft_id},
+        "_user_message": "Meeting draft ready. Press Send invite to send it, or Open in Outlook to review and edit it first.",
     }
+
+
+_AVAILABILITY_ICON = {
+    "free": "\U0001f7e2",
+    "tentative": "\U0001f7e1",
+    "workingElsewhere": "\U0001f7e1",
+    "busy": "\U0001f534",
+    "oof": "\U0001f534",
+}
+
+
+def _availability_strip(slot: dict) -> str:
+    """One short line on who is free in a suggested slot. Fixed length: counts, then at most two names that are not free."""
+    people = [("You", slot.get("organizerAvailability"))]
+    for a in slot.get("attendeeAvailability") or []:
+        who = (a.get("attendee") or {}).get("emailAddress") or {}
+        name = (who.get("name") or who.get("address") or "").strip()
+        if ", " in name:
+            name = name.split(", ", 1)[1]
+        people.append((name.split(" ")[0] or "Attendee", a.get("availability")))
+    people = [(n, s) for n, s in people if s]
+    if not people:
+        return ""
+    others = [(n, s) for n, s in people if s != "free"]
+    if not others:
+        return f"\U0001f7e2 All {len(people)} free" if len(people) > 1 else "\U0001f7e2 Free"
+    parts = [f"\U0001f7e2 {len(people) - len(others)} of {len(people)} free"]
+    parts += [f"{_AVAILABILITY_ICON.get(s, chr(0x26AA))} {n} {s}" for n, s in others[:2]]
+    if len(others) > 2:
+        parts.append(f"+{len(others) - 2} more")
+    return " · ".join(parts)
 
 
 def _tool_find_meeting_times(
@@ -545,9 +615,11 @@ def _tool_find_meeting_times(
     date: str = "",
     duration_minutes: int = 30,
     max_suggestions: int = 5,
+    ignore_timezones: bool = False,
 ) -> dict:
     from .._m365.helpers import get_cal_client
     from .helpers import get_user_win_tz, fmt_cal_time
+    from . import timezones
 
     gc = get_cal_client()
     win_tz = get_user_win_tz()
@@ -556,39 +628,335 @@ def _tool_find_meeting_times(
         day = datetime.fromisoformat(date).replace(tzinfo=local_tz).strftime("%Y-%m-%d")
     else:
         day = (datetime.now(local_tz) + timedelta(days=1)).strftime("%Y-%m-%d")
+    time_constraint = {
+        "timeslots": [
+            {
+                "start": {"dateTime": f"{day}T08:00:00", "timeZone": win_tz},
+                "end": {"dateTime": f"{day}T18:00:00", "timeZone": win_tz},
+            }
+        ]
+    }
+    if ignore_timezones:
+        time_constraint["activityDomain"] = "unrestricted"
     result = gc.post(
         "/me/findMeetingTimes",
         {
             "attendees": [
                 {"emailAddress": {"address": a}, "type": "required"} for a in attendees
             ],
-            "timeConstraint": {
-                "timeslots": [
-                    {
-                        "start": {"dateTime": f"{day}T08:00:00", "timeZone": win_tz},
-                        "end": {"dateTime": f"{day}T18:00:00", "timeZone": win_tz},
-                    }
-                ]
-            },
+            "timeConstraint": time_constraint,
             "meetingDuration": f"PT{duration_minutes}M",
             "maxCandidates": max_suggestions,
         },
     )
+    zones = timezones.attendee_zones(gc, [a.lower() for a in attendees], day, win_tz)
     suggestions = []
     for slot in result.get("meetingTimeSuggestions", []):
         s = slot.get("meetingTimeSlot", {})
+        raw_start = s.get("start", {}).get("dateTime", "")
+        raw_end = s.get("end", {}).get("dateTime", "")
+        slot_tz = s.get("start", {}).get("timeZone") or win_tz
+        local = {}
+        for email, info in zones.items():
+            shown = timezones.fmt_range(raw_start, raw_end, slot_tz, info["timezone"])
+            if shown:
+                local[email] = shown
         suggestions.append(
             {
-                "start": fmt_cal_time(s.get("start", {}).get("dateTime", "")),
-                "end": fmt_cal_time(s.get("end", {}).get("dateTime", "")),
+                "start": fmt_cal_time(raw_start),
+                "end": fmt_cal_time(raw_end),
+                "timezone": slot_tz,
+                "attendee_local": local,
+                "availability": _availability_strip(slot),
                 "confidence": round(slot.get("confidence", 0) * 100),
             }
         )
     return {
         "date": day,
         "duration_minutes": duration_minutes,
+        "timezone": win_tz,
+        "ignore_timezones": ignore_timezones,
+        "attendee_timezones": zones,
         "suggestions": suggestions,
     }
+
+
+_GRID_WORK_START = 8 * 60
+_GRID_WORK_END = 18 * 60
+_GRID_DAY_SLOTS = 24 * 60 // 30
+_GRID_STEP = 30
+_GRID_DEFAULT_DAYS = 10
+_GRID_STATUS = {"0": "f", "1": "t", "2": "b", "3": "o", "4": "w"}
+
+
+def _clock12(minutes: int) -> str:
+    h, m = divmod(minutes, 60)
+    return f"{(h % 12) or 12}:{m:02d} {'AM' if h < 12 else 'PM'}"
+
+
+def _person_name(email: str) -> str:
+    return " ".join(p.capitalize() for p in re.split(r"[._\-]+", email.split("@")[0]) if p)
+
+
+def _mailbox_now(win_tz: str) -> datetime:
+    """The current time on the mailbox's clock, without a zone, to compare with the grid's mailbox-local slots."""
+    from . import timezones
+
+    zone = timezones.zone(win_tz)
+    return datetime.now(zone).replace(tzinfo=None) if zone else datetime.now()
+
+
+def _grid_days(dates, now: datetime) -> list:
+    days = []
+    for raw in dates or []:
+        try:
+            d = datetime.fromisoformat(str(raw)).date()
+        except ValueError:
+            continue
+        if d not in days:
+            days.append(d)
+    if days:
+        return days[:20]
+    return _next_working_days(now.date(), _GRID_DEFAULT_DAYS)
+
+
+def _next_working_days(after, count: int) -> list:
+    days = []
+    d = after
+    while len(days) < count:
+        d += timedelta(days=1)
+        if d.weekday() < 5:
+            days.append(d)
+    return days
+
+
+def _grid_day_runs(day_list: list) -> list[list]:
+    """Group days into runs of consecutive dates (at most a week), so one call can cover each run."""
+    runs: list[list] = []
+    for d in day_list:
+        if runs and d - runs[-1][-1] == timedelta(days=1) and len(runs[-1]) < 7:
+            runs[-1].append(d)
+        else:
+            runs.append([d])
+    return runs
+
+
+def _view_index_by_wall_slot(day, win_tz: str) -> list:
+    """Position in a getSchedule view (half hours elapsed since midnight) of each wall-clock half hour of `day`.
+
+    It is the wall-clock slot itself except on a daylight-saving day, where the clock skips or repeats an
+    hour: a skipped half hour has no position (None), and a repeated hour is read at its first pass.
+    """
+    from . import timezones
+
+    tz = timezones.zone(win_tz)
+    if tz is None:
+        return list(range(_GRID_DAY_SLOTS))
+    midnight = datetime.combine(day, datetime.min.time())
+    base = midnight.replace(tzinfo=tz).astimezone(timezone.utc)
+    positions = []
+    for k in range(_GRID_DAY_SLOTS):
+        wall = midnight + timedelta(minutes=k * _GRID_STEP)
+        utc = wall.replace(tzinfo=tz).astimezone(timezone.utc)
+        if utc.astimezone(tz).replace(tzinfo=None) != wall:
+            positions.append(None)
+        else:
+            positions.append(int((utc - base).total_seconds() // (_GRID_STEP * 60)))
+    return positions
+
+
+def _grid_day_payloads(gc, emails: list, day_list: list, win_tz: str, need: int, now: datetime) -> list:
+    from concurrent.futures import ThreadPoolExecutor
+
+    per_day = _GRID_DAY_SLOTS
+
+    def fetch_range(first, n_days: int) -> dict[str, str]:
+        views: dict[str, str] = {}
+        for i in range(0, len(emails), 20):
+            result = gc.post(
+                "/me/calendar/getSchedule",
+                {
+                    "schedules": emails[i : i + 20],
+                    "startTime": {"dateTime": f"{first:%Y-%m-%d}T00:00:00", "timeZone": win_tz},
+                    "endTime": {"dateTime": f"{first + timedelta(days=n_days):%Y-%m-%d}T00:00:00", "timeZone": win_tz},
+                    "availabilityViewInterval": _GRID_STEP,
+                },
+            )
+            for s in result.get("value", []):
+                views[(s.get("scheduleId") or "").lower()] = s.get("availabilityView") or ""
+        return views
+
+    def fetch_run(run: list) -> dict:
+        views = fetch_range(run[0], len(run))
+        expected = per_day * len(run)
+        if len(run) > 1 and any(v and len(v) != expected for v in views.values()):
+            # A daylight-saving change inside the run shifts the slot count; read those days one at a time.
+            return {d: fetch_range(d, 1) for d in run}
+        return {
+            d: {e: v[i * per_day : (i + 1) * per_day] for e, v in views.items()} for i, d in enumerate(run)
+        }
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        by_day: dict = {}
+        for part in pool.map(fetch_run, _grid_day_runs(day_list)):
+            by_day.update(part)
+    all_views = [by_day.get(d, {}) for d in day_list]
+    days = []
+    for day, views in zip(day_list, all_views):
+        rows = []
+        positions = _view_index_by_wall_slot(day, win_tz)
+        for e in emails:
+            view = views.get(e, "")
+            rows.append("".join(_GRID_STATUS.get(view[p], "?") if p is not None and p < len(view) else "?" for p in positions))
+        open_slots = ""
+        fit = ""
+        for k in range(per_day):
+            begin = k * _GRID_STEP
+            start = datetime.combine(day, datetime.min.time()) + timedelta(minutes=begin)
+            eligible = begin >= _GRID_WORK_START and begin + need * _GRID_STEP <= _GRID_WORK_END and start > now
+            open_slots += "1" if eligible else "0"
+            ok = eligible and all(r[j] in "f?" for r in rows for j in range(k, k + need))
+            fit += "1" if ok else "0"
+        days.append(
+            {"date": f"{day:%Y-%m-%d}", "label": f"{day:%a %b} {day.day}", "rows": rows, "open": open_slots, "fit": fit}
+        )
+    return days
+
+
+def _tool_load_availability_days(
+    emails: list,
+    after_date: str = "",
+    duration_minutes: int = 30,
+    count: int = 10,
+    dates: list | None = None,
+    with_zones: bool = False,
+) -> dict:
+    """Free/busy for people on an availability grid: the given `dates`, else the next working days after `after_date`."""
+    from .._m365.helpers import get_cal_client
+    from .helpers import get_user_win_tz
+
+    win_tz = get_user_win_tz()
+    now = _mailbox_now(win_tz)
+    if dates:
+        day_list = []
+        for raw in dates[:60]:
+            try:
+                d = datetime.fromisoformat(str(raw)).date()
+            except ValueError:
+                return {"error": "dates must be YYYY-MM-DD."}
+            if d not in day_list:
+                day_list.append(d)
+    else:
+        try:
+            after = datetime.fromisoformat(str(after_date)).date()
+        except ValueError:
+            return {"error": "after_date must be YYYY-MM-DD."}
+        day_list = _next_working_days(after, max(1, min(int(count), _GRID_DEFAULT_DAYS)))
+    if max(day_list) > now.date() + timedelta(days=365):
+        return {"error": "That is more than a year ahead."}
+    wanted = [e.lower() for e in _parse_email_list(emails)]
+    if not wanted:
+        return {"error": "Give at least one email."}
+    need = max(1, -(-int(duration_minutes or 30) // _GRID_STEP))
+    gc = get_cal_client()
+    out: dict = {"days": _grid_day_payloads(gc, wanted, day_list, win_tz, need, now)}
+    if with_zones:
+        from . import timezones
+
+        found = timezones.attendee_zones(gc, wanted, day_list[0].isoformat(), win_tz)
+        out["zones"] = {email: info["timezone"] for email, info in found.items()}
+    return out
+
+
+_GRID_REPEATS = ("none", "daily", "weekdays", "weekly", "biweekly", "monthly", "yearly")
+
+
+def _grid_pick(days: list, need: int, start_time: str, now: datetime) -> dict | None:
+    """The slot the grid opens on: the asked-for time of day, else the first slot everyone is free for."""
+    match = re.fullmatch(r"\s*(\d{1,2}):(\d{2})\s*", str(start_time or ""))
+    asked = int(match.group(1)) * 60 + int(match.group(2)) if match else None
+    if asked is not None and (asked >= 24 * 60 or asked % _GRID_STEP):
+        asked = None
+    if asked is not None:
+        k = asked // _GRID_STEP
+        for d in days:
+            begin = datetime.fromisoformat(d["date"]) + timedelta(minutes=asked)
+            free = all(r[j] in "f?" for r in d["rows"] for j in range(k, k + need)) if k + need <= len(d["rows"][0]) else False
+            if free and begin > now:
+                return {"date": d["date"], "minute": asked}
+    for d in days:
+        k = d["fit"].find("1")
+        if k >= 0:
+            return {"date": d["date"], "minute": k * _GRID_STEP}
+    return None
+
+
+def _tool_show_availability_grid(
+    attendees: list,
+    dates: list | None = None,
+    duration_minutes: int = 30,
+    recurrence: str = "none",
+    subject: str = "",
+    body: str = "",
+    start_time: str = "",
+) -> dict:
+    from .._m365.helpers import get_cal_client, get_cached_me
+    from .helpers import get_user_win_tz
+
+    gc = get_cal_client()
+    win_tz = get_user_win_tz()
+    now = _mailbox_now(win_tz)
+    me = get_cached_me(gc)
+    my_email = (me.get("mail") or me.get("userPrincipalName") or "").lower()
+    others = [e for e in _parse_email_list(attendees) if e.lower() != my_email]
+    if not others:
+        return {"error": "Give at least one attendee email."}
+    people = [{"name": "You", "email": my_email, "you": True, "optional": False}] + [
+        {"name": _person_name(e), "email": e.lower(), "you": False, "optional": False} for e in others
+    ]
+    emails = [p["email"] for p in people]
+    need = max(1, -(-int(duration_minutes or 30) // _GRID_STEP))
+    repeat = str(recurrence or "none").strip().lower()
+    repeat = repeat if repeat in _GRID_REPEATS else "none"
+    days = _grid_day_payloads(gc, emails, _grid_days(dates, now), win_tz, need, now)
+    from . import timezones
+
+    found = timezones.attendee_zones(gc, emails[1:], days[0]["date"] if days else "", win_tz)
+    for person in people:
+        if person["email"] in found:
+            person["timezone"] = found[person["email"]]["timezone"]
+    best = []
+    for d in days:
+        for k, c in enumerate(d["fit"]):
+            if c == "1" and len(best) < 5:
+                begin = k * _GRID_STEP
+                day = datetime.fromisoformat(d["date"])
+                best.append(f"{day:%A, %b} {day.day}, {_clock12(begin)} - {_clock12(begin + need * _GRID_STEP)}")
+    grid = {
+        "grid_id": f"grid-{int(datetime.now().timestamp() * 1000)}",
+        "timezone": win_tz,
+        "duration_minutes": need * _GRID_STEP,
+        "repeat": repeat,
+        "subject": str(subject or ""),
+        "body": str(body or ""),
+        "step_minutes": _GRID_STEP,
+        "first_minute": 0,
+        "work_start_minute": _GRID_WORK_START,
+        "work_end_minute": _GRID_WORK_END,
+        "people": people,
+        "days": days,
+        "pick": _grid_pick(days, need, start_time, now),
+    }
+    return {
+        "_availability_grid": grid,
+        "grid_shown": True,
+        "timezone": win_tz,
+        "mutual_free_examples": best,
+        "message": "An availability grid is on screen. End your turn now with one short sentence; a time is already selected (the one asked for if everyone is free, otherwise the first mutual slot) and the user can change it; their choice comes back as their next message.",
+    }
+
+
+_EVENT_GONE = "This event no longer exists — it may have been deleted or cancelled."
 
 
 def _tool_delete_calendar_event(
@@ -597,11 +965,73 @@ def _tool_delete_calendar_event(
     delete_series: bool = False,
     send_updates: str = "All",
 ) -> dict:
+    """Stage a cancellation as a draft card when it would email attendees. Nothing is cancelled until the user approves it. send_updates is accepted for older callers; Graph always notifies attendees."""
+    from .._drafts import create_draft
+    from .._m365.helpers import get_cal_client
+    from .helpers import get_user_win_tz
+
+    win_tz = get_user_win_tz()
+    try:
+        event = get_cal_client().get(
+            f"/me/events/{_eid(event_id)}",
+            {"$select": "id,subject,isOrganizer,type,organizer,attendees,start,end,webLink"},
+            extra_headers={"Prefer": f'outlook.timezone="{win_tz}"'},
+        )
+    except Exception as ex:
+        if getattr(ex, "status_code", 0) == 404:
+            return {"deleted": False, "not_found": True, "error": _EVENT_GONE}
+        return {"deleted": False, "error": f"Unable to load event: {ex}"}
+    if not event:
+        return {"deleted": False, "not_found": True, "error": _EVENT_GONE}
+    kind = ((event or {}).get("type") or "").lower()
+    people = _attendees_to_notify(event)
+    if not event.get("isOrganizer") or not people or (kind == "seriesmaster" and not delete_series):
+        return apply_calendar_cancel(event_id, comment, delete_series)
+
+    card = {
+        "event_id": event_id,
+        "subject": event.get("subject", ""),
+        "scope": "series" if delete_series else ("occurrence" if kind in ("occurrence", "exception") else "single"),
+        "timezone": win_tz,
+        "start": ((event.get("start") or {}).get("dateTime") or "")[:19],
+        "end": ((event.get("end") or {}).get("dateTime") or "")[:19],
+        "attendees": people,
+        "comment": (comment or "").strip(),
+        "delete_series": bool(delete_series),
+    }
+    draft_id = create_draft(
+        draft_type="calendar-cancel",
+        params=card,
+        preview={"subject": card["subject"], "attendees": [p["email"] for p in people]},
+    )
+    return {
+        "_draft": "calendar-cancel",
+        "data": {**card, "draft_id": draft_id},
+        "_user_message": "Cancellation ready. Press Send cancellation to cancel the meeting and notify attendees. Nothing has been cancelled yet.",
+    }
+
+
+def _attendees_to_notify(event: dict) -> list[dict]:
+    """Attendees other than rooms and the organizer, who receive a cancellation."""
+    organizer = (((event.get("organizer") or {}).get("emailAddress") or {}).get("address") or "").lower()
+    return [
+        {"name": who.get("name") or "", "email": who["address"]}
+        for a in event.get("attendees") or []
+        if a.get("type") != "resource"
+        and (who := a.get("emailAddress") or {}).get("address")
+        and who["address"].lower() != organizer
+    ]
+
+
+def apply_calendar_cancel(
+    event_id: str,
+    comment: str = "",
+    delete_series: bool = False,
+) -> dict:
+    """Cancel an event the user organizes and read it back. Returns deleted=False with an error when it could not."""
     from .._m365.helpers import get_cal_client
 
     gc = get_cal_client()
-
-    normalized_send_updates = _normalize_send_updates(send_updates)
 
     def _parse_dt(dt_str: str) -> datetime | None:
         """Return a timezone-aware UTC datetime if possible."""
@@ -627,7 +1057,7 @@ def _tool_delete_calendar_event(
     try:
         event = gc.get(
             f"/me/events/{_eid(event_id)}",
-            {"$select": "id,subject,isOrganizer,type,seriesMasterId,start"},
+            {"$select": "id,subject,isOrganizer,type,seriesMasterId,start,organizer,attendees"},
         )
     except Exception as ex:
         status_code = getattr(ex, "status_code", 0)
@@ -635,14 +1065,14 @@ def _tool_delete_calendar_event(
             return {
                 "deleted": False,
                 "not_found": True,
-                "error": "This event no longer exists — it may have been deleted or cancelled.",
+                "error": _EVENT_GONE,
             }
         return {"deleted": False, "error": f"Unable to load event: {ex}"}
     if not event:
         return {
             "deleted": False,
             "not_found": True,
-            "error": "This event no longer exists — it may have been deleted or cancelled.",
+            "error": _EVENT_GONE,
         }
     if not event.get("isOrganizer", False):
         return {
@@ -673,11 +1103,15 @@ def _tool_delete_calendar_event(
         delete_target = series_master_id
         is_series_master = True
 
-    # DELETE first — removes the event from the organizer's calendar and sends
-    # cancellation emails to attendees (when sendUpdates=All).
+    # Graph's /cancel is the only call that carries the organizer's note to
+    # attendees, and it also notifies them. A plain DELETE is used when nobody
+    # needs telling. Both remove the event from the organizer's calendar.
     delete_succeeded = False
     try:
-        gc.delete(f"/me/events/{_eid(delete_target)}?sendUpdates={normalized_send_updates}")
+        if _attendees_to_notify(event):
+            gc.post(f"/me/events/{_eid(delete_target)}/cancel", {"Comment": (comment or "").strip()})
+        else:
+            gc.delete(f"/me/events/{_eid(delete_target)}")
         delete_succeeded = True
     except Exception as ex:
         status_code = getattr(ex, "status_code", 0)
@@ -688,18 +1122,9 @@ def _tool_delete_calendar_event(
         else:
             return {
                 "deleted": False,
-                "error": f"Unable to delete event: {ex}",
+                "error": f"Unable to cancel event: {ex}",
                 "subject": event.get("subject", ""),
             }
-
-    # If the caller included a comment, send a cancel notification so attendees
-    # see the reason.  This is best-effort — the event is already deleted above.
-    cancel_comment = (comment or "").strip()
-    if cancel_comment and delete_succeeded:
-        try:
-            gc.post(f"/me/events/{_eid(delete_target)}/cancel", {"Comment": cancel_comment})
-        except Exception:
-            pass  # event already deleted; cancel may 404 — that's fine
 
     # ── Verification ──────────────────────────────────────────────────
     # Confirm the event is actually gone before reporting success.
@@ -711,7 +1136,7 @@ def _tool_delete_calendar_event(
         if remaining and not remaining.get("isCancelled", False):
             return {
                 "deleted": False,
-                "error": "Graph still shows this event as active after DELETE. Try again or cancel it manually in Outlook.",
+                "error": "Graph still shows this event as active after cancelling it. Try again or cancel it manually in Outlook.",
                 "subject": event.get("subject", ""),
             }
         if remaining and remaining.get("isCancelled", False):
@@ -833,7 +1258,9 @@ def _tool_create_ooo_event(
     subject: str = "",
     body: str = "",
 ) -> dict:
+    from .._drafts import create_draft
     from .._m365.helpers import get_cal_client
+    from .events import create_event, event_payload
     from .helpers import get_user_win_tz
 
     gc = get_cal_client()
@@ -844,31 +1271,38 @@ def _tool_create_ooo_event(
     end_midnight = (
         datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
     ).strftime("%Y-%m-%dT00:00:00")
-    event = {
+    invitees = list(dict.fromkeys(a.strip() for a in (notify or []) if a and a.strip()))
+    params = {
         "subject": subject,
-        "isAllDay": True,
-        "start": {"dateTime": f"{start_date}T00:00:00", "timeZone": win_tz},
-        "end": {"dateTime": end_midnight, "timeZone": win_tz},
-        "showAs": "oof",
-        "responseRequested": False,
-        "isReminderOn": False,
+        "start": f"{start_date}T00:00:00",
+        "end": end_midnight,
+        "timezone": win_tz,
+        "attendees": [],
+        "optional_attendees": invitees,
+        "body": body,
+        "body_plain": True,
+        "ooo": True,
     }
-    if notify:
-        event["attendees"] = [
-            {"emailAddress": {"address": a}, "type": "optional"} for a in notify if a
-        ]
-    if body:
-        event["body"] = {"contentType": "text", "content": body}
-    result = gc.post("/me/events", event)
-    event_id = result.get("id", "")
     date_label = start_date if start_date == end_date else f"{start_date} to {end_date}"
+    if invitees:
+        draft_id = create_draft(
+            draft_type="calendar-event",
+            params=params,
+            preview={"subject": subject, "attendees": invitees},
+        )
+        return {
+            "_draft": "calendar-event",
+            "data": {**params, "draft_id": draft_id},
+            "_user_message": "Out-of-office invite ready. Press Send invite to notify them, or Open in Outlook to review it first.",
+        }
+    result = create_event(event_payload(params))
     return {
         "created": True,
         "subject": subject,
         "dates": date_label,
         "your_calendar": "Out of Office",
-        "notified": notify or [],
-        "id": event_id,
+        "notified": [],
+        "id": result.get("id", ""),
     }
 
 
@@ -1011,7 +1445,7 @@ def _tool_get_calendar_event_detail(
         if status_code == 404:
             return {
                 "not_found": True,
-                "error": "This event no longer exists — it may have been deleted or cancelled.",
+                "error": _EVENT_GONE,
             }
         return {"error": f"Unable to load event: {ex}"}
 
@@ -1186,6 +1620,106 @@ def _normalize_local_datetime(dt_str: str, target_tz) -> str:
         return dt_str
 
 
+_UPDATE_READ_FIELDS = "subject,start,end,location,attendees,body,isOnlineMeeting,isOrganizer,type,webLink,recurrence"
+
+
+def _attendee_people(entries: list) -> dict:
+    people = {}
+    for entry in entries or []:
+        who = entry.get("emailAddress") or {}
+        address = (who.get("address") or "").strip()
+        if address:
+            people[address.lower()] = {
+                "email": address,
+                "name": who.get("name") or "",
+                "type": entry.get("type") or "required",
+            }
+    return people
+
+
+def _attendee_diff(before: list, after: list) -> dict:
+    old, new = _attendee_people(before), _attendee_people(after)
+    return {
+        "added": [p for key, p in new.items() if key not in old],
+        "removed": [p for key, p in old.items() if key not in new],
+        "moved": [
+            {"email": p["email"], "name": p["name"], "from": old[key]["type"], "to": p["type"]}
+            for key, p in new.items()
+            if key in old and old[key]["type"] != p["type"]
+        ],
+    }
+
+
+def _build_calendar_update(
+    event: dict,
+    win_tz: str,
+    subject: str = "",
+    start: str = "",
+    end: str = "",
+    location: str = "",
+    body: str = "",
+    attendees: list = None,
+    optional_attendees: list = None,
+    teams: bool | None = None,
+    recurrence: dict | None = None,
+    response_requested: bool | None = None,
+) -> dict:
+    """The Graph PATCH payload for the requested edits, with unchanged fields left out."""
+    local_tz = datetime.now().astimezone().tzinfo
+    payload = {}
+
+    if subject and subject != (event.get("subject") or ""):
+        payload["subject"] = subject
+
+    for key, value in (("start", start), ("end", end)):
+        if not value:
+            continue
+        wanted = _normalize_local_datetime(value, local_tz)
+        if wanted[:19] != ((event.get(key) or {}).get("dateTime") or "")[:19]:
+            payload[key] = {"dateTime": wanted, "timeZone": win_tz}
+
+    if location and location != ((event.get("location") or {}).get("displayName") or ""):
+        payload["location"] = {"displayName": location}
+
+    if body:
+        is_html = bool(re.search(r"<\w+[^>]*>", body))
+        payload["body"] = {"contentType": "HTML" if is_html else "text", "content": body}
+
+    entries = []
+    seen = set()
+    for addresses, kind in ((attendees, "required"), (optional_attendees, "optional")):
+        for email in _parse_email_list(addresses):
+            email = email.strip()
+            if email and email.lower() not in seen:
+                entries.append({"emailAddress": {"address": email}, "type": kind})
+                seen.add(email.lower())
+    if entries:
+        # Graph replaces the whole attendees array, so carry over the type the caller left out.
+        keep = {"required": not attendees, "optional": not optional_attendees, "resource": True}
+        for entry in event.get("attendees") or []:
+            who = entry.get("emailAddress") or {}
+            address = (who.get("address") or "").strip()
+            if address and address.lower() not in seen and keep.get(entry.get("type"), False):
+                entries.append({"emailAddress": who, "type": entry["type"]})
+                seen.add(address.lower())
+        diff = _attendee_diff(event.get("attendees"), entries)
+        if diff["added"] or diff["removed"] or diff["moved"]:
+            payload["attendees"] = entries
+
+    if teams is True and not event.get("isOnlineMeeting"):
+        payload["isOnlineMeeting"] = True
+        payload["onlineMeetingProvider"] = "teamsForBusiness"
+    elif teams is False and event.get("isOnlineMeeting"):
+        payload["isOnlineMeeting"] = False
+        payload["onlineMeetingProvider"] = "unknown"
+
+    if response_requested is not None:
+        payload["responseRequested"] = bool(response_requested)
+    if recurrence is not None:
+        payload["recurrence"] = recurrence
+    return payload
+
+
 def _tool_update_calendar_event(
     event_id: str,
     subject: str = "",
@@ -1200,108 +1734,144 @@ def _tool_update_calendar_event(
     send_updates: str = "All",
     response_requested: bool | None = None,
 ) -> dict:
-    """Reschedule or edit an existing event in place."""
+    """Stage an edit to an existing event as a draft card. Nothing changes until the user approves it."""
+    from .._drafts import create_draft
     from .._m365.helpers import get_cal_client
     from .helpers import get_user_win_tz
 
     gc = get_cal_client()
     win_tz = get_user_win_tz()
-    local_tz = datetime.now().astimezone().tzinfo
-
-    update_payload = {}
-
-    if subject:
-        update_payload["subject"] = subject
-
-    if start:
-        update_payload["start"] = {
-            "dateTime": _normalize_local_datetime(start, local_tz),
-            "timeZone": win_tz,
-        }
-    if end:
-        update_payload["end"] = {
-            "dateTime": _normalize_local_datetime(end, local_tz),
-            "timeZone": win_tz,
-        }
-
-    if location:
-        update_payload["location"] = {"displayName": location}
-
-    if body:
-        is_html = bool(re.search(r"<\w+[^>]*>", body))
-        update_payload["body"] = {
-            "contentType": "HTML" if is_html else "text",
-            "content": body,
-        }
-
-    attendee_entries = []
-    seen_addresses = set()
-
-    def _append(addresses, att_type):
-        for email in _parse_email_list(addresses):
-            email = email.strip()
-            if not email:
-                continue
-            key = email.lower()
-            if key in seen_addresses:
-                continue
-            attendee_entries.append(
-                {
-                    "emailAddress": {"address": email},
-                    "type": att_type,
-                }
-            )
-            seen_addresses.add(key)
-
-    _append(attendees, "required")
-    _append(optional_attendees, "optional")
-
-    if attendee_entries:
-        update_payload["attendees"] = attendee_entries
-
-    if teams is True:
-        update_payload["isOnlineMeeting"] = True
-        update_payload["onlineMeetingProvider"] = "teamsForBusiness"
-    elif teams is False:
-        update_payload["isOnlineMeeting"] = False
-        update_payload["onlineMeetingProvider"] = "unknown"
-
-    if response_requested is not None:
-        update_payload["responseRequested"] = bool(response_requested)
-    if recurrence is not None:
-        update_payload["recurrence"] = recurrence
-
-    if not update_payload:
-        return {"updated": False, "note": "No changes provided."}
-
-    normalized_send_updates = _normalize_send_updates(send_updates)
     try:
-        gc.patch(
-            f"/me/events/{_eid(event_id)}?sendUpdates={normalized_send_updates}",
-            update_payload,
+        event = gc.get(
+            f"/me/events/{_eid(event_id)}",
+            {"$select": _UPDATE_READ_FIELDS},
+            extra_headers={"Prefer": f'outlook.timezone="{win_tz}"'},
         )
     except Exception as ex:
-        return {"updated": False, "error": f"Unable to update event: {ex}"}
+        return {"updated": False, "error": f"Unable to read the event, so nothing was changed: {ex}"}
+    if not event.get("isOrganizer", True):
+        return {
+            "updated": False,
+            "error": "You can only edit meetings you organize. Ask the organizer to update the invite.",
+        }
 
-    try:
-        refreshed = gc.get(
-            f"/me/events/{_eid(event_id)}",
-            {
-                "$select": "subject,start,end,location,attendees,isOnlineMeeting,onlineMeetingUrl"
-            },
+    payload = _build_calendar_update(
+        event, win_tz, subject, start, end, location, body,
+        attendees, optional_attendees, teams, recurrence, response_requested,
+    )
+    if not payload:
+        return {"updated": False, "note": "The event already matches those values. Nothing to change."}
+
+    before = {
+        "start": ((event.get("start") or {}).get("dateTime") or "")[:19],
+        "end": ((event.get("end") or {}).get("dateTime") or "")[:19],
+        "subject": event.get("subject", ""),
+        "location": (event.get("location") or {}).get("displayName", ""),
+        "teams": bool(event.get("isOnlineMeeting")),
+    }
+    after = {
+        "start": (payload.get("start") or {}).get("dateTime", before["start"])[:19],
+        "end": (payload.get("end") or {}).get("dateTime", before["end"])[:19],
+        "subject": payload.get("subject", before["subject"]),
+        "location": (payload.get("location") or {}).get("displayName", before["location"]),
+        "teams": payload.get("isOnlineMeeting", before["teams"]),
+    }
+    diff = _attendee_diff(event.get("attendees"), payload.get("attendees", event.get("attendees")))
+    scope = {"seriesMaster": "series", "occurrence": "occurrence", "exception": "occurrence"}.get(event.get("type"), "single")
+    changed = [
+        name
+        for name, hit in (
+            ("subject", "subject" in payload),
+            ("when", "start" in payload or "end" in payload),
+            ("location", "location" in payload),
+            ("body", "body" in payload),
+            ("attendees", "attendees" in payload),
+            ("teams", "isOnlineMeeting" in payload),
+            ("recurrence", "recurrence" in payload),
+            ("response", "responseRequested" in payload),
         )
+        if hit
+    ]
+    card = {
+        "event_id": event_id,
+        "subject": before["subject"],
+        "scope": scope,
+        "timezone": win_tz,
+        "before": before,
+        "after": after,
+        "changed": changed,
+        "added": diff["added"],
+        "removed": diff["removed"],
+        "moved": diff["moved"],
+        "recurrence": payload.get("recurrence"),
+        "notify": _normalize_send_updates(send_updates),
+        "web_link": event.get("webLink") or "",
+    }
+    draft_id = create_draft(
+        draft_type="calendar-update",
+        params={**card, "payload": payload, "fingerprint": _event_fingerprint(event)},
+        preview={"subject": before["subject"], "attendees": [p["email"] for p in diff["added"]]},
+    )
+    return {
+        "_draft": "calendar-update",
+        "data": {**card, "draft_id": draft_id},
+        "_user_message": "Meeting update ready. Press Send update to apply it, or Open in Outlook to change it there. Nothing has been changed yet.",
+    }
+
+
+class EventChangedError(Exception):
+    """The event no longer matches what the update card was staged against."""
+
+
+def _event_fingerprint(event: dict) -> dict:
+    return {
+        "subject": event.get("subject") or "",
+        "start": ((event.get("start") or {}).get("dateTime") or "")[:19],
+        "end": ((event.get("end") or {}).get("dateTime") or "")[:19],
+        "location": (event.get("location") or {}).get("displayName") or "",
+        "body": (event.get("body") or {}).get("content") or "",
+        "attendees": sorted(
+            [(a.get("emailAddress") or {}).get("address", "").lower(), a.get("type") or "required"]
+            for a in event.get("attendees") or []
+        ),
+    }
+
+
+def apply_calendar_update(
+    event_id: str,
+    payload: dict,
+    send_updates: str = "All",
+    timezone: str = "",
+    fingerprint: dict | None = None,
+) -> dict:
+    """PATCH an approved update onto the event and read it back. Raises if Graph refuses.
+
+    Graph replaces the whole attendee list, so the payload is only safe against the event
+    as it was when staged. If the event changed since, nothing is sent.
+    """
+    from .._m365.helpers import get_cal_client
+
+    gc = get_cal_client()
+    if fingerprint is not None:
+        headers = {"Prefer": f'outlook.timezone="{timezone}"'} if timezone else None
+        current = gc.get(f"/me/events/{_eid(event_id)}", {"$select": _UPDATE_READ_FIELDS}, extra_headers=headers)
+        if _event_fingerprint(current) != fingerprint:
+            raise EventChangedError(
+                "This meeting changed after the update was prepared, so nothing was applied. "
+                "Ask Gator to prepare the update again."
+            )
+    gc.patch(f"/me/events/{_eid(event_id)}?sendUpdates={_normalize_send_updates(send_updates)}", payload)
+    try:
+        refreshed = gc.get(f"/me/events/{_eid(event_id)}", {"$select": "subject,start,end,attendees"})
     except Exception:
         refreshed = {}
-
     return {
         "updated": True,
         "event_id": event_id,
-        "subject": refreshed.get("subject", subject),
+        "subject": refreshed.get("subject", ""),
         "start": (refreshed.get("start") or {}).get("dateTime", ""),
         "end": (refreshed.get("end") or {}).get("dateTime", ""),
-        "location": (refreshed.get("location") or {}).get("displayName", ""),
-        "attendee_count": len(refreshed.get("attendees") or attendee_entries),
-        "online_meeting": (refreshed.get("onlineMeetingUrl") or ""),
+        "attendee_count": len(refreshed.get("attendees") or []),
     }
 
 
@@ -1463,8 +2033,9 @@ TOOL_HANDLERS = {
     "read_calendar": _tool_read_calendar,
     "get_calendar_event_detail": _tool_get_calendar_event_detail,
     "update_calendar_event": _tool_update_calendar_event,
-    "create_calendar_event": _tool_create_calendar_event,
+    "draft_calendar_event": _tool_draft_calendar_event,
     "find_meeting_times": _tool_find_meeting_times,
+    "show_availability_grid": _tool_show_availability_grid,
     "delete_calendar_event": _tool_delete_calendar_event,
     "respond_calendar_event": _tool_respond_calendar_event,
     "create_ooo_event": _tool_create_ooo_event,

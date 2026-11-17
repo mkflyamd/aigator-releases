@@ -130,3 +130,34 @@ def test_both_direct_router_paths_mark_their_data():
     from routes import chat
     for src in (inspect.getsource(chat), inspect.getsource(app)):
         assert 'data_sources.mark_direct_data(intent["tool"], direct["data"])' in src
+
+
+def test_calendar_people_and_contacts_share_one_approval():
+    cal = ds.source_for_call("read_calendar", {})
+    people = ds.source_for_call("search_people", {})
+    contacts = ds.source_for_call("search_contacts", {})
+    assert ds.approval_key(cal) == ds.approval_key(people) == ds.approval_key(contacts)
+    ds.allow_source("tab1", cal)
+    assert ds.is_allowed("tab1", people.key) and ds.is_allowed("tab1", contacts.key)
+
+
+def test_mail_and_teams_keep_their_own_approval():
+    cal = ds.source_for_call("read_calendar", {})
+    mail = ds.source_for_call("search_email", {})
+    teams = ds.source_for_call("read_channel_messages", {})
+    ds.allow_source("tab1", cal)
+    assert not ds.is_allowed("tab1", mail.key)
+    assert not ds.is_allowed("tab1", teams.key)
+    assert ds.approval_key(mail) == mail.key
+
+
+def test_group_card_names_all_three_sources():
+    text = ds.prompt_for(ds.source_for_call("search_people", {}), "search_people", {})
+    assert "Outlook calendar" in text["title"] and "Outlook contacts" in text["title"]
+
+
+def test_denying_a_group_source_denies_all_three():
+    cal = ds.source_for_call("read_calendar", {})
+    people = ds.source_for_call("search_people", {})
+    ds.deny_source("tab1", cal)
+    assert ds.recently_denied("tab1", people.key)

@@ -104,11 +104,9 @@ def test_direct_irreversible_tools_have_no_remembered_gate(tool):
     assert actions.gate_action(tool) is None
 
 
-def test_a_calendar_event_with_attendees_notifies_and_one_without_does_not():
-    assert actions.action_for_call("create_calendar_event", {"subject": "x"}) == actions.WRITE_PRIVATE
-    assert actions.action_for_call("create_calendar_event", {"attendees": ["a@b.c"]}) == actions.IRREVERSIBLE
-    assert actions.action_for_call("create_calendar_event", {"optional_attendees": "a@b.c"}) == actions.IRREVERSIBLE
-    assert actions.gate_action("create_calendar_event", {"attendees": ["a@b.c"]}) is None
+def test_a_meeting_draft_is_backed_by_its_card_and_the_availability_grid_only_reads():
+    assert actions.gate_action("draft_calendar_event", {"attendees": ["a@b.c"]}) == actions.WRITE_PRIVATE
+    assert actions.gate_action("show_availability_grid", {"attendees": ["a@b.c"]}) == actions.READ
 
 
 def test_a_file_moved_within_one_drive_can_be_undone_and_one_moved_across_drives_cannot():
@@ -134,7 +132,7 @@ def test_each_permission_a_call_can_be_filed_under_is_offered_for_the_app():
     ids = {c.id for c in registry.known()}
     assert "data:SharePoint and OneDrive:write_public" in ids
     assert {"data:OneNote:write_private", "data:OneNote:write_public"} <= ids
-    assert actions.gate_actions_possible("create_calendar_event") == {actions.WRITE_PRIVATE}
+    assert actions.gate_actions_possible("draft_calendar_event") == {actions.WRITE_PRIVATE}
     assert actions.gate_actions_possible("github_gh") == {actions.READ}
 
 
@@ -197,7 +195,6 @@ def _allow_everything_else_for(label):
 @pytest.mark.parametrize("tool,inputs,label", [
     ("delete_calendar_event", {"event_id": "e1"}, "Outlook calendar"),
     ("respond_calendar_event", {"event_id": "e1", "response": "accept"}, "Outlook calendar"),
-    ("create_calendar_event", {"subject": "x", "attendees": ["a@b.c"]}, "Outlook calendar"),
     ("delete_contact", {"contact_id": "c1"}, "Outlook contacts"),
     ("github_create_issue", {"repo": "o/r", "title": "x"}, "GitHub"),
     ("github_add_issue_comment", {"repo": "o/r", "number": 1, "body": "x"}, "GitHub"),
@@ -476,3 +473,20 @@ async def test_a_setup_card_is_shown_only_after_the_calls_before_it_in_the_batch
     assert finished == ["extension_setup__set_field"]
     resolve_browser_confirm(evt["confirm_id"], False, "once")
     await task
+
+
+async def test_allowing_calendar_reads_for_a_tab_also_covers_people_and_contacts_reads_but_not_contact_writes():
+    calls, cards = [], []
+    run = _runner(calls)
+    queue = asyncio.Queue()
+    answer = asyncio.create_task(_answer(queue, "tab", cards))
+    await run(_tc("read_calendar", {}, "c1"), queue)
+    await answer
+    assert [c["title"] for c in cards] == ["Allow access to Outlook calendar, the people directory and Outlook contacts?"]
+    await run(_tc("search_people", {"query": "a"}, "c2"), queue)
+    await run(_tc("search_contacts", {"query": "a"}, "c3"), queue)
+    assert calls == ["read_calendar", "search_people", "search_contacts"]
+    answer = asyncio.create_task(_answer(queue, "tab", cards))
+    await run(_tc("create_contact", {"name": "x"}, "c4"), queue)
+    await answer
+    assert len(cards) == 2

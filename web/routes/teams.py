@@ -4422,6 +4422,8 @@ _tx_list_transcripts = _tx_beta.list_transcripts
 _tx_fetch_content = _tx_beta.fetch_transcript_content
 _tx_resolve_chat = _tx_recording.resolve_recording_from_chat
 _tx_resolve_chat_all = _tx_recording.resolve_recordings_from_chat
+_tx_list_chat = _tx_recording.list_recordings_from_chat
+_tx_resolve_share = _tx_recording.resolve_share
 _tx_resolve_event = _tx_recording.resolve_recording_from_event
 
 
@@ -4441,6 +4443,7 @@ def _recording_to_dict(info) -> dict:
         "original_name": info.original_name,
         "has_transcript": info.has_transcript,
         "web_url": info.web_url,
+        "share_url": getattr(info, "share_url", ""),
         "created_at": getattr(info, "created_at", ""),
     }
 
@@ -4549,12 +4552,23 @@ def teams_chat_recording(chat_id: str):
 @router.get("/api/teams/chats/{chat_id}/recordings")
 def teams_chat_recordings(chat_id: str):
     try:
-        recs = _tx_resolve_chat_all(chat_id)
+        recs = _tx_list_chat(chat_id)
     except Exception as e:
-        log.info("resolve_recordings_from_chat(%s) failed: %s", chat_id, e)
+        log.info("list_recordings_from_chat(%s) failed: %s", chat_id, e)
         return {"total": 0, "recordings": []}
     out = [_recording_to_dict(r) for r in recs]
     return {"total": len(out), "recordings": out}
+
+
+@router.get("/api/recordings/resolve")
+def resolve_recording_share(share_url: str = ""):
+    parsed = urllib.parse.urlparse(share_url)
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme != "https" or not (
+        host == "sharepoint.com" or host.endswith(".sharepoint.com")
+    ):
+        raise HTTPException(status_code=400, detail="share_url must be a SharePoint link")
+    return _tx_resolve_share(share_url)
 
 
 @router.get("/api/calendar/events/{event_id}/recording")

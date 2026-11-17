@@ -20,6 +20,8 @@ class Source:
     flow_id: str = ""  # id used by the admin blocked_data_flows policy
     action: str = ""  # permissions.actions type the grant is filed under; "" for websites
     per_call: bool = False  # True = no tab or saved grant exists, every call gets its own card
+    group_keys: tuple = ()  # approving this source approves all of these keys together
+    group_label: str = ""
 
 
 _NATIVE_SOURCES = {
@@ -37,6 +39,8 @@ _NATIVE_SOURCES = {
     "slack": "Slack",
     "github": "GitHub",
 }
+_SCHEDULING = ("calendar", "people", "contacts")
+_SCHEDULING_LABEL = "Outlook calendar, the people directory and Outlook contacts"
 _MCP_LABELS = {
     "mcp-google-workspace": "Google Workspace",
 }
@@ -47,10 +51,14 @@ _BROWSER_TOOLS = frozenset({"browser_task", "browser_navigate", "browser_search"
 _DENY_WINDOW_S = 10.0
 
 
-def _data_source(prefix: str, label: str, flow_id: str, gate: str | None) -> Source:
+def _data_source(prefix: str, label: str, flow_id: str, gate: str | None, grouped: bool = False) -> Source:
     if gate is None:
         return Source(key=f"{prefix}:{actions.IRREVERSIBLE}", label=label, kind="data", flow_id=flow_id,
                       action=actions.IRREVERSIBLE, per_call=True)
+    if grouped and gate == actions.READ:
+        return Source(key=f"{prefix}:{gate}", label=label, kind="data", flow_id=flow_id, action=gate,
+                      group_keys=tuple(f"data:{_NATIVE_SOURCES[s]}:{gate}" for s in _SCHEDULING),
+                      group_label=_SCHEDULING_LABEL)
     return Source(key=f"{prefix}:{gate}", label=label, kind="data", flow_id=flow_id, action=gate)
 
 
@@ -58,7 +66,7 @@ def _native_source(tool_name: str, inputs: dict | None = None) -> Source | None:
     for skill_id, label in _NATIVE_SOURCES.items():
         if tool_name in shared.SKILL_TOOLS_MAP.get(skill_id, ()):
             return _data_source(f"data:{label}", label, skill_id.removeprefix("m365-"),
-                                actions.gate_action(tool_name, inputs))
+                                actions.gate_action(tool_name, inputs), grouped=skill_id in _SCHEDULING)
     return None
 
 
@@ -237,7 +245,7 @@ def prompt_for(source: Source, tool_name: str, inputs: dict | None = None) -> di
             "deny_label": "Deny",
         }
     elif source.action == actions.READ:
-        action = f"AI Gator wants to read from {source.label} (tool: {tool_name}). {_STAYS_ALLOWED}"
+        action = f"AI Gator wants to read from {source.group_label or source.label} (tool: {tool_name}). {_STAYS_ALLOWED}"
     else:
         what = ("save a draft or a private change in" if source.action == actions.WRITE_PRIVATE
                 else "change shared content in")
@@ -248,7 +256,7 @@ def prompt_for(source: Source, tool_name: str, inputs: dict | None = None) -> di
             "deny_label": "Deny",
         }
     return {
-        "title": f"Allow access to {source.label}?",
+        "title": f"Allow access to {source.group_label or source.label}?",
         "action": action,
         "allow_label": "Allow for this tab",
         "deny_label": "Deny",
@@ -337,6 +345,20 @@ def allowed_with_prefix(context_id: str, prefix: str) -> list[str]:
 def deny(context_id: str, key: str) -> None:
     with _LOCK:
         _DENIED[(context_id, key)] = time.monotonic()
+
+
+def approval_key(source: Source) -> str:
+    return source.group_keys[0] if source.group_keys else source.key
+
+
+def allow_source(context_id: str, source: Source) -> None:
+    for key in source.group_keys or (source.key,):
+        allow(context_id, key)
+
+
+def deny_source(context_id: str, source: Source) -> None:
+    for key in source.group_keys or (source.key,):
+        deny(context_id, key)
 
 
 def recently_denied(context_id: str, key: str, window_s: float = _DENY_WINDOW_S) -> bool:

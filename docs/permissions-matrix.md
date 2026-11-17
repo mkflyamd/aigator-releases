@@ -38,7 +38,9 @@ A not-reversible tool is never remembered or allowed for a tab. It does one of t
 - Draft card. The tool only prepares a draft or is refused. The draft's approval card is the per-call approval, and the access gate in front of it is the app's "Write to private" permission.
 - Asks every time. The tool acts as soon as it runs, so each call gets its own card with only Allow this time and Deny.
 
-Some tools depend on the call. Creating a calendar event or an out-of-office event with nobody to notify is a private write. Running `gh` with a read-only command is a read. Moving or copying a OneDrive file within one drive is a reversible shared write, and into another drive is not reversible. Creating a OneNote notebook, section or page with a `site_id` is a reversible shared write, because a team notebook is visible to others. Any other call to these tools is not reversible.
+Some tools depend on the call. Creating an out-of-office event with nobody to notify is a private write. Running `gh` with a read-only command is a read. Moving or copying a OneDrive file within one drive is a reversible shared write, and into another drive is not reversible. Creating a OneNote notebook, section or page with a `site_id` is a reversible shared write, because a team notebook is visible to others. Any other call to these tools is not reversible.
+
+A tab's Read approval for Outlook calendar also covers the people directory and Outlook contacts, and the card names all three. Their write permissions stay separate.
 
 ## MCP tools
 
@@ -110,10 +112,11 @@ The tables list every built-in tool of the connected apps. The tool names in `we
 
 ### Outlook calendar
 
-| Action type                     | Tools                                                                                                                                             |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Read                            | `check_availability`, `find_meeting_times`, `get_calendar_event_detail`, `read_calendar`                                                          |
-| Not reversible, asks every time | `add_calendar_attendees`, `create_calendar_event`, `create_ooo_event`, `delete_calendar_event`, `respond_calendar_event`, `update_calendar_event` |
+| Action type                     | Tools                                                                                                                    |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| Read                            | `check_availability`, `find_meeting_times`, `get_calendar_event_detail`, `read_calendar`, `show_availability_grid`       |
+| Not reversible, draft card      | `draft_calendar_event`                                                                                                   |
+| Not reversible, asks every time | `add_calendar_attendees`, `create_ooo_event`, `delete_calendar_event`, `respond_calendar_event`, `update_calendar_event` |
 
 ### Outlook contacts
 
