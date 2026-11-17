@@ -111,3 +111,20 @@ def test_copy_request_exception_is_ambiguous(monkeypatch):
     with patch("skills._m365.helpers.get_skill_client", return_value=_gc()):
         out = od._tool_copy_onedrive_file("d1", "i1", "d2", "f2")
     assert out["error_code"] == "unknown" and out["ambiguous"] is True
+
+
+def _copy_answered(monkeypatch, status):
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: _Resp(status, text="oops"))
+    with patch("skills._m365.helpers.get_skill_client", return_value=_gc()):
+        return od._tool_copy_onedrive_file("d1", "i1", "d2", "f2")
+
+
+def test_copy_request_answered_with_a_server_fault_is_ambiguous(monkeypatch):
+    for status in (500, 502, 503, 504):
+        out = _copy_answered(monkeypatch, status)
+        assert f"HTTP {status}" in out["error"] and out["ambiguous"] is True
+
+
+def test_copy_request_refused_with_a_client_error_is_not_ambiguous(monkeypatch):
+    for status in (403, 404, 409, 423):
+        assert "ambiguous" not in _copy_answered(monkeypatch, status)

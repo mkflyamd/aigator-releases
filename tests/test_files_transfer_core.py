@@ -282,7 +282,6 @@ def test_ambiguous_copy_error_is_pending_without_upload(tmp_path):
 
 
 @pytest.mark.parametrize("copy", [
-    {"error": "Copy request returned HTTP 500: oops", "error_code": "unknown"},
     {"error": "Copy request returned HTTP 423: locked", "error_code": "locked"},
 ])
 def test_definite_copy_refusal_falls_back_to_download_and_upload(copy, tmp_path):

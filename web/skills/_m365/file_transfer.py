@@ -264,7 +264,7 @@ def _folder_item_path(drive_id: str, folder_id: str, name: str) -> str:
 
 def store_in_folder(gc, source: Source, drive_id: str, folder_id: str, on_conflict: str = "rename") -> dict:
     """Upload into a folder addressed by drive and item ID. Never overwrites: a clash renames."""
-    from .._files.errors import classify_graph_error, http_status
+    from .._files.errors import classify_graph_error, http_status, may_have_happened
 
     if on_conflict not in ("rename", "fail"):
         raise ValueError(f"on_conflict must be 'rename' or 'fail', got {on_conflict!r}")
@@ -276,7 +276,9 @@ def store_in_folder(gc, source: Source, drive_id: str, folder_id: str, on_confli
         else:
             item, err, sha = _put_large(gc, source, item_path, on_conflict, name)
     except Exception as e:
-        unanswered = http_status(e) == 0
+        status = http_status(e)
+        # A local read error sent nothing, so the folder cannot hold the file.
+        unanswered = may_have_happened(status) and not (status == 0 and isinstance(e, OSError))
         return _result(
             "error",
             error="transfer_failed",
@@ -286,7 +288,7 @@ def store_in_folder(gc, source: Source, drive_id: str, folder_id: str, on_confli
             **(
                 {
                     "ambiguous": True,
-                    "hint": "No answer came back, so the file may already be in the folder. Check the destination "
+                    "hint": "No clear answer came back, so the file may already be in the folder. Check the destination "
                     "before uploading it again.",
                 }
                 if unanswered

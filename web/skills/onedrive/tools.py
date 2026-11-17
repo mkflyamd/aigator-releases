@@ -1589,7 +1589,7 @@ def _tool_copy_onedrive_file(source_drive_id: str, source_item_id: str,
     then poll the monitor URL until the copy completes.
     """
     from .._m365.helpers import get_skill_client
-    from .._files.errors import classify_graph_error, classify_status
+    from .._files.errors import classify_graph_error, classify_status, may_have_happened
     import httpx as _httpx
     import json as _json
     import time as _time
@@ -1623,10 +1623,13 @@ def _tool_copy_onedrive_file(source_drive_id: str, source_item_id: str,
         return {"error": f"Copy request failed: {e}", "error_code": classify_graph_error(e), "ambiguous": True}
 
     if r.status_code not in (202, 200, 201):
-        return {
+        out = {
             "error": f"Copy request returned HTTP {r.status_code}: {r.text[:300]}",
             "error_code": classify_status(r.status_code),
         }
+        if may_have_happened(r.status_code):
+            out["ambiguous"] = True
+        return out
 
     monitor_url = r.headers.get("Location", "")
     if not monitor_url:

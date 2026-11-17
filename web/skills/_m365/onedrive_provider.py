@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 from urllib.parse import quote
 
-from .._files.errors import classify_graph_error, http_status
+from .._files.errors import classify_graph_error, http_status, may_have_happened
 from . import file_transfer as ft
 
 
@@ -78,8 +78,8 @@ class OneDriveProvider:
             )
         except Exception as e:
             out = _failure("Copy failed", e)
-            if not http_status(e):
-                out["ambiguous"] = True  # no HTTP answer: the copy may still have been started
+            if may_have_happened(http_status(e)):
+                out["ambiguous"] = True  # no answer or a 5xx: the copy may still have been started
             return out
 
     def find_in_folder(self, dest_folder, name, size):

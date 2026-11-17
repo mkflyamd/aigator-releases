@@ -23,5 +23,10 @@ def http_status(exc: Exception) -> int:
     return int(status or 0)
 
 
+def may_have_happened(status: int) -> bool:
+    """No answer (0) or a server fault (5xx): Graph may have acted, so a retry or fallback could duplicate."""
+    return status == 0 or status >= 500
+
+
 def classify_graph_error(exc: Exception) -> str:
     return classify_status(http_status(exc))

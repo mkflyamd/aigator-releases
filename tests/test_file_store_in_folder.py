@@ -182,6 +182,22 @@ def test_a_put_that_got_no_answer_is_reported_as_possibly_stored_and_never_as_a_
     assert "may already be in the folder" in out["hint"]
 
 
+@pytest.mark.parametrize("status", [500, 502, 503, 504])
+def test_a_put_answered_with_a_server_fault_is_reported_as_possibly_stored(tmp_path, status):
+    f = tmp_path / "a.txt"
+    f.write_bytes(b"hello")
+    out = ft.store_in_folder(FakeGC(put_error=Err(status)), ft.file_source(str(f)), "d", "f")
+    assert out["status"] == "error" and out["ambiguous"] is True
+    assert "may already be in the folder" in out["hint"]
+
+
+def test_a_local_read_error_is_a_plain_failure_because_nothing_was_sent(tmp_path):
+    f = tmp_path / "a.txt"
+    f.write_bytes(b"hello")
+    out = ft.store_in_folder(FakeGC(put_error=PermissionError("denied")), ft.file_source(str(f)), "d", "f")
+    assert out["status"] == "error" and "ambiguous" not in out and "hint" not in out
+
+
 def test_a_put_the_server_refused_is_a_plain_failure(tmp_path):
     f = tmp_path / "a.txt"
     f.write_bytes(b"hello")

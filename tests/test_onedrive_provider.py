@@ -1,6 +1,8 @@
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
 from skills._m365 import file_transfer as ft
 from skills._m365.onedrive_provider import OneDriveProvider
 
@@ -264,9 +266,16 @@ def test_copy_exception_without_http_status_is_ambiguous():
     assert out["ambiguous"] is True and out["error_code"] == "unknown"
 
 
-def test_copy_exception_with_http_status_is_not_ambiguous():
-    p, _ = provider(copy=MagicMock(side_effect=Err(500)))
+@pytest.mark.parametrize("status", [403, 404, 409, 423])
+def test_copy_exception_with_a_client_error_status_is_not_ambiguous(status):
+    p, _ = provider(copy=MagicMock(side_effect=Err(status)))
     assert "ambiguous" not in p.copy(SRC, DEST, "")
+
+
+@pytest.mark.parametrize("status", [500, 502, 503, 504])
+def test_copy_exception_with_a_server_fault_status_is_ambiguous(status):
+    p, _ = provider(copy=MagicMock(side_effect=Err(status)))
+    assert p.copy(SRC, DEST, "")["ambiguous"] is True
 
 
 def test_only_the_me_drive_id_is_taken_for_the_users_own_drive():
