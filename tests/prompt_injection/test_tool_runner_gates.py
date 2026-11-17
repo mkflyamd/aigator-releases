@@ -58,7 +58,7 @@ async def test_first_use_of_a_source_asks_then_remembers_for_the_tab():
     assert res.get("ok") is True and calls == ["search_email"]
     assert cards[0]["title"] == "Allow access to Outlook mail?"
     assert cards[0]["allow_label"] == "Allow for this tab" and cards[0]["deny_label"] == "Deny"
-    assert ds.is_allowed("tab-a", "data:Outlook mail")
+    assert ds.is_allowed("tab-a", "data:Outlook mail:read")
     await asyncio.wait_for(run(_tc("read_email", call_id="c2"), asyncio.Queue()), 5)  # no card, would hang
     assert calls == ["search_email", "read_email"]
 
@@ -70,7 +70,7 @@ async def test_deny_returns_an_error_and_does_not_run_the_tool():
     assert res["error"] == "data_source_denied" and "Jira" in res["source"]
     assert "do not retry" in res["hint"].lower()
     assert calls == []
-    assert not ds.is_allowed("tab-a", "data:Jira")
+    assert not ds.is_allowed("tab-a", "data:Jira:read")
 
 
 async def test_a_denied_source_is_not_asked_again_straight_away():
@@ -82,12 +82,12 @@ async def test_a_denied_source_is_not_asked_again_straight_away():
 
 
 async def test_another_tab_must_ask_again():
-    ds.allow("tab-a", "data:Slack")
+    ds.allow("tab-a", "data:Slack:read")
     calls, q = [], asyncio.Queue()
     run = _runner(calls, context_id="tab-b")
     res, _ = await asyncio.gather(run(_tc("slack_search_users"), q), _answer(q, True))
     assert res.get("ok") is True
-    assert ds.is_allowed("tab-b", "data:Slack")
+    assert ds.is_allowed("tab-b", "data:Slack:read")
 
 
 async def test_parallel_calls_to_one_new_source_share_one_card():
@@ -153,6 +153,23 @@ async def test_the_confirm_route_still_answers_a_pending_card():
     assert reply == {"ok": True} and res.get("ok") is True
 
 
+async def test_the_confirm_route_passes_the_chosen_scope_to_the_gate():
+    import permissions
+    from routes.tasks import ConfirmScope, browser_confirm_allow
+
+    q = asyncio.Queue()
+
+    async def click():
+        while True:
+            evt = await asyncio.wait_for(q.get(), 5)
+            if evt["kind"] == "browser_confirm":
+                return await browser_confirm_allow(evt["confirm_id"], ConfirmScope(scope="always"))
+
+    res, reply = await asyncio.gather(_runner([])(_tc("search_email"), q), click())
+    assert reply == {"ok": True} and res.get("ok") is True
+    assert permissions.decision("tab-z", "data:Outlook mail:read") == "allow"
+
+
 async def test_no_card_without_a_tab_or_for_tools_with_no_source():
     calls = []
     res = await asyncio.wait_for(_runner(calls, context_id=None)(_tc("search_email"), asyncio.Queue()), 5)
@@ -193,7 +210,7 @@ def test_offered_names_reads_both_tool_shapes():
 def test_both_loops_hand_the_runner_the_tab_and_the_offered_tools():
     import inspect
     src = inspect.getsource(agent_loop)
-    assert src.count('("confirm_id", "action", "title", "allow_label", "deny_label", "diagram")') == 2
+    assert src.count('("confirm_id", "action", "title", "allow_label", "deny_label", "diagram", "category", "card")') == 2
     assert src.count("context_id=context_id, offered_names=_offered_tool_names(normalized_tools)") == 2
 
 
@@ -430,3 +447,125 @@ async def test_bidi_and_zero_width_characters_are_stripped_from_the_schedule_car
     action = cards[0]["action"]
     assert not any(ch in action for ch in hidden)
     assert action.startswith("Name: Digest")
+
+
+# ── "Always allow" and the scope the user picked on the card ──────────────────
+
+async def _answer_scope(queue, scope, cards=None):
+    while True:
+        evt = await asyncio.wait_for(queue.get(), 5)
+        if evt["kind"] == "browser_confirm":
+            if cards is not None:
+                cards.append(evt)
+            resolve_browser_confirm(evt["confirm_id"], True, scope)
+            return
+
+
+async def test_a_data_source_card_offers_scope_buttons_with_always_leading():
+    cards, q = [], asyncio.Queue()
+    await asyncio.gather(_runner([])(_tc("search_email"), q), _answer(q, True, cards))
+    assert cards[0]["category"] == "data:Outlook mail:read"
+    assert cards[0]["card"] == {"scopes": ["always", "tab"], "primary": "always"}
+
+
+async def test_always_on_a_source_card_saves_a_rule_so_a_new_tab_is_not_asked():
+    import permissions
+    calls, q = [], asyncio.Queue()
+    await asyncio.gather(_runner(calls)(_tc("search_email"), q), _answer_scope(q, "always"))
+    assert permissions.decision("tab-z", "data:Outlook mail:read") == "allow"
+    assert not ds.is_allowed("tab-a", "data:Outlook mail:read")
+    res = await asyncio.wait_for(_runner(calls, context_id="tab-z")(_tc("read_email", call_id="c2"), asyncio.Queue()), 5)
+    assert res.get("ok") is True and calls == ["search_email", "read_email"]
+
+
+async def test_tab_on_a_source_card_does_not_save_a_rule():
+    import permissions
+    q = asyncio.Queue()
+    await asyncio.gather(_runner([])(_tc("search_email"), q), _answer_scope(q, "tab"))
+    assert ds.is_allowed("tab-a", "data:Outlook mail:read")
+    assert permissions.decision("tab-z", "data:Outlook mail:read") == "ask"
+
+
+async def test_once_on_a_card_allows_the_call_without_remembering_it():
+    calls, q = [], asyncio.Queue()
+    res, _ = await asyncio.gather(_runner(calls)(_tc("search_email"), q), _answer_scope(q, "once"))
+    assert res.get("ok") is True and calls == ["search_email"]
+    assert not ds.is_allowed("tab-a", "data:Outlook mail:read")
+
+
+def test_a_saved_rule_never_applies_to_an_unattended_run():
+    import permissions
+    permissions.remember("data:Outlook mail:read")
+    assert permissions.decision(None, "data:Outlook mail:read") == "ask"
+    assert permissions.decision("", "data:Outlook mail:read") == "ask"
+
+
+async def test_a_saved_website_rule_covers_that_host_only():
+    import permissions
+    permissions.remember("web", "example.com")
+    calls = []
+    await asyncio.wait_for(_runner(calls)(_tc("fetch_webpage", {"url": "https://example.com/a"}), asyncio.Queue()), 5)
+    assert calls == ["fetch_webpage"]
+    cards, q = [], asyncio.Queue()
+    await asyncio.gather(_runner(calls)(_tc("fetch_webpage", {"url": "https://other.example.org/"}, "c2"), q), _answer(q, True, cards))
+    assert cards and cards[0]["category"] == "web"
+
+
+async def test_schedule_task_always_is_remembered_and_old_pages_without_a_scope_stay_once():
+    import permissions
+    calls, q = [], asyncio.Queue()
+    await asyncio.gather(_runner(calls)(_tc("schedule_task", _SCHED), q), _answer(q, True))
+    assert permissions.decision("tab-a", "schedule_task") == "ask"
+    q = asyncio.Queue()
+    await asyncio.gather(_runner(calls)(_tc("schedule_task", _SCHED, "c2"), q), _answer_scope(q, "always"))
+    await asyncio.wait_for(_runner(calls)(_tc("schedule_task", _SCHED, "c3"), asyncio.Queue()), 5)  # no card
+    assert calls == ["schedule_task"] * 3
+
+
+async def test_browser_scope_tab_skips_the_next_card():
+    calls, q = [], asyncio.Queue()
+    run = _runner(calls)
+    await asyncio.gather(run(_tc("browser_navigate", {"url": "https://example.com/"}), q), _answer_scope(q, "tab"))
+    await asyncio.wait_for(run(_tc("browser_navigate", {"url": "https://example.com/"}, "c2"), asyncio.Queue()), 5)
+    assert calls == ["browser_navigate"] * 2
+
+
+async def test_admin_policy_deny_turns_always_into_this_tab(monkeypatch):
+    import permissions
+    from sandbox.policy import Policy
+    monkeypatch.setattr(permissions, "load_policy", lambda: Policy(persistent_permissions="deny"))
+    cards, q = [], asyncio.Queue()
+    await asyncio.gather(_runner([])(_tc("search_email"), q), _answer_scope(q, "always", cards))
+    assert cards[0]["card"]["scopes"] == ["tab"]
+    assert permissions.decision("tab-z", "data:Outlook mail:read") == "ask"
+    assert ds.is_allowed("tab-a", "data:Outlook mail:read")
+
+
+async def test_a_call_let_through_by_a_saved_rule_is_tagged_for_telemetry():
+    import permissions
+    from agent_loop import _summarize_tool_calls
+    permissions.remember("data:Outlook mail:read")
+    tc = _tc("search_email")
+    res = await asyncio.wait_for(_runner([])(tc, asyncio.Queue()), 5)
+    assert res["_permission_telemetry"] == {"approval": "saved", "categories": ["data:Outlook mail:read"]}
+    (entry,) = _summarize_tool_calls([tc], [res])
+    assert entry["permission"] == {"approval": "saved", "categories": ["data:Outlook mail:read"]}
+
+
+async def test_a_tab_grant_or_a_fresh_card_is_not_tagged_as_a_saved_rule():
+    calls, q = [], asyncio.Queue()
+    res, _ = await asyncio.gather(_runner(calls)(_tc("search_email"), q), _answer_scope(q, "tab"))
+    assert "_permission_telemetry" not in res
+    again = await asyncio.wait_for(_runner(calls)(_tc("read_email", call_id="c2"), asyncio.Queue()), 5)
+    assert "_permission_telemetry" not in again
+
+
+async def test_a_shell_run_covered_by_a_saved_set_is_tagged_with_the_sandbox_category():
+    res = await asyncio.wait_for(
+        _runner([], result={"ok": True, "_sandbox_telemetry": {"approval": "saved"}})(_tc("run_shell"), asyncio.Queue()), 5
+    )
+    assert res["_permission_telemetry"] == {"approval": "saved", "categories": ["sandbox:shell"]}
+    fresh = await asyncio.wait_for(
+        _runner([], result={"ok": True, "_sandbox_telemetry": {"approval": "task_approved"}})(_tc("run_shell", call_id="c2"), asyncio.Queue()), 5
+    )
+    assert "_permission_telemetry" not in fresh

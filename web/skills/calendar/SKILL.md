@@ -125,11 +125,11 @@ Before passing start/end datetimes to any calendar tool:
 3. Resolve the recipient via `search_people` (apply attendee disambiguation rules above).
 4. Confirm with the user before adding:
    > "Add **[Recipient Name]** to **[Event Title]** ([date/time]) as a required attendee? They'll receive a calendar invite and appear in your attendee list."
-5. Once confirmed, call `forward_calendar_event` with the `event_id` and resolved email(s).
-   - The tool attempts a Graph PATCH with `sendUpdates=All` so the attendee is added to the meeting and receives a real invite.
-   - If Graph refuses to add the attendee (e.g. you're not the organizer), the tool falls back to the legacy `/forward` email flow and tells the user that the person won't show up in the attendee list.
+5. Once confirmed, call `add_calendar_attendees` with the `event_id` and resolved email(s).
+   - The tool adds them as required attendees with a calendar update, so they receive a real invite.
+   - If Graph refuses to add the attendee (e.g. you're not the organizer), the tool returns an error and nothing is sent. Tell the user and do not retry through another channel.
    - If they are already an attendee, the tool will tell you — do not add them again.
-6. Do NOT use `email_open_compose`, `send_email`, or the Graph `/forward` action directly — rely on `forward_calendar_event` so we only fall back to `/forward` when Graph blocks a proper attendee update.
+6. Do NOT use `email_open_compose`, `send_email`, or the Graph `/forward` action to invite someone to an existing event.
 
 ## Cloning / Follow-up Sessions
 

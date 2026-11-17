@@ -18,8 +18,6 @@ POST /api/auth/device/start
 POST /api/auth/teams/capture
 POST /api/auth/token
 POST /api/browser/cancel
-POST /api/browser/confirm/{confirm_id}
-POST /api/browser/confirm/{confirm_id}/cancel
 POST /api/browser/pause
 POST /api/browser/resume
 POST /api/chat
@@ -59,8 +57,6 @@ POST /api/extensions/setup/commit
 POST /api/extensions/setup/normalize
 POST /api/extensions/setup/start
 POST /api/extensions/setup/test
-POST /api/failover/confirm/{consent_id}
-POST /api/failover/confirm/{consent_id}/cancel
 POST /api/file-picker
 POST /api/file-upload-temp
 POST /api/github/tool
