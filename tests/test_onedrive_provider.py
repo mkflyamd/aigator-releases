@@ -267,3 +267,26 @@ def test_copy_exception_without_http_status_is_ambiguous():
 def test_copy_exception_with_http_status_is_not_ambiguous():
     p, _ = provider(copy=MagicMock(side_effect=Err(500)))
     assert "ambiguous" not in p.copy(SRC, DEST, "")
+
+
+def test_only_the_me_drive_id_is_taken_for_the_users_own_drive():
+    from permissions import actions
+
+    actions.forget_own_drive()
+    p, gc = provider()
+    _drives(gc, "documentLibrary", drive_id="teams")
+    p.is_foreign_owner({"drive_id": "teams", "item_id": "i"})
+    assert actions.action_for_call("file_transfer", {"dest_drive_id": "teams", "mode": "copy"}) == actions.IRREVERSIBLE
+    assert actions.action_for_call("file_transfer", {"dest_drive_id": "mine", "mode": "copy"}) == actions.WRITE_PRIVATE
+    actions.forget_own_drive()
+
+
+def test_own_drive_id_reads_me_drive_and_is_blank_on_failure():
+    p, gc = provider()
+    gc.get.side_effect = lambda path, params=None, **kw: {"id": "mine"}
+    assert p.own_drive_id() == "mine"
+    assert gc.get.call_args.args[0] == "/me/drive"
+    gc.get.side_effect = Err(403)
+    assert p.own_drive_id() == ""
+    p, _ = provider(client=_broken_client)
+    assert p.own_drive_id() == ""

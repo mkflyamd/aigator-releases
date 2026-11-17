@@ -171,3 +171,19 @@ def test_fail_conflict_is_accepted(tmp_path):
     gc = FakeGC()
     ft.store_in_folder(gc, ft.file_source(str(f)), "d", "f", on_conflict="fail")
     assert gc.put_paths[0].endswith("conflictBehavior=fail")
+
+
+def test_a_put_that_got_no_answer_is_reported_as_possibly_stored_and_never_as_a_plain_failure(tmp_path):
+    f = tmp_path / "a.txt"
+    f.write_bytes(b"hello")
+    gc = FakeGC(put_error=Exception("Network error on PUT: timed out"))
+    out = ft.store_in_folder(gc, ft.file_source(str(f)), "d", "f")
+    assert out["status"] == "error" and out["ambiguous"] is True
+    assert "may already be in the folder" in out["hint"]
+
+
+def test_a_put_the_server_refused_is_a_plain_failure(tmp_path):
+    f = tmp_path / "a.txt"
+    f.write_bytes(b"hello")
+    out = ft.store_in_folder(FakeGC(put_error=Err(403)), ft.file_source(str(f)), "d", "f")
+    assert out["status"] == "error" and "ambiguous" not in out

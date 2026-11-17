@@ -56,6 +56,13 @@ class OneDriveProvider:
         actions.note_own_drive(mine.get("id", ""))
         return drive.get("driveType") in ("business", "personal") and drive.get("id") != mine.get("id")
 
+    def own_drive_id(self):
+        """The id Graph gives the signed-in user's own drive, or "" when it cannot be read."""
+        try:
+            return str(self._client().get("/me/drive", params={"$select": "id"}).get("id") or "")
+        except Exception:
+            return ""
+
     def move(self, ref, dest_folder, new_name):
         try:
             return _coded(
@@ -137,7 +144,8 @@ class OneDriveProvider:
                 "web_url": out["web_url"],
                 "size": out["size"],
             }
-        return {
+        failed = {
             "error": out.get("detail") or out.get("hint") or out.get("error") or "Upload failed",
             "error_code": out.get("error_code") or "unknown",
         }
+        return {**failed, "ambiguous": True} if out.get("ambiguous") else failed

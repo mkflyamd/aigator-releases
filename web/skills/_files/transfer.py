@@ -168,6 +168,16 @@ def transfer(provider, source, dest_folder, mode="move", new_name="", sleep=time
     if "error" in dl:
         return _failed(dl["error"], dl.get("error_code", "unknown"), reason)
     up = provider.upload(dl["saved_to"], dest_folder, name)
+    if up.get("ambiguous"):
+        return _result(
+            "pending",
+            "download_upload",
+            True,
+            reason,
+            error=up["error"],
+            local_copy=dl["saved_to"],
+            message="The upload may have finished. Check the destination folder; do not retry the transfer.",
+        )
     if "error" in up:
         return _failed(up["error"], up.get("error_code", "unknown"), reason, local_copy=dl["saved_to"])
     check = provider.stat({"drive_id": up.get("drive_id", ""), "item_id": up.get("item_id", "")})

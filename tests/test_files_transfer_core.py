@@ -322,3 +322,12 @@ def test_a_local_copy_that_is_already_gone_does_not_fail_a_verified_transfer(tmp
     p.upload = lambda local_path, dest, name: (Path(local_path).unlink(), p.upload_result)[1]
     out, _ = run(p, mode="copy", downloads_dir=tmp_path)
     assert out["status"] == "copied" and out["local_copy"] is None
+
+
+def test_an_upload_that_got_no_answer_is_pending_not_failed_and_keeps_the_local_copy(tmp_path):
+    p = FakeProvider(copy={"error": "boom", "error_code": "unknown"},
+                     download={"saved_to": str(tmp_path / "report.docx")},
+                     upload={"error": "timed out", "error_code": "unknown", "ambiguous": True})
+    out, _ = run(p, mode="copy", downloads_dir=tmp_path)
+    assert out["status"] == "pending" and out["method"] == "download_upload"
+    assert "do not retry" in out["message"] and out["local_copy"] == str(tmp_path / "report.docx")

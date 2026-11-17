@@ -74,3 +74,71 @@ def test_skill_guide_covers_move_copy_lock_and_upload():
     for needle in ("file_transfer", "file_upload", "original_remains", "resolve_teams_attachment", "never deletes", "dest.web_url"):
         assert needle in text, needle
     assert "file_transfer" in (SKILLS / "m365-onedrive" / "SKILL.md").read_text(encoding="utf-8")
+
+
+def _graph(own_id):
+    gc = MagicMock()
+    gc.get.side_effect = lambda path, params=None, **kw: (
+        {"id": own_id} if path == "/me/drive" else {"id": "x", "driveType": "documentLibrary", "value": [
+            {"name": "a", "parentReference": {"driveId": "teams"}}]}
+    )
+    return gc
+
+
+def test_listing_files_never_teaches_the_permission_model_which_drive_is_the_users_own():
+    from permissions import actions
+
+    actions.forget_own_drive()
+    with patch("skills._m365.helpers.get_skill_client", return_value=_graph("mine")):
+        od.TOOL_HANDLERS["list_onedrive_files"](path="Documents")
+        od.TOOL_HANDLERS["list_onedrive_files"](path="")
+    assert actions.action_for_call("file_transfer", {"dest_drive_id": "teams", "mode": "copy"}) == actions.IRREVERSIBLE
+    actions.forget_own_drive()
+
+
+def test_a_transfer_approved_as_private_is_refused_when_the_destination_is_not_the_users_own_drive():
+    from permissions import actions
+
+    actions.note_own_drive("stale")
+    args = dict(source_drive_id="s", source_item_id="i1", dest_drive_id="stale", dest_folder_id="f2", mode="copy")
+    with patch("skills._m365.helpers.get_skill_client", return_value=_graph("mine")), \
+         patch("skills._files.transfer.transfer") as moved:
+        out = od.TOOL_HANDLERS["file_transfer"](**args)
+    assert out["status"] == "failed" and "nothing was moved" in out["error"]
+    moved.assert_not_called()
+    actions.forget_own_drive()
+
+
+def test_a_transfer_into_the_confirmed_own_drive_goes_ahead():
+    from permissions import actions
+
+    actions.note_own_drive("mine")
+    args = dict(source_drive_id="s", source_item_id="i1", dest_drive_id="mine", dest_folder_id="f2", mode="copy")
+    with patch("skills._m365.helpers.get_skill_client", return_value=_graph("mine")), \
+         patch("skills._files.transfer.transfer", return_value={"status": "copied"}) as moved:
+        out = od.TOOL_HANDLERS["file_transfer"](**args)
+    assert out == {"status": "copied"}
+    moved.assert_called_once()
+    actions.forget_own_drive()
+
+
+def test_listing_refuses_a_path_that_climbs_out_of_the_drive():
+    gc = _graph("mine")
+    with patch("skills._m365.helpers.get_skill_client", return_value=gc):
+        for path in ("../../../drives/teams/root", "a/../b", "./a", "..", "a\\..\\b", "/../x"):
+            for drive_id in ("", "d1"):
+                out = od.TOOL_HANDLERS["list_onedrive_files"](path=path, drive_id=drive_id)
+                assert "error" in out, path
+    gc.get.assert_not_called()
+
+
+def test_listing_encodes_the_path_and_the_drive_id():
+    gc = _graph("mine")
+    with patch("skills._m365.helpers.get_skill_client", return_value=gc):
+        od.TOOL_HANDLERS["list_onedrive_files"](path="/My Docs/%2e%2e/a#b")
+        od.TOOL_HANDLERS["list_onedrive_files"](path="Reports", drive_id="b!x/y")
+    paths = [c.args[0] for c in gc.get.call_args_list]
+    assert paths == [
+        "/me/drive/root:/My%20Docs/%252e%252e/a%23b:/children",
+        "/drives/b%21x%2Fy/root:/Reports:/children",
+    ]

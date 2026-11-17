@@ -1109,21 +1109,24 @@ def _tool_read_onedrive_file(
 
 
 def _tool_list_onedrive_files(path: str = "", count: int = 50, drive_id: str = "", folder_id: str = "") -> dict:
+    from urllib.parse import quote as _quote
+
     from .._m365.helpers import get_skill_client
 
+    clean_path = str(path or "").replace("\\", "/").strip("/")
+    if any(segment in (".", "..") for segment in clean_path.split("/")):
+        return {"error": "path must not contain '.' or '..' segments; give the folder path from the drive root"}
     gc = get_skill_client(ONEDRIVE_SKILLS_DIR)
     if drive_id:
         if folder_id:
             api_path = f"/drives/{_eid(drive_id)}/items/{_eid(folder_id)}/children"
-        elif path:
-            from urllib.parse import quote as _quote
-
-            api_path = f"/drives/{drive_id}/root:/{_quote(path.lstrip('/'), safe='/')}:/children"
+        elif clean_path:
+            api_path = f"/drives/{_eid(drive_id)}/root:/{_quote(clean_path, safe='/')}:/children"
         else:
-            api_path = f"/drives/{drive_id}/root/children"
+            api_path = f"/drives/{_eid(drive_id)}/root/children"
     else:
         api_path = (
-            f"/me/drive/root:/{path}:/children" if path else "/me/drive/root/children"
+            f"/me/drive/root:/{_quote(clean_path, safe='/')}:/children" if clean_path else "/me/drive/root/children"
         )
     data = gc.get(
         api_path,
@@ -1137,10 +1140,6 @@ def _tool_list_onedrive_files(path: str = "", count: int = 50, drive_id: str = "
     for item in data.get("value", []):
         is_folder = "folder" in item
         parent_reference = item.get("parentReference") or {}
-        if not drive_id:
-            from permissions import actions as _permission_actions
-
-            _permission_actions.note_own_drive(parent_reference.get("driveId", ""))
         items.append(
             {
                 "name": item.get("name", ""),
@@ -1735,9 +1734,24 @@ def _tool_file_transfer(source_drive_id: str, source_item_id: str,
                         dest_drive_id: str, dest_folder_id: str,
                         mode: str = "move", new_name: str = "") -> dict:
     """Move or copy a file into a folder, copying instead when the source is locked."""
+    from permissions import actions
     from .._files.transfer import transfer
+    provider = _od_provider()
+    call = {"source_drive_id": source_drive_id, "dest_drive_id": dest_drive_id, "mode": mode}
+    claimed = actions.action_for_call("file_transfer", call)
+    own = provider.own_drive_id()
+    if isinstance(own, str) and own:
+        actions.note_own_drive(own)
+    else:
+        actions.forget_own_drive()
+    if claimed == actions.WRITE_PRIVATE and actions.action_for_call("file_transfer", call) != claimed:
+        return {
+            "status": "failed", "error_code": "unknown",
+            "error": "This transfer was approved as a private change, but the destination is not confirmed to be the "
+                     "user's own OneDrive, so nothing was moved. Call file_transfer again with the same arguments.",
+        }
     return transfer(
-        _od_provider(),
+        provider,
         {"drive_id": source_drive_id, "item_id": source_item_id},
         {"drive_id": dest_drive_id, "folder_id": dest_folder_id},
         mode=mode,
