@@ -20,6 +20,8 @@ class Source:
     flow_id: str = ""  # id used by the admin blocked_data_flows policy
     action: str = ""  # permissions.actions type the grant is filed under; "" for websites
     per_call: bool = False  # True = no tab or saved grant exists, every call gets its own card
+    group_keys: tuple = ()  # approving this source approves all of these keys together
+    group_label: str = ""
 
 
 _NATIVE_SOURCES = {
@@ -37,6 +39,8 @@ _NATIVE_SOURCES = {
     "slack": "Slack",
     "github": "GitHub",
 }
+_SCHEDULING = ("calendar", "people", "contacts")
+_SCHEDULING_LABEL = "Outlook calendar, the people directory and Outlook contacts"
 _MCP_LABELS = {
     "mcp-google-workspace": "Google Workspace",
 }
@@ -47,10 +51,14 @@ _BROWSER_TOOLS = frozenset({"browser_task", "browser_navigate", "browser_search"
 _DENY_WINDOW_S = 10.0
 
 
-def _data_source(prefix: str, label: str, flow_id: str, gate: str | None) -> Source:
+def _data_source(prefix: str, label: str, flow_id: str, gate: str | None, grouped: bool = False) -> Source:
     if gate is None:
         return Source(key=f"{prefix}:{actions.IRREVERSIBLE}", label=label, kind="data", flow_id=flow_id,
                       action=actions.IRREVERSIBLE, per_call=True)
+    if grouped and gate == actions.READ:
+        return Source(key=f"{prefix}:{gate}", label=label, kind="data", flow_id=flow_id, action=gate,
+                      group_keys=tuple(f"data:{_NATIVE_SOURCES[s]}:{gate}" for s in _SCHEDULING),
+                      group_label=_SCHEDULING_LABEL)
     return Source(key=f"{prefix}:{gate}", label=label, kind="data", flow_id=flow_id, action=gate)
 
 
@@ -58,7 +66,7 @@ def _native_source(tool_name: str, inputs: dict | None = None) -> Source | None:
     for skill_id, label in _NATIVE_SOURCES.items():
         if tool_name in shared.SKILL_TOOLS_MAP.get(skill_id, ()):
             return _data_source(f"data:{label}", label, skill_id.removeprefix("m365-"),
-                                actions.gate_action(tool_name, inputs))
+                                actions.gate_action(tool_name, inputs), grouped=skill_id in _SCHEDULING)
     return None
 
 
@@ -87,12 +95,55 @@ def _mcp_source(tool_name: str, inputs: dict | None = None) -> Source | None:
     return _data_source(f"mcp:{best}", label, "mcp", _mcp_gate(tool_name, inputs))
 
 
+# Tools that run a command, start a sign-in or probe a server on the model's say-so. Each call gets its own card and is
+# refused in an unattended run. tool -> (label, card title, what the call does).
+PER_CALL_TOOLS = {
+    "connect_mcp_server": (
+        "an MCP server connection",
+        "Connect this MCP server?",
+        "connect an MCP server. A local command is started on this computer with your access, and a web address "
+        "receives any credential given here",
+    ),
+    "extension_setup__test_connection": (
+        "the extension setup",
+        "Test this connection?",
+        "test the connection filled in on the setup form. This starts the command or contacts the address entered there",
+    ),
+    "extension_setup__start_oauth_flow": (
+        "the extension setup",
+        "Start this sign-in?",
+        "start a sign-in with the server at the address below",
+    ),
+}
+_SECRET_NAME = re.compile(r"auth|token|secret|password|header|key|credential", re.IGNORECASE)
+URL_TOOLS = frozenset({"fetch_webpage", "extension_setup__fetch_doc"})
+
+
+def _is_public_image_fetch(tool_name: str, inputs: dict | None) -> bool:
+    """fetch_image reaches Microsoft, Teams and Slack with the user's own sign-in; any other address is a website."""
+    if tool_name != "fetch_image":
+        return False
+    inputs = inputs or {}
+    url = str(inputs.get("url") or "")
+    if not url.startswith(("http://", "https://")) or (inputs.get("page_id") and inputs.get("filename")):
+        return False
+    from skills.fetch_image.tools import _detect_source
+    return _detect_source(url) == "auto"
+
+
+def fetches_website(tool_name: str, inputs: dict | None) -> bool:
+    return tool_name in URL_TOOLS or _is_public_image_fetch(tool_name, inputs)
+
+
 def source_for_call(tool_name: str, inputs: dict | None) -> Source | None:
-    if tool_name == "fetch_webpage":
+    if fetches_website(tool_name, inputs):
         host = (urlparse(str((inputs or {}).get("url", ""))).hostname or "").lower()
         if not host:
             return None
         return Source(key=f"web:{host}", label=f"the website {host}", kind="web", flow_id="web")
+    if tool_name in PER_CALL_TOOLS:
+        return Source(key=f"setup:{tool_name}", label=PER_CALL_TOOLS[tool_name][0], kind="data",
+                      action=actions.IRREVERSIBLE, per_call=True)
     return _native_source(tool_name, inputs) or _mcp_source(tool_name, inputs)
 
 
@@ -118,16 +169,47 @@ _STAYS_ALLOWED = "This stays allowed until you close this tab."
 _CARD_VALUE_MAX = 1000
 _CARD_KEY_MAX = 100
 _CONTROL_CHARS = re.compile(
-    r"[\x00-\x08\x0b-\x1f\x7f-\x9f\u200b-\u200f\u2028\u2029\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]")
+    r"[\x00-\x08\x0b-\x1f\x7f-\x9f\u200b-\u200f\u2028\u2029\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff\u061c\u180e\u00ad]")
 
 
-def _call_details(inputs: dict | None) -> str:
+def _shown_keys(tool_name: str) -> frozenset | None:
+    """The arguments that reach the tool, by the same rule execute_tool applies. None when it takes all of them."""
+    fn = shared.TOOL_DISPATCH.get(tool_name)
+    if fn is None:
+        return None
+    try:
+        _params, accepted, has_var_keyword, single_dict_arg = shared.handler_arguments(fn)
+    except (TypeError, ValueError):
+        return None
+    return None if has_var_keyword or single_dict_arg else frozenset(accepted)
+
+
+def _setup_view(tool_name: str, inputs: dict) -> dict:
+    """What a setup call acts on: for a connection test, the form it will run rather than the session id."""
+    if tool_name != "extension_setup__test_connection":
+        return inputs
+    try:
+        from extensions.tools import _SESSIONS
+        return _SESSIONS.get(str(inputs.get("session_id")))
+    except Exception:
+        return inputs
+
+
+def _call_details(inputs: dict | None, tool_name: str = "") -> str:
     """The call's arguments for the approval card, on one line. Each value is cut on its own, so a long value cannot
     push a later argument such as the recipient out of sight."""
     if not inputs:
         return ""
+    shown = _shown_keys(tool_name) if tool_name else None
+    setup = tool_name in PER_CALL_TOOLS
+    if setup:
+        inputs = _setup_view(tool_name, inputs)
     parts = []
     for key, value in inputs.items():
+        if shown is not None and key not in shown:
+            continue
+        if setup and _SECRET_NAME.search(str(key)):
+            value = "(hidden)" if value else ""
         text = _CONTROL_CHARS.sub(" ", json.dumps(value, default=str, ensure_ascii=False))
         if len(text) > _CARD_VALUE_MAX:
             text = f"{text[:_CARD_VALUE_MAX]}... ({len(text) - _CARD_VALUE_MAX} more characters not shown)"
@@ -143,18 +225,27 @@ def prompt_for(source: Source, tool_name: str, inputs: dict | None = None) -> di
             url = url[:_CARD_URL_MAX] + "..."
         shown = "\nAddress: " + url if url else ""
         action = f"AI Gator wants to open {source.label}, which this tab has not used yet.{shown}"
+    elif source.per_call and tool_name in PER_CALL_TOOLS:
+        _label, title, what = PER_CALL_TOOLS[tool_name]
+        return {
+            "title": title,
+            "action": (f"AI Gator wants to {what} (tool: {tool_name}). You are asked every time."
+                       f"{_call_details(inputs, tool_name)}"),
+            "allow_label": "Allow this time",
+            "deny_label": "Deny",
+        }
     elif source.per_call:
         return {
             "title": f"Allow this change in {source.label}?",
             "action": (
                 f"AI Gator wants to make a change in {source.label} (tool: {tool_name}) that notifies other people "
-                f"or cannot be undone. You are asked every time.{_call_details(inputs)}"
+                f"or cannot be undone. You are asked every time.{_call_details(inputs, tool_name)}"
             ),
             "allow_label": "Allow this time",
             "deny_label": "Deny",
         }
     elif source.action == actions.READ:
-        action = f"AI Gator wants to read from {source.label} (tool: {tool_name}). {_STAYS_ALLOWED}"
+        action = f"AI Gator wants to read from {source.group_label or source.label} (tool: {tool_name}). {_STAYS_ALLOWED}"
     else:
         what = ("save a draft or a private change in" if source.action == actions.WRITE_PRIVATE
                 else "change shared content in")
@@ -165,7 +256,7 @@ def prompt_for(source: Source, tool_name: str, inputs: dict | None = None) -> di
             "deny_label": "Deny",
         }
     return {
-        "title": f"Allow access to {source.label}?",
+        "title": f"Allow access to {source.group_label or source.label}?",
         "action": action,
         "allow_label": "Allow for this tab",
         "deny_label": "Deny",
@@ -254,6 +345,20 @@ def allowed_with_prefix(context_id: str, prefix: str) -> list[str]:
 def deny(context_id: str, key: str) -> None:
     with _LOCK:
         _DENIED[(context_id, key)] = time.monotonic()
+
+
+def approval_key(source: Source) -> str:
+    return source.group_keys[0] if source.group_keys else source.key
+
+
+def allow_source(context_id: str, source: Source) -> None:
+    for key in source.group_keys or (source.key,):
+        allow(context_id, key)
+
+
+def deny_source(context_id: str, source: Source) -> None:
+    for key in source.group_keys or (source.key,):
+        deny(context_id, key)
 
 
 def recently_denied(context_id: str, key: str, window_s: float = _DENY_WINDOW_S) -> bool:

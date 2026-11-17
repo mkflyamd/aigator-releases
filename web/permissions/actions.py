@@ -36,7 +36,7 @@ DESCRIPTION = {
 
 _READ_TOOLS = """
 read_email get_email_detail search_email
-check_availability find_meeting_times get_calendar_event_detail read_calendar
+check_availability find_meeting_times get_calendar_event_detail read_calendar show_availability_grid
 search_contacts get_person_profile search_people
 find_meeting_transcripts get_meeting_transcript_full get_meeting_transcript_header get_meeting_transcript_range
 get_meeting_transcript_speaker search_meeting_transcript list_teams read_channel_messages read_teams_chats
@@ -67,7 +67,7 @@ update_onenote_page file_upload
 
 # Tools that only prepare a draft (or are refused outright). The draft's approval card is the per-call approval.
 DRAFT_BACKED = frozenset("""
-send_email reply_email forward_email send_teams_message slack_send_message
+send_email reply_email forward_email send_teams_message slack_send_message draft_calendar_event
 jira_add_comment jira_add_watcher jira_stage_attachment
 jira_create_issue jira_add_remote_link jira_unlink_issues jira_mutate
 jira_update_issue jira_transition jira_link_issues
@@ -77,7 +77,7 @@ jira_update_issue jira_transition jira_link_issues
 # watchers and nothing here suppresses that, so they are not reversible.
 _ASK_EVERY_TIME_TOOLS = """
 add_calendar_attendees update_calendar_event delete_calendar_event respond_calendar_event
-create_calendar_event create_ooo_event delete_contact
+create_ooo_event delete_contact
 github_create_issue github_add_issue_comment github_gh
 create_confluence_page patch_confluence_page update_confluence_page
 file_transfer move_onedrive_file copy_onedrive_file
@@ -94,11 +94,6 @@ BUILTIN_ACTIONS: dict[str, str] = {
 
 def _has_value(value) -> bool:
     return bool(value) if not isinstance(value, str) else bool(value.strip())
-
-
-def _calendar_action(inputs: dict) -> str:
-    notifies = _has_value(inputs.get("attendees")) or _has_value(inputs.get("optional_attendees"))
-    return IRREVERSIBLE if notifies else WRITE_PRIVATE
 
 
 def _ooo_action(inputs: dict) -> str:
@@ -174,7 +169,6 @@ def _onenote_create_action(inputs: dict) -> str:
 
 # Tools whose action depends on the call: the rule, and every action a call can end up with.
 _BY_INPUTS = {
-    "create_calendar_event": (_calendar_action, (WRITE_PRIVATE, IRREVERSIBLE)),
     "create_ooo_event": (_ooo_action, (WRITE_PRIVATE, IRREVERSIBLE)),
     "github_gh": (_gh_action, (READ, IRREVERSIBLE)),
     "move_onedrive_file": (_move_action, (WRITE_PRIVATE, WRITE_PUBLIC, IRREVERSIBLE)),

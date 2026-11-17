@@ -38,11 +38,15 @@ A not-reversible tool is never remembered or allowed for a tab. It does one of t
 - Draft card. The tool only prepares a draft or is refused. The draft's approval card is the per-call approval, and the access gate in front of it is the app's "Write to private" permission.
 - Asks every time. The tool acts as soon as it runs, so each call gets its own card with only Allow this time and Deny.
 
-Some tools depend on the call. Creating a calendar event or an out-of-office event with nobody to notify is a private write. Running `gh` with a read-only command is a read. Moving or copying a OneDrive file within one drive is a reversible shared write, and into another drive is not reversible. Creating a OneNote notebook, section or page with a `site_id` is a reversible shared write, because a team notebook is visible to others. Any other call to these tools is not reversible.
+Some tools depend on the call. Creating an out-of-office event with nobody to notify is a private write. Running `gh` with a read-only command is a read. Moving or copying a OneDrive file within one drive is a reversible shared write, and into another drive is not reversible. Creating a OneNote notebook, section or page with a `site_id` is a reversible shared write, because a team notebook is visible to others. Any other call to these tools is not reversible.
+
+A tab's Read approval for Outlook calendar also covers the people directory and Outlook contacts, and the card names all three. Their write permissions stay separate.
 
 ## MCP tools
 
 An MCP tool is a read when its server declares `readOnlyHint: true` and does not declare `destructiveHint: true`. Everything else from an MCP server asks every time. Tools that AI Gator parks as approval drafts (gated Google Workspace writes, unverified Jira writes) are filed under the server's "Write to private" permission, and the draft card remains the per-call approval. An MCP server can be granted read and, for drafts, save drafts. It can never be granted anything that sends or changes shared content.
+
+Tools from installed marketplace skills (`skill__tool`) are listed as an "(MCP server)" and follow the same rules. None of them has a read-only declaration, so every call asks.
 
 ## Button meanings
 
@@ -60,7 +64,7 @@ An MCP tool is a read when its server declares `readOnlyHint: true` and does not
 
 | Permission                                      | Risk | Card buttons                    | Primary           | "Always allow" set from                                   | Remembered as                          |
 | ----------------------------------------------- | ---- | ------------------------------- | ----------------- | --------------------------------------------------------- | -------------------------------------- |
-| Websites (fetch a page)                         | Low  | Always allow, Allow in this tab | Always allow      | Card only                                                 | One host, for example `github.com`     |
+| Websites (fetch a page or a public image)       | Low  | Always allow, Allow in this tab | Always allow      | Card only                                                 | One host, for example `github.com`     |
 | MCP server: read-only tools                     | Low  | Always allow, Allow in this tab | Always allow      | Card or Settings                                          | One server, read                       |
 | MCP server: tools parked as drafts              | Low  | Always allow, Allow in this tab | Always allow      | Card or Settings                                          | One server, save drafts                |
 | Browser control                                 | High | Allow in this tab               | Allow in this tab | Settings only                                             | Whole category                         |
@@ -77,12 +81,13 @@ Settings → Permissions shows an Ask / Always allow toggle for each whole-categ
 
 These always ask, with no Always allow button.
 
-| Action                                                                | Rule                                                                                                                                        |
-| --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| Sending email, Teams or Slack messages, Jira writes, calendar changes | Always a draft card or a per-call card that needs an explicit approval click, even when every other permission for the app is Always allow. |
-| Raw Rovo or MCP Jira writes, gated MCP writes                         | Parked as approval drafts.                                                                                                                  |
-| Payments, fetching private-network addresses                          | Refused, no card.                                                                                                                           |
-| Recorder consent, marketplace digest consent                          | Use their own consent cards.                                                                                                                |
+| Action                                                                   | Rule                                                                                                                                        |
+| ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| Sending email, Teams or Slack messages, Jira writes, calendar changes    | Always a draft card or a per-call card that needs an explicit approval click, even when every other permission for the app is Always allow. |
+| Raw Rovo or MCP Jira writes, gated MCP writes                            | Parked as approval drafts.                                                                                                                  |
+| Payments, fetching private-network addresses                             | Refused, no card.                                                                                                                           |
+| Connecting an MCP server, testing or signing in from the extension setup | A card for each call that shows the command or address. A saved credential is never shown.                                                  |
+| Recorder consent, marketplace digest consent                             | Use their own consent cards.                                                                                                                |
 
 ## Rules that apply to everything
 
@@ -107,10 +112,11 @@ The tables list every built-in tool of the connected apps. The tool names in `we
 
 ### Outlook calendar
 
-| Action type                     | Tools                                                                                                                                             |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Read                            | `check_availability`, `find_meeting_times`, `get_calendar_event_detail`, `read_calendar`                                                          |
-| Not reversible, asks every time | `add_calendar_attendees`, `create_calendar_event`, `create_ooo_event`, `delete_calendar_event`, `respond_calendar_event`, `update_calendar_event` |
+| Action type                     | Tools                                                                                                                    |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| Read                            | `check_availability`, `find_meeting_times`, `get_calendar_event_detail`, `read_calendar`, `show_availability_grid`       |
+| Not reversible, draft card      | `draft_calendar_event`                                                                                                   |
+| Not reversible, asks every time | `add_calendar_attendees`, `create_ooo_event`, `delete_calendar_event`, `respond_calendar_event`, `update_calendar_event` |
 
 ### Outlook contacts
 

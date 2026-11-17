@@ -461,30 +461,7 @@ async def _execute_tool_impl(
         # The LLM never supplies _context_id itself — it's server-injected so
         # tools like get_tab_pins can know "current tab" without the LLM
         # having to pass it explicitly.
-        sig = inspect.signature(fn)
-        params = list(sig.parameters.values())
-        accepted = set(sig.parameters)
-        has_var_keyword = any(
-            p.kind == inspect.Parameter.VAR_KEYWORD for p in params
-        )
-        # Handlers that take a single positional `args: dict` param (e.g. the
-        # extension_setup__ tools) must be called as fn(inputs), not fn(**inputs).
-        # Only apply this when the sole parameter is explicitly annotated as dict
-        # (or has no annotation and no default — bare `def fn(args):`).
-        # A function with one typed param like `def fn(page_id: str)` must be
-        # called as fn(**inputs), not fn(inputs).
-        _p0 = params[0] if len(params) == 1 else None
-        single_dict_arg = (
-            _p0 is not None
-            and _p0.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                             inspect.Parameter.POSITIONAL_ONLY)
-            and (
-                # `from __future__ import annotations` stringizes annotations,
-                # so a `dict`-typed param reads back as the str "dict".
-                _p0.annotation in (dict, "dict")
-                or (_p0.annotation is inspect.Parameter.empty and _p0.default is inspect.Parameter.empty)
-            )
-        )
+        params, accepted, has_var_keyword, single_dict_arg = shared.handler_arguments(fn)
         if not single_dict_arg:
             if context_id is not None and ("_context_id" in accepted or has_var_keyword):
                 inputs = {**inputs, "_context_id": context_id}
@@ -741,7 +718,7 @@ async def lifespan(app):
             inferred = _infer_skills_from_message(prompt)
             if not inferred and prompt.strip():
                 from routes.chat import _classify_skills_via_llm
-                inferred = _classify_skills_via_llm(prompt)
+                inferred = _classify_skills_via_llm(prompt) or []
         # Always filter — never fall back to ALL tools
         # A runner (Python or shell) runs only if the schedule approval named it; nobody is here to approve one now.
         _approved_runners = {_gated_runner_id(s) for s in (skills or [])}

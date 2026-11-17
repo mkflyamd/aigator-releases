@@ -195,8 +195,8 @@ _JIRA_READ_ONLY_PREFIXES = (
     "get", "list", "search", "lookup", "find", "read", "view", "fetch",
     "accessible", "metadata", "field", "project", "page", "space",
 )
-# Only Atlassian's own server may vouch for a tool through its readOnlyHint;
-# a hint from any other MCP server proves nothing.
+# The Jira write guard below lets only Atlassian's own server vouch for a tool through its readOnlyHint.
+# The permission cards take a readOnlyHint from any server as the server's own claim (see _classify).
 _ATLASSIAN_MCP_HOST = "mcp.atlassian.com"
 
 
