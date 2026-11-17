@@ -207,8 +207,11 @@ def _remove_planted(path: Path) -> None:
     elif path.is_dir():
         shutil.rmtree(path, onexc=lambda func, p, _exc: (os.chmod(p, stat.S_IWRITE), func(p)))
     else:
-        os.chmod(path, stat.S_IWRITE)
-        path.unlink()
+        try:
+            path.unlink()
+        except PermissionError:  # Windows refuses to delete a read-only file
+            os.chmod(path, stat.S_IWRITE)
+            path.unlink()
 
 
 def build_env(parent: Mapping[str, str], run_dir: Path, node_path: str | None,
