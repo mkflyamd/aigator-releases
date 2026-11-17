@@ -152,7 +152,7 @@ def test_unavailable_never_runs(env):
 
 
 def test_launcher_failures_never_fall_back(env):
-    env.mp.setattr(sh.subprocess, "run", lambda *a, **k: pytest.fail("unsandboxed run"))
+    env.mp.setattr(sh, "_run_unsandboxed", lambda *a, **k: pytest.fail("unsandboxed run"))
     env.fake.raises = sandbox.SandboxRunError("boom")
     assert _run()["error"] == cr._RUN_ERROR_MSG
     env.fake.raises = sandbox.SandboxUnavailable("gone")

@@ -11792,7 +11792,7 @@ function _renderHostCommandCard(data, requestId, cardTab, tabId) {
 
   const body = document.createElement('div');
   body.className = 'gcc-body';
-  const addRow = (label, value, asPre) => {
+  const addRow = (label, value, asPre, wrap) => {
     if (typeof value !== 'string' || !value) return;
     const row = document.createElement('div');
     row.className = 'gcc-field-row gcc-field-row--block';
@@ -11800,13 +11800,20 @@ function _renderHostCommandCard(data, requestId, cardTab, tabId) {
     key.className = 'gcc-field-key';
     key.textContent = label;
     const val = document.createElement(asPre ? 'pre' : 'span');
-    val.className = 'gcc-field-val';
+    val.className = wrap ? 'gcc-field-val gcc-field-val--wrap' : 'gcc-field-val';
     val.textContent = value;
     row.append(key, val);
     body.appendChild(row);
   };
+  const lineCount = typeof data.command === 'string' ? data.command.split(/\r?\n/).length : 0;
   addRow('Why', data.reason, false);
-  addRow('Command', data.command, true);
+  addRow('Command', data.command, true, true);
+  if (lineCount > 1) {
+    const lines = document.createElement('div');
+    lines.className = 'gcc-refine';
+    lines.textContent = `This command has ${lineCount} lines. Read all of them before you click Run.`;
+    body.appendChild(lines);
+  }
   addRow('Folder', data.cwd, false);
   addRow('Shell', data.shell, false);
   if (Array.isArray(data.risks) && data.risks.length) {
@@ -11815,13 +11822,27 @@ function _renderHostCommandCard(data, requestId, cardTab, tabId) {
     warn.textContent = `Check carefully: ${data.risks.join('; ')}.`;
     body.appendChild(warn);
   }
+  if (data.cwd_is_ai_workspace) {
+    const work = document.createElement('div');
+    work.className = 'gcc-refine';
+    work.textContent =
+      "This is AI Gator's own working folder. Files in it were written by the AI, so a script here runs code the AI wrote.";
+    body.appendChild(work);
+  }
+  const removed = Number(data.env_removed) || 0;
+  if (removed > 0) {
+    const env = document.createElement('div');
+    env.className = 'gcc-refine';
+    env.textContent = `${removed} environment variable${removed === 1 ? '' : 's'} removed (tokens, keys and passwords stay out of the command).`;
+    body.appendChild(env);
+  }
   const note = document.createElement('div');
   note.className = 'gcc-refine';
   note.textContent =
     'Runs as you on this computer, outside the sandbox, with your own tools, sign-in and network.';
   body.appendChild(note);
   const output = document.createElement('pre');
-  output.className = 'gcc-field-val';
+  output.className = 'gcc-field-val gcc-field-val--wrap';
   output.hidden = true;
   body.appendChild(output);
 
@@ -11871,11 +11892,17 @@ function _renderHostCommandCard(data, requestId, cardTab, tabId) {
     }
     return res.json();
   };
+  let running = false;
   const decide = async (action) => {
     if (run.disabled) return;
     run.disabled = true;
-    cancel.disabled = true;
-    if (action === 'run') footNote.textContent = 'Running...';
+    if (action === 'run') {
+      running = true;
+      cancel.textContent = 'Stop';
+      footNote.textContent = 'Running...';
+    } else {
+      cancel.disabled = true;
+    }
     try {
       const out = await send(action);
       actions.remove();
@@ -11901,8 +11928,10 @@ function _renderHostCommandCard(data, requestId, cardTab, tabId) {
         `I ran command request ${requestId}. Call host_command_result with that request_id to read the output.`,
       ).catch((e) => console.warn('[host-shell] follow-up not sent:', e));
     } catch (err) {
+      running = false;
       run.disabled = false;
       cancel.disabled = false;
+      cancel.textContent = 'Cancel';
       footNote.textContent = 'Unanswered requests expire after 10 minutes.';
       _showConnectivityToast(`Could not record your decision: ${err.message}`, 'warn');
     }
@@ -11913,7 +11942,16 @@ function _renderHostCommandCard(data, requestId, cardTab, tabId) {
   });
   cancel.addEventListener('click', (e) => {
     e.stopPropagation();
-    decide('cancel');
+    if (!running) {
+      decide('cancel');
+      return;
+    }
+    cancel.disabled = true;
+    footNote.textContent = 'Stopping...';
+    send('cancel').catch((err) => {
+      cancel.disabled = false;
+      _showConnectivityToast(`Could not stop the command: ${err.message}`, 'warn');
+    });
   });
   document.getElementById('messages')?.appendChild(card);
   card.scrollIntoView({ behavior: 'smooth', block: 'end' });

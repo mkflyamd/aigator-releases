@@ -274,15 +274,248 @@ def test_delete_inside_compound_commands_is_refused(tmp_path, command):
 def test_run_host_request_runs_the_command_as_typed(tmp_path, monkeypatch):
     seen = {}
 
-    def fake_run(argv, **kwargs):
+    def fake_captured(argv, cwd, env, timeout, on_start=None):
         seen["argv"] = argv
-        import subprocess
+        return 0, "", ""
 
-        return subprocess.CompletedProcess(argv, 0, "", "")
-
-    monkeypatch.setattr(shell_tools.subprocess, "run", fake_run)
+    monkeypatch.setattr(shell_tools, "_run_captured", fake_captured)
     monkeypatch.setattr(shell_tools.sys, "frozen", True, raising=False)
     monkeypatch.setattr(shell_tools.sys, "executable", "C:/app/aigator.exe")
     req = host_requests.create("tab-1", "python3 --version", str(tmp_path), "bash" if shell_tools.os.name != "nt" else "powershell", "", 30)
     shell_tools.run_host_request(req)
     assert seen["argv"][-1] == "python3 --version"
+
+
+# --- review round 2 ------------------------------------------------------
+
+_NL, _TAB, _ESC, _RLO, _ZWSP, _NUL = chr(10), chr(9), chr(27), chr(0x202E), chr(0x200B), chr(0)
+
+
+@pytest.mark.parametrize("command", [
+    "echo a" + _RLO + "b",
+    "echo a" + _ZWSP + "b",
+    "echo " + _ESC + "[2Jhi",
+    "echo a" + _NUL + "b",
+], ids=["bidi", "zero-width", "ansi-escape", "nul"])
+def test_hidden_characters_in_the_command_are_refused(tmp_path, command):
+    out = _propose(tmp_path, command=command)
+    assert "error" in out and "cannot see" in out["error"]
+    assert not host_requests._REQUESTS
+
+
+def test_hidden_characters_in_the_folder_are_refused(tmp_path):
+    out = _propose(tmp_path, cwd=str(tmp_path) + _RLO)
+    assert "error" in out
+    assert not host_requests._REQUESTS
+
+
+def test_tabs_and_newlines_are_allowed_in_the_command(tmp_path):
+    command = "echo a" + _NL + _TAB + "echo b"
+    out = _propose(tmp_path, command=command)
+    assert "error" not in out
+    assert out["_sandbox_approval"]["command"] == command
+
+
+def test_reason_is_cleaned_of_hidden_characters(tmp_path):
+    out = _propose(tmp_path, reason="Needs" + _RLO + " node" + _ESC + "[31m here")
+    reason = out["_sandbox_approval"]["reason"]
+    assert not host_requests.has_hidden_characters(reason)
+    assert reason.split() == ["Needs", "node", "[31m", "here"]
+
+
+def test_card_reports_the_ai_working_folder_and_removed_variables(tmp_path, monkeypatch):
+    import config
+
+    monkeypatch.setattr(config, "WORK_DIR", tmp_path / "work")
+    monkeypatch.setenv("AIGATOR_TEST_TOKEN", "aigator-fake-api-key")  # pragma: allowlist secret
+    in_work = shell_tools._tool_run_on_host(command="echo ok", reason="t", _context_id="tab-1")
+    assert in_work["_sandbox_approval"]["cwd_is_ai_workspace"] is True
+    assert in_work["_sandbox_approval"]["env_removed"] >= 1
+    elsewhere = _propose(tmp_path)
+    assert elsewhere["_sandbox_approval"]["cwd_is_ai_workspace"] is False
+
+
+def test_unwritable_default_working_folder_is_an_error(monkeypatch):
+    import config
+
+    class Unwritable:
+        def mkdir(self, *a, **k):
+            raise OSError("read-only")
+
+    monkeypatch.setattr(config, "WORK_DIR", Unwritable())
+    out = shell_tools._tool_run_on_host(command="echo ok", reason="t", _context_id="tab-1")
+    assert "cannot be created" in out["error"]
+    assert not host_requests._REQUESTS
+
+
+@pytest.mark.parametrize("name", [
+    "DATABASE_URL", "REPORTS_AUTH", "PYTHONHOME", "PYTHONPATH", "CONFLUENCE_URL", "JIRA_URL",
+])
+def test_host_env_drops_more_credential_names(name):
+    assert name not in host_requests.host_env({"PATH": "/bin", name: "aigator-fake-api-key"})  # pragma: allowlist secret
+
+
+def test_host_env_keeps_names_that_only_look_similar():
+    kept = host_requests.host_env({"PATH": "/bin", "AUTHOR": "me", "PATHEXT": ".EXE", "HOME": "/h"})
+    assert set(kept) == {"PATH", "AUTHOR", "PATHEXT", "HOME"}
+
+
+@pytest.mark.parametrize("command", [
+    "xargs -0 rm -rf build",
+    "ls | xargs -0 rm -rf build",
+    "ls | xargs -I {} rm {}",
+    "find . -print0 | xargs -0 -n 1 rm",
+    "sudo -u root rm x",
+])
+def test_delete_behind_prefix_flags_is_refused(tmp_path, command):
+    out = _propose(tmp_path, command=command)
+    assert "error" in out
+    assert not host_requests._REQUESTS
+
+
+def test_flags_on_a_harmless_command_are_not_a_delete(tmp_path):
+    out = _propose(tmp_path, command="ls | xargs -0 -n 1 echo")
+    assert "error" not in out
+
+
+def test_host_command_result_is_untrusted():
+    from data_sources import is_untrusted
+
+    assert is_untrusted("host_command_result")
+    assert not is_untrusted("run_on_host")
+
+
+def test_a_scheduled_run_cannot_propose_a_host_command(tmp_path):
+    import asyncio
+
+    import app as app_module
+
+    inputs = {"command": "echo hi", "cwd": str(tmp_path), "reason": "t", "_context_id": "tab-1"}
+    out = asyncio.run(app_module._execute_tool_impl("run_on_host", inputs, context_id=None))
+    assert "unattended" in out["error"]
+    assert not host_requests._REQUESTS
+
+
+def test_an_attended_run_gets_its_own_context_id_not_the_models(tmp_path):
+    import asyncio
+
+    import app as app_module
+
+    inputs = {"command": "echo hi", "cwd": str(tmp_path), "reason": "t", "_context_id": "someone-else"}
+    out = asyncio.run(app_module._execute_tool_impl("run_on_host", inputs, context_id="tab-1"))
+    assert out["_sandbox_approval"]["context_id"] == "tab-1"
+
+
+def _sleeper(tmp_path):
+    """A command whose Python child starts a grandchild that outlives it and holds the output pipes."""
+    pid_file = tmp_path / "grandchild.pid"
+    script = tmp_path / "spawn.py"
+    script.write_text(
+        "import subprocess, sys, time, pathlib\n"
+        "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+        f"pathlib.Path({str(pid_file)!r}).write_text(str(p.pid))\n"
+        "time.sleep(60)\n"
+    )
+    return pid_file, f'"{sys.executable}" "{script}"'
+
+
+def _alive(pid):
+    if sys.platform == "win32":
+        import subprocess
+
+        out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}"], capture_output=True, text=True).stdout
+        return str(pid) in out
+    import os
+
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def _wait_for(predicate, seconds=15):
+    import time
+
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        if predicate():
+            return True
+        time.sleep(0.1)
+    return False
+
+
+def test_timeout_kills_the_whole_process_tree(tmp_path):
+    import time
+
+    pid_file, command = _sleeper(tmp_path)
+    started = time.monotonic()
+    result = shell_tools._run_unsandboxed(command, "", str(tmp_path), 3, False, as_typed=True)
+    assert time.monotonic() - started < 30
+    assert "timed out" in str(result.get("error", "")).lower()
+    assert pid_file.exists()
+    grandchild = int(pid_file.read_text())
+    assert _wait_for(lambda: not _alive(grandchild)), "the grandchild survived the timeout"
+
+
+def test_stop_kills_a_running_request_and_marks_it_stopped(tmp_path):
+    import threading
+
+    pid_file, command = _sleeper(tmp_path)
+    req = host_requests.create("tab-1", command, str(tmp_path), "", "", 60)
+    host_requests.claim(req.id, "tab-1")
+    worker = threading.Thread(target=lambda: shell_tools.run_host_request(req))
+    worker.start()
+    assert _wait_for(pid_file.exists), "the command never started"
+    grandchild = int(pid_file.read_text())
+    host_requests.stop(req.id, "tab-1")
+    worker.join(30)
+    assert not worker.is_alive()
+    assert req.stopped is True
+    assert _wait_for(lambda: not _alive(grandchild)), "the grandchild survived Stop"
+
+
+def test_stop_all_kills_every_running_command(tmp_path):
+    import threading
+
+    pid_file, command = _sleeper(tmp_path)
+    req = host_requests.create("tab-1", command, str(tmp_path), "", "", 60)
+    host_requests.claim(req.id, "tab-1")
+    worker = threading.Thread(target=lambda: shell_tools.run_host_request(req))
+    worker.start()
+    assert _wait_for(pid_file.exists)
+    grandchild = int(pid_file.read_text())
+    host_requests.stop_all()
+    worker.join(30)
+    assert not worker.is_alive()
+    assert _wait_for(lambda: not _alive(grandchild))
+
+
+def test_stop_needs_a_running_request_in_the_same_tab():
+    req = host_requests.create("tab-1", "echo hi", "C:/x", "", "", 60)
+    with pytest.raises(host_requests.HostRequestError):
+        host_requests.stop(req.id, "tab-1")
+    host_requests.claim(req.id, "tab-1")
+    with pytest.raises(host_requests.HostRequestError):
+        host_requests.stop(req.id, "tab-2")
+
+
+def test_cancel_route_stops_a_running_command(client, csrf, monkeypatch):
+    stopped = []
+    monkeypatch.setattr(host_requests, "stop", lambda rid, ctx: stopped.append(rid) or host_requests.lookup(rid, ctx)[1])
+    req = host_requests.create("tab-1", "echo hi", "C:/x", "", "", 60)
+    host_requests.claim(req.id, "tab-1")
+    r = client.post(f"/api/host-shell/{req.id}/cancel", json={"context_id": "tab-1"}, headers=csrf)
+    assert r.status_code == 200
+    assert stopped == [req.id]
+
+
+def test_run_route_reports_a_stopped_command(client, csrf, monkeypatch):
+    def stopped_runner(req):
+        req.stopped = True
+        return {"stdout": "", "stderr": "", "exit_code": -1}
+
+    monkeypatch.setattr(shell_tools, "run_host_request", stopped_runner)
+    req = host_requests.create("tab-1", "echo hi", "C:/x", "", "", 60)
+    r = client.post(f"/api/host-shell/{req.id}/run", json={"context_id": "tab-1"}, headers=csrf)
+    assert "stopped" in r.json()["result"]["error"]

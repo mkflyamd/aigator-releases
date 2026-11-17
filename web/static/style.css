@@ -6899,6 +6899,12 @@ ul.gcc-field-val {
   margin: 0;
   padding-left: 18px;
 }
+.gcc-field-val--wrap {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 16rem;
+  overflow-y: auto;
+}
 .gcc-field-row--block {
   flex-direction: column;
   flex-wrap: nowrap;

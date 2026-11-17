@@ -884,6 +884,8 @@ async def lifespan(app):
             await _t
         except asyncio.CancelledError:
             pass
+    from sandbox import host_requests as _host_requests
+    _host_requests.stop_all()
     # Cancel in-flight chat tasks so they don't block shutdown holding the
     # per-context lock. Without this, a stuck turn blocks uvicorn's lifespan
     # shutdown until the watchdog's 10s timeout force-kills the process.

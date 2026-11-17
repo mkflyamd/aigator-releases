@@ -15,14 +15,21 @@ import time
 import uuid
 from dataclasses import dataclass
 
+from proc_utils import kill_process_tree
+
 REQUEST_TTL_SECONDS = 600
 RESULT_TTL_SECONDS = 1800
 OUTPUT_LIMIT = 20_000
 
 _SECRET_NAME = re.compile(
-    r"TOKEN|SECRET|PASSW|CREDENTIAL|KEY|COOKIE|(?:^|_)PAT(?:$|_)|^(?:AIGATOR|GATEWAY|LLM_GATEWAY|JIRA|CONFLUENCE)",
+    r"TOKEN|SECRET|PASSW|CREDENTIAL|KEY|COOKIE|(?:^|_)PAT(?:$|_)|_AUTH$|^DATABASE_URL$"
+    r"|^PYTHON(?:HOME|PATH)$|^(?:AIGATOR|GATEWAY|LLM_GATEWAY|JIRA|CONFLUENCE)",
     re.IGNORECASE,
 )
+
+# Control (except tab, newline, return), ANSI escape, bidi override and zero-width characters: invisible or
+# misleading on a card, so a command that holds one is refused instead of shown.
+_HIDDEN_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\u2028\u2029\u200b-\u200f\u202a-\u202e\u2060\u2066-\u2069\ufeff]")
 
 _RISKS = (
     ("Pushes commits to a remote", re.compile(r"\bgit\b[^\n;|&]*?\bpush\b", re.IGNORECASE)),
@@ -55,6 +62,8 @@ class HostRequest:
     status: str = "pending"  # pending | running | done | denied
     result: dict | None = None
     finished_at: float = 0.0
+    proc: object | None = None
+    stopped: bool = False
 
 
 _LOCK = threading.Lock()
@@ -66,8 +75,16 @@ def risk_flags(command: str) -> tuple[str, ...]:
 
 
 def host_env(environ) -> dict[str, str]:
-    """The user's own environment (PATH, proxy, certificates, login) minus secrets the app holds."""
+    """The user's own environment (PATH, proxy, certificates, login) minus secrets and settings the app holds."""
     return {k: v for k, v in environ.items() if not _SECRET_NAME.search(k)}
+
+
+def has_hidden_characters(text: str) -> bool:
+    return bool(_HIDDEN_CHARS.search(text))
+
+
+def strip_hidden_characters(text: str) -> str:
+    return _HIDDEN_CHARS.sub(" ", text)
 
 
 def _purge(now: float) -> None:
@@ -116,6 +133,43 @@ def finish(request_id: str, result: dict, now: float | None = None) -> None:
         req = _REQUESTS.get(request_id)
         if req is not None:
             req.status, req.result, req.finished_at = "done", result, time.time() if now is None else now
+            req.proc = None
+
+
+def attach(request_id: str, proc) -> None:
+    """Remember the running process so Stop and app quit can kill it; kill it now if Stop already came."""
+    with _LOCK:
+        req = _REQUESTS.get(request_id)
+        if req is None:
+            return
+        req.proc = proc
+        kill_now = req.stopped
+    if kill_now:
+        kill_process_tree(proc)
+
+
+def stop(request_id: str, context_id: str) -> HostRequest:
+    """Kill the whole process tree of a running request. Raises unless it is running and this tab's."""
+    with _LOCK:
+        req = _owned(request_id, context_id)
+        if req.status != "running":
+            raise HostRequestError(409, f"This command request is {req.status}, not running.")
+        req.stopped = True
+        proc = req.proc
+    if proc is not None:
+        kill_process_tree(proc)
+    return req
+
+
+def stop_all() -> None:
+    """App quit: kill every command still running."""
+    with _LOCK:
+        running = [r for r in _REQUESTS.values() if r.status == "running"]
+        for req in running:
+            req.stopped = True
+        procs = [r.proc for r in running if r.proc is not None]
+    for proc in procs:
+        kill_process_tree(proc)
 
 
 def deny(request_id: str, context_id: str, now: float | None = None) -> HostRequest:

@@ -213,6 +213,68 @@ const buttonsOf = (env) => walk(env.messages).filter((e) => e.tag === 'button');
     ['/api/host-shell/req1/run', '/api/csrf', '/api/host-shell/req1/run'],
   );
 
+  // Several lines, the AI's own folder and removed variables are all called out on the card.
+  const nl = String.fromCharCode(10);
+  const env5 = makeEnv(ok);
+  env5.ctx._showSandboxApproval(
+    {
+      ...data,
+      request_id: 'req5',
+      command: ['echo a', 'echo b', 'echo c'].join(nl),
+      cwd_is_ai_workspace: true,
+      env_removed: 3,
+    },
+    'tab-1',
+  );
+  const text5 = walk(env5.messages)
+    .map((e) => e.textContent)
+    .join(nl);
+  assert.match(text5, /3 lines/);
+  assert.match(text5, /AI Gator's own working folder/);
+  assert.match(text5, /3 environment variables removed/);
+  assert(
+    walk(env5.messages).some((e) => e.tag === 'pre' && /gcc-field-val--wrap/.test(e.className)),
+    'command wraps',
+  );
+  const plain = walk(env.messages)
+    .map((e) => e.textContent)
+    .join(nl);
+  assert(!/lines\./.test(plain) && !/working folder/.test(plain) && !/removed/.test(plain));
+
+  // While a command runs, Cancel becomes Stop and calls the cancel route.
+  let release = () => {};
+  const env6 = makeEnv(async (url) => {
+    if (url.endsWith('/run'))
+      return new Promise((resolve) => {
+        release = () =>
+          resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              ok: true,
+              result: { stdout: '', stderr: '', error: 'You stopped this command', exit_code: -1 },
+            }),
+          });
+      });
+    release();
+    return { ok: true, status: 200, json: async () => ({ ok: true, status: 'stopped' }) };
+  });
+  env6.ctx._showSandboxApproval(data, 'tab-1');
+  buttonsOf(env6)[0].listeners.click(click);
+  await tick();
+  const stopBtn = buttonsOf(env6)[1];
+  assert.strictEqual(stopBtn.textContent, 'Stop');
+  assert(!stopBtn.disabled, 'Stop is clickable while running');
+  await stopBtn.listeners.click(click);
+  await tick();
+  await tick();
+  await tick();
+  assert.deepStrictEqual(
+    env6.fetches.map((f) => f.url),
+    ['/api/host-shell/req1/run', '/api/host-shell/req1/cancel'],
+  );
+  assert(walk(env6.messages).some((e) => e.tag === 'pre' && /You stopped/.test(e.textContent)));
+
   console.log('host_command_card: all assertions passed');
 })().catch((err) => {
   console.error(err);

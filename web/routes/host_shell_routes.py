@@ -38,6 +38,8 @@ def run_host_command(request_id: str, body: HostShellDecision):  # sync: runs in
     except Exception as exc:
         result = {"error": f"The command could not be started ({type(exc).__name__}).", "stdout": "", "stderr": "",
                   "exit_code": -1, "ran_on": "host", "cwd": req.cwd}
+    if req.stopped:
+        result["error"] = "You stopped this command before it finished."
     host_requests.finish(req.id, result)
     # Metadata only: never log the command, folder or output.
     _log.info("host command finished exit_code=%s", result.get("exit_code"))
@@ -46,8 +48,13 @@ def run_host_command(request_id: str, body: HostShellDecision):  # sync: runs in
 
 @router.post("/api/host-shell/{request_id}/cancel", dependencies=[Depends(verify_csrf)])
 def cancel_host_command(request_id: str, body: HostShellDecision):
+    """Cancel a pending request, or stop a running one by killing its whole process tree."""
     try:
-        req = host_requests.deny(request_id, body.context_id)
+        status, _ = host_requests.lookup(request_id, body.context_id)
+        if status == "running":
+            req = host_requests.stop(request_id, body.context_id)
+        else:
+            req = host_requests.deny(request_id, body.context_id)
     except host_requests.HostRequestError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
     return {"ok": True, "request_id": req.id, "status": req.status}

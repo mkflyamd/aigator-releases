@@ -55,6 +55,7 @@ def test_untrusted_tools():
     assert ds.is_untrusted("fetch_webpage") and ds.is_untrusted("web_search")
     assert ds.is_untrusted("read_email") and ds.is_untrusted("jira_get_issue")
     assert not ds.is_untrusted("run_python") and not ds.is_untrusted("create_docx")
+    assert ds.is_untrusted("host_command_result") and not ds.is_untrusted("run_on_host")
 
 
 def test_prompt_text_names_the_source_and_the_tool():

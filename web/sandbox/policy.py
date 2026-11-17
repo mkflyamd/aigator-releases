@@ -109,6 +109,7 @@ def parse_policy(text: str) -> Policy:
             if not isinstance(value, str) or value not in allowed:
                 raise ValueError(f"invalid value for {key}")
             values[key] = value
+    values.setdefault("host_shell", "deny")  # a managed install opts in to host commands
     if "require_sandbox" in data:
         if not isinstance(data["require_sandbox"], bool):
             raise ValueError("require_sandbox must be true or false")
