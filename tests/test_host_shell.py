@@ -406,6 +406,10 @@ def test_an_attended_run_gets_its_own_context_id_not_the_models(tmp_path):
     assert out["_sandbox_approval"]["context_id"] == "tab-1"
 
 
+# cmd quotes a Windows path the same way everywhere; bash and WSL would mangle it.
+_SLEEPER_SHELL = "cmd" if sys.platform == "win32" else ""
+
+
 def _sleeper(tmp_path):
     """A command whose Python child starts a grandchild that outlives it and holds the output pipes."""
     pid_file = tmp_path / "grandchild.pid"
@@ -416,6 +420,8 @@ def _sleeper(tmp_path):
         f"pathlib.Path({str(pid_file)!r}).write_text(str(p.pid))\n"
         "time.sleep(60)\n"
     )
+    if sys.platform == "win32" and " " not in f"{sys.executable}{script}":
+        return pid_file, f"{sys.executable} {script}"  # cmd.exe cannot be handed escaped quotes
     return pid_file, f'"{sys.executable}" "{script}"'
 
 
@@ -450,7 +456,7 @@ def test_timeout_kills_the_whole_process_tree(tmp_path):
 
     pid_file, command = _sleeper(tmp_path)
     started = time.monotonic()
-    result = shell_tools._run_unsandboxed(command, "", str(tmp_path), 3, False, as_typed=True)
+    result = shell_tools._run_unsandboxed(command, _SLEEPER_SHELL, str(tmp_path), 3, False, as_typed=True)
     assert time.monotonic() - started < 30
     assert "timed out" in str(result.get("error", "")).lower()
     assert pid_file.exists()
@@ -462,7 +468,7 @@ def test_stop_kills_a_running_request_and_marks_it_stopped(tmp_path):
     import threading
 
     pid_file, command = _sleeper(tmp_path)
-    req = host_requests.create("tab-1", command, str(tmp_path), "", "", 60)
+    req = host_requests.create("tab-1", command, str(tmp_path), _SLEEPER_SHELL, "", 60)
     host_requests.claim(req.id, "tab-1")
     worker = threading.Thread(target=lambda: shell_tools.run_host_request(req))
     worker.start()
@@ -479,7 +485,7 @@ def test_stop_all_kills_every_running_command(tmp_path):
     import threading
 
     pid_file, command = _sleeper(tmp_path)
-    req = host_requests.create("tab-1", command, str(tmp_path), "", "", 60)
+    req = host_requests.create("tab-1", command, str(tmp_path), _SLEEPER_SHELL, "", 60)
     host_requests.claim(req.id, "tab-1")
     worker = threading.Thread(target=lambda: shell_tools.run_host_request(req))
     worker.start()

@@ -105,6 +105,33 @@ def test_saveable_follows_command_programs(env):
     assert py["_sandbox_approval"]["saveable"] is False
 
 
+def test_shell_card_carries_the_registry_category_and_scopes(env):
+    saveable = _run("git pull", network_hosts=["github.com:443"])["_sandbox_approval"]
+    assert saveable["category"] == "sandbox:shell"
+    assert saveable["card"] == {"scopes": ["always", "tab"], "primary": "tab"}
+    plain = _run("python x.py", network_hosts=["github.com:443"])["_sandbox_approval"]
+    assert plain["card"] == {"scopes": ["tab"], "primary": "tab"}
+
+
+def test_persistent_policy_deny_hides_always_and_ignores_saved_sets(env):
+    import permissions
+
+    proj = _project(env)
+    saved_permissions.add([], [str(proj)], False, [])
+    env.mp.setattr(permissions, "load_policy", lambda: Policy(persistent_permissions="deny"))
+    r = _run(cwd=str(proj))
+    assert r["approval_required"] is True
+    assert r["_sandbox_approval"]["card"]["scopes"] == ["tab"]
+
+
+def test_python_card_carries_the_registry_category_and_scopes(env):
+    proj = _project(env)
+    r = cr._tool_run_python("print(1)", extra_write_paths=[str(proj)], _context_id="tab")
+    card = r["_sandbox_approval"]
+    assert card["category"] == "sandbox:python"
+    assert card["card"] == {"scopes": ["tab", "once"], "primary": "tab"}
+
+
 def test_network_approval_runs_with_network(env):
     r = _run("git pull", network_hosts=["github.com:443"])
     approvals.decide(r["request_id"], "tab", True)

@@ -6,11 +6,17 @@ import json
 from fastapi import APIRouter, HTTPException, Request, Depends
 from security import verify_csrf
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+from typing import Literal
 
 from task_queue import enqueue, get_task, list_tasks, cancel_task, get_usage_summary
 import shared
 
 router = APIRouter()
+
+
+class ConfirmScope(BaseModel):
+    scope: Literal["always", "tab", "once"] | None = None
 
 
 @router.get("/api/notifications/stream")
@@ -213,17 +219,17 @@ async def browser_cancel():
     return {"cancelled": True}
 
 
-@router.post("/api/browser/confirm/{confirm_id}")
-async def browser_confirm_allow(confirm_id: str):
-    """Allow a pending browser confirm gate."""
+@router.post("/api/browser/confirm/{confirm_id}", dependencies=[Depends(verify_csrf)])
+async def browser_confirm_allow(confirm_id: str, body: ConfirmScope | None = None):
+    """Allow a pending browser confirm gate. The scope says how long: "always", "tab" or "once"."""
     from browser_agent import resolve_browser_confirm
 
-    if not resolve_browser_confirm(confirm_id, allowed=True):
+    if not resolve_browser_confirm(confirm_id, allowed=True, scope=body.scope if body else None):
         return {"ok": False, "expired": True}
     return {"ok": True}
 
 
-@router.post("/api/browser/confirm/{confirm_id}/cancel")
+@router.post("/api/browser/confirm/{confirm_id}/cancel", dependencies=[Depends(verify_csrf)])
 async def browser_confirm_cancel(confirm_id: str):
     """Cancel a pending browser confirm gate."""
     from browser_agent import resolve_browser_confirm
@@ -233,15 +239,16 @@ async def browser_confirm_cancel(confirm_id: str):
     return {"ok": True}
 
 
-@router.post("/api/failover/confirm/{consent_id}")
-async def failover_confirm_allow(consent_id: str):
+@router.post("/api/failover/confirm/{consent_id}", dependencies=[Depends(verify_csrf)])
+async def failover_confirm_allow(consent_id: str, body: ConfirmScope | None = None):
     """Allow a pending failover consent gate — user clicked 'Switch to fallback'."""
     from agent_loop import resolve_failover_consent
-    resolve_failover_consent(consent_id, allowed=True)
+    if not resolve_failover_consent(consent_id, allowed=True, scope=body.scope if body else None):
+        return {"ok": False, "expired": True}
     return {"ok": True}
 
 
-@router.post("/api/failover/confirm/{consent_id}/cancel")
+@router.post("/api/failover/confirm/{consent_id}/cancel", dependencies=[Depends(verify_csrf)])
 async def failover_confirm_cancel(consent_id: str):
     """Cancel a pending failover consent gate — user declined the fallback."""
     from agent_loop import resolve_failover_consent

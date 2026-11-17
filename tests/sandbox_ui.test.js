@@ -53,17 +53,11 @@ assert.match(
   /blocked/,
 );
 
-for (const name of [
-  '_showSandboxApproval',
-  '_initSandboxSettings',
-  '_sendSandboxFollowUp',
-  '_initSavedPermissions',
-]) {
+for (const name of ['_showSandboxApproval', '_initSandboxSettings', '_sendSandboxFollowUp']) {
   assert(!/innerHTML/.test(extract(name)), `${name} must not use innerHTML`);
 }
 assert(source.includes('_showSandboxApproval(msg.sandbox_approval, requestTabId)'));
 assert(source.includes('  _initSandboxSettings();'));
-assert(source.includes('  _initSavedPermissions();'));
 assert(
   !/alert\(/.test(extract('_initSandboxSettings')),
   'opt-out failure uses a toast, not alert()',
@@ -181,6 +175,9 @@ function makeEnv(activeTab) {
     '_sandboxFollowUpText',
     '_sendSandboxFollowUp',
     '_flushSandboxFollowUp',
+    '_markTabNeedsAttention',
+    '_scopeLabel',
+    '_scopeButtonSpecs',
     '_showSandboxApproval',
     '_renderTabSandboxCards',
   ].forEach((n) => vm.runInContext(extract(n), ctx));
@@ -195,6 +192,7 @@ const card = {
   write_paths: [],
   network_hosts: [evilHost],
   context_id: 'tab-1',
+  card: { scopes: ['tab', 'once'], primary: 'tab' },
 };
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
@@ -232,7 +230,7 @@ const flush = async () => {
   const buttons = all.filter((e) => e.tag === 'button');
   assert.deepStrictEqual(
     buttons.map((b) => b.textContent),
-    ['Allow for this tab', 'Allow once', 'Deny'],
+    ['Allow in this tab', 'Allow once', 'Deny'],
   );
   assert(
     all.some((e) => /Allowed until you close this tab/.test(e._text)),
@@ -277,7 +275,7 @@ const flush = async () => {
   assert.strictEqual(env.fetches[0].opts.headers['X-CSRF-Token'], 'aigator-fake-api-key');
   assert.deepStrictEqual(JSON.parse(env.fetches[0].opts.body), {
     context_id: 'tab-1',
-    scope: 'task',
+    scope: 'tab',
   });
   assert.strictEqual(env.form.submits, 1);
   assert.match(env.form.sent[0], /approved sandbox access request req1/);
@@ -357,7 +355,7 @@ const flush = async () => {
   await flush();
   assert.deepStrictEqual(JSON.parse(env6.fetches[0].opts.body), {
     context_id: 'ctx-from-server',
-    scope: 'task',
+    scope: 'tab',
   });
 
   // A second click while the first is in flight does not send a second POST.
@@ -465,6 +463,7 @@ const flush = async () => {
     context_id: 'tab-1',
     saveable: true,
     programs: ['git'],
+    card: { scopes: ['always', 'tab'], primary: 'tab' },
   };
   const envS = makeEnv('tab-1');
   envS.ctx._showSandboxApproval(shellCard, 'tab-1');
@@ -494,14 +493,14 @@ const flush = async () => {
   const shellButtons = allS.filter((e) => e.tag === 'button');
   assert.deepStrictEqual(
     shellButtons.map((b) => b.textContent),
-    ['Allow for this tab', 'Always allow this', 'Deny'],
+    ['Always allow', 'Allow in this tab', 'Deny'],
   );
-  await shellButtons[0].listeners.click({ stopPropagation() {} });
+  await shellButtons[1].listeners.click({ stopPropagation() {} });
   await flush();
   assert.strictEqual(envS.fetches[0].url, '/api/sandbox/requests/sh1/approve');
   assert.deepStrictEqual(JSON.parse(envS.fetches[0].opts.body), {
     context_id: 'tab-1',
-    scope: 'task',
+    scope: 'tab',
   });
   assert.match(envS.form.sent[0], /run the same run_shell call again/i);
 
@@ -509,7 +508,7 @@ const flush = async () => {
   const envA = makeEnv('tab-1');
   envA.ctx._showSandboxApproval({ ...shellCard, request_id: 'sh2' }, 'tab-1');
   await walk(envA.messages)
-    .filter((e) => e.tag === 'button')[1]
+    .filter((e) => e.tag === 'button')[0]
     .listeners.click({ stopPropagation() {} });
   await flush();
   assert.deepStrictEqual(JSON.parse(envA.fetches[0].opts.body), {
@@ -517,12 +516,15 @@ const flush = async () => {
     scope: 'always',
   });
   const envU = makeEnv('tab-1');
-  envU.ctx._showSandboxApproval({ ...shellCard, request_id: 'sh3', saveable: false }, 'tab-1');
+  envU.ctx._showSandboxApproval(
+    { ...shellCard, request_id: 'sh3', saveable: false, card: { scopes: ['tab'], primary: 'tab' } },
+    'tab-1',
+  );
   assert.deepStrictEqual(
     walk(envU.messages)
       .filter((e) => e.tag === 'button')
       .map((b) => b.textContent),
-    ['Allow for this tab', 'Deny'],
+    ['Allow in this tab', 'Deny'],
   );
   assert(
     !walk(envU.messages).some((e) => /any host/.test(e._text)),
@@ -539,130 +541,40 @@ const flush = async () => {
   await flush();
   assert.deepStrictEqual(JSON.parse(envD.fetches[0].opts.body), { context_id: 'tab-1' });
 
-  // ── Settings: Saved permissions ──
-  function makeSettingsEnv(entries) {
-    const list = makeEl('div');
-    const clear = makeEl('button');
-    clear.hidden = true;
-    const row = makeEl('div');
-    const byId = {
-      'saved-permissions-row': row,
-      'saved-permissions-list': list,
-      'saved-permissions-clear': clear,
-    };
-    const calls = [];
-    const confirms = [];
-    const state = { entries };
-    const ctx = {
-      document: { createElement: makeEl, getElementById: (id) => byId[id] || null },
-      window: { __CSRF_TOKEN__: 'aigator-fake-api-key' },
-      _showConnectivityToast: () => {},
-      confirm: (msg) => {
-        confirms.push(msg);
-        return true;
-      },
-      encodeURIComponent,
-      Array,
-      String,
-      fetch: async (url, opts = {}) => {
-        const method = opts.method || 'GET';
-        calls.push({ url, method, headers: opts.headers });
-        if (method === 'DELETE' && url.endsWith('/saved-permissions')) state.entries = [];
-        else if (method === 'DELETE')
-          state.entries = state.entries.filter((e) => !url.endsWith(encodeURIComponent(e.id)));
-        return { ok: true, status: 200, json: async () => ({ ok: true, entries: state.entries }) };
-      },
-    };
-    vm.createContext(ctx);
-    vm.runInContext(extract('_initSavedPermissions'), ctx);
-    return { ctx, list, clear, calls, confirms };
-  }
-  const evilDesc = '<img src=x onerror=alert(1)> git: network in C:/proj';
-  const sEnv = makeSettingsEnv([
-    { id: 'e1', description: evilDesc, created: 1 },
-    { id: 'e/2', description: 'second', created: 2 },
-  ]);
-  sEnv.ctx._initSavedPermissions();
-  await flush();
-  assert.strictEqual(sEnv.calls[0].method, 'GET');
-  assert.strictEqual(sEnv.calls[0].headers['X-CSRF-Token'], 'aigator-fake-api-key');
-  const rows = walk(sEnv.list);
-  assert(
-    rows.some((e) => e.textContent === evilDesc),
-    'description rendered as text',
-  );
-  assert(!rows.some((e) => e.tag === 'img'));
-  assert.strictEqual(sEnv.clear.hidden, false);
-  assert.strictEqual(typeof sEnv.ctx.window._refreshSavedPermissions, 'function');
-
-  const removeBtns = walk(sEnv.list).filter((e) => e.tag === 'button');
-  await removeBtns[1].listeners.click({ stopPropagation() {} });
-  await flush();
-  const del = sEnv.calls.find((c) => c.method === 'DELETE');
-  assert.strictEqual(del.url, '/api/sandbox/saved-permissions/e%2F2');
-  assert.strictEqual(del.headers['X-CSRF-Token'], 'aigator-fake-api-key');
-  assert.strictEqual(
-    walk(sEnv.list).filter((e) => e.tag === 'button').length,
-    1,
-    'list refreshed after Remove',
-  );
-  assert.strictEqual(sEnv.confirms.length, 0, 'single Remove does not ask');
-
-  await sEnv.clear.listeners.click({ stopPropagation() {} });
-  await flush();
-  assert.strictEqual(sEnv.confirms.length, 1, 'Remove all asks first');
-  assert(
-    sEnv.calls.some((c) => c.method === 'DELETE' && c.url === '/api/sandbox/saved-permissions'),
-  );
-  assert.strictEqual(sEnv.clear.hidden, true);
-  assert(
-    walk(sEnv.list).some((e) => /Nothing saved/.test(e.textContent)),
-    'empty state shown',
-  );
-
-  // Remove all does nothing when the user cancels.
-  const cEnv = makeSettingsEnv([{ id: 'e1', description: 'x', created: 1 }]);
-  cEnv.ctx.confirm = () => false;
-  cEnv.ctx._initSavedPermissions();
-  await flush();
-  await cEnv.clear.listeners.click({ stopPropagation() {} });
-  await flush();
-  assert(!cEnv.calls.some((c) => c.method === 'DELETE'), 'cancelled Remove all sends nothing');
-
-  // A failed refresh after Remove leaves no stale rows and says so.
-  const fEnv = makeSettingsEnv([
-    { id: 'e1', description: 'first', created: 1 },
-    { id: 'e2', description: 'second', created: 2 },
-  ]);
-  fEnv.ctx._initSavedPermissions();
-  await flush();
-  const okFetch = fEnv.ctx.fetch;
-  fEnv.ctx.fetch = async (url, opts = {}) =>
-    (opts.method || 'GET') === 'GET'
-      ? { ok: false, status: 500, json: async () => ({}) }
-      : okFetch(url, opts);
-  await walk(fEnv.list)
-    .filter((e) => e.tag === 'button')[0]
-    .listeners.click({ stopPropagation() {} });
-  await flush();
-  assert.strictEqual(
-    walk(fEnv.list).filter((e) => e.tag === 'button').length,
-    0,
-    'no stale Remove buttons',
-  );
-  assert(!walk(fEnv.list).some((e) => e.textContent === 'second'), 'no stale rows');
-  assert(walk(fEnv.list).some((e) => e.textContent === 'Could not load saved permissions.'));
-  assert.strictEqual(fEnv.clear.hidden, true);
-
-  // A rejected fetch (backend down) shows the same message.
-  const rEnv = makeSettingsEnv([{ id: 'e1', description: 'x', created: 1 }]);
-  rEnv.ctx.fetch = async () => {
-    throw new Error('offline');
+  // A file upload card names the file and folder, offers only once, and asks for file_upload again.
+  const uploadCard = {
+    request_id: 'up1',
+    tool: 'file_upload',
+    read_paths: ['C:/Users/me/report.docx'],
+    write_paths: [],
+    network_hosts: [],
+    context_id: 'tab-1',
+    destination: 'Reports 2026',
+    card: { scopes: ['once'], primary: 'once' },
   };
-  rEnv.ctx._initSavedPermissions();
+  const envF = makeEnv('tab-1');
+  envF.ctx._showSandboxApproval(uploadCard, 'tab-1');
+  const allF = walk(envF.messages);
+  assert(allF.some((e) => e.textContent === 'AI Gator wants to read a file to upload it'));
+  assert(allF.some((e) => e.textContent === 'C:/Users/me/report.docx'));
+  assert(allF.some((e) => e.textContent === 'Reports 2026'));
+  const uploadButtons = allF.filter((e) => e.tag === 'button');
+  assert.deepStrictEqual(
+    uploadButtons.map((b) => b.textContent),
+    ['Allow once', 'Deny'],
+  );
+  await uploadButtons[0].listeners.click({ stopPropagation() {} });
   await flush();
-  assert(walk(rEnv.list).some((e) => e.textContent === 'Could not load saved permissions.'));
-  assert.strictEqual(walk(rEnv.list).filter((e) => e.tag === 'button').length, 0);
+  assert.strictEqual(envF.fetches[0].url, '/api/sandbox/requests/up1/approve');
+  assert.deepStrictEqual(JSON.parse(envF.fetches[0].opts.body), {
+    context_id: 'tab-1',
+    scope: 'once',
+  });
+  assert.match(envF.form.sent[0], /run the same file_upload call again/i);
+  assert.doesNotMatch(envF.form.sent[0], /run_python/);
+  assert(
+    !walk(envF.messages).some((e) => /Allowed until you close this tab/.test(e.textContent || '')),
+  );
 
   console.log('sandbox_ui: all assertions passed');
 })().catch((err) => {

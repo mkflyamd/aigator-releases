@@ -78,6 +78,7 @@ from routes.actions import router as actions_router
 from routes.aigator import router as aigator_router
 from routes.config_routes import router as config_router
 from routes.host_shell_routes import router as host_shell_router
+from routes.permissions_routes import router as permissions_router
 from routes.sandbox_routes import router as sandbox_router
 from routes.auth import router as auth_router
 from routes.health import router as health_router
@@ -462,30 +463,7 @@ async def _execute_tool_impl(
         # The LLM never supplies _context_id itself — it's server-injected so
         # tools like get_tab_pins can know "current tab" without the LLM
         # having to pass it explicitly.
-        sig = inspect.signature(fn)
-        params = list(sig.parameters.values())
-        accepted = set(sig.parameters)
-        has_var_keyword = any(
-            p.kind == inspect.Parameter.VAR_KEYWORD for p in params
-        )
-        # Handlers that take a single positional `args: dict` param (e.g. the
-        # extension_setup__ tools) must be called as fn(inputs), not fn(**inputs).
-        # Only apply this when the sole parameter is explicitly annotated as dict
-        # (or has no annotation and no default — bare `def fn(args):`).
-        # A function with one typed param like `def fn(page_id: str)` must be
-        # called as fn(**inputs), not fn(inputs).
-        _p0 = params[0] if len(params) == 1 else None
-        single_dict_arg = (
-            _p0 is not None
-            and _p0.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                             inspect.Parameter.POSITIONAL_ONLY)
-            and (
-                # `from __future__ import annotations` stringizes annotations,
-                # so a `dict`-typed param reads back as the str "dict".
-                _p0.annotation in (dict, "dict")
-                or (_p0.annotation is inspect.Parameter.empty and _p0.default is inspect.Parameter.empty)
-            )
-        )
+        params, accepted, has_var_keyword, single_dict_arg = shared.handler_arguments(fn)
         if not single_dict_arg:
             if context_id is not None and ("_context_id" in accepted or has_var_keyword):
                 inputs = {**inputs, "_context_id": context_id}
@@ -938,6 +916,7 @@ app.include_router(config_router)
 app.include_router(auth_router)
 app.include_router(sandbox_router)
 app.include_router(host_shell_router)
+app.include_router(permissions_router)
 app.include_router(health_router)
 app.include_router(chat_router)
 app.include_router(tasks_router)
