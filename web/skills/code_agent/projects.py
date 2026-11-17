@@ -157,6 +157,16 @@ def set_active_pty_session(pty_session_id: str) -> None:
     _save_config(cfg)
 
 
+def _is_clone_of(clone_dir: Path, url: str) -> bool:
+    result = subprocess.run(
+        ["git", "-C", str(clone_dir), "remote", "get-url", "origin"],
+        capture_output=True,
+        text=True,
+        **no_window_kwargs(),
+    )
+    return result.returncode == 0 and result.stdout.strip() == url
+
+
 def add_project(
     name: str, repo_path: str, source: str = "local", init_git: bool = False
 ) -> dict:
@@ -231,19 +241,26 @@ def add_project(
             )
         # Clone into ~/.gator/projects/<name>/
         clone_dir = PROJECTS_DIR / safe_name
-        if clone_dir.exists():
+        if safe_name in _load_config().get("projects", {}):
             raise ValueError(f"Project '{safe_name}' already exists")
-        # Run git clone via args list (not shell=True)
-        result = subprocess.run(
-            ["git", "clone", repo_path, str(clone_dir)],
-            capture_output=True,
-            text=True,
-            **no_window_kwargs(),
-        )
-        if result.returncode != 0:
-            raise ValueError(
-                f"Could not clone repository: {result.stderr.splitlines()[-1] if result.stderr else 'unknown error'}"
+        if clone_dir.exists():
+            # A clone kept when the project was removed is reused, never re-cloned.
+            if not _is_clone_of(clone_dir, repo_path):
+                raise ValueError(
+                    f"'{clone_dir}' exists and is not a clone of this repository"
+                )
+        else:
+            # Run git clone via args list (not shell=True)
+            result = subprocess.run(
+                ["git", "clone", repo_path, str(clone_dir)],
+                capture_output=True,
+                text=True,
+                **no_window_kwargs(),
             )
+            if result.returncode != 0:
+                raise ValueError(
+                    f"Could not clone repository: {result.stderr.splitlines()[-1] if result.stderr else 'unknown error'}"
+                )
         resolved_path = str(clone_dir)
 
     else:

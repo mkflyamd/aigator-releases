@@ -1,5 +1,6 @@
 """Project list ordering and removal for the Code project picker."""
 
+import subprocess
 import time
 
 import pytest
@@ -123,3 +124,37 @@ def test_delete_route_requires_csrf(store):
     app.include_router(code_agent.router, prefix="/api/code_agent")
     assert TestClient(app).delete("/api/code_agent/projects/a").status_code in (401, 403)
     assert projects.get_project("a") is not None
+
+
+URL = "https://github.com/o/r"
+
+
+def _leftover_clone(name, origin):
+    clone = projects.PROJECTS_DIR / name
+    clone.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(clone)], check=True)
+    subprocess.run(["git", "-C", str(clone), "remote", "add", "origin", origin], check=True)
+    (clone / "unpushed.txt").write_text("work", encoding="utf-8")
+    return clone
+
+
+def test_a_removed_github_project_can_be_added_again_from_its_kept_clone(store):
+    clone = _leftover_clone("g", URL)
+    added = projects.add_project("g", URL, source="github")
+    assert added["repo_path"] == str(clone)
+    assert projects.get_project("g") is not None
+    assert (clone / "unpushed.txt").read_text(encoding="utf-8") == "work"
+
+
+def test_a_kept_clone_of_a_different_repo_still_blocks_the_name(store):
+    _leftover_clone("g", "https://github.com/o/other")
+    with pytest.raises(ValueError, match="not a clone of this repository"):
+        projects.add_project("g", URL, source="github")
+
+
+def test_adding_a_github_project_that_is_already_listed_is_refused(store):
+    clone = _leftover_clone("g", URL)
+    projects._save_config({"active_project": None, "projects": {"g": {"repo_path": str(clone), "source": "github", "agent": "claude"}}})
+    with pytest.raises(ValueError, match="already exists"):
+        projects.add_project("g", URL, source="github")
+    assert projects.get_project("g")["agent"] == "claude"
