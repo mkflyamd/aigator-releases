@@ -95,11 +95,7 @@ def test_tab_strip_supports_drag_and_keyboard_reorder():
     assert ".gtp-drop-before" in STYLE and ".gtp-drop-after" in STYLE
 
 
-def test_loading_projects_drops_an_active_project_that_no_longer_exists():
+def test_loading_projects_resolves_the_active_project_through_the_tested_helper():
     load = _between("function _caLoadProjects()", "function _caAddLocalProject")
-    assert "_caProjects.some((p) => p.name === _caActiveProject)" in load
-
-
-def test_a_dropped_active_project_follows_the_server_pointer_so_chat_and_the_view_agree():
-    load = _between("function _caLoadProjects()", "function _caAddLocalProject")
-    assert "_caProjects.some((p) => p.name === data.active) ? data.active : null" in load
+    assert "window.codePickerHelpers.resolveActiveProject(" in load
+    assert "data.active" in load

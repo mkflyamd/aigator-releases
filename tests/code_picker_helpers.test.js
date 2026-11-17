@@ -79,4 +79,15 @@ const P = (name, last_opened, repo_path) => ({
   assert.deepStrictEqual(h.stepTab(order, 'c', 1), order);
 }
 
+// resolveActiveProject: keep a project that still exists, else follow the server's pointer
+{
+  const list = [P('a'), P('b')];
+  assert.strictEqual(h.resolveActiveProject(list, 'a', 'b'), 'a');
+  assert.strictEqual(h.resolveActiveProject(list, 'gone', 'b'), 'b');
+  assert.strictEqual(h.resolveActiveProject(list, 'gone', 'also-gone'), null);
+  assert.strictEqual(h.resolveActiveProject(list, 'gone', null), null);
+  assert.strictEqual(h.resolveActiveProject(list, null, 'b'), null);
+  assert.strictEqual(h.resolveActiveProject([], 'a', 'a'), null);
+}
+
 console.log('code_picker_helpers ok');

@@ -36,7 +36,14 @@
     return out;
   }
 
-  const api = { sortProjects, filterProjects, moveTab, stepTab };
+  function resolveActiveProject(projects, current, serverActive) {
+    const has = (name) => !!name && projects.some((p) => p.name === name);
+    if (!current) return null;
+    if (has(current)) return current;
+    return has(serverActive) ? serverActive : null;
+  }
+
+  const api = { sortProjects, filterProjects, moveTab, stepTab, resolveActiveProject };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.codePickerHelpers = api;
 })(typeof window !== 'undefined' ? window : globalThis);
