@@ -22,6 +22,14 @@ function _ocXtermTheme() {
   return { background: '#0b0d12', foreground: '#d4d4d4', cursor: '#d4d4d4' };
 }
 
+// Output right after the user's own input (typing, a click's focus/mouse report),
+// a resize we sent, or a (re)connect is an echo or repaint, not the agent working.
+const _OC_ECHO_QUIET_MS = 1500;
+
+function _ocNoteEcho(sess) {
+  sess._quietUntil = Date.now() + _OC_ECHO_QUIET_MS;
+}
+
 function _ocSpawnTerm(sess) {
   /* global Terminal, FitAddon */
   sess.term = new Terminal({
@@ -97,12 +105,13 @@ function _ocSpawnTerm(sess) {
         sess._sawUserInput = true;
       }
     }
+    _ocNoteEcho(sess);
     sess.ws.send(JSON.stringify({ type: 'input', data }));
   });
 }
 
 function _ocFit(sess) {
-  if (!sess || !sess.fitAddon || !sess.term) return;
+  if (!sess || !sess.fitAddon || !sess.term || sess._parked) return;
   const el = sess.container;
   if (!el || !el.offsetParent || el.clientWidth < 40) return;
   const prevCols = sess.term.cols;
@@ -124,6 +133,7 @@ function _ocFit(sess) {
   // resize notification drive the application's normal redraw.
   if (!sess._hasOutput) sess.term.reset();
   if (sess.ws && sess.ws.readyState === WebSocket.OPEN) {
+    _ocNoteEcho(sess);
     sess.ws.send(
       JSON.stringify({
         type: 'resize',

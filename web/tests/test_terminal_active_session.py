@@ -1,15 +1,17 @@
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from pty_session import PtySession
 from routes import terminal
 from skills.code_agent import projects
 
 
 class _DeadPty:
-    _p = object()
-
     def isalive(self):
         return False
+
+    def read(self, n=4096):
+        raise EOFError
 
     def close(self):
         pass
@@ -19,13 +21,7 @@ def test_agent_terminal_ws_records_active_pty_session(monkeypatch):
     saved = {}
     monkeypatch.setattr(projects, "_load_config", lambda: dict(saved))
     monkeypatch.setattr(projects, "_save_config", lambda cfg: saved.update(cfg))
-    terminal._pty_sessions["sess-1"] = {
-        "pty": _DeadPty(),
-        "output_buf": [],
-        "done": False,
-        "waiters": [],
-        "ws_clients": 0,
-    }
+    terminal._pty_sessions["sess-1"] = PtySession(_DeadPty())
     app = FastAPI()
     app.include_router(terminal.router)
     try:

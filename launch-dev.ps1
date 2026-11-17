@@ -2,20 +2,24 @@
 #
 # One command to spin up a clean dev environment for testing your changes,
 # isolated from the stable app on :8000. It:
-#   1. Kills any stale dev backend / Electron on the dev port (the #1 cause of
+#   1. Kills any stale dev backend on the dev port (the #1 cause of
 #      "it loaded the old app" - a zombie backend still holding the port).
 #   2. Starts the hot-reload backend (dev.ps1) on the dev port.
 #   3. Waits until the backend is actually ready.
 #   4. Launches the Electron shell attached to it (dev-shell.ps1), always with
-#      --remote-debugging-port for the DevTools MCP.
+#      --remote-debugging-port for the DevTools MCP - unless a shell for this
+#      port is already open. An open shell is left alone: it shows
+#      "Reconnecting..." while the backend restarts and reloads by itself.
 #
-#   .\launch-dev.ps1                 - dev backend + shell on :8003 (default)
+#   .\launch-dev.ps1                 - restart the dev backend on :8003 (default);
+#                                      open the shell only if none is running
+#   .\launch-dev.ps1 -Shell          - also close and relaunch the shell window
 #   .\launch-dev.ps1 -Port 8002      - use a different dev port
 #   .\launch-dev.ps1 -DebugPort 9223 - use a different remote-debugging port
 #
 # Runs everything from THIS repo. Edits to web/ hot-reload the backend (reload
 # the shell window with Ctrl+R to pick up JS/CSS). Never touches the stable app.
-param([int]$Port = 8003, [int]$DebugPort = 9222)
+param([int]$Port = 8003, [int]$DebugPort = 9222, [switch]$Shell)
 
 $ErrorActionPreference = "Stop"
 $projectDir = $PSScriptRoot
@@ -23,12 +27,14 @@ $projectDir = $PSScriptRoot
 Write-Host ""
 Write-Host "=== AI Gator (dev :$Port) ===" -ForegroundColor Cyan
 
-# -- 1. Kill any stale dev backend / Electron so we never attach to a zombie ----
+# -- 1. Kill any stale dev backend so we never attach to a zombie ---------------
 # A backend left holding the dev port (e.g. an old dev-workbench run, or an
 # abruptly-killed uvicorn whose reloader child kept the socket) makes the shell
 # load OLD code - the "why is it the classic/old app?" trap. Clear it first.
-Write-Host "Clearing any stale dev processes on :$Port ..." -ForegroundColor Yellow
-$stalePids = (netstat -ano | Select-String ":$Port\s" | ForEach-Object { ($_ -split '\s+')[-1] }) |
+# Only the LISTENING owner is killed: the shell's own connections to the port
+# also show up in netstat, and killing those would close the window.
+Write-Host "Clearing any stale dev backend on :$Port ..." -ForegroundColor Yellow
+$stalePids = (netstat -ano | Select-String "^\s*TCP\s+\S+:$Port\s+\S+\s+LISTENING" | ForEach-Object { ($_ -split '\s+')[-1] }) |
     Where-Object { $_ -match '^\d+$' -and $_ -ne '0' } | Sort-Object -Unique
 foreach ($id in $stalePids) {
     $p = Get-Process -Id $id -ErrorAction SilentlyContinue
@@ -40,21 +46,15 @@ foreach ($id in $stalePids) {
         Write-Host "  PID $id already gone (socket will clear)" -ForegroundColor DarkGray
     }
 }
-# Also close ONLY the Electron for THIS port (its userData profile is tagged
-# "gator-shell-<port>" on every process — see shell/main.js app.setPath). This
-# leaves the stable app (:8000) and any other dev instance running, so you can
-# have stable + dev open at the same time. (dev-shell.ps1 does the same match.)
+# The shell for THIS port is identified by its userData profile tag
+# "gator-shell-<port>" in the process command line (see shell/main.js
+# app.setPath). Matching on it never touches the stable app (:8000) or another
+# dev instance. It is closed only with -Shell; otherwise it stays open and
+# reconnects on its own when the backend is back.
 $profileTag = "gator-shell-$Port"
-# Kill Electron instances for this dev port. We can't read command lines without
-# WMI (which hangs on degraded systems), so we use the process's MainWindowTitle
-# which Electron sets to the app name + userData tag. If no title match is found,
-# fall back to killing all AI Gator / electron dev instances by process name.
-$electronProcs = @(Get-Process -Name 'electron','AI Gator' -ErrorAction SilentlyContinue)
-foreach ($ep in $electronProcs) {
-    if ($ep.MainWindowTitle -match [regex]::Escape($profileTag) -or $ep.MainWindowTitle -eq '') {
-        Stop-Process -Id $ep.Id -Force -ErrorAction SilentlyContinue
-    }
-}
+$shellProcs = @(Get-CimInstance Win32_Process -Filter "Name='electron.exe' OR Name='AI Gator.exe'" -OperationTimeoutSec 10 -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -match [regex]::Escape($profileTag) })
+$launchShell = $Shell -or ($shellProcs.Count -eq 0)
 Start-Sleep -Seconds 2
 
 # If the port is stuck in a "zombie" LISTEN with a dead owning PID, this is
@@ -70,8 +70,10 @@ if ($stillListening) {
         $probe = Invoke-WebRequest -Uri "http://localhost:$Port/health" -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop
         if ($probe.StatusCode -eq 200) {
             Write-Host "Port $Port shows a stale owning PID but is actually serving a healthy Gator backend." -ForegroundColor Green
-            Write-Host "Skipping restart -- launching the shell against the existing backend." -ForegroundColor Cyan
-            & (Join-Path $projectDir "dev-shell.ps1") -Port $Port -DebugPort $DebugPort
+            Write-Host "Skipping restart -- using the existing backend." -ForegroundColor Cyan
+            if ($launchShell) {
+                & (Join-Path $projectDir "dev-shell.ps1") -Port $Port -DebugPort $DebugPort -Restart
+            }
             Write-Host ""
             Write-Host "Dev instance is up on :$Port." -ForegroundColor Green
             exit 0
@@ -146,8 +148,12 @@ if (-not $ready) {
 Write-Host "Backend ready." -ForegroundColor Green
 
 # -- 4. Launch the Electron shell attached to the dev backend -----------------
-Write-Host "Launching the Electron shell (attached to :$Port, MCP on :$DebugPort) ..." -ForegroundColor Cyan
-& (Join-Path $projectDir "dev-shell.ps1") -Port $Port -DebugPort $DebugPort
+if ($launchShell) {
+    Write-Host "Launching the Electron shell (attached to :$Port, MCP on :$DebugPort) ..." -ForegroundColor Cyan
+    & (Join-Path $projectDir "dev-shell.ps1") -Port $Port -DebugPort $DebugPort -Restart
+} else {
+    Write-Host "Shell for :$Port is already open - leaving it running; it reconnects on its own." -ForegroundColor Cyan
+}
 
 Write-Host ""
 Write-Host "Dev instance is up on :$Port. The stable app (:8000) is untouched." -ForegroundColor Green

@@ -35,10 +35,11 @@ Adding a skill needs **zero changes to `app.py`** — drop `web/skills/<name>/` 
 
 ## Dev commands
 
-Windows one-shot (clears stale procs, starts hot-reload backend, waits for `/health`, opens Electron with `--remote-debugging-port=9222`):
+Windows one-shot (clears the stale backend, starts hot-reload backend, waits for `/health`, opens Electron with `--remote-debugging-port=9222` if no shell is open for that port; an open shell stays and reconnects on its own):
 
 ```powershell
 .\launch-dev.ps1                 # dev backend + shell on :8003
+.\launch-dev.ps1 -Shell          # also close and relaunch the shell window
 .\launch-dev.ps1 -Port 8002 -DebugPort 9223
 ```
 
@@ -107,7 +108,7 @@ npm --prefix shell run dist -- --win --x64 --publish never   # or --mac/--linux
 
 ## OpenCode integration
 
-`web/skills/opencode_agent/instance_manager.py` owns one `opencode serve` subprocess per project (ports 8100–8200, idle-reaped after 30 min). Per-project spawn locks prevent duplicate servers. The explore subagent is hardcoded to `gator-gateway/gpt-4.1` regardless of the project's main model. This Gator instance's identity = its uvicorn `--port` (derived from argv, not an env var).
+OpenCode runs as a bare PTY process (`opencode-bare` in `web/generic_agent.py`), resolved on PATH like claude/codex/crush and routed through the gateway via injected config. AI Gator does not bundle or pin it; users install it with `npm install -g opencode-ai`.
 
 ## Microsoft Graph API rules
 
