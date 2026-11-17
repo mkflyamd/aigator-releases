@@ -1,7 +1,8 @@
 """Serve an image shown inline in chat so the UI can download or save it.
 
-Only /api/files/ outputs and https images on INLINE_IMAGE_HOSTS are served; keep
-that list in sync with INLINE_IMAGE_HOSTS in web/static/app.js (a test enforces it).
+Only /api/files/ outputs and https images hosted by one of the user's connected MCP
+servers are served. The page builds the same host list from those connections in
+INLINE_IMAGE_HOSTS in web/static/app.js (a test enforces it).
 """
 
 import asyncio
@@ -11,6 +12,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 import httpx
+from config import load_config
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel
@@ -21,7 +23,6 @@ from routes.utils import _open_file_dialog
 
 router = APIRouter()
 
-INLINE_IMAGE_HOSTS = ("mcp-platform.amd.com",)
 _MAX_BYTES = 25 * 1024 * 1024
 _EXT_BY_TYPE = {
     "image/png": ".png",
@@ -38,6 +39,17 @@ _TYPE_BY_EXT = {
 }
 _LOCAL_PATH = re.compile(r"^/api/files/([^/]+)/([^/]+)$")
 _fetch_locks: dict[str, asyncio.Lock] = {}
+
+
+def inline_image_hosts() -> frozenset[str]:
+    """Hostnames of the enabled https MCP servers the user has connected."""
+    hosts = set()
+    for conn in load_config().get("mcp_connections", []):
+        if conn.get("enabled", True) and conn.get("transport", "http") == "http":
+            parts = urlsplit(conn.get("url", ""))
+            if parts.scheme == "https" and parts.hostname:
+                hosts.add(parts.hostname)
+    return frozenset(hosts)
 
 
 async def _fetch_remote(url: str) -> tuple[bytes, str]:
@@ -80,7 +92,7 @@ async def _load_remote(url: str) -> tuple[bytes, str, str]:
     parts = urlsplit(url)
     if (
         parts.scheme != "https"
-        or parts.hostname not in INLINE_IMAGE_HOSTS
+        or parts.hostname not in inline_image_hosts()
         or parts.username
         or parts.password
         or parts.port not in (None, 443)

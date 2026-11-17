@@ -30,12 +30,12 @@ const code =
   '\n}\n' +
   slice('const INLINE_IMAGE_HOSTS', '\n// ── end inline images') +
   '\nthis.applyInline = applyInline;';
-const ctx = { window: {}, URL };
+const ctx = { window: { __MCP_SKILLS__: [{ url: 'https://images.example/mcp' }] }, URL };
 vm.createContext(ctx);
 vm.runInContext(code, ctx);
 const render = (md) => ctx.applyInline(ctx.escapeHtml ? ctx.escapeHtml(md) : md);
 
-const TXT2IMG = 'https://mcp-platform.amd.com/mcp/txt2img/images/a42668ca.png?token=abc.def&x=1';
+const TXT2IMG = 'https://images.example/mcp/txt2img/images/a42668ca.png?token=abc.def&x=1';
 
 (function allowedHostRendersImage() {
   const out = render(`![flower](${TXT2IMG})`);
@@ -45,13 +45,13 @@ const TXT2IMG = 'https://mcp-platform.amd.com/mcp/txt2img/images/a42668ca.png?to
   assert.ok(out.includes('referrerpolicy="no-referrer"'), out);
   assert.ok(
     out.includes(
-      'src="/api/inline-image?url=https%3A%2F%2Fmcp-platform.amd.com%2Fmcp%2Ftxt2img%2Fimages%2Fa42668ca.png%3Ftoken%3Dabc.def%26x%3D1"',
+      'src="/api/inline-image?url=https%3A%2F%2Fimages.example%2Fmcp%2Ftxt2img%2Fimages%2Fa42668ca.png%3Ftoken%3Dabc.def%26x%3D1"',
     ),
     `remote images must load through the caching proxy: ${out}`,
   );
   assert.ok(
     out.includes(
-      'data-orig-src="https://mcp-platform.amd.com/mcp/txt2img/images/a42668ca.png?token=abc.def&amp;x=1"',
+      'data-orig-src="https://images.example/mcp/txt2img/images/a42668ca.png?token=abc.def&amp;x=1"',
     ),
     `original URL must be kept for download/save: ${out}`,
   );
@@ -88,9 +88,9 @@ const TXT2IMG = 'https://mcp-platform.amd.com/mcp/txt2img/images/a42668ca.png?to
 (function otherHostsStayLinks() {
   for (const url of [
     'https://evil.example/pixel.png?d=secret',
-    'https://mcp-platform.amd.com.evil.example/x.png',
-    'https://mcp-platform.amd.com@evil.example/x.png',
-    'http://mcp-platform.amd.com/x.png',
+    'https://images.example.evil.example/x.png',
+    'https://images.example@evil.example/x.png',
+    'http://images.example/x.png',
     '/api/other/endpoint',
     '/api/files/../secret',
   ]) {
@@ -99,6 +99,16 @@ const TXT2IMG = 'https://mcp-platform.amd.com/mcp/txt2img/images/a42668ca.png?to
     assert.ok(!out.includes('!<a'), `stray "!" before link for ${url}: ${out}`);
     assert.ok(out.includes('<a '), `must fall back to a link for ${url}: ${out}`);
   }
+})();
+
+(function hostsComeFromConnectedMcpServers() {
+  const other = '![x](https://later.example/a.png)';
+  assert.ok(!render(other).includes('<img'), 'an unconnected host must stay a link');
+  ctx.window.registerInlineImageHost('http://later.example/mcp');
+  assert.ok(!render(other).includes('<img'), 'a plain-http server does not allow its host');
+  ctx.window.registerInlineImageHost('not a url');
+  ctx.window.registerInlineImageHost('https://later.example/mcp?api_key=***');
+  assert.ok(render(other).includes('<img '), 'a connected https server allows its host');
 })();
 
 (function altTextCannotBreakOutOfAttribute() {
