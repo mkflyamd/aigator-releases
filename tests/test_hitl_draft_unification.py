@@ -514,10 +514,18 @@ class TestOpenInOutlook:
         source = (pathlib.Path(__file__).parent.parent / "web" / "static" / "app.js").read_text(
             encoding="utf-8", errors="replace"
         )
-        start = source.find("const { url } = await res.json()")
-        assert start != -1
-        block = source[start : start + 900]
-        assert block.find("openThirdPane('email')") < block.find("openOutlookDraft(url)")
+        needle = "const { url } = await res.json()"
+        blocks = []
+        start = source.find(needle)
+        while start != -1:
+            block = source[start : start + 900]
+            if "openOutlookDraft(url)" in block:
+                blocks.append(block)
+            start = source.find(needle, start + 1)
+        assert blocks, "email open handler not found"
+        for block in blocks:
+            assert block.find("openThirdPane('email')") != -1
+            assert block.find("openThirdPane('email')") < block.find("openOutlookDraft(url)")
 
 
 # ---------------------------------------------------------------------------

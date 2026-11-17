@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from functools import partial
 from urllib.parse import quote
 _eid = lambda mid: quote(mid, safe="")  # encode Graph resource ID for path segment
@@ -225,6 +226,117 @@ def _apply_jira_edits(draft: dict, body: dict | None) -> None:
             p[name] = text
 
 
+_CALENDAR_EDIT_MAX_LEN = {"subject": 255, "body": 32768}
+
+_REPLY_RECIPIENT_MAX = 50
+_EMAIL_ADDRESS_RE = re.compile(r"^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$")
+
+
+def _reply_recipient_edits(body: dict | None) -> dict:
+    """Validates the To and CC edits made on a reply card and returns them as to_override / cc_override."""
+    edits = (body or {}).get("edited_recipients")
+    if edits is None:
+        return {}
+    if not isinstance(edits, dict):
+        raise HTTPException(status_code=400, detail="Edited recipients must be an object.")
+    unknown = sorted(set(edits) - {"to", "cc"})
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"Field(s) not editable here: {', '.join(unknown)}.")
+    out: dict = {}
+    for field, raw in edits.items():
+        if not isinstance(raw, list) or not all(isinstance(a, str) for a in raw):
+            raise HTTPException(status_code=400, detail=f"Edited {field} must be a list of email addresses.")
+        addresses: list[str] = []
+        for address in (a.strip() for a in raw):
+            if not _EMAIL_ADDRESS_RE.match(address):
+                raise HTTPException(status_code=400, detail=f"'{address}' is not a valid email address.")
+            if address.lower() not in (a.lower() for a in addresses):
+                addresses.append(address)
+        if len(addresses) > _REPLY_RECIPIENT_MAX:
+            raise HTTPException(status_code=400, detail=f"An email can have up to {_REPLY_RECIPIENT_MAX} {field.upper()} recipients.")
+        if field == "to" and not addresses:
+            raise HTTPException(status_code=400, detail="An email needs at least one To recipient.")
+        out[f"{field}_override"] = addresses
+    return out
+
+
+_SUBJECT_MAX = 255
+
+
+def _send_subject_edit(body: dict | None) -> dict:
+    """Validates a subject edited on a new-email card and returns it as the subject param."""
+    subject = (body or {}).get("edited_subject")
+    if subject is None:
+        return {}
+    if not isinstance(subject, str) or not subject.strip():
+        raise HTTPException(status_code=400, detail="The subject can't be empty.")
+    subject = subject.strip()
+    if len(subject) > _SUBJECT_MAX or "\n" in subject or "\r" in subject:
+        raise HTTPException(status_code=400, detail=f"The subject must be one line of up to {_SUBJECT_MAX} characters.")
+    return {"subject": subject}
+
+
+def _fold_send_recipients(params: dict) -> None:
+    """A new email sends from comma-separated to/cc strings, so the people edited on the card replace them."""
+    for field in ("to", "cc"):
+        override = params.pop(f"{field}_override", None)
+        if override is not None:
+            params[field] = ", ".join(override)
+
+
+_HEADER_KEYS = ("to", "cc", "subject")
+
+
+def _reset_header_edits(draft: dict) -> None:
+    """Puts To/CC/Subject back to what the draft was created with, so each attempt applies only the edits it carries.
+
+    A failed send keeps the stored draft, and the card sends no edit once the user reverts one, so an
+    edit applied by an earlier attempt must not outlive it."""
+    p = draft["params"]
+    baseline = draft.setdefault("header_baseline", {k: p[k] for k in _HEADER_KEYS if k in p})
+    p.pop("to_override", None)
+    p.pop("cc_override", None)
+    for key in _HEADER_KEYS:
+        if key in baseline:
+            p[key] = baseline[key]
+        else:
+            p.pop(key, None)
+
+
+def _reply_recipient_patch(params: dict) -> dict:
+    """Graph fields for the To/CC the user changed on the card; empty when they left the recipients alone."""
+    patch: dict = {}
+    for field, graph_field in (("to", "toRecipients"), ("cc", "ccRecipients")):
+        if f"{field}_override" in params:
+            patch[graph_field] = [{"emailAddress": {"address": a}} for a in params[f"{field}_override"]]
+    return patch
+
+
+def _calendar_edits(body: dict | None) -> dict:
+    """Validates the title and message edits made on a meeting draft card and returns them as params."""
+    edits = (body or {}).get("edited_fields")
+    if edits is None:
+        return {}
+    if not isinstance(edits, dict):
+        raise HTTPException(status_code=400, detail="Edited fields must be an object.")
+    unknown = sorted(set(edits) - set(_CALENDAR_EDIT_MAX_LEN))
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"Field(s) not editable on a meeting draft: {', '.join(unknown)}.")
+    out: dict = {}
+    for name, raw in edits.items():
+        if not isinstance(raw, str):
+            raise HTTPException(status_code=400, detail=f"Edited {name} must be text.")
+        text = raw.strip()
+        if len(text) > _CALENDAR_EDIT_MAX_LEN[name]:
+            raise HTTPException(status_code=400, detail=f"Edited {name} is too long.")
+        if name == "subject" and (not text or "\n" in text):
+            raise HTTPException(status_code=400, detail="Title must be a single line and cannot be empty.")
+        out[name] = text
+        if name == "body":
+            out["body_plain"] = True
+    return out
+
+
 def _direct_read_issue(target, issue_key: str, fields: str = "*all") -> dict:
     from skills.jira.api import jira_api_for_target
     return jira_api_for_target(target, "GET", f"issue/{issue_key}?fields={fields}")
@@ -245,7 +357,7 @@ async def _atlassian_mcp_read_issue(target, issue_key: str) -> dict:
 async def _read_issue(target, issue_key: str, fields: str = "*all") -> dict:
     """Read an issue from whichever transport owns the target. No fallback."""
     if target.adapter == "builtin-rest":
-        return _direct_read_issue(target, issue_key, fields)
+        return await _run_sync(_direct_read_issue, target, issue_key, fields)
     if target.adapter == "atlassian-mcp":
         return await _atlassian_mcp_read_issue(target, issue_key)
     raise HTTPException(status_code=409, detail=f"Unknown adapter {target.adapter!r} on Jira target.")
@@ -256,9 +368,9 @@ async def _write_with_atlassian_mcp_fallback(target, rest_write, atlassian_mcp_w
     Atlassian MCP on the same site. Returns (result, target_used, fallback_note|None)."""
     from skills.jira.mutations import atlassian_mcp_write_fallback
     try:
-        return rest_write(), target, None
+        return await _run_sync(rest_write), target, None
     except RuntimeError as exc:
-        fallback = atlassian_mcp_write_fallback(target, exc)
+        fallback = await _run_sync(atlassian_mcp_write_fallback, target, exc)
         if fallback is None:
             raise
         try:
@@ -346,7 +458,16 @@ async def approve_draft(draft_id: str, body: dict = None):
     try:
         dtype = draft["type"]
         p = draft["params"]
-        _apply_jira_edits(draft, body)
+        if dtype == "calendar-event":
+            p.update(_calendar_edits(body))
+        elif dtype not in ("calendar-update", "calendar-cancel"):
+            await _run_sync(_apply_jira_edits, draft, body)
+        if dtype in ("email-reply", "email-send"):
+            _reset_header_edits(draft)
+            p.update(_reply_recipient_edits(body))
+        if dtype == "email-send":
+            p.update(_send_subject_edit(body))
+            _fold_send_recipients(p)
 
         # â”€â”€ Email â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         if dtype == "email-reply":
@@ -354,7 +475,7 @@ async def approve_draft(draft_id: str, body: dict = None):
 
             gc = get_graph_client()
             try:
-                gc.get(f"/me/messages/{_eid(p['message_id'])}", {"$select": "id"})
+                await _run_sync(gc.get, f"/me/messages/{_eid(p['message_id'])}", {"$select": "id"})
                 print(
                     f"[draft-approve] VERIFIED email-reply message_id={p['message_id'][:20]}...",
                     flush=True,
@@ -365,17 +486,17 @@ async def approve_draft(draft_id: str, body: dict = None):
                     detail="Original message no longer exists -- cannot reply",
                 )
             action = "createReplyAll" if p.get("reply_all") else "createReply"
-            draft_msg = gc.post(f"/me/messages/{_eid(p['message_id'])}/{action}", {})
+            draft_msg = await _run_sync(gc.post, f"/me/messages/{_eid(p['message_id'])}/{action}", {})
             draft_msg_id = draft_msg.get("id", "")
             body_html = _email_fragment(p, "body")
-            quoted = (
-                gc.get(f"/me/messages/{_eid(draft_msg_id)}", {"$select": "body"}).get("body") or {}
-            ).get("content", "")
-            gc.patch(
+            quoted_msg = await _run_sync(gc.get, f"/me/messages/{_eid(draft_msg_id)}", {"$select": "body"})
+            quoted = (quoted_msg.get("body") or {}).get("content", "")
+            await _run_sync(
+                gc.patch,
                 f"/me/messages/{_eid(draft_msg_id)}",
-                {"body": {"contentType": "HTML", "content": body_html + quoted}},
+                {"body": {"contentType": "HTML", "content": body_html + quoted}, **_reply_recipient_patch(p)},
             )
-            gc.post(f"/me/messages/{_eid(draft_msg_id)}/send", {})
+            await _run_sync(gc.post, f"/me/messages/{_eid(draft_msg_id)}/send", {})
             delivery_result = {"ok": True, "action": action.replace("create", "").lower()}
 
         elif dtype == "email-forward":
@@ -383,7 +504,7 @@ async def approve_draft(draft_id: str, body: dict = None):
 
             gc = get_graph_client()
             try:
-                gc.get(f"/me/messages/{_eid(p['message_id'])}", {"$select": "id"})
+                await _run_sync(gc.get, f"/me/messages/{_eid(p['message_id'])}", {"$select": "id"})
                 print(
                     f"[draft-approve] VERIFIED email-forward message_id={p['message_id'][:20]}... to={p.get('to', '')}",
                     flush=True,
@@ -393,7 +514,7 @@ async def approve_draft(draft_id: str, body: dict = None):
                     status_code=404,
                     detail="Original message no longer exists -- cannot forward",
                 )
-            draft_msg = gc.post(f"/me/messages/{_eid(p['message_id'])}/createForward", {})
+            draft_msg = await _run_sync(gc.post, f"/me/messages/{_eid(p['message_id'])}/createForward", {})
             draft_msg_id = draft_msg.get("id", "")
             to_addrs = [a.strip() for a in p["to"].split(",") if a.strip()]
             if not to_addrs:
@@ -401,12 +522,11 @@ async def approve_draft(draft_id: str, body: dict = None):
             update: dict = {"toRecipients": [{"emailAddress": {"address": a}} for a in to_addrs]}
             comment_html = _email_fragment(p, "comment")
             if comment_html:
-                forwarded = (
-                    gc.get(f"/me/messages/{_eid(draft_msg_id)}", {"$select": "body"}).get("body") or {}
-                ).get("content", "")
+                forwarded_msg = await _run_sync(gc.get, f"/me/messages/{_eid(draft_msg_id)}", {"$select": "body"})
+                forwarded = (forwarded_msg.get("body") or {}).get("content", "")
                 update["body"] = {"contentType": "HTML", "content": comment_html + forwarded}
-            gc.patch(f"/me/messages/{_eid(draft_msg_id)}", update)
-            gc.post(f"/me/messages/{_eid(draft_msg_id)}/send", {})
+            await _run_sync(gc.patch, f"/me/messages/{_eid(draft_msg_id)}", update)
+            await _run_sync(gc.post, f"/me/messages/{_eid(draft_msg_id)}/send", {})
             delivery_result = {"ok": True, "forwarded_to": to_addrs}
 
         elif dtype == "email-send":
@@ -431,7 +551,7 @@ async def approve_draft(draft_id: str, body: dict = None):
                 msg["ccRecipients"] = [{"emailAddress": {"address": a.strip()}} for a in p["cc"].split(",") if a.strip()]
             if p.get("bcc"):
                 msg["bccRecipients"] = [{"emailAddress": {"address": a.strip()}} for a in p["bcc"].split(",") if a.strip()]
-            gc.post("/me/sendMail", {"message": msg, "saveToSentItems": True})
+            await _run_sync(gc.post, "/me/sendMail", {"message": msg, "saveToSentItems": True})
             delivery_result = {"ok": True, "sent_to": to_addrs}
 
         # â”€â”€ Slack â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -445,7 +565,7 @@ async def approve_draft(draft_id: str, body: dict = None):
                     status_code=409,
                     detail="Slack workspace changed after this draft was created. Reselect the destination and draft again.",
                 )
-            channel_info = _slack_web_api("conversations.info", {"channel": p["channel_id"]})
+            channel_info = await _run_sync(_slack_web_api, "conversations.info", {"channel": p["channel_id"]})
             channel = channel_info.get("channel", {}) if channel_info.get("ok") else {}
             if not channel_info.get("ok") or channel.get("is_archived"):
                 raise HTTPException(
@@ -460,7 +580,7 @@ async def approve_draft(draft_id: str, body: dict = None):
             payload = {"channel": p["channel_id"], "text": _slack_text(p)}
             if p.get("thread_ts"):
                 payload["thread_ts"] = p["thread_ts"]
-            data = _slack_web_api("chat.postMessage", payload, method="POST")
+            data = await _run_sync(_slack_web_api, "chat.postMessage", payload, method="POST")
             if not data.get("ok"):
                 raise HTTPException(status_code=503, detail=f"Slack error: {data.get('error', 'unknown')}")
             delivery_result = {"ok": True, "ts": data.get("ts"), "channel_id": p["channel_id"], "thread_ts": p.get("thread_ts", "")}
@@ -475,11 +595,11 @@ async def approve_draft(draft_id: str, body: dict = None):
                     status_code=409,
                     detail="Slack workspace changed after this draft was created. Reselect the destination and draft again.",
                 )
-            opened = _slack_web_api("conversations.open", {"users": p["user_id"]}, method="POST")
+            opened = await _run_sync(_slack_web_api, "conversations.open", {"users": p["user_id"]}, method="POST")
             if not opened.get("ok") or not (opened.get("channel") or {}).get("id"):
                 raise HTTPException(status_code=503, detail=f"Slack could not open the DM: {opened.get('error', 'unknown')}")
             dm_channel_id = opened["channel"]["id"]
-            data = _slack_web_api("chat.postMessage", {"channel": dm_channel_id, "text": _slack_text(p)}, method="POST")
+            data = await _run_sync(_slack_web_api, "chat.postMessage", {"channel": dm_channel_id, "text": _slack_text(p)}, method="POST")
             if not data.get("ok"):
                 raise HTTPException(status_code=503, detail=f"Slack error: {data.get('error', 'unknown')}")
             delivery_result = {"ok": True, "ts": data.get("ts"), "channel_id": dm_channel_id}
@@ -517,7 +637,7 @@ async def approve_draft(draft_id: str, body: dict = None):
             from skills.jira.tools import _build_adf_doc
 
             _jira_tab_guard(p, body)
-            target = _jira_get_target(p, body)
+            target = await _run_sync(_jira_get_target, p, body)
             is_cloud = target.is_cloud
 
             def _create_fields(for_target) -> dict:
@@ -656,7 +776,7 @@ async def approve_draft(draft_id: str, body: dict = None):
             )
 
             _jira_tab_guard(p, body)
-            target = _jira_get_target(p, body)
+            target = await _run_sync(_jira_get_target, p, body)
             issue_key = str(p.get("issue_key", ""))
             fields = p.get("fields") or {}
             if not issue_key or not isinstance(fields, dict) or not fields:
@@ -710,7 +830,7 @@ async def approve_draft(draft_id: str, body: dict = None):
             )
 
             _jira_tab_guard(p, body)
-            target = _jira_get_target(p, body)
+            target = await _run_sync(_jira_get_target, p, body)
             issue_key = str(p.get("issue_key", ""))
             account_id = str(p.get("account_id", ""))
             if not issue_key or not account_id:
@@ -732,9 +852,9 @@ async def approve_draft(draft_id: str, body: dict = None):
                 })
             else:
                 try:
-                    jira_api_for_target(target, "GET", f"issue/{issue_key}?fields=watcher")
-                    jira_api_for_target(target, "POST", f"issue/{issue_key}/watchers", account_id)
-                    watchers = jira_api_for_target(target, "GET", f"issue/{issue_key}/watchers")
+                    await _run_sync(jira_api_for_target, target, "GET", f"issue/{issue_key}?fields=watcher")
+                    await _run_sync(jira_api_for_target, target, "POST", f"issue/{issue_key}/watchers", account_id)
+                    watchers = await _run_sync(jira_api_for_target, target, "GET", f"issue/{issue_key}/watchers")
                 except JiraTargetResolutionError as exc:
                     raise HTTPException(status_code=409, detail=str(exc)) from exc
                 except Exception as exc:
@@ -769,7 +889,7 @@ async def approve_draft(draft_id: str, body: dict = None):
             )
 
             _jira_tab_guard(p, body)
-            target = _jira_get_target(p, body)
+            target = await _run_sync(_jira_get_target, p, body)
 
             if target.adapter == "atlassian-mcp":
                 # Atlassian MCP schema does not expose a file attachment API â€” refuse explicitly.
@@ -786,8 +906,9 @@ async def approve_draft(draft_id: str, body: dict = None):
             else:
                 try:
                     attachment = staged_attachment(str(p.get("upload_id", "")))
-                    jira_api_for_target(target, "GET", f"issue/{p['issue_key']}?fields=attachment")
-                    uploaded = jira_upload_attachment_for_target(
+                    await _run_sync(jira_api_for_target, target, "GET", f"issue/{p['issue_key']}?fields=attachment")
+                    uploaded = await _run_sync(
+                        jira_upload_attachment_for_target,
                         target, p["issue_key"],
                         attachment["_content"], attachment["filename"], attachment["content_type"],
                     )
@@ -827,7 +948,7 @@ async def approve_draft(draft_id: str, body: dict = None):
             from skills.jira.tools import _build_adf_comment
 
             _jira_tab_guard(p, body)
-            target = _jira_get_target(p, body)
+            target = await _run_sync(_jira_get_target, p, body)
             issue_key = str(p.get("issue_key", ""))
             comment_text = str(p.get("comment", ""))
 
@@ -855,7 +976,7 @@ async def approve_draft(draft_id: str, body: dict = None):
                 if target.adapter == "atlassian-mcp":
                     read_back = await _read_issue(target, issue_key)
                 else:
-                    read_back = jira_api_for_target(target, "GET", f"issue/{issue_key}?fields=comment")
+                    read_back = await _run_sync(jira_api_for_target, target, "GET", f"issue/{issue_key}?fields=comment")
             except JiraTargetResolutionError as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
             except Exception as exc:
@@ -885,7 +1006,7 @@ async def approve_draft(draft_id: str, body: dict = None):
             )
 
             _jira_tab_guard(p, body)
-            target = _jira_get_target(p, body)
+            target = await _run_sync(_jira_get_target, p, body)
             issue_key = str(p.get("issue_key", ""))
             comment_warning = ""
 
@@ -912,8 +1033,8 @@ async def approve_draft(draft_id: str, body: dict = None):
                             _log.warning("Atlassian MCP comment on %s failed after its transition: %s", issue_key, exc)
                             comment_warning = f"The status changed, but the comment could not be added: {exc}"
                 else:
-                    jira_api_for_target(target, "GET", f"issue/{issue_key}?fields=status")
-                    jira_api_for_target(target, "POST", f"issue/{issue_key}/transitions", p["payload"])
+                    await _run_sync(jira_api_for_target, target, "GET", f"issue/{issue_key}?fields=status")
+                    await _run_sync(jira_api_for_target, target, "POST", f"issue/{issue_key}/transitions", p["payload"])
                 read_back = await _read_issue(target, issue_key)
             except JiraTargetResolutionError as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -947,7 +1068,7 @@ async def approve_draft(draft_id: str, body: dict = None):
             )
 
             _jira_tab_guard(p, body)
-            target = _jira_get_target(p, body)
+            target = await _run_sync(_jira_get_target, p, body)
             issue_key = str(p.get("issue_key", ""))
             other_key = str(p.get("other_key", ""))
             link_type = str(p.get("link_type", ""))
@@ -1005,6 +1126,49 @@ async def approve_draft(draft_id: str, body: dict = None):
             delivery_result["navigate_to"] = {"app": "jira", "url": target.issue_url(issue_key)}
             if fallback_note:
                 delivery_result["fallback"] = fallback_note
+
+        elif dtype == "calendar-event":
+            from skills.calendar.events import NoAttendeesError, create_meeting
+
+            try:
+                result = await _run_sync(create_meeting, p, deliver=True)
+            except NoAttendeesError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            delivery_result = {
+                "ok": True,
+                "sent_to": (p.get("attendees") or []) + (p.get("optional_attendees") or []),
+                "event_id": (result or {}).get("id", ""),
+            }
+
+        elif dtype == "calendar-update":
+            from skills.calendar.tools import EventChangedError, apply_calendar_update
+
+            try:
+                applied = await _run_sync(
+                    apply_calendar_update,
+                    p["event_id"],
+                    p["payload"],
+                    p.get("notify", "All"),
+                    p.get("timezone", ""),
+                    p.get("fingerprint"),
+                )
+            except EventChangedError as e:
+                raise HTTPException(status_code=409, detail=str(e))
+            delivery_result = {"ok": True, **applied}
+
+        elif dtype == "calendar-cancel":
+            from skills.calendar.tools import apply_calendar_cancel
+
+            cancelled = await _run_sync(
+                apply_calendar_cancel, p["event_id"], p.get("comment", ""), p.get("delete_series", False)
+            )
+            if not cancelled.get("deleted"):
+                refused = cancelled.get("not_found") or cancelled.get("organizer_required")
+                raise HTTPException(
+                    status_code=409 if refused else 502,
+                    detail=cancelled.get("error") or "The meeting was not cancelled.",
+                )
+            delivery_result = {"ok": True, **cancelled}
 
         # â”€â”€ Calendar (Google Workspace MCP) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         elif dtype in ("calendar-write", "jira-mcp-write"):
@@ -1089,6 +1253,22 @@ async def approve_draft(draft_id: str, body: dict = None):
 
 # â”€â”€ open_draft_in_outlook â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
+def _calendar_compose_url(params: dict) -> str:
+    query = {
+        "path": "/calendar/action/compose",
+        "rru": "addevent",
+        "subject": params.get("subject", ""),
+        "startdt": params.get("start", ""),
+        "enddt": params.get("end", ""),
+        "body": params.get("body", ""),
+        "location": params.get("location", ""),
+        "online": "1" if params.get("teams") else "",
+        "to": ";".join((params.get("attendees") or []) + (params.get("optional_attendees") or [])),
+    }
+    qs = "&".join(f"{k}={quote(str(v), safe='')}" for k, v in query.items() if v)
+    return f"https://outlook.office.com/calendar/0/deeplink/compose?{qs}"
+
+
 @router.post("/api/drafts/{draft_id}/open-in-outlook", dependencies=[Depends(verify_csrf)])
 async def open_draft_in_outlook(draft_id: str, body: dict = None):
     """Create a real OWA draft from a pending Gator draft and return its URL.
@@ -1141,11 +1321,15 @@ async def open_draft_in_outlook(draft_id: str, body: dict = None):
 
     dtype = draft["type"]
 
-    if dtype not in ("email-send", "email-reply", "email-forward"):
+    if dtype not in ("email-send", "email-reply", "email-forward", "calendar-event", "calendar-update"):
         raise HTTPException(
             status_code=400,
             detail=f"Open-in-Outlook not supported for draft type '{dtype}'.",
         )
+
+    calendar_edits = _calendar_edits(body) if dtype == "calendar-event" else {}
+    recipient_edits = _reply_recipient_edits(body) if dtype in ("email-reply", "email-send") else {}
+    subject_edit = _send_subject_edit(body) if dtype == "email-send" else {}
 
     claimed = claim_for_handoff(draft_id)
     if claimed is not None:
@@ -1165,6 +1349,66 @@ async def open_draft_in_outlook(draft_id: str, body: dict = None):
             )
         raise HTTPException(status_code=404, detail="Draft not found or expired.")
     p = claimed["params"]
+    if dtype in ("email-reply", "email-send"):
+        _reset_header_edits(claimed)
+    p.update(calendar_edits)
+    p.update(recipient_edits)
+    p.update(subject_edit)
+    if dtype == "email-send":
+        _fold_send_recipients(p)
+
+    if dtype == "calendar-update":
+        link = p.get("web_link") or ""
+        if complete_handoff(draft_id):
+            await _sync_task_draft_status(draft_id, "handed_off")
+        return {"url": link if link.startswith("https://") else "https://outlook.office.com/calendar"}
+
+    if dtype == "calendar-event" and (p.get("recurrence") or p.get("optional_attendees")):
+        # Outlook's compose link cannot carry a recurrence or mark attendees optional,
+        # so the event is created as an unsent draft (isDraft) and opened from its webLink.
+        try:
+            from skills.calendar.events import NoAttendeesError, NotHeldAsDraftError, create_meeting
+
+            created = await _run_sync(create_meeting, p)
+        except NotHeldAsDraftError:
+            if complete_handoff(draft_id):
+                await _sync_task_draft_status(draft_id, "handed_off")
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "The meeting was created, but Outlook did not keep it as an unsent draft, so "
+                    "invites may have gone out. Check your Outlook calendar — Gator will not open it."
+                ),
+            )
+        except NoAttendeesError as e:
+            if abort_handoff(draft_id):
+                await _sync_task_draft_status(draft_id, "pending")
+            raise HTTPException(status_code=400, detail="A recurring meeting needs at least one attendee to open in Outlook as a draft.")
+        except Exception as e:
+            status_code = getattr(e, "status_code", None)
+            if isinstance(status_code, int) and (status_code == 0 or status_code >= 500):
+                if complete_handoff(draft_id):
+                    await _sync_task_draft_status(draft_id, "handed_off")
+                raise HTTPException(
+                    status_code=502,
+                    detail=(
+                        f"Outlook may already have created a draft for this meeting, "
+                        f"but Gator could not confirm it ({e}). Check your Outlook "
+                        "calendar — Send invite is disabled for this meeting to avoid a duplicate."
+                    ),
+                )
+            if abort_handoff(draft_id):
+                await _sync_task_draft_status(draft_id, "pending")
+            raise HTTPException(status_code=500, detail=str(e))
+        if complete_handoff(draft_id):
+            await _sync_task_draft_status(draft_id, "handed_off")
+        return {"url": (created or {}).get("webLink") or "https://outlook.office.com/calendar"}
+
+    if dtype == "calendar-event":
+        url = _calendar_compose_url(p)
+        if complete_handoff(draft_id):
+            await _sync_task_draft_status(draft_id, "handed_off")
+        return {"url": url}
 
     if body is not None and "edited_message" in body:
         if dtype == "email-reply":
@@ -1194,35 +1438,41 @@ async def open_draft_in_outlook(draft_id: str, body: dict = None):
                 msg["ccRecipients"] = [{"emailAddress": {"address": a.strip()}} for a in p["cc"].split(",") if a.strip()]
             if p.get("bcc"):
                 msg["bccRecipients"] = [{"emailAddress": {"address": a.strip()}} for a in p["bcc"].split(",") if a.strip()]
-            created = gc.post("/me/messages", msg)
+            created = await _run_sync(gc.post, "/me/messages", msg)
             msg_id = created.get("id", "")
 
         elif dtype == "email-reply":
             try:
-                gc.get(f"/me/messages/{_eid(p['message_id'])}", {"$select": "id"})
+                await _run_sync(gc.get, f"/me/messages/{_eid(p['message_id'])}", {"$select": "id"})
             except Exception:
                 raise HTTPException(status_code=404, detail="Original message no longer exists.")
             action = "createReplyAll" if p.get("reply_all") else "createReply"
-            reply_draft = gc.post(f"/me/messages/{_eid(p['message_id'])}/{action}", {})
+            reply_draft = await _run_sync(gc.post, f"/me/messages/{_eid(p['message_id'])}/{action}", {})
             msg_id = reply_draft.get("id", "")
             body_html = _email_fragment(p, "body")
-            quoted = (gc.get(f"/me/messages/{_eid(msg_id)}", {"$select": "body"}).get("body") or {}).get("content", "")
-            gc.patch(f"/me/messages/{_eid(msg_id)}", {"body": {"contentType": "HTML", "content": body_html + quoted}})
+            quoted_msg = await _run_sync(gc.get, f"/me/messages/{_eid(msg_id)}", {"$select": "body"})
+            quoted = (quoted_msg.get("body") or {}).get("content", "")
+            await _run_sync(
+                gc.patch,
+                f"/me/messages/{_eid(msg_id)}",
+                {"body": {"contentType": "HTML", "content": body_html + quoted}, **_reply_recipient_patch(p)},
+            )
 
         else:  # email-forward
             try:
-                gc.get(f"/me/messages/{_eid(p['message_id'])}", {"$select": "id"})
+                await _run_sync(gc.get, f"/me/messages/{_eid(p['message_id'])}", {"$select": "id"})
             except Exception:
                 raise HTTPException(status_code=404, detail="Original message no longer exists.")
-            fwd_draft = gc.post(f"/me/messages/{_eid(p['message_id'])}/createForward", {})
+            fwd_draft = await _run_sync(gc.post, f"/me/messages/{_eid(p['message_id'])}/createForward", {})
             msg_id = fwd_draft.get("id", "")
             to_addrs = [a.strip() for a in p.get("to", "").split(",") if a.strip()]
             update: dict = {"toRecipients": [{"emailAddress": {"address": a}} for a in to_addrs]}
             comment_html = _email_fragment(p, "comment")
             if comment_html:
-                forwarded = (gc.get(f"/me/messages/{_eid(msg_id)}", {"$select": "body"}).get("body") or {}).get("content", "")
+                forwarded_msg = await _run_sync(gc.get, f"/me/messages/{_eid(msg_id)}", {"$select": "body"})
+                forwarded = (forwarded_msg.get("body") or {}).get("content", "")
                 update["body"] = {"contentType": "HTML", "content": comment_html + forwarded}
-            gc.patch(f"/me/messages/{_eid(msg_id)}", update)
+            await _run_sync(gc.patch, f"/me/messages/{_eid(msg_id)}", update)
 
     except HTTPException:
         if msg_id:
