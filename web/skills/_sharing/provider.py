@@ -11,6 +11,7 @@ from .._m365 import file_transfer as ft
 from .errors import ShareError
 
 ROOT_FOLDER_NAME = "AI Gator Skills"
+JSON_MAX_BYTES = 1024 * 1024
 
 _MESSAGES = {
     "forbidden": "You do not have permission to do that in this OneDrive folder.",
@@ -79,7 +80,7 @@ class GraphSharingProvider:
         item = self._get_or_create_folder(f"{base}:/{_q(name)}", f"{base}/children", name, create)
         return _ref(item, parent["drive_id"]) if item else None
 
-    def read_file(self, folder: dict, name: str) -> tuple[bytes, str] | None:
+    def read_file(self, folder: dict, name: str, max_bytes: int | None = None) -> tuple[bytes, str] | None:
         drive = _q(folder["drive_id"])
         try:
             item = self._gc.get(f"/drives/{drive}/items/{_q(folder['folder_id'])}:/{_q(name)}")
@@ -89,14 +90,17 @@ class GraphSharingProvider:
             raise _fail(e) from e
         if not isinstance(item, dict) or not item.get("id"):
             return None
+        size = item.get("size")
+        if max_bytes is not None and isinstance(size, int) and size > max_bytes:
+            raise ShareError("too_large", f"{name} in the shared folder is too large to open.")
         try:
             data = self._gc.get_bytes(f"/drives/{drive}/items/{_q(item['id'])}/content")
         except Exception as e:
             raise _fail(e) from e
         return data, item.get("eTag", "")
 
-    def read_json(self, folder: dict, name: str) -> tuple[dict, str] | None:
-        found = self.read_file(folder, name)
+    def read_json(self, folder: dict, name: str, max_bytes: int = JSON_MAX_BYTES) -> tuple[dict, str] | None:
+        found = self.read_file(folder, name, max_bytes)
         if found is None:
             return None
         data, etag = found

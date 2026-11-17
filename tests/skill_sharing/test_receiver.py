@@ -103,6 +103,24 @@ def test_an_incomplete_version_is_not_found(provider, make_mine):
     assert err.value.code == "not_found"
 
 
+def test_review_of_an_oversize_bundle_is_too_large(provider, make_mine):
+    _skill_id, out = _published(provider, make_mine)
+    key = (_version_folder(provider, out)["folder_id"], "bundle.zip")
+    provider.files[key] = (b"x" * (receiver.MAX_BUNDLE_BYTES + 1), '"big"')
+    with pytest.raises(ShareError) as err:
+        receiver.review(provider, _ref(out))
+    assert err.value.code == "too_large"
+
+
+def test_review_of_an_oversize_manifest_is_too_large(provider, make_mine):
+    _skill_id, out = _published(provider, make_mine)
+    key = (_version_folder(provider, out)["folder_id"], "manifest.json")
+    provider.files[key] = (b" " * (receiver.MAX_JSON_BYTES + 1), '"big"')
+    with pytest.raises(ShareError) as err:
+        receiver.review(provider, _ref(out))
+    assert err.value.code == "too_large"
+
+
 def test_a_modified_bundle_is_tampered(provider, make_mine):
     _skill_id, out = _published(provider, make_mine)
     key = (_version_folder(provider, out)["folder_id"], "bundle.zip")

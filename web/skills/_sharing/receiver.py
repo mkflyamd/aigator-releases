@@ -4,13 +4,16 @@ import re
 from pathlib import Path
 
 from marketplace import installer
+from marketplace.github_fetcher import MAX_TOTAL_BYTES
 from marketplace import state as skill_state
 from marketplace.permissions import declared_permissions, files_digest, summarize_package
 
 from . import bundle
 from .errors import ShareError
+from .provider import JSON_MAX_BYTES as MAX_JSON_BYTES
 from .publisher import checked_doc
 
+MAX_BUNDLE_BYTES = MAX_TOTAL_BYTES + 1024 * 1024  # the extraction cap plus zip overhead
 _NATIVE_DIR = Path(__file__).resolve().parent.parent
 _ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 _RESERVED_IDS = {"mine"}
@@ -41,7 +44,7 @@ def _check_manifest(manifest, version: int) -> None:
 
 
 def _fetch(provider, ref: dict, version: int | None) -> dict:
-    found = provider.read_json(ref, "skill.json")
+    found = provider.read_json(ref, "skill.json", MAX_JSON_BYTES)
     if found is None:
         raise ShareError("not_found", "This shared skill could not be found. It may have been removed.")
     doc = checked_doc(found[0])
@@ -50,8 +53,8 @@ def _fetch(provider, ref: dict, version: int | None) -> dict:
         raise ShareError("not_found", "That version of the shared skill is not available.")
 
     version_folder = provider.child_folder(ref, f"v{wanted}", create=False)
-    manifest_read = provider.read_json(version_folder, "manifest.json") if version_folder else None
-    bundle_read = provider.read_file(version_folder, "bundle.zip") if version_folder else None
+    manifest_read = provider.read_json(version_folder, "manifest.json", MAX_JSON_BYTES) if version_folder else None
+    bundle_read = provider.read_file(version_folder, "bundle.zip", MAX_BUNDLE_BYTES) if version_folder else None
     if manifest_read is None or bundle_read is None:
         raise ShareError("not_found", f"Version {wanted} of this shared skill is incomplete.")
     manifest, zip_bytes = manifest_read[0], bundle_read[0]
