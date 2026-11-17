@@ -17,6 +17,7 @@ from fastapi.responses import HTMLResponse
 import perf
 import shared
 import updater
+import usage_report
 from security import require_shell_key, script_json
 
 
@@ -297,6 +298,7 @@ async def health():
         "skill_tools_map": {k: sorted(v) for k, v in shared.SKILL_TOOLS_MAP.items()},
         "tool_count": len(shared.TOOLS),
         "failed_skills": shared.FAILED_SKILLS,
+        "usage_reporting": usage_report.is_enabled(shared.cfg),
     }
 
 
