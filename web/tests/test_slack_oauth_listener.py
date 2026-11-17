@@ -25,7 +25,7 @@ def test_slack_oauth_binds_shared_listener_before_saving_pkce():
 
 
 def test_slack_oauth_startup_error_is_an_http_error_and_visible_to_users():
-    route_start = ROUTE.index("async def slack_oauth_start()")
+    route_start = ROUTE.index("def slack_oauth_start()")
     route_body = ROUTE[route_start : ROUTE.index("\n\n#", route_start)]
     assert "status_code=503" in route_body
     assert "detail=result[\"error\"]" in route_body
