@@ -153,6 +153,17 @@ const TEAMS_PARTITION = 'persist:teams';
 // Unlike Teams, OWA uses REAL URL routing (/mail/<folder>/id/<convid>).
 const OUTLOOK_URL = 'https://outlook.office.com/mail/';
 const OUTLOOK_PARTITION = 'persist:outlook';
+const OUTLOOK_HOME_HOSTS = [
+  'outlook.office.com',
+  'outlook.office365.com',
+  'outlook.cloud.microsoft',
+  'office.com',
+  'office365.com',
+  'cloud.microsoft',
+  'microsoft.com',
+  'microsoftonline.com',
+  'live.com',
+];
 // OneDrive (M365): entry via the office.com launcher, which redirects to the
 // signed-in user's OneDrive for Business ({tenant}-my.sharepoint.com) after
 // SSO. Same MS platform quirks as Teams/Outlook (M2 UA, M4 Trusted Types, M5
@@ -689,6 +700,49 @@ function _toolbarPushState() {
 // reflects URL changes and loading state live. Called once per view at
 // creation. We also push state from the 500ms nav-state poller (below) so
 // back/forward button enable/disable stays fresh even if events are missed.
+// OWA's calendar compose deeplink is a standalone surface with no left rail, so
+// the pane would be a dead end. Give that page Mail and Calendar links back into
+// the full app. Plain DOM only: OWA enforces Trusted Types.
+function _confirmLeaveOutlookPage(e, parentWin) {
+  const { dialog } = require('electron');
+  const leave =
+    dialog.showMessageBoxSync(parentWin, {
+      type: 'question',
+      buttons: ['Leave', 'Stay'],
+      defaultId: 1,
+      cancelId: 1,
+      title: 'Leave this page?',
+      message: 'Changes you made may not be saved.',
+    }) === 0;
+  if (leave) e.preventDefault();
+}
+
+const _OUTLOOK_STANDALONE_NAV_SCRIPT = `(function () {
+  var ID = 'gator-outlook-standalone-nav';
+  var existing = document.getElementById(ID);
+  if (location.pathname.indexOf('/deeplink/compose') === -1) {
+    if (existing) existing.remove();
+    return;
+  }
+  if (existing) return;
+  var bar = document.createElement('div');
+  bar.id = ID;
+  bar.style.cssText = 'position:fixed;left:12px;bottom:12px;z-index:2147483647;display:flex;gap:6px;padding:6px;border-radius:8px;background:#0f172a;box-shadow:0 2px 10px rgba(0,0,0,.35);font:12px Segoe UI,sans-serif';
+  [['Mail', '/mail/'], ['Calendar', '/calendar/']].forEach(function (l) {
+    var b = document.createElement('button');
+    b.textContent = l[0];
+    b.style.cssText = 'border:0;border-radius:6px;padding:5px 10px;background:#1f6f3f;color:#fff;cursor:pointer;font:inherit';
+    b.addEventListener('click', function () { location.assign(l[1]); });
+    bar.appendChild(b);
+  });
+  document.body.appendChild(bar);
+})();`;
+
+function _syncOutlookStandaloneNav(wc) {
+  if (!wc || wc.isDestroyed()) return;
+  wc.executeJavaScript(_OUTLOOK_STANDALONE_NAV_SCRIPT).catch(() => {});
+}
+
 function _attachToolbarListeners(view, appName) {
   if (!view || !view.webContents) return;
   const wc = view.webContents;
@@ -1698,17 +1752,7 @@ setTimeout(scanAll, 500);
   applyNavigationPolicy(outlookView, {
     name: 'outlook',
     // OWA serves from both office.com and the newer cloud.microsoft domain.
-    homeHosts: [
-      'outlook.office.com',
-      'outlook.office365.com',
-      'outlook.cloud.microsoft',
-      'office.com',
-      'office365.com',
-      'cloud.microsoft',
-      'microsoft.com',
-      'microsoftonline.com',
-      'live.com',
-    ],
+    homeHosts: OUTLOOK_HOME_HOSTS,
     // M365 app launcher guard (M17): block cross-app navs before they happen.
     onCrossAppNav: _makeCrossAppNavGuard('outlook'),
   });
@@ -3216,6 +3260,13 @@ setTimeout(scanAll, 500);
   _attachToolbarListeners(slackView, 'slack');
   _attachToolbarListeners(teamsView, 'teams');
   _attachToolbarListeners(outlookView, 'outlook');
+  // Without a handler Electron silently cancels any navigation away from a page with
+  // unsaved changes (the calendar compose form), so the address bar, Back and the
+  // links above all appear dead. Ask the way a browser does.
+  outlookView.webContents.on('will-prevent-unload', (e) => _confirmLeaveOutlookPage(e, win));
+  for (const ev of ['dom-ready', 'did-navigate', 'did-navigate-in-page']) {
+    outlookView.webContents.on(ev, () => _syncOutlookStandaloneNav(outlookView.webContents));
+  }
   _attachToolbarListeners(onedriveView, 'onedrive');
   _attachToolbarListeners(onenoteView, 'onenote');
   _attachToolbarListeners(confluenceView, 'confluence');
@@ -3827,13 +3878,15 @@ setTimeout(scanAll, 500);
 
   function _forwardPinFromFrame(readTarget, source) {
     if (!readTarget) return;
+    // Take the pending pin and clear it in ONE script. Reading and clearing in two round trips let
+    // the next 300ms poll read the same pin again while a busy page was slow to run the clear, so one
+    // pin produced several chips and several pin requests.
     readTarget
-      .executeJavaScript('window.__gatorPinCtx || null')
+      .executeJavaScript(
+        '(function(){var c=window.__gatorPinCtx||null;window.__gatorPinCtx=null;return c;})()',
+      )
       .then((ctx) => {
         if (!ctx) return;
-        try {
-          readTarget.executeJavaScript('window.__gatorPinCtx = null;');
-        } catch {}
         if (!gatorView || !gatorView.webContents || gatorView.webContents.isDestroyed()) return;
         // OneNote: the editor subframe cannot see the SharePoint site, but its top
         // frame URL is the Doc.aspx link; the server resolves the team site from it.
@@ -4610,6 +4663,49 @@ ipcMain.handle('outlook-pane:open-draft', async (_e, url) => {
   } catch {
     return false;
   }
+});
+
+function _isOutlookComposeUrl(url) {
+  try {
+    const u = new URL(String(url));
+    return (
+      u.protocol === 'https:' &&
+      /^outlook\.(office\.com|office365\.com|cloud\.microsoft)$/.test(u.hostname)
+    );
+  } catch {
+    return false;
+  }
+}
+
+// Opens a draft meeting the way native Outlook does: its own "new event" window
+// on the Outlook session, with the browser toolbar, beside the Gator window.
+ipcMain.handle('outlook-pane:open-compose-window', (event, url) => {
+  if (!_isOutlookComposeUrl(url)) return false;
+  const iconPath = IS_MAC
+    ? path.join(__dirname, '..', 'tray', 'aigator_icon.png')
+    : path.join(__dirname, '..', 'build', 'aigator_icon.ico');
+  const compose = new BrowserWindow({
+    width: 980,
+    height: 780,
+    title: 'New event',
+    icon: iconPath,
+    titleBarStyle: IS_MAC ? 'hiddenInset' : IS_WINDOWS ? 'hidden' : 'default',
+    autoHideMenuBar: true,
+    webPreferences: {
+      session: session.fromPartition(OUTLOOK_PARTITION),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  applyNavigationPolicy(compose, { name: 'outlook-compose', homeHosts: OUTLOOK_HOME_HOSTS });
+  attachToolbarToWindow(compose);
+  compose.webContents.on('will-prevent-unload', (e) => _confirmLeaveOutlookPage(e, compose));
+  const opener = event.sender;
+  compose.on('closed', () => {
+    if (!opener.isDestroyed()) opener.send('outlook-pane:compose-closed', String(url));
+  });
+  compose.loadURL(String(url));
+  return true;
 });
 
 ipcMain.handle('onedrive-pane:navigate-pin', (_e, webUrl) => {
