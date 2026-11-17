@@ -27,9 +27,9 @@ ACCEPTED_ADVISORIES = {
             "node-gyp > tinyglobby, which globs the literal patterns "
             "'build/*.sln' and 'build/*.mk'. Not shipped in app.asar."
         ),
-        "owner": "TBD",
+        "owner": "The AI Gator devs",
         "review_by": date(2026, 12, 17),
-        "tracking": "https://github.com/advisories/GHSA-fc5q-39xc-vjpf",
+        "tracking": "https://github.com/mkflyamd/aigator-releases/issues/130",
     },
 }
 
