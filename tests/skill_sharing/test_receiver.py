@@ -243,3 +243,41 @@ def test_install_passes_an_admin_block_through_as_the_installer_result(provider,
 
     assert result == {"ok": False, "error": "digest_not_approved", "digest": out["digest"]}
     assert installer.load_installed() == []
+
+
+def _edit_skill_json(provider, out, edit):
+    key = (out["folder"]["folder_id"], "skill.json")
+    doc = json.loads(provider.files[key][0])
+    edit(doc)
+    provider.files[key] = (json.dumps(doc).encode(), '"edited"')
+
+
+def test_a_manifest_digest_that_differs_from_skill_json_is_tampered_on_review(provider, make_mine):
+    _skill_id, out = _published(provider, make_mine)
+    _edit_skill_json(provider, out, lambda doc: doc["versions"][0].update(files_digest="0" * 64))
+    with pytest.raises(ShareError) as err:
+        receiver.review(provider, _ref(out))
+    assert err.value.code == "tampered"
+
+
+def test_a_manifest_digest_that_differs_from_skill_json_is_tampered_on_install(provider, make_mine, skills_dir):
+    _skill_id, out = _published(provider, make_mine)
+    _recipient(skills_dir)
+    _edit_skill_json(provider, out, lambda doc: doc["versions"][0].update(files_digest="0" * 64))
+    with pytest.raises(ShareError) as err:
+        receiver.install(provider, _ref(out), version=1, digest=out["digest"])
+    assert err.value.code == "tampered"
+    assert installer.load_installed() == []
+
+
+@pytest.mark.parametrize("action", ["review", "install"])
+def test_a_version_list_without_the_wanted_version_is_invalid(provider, make_mine, skills_dir, action):
+    _skill_id, out = _published(provider, make_mine)
+    _recipient(skills_dir)
+    _edit_skill_json(provider, out, lambda doc: doc.update(versions=[]))
+    with pytest.raises(ShareError) as err:
+        if action == "review":
+            receiver.review(provider, _ref(out))
+        else:
+            receiver.install(provider, _ref(out), version=1, digest=out["digest"])
+    assert err.value.code == "invalid"
