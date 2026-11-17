@@ -111,6 +111,24 @@ const TXT2IMG = 'https://images.example/mcp/txt2img/images/a42668ca.png?token=ab
   assert.ok(render(other).includes('<img '), 'a connected https server allows its host');
 })();
 
+(function reloadingConnectionsDropsDisabledHosts() {
+  const gone = '![x](https://images.example/a.png)';
+  const kept = '![x](https://kept.example/a.png)';
+  assert.ok(render(gone).includes('<img '), 'precondition: the bootstrap host renders inline');
+  ctx.window.setInlineImageHosts(['https://kept.example/mcp']);
+  assert.ok(!render(gone).includes('<img'), 'a host no longer connected must go back to a link');
+  assert.ok(render(gone).includes('<a '), 'a dropped host falls back to a link');
+  assert.ok(render(kept).includes('<img '), 'a host that is still connected keeps rendering');
+  ctx.window.setInlineImageHosts([]);
+  assert.ok(!render(kept).includes('<img'), 'no connections means no remote images');
+  ctx.window.setInlineImageHosts(['https://images.example/mcp']);
+  const loader = slice('async function _loadMcpConnections(', '\n}\n');
+  assert.ok(
+    loader.includes('window.setInlineImageHosts('),
+    'loading connections must rebuild the host list, not only add to it',
+  );
+})();
+
 (function altTextCannotBreakOutOfAttribute() {
   const out = render('![a" onerror="x](/api/files/r/f.png)');
   assert.ok(!/alt="a" onerror/.test(out), `alt broke out of its attribute: ${out}`);

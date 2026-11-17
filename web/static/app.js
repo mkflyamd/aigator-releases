@@ -11731,6 +11731,11 @@ window.registerInlineImageHost = function (url) {
 };
 (window.__MCP_SKILLS__ || []).forEach((c) => window.registerInlineImageHost(c.url));
 
+window.setInlineImageHosts = function (urls) {
+  INLINE_IMAGE_HOSTS.clear();
+  urls.forEach((url) => window.registerInlineImageHost(url));
+};
+
 function _isInlineImageUrl(href) {
   if (href.startsWith('/api/files/')) return !href.includes('..');
   try {
@@ -17565,12 +17570,13 @@ async function _loadMcpConnections() {
     // Settings list but not SKILL_REGISTRY, so the backend could auto-select
     // the MCP while the / picker required Ctrl+R to see it. Reconcile every
     // enabled, tool-bearing connection into the live slash-skill registry.
-    connections.forEach((connection) => {
-      if (connection.enabled !== false && Number(connection.tool_count || 0) > 0) {
-        window.registerMcpSkill(connection.id, connection.name || connection.id);
-        window.registerInlineImageHost(connection.url_hint || '');
-      }
-    });
+    const active = connections.filter(
+      (connection) => connection.enabled !== false && Number(connection.tool_count || 0) > 0,
+    );
+    active.forEach((connection) =>
+      window.registerMcpSkill(connection.id, connection.name || connection.id),
+    );
+    window.setInlineImageHosts(active.map((connection) => connection.url_hint || ''));
     _renderMcpConnections(connections);
   } catch (e) {
     console.error('Failed to load MCP connections', e);
