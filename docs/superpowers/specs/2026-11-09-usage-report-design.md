@@ -20,8 +20,8 @@ A day is active when the user sent at least one chat message or ran at least one
 Counts only. Never message text, file names, or tool arguments.
 
 | Column                        | Value                                                                                                                                                                                                                         |
-| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
-| `Title`                       | key `email                                                                                                                                                                                                                    | date`(lowercase email,`YYYY-MM-DD`), unique |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
+| `Title`                       | key `email                                                                                                                                                                                                                    | date`(lowercase email,`YYYY-MM-DD`) |
 | `Email`                       | identity email                                                                                                                                                                                                                |
 | `ReportDate`                  | the UTC date                                                                                                                                                                                                                  |
 | `OS`                          | Windows, macOS or Linux                                                                                                                                                                                                       |
@@ -68,7 +68,7 @@ The existing "Gator Usage" list is used. Gator's token can write rows but not ch
 
 - Add an `AppVersion` single-line-text column.
 - Add number columns `InputTokens`, `OutputTokens`, `Conversations`, `BackgroundTasks`, `ToolErrors`, `McpToolRuns`, `LlmErrors`, `Failovers`, `Drafts`, `AvgTurnMs`, and a multiple-lines-of-plain-text column `Details`.
-- Index `Title` and turn on "Enforce unique values". This makes a repeat send fail harmlessly.
+- Index `Title` but leave "Enforce unique values" off. SharePoint does not allow unique values together with item-level permissions. A repeat send after local state is lost adds a duplicate row, and `tools/sync_usage_to_mysql.py` skips it when loading MySQL.
 - Item-level permissions (List settings, Advanced settings): Read access "Read items that were created by the user"; Create and Edit access "Create items and edit items created by the user".
 - Every Gator user needs permission to add items. They get it from the org-wide "Can edit items" sharing link. Other admins get full control of the same list.
 
