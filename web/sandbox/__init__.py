@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -163,17 +164,25 @@ _NODE_SHIM = Path(__file__).with_name("node_shim.js")
 _NODE_SHIM_RELPATH = (".gator", "node-shim.js")
 
 
+_NODE_SHIM_REQUIRE = re.compile(r'--require="([^"]+)"')
+
+
 def _node_options_windows(run_dir: Path) -> str:
-    """Windows NODE_OPTIONS preloading the shim, copied into a hidden run-dir subfolder (not listed as output)."""
+    """Windows NODE_OPTIONS preloading the shim from a hidden run-dir subfolder (not listed as output)."""
     shim = run_dir.joinpath(*_NODE_SHIM_RELPATH)
-    shim.parent.mkdir(parents=True, exist_ok=True)
-    source = _NODE_SHIM.read_text(encoding="utf-8")
-    if not shim.is_file() or shim.read_text(encoding="utf-8") != source:
-        tmp = shim.with_name(f"{shim.name}.{os.getpid()}.tmp")
-        tmp.write_text(source, encoding="utf-8", newline="\n")
-        os.replace(tmp, shim)
     # Forward slashes: NODE_OPTIONS treats a backslash inside quotes as an escape.
     return f'{_NODE_OPTIONS_WINDOWS} --require="{shim.as_posix()}"'
+
+
+def install_node_shim(env: Mapping[str, str]) -> None:
+    """Write the shim to the path env's NODE_OPTIONS requires. The launcher calls this while holding its
+    run lock, right before spawning, so sandboxed code from an earlier run cannot have altered it."""
+    match = _NODE_SHIM_REQUIRE.search(env.get("NODE_OPTIONS", ""))
+    if match is None:
+        return
+    shim = Path(match.group(1))
+    shim.parent.mkdir(parents=True, exist_ok=True)
+    shim.write_text(_NODE_SHIM.read_text(encoding="utf-8"), encoding="utf-8", newline="\n")
 
 
 def build_env(parent: Mapping[str, str], run_dir: Path, node_path: str | None,

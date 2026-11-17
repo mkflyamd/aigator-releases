@@ -26,7 +26,15 @@ import threading
 from pathlib import Path
 from types import SimpleNamespace
 
-from . import RawArg, SandboxPathNotGrantable, SandboxRequest, SandboxResult, SandboxRunError, SandboxUnavailable
+from . import (
+    RawArg,
+    SandboxPathNotGrantable,
+    SandboxRequest,
+    SandboxResult,
+    SandboxRunError,
+    SandboxUnavailable,
+    install_node_shim,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -952,6 +960,10 @@ def launch(req: SandboxRequest) -> SandboxResult:
                     rc, out = _grant(path, sid, perm)
                     if rc != 0:
                         raise SandboxUnavailable(f"The sandbox could not be given access to {path} ({out}).")
+                try:
+                    install_node_shim(req.env)
+                except OSError as exc:
+                    raise SandboxUnavailable(f"The sandbox could not prepare its Node preload ({exc}).") from exc
                 return _run_contained(req.argv, req.cwd, req.env, psid, req.timeout, req.network)
             finally:
                 for path in attempted:

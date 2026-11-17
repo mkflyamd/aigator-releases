@@ -34,6 +34,8 @@ def test_build_env_windows_keeps_allow_list_and_drops_tokens(tmp_path):
     assert env["NODE_PATH"] == r"C:\npm\node_modules"
     shim = tmp_path / ".gator" / "node-shim.js"
     assert env["NODE_OPTIONS"] == f'--preserve-symlinks --preserve-symlinks-main --require="{shim.as_posix()}"'
+    assert not shim.exists()
+    sandbox.install_node_shim(env)
     assert "asyncNative" in shim.read_text(encoding="utf-8")
     assert env["PYTHONIOENCODING"] == "utf-8"
     assert FAKE not in env.values()
@@ -58,13 +60,16 @@ def test_node_shim_blocks_piped_spawns_and_closes_callback_form(tmp_path):
     assert out == "cb:EPERM,close,overlapped,ipc"
 
 
-def test_node_shim_copy_is_not_rewritten_when_unchanged(tmp_path):
-    sandbox.build_env({}, tmp_path, None, platform="win32")
+def test_install_node_shim_restores_a_tampered_copy_and_ignores_envs_without_it(tmp_path):
+    env = sandbox.build_env({}, tmp_path, None, platform="win32")
     shim = tmp_path / ".gator" / "node-shim.js"
-    before = shim.stat().st_mtime_ns
-    sandbox.build_env({}, tmp_path, None, platform="win32")
-    assert shim.stat().st_mtime_ns == before
-    assert not list(shim.parent.glob("*.tmp"))
+    sandbox.install_node_shim(env)
+    original = shim.read_text(encoding="utf-8")
+    shim.write_text("tampered", encoding="utf-8")
+    sandbox.install_node_shim(env)
+    assert shim.read_text(encoding="utf-8") == original
+    sandbox.install_node_shim(sandbox.build_env({}, tmp_path / "other", None, platform="linux"))
+    assert not (tmp_path / "other").exists()
 
 
 def test_build_env_posix(tmp_path):
