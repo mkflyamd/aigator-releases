@@ -117,3 +117,13 @@ def test_build_manifest_records_digests_and_recomputable_facts():
         "has_scripts": True,
         "requested_tools": {"filesystem": [], "network": [], "invalid": False},
     }
+
+
+@pytest.mark.parametrize("name", ["a", "weekly-report", "0-day", "a" * 64])
+def test_valid_share_names(name):
+    assert bundle.valid_share_name(name) is True
+
+
+@pytest.mark.parametrize("name", ["", "a" * 65, "mine", "-lead", "Upper", "has space", "../x", 7, None])
+def test_invalid_share_names(name):
+    assert bundle.valid_share_name(name) is False

@@ -2,6 +2,7 @@
 
 import hashlib
 import io
+import re
 import zipfile
 from pathlib import Path
 
@@ -14,6 +15,15 @@ SCHEMA = 1
 _FIXED_TIME = (1980, 1, 1, 0, 0, 0)
 _SCRIPT_SUFFIXES = (".py", ".sh", ".ps1", ".bat", ".cmd", ".exe", ".js")
 _SKIP_DIRS = {"__pycache__", ".git"}
+_SHARE_NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
+_RESERVED_NAMES = {"mine"}
+INVALID_NAME_MESSAGE = (
+    'A shared skill name must be 1-64 lowercase letters, digits or hyphens, starting with a letter or digit, and not "mine".'
+)
+
+
+def valid_share_name(name) -> bool:
+    return isinstance(name, str) and bool(_SHARE_NAME.fullmatch(name)) and name not in _RESERVED_NAMES
 
 
 def build_zip(files: dict[str, bytes]) -> bytes:
