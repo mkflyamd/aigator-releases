@@ -1,6 +1,8 @@
 """Project list ordering and removal for the Code project picker."""
 
+import json
 import subprocess
+import threading
 import time
 
 import pytest
@@ -158,3 +160,41 @@ def test_adding_a_github_project_that_is_already_listed_is_refused(store):
     with pytest.raises(ValueError, match="already exists"):
         projects.add_project("g", URL, source="github")
     assert projects.get_project("g")["agent"] == "claude"
+
+
+def test_saving_the_config_never_leaves_a_truncated_file(store, monkeypatch):
+    _seed(["a", "b"])
+    seen = []
+    real_replace = projects.os.replace
+
+    def spy(src, dst):
+        seen.append(projects.CONFIG_FILE.read_text(encoding="utf-8"))
+        real_replace(src, dst)
+
+    monkeypatch.setattr(projects.os, "replace", spy)
+    projects.set_active_project("a")
+    assert seen and set(projects._load_config()["projects"]) == {"a", "b"}
+    assert set(json.loads(seen[0])["projects"]) == {"a", "b"}
+
+
+def test_concurrent_config_updates_do_not_lose_each_other(store, monkeypatch):
+    _seed(["a", "b"])
+    real_load = projects._load_config
+
+    def slow_load():
+        cfg = real_load()
+        time.sleep(0.05)
+        return cfg
+
+    monkeypatch.setattr(projects, "_load_config", slow_load)
+    threads = [
+        threading.Thread(target=projects.set_project_agent, args=(n, "claude"))
+        for n in ("a", "b")
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    monkeypatch.setattr(projects, "_load_config", real_load)
+    assert projects.get_project("a")["agent"] == "claude"
+    assert projects.get_project("b")["agent"] == "claude"
