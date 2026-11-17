@@ -4,6 +4,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+import agent_state
 import generic_agent
 from routes import generic_agent_routes
 from security import verify_csrf
@@ -95,10 +96,12 @@ def spawned(monkeypatch):
 
 def test_launch_injects_the_gateway_env_only_for_bound_agents(spawned):
     body = {"project_id": "p", "repo_path": "/r", "force_new": True}
-    assert _app().post("/api/generic-agent/terminal", json={**body, "agent": "claude"}).status_code == 200
-    assert _app().post("/api/generic-agent/terminal", json={**body, "agent": "pi"}).status_code == 200
-    assert spawned[0]["env"] == {"ANTHROPIC_API_KEY": FAKE}
-    assert spawned[1]["env"] is None
+    claude = _app().post("/api/generic-agent/terminal", json={**body, "agent": "claude"})
+    pi = _app().post("/api/generic-agent/terminal", json={**body, "agent": "pi"})
+    assert claude.status_code == 200 and pi.status_code == 200
+    state_env = agent_state.launch_env
+    assert spawned[0]["env"] == {"ANTHROPIC_API_KEY": FAKE, **state_env(claude.json()["pty_session_id"])}
+    assert spawned[1]["env"] == state_env(pi.json()["pty_session_id"])
 
 
 def test_installed_route_reports_which_installed_agents_are_gateway_routed(monkeypatch):

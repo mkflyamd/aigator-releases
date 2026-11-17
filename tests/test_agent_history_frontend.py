@@ -21,13 +21,13 @@ def test_activating_a_session_marks_it_viewed():
 
 
 def test_output_in_the_viewed_terminal_counts_as_seen():
-    assert "agentHistory.isViewing(sess))\n          sess._viewedAt = sess._lastOutputAt;" in TERM
+    assert "if (agentHistory.isViewing(sess)) sess._viewedAt = sess._lastOutputAt;" in TERM
 
 
 def test_echo_and_repaint_output_does_not_count_as_working():
     helpers = (STATIC / "tp-term-helpers.js").read_text(encoding="utf-8")
-    assert "if (Date.now() >= (sess._quietUntil || 0)) {" in TERM
-    assert TERM.index("if (Date.now() >= (sess._quietUntil || 0)) {") < TERM.index("sess._lastOutputAt = Date.now();")
+    assert "if (Date.now() >= (sess._quietUntil || 0) && window.agentHistory) {" in TERM
+    assert TERM.index("sess._quietUntil || 0) && window.agentHistory") < TERM.index("agentHistory.noteOutput(sess, Date.now());")
     on_open = TERM.index("sess.ws.onopen = () => {")
     assert "_ocNoteEcho(sess);" in TERM[on_open : on_open + 120]
     on_data = helpers.index("sess.term.onData((data) => {")
@@ -248,3 +248,12 @@ def test_terminal_tabs_use_the_history_state_dot():
 def test_tab_label_shows_its_full_name_on_hover():
     assert "tabTooltip(sess.label" in TERM
     assert "labelEl.title = sess.label;" in TERM
+
+
+def test_every_tick_polls_the_agent_reported_state_for_live_agent_tabs():
+    tick = HISTORY.split("function tick()")[1].split("function ")[0]
+    assert "pollHookStates();" in tick
+    poll = HISTORY.split("async function pollHookStates")[1].split("function tick")[0]
+    assert "'/api/agent-state?'" in poll
+    assert "t.agent !== 'terminal'" in poll
+    assert "t._hookState = " in poll

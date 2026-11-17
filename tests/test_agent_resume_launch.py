@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import agent_sessions as ags
+import agent_state
 import generic_agent
 from routes import generic_agent_routes
 from security import verify_csrf
@@ -49,9 +50,9 @@ def test_resume_spawns_the_resume_command_and_pins_the_session(env):
         {"agent": "claude", "repo_path": "C:\\work\\app", "id": "abc-1", "source": "windows", "extra": ("-c", "x=1")}
     ]
     spawn = env["spawn"][-1]
-    assert spawn["command"] == ["C:\\bin\\claude.exe", "--resume", "abc-1"]
+    assert spawn["command"] == ["C:\\bin\\claude.exe", "--resume", "abc-1", "--settings", agent_state.claude_settings_path()]
     assert spawn["cwd"] == "C:\\work\\app"
-    assert spawn["env"] == {"K": "v"}
+    assert spawn["env"] == {"K": "v", **agent_state.launch_env(r.json()["pty_session_id"])}
     assert generic_agent.pinned_session_id(r.json()["pty_session_id"]) == "abc-1"
 
 
@@ -129,7 +130,7 @@ def test_a_resumed_crush_terminal_keeps_the_gateway_env_and_links_its_session(en
     assert env["resume"][-1]["agent"] == "crush" and env["resume"][-1]["id"] == "abc-1"
     spawn = env["spawn"][-1]
     assert spawn["command"] == ["C:\\bin\\crush.exe", "--resume", "abc-1"]
-    assert spawn["env"] == {"CRUSH_GLOBAL_CONFIG": "cfg"}
+    assert spawn["env"] == {"CRUSH_GLOBAL_CONFIG": "cfg", **agent_state.launch_env(r.json()["pty_session_id"])}
     assert generic_agent.linked_session_id(r.json()["pty_session_id"]) == "abc-1"
 
 
@@ -145,7 +146,7 @@ def test_a_resumed_opencode_terminal_passes_the_session_to_the_bare_command(env,
     r = client().post("/api/generic-agent/terminal", json={**BODY, "agent": "opencode-bare"})
     assert r.status_code == 200
     assert seen == [("C:\\work\\app", "abc-1")]
-    assert env["spawn"][-1]["env"] == {"OPENCODE_CONFIG_CONTENT": "{}"}
+    assert env["spawn"][-1]["env"] == {"OPENCODE_CONFIG_CONTENT": "{}", **agent_state.launch_env(r.json()["pty_session_id"])}
     assert generic_agent.linked_session_id(r.json()["pty_session_id"]) == "abc-1"
 
 

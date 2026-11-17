@@ -20,7 +20,7 @@ A user's agent work is scattered across tools. Sessions live in each agent's own
 - Host, workspace or all-projects scopes. A different project opens a new Gator window, so the view is always this window's project.
 - Jira, Azure DevOps, GitHub or any "Linked work". That belongs with the Workboard.
 - Storing session content. Gator keeps no copy of any conversation.
-- Hooks or agent configuration changes to learn live state.
+- Editing the user's own agent configuration to learn live state. Hooks are passed per launch, never written to the user's settings.
 - Syncing history into agents through MCP (issue #76).
 
 ## User experience
@@ -71,10 +71,27 @@ If the file was deleted between listing and clicking, resume fails with an inlin
 
 ### Live states
 
-Gator already owns the terminals it launches, so live state needs no hooks:
+The agent reports its own state; output timing is only the fallback.
 
-- **Working**: the terminal is still printing output. This reuses the handoff's readiness test (`isInputReady`) inverted: not quiet yet.
-- **Needs you**: the agent has gone quiet since the user last viewed that tab. Opening the tab clears it.
+**Agent-reported (primary).** Gator launches each agent with `GATOR_PTY_ID` and `GATOR_AGENT_STATE_DIR` in its environment, and the agent's hooks write one word (`working`, `asking` or `idle`) to `~/.gator/agent-state/<pty id>`. The file's modification time is the event time. The panel reads these through `GET /api/agent-state?pty=<id>...` on each 2-second tick. A file is used instead of a network route because a hook cannot hold a CSRF token and nothing needs to listen.
+
+| Agent       | Hooks                                                                                                         | Passed how                                             |
+| ----------- | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| Claude Code | `UserPromptSubmit` and `PostToolUse` working, `Notification` (permission and elicitation) asking, `Stop` idle | `--settings ~/.gator/agent-hooks/claude-settings.json` |
+| Crush 0.99+ | `TurnStart`, `PermissionRequest`, `PermissionResult`, `TurnEnd`, `Interrupt`, `StopFailure`                   | `hook add` lines in the generated crushrc              |
+
+Codex, OpenCode and terminals launched inside WSL have no hook yet and use the fallback.
+
+- **Working**: the last event was `working`.
+- **Needs you**: the last event was `asking` (it stays until the agent moves on, even while the tab is open), or `idle` and the user has not viewed the tab since. Opening the tab clears `idle`.
+- A `working` event with no terminal output for 120 seconds is ignored, because Esc and a crash fire no hook.
+
+**Output timing (fallback).** When no hook reports:
+
+- **Working**: the terminal printed within the last 12 seconds.
+- **Needs you**: a work episode ended since the user last viewed the tab. An episode is output with gaps under 3 seconds that lasts at least 3 seconds, so a repaint from a resize, a focus change or a reconnect replay never raises it.
+- Echo of the user's own typing and resize repaints are ignored.
+
 - Sessions started outside Gator have no terminal in Gator, so they show only as past.
 
 Live sessions join the stored list through the session id Gator knows for the terminal (`generic_agent.linked_session_id`): the id pinned at launch for Claude (Windows or WSL), or the id of the session a terminal was resumed from, for any agent. Terminals with no known id (new Codex terminals) join by start time: the rollout whose start falls from 5 seconds before to 120 seconds after the terminal's `created_at`, only when exactly one unclaimed Windows rollout matches. Codex writes its first line when the first prompt is sent, so a rollout can start well after the terminal opens.

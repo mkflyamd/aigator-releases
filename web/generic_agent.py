@@ -38,6 +38,8 @@ import time
 import uuid
 from pathlib import Path
 
+import agent_state
+
 # name -> argv. Extend here to add a new agent; no other file needs to know
 # the executable name. Values are lists (not a bare string) so a future entry
 # needing fixed flags (e.g. a non-interactive/resume flag) can just add them.
@@ -806,6 +808,8 @@ def _build_crushrc(profile: dict, models: list[str]) -> str:
         f"model large {default_ref}",
         f"model small {small_ref}",
     ]
+    if agent_state.crush_supports_hooks(find_agent_binary("crush")):
+        lines += ["", *agent_state.crush_hook_lines()]
     return "\n".join(lines)
 
 
