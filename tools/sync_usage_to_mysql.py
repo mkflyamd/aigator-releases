@@ -73,11 +73,37 @@ def _details(value) -> str:
         return "{}"
 
 
-def row_from_item(item: dict) -> tuple | None:
-    """Map one SharePoint list item to a table row; None if its Title is not 'email|YYYY-MM-DD'."""
+def _creator(item: dict) -> dict:
+    return (item.get("createdBy") or {}).get("user") or {}
+
+
+def creator_addresses(gc, user: dict, cache: dict) -> set[str]:
+    """Every address the item's creator signs in or receives mail with, as SharePoint stamped it."""
+    key = user.get("id") or user.get("email") or ""
+    if key not in cache:
+        found = {str(user.get("email") or "").lower()} - {""}
+        if user.get("id"):
+            try:
+                profile = gc.get(f"/users/{user['id']}", {"$select": "userPrincipalName,mail,proxyAddresses"})
+            except Exception:
+                profile = {}
+            found |= {str(profile.get(name) or "").lower() for name in ("userPrincipalName", "mail")} - {""}
+            found |= {
+                address[5:].lower() for address in profile.get("proxyAddresses") or [] if address.lower().startswith("smtp:")
+            }
+        cache[key] = found
+    return cache[key]
+
+
+def row_from_item(item: dict, creator_emails: set[str]) -> tuple | None:
+    """Map one SharePoint list item to a table row.
+
+    None if the Title is not 'email|YYYY-MM-DD' or its email is not one of the creator's own
+    addresses (a writer must not be able to report as someone else).
+    """
     fields = item.get("fields") or {}
     email, _, day = str(fields.get("Title") or "").rpartition("|")
-    if "@" not in email:
+    if "@" not in email or email.strip().lower() not in creator_emails:
         return None
     try:
         report_date = date.fromisoformat(day)
@@ -94,11 +120,11 @@ def row_from_item(item: dict) -> tuple | None:
 
 def fetch_rows(gc, site: str, list_id: str) -> tuple[list[tuple], int]:
     """Return (rows, skipped) for every list item, following Graph paging."""
-    rows, skipped = [], 0
+    rows, skipped, creators = [], 0, {}
     page = gc.get(f"/sites/{site}/lists/{list_id}/items", {"$expand": "fields", "$top": str(PAGE_SIZE)})
     while True:
         for item in page.get("value", []):
-            row = row_from_item(item)
+            row = row_from_item(item, creator_addresses(gc, _creator(item), creators))
             if row is None:
                 skipped += 1
             else:
@@ -177,7 +203,7 @@ def main(argv=None) -> int:
     users = {row[0] for row in rows}
     days = sorted({row[1] for row in rows})
     span = f"{days[0]} to {days[-1]}" if days else "no days"
-    print(f"Read {len(rows)} rows ({len(users)} users, {span}); skipped {skipped} without an email|date Title.")
+    print(f"Read {len(rows)} rows ({len(users)} users, {span}); skipped {skipped} without an email|date Title matching the creator.")
     if args.dry_run:
         return 0
 

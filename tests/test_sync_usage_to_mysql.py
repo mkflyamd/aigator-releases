@@ -5,17 +5,26 @@ import pytest
 from tools import sync_usage_to_mysql as sync
 
 
-def _item(title="a@amd.com|2026-11-09", **fields):
-    return {"fields": {"Title": title, **fields}}
+def _item(title="a@amd.com|2026-11-09", creator=None, **fields):
+    creator = creator if creator is not None else title.rpartition("|")[0]
+    return {"createdBy": {"user": {"email": creator}}, "fields": {"Title": title, **fields}}
+
+
+def _row(item):
+    user = sync._creator(item)
+    return sync.row_from_item(item, {str(user.get("email") or "").lower()} - {""})
 
 
 class FakeGraph:
-    def __init__(self, pages):
+    def __init__(self, pages, profiles=None):
         self.pages = pages
+        self.profiles = profiles or {}
         self.calls = []
 
     def get(self, path, params=None):
         self.calls.append(("get", path, params))
+        if path.startswith("/users/"):
+            return self.profiles[path.rsplit("/", 1)[1]]
         return self.pages[0]
 
     def get_absolute(self, url):
@@ -51,7 +60,7 @@ class FakeConnection:
 
 
 def test_row_maps_title_text_and_numbers():
-    row = sync.row_from_item(
+    row = _row(
         _item(
             "A@AMD.com|2026-11-09", OS="Windows", AppVersion="1.2.3", InstallId="abc",
             Messages=5, ToolRuns=2.0, InputTokens="100", Details='{"tools":{"x":1}}',
@@ -69,11 +78,61 @@ def test_row_maps_title_text_and_numbers():
 
 @pytest.mark.parametrize("title", ["", "no-pipe", "nobody|2026-11-09", "a@amd.com|not-a-date"])
 def test_row_skips_bad_titles(title):
-    assert sync.row_from_item(_item(title)) is None
+    assert _row(_item(title)) is None
+
+
+def test_row_accepts_creator_with_different_letter_case():
+    assert _row(_item("a@amd.com|2026-11-09", creator="A@AMD.com")) is not None
+
+
+def test_row_skips_title_email_that_is_not_the_creator():
+    assert _row(_item("victim@amd.com|2026-11-09", creator="attacker@amd.com")) is None
+
+
+@pytest.mark.parametrize("created_by", [None, {}, {"user": {}}, {"application": {"displayName": "x"}}])
+def test_row_skips_items_without_a_creator_email(created_by):
+    item = _item()
+    item["createdBy"] = created_by
+    assert _row(item) is None
+
+
+def test_creator_addresses_include_sign_in_name_mail_and_smtp_aliases_once_per_user():
+    profile = {
+        "userPrincipalName": "Alias@amd.com",
+        "mail": "First.Last@amd.com",
+        "proxyAddresses": ["x500:/o=x", "smtp:old@amd.com", "SMTP:First.Last@amd.com"],
+    }
+    gc = FakeGraph([], {"u1": profile})
+    user = {"id": "u1", "email": "First.Last@amd.com"}
+    cache = {}
+    assert sync.creator_addresses(gc, user, cache) == {"alias@amd.com", "first.last@amd.com", "old@amd.com"}
+    sync.creator_addresses(gc, user, cache)
+    assert [call[1] for call in gc.calls] == ["/users/u1"]
+
+
+def test_row_accepts_title_with_sign_in_name_when_creator_mail_differs():
+    item = _item("alias@amd.com|2026-11-09", creator="first.last@amd.com")
+    item["createdBy"]["user"]["id"] = "u1"
+    gc = FakeGraph([{"value": [item]}], {"u1": {"userPrincipalName": "alias@amd.com", "mail": "first.last@amd.com"}})
+    rows, skipped = sync.fetch_rows(gc, "site", "list")
+    assert [row[0] for row in rows] == ["alias@amd.com"] and skipped == 0
+
+
+def test_failed_profile_lookup_keeps_only_the_creator_mail():
+    class Failing(FakeGraph):
+        def get(self, path, params=None):
+            if path.startswith("/users/"):
+                raise RuntimeError("403")
+            return super().get(path, params)
+
+    item = _item("alias@amd.com|2026-11-09", creator="first.last@amd.com")
+    item["createdBy"]["user"]["id"] = "u1"
+    rows, skipped = sync.fetch_rows(Failing([{"value": [item]}]), "site", "list")
+    assert rows == [] and skipped == 1
 
 
 def test_row_survives_blank_and_malformed_fields():
-    row = dict(zip(sync.COLUMNS, sync.row_from_item(_item(Messages=None, ToolRuns="x", Details="{oops"))))
+    row = dict(zip(sync.COLUMNS, _row(_item(Messages=None, ToolRuns="x", Details="{oops"))))
     assert (row["messages"], row["tool_runs"], row["details"]) == (0, 0, "{}")
 
 
@@ -92,7 +151,7 @@ def test_fetch_rows_follows_paging_and_counts_skipped():
 
 
 def test_load_inserts_only_new_rows_and_is_rerunnable():
-    rows = [sync.row_from_item(_item(f"{n}@amd.com|2026-11-09")) for n in "ab"]
+    rows = [_row(_item(f"{n}@amd.com|2026-11-09")) for n in "ab"]
     connection = FakeConnection()
     assert sync.load(connection, rows, create_table=False) == (0, 2)
     assert sync.load(connection, rows, create_table=False) == (2, 2)
@@ -109,7 +168,7 @@ def test_load_creates_table_only_when_asked():
 
 def test_load_chunks_large_batches(monkeypatch):
     monkeypatch.setattr(sync, "INSERT_CHUNK", 2)
-    rows = [sync.row_from_item(_item(f"{n}@amd.com|2026-11-09")) for n in "abcde"]
+    rows = [_row(_item(f"{n}@amd.com|2026-11-09")) for n in "abcde"]
     connection = FakeConnection()
     sync.load(connection, rows, create_table=False)
     assert [len(chunk) for chunk in connection.store["inserted"]] == [2, 2, 1]

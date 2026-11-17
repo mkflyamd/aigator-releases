@@ -72,6 +72,14 @@ The existing "Gator Usage" list is used. Gator's token can write rows but not ch
 - Item-level permissions (List settings, Advanced settings): Read access "Read items that were created by the user"; Create and Edit access "Create items and edit items created by the user".
 - Every Gator user needs permission to add items. They get it from the org-wide "Can edit items" sharing link. Other admins get full control of the same list.
 
+## Copy to MySQL
+
+`tools/sync_usage_to_mysql.py` is run by an admin. It copies the list into table `usage_daily` in the `aigator_usage` database (approved MySQL request 880), keyed by `(email, report_date)`. Desktops never connect to MySQL.
+
+- A row is copied only when the `Title` email is one of the creator's own addresses (sign-in name, mail, or SMTP alias, looked up in Graph from the creator SharePoint recorded on the item). Any other row is skipped, so a user with write access to the list cannot report as someone else.
+- When the key already exists the first row is kept and later rows are ignored.
+- Emails and daily counts are the only personal data stored. The table is read by admins only.
+
 ## Errors
 
 - No Microsoft token or expired refresh: nothing is sent, and the days stay pending.
