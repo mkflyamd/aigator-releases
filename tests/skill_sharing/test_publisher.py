@@ -175,3 +175,34 @@ def test_published_files_digest_matches_the_local_files(provider, make_mine, ski
     out = publisher.publish(provider, skill_id, author="A")
     local = bundle.read_skill_dir(skills_dir / "mine" / skill_id)
     assert out["digest"] == files_digest(local)
+
+
+def test_a_failed_invite_still_records_the_share_state(provider, make_mine):
+    skill_id = make_mine()
+    provider.fail_on["grant_read"] = ShareError("forbidden", "no access")
+    with pytest.raises(ShareError) as err:
+        publisher.publish(provider, skill_id, author="A", people=["a@contoso.com"])
+    assert err.value.code == "forbidden"
+
+    entry = skill_state.get_entry(skill_id)
+    assert entry["share_source"]["folder_id"]
+    assert entry["published_version"] == 1
+    assert entry["published_digest"]
+
+
+def test_retry_after_a_failed_invite_reuses_the_same_folder_even_with_a_different_root(provider, make_mine):
+    skill_id = make_mine()
+    provider.fail_on["grant_read"] = ShareError("forbidden", "no access")
+    with pytest.raises(ShareError):
+        publisher.publish(provider, skill_id, author="A", people=["a@contoso.com"])
+    share_source = dict(skill_state.get_entry(skill_id)["share_source"])
+    other_root = provider.child_folder(provider.default_root(), "Elsewhere")
+    folders_before = len(provider.folders)
+
+    out = publisher.publish(provider, skill_id, author="A", root=other_root, people=["a@contoso.com"])
+
+    assert out["reused"] is True
+    assert out["version"] == 1
+    assert len(provider.folders) == folders_before
+    assert skill_state.get_entry(skill_id)["share_source"] == share_source
+    assert provider.grants == [(share_source["folder_id"], ["a@contoso.com"])]

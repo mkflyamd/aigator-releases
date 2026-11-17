@@ -87,6 +87,7 @@ class FakeProvider:
         self._put(folder, name, json.dumps(doc).encode())
 
     def grant_read(self, folder, emails):
+        self._maybe_fail("grant_read")
         if emails:
             self.grants.append((folder["folder_id"], list(emails)))
 
