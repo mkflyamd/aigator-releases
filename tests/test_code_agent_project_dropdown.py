@@ -97,6 +97,12 @@ def test_changes_header_branch_button_opens_the_branch_and_worktree_menu():
     assert "setAttribute('role', 'menuitem')" in menu
 
 
+def test_changes_header_is_built_without_writing_html():
+    header = _between("// Header: branch name + ahead/behind indicator", "if (commitsEl) {")
+    assert "innerHTML" not in header and "insertAdjacentHTML" not in header
+    assert "ca-sc-sync-local" in header and "ca-sc-sync-remote" in header
+
+
 def test_git_views_are_keyed_and_fetched_per_selected_folder():
     assert "_caCacheKey(_caActiveProject)" in SCRIPT
     assert "codeBranchHelpers.folderKey(project, _caSelectedWorktree(project))" in SCRIPT

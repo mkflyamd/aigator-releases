@@ -510,14 +510,13 @@ function _caRenderSourceControl(status, log) {
       _caRenderProjectSwitcher(_caActiveProject, _caProjects);
     }
     // Header: branch name + ahead/behind indicator
-    const aheadHtml = log.ahead
-      ? `<span class="ca-sc-sync-local" title="${log.ahead} unpushed commit${log.ahead !== 1 ? 's' : ''}">↑${log.ahead}</span>`
-      : '';
-    const behindHtml = log.behind
-      ? `<span class="ca-sc-sync-remote" title="${log.behind} unpulled commit${log.behind !== 1 ? 's' : ''}">↓${log.behind}</span>`
-      : '';
-    const syncBadge =
-      log.ahead || log.behind ? ` <span class="ca-sc-sync">${aheadHtml}${behindHtml}</span>` : '';
+    const syncPart = (cls, arrow, count, noun) => {
+      const part = document.createElement('span');
+      part.className = cls;
+      part.title = `${count} ${noun} commit${count !== 1 ? 's' : ''}`;
+      part.textContent = arrow + count;
+      return part;
+    };
     if (commitsLabel) {
       const branchBtn = document.createElement('button');
       branchBtn.type = 'button';
@@ -535,7 +534,13 @@ function _caRenderSourceControl(status, log) {
         wtBadge.textContent = 'worktree';
         commitsLabel.append(' ', wtBadge);
       }
-      if (syncBadge) commitsLabel.insertAdjacentHTML('beforeend', syncBadge);
+      if (log.ahead || log.behind) {
+        const sync = document.createElement('span');
+        sync.className = 'ca-sc-sync';
+        if (log.ahead) sync.append(syncPart('ca-sc-sync-local', '↑', log.ahead, 'unpushed'));
+        if (log.behind) sync.append(syncPart('ca-sc-sync-remote', '↓', log.behind, 'unpulled'));
+        commitsLabel.append(' ', sync);
+      }
       commitsLabel.style.display = '';
     }
     if (commitsEl) {
