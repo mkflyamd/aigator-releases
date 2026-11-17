@@ -26,6 +26,7 @@ class FakeGc:
         self.posts = []
         self.puts = []
         self.put_error = None
+        self.downloads = []
 
     def get(self, path, params=None):
         if path in self.get_errors:
@@ -35,6 +36,7 @@ class FakeGc:
         raise _Err(404)
 
     def get_bytes(self, path):
+        self.downloads.append(path)
         return self.blobs[path]
 
     def post(self, path, body):
@@ -133,6 +135,39 @@ def test_read_json_returns_document_and_etag():
     gc.items["/drives/d1/items/f1:/skill.json"] = {"id": "j1", "eTag": '"e1"', "file": {}}
     gc.blobs["/drives/d1/items/j1/content"] = json.dumps({"latest": 2}).encode()
     assert GraphSharingProvider(gc).read_json(folder, "skill.json") == ({"latest": 2}, '"e1"')
+
+
+def _sized_file(gc, size, data=b"abc"):
+    gc.items["/drives/d1/items/f1:/bundle.zip"] = {"id": "b1", "eTag": '"e1"', "file": {}, "size": size}
+    gc.blobs["/drives/d1/items/b1/content"] = data
+    return {"drive_id": "d1", "folder_id": "f1", "web_url": "", "name": "f"}
+
+
+def test_read_file_over_the_limit_is_too_large_and_downloads_nothing():
+    gc = FakeGc()
+    folder = _sized_file(gc, 101)
+    with pytest.raises(ShareError) as err:
+        GraphSharingProvider(gc).read_file(folder, "bundle.zip", max_bytes=100)
+    assert err.value.code == "too_large"
+    assert gc.downloads == []
+
+
+@pytest.mark.parametrize("size", [100, 3])
+def test_read_file_at_or_under_the_limit_downloads(size):
+    gc = FakeGc()
+    folder = _sized_file(gc, size)
+    assert GraphSharingProvider(gc).read_file(folder, "bundle.zip", max_bytes=100) == (b"abc", '"e1"')
+    assert len(gc.downloads) == 1
+
+
+def test_read_json_has_a_default_size_limit():
+    gc = FakeGc()
+    gc.items["/drives/d1/items/f1:/skill.json"] = {"id": "j1", "eTag": '"e1"', "file": {}, "size": 50 * 1024 * 1024}
+    folder = {"drive_id": "d1", "folder_id": "f1", "web_url": "", "name": "f"}
+    with pytest.raises(ShareError) as err:
+        GraphSharingProvider(gc).read_json(folder, "skill.json")
+    assert err.value.code == "too_large"
+    assert gc.downloads == []
 
 
 def test_read_json_returns_none_when_the_file_is_missing():

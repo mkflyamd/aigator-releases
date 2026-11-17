@@ -53,12 +53,15 @@ class FakeProvider:
     def child_folder(self, parent, name, create=True):
         return self._folder(parent["folder_id"], name, create)
 
-    def read_file(self, folder, name):
+    def read_file(self, folder, name, max_bytes=None):
         self._maybe_fail("read_file")
-        return self.files.get((folder["folder_id"], name))
+        found = self.files.get((folder["folder_id"], name))
+        if found is not None and max_bytes is not None and len(found[0]) > max_bytes:
+            raise ShareError("too_large", "too big")
+        return found
 
-    def read_json(self, folder, name):
-        found = self.read_file(folder, name)
+    def read_json(self, folder, name, max_bytes=None):
+        found = self.read_file(folder, name, max_bytes)
         return (json.loads(found[0]), found[1]) if found else None
 
     def _put(self, folder, name, data):
