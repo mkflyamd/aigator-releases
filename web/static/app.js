@@ -12011,7 +12011,9 @@ function _showSandboxApproval(data, ownerTabId) {
   });
   document.getElementById('messages')?.appendChild(card);
   card.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  _focusApprovalButton(approve);
+  _focusApprovalButton(
+    scopeButtons.find((b) => b.className === 'gcc-approve-btn') || scopeButtons[0],
+  );
 }
 
 // Navigate the relevant native app after a draft is approved and inject
@@ -18968,6 +18970,8 @@ function _showBrowserConfirmCard(
     msgDiv.appendChild(card);
   }
   _pinConfirmCardInView(card);
+  const allowBtn =
+    allowBtns.find((b) => b.classList.contains('confirm-card-btn-primary')) || allowBtns[0];
   _focusApprovalButton(allowBtn);
 }
 
