@@ -128,11 +128,7 @@ def test_terminals_start_in_the_worktree_selected_when_the_user_clicks():
     assert "setTimeout(() => _genAgentStart(tabId, agent, projectId, folder), 0)" in prompt
 
 
-def test_loading_projects_drops_an_active_project_that_no_longer_exists():
+def test_loading_projects_resolves_the_active_project_through_the_tested_helper():
     load = _between("function _caLoadProjects()", "function _caAddLocalProject")
-    assert "_caProjects.some((p) => p.name === _caActiveProject)" in load
-
-
-def test_a_dropped_active_project_follows_the_server_pointer_so_chat_and_the_view_agree():
-    load = _between("function _caLoadProjects()", "function _caAddLocalProject")
-    assert "_caProjects.some((p) => p.name === data.active) ? data.active : null" in load
+    assert "window.codePickerHelpers.resolveActiveProject(" in load
+    assert "data.active" in load
