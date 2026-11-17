@@ -254,6 +254,25 @@ def test_launch_removes_ledger_entries_when_revoke_succeeds(fake):
     assert lw._ledger_load()["per_run"] == []
 
 
+def test_launch_installs_the_node_shim_under_the_run_lock_before_spawning(fake, monkeypatch):
+    seen = []
+    monkeypatch.setattr(lw, "install_node_shim", lambda env: seen.append((lw._RUN_LOCK.locked(), fake.runs)))
+    lw.launch(fake.req())
+    assert seen == [(True, 0)]
+    assert fake.runs == 1
+
+
+def test_launch_reports_a_failed_shim_install_as_sandbox_unavailable(fake, monkeypatch):
+    def fail(env):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(lw, "install_node_shim", fail)
+    with pytest.raises(sandbox.SandboxUnavailable, match="Node preload"):
+        lw.launch(fake.req())
+    assert fake.runs == 0
+    assert not lw._RUN_LOCK.locked()
+
+
 def _scratch_req(fake, cwd):
     return SandboxRequest(argv=["cmd"], cwd=cwd, env={}, runtime_paths=[], read_paths=[], write_paths=[],
                           network=False, timeout=5, scratch_path=fake.scratch)
