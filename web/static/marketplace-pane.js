@@ -2502,11 +2502,12 @@
     });
   }
 
-  // Share opens the modal (OneDrive link, or "Download file instead").
+  // Share opens the modal (save to OneDrive, pick people, send an email draft).
   function _shareMineSkill(skillId) {
     if (window.SkillSharing && typeof window.SkillSharing.openShareModal === 'function') {
       window.SkillSharing.openShareModal(skillId, {
         postJson: _postJson,
+        getJson: _getJson,
         downloadSkill: _downloadMineSkill,
         showAlert: _showAlert,
         searchPeople: _searchPeople,
@@ -2518,23 +2519,25 @@
     return _downloadMineSkill(skillId);
   }
 
-  // Same sources the prompt bar's @ mentions use: Slack's directory for Slack,
-  // people in the user's own org for email and Teams.
-  async function _searchPeople(query, channel) {
-    if (channel === 'slack') {
-      const resp = await fetch('/api/slack/users/' + encodeURIComponent(query));
-      if (!resp.ok) return [];
-      const body = await resp.json().catch(() => ({}));
-      const users = Array.isArray(body.users) ? body.users : body.user ? [body.user] : [];
-      return users.map((u) => ({
-        name: u.display_name || u.real_name || u.username || '',
-        email: u.email || '',
-      }));
+  async function _getJson(url) {
+    const resp = await fetch(url);
+    let body = null;
+    try {
+      body = await resp.json();
+    } catch (e) {
+      body = null;
     }
+    return { resp, body };
+  }
+
+  // Same source the prompt bar's @ mentions use: people in the user's own org.
+  // A failed search throws, so the modal does not remember it as "no results".
+  async function _searchPeople(query, signal) {
     const resp = await fetch(
       '/api/people/search?q=' + encodeURIComponent(query) + '&org_only=true',
+      { signal },
     );
-    if (!resp.ok) return [];
+    if (!resp.ok) throw new Error('People search failed');
     const body = await resp.json().catch(() => ({}));
     return Array.isArray(body.people) ? body.people : [];
   }
