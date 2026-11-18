@@ -1199,21 +1199,70 @@ function _caInstallBodyObserver() {
 
 // ── Terminal theme ─────────────────────────────────────────────────────────────
 
-function _caXtermTheme() {
+// xterm's built-in ANSI palette is tuned for dark backgrounds: white, bright
+// white and yellow text (shell syntax highlighting, TUI agents) vanishes on a
+// light canvas. Light mode needs its own palette.
+const _CA_XTERM_LIGHT_ANSI = {
+  black: '#24292f',
+  red: '#cf222e',
+  green: '#116329',
+  yellow: '#7d4e00',
+  blue: '#0550ae',
+  magenta: '#8250df',
+  cyan: '#1b7c83',
+  white: '#6e7781',
+  brightBlack: '#57606a',
+  brightRed: '#a40e26',
+  brightGreen: '#1a7f37',
+  brightYellow: '#633c01',
+  brightBlue: '#0969da',
+  brightMagenta: '#6639ba',
+  brightCyan: '#1b7c83',
+  brightWhite: '#57606a',
+};
+
+function _caIsLightTheme() {
   // The app theme is the single source of truth (ThemeManager sets data-theme).
-  const light = document.documentElement.getAttribute('data-theme') === 'light';
-  return light
-    ? { background: '#ffffff', foreground: '#0f172a', cursor: '#0f172a' }
-    : { background: '#0b0d12', foreground: '#d4d4d4', cursor: '#d4d4d4' };
+  return document.documentElement.getAttribute('data-theme') === 'light';
+}
+
+function _caThemeVar(name, fallback) {
+  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return v || fallback;
+}
+
+function _caXtermTheme() {
+  if (!_caIsLightTheme()) {
+    return { background: '#0b0d12', foreground: '#d4d4d4', cursor: '#d4d4d4' };
+  }
+  const text = _caThemeVar('--text', '#0f172a');
+  return {
+    ..._CA_XTERM_LIGHT_ANSI,
+    background: _caThemeVar('--surface', '#ffffff'),
+    foreground: text,
+    cursor: text,
+    cursorAccent: _caThemeVar('--surface', '#ffffff'),
+    selectionBackground: _caThemeVar('--user-bg', '#dbeafe'),
+    selectionForeground: text,
+  };
+}
+
+// TUI agents also emit 256-colour / truecolour text designed for dark
+// backgrounds; xterm lifts any cell below this contrast ratio on light.
+function _caXtermMinContrast() {
+  return _caIsLightTheme() ? 4.5 : 1;
 }
 
 function _caApplyTerminalTheme() {
   const theme = _caXtermTheme();
+  const contrast = _caXtermMinContrast();
   // Apply to all live generic-agent terminal sessions
   if (typeof _genAgentTerminals !== 'undefined') {
     Object.values(_genAgentTerminals).forEach((state) => {
       Object.values(state.sessions || {}).forEach((sess) => {
-        if (sess.term) sess.term.options.theme = theme;
+        if (!sess.term) return;
+        sess.term.options.theme = theme;
+        sess.term.options.minimumContrastRatio = contrast;
       });
     });
   }

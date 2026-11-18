@@ -344,4 +344,24 @@ const term = (pty, agent, out, viewed) => ({
   assert.deepStrictEqual(h.rowActions(by.s1), ['resume', 'handoff']);
 }
 
+// clicking a row does what its first chip does; a live row already on screen does nothing
+{
+  assert.strictEqual(h.primaryAction({ ptySessionId: 'p1', agent: 'claude' }, false), 'go');
+  assert.strictEqual(h.primaryAction({ ptySessionId: 'p1', agent: 'claude' }, true), null);
+  assert.strictEqual(h.primaryAction({ ptySessionId: '', agent: 'claude' }, false), 'resume');
+  assert.strictEqual(h.primaryAction({ ptySessionId: '', agent: 'opencode' }, true), 'resume');
+}
+
+// a row is the active terminal only when its pty is the strip's active tab
+{
+  assert.strictEqual(h.isActiveTerminal({ ptySessionId: 'p1' }, 'p1'), true);
+  assert.strictEqual(h.isActiveTerminal({ ptySessionId: 'p1' }, 'p2'), false);
+  assert.strictEqual(h.isActiveTerminal({ ptySessionId: 'p1' }, null), false);
+  assert.strictEqual(
+    h.isActiveTerminal({ ptySessionId: '' }, ''),
+    false,
+    'a saved row is never active',
+  );
+}
+
 console.log('agent_history: ok');

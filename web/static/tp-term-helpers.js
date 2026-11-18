@@ -37,6 +37,7 @@ function _ocSpawnTerm(sess) {
     fontSize: 13,
     cursorBlink: true,
     theme: _ocXtermTheme(),
+    minimumContrastRatio: typeof _caXtermMinContrast === 'function' ? _caXtermMinContrast() : 1,
     scrollback: 5000,
     // convertEol: false — TUI apps (Crush, Claude Code, OpenCode) send raw
     // ANSI escape sequences with precise cursor positioning and their own \r\n

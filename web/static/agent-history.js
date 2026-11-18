@@ -144,6 +144,18 @@
     return TRANSCRIPT_AGENTS.includes(row.agent) ? ['resume', 'handoff'] : ['resume'];
   }
 
+  // What clicking the row itself does: the same as its first action chip. A live row whose
+  // terminal is already on screen has nothing to do (its Go to terminal chip is disabled).
+  function primaryAction(row, viewing) {
+    const first = rowActions(row)[0];
+    return first === 'go' && viewing ? null : first;
+  }
+
+  // The row is the terminal whose tab is the active one in the strip.
+  function isActiveTerminal(row, activeId) {
+    return !!row.ptySessionId && !!activeId && row.ptySessionId === activeId;
+  }
+
   function filterGroups(rows, query) {
     const words = String(query || '')
       .toLowerCase()
@@ -685,6 +697,19 @@
     const list = document.getElementById('ca-hist-list');
     if (!list || list.dataset.bound) return;
     list.dataset.bound = '1';
+    // The whole row is the primary action. Chips are buttons that stop their own clicks;
+    // the guard here also keeps any other control inside the item from triggering it.
+    list.addEventListener('click', (e) => {
+      if (e.target.closest('button, a, input')) return;
+      const key = rowKey(e.target);
+      if (key) activateRow(ui.rows.get(key));
+    });
+    list.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      if (!e.target.classList || !e.target.classList.contains('ah-row')) return;
+      e.preventDefault();
+      activateRow(ui.rows.get(rowKey(e.target)));
+    });
     list.addEventListener('mouseover', (e) => pointAt(rowKey(e.target)));
     list.addEventListener('mouseleave', () => pointAt(null));
     list.addEventListener('focusin', (e) => {
@@ -729,6 +754,37 @@
     return isViewing(liveSessions().find((t) => t.ptySessionId === row.ptySessionId));
   }
 
+  function rowActive(row) {
+    const st = terminalState(context().tabId);
+    if (!st || !isActiveTerminal(row, st.activeId)) return false;
+    return liveSessions().some((t) => t.ptySessionId === row.ptySessionId);
+  }
+
+  function setRowActive(item, active) {
+    item.classList.toggle('ah-active', active);
+    const head = item.querySelector('.ah-row');
+    if (!head) return;
+    if (active) head.setAttribute('aria-current', 'true');
+    else head.removeAttribute('aria-current');
+  }
+
+  // Mirror the tab strip's active tab onto the rows without rebuilding the list.
+  function syncActive() {
+    const list = document.getElementById('ca-hist-list');
+    if (!list) return;
+    list.querySelectorAll('.ah-item').forEach((item) => {
+      const row = ui.rows.get(item.dataset.key);
+      setRowActive(item, !!row && rowActive(row));
+    });
+  }
+
+  function activateRow(row) {
+    if (!row) return;
+    const action = primaryAction(row, rowViewing(row));
+    if (action === 'go') goToTerminal(row);
+    else if (action === 'resume') resume(row);
+  }
+
   function actionButton(row, action) {
     const spec = {
       go: [terminalIcon, 'Go to terminal', goToTerminal],
@@ -764,11 +820,19 @@
     head.tabIndex = 0;
     const pill = statePill(row);
     const text = metaLine(row, now, agentName);
-    head.setAttribute('role', 'group');
+    const primary = primaryAction(row, rowViewing(row));
+    head.setAttribute('role', 'button');
     head.setAttribute(
       'aria-label',
-      [row.title, pill && pill.textContent, text].filter(Boolean).join(', '),
+      [row.title, pill && pill.textContent, text, rowActive(row) ? 'current terminal' : '']
+        .filter(Boolean)
+        .join(', '),
     );
+    if (primary) head.classList.add('ah-row-clickable');
+    if (rowActive(row)) {
+      item.classList.add('ah-active');
+      head.setAttribute('aria-current', 'true');
+    }
     const lead = el('span', 'ah-lead');
     if (typeof _genAgentTabIcon === 'function') lead.appendChild(_genAgentTabIcon(row.agent));
     if (row.state === 'needs_you' || row.state === 'working') {
@@ -869,6 +933,7 @@
           r.ptySessionId,
           metaLine(r, now, agentName),
           rowViewing(r),
+          rowActive(r),
           ui.notice[r.key] || '',
         ]),
       ]),
@@ -962,6 +1027,9 @@
     shortAge,
     metaLine,
     rowActions,
+    primaryAction,
+    isActiveTerminal,
+    syncActive,
     filterGroups,
     flyoutPlacement,
     show,
