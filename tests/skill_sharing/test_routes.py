@@ -88,7 +88,16 @@ def test_draft_route_hands_the_people_and_message_to_the_drafter(env):
     with patch("routes.skill_sharing.drafts.build", return_value={"drafts": [], "unmatched": []}) as build:
         res = _post(env, DRAFT, _draft_body())
     assert res.status_code == 200
-    build.assert_called_once_with(skill_id="s", people=[{"name": "Ann", "email": "A@Contoso.com"}], message="Hello")
+    build.assert_called_once_with(
+        skill_id="s", people=[{"name": "Ann", "email": "A@Contoso.com"}], message="Hello", message_html=""
+    )
+
+
+def test_draft_route_passes_the_html_message_through(env):
+    with patch("routes.skill_sharing.drafts.build", return_value={"drafts": [], "unmatched": []}) as build:
+        res = _post(env, DRAFT, _draft_body(message_html="<p>Hi</p>"))
+    assert res.status_code == 200
+    assert build.call_args.kwargs["message_html"] == "<p>Hi</p>"
 
 
 def test_draft_route_names_are_optional(env):

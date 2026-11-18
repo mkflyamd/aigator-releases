@@ -2,6 +2,7 @@
 
 import base64
 import binascii
+import html
 import json
 from urllib.parse import parse_qs, urlparse
 
@@ -58,16 +59,46 @@ def _flat(text: str, limit: int = 0) -> str:
     return out[:limit] if limit else out
 
 
+_STEPS = (
+    ("Copy the link", "Copy the whole link below, starting with aigator://."),
+    ("Open AI Gator", 'Click the Marketplace button, then the "+ Add" tab (it opens on "Import from URL").'),
+    ("Paste it to review the skill", 'Paste the link into "Share link" and click Review. Nothing installs until you click Install.'),
+)
+_BADGE = "background-color: #1f8f4e; color: #ffffff; font-weight: bold; text-align: center"
+
+
 def share_message(title: str, author: str, description: str, link: str, web_url: str = "") -> str:
     lines = [f'{_flat(author)} shared the AI Gator skill "{_flat(title)}" with you.']
     summary = _flat(description, _MAX_DESCRIPTION)
     if summary:
         lines += ["", summary]
-    lines += [
-        "",
-        "Open it in AI Gator. You can review what it does before anything is installed:",
-        link,
-    ]
+    lines += ["", "To add it in AI Gator:"]
+    for n, (head, detail) in enumerate(_STEPS, 1):
+        lines.append(f"{n}. {head}. {detail}")
+        if n == 1:
+            lines.append(f"   {link}")
     if web_url:
-        lines += ["", f"If the link does not open, the skill is in OneDrive: {web_url}"]
+        lines += ["", f"If you cannot open AI Gator, the skill is in OneDrive: {web_url}"]
     return "\n".join(lines)
+
+
+def share_message_html(title: str, author: str, description: str, link: str, web_url: str = "") -> str:
+    """Same content as share_message, as numbered steps using only tags and styles the draft sanitizer keeps."""
+    def esc(text: str) -> str:
+        return html.escape(text, quote=False)
+
+    parts = [f'<p>{esc(_flat(author))} shared the AI Gator skill <b>"{esc(_flat(title))}"</b> with you.</p>']
+    summary = _flat(description, _MAX_DESCRIPTION)
+    if summary:
+        parts.append(f"<p>{esc(summary)}</p>")
+    parts.append("<p><b>To add it in AI Gator:</b></p><table>")
+    for n, (head, detail) in enumerate(_STEPS, 1):
+        cell = f"<b>{esc(head)}</b><br>{esc(detail)}"
+        if n == 1:
+            cell += f"<br><code>{esc(link)}</code>"
+        parts.append(f'<tr><td style="{_BADGE}">\u00a0{n}\u00a0</td><td>{cell}</td></tr>')
+    parts.append("</table>")
+    if web_url:
+        link_attr = html.escape(web_url, quote=True)
+        parts.append(f'<p>If you cannot open AI Gator, the skill is in OneDrive: <a href="{link_attr}">{esc(web_url)}</a></p>')
+    return "".join(parts)

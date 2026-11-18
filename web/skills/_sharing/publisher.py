@@ -179,6 +179,7 @@ def publish(
         "link": link,
         "web_url": folder["web_url"],
         "message": messages.share_message(title, author, description, link, folder["web_url"]),
+        "message_html": messages.share_message_html(title, author, description, link, folder["web_url"]),
         "ungranted": ungranted,
         "saved_path": saved_path,
         "audience": audience,

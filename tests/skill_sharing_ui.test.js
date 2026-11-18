@@ -300,6 +300,7 @@ function checkBody(audience, over) {
 
 const PUBLISHED = {
   message: 'I shared a skill with you. Open it here: https://contoso-my.sharepoint.com/s/weekly-report',
+  message_html: '<p>I shared a skill with you.</p>',
   web_url: 'https://contoso-my.sharepoint.com/personal/me/Documents/AI%20Gator%20Skills/weekly-report',
   saved_path: ['OneDrive', 'AI Gator Skills', 'weekly-report'],
   ungranted: [],
@@ -1631,6 +1632,7 @@ test('Send saves, asks for an email draft, opens it, then shows Done', async () 
       channel: 'email',
       people: [{ name: 'Ann Lee', email: ANN_EMAIL }, { email: 'bob@contoso.com' }],
       message: PUBLISHED.message,
+      message_html: PUBLISHED.message_html,
     },
   });
   assert.deepStrictEqual(t.calls.drafts, [DRAFT.drafts]);

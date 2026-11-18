@@ -87,3 +87,33 @@ def test_message_flattens_whitespace_in_user_text():
     text = messages.share_message("Weekly\nReport", "May\r\nur", "line one\nline two", "aigator://share?d=abc")
     assert '"Weekly Report"' in text
     assert "line one line two" in text
+
+
+def test_message_lists_the_three_steps_with_the_link_under_step_one():
+    text = messages.share_message("Weekly Report", "Mayuresh Kulkarni", "", "aigator-link", "https://onedrive.example/f")
+    lines = text.splitlines()
+    assert [l[:2] for l in lines if l[:1].isdigit()] == ["1.", "2.", "3."]
+    assert lines[lines.index(next(l for l in lines if l.startswith("1."))) + 1].strip() == "aigator-link"
+    assert "Marketplace" in text and "+ Add" in text and "Share link" in text and "Review" in text
+
+
+def test_html_message_has_three_steps_and_survives_the_draft_sanitizer():
+    from skills import _rich_text as rich
+
+    html = messages.share_message_html(
+        "Weekly <b>Report</b>", "Ann & Bo", "Sums up\nthe week", "aigator://share?d=abc", "https://onedrive.example/f?a=1&b=2"
+    )
+    kept = rich.sanitize(html)
+    assert kept == html
+    assert kept.count("<tr>") == 3
+    assert "aigator://share?d=abc" in kept
+    assert "&lt;b&gt;Report&lt;/b&gt;" in kept
+    assert "Ann &amp; Bo" in kept
+    assert 'href="https://onedrive.example/f?a=1&amp;b=2"' in kept
+    assert "<img" not in kept
+
+
+def test_html_message_without_description_or_web_url_has_no_empty_paragraphs():
+    html = messages.share_message_html("Weekly Report", "Ann", "", "aigator-link")
+    assert "<p></p>" not in html
+    assert "OneDrive" not in html

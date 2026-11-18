@@ -1534,6 +1534,7 @@
           return p.name ? { name: p.name, email: p.email } : { email: p.email };
         }),
         message: res.message || '',
+        message_html: res.message_html || '',
       });
       if (shell.closed) return;
       setBusy(false);

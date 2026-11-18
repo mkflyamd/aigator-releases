@@ -31,3 +31,9 @@ def test_a_comma_in_a_name_cannot_shift_the_names_onto_other_addresses():
     with patch("skills.email.tools._tool_email_open_compose", return_value={}) as compose:
         _build([{"name": "Lee, Ann", "email": "a@contoso.com"}, {"name": "Bo", "email": "b@contoso.com"}])
     assert compose.call_args.kwargs["to_names"] == "Lee Ann,Bo"
+
+
+def test_the_html_message_goes_to_the_draft_body_html():
+    with patch("skills.email.tools._tool_email_open_compose", return_value={}) as compose:
+        drafts.build(skill_id="s", people=PEOPLE, message="text", message_html="<p>html</p>")
+    assert compose.call_args.kwargs["body_html"] == "<p>html</p>"
