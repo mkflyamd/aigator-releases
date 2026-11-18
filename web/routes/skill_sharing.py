@@ -17,7 +17,7 @@ from routes.marketplace import (
 )
 from security import verify_csrf
 from shared import load_installed_skill_prompts
-from skills._sharing import messages, publisher, receiver
+from skills._sharing import drafts, messages, publisher, receiver
 from skills._sharing.errors import ShareError
 from skills._sharing.provider import GraphSharingProvider
 
@@ -40,6 +40,7 @@ _STATUS = {
     "throttled": 429,
     "locked": 423,
     "forbidden": 422,
+    "channel_unavailable": 422,
 }
 
 
@@ -50,6 +51,13 @@ class FolderRef(BaseModel):
     name: str = Field(default="", max_length=256)
 
 
+def _check_emails(people: list[str]) -> list[str]:
+    for person in people:
+        if not _EMAIL.match(person):
+            raise ValueError(f"not an email address: {person!r}")
+    return people
+
+
 class PublishRequest(BaseModel):
     skill_id: str = Field(min_length=1, max_length=128)
     people: list[str] = Field(default_factory=list, max_length=50)
@@ -58,10 +66,19 @@ class PublishRequest(BaseModel):
     @field_validator("people")
     @classmethod
     def _emails(cls, people: list[str]) -> list[str]:
-        for person in people:
-            if not _EMAIL.match(person):
-                raise ValueError(f"not an email address: {person!r}")
-        return people
+        return _check_emails(people)
+
+
+class DraftRequest(BaseModel):
+    skill_id: str = Field(min_length=1, max_length=128)
+    channel: str = Field(pattern="^(email|teams|slack)$")
+    people: list[str] = Field(min_length=1, max_length=50)
+    message: str = Field(min_length=1, max_length=4000)
+
+    @field_validator("people")
+    @classmethod
+    def _emails(cls, people: list[str]) -> list[str]:
+        return _check_emails(people)
 
 
 class ReviewRequest(BaseModel):
@@ -108,6 +125,11 @@ def publish_skill(req: PublishRequest):
     author = _call(_author_name)
     root = req.root.model_dump() if req.root else None
     return _call(publisher.publish, provider, req.skill_id, author=author, root=root, people=req.people)
+
+
+@router.post("/api/skills/share/draft", dependencies=[Depends(verify_csrf)])
+def draft_share_message(req: DraftRequest):
+    return _call(drafts.build, req.channel, skill_id=req.skill_id, people=req.people, message=req.message)
 
 
 @router.post("/api/skills/share/review", dependencies=[Depends(verify_csrf)])

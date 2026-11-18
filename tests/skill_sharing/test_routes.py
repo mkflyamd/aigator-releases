@@ -18,6 +18,7 @@ from skills._sharing.errors import ShareError
 PUBLISH = "/api/skills/share/publish"
 REVIEW = "/api/skills/share/review"
 INSTALL = "/api/skills/share/install"
+DRAFT = "/api/skills/share/draft"
 
 
 @pytest.fixture
@@ -48,7 +49,7 @@ def _published_for_a_recipient(env, make_mine):
     return skill_id, body
 
 
-@pytest.mark.parametrize("path", [PUBLISH, REVIEW, INSTALL])
+@pytest.mark.parametrize("path", [PUBLISH, REVIEW, INSTALL, DRAFT])
 def test_every_route_rejects_a_missing_csrf_token(env, path):
     assert _post(env, path, {}, headers=False).status_code == 403
 
@@ -64,6 +65,42 @@ def test_publish_returns_the_link_and_records_the_share(env, make_mine):
     assert messages.parse_share_link(body["link"])["folder_id"] == body["folder"]["folder_id"]
     assert env.provider.grants == [(body["folder"]["folder_id"], ["a@contoso.com"])]
     assert skill_state.get_entry(skill_id)["published_version"] == 1
+
+
+def test_publish_reports_addresses_that_could_not_be_granted(env, make_mine):
+    env.provider.ungrantable.add("outside@gmail.com")
+    res = _post(env, PUBLISH, {"skill_id": make_mine(), "people": ["a@contoso.com", "outside@gmail.com"]})
+
+    assert res.status_code == 200
+    assert res.json()["ungranted"] == ["outside@gmail.com"]
+    assert res.json()["link"]
+
+
+def _draft_body(**over):
+    return {"skill_id": "s", "channel": "email", "people": ["A@Contoso.com"], "message": "Hello", **over}
+
+
+def test_draft_route_passes_the_channel_and_message_to_the_drafter(env):
+    with patch("routes.skill_sharing.drafts.build", return_value={"drafts": [], "unmatched": []}) as build:
+        res = _post(env, DRAFT, _draft_body(channel="teams"))
+    assert res.status_code == 200
+    build.assert_called_once_with("teams", skill_id="s", people=["A@Contoso.com"], message="Hello")
+
+
+@pytest.mark.parametrize(
+    "over",
+    [{"channel": "sms"}, {"people": []}, {"people": ["not-an-email"]}, {"message": ""}, {"message": "x" * 4001}],
+)
+def test_draft_route_rejects_bad_input(env, over):
+    assert _post(env, DRAFT, _draft_body(**over)).status_code == 422
+
+
+def test_draft_route_reports_an_unavailable_channel(env):
+    err = ShareError("channel_unavailable", "Slack is not connected.")
+    with patch("routes.skill_sharing.drafts.build", side_effect=err):
+        res = _post(env, DRAFT, _draft_body(channel="slack"))
+    assert res.status_code == 422
+    assert res.json()["detail"] == {"error": "channel_unavailable", "message": "Slack is not connected."}
 
 
 def test_publish_refuses_a_skill_that_is_not_mine(env):

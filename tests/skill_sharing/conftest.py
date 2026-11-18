@@ -24,6 +24,7 @@ class FakeProvider:
         self.folders = {}
         self.files = {}
         self.grants = []
+        self.ungrantable = set()
         self.writes = []
         self.fail_on = {}
         self._n = 0
@@ -88,8 +89,11 @@ class FakeProvider:
 
     def grant_read(self, folder, emails):
         self._maybe_fail("grant_read")
-        if emails:
-            self.grants.append((folder["folder_id"], list(emails)))
+        refused = [e for e in emails if e in self.ungrantable]
+        granted = [e for e in emails if e not in self.ungrantable]
+        if granted:
+            self.grants.append((folder["folder_id"], granted))
+        return refused
 
 
 @pytest.fixture

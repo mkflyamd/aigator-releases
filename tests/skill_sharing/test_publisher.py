@@ -177,6 +177,23 @@ def test_published_files_digest_matches_the_local_files(provider, make_mine, ski
     assert out["digest"] == files_digest(local)
 
 
+def test_an_address_that_cannot_be_granted_does_not_fail_the_share(provider, make_mine):
+    skill_id = make_mine()
+    provider.ungrantable.add("outside@gmail.com")
+    out = publisher.publish(provider, skill_id, author="A", people=["a@contoso.com", "outside@gmail.com"])
+
+    assert out["ungranted"] == ["outside@gmail.com"]
+    assert out["link"]
+    assert out["version"] == 1
+    assert provider.grants == [(out["folder"]["folder_id"], ["a@contoso.com"])]
+    assert skill_state.get_entry(skill_id)["published_version"] == 1
+
+
+def test_publish_with_everyone_granted_reports_nobody_ungranted(provider, make_mine):
+    out = publisher.publish(provider, make_mine(), author="A", people=["a@contoso.com"])
+    assert out["ungranted"] == []
+
+
 def test_a_failed_invite_still_records_the_share_state(provider, make_mine):
     skill_id = make_mine()
     provider.fail_on["grant_read"] = ShareError("forbidden", "no access")
