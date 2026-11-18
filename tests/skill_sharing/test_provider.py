@@ -65,6 +65,12 @@ def _folder_item(item_id, name):
 ROOT_GET = f"/me/drive/root:/{q(ROOT_FOLDER_NAME)}"
 
 
+def test_default_root_without_create_returns_none_and_creates_nothing():
+    gc = FakeGc()
+    assert GraphSharingProvider(gc).default_root(create=False) is None
+    assert gc.posts == []
+
+
 def test_default_root_creates_the_folder_when_missing():
     gc = FakeGc()
     root = GraphSharingProvider(gc).default_root()
@@ -295,3 +301,92 @@ def test_grant_read_with_nobody_does_nothing():
     gc = FakeGc()
     GraphSharingProvider(gc).grant_read({"drive_id": "d1", "folder_id": "f1", "web_url": "", "name": "f"}, [])
     assert gc.posts == []
+
+
+def _drive_gc(drive_type="business", name="OneDrive", item=None, perms=None, perm_error=None, my_id="d1"):
+    gc = FakeGc()
+    gc.items["/me/drive"] = {"id": my_id}
+    gc.items["/drives/d1"] = {"id": "d1", "name": name, "driveType": drive_type}
+    gc.items["/drives/d1/items/f9"] = item or {}
+    if perms is not None:
+        gc.items["/drives/d1/items/f9/permissions"] = {"value": perms}
+    if perm_error:
+        gc.get_errors["/drives/d1/items/f9/permissions"] = perm_error
+    return gc
+
+
+def test_describe_folder_builds_a_display_path_from_the_drive_and_parents():
+    item = {
+        "id": "f9",
+        "name": "Templates",
+        "webUrl": "https://x/Templates",
+        "folder": {},
+        "parentReference": {"driveId": "d1", "path": "/drives/d1/root:/Team%20Docs/Skills"},
+    }
+    loc = GraphSharingProvider(_drive_gc(name="Marketing", item=item)).describe_folder("d1", "f9")
+    assert loc == {
+        "drive_id": "d1",
+        "folder_id": "f9",
+        "name": "Templates",
+        "path": ["Marketing", "Team Docs", "Skills", "Templates"],
+        "web_url": "https://x/Templates",
+    }
+
+
+def test_describe_folder_of_a_drive_root_is_just_the_drive_name():
+    item = {"id": "f9", "name": "root", "folder": {}, "root": {}, "parentReference": {"driveId": "d1"}}
+    assert GraphSharingProvider(_drive_gc(name="OneDrive", item=item)).describe_folder("d1", "f9")["path"] == ["OneDrive"]
+
+
+def test_describe_folder_refuses_a_file():
+    gc = _drive_gc(item={"id": "f9", "name": "a.docx", "file": {}})
+    with pytest.raises(ShareError) as err:
+        GraphSharingProvider(gc).describe_folder("d1", "f9")
+    assert err.value.code == "invalid"
+
+
+def test_describe_folder_reports_a_missing_folder():
+    gc = _drive_gc()
+    gc.get_errors["/drives/d1/items/f9"] = _Err(404)
+    with pytest.raises(ShareError) as err:
+        GraphSharingProvider(gc).describe_folder("d1", "f9")
+    assert err.value.code == "not_found"
+
+
+def test_audience_of_a_sharepoint_library_is_the_library():
+    gc = _drive_gc(drive_type="documentLibrary", name="Marketing site")
+    assert GraphSharingProvider(gc).audience("d1", "f9", "Templates") == {
+        "kind": "library",
+        "name": "Marketing site",
+        "approx_count": None,
+    }
+
+
+def test_audience_of_an_unshared_folder_in_my_own_onedrive_is_private():
+    gc = _drive_gc(perms=[{"roles": ["owner"]}])
+    assert GraphSharingProvider(gc).audience("d1", "f9", "Mine")["kind"] == "private"
+
+
+@pytest.mark.parametrize("scope", ["organization", "anonymous"])
+def test_audience_with_a_wide_link_is_the_organization(scope):
+    gc = _drive_gc(perms=[{"roles": ["owner"]}, {"roles": ["read"], "link": {"scope": scope}}])
+    assert GraphSharingProvider(gc).audience("d1", "f9", "Mine")["kind"] == "org"
+
+
+def test_audience_counts_the_people_a_folder_is_already_shared_with():
+    gc = _drive_gc(perms=[{"roles": ["owner"]}, {"roles": ["read"]}, {"roles": ["write"]}])
+    assert GraphSharingProvider(gc).audience("d1", "f9", "Shared") == {
+        "kind": "folder",
+        "name": "Shared",
+        "approx_count": 2,
+    }
+
+
+def test_audience_is_not_private_when_the_permissions_cannot_be_read():
+    gc = _drive_gc(perm_error=_Err(403))
+    assert GraphSharingProvider(gc).audience("d1", "f9", "Mine")["kind"] == "folder"
+
+
+def test_audience_of_a_folder_in_someone_elses_onedrive_is_not_private():
+    gc = _drive_gc(perms=[{"roles": ["owner"]}], my_id="mine")
+    assert GraphSharingProvider(gc).audience("d1", "f9", "Theirs")["kind"] == "folder"

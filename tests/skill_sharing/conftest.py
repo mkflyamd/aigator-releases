@@ -27,6 +27,9 @@ class FakeProvider:
         self.ungrantable = set()
         self.writes = []
         self.fail_on = {}
+        self.audiences = {}
+        self.not_folders = set()
+        self.parents = {}
         self._n = 0
 
     def _maybe_fail(self, op):
@@ -46,10 +49,30 @@ class FakeProvider:
                 "web_url": f"https://onedrive.example/{name}",
                 "name": name,
             }
+            self.parents[f"f{self._n}"] = parent_id
         return dict(self.folders[key])
 
-    def default_root(self):
-        return self._folder("", "AI Gator Skills", True)
+    def default_root(self, create=True):
+        return self._folder("", "AI Gator Skills", create)
+
+    def my_drive_id(self):
+        return "d1"
+
+    def describe_folder(self, drive_id, folder_id):
+        found = next((f for f in self.folders.values() if f["folder_id"] == folder_id), None)
+        if found is None:
+            raise ShareError("not_found", "gone")
+        if folder_id in self.not_folders:
+            raise ShareError("invalid", "That is a file, not a folder.")
+        chain, current = [], found
+        while current:
+            chain.append(current["name"])
+            parent_id = self.parents.get(current["folder_id"], "")
+            current = next((f for f in self.folders.values() if f["folder_id"] == parent_id), None)
+        return {**found, "drive_id": drive_id, "path": ["OneDrive", *reversed(chain)]}
+
+    def audience(self, drive_id, folder_id, name):
+        return self.audiences.get(folder_id, {"kind": "private", "name": "Only you", "approx_count": None})
 
     def child_folder(self, parent, name, create=True):
         return self._folder(parent["folder_id"], name, create)

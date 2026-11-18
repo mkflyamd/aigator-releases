@@ -1008,7 +1008,7 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
                 f"{tc.name} is not available in this conversation",
             )
         if tc.name in data_sources.URL_TOOLS:
-            # Refuse a private or internal target before asking the user to approve it.
+            # Refuse an over-long fetch URL before asking the user to approve it.
             url = (tc.inputs or {}).get("url")
             if isinstance(url, str) and url.startswith(("http://", "https://")):
                 from skills._always_on.tools import _check_fetch_target

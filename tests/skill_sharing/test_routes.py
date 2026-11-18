@@ -19,6 +19,8 @@ PUBLISH = "/api/skills/share/publish"
 REVIEW = "/api/skills/share/review"
 INSTALL = "/api/skills/share/install"
 DRAFT = "/api/skills/share/draft"
+LOCATIONS = "/api/skills/share/locations"
+CHECK = "/api/skills/share/check"
 
 
 @pytest.fixture
@@ -79,30 +81,37 @@ def test_publish_reports_addresses_that_could_not_be_granted(env, make_mine):
 
 
 def _draft_body(**over):
-    return {"skill_id": "s", "channel": "email", "people": ["A@Contoso.com"], "message": "Hello", **over}
+    return {"skill_id": "s", "channel": "email", "people": [{"name": "Ann", "email": "A@Contoso.com"}], "message": "Hello", **over}
 
 
-def test_draft_route_passes_the_channel_and_message_to_the_drafter(env):
+def test_draft_route_hands_the_people_and_message_to_the_drafter(env):
     with patch("routes.skill_sharing.drafts.build", return_value={"drafts": [], "unmatched": []}) as build:
-        res = _post(env, DRAFT, _draft_body(channel="teams"))
+        res = _post(env, DRAFT, _draft_body())
     assert res.status_code == 200
-    build.assert_called_once_with("teams", skill_id="s", people=["A@Contoso.com"], message="Hello")
+    build.assert_called_once_with(skill_id="s", people=[{"name": "Ann", "email": "A@Contoso.com"}], message="Hello")
+
+
+def test_draft_route_names_are_optional(env):
+    with patch("routes.skill_sharing.drafts.build", return_value={"drafts": [], "unmatched": []}) as build:
+        res = _post(env, DRAFT, _draft_body(people=[{"email": "a@contoso.com"}]))
+    assert res.status_code == 200
+    assert build.call_args.kwargs["people"] == [{"name": "", "email": "a@contoso.com"}]
 
 
 @pytest.mark.parametrize(
     "over",
-    [{"channel": "sms"}, {"people": []}, {"people": ["not-an-email"]}, {"message": ""}, {"message": "x" * 4001}],
+    [
+        {"channel": "teams"},
+        {"channel": "slack"},
+        {"people": []},
+        {"people": ["a@contoso.com"]},
+        {"people": [{"email": "not-an-email"}]},
+        {"message": ""},
+        {"message": "x" * 4001},
+    ],
 )
 def test_draft_route_rejects_bad_input(env, over):
     assert _post(env, DRAFT, _draft_body(**over)).status_code == 422
-
-
-def test_draft_route_reports_an_unavailable_channel(env):
-    err = ShareError("channel_unavailable", "Slack is not connected.")
-    with patch("routes.skill_sharing.drafts.build", side_effect=err):
-        res = _post(env, DRAFT, _draft_body(channel="slack"))
-    assert res.status_code == 422
-    assert res.json()["detail"] == {"error": "channel_unavailable", "message": "Slack is not connected."}
 
 
 def test_publish_refuses_a_skill_that_is_not_mine(env):
@@ -221,3 +230,103 @@ def test_install_keeps_the_tier_policy(env, make_mine, tmp_path):
     res = _post(env, INSTALL, {"link": shared["link"], "version": 1, "digest": shared["digest"]})
     assert res.status_code == 403
     assert installer.load_installed() == []
+
+
+def _ref(folder):
+    return {k: folder[k] for k in ("drive_id", "folder_id", "web_url", "name")}
+
+
+def test_locations_returns_default_recent_and_current(env, make_mine):
+    skill_id = make_mine()
+    res = env.http.get(LOCATIONS, params={"skill_id": skill_id})
+    assert res.status_code == 200
+    body = res.json()
+    assert body["default"]["path"] == ["OneDrive", "AI Gator Skills"]
+    assert body["recent"] == []
+    assert body["current"] is None
+
+
+def test_locations_needs_a_skill_id(env):
+    assert env.http.get(LOCATIONS).status_code == 422
+
+
+def test_check_with_no_folder_checks_the_default(env, make_mine):
+    res = env.http.get(CHECK, params={"skill_id": make_mine()})
+    assert res.status_code == 200
+    assert res.json()["ok"] is True
+    assert res.json()["audience"]["kind"] == "private"
+
+
+@pytest.mark.parametrize("params", [{"drive_id": "d1"}, {"folder_id": "f1"}])
+def test_check_with_half_a_folder_is_a_400(env, make_mine, params):
+    res = env.http.get(CHECK, params={"skill_id": make_mine(), **params})
+    assert res.status_code == 400
+    assert res.json()["detail"]["error"] == "invalid"
+
+
+def test_check_of_a_missing_folder_is_ok_false_not_an_error(env, make_mine):
+    res = env.http.get(CHECK, params={"skill_id": make_mine(), "drive_id": "d1", "folder_id": "nope"})
+    assert res.status_code == 200
+    assert res.json()["ok"] is False
+    assert res.json()["reason"] == "not_found"
+
+
+def test_check_reports_the_audience_and_an_existing_skill(env, make_mine):
+    chosen = env.provider.child_folder(env.provider.default_root(), "Team")
+    env.provider.audiences[chosen["folder_id"]] = {"kind": "org", "name": "Your organization", "approx_count": None}
+    skill_id = make_mine()
+    _post(env, PUBLISH, {"skill_id": skill_id, "root": _ref(chosen), "audience_ack": True})
+    body = env.http.get(CHECK, params={"skill_id": skill_id, "drive_id": "d1", "folder_id": chosen["folder_id"]}).json()
+    assert body["audience"]["kind"] == "org"
+    assert body["existing"]["yours"] is True
+
+
+def test_publish_to_a_chosen_folder_returns_where_it_went(env, make_mine):
+    chosen = env.provider.child_folder(env.provider.default_root(), "Team")
+    skill_id = make_mine()
+    res = _post(env, PUBLISH, {"skill_id": skill_id, "root": _ref(chosen)})
+    assert res.status_code == 200
+    assert res.json()["saved_path"] == ["OneDrive", "AI Gator Skills", "Team", skill_id]
+    assert env.http.get(LOCATIONS, params={"skill_id": skill_id}).json()["recent"][0]["folder_id"] == chosen["folder_id"]
+
+
+def test_publish_to_a_shared_folder_needs_acknowledgement(env, make_mine):
+    chosen = env.provider.child_folder(env.provider.default_root(), "Team")
+    env.provider.audiences[chosen["folder_id"]] = {"kind": "folder", "name": "Team", "approx_count": 3}
+    skill_id = make_mine()
+    res = _post(env, PUBLISH, {"skill_id": skill_id, "root": _ref(chosen)})
+    assert res.status_code == 422
+    assert res.json()["detail"]["error"] == "audience_unacknowledged"
+    assert env.provider.writes == []
+    assert _post(env, PUBLISH, {"skill_id": skill_id, "root": _ref(chosen), "audience_ack": True}).status_code == 200
+
+
+def test_publish_into_someone_elses_skill_is_a_409(env, make_mine):
+    chosen = env.provider.child_folder(env.provider.default_root(), "Team")
+    skill_id = make_mine()
+    theirs = env.provider.child_folder(chosen, skill_id)
+    env.provider.files[(theirs["folder_id"], "skill.json")] = (
+        json.dumps({"latest": 1, "versions": [], "author": "Bob"}).encode(),
+        '"e1"',
+    )
+    res = _post(env, PUBLISH, {"skill_id": skill_id, "root": _ref(chosen)})
+    assert res.status_code == 409
+    assert res.json()["detail"]["error"] == "not_yours"
+
+
+def test_a_policy_refusal_is_a_422_with_its_own_code(env, make_mine):
+    env.provider.fail_on["write_file"] = ShareError("forbidden", "label")
+    res = _post(env, PUBLISH, {"skill_id": make_mine()})
+    assert res.status_code == 422
+    assert res.json()["detail"]["error"] == "policy_blocked"
+
+
+def test_publish_to_a_folder_that_is_gone_is_a_404(env, make_mine):
+    root = {"drive_id": "d1", "folder_id": "nope"}
+    res = _post(env, PUBLISH, {"skill_id": make_mine(), "root": root})
+    assert res.status_code == 404
+    assert res.json()["detail"]["error"] == "not_found"
+
+
+def test_the_new_read_routes_need_no_csrf_token(env, make_mine):
+    assert env.http.get(LOCATIONS, params={"skill_id": make_mine()}).status_code == 200
