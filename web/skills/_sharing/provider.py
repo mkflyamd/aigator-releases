@@ -4,7 +4,7 @@ Every method raises ShareError. Nothing here deletes anything.
 """
 
 import json
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 from .._files.errors import classify_graph_error, http_status
 from .._m365 import file_transfer as ft
@@ -69,16 +69,69 @@ class GraphSharingProvider:
             raise ShareError("conflict", f"'{name}' already exists in OneDrive and is not a folder.")
         return item
 
-    def default_root(self) -> dict:
+    def default_root(self, create: bool = True) -> dict | None:
         item = self._get_or_create_folder(
-            f"/me/drive/root:/{_q(ROOT_FOLDER_NAME)}", "/me/drive/root/children", ROOT_FOLDER_NAME, True
+            f"/me/drive/root:/{_q(ROOT_FOLDER_NAME)}", "/me/drive/root/children", ROOT_FOLDER_NAME, create
         )
-        return _ref(item)
+        return _ref(item) if item else None
 
     def child_folder(self, parent: dict, name: str, create: bool = True) -> dict | None:
         base = f"/drives/{_q(parent['drive_id'])}/items/{_q(parent['folder_id'])}"
         item = self._get_or_create_folder(f"{base}:/{_q(name)}", f"{base}/children", name, create)
         return _ref(item, parent["drive_id"]) if item else None
+
+    def _get(self, path: str, **params) -> dict:
+        try:
+            out = self._gc.get(path, params=params) if params else self._gc.get(path)
+        except Exception as e:
+            raise _fail(e) from e
+        return out if isinstance(out, dict) else {}
+
+    def my_drive_id(self) -> str:
+        return self._get("/me/drive", **{"$select": "id"}).get("id", "")
+
+    def describe_folder(self, drive_id: str, folder_id: str) -> dict:
+        """The folder as a location with a display path. Raises not_found, or invalid when it is not a folder."""
+        item = self._get(
+            f"/drives/{_q(drive_id)}/items/{_q(folder_id)}",
+            **{"$select": "id,name,webUrl,folder,root,parentReference"},
+        )
+        if not item.get("id"):
+            raise ShareError("not_found", _MESSAGES["not_found"])
+        if "folder" not in item:
+            raise ShareError("invalid", "That is a file, not a folder.")
+        drive = self._get(f"/drives/{_q(drive_id)}", **{"$select": "name"})
+        path = [drive.get("name") or "OneDrive"]
+        if "root" not in item:
+            parent = (item.get("parentReference") or {}).get("path", "")
+            path += [unquote(seg) for seg in parent.partition("root:")[2].split("/") if seg]
+            path.append(item.get("name", ""))
+        return {
+            "drive_id": drive_id,
+            "folder_id": item["id"],
+            "name": item.get("name", ""),
+            "path": path,
+            "web_url": item.get("webUrl", ""),
+        }
+
+    def audience(self, drive_id: str, folder_id: str, name: str) -> dict:
+        """Who can already see inside this folder: private, library, org or folder."""
+        drive = self._get(f"/drives/{_q(drive_id)}", **{"$select": "name,driveType"})
+        if drive.get("driveType") == "documentLibrary":
+            return {"kind": "library", "name": drive.get("name") or name, "approx_count": None}
+        try:
+            perms = self._gc.get(f"/drives/{_q(drive_id)}/items/{_q(folder_id)}/permissions")
+        except Exception:
+            return {"kind": "folder", "name": name, "approx_count": None}
+        entries = perms.get("value", []) if isinstance(perms, dict) else []
+        for entry in entries:
+            scope = (entry.get("link") or {}).get("scope")
+            if scope in ("organization", "anonymous"):
+                return {"kind": "org", "name": "Your organization", "approx_count": None}
+        others = [e for e in entries if "owner" not in (e.get("roles") or [])]
+        if others or drive_id != self.my_drive_id():
+            return {"kind": "folder", "name": name, "approx_count": len(others) or None}
+        return {"kind": "private", "name": "Only you", "approx_count": None}
 
     def read_file(self, folder: dict, name: str, max_bytes: int | None = None) -> tuple[bytes, str] | None:
         drive = _q(folder["drive_id"])

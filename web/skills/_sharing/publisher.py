@@ -1,6 +1,7 @@
 """Publish a Mine skill as an immutable version in a OneDrive folder."""
 
 import json
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Sequence
 
@@ -8,7 +9,7 @@ from marketplace import installer
 from marketplace import state as skill_state
 from marketplace.permissions import files_digest
 
-from . import bundle, messages
+from . import bundle, destinations, messages
 from .errors import ShareError
 
 
@@ -39,7 +40,18 @@ def _latest_digest(doc: dict) -> str:
     return ""
 
 
-def _skill_folder(provider, entry: dict, skill_id: str, root: dict | None) -> dict:
+@contextmanager
+def _refusal_is_policy(message: str):
+    """Once the skill folder exists we can write here, so a refusal after that is policy, not access."""
+    try:
+        yield
+    except ShareError as err:
+        if err.code == "forbidden":
+            raise ShareError("policy_blocked", message) from err
+        raise
+
+
+def _fixed_folder(entry: dict, skill_id: str) -> dict | None:
     fixed = entry.get("share_source") or {}
     if fixed.get("folder_id") and fixed.get("drive_id"):
         return {
@@ -48,10 +60,41 @@ def _skill_folder(provider, entry: dict, skill_id: str, root: dict | None) -> di
             "web_url": fixed.get("web_url", ""),
             "name": skill_id,
         }
-    return provider.child_folder(root or provider.default_root(), skill_id)
+    return None
 
 
-def publish(provider, skill_id: str, *, author: str, root: dict | None = None, people: Sequence[str] = ()) -> dict:
+def _vet_root(provider, skill_id: str, root: dict | None, author: str, audience_ack: bool) -> tuple[dict, dict]:
+    """Check the chosen folder (or the default) before anything is written. Returns (location, audience)."""
+    if root:
+        location = provider.describe_folder(root["drive_id"], root["folder_id"])
+        audience = provider.audience(location["drive_id"], location["folder_id"], location["name"])
+        if audience["kind"] != "private" and not audience_ack:
+            raise ShareError(
+                "audience_unacknowledged",
+                "Other people can already see this folder. Confirm who it is shared with before saving the skill here.",
+            )
+    else:
+        default = provider.default_root()
+        location = provider.describe_folder(default["drive_id"], default["folder_id"])
+        audience = {"kind": "private", "name": "Only you", "approx_count": None}
+    existing = destinations.existing_skill(provider, location, skill_id, author)
+    if existing and not existing["yours"]:
+        raise ShareError(
+            "not_yours",
+            f'A skill named "{skill_id}" by {existing["author"] or "someone else"} is already in that folder.',
+        )
+    return location, audience
+
+
+def publish(
+    provider,
+    skill_id: str,
+    *,
+    author: str,
+    root: dict | None = None,
+    people: Sequence[str] = (),
+    audience_ack: bool = False,
+) -> dict:
     entry = skill_state.get_entry(skill_id)
     if not entry or entry.get("tier") != "Mine" or entry.get("id") != skill_id:
         raise ShareError("not_mine", "Only skills you created can be shared.")
@@ -63,7 +106,17 @@ def publish(provider, skill_id: str, *, author: str, root: dict | None = None, p
 
     files = bundle.read_skill_dir(skill_dir)
     digest = files_digest(files)
-    folder = _skill_folder(provider, entry, skill_id, root)
+    folder = _fixed_folder(entry, skill_id)
+    location = audience = None
+    if folder:
+        try:
+            saved_path = provider.describe_folder(folder["drive_id"], folder["folder_id"])["path"]
+        except ShareError:
+            saved_path = [skill_id]
+    else:
+        location, audience = _vet_root(provider, skill_id, root, author, audience_ack)
+        folder = provider.child_folder(location, skill_id)
+        saved_path = [*location["path"], skill_id]
 
     current = provider.read_json(folder, "skill.json")
     doc, etag = (checked_doc(current[0]), current[1]) if current else (None, "")
@@ -77,27 +130,28 @@ def publish(provider, skill_id: str, *, author: str, root: dict | None = None, p
         created_at = _now()
         zip_bytes = bundle.build_zip(files)
         manifest = bundle.build_manifest(skill_id, version, files, zip_bytes, author=author, created_at=created_at)
-        version_folder = provider.child_folder(folder, f"v{version}")
-        provider.write_file(version_folder, "bundle.zip", zip_bytes)
-        provider.write_file(version_folder, "manifest.json", _json_bytes(manifest))
-        new_doc = {
-            "schema": bundle.SCHEMA,
-            "name": skill_id,
-            "title": manifest["title"],
-            "description": manifest["description"],
-            "author": author,
-            "latest": version,
-            "versions": [
-                *(doc["versions"] if doc else []),
-                {"version": version, "files_digest": digest, "created_at": created_at},
-            ],
-            "updated_at": created_at,
-        }
-        title, description = manifest["title"], manifest["description"]
-        if doc is None:
-            provider.write_json_create(folder, "skill.json", new_doc)
-        else:
-            provider.write_json_replace(folder, "skill.json", new_doc, etag)
+        with _refusal_is_policy("Your organization's policy blocked saving the skill there. Nothing was shared."):
+            version_folder = provider.child_folder(folder, f"v{version}")
+            provider.write_file(version_folder, "bundle.zip", zip_bytes)
+            provider.write_file(version_folder, "manifest.json", _json_bytes(manifest))
+            new_doc = {
+                "schema": bundle.SCHEMA,
+                "name": skill_id,
+                "title": manifest["title"],
+                "description": manifest["description"],
+                "author": author,
+                "latest": version,
+                "versions": [
+                    *(doc["versions"] if doc else []),
+                    {"version": version, "files_digest": digest, "created_at": created_at},
+                ],
+                "updated_at": created_at,
+            }
+            title, description = manifest["title"], manifest["description"]
+            if doc is None:
+                provider.write_json_create(folder, "skill.json", new_doc)
+            else:
+                provider.write_json_replace(folder, "skill.json", new_doc, etag)
 
     skill_state.update_entry(
         skill_id,
@@ -111,7 +165,10 @@ def publish(provider, skill_id: str, *, author: str, root: dict | None = None, p
             "published_digest": digest,
         },
     )
-    ungranted = provider.grant_read(folder, list(people))
+    with _refusal_is_policy("The skill was saved, but your organization does not allow sharing it with other people."):
+        ungranted = provider.grant_read(folder, list(people))
+    if root and location:
+        destinations.remember(location)
     link = messages.make_share_link(folder)
     return {
         "skill_id": skill_id,
@@ -123,4 +180,6 @@ def publish(provider, skill_id: str, *, author: str, root: dict | None = None, p
         "web_url": folder["web_url"],
         "message": messages.share_message(title, author, description, link, folder["web_url"]),
         "ungranted": ungranted,
+        "saved_path": saved_path,
+        "audience": audience,
     }

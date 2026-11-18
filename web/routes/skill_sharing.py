@@ -3,7 +3,7 @@
 import logging
 import re
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator
 
 from marketplace import installer, skill_audit
@@ -17,7 +17,7 @@ from routes.marketplace import (
 )
 from security import verify_csrf
 from shared import load_installed_skill_prompts
-from skills._sharing import drafts, messages, publisher, receiver
+from skills._sharing import destinations, drafts, messages, publisher, receiver
 from skills._sharing.errors import ShareError
 from skills._sharing.provider import GraphSharingProvider
 
@@ -34,13 +34,15 @@ _STATUS = {
     "too_large": 400,
     "not_mine": 400,
     "conflict": 409,
+    "not_yours": 409,
     "collision": 409,
     "content_changed": 409,
     "tampered": 409,
     "throttled": 429,
     "locked": 423,
     "forbidden": 422,
-    "channel_unavailable": 422,
+    "audience_unacknowledged": 422,
+    "policy_blocked": 422,
 }
 
 
@@ -62,23 +64,30 @@ class PublishRequest(BaseModel):
     skill_id: str = Field(min_length=1, max_length=128)
     people: list[str] = Field(default_factory=list, max_length=50)
     root: FolderRef | None = None
+    audience_ack: bool = False
 
     @field_validator("people")
     @classmethod
     def _emails(cls, people: list[str]) -> list[str]:
         return _check_emails(people)
+
+
+class Person(BaseModel):
+    name: str = Field(default="", max_length=200)
+    email: str = Field(max_length=320)
+
+    @field_validator("email")
+    @classmethod
+    def _email(cls, email: str) -> str:
+        _check_emails([email])
+        return email
 
 
 class DraftRequest(BaseModel):
     skill_id: str = Field(min_length=1, max_length=128)
-    channel: str = Field(pattern="^(email|teams|slack)$")
-    people: list[str] = Field(min_length=1, max_length=50)
+    channel: str = Field(pattern="^email$")
+    people: list[Person] = Field(min_length=1, max_length=50)
     message: str = Field(min_length=1, max_length=4000)
-
-    @field_validator("people")
-    @classmethod
-    def _emails(cls, people: list[str]) -> list[str]:
-        return _check_emails(people)
 
 
 class ReviewRequest(BaseModel):
@@ -119,17 +128,44 @@ def _call(fn, *args, **kwargs):
         ) from exc
 
 
+@router.get("/api/skills/share/locations")
+def share_locations(skill_id: str = Query(min_length=1, max_length=128)):
+    return _call(destinations.locations, _call(_provider), skill_id)
+
+
+@router.get("/api/skills/share/check")
+def check_share_location(
+    skill_id: str = Query(min_length=1, max_length=128),
+    drive_id: str = Query(default="", max_length=512),
+    folder_id: str = Query(default="", max_length=512),
+):
+    if bool(drive_id) != bool(folder_id):
+        raise HTTPException(
+            status_code=400, detail={"error": "invalid", "message": "Give both drive_id and folder_id, or neither."}
+        )
+    return _call(destinations.check, _call(_provider), skill_id, drive_id, folder_id, _call(_author_name))
+
+
 @router.post("/api/skills/share/publish", dependencies=[Depends(verify_csrf)])
 def publish_skill(req: PublishRequest):
     provider = _call(_provider)
     author = _call(_author_name)
     root = req.root.model_dump() if req.root else None
-    return _call(publisher.publish, provider, req.skill_id, author=author, root=root, people=req.people)
+    return _call(
+        publisher.publish,
+        provider,
+        req.skill_id,
+        author=author,
+        root=root,
+        people=req.people,
+        audience_ack=req.audience_ack,
+    )
 
 
 @router.post("/api/skills/share/draft", dependencies=[Depends(verify_csrf)])
 def draft_share_message(req: DraftRequest):
-    return _call(drafts.build, req.channel, skill_id=req.skill_id, people=req.people, message=req.message)
+    people = [p.model_dump() for p in req.people]
+    return _call(drafts.build, skill_id=req.skill_id, people=people, message=req.message)
 
 
 @router.post("/api/skills/share/review", dependencies=[Depends(verify_csrf)])
