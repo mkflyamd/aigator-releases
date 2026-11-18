@@ -21759,6 +21759,10 @@ body.tab-fullscreen {
   color: var(--ah-accent-ink);
   background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
+.ah-pill-elsewhere {
+  color: var(--ah-warn-ink);
+  background: color-mix(in srgb, var(--warn) 16%, transparent);
+}
 .ah-pill-needs_you {
   color: var(--ah-warn-ink);
   background: color-mix(in srgb, var(--warn) 16%, transparent);

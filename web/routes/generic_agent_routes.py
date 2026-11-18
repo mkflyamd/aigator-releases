@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 import agent_handoff
+import agent_liveness
 import agent_sessions
 import generic_agent
 from security import verify_csrf
@@ -46,6 +47,7 @@ class GenericAgentTerminalRequest(BaseModel):
     rows: int = 0  # PTY spawns at the right size before the TUI app paints
     handoff_id: str | None = None  # continue a prior session; always a new process
     resume_id: str | None = None  # reopen a stored session in its own agent; reuses its live terminal if it has one
+    allow_duplicate: bool = False  # resume even if another process outside Gator already has the session open
 
 
 class HandoffPrepareRequest(BaseModel):
@@ -175,6 +177,17 @@ async def _open_terminal(req: GenericAgentTerminalRequest):
             entry = await asyncio.to_thread(get_pty_session, live_id)
             if entry and not entry.done:
                 return {"pty_session_id": live_id, "created": False}
+        if not req.allow_duplicate:
+            elsewhere = await asyncio.to_thread(agent_liveness.live_processes, req.agent, resume["id"])
+            if elsewhere:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "session_live",
+                        "message": "This session is already open in another window.",
+                        "processes": elsewhere,
+                    },
+                )
 
     handoff = None
     if req.handoff_id:

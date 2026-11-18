@@ -77,6 +77,7 @@
         state,
         group: groupOf(state, lastActive, nowMs),
         ptySessionId: term ? term.ptySessionId : null,
+        liveElsewhere: !term && !!s.live_elsewhere,
       };
     });
     live.forEach((term, pty) => {
@@ -94,6 +95,7 @@
         state,
         group: groupOf(state, lastActive, nowMs),
         ptySessionId: pty,
+        liveElsewhere: false,
       });
     });
     return rows;
@@ -374,18 +376,39 @@
     _genAgentActivateSession(tabId, row.ptySessionId);
   }
 
-  async function resume(row) {
+  function confirmDuplicate(row) {
+    if (typeof _showConfirmModal !== 'function') return;
+    _showConfirmModal(
+      'Session already open',
+      'This session is already open in another window. Open another copy anyway?',
+      'Open anyway',
+      () => resume(row, true),
+    );
+  }
+
+  async function resume(row, allowDuplicate) {
     const { tabId, project } = context();
     if (!project || typeof _genAgentStart !== 'function') return;
     if (typeof _genAgentStartInFlight === 'function' && _genAgentStartInFlight(tabId)) return;
+    if (row.liveElsewhere && !allowDuplicate) {
+      confirmDuplicate(row);
+      return;
+    }
+    let asked = false;
     const before = terminalState(tabId);
     const count = before ? before.order.length : 0;
     closeFileView();
     await _genAgentStart(tabId, row.agent, project.name, project.repo_path, {
       forceNew: true,
       resumeId: row.id,
+      allowDuplicate: !!allowDuplicate,
+      onSessionLive: () => {
+        asked = true;
+        confirmDuplicate(row);
+      },
       keepStateAgent: !!(before && before.agent),
     });
+    if (asked) return;
     const after = terminalState(tabId);
     if (after && after.order.length > count) {
       delete ui.notice[row.key];
@@ -555,6 +578,7 @@
   }
 
   function statePill(row) {
+    if (row.liveElsewhere) return el('span', 'ah-pill ah-pill-elsewhere', 'Open elsewhere');
     if (row.state !== 'needs_you' && row.state !== 'working') return null;
     const text = row.state === 'needs_you' ? 'Needs you' : 'Working';
     return el('span', 'ah-pill ah-pill-' + row.state, text);
