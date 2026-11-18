@@ -87,3 +87,14 @@ test('app.js exposes showShareDrafts, which closes Settings and injects approval
   assert(body.includes('closeDrawer()'));
   assert(body.includes('_injectDraftApprovalCard(item._draft, item.data)'));
 });
+
+test('the Share link field keeps only the link when the whole message is pasted', () => {
+  const at = source.indexOf("shareInput.addEventListener('paste'");
+  assert(at > 0, 'paste handler exists');
+  const handler = source.slice(at, source.indexOf('shareRow.appendChild(shareInput)', at));
+  assert(handler.includes("getData('text')"));
+  assert(handler.includes('sharing.extractLink(pasted)'));
+  assert(handler.includes('if (!link) return;'), 'text without a link is pasted as typed');
+  assert(handler.includes('e.preventDefault()'));
+  assert(handler.includes('shareInput.value = link'));
+});

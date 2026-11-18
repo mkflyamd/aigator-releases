@@ -1397,6 +1397,14 @@
         reviewShared();
       }
     });
+    shareInput.addEventListener('paste', (e) => {
+      const pasted = e.clipboardData ? e.clipboardData.getData('text') : '';
+      const sharing = window.SkillSharing;
+      const link = sharing && typeof sharing.extractLink === 'function' ? sharing.extractLink(pasted) : '';
+      if (!link) return;
+      e.preventDefault();
+      shareInput.value = link;
+    });
     shareRow.appendChild(shareInput);
     shareRow.appendChild(reviewBtn);
     wrap.appendChild(shareLabel);
