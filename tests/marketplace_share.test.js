@@ -60,9 +60,11 @@ test('Share reuses the people search endpoint and hands drafts to the chat', () 
   assert(body.includes('window.showShareDrafts'));
   const search = source.indexOf('async function _searchPeople(');
   assert(search > 0);
-  const fn = source.slice(search, search + 400);
+  const fn = source.slice(search, search + 1100);
   assert(fn.includes("'/api/people/search?q='"));
   assert(fn.includes('org_only=true'));
+  assert(fn.includes("channel === 'slack'"));
+  assert(fn.includes("'/api/slack/users/'"));
 });
 
 test('app.js exposes showShareDrafts, which closes Settings and injects approval cards', () => {

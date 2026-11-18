@@ -166,10 +166,10 @@
   }
 
   // Suggests people for the address being typed (the text after the last
-  // separator). `deps.searchPeople(query)` resolves to [{name, email}], the
-  // same /api/people/search lookup the prompt bar's @ mentions use. Without
-  // that dependency the field is a plain text input.
-  function _attachPeopleLookup(input, list, deps) {
+  // separator). `deps.searchPeople(query, channel)` resolves to [{name, email}]
+  // from the directory for that channel, as the prompt bar's @ mentions do.
+  // Without that dependency the field is a plain text input.
+  function _attachPeopleLookup(input, list, deps, getChannel) {
     var rows = [];
     var active = -1;
     var seq = 0;
@@ -255,15 +255,17 @@
     }
 
     async function run(token, mine) {
-      var people = cache[token];
+      var channel = getChannel();
+      var key = channel + ':' + token;
+      var people = cache[key];
       if (!people) {
         try {
-          people = await deps.searchPeople(token);
+          people = await deps.searchPeople(token, channel);
         } catch (err) {
           people = [];
         }
         if (!Array.isArray(people)) people = [];
-        cache[token] = people;
+        cache[key] = people;
       }
       if (mine !== seq) return;
       show(people, token);
@@ -370,7 +372,9 @@
       suggest.id = 'ss-suggest-' + stamp;
       field.appendChild(input);
       field.appendChild(suggest);
-      var lookup = _attachPeopleLookup(input, suggest, deps);
+      var lookup = _attachPeopleLookup(input, suggest, deps, function () {
+        return channel;
+      });
       shell.onEscape = function () {
         if (!lookup.isOpen()) return false;
         lookup.close();
@@ -393,6 +397,7 @@
       });
       var focusOrder = function () {};
       function pick(id, focus) {
+        if (id !== channel) lookup.close();
         channel = id;
         segBtns.forEach(function (s) {
           var on = s.id === id;

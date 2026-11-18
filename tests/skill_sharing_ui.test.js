@@ -842,11 +842,13 @@ const PEOPLE = [
 
 function openForm(dom, api, overrides) {
   const queries = [];
+  const sources = [];
   const { deps, calls } = makeDeps(
     Object.assign(
       {
-        searchPeople: async (q) => {
+        searchPeople: async (q, channel) => {
           queries.push(q);
+          sources.push(channel);
           return PEOPLE;
         },
       },
@@ -855,13 +857,29 @@ function openForm(dom, api, overrides) {
   );
   api.openShareModal('weekly-report', deps);
   const modal = dom.document.body.children[0];
-  return { modal, input: dom.byTag(modal, 'input'), list: dom.byClass(modal, 'ss-suggest'), queries, deps, calls };
+  return { modal, input: dom.byTag(modal, 'input'), list: dom.byClass(modal, 'ss-suggest'), queries, sources, deps, calls };
 }
 
 function typeInto(input, text) {
   input.value = text;
   input._listeners.input({});
 }
+
+test('the lookup asks the directory for the chosen channel and does not reuse another channel results', async () => {
+  const dom = makeDom();
+  const api = load(dom, { setTimeout, clearTimeout });
+  const { modal, input, list, sources } = openForm(dom, api);
+
+  typeInto(input, 'an');
+  await new Promise((r) => setTimeout(r, 300));
+  assert.deepStrictEqual(sources, ['email']);
+
+  dom.byText(modal, 'Slack').click();
+  assert.strictEqual(list.hidden, true, 'switching channel closes the open suggestions');
+  typeInto(input, 'an');
+  await new Promise((r) => setTimeout(r, 300));
+  assert.deepStrictEqual(sources, ['email', 'slack']);
+});
 
 test('typing two characters shows matches after the debounce, not before', async () => {
   const dom = makeDom();

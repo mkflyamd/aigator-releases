@@ -2518,8 +2518,19 @@
     return _downloadMineSkill(skillId);
   }
 
-  // Same lookup the prompt bar's @ mentions use: people in the user's own org.
-  async function _searchPeople(query) {
+  // Same sources the prompt bar's @ mentions use: Slack's directory for Slack,
+  // people in the user's own org for email and Teams.
+  async function _searchPeople(query, channel) {
+    if (channel === 'slack') {
+      const resp = await fetch('/api/slack/users/' + encodeURIComponent(query));
+      if (!resp.ok) return [];
+      const body = await resp.json().catch(() => ({}));
+      const users = Array.isArray(body.users) ? body.users : body.user ? [body.user] : [];
+      return users.map((u) => ({
+        name: u.display_name || u.real_name || u.username || '',
+        email: u.email || '',
+      }));
+    }
     const resp = await fetch(
       '/api/people/search?q=' + encodeURIComponent(query) + '&org_only=true',
     );
