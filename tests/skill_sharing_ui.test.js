@@ -701,7 +701,7 @@ test('Install posts exactly link, version and digest from the review response', 
   assert.strictEqual(calls.post.length, 2);
   assert.strictEqual(calls.post[1].url, '/api/skills/share/install');
   assert.deepStrictEqual(calls.post[1].payload, { link: LINK, version: 2, digest: 'sha256:deadbeef' });
-  assert.deepStrictEqual(calls.alerts, [{ msg: 'Installed "Weekly Report".', kind: 'success' }]);
+  assert.deepStrictEqual(calls.alerts, [], 'onInstalled owns the outcome message');
   assert.deepStrictEqual(calls.installed, [{ ok: true, skill_id: 'weekly-report' }]);
   assert.strictEqual(calls.reviews[0].title, 'Weekly Report', 'onInstalled also gets the review');
   assert.strictEqual(calls.refresh, 1);

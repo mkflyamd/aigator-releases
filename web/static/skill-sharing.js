@@ -430,8 +430,8 @@
           : 'Could not install this skill. Try again.';
         return;
       }
-      deps.showAlert('Installed "' + title + '".', 'success');
       if (deps.onInstalled) deps.onInstalled(out.body, review);
+      else deps.showAlert('Installed "' + title + '".', 'success');
       if (deps.refresh) deps.refresh();
       shell.close();
     }
