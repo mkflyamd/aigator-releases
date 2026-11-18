@@ -94,7 +94,11 @@ def test_message_lists_the_three_steps_with_the_link_under_step_one():
     lines = text.splitlines()
     assert [l[:2] for l in lines if l[:1].isdigit()] == ["1.", "2.", "3."]
     assert lines[lines.index(next(l for l in lines if l.startswith("1."))) + 1].strip() == "aigator-link"
-    assert "Marketplace" in text and "+ Add" in text and "Share link" in text and "Review" in text
+    for name in (
+        '"Skill Marketplace"', "hammer-and-screwdriver", '"+ Add"', '"Import from URL"',
+        '"Share link"', '"Review"', '"Install"',
+    ):
+        assert name in text
 
 
 def test_html_message_has_three_steps_and_survives_the_draft_sanitizer():
@@ -105,7 +109,10 @@ def test_html_message_has_three_steps_and_survives_the_draft_sanitizer():
     )
     kept = rich.sanitize(html)
     assert kept == html
-    assert kept.count("<tr>") == 3
+    assert kept.count("<h2") == 3
+    assert "<table" not in kept and "<code" not in kept
+    for name in ("Skill Marketplace", "+ Add", "Import from URL", "Share link", "Review", "Install"):
+        assert f"<b>{name}</b>" in kept
     assert "aigator://share?d=abc" in kept
     assert "&lt;b&gt;Report&lt;/b&gt;" in kept
     assert "Ann &amp; Bo" in kept
