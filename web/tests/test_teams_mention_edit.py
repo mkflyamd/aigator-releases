@@ -104,7 +104,7 @@ class TestBuildSkypeMentionsHelper:
 class TestEditEndpointSerializesMentions:
     def test_edit_endpoint_calls_build_skype_mentions(self):
         """The edit endpoint handler must call _build_skype_mentions (same as send)."""
-        edit_fn_start = SRC.find("async def tp_teams_edit_message(")
+        edit_fn_start = SRC.find("def tp_teams_edit_message(")
         assert edit_fn_start != -1
         # Find the next function boundary
         next_fn = SRC.find("\n@router.", edit_fn_start + 1)

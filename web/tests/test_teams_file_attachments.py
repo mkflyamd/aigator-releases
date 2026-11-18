@@ -227,7 +227,7 @@ class TestNormalizeSkypeMessagesSurfacesAttachments:
 class TestChannelSkypePathSurfacesAttachments:
     def test_channel_parent_and_reply_use_the_helper(self):
         # tp_channel_messages is large; slice from its def to the next top-level def
-        start = SRC.find("async def tp_channel_messages(")
+        start = SRC.find("def tp_channel_messages(")
         assert start != -1
         nxt = SRC.find("\n@router.", start + 1)
         body = SRC[start : nxt if nxt != -1 else start + 6000]

@@ -1,5 +1,6 @@
 """OneDrive route group -- quota, recent, shared, search, folder browsing, upload."""
 
+import asyncio
 import re
 from pathlib import Path
 from urllib.parse import quote as _url_quote
@@ -40,6 +41,22 @@ def _post_folder(gc, path: str, name: str, conflict: str) -> dict:
             ) from e
         raise
     return {"id": item["id"], "name": item["name"]}
+
+
+async def _put_once(gc, path: str, content: bytes, content_type: str) -> dict:
+    """PUT a file. put_binary is never repeated, so a 5xx or no answer may mean the file landed."""
+    from skills._files.errors import http_status, may_have_happened
+
+    try:
+        return await asyncio.to_thread(gc.put_binary, path, content, content_type)
+    except Exception as e:
+        if may_have_happened(http_status(e)):
+            raise HTTPException(
+                status_code=502,
+                detail="OneDrive gave no clear answer, so the file may already be uploaded. "
+                "Check the folder before uploading it again.",
+            ) from e
+        raise
 
 
 # ── OneDrive endpoints ──────────────────────────────────────────────────────
@@ -348,15 +365,14 @@ async def onedrive_upload_to_folder(folder_id: str, file: UploadFile):
             upload_path = f"/me/drive/root:/{safe_name}:/content"
         else:
             upload_path = f"/me/drive/items/{folder_id}:/{safe_name}:/content"
-        item = gc.put_binary(
-            upload_path, content, file.content_type or "application/octet-stream"
-        )
+        item = await _put_once(gc, upload_path, content, file.content_type or "application/octet-stream")
         item_id = item.get("id", "")
         if not item_id:
             raise HTTPException(
                 status_code=500, detail="Upload failed -- no item ID returned"
             )
-        share = gc.post(
+        share = await asyncio.to_thread(
+            gc.post,
             f"/me/drive/items/{_eid(item_id)}/createLink",
             {"type": "view", "scope": "organization"},
         )
@@ -390,7 +406,8 @@ async def upload_to_onedrive(file: UploadFile):
         if len(safe_name) > 200:
             safe_name = safe_name[:200]
         # Simple upload (< 4 MB) -- PUT to OneDrive
-        item = gc.put_binary(
+        item = await _put_once(
+            gc,
             f"/me/drive/root:/Attachments/{safe_name}:/content",
             content,
             file.content_type or "application/octet-stream",
@@ -401,7 +418,8 @@ async def upload_to_onedrive(file: UploadFile):
                 status_code=500, detail="Upload failed -- no item ID returned"
             )
         # Create an organisation-scoped view link
-        share = gc.post(
+        share = await asyncio.to_thread(
+            gc.post,
             f"/me/drive/items/{_eid(item_id)}/createLink",
             {"type": "view", "scope": "organization"},
         )

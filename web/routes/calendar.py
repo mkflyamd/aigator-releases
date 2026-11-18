@@ -33,7 +33,7 @@ class AvailabilityDaysRequest(BaseModel):
 
 
 @router.get("/api/calendar/events")
-async def tp_calendar_events(start: str, end: str):
+def tp_calendar_events(start: str, end: str):
     """Return events in FullCalendar format for a date range."""
     try:
         from skills._m365.helpers import get_cal_client
@@ -88,7 +88,7 @@ async def tp_calendar_events(start: str, end: str):
 
 
 @router.get("/api/calendar/events/{event_id}")
-async def tp_calendar_event_detail(event_id: str):
+def tp_calendar_event_detail(event_id: str):
     """Full event detail including body HTML."""
     try:
         from skills._m365.helpers import get_cal_client
@@ -109,7 +109,7 @@ async def tp_calendar_event_detail(event_id: str):
 
 
 @router.post("/api/calendar/events/{event_id}/respond", dependencies=[Depends(verify_csrf)])
-async def tp_calendar_respond(event_id: str, req: CalendarRsvpRequest):
+def tp_calendar_respond(event_id: str, req: CalendarRsvpRequest):
     """Accept, decline, or tentatively accept a calendar event."""
     if req.response not in ("accept", "decline", "tentativelyAccept"):
         raise HTTPException(

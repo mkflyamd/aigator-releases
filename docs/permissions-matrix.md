@@ -85,7 +85,8 @@ These always ask, with no Always allow button.
 | ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
 | Sending email, Teams or Slack messages, Jira writes, calendar changes    | Always a draft card or a per-call card that needs an explicit approval click, even when every other permission for the app is Always allow. |
 | Raw Rovo or MCP Jira writes, gated MCP writes                            | Parked as approval drafts.                                                                                                                  |
-| Payments, fetching private-network addresses                             | Refused, no card.                                                                                                                           |
+| Payments, fetching a URL with a very long path or query                  | Refused, no card.                                                                                                                           |
+| Fetching a private-network address                                       | The website card, like any other site.                                                                                                      |
 | Connecting an MCP server, testing or signing in from the extension setup | A card for each call that shows the command or address. A saved credential is never shown.                                                  |
 | Recorder consent, marketplace digest consent                             | Use their own consent cards.                                                                                                                |
 

@@ -78,7 +78,10 @@ patterns, and GitHub Actions security. Commit-message hooks reject messages that
 contain potential secrets. Push-time hooks use `uv audit` to check all
 locked Python dependencies and adverse package statuses, then run `npm audit` for
 Electron dependencies. They fail on any known Python vulnerability or
-high/critical npm vulnerability. CI also enables uv's malware check before syncing
+high/critical npm advisory, except an advisory listed in `ACCEPTED_ADVISORIES`
+in `tools/audit_dependencies.py`. Each entry waives one advisory ID for one
+dev-only package until its review date, and the hook prints it whenever it is
+applied. CI also enables uv's malware check before syncing
 locked dependencies. Run the same gates manually with:
 
 ```bash
@@ -102,7 +105,8 @@ Secret findings must be removed. A false positive may be added to
 `.secrets.baseline` only after manual review. Security scanner suppressions must
 be narrowly scoped, include the scanner rule ID, and be justified in the pull
 request. Dependency audit exceptions require a tracked security issue with an
-owner, expiration date, and compensating controls.
+owner, expiration date, and compensating controls, recorded in the
+`ACCEPTED_ADVISORIES` entry.
 
 ### Code Style
 
