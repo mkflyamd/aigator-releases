@@ -63,6 +63,8 @@ def test_publish_returns_the_link_and_records_the_share(env, make_mine):
     assert body["version"] == 1
     assert body["reused"] is False
     assert messages.parse_share_link(body["link"])["folder_id"] == body["folder"]["folder_id"]
+    assert body["message"]
+    assert body["link"] in body["message"]
     assert env.provider.grants == [(body["folder"]["folder_id"], ["a@contoso.com"])]
     assert skill_state.get_entry(skill_id)["published_version"] == 1
 
