@@ -111,7 +111,7 @@ def publish(provider, skill_id: str, *, author: str, root: dict | None = None, p
             "published_digest": digest,
         },
     )
-    provider.grant_read(folder, list(people))
+    ungranted = provider.grant_read(folder, list(people))
     link = messages.make_share_link(folder)
     return {
         "skill_id": skill_id,
@@ -122,4 +122,5 @@ def publish(provider, skill_id: str, *, author: str, root: dict | None = None, p
         "link": link,
         "web_url": folder["web_url"],
         "message": messages.share_message(title, author, description, link, folder["web_url"]),
+        "ungranted": ungranted,
     }

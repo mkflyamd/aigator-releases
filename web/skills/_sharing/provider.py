@@ -134,16 +134,41 @@ class GraphSharingProvider:
         source = ft.bytes_source(name, json.dumps(doc, indent=2, sort_keys=True).encode("utf-8"))
         self._check(ft.replace_in_folder(self._gc, source, folder["drive_id"], folder["folder_id"], if_match=etag))
 
-    def grant_read(self, folder: dict, emails: list[str]) -> None:
+    def grant_read(self, folder: dict, emails: list[str]) -> list[str]:
+        """Give each address read access. Returns the addresses Graph would not accept.
+
+        One invite covers everyone. If Graph rejects it with a 400 (an address
+        outside the tenant or one it cannot resolve), each address is invited
+        on its own so one bad address does not block the rest. Any other
+        failure still raises.
+        """
         if not emails:
-            return
-        body = {
-            "recipients": [{"email": e} for e in emails],
-            "roles": ["read"],
-            "requireSignIn": True,
-            "sendInvitation": False,
-        }
+            return []
+        path = f"/drives/{_q(folder['drive_id'])}/items/{_q(folder['folder_id'])}/invite"
+
+        def invite(batch: list[str]) -> None:
+            self._gc.post(
+                path,
+                {
+                    "recipients": [{"email": e} for e in batch],
+                    "roles": ["read"],
+                    "requireSignIn": True,
+                    "sendInvitation": False,
+                },
+            )
+
         try:
-            self._gc.post(f"/drives/{_q(folder['drive_id'])}/items/{_q(folder['folder_id'])}/invite", body)
+            invite(emails)
+            return []
         except Exception as e:
-            raise _fail(e) from e
+            if http_status(e) != 400:
+                raise _fail(e) from e
+        ungranted = []
+        for email in emails:
+            try:
+                invite([email])
+            except Exception as e:
+                if http_status(e) != 400:
+                    raise _fail(e) from e
+                ungranted.append(email)
+        return ungranted

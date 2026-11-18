@@ -245,6 +245,52 @@ def test_grant_read_is_read_only_and_silent():
     }
 
 
+class _InviteGc(FakeGc):
+    """Invite calls that name an address in `refuse` fail with 400."""
+
+    def __init__(self, refuse=(), status=400):
+        super().__init__()
+        self.refuse = set(refuse)
+        self.status = status
+
+    def post(self, path, body):
+        self.posts.append((path, body))
+        if any(r["email"] in self.refuse for r in body["recipients"]):
+            raise _Err(self.status)
+        return {}
+
+
+FOLDER = {"drive_id": "d1", "folder_id": "f1", "web_url": "", "name": "f"}
+
+
+def test_grant_read_returns_nothing_refused_when_every_address_is_accepted():
+    gc = _InviteGc()
+    assert GraphSharingProvider(gc).grant_read(FOLDER, ["a@contoso.com", "b@contoso.com"]) == []
+    assert len(gc.posts) == 1
+
+
+def test_grant_read_invites_the_rest_when_one_address_is_refused():
+    gc = _InviteGc(refuse={"bad@gmail.com"})
+    refused = GraphSharingProvider(gc).grant_read(FOLDER, ["a@contoso.com", "bad@gmail.com", "b@contoso.com"])
+    assert refused == ["bad@gmail.com"]
+    accepted = [r["email"] for _, body in gc.posts[1:] for r in body["recipients"] if r["email"] not in gc.refuse]
+    assert accepted == ["a@contoso.com", "b@contoso.com"]
+
+
+def test_grant_read_reports_every_address_refused():
+    gc = _InviteGc(refuse={"x@gmail.com", "y@gmail.com"})
+    assert GraphSharingProvider(gc).grant_read(FOLDER, ["x@gmail.com", "y@gmail.com"]) == ["x@gmail.com", "y@gmail.com"]
+
+
+@pytest.mark.parametrize("status,code", [(403, "forbidden"), (429, "throttled")])
+def test_grant_read_still_fails_on_errors_other_than_a_refused_address(status, code):
+    gc = _InviteGc(refuse={"a@contoso.com"}, status=status)
+    with pytest.raises(ShareError) as err:
+        GraphSharingProvider(gc).grant_read(FOLDER, ["a@contoso.com"])
+    assert err.value.code == code
+    assert len(gc.posts) == 1
+
+
 def test_grant_read_with_nobody_does_nothing():
     gc = FakeGc()
     GraphSharingProvider(gc).grant_read({"drive_id": "d1", "folder_id": "f1", "web_url": "", "name": "f"}, [])
