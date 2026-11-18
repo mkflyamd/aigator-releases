@@ -167,7 +167,19 @@ function makeDom() {
   const byClass = (root, cls) => find(root, (el) => hasClass(el, cls));
   const allByClass = (root, cls) => findAll(root, (el) => hasClass(el, cls));
 
-  return { document, state, key, fire, find, findAll, byText, byTag, byClass, allByClass, hasClass };
+  return {
+    document,
+    state,
+    key,
+    fire,
+    find,
+    findAll,
+    byText,
+    byTag,
+    byClass,
+    allByClass,
+    hasClass,
+  };
 }
 
 function load(dom, extra) {
@@ -260,20 +272,32 @@ test('shareErrorText covers the four response shapes', () => {
     pure.shareErrorText({ ok: false }, { detail: { message: 'OneDrive is not connected.' } }),
     'OneDrive is not connected.',
   );
-  assert.strictEqual(pure.shareErrorText({ ok: false }, { detail: 'Skill not found' }), 'Skill not found');
+  assert.strictEqual(
+    pure.shareErrorText({ ok: false }, { detail: 'Skill not found' }),
+    'Skill not found',
+  );
   assert.strictEqual(
     pure.shareErrorText({ ok: false }, { detail: [{ loc: ['body', 'people'], msg: 'bad' }] }),
     'Check the email addresses and try again.',
   );
-  assert.strictEqual(pure.shareErrorText({ ok: false }, null), 'Could not share this skill. Try again.');
-  assert.strictEqual(pure.shareErrorText({ ok: false }, { detail: { code: 'x' } }), 'Could not share this skill. Try again.');
+  assert.strictEqual(
+    pure.shareErrorText({ ok: false }, null),
+    'Could not share this skill. Try again.',
+  );
+  assert.strictEqual(
+    pure.shareErrorText({ ok: false }, { detail: { code: 'x' } }),
+    'Could not share this skill. Try again.',
+  );
 });
 
 // ── Share modal harness ───────────────────────────────────────────────────
 
 const SKILL = 'weekly-report';
 const clone = (x) => JSON.parse(JSON.stringify(x));
-const json = (body, status) => ({ resp: { ok: !status || status < 400, status: status || 200 }, body });
+const json = (body, status) => ({
+  resp: { ok: !status || status < 400, status: status || 200 },
+  body,
+});
 const fail = (status, error, message) => json({ detail: { error, message } }, status);
 
 const LOC_DEFAULT = {
@@ -295,17 +319,25 @@ const PRIVATE = { kind: 'private' };
 const LIBRARY = { kind: 'library', name: 'Contoso Team', approx_count: 1200 };
 
 function checkBody(audience, over) {
-  return Object.assign({ ok: true, reason: '', can_write: true, location: null, audience, existing: null }, over);
+  return Object.assign(
+    { ok: true, reason: '', can_write: true, location: null, audience, existing: null },
+    over,
+  );
 }
 
 const PUBLISHED = {
-  message: 'I shared a skill with you. Open it here: https://contoso-my.sharepoint.com/s/weekly-report',
+  message:
+    'I shared a skill with you. Open it here: https://contoso-my.sharepoint.com/s/weekly-report',
   message_html: '<p>I shared a skill with you.</p>',
-  web_url: 'https://contoso-my.sharepoint.com/personal/me/Documents/AI%20Gator%20Skills/weekly-report',
+  web_url:
+    'https://contoso-my.sharepoint.com/personal/me/Documents/AI%20Gator%20Skills/weekly-report',
   saved_path: ['OneDrive', 'AI Gator Skills', 'weekly-report'],
   ungranted: [],
 };
-const DRAFT = { drafts: [{ id: 'd1', to: ['ann.lee@contoso.com'], subject: 'weekly-report' }], unmatched: [] };
+const DRAFT = {
+  drafts: [{ id: 'd1', to: ['ann.lee@contoso.com'], subject: 'weekly-report' }],
+  unmatched: [],
+};
 const PEOPLE = [
   { name: 'Ann Lee', email: 'Ann.Lee@contoso.com' },
   { name: 'Anna Wu', email: 'anna.wu@contoso.com' },
@@ -375,7 +407,12 @@ function boot(opts) {
       },
     };
   }
-  const api = load(dom, { setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout, AbortController, navigator });
+  const api = load(dom, {
+    setTimeout: clock.setTimeout,
+    clearTimeout: clock.clearTimeout,
+    AbortController,
+    navigator,
+  });
   const t = { dom, clock, env, calls: env.calls, clip, api };
 
   t.start = () => {
@@ -428,7 +465,10 @@ test('opens on Save with a loading line and asks for the locations of this skill
   const t = boot().start();
   assert.strictEqual(t.heading(), 'Share "weekly-report"');
   assert(t.text().includes('Loading your folders...'));
-  assert.deepStrictEqual(t.cls('ss-step').map((b) => b.textContent), ['1Save', '2Share', '3Send']);
+  assert.deepStrictEqual(
+    t.cls('ss-step').map((b) => b.textContent),
+    ['1Save', '2Share', '3Send'],
+  );
   assert.strictEqual(t.dom.byClass(t.root(), 'is-current').getAttribute('aria-current'), 'step');
   await flush();
   assert.strictEqual(t.calls.get[0], '/api/skills/share/locations?skill_id=weekly-report');
@@ -464,7 +504,10 @@ test('choosing a recent folder checks it with its drive and folder ids', async (
   const t = await open();
   await pickRadio(t, 1);
   assert.strictEqual(selectedRow(t), 1);
-  assert.strictEqual(t.calls.get[2], '/api/skills/share/check?skill_id=weekly-report&drive_id=b!team&folder_id=f1');
+  assert.strictEqual(
+    t.calls.get[2],
+    '/api/skills/share/check?skill_id=weekly-report&drive_id=b!team&folder_id=f1',
+  );
 });
 
 test('while a folder is being checked Next is off and a checking line shows', async () => {
@@ -487,7 +530,9 @@ test('while a folder is being checked Next is off and a checking line shows', as
 });
 
 test('a library folder needs the acknowledgement before Next', async () => {
-  const t = await open({ get: (url) => (url.includes('/share/check') ? json(checkBody(LIBRARY)) : undefined) });
+  const t = await open({
+    get: (url) => (url.includes('/share/check') ? json(checkBody(LIBRARY)) : undefined),
+  });
   assert(t.status().includes('Everyone in Contoso Team (about 1,200 people) can see it'));
   assert(t.status().includes('Anyone in this library can open this skill without being added.'));
   assert(t.status().includes('I understand everyone with access to Contoso Team can see it'));
@@ -503,12 +548,16 @@ test('a library folder needs the acknowledgement before Next', async () => {
 
 test('a library without a head count still names the library', async () => {
   const audience = { kind: 'library', name: 'Contoso Team' };
-  const t = await open({ get: (url) => (url.includes('/share/check') ? json(checkBody(audience)) : undefined) });
+  const t = await open({
+    get: (url) => (url.includes('/share/check') ? json(checkBody(audience)) : undefined),
+  });
   assert(t.status().includes('Everyone with access to Contoso Team can see it'));
 });
 
 test('an organization-wide folder needs the acknowledgement and is flagged as broad', async () => {
-  const t = await open({ get: (url) => (url.includes('/share/check') ? json(checkBody({ kind: 'org' })) : undefined) });
+  const t = await open({
+    get: (url) => (url.includes('/share/check') ? json(checkBody({ kind: 'org' })) : undefined),
+  });
   assert(t.status().includes('Everyone in your organization can see it'));
   assert(t.status().includes('I understand everyone in my organization can see it'));
   assert(t.dom.byClass(t.root(), 'ss-audience').className.includes('is-broad'));
@@ -521,12 +570,16 @@ test('an organization-wide folder needs the acknowledgement and is flagged as br
 
 test('an already shared folder needs the acknowledgement, with or without a count', async () => {
   let audience = { kind: 'folder', approx_count: 12 };
-  const t = await open({ get: (url) => (url.includes('/share/check') ? json(checkBody(audience)) : undefined) });
+  const t = await open({
+    get: (url) => (url.includes('/share/check') ? json(checkBody(audience)) : undefined),
+  });
   assert(t.status().includes('Already shared with 12 people'));
   assert(t.status().includes('I understand they can see it'));
   assert.strictEqual(t.nextDisabled(), true);
   audience = { kind: 'folder' };
-  const u = await open({ get: (url) => (url.includes('/share/check') ? json(checkBody(audience)) : undefined) });
+  const u = await open({
+    get: (url) => (url.includes('/share/check') ? json(checkBody(audience)) : undefined),
+  });
   assert(u.status().includes('Already shared with other people'));
 });
 
@@ -549,7 +602,9 @@ test('changing the folder clears the acknowledgement', async () => {
 });
 
 test('Next does nothing while the acknowledgement is missing', async () => {
-  const t = await open({ get: (url) => (url.includes('/share/check') ? json(checkBody(LIBRARY)) : undefined) });
+  const t = await open({
+    get: (url) => (url.includes('/share/check') ? json(checkBody(LIBRARY)) : undefined),
+  });
   await t.press('Next');
   assert.strictEqual(t.cls('ss-label')[0].textContent, 'Save to');
   assert.strictEqual(t.heading(), 'Share "weekly-report"');
@@ -557,7 +612,10 @@ test('Next does nothing while the acknowledgement is missing', async () => {
 
 test('a skill with this name from someone else blocks the folder', async () => {
   const existing = { title: 'Weekly report', version: 3, author: 'Dana Kim', yours: false };
-  const t = await open({ get: (url) => (url.includes('/share/check') ? json(checkBody(PRIVATE, { existing })) : undefined) });
+  const t = await open({
+    get: (url) =>
+      url.includes('/share/check') ? json(checkBody(PRIVATE, { existing })) : undefined,
+  });
   assert(t.status().includes('A skill with this name is already there'));
   assert(t.status().includes('"weekly-report" in this folder was created by Dana Kim'));
   assert.strictEqual(t.nextDisabled(), true);
@@ -566,17 +624,26 @@ test('a skill with this name from someone else blocks the folder', async () => {
 
 test('a taken folder without an author says someone else, and my own copy is fine', async () => {
   let existing = { yours: false };
-  const t = await open({ get: (url) => (url.includes('/share/check') ? json(checkBody(PRIVATE, { existing })) : undefined) });
+  const t = await open({
+    get: (url) =>
+      url.includes('/share/check') ? json(checkBody(PRIVATE, { existing })) : undefined,
+  });
   assert(t.status().includes('created by someone else'));
   existing = { title: 'Weekly report', version: 3, author: 'Me', yours: true };
-  const u = await open({ get: (url) => (url.includes('/share/check') ? json(checkBody(PRIVATE, { existing })) : undefined) });
+  const u = await open({
+    get: (url) =>
+      url.includes('/share/check') ? json(checkBody(PRIVATE, { existing })) : undefined,
+  });
   assert(u.status().includes('Only you can see this folder'));
   assert.strictEqual(u.nextDisabled(), false);
 });
 
 test('a folder that is gone blocks Next', async () => {
   const t = await open({
-    get: (url) => (url.includes('/share/check') ? json(checkBody(PRIVATE, { ok: false, reason: 'not_found' })) : undefined),
+    get: (url) =>
+      url.includes('/share/check')
+        ? json(checkBody(PRIVATE, { ok: false, reason: 'not_found' }))
+        : undefined,
   });
   assert(t.status().includes('This folder is no longer available'));
   assert(t.status().includes('Choose another folder.'));
@@ -648,7 +715,10 @@ test('the path the check reports replaces the label of the folder that was check
 test('Next moves to Share and the finished Save step becomes a way back', async () => {
   const t = await open();
   await t.press('Next');
-  assert.deepStrictEqual(t.cls('ss-step').map((b) => b.textContent), ['Save', '2Share', '3Send']);
+  assert.deepStrictEqual(
+    t.cls('ss-step').map((b) => b.textContent),
+    ['Save', '2Share', '3Send'],
+  );
   assert.strictEqual(t.cls('ss-step')[0].getAttribute('data-done'), 'true');
   assert.strictEqual(t.cls('ss-step')[2].getAttribute('data-done'), 'false');
   assert(t.btn('Back'));
@@ -661,7 +731,10 @@ test('Next moves to Share and the finished Save step becomes a way back', async 
 
 test('when the folders fail to load the server text shows with Try again and a download', async () => {
   const t = await open({
-    get: (url) => (url.startsWith('/api/skills/share/locations') ? fail(503, 'unavailable', 'OneDrive is not connected.') : undefined),
+    get: (url) =>
+      url.startsWith('/api/skills/share/locations')
+        ? fail(503, 'unavailable', 'OneDrive is not connected.')
+        : undefined,
   });
   const alert = t.dom.find(t.root(), (el) => el.tag === 'p' && el.getAttribute('role') === 'alert');
   assert.strictEqual(alert.textContent, 'OneDrive is not connected.');
@@ -671,7 +744,9 @@ test('when the folders fail to load the server text shows with Try again and a d
 });
 
 test('a locations answer without a default folder is a load failure', async () => {
-  const t = await open({ get: (url) => (url.startsWith('/api/skills/share/locations') ? json({}) : undefined) });
+  const t = await open({
+    get: (url) => (url.startsWith('/api/skills/share/locations') ? json({}) : undefined),
+  });
   assert(t.text().includes('Could not load your folders. Try again.'));
 });
 
@@ -701,7 +776,8 @@ test('Try again reloads the folders and then shows them', async () => {
 
 test('Download file instead closes the modal and downloads the skill', async () => {
   const t = await open({
-    get: (url) => (url.startsWith('/api/skills/share/locations') ? fail(500, 'boom', 'Nope') : undefined),
+    get: (url) =>
+      url.startsWith('/api/skills/share/locations') ? fail(500, 'boom', 'Nope') : undefined,
   });
   await t.press('Download file instead');
   assert.strictEqual(t.root(), null);
@@ -718,13 +794,18 @@ const CURRENT = {
   web_url: '',
 };
 const lockedLocations = (url) =>
-  url.startsWith('/api/skills/share/locations') ? json({ default: LOC_DEFAULT, recent: [LOC_RECENT], current: CURRENT }) : undefined;
+  url.startsWith('/api/skills/share/locations')
+    ? json({ default: LOC_DEFAULT, recent: [LOC_RECENT], current: CURRENT })
+    : undefined;
 
 test('a skill saved before is locked to its folder: no radios, no check, Next on', async () => {
   const t = await open({ get: lockedLocations });
   assert.strictEqual(t.cls('ss-label')[0].textContent, 'Saved in');
   assert.strictEqual(t.radios().length, 0);
-  assert.deepStrictEqual(t.cls('ss-loc-name').map((n) => n.textContent), ['Contoso Team › Documents › Team Skills']);
+  assert.deepStrictEqual(
+    t.cls('ss-loc-name').map((n) => n.textContent),
+    ['Contoso Team › Documents › Team Skills'],
+  );
   assert(t.text().includes('This skill is already saved here. Updates go to the same folder.'));
   assert.strictEqual(t.btn('Choose another folder...'), null);
   assert.deepStrictEqual(t.calls.get, ['/api/skills/share/locations?skill_id=weekly-report']);
@@ -741,8 +822,14 @@ test('a locked skill can move on with nobody added, and Share still opens', asyn
 
 // ── Folder chooser ────────────────────────────────────────────────────────
 
-const SITES = { sites: [{ id: 'site,1', name: 'Contoso Team' }, { id: 'site2', name: 'Design' }] };
-const folder = (id, name, extra) => Object.assign({ id, name, is_folder: true, has_children: false, web_url: '' }, extra);
+const SITES = {
+  sites: [
+    { id: 'site,1', name: 'Contoso Team' },
+    { id: 'site2', name: 'Design' },
+  ],
+};
+const folder = (id, name, extra) =>
+  Object.assign({ id, name, is_folder: true, has_children: false, web_url: '' }, extra);
 
 // Answers the OneDrive listing routes the chooser calls. `extra` replaces or
 // adds routes; a route may be a function of the url.
@@ -758,10 +845,15 @@ function chooserRoutes(extra) {
         ],
       }),
       '/api/onedrive/folders?parent=d1': json({ items: [] }),
-      '/api/onedrive/sites/site%2C1/drives': json({ drives: [{ id: 'b!team', name: 'Documents' }] }),
+      '/api/onedrive/sites/site%2C1/drives': json({
+        drives: [{ id: 'b!team', name: 'Documents' }],
+      }),
       '/api/onedrive/drives/b!team/folders?parent=root': json({
         items: [
-          folder('f1', 'Team Skills', { has_children: true, web_url: 'https://contoso.sharepoint.com/sites/team' }),
+          folder('f1', 'Team Skills', {
+            has_children: true,
+            web_url: 'https://contoso.sharepoint.com/sites/team',
+          }),
           folder('f9', 'Archive'),
         ],
       }),
@@ -786,7 +878,10 @@ async function goTo(t, names) {
 const foldRows = (t) => t.cls('ss-fold').map((b) => b.textContent);
 const crumbs = (t) => t.cls('ss-crumb').map((b) => b.textContent);
 const nameInput = (t) =>
-  t.dom.find(t.root(), (el) => el.tag === 'input' && el.getAttribute('aria-label') === 'New folder name');
+  t.dom.find(
+    t.root(),
+    (el) => el.tag === 'input' && el.getAttribute('aria-label') === 'New folder name',
+  );
 function typeName(t, text) {
   const i = nameInput(t);
   i.value = text;
@@ -798,9 +893,15 @@ test('the chooser starts at My OneDrive and the SharePoint sites', async () => {
   const t = await inChooser();
   assert.strictEqual(t.heading(), 'Choose a folder');
   assert.deepStrictEqual(foldRows(t), ['My OneDrive', 'Contoso Team', 'Design']);
-  assert.deepStrictEqual(t.cls('ss-group').map((g) => g.textContent), ['Your OneDrive', 'SharePoint sites']);
+  assert.deepStrictEqual(
+    t.cls('ss-group').map((g) => g.textContent),
+    ['Your OneDrive', 'SharePoint sites'],
+  );
   assert.deepStrictEqual(crumbs(t), ['Folders']);
-  assert.deepStrictEqual(t.cls('ss-step').map((b) => b.textContent), ['1Save', '2Share', '3Send']);
+  assert.deepStrictEqual(
+    t.cls('ss-step').map((b) => b.textContent),
+    ['1Save', '2Share', '3Send'],
+  );
   assert.strictEqual(t.btn('Select this folder').disabled, true);
   assert.strictEqual(t.btn('New folder'), null);
   assert(t.calls.get.includes('/api/onedrive/sites'));
@@ -817,7 +918,10 @@ test('Back leaves the chooser with the folder choice unchanged', async () => {
 test('a failed sites call keeps My OneDrive and shows a note', async () => {
   const t = await inChooser({ '/api/onedrive/sites': fail(403, 'forbidden', 'No sites for you') });
   assert.deepStrictEqual(foldRows(t), ['My OneDrive']);
-  assert.deepStrictEqual(t.cls('ss-empty').map((n) => n.textContent), ['Could not load SharePoint sites.']);
+  assert.deepStrictEqual(
+    t.cls('ss-empty').map((n) => n.textContent),
+    ['Could not load SharePoint sites.'],
+  );
 });
 
 test('My OneDrive lists only folders and each level adds a crumb', async () => {
@@ -829,7 +933,10 @@ test('My OneDrive lists only folders and each level adds a crumb', async () => {
   await t.press('Projects');
   assert(t.calls.get.includes('/api/onedrive/folders?parent=d1'));
   assert.deepStrictEqual(crumbs(t), ['Folders', 'My OneDrive', 'Projects']);
-  assert.deepStrictEqual(t.cls('ss-empty').map((n) => n.textContent), ['No folders here']);
+  assert.deepStrictEqual(
+    t.cls('ss-empty').map((n) => n.textContent),
+    ['No folders here'],
+  );
   assert.strictEqual(t.btn('Select this folder').disabled, false);
 });
 
@@ -904,7 +1011,10 @@ test('a second chosen folder replaces the first one', async () => {
 test('a chosen folder that needs the acknowledgement keeps Next off until it is ticked', async () => {
   const t = await inChooser(
     {},
-    { get: (url) => (url.includes('folder_id=f9') ? json(checkBody({ kind: 'org' })) : chooserRoutes()(url)) },
+    {
+      get: (url) =>
+        url.includes('folder_id=f9') ? json(checkBody({ kind: 'org' })) : chooserRoutes()(url),
+    },
   );
   await goTo(t, ['Contoso Team', 'Documents', 'Archive', 'Select this folder']);
   assert.strictEqual(t.nextDisabled(), true);
@@ -918,7 +1028,8 @@ function createRoutes() {
   return {
     state,
     get: {
-      '/api/onedrive/drives/b!team/folders?parent=f1': () => json({ items: state.created ? [folder('f2', 'Shared')] : [] }),
+      '/api/onedrive/drives/b!team/folders?parent=f1': () =>
+        json({ items: state.created ? [folder('f2', 'Shared')] : [] }),
       '/api/onedrive/drives/b!team/folders?parent=f2': json({ items: [] }),
     },
     post: (url) => {
@@ -940,9 +1051,18 @@ test('New folder posts the name with conflict fail and steps into the new folder
   assert.strictEqual(t.btn('Create').disabled, false);
   await t.press('Create');
   assert.deepStrictEqual(t.calls.post, [
-    { url: '/api/onedrive/drives/b!team/folders/f1', payload: { name: 'Shared', conflict: 'fail' } },
+    {
+      url: '/api/onedrive/drives/b!team/folders/f1',
+      payload: { name: 'Shared', conflict: 'fail' },
+    },
   ]);
-  assert.deepStrictEqual(crumbs(t), ['Folders', 'Contoso Team', 'Documents', 'Team Skills', 'Shared']);
+  assert.deepStrictEqual(crumbs(t), [
+    'Folders',
+    'Contoso Team',
+    'Documents',
+    'Team Skills',
+    'Shared',
+  ]);
   assert.strictEqual(nameInput(t), null);
   assert.strictEqual(t.btn('Select this folder').disabled, false);
 });
@@ -1026,11 +1146,14 @@ test('other create failures show the server text, or a generic one when nothing 
   typeName(t, 'Fresh');
   await t.press('Create');
   assert.strictEqual(newFolderError(t), 'OneDrive is busy.');
-  const u = await inChooser({}, {
-    post: () => {
-      throw new Error('offline');
+  const u = await inChooser(
+    {},
+    {
+      post: () => {
+        throw new Error('offline');
+      },
     },
-  });
+  );
   await goTo(u, ['My OneDrive', 'New folder']);
   typeName(u, 'Fresh');
   await u.press('Create');
@@ -1128,7 +1251,10 @@ async function toShare(opts) {
   return t;
 }
 const inputOf = (t) =>
-  t.dom.find(t.root(), (el) => el.tag === 'input' && el.getAttribute('aria-label') === 'People to share with');
+  t.dom.find(
+    t.root(),
+    (el) => el.tag === 'input' && el.getAttribute('aria-label') === 'People to share with',
+  );
 function typeInto(t, text) {
   const i = inputOf(t);
   i.value = text;
@@ -1142,7 +1268,8 @@ function enter(t, text) {
 }
 const key = (t, k) => t.dom.fire(inputOf(t), 'keydown', { key: k });
 const chipNames = (t) => t.cls('ss-chip').map((c) => c.firstChild.textContent);
-const suggestRows = (t) => t.cls('ss-suggest-item').map((li) => li.children.map((c) => c.textContent));
+const suggestRows = (t) =>
+  t.cls('ss-suggest-item').map((li) => li.children.map((c) => c.textContent));
 const listHidden = (t) => t.one('ss-suggest').hidden;
 const fieldError = (t) => t.one('ss-error').textContent;
 const noticeTitles = (t) => t.cls('ss-notice-title').map((n) => n.textContent);
@@ -1151,7 +1278,11 @@ async function search(t, q) {
   t.clock.tick(250);
   await flush();
 }
-const ANN = [['Ann Lee', 'Ann.Lee@contoso.com'], ['Anna Wu', 'anna.wu@contoso.com'], ['ann.x@contoso.com']];
+const ANN = [
+  ['Ann Lee', 'Ann.Lee@contoso.com'],
+  ['Anna Wu', 'anna.wu@contoso.com'],
+  ['ann.x@contoso.com'],
+];
 
 test('nothing is searched until two characters are typed', async () => {
   const s = makeSearch();
@@ -1166,7 +1297,10 @@ test('nothing is searched until two characters are typed', async () => {
   assert.strictEqual(s.calls.length, 0);
   t.clock.tick(1);
   await flush();
-  assert.deepStrictEqual(s.calls.map((c) => c.q), ['an']);
+  assert.deepStrictEqual(
+    s.calls.map((c) => c.q),
+    ['an'],
+  );
 });
 
 test('the search waits for a pause in typing', async () => {
@@ -1179,7 +1313,10 @@ test('the search waits for a pause in typing', async () => {
   assert.strictEqual(s.calls.length, 0);
   t.clock.tick(50);
   await flush();
-  assert.deepStrictEqual(s.calls.map((c) => c.q), ['ann']);
+  assert.deepStrictEqual(
+    s.calls.map((c) => c.q),
+    ['ann'],
+  );
 });
 
 test('clearing the box before the pause cancels the search', async () => {
@@ -1201,7 +1338,10 @@ test('results are listed with name and address, nothing selected, and the box an
   assert.deepStrictEqual(suggestRows(t), ANN);
   assert.strictEqual(listHidden(t), false);
   assert.strictEqual(input.getAttribute('aria-expanded'), 'true');
-  assert.deepStrictEqual(t.cls('ss-suggest-item').map((li) => li.getAttribute('aria-selected')), ['false', 'false', 'false']);
+  assert.deepStrictEqual(
+    t.cls('ss-suggest-item').map((li) => li.getAttribute('aria-selected')),
+    ['false', 'false', 'false'],
+  );
 });
 
 test('Searching people shows only while there is nothing else to list', async () => {
@@ -1262,7 +1402,9 @@ test('an answered query is cached, whatever the case, and needs no new request',
 });
 
 test('a failed search is not cached, so typing it again asks again', async () => {
-  const s = makeSearch((q, signal, n) => (n === 1 ? Promise.reject(new Error('offline')) : Promise.resolve(clone(PEOPLE))));
+  const s = makeSearch((q, signal, n) =>
+    n === 1 ? Promise.reject(new Error('offline')) : Promise.resolve(clone(PEOPLE)),
+  );
   const t = await toShare({ search: s });
   await search(t, 'an');
   assert.strictEqual(listHidden(t), true);
@@ -1316,7 +1458,10 @@ test('arrow keys move through the results, wrap around, and Enter picks the acti
   assert.strictEqual(e.prevented, true);
   assert.deepStrictEqual(active(), ['true', 'false', 'false']);
   assert(t.dom.hasClass(t.cls('ss-suggest-item')[0], 'is-active'));
-  assert.strictEqual(inputOf(t).getAttribute('aria-activedescendant'), t.cls('ss-suggest-item')[0].id);
+  assert.strictEqual(
+    inputOf(t).getAttribute('aria-activedescendant'),
+    t.cls('ss-suggest-item')[0].id,
+  );
   key(t, 'ArrowUp');
   assert.deepStrictEqual(active(), ['false', 'false', 'true']);
   key(t, 'ArrowDown');
@@ -1361,7 +1506,9 @@ test('Backspace in an empty box removes the last chip, and the x on a chip remov
   assert.strictEqual(key(t, 'Backspace').prevented, false);
   assert.deepStrictEqual(chipNames(t), ['a@x.com', 'b@x.com']);
   inputOf(t).value = '';
-  t.dom.find(t.root(), (el) => el.getAttribute && el.getAttribute('aria-label') === 'Remove a@x.com').click();
+  t.dom
+    .find(t.root(), (el) => el.getAttribute && el.getAttribute('aria-label') === 'Remove a@x.com')
+    .click();
   assert.deepStrictEqual(chipNames(t), ['b@x.com']);
 });
 
@@ -1372,19 +1519,37 @@ test('a chip is flagged as outside the organization only once the directory has 
   assert.deepStrictEqual(noticeTitles(t), []);
   await search(t, 'an');
   assert.strictEqual(t.cls('ss-chip')[0].className, 'ss-chip is-warn');
-  assert.strictEqual(t.cls('ss-chip')[0].getAttribute('title'), 'outsider@gmail.com (outside your organization)');
+  assert.strictEqual(
+    t.cls('ss-chip')[0].getAttribute('title'),
+    'outsider@gmail.com (outside your organization)',
+  );
   enter(t, 'ann.lee@contoso.com');
-  assert.deepStrictEqual(t.cls('ss-chip').map((c) => c.className), ['ss-chip is-warn', 'ss-chip']);
+  assert.deepStrictEqual(
+    t.cls('ss-chip').map((c) => c.className),
+    ['ss-chip is-warn', 'ss-chip'],
+  );
   assert.deepStrictEqual(noticeTitles(t), ['May need adding in OneDrive']);
   assert(
-    t.text().includes(
-      'outsider@gmail.com is outside your organization, so access may not be given automatically. They still get the email. You can add them to the folder in OneDrive afterwards.',
-    ),
+    t
+      .text()
+      .includes(
+        'outsider@gmail.com is outside your organization, so access may not be given automatically. They still get the email. You can add them to the folder in OneDrive afterwards.',
+      ),
   );
   enter(t, 'other@yahoo.com');
   assert(t.text().includes('outsider@gmail.com, other@yahoo.com are outside your organization'));
-  t.dom.find(t.root(), (el) => el.getAttribute && el.getAttribute('aria-label') === 'Remove outsider@gmail.com').click();
-  t.dom.find(t.root(), (el) => el.getAttribute && el.getAttribute('aria-label') === 'Remove other@yahoo.com').click();
+  t.dom
+    .find(
+      t.root(),
+      (el) => el.getAttribute && el.getAttribute('aria-label') === 'Remove outsider@gmail.com',
+    )
+    .click();
+  t.dom
+    .find(
+      t.root(),
+      (el) => el.getAttribute && el.getAttribute('aria-label') === 'Remove other@yahoo.com',
+    )
+    .click();
   assert.deepStrictEqual(noticeTitles(t), []);
 });
 
@@ -1437,7 +1602,9 @@ test('Next waits for a person, but typed text counts', async () => {
   assert.strictEqual(t.nextDisabled(), true);
   enter(t, 'a@x.com');
   assert.strictEqual(t.nextDisabled(), false);
-  t.dom.find(t.root(), (el) => el.getAttribute && el.getAttribute('aria-label') === 'Remove a@x.com').click();
+  t.dom
+    .find(t.root(), (el) => el.getAttribute && el.getAttribute('aria-label') === 'Remove a@x.com')
+    .click();
   assert.strictEqual(t.nextDisabled(), true);
 });
 
@@ -1446,7 +1613,10 @@ test('Next turns a typed address into a chip and moves on to Send', async () => 
   typeInto(t, 'carol@contoso.com');
   await t.press('Next');
   assert(t.text().includes('Email to'));
-  assert.deepStrictEqual(t.cls('ss-to-row').map((r) => r.textContent), ['carol@contoso.com']);
+  assert.deepStrictEqual(
+    t.cls('ss-to-row').map((r) => r.textContent),
+    ['carol@contoso.com'],
+  );
 });
 
 test('a private folder explains the read access people get', async () => {
@@ -1457,12 +1627,23 @@ test('a private folder explains the read access people get', async () => {
 
 test('an already shared folder says who can use it and lets Next go with nobody added', async () => {
   const wording = [
-    [LIBRARY, 'Everyone with access to Contoso Team can already use it. Add people only to include them in the message.'],
-    [{ kind: 'org' }, 'Everyone in your organization can already use it. Add people only to include them in the message.'],
-    [{ kind: 'folder' }, 'The people this folder is shared with can already use it. Add people only to include them in the message.'],
+    [
+      LIBRARY,
+      'Everyone with access to Contoso Team can already use it. Add people only to include them in the message.',
+    ],
+    [
+      { kind: 'org' },
+      'Everyone in your organization can already use it. Add people only to include them in the message.',
+    ],
+    [
+      { kind: 'folder' },
+      'The people this folder is shared with can already use it. Add people only to include them in the message.',
+    ],
   ];
   for (const [audience, text] of wording) {
-    const t = await open({ get: (url) => (url.includes('/share/check') ? json(checkBody(audience)) : undefined) });
+    const t = await open({
+      get: (url) => (url.includes('/share/check') ? json(checkBody(audience)) : undefined),
+    });
     const box = t.checkbox();
     box.checked = true;
     t.dom.fire(box, 'change');
@@ -1525,8 +1706,10 @@ async function toSend(opts, who) {
   return t;
 }
 
-const publishWith = (over) => (url) => (url === PUBLISH_ROUTE ? json(Object.assign(clone(PUBLISHED), over)) : undefined);
-const failOn = (route, status, code, message) => (url) => (url === route ? fail(status, code, message) : undefined);
+const publishWith = (over) => (url) =>
+  url === PUBLISH_ROUTE ? json(Object.assign(clone(PUBLISHED), over)) : undefined;
+const failOn = (route, status, code, message) => (url) =>
+  url === route ? fail(status, code, message) : undefined;
 
 // Holds the request for each listed route until the test releases it.
 function gated(routes) {
@@ -1551,15 +1734,27 @@ test('Send lists who the email goes to and shows a read-only message box waiting
   assert.strictEqual(t.heading(), 'Share "weekly-report"');
   assert.strictEqual(t.one('is-current').textContent, '3Send');
   assert.strictEqual(t.cls('ss-label')[0].textContent, 'Email to');
-  assert.deepStrictEqual(t.cls('ss-to-row').map((r) => r.textContent), ['Ann Lee ' + ANN_EMAIL, 'bob@contoso.com']);
-  assert.deepStrictEqual(t.cls('ss-to-email').map((r) => r.textContent), [ANN_EMAIL]);
+  assert.deepStrictEqual(
+    t.cls('ss-to-row').map((r) => r.textContent),
+    ['Ann Lee ' + ANN_EMAIL, 'bob@contoso.com'],
+  );
+  assert.deepStrictEqual(
+    t.cls('ss-to-email').map((r) => r.textContent),
+    [ANN_EMAIL],
+  );
   const box = messageBox(t);
   assert.strictEqual(box.readOnly, true);
   assert.strictEqual(box.id, 'ss-message');
   assert.strictEqual(box.value, '');
   assert.strictEqual(box.parent.hidden, true);
-  assert.strictEqual(t.dom.find(t.root(), (el) => el.tag === 'label').getAttribute('for'), 'ss-message');
-  assert.strictEqual(t.btn('Send').getAttribute('title'), 'Opens an email draft for you to approve. Nothing is sent automatically.');
+  assert.strictEqual(
+    t.dom.find(t.root(), (el) => el.tag === 'label').getAttribute('for'),
+    'ss-message',
+  );
+  assert.strictEqual(
+    t.btn('Send').getAttribute('title'),
+    'Opens an email draft for you to approve. Nothing is sent automatically.',
+  );
   assert.strictEqual(t.btn('Send').disabled, false);
   assert.strictEqual(t.dom.state.activeElement, t.btn('Send'));
   assert.deepStrictEqual(t.calls.post, []);
@@ -1569,7 +1764,10 @@ test('with nobody added Send is off, Copy is on and takes the focus', async () =
   const t = await open({ get: lockedLocations });
   await t.press('Next');
   await t.press('Next');
-  assert.deepStrictEqual(t.cls('ss-to-row').map((r) => r.textContent), ['No one added. Use Copy message to share the link yourself.']);
+  assert.deepStrictEqual(
+    t.cls('ss-to-row').map((r) => r.textContent),
+    ['No one added. Use Copy message to share the link yourself.'],
+  );
   assert.strictEqual(t.btn('Send').disabled, true);
   assert.strictEqual(t.btn('Copy message').disabled, false);
   assert.strictEqual(t.dom.state.activeElement, t.btn('Copy message'));
@@ -1591,7 +1789,15 @@ test('the save request carries the skill, the addresses, the default folder as n
   const t = await toSend({}, ['ann', 'bob@contoso.com']);
   await t.press('Copy message');
   assert.deepStrictEqual(t.calls.post, [
-    { url: PUBLISH_ROUTE, payload: { skill_id: 'weekly-report', people: [ANN_EMAIL, 'bob@contoso.com'], root: null, audience_ack: false } },
+    {
+      url: PUBLISH_ROUTE,
+      payload: {
+        skill_id: 'weekly-report',
+        people: [ANN_EMAIL, 'bob@contoso.com'],
+        root: null,
+        audience_ack: false,
+      },
+    },
   ]);
 });
 
@@ -1608,7 +1814,10 @@ test('a skill locked to its folder is saved with no root', async () => {
 });
 
 test('a ticked acknowledgement is passed on', async () => {
-  const t = await toSend({ get: (url) => (url.includes('/share/check') ? json(checkBody(LIBRARY)) : undefined), ack: true });
+  const t = await toSend({
+    get: (url) => (url.includes('/share/check') ? json(checkBody(LIBRARY)) : undefined),
+    ack: true,
+  });
   await t.press('Copy message');
   assert.strictEqual(t.calls.post[0].payload.audience_ack, true);
 });
@@ -1660,7 +1869,11 @@ test('Open in OneDrive is only offered for an https link', async () => {
   for (const web_url of ['http://contoso.sharepoint.com/x', 'javascript:alert(1)', '', undefined]) {
     const t = await toSend({ post: publishWith({ web_url }) });
     await t.press('Send');
-    assert.strictEqual(t.dom.find(t.root(), (el) => el.tag === 'a'), null, String(web_url));
+    assert.strictEqual(
+      t.dom.find(t.root(), (el) => el.tag === 'a'),
+      null,
+      String(web_url),
+    );
   }
 });
 
@@ -1670,14 +1883,11 @@ test('Done falls back to the chosen folder when the server gives no path', async
   assert(t.text().includes('Saved to OneDrive › AI Gator Skills.'));
 });
 
-test(
-  'Done names the locked folder when the server gives no path',
-  async () => {
-    const t = await toSend({ get: lockedLocations, post: publishWith({ saved_path: [] }) });
-    await t.press('Send');
-    assert(t.text().includes('Saved to Contoso Team › Documents › Team Skills.'));
-  },
-);
+test('Done names the locked folder when the server gives no path', async () => {
+  const t = await toSend({ get: lockedLocations, post: publishWith({ saved_path: [] }) });
+  await t.press('Send');
+  assert(t.text().includes('Saved to Contoso Team › Documents › Team Skills.'));
+});
 
 test('Copy then Send saves only once', async () => {
   const t = await toSend({});
@@ -1688,21 +1898,36 @@ test('Copy then Send saves only once', async () => {
 });
 
 test('people with no matching account raise a warning alert after the draft opens', async () => {
-  const t = await toSend({ post: (url) => (url === DRAFT_ROUTE ? json({ drafts: DRAFT.drafts, unmatched: ['a@x.com', 'b@x.com'] }) : undefined) });
+  const t = await toSend({
+    post: (url) =>
+      url === DRAFT_ROUTE
+        ? json({ drafts: DRAFT.drafts, unmatched: ['a@x.com', 'b@x.com'] })
+        : undefined,
+  });
   await t.press('Send');
-  assert.deepStrictEqual(t.calls.alerts, [['No account was found for a@x.com, b@x.com. Use Copy message to reach them.', 'warning']]);
+  assert.deepStrictEqual(t.calls.alerts, [
+    ['No account was found for a@x.com, b@x.com. Use Copy message to reach them.', 'warning'],
+  ]);
   assert.deepStrictEqual(t.calls.drafts, [DRAFT.drafts]);
   assert.strictEqual(t.heading(), 'Shared "weekly-report"');
 });
 
 test('a policy block says nobody was given access and offers no other folder', async () => {
-  const t = await toSend({ post: failOn(PUBLISH_ROUTE, 403, 'policy_blocked', 'Your organization blocks sharing.') });
+  const t = await toSend({
+    post: failOn(PUBLISH_ROUTE, 403, 'policy_blocked', 'Your organization blocks sharing.'),
+  });
   await t.press('Send');
   const boxes = errorBox(t);
   assert.strictEqual(boxes.length, 1);
   assert.strictEqual(boxes[0].getAttribute('role'), 'alert');
-  assert.strictEqual(t.dom.byClass(boxes[0], 'ss-audience-title').textContent, 'Nobody has been given access');
-  assert.strictEqual(t.dom.byClass(boxes[0], 'ss-audience-text').textContent, 'Your organization blocks sharing.');
+  assert.strictEqual(
+    t.dom.byClass(boxes[0], 'ss-audience-title').textContent,
+    'Nobody has been given access',
+  );
+  assert.strictEqual(
+    t.dom.byClass(boxes[0], 'ss-audience-text').textContent,
+    'Your organization blocks sharing.',
+  );
   assert.strictEqual(t.btn('Choose another folder'), null);
   assert.deepStrictEqual(t.calls.order.slice(-1), ['publish']);
   assert.strictEqual(t.btn('Send').disabled, false);
@@ -1716,7 +1941,10 @@ test('a folder fault says it could not save and offers another folder, which goe
     await t.press('Send');
     const boxes = errorBox(t);
     assert.strictEqual(boxes.length, 1, code);
-    assert.strictEqual(t.dom.byClass(boxes[0], 'ss-audience-title').textContent, 'Could not save to this folder');
+    assert.strictEqual(
+      t.dom.byClass(boxes[0], 'ss-audience-title').textContent,
+      'Could not save to this folder',
+    );
     assert.strictEqual(t.dom.byClass(boxes[0], 'ss-audience-text').textContent, 'Trouble: ' + code);
     await t.press('Choose another folder');
     assert.strictEqual(t.cls('ss-label')[0].textContent, 'Save to', code);
@@ -1726,7 +1954,10 @@ test('a folder fault says it could not save and offers another folder, which goe
 
 test('a locked skill has no other folder to choose', async () => {
   for (const code of FOLDER_FAULTS) {
-    const t = await toSend({ get: lockedLocations, post: failOn(PUBLISH_ROUTE, 403, code, 'No access') });
+    const t = await toSend({
+      get: lockedLocations,
+      post: failOn(PUBLISH_ROUTE, 403, code, 'No access'),
+    });
     await t.press('Send');
     assert.strictEqual(errorBox(t).length, 1, code);
     assert.strictEqual(t.btn('Choose another folder'), null, code);
@@ -1743,7 +1974,9 @@ test('any other failure shows the server message as an alert', async () => {
 });
 
 test('failures with no usable message fall back to the default or the address hint', async () => {
-  const bare = await toSend({ post: (url) => (url === PUBLISH_ROUTE ? json({ detail: { error: 'boom' } }, 500) : undefined) });
+  const bare = await toSend({
+    post: (url) => (url === PUBLISH_ROUTE ? json({ detail: { error: 'boom' } }, 500) : undefined),
+  });
   await bare.press('Send');
   assert.deepStrictEqual(alertText(bare), ['Could not share this skill. Try again.']);
   const net = await toSend({
@@ -1753,7 +1986,9 @@ test('failures with no usable message fall back to the default or the address hi
   });
   await net.press('Send');
   assert.deepStrictEqual(alertText(net), ['Could not share this skill. Try again.']);
-  const bad = await toSend({ post: (url) => (url === PUBLISH_ROUTE ? json({ detail: [{ loc: ['body'] }] }, 422) : undefined) });
+  const bad = await toSend({
+    post: (url) => (url === PUBLISH_ROUTE ? json({ detail: [{ loc: ['body'] }] }, 422) : undefined),
+  });
   await bad.press('Send');
   assert.deepStrictEqual(alertText(bad), ['Check the email addresses and try again.']);
 });
@@ -1797,7 +2032,9 @@ test('a failed draft keeps the saved message and does not save again on retry', 
 });
 
 test('a failed draft with no message offers Copy message instead', async () => {
-  const t = await toSend({ post: (url) => (url === DRAFT_ROUTE ? json({ detail: {} }, 502) : undefined) });
+  const t = await toSend({
+    post: (url) => (url === DRAFT_ROUTE ? json({ detail: {} }, 502) : undefined),
+  });
   await t.press('Send');
   assert.deepStrictEqual(alertText(t), ['Could not prepare the draft. Use Copy message instead.']);
   const n = await toSend({
@@ -1812,7 +2049,9 @@ test('a failed draft with no message offers Copy message instead', async () => {
 test('with no way to open drafts here, it says so and stays on Send', async () => {
   const t = await toSend({ noDrafts: true });
   await t.press('Send');
-  assert.deepStrictEqual(alertText(t), ['Could not open the draft here. Use Copy message instead.']);
+  assert.deepStrictEqual(alertText(t), [
+    'Could not open the draft here. Use Copy message instead.',
+  ]);
   assert.strictEqual(t.heading(), 'Share "weekly-report"');
   assert.deepStrictEqual(t.calls.alerts, []);
 });
@@ -1922,12 +2161,26 @@ test('people the folder would not accept are listed in a notice, singular and pl
   const one = await toSend({ post: publishWith({ ungranted: ['x@gmail.com'] }) });
   await one.press('Copy message');
   assert.deepStrictEqual(noticeTitles(one), ['Access was not granted for x@gmail.com']);
-  assert(one.text().includes('OneDrive would not let this person open the skill, usually because they are outside your organization. Add them in OneDrive'));
+  assert(
+    one
+      .text()
+      .includes(
+        'OneDrive would not let this person open the skill, usually because they are outside your organization. Add them in OneDrive',
+      ),
+  );
   const many = await toSend({ post: publishWith({ ungranted: ['x@gmail.com', 'y@yahoo.com'] }) });
   await many.press('Copy message');
-  assert.deepStrictEqual(noticeTitles(many), ['Access was not granted for x@gmail.com, y@yahoo.com']);
+  assert.deepStrictEqual(noticeTitles(many), [
+    'Access was not granted for x@gmail.com, y@yahoo.com',
+  ]);
   assert(many.text().includes('OneDrive would not let these people open the skill'));
-  assert(many.text().includes('Add each of them in OneDrive (Open in OneDrive, then Share) so the link works for them.'));
+  assert(
+    many
+      .text()
+      .includes(
+        'Add each of them in OneDrive (Open in OneDrive, then Share) so the link works for them.',
+      ),
+  );
 });
 
 test('the notice is still there on Done, and not shown when everyone got access', async () => {
@@ -2016,7 +2269,10 @@ test('going back and changing the people saves again with the new list', async (
   await t.press('Next');
   assert.strictEqual(messageBox(t).value, '');
   await t.press('Copy message');
-  assert.deepStrictEqual(t.calls.post.map((p) => p.payload.people), [['bob@contoso.com'], ['bob@contoso.com', 'cy@contoso.com']]);
+  assert.deepStrictEqual(
+    t.calls.post.map((p) => p.payload.people),
+    [['bob@contoso.com'], ['bob@contoso.com', 'cy@contoso.com']],
+  );
 });
 
 test('opening a second share modal replaces the first', async () => {
@@ -2043,7 +2299,10 @@ test('the modal never writes markup: names, ids and messages stay literal text',
     ['ann'],
   );
   assert.strictEqual(t.heading(), 'Share "<b>x</b>"');
-  assert.deepStrictEqual(t.cls('ss-to-row').map((r) => r.textContent), ['<img src=x onerror=1> evil@contoso.com']);
+  assert.deepStrictEqual(
+    t.cls('ss-to-row').map((r) => r.textContent),
+    ['<img src=x onerror=1> evil@contoso.com'],
+  );
   await t.press('Copy message');
   assert.strictEqual(messageBox(t).value, message);
   await t.press('Send');
@@ -2099,7 +2358,9 @@ function reviewDeps(dom, review, installResult, extra) {
       postJson: async (url, payload) => {
         calls.post.push({ url, payload: JSON.parse(JSON.stringify(payload)) });
         if (url === '/api/skills/share/review') return review;
-        return installResult || { resp: { ok: true }, body: { ok: true, skill_id: 'weekly-report' } };
+        return (
+          installResult || { resp: { ok: true }, body: { ok: true, skill_id: 'weekly-report' } }
+        );
       },
       showAlert: (msg, kind) => calls.alerts.push({ msg, kind }),
       errorMessage: (body) => (body && body.detail && body.detail.message) || 'Unknown error',
@@ -2136,7 +2397,9 @@ test('review modal shows title, description, author, scripts no, permissions and
   const { deps, calls } = reviewDeps(dom, okReview());
   await api.openLinkReview(LINK, deps);
 
-  assert.deepStrictEqual(calls.post, [{ url: '/api/skills/share/review', payload: { link: LINK } }]);
+  assert.deepStrictEqual(calls.post, [
+    { url: '/api/skills/share/review', payload: { link: LINK } },
+  ]);
   const modal = dom.byClass(dom.document.body.children[0], 'mp-modal');
   assert.strictEqual(modal.getAttribute('role'), 'dialog');
   const title = dom.byClass(modal, 'mp-modal-title');
@@ -2218,7 +2481,11 @@ test('Install posts exactly link, version and digest from the review response', 
 
   assert.strictEqual(calls.post.length, 2);
   assert.strictEqual(calls.post[1].url, '/api/skills/share/install');
-  assert.deepStrictEqual(calls.post[1].payload, { link: LINK, version: 2, digest: 'sha256:deadbeef' });
+  assert.deepStrictEqual(calls.post[1].payload, {
+    link: LINK,
+    version: 2,
+    digest: 'sha256:deadbeef',
+  });
   assert.deepStrictEqual(calls.alerts, [], 'onInstalled owns the outcome message');
   assert.deepStrictEqual(calls.installed, [{ ok: true, skill_id: 'weekly-report' }]);
   assert.strictEqual(calls.reviews[0].title, 'Weekly Report', 'onInstalled also gets the review');
@@ -2298,10 +2565,15 @@ test('Cancel and Escape post nothing beyond the review', async () => {
 test('server text in the review modal is set with textContent only', async () => {
   const dom = makeDom();
   const api = load(dom);
-  const { deps } = reviewDeps(dom, okReview({ title: '<img src=x onerror=alert(1)>', author: '<b>x</b>' }));
+  const { deps } = reviewDeps(
+    dom,
+    okReview({ title: '<img src=x onerror=alert(1)>', author: '<b>x</b>' }),
+  );
   await api.openLinkReview(LINK, deps);
   const modal = dom.document.body.children[0];
-  assert.strictEqual(dom.byClass(modal, 'mp-modal-title').textContent, 'Review "<img src=x onerror=alert(1)>"');
+  assert.strictEqual(
+    dom.byClass(modal, 'mp-modal-title').textContent,
+    'Review "<img src=x onerror=alert(1)>"',
+  );
   assert(dom.byText(modal, 'Shared by <b>x</b>, version 2'));
 });
-

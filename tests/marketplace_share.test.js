@@ -28,7 +28,10 @@ test('Share opens the Share modal and hands it the download as a fallback', () =
   assert(body.includes('downloadSkill: _downloadMineSkill'));
   assert(body.includes('showAlert: _showAlert'));
   assert(body.includes('refresh'));
-  assert(body.includes('return _downloadMineSkill(skillId)'), 'falls back when the module is missing');
+  assert(
+    body.includes('return _downloadMineSkill(skillId)'),
+    'falls back when the module is missing',
+  );
 });
 
 test('Mine rows show a Shared chip only for a positive published_version', () => {
@@ -66,7 +69,10 @@ test('Share reuses the people search endpoint and hands drafts to the chat', () 
   assert(fn.includes("'/api/people/search?q='"));
   assert(fn.includes('org_only=true'));
   assert(fn.includes('{ signal }'));
-  assert(/if \(!resp\.ok\) throw new Error\(/.test(fn), 'a failed search throws so it is not cached as empty');
+  assert(
+    /if \(!resp\.ok\) throw new Error\(/.test(fn),
+    'a failed search throws so it is not cached as empty',
+  );
   assert(!/slack|channel/i.test(fn));
 });
 

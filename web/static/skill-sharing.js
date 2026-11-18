@@ -162,7 +162,11 @@
   var ICONS = {
     folder: ['M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'],
     cloud: ['M7 18a4 4 0 0 1-.5-7.97A6 6 0 0 1 18 9a4.5 4.5 0 0 1-.5 9z'],
-    site: ['M3 12a9 9 0 1 0 18 0a9 9 0 1 0-18 0', 'M3 12h18', 'M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0-18'],
+    site: [
+      'M3 12a9 9 0 1 0 18 0a9 9 0 1 0-18 0',
+      'M3 12h18',
+      'M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0-18',
+    ],
     drive: ['M3 12l2-7h14l2 7', 'M3 12v6a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-6z', 'M3 12h18'],
     chev: ['M9 6l6 6-6 6'],
     check: ['M5 12l5 5 9-10'],
@@ -302,7 +306,9 @@
     }
 
     function add(email, name) {
-      email = String(email || '').trim().toLowerCase();
+      email = String(email || '')
+        .trim()
+        .toLowerCase();
       if (!EMAIL_RE.test(email)) return false;
       var n = name && name !== email ? name : '';
       var have = people.filter(function (p) {
@@ -357,7 +363,12 @@
       });
       var items = shown
         .filter(function (p) {
-          return p && typeof p.email === 'string' && p.email && taken.indexOf(p.email.toLowerCase()) === -1;
+          return (
+            p &&
+            typeof p.email === 'string' &&
+            p.email &&
+            taken.indexOf(p.email.toLowerCase()) === -1
+          );
         })
         .slice(0, SUGGEST_MAX)
         .map(function (p) {
@@ -544,12 +555,16 @@
     var one = ungranted.length === 1;
     var notice = _el('div', 'ss-notice');
     notice.setAttribute('role', 'status');
-    notice.appendChild(_el('p', 'ss-notice-title', 'Access was not granted for ' + ungranted.join(', ')));
+    notice.appendChild(
+      _el('p', 'ss-notice-title', 'Access was not granted for ' + ungranted.join(', ')),
+    );
     notice.appendChild(
       _el(
         'p',
         'ss-notice-text',
-        (one ? 'OneDrive would not let this person open the skill' : 'OneDrive would not let these people open the skill') +
+        (one
+          ? 'OneDrive would not let this person open the skill'
+          : 'OneDrive would not let these people open the skill') +
           ', usually because they are outside your organization. Add ' +
           (one ? 'them' : 'each of them') +
           ' in OneDrive (Open in OneDrive, then Share) so the link works for them.',
@@ -559,7 +574,10 @@
   }
 
   function _locLabel(loc) {
-    var path = loc && Array.isArray(loc.path) && loc.path.length ? loc.path : [(loc && loc.name) || 'Folder'];
+    var path =
+      loc && Array.isArray(loc.path) && loc.path.length
+        ? loc.path
+        : [(loc && loc.name) || 'Folder'];
     return path.join(' › ');
   }
 
@@ -576,7 +594,10 @@
     var name = a.name || 'this location';
     if (a.kind === 'folder') {
       return {
-        title: typeof a.approx_count === 'number' ? 'Already shared with ' + _count(a.approx_count) + ' people' : 'Already shared with other people',
+        title:
+          typeof a.approx_count === 'number'
+            ? 'Already shared with ' + _count(a.approx_count) + ' people'
+            : 'Already shared with other people',
         text: 'Anyone this folder is shared with can open this skill without being added.',
         ack: 'I understand they can see it',
       };
@@ -607,7 +628,8 @@
 
   function _errorInfo(out) {
     var d = out.body && out.body.detail;
-    var code = d && typeof d === 'object' && !Array.isArray(d) && typeof d.error === 'string' ? d.error : '';
+    var code =
+      d && typeof d === 'object' && !Array.isArray(d) && typeof d.error === 'string' ? d.error : '';
     return { code: code, text: shareErrorText(out.resp, out.body) };
   }
 
@@ -736,11 +758,20 @@
     }
 
     function mapCheck(r) {
-      if (!ok(r)) return { status: 'error', text: shareErrorText(r.resp, r.body, 'Could not check this folder. Try again.') };
+      if (!ok(r))
+        return {
+          status: 'error',
+          text: shareErrorText(r.resp, r.body, 'Could not check this folder. Try again.'),
+        };
       var b = r.body || {};
       if (!b.ok) return { status: 'gone' };
-      if (b.existing && b.existing.yours === false) return { status: 'taken', author: b.existing.author || '' };
-      return { status: 'ok', audience: b.audience || { kind: 'private' }, location: b.location || null };
+      if (b.existing && b.existing.yours === false)
+        return { status: 'taken', author: b.existing.author || '' };
+      return {
+        status: 'ok',
+        audience: b.audience || { kind: 'private' },
+        location: b.location || null,
+      };
     }
 
     function runCheck() {
@@ -751,7 +782,11 @@
       fillStatus();
       var q = '?skill_id=' + encodeURIComponent(skillId);
       if (!entry.isDefault) {
-        q += '&drive_id=' + encodeURIComponent(entry.loc.drive_id) + '&folder_id=' + encodeURIComponent(entry.loc.folder_id);
+        q +=
+          '&drive_id=' +
+          encodeURIComponent(entry.loc.drive_id) +
+          '&folder_id=' +
+          encodeURIComponent(entry.loc.folder_id);
       }
       get('/api/skills/share/check' + q).then(function (r) {
         if (mine !== checkSeq || shell.closed) return;
@@ -801,13 +836,20 @@
         view.status.appendChild(box);
       } else if (c.status === 'gone') {
         view.status.appendChild(
-          blockedBox('This folder is no longer available', 'It may have been moved or deleted. Choose another folder.'),
+          blockedBox(
+            'This folder is no longer available',
+            'It may have been moved or deleted. Choose another folder.',
+          ),
         );
       } else if (c.status === 'taken') {
         view.status.appendChild(
           blockedBox(
             'A skill with this name is already there',
-            '"' + skillId + '" in this folder was created by ' + (c.author || 'someone else') + ', so it cannot be updated from here. Choose another folder.',
+            '"' +
+              skillId +
+              '" in this folder was created by ' +
+              (c.author || 'someone else') +
+              ', so it cannot be updated from here. Choose another folder.',
           ),
         );
       } else if (c.status === 'ok') {
@@ -946,7 +988,17 @@
     // ── Folder chooser ─────────────────────────────────────────────────────
 
     function openChooser() {
-      S.chooser = { stack: [], items: [], loading: false, error: '', creating: false, newName: '', newError: '', busy: false, seq: 0 };
+      S.chooser = {
+        stack: [],
+        items: [],
+        loading: false,
+        error: '',
+        creating: false,
+        newName: '',
+        newError: '',
+        busy: false,
+        seq: 0,
+      };
       loadChooser();
     }
 
@@ -986,7 +1038,9 @@
       }
       if (top.kind === 'od') {
         r = await get('/api/onedrive/folders?parent=root');
-        return ok(r) ? { items: folderItems(r.body, '', true) } : { error: shareErrorText(r.resp, r.body, LOAD_ERROR) };
+        return ok(r)
+          ? { items: folderItems(r.body, '', true) }
+          : { error: shareErrorText(r.resp, r.body, LOAD_ERROR) };
       }
       if (top.kind === 'site') {
         r = await get('/api/onedrive/sites/' + enc(top.id) + '/drives');
@@ -999,14 +1053,20 @@
       }
       if (top.kind === 'drive') {
         r = await get('/api/onedrive/drives/' + enc(top.id) + '/folders?parent=root');
-        return ok(r) ? { items: folderItems(r.body, top.id, false) } : { error: shareErrorText(r.resp, r.body, LOAD_ERROR) };
+        return ok(r)
+          ? { items: folderItems(r.body, top.id, false) }
+          : { error: shareErrorText(r.resp, r.body, LOAD_ERROR) };
       }
       if (top.personal) {
         r = await get('/api/onedrive/folders?parent=' + enc(top.id));
-        return ok(r) ? { items: folderItems(r.body, top.drive_id, true) } : { error: shareErrorText(r.resp, r.body, LOAD_ERROR) };
+        return ok(r)
+          ? { items: folderItems(r.body, top.drive_id, true) }
+          : { error: shareErrorText(r.resp, r.body, LOAD_ERROR) };
       }
       r = await get('/api/onedrive/drives/' + enc(top.drive_id) + '/folders?parent=' + enc(top.id));
-      return ok(r) ? { items: folderItems(r.body, top.drive_id, false) } : { error: shareErrorText(r.resp, r.body, LOAD_ERROR) };
+      return ok(r)
+        ? { items: folderItems(r.body, top.drive_id, false) }
+        : { error: shareErrorText(r.resp, r.body, LOAD_ERROR) };
     }
 
     async function loadChooser() {
@@ -1043,7 +1103,9 @@
     }
 
     function iconFor(kind) {
-      return _icon(kind === 'od' ? 'cloud' : kind === 'site' ? 'site' : kind === 'drive' ? 'drive' : 'folder');
+      return _icon(
+        kind === 'od' ? 'cloud' : kind === 'site' ? 'site' : kind === 'drive' ? 'drive' : 'folder',
+      );
     }
 
     function nameClash(ch) {
@@ -1192,7 +1254,8 @@
       } else {
         var lastGroup = '';
         ch.items.forEach(function (it) {
-          var group = it.kind === 'od' ? 'Your OneDrive' : it.kind === 'site' ? 'SharePoint sites' : '';
+          var group =
+            it.kind === 'od' ? 'Your OneDrive' : it.kind === 'site' ? 'SharePoint sites' : '';
           if (group && group !== lastGroup) {
             box.appendChild(_el('div', 'ss-group', group));
             lastGroup = group;
@@ -1217,7 +1280,8 @@
           reg(row);
         });
         if (ch.note) box.appendChild(_el('div', 'ss-empty', ch.note));
-        if (!ch.items.length && !ch.note) box.appendChild(_el('div', 'ss-empty', 'No folders here'));
+        if (!ch.items.length && !ch.note)
+          box.appendChild(_el('div', 'ss-empty', 'No folders here'));
       }
       shell.body.appendChild(box);
 
@@ -1371,7 +1435,11 @@
         note.setAttribute('role', 'note');
         note.appendChild(_el('p', 'ss-notice-title', 'People can already use it'));
         note.appendChild(
-          _el('p', 'ss-notice-text', who + ' can already use it. Add people only to include them in the message.'),
+          _el(
+            'p',
+            'ss-notice-text',
+            who + ' can already use it. Add people only to include them in the message.',
+          ),
         );
         shell.body.appendChild(note);
       } else {
@@ -1436,7 +1504,10 @@
     function showFailure(info) {
       _clear(view.errors);
       if (!info) return;
-      var folderFault = ['not_yours', 'forbidden', 'not_found', 'invalid', 'audience_unacknowledged'].indexOf(info.code) !== -1;
+      var folderFault =
+        ['not_yours', 'forbidden', 'not_found', 'invalid', 'audience_unacknowledged'].indexOf(
+          info.code,
+        ) !== -1;
       if (info.code === 'policy_blocked') {
         view.errors.appendChild(blockedBox('Nobody has been given access', info.text));
       } else if (folderFault) {
@@ -1469,7 +1540,10 @@
     async function ensurePublished() {
       if (S.result) return S.result;
       var entry = selectedEntry();
-      var root = S.current || (entry && entry.isDefault) ? null : { drive_id: entry.loc.drive_id, folder_id: entry.loc.folder_id };
+      var root =
+        S.current || (entry && entry.isDefault)
+          ? null
+          : { drive_id: entry.loc.drive_id, folder_id: entry.loc.folder_id };
       var out = await post('/api/skills/share/publish', {
         skill_id: skillId,
         people: S.people.map(function (p) {
@@ -1539,7 +1613,14 @@
       if (shell.closed) return;
       setBusy(false);
       if (!ok(out)) {
-        showFailure({ code: '', text: shareErrorText(out.resp, out.body, 'Could not prepare the draft. Use Copy message instead.') });
+        showFailure({
+          code: '',
+          text: shareErrorText(
+            out.resp,
+            out.body,
+            'Could not prepare the draft. Use Copy message instead.',
+          ),
+        });
         return;
       }
       if (!deps.showDrafts) {
@@ -1552,7 +1633,10 @@
       render();
       deps.showDrafts(drafts);
       if (unmatched.length && deps.showAlert) {
-        deps.showAlert('No account was found for ' + unmatched.join(', ') + '. Use Copy message to reach them.', 'warning');
+        deps.showAlert(
+          'No account was found for ' + unmatched.join(', ') + '. Use Copy message to reach them.',
+          'warning',
+        );
       }
     }
 
@@ -1567,7 +1651,9 @@
           to.appendChild(personRow(p));
         });
       } else {
-        to.appendChild(_el('div', 'ss-to-row', 'No one added. Use Copy message to share the link yourself.'));
+        to.appendChild(
+          _el('div', 'ss-to-row', 'No one added. Use Copy message to share the link yourself.'),
+        );
       }
       shell.body.appendChild(to);
       var msgLabel = _el('label', 'ss-label', 'Message');
@@ -1601,7 +1687,10 @@
       view.copy.addEventListener('click', onCopy);
       view.send = _button('Send', true);
       view.send.disabled = !S.people.length;
-      view.send.setAttribute('title', 'Opens an email draft for you to approve. Nothing is sent automatically.');
+      view.send.setAttribute(
+        'title',
+        'Opens an email draft for you to approve. Nothing is sent automatically.',
+      );
       view.send.addEventListener('click', onSend);
       reg(msg);
       reg(view.copy);
@@ -1626,13 +1715,19 @@
       check.appendChild(_icon('check', 16));
       var text = _el('div', '');
       text.appendChild(_el('div', 'ss-done-title', 'Email draft ready for your approval'));
-      text.appendChild(_el('p', 'ss-done-sub ss-hint', 'Nothing is sent until you approve it in the chat.'));
+      text.appendChild(
+        _el('p', 'ss-done-sub ss-hint', 'Nothing is sent until you approve it in the chat.'),
+      );
       head.appendChild(check);
       head.appendChild(text);
       shell.body.appendChild(head);
-      var saved = Array.isArray(res.saved_path) && res.saved_path.length ? res.saved_path.join(' › ') : _locLabel(S.current || selectedEntry().loc);
+      var saved =
+        Array.isArray(res.saved_path) && res.saved_path.length
+          ? res.saved_path.join(' › ')
+          : _locLabel(S.current || selectedEntry().loc);
       shell.body.appendChild(_el('p', 'ss-hint', 'Saved to ' + saved + '.'));
-      if (Array.isArray(res.ungranted) && res.ungranted.length) shell.body.appendChild(_ungrantedNotice(res.ungranted));
+      if (Array.isArray(res.ungranted) && res.ungranted.length)
+        shell.body.appendChild(_ungrantedNotice(res.ungranted));
       if (typeof res.web_url === 'string' && res.web_url.indexOf('https://') === 0) {
         var open = reg(_el('a', 'mp-btn mp-btn-cancel', 'Open in OneDrive'));
         open.href = res.web_url;
@@ -1699,7 +1794,10 @@
       result = { resp: { ok: false }, body: null };
     }
     if (!result || !result.resp || !result.resp.ok || !result.body) {
-      deps.showAlert(shareErrorText(result && result.resp, result && result.body, REVIEW_ERROR), 'error');
+      deps.showAlert(
+        shareErrorText(result && result.resp, result && result.body, REVIEW_ERROR),
+        'error',
+      );
       return null;
     }
     var review = result.body;
@@ -1712,8 +1810,22 @@
     if (review.description) shell.body.appendChild(_el('p', 'ss-desc', String(review.description)));
     var by = 'Shared by ' + (review.author || 'unknown') + ', version ' + review.version;
     shell.body.appendChild(_el('p', 'ss-meta', by));
-    if (typeof review.latest === 'number' && typeof review.version === 'number' && review.latest > review.version) {
-      shell.body.appendChild(_el('p', 'ss-meta', 'Newer version ' + review.latest + ' is available. Ask ' + (review.author || 'the sender') + ' for the latest link.'));
+    if (
+      typeof review.latest === 'number' &&
+      typeof review.version === 'number' &&
+      review.latest > review.version
+    ) {
+      shell.body.appendChild(
+        _el(
+          'p',
+          'ss-meta',
+          'Newer version ' +
+            review.latest +
+            ' is available. Ask ' +
+            (review.author || 'the sender') +
+            ' for the latest link.',
+        ),
+      );
     }
     shell.body.appendChild(
       _el(
@@ -1770,9 +1882,12 @@
       if (!ok) {
         if (shell.closed) return;
         installBtn.disabled = false;
-        errorEl.textContent = out && out.body
-          ? (deps.errorMessage ? deps.errorMessage(out.body) : shareErrorText(out.resp, out.body))
-          : 'Could not install this skill. Try again.';
+        errorEl.textContent =
+          out && out.body
+            ? deps.errorMessage
+              ? deps.errorMessage(out.body)
+              : shareErrorText(out.resp, out.body)
+            : 'Could not install this skill. Try again.';
         return;
       }
       if (deps.onInstalled) deps.onInstalled(out.body, review);

@@ -26,10 +26,12 @@
 ## Task 1: Publish also returns the message text
 
 **Files:**
+
 - Modify: `web/skills/_sharing/publisher.py` (the `publish` return value)
 - Test: `tests/skill_sharing/test_publisher.py`, `tests/skill_sharing/test_routes.py` (whichever already asserts the publish response shape)
 
 **Interfaces:**
+
 - Consumes: `messages.share_message(title, author, description, link, web_url="") -> str`.
 - Produces: `publish(...)` result gains `"message": str`, built with `share_message(title, author, description, link, web_url)`. `title` and `description` come from the new `manifest` when a version was just written, or from `doc` (`doc.get("title")`, `doc.get("description")`, falling back to `skill_id` and `""`) when `reused` is true.
 
@@ -44,6 +46,7 @@
 ## Task 2: Share modal (OneDrive and download)
 
 **Files:**
+
 - Create: `web/static/skill-sharing.js`
 - Modify: `web/static/index.html` (add `<script src="/static/skill-sharing.js"></script>` immediately before the `marketplace-pane.js` tag at line ~2043)
 - Modify: `web/static/marketplace-pane.js` (Share button handler at `_shareMineSkill`, ~line 2427; Mine row chip near line 1078)
@@ -52,6 +55,7 @@
 - Test: `tests/skill_sharing_ui.test.js` (new)
 
 **Interfaces:**
+
 - Produces, in `skill-sharing.js`, an IIFE assigning `window.SkillSharing = { openShareModal, parseEmails, shareErrorText }`, also `module.exports` when `typeof module !== 'undefined'` so node tests can load it.
   - `parseEmails(text) -> { emails: string[], bad: string[] }`: split on commas, semicolons, whitespace; lower-case; drop empties and duplicates; an address is valid when it matches `^[^@\s,;<>]+@[^@\s,;<>]+\.[^@\s,;<>]+$` (the backend rule in `web/routes/skill_sharing.py`).
   - `shareErrorText(resp, body) -> string`: the message from `body.detail.message` when `detail` is an object; the string `detail` when it is a string; for an array `detail` (FastAPI validation) `"Check the email addresses and try again."`; otherwise `"Could not share this skill. Try again."`.
@@ -83,12 +87,14 @@ Behaviour of `openShareModal` (reuse the existing `mp-modal-overlay` / `mp-modal
 ## Task 3: Review and install from a share link
 
 **Files:**
+
 - Modify: `web/static/skill-sharing.js` (add `openLinkReview`)
 - Modify: `web/static/marketplace-pane.js` (Import tab section, ~line 1296 `_renderImport`)
 - Modify: `web/static/style.css`
 - Test: `tests/skill_sharing_ui.test.js`
 
 **Interfaces:**
+
 - Produces: `window.SkillSharing.openLinkReview(link, deps)` and `SkillSharing.extractLink(text) -> string` (returns the first `aigator://share?d=...` token found in pasted text, or `""`). `deps = { postJson, showAlert, errorMessage, appendPermissionList(container, summary), onInstalled(result), refresh() }`.
 - Consumes: `POST /api/skills/share/review` with `{link}`, returns `{skill_id, title, description, author, version, latest, created_at, digest, has_scripts, requested_tools, summary, collision}`; `POST /api/skills/share/install` with `{link, version, digest}`, returns the installer result (`{ok, skill_id, ...}`) or an error whose `detail` is `{error, message}`.
 

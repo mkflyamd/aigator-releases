@@ -1057,7 +1057,11 @@
       ver.className = 'mp-installed-version';
       ver.textContent = 'v' + (skill.version || '?');
       meta.appendChild(ver);
-      if (skill.tier === 'Mine' && Number.isInteger(skill.published_version) && skill.published_version > 0) {
+      if (
+        skill.tier === 'Mine' &&
+        Number.isInteger(skill.published_version) &&
+        skill.published_version > 0
+      ) {
         const chip = document.createElement('span');
         chip.className = 'mp-share-chip';
         chip.textContent = 'Shared · v' + skill.published_version;
@@ -1400,7 +1404,8 @@
     shareInput.addEventListener('paste', (e) => {
       const pasted = e.clipboardData ? e.clipboardData.getData('text') : '';
       const sharing = window.SkillSharing;
-      const link = sharing && typeof sharing.extractLink === 'function' ? sharing.extractLink(pasted) : '';
+      const link =
+        sharing && typeof sharing.extractLink === 'function' ? sharing.extractLink(pasted) : '';
       if (!link) return;
       e.preventDefault();
       shareInput.value = link;
