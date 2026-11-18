@@ -18453,6 +18453,29 @@ body.gator-terminal-pushing .dock {
   text-decoration: none;
 }
 
+/* Review a shared skill */
+.mp-modal-body .ss-desc {
+  margin: 0 0 8px;
+}
+.mp-modal-body .ss-meta {
+  margin: 0 0 4px;
+  font-size: 0.8rem;
+  color: var(--text-dim, #aaa);
+}
+.ss-details-toggle {
+  margin: 6px 0;
+  font-size: 0.75rem;
+}
+.mp-modal-body .ss-fingerprint {
+  font-family: monospace;
+  font-size: 0.75rem;
+  word-break: break-all;
+  color: var(--text-dim, #aaa);
+}
+.ss-fingerprint[hidden] {
+  display: none;
+}
+
 /* â”€â”€ Native skills grouped card â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .mp-native-list {
   display: flex;

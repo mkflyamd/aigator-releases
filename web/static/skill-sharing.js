@@ -254,48 +254,51 @@
       copyStatus.setAttribute('aria-live', 'polite');
       shell.body.appendChild(copyStatus);
 
-      function copy(btn, text, doneLabel) {
+      // The label is captured once, here, so a second click while "Copied" is
+      // showing cannot mistake "Copied" for the original label.
+      function wireCopy(btn, text, doneLabel) {
         var original = btn.textContent;
-        var clip = typeof navigator !== 'undefined' && navigator.clipboard;
-        if (!clip || typeof clip.writeText !== 'function') {
-          copyStatus.textContent = 'Could not copy. Select the text and copy it.';
-          return;
-        }
-        Promise.resolve()
-          .then(function () {
-            return clip.writeText(text);
-          })
-          .then(
-            function () {
-              copyStatus.textContent = '';
-              btn.textContent = doneLabel;
-              setTimeout(function () {
-                btn.textContent = original;
-              }, 2000);
-            },
-            function () {
-              copyStatus.textContent = 'Could not copy. Select the text and copy it.';
-            },
-          );
+        btn.addEventListener('click', function () {
+          var clip = typeof navigator !== 'undefined' && navigator.clipboard;
+          if (!clip || typeof clip.writeText !== 'function') {
+            copyStatus.textContent = 'Could not copy. Select the text and copy it.';
+            return;
+          }
+          Promise.resolve()
+            .then(function () {
+              return clip.writeText(text);
+            })
+            .then(
+              function () {
+                copyStatus.textContent = '';
+                btn.textContent = doneLabel;
+                setTimeout(function () {
+                  btn.textContent = original;
+                }, 2000);
+              },
+              function () {
+                copyStatus.textContent = 'Could not copy. Select the text and copy it.';
+              },
+            );
+        });
       }
 
       var copyMsgBtn = _button('Copy message', true);
-      var copyLinkBtn = _button('Copy link');
       var doneBtn = _button('Done');
-      copyMsgBtn.addEventListener('click', function () {
-        copy(copyMsgBtn, data.message || '', 'Copied');
-      });
-      copyLinkBtn.addEventListener('click', function () {
-        copy(copyLinkBtn, data.link || '', 'Copied');
-      });
+      wireCopy(copyMsgBtn, data.message || '', 'Copied');
       doneBtn.addEventListener('click', function () {
         shell.close();
         if (deps.refresh) deps.refresh();
       });
 
-      var focusables = [area, copyMsgBtn, copyLinkBtn];
+      var focusables = [area, copyMsgBtn];
       shell.actions.appendChild(copyMsgBtn);
-      shell.actions.appendChild(copyLinkBtn);
+      if (typeof data.link === 'string' && data.link) {
+        var copyLinkBtn = _button('Copy link');
+        wireCopy(copyLinkBtn, data.link, 'Copied');
+        shell.actions.appendChild(copyLinkBtn);
+        focusables.push(copyLinkBtn);
+      }
       if (typeof data.web_url === 'string' && data.web_url.indexOf('https://') === 0) {
         var open = _el('a', 'ap-card-btn', 'Open in OneDrive');
         open.href = data.web_url;
@@ -313,8 +316,124 @@
     return shell;
   }
 
+  // ── Review and install from a share link ─────────────────────────────────
+
+  var COLLISION_TEXT = {
+    mine: 'You already have a skill of your own with this name.',
+    installed: 'A skill with this name is already installed.',
+    native: 'This name is used by a built-in skill.',
+  };
+
+  // First aigator://share?d=... token in pasted text, or ''. The payload is
+  // base64url, so punctuation around the link in a sentence is left out.
+  function extractLink(text) {
+    var m = /aigator:\/\/share\?d=[A-Za-z0-9_-]+/.exec(String(text == null ? '' : text));
+    return m ? m[0] : '';
+  }
+
+  // Resolves to the open modal, or null when the review failed (an alert is
+  // shown and nothing opens). Nothing is installed until Install is clicked.
+  async function openLinkReview(link, deps) {
+    var result;
+    try {
+      result = await deps.postJson('/api/skills/share/review', { link: link });
+    } catch (err) {
+      result = { resp: { ok: false }, body: null };
+    }
+    if (!result || !result.resp || !result.resp.ok || !result.body) {
+      deps.showAlert(shareErrorText(result && result.resp, result && result.body), 'error');
+      return null;
+    }
+    var review = result.body;
+    var title = String(review.title || review.skill_id || 'skill');
+    var shell = _openShell('Review "' + title + '"');
+
+    if (review.description) shell.body.appendChild(_el('p', 'ss-desc', String(review.description)));
+    var by = 'Shared by ' + (review.author || 'unknown') + ', version ' + review.version;
+    shell.body.appendChild(_el('p', 'ss-meta', by));
+    if (typeof review.latest === 'number' && typeof review.version === 'number' && review.latest > review.version) {
+      shell.body.appendChild(_el('p', 'ss-meta', 'Newer version ' + review.latest + ' is available'));
+    }
+    shell.body.appendChild(
+      _el(
+        'p',
+        review.has_scripts ? 'ss-meta mp-modal-community-warn' : 'ss-meta',
+        'Contains scripts: ' + (review.has_scripts ? 'yes' : 'no'),
+      ),
+    );
+    if (deps.appendPermissionList) deps.appendPermissionList(shell.body, review.summary);
+
+    var detailsBtn = _button('Details');
+    detailsBtn.className = 'ss-details-toggle';
+    detailsBtn.setAttribute('aria-expanded', 'false');
+    var fingerprint = _el('p', 'ss-fingerprint', 'Fingerprint: ' + (review.digest || ''));
+    fingerprint.hidden = true;
+    detailsBtn.addEventListener('click', function () {
+      fingerprint.hidden = !fingerprint.hidden;
+      detailsBtn.setAttribute('aria-expanded', fingerprint.hidden ? 'false' : 'true');
+    });
+    shell.body.appendChild(detailsBtn);
+    shell.body.appendChild(fingerprint);
+
+    var collision = COLLISION_TEXT[review.collision];
+    if (review.collision && !collision) collision = 'A skill with this name already exists.';
+    if (collision) shell.body.appendChild(_el('p', 'ss-error ss-collision', collision));
+    shell.body.appendChild(_el('p', 'ss-hint', 'Nothing is installed until you choose Install.'));
+    var errorEl = _el('p', 'ss-error');
+    errorEl.setAttribute('role', 'alert');
+    shell.body.appendChild(errorEl);
+
+    var cancelBtn = _button('Cancel');
+    var installBtn = _button('Install', true);
+    installBtn.disabled = !!collision;
+    shell.actions.appendChild(cancelBtn);
+    shell.actions.appendChild(installBtn);
+    shell.setFocusables([detailsBtn, cancelBtn, installBtn]);
+
+    var pending = false;
+    async function install() {
+      if (pending || installBtn.disabled) return;
+      pending = true;
+      installBtn.disabled = true;
+      errorEl.textContent = '';
+      var out;
+      try {
+        out = await deps.postJson('/api/skills/share/install', {
+          link: link,
+          version: review.version,
+          digest: review.digest,
+        });
+      } catch (err) {
+        out = { resp: { ok: false }, body: null };
+      }
+      pending = false;
+      var ok = out && out.resp && out.resp.ok && out.body && out.body.ok !== false;
+      if (!ok) {
+        if (shell.closed) return;
+        installBtn.disabled = false;
+        errorEl.textContent = out && out.body
+          ? (deps.errorMessage ? deps.errorMessage(out.body) : shareErrorText(out.resp, out.body))
+          : 'Could not install this skill. Try again.';
+        return;
+      }
+      deps.showAlert('Installed "' + title + '".', 'success');
+      if (deps.onInstalled) deps.onInstalled(out.body, review);
+      if (deps.refresh) deps.refresh();
+      shell.close();
+    }
+
+    cancelBtn.addEventListener('click', function () {
+      shell.close();
+    });
+    installBtn.addEventListener('click', install);
+    (collision ? cancelBtn : installBtn).focus();
+    return shell;
+  }
+
   var api = {
     openShareModal: openShareModal,
+    openLinkReview: openLinkReview,
+    extractLink: extractLink,
     parseEmails: parseEmails,
     shareErrorText: shareErrorText,
   };

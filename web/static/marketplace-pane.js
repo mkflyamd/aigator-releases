@@ -1365,7 +1365,79 @@
       wrap.appendChild(localRow);
     }
 
+    // ── Open a skill someone shared (works with or without Electron) ────
+    const shareDivider = document.createElement('div');
+    shareDivider.className = 'mp-import-divider';
+    shareDivider.textContent = 'or open a skill someone shared with you';
+    wrap.appendChild(shareDivider);
+
+    const shareLabel = document.createElement('label');
+    shareLabel.className = 'mp-import-label';
+    shareLabel.textContent = 'Share link';
+    const shareInputId = 'mp-share-link-input';
+    shareLabel.setAttribute('for', shareInputId);
+
+    const shareRow = document.createElement('div');
+    shareRow.className = 'mp-import-row';
+    const shareInput = document.createElement('input');
+    shareInput.type = 'text';
+    shareInput.id = shareInputId;
+    shareInput.className = 'mp-input mp-import-url';
+    shareInput.placeholder = 'aigator://share?d=...';
+    shareInput.setAttribute('autocomplete', 'off');
+    const reviewBtn = document.createElement('button');
+    reviewBtn.type = 'button';
+    reviewBtn.className = 'ap-card-btn primary';
+    reviewBtn.textContent = 'Review';
+    const reviewShared = () => _reviewSharedLink(shareInput.value, errorArea);
+    reviewBtn.addEventListener('click', reviewShared);
+    shareInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        reviewShared();
+      }
+    });
+    shareRow.appendChild(shareInput);
+    shareRow.appendChild(reviewBtn);
+    wrap.appendChild(shareLabel);
+    wrap.appendChild(shareRow);
+
     content.appendChild(wrap);
+  }
+
+  // Review a pasted share link. Nothing installs until the user clicks Install
+  // in the review modal; a successful install is registered the same way the
+  // local-file install is (see _pickLocalSkill).
+  function _reviewSharedLink(text, errorArea) {
+    if (errorArea) errorArea.textContent = '';
+    const sharing = window.SkillSharing;
+    if (!sharing || typeof sharing.openLinkReview !== 'function') {
+      if (errorArea) errorArea.textContent = 'Sharing is not available right now.';
+      return;
+    }
+    const link = sharing.extractLink(text);
+    if (!link) {
+      if (errorArea) errorArea.textContent = 'Paste the aigator://share link you were sent.';
+      return;
+    }
+    return sharing.openLinkReview(link, {
+      postJson: _postJson,
+      showAlert: _showAlert,
+      errorMessage: _errorMessage,
+      appendPermissionList: _appendPermissionList,
+      onInstalled: (result, review) => {
+        const skill = {
+          id: result.skill_id,
+          name: (review && review.title) || result.skill_id,
+          tier: 'Community',
+        };
+        if (typeof window.registerUserSkill === 'function') {
+          window.registerUserSkill(skill.id, skill.name, skill.tier);
+        }
+        _handleInstallOutcome(true, result, skill);
+        _switchTab('installed');
+      },
+    });
   }
 
   async function _pickLocalSkill(kind, errorArea) {
