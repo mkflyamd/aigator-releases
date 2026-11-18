@@ -378,7 +378,7 @@
       };
 
       var viaId = 'ss-via-' + stamp;
-      var viaLabel = _el('span', 'ss-label', 'Send the message by');
+      var viaLabel = _el('span', 'ss-label', 'Tell them by');
       viaLabel.id = viaId;
       var seg = _el('div', 'ss-seg');
       seg.setAttribute('role', 'radiogroup');
@@ -391,6 +391,7 @@
         seg.appendChild(b);
         return { id: c.id, el: b };
       });
+      var focusOrder = function () {};
       function pick(id, focus) {
         channel = id;
         segBtns.forEach(function (s) {
@@ -400,6 +401,7 @@
           s.el.setAttribute('tabindex', on ? '0' : '-1');
           if (on && focus) s.el.focus();
         });
+        focusOrder();
         hint.textContent =
           'They can use the skill but not change it. Nothing is sent until you approve ' + _channel(id).draft + '.';
       }
@@ -421,10 +423,10 @@
       errorEl.setAttribute('role', 'alert');
       var statusEl = _el('p', 'ss-status');
       statusEl.setAttribute('aria-live', 'polite');
-      shell.body.appendChild(label);
-      shell.body.appendChild(field);
       shell.body.appendChild(viaLabel);
       shell.body.appendChild(seg);
+      shell.body.appendChild(label);
+      shell.body.appendChild(field);
       shell.body.appendChild(hint);
       shell.body.appendChild(errorEl);
       shell.body.appendChild(statusEl);
@@ -437,7 +439,13 @@
       shell.actions.appendChild(downloadBtn);
       shell.actions.appendChild(cancelBtn);
       shell.actions.appendChild(shareBtn);
-      shell.setFocusables([input, downloadBtn, cancelBtn, shareBtn]);
+      focusOrder = function () {
+        var selected = segBtns.filter(function (s) {
+          return s.id === channel;
+        })[0];
+        shell.setFocusables([selected.el, input, downloadBtn, cancelBtn, shareBtn]);
+      };
+      focusOrder();
 
       function setBusy(busy) {
         pending = busy;

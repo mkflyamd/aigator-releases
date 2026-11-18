@@ -460,15 +460,31 @@ test('Tab wraps inside the form view', () => {
   const { deps } = makeDeps();
   api.openShareModal('weekly-report', deps);
   const modal = dom.document.body.children[0];
-  const input = dom.byTag(modal, 'input');
+  const email = dom.byText(modal, 'Email');
   const shareBtn = dom.byText(modal, 'Share');
 
   shareBtn.focus();
   dom.key('Tab');
-  assert.strictEqual(dom.state.activeElement, input);
-  input.focus();
+  assert.strictEqual(dom.state.activeElement, email);
+  email.focus();
   dom.key('Tab', true);
   assert.strictEqual(dom.state.activeElement, shareBtn);
+});
+
+test('the channel choice comes before the people field', () => {
+  const dom = makeDom();
+  const api = load(dom);
+  const { deps } = makeDeps();
+  api.openShareModal('weekly-report', deps);
+  const modal = dom.document.body.children[0];
+  const flat = [];
+  (function walk(el) {
+    flat.push(el);
+    (el.children || []).forEach(walk);
+  })(modal);
+  const at = (node) => flat.indexOf(node);
+  assert.ok(at(dom.byText(modal, 'Email')) > -1);
+  assert.ok(at(dom.byText(modal, 'Email')) < at(dom.byTag(modal, 'input')));
 });
 
 test('Tab skips a disabled last button so focus stays in the modal', async () => {
