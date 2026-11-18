@@ -70,6 +70,8 @@ def publish(provider, skill_id: str, *, author: str, root: dict | None = None, p
 
     if doc is not None and _latest_digest(doc) == digest:
         version, reused = doc["latest"], True
+        title = doc.get("title") or skill_id
+        description = doc.get("description") or ""
     else:
         version, reused = (doc["latest"] if doc else 0) + 1, False
         created_at = _now()
@@ -91,6 +93,7 @@ def publish(provider, skill_id: str, *, author: str, root: dict | None = None, p
             ],
             "updated_at": created_at,
         }
+        title, description = manifest["title"], manifest["description"]
         if doc is None:
             provider.write_json_create(folder, "skill.json", new_doc)
         else:
@@ -109,12 +112,14 @@ def publish(provider, skill_id: str, *, author: str, root: dict | None = None, p
         },
     )
     provider.grant_read(folder, list(people))
+    link = messages.make_share_link(folder)
     return {
         "skill_id": skill_id,
         "version": version,
         "reused": reused,
         "digest": digest,
         "folder": folder,
-        "link": messages.make_share_link(folder),
+        "link": link,
         "web_url": folder["web_url"],
+        "message": messages.share_message(title, author, description, link, folder["web_url"]),
     }

@@ -38,6 +38,23 @@ def test_first_publish_writes_bundle_manifest_and_skill_json(provider, make_mine
     assert messages.parse_share_link(out["link"]) == {"drive_id": "d1", "folder_id": folder["folder_id"]}
 
 
+def test_first_publish_returns_the_share_message(provider, make_mine):
+    out = publisher.publish(provider, make_mine(), author="Mayuresh Kulkarni")
+    assert out["link"] in out["message"]
+    assert "Mayuresh Kulkarni" in out["message"]
+    assert "Weekly Report" in out["message"]
+
+
+def test_reused_publish_returns_a_message_with_the_same_link(provider, make_mine):
+    skill_id = make_mine()
+    first = publisher.publish(provider, skill_id, author="Mayuresh Kulkarni")
+    again = publisher.publish(provider, skill_id, author="Mayuresh Kulkarni")
+    assert again["reused"] is True
+    assert again["link"] == first["link"]
+    assert first["link"] in again["message"]
+    assert "Weekly Report" in again["message"]
+
+
 def test_skill_json_is_written_last(provider, make_mine):
     publisher.publish(provider, make_mine(), author="A")
     assert [name for _folder, name in provider.writes] == ["bundle.zip", "manifest.json", "skill.json"]
