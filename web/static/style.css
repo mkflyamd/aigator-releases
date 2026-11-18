@@ -18388,6 +18388,71 @@ body.gator-terminal-pushing .dock {
   border-color: var(--accent, #4ade80);
 }
 
+/* Share modal (skill-sharing.js) */
+.mp-share-chip {
+  font-size: 0.68rem;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: rgba(74, 222, 128, 0.12);
+  color: var(--accent, #4ade80);
+  white-space: nowrap;
+}
+.ss-modal {
+  max-width: 520px;
+}
+.ss-modal .mp-modal-actions {
+  flex-wrap: wrap;
+}
+.ss-label {
+  display: block;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text, #e8e8f0);
+  margin-bottom: 6px;
+}
+.ss-input,
+.ss-message {
+  width: 100%;
+  padding: 8px 10px;
+  background: var(--surface1, #181822);
+  color: var(--text, #e8e8f0);
+  border: 1px solid var(--border, #444);
+  border-radius: 6px;
+  box-sizing: border-box;
+  font-family: inherit;
+  font-size: 0.85rem;
+  margin-bottom: 10px;
+}
+.ss-message {
+  min-height: 140px;
+  resize: vertical;
+  line-height: 1.5;
+}
+.ss-input:focus,
+.ss-message:focus {
+  outline: none;
+  border-color: var(--accent, #4ade80);
+}
+.mp-modal-body .ss-hint,
+.mp-modal-body .ss-access {
+  font-size: 0.8rem;
+}
+.mp-modal-body .ss-error {
+  color: var(--error, #f87171);
+  margin-bottom: 6px;
+}
+.mp-modal-body .ss-status {
+  color: var(--text-dim, #aaa);
+  margin-bottom: 6px;
+}
+.ss-error:empty,
+.ss-status:empty {
+  display: none;
+}
+.mp-modal-actions a.ap-card-btn {
+  text-decoration: none;
+}
+
 /* â”€â”€ Native skills grouped card â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .mp-native-list {
   display: flex;

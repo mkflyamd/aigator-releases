@@ -1075,10 +1075,16 @@
         editBtn.dataset.action = 'edit-mine';
         editBtn.dataset.skillId = skill.id;
         actions.appendChild(editBtn);
+        if (Number.isInteger(skill.published_version) && skill.published_version > 0) {
+          const chip = document.createElement('span');
+          chip.className = 'mp-share-chip';
+          chip.textContent = 'Shared · v' + skill.published_version;
+          actions.appendChild(chip);
+        }
         const shareBtn = document.createElement('button');
         shareBtn.className = 'mp-row-btn';
         shareBtn.textContent = 'Share';
-        shareBtn.title = 'Download this skill as a .skill file to send to a colleague';
+        shareBtn.title = 'Share with colleagues through OneDrive, or download a file';
         shareBtn.dataset.action = 'share-mine';
         shareBtn.dataset.skillId = skill.id;
         actions.appendChild(shareBtn);
@@ -2424,7 +2430,21 @@
     });
   }
 
-  async function _shareMineSkill(skillId) {
+  // Share opens the modal (OneDrive link, or "Download file instead").
+  function _shareMineSkill(skillId) {
+    if (window.SkillSharing && typeof window.SkillSharing.openShareModal === 'function') {
+      window.SkillSharing.openShareModal(skillId, {
+        postJson: _postJson,
+        downloadSkill: _downloadMineSkill,
+        showAlert: _showAlert,
+        refresh,
+      });
+      return;
+    }
+    return _downloadMineSkill(skillId);
+  }
+
+  async function _downloadMineSkill(skillId) {
     try {
       const resp = await fetch('/api/marketplace/export/' + encodeURIComponent(skillId));
       if (!resp.ok) {
