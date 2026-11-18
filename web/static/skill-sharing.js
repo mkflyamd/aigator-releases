@@ -1459,6 +1459,7 @@
 
     function showPublished(res) {
       view.msg.value = res.message || '';
+      view.msgWrap.hidden = false;
       _clear(view.notices);
       if (Array.isArray(res.ungranted) && res.ungranted.length) {
         view.notices.appendChild(_ungrantedNotice(res.ungranted));
@@ -1574,11 +1575,14 @@
       msg.id = 'ss-message';
       msg.readOnly = true;
       msg.setAttribute('rows', '5');
-      msg.setAttribute('placeholder', 'The message is filled in when you choose Send or Copy message.');
       msg.value = S.result ? S.result.message || '' : '';
-      shell.body.appendChild(msgLabel);
-      shell.body.appendChild(msg);
+      var msgWrap = _el('div', '');
+      msgWrap.hidden = !S.result;
+      msgWrap.appendChild(msgLabel);
+      msgWrap.appendChild(msg);
+      shell.body.appendChild(msgWrap);
       view.msg = msg;
+      view.msgWrap = msgWrap;
       view.status = _el('p', 'ss-status');
       view.status.setAttribute('aria-live', 'polite');
       view.notices = _el('div', '');

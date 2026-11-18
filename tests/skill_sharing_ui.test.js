@@ -1555,8 +1555,8 @@ test('Send lists who the email goes to and shows a read-only message box waiting
   const box = messageBox(t);
   assert.strictEqual(box.readOnly, true);
   assert.strictEqual(box.id, 'ss-message');
-  assert.strictEqual(box.getAttribute('placeholder'), 'The message is filled in when you choose Send or Copy message.');
   assert.strictEqual(box.value, '');
+  assert.strictEqual(box.parent.hidden, true);
   assert.strictEqual(t.dom.find(t.root(), (el) => el.tag === 'label').getAttribute('for'), 'ss-message');
   assert.strictEqual(t.btn('Send').getAttribute('title'), 'Opens an email draft for you to approve. Nothing is sent automatically.');
   assert.strictEqual(t.btn('Send').disabled, false);
@@ -1580,6 +1580,7 @@ test('Copy saves the skill first and then copies the message it got back', async
   assert.deepStrictEqual(t.calls.order.slice(-2), ['publish', 'copy']);
   assert.deepStrictEqual(t.clip.written, [PUBLISHED.message]);
   assert.strictEqual(messageBox(t).value, PUBLISHED.message);
+  assert.strictEqual(messageBox(t).parent.hidden, false);
   assert.strictEqual(sendStatus(t), 'Message copied.');
   assert.deepStrictEqual(t.calls.alerts, []);
   assert.strictEqual(t.btn('Copy message').disabled, false);
