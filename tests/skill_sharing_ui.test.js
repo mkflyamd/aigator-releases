@@ -444,6 +444,35 @@ test('Tab wraps inside the form view', () => {
   assert.strictEqual(dom.state.activeElement, shareBtn);
 });
 
+test('Tab skips a disabled last button so focus stays in the modal', async () => {
+  const dom = makeDom();
+  const api = load(dom);
+  const { deps } = reviewDeps(dom, okReview({ collision: 'mine' }));
+  await api.openLinkReview(LINK, deps);
+  const modal = dom.document.body.children[0];
+  const cancel = dom.byText(modal, 'Cancel');
+
+  cancel.focus();
+  const e = dom.key('Tab');
+  assert.strictEqual(e.prevented, true);
+  assert.notStrictEqual(dom.state.activeElement, cancel);
+  assert.strictEqual(dom.byText(modal, 'Install').disabled, true);
+});
+
+test('an invalid address marks the input invalid and refocuses it', () => {
+  const dom = makeDom();
+  const api = load(dom);
+  const { deps } = makeDeps();
+  api.openShareModal('weekly-report', deps);
+  const modal = dom.document.body.children[0];
+  const input = dom.byTag(modal, 'input');
+
+  input.value = 'not-an-email';
+  dom.byText(modal, 'Share').click();
+  assert.strictEqual(input.getAttribute('aria-invalid'), 'true');
+  assert.strictEqual(dom.state.activeElement, input);
+});
+
 test('opening a second Share modal removes the first', () => {
   const dom = makeDom();
   const api = load(dom);
@@ -617,7 +646,7 @@ test('scripts yes is emphasised and a newer version is announced', async () => {
 
   const scripts = dom.byText(modal, 'Contains scripts: yes');
   assert(scripts.className.split(' ').includes('mp-modal-community-warn'));
-  assert(dom.byText(modal, 'Newer version 3 is available'));
+  assert(dom.byText(modal, 'Newer version 3 is available. Ask Ann Lee for the latest link.'));
 });
 
 test('Details toggle reveals the fingerprint', async () => {
@@ -640,8 +669,8 @@ test('Details toggle reveals the fingerprint', async () => {
 
 test('each collision shows its sentence and disables Install', async () => {
   const texts = {
-    mine: 'You already have a skill of your own with this name.',
-    installed: 'A skill with this name is already installed.',
+    mine: 'You already have a skill of your own with this name. Rename or remove it to install this one.',
+    installed: 'A skill with this name is already installed. Remove it to install this one.',
     native: 'This name is used by a built-in skill.',
   };
   for (const key of Object.keys(texts)) {

@@ -13,6 +13,7 @@
 
   var EMAIL_RE = /^[^@\s,;<>]+@[^@\s,;<>]+\.[^@\s,;<>]+$/;
   var DEFAULT_ERROR = 'Could not share this skill. Try again.';
+  var REVIEW_ERROR = 'Could not open this share link. Try again.';
 
   // ── Pure helpers ─────────────────────────────────────────────────────────
 
@@ -33,14 +34,15 @@
     return { emails: emails, bad: bad };
   }
 
-  function shareErrorText(resp, body) {
+  function shareErrorText(resp, body, fallback) {
+    var none = fallback || DEFAULT_ERROR;
     var detail = body && body.detail;
     if (Array.isArray(detail)) return 'Check the email addresses and try again.';
     if (detail && typeof detail === 'object') {
-      return typeof detail.message === 'string' && detail.message ? detail.message : DEFAULT_ERROR;
+      return typeof detail.message === 'string' && detail.message ? detail.message : none;
     }
     if (typeof detail === 'string' && detail) return detail;
-    return DEFAULT_ERROR;
+    return none;
   }
 
   // ── Modal shell (shared by every modal in this file) ─────────────────────
@@ -55,7 +57,7 @@
   }
 
   function _button(label, primary) {
-    var btn = _el('button', primary ? 'ap-card-btn primary' : 'ap-card-btn', label);
+    var btn = _el('button', primary ? 'mp-btn mp-btn-primary' : 'mp-btn mp-btn-cancel', label);
     btn.type = 'button';
     return btn;
   }
@@ -105,9 +107,12 @@
         shell.close();
         return;
       }
-      if (e.key === 'Tab' && focusables.length) {
-        var first = focusables[0];
-        var last = focusables[focusables.length - 1];
+      var enabled = focusables.filter(function (el) {
+        return !el.disabled;
+      });
+      if (e.key === 'Tab' && enabled.length) {
+        var first = enabled[0];
+        var last = enabled[enabled.length - 1];
         var active = document.activeElement;
         if (e.shiftKey && active === first) {
           e.preventDefault();
@@ -167,11 +172,12 @@
 
       var cancelBtn = _button('Cancel');
       var downloadBtn = _button('Download file instead');
+      downloadBtn.className = 'mp-btn ss-link-btn';
       var shareBtn = _button('Share', true);
-      shell.actions.appendChild(cancelBtn);
       shell.actions.appendChild(downloadBtn);
+      shell.actions.appendChild(cancelBtn);
       shell.actions.appendChild(shareBtn);
-      shell.setFocusables([input, cancelBtn, downloadBtn, shareBtn]);
+      shell.setFocusables([input, downloadBtn, cancelBtn, shareBtn]);
 
       function setBusy(busy) {
         pending = busy;
@@ -183,13 +189,15 @@
       async function submit() {
         if (pending) return;
         errorEl.textContent = '';
+        input.setAttribute('aria-invalid', 'false');
         var parsed = parseEmails(input.value);
-        if (!parsed.emails.length && !parsed.bad.length) {
-          errorEl.textContent = 'Enter at least one work email address.';
-          return;
-        }
-        if (parsed.bad.length) {
-          errorEl.textContent = '"' + parsed.bad[0] + '" is not a valid email address.';
+        var invalid = '';
+        if (!parsed.emails.length && !parsed.bad.length) invalid = 'Enter at least one work email address.';
+        else if (parsed.bad.length) invalid = '"' + parsed.bad[0] + '" is not a valid email address.';
+        if (invalid) {
+          errorEl.textContent = invalid;
+          input.setAttribute('aria-invalid', 'true');
+          input.focus();
           return;
         }
         setBusy(true);
@@ -245,7 +253,7 @@
       var area = _el('textarea', 'ss-message');
       area.readOnly = true;
       area.value = data.message || '';
-      area.setAttribute('rows', '8');
+      area.setAttribute('rows', '4');
       area.setAttribute('aria-label', 'Message to send');
       shell.body.appendChild(area);
       var note = _el('p', 'ss-hint', 'Nothing has been sent. Paste this message into an email or chat yourself.');
@@ -284,6 +292,7 @@
       }
 
       var copyMsgBtn = _button('Copy message', true);
+      copyMsgBtn.className += ' ss-copy';
       var doneBtn = _button('Done');
       wireCopy(copyMsgBtn, data.message || '', 'Copied');
       doneBtn.addEventListener('click', function () {
@@ -291,24 +300,28 @@
         if (deps.refresh) deps.refresh();
       });
 
-      var focusables = [area, copyMsgBtn];
-      shell.actions.appendChild(copyMsgBtn);
+      // Secondary actions sit on the left, Done and the main action on the
+      // right, so the primary button is last like every other modal.
+      var focusables = [area];
       if (typeof data.link === 'string' && data.link) {
         var copyLinkBtn = _button('Copy link');
+        copyLinkBtn.className += ' ss-copy';
         wireCopy(copyLinkBtn, data.link, 'Copied');
         shell.actions.appendChild(copyLinkBtn);
         focusables.push(copyLinkBtn);
       }
       if (typeof data.web_url === 'string' && data.web_url.indexOf('https://') === 0) {
-        var open = _el('a', 'ap-card-btn', 'Open in OneDrive');
+        var open = _el('a', 'mp-btn mp-btn-cancel', 'Open in OneDrive');
         open.href = data.web_url;
         open.target = '_blank';
         open.rel = 'noopener';
         shell.actions.appendChild(open);
         focusables.push(open);
       }
+      shell.actions.appendChild(_el('div', 'ss-spacer'));
       shell.actions.appendChild(doneBtn);
-      focusables.push(doneBtn);
+      shell.actions.appendChild(copyMsgBtn);
+      focusables.push(doneBtn, copyMsgBtn);
       shell.setFocusables(focusables);
       copyMsgBtn.focus();
     }
@@ -319,8 +332,8 @@
   // ── Review and install from a share link ─────────────────────────────────
 
   var COLLISION_TEXT = {
-    mine: 'You already have a skill of your own with this name.',
-    installed: 'A skill with this name is already installed.',
+    mine: 'You already have a skill of your own with this name. Rename or remove it to install this one.',
+    installed: 'A skill with this name is already installed. Remove it to install this one.',
     native: 'This name is used by a built-in skill.',
   };
 
@@ -341,18 +354,21 @@
       result = { resp: { ok: false }, body: null };
     }
     if (!result || !result.resp || !result.resp.ok || !result.body) {
-      deps.showAlert(shareErrorText(result && result.resp, result && result.body), 'error');
+      deps.showAlert(shareErrorText(result && result.resp, result && result.body, REVIEW_ERROR), 'error');
       return null;
     }
     var review = result.body;
     var title = String(review.title || review.skill_id || 'skill');
     var shell = _openShell('Review "' + title + '"');
 
+    var collision = COLLISION_TEXT[review.collision];
+    if (review.collision && !collision) collision = 'A skill with this name already exists.';
+    if (collision) shell.body.appendChild(_el('p', 'mp-modal-compat-risk ss-collision', collision));
     if (review.description) shell.body.appendChild(_el('p', 'ss-desc', String(review.description)));
     var by = 'Shared by ' + (review.author || 'unknown') + ', version ' + review.version;
     shell.body.appendChild(_el('p', 'ss-meta', by));
     if (typeof review.latest === 'number' && typeof review.version === 'number' && review.latest > review.version) {
-      shell.body.appendChild(_el('p', 'ss-meta', 'Newer version ' + review.latest + ' is available'));
+      shell.body.appendChild(_el('p', 'ss-meta', 'Newer version ' + review.latest + ' is available. Ask ' + (review.author || 'the sender') + ' for the latest link.'));
     }
     shell.body.appendChild(
       _el(
@@ -363,8 +379,8 @@
     );
     if (deps.appendPermissionList) deps.appendPermissionList(shell.body, review.summary);
 
-    var detailsBtn = _button('Details');
-    detailsBtn.className = 'ss-details-toggle';
+    var detailsBtn = _el('button', 'ss-details-toggle', 'Details');
+    detailsBtn.type = 'button';
     detailsBtn.setAttribute('aria-expanded', 'false');
     var fingerprint = _el('p', 'ss-fingerprint', 'Fingerprint: ' + (review.digest || ''));
     fingerprint.hidden = true;
@@ -375,9 +391,6 @@
     shell.body.appendChild(detailsBtn);
     shell.body.appendChild(fingerprint);
 
-    var collision = COLLISION_TEXT[review.collision];
-    if (review.collision && !collision) collision = 'A skill with this name already exists.';
-    if (collision) shell.body.appendChild(_el('p', 'ss-error ss-collision', collision));
     shell.body.appendChild(_el('p', 'ss-hint', 'Nothing is installed until you choose Install.'));
     var errorEl = _el('p', 'ss-error');
     errorEl.setAttribute('role', 'alert');
@@ -386,6 +399,7 @@
     var cancelBtn = _button('Cancel');
     var installBtn = _button('Install', true);
     installBtn.disabled = !!collision;
+    if (collision) installBtn.title = 'Resolve the name clash above to install';
     shell.actions.appendChild(cancelBtn);
     shell.actions.appendChild(installBtn);
     shell.setFocusables([detailsBtn, cancelBtn, installBtn]);

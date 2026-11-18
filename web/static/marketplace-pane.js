@@ -1057,6 +1057,12 @@
       ver.className = 'mp-installed-version';
       ver.textContent = 'v' + (skill.version || '?');
       meta.appendChild(ver);
+      if (skill.tier === 'Mine' && Number.isInteger(skill.published_version) && skill.published_version > 0) {
+        const chip = document.createElement('span');
+        chip.className = 'mp-share-chip';
+        chip.textContent = 'Shared · v' + skill.published_version;
+        meta.appendChild(chip);
+      }
 
       const name = document.createElement('div');
       name.className = 'mp-installed-name';
@@ -1075,12 +1081,6 @@
         editBtn.dataset.action = 'edit-mine';
         editBtn.dataset.skillId = skill.id;
         actions.appendChild(editBtn);
-        if (Number.isInteger(skill.published_version) && skill.published_version > 0) {
-          const chip = document.createElement('span');
-          chip.className = 'mp-share-chip';
-          chip.textContent = 'Shared · v' + skill.published_version;
-          actions.appendChild(chip);
-        }
         const shareBtn = document.createElement('button');
         shareBtn.className = 'mp-row-btn';
         shareBtn.textContent = 'Share';
@@ -1373,7 +1373,7 @@
 
     const shareLabel = document.createElement('label');
     shareLabel.className = 'mp-import-label';
-    shareLabel.textContent = 'Share link';
+    shareLabel.textContent = 'Share link:';
     const shareInputId = 'mp-share-link-input';
     shareLabel.setAttribute('for', shareInputId);
 
