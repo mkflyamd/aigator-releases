@@ -225,9 +225,22 @@ test('form view has the dialog attributes, labelled input, hint and three button
 
   const label = dom.byTag(modal, 'label');
   const input = dom.byTag(modal, 'input');
-  assert.strictEqual(label.textContent, 'Share with (work email addresses)');
+  assert.strictEqual(label.textContent, 'Share with');
   assert.strictEqual(label.getAttribute('for'), input.id);
-  assert(dom.byText(modal, 'They can use the skill but not change it. Nobody is emailed; you copy the message and send it yourself.'));
+  assert(
+    dom.byText(
+      modal,
+      'They can use the skill but not change it. Nothing is sent until you approve an email draft.',
+    ),
+  );
+  const radios = [];
+  dom.find(modal, (el) => {
+    if (el.getAttribute('role') === 'radio') radios.push(el);
+    return false;
+  });
+  assert.deepStrictEqual(radios.map((r) => r.textContent), ['Email', 'Teams', 'Slack']);
+  assert.deepStrictEqual(radios.map((r) => r.getAttribute('aria-checked')), ['true', 'false', 'false']);
+  assert.strictEqual(dom.byClass(modal, 'ss-close').hidden, true, 'no X on the form view');
   assert(dom.byText(modal, 'Cancel'));
   assert(dom.byText(modal, 'Download file instead'));
   assert(dom.byText(modal, 'Share').className.includes('primary'));
@@ -296,8 +309,10 @@ test('Share with two addresses posts once and shows the result view', async () =
   assert.strictEqual(area.value, PUBLISHED.message);
   assert.strictEqual(area.readOnly, true);
   assert(dom.byText(modal, 'Copy message'));
-  assert(dom.byText(modal, 'Copy link'));
-  assert(dom.byText(modal, 'Done'));
+  assert(dom.byText(modal, 'Send').className.includes('primary'));
+  assert.strictEqual(dom.byText(modal, 'Copy link'), null);
+  assert.strictEqual(dom.byText(modal, 'Done'), null);
+  assert.strictEqual(dom.byClass(modal, 'ss-close').hidden, false, 'X is shown on the result view');
   const open = dom.byText(modal, 'Open in OneDrive');
   assert.strictEqual(open.tag, 'a');
   assert.strictEqual(open.href, PUBLISHED.web_url);
@@ -309,10 +324,6 @@ test('Share with two addresses posts once and shows the result view', async () =
   await flush();
   assert.deepStrictEqual(written, [PUBLISHED.message]);
   assert.strictEqual(copyBtn.textContent, 'Copied');
-
-  dom.byText(modal, 'Copy link').click();
-  await flush();
-  assert.deepStrictEqual(written, [PUBLISHED.message, PUBLISHED.link]);
 });
 
 test('result view for an unchanged skill and no Open link without https', async () => {
@@ -337,7 +348,7 @@ test('result view for an unchanged skill and no Open link without https', async 
   assert.strictEqual(dom.byText(modal, 'Open in OneDrive'), null);
 });
 
-test('Done closes the modal and refreshes', async () => {
+test('the X closes the result view and refreshes the list', async () => {
   const dom = makeDom();
   const api = load(dom);
   const { deps, calls } = makeDeps({
@@ -350,7 +361,23 @@ test('Done closes the modal and refreshes', async () => {
   await flush();
 
   assert.strictEqual(calls.refresh, 0);
-  dom.byText(modal, 'Done').click();
+  dom.byClass(modal, 'ss-close').click();
+  assert.strictEqual(dom.document.body.children.length, 0);
+  assert.strictEqual(calls.refresh, 1);
+});
+
+test('Escape on the result view closes it and refreshes the list', async () => {
+  const dom = makeDom();
+  const api = load(dom);
+  const { deps, calls } = makeDeps({
+    postJson: async () => ({ resp: { ok: true }, body: PUBLISHED }),
+  });
+  api.openShareModal('weekly-report', deps);
+  const modal = dom.document.body.children[0];
+  dom.byTag(modal, 'input').value = 'ann@contoso.com';
+  dom.byText(modal, 'Share').click();
+  await flush();
+  dom.key('Escape');
   assert.strictEqual(dom.document.body.children.length, 0);
   assert.strictEqual(calls.refresh, 1);
 });
@@ -526,12 +553,13 @@ test('clicking Copy message twice within the reset delay still restores the labe
   assert.strictEqual(btn.textContent, 'Copy message');
 });
 
-test('no Copy link button when the response has no link', async () => {
+test('the result view offers exactly Copy message and Send as actions, plus the OneDrive link', async () => {
   const dom = makeDom();
   const { api } = loadWithTimers(dom, []);
-  const modal = await openResult(dom, api, Object.assign({}, PUBLISHED, { link: '' }));
-  assert(dom.byText(modal, 'Copy message'));
-  assert.strictEqual(dom.byText(modal, 'Copy link'), null);
+  const modal = await openResult(dom, api, PUBLISHED);
+  const actions = dom.byClass(modal, 'mp-modal-actions');
+  const labels = actions.children.filter((c) => c.textContent).map((c) => c.textContent);
+  assert.deepStrictEqual(labels, ['Open in OneDrive', 'Copy message', 'Send']);
 });
 
 // ── extractLink ──────────────────────────────────────────────────────────
@@ -785,4 +813,356 @@ test('server text in the review modal is set with textContent only', async () =>
   const modal = dom.document.body.children[0];
   assert.strictEqual(dom.byClass(modal, 'mp-modal-title').textContent, 'Review "<img src=x onerror=alert(1)>"');
   assert(dom.byText(modal, 'Shared by <b>x</b>, version 2'));
+});
+
+// ── People lookup ─────────────────────────────────────────────────────────
+
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+const PEOPLE = [
+  { name: 'Ann Lee', email: 'Ann.Lee@contoso.com' },
+  { name: 'Anna Wu', email: 'anna.wu@contoso.com' },
+  { name: '', email: 'ann.x@contoso.com' },
+];
+
+function openForm(dom, api, overrides) {
+  const queries = [];
+  const { deps, calls } = makeDeps(
+    Object.assign(
+      {
+        searchPeople: async (q) => {
+          queries.push(q);
+          return PEOPLE;
+        },
+      },
+      overrides,
+    ),
+  );
+  api.openShareModal('weekly-report', deps);
+  const modal = dom.document.body.children[0];
+  return { modal, input: dom.byTag(modal, 'input'), list: dom.byClass(modal, 'ss-suggest'), queries, deps, calls };
+}
+
+function typeInto(input, text) {
+  input.value = text;
+  input._listeners.input({});
+}
+
+test('typing two characters shows matches after the debounce, not before', async () => {
+  const dom = makeDom();
+  const api = load(dom, { setTimeout, clearTimeout });
+  const { input, list, queries } = openForm(dom, api);
+
+  typeInto(input, 'a');
+  await wait(260);
+  assert.strictEqual(queries.length, 0, 'one character does not search');
+
+  typeInto(input, 'an');
+  assert.strictEqual(queries.length, 0, 'no request before the debounce');
+  await wait(260);
+  assert.deepStrictEqual(queries, ['an']);
+  assert.strictEqual(list.hidden, false);
+  assert.strictEqual(list.children.length, 3);
+  assert.strictEqual(input.getAttribute('aria-expanded'), 'true');
+  assert.strictEqual(list.children[0].children[0].textContent, 'Ann Lee');
+  assert.strictEqual(list.children[2].children.length, 1, 'no name row when the person has no name');
+});
+
+test('choosing a match replaces the token and adds a separator', async () => {
+  const dom = makeDom();
+  const api = load(dom, { setTimeout, clearTimeout });
+  const { input, list } = openForm(dom, api);
+
+  typeInto(input, 'bob@contoso.com, an');
+  await wait(260);
+  list.children[0]._listeners.mousedown({ preventDefault() {} });
+  assert.strictEqual(input.value, 'bob@contoso.com, ann.lee@contoso.com, ');
+  assert.strictEqual(list.hidden, true);
+  assert.strictEqual(dom.state.activeElement, input);
+});
+
+test('people already added are not suggested again', async () => {
+  const dom = makeDom();
+  const api = load(dom, { setTimeout, clearTimeout });
+  const { input, list } = openForm(dom, api);
+
+  typeInto(input, 'ann.lee@contoso.com, an');
+  await wait(260);
+  assert.strictEqual(list.children.length, 2);
+  assert(!list.children.some((li) => li.children.some((c) => c.textContent === 'Ann.Lee@contoso.com')));
+});
+
+test('arrow keys move through matches, Enter picks one and does not submit', async () => {
+  const dom = makeDom();
+  const api = load(dom, { setTimeout, clearTimeout });
+  const { input, list, calls } = openForm(dom, api);
+
+  typeInto(input, 'an');
+  await wait(260);
+  const key = (k) => {
+    const e = {
+      key: k,
+      prevented: false,
+      preventDefault() {
+        this.prevented = true;
+      },
+    };
+    input._listeners.keydown(e);
+    return e;
+  };
+  key('ArrowDown');
+  key('ArrowDown');
+  assert.strictEqual(list.children[1].getAttribute('aria-selected'), 'true');
+  assert.strictEqual(input.getAttribute('aria-activedescendant'), list.children[1].id);
+  key('ArrowUp');
+  assert.strictEqual(list.children[0].getAttribute('aria-selected'), 'true');
+  const enter = key('Enter');
+  assert.strictEqual(enter.prevented, true);
+  assert.strictEqual(input.value, 'ann.lee@contoso.com, ');
+  assert.strictEqual(calls.post.length, 0);
+});
+
+test('Enter with no highlighted match submits the form as before', async () => {
+  const dom = makeDom();
+  const api = load(dom, { setTimeout, clearTimeout });
+  const { input, calls } = openForm(dom, api);
+
+  typeInto(input, 'an');
+  await wait(260);
+  input.value = 'ann@contoso.com';
+  input._listeners.keydown({ key: 'Enter', preventDefault() {} });
+  await flush();
+  assert.strictEqual(calls.post.length, 1);
+  assert.strictEqual(calls.post[0].url, '/api/skills/share/publish');
+});
+
+test('Escape closes the match list first and only then the modal', async () => {
+  const dom = makeDom();
+  const api = load(dom, { setTimeout, clearTimeout });
+  const { input, list } = openForm(dom, api);
+
+  typeInto(input, 'an');
+  await wait(260);
+  dom.key('Escape');
+  assert.strictEqual(list.hidden, true);
+  assert.strictEqual(dom.document.body.children.length, 1, 'modal still open');
+  dom.key('Escape');
+  assert.strictEqual(dom.document.body.children.length, 0);
+});
+
+test('a slow earlier search cannot overwrite the matches for newer text', async () => {
+  const dom = makeDom();
+  const api = load(dom, { setTimeout, clearTimeout });
+  const slow = { resolve: null };
+  const { input, list } = openForm(dom, api, {
+    searchPeople: (q) =>
+      q === 'an'
+        ? new Promise((r) => {
+            slow.resolve = () => r(PEOPLE);
+          })
+        : Promise.resolve([{ name: 'Zed Zed', email: 'zed@contoso.com' }]),
+  });
+
+  typeInto(input, 'an');
+  await wait(260);
+  typeInto(input, 'ze');
+  await wait(260);
+  slow.resolve();
+  await flush();
+  assert.strictEqual(list.children.length, 1);
+  assert.strictEqual(list.children[0].children[1].textContent, 'zed@contoso.com');
+});
+
+test('a failing lookup shows no list and does not block typing', async () => {
+  const dom = makeDom();
+  const api = load(dom, { setTimeout, clearTimeout });
+  const { input, list } = openForm(dom, api, {
+    searchPeople: async () => {
+      throw new Error('offline');
+    },
+  });
+  typeInto(input, 'an');
+  await wait(260);
+  assert.strictEqual(list.hidden, true);
+  assert.strictEqual(input.value, 'an');
+});
+
+test('without a searchPeople dependency the field is a plain input', () => {
+  const dom = makeDom();
+  const api = load(dom);
+  const { deps } = makeDeps();
+  api.openShareModal('weekly-report', deps);
+  const input = dom.byTag(dom.document.body.children[0], 'input');
+  assert.strictEqual(input.getAttribute('role'), null);
+  assert.strictEqual(input._listeners.input, undefined);
+});
+
+// ── Send the message ─────────────────────────────────────────────────────
+
+async function openResultWith(dom, api, extraDeps, body, channelLabel) {
+  const { deps, calls } = makeDeps(
+    Object.assign(
+      {
+        postJson: async (url, payload) => {
+          calls.post.push({ url, payload });
+          if (url.endsWith('/publish')) return { resp: { ok: true }, body: body || PUBLISHED };
+          return {
+            resp: { ok: true },
+            body: { drafts: [{ _draft: 'email-send', data: { draft_id: 'd1' } }], unmatched: [] },
+          };
+        },
+      },
+      extraDeps,
+    ),
+  );
+  api.openShareModal('weekly-report', deps);
+  const modal = dom.document.body.children[0];
+  if (channelLabel) dom.byText(modal, channelLabel).click();
+  dom.byTag(modal, 'input').value = 'ann@contoso.com, out@gmail.com';
+  dom.byText(modal, 'Share').click();
+  await flush();
+  return { modal, calls };
+}
+
+test('Send posts the chosen channel, people and message, then hands the drafts over and closes', async () => {
+  const dom = makeDom();
+  const api = load(dom);
+  const shown = [];
+  const { modal, calls } = await openResultWith(dom, api, { showDrafts: (d) => shown.push(d) }, null, 'Teams');
+
+  assert(dom.byText(modal, 'Nothing has been sent. Send opens a Teams message draft for you to approve.'));
+  dom.byText(modal, 'Send').click();
+  await flush();
+
+  const draftCall = calls.post[1];
+  assert.strictEqual(draftCall.url, '/api/skills/share/draft');
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(draftCall.payload)), {
+    channel: 'teams',
+    skill_id: 'weekly-report',
+    people: ['ann@contoso.com', 'out@gmail.com'],
+    message: PUBLISHED.message,
+  });
+  assert.strictEqual(shown.length, 1);
+  assert.strictEqual(shown[0][0]._draft, 'email-send');
+  assert.strictEqual(dom.document.body.children.length, 0);
+  assert.strictEqual(calls.refresh, 1);
+});
+
+test('Send only ever posts to the publish and draft routes', async () => {
+  const dom = makeDom();
+  const api = load(dom);
+  const { modal, calls } = await openResultWith(dom, api, { showDrafts() {} });
+  dom.byText(modal, 'Send').click();
+  await flush();
+  assert(calls.post.every((c) => /^\/api\/skills\/share\/(publish|draft)$/.test(c.url)));
+});
+
+test('a draft failure explains in plain words, keeps the modal and re-enables Send', async () => {
+  const dom = makeDom();
+  const api = load(dom);
+  const { modal } = await openResultWith(
+    dom,
+    api,
+    {
+      showDrafts() {},
+      postJson: async (url) =>
+        url.endsWith('/publish')
+          ? { resp: { ok: true }, body: PUBLISHED }
+          : { resp: { ok: false }, body: { detail: { message: 'Slack is not connected.' } } },
+    },
+    null,
+    'Slack',
+  );
+  const send = dom.byText(modal, 'Send');
+  send.click();
+  await flush();
+  assert.strictEqual(dom.byClass(modal, 'ss-error').textContent, 'Slack is not connected.');
+  assert.strictEqual(send.disabled, false);
+  assert.strictEqual(dom.document.body.children.length, 1);
+});
+
+test('people without a Slack account are reported after the drafts open', async () => {
+  const dom = makeDom();
+  const api = load(dom);
+  const shown = [];
+  const reply = { drafts: [{ _draft: 'slack-dm', data: { draft_id: 's1' } }], unmatched: ['out@gmail.com'] };
+  const { modal, calls } = await openResultWith(
+    dom,
+    api,
+    {
+      showDrafts: (d) => shown.push(d),
+      postJson: async (url) =>
+        url.endsWith('/publish') ? { resp: { ok: true }, body: PUBLISHED } : { resp: { ok: true }, body: reply },
+    },
+    null,
+    'Slack',
+  );
+  dom.byText(modal, 'Send').click();
+  await flush();
+  assert.strictEqual(shown.length, 1);
+  assert.strictEqual(calls.alerts.length, 1);
+  assert(calls.alerts[0].msg.includes('out@gmail.com'));
+  assert.strictEqual(calls.alerts[0].kind, 'warning');
+});
+
+test('people who could not be granted access get a plain-words notice and still get the message', async () => {
+  const dom = makeDom();
+  const api = load(dom);
+  const { modal } = await openResultWith(
+    dom,
+    api,
+    { showDrafts() {} },
+    Object.assign({}, PUBLISHED, { ungranted: ['out@gmail.com'] }),
+  );
+  assert(dom.byText(modal, 'Access granted to ann@contoso.com'));
+  assert.strictEqual(dom.byClass(modal, 'ss-notice-title').textContent, 'Access was not granted for out@gmail.com');
+  const text = dom.byClass(modal, 'ss-notice-text').textContent;
+  assert(text.includes('outside your organization'));
+  assert(text.includes('Send the message anyway'));
+  assert(text.includes('Open in OneDrive'));
+  assert(dom.byText(modal, 'Send'));
+  assert.strictEqual(dom.byTag(modal, 'textarea').value, PUBLISHED.message);
+});
+
+test('no notice when everyone was granted access', async () => {
+  const dom = makeDom();
+  const api = load(dom);
+  const { modal } = await openResultWith(dom, api, {}, Object.assign({}, PUBLISHED, { ungranted: [] }));
+  assert.strictEqual(dom.byClass(modal, 'ss-notice'), null);
+});
+
+test('when everyone is ungranted there is no Access granted line', async () => {
+  const dom = makeDom();
+  const api = load(dom);
+  const { modal } = await openResultWith(
+    dom,
+    api,
+    {},
+    Object.assign({}, PUBLISHED, { ungranted: ['ann@contoso.com', 'out@gmail.com'] }),
+  );
+  assert.strictEqual(dom.byClass(modal, 'ss-access'), null);
+  assert.strictEqual(
+    dom.byClass(modal, 'ss-notice-title').textContent,
+    'Access was not granted for ann@contoso.com, out@gmail.com',
+  );
+});
+
+test('the send-by choice moves with the arrow keys', () => {
+  const dom = makeDom();
+  const api = load(dom);
+  const { deps } = makeDeps();
+  api.openShareModal('weekly-report', deps);
+  const modal = dom.document.body.children[0];
+  const email = dom.byText(modal, 'Email');
+  const teams = dom.byText(modal, 'Teams');
+  const e = {
+    key: 'ArrowRight',
+    preventDefault() {
+      this.prevented = true;
+    },
+  };
+  email._listeners.keydown(e);
+  assert.strictEqual(e.prevented, true);
+  assert.strictEqual(teams.getAttribute('aria-checked'), 'true');
+  assert.strictEqual(email.getAttribute('aria-checked'), 'false');
+  assert.strictEqual(dom.state.activeElement, teams);
 });

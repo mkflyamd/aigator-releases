@@ -6279,6 +6279,14 @@ function closeDrawer() {
 }
 settingsTrigger.addEventListener('click', openDrawer);
 drawerClose.addEventListener('click', closeDrawer);
+// Share modal (skill-sharing.js) hands its drafts here so the approval cards
+// appear in the chat, which the Settings drawer would otherwise cover.
+window.showShareDrafts = function (items) {
+  closeDrawer();
+  (items || []).forEach((item) => {
+    if (item && item._draft && item.data) _injectDraftApprovalCard(item._draft, item.data);
+  });
+};
 settingsBackdrop.addEventListener('click', closeDrawer);
 
 /* ── Settings tab switching ─────────────────────────── */

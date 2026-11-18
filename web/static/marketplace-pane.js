@@ -2509,11 +2509,23 @@
         postJson: _postJson,
         downloadSkill: _downloadMineSkill,
         showAlert: _showAlert,
+        searchPeople: _searchPeople,
+        showDrafts: typeof window.showShareDrafts === 'function' ? window.showShareDrafts : null,
         refresh,
       });
       return;
     }
     return _downloadMineSkill(skillId);
+  }
+
+  // Same lookup the prompt bar's @ mentions use: people in the user's own org.
+  async function _searchPeople(query) {
+    const resp = await fetch(
+      '/api/people/search?q=' + encodeURIComponent(query) + '&org_only=true',
+    );
+    if (!resp.ok) return [];
+    const body = await resp.json().catch(() => ({}));
+    return Array.isArray(body.people) ? body.people : [];
   }
 
   async function _downloadMineSkill(skillId) {

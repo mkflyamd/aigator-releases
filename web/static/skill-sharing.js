@@ -1,8 +1,9 @@
 // web/static/skill-sharing.js
 //
 // Browser side of skill sharing. Owns the Share modal on Mine skill rows:
-// publish through OneDrive, show the message the author copies and sends, or
-// fall back to downloading the .skill file.
+// look up people, publish through OneDrive, then copy the message or open a
+// draft of it (email, Teams or Slack) for approval; or fall back to downloading
+// the .skill file.
 //
 // Every dependency on the marketplace pane (CSRF-aware POST, the download
 // function, alerts, refresh) is passed in, so this file has no globals of its
@@ -64,7 +65,10 @@
 
   // Builds the overlay, dialog, title, body and actions row; wires Escape and
   // the Tab loop. `setFocusables(list)` tells the Tab loop which elements the
-  // current view offers. `close()` is idempotent and restores focus.
+  // current view offers. `onEscape()` may return true to claim the key (an
+  // open suggestion list closes before the modal does). `closeBtn` is the X in
+  // the top corner, hidden until a view asks for it. `close()` is idempotent
+  // and restores focus.
   function _openShell(titleText, onClose) {
     if (_current) _current.close();
 
@@ -77,14 +81,27 @@
     modal.setAttribute('aria-labelledby', titleId);
     var heading = _el('div', 'mp-modal-title', titleText);
     heading.id = titleId;
+    var closeBtn = _el('button', 'ss-close', '×');
+    closeBtn.type = 'button';
+    closeBtn.setAttribute('aria-label', 'Close');
+    closeBtn.hidden = true;
     var body = _el('div', 'mp-modal-body');
     var actions = _el('div', 'mp-modal-actions');
+    modal.appendChild(closeBtn);
     modal.appendChild(heading);
     modal.appendChild(body);
     modal.appendChild(actions);
     overlay.appendChild(modal);
 
-    var shell = { overlay: overlay, heading: heading, body: body, actions: actions, closed: false };
+    var shell = {
+      overlay: overlay,
+      heading: heading,
+      body: body,
+      actions: actions,
+      closeBtn: closeBtn,
+      closed: false,
+      onEscape: null,
+    };
     var focusables = [];
 
     shell.setFocusables = function (list) {
@@ -99,11 +116,15 @@
       if (prevFocus && typeof prevFocus.focus === 'function') prevFocus.focus();
       if (onClose) onClose();
     };
+    closeBtn.addEventListener('click', function () {
+      shell.close();
+    });
 
     function onKey(e) {
       if (e.key === 'Escape') {
         e.stopPropagation();
         e.preventDefault();
+        if (shell.onEscape && shell.onEscape()) return;
         shell.close();
         return;
       }
@@ -134,10 +155,198 @@
     el.textContent = '';
   }
 
+  // ── People lookup ────────────────────────────────────────────────────────
+
+  var SUGGEST_MIN = 2;
+  var SUGGEST_MAX = 6;
+  var SUGGEST_DELAY = 200;
+
+  function _lastToken(text) {
+    return /[^,;\s]*$/.exec(text)[0];
+  }
+
+  // Suggests people for the address being typed (the text after the last
+  // separator). `deps.searchPeople(query)` resolves to [{name, email}], the
+  // same /api/people/search lookup the prompt bar's @ mentions use. Without
+  // that dependency the field is a plain text input.
+  function _attachPeopleLookup(input, list, deps) {
+    var rows = [];
+    var active = -1;
+    var seq = 0;
+    var timer = null;
+    var cache = {};
+    var enabled = typeof deps.searchPeople === 'function';
+
+    list.setAttribute('role', 'listbox');
+    list.setAttribute('aria-label', 'Matching people');
+    list.hidden = true;
+    if (enabled) {
+      input.setAttribute('role', 'combobox');
+      input.setAttribute('aria-autocomplete', 'list');
+      input.setAttribute('aria-expanded', 'false');
+      input.setAttribute('aria-controls', list.id);
+    }
+
+    function isOpen() {
+      return !list.hidden;
+    }
+
+    function close() {
+      list.hidden = true;
+      _clear(list);
+      rows = [];
+      active = -1;
+      if (enabled) {
+        input.setAttribute('aria-expanded', 'false');
+        input.setAttribute('aria-activedescendant', '');
+      }
+    }
+
+    function setActive(i) {
+      active = i;
+      rows.forEach(function (row, idx) {
+        var on = idx === i;
+        row.el.className = on ? 'ss-suggest-item is-active' : 'ss-suggest-item';
+        row.el.setAttribute('aria-selected', on ? 'true' : 'false');
+      });
+      input.setAttribute('aria-activedescendant', i >= 0 ? rows[i].el.id : '');
+    }
+
+    function choose(person) {
+      seq += 1;
+      clearTimeout(timer);
+      input.value = input.value.replace(/[^,;\s]*$/, '') + person.email.toLowerCase() + ', ';
+      close();
+      input.focus();
+    }
+
+    function show(people, token) {
+      var taken = parseEmails(input.value.slice(0, input.value.length - token.length)).emails;
+      var shown = people
+        .filter(function (p) {
+          return p && typeof p.email === 'string' && p.email && taken.indexOf(p.email.toLowerCase()) === -1;
+        })
+        .slice(0, SUGGEST_MAX);
+      if (!shown.length) {
+        close();
+        return;
+      }
+      _clear(list);
+      rows = shown.map(function (p, i) {
+        var li = _el('li', 'ss-suggest-item');
+        li.id = list.id + '-' + i;
+        li.setAttribute('role', 'option');
+        li.setAttribute('aria-selected', 'false');
+        var name = p.name && p.name !== p.email ? p.name : '';
+        if (name) li.appendChild(_el('span', 'ss-suggest-name', name));
+        li.appendChild(_el('span', 'ss-suggest-email', p.email));
+        // mousedown, not click: the input keeps focus, so it does not blur
+        // (and close the list) before the choice lands.
+        li.addEventListener('mousedown', function (e) {
+          e.preventDefault();
+          choose(p);
+        });
+        list.appendChild(li);
+        return { el: li, person: p };
+      });
+      list.hidden = false;
+      input.setAttribute('aria-expanded', 'true');
+      setActive(-1);
+    }
+
+    async function run(token, mine) {
+      var people = cache[token];
+      if (!people) {
+        try {
+          people = await deps.searchPeople(token);
+        } catch (err) {
+          people = [];
+        }
+        if (!Array.isArray(people)) people = [];
+        cache[token] = people;
+      }
+      if (mine !== seq) return;
+      show(people, token);
+    }
+
+    function onInput() {
+      clearTimeout(timer);
+      seq += 1;
+      var mine = seq;
+      var token = _lastToken(input.value);
+      if (token.length < SUGGEST_MIN) {
+        close();
+        return;
+      }
+      timer = setTimeout(function () {
+        run(token, mine);
+      }, SUGGEST_DELAY);
+    }
+
+    // True when the key was used by the list and the field must not act on it.
+    function handleKey(e) {
+      if (!isOpen() || !rows.length) return false;
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        var next = active + (e.key === 'ArrowDown' ? 1 : -1);
+        if (next < 0) next = rows.length - 1;
+        if (next >= rows.length) next = 0;
+        setActive(next);
+        return true;
+      }
+      if (e.key === 'Enter' && active >= 0) {
+        e.preventDefault();
+        choose(rows[active].person);
+        return true;
+      }
+      return false;
+    }
+
+    if (enabled) {
+      input.addEventListener('input', onInput);
+      input.addEventListener('blur', close);
+    }
+    return { handleKey: handleKey, close: close, isOpen: isOpen };
+  }
+
   // ── Share modal ──────────────────────────────────────────────────────────
 
+  var CHANNELS = [
+    { id: 'email', label: 'Email', draft: 'an email draft' },
+    { id: 'teams', label: 'Teams', draft: 'a Teams message draft' },
+    { id: 'slack', label: 'Slack', draft: 'a Slack message draft' },
+  ];
+
+  function _channel(id) {
+    return CHANNELS.filter(function (c) {
+      return c.id === id;
+    })[0];
+  }
+
+  function _ungrantedNotice(ungranted) {
+    var one = ungranted.length === 1;
+    var notice = _el('div', 'ss-notice');
+    notice.setAttribute('role', 'status');
+    notice.appendChild(_el('p', 'ss-notice-title', 'Access was not granted for ' + ungranted.join(', ')));
+    notice.appendChild(
+      _el(
+        'p',
+        'ss-notice-text',
+        (one ? 'OneDrive would not let this person open the skill' : 'OneDrive would not let these people open the skill') +
+          ', usually because they are outside your organization. Send the message anyway, then add ' +
+          (one ? 'them' : 'each of them') +
+          ' in OneDrive (Open in OneDrive, then Share) so the link works for them.',
+      ),
+    );
+    return notice;
+  }
+
   function openShareModal(skillId, deps) {
-    var shell = _openShell('Share "' + skillId + '"');
+    var published = false;
+    var channel = 'email';
+    var shell = _openShell('Share "' + skillId + '"', function () {
+      if (published && deps.refresh) deps.refresh();
+    });
     showForm('');
 
     function showForm(initialText) {
@@ -146,29 +355,80 @@
       _clear(shell.actions);
       shell.heading.textContent = 'Share "' + skillId + '"';
 
-      var inputId = 'ss-people-' + Date.now();
-      var label = _el('label', 'ss-label', 'Share with (work email addresses)');
+      var stamp = Date.now();
+      var inputId = 'ss-people-' + stamp;
+      var label = _el('label', 'ss-label', 'Share with');
       label.setAttribute('for', inputId);
+      var field = _el('div', 'ss-field');
       var input = _el('input', 'ss-input');
       input.id = inputId;
       input.type = 'text';
       input.value = initialText;
       input.setAttribute('autocomplete', 'off');
-      input.setAttribute('placeholder', 'name@company.com, name2@company.com');
-      var hint = _el(
-        'p',
-        'ss-hint',
-        'They can use the skill but not change it. Nobody is emailed; you copy the message and send it yourself.',
-      );
+      input.setAttribute('placeholder', 'Search by name or enter work email addresses');
+      var suggest = _el('ul', 'ss-suggest');
+      suggest.id = 'ss-suggest-' + stamp;
+      field.appendChild(input);
+      field.appendChild(suggest);
+      var lookup = _attachPeopleLookup(input, suggest, deps);
+      shell.onEscape = function () {
+        if (!lookup.isOpen()) return false;
+        lookup.close();
+        return true;
+      };
+
+      var viaId = 'ss-via-' + stamp;
+      var viaLabel = _el('span', 'ss-label', 'Send the message by');
+      viaLabel.id = viaId;
+      var seg = _el('div', 'ss-seg');
+      seg.setAttribute('role', 'radiogroup');
+      seg.setAttribute('aria-labelledby', viaId);
+      var hint = _el('p', 'ss-hint');
+      var segBtns = CHANNELS.map(function (c) {
+        var b = _el('button', 'ss-seg-btn', c.label);
+        b.type = 'button';
+        b.setAttribute('role', 'radio');
+        seg.appendChild(b);
+        return { id: c.id, el: b };
+      });
+      function pick(id, focus) {
+        channel = id;
+        segBtns.forEach(function (s) {
+          var on = s.id === id;
+          s.el.className = on ? 'ss-seg-btn is-selected' : 'ss-seg-btn';
+          s.el.setAttribute('aria-checked', on ? 'true' : 'false');
+          s.el.setAttribute('tabindex', on ? '0' : '-1');
+          if (on && focus) s.el.focus();
+        });
+        hint.textContent =
+          'They can use the skill but not change it. Nothing is sent until you approve ' + _channel(id).draft + '.';
+      }
+      segBtns.forEach(function (s, i) {
+        s.el.addEventListener('click', function () {
+          pick(s.id, false);
+        });
+        s.el.addEventListener('keydown', function (e) {
+          var step = 0;
+          if (e.key === 'ArrowRight' || e.key === 'ArrowDown') step = 1;
+          if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') step = -1;
+          if (!step) return;
+          e.preventDefault();
+          pick(segBtns[(i + step + segBtns.length) % segBtns.length].id, true);
+        });
+      });
+
       var errorEl = _el('p', 'ss-error');
       errorEl.setAttribute('role', 'alert');
       var statusEl = _el('p', 'ss-status');
       statusEl.setAttribute('aria-live', 'polite');
       shell.body.appendChild(label);
-      shell.body.appendChild(input);
+      shell.body.appendChild(field);
+      shell.body.appendChild(viaLabel);
+      shell.body.appendChild(seg);
       shell.body.appendChild(hint);
       shell.body.appendChild(errorEl);
       shell.body.appendChild(statusEl);
+      pick(channel, false);
 
       var cancelBtn = _button('Cancel');
       var downloadBtn = _button('Download file instead');
@@ -190,6 +450,7 @@
         if (pending) return;
         errorEl.textContent = '';
         input.setAttribute('aria-invalid', 'false');
+        lookup.close();
         var parsed = parseEmails(input.value);
         var invalid = '';
         if (!parsed.emails.length && !parsed.bad.length) invalid = 'Enter at least one work email address.';
@@ -221,6 +482,7 @@
           errorEl.textContent = shareErrorText(result.resp, result.body);
           return;
         }
+        published = true;
         showResult(result.body || {}, parsed.emails);
       }
 
@@ -233,6 +495,7 @@
       });
       shareBtn.addEventListener('click', submit);
       input.addEventListener('keydown', function (e) {
+        if (lookup.handleKey(e)) return;
         if (e.key === 'Enter') {
           e.preventDefault();
           submit();
@@ -244,72 +507,112 @@
     function showResult(data, emails) {
       _clear(shell.body);
       _clear(shell.actions);
+      shell.onEscape = null;
+      shell.closeBtn.hidden = false;
       var version = data.version;
       shell.heading.textContent = data.reused
         ? 'Already shared, no changes since version ' + version
         : 'Shared as version ' + version;
 
-      shell.body.appendChild(_el('p', 'ss-access', 'Access granted to ' + emails.join(', ')));
+      var ungranted = Array.isArray(data.ungranted) ? data.ungranted : [];
+      var granted = emails.filter(function (e) {
+        return ungranted.indexOf(e) === -1;
+      });
+      if (granted.length) shell.body.appendChild(_el('p', 'ss-access', 'Access granted to ' + granted.join(', ')));
+      if (ungranted.length) shell.body.appendChild(_ungrantedNotice(ungranted));
       var area = _el('textarea', 'ss-message');
       area.readOnly = true;
       area.value = data.message || '';
       area.setAttribute('rows', '4');
       area.setAttribute('aria-label', 'Message to send');
       shell.body.appendChild(area);
-      var note = _el('p', 'ss-hint', 'Nothing has been sent. Paste this message into an email or chat yourself.');
-      shell.body.appendChild(note);
-      var copyStatus = _el('p', 'ss-status');
-      copyStatus.setAttribute('aria-live', 'polite');
-      shell.body.appendChild(copyStatus);
+      shell.body.appendChild(
+        _el('p', 'ss-hint', 'Nothing has been sent. Send opens ' + _channel(channel).draft + ' for you to approve.'),
+      );
+      var errorEl = _el('p', 'ss-error');
+      errorEl.setAttribute('role', 'alert');
+      shell.body.appendChild(errorEl);
+      var statusEl = _el('p', 'ss-status');
+      statusEl.setAttribute('aria-live', 'polite');
+      shell.body.appendChild(statusEl);
 
-      // The label is captured once, here, so a second click while "Copied" is
-      // showing cannot mistake "Copied" for the original label.
-      function wireCopy(btn, text, doneLabel) {
-        var original = btn.textContent;
-        btn.addEventListener('click', function () {
-          var clip = typeof navigator !== 'undefined' && navigator.clipboard;
-          if (!clip || typeof clip.writeText !== 'function') {
-            copyStatus.textContent = 'Could not copy. Select the text and copy it.';
-            return;
-          }
-          Promise.resolve()
-            .then(function () {
-              return clip.writeText(text);
-            })
-            .then(
-              function () {
-                copyStatus.textContent = '';
-                btn.textContent = doneLabel;
-                setTimeout(function () {
-                  btn.textContent = original;
-                }, 2000);
-              },
-              function () {
-                copyStatus.textContent = 'Could not copy. Select the text and copy it.';
-              },
-            );
-        });
-      }
-
-      var copyMsgBtn = _button('Copy message', true);
+      var copyMsgBtn = _button('Copy message');
       copyMsgBtn.className += ' ss-copy';
-      var doneBtn = _button('Done');
-      wireCopy(copyMsgBtn, data.message || '', 'Copied');
-      doneBtn.addEventListener('click', function () {
-        shell.close();
-        if (deps.refresh) deps.refresh();
+      // The label is captured once, so a second click while "Copied" is
+      // showing cannot mistake "Copied" for the original label.
+      var copyLabel = copyMsgBtn.textContent;
+      copyMsgBtn.addEventListener('click', function () {
+        var clip = typeof navigator !== 'undefined' && navigator.clipboard;
+        if (!clip || typeof clip.writeText !== 'function') {
+          errorEl.textContent = 'Could not copy. Select the text and copy it.';
+          return;
+        }
+        Promise.resolve()
+          .then(function () {
+            return clip.writeText(data.message || '');
+          })
+          .then(
+            function () {
+              errorEl.textContent = '';
+              copyMsgBtn.textContent = 'Copied';
+              setTimeout(function () {
+                copyMsgBtn.textContent = copyLabel;
+              }, 2000);
+            },
+            function () {
+              errorEl.textContent = 'Could not copy. Select the text and copy it.';
+            },
+          );
       });
 
-      // Secondary actions sit on the left, Done and the main action on the
-      // right, so the primary button is last like every other modal.
-      var focusables = [area];
-      if (typeof data.link === 'string' && data.link) {
-        var copyLinkBtn = _button('Copy link');
-        copyLinkBtn.className += ' ss-copy';
-        wireCopy(copyLinkBtn, data.link, 'Copied');
-        shell.actions.appendChild(copyLinkBtn);
-        focusables.push(copyLinkBtn);
-      }
+      var sendBtn = _button('Send', true);
+      var sending = false;
+      sendBtn.addEventListener('click', async function () {
+        if (sending) return;
+        sending = true;
+        sendBtn.disabled = true;
+        errorEl.textContent = '';
+        statusEl.textContent = 'Preparing draft...';
+        var out;
+        try {
+          out = await deps.postJson('/api/skills/share/draft', {
+            channel: channel,
+            skill_id: skillId,
+            people: emails,
+            message: data.message || '',
+          });
+        } catch (err) {
+          out = { resp: { ok: false }, body: null };
+        }
+        sending = false;
+        statusEl.textContent = '';
+        if (!out.resp || !out.resp.ok) {
+          if (shell.closed) return;
+          sendBtn.disabled = false;
+          errorEl.textContent = shareErrorText(out.resp, out.body, 'Could not prepare the draft. Use Copy message instead.');
+          return;
+        }
+        if (!deps.showDrafts) {
+          if (shell.closed) return;
+          sendBtn.disabled = false;
+          errorEl.textContent = 'Could not open the draft here. Use Copy message instead.';
+          return;
+        }
+        var drafts = (out.body && out.body.drafts) || [];
+        var unmatched = (out.body && out.body.unmatched) || [];
+        shell.close();
+        deps.showDrafts(drafts);
+        if (unmatched.length && deps.showAlert) {
+          deps.showAlert(
+            'No Slack account was found for ' + unmatched.join(', ') + '. Use Copy message to reach them.',
+            'warning',
+          );
+        }
+      });
+
+      // The quiet link sits on the left; the two actions sit on the right with
+      // the main one last, like every other modal.
+      var focusables = [shell.closeBtn, area];
       if (typeof data.web_url === 'string' && data.web_url.indexOf('https://') === 0) {
         var open = _el('a', 'mp-btn mp-btn-cancel', 'Open in OneDrive');
         open.href = data.web_url;
@@ -319,11 +622,11 @@
         focusables.push(open);
       }
       shell.actions.appendChild(_el('div', 'ss-spacer'));
-      shell.actions.appendChild(doneBtn);
       shell.actions.appendChild(copyMsgBtn);
-      focusables.push(doneBtn, copyMsgBtn);
+      shell.actions.appendChild(sendBtn);
+      focusables.push(copyMsgBtn, sendBtn);
       shell.setFocusables(focusables);
-      copyMsgBtn.focus();
+      sendBtn.focus();
     }
 
     return shell;

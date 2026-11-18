@@ -52,3 +52,24 @@ test('Share is only added inside the Mine branch of the installed list', () => {
   const removeBtn = source.indexOf('const removeBtn', branch);
   assert(branch > 0 && at < removeBtn, 'share button sits in the tier === Mine block');
 });
+
+test('Share reuses the people search endpoint and hands drafts to the chat', () => {
+  const start = source.indexOf('function _shareMineSkill(');
+  const body = source.slice(start, source.indexOf('async function _downloadMineSkill(', start));
+  assert(body.includes('searchPeople: _searchPeople'));
+  assert(body.includes('window.showShareDrafts'));
+  const search = source.indexOf('async function _searchPeople(');
+  assert(search > 0);
+  const fn = source.slice(search, search + 400);
+  assert(fn.includes("'/api/people/search?q='"));
+  assert(fn.includes('org_only=true'));
+});
+
+test('app.js exposes showShareDrafts, which closes Settings and injects approval cards', () => {
+  const app = fs.readFileSync(path.join(__dirname, '..', 'web', 'static', 'app.js'), 'utf8');
+  const at = app.indexOf('window.showShareDrafts = function');
+  assert(at > 0);
+  const body = app.slice(at, at + 400);
+  assert(body.includes('closeDrawer()'));
+  assert(body.includes('_injectDraftApprovalCard(item._draft, item.data)'));
+});

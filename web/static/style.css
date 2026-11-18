@@ -18497,6 +18497,137 @@ body.gator-terminal-pushing .dock {
   color: var(--text, #e8e8f0);
 }
 
+/* Share modal: close X, people lookup, send-by toggle, notice */
+.ss-modal {
+  position: relative;
+}
+.ss-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  color: var(--text-dim, #aaa);
+  font-size: 1.25rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.ss-close[hidden] {
+  display: none;
+}
+.ss-close:hover {
+  background: var(--surface2, #1a2332);
+  color: var(--text, #e8e8f0);
+}
+.ss-close:focus-visible {
+  outline: 2px solid var(--accent, #4ade80);
+  outline-offset: 2px;
+}
+.ss-modal .mp-modal-title {
+  padding-right: 32px;
+}
+.ss-field {
+  position: relative;
+}
+.ss-suggest {
+  position: absolute;
+  top: calc(100% - 8px);
+  left: 0;
+  right: 0;
+  z-index: 5;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  background: var(--surface, #1e1e2e);
+  border: 1px solid var(--border, #444);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+.ss-suggest[hidden] {
+  display: none;
+}
+.ss-suggest-item {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--text, #e8e8f0);
+}
+.ss-suggest-item.is-active,
+.ss-suggest-item:hover {
+  background: var(--surface2, #1a2332);
+}
+.ss-suggest-name {
+  font-weight: 600;
+}
+.ss-suggest-email {
+  font-size: 0.78rem;
+  color: var(--text-dim, #aaa);
+}
+.ss-seg {
+  display: inline-flex;
+  padding: 2px;
+  margin-bottom: 10px;
+  background: var(--surface1, #181822);
+  border: 1px solid var(--border, #444);
+  border-radius: 8px;
+}
+.ss-seg-btn {
+  min-width: 4.5rem;
+  padding: 5px 14px;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  color: var(--text-dim, #aaa);
+  font-family: inherit;
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+.ss-seg-btn:hover {
+  color: var(--text, #e8e8f0);
+}
+.ss-seg-btn.is-selected {
+  background: var(--surface2, #1a2332);
+  color: var(--text, #e8e8f0);
+  box-shadow: 0 0 0 1px var(--accent, #4ade80);
+}
+.ss-seg-btn:focus-visible {
+  outline: 2px solid var(--accent, #4ade80);
+  outline-offset: 2px;
+}
+.ss-notice {
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  background: rgba(251, 191, 36, 0.1);
+  border: 1px solid rgba(251, 191, 36, 0.35);
+  border-radius: 8px;
+}
+[data-theme='light'] .ss-notice {
+  background: rgba(217, 119, 6, 0.08);
+  border-color: rgba(217, 119, 6, 0.35);
+}
+.mp-modal-body .ss-notice-title {
+  margin: 0 0 4px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text, #e8e8f0);
+}
+.mp-modal-body .ss-notice-text {
+  margin: 0;
+  font-size: 0.8rem;
+}
+
 /* Review a shared skill */
 .mp-modal-body .ss-desc {
   margin: 0 0 8px;
