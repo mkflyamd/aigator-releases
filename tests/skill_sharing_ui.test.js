@@ -1555,7 +1555,7 @@ test('Send lists who the email goes to and shows a read-only message box waiting
   const box = messageBox(t);
   assert.strictEqual(box.readOnly, true);
   assert.strictEqual(box.id, 'ss-message');
-  assert.strictEqual(box.getAttribute('placeholder'), 'The message appears here once the skill is saved.');
+  assert.strictEqual(box.getAttribute('placeholder'), 'The message is filled in when you choose Send or Copy message.');
   assert.strictEqual(box.value, '');
   assert.strictEqual(t.dom.find(t.root(), (el) => el.tag === 'label').getAttribute('for'), 'ss-message');
   assert.strictEqual(t.btn('Send').getAttribute('title'), 'Opens an email draft for you to approve. Nothing is sent automatically.');
@@ -1668,7 +1668,7 @@ test('Done falls back to the chosen folder when the server gives no path', async
 });
 
 test(
-  'Done names the locked folder when the server gives no path',
+  'Done names the locked folder when the server gives no path',
   async () => {
     const t = await toSend({ get: lockedLocations, post: publishWith({ saved_path: [] }) });
     await t.press('Send');

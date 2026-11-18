@@ -1574,7 +1574,7 @@
       msg.id = 'ss-message';
       msg.readOnly = true;
       msg.setAttribute('rows', '5');
-      msg.setAttribute('placeholder', 'The message appears here once the skill is saved.');
+      msg.setAttribute('placeholder', 'The message is filled in when you choose Send or Copy message.');
       msg.value = S.result ? S.result.message || '' : '';
       shell.body.appendChild(msgLabel);
       shell.body.appendChild(msg);
