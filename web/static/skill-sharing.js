@@ -1,10 +1,11 @@
 // web/static/skill-sharing.js
 //
 // Browser side of skill sharing. Owns the Share modal on Mine skill rows, a
-// three-step flow: Save (pick the OneDrive folder and confirm who can already
-// see it), Share (pick people), Send (publish, then open an email draft for
-// approval or copy the message). The .skill file download stays as a fallback
-// when the folders cannot be loaded.
+// two-step flow: Save (pick the OneDrive folder and confirm who can already
+// see it) and Share (pick people, read the whole message, then one button
+// publishes the skill, gives access, drafts the email and approves that draft).
+// The modal is the approval surface, so the draft is never shown anywhere else.
+// The .skill file download stays as a fallback when the folders cannot be loaded.
 //
 // Every dependency on the marketplace pane (CSRF-aware POST, JSON GET, the
 // download function, people search, alerts, refresh) is passed in, so this file
@@ -224,6 +225,7 @@
     var seq = 0;
     var timer = null;
     var ctrl = null;
+    var locked = false;
 
     var field = _el('div', 'ss-field');
     var box = _el('div', 'ss-chipbox');
@@ -288,6 +290,7 @@
         var x = _el('button', '', '×');
         x.type = 'button';
         x.setAttribute('aria-label', 'Remove ' + p.email);
+        x.disabled = locked;
         x.addEventListener('click', function () {
           remove(p.email);
           input.focus();
@@ -298,6 +301,7 @@
     }
 
     function remove(email) {
+      if (locked) return;
       people = people.filter(function (p) {
         return p.email !== email;
       });
@@ -540,6 +544,13 @@
         });
       },
       flush: flush,
+      remove: remove,
+      // Frozen while a send is in flight, so the list cannot change under it.
+      lock: function (on) {
+        locked = !!on;
+        input.disabled = locked;
+        renderChips();
+      },
       close: close,
       isOpen: isOpen,
     };
@@ -547,7 +558,7 @@
 
   // ── Share modal ──────────────────────────────────────────────────────────
 
-  var STEP_NAMES = ['Save', 'Share', 'Send'];
+  var STEP_NAMES = ['Save', 'Share'];
   var LOAD_ERROR = 'Could not load your folders. Try again.';
   var NO_RESPONSE = { resp: { ok: false }, body: null };
 
@@ -660,6 +671,12 @@
       ack: false,
       chooser: null,
       people: [],
+      note: null,
+      preview: null,
+      previewing: false,
+      previewError: '',
+      draft: null,
+      maybeSent: false,
       result: null,
       publishing: false,
       error: null,
@@ -718,7 +735,7 @@
       wrap.setAttribute('aria-label', 'Progress');
       STEP_NAMES.forEach(function (name, i) {
         var k = i + 1;
-        var done = k < S.step && S.step <= 3;
+        var done = k < S.step;
         var cls = 'ss-step' + (k === S.step ? ' is-current' : done ? ' is-done' : '');
         var b = _el('button', cls);
         b.type = 'button';
@@ -737,7 +754,7 @@
           reg(b);
         }
         wrap.appendChild(b);
-        if (i < 2) {
+        if (i < STEP_NAMES.length - 1) {
           var line = _el('span', 'ss-step-line');
           line.setAttribute('aria-hidden', 'true');
           wrap.appendChild(line);
@@ -748,10 +765,7 @@
 
     function go(step) {
       if (S.publishing) return;
-      if (step < 3) {
-        S.result = null;
-        S.error = null;
-      }
+      S.error = null;
       S.step = step;
       render();
     }
@@ -760,9 +774,7 @@
       if (shell.closed) return;
       if (S.chooser) renderChooser();
       else if (S.step === 1) renderSave();
-      else if (S.step === 2) renderShare();
-      else if (S.step === 3) renderSend();
-      else renderDone();
+      else renderShare();
     }
 
     // ── Step 1: where to save ──────────────────────────────────────────────
@@ -1379,29 +1391,427 @@
       finish();
     }
 
-    // ── Step 2: who to share with ──────────────────────────────────────────
+    // ── Step 2: share and send ─────────────────────────────────────────────
+    //
+    // One screen. It shows everyone who gets the email and the whole message
+    // before anything happens. The one primary button is the approval: it saves
+    // the skill, gives access, drafts the email and approves that draft in a
+    // single click. Nothing is written to OneDrive until that click or Copy link.
+
+    var NOTE_MAX = 1000;
+    var PREVIEW_ERROR = 'Could not load the message. Try again.';
+    var UNSENT_ACCESS_GIVEN = 'Access was given; email not sent.';
+    var MAYBE_SENT = 'May have been sent. Check Sent Items.';
+    var sh = {};
+
+    function shown(p) {
+      return p.name || p.email;
+    }
+
+    function personRow(p) {
+      var row = _el('div', 'ss-to-row');
+      var who = _el('span', '');
+      if (p.name) {
+        who.appendChild(document.createTextNode(p.name + ' '));
+        who.appendChild(_el('span', 'ss-to-email', p.email));
+      } else {
+        who.appendChild(document.createTextNode(p.email));
+      }
+      row.appendChild(who);
+      row.appendChild(_el('span', 'ss-to-role', 'Can view'));
+      return row;
+    }
+
+    function noteText() {
+      return String(S.note == null ? '' : S.note).trim();
+    }
+
+    function defaultNote(title) {
+      return "Hi, I'm sharing the skill " + title + ' with you.';
+    }
+
+    function canAct() {
+      return !!S.preview && !S.publishing;
+    }
+
+    function canSend() {
+      return canAct() && !S.maybeSent && sh.field.people().length > 0;
+    }
+
+    function updateButtons() {
+      if (!sh.send) return;
+      var any = sh.field.people().length > 0;
+      sh.send.disabled = !canSend();
+      sh.copy.disabled = !canAct();
+      sh.access.hidden = !any;
+      sh.copyNote.hidden = !any;
+    }
+
+    // `back` is the button the sender pressed. Disabling it drops the focus, so it gets it back.
+    function setBusy(busy, text, back) {
+      S.publishing = busy;
+      sh.back.disabled = busy;
+      sh.field.lock(busy);
+      sh.note.disabled = busy;
+      sh.stopButtons.forEach(function (b) {
+        b.disabled = busy;
+      });
+      updateButtons();
+      sh.status.textContent = busy ? text || '' : '';
+      if (!busy && back) (back.disabled ? sh.note : back).focus();
+    }
+
+    function fillRecipients() {
+      _clear(sh.to);
+      sh.field.people().forEach(function (p) {
+        sh.to.appendChild(personRow(p));
+      });
+      sh.to.hidden = !sh.to.firstChild;
+    }
+
+    // Before saving, the message is the real text with the link left out. After
+    // saving it is the message exactly as it goes.
+    function fillPreview() {
+      if (!sh.send || shell.closed) return;
+      if (S.preview && S.note == null) S.note = defaultNote(S.preview.title);
+      sh.note.value = S.note == null ? '' : S.note;
+      sh.msg.value = S.result ? S.result.message || '' : S.preview ? S.preview.message : '';
+      sh.previewError.textContent = S.previewError;
+      sh.previewError.hidden = !S.previewError;
+      sh.retry.hidden = !S.previewError;
+      updateButtons();
+    }
+
+    function loadPreview() {
+      if (S.preview || S.previewing) return;
+      S.previewing = true;
+      S.previewError = '';
+      get('/api/skills/share/preview?skill_id=' + encodeURIComponent(skillId)).then(function (r) {
+        S.previewing = false;
+        if (shell.closed) return;
+        var b = r.body || {};
+        if (!ok(r) || typeof b.message !== 'string') {
+          S.previewError = shareErrorText(r.resp, r.body, PREVIEW_ERROR);
+        } else {
+          S.preview = { message: b.message, title: b.title || skillId };
+        }
+        if (sh.send) fillPreview();
+      });
+    }
+
+    function showFailure(info) {
+      _clear(sh.errors);
+      if (!info) return;
+      var folderFault =
+        ['not_yours', 'forbidden', 'not_found', 'invalid', 'audience_unacknowledged'].indexOf(
+          info.code,
+        ) !== -1;
+      if (info.code === 'policy_blocked') {
+        sh.errors.appendChild(blockedBox('Nobody has been given access', info.text));
+      } else if (folderFault) {
+        var box = blockedBox('Could not save to this folder', info.text);
+        if (!S.current) {
+          var other = _el('button', 'ss-link-btn', 'Choose another folder');
+          other.type = 'button';
+          other.addEventListener('click', function () {
+            go(1);
+          });
+          box.appendChild(other);
+        }
+        sh.errors.appendChild(box);
+      } else {
+        var p = _el('p', 'ss-error', info.text);
+        p.setAttribute('role', 'alert');
+        sh.errors.appendChild(p);
+      }
+    }
+
+    function clearStop() {
+      sh.stopButtons.forEach(function (b) {
+        var i = focus.indexOf(b);
+        if (i !== -1) focus.splice(i, 1);
+      });
+      sh.stopButtons = [];
+      _clear(sh.stop);
+    }
+
+    // Once saved, the folder is fixed, so Back shows it as the chosen one.
+    function rememberFolder(res) {
+      if (!res.folder || !res.folder.folder_id) return;
+      S.current = {
+        drive_id: res.folder.drive_id,
+        folder_id: res.folder.folder_id,
+        name: res.folder.name || skillId,
+        path: Array.isArray(res.saved_path) ? res.saved_path : [],
+        web_url: res.folder.web_url || '',
+      };
+    }
+
+    function showPublished(res) {
+      S.result = res;
+      rememberFolder(res);
+      fillPreview();
+      sh.linkText.textContent = res.link || 'Added when you send';
+      _clear(sh.saved);
+      var entry = selectedEntry();
+      var where =
+        Array.isArray(res.saved_path) && res.saved_path.length
+          ? res.saved_path.join(' › ')
+          : _locLabel(S.current || (entry && entry.loc));
+      sh.saved.appendChild(document.createTextNode('Saved to ' + where + '. '));
+      if (typeof res.web_url === 'string' && res.web_url.indexOf('https://') === 0) {
+        var open = _el('a', 'ss-open-link', 'Open in OneDrive');
+        open.href = res.web_url;
+        open.target = '_blank';
+        open.rel = 'noopener';
+        sh.saved.appendChild(open);
+      }
+      sh.saved.hidden = false;
+      _clear(sh.notices);
+      if (res.relinked) sh.notices.appendChild(_relinkedNotice());
+      if (Array.isArray(res.ungranted) && res.ungranted.length) {
+        sh.notices.appendChild(_ungrantedNotice(res.ungranted));
+      }
+    }
+
+    // Saves the skill and gives these people access. Runs on every click, with
+    // the people on screen at that moment and never an earlier list.
+    async function publish(people) {
+      var entry = selectedEntry();
+      var root =
+        S.current || (entry && entry.isDefault)
+          ? null
+          : { drive_id: entry.loc.drive_id, folder_id: entry.loc.folder_id };
+      var out = await post('/api/skills/share/publish', {
+        skill_id: skillId,
+        people: people.map(function (p) {
+          return p.email;
+        }),
+        root: root,
+        audience_ack: !!S.ack,
+      });
+      if (ok(out)) published = true;
+      if (shell.closed) {
+        if (ok(out) && deps.refresh) deps.refresh();
+        return null;
+      }
+      if (!ok(out)) {
+        S.error = _errorInfo(out);
+        return null;
+      }
+      S.error = null;
+      return out.body || {};
+    }
+
+    // Typed text that is not a chip yet becomes one and nothing else happens,
+    // so every recipient is on screen before anything is sent.
+    function commitTyped() {
+      if (!sh.field.input.value.trim()) return false;
+      sh.field.flush();
+      return true;
+    }
+
+    async function onCopy() {
+      if (!canAct() || commitTyped()) return;
+      setBusy(true, 'Saving the skill and giving access...');
+      showFailure(null);
+      var res = await publish(sh.field.people());
+      if (shell.closed) return;
+      setBusy(false, '', sh.copy);
+      if (!res) {
+        showFailure(S.error);
+        return;
+      }
+      showPublished(res);
+      var clip = typeof navigator !== 'undefined' && navigator.clipboard;
+      try {
+        if (!clip || typeof clip.writeText !== 'function') throw new Error('no clipboard');
+        await clip.writeText(res.link || '');
+        sh.status.textContent = 'Link copied.';
+      } catch (err) {
+        showFailure({ code: '', text: 'Could not copy. Select the link and copy it.' });
+      }
+    }
+
+    function toastSent(people) {
+      if (typeof deps.showToast !== 'function') return;
+      deps.showToast(
+        people.length === 1
+          ? 'Sent to ' + shown(people[0])
+          : 'Sent to ' + people.length + ' people',
+        'success',
+      );
+    }
+
+    // Access could not be given to everyone. Nothing is sent until the sender chooses.
+    function showStop(people, ungranted) {
+      clearStop();
+      var gone = ungranted.map(function (e) {
+        return String(e).toLowerCase();
+      });
+      var given = people.filter(function (p) {
+        return gone.indexOf(p.email) === -1;
+      });
+      var notGiven = people.filter(function (p) {
+        return gone.indexOf(p.email) !== -1;
+      });
+      var notGivenText = (
+        notGiven.length
+          ? notGiven
+          : ungranted.map(function (e) {
+              return { email: String(e) };
+            })
+      )
+        .map(shown)
+        .join(', ');
+      var text =
+        (given.length ? 'Access given to ' + given.map(shown).join(', ') + '. ' : '') +
+        'Not given to ' +
+        notGivenText +
+        '. Email not sent yet.';
+      var box = _el('div', 'ss-notice');
+      box.setAttribute('role', 'alert');
+      box.appendChild(_el('p', 'ss-notice-text', text));
+      var row = _el('div', 'ss-stop-actions');
+      var buttons = [];
+      if (given.length && notGiven.length) {
+        var remove = _button('Remove ' + notGivenText + ' and send');
+        remove.addEventListener('click', function () {
+          if (S.publishing) return;
+          notGiven.forEach(function (p) {
+            sh.field.remove(p.email);
+          });
+          onShareAndSend(false);
+        });
+        buttons.push(remove);
+      }
+      var anyway = _button('Send anyway');
+      anyway.addEventListener('click', function () {
+        onShareAndSend(true);
+      });
+      buttons.push(anyway);
+      buttons.forEach(function (b) {
+        row.appendChild(b);
+        focus.splice(focus.indexOf(sh.back), 0, b);
+      });
+      sh.stopButtons = buttons;
+      box.appendChild(row);
+      sh.stop.appendChild(box);
+    }
+
+    // A draft is reused only while nothing it was made from has changed.
+    function draftKey(people, res) {
+      return JSON.stringify([
+        people
+          .map(function (p) {
+            return p.email;
+          })
+          .sort(),
+        noteText(),
+        res.message || '',
+      ]);
+    }
+
+    function draftIdOf(body) {
+      var first = body && Array.isArray(body.drafts) ? body.drafts[0] : null;
+      var id = first && first.data && first.data.draft_id;
+      return typeof id === 'string' ? id : '';
+    }
+
+    // The whole send, in order: save and give access, stop if anyone could not
+    // be given access, draft the email, approve it. `sendAnyway` carries on past
+    // that stop for the people shown.
+    async function onShareAndSend(sendAnyway) {
+      if (!canSend() || commitTyped()) return;
+      var people = sh.field.people();
+      setBusy(true, 'Saving the skill and giving access...');
+      showFailure(null);
+      clearStop();
+      var res = await publish(people);
+      if (shell.closed) return;
+      if (!res) {
+        setBusy(false, '', sh.send);
+        showFailure(S.error);
+        return;
+      }
+      showPublished(res);
+      var ungranted = Array.isArray(res.ungranted) ? res.ungranted : [];
+      if (ungranted.length && !sendAnyway) {
+        setBusy(false);
+        showStop(people, ungranted);
+        sh.stopButtons[0].focus();
+        return;
+      }
+
+      var key = draftKey(people, res);
+      var id = S.draft && S.draft.key === key ? S.draft.id : '';
+      if (!id) {
+        sh.status.textContent = 'Preparing the email...';
+        var made = await post('/api/skills/share/draft', {
+          skill_id: skillId,
+          channel: 'email',
+          people: people.map(function (p) {
+            return p.name ? { name: p.name, email: p.email } : { email: p.email };
+          }),
+          message: res.message || '',
+          message_html: res.message_html || '',
+          note: noteText(),
+        });
+        if (shell.closed) return;
+        id = ok(made) ? draftIdOf(made.body) : '';
+        if (!id) {
+          setBusy(false, '', sh.send);
+          showFailure({
+            code: '',
+            text:
+              UNSENT_ACCESS_GIVEN +
+              ' ' +
+              shareErrorText(made.resp, made.body, 'Could not prepare the email. Try again.'),
+          });
+          return;
+        }
+        S.draft = { id: id, key: key };
+      }
+
+      sh.status.textContent = 'Sending...';
+      var sent = await post('/api/drafts/' + encodeURIComponent(id) + '/approve', {});
+      if (shell.closed) return;
+      if (ok(sent)) {
+        S.draft = null;
+        shell.close();
+        toastSent(people);
+        return;
+      }
+      var status = sent && sent.resp ? sent.resp.status : undefined;
+      var lost = status === undefined || status === 404 || status === 409;
+      // A lost reply, or a draft that is gone or already in flight, may mean it is
+      // out already, so it is never retried blindly.
+      if (lost) {
+        S.maybeSent = true;
+        S.draft = null;
+      }
+      setBusy(false, '', sh.send);
+      if (lost) {
+        showFailure({ code: '', text: MAYBE_SENT });
+        return;
+      }
+      showFailure({ code: '', text: UNSENT_ACCESS_GIVEN });
+    }
 
     function renderShare() {
       begin();
       shell.body.appendChild(stepper());
+      sh = { stopButtons: [] };
       var shared = S.check.status === 'ok' && S.check.audience.kind !== 'private';
-      var nextBtn = _button('Next', true);
       var errorEl = _el('p', 'ss-error');
       errorEl.setAttribute('role', 'alert');
       var warnHost = _el('div', '');
       var field;
 
-      function updateNext() {
-        nextBtn.disabled = !(S.current || shared || S.people.length || field.input.value.trim());
-      }
-
       function fillWarn() {
         _clear(warnHost);
         var out = field.outside();
         if (!out.length) return;
-        var names = out.map(function (p) {
-          return p.name || p.email;
-        });
         var notice = _el('div', 'ss-notice');
         notice.setAttribute('role', 'note');
         notice.appendChild(_el('p', 'ss-notice-title', 'May need adding in OneDrive'));
@@ -1409,7 +1819,7 @@
           _el(
             'p',
             'ss-notice-text',
-            names.join(', ') +
+            out.map(shown).join(', ') +
               (out.length === 1 ? ' is' : ' are') +
               ' outside your organization, so access may not be given automatically. They still get the email. You can add them to the folder in OneDrive afterwards.',
           ),
@@ -1424,8 +1834,11 @@
           onChange: function () {
             S.people = field.people();
             errorEl.textContent = '';
+            // A different list is a different send, so an earlier stop no longer applies.
+            clearStop();
             fillWarn();
-            updateNext();
+            fillRecipients();
+            updateButtons();
           },
           onInvalid: function (text) {
             errorEl.textContent = text;
@@ -1433,6 +1846,7 @@
         },
         S.people,
       );
+      sh.field = field;
       label.setAttribute('for', field.input.id);
       shell.body.appendChild(label);
       shell.body.appendChild(field.el);
@@ -1456,303 +1870,98 @@
           ),
         );
         shell.body.appendChild(note);
-      } else {
-        shell.body.appendChild(
-          _el(
-            'p',
-            'ss-hint',
-            'These people get read access to this skill. Leave out anyone you do not want to be able to open it.',
-          ),
-        );
       }
       shell.body.appendChild(warnHost);
       shell.body.appendChild(errorEl);
-      fillWarn();
 
-      var back = reg(_button('Back'));
-      back.addEventListener('click', function () {
+      sh.to = _el('div', 'ss-tobar');
+      sh.to.setAttribute('aria-label', 'Email to');
+      shell.body.appendChild(sh.to);
+
+      var noteLabel = _el('label', 'ss-label', 'Add a message');
+      noteLabel.setAttribute('for', 'ss-note');
+      sh.note = _el('textarea', 'ss-message');
+      sh.note.id = 'ss-note';
+      sh.note.setAttribute('rows', '2');
+      sh.note.setAttribute('maxlength', String(NOTE_MAX));
+      sh.note.addEventListener('input', function () {
+        S.note = sh.note.value;
+      });
+      shell.body.appendChild(noteLabel);
+      shell.body.appendChild(sh.note);
+
+      var msgLabel = _el('label', 'ss-label', 'The rest of the email, as it will be sent');
+      msgLabel.setAttribute('for', 'ss-message');
+      sh.msg = _el('textarea', 'ss-message is-locked');
+      sh.msg.id = 'ss-message';
+      sh.msg.readOnly = true;
+      sh.msg.setAttribute('rows', '8');
+      shell.body.appendChild(msgLabel);
+      shell.body.appendChild(sh.msg);
+
+      sh.previewError = _el('p', 'ss-error');
+      sh.previewError.setAttribute('role', 'alert');
+      sh.retry = _el('button', 'ss-link-btn', 'Try again');
+      sh.retry.type = 'button';
+      sh.retry.addEventListener('click', function () {
+        loadPreview();
+      });
+      shell.body.appendChild(sh.previewError);
+      shell.body.appendChild(sh.retry);
+
+      var linkRow = _el('div', 'ss-linkrow');
+      linkRow.appendChild(_el('span', 'ss-label', 'Link'));
+      sh.linkText = _el('span', 'ss-link-text', 'Added when you send');
+      linkRow.appendChild(sh.linkText);
+      sh.copy = _button('Copy link');
+      sh.copy.addEventListener('click', onCopy);
+      linkRow.appendChild(sh.copy);
+      shell.body.appendChild(linkRow);
+      sh.copyNote = _el('p', 'ss-hint', 'Copying the link also gives these people access.');
+      shell.body.appendChild(sh.copyNote);
+
+      sh.status = _el('p', 'ss-status');
+      sh.status.setAttribute('aria-live', 'polite');
+      sh.saved = _el('p', 'ss-hint');
+      sh.saved.hidden = true;
+      sh.notices = _el('div', '');
+      sh.stop = _el('div', '');
+      sh.errors = _el('div', '');
+      shell.body.appendChild(sh.status);
+      shell.body.appendChild(sh.saved);
+      shell.body.appendChild(sh.notices);
+      shell.body.appendChild(sh.stop);
+      shell.body.appendChild(sh.errors);
+      sh.access = _el('p', 'ss-access', 'These people can open the skill and will get this email.');
+      shell.body.appendChild(sh.access);
+
+      sh.back = _button('Back');
+      sh.back.addEventListener('click', function () {
+        if (S.publishing) return;
         S.people = field.people();
         go(1);
       });
-      nextBtn.addEventListener('click', function () {
-        if (!field.flush()) return;
-        S.people = field.people();
-        if (S.current || shared || S.people.length) go(3);
+      sh.send = _button('Share and send', true);
+      sh.send.addEventListener('click', function () {
+        onShareAndSend(false);
       });
-      field.input.addEventListener('input', updateNext);
-      shell.actions.appendChild(back);
+      shell.actions.appendChild(sh.back);
       shell.actions.appendChild(_el('div', 'ss-spacer'));
-      shell.actions.appendChild(reg(nextBtn));
-      focus.splice(focus.length - 2, 0, field.input);
-      updateNext();
+      shell.actions.appendChild(sh.send);
+      focus.push(field.input, sh.note, sh.msg, sh.copy, sh.back, sh.send);
+
       shell.onEscape = function () {
         if (!field.isOpen()) return false;
         field.close();
         return true;
       };
+      fillWarn();
+      fillRecipients();
+      if (S.result) showPublished(S.result);
+      fillPreview();
+      loadPreview();
       finish();
       field.input.focus();
-    }
-
-    // ── Step 3: message and send ───────────────────────────────────────────
-
-    function personRow(p) {
-      var row = _el('div', 'ss-to-row');
-      if (p.name) {
-        row.appendChild(document.createTextNode(p.name + ' '));
-        row.appendChild(_el('span', 'ss-to-email', p.email));
-      } else {
-        row.appendChild(document.createTextNode(p.email));
-      }
-      return row;
-    }
-
-    function setBusy(busy, text) {
-      S.publishing = busy;
-      view.back.disabled = busy;
-      view.copy.disabled = busy;
-      view.send.disabled = busy || !S.people.length;
-      view.status.textContent = busy ? text || '' : '';
-    }
-
-    function showFailure(info) {
-      _clear(view.errors);
-      if (!info) return;
-      var folderFault =
-        ['not_yours', 'forbidden', 'not_found', 'invalid', 'audience_unacknowledged'].indexOf(
-          info.code,
-        ) !== -1;
-      if (info.code === 'policy_blocked') {
-        view.errors.appendChild(blockedBox('Nobody has been given access', info.text));
-      } else if (folderFault) {
-        var box = blockedBox('Could not save to this folder', info.text);
-        if (!S.current) {
-          var other = _el('button', 'ss-link-btn', 'Choose another folder');
-          other.type = 'button';
-          other.addEventListener('click', function () {
-            go(1);
-          });
-          box.appendChild(other);
-        }
-        view.errors.appendChild(box);
-      } else {
-        var p = _el('p', 'ss-error', info.text);
-        p.setAttribute('role', 'alert');
-        view.errors.appendChild(p);
-      }
-    }
-
-    function showPublished(res) {
-      view.msg.value = res.message || '';
-      view.msgWrap.hidden = false;
-      _clear(view.notices);
-      if (res.relinked) view.notices.appendChild(_relinkedNotice());
-      if (Array.isArray(res.ungranted) && res.ungranted.length) {
-        view.notices.appendChild(_ungrantedNotice(res.ungranted));
-      }
-    }
-
-    async function ensurePublished() {
-      if (S.result) return S.result;
-      var entry = selectedEntry();
-      var root =
-        S.current || (entry && entry.isDefault)
-          ? null
-          : { drive_id: entry.loc.drive_id, folder_id: entry.loc.folder_id };
-      var out = await post('/api/skills/share/publish', {
-        skill_id: skillId,
-        people: S.people.map(function (p) {
-          return p.email;
-        }),
-        root: root,
-        audience_ack: !!S.ack,
-      });
-      if (ok(out)) published = true;
-      if (shell.closed) {
-        if (ok(out) && deps.refresh) deps.refresh();
-        return null;
-      }
-      if (!ok(out)) {
-        S.error = _errorInfo(out);
-        return null;
-      }
-      S.result = out.body || {};
-      S.error = null;
-      return S.result;
-    }
-
-    async function onCopy() {
-      if (S.publishing) return;
-      setBusy(true, 'Saving the skill and giving access...');
-      showFailure(null);
-      var res = await ensurePublished();
-      if (shell.closed) return;
-      setBusy(false);
-      if (!res) {
-        showFailure(S.error);
-        return;
-      }
-      showPublished(res);
-      var clip = typeof navigator !== 'undefined' && navigator.clipboard;
-      try {
-        if (!clip || typeof clip.writeText !== 'function') throw new Error('no clipboard');
-        await clip.writeText(res.message || '');
-        view.status.textContent = 'Message copied.';
-      } catch (err) {
-        showFailure({ code: '', text: 'Could not copy. Select the text and copy it.' });
-      }
-    }
-
-    async function onSend() {
-      if (S.publishing) return;
-      setBusy(true, 'Saving the skill and giving access...');
-      showFailure(null);
-      var res = await ensurePublished();
-      if (shell.closed) return;
-      if (!res) {
-        setBusy(false);
-        showFailure(S.error);
-        return;
-      }
-      showPublished(res);
-      view.status.textContent = 'Preparing draft...';
-      var out = await post('/api/skills/share/draft', {
-        skill_id: skillId,
-        channel: 'email',
-        people: S.people.map(function (p) {
-          return p.name ? { name: p.name, email: p.email } : { email: p.email };
-        }),
-        message: res.message || '',
-        message_html: res.message_html || '',
-      });
-      if (shell.closed) return;
-      setBusy(false);
-      if (!ok(out)) {
-        showFailure({
-          code: '',
-          text: shareErrorText(
-            out.resp,
-            out.body,
-            'Could not prepare the draft. Use Copy message instead.',
-          ),
-        });
-        return;
-      }
-      if (!deps.showDrafts) {
-        showFailure({ code: '', text: 'Could not open the draft here. Use Copy message instead.' });
-        return;
-      }
-      var drafts = (out.body && out.body.drafts) || [];
-      var unmatched = (out.body && out.body.unmatched) || [];
-      S.step = 4;
-      render();
-      deps.showDrafts(drafts);
-      if (unmatched.length && deps.showAlert) {
-        deps.showAlert(
-          'No account was found for ' + unmatched.join(', ') + '. Use Copy message to reach them.',
-          'warning',
-        );
-      }
-    }
-
-    function renderSend() {
-      begin();
-      shell.body.appendChild(stepper());
-      view = {};
-      shell.body.appendChild(_el('span', 'ss-label', 'Email to'));
-      var to = _el('div', 'ss-tobar');
-      if (S.people.length) {
-        S.people.forEach(function (p) {
-          to.appendChild(personRow(p));
-        });
-      } else {
-        to.appendChild(
-          _el('div', 'ss-to-row', 'No one added. Use Copy message to share the link yourself.'),
-        );
-      }
-      shell.body.appendChild(to);
-      var msgLabel = _el('label', 'ss-label', 'Message');
-      msgLabel.setAttribute('for', 'ss-message');
-      var msg = _el('textarea', 'ss-message');
-      msg.id = 'ss-message';
-      msg.readOnly = true;
-      msg.setAttribute('rows', '5');
-      msg.value = S.result ? S.result.message || '' : '';
-      var msgWrap = _el('div', '');
-      msgWrap.hidden = !S.result;
-      msgWrap.appendChild(msgLabel);
-      msgWrap.appendChild(msg);
-      shell.body.appendChild(msgWrap);
-      view.msg = msg;
-      view.msgWrap = msgWrap;
-      view.status = _el('p', 'ss-status');
-      view.status.setAttribute('aria-live', 'polite');
-      view.notices = _el('div', '');
-      view.errors = _el('div', '');
-      shell.body.appendChild(view.status);
-      shell.body.appendChild(view.notices);
-      shell.body.appendChild(view.errors);
-
-      view.back = reg(_button('Back'));
-      view.back.addEventListener('click', function () {
-        go(2);
-      });
-      view.copy = _button('Copy message');
-      view.copy.className += ' ss-copy';
-      view.copy.addEventListener('click', onCopy);
-      view.send = _button('Send', true);
-      view.send.disabled = !S.people.length;
-      view.send.setAttribute(
-        'title',
-        'Opens an email draft for you to approve. Nothing is sent automatically.',
-      );
-      view.send.addEventListener('click', onSend);
-      reg(msg);
-      reg(view.copy);
-      reg(view.send);
-      shell.actions.appendChild(view.back);
-      shell.actions.appendChild(_el('div', 'ss-spacer'));
-      shell.actions.appendChild(view.copy);
-      shell.actions.appendChild(view.send);
-      if (S.result) showPublished(S.result);
-      showFailure(S.error);
-      finish();
-      (view.send.disabled ? view.copy : view.send).focus();
-    }
-
-    // ── Done ───────────────────────────────────────────────────────────────
-
-    function renderDone() {
-      var res = S.result || {};
-      begin('Shared "' + skillId + '"');
-      var head = _el('div', 'ss-done-head');
-      var check = _el('span', 'ss-done-check');
-      check.appendChild(_icon('check', 16));
-      var text = _el('div', '');
-      text.appendChild(_el('div', 'ss-done-title', 'Email draft ready for your approval'));
-      text.appendChild(
-        _el('p', 'ss-done-sub ss-hint', 'Nothing is sent until you approve it in the chat.'),
-      );
-      head.appendChild(check);
-      head.appendChild(text);
-      shell.body.appendChild(head);
-      var saved =
-        Array.isArray(res.saved_path) && res.saved_path.length
-          ? res.saved_path.join(' › ')
-          : _locLabel(S.current || selectedEntry().loc);
-      shell.body.appendChild(_el('p', 'ss-hint', 'Saved to ' + saved + '.'));
-      if (res.relinked) shell.body.appendChild(_relinkedNotice());
-      if (Array.isArray(res.ungranted) && res.ungranted.length)
-        shell.body.appendChild(_ungrantedNotice(res.ungranted));
-      if (typeof res.web_url === 'string' && res.web_url.indexOf('https://') === 0) {
-        var open = reg(_el('a', 'mp-btn mp-btn-cancel', 'Open in OneDrive'));
-        open.href = res.web_url;
-        open.target = '_blank';
-        open.rel = 'noopener';
-        shell.actions.appendChild(open);
-      }
-      finish();
-      shell.closeBtn.focus();
     }
 
     // ── Start ──────────────────────────────────────────────────────────────

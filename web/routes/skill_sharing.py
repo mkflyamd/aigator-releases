@@ -89,6 +89,7 @@ class DraftRequest(BaseModel):
     people: list[Person] = Field(min_length=1, max_length=50)
     message: str = Field(min_length=1, max_length=4000)
     message_html: str = Field(default="", max_length=8000)
+    note: str = Field(default="", max_length=1000)
 
 
 class ReviewRequest(BaseModel):
@@ -152,6 +153,11 @@ def check_shared_update(skill_id: str = Query(min_length=1, max_length=128)):
     return _call(receiver.check_update, _call(_provider), skill_id)
 
 
+@router.get("/api/skills/share/preview")
+def preview_share_message(skill_id: str = Query(min_length=1, max_length=128)):
+    return _call(publisher.preview_message, skill_id, author=_call(_author_name))
+
+
 @router.post("/api/skills/share/publish", dependencies=[Depends(verify_csrf)])
 def publish_skill(req: PublishRequest):
     provider = _call(_provider)
@@ -172,7 +178,12 @@ def publish_skill(req: PublishRequest):
 def draft_share_message(req: DraftRequest):
     people = [p.model_dump() for p in req.people]
     return _call(
-        drafts.build, skill_id=req.skill_id, people=people, message=req.message, message_html=req.message_html
+        drafts.build,
+        skill_id=req.skill_id,
+        people=people,
+        message=req.message,
+        message_html=req.message_html,
+        note=req.note,
     )
 
 

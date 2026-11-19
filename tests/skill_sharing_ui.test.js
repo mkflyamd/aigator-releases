@@ -333,9 +333,29 @@ const PUBLISHED = {
     'https://contoso-my.sharepoint.com/personal/me/Documents/AI%20Gator%20Skills/weekly-report',
   saved_path: ['OneDrive', 'AI Gator Skills', 'weekly-report'],
   ungranted: [],
+  link: 'aigator://share?d=eyJkIjoiYWJjIiwiZiI6MX0',
+  folder: {
+    drive_id: 'b!me',
+    folder_id: 'f9',
+    name: 'weekly-report',
+    web_url:
+      'https://contoso-my.sharepoint.com/personal/me/Documents/AI%20Gator%20Skills/weekly-report',
+  },
+};
+const PREVIEW = {
+  title: 'Weekly Report',
+  message:
+    'I shared a skill with you. Open it here: (link added when you send)\nFolder: (link added when you send)',
 };
 const DRAFT = {
-  drafts: [{ id: 'd1', to: ['ann.lee@contoso.com'], subject: 'weekly-report' }],
+  drafts: [
+    {
+      id: 'd1',
+      to: ['ann.lee@contoso.com'],
+      subject: 'weekly-report',
+      data: { draft_id: 'd1' },
+    },
+  ],
   unmatched: [],
 };
 const PEOPLE = [
@@ -347,6 +367,7 @@ const PEOPLE = [
 function defaultGet(url) {
   if (url.startsWith('/api/skills/share/locations')) return json(clone(LOCATIONS));
   if (url.startsWith('/api/skills/share/check')) return json(checkBody(PRIVATE));
+  if (url.startsWith('/api/skills/share/preview')) return json(clone(PREVIEW));
   return fail(404, 'not_found', 'No route ' + url);
 }
 
@@ -354,7 +375,7 @@ function defaultGet(url) {
 // defaults above. Payloads are copied to plain objects because values made
 // inside the vm context do not deepStrictEqual outer literals.
 function makeEnv(opts) {
-  const calls = { get: [], post: [], order: [], alerts: [], drafts: [], downloads: [], refresh: 0 };
+  const calls = { get: [], post: [], order: [], alerts: [], toasts: [], downloads: [], refresh: 0 };
   const deps = {
     getJson: async (url) => {
       calls.get.push(url);
@@ -368,6 +389,7 @@ function makeEnv(opts) {
       if (own != null) return own;
       if (url === '/api/skills/share/publish') return json(clone(PUBLISHED));
       if (url === '/api/skills/share/draft') return json(clone(DRAFT));
+      if (/^\/api\/drafts\/[^/]+\/approve$/.test(url)) return json({ ok: true, sent_to: [] });
       return fail(404, 'not_found', 'No route ' + url);
     },
     downloadSkill: (id) => {
@@ -376,16 +398,15 @@ function makeEnv(opts) {
     showAlert: (message, kind) => {
       calls.alerts.push([message, kind]);
     },
-    showDrafts: (drafts) => {
-      calls.order.push('drafts');
-      calls.drafts.push(clone(drafts));
+    showToast: (message, type) => {
+      calls.order.push('toast');
+      calls.toasts.push([message, type]);
     },
     refresh: () => {
       calls.refresh += 1;
     },
   };
   if (opts.search) deps.searchPeople = opts.search;
-  if (opts.noDrafts) delete deps.showDrafts;
   return { calls, deps };
 }
 
@@ -467,7 +488,7 @@ test('opens on Save with a loading line and asks for the locations of this skill
   assert(t.text().includes('Loading your folders...'));
   assert.deepStrictEqual(
     t.cls('ss-step').map((b) => b.textContent),
-    ['1Save', '2Share', '3Send'],
+    ['1Save', '2Share'],
   );
   assert.strictEqual(t.dom.byClass(t.root(), 'is-current').getAttribute('aria-current'), 'step');
   await flush();
@@ -717,10 +738,10 @@ test('Next moves to Share and the finished Save step becomes a way back', async 
   await t.press('Next');
   assert.deepStrictEqual(
     t.cls('ss-step').map((b) => b.textContent),
-    ['Save', '2Share', '3Send'],
+    ['Save', '2Share'],
   );
   assert.strictEqual(t.cls('ss-step')[0].getAttribute('data-done'), 'true');
-  assert.strictEqual(t.cls('ss-step')[2].getAttribute('data-done'), 'false');
+  assert.strictEqual(t.cls('ss-step')[1].getAttribute('data-done'), 'false');
   assert(t.btn('Back'));
   await t.dom.byClass(t.root(), 'is-done').click();
   await flush();
@@ -812,12 +833,12 @@ test('a skill saved before is locked to its folder: no radios, no check, Next on
   assert.strictEqual(t.nextDisabled(), false);
 });
 
-test('a locked skill can move on with nobody added, and Share still opens', async () => {
+test('a locked skill opens Share with nobody added, and sending waits for a person', async () => {
   const t = await open({ get: lockedLocations });
   await t.press('Next');
-  assert.strictEqual(t.btn('Next').disabled, false);
-  await t.press('Next');
-  assert(t.text().includes('Email to'));
+  assert.strictEqual(t.cls('ss-label')[0].textContent, 'Share with');
+  assert.strictEqual(t.btn('Share and send').disabled, true);
+  assert.deepStrictEqual(t.calls.post, []);
 });
 
 // ── Folder chooser ────────────────────────────────────────────────────────
@@ -900,7 +921,7 @@ test('the chooser starts at My OneDrive and the SharePoint sites', async () => {
   assert.deepStrictEqual(crumbs(t), ['Folders']);
   assert.deepStrictEqual(
     t.cls('ss-step').map((b) => b.textContent),
-    ['1Save', '2Share', '3Send'],
+    ['1Save', '2Share'],
   );
   assert.strictEqual(t.btn('Select this folder').disabled, true);
   assert.strictEqual(t.btn('New folder'), null);
@@ -1561,14 +1582,12 @@ test('a chip typed as an address takes the name the directory later reports', as
   assert.deepStrictEqual(chipNames(t), ['Ann Lee']);
 });
 
-test('text that is not an address stays in the box with an error, and Next will not move on', async () => {
+test('text that is not an address stays in the box with an error', async () => {
   const t = await toShare({ search: makeSearch() });
   enter(t, 'nobody');
   assert.strictEqual(fieldError(t), '"nobody" is not a valid email address.');
   assert.strictEqual(inputOf(t).value, 'nobody');
   assert.strictEqual(inputOf(t).getAttribute('aria-invalid'), 'true');
-  await t.press('Next');
-  assert.strictEqual(t.cls('ss-label')[0].textContent, 'Share with');
   assert.deepStrictEqual(chipNames(t), []);
 });
 
@@ -1593,39 +1612,27 @@ test('without a search function the box still takes addresses and never opens a 
   assert.deepStrictEqual(chipNames(t), ['a@x.com']);
 });
 
-test('Next waits for a person, but typed text counts', async () => {
+test('Share and send waits for a person, and typed text alone does not count', async () => {
   const t = await toShare({});
-  assert.strictEqual(t.nextDisabled(), true);
+  const send = () => t.btn('Share and send').disabled;
+  assert.strictEqual(send(), true);
   typeInto(t, 'x');
-  assert.strictEqual(t.nextDisabled(), false);
+  assert.strictEqual(send(), true);
   typeInto(t, '');
-  assert.strictEqual(t.nextDisabled(), true);
   enter(t, 'a@x.com');
-  assert.strictEqual(t.nextDisabled(), false);
+  assert.strictEqual(send(), false);
   t.dom
     .find(t.root(), (el) => el.getAttribute && el.getAttribute('aria-label') === 'Remove a@x.com')
     .click();
-  assert.strictEqual(t.nextDisabled(), true);
+  assert.strictEqual(send(), true);
 });
 
-test('Next turns a typed address into a chip and moves on to Send', async () => {
+test('a private folder shows no already-shared notice', async () => {
   const t = await toShare({});
-  typeInto(t, 'carol@contoso.com');
-  await t.press('Next');
-  assert(t.text().includes('Email to'));
-  assert.deepStrictEqual(
-    t.cls('ss-to-row').map((r) => r.textContent),
-    ['carol@contoso.com'],
-  );
-});
-
-test('a private folder explains the read access people get', async () => {
-  const t = await toShare({});
-  assert(t.text().includes('These people get read access to this skill.'));
   assert.deepStrictEqual(noticeTitles(t), []);
 });
 
-test('an already shared folder says who can use it and lets Next go with nobody added', async () => {
+test('an already shared folder says who can use it, and sending still needs someone added', async () => {
   const wording = [
     [
       LIBRARY,
@@ -1650,7 +1657,7 @@ test('an already shared folder says who can use it and lets Next go with nobody 
     await t.press('Next');
     assert.deepStrictEqual(noticeTitles(t), ['People can already use it']);
     assert(t.text().includes(text), text);
-    assert.strictEqual(t.nextDisabled(), false);
+    assert.strictEqual(t.btn('Share and send').disabled, true);
   }
 });
 
@@ -1676,11 +1683,15 @@ test('Back keeps the chips for when I return', async () => {
   assert.deepStrictEqual(chipNames(t), ['a@x.com', 'b@x.com']);
 });
 
-// ── Step 3: message and send, and the Done view ───────────────────────────
+// ── Step 2: share and send ────────────────────────────────────────────────
 
 const ANN_EMAIL = 'ann.lee@contoso.com';
 const DRAFT_ROUTE = '/api/skills/share/draft';
 const PUBLISH_ROUTE = '/api/skills/share/publish';
+const PREVIEW_ROUTE = '/api/skills/share/preview';
+const APPROVE_ROUTE = '/api/drafts/d1/approve';
+const SEND = 'Share and send';
+const DEFAULT_NOTE = "Hi, I'm sharing the skill Weekly Report with you.";
 
 // who: 'ann' picks Ann Lee from the directory (a named chip); anything else is
 // typed as an address. opts.pick chooses a recent folder, opts.ack ticks the box.
@@ -1702,7 +1713,7 @@ async function toSend(opts, who) {
       enter(t, w);
     }
   }
-  await t.press('Next');
+  await flush();
   return t;
 }
 
@@ -1710,6 +1721,13 @@ const publishWith = (over) => (url) =>
   url === PUBLISH_ROUTE ? json(Object.assign(clone(PUBLISHED), over)) : undefined;
 const failOn = (route, status, code, message) => (url) =>
   url === route ? fail(status, code, message) : undefined;
+const draftReply = (id) => ({
+  drafts: [{ id, to: [ANN_EMAIL], data: { draft_id: id } }],
+  unmatched: [],
+});
+// The approve step answers with this until a test says otherwise.
+const approveFails = (status, code, message) => (url) =>
+  url.endsWith('/approve') ? fail(status, code, message) : undefined;
 
 // Holds the request for each listed route until the test releases it.
 function gated(routes) {
@@ -1725,91 +1743,141 @@ function gated(routes) {
 }
 const sendStatus = (t) => t.one('ss-status').textContent;
 const errorBox = (t) => t.cls('ss-audience').filter((b) => t.dom.hasClass(b, 'is-blocked'));
-const alertText = (t) => t.cls('ss-error').map((p) => p.textContent);
-const messageBox = (t) => t.dom.byTag(t.root(), 'textarea');
+const alertText = (t) =>
+  t
+    .cls('ss-error')
+    .map((p) => p.textContent)
+    .filter(Boolean);
+const msgBox = (t) => t.dom.find(t.root(), (el) => el.tag === 'textarea' && el.id === 'ss-message');
+const noteBox = (t) => t.dom.find(t.root(), (el) => el.tag === 'textarea' && el.id === 'ss-note');
+const sendBtn = (t) => t.btn(SEND);
+const chipX = (t, email) =>
+  t.dom.find(
+    t.root(),
+    (el) => el.getAttribute && el.getAttribute('aria-label') === 'Remove ' + email,
+  );
 const FOLDER_FAULTS = ['not_yours', 'forbidden', 'not_found', 'invalid', 'audience_unacknowledged'];
+const publishCalls = (t) => t.calls.post.filter((p) => p.url === PUBLISH_ROUTE);
+const publishedPeople = (t) => publishCalls(t).map((p) => p.payload.people);
 
-test('Send lists who the email goes to and shows a read-only message box waiting for the skill to be saved', async () => {
+test('opening the screen lists each person as Can view and shows the whole message before anything is saved', async () => {
   const t = await toSend({}, ['ann', 'bob@contoso.com']);
   assert.strictEqual(t.heading(), 'Share "weekly-report"');
-  assert.strictEqual(t.one('is-current').textContent, '3Send');
-  assert.strictEqual(t.cls('ss-label')[0].textContent, 'Email to');
+  assert.deepStrictEqual(
+    t.cls('ss-step').map((b) => b.textContent),
+    ['Save', '2Share'],
+  );
+  assert.strictEqual(t.one('is-current').textContent, '2Share');
   assert.deepStrictEqual(
     t.cls('ss-to-row').map((r) => r.textContent),
-    ['Ann Lee ' + ANN_EMAIL, 'bob@contoso.com'],
+    ['Ann Lee ' + ANN_EMAIL + 'Can view', 'bob@contoso.com' + 'Can view'],
   );
   assert.deepStrictEqual(
-    t.cls('ss-to-email').map((r) => r.textContent),
-    [ANN_EMAIL],
+    t.cls('ss-to-role').map((r) => [r.tag, r.textContent]),
+    [
+      ['span', 'Can view'],
+      ['span', 'Can view'],
+    ],
   );
-  const box = messageBox(t);
-  assert.strictEqual(box.readOnly, true);
-  assert.strictEqual(box.id, 'ss-message');
-  assert.strictEqual(box.value, '');
-  assert.strictEqual(box.parent.hidden, true);
-  assert.strictEqual(
-    t.dom.find(t.root(), (el) => el.tag === 'label').getAttribute('for'),
-    'ss-message',
-  );
-  assert.strictEqual(
-    t.btn('Send').getAttribute('title'),
-    'Opens an email draft for you to approve. Nothing is sent automatically.',
-  );
-  assert.strictEqual(t.btn('Send').disabled, false);
-  assert.strictEqual(t.dom.state.activeElement, t.btn('Send'));
+  assert.strictEqual(noteBox(t).value, DEFAULT_NOTE);
+  assert.notStrictEqual(noteBox(t).readOnly, true);
+  assert.strictEqual(msgBox(t).readOnly, true);
+  assert.strictEqual(msgBox(t).value, PREVIEW.message);
+  assert(msgBox(t).value.includes('(link added when you send)'));
+  assert.strictEqual(t.one('ss-link-text').textContent, 'Added when you send');
+  assert(t.text().includes('Copying the link also gives these people access.'));
+  assert(t.text().includes('These people can open the skill and will get this email.'));
+  assert.strictEqual(sendBtn(t).disabled, false);
+  assert.strictEqual(t.btn('Copy link').disabled, false);
+  assert.deepStrictEqual(t.calls.get.slice(-1), [PREVIEW_ROUTE + '?skill_id=weekly-report']);
+  assert.deepStrictEqual(t.calls.post, [], 'nothing is saved by opening the screen');
+});
+
+test('opening Share and going Back do not save or give access', async () => {
+  const t = await toSend({}, ['bob@contoso.com']);
+  assert.deepStrictEqual(t.calls.post, []);
+  await t.press('Back');
+  assert.strictEqual(t.cls('ss-label')[0].textContent, 'Save to');
+  await t.press('Next');
+  assert.deepStrictEqual(t.calls.post, []);
+  assert.strictEqual(t.calls.refresh, 0);
+});
+
+test('with nobody added the send is off and so are the people lines', async () => {
+  const t = await toSend({ get: lockedLocations }, []);
+  assert.strictEqual(sendBtn(t).disabled, true);
+  assert.strictEqual(t.cls('ss-to-row').length, 0);
+  assert.strictEqual(t.one('ss-access').hidden, true);
+  sendBtn(t).click();
+  await flush();
   assert.deepStrictEqual(t.calls.post, []);
 });
 
-test('with nobody added Send is off, Copy is on and takes the focus', async () => {
-  const t = await open({ get: lockedLocations });
-  await t.press('Next');
-  await t.press('Next');
-  assert.deepStrictEqual(
-    t.cls('ss-to-row').map((r) => r.textContent),
-    ['No one added. Use Copy message to share the link yourself.'],
-  );
-  assert.strictEqual(t.btn('Send').disabled, true);
-  assert.strictEqual(t.btn('Copy message').disabled, false);
-  assert.strictEqual(t.dom.state.activeElement, t.btn('Copy message'));
-});
-
-test('Copy saves the skill first and then copies the message it got back', async () => {
-  const t = await toSend({});
-  await t.press('Copy message');
-  assert.deepStrictEqual(t.calls.order.slice(-2), ['publish', 'copy']);
-  assert.deepStrictEqual(t.clip.written, [PUBLISHED.message]);
-  assert.strictEqual(messageBox(t).value, PUBLISHED.message);
-  assert.strictEqual(messageBox(t).parent.hidden, false);
-  assert.strictEqual(sendStatus(t), 'Message copied.');
-  assert.deepStrictEqual(t.calls.alerts, []);
-  assert.strictEqual(t.btn('Copy message').disabled, false);
-});
-
-test('the save request carries the skill, the addresses, the default folder as no root, and no acknowledgement', async () => {
-  const t = await toSend({}, ['ann', 'bob@contoso.com']);
-  await t.press('Copy message');
-  assert.deepStrictEqual(t.calls.post, [
-    {
-      url: PUBLISH_ROUTE,
-      payload: {
-        skill_id: 'weekly-report',
-        people: [ANN_EMAIL, 'bob@contoso.com'],
-        root: null,
-        audience_ack: false,
-      },
+test('the send stays off until the message has loaded, and Try again loads it', async () => {
+  let n = 0;
+  const t = await toSend({
+    get: (url) => {
+      if (!url.startsWith(PREVIEW_ROUTE)) return undefined;
+      n += 1;
+      return n === 1 ? fail(500, 'boom', 'Could not read the skill.') : undefined;
     },
+  });
+  assert(alertText(t).includes('Could not read the skill.'));
+  assert.strictEqual(sendBtn(t).disabled, true);
+  assert.strictEqual(msgBox(t).value, '');
+  await t.press('Try again');
+  assert.strictEqual(msgBox(t).value, PREVIEW.message);
+  assert.strictEqual(sendBtn(t).disabled, false);
+  assert.strictEqual(n, 2);
+});
+
+test('a preview that never arrives says so with the generic text', async () => {
+  const t = await toSend({
+    get: (url) => {
+      if (url.startsWith(PREVIEW_ROUTE)) throw new Error('offline');
+    },
+  });
+  assert(alertText(t).includes('Could not load the message. Try again.'));
+  assert.strictEqual(sendBtn(t).disabled, true);
+});
+
+test('every click saves with exactly the people on screen then, with no cached list', async () => {
+  const t = await toSend({ post: approveFails(500, 'boom', 'Nope') }, ['ann']);
+  await t.press(SEND);
+  enter(t, 'bob@contoso.com');
+  await t.press(SEND);
+  chipX(t, ANN_EMAIL).click();
+  await t.press(SEND);
+  assert.deepStrictEqual(publishedPeople(t), [
+    [ANN_EMAIL],
+    [ANN_EMAIL, 'bob@contoso.com'],
+    ['bob@contoso.com'],
   ]);
+});
+
+test('the save request carries the skill, the folder as no root for the default, and no acknowledgement', async () => {
+  const t = await toSend({}, ['ann', 'bob@contoso.com']);
+  await t.press(SEND);
+  assert.deepStrictEqual(t.calls.post[0], {
+    url: PUBLISH_ROUTE,
+    payload: {
+      skill_id: 'weekly-report',
+      people: [ANN_EMAIL, 'bob@contoso.com'],
+      root: null,
+      audience_ack: false,
+    },
+  });
 });
 
 test('a recent folder is sent as its drive and folder ids', async () => {
   const t = await toSend({ pick: 1 });
-  await t.press('Copy message');
+  await t.press(SEND);
   assert.deepStrictEqual(t.calls.post[0].payload.root, { drive_id: 'b!team', folder_id: 'f1' });
 });
 
 test('a skill locked to its folder is saved with no root', async () => {
   const t = await toSend({ get: lockedLocations });
-  await t.press('Copy message');
+  await t.press(SEND);
   assert.strictEqual(t.calls.post[0].payload.root, null);
 });
 
@@ -1818,22 +1886,41 @@ test('a ticked acknowledgement is passed on', async () => {
     get: (url) => (url.includes('/share/check') ? json(checkBody(LIBRARY)) : undefined),
     ack: true,
   });
-  await t.press('Copy message');
+  await t.press(SEND);
   assert.strictEqual(t.calls.post[0].payload.audience_ack, true);
 });
 
-test('copying twice saves once', async () => {
-  const t = await toSend({});
-  await t.press('Copy message');
-  await t.press('Copy message');
-  assert.deepStrictEqual(t.calls.order.filter((o) => o === 'publish').length, 1);
-  assert.strictEqual(t.clip.written.length, 2);
+test('one click saves, drafts, approves and closes, in that order, using the draft id from the reply', async () => {
+  const t = await toSend({
+    post: (url) => (url === DRAFT_ROUTE ? json(draftReply('xyz')) : undefined),
+  });
+  await t.press(SEND);
+  assert.deepStrictEqual(t.calls.order, ['publish', 'draft', 'approve', 'toast']);
+  assert.strictEqual(t.calls.post[2].url, '/api/drafts/xyz/approve');
+  assert.strictEqual(t.root(), null);
+  assert.deepStrictEqual(t.calls.alerts, []);
+  assert.strictEqual(t.calls.refresh, 1);
 });
 
-test('Send saves, asks for an email draft, opens it, then shows Done', async () => {
+test('success toasts the name for one person and the count for several', async () => {
+  const one = await toSend({}, ['ann']);
+  await one.press(SEND);
+  assert.deepStrictEqual(one.calls.toasts, [['Sent to Ann Lee', 'success']]);
+  const bare = await toSend({}, ['bob@contoso.com']);
+  await bare.press(SEND);
+  assert.deepStrictEqual(bare.calls.toasts, [['Sent to bob@contoso.com', 'success']]);
+  const many = await toSend({}, ['ann', 'bob@contoso.com', 'cy@contoso.com']);
+  await many.press(SEND);
+  assert.deepStrictEqual(many.calls.toasts, [['Sent to 3 people', 'success']]);
+  assert.strictEqual(many.root(), null);
+});
+
+test('the draft carries the people with names, the saved message, and the note as written', async () => {
   const t = await toSend({}, ['ann', 'bob@contoso.com']);
-  await t.press('Send');
-  assert.deepStrictEqual(t.calls.order.slice(-3), ['publish', 'draft', 'drafts']);
+  assert.strictEqual(noteBox(t).value, DEFAULT_NOTE);
+  noteBox(t).value = 'Thought you would like this.\nTry it Friday.';
+  t.dom.fire(noteBox(t), 'input');
+  await t.press(SEND);
   assert.deepStrictEqual(t.calls.post[1], {
     url: DRAFT_ROUTE,
     payload: {
@@ -1842,81 +1929,199 @@ test('Send saves, asks for an email draft, opens it, then shows Done', async () 
       people: [{ name: 'Ann Lee', email: ANN_EMAIL }, { email: 'bob@contoso.com' }],
       message: PUBLISHED.message,
       message_html: PUBLISHED.message_html,
+      note: 'Thought you would like this.\nTry it Friday.',
     },
   });
-  assert.deepStrictEqual(t.calls.drafts, [DRAFT.drafts]);
-  assert.deepStrictEqual(t.calls.alerts, []);
+});
+
+test('the default note goes into the draft when it is left alone, and an emptied one goes as nothing', async () => {
+  const a = await toSend({});
+  await a.press(SEND);
+  assert.strictEqual(a.calls.post[1].payload.note, DEFAULT_NOTE);
+  const b = await toSend({});
+  noteBox(b).value = '';
+  b.dom.fire(noteBox(b), 'input');
+  await b.press(SEND);
+  assert.strictEqual(b.calls.post[1].payload.note, '');
+});
+
+test('the note is limited to what the server accepts', async () => {
+  const t = await toSend({});
+  assert.strictEqual(noteBox(t).getAttribute('maxlength'), '1000');
+});
+
+test('Enter in the people field never sends, with or without text in it', async () => {
+  const t = await toSend({}, ['ann']);
+  enter(t, 'bob@contoso.com');
+  enter(t, '');
+  const e = t.dom.fire(inputOf(t), 'keydown', { key: 'Enter' });
+  assert.strictEqual(e.prevented, false);
+  t.dom.key('Enter');
+  await flush();
+  assert.deepStrictEqual(t.calls.post, []);
+  assert.deepStrictEqual(chipNames(t), ['Ann Lee', 'bob@contoso.com']);
+  assert(t.root());
+});
+
+test('text typed but not yet a chip is turned into one and nothing is sent', async () => {
+  const t = await toSend({}, ['ann']);
+  typeInto(t, 'carol@contoso.com');
+  await t.press(SEND);
+  assert.deepStrictEqual(t.calls.post, []);
+  assert.deepStrictEqual(
+    t.cls('ss-to-row').map((r) => r.textContent),
+    ['Ann Lee ' + ANN_EMAIL + 'Can view', 'carol@contoso.com' + 'Can view'],
+  );
+  await t.press(SEND);
+  assert.deepStrictEqual(publishedPeople(t), [[ANN_EMAIL, 'carol@contoso.com']]);
+});
+
+test('text that is not an address stops the send and stays in the box', async () => {
+  const t = await toSend({}, ['ann']);
+  typeInto(t, 'nobody');
+  await t.press(SEND);
+  assert.deepStrictEqual(t.calls.post, []);
+  assert.strictEqual(fieldError(t), '"nobody" is not a valid email address.');
+});
+
+test('while sending everything is off and a second click does nothing', async () => {
+  const g = gated([PUBLISH_ROUTE, DRAFT_ROUTE, APPROVE_ROUTE]);
+  const t = await toSend({ post: g });
+  sendBtn(t).click();
+  await flush();
+  assert.strictEqual(sendStatus(t), 'Saving the skill and giving access...');
+  assert.strictEqual(sendBtn(t).disabled, true);
+  assert.strictEqual(t.btn('Back').disabled, true);
+  assert.strictEqual(t.btn('Copy link').disabled, true);
+  assert.strictEqual(noteBox(t).disabled, true);
+  assert.strictEqual(inputOf(t).disabled, true);
+  assert.strictEqual(chipX(t, ANN_EMAIL).disabled, true);
+  sendBtn(t).click();
+  t.btn('Copy link').click();
+  t.btn('Back').click();
+  chipX(t, ANN_EMAIL).click();
+  await flush();
+  assert.strictEqual(g.pending[PUBLISH_ROUTE].length, 1);
+  assert.strictEqual(t.calls.post.length, 1);
+  assert(sendBtn(t), 'still on the Share screen');
+  assert.deepStrictEqual(chipNames(t), ['Ann Lee']);
+  g.pending[PUBLISH_ROUTE][0].resolve(json(clone(PUBLISHED)));
+  await flush();
+  assert.strictEqual(sendStatus(t), 'Preparing the email...');
+  assert.strictEqual(msgBox(t).value, PUBLISHED.message);
+  sendBtn(t).click();
+  await flush();
   assert.strictEqual(t.calls.post.length, 2);
+  g.pending[DRAFT_ROUTE][0].resolve(json(clone(DRAFT)));
+  await flush();
+  assert.strictEqual(sendStatus(t), 'Sending...');
+  sendBtn(t).click();
+  await flush();
+  assert.strictEqual(g.pending[APPROVE_ROUTE].length, 1);
+  g.pending[APPROVE_ROUTE][0].resolve(json({ ok: true, sent_to: [ANN_EMAIL] }));
+  await flush();
+  assert.strictEqual(t.root(), null);
+  assert.deepStrictEqual(t.calls.order, ['publish', 'draft', 'approve', 'toast']);
 });
 
-test('Done says the draft needs approval, where the skill went, and links to OneDrive', async () => {
-  const t = await toSend({});
-  await t.press('Send');
-  assert.strictEqual(t.heading(), 'Shared "weekly-report"');
-  assert(t.text().includes('Email draft ready for your approval'));
-  assert(t.text().includes('Nothing is sent until you approve it in the chat.'));
-  assert(t.text().includes('Saved to OneDrive › AI Gator Skills › weekly-report.'));
-  assert.strictEqual(t.btn('Send'), null);
-  assert.strictEqual(t.btn('Copy message'), null);
-  const link = t.dom.find(t.root(), (el) => el.tag === 'a');
-  assert.strictEqual(link.textContent, 'Open in OneDrive');
-  assert.strictEqual(link.href, PUBLISHED.web_url);
-  assert.strictEqual(link.target, '_blank');
-  assert.strictEqual(link.rel, 'noopener');
+test('the buttons come back after a failure', async () => {
+  const t = await toSend({ post: failOn(PUBLISH_ROUTE, 500, 'boom', 'Nope') });
+  await t.press('Copy link');
+  assert.strictEqual(sendStatus(t), '');
+  assert.strictEqual(t.btn('Back').disabled, false);
+  assert.strictEqual(t.btn('Copy link').disabled, false);
+  assert.strictEqual(sendBtn(t).disabled, false);
+  assert.strictEqual(inputOf(t).disabled, false);
+  assert.strictEqual(noteBox(t).disabled, false);
+  assert.deepStrictEqual(t.clip.written, []);
 });
 
-test('Open in OneDrive is only offered for an https link', async () => {
-  for (const web_url of ['http://contoso.sharepoint.com/x', 'javascript:alert(1)', '', undefined]) {
-    const t = await toSend({ post: publishWith({ web_url }) });
-    await t.press('Send');
-    assert.strictEqual(
-      t.dom.find(t.root(), (el) => el.tag === 'a'),
-      null,
-      String(web_url),
-    );
-  }
-});
+// Access stops
 
-test('Done falls back to the chosen folder when the server gives no path', async () => {
-  const t = await toSend({ post: publishWith({ saved_path: undefined }) });
-  await t.press('Send');
-  assert(t.text().includes('Saved to OneDrive › AI Gator Skills.'));
-});
-
-test('Done names the locked folder when the server gives no path', async () => {
-  const t = await toSend({ get: lockedLocations, post: publishWith({ saved_path: [] }) });
-  await t.press('Send');
-  assert(t.text().includes('Saved to Contoso Team › Documents › Team Skills.'));
-});
-
-test('Copy then Send saves only once', async () => {
-  const t = await toSend({});
-  await t.press('Copy message');
-  await t.press('Send');
-  assert.deepStrictEqual(t.calls.order.slice(-4), ['publish', 'copy', 'draft', 'drafts']);
-  assert.strictEqual(t.calls.order.filter((o) => o === 'publish').length, 1);
-});
-
-test('people with no matching account raise a warning alert after the draft opens', async () => {
-  const t = await toSend({
-    post: (url) =>
-      url === DRAFT_ROUTE
-        ? json({ drafts: DRAFT.drafts, unmatched: ['a@x.com', 'b@x.com'] })
-        : undefined,
-  });
-  await t.press('Send');
-  assert.deepStrictEqual(t.calls.alerts, [
-    ['No account was found for a@x.com, b@x.com. Use Copy message to reach them.', 'warning'],
+test('when access could not be given to someone it stops before any draft and says who', async () => {
+  const t = await toSend({ post: publishWith({ ungranted: ['x@gmail.com'] }) }, [
+    'ann',
+    'x@gmail.com',
   ]);
-  assert.deepStrictEqual(t.calls.drafts, [DRAFT.drafts]);
-  assert.strictEqual(t.heading(), 'Shared "weekly-report"');
+  await t.press(SEND);
+  assert.deepStrictEqual(t.calls.order, ['publish']);
+  assert(
+    t.text().includes('Access given to Ann Lee. Not given to x@gmail.com. Email not sent yet.'),
+  );
+  assert(t.btn('Remove x@gmail.com and send'));
+  assert(t.btn('Send anyway'));
+  assert.deepStrictEqual(t.calls.toasts, []);
+  assert(t.root());
+  assert.strictEqual(sendBtn(t).disabled, false);
 });
+
+test('the stop names everyone when nobody was given access, and offers only Send anyway', async () => {
+  const t = await toSend({ post: publishWith({ ungranted: ['x@gmail.com', 'y@yahoo.com'] }) }, [
+    'x@gmail.com',
+    'y@yahoo.com',
+  ]);
+  await t.press(SEND);
+  assert(t.text().includes('Not given to x@gmail.com, y@yahoo.com. Email not sent yet.'));
+  assert(!t.text().includes('Access given to'));
+  assert.strictEqual(t.btn('Remove x@gmail.com, y@yahoo.com and send'), null);
+  assert(t.btn('Send anyway'));
+});
+
+test('Remove and send drops them and runs the whole send again with the people left', async () => {
+  let n = 0;
+  const t = await toSend(
+    {
+      post: (url) => {
+        if (url !== PUBLISH_ROUTE) return undefined;
+        n += 1;
+        return json(Object.assign(clone(PUBLISHED), { ungranted: n === 1 ? ['x@gmail.com'] : [] }));
+      },
+    },
+    ['ann', 'x@gmail.com'],
+  );
+  await t.press(SEND);
+  await t.press('Remove x@gmail.com and send');
+  assert.deepStrictEqual(publishedPeople(t), [[ANN_EMAIL, 'x@gmail.com'], [ANN_EMAIL]]);
+  assert.deepStrictEqual(t.calls.order, ['publish', 'publish', 'draft', 'approve', 'toast']);
+  assert.deepStrictEqual(t.calls.post[2].payload.people, [{ name: 'Ann Lee', email: ANN_EMAIL }]);
+  assert.deepStrictEqual(t.calls.toasts, [['Sent to Ann Lee', 'success']]);
+  assert.strictEqual(t.root(), null);
+});
+
+test('Send anyway drafts and sends to everyone shown', async () => {
+  const t = await toSend({ post: publishWith({ ungranted: ['x@gmail.com'] }) }, [
+    'ann',
+    'x@gmail.com',
+  ]);
+  await t.press(SEND);
+  await t.press('Send anyway');
+  assert.deepStrictEqual(t.calls.order, ['publish', 'publish', 'draft', 'approve', 'toast']);
+  assert.deepStrictEqual(
+    t.calls.post[2].payload.people.map((p) => p.email),
+    [ANN_EMAIL, 'x@gmail.com'],
+  );
+  assert.deepStrictEqual(t.calls.toasts, [['Sent to 2 people', 'success']]);
+});
+
+test('changing the people clears the stop, so an old choice cannot send a new list', async () => {
+  const t = await toSend({ post: publishWith({ ungranted: ['x@gmail.com'] }) }, [
+    'ann',
+    'x@gmail.com',
+  ]);
+  await t.press(SEND);
+  enter(t, 'bob@contoso.com');
+  assert.strictEqual(t.btn('Send anyway'), null);
+  assert(!t.text().includes('Email not sent yet.'));
+  assert.deepStrictEqual(t.calls.order, ['publish']);
+});
+
+// Failures
 
 test('a policy block says nobody was given access and offers no other folder', async () => {
   const t = await toSend({
     post: failOn(PUBLISH_ROUTE, 403, 'policy_blocked', 'Your organization blocks sharing.'),
   });
-  await t.press('Send');
+  await t.press(SEND);
   const boxes = errorBox(t);
   assert.strictEqual(boxes.length, 1);
   assert.strictEqual(boxes[0].getAttribute('role'), 'alert');
@@ -1929,8 +2134,8 @@ test('a policy block says nobody was given access and offers no other folder', a
     'Your organization blocks sharing.',
   );
   assert.strictEqual(t.btn('Choose another folder'), null);
-  assert.deepStrictEqual(t.calls.order.slice(-1), ['publish']);
-  assert.strictEqual(t.btn('Send').disabled, false);
+  assert.deepStrictEqual(t.calls.order, ['publish']);
+  assert.strictEqual(sendBtn(t).disabled, false);
   assert.strictEqual(t.btn('Back').disabled, false);
   assert.strictEqual(t.heading(), 'Share "weekly-report"');
 });
@@ -1938,7 +2143,7 @@ test('a policy block says nobody was given access and offers no other folder', a
 test('a folder fault says it could not save and offers another folder, which goes back to Save', async () => {
   for (const code of FOLDER_FAULTS) {
     const t = await toSend({ post: failOn(PUBLISH_ROUTE, 400, code, 'Trouble: ' + code) });
-    await t.press('Send');
+    await t.press(SEND);
     const boxes = errorBox(t);
     assert.strictEqual(boxes.length, 1, code);
     assert.strictEqual(
@@ -1958,42 +2163,42 @@ test('a locked skill has no other folder to choose', async () => {
       get: lockedLocations,
       post: failOn(PUBLISH_ROUTE, 403, code, 'No access'),
     });
-    await t.press('Send');
+    await t.press(SEND);
     assert.strictEqual(errorBox(t).length, 1, code);
     assert.strictEqual(t.btn('Choose another folder'), null, code);
   }
 });
 
-test('any other failure shows the server message as an alert', async () => {
+test('any other failure shows the server message and sends nothing', async () => {
   const t = await toSend({ post: failOn(PUBLISH_ROUTE, 500, 'boom', 'The server exploded.') });
-  await t.press('Send');
-  assert.deepStrictEqual(alertText(t), ['The server exploded.']);
-  assert.strictEqual(t.dom.byClass(t.root(), 'ss-error').getAttribute('role'), 'alert');
+  await t.press(SEND);
+  assert(alertText(t).includes('The server exploded.'));
   assert.strictEqual(t.btn('Choose another folder'), null);
   assert.strictEqual(errorBox(t).length, 0);
+  assert.deepStrictEqual(t.calls.order, ['publish']);
 });
 
 test('failures with no usable message fall back to the default or the address hint', async () => {
   const bare = await toSend({
     post: (url) => (url === PUBLISH_ROUTE ? json({ detail: { error: 'boom' } }, 500) : undefined),
   });
-  await bare.press('Send');
-  assert.deepStrictEqual(alertText(bare), ['Could not share this skill. Try again.']);
+  await bare.press(SEND);
+  assert(alertText(bare).includes('Could not share this skill. Try again.'));
   const net = await toSend({
     post: (url) => {
       if (url === PUBLISH_ROUTE) throw new Error('offline');
     },
   });
-  await net.press('Send');
-  assert.deepStrictEqual(alertText(net), ['Could not share this skill. Try again.']);
+  await net.press(SEND);
+  assert(alertText(net).includes('Could not share this skill. Try again.'));
   const bad = await toSend({
     post: (url) => (url === PUBLISH_ROUTE ? json({ detail: [{ loc: ['body'] }] }, 422) : undefined),
   });
-  await bad.press('Send');
-  assert.deepStrictEqual(alertText(bad), ['Check the email addresses and try again.']);
+  await bad.press(SEND);
+  assert(alertText(bad).includes('Check the email addresses and try again.'));
 });
 
-test('after a failed save, Send tries to save again and then carries on', async () => {
+test('after a failed save the next click saves again and then carries on', async () => {
   let n = 0;
   const t = await toSend({
     post: (url) => {
@@ -2002,15 +2207,15 @@ test('after a failed save, Send tries to save again and then carries on', async 
       return n === 1 ? fail(500, 'boom', 'The server exploded.') : undefined;
     },
   });
-  await t.press('Send');
-  assert.strictEqual(t.cls('ss-error').length, 1);
-  await t.press('Send');
+  await t.press(SEND);
+  assert(alertText(t).includes('The server exploded.'));
+  await t.press(SEND);
   assert.strictEqual(n, 2);
-  assert.deepStrictEqual(t.calls.order.slice(-3), ['publish', 'draft', 'drafts']);
-  assert.strictEqual(t.heading(), 'Shared "weekly-report"');
+  assert.deepStrictEqual(t.calls.order, ['publish', 'publish', 'draft', 'approve', 'toast']);
+  assert.strictEqual(t.root(), null);
 });
 
-test('a failed draft keeps the saved message and does not save again on retry', async () => {
+test('a failed draft says access was given and the email was not sent, and a retry saves again', async () => {
   let n = 0;
   const t = await toSend({
     post: (url) => {
@@ -2019,82 +2224,269 @@ test('a failed draft keeps the saved message and does not save again on retry', 
       return n === 1 ? fail(502, 'mail_down', 'Mail is down.') : undefined;
     },
   });
-  await t.press('Send');
-  assert.deepStrictEqual(alertText(t), ['Mail is down.']);
-  assert.strictEqual(messageBox(t).value, PUBLISHED.message);
-  assert.strictEqual(t.heading(), 'Share "weekly-report"');
-  assert.strictEqual(t.calls.drafts.length, 0);
-  assert.strictEqual(t.btn('Send').disabled, false);
-  await t.press('Send');
-  assert.deepStrictEqual(t.calls.order.filter((o) => o === 'publish').length, 1);
-  assert.deepStrictEqual(t.calls.order.slice(-3), ['draft', 'draft', 'drafts']);
-  assert.deepStrictEqual(alertText(t), []);
+  await t.press(SEND);
+  assert(alertText(t).includes('Access was given; email not sent. Mail is down.'));
+  assert.strictEqual(t.calls.toasts.length, 0);
+  assert(t.root());
+  assert.strictEqual(sendBtn(t).disabled, false);
+  await t.press(SEND);
+  assert.deepStrictEqual(t.calls.order, [
+    'publish',
+    'draft',
+    'publish',
+    'draft',
+    'approve',
+    'toast',
+  ]);
 });
 
-test('a failed draft with no message offers Copy message instead', async () => {
+test('a draft with no usable reply says the email was not sent and never approves', async () => {
+  for (const reply of [
+    () => json({ detail: {} }, 502),
+    () => {
+      throw new Error('offline');
+    },
+    () => json({ drafts: [], unmatched: [] }),
+    () => json({ drafts: [{ id: 'd1', data: {} }], unmatched: [] }),
+  ]) {
+    const t = await toSend({ post: (url) => (url === DRAFT_ROUTE ? reply() : undefined) });
+    await t.press(SEND);
+    assert(
+      alertText(t).some((a) => a.startsWith('Access was given; email not sent.')),
+      alertText(t).join('|'),
+    );
+    assert(!t.calls.order.includes('approve'));
+    assert.deepStrictEqual(t.calls.toasts, []);
+  }
+});
+
+test('a failed approve says access was given and the email was not sent, and keeps the modal open', async () => {
+  const t = await toSend({ post: approveFails(500, 'boom', 'Mail is down.') });
+  await t.press(SEND);
+  assert.deepStrictEqual(alertText(t), ['Access was given; email not sent.']);
+  assert(t.root());
+  assert.deepStrictEqual(t.calls.toasts, []);
+  assert.strictEqual(sendBtn(t).disabled, false);
+  assert.strictEqual(t.btn('Back').disabled, false);
+});
+
+test('retrying a failed approve reuses the draft while the people, note and message are unchanged', async () => {
+  let approves = 0;
   const t = await toSend({
-    post: (url) => (url === DRAFT_ROUTE ? json({ detail: {} }, 502) : undefined),
-  });
-  await t.press('Send');
-  assert.deepStrictEqual(alertText(t), ['Could not prepare the draft. Use Copy message instead.']);
-  const n = await toSend({
     post: (url) => {
-      if (url === DRAFT_ROUTE) throw new Error('offline');
+      if (!url.endsWith('/approve')) return undefined;
+      approves += 1;
+      return approves === 1 ? fail(500, 'boom', 'x') : undefined;
     },
   });
-  await n.press('Send');
-  assert.deepStrictEqual(alertText(n), ['Could not prepare the draft. Use Copy message instead.']);
-});
-
-test('with no way to open drafts here, it says so and stays on Send', async () => {
-  const t = await toSend({ noDrafts: true });
-  await t.press('Send');
-  assert.deepStrictEqual(alertText(t), [
-    'Could not open the draft here. Use Copy message instead.',
+  await t.press(SEND);
+  await t.press(SEND);
+  assert.deepStrictEqual(t.calls.order, [
+    'publish',
+    'draft',
+    'approve',
+    'publish',
+    'approve',
+    'toast',
   ]);
-  assert.strictEqual(t.heading(), 'Share "weekly-report"');
+  assert.strictEqual(t.root(), null);
+});
+
+test('after a failed approve, changing the people or the note makes a new draft', async () => {
+  for (const change of [
+    (t) => enter(t, 'bob@contoso.com'),
+    (t) => {
+      noteBox(t).value = 'A different note.';
+      t.dom.fire(noteBox(t), 'input');
+    },
+  ]) {
+    let drafts = 0;
+    let approves = 0;
+    const t = await toSend({
+      post: (url) => {
+        if (url === DRAFT_ROUTE) {
+          drafts += 1;
+          return json(draftReply('d' + drafts));
+        }
+        if (url.endsWith('/approve')) {
+          approves += 1;
+          return approves === 1 ? fail(500, 'boom', 'x') : undefined;
+        }
+      },
+    });
+    await t.press(SEND);
+    change(t);
+    await t.press(SEND);
+    assert.strictEqual(drafts, 2);
+    assert.deepStrictEqual(
+      t.calls.post.filter((p) => p.url.endsWith('/approve')).map((p) => p.url),
+      ['/api/drafts/d1/approve', '/api/drafts/d2/approve'],
+    );
+    assert.strictEqual(t.root(), null);
+  }
+});
+
+test('an approve that is not found or already in progress says it may have been sent and is never retried', async () => {
+  for (const status of [404, 409]) {
+    const t = await toSend({ post: approveFails(status, 'x', 'gone') });
+    await t.press(SEND);
+    assert.deepStrictEqual(alertText(t), ['May have been sent. Check Sent Items.'], String(status));
+    assert.strictEqual(sendBtn(t).disabled, true);
+    sendBtn(t).click();
+    await flush();
+    assert.strictEqual(t.calls.post.filter((p) => p.url.endsWith('/approve')).length, 1);
+    assert.deepStrictEqual(t.calls.toasts, []);
+    assert(t.root());
+  }
+});
+
+test('an approve whose reply is lost says it may have been sent and is never retried', async () => {
+  const t = await toSend({
+    post: (url) => {
+      if (url.endsWith('/approve')) throw new Error('connection dropped');
+    },
+  });
+  await t.press(SEND);
+  assert.deepStrictEqual(alertText(t), ['May have been sent. Check Sent Items.']);
+  assert.strictEqual(sendBtn(t).disabled, true);
+  enter(t, 'bob@contoso.com');
+  assert.strictEqual(sendBtn(t).disabled, true, 'changing the people does not allow another send');
+  sendBtn(t).click();
+  await flush();
+  assert.strictEqual(t.calls.post.filter((p) => p.url.endsWith('/approve')).length, 1);
+});
+
+// Copy link
+
+test('Copy link saves with the people on screen, then copies the link', async () => {
+  const t = await toSend({}, ['ann', 'bob@contoso.com']);
+  await t.press('Copy link');
+  assert.deepStrictEqual(t.calls.order, ['publish', 'copy']);
+  assert.deepStrictEqual(publishedPeople(t), [[ANN_EMAIL, 'bob@contoso.com']]);
+  assert.deepStrictEqual(t.clip.written, [PUBLISHED.link]);
+  assert.strictEqual(t.one('ss-link-text').textContent, PUBLISHED.link);
+  assert.strictEqual(sendStatus(t), 'Link copied.');
+  assert.strictEqual(msgBox(t).value, PUBLISHED.message);
   assert.deepStrictEqual(t.calls.alerts, []);
+  assert(!t.calls.order.includes('draft'), 'copying never drafts or sends an email');
 });
 
-test('while saving, the buttons are off, a second Send is ignored, and a status line shows', async () => {
-  const g = gated([PUBLISH_ROUTE, DRAFT_ROUTE]);
-  const t = await toSend({ post: g });
-  t.btn('Send').click();
-  await flush();
-  assert.strictEqual(sendStatus(t), 'Saving the skill and giving access...');
-  assert.strictEqual(t.btn('Back').disabled, true);
-  assert.strictEqual(t.btn('Copy message').disabled, true);
-  assert.strictEqual(t.btn('Send').disabled, true);
-  t.btn('Send').click();
-  t.btn('Copy message').click();
-  await flush();
-  assert.strictEqual(g.pending[PUBLISH_ROUTE].length, 1);
-  g.pending[PUBLISH_ROUTE][0].resolve(json(clone(PUBLISHED)));
-  await flush();
-  assert.strictEqual(sendStatus(t), 'Preparing draft...');
-  assert.strictEqual(messageBox(t).value, PUBLISHED.message);
-  assert.strictEqual(t.btn('Send').disabled, true);
-  g.pending[DRAFT_ROUTE][0].resolve(json(clone(DRAFT)));
-  await flush();
-  assert.strictEqual(t.heading(), 'Shared "weekly-report"');
-  assert.strictEqual(t.calls.drafts.length, 1);
-  assert.strictEqual(g.pending[DRAFT_ROUTE].length, 1);
+test('copying twice saves twice, each time with the people then on screen', async () => {
+  const t = await toSend({}, ['ann']);
+  await t.press('Copy link');
+  enter(t, 'bob@contoso.com');
+  await t.press('Copy link');
+  assert.deepStrictEqual(publishedPeople(t), [[ANN_EMAIL], [ANN_EMAIL, 'bob@contoso.com']]);
+  assert.strictEqual(t.clip.written.length, 2);
 });
 
-test('the buttons come back after a failure', async () => {
-  const t = await toSend({ post: failOn(PUBLISH_ROUTE, 500, 'boom', 'Nope') });
-  await t.press('Copy message');
-  assert.strictEqual(sendStatus(t), '');
-  assert.strictEqual(t.btn('Back').disabled, false);
-  assert.strictEqual(t.btn('Copy message').disabled, false);
-  assert.strictEqual(t.btn('Send').disabled, false);
-  assert.deepStrictEqual(t.clip.written, []);
+test('when the clipboard is missing or refuses, it says to copy by hand and the link stays visible', async () => {
+  for (const extra of [{ noClipboard: true }, { clipboardFails: true }]) {
+    const t = await toSend(extra);
+    await t.press('Copy link');
+    assert(alertText(t).includes('Could not copy. Select the link and copy it.'));
+    assert.strictEqual(t.one('ss-link-text').textContent, PUBLISHED.link);
+    assert.notStrictEqual(sendStatus(t), 'Link copied.');
+    assert.strictEqual(t.btn('Copy link').disabled, false);
+  }
 });
+
+// What stays on screen after the save
+
+test('after a save the screen says where it went and links to OneDrive', async () => {
+  const t = await toSend({ post: approveFails(500, 'boom', 'x') });
+  await t.press(SEND);
+  assert(t.text().includes('Saved to OneDrive › AI Gator Skills › weekly-report.'));
+  const link = t.dom.find(t.root(), (el) => el.tag === 'a');
+  assert.strictEqual(link.textContent, 'Open in OneDrive');
+  assert.strictEqual(link.href, PUBLISHED.web_url);
+  assert.strictEqual(link.target, '_blank');
+  assert.strictEqual(link.rel, 'noopener');
+  assert.strictEqual(t.one('ss-link-text').textContent, PUBLISHED.link);
+  assert.strictEqual(msgBox(t).value, PUBLISHED.message);
+});
+
+test('Open in OneDrive is only offered for an https link', async () => {
+  for (const web_url of ['http://contoso.sharepoint.com/x', 'javascript:alert(1)', '', undefined]) {
+    const t = await toSend({ post: publishWith({ web_url }) });
+    await t.press('Copy link');
+    assert.strictEqual(
+      t.dom.find(t.root(), (el) => el.tag === 'a'),
+      null,
+      String(web_url),
+    );
+  }
+});
+
+test('the saved line falls back to the chosen folder, or the locked one, when the server gives no path', async () => {
+  const a = await toSend({ post: publishWith({ saved_path: undefined, folder: undefined }) });
+  await a.press('Copy link');
+  assert(a.text().includes('Saved to OneDrive › AI Gator Skills.'));
+  const b = await toSend({
+    get: lockedLocations,
+    post: publishWith({ saved_path: [], folder: undefined }),
+  });
+  await b.press('Copy link');
+  assert(b.text().includes('Saved to Contoso Team › Documents › Team Skills.'));
+});
+
+test('after a save, Back shows that folder as fixed and sends no root next time', async () => {
+  const t = await toSend({ pick: 1, post: approveFails(500, 'boom', 'x') });
+  await t.press(SEND);
+  assert.deepStrictEqual(t.calls.post[0].payload.root, { drive_id: 'b!team', folder_id: 'f1' });
+  await t.press('Back');
+  assert.strictEqual(t.cls('ss-label')[0].textContent, 'Saved in');
+  assert.strictEqual(t.radios().length, 0);
+  await t.press('Next');
+  await t.press(SEND);
+  assert.strictEqual(t.calls.post.filter((p) => p.url === PUBLISH_ROUTE)[1].payload.root, null);
+});
+
+test('a skill saved to a new folder because the old one was deleted says so', async () => {
+  const d = await toSend({ post: publishWith({ relinked: true }) });
+  await d.press('Copy link');
+  assert.deepStrictEqual(noticeTitles(d), ['Saved to a new folder']);
+  assert(d.text().includes('The earlier link does not work anymore.'));
+  const plain = await toSend({ post: publishWith({ relinked: false }) });
+  await plain.press('Copy link');
+  assert.deepStrictEqual(noticeTitles(plain), []);
+});
+
+test('people the folder would not accept are listed in a notice, singular and plural', async () => {
+  const one = await toSend({ post: publishWith({ ungranted: ['x@gmail.com'] }) });
+  await one.press('Copy link');
+  assert.deepStrictEqual(noticeTitles(one), ['Access was not granted for x@gmail.com']);
+  assert(
+    one
+      .text()
+      .includes(
+        'OneDrive would not let this person open the skill, usually because they are outside your organization. Add them in OneDrive',
+      ),
+  );
+  const many = await toSend({ post: publishWith({ ungranted: ['x@gmail.com', 'y@yahoo.com'] }) });
+  await many.press('Copy link');
+  assert.deepStrictEqual(noticeTitles(many), [
+    'Access was not granted for x@gmail.com, y@yahoo.com',
+  ]);
+  assert(many.text().includes('OneDrive would not let these people open the skill'));
+  assert(
+    many
+      .text()
+      .includes(
+        'Add each of them in OneDrive (Open in OneDrive, then Share) so the link works for them.',
+      ),
+  );
+  const none = await toSend({});
+  await none.press('Copy link');
+  assert.deepStrictEqual(noticeTitles(none), []);
+});
+
+// Closing while something is running
 
 test('closing while the save is running still refreshes once it succeeds, and sends nothing', async () => {
   const g = gated([PUBLISH_ROUTE]);
   const t = await toSend({ post: g });
-  t.btn('Send').click();
+  sendBtn(t).click();
   await flush();
   t.btn('×').click();
   assert.strictEqual(t.root(), null);
@@ -2103,14 +2495,13 @@ test('closing while the save is running still refreshes once it succeeds, and se
   await flush();
   assert.strictEqual(t.calls.refresh, 1);
   assert.deepStrictEqual(t.calls.order, ['publish']);
-  assert.deepStrictEqual(t.calls.drafts, []);
-  assert.deepStrictEqual(t.calls.alerts, []);
+  assert.deepStrictEqual(t.calls.toasts, []);
 });
 
 test('closing while the save is running does not refresh when it fails', async () => {
   const g = gated([PUBLISH_ROUTE]);
   const t = await toSend({ post: g });
-  t.btn('Copy message').click();
+  t.btn('Copy link').click();
   await flush();
   t.dom.key('Escape');
   g.pending[PUBLISH_ROUTE][0].resolve(fail(500, 'boom', 'Nope'));
@@ -2119,19 +2510,19 @@ test('closing while the save is running does not refresh when it fails', async (
   assert.deepStrictEqual(t.clip.written, []);
 });
 
-test('closing while the draft is being prepared refreshes once and opens nothing', async () => {
+test('closing while the draft is being prepared refreshes once and approves nothing', async () => {
   const g = gated([DRAFT_ROUTE]);
   const t = await toSend({ post: g });
-  t.btn('Send').click();
+  sendBtn(t).click();
   await flush();
-  assert.strictEqual(sendStatus(t), 'Preparing draft...');
+  assert.strictEqual(sendStatus(t), 'Preparing the email...');
   t.btn('×').click();
   assert.strictEqual(t.calls.refresh, 1);
-  g.pending[DRAFT_ROUTE][0].resolve(json({ drafts: DRAFT.drafts, unmatched: ['a@x.com'] }));
+  g.pending[DRAFT_ROUTE][0].resolve(json(clone(DRAFT)));
   await flush();
   assert.strictEqual(t.calls.refresh, 1);
-  assert.deepStrictEqual(t.calls.drafts, []);
-  assert.deepStrictEqual(t.calls.alerts, []);
+  assert.deepStrictEqual(t.calls.order, ['publish', 'draft']);
+  assert.deepStrictEqual(t.calls.toasts, []);
 });
 
 test('the list refreshes on close only when the skill was saved, and only once', async () => {
@@ -2144,79 +2535,20 @@ test('the list refreshes on close only when the skill was saved, and only once',
   assert.strictEqual(b.calls.refresh, 0);
 
   const c = await toSend({});
-  await c.press('Copy message');
+  await c.press('Copy link');
   assert.strictEqual(c.calls.refresh, 0);
   c.dom.key('Escape');
   c.shell.close();
   assert.strictEqual(c.calls.refresh, 1);
 
   const d = await toSend({});
-  await d.press('Send');
-  assert.strictEqual(d.calls.refresh, 0);
-  d.btn('×').click();
-  assert.strictEqual(d.calls.refresh, 1);
+  await d.press(SEND);
+  assert.strictEqual(d.calls.refresh, 1, 'a send closes the modal, which refreshes once');
 });
 
-test('a skill saved to a new folder because the old one was deleted says so', async () => {
-  const d = await toSend({ post: publishWith({ relinked: true }) });
-  await d.press('Copy message');
-  assert.deepStrictEqual(noticeTitles(d), ['Saved to a new folder']);
-  assert(d.text().includes('The earlier link does not work anymore.'));
-  const plain = await toSend({ post: publishWith({ relinked: false }) });
-  await plain.press('Copy message');
-  assert.deepStrictEqual(noticeTitles(plain), []);
-});
+// Keyboard and focus
 
-test('people the folder would not accept are listed in a notice, singular and plural', async () => {
-  const one = await toSend({ post: publishWith({ ungranted: ['x@gmail.com'] }) });
-  await one.press('Copy message');
-  assert.deepStrictEqual(noticeTitles(one), ['Access was not granted for x@gmail.com']);
-  assert(
-    one
-      .text()
-      .includes(
-        'OneDrive would not let this person open the skill, usually because they are outside your organization. Add them in OneDrive',
-      ),
-  );
-  const many = await toSend({ post: publishWith({ ungranted: ['x@gmail.com', 'y@yahoo.com'] }) });
-  await many.press('Copy message');
-  assert.deepStrictEqual(noticeTitles(many), [
-    'Access was not granted for x@gmail.com, y@yahoo.com',
-  ]);
-  assert(many.text().includes('OneDrive would not let these people open the skill'));
-  assert(
-    many
-      .text()
-      .includes(
-        'Add each of them in OneDrive (Open in OneDrive, then Share) so the link works for them.',
-      ),
-  );
-});
-
-test('the notice is still there on Done, and not shown when everyone got access', async () => {
-  const t = await toSend({ post: publishWith({ ungranted: ['x@gmail.com'] }) });
-  await t.press('Send');
-  assert.strictEqual(t.heading(), 'Shared "weekly-report"');
-  assert.deepStrictEqual(noticeTitles(t), ['Access was not granted for x@gmail.com']);
-  const u = await toSend({});
-  await u.press('Send');
-  assert.deepStrictEqual(noticeTitles(u), []);
-});
-
-test('when the clipboard is missing or refuses, it says to copy by hand and the message is selectable', async () => {
-  for (const extra of [{ noClipboard: true }, { clipboardFails: true }]) {
-    const t = await toSend(extra);
-    await t.press('Copy message');
-    assert.deepStrictEqual(alertText(t), ['Could not copy. Select the text and copy it.']);
-    assert.strictEqual(messageBox(t).value, PUBLISHED.message);
-    assert.notStrictEqual(sendStatus(t), 'Message copied.');
-    assert.strictEqual(t.btn('Copy message').disabled, false);
-    await t.press('Copy message');
-    assert.strictEqual(t.calls.order.filter((o) => o === 'publish').length, 1);
-  }
-});
-
-test('Escape closes Send and puts the focus back where it came from', async () => {
+test('Escape closes the screen and puts the focus back where it came from', async () => {
   const t = boot({ search: makeSearch() });
   const trigger = t.dom.document.createElement('button');
   t.dom.state.activeElement = trigger;
@@ -2224,70 +2556,55 @@ test('Escape closes Send and puts the focus back where it came from', async () =
   await flush();
   await t.press('Next');
   enter(t, 'bob@contoso.com');
-  await t.press('Next');
   assert.notStrictEqual(t.dom.state.activeElement, trigger);
   const e = t.dom.key('Escape');
   assert.strictEqual(e.prevented, true);
   assert.strictEqual(t.root(), null);
   assert.strictEqual(t.dom.state.activeElement, trigger);
+  assert.deepStrictEqual(t.calls.post, []);
 });
 
-test('Tab wraps from the last button to Close and Shift+Tab wraps back', async () => {
+test('Tab wraps from the send button to Close and Shift+Tab wraps back', async () => {
   const t = await toSend({});
-  assert.strictEqual(t.dom.state.activeElement, t.btn('Send'));
+  sendBtn(t).focus();
   let e = t.dom.key('Tab');
   assert.strictEqual(e.prevented, true);
   assert.strictEqual(t.dom.state.activeElement, t.btn('×'));
   e = t.dom.key('Tab', true);
   assert.strictEqual(e.prevented, true);
-  assert.strictEqual(t.dom.state.activeElement, t.btn('Send'));
+  assert.strictEqual(t.dom.state.activeElement, sendBtn(t));
   t.btn('Back').focus();
   assert.strictEqual(t.dom.key('Tab').prevented, false);
   assert.strictEqual(t.dom.key('Tab', true).prevented, false);
 });
 
-test('with Send off, Copy is the last stop of the Tab loop', async () => {
-  const t = await open({ get: lockedLocations });
-  await t.press('Next');
-  await t.press('Next');
-  assert.strictEqual(t.dom.state.activeElement, t.btn('Copy message'));
+test('with the send off, Back is the last stop of the Tab loop', async () => {
+  const t = await toSend({ get: lockedLocations }, []);
+  assert.strictEqual(sendBtn(t).disabled, true);
+  t.btn('Back').focus();
   assert.strictEqual(t.dom.key('Tab').prevented, true);
   assert.strictEqual(t.dom.state.activeElement, t.btn('×'));
 });
 
-test('the Done view traps Tab between Close and Open in OneDrive, and Escape closes it', async () => {
-  const t = await toSend({});
-  await t.press('Send');
-  assert.strictEqual(t.dom.state.activeElement, t.btn('×'));
-  const link = t.dom.find(t.root(), (el) => el.tag === 'a');
-  assert.strictEqual(t.dom.key('Tab', true).prevented, true);
-  assert.strictEqual(t.dom.state.activeElement, link);
-  assert.strictEqual(t.dom.key('Tab').prevented, true);
-  assert.strictEqual(t.dom.state.activeElement, t.btn('×'));
-  t.dom.key('Escape');
-  assert.strictEqual(t.root(), null);
-  assert.strictEqual(t.calls.refresh, 1);
+test('the focus returns to the send button after a failed send', async () => {
+  const t = await toSend({ post: approveFails(500, 'boom', 'x') });
+  await t.press(SEND);
+  assert.strictEqual(t.dom.state.activeElement, sendBtn(t));
 });
 
-test('going back and changing the people saves again with the new list', async () => {
-  const t = await toSend({}, ['bob@contoso.com']);
-  await t.press('Copy message');
-  assert.strictEqual(messageBox(t).value, PUBLISHED.message);
-  await t.press('Back');
-  assert.deepStrictEqual(chipNames(t), ['bob@contoso.com']);
-  enter(t, 'cy@contoso.com');
-  await t.press('Next');
-  assert.strictEqual(messageBox(t).value, '');
-  await t.press('Copy message');
-  assert.deepStrictEqual(
-    t.calls.post.map((p) => p.payload.people),
-    [['bob@contoso.com'], ['bob@contoso.com', 'cy@contoso.com']],
-  );
+test('the stop moves the focus to its first choice', async () => {
+  const t = await toSend({ post: publishWith({ ungranted: ['x@gmail.com'] }) }, [
+    'ann',
+    'x@gmail.com',
+  ]);
+  await t.press(SEND);
+  assert.strictEqual(t.dom.state.activeElement, t.btn('Remove x@gmail.com and send'));
+  assert.strictEqual(t.dom.key('Tab').prevented, false);
 });
 
 test('opening a second share modal replaces the first', async () => {
   const t = await toSend({});
-  await t.press('Copy message');
+  await t.press('Copy link');
   const first = t.shell;
   t.start();
   assert.strictEqual(t.dom.document.body.children.length, 1);
@@ -2297,13 +2614,16 @@ test('opening a second share modal replaces the first', async () => {
 });
 
 test('the modal never writes markup: names, ids and messages stay literal text', async () => {
-  assert(!/innerHTML|insertAdjacentHTML|outerHTML|document\.write/.test(source));
   const evil = { name: '<img src=x onerror=1>', email: 'evil@contoso.com' };
   const message = 'Open <b>this</b> <img src=x>';
   const t = await toSend(
     {
       skill: '<b>x</b>',
       search: makeSearch(() => Promise.resolve([evil])),
+      get: (url) =>
+        url.startsWith(PREVIEW_ROUTE)
+          ? json({ title: '<u>T</u>', message: '<s>m</s>' })
+          : undefined,
       post: publishWith({ message, saved_path: ['<i>One</i>'] }),
     },
     ['ann'],
@@ -2311,13 +2631,14 @@ test('the modal never writes markup: names, ids and messages stay literal text',
   assert.strictEqual(t.heading(), 'Share "<b>x</b>"');
   assert.deepStrictEqual(
     t.cls('ss-to-row').map((r) => r.textContent),
-    ['<img src=x onerror=1> evil@contoso.com'],
+    ['<img src=x onerror=1> evil@contoso.com' + 'Can view'],
   );
-  await t.press('Copy message');
-  assert.strictEqual(messageBox(t).value, message);
-  await t.press('Send');
+  assert.strictEqual(msgBox(t).value, '<s>m</s>');
+  assert.strictEqual(noteBox(t).value, "Hi, I'm sharing the skill <u>T</u> with you.");
+  await t.press('Copy link');
+  assert.strictEqual(msgBox(t).value, message);
   assert(t.text().includes('Saved to <i>One</i>.'));
-  const markup = t.dom.find(t.root(), (el) => ['b', 'i', 'img'].indexOf(el.tag) !== -1);
+  const markup = t.dom.find(t.root(), (el) => ['b', 'i', 'img', 'u', 's'].indexOf(el.tag) !== -1);
   assert.strictEqual(markup, null);
 });
 

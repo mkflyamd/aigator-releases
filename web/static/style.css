@@ -19014,29 +19014,53 @@ body.gator-terminal-pushing .dock {
 .ss-to-row .ss-to-email {
   color: var(--text-dim, #aaa);
 }
-.ss-done-head {
+.ss-tobar[hidden] {
+  display: none;
+}
+.ss-to-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+.ss-to-role {
+  flex: 0 0 auto;
+  font-size: 0.75rem;
+  color: var(--text-dim, #aaa);
+}
+#ss-note {
+  min-height: 56px;
+}
+.ss-message.is-locked {
+  background: transparent;
+  color: var(--text-dim, #aaa);
+}
+.ss-linkrow {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-bottom: 10px;
+  margin-bottom: 6px;
 }
-.ss-done-check {
-  width: 30px;
-  height: 30px;
-  border-radius: 50%;
-  background: rgba(var(--accent-rgb, 74, 222, 128), 0.15);
-  color: var(--accent, #4ade80);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-}
-.ss-done-title {
-  font-weight: 600;
-}
-.mp-modal-body .ss-done-sub {
+.ss-linkrow .ss-label {
   margin: 0;
+}
+.ss-link-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 0.8rem;
+  color: var(--text-dim, #aaa);
+}
+.ss-open-link {
+  color: var(--accent, #4ade80);
+}
+.ss-stop-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
 }
 .ss-notice {
   margin-bottom: 10px;

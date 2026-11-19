@@ -98,6 +98,29 @@ def _vet_root(provider, skill_id: str, root: dict | None, author: str, audience_
     return location, audience
 
 
+def _mine_skill(skill_id: str) -> tuple[dict, dict[str, bytes]]:
+    """The Mine entry and its files, or the ShareError that says why the skill cannot be shared."""
+    entry = skill_state.get_entry(skill_id)
+    if not entry or entry.get("tier") != "Mine" or entry.get("id") != skill_id:
+        raise ShareError("not_mine", "Only skills you created can be shared.")
+    if not bundle.valid_share_name(skill_id):
+        raise ShareError("invalid", f'The skill name "{skill_id[:80]}" cannot be shared. {bundle.INVALID_NAME_MESSAGE}')
+    skill_dir = installer.INSTALLED_SKILLS_DIR / "mine" / skill_id
+    if not skill_dir.is_dir():
+        raise ShareError("not_found", "The skill's files could not be found.")
+    return entry, bundle.read_skill_dir(skill_dir)
+
+
+def preview_message(skill_id: str, *, author: str) -> dict:
+    """The message a share would send, before anything is written: same text, link and folder not made yet."""
+    _, files = _mine_skill(skill_id)
+    front = bundle.skill_front_matter(files)
+    title = str(front.get("name") or skill_id)
+    description = str(front.get("description") or "")
+    placeholder = messages.LINK_PLACEHOLDER
+    return {"title": title, "message": messages.share_message(title, author, description, placeholder, placeholder)}
+
+
 def publish(
     provider,
     skill_id: str,
@@ -107,16 +130,7 @@ def publish(
     people: Sequence[str] = (),
     audience_ack: bool = False,
 ) -> dict:
-    entry = skill_state.get_entry(skill_id)
-    if not entry or entry.get("tier") != "Mine" or entry.get("id") != skill_id:
-        raise ShareError("not_mine", "Only skills you created can be shared.")
-    if not bundle.valid_share_name(skill_id):
-        raise ShareError("invalid", f'The skill name "{skill_id[:80]}" cannot be shared. {bundle.INVALID_NAME_MESSAGE}')
-    skill_dir = installer.INSTALLED_SKILLS_DIR / "mine" / skill_id
-    if not skill_dir.is_dir():
-        raise ShareError("not_found", "The skill's files could not be found.")
-
-    files = bundle.read_skill_dir(skill_dir)
+    entry, files = _mine_skill(skill_id)
     digest = files_digest(files)
     folder = _fixed_folder(entry, skill_id)
     location = audience = None
