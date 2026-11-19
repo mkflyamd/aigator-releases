@@ -47,16 +47,14 @@ def _isolated_secure_store(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _jira_browse_url_default():
-    """Ensure jira_browse_url() succeeds in CI where JIRA_BASE_URL is not set.
+def _jira_browse_url_default(monkeypatch):
+    """Make jira_browse_url() independent of the host's JIRA_BASE_URL.
 
     Uses a URL that differs from every test target URL so the synthesized
     builtin target never deduplicates away a atlassian-mcp target that shares
     its base_url (e.g. https://jira.example.com used by Atlassian MCP test targets).
     """
-    if os.environ.get("JIRA_BASE_URL"):
-        yield
-        return
+    monkeypatch.delenv("JIRA_BASE_URL", raising=False)
     with patch("skills.jira.api.jira_browse_url", return_value=_JIRA_TEST_URL), \
          patch("skills.jira.api.jira_is_cloud", return_value=True):
         yield

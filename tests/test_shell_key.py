@@ -1,6 +1,6 @@
 """The CSRF token is served only to the AI Gator shell (per-launch shell key)."""
 
-import importlib
+import importlib.util
 import os
 import pathlib
 import sys
@@ -64,17 +64,14 @@ def test_csrf_guarded_route_still_needs_csrf_header(client, keyed):
 
 
 def test_key_is_read_once_and_scrubbed_from_environment(monkeypatch):
-    token = security._TOKEN
+    # Load a private copy: reloading `security` in place would re-create
+    # verify_csrf and orphan the one every already-imported router depends on.
     monkeypatch.setenv("AIGATOR_SHELL_KEY", FAKE)
-    try:
-        importlib.reload(security)
-        assert security._SHELL_KEY == FAKE
-        assert "AIGATOR_SHELL_KEY" not in os.environ
-    finally:
-        monkeypatch.delenv("AIGATOR_SHELL_KEY", raising=False)
-        importlib.reload(security)
-        security._TOKEN = token
-        assert security._SHELL_KEY is None
+    spec = importlib.util.spec_from_file_location("_security_private_copy", security.__file__)
+    fresh = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fresh)
+    assert fresh._SHELL_KEY == FAKE
+    assert "AIGATOR_SHELL_KEY" not in os.environ
 
 
 def test_sandbox_env_allow_list_drops_shell_key(tmp_path):
