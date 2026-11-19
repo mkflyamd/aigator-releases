@@ -125,6 +125,15 @@ class TestBrowserProfileConfig:
 class TestEnsureNativeBrowser:
     """_ensure_native_browser uses different flag sets for gator vs personal."""
 
+    @pytest.fixture(autouse=True)
+    def _no_live_cdp_probe(self):
+        # A debug browser already listening on the real port would otherwise
+        # be identified and refused before the patched launch path runs.
+        import browser_agent
+
+        with patch.object(browser_agent, "_cdp_endpoint_identity", return_value=""):
+            yield
+
     def test_gator_profile_uses_all_flags(self):
         """Gator profile should include stealth flags and --user-data-dir."""
         import browser_agent
