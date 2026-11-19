@@ -51,6 +51,7 @@ jobs:
           ffprobe -version | head -1
 
       - name: Run tests with coverage
+        timeout-minutes: 25
         env:
           GATOR_REQUIRE_FFMPEG: '1'
         run: uv run coverage run --source=web,packaging --omit='*/tests/*' -m pytest tests web/tests -q -o faulthandler_timeout=120
