@@ -108,12 +108,15 @@ def publish(
     digest = files_digest(files)
     folder = _fixed_folder(entry, skill_id)
     location = audience = None
+    relinked = False
     if folder:
         try:
             saved_path = provider.describe_folder(folder["drive_id"], folder["folder_id"])["path"]
-        except ShareError:
+        except ShareError as err:
+            if err.code == "not_found":
+                folder, relinked = None, True
             saved_path = [skill_id]
-    else:
+    if not folder:
         location, audience = _vet_root(provider, skill_id, root, author, audience_ack)
         folder = provider.child_folder(location, skill_id)
         saved_path = [*location["path"], skill_id]
@@ -182,4 +185,5 @@ def publish(
         "ungranted": ungranted,
         "saved_path": saved_path,
         "audience": audience,
+        "relinked": relinked,
     }

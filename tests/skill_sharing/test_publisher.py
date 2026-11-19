@@ -242,6 +242,65 @@ def test_retry_after_a_failed_invite_reuses_the_same_folder_even_with_a_differen
     assert provider.grants == [(share_source["folder_id"], ["a@contoso.com"])]
 
 
+def _delete_folder(provider, folder_id):
+    for key in [k for k, f in provider.folders.items() if f["folder_id"] == folder_id]:
+        del provider.folders[key]
+
+
+def test_a_deleted_skill_folder_is_recreated_at_the_default_and_the_link_is_replaced(provider, make_mine):
+    skill_id = make_mine()
+    first = publisher.publish(provider, skill_id, author="A")
+    assert first["relinked"] is False
+    _delete_folder(provider, first["folder"]["folder_id"])
+
+    out = publisher.publish(provider, skill_id, author="A")
+
+    assert out["relinked"] is True
+    assert out["version"] == 1
+    assert out["reused"] is False
+    assert out["folder"]["folder_id"] != first["folder"]["folder_id"]
+    assert out["link"] != first["link"]
+    assert (out["folder"]["folder_id"], "skill.json") in provider.files
+    assert skill_state.get_entry(skill_id)["share_source"]["folder_id"] == out["folder"]["folder_id"]
+
+
+def test_a_deleted_skill_folder_honours_the_folder_chosen_in_the_dialog(provider, make_mine):
+    skill_id = make_mine()
+    first = publisher.publish(provider, skill_id, author="A")
+    _delete_folder(provider, first["folder"]["folder_id"])
+    chosen = _chosen(provider)
+
+    out = publisher.publish(provider, skill_id, author="A", root=chosen)
+
+    assert out["relinked"] is True
+    assert out["saved_path"][-2:] == ["Team Skills", skill_id]
+
+
+def test_a_deleted_root_folder_is_recreated(provider, make_mine):
+    skill_id = make_mine()
+    first = publisher.publish(provider, skill_id, author="A")
+    provider.folders.clear()
+
+    out = publisher.publish(provider, skill_id, author="A")
+
+    assert out["relinked"] is True
+    assert out["saved_path"][-2:] == ["AI Gator Skills", skill_id]
+    assert out["folder"]["folder_id"] != first["folder"]["folder_id"]
+
+
+def test_a_deleted_folder_still_asks_for_the_audience_of_a_shared_destination(provider, make_mine):
+    skill_id = make_mine()
+    first = publisher.publish(provider, skill_id, author="A")
+    _delete_folder(provider, first["folder"]["folder_id"])
+    chosen = _chosen(provider)
+    provider.audiences[chosen["folder_id"]] = {"kind": "org", "name": "Your organization", "approx_count": None}
+
+    with pytest.raises(ShareError) as err:
+        publisher.publish(provider, skill_id, author="A", root=chosen)
+
+    assert err.value.code == "audience_unacknowledged"
+
+
 def _chosen(provider, name="Team Skills"):
     return provider.child_folder(provider.default_root(), name)
 
