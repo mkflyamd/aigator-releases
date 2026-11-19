@@ -93,8 +93,10 @@ class FakeProvider:
         self.files[(folder["folder_id"], name)] = (data, f'"e{self._n}"')
         self.writes.append((folder["name"], name))
 
-    def write_file(self, folder, name, data):
-        self._maybe_fail("write_file")
+    def write_file_create(self, folder, name, data):
+        self._maybe_fail("write_file_create")
+        if (folder["folder_id"], name) in self.files:
+            raise ShareError("conflict", "exists")
         self._put(folder, name, data)
 
     def write_json_create(self, folder, name, doc):

@@ -72,6 +72,20 @@ def test_publish_returns_the_link_and_records_the_share(env, make_mine):
     assert skill_state.get_entry(skill_id)["published_version"] == 1
 
 
+def test_publish_response_says_when_the_saved_folder_was_replaced(env, make_mine):
+    skill_id = make_mine()
+    first = _post(env, PUBLISH, {"skill_id": skill_id}).json()
+    assert first["relinked"] is False
+    for key in [k for k, f in env.provider.folders.items() if f["folder_id"] == first["folder"]["folder_id"]]:
+        del env.provider.folders[key]
+
+    again = _post(env, PUBLISH, {"skill_id": skill_id})
+
+    assert again.status_code == 200
+    assert again.json()["relinked"] is True
+    assert again.json()["folder"]["folder_id"] != first["folder"]["folder_id"]
+
+
 def test_publish_reports_addresses_that_could_not_be_granted(env, make_mine):
     env.provider.ungrantable.add("outside@gmail.com")
     res = _post(env, PUBLISH, {"skill_id": make_mine(), "people": ["a@contoso.com", "outside@gmail.com"]})
@@ -341,7 +355,7 @@ def test_publish_into_someone_elses_skill_is_a_409(env, make_mine):
 
 
 def test_a_policy_refusal_is_a_422_with_its_own_code(env, make_mine):
-    env.provider.fail_on["write_file"] = ShareError("forbidden", "label")
+    env.provider.fail_on["write_file_create"] = ShareError("forbidden", "label")
     res = _post(env, PUBLISH, {"skill_id": make_mine()})
     assert res.status_code == 422
     assert res.json()["detail"]["error"] == "policy_blocked"
