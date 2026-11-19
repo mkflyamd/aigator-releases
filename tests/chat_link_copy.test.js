@@ -128,7 +128,9 @@ test('a rejected clipboard write leaves the button reading Copy link', async () 
 });
 
 function rule(selector) {
-  const m = css.match(new RegExp('(^|\\n)' + selector.replace(/[.]/g, '\\.') + '\\s*\\{([^}]*)\\}'));
+  const m = css.match(
+    new RegExp('(^|\\n)' + selector.replace(/[.]/g, '\\.') + '\\s*\\{([^}]*)\\}'),
+  );
   assert(m, selector + ' rule exists');
   return m[2];
 }
