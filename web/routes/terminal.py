@@ -115,8 +115,32 @@ def _adopt_pty_session(session_id: str) -> PtySession | None:
         return entry
 
 
+def find_host_session(owner: dict[str, str]) -> str | None:
+    """Id of the newest live session the host holds for `owner` (the labels given
+    when it was created), or None. After a backend restart this is how a project
+    finds the agent that is still running for it. Blocking (loopback socket)."""
+    if not pty_client.host_enabled():
+        return None
+    info = pty_client.find_host(pty_client.instance_key())
+    if info is None:
+        return None
+    try:
+        listed = pty_client.host_request(info, {"op": "list"}).get("sessions", [])
+    except pty_client.HostError:
+        logger.warning("could not ask the PTY host for sessions", exc_info=True)
+        return None
+    # The host lists sessions in creation order; the last match is the newest.
+    mine = [
+        s["id"]
+        for s in listed
+        if not s.get("done")
+        and all((s.get("meta") or {}).get(k) == v for k, v in owner.items())
+    ]
+    return mine[-1] if mine else None
+
+
 def _create_remote_pty_session(
-    session_id, cols, rows, command, env, cwd
+    session_id, cols, rows, command, env, cwd, meta=None
 ) -> PtySession | None:
     info = pty_client.ensure_host(pty_client.instance_key())
     if info is None:
@@ -131,6 +155,8 @@ def _create_remote_pty_session(
         "env": {**os.environ, **(env or {})},
         "cwd": os.path.abspath(cwd) if cwd else None,
     }
+    if meta:
+        request["meta"] = meta
     try:
         reply = pty_client.host_request(info, request, pty_client.CREATE_TIMEOUT)
         if reply.get("error") == "exists":
@@ -158,8 +184,12 @@ def create_pty_session(
     command: list[str] | None = None,
     env: dict | None = None,
     cwd: str | None = None,
+    meta: dict[str, str] | None = None,
 ) -> PtySession:
     """Spawn a PTY and register it under session_id. Returns the session.
+
+    `meta` labels who the session belongs to (project and agent). The PTY host
+    keeps it, so a restarted backend can find the session again.
 
     Pass `command`/`env` to run a specific process (e.g. `opencode attach`)
     instead of a bare shell - see pty_spawn.spawn_pty for why direct spawn is used
@@ -171,7 +201,9 @@ def create_pty_session(
     """
     entry = None
     if pty_client.host_enabled():
-        entry = _create_remote_pty_session(session_id, cols, rows, command, env, cwd)
+        entry = _create_remote_pty_session(
+            session_id, cols, rows, command, env, cwd, meta
+        )
     if entry is None:
         pty = spawn_pty(cols=cols, rows=rows, command=command, env=env, cwd=cwd)
         entry = PtySession(pty)

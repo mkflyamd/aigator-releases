@@ -50,6 +50,8 @@ class _FakePty:
     def close(self):
         self.end()
 
+    detach = close
+
 
 def _wait(cond, timeout=5.0):
     deadline = time.time() + timeout
@@ -566,3 +568,205 @@ def test_create_waits_longer_than_a_normal_host_request(monkeypatch):
     finally:
         terminal._pty_sessions.pop("sess-timeout", None)
     assert timeouts["create"] == pty_client.CREATE_TIMEOUT > 5.0
+
+
+# ── Ownership across a backend restart ────────────────────────────────────────
+# The backend's (project, agent) -> session map dies with it, so the host
+# remembers who a session was created for and a restarted backend reclaims it.
+
+
+def _meta(project="proj-own", agent="claude"):
+    return {"project_id": project, "agent": agent}
+
+
+def test_host_remembers_the_owner_metadata_it_was_given_at_create(host):
+    info, _ = host
+    _create(info, sid="a", meta=_meta())
+    _create(info, sid="b")
+    listed = {
+        s["id"]: s
+        for s in pty_client.host_request(info, {"op": "list"})["sessions"]
+    }
+    assert listed["a"]["meta"] == _meta()
+    assert listed["b"]["meta"] is None
+    pty_client.host_request(info, {"op": "close", "id": "a"})
+    ids = [s["id"] for s in pty_client.host_request(info, {"op": "list"})["sessions"]]
+    assert ids == ["b"]
+
+
+@pytest.mark.parametrize(
+    "bad",
+    ["a string", ["a"], {"project_id": 1}, {"k" * 300: "v"}, {"project_id": "x" * 5000}],
+)
+def test_host_ignores_metadata_that_is_not_a_small_string_map(host, bad):
+    info, _ = host
+    _create(info, sid="a", meta=bad)
+    [listed] = pty_client.host_request(info, {"op": "list"})["sessions"]
+    assert listed["meta"] is None
+
+
+def test_host_forgets_metadata_of_a_session_it_reaps():
+    h = PtyHost(TOKEN, spawn=lambda **kw: _FakePty())
+    pty = _FakePty()
+    session = PtySession(pty)
+    h.sessions["a"] = session
+    h._meta["a"] = _meta()
+    pty.end()
+    assert _wait(lambda: session.done)
+    now = time.time()
+    h.reap(now, orphan_timeout=10**9, done_ttl=1)
+    h.reap(now + 2, orphan_timeout=10**9, done_ttl=1)
+    assert "a" not in h.sessions and "a" not in h._meta
+
+
+def test_create_sends_the_owner_metadata_to_the_host(monkeypatch):
+    info = {"port": 1, "token": TOKEN}
+    sent = []
+
+    def fake_request(info, msg, timeout=5.0):
+        sent.append(msg)
+        return {"ok": True}
+
+    monkeypatch.setattr(pty_client, "host_enabled", lambda: True)
+    monkeypatch.setattr(pty_client, "ensure_host", lambda key: info)
+    monkeypatch.setattr(pty_client, "host_request", fake_request)
+
+    class _Remote(_FakePty):
+        start_offset = end_offset = 0
+
+        def __init__(self, *args, **kwargs):
+            super().__init__()
+
+    monkeypatch.setattr(pty_client, "RemotePty", _Remote)
+    try:
+        terminal.create_pty_session("sess-meta", command=["agent"], meta=_meta())
+    finally:
+        terminal._pty_sessions.pop("sess-meta", None)
+    assert sent[0]["meta"] == _meta()
+
+
+@pytest.fixture
+def restarted_backend(host, monkeypatch):
+    """A fresh backend in front of a host that already holds sessions: its
+    registries are empty and POSTs reach the real route."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    import generic_agent
+    from routes import generic_agent_routes
+    from security import verify_csrf
+
+    info, spawned = host
+    monkeypatch.setattr(pty_client, "host_enabled", lambda: True)
+    monkeypatch.setattr(pty_client, "find_host", lambda key: info)
+    monkeypatch.setattr(pty_client, "ensure_host", lambda key: info)
+    monkeypatch.setattr(generic_agent, "is_supported", lambda agent: True)
+    monkeypatch.setattr(generic_agent, "is_bare_terminal", lambda agent: True)
+    monkeypatch.setattr(generic_agent, "_active_sessions", {})
+    monkeypatch.setattr(terminal, "_pty_sessions", {})
+    app = FastAPI()
+    app.include_router(generic_agent_routes.router)
+    app.dependency_overrides[verify_csrf] = lambda: None
+    client = TestClient(app)
+
+    def open_terminal(project="proj-own", agent="claude", **extra):
+        return client.post(
+            "/api/generic-agent/terminal",
+            json={"project_id": project, "agent": agent, "repo_path": ".", **extra},
+        )
+
+    yield info, spawned, open_terminal, generic_agent
+    for entry in list(terminal._pty_sessions.values()):
+        entry.pty.detach()
+
+
+def test_reopening_a_project_after_a_restart_reattaches_the_running_agent(
+    restarted_backend,
+):
+    info, spawned, open_terminal, generic_agent = restarted_backend
+    _create(info, sid="old", meta=_meta())
+    _create(info, sid="newest", meta=_meta())
+    _create(info, sid="other-agent", meta=_meta(agent="codex"))
+    _create(info, sid="other-project", meta=_meta(project="elsewhere"))
+
+    reply = open_terminal()
+
+    assert reply.status_code == 200
+    assert reply.json() == {"pty_session_id": "newest", "created": False}
+    assert len(spawned) == 4  # nothing new was started
+    assert generic_agent.get_active_session("proj-own", "claude") == "newest"
+
+
+def test_a_plus_tab_still_starts_a_new_agent_next_to_the_running_one(
+    restarted_backend, monkeypatch
+):
+    info, spawned, open_terminal, _ = restarted_backend
+    _create(info, sid="running", meta=_meta())
+
+    reply = open_terminal(force_new=True)
+
+    assert reply.json()["created"] is True
+    assert reply.json()["pty_session_id"] != "running"
+    assert len(spawned) == 2
+
+
+def test_a_finished_session_is_not_reattached_after_a_restart(restarted_backend):
+    info, spawned, open_terminal, _ = restarted_backend
+    _create(info, sid="finished", meta=_meta())
+    spawned[0][1].end()
+    assert _wait(
+        lambda: pty_client.host_request(info, {"op": "status", "id": "finished"})[
+            "done"
+        ]
+    )
+
+    reply = open_terminal()
+
+    assert reply.json()["created"] is True
+    assert reply.json()["pty_session_id"] != "finished"
+
+
+def test_no_matching_session_in_the_host_starts_a_new_agent(restarted_backend):
+    info, spawned, open_terminal, _ = restarted_backend
+    _create(info, sid="other", meta=_meta(project="elsewhere"))
+    _create(info, sid="unowned")
+
+    reply = open_terminal()
+
+    assert reply.json()["created"] is True
+    assert len(spawned) == 3
+
+
+def test_an_unreachable_host_starts_a_new_agent_as_before(restarted_backend, monkeypatch):
+    _, spawned, open_terminal, _ = restarted_backend
+
+    def unreachable(info, msg, timeout=5.0):
+        raise pty_client.HostError("host went away")
+
+    monkeypatch.setattr(pty_client, "host_request", unreachable)
+    monkeypatch.setattr(terminal, "spawn_pty", lambda **kw: _FakePty())
+    reply = open_terminal()
+    assert reply.json()["created"] is True
+
+
+def test_a_running_agent_that_cannot_be_reattached_is_not_duplicated_or_killed(
+    restarted_backend, monkeypatch
+):
+    info, spawned, open_terminal, generic_agent = restarted_backend
+    _create(info, sid="running", meta=_meta())
+    monkeypatch.setattr(terminal, "_ADOPT_REPLAY_TIMEOUT", 0.1)
+    real_read = pty_client.RemotePty.read
+    spawned[0][1].feed("retained")
+
+    def stalled(self, n=4096):
+        time.sleep(2)
+        return real_read(self, n)
+
+    monkeypatch.setattr(pty_client.RemotePty, "read", stalled)
+
+    reply = open_terminal()
+
+    assert reply.status_code == 503
+    assert len(spawned) == 1
+    assert pty_client.host_request(info, {"op": "status", "id": "running"})["alive"]
+    assert generic_agent.get_active_session("proj-own", "claude") is None
