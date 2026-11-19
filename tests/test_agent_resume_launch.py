@@ -191,7 +191,7 @@ def test_resume_of_a_session_a_gator_terminal_runs_reattaches_instead_of_duplica
         done = False
 
     monkeypatch.setattr(agent_liveness, "live_processes", lambda agent, sid=None: [LIVE_PROC])
-    monkeypatch.setattr(terminal, "pty_pid_map", lambda: {1: "p-owner"})
+    monkeypatch.setattr(terminal, "pty_pid_map", lambda strict=False: {1: "p-owner"})
     monkeypatch.setattr(agent_liveness, "owning_pty", lambda pid, owners: "p-owner" if pid == 4242 else None)
     monkeypatch.setattr(terminal, "get_pty_session", lambda sid: _Live() if sid == "p-owner" else None)
     for allow_duplicate in (False, True):
@@ -206,7 +206,7 @@ def test_resume_still_409s_when_the_owning_terminal_is_gone(env, monkeypatch):
     import routes.terminal as terminal
 
     monkeypatch.setattr(agent_liveness, "live_processes", lambda agent, sid=None: [LIVE_PROC])
-    monkeypatch.setattr(terminal, "pty_pid_map", lambda: {1: "p-owner"})
+    monkeypatch.setattr(terminal, "pty_pid_map", lambda strict=False: {1: "p-owner"})
     monkeypatch.setattr(agent_liveness, "owning_pty", lambda pid, owners: "p-owner")
     monkeypatch.setattr(terminal, "get_pty_session", lambda sid: None)
     r = client().post("/api/generic-agent/terminal", json=BODY)
@@ -230,3 +230,33 @@ def test_pty_pid_map_keeps_local_owners_and_logs_when_the_host_list_fails(monkey
     with caplog.at_level("WARNING"):
         assert terminal.pty_pid_map() == {77: "p-local"}
     assert "PTY host list failed" in caplog.text
+
+
+def test_resume_refuses_to_spawn_when_the_owner_lookup_fails(env, monkeypatch):
+    import agent_liveness
+    import routes.terminal as terminal
+
+    def failing(strict=False):
+        raise terminal.pty_client.HostError("down")
+
+    monkeypatch.setattr(agent_liveness, "live_processes", lambda agent, sid=None: [LIVE_PROC])
+    monkeypatch.setattr(terminal, "pty_pid_map", failing)
+    r = client().post("/api/generic-agent/terminal", json={**BODY, "allow_duplicate": True})
+    assert r.status_code == 503
+    assert env["spawn"] == []
+
+
+def test_pty_pid_map_strict_raises_when_the_host_list_fails(monkeypatch):
+    import routes.terminal as terminal
+
+    monkeypatch.setattr(terminal, "_pty_sessions", {})
+    monkeypatch.setattr(terminal.pty_client, "host_enabled", lambda: True)
+    monkeypatch.setattr(terminal.pty_client, "find_host", lambda key: {"port": 1})
+    monkeypatch.setattr(terminal.pty_client, "instance_key", lambda: "k")
+
+    def boom(info, msg):
+        raise terminal.pty_client.HostError("down")
+
+    monkeypatch.setattr(terminal.pty_client, "host_request", boom)
+    with pytest.raises(terminal.pty_client.HostError):
+        terminal.pty_pid_map(strict=True)

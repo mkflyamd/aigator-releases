@@ -157,6 +157,7 @@ async def _open_terminal(req: GenericAgentTerminalRequest):
     always spawn rather than adopt the first tab's PTY. The last one spawned
     becomes the project's tracked session (what a cold reopen reattaches to).
     """
+    import pty_client
     from routes.terminal import create_pty_session, get_pty_session, close_pty_session, pty_pid_map
 
     if not generic_agent.is_supported(req.agent):
@@ -181,7 +182,13 @@ async def _open_terminal(req: GenericAgentTerminalRequest):
         if elsewhere:
             # A restart empties the in-memory pins, but the process is still a child of the
             # Gator terminal that started it: reattach to that terminal rather than duplicate it.
-            owners = await asyncio.to_thread(pty_pid_map)
+            try:
+                owners = await asyncio.to_thread(pty_pid_map, True)
+            except pty_client.HostError:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Could not check whether this session is already open in a Gator terminal. Try again.",
+                )
             for proc in elsewhere:
                 owner = agent_liveness.owning_pty(proc["pid"], owners)
                 entry = owner and await asyncio.to_thread(get_pty_session, owner)

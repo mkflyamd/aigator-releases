@@ -110,9 +110,11 @@ def _adopt_pty_session(session_id: str) -> PtySession | None:
         return entry
 
 
-def pty_pid_map() -> dict[int, str]:
+def pty_pid_map(strict: bool = False) -> dict[int, str]:
     """Child pid -> PTY id for every live PTY, including ones the PTY host still
-    holds that this backend has not adopted yet (after a restart). Blocking."""
+    holds that this backend has not adopted yet (after a restart). Blocking.
+    When the host cannot be listed, return what this process knows, or raise
+    HostError if strict."""
     owners = {}
     for sid, entry in list(_pty_sessions.items()):
         if entry.pid and not entry.done:
@@ -123,6 +125,8 @@ def pty_pid_map() -> dict[int, str]:
             try:
                 sessions = pty_client.host_request(info, {"op": "list"}).get("sessions", [])
             except pty_client.HostError as exc:
+                if strict:
+                    raise
                 logger.warning("pty_pid_map: PTY host list failed, owners incomplete: %s", exc)
                 return owners
             for s in sessions:
