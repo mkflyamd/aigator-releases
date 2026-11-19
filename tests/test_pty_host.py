@@ -770,3 +770,36 @@ def test_a_running_agent_that_cannot_be_reattached_is_not_duplicated_or_killed(
     assert len(spawned) == 1
     assert pty_client.host_request(info, {"op": "status", "id": "running"})["alive"]
     assert generic_agent.get_active_session("proj-own", "claude") is None
+
+
+def test_packaged_builds_keep_their_ptys_in_the_backend(monkeypatch):
+    # Not under pytest, as a real run would be.
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.delenv("GATOR_PTY_HOST", raising=False)
+    assert pty_client.host_enabled() is True  # a source checkout
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    assert pty_client.host_enabled() is False
+    monkeypatch.setenv("GATOR_PTY_HOST", "1")
+    assert pty_client.host_enabled() is True  # an explicit override still wins
+
+
+def test_a_packaged_build_never_contacts_the_host(monkeypatch):
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.delenv("GATOR_PTY_HOST", raising=False)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("a packaged build must not start or ask a PTY host")
+
+    monkeypatch.setattr(pty_client, "ensure_host", forbidden)
+    monkeypatch.setattr(pty_client, "find_host", forbidden)
+    fallback = _FakePty()
+    monkeypatch.setattr(terminal, "spawn_pty", lambda **kw: fallback)
+    try:
+        entry = terminal.create_pty_session("sess-frozen", command=["agent"])
+        assert entry.pty is fallback
+        assert terminal.get_pty_session("sess-unknown") is None
+        assert terminal.find_host_session({"project_id": "p", "agent": "a"}) is None
+    finally:
+        terminal._pty_sessions.pop("sess-frozen", None)
+        fallback.end()
