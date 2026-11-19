@@ -2664,7 +2664,7 @@ async function openPinDropdown(query) {
 }
 
 // Build a canonical pin-ref chip element (icon + label, no X button).
-// Single source of truth for chip markup so every insertion path — the Shift+{
+// Single source of truth for chip markup so every insertion path — the Shift+?
 // dropdown AND the Electron shell's Slack/Teams pin forwarder — produces an
 // identical-looking chip. pin: { source, id, label }.
 function buildPinChipEl(pin) {
@@ -2684,7 +2684,7 @@ function buildPinChipEl(pin) {
 }
 
 // Insert a pin chip at the current caret in the chat composer, exactly as the
-// Shift+{ dropdown does (no trailing line/space, no X button). Called by the
+// Shift+? dropdown does (no trailing line/space, no X button). Called by the
 // Electron shell's pin forwarder via executeJavaScript so shell-pinned chips
 // match dropdown-pinned chips. Returns 'ok' | 'no input'.
 window.insertPinChipAtCaret = function (pin) {
@@ -2715,7 +2715,7 @@ window.insertPinChipAtCaret = function (pin) {
 
 function commitPinMention(pin) {
   closePinDropdown();
-  _replaceAtHashInInput('{', () => buildPinChipEl(pin));
+  _replaceAtHashInInput('?', () => buildPinChipEl(pin));
 }
 
 /* ── @ mention dropdown ──────────────────────────────── */
@@ -4560,7 +4560,13 @@ function _deriveTitle(hist) {
   const first = hist.find((m) => m.role === 'user');
   if (!first) return 'New Chat';
   const text = typeof first.content === 'string' ? first.content : '';
-  return text.replace(/@\w+/g, '').trim().slice(0, 25) || 'New Chat';
+  return _stripPinTokens(text.replace(/@\w+/g, '')).slice(0, 25) || 'New Chat';
+}
+
+function _stripPinTokens(t) {
+  return String(t)
+    .replace(/\[Pin:[^\]]*(\]|$)/g, '')
+    .trim();
 }
 
 function _showChatOrOnboarding() {
@@ -5530,6 +5536,14 @@ function _togglePinPopover() {
   _showPinPopover();
 }
 
+function _groupPinsByScope(pins) {
+  const list = Array.isArray(pins) ? pins : [];
+  return {
+    globals: list.filter((p) => p.scope === 'global'),
+    locals: list.filter((p) => p.scope !== 'global'),
+  };
+}
+
 async function _showPinPopover() {
   const main = document.querySelector('.main');
   if (!main) return;
@@ -5537,7 +5551,7 @@ async function _showPinPopover() {
   backdrop.className = 'pin-popover-backdrop';
   const popover = document.createElement('div');
   popover.className = 'pin-popover';
-  popover.innerHTML = `<div class="pin-popover-header"><span class="pin-popover-title">\uD83D\uDC0A Gator's Context</span><span class="pin-popover-count"></span><button class="pin-popover-close">&times;</button></div><div class="pin-popover-hint"><span class="guide-key">Shift+{</span> in the prompt to reference a pinned item</div><div class="pin-popover-list"></div>`;
+  popover.innerHTML = `<div class="pin-popover-header"><span class="pin-popover-title">\uD83D\uDC0A Gator's Context</span><span class="pin-popover-count"></span><button class="pin-popover-close">&times;</button></div><div class="pin-popover-hint"><span class="guide-key">Shift+?</span> in the prompt to reference a pinned item</div><div class="pin-popover-list"></div>`;
   document.body.appendChild(backdrop);
   main.appendChild(popover);
   const onEsc = (e) => {
@@ -5554,6 +5568,9 @@ async function _showPinPopover() {
   document.addEventListener('keydown', onEsc);
 
   const contextId = _activeTabId || 'default';
+  const tabName =
+    _stripPinTokens(_tabs.find((t) => t.id === contextId)?.title || '').slice(0, 30) || 'this tab';
+  let scopeNote = '';
   let pins;
   if (_cachedPinsContextId === contextId && Array.isArray(_cachedPins)) {
     pins = _cachedPins;
@@ -5591,7 +5608,7 @@ async function _showPinPopover() {
       github: { icon: _pinIcon('github'), label: 'GitHub' },
     };
 
-    pins.forEach((p) => {
+    const addCard = (p) => {
       const cfg = _sourceConfig[p.source] || { icon: '\uD83D\uDCCC', label: p.source };
       const meta =
         p.source === 'onedrive'
@@ -5610,12 +5627,13 @@ async function _showPinPopover() {
       card.innerHTML = `
       <div class="pin-card-icon">${cfg.icon}</div>
       <div class="pin-card-body">
-        <div class="pin-card-label" title="${escapeHtml(p.label)}">${escapeHtml(p.label)}</div>
-        <div class="pin-card-meta" title="${escapeHtml(cfg.label)}${meta ? ' \u00B7 ' + escapeHtml(meta) : ''}">${escapeHtml(cfg.label)}${meta ? ' \u00B7 ' + escapeHtml(meta) : ''}</div>
+        <div class="pin-card-label">${escapeHtml(p.label)}</div>
+        <div class="pin-card-meta">${escapeHtml(cfg.label)}${meta ? ' \u00B7 ' + escapeHtml(meta) : ''}</div>
       </div>
       <div class="pin-card-actions">
         <button class="pin-card-btn pin-card-open" title="Open">&#8599;</button>
         <button class="pin-card-btn pin-card-ask" title="Insert into chat">\u2726</button>
+        <button class="pin-card-btn pin-card-scope${p.scope === 'global' ? ' is-global' : ''}" aria-pressed="${p.scope === 'global'}">\uD83C\uDF10</button>
         <button class="pin-card-btn pin-card-remove" title="Unpin">&times;</button>
       </div>`;
       // ↗ Open item in its native pane (or browser for external sources)
@@ -5800,7 +5818,7 @@ async function _showPinPopover() {
         }
       });
       // ✦ Insert pin reference into chat input — uses the canonical helper so
-      // the chip is identical to Shift+{ and shell-pinned chips (icon+label,
+      // the chip is identical to Shift+? and shell-pinned chips (icon+label,
       // no X, no trailing line/space).
       card.querySelector('.pin-card-ask').addEventListener('click', () => {
         if (typeof window.insertPinChipAtCaret === 'function') {
@@ -5808,12 +5826,68 @@ async function _showPinPopover() {
         }
         cleanup();
       });
+      // Titles go through the DOM: escapeHtml leaves quotes intact, so they cannot sit in an attribute
+      card.querySelector('.pin-card-label').title = p.label;
+      card.querySelector('.pin-card-meta').title = cfg.label + (meta ? ' \u00B7 ' + meta : '');
+      // Globe: global pins show in every tab; turning it off keeps the pin on this tab only
+      card.querySelector('.pin-card-scope').title =
+        p.scope === 'global'
+          ? 'Make tab-only (keeps it on \u201C' + tabName + '\u201D)'
+          : 'Make global';
+      card.querySelector('.pin-card-scope').addEventListener('click', async (e) => {
+        const btn = e.currentTarget;
+        btn.disabled = true;
+        const toGlobal = p.scope !== 'global';
+        let moved = false;
+        try {
+          const res = await fetch('/api/context/pin/scope', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              source: p.source,
+              id: p.id,
+              scope: toGlobal ? 'global' : 'tab',
+              context_id: contextId,
+            }),
+          });
+          moved = res.ok && !!(await res.json().catch(() => ({}))).moved;
+        } catch {
+          moved = false;
+        }
+        if (!moved) {
+          btn.disabled = false;
+          return;
+        }
+        _cachedPins = _cachedPins.map((pin) => {
+          if (!(pin.source === p.source && String(pin.id) === String(p.id))) return pin;
+          const next = { ...pin };
+          if (toGlobal) next.scope = 'global';
+          else delete next.scope;
+          return next;
+        });
+        scopeNote = toGlobal ? '' : 'Now only on \u201C' + tabName + '\u201D';
+        renderPins();
+      });
       // × Unpin
       card.querySelector('.pin-card-remove').addEventListener('click', async () => {
         const removeBtn = card.querySelector('.pin-card-remove');
+        const confirmed = removeBtn.dataset.confirmed === '1';
+        delete removeBtn.dataset.confirmed;
+        if (p.scope === 'global' && !confirmed) {
+          _showConfirmModal(
+            'Remove global pin',
+            `Remove "${escapeHtml(p.label)}" from all tabs?`,
+            'Remove',
+            () => {
+              removeBtn.dataset.confirmed = '1';
+              removeBtn.click();
+            },
+          );
+          return;
+        }
         removeBtn.disabled = true;
         const res = await fetch(
-          `/api/context/pin/${p.source}/${encodeURIComponent(p.id)}?context_id=${contextId}`,
+          `/api/context/pin/${p.source}/${encodeURIComponent(p.id)}?context_id=${contextId}${p.scope === 'global' ? '&scope=global' : ''}`,
           { method: 'DELETE' },
         );
         const result = res.ok ? await res.json().catch(() => ({})) : {};
@@ -5830,36 +5904,68 @@ async function _showPinPopover() {
         card.style.opacity = '0';
         card.style.transform = 'scale(.95) translateX(-10px)';
         setTimeout(() => {
-          card.remove();
-          // Update badge locally from the already-correct _cachedPins — no network fetch needed
-          const orb = document.getElementById('pin-orb');
-          const badge = document.getElementById('pin-orb-badge');
-          const count = Array.isArray(_cachedPins) ? _cachedPins.length : 0;
-          if (badge) {
-            badge.textContent = count;
-            badge.classList.toggle('hidden', count === 0);
-          }
-          if (orb) {
-            orb.classList.toggle('has-pins', count > 0);
-          }
-          if (countEl)
-            countEl.textContent = list.children.length
-              ? `${list.children.length} item${list.children.length !== 1 ? 's' : ''}`
-              : '';
-          if (!list.children.length) {
-            const empty = document.createElement('div');
-            empty.className = 'pin-popover-empty';
-            const icon = document.createElement('div');
-            icon.style.cssText = 'font-size:1.4rem;margin-bottom:.4rem';
-            icon.textContent = '\uD83D\uDC0A';
-            empty.appendChild(icon);
-            empty.appendChild(document.createTextNode('All clear! No items pinned.'));
-            list.replaceChildren(empty);
-          }
+          syncBadge();
+          renderPins();
         }, 200);
       });
       list.appendChild(card);
-    });
+    };
+
+    // Badge from the already-correct _cachedPins -- no network fetch needed
+    const syncBadge = () => {
+      const orb = document.getElementById('pin-orb');
+      const badge = document.getElementById('pin-orb-badge');
+      const count = Array.isArray(_cachedPins) ? _cachedPins.length : 0;
+      if (badge) {
+        badge.textContent = count;
+        badge.classList.toggle('hidden', count === 0);
+      }
+      if (orb) orb.classList.toggle('has-pins', count > 0);
+    };
+
+    // Rebuilds the list from the cache. The initial empty state returns earlier, so an
+    // empty list here means the user just removed the last pin.
+    const renderPins = () => {
+      const current =
+        _cachedPinsContextId === contextId && Array.isArray(_cachedPins) ? _cachedPins : [];
+      list.replaceChildren();
+      if (countEl)
+        countEl.textContent = current.length
+          ? `${current.length} item${current.length !== 1 ? 's' : ''}`
+          : '';
+      if (!current.length) {
+        const empty = document.createElement('div');
+        empty.className = 'pin-popover-empty';
+        const icon = document.createElement('div');
+        icon.style.cssText = 'font-size:1.4rem;margin-bottom:.4rem';
+        icon.textContent = '\uD83D\uDC0A';
+        empty.appendChild(icon);
+        empty.appendChild(document.createTextNode('All clear! No items pinned.'));
+        list.replaceChildren(empty);
+        return;
+      }
+      if (scopeNote) {
+        const note = document.createElement('div');
+        note.className = 'pin-scope-note';
+        note.textContent = scopeNote;
+        list.appendChild(note);
+        scopeNote = '';
+      }
+      const { globals, locals } = _groupPinsByScope(current);
+      const addGroup = (title, items) => {
+        if (globals.length && items.length) {
+          const header = document.createElement('div');
+          header.className = 'pin-group-title';
+          header.textContent = title;
+          list.appendChild(header);
+        }
+        items.forEach(addCard);
+      };
+      addGroup('Global', globals);
+      addGroup('This tab \u00B7 ' + tabName, locals);
+    };
+
+    renderPins();
   } catch {
     list.innerHTML = '<div class="pin-popover-empty">Could not load pins</div>';
   }
@@ -9129,7 +9235,7 @@ function _replaceAtHashInInput(trigger, chipFactory) {
         ? /^#[\w-]*/
         : trigger === '/'
           ? /^\/[\w-]*/
-          : /^\{[^}\n]*/;
+          : /^\?\S*/;
   const afterQuery = text.slice(idx).replace(triggerRegex, '');
   const chip = chipFactory();
   const parent = node.parentNode;
@@ -9380,13 +9486,13 @@ input.addEventListener('input', () => {
   }
   _closeSlashDropdown();
 
-  // { trigger: open pin reference dropdown
-  const braceIdx = val.lastIndexOf('{');
-  if (braceIdx !== -1) {
-    const beforeBrace = val[braceIdx - 1];
-    if (_isTriggerBoundary(beforeBrace)) {
-      const afterBrace = val.slice(braceIdx + 1);
-      const query = (afterBrace.match(/^[^}\n]*/) || [''])[0];
+  // ? trigger: open pin reference dropdown (at start or after a space; a space
+  // after the ? ends it, so a sentence like "ok ? yes" never captures Enter)
+  const questionIdx = val.lastIndexOf('?');
+  if (questionIdx !== -1) {
+    const beforeQuestion = val[questionIdx - 1];
+    const query = val.slice(questionIdx + 1);
+    if (_isTriggerBoundary(beforeQuestion) && !/\s/.test(query)) {
       closeMentionDropdown();
       closeChannelDropdown();
       openPinDropdown(query);
@@ -9543,6 +9649,8 @@ input.addEventListener('keydown', (e) => {
     });
     return;
   }
+  // Enter with nothing highlighted is a plain send (e.g. a message ending in " ?")
+  if (_pinDropdown && e.key === 'Enter' && _pinFocusIdx < 0) closePinDropdown();
   // Pin dropdown navigation
   if (_pinDropdown) {
     const items = _pinDropdown.querySelectorAll('.skill-mention-item');
@@ -20015,7 +20123,7 @@ _loadMcpConnections();
   }
 
   // ── Content fade: dim guide hints once the user has typed, NOT on focus.
-  // The hints (/, @, Shift+{, open file) are discovery affordances — most useful
+  // The hints (/, @, Shift+?, open file) are discovery affordances — most useful
   // when the box is focused-but-empty (about to type). Keep them readable then;
   // recede only after there's content so they don't compete with what's typed.
   if (chatInput && guideBar) {

@@ -1628,18 +1628,33 @@ async function _pinItem(source, id, label, meta = {}) {
   if (typeof _refreshPinOrb === 'function') _refreshPinOrb();
 }
 
-// Unpin an item: optimistic cache update → API call → rollback on failure
-async function _unpinItem(source, id) {
+// Unpin an item: optimistic cache update → API call → rollback on failure.
+// Global pins show in every tab, so removing one asks first and deletes with scope=global.
+async function _unpinItem(source, id, confirmedGlobal = false) {
   const key = `${source}::${id}`;
+  const cid = typeof _activeTabId !== 'undefined' ? _activeTabId : 'default';
+  if (!confirmedGlobal && typeof _cachedPins !== 'undefined' && _cachedPinsContextId === cid) {
+    const pin = _cachedPins.find((p) => p.source === source && String(p.id) === String(id));
+    if (pin && pin.scope === 'global') {
+      _showConfirmModal(
+        'Remove global pin',
+        'Remove "' + escapeHtml(pin.label || '') + '" from all tabs?',
+        'Remove',
+        () => _unpinItem(source, id, true),
+      );
+      return;
+    }
+  }
   _pinnedItemsCache.delete(key);
   _syncAllPinUI();
-  const cid = typeof _activeTabId !== 'undefined' ? _activeTabId : 'default';
   try {
     const res = await fetch(
-      `/api/context/pin/${source}/${encodeURIComponent(id)}?context_id=${cid}`,
+      `/api/context/pin/${source}/${encodeURIComponent(id)}?context_id=${cid}${confirmedGlobal ? '&scope=global' : ''}`,
       { method: 'DELETE' },
     );
     if (!res.ok) throw new Error();
+    const result = await res.json().catch(() => ({}));
+    if (result.unpinned === false) throw new Error();
   } catch {
     _pinnedItemsCache.add(key); // rollback
     _syncAllPinUI();
