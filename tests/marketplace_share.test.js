@@ -118,17 +118,48 @@ function fnSource(name) {
   return match[0];
 }
 
+class FakeEl {
+  constructor(tag) {
+    this.tag = tag;
+    this.dataset = {};
+    this.className = '';
+    this.title = '';
+    this.disabled = false;
+    this.isConnected = true;
+    this.children = [];
+    this.focusCalls = [];
+    this._text = '';
+  }
+  get textContent() {
+    return this.children.length ? this.children.map((c) => c.textContent).join('') : this._text;
+  }
+  set textContent(value) {
+    this.children = [];
+    this._text = String(value);
+  }
+  appendChild(child) {
+    this.children.push(child);
+    return child;
+  }
+  focus(options) {
+    this.focusCalls.push(options);
+  }
+}
+
 function fakeDocument() {
-  return {
-    document: {
-      createElement: (tag) => ({ tag, dataset: {}, className: '', textContent: '', title: '' }),
-    },
-  };
+  return { document: { createElement: (tag) => new FakeEl(tag) } };
 }
 
 function extractFn(name, ctx) {
   const context = vm.createContext(ctx || {});
   return vm.runInContext(fnSource(name) + ';' + name + ';', context);
+}
+
+// Several functions of the pane in one context, so they call each other as in the page.
+function extractFns(names, ctx) {
+  const context = vm.createContext(ctx || {});
+  names.forEach((name) => vm.runInContext(fnSource(name) + ';', context));
+  return context;
 }
 
 test('the row note says "vN available", "Up to date", removed, or no access', () => {
@@ -162,7 +193,7 @@ test('Check for update reads the update-check route and stores the answer withou
   await run('weekly-report');
   assert.deepStrictEqual(urls, ['/api/skills/share/update-check?skill_id=weekly-report']);
   assert.strictEqual(_updateStatus['weekly-report'], answer);
-  assert.strictEqual(renders, 1);
+  assert.strictEqual(renders, 0, 'the caller re-renders once the button is released');
   assert.strictEqual(alerts.length, 0);
 });
 
@@ -184,7 +215,10 @@ test('a failed check shows an alert and records nothing', async () => {
 });
 
 test('received rows get Check for update, which becomes Update once a newer version is known', () => {
-  const button = extractFn('_updateButton', fakeDocument());
+  const button = extractFns(['_updateButton', '_paintUpdateButton'], {
+    document: fakeDocument().document,
+    _updateBusy: new Set(),
+  })._updateButton;
   const skill = { id: 'weekly-report' };
   assert.strictEqual(button(false, skill, null), null);
   const check = button(true, skill, null);
@@ -195,8 +229,6 @@ test('received rows get Check for update, which becomes Update once a newer vers
   const update = button(true, skill, { status: 'update', latest: 2 });
   assert.strictEqual(update.textContent, 'Update');
   assert.strictEqual(update.dataset.action, 'apply-update');
-  assert(source.includes("action === 'check-update'"));
-  assert(source.includes('_checkSharedUpdate(btn.dataset.skillId)'));
   assert(
     source.includes(
       "skill.tier === 'Community' && !!(skill.share_source && skill.share_source.folder_id)",
@@ -204,14 +236,366 @@ test('received rows get Check for update, which becomes Update once a newer vers
   );
 });
 
-test('Update reuses the review and install modal with the folder link from the check', () => {
-  const at = source.indexOf("action === 'apply-update'");
-  assert(at > 0);
-  const branch = source.slice(at, source.indexOf("action === 'submit-create'", at));
-  assert(branch.includes('_updateStatus[btn.dataset.skillId]'));
-  assert(branch.includes('_reviewSharedLink(found.link)'));
-  const onInstalled = source.indexOf('delete _updateStatus[result.skill_id]');
-  assert(onInstalled > 0, 'the stale answer is dropped once the update installs');
+function updateContext(overrides) {
+  return extractFns(
+    ['_updateButton', '_paintUpdateButton', '_startUpdateAction', '_rowButtonKey'],
+    Object.assign(
+      {
+        document: fakeDocument().document,
+        _updateBusy: new Set(),
+        _updateStatus: {},
+        _pendingFocusKey: null,
+        _showAlert: () => {},
+      },
+      overrides,
+    ),
+  );
+}
+
+function deferred() {
+  let resolve;
+  const promise = new Promise((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
+test('a busy update button is disabled and shows the spinner with Checking… or Opening…', () => {
+  const ctx = updateContext();
+  const skill = { id: 'weekly-report' };
+  const idle = ctx._updateButton(true, skill, null);
+  assert.strictEqual(idle.disabled, false);
+  assert.strictEqual(idle.textContent, 'Check for update');
+  assert.strictEqual(idle.children.length, 0);
+
+  ctx._updateBusy.add('weekly-report');
+  const checking = ctx._updateButton(true, skill, { status: 'current' });
+  assert.strictEqual(checking.disabled, true);
+  assert.strictEqual(checking.textContent, 'Checking…');
+  assert(checking.children.some((c) => c.className === 'cap-inline-spinner'));
+  assert(checking.className.includes('mp-row-btn-busy'));
+  assert.strictEqual(checking.dataset.action, 'check-update');
+
+  const opening = ctx._updateButton(true, skill, { status: 'update', latest: 2 });
+  assert.strictEqual(opening.disabled, true);
+  assert.strictEqual(opening.textContent, 'Opening…');
+  assert(opening.children.some((c) => c.className === 'cap-inline-spinner'));
+  assert.strictEqual(opening.dataset.action, 'apply-update');
+});
+
+test('Check for update shows the spinner while in flight, ignores repeat clicks, and restores after', async () => {
+  const gate = deferred();
+  let checks = 0;
+  let renders = 0;
+  const ctx = updateContext({
+    _checkSharedUpdate: async () => {
+      checks += 1;
+      await gate.promise;
+    },
+  });
+  ctx._render = () => {
+    renders += 1;
+  };
+  const btn = ctx._updateButton(true, { id: 'a' }, null);
+  const first = ctx._startUpdateAction(btn, 'check-update');
+  assert.strictEqual(btn.disabled, true);
+  assert.strictEqual(btn.textContent, 'Checking…');
+  assert(btn.children.some((c) => c.className === 'cap-inline-spinner'));
+  assert(ctx._updateBusy.has('a'));
+
+  await ctx._startUpdateAction(btn, 'check-update');
+  assert.strictEqual(checks, 1, 'a repeat click does not start a second check');
+
+  // A re-render while the request runs must still draw the busy button.
+  const rebuilt = ctx._updateButton(true, { id: 'a' }, null);
+  assert.strictEqual(rebuilt.disabled, true);
+  assert.strictEqual(rebuilt.textContent, 'Checking…');
+
+  gate.resolve();
+  await first;
+  assert.strictEqual(ctx._updateBusy.size, 0);
+  assert.strictEqual(renders, 1);
+  const after = ctx._updateButton(true, { id: 'a' }, null);
+  assert.strictEqual(after.disabled, false);
+  assert.strictEqual(after.textContent, 'Check for update');
+  assert.strictEqual(ctx._pendingFocusKey, null, 'the focus request does not outlive the check');
+});
+
+test('the button is restored when the check fails', async () => {
+  const alerts = [];
+  let renders = 0;
+  const ctx = updateContext({
+    _checkSharedUpdate: async () => {
+      throw new Error('offline');
+    },
+    _showAlert: (msg, kind) => alerts.push({ msg, kind }),
+  });
+  ctx._render = () => {
+    renders += 1;
+  };
+  const btn = ctx._updateButton(true, { id: 'a' }, null);
+  await ctx._startUpdateAction(btn, 'check-update');
+  assert.strictEqual(ctx._updateBusy.size, 0);
+  assert.strictEqual(renders, 1, 'the list is drawn again with the idle button');
+  assert.strictEqual(alerts.length, 1);
+  assert.strictEqual(alerts[0].kind, 'error');
+  assert.strictEqual(ctx._updateButton(true, { id: 'a' }, null).disabled, false);
+});
+
+test('Update shows Opening…, ignores repeat clicks, and opens the review with the checked link', async () => {
+  const gate = deferred();
+  const links = [];
+  let renders = 0;
+  const ctx = updateContext({
+    _reviewSharedLink: async (link) => {
+      links.push(link);
+      await gate.promise;
+    },
+  });
+  ctx._render = () => {
+    renders += 1;
+  };
+  ctx._updateStatus.a = { status: 'update', latest: 2, link: 'aigator://share?d=x' };
+  const btn = ctx._updateButton(true, { id: 'a' }, ctx._updateStatus.a);
+  const first = ctx._startUpdateAction(btn, 'apply-update');
+  assert.strictEqual(btn.disabled, true);
+  assert.strictEqual(btn.textContent, 'Opening…');
+  await ctx._startUpdateAction(btn, 'apply-update');
+  assert.deepStrictEqual(links, ['aigator://share?d=x']);
+
+  gate.resolve();
+  await first;
+  // The review dialog is open on top of the list: the same button is put back, no re-render.
+  assert.strictEqual(renders, 0);
+  assert.strictEqual(btn.disabled, false);
+  assert.strictEqual(btn.textContent, 'Update');
+  assert.strictEqual(ctx._updateBusy.size, 0);
+});
+
+test('Update restores the button when the review cannot open', async () => {
+  const alerts = [];
+  const ctx = updateContext({
+    _reviewSharedLink: async () => {
+      throw new Error('boom');
+    },
+    _showAlert: (msg, kind) => alerts.push({ msg, kind }),
+  });
+  ctx._updateStatus.a = { status: 'update', latest: 2, link: 'aigator://share?d=x' };
+  const btn = ctx._updateButton(true, { id: 'a' }, ctx._updateStatus.a);
+  await ctx._startUpdateAction(btn, 'apply-update');
+  assert.strictEqual(btn.disabled, false);
+  assert.strictEqual(btn.textContent, 'Update');
+  assert.strictEqual(ctx._updateBusy.size, 0);
+  assert.strictEqual(alerts.length, 1);
+  assert.strictEqual(alerts[0].kind, 'error');
+});
+
+test('Update on a button the list already replaced redraws the list instead', async () => {
+  let renders = 0;
+  const ctx = updateContext({ _reviewSharedLink: async () => {} });
+  ctx._render = () => {
+    renders += 1;
+  };
+  ctx._updateStatus.a = { status: 'update', latest: 2, link: 'aigator://share?d=x' };
+  const btn = ctx._updateButton(true, { id: 'a' }, ctx._updateStatus.a);
+  btn.isConnected = false;
+  await ctx._startUpdateAction(btn, 'apply-update');
+  assert.strictEqual(renders, 1);
+});
+
+test('the delegated click handler sends both update buttons to the guarded action', () => {
+  const calls = [];
+  const handler = extractFn('_handleContentClick', {
+    _startUpdateAction: (btn, action) => calls.push([btn.dataset.skillId, action]),
+  });
+  ['check-update', 'apply-update'].forEach((action) => {
+    const btn = { dataset: { action, skillId: 'a' } };
+    handler({ target: { closest: () => btn } });
+  });
+  assert.deepStrictEqual(calls, [
+    ['a', 'check-update'],
+    ['a', 'apply-update'],
+  ]);
+});
+
+function installedContext(activeTab) {
+  const calls = { render: 0, switched: [] };
+  const deps = {};
+  const ctx = extractFns(['_reviewSharedLink', '_updateNote', '_rowButtonKey'], {
+    window: {
+      SkillSharing: {
+        extractLink: (text) => text,
+        openLinkReview: (link, d) => Object.assign(deps, d),
+      },
+    },
+    _updateStatus: { a: { status: 'update', latest: 2, link: 'aigator://share?d=x' } },
+    _activeTab: activeTab,
+    _pendingFocusKey: null,
+    _postJson: async () => ({}),
+    _showAlert: () => {},
+    _errorMessage: () => '',
+    _appendPermissionList: () => {},
+    _handleInstallOutcome: () => {},
+    _render: () => {
+      calls.render += 1;
+    },
+    _switchTab: (tab) => calls.switched.push(tab),
+  });
+  ctx._reviewSharedLink('aigator://share?d=x');
+  return { ctx, deps, calls };
+}
+
+test('after an update installs, the row keeps an "Up to date" status at the new version', () => {
+  const { ctx, deps, calls } = installedContext('installed');
+  deps.onInstalled({ skill_id: 'a', version: 2 }, { title: 'Weekly report' });
+  assert.deepStrictEqual(Object.assign({}, ctx._updateStatus.a), {
+    status: 'current',
+    installed: 2,
+  });
+  assert.strictEqual(ctx._updateNote(ctx._updateStatus.a), 'Up to date');
+  assert.strictEqual(calls.render, 1, 'the open Installed list is redrawn in place');
+  assert.deepStrictEqual(calls.switched, []);
+  assert.strictEqual(ctx._pendingFocusKey, 'a|update', 'focus returns to the row button');
+});
+
+test('a link installed from the Add tab still switches to Installed', () => {
+  const { ctx, deps, calls } = installedContext('add');
+  deps.onInstalled({ skill_id: 'a', version: 1 }, { title: 'Weekly report' });
+  assert.deepStrictEqual(calls.switched, ['installed']);
+  assert.strictEqual(calls.render, 0);
+  assert.strictEqual(ctx._pendingFocusKey, null, 'no focus is taken from the Add form');
+  assert.strictEqual(ctx._updateNote(ctx._updateStatus.a), 'Up to date');
+});
+
+// A fake #mp-content that behaves like the browser: emptying it collapses the scroll position.
+function fakeContent(initialScroll) {
+  return {
+    children: [],
+    scrollTop: initialScroll,
+    get firstChild() {
+      return this.children[0] || null;
+    },
+    removeChild(child) {
+      this.children.splice(this.children.indexOf(child), 1);
+      if (!this.children.length) this.scrollTop = 0;
+    },
+    contains(el) {
+      return this.children.includes(el);
+    },
+    querySelectorAll() {
+      return this.children;
+    },
+  };
+}
+
+function rowButton(id, action, disabled) {
+  const btn = new FakeEl('button');
+  btn.dataset.action = action;
+  btn.dataset.skillId = id;
+  btn.disabled = !!disabled;
+  return btn;
+}
+
+function renderContext(content, active, overrides) {
+  const doc = { body: { tag: 'body' }, getElementById: () => content };
+  doc.activeElement = active || doc.body;
+  const ctx = extractFns(
+    ['_render', '_rowButtonKey', '_findRowButton'],
+    Object.assign(
+      {
+        document: doc,
+        _activeTab: 'installed',
+        _pendingFocusKey: null,
+        _renderBrowse: () => {},
+        _renderAdd: () => {},
+        _renderInstalled: (c) => {
+          ['disable', 'check-update', 'remove'].forEach((action) => {
+            ['a', 'b'].forEach((id) => c.children.push(rowButton(id, action)));
+          });
+        },
+      },
+      overrides,
+    ),
+  );
+  return ctx;
+}
+
+test('a re-render keeps the Installed list scroll position and the focused row button', () => {
+  const content = fakeContent(480);
+  const old = rowButton('b', 'apply-update');
+  content.children.push(old);
+  const ctx = renderContext(content, old);
+  ctx._render();
+  assert.strictEqual(content.scrollTop, 480);
+  const focused = content.children.filter((c) => c.focusCalls.length > 0);
+  assert.strictEqual(focused.length, 1, 'exactly one button is focused');
+  assert.strictEqual(focused[0].dataset.skillId, 'b');
+  assert.strictEqual(focused[0].dataset.action, 'check-update');
+  assert.strictEqual(focused[0].focusCalls.length, 1);
+  assert.strictEqual(focused[0].focusCalls[0].preventScroll, true);
+});
+
+test('a tab switch or new search starts at the top and takes no focus', () => {
+  const content = fakeContent(480);
+  const old = rowButton('a', 'check-update');
+  content.children.push(old);
+  const ctx = renderContext(content, old);
+  ctx._render(true);
+  assert.strictEqual(content.scrollTop, 0);
+  assert(content.children.every((c) => c.focusCalls.length === 0));
+});
+
+test('focus lost while the button was disabled comes back once the button is enabled again', () => {
+  const content = fakeContent(300);
+  const ctx = renderContext(content, null);
+  ctx._pendingFocusKey = 'b|update';
+  ctx._render();
+  const focused = content.children.filter((c) => c.focusCalls.length > 0);
+  assert.strictEqual(focused.length, 1);
+  assert.strictEqual(focused[0].dataset.skillId, 'b');
+  assert.strictEqual(ctx._pendingFocusKey, null);
+  assert.strictEqual(content.scrollTop, 300);
+
+  // A button that is still busy is not focused and the request stays pending.
+  const busy = fakeContent(300);
+  const second = renderContext(busy, null, {
+    _renderInstalled: (c) => c.children.push(rowButton('b', 'check-update', true)),
+  });
+  second._pendingFocusKey = 'b|update';
+  second._render();
+  assert.strictEqual(busy.children[0].focusCalls.length, 0);
+  assert.strictEqual(second._pendingFocusKey, 'b|update');
+});
+
+test('focus the user moved elsewhere is not pulled back to the update button', () => {
+  const content = fakeContent(300);
+  const ctx = renderContext(content, new FakeEl('input'));
+  ctx._pendingFocusKey = 'b|update';
+  ctx._render();
+  assert(content.children.every((c) => c.focusCalls.length === 0));
+});
+
+test('refresh shows the loading skeleton only before the first load', async () => {
+  let skeletons = 0;
+  const ctx = {
+    document: { getElementById: () => ({ tag: 'content', style: {} }) },
+    fetch: async () => ({ json: async () => ({ skills: [] }) }),
+    _renderSkeleton: () => {
+      skeletons += 1;
+    },
+    _render: () => {},
+    _loaded: false,
+    _catalog: [],
+    _installed: [],
+    console,
+  };
+  const refresh = extractFn('refresh', ctx);
+  await refresh();
+  assert.strictEqual(skeletons, 1);
+  assert.strictEqual(ctx._loaded, true);
+  // An empty catalog must not bring the skeleton back: it would collapse a long list.
+  await refresh();
+  assert.strictEqual(skeletons, 1);
 });
 
 test('a Mine skill edited after sharing shows "Shared v1 · edited since" and opens Share', () => {

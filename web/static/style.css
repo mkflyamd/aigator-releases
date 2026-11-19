@@ -17847,6 +17847,21 @@ body.gator-terminal-pushing .dock {
   color: var(--text);
   border-color: var(--border2);
 }
+.mp-row-btn-busy,
+.mp-row-btn-busy:hover {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  border-color: var(--border);
+  cursor: default;
+}
+.mp-row-btn-busy .cap-inline-spinner {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+}
 .mp-row-btn-danger {
   color: var(--error);
   border-color: rgba(248, 113, 113, 0.4);
