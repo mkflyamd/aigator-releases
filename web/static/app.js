@@ -13723,15 +13723,29 @@ function _fuzzyFilterCommands(commands, query) {
   return scored.map((x) => x.command);
 }
 
-// Hosts whose https images may render inline in chat. Any other image URL stays a
-// plain link so model output can't beacon data out through an image request.
-const INLINE_IMAGE_HOSTS = ['mcp-platform.amd.com'];
+// Hosts whose https images may render inline in chat: the https MCP servers the user
+// has connected. Any other image URL stays a plain link so model output can't beacon
+// data out through an image request. Mirrors inline_image_hosts() on the server.
+const INLINE_IMAGE_HOSTS = new Set();
+
+window.registerInlineImageHost = function (url) {
+  try {
+    const u = new URL(url);
+    if (u.protocol === 'https:') INLINE_IMAGE_HOSTS.add(u.hostname);
+  } catch (_) {}
+};
+(window.__MCP_SKILLS__ || []).forEach((c) => window.registerInlineImageHost(c.url));
+
+window.setInlineImageHosts = function (urls) {
+  INLINE_IMAGE_HOSTS.clear();
+  urls.forEach((url) => window.registerInlineImageHost(url));
+};
 
 function _isInlineImageUrl(href) {
   if (href.startsWith('/api/files/')) return !href.includes('..');
   try {
     const u = new URL(href.replace(/&amp;/g, '&'));
-    return u.protocol === 'https:' && INLINE_IMAGE_HOSTS.includes(u.hostname);
+    return u.protocol === 'https:' && INLINE_IMAGE_HOSTS.has(u.hostname);
   } catch (_) {
     return false;
   }
@@ -19781,11 +19795,13 @@ async function _loadMcpConnections() {
     // Settings list but not SKILL_REGISTRY, so the backend could auto-select
     // the MCP while the / picker required Ctrl+R to see it. Reconcile every
     // enabled, tool-bearing connection into the live slash-skill registry.
-    connections.forEach((connection) => {
-      if (connection.enabled !== false && Number(connection.tool_count || 0) > 0) {
-        window.registerMcpSkill(connection.id, connection.name || connection.id);
-      }
-    });
+    const active = connections.filter(
+      (connection) => connection.enabled !== false && Number(connection.tool_count || 0) > 0,
+    );
+    active.forEach((connection) =>
+      window.registerMcpSkill(connection.id, connection.name || connection.id),
+    );
+    window.setInlineImageHosts(active.map((connection) => connection.url_hint || ''));
     _renderMcpConnections(connections);
   } catch (e) {
     console.error('Failed to load MCP connections', e);
