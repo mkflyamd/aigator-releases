@@ -11,6 +11,7 @@
   let _activeTab = 'browse';
   let _searchQuery = '';
   let _filterTier = 'all';
+  const _updateStatus = {}; // skill id -> answer of /api/skills/share/update-check
   let _addSubTab = 'import'; // 'import' | 'create' — active section inside the Add tab
 
   // Skills currently mid-flow through the verified-plugin consent install
@@ -158,6 +159,11 @@
       _editMineSkill(btn.dataset.skillId);
     } else if (action === 'share-mine') {
       _shareMineSkill(btn.dataset.skillId);
+    } else if (action === 'check-update') {
+      _checkSharedUpdate(btn.dataset.skillId);
+    } else if (action === 'apply-update') {
+      const found = _updateStatus[btn.dataset.skillId];
+      if (found && found.link) _reviewSharedLink(found.link);
     } else if (action === 'submit-create') {
       _submitCreate();
     } else if (action === 'mp-import-fetch') {
@@ -1062,10 +1068,32 @@
         Number.isInteger(skill.published_version) &&
         skill.published_version > 0
       ) {
-        const chip = document.createElement('span');
-        chip.className = 'mp-share-chip';
-        chip.textContent = 'Shared · v' + skill.published_version;
-        meta.appendChild(chip);
+        if (skill.unshared_edits === true) {
+          const chip = document.createElement('button');
+          chip.type = 'button';
+          chip.className = 'mp-share-chip mp-share-chip-edited';
+          chip.textContent = 'Shared v' + skill.published_version + ' · edited since';
+          chip.title =
+            'You changed this skill after sharing it. Open Share to publish the changes.';
+          chip.dataset.action = 'share-mine';
+          chip.dataset.skillId = skill.id;
+          meta.appendChild(chip);
+        } else {
+          const chip = document.createElement('span');
+          chip.className = 'mp-share-chip';
+          chip.textContent = 'Shared · v' + skill.published_version;
+          meta.appendChild(chip);
+        }
+      }
+      const received =
+        skill.tier === 'Community' && !!(skill.share_source && skill.share_source.folder_id);
+      const updateState = received ? _updateStatus[skill.id] : null;
+      const updateNote = updateState ? _updateNote(updateState) : '';
+      if (updateNote) {
+        const span = document.createElement('span');
+        span.className = 'mp-update-note';
+        span.textContent = updateNote;
+        meta.appendChild(span);
       }
 
       const name = document.createElement('div');
@@ -1092,6 +1120,15 @@
         shareBtn.dataset.action = 'share-mine';
         shareBtn.dataset.skillId = skill.id;
         actions.appendChild(shareBtn);
+      }
+      if (received) {
+        const updating = !!(updateState && updateState.status === 'update');
+        const updateBtn = document.createElement('button');
+        updateBtn.className = 'mp-row-btn';
+        updateBtn.textContent = updating ? 'Update' : 'Check for update';
+        updateBtn.dataset.action = updating ? 'apply-update' : 'check-update';
+        updateBtn.dataset.skillId = skill.id;
+        actions.appendChild(updateBtn);
       }
       const removeBtn = document.createElement('button');
       removeBtn.className = 'mp-row-btn mp-row-btn-danger';
@@ -1418,6 +1455,32 @@
     content.appendChild(wrap);
   }
 
+  function _updateNote(state) {
+    if (state.status === 'update') return 'v' + state.latest + ' available';
+    if (state.status === 'current') return 'Up to date';
+    if (state.status === 'removed') return 'The author removed this shared skill';
+    if (state.status === 'no_access') return 'You no longer have access';
+    return '';
+  }
+
+  // Asks the server whether a newer version sits in the folder this skill came
+  // from. Read only; the installed copy is never touched here.
+  async function _checkSharedUpdate(skillId) {
+    try {
+      const { resp, body } = await _getJson(
+        '/api/skills/share/update-check?skill_id=' + encodeURIComponent(skillId),
+      );
+      if (!resp.ok || !body || !body.status) {
+        _showAlert('Could not check for an update: ' + _errorMessage(body), 'error');
+        return;
+      }
+      _updateStatus[skillId] = body;
+      _render();
+    } catch (err) {
+      _showAlert('Could not check for an update: ' + err.message, 'error');
+    }
+  }
+
   // Review a pasted share link. Nothing installs until the user clicks Install
   // in the review modal; a successful install is registered the same way the
   // local-file install is (see _pickLocalSkill).
@@ -1439,6 +1502,7 @@
       errorMessage: _errorMessage,
       appendPermissionList: _appendPermissionList,
       onInstalled: (result, review) => {
+        delete _updateStatus[result.skill_id];
         const skill = {
           id: result.skill_id,
           name: (review && review.title) || result.skill_id,

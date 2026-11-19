@@ -18397,6 +18397,18 @@ body.gator-terminal-pushing .dock {
   color: var(--accent, #4ade80);
   white-space: nowrap;
 }
+.mp-share-chip-edited {
+  background: transparent;
+  border: 1px solid var(--warn);
+  color: var(--warn);
+  cursor: pointer;
+  font-family: inherit;
+}
+.mp-update-note {
+  font-size: 0.68rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
 .ss-modal {
   max-width: 560px;
 }

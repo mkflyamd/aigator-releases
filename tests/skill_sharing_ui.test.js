@@ -2587,3 +2587,62 @@ test('server text in the review modal is set with textContent only', async () =>
   );
   assert(dom.byText(modal, 'Shared by <b>x</b>, version 2'));
 });
+
+test('a newer version of an installed shared skill reads "Update v1 to v2" and installs on Update', async () => {
+  const dom = makeDom();
+  const api = load(dom);
+  const { deps, calls } = reviewDeps(
+    dom,
+    okReview({ installed_version: 1, version: 2, latest: 2, up_to_date: false }),
+  );
+  await api.openLinkReview(LINK, deps);
+  const modal = dom.document.body.children[0];
+
+  assert(dom.byText(modal, 'Update v1 to v2'));
+  assert(dom.byText(modal, 'Nothing changes until you choose Update.'));
+  assert.strictEqual(dom.byText(modal, 'Nothing is installed until you choose Install.'), null);
+  assert.strictEqual(dom.byText(modal, 'Install'), null);
+  assert(dom.byText(modal, 'Cancel'));
+
+  dom.byText(modal, 'Update').click();
+  await flush();
+  const install = calls.post.find((c) => c.url === '/api/skills/share/install');
+  assert(install, 'the Update button posts to the install route');
+  assert.strictEqual(install.payload.digest, 'sha256:deadbeef');
+  assert.strictEqual(calls.installed.length, 1);
+});
+
+test('an up-to-date shared skill has no Install or Update button, only Close', async () => {
+  const dom = makeDom();
+  const api = load(dom);
+  const { deps, calls } = reviewDeps(
+    dom,
+    okReview({ installed_version: 2, version: 2, latest: 2, up_to_date: true }),
+  );
+  await api.openLinkReview(LINK, deps);
+  const modal = dom.document.body.children[0];
+
+  assert(dom.byText(modal, 'Already up to date (v2).'));
+  assert.strictEqual(dom.byText(modal, 'Install'), null);
+  assert.strictEqual(dom.byText(modal, 'Update'), null);
+  assert.strictEqual(dom.byText(modal, 'Cancel'), null);
+  dom.byTag(dom.byClass(modal, 'mp-modal-actions'), 'button').click();
+  assert.strictEqual(dom.document.body.children.length, 0);
+  assert.deepStrictEqual(
+    calls.post.map((c) => c.url),
+    ['/api/skills/share/review'],
+  );
+});
+
+test('a same-name skill from somewhere else is still a blocking collision, not an update', async () => {
+  const dom = makeDom();
+  const api = load(dom);
+  const { deps } = reviewDeps(
+    dom,
+    okReview({ collision: 'installed', installed_version: null, up_to_date: false }),
+  );
+  await api.openLinkReview(LINK, deps);
+  const modal = dom.document.body.children[0];
+  assert.strictEqual(dom.byText(modal, 'Install').disabled, true);
+  assert.strictEqual(dom.byText(modal, 'Update'), null);
+});
