@@ -181,3 +181,33 @@ def test_allow_duplicate_resumes_despite_a_live_process(env, monkeypatch):
     r = client().post("/api/generic-agent/terminal", json={**BODY, "allow_duplicate": True})
     assert r.status_code == 200 and r.json()["created"] is True
     assert len(env["spawn"]) == 1
+
+
+def test_resume_of_a_session_a_gator_terminal_runs_reattaches_instead_of_duplicating(env, monkeypatch):
+    import agent_liveness
+    import routes.terminal as terminal
+
+    class _Live:
+        done = False
+
+    monkeypatch.setattr(agent_liveness, "live_processes", lambda agent, sid=None: [LIVE_PROC])
+    monkeypatch.setattr(terminal, "pty_pid_map", lambda: {1: "p-owner"})
+    monkeypatch.setattr(agent_liveness, "owning_pty", lambda pid, owners: "p-owner" if pid == 4242 else None)
+    monkeypatch.setattr(terminal, "get_pty_session", lambda sid: _Live() if sid == "p-owner" else None)
+    for allow_duplicate in (False, True):
+        r = client().post("/api/generic-agent/terminal", json={**BODY, "allow_duplicate": allow_duplicate})
+        assert r.status_code == 200
+        assert r.json() == {"pty_session_id": "p-owner", "created": False}
+    assert env["spawn"] == []
+
+
+def test_resume_still_409s_when_the_owning_terminal_is_gone(env, monkeypatch):
+    import agent_liveness
+    import routes.terminal as terminal
+
+    monkeypatch.setattr(agent_liveness, "live_processes", lambda agent, sid=None: [LIVE_PROC])
+    monkeypatch.setattr(terminal, "pty_pid_map", lambda: {1: "p-owner"})
+    monkeypatch.setattr(agent_liveness, "owning_pty", lambda pid, owners: "p-owner")
+    monkeypatch.setattr(terminal, "get_pty_session", lambda sid: None)
+    r = client().post("/api/generic-agent/terminal", json=BODY)
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "session_live"

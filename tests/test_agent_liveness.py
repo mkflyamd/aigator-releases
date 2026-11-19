@@ -92,3 +92,21 @@ def test_a_failing_probe_is_treated_as_nothing_live(monkeypatch):
 
     monkeypatch.setitem(live.PROBES, "claude", boom)
     assert live.live_processes("claude", "s-1") == []
+
+
+def test_owning_pty_matches_a_process_to_the_pty_whose_process_is_its_ancestor():
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        assert live.owning_pty(child.pid, {os.getpid(): "p1"}) == "p1"
+        assert live.owning_pty(os.getpid(), {os.getpid(): "p1"}) == "p1"
+        assert live.owning_pty(child.pid, {os.getpid() + 100000: "p2"}) is None
+        assert live.owning_pty(child.pid, {}) is None
+    finally:
+        child.kill()
+        child.wait()
+
+
+def test_owning_pty_ignores_a_process_that_is_gone():
+    gone = subprocess.Popen([sys.executable, "-c", "pass"])
+    gone.wait()
+    assert live.owning_pty(gone.pid, {os.getpid(): "p1"}) is None

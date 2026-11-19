@@ -93,6 +93,22 @@ PROBES: dict[str, Probe] = {
 }
 
 
+def owning_pty(pid: int, pty_pids: dict[int, str]) -> str | None:
+    """The Gator PTY whose child process is pid or one of its ancestors, else None."""
+    if not pty_pids:
+        return None
+    try:
+        proc = psutil.Process(pid)
+        chain = [proc, *proc.parents()]
+    except psutil.Error:
+        return None
+    for p in chain:
+        owner = pty_pids.get(p.pid)
+        if owner:
+            return owner
+    return None
+
+
 def live_processes(agent: str, session_id: str | None = None) -> list[dict]:
     probe = PROBES.get(agent)
     if probe is None:

@@ -98,12 +98,36 @@ def _adopt_pty_session(session_id: str) -> PtySession | None:
             logger.exception("could not adopt PTY session %s from the host", session_id)
             return None
         entry = PtySession(remote, start_offset=remote.start_offset)
+        # The wrapper was just built, but the session began when the host spawned it.
+        created_at = status.get("created_at")
+        if isinstance(created_at, (int, float)):
+            entry.created_at = created_at
         # The host replays its retained output into the new buffer on a reader
         # thread. A client resuming at its last seq must not see a short stream
         # end and mistake it for a different stream, so wait for the replay.
         entry.wait_for_offset(remote.end_offset, _ADOPT_REPLAY_TIMEOUT)
         _pty_sessions[session_id] = entry
         return entry
+
+
+def pty_pid_map() -> dict[int, str]:
+    """Child pid -> PTY id for every live PTY, including ones the PTY host still
+    holds that this backend has not adopted yet (after a restart). Blocking."""
+    owners = {}
+    for sid, entry in list(_pty_sessions.items()):
+        if entry.pid and not entry.done:
+            owners[entry.pid] = sid
+    if pty_client.host_enabled():
+        info = pty_client.find_host(pty_client.instance_key())
+        if info is not None:
+            try:
+                sessions = pty_client.host_request(info, {"op": "list"}).get("sessions", [])
+            except pty_client.HostError:
+                return owners
+            for s in sessions:
+                if s.get("pid") and not s.get("done"):
+                    owners.setdefault(s["pid"], s["id"])
+    return owners
 
 
 def _create_remote_pty_session(

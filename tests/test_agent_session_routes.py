@@ -121,6 +121,30 @@ def test_list_does_not_flag_a_session_gator_owns_but_shows_its_live_name(scanned
     assert c1["pty_session_id"] == "p1" and "live_elsewhere" not in c1 and c1["title"] == "Live name"
 
 
+def test_list_links_a_live_process_to_the_gator_terminal_that_owns_it(scanned, monkeypatch):
+    import agent_liveness
+    from routes import terminal
+
+    live_claude(monkeypatch, "Live name")
+    monkeypatch.setattr(terminal, "pty_pid_map", lambda: {99: "p-owner"})
+    monkeypatch.setattr(agent_liveness, "owning_pty", lambda pid, owners: owners.get(99) if pid == 7 else None)
+    data = client().get("/api/agent-sessions", params={"project_name": "demo"}).json()
+    c1 = next(s for s in data["sessions"] if s["id"] == "c1")
+    assert c1["pty_session_id"] == "p-owner" and "live_elsewhere" not in c1 and c1["title"] == "Live name"
+
+
+def test_list_still_flags_a_process_no_gator_terminal_owns(scanned, monkeypatch):
+    import agent_liveness
+    from routes import terminal
+
+    live_claude(monkeypatch, "Live name")
+    monkeypatch.setattr(terminal, "pty_pid_map", lambda: {99: "p-owner"})
+    monkeypatch.setattr(agent_liveness, "owning_pty", lambda pid, owners: None)
+    data = client().get("/api/agent-sessions", params={"project_name": "demo"}).json()
+    c1 = next(s for s in data["sessions"] if s["id"] == "c1")
+    assert c1["live_elsewhere"] is True and "pty_session_id" not in c1
+
+
 def test_list_keeps_the_stored_title_when_nothing_is_live(scanned):
     data = client().get("/api/agent-sessions", params={"project_name": "demo"}).json()
     c1 = next(s for s in data["sessions"] if s["id"] == "c1")

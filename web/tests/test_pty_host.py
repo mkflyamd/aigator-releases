@@ -19,6 +19,8 @@ TOKEN = "aigator-fake-api-key"
 
 
 class _FakePty:
+    pid = 4242
+
     def __init__(self):
         self._q = queue.Queue()
         self._alive = True
@@ -531,3 +533,44 @@ def test_create_waits_longer_than_a_normal_host_request(monkeypatch):
     finally:
         terminal._pty_sessions.pop("sess-timeout", None)
     assert timeouts["create"] == pty_client.CREATE_TIMEOUT > 5.0
+
+
+def test_status_and_list_report_the_child_pid_and_creation_time(host):
+    info, spawned = host
+    _create(info, sid="s-pid")
+    status = pty_client.host_request(info, {"op": "status", "id": "s-pid"})
+    assert status["pid"] == 4242 and isinstance(status["created_at"], float)
+    listed = pty_client.host_request(info, {"op": "list"})["sessions"]
+    assert listed == [
+        {"id": "s-pid", "done": False, "pid": 4242, "created_at": status["created_at"]}
+    ]
+
+
+def test_adopted_session_keeps_the_creation_time_the_host_recorded(host, monkeypatch):
+    info, spawned = host
+    _create(info, sid="s-old")
+    created = pty_client.host_request(info, {"op": "status", "id": "s-old"})["created_at"]
+    time.sleep(0.05)
+    monkeypatch.setattr(pty_client, "host_enabled", lambda: True)
+    monkeypatch.setattr(pty_client, "find_host", lambda key: info)
+    terminal._pty_sessions.pop("s-old", None)
+    try:
+        entry = terminal.get_pty_session("s-old")
+        assert entry.created_at == created
+    finally:
+        terminal._pty_sessions.pop("s-old", None)
+        spawned[0][1].end()
+
+
+def test_pty_pid_map_includes_host_sessions_this_backend_has_not_adopted(host, monkeypatch):
+    info, spawned = host
+    _create(info, sid="s-unadopted")
+    monkeypatch.setattr(pty_client, "host_enabled", lambda: True)
+    monkeypatch.setattr(pty_client, "find_host", lambda key: info)
+    terminal._pty_sessions.pop("s-unadopted", None)
+    try:
+        assert terminal.pty_pid_map() == {4242: "s-unadopted"}
+        spawned[0][1].end()
+        assert _wait(lambda: terminal.pty_pid_map() == {})
+    finally:
+        terminal._pty_sessions.pop("s-unadopted", None)
