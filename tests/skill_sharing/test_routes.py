@@ -315,7 +315,7 @@ def test_publish_into_someone_elses_skill_is_a_409(env, make_mine):
 
 
 def test_a_policy_refusal_is_a_422_with_its_own_code(env, make_mine):
-    env.provider.fail_on["write_file"] = ShareError("forbidden", "label")
+    env.provider.fail_on["write_file_create"] = ShareError("forbidden", "label")
     res = _post(env, PUBLISH, {"skill_id": make_mine()})
     assert res.status_code == 422
     assert res.json()["detail"]["error"] == "policy_blocked"

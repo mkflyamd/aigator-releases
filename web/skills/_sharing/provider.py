@@ -173,8 +173,13 @@ class GraphSharingProvider:
             code, _MESSAGES.get(code) or f"Upload to OneDrive failed: {out.get('detail') or out.get('error')}"
         )
 
-    def write_file(self, folder: dict, name: str, data: bytes) -> None:
-        self._check(ft.replace_in_folder(self._gc, ft.bytes_source(name, data), folder["drive_id"], folder["folder_id"]))
+    def write_file_create(self, folder: dict, name: str, data: bytes) -> None:
+        """Create the file; raises conflict when it already exists, so a published version is never overwritten."""
+        self._check(
+            ft.store_in_folder(
+                self._gc, ft.bytes_source(name, data), folder["drive_id"], folder["folder_id"], on_conflict="fail"
+            )
+        )
 
     def write_json_create(self, folder: dict, name: str, doc: dict) -> None:
         source = ft.bytes_source(name, json.dumps(doc, indent=2, sort_keys=True).encode("utf-8"))

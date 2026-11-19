@@ -307,7 +307,7 @@ def _chosen(provider, name="Team Skills"):
 
 def test_an_upload_refusal_is_a_policy_block_and_nothing_is_recorded(provider, make_mine):
     skill_id = make_mine()
-    provider.fail_on["write_file"] = ShareError("forbidden", "label")
+    provider.fail_on["write_file_create"] = ShareError("forbidden", "label")
     with pytest.raises(ShareError) as err:
         publisher.publish(provider, skill_id, author="A", people=["a@contoso.com"])
     assert err.value.code == "policy_blocked"
@@ -342,7 +342,7 @@ def test_an_invite_refusal_is_a_policy_block_that_names_the_saved_skill(provider
 
 
 def test_a_non_forbidden_error_keeps_its_code(provider, make_mine):
-    provider.fail_on["write_file"] = ShareError("throttled", "slow down")
+    provider.fail_on["write_file_create"] = ShareError("throttled", "slow down")
     with pytest.raises(ShareError) as err:
         publisher.publish(provider, make_mine(), author="A")
     assert err.value.code == "throttled"
@@ -437,3 +437,89 @@ def test_sharing_with_nobody_still_publishes(provider, make_mine):
     out = publisher.publish(provider, make_mine(), author="A", people=[])
     assert out["ungranted"] == []
     assert provider.grants == []
+
+
+def test_concurrent_publishes_of_one_skill_are_serialised(provider, make_mine):
+    import threading
+    import time
+
+    skill_id = make_mine()
+    real_read_json = provider.read_json
+
+    def slow_read_json(folder, name, max_bytes=None):
+        found = real_read_json(folder, name, max_bytes)
+        time.sleep(0.05)  # widen the window between reading skill.json and writing the version
+        return found
+
+    provider.read_json = slow_read_json
+    results, errors = [], []
+
+    def run():
+        try:
+            results.append(publisher.publish(provider, skill_id, author="A"))
+        except ShareError as err:  # only reached when the per-skill lock fails
+            errors.append(err)
+
+    threads = [threading.Thread(target=run) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert errors == []
+    assert sorted(r["reused"] for r in results) == [False, True]
+    assert {r["version"] for r in results} == {1}
+    assert [name for _folder, name in provider.writes].count("bundle.zip") == 1
+
+
+def test_publish_never_overwrites_an_existing_version_folder(provider, make_mine):
+    skill_id = make_mine()
+    folder = provider.child_folder(provider.default_root(), skill_id)
+    v1 = provider.child_folder(folder, "v1")
+    provider.write_file_create(v1, "bundle.zip", b"someone else's bundle")
+
+    out = publisher.publish(provider, skill_id, author="A")
+
+    assert out["version"] == 2
+    assert provider.files[(v1["folder_id"], "bundle.zip")][0] == b"someone else's bundle"
+    assert (v1["folder_id"], "manifest.json") not in provider.files
+    assert [v["version"] for v in _stored_doc(provider, folder, "skill.json")["versions"]] == [2]
+
+
+def test_publish_gives_up_when_every_version_number_is_taken(provider, make_mine):
+    skill_id = make_mine()
+    folder = provider.child_folder(provider.default_root(), skill_id)
+    for n in range(1, 6):
+        provider.write_file_create(provider.child_folder(folder, f"v{n}"), "bundle.zip", b"taken")
+
+    with pytest.raises(ShareError) as err:
+        publisher.publish(provider, skill_id, author="A")
+
+    assert err.value.code == "conflict"
+    assert (folder["folder_id"], "skill.json") not in provider.files
+
+
+CHANGED_SKILL_MD = "---\nname: Weekly Report\n---\n\nChanged\n"
+
+
+def test_stale_skill_json_fails_with_a_conflict_and_is_not_overwritten(provider, make_mine, skills_dir):
+    skill_id = make_mine()
+    publisher.publish(provider, skill_id, author="A")
+    (skills_dir / "mine" / skill_id / "SKILL.md").write_text(CHANGED_SKILL_MD, encoding="utf-8")
+    folder = _skill_folder(provider, skill_id)
+    real_read_json = provider.read_json
+
+    def read_then_lose_the_race(f, name, max_bytes=None):
+        found = real_read_json(f, name, max_bytes)
+        if name == "skill.json":
+            other = {"schema": 1, "latest": 1, "versions": [], "by": "other"}
+            provider._put(f, "skill.json", json.dumps(other).encode())
+        return found
+
+    provider.read_json = read_then_lose_the_race
+
+    with pytest.raises(ShareError) as err:
+        publisher.publish(provider, skill_id, author="A")
+
+    assert err.value.code == "conflict"
+    assert _stored_doc(provider, folder, "skill.json")["by"] == "other"
