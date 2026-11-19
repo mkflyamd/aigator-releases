@@ -2157,6 +2157,16 @@ test('the list refreshes on close only when the skill was saved, and only once',
   assert.strictEqual(d.calls.refresh, 1);
 });
 
+test('a skill saved to a new folder because the old one was deleted says so', async () => {
+  const d = await toSend({ post: publishWith({ relinked: true }) });
+  await d.press('Copy message');
+  assert.deepStrictEqual(noticeTitles(d), ['Saved to a new folder']);
+  assert(d.text().includes('The earlier link does not work anymore.'));
+  const plain = await toSend({ post: publishWith({ relinked: false }) });
+  await plain.press('Copy message');
+  assert.deepStrictEqual(noticeTitles(plain), []);
+});
+
 test('people the folder would not accept are listed in a notice, singular and plural', async () => {
   const one = await toSend({ post: publishWith({ ungranted: ['x@gmail.com'] }) });
   await one.press('Copy message');

@@ -551,6 +551,20 @@
   var LOAD_ERROR = 'Could not load your folders. Try again.';
   var NO_RESPONSE = { resp: { ok: false }, body: null };
 
+  function _relinkedNotice() {
+    var notice = _el('div', 'ss-notice');
+    notice.setAttribute('role', 'status');
+    notice.appendChild(_el('p', 'ss-notice-title', 'Saved to a new folder'));
+    notice.appendChild(
+      _el(
+        'p',
+        'ss-notice-text',
+        'The folder this skill was shared from is no longer in OneDrive, so a new one was created. The earlier link does not work anymore. Use the link in this message.',
+      ),
+    );
+    return notice;
+  }
+
   function _ungrantedNotice(ungranted) {
     var one = ungranted.length === 1;
     var notice = _el('div', 'ss-notice');
@@ -1532,6 +1546,7 @@
       view.msg.value = res.message || '';
       view.msgWrap.hidden = false;
       _clear(view.notices);
+      if (res.relinked) view.notices.appendChild(_relinkedNotice());
       if (Array.isArray(res.ungranted) && res.ungranted.length) {
         view.notices.appendChild(_ungrantedNotice(res.ungranted));
       }
@@ -1726,6 +1741,7 @@
           ? res.saved_path.join(' › ')
           : _locLabel(S.current || selectedEntry().loc);
       shell.body.appendChild(_el('p', 'ss-hint', 'Saved to ' + saved + '.'));
+      if (res.relinked) shell.body.appendChild(_relinkedNotice());
       if (Array.isArray(res.ungranted) && res.ungranted.length)
         shell.body.appendChild(_ungrantedNotice(res.ungranted));
       if (typeof res.web_url === 'string' && res.web_url.indexOf('https://') === 0) {
