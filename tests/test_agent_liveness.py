@@ -110,3 +110,140 @@ def test_owning_pty_ignores_a_process_that_is_gone():
     gone = subprocess.Popen([sys.executable, "-c", "pass"])
     gone.wait()
     assert live.owning_pty(gone.pid, {os.getpid(): "p1"}) is None
+
+
+class _Named:
+    def __init__(self, name):
+        self._name = name
+
+    def name(self):
+        return self._name
+
+
+class _Chain:
+    def __init__(self, parents):
+        self._parents = [_Named(n) for n in parents]
+
+    def parents(self):
+        return self._parents
+
+
+def fake_chain(monkeypatch, parents):
+    monkeypatch.setattr(live.psutil, "Process", lambda pid: _Chain(parents))
+
+
+@pytest.mark.parametrize(
+    "parents, label",
+    [
+        (["pwsh.exe", "Orca.exe", "explorer.exe"], "Orca"),
+        (["Claude.exe", "explorer.exe"], "Claude desktop"),
+        (["pwsh.exe", "WindowsTerminal.exe", "explorer.exe"], "Windows Terminal"),
+        (["Code.exe"], "VS Code"),
+        (["bash", "gnome-terminal-server", "systemd"], "Terminal"),
+        (["pwsh.exe", "explorer.exe"], "PowerShell"),
+        (["explorer.exe"], None),
+        ([], None),
+    ],
+)
+def test_location_label_names_the_app_a_process_runs_under(monkeypatch, parents, label):
+    fake_chain(monkeypatch, parents)
+    assert live.location_label(123) == label
+
+
+def test_location_label_is_none_for_a_process_that_is_gone():
+    gone = subprocess.Popen([sys.executable, "-c", "pass"])
+    gone.wait()
+    assert live.location_label(gone.pid) is None
+
+
+def spawn_tree():
+    """A python process that has one python grandchild; returns (child, grandchild_pid)."""
+    code = (
+        "import subprocess, sys, time;"
+        "g = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']);"
+        "print(g.pid, flush=True); time.sleep(60)"
+    )
+    child = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True)
+    return child, int(child.stdout.readline())
+
+
+def register(child, session_id="s-1", **extra):
+    write_entry(child.pid, session_id, procStart=filetime(psutil.Process(child.pid).create_time()), **extra)
+
+
+def reap(child):
+    child.kill()
+    child.wait()
+    child.stdout.close()
+
+
+def test_takeover_ends_the_registered_process_and_its_children_only():
+    child, grandchild = spawn_tree()
+    try:
+        register(child)
+        assert live.takeover("claude", "s-1", {}) == [child.pid]
+        assert child.poll() is not None
+        assert not psutil.pid_exists(grandchild)
+        assert psutil.pid_exists(os.getpid())
+    finally:
+        reap(child)
+
+
+def test_takeover_never_ends_a_process_a_gator_terminal_owns():
+    child, _ = spawn_tree()
+    try:
+        register(child)
+        assert live.takeover("claude", "s-1", {child.pid: "p1"}) == []
+        assert child.poll() is None
+    finally:
+        reap(child)
+
+
+def test_takeover_never_ends_a_process_whose_pid_was_reused():
+    child, _ = spawn_tree()
+    try:
+        write_entry(child.pid, "s-1", procStart=filetime(psutil.Process(child.pid).create_time() - 3600))
+        assert live.takeover("claude", "s-1", {}) == []
+        assert child.poll() is None
+    finally:
+        reap(child)
+
+
+def test_takeover_never_ends_a_process_registered_for_another_session():
+    child, _ = spawn_tree()
+    try:
+        register(child, session_id="other")
+        assert live.takeover("claude", "s-1", {}) == []
+        assert child.poll() is None
+    finally:
+        reap(child)
+
+
+def test_takeover_refuses_to_end_a_tree_that_contains_this_server(monkeypatch):
+    child, grandchild = spawn_tree()
+    try:
+        register(child)
+        monkeypatch.setattr(live.os, "getpid", lambda: grandchild)
+        with pytest.raises(live.TakeoverError):
+            live.takeover("claude", "s-1", {})
+        assert child.poll() is None and psutil.pid_exists(grandchild)
+    finally:
+        reap(child)
+
+
+def test_takeover_reports_a_process_that_cannot_be_ended(monkeypatch):
+    child, _ = spawn_tree()
+    try:
+        register(child)
+
+        def denied(self):
+            raise psutil.AccessDenied(self.pid)
+
+        monkeypatch.setattr(psutil.Process, "terminate", denied)
+        monkeypatch.setattr(psutil.Process, "kill", denied)
+        with pytest.raises(live.TakeoverError, match="could not"):
+            live.takeover("claude", "s-1", {})
+        assert child.poll() is None
+    finally:
+        monkeypatch.undo()
+        reap(child)

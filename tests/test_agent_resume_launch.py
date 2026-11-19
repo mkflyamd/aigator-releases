@@ -174,13 +174,22 @@ def test_resume_of_a_session_open_in_another_window_is_a_409_with_the_process(en
     assert env["spawn"] == []
 
 
-def test_allow_duplicate_resumes_despite_a_live_process(env, monkeypatch):
+def test_a_duplicate_of_a_session_open_elsewhere_cannot_be_forced(env, monkeypatch):
     import agent_liveness
 
     monkeypatch.setattr(agent_liveness, "live_processes", lambda agent, sid=None: [LIVE_PROC])
     r = client().post("/api/generic-agent/terminal", json={**BODY, "allow_duplicate": True})
-    assert r.status_code == 200 and r.json()["created"] is True
-    assert len(env["spawn"]) == 1
+    assert r.status_code == 409
+    assert env["spawn"] == []
+
+
+def test_the_409_names_where_the_session_is_open(env, monkeypatch):
+    import agent_liveness
+
+    monkeypatch.setattr(agent_liveness, "live_processes", lambda agent, sid=None: [LIVE_PROC])
+    monkeypatch.setattr(agent_liveness, "location_label", lambda pid: "Orca")
+    r = client().post("/api/generic-agent/terminal", json=BODY)
+    assert r.json()["detail"]["where"] == {"app": "Orca", "pid": 4242}
 
 
 def test_resume_of_a_session_a_gator_terminal_runs_reattaches_instead_of_duplicating(env, monkeypatch):
@@ -194,10 +203,9 @@ def test_resume_of_a_session_a_gator_terminal_runs_reattaches_instead_of_duplica
     monkeypatch.setattr(terminal, "pty_pid_map", lambda strict=False: {1: "p-owner"})
     monkeypatch.setattr(agent_liveness, "owning_pty", lambda pid, owners: "p-owner" if pid == 4242 else None)
     monkeypatch.setattr(terminal, "get_pty_session", lambda sid: _Live() if sid == "p-owner" else None)
-    for allow_duplicate in (False, True):
-        r = client().post("/api/generic-agent/terminal", json={**BODY, "allow_duplicate": allow_duplicate})
-        assert r.status_code == 200
-        assert r.json() == {"pty_session_id": "p-owner", "created": False}
+    r = client().post("/api/generic-agent/terminal", json=BODY)
+    assert r.status_code == 200
+    assert r.json() == {"pty_session_id": "p-owner", "created": False}
     assert env["spawn"] == []
 
 
@@ -245,7 +253,7 @@ def test_resume_refuses_to_spawn_when_the_owner_lookup_fails(env, monkeypatch):
     monkeypatch.setattr(terminal.pty_client, "find_host", lambda key: {"port": 1})
     monkeypatch.setattr(terminal.pty_client, "instance_key", lambda: "k")
     monkeypatch.setattr(terminal.pty_client, "host_request", boom)
-    r = client().post("/api/generic-agent/terminal", json={**BODY, "allow_duplicate": True})
+    r = client().post("/api/generic-agent/terminal", json=BODY)
     assert r.status_code == 503
     assert env["spawn"] == []
 
@@ -264,3 +272,66 @@ def test_pty_pid_map_strict_raises_when_the_host_list_fails(monkeypatch):
     monkeypatch.setattr(terminal.pty_client, "host_request", boom)
     with pytest.raises(terminal.pty_client.HostError):
         terminal.pty_pid_map(strict=True)
+
+
+TAKEOVER = {"agent": "claude", "repo_path": "C:\work\app", "resume_id": "abc-1"}
+
+
+@pytest.fixture
+def takeover_env(env, monkeypatch):
+    import agent_liveness
+    import routes.terminal as terminal
+
+    calls = []
+    monkeypatch.setattr(terminal, "pty_pid_map", lambda strict=False: {1: "p-owner"})
+
+    def fake_takeover(agent, session_id, owners):
+        calls.append((agent, session_id, owners))
+        return [4242]
+
+    monkeypatch.setattr(agent_liveness, "takeover", fake_takeover)
+    return calls
+
+
+def test_takeover_ends_the_outside_process_and_does_not_spawn(takeover_env, env):
+    r = client().post("/api/generic-agent/takeover", json=TAKEOVER)
+    assert r.status_code == 200 and r.json() == {"terminated": [4242]}
+    assert takeover_env == [("claude", "abc-1", {1: "p-owner"})]
+    assert env["spawn"] == []
+
+
+def test_takeover_rejects_an_unknown_session_without_ending_anything(takeover_env):
+    r = client().post("/api/generic-agent/takeover", json={**TAKEOVER, "resume_id": "nope"})
+    assert r.status_code == 404
+    assert takeover_env == []
+
+
+def test_takeover_rejects_a_malformed_id_and_an_unsupported_agent(takeover_env):
+    assert client().post("/api/generic-agent/takeover", json={**TAKEOVER, "resume_id": "../x"}).status_code == 400
+    assert client().post("/api/generic-agent/takeover", json={**TAKEOVER, "agent": "bogus"}).status_code == 400
+    assert takeover_env == []
+
+
+def test_takeover_that_cannot_end_the_process_is_a_409_and_never_duplicates(takeover_env, env, monkeypatch):
+    import agent_liveness
+
+    def refuse(agent, session_id, owners):
+        raise agent_liveness.TakeoverError("Gator could not close it (access denied).")
+
+    monkeypatch.setattr(agent_liveness, "takeover", refuse)
+    r = client().post("/api/generic-agent/takeover", json=TAKEOVER)
+    assert r.status_code == 409
+    assert r.json()["detail"] == {"code": "takeover_failed", "message": "Gator could not close it (access denied)."}
+    assert env["spawn"] == []
+
+
+def test_takeover_refuses_when_the_owner_lookup_fails(takeover_env, monkeypatch):
+    import routes.terminal as terminal
+
+    def boom(strict=False):
+        raise terminal.pty_client.HostError("down")
+
+    monkeypatch.setattr(terminal, "pty_pid_map", boom)
+    r = client().post("/api/generic-agent/takeover", json=TAKEOVER)
+    assert r.status_code == 503
+    assert takeover_env == []

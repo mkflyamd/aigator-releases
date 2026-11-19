@@ -78,6 +78,7 @@
         group: groupOf(state, lastActive, nowMs),
         ptySessionId: term ? term.ptySessionId : null,
         liveElsewhere: !term && !!s.live_elsewhere,
+        elsewhereIn: !term && s.live_elsewhere ? s.live_elsewhere_in || null : null,
       };
     });
     live.forEach((term, pty) => {
@@ -96,6 +97,7 @@
         group: groupOf(state, lastActive, nowMs),
         ptySessionId: pty,
         liveElsewhere: false,
+        elsewhereIn: null,
       });
     });
     return rows;
@@ -376,22 +378,65 @@
     _genAgentActivateSession(tabId, row.ptySessionId);
   }
 
-  function confirmDuplicate(row) {
-    if (typeof _showConfirmModal !== 'function') return;
-    _showConfirmModal(
-      'Session already open',
-      'This session is already open in another window. Open another copy anyway?',
-      'Open anyway',
-      () => resume(row, true),
+  function escapeHtml(text) {
+    return String(text).replace(/[&<>"']/g, (c) => '&#' + c.charCodeAt(0) + ';');
+  }
+
+  function elsewhereText(where) {
+    if (!where) return 'another window';
+    return (where.app || 'another program') + ' (process ' + where.pid + ')';
+  }
+
+  function takeoverBody(where) {
+    return escapeHtml(
+      'This session is open in ' +
+        elsewhereText(where) +
+        '. Gator will close it there and open it here. Anything unsaved in that window is lost.',
     );
   }
 
-  async function resume(row, allowDuplicate) {
+  function confirmTakeover(row, where) {
+    if (typeof _showConfirmModal !== 'function') return;
+    _showConfirmModal(
+      'Session open elsewhere',
+      takeoverBody(where || row.elsewhereIn),
+      'Close and open here',
+      () => takeover(row),
+    );
+  }
+
+  async function takeover(row) {
+    const { project } = context();
+    if (!project) return;
+    const headers =
+      typeof _caHeadersAsync === 'function'
+        ? await _caHeadersAsync()
+        : { 'Content-Type': 'application/json' };
+    let message = 'Could not close the session where it is open.';
+    try {
+      const resp = await fetcher()('/api/generic-agent/takeover', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ agent: row.agent, repo_path: project.repo_path, resume_id: row.id }),
+      });
+      if (resp.ok) {
+        resume(row, true);
+        return;
+      }
+      const d = await resp.json();
+      if (d && d.detail)
+        message = typeof d.detail === 'object' ? d.detail.message || message : d.detail;
+    } catch (_) {}
+    ui.notice[row.key] = message;
+    render();
+  }
+
+  async function resume(row, tookOver) {
     const { tabId, project } = context();
     if (!project || typeof _genAgentStart !== 'function') return;
     if (typeof _genAgentStartInFlight === 'function' && _genAgentStartInFlight(tabId)) return;
-    if (row.liveElsewhere && !allowDuplicate) {
-      confirmDuplicate(row);
+    if (row.liveElsewhere && !tookOver) {
+      confirmTakeover(row);
       return;
     }
     let asked = false;
@@ -401,10 +446,9 @@
     await _genAgentStart(tabId, row.agent, project.name, project.repo_path, {
       forceNew: true,
       resumeId: row.id,
-      allowDuplicate: !!allowDuplicate,
-      onSessionLive: () => {
+      onSessionLive: (err) => {
         asked = true;
-        confirmDuplicate(row);
+        confirmTakeover(row, err && err.where);
       },
       keepStateAgent: !!(before && before.agent),
     });
@@ -578,7 +622,11 @@
   }
 
   function statePill(row) {
-    if (row.liveElsewhere) return el('span', 'ah-pill ah-pill-elsewhere', 'Open elsewhere');
+    if (row.liveElsewhere) {
+      const pill = el('span', 'ah-pill ah-pill-elsewhere', 'Open elsewhere');
+      pill.title = 'Open in ' + elsewhereText(row.elsewhereIn);
+      return pill;
+    }
     if (row.state !== 'needs_you' && row.state !== 'working') return null;
     const text = row.state === 'needs_you' ? 'Needs you' : 'Working';
     return el('span', 'ah-pill ah-pill-' + row.state, text);
@@ -958,6 +1006,8 @@
     liveState,
     needsYou,
     buildRows,
+    elsewhereText,
+    takeoverBody,
     syncTabLabels,
     shortAge,
     metaLine,

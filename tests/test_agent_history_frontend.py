@@ -246,3 +246,11 @@ def test_terminal_tabs_use_the_history_state_dot():
 def test_tab_label_shows_its_full_name_on_hover():
     assert "label.title = sess.label;" in TERM
     assert "labelEl.title = sess.label;" in TERM
+
+
+def test_a_session_open_elsewhere_is_taken_over_never_duplicated():
+    assert "allow_duplicate" not in TERM and "allowDuplicate" not in TERM
+    assert "allowDuplicate" not in HISTORY and "Open anyway" not in HISTORY
+    assert "/api/generic-agent/takeover" in HISTORY
+    assert "Close and open here" in HISTORY
+    assert "failure.where" in TERM

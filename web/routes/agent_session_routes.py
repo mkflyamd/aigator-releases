@@ -63,6 +63,7 @@ def _join_live_processes(records: list[dict], redact) -> list[dict]:
             rec["pty_session_id"] = owner
         elif "pty_session_id" not in rec:
             rec["live_elsewhere"] = True
+            rec["live_elsewhere_in"] = {"app": agent_liveness.location_label(proc["pid"]), "pid": proc["pid"]}
         out.append(rec)
     return out
 

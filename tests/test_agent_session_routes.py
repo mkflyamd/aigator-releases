@@ -145,6 +145,19 @@ def test_list_still_flags_a_process_no_gator_terminal_owns(scanned, monkeypatch)
     assert c1["live_elsewhere"] is True and "pty_session_id" not in c1
 
 
+def test_list_says_where_a_session_open_outside_gator_is_running(scanned, monkeypatch):
+    import agent_liveness
+    from routes import terminal
+
+    live_claude(monkeypatch, "Live name")
+    monkeypatch.setattr(terminal, "pty_pid_map", lambda: {})
+    monkeypatch.setattr(agent_liveness, "owning_pty", lambda pid, owners: None)
+    monkeypatch.setattr(agent_liveness, "location_label", lambda pid: "Orca" if pid == 7 else None)
+    data = client().get("/api/agent-sessions", params={"project_name": "demo"}).json()
+    c1 = next(s for s in data["sessions"] if s["id"] == "c1")
+    assert c1["live_elsewhere_in"] == {"app": "Orca", "pid": 7}
+
+
 def test_list_keeps_the_stored_title_when_nothing_is_live(scanned):
     data = client().get("/api/agent-sessions", params={"project_name": "demo"}).json()
     c1 = next(s for s in data["sessions"] if s["id"] == "c1")
