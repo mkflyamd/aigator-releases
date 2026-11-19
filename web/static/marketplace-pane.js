@@ -1063,28 +1063,8 @@
       ver.className = 'mp-installed-version';
       ver.textContent = 'v' + (skill.version || '?');
       meta.appendChild(ver);
-      if (
-        skill.tier === 'Mine' &&
-        Number.isInteger(skill.published_version) &&
-        skill.published_version > 0
-      ) {
-        if (skill.unshared_edits === true) {
-          const chip = document.createElement('button');
-          chip.type = 'button';
-          chip.className = 'mp-share-chip mp-share-chip-edited';
-          chip.textContent = 'Shared v' + skill.published_version + ' · edited since';
-          chip.title =
-            'You changed this skill after sharing it. Open Share to publish the changes.';
-          chip.dataset.action = 'share-mine';
-          chip.dataset.skillId = skill.id;
-          meta.appendChild(chip);
-        } else {
-          const chip = document.createElement('span');
-          chip.className = 'mp-share-chip';
-          chip.textContent = 'Shared · v' + skill.published_version;
-          meta.appendChild(chip);
-        }
-      }
+      const sharedChip = _sharedChip(skill);
+      if (sharedChip) meta.appendChild(sharedChip);
       const received =
         skill.tier === 'Community' && !!(skill.share_source && skill.share_source.folder_id);
       const updateState = received ? _updateStatus[skill.id] : null;
@@ -1121,15 +1101,8 @@
         shareBtn.dataset.skillId = skill.id;
         actions.appendChild(shareBtn);
       }
-      if (received) {
-        const updating = !!(updateState && updateState.status === 'update');
-        const updateBtn = document.createElement('button');
-        updateBtn.className = 'mp-row-btn';
-        updateBtn.textContent = updating ? 'Update' : 'Check for update';
-        updateBtn.dataset.action = updating ? 'apply-update' : 'check-update';
-        updateBtn.dataset.skillId = skill.id;
-        actions.appendChild(updateBtn);
-      }
+      const updateBtn = _updateButton(received, skill, updateState);
+      if (updateBtn) actions.appendChild(updateBtn);
       const removeBtn = document.createElement('button');
       removeBtn.className = 'mp-row-btn mp-row-btn-danger';
       removeBtn.textContent = 'Remove';
@@ -1453,6 +1426,41 @@
     wrap.appendChild(shareRow);
 
     content.appendChild(wrap);
+  }
+
+  function _sharedChip(skill) {
+    if (
+      skill.tier !== 'Mine' ||
+      !Number.isInteger(skill.published_version) ||
+      skill.published_version <= 0
+    ) {
+      return null;
+    }
+    if (skill.unshared_edits === true) {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'mp-share-chip mp-share-chip-edited';
+      chip.textContent = 'Shared v' + skill.published_version + ' · edited since';
+      chip.title = 'You changed this skill after sharing it. Open Share to publish the changes.';
+      chip.dataset.action = 'share-mine';
+      chip.dataset.skillId = skill.id;
+      return chip;
+    }
+    const chip = document.createElement('span');
+    chip.className = 'mp-share-chip';
+    chip.textContent = 'Shared · v' + skill.published_version;
+    return chip;
+  }
+
+  function _updateButton(received, skill, updateState) {
+    if (!received) return null;
+    const updating = !!(updateState && updateState.status === 'update');
+    const btn = document.createElement('button');
+    btn.className = 'mp-row-btn';
+    btn.textContent = updating ? 'Update' : 'Check for update';
+    btn.dataset.action = updating ? 'apply-update' : 'check-update';
+    btn.dataset.skillId = skill.id;
+    return btn;
   }
 
   function _updateNote(state) {

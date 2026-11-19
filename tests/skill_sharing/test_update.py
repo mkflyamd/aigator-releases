@@ -138,6 +138,16 @@ def test_update_changes_files_and_state(provider, make_mine, skills_dir):
     assert len([e for e in installer.load_installed() if e["id"] == skill_id]) == 1
 
 
+def test_update_keeps_a_skill_the_user_disabled_disabled(provider, make_mine, skills_dir):
+    skill_id, _first, second = _v2_for_a_recipient(provider, make_mine, skills_dir)
+    skill_state.set_disabled(skill_id, True)
+
+    receiver.install(provider, _ref(second), version=2, digest=second["digest"])
+
+    assert skill_state.is_disabled(skill_id)
+    assert skill_state.get_entry(skill_id)["shared_version"] == 2
+
+
 def test_update_removes_files_the_new_version_no_longer_has(provider, make_mine, skills_dir):
     skill_id = make_mine(extra={"notes.md": b"old notes\n"})
     first = publisher.publish(provider, skill_id, author=AUTHOR)

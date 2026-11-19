@@ -334,16 +334,19 @@ def install_skill_md(
             delete_orphans(skill_dir, sorted(set(list_existing_skill_files(skill_dir)) - set(files)))
 
         with _INSTALL_INDEX_LOCK:
-            entries = [e for e in load_installed() if e.get("id") != skill_id]
-            entries.append(
-                {
-                    "id": skill_id,
-                    "version": version,
-                    "tier": tier,
-                    "installed_at": datetime.now(timezone.utc).isoformat(),
-                    "has_tools": (skill_dir / "tools.py").exists(),
-                }
-            )
+            existing = load_installed()
+            was_disabled = replace_files and any(e.get("id") == skill_id and e.get("disabled") for e in existing)
+            entries = [e for e in existing if e.get("id") != skill_id]
+            entry = {
+                "id": skill_id,
+                "version": version,
+                "tier": tier,
+                "installed_at": datetime.now(timezone.utc).isoformat(),
+                "has_tools": (skill_dir / "tools.py").exists(),
+            }
+            if was_disabled:
+                entry["disabled"] = True
+            entries.append(entry)
             save_installed(entries)
         return {
             "ok": True,

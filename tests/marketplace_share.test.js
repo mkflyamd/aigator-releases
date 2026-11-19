@@ -36,11 +36,13 @@ test('Share opens the Share modal and hands it the download as a fallback', () =
 
 test('Mine rows show a Shared chip only for a positive published_version', () => {
   assert(source.includes('Share with colleagues through OneDrive, or download a file'));
-  const at = source.indexOf("chip.className = 'mp-share-chip'");
-  assert(at > 0, 'chip exists');
-  const guard = source.lastIndexOf('skill.published_version > 0', at);
-  assert(guard > 0 && at - guard < 800, 'chip is guarded by a positive published_version');
-  assert(source.includes("'Shared \u00b7 v' + skill.published_version"));
+  const chip = extractFn('_sharedChip', fakeDocument());
+  assert.strictEqual(chip({ tier: 'Mine', id: 'a' }), null);
+  assert.strictEqual(chip({ tier: 'Mine', id: 'a', published_version: 0 }), null);
+  assert.strictEqual(chip({ tier: 'Community', id: 'a', published_version: 2 }), null);
+  const shown = chip({ tier: 'Mine', id: 'a', published_version: 2 });
+  assert.strictEqual(shown.tag, 'span');
+  assert.strictEqual(shown.textContent, 'Shared · v2');
 });
 
 test('the Share modal script loads before the marketplace pane', () => {
@@ -116,6 +118,14 @@ function fnSource(name) {
   return match[0];
 }
 
+function fakeDocument() {
+  return {
+    document: {
+      createElement: (tag) => ({ tag, dataset: {}, className: '', textContent: '', title: '' }),
+    },
+  };
+}
+
 function extractFn(name, ctx) {
   const context = vm.createContext(ctx || {});
   return vm.runInContext(fnSource(name) + ';' + name + ';', context);
@@ -174,15 +184,24 @@ test('a failed check shows an alert and records nothing', async () => {
 });
 
 test('received rows get Check for update, which becomes Update once a newer version is known', () => {
+  const button = extractFn('_updateButton', fakeDocument());
+  const skill = { id: 'weekly-report' };
+  assert.strictEqual(button(false, skill, null), null);
+  const check = button(true, skill, null);
+  assert.strictEqual(check.textContent, 'Check for update');
+  assert.strictEqual(check.dataset.action, 'check-update');
+  assert.strictEqual(check.dataset.skillId, 'weekly-report');
+  assert.strictEqual(button(true, skill, { status: 'current' }).dataset.action, 'check-update');
+  const update = button(true, skill, { status: 'update', latest: 2 });
+  assert.strictEqual(update.textContent, 'Update');
+  assert.strictEqual(update.dataset.action, 'apply-update');
+  assert(source.includes("action === 'check-update'"));
+  assert(source.includes('_checkSharedUpdate(btn.dataset.skillId)'));
   assert(
     source.includes(
       "skill.tier === 'Community' && !!(skill.share_source && skill.share_source.folder_id)",
     ),
   );
-  assert(source.includes("updateBtn.textContent = updating ? 'Update' : 'Check for update'"));
-  assert(source.includes("updating ? 'apply-update' : 'check-update'"));
-  assert(source.includes("action === 'check-update'"));
-  assert(source.includes('_checkSharedUpdate(btn.dataset.skillId)'));
 });
 
 test('Update reuses the review and install modal with the folder link from the check', () => {
@@ -196,13 +215,16 @@ test('Update reuses the review and install modal with the folder link from the c
 });
 
 test('a Mine skill edited after sharing shows "Shared v1 · edited since" and opens Share', () => {
-  const at = source.indexOf('skill.unshared_edits === true');
-  assert(at > 0);
-  const branch = source.slice(at, source.indexOf("chip.className = 'mp-share-chip';", at));
-  assert(branch.includes("document.createElement('button')"));
-  assert(branch.includes("'Shared v' + skill.published_version + ' · edited since'"));
-  assert(branch.includes("chip.dataset.action = 'share-mine'"));
-  assert(branch.includes('chip.dataset.skillId = skill.id'));
+  const chip = extractFn('_sharedChip', fakeDocument());
+  const edited = chip({ tier: 'Mine', id: 'a', published_version: 1, unshared_edits: true });
+  assert.strictEqual(edited.tag, 'button');
+  assert.strictEqual(edited.textContent, 'Shared v1 · edited since');
+  assert.strictEqual(edited.dataset.action, 'share-mine');
+  assert.strictEqual(edited.dataset.skillId, 'a');
+  const clean = chip({ tier: 'Mine', id: 'a', published_version: 1, unshared_edits: false });
+  assert.strictEqual(clean.tag, 'span');
+  assert.strictEqual(clean.textContent, 'Shared · v1');
+  assert.strictEqual(clean.dataset.action, undefined);
   // The same delegated handler that serves the Share button opens the Share dialog.
   assert(source.includes("action === 'share-mine'"));
   assert(source.includes('_shareMineSkill(btn.dataset.skillId)'));
