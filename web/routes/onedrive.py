@@ -21,6 +21,28 @@ ROOT = Path(__file__).parent.parent.parent
 router = APIRouter()
 
 
+def _folder_conflict(body: dict) -> str:
+    mode = body.get("conflict", "rename")
+    if mode not in ("rename", "fail"):
+        raise HTTPException(status_code=400, detail="conflict must be 'rename' or 'fail'")
+    return mode
+
+
+def _post_folder(gc, path: str, name: str, conflict: str) -> dict:
+    from skills._files.errors import http_status
+
+    try:
+        item = gc.post(path, {"name": name, "folder": {}, "@microsoft.graph.conflictBehavior": conflict})
+    except Exception as e:
+        if conflict == "fail" and http_status(e) == 409:
+            raise HTTPException(
+                status_code=409,
+                detail={"error": "folder_exists", "message": f'A folder named "{name}" already exists here.'},
+            ) from e
+        raise
+    return {"id": item["id"], "name": item["name"]}
+
+
 async def _put_once(gc, path: str, content: bytes, content_type: str) -> dict:
     """PUT a file. put_binary is never repeated, so a 5xx or no answer may mean the file landed."""
     from skills._files.errors import http_status, may_have_happened
@@ -320,15 +342,9 @@ def onedrive_create_folder(parent_id: str, body: dict):
             path = "/me/drive/root/children"
         else:
             path = f"/me/drive/items/{_eid(parent_id)}/children"
-        item = gc.post(
-            path,
-            {
-                "name": name,
-                "folder": {},
-                "@microsoft.graph.conflictBehavior": "rename",
-            },
-        )
-        return {"id": item["id"], "name": item["name"]}
+        return _post_folder(gc, path, name, _folder_conflict(body))
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -484,15 +500,9 @@ def onedrive_create_folder_in_drive(drive_id: str, parent_id: str, body: dict):
             path = f"/drives/{drive_id}/root/children"
         else:
             path = f"/drives/{drive_id}/items/{parent_id}/children"
-        item = gc.post(
-            path,
-            {
-                "name": name,
-                "folder": {},
-                "@microsoft.graph.conflictBehavior": "rename",
-            },
-        )
-        return {"id": item["id"], "name": item["name"]}
+        return _post_folder(gc, path, name, _folder_conflict(body))
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
