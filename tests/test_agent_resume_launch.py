@@ -211,3 +211,22 @@ def test_resume_still_409s_when_the_owning_terminal_is_gone(env, monkeypatch):
     monkeypatch.setattr(terminal, "get_pty_session", lambda sid: None)
     r = client().post("/api/generic-agent/terminal", json=BODY)
     assert r.status_code == 409 and r.json()["detail"]["code"] == "session_live"
+
+
+def test_pty_pid_map_keeps_local_owners_and_logs_when_the_host_list_fails(monkeypatch, caplog):
+    import routes.terminal as terminal
+    from types import SimpleNamespace
+
+    local = SimpleNamespace(pid=77, done=False)
+    monkeypatch.setattr(terminal, "_pty_sessions", {"p-local": local})
+    monkeypatch.setattr(terminal.pty_client, "host_enabled", lambda: True)
+    monkeypatch.setattr(terminal.pty_client, "find_host", lambda key: {"port": 1})
+    monkeypatch.setattr(terminal.pty_client, "instance_key", lambda: "k")
+
+    def boom(info, msg):
+        raise terminal.pty_client.HostError("down")
+
+    monkeypatch.setattr(terminal.pty_client, "host_request", boom)
+    with caplog.at_level("WARNING"):
+        assert terminal.pty_pid_map() == {77: "p-local"}
+    assert "PTY host list failed" in caplog.text

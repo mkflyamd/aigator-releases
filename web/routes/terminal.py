@@ -122,7 +122,8 @@ def pty_pid_map() -> dict[int, str]:
         if info is not None:
             try:
                 sessions = pty_client.host_request(info, {"op": "list"}).get("sessions", [])
-            except pty_client.HostError:
+            except pty_client.HostError as exc:
+                logger.warning("pty_pid_map: PTY host list failed, owners incomplete: %s", exc)
                 return owners
             for s in sessions:
                 if s.get("pid") and not s.get("done"):
