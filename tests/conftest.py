@@ -84,6 +84,8 @@ def _restore_shared_state():
             "SKILL_TOOLS_MAP": copy.deepcopy(shared.SKILL_TOOLS_MAP),
             "TOOL_DISPATCH": copy.deepcopy(shared.TOOL_DISPATCH),
             "MCP_TOOL_DIAGNOSTICS": copy.deepcopy(shared.MCP_TOOL_DIAGNOSTICS),
+            "_ALWAYS_ON_TOOLS": set(shared._ALWAYS_ON_TOOLS),
+            "_ALWAYS_ON_SKILLS": set(shared._ALWAYS_ON_SKILLS),
         }
     except ModuleNotFoundError:
         pass
@@ -102,6 +104,10 @@ def _restore_shared_state():
         shared.SKILL_TOOLS_MAP = snapshots["shared"]["SKILL_TOOLS_MAP"]
         shared.TOOL_DISPATCH = snapshots["shared"]["TOOL_DISPATCH"]
         shared.MCP_TOOL_DIAGNOSTICS = snapshots["shared"]["MCP_TOOL_DIAGNOSTICS"]
+        # Restored in place: _load_skill_modules() adds to these sets, and callers hold the same objects.
+        for name in ("_ALWAYS_ON_TOOLS", "_ALWAYS_ON_SKILLS"):
+            getattr(shared, name).clear()
+            getattr(shared, name).update(snapshots["shared"][name])
     if "config" in snapshots:
         import config
         if snapshots["config"]["WORK_DIR"] is not None:
