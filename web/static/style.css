@@ -4406,7 +4406,6 @@ body.gator-chat-expanded .gator-expand-btn {
   font-size: 0.7rem;
   cursor: pointer;
   opacity: 0;
-  pointer-events: none;
   transition:
     opacity 0.15s,
     background 0.15s;
@@ -4416,7 +4415,6 @@ body.gator-chat-expanded .gator-expand-btn {
 .chat-link-copy:hover,
 .chat-link-copy:focus-visible {
   opacity: 1;
-  pointer-events: auto;
 }
 .chat-link-copy:hover {
   background: var(--border2);
