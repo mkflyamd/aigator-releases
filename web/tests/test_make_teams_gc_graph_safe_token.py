@@ -24,6 +24,15 @@ import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _vault_follows_patched_home(monkeypatch):
+    import secure_store
+
+    monkeypatch.setattr(secure_store, "_home", lambda: Path.home())
+
 
 def _make_skype_token_file(cfg: Path, expired: bool = False) -> None:
     (cfg / "skype_token.json").write_text(
