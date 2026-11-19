@@ -1,6 +1,7 @@
 """Publish a Mine skill as an immutable version in a OneDrive folder."""
 
 import json
+import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Sequence
@@ -11,6 +12,16 @@ from marketplace.permissions import files_digest
 
 from . import bundle, destinations, messages
 from .errors import ShareError
+
+
+_publish_locks: dict[str, threading.Lock] = {}
+_publish_locks_guard = threading.Lock()
+
+
+def _publish_lock(skill_id: str) -> threading.Lock:
+    """One lock per skill, so two publishes of the same skill in this process never interleave."""
+    with _publish_locks_guard:
+        return _publish_locks.setdefault(skill_id, threading.Lock())
 
 
 def _now() -> str:
@@ -61,6 +72,49 @@ def _refusal_is_policy(message: str):
         if err.code == "forbidden":
             raise ShareError("policy_blocked", message) from err
         raise
+
+
+_MAX_VERSION_CLAIMS = 5
+
+
+def _claim_version(
+    provider, folder: dict, version: int, skill_id: str, files: dict, zip_bytes: bytes, *, author: str, created_at: str
+) -> tuple[int, dict]:
+    """Write vN without ever overwriting an existing version folder. Returns (version, manifest).
+
+    A version folder that skill.json does not list yet is either an earlier attempt of ours that stopped
+    before skill.json was written, or another publish still in flight. Identical bytes are adopted (a retry);
+    anything else is left alone and the next number is tried, so a stale or concurrent writer can never
+    replace files another publish is about to commit.
+    """
+    for _ in range(_MAX_VERSION_CLAIMS):
+        manifest = bundle.build_manifest(skill_id, version, files, zip_bytes, author=author, created_at=created_at)
+        version_folder = provider.child_folder(folder, f"v{version}")
+        try:
+            provider.write_file_create(version_folder, "bundle.zip", zip_bytes)
+        except ShareError as err:
+            if err.code != "conflict":
+                raise
+            theirs = provider.read_file(version_folder, "bundle.zip")
+            if theirs is None or theirs[0] != zip_bytes:
+                version += 1
+                continue
+        try:
+            provider.write_file_create(version_folder, "manifest.json", _json_bytes(manifest))
+        except ShareError as err:
+            if err.code != "conflict":
+                raise
+            found = provider.read_json(version_folder, "manifest.json")
+            if not found or found[0].get("bundle_sha256") != manifest["bundle_sha256"]:
+                version += 1
+                continue
+            manifest = {**manifest, **found[0]}
+        return version, manifest
+    raise ShareError(
+        "conflict",
+        "Other versions of this skill are being saved in the shared folder right now, so nothing was "
+        "overwritten. Try again in a minute.",
+    )
 
 
 def _fixed_folder(entry: dict, skill_id: str) -> dict | None:
@@ -130,16 +184,32 @@ def publish(
     people: Sequence[str] = (),
     audience_ack: bool = False,
 ) -> dict:
+    with _publish_lock(skill_id):
+        return _publish(provider, skill_id, author=author, root=root, people=people, audience_ack=audience_ack)
+
+
+def _publish(
+    provider,
+    skill_id: str,
+    *,
+    author: str,
+    root: dict | None,
+    people: Sequence[str],
+    audience_ack: bool,
+) -> dict:
     entry, files = _mine_skill(skill_id)
     digest = files_digest(files)
     folder = _fixed_folder(entry, skill_id)
     location = audience = None
+    relinked = False
     if folder:
         try:
             saved_path = provider.describe_folder(folder["drive_id"], folder["folder_id"])["path"]
-        except ShareError:
+        except ShareError as err:
+            if err.code == "not_found":
+                folder, relinked = None, True
             saved_path = [skill_id]
-    else:
+    if not folder:
         location, audience = _vet_root(provider, skill_id, root, author, audience_ack)
         folder = provider.child_folder(location, skill_id)
         saved_path = [*location["path"], skill_id]
@@ -155,11 +225,11 @@ def publish(
         version, reused = (doc["latest"] if doc else 0) + 1, False
         created_at = _now()
         zip_bytes = bundle.build_zip(files)
-        manifest = bundle.build_manifest(skill_id, version, files, zip_bytes, author=author, created_at=created_at)
         with _refusal_is_policy("Your organization's policy blocked saving the skill there. Nothing was shared."):
-            version_folder = provider.child_folder(folder, f"v{version}")
-            provider.write_file(version_folder, "bundle.zip", zip_bytes)
-            provider.write_file(version_folder, "manifest.json", _json_bytes(manifest))
+            version, manifest = _claim_version(
+                provider, folder, version, skill_id, files, zip_bytes, author=author, created_at=created_at
+            )
+            created_at = manifest["created_at"]
             new_doc = {
                 "schema": bundle.SCHEMA,
                 "name": skill_id,
@@ -209,4 +279,5 @@ def publish(
         "ungranted": ungranted,
         "saved_path": saved_path,
         "audience": audience,
+        "relinked": relinked,
     }

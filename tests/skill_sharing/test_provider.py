@@ -200,11 +200,15 @@ def test_forbidden_is_reported_with_a_code():
     assert err.value.code == "forbidden"
 
 
-def test_write_file_replaces():
+def test_write_file_create_fails_when_the_file_exists():
     gc = FakeGc()
     folder = {"drive_id": "d1", "folder_id": "f1", "web_url": "", "name": "f"}
-    GraphSharingProvider(gc).write_file(folder, "bundle.zip", b"abc")
-    assert "conflictBehavior=replace" in gc.puts[0]["path"]
+    GraphSharingProvider(gc).write_file_create(folder, "bundle.zip", b"abc")
+    assert "conflictBehavior=fail" in gc.puts[0]["path"]
+    gc.put_error = _Err(409)
+    with pytest.raises(ShareError) as err:
+        GraphSharingProvider(gc).write_file_create(folder, "bundle.zip", b"abc")
+    assert err.value.code == "conflict"
 
 
 def test_write_json_create_fails_when_the_file_exists():
