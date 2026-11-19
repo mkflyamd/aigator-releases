@@ -2515,7 +2515,7 @@
     });
   }
 
-  // Share opens the modal (save to OneDrive, pick people, send an email draft).
+  // Share opens the modal (save to OneDrive, pick people, send the email).
   function _shareMineSkill(skillId) {
     if (window.SkillSharing && typeof window.SkillSharing.openShareModal === 'function') {
       window.SkillSharing.openShareModal(skillId, {
@@ -2524,7 +2524,7 @@
         downloadSkill: _downloadMineSkill,
         showAlert: _showAlert,
         searchPeople: _searchPeople,
-        showDrafts: typeof window.showShareDrafts === 'function' ? window.showShareDrafts : null,
+        showToast: window._showConnectivityToast,
         refresh,
       });
       return;

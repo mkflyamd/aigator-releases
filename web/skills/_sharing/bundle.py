@@ -79,6 +79,10 @@ def read_skill_dir(skill_dir: Path) -> dict[str, bytes]:
     return files
 
 
+def skill_front_matter(files: dict[str, bytes]) -> dict:
+    return _parse_skill_md_frontmatter(files["SKILL.md"].decode("utf-8", errors="replace"))
+
+
 def build_manifest(
     skill_id: str,
     version: int,
@@ -88,7 +92,7 @@ def build_manifest(
     author: str,
     created_at: str,
 ) -> dict:
-    front = _parse_skill_md_frontmatter(files["SKILL.md"].decode("utf-8", errors="replace"))
+    front = skill_front_matter(files)
     return {
         "schema": SCHEMA,
         "name": skill_id,

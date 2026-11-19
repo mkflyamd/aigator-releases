@@ -74,6 +74,9 @@ _STEPS = (
 )
 _HEADING_COLOR = "#1f8f4e"
 
+# Stands in for the link and OneDrive address in the preview shown before the folder exists.
+LINK_PLACEHOLDER = "(link added when you send)"
+
 
 def _labels(detail: str, left: str, right: str) -> str:
     return detail.replace("[[", left).replace("]]", right)

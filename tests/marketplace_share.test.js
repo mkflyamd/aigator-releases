@@ -57,11 +57,11 @@ test('Share is only added inside the Mine branch of the installed list', () => {
   assert(branch > 0 && at < removeBtn, 'share button sits in the tier === Mine block');
 });
 
-test('Share reuses the people search endpoint and hands drafts to the chat', () => {
+test('Share reuses the people search endpoint and reports a send in a toast', () => {
   const start = source.indexOf('function _shareMineSkill(');
   const body = source.slice(start, source.indexOf('async function _downloadMineSkill(', start));
   assert(body.includes('searchPeople: _searchPeople'));
-  assert(body.includes('window.showShareDrafts'));
+  assert(body.includes('showToast: window._showConnectivityToast'));
   assert(!/slack|channel/i.test(body), 'the share modal is email only');
   const search = source.indexOf('async function _searchPeople(query, signal)');
   assert(search > 0, 'people search takes a query and an abort signal');
@@ -83,15 +83,6 @@ test('Share gets a JSON GET helper that returns the response and the parsed body
   assert(fn.includes('await fetch(url)'));
   assert(fn.includes('resp.json()'));
   assert(fn.includes('return { resp, body }'));
-});
-
-test('app.js exposes showShareDrafts, which closes Settings and injects approval cards', () => {
-  const app = fs.readFileSync(path.join(__dirname, '..', 'web', 'static', 'app.js'), 'utf8');
-  const at = app.indexOf('window.showShareDrafts = function');
-  assert(at > 0);
-  const body = app.slice(at, at + 400);
-  assert(body.includes('closeDrawer()'));
-  assert(body.includes('_injectDraftApprovalCard(item._draft, item.data)'));
 });
 
 test('the Share link field keeps only the link when the whole message is pasted', () => {
