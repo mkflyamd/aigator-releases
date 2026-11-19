@@ -247,3 +247,37 @@ def test_takeover_reports_a_process_that_cannot_be_ended(monkeypatch):
     finally:
         monkeypatch.undo()
         reap(child)
+
+
+def test_takeover_counts_an_exited_process_awaiting_its_parent_as_ended(monkeypatch):
+    class Zombie:
+        def __init__(self, proc):
+            self.pid = proc.pid
+
+        def status(self):
+            return psutil.STATUS_ZOMBIE
+
+    real_wait = psutil.wait_procs
+
+    def wait_leaving_zombies(procs, timeout=None):
+        real_wait(procs, timeout=timeout)
+        return [], [Zombie(p) for p in procs]
+
+    child, _ = spawn_tree()
+    try:
+        register(child)
+        monkeypatch.setattr(live.psutil, "wait_procs", wait_leaving_zombies)
+        assert live.takeover("claude", "s-1", {}) == [child.pid]
+    finally:
+        reap(child)
+
+
+def test_takeover_logs_what_it_ends(caplog):
+    child, _ = spawn_tree()
+    try:
+        register(child)
+        with caplog.at_level("WARNING"):
+            live.takeover("claude", "s-1", {})
+        assert str(child.pid) in caplog.text and "s-1" in caplog.text
+    finally:
+        reap(child)

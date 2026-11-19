@@ -168,6 +168,18 @@ def _end(proc: psutil.Process, hard: bool) -> None:
         raise TakeoverError(f"Gator could not close process {proc.pid} ({exc}). Close it yourself, then try again.")
 
 
+def _running(procs: list) -> list:
+    """The procs that are still executing. A zombie has exited and only awaits its parent's wait()."""
+    out = []
+    for proc in procs:
+        try:
+            if proc.status() != psutil.STATUS_ZOMBIE:
+                out.append(proc)
+        except psutil.NoSuchProcess:
+            pass
+    return out
+
+
 def takeover(agent: str, session_id: str, owners: dict[int, str]) -> list[int]:
     """End the processes outside Gator that hold session_id open, and return their pids.
 
@@ -193,12 +205,15 @@ def takeover(agent: str, session_id: str, owners: dict[int, str]) -> list[int]:
         if own & {p.pid for p in tree}:
             raise TakeoverError("This session is running in the same process tree as Gator, so Gator cannot close it.")
         victims.extend(tree)
+    logger.warning("takeover of %s session %s: ending pids %s", agent, session_id, [p.pid for p in victims])
     for proc in victims:
         _end(proc, hard=False)
     _, alive = psutil.wait_procs(victims, timeout=_EXIT_WAIT_S)
+    alive = _running(alive)
     for proc in alive:
         _end(proc, hard=True)
     _, alive = psutil.wait_procs(alive, timeout=_EXIT_WAIT_S)
+    alive = _running(alive)
     if alive:
         raise TakeoverError(f"Gator could not close process {alive[0].pid}. Close it yourself, then try again.")
     return [p.pid for p in targets]

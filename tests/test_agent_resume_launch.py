@@ -335,3 +335,66 @@ def test_takeover_refuses_when_the_owner_lookup_fails(takeover_env, monkeypatch)
     r = client().post("/api/generic-agent/takeover", json=TAKEOVER)
     assert r.status_code == 503
     assert takeover_env == []
+
+
+def _host_file_with(tmp_path, monkeypatch, content):
+    import pty_client
+
+    path = tmp_path / "host.json"
+    if content is not None:
+        path.write_text(content, encoding="utf-8")
+    monkeypatch.setattr(pty_client, "host_file", lambda key: path)
+    return pty_client
+
+
+def test_a_live_host_process_that_does_not_answer_counts_as_unreachable(tmp_path, monkeypatch):
+    import os
+
+    pty_client = _host_file_with(tmp_path, monkeypatch, '{"pid": %d, "port": 1}' % os.getpid())
+    assert pty_client.host_alive_but_unreachable("k") is True
+
+
+@pytest.mark.parametrize("content", [None, "not json", "{}", '{"pid": 2147480000}'])
+def test_no_host_a_garbled_host_file_or_a_dead_host_is_not_unreachable(tmp_path, monkeypatch, content):
+    pty_client = _host_file_with(tmp_path, monkeypatch, content)
+    assert pty_client.host_alive_but_unreachable("k") is False
+
+
+def test_pty_pid_map_strict_raises_when_a_live_host_does_not_answer(monkeypatch):
+    import routes.terminal as terminal
+
+    monkeypatch.setattr(terminal, "_pty_sessions", {})
+    monkeypatch.setattr(terminal.pty_client, "host_enabled", lambda: True)
+    monkeypatch.setattr(terminal.pty_client, "find_host", lambda key: None)
+    monkeypatch.setattr(terminal.pty_client, "host_alive_but_unreachable", lambda key: True)
+    monkeypatch.setattr(terminal.pty_client, "instance_key", lambda: "k")
+    with pytest.raises(terminal.pty_client.HostError):
+        terminal.pty_pid_map(strict=True)
+    assert terminal.pty_pid_map() == {}
+
+
+def test_pty_pid_map_strict_allows_no_host_at_all(monkeypatch):
+    import routes.terminal as terminal
+
+    monkeypatch.setattr(terminal, "_pty_sessions", {})
+    monkeypatch.setattr(terminal.pty_client, "host_enabled", lambda: True)
+    monkeypatch.setattr(terminal.pty_client, "find_host", lambda key: None)
+    monkeypatch.setattr(terminal.pty_client, "host_alive_but_unreachable", lambda key: False)
+    monkeypatch.setattr(terminal.pty_client, "instance_key", lambda: "k")
+    assert terminal.pty_pid_map(strict=True) == {}
+
+
+def test_takeover_ends_nothing_when_the_pty_host_is_alive_but_silent(env, monkeypatch):
+    import agent_liveness
+    import routes.terminal as terminal
+
+    ended = []
+    monkeypatch.setattr(agent_liveness, "takeover", lambda *a: ended.append(a) or [1])
+    monkeypatch.setattr(terminal, "_pty_sessions", {})
+    monkeypatch.setattr(terminal.pty_client, "host_enabled", lambda: True)
+    monkeypatch.setattr(terminal.pty_client, "find_host", lambda key: None)
+    monkeypatch.setattr(terminal.pty_client, "host_alive_but_unreachable", lambda key: True)
+    monkeypatch.setattr(terminal.pty_client, "instance_key", lambda: "k")
+    r = client().post("/api/generic-agent/takeover", json=TAKEOVER)
+    assert r.status_code == 503
+    assert ended == []

@@ -132,6 +132,10 @@ def pty_pid_map(strict: bool = False) -> dict[int, str]:
             for s in sessions:
                 if s.get("pid") and not s.get("done"):
                     owners.setdefault(s["pid"], s["id"])
+        elif pty_client.host_alive_but_unreachable(pty_client.instance_key()):
+            if strict:
+                raise pty_client.HostError("PTY host is running but did not answer")
+            logger.warning("pty_pid_map: PTY host did not answer, owners incomplete")
     return owners
 
 
