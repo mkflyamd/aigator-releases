@@ -449,6 +449,41 @@ def test_failed_adoption_does_not_register_a_session(host, monkeypatch):
     assert "sess-gone" not in terminal._pty_sessions
 
 
+def test_adoption_that_times_out_waiting_for_the_replay_fails(host, monkeypatch):
+    info, spawned = host
+    _create(info, sid="sess-slow")
+    pty = spawned[0][1]
+    pty.feed("retained output")
+
+    # The replay never arrives in time. Serving a buffer shorter than what the
+    # host retains would hand a resuming client a stream it cannot trust, so
+    # the adopt must fail rather than register that session.
+    real_read = pty_client.RemotePty.read
+
+    def stalled_read(self, n=4096):
+        time.sleep(2)
+        return real_read(self, n)
+
+    monkeypatch.setattr(pty_client.RemotePty, "read", stalled_read)
+    monkeypatch.setattr(terminal, "_ADOPT_REPLAY_TIMEOUT", 0.1)
+    monkeypatch.setattr(pty_client, "host_enabled", lambda: True)
+    monkeypatch.setattr(pty_client, "find_host", lambda key: info)
+    terminal._pty_sessions.pop("sess-slow", None)
+    try:
+        assert terminal.get_pty_session("sess-slow") is None
+        assert "sess-slow" not in terminal._pty_sessions
+        # Giving up on the adopt only drops our connection; the agent keeps
+        # running in the host, and a later lookup can adopt it.
+        assert pty_client.host_request(info, {"op": "status", "id": "sess-slow"})[
+            "exists"
+        ]
+        monkeypatch.setattr(pty_client.RemotePty, "read", real_read)
+        assert terminal.get_pty_session("sess-slow") is not None
+    finally:
+        terminal._pty_sessions.pop("sess-slow", None)
+        pty.end()
+
+
 def test_generic_agent_route_spawns_off_the_event_loop(monkeypatch):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient

@@ -100,8 +100,17 @@ def _adopt_pty_session(session_id: str) -> PtySession | None:
         entry = PtySession(remote, start_offset=remote.start_offset)
         # The host replays its retained output into the new buffer on a reader
         # thread. A client resuming at its last seq must not see a short stream
-        # end and mistake it for a different stream, so wait for the replay.
-        entry.wait_for_offset(remote.end_offset, _ADOPT_REPLAY_TIMEOUT)
+        # end and mistake it for a different stream, so wait for the replay. If
+        # it does not arrive, fail the adopt: drop our connection (the agent keeps
+        # running in the host) and let a later lookup try again.
+        if not entry.wait_for_offset(remote.end_offset, _ADOPT_REPLAY_TIMEOUT):
+            logger.warning(
+                "PTY session %s: host replay did not finish in %.0fs; not adopting",
+                session_id,
+                _ADOPT_REPLAY_TIMEOUT,
+            )
+            remote.detach()
+            return None
         _pty_sessions[session_id] = entry
         return entry
 
