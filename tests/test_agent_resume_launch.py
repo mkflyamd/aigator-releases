@@ -236,11 +236,15 @@ def test_resume_refuses_to_spawn_when_the_owner_lookup_fails(env, monkeypatch):
     import agent_liveness
     import routes.terminal as terminal
 
-    def failing(strict=False):
+    def boom(info, msg):
         raise terminal.pty_client.HostError("down")
 
     monkeypatch.setattr(agent_liveness, "live_processes", lambda agent, sid=None: [LIVE_PROC])
-    monkeypatch.setattr(terminal, "pty_pid_map", failing)
+    monkeypatch.setattr(terminal, "_pty_sessions", {})
+    monkeypatch.setattr(terminal.pty_client, "host_enabled", lambda: True)
+    monkeypatch.setattr(terminal.pty_client, "find_host", lambda key: {"port": 1})
+    monkeypatch.setattr(terminal.pty_client, "instance_key", lambda: "k")
+    monkeypatch.setattr(terminal.pty_client, "host_request", boom)
     r = client().post("/api/generic-agent/terminal", json={**BODY, "allow_duplicate": True})
     assert r.status_code == 503
     assert env["spawn"] == []
