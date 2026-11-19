@@ -52,7 +52,7 @@ jobs:
       - name: Run tests with coverage
         env:
           GATOR_REQUIRE_FFMPEG: '1'
-        run: uv run coverage run --source=web,packaging --omit='*/tests/*' -m pytest tests -q
+        run: uv run coverage run --source=web,packaging --omit='*/tests/*' -m pytest tests web/tests -q
 
       - name: Create coverage reports
         run: |
