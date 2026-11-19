@@ -69,7 +69,9 @@ class TestBackendMessageShape:
         import asyncio
 
         async def _run():
-            with patch.object(slack_mod, "_slack_web_api", side_effect=fake_api):
+            with patch("skills.slack.mcp_client.get_oauth_token", return_value="xoxp-test"), \
+                 patch("skills.slack.mcp_client._load_token", return_value={"team_id": "T1"}), \
+                 patch.object(slack_mod, "_slack_web_api", side_effect=fake_api):
                 from fastapi.testclient import TestClient
                 from fastapi import FastAPI
 

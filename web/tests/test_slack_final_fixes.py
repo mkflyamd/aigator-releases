@@ -223,12 +223,13 @@ class TestHITLBackendToken:
     def test_confirm_token_has_expiry(self):
         """Issued tokens must have a TTL (not valid forever)."""
         fn_start = SRC.find("def _issue_draft_token(")
-        if fn_start != -1:
-            fn_body = SRC[fn_start : fn_start + 400]
-            assert "expires" in fn_body or "time.time()" in fn_body, (
-                "_issue_draft_token must set an expiry timestamp so tokens "
-                "cannot be replayed hours later."
-            )
+        assert fn_start != -1
+        next_def = SRC.find("\ndef ", fn_start + 1)
+        fn_body = SRC[fn_start : next_def if next_def != -1 else len(SRC)]
+        assert "expires" in fn_body or "time.time()" in fn_body, (
+            "_issue_draft_token must set an expiry timestamp so tokens "
+            "cannot be replayed hours later."
+        )
 
     def test_send_rejected_without_valid_token(self):
         """POST /send with no confirm_token must return 403, not send."""

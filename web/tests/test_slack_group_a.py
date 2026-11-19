@@ -171,10 +171,10 @@ class TestSlackMentionDropdown:
 
     def test_wireMentionDropdownSlack_calls_slack_users_api(self):
         fn_start = JS_SRC.find("function _wireMentionDropdownSlack(")
-        fn_end = fn_start + 4000
+        fn_end = len(JS_SRC)
         depth = 0
         i = fn_start
-        while i < fn_start + 5000 and i < len(JS_SRC):
+        while i < len(JS_SRC):
             if JS_SRC[i] == "{":
                 depth += 1
             elif JS_SRC[i] == "}":
