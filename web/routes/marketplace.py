@@ -6,6 +6,7 @@ import logging
 import zipfile
 from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Response
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
 from config import load_config as _load_config
@@ -405,6 +406,11 @@ async def get_installed():
     native = _load_native_skills()
     user_installed = load_installed()
     enriched = _enrich_plugin_bundle_mcp_state(user_installed)
+    from skills._sharing.publisher import has_unshared_edits
+
+    for entry in enriched:
+        if entry.get("published_digest"):
+            entry["unshared_edits"] = await run_in_threadpool(has_unshared_edits, entry)
     return {"skills": native + enriched}
 
 

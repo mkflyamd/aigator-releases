@@ -148,6 +148,11 @@ def check_share_location(
     return _call(destinations.check, _call(_provider), skill_id, drive_id, folder_id, _call(_author_name))
 
 
+@router.get("/api/skills/share/update-check")
+def check_shared_update(skill_id: str = Query(min_length=1, max_length=128)):
+    return _call(receiver.check_update, _call(_provider), skill_id)
+
+
 @router.get("/api/skills/share/preview")
 def preview_share_message(skill_id: str = Query(min_length=1, max_length=128)):
     return _call(publisher.preview_message, skill_id, author=_call(_author_name))

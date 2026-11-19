@@ -11,6 +11,13 @@
   let _activeTab = 'browse';
   let _searchQuery = '';
   let _filterTier = 'all';
+  const _updateStatus = {}; // skill id -> answer of /api/skills/share/update-check
+  // Skills whose Check for update / Update click is still running. _render() rebuilds
+  // every row, so the busy look lives here rather than on the button element.
+  const _updateBusy = new Set();
+  // Row button that should get keyboard focus back once a re-render has rebuilt it.
+  let _pendingFocusKey = null;
+  let _loaded = false; // the first marketplace fetch finished
   let _addSubTab = 'import'; // 'import' | 'create' — active section inside the Add tab
 
   // Skills currently mid-flow through the verified-plugin consent install
@@ -38,7 +45,7 @@
     if (input) input.value = term;
     const filter = document.getElementById('mp-tier-filter');
     if (filter) filter.value = 'all';
-    _render();
+    _render(true);
   }
 
   // ── Public API ─────────────────────────────────────────────────────────────
@@ -81,7 +88,7 @@
     searchInput.className = 'marketplace-search';
     searchInput.addEventListener('input', (e) => {
       _searchQuery = e.target.value.toLowerCase();
-      _render();
+      _render(true);
     });
     const tierFilter = document.createElement('select');
     tierFilter.id = 'mp-tier-filter';
@@ -99,7 +106,7 @@
     });
     tierFilter.addEventListener('change', (e) => {
       _filterTier = e.target.value;
-      _render();
+      _render(true);
     });
     searchRow.appendChild(searchInput);
     searchRow.appendChild(tierFilter);
@@ -134,13 +141,14 @@
 
   // ── Tab switching ──────────────────────────────────────────────────────────
   function _switchTab(tab) {
+    const changed = tab !== _activeTab;
     _activeTab = tab;
     document.querySelectorAll('.mp-tab').forEach((b) => {
       b.classList.toggle('mp-tab-active', b.dataset.tab === tab);
     });
     const searchRow = document.getElementById('mp-search-row');
     if (searchRow) searchRow.style.display = tab === 'browse' ? '' : 'none';
-    _render();
+    _render(changed);
   }
 
   // ── Delegated click handler (no inline onclick) ────────────────────────────
@@ -158,6 +166,8 @@
       _editMineSkill(btn.dataset.skillId);
     } else if (action === 'share-mine') {
       _shareMineSkill(btn.dataset.skillId);
+    } else if (action === 'check-update' || action === 'apply-update') {
+      _startUpdateAction(btn, action);
     } else if (action === 'submit-create') {
       _submitCreate();
     } else if (action === 'mp-import-fetch') {
@@ -239,7 +249,9 @@
   // ── Fetch data ─────────────────────────────────────────────────────────────
   async function refresh() {
     const content = document.getElementById('mp-content');
-    if (content && !_catalog.length) _renderSkeleton(content);
+    // Skeleton only before the first load: swapping a long list for five skeleton
+    // cards collapses the scroller, and the browser clamps scrollTop to the top.
+    if (content && !_loaded) _renderSkeleton(content);
     try {
       const [catResp, instResp] = await Promise.all([
         fetch('/api/marketplace/catalog'),
@@ -247,6 +259,7 @@
       ]);
       _catalog = (await catResp.json()).skills || [];
       _installed = (await instResp.json()).skills || [];
+      _loaded = true;
       const badge = document.getElementById('mp-installed-count');
       if (badge) {
         badge.textContent = _installed.length ? String(_installed.length) : '';
@@ -259,14 +272,50 @@
   }
 
   // ── Render ─────────────────────────────────────────────────────────────────
-  function _render() {
+  // Rebuilds #mp-content. Unless resetScroll is set (tab switch, new search), the
+  // scroll position and the focused row button survive the rebuild.
+  function _render(resetScroll) {
     const content = document.getElementById('mp-content');
     if (!content) return;
+    const scrollTop = content.scrollTop;
+    const active = document.activeElement;
+    const nowhere = !active || active === document.body;
+    let focusKey = null;
+    if (!resetScroll) {
+      if (!nowhere && content.contains(active) && active.dataset && active.dataset.action) {
+        focusKey = _rowButtonKey(active.dataset.skillId, active.dataset.action);
+      } else if (nowhere) {
+        focusKey = _pendingFocusKey;
+      }
+    }
     // Clear safely
     while (content.firstChild) content.removeChild(content.firstChild);
     if (_activeTab === 'browse') _renderBrowse(content);
     else if (_activeTab === 'installed') _renderInstalled(content);
     else if (_activeTab === 'add') _renderAdd(content);
+    if (resetScroll) return;
+    content.scrollTop = scrollTop;
+    const target = focusKey ? _findRowButton(content, focusKey) : null;
+    if (target && !target.disabled) target.focus({ preventScroll: true });
+    // A button that is still disabled keeps its pending focus for the next render.
+    if (focusKey && focusKey === _pendingFocusKey && !(target && target.disabled)) {
+      _pendingFocusKey = null;
+    }
+  }
+
+  // Check for update and Update are one button in two states, so they share a key.
+  function _rowButtonKey(skillId, action) {
+    const group = action === 'check-update' || action === 'apply-update' ? 'update' : action;
+    return skillId + '|' + group;
+  }
+
+  function _findRowButton(content, key) {
+    const buttons = content.querySelectorAll('button[data-action]');
+    for (let i = 0; i < buttons.length; i++) {
+      const b = buttons[i];
+      if (_rowButtonKey(b.dataset.skillId, b.dataset.action) === key) return b;
+    }
+    return null;
   }
 
   const _TIER_TOOLTIPS = {
@@ -1057,15 +1106,17 @@
       ver.className = 'mp-installed-version';
       ver.textContent = 'v' + (skill.version || '?');
       meta.appendChild(ver);
-      if (
-        skill.tier === 'Mine' &&
-        Number.isInteger(skill.published_version) &&
-        skill.published_version > 0
-      ) {
-        const chip = document.createElement('span');
-        chip.className = 'mp-share-chip';
-        chip.textContent = 'Shared · v' + skill.published_version;
-        meta.appendChild(chip);
+      const sharedChip = _sharedChip(skill);
+      if (sharedChip) meta.appendChild(sharedChip);
+      const received =
+        skill.tier === 'Community' && !!(skill.share_source && skill.share_source.folder_id);
+      const updateState = received ? _updateStatus[skill.id] : null;
+      const updateNote = updateState ? _updateNote(updateState) : '';
+      if (updateNote) {
+        const span = document.createElement('span');
+        span.className = 'mp-update-note';
+        span.textContent = updateNote;
+        meta.appendChild(span);
       }
 
       const name = document.createElement('div');
@@ -1093,6 +1144,8 @@
         shareBtn.dataset.skillId = skill.id;
         actions.appendChild(shareBtn);
       }
+      const updateBtn = _updateButton(received, skill, updateState);
+      if (updateBtn) actions.appendChild(updateBtn);
       const removeBtn = document.createElement('button');
       removeBtn.className = 'mp-row-btn mp-row-btn-danger';
       removeBtn.textContent = 'Remove';
@@ -1418,6 +1471,112 @@
     content.appendChild(wrap);
   }
 
+  function _sharedChip(skill) {
+    if (
+      skill.tier !== 'Mine' ||
+      !Number.isInteger(skill.published_version) ||
+      skill.published_version <= 0
+    ) {
+      return null;
+    }
+    if (skill.unshared_edits === true) {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'mp-share-chip mp-share-chip-edited';
+      chip.textContent = 'Shared v' + skill.published_version + ' · edited since';
+      chip.title = 'You changed this skill after sharing it. Open Share to publish the changes.';
+      chip.dataset.action = 'share-mine';
+      chip.dataset.skillId = skill.id;
+      return chip;
+    }
+    const chip = document.createElement('span');
+    chip.className = 'mp-share-chip';
+    chip.textContent = 'Shared · v' + skill.published_version;
+    return chip;
+  }
+
+  function _updateButton(received, skill, updateState) {
+    if (!received) return null;
+    const updating = !!(updateState && updateState.status === 'update');
+    const btn = document.createElement('button');
+    btn.dataset.action = updating ? 'apply-update' : 'check-update';
+    btn.dataset.skillId = skill.id;
+    _paintUpdateButton(btn, updating, _updateBusy.has(skill.id));
+    return btn;
+  }
+
+  // Idle: "Check for update" / "Update". Busy: disabled, spinner, "Checking…" / "Opening…".
+  function _paintUpdateButton(btn, updating, busy) {
+    btn.disabled = busy;
+    btn.className = busy ? 'mp-row-btn mp-row-btn-busy' : 'mp-row-btn';
+    btn.textContent = '';
+    if (!busy) {
+      btn.textContent = updating ? 'Update' : 'Check for update';
+      return;
+    }
+    const spinner = document.createElement('span');
+    spinner.className = 'cap-inline-spinner';
+    const label = document.createElement('span');
+    label.textContent = updating ? 'Opening\u2026' : 'Checking\u2026';
+    btn.appendChild(spinner);
+    btn.appendChild(label);
+  }
+
+  // One click on Check for update / Update. Repeat clicks are ignored until it
+  // finishes; the button is restored afterwards, also when the request failed.
+  async function _startUpdateAction(btn, action) {
+    const skillId = btn.dataset.skillId;
+    if (_updateBusy.has(skillId)) return;
+    const checking = action === 'check-update';
+    _updateBusy.add(skillId);
+    if (checking) _pendingFocusKey = _rowButtonKey(skillId, action);
+    _paintUpdateButton(btn, !checking, true);
+    try {
+      if (checking) {
+        await _checkSharedUpdate(skillId);
+      } else {
+        const found = _updateStatus[skillId];
+        if (found && found.link) await _reviewSharedLink(found.link);
+      }
+    } catch (err) {
+      _showAlert('Could not open the update: ' + err.message, 'error');
+    } finally {
+      _updateBusy.delete(skillId);
+      if (!checking && btn.isConnected) {
+        // The review dialog is open on top; put the button back without moving focus.
+        _paintUpdateButton(btn, true, false);
+      } else {
+        _render();
+      }
+      if (checking) _pendingFocusKey = null;
+    }
+  }
+
+  function _updateNote(state) {
+    if (state.status === 'update') return 'v' + state.latest + ' available';
+    if (state.status === 'current') return 'Up to date';
+    if (state.status === 'removed') return 'The author removed this shared skill';
+    if (state.status === 'no_access') return 'You no longer have access';
+    return '';
+  }
+
+  // Asks the server whether a newer version sits in the folder this skill came
+  // from. Read only; the installed copy is never touched here.
+  async function _checkSharedUpdate(skillId) {
+    try {
+      const { resp, body } = await _getJson(
+        '/api/skills/share/update-check?skill_id=' + encodeURIComponent(skillId),
+      );
+      if (!resp.ok || !body || !body.status) {
+        _showAlert('Could not check for an update: ' + _errorMessage(body), 'error');
+        return;
+      }
+      _updateStatus[skillId] = body;
+    } catch (err) {
+      _showAlert('Could not check for an update: ' + err.message, 'error');
+    }
+  }
+
   // Review a pasted share link. Nothing installs until the user clicks Install
   // in the review modal; a successful install is registered the same way the
   // local-file install is (see _pickLocalSkill).
@@ -1439,6 +1598,11 @@
       errorMessage: _errorMessage,
       appendPermissionList: _appendPermissionList,
       onInstalled: (result, review) => {
+        // Keep a row status so the user sees "Up to date" after updating.
+        _updateStatus[result.skill_id] = { status: 'current', installed: result.version };
+        if (_activeTab === 'installed') {
+          _pendingFocusKey = _rowButtonKey(result.skill_id, 'check-update');
+        }
         const skill = {
           id: result.skill_id,
           name: (review && review.title) || result.skill_id,
@@ -1448,7 +1612,8 @@
           window.registerUserSkill(skill.id, skill.name, skill.tier);
         }
         _handleInstallOutcome(true, result, skill);
-        _switchTab('installed');
+        if (_activeTab === 'installed') _render();
+        else _switchTab('installed');
       },
     });
   }

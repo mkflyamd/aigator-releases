@@ -51,6 +51,18 @@ def _latest_digest(doc: dict) -> str:
     return ""
 
 
+def has_unshared_edits(entry: dict) -> bool:
+    """True when a Mine skill's files differ from what was last published."""
+    published = entry.get("published_digest")
+    if entry.get("tier") != "Mine" or not published:
+        return False
+    try:
+        files = bundle.read_skill_dir(installer.INSTALLED_SKILLS_DIR / "mine" / entry["id"])
+    except (ShareError, OSError):
+        return False
+    return files_digest(files) != published
+
+
 @contextmanager
 def _refusal_is_policy(message: str):
     """Once the skill folder exists we can write here, so a refusal after that is policy, not access."""

@@ -17847,6 +17847,21 @@ body.gator-terminal-pushing .dock {
   color: var(--text);
   border-color: var(--border2);
 }
+.mp-row-btn-busy,
+.mp-row-btn-busy:hover {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  border-color: var(--border);
+  cursor: default;
+}
+.mp-row-btn-busy .cap-inline-spinner {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+}
 .mp-row-btn-danger {
   color: var(--error);
   border-color: rgba(248, 113, 113, 0.4);
@@ -18395,6 +18410,18 @@ body.gator-terminal-pushing .dock {
   border-radius: 10px;
   background: rgba(74, 222, 128, 0.12);
   color: var(--accent, #4ade80);
+  white-space: nowrap;
+}
+.mp-share-chip-edited {
+  background: transparent;
+  border: 1px solid var(--warn);
+  color: var(--warn);
+  cursor: pointer;
+  font-family: inherit;
+}
+.mp-update-note {
+  font-size: 0.68rem;
+  color: var(--text-dim);
   white-space: nowrap;
 }
 .ss-modal {
