@@ -8748,22 +8748,54 @@ function _buildCompactionMarker(turnCount, summaryText) {
 
 _initTabSystem();
 
+// The Copy link button is a fixed-position overlay (out of the text flow, so it never moves
+// the text around it) placed above the last line of the link, right-aligned to it.
+let _activeChatLinkCopy = null;
+
+function _placeChatLinkCopy(link, btn) {
+  const rects = link.getClientRects();
+  const last = rects[rects.length - 1];
+  if (!last) return;
+  const bounds = messages.getBoundingClientRect();
+  const overlap = 2; // overlap the link so the pointer never crosses a gap
+  const margin = 4;
+  let top = last.top - btn.offsetHeight + overlap;
+  if (top < bounds.top) top = last.bottom - overlap;
+  const maxLeft = bounds.right - btn.offsetWidth - margin;
+  const left = Math.min(Math.max(last.right - btn.offsetWidth, bounds.left + margin), maxLeft);
+  btn.style.top = top + 'px';
+  btn.style.left = left + 'px';
+  _activeChatLinkCopy = btn;
+}
+
 function _showChatLinkCopy(e) {
   const link = e.target.closest('.prose a[href]');
-  if (!link || link.nextElementSibling?.classList.contains('chat-link-copy')) return;
+  if (!link) return;
 
-  const copyBtn = document.createElement('button');
-  copyBtn.type = 'button';
-  copyBtn.className = 'chat-link-copy';
-  copyBtn.dataset.href = link.href;
-  copyBtn.title = 'Copy link';
-  copyBtn.setAttribute('aria-label', 'Copy link');
-  copyBtn.textContent = 'Copy link';
-  link.after(copyBtn);
+  let copyBtn = link.nextElementSibling;
+  if (!copyBtn?.classList.contains('chat-link-copy')) {
+    copyBtn = document.createElement('button');
+    copyBtn.type = 'button';
+    copyBtn.className = 'chat-link-copy';
+    copyBtn.dataset.href = link.href;
+    copyBtn.title = 'Copy link';
+    copyBtn.setAttribute('aria-label', 'Copy link');
+    copyBtn.textContent = 'Copy link';
+    link.after(copyBtn);
+  }
+  _placeChatLinkCopy(link, copyBtn);
 }
 
 messages.addEventListener('mouseover', _showChatLinkCopy);
 messages.addEventListener('focusin', _showChatLinkCopy);
+messages.addEventListener(
+  'scroll',
+  () => {
+    _activeChatLinkCopy?.remove();
+    _activeChatLinkCopy = null;
+  },
+  { capture: true, passive: true },
+);
 
 // Delegated handler: open local file paths in default OS app
 messages.addEventListener('click', (e) => {
