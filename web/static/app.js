@@ -13536,6 +13536,7 @@ function _injectDraftApprovalCard(
         }
       } catch (err) {
         editLink.textContent = config.openLabel || 'Open in ' + config.paneLabel;
+        console.warn('Approval card: could not open ' + config.service + ' pane', err);
         if (config.service === 'email' && err && err.message) {
           _showConnectivityToast("Couldn't open in Outlook: " + err.message, 'warn');
         }
