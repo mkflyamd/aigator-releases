@@ -13526,14 +13526,12 @@ function _injectDraftApprovalCard(
         } else if (config.service === 'teams') {
           if (!data.chat_id || !window.gatorShell?.navigateTeamsPin)
             throw new Error('No Teams conversation');
-          if (window.gatorShell.showTeams) window.gatorShell.showTeams();
-          await window.gatorShell.navigateTeamsPin(data.chat_id);
+          await _openNativePinPane('teams', data.chat_id);
           editLink.textContent = 'Viewing Teams \u2197';
         } else if (config.service === 'slack') {
           if (!data.channel_id || !window.gatorShell?.navigateSlackPin)
             throw new Error('No Slack conversation');
-          if (window.gatorShell.showSlack) window.gatorShell.showSlack();
-          await window.gatorShell.navigateSlackPin(data.channel_id);
+          await _openNativePinPane('slack', data.channel_id);
           editLink.textContent = 'Viewing Slack \u2197';
         }
       } catch (err) {
@@ -13548,6 +13546,16 @@ function _injectDraftApprovalCard(
 
   document.getElementById('messages').appendChild(card);
   if (scroll) card.scrollIntoView({ behavior: 'smooth', block: 'end' });
+}
+
+// Open Teams/Slack via openThirdPane so any classic pane is closed first; a direct
+// gatorShell.show*() would leave it open beside the native tile.
+async function _openNativePinPane(service, id) {
+  const shell = window.gatorShell;
+  if (typeof openThirdPane === 'function') openThirdPane(service);
+  else if (service === 'teams' && shell.showTeams) shell.showTeams();
+  else if (service === 'slack' && shell.showSlack) shell.showSlack();
+  await (service === 'teams' ? shell.navigateTeamsPin(id) : shell.navigateSlackPin(id));
 }
 
 function addMessage(role, html) {
