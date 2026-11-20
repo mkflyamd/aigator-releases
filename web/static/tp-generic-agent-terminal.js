@@ -996,21 +996,13 @@ function _genAgentConnect(sess, retryDelay) {
     location.host +
     '/api/terminal/agent?session_id=' +
     encodeURIComponent(sess.ptySessionId);
-  const wasRetrying = !!retryDelay;
 
   sess.ws = new WebSocket(url);
   sess.ws.onopen = () => {
-    if (wasRetrying && sess._retryAttempt) {
-      // Don't write [reconnected] text into the terminal - for TUI apps like
-      // opencode it injects text into the alternate screen and corrupts the
-      // layout. Instead send a resize event to force the TUI to fully redraw.
-      if (sess.term && sess.ws.readyState === WebSocket.OPEN) {
-        sess.ws.send(
-          JSON.stringify({ type: 'resize', cols: sess.term.cols, rows: sess.term.rows }),
-        );
-      }
-    }
-    _ocFit(sess);
+    // Always push xterm's size to the PTY on (re)connect: the PTY may hold a
+    // stale size, and on a reconnect the resize also makes a TUI fully redraw
+    // without writing text into its alternate screen.
+    _ocFit(sess, true);
     sess.term && sess.term.focus();
     if (!sess._hasOutput) _genAgentArmNoOutputWatchdog(sess);
   };
