@@ -264,7 +264,8 @@ const isHorizontal = (env) => env.panel().classList.contains('horizontal');
   assert(isVertical(env), 'terminal stays vertical after the browser pane closes');
 }
 
-// (b) With a native app tiled, vertical is never used.
+// (b) With a native app tiled, vertical is never displayed, but the user's
+// explicit choice is still what is stored.
 for (const cls of ['gator-split', 'gator-squeezed']) {
   const env = makeEnv({ bodyClasses: [cls] });
   env.GatorTerminal.open();
@@ -272,18 +273,34 @@ for (const cls of ['gator-split', 'gator-squeezed']) {
 
   assert(isHorizontal(env), `setLayout('vertical') falls back to horizontal under ${cls}`);
   assert(!isVertical(env), `terminal is not vertical under ${cls}`);
+  assert.strictEqual(
+    env.store['gator.terminal.layout'],
+    'vertical',
+    `explicit vertical choice stays stored under ${cls}`,
+  );
 }
 
-// (b2) A saved vertical preference is not honoured while a native app is tiled.
+// (b2) A saved vertical preference is not displayed while a native app is
+// tiled, and opening the terminal does not overwrite it.
 {
   const env = makeEnv({ saved: 'vertical', bodyClasses: ['gator-split'] });
   env.GatorTerminal.open();
 
   assert(isHorizontal(env), 'open() with saved vertical + gator-split starts horizontal');
+  assert.strictEqual(
+    env.store['gator.terminal.layout'],
+    'vertical',
+    'open() under gator-split must not overwrite the saved vertical preference',
+  );
+
+  env.body.classList.remove('gator-split');
+  env.mutate(env.body);
+  assert(isVertical(env), 'terminal returns to the saved vertical once gator-split clears');
 }
 
 // (c) Terminal already vertical when a native app gets tiled afterwards: the
-// terminal flips to horizontal instead of overflowing the narrow viewport.
+// terminal flips to horizontal for display only, keeps the stored preference,
+// and goes back to vertical when the native tile goes away.
 {
   const env = makeEnv({ saved: 'vertical' });
   env.GatorTerminal.open();
@@ -293,9 +310,34 @@ for (const cls of ['gator-split', 'gator-squeezed']) {
   env.mutate(env.body);
 
   assert(isHorizontal(env), 'terminal flips to horizontal once gator-split appears');
+  assert.strictEqual(
+    env.store['gator.terminal.layout'],
+    'vertical',
+    'automatic fallback must not overwrite the stored vertical preference',
+  );
+
+  env.body.classList.remove('gator-split');
+  env.mutate(env.body);
+  assert(isVertical(env), 'terminal returns to vertical after the native tile goes away');
+  assert.strictEqual(env.store['gator.terminal.layout'], 'vertical');
 }
 
-// A third pane opening while the terminal is vertical still flips it (existing behaviour).
+// (c2) An explicit horizontal choice made under gator-split is the new
+// preference and is not reverted when the tile goes away.
+{
+  const env = makeEnv({ saved: 'vertical', bodyClasses: ['gator-split'] });
+  env.GatorTerminal.open();
+  env.GatorTerminal.setLayout('horizontal');
+  assert.strictEqual(env.store['gator.terminal.layout'], 'horizontal');
+
+  env.body.classList.remove('gator-split');
+  env.mutate(env.body);
+  assert(isHorizontal(env), 'explicit horizontal stays horizontal after gator-split clears');
+}
+
+// A third pane opening while the terminal is vertical still flips it (existing
+// behaviour) for display only, and the terminal returns to vertical when the
+// pane closes.
 {
   const env = makeEnv({ saved: 'vertical' });
   env.GatorTerminal.open();
@@ -305,6 +347,13 @@ for (const cls of ['gator-split', 'gator-squeezed']) {
   env.mutate(env.thirdPane);
 
   assert(isHorizontal(env), 'terminal flips to horizontal when a pane opens beside it');
+  assert.strictEqual(env.store['gator.terminal.layout'], 'vertical');
+
+  env.thirdPane.classList.remove('is-open');
+  env.thirdPane.classList.add('hidden');
+  env.thirdPane.offsetWidth = 0;
+  env.mutate(env.thirdPane);
+  assert(isVertical(env), 'terminal returns to vertical once the pane closes');
 }
 
 console.log('terminal_layout_conflicts: all tests passed');
