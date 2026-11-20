@@ -593,11 +593,18 @@
     );
   }
 
+  // A tiled native app (gator-split) or a squeezed Gator (gator-squeezed) leaves
+  // the Gator viewport as narrow as 400px, which cannot fit chat + dock + the
+  // 420px vertical terminal.
+  function _verticalBlocked() {
+    const cl = document.body.classList;
+    return cl.contains('gator-split') || cl.contains('gator-squeezed');
+  }
+
   function _closeConflictingPanes() {
-    // Explicit user request for vertical — close any pane occupying the .layout row.
-    // Reuse the panes' own close buttons so their internal state stays consistent.
-    const tpClose = document.getElementById('tp-detail-close');
-    if (tpClose) tpClose.click();
+    // Explicit user request for vertical — close any pane occupying the .layout row
+    // through the panes' own close paths so their internal state stays consistent.
+    if (typeof closeThirdPane === 'function') closeThirdPane();
     const bpClose = document.getElementById('bp-close-btn');
     if (bpClose) bpClose.click();
   }
@@ -605,6 +612,7 @@
   function setLayout(layout) {
     if (layout !== 'horizontal' && layout !== 'vertical') return;
     _ensurePanel();
+    if (layout === 'vertical' && _verticalBlocked()) layout = 'horizontal';
     // User explicitly chose vertical — make room by closing any conflicting pane.
     if (layout === 'vertical' && !STATE.fullscreen && _conflictingPaneOpen()) {
       _closeConflictingPanes();
@@ -620,14 +628,7 @@
     // horizontal - a full auto-reparent every time the terminal is toggled
     // on felt like the whole page shifting, when the user just wants their
     // vertical terminal back.
-    if (
-      (STATE.layout || _loadLayout()) === 'vertical' &&
-      !STATE.fullscreen &&
-      _conflictingPaneOpen()
-    ) {
-      _closeConflictingPanes();
-    }
-    _applyLayout(STATE.layout || _loadLayout());
+    setLayout(STATE.layout || _loadLayout());
     if (STATE.fullscreenBtn) {
       const iconEl = STATE.fullscreenBtn.querySelector('.material-symbols-outlined');
       if (iconEl && !iconEl.textContent)
@@ -663,9 +664,10 @@
   function _watchPanesForConflicts() {
     const check = () => {
       if (!STATE.opened || STATE.layout !== 'vertical' || STATE.fullscreen) return;
-      if (_conflictingPaneOpen()) setLayout('horizontal');
+      if (_verticalBlocked() || _conflictingPaneOpen()) setLayout('horizontal');
     };
     const obs = new MutationObserver(check);
+    obs.observe(document.body, { attributes: true, attributeFilter: ['class'] });
     ['third-pane', 'browser-pane'].forEach((id) => {
       const el = document.getElementById(id);
       if (el) obs.observe(el, { attributes: true, attributeFilter: ['class', 'style'] });
