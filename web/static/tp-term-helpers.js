@@ -107,11 +107,18 @@ function _ocSpawnTerm(sess) {
 function _ocFit(sess, force) {
   if (!sess || !sess.fitAddon || !sess.term) return;
   const el = sess.container;
-  if (!el || !el.offsetParent || el.clientWidth < 40) return;
+  if (!el || !el.offsetParent || el.clientWidth < 40) {
+    // A hidden panel cannot be measured, but a (re)connect still has to tell the
+    // PTY the last fitted size so a TUI redraws. A never-fitted xterm still holds
+    // its 80x24 default, which would be a bogus size for the PTY.
+    if (force && sess._ocFitted) _ocSendSize(sess);
+    return;
+  }
   const prevCols = sess.term.cols;
   const prevRows = sess.term.rows;
   try {
     sess.fitAddon.fit();
+    sess._ocFitted = true;
   } catch (_) {
     /* not visible yet */
   }
@@ -127,6 +134,10 @@ function _ocFit(sess, force) {
   // before the session has produced visible output; after that, let the PTY's
   // resize notification drive the application's normal redraw.
   if (changed && !sess._hasOutput) sess.term.reset();
+  _ocSendSize(sess);
+}
+
+function _ocSendSize(sess) {
   if (sess.ws && sess.ws.readyState === WebSocket.OPEN) {
     sess.ws.send(
       JSON.stringify({

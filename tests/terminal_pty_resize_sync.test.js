@@ -124,7 +124,8 @@ const resizes = (ws) => ws.sent.filter((m) => m.type === 'resize');
   );
 }
 
-// 3. An unlaid-out container (hidden pane) must not push a bogus size.
+// 3a. A container that was never laid out (hidden pane, xterm still at its 80x24 default)
+// must not push a bogus size.
 {
   const { ctx, sockets, makeEl } = makeContext();
   const container = makeEl();
@@ -133,7 +134,27 @@ const resizes = (ws) => ws.sent.filter((m) => m.type === 'resize');
   ctx.sess = sess;
   vm.runInContext('_ocSpawnTerm(sess); _genAgentConnect(sess);', ctx);
   sockets[0].open();
-  assert.deepStrictEqual(resizes(sockets[0]), [], 'no resize while the container is not laid out');
+  assert.deepStrictEqual(resizes(sockets[0]), [], 'no resize for a never-fitted hidden container');
+}
+
+// 3b. A reconnect while the pane is hidden still sends the last fitted size, so the TUI redraws
+// (the old reconnect-only resize from e3d224e) even though _ocFit cannot measure a hidden panel.
+{
+  const { ctx, sockets, makeEl } = makeContext();
+  const container = makeEl();
+  const sess = { tabId: 't', ptySessionId: 'pty-3', agent: 'terminal', container };
+  ctx.sess = sess;
+  vm.runInContext('_ocSpawnTerm(sess); _ocFit(sess); _genAgentConnect(sess);', ctx);
+  sockets[0].open();
+  container.offsetParent = null; // pane hidden before the socket drops and reconnects
+  vm.runInContext('_genAgentConnect(sess);', ctx);
+  assert.strictEqual(sockets.length, 2);
+  sockets[1].open();
+  assert.deepStrictEqual(
+    resizes(sockets[1]),
+    [{ type: 'resize', cols: 84, rows: 43 }],
+    'reconnect while hidden must send the current size to force a redraw',
+  );
 }
 
 console.log('terminal_pty_resize_sync: ok');
