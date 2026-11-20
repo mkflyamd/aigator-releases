@@ -4396,7 +4396,11 @@ body.gator-chat-expanded .gator-expand-btn {
   text-decoration-thickness: 2px;
 }
 .chat-link-copy {
-  margin-left: 0.3rem;
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 50;
+  white-space: nowrap;
   padding: 1px 5px;
   border: 1px solid var(--border);
   border-radius: 4px;
@@ -4406,17 +4410,19 @@ body.gator-chat-expanded .gator-expand-btn {
   font-size: 0.7rem;
   cursor: pointer;
   opacity: 0;
-  pointer-events: none;
+  visibility: hidden;
   transition:
     opacity 0.15s,
-    background 0.15s;
+    background 0.15s,
+    visibility 0s linear 0.15s;
 }
 .prose a:hover + .chat-link-copy,
 .prose a:focus-visible + .chat-link-copy,
 .chat-link-copy:hover,
 .chat-link-copy:focus-visible {
   opacity: 1;
-  pointer-events: auto;
+  visibility: visible;
+  transition-delay: 0s;
 }
 .chat-link-copy:hover {
   background: var(--border2);
