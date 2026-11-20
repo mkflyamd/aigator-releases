@@ -46,6 +46,7 @@ function makeLink(href, rects = ONE_LINE) {
     getClientRects: () => rects,
     after(node) {
       node.owner = link;
+      node.previousElementSibling = link;
       link.nextElementSibling = node;
     },
   };
@@ -200,15 +201,42 @@ test('hovering again re-places the existing button instead of adding a second on
   assert.strictEqual(btn.style.top, '282px');
 });
 
-test('scrolling removes the active button so it cannot float away from its link', () => {
+test('scrolling keeps the button on its link instead of leaving it behind', () => {
   const { fire } = setup(() => Promise.resolve());
-  const link = makeLink('https://example.com/a');
+  const rects = [{ left: 100, right: 300, top: 200, bottom: 216 }];
+  const link = makeLink('https://example.com/a', rects);
   fire('mouseover', hoverTarget(link));
-  assert(link.nextElementSibling, 'button shown');
+  const btn = link.nextElementSibling;
+  assert.strictEqual(btn.style.top, '182px');
+  rects[0] = { left: 100, right: 300, top: 150, bottom: 166 };
   fire('scroll', {});
-  assert.strictEqual(link.nextElementSibling, null);
-  fire('mouseover', hoverTarget(link));
-  assert(link.nextElementSibling, 'hovering again brings the button back');
+  assert.strictEqual(link.nextElementSibling, btn, 'the button must survive a scroll');
+  assert.strictEqual(btn.style.top, '132px');
+});
+
+test('a keyboard-focused link scrolled into view keeps its button', () => {
+  const { fire } = setup(() => Promise.resolve());
+  const rects = [{ left: 100, right: 300, top: 900, bottom: 916 }];
+  const link = makeLink('https://example.com/a', rects);
+  fire('focusin', hoverTarget(link));
+  const btn = link.nextElementSibling;
+  assert(btn, 'focusing a link adds its button even while the link is off screen');
+  assert.strictEqual(btn.style.display, 'none', 'off screen: nothing floats over other text');
+  rects[0] = { left: 100, right: 300, top: 300, bottom: 316 };
+  fire('scroll', {});
+  assert.strictEqual(link.nextElementSibling, btn);
+  assert.strictEqual(btn.style.display, '');
+  assert.strictEqual(btn.style.top, '282px');
+});
+
+test('only the most recently placed button is kept on screen', () => {
+  const { fire } = setup(() => Promise.resolve());
+  const first = makeLink('https://example.com/a');
+  const second = makeLink('https://example.com/b');
+  fire('focusin', hoverTarget(first));
+  fire('mouseover', hoverTarget(second));
+  assert.strictEqual(first.nextElementSibling, null, 'an earlier button must not be left stranded');
+  assert(second.nextElementSibling);
 });
 
 test('the copy button is out of the text flow, so showing or hiding it moves nothing', () => {

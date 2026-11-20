@@ -8753,10 +8753,17 @@ _initTabSystem();
 let _activeChatLinkCopy = null;
 
 function _placeChatLinkCopy(link, btn) {
+  if (_activeChatLinkCopy && _activeChatLinkCopy !== btn) _activeChatLinkCopy.remove();
+  _activeChatLinkCopy = btn;
+  btn.style.display = '';
   const rects = link.getClientRects();
   const last = rects[rects.length - 1];
   if (!last) return;
   const bounds = messages.getBoundingClientRect();
+  if (last.bottom < bounds.top || last.top > bounds.bottom) {
+    btn.style.display = 'none'; // link scrolled out of view: keep the button off other text
+    return;
+  }
   const overlap = 2; // overlap the link so the pointer never crosses a gap
   const margin = 4;
   let top = last.top - btn.offsetHeight + overlap;
@@ -8765,7 +8772,6 @@ function _placeChatLinkCopy(link, btn) {
   const left = Math.min(Math.max(last.right - btn.offsetWidth, bounds.left + margin), maxLeft);
   btn.style.top = top + 'px';
   btn.style.left = left + 'px';
-  _activeChatLinkCopy = btn;
 }
 
 function _showChatLinkCopy(e) {
@@ -8791,8 +8797,8 @@ messages.addEventListener('focusin', _showChatLinkCopy);
 messages.addEventListener(
   'scroll',
   () => {
-    _activeChatLinkCopy?.remove();
-    _activeChatLinkCopy = null;
+    const link = _activeChatLinkCopy?.previousElementSibling;
+    if (link) _placeChatLinkCopy(link, _activeChatLinkCopy);
   },
   { capture: true, passive: true },
 );
