@@ -121,6 +121,18 @@ def test_invalid_json_response():
         client.close()
 
 
+def test_undecodable_stderr_does_not_stall_server():
+    """A server that logs bytes the console codepage can't decode (e.g. the
+    box-drawing banner FastMCP prints) must keep being drained. If the stderr
+    reader dies, the pipe fills and the server blocks on its next log write."""
+    client = StdioMCPClient(_cfg(), timeout=10)
+    try:
+        assert client.call("noisy", {}) == "done"
+        assert client.call("echo", {"text": "still alive"})
+    finally:
+        client.close()
+
+
 def test_preflight_no_error_when_no_lock(tmp_path, monkeypatch):
     """No SingletonLock → preflight passes silently."""
     import pathlib
