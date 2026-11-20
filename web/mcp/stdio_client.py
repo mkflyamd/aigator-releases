@@ -222,6 +222,11 @@ class StdioMCPClient:
             stderr=subprocess.PIPE,
             env=env,
             text=True,
+            # MCP stdio is UTF-8. The default console codepage (cp1252 on Windows)
+            # raises on bytes like the box-drawing chars in FastMCP's banner, which
+            # silently kills the reader threads and stalls the server on a full pipe.
+            encoding="utf-8",
+            errors="replace",
             bufsize=1,
             **no_window_kwargs(),
         )
