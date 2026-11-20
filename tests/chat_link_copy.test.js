@@ -229,6 +229,22 @@ test('a keyboard-focused link scrolled into view keeps its button', () => {
   assert.strictEqual(btn.style.top, '282px');
 });
 
+test('a link scrolled above the message list hides its button until it scrolls back', () => {
+  const { fire } = setup(() => Promise.resolve());
+  const rects = [{ left: 100, right: 300, top: 200, bottom: 216 }];
+  const link = makeLink('https://example.com/a', rects);
+  fire('mouseover', hoverTarget(link));
+  const btn = link.nextElementSibling;
+  assert.strictEqual(btn.style.display, '');
+  rects[0] = { left: 100, right: 300, top: -80, bottom: -64 };
+  fire('scroll', {});
+  assert.strictEqual(btn.style.display, 'none');
+  rects[0] = { left: 100, right: 300, top: 40, bottom: 56 };
+  fire('scroll', {});
+  assert.strictEqual(btn.style.display, '');
+  assert.strictEqual(btn.style.top, '22px');
+});
+
 test('only the most recently placed button is kept on screen', () => {
   const { fire } = setup(() => Promise.resolve());
   const first = makeLink('https://example.com/a');
