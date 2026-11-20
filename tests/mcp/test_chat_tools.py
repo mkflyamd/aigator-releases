@@ -67,3 +67,47 @@ def test_connect_tool_calls_save_endpoint():
     mock_save.assert_called_once()
     assert "playwright" in result
     assert "3" in result
+
+
+def test_connect_tool_saves_in_process_without_http():
+    import importlib
+
+    tools = importlib.import_module("skills._always_on.tools")
+
+    with patch("urllib.request.urlopen", side_effect=OSError("no HTTP allowed")), patch(
+        "routes.mcp_routes.add_or_update",
+        return_value={"ok": True, "name": "playwright", "tool_count": 3},
+    ) as mock_add:
+        result = tools.TOOL_HANDLERS["connect_mcp_server"](
+            transport="stdio",
+            name="playwright",
+            command="npx",
+            args=["@playwright/mcp@latest"],
+        )
+
+    mock_add.assert_called_once()
+    assert mock_add.call_args.args[0]["command"] == "npx"
+    assert "added successfully" in result
+    assert "3 tools" in result
+
+
+def test_connect_tool_surfaces_validation_errors():
+    import importlib
+
+    tools = importlib.import_module("skills._always_on.tools")
+
+    with patch("routes.mcp_routes.add_or_update") as mock_add:
+        missing_url = tools.TOOL_HANDLERS["connect_mcp_server"](transport="http", name="x")
+        bad_basic = tools.TOOL_HANDLERS["connect_mcp_server"](
+            transport="http",
+            name="x",
+            url="https://mcp.example.com/mcp",
+            auth_type="basic",
+            auth_value="aigator-fake-api-key",
+        )
+        missing_command = tools.TOOL_HANDLERS["connect_mcp_server"](transport="stdio", name="x")
+
+    mock_add.assert_not_called()
+    assert "URL is required" in missing_url
+    assert "identifier:secret" in bad_basic
+    assert "command is required" in missing_command

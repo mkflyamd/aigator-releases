@@ -8,7 +8,6 @@ import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
-import urllib.request as _urllib
 from pathlib import Path
 
 import shared
@@ -28,17 +27,14 @@ def _normalize_mcp(raw_input: str) -> _NR:
 
 
 def _save_mcp_connection(payload: dict) -> dict:
-    """POST to /api/config/mcp and return the JSON response."""
-    import json as _json
-    data = _json.dumps(payload).encode()
-    req = _urllib.Request(
-        "http://localhost:8765/api/config/mcp",
-        data=data,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    with _urllib.urlopen(req, timeout=30) as resp:
-        return _json.loads(resp.read())
+    """Save an MCP connection in-process, with the same validation as POST /api/config/mcp."""
+    from fastapi import HTTPException
+    from routes.mcp_routes import MCPConnectionRequest, save_connection
+
+    try:
+        return save_connection(MCPConnectionRequest(**payload))
+    except HTTPException as e:
+        return {"ok": False, "error": e.detail}
 
 
 TOOL_DEFS = [
