@@ -28,7 +28,7 @@ class ActionRequest(BaseModel):
 
 
 @router.post("/api/actions/jira")
-async def action_jira(req: ActionRequest):
+def action_jira(req: ActionRequest):
     from skills.jira.api import jira_api, jira_browse_url
 
     data = jira_api(
@@ -49,7 +49,7 @@ async def action_jira(req: ActionRequest):
 
 
 @router.post("/api/actions/confluence")
-async def action_confluence(req: ActionRequest):
+def action_confluence(req: ActionRequest):
     import urllib.parse
     from skills.confluence.api import confluence_api
 
@@ -73,7 +73,7 @@ async def action_confluence(req: ActionRequest):
 
 
 @router.post("/api/actions/teams")
-async def action_teams(req: ActionRequest):
+def action_teams(req: ActionRequest):
     try:
         import re
         from skills._m365.helpers import (
@@ -144,7 +144,7 @@ async def action_teams(req: ActionRequest):
 
 
 @router.post("/api/actions/news")
-async def action_news(req: ActionRequest):
+def action_news(req: ActionRequest):
     script = ROOT / "update_news_live.py"
     result = subprocess.run(
         [sys.executable, str(script)],
@@ -161,7 +161,7 @@ async def action_news(req: ActionRequest):
 
 
 @router.post("/api/actions/calendar")
-async def action_calendar(req: ActionRequest):
+def action_calendar(req: ActionRequest):
     try:
         from skills._m365.helpers import get_cal_client
         from skills.calendar.helpers import (
@@ -204,7 +204,7 @@ async def action_calendar(req: ActionRequest):
 
 
 @router.post("/api/actions/jira-urgent")
-async def action_jira_urgent(req: ActionRequest):
+def action_jira_urgent(req: ActionRequest):
     try:
         import urllib.parse
         from skills.jira.api import jira_api, jira_browse_url
@@ -231,7 +231,7 @@ async def action_jira_urgent(req: ActionRequest):
 
 
 @router.post("/api/actions/jira-custom")
-async def action_jira_custom(req: ActionRequest):
+def action_jira_custom(req: ActionRequest):
     """Run an arbitrary JQL query passed via req.query."""
     import urllib.parse
     from skills.jira.api import jira_api, jira_browse_url
@@ -264,7 +264,7 @@ async def action_jira_custom(req: ActionRequest):
 
 
 @router.post("/api/actions/teams-mentions")
-async def action_teams_mentions(req: ActionRequest):
+def action_teams_mentions(req: ActionRequest):
     try:
         import re
         from skills._m365.helpers import (
@@ -324,7 +324,7 @@ async def action_teams_mentions(req: ActionRequest):
 
 
 @router.post("/api/actions/onedrive")
-async def action_onedrive(req: ActionRequest):
+def action_onedrive(req: ActionRequest):
     try:
         from skills._m365.helpers import GraphClient
 

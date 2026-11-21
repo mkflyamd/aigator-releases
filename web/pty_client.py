@@ -40,9 +40,11 @@ class HostError(Exception):
 
 
 def host_enabled() -> bool:
-    """GATOR_PTY_HOST=0/1 forces it off/on. By default it is on, except in frozen
-    builds (a lingering host would hold install-dir files open and block updates)
-    and under pytest (so tests never leave a detached host behind)."""
+    """GATOR_PTY_HOST=0/1 forces it off/on. By default it is on in a source
+    checkout and off in frozen (packaged) builds, which keep their PTYs in the
+    backend as before: the host is launched as `python pty_host.py`, which a
+    packaged exe cannot do, and its install, update and uninstall handling is not
+    set up. Also off under pytest, so tests never leave a detached host behind."""
     forced = os.environ.get("GATOR_PTY_HOST")
     if forced in ("0", "1"):
         return forced == "1"

@@ -136,4 +136,11 @@ assert(r.updates.has('tab-2') && r.toasts.length === 1, 'the user is told in the
 r = run({ question: 'no id', options: [] });
 assert.strictEqual(r.messages.children.length, 0, 'a card without an id is ignored');
 
+// .btn-secondary is nowrap; options carry long slot text, so they must wrap inside the card.
+const css = fs.readFileSync(path.join(__dirname, '..', 'web', 'static', 'style.css'), 'utf8');
+const optionRule = css.match(/\n\.ask-user-option \{([^}]*)\}/);
+assert(optionRule, 'ask-user-option rule present');
+assert(/white-space: normal/.test(optionRule[1]), 'option text wraps instead of overflowing');
+assert(/overflow-wrap: anywhere/.test(optionRule[1]), 'unbreakable text cannot overflow');
+
 console.log('ask_user_card: ok');

@@ -190,7 +190,13 @@ async def _open_terminal(req: GenericAgentTerminalRequest):
     becomes the project's tracked session (what a cold reopen reattaches to).
     """
     import pty_client
-    from routes.terminal import create_pty_session, get_pty_session, close_pty_session, pty_pid_map
+    from routes.terminal import (
+        close_pty_session,
+        create_pty_session,
+        find_host_session,
+        get_pty_session,
+        pty_pid_map,
+    )
 
     if not generic_agent.is_supported(req.agent):
         raise HTTPException(status_code=400, detail=f"Unknown agent: {req.agent!r}")
@@ -246,12 +252,32 @@ async def _open_terminal(req: GenericAgentTerminalRequest):
             raise HTTPException(status_code=404, detail="Handoff expired or not found.")
     force_new = req.force_new or handoff is not None or resume is not None
 
+    owner = {"project_id": req.project_id, "agent": req.agent}
     if not force_new:
         existing = generic_agent.get_active_session(req.project_id, req.agent)
+        from_host = False
+        if not existing:
+            # Nothing in memory: either this project never had a terminal, or the
+            # backend restarted while the agent kept running in the PTY host.
+            # Ask the host, so reopening the project reconnects to that agent
+            # instead of starting a second one next to it.
+            existing = await asyncio.to_thread(find_host_session, owner)
+            from_host = bool(existing)
         if existing:
             entry = await asyncio.to_thread(get_pty_session, existing)
             if entry and not entry.done:
+                generic_agent.set_active_session(req.project_id, req.agent, existing)
                 return {"pty_session_id": existing, "created": False}
+            if from_host and entry is None:
+                # The agent is (or just was) running but we could not attach.
+                # Do not start a duplicate or kill it; the next try can succeed.
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        f"Your {req.agent} session is still running but could not "
+                        "be reconnected. Try again."
+                    ),
+                )
             # Stale record (process exited, or the in-memory session dict was
             # cleared by a restart) - drop it and fall through to a fresh spawn.
             # close_pty_session is idempotent even if the process already
@@ -353,6 +379,7 @@ async def _open_terminal(req: GenericAgentTerminalRequest):
         command=command,
         env=env,
         cwd=spawn_cwd,
+        meta=owner,
         **size,
     )
     generic_agent.set_active_session(req.project_id, req.agent, pty_session_id)

@@ -481,11 +481,10 @@ def build_resume_command(
 
 
 # (project_id, agent) -> pty_session_id of that project+agent's current
-# terminal. In-memory only (unlike OpenCode's disk-backed instance registry) —
-# a server restart just means "no known session to resume", which for a
-# single-foreground-process tool with no server-side state to reconnect to is
-# a reasonable v1 tradeoff, not a regression against anything that exists
-# today.
+# terminal. In-memory only: a backend restart empties it, but the agent keeps
+# running in the PTY host, which holds the same (project, agent) labels, so the
+# terminal route repopulates this from the host (routes.terminal.find_host_session)
+# instead of starting a second agent.
 #
 # Real bug found via user report: this was keyed by project_id ALONE. A
 # project switched from Claude to Terminal (or vice versa) would still find
