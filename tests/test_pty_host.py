@@ -467,6 +467,14 @@ def test_adoption_that_times_out_waiting_for_the_replay_fails(host, monkeypatch)
         return real_read(self, n)
 
     monkeypatch.setattr(pty_client.RemotePty, "read", stalled_read)
+    real_detach = pty_client.RemotePty.detach
+    detached = []
+
+    def spying_detach(self):
+        detached.append(self._id)
+        real_detach(self)
+
+    monkeypatch.setattr(pty_client.RemotePty, "detach", spying_detach)
     monkeypatch.setattr(terminal, "_ADOPT_REPLAY_TIMEOUT", 0.1)
     monkeypatch.setattr(pty_client, "host_enabled", lambda: True)
     monkeypatch.setattr(pty_client, "find_host", lambda key: info)
@@ -474,6 +482,7 @@ def test_adoption_that_times_out_waiting_for_the_replay_fails(host, monkeypatch)
     try:
         assert terminal.get_pty_session("sess-slow") is None
         assert "sess-slow" not in terminal._pty_sessions
+        assert detached == ["sess-slow"]
         # Giving up on the adopt only drops our connection; the agent keeps
         # running in the host, and a later lookup can adopt it.
         assert pty_client.host_request(info, {"op": "status", "id": "sess-slow"})[
