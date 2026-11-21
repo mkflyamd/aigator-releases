@@ -119,6 +119,10 @@ assert(
   showFn && /_pinConfirmCardInView\(card\)/.test(showFn[0]),
   'a new card must be pinned into view like the text stream',
 );
+assert(
+  showFn && /_focusApprovalButton\(allowBtn\)/.test(showFn[0]),
+  'a new card focuses Allow so Enter approves',
+);
 const pinFn = source.match(/function _pinConfirmCardInView\([\s\S]*?\n\}/);
 assert(
   pinFn && /_pinScrollToBottom\(/.test(pinFn[0]),
