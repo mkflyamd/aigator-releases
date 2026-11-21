@@ -706,6 +706,37 @@ def test_reopening_a_project_after_a_restart_reattaches_the_running_agent(
     assert generic_agent.get_active_session("proj-own", "claude") == "newest"
 
 
+def test_a_reattached_claude_terminal_keeps_its_stored_session_link(
+    restarted_backend, monkeypatch
+):
+    info, spawned, open_terminal, generic_agent = restarted_backend
+    monkeypatch.setattr(generic_agent, "_pinned_sessions", {})
+    monkeypatch.setattr(generic_agent, "_linked_sessions", {})
+    monkeypatch.setattr(generic_agent, "is_bare_terminal", lambda agent: False)
+    monkeypatch.setattr(generic_agent, "is_opencode_bare", lambda agent: False)
+    monkeypatch.setattr(generic_agent, "effective_binding", lambda agent: None)
+    monkeypatch.setattr(generic_agent, "build_command", lambda *a: ["claude"])
+
+    created = open_terminal().json()
+    pty_id = created["pty_session_id"]
+    transcript_id = generic_agent.linked_session_id(pty_id)
+    assert transcript_id
+    labels = pty_client.host_request(info, {"op": "list"})["sessions"][0]["meta"]
+    assert labels["session_id"] == transcript_id
+
+    # The backend restarts: its in-memory links are gone, the host still has the agent.
+    monkeypatch.setattr(generic_agent, "_pinned_sessions", {})
+    monkeypatch.setattr(generic_agent, "_linked_sessions", {})
+    monkeypatch.setattr(generic_agent, "_active_sessions", {})
+    monkeypatch.setattr(terminal, "_pty_sessions", {})
+
+    reply = open_terminal()
+
+    assert reply.json() == {"pty_session_id": pty_id, "created": False}
+    assert generic_agent.linked_session_id(pty_id) == transcript_id
+    assert generic_agent.ptys_for_session("claude", transcript_id) == [pty_id]
+
+
 def test_a_plus_tab_still_starts_a_new_agent_next_to_the_running_one(
     restarted_backend, monkeypatch
 ):

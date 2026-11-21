@@ -14,11 +14,15 @@ def test_scripts_load_before_terminal_module():
     assert limit < terminal and handoff < terminal
 
 
-def test_tab_has_continue_button_excluded_from_tab_gestures():
-    assert "gtp-tab-handoff" in TERM
-    assert "agentHandoff.openDialog" in TERM
-    assert "e.target.classList.contains('gtp-tab-handoff')" in TERM
-    assert "e.target === handoff" in TERM
+def test_tab_kebab_menu_lists_hand_off_then_open_then_restart():
+    assert "kebab.className = 'gtp-tab-restart gtp-tab-kebab';" in TERM
+    assert "e.target === x || e.target === kebab" in TERM
+    assert "gtp-tab-handoff" not in TERM and "gtp-tab-popout" not in TERM
+    menu = TERM[TERM.index("function _genAgentOpenTabMenu"):TERM.index("function _genAgentForceRestartTab")]
+    order = [menu.index(label) for label in ("Hand off to another agent", "Open in its own window", "Restart session")]
+    assert order == sorted(order)
+    assert "agentHandoff.openDialog({ tabId, sess })" in menu
+    assert "_genAgentForceRestartTab(tabId, id, null)" in menu
 
 
 def test_start_sends_handoff_id_and_delivers_prompt():
@@ -74,7 +78,7 @@ def test_every_extra_agent_has_a_label_and_an_icon():
     sys.path.insert(0, str(STATIC.parent))
     import generic_agent
 
-    label_map = TERM.split("const _GEN_EXTRA_AGENT_LABELS = {")[1].split(chr(10) + "};")[0]
+    label_map = TERM.split("const _GEN_EXTRA_AGENT_LABELS = {")[1].split("\n};")[0]
     labels = dict(re.findall(r"^  '?([\w-]+)'?: '([^']+)',$", label_map, re.M))
     for agent, (label, _, _) in generic_agent.EXTRA_AGENTS.items():
         assert labels.get(agent) == label, agent
@@ -115,6 +119,12 @@ def test_readiness_requires_bracketed_paste():
     # the probe deliver() uses builds the session-shaped object from the flag
     assert "bracketedPaste: !!sess._bracketedPaste," in HANDOFF
     assert "draftPrompt(sess, prompt, sessionProbe)" in HANDOFF
+
+
+def test_readiness_clock_ignores_the_working_indicator_quiet_window():
+    # output right after a connect or resize must still count, or a fast-painting target never looks ready
+    assert "lastOutputAt: sess._lastRawOutputAt," in HANDOFF
+    assert TERM.index("sess._lastRawOutputAt = Date.now();") < TERM.index("if (Date.now() >= (sess._quietUntil || 0)) {")
 
 
 def test_paste_text_is_stripped_of_terminal_controls():

@@ -531,6 +531,16 @@ def prepare_handoff(agent: str, project_id: str, cwd: str, pty_session_id: str) 
         text, last_user, last_assistant, kind = capture_pane(pty_session_id, red), "", "", "capture"
     if not text.strip():
         raise NothingToHandOff()
+    return _save_prepared(
+        agent=agent, project_id=project_id, cwd=cwd, kind=kind, text=text,
+        last_user=last_user, last_assistant=last_assistant, red=red,
+    )
+
+
+def _save_prepared(
+    *, agent: str, project_id: str, cwd: str, kind: str, text: str,
+    last_user: str, last_assistant: str, red: Redactor,
+) -> dict:
     record = save_handoff(
         source_agent=agent, project_id=project_id, cwd=cwd, source_kind=kind, text=text,
         last_user=last_user, last_assistant=last_assistant, api_key=red.keys,
@@ -541,3 +551,19 @@ def prepare_handoff(agent: str, project_id: str, cwd: str, pty_session_id: str) 
         snapshot_bytes=record["snapshot_bytes"], redactions=record["redactions"],
     )
     return record
+
+
+def prepare_handoff_from_transcript(agent: str, project_id: str, cwd: str, transcript: Path) -> dict:
+    """Hand off a stored session: its transcript is the only source, there is no pane to fall back on."""
+    red = Redactor(_configured_api_keys())
+    try:
+        text, last_user, last_assistant = render_transcript(agent, transcript, red)
+    except Exception as exc:
+        _log.warning("agent_handoff transcript unreadable (%s)", type(exc).__name__)
+        raise NothingToHandOff()
+    if not text.strip():
+        raise NothingToHandOff()
+    return _save_prepared(
+        agent=agent, project_id=project_id, cwd=cwd, kind="transcript", text=text,
+        last_user=last_user, last_assistant=last_assistant, red=red,
+    )

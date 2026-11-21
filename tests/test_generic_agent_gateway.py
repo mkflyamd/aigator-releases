@@ -157,3 +157,20 @@ def test_only_native_claude_launches_are_pinned():
     assert generic_agent.pin_session("claude", ["wsl.exe", "claude"], "pty-3") == ["wsl.exe", "claude"]
     assert generic_agent.pinned_session_id("pty-2") is None
     assert generic_agent.pinned_session_id("pty-3") is None
+
+
+def test_a_wsl_claude_launch_gets_a_session_id_for_the_history_link_but_not_for_handoff():
+    wsl = ["wsl.exe", "-d", "Ubuntu", "--", "bash", "-lc", "exec claude"]
+    cmd = generic_agent.pin_session("claude", wsl, "pty-4")
+    sid = generic_agent.linked_session_id("pty-4")
+    assert cmd == [*wsl[:-1], f"exec claude --session-id {sid}"]
+    assert generic_agent.pinned_session_id("pty-4") is None
+    assert generic_agent.ptys_for_session("claude", sid) == ["pty-4"]
+    generic_agent.unpin_session("pty-4")
+
+
+def test_a_native_claude_launch_is_found_by_its_pinned_session_id():
+    cmd = generic_agent.pin_session("claude", ["claude.exe"], "pty-5")
+    assert generic_agent.ptys_for_session("claude", cmd[2]) == ["pty-5"]
+    assert generic_agent.ptys_for_session("codex", cmd[2]) == []
+    generic_agent.unpin_session("pty-5")

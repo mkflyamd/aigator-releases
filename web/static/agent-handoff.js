@@ -129,6 +129,17 @@
     return 'delivered';
   }
 
+  function prepareBody(opts, project) {
+    const body = {
+      agent: opts.sess.agent,
+      project_id: project.projectId,
+      repo_path: project.repoPath,
+    };
+    if (opts.stored) body.session_id = opts.stored.id;
+    else body.pty_session_id = opts.sess.ptySessionId;
+    return body;
+  }
+
   // ── Browser-only below ──────────────────────────────────────────────────
   function agentLabel(agent) {
     return typeof _genAgentLabel === 'function' ? _genAgentLabel(agent) : agent;
@@ -140,7 +151,7 @@
         agent: sess.agent,
         bracketedPaste: !!sess._bracketedPaste,
         outputChars: sess._outputChars,
-        lastOutputAt: sess._lastOutputAt,
+        lastOutputAt: sess._lastRawOutputAt,
         paintedRows: _genAgentPaintedRowCount(sess),
         frameReady: _genAgentOpenCodeFrameIsReady(sess),
       },
@@ -236,7 +247,7 @@
     return typeof _genAgentStartInFlight === 'function' && !!_genAgentStartInFlight(tabId);
   }
 
-  function renderDialog(prep, sess, state, tabId) {
+  function renderDialog(prep, sess, state, tabId, project) {
     dialogSeq += 1;
     const listId = 'agent-handoff-list-' + dialogSeq;
     const overlay = h('div', 'agent-handoff-overlay');
@@ -322,10 +333,10 @@
         return;
       }
       close();
-      _genAgentStart(tabId, target, state.projectId, state.repoPath, {
+      _genAgentStart(tabId, target, project.projectId, project.repoPath, {
         forceNew: true,
         handoffId: prep.handoff_id,
-        keepStateAgent: true,
+        keepStateAgent: !!state.agent,
       });
     }
 
@@ -420,8 +431,15 @@
 
   async function openDialog(opts) {
     if (dialogBusy || document.querySelector('.agent-handoff-overlay')) return;
-    const state = _genAgentTerminals[_caSessionKey(opts.tabId)];
-    if (!state || !opts.sess || !opts.sess.ptySessionId) return;
+    const stored = opts.stored || null;
+    const state = stored
+      ? _genAgentEnsureTermsContainer(opts.tabId)
+      : _genAgentTerminals[_caSessionKey(opts.tabId)];
+    if (!state || !opts.sess) return;
+    if (stored ? !opts.project : !opts.sess.ptySessionId) return;
+    const project = stored
+      ? { projectId: opts.project.id, repoPath: opts.project.repoPath }
+      : { projectId: state.projectId, repoPath: state.repoPath };
     dialogBusy = true;
     try {
       const doFetch = typeof _ocFetch === 'function' ? _ocFetch : fetch;
@@ -431,12 +449,7 @@
         const resp = await doFetch('/api/generic-agent/handoff/prepare', {
           method: 'POST',
           headers,
-          body: JSON.stringify({
-            agent: opts.sess.agent,
-            project_id: state.projectId,
-            repo_path: state.repoPath,
-            pty_session_id: opts.sess.ptySessionId,
-          }),
+          body: JSON.stringify(prepareBody(opts, project)),
         });
         const body = await resp.json().catch(() => ({}));
         if (!resp.ok) {
@@ -445,7 +458,7 @@
         }
         prep = body;
         // A malformed 200 (missing fields) throws here, so it gets the same toast.
-        renderDialog(prep, opts.sess, state, opts.tabId);
+        renderDialog(prep, opts.sess, state, opts.tabId, project);
       } catch (_) {
         document.querySelectorAll('.agent-handoff-overlay').forEach((el) => el.remove());
         showToast('Could not prepare the handoff.', 'warn');
@@ -484,6 +497,7 @@
     defaultTarget,
     targetWarning,
     errorDetail,
+    prepareBody,
     waitForReady,
     draftPrompt,
     showToast,

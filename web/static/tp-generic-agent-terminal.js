@@ -355,73 +355,42 @@ function _genAgentRenderTabs(tabId) {
     const label = document.createElement('span');
     label.className = 'gtp-tab-label';
     label.textContent = sess.label;
-    // Always-visible escape hatch, agnostic to which agent this tab runs
-    // (Claude Code CLI, Codex, Crush, bare Terminal) — mirrors the same fix
-    // in tp-term-helpers.js. Real gap: the existing recovery affordances
-    // here (the no-output watchdog and the exit-restart overlay) only fire
-    // at cold start or once the process has actually exited — neither helps
-    // a process that's still alive but silently wedged mid-conversation,
-    // and there was no per-tab control at all for that case.
-    const restart = document.createElement('button');
-    restart.type = 'button';
-    restart.className = 'gtp-tab-restart';
-    restart.title =
-      'Force restart this session (use if the terminal is frozen and Esc does nothing)';
-    restart.textContent = '↻';
+    label.title = sess.label;
+    // Per-tab actions (hand off, pop out, restart) live in one kebab menu. Restart
+    // is the escape hatch for a session that is alive but silently wedged, which
+    // the cold-start watchdog and exit-restart overlay never catch.
+    const kebab = document.createElement('button');
+    kebab.type = 'button';
+    kebab.className = 'gtp-tab-restart gtp-tab-kebab';
+    kebab.title = 'Session actions';
+    kebab.setAttribute('aria-label', 'Session actions');
+    kebab.setAttribute('aria-haspopup', 'menu');
+    kebab.textContent = '⋮';
+    kebab.addEventListener('click', (e) => {
+      e.stopPropagation();
+      _genAgentOpenTabMenu(tabId, id, kebab);
+    });
     const x = document.createElement('button');
     x.type = 'button';
     x.className = 'gtp-tab-close';
     x.title = 'Close';
     x.textContent = '✕';
     tab.appendChild(_genAgentTabIcon(sess.agent || state.agent));
+    if (window.agentHistory) window.agentHistory.applyTabState(tab, sess, Date.now());
     tab.appendChild(label);
-    tab.appendChild(restart);
-    const handoff = document.createElement('button');
-    handoff.type = 'button';
-    handoff.className = 'gtp-tab-restart gtp-tab-handoff';
-    handoff.title = 'Continue this session in another agent';
-    handoff.textContent = '↪';
-    handoff.addEventListener('click', (e) => {
-      e.stopPropagation();
-      if (window.agentHandoff) window.agentHandoff.openDialog({ tabId, sess });
-    });
-    tab.appendChild(handoff);
-    if (window.gatorShell && typeof window.gatorShell.popOutTerminal === 'function') {
-      const popOut = document.createElement('button');
-      popOut.type = 'button';
-      popOut.className = 'gtp-tab-restart gtp-tab-popout';
-      popOut.title = 'Open this terminal in its own window';
-      popOut.textContent = '⧉';
-      popOut.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        if (await window.gatorShell.popOutTerminal(sess.ptySessionId, sess.label)) {
-          _genAgentParkForPopout(sess);
-        }
-      });
-      tab.appendChild(popOut);
-    }
+    tab.appendChild(kebab);
     tab.appendChild(x);
     tab.addEventListener('click', (e) => {
-      if (e.target === x || e.target === restart || e.target === handoff) return;
+      if (e.target === x || e.target === kebab) return;
       if (label.isContentEditable) return; // don't activate while renaming
       if (typeof _caCloseFileDiffIfOpen === 'function') _caCloseFileDiffIfOpen();
       _genAgentActivateSession(tabId, id);
     });
     tab.addEventListener('dblclick', (e) => {
-      if (
-        e.target === x ||
-        e.target === restart ||
-        e.target.classList.contains('gtp-tab-popout') ||
-        e.target.classList.contains('gtp-tab-handoff')
-      )
-        return;
+      if (e.target === x || e.target === kebab) return;
       e.preventDefault();
       e.stopPropagation();
       _genAgentBeginRename(sess, label);
-    });
-    restart.addEventListener('click', (e) => {
-      e.stopPropagation();
-      _genAgentForceRestartTab(tabId, id, restart);
     });
     x.addEventListener('click', (e) => {
       e.preventDefault();
@@ -477,8 +446,12 @@ function _genAgentBeginRename(sess, labelEl) {
     labelEl.classList.remove('editing');
     _genAgentEditing = false;
     const next = labelEl.textContent.trim();
-    if (commit && next) sess.label = next;
+    if (commit && next) {
+      sess.label = next;
+      sess.userLabel = next;
+    }
     labelEl.textContent = sess.label;
+    labelEl.title = sess.label;
     window.getSelection().removeAllRanges();
   };
   const onKey = (e) => {
@@ -495,10 +468,93 @@ function _genAgentBeginRename(sess, labelEl) {
   labelEl.addEventListener('blur', onBlur);
 }
 
+// Ordered by how often people reach for them.
+function _genAgentOpenTabMenu(tabId, id, anchor) {
+  const wasOpen = document.querySelector('.gtp-new-menu');
+  _genAgentCloseNewMenu();
+  if (wasOpen && wasOpen.dataset.owner === 'tab:' + id) return;
+  const state = _genAgentTerminals[_caSessionKey(tabId)];
+  const sess = state && state.sessions[id];
+  if (!sess) return;
+  const actions = [
+    {
+      label: 'Hand off to another agent…',
+      run: () => {
+        if (window.agentHandoff) window.agentHandoff.openDialog({ tabId, sess });
+      },
+    },
+  ];
+  if (window.gatorShell && typeof window.gatorShell.popOutTerminal === 'function') {
+    actions.push({
+      label: 'Open in its own window',
+      run: async () => {
+        if (await window.gatorShell.popOutTerminal(sess.ptySessionId, sess.label)) {
+          _genAgentParkForPopout(sess);
+        }
+      },
+    });
+  }
+  actions.push({
+    label: 'Restart session',
+    title: 'Use if the terminal is frozen and Esc does nothing',
+    run: () => _genAgentForceRestartTab(tabId, id, null),
+  });
+  const menu = document.createElement('div');
+  menu.className = 'gtp-new-menu';
+  menu.dataset.owner = 'tab:' + id;
+  menu.setAttribute('role', 'menu');
+  menu.setAttribute('aria-label', 'Session actions');
+  const items = actions.map((action) => {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'gtp-new-menu-item';
+    item.setAttribute('role', 'menuitem');
+    item.textContent = action.label;
+    if (action.title) item.title = action.title;
+    item.addEventListener('click', () => {
+      close();
+      void action.run();
+    });
+    menu.appendChild(item);
+    return item;
+  });
+  const onOutside = (e) => {
+    if (!menu.contains(e.target) && !anchor.contains(e.target)) close();
+  };
+  const onKey = (e) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      close();
+      anchor.focus();
+    } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const at = items.indexOf(document.activeElement);
+      const step = e.key === 'ArrowDown' ? 1 : -1;
+      items[(at + step + items.length) % items.length].focus();
+    }
+  };
+  function close() {
+    menu.remove();
+    document.removeEventListener('mousedown', onOutside, true);
+    document.removeEventListener('keydown', onKey, true);
+    anchor.setAttribute('aria-expanded', 'false');
+  }
+  menu._close = close;
+  document.addEventListener('mousedown', onOutside, true);
+  document.addEventListener('keydown', onKey, true);
+  document.body.appendChild(menu);
+  const rect = anchor.getBoundingClientRect();
+  const left = Math.min(rect.left, window.innerWidth - menu.offsetWidth - 4);
+  menu.style.left = Math.max(4, left) + 'px';
+  menu.style.top = rect.bottom + 2 + 'px';
+  anchor.setAttribute('aria-expanded', 'true');
+  items[0].focus();
+}
+
 // Same kill-and-respawn sequence the exit-restart overlay already uses
 // (drop the dead/stuck session, spawn a fresh one in its place) - but
 // reachable unconditionally from the tab strip, not gated behind the
-// process having actually exited. See the restart-icon comment above.
+// process having actually exited. See the kebab comment above.
 function _genAgentForceRestartTab(tabId, ptySessionId, btn) {
   const state = _genAgentTerminals[_caSessionKey(tabId)];
   if (!state) return;
@@ -529,6 +585,7 @@ function _genAgentActivateSession(tabId, ptyId) {
   });
   _genAgentUpdateActiveTab(tabId);
   const sess = state.sessions[ptyId];
+  if (sess) sess._viewedAt = Date.now();
   if (sess && sess.term)
     setTimeout(() => {
       _ocFit(sess);
@@ -926,6 +983,7 @@ async function _genAgentStart(tabId, agent, projectId, repoPath, opts) {
               cols: dims.cols,
               rows: dims.rows,
               handoff_id: opts.handoffId,
+              resume_id: opts.resumeId,
             }),
           })
         : await fetch('/api/generic-agent/terminal', {
@@ -939,6 +997,7 @@ async function _genAgentStart(tabId, agent, projectId, repoPath, opts) {
               cols: dims.cols,
               rows: dims.rows,
               handoff_id: opts.handoffId,
+              resume_id: opts.resumeId,
             }),
           });
     if (!resp.ok) {
@@ -1353,6 +1412,7 @@ function _genAgentConnect(sess, retryDelay) {
 
   sess.ws = new WebSocket(url);
   sess.ws.onopen = () => {
+    _ocNoteEcho(sess);
     _genAgentClearReconnecting(sess);
     if (wasRetrying && sess._retryAttempt) {
       // Don't write [reconnected] text into the terminal - for TUI apps like
@@ -1389,7 +1449,12 @@ function _genAgentConnect(sess, retryDelay) {
       // this terminal already shows instead of replaying the whole buffer.
       if (typeof msg.seq === 'number') sess._outputSeq = msg.seq;
       sess._outputChars = (sess._outputChars || 0) + String(msg.data || '').length;
-      sess._lastOutputAt = Date.now();
+      sess._lastRawOutputAt = Date.now();
+      if (Date.now() >= (sess._quietUntil || 0)) {
+        sess._lastOutputAt = Date.now();
+        if (window.agentHistory && agentHistory.isViewing(sess))
+          sess._viewedAt = sess._lastOutputAt;
+      }
       if (window.agentHandoff) {
         // Whether the agent has switched bracketed paste on (ESC[?2004h); the
         // handoff prompt is only drafted into a terminal that has.
