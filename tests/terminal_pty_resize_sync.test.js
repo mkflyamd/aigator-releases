@@ -11,6 +11,7 @@ const read = (f) => fs.readFileSync(path.join(__dirname, '..', 'web', 'static', 
 
 function makeContext() {
   const sockets = [];
+  const timers = [];
   class FakeWebSocket {
     constructor(url) {
       this.url = url;
@@ -24,6 +25,10 @@ function makeContext() {
     open() {
       this.readyState = FakeWebSocket.OPEN;
       this.onopen();
+    }
+    drop() {
+      this.readyState = 3;
+      this.onclose();
     }
   }
   FakeWebSocket.OPEN = 1;
@@ -72,7 +77,7 @@ function makeContext() {
     location: { protocol: 'http:', host: 'localhost' },
     document: { createElement: makeEl, getElementById: () => null },
     requestAnimationFrame: (cb) => cb(),
-    setTimeout: () => 0,
+    setTimeout: (cb) => timers.push(cb),
     clearTimeout: () => {},
     console,
   };
@@ -89,7 +94,7 @@ function makeContext() {
     '_genAgentRenderTabs = function () {}; _genAgentArmNoOutputWatchdog = function () {};',
     ctx,
   );
-  return { ctx, sockets, makeEl, laidOut };
+  return { ctx, sockets, timers, makeEl, laidOut };
 }
 
 const resizes = (ws) => ws.sent.filter((m) => m.type === 'resize');
@@ -154,6 +159,28 @@ const resizes = (ws) => ws.sent.filter((m) => m.type === 'resize');
     resizes(sockets[1]),
     [{ type: 'resize', cols: 84, rows: 43 }],
     'reconnect while hidden must send the current size to force a redraw',
+  );
+}
+
+// 3c. Real retry path: the socket drops, the backoff timer fires, and the second socket opens
+// while the pane is hidden. The PTY gets exactly one resize carrying the last fitted size.
+{
+  const { ctx, sockets, timers, makeEl } = makeContext();
+  const container = makeEl();
+  const sess = { tabId: 't', ptySessionId: 'pty-4', agent: 'terminal', container };
+  ctx.sess = sess;
+  vm.runInContext('_ocSpawnTerm(sess); _ocFit(sess); _genAgentConnect(sess);', ctx);
+  sockets[0].open();
+  container.offsetParent = null;
+  sockets[0].drop();
+  assert.strictEqual(timers.length, 1, 'onclose schedules exactly one reconnect');
+  timers[0]();
+  assert.strictEqual(sockets.length, 2);
+  sockets[1].open();
+  assert.deepStrictEqual(
+    resizes(sockets[1]),
+    [{ type: 'resize', cols: 84, rows: 43 }],
+    'scheduled reconnect while hidden sends exactly one resize with the last fitted size',
   );
 }
 
