@@ -465,8 +465,16 @@
         flex: 0 0 auto;
       }
       .tb-pinbar.has-label .tb-pinbar-prompt,
+      .tb-pinbar.has-label .tb-pinbar-prompt-short,
       .tb-pinbar.has-label .tb-pinbar-hint {
         display: none;
+      }
+      .tb-pinbar-prompt-short {
+        display: none;
+        flex: 0 1 auto;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
       .tb-pinbar-prompt,
       .tb-pinbar-hint {
@@ -481,8 +489,15 @@
         }
       }
       @media (max-width: 400px) {
-        .tb-pinbar kbd {
+        .tb-pinbar kbd,
+        .tb-pinbar-prompt {
           display: none;
+        }
+        .tb-pinbar:not(.has-label) .tb-pinbar-prompt-short {
+          display: block;
+        }
+        .tb-pinbar {
+          min-width: 142px;
         }
       }
       .tb-pinbar kbd {
@@ -602,7 +617,7 @@
         <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="12" cy="12" r="8" /><line x1="12" y1="2" x2="12" y2="6" /><line x1="12" y1="18" x2="12" y2="22" /><line x1="2" y1="12" x2="6" y2="12" /><line x1="18" y1="12" x2="22" y2="12" />
         </svg>
-        <span class="tb-pinbar-prompt">Click what you want to pin</span>
+        <span class="tb-pinbar-prompt">Click what you want to pin</span><span class="tb-pinbar-prompt-short">Click to pin</span>
         <span class="tb-pinbar-label" id="tb-pinbar-label"></span>
         <kbd>Esc</kbd><span class="tb-pinbar-hint" style="color: var(--text-dim)">to cancel</span>
         <button class="tb-btn" id="tb-pinbar-cancel" title="Cancel pinning" aria-label="Cancel pinning">

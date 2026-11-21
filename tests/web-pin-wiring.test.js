@@ -56,6 +56,7 @@ test('pin banner keeps its exit visible and gives a live label the room', () => 
   assert.match(toolbar, /\.tb-pinbar \.tb-btn[\s\S]{0,40}flex: 0 0 auto/);
   assert.match(toolbar, /\.tb-pinbar\.has-label \.tb-pinbar-prompt/);
   assert.match(toolbar, /classList\.toggle\('has-label'/);
+  assert.match(toolbar, /@media \(max-width: 400px\)[\s\S]{0,200}\.tb-pinbar:not\(\.has-label\) \.tb-pinbar-prompt-short/);
   assert.match(toolbar, /@media \(max-width: 520px\)[\s\S]{0,60}\.tb-pinbar-hint/);
   assert.match(toolbar, /\[data-theme='light'\] \.tb-pinbar-label[\s\S]{0,40}#15803d/);
 });
