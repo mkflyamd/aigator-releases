@@ -66,3 +66,8 @@ def test_clear_pins_cleans_webpin_dirs():
         state.set_pin("webpin", p, "L", {}, "tab-a")
     state.clear_pins("tab-a")
     assert not store.web_pin_dir(a).exists() and not store.web_pin_dir(b).exists()
+
+
+def test_web_pin_dir_rejects_trailing_newline():
+    with pytest.raises(ValueError):
+        store.web_pin_dir(str(uuid.uuid4()) + "\n")

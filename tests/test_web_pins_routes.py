@@ -183,3 +183,40 @@ def test_pending_resolve_conflicts():
         assert pending.resolve(rid2, "p2", {}) == "conflict"
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("field,value", [
+    ("title", "t" * 501),
+    ("url", "https://x.test/" + "a" * 4096),
+    ("aria_label", "a" * 501),
+    ("locator", {"selector": "#" + "a" * 9000}),
+])
+def test_create_rejects_oversize_metadata_fields(client, field, value):
+    assert client.post("/api/web-pins", json=_body(**{field: value})).status_code == 422
+    assert state.get_pins("tab-a") == []
+
+
+def test_oversize_image_is_refused_before_decoding(client, monkeypatch):
+    import routes.web_pins as wp
+
+    def boom(*a, **k):
+        raise AssertionError("decoded an oversize payload")
+
+    monkeypatch.setattr(wp.base64, "b64decode", boom)
+    r = client.post("/api/web-pins", json=_body(image_b64="A" * (wp._MAX_B64 + 4)))
+    assert r.status_code == 413
+
+
+def test_oversize_snapshot_image_is_413_and_leaves_the_request_claimable(client):
+    pid = client.post("/api/web-pins", json=_body()).json()["id"]
+    big = _b64(PNG + b"0" * (5 * 1024 * 1024))
+
+    async def scenario():
+        rid, fut = pending.create(pid, "tab-a")
+        r1 = await asyncio.to_thread(client.post, f"/api/web-pins/{pid}/snapshot", json={"request_id": rid, "image_b64": big, "text": "x"})
+        r2 = await asyncio.to_thread(client.post, f"/api/web-pins/{pid}/snapshot", json={"request_id": rid, "text": "ok"})
+        return r1, r2, await asyncio.wait_for(fut, 2)
+
+    r1, r2, res = asyncio.run(scenario())
+    assert r1.status_code == 413
+    assert r2.status_code == 200 and res["status"] == "ok"

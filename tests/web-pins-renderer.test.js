@@ -487,6 +487,18 @@ test('SSE recapture request on an owning tab captures and answers with the reque
   assert.equal(posts(f)[0].request_id, 'r1');
 });
 
+test('SSE recapture request is ignored by a client without the desktop shell, so it never wins the claim', async () => {
+  const f = fakeFetch();
+  const { env } = makeEnv({ fetchImpl: f });
+  env.WebPins.onRecaptureRequest({ request_id: 'r1', pin_id: 'p1', context_id: 'tab-a' });
+  await flush();
+  assert.equal(f.calls.length, 0);
+  const { env: env2 } = makeEnv({ fetchImpl: f, gatorShell: {} });
+  env2.WebPins.onRecaptureRequest({ request_id: 'r1', pin_id: 'p1', context_id: 'tab-a' });
+  await flush();
+  assert.equal(f.calls.length, 0);
+});
+
 function fakeCard() {
   const card = new FakeEl('div');
   const kids = {};

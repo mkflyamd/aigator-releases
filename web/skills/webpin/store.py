@@ -18,7 +18,7 @@ def _root() -> Path:
 
 
 def web_pin_dir(pin_id: str) -> Path:
-    if not isinstance(pin_id, str) or not _UUID4.match(pin_id):
+    if not isinstance(pin_id, str) or not _UUID4.fullmatch(pin_id):
         raise ValueError("invalid web pin id")
     return _root() / pin_id
 

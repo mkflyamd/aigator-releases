@@ -163,6 +163,8 @@
   // always posts a result (success or failure) so the waiting agent tool is released.
   function onRecaptureRequest(msg) {
     if (!msg || !msg.request_id || !msg.pin_id || !ownsContext(msg.context_id)) return;
+    // A client without the desktop shell cannot capture: stay silent so a shell client can win the claim.
+    if (!root.gatorShell || !root.gatorShell.webPinRecapture) return;
     recapturer
       .recapture(msg.pin_id, { requestId: msg.request_id, user: false })
       .then((r) => {

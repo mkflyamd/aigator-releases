@@ -9,7 +9,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 from security import verify_csrf
 
@@ -18,6 +18,8 @@ router = APIRouter()
 _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 _MAX_IMAGE = 5 * 1024 * 1024
 _MAX_TEXT = 20_000
+_MAX_B64 = (_MAX_IMAGE + 2) // 3 * 4
+_MAX_LOCATOR = 8_192
 _FAILURE_STATUSES = {"pane_not_visible", "page_mismatch", "pane_unavailable", "timeout", "empty_target"}
 
 
@@ -28,6 +30,8 @@ def _custom_apps() -> list[dict]:
 
 
 def _decode_png(image_b64: str) -> bytes:
+    if len(image_b64) > _MAX_B64:
+        raise HTTPException(413, "image too large")
     try:
         raw = base64.b64decode(image_b64, validate=True)
     except (binascii.Error, ValueError):
@@ -50,9 +54,16 @@ class WebPinCreate(BaseModel):
     image_b64: str
     text: str = ""
     locator: dict | None = None
-    url: str = ""
-    title: str = ""
-    aria_label: str = ""
+    url: str = Field("", max_length=4096)
+    title: str = Field("", max_length=500)
+    aria_label: str = Field("", max_length=500)
+
+    @field_validator("locator")
+    @classmethod
+    def _locator_size(cls, v):
+        if v is not None and len(json.dumps(v)) > _MAX_LOCATOR:
+            raise ValueError("locator too large")
+        return v
 
 
 class WebPinSnapshot(BaseModel):
