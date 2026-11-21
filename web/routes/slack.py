@@ -910,7 +910,7 @@ async def slack_token_status():
 
 
 @router.get("/api/auth/slack/start")
-async def slack_oauth_start():
+def slack_oauth_start():
     """Start Slack OAuth flow — spins up temp callback server on port 3118."""
     from skills.slack.mcp_client import start_oauth
 
@@ -1349,7 +1349,7 @@ async def slack_dms():
 
     # Resolve your own name so it shows correctly in group DM lists
     if authed_user_id and authed_user_id not in _USER_CACHE:
-        _resolve_uid_sync(authed_user_id, team_id)
+        await loop.run_in_executor(None, _resolve_uid_sync, authed_user_id, team_id)
     if authed_user_id and not authed_user_name:
         authed_user_name = _USER_CACHE.get(authed_user_id, "")
 
@@ -1508,7 +1508,7 @@ async def slack_search(
 
 
 @router.post("/api/slack/react", dependencies=[Depends(verify_csrf)])
-async def slack_add_reaction(req: SlackReactionRequest):
+def slack_add_reaction(req: SlackReactionRequest):
     """Add a reaction to a Slack message using the Slack Web API directly."""
     import urllib.parse, urllib.request, urllib.error
     from skills.slack.mcp_client import get_oauth_token
@@ -1543,7 +1543,7 @@ async def slack_add_reaction(req: SlackReactionRequest):
 
 
 @router.post("/api/slack/unreact", dependencies=[Depends(verify_csrf)])
-async def slack_remove_reaction(req: SlackReactionRequest):
+def slack_remove_reaction(req: SlackReactionRequest):
     """Remove a reaction from a Slack message using the Slack Web API directly."""
     import urllib.parse, urllib.request, urllib.error
     from skills.slack.mcp_client import get_oauth_token
@@ -1692,7 +1692,7 @@ async def slack_post_message(channel_id: str, req: SlackPostRequest):
 
 
 @router.post("/api/slack/channels/{channel_id}/send", dependencies=[Depends(verify_csrf)])
-async def slack_send_message_confirmed(channel_id: str, req: SlackPostRequest):
+def slack_send_message_confirmed(channel_id: str, req: SlackPostRequest):
     """Confirmed send — validates the single-use confirm_token before dispatching."""
     token = req.confirm_token or ""
     draft = _peek_draft_token(token)
@@ -1973,7 +1973,9 @@ async def slack_send_dm_confirmed(req: Request):
     draft = _consume_draft_token(token)
     if not draft:
         raise HTTPException(status_code=403, detail="Draft already sent or expired.")
-    opened = _slack_web_api("conversations.open", {"users": draft["user_id"]}, method="POST")
+    opened = await asyncio.to_thread(
+        _slack_web_api, "conversations.open", {"users": draft["user_id"]}, method="POST"
+    )
     if not opened.get("ok") or not (opened.get("channel") or {}).get("id"):
         _restore_draft_token(token, draft)
         raise HTTPException(
@@ -1981,7 +1983,8 @@ async def slack_send_dm_confirmed(req: Request):
             detail=f"Slack could not open the DM: {opened.get('error', 'unknown')}",
         )
     dm_channel_id = opened["channel"]["id"]
-    data = _slack_web_api(
+    data = await asyncio.to_thread(
+        _slack_web_api,
         "chat.postMessage",
         {"channel": dm_channel_id, "text": draft["message"]},
         method="POST",
