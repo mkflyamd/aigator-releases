@@ -77,14 +77,25 @@ def set_pin(
     }
 
 
+def _cleanup_web_pin(source: str, item_id: str) -> None:
+    if source != "webpin":
+        return
+    from skills.webpin.store import delete_if_unreferenced
+
+    delete_if_unreferenced(item_id)
+
+
 def remove_pin(source: str, item_id: str, context_id: str = "default") -> dict:
     key = f"{source}::{item_id}"
     removed = pinned_contexts.get(context_id, {}).pop(key, None)
     _save()
+    _cleanup_web_pin(source, item_id)
     return {"unpinned": bool(removed), "source": source, "id": item_id}
 
 
 def clear_pins(context_id: str = "default") -> dict:
-    count = len(pinned_contexts.pop(context_id, {}))
+    dropped = pinned_contexts.pop(context_id, {})
     _save()
-    return {"cleared": count, "context_id": context_id}
+    for entry in dropped.values():
+        _cleanup_web_pin(entry.get("source", ""), entry.get("id", ""))
+    return {"cleared": len(dropped), "context_id": context_id}
