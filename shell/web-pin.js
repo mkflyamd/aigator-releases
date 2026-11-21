@@ -61,14 +61,23 @@ async function readPage(cdp) {
   return JSON.parse(r.result.value);
 }
 
-async function shoot(cdp, clip) {
+function insideViewport(clip, v) {
+  const slack = 1;
+  return clip.x >= v.pageX - slack && clip.y >= v.pageY - slack
+    && clip.x + clip.width <= v.pageX + v.clientWidth + slack
+    && clip.y + clip.height <= v.pageY + v.clientHeight + slack;
+}
+
+async function shoot(cdp, clip, v) {
   // Page.captureScreenshot rejects a zero-size clip; fail clearly instead.
   if (!(clip.width >= 1 && clip.height >= 1)) throw coded('empty_target');
   const scale = core.captureScale(clip.width, clip.height);
   const r = await cdp.send('Page.captureScreenshot', {
     format: 'png',
     clip: { ...clip, scale },
-    captureBeyondViewport: true,
+    // Chrome implements captureBeyondViewport by resizing the page to the full document,
+    // which can reflow responsive dashboards; only ask for it when the clip needs it.
+    captureBeyondViewport: !insideViewport(clip, v),
   });
   return r.data;
 }
@@ -76,7 +85,7 @@ async function shoot(cdp, clip) {
 async function captureView(cdp, wc) {
   const { cssVisualViewport: v } = await cdp.send('Page.getLayoutMetrics');
   const page = await readPage(cdp);
-  const image_b64 = await shoot(cdp, { x: v.pageX, y: v.pageY, width: v.clientWidth, height: v.clientHeight });
+  const image_b64 = await shoot(cdp, { x: v.pageX, y: v.pageY, width: v.clientWidth, height: v.clientHeight }, v);
   // The url comes from the main process, never from the page: go-to and the
   // recapture page check trust it, and in-page JS could report anything.
   return { image_b64, text: core.capText(page.text), locator: null, url: wc.getURL(), title: page.title, aria_label: '' };
@@ -97,7 +106,7 @@ async function captureElement(cdp, wc, backendNodeId) {
   const clip = core.clipFromQuad(model.border, { x: v.pageX, y: v.pageY });
   if (!(clip.width >= 1 && clip.height >= 1)) throw coded('empty_target');
   const page = await readPage(cdp);
-  const image_b64 = await shoot(cdp, clip);
+  const image_b64 = await shoot(cdp, clip, v);
   return {
     image_b64,
     text: core.capText(info.text),

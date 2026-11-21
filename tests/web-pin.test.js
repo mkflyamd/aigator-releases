@@ -346,3 +346,25 @@ test('pinned url comes from the main process, not from page-reported text', asyn
   const r = await harness(re).wp.recapture('custom-x', null, 'https://a.com/r/1');
   assert.strictEqual(r.url, 'https://a.com/r/1');
 });
+
+test('captureBeyondViewport is only requested when the clip leaves the viewport', async () => {
+  // whole-view capture and an element fully inside the viewport (0,100 800x600)
+  const view = fakeWc();
+  await harness(view).wp.pinView('custom-x');
+  assert.strictEqual(view.params['Page.captureScreenshot'].captureBeyondViewport, false);
+
+  const inside = fakeWc();
+  const i = harness(inside);
+  await i.wp.start('custom-x');
+  inside.debugger.emit('message', {}, 'Overlay.inspectNodeRequested', { backendNodeId: 5 });
+  await waitFor(() => i.events.captured.length === 1);
+  assert.strictEqual(inside.params['Page.captureScreenshot'].captureBeyondViewport, false);
+
+  // an element taller than the viewport needs the page to be captured beyond it
+  const tall = fakeWc({ overrides: { 'DOM.getBoxModel': { model: { border: [10, 20, 110, 20, 110, 900, 10, 900] } } } });
+  const t = harness(tall);
+  await t.wp.start('custom-x');
+  tall.debugger.emit('message', {}, 'Overlay.inspectNodeRequested', { backendNodeId: 5 });
+  await waitFor(() => t.events.captured.length === 1);
+  assert.strictEqual(tall.params['Page.captureScreenshot'].captureBeyondViewport, true);
+});
