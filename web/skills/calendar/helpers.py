@@ -13,10 +13,13 @@ def get_user_win_tz() -> str:
     try:
         gc = get_cal_client()
         settings = gc.get("/me/mailboxSettings")
-        _user_win_tz_cache = settings.get("timeZone", "UTC")
     except Exception:
-        _user_win_tz_cache = "UTC"
-    return _user_win_tz_cache
+        return "UTC"
+    tz = (settings or {}).get("timeZone")
+    if not tz:
+        return "UTC"
+    _user_win_tz_cache = tz
+    return tz
 
 
 def fmt_cal_time(dt_str: str) -> str:
