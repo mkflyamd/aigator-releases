@@ -15,7 +15,8 @@
     activeId: null,
     nextId: 1,
     opened: false,
-    layout: null,
+    layout: null, // layout currently displayed
+    preferred: null, // user's chosen layout (mirrors localStorage)
     fullscreen: false,
     layoutBtn: null,
     fullscreenBtn: null,
@@ -187,7 +188,6 @@
       if (iconEl)
         iconEl.textContent = layout === 'horizontal' ? 'side_navigation' : 'bottom_navigation';
     }
-    localStorage.setItem(LS_LAYOUT_KEY, layout);
     _updatePush();
     _updateVerticalFlag();
     setTimeout(_fitActive, 30);
@@ -593,20 +593,35 @@
     );
   }
 
+  // A tiled native app (gator-split) or a squeezed Gator (gator-squeezed) leaves
+  // the Gator viewport as narrow as 400px, which cannot fit chat + dock + the
+  // 420px vertical terminal.
+  function _verticalBlocked() {
+    const cl = document.body.classList;
+    return cl.contains('gator-split') || cl.contains('gator-squeezed');
+  }
+
   function _closeConflictingPanes() {
-    // Explicit user request for vertical — close any pane occupying the .layout row.
-    // Reuse the panes' own close buttons so their internal state stays consistent.
-    const tpClose = document.getElementById('tp-detail-close');
-    if (tpClose) tpClose.click();
+    // Explicit user request for vertical — close any pane occupying the .layout row
+    // through the panes' own close paths so their internal state stays consistent.
+    if (typeof closeThirdPane === 'function') closeThirdPane();
     const bpClose = document.getElementById('bp-close-btn');
     if (bpClose) bpClose.click();
   }
 
-  function setLayout(layout) {
+  // `auto` marks a display-only change made by the conflict watcher: the user's
+  // stored preference (STATE.preferred / localStorage) is left untouched so the
+  // terminal can return to it when the conflict goes away.
+  function setLayout(layout, { auto = false } = {}) {
     if (layout !== 'horizontal' && layout !== 'vertical') return;
     _ensurePanel();
+    if (!auto) {
+      STATE.preferred = layout;
+      localStorage.setItem(LS_LAYOUT_KEY, layout);
+    }
+    if (layout === 'vertical' && _verticalBlocked()) layout = 'horizontal';
     // User explicitly chose vertical — make room by closing any conflicting pane.
-    if (layout === 'vertical' && !STATE.fullscreen && _conflictingPaneOpen()) {
+    if (layout === 'vertical' && !auto && !STATE.fullscreen && _conflictingPaneOpen()) {
       _closeConflictingPanes();
     }
     _applyLayout(layout);
@@ -620,14 +635,7 @@
     // horizontal - a full auto-reparent every time the terminal is toggled
     // on felt like the whole page shifting, when the user just wants their
     // vertical terminal back.
-    if (
-      (STATE.layout || _loadLayout()) === 'vertical' &&
-      !STATE.fullscreen &&
-      _conflictingPaneOpen()
-    ) {
-      _closeConflictingPanes();
-    }
-    _applyLayout(STATE.layout || _loadLayout());
+    setLayout(STATE.preferred || _loadLayout());
     if (STATE.fullscreenBtn) {
       const iconEl = STATE.fullscreenBtn.querySelector('.material-symbols-outlined');
       if (iconEl && !iconEl.textContent)
@@ -658,14 +666,22 @@
     else open();
   }
 
-  // Auto-flip vertical → horizontal when another left-rail pane opens, so they don't fight for width.
-  // Non-destructive: shell sessions are preserved; user can flip back to vertical when the other pane closes.
+  // Auto-flip vertical → horizontal when another left-rail pane or a native app
+  // tile appears, so they don't fight for width. Display-only: the stored
+  // preference is kept, and the terminal returns to vertical once nothing
+  // conflicts any more. Shell sessions are preserved throughout.
   function _watchPanesForConflicts() {
     const check = () => {
-      if (!STATE.opened || STATE.layout !== 'vertical' || STATE.fullscreen) return;
-      if (_conflictingPaneOpen()) setLayout('horizontal');
+      if (!STATE.opened || STATE.fullscreen) return;
+      const conflict = _verticalBlocked() || _conflictingPaneOpen();
+      if (STATE.layout === 'vertical' && conflict) {
+        setLayout('horizontal', { auto: true });
+      } else if (STATE.layout === 'horizontal' && STATE.preferred === 'vertical' && !conflict) {
+        setLayout('vertical', { auto: true });
+      }
     };
     const obs = new MutationObserver(check);
+    obs.observe(document.body, { attributes: true, attributeFilter: ['class'] });
     ['third-pane', 'browser-pane'].forEach((id) => {
       const el = document.getElementById(id);
       if (el) obs.observe(el, { attributes: true, attributeFilter: ['class', 'style'] });

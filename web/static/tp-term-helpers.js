@@ -101,28 +101,43 @@ function _ocSpawnTerm(sess) {
   });
 }
 
-function _ocFit(sess) {
+// force: also tell the PTY when xterm's own size is unchanged. Needed when the
+// websocket (re)opens, because the PTY's size is independent of xterm's and may
+// be stale (e.g. a reattached shell keeps the size of its previous viewer).
+function _ocFit(sess, force) {
   if (!sess || !sess.fitAddon || !sess.term) return;
   const el = sess.container;
-  if (!el || !el.offsetParent || el.clientWidth < 40) return;
+  if (!el || !el.offsetParent || el.clientWidth < 40) {
+    // A hidden panel cannot be measured, but a (re)connect still has to tell the
+    // PTY the last fitted size so a TUI redraws. A never-fitted xterm still holds
+    // its 80x24 default, which would be a bogus size for the PTY.
+    if (force && sess._ocFitted) _ocSendSize(sess);
+    return;
+  }
   const prevCols = sess.term.cols;
   const prevRows = sess.term.rows;
   try {
     sess.fitAddon.fit();
+    sess._ocFitted = true;
   } catch (_) {
     /* not visible yet */
   }
   // Only send resize + clear if dimensions actually changed. Sending a
   // resize when nothing changed makes TUI apps redraw needlessly; clearing
   // the buffer on a no-op resize would wipe the screen for nothing.
-  if (sess.term.cols === prevCols && sess.term.rows === prevRows) return;
+  const changed = sess.term.cols !== prevCols || sess.term.rows !== prevRows;
+  if (!changed && !force) return;
   // A post-start reset clears the TUI frame xterm has already painted. That
   // is especially visible for a newly opened second session: it receives and
   // renders OpenCode's first frame, then this late fit wipes it and leaves a
   // blank canvas until OpenCode eventually redraws. A reset is safe only
   // before the session has produced visible output; after that, let the PTY's
   // resize notification drive the application's normal redraw.
-  if (!sess._hasOutput) sess.term.reset();
+  if (changed && !sess._hasOutput) sess.term.reset();
+  _ocSendSize(sess);
+}
+
+function _ocSendSize(sess) {
   if (sess.ws && sess.ws.readyState === WebSocket.OPEN) {
     sess.ws.send(
       JSON.stringify({
