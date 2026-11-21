@@ -14,6 +14,25 @@ from .base import LLMProvider, StreamEvent, ToolCall, TurnResult
 from .gateway import LLM_GATEWAY_URL, gateway_headers, profile_headers
 from tool_pipeline import parse_tool_definition_error, project_json_schema
 
+# The API only accepts these image types and rejects images over ~5 MB; one bad
+# image in a stored tool result would otherwise 400 every later turn.
+_IMAGE_MEDIA_TYPES = frozenset({"image/jpeg", "image/png", "image/gif", "image/webp"})
+_MAX_IMAGE_B64_CHARS = 5 * 1024 * 1024
+
+
+def _usable_images(images: Any) -> tuple[list[dict], int]:
+    """Split tool images into (acceptable to the API, number dropped)."""
+    if not isinstance(images, list):
+        return [], 0
+    ok = [
+        img for img in images
+        if isinstance(img, dict)
+        and isinstance(img.get("base64"), str)
+        and img.get("media_type", "image/png") in _IMAGE_MEDIA_TYPES
+        and len(img["base64"]) <= _MAX_IMAGE_B64_CHARS
+    ]
+    return ok, len(images) - len(ok)
+
 logger = logging.getLogger(__name__)
 
 LLM_GATEWAY = LLM_GATEWAY_URL  # re-export for config_routes compatibility
@@ -657,7 +676,8 @@ class AnthropicProvider(LLMProvider):
                 counted if isinstance(counted, str) else json.dumps(counted, default=str)
             )
             if isinstance(result, dict) and "_images" in result:
-                images = result["_images"]
+                # A non-list _images (e.g. None) means no images.
+                images, omitted = _usable_images(result["_images"])
                 result_without_images = {
                     k: v for k, v in result.items() if k != "_images"
                 }
@@ -681,11 +701,18 @@ class AnthropicProvider(LLMProvider):
                             "text": f"[Embedded image: {img.get('name', 'image')}]",
                         }
                     )
+                if omitted:
+                    blocks.append(
+                        {
+                            "type": "text",
+                            "text": f"[{omitted} image(s) omitted: unsupported type or too large]",
+                        }
+                    )
                 content.append(
                     {
                         "type": "tool_result",
                         "tool_use_id": tc.id,
-                        "content": blocks,
+                        "content": blocks if images or omitted else blocks[0]["text"],
                     }
                 )
             else:

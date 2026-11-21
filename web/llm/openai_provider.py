@@ -465,7 +465,8 @@ class OpenAIProvider(LLMProvider):
             omitted = 0
             if isinstance(result, dict) and "_images" in result:
                 # This provider's history is text-only; base64 would be megabytes of noise.
-                omitted = len(result["_images"] or [])
+                imgs = result["_images"]
+                omitted = len(imgs) if isinstance(imgs, list) else 0
                 result = {k: v for k, v in result.items() if k != "_images"}
             result_str = result if isinstance(result, str) else json.dumps(result, default=str)
             if omitted:

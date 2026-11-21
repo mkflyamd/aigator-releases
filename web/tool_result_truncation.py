@@ -90,7 +90,7 @@ def truncate_tool_result(result: object, *, tool_name: str = "") -> object:
 
     # Image blocks travel to the provider as multimodal content, not as text, so
     # they are set aside before measuring and put back on whatever is returned.
-    if "_images" in result:
+    if isinstance(result.get("_images"), list):
         images = result["_images"]
         text_only = truncate_tool_result(
             {k: v for k, v in result.items() if k != "_images"}, tool_name=tool_name
