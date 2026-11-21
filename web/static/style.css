@@ -24647,3 +24647,144 @@ body.tab-fullscreen {
   font-size: 0.65rem;
   opacity: 0.7;
 }
+
+/* ── Branch and worktree menu (Changes header) ───────────────────────────── */
+.ca-sc-branch-btn {
+  background: transparent;
+  color: inherit;
+  border: 0;
+  border-radius: 4px;
+  padding: 1px 4px;
+  margin: 0 -4px;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+}
+.ca-sc-branch-btn:hover,
+.ca-sc-branch-btn:focus-visible {
+  background: rgba(127, 127, 127, 0.2);
+  outline: none;
+}
+.ca-branch-menu {
+  width: min(340px, calc(100vw - 16px));
+  padding: 0.35rem;
+}
+.ca-branch-search {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin-bottom: 2px;
+  padding: 0.35rem 0.5rem;
+  font: inherit;
+  font-size: 0.85rem;
+  color: var(--text);
+  background: var(--surface2, var(--surface));
+  border: 1px solid var(--border2, rgba(127, 127, 127, 0.35));
+  border-radius: 5px;
+}
+.ca-branch-search:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.ca-branch-section {
+  padding: 0.55rem 0.6rem 0.2rem;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.6;
+}
+.ca-branch-empty {
+  padding: 0.6rem;
+  font-size: 0.82rem;
+  opacity: 0.7;
+}
+.ca-branch-row {
+  gap: 0.4rem;
+}
+.ca-branch-mark {
+  flex: none;
+  width: 1em;
+  color: var(--accent);
+}
+.ca-branch-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ca-branch-tag {
+  flex: none;
+  font-size: 0.7rem;
+  opacity: 0.6;
+}
+.ca-branch-act {
+  flex: none;
+  padding: 0 0.35rem;
+  font: inherit;
+  font-size: 0.72rem;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  opacity: 0;
+  cursor: pointer;
+}
+.ca-branch-row:hover .ca-branch-act,
+.ca-branch-row:focus-within .ca-branch-act {
+  opacity: 0.8;
+}
+.ca-branch-act:hover,
+.ca-branch-act:focus-visible {
+  opacity: 1;
+  background: rgba(127, 127, 127, 0.25);
+  outline: none;
+}
+.ca-branch-note {
+  margin: 4px 2px 2px;
+  padding: 0.45rem 0.55rem;
+  font-size: 0.8rem;
+  border-radius: 5px;
+  background: rgba(127, 127, 127, 0.15);
+}
+.ca-branch-note:empty {
+  display: none;
+}
+.ca-branch-note-actions {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 0.4rem;
+}
+.ca-branch-note-yes,
+.ca-branch-note-no {
+  padding: 0.2rem 0.6rem;
+  font: inherit;
+  font-size: 0.78rem;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--border2, rgba(127, 127, 127, 0.35));
+  border-radius: 5px;
+  cursor: pointer;
+}
+.ca-branch-note-yes {
+  border-color: var(--accent);
+}
+.ca-branch-note-yes:hover,
+.ca-branch-note-no:hover {
+  background: rgba(127, 127, 127, 0.2);
+}
+.gtp-tab-wt {
+  flex: none;
+  margin-left: 4px;
+  padding: 0 4px;
+  font-size: 0.62rem;
+  line-height: 1.4;
+  border: 1px solid rgba(127, 127, 127, 0.5);
+  border-radius: 8px;
+  opacity: 0.75;
+}

@@ -48,7 +48,7 @@ def test_restart_and_close_use_the_session_agent():
 def test_plus_opens_the_agent_menu_and_keeps_the_project_agent():
     assert "newBtn.onclick = () => _genAgentOpenNewMenu(tabId, newBtn);" in TERM
     assert "gtp-tab-new-menu" not in TERM
-    assert "_genAgentStart(tabId, agent, state.projectId, state.repoPath, {" in TERM
+    assert "_genAgentStart(tabId, agent, state.projectId, _genAgentFolder(state), {" in TERM
     assert "keepStateAgent: true," in TERM
     assert "_genAgentNewSession(tabId, agent)" in TERM
 
@@ -182,3 +182,7 @@ def test_menu_badges_installed_agents_that_run_outside_the_gateway():
     assert "routed[item.dataset.agent] !== false" in TERM
     assert "badge.textContent = 'Unmanaged';" in TERM
     assert ".gtp-new-menu-badge" in (STATIC / "style.css").read_text(encoding="utf-8")
+
+
+def test_handoff_starts_the_new_agent_in_the_selected_worktree():
+    assert "_genAgentStart(tabId, target, project.projectId, _genAgentFolder(state), {" in HANDOFF
