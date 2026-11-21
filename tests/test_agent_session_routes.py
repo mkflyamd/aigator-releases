@@ -98,6 +98,35 @@ def test_list_joins_codex_by_start_time(scanned, monkeypatch):
     assert {s["id"]: s.get("pty_session_id") for s in r.json()["sessions"]}["x1"] == "p9"
 
 
+def live_claude(monkeypatch, name):
+    import agent_liveness
+
+    proc = {"pid": 7, "session_id": "c1", "name": name, "started_at": 5.0, "source": "claude-registry"}
+    monkeypatch.setattr(agent_liveness, "live_processes", lambda agent, sid=None: [proc] if agent == "claude" else [])
+
+
+def test_list_marks_sessions_open_elsewhere_and_prefers_the_live_name(scanned, monkeypatch):
+    live_claude(monkeypatch, f"Live {FAKE}")
+    data = client().get("/api/agent-sessions", params={"project_name": "demo"}).json()
+    sessions = {s["id"]: s for s in data["sessions"]}
+    assert sessions["c1"]["live_elsewhere"] is True
+    assert sessions["c1"]["title"].startswith("Live ") and FAKE not in sessions["c1"]["title"]
+    assert "live_elsewhere" not in sessions["x1"] and sessions["x1"]["title"].startswith("Use key")
+
+
+def test_list_does_not_flag_a_session_gator_owns_but_shows_its_live_name(scanned, monkeypatch):
+    live_claude(monkeypatch, "Live name")
+    data = client().get("/api/agent-sessions", params={"project_name": "demo", "pty": ["claude:p1"]}).json()
+    c1 = next(s for s in data["sessions"] if s["id"] == "c1")
+    assert c1["pty_session_id"] == "p1" and "live_elsewhere" not in c1 and c1["title"] == "Live name"
+
+
+def test_list_keeps_the_stored_title_when_nothing_is_live(scanned):
+    data = client().get("/api/agent-sessions", params={"project_name": "demo"}).json()
+    c1 = next(s for s in data["sessions"] if s["id"] == "c1")
+    assert c1["title"] == "Older claude" and "live_elsewhere" not in c1
+
+
 def write_transcript(path: Path):
     lines = [
         {"type": "user", "cwd": "C:\\work\\app", "message": {"role": "user", "content": "hello"}},

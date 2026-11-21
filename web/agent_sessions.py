@@ -521,7 +521,10 @@ def join_live(records: list[dict], live: list[dict]) -> list[dict]:
     return out
 
 
-_PUBLIC_KEYS = ("id", "agent", "title", "branch", "started_at", "last_active_at", "state", "source", "pty_session_id")
+_PUBLIC_KEYS = (
+    "id", "agent", "title", "branch", "started_at", "last_active_at", "state", "source",
+    "pty_session_id", "live_elsewhere",
+)
 
 
 def public(rec: dict) -> dict:

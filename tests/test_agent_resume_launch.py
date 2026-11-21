@@ -158,3 +158,26 @@ def test_a_resumed_codex_terminal_is_linked_to_its_session(env, monkeypatch):
     pty = r.json()["pty_session_id"]
     assert generic_agent.linked_session_id(pty) == "x1"
     assert generic_agent.pinned_session_id(pty) is None
+
+
+LIVE_PROC = {"pid": 4242, "session_id": "abc-1", "name": "work", "started_at": 1.0, "source": "claude-registry"}
+
+
+def test_resume_of_a_session_open_in_another_window_is_a_409_with_the_process(env, monkeypatch):
+    import agent_liveness
+
+    monkeypatch.setattr(agent_liveness, "live_processes", lambda agent, sid=None: [LIVE_PROC])
+    r = client().post("/api/generic-agent/terminal", json=BODY)
+    assert r.status_code == 409
+    detail = r.json()["detail"]
+    assert detail["code"] == "session_live" and detail["processes"] == [LIVE_PROC]
+    assert env["spawn"] == []
+
+
+def test_allow_duplicate_resumes_despite_a_live_process(env, monkeypatch):
+    import agent_liveness
+
+    monkeypatch.setattr(agent_liveness, "live_processes", lambda agent, sid=None: [LIVE_PROC])
+    r = client().post("/api/generic-agent/terminal", json={**BODY, "allow_duplicate": True})
+    assert r.status_code == 200 and r.json()["created"] is True
+    assert len(env["spawn"]) == 1

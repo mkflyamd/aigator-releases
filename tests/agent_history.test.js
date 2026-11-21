@@ -329,4 +329,19 @@ const term = (pty, agent, out, viewed) => ({
   delete global.document;
 }
 
+// a session open in another window is flagged, unless Gator already owns a terminal for it
+{
+  const sessions = [
+    rec('s1', 'claude', 'Elsewhere', at(10, 15, 9, 0), { live_elsewhere: true }),
+    rec('s2', 'claude', 'Owned', at(10, 15, 9, 0), { live_elsewhere: true, pty_session_id: 'p2' }),
+    rec('s3', 'claude', 'Closed', at(10, 15, 9, 0)),
+  ];
+  const rows = h.buildRows(sessions, [term('p2', 'claude', NOW - 1000, 0)], NOW);
+  const by = Object.fromEntries(rows.map((r) => [r.id, r]));
+  assert.strictEqual(by.s1.liveElsewhere, true);
+  assert.strictEqual(by.s2.liveElsewhere, false);
+  assert.strictEqual(by.s3.liveElsewhere, false);
+  assert.deepStrictEqual(h.rowActions(by.s1), ['resume', 'handoff']);
+}
+
 console.log('agent_history: ok');
