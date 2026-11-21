@@ -52,6 +52,14 @@ test('toolbar pin controls are no-drag and wired to the three channels', () => {
   }
 });
 
+test('pin banner keeps its exit visible and gives a live label the room', () => {
+  assert.match(toolbar, /\.tb-pinbar \.tb-btn[\s\S]{0,40}flex: 0 0 auto/);
+  assert.match(toolbar, /\.tb-pinbar\.has-label \.tb-pinbar-prompt/);
+  assert.match(toolbar, /classList\.toggle\('has-label'/);
+  assert.match(toolbar, /@media \(max-width: 520px\)[\s\S]{0,60}\.tb-pinbar-hint/);
+  assert.match(toolbar, /\[data-theme='light'\] \.tb-pinbar-label[\s\S]{0,40}#15803d/);
+});
+
 test('web-pin:go-to is gatorView-only, custom-app-only, http(s)-only and limited to the pane home hosts', () => {
   const body = after(main, "ipcMain.handle('web-pin:go-to'", 1500);
   assert.match(body, /gatorView\.webContents\.id/);

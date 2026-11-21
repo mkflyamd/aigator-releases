@@ -456,6 +456,35 @@
         text-overflow: ellipsis;
         color: var(--accent);
       }
+      [data-theme='light'] .tb-pinbar-label {
+        color: #15803d;
+      }
+      .tb-pinbar > svg,
+      .tb-pinbar kbd,
+      .tb-pinbar .tb-btn {
+        flex: 0 0 auto;
+      }
+      .tb-pinbar.has-label .tb-pinbar-prompt,
+      .tb-pinbar.has-label .tb-pinbar-hint {
+        display: none;
+      }
+      .tb-pinbar-prompt,
+      .tb-pinbar-hint {
+        flex: 0 1 auto;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      @media (max-width: 520px) {
+        .tb-pinbar-hint {
+          display: none;
+        }
+      }
+      @media (max-width: 400px) {
+        .tb-pinbar kbd {
+          display: none;
+        }
+      }
       .tb-pinbar kbd {
         padding: 1px 5px;
         border: 1px solid var(--border);
@@ -573,9 +602,9 @@
         <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="12" cy="12" r="8" /><line x1="12" y1="2" x2="12" y2="6" /><line x1="12" y1="18" x2="12" y2="22" /><line x1="2" y1="12" x2="6" y2="12" /><line x1="18" y1="12" x2="22" y2="12" />
         </svg>
-        <span>Click what you want to pin</span>
+        <span class="tb-pinbar-prompt">Click what you want to pin</span>
         <span class="tb-pinbar-label" id="tb-pinbar-label"></span>
-        <kbd>Esc</kbd><span style="color: var(--text-dim)">to cancel</span>
+        <kbd>Esc</kbd><span class="tb-pinbar-hint" style="color: var(--text-dim)">to cancel</span>
         <button class="tb-btn" id="tb-pinbar-cancel" title="Cancel pinning" aria-label="Cancel pinning">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18" /><line x1="18" y1="6" x2="6" y2="18" /></svg>
         </button>
@@ -917,6 +946,7 @@
         const elBar = document.getElementById('tb');
         const elPin = document.getElementById('tb-pin');
         const elPinLabel = document.getElementById('tb-pinbar-label');
+        const elPinBar = document.getElementById('tb-pinbar');
         elPin.addEventListener('click', () => ipcRenderer.send('toolbar:web-pin-start'));
         document
           .getElementById('tb-pin-view')
@@ -930,7 +960,10 @@
             elBar.classList.toggle('is-pinning', state.pinMode);
             elPin.classList.toggle('is-active', state.pinMode);
           }
-          if (typeof state.pinLabel === 'string') elPinLabel.textContent = state.pinLabel;
+          if (typeof state.pinLabel === 'string') {
+            elPinLabel.textContent = state.pinLabel;
+            elPinBar.classList.toggle('has-label', state.pinLabel.length > 0);
+          }
         }
 
         // ── Keyboard shortcuts ────────────────────────────────────────────────
