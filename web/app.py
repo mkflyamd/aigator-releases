@@ -99,6 +99,7 @@ from routes.extension_setup import router as extension_setup_router
 from routes.helper import router as helper_router
 from routes.debug_routes import router as debug_router
 from routes.widgets import router as widgets_router
+from routes.web_pins import router as web_pins_router
 from routes.recorder import router as recorder_router
 from routes.dictation import router as dictation_router
 from routes.demo_clips import router as demo_clips_router
@@ -931,6 +932,7 @@ app.include_router(extension_setup_router)
 app.include_router(helper_router)
 app.include_router(debug_router)
 app.include_router(widgets_router)
+app.include_router(web_pins_router)
 app.include_router(recorder_router)
 app.include_router(dictation_router)
 app.include_router(demo_clips_router)
