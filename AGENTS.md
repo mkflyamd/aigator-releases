@@ -108,7 +108,7 @@ npm --prefix shell run dist -- --win --x64 --publish never   # or --mac/--linux
 
 ## OpenCode integration
 
-`web/skills/opencode_agent/instance_manager.py` owns one `opencode serve` subprocess per project (ports 8100–8200, idle-reaped after 30 min). Per-project spawn locks prevent duplicate servers. The explore subagent is hardcoded to `gator-gateway/gpt-4.1` regardless of the project's main model. This Gator instance's identity = its uvicorn `--port` (derived from argv, not an env var).
+OpenCode runs as a bare PTY process (`opencode-bare` in `web/generic_agent.py`), resolved on PATH like claude/codex/crush and routed through the gateway via injected config. AI Gator does not bundle or pin it; users install it with `npm install -g opencode-ai`.
 
 ## Microsoft Graph API rules
 

@@ -38,7 +38,10 @@ def test_restart_waits_for_backend_cleanup_before_spawning_replacement():
     )[0]
     assert "const cleanedUp = await _genAgentCloseBackendSession(state, sess);" in restart
     assert "_genAgentCloseSession(tabId, ptyId, true);" in restart
-    assert "_genAgentStart(tabId, state.agent, state.projectId, state.repoPath" in restart
+    assert (
+        "_genAgentStart(tabId, sess.agent || state.agent, state.projectId, state.repoPath"
+        in restart
+    )
     assert restart.index("await _genAgentCloseBackendSession") < restart.index("_genAgentStart")
 
 

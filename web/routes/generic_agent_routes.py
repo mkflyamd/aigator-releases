@@ -16,6 +16,7 @@ import asyncio
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+import agent_handoff
 import generic_agent
 from security import verify_csrf
 
@@ -29,6 +30,14 @@ class GenericAgentTerminalRequest(BaseModel):
     force_new: bool = False  # "+" opens another independent process, never reattach
     cols: int = 0  # initial terminal dimensions — sent by the frontend so the
     rows: int = 0  # PTY spawns at the right size before the TUI app paints
+    handoff_id: str | None = None  # continue a prior session; always a new process
+
+
+class HandoffPrepareRequest(BaseModel):
+    agent: str
+    project_id: str
+    repo_path: str
+    pty_session_id: str
 
 
 class GenericAgentTerminalCloseRequest(BaseModel):
@@ -49,9 +58,47 @@ async def close_generic_agent_terminal(req: GenericAgentTerminalCloseRequest):
     from routes.terminal import close_pty_session
 
     await asyncio.to_thread(close_pty_session, req.pty_session_id)
+    generic_agent.unpin_session(req.pty_session_id)
     if generic_agent.get_active_session(req.project_id, req.agent) == req.pty_session_id:
         generic_agent.clear_active_session(req.project_id, req.agent)
     return {"ok": True}
+
+
+@router.post("/api/generic-agent/handoff/prepare", dependencies=[Depends(verify_csrf)])
+async def prepare_agent_handoff(req: HandoffPrepareRequest):
+    if not generic_agent.is_supported(req.agent):
+        raise HTTPException(status_code=400, detail=f"Unknown agent: {req.agent!r}")
+    try:
+        record = await asyncio.to_thread(
+            agent_handoff.prepare_handoff,
+            req.agent, req.project_id, req.repo_path, req.pty_session_id,
+        )
+    except agent_handoff.NothingToHandOff:
+        raise HTTPException(status_code=422, detail="Nothing to hand off from this session.")
+    return {
+        "handoff_id": record["handoff_id"],
+        "source_agent": record["source_agent"],
+        "source_kind": record["source_kind"],
+        "last_user_message": record["last_user_message"],
+        "snapshot_bytes": record["snapshot_bytes"],
+        "redactions": record["redactions"],
+        "targets": await asyncio.to_thread(generic_agent.handoff_targets),
+    }
+
+
+@router.get("/api/generic-agent/installed")
+async def installed_generic_agents():
+    agents = generic_agent.launchable_agents()
+    found = await asyncio.to_thread(lambda: [generic_agent.is_installed(a) for a in agents])
+    installed = dict(zip(agents, found))
+    routed = await asyncio.to_thread(
+        lambda: {
+            a: generic_agent.is_gateway_routed(a)
+            for a, ok in installed.items()
+            if ok and a != generic_agent.TERMINAL_AGENT
+        }
+    )
+    return {"installed": installed, "gateway_routed": routed}
 
 
 @router.post("/api/generic-agent/terminal", dependencies=[Depends(verify_csrf)])
@@ -77,8 +124,17 @@ async def generic_agent_terminal(req: GenericAgentTerminalRequest):
     if not generic_agent.is_supported(req.agent):
         raise HTTPException(status_code=400, detail=f"Unknown agent: {req.agent!r}")
 
+    handoff = None
+    if req.handoff_id:
+        if not generic_agent.is_handoff_target(req.agent):
+            raise HTTPException(status_code=400, detail=f"{req.agent!r} cannot continue a handoff.")
+        handoff = await asyncio.to_thread(agent_handoff.load_handoff, req.handoff_id)
+        if handoff is None:
+            raise HTTPException(status_code=404, detail="Handoff expired or not found.")
+    force_new = req.force_new or handoff is not None
+
     owner = {"project_id": req.project_id, "agent": req.agent}
-    if not req.force_new:
+    if not force_new:
         existing = generic_agent.get_active_session(req.project_id, req.agent)
         from_host = False
         if not existing:
@@ -132,7 +188,7 @@ async def generic_agent_terminal(req: GenericAgentTerminalRequest):
         # config injected via a generated crushrc (CRUSH_GLOBAL_CONFIG env) —
         # see generic_agent.build_crush_env. No bundled binary; install via
         # `winget install charmbracelet.crush`.
-        command = generic_agent.build_command(req.agent)
+        command = generic_agent.build_command(req.agent, req.repo_path)
         if not command:
             raise HTTPException(
                 status_code=500,
@@ -143,7 +199,8 @@ async def generic_agent_terminal(req: GenericAgentTerminalRequest):
         except RuntimeError as exc:
             raise HTTPException(status_code=500, detail=str(exc))
     else:
-        command = generic_agent.build_command(req.agent)
+        binding = generic_agent.effective_binding(req.agent)
+        command = generic_agent.build_command(req.agent, req.repo_path, binding[0] if binding else ())
         if not command:
             _install_hint = {
                 "codex": "npm install -g @openai/codex",
@@ -157,8 +214,12 @@ async def generic_agent_terminal(req: GenericAgentTerminalRequest):
                     "and restart AI Gator."
                 ),
             )
+        # No gateway config for the profile -> launch on the user's own setup.
+        env = generic_agent.with_wsl_env(command, binding[1] if binding else None)
 
     pty_session_id = generic_agent.new_session_id()
+    if command:
+        command = generic_agent.pin_session(req.agent, command, pty_session_id)
     # Use the frontend's measured dimensions if provided (non-zero), so TUI
     # apps (Crush, Claude Code) spawn at the correct size and don't garble on
     # the late resize. Fall back to create_pty_session's defaults otherwise.
@@ -175,4 +236,17 @@ async def generic_agent_terminal(req: GenericAgentTerminalRequest):
         **size,
     )
     generic_agent.set_active_session(req.project_id, req.agent, pty_session_id)
-    return {"pty_session_id": pty_session_id, "created": True}
+    result = {"pty_session_id": pty_session_id, "created": True}
+    if handoff is not None:
+        agent_handoff.log_event(
+            "launched",
+            project_id=req.project_id,
+            source=handoff["source_agent"],
+            target=req.agent,
+            source_kind=handoff["source_kind"],
+            snapshot_bytes=handoff["snapshot_bytes"],
+            redactions=handoff["redactions"],
+            gateway_routed=agent_handoff.is_gateway_routed(req.agent),
+        )
+        result["handoff_prompt"] = handoff["prompt"]
+    return result
