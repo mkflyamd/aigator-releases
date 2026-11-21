@@ -195,6 +195,7 @@ async def _open_terminal(req: GenericAgentTerminalRequest):
         create_pty_session,
         find_host_session,
         get_pty_session,
+        host_session_labels,
         pty_pid_map,
     )
 
@@ -267,6 +268,10 @@ async def _open_terminal(req: GenericAgentTerminalRequest):
             entry = await asyncio.to_thread(get_pty_session, existing)
             if entry and not entry.done:
                 generic_agent.set_active_session(req.project_id, req.agent, existing)
+                if from_host:
+                    stored = (await asyncio.to_thread(host_session_labels, existing)).get("session_id")
+                    if stored:
+                        generic_agent.relink_session(req.agent, existing, stored)
                 return {"pty_session_id": existing, "created": False}
             if from_host and entry is None:
                 # The agent is (or just was) running but we could not attach.
@@ -370,6 +375,9 @@ async def _open_terminal(req: GenericAgentTerminalRequest):
     # Spawning talks to the PTY host over a socket and may start it, so it
     # runs off the event loop.
     size = {"cols": req.cols, "rows": req.rows} if req.cols > 0 and req.rows > 0 else {}
+    stored_session = generic_agent.linked_session_id(pty_session_id)
+    if stored_session:
+        owner = {**owner, "session_id": stored_session}
     spawn_cwd = req.repo_path
     if resume is not None and resume["source"] == "windows" and Path(resume["cwd"]).is_dir():
         spawn_cwd = resume["cwd"]  # a worktree session resumes in its own worktree
