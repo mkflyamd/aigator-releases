@@ -149,6 +149,7 @@ contextBridge.exposeInMainWorld('gatorShell', {
   // Re-read a pinned page or element from its custom-app pane (Gator renderer only).
   webPinRecapture: (appId, locator, url) =>
     ipcRenderer.invoke('web-pin:recapture', appId, locator, url),
+  webPinGoTo: (appId, url) => ipcRenderer.invoke('web-pin:go-to', appId, url),
   onWebPinCaptured: (callback) => {
     const listener = (_event, payload) => callback(payload);
     ipcRenderer.on('web-pin:captured', listener);

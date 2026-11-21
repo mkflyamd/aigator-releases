@@ -38,11 +38,150 @@
     return `<svg xmlns="http://www.w3.org/2000/svg" width="${n}" height="${n}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="vertical-align:middle;flex-shrink:0"><circle cx="12" cy="12" r="7"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg>`;
   }
 
-  const api = { STALE_MS, errorMessage, ageLabel, isStale, icon };
+  function matchNote(match) {
+    if (match === 'rect') return 'Refreshed. The element moved, so this capture is approximate.';
+    if (match === 'view-fallback') return 'Could not find the pinned element, so Gator captured the whole view.';
+    return '';
+  }
+
+  // The backend only accepts these failure codes on the snapshot route; any other shell code
+  // (for example empty_target) is posted as pane_unavailable so the waiting agent tool is released.
+  const POSTABLE_FAILURES = new Set(['pane_not_visible', 'page_mismatch', 'pane_unavailable', 'timeout']);
+
+  function createRecapturer({ fetchFn, shell, sleep }) {
+    const base = (pinId) => `/api/web-pins/${encodeURIComponent(pinId)}`;
+
+    async function post(pinId, body) {
+      try {
+        const r = await fetchFn(`${base(pinId)}/snapshot`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!r || !r.ok) return { ok: false, json: null };
+        let json = null;
+        try {
+          json = await r.json();
+        } catch {
+          json = null;
+        }
+        return { ok: true, json: json && typeof json === 'object' ? json : {} };
+      } catch {
+        return { ok: false, json: null };
+      }
+    }
+
+    async function recapture(pinId, opts) {
+      const requestId = opts && opts.requestId;
+      const user = !!(opts && opts.user);
+      let detail = null;
+      try {
+        const r = await fetchFn(base(pinId));
+        detail = r && r.ok ? await r.json() : null;
+      } catch {
+        detail = null;
+      }
+      const meta = (detail && detail.meta) || {};
+      const fail = async (code) => {
+        if (requestId) {
+          await post(pinId, { request_id: requestId, status: POSTABLE_FAILURES.has(code) ? code : 'pane_unavailable' });
+        }
+        const out = { status: code };
+        if (meta.app_id) out.appId = meta.app_id;
+        if (meta.url) out.url = meta.url;
+        return out;
+      };
+      if (!meta.app_id || !shell || !shell.webPinRecapture) return fail('pane_unavailable');
+      const locator = meta.locator || null;
+      const url = meta.url || '';
+      const capture = async () => {
+        try {
+          const res = await shell.webPinRecapture(meta.app_id, locator, url);
+          return res && typeof res === 'object' && res.status ? res : { status: 'pane_unavailable' };
+        } catch {
+          return { status: 'pane_unavailable' };
+        }
+      };
+      let res = await capture();
+      if (user && res.status === 'pane_not_visible' && shell.showCustomApp) {
+        try {
+          await shell.showCustomApp(meta.app_id);
+          await sleep(700);
+        } catch {
+          // fall through to the retry; it reports pane_not_visible again if the pane never showed
+        }
+        res = await capture();
+      }
+      if (res.status !== 'ok') return fail(res.status);
+      const out = await post(pinId, {
+        request_id: requestId,
+        status: 'ok',
+        image_b64: res.image_b64,
+        text: res.text,
+        match: res.match,
+      });
+      if (!out.ok || typeof out.json.captured_at !== 'number') return { status: 'pane_unavailable' };
+      return { status: 'ok', changed: out.json.changed, captured_at: out.json.captured_at, match: out.json.match };
+    }
+
+    return { recapture };
+  }
+
+  const api = { STALE_MS, errorMessage, ageLabel, isStale, icon, matchNote, createRecapturer };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   if (typeof document === 'undefined') return;
 
   const captured = new Map(); // pin id -> captured_at seconds (null while loading)
+  const changedPins = new Set();
+  const recapturer = createRecapturer({
+    fetchFn: (...args) => root.fetch(...args),
+    shell: root.gatorShell,
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  });
+
+  function ownsContext(contextId) {
+    return typeof _tabs !== 'undefined' && Array.isArray(_tabs) && _tabs.some((t) => t.id === contextId);
+  }
+
+  function afterRefresh(pinId, r) {
+    captured.set(pinId, r.captured_at);
+    if (r.changed) changedPins.add(pinId);
+    tickChips();
+    if (typeof _refreshPinOrb === 'function') _refreshPinOrb(true);
+  }
+
+  // Agent-initiated refresh. Only the tab that owns the conversation answers; the recapturer
+  // always posts a result (success or failure) so the waiting agent tool is released.
+  function onRecaptureRequest(msg) {
+    if (!msg || !msg.request_id || !msg.pin_id || !ownsContext(msg.context_id)) return;
+    recapturer
+      .recapture(msg.pin_id, { requestId: msg.request_id, user: false })
+      .then((r) => {
+        if (r && r.status === 'ok') afterRefresh(msg.pin_id, r);
+      })
+      .catch(() => {});
+  }
+
+  function offerGoTo(metaEl, appId, url) {
+    if (!metaEl) return;
+    metaEl.textContent = 'Different page · ';
+    const link = document.createElement('button');
+    link.type = 'button';
+    link.className = 'wp-goto';
+    link.textContent = "Go to pin's page";
+    link.addEventListener('click', async () => {
+      link.disabled = true;
+      const shell = root.gatorShell;
+      let ok = false;
+      try {
+        ok = shell && shell.webPinGoTo ? await shell.webPinGoTo(appId, url) : false;
+      } catch {
+        ok = false;
+      }
+      toast(ok ? 'Back on the pinned page. Refresh again.' : "Couldn't open that page.", ok ? 'info' : 'warning');
+    });
+    metaEl.appendChild(link);
+  }
 
   function activeContext() {
     return typeof _activeTabId !== 'undefined' && _activeTabId ? _activeTabId : null;
@@ -53,8 +192,8 @@
     return tab && tab.title ? tab.title : 'another tab';
   }
 
-  function toast(message) {
-    if (typeof _showConnectivityToast === 'function') _showConnectivityToast(message, 'warning');
+  function toast(message, type) {
+    if (typeof _showConnectivityToast === 'function') _showConnectivityToast(message, type || 'warning');
   }
 
   function fly(imageB64) {
@@ -240,31 +379,76 @@
 
   function decorateCard(card, pin) {
     const iconEl = card.querySelector('.pin-card-icon');
+    let thumb = null;
     if (iconEl) {
-      const img = document.createElement('img');
-      img.className = 'wp-thumb';
-      img.alt = '';
-      img.src = `/api/web-pins/${encodeURIComponent(pin.id)}/image?t=${Date.now()}`;
-      img.addEventListener('error', () => img.remove());
+      thumb = document.createElement('img');
+      thumb.className = 'wp-thumb';
+      thumb.alt = '';
+      thumb.src = `/api/web-pins/${encodeURIComponent(pin.id)}/image?t=${Date.now()}`;
+      thumb.addEventListener('error', () => thumb.remove());
       iconEl.classList.add('has-thumb');
-      iconEl.appendChild(img);
+      iconEl.appendChild(thumb);
     }
     const open = card.querySelector('.pin-card-open');
     if (open) open.style.display = 'none';
     const metaEl = card.querySelector('.pin-card-meta');
+    const appName = (pin.meta && pin.meta.app_name) || 'Web view';
+    const paintMeta = (at) => {
+      if (!metaEl) return;
+      metaEl.textContent = `${appName} · ${ageLabel(at)}`;
+      metaEl.classList.toggle('is-stale', isStale(at));
+    };
+    if (changedPins.has(pin.id)) card.classList.add('has-change');
+    const ask = card.querySelector('.pin-card-ask');
+    if (ask) {
+      ask.addEventListener('click', () => {
+        changedPins.delete(pin.id);
+        card.classList.remove('has-change');
+      });
+    }
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'pin-card-btn pin-card-refresh';
+    btn.title = 'Refresh this pin';
+    btn.setAttribute('aria-label', 'Refresh this pin');
+    btn.textContent = '↻';
+    if (ask && ask.parentElement) ask.parentElement.insertBefore(btn, ask);
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      btn.classList.add('is-spinning');
+      let r;
+      try {
+        r = await recapturer.recapture(pin.id, { user: true });
+      } catch {
+        r = { status: 'pane_unavailable' };
+      }
+      btn.disabled = false;
+      btn.classList.remove('is-spinning');
+      if (r.status === 'ok') {
+        afterRefresh(pin.id, r);
+        paintMeta(r.captured_at);
+        card.classList.toggle('has-change', !!r.changed);
+        if (thumb) thumb.src = `/api/web-pins/${encodeURIComponent(pin.id)}/image?t=${Date.now()}`;
+        const note = matchNote(r.match);
+        if (note) toast(note, 'info');
+        else if (!r.changed) toast('No change since the last capture.', 'info');
+      } else if (r.status === 'page_mismatch' && r.url) {
+        offerGoTo(metaEl, r.appId, r.url);
+      } else {
+        toast(errorMessage(r.status));
+      }
+    });
     fetch(`/api/web-pins/${encodeURIComponent(pin.id)}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((j) => {
-        if (!j || !metaEl) return;
+        if (!j) return;
         captured.set(pin.id, j.captured_at);
-        const app = (pin.meta && pin.meta.app_name) || 'Web view';
-        metaEl.textContent = `${app} · ${ageLabel(j.captured_at)}`;
-        metaEl.classList.toggle('is-stale', isStale(j.captured_at));
+        paintMeta(j.captured_at);
       })
       .catch(() => {});
   }
 
-  root.WebPins = Object.assign(api, { onCaptured, decorateCard, tickChips });
+  root.WebPins = Object.assign(api, { onCaptured, decorateCard, tickChips, onRecaptureRequest });
 
   const shell = root.gatorShell;
   if (shell && shell.isShell && shell.onWebPinCaptured && shell.onWebPinEvent) {

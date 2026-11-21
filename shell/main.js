@@ -4919,6 +4919,26 @@ ipcMain.handle('web-pin:recapture', (e, appId, locator, url) => {
   );
 });
 
+ipcMain.handle('web-pin:go-to', async (e, appId, url) => {
+  if (!gatorView || e.sender.id !== gatorView.webContents.id) return false;
+  if (typeof appId !== 'string' || !_customAppIds.has(appId)) return false;
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return false;
+  const pane = _genericPanes[appId];
+  if (!pane || !pane.view || pane.view.webContents.isDestroyed()) return false;
+  try {
+    await pane.view.webContents.loadURL(parsed.href);
+    return true;
+  } catch {
+    return false;
+  }
+});
+
 // ΓöÇΓöÇ Theme IPC (renderer ΓåÆ main ΓåÆ toolbar) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 // The Gator renderer's ThemeManager calls this when the user switches themes
 // (or when 'system' mode resolves on init). main.js forwards the effective

@@ -51,3 +51,11 @@ test('toolbar pin controls are no-drag and wired to the three channels', () => {
     assert.ok(toolbar.includes(`'${ch}'`), ch);
   }
 });
+
+test('web-pin:go-to is gatorView-only, custom-app-only and http(s)-only', () => {
+  const body = after(main, "ipcMain.handle('web-pin:go-to'", 900);
+  assert.match(body, /gatorView\.webContents\.id/);
+  assert.match(body, /_customAppIds\.has\(appId\)/);
+  assert.match(body, /'https:'/);
+  assert.match(preload, /webPinGoTo: \(appId, url\) => ipcRenderer\.invoke\('web-pin:go-to'/);
+});

@@ -17706,6 +17706,11 @@ function _initNotificationStream() {
         _handlePaneSignal(msg.pane, msg.paneData || {});
         return;
       }
+      if (msg.type === 'webpin-recapture') {
+        // Ownership (_tabs.some) is checked inside onRecaptureRequest.
+        if (window.WebPins && window.WebPins.onRecaptureRequest) window.WebPins.onRecaptureRequest(msg);
+        return;
+      }
       if (msg.type === 'draft_signal' && msg.draft) {
         // Notification SSE is global. Route only to the tab that owns the
         // request; never inject into whichever tab happens to be visible.

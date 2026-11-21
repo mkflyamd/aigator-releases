@@ -79,6 +79,7 @@ class FakeEl {
     this.classes = new Set();
     this.classList = {
       add: (...c) => c.forEach((x) => this.classes.add(x)),
+      remove: (...c) => c.forEach((x) => this.classes.delete(x)),
       toggle: (c, on) => (on ? this.classes.add(c) : this.classes.delete(c)),
       contains: (c) => this.classes.has(c),
     };
@@ -129,7 +130,7 @@ class FakeEl {
   }
 }
 
-function makeEnv({ fetchImpl }) {
+function makeEnv({ fetchImpl, gatorShell }) {
   const body = new FakeEl('body');
   const form = new FakeEl('form');
   const input = new FakeEl('div');
@@ -148,6 +149,7 @@ function makeEnv({ fetchImpl }) {
     _showConnectivityToast: (m) => toasts.push(m),
     _refreshPinOrb: () => {},
     fetch: fetchImpl,
+    gatorShell,
     setInterval: () => 0,
     setTimeout: () => 0,
     requestAnimationFrame: () => 0,
@@ -259,4 +261,229 @@ test('suggestion chips fill the composer only on the owning tab, and rows never 
   rows()[0].all((e) => e.classes.has('wp-suggest-chip'))[0].click();
   assert.deepEqual(filled, []);
   assert.equal(rows().length, 0);
+});
+
+// ---- Task 9: recapture round trip ----
+const DETAIL = { meta: { app_id: 'custom-pbi', locator: { selector: '#a' }, url: 'https://x.test/y' } };
+
+function fakeFetch({ detail = DETAIL, snapshot = { ok: true, changed: true, captured_at: 123, match: 'selector' } } = {}) {
+  const calls = [];
+  const fn = async (url, opts = {}) => {
+    calls.push({ url, opts });
+    if (url.endsWith('/snapshot')) return { ok: snapshot.ok, status: snapshot.ok ? 200 : 409, json: async () => snapshot };
+    return { ok: !!detail, status: detail ? 200 : 404, json: async () => detail };
+  };
+  fn.calls = calls;
+  return fn;
+}
+
+function fakeShell(results) {
+  const queue = [...results];
+  const shell = {
+    recaptureCalls: [],
+    shown: [],
+    goTo: [],
+    webPinRecapture: async (...args) => {
+      shell.recaptureCalls.push(args);
+      return queue.shift();
+    },
+    showCustomApp: async (id) => shell.shown.push(id),
+    webPinGoTo: async (...args) => {
+      shell.goTo.push(args);
+      return true;
+    },
+  };
+  return shell;
+}
+
+const OK = { status: 'ok', image_b64: 'AA', text: 't', match: 'selector' };
+const posts = (f) => f.calls.filter((c) => c.url.endsWith('/snapshot')).map((c) => JSON.parse(c.opts.body));
+
+test('recapture posts the snapshot with the request id and reports changed', async () => {
+  const f = fakeFetch();
+  const shell = fakeShell([OK]);
+  const r = await wp.createRecapturer({ fetchFn: f, shell, sleep: async () => {} }).recapture('p1', { requestId: 'r1' });
+  assert.deepEqual(r, { status: 'ok', changed: true, captured_at: 123, match: 'selector' });
+  assert.deepEqual(posts(f)[0], { request_id: 'r1', status: 'ok', image_b64: 'AA', text: 't', match: 'selector' });
+  assert.deepEqual(shell.recaptureCalls[0], ['custom-pbi', { selector: '#a' }, 'https://x.test/y']);
+});
+
+test('agent request on a hidden pane reports pane_not_visible and never switches panes', async () => {
+  const f = fakeFetch();
+  const shell = fakeShell([{ status: 'pane_not_visible' }]);
+  const r = await wp.createRecapturer({ fetchFn: f, shell, sleep: async () => {} }).recapture('p1', { requestId: 'r1' });
+  assert.equal(r.status, 'pane_not_visible');
+  assert.deepEqual(shell.shown, []);
+  assert.deepEqual(posts(f), [{ request_id: 'r1', status: 'pane_not_visible' }]);
+});
+
+test('user refresh on a hidden pane shows the app and retries once', async () => {
+  const f = fakeFetch();
+  const shell = fakeShell([{ status: 'pane_not_visible' }, OK]);
+  const r = await wp.createRecapturer({ fetchFn: f, shell, sleep: async () => {} }).recapture('p1', { user: true });
+  assert.equal(r.status, 'ok');
+  assert.deepEqual(shell.shown, ['custom-pbi']);
+  assert.equal(shell.recaptureCalls.length, 2);
+  assert.equal(posts(f)[0].request_id, undefined);
+});
+
+test('user refresh gives up after one retry and posts nothing without a request id', async () => {
+  const f = fakeFetch();
+  const shell = fakeShell([{ status: 'pane_not_visible' }, { status: 'pane_not_visible' }]);
+  const r = await wp.createRecapturer({ fetchFn: f, shell, sleep: async () => {} }).recapture('p1', { user: true });
+  assert.equal(r.status, 'pane_not_visible');
+  assert.equal(shell.recaptureCalls.length, 2);
+  assert.deepEqual(posts(f), []);
+});
+
+test('a missing pin never reaches the shell', async () => {
+  const f = fakeFetch({ detail: null });
+  const shell = fakeShell([]);
+  const r = await wp.createRecapturer({ fetchFn: f, shell, sleep: async () => {} }).recapture('gone', { requestId: 'r9' });
+  assert.equal(r.status, 'pane_unavailable');
+  assert.equal(shell.recaptureCalls.length, 0);
+});
+
+test('page_mismatch carries the app and url so the card can offer Go to the pin page', async () => {
+  const shell = fakeShell([{ status: 'page_mismatch' }]);
+  const r = await wp.createRecapturer({ fetchFn: fakeFetch(), shell, sleep: async () => {} }).recapture('p1', { user: true });
+  assert.deepEqual(r, { status: 'page_mismatch', appId: 'custom-pbi', url: 'https://x.test/y' });
+});
+
+test('a 409 on the snapshot post (request already answered) is not reported as success', async () => {
+  const f = fakeFetch({ snapshot: { ok: false } });
+  const shell = fakeShell([OK]);
+  const r = await wp.createRecapturer({ fetchFn: f, shell, sleep: async () => {} }).recapture('p1', { requestId: 'r1' });
+  assert.equal(r.status, 'pane_unavailable');
+});
+
+test('matchNote labels approximate and fallback matches only', () => {
+  assert.match(wp.matchNote('rect'), /approximate/i);
+  assert.match(wp.matchNote('view-fallback'), /whole view/i);
+  for (const m of ['selector', 'role-name', 'view', undefined]) assert.equal(wp.matchNote(m), '');
+});
+
+test('app.js routes webpin-recapture to the renderer and the renderer checks tab ownership', () => {
+  assert.match(read('web', 'static', 'app.js'), /msg\.type === 'webpin-recapture'[\s\S]{0,300}onRecaptureRequest\(msg\)/);
+  assert.match(read('web', 'static', 'web-pins.js'), /_tabs\.some\(/);
+});
+
+test('a malformed snapshot reply body is reported as pane_unavailable, not thrown', async () => {
+  for (const body of [null, 'x', {}]) {
+    const f = async (url) =>
+      url.endsWith('/snapshot')
+        ? {
+            ok: true,
+            status: 200,
+            json: async () => {
+              if (body === null) throw new SyntaxError('bad');
+              return body;
+            },
+          }
+        : { ok: true, status: 200, json: async () => DETAIL };
+    const shell = fakeShell([OK]);
+    const r = await wp.createRecapturer({ fetchFn: f, shell, sleep: async () => {} }).recapture('p1', { requestId: 'r1' });
+    assert.equal(r.status, 'pane_unavailable');
+  }
+});
+
+test('a shell that throws or returns nothing still answers the waiting agent request', async () => {
+  const bad = [
+    async () => {
+      throw new Error('ipc');
+    },
+    async () => undefined,
+  ];
+  for (const webPinRecapture of bad) {
+    const f = fakeFetch();
+    const r = await wp.createRecapturer({ fetchFn: f, shell: { webPinRecapture }, sleep: async () => {} }).recapture('p1', { requestId: 'r1' });
+    assert.equal(r.status, 'pane_unavailable');
+    assert.deepEqual(posts(f), [{ request_id: 'r1', status: 'pane_unavailable' }]);
+  }
+});
+
+test('a shell failure code the backend does not accept is posted as pane_unavailable', async () => {
+  const f = fakeFetch();
+  const shell = fakeShell([{ status: 'empty_target' }]);
+  const r = await wp.createRecapturer({ fetchFn: f, shell, sleep: async () => {} }).recapture('p1', { requestId: 'r1' });
+  assert.equal(r.status, 'empty_target');
+  assert.deepEqual(posts(f), [{ request_id: 'r1', status: 'pane_unavailable' }]);
+});
+
+test('a pin that has no app id still releases the waiting agent request', async () => {
+  const f = fakeFetch({ detail: { meta: {} } });
+  const r = await wp.createRecapturer({ fetchFn: f, shell: fakeShell([]), sleep: async () => {} }).recapture('p1', { requestId: 'r1' });
+  assert.equal(r.status, 'pane_unavailable');
+  assert.deepEqual(posts(f), [{ request_id: 'r1', status: 'pane_unavailable' }]);
+});
+
+test('SSE recapture request is ignored by a tab that does not own the context', async () => {
+  const f = fakeFetch();
+  const shell = fakeShell([OK]);
+  const { env } = makeEnv({ fetchImpl: f, gatorShell: shell });
+  env.WebPins.onRecaptureRequest({ request_id: 'r1', pin_id: 'p1', context_id: 'tab-zzz' });
+  env.WebPins.onRecaptureRequest({ request_id: 'r1', pin_id: 'p1' });
+  env.WebPins.onRecaptureRequest({ pin_id: 'p1', context_id: 'tab-a' });
+  await flush();
+  assert.equal(f.calls.length, 0);
+  assert.equal(shell.recaptureCalls.length, 0);
+});
+
+test('SSE recapture request on an owning tab captures and answers with the request id', async () => {
+  const f = fakeFetch();
+  const shell = fakeShell([OK]);
+  const { env } = makeEnv({ fetchImpl: f, gatorShell: shell });
+  env.WebPins.onRecaptureRequest({ request_id: 'r1', pin_id: 'p1', context_id: 'tab-b' });
+  await flush();
+  assert.equal(shell.recaptureCalls.length, 1);
+  assert.equal(posts(f)[0].request_id, 'r1');
+});
+
+function fakeCard() {
+  const card = new FakeEl('div');
+  const kids = {};
+  for (const cls of ['pin-card-icon', 'pin-card-open', 'pin-card-meta', 'pin-card-ask']) {
+    kids['.' + cls] = card.appendChild(new FakeEl('div'));
+    kids['.' + cls].className = cls;
+  }
+  card.querySelector = (sel) => kids[sel] || null;
+  card.insertBefore = (el, ref) => {
+    card.children.splice(card.children.indexOf(ref), 0, el);
+    el.parentElement = card;
+  };
+  return { card, kids };
+}
+
+const findRefresh = (card) => card.children.find((c) => c.classes.has('pin-card-refresh'));
+
+test('card refresh on a different page offers a Go to link that navigates the pane', async () => {
+  const shell = fakeShell([{ status: 'page_mismatch' }]);
+  const { env, toasts } = makeEnv({ fetchImpl: fakeFetch(), gatorShell: shell });
+  const { card, kids } = fakeCard();
+  env.WebPins.decorateCard(card, { id: 'p1', meta: { app_name: 'Power BI' } });
+  const refresh = findRefresh(card);
+  assert.ok(refresh, 'refresh button inserted');
+  refresh.click();
+  await flush();
+  await flush();
+  const meta = kids['.pin-card-meta'];
+  assert.match(meta.textContent, /^Different page/);
+  const link = meta.children.find((c) => c.classes.has('wp-goto'));
+  assert.ok(link);
+  link.click();
+  await flush();
+  assert.deepEqual(shell.goTo, [['custom-pbi', 'https://x.test/y']]);
+  assert.match(toasts[toasts.length - 1], /Back on the pinned page/);
+  assert.equal(refresh.disabled, false);
+});
+
+test('card refresh error codes surface through the shared error messages', async () => {
+  const shell = fakeShell([{ status: 'timeout' }]);
+  const { env, toasts } = makeEnv({ fetchImpl: fakeFetch(), gatorShell: shell });
+  const { card } = fakeCard();
+  env.WebPins.decorateCard(card, { id: 'p1', meta: {} });
+  findRefresh(card).click();
+  await flush();
+  await flush();
+  assert.deepEqual(toasts, [env.WebPins.errorMessage('timeout')]);
 });
