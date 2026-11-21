@@ -148,7 +148,13 @@ async def post_web_pin_snapshot(pin_id: str, req: WebPinSnapshot):
     if req.request_id and not pending.claim(req.request_id, pin_id):
         raise HTTPException(409, "request already answered or unknown")
     meta = {"match": req.match} if req.match else {}
-    snap = store.write_snapshot(pin_id, image=image, text=req.text, meta=meta)
+    try:
+        snap = store.write_snapshot(pin_id, image=image, text=req.text, meta=meta)
+    except Exception:
+        # The request is already claimed, so nobody else will answer it: release the agent now.
+        if req.request_id:
+            pending.finish(req.request_id, {"status": "pane_unavailable"})
+        raise
     result = {"status": "ok", "changed": snap["changed"], "captured_at": snap["captured_at"], "match": req.match}
     if req.request_id:
         pending.finish(req.request_id, result)

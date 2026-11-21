@@ -220,3 +220,22 @@ def test_oversize_snapshot_image_is_413_and_leaves_the_request_claimable(client)
     r1, r2, res = asyncio.run(scenario())
     assert r1.status_code == 413
     assert r2.status_code == 200 and res["status"] == "ok"
+
+
+def test_snapshot_write_failure_releases_the_waiting_agent(client, monkeypatch):
+    pid = client.post("/api/web-pins", json=_body()).json()["id"]
+
+    def broken(*a, **k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(store, "write_snapshot", broken)
+    quiet = TestClient(app, raise_server_exceptions=False, headers={"X-CSRF-Token": get_csrf_token("testserver")})
+
+    async def scenario():
+        rid, fut = pending.create(pid, "tab-a")
+        r = await asyncio.to_thread(quiet.post, f"/api/web-pins/{pid}/snapshot", json={"request_id": rid, "text": "new"})
+        return r, await asyncio.wait_for(fut, 2)
+
+    r, res = asyncio.run(scenario())
+    assert r.status_code == 500
+    assert res == {"status": "pane_unavailable"}
