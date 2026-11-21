@@ -470,6 +470,14 @@ def test_adoption_that_times_out_waiting_for_the_replay_fails(host, monkeypatch)
         return real_read(self, n)
 
     monkeypatch.setattr(pty_client.RemotePty, "read", stalled_read)
+    real_detach = pty_client.RemotePty.detach
+    detached = []
+
+    def spying_detach(self):
+        detached.append(self._id)
+        real_detach(self)
+
+    monkeypatch.setattr(pty_client.RemotePty, "detach", spying_detach)
     monkeypatch.setattr(terminal, "_ADOPT_REPLAY_TIMEOUT", 0.1)
     monkeypatch.setattr(pty_client, "host_enabled", lambda: True)
     monkeypatch.setattr(pty_client, "find_host", lambda key: info)
@@ -477,6 +485,7 @@ def test_adoption_that_times_out_waiting_for_the_replay_fails(host, monkeypatch)
     try:
         assert terminal.get_pty_session("sess-slow") is None
         assert "sess-slow" not in terminal._pty_sessions
+        assert detached == ["sess-slow"]
         # Giving up on the adopt only drops our connection; the agent keeps
         # running in the host, and a later lookup can adopt it.
         assert pty_client.host_request(info, {"op": "status", "id": "sess-slow"})[
@@ -745,6 +754,37 @@ def test_reopening_a_project_after_a_restart_reattaches_the_running_agent(
     assert reply.json() == {"pty_session_id": "newest", "created": False}
     assert len(spawned) == 4  # nothing new was started
     assert generic_agent.get_active_session("proj-own", "claude") == "newest"
+
+
+def test_a_reattached_claude_terminal_keeps_its_stored_session_link(
+    restarted_backend, monkeypatch
+):
+    info, spawned, open_terminal, generic_agent = restarted_backend
+    monkeypatch.setattr(generic_agent, "_pinned_sessions", {})
+    monkeypatch.setattr(generic_agent, "_linked_sessions", {})
+    monkeypatch.setattr(generic_agent, "is_bare_terminal", lambda agent: False)
+    monkeypatch.setattr(generic_agent, "is_opencode_bare", lambda agent: False)
+    monkeypatch.setattr(generic_agent, "effective_binding", lambda agent: None)
+    monkeypatch.setattr(generic_agent, "build_command", lambda *a: ["claude"])
+
+    created = open_terminal().json()
+    pty_id = created["pty_session_id"]
+    transcript_id = generic_agent.linked_session_id(pty_id)
+    assert transcript_id
+    labels = pty_client.host_request(info, {"op": "list"})["sessions"][0]["meta"]
+    assert labels["session_id"] == transcript_id
+
+    # The backend restarts: its in-memory links are gone, the host still has the agent.
+    monkeypatch.setattr(generic_agent, "_pinned_sessions", {})
+    monkeypatch.setattr(generic_agent, "_linked_sessions", {})
+    monkeypatch.setattr(generic_agent, "_active_sessions", {})
+    monkeypatch.setattr(terminal, "_pty_sessions", {})
+
+    reply = open_terminal()
+
+    assert reply.json() == {"pty_session_id": pty_id, "created": False}
+    assert generic_agent.linked_session_id(pty_id) == transcript_id
+    assert generic_agent.ptys_for_session("claude", transcript_id) == [pty_id]
 
 
 def test_a_plus_tab_still_starts_a_new_agent_next_to_the_running_one(
