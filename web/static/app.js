@@ -4940,6 +4940,57 @@ function _tabScrollTargetLeft(scrollRect, scrollLeft, clientWidth, elRect, pad) 
   return scrollLeft;
 }
 
+// Overflow arrows for a horizontal tab scroller: shown only while there is
+// more to scroll to, and each click steps the strip. Shared by the chat tab
+// bar and the code-agent terminal tabs. Returns the refresh function so the
+// caller can re-run it after a re-render or resize; onOverflow(bool) lets the
+// chat bar drive its overflow-list button off the same measurement.
+function _wireTabScrollArrows(scroll, arrowL, arrowR, onOverflow) {
+  const updateArrows = () => {
+    const canLeft = scroll.scrollLeft > 1;
+    const canRight = scroll.scrollLeft < scroll.scrollWidth - scroll.clientWidth - 1;
+    arrowL.classList.toggle('visible', canLeft);
+    arrowR.classList.toggle('visible', canRight);
+    if (onOverflow) onOverflow(scroll.scrollWidth > scroll.clientWidth + 1);
+  };
+  arrowL.addEventListener('click', () => {
+    scroll.scrollBy({ left: -120, behavior: 'smooth' });
+  });
+  arrowR.addEventListener('click', () => {
+    scroll.scrollBy({ left: 120, behavior: 'smooth' });
+  });
+  scroll.addEventListener('scroll', updateArrows);
+  return updateArrows;
+}
+
+// Whether `el` is hidden (or sits under a sticky arrow) in `scroll`, and the
+// scrollLeft that reveals it with room to spare.
+function _tabRevealInfo(scroll, el) {
+  const scrollRect = scroll.getBoundingClientRect();
+  const elRect = el.getBoundingClientRect();
+  // Sticky scroll arrows (22px each) overlay tab content at the edges.
+  // A tab whose close button sits under an arrow is NOT fully visible.
+  const ARROW_W = 22;
+  const leftArrowOn = scroll.scrollLeft > 1;
+  const rightArrowOn = scroll.scrollLeft < scroll.scrollWidth - scroll.clientWidth - 1;
+  const effLeft = scrollRect.left + (leftArrowOn ? ARROW_W : 0);
+  const effRight = scrollRect.right - (rightArrowOn ? ARROW_W : 0);
+  // Visibility: tab must be entirely within the effective (arrow-adjusted) viewport.
+  const outOfView = elRect.left < effLeft - 1 || elRect.right > effRight + 1;
+  // rightPad accounts for the right arrow overlay so the target scroll
+  // position leaves room for the close button to be fully visible.
+  const rightPad = (rightArrowOn ? ARROW_W : 0) + 8;
+  const leftPad = (leftArrowOn ? ARROW_W : 0) + 8;
+  const target = _tabScrollTargetLeft(
+    scrollRect,
+    scroll.scrollLeft,
+    scroll.clientWidth - rightPad,
+    elRect,
+    leftPad,
+  );
+  return { outOfView, target };
+}
+
 function _renderTabBar() {
   const bar = document.getElementById('topbar-tabs') || document.getElementById('tab-bar');
   if (!bar) return;
@@ -5177,21 +5228,9 @@ function _renderTabBar() {
   }
 
   // ── Scroll / overflow visibility ─────────────────────────────────────────
-  const updateArrows = () => {
-    const canLeft = scroll.scrollLeft > 1;
-    const canRight = scroll.scrollLeft < scroll.scrollWidth - scroll.clientWidth - 1;
-    const canOverflow = scroll.scrollWidth > scroll.clientWidth + 1;
-    arrowL.classList.toggle('visible', canLeft);
-    arrowR.classList.toggle('visible', canRight);
-    overflowBtn.classList.toggle('visible', canOverflow);
-  };
-  arrowL.addEventListener('click', () => {
-    scroll.scrollBy({ left: -120, behavior: 'smooth' });
-  });
-  arrowR.addEventListener('click', () => {
-    scroll.scrollBy({ left: 120, behavior: 'smooth' });
-  });
-  scroll.addEventListener('scroll', updateArrows);
+  const updateArrows = _wireTabScrollArrows(scroll, arrowL, arrowR, (canOverflow) =>
+    overflowBtn.classList.toggle('visible', canOverflow),
+  );
   // Restore previous scroll position.
   // Only scroll to reveal the active tab when it is genuinely out of view —
   // avoids jarring jumps when the user deletes a tab or re-renders for other reasons.
@@ -5201,28 +5240,7 @@ function _renderTabBar() {
   requestAnimationFrame(() => {
     const activeEl = scroll.querySelector('.tab-item.active');
     if (activeEl) {
-      const scrollRect = scroll.getBoundingClientRect();
-      const elRect = activeEl.getBoundingClientRect();
-      // Sticky scroll arrows (22px each) overlay tab content at the edges.
-      // A tab whose close button sits under an arrow is NOT fully visible.
-      const ARROW_W = 22;
-      const leftArrowOn = scroll.scrollLeft > 1;
-      const rightArrowOn = scroll.scrollLeft < scroll.scrollWidth - scroll.clientWidth - 1;
-      const effLeft = scrollRect.left + (leftArrowOn ? ARROW_W : 0);
-      const effRight = scrollRect.right - (rightArrowOn ? ARROW_W : 0);
-      // Visibility: tab must be entirely within the effective (arrow-adjusted) viewport.
-      const activeTabOutOfView = elRect.left < effLeft - 1 || elRect.right > effRight + 1;
-      // rightPad accounts for the right arrow overlay so the target scroll
-      // position leaves room for the close button to be fully visible.
-      const rightPad = (rightArrowOn ? ARROW_W : 0) + 8;
-      const leftPad = (leftArrowOn ? ARROW_W : 0) + 8;
-      const target = _tabScrollTargetLeft(
-        scrollRect,
-        scroll.scrollLeft,
-        scroll.clientWidth - rightPad,
-        elRect,
-        leftPad,
-      );
+      const { outOfView: activeTabOutOfView, target } = _tabRevealInfo(scroll, activeEl);
       if (_forcedScrollLeft !== null) {
         // Closing a tab: restore the exact pre-close scroll position.
         scroll.scrollLeft = _forcedScrollLeft;
