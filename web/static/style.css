@@ -22365,6 +22365,12 @@ body.tab-fullscreen {
   visibility: visible;
   transition: none;
 }
+.ah-item.ah-busy .ah-main {
+  animation: ah-pulse 1.2s ease-in-out infinite;
+}
+.ah-item.ah-busy .ah-icon-btn {
+  cursor: progress;
+}
 .ah-icon-btn {
   --ah-chip: var(--accent);
   --ah-chip-ink: var(--ah-chip);
@@ -22604,8 +22610,12 @@ body.tab-fullscreen {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .ah-dot-working {
+  .ah-dot-working,
+  .ah-item.ah-busy .ah-main {
     animation: none;
+  }
+  .ah-item.ah-busy .ah-main {
+    opacity: 0.6;
   }
   .ah-flyout,
   .ah-flyout.is-open {
