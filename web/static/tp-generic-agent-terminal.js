@@ -918,34 +918,40 @@ function _genAgentShowStartPrompt(tabId, agent, projectId, repoPath, errMsg) {
   const sub = isBareTerminal
     ? 'Open a plain shell in ' + projectId + "'s directory - run any tool you like."
     : 'Launch ' + agentLabel + ' for ' + projectId + ' using its own installed config.';
-  el.innerHTML =
-    '<div class="oc-start-card">' +
-    '<div class="oc-start-icon">&lt;/&gt;</div>' +
-    '<div class="oc-start-title">' +
-    escapeHtml(title) +
-    '</div>' +
-    '<div class="oc-start-sub">' +
-    escapeHtml(sub) +
-    '</div>' +
-    (errMsg ? '<div class="oc-start-err">' + escapeHtml(String(errMsg)) + '</div>' : '') +
-    '<button type="button" class="oc-start-btn' +
-    (busy ? ' oc-start-btn--busy' : '') +
-    '"' +
-    (busy ? ' disabled' : '') +
-    '>' +
-    '<span class="oc-start-btn-spinner"></span>' +
-    '<span class="oc-start-btn-label">' +
-    escapeHtml(busy ? busyLabel : idleLabel) +
-    '</span>' +
-    '</button>' +
-    (isBareTerminal || busy
-      ? ''
-      : '<button type="button" class="oc-start-other" aria-haspopup="menu">Use a different agent</button>') +
-    '</div>';
-  el.querySelector('.oc-start-other')?.addEventListener('click', (e) =>
-    _genAgentOpenNewMenu(tabId, e.currentTarget),
+  const _div = (cls, text) => {
+    const d = document.createElement('div');
+    d.className = cls;
+    if (text !== undefined) d.textContent = text;
+    return d;
+  };
+  const card = _div('oc-start-card');
+  card.append(
+    _div('oc-start-icon', '</>'),
+    _div('oc-start-title', title),
+    _div('oc-start-sub', sub),
   );
-  const btn = el.querySelector('.oc-start-btn');
+  if (errMsg) card.append(_div('oc-start-err', String(errMsg)));
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'oc-start-btn' + (busy ? ' oc-start-btn--busy' : '');
+  btn.disabled = busy;
+  const spinner = document.createElement('span');
+  spinner.className = 'oc-start-btn-spinner';
+  const label = document.createElement('span');
+  label.className = 'oc-start-btn-label';
+  label.textContent = busy ? busyLabel : idleLabel;
+  btn.append(spinner, label);
+  card.append(btn);
+  if (!isBareTerminal && !busy) {
+    const other = document.createElement('button');
+    other.type = 'button';
+    other.className = 'oc-start-other';
+    other.setAttribute('aria-haspopup', 'menu');
+    other.textContent = 'Use a different agent';
+    other.addEventListener('click', (e) => _genAgentOpenNewMenu(tabId, e.currentTarget));
+    card.append(other);
+  }
+  el.replaceChildren(card);
   btn.addEventListener('click', () => {
     if (btn.disabled) return;
     btn.disabled = true;
