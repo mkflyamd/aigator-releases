@@ -4934,7 +4934,7 @@ ipcMain.handle('web-pin:go-to', async (e, appId, url) => {
   // loadURL skips will-navigate, so the pane's home-host restriction is enforced here:
   // only the app's own hosts, and never http for an https app.
   if (!pane.homeHosts.length || !_hostMatches(parsed.hostname, pane.homeHosts)) return false;
-  if (pane.url.startsWith('https:') && parsed.protocol !== 'https:') return false;
+  if (new URL(pane.url).protocol === 'https:' && parsed.protocol !== 'https:') return false;
   try {
     await pane.view.webContents.loadURL(parsed.href);
     return true;

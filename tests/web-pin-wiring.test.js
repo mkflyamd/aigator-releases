@@ -59,7 +59,8 @@ test('web-pin:go-to is gatorView-only, custom-app-only, http(s)-only and limited
   assert.match(body, /'https:'/);
   // loadURL skips will-navigate, so the pane's own host restriction is re-applied here.
   assert.match(body, /_hostMatches\(parsed\.hostname, pane\.homeHosts\)/);
-  assert.match(body, /pane\.url\.startsWith\('https:'\) && parsed\.protocol !== 'https:'/);
+  assert.match(body, /new URL\(pane\.url\)\.protocol === 'https:' && parsed\.protocol !== 'https:'/);
+  assert.doesNotMatch(body, /startsWith\('https:'\)/);
   assert.match(after(main, 'function createGenericPane(', 1400), /_genericPanes\[id\] = \{[^}]*homeHosts/);
   assert.match(preload, /webPinGoTo: \(appId, url\) => ipcRenderer\.invoke\('web-pin:go-to'/);
 });
