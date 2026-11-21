@@ -1,5 +1,6 @@
 """OneDrive route group -- quota, recent, shared, search, folder browsing, upload."""
 
+import asyncio
 import re
 from pathlib import Path
 from urllib.parse import quote as _url_quote
@@ -332,15 +333,19 @@ async def onedrive_upload_to_folder(folder_id: str, file: UploadFile):
             upload_path = f"/me/drive/root:/{safe_name}:/content"
         else:
             upload_path = f"/me/drive/items/{folder_id}:/{safe_name}:/content"
-        item = gc.put_binary(
-            upload_path, content, file.content_type or "application/octet-stream"
+        item = await asyncio.to_thread(
+            gc.put_binary,
+            upload_path,
+            content,
+            file.content_type or "application/octet-stream",
         )
         item_id = item.get("id", "")
         if not item_id:
             raise HTTPException(
                 status_code=500, detail="Upload failed -- no item ID returned"
             )
-        share = gc.post(
+        share = await asyncio.to_thread(
+            gc.post,
             f"/me/drive/items/{_eid(item_id)}/createLink",
             {"type": "view", "scope": "organization"},
         )
@@ -374,7 +379,8 @@ async def upload_to_onedrive(file: UploadFile):
         if len(safe_name) > 200:
             safe_name = safe_name[:200]
         # Simple upload (< 4 MB) -- PUT to OneDrive
-        item = gc.put_binary(
+        item = await asyncio.to_thread(
+            gc.put_binary,
             f"/me/drive/root:/Attachments/{safe_name}:/content",
             content,
             file.content_type or "application/octet-stream",
@@ -385,7 +391,8 @@ async def upload_to_onedrive(file: UploadFile):
                 status_code=500, detail="Upload failed -- no item ID returned"
             )
         # Create an organisation-scoped view link
-        share = gc.post(
+        share = await asyncio.to_thread(
+            gc.post,
             f"/me/drive/items/{_eid(item_id)}/createLink",
             {"type": "view", "scope": "organization"},
         )
