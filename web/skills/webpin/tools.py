@@ -22,6 +22,7 @@ _MESSAGES = {
     "pane_not_visible": "The app's pane is not visible in Gator. Ask the user to open that app, then try again.",
     "page_mismatch": "The app is on a different page than the one pinned. Ask the user to go back to the pinned page, then try again.",
     "pane_unavailable": "The app's pane is not available (closed or still loading). Ask the user to open it, then try again.",
+    "empty_target": "The pinned element is currently empty or hidden. Ask the user to open the section it lives in, then try again.",
     "timeout": "Gator did not get a capture back in time. Ask the user to open the app's pane and try again.",
 }
 

@@ -44,9 +44,9 @@
     return '';
   }
 
-  // The backend only accepts these failure codes on the snapshot route; any other shell code
-  // (for example empty_target) is posted as pane_unavailable so the waiting agent tool is released.
-  const POSTABLE_FAILURES = new Set(['pane_not_visible', 'page_mismatch', 'pane_unavailable', 'timeout']);
+  // The five codes the shell emits; the snapshot route accepts all of them. Anything outside
+  // this set is posted as pane_unavailable so the waiting agent tool is still released.
+  const POSTABLE_FAILURES = new Set(['pane_not_visible', 'page_mismatch', 'pane_unavailable', 'timeout', 'empty_target']);
 
   function createRecapturer({ fetchFn, shell, sleep }) {
     const base = (pinId) => `/api/web-pins/${encodeURIComponent(pinId)}`;
@@ -58,16 +58,16 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
-        if (!r || !r.ok) return { ok: false, json: null };
+        if (!r || !r.ok) return { ok: false, status: r ? r.status : undefined, json: null };
         let json = null;
         try {
           json = await r.json();
         } catch {
           json = null;
         }
-        return { ok: true, json: json && typeof json === 'object' ? json : {} };
+        return { ok: true, status: r.status, json: json && typeof json === 'object' ? json : {} };
       } catch {
-        return { ok: false, json: null };
+        return { ok: false, status: undefined, json: null };
       }
     }
 
@@ -120,7 +120,16 @@
         text: res.text,
         match: res.match,
       });
-      if (!out.ok || typeof out.json.captured_at !== 'number') return { status: 'pane_unavailable' };
+      if (!out.ok) {
+        // The route validates image/text (400/413) before it claims the request, so a rejected
+        // success post leaves the agent waiting. 409 means the request is already answered.
+        // A post that never reached the server (status undefined) cannot be followed up.
+        if (requestId && out.status !== undefined && out.status !== 409) {
+          await post(pinId, { request_id: requestId, status: 'pane_unavailable' });
+        }
+        return { status: 'pane_unavailable' };
+      }
+      if (typeof out.json.captured_at !== 'number') return { status: 'pane_unavailable' };
       return { status: 'ok', changed: out.json.changed, captured_at: out.json.captured_at, match: out.json.match };
     }
 
@@ -178,6 +187,7 @@
       } catch {
         ok = false;
       }
+      if (!ok) link.disabled = false;
       toast(ok ? 'Back on the pinned page. Refresh again.' : "Couldn't open that page.", ok ? 'info' : 'warning');
     });
     metaEl.appendChild(link);

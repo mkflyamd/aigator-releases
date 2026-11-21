@@ -89,6 +89,24 @@ def test_recapture_failure_status_has_message(monkeypatch):
     assert pending._pending == {}
 
 
+def test_recapture_empty_target_gets_its_own_guidance(monkeypatch):
+    pid = _pin()
+    sent = []
+    monkeypatch.setattr(shared, "notify_all", lambda m: sent.append(m))
+
+    async def scenario():
+        task = asyncio.create_task(tools.recapture_web_pin(pid, _context_id="tab-a"))
+        while not sent:
+            await asyncio.sleep(0.01)
+        pending.resolve(sent[0]["request_id"], pid, {"status": "empty_target"})
+        return await task
+
+    out = asyncio.run(scenario())
+    assert out["status"] == "empty_target"
+    assert "empty or hidden" in out["message"]
+    assert "not available" not in out["message"]
+
+
 def test_recapture_times_out_and_discards(monkeypatch):
     pid = _pin()
     monkeypatch.setattr(shared, "notify_all", lambda m: None)

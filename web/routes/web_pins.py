@@ -18,7 +18,7 @@ router = APIRouter()
 _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 _MAX_IMAGE = 5 * 1024 * 1024
 _MAX_TEXT = 20_000
-_FAILURE_STATUSES = {"pane_not_visible", "page_mismatch", "pane_unavailable", "timeout"}
+_FAILURE_STATUSES = {"pane_not_visible", "page_mismatch", "pane_unavailable", "timeout", "empty_target"}
 
 
 def _custom_apps() -> list[dict]:

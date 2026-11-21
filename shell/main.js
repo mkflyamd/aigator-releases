@@ -4934,8 +4934,9 @@ ipcMain.handle('web-pin:go-to', async (e, appId, url) => {
   try {
     await pane.view.webContents.loadURL(parsed.href);
     return true;
-  } catch {
-    return false;
+  } catch (err) {
+    // ERR_ABORTED (-3) is what loadURL rejects with when a redirect replaces the navigation.
+    return !!err && (err.errno === -3 || err.code === 'ERR_ABORTED');
   }
 });
 

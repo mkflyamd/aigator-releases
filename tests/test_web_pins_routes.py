@@ -148,6 +148,23 @@ def test_snapshot_with_failure_request_resolves_pending(client):
     assert asyncio.run(scenario())["status"] == "page_mismatch"
 
 
+def test_snapshot_empty_target_failure_resolves_pending(client):
+    pid = client.post("/api/web-pins", json=_body()).json()["id"]
+
+    async def scenario():
+        rid, fut = pending.create(pid, "tab-a")
+        r = await asyncio.to_thread(client.post, f"/api/web-pins/{pid}/snapshot", json={"request_id": rid, "status": "empty_target"})
+        return r, await asyncio.wait_for(fut, 2)
+
+    r, res = asyncio.run(scenario())
+    assert r.status_code == 200 and res["status"] == "empty_target"
+
+
+def test_snapshot_unknown_failure_status_is_400(client):
+    pid = client.post("/api/web-pins", json=_body()).json()["id"]
+    assert client.post(f"/api/web-pins/{pid}/snapshot", json={"status": "made_up"}).status_code == 400
+
+
 def test_snapshot_unknown_request_id_is_409(client):
     pid = client.post("/api/web-pins", json=_body()).json()["id"]
     r = client.post(f"/api/web-pins/{pid}/snapshot", json={"request_id": "nope", "text": "x"})

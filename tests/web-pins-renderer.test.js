@@ -336,6 +336,8 @@ test('user refresh gives up after one retry and posts nothing without a request 
   assert.deepEqual(posts(f), []);
 });
 
+// The route 404s before it resolves anything, so for a pin missing on disk the failure post is
+// best effort only; the agent tool already checks the pin belongs to the tab before asking.
 test('a missing pin never reaches the shell', async () => {
   const f = fakeFetch({ detail: null });
   const shell = fakeShell([]);
@@ -402,12 +404,58 @@ test('a shell that throws or returns nothing still answers the waiting agent req
   }
 });
 
-test('a shell failure code the backend does not accept is posted as pane_unavailable', async () => {
+test('every shell failure code is forwarded to the agent unchanged', async () => {
+  for (const code of ['timeout', 'empty_target', 'page_mismatch', 'pane_unavailable', 'pane_not_visible']) {
+    const f = fakeFetch();
+    const shell = fakeShell([{ status: code }]);
+    const r = await wp.createRecapturer({ fetchFn: f, shell, sleep: async () => {} }).recapture('p1', { requestId: 'r1' });
+    assert.equal(r.status, code);
+    assert.deepEqual(posts(f), [{ request_id: 'r1', status: code }]);
+  }
+});
+
+test('a shell code outside the known five falls back to pane_unavailable on the post', async () => {
   const f = fakeFetch();
-  const shell = fakeShell([{ status: 'empty_target' }]);
+  const shell = fakeShell([{ status: 'something_new' }]);
   const r = await wp.createRecapturer({ fetchFn: f, shell, sleep: async () => {} }).recapture('p1', { requestId: 'r1' });
-  assert.equal(r.status, 'empty_target');
+  assert.equal(r.status, 'something_new');
   assert.deepEqual(posts(f), [{ request_id: 'r1', status: 'pane_unavailable' }]);
+});
+
+test('a success post rejected with 400/413/500 releases the waiting agent request', async () => {
+  for (const status of [400, 413, 500]) {
+    const calls = [];
+    const f = async (url, opts = {}) => {
+      calls.push({ url, opts });
+      if (url.endsWith('/snapshot')) {
+        const n = calls.filter((c) => c.url.endsWith('/snapshot')).length;
+        return n === 1 ? { ok: false, status, json: async () => ({}) } : { ok: true, status: 200, json: async () => ({ ok: false }) };
+      }
+      return { ok: true, status: 200, json: async () => DETAIL };
+    };
+    const shell = fakeShell([OK]);
+    const r = await wp.createRecapturer({ fetchFn: f, shell, sleep: async () => {} }).recapture('p1', { requestId: 'r1' });
+    assert.equal(r.status, 'pane_unavailable');
+    const sent = calls.filter((c) => c.url.endsWith('/snapshot')).map((c) => JSON.parse(c.opts.body));
+    assert.equal(sent.length, 2, String(status));
+    assert.equal(sent[0].status, 'ok');
+    assert.deepEqual(sent[1], { request_id: 'r1', status: 'pane_unavailable' });
+  }
+});
+
+test('a 409 or an undelivered success post sends no follow-up release', async () => {
+  const f409 = fakeFetch({ snapshot: { ok: false } });
+  await wp.createRecapturer({ fetchFn: f409, shell: fakeShell([OK]), sleep: async () => {} }).recapture('p1', { requestId: 'r1' });
+  assert.equal(posts(f409).length, 1);
+  const calls = [];
+  const fNet = async (url) => {
+    calls.push(url);
+    if (url.endsWith('/snapshot')) throw new Error('net');
+    return { ok: true, status: 200, json: async () => DETAIL };
+  };
+  const r = await wp.createRecapturer({ fetchFn: fNet, shell: fakeShell([OK]), sleep: async () => {} }).recapture('p1', { requestId: 'r1' });
+  assert.equal(r.status, 'pane_unavailable');
+  assert.equal(calls.filter((u) => u.endsWith('/snapshot')).length, 1);
 });
 
 test('a pin that has no app id still releases the waiting agent request', async () => {
@@ -475,6 +523,22 @@ test('card refresh on a different page offers a Go to link that navigates the pa
   assert.deepEqual(shell.goTo, [['custom-pbi', 'https://x.test/y']]);
   assert.match(toasts[toasts.length - 1], /Back on the pinned page/);
   assert.equal(refresh.disabled, false);
+});
+
+test('the Go to link is re-enabled after a failed navigation so it can be retried', async () => {
+  const shell = fakeShell([{ status: 'page_mismatch' }]);
+  shell.webPinGoTo = async () => false;
+  const { env, toasts } = makeEnv({ fetchImpl: fakeFetch(), gatorShell: shell });
+  const { card, kids } = fakeCard();
+  env.WebPins.decorateCard(card, { id: 'p1', meta: {} });
+  findRefresh(card).click();
+  await flush();
+  await flush();
+  const link = kids['.pin-card-meta'].children.find((c) => c.classes.has('wp-goto'));
+  link.click();
+  await flush();
+  assert.equal(link.disabled, false);
+  assert.match(toasts[toasts.length - 1], /open that page/);
 });
 
 test('card refresh error codes surface through the shared error messages', async () => {
