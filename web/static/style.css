@@ -1322,6 +1322,86 @@ body.tab-fullscreen .tab-expand-btn {
   font-size: 0.78rem;
   line-height: 1.6;
 }
+.pin-ref-chip svg {
+  flex-shrink: 0;
+}
+.pin-ref-chip.is-stale {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+  border-color: color-mix(in srgb, var(--warn) 35%, transparent);
+}
+.pin-card-icon.has-thumb {
+  position: relative;
+  overflow: hidden;
+}
+.pin-card-icon .wp-thumb {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.pin-card-meta.is-stale {
+  color: var(--warn);
+}
+.wp-fly {
+  position: fixed;
+  z-index: 9999;
+  pointer-events: none;
+  border-radius: 10px;
+  border: 1px solid var(--accent);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+  transform-origin: 0 0;
+  transition:
+    transform 0.55s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 0.55s ease-in;
+}
+.wp-suggest {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.6rem 0;
+}
+.wp-suggest-hint {
+  flex-basis: 100%;
+  font-size: 0.7rem;
+  color: var(--text-sub);
+}
+.wp-suggest-chip {
+  font-size: 0.72rem;
+  padding: 0.22rem 0.6rem;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--text);
+  cursor: pointer;
+  transition:
+    border-color 0.12s,
+    color 0.12s;
+}
+.wp-suggest-chip:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.wp-suggest-chip.is-action {
+  border-style: dashed;
+  color: var(--text-sub);
+}
+.wp-suggest-x {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 0.95rem;
+  line-height: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .wp-fly {
+    display: none;
+  }
+}
 
 .settings-badges {
   position: absolute;

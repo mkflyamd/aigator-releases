@@ -2603,6 +2603,7 @@ const _SVG_ICON_SOURCES = new Set([
 function _pinSourceIcon(source, size) {
   const px = size || 16;
   const file = source === 'email' ? 'outlook' : source === 'teams_transcript' ? 'teams' : source;
+  if (source === 'webpin') return window.WebPins ? window.WebPins.icon(px) : '📌';
   if (_SVG_ICON_SOURCES.has(source) || source === 'teams_transcript') {
     return `<img src="/static/icons/${file}.svg" width="${px}" height="${px}" style="vertical-align:middle;flex-shrink:0" alt="${source}">`;
   }
@@ -2675,7 +2676,7 @@ function buildPinChipEl(pin) {
   chip.dataset.pinId = pin.id;
   chip.title = `${pin.source}: ${pin.label}`;
   const iconHtml = _pinSourceIcon(pin.source, 14);
-  if (iconHtml.startsWith('<img')) {
+  if (iconHtml.startsWith('<img') || iconHtml.startsWith('<svg')) {
     chip.innerHTML = `${iconHtml} ${escapeHtml(pin.label)}`;
   } else {
     chip.textContent = `${iconHtml} ${pin.label}`;
@@ -5589,6 +5590,7 @@ async function _showPinPopover() {
       slack: { icon: _pinIcon('slack'), label: 'Slack' },
       calendar: { icon: _pinIcon('calendar'), label: 'Calendar' },
       github: { icon: _pinIcon('github'), label: 'GitHub' },
+      webpin: { icon: window.WebPins ? window.WebPins.icon(20) : '📌', label: 'Web view' },
     };
 
     pins.forEach((p) => {
@@ -5604,7 +5606,9 @@ async function _showPinPopover() {
                 ? p.meta?.type || 'chat'
                 : p.source === 'calendar'
                   ? _calendarPinMeta(p.meta)
-                  : '';
+                  : p.source === 'webpin'
+                    ? p.meta?.app_name || ''
+                    : '';
       const card = document.createElement('div');
       card.className = 'pin-card';
       card.innerHTML = `
@@ -5619,6 +5623,7 @@ async function _showPinPopover() {
         <button class="pin-card-btn pin-card-remove" title="Unpin">&times;</button>
       </div>`;
       // ↗ Open item in its native pane (or browser for external sources)
+      if (p.source === 'webpin' && window.WebPins) window.WebPins.decorateCard(card, p);
       card.querySelector('.pin-card-open').addEventListener('click', () => {
         cleanup();
         const webUrl = p.meta?.web_url || p.meta?.url;
