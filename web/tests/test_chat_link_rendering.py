@@ -212,7 +212,8 @@ class TestAppJsCarriesFix:
         """app.js renderMarkdown must convert raw <a href=...> tags before escaping."""
         start = APP_JS.find("function renderMarkdown(")
         assert start != -1, "renderMarkdown not found in app.js"
-        body = APP_JS[start : start + 4000]
+        end = APP_JS.find("\nfunction ", start + 1)
+        body = APP_JS[start : end if end != -1 else len(APP_JS)]
         assert "<a\\b" in body and "href=" in body, (
             "renderMarkdown must pre-process raw <a href=...> tags into markdown "
             "links so they don't leak as escaped text (issue #49)."

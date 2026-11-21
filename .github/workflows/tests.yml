@@ -25,6 +25,7 @@ jobs:
       matrix:
         os: [ubuntu-24.04, windows-latest, macos-15]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -50,9 +51,10 @@ jobs:
           ffprobe -version | head -1
 
       - name: Run tests with coverage
+        timeout-minutes: 25
         env:
           GATOR_REQUIRE_FFMPEG: '1'
-        run: uv run coverage run --source=web,packaging --omit='*/tests/*' -m pytest tests -q
+        run: uv run coverage run --source=web,packaging --omit='*/tests/*' -m pytest tests web/tests -q -o faulthandler_timeout=120
 
       - name: Create coverage reports
         run: |
