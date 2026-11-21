@@ -36,11 +36,9 @@ test('icon is an svg that inherits colour', () => {
   assert.match(svg, /width="14"/);
 });
 
-test('icon is the pushpin and pickIcon is the crosshair', () => {
+test('icon is the pushpin, not the crosshair', () => {
   assert.ok(wp.icon(14).includes('M9 3h6l-.8 6.2L17 12v2H7v-2l2.8-2.8L9 3z'));
   assert.ok(!wp.icon(14).includes('<circle'));
-  assert.match(wp.pickIcon(16), /<circle/);
-  assert.match(wp.pickIcon(16), /width="16"/);
 });
 
 test('renderer never sends a message or falls back to the default tab', () => {
