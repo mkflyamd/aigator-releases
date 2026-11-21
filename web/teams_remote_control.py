@@ -120,7 +120,7 @@ async def _poll_once() -> None:
                 command,
             )
             continue
-        if not is_pty_alive(pty_session_id):
+        if not await asyncio.to_thread(is_pty_alive, pty_session_id):
             _log.warning(
                 "Teams remote-control: got %r but OpenCode session %s is dead/closed — open the Code tab to start a new one; clearing stale session id",
                 command,
@@ -133,7 +133,7 @@ async def _poll_once() -> None:
             except Exception:
                 pass
             continue
-        ok = write_pty_session(pty_session_id, command + "\r")
+        ok = await asyncio.to_thread(write_pty_session, pty_session_id, command + "\r")
         if ok:
             _log.warning(
                 "Teams remote-control: relayed %r to OpenCode session %s",

@@ -37,6 +37,10 @@ contextBridge.exposeInMainWorld('gatorShell', {
     ipcRenderer.on('outlook-pane:compose-closed', listener);
     return () => ipcRenderer.removeListener('outlook-pane:compose-closed', listener);
   },
+  popOutTerminal: (sessionId, label) => ipcRenderer.invoke('terminal:pop-out', sessionId, label),
+  closeTerminalPopout: (sessionId) => ipcRenderer.invoke('terminal:close-pop-out', sessionId),
+  onTerminalPopoutClosed: (cb) =>
+    ipcRenderer.on('terminal:popout-closed', (_e, sessionId) => cb(sessionId)),
 
   // ── OneDrive ────────────────────────────────────────────────────────
   showOneDrive: () => ipcRenderer.invoke('external-pane:show', 'onedrive'),
