@@ -6,7 +6,7 @@ ALWAYS_ON = True  # always available regardless of active skill
 TOOL_DEFS = [
     {
         "name": "search_people",
-        "description": "Search coworkers by name or email using the Microsoft Graph People API. ALWAYS call this first when the user mentions a person's name (e.g. 'send email to Tanmay', 'message Sarah', 'find John') to resolve their email address before calling send_email or send_teams_message. Returns name, email, job title, department.",
+        "description": "Search coworkers by name or email using the Microsoft Graph People API. ALWAYS call this first when the user mentions a person's name (e.g. 'send email to Tanmay', 'message Sarah', 'find John') to resolve their email address before calling send_email or send_teams_message. Returns name, email, job title, department. People from a chat or email thread you already read in this request come first with in_context=true; when `resolved_from_context` is set, use that person and do not ask which one was meant.",
         "input_schema": {
             "type": "object",
             "properties": {
