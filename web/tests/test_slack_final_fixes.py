@@ -196,7 +196,7 @@ class TestHITLBackendToken:
 
     def test_send_endpoint_validates_confirm_token(self):
         """POST /api/slack/channels/{id}/send must require and consume confirm_token."""
-        fn_start = SRC.find("async def slack_send_message_confirmed(")
+        fn_start = SRC.find("def slack_send_message_confirmed(")
         assert fn_start != -1
         next_route = SRC.find("\n@router.", fn_start + 1)
         fn_body = SRC[fn_start : next_route if next_route != -1 else fn_start + 800]
