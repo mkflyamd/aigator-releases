@@ -258,3 +258,11 @@ def test_whole_row_activates_primary_action_and_marks_active_terminal():
     assert "rowActive(r)," in HISTORY
     css = _history_css()
     assert ".ah-item.ah-active::before" in css
+
+
+def test_a_session_open_elsewhere_is_taken_over_never_duplicated():
+    assert "allow_duplicate" not in TERM and "allowDuplicate" not in TERM
+    assert "allowDuplicate" not in HISTORY and "Open anyway" not in HISTORY
+    assert "/api/generic-agent/takeover" in HISTORY
+    assert "Close and open here" in HISTORY
+    assert "failure.where" in TERM
