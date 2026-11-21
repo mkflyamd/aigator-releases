@@ -10,7 +10,7 @@
   screen,
 } = require('electron');
 const { applyMediaPermissions } = require('./media-permissions');
-const { applyNavigationPolicy, setToolbarAttacher } = require('./navigation-policy');
+const { applyNavigationPolicy, setToolbarAttacher, _hostMatches } = require('./navigation-policy');
 const { resolveAtlassianUrls } = require('./atlassian-urls');
 const { createHudRecorder } = require('./hud_recorder');
 const path = require('path');
@@ -4439,7 +4439,7 @@ function createGenericPane(appConfig) {
   win.contentView.addChildView(view);
   view.setBounds({ x: 1599, y: 0, width: 1, height: 900 });
 
-  _genericPanes[id] = { id, name, url, view, partition };
+  _genericPanes[id] = { id, name, url, view, partition, homeHosts };
   _refreshAppHomeUrls();
   return view;
 }
@@ -4931,6 +4931,10 @@ ipcMain.handle('web-pin:go-to', async (e, appId, url) => {
   if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return false;
   const pane = _genericPanes[appId];
   if (!pane || !pane.view || pane.view.webContents.isDestroyed()) return false;
+  // loadURL skips will-navigate, so the pane's home-host restriction is enforced here:
+  // only the app's own hosts, and never http for an https app.
+  if (!pane.homeHosts.length || !_hostMatches(parsed.hostname, pane.homeHosts)) return false;
+  if (pane.url.startsWith('https:') && parsed.protocol !== 'https:') return false;
   try {
     await pane.view.webContents.loadURL(parsed.href);
     return true;

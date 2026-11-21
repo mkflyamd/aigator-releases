@@ -52,10 +52,14 @@ test('toolbar pin controls are no-drag and wired to the three channels', () => {
   }
 });
 
-test('web-pin:go-to is gatorView-only, custom-app-only and http(s)-only', () => {
-  const body = after(main, "ipcMain.handle('web-pin:go-to'", 900);
+test('web-pin:go-to is gatorView-only, custom-app-only, http(s)-only and limited to the pane home hosts', () => {
+  const body = after(main, "ipcMain.handle('web-pin:go-to'", 1500);
   assert.match(body, /gatorView\.webContents\.id/);
   assert.match(body, /_customAppIds\.has\(appId\)/);
   assert.match(body, /'https:'/);
+  // loadURL skips will-navigate, so the pane's own host restriction is re-applied here.
+  assert.match(body, /_hostMatches\(parsed\.hostname, pane\.homeHosts\)/);
+  assert.match(body, /pane\.url\.startsWith\('https:'\) && parsed\.protocol !== 'https:'/);
+  assert.match(after(main, 'function createGenericPane(', 1400), /_genericPanes\[id\] = \{[^}]*homeHosts/);
   assert.match(preload, /webPinGoTo: \(appId, url\) => ipcRenderer\.invoke\('web-pin:go-to'/);
 });

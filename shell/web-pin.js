@@ -73,14 +73,16 @@ async function shoot(cdp, clip) {
   return r.data;
 }
 
-async function captureView(cdp) {
+async function captureView(cdp, wc) {
   const { cssVisualViewport: v } = await cdp.send('Page.getLayoutMetrics');
   const page = await readPage(cdp);
   const image_b64 = await shoot(cdp, { x: v.pageX, y: v.pageY, width: v.clientWidth, height: v.clientHeight });
-  return { image_b64, text: core.capText(page.text), locator: null, url: page.url, title: page.title, aria_label: '' };
+  // The url comes from the main process, never from the page: go-to and the
+  // recapture page check trust it, and in-page JS could report anything.
+  return { image_b64, text: core.capText(page.text), locator: null, url: wc.getURL(), title: page.title, aria_label: '' };
 }
 
-async function captureElement(cdp, backendNodeId) {
+async function captureElement(cdp, wc, backendNodeId) {
   await cdp.send('DOM.scrollIntoViewIfNeeded', { backendNodeId }).catch(() => {});
   const { object } = await cdp.send('DOM.resolveNode', { backendNodeId });
   const called = await cdp.send('Runtime.callFunctionOn', {
@@ -100,7 +102,7 @@ async function captureElement(cdp, backendNodeId) {
     image_b64,
     text: core.capText(info.text),
     locator: info.locator,
-    url: page.url,
+    url: wc.getURL(),
     title: page.title,
     aria_label: info.ariaLabel || info.name || '',
   };
@@ -148,7 +150,7 @@ function createWebPin({ getPane, isPaneVisible, onState, onCaptured, onError, ti
     try {
       await a.cdp.send('Overlay.setInspectMode', { mode: 'none', highlightConfig: {} });
       await a.cdp.send('Overlay.hideHighlight');
-      const captured = await captureElement(a.cdp, backendNodeId);
+      const captured = await captureElement(a.cdp, a.wc, backendNodeId);
       // The user may have cancelled (Esc / stop) while the capture was running.
       if (active !== a) return;
       onCaptured({ appId: a.appId, ...captured });
@@ -244,7 +246,7 @@ function createWebPin({ getPane, isPaneVisible, onState, onCaptured, onError, ti
 
   async function pinView(appId) {
     await stop();
-    const r = await run(appId, (cdp) => captureView(cdp));
+    const r = await run(appId, (cdp, wc) => captureView(cdp, wc));
     if (r.status === 'ok') onCaptured({ appId, ...r.payload });
     else onError({ appId, code: r.status });
   }
@@ -259,9 +261,9 @@ function createWebPin({ getPane, isPaneVisible, onState, onCaptured, onError, ti
       let result = null;
       if (locator) {
         const hit = await core.resolveTarget(cdp, locator);
-        if (hit) result = { ...(await captureElement(cdp, hit.backendNodeId)), match: hit.match };
+        if (hit) result = { ...(await captureElement(cdp, wc, hit.backendNodeId)), match: hit.match };
       }
-      if (!result) result = { ...(await captureView(cdp)), match: locator ? 'view-fallback' : 'view' };
+      if (!result) result = { ...(await captureView(cdp, wc)), match: locator ? 'view-fallback' : 'view' };
       if (!samePage()) throw coded('page_mismatch');
       return result;
     });

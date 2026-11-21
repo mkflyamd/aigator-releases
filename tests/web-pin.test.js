@@ -327,3 +327,22 @@ test('recapture fails with page_mismatch when the page navigates mid-capture', a
   assert.deepStrictEqual(await wp.recapture('custom-x', null, 'https://a.com/r/1'), { status: 'page_mismatch' });
   assert.strictEqual(wc.debugger.isAttached(), false);
 });
+
+test('pinned url comes from the main process, not from page-reported text', async () => {
+  const spoof = JSON.stringify({ text: 'whole page', title: 'Dash', url: 'https://evil.test/phish' });
+  const view = fakeWc({ overrides: { 'Runtime.evaluate': { result: { value: spoof } } } });
+  const v = harness(view);
+  await v.wp.pinView('custom-x');
+  assert.strictEqual(v.events.captured[0].url, 'https://a.com/r/1');
+
+  const pick = fakeWc({ overrides: { 'Runtime.evaluate': { result: { value: spoof } } } });
+  const p = harness(pick);
+  await p.wp.start('custom-x');
+  pick.debugger.emit('message', {}, 'Overlay.inspectNodeRequested', { backendNodeId: 5 });
+  await waitFor(() => p.events.captured.length === 1);
+  assert.strictEqual(p.events.captured[0].url, 'https://a.com/r/1');
+
+  const re = fakeWc({ overrides: { 'Runtime.evaluate': { result: { value: spoof } } } });
+  const r = await harness(re).wp.recapture('custom-x', null, 'https://a.com/r/1');
+  assert.strictEqual(r.url, 'https://a.com/r/1');
+});

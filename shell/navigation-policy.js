@@ -306,4 +306,4 @@ function applyNavigationPolicy(view, opts) {
   });
 }
 
-module.exports = { applyNavigationPolicy, AUTH_RE, setToolbarAttacher };
+module.exports = { applyNavigationPolicy, AUTH_RE, setToolbarAttacher, _hostMatches };
