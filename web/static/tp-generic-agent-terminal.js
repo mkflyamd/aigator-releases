@@ -1052,7 +1052,25 @@ async function _genAgentStart(tabId, agent, projectId, repoPath, opts) {
     // opencode render at the wrong size or blank on first visit.)
     // Attach: register the session, connect the WebSocket, wire the resize
     // observer. The terminal + container are already created above.
+    const existing = current.sessions[data.pty_session_id];
+    if (existing) {
+      // The server reattached to a PTY this tab already shows ({created:false}).
+      // Activate it instead of stacking a second xterm and tab entry on it.
+      try {
+        sess.term && sess.term.dispose();
+      } catch (_) {}
+      try {
+        container.remove();
+      } catch (_) {}
+      if (opts.onFirstPaint) {
+        if (existing._revealed) opts.onFirstPaint();
+        else _genAgentOnFirstPaint(existing, opts.onFirstPaint);
+      }
+      _genAgentActivateSession(tabId, data.pty_session_id);
+      return data.pty_session_id;
+    }
     sess.ptySessionId = data.pty_session_id;
+    if (opts.onFirstPaint) _genAgentOnFirstPaint(sess, opts.onFirstPaint);
     state.sessions[data.pty_session_id] = sess;
     state.order.push(data.pty_session_id);
     state.activeId = data.pty_session_id;
@@ -1063,6 +1081,7 @@ async function _genAgentStart(tabId, agent, projectId, repoPath, opts) {
     }
     _ocGuardSize(sess);
     _genAgentRenderTabs(tabId);
+    return data.pty_session_id;
   } catch (err) {
     // Clean up the pre-created terminal
     try {
@@ -1168,6 +1187,23 @@ function _genAgentStartInFlight(tabId) {
   return !!(state && state._starting);
 }
 
+// Chains callbacks fired once when a session first paints or is detached.
+function _genAgentOnFirstPaint(sess, fn) {
+  const prev = sess._onFirstPaint;
+  sess._onFirstPaint = prev
+    ? () => {
+        prev();
+        fn();
+      }
+    : fn;
+}
+
+function _genAgentFirePaint(sess) {
+  const fn = sess._onFirstPaint;
+  sess._onFirstPaint = null;
+  if (fn) fn();
+}
+
 function _genAgentPaintedRowCount(sess) {
   const term = sess && sess.term;
   const buffer = term && term.buffer && term.buffer.active;
@@ -1223,6 +1259,7 @@ function _genAgentRevealSession(sess) {
     if (!current || current.sessions[sess.ptySessionId] !== sess || sess._closing) return;
     sess._revealed = true;
     _genAgentHideLoadingState(sess.tabId, sess.container);
+    _genAgentFirePaint(sess);
     if (current.activeId === sess.ptySessionId) {
       _genAgentHideStartPrompt(sess.tabId);
       if (sess.container) sess.container.style.display = '';
@@ -1295,6 +1332,7 @@ function _genAgentDetachSession(tabId, ptyId) {
     sess.container && sess.container.remove();
   } catch (_) {}
   delete state.sessions[ptyId];
+  _genAgentFirePaint(sess);
 }
 
 // Full teardown for this tab - detaches every session, removes the wrapper

@@ -254,3 +254,17 @@ def test_a_session_open_elsewhere_is_taken_over_never_duplicated():
     assert "/api/generic-agent/takeover" in HISTORY
     assert "Close and open here" in HISTORY
     assert "failure.where" in TERM
+
+
+def test_busy_rows_expose_aria_busy_and_respect_reduced_motion():
+    row = HISTORY.split("function buildRow(")[1].split("function ")[0]
+    assert "item.setAttribute('aria-busy', 'true');" in row
+    assert "isRowBusy(r)," in HISTORY.split("const sig = JSON.stringify(")[1]
+    assert ".ah-item.ah-busy .ah-main" in CSS.split("@media (prefers-reduced-motion: reduce)")[-1]
+
+
+def test_terminal_reports_first_paint_and_reuses_an_existing_session():
+    assert "onFirstPaint: () => setRowBusy(row, false)," in HISTORY
+    assert "_genAgentFirePaint(sess);" in TERM.split("function _genAgentRevealSession(")[1]
+    assert "_genAgentFirePaint(sess);" in TERM.split("function _genAgentDetachSession(")[1]
+    assert "const existing = current.sessions[data.pty_session_id];" in TERM
