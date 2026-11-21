@@ -39,7 +39,9 @@
       "sandbox-repair.js",
       "splash.html",
       "toolbar-preload.js",
-      "toolbar.html"
+      "toolbar.html",
+      "web-pin-core.js",
+      "web-pin.js"
     ],
     "extraResources": [
       {
