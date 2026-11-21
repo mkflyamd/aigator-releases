@@ -68,6 +68,24 @@ def test_clear_pins_cleans_webpin_dirs():
     assert not store.web_pin_dir(a).exists() and not store.web_pin_dir(b).exists()
 
 
+def test_global_remove_cleans_the_snapshot_when_no_bucket_keeps_it():
+    pid = str(uuid.uuid4())
+    store.write_snapshot(pid, image=b"x", text="t", meta={})
+    state.set_pin("webpin", pid, "L", {}, "tab-a")
+    state.set_pin("webpin", pid, "L", {}, "tab-b")
+    state.set_pin_scope("webpin", pid, "global", "tab-a")
+    state.remove_pin("webpin", pid, "tab-a", scope="global")
+    assert not store.web_pin_dir(pid).exists()
+
+
+def test_moving_a_pin_to_global_keeps_the_snapshot():
+    pid = str(uuid.uuid4())
+    store.write_snapshot(pid, image=b"x", text="t", meta={})
+    state.set_pin("webpin", pid, "L", {}, "tab-a")
+    state.set_pin_scope("webpin", pid, "global", "tab-a")
+    assert store.web_pin_dir(pid).exists()
+
+
 def test_web_pin_dir_rejects_trailing_newline():
     with pytest.raises(ValueError):
         store.web_pin_dir(str(uuid.uuid4()) + "\n")

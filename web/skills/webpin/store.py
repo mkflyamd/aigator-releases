@@ -73,7 +73,8 @@ def delete_if_unreferenced(pin_id: str) -> bool:
         d = web_pin_dir(pin_id)
     except ValueError:
         return False
-    if pin_id in json.dumps(state.pinned_contexts, default=str):
-        return False
-    shutil.rmtree(d, ignore_errors=True)
+    with state._lock:
+        if pin_id in json.dumps(state.pinned_contexts, default=str):
+            return False
+        shutil.rmtree(d, ignore_errors=True)
     return True
