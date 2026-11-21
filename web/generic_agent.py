@@ -564,6 +564,10 @@ def ptys_for_session(agent: str, session_id: str) -> list[str]:
     return found
 
 
+def relink_session(agent: str, pty_session_id: str, session_id: str) -> None:
+    _linked_sessions[pty_session_id] = (agent, session_id)
+
+
 def unpin_session(pty_session_id: str) -> None:
     _pinned_sessions.pop(pty_session_id, None)
     _linked_sessions.pop(pty_session_id, None)
