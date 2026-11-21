@@ -35,6 +35,7 @@ import subprocess
 import sys
 import threading
 import time
+import unicodedata
 import uuid
 from pathlib import Path
 
@@ -456,28 +457,46 @@ def can_resume(agent: str) -> bool:
     return agent in _RESUME_VERBS
 
 
+_RESUME_NAME_MAX = 200
+
+
+def _resume_name(title: str) -> str:
+    """The session title as a safe `-n` value: control and invisible characters
+    removed, trimmed, capped. Empty when nothing usable is left."""
+    kept = "".join(
+        " " if ch.isspace() else ch
+        for ch in (title or "")
+        if ch.isspace() or unicodedata.category(ch) not in ("Cc", "Cf", "Cs", "Co", "Cn", "Zl", "Zp")
+    )
+    return kept.strip()[:_RESUME_NAME_MAX].strip()
+
+
 def build_resume_command(
     agent: str,
     repo_path: str,
     session_id: str,
     source: str = "windows",
     extra_args: tuple[str, ...] = (),
+    title: str = "",
 ) -> list[str] | None:
     """argv that reopens a stored session in the agent's own resume mode, in the
     place the session lives. A WSL session resumes inside its distro with the
-    Linux path, never a UNC path."""
+    Linux path, never a UNC path. Claude keeps the session's stored title as its
+    name; without `-n` it derives a new one from the directory."""
     verb = _RESUME_VERBS.get(agent)
     if not verb:
         return None
+    name = _resume_name(title) if agent == "claude" else ""
+    tail = (session_id, "-n", name) if name else (session_id,)
     if source == "windows":
         resolved = find_agent_binary(agent)
         if not resolved:
             return None
-        return [resolved, *SUPPORTED_AGENTS[agent][1:], *extra_args, *verb, session_id]
+        return [resolved, *SUPPORTED_AGENTS[agent][1:], *extra_args, *verb, *tail]
     distro, _found = wsl_agents()
     if not distro or source != f"wsl:{distro}":
         return None
-    return _wsl_command(agent, repo_path, (*verb, session_id))
+    return _wsl_command(agent, repo_path, (*extra_args, *verb, *tail))
 
 
 # (project_id, agent) -> pty_session_id of that project+agent's current

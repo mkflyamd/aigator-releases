@@ -308,6 +308,7 @@ async def _open_terminal(req: GenericAgentTerminalRequest):
                 resume["id"],
                 resume["source"],
                 extra,
+                resume.get("title", ""),
             )
             if not command:
                 if resume["source"] == "windows" and not generic_agent.find_agent_binary(req.agent):
