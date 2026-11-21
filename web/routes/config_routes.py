@@ -1,5 +1,6 @@
 """Configuration routes — API key, model, Jira, Confluence, GitHub, username, personas."""
 
+import asyncio
 import json
 import os
 import re
@@ -84,7 +85,8 @@ async def save_api_key(req: ApiKeyRequest):
             "anthropic-version": "2023-06-01",
             **gateway_headers(key),
         }
-        resp = httpx.post(
+        resp = await asyncio.to_thread(
+            httpx.post,
             f"{get_gateway_url()}/v1/messages",
             headers=headers,
             json={
@@ -110,11 +112,12 @@ async def save_api_key(req: ApiKeyRequest):
 
     os.environ["ANTHROPIC_API_KEY"] = key
     reset_provider("anthropic")
-    cfg = _load_config()
-    cfg["api_key"] = key
-    if user_id:
-        cfg["gateway_user_id"] = user_id
-    _save_config(cfg)
+    def _apply(cfg):
+        cfg["api_key"] = key
+        if user_id:
+            cfg["gateway_user_id"] = user_id
+
+    _update_config(_apply)
     return {"ok": True}
 
 
@@ -1392,7 +1395,7 @@ async def activate_llm_profile(profile_id: str):
 
 
 @router.get("/api/config/llm/profiles/{profile_id}/models")
-async def get_llm_profile_models(profile_id: str):
+def get_llm_profile_models(profile_id: str):
     cfg = _load_config()
     profiles: list = cfg.get("llm_profiles", [])
     profile = next((p for p in profiles if p.get("id") == profile_id), None)

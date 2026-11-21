@@ -9,6 +9,7 @@ import time
 
 import pytest
 
+import agent_liveness
 import pty_client
 import pty_host
 from pty_host import PtyHost
@@ -51,6 +52,8 @@ class _FakePty:
 
     def close(self):
         self.end()
+
+    detach = close
 
 
 def _wait(cond, timeout=5.0):
@@ -451,6 +454,41 @@ def test_failed_adoption_does_not_register_a_session(host, monkeypatch):
     assert "sess-gone" not in terminal._pty_sessions
 
 
+def test_adoption_that_times_out_waiting_for_the_replay_fails(host, monkeypatch):
+    info, spawned = host
+    _create(info, sid="sess-slow")
+    pty = spawned[0][1]
+    pty.feed("retained output")
+
+    # The replay never arrives in time. Serving a buffer shorter than what the
+    # host retains would hand a resuming client a stream it cannot trust, so
+    # the adopt must fail rather than register that session.
+    real_read = pty_client.RemotePty.read
+
+    def stalled_read(self, n=4096):
+        time.sleep(2)
+        return real_read(self, n)
+
+    monkeypatch.setattr(pty_client.RemotePty, "read", stalled_read)
+    monkeypatch.setattr(terminal, "_ADOPT_REPLAY_TIMEOUT", 0.1)
+    monkeypatch.setattr(pty_client, "host_enabled", lambda: True)
+    monkeypatch.setattr(pty_client, "find_host", lambda key: info)
+    terminal._pty_sessions.pop("sess-slow", None)
+    try:
+        assert terminal.get_pty_session("sess-slow") is None
+        assert "sess-slow" not in terminal._pty_sessions
+        # Giving up on the adopt only drops our connection; the agent keeps
+        # running in the host, and a later lookup can adopt it.
+        assert pty_client.host_request(info, {"op": "status", "id": "sess-slow"})[
+            "exists"
+        ]
+        monkeypatch.setattr(pty_client.RemotePty, "read", real_read)
+        assert terminal.get_pty_session("sess-slow") is not None
+    finally:
+        terminal._pty_sessions.pop("sess-slow", None)
+        pty.end()
+
+
 def test_generic_agent_route_spawns_off_the_event_loop(monkeypatch):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
@@ -542,7 +580,13 @@ def test_status_and_list_report_the_child_pid_and_creation_time(host):
     assert status["pid"] == 4242 and isinstance(status["created_at"], float)
     listed = pty_client.host_request(info, {"op": "list"})["sessions"]
     assert listed == [
-        {"id": "s-pid", "done": False, "pid": 4242, "created_at": status["created_at"]}
+        {
+            "id": "s-pid",
+            "done": False,
+            "pid": 4242,
+            "created_at": status["created_at"],
+            "meta": None,
+        }
     ]
 
 
@@ -574,3 +618,266 @@ def test_pty_pid_map_includes_host_sessions_this_backend_has_not_adopted(host, m
         assert _wait(lambda: terminal.pty_pid_map() == {})
     finally:
         terminal._pty_sessions.pop("s-unadopted", None)
+
+
+# ── Ownership across a backend restart ────────────────────────────────────────
+# The backend's (project, agent) -> session map dies with it, so the host
+# remembers who a session was created for and a restarted backend reclaims it.
+
+
+def _meta(project="proj-own", agent="claude"):
+    return {"project_id": project, "agent": agent}
+
+
+def test_host_remembers_the_owner_metadata_it_was_given_at_create(host):
+    info, _ = host
+    _create(info, sid="a", meta=_meta())
+    _create(info, sid="b")
+    listed = {
+        s["id"]: s
+        for s in pty_client.host_request(info, {"op": "list"})["sessions"]
+    }
+    assert listed["a"]["meta"] == _meta()
+    assert listed["b"]["meta"] is None
+    pty_client.host_request(info, {"op": "close", "id": "a"})
+    ids = [s["id"] for s in pty_client.host_request(info, {"op": "list"})["sessions"]]
+    assert ids == ["b"]
+
+
+@pytest.mark.parametrize(
+    "bad",
+    ["a string", ["a"], {"project_id": 1}, {"k" * 300: "v"}, {"project_id": "x" * 5000}],
+)
+def test_host_ignores_metadata_that_is_not_a_small_string_map(host, bad):
+    info, _ = host
+    _create(info, sid="a", meta=bad)
+    [listed] = pty_client.host_request(info, {"op": "list"})["sessions"]
+    assert listed["meta"] is None
+
+
+def test_host_forgets_metadata_of_a_session_it_reaps():
+    h = PtyHost(TOKEN, spawn=lambda **kw: _FakePty())
+    pty = _FakePty()
+    session = PtySession(pty)
+    h.sessions["a"] = session
+    h._meta["a"] = _meta()
+    pty.end()
+    assert _wait(lambda: session.done)
+    now = time.time()
+    h.reap(now, orphan_timeout=10**9, done_ttl=1)
+    h.reap(now + 2, orphan_timeout=10**9, done_ttl=1)
+    assert "a" not in h.sessions and "a" not in h._meta
+
+
+def test_create_sends_the_owner_metadata_to_the_host(monkeypatch):
+    info = {"port": 1, "token": TOKEN}
+    sent = []
+
+    def fake_request(info, msg, timeout=5.0):
+        sent.append(msg)
+        return {"ok": True}
+
+    monkeypatch.setattr(pty_client, "host_enabled", lambda: True)
+    monkeypatch.setattr(pty_client, "ensure_host", lambda key: info)
+    monkeypatch.setattr(pty_client, "host_request", fake_request)
+
+    class _Remote(_FakePty):
+        start_offset = end_offset = 0
+
+        def __init__(self, *args, **kwargs):
+            super().__init__()
+
+    monkeypatch.setattr(pty_client, "RemotePty", _Remote)
+    try:
+        terminal.create_pty_session("sess-meta", command=["agent"], meta=_meta())
+    finally:
+        terminal._pty_sessions.pop("sess-meta", None)
+    assert sent[0]["meta"] == _meta()
+
+
+@pytest.fixture
+def restarted_backend(host, monkeypatch):
+    """A fresh backend in front of a host that already holds sessions: its
+    registries are empty and POSTs reach the real route."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    import generic_agent
+    from routes import generic_agent_routes
+    from security import verify_csrf
+
+    info, spawned = host
+    monkeypatch.setattr(pty_client, "host_enabled", lambda: True)
+    monkeypatch.setattr(pty_client, "find_host", lambda key: info)
+    monkeypatch.setattr(pty_client, "ensure_host", lambda key: info)
+    monkeypatch.setattr(generic_agent, "is_supported", lambda agent: True)
+    monkeypatch.setattr(generic_agent, "is_bare_terminal", lambda agent: True)
+    monkeypatch.setattr(generic_agent, "_active_sessions", {})
+    monkeypatch.setattr(terminal, "_pty_sessions", {})
+    app = FastAPI()
+    app.include_router(generic_agent_routes.router)
+    app.dependency_overrides[verify_csrf] = lambda: None
+    client = TestClient(app)
+
+    def open_terminal(project="proj-own", agent="claude", **extra):
+        return client.post(
+            "/api/generic-agent/terminal",
+            json={"project_id": project, "agent": agent, "repo_path": ".", **extra},
+        )
+
+    yield info, spawned, open_terminal, generic_agent
+    for entry in list(terminal._pty_sessions.values()):
+        entry.pty.detach()
+
+
+def test_reopening_a_project_after_a_restart_reattaches_the_running_agent(
+    restarted_backend,
+):
+    info, spawned, open_terminal, generic_agent = restarted_backend
+    _create(info, sid="old", meta=_meta())
+    _create(info, sid="newest", meta=_meta())
+    _create(info, sid="other-agent", meta=_meta(agent="codex"))
+    _create(info, sid="other-project", meta=_meta(project="elsewhere"))
+
+    reply = open_terminal()
+
+    assert reply.status_code == 200
+    assert reply.json() == {"pty_session_id": "newest", "created": False}
+    assert len(spawned) == 4  # nothing new was started
+    assert generic_agent.get_active_session("proj-own", "claude") == "newest"
+
+
+def test_a_plus_tab_still_starts_a_new_agent_next_to_the_running_one(
+    restarted_backend, monkeypatch
+):
+    info, spawned, open_terminal, _ = restarted_backend
+    _create(info, sid="running", meta=_meta())
+
+    reply = open_terminal(force_new=True)
+
+    assert reply.json()["created"] is True
+    assert reply.json()["pty_session_id"] != "running"
+    assert len(spawned) == 2
+
+
+def test_a_finished_session_is_not_reattached_after_a_restart(restarted_backend):
+    info, spawned, open_terminal, _ = restarted_backend
+    _create(info, sid="finished", meta=_meta())
+    spawned[0][1].end()
+    assert _wait(
+        lambda: pty_client.host_request(info, {"op": "status", "id": "finished"})[
+            "done"
+        ]
+    )
+
+    reply = open_terminal()
+
+    assert reply.json()["created"] is True
+    assert reply.json()["pty_session_id"] != "finished"
+
+
+def test_a_reattached_agent_stays_mapped_to_its_terminal_for_takeover(
+    restarted_backend, monkeypatch
+):
+    info, spawned, open_terminal, _ = restarted_backend
+    _create(info, sid="running", meta=_meta())
+    assert terminal.pty_pid_map() == {4242: "running"}
+
+    reply = open_terminal()
+
+    assert reply.json() == {"pty_session_id": "running", "created": False}
+    assert len(spawned) == 1
+    assert terminal.pty_pid_map() == {4242: "running"}
+
+    class _Proc:
+        def __init__(self, pid, parents=()):
+            self.pid = pid
+            self._parents = list(parents)
+
+        def parents(self):
+            return self._parents
+
+    shell = _Proc(4242)
+    monkeypatch.setattr(
+        "agent_liveness.psutil.Process", lambda pid: _Proc(pid, [shell]) if pid != 4242 else shell
+    )
+    assert agent_liveness.owning_pty(9001, terminal.pty_pid_map()) == "running"
+
+
+def test_no_matching_session_in_the_host_starts_a_new_agent(restarted_backend):
+    info, spawned, open_terminal, _ = restarted_backend
+    _create(info, sid="other", meta=_meta(project="elsewhere"))
+    _create(info, sid="unowned")
+
+    reply = open_terminal()
+
+    assert reply.json()["created"] is True
+    assert len(spawned) == 3
+
+
+def test_an_unreachable_host_starts_a_new_agent_as_before(restarted_backend, monkeypatch):
+    _, spawned, open_terminal, _ = restarted_backend
+
+    def unreachable(info, msg, timeout=5.0):
+        raise pty_client.HostError("host went away")
+
+    monkeypatch.setattr(pty_client, "host_request", unreachable)
+    monkeypatch.setattr(terminal, "spawn_pty", lambda **kw: _FakePty())
+    reply = open_terminal()
+    assert reply.json()["created"] is True
+
+
+def test_a_running_agent_that_cannot_be_reattached_is_not_duplicated_or_killed(
+    restarted_backend, monkeypatch
+):
+    info, spawned, open_terminal, generic_agent = restarted_backend
+    _create(info, sid="running", meta=_meta())
+    monkeypatch.setattr(terminal, "_ADOPT_REPLAY_TIMEOUT", 0.1)
+    real_read = pty_client.RemotePty.read
+    spawned[0][1].feed("retained")
+
+    def stalled(self, n=4096):
+        time.sleep(2)
+        return real_read(self, n)
+
+    monkeypatch.setattr(pty_client.RemotePty, "read", stalled)
+
+    reply = open_terminal()
+
+    assert reply.status_code == 503
+    assert len(spawned) == 1
+    assert pty_client.host_request(info, {"op": "status", "id": "running"})["alive"]
+    assert generic_agent.get_active_session("proj-own", "claude") is None
+
+
+def test_packaged_builds_keep_their_ptys_in_the_backend(monkeypatch):
+    # Not under pytest, as a real run would be.
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.delenv("GATOR_PTY_HOST", raising=False)
+    assert pty_client.host_enabled() is True  # a source checkout
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    assert pty_client.host_enabled() is False
+    monkeypatch.setenv("GATOR_PTY_HOST", "1")
+    assert pty_client.host_enabled() is True  # an explicit override still wins
+
+
+def test_a_packaged_build_never_contacts_the_host(monkeypatch):
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.delenv("GATOR_PTY_HOST", raising=False)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("a packaged build must not start or ask a PTY host")
+
+    monkeypatch.setattr(pty_client, "ensure_host", forbidden)
+    monkeypatch.setattr(pty_client, "find_host", forbidden)
+    fallback = _FakePty()
+    monkeypatch.setattr(terminal, "spawn_pty", lambda **kw: fallback)
+    try:
+        entry = terminal.create_pty_session("sess-frozen", command=["agent"])
+        assert entry.pty is fallback
+        assert terminal.get_pty_session("sess-unknown") is None
+        assert terminal.find_host_session({"project_id": "p", "agent": "a"}) is None
+    finally:
+        terminal._pty_sessions.pop("sess-frozen", None)
+        fallback.end()

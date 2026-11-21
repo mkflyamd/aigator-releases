@@ -341,3 +341,40 @@ def test_capture_controls_reject_a_caller_without_the_csrf_token(env, action):
     app.include_router(rec.router)
     bare = TestClient(app)
     assert bare.post(f"/api/recorder/{action}", json={}).status_code == 403
+
+
+async def test_concurrent_forced_starts_leave_no_orphaned_recording(env, monkeypatch):
+    import asyncio
+    import time
+
+    import httpx
+
+    from security import get_csrf_token
+
+    started = []
+    original_popen = rec.subprocess.Popen
+
+    def recording_popen(cmd, **kwargs):
+        proc = original_popen(cmd, **kwargs)
+        started.append(proc)
+        return proc
+
+    def slow_screens():
+        time.sleep(0.2)
+        return SCREENS
+
+    monkeypatch.setattr(rec.subprocess, "Popen", recording_popen)
+    monkeypatch.setattr(rec, "_list_screens_windows", slow_screens)
+
+    app = FastAPI()
+    app.include_router(rec.router)
+    transport = httpx.ASGITransport(app=app)
+    headers = {"X-CSRF-Token": get_csrf_token("testserver")}
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver", headers=headers) as ac:
+        body = {**CROP, "force": True}
+        await asyncio.gather(
+            ac.post("/api/recorder/start", json=body), ac.post("/api/recorder/start", json=body)
+        )
+
+    running = [p for p in started if p.poll() is None]
+    assert running == [rec._ffmpeg_proc], "a started ffmpeg is running but recorder_stop cannot reach it"
