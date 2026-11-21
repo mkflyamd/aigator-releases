@@ -19268,14 +19268,18 @@ body.gator-terminal-vertical .main-resize {
   max-width: 140px;
   outline: none;
 }
+/* The edit field stays inside the tab: same clipped box as the resting label
+   (overflow + max-width come from .gtp-tab-label), so a long name scrolls
+   within the field instead of spilling over the kebab/close buttons. */
 .gtp-tab-label.editing {
   background: rgba(99, 102, 241, 0.12);
   border-radius: 3px;
   padding: 0 4px;
   color: #fff;
   cursor: text;
-  overflow: visible;
-  max-width: 240px;
+  box-sizing: border-box;
+  min-width: 40px;
+  text-overflow: clip;
 }
 .gtp-tab-close {
   background: transparent;
@@ -21640,6 +21644,22 @@ body.tab-fullscreen {
 .ah-item.ah-state-needs_you.is-previewed::before {
   background: var(--warn);
 }
+/* The row of the terminal whose tab is active: a standing accent bar and tint, like the
+   strip's active tab. Written after the state rules so it wins over their bar and tint. */
+.ah-item.ah-active {
+  --ah-row-bg: color-mix(in srgb, var(--accent) 10%, var(--surface));
+}
+.ah-item.ah-active:hover,
+.ah-item.ah-active:focus-within,
+.ah-item.ah-active.is-previewed {
+  --ah-row-bg: color-mix(in srgb, var(--accent) 14%, var(--surface2));
+}
+.ah-item.ah-active::before {
+  background: var(--accent);
+}
+.ah-row-clickable {
+  cursor: pointer;
+}
 /* The amber row surface costs contrast: brighten the meta ink and, in light, deepen the
    warn ink so meta, pill and note stay at least 4.5:1 when the row is hovered. */
 .ah-item.ah-state-needs_you .ah-meta {
@@ -22419,6 +22439,11 @@ body.tab-fullscreen {
 }
 .tp-detail-header .oc-header-tabs .gtp-tab {
   height: 100%;
+}
+/* Overflow arrows reuse the chat tab bar's .tab-scroll-arrow; they only need
+   to match the header surface the tabs sit on. */
+.tp-detail-header .oc-header-tabs .tab-scroll-arrow {
+  background: var(--surface);
 }
 
 /* â”€â”€ OpenCode loading state (shown in .gtp-terms while a dispatch/reattach

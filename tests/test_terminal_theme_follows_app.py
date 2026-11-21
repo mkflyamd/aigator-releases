@@ -30,9 +30,12 @@ def test_theme_change_event_retints_terminals_and_refreshes_the_pill():
 
 def test_terminal_palette_comes_from_the_document_theme_attribute():
     js = _read("web", "static", "tp-code-agent.js")
+    probe = js.split("function _caIsLightTheme()", 1)[1].split("\n}\n", 1)[0]
+    assert "getAttribute('data-theme') === 'light'" in probe
     body = js.split("function _caXtermTheme()", 1)[1].split("\n}\n", 1)[0]
-    assert "getAttribute('data-theme') === 'light'" in body
-    assert "#ffffff" in body and "#0b0d12" in body
+    assert "_caIsLightTheme()" in body
+    assert "#0b0d12" in body
+    assert "_caThemeVar('--surface', '#ffffff')" in body
 
 
 def test_config_no_longer_lists_the_terminal_theme_key():
