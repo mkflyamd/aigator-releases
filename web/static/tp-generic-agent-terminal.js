@@ -984,7 +984,6 @@ async function _genAgentStart(tabId, agent, projectId, repoPath, opts) {
               rows: dims.rows,
               handoff_id: opts.handoffId,
               resume_id: opts.resumeId,
-              allow_duplicate: !!opts.allowDuplicate,
             }),
           })
         : await fetch('/api/generic-agent/terminal', {
@@ -999,16 +998,17 @@ async function _genAgentStart(tabId, agent, projectId, repoPath, opts) {
               rows: dims.rows,
               handoff_id: opts.handoffId,
               resume_id: opts.resumeId,
-              allow_duplicate: !!opts.allowDuplicate,
             }),
           });
     if (!resp.ok) {
       let detail = 'Could not start ' + agent;
       let code = null;
+      let where = null;
       try {
         const d = await resp.json();
         if (d && d.detail && typeof d.detail === 'object') {
           code = d.detail.code || null;
+          where = d.detail.where || null;
           detail = d.detail.message || detail;
         } else if (d && d.detail) {
           detail = d.detail;
@@ -1016,6 +1016,7 @@ async function _genAgentStart(tabId, agent, projectId, repoPath, opts) {
       } catch (_) {}
       const failure = new Error(detail);
       failure.code = code;
+      failure.where = where;
       throw failure;
     }
     const data = await resp.json();

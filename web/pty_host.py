@@ -236,13 +236,21 @@ class PtyHost:
                 "exists": session is not None,
                 "alive": bool(session and not session.done and session.isalive()),
                 "done": bool(session and session.done),
+                "pid": session.pid if session else None,
+                "created_at": session.created_at if session else None,
             }
         if op == "list":
             return {
                 "ok": True,
                 # Creation order, so a caller can take the newest match.
                 "sessions": [
-                    {"id": k, "done": s.done, "meta": self._meta.get(k)}
+                    {
+                        "id": k,
+                        "done": s.done,
+                        "pid": s.pid,
+                        "created_at": s.created_at,
+                        "meta": self._meta.get(k),
+                    }
                     for k, s in self.sessions.items()
                 ],
             }

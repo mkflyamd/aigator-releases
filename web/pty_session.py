@@ -124,6 +124,11 @@ class PtySession:
         with self._lock:
             self._subs = [s for s in self._subs if s[1] is not event]
 
+    @property
+    def pid(self) -> int | None:
+        """The PTY's child process, when the underlying PTY lives in this process."""
+        return getattr(self.pty, "pid", None)
+
     def write(self, data: str) -> None:
         self.pty.write(data)
 

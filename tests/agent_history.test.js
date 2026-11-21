@@ -344,4 +344,28 @@ const term = (pty, agent, out, viewed) => ({
   assert.deepStrictEqual(h.rowActions(by.s1), ['resume', 'handoff']);
 }
 
+// a session open outside Gator says where, and takes over instead of duplicating
+{
+  const sessions = [
+    rec('s1', 'claude', 'Elsewhere', at(10, 15, 9, 0), {
+      live_elsewhere: true,
+      live_elsewhere_in: { app: 'Orca', pid: 51892 },
+    }),
+    rec('s2', 'claude', 'Unknown app', at(10, 15, 9, 0), {
+      live_elsewhere: true,
+      live_elsewhere_in: { app: null, pid: 71308 },
+    }),
+  ];
+  const by = Object.fromEntries(h.buildRows(sessions, [], NOW).map((r) => [r.id, r]));
+  assert.deepStrictEqual(by.s1.elsewhereIn, { app: 'Orca', pid: 51892 });
+  assert.strictEqual(h.elsewhereText(by.s1.elsewhereIn), 'Orca (process 51892)');
+  assert.strictEqual(h.elsewhereText(by.s2.elsewhereIn), 'another program (process 71308)');
+  assert.strictEqual(h.elsewhereText(null), 'another window');
+  assert.strictEqual(
+    h.takeoverBody({ app: 'Orca', pid: 51892 }),
+    'This session is open in Orca (process 51892). Gator will close it there and open it here. Anything unsaved in that window is lost.',
+  );
+  assert(!h.takeoverBody({ app: '<b>x</b>', pid: 1 }).includes('<b>'), 'app text is escaped');
+}
+
 console.log('agent_history: ok');
