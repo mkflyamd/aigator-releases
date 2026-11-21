@@ -110,27 +110,36 @@ function createWebPin({ getPane, isPaneVisible, onState, onCaptured, onError, ti
   let active = null;
   let closing = Promise.resolve();
   const busy = new Set();
+  let starting = null;
+  let startingApp = null;
 
   function fail(appId, code) {
     onError({ appId, code });
     return { ok: false, status: code };
   }
 
-  function stop() {
+  // skipCdp is true when the pane or debugger is already gone: reset state only.
+  function teardown(skipCdp) {
     const a = active;
     if (!a) return closing;
     active = null;
     a.wc.removeListener('before-input-event', a.onInput);
+    a.wc.removeListener('destroyed', a.onGone);
+    a.dbg.removeListener('detach', a.onGone);
     onState({ appId: a.appId, picking: false, label: '' });
     closing = (async () => {
-      try {
-        await a.cdp.send('Overlay.setInspectMode', { mode: 'none', highlightConfig: {} });
-        await a.cdp.send('Overlay.hideHighlight');
-      } catch (_) { /* page may be gone */ }
+      if (!skipCdp) {
+        try {
+          await a.cdp.send('Overlay.setInspectMode', { mode: 'none', highlightConfig: {} });
+          await a.cdp.send('Overlay.hideHighlight');
+        } catch (_) { /* page may be gone */ }
+      }
       a.cdp.close();
     })();
     return closing;
   }
+
+  const stop = () => teardown(false);
 
   async function pick(backendNodeId) {
     const a = active;
@@ -139,11 +148,14 @@ function createWebPin({ getPane, isPaneVisible, onState, onCaptured, onError, ti
     try {
       await a.cdp.send('Overlay.setInspectMode', { mode: 'none', highlightConfig: {} });
       await a.cdp.send('Overlay.hideHighlight');
-      onCaptured({ appId: a.appId, ...(await captureElement(a.cdp, backendNodeId)) });
+      const captured = await captureElement(a.cdp, backendNodeId);
+      // The user may have cancelled (Esc / stop) while the capture was running.
+      if (active !== a) return;
+      onCaptured({ appId: a.appId, ...captured });
     } catch (e) {
-      onError({ appId: a.appId, code: codeOf(e) });
+      if (active === a) onError({ appId: a.appId, code: codeOf(e) });
     } finally {
-      await stop();
+      if (active === a) await teardown(false);
     }
   }
 
@@ -166,11 +178,20 @@ function createWebPin({ getPane, isPaneVisible, onState, onCaptured, onError, ti
     }
   }
 
-  async function start(appId) {
+  function start(appId) {
+    // A double click must not open two sessions: share the in-flight start.
+    if (starting) return startingApp === appId ? starting : Promise.resolve(fail(appId, 'pane_unavailable'));
+    startingApp = appId;
+    starting = doStart(appId).finally(() => { starting = null; startingApp = null; });
+    return starting;
+  }
+
+  async function doStart(appId) {
     await stop();
     const wc = getPane(appId);
     if (!wc || wc.isDestroyed()) return fail(appId, 'pane_unavailable');
     if (!isPaneVisible(appId)) return fail(appId, 'pane_not_visible');
+    if (busy.has(appId)) return fail(appId, 'pane_unavailable');
     let cdp;
     try {
       cdp = openSession(wc, timeoutMs);
@@ -188,8 +209,12 @@ function createWebPin({ getPane, isPaneVisible, onState, onCaptured, onError, ti
         stop();
       }
     };
+    const dbg = wc.debugger;
+    const onGone = () => teardown(true);
     wc.on('before-input-event', onInput);
-    active = { appId, wc, cdp, onInput, picking: false, hovering: false };
+    wc.on('destroyed', onGone);
+    dbg.on('detach', onGone);
+    active = { appId, wc, dbg, cdp, onInput, onGone, picking: false, hovering: false };
     cdp.onEvent((method, params) => {
       if (!active || active.cdp !== cdp) return;
       if (method === 'Overlay.inspectNodeRequested') pick(params.backendNodeId);
@@ -203,7 +228,7 @@ function createWebPin({ getPane, isPaneVisible, onState, onCaptured, onError, ti
     const wc = getPane(appId);
     if (!wc || wc.isDestroyed()) return { status: 'pane_unavailable' };
     if (!isPaneVisible(appId)) return { status: 'pane_not_visible' };
-    if (busy.has(appId)) return { status: 'pane_unavailable' };
+    if (busy.has(appId) || (starting && startingApp === appId)) return { status: 'pane_unavailable' };
     busy.add(appId);
     let cdp;
     try {
@@ -227,12 +252,18 @@ function createWebPin({ getPane, isPaneVisible, onState, onCaptured, onError, ti
   async function recapture(appId, locator, url) {
     if (active && active.appId === appId) await stop();
     const r = await run(appId, async (cdp, wc) => {
-      if (url && !core.urlMatches(wc.getURL(), url)) throw coded('page_mismatch');
+      // The pin must be of the page it was made on: require the url, and re-check
+      // after the capture in case the pane navigated while we were working.
+      const samePage = () => !!url && core.urlMatches(wc.getURL(), url);
+      if (!samePage()) throw coded('page_mismatch');
+      let result = null;
       if (locator) {
         const hit = await core.resolveTarget(cdp, locator);
-        if (hit) return { ...(await captureElement(cdp, hit.backendNodeId)), match: hit.match };
+        if (hit) result = { ...(await captureElement(cdp, hit.backendNodeId)), match: hit.match };
       }
-      return { ...(await captureView(cdp)), match: locator ? 'view-fallback' : 'view' };
+      if (!result) result = { ...(await captureView(cdp)), match: locator ? 'view-fallback' : 'view' };
+      if (!samePage()) throw coded('page_mismatch');
+      return result;
     });
     return r.status === 'ok' ? { status: 'ok', ...r.payload } : { status: r.status };
   }
