@@ -48,6 +48,11 @@
     return typeof _activeTabId !== 'undefined' && _activeTabId ? _activeTabId : null;
   }
 
+  function tabTitle(id) {
+    const tab = typeof _tabs !== 'undefined' && Array.isArray(_tabs) ? _tabs.find((t) => t.id === id) : null;
+    return tab && tab.title ? tab.title : 'another tab';
+  }
+
   function toast(message) {
     if (typeof _showConnectivityToast === 'function') _showConnectivityToast(message, 'warning');
   }
@@ -128,7 +133,7 @@
       b.textContent = s.text;
       b.addEventListener('click', () => {
         clearSuggestions();
-        fillComposer(s.text);
+        if (activeContext() === contextId) fillComposer(s.text);
       });
       row.appendChild(b);
     });
@@ -139,6 +144,7 @@
     x.textContent = '×';
     x.addEventListener('click', clearSuggestions);
     row.appendChild(x);
+    clearSuggestions();
     host.insertAdjacentElement('beforebegin', row);
   }
 
@@ -175,8 +181,23 @@
       );
       return;
     }
-    const pin = await res.json();
+    let pin = null;
+    try {
+      pin = await res.json();
+    } catch {
+      pin = null;
+    }
+    if (!pin || !pin.id) {
+      toast('Could not pin that. Try again.');
+      return;
+    }
     captured.set(pin.id, pin.captured_at);
+    if (activeContext() !== contextId) {
+      // The user switched tabs while the capture was saving: the pin belongs to the original tab.
+      toast(`Pinned to ${tabTitle(contextId)}. Switch back to use it.`);
+      if (typeof _refreshPinOrb === 'function') _refreshPinOrb(true);
+      return;
+    }
     fly(p.image_b64);
     if (typeof root.insertPinChipAtCaret === 'function') {
       root.insertPinChipAtCaret({ source: 'webpin', id: pin.id, label: pin.label });
