@@ -58,9 +58,9 @@ def web_pin_compare_line(pins: list[dict]) -> str:
             meta = p.get("meta") or {}
             key = meta.get("app_id") or ""
             if key:
-                apps.setdefault(key, store.sanitize_label(meta.get("app_name", "")) or "a web app")
+                apps.setdefault(key, _safe(meta.get("app_name")) or "a web app")
         else:
-            src = str(p.get("source", ""))
+            src = _safe(p.get("source"))
             if src and src not in other_sources:
                 other_sources.append(src)
     if not apps:
