@@ -7,7 +7,9 @@ attaches to an existing one and receives its buffered output plus live output.
 
 Wire format: one JSON object per line. The first message on a connection must be
 {"op": "hello", "token": ..., "proto": N}. Requests with a reply: create, status,
-list, close, attach. After attach, the connection also carries output events
+list, close, attach. A create may carry "meta" (owner labels such as project and
+agent); list returns it, so a restarted backend can find the sessions that were its
+own. After attach, the connection also carries output events
 ({"t": "out", "off": N, "data": ...}, {"t": "exit"}) and accepts write and resize
 requests, which have no reply.
 
@@ -69,6 +71,24 @@ def host_log_file(key: str) -> Path:
     return state_dir() / f"pty-host-{safe_key(key)}.log"
 
 
+_META_MAX_ITEMS = 8
+_META_MAX_CHARS = 256
+
+
+def _clean_meta(meta) -> dict[str, str] | None:
+    """Owner labels a client attached to a session (which project and agent it
+    was started for). Anything that is not a small string-to-string map is
+    dropped rather than stored, since the host keeps it for the session's life."""
+    if not isinstance(meta, dict) or not 0 < len(meta) <= _META_MAX_ITEMS:
+        return None
+    for key, value in meta.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            return None
+        if len(key) > _META_MAX_CHARS or len(value) > _META_MAX_CHARS:
+            return None
+    return dict(meta)
+
+
 class PtyHost:
     def __init__(self, token: str, spawn=spawn_pty):
         self._token = token
@@ -77,6 +97,7 @@ class PtyHost:
         self._connections = 0
         self._attached: dict[str, int] = {}
         self._done_since: dict[str, float] = {}
+        self._meta: dict[str, dict[str, str]] = {}
         self._last_connection = time.time()
 
     def reap(self, now: float, orphan_timeout: float, done_ttl: float) -> bool:
@@ -90,6 +111,7 @@ class PtyHost:
             if now - since >= done_ttl:
                 self.sessions.pop(sid, None)
                 self._done_since.pop(sid, None)
+                self._meta.pop(sid, None)
                 session.close()
         if self._connections:
             return False
@@ -102,6 +124,7 @@ class PtyHost:
             except Exception:
                 logger.exception("closing a session failed")
         self.sessions.clear()
+        self._meta.clear()
 
     async def handle(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
@@ -202,6 +225,9 @@ class PtyHost:
                 logger.exception("spawn failed")
                 return {"ok": False, "error": f"spawn failed: {exc}"}
             self.sessions[sid] = PtySession(pty)
+            meta = _clean_meta(msg.get("meta"))
+            if meta:
+                self._meta[sid] = meta
             return {"ok": True}
         if op == "status":
             session = self.sessions.get(sid)
@@ -214,12 +240,15 @@ class PtyHost:
         if op == "list":
             return {
                 "ok": True,
+                # Creation order, so a caller can take the newest match.
                 "sessions": [
-                    {"id": k, "done": s.done} for k, s in self.sessions.items()
+                    {"id": k, "done": s.done, "meta": self._meta.get(k)}
+                    for k, s in self.sessions.items()
                 ],
             }
         if op == "close":
             session = self.sessions.pop(sid, None)
+            self._meta.pop(sid, None)
             if session is not None:
                 await loop.run_in_executor(None, session.close)
             return {"ok": True, "existed": session is not None}

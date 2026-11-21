@@ -18,12 +18,12 @@ class TestUnreactRoute:
     """POST /api/slack/unreact must call reactions.remove via Web API."""
 
     def test_unreact_route_exists(self):
-        assert "async def slack_remove_reaction" in SRC, (
+        assert "def slack_remove_reaction" in SRC, (
             "slack_remove_reaction route must exist in routes/slack.py"
         )
 
     def test_unreact_calls_reactions_remove(self):
-        fn_start = SRC.find("async def slack_remove_reaction")
+        fn_start = SRC.find("def slack_remove_reaction")
         fn_end = SRC.find("\n@router.", fn_start + 1)
         fn_body = SRC[fn_start : fn_end if fn_end != -1 else fn_start + 800]
         assert "reactions.remove" in fn_body, (
@@ -31,7 +31,7 @@ class TestUnreactRoute:
         )
 
     def test_unreact_uses_post_method(self):
-        fn_start = SRC.find("async def slack_remove_reaction")
+        fn_start = SRC.find("def slack_remove_reaction")
         fn_end = SRC.find("\n@router.", fn_start + 1)
         fn_body = SRC[fn_start : fn_end if fn_end != -1 else fn_start + 800]
         assert "POST" in fn_body or "post" in fn_body.lower(), (
