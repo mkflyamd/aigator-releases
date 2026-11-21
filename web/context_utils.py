@@ -91,7 +91,13 @@ def compress_tool_result(
     if tool_name in COM_BOUND_TOOLS:
         return result
     is_mcp = tool_name.startswith("mcp-")
-    result_str = result if isinstance(result, str) else json.dumps(result, default=str)
+    # Tool images are sent as image blocks, so they never count against the text budget.
+    measured = (
+        {k: v for k, v in result.items() if k != "_images"}
+        if isinstance(result, dict) and "_images" in result
+        else result
+    )
+    result_str = measured if isinstance(measured, str) else json.dumps(measured, default=str)
     if is_mcp and len(result_str) > MCP_RESPONSE_MAX_CHARS:
         return _cap_mcp_result(result, result_str)
     if total_chars_so_far + len(result_str) < COMPRESSION_THRESHOLD_CHARS:

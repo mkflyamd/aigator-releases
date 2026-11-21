@@ -191,3 +191,18 @@ def test_prompt_line_tolerates_non_string_app_name():
     pid = str(uuid.uuid4())
     line = web_pin_prompt_line("x", pid, {"app_name": 123, "captured_at": 0})
     assert "from 123," in line
+
+
+def test_read_result_keeps_image_through_the_app_truncation_step(monkeypatch, tmp_path):
+    """web/app.py passes every tool result through truncate_tool_result; a real-size
+    screenshot must still reach the provider as an image, not be stubbed away."""
+    import tool_result_truncation as trunc
+
+    monkeypatch.setattr(trunc, "_outputs_dir", lambda: tmp_path / "out")
+    big_png = b"\x89PNG\r\n\x1a\n" + b"\x07" * 60_000
+    pid = str(uuid.uuid4())
+    store.write_snapshot(pid, image=big_png, text="Revenue 4.2M", meta={"app_id": "pbi", "url": "https://app.powerbi.com/r/1"})
+    state.set_pin("webpin", pid, "Revenue card", {"app_id": "pbi", "app_name": "Power BI", "captured_at": 1.0}, "tab-a")
+    out = trunc.truncate_tool_result(tools.read_web_pin(pid, _context_id="tab-a"), tool_name="read_web_pin")
+    assert "Revenue 4.2M" in out["text"]
+    assert base64.b64decode(out["_images"][0]["base64"]) == big_png

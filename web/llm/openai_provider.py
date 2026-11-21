@@ -462,7 +462,14 @@ class OpenAIProvider(LLMProvider):
             raise ValueError("build_tool_result_message called with empty tool_calls list")
         content: list[dict] = []
         for tc, result in zip(tool_calls, results):
+            omitted = 0
+            if isinstance(result, dict) and "_images" in result:
+                # This provider's history is text-only; base64 would be megabytes of noise.
+                omitted = len(result["_images"] or [])
+                result = {k: v for k, v in result.items() if k != "_images"}
             result_str = result if isinstance(result, str) else json.dumps(result, default=str)
+            if omitted:
+                result_str += f"\n[{omitted} image(s) omitted: this provider cannot receive tool images]"
             content.append({
                 "type": "tool_result",
                 "tool_use_id": tc.id,

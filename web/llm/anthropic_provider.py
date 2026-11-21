@@ -648,8 +648,13 @@ class AnthropicProvider(LLMProvider):
         total_chars = 0
         for tc, result in zip(tool_calls, results):
             result = compress_tool_result(tc.name, result, total_chars)
+            counted = (
+                {k: v for k, v in result.items() if k != "_images"}
+                if isinstance(result, dict)
+                else result
+            )
             total_chars += len(
-                result if isinstance(result, str) else json.dumps(result, default=str)
+                counted if isinstance(counted, str) else json.dumps(counted, default=str)
             )
             if isinstance(result, dict) and "_images" in result:
                 images = result["_images"]

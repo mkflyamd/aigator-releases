@@ -230,3 +230,23 @@ def test_canonical_to_oai_text_only_simplifies_to_string():
     assert len(result) == 1
     assert result[0]["role"] == "user"
     assert result[0]["content"] == "Hello world"
+
+
+def test_build_tool_result_message_does_not_serialise_image_base64():
+    """OpenAI-compat history is text; tool images must not be json.dumps'd into it."""
+    from web.llm.openai_provider import OpenAIProvider
+    from web.llm.base import ToolCall
+
+    with patch("web.llm.openai_provider.OpenAI"):
+        provider = OpenAIProvider(GATEWAY_PROFILE)
+    tc = ToolCall(id="call_img", name="read_web_pin", inputs={})
+    b64 = "QUJD" * 20_000
+    msg = provider.build_tool_result_message(
+        [tc], [{"text": "Revenue 4.2M", "_images": [{"base64": b64, "media_type": "image/png"}]}]
+    )
+    content = msg["content"][0]["content"]
+    assert b64 not in content
+    assert "_images" not in content
+    assert "Revenue 4.2M" in content
+    assert "1 image(s) omitted" in content
+    assert len(content) < 1000
