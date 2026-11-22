@@ -23826,3 +23826,62 @@ body.tab-fullscreen {
   fill: var(--text-muted) !important;
   stroke: var(--text-muted) !important;
 }
+
+/* ── Gator toast (Undo) ─────────────────────────────────────────────── */
+#gator-toast-host {
+  position: fixed;
+  left: 50%;
+  bottom: 1.2rem;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  align-items: center;
+  z-index: 9999;
+  pointer-events: none;
+}
+.gator-toast {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  padding: 0.55rem 0.9rem;
+  background: var(--surface2);
+  color: var(--text);
+  border: 1px solid var(--border2);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  font-size: 0.82rem;
+  opacity: 0;
+  transform: translateY(6px);
+  transition:
+    opacity 0.2s,
+    transform 0.2s;
+  pointer-events: auto;
+}
+.gator-toast.is-in {
+  opacity: 1;
+  transform: translateY(0);
+}
+.gator-toast-action {
+  background: none;
+  border: 0;
+  padding: 0.15rem 0.35rem;
+  border-radius: 4px;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.gator-toast-action:hover {
+  background: var(--accent-glow);
+}
+.gator-toast-action:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .gator-toast {
+    transition: none;
+    transform: none;
+  }
+}

@@ -5115,7 +5115,7 @@ ipcMain.on('toolbar:star-add', (e) => {
   _sendToGator('custom-app:star-event', {
     kind: 'add',
     url: v.webContents.getURL(),
-    title: v.webContents.getTitle(),
+    name: toolbarStar.defaultAppName(v.webContents.getTitle(), v.webContents.getURL()),
     fromAppId: activeExternalApp,
   });
 });
