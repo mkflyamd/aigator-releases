@@ -1,0 +1,13 @@
+AI Gator
+Copyright 2026 Mayuresh Kulkarni
+
+This product is licensed under the Apache License, Version 2.0. See LICENSE.
+
+This product includes software developed by Anthropic, PBC, taken from the
+Anthropic skills repository (https://github.com/anthropics/skills), which is
+licensed under the Apache License, Version 2.0:
+
+  - web/skills/_scripts/office/
+  - web/skills/docx/scripts/
+  - web/skills/ppt/scripts/
+  - web/skills/excel/scripts/recalc.py
