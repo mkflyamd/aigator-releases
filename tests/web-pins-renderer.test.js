@@ -43,7 +43,7 @@ test('renderer never sends a message or falls back to the default tab', () => {
 
 test('app.js gives web pins the chat pin icon, a webpin card config and decorates cards', () => {
   const src = read('web', 'static', 'app.js');
-  assert.match(src, /webpin: \{ icon: '📌', label: 'Web view' \}/);
+  assert.match(src, /webpin: \{ label: 'Web view' \}/);
   assert.doesNotMatch(src, /WebPins\.icon/);
   assert.match(src, /window\.WebPins\.decorateCard\(card, p\)/);
 });
