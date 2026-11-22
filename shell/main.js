@@ -11,6 +11,7 @@
 } = require('electron');
 const { applyMediaPermissions } = require('./media-permissions');
 const { applyNavigationPolicy, setToolbarAttacher, _hostMatches } = require('./navigation-policy');
+const addressInput = require('./address-input');
 const { resolveAtlassianUrls } = require('./atlassian-urls');
 const { createHudRecorder } = require('./hud_recorder');
 const path = require('path');
@@ -389,12 +390,12 @@ function attachToolbarToWindow(childWin) {
       childWc.reloadIgnoringCache();
     } catch {}
   };
-  const navigateHandler = (e, url) => {
-    if (e.sender.id !== tbWcId || typeof url !== 'string' || !/^https:\/\//.test(url)) return;
+  const navigateHandler = (e, typed) => {
+    if (e.sender.id !== tbWcId || typeof typed !== 'string') return;
     // The shared toolbar emits one navigation channel for both main panes and
     // child windows. Child toolbars previously had no handler, so Enter in a
     // visible address bar appeared to do nothing.
-    childWc.loadURL(url).catch((error) => {
+    addressInput.loadAddressInput(childWc, typed, (error, url) => {
       console.error(`[toolbar] child navigation failed for ${url}: ${error.message}`);
       try {
         tbWc.send('toolbar:navigation-error', { url, message: error.message });
@@ -814,6 +815,20 @@ function _attachToolbarListeners(view, appName) {
         .catch(() => {});
     }
   };
+  // Ctrl+L / Alt+D jump to the address bar, as in a browser.
+  wc.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown' || activeExternalApp !== appName) return;
+    const key = String(input.key || '').toLowerCase();
+    const mod = input.control || input.meta;
+    if (!((mod && !input.alt && !input.shift && key === 'l') || (input.alt && !mod && key === 'd'))) return;
+    const toolbarWc = _liveToolbarWebContents();
+    if (!toolbarWc) return;
+    event.preventDefault();
+    try {
+      toolbarWc.focus();
+      toolbarWc.send('toolbar:focus-url');
+    } catch {}
+  });
   wc.on('did-navigate', () => {
     if (activeExternalApp === appName) _toolbarPushState();
     notifyJiraNavigation();
@@ -5084,11 +5099,11 @@ ipcMain.on('toolbar:collapse-gator', (e) => {
   _syncGatorSqueezed(!gatorVisible);
 });
 
-ipcMain.on('toolbar:navigate', (e, url) => {
-  if (!_isMainToolbar(e) || typeof url !== 'string' || !/^https:\/\//.test(url)) return;
+ipcMain.on('toolbar:navigate', (e, typed) => {
+  if (!_isMainToolbar(e) || typeof typed !== 'string') return;
   const v = viewForApp(activeExternalApp);
   if (v && !v.webContents.isDestroyed()) {
-    v.webContents.loadURL(url).catch((error) => {
+    addressInput.loadAddressInput(v.webContents, typed, (error, url) => {
       console.error(`[toolbar] navigation failed for ${url}: ${error.message}`);
       try {
         _liveToolbarWebContents()?.send('toolbar:navigation-error', {

@@ -97,16 +97,13 @@ function leavePrompt(choice) {
 // Address bar: typing www.cnn.com on the compose page must navigate there. That page
 // has a beforeunload handler, so Electron cancels the load unless will-prevent-unload
 // calls preventDefault.
-const toolbarHtml = fs.readFileSync(path.join(__dirname, '..', 'shell', 'toolbar.html'), 'utf8');
-const normalize = toolbarHtml.match(/if \(!\/\^https\?:[^\n]*navUrl = 'https:\/\/' \+ navUrl;/);
-assert(normalize, 'toolbar address bar adds https:// to bare hostnames');
-const typedToUrl = (typed) =>
-  vm.runInNewContext('var navUrl = typed;' + normalize[0] + ' navUrl', { typed });
-assert.strictEqual(typedToUrl('www.cnn.com'), 'https://www.cnn.com');
-assert.strictEqual(typedToUrl('http://example.com'), 'http://example.com');
+const addressInput = require('../shell/address-input');
+const typedToUrl = (typed) => typed;
+assert.strictEqual(addressInput.resolveAddressInput('www.cnn.com').url, 'https://www.cnn.com/');
+assert.strictEqual(addressInput.resolveAddressInput('http://example.com').url, 'http://example.com/');
 
 const navHandler = source.match(
-  /ipcMain\.on\('toolbar:navigate', (\(e, url\) => \{[\s\S]*?\r?\n\})\);\r?\n\r?\nipcMain\.on\('toolbar:set-expanded'/,
+  /ipcMain\.on\('toolbar:navigate', (\(e, typed\) => \{[\s\S]*?\r?\n\})\);\r?\n\r?\nipcMain\.on\('toolbar:set-expanded'/,
 );
 assert(navHandler, 'toolbar:navigate handler found');
 
@@ -127,6 +124,7 @@ function typeInAddressBar(typed, { beforeUnload, listener }) {
   };
   const handler = vm.runInNewContext('(' + navHandler[1] + ')', {
     _isMainToolbar: () => true,
+    addressInput,
     viewForApp: () => ({ webContents: wc }),
     activeExternalApp: 'outlook',
     console,
@@ -143,7 +141,7 @@ function typeInAddressBar(typed, { beforeUnload, listener }) {
       beforeUnload: true,
       listener: (e) => leave.fn(e, {}),
     }),
-    'https://www.cnn.com',
+    'https://www.cnn.com/',
     'www.cnn.com loads after choosing Leave',
   );
   assert.strictEqual(JSON.stringify(leave.asked), JSON.stringify([['Leave', 'Stay']]));
@@ -162,7 +160,7 @@ function typeInAddressBar(typed, { beforeUnload, listener }) {
   );
   assert.strictEqual(
     await typeInAddressBar('www.cnn.com', { beforeUnload: false, listener: null }),
-    'https://www.cnn.com',
+    'https://www.cnn.com/',
     'pages without unsaved changes navigate straight away',
   );
 

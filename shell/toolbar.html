@@ -188,6 +188,9 @@
       .tb-url.is-loading {
         color: var(--text-sub);
       }
+      .tb-url.is-error {
+        border-color: var(--danger, #e5484d);
+      }
       .tb-url-text {
         flex: 1;
         min-width: 0;
@@ -837,6 +840,11 @@
         let spinTimer = null;
         let star = { state: 'hidden', appId: null, name: '' };
         let userEditing = false;
+        // Text the user just submitted; stays in the field until the page's real URL arrives.
+        let submittedText = null;
+        let submittedFrom = '';
+        let submitTimer = null;
+        let errorTimer = null;
 
         // True when the user has an active text selection inside the URL field.
         function urlTextSelected() {
@@ -869,8 +877,11 @@
           // code updated the input and restored readonly on every event,
           // making the address bar appear read-only in practice.  Preserve
           // the edit buffer until Enter or Escape/blur completes the edit.
-          if (userEditing) return;
           currentUrl = url || '';
+          // The 500ms state poll keeps re-sending the old URL until the new page commits.
+          if (submittedText !== null && currentUrl === submittedFrom) return;
+          submittedText = null;
+          if (userEditing) return;
           if (urlTextSelected()) return;
           if (!currentUrl) {
             elUrlInput.value = '—';
@@ -916,8 +927,21 @@
         elUrlInput.addEventListener('blur', () => {
           userEditing = false;
           elUrlInput.setAttribute('readonly', 'readonly');
-          renderUrl(currentUrl);
+          if (submittedText === null) renderUrl(currentUrl);
         });
+
+        function showNavigationError(message) {
+          submittedText = null;
+          renderUrl(currentUrl);
+          setSpinning(false);
+          elUrl.classList.add('is-error');
+          elUrl.title = message || 'Could not open that address';
+          clearTimeout(errorTimer);
+          errorTimer = setTimeout(() => {
+            elUrl.classList.remove('is-error');
+            elUrl.title = currentUrl;
+          }, 4000);
+        }
 
         elUrlInput.addEventListener('keydown', (e) => {
           if (e.key === 'Enter') {
@@ -927,14 +951,26 @@
               elUrlInput.blur();
               return;
             }
-            let navUrl = typed;
-            if (!/^https?:\/\//i.test(navUrl)) navUrl = 'https://' + navUrl;
-            elUrlInput.setAttribute('readonly', 'readonly');
-            userEditing = false;
+            elUrl.classList.remove('is-error');
+            submittedText = typed;
+            submittedFrom = currentUrl;
+            clearTimeout(submitTimer);
+            submitTimer = setTimeout(() => {
+              submittedText = null;
+              renderUrl(currentUrl);
+            }, 10000);
             pulseSpin();
-            ipcRenderer.send('toolbar:navigate', navUrl);
-          } else if (e.key === 'Escape') {
+            // main decides between an address and a web search, and hands focus to the page.
+            ipcRenderer.send('toolbar:navigate', typed);
             elUrlInput.blur();
+          } else if (e.key === 'Escape') {
+            // First Escape restores the current address, a second one leaves the field.
+            if (elUrlInput.value !== currentUrl) {
+              elUrlInput.value = currentUrl;
+              elUrlInput.select();
+            } else {
+              elUrlInput.blur();
+            }
           }
         });
 
@@ -943,6 +979,13 @@
           if (elUrlInput.hasAttribute('readonly') && currentUrl) {
             elUrlInput.select();
           }
+        });
+
+        ipcRenderer.on('toolbar:focus-url', () => {
+          if (currentUrl) elUrlInput.focus();
+        });
+        ipcRenderer.on('toolbar:navigation-error', (info) => {
+          showNavigationError(info && info.message);
         });
 
         // ── Favorite star + edit bubble ──────────────────────────────────────
