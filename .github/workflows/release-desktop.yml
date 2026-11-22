@@ -87,6 +87,9 @@ jobs:
       - name: Fetch dictation model
         run: uv run python tools/fetch_dictation_model.py
 
+      - name: Generate third-party notices
+        run: uv run python tools/generate_third_party_notices.py
+
       - name: Install Electron dependencies
         working-directory: shell
         run: npm ci --ignore-scripts
