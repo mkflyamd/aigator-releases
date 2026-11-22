@@ -98,3 +98,10 @@ test('resolveTarget returns null when nothing matches or locator is empty', asyn
   assert.strictEqual(await core.resolveTarget(none, LOC), null);
   assert.strictEqual(await core.resolveTarget(fakeCdp({}), null), null);
 });
+
+test('pin cursor css is one safe user rule with a hotspot and a crosshair fallback', () => {
+  const css = require('../shell/web-pin-core').PIN_CURSOR_CSS;
+  assert.match(css, /^html, html \* \{ cursor: url\("data:image\/svg\+xml,[^"]+"\) 8 25, crosshair !important; \}$/);
+  const uri = css.slice(css.indexOf('data:'), css.indexOf('")'));
+  assert.doesNotMatch(uri, /[<>#]/);
+});

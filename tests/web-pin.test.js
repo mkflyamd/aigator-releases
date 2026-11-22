@@ -37,7 +37,11 @@ function fakeWc({ url = 'https://a.com/r/1', overrides = {}, attached: preAttach
     return typeof h === 'function' ? h(p) : h || {};
   };
   const wc = new EventEmitter();
+  const css = { inserted: [], removed: [] };
   return Object.assign(wc, {
+    css,
+    insertCSS: async (text, opts) => { css.inserted.push({ text, opts }); return 'css-1'; },
+    removeInsertedCSS: async (key) => { css.removed.push(key); },
     debugger: dbg, sent, inspectCalls, params, getURL: () => currentUrl, setUrl: (u) => { currentUrl = u; }, isDestroyed: () => false,
   });
 }
@@ -367,4 +371,47 @@ test('captureBeyondViewport is only requested when the clip leaves the viewport'
   tall.debugger.emit('message', {}, 'Overlay.inspectNodeRequested', { backendNodeId: 5 });
   await waitFor(() => t.events.captured.length === 1);
   assert.strictEqual(tall.params['Page.captureScreenshot'].captureBeyondViewport, true);
+});
+
+test('pin mode shows the pin pointer as user-origin CSS and removes it on stop', async () => {
+  const wc = fakeWc();
+  const { wp } = harness(wc);
+  await wp.start('custom-x');
+  assert.strictEqual(wc.css.inserted.length, 1);
+  assert.strictEqual(wc.css.inserted[0].opts.cssOrigin, 'user');
+  assert.match(wc.css.inserted[0].text, /crosshair !important/);
+  assert.deepStrictEqual(wc.css.removed, []);
+  await wp.stop();
+  assert.deepStrictEqual(wc.css.removed, ['css-1']);
+});
+
+test('the pin pointer is removed after a pick', async () => {
+  const wc = fakeWc();
+  const { wp, events } = harness(wc);
+  await wp.start('custom-x');
+  wc.debugger.emit('message', {}, 'Overlay.inspectNodeRequested', { backendNodeId: 7 });
+  await waitFor(() => events.captured.length === 1);
+  await waitFor(() => wc.css.removed.length === 1);
+  assert.deepStrictEqual(wc.css.removed, ['css-1']);
+});
+
+test('a failing cursor injection does not stop pin mode starting', async () => {
+  const wc = fakeWc();
+  wc.insertCSS = async () => { throw new Error('nope'); };
+  const { wp, events } = harness(wc);
+  const r = await wp.start('custom-x');
+  assert.strictEqual(r.ok, true);
+  assert.deepStrictEqual(events.errors, []);
+  await wp.stop();
+  assert.deepStrictEqual(wc.css.removed, []);
+});
+
+test('a destroyed pane is not asked to remove the pointer', async () => {
+  const wc = fakeWc();
+  const { wp } = harness(wc);
+  await wp.start('custom-x');
+  wc.isDestroyed = () => true;
+  wc.emit('destroyed');
+  await wp.stop();
+  assert.deepStrictEqual(wc.css.removed, []);
 });

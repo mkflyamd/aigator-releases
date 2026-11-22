@@ -117,6 +117,12 @@ async function captureElement(cdp, wc, backendNodeId) {
   };
 }
 
+// The pointer is cosmetic: a pane that is already gone must not break teardown.
+function removeCursor(wc, key) {
+  if (key == null || wc.isDestroyed()) return;
+  Promise.resolve().then(() => wc.removeInsertedCSS(key)).catch(() => {});
+}
+
 function createWebPin({ getPane, isPaneVisible, onState, onCaptured, onError, timeoutMs = CDP_TIMEOUT_MS }) {
   let active = null;
   let closing = Promise.resolve();
@@ -138,6 +144,7 @@ function createWebPin({ getPane, isPaneVisible, onState, onCaptured, onError, ti
     a.wc.removeListener('destroyed', a.onGone);
     a.dbg.removeListener('detach', a.onGone);
     onState({ appId: a.appId, picking: false, label: '' });
+    removeCursor(a.wc, a.cursorKey);
     closing = (async () => {
       if (!skipCdp) {
         try {
@@ -204,13 +211,16 @@ function createWebPin({ getPane, isPaneVisible, onState, onCaptured, onError, ti
     if (!isPaneVisible(appId)) return fail(appId, 'pane_not_visible');
     if (busy.has(appId)) return fail(appId, 'pane_unavailable');
     let cdp;
+    let cursorKey = null;
     try {
       cdp = openSession(wc, timeoutMs);
       await cdp.send('DOM.enable');
       await cdp.send('Overlay.enable');
       await cdp.send('DOM.getDocument', { depth: 0 });
       await cdp.send('Overlay.setInspectMode', { mode: 'searchForNode', highlightConfig: HIGHLIGHT });
+      cursorKey = await Promise.resolve().then(() => wc.insertCSS(core.PIN_CURSOR_CSS, { cssOrigin: 'user' })).catch(() => null);
     } catch (e) {
+      removeCursor(wc, cursorKey);
       if (cdp) cdp.close();
       return fail(appId, codeOf(e));
     }
@@ -225,7 +235,7 @@ function createWebPin({ getPane, isPaneVisible, onState, onCaptured, onError, ti
     wc.on('before-input-event', onInput);
     wc.on('destroyed', onGone);
     dbg.on('detach', onGone);
-    active = { appId, wc, dbg, cdp, onInput, onGone, picking: false, hovering: false };
+    active = { appId, wc, dbg, cdp, onInput, onGone, cursorKey, picking: false, hovering: false };
     cdp.onEvent((method, params) => {
       if (!active || active.cdp !== cdp) return;
       if (method === 'Overlay.inspectNodeRequested') pick(params.backendNodeId);

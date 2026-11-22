@@ -198,7 +198,21 @@ async function resolveTarget(cdp, locator) {
   return null;
 }
 
+// Pushpin pointer shown over the page while pin mode is on. The needle tip is the
+// hotspot (8,25) so the head sits up-right of the element being picked.
+const PIN_CURSOR_HOTSPOT = '8 25';
+const PIN_CURSOR_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24">'
+  + '<g transform="rotate(45 12 12)" stroke-linejoin="round" stroke-linecap="round">'
+  + '<path d="M9 3h6l-.8 6.2L17 12v2H7v-2l2.8-2.8L9 3zM12 14v7" fill="none" stroke="%23fff" stroke-width="3"/>'
+  + '<path d="M12 14v7" fill="none" stroke="%230a0f1a" stroke-width="2"/>'
+  + '<path d="M12 14v7" fill="none" stroke="%2394a3b8" stroke-width="1"/>'
+  + '<path d="M9 3h6l-.8 6.2L17 12v2H7v-2l2.8-2.8L9 3z" fill="%23ef4444" stroke="%230a0f1a" stroke-width="1"/>'
+  + '</g></svg>';
+// cssOrigin 'user' + !important beats a page's own !important cursor rules.
+const PIN_CURSOR_CSS = 'html, html * { cursor: url("data:image/svg+xml,' + PIN_CURSOR_SVG.replace(/"/g, "'").replace(/</g, '%3C').replace(/>/g, '%3E')
+  + '") ' + PIN_CURSOR_HOTSPOT + ', crosshair !important; }';
+
 module.exports = {
-  MAX_SIDE, MAX_TEXT, clipFromQuad, captureScale, capText, hoverLabel, urlMatches,
+  PIN_CURSOR_CSS, MAX_SIDE, MAX_TEXT, clipFromQuad, captureScale, capText, hoverLabel, urlMatches,
   describeInPage, pageTextInPage, labelInPage, resolveTarget,
 };
