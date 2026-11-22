@@ -246,3 +246,11 @@ def test_terminal_tabs_use_the_history_state_dot():
 def test_tab_label_shows_its_full_name_on_hover():
     assert "label.title = sess.label;" in TERM
     assert "labelEl.title = sess.label;" in TERM
+
+
+def test_row_vendor_icon_does_not_inherit_the_tab_strip_margin():
+    # .gtp-tab-icon carries margin-right for the tab strip; inside the 28px
+    # tile that margin makes flex centring treat the icon as wider than it is
+    # and pushes the artwork left of centre.
+    rule = CSS.split(".ah-lead .gtp-tab-icon {")[1].split("}")[0]
+    assert re.search(r"margin:\s*0\s*;", rule)
