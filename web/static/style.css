@@ -1346,10 +1346,6 @@ body.tab-fullscreen .tab-expand-btn {
 .pin-ref-chip svg {
   flex-shrink: 0;
 }
-.pin-ref-chip[data-pin-source='webpin']:not(.is-stale) svg,
-.pin-card-icon.is-webpin svg {
-  color: var(--accent);
-}
 .pin-ref-chip.is-stale {
   color: var(--warn);
   background: color-mix(in srgb, var(--warn) 14%, transparent);

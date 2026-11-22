@@ -2603,7 +2603,6 @@ const _SVG_ICON_SOURCES = new Set([
 function _pinSourceIcon(source, size) {
   const px = size || 16;
   const file = source === 'email' ? 'outlook' : source === 'teams_transcript' ? 'teams' : source;
-  if (source === 'webpin') return window.WebPins ? window.WebPins.icon(px) : '📌';
   if (_SVG_ICON_SOURCES.has(source) || source === 'teams_transcript') {
     return `<img src="/static/icons/${file}.svg" width="${px}" height="${px}" style="vertical-align:middle;flex-shrink:0" alt="${source}">`;
   }
@@ -5607,7 +5606,7 @@ async function _showPinPopover() {
       slack: { icon: _pinIcon('slack'), label: 'Slack' },
       calendar: { icon: _pinIcon('calendar'), label: 'Calendar' },
       github: { icon: _pinIcon('github'), label: 'GitHub' },
-      webpin: { icon: window.WebPins ? window.WebPins.icon(20) : '📌', label: 'Web view' },
+      webpin: { icon: '📌', label: 'Web view' },
     };
 
     const addCard = (p) => {

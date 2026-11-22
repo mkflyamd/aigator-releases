@@ -422,6 +422,10 @@
       .tb.is-custom .tb-pin-group {
         display: flex;
       }
+      .tb-pin-emoji {
+        font-size: 14px;
+        line-height: 1;
+      }
       .tb-btn.is-active {
         color: var(--accent);
         background: rgba(var(--accent-rgb), 0.14);
@@ -632,9 +636,7 @@
           </svg>
         </button>
         <button class="tb-btn" id="tb-pin-view" title="Pin this view to Gator" aria-label="Pin this view to Gator">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M9 3h6l-.8 6.2L17 12v2H7v-2l2.8-2.8L9 3z" /><path d="M12 14v7" />
-          </svg>
+          <span class="tb-pin-emoji" aria-hidden="true">&#x1F4CC;</span>
         </button>
       </div>
 

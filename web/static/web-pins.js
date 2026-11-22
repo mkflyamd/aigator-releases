@@ -33,11 +33,6 @@
     return now - capturedAtSec * 1000 >= STALE_MS;
   }
 
-  function icon(px) {
-    const n = px || 16;
-    return `<svg xmlns="http://www.w3.org/2000/svg" width="${n}" height="${n}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;flex-shrink:0"><path d="M9 3h6l-.8 6.2L17 12v2H7v-2l2.8-2.8L9 3z"/><path d="M12 14v7"/></svg>`;
-  }
-
   function matchNote(match) {
     if (match === 'rect') return 'Refreshed. The element moved, so this capture is approximate.';
     if (match === 'view-fallback') return 'Could not find the pinned element, so Gator captured the whole view.';
@@ -136,7 +131,7 @@
     return { recapture };
   }
 
-  const api = { STALE_MS, errorMessage, ageLabel, isStale, icon, matchNote, createRecapturer };
+  const api = { STALE_MS, errorMessage, ageLabel, isStale, matchNote, createRecapturer };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   if (typeof document === 'undefined') return;
 
@@ -393,7 +388,6 @@
     const iconEl = card.querySelector('.pin-card-icon');
     let thumb = null;
     if (iconEl) {
-      iconEl.classList.add('is-webpin');
       thumb = document.createElement('img');
       thumb.className = 'wp-thumb';
       thumb.alt = '';

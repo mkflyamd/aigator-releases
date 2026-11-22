@@ -29,29 +29,16 @@ test('errorMessage covers every shell error code and has a fallback', () => {
   assert.equal(wp.errorMessage('something_new'), wp.errorMessage('pane_unavailable'));
 });
 
-test('icon is an svg that inherits colour', () => {
-  const svg = wp.icon(14);
-  assert.match(svg, /^<svg/);
-  assert.match(svg, /currentColor/);
-  assert.match(svg, /width="14"/);
-});
-
-test('icon is the pushpin, not the crosshair', () => {
-  assert.ok(wp.icon(14).includes('M9 3h6l-.8 6.2L17 12v2H7v-2l2.8-2.8L9 3z'));
-  assert.ok(!wp.icon(14).includes('<circle'));
-});
-
 test('renderer never sends a message or falls back to the default tab', () => {
   const src = read('web', 'static', 'web-pins.js');
   assert.ok(!/sendMessage|chat-send|requestSubmit|\.submit\(/.test(src));
   assert.ok(!/['"]default['"]/.test(src));
 });
 
-test('app.js renders svg pin icons, a webpin card config and decorates cards', () => {
+test('app.js gives web pins the chat pin icon, a webpin card config and decorates cards', () => {
   const src = read('web', 'static', 'app.js');
-  assert.match(src, /iconHtml\.startsWith\('<svg'\)/);
-  assert.match(src, /if \(source === 'webpin'\)/);
-  assert.match(src, /webpin: \{ icon: window\.WebPins/);
+  assert.match(src, /webpin: \{ icon: '📌', label: 'Web view' \}/);
+  assert.doesNotMatch(src, /WebPins\.icon/);
   assert.match(src, /window\.WebPins\.decorateCard\(card, p\)/);
 });
 
