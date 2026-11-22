@@ -105,6 +105,8 @@ npm --prefix shell run dist -- --win --x64 --publish never   # or --mac/--linux
 
 `npm run dist` auto-runs `packaging/sync_version.py` (syncs `version.txt` → `shell/package.json`). Output: `dist/installers/`. Packages are unsigned locally. Publishing a GitHub release triggers `.github/workflows/release-desktop.yml` (Win x64, macOS x64/arm64, Linux x64).
 
+A local `npm run dist` needs `uv run python tools/generate_third_party_notices.py` run first (it writes `dist/THIRD_PARTY_NOTICES.txt`), or `extraResources` fails.
+
 ## OpenCode integration
 
 `web/skills/opencode_agent/instance_manager.py` owns one `opencode serve` subprocess per project (ports 8100–8200, idle-reaped after 30 min). Per-project spawn locks prevent duplicate servers. The explore subagent is hardcoded to `gator-gateway/gpt-4.1` regardless of the project's main model. This Gator instance's identity = its uvicorn `--port` (derived from argv, not an env var).
