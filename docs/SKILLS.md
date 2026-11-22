@@ -93,7 +93,7 @@ shape.TextFrame.TextRange.Text = "New content"
 
 ### 4. Fetch → Format → Push pattern
 
-The core loop used across all POC work:
+The core loop used across all AI Gator work:
 
 ```
 [Data Source]         [Processor]          [Output]

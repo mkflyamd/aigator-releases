@@ -274,7 +274,7 @@ a missing `context_id`.
 
 ```
 POST /api/context/pin
-Body: { "source": "slack", "id": "C06R5U37KBK:1783978133.468829", "label": "ext-amd-cohere (thread)", "context_id": "39ole7b0" }
+Body: { "source": "slack", "id": "C06R5U37KBK:1783978133.468829", "label": "ext-acme-alpha (thread)", "context_id": "39ole7b0" }
 ```
 
 Note: this route is defined twice in `onenote.py` (once with the

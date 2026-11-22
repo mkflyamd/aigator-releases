@@ -11,7 +11,7 @@ INCIDENT (2026-09-30): an earlier version of this fix auto-resolved a
 preview-id failure via the draft's `to` field, reasoning that a preview id
 "can only exist because Teams generated it FOR a specific intended
 contact." That reasoning turned out to be false in practice: a real draft
-had chat_topic "ValliyappanRam,AI Agent" but `to` had independently been
+had chat_topic "RiveraCasey,AI Agent" but `to` had independently been
 resolved (by the model, following since-reverted SKILL.md guidance) to
 Ram's *personal* email — a completely different mailbox. The auto-fallback
 trusted `to` without any cross-check against chat_topic and delivered the
