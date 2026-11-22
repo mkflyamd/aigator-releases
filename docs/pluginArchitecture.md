@@ -13,7 +13,7 @@
 
 ## Marketplace skill controls (2026-10-07)
 
-Skills that arrive through the marketplace (catalog, URL, ZIP or folder) run under these controls. Native skills and your own skills are unchanged. Design: [marketplace skill controls](superpowers/specs/2026-10-07-marketplace-skill-controls-design.md).
+Skills that arrive through the marketplace (catalog, URL, ZIP or folder) run under these controls. Native skills and your own skills are unchanged.
 
 - **Declared permissions.** A skill may declare `permissions:` with `filesystem` (paths it may read) and `network` (hosts it needs). No block means no filesystem access beyond its own folder and no network.
 - **Approval at install.** Every install path shows what the package declares (permissions, hooks, `bin/` files, MCP server commands) and installs nothing until you approve. The approval is tied to the exact package you reviewed.

@@ -77,6 +77,7 @@ if %errorlevel% neq 0 goto :error
 
 REM Delete private dirs from working tree before staging
 if exist docs\internal rmdir /s /q docs\internal
+if exist docs\security rmdir /s /q docs\security
 if exist docs\superpowers rmdir /s /q docs\superpowers
 if exist docs\screenshots rmdir /s /q docs\screenshots
 

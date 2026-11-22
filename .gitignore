@@ -73,6 +73,8 @@ build/electron-v*.zip
 # Sensitive internal docs (keep in private repo only)
 token_troubleshooting.md
 docs/internal/
+docs/security/
+docs/superpowers/
 
 # Dev scratch files
 web/static/gator-preview.html

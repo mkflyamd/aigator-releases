@@ -10,12 +10,12 @@ Read these parts of the draft card before you click approve:
 
 1. **Data from.** This line lists the apps AI Gator read in this request (for example "Outlook mail"). If it lists an app you did not expect, do not approve.
 2. **Sending to.** This line names the destination app. Check that the data is allowed to go there.
-3. **Recipients and channel.** Check every name, address and channel. Check for people outside AMD.
+3. **Recipients and channel.** Check every name, address and channel. Check for people outside your organization.
 4. **Sensitive content banner.** A yellow banner shows when the text contains a classification word (for example "Confidential" or "Internal Use Only"). The banner is a warning only. It does not know the real classification of the data. You decide.
 
 ## Rules
 
-- Follow the AMD Data Classification Standard. Confidential data must not go to an external destination or to a tool that is not approved for it.
+- Follow your organization's data classification policy. Confidential data must not go to an external destination or to a tool that is not approved for it.
 - Do not ask AI Gator to copy confidential email text into Jira, Confluence, Slack or GitHub unless that is allowed for that data.
 - Use a new tab for each task. A tab only keeps the apps that you allowed in it.
 - If a draft is wrong, do not approve it. Edit it or ask AI Gator to change it.
