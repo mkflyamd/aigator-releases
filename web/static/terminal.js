@@ -107,8 +107,8 @@
     });
     fullscreenBtn.addEventListener('click', toggleFullscreen);
     newTabBtn.addEventListener('click', () => newSession());
-    tabsScroll.appendChild(newTabBtn);
     tabs.appendChild(tabsScroll);
+    tabs.appendChild(newTabBtn);
     tabs.appendChild(actions);
     STATE.newTabBtn = newTabBtn;
     STATE.actionsEl = actions;
@@ -313,7 +313,6 @@
       s.tabEl = tab;
       STATE.tabsEl.appendChild(tab);
     });
-    if (STATE.newTabBtn) STATE.tabsEl.appendChild(STATE.newTabBtn);
   }
 
   function _updateActiveTab() {
