@@ -134,3 +134,15 @@ test('custom app names from page titles are never interpolated into innerHTML un
     'chip aria-label is set through the DOM',
   );
 });
+
+test('Settings shows a one-line empty state that teaches the address bar star', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const js = fs.readFileSync(path.join(__dirname, '..', 'web', 'static', 'app.js'), 'utf8');
+  assert(
+    js.includes(
+      'No web apps yet. Open any site, then click the star in the address bar to add it.',
+    ),
+  );
+  assert(js.includes("empty.className = 'custom-apps-empty'"));
+});

@@ -252,3 +252,26 @@ def test_label_never_a_url_hostname_app_id_or_untitled(client):
     for bad in ("https://app.powerbi.com/report/1", "app.powerbi.com", "pbi", "Untitled", "Untitled page"):
         j = client.post("/api/web-pins", json=_body(aria_label=bad, title="")).json()
         assert j["label"] == "Power BI", bad
+
+
+def test_count_is_per_app_and_counts_each_pin_once(client):
+    first = client.post("/api/web-pins", json=_body()).json()["id"]
+    client.post("/api/web-pins", json=_body(context_id="tab-b"))
+    state.set_pin_scope("webpin", first, "global", "tab-a")
+    state.set_pin("slack", "C1:1", "A thread", {"app_id": "pbi"}, "tab-a")
+    assert client.get("/api/web-pins/count", params={"app_id": "pbi"}).json()["count"] == 2
+    assert client.get("/api/web-pins/count", params={"app_id": "other"}).json()["count"] == 0
+
+
+def test_removing_an_app_deletes_only_its_pins_and_snapshots(client, monkeypatch):
+    import config
+
+    monkeypatch.setattr(config, "update_config", lambda mutator: mutator({"custom_apps": [{"id": "pbi"}]}))
+    mine = client.post("/api/web-pins", json=_body()).json()["id"]
+    state.set_pin("webpin", "keep", "Other app pin", {"app_id": "other"}, "tab-a")
+    state.set_pin("slack", "C1:1", "A thread", {}, "tab-a")
+    assert store.read_snapshot(mine) is not None
+    assert client.delete("/api/config/custom-apps/pbi").status_code == 200
+    assert store.read_snapshot(mine) is None
+    assert sorted(p["id"] for p in state.get_pins("tab-a")) == ["C1:1", "keep"]
+    assert client.get("/api/web-pins/count", params={"app_id": "pbi"}).json()["count"] == 0

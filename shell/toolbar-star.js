@@ -37,4 +37,12 @@ function defaultAppName(title, url) {
   return name.slice(0, 40);
 }
 
-module.exports = { originKey, findStarredApp, starState, defaultAppName };
+function removalNote(pinCount) {
+  if (!Number.isInteger(pinCount) || pinCount < 0) {
+    return 'Removing deletes any pins, settings and saved sign-in.';
+  }
+  if (pinCount === 0) return "Removing deletes this app's settings and saved sign-in.";
+  return `Removing deletes its ${pinCount} ${pinCount === 1 ? 'pin' : 'pins'}, settings and saved sign-in.`;
+}
+
+module.exports = { originKey, findStarredApp, starState, defaultAppName, removalNote };

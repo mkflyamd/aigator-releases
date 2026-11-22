@@ -1040,9 +1040,13 @@ let createAtlassianView = null;
 const atlassianViewPromises = {};
 
 function _fetchConfigJson() {
+  return _fetchGatorJson('/api/config');
+}
+
+function _fetchGatorJson(path) {
   return new Promise((resolve) => {
     http
-      .get(GATOR_URL.replace(/\/$/, '') + '/api/config', (response) => {
+      .get(GATOR_URL.replace(/\/$/, '') + path, (response) => {
         let body = '';
         response.setEncoding('utf8');
         response.on('data', (chunk) => {
@@ -5142,6 +5146,11 @@ ipcMain.on('toolbar:star-add', (e) => {
 ipcMain.on('toolbar:star-rename', (e, appId, name) => {
   if (!_isMainToolbar(e) || !_customAppIds.has(appId) || typeof name !== 'string') return;
   _sendToGator('custom-app:star-event', { kind: 'rename', appId, name: name.trim().slice(0, 40) });
+});
+ipcMain.handle('toolbar:star-removal-note', async (e, appId) => {
+  if (!_isMainToolbar(e) || !_customAppIds.has(appId)) return toolbarStar.removalNote(null);
+  const data = await _fetchGatorJson('/api/web-pins/count?app_id=' + encodeURIComponent(appId));
+  return toolbarStar.removalNote(data ? data.count : null);
 });
 ipcMain.on('toolbar:star-remove', (e, appId) => {
   if (!_isMainToolbar(e) || !_customAppIds.has(appId)) return;

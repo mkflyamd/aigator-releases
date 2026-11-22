@@ -101,6 +101,13 @@ async def create_web_pin(req: WebPinCreate):
     return {"id": pin_id, "label": label, "captured_at": snap["captured_at"], "text_hash": snap["text_hash"], "total": result["total"]}
 
 
+@router.get("/api/web-pins/count")
+async def count_web_pins(app_id: str):
+    from skills.context.state import count_web_pins_for_app
+
+    return {"app_id": app_id, "count": count_web_pins_for_app(app_id)}
+
+
 def _snapshot_or_404(pin_id: str) -> dict:
     from skills.webpin import store
 

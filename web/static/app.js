@@ -20354,6 +20354,13 @@ async function _loadCustomApps() {
     const res = await fetch('/api/config/custom-apps');
     const data = await res.json();
     list.innerHTML = '';
+    if (!(data.apps || []).length) {
+      const empty = document.createElement('div');
+      empty.className = 'custom-apps-empty';
+      empty.textContent =
+        'No web apps yet. Open any site, then click the star in the address bar to add it.';
+      list.appendChild(empty);
+    }
     (data.apps || []).forEach((app) => {
       const row = document.createElement('div');
       row.className = 'custom-app-row';

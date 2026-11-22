@@ -54,3 +54,34 @@ test('clicking a filled star un-favorites directly instead of opening the edit b
   assert(/star\.state === 'filled'[\s\S]*toolbar:star-remove/.test(click));
   assert(!/openBubble/.test(click));
 });
+
+test('removalNote states the real pin count and never claims pins that do not exist', () => {
+  assert.strictEqual(
+    star.removalNote(3),
+    'Removing deletes its 3 pins, settings and saved sign-in.',
+  );
+  assert.strictEqual(
+    star.removalNote(1),
+    'Removing deletes its 1 pin, settings and saved sign-in.',
+  );
+  assert.strictEqual(
+    star.removalNote(0),
+    "Removing deletes this app's settings and saved sign-in.",
+  );
+  for (const unknown of [null, undefined, -1, 1.5, '2', NaN]) {
+    assert.strictEqual(
+      star.removalNote(unknown),
+      'Removing deletes any pins, settings and saved sign-in.',
+    );
+  }
+});
+
+test('the bubble fetches the removal note when opened and ignores a stale answer', () => {
+  const read = (...p) =>
+    require('node:fs').readFileSync(require('node:path').join(__dirname, '..', ...p), 'utf8');
+  const html = read('shell', 'toolbar.html');
+  const open = html.match(/function openBubble\(\) \{[\s\S]*?\n        \}/)[0];
+  assert(/invoke\(\s*'toolbar:star-removal-note'/.test(open));
+  assert(/bubbleOpen\(\) && star\.appId === forApp/.test(open));
+  assert(/ipcMain\.handle\('toolbar:star-removal-note'/.test(read('shell', 'main.js')));
+});

@@ -871,6 +871,8 @@ def remove_custom_app(app_id: str):
     update_config(_mutate)
     if not removed[0]:
         raise HTTPException(status_code=404, detail="Custom app not found")
+    from skills.context.state import remove_web_pins_for_app
+    remove_web_pins_for_app(app_id)
     return {"ok": True}
 
 

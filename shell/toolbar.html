@@ -816,7 +816,9 @@
         maxlength="40"
         spellcheck="false"
       />
-      <div class="tb-bubble-note">Removing deletes its pins, settings and saved sign-in.</div>
+      <div class="tb-bubble-note" id="tb-bubble-note">
+        Removing deletes any pins, settings and saved sign-in.
+      </div>
       <div class="tb-bubble-actions">
         <button type="button" class="tb-bubble-remove" id="tb-bubble-remove">Remove</button>
         <button type="button" class="tb-bubble-done" id="tb-bubble-done">Done</button>
@@ -908,6 +910,7 @@
         const elStar = document.getElementById('tb-star');
         const elBubble = document.getElementById('tb-bubble');
         const elBubbleName = document.getElementById('tb-bubble-name');
+        const elBubbleNote = document.getElementById('tb-bubble-note');
         const elOverflow = document.getElementById('tb-overflow');
         const elMenu = document.getElementById('tb-menu');
         const elCollapse = document.getElementById('tb-collapse');
@@ -1080,7 +1083,7 @@
           elStar.classList.toggle('is-filled', filled);
           elStar.setAttribute('aria-pressed', filled ? 'true' : 'false');
           const label = filled
-            ? 'Saved in your web apps · click to edit or remove'
+            ? 'Saved in your web apps · click to remove · right-click to rename'
             : 'Add this site to your web apps';
           elStar.setAttribute('aria-label', label);
           elStar.title = label;
@@ -1094,10 +1097,20 @@
         function openBubble() {
           closeMenu();
           elBubbleName.value = star.name || '';
+          elBubbleNote.textContent = 'Removing deletes any pins, settings and saved sign-in.';
           elBubble.hidden = false;
           ipcRenderer.send('toolbar:set-expanded', BUBBLE_EXPANDED_H);
           elBubbleName.focus();
           elBubbleName.select();
+          const forApp = star.appId;
+          ipcRenderer
+            .invoke('toolbar:star-removal-note', forApp)
+            .then((text) => {
+              if (bubbleOpen() && star.appId === forApp && typeof text === 'string') {
+                elBubbleNote.textContent = text;
+              }
+            })
+            .catch(() => {});
         }
 
         function closeBubble() {
