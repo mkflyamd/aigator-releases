@@ -3,7 +3,7 @@
 
 Usage:
     python3 get_profile.py                             # Your own profile
-    python3 get_profile.py --email tanmay.shah@example.com  # By email
+    python3 get_profile.py --email taylor.morgan@example.com  # By email
     python3 get_profile.py --id <user-id>               # By user ID
     python3 get_profile.py --email user@example.com --json
 """

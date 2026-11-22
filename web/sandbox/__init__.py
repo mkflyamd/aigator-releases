@@ -29,11 +29,14 @@ class SandboxUnavailable(RuntimeError):
 class SandboxPathNotGrantable(SandboxUnavailable):
     """Requested folders the sandbox cannot be given access to on this computer; nothing was executed."""
 
-    def __init__(self, paths):
+    def __init__(self, paths, reason=None):
         self.paths = [str(p) for p in paths]
+        self.reason = reason
         super().__init__(
-            "The sandbox cannot be given access to " + ", ".join(self.paths) + ". Windows does not let this "
-            "account change permissions there, and sandboxed code cannot read it by default."
+            reason or (
+                "The sandbox cannot be given access to " + ", ".join(self.paths) + ". Windows does not let this "
+                "account change permissions there, and sandboxed code cannot read it by default."
+            )
         )
 
 
@@ -50,6 +53,14 @@ class RawArg(str):
     Normal elements go through subprocess.list2cmdline, which writes an inner double
     quote as backslash-quote. cmd.exe does not understand that, so a command line meant
     for cmd /s /c must be passed verbatim. Other platforms treat it as a plain str."""
+
+
+# The longest a single sandboxed run may last; the Windows run lock waits for this plus a margin.
+MAX_RUN_SECONDS = 600
+
+
+def clamp_run_timeout(timeout: int) -> int:
+    return max(1, min(int(timeout), MAX_RUN_SECONDS))
 
 
 @dataclass(frozen=True)

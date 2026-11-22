@@ -2008,27 +2008,6 @@ def _tool_add_calendar_attendees(
     }
 
 
-def _tool_forward_calendar_event(
-    event_id: str,
-    to: list | str,
-    comment: str = "",
-    expected_subject: str = "",
-    expected_start: str = "",
-) -> dict:
-    """Backward-compatible attendee-add alias for persisted old tool calls.
-
-    The old optional comment is intentionally ignored: adding an attendee does
-    not support a forwarding comment, and this alias never sends a fallback
-    invitation email.
-    """
-    return _tool_add_calendar_attendees(
-        event_id=event_id,
-        to=to,
-        expected_subject=expected_subject,
-        expected_start=expected_start,
-    )
-
-
 TOOL_HANDLERS = {
     "read_calendar": _tool_read_calendar,
     "get_calendar_event_detail": _tool_get_calendar_event_detail,
@@ -2040,6 +2019,5 @@ TOOL_HANDLERS = {
     "respond_calendar_event": _tool_respond_calendar_event,
     "create_ooo_event": _tool_create_ooo_event,
     "add_calendar_attendees": _tool_add_calendar_attendees,
-    "forward_calendar_event": _tool_forward_calendar_event,
     "check_availability": _tool_check_availability,
 }

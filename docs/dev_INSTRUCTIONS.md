@@ -5,10 +5,10 @@ into `main`, and keep the worktree in sync afterward.
 
 Paths used below (adjust if yours differ):
 
-|                    | Path                                    | Branch       | Port |
-| ------------------ | --------------------------------------- | ------------ | ---- |
-| Main checkout      | `C:\Users\maykulka\POCs\AgenticPOC`     | `main`       | 8000 |
-| Workbench worktree | `C:\Users\maykulka\POCs\AgenticPOC-dev` | `agent-work` | 8002 |
+|                    | Path                              | Branch       | Port |
+| ------------------ | --------------------------------- | ------------ | ---- |
+| Main checkout      | `C:\path\to\aigator-releases`     | `main`       | 8000 |
+| Workbench worktree | `C:\path\to\aigator-releases-dev` | `agent-work` | 8002 |
 
 > Port 8001 is reserved for the watchdog — never point `dev.ps1` at it.
 
@@ -17,7 +17,7 @@ Paths used below (adjust if yours differ):
 ## 1. Spin up the main dev server (port 8000)
 
 ```powershell
-cd C:\Users\maykulka\POCs\AgenticPOC
+cd C:\path\to\aigator-releases
 .\dev.ps1
 ```
 
@@ -26,7 +26,7 @@ Open **http://localhost:8000**.
 ## 2. Spin up the workbench worktree (port 8002)
 
 ```powershell
-cd C:\Users\maykulka\POCs\AgenticPOC-dev
+cd C:\path\to\aigator-releases-dev
 .\dev.ps1 -Port 8002
 ```
 
@@ -38,7 +38,7 @@ never touches the primary tray app or the 8000 server.
 Once you're happy with what's running on 8002:
 
 ```powershell
-cd C:\Users\maykulka\POCs\AgenticPOC
+cd C:\path\to\aigator-releases
 git merge agent-work
 git push
 ```
@@ -50,7 +50,7 @@ merging in). After merging, reset the worktree branch to `main`'s tip so the
 next round of 8002 testing starts clean and current:
 
 ```powershell
-cd C:\Users\maykulka\POCs\AgenticPOC-dev
+cd C:\path\to\aigator-releases-dev
 git fetch origin
 git checkout agent-work
 git reset --hard main

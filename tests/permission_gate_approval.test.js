@@ -19,3 +19,16 @@ test('Allow on the permission card posts the server-issued approval id before re
   assert(/method:\s*'POST'/.test(call));
   assert(/approval_id:\s*msg\.approval_id/.test(call));
 });
+
+test('the global fetch wrapper refreshes a stale CSRF token and retries once', () => {
+  const head = app.slice(0, app.indexOf('GATOR_WIDGET_MAX_H'));
+  assert(/fetch\('\/api\/csrf'\)|orig\('\/api\/csrf'\)/.test(head));
+  assert(/res\.status !== 403/.test(head));
+  assert(/fresh === sentToken/.test(head), 'no retry when the token did not change');
+});
+
+test('a failed approval offers Ask again instead of a dead end', () => {
+  const i = app.indexOf("'Ask again'");
+  assert(i > 0);
+  assert(/doSend\(retryPayload\)/.test(app.slice(i, i + 300)));
+});

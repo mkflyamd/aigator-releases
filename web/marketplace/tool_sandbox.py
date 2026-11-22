@@ -10,6 +10,7 @@ from marketplace import skill_audit, state
 from marketplace.permissions import Permissions
 from marketplace.sandbox_launch import new_run_dir, run_in_sandbox
 from marketplace.tool_runner_source import ARGS_NAME, RESULT_NAME, RUNNER_NAME, RUNNER_SOURCE
+from sandbox import clamp_run_timeout
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +32,7 @@ def _timeout_for(tier: str) -> int:
 
     community = tier == "Community"
     key = "code_runner_timeout_community" if community else "code_runner_timeout_verified"
-    return int(load_config().get(key, 30 if community else 60))
+    return clamp_run_timeout(load_config().get(key, 30 if community else 60))
 
 
 def _friendly(message: str) -> str:

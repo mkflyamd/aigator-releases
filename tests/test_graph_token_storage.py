@@ -76,3 +76,67 @@ def test_refresh_adopts_rotated_refresh_token(gc, monkeypatch):
     assert c.get_token() == "aigator-fake-api-key"
     assert secure_store.get_json("graph/token")["refresh_token"] == "r2"
     assert gc.GraphClient()._refresh_token == "r2"
+
+
+def _pool_that_times_out(mod, monkeypatch, calls):
+    class Pool:
+        def request(self, method, url, headers=None, content=None, timeout=None):
+            calls.append(method)
+            raise mod.httpx.ReadTimeout("timed out")
+
+    monkeypatch.setattr(mod, "_get_http_pool", lambda: Pool())
+    monkeypatch.setattr(mod.time, "sleep", lambda _s: None)
+
+
+def test_a_timed_out_upload_is_sent_once_so_it_cannot_be_stored_twice(gc, monkeypatch):
+    calls = []
+    _pool_that_times_out(gc, monkeypatch, calls)
+    client = _seed(gc)
+    with pytest.raises(gc.GraphAPIError):
+        client.put_binary("/drives/d/items/f:/a.txt:/content", b"data")
+    assert calls == ["PUT"]
+
+
+def test_a_timed_out_read_is_still_retried(gc, monkeypatch):
+    calls = []
+    _pool_that_times_out(gc, monkeypatch, calls)
+    client = _seed(gc)
+    with pytest.raises(gc.GraphAPIError):
+        client.get("/me/drive")
+    assert calls == ["GET"] * client._MAX_RETRIES
+
+
+def _pool_that_answers(mod, monkeypatch, calls, status):
+    class Resp:
+        status_code = status
+        headers = {}
+        text = "unavailable"
+
+        def raise_for_status(self):
+            raise mod.httpx.HTTPStatusError("bad", request=None, response=self)
+
+    class Pool:
+        def request(self, method, url, headers=None, content=None, timeout=None):
+            calls.append(method)
+            return Resp()
+
+    monkeypatch.setattr(mod, "_get_http_pool", lambda: Pool())
+    monkeypatch.setattr(mod.time, "sleep", lambda _s: None)
+
+
+@pytest.mark.parametrize("status", [502, 503, 504])
+def test_an_upload_answered_with_a_gateway_error_is_sent_once(gc, monkeypatch, status):
+    calls = []
+    _pool_that_answers(gc, monkeypatch, calls, status)
+    with pytest.raises(gc.GraphAPIError):
+        _seed(gc).put_binary("/drives/d/items/f:/a.txt:/content", b"data")
+    assert calls == ["PUT"]
+
+
+def test_a_read_answered_with_a_gateway_error_is_still_retried(gc, monkeypatch):
+    calls = []
+    _pool_that_answers(gc, monkeypatch, calls, 503)
+    client = _seed(gc)
+    with pytest.raises(gc.GraphAPIError):
+        client.get("/me/drive")
+    assert calls == ["GET"] * client._MAX_RETRIES
