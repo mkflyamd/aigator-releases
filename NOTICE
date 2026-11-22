@@ -35,3 +35,12 @@ anthropics/skills at e4bb5d9. Upstream states no copyright or license terms for
 them: its schema files contain no copyright or license text, its THIRD_PARTY_NOTICES.md
 does not mention them, and its only license file for the skill is the
 Apache-2.0 skills/docx/LICENSE.txt.
+
+This product bundles the following front-end libraries under web/static/vendor.
+Their copyright notices and license texts are reproduced in THIRD_PARTY_NOTICES.txt.
+
+  - xterm.js 5.5.0 and its fit addon 0.10.0 (MIT)
+  - Mermaid 11.17.2 (MIT), which embeds DOMPurify 3.4.12 (MPL-2.0 OR Apache-2.0)
+  - Quill 1.3.7 (BSD-3-Clause)
+  - FullCalendar 6.1.17 (MIT)
+  - Floating UI core 1.6.8 and dom 1.6.12 (MIT)
