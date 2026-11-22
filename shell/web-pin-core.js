@@ -208,8 +208,10 @@ const PIN_CURSOR_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="32" heigh
   + '<path d="M12 14v7" fill="none" stroke="%2394a3b8" stroke-width="1"/>'
   + '<path d="M9 3h6l-.8 6.2L17 12v2H7v-2l2.8-2.8L9 3z" fill="%23ef4444" stroke="%230a0f1a" stroke-width="1"/>'
   + '</g></svg>';
-// cssOrigin 'user' + !important beats a page's own !important cursor rules.
-const PIN_CURSOR_CSS = 'html, html * { cursor: url("data:image/svg+xml,' + PIN_CURSOR_SVG.replace(/"/g, "'").replace(/</g, '%3C').replace(/>/g, '%3E')
+// Author origin because Electron's removeInsertedCSS cannot remove user-origin CSS, so a
+// user-origin pointer would stay after pin mode ends. The doubled :root outranks the
+// page's own !important cursor rules, which are almost always a single tag or class.
+const PIN_CURSOR_CSS = ':root:root, :root:root * { cursor: url("data:image/svg+xml,' + PIN_CURSOR_SVG.replace(/"/g, "'").replace(/</g, '%3C').replace(/>/g, '%3E')
   + '") ' + PIN_CURSOR_HOTSPOT + ', crosshair !important; }';
 
 module.exports = {

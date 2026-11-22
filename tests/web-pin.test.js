@@ -373,12 +373,12 @@ test('captureBeyondViewport is only requested when the clip leaves the viewport'
   assert.strictEqual(tall.params['Page.captureScreenshot'].captureBeyondViewport, true);
 });
 
-test('pin mode shows the pin pointer as user-origin CSS and removes it on stop', async () => {
+test('pin mode shows the pin pointer as author-origin CSS and removes it on stop', async () => {
   const wc = fakeWc();
   const { wp } = harness(wc);
   await wp.start('custom-x');
   assert.strictEqual(wc.css.inserted.length, 1);
-  assert.strictEqual(wc.css.inserted[0].opts.cssOrigin, 'user');
+  assert.strictEqual(wc.css.inserted[0].opts.cssOrigin, 'author');
   assert.match(wc.css.inserted[0].text, /crosshair !important/);
   assert.deepStrictEqual(wc.css.removed, []);
   await wp.stop();

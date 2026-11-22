@@ -218,7 +218,7 @@ function createWebPin({ getPane, isPaneVisible, onState, onCaptured, onError, ti
       await cdp.send('Overlay.enable');
       await cdp.send('DOM.getDocument', { depth: 0 });
       await cdp.send('Overlay.setInspectMode', { mode: 'searchForNode', highlightConfig: HIGHLIGHT });
-      cursorKey = await Promise.resolve().then(() => wc.insertCSS(core.PIN_CURSOR_CSS, { cssOrigin: 'user' })).catch(() => null);
+      cursorKey = await Promise.resolve().then(() => wc.insertCSS(core.PIN_CURSOR_CSS, { cssOrigin: 'author' })).catch(() => null);
     } catch (e) {
       removeCursor(wc, cursorKey);
       if (cdp) cdp.close();
