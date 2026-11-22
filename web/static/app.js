@@ -20429,9 +20429,27 @@ async function _addCustomApp() {
 }
 
 async function _removeCustomApp(appId, appName) {
-  if (!confirm(`Remove "${appName}"?`)) return;
+  let pins = null;
   try {
-    await fetch(`/api/config/custom-apps/${encodeURIComponent(appId)}`, { method: 'DELETE' });
+    const r = await fetch(`/api/web-pins/count?app_id=${encodeURIComponent(appId)}`);
+    if (r.ok) pins = (await r.json()).count;
+  } catch {}
+  const what =
+    pins === 0
+      ? 'Its settings and saved sign-in'
+      : Number.isInteger(pins) && pins > 0
+        ? `Its ${pins} ${pins === 1 ? 'pin' : 'pins'}, settings and saved sign-in`
+        : 'Its pins, settings and saved sign-in';
+  if (!confirm(`Remove "${appName}"? ${what} will be deleted.`)) return;
+  try {
+    const res = await fetch(`/api/config/custom-apps/${encodeURIComponent(appId)}`, {
+      method: 'DELETE',
+    });
+    if (!res.ok) throw new Error('server returned ' + res.status);
+    if (typeof tpState !== 'undefined' && tpState.type === appId) closeThirdPane();
+    if (window.gatorShell && window.gatorShell.customAppTeardown) {
+      await window.gatorShell.customAppTeardown(appId);
+    }
     _loadCustomApps();
     // Remove from skill registry
     const idx = SKILL_REGISTRY.findIndex((s) => s.id === appId);

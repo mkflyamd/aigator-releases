@@ -146,3 +146,14 @@ test('Settings shows a one-line empty state that teaches the address bar star', 
   );
   assert(js.includes("empty.className = 'custom-apps-empty'"));
 });
+
+test('Settings Remove names what is deleted and tears down the pane and saved sign-in', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const js = fs.readFileSync(path.join(__dirname, '..', 'web', 'static', 'app.js'), 'utf8');
+  const fn = js.match(/async function _removeCustomApp[\s\S]*?\n\}/)[0];
+  assert(fn.includes('/api/web-pins/count?app_id='));
+  assert(fn.includes('will be deleted.'));
+  assert(fn.includes("'Its settings and saved sign-in'"));
+  assert(fn.includes('customAppTeardown(appId)'));
+});
