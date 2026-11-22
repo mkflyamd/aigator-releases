@@ -47,7 +47,11 @@ function openSession(wc, timeoutMs) {
     close() {
       dbg.removeListener('message', onMessage);
       if (owned && dbg.isAttached()) {
-        try { dbg.detach(); } catch (_) { /* already gone */ }
+        try {
+          dbg.detach();
+        } catch (_) {
+          /* already gone */
+        }
       }
     },
   };
@@ -63,9 +67,12 @@ async function readPage(cdp) {
 
 function insideViewport(clip, v) {
   const slack = 1;
-  return clip.x >= v.pageX - slack && clip.y >= v.pageY - slack
-    && clip.x + clip.width <= v.pageX + v.clientWidth + slack
-    && clip.y + clip.height <= v.pageY + v.clientHeight + slack;
+  return (
+    clip.x >= v.pageX - slack &&
+    clip.y >= v.pageY - slack &&
+    clip.x + clip.width <= v.pageX + v.clientWidth + slack &&
+    clip.y + clip.height <= v.pageY + v.clientHeight + slack
+  );
 }
 
 async function shoot(cdp, clip, v) {
@@ -85,10 +92,21 @@ async function shoot(cdp, clip, v) {
 async function captureView(cdp, wc) {
   const { cssVisualViewport: v } = await cdp.send('Page.getLayoutMetrics');
   const page = await readPage(cdp);
-  const image_b64 = await shoot(cdp, { x: v.pageX, y: v.pageY, width: v.clientWidth, height: v.clientHeight }, v);
+  const image_b64 = await shoot(
+    cdp,
+    { x: v.pageX, y: v.pageY, width: v.clientWidth, height: v.clientHeight },
+    v,
+  );
   // The url comes from the main process, never from the page: go-to and the
   // recapture page check trust it, and in-page JS could report anything.
-  return { image_b64, text: core.capText(page.text), locator: null, url: wc.getURL(), title: page.title, aria_label: '' };
+  return {
+    image_b64,
+    text: core.capText(page.text),
+    locator: null,
+    url: wc.getURL(),
+    title: page.title,
+    aria_label: '',
+  };
 }
 
 async function captureElement(cdp, wc, backendNodeId) {
@@ -120,10 +138,19 @@ async function captureElement(cdp, wc, backendNodeId) {
 // The pointer is cosmetic: a pane that is already gone must not break teardown.
 function removeCursor(wc, key) {
   if (key == null || wc.isDestroyed()) return;
-  Promise.resolve().then(() => wc.removeInsertedCSS(key)).catch(() => {});
+  Promise.resolve()
+    .then(() => wc.removeInsertedCSS(key))
+    .catch(() => {});
 }
 
-function createWebPin({ getPane, isPaneVisible, onState, onCaptured, onError, timeoutMs = CDP_TIMEOUT_MS }) {
+function createWebPin({
+  getPane,
+  isPaneVisible,
+  onState,
+  onCaptured,
+  onError,
+  timeoutMs = CDP_TIMEOUT_MS,
+}) {
   let active = null;
   let closing = Promise.resolve();
   const busy = new Set();
@@ -150,7 +177,9 @@ function createWebPin({ getPane, isPaneVisible, onState, onCaptured, onError, ti
         try {
           await a.cdp.send('Overlay.setInspectMode', { mode: 'none', highlightConfig: {} });
           await a.cdp.send('Overlay.hideHighlight');
-        } catch (_) { /* page may be gone */ }
+        } catch (_) {
+          /* page may be gone */
+        }
       }
       a.cdp.close();
     })();
@@ -189,18 +218,28 @@ function createWebPin({ getPane, isPaneVisible, onState, onCaptured, onError, ti
         returnByValue: true,
       });
       if (active === a && !a.picking) {
-        onState({ appId: a.appId, picking: true, label: core.hoverLabel(JSON.parse(r.result.value)) });
+        onState({
+          appId: a.appId,
+          picking: true,
+          label: core.hoverLabel(JSON.parse(r.result.value)),
+        });
       }
-    } catch (_) { /* label is best-effort */ } finally {
+    } catch (_) {
+      /* label is best-effort */
+    } finally {
       a.hovering = false;
     }
   }
 
   function start(appId) {
     // A double click must not open two sessions: share the in-flight start.
-    if (starting) return startingApp === appId ? starting : Promise.resolve(fail(appId, 'pane_unavailable'));
+    if (starting)
+      return startingApp === appId ? starting : Promise.resolve(fail(appId, 'pane_unavailable'));
     startingApp = appId;
-    starting = doStart(appId).finally(() => { starting = null; startingApp = null; });
+    starting = doStart(appId).finally(() => {
+      starting = null;
+      startingApp = null;
+    });
     return starting;
   }
 
@@ -217,8 +256,13 @@ function createWebPin({ getPane, isPaneVisible, onState, onCaptured, onError, ti
       await cdp.send('DOM.enable');
       await cdp.send('Overlay.enable');
       await cdp.send('DOM.getDocument', { depth: 0 });
-      await cdp.send('Overlay.setInspectMode', { mode: 'searchForNode', highlightConfig: HIGHLIGHT });
-      cursorKey = await Promise.resolve().then(() => wc.insertCSS(core.PIN_CURSOR_CSS, { cssOrigin: 'author' })).catch(() => null);
+      await cdp.send('Overlay.setInspectMode', {
+        mode: 'searchForNode',
+        highlightConfig: HIGHLIGHT,
+      });
+      cursorKey = await Promise.resolve()
+        .then(() => wc.insertCSS(core.PIN_CURSOR_CSS, { cssOrigin: 'author' }))
+        .catch(() => null);
     } catch (e) {
       removeCursor(wc, cursorKey);
       if (cdp) cdp.close();
@@ -249,7 +293,8 @@ function createWebPin({ getPane, isPaneVisible, onState, onCaptured, onError, ti
     const wc = getPane(appId);
     if (!wc || wc.isDestroyed()) return { status: 'pane_unavailable' };
     if (!isPaneVisible(appId)) return { status: 'pane_not_visible' };
-    if (busy.has(appId) || (starting && startingApp === appId)) return { status: 'pane_unavailable' };
+    if (busy.has(appId) || (starting && startingApp === appId))
+      return { status: 'pane_unavailable' };
     busy.add(appId);
     let cdp;
     try {
@@ -280,9 +325,11 @@ function createWebPin({ getPane, isPaneVisible, onState, onCaptured, onError, ti
       let result = null;
       if (locator) {
         const hit = await core.resolveTarget(cdp, locator);
-        if (hit) result = { ...(await captureElement(cdp, wc, hit.backendNodeId)), match: hit.match };
+        if (hit)
+          result = { ...(await captureElement(cdp, wc, hit.backendNodeId)), match: hit.match };
       }
-      if (!result) result = { ...(await captureView(cdp, wc)), match: locator ? 'view-fallback' : 'view' };
+      if (!result)
+        result = { ...(await captureView(cdp, wc)), match: locator ? 'view-fallback' : 'view' };
       if (!samePage()) throw coded('page_mismatch');
       return result;
     });

@@ -8,7 +8,13 @@ test('clipFromQuad uses min/max of the quad and adds the scroll offset', () => {
 });
 
 test('clipFromQuad works without an offset', () => {
-  assert.deepStrictEqual(core.clipFromQuad([0, 0, 4, 0, 4, 2, 0, 2]), { x: 0, y: 0, width: 4, height: 2, scale: 1 });
+  assert.deepStrictEqual(core.clipFromQuad([0, 0, 4, 0, 4, 2, 0, 2]), {
+    x: 0,
+    y: 0,
+    width: 4,
+    height: 2,
+    scale: 1,
+  });
 });
 
 test('captureScale caps at 2x and shrinks large captures to 1600px', () => {
@@ -27,9 +33,15 @@ test('capText collapses blank runs and enforces the cap', () => {
 });
 
 test('hoverLabel priority and truncation', () => {
-  assert.strictEqual(core.hoverLabel({ ariaLabel: 'Revenue', role: 'img', heading: 'H', tag: 'DIV' }), 'Revenue');
+  assert.strictEqual(
+    core.hoverLabel({ ariaLabel: 'Revenue', role: 'img', heading: 'H', tag: 'DIV' }),
+    'Revenue',
+  );
   assert.strictEqual(core.hoverLabel({ role: 'img', heading: 'H', tag: 'DIV' }), 'img');
-  assert.strictEqual(core.hoverLabel({ heading: 'Sales by region', tag: 'DIV' }), 'Sales by region');
+  assert.strictEqual(
+    core.hoverLabel({ heading: 'Sales by region', tag: 'DIV' }),
+    'Sales by region',
+  );
   assert.strictEqual(core.hoverLabel({ tag: 'DIV' }), 'div');
   assert.ok(core.hoverLabel({ ariaLabel: 'x'.repeat(200) }).length <= 60);
   assert.strictEqual(core.hoverLabel({}), 'element');
@@ -55,14 +67,22 @@ function fakeCdp(handlers) {
   };
 }
 
-const LOC = { selector: '#kpi', role: 'img', name: 'Revenue', rect: { x: 100, y: 200, width: 40, height: 20 } };
+const LOC = {
+  selector: '#kpi',
+  role: 'img',
+  name: 'Revenue',
+  rect: { x: 100, y: 200, width: 40, height: 20 },
+};
 
 test('resolveTarget prefers a unique selector', async () => {
   const cdp = fakeCdp({
     'Runtime.evaluate': { result: { subtype: 'node', objectId: 'o1' } },
     'DOM.describeNode': { node: { backendNodeId: 7 } },
   });
-  assert.deepStrictEqual(await core.resolveTarget(cdp, LOC), { backendNodeId: 7, match: 'selector' });
+  assert.deepStrictEqual(await core.resolveTarget(cdp, LOC), {
+    backendNodeId: 7,
+    match: 'selector',
+  });
 });
 
 test('resolveTarget falls back to a unique role+name', async () => {
@@ -71,13 +91,18 @@ test('resolveTarget falls back to a unique role+name', async () => {
     'DOM.getDocument': { root: { nodeId: 1 } },
     'Accessibility.queryAXTree': { nodes: [{ backendDOMNodeId: 9 }] },
   });
-  assert.deepStrictEqual(await core.resolveTarget(cdp, LOC), { backendNodeId: 9, match: 'role-name' });
+  assert.deepStrictEqual(await core.resolveTarget(cdp, LOC), {
+    backendNodeId: 9,
+    match: 'role-name',
+  });
 });
 
 test('resolveTarget falls back to rect when role+name is ambiguous', async () => {
   const cdp = fakeCdp({
     'Runtime.evaluate': (p) =>
-      /scrollX/.test(p.expression) ? { result: { value: { x: 0, y: 100 } } } : { result: { subtype: 'null' } },
+      /scrollX/.test(p.expression)
+        ? { result: { value: { x: 0, y: 100 } } }
+        : { result: { subtype: 'null' } },
     'DOM.getDocument': { root: { nodeId: 1 } },
     'Accessibility.queryAXTree': { nodes: [{ backendDOMNodeId: 9 }, { backendDOMNodeId: 10 }] },
     'DOM.getNodeForLocation': (p) => {
@@ -93,7 +118,9 @@ test('resolveTarget returns null when nothing matches or locator is empty', asyn
     'Runtime.evaluate': { result: { subtype: 'null' } },
     'DOM.getDocument': { root: { nodeId: 1 } },
     'Accessibility.queryAXTree': { nodes: [] },
-    'DOM.getNodeForLocation': () => { throw new Error('no node'); },
+    'DOM.getNodeForLocation': () => {
+      throw new Error('no node');
+    },
   });
   assert.strictEqual(await core.resolveTarget(none, LOC), null);
   assert.strictEqual(await core.resolveTarget(fakeCdp({}), null), null);
@@ -101,7 +128,10 @@ test('resolveTarget returns null when nothing matches or locator is empty', asyn
 
 test('pin cursor css is one safe author rule with a hotspot and a crosshair fallback', () => {
   const css = require('../shell/web-pin-core').PIN_CURSOR_CSS;
-  assert.match(css, /^:root:root, :root:root \* \{ cursor: url\("data:image\/svg\+xml,[^"]+"\) 8 25, crosshair !important; \}$/);
+  assert.match(
+    css,
+    /^:root:root, :root:root \* \{ cursor: url\("data:image\/svg\+xml,[^"]+"\) 8 25, crosshair !important; \}$/,
+  );
   const uri = css.slice(css.indexOf('data:'), css.indexOf('")'));
   assert.doesNotMatch(uri, /[<>#]/);
 });

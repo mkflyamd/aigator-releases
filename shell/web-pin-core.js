@@ -25,14 +25,17 @@ function captureScale(width, height) {
 }
 
 function capText(text, max = MAX_TEXT) {
-  const t = String(text == null ? '' : text).replace(/\n{3,}/g, '\n\n').trim();
+  const t = String(text == null ? '' : text)
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
   if (t.length <= max) return t;
   return t.slice(0, max - TRUNC.length) + TRUNC;
 }
 
 function hoverLabel(info) {
   const i = info || {};
-  const raw = i.ariaLabel || i.role || i.heading || (i.tag ? String(i.tag).toLowerCase() : '') || 'element';
+  const raw =
+    i.ariaLabel || i.role || i.heading || (i.tag ? String(i.tag).toLowerCase() : '') || 'element';
   const s = String(raw).replace(/\s+/g, ' ').trim();
   return s.length > 60 ? s.slice(0, 59) + '…' : s;
 }
@@ -54,7 +57,11 @@ function describeInPage() {
   const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
   const esc = (s) => (window.CSS && CSS.escape ? CSS.escape(s) : s);
   const unique = (sel) => {
-    try { return document.querySelectorAll(sel).length === 1; } catch (e) { return false; }
+    try {
+      return document.querySelectorAll(sel).length === 1;
+    } catch (e) {
+      return false;
+    }
   };
   function selectorFor(n) {
     if (n.id && unique('#' + esc(n.id))) return '#' + esc(n.id);
@@ -101,9 +108,17 @@ function describeInPage() {
   const role = (el.getAttribute && el.getAttribute('role')) || '';
   const labelledBy = el.getAttribute && el.getAttribute('aria-labelledby');
   const labelledText = labelledBy
-    ? clean(labelledBy.split(/\s+/).map((id) => (document.getElementById(id) || {}).textContent || '').join(' '))
+    ? clean(
+        labelledBy
+          .split(/\s+/)
+          .map((id) => (document.getElementById(id) || {}).textContent || '')
+          .join(' '),
+      )
     : '';
-  const name = ariaLabel || labelledText || clean(el.getAttribute && (el.getAttribute('title') || el.getAttribute('alt')));
+  const name =
+    ariaLabel ||
+    labelledText ||
+    clean(el.getAttribute && (el.getAttribute('title') || el.getAttribute('alt')));
   const r = el.getBoundingClientRect();
   const rect = {
     x: Math.round(r.left + window.scrollX),
@@ -158,14 +173,18 @@ async function resolveTarget(cdp, locator) {
   if (locator.selector) {
     try {
       const expr =
-        '(() => { const n = document.querySelectorAll(' + JSON.stringify(locator.selector) +
+        '(() => { const n = document.querySelectorAll(' +
+        JSON.stringify(locator.selector) +
         '); return n.length === 1 ? n[0] : null; })()';
       const ev = await cdp.send('Runtime.evaluate', { expression: expr });
       if (ev && ev.result && ev.result.subtype === 'node' && ev.result.objectId) {
         const d = await cdp.send('DOM.describeNode', { objectId: ev.result.objectId });
-        if (d && d.node && d.node.backendNodeId) return { backendNodeId: d.node.backendNodeId, match: 'selector' };
+        if (d && d.node && d.node.backendNodeId)
+          return { backendNodeId: d.node.backendNodeId, match: 'selector' };
       }
-    } catch (e) { /* fall through */ }
+    } catch (e) {
+      /* fall through */
+    }
   }
   if (locator.role && locator.name) {
     try {
@@ -179,7 +198,9 @@ async function resolveTarget(cdp, locator) {
       if (nodes.length === 1 && nodes[0].backendDOMNodeId) {
         return { backendNodeId: nodes[0].backendDOMNodeId, match: 'role-name' };
       }
-    } catch (e) { /* fall through */ }
+    } catch (e) {
+      /* fall through */
+    }
   }
   if (locator.rect) {
     try {
@@ -193,7 +214,9 @@ async function resolveTarget(cdp, locator) {
       const y = Math.round(r.y + r.height / 2 - s.y);
       const hit = await cdp.send('DOM.getNodeForLocation', { x, y });
       if (hit && hit.backendNodeId) return { backendNodeId: hit.backendNodeId, match: 'rect' };
-    } catch (e) { /* fall through */ }
+    } catch (e) {
+      /* fall through */
+    }
   }
   return null;
 }
@@ -201,20 +224,35 @@ async function resolveTarget(cdp, locator) {
 // Pushpin pointer shown over the page while pin mode is on. The needle tip is the
 // hotspot (8,25) so the head sits up-right of the element being picked.
 const PIN_CURSOR_HOTSPOT = '8 25';
-const PIN_CURSOR_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24">'
-  + '<g transform="rotate(45 12 12)" stroke-linejoin="round" stroke-linecap="round">'
-  + '<path d="M9 3h6l-.8 6.2L17 12v2H7v-2l2.8-2.8L9 3zM12 14v7" fill="none" stroke="%23fff" stroke-width="3"/>'
-  + '<path d="M12 14v7" fill="none" stroke="%230a0f1a" stroke-width="2"/>'
-  + '<path d="M12 14v7" fill="none" stroke="%2394a3b8" stroke-width="1"/>'
-  + '<path d="M9 3h6l-.8 6.2L17 12v2H7v-2l2.8-2.8L9 3z" fill="%23ef4444" stroke="%230a0f1a" stroke-width="1"/>'
-  + '</g></svg>';
+const PIN_CURSOR_SVG =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24">' +
+  '<g transform="rotate(45 12 12)" stroke-linejoin="round" stroke-linecap="round">' +
+  '<path d="M9 3h6l-.8 6.2L17 12v2H7v-2l2.8-2.8L9 3zM12 14v7" fill="none" stroke="%23fff" stroke-width="3"/>' +
+  '<path d="M12 14v7" fill="none" stroke="%230a0f1a" stroke-width="2"/>' +
+  '<path d="M12 14v7" fill="none" stroke="%2394a3b8" stroke-width="1"/>' +
+  '<path d="M9 3h6l-.8 6.2L17 12v2H7v-2l2.8-2.8L9 3z" fill="%23ef4444" stroke="%230a0f1a" stroke-width="1"/>' +
+  '</g></svg>';
 // Author origin because Electron's removeInsertedCSS cannot remove user-origin CSS, so a
 // user-origin pointer would stay after pin mode ends. The doubled :root outranks the
 // page's own !important cursor rules, which are almost always a single tag or class.
-const PIN_CURSOR_CSS = ':root:root, :root:root * { cursor: url("data:image/svg+xml,' + PIN_CURSOR_SVG.replace(/"/g, "'").replace(/</g, '%3C').replace(/>/g, '%3E')
-  + '") ' + PIN_CURSOR_HOTSPOT + ', crosshair !important; }';
+const PIN_CURSOR_CSS =
+  ':root:root, :root:root * { cursor: url("data:image/svg+xml,' +
+  PIN_CURSOR_SVG.replace(/"/g, "'").replace(/</g, '%3C').replace(/>/g, '%3E') +
+  '") ' +
+  PIN_CURSOR_HOTSPOT +
+  ', crosshair !important; }';
 
 module.exports = {
-  PIN_CURSOR_CSS, MAX_SIDE, MAX_TEXT, clipFromQuad, captureScale, capText, hoverLabel, urlMatches,
-  describeInPage, pageTextInPage, labelInPage, resolveTarget,
+  PIN_CURSOR_CSS,
+  MAX_SIDE,
+  MAX_TEXT,
+  clipFromQuad,
+  captureScale,
+  capText,
+  hoverLabel,
+  urlMatches,
+  describeInPage,
+  pageTextInPage,
+  labelInPage,
+  resolveTarget,
 };

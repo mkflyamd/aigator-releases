@@ -23,7 +23,13 @@ test('isStale flips at 30 minutes', () => {
 });
 
 test('errorMessage covers every shell error code and has a fallback', () => {
-  for (const code of ['pane_unavailable', 'pane_not_visible', 'page_mismatch', 'timeout', 'empty_target']) {
+  for (const code of [
+    'pane_unavailable',
+    'pane_not_visible',
+    'page_mismatch',
+    'timeout',
+    'empty_target',
+  ]) {
     assert.ok(wp.errorMessage(code).length > 10, code);
   }
   assert.equal(wp.errorMessage('something_new'), wp.errorMessage('pane_unavailable'));
@@ -48,7 +54,12 @@ test('index.html loads web-pins.js after marketplace-pane.js; css has the new ru
   const b = html.indexOf('/static/web-pins.js');
   assert.ok(a > 0 && b > a);
   const css = read('web', 'static', 'style.css');
-  for (const sel of ['.pin-ref-chip.is-stale', '.wp-suggest-chip', '.wp-fly', '.pin-card-icon.has-thumb']) {
+  for (const sel of [
+    '.pin-ref-chip.is-stale',
+    '.wp-suggest-chip',
+    '.wp-fly',
+    '.pin-card-icon.has-thumb',
+  ]) {
     assert.ok(css.includes(sel), sel);
   }
 });
@@ -101,7 +112,8 @@ class FakeEl {
     (this.listeners.click || []).forEach((fn) => fn({}));
   }
   remove() {
-    if (this.parentElement) this.parentElement.children = this.parentElement.children.filter((c) => c !== this);
+    if (this.parentElement)
+      this.parentElement.children = this.parentElement.children.filter((c) => c !== this);
     this.parentElement = null;
   }
   focus() {}
@@ -167,7 +179,15 @@ function makeEnv({ fetchImpl, gatorShell }) {
   return { env, toasts, chips, filled, form, body };
 }
 
-const payload = { appId: 'custom-x', image_b64: 'AAAA', text: 't', locator: {}, url: 'https://e.x', title: 'T', aria_label: '' };
+const payload = {
+  appId: 'custom-x',
+  image_b64: 'AAAA',
+  text: 't',
+  locator: {},
+  url: 'https://e.x',
+  title: 'T',
+  aria_label: '',
+};
 const jsonRes = (obj, ok = true, status = 200) => ({ ok, status, json: async () => obj });
 const flush = () => new Promise((r) => setImmediate(r));
 
@@ -176,7 +196,12 @@ test('hostile label and suggestion text are rendered as text, never as markup', 
   const { env, chips, form } = makeEnv({
     fetchImpl: async (url, opts) => {
       if (opts && opts.method === 'POST') return jsonRes({ id: 'p1', label: evil, captured_at: 1 });
-      return jsonRes({ suggestions: [{ text: evil, kind: 'question' }, { text: evil, kind: 'action' }] });
+      return jsonRes({
+        suggestions: [
+          { text: evil, kind: 'question' },
+          { text: evil, kind: 'action' },
+        ],
+      });
     },
   });
   await env.WebPins.onCaptured(payload);
@@ -192,7 +217,12 @@ test('hostile label and suggestion text are rendered as text, never as markup', 
 });
 
 test('a failed POST toasts an error and inserts no chip', async () => {
-  for (const fetchImpl of [async () => jsonRes({}, false, 500), async () => { throw new Error('net'); }]) {
+  for (const fetchImpl of [
+    async () => jsonRes({}, false, 500),
+    async () => {
+      throw new Error('net');
+    },
+  ]) {
     const { env, toasts, chips } = makeEnv({ fetchImpl });
     await env.WebPins.onCaptured(payload);
     assert.equal(chips.length, 0);
@@ -202,7 +232,13 @@ test('a failed POST toasts an error and inserts no chip', async () => {
 
 test('a malformed or id-less success body toasts an error and inserts no chip', async () => {
   const bad = [
-    { ok: true, status: 200, json: async () => { throw new SyntaxError('bad json'); } },
+    {
+      ok: true,
+      status: 200,
+      json: async () => {
+        throw new SyntaxError('bad json');
+      },
+    },
     jsonRes({}),
     jsonRes(null),
   ];
@@ -250,19 +286,27 @@ test('suggestion chips fill the composer only on the owning tab, and rows never 
   assert.equal(chips.length, 2);
   assert.equal(rows().length, 1);
   env._activeTabId = 'tab-b';
-  rows()[0].all((e) => e.classes.has('wp-suggest-chip'))[0].click();
+  rows()[0]
+    .all((e) => e.classes.has('wp-suggest-chip'))[0]
+    .click();
   assert.deepEqual(filled, []);
   assert.equal(rows().length, 0);
 });
 
 // ---- Task 9: recapture round trip ----
-const DETAIL = { meta: { app_id: 'custom-pbi', locator: { selector: '#a' }, url: 'https://x.test/y' } };
+const DETAIL = {
+  meta: { app_id: 'custom-pbi', locator: { selector: '#a' }, url: 'https://x.test/y' },
+};
 
-function fakeFetch({ detail = DETAIL, snapshot = { ok: true, changed: true, captured_at: 123, match: 'selector' } } = {}) {
+function fakeFetch({
+  detail = DETAIL,
+  snapshot = { ok: true, changed: true, captured_at: 123, match: 'selector' },
+} = {}) {
   const calls = [];
   const fn = async (url, opts = {}) => {
     calls.push({ url, opts });
-    if (url.endsWith('/snapshot')) return { ok: snapshot.ok, status: snapshot.ok ? 200 : 409, json: async () => snapshot };
+    if (url.endsWith('/snapshot'))
+      return { ok: snapshot.ok, status: snapshot.ok ? 200 : 409, json: async () => snapshot };
     return { ok: !!detail, status: detail ? 200 : 404, json: async () => detail };
   };
   fn.calls = calls;
@@ -289,21 +333,32 @@ function fakeShell(results) {
 }
 
 const OK = { status: 'ok', image_b64: 'AA', text: 't', match: 'selector' };
-const posts = (f) => f.calls.filter((c) => c.url.endsWith('/snapshot')).map((c) => JSON.parse(c.opts.body));
+const posts = (f) =>
+  f.calls.filter((c) => c.url.endsWith('/snapshot')).map((c) => JSON.parse(c.opts.body));
 
 test('recapture posts the snapshot with the request id and reports changed', async () => {
   const f = fakeFetch();
   const shell = fakeShell([OK]);
-  const r = await wp.createRecapturer({ fetchFn: f, shell, sleep: async () => {} }).recapture('p1', { requestId: 'r1' });
+  const r = await wp
+    .createRecapturer({ fetchFn: f, shell, sleep: async () => {} })
+    .recapture('p1', { requestId: 'r1' });
   assert.deepEqual(r, { status: 'ok', changed: true, captured_at: 123, match: 'selector' });
-  assert.deepEqual(posts(f)[0], { request_id: 'r1', status: 'ok', image_b64: 'AA', text: 't', match: 'selector' });
+  assert.deepEqual(posts(f)[0], {
+    request_id: 'r1',
+    status: 'ok',
+    image_b64: 'AA',
+    text: 't',
+    match: 'selector',
+  });
   assert.deepEqual(shell.recaptureCalls[0], ['custom-pbi', { selector: '#a' }, 'https://x.test/y']);
 });
 
 test('agent request on a hidden pane reports pane_not_visible and never switches panes', async () => {
   const f = fakeFetch();
   const shell = fakeShell([{ status: 'pane_not_visible' }]);
-  const r = await wp.createRecapturer({ fetchFn: f, shell, sleep: async () => {} }).recapture('p1', { requestId: 'r1' });
+  const r = await wp
+    .createRecapturer({ fetchFn: f, shell, sleep: async () => {} })
+    .recapture('p1', { requestId: 'r1' });
   assert.equal(r.status, 'pane_not_visible');
   assert.deepEqual(shell.shown, []);
   assert.deepEqual(posts(f), [{ request_id: 'r1', status: 'pane_not_visible' }]);
@@ -312,7 +367,9 @@ test('agent request on a hidden pane reports pane_not_visible and never switches
 test('user refresh on a hidden pane shows the app and retries once', async () => {
   const f = fakeFetch();
   const shell = fakeShell([{ status: 'pane_not_visible' }, OK]);
-  const r = await wp.createRecapturer({ fetchFn: f, shell, sleep: async () => {} }).recapture('p1', { user: true });
+  const r = await wp
+    .createRecapturer({ fetchFn: f, shell, sleep: async () => {} })
+    .recapture('p1', { user: true });
   assert.equal(r.status, 'ok');
   assert.deepEqual(shell.shown, ['custom-pbi']);
   assert.equal(shell.recaptureCalls.length, 2);
@@ -322,7 +379,9 @@ test('user refresh on a hidden pane shows the app and retries once', async () =>
 test('user refresh gives up after one retry and posts nothing without a request id', async () => {
   const f = fakeFetch();
   const shell = fakeShell([{ status: 'pane_not_visible' }, { status: 'pane_not_visible' }]);
-  const r = await wp.createRecapturer({ fetchFn: f, shell, sleep: async () => {} }).recapture('p1', { user: true });
+  const r = await wp
+    .createRecapturer({ fetchFn: f, shell, sleep: async () => {} })
+    .recapture('p1', { user: true });
   assert.equal(r.status, 'pane_not_visible');
   assert.equal(shell.recaptureCalls.length, 2);
   assert.deepEqual(posts(f), []);
@@ -333,21 +392,27 @@ test('user refresh gives up after one retry and posts nothing without a request 
 test('a missing pin never reaches the shell', async () => {
   const f = fakeFetch({ detail: null });
   const shell = fakeShell([]);
-  const r = await wp.createRecapturer({ fetchFn: f, shell, sleep: async () => {} }).recapture('gone', { requestId: 'r9' });
+  const r = await wp
+    .createRecapturer({ fetchFn: f, shell, sleep: async () => {} })
+    .recapture('gone', { requestId: 'r9' });
   assert.equal(r.status, 'pane_unavailable');
   assert.equal(shell.recaptureCalls.length, 0);
 });
 
 test('page_mismatch carries the app and url so the card can offer Go to the pin page', async () => {
   const shell = fakeShell([{ status: 'page_mismatch' }]);
-  const r = await wp.createRecapturer({ fetchFn: fakeFetch(), shell, sleep: async () => {} }).recapture('p1', { user: true });
+  const r = await wp
+    .createRecapturer({ fetchFn: fakeFetch(), shell, sleep: async () => {} })
+    .recapture('p1', { user: true });
   assert.deepEqual(r, { status: 'page_mismatch', appId: 'custom-pbi', url: 'https://x.test/y' });
 });
 
 test('a 409 on the snapshot post (request already answered) is not reported as success', async () => {
   const f = fakeFetch({ snapshot: { ok: false } });
   const shell = fakeShell([OK]);
-  const r = await wp.createRecapturer({ fetchFn: f, shell, sleep: async () => {} }).recapture('p1', { requestId: 'r1' });
+  const r = await wp
+    .createRecapturer({ fetchFn: f, shell, sleep: async () => {} })
+    .recapture('p1', { requestId: 'r1' });
   assert.equal(r.status, 'pane_unavailable');
 });
 
@@ -358,7 +423,10 @@ test('matchNote labels approximate and fallback matches only', () => {
 });
 
 test('app.js routes webpin-recapture to the renderer and the renderer checks tab ownership', () => {
-  assert.match(read('web', 'static', 'app.js'), /msg\.type === 'webpin-recapture'[\s\S]{0,300}onRecaptureRequest\(msg\)/);
+  assert.match(
+    read('web', 'static', 'app.js'),
+    /msg\.type === 'webpin-recapture'[\s\S]{0,300}onRecaptureRequest\(msg\)/,
+  );
   assert.match(read('web', 'static', 'web-pins.js'), /_tabs\.some\(/);
 });
 
@@ -376,7 +444,9 @@ test('a malformed snapshot reply body is reported as pane_unavailable, not throw
           }
         : { ok: true, status: 200, json: async () => DETAIL };
     const shell = fakeShell([OK]);
-    const r = await wp.createRecapturer({ fetchFn: f, shell, sleep: async () => {} }).recapture('p1', { requestId: 'r1' });
+    const r = await wp
+      .createRecapturer({ fetchFn: f, shell, sleep: async () => {} })
+      .recapture('p1', { requestId: 'r1' });
     assert.equal(r.status, 'pane_unavailable');
   }
 });
@@ -390,17 +460,27 @@ test('a shell that throws or returns nothing still answers the waiting agent req
   ];
   for (const webPinRecapture of bad) {
     const f = fakeFetch();
-    const r = await wp.createRecapturer({ fetchFn: f, shell: { webPinRecapture }, sleep: async () => {} }).recapture('p1', { requestId: 'r1' });
+    const r = await wp
+      .createRecapturer({ fetchFn: f, shell: { webPinRecapture }, sleep: async () => {} })
+      .recapture('p1', { requestId: 'r1' });
     assert.equal(r.status, 'pane_unavailable');
     assert.deepEqual(posts(f), [{ request_id: 'r1', status: 'pane_unavailable' }]);
   }
 });
 
 test('every shell failure code is forwarded to the agent unchanged', async () => {
-  for (const code of ['timeout', 'empty_target', 'page_mismatch', 'pane_unavailable', 'pane_not_visible']) {
+  for (const code of [
+    'timeout',
+    'empty_target',
+    'page_mismatch',
+    'pane_unavailable',
+    'pane_not_visible',
+  ]) {
     const f = fakeFetch();
     const shell = fakeShell([{ status: code }]);
-    const r = await wp.createRecapturer({ fetchFn: f, shell, sleep: async () => {} }).recapture('p1', { requestId: 'r1' });
+    const r = await wp
+      .createRecapturer({ fetchFn: f, shell, sleep: async () => {} })
+      .recapture('p1', { requestId: 'r1' });
     assert.equal(r.status, code);
     assert.deepEqual(posts(f), [{ request_id: 'r1', status: code }]);
   }
@@ -409,7 +489,9 @@ test('every shell failure code is forwarded to the agent unchanged', async () =>
 test('a shell code outside the known five falls back to pane_unavailable on the post', async () => {
   const f = fakeFetch();
   const shell = fakeShell([{ status: 'something_new' }]);
-  const r = await wp.createRecapturer({ fetchFn: f, shell, sleep: async () => {} }).recapture('p1', { requestId: 'r1' });
+  const r = await wp
+    .createRecapturer({ fetchFn: f, shell, sleep: async () => {} })
+    .recapture('p1', { requestId: 'r1' });
   assert.equal(r.status, 'something_new');
   assert.deepEqual(posts(f), [{ request_id: 'r1', status: 'pane_unavailable' }]);
 });
@@ -421,14 +503,20 @@ test('a success post rejected with 400/413/500 releases the waiting agent reques
       calls.push({ url, opts });
       if (url.endsWith('/snapshot')) {
         const n = calls.filter((c) => c.url.endsWith('/snapshot')).length;
-        return n === 1 ? { ok: false, status, json: async () => ({}) } : { ok: true, status: 200, json: async () => ({ ok: false }) };
+        return n === 1
+          ? { ok: false, status, json: async () => ({}) }
+          : { ok: true, status: 200, json: async () => ({ ok: false }) };
       }
       return { ok: true, status: 200, json: async () => DETAIL };
     };
     const shell = fakeShell([OK]);
-    const r = await wp.createRecapturer({ fetchFn: f, shell, sleep: async () => {} }).recapture('p1', { requestId: 'r1' });
+    const r = await wp
+      .createRecapturer({ fetchFn: f, shell, sleep: async () => {} })
+      .recapture('p1', { requestId: 'r1' });
     assert.equal(r.status, 'pane_unavailable');
-    const sent = calls.filter((c) => c.url.endsWith('/snapshot')).map((c) => JSON.parse(c.opts.body));
+    const sent = calls
+      .filter((c) => c.url.endsWith('/snapshot'))
+      .map((c) => JSON.parse(c.opts.body));
     assert.equal(sent.length, 2, String(status));
     assert.equal(sent[0].status, 'ok');
     assert.deepEqual(sent[1], { request_id: 'r1', status: 'pane_unavailable' });
@@ -437,7 +525,9 @@ test('a success post rejected with 400/413/500 releases the waiting agent reques
 
 test('a 409 or an undelivered success post sends no follow-up release', async () => {
   const f409 = fakeFetch({ snapshot: { ok: false } });
-  await wp.createRecapturer({ fetchFn: f409, shell: fakeShell([OK]), sleep: async () => {} }).recapture('p1', { requestId: 'r1' });
+  await wp
+    .createRecapturer({ fetchFn: f409, shell: fakeShell([OK]), sleep: async () => {} })
+    .recapture('p1', { requestId: 'r1' });
   assert.equal(posts(f409).length, 1);
   const calls = [];
   const fNet = async (url) => {
@@ -445,14 +535,18 @@ test('a 409 or an undelivered success post sends no follow-up release', async ()
     if (url.endsWith('/snapshot')) throw new Error('net');
     return { ok: true, status: 200, json: async () => DETAIL };
   };
-  const r = await wp.createRecapturer({ fetchFn: fNet, shell: fakeShell([OK]), sleep: async () => {} }).recapture('p1', { requestId: 'r1' });
+  const r = await wp
+    .createRecapturer({ fetchFn: fNet, shell: fakeShell([OK]), sleep: async () => {} })
+    .recapture('p1', { requestId: 'r1' });
   assert.equal(r.status, 'pane_unavailable');
   assert.equal(calls.filter((u) => u.endsWith('/snapshot')).length, 1);
 });
 
 test('a pin that has no app id still releases the waiting agent request', async () => {
   const f = fakeFetch({ detail: { meta: {} } });
-  const r = await wp.createRecapturer({ fetchFn: f, shell: fakeShell([]), sleep: async () => {} }).recapture('p1', { requestId: 'r1' });
+  const r = await wp
+    .createRecapturer({ fetchFn: f, shell: fakeShell([]), sleep: async () => {} })
+    .recapture('p1', { requestId: 'r1' });
   assert.equal(r.status, 'pane_unavailable');
   assert.deepEqual(posts(f), [{ request_id: 'r1', status: 'pane_unavailable' }]);
 });

@@ -17816,7 +17816,8 @@ function _initNotificationStream() {
       }
       if (msg.type === 'webpin-recapture') {
         // Ownership (_tabs.some) is checked inside onRecaptureRequest.
-        if (window.WebPins && window.WebPins.onRecaptureRequest) window.WebPins.onRecaptureRequest(msg);
+        if (window.WebPins && window.WebPins.onRecaptureRequest)
+          window.WebPins.onRecaptureRequest(msg);
         return;
       }
       if (msg.type === 'draft_signal' && msg.draft) {
