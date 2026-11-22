@@ -21,7 +21,7 @@ This tool lets you pull live data from Confluence, Outlook, and the web and push
 
 ```bash
 git clone <repo-url>
-cd TeamsPOC
+cd aigator-releases
 ```
 
 ### Install Python dependencies

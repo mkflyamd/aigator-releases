@@ -182,14 +182,14 @@ const cancelHtml = cancelRows({
   end: '2026-11-02T09:30:00',
   timezone: 'Pacific Standard Time',
   attendees: [
-    { name: 'Ann', email: 'ann@amd.com' },
-    { name: '', email: 'bob@amd.com' },
+    { name: 'Ann', email: 'ann@contoso.example' },
+    { name: '', email: 'bob@contoso.example' },
   ],
   comment: 'Moving <b>soon</b>',
 });
 assert(cancelHtml.includes('Sync &lt;1&gt;') && cancelHtml.includes('Whole series'), cancelHtml);
 assert(
-  cancelHtml.includes('Ann (ann@amd.com)') && cancelHtml.includes('>bob@amd.com<'),
+  cancelHtml.includes('Ann (ann@contoso.example)') && cancelHtml.includes('>bob@contoso.example<'),
   cancelHtml,
 );
 assert(cancelHtml.includes('Moving &lt;b&gt;soon&lt;/b&gt;'), 'note is escaped');

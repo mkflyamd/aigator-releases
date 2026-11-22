@@ -2,10 +2,10 @@
 """Search for coworkers by name or email.
 
 Usage:
-    python3 search_people.py "Tanmay Shah"
+    python3 search_people.py "Taylor Morgan"
     python3 search_people.py "kumar" --count 10
-    python3 search_people.py "tanmay.shah@example.com"
-    python3 search_people.py "Tanmay" --json
+    python3 search_people.py "taylor.morgan@example.com"
+    python3 search_people.py "Taylor" --json
 """
 
 import argparse

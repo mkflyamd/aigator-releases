@@ -120,8 +120,8 @@ const json = (v) => JSON.stringify(v);
 {
   const { build } = setup();
   const ed = build({
-    to_people: [person('ann@amd.com'), person('bob@amd.com')],
-    cc_people: [person('cy@amd.com')],
+    to_people: [person('ann@contoso.example'), person('bob@contoso.example')],
+    cc_people: [person('cy@contoso.example')],
   });
   const [to, cc] = ed.rows;
   assert.strictEqual(ed.rows.length, 2, 'To and CC rows only, no Bcc');
@@ -134,50 +134,56 @@ const json = (v) => JSON.stringify(v);
 {
   const { build } = setup();
   const ed = build({
-    to_people: [person('ann@amd.com'), person('bob@amd.com')],
-    cc_people: [person('cy@amd.com')],
+    to_people: [person('ann@contoso.example'), person('bob@contoso.example')],
+    cc_people: [person('cy@contoso.example')],
   });
   const [to, cc] = ed.rows;
   removeButtons(cc)[0].click();
   assert.strictEqual(json(ed.edits()), json({ cc: [] }));
   removeButtons(to)[1].click();
-  assert.strictEqual(json(ed.edits()), json({ to: ['ann@amd.com'], cc: [] }));
+  assert.strictEqual(json(ed.edits()), json({ to: ['ann@contoso.example'], cc: [] }));
   assert.strictEqual(removeButtons(to).length, 0, 'the last To person cannot be removed');
 }
 
 // A typed email address is added on Enter; repeats and junk are ignored.
 {
   const { build } = setup();
-  const ed = build({ to_people: [person('ann@amd.com')], cc_people: [person('cy@amd.com')] });
+  const ed = build({
+    to_people: [person('ann@contoso.example')],
+    cc_people: [person('cy@contoso.example')],
+  });
   const [to, cc] = ed.rows;
-  enter(cc, 'new@amd.com');
-  assert.strictEqual(json(ed.edits()), json({ cc: ['cy@amd.com', 'new@amd.com'] }));
-  enter(to, 'NEW@amd.com');
-  enter(to, 'ann@amd.com');
+  enter(cc, 'new@contoso.example');
+  assert.strictEqual(json(ed.edits()), json({ cc: ['cy@contoso.example', 'new@contoso.example'] }));
+  enter(to, 'NEW@contoso.example');
+  enter(to, 'ann@contoso.example');
   enter(to, 'not-an-address');
   assert.strictEqual(json(chipNames(to)), json(['ann']), 'duplicates and junk are not added');
-  assert.strictEqual(json(chipNames(cc)), json(['cy', 'new@amd.com']));
+  assert.strictEqual(json(chipNames(cc)), json(['cy', 'new@contoso.example']));
 }
 
 // Removing and re-adding the same person leaves nothing to report.
 {
   const { build } = setup();
-  const ed = build({ to_people: [person('ann@amd.com')], cc_people: [person('cy@amd.com')] });
+  const ed = build({
+    to_people: [person('ann@contoso.example')],
+    cc_people: [person('cy@contoso.example')],
+  });
   const [, cc] = ed.rows;
   removeButtons(cc)[0].click();
-  enter(cc, 'cy@amd.com');
+  enter(cc, 'cy@contoso.example');
   assert.strictEqual(ed.edits(), null);
 }
 
 // An empty CC line collapses to a single "+ Add CC" link instead of a blank row.
 {
   const { build } = setup();
-  const ed = build({ to_people: [person('ann@amd.com')], cc_people: [] });
+  const ed = build({ to_people: [person('ann@contoso.example')], cc_people: [] });
   const [to, cc] = ed.rows;
   assert(cc.classes.has('gcc-recipient-empty'));
   assert.strictEqual(addLink(cc).textContent, '+ Add CC');
   assert(!to.classes.has('gcc-recipient-empty'));
-  enter(cc, 'new@amd.com');
+  enter(cc, 'new@contoso.example');
   assert(!cc.classes.has('gcc-recipient-empty'));
   assert.strictEqual(addLink(cc).textContent, '+ Add');
   removeButtons(cc)[0].click();
@@ -188,11 +194,11 @@ const json = (v) => JSON.stringify(v);
 (async () => {
   const { build, timers, fetched } = setup({
     people: [
-      { name: 'Dee Lee', email: 'dee@amd.com' },
-      { name: 'Ann', email: 'ann@amd.com' },
+      { name: 'Dee Lee', email: 'dee@contoso.example' },
+      { name: 'Ann', email: 'ann@contoso.example' },
     ],
   });
-  const ed = build({ to_people: [person('ann@amd.com')], cc_people: [] });
+  const ed = build({ to_people: [person('ann@contoso.example')], cc_people: [] });
   const [to] = ed.rows;
   addLink(to).click();
   const input = addInput(to);
@@ -206,7 +212,10 @@ const json = (v) => JSON.stringify(v);
   const suggestions = to.find((c) => c.classes.has('ag-suggestion'));
   assert.strictEqual(suggestions.length, 1, 'people already on the reply are not suggested');
   suggestions[0].click();
-  assert.strictEqual(json(ed.edits()), json({ to: ['ann@amd.com', 'dee@amd.com'] }));
+  assert.strictEqual(
+    json(ed.edits()),
+    json({ to: ['ann@contoso.example', 'dee@contoso.example'] }),
+  );
 
   // Once sent or handed to Outlook, the editor locks; a failed send unlocks it.
   ed.lock();
@@ -216,8 +225,8 @@ const json = (v) => JSON.stringify(v);
 
   // Enter never adds a suggestion left over from an earlier query.
   {
-    const stale = setup({ people: [{ name: 'Bob Ong', email: 'bob@amd.com' }] });
-    const edStale = stale.build({ to_people: [person('ann@amd.com')], cc_people: [] });
+    const stale = setup({ people: [{ name: 'Bob Ong', email: 'bob@contoso.example' }] });
+    const edStale = stale.build({ to_people: [person('ann@contoso.example')], cc_people: [] });
     const [staleTo] = edStale.rows;
     addLink(staleTo).click();
     const staleInput = addInput(staleTo);
@@ -234,8 +243,8 @@ const json = (v) => JSON.stringify(v);
 
   // Once locked for sending, a suggestion click adds no one and the add box closes.
   {
-    const locked = setup({ people: [{ name: 'Dee Lee', email: 'dee@amd.com' }] });
-    const edLocked = locked.build({ to_people: [person('ann@amd.com')], cc_people: [] });
+    const locked = setup({ people: [{ name: 'Dee Lee', email: 'dee@contoso.example' }] });
+    const edLocked = locked.build({ to_people: [person('ann@contoso.example')], cc_people: [] });
     const [lockedTo] = edLocked.rows;
     addLink(lockedTo).click();
     const lockedInput = addInput(lockedTo);
@@ -248,15 +257,18 @@ const json = (v) => JSON.stringify(v);
     pending.click();
     assert.strictEqual(edLocked.edits(), null, 'a late click while sending adds no one');
     edLocked.lock(false);
-    enter(lockedTo, 'dee@amd.com');
-    assert.strictEqual(json(edLocked.edits()), json({ to: ['ann@amd.com', 'dee@amd.com'] }));
+    enter(lockedTo, 'dee@contoso.example');
+    assert.strictEqual(
+      json(edLocked.edits()),
+      json({ to: ['ann@contoso.example', 'dee@contoso.example'] }),
+    );
   }
 
   // The recipient cap matches the server's.
   const cap = setup();
-  const many = Array.from({ length: 50 }, (_, i) => person(`p${i}@amd.com`));
+  const many = Array.from({ length: 50 }, (_, i) => person(`p${i}@contoso.example`));
   const full = cap.build({ to_people: many, cc_people: [] });
-  enter(full.rows[1], 'extra@amd.com');
+  enter(full.rows[1], 'extra@contoso.example');
   assert.strictEqual(cap.toasts.length, 1, 'a 51st recipient is refused with a message');
   assert.strictEqual(full.rows[1].find((c) => c.classes.has('ag-chip-name')).length, 0);
 

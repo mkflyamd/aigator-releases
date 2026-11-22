@@ -43,7 +43,7 @@ def _offered_to_loop(monkeypatch, context_id, message, seeded):
 
 def _slack_turn():
     return [
-        {"role": "user", "content": "catch me up on ext-amd-fireworks"},
+        {"role": "user", "content": "catch me up on ext-acme-gamma"},
         {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": SLACK_TOOL, "input": {"query": "x"}}]},
         {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "[]"}]},
         {"role": "assistant", "content": "Nothing found."},
