@@ -15,7 +15,7 @@
 - Any new POST/PUT/PATCH/DELETE route uses `dependencies=[Depends(verify_csrf)]` from `web/security.py`; `tests/csrf_route_baseline.txt` is never edited.
 - Only fake credential in tests/docs: `aigator-fake-api-key`.
 - Unstar = Remove: deletes the app's config entry, its pane, and its `persist:custom-<id>` session, after an 8 s Undo window. No "hide but keep" state.
-- Star is hidden for built-in apps (Teams, Outlook, Slack, Jira, GitHub, Google g-* panes); shown only for user-added custom apps' panes.
+- Star is hidden for built-in apps (Teams, Outlook, Slack, Jira, GitHub, Google g-\* panes); shown only for user-added custom apps' panes.
 - Bubble: name field, Remove (left, destructive style, never autofocused), Done (right, primary). Enter = Done, Esc = close with no change, click outside = Done. Consequence line: "Removing deletes this app's pins, settings and saved sign-in."
 - Toasts: "Added to Gator apps" with Edit and Undo; "Removed <name> from Gator apps" with Undo. `role="status"`, 8 s, pause on hover/focus, Undo keyboard-reachable.
 - Design truth is `web/static/style.css` and `docs/styleguide.md`; toolbar uses its own CSS variables in `shell/toolbar.html`.
@@ -39,10 +39,12 @@
 ### Task 1: Star helpers (pure logic)
 
 **Files:**
+
 - Create: `shell/toolbar-star.js`
 - Test: `tests/toolbar-star.test.js`
 
 **Interfaces:**
+
 - Produces:
   - `originKey(url: string): string | ''` - `origin` of an http(s) URL, lower-cased; `''` otherwise.
   - `findStarredApp(url, apps: {id, url}[], hiddenIds: Set<string>): string | null` - id of the app whose origin equals the URL's origin and not hidden.
@@ -68,17 +70,29 @@ test('originKey lower-cases and rejects non-http', () => {
 });
 
 test('findStarredApp matches by origin, ignoring path', () => {
-  assert.strictEqual(star.findStarredApp('https://app.powerbi.com/groups/1/reports/2', apps, new Set()), 'custom-power-bi');
+  assert.strictEqual(
+    star.findStarredApp('https://app.powerbi.com/groups/1/reports/2', apps, new Set()),
+    'custom-power-bi',
+  );
   assert.strictEqual(star.findStarredApp('https://edition.cnn.com/', apps, new Set()), null);
 });
 
 test('findStarredApp skips apps pending deletion', () => {
-  assert.strictEqual(star.findStarredApp('https://www.cnn.com/world', apps, new Set(['custom-cnn'])), null);
+  assert.strictEqual(
+    star.findStarredApp('https://www.cnn.com/world', apps, new Set(['custom-cnn'])),
+    null,
+  );
 });
 
 test('starState reports filled with the app id, else empty', () => {
-  assert.deepStrictEqual(star.starState('https://www.cnn.com/a', apps, new Set()), { state: 'filled', appId: 'custom-cnn' });
-  assert.deepStrictEqual(star.starState('https://example.com/', apps, new Set()), { state: 'empty', appId: null });
+  assert.deepStrictEqual(star.starState('https://www.cnn.com/a', apps, new Set()), {
+    state: 'filled',
+    appId: 'custom-cnn',
+  });
+  assert.deepStrictEqual(star.starState('https://example.com/', apps, new Set()), {
+    state: 'empty',
+    appId: null,
+  });
 });
 
 test('defaultAppName prefers the title, falls back to the host, caps length', () => {
@@ -156,10 +170,12 @@ git commit -m "feat(toolbar): add pure helpers that decide the address bar star 
 ### Task 2: Shell wiring (listeners, star state, expandable toolbar, IPC)
 
 **Files:**
+
 - Modify: `shell/main.js` (`_toolbarAppForUrl` ~652, `_toolbarPushState` ~690, `createGenericPane` ~4410, `layout()` ~4272-4294, `toolbar:save-custom-app` ~5073, poller ~5089)
 - Modify: `shell/preload.js` (after `createCustomApp`, line 92)
 
 **Interfaces:**
+
 - Consumes: `starState`, `defaultAppName` from `shell/toolbar-star.js`.
 - Produces (main -> toolbar): `toolbar:state` gains `star: { state: 'hidden' | 'empty' | 'filled', appId: string | null, name: string }`; `app` and `isCustomApp`-pill use removed from the UI (field may stay).
 - Produces (toolbar -> main): `toolbar:set-expanded(heightPx: number)` (0 = collapse), `toolbar:star-add`, `toolbar:star-rename(appId, name)`, `toolbar:star-remove(appId)`.
@@ -180,7 +196,10 @@ const _hiddenCustomApps = new Set();
 
 function _starFor(app, url) {
   if (!_customAppIds.has(app)) return { state: 'hidden', appId: null, name: '' };
-  const apps = [..._customAppIds].map((id) => ({ id, url: _genericPanes[id] ? _genericPanes[id].url : '' }));
+  const apps = [..._customAppIds].map((id) => ({
+    id,
+    url: _genericPanes[id] ? _genericPanes[id].url : '',
+  }));
   const s = toolbarStar.starState(url, apps, _hiddenCustomApps);
   const name = s.appId && _genericPanes[s.appId] ? _genericPanes[s.appId].name : '';
   return { state: s.state, appId: s.appId, name };
@@ -243,11 +262,17 @@ ipcMain.handle('custom-app:teardown', async (_e, appId) => {
   delete _genericPanes[appId];
   delete APP_HOME_URL[appId];
   if (pane && pane.view) {
-    try { win.contentView.removeChildView(pane.view); } catch {}
-    try { pane.view.webContents.close(); } catch {}
+    try {
+      win.contentView.removeChildView(pane.view);
+    } catch {}
+    try {
+      pane.view.webContents.close();
+    } catch {}
   }
   if (pane && pane.partition) {
-    try { await session.fromPartition(pane.partition).clearStorageData(); } catch {}
+    try {
+      await session.fromPartition(pane.partition).clearStorageData();
+    } catch {}
   }
   layout();
   return true;
@@ -285,9 +310,11 @@ git commit -m "feat(shell): push star state to the toolbar and wire custom panes
 ### Task 3: Toolbar UI (remove pill, add star and bubble)
 
 **Files:**
+
 - Modify: `shell/toolbar.html` (markup 568-618, CSS `.tb-app` 250-266 and `.tb-app-cta` 234-246, JS: `render*` functions and the `toolbar:state` handler)
 
 **Interfaces:**
+
 - Consumes: `toolbar:state.star`, `toolbar:set-expanded`, `toolbar:star-add|rename|remove`.
 
 - [ ] **Step 1: Remove the pill and CTA**
@@ -299,21 +326,63 @@ Delete `#tb-app`, `#tb-app-cta` markup, their CSS, the `elApp*` constants, `rend
 Inside `#tb-url`, immediately before `#tb-overflow`:
 
 ```html
-<button class="tb-star" id="tb-star" type="button" aria-label="Add to Gator apps" aria-pressed="false" hidden>
-  <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path class="tb-star-path" d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.8 6.8 19.6l1-5.8-4.3-4.1 5.9-.9z"/></svg>
+<button
+  class="tb-star"
+  id="tb-star"
+  type="button"
+  aria-label="Add to Gator apps"
+  aria-pressed="false"
+  hidden
+>
+  <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+    <path
+      class="tb-star-path"
+      d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.8 6.8 19.6l1-5.8-4.3-4.1 5.9-.9z"
+    />
+  </svg>
 </button>
 ```
 
 CSS (uses toolbar variables; empty = outline `--text-sub`, hover = `--text`, filled = `--accent` fill, focus ring = 1px `--accent` outline):
 
 ```css
-.tb-star { width: 20px; height: 20px; flex-shrink: 0; background: none; border: none; border-radius: 4px; cursor: pointer; display: flex; align-items: center; justify-content: center; color: var(--text-sub); transition: var(--transition); }
-.tb-star[hidden] { display: none; }
-.tb-star:hover { color: var(--text); background: var(--surface2, rgba(255,255,255,0.06)); }
-.tb-star:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
-.tb-star .tb-star-path { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linejoin: round; }
-.tb-star.is-filled { color: var(--accent); }
-.tb-star.is-filled .tb-star-path { fill: currentColor; }
+.tb-star {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-sub);
+  transition: var(--transition);
+}
+.tb-star[hidden] {
+  display: none;
+}
+.tb-star:hover {
+  color: var(--text);
+  background: var(--surface2, rgba(255, 255, 255, 0.06));
+}
+.tb-star:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+.tb-star .tb-star-path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linejoin: round;
+}
+.tb-star.is-filled {
+  color: var(--accent);
+}
+.tb-star.is-filled .tb-star-path {
+  fill: currentColor;
+}
 ```
 
 - [ ] **Step 3: Star state and click**
@@ -352,12 +421,14 @@ git commit -m "feat(toolbar): replace the app pill and Save-as button with a fav
 ### Task 4: Renderer flows, rename route, undo toast
 
 **Files:**
+
 - Modify: `web/routes/mcp_routes.py` (after `remove_custom_app`, ~874)
 - Create: `tests/test_custom_app_rename.py`
 - Create: `web/static/custom-app-star.js`
 - Modify: `web/static/index.html` (script tag next to `web-pins.js`), `web/static/style.css`
 
 **Interfaces:**
+
 - Consumes: `gatorShell.onCustomAppStar`, `customAppSetHidden`, `customAppTeardown`, `createCustomApp`, `showCustomApp`; app.js globals `_registerCustomAppSkill`, `SKILL_REGISTRY`, `SKILL_MAP`, `renderDock`, `_loadCustomApps`.
 
 - [ ] **Step 1: Failing route test**
@@ -411,6 +482,7 @@ Run: `PYTHONPATH=/tmp/mcp1 pytest tests/test_custom_app_rename.py tests/test_csr
 - [ ] **Step 3: Renderer module `custom-app-star.js`**
 
 Handles `custom-app:star-event`:
+
 - `add`: POST `/api/config/custom-apps` `{name: title-or-host, url}`; on success `gatorShell.createCustomApp(app)`, `_registerCustomAppSkill(app)`, `_loadCustomApps()`, `gatorShell.showCustomApp(app.id)`, navigate the source pane back is NOT done (left as is), show toast "Added to Gator apps" with **Edit** (re-sends focus to the bubble by showing the app and posting nothing; simply opens the app) and **Undo** (runs the remove flow immediately without a second toast).
 - `rename`: PATCH, update `SKILL_MAP[id].label`, `renderDock()`, `_loadCustomApps()`.
 - `remove`: `customAppSetHidden(id, true)`; hide dock item (remove from `SKILL_REGISTRY`/`SKILL_MAP`, `renderDock()`, keep the entry to restore); show toast "Removed <name> from Gator apps" with **Undo**; timer 8 s (paused on hover/focus). Undo: `customAppSetHidden(id, false)`, re-push the entry, `renderDock()`. Expiry or `beforeunload`: `fetch DELETE /api/config/custom-apps/<id>` then `customAppTeardown(id)`; `_loadCustomApps()`. After the hide, `showCustomApp`-less: the shell lands on Gator chat because the active pane was hidden.

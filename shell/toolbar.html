@@ -784,8 +784,16 @@
 
     <div class="tb-bubble" id="tb-bubble" role="dialog" aria-label="Gator app" hidden>
       <label class="tb-bubble-label" for="tb-bubble-name">Name</label>
-      <input class="tb-bubble-name" id="tb-bubble-name" type="text" maxlength="40" spellcheck="false" />
-      <div class="tb-bubble-note">Removing deletes this app's pins, settings and saved sign-in.</div>
+      <input
+        class="tb-bubble-name"
+        id="tb-bubble-name"
+        type="text"
+        maxlength="40"
+        spellcheck="false"
+      />
+      <div class="tb-bubble-note">
+        Removing deletes this app's pins, settings and saved sign-in.
+      </div>
       <div class="tb-bubble-actions">
         <button type="button" class="tb-bubble-remove" id="tb-bubble-remove">Remove</button>
         <button type="button" class="tb-bubble-done" id="tb-bubble-done">Done</button>
@@ -943,7 +951,9 @@
 
         function renderApp(app) {
           currentApp = app;
-          elReload.title = app ? 'Reload ' + (app === 'email' ? 'outlook' : app) : 'Refresh Gator data';
+          elReload.title = app
+            ? 'Reload ' + (app === 'email' ? 'outlook' : app)
+            : 'Refresh Gator data';
         }
 
         function renderNavState(state) {

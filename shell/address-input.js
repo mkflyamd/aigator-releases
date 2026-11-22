@@ -7,7 +7,8 @@ const SEARCH_URL = 'https://www.bing.com/search?q=';
 const SCHEME = /^[a-z][a-z0-9+.-]*:/i;
 const HOST_PORT = /^(\[[0-9a-f:.]+\]|[^\s:/?#@\[\]]+)(?::(\d{1,5}))?$/i;
 const IPV4 = /^\d{1,3}(?:\.\d{1,3}){3}$/;
-const DOMAIN = /^(?:[\p{L}\p{N}](?:[\p{L}\p{N}-]*[\p{L}\p{N}])?\.)+(?:[\p{L}]{2,}|xn--[a-z0-9-]+)$/iu;
+const DOMAIN =
+  /^(?:[\p{L}\p{N}](?:[\p{L}\p{N}-]*[\p{L}\p{N}])?\.)+(?:[\p{L}]{2,}|xn--[a-z0-9-]+)$/iu;
 
 function search(text) {
   return { kind: 'search', url: SEARCH_URL + encodeURIComponent(text), explicit: false };
@@ -70,7 +71,12 @@ function loadAddressInput(wc, typed, onError) {
   }
   wc.loadURL(target.url).catch((error) => {
     if (ABORTED(error)) return;
-    if (target.kind === 'url' && !target.explicit && isBareHost(typed) && NAME_NOT_RESOLVED(error)) {
+    if (
+      target.kind === 'url' &&
+      !target.explicit &&
+      isBareHost(typed) &&
+      NAME_NOT_RESOLVED(error)
+    ) {
       const fallback = search(String(typed).trim());
       wc.loadURL(fallback.url).catch((err) => {
         if (!ABORTED(err) && onError) onError(err, fallback.url);

@@ -5,13 +5,21 @@ const { resolveAddressInput, loadAddressInput } = require('../shell/address-inpu
 const resolve = (s) => resolveAddressInput(s);
 
 test('full web addresses navigate over https by default', () => {
-  assert.deepStrictEqual(resolve('www.cnn.com'), { kind: 'url', url: 'https://www.cnn.com/', explicit: false });
+  assert.deepStrictEqual(resolve('www.cnn.com'), {
+    kind: 'url',
+    url: 'https://www.cnn.com/',
+    explicit: false,
+  });
   assert.strictEqual(resolve('cnn.com/world?x=1').url, 'https://cnn.com/world?x=1');
   assert.strictEqual(resolve('  example.org  ').url, 'https://example.org/');
 });
 
 test('explicit http and https are kept', () => {
-  assert.deepStrictEqual(resolve('http://example.com'), { kind: 'url', url: 'http://example.com/', explicit: true });
+  assert.deepStrictEqual(resolve('http://example.com'), {
+    kind: 'url',
+    url: 'http://example.com/',
+    explicit: true,
+  });
   assert.strictEqual(resolve('HTTPS://Example.com/A').url, 'https://example.com/A');
 });
 
@@ -22,7 +30,10 @@ test('a bare word is a search, not a guessed .com', () => {
 });
 
 test('anything with spaces is a search and is encoded', () => {
-  assert.strictEqual(resolve('weather in paris & rome').url, 'https://www.bing.com/search?q=weather%20in%20paris%20%26%20rome');
+  assert.strictEqual(
+    resolve('weather in paris & rome').url,
+    'https://www.bing.com/search?q=weather%20in%20paris%20%26%20rome',
+  );
   assert.strictEqual(resolve('cnn.com news').kind, 'search');
 });
 
@@ -75,7 +86,10 @@ test('a guessed address that does not resolve falls back to a search', async () 
   const errors = [];
   loadAddressInput(wc, 'notarealsite.zzz', (e) => errors.push(e));
   await tick();
-  assert.deepStrictEqual(wc.loaded, ['https://notarealsite.zzz/', 'https://www.bing.com/search?q=notarealsite.zzz']);
+  assert.deepStrictEqual(wc.loaded, [
+    'https://notarealsite.zzz/',
+    'https://www.bing.com/search?q=notarealsite.zzz',
+  ]);
   assert.strictEqual(errors.length, 0);
 });
 
@@ -106,7 +120,11 @@ test('refused schemes report an error and load nothing', () => {
 });
 
 test('a mistyped address with a path or query is never sent to the search engine', async () => {
-  for (const typed of ['intranet.corp.exmple/reports?token=abc', 'host.zzz/path', 'host.zzz:8443']) {
+  for (const typed of [
+    'intranet.corp.exmple/reports?token=abc',
+    'host.zzz/path',
+    'host.zzz:8443',
+  ]) {
     const wc = fakeWc([Object.assign(new Error('dns'), { code: 'ERR_NAME_NOT_RESOLVED' })]);
     const errors = [];
     loadAddressInput(wc, typed, (e) => errors.push(e));

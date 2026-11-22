@@ -820,7 +820,8 @@ function _attachToolbarListeners(view, appName) {
     if (input.type !== 'keyDown' || activeExternalApp !== appName) return;
     const key = String(input.key || '').toLowerCase();
     const mod = input.control || input.meta;
-    if (!((mod && !input.alt && !input.shift && key === 'l') || (input.alt && !mod && key === 'd'))) return;
+    if (!((mod && !input.alt && !input.shift && key === 'l') || (input.alt && !mod && key === 'd')))
+      return;
     const toolbarWc = _liveToolbarWebContents();
     if (!toolbarWc) return;
     event.preventDefault();
@@ -4270,7 +4271,8 @@ function _layoutNow() {
   if (githubView && githubView.setVisible) githubView.setVisible(activeExternalApp === 'github');
   // Generic panes
   for (const [paneId, pane] of Object.entries(_genericPanes)) {
-    if (pane.view && pane.view.setVisible) pane.view.setVisible(activeExternalApp === paneId && !_hiddenCustomApps.has(paneId));
+    if (pane.view && pane.view.setVisible)
+      pane.view.setVisible(activeExternalApp === paneId && !_hiddenCustomApps.has(paneId));
   }
 
   // Toolbar: shown only when an external app is active. Sits flush at the top

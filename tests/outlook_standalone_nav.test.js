@@ -100,7 +100,10 @@ function leavePrompt(choice) {
 const addressInput = require('../shell/address-input');
 const typedToUrl = (typed) => typed;
 assert.strictEqual(addressInput.resolveAddressInput('www.cnn.com').url, 'https://www.cnn.com/');
-assert.strictEqual(addressInput.resolveAddressInput('http://example.com').url, 'http://example.com/');
+assert.strictEqual(
+  addressInput.resolveAddressInput('http://example.com').url,
+  'http://example.com/',
+);
 
 const navHandler = source.match(
   /ipcMain\.on\('toolbar:navigate', (\(e, typed\) => \{[\s\S]*?\r?\n\})\);\r?\n\r?\nipcMain\.on\('toolbar:set-expanded'/,

@@ -26,7 +26,13 @@ function harness() {
       showApp: (id) => log.push(['ui.show', id]),
       reloadList: () => log.push(['ui.reload']),
       toast: (t) => {
-        const handle = { ...t, dismissed: false, dismiss() { handle.dismissed = true; } };
+        const handle = {
+          ...t,
+          dismissed: false,
+          dismiss() {
+            handle.dismissed = true;
+          },
+        };
         toasts.push(handle);
         return handle;
       },
@@ -40,9 +46,18 @@ const names = (log) => log.map((l) => l[0]);
 test('add creates the app, registers it, shows it and offers Undo', async () => {
   const { controller, log, toasts } = harness();
   await controller.handle({ kind: 'add', url: 'https://news.example.com', name: 'News' });
-  assert.deepStrictEqual(names(log), ['api.create', 'shell.create', 'ui.register', 'ui.reload', 'ui.show']);
+  assert.deepStrictEqual(names(log), [
+    'api.create',
+    'shell.create',
+    'ui.register',
+    'ui.reload',
+    'ui.show',
+  ]);
   assert.strictEqual(toasts[0].message, 'Added to Gator apps');
-  assert.deepStrictEqual(toasts[0].actions.map((a) => a.label), ['Undo']);
+  assert.deepStrictEqual(
+    toasts[0].actions.map((a) => a.label),
+    ['Undo'],
+  );
 });
 
 test('Undo on the add toast deletes the app for real', async () => {
@@ -51,7 +66,12 @@ test('Undo on the add toast deletes the app for real', async () => {
   log.length = 0;
   await toasts[0].actions[0].run();
   assert.deepStrictEqual(names(log), [
-    'shell.hidden', 'ui.close', 'ui.unregister', 'api.remove', 'shell.teardown', 'ui.reload',
+    'shell.hidden',
+    'ui.close',
+    'ui.unregister',
+    'api.remove',
+    'shell.teardown',
+    'ui.reload',
   ]);
 });
 
@@ -104,7 +124,13 @@ test('a second removal commits the first immediately', async () => {
 });
 
 test('custom app names from page titles are never interpolated into innerHTML unescaped', () => {
-  const src = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'web', 'static', 'app.js'), 'utf8');
+  const src = require('node:fs').readFileSync(
+    require('node:path').join(__dirname, '..', 'web', 'static', 'app.js'),
+    'utf8',
+  );
   assert(!/\$\{s\.label\}/.test(src), 'slash menu badge escapes the label');
-  assert(!/aria-label="Remove \$\{skill\.label\}/.test(src), 'chip aria-label is set through the DOM');
+  assert(
+    !/aria-label="Remove \$\{skill\.label\}/.test(src),
+    'chip aria-label is set through the DOM',
+  );
 });

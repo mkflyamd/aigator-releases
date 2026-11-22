@@ -28,6 +28,7 @@
     "productName": "AI Gator",
     "asar": true,
     "files": [
+      "address-input.js",
       "atlassian-urls.js",
       "hud-preload.js",
       "hud_recorder.js",
@@ -39,6 +40,7 @@
       "sandbox-repair.js",
       "splash.html",
       "toolbar-preload.js",
+      "toolbar-star.js",
       "toolbar.html",
       "web-pin-core.js",
       "web-pin.js"

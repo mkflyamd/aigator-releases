@@ -14,17 +14,29 @@ test('originKey lower-cases and rejects non-http', () => {
 });
 
 test('findStarredApp matches by origin, ignoring path', () => {
-  assert.strictEqual(star.findStarredApp('https://app.powerbi.com/groups/1/reports/2', apps, new Set()), 'custom-power-bi');
+  assert.strictEqual(
+    star.findStarredApp('https://app.powerbi.com/groups/1/reports/2', apps, new Set()),
+    'custom-power-bi',
+  );
   assert.strictEqual(star.findStarredApp('https://edition.cnn.com/', apps, new Set()), null);
 });
 
 test('findStarredApp skips apps pending deletion', () => {
-  assert.strictEqual(star.findStarredApp('https://www.cnn.com/world', apps, new Set(['custom-cnn'])), null);
+  assert.strictEqual(
+    star.findStarredApp('https://www.cnn.com/world', apps, new Set(['custom-cnn'])),
+    null,
+  );
 });
 
 test('starState reports filled with the app id, else empty', () => {
-  assert.deepStrictEqual(star.starState('https://www.cnn.com/a', apps, new Set()), { state: 'filled', appId: 'custom-cnn' });
-  assert.deepStrictEqual(star.starState('https://example.com/', apps, new Set()), { state: 'empty', appId: null });
+  assert.deepStrictEqual(star.starState('https://www.cnn.com/a', apps, new Set()), {
+    state: 'filled',
+    appId: 'custom-cnn',
+  });
+  assert.deepStrictEqual(star.starState('https://example.com/', apps, new Set()), {
+    state: 'empty',
+    appId: null,
+  });
 });
 
 test('defaultAppName prefers the title, falls back to the host, caps length', () => {
@@ -34,7 +46,10 @@ test('defaultAppName prefers the title, falls back to the host, caps length', ()
 });
 
 test('clicking a filled star un-favorites directly instead of opening the edit bubble', () => {
-  const html = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'shell', 'toolbar.html'), 'utf8');
+  const html = require('node:fs').readFileSync(
+    require('node:path').join(__dirname, '..', 'shell', 'toolbar.html'),
+    'utf8',
+  );
   const click = html.match(/elStar\.addEventListener\('click'[\s\S]*?\n        \}\);/)[0];
   assert(/star\.state === 'filled'[\s\S]*toolbar:star-remove/.test(click));
   assert(!/openBubble/.test(click));
