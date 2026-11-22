@@ -72,12 +72,16 @@ test('remove hides the app first and deletes nothing until the Undo window ends'
   assert(controller.hasPending());
 });
 
-test('Undo restores the pane and the dock entry without deleting', async () => {
+test('Undo restores the pane and the dock entry, reopens the app, and deletes nothing', async () => {
   const { controller, log, toasts } = harness();
   await controller.handle({ kind: 'remove', appId: 'custom-news' });
   log.length = 0;
-  toasts[0].actions[0].run();
-  assert.deepStrictEqual(log, [['shell.hidden', 'custom-news', false], ['ui.register', 'custom-news']]);
+  await toasts[0].actions[0].run();
+  assert.deepStrictEqual(log, [
+    ['shell.hidden', 'custom-news', false],
+    ['ui.register', 'custom-news'],
+    ['ui.show', 'custom-news'],
+  ]);
   assert(!controller.hasPending());
   assert(toasts[0].dismissed);
 });

@@ -956,9 +956,9 @@
           elStar.hidden = star.state === 'hidden';
           elStar.classList.toggle('is-filled', filled);
           elStar.setAttribute('aria-pressed', filled ? 'true' : 'false');
-          const label = filled ? 'Edit Gator app' : 'Add to Gator apps';
+          const label = filled ? 'Remove from Gator apps' : 'Add to Gator apps';
           elStar.setAttribute('aria-label', label);
-          elStar.title = label;
+          elStar.title = filled ? label + ' (right-click to rename)' : label;
           if (star.state === 'hidden') closeBubble();
         }
 
@@ -992,11 +992,19 @@
         elStar.addEventListener('click', (e) => {
           e.stopPropagation();
           if (star.state === 'filled') {
-            if (bubbleOpen()) finishBubble();
-            else openBubble();
+            const appId = star.appId;
+            closeBubble();
+            if (appId) ipcRenderer.send('toolbar:star-remove', appId);
           } else if (star.state === 'empty') {
             ipcRenderer.send('toolbar:star-add');
           }
+        });
+        elStar.addEventListener('contextmenu', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (star.state !== 'filled') return;
+          if (bubbleOpen()) finishBubble();
+          else openBubble();
         });
         elBubble.addEventListener('click', (e) => e.stopPropagation());
         elBubbleName.addEventListener('keydown', (e) => {

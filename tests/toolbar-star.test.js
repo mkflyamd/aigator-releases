@@ -32,3 +32,10 @@ test('defaultAppName prefers the title, falls back to the host, caps length', ()
   assert.strictEqual(star.defaultAppName('', 'https://www.example.com/a'), 'example.com');
   assert.strictEqual(star.defaultAppName('a'.repeat(60), 'https://x.com').length, 40);
 });
+
+test('clicking a filled star un-favorites directly instead of opening the edit bubble', () => {
+  const html = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'shell', 'toolbar.html'), 'utf8');
+  const click = html.match(/elStar\.addEventListener\('click'[\s\S]*?\n        \}\);/)[0];
+  assert(/star\.state === 'filled'[\s\S]*toolbar:star-remove/.test(click));
+  assert(!/openBubble/.test(click));
+});

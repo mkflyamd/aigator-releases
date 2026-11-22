@@ -25,13 +25,14 @@
       ui.reloadList();
     }
 
-    function undoPending() {
+    async function undoPending() {
       if (!pending) return;
       const { app, toast } = pending;
       pending = null;
       toast.dismiss();
-      shell.customAppSetHidden(app.id, false);
+      await shell.customAppSetHidden(app.id, false);
       ui.registerApp(app);
+      ui.showApp(app.id);
     }
 
     async function add({ url, name }) {
