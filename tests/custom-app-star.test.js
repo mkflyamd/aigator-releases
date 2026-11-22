@@ -53,7 +53,7 @@ test('add creates the app, registers it, shows it and offers Undo', async () => 
     'ui.reload',
     'ui.show',
   ]);
-  assert.strictEqual(toasts[0].message, 'Added to Gator apps');
+  assert.strictEqual(toasts[0].message, 'Added to your web apps');
   assert.deepStrictEqual(
     toasts[0].actions.map((a) => a.label),
     ['Undo'],
@@ -88,7 +88,7 @@ test('remove hides the app first and deletes nothing until the Undo window ends'
   const { controller, log, toasts } = harness();
   await controller.handle({ kind: 'remove', appId: 'custom-news' });
   assert.deepStrictEqual(names(log), ['shell.hidden', 'ui.close', 'ui.unregister']);
-  assert.strictEqual(toasts[0].message, 'Removed News from Gator apps');
+  assert.strictEqual(toasts[0].message, 'Removed News from your web apps');
   assert(controller.hasPending());
 });
 

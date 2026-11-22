@@ -698,9 +698,9 @@
           class="tb-star"
           id="tb-star"
           type="button"
-          aria-label="Add to Gator apps"
+          aria-label="Add this site to your web apps"
           aria-pressed="false"
-          title="Add to Gator apps"
+          title="Add this site to your web apps"
           hidden
         >
           <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
@@ -807,7 +807,7 @@
       <div class="tb-drag-spacer-right"></div>
     </div>
 
-    <div class="tb-bubble" id="tb-bubble" role="dialog" aria-label="Gator app" hidden>
+    <div class="tb-bubble" id="tb-bubble" role="dialog" aria-label="Web app" hidden>
       <label class="tb-bubble-label" for="tb-bubble-name">Name</label>
       <input
         class="tb-bubble-name"
@@ -816,9 +816,7 @@
         maxlength="40"
         spellcheck="false"
       />
-      <div class="tb-bubble-note">
-        Removing deletes this app's pins, settings and saved sign-in.
-      </div>
+      <div class="tb-bubble-note">Removing deletes its pins, settings and saved sign-in.</div>
       <div class="tb-bubble-actions">
         <button type="button" class="tb-bubble-remove" id="tb-bubble-remove">Remove</button>
         <button type="button" class="tb-bubble-done" id="tb-bubble-done">Done</button>
@@ -1081,9 +1079,11 @@
           elStar.hidden = star.state === 'hidden';
           elStar.classList.toggle('is-filled', filled);
           elStar.setAttribute('aria-pressed', filled ? 'true' : 'false');
-          const label = filled ? 'Remove from Gator apps' : 'Add to Gator apps';
+          const label = filled
+            ? 'Saved in your web apps · click to edit or remove'
+            : 'Add this site to your web apps';
           elStar.setAttribute('aria-label', label);
-          elStar.title = filled ? label + ' (right-click to rename)' : label;
+          elStar.title = label;
           if (star.state === 'hidden') closeBubble();
         }
 

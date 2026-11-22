@@ -43,7 +43,7 @@
       ui.reloadList();
       ui.showApp(app.id);
       const toast = ui.toast({
-        message: 'Added to Gator apps',
+        message: 'Added to your web apps',
         actions: [{ label: 'Undo', run: () => removeNow(app) }],
         ms: undoMs,
       });
@@ -73,7 +73,7 @@
       ui.closeIfActive(appId);
       ui.unregisterApp(appId);
       const toast = ui.toast({
-        message: `Removed ${app.name} from Gator apps`,
+        message: `Removed ${app.name} from your web apps`,
         actions: [{ label: 'Undo', run: undoPending }],
         ms: undoMs,
         onExpire: commitPending,
@@ -230,7 +230,7 @@
     shell.onCustomAppStar((event) => {
       controller.handle(event).catch((e) => {
         if (typeof _showConnectivityToast === 'function') {
-          _showConnectivityToast(e.message || 'Could not update Gator apps.', 'warning');
+          _showConnectivityToast(e.message || 'Could not update your web apps.', 'warning');
         }
       });
     });
