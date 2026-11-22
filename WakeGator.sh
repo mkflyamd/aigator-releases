@@ -160,8 +160,8 @@ setup_env() {
     fi
 
     # -- Bundle OpenCode (pinned version, into the portable Node above) -------
-    # Mirrors WakeGator.ps1's OpenCode step exactly,
-    # including the pinned version.
+    # Mirrors WakeGator.ps1's OpenCode step exactly - see
+    # docs/internal/OpenCodeIntegrationPlan.md §4 for the pinning rationale.
     # Verified on macOS against a real install. Unlike Windows (where global
     # bins land directly in the prefix dir as .cmd shims), Unix links them into
     # {prefix}/bin - which is also exactly why the Node step above expects node
