@@ -11,8 +11,8 @@ from app import app
 from skills._drafts import get_draft
 from skills.calendar.tools import _tool_delete_calendar_event
 
-ANN = {"emailAddress": {"name": "Ann", "address": "ann@amd.com"}, "type": "required"}
-ROOM = {"emailAddress": {"name": "Room 4", "address": "room4@amd.com"}, "type": "resource"}
+ANN = {"emailAddress": {"name": "Ann", "address": "ann@contoso.example"}, "type": "required"}
+ROOM = {"emailAddress": {"name": "Room 4", "address": "room4@contoso.example"}, "type": "resource"}
 
 
 class _Gone(RuntimeError):
@@ -77,7 +77,7 @@ def test_cancelling_a_meeting_with_attendees_makes_a_card_and_cancels_nothing():
     gc.post.assert_not_called()
     params = get_draft(result["data"]["draft_id"])["params"]
     assert params["comment"] == "Moving to next week"
-    assert params["attendees"] == [{"name": "Ann", "email": "ann@amd.com"}]
+    assert params["attendees"] == [{"name": "Ann", "email": "ann@contoso.example"}]
     assert params["scope"] == "single" and "notify" not in params
 
 
@@ -188,8 +188,8 @@ def test_an_event_that_is_gone_or_empty_cancels_nothing():
 
 
 def test_a_meeting_whose_only_attendee_is_the_organizer_is_cancelled_without_a_card():
-    me = {"emailAddress": {"name": "Me", "address": "Me@amd.com"}, "type": "required"}
-    organizer = {"emailAddress": {"name": "Me", "address": "me@amd.com"}}
+    me = {"emailAddress": {"name": "Me", "address": "Me@contoso.example"}, "type": "required"}
+    organizer = {"emailAddress": {"name": "Me", "address": "me@contoso.example"}}
     result, gc = _stage(_event(attendees=[me], organizer=organizer))
     assert "_draft" not in result
     assert result["deleted"] is True

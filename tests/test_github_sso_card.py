@@ -124,11 +124,11 @@ def _gh_as(monkeypatch, login):
 
 def test_card_names_the_account_gh_runs_as(monkeypatch):
     _refused_rest(monkeypatch)
-    _gh_as(monkeypatch, "maykulka_amdeng")
+    _gh_as(monkeypatch, "example-user_enterprise")
 
     result = api._rest("/repos/ROCm/rocm-systems/pulls/482")
 
-    assert result["_github_sso"] == {"org": "ROCm", "url": ONE_TIME, "account": "maykulka_amdeng"}
+    assert result["_github_sso"] == {"org": "ROCm", "url": ONE_TIME, "account": "example-user_enterprise"}
 
 
 def test_card_leaves_out_an_account_name_that_is_not_a_login(monkeypatch):
@@ -233,7 +233,7 @@ def test_skill_tells_the_model_how_to_handle_the_card():
 
 STATUS = json.dumps({"hosts": {"github.com": [
     {"login": "mkflyamd", "active": True, "state": "success", "host": "github.com"},
-    {"login": "maykulka_amdeng", "active": False, "state": "success", "host": "github.com"},
+    {"login": "example-user_enterprise", "active": False, "state": "success", "host": "github.com"},
 ]}})
 OTHER_TOKEN = "aigator-fake-api-key"
 
@@ -267,13 +267,13 @@ def _two_accounts(monkeypatch, works_for=()):
 def test_accounts_lists_logins_without_tokens(monkeypatch):
     _two_accounts(monkeypatch)
     assert gh_cli.accounts() == [{"login": "mkflyamd", "active": True},
-                                 {"login": "maykulka_amdeng", "active": False}]
-    assert gh_cli.other_accounts() == ["maykulka_amdeng"]
+                                 {"login": "example-user_enterprise", "active": False}]
+    assert gh_cli.other_accounts() == ["example-user_enterprise"]
 
 
 def test_refused_read_succeeds_as_the_other_account_with_no_card(monkeypatch):
     _refused_rest(monkeypatch)
-    calls = _two_accounts(monkeypatch, works_for=("maykulka_amdeng",))
+    calls = _two_accounts(monkeypatch, works_for=("example-user_enterprise",))
 
     result = api._rest("/repos/ROCm/aiter/pulls/6335")
 
@@ -283,9 +283,9 @@ def test_refused_read_succeeds_as_the_other_account_with_no_card(monkeypatch):
 
 
 def test_other_account_token_never_leaks_into_the_result(monkeypatch):
-    _two_accounts(monkeypatch, works_for=("maykulka_amdeng",))
+    _two_accounts(monkeypatch, works_for=("example-user_enterprise",))
     result = gh_tools._github_gh(["pr", "view", "6335", "-R", "ROCm/aiter", "--json", "number"])
-    assert result["auth"] == "gh login (maykulka_amdeng)"
+    assert result["auth"] == "gh login (example-user_enterprise)"
     assert OTHER_TOKEN not in json.dumps(result)
 
 
@@ -299,12 +299,12 @@ def _approved_folder(tmp_path, args):
 
 def test_other_account_retry_in_an_approved_folder_does_not_ask_again(monkeypatch, tmp_path):
     args = ["pr", "view", "6335", "-R", "ROCm/aiter", "--json", "number"]
-    _two_accounts(monkeypatch, works_for=("maykulka_amdeng",))
+    _two_accounts(monkeypatch, works_for=("example-user_enterprise",))
     proj = _approved_folder(tmp_path, args)
 
     result = gh_tools._github_gh(args, proj, "tab")
 
-    assert result["auth"] == "gh login (maykulka_amdeng)"
+    assert result["auth"] == "gh login (example-user_enterprise)"
     assert "approval_required" not in result
 
 
@@ -325,13 +325,13 @@ def test_card_lists_the_other_accounts_when_none_can_read(monkeypatch):
 
     card = api._rest("/repos/ROCm/aiter/pulls/6335")["_github_sso"]
 
-    assert card["account"] == "mkflyamd" and card["others"] == ["maykulka_amdeng"]
+    assert card["account"] == "mkflyamd" and card["others"] == ["example-user_enterprise"]
 
 
 @pytest.mark.parametrize("args", [["pr", "comment", "1", "-b", "x"], ["pr", "create"], ["issue", "close", "1"],
                                   ["api", "-X", "POST", "repos/o/r/issues"]])
 def test_writes_are_never_retried_as_another_account(monkeypatch, args):
-    calls = _two_accounts(monkeypatch, works_for=("maykulka_amdeng",))
+    calls = _two_accounts(monkeypatch, works_for=("example-user_enterprise",))
     result = gh_tools._github_gh(args)
     assert "_github_sso" in result or "error" in result
     assert not any(c[0][1:3] == ["auth", "token"] for c in calls)
@@ -347,8 +347,8 @@ def test_read_only_check():
 
 def test_switch_account_runs_gh_auth_switch_for_a_known_login(monkeypatch):
     calls = _two_accounts(monkeypatch)
-    assert gh_cli.switch_account("maykulka_amdeng") == {"ok": True, "account": "maykulka_amdeng"}
-    assert any(c[0][1:] == ["auth", "switch", "--hostname", "github.com", "--user", "maykulka_amdeng"] for c in calls)
+    assert gh_cli.switch_account("example-user_enterprise") == {"ok": True, "account": "example-user_enterprise"}
+    assert any(c[0][1:] == ["auth", "switch", "--hostname", "github.com", "--user", "example-user_enterprise"] for c in calls)
 
 
 @pytest.mark.parametrize("login", ["stranger", "", "a b", "x; rm -rf /", "-u"])
@@ -366,12 +366,12 @@ def test_switch_route_is_csrf_protected_and_switches(monkeypatch):
     seen = []
     monkeypatch.setattr(gh_cli, "switch_account", lambda login: seen.append(login) or {"ok": True, "account": login})
     client = TestClient(app)
-    assert client.post("/api/github/switch-account", json={"account": "maykulka_amdeng"}).status_code in (401, 403)
+    assert client.post("/api/github/switch-account", json={"account": "example-user_enterprise"}).status_code in (401, 403)
     assert seen == []
     token = client.get("/api/csrf").json()["csrf_token"]
-    res = client.post("/api/github/switch-account", json={"account": "maykulka_amdeng"},
+    res = client.post("/api/github/switch-account", json={"account": "example-user_enterprise"},
                       headers={"X-CSRF-Token": token})
-    assert res.status_code == 200 and seen == ["maykulka_amdeng"]
+    assert res.status_code == 200 and seen == ["example-user_enterprise"]
 
 
 def test_card_offers_use_account_buttons_that_retry():
@@ -384,7 +384,7 @@ def test_the_switch_retry_message_continues_the_previous_turn():
     sys.path.insert(0, str(ROOT / "web"))
     from routes.chat import _continues_the_previous_turn as cont
 
-    assert cont("✅ Authorized · I authorized GitHub SSO for ROCm by switching GitHub to maykulka_amdeng. Retry.", set())
+    assert cont("✅ Authorized · I authorized GitHub SSO for ROCm by switching GitHub to example-user_enterprise. Retry.", set())
 
 
 def _public_after_refusal(monkeypatch, public_ok=True):

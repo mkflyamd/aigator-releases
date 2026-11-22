@@ -34,17 +34,17 @@ def _post(client, draft_id, action, body=None):
 
 
 def test_notifying_colleagues_makes_a_draft_card_and_sends_nothing():
-    result, gc = _create(notify=["ann@amd.com", "bob@amd.com", "ann@amd.com"])
+    result, gc = _create(notify=["ann@contoso.example", "bob@contoso.example", "ann@contoso.example"])
     assert result["_draft"] == "calendar-event"
     gc.post.assert_not_called()
     params = get_draft(result["data"]["draft_id"])["params"]
-    assert params["optional_attendees"] == ["ann@amd.com", "bob@amd.com"]
+    assert params["optional_attendees"] == ["ann@contoso.example", "bob@contoso.example"]
     assert params["ooo"] is True and params["start"] == "2026-11-20T00:00:00"
     assert params["end"] == "2026-11-23T00:00:00"
 
 
 def test_approving_sends_an_all_day_out_of_office_with_optional_attendees():
-    result, gc = _create(notify=["ann@amd.com"])
+    result, gc = _create(notify=["ann@contoso.example"])
     cal = MagicMock()
     cal.post.return_value = {"id": "evt1"}
     with patch("skills._m365.helpers.get_cal_client", return_value=cal):
@@ -54,12 +54,12 @@ def test_approving_sends_an_all_day_out_of_office_with_optional_attendees():
     assert path == "/me/events"
     assert event["isAllDay"] is True and event["showAs"] == "oof"
     assert event["responseRequested"] is False and event["isReminderOn"] is False
-    assert event["attendees"] == [{"emailAddress": {"address": "ann@amd.com"}, "type": "optional"}]
+    assert event["attendees"] == [{"emailAddress": {"address": "ann@contoso.example"}, "type": "optional"}]
     assert "isDraft" not in event and "onlineMeetingProvider" not in event
 
 
 def test_opening_it_in_outlook_keeps_the_invite_unsent():
-    result, _ = _create(notify=["ann@amd.com"])
+    result, _ = _create(notify=["ann@contoso.example"])
     cal = MagicMock()
     cal.post.return_value = {"id": "evt1", "webLink": "https://outlook.office.com/calendar/item/evt1"}
     cal.get.return_value = {"isDraft": True}

@@ -95,7 +95,7 @@ def _send_teams(params, body):
 
 
 TEAMS = {
-    "to": "bob@amd.com",
+    "to": "bob@contoso.example",
     "message": "old",
     "chat_id": "19:abc@thread.v2",
     "recipients": [],

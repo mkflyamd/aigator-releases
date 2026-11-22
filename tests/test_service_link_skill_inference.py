@@ -45,7 +45,7 @@ def test_github_link_still_infers_github_once_with_keyword():
 
 
 @pytest.mark.parametrize("message, expected", [
-    ("summarize https://amd-my.sharepoint.com/:x:/g/personal/bob_amd_com/EabC", {"onedrive"}),
+    ("summarize https://amd-my.sharepoint.com/:x:/g/personal/bob_contoso_example/EabC", {"onedrive"}),
     ("open https://1drv.ms/x/s!AbCdEf", {"onedrive"}),
     ("read https://amd.sharepoint.com/sites/Eng/Shared%20Documents/plan.docx", {"sharepoint", "onedrive"}),
     ("what was said in https://teams.microsoft.com/l/message/19:abc@thread.v2/123", {"teams"}),
