@@ -16,6 +16,7 @@ function harness() {
       createCustomApp: async (a) => log.push(['shell.create', a.id]),
       customAppSetHidden: async (id, h) => log.push(['shell.hidden', id, h]),
       customAppTeardown: async (id) => log.push(['shell.teardown', id]),
+      customAppOpenRename: (id) => log.push(['shell.openRename', id]),
     },
     ui: {
       registerApp: (a) => log.push(['ui.register', a.id]),
@@ -56,15 +57,23 @@ test('add creates the app, registers it, shows it and offers Undo', async () => 
   assert.strictEqual(toasts[0].message, 'Added to your web apps');
   assert.deepStrictEqual(
     toasts[0].actions.map((a) => a.label),
-    ['Undo'],
+    ['Rename', 'Undo'],
   );
+});
+
+test('Rename on the add toast opens the toolbar bubble for the new app and keeps it', async () => {
+  const { controller, log, toasts } = harness();
+  await controller.handle({ kind: 'add', url: 'https://news.example.com', name: 'News' });
+  log.length = 0;
+  toasts[0].actions[0].run();
+  assert.deepStrictEqual(log, [['shell.openRename', 'custom-news']]);
 });
 
 test('Undo on the add toast deletes the app for real', async () => {
   const { controller, log, toasts } = harness();
   await controller.handle({ kind: 'add', url: 'https://news.example.com', name: 'News' });
   log.length = 0;
-  await toasts[0].actions[0].run();
+  await toasts[0].actions[1].run();
   assert.deepStrictEqual(names(log), [
     'shell.hidden',
     'ui.close',

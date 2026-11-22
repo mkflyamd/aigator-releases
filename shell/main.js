@@ -5148,9 +5148,18 @@ ipcMain.on('toolbar:star-rename', (e, appId, name) => {
   _sendToGator('custom-app:star-event', { kind: 'rename', appId, name: name.trim().slice(0, 40) });
 });
 ipcMain.handle('toolbar:star-removal-note', async (e, appId) => {
-  if (!_isMainToolbar(e) || !_customAppIds.has(appId)) return toolbarStar.removalNote(null);
+  if (!_isMainToolbar(e) || !_customAppIds.has(appId)) {
+    return { count: null, note: toolbarStar.removalNote(null) };
+  }
   const data = await _fetchGatorJson('/api/web-pins/count?app_id=' + encodeURIComponent(appId));
-  return toolbarStar.removalNote(data ? data.count : null);
+  const count = data && Number.isInteger(data.count) ? data.count : null;
+  return { count, note: toolbarStar.removalNote(count) };
+});
+// The add toast's Rename action lives in the Gator renderer; the bubble lives in the toolbar.
+ipcMain.on('custom-app:open-rename', (_e, appId) => {
+  if (typeof appId !== 'string' || !_customAppIds.has(appId)) return;
+  const toolbarWc = _liveToolbarWebContents();
+  if (toolbarWc) toolbarWc.send('toolbar:open-bubble', appId);
 });
 ipcMain.on('toolbar:star-remove', (e, appId) => {
   if (!_isMainToolbar(e) || !_customAppIds.has(appId)) return;

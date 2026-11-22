@@ -45,14 +45,26 @@ test('defaultAppName prefers the title, falls back to the host, caps length', ()
   assert.strictEqual(star.defaultAppName('a'.repeat(60), 'https://x.com').length, 40);
 });
 
-test('clicking a filled star un-favorites directly instead of opening the edit bubble', () => {
+test('clicking a filled star removes straight away only when no pins would be lost', () => {
   const html = require('node:fs').readFileSync(
     require('node:path').join(__dirname, '..', 'shell', 'toolbar.html'),
     'utf8',
   );
   const click = html.match(/elStar\.addEventListener\('click'[\s\S]*?\n        \}\);/)[0];
-  assert(/star\.state === 'filled'[\s\S]*toolbar:star-remove/.test(click));
-  assert(!/openBubble/.test(click));
+  assert(/star\.state === 'filled'[\s\S]*onFilledStarClick\(\)/.test(click));
+  assert(!/toolbar:star-remove/.test(click));
+  const gate = html.match(/async function onFilledStarClick\(\) \{[\s\S]*?\n        \}\n/)[0];
+  assert(/info && info\.count === 0\) \{[\s\S]*toolbar:star-remove/.test(gate));
+  assert(/else if \(!bubbleOpen\(\)\) \{\s*openBubble\(info && info\.note\)/.test(gate));
+});
+
+test('the main process relays the toast Rename action to the toolbar bubble', () => {
+  const read = (...p) =>
+    require('node:fs').readFileSync(require('node:path').join(__dirname, '..', ...p), 'utf8');
+  assert(/ipcMain\.on\('custom-app:open-rename'/.test(read('shell', 'main.js')));
+  assert(/'toolbar:open-bubble'/.test(read('shell', 'main.js')));
+  assert(/ipcRenderer\.on\('toolbar:open-bubble'/.test(read('shell', 'toolbar.html')));
+  assert(/customAppOpenRename/.test(read('shell', 'preload.js')));
 });
 
 test('removalNote states the real pin count and never claims pins that do not exist', () => {
@@ -80,7 +92,7 @@ test('the bubble fetches the removal note when opened and ignores a stale answer
   const read = (...p) =>
     require('node:fs').readFileSync(require('node:path').join(__dirname, '..', ...p), 'utf8');
   const html = read('shell', 'toolbar.html');
-  const open = html.match(/function openBubble\(\) \{[\s\S]*?\n        \}/)[0];
+  const open = html.match(/function openBubble\(knownNote\) \{[\s\S]*?\n        \}/)[0];
   assert(/invoke\(\s*'toolbar:star-removal-note'/.test(open));
   assert(/bubbleOpen\(\) && star\.appId === forApp/.test(open));
   assert(/ipcMain\.handle\('toolbar:star-removal-note'/.test(read('shell', 'main.js')));

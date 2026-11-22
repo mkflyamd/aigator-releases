@@ -44,7 +44,10 @@
       ui.showApp(app.id);
       const toast = ui.toast({
         message: 'Added to your web apps',
-        actions: [{ label: 'Undo', run: () => removeNow(app) }],
+        actions: [
+          { label: 'Rename', run: () => shell.customAppOpenRename(app.id) },
+          { label: 'Undo', run: () => removeNow(app) },
+        ],
         ms: undoMs,
       });
       return { app, toast };

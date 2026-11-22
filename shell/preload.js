@@ -92,6 +92,7 @@ contextBridge.exposeInMainWorld('gatorShell', {
   createCustomApp: (appConfig) => ipcRenderer.invoke('custom-app:create', appConfig),
   customAppSetHidden: (id, hidden) => ipcRenderer.invoke('custom-app:set-hidden', id, hidden),
   customAppTeardown: (id) => ipcRenderer.invoke('custom-app:teardown', id),
+  customAppOpenRename: (id) => ipcRenderer.send('custom-app:open-rename', id),
   onCustomAppStar: (callback) => {
     const listener = (_event, payload) => callback(payload);
     ipcRenderer.on('custom-app:star-event', listener);

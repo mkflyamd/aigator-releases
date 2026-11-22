@@ -1094,24 +1094,52 @@
           return !elBubble.hidden;
         }
 
-        function openBubble() {
+        function openBubble(knownNote) {
           closeMenu();
           elBubbleName.value = star.name || '';
-          elBubbleNote.textContent = 'Removing deletes any pins, settings and saved sign-in.';
+          elBubbleNote.textContent =
+            knownNote || 'Removing deletes any pins, settings and saved sign-in.';
           elBubble.hidden = false;
           ipcRenderer.send('toolbar:set-expanded', BUBBLE_EXPANDED_H);
           elBubbleName.focus();
           elBubbleName.select();
+          if (knownNote) return;
           const forApp = star.appId;
           ipcRenderer
             .invoke('toolbar:star-removal-note', forApp)
-            .then((text) => {
-              if (bubbleOpen() && star.appId === forApp && typeof text === 'string') {
-                elBubbleNote.textContent = text;
+            .then((info) => {
+              if (bubbleOpen() && star.appId === forApp && info && typeof info.note === 'string') {
+                elBubbleNote.textContent = info.note;
               }
             })
             .catch(() => {});
         }
+
+        // A star with no pins behind it removes straight away (Undo toast); with pins, the
+        // bubble names what will be deleted first. An unknown count is treated as "has pins".
+        async function onFilledStarClick() {
+          const appId = star.appId;
+          if (!appId) return;
+          if (bubbleOpen()) {
+            finishBubble();
+            return;
+          }
+          let info = null;
+          try {
+            info = await ipcRenderer.invoke('toolbar:star-removal-note', appId);
+          } catch {}
+          if (star.appId !== appId || star.state !== 'filled') return;
+          if (info && info.count === 0) {
+            closeBubble();
+            ipcRenderer.send('toolbar:star-remove', appId);
+          } else if (!bubbleOpen()) {
+            openBubble(info && info.note);
+          }
+        }
+
+        ipcRenderer.on('toolbar:open-bubble', (appId) => {
+          if (star.state === 'filled' && star.appId === appId && !bubbleOpen()) openBubble();
+        });
 
         function closeBubble() {
           if (!bubbleOpen()) return;
@@ -1130,9 +1158,7 @@
         elStar.addEventListener('click', (e) => {
           e.stopPropagation();
           if (star.state === 'filled') {
-            const appId = star.appId;
-            closeBubble();
-            if (appId) ipcRenderer.send('toolbar:star-remove', appId);
+            onFilledStarClick();
           } else if (star.state === 'empty') {
             ipcRenderer.send('toolbar:star-add');
           }
