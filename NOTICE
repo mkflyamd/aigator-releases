@@ -4,10 +4,32 @@ Copyright 2026 Mayuresh Kulkarni
 This product is licensed under the Apache License, Version 2.0. See LICENSE.
 
 This product includes software developed by Anthropic, PBC, taken from the
-Anthropic skills repository (https://github.com/anthropics/skills), which is
-licensed under the Apache License, Version 2.0:
+Anthropic skills repository (https://github.com/anthropics/skills), which has
+been licensed under the Apache License, Version 2.0 for its Office skills
+(docx, pptx, xlsx, pdf) since 2026-11-06. The copies were synchronized with
+upstream commit e4bb5d9 of 2026-11-16:
 
-  - web/skills/_scripts/office/
+  - web/skills/_scripts/office/ (from skills/docx/scripts/office/)
   - web/skills/docx/scripts/
   - web/skills/ppt/scripts/
   - web/skills/excel/scripts/recalc.py
+
+These files were modified by AI Gator. The modified files are:
+
+  - web/skills/_scripts/office/soffice.py
+  - web/skills/docx/scripts/accept_changes.py
+  - web/skills/docx/scripts/comment.py
+  - web/skills/excel/scripts/recalc.py
+  - web/skills/ppt/scripts/add_slide.py
+  - web/skills/ppt/scripts/clean.py
+  - web/skills/ppt/scripts/thumbnail.py
+
+Four files in web/skills/_scripts/office/ are derived from an earlier upstream
+revision published before the Apache-2.0 change; no counterpart exists upstream
+at e4bb5d9; left unchanged pending a decision, except that pack.py was edited
+to stop passing an author to the upstream redlining validator:
+
+  - web/skills/_scripts/office/pack.py
+  - web/skills/_scripts/office/unpack.py
+  - web/skills/_scripts/office/helpers/merge_runs.py
+  - web/skills/_scripts/office/helpers/simplify_redlines.py

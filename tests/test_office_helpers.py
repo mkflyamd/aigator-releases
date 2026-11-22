@@ -47,6 +47,28 @@ def _workbook_with_cached_values(path, values):
             zf.writestr(name, data)
 
 
+def _formula_workbook(path):
+    wb = Workbook()
+    ws = wb.active
+    ws["A1"] = 2
+    ws["A2"] = 3
+    ws["A3"] = "=A1*A2"
+    ws["A4"] = "=1/0"
+    wb.save(path)
+
+
+def _fake_libreoffice(tmp_path):
+    """A run_basic_macro stand-in that leaves the calculated workbook where LibreOffice's copy was."""
+    calculated = tmp_path / "calculated.xlsx"
+    _workbook_with_cached_values(calculated, {"A3": 6})
+
+    def run(macro_xml, macro_name, document, timeout, profile_name):
+        Path(document).write_bytes(calculated.read_bytes())
+        return _fake_proc()
+
+    return run
+
+
 # ── discovery ────────────────────────────────────────────────────────────────
 
 
@@ -140,7 +162,7 @@ def test_run_times_out_and_stops_the_process():
 
 def test_recalc_reports_missing_libreoffice(recalc_mod, monkeypatch, tmp_path):
     book = tmp_path / "book.xlsx"
-    Workbook().save(book)
+    _formula_workbook(book)
     monkeypatch.setattr(recalc_mod, "find_soffice", lambda: None)
     out = recalc_mod.recalc(str(book))
     assert out["libreoffice_missing"] is True
@@ -149,7 +171,7 @@ def test_recalc_reports_missing_libreoffice(recalc_mod, monkeypatch, tmp_path):
 
 def test_recalc_reports_broken_libreoffice_install(recalc_mod, monkeypatch, tmp_path):
     book = tmp_path / "book.xlsx"
-    Workbook().save(book)
+    _formula_workbook(book)
     monkeypatch.setattr(recalc_mod, "find_soffice", lambda: "soffice")
     stderr = "The application cannot be started.\nThe component manager is not available.\n"
     monkeypatch.setattr(recalc_mod, "run_basic_macro", lambda *a, **k: _fake_proc(3221225477, "", stderr))
@@ -161,7 +183,7 @@ def test_recalc_reports_broken_libreoffice_install(recalc_mod, monkeypatch, tmp_
 
 def test_recalc_reports_timeout(recalc_mod, monkeypatch, tmp_path):
     book = tmp_path / "book.xlsx"
-    Workbook().save(book)
+    _formula_workbook(book)
     monkeypatch.setattr(recalc_mod, "find_soffice", lambda: "soffice")
 
     def hang(*a, **k):
@@ -173,13 +195,14 @@ def test_recalc_reports_timeout(recalc_mod, monkeypatch, tmp_path):
 
 def test_recalc_scans_calculated_workbook(recalc_mod, monkeypatch, tmp_path):
     book = tmp_path / "book.xlsx"
-    _workbook_with_cached_values(book, {"A3": 6})
+    _formula_workbook(book)
     monkeypatch.setattr(recalc_mod, "find_soffice", lambda: "soffice")
-    monkeypatch.setattr(recalc_mod, "run_basic_macro", lambda *a, **k: _fake_proc())
+    monkeypatch.setattr(recalc_mod, "run_basic_macro", _fake_libreoffice(tmp_path))
     out = recalc_mod.recalc(str(book))
     assert out["status"] == "errors_found"
     assert out["total_formulas"] == 2
     assert out["error_summary"]["#DIV/0!"]["locations"] == ["Sheet!A4"]
+    assert out["engine"] == "LibreOffice"
 
 
 def test_recalc_does_not_claim_success_when_nothing_was_calculated(recalc_mod, monkeypatch, tmp_path):
@@ -189,7 +212,7 @@ def test_recalc_does_not_claim_success_when_nothing_was_calculated(recalc_mod, m
     wb.save(book)
     monkeypatch.setattr(recalc_mod, "find_soffice", lambda: "soffice")
     monkeypatch.setattr(recalc_mod, "run_basic_macro", lambda *a, **k: _fake_proc())
-    assert "did not calculate any formulas" in recalc_mod.recalc(str(book))["error"]
+    assert "nothing was recalculated" in recalc_mod.recalc(str(book))["error"]
 
 
 def test_recalc_uses_excel_when_it_does_the_work(recalc_mod, monkeypatch, tmp_path):
@@ -209,9 +232,9 @@ def test_recalc_uses_excel_when_it_does_the_work(recalc_mod, monkeypatch, tmp_pa
 
 def test_recalc_falls_back_to_libreoffice_when_excel_cannot_be_used(recalc_mod, monkeypatch, tmp_path):
     book = tmp_path / "book.xlsx"
-    _workbook_with_cached_values(book, {"A3": 6})
+    _formula_workbook(book)
     monkeypatch.setattr(recalc_mod, "find_soffice", lambda: "soffice")
-    monkeypatch.setattr(recalc_mod, "run_basic_macro", lambda *a, **k: _fake_proc())
+    monkeypatch.setattr(recalc_mod, "run_basic_macro", _fake_libreoffice(tmp_path))
     assert recalc_mod.recalc(str(book))["engine"] == "LibreOffice"
 
 
@@ -290,7 +313,7 @@ def test_excel_recalc_ignores_a_save_that_did_not_change_the_file(monkeypatch, t
 
 def test_recalc_tool_passes_the_missing_libreoffice_message_through(monkeypatch, tmp_path):
     book = tmp_path / "book.xlsx"
-    Workbook().save(book)
+    _formula_workbook(book)
     monkeypatch.setattr(soffice.shutil, "which", lambda name: None)
     monkeypatch.setattr(soffice, "_candidate_paths", lambda: [])
     out = xl._tool_recalc_excel(str(book))
