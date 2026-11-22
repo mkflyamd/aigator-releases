@@ -22,6 +22,8 @@ After running, add markers to word/document.xml so the comment is visible:
   <w:r><w:rPr><w:rStyle w:val="CommentReference"/></w:rPr><w:commentReference w:id="N"/></w:r>
 """
 
+# Modified by the AI Gator project: adds a sys.path bootstrap so the shared office helpers resolve.
+
 import argparse
 import random
 import shutil

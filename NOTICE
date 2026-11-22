@@ -9,12 +9,13 @@ been licensed under the Apache License, Version 2.0 for its Office skills
 (docx, pptx, xlsx, pdf) since 2026-11-06. The copies were synchronized with
 upstream commit e4bb5d9 of 2026-11-16:
 
-  - web/skills/_scripts/office/ (from skills/docx/scripts/office/)
+  - web/skills/_scripts/office/ (from skills/docx/scripts/office/), except schemas/
   - web/skills/docx/scripts/
   - web/skills/ppt/scripts/
   - web/skills/excel/scripts/recalc.py
 
-These files were modified by AI Gator. The modified files are:
+These files were modified by AI Gator, and each carries a header comment saying
+so. The modified files are:
 
   - web/skills/_scripts/office/soffice.py
   - web/skills/docx/scripts/accept_changes.py
@@ -24,12 +25,13 @@ These files were modified by AI Gator. The modified files are:
   - web/skills/ppt/scripts/clean.py
   - web/skills/ppt/scripts/thumbnail.py
 
-Four files in web/skills/_scripts/office/ are derived from an earlier upstream
-revision published before the Apache-2.0 change; no counterpart exists upstream
-at e4bb5d9; left unchanged pending a decision, except that pack.py was edited
-to stop passing an author to the upstream redlining validator:
-
-  - web/skills/_scripts/office/pack.py
-  - web/skills/_scripts/office/unpack.py
-  - web/skills/_scripts/office/helpers/merge_runs.py
-  - web/skills/_scripts/office/helpers/simplify_redlines.py
+The XML schemas in web/skills/_scripts/office/schemas/ are not attributed to
+Anthropic and are not covered by the attribution above. They are the ISO/IEC 29500-4:2016
+schemas (directory ISO-IEC29500-4_2016), the ECMA OPC schemas (directory
+ecma/fouth-edition), and mce/mc.xsd, which describes itself as a modified version of
+https://github.com/plutext/docx4j/blob/master/xsd/mce/markup-compatibility-2006-MINIMAL.xsd,
+and the microsoft/ schemas. They are byte-identical to the copies in
+anthropics/skills at e4bb5d9. Upstream states no copyright or license terms for
+them: its schema files contain no copyright or license text, its THIRD_PARTY_NOTICES.md
+does not mention them, and its only license file for the skill is the
+Apache-2.0 skills/docx/LICENSE.txt.

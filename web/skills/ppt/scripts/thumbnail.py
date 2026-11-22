@@ -15,6 +15,8 @@ Examples:
     # Creates: grid.jpg (or grid-1.jpg, grid-2.jpg for large decks)
 """
 
+# Modified by the AI Gator project: adds a sys.path bootstrap so the shared office helpers resolve.
+
 import argparse
 import posixpath
 import subprocess

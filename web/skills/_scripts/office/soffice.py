@@ -17,6 +17,8 @@ They launch LibreOffice with require_soffice(), which also finds a Windows or ma
 install that is not on PATH.
 """
 
+# Modified by the AI Gator project: adds Windows/macOS LibreOffice discovery, SofficeNotFound, and run_basic_macro (private profile, kill on timeout).
+
 from __future__ import annotations
 
 import contextlib

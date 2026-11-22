@@ -25,6 +25,8 @@ A duplicated slide still holds the source's content: edit ppt/slides/slideN.xml
 (printed on success) to change it. To list layouts: ls <dir>/ppt/slideLayouts/
 """
 
+# Modified by the AI Gator project: adds a sys.path bootstrap so the shared office helpers resolve.
+
 import argparse
 import posixpath
 import re

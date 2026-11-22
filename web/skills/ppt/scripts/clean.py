@@ -15,6 +15,8 @@ This script removes:
 - Content-Type overrides for deleted files
 """
 
+# Modified by the AI Gator project: adds a sys.path bootstrap so the shared office helpers resolve.
+
 import posixpath
 import re
 import sys

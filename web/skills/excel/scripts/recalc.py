@@ -7,6 +7,8 @@ into the workbook itself, so nothing else in the file is rewritten. Desktop Exce
 and saves the workbook itself.
 """
 
+# Modified by the AI Gator project: tries desktop Excel (COM) first, falls back to LibreOffice via run_basic_macro, reports the engine, adds a sys.path bootstrap.
+
 import contextlib
 import copy
 import html

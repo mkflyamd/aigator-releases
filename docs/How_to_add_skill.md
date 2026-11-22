@@ -273,7 +273,7 @@ Shared tool definition constants:
 
 ### `web/skills/_scripts/office/`
 
-Shared Anthropic office scripts (validate.py, pack.py, unpack.py, soffice.py, schemas). One copy — not duplicated per skill.
+Shared Anthropic office scripts (validate.py, soffice.py, helpers, validators, schemas). One copy — not duplicated per skill.
 
 ---
 
@@ -312,7 +312,7 @@ web/skills/<name>/
 
 ### Step 5: Bundle relevant Anthropic scripts
 
-- Shared scripts (validate, pack, unpack) go in `web/skills/_scripts/office/` (already there)
+- Shared scripts (validate, soffice, helpers) go in `web/skills/_scripts/office/` (already there)
 - Skill-specific scripts go in `web/skills/<name>/scripts/`
 
 ### Step 6: Write the SKILL.md for Gator Chat
