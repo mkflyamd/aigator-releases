@@ -32,12 +32,34 @@ function capText(text, max = MAX_TEXT) {
   return t.slice(0, max - TRUNC.length) + TRUNC;
 }
 
+const HOVER_LABEL_MAX = 40;
+const HOVER_ANCESTOR_MAX = 30;
+const HOVER_TEXT_MAX = 80;
+const QUIET_KINDS = new Set(['', 'Text', 'Section']);
+
+function clipLabel(s, max) {
+  const t = String(s == null ? '' : s)
+    .replace(/\s+/g, ' ')
+    .trim();
+  return t.length > max ? t.slice(0, max - 1) + '…' : t;
+}
+
+// info comes from labelInPage. Never a tag name or CSS class. Returns the label plus an
+// optional dim kind word ('Chart', 'Table', ...) that the banner shows after the label.
 function hoverLabel(info) {
   const i = info || {};
-  const raw =
-    i.ariaLabel || i.role || i.heading || (i.tag ? String(i.tag).toLowerCase() : '') || 'element';
-  const s = String(raw).replace(/\s+/g, ' ').trim();
-  return s.length > 60 ? s.slice(0, 59) + '…' : s;
+  const kind = clipLabel(i.kind, 20);
+  const text = clipLabel(i.text, 200);
+  const textLen = Number.isFinite(i.textLen) ? i.textLen : text.length;
+  const own =
+    clipLabel(i.name, 200) || clipLabel(i.heading, 200) || (textLen <= HOVER_TEXT_MAX ? text : '');
+  if (own) {
+    const quiet = QUIET_KINDS.has(kind) || kind.toLowerCase() === own.toLowerCase();
+    return { label: clipLabel(own, HOVER_LABEL_MAX), kind: quiet ? '' : kind };
+  }
+  const ancestor = clipLabel(i.ancestor, HOVER_ANCESTOR_MAX);
+  const noun = QUIET_KINDS.has(kind) ? 'This area' : kind;
+  return { label: ancestor ? noun + ' in ' + ancestor : noun, kind: '' };
 }
 
 function urlMatches(a, b) {
@@ -151,20 +173,88 @@ function pageTextInPage() {
   return JSON.stringify({ text, title: document.title || '', url: location.href });
 }
 
-// Runs INSIDE the page (this = element); cheap label info for the hover banner.
+// Runs INSIDE the page (this = element); cheap label facts for the hover banner.
 function labelInPage() {
-  const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
   const el = this;
-  let heading = '';
-  for (let cur = el, i = 0; cur && !heading && i < 5; i++, cur = cur.parentElement) {
-    const h = cur.querySelector && cur.querySelector('h1,h2,h3,h4,h5,[role="heading"]');
-    if (h) heading = clean(h.textContent).slice(0, 80);
+  const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
+  const attr = (n, a) => (n.getAttribute && n.getAttribute(a)) || '';
+  const nameOf = (n) => {
+    const aria = clean(attr(n, 'aria-label'));
+    if (aria) return aria;
+    const by = attr(n, 'aria-labelledby');
+    const labelled = by
+      ? clean(
+          by
+            .split(/\s+/)
+            .map((id) => (document.getElementById(id) || {}).textContent || '')
+            .join(' '),
+        )
+      : '';
+    if (labelled) return labelled;
+    if (n.tagName === 'IMG') return clean(attr(n, 'alt'));
+    if (n.labels && n.labels.length) {
+      return clean(
+        Array.from(n.labels)
+          .map((l) => l.textContent)
+          .join(' '),
+      );
+    }
+    return '';
+  };
+  const NESTED =
+    'table,[role=table],[role=grid],ul,ol,[role=list],svg,canvas,form,[role=dialog],[role=tablist]';
+  const headingIn = (n) => {
+    const found = n.querySelectorAll('h1,h2,h3,h4,h5,h6,[role=heading],caption,figcaption,legend');
+    for (const h of found) {
+      const host = h.closest(NESTED);
+      if (host && host !== n && n.contains(host)) continue;
+      const t = clean(h.textContent);
+      if (t) return t;
+    }
+    return '';
+  };
+  let ancestor = '';
+  for (let p = el.parentElement, i = 0; p && !ancestor && i < 3; i++, p = p.parentElement) {
+    ancestor = nameOf(p) || headingIn(p);
   }
+  const name = nameOf(el);
+  const heading = headingIn(el);
+  const tag = el.tagName.toLowerCase();
+  const role = attr(el, 'role').toLowerCase();
+  const chartish = (s) => /chart|graph|plot|visual/i.test(s);
+  const textFull = clean(el.innerText || el.textContent);
+  let kind = 'Section';
+  if (el.ownerSVGElement) kind = 'Chart part';
+  else if (tag === 'table' || role === 'table' || role === 'grid') kind = 'Table';
+  else if (
+    tag === 'svg' ||
+    tag === 'canvas' ||
+    tag === 'img' ||
+    tag === 'picture' ||
+    role === 'img'
+  ) {
+    const isChart = chartish(name + ' ' + role + ' ' + attr(el, 'class') + ' ' + ancestor);
+    if (tag === 'svg' || tag === 'canvas') kind = isChart ? 'Chart' : 'Graphic';
+    else kind = isChart && role === 'img' ? 'Chart' : 'Image';
+  } else if (tag === 'video') kind = 'Video';
+  else if (tag === 'button' || role === 'button') kind = 'Button';
+  else if (tag === 'a' && el.hasAttribute('href')) kind = 'Link';
+  else if (
+    ['input', 'textarea', 'select'].includes(tag) ||
+    role === 'textbox' ||
+    role === 'combobox'
+  )
+    kind = 'Input';
+  else if (tag === 'ul' || tag === 'ol' || role === 'list') kind = 'List';
+  else if (/^h[1-6]$/.test(tag) || role === 'heading') kind = 'Heading';
+  else if (['p', 'span', 'label'].includes(tag) || (textFull && !el.children.length)) kind = 'Text';
   return JSON.stringify({
-    ariaLabel: clean(el.getAttribute && el.getAttribute('aria-label')),
-    role: (el.getAttribute && el.getAttribute('role')) || '',
+    name,
     heading,
-    tag: el.tagName,
+    text: textFull.slice(0, 200),
+    textLen: textFull.length,
+    kind,
+    ancestor: ancestor.slice(0, 80),
   });
 }
 

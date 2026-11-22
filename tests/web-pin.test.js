@@ -140,7 +140,7 @@ test('hover events update the banner label', async () => {
   const wc = fakeWc({
     overrides: {
       'Runtime.callFunctionOn': {
-        result: { value: JSON.stringify({ ariaLabel: 'Sales by region' }) },
+        result: { value: JSON.stringify({ name: 'Sales by region', kind: 'Chart' }) },
       },
     },
   });
@@ -148,6 +148,8 @@ test('hover events update the banner label', async () => {
   await wp.start('custom-x');
   wc.debugger.emit('message', {}, 'Overlay.nodeHighlightRequested', { nodeId: 3 });
   await waitFor(() => events.states.some((s) => s.label === 'Sales by region'));
+  assert.strictEqual(events.states.at(-1).kind, 'Chart');
+  assert.strictEqual(wc.params['DOM.resolveNode'].nodeId, 3);
 });
 
 test('Escape cancels pick mode and detaches', async () => {

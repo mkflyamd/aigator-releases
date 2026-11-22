@@ -454,11 +454,27 @@
         display: flex;
       }
       .tb-pinbar-label {
-        flex: 1 1 auto;
+        flex: 0 1 auto;
         min-width: 0;
         overflow: hidden;
         text-overflow: ellipsis;
         color: var(--accent);
+      }
+      .tb-pinbar:not(.has-kind) .tb-pinbar-label,
+      .tb-pinbar-kind {
+        margin-right: auto;
+      }
+      .tb-pinbar-kind {
+        display: none;
+        flex: 0 0 auto;
+        margin-left: -3px;
+        color: var(--text-dim);
+      }
+      .tb-pinbar.has-kind .tb-pinbar-kind {
+        display: block;
+      }
+      .tb-pinbar-kind::before {
+        content: '\00b7\00a0';
       }
       [data-theme='light'] .tb-pinbar-label {
         color: #15803d;
@@ -490,6 +506,14 @@
       @media (max-width: 520px) {
         .tb-pinbar-hint {
           display: none;
+        }
+      }
+      @media (max-width: 480px) {
+        .tb-pinbar.has-kind .tb-pinbar-kind {
+          display: none;
+        }
+        .tb-pinbar.has-kind .tb-pinbar-label {
+          margin-right: auto;
         }
       }
       @media (max-width: 400px) {
@@ -636,8 +660,9 @@
         </svg>
         <span class="tb-pinbar-prompt">Click what you want to pin</span
         ><span class="tb-pinbar-prompt-short">Click to pin</span>
-        <span class="tb-pinbar-label" id="tb-pinbar-label"></span>
-        <kbd>Esc</kbd><span class="tb-pinbar-hint" style="color: var(--text-dim)">to cancel</span>
+        <span class="tb-pinbar-label" id="tb-pinbar-label" aria-live="off"></span
+        ><span class="tb-pinbar-kind" id="tb-pinbar-kind" aria-live="off"></span> <kbd>Esc</kbd
+        ><span class="tb-pinbar-hint" style="color: var(--text-dim)">to cancel</span>
         <button
           class="tb-btn"
           id="tb-pinbar-cancel"
@@ -1011,6 +1036,7 @@
         const elBar = document.getElementById('tb');
         const elPin = document.getElementById('tb-pin');
         const elPinLabel = document.getElementById('tb-pinbar-label');
+        const elPinKind = document.getElementById('tb-pinbar-kind');
         const elPinBar = document.getElementById('tb-pinbar');
         elPin.addEventListener('click', () => ipcRenderer.send('toolbar:web-pin-start'));
         document
@@ -1029,6 +1055,9 @@
           if (typeof state.pinLabel === 'string') {
             elPinLabel.textContent = state.pinLabel;
             elPinBar.classList.toggle('has-label', state.pinLabel.length > 0);
+            const kind = state.pinLabel && typeof state.pinKind === 'string' ? state.pinKind : '';
+            elPinKind.textContent = kind;
+            elPinBar.classList.toggle('has-kind', kind.length > 0);
           }
         }
 

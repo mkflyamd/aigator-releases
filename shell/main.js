@@ -714,6 +714,7 @@ function _toolbarPushState() {
     isCustomApp: _customAppIds.has(app),
     pinMode: !!_webPinPicking && _webPinPicking === app,
     pinLabel: _webPinLabel,
+    pinKind: _webPinKind,
   };
   try {
     toolbarWc.send('toolbar:state', state);
@@ -1060,6 +1061,7 @@ let activeExternalApp = null;
 const _customAppIds = new Set();
 let _webPinPicking = null;
 let _webPinLabel = '';
+let _webPinKind = '';
 const _sendToGator = (channel, payload) => {
   if (gatorView && !gatorView.webContents.isDestroyed()) {
     gatorView.webContents.send(channel, payload);
@@ -1071,9 +1073,10 @@ const _webPin = require('./web-pin').createWebPin({
     return pane && pane.view && !pane.view.webContents.isDestroyed() ? pane.view.webContents : null;
   },
   isPaneVisible: (appId) => activeExternalApp === appId,
-  onState: ({ appId, picking, label }) => {
+  onState: ({ appId, picking, label, kind }) => {
     _webPinPicking = picking ? appId : null;
     _webPinLabel = picking ? label : '';
+    _webPinKind = picking ? kind || '' : '';
     _toolbarPushState();
   },
   onCaptured: (payload) => _sendToGator('web-pin:captured', payload),
