@@ -1362,6 +1362,8 @@ function createWindow() {
       sandbox: false,
     },
   });
+  // Transparent so the area below the bar (shown only while the star bubble or menu is open) lets the pane show through.
+  toolbarView.setBackgroundColor('#00000000');
   toolbarView.webContents.loadFile(path.join(__dirname, 'toolbar.html'));
   win.contentView.addChildView(toolbarView);
   // Hide until an external app activates. _layoutNow() will show it.
