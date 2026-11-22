@@ -42,7 +42,6 @@ function _ocSpawnTerm(sess) {
   sess.fitAddon = new FitAddon.FitAddon();
   sess.term.loadAddon(sess.fitAddon);
   sess.term.open(sess.container);
-  sess._defaultLabel = sess.label;
   sess.term.onTitleChange((title) => _ocFollowProgramTitle(sess, title));
 
   sess.container.addEventListener(
@@ -163,15 +162,13 @@ function _ocCleanProgramTitle(raw) {
   return t;
 }
 
-// A manual rename leaves sess.label matching neither remembered label, which ends the following.
+// A manual rename sets sess._manualRename, which ends the following for good.
 function _ocFollowProgramTitle(sess, raw) {
-  if (sess.agent === 'terminal' || sess._closing) return;
+  if (sess.agent === 'terminal' || sess._closing || sess._manualRename) return;
   const title = _ocCleanProgramTitle(raw);
   if (!title || title === sess.label) return;
-  if (sess.label !== sess._defaultLabel && sess.label !== sess._autoLabel) return;
   if (typeof _genAgentEditing !== 'undefined' && _genAgentEditing) return;
   sess.label = title;
-  sess._autoLabel = title;
   if (typeof _genAgentRenderTabs === 'function') _genAgentRenderTabs(sess.tabId);
 }
 
