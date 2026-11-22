@@ -512,3 +512,23 @@ class OpenAIProvider(LLMProvider):
             else:
                 raise
         return (response.choices[0].message.content or "").strip()
+
+    def describe_image(self, image: bytes, prompt: str, model: str | None = None, max_tokens: int = 700) -> str:
+        import base64
+        from llm.registry import get_active_model
+        mdl = model or get_active_model() or self._profile.get("active_model", "")
+        url = "data:image/png;base64," + base64.b64encode(image).decode("ascii")
+        msgs = [{"role": "user", "content": [
+            {"type": "image_url", "image_url": {"url": url}},
+            {"type": "text", "text": prompt},
+        ]}]
+        client = self._client.with_options(timeout=_SIMPLE_TIMEOUT, max_retries=0)
+        try:
+            response = client.chat.completions.create(model=mdl, max_tokens=max_tokens, messages=msgs)
+        except Exception as err:
+            err_str = str(err)
+            if "max_tokens" in err_str and "max_completion_tokens" in err_str:
+                response = client.chat.completions.create(model=mdl, max_completion_tokens=max_tokens, messages=msgs)
+            else:
+                raise
+        return (response.choices[0].message.content or "").strip()

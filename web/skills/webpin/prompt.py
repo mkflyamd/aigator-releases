@@ -44,7 +44,7 @@ def web_pin_prompt_line(label: str, pin_id: str, meta: dict) -> str:
     when = _ago(_captured_at(pin_id, meta))
     return (
         f'- Web pin "{_safe(label)}" (pin_id: {pin_id}, from {app}, captured {when}) '
-        f'→ call read_web_pin(pin_id="{pin_id}") to see the snapshot (page text + screenshot); '
+        f'→ call read_web_pin(pin_id="{pin_id}") to see the snapshot (page text plus the screenshot, or a description of it if you cannot see images); '
         f'call recapture_web_pin(pin_id="{pin_id}") if the user says the view changed or asks for the latest. '
         f'This is a snapshot, not live data: open answers from it with "As of {when}, from {app}".'
     )

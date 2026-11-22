@@ -45,6 +45,27 @@ def read_image(pin_id: str) -> bytes | None:
     return f.read_bytes() if f.exists() else None
 
 
+def read_description(pin_id: str, image: bytes) -> dict | None:
+    """Cached screenshot description, valid only for this exact image."""
+    f = web_pin_dir(pin_id) / "description.json"
+    try:
+        data = json.loads(f.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or data.get("image_sha") != hashlib.sha256(image).hexdigest():
+        return None
+    return data if data.get("text") else None
+
+
+def write_description(pin_id: str, image: bytes, text: str, model: str) -> None:
+    d = web_pin_dir(pin_id)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "description.json").write_text(
+        json.dumps({"image_sha": hashlib.sha256(image).hexdigest(), "text": text, "model": model}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
 def write_snapshot(pin_id: str, *, image: bytes | None, text: str | None, meta: dict) -> dict:
     d = web_pin_dir(pin_id)
     d.mkdir(parents=True, exist_ok=True)

@@ -206,3 +206,77 @@ def test_read_result_keeps_image_through_the_app_truncation_step(monkeypatch, tm
     out = trunc.truncate_tool_result(tools.read_web_pin(pid, _context_id="tab-a"), tool_name="read_web_pin")
     assert "Revenue 4.2M" in out["text"]
     assert base64.b64decode(out["_images"][0]["base64"]) == big_png
+
+
+class _FakeProvider:
+    def __init__(self, sees, reply="Bar chart: Q1 4.2M, Q2 5.0M"):
+        self.receives_tool_images = sees
+        self.reply = reply
+        self.calls = []
+
+    def describe_image(self, image, prompt, model=None, max_tokens=700):
+        self.calls.append(model)
+        if isinstance(self.reply, Exception):
+            raise self.reply
+        return self.reply
+
+
+def _use_models(monkeypatch, active, models, providers):
+    from llm import registry
+
+    monkeypatch.setattr(registry, "MODEL_REGISTRY", {m: object() for m in models})
+    monkeypatch.setattr(registry, "get_active_model", lambda: active)
+    monkeypatch.setattr(registry, "available_models", lambda: list(models))
+    monkeypatch.setattr(registry, "get_provider", lambda model_id=None: providers[model_id or active])
+
+
+def test_non_vision_model_gets_wrapped_description_not_image(monkeypatch):
+    pid = _pin()
+    ds, sonnet, haiku = _FakeProvider(False), _FakeProvider(True), _FakeProvider(True, "Haiku reading")
+    _use_models(monkeypatch, "deepseek-v4", ["deepseek-v4", "claude-sonnet-5", "claude-haiku-4-5"],
+                {"deepseek-v4": ds, "claude-sonnet-5": sonnet, "claude-haiku-4-5": haiku})
+    out = tools.read_web_pin(pid, _context_id="tab-a")
+    assert "_images" not in out and "screenshot_unavailable" not in out
+    assert "UNTRUSTED PAGE CONTENT" in out["screenshot_description"] and "Haiku reading" in out["screenshot_description"]
+    assert "claude-haiku-4-5" in out["screenshot_note"]
+    assert haiku.calls == ["claude-haiku-4-5"] and not sonnet.calls and not ds.calls
+
+
+def test_description_is_cached_until_image_changes(monkeypatch):
+    pid = _pin()
+    vis = _FakeProvider(True)
+    _use_models(monkeypatch, "deepseek-v4", ["deepseek-v4", "claude-sonnet-5"],
+                {"deepseek-v4": _FakeProvider(False), "claude-sonnet-5": vis})
+    tools.read_web_pin(pid, _context_id="tab-a")
+    tools.read_web_pin(pid, _context_id="tab-a")
+    assert len(vis.calls) == 1
+    store.write_snapshot(pid, image=PNG + b"1", text="Revenue 4.2M", meta={})
+    tools.read_web_pin(pid, _context_id="tab-a")
+    assert len(vis.calls) == 2
+
+
+def test_non_vision_model_without_vision_option_says_so(monkeypatch):
+    pid = _pin()
+    _use_models(monkeypatch, "deepseek-v4", ["deepseek-v4"], {"deepseek-v4": _FakeProvider(False)})
+    out = tools.read_web_pin(pid, _context_id="tab-a")
+    assert "_images" not in out and "screenshot_description" not in out
+    assert "cannot see" in out["screenshot_unavailable"] and "Do not guess" in out["screenshot_unavailable"]
+
+
+def test_failed_description_is_not_cached_and_reports_unavailable(monkeypatch):
+    pid = _pin()
+    vis = _FakeProvider(True, RuntimeError("gateway 500"))
+    _use_models(monkeypatch, "deepseek-v4", ["deepseek-v4", "claude-sonnet-5"],
+                {"deepseek-v4": _FakeProvider(False), "claude-sonnet-5": vis})
+    out = tools.read_web_pin(pid, _context_id="tab-a")
+    assert "screenshot_unavailable" in out
+    assert store.read_description(pid, PNG) is None
+
+
+def test_vision_model_still_gets_the_image(monkeypatch):
+    pid = _pin()
+    vis = _FakeProvider(True)
+    _use_models(monkeypatch, "claude-sonnet-5", ["claude-sonnet-5"], {"claude-sonnet-5": vis})
+    out = tools.read_web_pin(pid, _context_id="tab-a")
+    assert out["_images"][0]["media_type"] == "image/png" and not vis.calls
+    assert "screenshot_description" not in out

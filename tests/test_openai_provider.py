@@ -250,3 +250,20 @@ def test_build_tool_result_message_does_not_serialise_image_base64():
     assert "Revenue 4.2M" in content
     assert "1 image(s) omitted" in content
     assert len(content) < 1000
+
+
+def test_describe_image_sends_data_url_image_part():
+    from web.llm.openai_provider import OpenAIProvider
+
+    with patch("web.llm.openai_provider.OpenAI"):
+        provider = OpenAIProvider(GATEWAY_PROFILE)
+    assert provider.receives_tool_images is False
+    client = provider._client.with_options.return_value
+    client.chat.completions.create.return_value.choices = [MagicMock(message=MagicMock(content=" A bar chart "))]
+    out = provider.describe_image(b"\x89PNGdata", "describe", "gpt-4o")
+    assert out == "A bar chart"
+    kwargs = client.chat.completions.create.call_args.kwargs
+    parts = kwargs["messages"][0]["content"]
+    assert kwargs["model"] == "gpt-4o"
+    assert parts[0]["image_url"]["url"].startswith("data:image/png;base64,")
+    assert parts[1] == {"type": "text", "text": "describe"}

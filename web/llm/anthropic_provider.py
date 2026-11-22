@@ -105,6 +105,7 @@ class AnthropicProvider(LLMProvider):
 
     supports_thinking = False  # enabled per-model at call time
     supports_vision = True
+    receives_tool_images = True
 
     def __init__(self) -> None:
         self._client: anthropic.Anthropic | None = None
@@ -759,6 +760,25 @@ class AnthropicProvider(LLMProvider):
             model=model or get_active_model() or "Claude-Haiku-4.5",
             max_tokens=max_tokens,
             messages=[{"role": "user", "content": prompt}],
+        )
+        return "".join(b.text for b in response.content if hasattr(b, "text")).strip()
+
+    def describe_image(
+        self, image: bytes, prompt: str, model: str | None = None, max_tokens: int = 700
+    ) -> str:
+        import base64
+        from llm.registry import get_active_model
+        client = self._client.with_options(timeout=_SIMPLE_TIMEOUT, max_retries=0)
+        response = client.messages.create(
+            model=model or get_active_model() or "Claude-Haiku-4.5",
+            max_tokens=max_tokens,
+            messages=[{"role": "user", "content": [
+                {"type": "image", "source": {
+                    "type": "base64", "media_type": "image/png",
+                    "data": base64.b64encode(image).decode("ascii"),
+                }},
+                {"type": "text", "text": prompt},
+            ]}],
         )
         return "".join(b.text for b in response.content if hasattr(b, "text")).strip()
 
