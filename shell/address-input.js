@@ -54,6 +54,9 @@ function resolveAddressInput(raw) {
 
 const NAME_NOT_RESOLVED = (err) =>
   !!err && (err.code === 'ERR_NAME_NOT_RESOLVED' || err.errno === -105);
+// Only a bare hostname is safe to hand to a search engine; a path or query may carry tokens
+// or internal identifiers that must not leave the machine after a typo.
+const isBareHost = (typed) => /^[^\s/?#@:]+$/.test(String(typed).trim());
 const ABORTED = (err) => !!err && (err.code === 'ERR_ABORTED' || err.errno === -3);
 
 // Loads what the user typed into `wc`. A guessed address that does not resolve (for example
@@ -67,7 +70,7 @@ function loadAddressInput(wc, typed, onError) {
   }
   wc.loadURL(target.url).catch((error) => {
     if (ABORTED(error)) return;
-    if (target.kind === 'url' && !target.explicit && NAME_NOT_RESOLVED(error)) {
+    if (target.kind === 'url' && !target.explicit && isBareHost(typed) && NAME_NOT_RESOLVED(error)) {
       const fallback = search(String(typed).trim());
       wc.loadURL(fallback.url).catch((err) => {
         if (!ABORTED(err) && onError) onError(err, fallback.url);

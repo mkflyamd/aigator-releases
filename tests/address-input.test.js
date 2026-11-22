@@ -104,3 +104,14 @@ test('refused schemes report an error and load nothing', () => {
   assert.strictEqual(wc.loaded.length, 0);
   assert.strictEqual(errors.length, 1);
 });
+
+test('a mistyped address with a path or query is never sent to the search engine', async () => {
+  for (const typed of ['intranet.corp.exmple/reports?token=abc', 'host.zzz/path', 'host.zzz:8443']) {
+    const wc = fakeWc([Object.assign(new Error('dns'), { code: 'ERR_NAME_NOT_RESOLVED' })]);
+    const errors = [];
+    loadAddressInput(wc, typed, (e) => errors.push(e));
+    await tick();
+    assert.strictEqual(wc.loaded.length, 1, typed);
+    assert.strictEqual(errors.length, 1, typed);
+  }
+});
