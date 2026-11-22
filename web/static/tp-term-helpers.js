@@ -112,6 +112,12 @@ function _ocFit(sess) {
   } catch (_) {
     /* not visible yet */
   }
+  // Output written while hidden leaves xterm's scroll area a screen short; fit() no-ops at the same size.
+  try {
+    sess.term._core?.viewport?.syncScrollArea?.(true);
+  } catch (_) {
+    /* xterm internals changed */
+  }
   // Only send resize + clear if dimensions actually changed. Sending a
   // resize when nothing changed makes TUI apps redraw needlessly; clearing
   // the buffer on a no-op resize would wipe the screen for nothing.
