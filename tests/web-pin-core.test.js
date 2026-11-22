@@ -32,19 +32,64 @@ test('capText collapses blank runs and enforces the cap', () => {
   assert.strictEqual(core.capText(null), '');
 });
 
-test('hoverLabel priority and truncation', () => {
-  assert.strictEqual(
-    core.hoverLabel({ ariaLabel: 'Revenue', role: 'img', heading: 'H', tag: 'DIV' }),
-    'Revenue',
+test('hoverLabel: accessible name, then inner heading, then own short text', () => {
+  assert.deepStrictEqual(
+    core.hoverLabel({ name: 'Revenue', heading: 'H', text: 't', kind: 'Chart' }),
+    {
+      label: 'Revenue',
+      kind: 'Chart',
+    },
   );
-  assert.strictEqual(core.hoverLabel({ role: 'img', heading: 'H', tag: 'DIV' }), 'img');
-  assert.strictEqual(
-    core.hoverLabel({ heading: 'Sales by region', tag: 'DIV' }),
-    'Sales by region',
+  assert.deepStrictEqual(
+    core.hoverLabel({ heading: 'Sales by region', text: 'x', kind: 'Table' }),
+    {
+      label: 'Sales by region',
+      kind: 'Table',
+    },
   );
-  assert.strictEqual(core.hoverLabel({ tag: 'DIV' }), 'div');
-  assert.ok(core.hoverLabel({ ariaLabel: 'x'.repeat(200) }).length <= 60);
-  assert.strictEqual(core.hoverLabel({}), 'element');
+  assert.deepStrictEqual(core.hoverLabel({ text: 'Total revenue 4.2M', kind: 'Section' }), {
+    label: 'Total revenue 4.2M',
+    kind: '',
+  });
+});
+
+test('hoverLabel: the kind is dropped for Text and Section and when it repeats the label', () => {
+  assert.strictEqual(core.hoverLabel({ name: 'Notes', kind: 'Text' }).kind, '');
+  assert.strictEqual(core.hoverLabel({ name: 'Notes', kind: 'Section' }).kind, '');
+  assert.strictEqual(core.hoverLabel({ name: 'chart', kind: 'Chart' }).kind, '');
+  assert.strictEqual(core.hoverLabel({ name: 'Save', kind: 'Button' }).kind, 'Button');
+});
+
+test('hoverLabel: long own text is skipped, long labels are clipped at 40', () => {
+  const long = 'word '.repeat(30);
+  assert.deepStrictEqual(
+    core.hoverLabel({ text: long.slice(0, 200), textLen: long.length, kind: 'Chart' }),
+    {
+      label: 'Chart',
+      kind: '',
+    },
+  );
+  const out = core.hoverLabel({ name: 'x'.repeat(200), kind: 'Chart' });
+  assert.strictEqual(out.label.length, 40);
+  assert.ok(out.label.endsWith('…'));
+});
+
+test('hoverLabel: with nothing readable it falls back to the kind word, never a tag or class', () => {
+  assert.deepStrictEqual(core.hoverLabel({ kind: 'Chart', ancestor: 'Revenue' }), {
+    label: 'Chart in Revenue',
+    kind: '',
+  });
+  assert.deepStrictEqual(core.hoverLabel({ kind: 'Table' }), { label: 'Table', kind: '' });
+  assert.deepStrictEqual(core.hoverLabel({ kind: 'Section' }), { label: 'This area', kind: '' });
+  assert.deepStrictEqual(core.hoverLabel({ kind: 'Section', ancestor: 'Revenue' }), {
+    label: 'This area in Revenue',
+    kind: '',
+  });
+  assert.deepStrictEqual(core.hoverLabel({}), { label: 'This area', kind: '' });
+  assert.deepStrictEqual(core.hoverLabel({ tag: 'DIV', role: 'img' }), {
+    label: 'This area',
+    kind: '',
+  });
 });
 
 test('urlMatches compares origin and pathname only', () => {
@@ -134,4 +179,110 @@ test('pin cursor css is one safe author rule with a hotspot and a crosshair fall
   );
   const uri = css.slice(css.indexOf('data:'), css.indexOf('")'));
   assert.doesNotMatch(uri, /[<>#]/);
+});
+
+// Minimal fake DOM: just enough surface for labelInPage.
+function fakeEl(tag, opts = {}, children = []) {
+  const el = {
+    tagName: tag.toUpperCase(),
+    attrs: opts.attrs || {},
+    innerText: opts.text || '',
+    textContent: opts.text || '',
+    children,
+    parentElement: null,
+    ownerSVGElement: opts.inSvg ? {} : null,
+    labels: opts.labels || null,
+    getAttribute(a) {
+      return a in this.attrs ? this.attrs[a] : null;
+    },
+    hasAttribute(a) {
+      return a in this.attrs;
+    },
+    contains(n) {
+      for (let c = n; c; c = c.parentElement) if (c === this) return true;
+      return false;
+    },
+    closest(sel) {
+      const tags = sel.split(',').filter((t) => /^[a-z]+$/.test(t));
+      for (let c = this; c; c = c.parentElement) {
+        if (tags.includes(c.tagName.toLowerCase())) return c;
+        const r = c.attrs.role;
+        if (r && sel.includes('[role=' + r + ']')) return c;
+      }
+      return null;
+    },
+    querySelectorAll(sel) {
+      const out = [];
+      const tags = sel.split(',').filter((t) => /^[a-z0-9]+$/.test(t));
+      const walk = (n) => {
+        for (const c of n.children) {
+          if (
+            tags.includes(c.tagName.toLowerCase()) ||
+            (c.attrs.role === 'heading' && sel.includes('[role=heading]'))
+          )
+            out.push(c);
+          walk(c);
+        }
+      };
+      walk(this);
+      return out;
+    },
+  };
+  children.forEach((c) => {
+    c.parentElement = el;
+  });
+  return el;
+}
+
+function labelOf(el) {
+  global.document = { getElementById: () => null };
+  try {
+    return core.hoverLabel(JSON.parse(core.labelInPage.call(el)));
+  } finally {
+    delete global.document;
+  }
+}
+
+test('labelInPage: a chart svg inside a labelled card reads as a chart, in that card', () => {
+  const svg = fakeEl('svg', { attrs: { class: 'bar-chart' } });
+  fakeEl('div', { attrs: { 'aria-label': 'Revenue' } }, [svg]);
+  assert.deepStrictEqual(labelOf(svg), { label: 'Chart in Revenue', kind: '' });
+});
+
+test('labelInPage: an svg child is a chart part, and a plain svg is a graphic', () => {
+  const rect = fakeEl('rect', { inSvg: true });
+  assert.strictEqual(JSON.parse(core.labelInPage.call(rect)).kind, 'Chart part');
+  const icon = fakeEl('svg');
+  assert.strictEqual(labelOf(icon).label, 'Graphic');
+});
+
+test('labelInPage: heading inside the element names it, nested widget headings do not', () => {
+  const h = fakeEl('h3', { text: 'Sales by region' });
+  const card = fakeEl('section', {}, [h]);
+  assert.deepStrictEqual(labelOf(card), { label: 'Sales by region', kind: '' });
+  const th = fakeEl('h4', { text: 'Inner' });
+  const list = fakeEl('ul', {}, [th]);
+  const wrap = fakeEl('div', { text: 'x'.repeat(200) }, [list]);
+  assert.strictEqual(labelOf(wrap).label, 'This area');
+});
+
+test('labelInPage: control kinds and own text, never a tag name', () => {
+  assert.deepStrictEqual(labelOf(fakeEl('button', { text: 'Export' })), {
+    label: 'Export',
+    kind: 'Button',
+  });
+  assert.deepStrictEqual(labelOf(fakeEl('a', { attrs: { href: '/x' }, text: 'Docs' })), {
+    label: 'Docs',
+    kind: 'Link',
+  });
+  assert.deepStrictEqual(labelOf(fakeEl('table')), { label: 'Table', kind: '' });
+  assert.deepStrictEqual(labelOf(fakeEl('img', { attrs: { alt: 'Logo' } })), {
+    label: 'Logo',
+    kind: 'Image',
+  });
+  assert.deepStrictEqual(labelOf(fakeEl('span', { text: 'Total revenue 4.2M' })), {
+    label: 'Total revenue 4.2M',
+    kind: '',
+  });
+  assert.deepStrictEqual(labelOf(fakeEl('div')), { label: 'This area', kind: '' });
 });

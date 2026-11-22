@@ -85,7 +85,7 @@ async def create_web_pin(req: WebPinCreate):
     image = _decode_png(req.image_b64)
     _check_text(req.text)
     pin_id = str(uuid.uuid4())
-    label = store.sanitize_label(req.aria_label) or store.sanitize_label(req.title) or store.sanitize_label(app_cfg.get("name", "")) or "Web view"
+    label = store.derive_label(req.aria_label, req.title, app_cfg.get("name", ""), req.app_id, req.url)
     kind = "element" if req.locator else "view"
     snap = store.write_snapshot(
         pin_id,

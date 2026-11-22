@@ -218,11 +218,8 @@ function createWebPin({
         returnByValue: true,
       });
       if (active === a && !a.picking) {
-        onState({
-          appId: a.appId,
-          picking: true,
-          label: core.hoverLabel(JSON.parse(r.result.value)),
-        });
+        const { label, kind } = core.hoverLabel(JSON.parse(r.result.value));
+        onState({ appId: a.appId, picking: true, label, kind });
       }
     } catch (_) {
       /* label is best-effort */

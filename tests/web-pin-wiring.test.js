@@ -73,6 +73,19 @@ test('pin banner keeps its exit visible and gives a live label the room', () => 
   assert.match(toolbar, /\[data-theme='light'\] \.tb-pinbar-label[\s\S]{0,40}#15803d/);
 });
 
+test('pin banner shows the hovered kind dimly, hides it before the label truncates, and stays quiet for screen readers', () => {
+  assert.match(toolbar, /id="tb-pinbar-label" aria-live="off"/);
+  assert.match(toolbar, /id="tb-pinbar-kind" aria-live="off"/);
+  assert.match(toolbar, /\.tb-pinbar-kind \{[^}]*flex: 0 0 auto;[^}]*var\(--text-dim\)/);
+  assert.match(
+    toolbar,
+    /@media \(max-width: 480px\)[\s\S]{0,80}\.tb-pinbar\.has-kind \.tb-pinbar-kind[\s\S]{0,40}display: none/,
+  );
+  assert.match(toolbar, /classList\.toggle\('has-kind'/);
+  assert.doesNotMatch(toolbar, /\.tb-pinbar-(label|kind)[^{]*\{[^}]*transition/);
+  assert.match(main, /pinKind: _webPinKind/);
+});
+
 test('web-pin:go-to is gatorView-only, custom-app-only, http(s)-only and limited to the pane home hosts', () => {
   const body = after(main, "ipcMain.handle('web-pin:go-to'", 1500);
   assert.match(body, /gatorView\.webContents\.id/);

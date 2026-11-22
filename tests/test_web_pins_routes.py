@@ -239,3 +239,16 @@ def test_snapshot_write_failure_releases_the_waiting_agent(client, monkeypatch):
     r, res = asyncio.run(scenario())
     assert r.status_code == 500
     assert res == {"status": "pane_unavailable"}
+
+
+def test_label_drops_the_site_suffix_but_keeps_real_title_parts(client):
+    j = client.post("/api/web-pins", json=_body(aria_label="", title="Finance - Power BI")).json()
+    assert j["label"] == "Finance"
+    j = client.post("/api/web-pins", json=_body(aria_label="", title="Q3 - Revenue")).json()
+    assert j["label"] == "Q3 - Revenue"
+
+
+def test_label_never_a_url_hostname_app_id_or_untitled(client):
+    for bad in ("https://app.powerbi.com/report/1", "app.powerbi.com", "pbi", "Untitled", "Untitled page"):
+        j = client.post("/api/web-pins", json=_body(aria_label=bad, title="")).json()
+        assert j["label"] == "Power BI", bad

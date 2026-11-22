@@ -7,6 +7,7 @@ import re
 import shutil
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 
 _ROOT: Path | None = None
 _UUID4 = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
@@ -28,6 +29,44 @@ def sanitize_label(s: str) -> str:
     s = s.replace('"', "").replace("'", "")
     s = re.sub(r"\s+", " ", s).strip()
     return s[:_LABEL_MAX]
+
+
+_HOSTLIKE = re.compile(r"^(?:[a-z][a-z0-9+.-]*://\S*|(?:www\.)?[\w-]+(?:\.[\w-]+)+(?:[/:?#]\S*)?)$", re.I)
+_SITE_SUFFIX = re.compile(r"\s+[-|–—·]\s+([^-|–—·]+)$")
+GENERIC_LABEL = "Web view"
+
+
+def _alnum(s: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", (s or "").lower())
+
+
+def strip_site_suffix(title: str, app_name: str = "", url: str = "") -> str:
+    """Drop a trailing ' - Power BI' style suffix, but only when it names the app or the site itself."""
+    m = _SITE_SUFFIX.search(title)
+    if not m:
+        return title
+    suffix = _alnum(m.group(1))
+    host = _alnum(urlparse(url).hostname or "")
+    if len(suffix) < 3 or not (suffix == _alnum(app_name) or suffix in host):
+        return title
+    return title[: m.start()].strip() or title
+
+
+def _usable_label(s: str, app_id: str) -> str:
+    s = sanitize_label(s)
+    if not s or s.lower().startswith("untitled") or s == app_id or _HOSTLIKE.match(s):
+        return ""
+    return s
+
+
+def derive_label(aria_label: str, title: str, app_name: str, app_id: str = "", url: str = "") -> str:
+    """Pin label: element label, then page title, then app name. Never a URL, hostname, app id or 'Untitled'."""
+    candidates = (aria_label, strip_site_suffix(sanitize_label(title), app_name, url), app_name)
+    for c in candidates:
+        label = _usable_label(c, app_id)
+        if label:
+            return label
+    return GENERIC_LABEL
 
 
 def read_snapshot(pin_id: str) -> dict | None:
