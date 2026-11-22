@@ -18,7 +18,7 @@ The app works with accounts you connect, such as Microsoft 365, Slack, Jira, Con
 
 ## 4. AI output and your responsibility
 
-The app uses AI models to draft text, write code, and take actions. Models can be wrong, incomplete or biased. You must review output before you rely on it, send it, run it or publish it. The app asks for your approval before sending messages or making changes in connected services, and you are responsible for what you approve. Do not use the app as the sole basis for legal, medical, financial or other high-stakes decisions. You are responsible for the data you send to your AI provider and for the instructions you give the assistant.
+The app uses AI models to draft text, write code, and take actions. Models can be wrong, incomplete or biased. You must review output before you rely on it, send it, run it or publish it. The app asks for your approval before it sends a message to another person, and you are responsible for what you approve. Some actions on your own accounts, such as adding an entry to your own calendar, may happen directly. Do not use the app as the sole basis for legal, medical, financial or other high-stakes decisions. You are responsible for the data you send to your AI provider and for the instructions you give the assistant.
 
 ## 5. Third-party services and software
 
