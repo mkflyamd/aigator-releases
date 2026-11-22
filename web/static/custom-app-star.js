@@ -11,18 +11,36 @@
     const undoMs = deps.undoMs || UNDO_MS;
     let pending = null;
 
+    async function finishRemoval(app) {
+      let removed = false;
+      try {
+        await api.remove(app.id);
+        removed = true;
+        await shell.customAppTeardown(app.id);
+      } catch (e) {
+        if (!removed) {
+          console.warn('Could not remove web app', app.id, e);
+          try {
+            await shell.customAppSetHidden(app.id, false);
+          } catch {
+            // The pane stays hidden until restart if the shell cannot be reached.
+          }
+          ui.toast({
+            message: `Could not remove ${app.name}. It is still in your web apps.`,
+            actions: [],
+            ms: undoMs,
+          });
+        }
+      }
+      ui.reloadList();
+    }
+
     async function commitPending() {
       if (!pending) return;
       const { app, toast } = pending;
       pending = null;
       toast.dismiss();
-      try {
-        await api.remove(app.id);
-        await shell.customAppTeardown(app.id);
-      } catch {
-        // The app stays in config; it comes back on the next launch instead of being lost silently.
-      }
-      ui.reloadList();
+      await finishRemoval(app);
     }
 
     async function undoPending() {
@@ -57,9 +75,7 @@
       await shell.customAppSetHidden(app.id, true);
       ui.closeIfActive(app.id);
       ui.unregisterApp(app.id);
-      await api.remove(app.id);
-      await shell.customAppTeardown(app.id);
-      ui.reloadList();
+      await finishRemoval(app);
     }
 
     async function rename(appId, name) {

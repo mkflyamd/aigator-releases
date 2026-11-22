@@ -102,7 +102,7 @@ async def create_web_pin(req: WebPinCreate):
 
 
 @router.get("/api/web-pins/count")
-async def count_web_pins(app_id: str):
+def count_web_pins(app_id: str):
     from skills.context.state import count_web_pins_for_app
 
     return {"app_id": app_id, "count": count_web_pins_for_app(app_id)}

@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const { createStarController } = require('../web/static/custom-app-star.js');
 
-function harness() {
+function harness({ failRemove = false } = {}) {
   const log = [];
   const toasts = [];
   const app = { id: 'custom-news', name: 'News', url: 'https://news.example.com' };
@@ -10,7 +10,10 @@ function harness() {
     api: {
       create: async (name, url) => (log.push(['api.create', name, url]), { ...app, name, url }),
       rename: async (id, name) => (log.push(['api.rename', id, name]), { ...app, name }),
-      remove: async (id) => log.push(['api.remove', id]),
+      remove: async (id) => {
+        log.push(['api.remove', id]);
+        if (failRemove) throw new Error('HTTP 500');
+      },
     },
     shell: {
       createCustomApp: async (a) => log.push(['shell.create', a.id]),
@@ -122,6 +125,49 @@ test('expiry deletes the app and its pane', async () => {
   await toasts[0].onExpire();
   assert.deepStrictEqual(names(log), ['api.remove', 'shell.teardown', 'ui.reload']);
   assert(!controller.hasPending());
+});
+
+test('a failed delete on expiry unhides the pane, tells the user and relists the app', async () => {
+  const warn = console.warn;
+  console.warn = () => {};
+  try {
+    const { controller, log, toasts } = harness({ failRemove: true });
+    await controller.handle({ kind: 'remove', appId: 'custom-news' });
+    log.length = 0;
+    await toasts[0].onExpire();
+    assert.deepStrictEqual(log, [
+      ['api.remove', 'custom-news'],
+      ['shell.hidden', 'custom-news', false],
+      ['ui.reload'],
+    ]);
+    assert.match(toasts[1].message, /Could not remove News/);
+    assert(!controller.hasPending());
+  } finally {
+    console.warn = warn;
+  }
+});
+
+test('a failed delete on Undo of an add also unhides the pane and tells the user', async () => {
+  const warn = console.warn;
+  console.warn = () => {};
+  try {
+    const { controller, log, toasts } = harness({ failRemove: true });
+    await controller.handle({ kind: 'add', url: 'https://news.example.com', name: 'News' });
+    log.length = 0;
+    await toasts[0].actions[1].run();
+    assert.deepStrictEqual(names(log), [
+      'shell.hidden',
+      'ui.close',
+      'ui.unregister',
+      'api.remove',
+      'shell.hidden',
+      'ui.reload',
+    ]);
+    assert.deepStrictEqual(log[4], ['shell.hidden', 'custom-news', false]);
+    assert.match(toasts[1].message, /Could not remove News/);
+  } finally {
+    console.warn = warn;
+  }
 });
 
 test('a second removal commits the first immediately', async () => {
