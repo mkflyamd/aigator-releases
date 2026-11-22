@@ -9,10 +9,19 @@ _LABEL_MAX = 60
 _DISALLOWED = re.compile(r"[^\w .,:;\-()/%&#]")
 
 
-def _ago(ts) -> str:
+_STALE_SECS = 30 * 60  # matches STALE_MS in web/static/web-pins.js
+
+
+def _age_secs(ts) -> int | None:
     try:
-        secs = max(0, int(time.time() - float(ts)))
+        return max(0, int(time.time() - float(ts)))
     except (TypeError, ValueError):
+        return None
+
+
+def _ago(ts) -> str:
+    secs = _age_secs(ts)
+    if secs is None:
         return "at an unknown time"
     if secs < 90:
         return "just now"
@@ -40,13 +49,28 @@ def web_pin_prompt_line(label: str, pin_id: str, meta: dict) -> str:
         store.web_pin_dir(pin_id)
     except ValueError:
         return ""
-    app = _safe(meta.get("app_name")) or "a web app"
-    when = _ago(_captured_at(pin_id, meta))
+    captured = _captured_at(pin_id, meta)
+    when = _ago(captured)
+    age = _age_secs(captured)
+    source = _safe(label)
+    if not source or source == store.GENERIC_LABEL:
+        source = "your pinned page"
+    if age is None or age >= _STALE_SECS:
+        freshness = (
+            f'It is older than 30 minutes: lead the answer with "From {source} (captured {when}): ..." and offer to refresh it. '
+            "Never say \"currently\" or \"right now\" about it."
+        )
+    else:
+        freshness = (
+            "It is fresh: answer directly with no lead-in, and do not mention its age or source unless the user asks where it came from "
+            f'or how current it is (then say "That\'s from a snapshot of {source} taken {when}.").'
+        )
     return (
-        f'- Web pin "{_safe(label)}" (pin_id: {pin_id}, from {app}, captured {when}) '
+        f'- Web pin "{_safe(label)}" (pin_id: {pin_id}, captured {when}) '
         f'→ call read_web_pin(pin_id="{pin_id}") to see the snapshot (page text plus the screenshot, or a description of it if you cannot see images); '
-        f'call recapture_web_pin(pin_id="{pin_id}") if the user says the view changed or asks for the latest. '
-        f'This is a snapshot, not live data: open answers from it with "As of {when}, from {app}".'
+        f'if the user asks for the latest or says the view changed, call recapture_web_pin(pin_id="{pin_id}") straight away (it only reads, so it needs no approval). '
+        f'This is a snapshot, not live data. {freshness} '
+        'When one answer uses several pins, label each figure inline with its pin label ("from <label>, ...").'
     )
 
 

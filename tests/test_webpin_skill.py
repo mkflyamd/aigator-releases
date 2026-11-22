@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import time
 import uuid
 
 import pytest
@@ -125,7 +126,8 @@ def test_recapture_rejects_foreign_pin():
 def test_prompt_line_mentions_tools_and_staleness():
     pid = str(uuid.uuid4())
     line = web_pin_prompt_line('Q3 "Revenue"', pid, {"app_name": "Power BI", "captured_at": 0})
-    assert pid in line and "read_web_pin" in line and "recapture_web_pin" in line and "Power BI" in line
+    assert pid in line and "read_web_pin" in line and "recapture_web_pin" in line
+    assert "Power BI" not in line and "As of" not in line  # the app name is no longer the source label
     assert '"Revenue"' not in line  # quotes stripped from the label
     assert web_pin_prompt_line("x", "not-a-uuid", {}) == ""
 
@@ -184,13 +186,13 @@ def test_prompt_line_strips_injection_characters_and_caps_length():
     shown = line[start:line.index('" (pin_id')]
     assert not set(shown) & set("`<>{}[]\"'\n")
     assert 0 < len(shown) <= 60
-    assert "from Power BIscript," in line
+    assert "BIscript" not in line and "Power" not in line
 
 
 def test_prompt_line_tolerates_non_string_app_name():
     pid = str(uuid.uuid4())
     line = web_pin_prompt_line("x", pid, {"app_name": 123, "captured_at": 0})
-    assert "from 123," in line
+    assert "123" not in line and pid in line
 
 
 def test_read_result_keeps_image_through_the_app_truncation_step(monkeypatch, tmp_path):
@@ -280,3 +282,30 @@ def test_vision_model_still_gets_the_image(monkeypatch):
     out = tools.read_web_pin(pid, _context_id="tab-a")
     assert out["_images"][0]["media_type"] == "image/png" and not vis.calls
     assert "screenshot_description" not in out
+
+
+def _line(label, age_secs):
+    pid = str(uuid.uuid4())
+    return web_pin_prompt_line(label, pid, {"app_name": "PowerBIPOC", "captured_at": time.time() - age_secs})
+
+
+def test_fresh_pin_gets_no_lead_in_and_never_names_the_app():
+    line = _line("Sales dashboard", 5 * 60)
+    assert "no lead-in" in line and "older than 30 minutes" not in line
+    assert "PowerBIPOC" not in line and "As of" not in line
+
+
+def test_stale_threshold_matches_the_ui_chip():
+    assert "older than 30 minutes" not in _line("Sales dashboard", 29 * 60)
+    stale = _line("Sales dashboard", 31 * 60)
+    assert 'From Sales dashboard (captured 31 min ago)' in stale and "refresh" in stale
+    assert 'Never say "currently"' in stale
+
+
+def test_recapture_for_latest_needs_no_approval():
+    assert "straight away" in _line("x", 60) and "no approval" in _line("x", 60)
+
+
+def test_generic_label_reads_as_your_pinned_page():
+    assert "your pinned page" in _line("Web view", 31 * 60)
+    assert "your pinned page" in _line("", 31 * 60)
