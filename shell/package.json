@@ -53,6 +53,10 @@
       {
         "from": "../models/dictation",
         "to": "models/dictation"
+      },
+      {
+        "from": "../dist/THIRD_PARTY_NOTICES.txt",
+        "to": "THIRD_PARTY_NOTICES.txt"
       }
     ],
     "directories": {
