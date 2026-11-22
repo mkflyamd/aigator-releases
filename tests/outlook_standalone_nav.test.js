@@ -106,7 +106,7 @@ assert.strictEqual(typedToUrl('www.cnn.com'), 'https://www.cnn.com');
 assert.strictEqual(typedToUrl('http://example.com'), 'http://example.com');
 
 const navHandler = source.match(
-  /ipcMain\.on\('toolbar:navigate', (\(e, url\) => \{[\s\S]*?\r?\n\})\);\r?\n\r?\nipcMain\.on\('toolbar:save-custom-app'/,
+  /ipcMain\.on\('toolbar:navigate', (\(e, url\) => \{[\s\S]*?\r?\n\})\);\r?\n\r?\nipcMain\.on\('toolbar:set-expanded'/,
 );
 assert(navHandler, 'toolbar:navigate handler found');
 
