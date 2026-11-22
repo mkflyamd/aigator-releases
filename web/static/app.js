@@ -5591,25 +5591,20 @@ async function _showPinPopover() {
   }
 
   try {
-    const _pinIcon = (id) =>
-      `<img src="/static/icons/${id}.svg" class="skill-icon-img" alt="${id}" style="width:20px;height:20px;">`;
     const _sourceConfig = {
-      email: { icon: _pinIcon('outlook'), label: 'Email' },
-      teams: { icon: _pinIcon('teams'), label: 'Teams' },
-      onedrive: { icon: _pinIcon('onedrive'), label: 'OneDrive' },
-      onenote: {
-        icon: '<img src="/static/icons/onenote.png" class="skill-icon-img" alt="onenote" style="width:20px;height:20px;">',
-        label: 'OneNote',
-      },
-      confluence: { icon: _pinIcon('confluence'), label: 'Confluence' },
-      jira: { icon: _pinIcon('jira'), label: 'Jira' },
-      slack: { icon: _pinIcon('slack'), label: 'Slack' },
-      calendar: { icon: _pinIcon('calendar'), label: 'Calendar' },
-      github: { icon: _pinIcon('github'), label: 'GitHub' },
+      email: { img: 'outlook.svg', label: 'Email' },
+      teams: { img: 'teams.svg', label: 'Teams' },
+      onedrive: { img: 'onedrive.svg', label: 'OneDrive' },
+      onenote: { img: 'onenote.png', label: 'OneNote' },
+      confluence: { img: 'confluence.svg', label: 'Confluence' },
+      jira: { img: 'jira.svg', label: 'Jira' },
+      slack: { img: 'slack.svg', label: 'Slack' },
+      calendar: { img: 'calendar.svg', label: 'Calendar' },
+      github: { img: 'github.svg', label: 'GitHub' },
     };
 
     const addCard = (p) => {
-      const cfg = _sourceConfig[p.source] || { icon: '\uD83D\uDCCC', label: p.source };
+      const cfg = _sourceConfig[p.source] || { label: p.source };
       const meta =
         p.source === 'onedrive'
           ? p.meta?.file_path || ''
@@ -5625,17 +5620,35 @@ async function _showPinPopover() {
       const card = document.createElement('div');
       card.className = 'pin-card';
       card.innerHTML = `
-      <div class="pin-card-icon">${cfg.icon}</div>
+      <div class="pin-card-icon"></div>
       <div class="pin-card-body">
-        <div class="pin-card-label">${escapeHtml(p.label)}</div>
-        <div class="pin-card-meta">${escapeHtml(cfg.label)}${meta ? ' \u00B7 ' + escapeHtml(meta) : ''}</div>
+        <div class="pin-card-label"></div>
+        <div class="pin-card-meta"></div>
       </div>
       <div class="pin-card-actions">
         <button class="pin-card-btn pin-card-open" title="Open">&#8599;</button>
         <button class="pin-card-btn pin-card-ask" title="Insert into chat">\u2726</button>
-        <button class="pin-card-btn pin-card-scope${p.scope === 'global' ? ' is-global' : ''}" aria-pressed="${p.scope === 'global'}">\uD83C\uDF10</button>
+        <button class="pin-card-btn pin-card-scope">\uD83C\uDF10</button>
         <button class="pin-card-btn pin-card-remove" title="Unpin">&times;</button>
       </div>`;
+      const iconEl = card.querySelector('.pin-card-icon');
+      if (cfg.img) {
+        const img = document.createElement('img');
+        img.src = `/static/icons/${cfg.img}`;
+        img.className = 'skill-icon-img';
+        img.alt = cfg.img.split('.')[0];
+        img.style.cssText = 'width:20px;height:20px;';
+        iconEl.appendChild(img);
+      } else {
+        iconEl.textContent = '\uD83D\uDCCC';
+      }
+      card.querySelector('.pin-card-label').textContent = p.label;
+      card.querySelector('.pin-card-meta').textContent = meta
+        ? `${cfg.label} \u00B7 ${meta}`
+        : cfg.label;
+      const scopeBtn = card.querySelector('.pin-card-scope');
+      scopeBtn.classList.toggle('is-global', p.scope === 'global');
+      scopeBtn.setAttribute('aria-pressed', String(p.scope === 'global'));
       // ↗ Open item in its native pane (or browser for external sources)
       card.querySelector('.pin-card-open').addEventListener('click', () => {
         cleanup();
