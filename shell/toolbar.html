@@ -618,24 +618,71 @@
       </div>
 
       <div class="tb-pinbar" id="tb-pinbar" role="status">
-        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="12" cy="12" r="8" /><line x1="12" y1="2" x2="12" y2="6" /><line x1="12" y1="18" x2="12" y2="22" /><line x1="2" y1="12" x2="6" y2="12" /><line x1="18" y1="12" x2="22" y2="12" />
+        <svg
+          viewBox="0 0 24 24"
+          width="13"
+          height="13"
+          fill="none"
+          stroke="var(--accent)"
+          stroke-width="2.5"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <circle cx="12" cy="12" r="8" />
+          <line x1="12" y1="2" x2="12" y2="6" />
+          <line x1="12" y1="18" x2="12" y2="22" />
+          <line x1="2" y1="12" x2="6" y2="12" />
+          <line x1="18" y1="12" x2="22" y2="12" />
         </svg>
-        <span class="tb-pinbar-prompt">Click what you want to pin</span><span class="tb-pinbar-prompt-short">Click to pin</span>
+        <span class="tb-pinbar-prompt">Click what you want to pin</span
+        ><span class="tb-pinbar-prompt-short">Click to pin</span>
         <span class="tb-pinbar-label" id="tb-pinbar-label"></span>
         <kbd>Esc</kbd><span class="tb-pinbar-hint" style="color: var(--text-dim)">to cancel</span>
-        <button class="tb-btn" id="tb-pinbar-cancel" title="Cancel pinning" aria-label="Cancel pinning">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18" /><line x1="18" y1="6" x2="6" y2="18" /></svg>
+        <button
+          class="tb-btn"
+          id="tb-pinbar-cancel"
+          title="Cancel pinning"
+          aria-label="Cancel pinning"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.5"
+            stroke-linecap="round"
+          >
+            <line x1="6" y1="6" x2="18" y2="18" />
+            <line x1="18" y1="6" x2="6" y2="18" />
+          </svg>
         </button>
       </div>
 
       <div class="tb-pin-group" id="tb-pin-group">
-        <button class="tb-btn" id="tb-pin" title="Pin an element to Gator" aria-label="Pin an element to Gator">
+        <button
+          class="tb-btn"
+          id="tb-pin"
+          title="Pin an element to Gator"
+          aria-label="Pin an element to Gator"
+        >
           <span class="tb-pin-emoji" aria-hidden="true">&#x1F4CC;</span>
         </button>
-        <button class="tb-btn" id="tb-pin-view" title="Pin this view to Gator" aria-label="Pin this view to Gator">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3" />
+        <button
+          class="tb-btn"
+          id="tb-pin-view"
+          title="Pin this view to Gator"
+          aria-label="Pin this view to Gator"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.5"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path
+              d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"
+            />
             <circle cx="12" cy="12" r="2.5" />
           </svg>
         </button>
@@ -973,7 +1020,8 @@
           .getElementById('tb-pinbar-cancel')
           .addEventListener('click', () => ipcRenderer.send('toolbar:web-pin-cancel'));
         function renderPin(state) {
-          if (typeof state.isCustomApp === 'boolean') elBar.classList.toggle('is-custom', state.isCustomApp);
+          if (typeof state.isCustomApp === 'boolean')
+            elBar.classList.toggle('is-custom', state.isCustomApp);
           if (typeof state.pinMode === 'boolean') {
             elBar.classList.toggle('is-pinning', state.pinMode);
             elPin.classList.toggle('is-active', state.pinMode);

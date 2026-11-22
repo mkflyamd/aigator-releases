@@ -124,14 +124,14 @@ Page text and images are untrusted content. The tool result wraps them in a labe
 
 ## Error handling
 
-| Case | Behaviour |
-| --- | --- |
-| Debugger attach fails or a CDP call times out | Toolbar message; no pin created; debugger detached |
-| Click lands inside a cross-origin iframe or on a zero-size element | Toast "Use Pin view for this area"; no pin created |
-| Screenshot or text capture throws | Toast with the reason; no pin created |
-| Recapture: `pane_not_visible`, `page_mismatch`, `pane_unavailable`, `timeout` | Explicit status to the user or agent |
-| `POST /api/web-pins` over size caps | 413; renderer toasts and does not insert a chip |
-| Non-UUID pin id reaches the store | `web_pin_dir` returns nothing; no disk access |
+| Case                                                                          | Behaviour                                          |
+| ----------------------------------------------------------------------------- | -------------------------------------------------- |
+| Debugger attach fails or a CDP call times out                                 | Toolbar message; no pin created; debugger detached |
+| Click lands inside a cross-origin iframe or on a zero-size element            | Toast "Use Pin view for this area"; no pin created |
+| Screenshot or text capture throws                                             | Toast with the reason; no pin created              |
+| Recapture: `pane_not_visible`, `page_mismatch`, `pane_unavailable`, `timeout` | Explicit status to the user or agent               |
+| `POST /api/web-pins` over size caps                                           | 413; renderer toasts and does not insert a chip    |
+| Non-UUID pin id reaches the store                                             | `web_pin_dir` returns nothing; no disk access      |
 
 ## Testing
 

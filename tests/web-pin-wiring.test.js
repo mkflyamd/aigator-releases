@@ -28,13 +28,22 @@ test('web-pin:recapture only accepts the Gator renderer and custom app ids', () 
 });
 
 test('custom app panes are created through createCustomApp, not createGenericPane', () => {
-  assert.match(main, /for \(const appCfg of _pendingCustomApps\)[\s\S]{0,120}createCustomApp\(appCfg\)/);
-  assert.match(after(main, "ipcMain.handle('custom-app:create'", 200), /createCustomApp\(appConfig\)/);
+  assert.match(
+    main,
+    /for \(const appCfg of _pendingCustomApps\)[\s\S]{0,120}createCustomApp\(appCfg\)/,
+  );
+  assert.match(
+    after(main, "ipcMain.handle('custom-app:create'", 200),
+    /createCustomApp\(appConfig\)/,
+  );
   assert.match(after(main, 'function createCustomApp(', 400), /_customAppIds\.add/);
 });
 
 test('picking stops when the active app changes', () => {
-  assert.match(after(main, 'function _layoutNow()', 200), /_webPinPicking[\s\S]{0,80}_webPin\.stop\(\)/);
+  assert.match(
+    after(main, 'function _layoutNow()', 200),
+    /_webPinPicking[\s\S]{0,80}_webPin\.stop\(\)/,
+  );
 });
 
 test('preload exposes only the three named web-pin methods', () => {
@@ -56,7 +65,10 @@ test('pin banner keeps its exit visible and gives a live label the room', () => 
   assert.match(toolbar, /\.tb-pinbar \.tb-btn[\s\S]{0,40}flex: 0 0 auto/);
   assert.match(toolbar, /\.tb-pinbar\.has-label \.tb-pinbar-prompt/);
   assert.match(toolbar, /classList\.toggle\('has-label'/);
-  assert.match(toolbar, /@media \(max-width: 400px\)[\s\S]{0,200}\.tb-pinbar:not\(\.has-label\) \.tb-pinbar-prompt-short/);
+  assert.match(
+    toolbar,
+    /@media \(max-width: 400px\)[\s\S]{0,200}\.tb-pinbar:not\(\.has-label\) \.tb-pinbar-prompt-short/,
+  );
   assert.match(toolbar, /@media \(max-width: 520px\)[\s\S]{0,60}\.tb-pinbar-hint/);
   assert.match(toolbar, /\[data-theme='light'\] \.tb-pinbar-label[\s\S]{0,40}#15803d/);
 });
@@ -68,8 +80,14 @@ test('web-pin:go-to is gatorView-only, custom-app-only, http(s)-only and limited
   assert.match(body, /'https:'/);
   // loadURL skips will-navigate, so the pane's own host restriction is re-applied here.
   assert.match(body, /_hostMatches\(parsed\.hostname, pane\.homeHosts\)/);
-  assert.match(body, /new URL\(pane\.url\)\.protocol === 'https:' && parsed\.protocol !== 'https:'/);
+  assert.match(
+    body,
+    /new URL\(pane\.url\)\.protocol === 'https:' && parsed\.protocol !== 'https:'/,
+  );
   assert.doesNotMatch(body, /startsWith\('https:'\)/);
-  assert.match(after(main, 'function createGenericPane(', 1400), /_genericPanes\[id\] = \{[^}]*homeHosts/);
+  assert.match(
+    after(main, 'function createGenericPane(', 1400),
+    /_genericPanes\[id\] = \{[^}]*homeHosts/,
+  );
   assert.match(preload, /webPinGoTo: \(appId, url\) => ipcRenderer\.invoke\('web-pin:go-to'/);
 });

@@ -27,36 +27,38 @@
 
 ## File Structure
 
-| File | Responsibility |
-|---|---|
-| `web/skills/webpin/__init__.py` | package marker (empty) |
-| `web/skills/webpin/SKILL.md` | skill frontmatter + usage rules for the model |
-| `web/skills/webpin/store.py` | per-pin dir on disk: write/read snapshot, image, label sanitising, safe cleanup |
-| `web/skills/webpin/pending.py` | in-memory registry of recapture requests (future per request_id) |
-| `web/skills/webpin/prompt.py` | one-line prompt text for a pin, used by `chat.py` |
-| `web/skills/webpin/tools.py` | `read_web_pin`, `recapture_web_pin` tool defs + handlers |
-| `web/routes/web_pins.py` | `POST /api/web-pins`, `GET /api/web-pins/{id}`, `GET .../image`, `POST .../snapshot`, `GET .../suggestions` |
-| `web/skills/context/state.py` (modify) | cleanup hook on `remove_pin` / `clear_pins` |
-| `web/routes/chat.py` (modify) | `webpin` branch in pinned-context block |
-| `web/security.py`, `web/app.py` (modify) | `SENSITIVE_ROUTES` entries, router registration |
-| `shell/web-pin-core.js` | pure functions (clip math, scale, text cap, label priority, url match, target resolution) |
-| `shell/web-pin.js` | Electron/CDP glue: session, lock, pick mode, capture, recapture |
-| `shell/main.js`, `shell/preload.js`, `shell/toolbar.html` (modify) | custom-app tracking, toolbar buttons + banner, IPC, right-click menu |
-| `web/static/web-pins.js` | renderer: receive capture, POST, chip, lift animation, suggestions, recapture handler |
-| `web/static/app.js`, `web/static/index.html`, `web/static/style.css` (modify) | chip thumbnail, pin card decoration, SSE branch, script tag, styles |
-| `tests/test_web_pin_store.py`, `tests/test_web_pins_routes.py`, `tests/test_webpin_skill.py`, `tests/web-pin-core.test.js` | tests |
+| File                                                                                                                       | Responsibility                                                                                              |
+| -------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `web/skills/webpin/__init__.py`                                                                                            | package marker (empty)                                                                                      |
+| `web/skills/webpin/SKILL.md`                                                                                               | skill frontmatter + usage rules for the model                                                               |
+| `web/skills/webpin/store.py`                                                                                               | per-pin dir on disk: write/read snapshot, image, label sanitising, safe cleanup                             |
+| `web/skills/webpin/pending.py`                                                                                             | in-memory registry of recapture requests (future per request_id)                                            |
+| `web/skills/webpin/prompt.py`                                                                                              | one-line prompt text for a pin, used by `chat.py`                                                           |
+| `web/skills/webpin/tools.py`                                                                                               | `read_web_pin`, `recapture_web_pin` tool defs + handlers                                                    |
+| `web/routes/web_pins.py`                                                                                                   | `POST /api/web-pins`, `GET /api/web-pins/{id}`, `GET .../image`, `POST .../snapshot`, `GET .../suggestions` |
+| `web/skills/context/state.py` (modify)                                                                                     | cleanup hook on `remove_pin` / `clear_pins`                                                                 |
+| `web/routes/chat.py` (modify)                                                                                              | `webpin` branch in pinned-context block                                                                     |
+| `web/security.py`, `web/app.py` (modify)                                                                                   | `SENSITIVE_ROUTES` entries, router registration                                                             |
+| `shell/web-pin-core.js`                                                                                                    | pure functions (clip math, scale, text cap, label priority, url match, target resolution)                   |
+| `shell/web-pin.js`                                                                                                         | Electron/CDP glue: session, lock, pick mode, capture, recapture                                             |
+| `shell/main.js`, `shell/preload.js`, `shell/toolbar.html` (modify)                                                         | custom-app tracking, toolbar buttons + banner, IPC, right-click menu                                        |
+| `web/static/web-pins.js`                                                                                                   | renderer: receive capture, POST, chip, lift animation, suggestions, recapture handler                       |
+| `web/static/app.js`, `web/static/index.html`, `web/static/style.css` (modify)                                              | chip thumbnail, pin card decoration, SSE branch, script tag, styles                                         |
+| `tests/test_web_pin_store.py`, `tests/test_web_pins_routes.py`, `tests/test_webpin_skill.py`, `tests/web-pin-core.test.js` | tests                                                                                                       |
 
 ---
 
 ### Task 1: Webpin store plus pin-cleanup hook
 
 **Files:**
+
 - Create: `web/skills/webpin/__init__.py` (empty)
 - Create: `web/skills/webpin/store.py`
 - Modify: `web/skills/context/state.py:80-90`
 - Test: `tests/test_web_pin_store.py`
 
 **Interfaces:**
+
 - Produces (all in `skills.webpin.store`):
   - `_ROOT: Path | None` (tests patch it); `web_pin_dir(pin_id: str) -> Path` raises `ValueError` unless `pin_id` is a lowercase UUID4.
   - `sanitize_label(s: str) -> str`
@@ -273,6 +275,7 @@ git commit -m "feat(web-pins): snapshot store and safe cleanup on unpin"
 ### Task 2: Pending-request registry and web-pin routes
 
 **Files:**
+
 - Create: `web/skills/webpin/pending.py`
 - Create: `web/routes/web_pins.py`
 - Modify: `web/security.py` (`SENSITIVE_ROUTES`, keep alphabetical order)
@@ -280,6 +283,7 @@ git commit -m "feat(web-pins): snapshot store and safe cleanup on unpin"
 - Test: `tests/test_web_pins_routes.py`
 
 **Interfaces:**
+
 - Consumes (Task 1): `store.write_snapshot`, `store.read_snapshot`, `store.read_image`, `store.sanitize_label`, `state.set_pin(source, item_id, label, meta, context_id)`.
 - Produces:
   - `pending.create(pin_id: str, context_id: str) -> tuple[str, asyncio.Future]` (must run inside an event loop; returns `(request_id, future)`); `pending.claim(request_id, pin_id) -> bool` (first caller wins); `pending.finish(request_id, result: dict) -> None`; `pending.resolve(request_id: str, pin_id: str, result: dict) -> str` = claim + finish, returns `"ok"` or `"conflict"` (unknown/mismatched/already-claimed = conflict); `pending.discard(request_id: str) -> None`.
@@ -688,11 +692,13 @@ git commit -m "feat(web-pins): create/read/snapshot routes with CSRF and recaptu
 ### Task 3: `webpin` skill, prompt line, and chat.py branch
 
 **Files:**
+
 - Create: `web/skills/webpin/SKILL.md`, `web/skills/webpin/prompt.py`, `web/skills/webpin/tools.py`
 - Modify: `web/routes/chat.py:1676` (insert an `elif s == "webpin":` branch immediately before `elif s == "onedrive":`)
 - Test: `tests/test_webpin_skill.py`
 
 **Interfaces:**
+
 - Consumes (Tasks 1-2): `store.read_snapshot/read_image/web_pin_dir`, `pending.create/discard`, `state.get_pins`, `shared.notify_all`.
 - Produces:
   - `prompt.web_pin_prompt_line(label: str, pin_id: str, meta: dict) -> str` (returns `""` when `pin_id` is not a valid web-pin id).
@@ -1000,7 +1006,7 @@ TOOL_HANDLERS = {
 ```markdown
 ---
 name: webpin
-description: 'Read and refresh pinned views or elements from the user''s own web apps (custom apps) so Gator can answer questions about what is on screen.'
+description: "Read and refresh pinned views or elements from the user's own web apps (custom apps) so Gator can answer questions about what is on screen."
 classify: false
 metadata:
   author: AI Gator
@@ -1059,10 +1065,12 @@ git commit -m "feat(web-pins): webpin skill with read/recapture tools and chat p
 ### Task 4: Suggestion chips endpoint
 
 **Files:**
+
 - Modify: `web/routes/web_pins.py` (append)
 - Test: `tests/test_web_pin_suggestions.py`
 
 **Interfaces:**
+
 - Consumes (Task 2): `_snapshot_or_404`, `router`.
 - Produces: `GET /api/web-pins/{pin_id}/suggestions` -> `{"suggestions": [{"text": str, "kind": "question" | "action"}]}`. Up to 3 questions (each <= 80 chars) plus always one `action` chip "Draft an email to the team about this". Suggestions only fill the composer; they never send. `routes.web_pins._ask_llm(prompt: str) -> str` is the one LLM call site (tests patch it).
 
@@ -1219,10 +1227,12 @@ git commit -m "feat(web-pins): grounded follow-up suggestions with static fallba
 ### Task 5: Shell core (pure, node-testable)
 
 **Files:**
+
 - Create: `shell/web-pin-core.js`
 - Test: `tests/web-pin-core.test.js`
 
 **Interfaces:**
+
 - Produces (CommonJS exports of `shell/web-pin-core.js`):
   - `MAX_SIDE = 1600`, `MAX_TEXT = 20000`
   - `clipFromQuad(quad: number[8], offset?: {x, y}) -> {x, y, width, height, scale: 1}` (box-model quad is viewport-relative; `offset` is the page scroll so the clip is document-relative)
@@ -1248,7 +1258,13 @@ test('clipFromQuad uses min/max of the quad and adds the scroll offset', () => {
 });
 
 test('clipFromQuad works without an offset', () => {
-  assert.deepStrictEqual(core.clipFromQuad([0, 0, 4, 0, 4, 2, 0, 2]), { x: 0, y: 0, width: 4, height: 2, scale: 1 });
+  assert.deepStrictEqual(core.clipFromQuad([0, 0, 4, 0, 4, 2, 0, 2]), {
+    x: 0,
+    y: 0,
+    width: 4,
+    height: 2,
+    scale: 1,
+  });
 });
 
 test('captureScale caps at 2x and shrinks large captures to 1600px', () => {
@@ -1267,9 +1283,15 @@ test('capText collapses blank runs and enforces the cap', () => {
 });
 
 test('hoverLabel priority and truncation', () => {
-  assert.strictEqual(core.hoverLabel({ ariaLabel: 'Revenue', role: 'img', heading: 'H', tag: 'DIV' }), 'Revenue');
+  assert.strictEqual(
+    core.hoverLabel({ ariaLabel: 'Revenue', role: 'img', heading: 'H', tag: 'DIV' }),
+    'Revenue',
+  );
   assert.strictEqual(core.hoverLabel({ role: 'img', heading: 'H', tag: 'DIV' }), 'img');
-  assert.strictEqual(core.hoverLabel({ heading: 'Sales by region', tag: 'DIV' }), 'Sales by region');
+  assert.strictEqual(
+    core.hoverLabel({ heading: 'Sales by region', tag: 'DIV' }),
+    'Sales by region',
+  );
   assert.strictEqual(core.hoverLabel({ tag: 'DIV' }), 'div');
   assert.ok(core.hoverLabel({ ariaLabel: 'x'.repeat(200) }).length <= 60);
   assert.strictEqual(core.hoverLabel({}), 'element');
@@ -1295,14 +1317,22 @@ function fakeCdp(handlers) {
   };
 }
 
-const LOC = { selector: '#kpi', role: 'img', name: 'Revenue', rect: { x: 100, y: 200, width: 40, height: 20 } };
+const LOC = {
+  selector: '#kpi',
+  role: 'img',
+  name: 'Revenue',
+  rect: { x: 100, y: 200, width: 40, height: 20 },
+};
 
 test('resolveTarget prefers a unique selector', async () => {
   const cdp = fakeCdp({
     'Runtime.evaluate': { result: { subtype: 'node', objectId: 'o1' } },
     'DOM.describeNode': { node: { backendNodeId: 7 } },
   });
-  assert.deepStrictEqual(await core.resolveTarget(cdp, LOC), { backendNodeId: 7, match: 'selector' });
+  assert.deepStrictEqual(await core.resolveTarget(cdp, LOC), {
+    backendNodeId: 7,
+    match: 'selector',
+  });
 });
 
 test('resolveTarget falls back to a unique role+name', async () => {
@@ -1311,13 +1341,18 @@ test('resolveTarget falls back to a unique role+name', async () => {
     'DOM.getDocument': { root: { nodeId: 1 } },
     'Accessibility.queryAXTree': { nodes: [{ backendDOMNodeId: 9 }] },
   });
-  assert.deepStrictEqual(await core.resolveTarget(cdp, LOC), { backendNodeId: 9, match: 'role-name' });
+  assert.deepStrictEqual(await core.resolveTarget(cdp, LOC), {
+    backendNodeId: 9,
+    match: 'role-name',
+  });
 });
 
 test('resolveTarget falls back to rect when role+name is ambiguous', async () => {
   const cdp = fakeCdp({
     'Runtime.evaluate': (p) =>
-      /scrollX/.test(p.expression) ? { result: { value: { x: 0, y: 100 } } } : { result: { subtype: 'null' } },
+      /scrollX/.test(p.expression)
+        ? { result: { value: { x: 0, y: 100 } } }
+        : { result: { subtype: 'null' } },
     'DOM.getDocument': { root: { nodeId: 1 } },
     'Accessibility.queryAXTree': { nodes: [{ backendDOMNodeId: 9 }, { backendDOMNodeId: 10 }] },
     'DOM.getNodeForLocation': (p) => {
@@ -1333,7 +1368,9 @@ test('resolveTarget returns null when nothing matches or locator is empty', asyn
     'Runtime.evaluate': { result: { subtype: 'null' } },
     'DOM.getDocument': { root: { nodeId: 1 } },
     'Accessibility.queryAXTree': { nodes: [] },
-    'DOM.getNodeForLocation': () => { throw new Error('no node'); },
+    'DOM.getNodeForLocation': () => {
+      throw new Error('no node');
+    },
   });
   assert.strictEqual(await core.resolveTarget(none, LOC), null);
   assert.strictEqual(await core.resolveTarget(fakeCdp({}), null), null);
@@ -1375,14 +1412,17 @@ function captureScale(width, height) {
 }
 
 function capText(text, max = MAX_TEXT) {
-  const t = String(text == null ? '' : text).replace(/\n{3,}/g, '\n\n').trim();
+  const t = String(text == null ? '' : text)
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
   if (t.length <= max) return t;
   return t.slice(0, max - TRUNC.length) + TRUNC;
 }
 
 function hoverLabel(info) {
   const i = info || {};
-  const raw = i.ariaLabel || i.role || i.heading || (i.tag ? String(i.tag).toLowerCase() : '') || 'element';
+  const raw =
+    i.ariaLabel || i.role || i.heading || (i.tag ? String(i.tag).toLowerCase() : '') || 'element';
   const s = String(raw).replace(/\s+/g, ' ').trim();
   return s.length > 60 ? s.slice(0, 59) + '…' : s;
 }
@@ -1404,7 +1444,11 @@ function describeInPage() {
   const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
   const esc = (s) => (window.CSS && CSS.escape ? CSS.escape(s) : s);
   const unique = (sel) => {
-    try { return document.querySelectorAll(sel).length === 1; } catch (e) { return false; }
+    try {
+      return document.querySelectorAll(sel).length === 1;
+    } catch (e) {
+      return false;
+    }
   };
   function selectorFor(n) {
     if (n.id && unique('#' + esc(n.id))) return '#' + esc(n.id);
@@ -1451,9 +1495,17 @@ function describeInPage() {
   const role = (el.getAttribute && el.getAttribute('role')) || '';
   const labelledBy = el.getAttribute && el.getAttribute('aria-labelledby');
   const labelledText = labelledBy
-    ? clean(labelledBy.split(/\s+/).map((id) => (document.getElementById(id) || {}).textContent || '').join(' '))
+    ? clean(
+        labelledBy
+          .split(/\s+/)
+          .map((id) => (document.getElementById(id) || {}).textContent || '')
+          .join(' '),
+      )
     : '';
-  const name = ariaLabel || labelledText || clean(el.getAttribute && (el.getAttribute('title') || el.getAttribute('alt')));
+  const name =
+    ariaLabel ||
+    labelledText ||
+    clean(el.getAttribute && (el.getAttribute('title') || el.getAttribute('alt')));
   const r = el.getBoundingClientRect();
   const rect = {
     x: Math.round(r.left + window.scrollX),
@@ -1508,14 +1560,18 @@ async function resolveTarget(cdp, locator) {
   if (locator.selector) {
     try {
       const expr =
-        '(() => { const n = document.querySelectorAll(' + JSON.stringify(locator.selector) +
+        '(() => { const n = document.querySelectorAll(' +
+        JSON.stringify(locator.selector) +
         '); return n.length === 1 ? n[0] : null; })()';
       const ev = await cdp.send('Runtime.evaluate', { expression: expr });
       if (ev && ev.result && ev.result.subtype === 'node' && ev.result.objectId) {
         const d = await cdp.send('DOM.describeNode', { objectId: ev.result.objectId });
-        if (d && d.node && d.node.backendNodeId) return { backendNodeId: d.node.backendNodeId, match: 'selector' };
+        if (d && d.node && d.node.backendNodeId)
+          return { backendNodeId: d.node.backendNodeId, match: 'selector' };
       }
-    } catch (e) { /* fall through */ }
+    } catch (e) {
+      /* fall through */
+    }
   }
   if (locator.role && locator.name) {
     try {
@@ -1529,7 +1585,9 @@ async function resolveTarget(cdp, locator) {
       if (nodes.length === 1 && nodes[0].backendDOMNodeId) {
         return { backendNodeId: nodes[0].backendDOMNodeId, match: 'role-name' };
       }
-    } catch (e) { /* fall through */ }
+    } catch (e) {
+      /* fall through */
+    }
   }
   if (locator.rect) {
     try {
@@ -1543,14 +1601,25 @@ async function resolveTarget(cdp, locator) {
       const y = Math.round(r.y + r.height / 2 - s.y);
       const hit = await cdp.send('DOM.getNodeForLocation', { x, y });
       if (hit && hit.backendNodeId) return { backendNodeId: hit.backendNodeId, match: 'rect' };
-    } catch (e) { /* fall through */ }
+    } catch (e) {
+      /* fall through */
+    }
   }
   return null;
 }
 
 module.exports = {
-  MAX_SIDE, MAX_TEXT, clipFromQuad, captureScale, capText, hoverLabel, urlMatches,
-  describeInPage, pageTextInPage, labelInPage, resolveTarget,
+  MAX_SIDE,
+  MAX_TEXT,
+  clipFromQuad,
+  captureScale,
+  capText,
+  hoverLabel,
+  urlMatches,
+  describeInPage,
+  pageTextInPage,
+  labelInPage,
+  resolveTarget,
 };
 ```
 
@@ -1569,10 +1638,12 @@ git commit -m "feat(web-pins): shell core helpers for clip math, text capture an
 ### Task 6: Shell CDP glue (`shell/web-pin.js`)
 
 **Files:**
+
 - Create: `shell/web-pin.js`
 - Test: `tests/web-pin.test.js`
 
 **Interfaces:**
+
 - Consumes: everything exported by `shell/web-pin-core.js` (Task 5).
 - Produces: `createWebPin({ getPane, isPaneVisible, onState, onCaptured, onError, timeoutMs = 8000 })` returning `{ start(appId), stop(), pinView(appId), recapture(appId, locator, url) }`, all async.
   - `getPane(appId) -> webContents | null`; `isPaneVisible(appId) -> boolean`.
@@ -1593,8 +1664,18 @@ const { EventEmitter } = require('node:events');
 const { createWebPin } = require('../shell/web-pin');
 
 const INFO = JSON.stringify({
-  tag: 'DIV', ariaLabel: 'Revenue', role: '', name: 'Revenue', heading: '', text: '4.2M',
-  locator: { selector: '#kpi', role: '', name: 'Revenue', rect: { x: 10, y: 120, width: 100, height: 60 } },
+  tag: 'DIV',
+  ariaLabel: 'Revenue',
+  role: '',
+  name: 'Revenue',
+  heading: '',
+  text: '4.2M',
+  locator: {
+    selector: '#kpi',
+    role: '',
+    name: 'Revenue',
+    rect: { x: 10, y: 120, width: 100, height: 60 },
+  },
 });
 const PAGE = JSON.stringify({ text: 'whole page', title: 'Dash', url: 'https://a.com/r/1' });
 
@@ -1606,15 +1687,21 @@ function fakeWc({ url = 'https://a.com/r/1', overrides = {} } = {}) {
     'DOM.resolveNode': { object: { objectId: 'o1' } },
     'Runtime.callFunctionOn': { result: { value: INFO } },
     'DOM.getBoxModel': { model: { border: [10, 20, 110, 20, 110, 80, 10, 80] } },
-    'Page.getLayoutMetrics': { cssVisualViewport: { pageX: 0, pageY: 100, clientWidth: 800, clientHeight: 600 } },
+    'Page.getLayoutMetrics': {
+      cssVisualViewport: { pageX: 0, pageY: 100, clientWidth: 800, clientHeight: 600 },
+    },
     'Page.captureScreenshot': { data: 'UE5H' },
     'Runtime.evaluate': { result: { value: PAGE } },
     ...overrides,
   };
   const dbg = new EventEmitter();
   dbg.isAttached = () => attached;
-  dbg.attach = () => { attached = true; };
-  dbg.detach = () => { attached = false; };
+  dbg.attach = () => {
+    attached = true;
+  };
+  dbg.detach = () => {
+    attached = false;
+  };
   dbg.sendCommand = async (method, p) => {
     sent.push(method);
     params[method] = p;
@@ -1622,7 +1709,13 @@ function fakeWc({ url = 'https://a.com/r/1', overrides = {} } = {}) {
     return typeof h === 'function' ? h(p) : h || {};
   };
   const wc = new EventEmitter();
-  return Object.assign(wc, { debugger: dbg, sent, params, getURL: () => url, isDestroyed: () => false });
+  return Object.assign(wc, {
+    debugger: dbg,
+    sent,
+    params,
+    getURL: () => url,
+    isDestroyed: () => false,
+  });
 }
 
 function harness(wc, { visible = true } = {}) {
@@ -1662,13 +1755,25 @@ test('pick flow captures the clicked element after hiding the highlight', async 
   assert.strictEqual(c.url, 'https://a.com/r/1');
   assert.strictEqual(c.title, 'Dash');
   assert.ok(wc.sent.indexOf('Overlay.hideHighlight') < wc.sent.indexOf('Page.captureScreenshot'));
-  assert.deepStrictEqual(wc.params['Page.captureScreenshot'].clip, { x: 10, y: 120, width: 100, height: 60, scale: 2 });
+  assert.deepStrictEqual(wc.params['Page.captureScreenshot'].clip, {
+    x: 10,
+    y: 120,
+    width: 100,
+    height: 60,
+    scale: 2,
+  });
   await waitFor(() => !wc.debugger.isAttached());
   assert.strictEqual(events.states.at(-1).picking, false);
 });
 
 test('hover events update the banner label', async () => {
-  const wc = fakeWc({ overrides: { 'Runtime.callFunctionOn': { result: { value: JSON.stringify({ ariaLabel: 'Sales by region' }) } } } });
+  const wc = fakeWc({
+    overrides: {
+      'Runtime.callFunctionOn': {
+        result: { value: JSON.stringify({ ariaLabel: 'Sales by region' }) },
+      },
+    },
+  });
   const { wp, events } = harness(wc);
   await wp.start('custom-x');
   wc.debugger.emit('message', {}, 'Overlay.nodeHighlightRequested', { nodeId: 3 });
@@ -1680,7 +1785,15 @@ test('Escape cancels pick mode and detaches', async () => {
   const { wp, events } = harness(wc);
   await wp.start('custom-x');
   let prevented = false;
-  wc.emit('before-input-event', { preventDefault() { prevented = true; } }, { type: 'keyDown', key: 'Escape' });
+  wc.emit(
+    'before-input-event',
+    {
+      preventDefault() {
+        prevented = true;
+      },
+    },
+    { type: 'keyDown', key: 'Escape' },
+  );
   await waitFor(() => !wc.debugger.isAttached());
   assert.ok(prevented);
   assert.strictEqual(events.captured.length, 0);
@@ -1690,7 +1803,10 @@ test('Escape cancels pick mode and detaches', async () => {
 
 test('start refuses a hidden or unknown pane', async () => {
   const hidden = harness(fakeWc(), { visible: false });
-  assert.deepStrictEqual(await hidden.wp.start('custom-x'), { ok: false, status: 'pane_not_visible' });
+  assert.deepStrictEqual(await hidden.wp.start('custom-x'), {
+    ok: false,
+    status: 'pane_not_visible',
+  });
   assert.deepStrictEqual(hidden.events.errors, [{ appId: 'custom-x', code: 'pane_not_visible' }]);
   const unknown = harness(fakeWc());
   assert.deepStrictEqual(await unknown.wp.start('nope'), { ok: false, status: 'pane_unavailable' });
@@ -1704,15 +1820,25 @@ test('pinView captures the visible viewport with no locator', async () => {
   const c = events.captured[0];
   assert.strictEqual(c.locator, null);
   assert.strictEqual(c.text, 'whole page');
-  assert.deepStrictEqual(wc.params['Page.captureScreenshot'].clip, { x: 0, y: 100, width: 800, height: 600, scale: 2 });
+  assert.deepStrictEqual(wc.params['Page.captureScreenshot'].clip, {
+    x: 0,
+    y: 100,
+    width: 800,
+    height: 600,
+    scale: 2,
+  });
   assert.strictEqual(wc.debugger.isAttached(), false);
 });
 
 test('recapture refuses hidden panes and moved pages', async () => {
   const hidden = harness(fakeWc(), { visible: false });
-  assert.deepStrictEqual(await hidden.wp.recapture('custom-x', null, 'https://a.com/r/1'), { status: 'pane_not_visible' });
+  assert.deepStrictEqual(await hidden.wp.recapture('custom-x', null, 'https://a.com/r/1'), {
+    status: 'pane_not_visible',
+  });
   const moved = harness(fakeWc({ url: 'https://a.com/r/2' }));
-  assert.deepStrictEqual(await moved.wp.recapture('custom-x', null, 'https://a.com/r/1'), { status: 'page_mismatch' });
+  assert.deepStrictEqual(await moved.wp.recapture('custom-x', null, 'https://a.com/r/1'), {
+    status: 'page_mismatch',
+  });
 });
 
 test('recapture re-finds the element by selector', async () => {
@@ -1741,10 +1867,14 @@ test('recapture falls back to the whole view when the element is gone', async ()
   const wc = fakeWc({
     overrides: {
       'Runtime.evaluate': (p) =>
-        /scrollX/.test(p.expression) ? { result: { value: { x: 0, y: 0 } } } : { result: { subtype: 'null', value: PAGE } },
+        /scrollX/.test(p.expression)
+          ? { result: { value: { x: 0, y: 0 } } }
+          : { result: { subtype: 'null', value: PAGE } },
       'DOM.getDocument': { root: { nodeId: 1 } },
       'Accessibility.queryAXTree': { nodes: [] },
-      'DOM.getNodeForLocation': () => { throw new Error('no node'); },
+      'DOM.getNodeForLocation': () => {
+        throw new Error('no node');
+      },
     },
   });
   const { wp } = harness(wc);
@@ -1756,7 +1886,9 @@ test('recapture falls back to the whole view when the element is gone', async ()
 test('a hung CDP call times out and detaches', async () => {
   const wc = fakeWc({ overrides: { 'Page.getLayoutMetrics': () => new Promise(() => {}) } });
   const { wp } = harness(wc);
-  assert.deepStrictEqual(await wp.recapture('custom-x', null, 'https://a.com/r/1'), { status: 'timeout' });
+  assert.deepStrictEqual(await wp.recapture('custom-x', null, 'https://a.com/r/1'), {
+    status: 'timeout',
+  });
   assert.strictEqual(wc.debugger.isAttached(), false);
 });
 ```
@@ -1818,7 +1950,11 @@ function openSession(wc, timeoutMs) {
     close() {
       dbg.removeListener('message', onMessage);
       if (owned && dbg.isAttached()) {
-        try { dbg.detach(); } catch (_) { /* already gone */ }
+        try {
+          dbg.detach();
+        } catch (_) {
+          /* already gone */
+        }
       }
     },
   };
@@ -1845,8 +1981,20 @@ async function shoot(cdp, clip) {
 async function captureView(cdp) {
   const { cssVisualViewport: v } = await cdp.send('Page.getLayoutMetrics');
   const page = await readPage(cdp);
-  const image_b64 = await shoot(cdp, { x: v.pageX, y: v.pageY, width: v.clientWidth, height: v.clientHeight });
-  return { image_b64, text: core.capText(page.text), locator: null, url: page.url, title: page.title, aria_label: '' };
+  const image_b64 = await shoot(cdp, {
+    x: v.pageX,
+    y: v.pageY,
+    width: v.clientWidth,
+    height: v.clientHeight,
+  });
+  return {
+    image_b64,
+    text: core.capText(page.text),
+    locator: null,
+    url: page.url,
+    title: page.title,
+    aria_label: '',
+  };
 }
 
 async function captureElement(cdp, backendNodeId) {
@@ -1874,7 +2022,14 @@ async function captureElement(cdp, backendNodeId) {
   };
 }
 
-function createWebPin({ getPane, isPaneVisible, onState, onCaptured, onError, timeoutMs = CDP_TIMEOUT_MS }) {
+function createWebPin({
+  getPane,
+  isPaneVisible,
+  onState,
+  onCaptured,
+  onError,
+  timeoutMs = CDP_TIMEOUT_MS,
+}) {
   let active = null;
   let closing = Promise.resolve();
   const busy = new Set();
@@ -1894,7 +2049,9 @@ function createWebPin({ getPane, isPaneVisible, onState, onCaptured, onError, ti
       try {
         await a.cdp.send('Overlay.setInspectMode', { mode: 'none', highlightConfig: {} });
         await a.cdp.send('Overlay.hideHighlight');
-      } catch (_) { /* page may be gone */ }
+      } catch (_) {
+        /* page may be gone */
+      }
       a.cdp.close();
     })();
     return closing;
@@ -1927,9 +2084,15 @@ function createWebPin({ getPane, isPaneVisible, onState, onCaptured, onError, ti
         returnByValue: true,
       });
       if (active === a && !a.picking) {
-        onState({ appId: a.appId, picking: true, label: core.hoverLabel(JSON.parse(r.result.value)) });
+        onState({
+          appId: a.appId,
+          picking: true,
+          label: core.hoverLabel(JSON.parse(r.result.value)),
+        });
       }
-    } catch (_) { /* label is best-effort */ } finally {
+    } catch (_) {
+      /* label is best-effort */
+    } finally {
       a.hovering = false;
     }
   }
@@ -1945,7 +2108,10 @@ function createWebPin({ getPane, isPaneVisible, onState, onCaptured, onError, ti
       await cdp.send('DOM.enable');
       await cdp.send('Overlay.enable');
       await cdp.send('DOM.getDocument', { depth: 0 });
-      await cdp.send('Overlay.setInspectMode', { mode: 'searchForNode', highlightConfig: HIGHLIGHT });
+      await cdp.send('Overlay.setInspectMode', {
+        mode: 'searchForNode',
+        highlightConfig: HIGHLIGHT,
+      });
     } catch (e) {
       if (cdp) cdp.close();
       return fail(appId, codeOf(e));
@@ -2026,12 +2192,14 @@ git commit -m "feat(shell): CDP glue for picking and recapturing web pane pins"
 ### Task 7: Shell wiring (main process, preload, toolbar)
 
 **Files:**
+
 - Modify: `shell/main.js` (declarations after line 1053, `_toolbarPushState` at 690, `_layoutNow` at 4184, startup loop at ~4144, `custom-app:create` at ~4470, toolbar handlers after `toolbar:ready` at ~4843)
 - Modify: `shell/preload.js` (before the closing `});` at line 147)
 - Modify: `shell/toolbar.html` (CSS before `.tb.is-hidden` at line 414, markup after the `.tb-url` block ending at line 515, script in the `toolbar:state` listener at ~859 and the keydown handler at ~837)
 - Test: `tests/web-pin-wiring.test.js`
 
 **Interfaces:**
+
 - Consumes: `createWebPin` (Task 6).
 - Produces:
   - IPC (toolbar to main, fire-and-forget, each guarded by `_isMainToolbar(e)`): `toolbar:web-pin-start` (toggles pick mode for the active custom app), `toolbar:web-pin-view`, `toolbar:web-pin-cancel`.
@@ -2076,13 +2244,22 @@ test('web-pin:recapture only accepts the Gator renderer and custom app ids', () 
 });
 
 test('custom app panes are created through createCustomApp, not createGenericPane', () => {
-  assert.match(main, /for \(const appCfg of _pendingCustomApps\)[\s\S]{0,120}createCustomApp\(appCfg\)/);
-  assert.match(after(main, "ipcMain.handle('custom-app:create'", 200), /createCustomApp\(appConfig\)/);
+  assert.match(
+    main,
+    /for \(const appCfg of _pendingCustomApps\)[\s\S]{0,120}createCustomApp\(appCfg\)/,
+  );
+  assert.match(
+    after(main, "ipcMain.handle('custom-app:create'", 200),
+    /createCustomApp\(appConfig\)/,
+  );
   assert.match(after(main, 'function createCustomApp(', 400), /_customAppIds\.add/);
 });
 
 test('picking stops when the active app changes', () => {
-  assert.match(after(main, 'function _layoutNow()', 200), /_webPinPicking[\s\S]{0,80}_webPin\.stop\(\)/);
+  assert.match(
+    after(main, 'function _layoutNow()', 200),
+    /_webPinPicking[\s\S]{0,80}_webPin\.stop\(\)/,
+  );
 });
 
 test('preload exposes only the three named web-pin methods', () => {
@@ -2133,7 +2310,6 @@ Insert before the closing `});` (after `setWidgetCaptureExcluded`):
 main.js comments contain mojibake. Edit with exact-match anchors only and never re-save the whole file. Directly after the `let activeExternalApp = null;` line (line 1053) add:
 
 ```javascript
-
 // Web pane pins. _customAppIds holds user-added apps only (the g-* Google panes also use
 // createGenericPane and must not get pin controls). _webPinPicking is the app id in pick mode.
 const _customAppIds = new Set();
@@ -2173,7 +2349,7 @@ In `_toolbarPushState`, after `appHomeUrls: APP_HOME_URL,` inside the `state` ob
 In `_layoutNow`, directly after `if (!win) return;` add:
 
 ```javascript
-  if (_webPinPicking && _webPinPicking !== activeExternalApp) _webPin.stop();
+if (_webPinPicking && _webPinPicking !== activeExternalApp) _webPin.stop();
 ```
 
 - [ ] **Step 6: `shell/main.js` custom-app creation and right-click menu**
@@ -2181,7 +2357,6 @@ In `_layoutNow`, directly after `if (!win) return;` add:
 Directly after the closing `}` of `createGenericPane` (the line before `ipcMain.handle('external-pane:show'`) add:
 
 ```javascript
-
 // A user-added app pane: a generic pane plus pin support (right-click menu, toolbar buttons).
 function createCustomApp(appConfig) {
   const view = createGenericPane(appConfig);
@@ -2201,10 +2376,11 @@ function createCustomApp(appConfig) {
 Change the two custom call sites (leave the `g-*` call `createGenericPane({ id: appName, ... })` in `external-pane:show` untouched):
 
 ```javascript
-        createCustomApp(appCfg);        // startup loop, was createGenericPane(appCfg)
+createCustomApp(appCfg); // startup loop, was createGenericPane(appCfg)
 ```
+
 ```javascript
-    createCustomApp(appConfig);         // custom-app:create handler, was createGenericPane(appConfig)
+createCustomApp(appConfig); // custom-app:create handler, was createGenericPane(appConfig)
 ```
 
 - [ ] **Step 7: `shell/main.js` IPC handlers**
@@ -2212,7 +2388,6 @@ Change the two custom call sites (leave the `g-*` call `createGenericPane({ id: 
 Directly after the `ipcMain.on('toolbar:ready', ...)` block add:
 
 ```javascript
-
 ipcMain.on('toolbar:web-pin-start', (e) => {
   if (!_isMainToolbar(e)) return;
   if (_webPinPicking) {
@@ -2248,61 +2423,60 @@ ipcMain.handle('web-pin:recapture', (e, appId, locator, url) => {
 Insert before the `/* Hidden state` comment (line 414):
 
 ```css
-      /* Web pane pins: shown only while a custom app is the active pane. */
-      .tb-pin-group {
-        display: none;
-        align-items: center;
-        gap: 2px;
-        margin-left: 4px;
-        -webkit-app-region: no-drag;
-      }
-      .tb.is-custom .tb-pin-group {
-        display: flex;
-      }
-      .tb-btn.is-active {
-        color: var(--accent);
-        background: rgba(var(--accent-rgb), 0.14);
-      }
-      .tb-pinbar {
-        display: none;
-        flex: 1 1 auto;
-        min-width: 120px;
-        align-items: center;
-        gap: 8px;
-        height: 28px;
-        padding: 0 4px 0 10px;
-        border: 1px solid rgba(var(--accent-rgb), 0.5);
-        border-radius: 6px;
-        background: rgba(var(--accent-rgb), 0.12);
-        color: var(--text);
-        font-size: 11px;
-        white-space: nowrap;
-        overflow: hidden;
-        -webkit-app-region: no-drag;
-      }
-      .tb.is-pinning .tb-url {
-        display: none;
-      }
-      .tb.is-pinning .tb-pinbar {
-        display: flex;
-      }
-      .tb-pinbar-label {
-        flex: 1 1 auto;
-        min-width: 0;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        color: var(--accent);
-      }
-      .tb-pinbar kbd {
-        padding: 1px 5px;
-        border: 1px solid var(--border);
-        border-radius: 4px;
-        background: var(--surface);
-        color: var(--text-dim);
-        font: inherit;
-        font-size: 10px;
-      }
-
+/* Web pane pins: shown only while a custom app is the active pane. */
+.tb-pin-group {
+  display: none;
+  align-items: center;
+  gap: 2px;
+  margin-left: 4px;
+  -webkit-app-region: no-drag;
+}
+.tb.is-custom .tb-pin-group {
+  display: flex;
+}
+.tb-btn.is-active {
+  color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.14);
+}
+.tb-pinbar {
+  display: none;
+  flex: 1 1 auto;
+  min-width: 120px;
+  align-items: center;
+  gap: 8px;
+  height: 28px;
+  padding: 0 4px 0 10px;
+  border: 1px solid rgba(var(--accent-rgb), 0.5);
+  border-radius: 6px;
+  background: rgba(var(--accent-rgb), 0.12);
+  color: var(--text);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  -webkit-app-region: no-drag;
+}
+.tb.is-pinning .tb-url {
+  display: none;
+}
+.tb.is-pinning .tb-pinbar {
+  display: flex;
+}
+.tb-pinbar-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--accent);
+}
+.tb-pinbar kbd {
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 10px;
+}
 ```
 
 - [ ] **Step 9: `shell/toolbar.html` markup**
@@ -2310,30 +2484,82 @@ Insert before the `/* Hidden state` comment (line 414):
 After the closing `</div>` of `.tb-url` (line 515) and before the collapse button, add:
 
 ```html
-      <div class="tb-pinbar" id="tb-pinbar" role="status">
-        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="12" cy="12" r="8" /><line x1="12" y1="2" x2="12" y2="6" /><line x1="12" y1="18" x2="12" y2="22" /><line x1="2" y1="12" x2="6" y2="12" /><line x1="18" y1="12" x2="22" y2="12" />
-        </svg>
-        <span>Click what you want to pin</span>
-        <span class="tb-pinbar-label" id="tb-pinbar-label"></span>
-        <kbd>Esc</kbd><span style="color: var(--text-dim)">to cancel</span>
-        <button class="tb-btn" id="tb-pinbar-cancel" title="Cancel pinning" aria-label="Cancel pinning">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18" /><line x1="18" y1="6" x2="6" y2="18" /></svg>
-        </button>
-      </div>
+<div class="tb-pinbar" id="tb-pinbar" role="status">
+  <svg
+    viewBox="0 0 24 24"
+    width="13"
+    height="13"
+    fill="none"
+    stroke="var(--accent)"
+    stroke-width="2.5"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  >
+    <circle cx="12" cy="12" r="8" />
+    <line x1="12" y1="2" x2="12" y2="6" />
+    <line x1="12" y1="18" x2="12" y2="22" />
+    <line x1="2" y1="12" x2="6" y2="12" />
+    <line x1="18" y1="12" x2="22" y2="12" />
+  </svg>
+  <span>Click what you want to pin</span>
+  <span class="tb-pinbar-label" id="tb-pinbar-label"></span>
+  <kbd>Esc</kbd><span style="color: var(--text-dim)">to cancel</span>
+  <button class="tb-btn" id="tb-pinbar-cancel" title="Cancel pinning" aria-label="Cancel pinning">
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2.5"
+      stroke-linecap="round"
+    >
+      <line x1="6" y1="6" x2="18" y2="18" />
+      <line x1="18" y1="6" x2="6" y2="18" />
+    </svg>
+  </button>
+</div>
 
-      <div class="tb-pin-group" id="tb-pin-group">
-        <button class="tb-btn" id="tb-pin" title="Pin an element to Gator" aria-label="Pin an element to Gator">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="12" r="8" /><line x1="12" y1="2" x2="12" y2="6" /><line x1="12" y1="18" x2="12" y2="22" /><line x1="2" y1="12" x2="6" y2="12" /><line x1="18" y1="12" x2="22" y2="12" />
-          </svg>
-        </button>
-        <button class="tb-btn" id="tb-pin-view" title="Pin this view to Gator" aria-label="Pin this view to Gator">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3" />
-          </svg>
-        </button>
-      </div>
+<div class="tb-pin-group" id="tb-pin-group">
+  <button
+    class="tb-btn"
+    id="tb-pin"
+    title="Pin an element to Gator"
+    aria-label="Pin an element to Gator"
+  >
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2.5"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    >
+      <circle cx="12" cy="12" r="8" />
+      <line x1="12" y1="2" x2="12" y2="6" />
+      <line x1="12" y1="18" x2="12" y2="22" />
+      <line x1="2" y1="12" x2="6" y2="12" />
+      <line x1="18" y1="12" x2="22" y2="12" />
+    </svg>
+  </button>
+  <button
+    class="tb-btn"
+    id="tb-pin-view"
+    title="Pin this view to Gator"
+    aria-label="Pin this view to Gator"
+  >
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2.5"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    >
+      <path
+        d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"
+      />
+    </svg>
+  </button>
+</div>
 ```
 
 - [ ] **Step 10: `shell/toolbar.html` script**
@@ -2341,25 +2567,26 @@ After the closing `</div>` of `.tb-url` (line 515) and before the collapse butto
 Next to the other click handlers (just before the `// ── Keyboard shortcuts` comment) add:
 
 ```javascript
-        // ── Web pane pins ─────────────────────────────────────────────────────
-        const elBar = document.getElementById('tb');
-        const elPin = document.getElementById('tb-pin');
-        const elPinLabel = document.getElementById('tb-pinbar-label');
-        elPin.addEventListener('click', () => ipcRenderer.send('toolbar:web-pin-start'));
-        document
-          .getElementById('tb-pin-view')
-          .addEventListener('click', () => ipcRenderer.send('toolbar:web-pin-view'));
-        document
-          .getElementById('tb-pinbar-cancel')
-          .addEventListener('click', () => ipcRenderer.send('toolbar:web-pin-cancel'));
-        function renderPin(state) {
-          if (typeof state.isCustomApp === 'boolean') elBar.classList.toggle('is-custom', state.isCustomApp);
-          if (typeof state.pinMode === 'boolean') {
-            elBar.classList.toggle('is-pinning', state.pinMode);
-            elPin.classList.toggle('is-active', state.pinMode);
-          }
-          if (typeof state.pinLabel === 'string') elPinLabel.textContent = state.pinLabel;
-        }
+// ── Web pane pins ─────────────────────────────────────────────────────
+const elBar = document.getElementById('tb');
+const elPin = document.getElementById('tb-pin');
+const elPinLabel = document.getElementById('tb-pinbar-label');
+elPin.addEventListener('click', () => ipcRenderer.send('toolbar:web-pin-start'));
+document
+  .getElementById('tb-pin-view')
+  .addEventListener('click', () => ipcRenderer.send('toolbar:web-pin-view'));
+document
+  .getElementById('tb-pinbar-cancel')
+  .addEventListener('click', () => ipcRenderer.send('toolbar:web-pin-cancel'));
+function renderPin(state) {
+  if (typeof state.isCustomApp === 'boolean')
+    elBar.classList.toggle('is-custom', state.isCustomApp);
+  if (typeof state.pinMode === 'boolean') {
+    elBar.classList.toggle('is-pinning', state.pinMode);
+    elPin.classList.toggle('is-active', state.pinMode);
+  }
+  if (typeof state.pinLabel === 'string') elPinLabel.textContent = state.pinLabel;
+}
 ```
 
 In the keydown handler, the chain currently ends with the `Escape` branch (`... closeMenu(); }`). Replace that final `}` (the one right after `closeMenu();`) with:
@@ -2373,7 +2600,7 @@ In the keydown handler, the chain currently ends with the `Escape` branch (`... 
 In the `toolbar:state` listener add as the first statement after `if (!state) return;`:
 
 ```javascript
-          renderPin(state);
+renderPin(state);
 ```
 
 - [ ] **Step 11: Run the wiring test and the earlier node tests**
@@ -2398,11 +2625,13 @@ git commit -m "feat(shell): pin controls, pick-mode banner and IPC for custom-ap
 ### Task 8: Renderer - pin on capture, chip, lift animation, suggestions, pin card
 
 **Files:**
+
 - Create: `web/static/web-pins.js`
 - Modify: `web/static/app.js` (`_pinSourceIcon` ~2603, `buildPinChipEl` ~2677, `_showPinPopover` ~5579-5608), `web/static/index.html` (~2043), `web/static/style.css` (after the `.pin-popover-empty` rule ~1318)
 - Test: `tests/web-pins-renderer.test.js`
 
 **Interfaces:**
+
 - Consumes (Task 7): `window.gatorShell.onWebPinCaptured(cb)` with payload `{appId, image_b64, text, locator, url, title, aria_label}`; `window.gatorShell.onWebPinEvent(cb)` with `{type:'error', appId, code}`. Consumes (Task 2): `POST /api/web-pins` -> `{id, label, captured_at, text_hash, total}`; `GET /api/web-pins/{id}` -> `{captured_at, meta, ...}`; `GET /api/web-pins/{id}/image`; (Task 4): `GET /api/web-pins/{id}/suggestions` -> `{suggestions: [{text, kind}]}`. Consumes existing app.js globals: `_activeTabId`, `_refreshPinOrb(force)`, `window.insertPinChipAtCaret(pin)`, `_showConnectivityToast(msg, type)`. The app.js fetch wrapper (app.js ~32) adds `X-CSRF-Token` to POSTs, so `web-pins.js` does not handle the token.
 - Produces: `window.WebPins = {STALE_MS, errorMessage(code), ageLabel(capturedAtSec, nowMs?), isStale(capturedAtSec, nowMs?), icon(px), onCaptured(payload), decorateCard(cardEl, pin), tickChips()}`. In Node (tests) the file exports the pure subset `{STALE_MS, errorMessage, ageLabel, isStale, icon}` via `module.exports`. Task 9 adds `recapture`, `onRecaptureRequest` and the card refresh button to this object.
 
@@ -2435,7 +2664,13 @@ test('isStale flips at 30 minutes', () => {
 });
 
 test('errorMessage covers every shell error code and has a fallback', () => {
-  for (const code of ['pane_unavailable', 'pane_not_visible', 'page_mismatch', 'timeout', 'empty_target']) {
+  for (const code of [
+    'pane_unavailable',
+    'pane_not_visible',
+    'page_mismatch',
+    'timeout',
+    'empty_target',
+  ]) {
     assert.ok(wp.errorMessage(code).length > 10, code);
   }
   assert.equal(wp.errorMessage('something_new'), wp.errorMessage('pane_unavailable'));
@@ -2468,7 +2703,12 @@ test('index.html loads web-pins.js after marketplace-pane.js; css has the new ru
   const b = html.indexOf('/static/web-pins.js');
   assert.ok(a > 0 && b > a);
   const css = read('web', 'static', 'style.css');
-  for (const sel of ['.pin-ref-chip.is-stale', '.wp-suggest-chip', '.wp-fly', '.pin-card-icon.has-thumb']) {
+  for (const sel of [
+    '.pin-ref-chip.is-stale',
+    '.wp-suggest-chip',
+    '.wp-fly',
+    '.pin-card-icon.has-thumb',
+  ]) {
     assert.ok(css.includes(sel), sel);
   }
 });
@@ -2743,7 +2983,7 @@ Expected: FAIL (`Cannot find module '../web/static/web-pins.js'`).
 1. In `_pinSourceIcon`, directly after the line `const file = source === 'email' ? 'outlook' : source === 'teams_transcript' ? 'teams' : source;` insert:
 
 ```js
-  if (source === 'webpin') return window.WebPins ? window.WebPins.icon(px) : '📌';
+if (source === 'webpin') return window.WebPins ? window.WebPins.icon(px) : '📌';
 ```
 
 2. In `buildPinChipEl`, change `if (iconHtml.startsWith('<img')) {` (the line right after `const iconHtml = _pinSourceIcon(pin.source, 14);`) to:
@@ -2790,7 +3030,7 @@ with
 After the line `<script src="/static/marketplace-pane.js"></script>` add:
 
 ```html
-    <script src="/static/web-pins.js"></script>
+<script src="/static/web-pins.js"></script>
 ```
 
 - [ ] **Step 6: Add styles to `web/static/style.css`**
@@ -2902,23 +3142,31 @@ git commit -m "feat(ui): pin chip, lift animation, starter questions and pin car
 ### Task 9: Recapture round trip (user refresh button and agent tool)
 
 **Files:**
+
 - Modify: `web/static/web-pins.js`, `web/static/app.js` (SSE handler ~17704), `web/static/style.css`, `shell/main.js`, `shell/preload.js`
 - Test: `tests/web-pins-renderer.test.js` (append), `tests/web-pin-wiring.test.js` (append)
 
 **Interfaces:**
+
 - Consumes (Task 3): SSE message `{type: "webpin-recapture", request_id, pin_id, context_id}`. (Task 2): `GET /api/web-pins/{id}`, `POST /api/web-pins/{id}/snapshot` (body `{request_id?, status, image_b64?, text?, match?}`). (Task 7): `gatorShell.webPinRecapture(appId, locator, url)` -> `{status: 'ok', image_b64, text, match, ...} | {status: code}`, `gatorShell.showCustomApp(appId)`.
 - Produces: `WebPins.createRecapturer({fetchFn, shell, sleep}) -> {recapture(pinId, {requestId?, user?}) -> Promise<{status, changed?, captured_at?, match?, appId?, url?}>}`; `WebPins.matchNote(match) -> string`; `WebPins.onRecaptureRequest(msg)`; `gatorShell.webPinGoTo(appId, url) -> Promise<boolean>`; IPC `web-pin:go-to`. A user refresh on a hidden pane shows the app and retries once; an agent-initiated request never switches panes and reports `pane_not_visible`.
 
 - [ ] **Step 1: Write the failing tests (append to `tests/web-pins-renderer.test.js`)**
 
 ```js
-const DETAIL = { meta: { app_id: 'custom-pbi', locator: { selector: '#a' }, url: 'https://x.test/y' } };
+const DETAIL = {
+  meta: { app_id: 'custom-pbi', locator: { selector: '#a' }, url: 'https://x.test/y' },
+};
 
-function fakeFetch({ detail = DETAIL, snapshot = { ok: true, changed: true, captured_at: 123, match: 'selector' } } = {}) {
+function fakeFetch({
+  detail = DETAIL,
+  snapshot = { ok: true, changed: true, captured_at: 123, match: 'selector' },
+} = {}) {
   const calls = [];
   const fn = async (url, opts = {}) => {
     calls.push({ url, opts });
-    if (url.endsWith('/snapshot')) return { ok: snapshot.ok, status: snapshot.ok ? 200 : 409, json: async () => snapshot };
+    if (url.endsWith('/snapshot'))
+      return { ok: snapshot.ok, status: snapshot.ok ? 200 : 409, json: async () => snapshot };
     return { ok: !!detail, status: detail ? 200 : 404, json: async () => detail };
   };
   fn.calls = calls;
@@ -2940,21 +3188,32 @@ function fakeShell(results) {
 }
 
 const OK = { status: 'ok', image_b64: 'AA', text: 't', match: 'selector' };
-const posts = (f) => f.calls.filter((c) => c.url.endsWith('/snapshot')).map((c) => JSON.parse(c.opts.body));
+const posts = (f) =>
+  f.calls.filter((c) => c.url.endsWith('/snapshot')).map((c) => JSON.parse(c.opts.body));
 
 test('recapture posts the snapshot with the request id and reports changed', async () => {
   const f = fakeFetch();
   const shell = fakeShell([OK]);
-  const r = await wp.createRecapturer({ fetchFn: f, shell, sleep: async () => {} }).recapture('p1', { requestId: 'r1' });
+  const r = await wp
+    .createRecapturer({ fetchFn: f, shell, sleep: async () => {} })
+    .recapture('p1', { requestId: 'r1' });
   assert.deepEqual(r, { status: 'ok', changed: true, captured_at: 123, match: 'selector' });
-  assert.deepEqual(posts(f)[0], { request_id: 'r1', status: 'ok', image_b64: 'AA', text: 't', match: 'selector' });
+  assert.deepEqual(posts(f)[0], {
+    request_id: 'r1',
+    status: 'ok',
+    image_b64: 'AA',
+    text: 't',
+    match: 'selector',
+  });
   assert.deepEqual(shell.recaptureCalls[0], ['custom-pbi', { selector: '#a' }, 'https://x.test/y']);
 });
 
 test('agent request on a hidden pane reports pane_not_visible and never switches panes', async () => {
   const f = fakeFetch();
   const shell = fakeShell([{ status: 'pane_not_visible' }]);
-  const r = await wp.createRecapturer({ fetchFn: f, shell, sleep: async () => {} }).recapture('p1', { requestId: 'r1' });
+  const r = await wp
+    .createRecapturer({ fetchFn: f, shell, sleep: async () => {} })
+    .recapture('p1', { requestId: 'r1' });
   assert.equal(r.status, 'pane_not_visible');
   assert.deepEqual(shell.shown, []);
   assert.deepEqual(posts(f), [{ request_id: 'r1', status: 'pane_not_visible' }]);
@@ -2963,7 +3222,9 @@ test('agent request on a hidden pane reports pane_not_visible and never switches
 test('user refresh on a hidden pane shows the app and retries once', async () => {
   const f = fakeFetch();
   const shell = fakeShell([{ status: 'pane_not_visible' }, OK]);
-  const r = await wp.createRecapturer({ fetchFn: f, shell, sleep: async () => {} }).recapture('p1', { user: true });
+  const r = await wp
+    .createRecapturer({ fetchFn: f, shell, sleep: async () => {} })
+    .recapture('p1', { user: true });
   assert.equal(r.status, 'ok');
   assert.deepEqual(shell.shown, ['custom-pbi']);
   assert.equal(shell.recaptureCalls.length, 2);
@@ -2973,7 +3234,9 @@ test('user refresh on a hidden pane shows the app and retries once', async () =>
 test('user refresh gives up after one retry and posts nothing without a request id', async () => {
   const f = fakeFetch();
   const shell = fakeShell([{ status: 'pane_not_visible' }, { status: 'pane_not_visible' }]);
-  const r = await wp.createRecapturer({ fetchFn: f, shell, sleep: async () => {} }).recapture('p1', { user: true });
+  const r = await wp
+    .createRecapturer({ fetchFn: f, shell, sleep: async () => {} })
+    .recapture('p1', { user: true });
   assert.equal(r.status, 'pane_not_visible');
   assert.equal(shell.recaptureCalls.length, 2);
   assert.deepEqual(posts(f), []);
@@ -2982,21 +3245,27 @@ test('user refresh gives up after one retry and posts nothing without a request 
 test('a missing pin never reaches the shell', async () => {
   const f = fakeFetch({ detail: null });
   const shell = fakeShell([]);
-  const r = await wp.createRecapturer({ fetchFn: f, shell, sleep: async () => {} }).recapture('gone', { requestId: 'r9' });
+  const r = await wp
+    .createRecapturer({ fetchFn: f, shell, sleep: async () => {} })
+    .recapture('gone', { requestId: 'r9' });
   assert.equal(r.status, 'pane_unavailable');
   assert.equal(shell.recaptureCalls.length, 0);
 });
 
 test('page_mismatch carries the app and url so the card can offer Go to the pin page', async () => {
   const shell = fakeShell([{ status: 'page_mismatch' }]);
-  const r = await wp.createRecapturer({ fetchFn: fakeFetch(), shell, sleep: async () => {} }).recapture('p1', { user: true });
+  const r = await wp
+    .createRecapturer({ fetchFn: fakeFetch(), shell, sleep: async () => {} })
+    .recapture('p1', { user: true });
   assert.deepEqual(r, { status: 'page_mismatch', appId: 'custom-pbi', url: 'https://x.test/y' });
 });
 
 test('a 409 on the snapshot post (request already answered) is not reported as success', async () => {
   const f = fakeFetch({ snapshot: { ok: false } });
   const shell = fakeShell([OK]);
-  const r = await wp.createRecapturer({ fetchFn: f, shell, sleep: async () => {} }).recapture('p1', { requestId: 'r1' });
+  const r = await wp
+    .createRecapturer({ fetchFn: f, shell, sleep: async () => {} })
+    .recapture('p1', { requestId: 'r1' });
   assert.equal(r.status, 'pane_unavailable');
 });
 
@@ -3007,7 +3276,10 @@ test('matchNote labels approximate and fallback matches only', () => {
 });
 
 test('app.js routes webpin-recapture to the renderer and the renderer checks tab ownership', () => {
-  assert.match(read('web', 'static', 'app.js'), /msg\.type === 'webpin-recapture'[\s\S]{0,200}onRecaptureRequest\(msg\)/);
+  assert.match(
+    read('web', 'static', 'app.js'),
+    /msg\.type === 'webpin-recapture'[\s\S]{0,200}onRecaptureRequest\(msg\)/,
+  );
   assert.match(read('web', 'static', 'web-pins.js'), /_tabs\.some\(/);
 });
 ```
@@ -3022,76 +3294,81 @@ Expected: the new tests FAIL (`wp.createRecapturer is not a function`).
 Insert directly above the line `const api = { STALE_MS, errorMessage, ageLabel, isStale, icon };`:
 
 ```js
-  function matchNote(match) {
-    if (match === 'rect') return 'Refreshed. The element moved, so this capture is approximate.';
-    if (match === 'view-fallback') return 'Could not find the pinned element, so Gator captured the whole view.';
-    return '';
-  }
+function matchNote(match) {
+  if (match === 'rect') return 'Refreshed. The element moved, so this capture is approximate.';
+  if (match === 'view-fallback')
+    return 'Could not find the pinned element, so Gator captured the whole view.';
+  return '';
+}
 
-  function createRecapturer({ fetchFn, shell, sleep }) {
-    const base = (pinId) => `/api/web-pins/${encodeURIComponent(pinId)}`;
+function createRecapturer({ fetchFn, shell, sleep }) {
+  const base = (pinId) => `/api/web-pins/${encodeURIComponent(pinId)}`;
 
-    async function post(pinId, body) {
-      try {
-        const r = await fetchFn(`${base(pinId)}/snapshot`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        });
-        return { ok: r.ok, json: r.ok ? await r.json() : null };
-      } catch {
-        return { ok: false, json: null };
-      }
-    }
-
-    async function recapture(pinId, opts) {
-      const requestId = opts && opts.requestId;
-      const user = !!(opts && opts.user);
-      let detail = null;
-      try {
-        const r = await fetchFn(base(pinId));
-        detail = r.ok ? await r.json() : null;
-      } catch {
-        detail = null;
-      }
-      const meta = (detail && detail.meta) || {};
-      const fail = async (code) => {
-        if (requestId) await post(pinId, { request_id: requestId, status: code });
-        const out = { status: code };
-        if (meta.app_id) out.appId = meta.app_id;
-        if (meta.url) out.url = meta.url;
-        return out;
-      };
-      if (!meta.app_id || !shell || !shell.webPinRecapture) return { status: 'pane_unavailable' };
-      const locator = meta.locator || null;
-      const url = meta.url || '';
-      let res = await shell.webPinRecapture(meta.app_id, locator, url);
-      if (user && res.status === 'pane_not_visible' && shell.showCustomApp) {
-        await shell.showCustomApp(meta.app_id);
-        await sleep(700);
-        res = await shell.webPinRecapture(meta.app_id, locator, url);
-      }
-      if (res.status !== 'ok') return fail(res.status);
-      const out = await post(pinId, {
-        request_id: requestId,
-        status: 'ok',
-        image_b64: res.image_b64,
-        text: res.text,
-        match: res.match,
+  async function post(pinId, body) {
+    try {
+      const r = await fetchFn(`${base(pinId)}/snapshot`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
       });
-      if (!out.ok) return { status: 'pane_unavailable' };
-      return { status: 'ok', changed: out.json.changed, captured_at: out.json.captured_at, match: out.json.match };
+      return { ok: r.ok, json: r.ok ? await r.json() : null };
+    } catch {
+      return { ok: false, json: null };
     }
-
-    return { recapture };
   }
 
+  async function recapture(pinId, opts) {
+    const requestId = opts && opts.requestId;
+    const user = !!(opts && opts.user);
+    let detail = null;
+    try {
+      const r = await fetchFn(base(pinId));
+      detail = r.ok ? await r.json() : null;
+    } catch {
+      detail = null;
+    }
+    const meta = (detail && detail.meta) || {};
+    const fail = async (code) => {
+      if (requestId) await post(pinId, { request_id: requestId, status: code });
+      const out = { status: code };
+      if (meta.app_id) out.appId = meta.app_id;
+      if (meta.url) out.url = meta.url;
+      return out;
+    };
+    if (!meta.app_id || !shell || !shell.webPinRecapture) return { status: 'pane_unavailable' };
+    const locator = meta.locator || null;
+    const url = meta.url || '';
+    let res = await shell.webPinRecapture(meta.app_id, locator, url);
+    if (user && res.status === 'pane_not_visible' && shell.showCustomApp) {
+      await shell.showCustomApp(meta.app_id);
+      await sleep(700);
+      res = await shell.webPinRecapture(meta.app_id, locator, url);
+    }
+    if (res.status !== 'ok') return fail(res.status);
+    const out = await post(pinId, {
+      request_id: requestId,
+      status: 'ok',
+      image_b64: res.image_b64,
+      text: res.text,
+      match: res.match,
+    });
+    if (!out.ok) return { status: 'pane_unavailable' };
+    return {
+      status: 'ok',
+      changed: out.json.changed,
+      captured_at: out.json.captured_at,
+      match: out.json.match,
+    };
+  }
+
+  return { recapture };
+}
 ```
 
 Then replace `const api = { STALE_MS, errorMessage, ageLabel, isStale, icon };` with:
 
 ```js
-  const api = { STALE_MS, errorMessage, ageLabel, isStale, icon, matchNote, createRecapturer };
+const api = { STALE_MS, errorMessage, ageLabel, isStale, icon, matchNote, createRecapturer };
 ```
 
 - [ ] **Step 4: Run the tests**
@@ -3104,129 +3381,135 @@ Expected: the recapturer and `matchNote` tests PASS; the `app.js routes webpin-r
 1. Replace `toast` with a typed version:
 
 ```js
-  function toast(message, type) {
-    if (typeof _showConnectivityToast === 'function') _showConnectivityToast(message, type || 'warning');
-  }
+function toast(message, type) {
+  if (typeof _showConnectivityToast === 'function')
+    _showConnectivityToast(message, type || 'warning');
+}
 ```
 
 2. Add below the `captured` Map declaration:
 
 ```js
-  const changedPins = new Set();
-  const recapturer = createRecapturer({
-    fetchFn: (...args) => root.fetch(...args),
-    shell: root.gatorShell,
-    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+const changedPins = new Set();
+const recapturer = createRecapturer({
+  fetchFn: (...args) => root.fetch(...args),
+  shell: root.gatorShell,
+  sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+});
+
+function ownsContext(contextId) {
+  return (
+    typeof _tabs !== 'undefined' && Array.isArray(_tabs) && _tabs.some((t) => t.id === contextId)
+  );
+}
+
+function afterRefresh(pinId, r) {
+  captured.set(pinId, r.captured_at);
+  if (r.changed) changedPins.add(pinId);
+  tickChips();
+  if (typeof _refreshPinOrb === 'function') _refreshPinOrb(true);
+}
+
+function onRecaptureRequest(msg) {
+  if (!msg || !msg.request_id || !msg.pin_id || !ownsContext(msg.context_id)) return;
+  recapturer.recapture(msg.pin_id, { requestId: msg.request_id, user: false }).then((r) => {
+    if (r.status === 'ok') afterRefresh(msg.pin_id, r);
   });
+}
 
-  function ownsContext(contextId) {
-    return typeof _tabs !== 'undefined' && Array.isArray(_tabs) && _tabs.some((t) => t.id === contextId);
-  }
-
-  function afterRefresh(pinId, r) {
-    captured.set(pinId, r.captured_at);
-    if (r.changed) changedPins.add(pinId);
-    tickChips();
-    if (typeof _refreshPinOrb === 'function') _refreshPinOrb(true);
-  }
-
-  function onRecaptureRequest(msg) {
-    if (!msg || !msg.request_id || !msg.pin_id || !ownsContext(msg.context_id)) return;
-    recapturer.recapture(msg.pin_id, { requestId: msg.request_id, user: false }).then((r) => {
-      if (r.status === 'ok') afterRefresh(msg.pin_id, r);
-    });
-  }
-
-  function offerGoTo(metaEl, appId, url) {
-    if (!metaEl) return;
-    metaEl.textContent = 'Different page · ';
-    const link = document.createElement('button');
-    link.type = 'button';
-    link.className = 'wp-goto';
-    link.textContent = "Go to pin's page";
-    link.addEventListener('click', async () => {
-      link.disabled = true;
-      const shell = root.gatorShell;
-      const ok = shell && shell.webPinGoTo ? await shell.webPinGoTo(appId, url) : false;
-      toast(ok ? 'Back on the pinned page. Refresh again.' : "Couldn't open that page.", ok ? 'info' : 'warning');
-    });
-    metaEl.appendChild(link);
-  }
+function offerGoTo(metaEl, appId, url) {
+  if (!metaEl) return;
+  metaEl.textContent = 'Different page · ';
+  const link = document.createElement('button');
+  link.type = 'button';
+  link.className = 'wp-goto';
+  link.textContent = "Go to pin's page";
+  link.addEventListener('click', async () => {
+    link.disabled = true;
+    const shell = root.gatorShell;
+    const ok = shell && shell.webPinGoTo ? await shell.webPinGoTo(appId, url) : false;
+    toast(
+      ok ? 'Back on the pinned page. Refresh again.' : "Couldn't open that page.",
+      ok ? 'info' : 'warning',
+    );
+  });
+  metaEl.appendChild(link);
+}
 ```
 
 3. Replace the whole `decorateCard` function with:
 
 ```js
-  function decorateCard(card, pin) {
-    const iconEl = card.querySelector('.pin-card-icon');
-    let thumb = null;
-    if (iconEl) {
-      thumb = document.createElement('img');
-      thumb.className = 'wp-thumb';
-      thumb.alt = '';
-      thumb.src = `/api/web-pins/${encodeURIComponent(pin.id)}/image?t=${Date.now()}`;
-      thumb.addEventListener('error', () => thumb.remove());
-      iconEl.classList.add('has-thumb');
-      iconEl.appendChild(thumb);
-    }
-    const open = card.querySelector('.pin-card-open');
-    if (open) open.style.display = 'none';
-    const metaEl = card.querySelector('.pin-card-meta');
-    const appName = (pin.meta && pin.meta.app_name) || 'Web view';
-    const paintMeta = (at) => {
-      if (!metaEl) return;
-      metaEl.textContent = `${appName} · ${ageLabel(at)}`;
-      metaEl.classList.toggle('is-stale', isStale(at));
-    };
-    if (changedPins.has(pin.id)) card.classList.add('has-change');
-    const ask = card.querySelector('.pin-card-ask');
-    if (ask) {
-      ask.addEventListener('click', () => {
-        changedPins.delete(pin.id);
-        card.classList.remove('has-change');
-      });
-    }
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'pin-card-btn pin-card-refresh';
-    btn.title = 'Refresh this pin';
-    btn.textContent = '↻';
-    if (ask && ask.parentElement) ask.parentElement.insertBefore(btn, ask);
-    btn.addEventListener('click', async () => {
-      btn.disabled = true;
-      btn.classList.add('is-spinning');
-      const r = await recapturer.recapture(pin.id, { user: true });
-      btn.disabled = false;
-      btn.classList.remove('is-spinning');
-      if (r.status === 'ok') {
-        afterRefresh(pin.id, r);
-        paintMeta(r.captured_at);
-        card.classList.toggle('has-change', !!r.changed);
-        if (thumb) thumb.src = `/api/web-pins/${encodeURIComponent(pin.id)}/image?t=${Date.now()}`;
-        const note = matchNote(r.match);
-        if (note) toast(note, 'info');
-        else if (!r.changed) toast('No change since the last capture.', 'info');
-      } else if (r.status === 'page_mismatch' && r.url) {
-        offerGoTo(metaEl, r.appId, r.url);
-      } else {
-        toast(errorMessage(r.status));
-      }
-    });
-    fetch(`/api/web-pins/${encodeURIComponent(pin.id)}`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((j) => {
-        if (!j) return;
-        captured.set(pin.id, j.captured_at);
-        paintMeta(j.captured_at);
-      })
-      .catch(() => {});
+function decorateCard(card, pin) {
+  const iconEl = card.querySelector('.pin-card-icon');
+  let thumb = null;
+  if (iconEl) {
+    thumb = document.createElement('img');
+    thumb.className = 'wp-thumb';
+    thumb.alt = '';
+    thumb.src = `/api/web-pins/${encodeURIComponent(pin.id)}/image?t=${Date.now()}`;
+    thumb.addEventListener('error', () => thumb.remove());
+    iconEl.classList.add('has-thumb');
+    iconEl.appendChild(thumb);
   }
+  const open = card.querySelector('.pin-card-open');
+  if (open) open.style.display = 'none';
+  const metaEl = card.querySelector('.pin-card-meta');
+  const appName = (pin.meta && pin.meta.app_name) || 'Web view';
+  const paintMeta = (at) => {
+    if (!metaEl) return;
+    metaEl.textContent = `${appName} · ${ageLabel(at)}`;
+    metaEl.classList.toggle('is-stale', isStale(at));
+  };
+  if (changedPins.has(pin.id)) card.classList.add('has-change');
+  const ask = card.querySelector('.pin-card-ask');
+  if (ask) {
+    ask.addEventListener('click', () => {
+      changedPins.delete(pin.id);
+      card.classList.remove('has-change');
+    });
+  }
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'pin-card-btn pin-card-refresh';
+  btn.title = 'Refresh this pin';
+  btn.textContent = '↻';
+  if (ask && ask.parentElement) ask.parentElement.insertBefore(btn, ask);
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    btn.classList.add('is-spinning');
+    const r = await recapturer.recapture(pin.id, { user: true });
+    btn.disabled = false;
+    btn.classList.remove('is-spinning');
+    if (r.status === 'ok') {
+      afterRefresh(pin.id, r);
+      paintMeta(r.captured_at);
+      card.classList.toggle('has-change', !!r.changed);
+      if (thumb) thumb.src = `/api/web-pins/${encodeURIComponent(pin.id)}/image?t=${Date.now()}`;
+      const note = matchNote(r.match);
+      if (note) toast(note, 'info');
+      else if (!r.changed) toast('No change since the last capture.', 'info');
+    } else if (r.status === 'page_mismatch' && r.url) {
+      offerGoTo(metaEl, r.appId, r.url);
+    } else {
+      toast(errorMessage(r.status));
+    }
+  });
+  fetch(`/api/web-pins/${encodeURIComponent(pin.id)}`)
+    .then((r) => (r.ok ? r.json() : null))
+    .then((j) => {
+      if (!j) return;
+      captured.set(pin.id, j.captured_at);
+      paintMeta(j.captured_at);
+    })
+    .catch(() => {});
+}
 ```
 
 4. Replace `root.WebPins = Object.assign(api, { onCaptured, decorateCard, tickChips });` with:
 
 ```js
-  root.WebPins = Object.assign(api, { onCaptured, decorateCard, tickChips, onRecaptureRequest });
+root.WebPins = Object.assign(api, { onCaptured, decorateCard, tickChips, onRecaptureRequest });
 ```
 
 - [ ] **Step 6: SSE branch in `web/static/app.js`**
@@ -3234,10 +3517,10 @@ Expected: the recapturer and `matchNote` tests PASS; the `app.js routes webpin-r
 In `_initNotificationStream`, directly above the line `if (msg.type === 'draft_signal' && msg.draft) {` insert:
 
 ```js
-      if (msg.type === 'webpin-recapture') {
-        if (window.WebPins && window.WebPins.onRecaptureRequest) window.WebPins.onRecaptureRequest(msg);
-        return;
-      }
+if (msg.type === 'webpin-recapture') {
+  if (window.WebPins && window.WebPins.onRecaptureRequest) window.WebPins.onRecaptureRequest(msg);
+  return;
+}
 ```
 
 - [ ] **Step 7: Styles (append after the Task 8 `@media (prefers-reduced-motion...)` block in `style.css`)**
@@ -3354,10 +3637,12 @@ git commit -m "feat: refresh web pins from the pin card and from the agent"
 This is the moat moment: the user pins a view from one app, pins another (or an email, a Jira issue), and asks Gator to reconcile them. The per-pin prompt lines already let the agent read each pin; this task adds one guidance line so the answer lines figures up by meaning, names both sources and capture times, and flags unit or period differences instead of silently blending numbers.
 
 **Files:**
+
 - Modify: `web/skills/webpin/prompt.py` (append), `web/routes/chat.py` (insert before the `# Legacy: keep OneNote state in sync` comment, ~1845)
 - Test: `tests/test_webpin_compare.py`
 
 **Interfaces:**
+
 - Consumes (Task 3): `store.sanitize_label`. Consumes the pin dicts from `state.get_pins`: `{"source", "id", "label", "meta"}`.
 - Produces: `prompt.web_pin_compare_line(pins: list[dict]) -> str`. Returns `""` unless the pins hold web pins from 2+ distinct `meta["app_id"]` values, or at least one web pin alongside at least one pin from another source.
 
@@ -3479,6 +3764,7 @@ git commit -m "feat(web-pins): guidance for comparing pins across apps"
 No new product code. This task proves the unproven items from the spec on a real tenant and closes the loop with design and merge owners. Do not push or open a PR until the user asks.
 
 **Files:**
+
 - None created. Fixes found here go back into the owning task's files as small commits.
 
 - [ ] **Step 1: Full automated pass**
@@ -3488,6 +3774,7 @@ python -m pytest tests -q
 cd shell && node --test ../tests/web-pin-core.test.js ../tests/web-pin.test.js ../tests/web-pin-wiring.test.js ../tests/web-pins-renderer.test.js
 cd .. && python -m pytest tests/test_csrf_route_inventory.py -q
 ```
+
 Expected: all PASS. The CSRF inventory test must pass without touching `tests/csrf_route_baseline.txt`.
 
 - [ ] **Step 2: Hygiene scan**
@@ -3497,6 +3784,7 @@ git diff main...HEAD --name-only
 git diff main...HEAD | grep -n -i -E "co-authored-by|generated with|\bpoc\b" || echo "clean"
 git diff main...HEAD | grep -n -E "api[_-]?key|token|password|secret" | grep -v "aigator-fake-api-key" | grep -v -i "csrf" || echo "no stray credentials"
 ```
+
 Expected: only files named in this plan; `clean`; no stray credentials. Fix anything else before moving on.
 
 - [ ] **Step 3: Live verification on the Power BI pane (record each result in the PR note)**
@@ -3535,4 +3823,3 @@ Send the overlap list to MergeBrain and ask for the merge order. If a rebase ont
 - [ ] **Step 6: Prepare the PR note (do not open the PR)**
 
 Draft the description for the user: what it does, the 11 verification results, the known limits (snapshots not live, text capture depends on the page, `rect` matches are approximate, hover label is best-effort), and the merge order from MergeBrain. Title: `feat: pin pages and elements from custom apps and talk to Gator about them`. If it stacks on another PR, use the title suffix ` - Stacked on PR###` and the body heading `## Stacked on #N`. Do not add attribution lines. Wait for the user to ask before pushing.
-

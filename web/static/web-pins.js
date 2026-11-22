@@ -35,13 +35,20 @@
 
   function matchNote(match) {
     if (match === 'rect') return 'Refreshed. The element moved, so this capture is approximate.';
-    if (match === 'view-fallback') return 'Could not find the pinned element, so Gator captured the whole view.';
+    if (match === 'view-fallback')
+      return 'Could not find the pinned element, so Gator captured the whole view.';
     return '';
   }
 
   // The five codes the shell emits; the snapshot route accepts all of them. Anything outside
   // this set is posted as pane_unavailable so the waiting agent tool is still released.
-  const POSTABLE_FAILURES = new Set(['pane_not_visible', 'page_mismatch', 'pane_unavailable', 'timeout', 'empty_target']);
+  const POSTABLE_FAILURES = new Set([
+    'pane_not_visible',
+    'page_mismatch',
+    'pane_unavailable',
+    'timeout',
+    'empty_target',
+  ]);
 
   function createRecapturer({ fetchFn, shell, sleep }) {
     const base = (pinId) => `/api/web-pins/${encodeURIComponent(pinId)}`;
@@ -79,7 +86,10 @@
       const meta = (detail && detail.meta) || {};
       const fail = async (code) => {
         if (requestId) {
-          await post(pinId, { request_id: requestId, status: POSTABLE_FAILURES.has(code) ? code : 'pane_unavailable' });
+          await post(pinId, {
+            request_id: requestId,
+            status: POSTABLE_FAILURES.has(code) ? code : 'pane_unavailable',
+          });
         }
         const out = { status: code };
         if (meta.app_id) out.appId = meta.app_id;
@@ -92,7 +102,9 @@
       const capture = async () => {
         try {
           const res = await shell.webPinRecapture(meta.app_id, locator, url);
-          return res && typeof res === 'object' && res.status ? res : { status: 'pane_unavailable' };
+          return res && typeof res === 'object' && res.status
+            ? res
+            : { status: 'pane_unavailable' };
         } catch {
           return { status: 'pane_unavailable' };
         }
@@ -125,7 +137,12 @@
         return { status: 'pane_unavailable' };
       }
       if (typeof out.json.captured_at !== 'number') return { status: 'pane_unavailable' };
-      return { status: 'ok', changed: out.json.changed, captured_at: out.json.captured_at, match: out.json.match };
+      return {
+        status: 'ok',
+        changed: out.json.changed,
+        captured_at: out.json.captured_at,
+        match: out.json.match,
+      };
     }
 
     return { recapture };
@@ -144,7 +161,9 @@
   });
 
   function ownsContext(contextId) {
-    return typeof _tabs !== 'undefined' && Array.isArray(_tabs) && _tabs.some((t) => t.id === contextId);
+    return (
+      typeof _tabs !== 'undefined' && Array.isArray(_tabs) && _tabs.some((t) => t.id === contextId)
+    );
   }
 
   function afterRefresh(pinId, r) {
@@ -185,7 +204,10 @@
         ok = false;
       }
       if (!ok) link.disabled = false;
-      toast(ok ? 'Back on the pinned page. Refresh again.' : "Couldn't open that page.", ok ? 'info' : 'warning');
+      toast(
+        ok ? 'Back on the pinned page. Refresh again.' : "Couldn't open that page.",
+        ok ? 'info' : 'warning',
+      );
     });
     metaEl.appendChild(link);
   }
@@ -195,12 +217,14 @@
   }
 
   function tabTitle(id) {
-    const tab = typeof _tabs !== 'undefined' && Array.isArray(_tabs) ? _tabs.find((t) => t.id === id) : null;
+    const tab =
+      typeof _tabs !== 'undefined' && Array.isArray(_tabs) ? _tabs.find((t) => t.id === id) : null;
     return tab && tab.title ? tab.title : 'another tab';
   }
 
   function toast(message, type) {
-    if (typeof _showConnectivityToast === 'function') _showConnectivityToast(message, type || 'warning');
+    if (typeof _showConnectivityToast === 'function')
+      _showConnectivityToast(message, type || 'warning');
   }
 
   function fly(imageB64) {

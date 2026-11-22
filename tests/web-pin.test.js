@@ -5,8 +5,18 @@ const { EventEmitter } = require('node:events');
 const { createWebPin } = require('../shell/web-pin');
 
 const INFO = JSON.stringify({
-  tag: 'DIV', ariaLabel: 'Revenue', role: '', name: 'Revenue', heading: '', text: '4.2M',
-  locator: { selector: '#kpi', role: '', name: 'Revenue', rect: { x: 10, y: 120, width: 100, height: 60 } },
+  tag: 'DIV',
+  ariaLabel: 'Revenue',
+  role: '',
+  name: 'Revenue',
+  heading: '',
+  text: '4.2M',
+  locator: {
+    selector: '#kpi',
+    role: '',
+    name: 'Revenue',
+    rect: { x: 10, y: 120, width: 100, height: 60 },
+  },
 });
 const PAGE = JSON.stringify({ text: 'whole page', title: 'Dash', url: 'https://a.com/r/1' });
 
@@ -20,15 +30,21 @@ function fakeWc({ url = 'https://a.com/r/1', overrides = {}, attached: preAttach
     'DOM.resolveNode': { object: { objectId: 'o1' } },
     'Runtime.callFunctionOn': { result: { value: INFO } },
     'DOM.getBoxModel': { model: { border: [10, 20, 110, 20, 110, 80, 10, 80] } },
-    'Page.getLayoutMetrics': { cssVisualViewport: { pageX: 0, pageY: 100, clientWidth: 800, clientHeight: 600 } },
+    'Page.getLayoutMetrics': {
+      cssVisualViewport: { pageX: 0, pageY: 100, clientWidth: 800, clientHeight: 600 },
+    },
     'Page.captureScreenshot': { data: 'UE5H' },
     'Runtime.evaluate': { result: { value: PAGE } },
     ...overrides,
   };
   const dbg = new EventEmitter();
   dbg.isAttached = () => attached;
-  dbg.attach = () => { attached = true; };
-  dbg.detach = () => { attached = false; };
+  dbg.attach = () => {
+    attached = true;
+  };
+  dbg.detach = () => {
+    attached = false;
+  };
   dbg.sendCommand = async (method, p) => {
     sent.push(method);
     params[method] = p;
@@ -40,9 +56,22 @@ function fakeWc({ url = 'https://a.com/r/1', overrides = {}, attached: preAttach
   const css = { inserted: [], removed: [] };
   return Object.assign(wc, {
     css,
-    insertCSS: async (text, opts) => { css.inserted.push({ text, opts }); return 'css-1'; },
-    removeInsertedCSS: async (key) => { css.removed.push(key); },
-    debugger: dbg, sent, inspectCalls, params, getURL: () => currentUrl, setUrl: (u) => { currentUrl = u; }, isDestroyed: () => false,
+    insertCSS: async (text, opts) => {
+      css.inserted.push({ text, opts });
+      return 'css-1';
+    },
+    removeInsertedCSS: async (key) => {
+      css.removed.push(key);
+    },
+    debugger: dbg,
+    sent,
+    inspectCalls,
+    params,
+    getURL: () => currentUrl,
+    setUrl: (u) => {
+      currentUrl = u;
+    },
+    isDestroyed: () => false,
   });
 }
 
@@ -52,7 +81,9 @@ function inspectModes(wc) {
 
 function deferred() {
   let resolve;
-  const promise = new Promise((r) => { resolve = r; });
+  const promise = new Promise((r) => {
+    resolve = r;
+  });
   return { promise, resolve };
 }
 
@@ -94,13 +125,25 @@ test('pick flow captures the clicked element after hiding the highlight', async 
   assert.strictEqual(c.title, 'Dash');
   assert.ok(wc.sent.indexOf('Overlay.hideHighlight') < wc.sent.indexOf('Page.captureScreenshot'));
   assert.deepStrictEqual(inspectModes(wc), ['searchForNode', 'none', 'none']);
-  assert.deepStrictEqual(wc.params['Page.captureScreenshot'].clip, { x: 10, y: 120, width: 100, height: 60, scale: 2 });
+  assert.deepStrictEqual(wc.params['Page.captureScreenshot'].clip, {
+    x: 10,
+    y: 120,
+    width: 100,
+    height: 60,
+    scale: 2,
+  });
   await waitFor(() => !wc.debugger.isAttached());
   assert.strictEqual(events.states.at(-1).picking, false);
 });
 
 test('hover events update the banner label', async () => {
-  const wc = fakeWc({ overrides: { 'Runtime.callFunctionOn': { result: { value: JSON.stringify({ ariaLabel: 'Sales by region' }) } } } });
+  const wc = fakeWc({
+    overrides: {
+      'Runtime.callFunctionOn': {
+        result: { value: JSON.stringify({ ariaLabel: 'Sales by region' }) },
+      },
+    },
+  });
   const { wp, events } = harness(wc);
   await wp.start('custom-x');
   wc.debugger.emit('message', {}, 'Overlay.nodeHighlightRequested', { nodeId: 3 });
@@ -112,7 +155,15 @@ test('Escape cancels pick mode and detaches', async () => {
   const { wp, events } = harness(wc);
   await wp.start('custom-x');
   let prevented = false;
-  wc.emit('before-input-event', { preventDefault() { prevented = true; } }, { type: 'keyDown', key: 'Escape' });
+  wc.emit(
+    'before-input-event',
+    {
+      preventDefault() {
+        prevented = true;
+      },
+    },
+    { type: 'keyDown', key: 'Escape' },
+  );
   await waitFor(() => !wc.debugger.isAttached());
   assert.ok(prevented);
   assert.strictEqual(events.captured.length, 0);
@@ -124,7 +175,10 @@ test('Escape cancels pick mode and detaches', async () => {
 
 test('start refuses a hidden or unknown pane', async () => {
   const hidden = harness(fakeWc(), { visible: false });
-  assert.deepStrictEqual(await hidden.wp.start('custom-x'), { ok: false, status: 'pane_not_visible' });
+  assert.deepStrictEqual(await hidden.wp.start('custom-x'), {
+    ok: false,
+    status: 'pane_not_visible',
+  });
   assert.deepStrictEqual(hidden.events.errors, [{ appId: 'custom-x', code: 'pane_not_visible' }]);
   const unknown = harness(fakeWc());
   assert.deepStrictEqual(await unknown.wp.start('nope'), { ok: false, status: 'pane_unavailable' });
@@ -138,15 +192,25 @@ test('pinView captures the visible viewport with no locator', async () => {
   const c = events.captured[0];
   assert.strictEqual(c.locator, null);
   assert.strictEqual(c.text, 'whole page');
-  assert.deepStrictEqual(wc.params['Page.captureScreenshot'].clip, { x: 0, y: 100, width: 800, height: 600, scale: 2 });
+  assert.deepStrictEqual(wc.params['Page.captureScreenshot'].clip, {
+    x: 0,
+    y: 100,
+    width: 800,
+    height: 600,
+    scale: 2,
+  });
   assert.strictEqual(wc.debugger.isAttached(), false);
 });
 
 test('recapture refuses hidden panes and moved pages', async () => {
   const hidden = harness(fakeWc(), { visible: false });
-  assert.deepStrictEqual(await hidden.wp.recapture('custom-x', null, 'https://a.com/r/1'), { status: 'pane_not_visible' });
+  assert.deepStrictEqual(await hidden.wp.recapture('custom-x', null, 'https://a.com/r/1'), {
+    status: 'pane_not_visible',
+  });
   const moved = harness(fakeWc({ url: 'https://a.com/r/2' }));
-  assert.deepStrictEqual(await moved.wp.recapture('custom-x', null, 'https://a.com/r/1'), { status: 'page_mismatch' });
+  assert.deepStrictEqual(await moved.wp.recapture('custom-x', null, 'https://a.com/r/1'), {
+    status: 'page_mismatch',
+  });
 });
 
 test('recapture re-finds the element by selector', async () => {
@@ -175,10 +239,14 @@ test('recapture falls back to the whole view when the element is gone', async ()
   const wc = fakeWc({
     overrides: {
       'Runtime.evaluate': (p) =>
-        /scrollX/.test(p.expression) ? { result: { value: { x: 0, y: 0 } } } : { result: { subtype: 'null', value: PAGE } },
+        /scrollX/.test(p.expression)
+          ? { result: { value: { x: 0, y: 0 } } }
+          : { result: { subtype: 'null', value: PAGE } },
       'DOM.getDocument': { root: { nodeId: 1 } },
       'Accessibility.queryAXTree': { nodes: [] },
-      'DOM.getNodeForLocation': () => { throw new Error('no node'); },
+      'DOM.getNodeForLocation': () => {
+        throw new Error('no node');
+      },
     },
   });
   const { wp } = harness(wc);
@@ -190,13 +258,19 @@ test('recapture falls back to the whole view when the element is gone', async ()
 test('a hung CDP call times out and detaches', async () => {
   const wc = fakeWc({ overrides: { 'Page.getLayoutMetrics': () => new Promise(() => {}) } });
   const { wp } = harness(wc);
-  assert.deepStrictEqual(await wp.recapture('custom-x', null, 'https://a.com/r/1'), { status: 'timeout' });
+  assert.deepStrictEqual(await wp.recapture('custom-x', null, 'https://a.com/r/1'), {
+    status: 'timeout',
+  });
   assert.strictEqual(wc.debugger.isAttached(), false);
 });
 
 test('a zero-size view fails with empty_target instead of calling captureScreenshot', async () => {
   const wc = fakeWc({
-    overrides: { 'Page.getLayoutMetrics': { cssVisualViewport: { pageX: 0, pageY: 0, clientWidth: 0, clientHeight: 0 } } },
+    overrides: {
+      'Page.getLayoutMetrics': {
+        cssVisualViewport: { pageX: 0, pageY: 0, clientWidth: 0, clientHeight: 0 },
+      },
+    },
   });
   const { wp, events } = harness(wc);
   await wp.pinView('custom-x');
@@ -206,7 +280,9 @@ test('a zero-size view fails with empty_target instead of calling captureScreens
 });
 
 test('a zero-size element fails with empty_target and leaves inspect mode', async () => {
-  const wc = fakeWc({ overrides: { 'DOM.getBoxModel': { model: { border: [10, 20, 10, 20, 10, 20, 10, 20] } } } });
+  const wc = fakeWc({
+    overrides: { 'DOM.getBoxModel': { model: { border: [10, 20, 10, 20, 10, 20, 10, 20] } } },
+  });
   const { wp, events } = harness(wc);
   await wp.start('custom-x');
   wc.debugger.emit('message', {}, 'Overlay.inspectNodeRequested', { backendNodeId: 5 });
@@ -220,7 +296,13 @@ test('a zero-size element fails with empty_target and leaves inspect mode', asyn
 });
 
 test('a failing element capture reports an error, leaves inspect mode and detaches', async () => {
-  const wc = fakeWc({ overrides: { 'DOM.getBoxModel': () => { throw new Error('boom'); } } });
+  const wc = fakeWc({
+    overrides: {
+      'DOM.getBoxModel': () => {
+        throw new Error('boom');
+      },
+    },
+  });
   const { wp, events } = harness(wc);
   await wp.start('custom-x');
   wc.debugger.emit('message', {}, 'Overlay.inspectNodeRequested', { backendNodeId: 5 });
@@ -324,16 +406,27 @@ test('recapture without a url is a page_mismatch and captures nothing', async ()
 test('recapture fails with page_mismatch when the page navigates mid-capture', async () => {
   let wcRef;
   const wc = fakeWc({
-    overrides: { 'Page.captureScreenshot': () => { wcRef.setUrl('https://a.com/r/2'); return { data: 'UE5H' }; } },
+    overrides: {
+      'Page.captureScreenshot': () => {
+        wcRef.setUrl('https://a.com/r/2');
+        return { data: 'UE5H' };
+      },
+    },
   });
   wcRef = wc;
   const { wp } = harness(wc);
-  assert.deepStrictEqual(await wp.recapture('custom-x', null, 'https://a.com/r/1'), { status: 'page_mismatch' });
+  assert.deepStrictEqual(await wp.recapture('custom-x', null, 'https://a.com/r/1'), {
+    status: 'page_mismatch',
+  });
   assert.strictEqual(wc.debugger.isAttached(), false);
 });
 
 test('pinned url comes from the main process, not from page-reported text', async () => {
-  const spoof = JSON.stringify({ text: 'whole page', title: 'Dash', url: 'https://evil.test/phish' });
+  const spoof = JSON.stringify({
+    text: 'whole page',
+    title: 'Dash',
+    url: 'https://evil.test/phish',
+  });
   const view = fakeWc({ overrides: { 'Runtime.evaluate': { result: { value: spoof } } } });
   const v = harness(view);
   await v.wp.pinView('custom-x');
@@ -365,7 +458,9 @@ test('captureBeyondViewport is only requested when the clip leaves the viewport'
   assert.strictEqual(inside.params['Page.captureScreenshot'].captureBeyondViewport, false);
 
   // an element taller than the viewport needs the page to be captured beyond it
-  const tall = fakeWc({ overrides: { 'DOM.getBoxModel': { model: { border: [10, 20, 110, 20, 110, 900, 10, 900] } } } });
+  const tall = fakeWc({
+    overrides: { 'DOM.getBoxModel': { model: { border: [10, 20, 110, 20, 110, 900, 10, 900] } } },
+  });
   const t = harness(tall);
   await t.wp.start('custom-x');
   tall.debugger.emit('message', {}, 'Overlay.inspectNodeRequested', { backendNodeId: 5 });
@@ -397,7 +492,9 @@ test('the pin pointer is removed after a pick', async () => {
 
 test('a failing cursor injection does not stop pin mode starting', async () => {
   const wc = fakeWc();
-  wc.insertCSS = async () => { throw new Error('nope'); };
+  wc.insertCSS = async () => {
+    throw new Error('nope');
+  };
   const { wp, events } = harness(wc);
   const r = await wp.start('custom-x');
   assert.strictEqual(r.ok, true);

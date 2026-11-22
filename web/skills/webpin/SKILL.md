@@ -1,6 +1,6 @@
 ---
 name: webpin
-description: 'Read and refresh pinned views or elements from the user''s own web apps (custom apps) so Gator can answer questions about what is on screen.'
+description: "Read and refresh pinned views or elements from the user's own web apps (custom apps) so Gator can answer questions about what is on screen."
 classify: false
 metadata:
   author: AI Gator

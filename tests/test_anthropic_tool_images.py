@@ -67,6 +67,6 @@ def test_openai_and_truncation_tolerate_non_list_images(tmp_path, monkeypatch):
     assert trunc.truncate_tool_result({"text": "x", "_images": None}, tool_name="t")["text"] == "x"
     with patch("llm.openai_provider.OpenAI"):
         p = OpenAIProvider({"id": "g", "name": "g", "type": "gateway", "base_url": "https://x.test/Unified",
-                            "api_key": "aigator-fake-api-key", "models": [], "active_model": ""})
+                            "api_key": "aigator-fake-api-key", "models": [], "active_model": ""})  # pragma: allowlist secret
     msg = p.build_tool_result_message([ToolCall(id="c", name="t", inputs={})], [{"text": "x", "_images": None}])
     assert "image(s) omitted" not in msg["content"][0]["content"]
