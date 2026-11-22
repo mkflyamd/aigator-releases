@@ -42,6 +42,8 @@ function _ocSpawnTerm(sess) {
   sess.fitAddon = new FitAddon.FitAddon();
   sess.term.loadAddon(sess.fitAddon);
   sess.term.open(sess.container);
+  sess._defaultLabel = sess.label;
+  sess.term.onTitleChange((title) => _ocFollowProgramTitle(sess, title));
 
   sess.container.addEventListener(
     'paste',
@@ -144,6 +146,33 @@ function _ocGuardSize(sess) {
   });
   observer.observe(sess.container);
   sess._sizeObserver = observer;
+}
+
+const _OC_GENERIC_TITLES = new Set(['claude', 'claude code', 'opencode', 'crush', 'codex']);
+const _OC_TITLE_MAX = 40;
+
+// Claude Code prefixes its title with a status glyph that animates while it works (✳ idle, ◐/◑ busy).
+function _ocCleanProgramTitle(raw) {
+  let t = String(raw == null ? '' : raw)
+    .replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ')
+    .replace(/^[\p{So}\p{Sk}\p{Z}\s*·•]+/u, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (_OC_GENERIC_TITLES.has(t.toLowerCase())) return '';
+  if (t.length > _OC_TITLE_MAX) t = t.slice(0, _OC_TITLE_MAX - 1).trimEnd() + '…';
+  return t;
+}
+
+// A manual rename leaves sess.label matching neither remembered label, which ends the following.
+function _ocFollowProgramTitle(sess, raw) {
+  if (sess.agent === 'terminal' || sess._closing) return;
+  const title = _ocCleanProgramTitle(raw);
+  if (!title || title === sess.label) return;
+  if (sess.label !== sess._defaultLabel && sess.label !== sess._autoLabel) return;
+  if (typeof _genAgentEditing !== 'undefined' && _genAgentEditing) return;
+  sess.label = title;
+  sess._autoLabel = title;
+  if (typeof _genAgentRenderTabs === 'function') _genAgentRenderTabs(sess.tabId);
 }
 
 function _ocHeaderTabStripId() {
