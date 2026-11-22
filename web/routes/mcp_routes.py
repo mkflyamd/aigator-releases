@@ -872,3 +872,28 @@ def remove_custom_app(app_id: str):
     if not removed[0]:
         raise HTTPException(status_code=404, detail="Custom app not found")
     return {"ok": True}
+
+
+class CustomAppRename(BaseModel):
+    name: str
+
+
+@router.patch("/api/config/custom-apps/{app_id}", dependencies=[Depends(verify_csrf)])
+def rename_custom_app(app_id: str, req: CustomAppRename):
+    from config import update_config
+    name = req.name.strip()[:40]
+    if not name:
+        raise HTTPException(status_code=422, detail="Name is required")
+    holder: dict[str, dict] = {}
+    def _mutate(cfg: dict):
+        apps = list(cfg.get("custom_apps", []))
+        for a in apps:
+            if a.get("id") == app_id:
+                a["name"] = name
+                holder["app"] = a
+        cfg["custom_apps"] = apps
+        return cfg
+    update_config(_mutate)
+    if "app" not in holder:
+        raise HTTPException(status_code=404, detail="Custom app not found")
+    return {"ok": True, "app": holder["app"]}
