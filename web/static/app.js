@@ -12045,26 +12045,23 @@ function _showSandboxApproval(data, ownerTabId) {
 function _gatorNavAfterApproval(nav, card) {
   const app = nav.app;
   const gs = window.gatorShell;
+  // openThirdPane closes any classic pane (e.g. the coding agent) before it tiles the native
+  // app, and syncs the dock spin; a direct gatorShell.show*() would leave both open.
   if (app === 'outlook') {
-    if (gs.showOutlook) gs.showOutlook();
+    openThirdPane('email');
   } else if (app === 'slack') {
-    if (gs.showSlack) gs.showSlack();
+    openThirdPane('slack');
     if (nav.channel_id && gs.navigateSlackPin) {
       const target = nav.thread_ts ? `${nav.channel_id}:${nav.thread_ts}` : nav.channel_id;
       gs.navigateSlackPin(target);
     }
   } else if (app === 'teams') {
-    if (gs.showTeams) gs.showTeams();
+    openThirdPane('teams');
     if (nav.chat_id && gs.navigateTeamsPin) gs.navigateTeamsPin(nav.chat_id);
   } else if (app === 'jira' && nav.url) {
-    if (gs.showJira) gs.showJira();
-    if (gs.navigateJiraPin) gs.navigateJiraPin(nav.url);
+    openThirdPane('jira');
+    if (gs.navigateJiraPin && _jiraNativeEnabled()) gs.navigateJiraPin(nav.url);
   }
-  // Post-approval navigation opens native apps directly instead of going
-  // through openThirdPane(), which normally invokes this hook. Reuse the
-  // same pane-open UI synchronization so the split-view restore button is
-  // visible for both automatic navigation and a later "View in …" click.
-  window._gatorSpinOnPaneOpen?.(app);
   // Inject 'View in [App] \u2197' link into card footer
   const footer = card && card.querySelector('.gcc-footer');
   if (!footer) return;
