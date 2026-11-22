@@ -258,7 +258,7 @@ if (Test-Path $nodeExe) {
 # Node's global prefix (--prefix $nodeDir) rather than the user's system
 # npm, so it's fully self-contained in the app folder and never touches or
 # depends on anything the user has installed. Pinned to an exact version,
-# not "latest" - see docs/internal/OpenCodeIntegrationPlan.md section 4. Non-fatal:
+# not "latest". Non-fatal:
 # if this fails, the app still starts; only the OpenCode coding-agent panel
 # won't be available.
 $opencodeVersion = "1.18.14"

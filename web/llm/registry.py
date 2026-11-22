@@ -23,8 +23,8 @@ class ModelEntry:
     # concurrency ceiling than cloud-autoscaled ones - confirmed directly:
     # GLM-5.2-FP8 (fingerprint vllm-0.24.0-tp8) returned 403 under 2+
     # concurrent requests, with a ~15s cooldown penalty, while cloud models
-    # on the same key at the same instant were unaffected. See
-    # docs/internal/OpenCodeIntegrationPlan.md §3. The real fix for
+    # on the same key at the same instant were unaffected.
+    # The real fix for
     # OpenCode's coding-agent (pinning its explore subagent to a reliable
     # cloud model regardless of the main model) doesn't depend on this flag -
     # it's applied unconditionally, every project. This flag is purely

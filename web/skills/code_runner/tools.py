@@ -265,7 +265,7 @@ def _ast_scan(code: str) -> tuple[list, list]:
     return blocked, flagged
 
 
-# --- OS sandbox (docs/superpowers/specs/2026-10-05-code-runner-sandbox-design.md) ---
+# --- OS sandbox ---
 
 _SANDBOX_HINT = (
     "[sandbox] This code can only use its own OUTPUT_DIR and has no network. If the task really "
