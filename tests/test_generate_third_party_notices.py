@@ -26,3 +26,15 @@ def test_notices_list_packages_licenses_and_dictation_model(tmp_path, monkeypatc
     assert "not-installed-on-this-platform" not in text
     assert "Dictation model base.en" in text
     assert "LICENSE.electron.txt" in text
+    assert "xterm.js (@xterm/xterm) 5.5.0" in text
+    assert "Quill 1.3.7" in text
+    assert "Front-end libraries under BSD-3-Clause" in text
+    assert "Copyright (c) 2021 Adam Shaw" in text
+
+
+def test_every_vendored_file_is_listed_in_the_notices():
+    mod = _load()
+    listed = {f for lib in mod.VENDORED for f in lib["files"]}
+    on_disk = {p.relative_to(mod.VENDOR_DIR).as_posix() for p in mod.VENDOR_DIR.rglob("*") if p.is_file()}
+    assert on_disk == listed
+    assert {lib["license"] for lib in mod.VENDORED} <= set(mod.LICENSE_TEXTS)

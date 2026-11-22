@@ -11,3 +11,12 @@ licensed under the Apache License, Version 2.0:
   - web/skills/docx/scripts/
   - web/skills/ppt/scripts/
   - web/skills/excel/scripts/recalc.py
+
+This product bundles the following front-end libraries under web/static/vendor.
+Their copyright notices and license texts are reproduced in THIRD_PARTY_NOTICES.txt.
+
+  - xterm.js 5.5.0 and its fit addon 0.10.0 (MIT)
+  - Mermaid 11.17.2 (MIT), which embeds DOMPurify 3.4.12 (MPL-2.0 OR Apache-2.0)
+  - Quill 1.3.7 (BSD-3-Clause)
+  - FullCalendar 6.1.17 (MIT)
+  - Floating UI core 1.6.8 and dom 1.6.12 (MIT)
