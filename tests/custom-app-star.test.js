@@ -98,3 +98,9 @@ test('a second removal commits the first immediately', async () => {
   await controller.handle({ kind: 'remove', appId: 'custom-news' });
   assert.strictEqual(names(log)[0], 'api.remove');
 });
+
+test('custom app names from page titles are never interpolated into innerHTML unescaped', () => {
+  const src = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'web', 'static', 'app.js'), 'utf8');
+  assert(!/\$\{s\.label\}/.test(src), 'slash menu badge escapes the label');
+  assert(!/aria-label="Remove \$\{skill\.label\}/.test(src), 'chip aria-label is set through the DOM');
+});

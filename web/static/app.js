@@ -1695,7 +1695,8 @@ function _addSkillChip(skillId) {
     ? `<span class="skill-alpha-badge">${skill.labelBadge}</span>`
     : '';
   const iconHtml = skill.icon ? `<span class="chip-skill-icon">${skill.icon}</span>` : '';
-  chip.innerHTML = `${iconHtml}${alias}${alphaBadge ? ' ' + alphaBadge : ''} <button class="chip-remove" aria-label="Remove ${skill.label} context">\u2715</button>`;
+  chip.innerHTML = `${iconHtml}${alias}${alphaBadge ? ' ' + alphaBadge : ''} <button class="chip-remove">\u2715</button>`;
+  chip.querySelector('.chip-remove').setAttribute('aria-label', `Remove ${skill.label} context`);
   chip.querySelector('.chip-remove').addEventListener('click', (e) => {
     e.stopPropagation();
     removeChip(skillId);
@@ -1884,7 +1885,7 @@ function _openSkillPickerDropdown(query) {
 
     const mainZone = document.createElement('span');
     mainZone.className = 'skill-mention-main';
-    mainZone.innerHTML = `<span class="skill-mention-icon">${s.icon}</span><span class="skill-mention-name">/${alias}</span><span class="skill-mention-badge">${s.label}${badgeHtml}</span>`;
+    mainZone.innerHTML = `<span class="skill-mention-icon">${s.icon}</span><span class="skill-mention-name">/${alias}</span><span class="skill-mention-badge">${escapeHtml(s.label)}${badgeHtml}</span>`;
     mainZone.addEventListener('mousedown', (e) => {
       e.preventDefault();
       _commitSkillChipOnly(s, '/');
