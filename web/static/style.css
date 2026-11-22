@@ -23182,7 +23182,7 @@ body.tab-fullscreen {
 }
 .custom-apps-empty {
   font-size: 0.8rem;
-  color: var(--text-sub);
+  color: var(--text-dim);
   padding: 2px 0 10px;
 }
 .custom-app-row {

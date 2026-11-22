@@ -166,3 +166,12 @@ test('Settings Remove names what is deleted and tears down the pane and saved si
   assert(fn.includes("'Its settings and saved sign-in'"));
   assert(fn.includes('customAppTeardown(appId)'));
 });
+
+test('only one star toast shows at a time and the empty state uses the readable dim text token', () => {
+  const read = (...p) =>
+    require('node:fs').readFileSync(require('node:path').join(__dirname, '..', ...p), 'utf8');
+  const js = read('web', 'static', 'custom-app-star.js');
+  assert(/if \(currentToast\) currentToast\.dismiss\(\)/.test(js));
+  const css = read('web', 'static', 'style.css');
+  assert(/\.custom-apps-empty \{[^}]*color: var\(--text-dim\)/.test(css));
+});

@@ -99,7 +99,10 @@
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   if (typeof document === 'undefined') return;
 
+  let currentToast = null;
+
   function showToast({ message, actions, ms, onExpire }) {
+    if (currentToast) currentToast.dismiss();
     let host = document.getElementById('gator-toast-host');
     if (!host) {
       host = document.createElement('div');
@@ -148,7 +151,8 @@
     host.appendChild(el);
     requestAnimationFrame(() => el.classList.add('is-in'));
     arm();
-    return { dismiss };
+    currentToast = { dismiss };
+    return currentToast;
   }
 
   const customApps = new Map();
