@@ -50,10 +50,30 @@ test('fit still works when xterm internals are missing or throw', () => {
   assert.doesNotThrow(() => ctx._ocFit(throwing));
 });
 
-test('the vendored xterm still exposes the viewport syncScrollArea the fit relies on', () => {
+test('a resize still reaches the PTY when the scroll resync throws', () => {
+  const sent = [];
+  const sess = session({
+    syncScrollArea: () => {
+      throw new Error('internals changed');
+    },
+  });
+  sess.ws = { readyState: 1, send: (m) => sent.push(JSON.parse(m)) };
+  ctx.WebSocket = { OPEN: 1 };
+  sess.fitAddon = {
+    fit() {
+      sess.term.cols = 100;
+    },
+  };
+  ctx._ocFit(sess);
+  assert.strictEqual(sent.length, 1);
+  assert.strictEqual(sent[0].type, 'resize');
+});
+
+test('the vendored xterm still builds a viewport whose syncScrollArea takes a force flag', () => {
   const xterm = fs.readFileSync(
     path.join(__dirname, '..', 'web', 'static', 'vendor', 'xterm', 'xterm.js'),
     'utf8',
   );
-  assert.ok(xterm.includes('syncScrollArea('));
+  assert.match(xterm, /\.viewport=this\._instantiationService\.createInstance\(\w+\.Viewport,/);
+  assert.match(xterm, /syncScrollArea\(\w+=!1\)\{/);
 });
