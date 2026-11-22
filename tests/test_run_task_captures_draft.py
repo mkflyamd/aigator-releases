@@ -46,14 +46,14 @@ def test_run_task_persists_draft_signal(env, monkeypatch):
     from skills import _drafts
 
     draft_id = _drafts.create_draft(
-        "email-send", {"to": "bob@amd.com", "message": "hi"}, {}
+        "email-send", {"to": "bob@contoso.example", "message": "hi"}, {}
     )
 
     async def _run():
         task_id = await tq.enqueue("send bob a note")
         await tq._run_task(
             task_id, "send bob a note",
-            _make_draft_run_fn("email-send", {"draft_id": draft_id, "to": "bob@amd.com"}),
+            _make_draft_run_fn("email-send", {"draft_id": draft_id, "to": "bob@contoso.example"}),
         )
         return task_id
 
@@ -64,13 +64,13 @@ def test_run_task_persists_draft_signal(env, monkeypatch):
     assert drafts[0]["draft_id"] == draft_id
     assert drafts[0]["draft_type"] == "email-send"
     assert drafts[0]["status"] == "pending"
-    assert drafts[0]["draft_data"]["to"] == "bob@amd.com"
+    assert drafts[0]["draft_data"]["to"] == "bob@contoso.example"
 
     # The mutation payload must have been captured too (from the live
     # _pending_drafts entry at the moment the SSE chunk was processed) —
     # required for restart-recovery rehydration, not just display.
     row = _run_coro(td.get_for_rehydrate(draft_id))
-    assert row["params"] == {"to": "bob@amd.com", "message": "hi"}
+    assert row["params"] == {"to": "bob@contoso.example", "message": "hi"}
 
 
 def test_run_task_ignores_draft_signal_missing_draft_id(env):
@@ -82,7 +82,7 @@ def test_run_task_ignores_draft_signal_missing_draft_id(env):
         task_id = await tq.enqueue("do something")
         await tq._run_task(
             task_id, "do something",
-            _make_draft_run_fn("email-send", {"to": "bob@amd.com"}),  # no draft_id key
+            _make_draft_run_fn("email-send", {"to": "bob@contoso.example"}),  # no draft_id key
         )
         return task_id
 

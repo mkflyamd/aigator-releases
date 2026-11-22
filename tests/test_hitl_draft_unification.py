@@ -113,7 +113,7 @@ class TestOpenInOutlook:
         gc = _gc_for_open()
         did = _drafts.create_draft(
             "email-send",
-            {"to": "bob@amd.com", "subject": "Hello", "body": "Draft body."},
+            {"to": "bob@contoso.example", "subject": "Hello", "body": "Draft body."},
             {},
         )
         with patch("skills._m365.helpers.get_graph_client", return_value=gc):
@@ -137,7 +137,7 @@ class TestOpenInOutlook:
         gc = _gc_for_open()
         did = _drafts.create_draft(
             "email-send",
-            {"to": "bob@amd.com", "subject": "Hello", "body": "body"},
+            {"to": "bob@contoso.example", "subject": "Hello", "body": "body"},
             {},
         )
         with patch("skills._m365.helpers.get_graph_client", return_value=gc):
@@ -154,7 +154,7 @@ class TestOpenInOutlook:
         gc = _gc_for_open()
         did = _drafts.create_draft(
             "email-send",
-            {"to": "bob@amd.com", "subject": "Hello", "body": "body"},
+            {"to": "bob@contoso.example", "subject": "Hello", "body": "body"},
             {},
         )
         with patch("skills._m365.helpers.get_graph_client", return_value=gc):
@@ -186,7 +186,7 @@ class TestOpenInOutlook:
         gc = _gc_for_open()
         did = _drafts.create_draft(
             "email-forward",
-            {"message_id": "MSG1", "to": "carol@amd.com", "comment": "FYI"},
+            {"message_id": "MSG1", "to": "carol@contoso.example", "comment": "FYI"},
             {},
         )
         with patch("skills._m365.helpers.get_graph_client", return_value=gc):
@@ -202,7 +202,7 @@ class TestOpenInOutlook:
         gc = _gc_for_open()
         did = _drafts.create_draft(
             "email-send",
-            {"to": "bob@amd.com", "subject": "Hello", "body": "ORIGINAL DRAFT"},
+            {"to": "bob@contoso.example", "subject": "Hello", "body": "ORIGINAL DRAFT"},
             {},
         )
         with patch("skills._m365.helpers.get_graph_client", return_value=gc):
@@ -238,7 +238,7 @@ class TestOpenInOutlook:
         gc = _gc_for_open()
         did = _drafts.create_draft(
             "email-forward",
-            {"message_id": "MSG1", "to": "carol@amd.com", "comment": "ORIGINAL COMMENT"},
+            {"message_id": "MSG1", "to": "carol@contoso.example", "comment": "ORIGINAL COMMENT"},
             {},
         )
         with patch("skills._m365.helpers.get_graph_client", return_value=gc):
@@ -295,7 +295,7 @@ class TestOpenInOutlook:
         gc.patch.side_effect = RuntimeError("patch failed")
         did = _drafts.create_draft(
             "email-forward",
-            {"message_id": "MSG1", "to": "carol@amd.com", "comment": "FYI"},
+            {"message_id": "MSG1", "to": "carol@contoso.example", "comment": "FYI"},
             {},
         )
         with patch("skills._m365.helpers.get_graph_client", return_value=gc):
@@ -324,7 +324,7 @@ class TestOpenInOutlook:
         )
         did = _drafts.create_draft(
             "email-send",
-            {"to": "bob@amd.com", "subject": "Hello", "body": "body"},
+            {"to": "bob@contoso.example", "subject": "Hello", "body": "body"},
             {},
         )
         with patch("skills._m365.helpers.get_graph_client", return_value=gc):
@@ -350,7 +350,7 @@ class TestOpenInOutlook:
         gc.post.side_effect = _FakeGatewayError("Graph API 503: service unavailable")
         did = _drafts.create_draft(
             "email-send",
-            {"to": "bob@amd.com", "subject": "Hello", "body": "body"},
+            {"to": "bob@contoso.example", "subject": "Hello", "body": "body"},
             {},
         )
         with patch("skills._m365.helpers.get_graph_client", return_value=gc):
@@ -377,7 +377,7 @@ class TestOpenInOutlook:
         gc.post.side_effect = _FakeGraphError("Graph API 400: bad request")
         did = _drafts.create_draft(
             "email-send",
-            {"to": "bob@amd.com", "subject": "Hello", "body": "body"},
+            {"to": "bob@contoso.example", "subject": "Hello", "body": "body"},
             {},
         )
         with patch("skills._m365.helpers.get_graph_client", return_value=gc):
@@ -406,7 +406,7 @@ class TestOpenInOutlook:
         client = TestClient(app)
         did = _drafts.create_draft(
             "email-send",
-            {"to": "bob@amd.com", "subject": "x", "body": "y"},
+            {"to": "bob@contoso.example", "subject": "x", "body": "y"},
             {},
         )
         r = client.post(f"/api/drafts/{did}/open-in-outlook")
@@ -422,7 +422,7 @@ class TestOpenInOutlook:
         Gator send that starts after it."""
         did = _drafts.create_draft(
             "email-send",
-            {"to": "bob@amd.com", "subject": "Hello", "body": "body"},
+            {"to": "bob@contoso.example", "subject": "Hello", "body": "body"},
             {},
         )
         reached_post = threading.Event()
@@ -471,7 +471,7 @@ class TestOpenInOutlook:
         proving a Gator send in flight excludes a concurrent handoff too."""
         did = _drafts.create_draft(
             "email-send",
-            {"to": "bob@amd.com", "subject": "Hello", "body": "body"},
+            {"to": "bob@contoso.example", "subject": "Hello", "body": "body"},
             {},
         )
         reached_send = threading.Event()
@@ -547,7 +547,7 @@ class TestNavigateTo:
         gc.post.return_value = {}
         did = _drafts.create_draft(
             "email-send",
-            {"to": "bob@amd.com", "subject": "x", "body": "y"},
+            {"to": "bob@contoso.example", "subject": "x", "body": "y"},
             {},
         )
         with patch("skills._m365.helpers.get_graph_client", return_value=gc):
@@ -598,7 +598,7 @@ class TestNavigateTo:
         client = TestClient(app)
         did = _drafts.create_draft(
             "teams-message",
-            {"to": "bob@amd.com", "message": "hi", "chat_id": "19:abc@thread.v2",
+            {"to": "bob@contoso.example", "message": "hi", "chat_id": "19:abc@thread.v2",
              "chat_topic": "", "recipients": [], "mentions": []},
             {},
         )
@@ -617,7 +617,7 @@ class TestNavigateTo:
         client = TestClient(app)
         did = _drafts.create_draft(
             "teams-message",
-            {"to": "bob@amd.com", "message": "hi", "chat_id": "", "recipients": [], "mentions": []},
+            {"to": "bob@contoso.example", "message": "hi", "chat_id": "", "recipients": [], "mentions": []},
             {},
         )
         with patch(
@@ -1171,7 +1171,7 @@ class TestSlackTypedDestinations:
         from skills.teams.tools import _tool_teams_open_compose
 
         result = _tool_teams_open_compose(
-            to="peer@amd.com",
+            to="peer@contoso.example",
             message="Hi @Alex McKinney, please review.",
             mentions=[
                 {
@@ -1189,7 +1189,7 @@ class TestSlackTypedDestinations:
         from skills.teams.tools import _tool_teams_open_compose
 
         result = _tool_teams_open_compose(
-            to="peer@amd.com",
+            to="peer@contoso.example",
             message="@Alex McKinney and @Alex McKinney",
             mentions=[
                 {"mentionText": "Alex", "mentioned": {"user": {"id": "AAD_SHORT"}}},

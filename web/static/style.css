@@ -9250,7 +9250,7 @@ main.main.tp-hidden-for-expand {
   color: var(--text-dim);
 }
 /* Sender attribution at the start of a quoted/forwarded blockquote sits on its
-   own line so the quoted body doesn't run into the name (e.g. "Karvir, MrinalHiâ€¦"). #144 */
+   own line so the quoted body doesn't run into the name (e.g. "Rivera, AlexHiâ€¦"). #144 */
 .tp-msg-text blockquote > strong:first-child {
   display: block;
 }

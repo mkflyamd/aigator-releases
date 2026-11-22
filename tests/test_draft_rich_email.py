@@ -38,7 +38,7 @@ def _sent_content(gc):
 
 
 def _email_send(**extra):
-    params = {"to": "bob@amd.com", "subject": "S", "body": "stale", "body_html": "<p>stale</p>"}
+    params = {"to": "bob@contoso.example", "subject": "S", "body": "stale", "body_html": "<p>stale</p>"}
     params.update(extra)
     return _drafts.create_draft("email-send", params, {})
 
@@ -115,7 +115,7 @@ def test_forward_approve_uses_edited_html():
     gc = _gc()
     did = _drafts.create_draft(
         "email-forward",
-        {"message_id": "AAMk1", "to": "bob@amd.com", "comment": "old", "body_html": "<p>old</p>"},
+        {"message_id": "AAMk1", "to": "bob@contoso.example", "comment": "old", "body_html": "<p>old</p>"},
         {},
     )
     with patch("skills._m365.helpers.get_graph_client", return_value=gc):

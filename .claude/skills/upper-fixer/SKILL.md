@@ -7,7 +7,7 @@ description: Run a structured, safe GitHub-issue fixing session for AI Gator. Us
   (/upper-fixer) or on a check-in loop (/loop 30m /upper-fixer). Keywords — fix issues,
   triage, github issues, fixing session, batch fix, work on bugs.
 metadata:
-  author: maykulka
+  author: Mayuresh Kulkarni
   version: '2.2.0'
   category: workflow
   tags:
@@ -23,7 +23,7 @@ compatibility:
 # upper-fixer
 
 Orchestrate a safe, modular GitHub-issue fixing session for AI Gator
-(repo `mkflyamd/AiGator`). Work through the phases **in order**. Create a
+(repo `mkflyamd/aigator-releases`). Work through the phases **in order**. Create a
 TodoWrite item per phase at the start so progress is visible.
 
 ## Guardrails (non-negotiable)
