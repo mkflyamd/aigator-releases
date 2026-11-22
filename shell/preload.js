@@ -90,6 +90,13 @@ contextBridge.exposeInMainWorld('gatorShell', {
   showCustomApp: (id) => ipcRenderer.invoke('external-pane:show', id),
   hideCustomApp: (id) => ipcRenderer.invoke('external-pane:hide', id),
   createCustomApp: (appConfig) => ipcRenderer.invoke('custom-app:create', appConfig),
+  customAppSetHidden: (id, hidden) => ipcRenderer.invoke('custom-app:set-hidden', id, hidden),
+  customAppTeardown: (id) => ipcRenderer.invoke('custom-app:teardown', id),
+  onCustomAppStar: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('custom-app:star-event', listener);
+    return () => ipcRenderer.removeListener('custom-app:star-event', listener);
+  },
 
   // Debug/introspection: which external app is currently the active tile.
   getActiveApp: () => ipcRenderer.invoke('shell:get-active-app'),
