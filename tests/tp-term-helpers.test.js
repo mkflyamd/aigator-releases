@@ -49,3 +49,11 @@ test('fit still works when xterm internals are missing or throw', () => {
   });
   assert.doesNotThrow(() => ctx._ocFit(throwing));
 });
+
+test('the vendored xterm still exposes the viewport syncScrollArea the fit relies on', () => {
+  const xterm = fs.readFileSync(
+    path.join(__dirname, '..', 'web', 'static', 'vendor', 'xterm', 'xterm.js'),
+    'utf8',
+  );
+  assert.ok(xterm.includes('syncScrollArea('));
+});
