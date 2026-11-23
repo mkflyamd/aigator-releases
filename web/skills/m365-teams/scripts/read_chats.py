@@ -370,6 +370,7 @@ def list_chats(
                 "thread_type": thread_props.get(
                     "threadType", conv.get("threadtype", "")
                 ),
+                "product_thread_type": thread_props.get("productThreadType", ""),
                 "added_by_mri": added_by_mri,
                 # Member count for distinguishing 2-person group threads from real groups.
                 # Skype's conversations endpoint may expose this under several keys; try each.

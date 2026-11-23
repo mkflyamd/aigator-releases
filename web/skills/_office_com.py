@@ -219,3 +219,31 @@ def verify_com_alive(app_type: str):
     except Exception:
         pass
     return False, None
+
+
+def get_outlook_inbox_unread():
+    """Unread count of the default Inbox in running desktop Outlook, or None.
+
+    None means Outlook is not running (or has no COM interface), so callers fall
+    back to the server count. Never launches Outlook.
+    """
+    try:
+        import pythoncom
+        import win32com.client
+    except Exception:
+        return None
+    try:
+        pythoncom.CoInitialize()
+    except Exception:
+        return None
+    try:
+        app = win32com.client.GetActiveObject("Outlook.Application")
+        inbox = app.GetNamespace("MAPI").GetDefaultFolder(6)  # olFolderInbox
+        return int(inbox.UnreadItemCount)
+    except Exception:
+        return None
+    finally:
+        try:
+            pythoncom.CoUninitialize()
+        except Exception:
+            pass

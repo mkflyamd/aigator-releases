@@ -1786,6 +1786,33 @@ function updateRailBadge(skillId, count) {
   }
 }
 
+/* Teams rail badge: every writer goes through publishTeamsBadge so they cannot disagree.
+   The shell reports native Teams' own count (updateNativeBadge); the chat list is the fallback. */
+function teamsBadgeCount(chats) {
+  return (chats || []).filter((c) => c.badge_unread && c._unread !== false).length;
+}
+
+function publishTeamsBadge(chats) {
+  window._teamsBadgeChats = chats || [];
+  const native = window._nativeBadge && window._nativeBadge.teams;
+  updateRailBadge('teams', typeof native === 'number' ? native : teamsBadgeCount(chats));
+}
+
+function publishEmailBadge(graphTotal) {
+  window._emailBadgeGraph = graphTotal;
+  const native = window._nativeBadge && window._nativeBadge.email;
+  updateRailBadge('email', typeof native === 'number' ? native : graphTotal);
+}
+function updateNativeBadge(id, count) {
+  window._nativeBadge = window._nativeBadge || {};
+  window._nativeBadge[id] = typeof count === 'number' ? count : undefined;
+  if (id === 'teams') publishTeamsBadge(window._teamsBadgeChats);
+  else if (id === 'email') {
+    if (typeof window._emailBadgeGraph === 'number' || typeof count === 'number')
+      publishEmailBadge(window._emailBadgeGraph);
+  } else if (typeof count === 'number') updateRailBadge(id, count);
+}
+
 /* ── / Skill Picker (reuses mention dropdown infrastructure) ── */
 let _slashDropdown = null; // kept as alias so legacy _closeSlashDropdown calls still work
 let _slashFocusIdx = -1;
@@ -17552,8 +17579,7 @@ fetch('/api/teams/chats')
         const chats = data.chats || [];
 
         // Update badge
-        const unread = chats.filter((c) => (c.unread_count || 0) > 0).length;
-        if (typeof updateRailBadge === 'function') updateRailBadge('teams', unread);
+        if (typeof publishTeamsBadge === 'function') publishTeamsBadge(chats);
 
         if (!_notifReady) {
           // First poll — seed state, don't notify
@@ -17589,6 +17615,18 @@ fetch('/api/teams/chats')
     60000,
   );
 
+  // Desktop Outlook's own Inbox count (null when Outlook is not running -> rail falls back to Graph).
+  const _pollNativeEmail = _pollOnce(async () => {
+    try {
+      const res = await fetch('/api/email/native-unread', { signal: AbortSignal.timeout(10000) });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (typeof updateNativeBadge === 'function') updateNativeBadge('email', data.count);
+    } catch {}
+  });
+  _pollNativeEmail();
+  setInterval(_pollNativeEmail, 30000);
+
   // ── Email notification polling (every 90s, global) ──
   setInterval(
     _pollOnce(async () => {
@@ -17602,7 +17640,7 @@ fetch('/api/teams/chats')
         const totalUnread = data.total_unread || 0;
 
         // Update badge
-        if (typeof updateRailBadge === 'function') updateRailBadge('email', totalUnread);
+        if (typeof publishEmailBadge === 'function') publishEmailBadge(totalUnread);
 
         if (!_notifReady) return; // Wait for Teams poll to seed first
 

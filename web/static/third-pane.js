@@ -4544,8 +4544,8 @@ function renderTeamsList(chats, isSearchResults = false) {
     addBtn.style.display = '';
   }
 
-  // Update rail badge
-  if (typeof updateRailBadge === 'function') updateRailBadge('teams', totalUnread);
+  // Update rail badge — search results are a subset of chats and must not change it
+  if (!isSearchResults && typeof publishTeamsBadge === 'function') publishTeamsBadge(chats);
 
   // ── Keyboard navigation (shared helper) ──────────────────
   _wireListKeyboard(scroll, (el) => {
@@ -4887,7 +4887,7 @@ function renderEmailList(
               typeof updateRailBadge === 'function' &&
               (tpState.filter === 'all' || tpState.filter === 'unread')
             ) {
-              updateRailBadge('email', tpState._totalUnread);
+              publishEmailBadge(tpState._totalUnread);
             }
           })
           .catch(() => {});
@@ -4965,7 +4965,7 @@ function renderEmailList(
     typeof updateRailBadge === 'function' &&
     (tpState.filter === 'all' || tpState.filter === 'unread')
   ) {
-    updateRailBadge('email', totalUnread);
+    publishEmailBadge(totalUnread);
   }
 }
 
@@ -5454,8 +5454,7 @@ function _startChatListPolling() {
           hasMore: tpState._hasMore,
           skypeCursor: tpState._skypeCursor,
         });
-        const unread = newChats.filter((c) => (c.unread_count || 0) > 0).length;
-        if (typeof updateRailBadge === 'function') updateRailBadge('teams', unread);
+        if (typeof publishTeamsBadge === 'function') publishTeamsBadge(newChats);
         // Don't clobber active search results with the browse list — the poller
         // updates tpState.list + badges silently while a search is showing (#118).
         // Only re-render when the list actually changed (avoids flicker on every poll).
@@ -5736,8 +5735,7 @@ function _markListItemRead(id) {
     const chat = tpState.list.find((c) => c.id === id);
     if (chat) {
       chat._unread = false;
-      const totalUnread = tpState.list.filter((c) => c._unread).length;
-      if (typeof updateRailBadge === 'function') updateRailBadge('teams', totalUnread);
+      if (typeof publishTeamsBadge === 'function') publishTeamsBadge(tpState.list);
     }
   } else if (tpState.type === 'email') {
     const email = tpState.list.find((m) => m.id === id);
@@ -5748,7 +5746,7 @@ function _markListItemRead(id) {
         typeof updateRailBadge === 'function' &&
         (tpState.filter === 'all' || tpState.filter === 'unread')
       ) {
-        updateRailBadge('email', tpState._totalUnread);
+        publishEmailBadge(tpState._totalUnread);
       }
     }
   }
@@ -14917,13 +14915,12 @@ tpState.type = null;
     // Populate badges from stale cache immediately
     const staleTeams = _getStaleCache('teams');
     if (staleTeams) {
-      const unread = (staleTeams.data || []).filter((c) => (c.unread_count || 0) > 0).length;
-      if (typeof updateRailBadge === 'function') updateRailBadge('teams', unread);
+      if (typeof publishTeamsBadge === 'function') publishTeamsBadge(staleTeams.data || []);
     }
     const staleEmail = _getStaleCache('email');
     if (staleEmail) {
       const unread = staleEmail.extra?.totalUnread || 0;
-      if (typeof updateRailBadge === 'function') updateRailBadge('email', unread);
+      if (typeof publishEmailBadge === 'function') publishEmailBadge(unread);
     }
 
     // Single combined fetch — runs Teams + Email in parallel server-side threads
@@ -14950,8 +14947,7 @@ tpState.type = null;
           hasMore: !!teamsData.has_more,
           skypeCursor: teamsData.skype_cursor || '',
         });
-        const unread = chats.filter((c) => (c.unread_count || 0) > 0).length;
-        if (typeof updateRailBadge === 'function') updateRailBadge('teams', unread);
+        if (typeof publishTeamsBadge === 'function') publishTeamsBadge(chats);
         window._teamsChatsCache = chats;
         // Cache server-prefetched threads (top 3, fetched in parallel server-side)
         const prefetchedThreads = prefetchData.threads || {};
@@ -14982,7 +14978,7 @@ tpState.type = null;
         });
         const totalUnread = emailData.total_unread || 0;
         _setListCache('email', messages, { totalUnread });
-        if (typeof updateRailBadge === 'function') updateRailBadge('email', totalUnread);
+        if (typeof updateRailBadge === 'function') publishEmailBadge(totalUnread);
         // Cache server-prefetched email details (top 3, fetched in parallel server-side)
         const prefetchedEmails = prefetchData.emails || {};
         for (const [emailId, emailDetail] of Object.entries(prefetchedEmails)) {

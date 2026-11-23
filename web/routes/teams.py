@@ -976,6 +976,13 @@ def _resolve_to_graph_chat_id(skype_id: str, gc) -> str:
     return skype_id  # fallback — let Graph return its own error
 
 
+# Channel threads keep a read marker native Teams never advances, so they must not
+# feed the rail badge (native counts chats only).
+_NON_CHAT_PRODUCT_TYPES = frozenset(
+    {"TeamsStandardChannel", "TeamsSharedChannel", "TeamsPrivateChannel", "TeamsTeam"}
+)
+
+
 def _normalize_skype_chats(convs: list[dict]) -> list[dict]:
     """Convert Skype API conversation objects to the third-pane response format."""
     from datetime import datetime, timezone
@@ -1202,6 +1209,20 @@ def _normalize_skype_chats(convs: list[dict]) -> list[dict]:
                 if _og and _og != _my_guid:
                     peer_mri = f"8:orgid:{_og}"
 
+        _product = conv.get("product_thread_type", "")
+        _sent_by_me = bool(
+            _my_guid
+            and conv.get("last_sender_mri", "").split(":")[-1].lower() == _my_guid
+        )
+        badge_unread = (
+            1
+            if unread
+            and _product not in _NON_CHAT_PRODUCT_TYPES
+            and not _product.startswith("StreamOf")
+            and not _sent_by_me
+            else 0
+        )
+
         chats.append(
             {
                 "id": cid,
@@ -1211,6 +1232,7 @@ def _normalize_skype_chats(convs: list[dict]) -> list[dict]:
                 "last_sender": _last_sender,
                 "last_read_time": last_read_time,
                 "unread_count": unread,
+                "badge_unread": badge_unread,
                 "chat_type": chat_type,
                 "peer_mri": peer_mri,
                 "member_emails": [],
@@ -1322,6 +1344,7 @@ def _normalize_teams_chats(
                 "last_sender": last_sender,
                 "last_read_time": last_read_time,
                 "unread_count": unread,
+                "badge_unread": unread,
                 "chat_type": chat.get("chatType", ""),
                 "member_emails": member_emails,
                 "members": member_details,
