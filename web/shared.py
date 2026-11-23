@@ -457,6 +457,9 @@ def load_installed_skill_prompts() -> None:
                     SKILL_OUTPUT_FORMATS[skill_id] = _fmt
                 else:
                     SKILL_OUTPUT_FORMATS.pop(skill_id, None)
+                from marketplace.loader import link_skill_mcp_connections
+
+                link_skill_mcp_connections(skill_id)
             except Exception:
                 pass
     # Remove skills that were uninstalled (dir deleted but still in dict).

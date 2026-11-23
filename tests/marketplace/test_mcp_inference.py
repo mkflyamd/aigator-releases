@@ -319,3 +319,76 @@ def test_the_server_is_owned_by_the_skill_so_teardown_removes_it(installer):
         manager.remove_plugin_mcp_servers("s")
 
     assert removed == ["plugin:s:s"]
+
+
+# ── the skill and its server are used together ───────────────────────────────
+
+CONNECTION = "plugin:snowflake-mcp:snowflake-mcp"
+
+
+@pytest.fixture
+def deps_map():
+    import shared
+
+    saved = dict(shared.SKILL_DEPENDENCIES_MAP)
+    shared.SKILL_DEPENDENCIES_MAP.clear()
+    yield shared.SKILL_DEPENDENCIES_MAP
+    shared.SKILL_DEPENDENCIES_MAP.clear()
+    shared.SKILL_DEPENDENCIES_MAP.update(saved)
+
+
+def _entry(**extra):
+    return {"id": "snowflake-mcp", "tier": "Community", **extra}
+
+
+def test_a_skill_with_an_inferred_server_depends_on_that_connection(deps_map):
+    from marketplace import loader
+
+    with patch("marketplace.state.get_entry", return_value=_entry(mcp_connection_ids=[CONNECTION])):
+        loader.link_skill_mcp_connections("snowflake-mcp")
+
+    assert [d["id"] for d in deps_map["snowflake-mcp"]] == [CONNECTION]
+
+
+def test_linking_keeps_the_dependencies_the_skill_already_has_and_is_repeatable(deps_map):
+    from marketplace import loader
+
+    deps_map["snowflake-mcp"] = [{"id": "shell_runner", "reason": "r"}]
+    with patch("marketplace.state.get_entry", return_value=_entry(mcp_connection_ids=[CONNECTION])):
+        loader.link_skill_mcp_connections("snowflake-mcp")
+        loader.link_skill_mcp_connections("snowflake-mcp")
+
+    assert [d["id"] for d in deps_map["snowflake-mcp"]] == ["shell_runner", CONNECTION]
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        None,
+        _entry(),
+        _entry(mcp_connection_ids=[]),
+        _entry(skill_ids=["inner"], mcp_connection_ids=[CONNECTION]),
+    ],
+)
+def test_other_skills_and_plugin_bundles_are_left_alone(deps_map, entry):
+    from marketplace import loader
+
+    with patch("marketplace.state.get_entry", return_value=entry):
+        loader.link_skill_mcp_connections("snowflake-mcp")
+
+    assert deps_map == {}
+
+
+def test_choosing_the_skill_offers_the_servers_tools(deps_map):
+    import shared
+    from marketplace import loader
+    from routes import chat
+
+    tools = [{"name": "snowflake_query"}, {"name": "unrelated"}]
+    with patch.dict(shared.SKILL_TOOLS_MAP, {CONNECTION: {"snowflake_query"}}),             patch.object(shared, "TOOLS", tools),             patch("marketplace.state.get_entry", return_value=_entry(mcp_connection_ids=[CONNECTION])):
+        before = chat._filter_tools("snowflake-mcp", False, active_skills=["snowflake-mcp"])
+        loader.link_skill_mcp_connections("snowflake-mcp")
+        after = chat._filter_tools("snowflake-mcp", False, active_skills=["snowflake-mcp"])
+
+    assert "snowflake_query" not in [t["name"] for t in before]
+    assert [t["name"] for t in after if t["name"] in {"snowflake_query", "unrelated"}] == ["snowflake_query"]
