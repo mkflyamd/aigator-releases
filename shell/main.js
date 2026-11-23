@@ -1054,6 +1054,7 @@ async function createGitHubView() {
       },
     );
     win.contentView.addChildView(githubView);
+    _raiseToolbarView();
     githubView.setVisible(false);
     githubView.webContents.loadURL(GITHUB_URL).catch((error) => {
       console.error(`[github] could not navigate to ${GITHUB_URL}: ${error.message}`);

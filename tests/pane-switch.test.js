@@ -331,3 +331,55 @@ test('the toolbar is raised once after the startup panes are created', () => {
   const main = read('shell/main.js');
   assert.match(main, /githubView\.setBounds\(\{ x: 1599, y: 0, width: 1, height: 900 \}\);\s*\}\s*_raiseToolbarView\(\);/);
 });
+
+function loadPaneSwitchHandler() {
+  const vm = require('node:vm');
+  const main = read('shell/main.js');
+  const m = main.match(/ipcMain\.handle\('pane:switch', async \(_e, to, seq\) => \{[\s\S]*?\n\}\);/);
+  assert.ok(m, 'pane:switch handler not found');
+  const calls = [];
+  let handler = null;
+  const sandbox = {
+    ipcMain: { handle: (name, fn) => { if (name === 'pane:switch') handler = fn; } },
+    paneTrace: { mark: () => {} },
+    _switchGate: createSwitchGate(),
+    showNativePane: async (to, ticket) => { calls.push([to, ticket]); return true; },
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(m[0], sandbox);
+  return { handler, calls };
+}
+
+test('pane:switch runtime: bad names are rejected before the gate or showNativePane', async () => {
+  const { handler, calls } = loadPaneSwitchHandler();
+  assert.strictEqual(await handler({}, '', 1), false);
+  assert.strictEqual(await handler({}, null, 2), false);
+  assert.strictEqual(await handler({}, { x: 1 }, 3), false);
+  assert.strictEqual(await handler({}, 'a'.repeat(201), 4), false);
+  assert.strictEqual(calls.length, 0);
+});
+
+test('pane:switch runtime: a rejected name does not consume the sequence number', async () => {
+  const { handler, calls } = loadPaneSwitchHandler();
+  assert.strictEqual(await handler({}, '', 10), false);
+  assert.strictEqual(await handler({}, 'teams', 10), true);
+  assert.strictEqual(calls.length, 1);
+});
+
+test('pane:switch runtime: a prototype-key name reaches showNativePane, which owns the lookup', async () => {
+  const { handler, calls } = loadPaneSwitchHandler();
+  assert.strictEqual(await handler({}, 'constructor', 1), true);
+  assert.strictEqual(calls[0][0], 'constructor');
+});
+
+test('pane:switch runtime: a stale seq returns superseded without showing', async () => {
+  const { handler, calls } = loadPaneSwitchHandler();
+  assert.strictEqual(await handler({}, 'teams', 5), true);
+  assert.strictEqual(await handler({}, 'slack', 4), 'superseded');
+  assert.strictEqual(calls.length, 1);
+});
+
+test('the lazily created GitHub view raises the toolbar above itself', () => {
+  const main = read('shell/main.js');
+  assert.match(main, /win\.contentView\.addChildView\(githubView\);\s*_raiseToolbarView\(\);\s*githubView\.setVisible\(false\);/);
+});
