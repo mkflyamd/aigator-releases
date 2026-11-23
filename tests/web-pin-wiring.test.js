@@ -38,7 +38,10 @@ test('pinnable panes are custom apps plus the built-in browser pane, nothing els
     after(main, 'getPane', 300),
     /_isPinnablePane\(appId\) \? _genericPanes\[appId\] : null/,
   );
-  assert.match(main, /if \(_isPinnablePane\(activeExternalApp\)\) _webPin\.start\(activeExternalApp\)/);
+  assert.match(
+    main,
+    /if \(_isPinnablePane\(activeExternalApp\)\) _webPin\.start\(activeExternalApp\)/,
+  );
   assert.match(
     main,
     /if \(_isPinnablePane\(activeExternalApp\)\) _webPin\.pinView\(activeExternalApp\)/,
