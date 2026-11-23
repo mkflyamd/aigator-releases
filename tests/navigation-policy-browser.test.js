@@ -48,7 +48,10 @@ test('a browser pane loads outside links in the pane, not the system browser', a
 test('sign-in and blank popups still get a child window in a browser pane', () => {
   const view = stubView();
   applyNavigationPolicy(view, { homeHosts: ['bing.com'], openLinksInPane: true });
-  assert.strictEqual(view.webContents.handler({ url: 'https://login.microsoftonline.com/x' }).action, 'allow');
+  assert.strictEqual(
+    view.webContents.handler({ url: 'https://login.microsoftonline.com/x' }).action,
+    'allow',
+  );
   assert.strictEqual(view.webContents.handler({ url: 'about:blank' }).action, 'allow');
   assert.deepStrictEqual(view.webContents.loaded, []);
 });

@@ -5,7 +5,8 @@ const os = require('os');
 const path = require('path');
 const { createStore, listEngines, ENGINES, DEFAULT_ENGINE } = require('../shell/search-engine');
 
-const tmpFile = () => path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'gator-engine-')), 'engine.json');
+const tmpFile = () =>
+  path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'gator-engine-')), 'engine.json');
 
 test('defaults to Bing when nothing is saved', () => {
   const store = createStore(tmpFile());
@@ -42,7 +43,10 @@ test('a corrupt or hostile file falls back to the default', () => {
 
 test('every engine lists a name and an https search URL that ends ready for a query', () => {
   const list = listEngines();
-  assert.deepStrictEqual(list.map((e) => e.id), ['bing', 'google', 'duckduckgo']);
+  assert.deepStrictEqual(
+    list.map((e) => e.id),
+    ['bing', 'google', 'duckduckgo'],
+  );
   for (const e of Object.values(ENGINES)) {
     assert.match(e.search, /^https:\/\/.+[?&]q=$/);
     assert.match(e.home, /^https:\/\//);

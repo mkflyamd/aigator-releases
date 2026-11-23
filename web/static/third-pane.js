@@ -2485,10 +2485,7 @@ function _openThirdPaneImpl(type) {
       _shellDrag.unmount();
     }
     // Custom apps & Google services — hide the previous native pane if switching away
-    if (
-      typeof SKILL_MAP !== 'undefined' &&
-      _isShellWebPaneSkill(SKILL_MAP[tpState.type])
-    ) {
+    if (typeof SKILL_MAP !== 'undefined' && _isShellWebPaneSkill(SKILL_MAP[tpState.type])) {
       if (
         typeof window.gatorShell !== 'undefined' &&
         window.gatorShell.isShell &&

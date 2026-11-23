@@ -24,7 +24,17 @@ assert(defaults, 'DEFAULT_DOCK_FAVS not found');
 const ids = defaults[1].match(/'[^']+'/g).map((s) => s.slice(1, -1));
 assert.deepStrictEqual(
   ids,
-  ['email', 'calendar', 'teams', 'onedrive', 'confluence', 'jira', 'slack', 'code_agent', 'browser'],
+  [
+    'email',
+    'calendar',
+    'teams',
+    'onedrive',
+    'confluence',
+    'jira',
+    'slack',
+    'code_agent',
+    'browser',
+  ],
   'default rail',
 );
 

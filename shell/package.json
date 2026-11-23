@@ -38,6 +38,7 @@
       "navigation-policy.js",
       "preload.js",
       "sandbox-repair.js",
+      "search-engine.js",
       "splash.html",
       "toolbar-preload.js",
       "toolbar-star.js",
