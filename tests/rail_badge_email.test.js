@@ -28,7 +28,12 @@ function load() {
     },
   };
   vm.createContext(ctx);
-  for (const fn of ['teamsBadgeCount', 'publishTeamsBadge', 'publishEmailBadge', 'updateNativeBadge']) {
+  for (const fn of [
+    'teamsBadgeCount',
+    'publishTeamsBadge',
+    'publishEmailBadge',
+    'updateNativeBadge',
+  ]) {
     vm.runInContext(functionSource(fn), ctx);
   }
   return { ctx, badges };

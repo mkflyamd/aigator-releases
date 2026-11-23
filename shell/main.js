@@ -4087,7 +4087,11 @@ setTimeout(scanAll, 500);
       const count = parse(view.webContents.getTitle());
       gatorView.webContents
         .executeJavaScript(
-          'if(typeof updateNativeBadge==="function"){updateNativeBadge("' + id + '",' + count + ');}',
+          'if(typeof updateNativeBadge==="function"){updateNativeBadge("' +
+            id +
+            '",' +
+            count +
+            ');}',
         )
         .catch(() => {});
     };
