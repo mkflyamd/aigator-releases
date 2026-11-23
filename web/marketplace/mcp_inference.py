@@ -94,12 +94,21 @@ def _constructs_server(tree: ast.Module) -> bool:
     return False
 
 
+def _calls_run(node: ast.AST) -> bool:
+    return any(
+        isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "run"
+        for n in ast.walk(node)
+    )
+
+
 def _runs_when_main(tree: ast.Module) -> bool:
+    runners = {n.name for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and _calls_run(n)}
     for node in tree.body:
         if isinstance(node, ast.If) and _is_main_guard(node.test):
-            for inner in ast.walk(node):
-                if isinstance(inner, ast.Call) and isinstance(inner.func, ast.Attribute) and inner.func.attr == "run":
-                    return True
+            if _calls_run(node):
+                return True
+            if any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in runners for n in ast.walk(node)):
+                return True
     return False
 
 

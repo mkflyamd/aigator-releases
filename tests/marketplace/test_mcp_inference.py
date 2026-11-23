@@ -56,6 +56,34 @@ def test_the_snowflake_layout_infers_a_uv_launch():
     assert spec.args() == EXPECTED_ARGS
 
 
+WRAPPED_SERVER = b"""import click
+from fastmcp import FastMCP
+
+server = FastMCP("snowflake")
+
+
+@click.command()
+def main() -> None:
+    server.run(transport="stdio")
+
+
+if __name__ == "__main__":
+    main()
+"""
+
+
+def test_a_server_started_by_a_main_function_the_guard_calls_matches():
+    spec = infer_launch_spec({**FILES, "scripts/main.py": WRAPPED_SERVER})
+
+    assert spec is not None and spec.args() == EXPECTED_ARGS
+
+
+def test_a_guard_that_calls_a_function_which_never_runs_the_server_does_not_match():
+    idle = WRAPPED_SERVER.replace(b'server.run(transport="stdio")', b"print('hi')")
+
+    assert infer_launch_spec({**FILES, "scripts/main.py": idle}) is None
+
+
 def test_inference_is_a_pure_function_of_the_files():
     assert infer_launch_spec(FILES) == infer_launch_spec(dict(reversed(list(FILES.items()))))
 
