@@ -6,6 +6,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('gatorShell', {
   isShell: true,
   platform: process.platform,
+  paneTraceClick: (app) => ipcRenderer.send('pane-trace:click', app, Date.now()),
 
   // ── Slack (backwards-compatible — existing callers unchanged) ──────
   showSlack: () => ipcRenderer.invoke('external-pane:show', 'slack'),

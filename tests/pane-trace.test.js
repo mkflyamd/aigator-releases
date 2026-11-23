@@ -109,3 +109,19 @@ test('a stale settle timer does not finish a newer click', () => {
   timers[0]();
   assert.strictEqual(lines.length, 1);
 });
+
+const fs = require('node:fs');
+const path = require('node:path');
+const read = (rel) => fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
+
+test('the trace is wired through main, preload and the rail click', () => {
+  const main = read('shell/main.js');
+  assert.match(main, /require\('\.\/pane-trace'\)\.createPaneTrace\(\{\s*enabled: process\.env\.AIGATOR_PANE_TRACE === '1'/);
+  assert.match(main, /ipcMain\.on\('pane-trace:click'/);
+  assert.match(main, /paneTrace\.mark\('ipc-show'/);
+  assert.match(main, /paneTrace\.mark\('ipc-hide'/);
+  assert.match(main, /paneTrace\.mark\('layout'/);
+  assert.match(main, /paneTrace\.mark\('frame'\)/);
+  assert.match(read('shell/preload.js'), /paneTraceClick: \(app\) => ipcRenderer\.send\('pane-trace:click', app, Date\.now\(\)\)/);
+  assert.match(read('web/static/app.js'), /window\.gatorShell\?\.paneTraceClick\?\.\(id\)/);
+});
