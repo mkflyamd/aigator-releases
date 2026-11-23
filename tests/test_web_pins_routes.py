@@ -68,6 +68,18 @@ def test_create_rejects_unknown_app(client):
     assert client.post("/api/web-pins", json=_body(app_id="nope")).status_code == 400
 
 
+def test_create_accepts_builtin_browser_pane(client):
+    r = client.post("/api/web-pins", json=_body(app_id="browser", aria_label="", title="", url="https://example.com/a"))
+    assert r.status_code == 200, r.text
+    pin = state.get_pins("tab-a")[0]
+    assert pin["meta"]["app_id"] == "browser" and pin["meta"]["app_name"] == "Browser"
+
+
+def test_create_still_rejects_other_unknown_panes(client):
+    for app_id in ("g-docs", "Browser", "browser2", ""):
+        assert client.post("/api/web-pins", json=_body(app_id=app_id)).status_code == 400, app_id
+
+
 def test_create_rejects_non_png(client):
     assert client.post("/api/web-pins", json=_body(image_b64=_b64(b"GIF89a-----"))).status_code == 400
 

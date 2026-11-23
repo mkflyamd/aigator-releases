@@ -501,7 +501,7 @@
         margin-left: 4px;
         -webkit-app-region: no-drag;
       }
-      .tb.is-custom .tb-pin-group {
+      .tb.is-pinnable .tb-pin-group {
         display: flex;
       }
       .tb-pin-emoji {
@@ -1281,8 +1281,8 @@
           .getElementById('tb-pinbar-cancel')
           .addEventListener('click', () => ipcRenderer.send('toolbar:web-pin-cancel'));
         function renderPin(state) {
-          if (typeof state.isCustomApp === 'boolean')
-            elBar.classList.toggle('is-custom', state.isCustomApp);
+          if (typeof state.pinnable === 'boolean')
+            elBar.classList.toggle('is-pinnable', state.pinnable);
           if (typeof state.pinMode === 'boolean') {
             elBar.classList.toggle('is-pinning', state.pinMode);
             elPin.classList.toggle('is-active', state.pinMode);

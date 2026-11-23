@@ -23,10 +23,17 @@ _MAX_LOCATOR = 8_192
 _FAILURE_STATUSES = {"pane_not_visible", "page_mismatch", "pane_unavailable", "timeout", "empty_target"}
 
 
+_BUILTIN_PINNABLE = {"browser": {"id": "browser", "name": "Browser"}}
+
+
 def _custom_apps() -> list[dict]:
     from config import load_config
 
     return load_config().get("custom_apps", [])
+
+
+def _pinnable_app(app_id: str) -> dict | None:
+    return next((a for a in _custom_apps() if a.get("id") == app_id), None) or _BUILTIN_PINNABLE.get(app_id)
 
 
 def _decode_png(image_b64: str) -> bytes:
@@ -79,7 +86,7 @@ async def create_web_pin(req: WebPinCreate):
     from skills.context.state import set_pin
     from skills.webpin import store
 
-    app_cfg = next((a for a in _custom_apps() if a.get("id") == req.app_id), None)
+    app_cfg = _pinnable_app(req.app_id)
     if not app_cfg:
         raise HTTPException(400, "unknown custom app")
     image = _decode_png(req.image_b64)
