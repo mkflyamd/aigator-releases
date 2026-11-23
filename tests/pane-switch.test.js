@@ -326,3 +326,8 @@ test('_nativeShellAppId is null outside the shell or without switchPane', () => 
     assert.strictEqual(fn('my-app'), null);
   }
 });
+
+test('the toolbar is raised once after the startup panes are created', () => {
+  const main = read('shell/main.js');
+  assert.match(main, /githubView\.setBounds\(\{ x: 1599, y: 0, width: 1, height: 900 \}\);\s*\}\s*_raiseToolbarView\(\);/);
+});

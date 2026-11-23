@@ -3186,6 +3186,7 @@ setTimeout(scanAll, 500);
     win.contentView.addChildView(githubView);
     githubView.setBounds({ x: 1599, y: 0, width: 1, height: 900 });
   }
+  _raiseToolbarView();
 
   // ΓöÇΓöÇ Outlook pin module: inject ONCE on dom-ready ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
   // Selectors confirmed by spike/native-outlook-pane/:
