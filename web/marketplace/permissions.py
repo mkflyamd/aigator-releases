@@ -9,6 +9,8 @@ from pathlib import Path
 
 import yaml
 
+from marketplace.mcp_inference import infer_launch_spec
+
 MAX_ENTRIES = 20
 MAX_ENTRY_LEN = 200
 MAX_HOOK_LEN = 300
@@ -198,6 +200,14 @@ def summarize_package(files: dict[str, bytes]) -> dict:
         lines.append("Ships programs: " + ", ".join(bin_files))
     for name in servers:
         lines.append(_mcp_line(name, manifest[name]))
+    inferred = None if manifest else infer_launch_spec(files)
+    if inferred is not None:
+        servers = [inferred.name]
+        line = _mcp_line(inferred.name, {"command": inferred.command, "args": inferred.args()})
+        lines.append(line)
+        if line.startswith("Starts"):
+            lines.append("Downloads and installs these Python packages the first time it starts: "
+                         + ", ".join(_visible(dep) for dep in inferred.dependencies))
     return {
         "permissions": perms.to_dict(),
         "has_tools": has_tools,

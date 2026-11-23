@@ -530,6 +530,12 @@ def _uninstall_skill_unlocked(skill_id: str) -> dict:
     entries = load_installed()
     entry = next((e for e in entries if e.get("id") == skill_id), None)
 
+    # A server shipped by a local import runs with the skill folder as its working
+    # directory, so stop it before the folder is deleted (Windows cannot delete a
+    # folder a process is running in).
+    if entry is not None and entry.get("mcp_connection_ids") and entry.get("skill_ids") is None:
+        _teardown_plugin_mcp(skill_id)
+
     removed = False
     for d in [skill_dir, mine_dir]:
         if d.exists():
@@ -1249,6 +1255,77 @@ def _register_plugin_mcp_servers(plugin_id: str, plugin_dir: Path) -> list[str]:
         )
         connection_ids.append(result["id"])
     return connection_ids
+
+
+_UV_WARM_TIMEOUT_S = 240
+
+
+def _warm_uv_cache(spec, skill_dir: Path) -> None:
+    """Fetch the server's Python packages now. The first `uv run` can take longer
+    than the 30s an MCP server gets to answer its first request, so without this
+    the first connection would time out. A failure here is ignored: the connection
+    attempt that follows reports the real error."""
+    import subprocess
+    from proc_utils import no_window_kwargs
+
+    uv = shutil.which(spec.command)
+    if not uv:
+        return
+    args = [uv, *spec.args()[:-1], "python", "-c", "pass"]
+    try:
+        subprocess.run(
+            args,
+            cwd=skill_dir,
+            capture_output=True,
+            timeout=_UV_WARM_TIMEOUT_S,
+            **no_window_kwargs(),
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.info("uv cache warm-up for %s did not finish: %s", skill_dir.name, exc)
+
+
+def register_inferred_mcp_server(skill_id: str, files: dict[str, bytes]) -> dict:
+    """Register the MCP server a locally imported skill ships, if its files match
+    marketplace.mcp_inference's rule. Called only after the user approved the
+    preview that listed it. Returns {} when nothing matches, otherwise
+    {"mcp_connection_ids": [...]} plus "mcp_error" if it could not start."""
+    from marketplace.mcp_inference import infer_launch_spec
+
+    if _discover_plugin_mcp_manifest_from_files(files):
+        return {}
+    spec = infer_launch_spec(files)
+    if spec is None:
+        return {}
+
+    from mcp import manager as _mcp_manager
+
+    skill_dir = INSTALLED_SKILLS_DIR / skill_id
+    provisional = {
+        "transport": "stdio",
+        "command": spec.command,
+        "args": spec.args(),
+        "env": {},
+        "name": spec.name,
+        "cwd": str(skill_dir),
+    }
+    out: dict = {}
+    try:
+        _warm_uv_cache(spec, skill_dir)
+        result = _mcp_manager.register_plugin_mcp_server(skill_id, spec.name, provisional, [])
+    except Exception as exc:
+        logger.warning("Registering the MCP server of skill %s failed: %s", skill_id, exc)
+        return {"mcp_error": str(exc)}
+    if result.get("id"):
+        out["mcp_connection_ids"] = [result["id"]]
+        with _INSTALL_INDEX_LOCK:
+            entries = load_installed()
+            for entry in entries:
+                if entry.get("id") == skill_id:
+                    entry["mcp_connection_ids"] = out["mcp_connection_ids"]
+            save_installed(entries)
+    if not result.get("ok"):
+        out["mcp_error"] = result.get("error", "")
+    return out
 
 
 def namespaced_skill_id(

@@ -757,6 +757,9 @@ def install_local(req: LocalInstallRequest):
 
     _record_grants(result, result["skill_id"])
     skill_audit.log_install(result["skill_id"], "Community", "local", req.digest)
+    preview = _installer.preview_package(local_zip_bytes=zip_bytes)
+    if preview.get("ok"):
+        result.update(_installer.register_inferred_mcp_server(result["skill_id"], preview["files"]))
     load_installed_skill_prompts()
     skill_dir = __import__("config").INSTALLED_SKILLS_DIR / result["skill_id"]
     _note_tools_error(result, load_skill_tools(result["skill_id"], skill_dir, "Community"))
