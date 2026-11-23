@@ -50,3 +50,20 @@ test('paneBackground follows the theme', () => {
   assert.strictEqual(paneBackground('dark'), PANE_BG.dark);
   assert.strictEqual(paneBackground(undefined), PANE_BG.dark);
 });
+
+const fs = require('node:fs');
+const path = require('node:path');
+const read = (rel) => fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
+
+test('pane:switch is wired through main and preload', () => {
+  const main = read('shell/main.js');
+  assert.match(main, /require\('\.\/pane-switch'\)/);
+  assert.match(main, /ipcMain\.handle\('pane:switch'/);
+  assert.match(main, /async function showNativePane\(appName, ticket\)/);
+  assert.match(main, /ipcMain\.handle\('external-pane:show'[\s\S]*?showNativePane\(appName, null\)/);
+  assert.match(main, /_switchGate\.invalidate\(\)/);
+  assert.match(main, /_raiseToolbarView\(\)/);
+  assert.match(main, /_applyPaneBackgrounds\(\)/);
+  assert.match(main, /_gatorSplitApplied/);
+  assert.match(read('shell/preload.js'), /switchPane: \(to, seq\) => ipcRenderer\.invoke\('pane:switch', to, seq\)/);
+});

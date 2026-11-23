@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('gatorShell', {
   isShell: true,
   platform: process.platform,
   paneTraceClick: (app) => ipcRenderer.send('pane-trace:click', app, Date.now()),
+  switchPane: (to, seq) => ipcRenderer.invoke('pane:switch', to, seq),
 
   // ── Slack (backwards-compatible — existing callers unchanged) ──────
   showSlack: () => ipcRenderer.invoke('external-pane:show', 'slack'),
