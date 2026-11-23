@@ -691,7 +691,7 @@ function viewForApp(appName) {
   if (appName === 'jira') return jiraView;
   if (appName === 'github') return githubView;
   // Generic panes
-  if (_genericPanes[appName]) return _genericPanes[appName].view;
+  if (Object.hasOwn(_genericPanes, appName)) return _genericPanes[appName].view;
   return null;
 }
 
@@ -1337,6 +1337,13 @@ function createWindow() {
   gatorView.setBackgroundColor('#0a0f1a');
   gatorView.webContents.on('did-start-navigation', (_e, _url, _isInPlace, isMainFrame) => {
     if (isMainFrame) _gatorSplitApplied = null;
+  });
+  // A layout between navigation start and commit can toggle the old document.
+  gatorView.webContents.on('dom-ready', () => {
+    _gatorSplitApplied = null;
+  });
+  gatorView.webContents.on('did-finish-load', () => {
+    _gatorSplitApplied = null;
   });
 
   // Raise the listener cap on the Gator webContents. gatorView gets a dom-ready
@@ -4471,7 +4478,9 @@ function _syncGatorSplit(split) {
   _gatorSplitApplied = split;
   gatorView.webContents
     .executeJavaScript("document.body.classList.toggle('gator-split', " + split + ');')
-    .catch(() => {});
+    .catch(() => {
+      _gatorSplitApplied = null;
+    });
 }
 
 // Generic external-pane IPC ΓÇö used by both Slack and Teams.
@@ -4587,16 +4596,20 @@ async function showNativePane(appName, ticket) {
   }
   // Auto-create a generic pane for apps that have a home URL but no pane yet
   // (e.g. Google Workspace service skills g-gmail, g-calendar).
-  if (!view && APP_HOME_URL[appName]) {
+  if (!view && Object.hasOwn(APP_HOME_URL, appName) && APP_HOME_URL[appName]) {
     try {
       view = createGenericPane({ id: appName, name: appName, url: APP_HOME_URL[appName] });
     } catch {}
   }
   if (appName === 'github' && !view) view = await ensureGitHubView();
   if (!view) return false;
-  if (ticket !== null && !_switchGate.isCurrent(ticket)) return false;
-  if (view.setBackgroundColor) view.setBackgroundColor(paneBackground(_effectiveTheme));
+  // A view created during an await is already on the stack, so raise the toolbar
+  // above it even when this switch was superseded.
   if (!preexisting) _raiseToolbarView();
+  if (ticket !== null && !_switchGate.isCurrent(ticket)) return false;
+  try {
+    if (view.setBackgroundColor) view.setBackgroundColor(paneBackground(_effectiveTheme));
+  } catch {}
   if (activeExternalApp === appName && view.webContents && !view.webContents.isDestroyed()) {
     const home =
       appName === 'github'
@@ -4629,13 +4642,13 @@ ipcMain.handle('external-pane:show', async (_e, appName) => {
   return showNativePane(appName, null);
 });
 ipcMain.handle('pane:switch', async (_e, to, seq) => {
-  if (typeof to !== 'string' || !to) return false;
+  if (typeof to !== 'string' || !/^[a-z0-9_-]{1,64}$/i.test(to)) return false;
   paneTrace.mark('ipc-show', { app: to.slice(0, 64) });
   const ticket = _switchGate.begin(seq);
   if (ticket === null) return false;
   return showNativePane(to, ticket);
 });
-ipcMain.on('pane-trace:click',(_e, app, t) => {
+ipcMain.on('pane-trace:click', (_e, app, t) => {
   if (typeof app === 'string' && Number.isFinite(t)) paneTrace.click(app.slice(0, 64), t);
 });
 ipcMain.handle('search-engine:get', () => ({

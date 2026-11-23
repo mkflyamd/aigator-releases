@@ -62,8 +62,9 @@ test('pane:switch is wired through main and preload', () => {
   assert.match(main, /async function showNativePane\(appName, ticket\)/);
   assert.match(main, /ipcMain\.handle\('external-pane:show'[\s\S]*?showNativePane\(appName, null\)/);
   assert.match(main, /_switchGate\.invalidate\(\)/);
-  assert.match(main, /_raiseToolbarView\(\)/);
-  assert.match(main, /_applyPaneBackgrounds\(\)/);
+  assert.match(main, /if \(!preexisting\) _raiseToolbarView\(\);\s*if \(ticket !== null && !_switchGate\.isCurrent\(ticket\)\) return false;/);
+  assert.match(main, /_pushThemeToToolbar\(\);\s*_applyPaneBackgrounds\(\);/);
+  assert.strictEqual(main.match(/_pushThemeToToolbar\(\);\s*_applyPaneBackgrounds\(\);/g).length, 2);
   assert.match(main, /_gatorSplitApplied/);
   assert.match(read('shell/preload.js'), /switchPane: \(to, seq\) => ipcRenderer\.invoke\('pane:switch', to, seq\)/);
 });
