@@ -163,19 +163,19 @@ cannot reach.
 
 ## Key files
 
-| File                          | Role                                                                           |
-| ----------------------------- | ------------------------------------------------------------------------------ |
-| `web/routes/mcp_routes.py`    | Preset definition, resolve and spawn endpoints, MCP connection CRUD            |
-| `web/google_accounts.py`      | Account list, account resolver, client-secret probe                            |
-| `web/routes/config_routes.py` | `POST /api/config/google` (validate and save), `GET /api/config/google/status` |
-| `web/tool_pipeline.py`        | Google service groups, `expand_google_umbrella`                                |
+| File                          | Role                                                                                   |
+| ----------------------------- | -------------------------------------------------------------------------------------- |
+| `web/routes/mcp_routes.py`    | Preset definition, resolve and spawn endpoints, MCP connection CRUD                    |
+| `web/google_accounts.py`      | Account list, account resolver, client-secret probe                                    |
+| `web/routes/config_routes.py` | `POST /api/config/google` (validate and save), `GET /api/config/google/status`         |
+| `web/tool_pipeline.py`        | Google service groups, `expand_google_umbrella`                                        |
 | `web/mcp/manager.py`          | HITL gate (`_is_gated_tool`, `_summarize_gated_call`), account resolver, tool dispatch |
-| `web/skills/_drafts.py`       | Draft store for HITL approval flow                                             |
-| `web/routes/email.py`         | Draft approval endpoint (`/api/drafts/{id}/approve`) — replays gated MCP calls |
-| `web/static/mcp_add_modal.js` | Connect wizard — preset flow, GitHub URL fetcher                               |
-| `web/static/app.js`           | Draft approval card UI, chat rendering                                         |
-| `web/oauth/flow.py`           | OAuth flow for remote MCP servers (not used for workspace-mcp)                 |
-| `web/oauth/dcr.py`            | BYOC provider registration — Google-specific params (no `resource` param)      |
+| `web/skills/_drafts.py`       | Draft store for HITL approval flow                                                     |
+| `web/routes/email.py`         | Draft approval endpoint (`/api/drafts/{id}/approve`) — replays gated MCP calls         |
+| `web/static/mcp_add_modal.js` | Connect wizard — preset flow, GitHub URL fetcher                                       |
+| `web/static/app.js`           | Draft approval card UI, chat rendering                                                 |
+| `web/oauth/flow.py`           | OAuth flow for remote MCP servers (not used for workspace-mcp)                         |
+| `web/oauth/dcr.py`            | BYOC provider registration — Google-specific params (no `resource` param)              |
 
 ## Corporate proxy support
 

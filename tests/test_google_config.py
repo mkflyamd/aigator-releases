@@ -9,7 +9,7 @@ from fastapi import HTTPException
 from routes import config_routes as cr
 
 CLIENT_ID = "1234567890-abc.apps.googleusercontent.com"
-SECRET = "aigator-fake-api-key"
+SECRET = "aigator-fake-api-key"  # pragma: allowlist secret
 
 
 @pytest.fixture
@@ -69,7 +69,7 @@ def test_bad_client_id_is_rejected(store):
 
 def test_secret_with_whitespace_is_rejected(store):
     with pytest.raises(HTTPException) as exc:
-        cr.save_google_workspace(_req(client_secret="two words"))
+        cr.save_google_workspace(_req(client_secret="two words"))  # pragma: allowlist secret
     assert exc.value.status_code == 400
 
 
