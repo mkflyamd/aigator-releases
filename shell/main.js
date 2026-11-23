@@ -4642,7 +4642,7 @@ ipcMain.handle('external-pane:show', async (_e, appName) => {
   return showNativePane(appName, null);
 });
 ipcMain.handle('pane:switch', async (_e, to, seq) => {
-  if (typeof to !== 'string' || !/^[a-z0-9_-]{1,64}$/i.test(to)) return false;
+  if (typeof to !== 'string' || !/^[a-z0-9_-]{1,200}$/i.test(to)) return false;
   paneTrace.mark('ipc-show', { app: to.slice(0, 64) });
   const ticket = _switchGate.begin(seq);
   if (ticket === null) return false;
