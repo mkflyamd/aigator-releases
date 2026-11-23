@@ -99,7 +99,7 @@ const _nativeSlack = {
     if (this._inShell()) {
       // Shell mode: tell the shell to show the Slack tile (tiled WebContentsView).
       // The shell handles layout — Gator shrinks, Slack fills the right tile.
-      if (switchTo) window.gatorShell.switchPane(switchTo, ++_paneSwitchSeq);
+      if (switchTo) window.gatorShell.switchPane(switchTo, _nextPaneSwitchSeq());
       else window.gatorShell.showSlack();
       this._startContextListener();
       this._mountDragHandle();
@@ -2406,6 +2406,13 @@ function _hideAllNativePanes(exceptType) {
 const USE_SWITCH_PANE = true;
 let _paneSwitchSeq = 0;
 
+// Monotonic across reloads and Gator windows: seeded from the clock so a restarted renderer
+// never falls below the shell's last accepted seq.
+function _nextPaneSwitchSeq() {
+  _paneSwitchSeq = Math.max(_paneSwitchSeq + 1, Date.now());
+  return _paneSwitchSeq;
+}
+
 // Shell app id this skill type opens natively, or null for classic panes / browser mode.
 function _nativeShellAppId(type) {
   const shell = window.gatorShell;
@@ -2435,7 +2442,7 @@ function _nativeShellAppId(type) {
 }
 
 function _switchNativePane(appId) {
-  return window.gatorShell.switchPane(appId, ++_paneSwitchSeq);
+  return window.gatorShell.switchPane(appId, _nextPaneSwitchSeq());
 }
 
 function _openThirdPaneImpl(type) {

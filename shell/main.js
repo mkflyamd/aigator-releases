@@ -1335,11 +1335,11 @@ function createWindow() {
   // Match the splash so the unpainted moment before the page's first frame is
   // dark instead of Chromium's default white.
   gatorView.setBackgroundColor('#0a0f1a');
-  gatorView.webContents.on('did-start-navigation', (_e, _url, _isInPlace, isMainFrame) => {
+  gatorView.webContents.on('did-start-navigation', (_e, _url, isInPlace, isMainFrame) => {
     if (isMainFrame) {
       _gatorSplitApplied = null;
-      // The renderer's pane-switch seq restarts at 0 on every document load.
-      _switchGate.reset();
+      // Only a real document load restarts the renderer's pane-switch seq (not a hash change).
+      if (!isInPlace) _switchGate.reset();
     }
   });
   // A layout between navigation start and commit can toggle the old document.
@@ -4561,6 +4561,7 @@ function createGenericPane(appConfig) {
   win.contentView.addChildView(view);
   view.setBounds({ x: 1599, y: 0, width: 1, height: 900 });
   _attachToolbarListeners(view, id);
+  _raiseToolbarView();
 
   _genericPanes[id] = { id, name, url, view, partition, homeHosts };
   _refreshAppHomeUrls();
@@ -4582,7 +4583,28 @@ function createCustomApp(appConfig) {
   return view;
 }
 
+// The native switch currently in flight (set synchronously, cleared when that same ticket
+// finishes). A hide that arrives meanwhile must leave nothing native visible.
+let _pendingSwitchApp = null;
+let _pendingSwitchTicket = null;
+
 async function showNativePane(appName, ticket) {
+  if (ticket !== null) {
+    _pendingSwitchApp = appName;
+    _pendingSwitchTicket = ticket;
+  }
+  try {
+    return await _showNativePaneImpl(appName, ticket);
+  } finally {
+    // A later switch may have replaced the pending value; only clear our own.
+    if (ticket !== null && _pendingSwitchTicket === ticket) {
+      _pendingSwitchApp = null;
+      _pendingSwitchTicket = null;
+    }
+  }
+}
+
+async function _showNativePaneImpl(appName, ticket) {
   const preexisting = !!viewForApp(appName);
   let view = viewForApp(appName);
   if (!view && (appName === 'jira' || appName === 'confluence'))
@@ -4606,11 +4628,23 @@ async function showNativePane(appName, ticket) {
     } catch {}
   }
   if (appName === 'github' && !view) view = await ensureGitHubView();
-  if (!view) return false;
+  if (!view) {
+    // The target could not be created: do not leave the previous pane showing while the
+    // renderer redirects to Settings. The legacy path (no ticket) already hid it renderer-side.
+    if (ticket !== null && _switchGate.isCurrent(ticket)) {
+      activeExternalApp = null;
+      layout();
+    }
+    return false;
+  }
   // A view created during an await is already on the stack, so raise the toolbar
   // above it even when this switch was superseded.
   if (!preexisting) _raiseToolbarView();
-  if (ticket !== null && !_switchGate.isCurrent(ticket)) return 'superseded';
+  if (ticket !== null && !_switchGate.isCurrent(ticket)) {
+    // Park the just-created view at its proper (hidden) bounds.
+    if (!preexisting) layout();
+    return 'superseded';
+  }
   try {
     if (view.setBackgroundColor) view.setBackgroundColor(paneBackground(_effectiveTheme));
   } catch {}
@@ -4642,6 +4676,8 @@ async function showNativePane(appName, ticket) {
   return true;
 }
 ipcMain.handle('external-pane:show', async (_e, appName) => {
+  // A legacy show (closeDrawer, restore, post-approval) must not be replaced by an in-flight switch.
+  _switchGate.invalidate();
   paneTrace.mark('ipc-show', { app: appName });
   return showNativePane(appName, null);
 });
@@ -4686,7 +4722,11 @@ ipcMain.handle('github-pane:refresh', async (_e, baseUrl) => {
 ipcMain.handle('external-pane:hide', (_e, appName) => {
   paneTrace.mark('ipc-hide', { app: appName, noop: activeExternalApp !== appName });
   _switchGate.invalidate();
-  if (activeExternalApp === appName) {
+  if (_pendingSwitchApp !== null) {
+    // Close / classic open / Settings arrived mid-switch: nothing native may stay visible.
+    activeExternalApp = null;
+    layout();
+  } else if (activeExternalApp === appName) {
     activeExternalApp = null;
     layout();
   }
@@ -4744,7 +4784,10 @@ ipcMain.handle('external-pane:get-width', () => extTileWidth);
 ipcMain.handle('slack-pane:hide', () => {
   paneTrace.mark('ipc-hide', { app: 'slack', noop: activeExternalApp !== 'slack' });
   _switchGate.invalidate();
-  if (activeExternalApp === 'slack') {
+  if (_pendingSwitchApp !== null) {
+    activeExternalApp = null;
+    layout();
+  } else if (activeExternalApp === 'slack') {
     activeExternalApp = null;
     layout();
   }
