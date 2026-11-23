@@ -648,8 +648,10 @@ function saveLastSlackUrl(url) {
   }
 }
 
-const { createSwitchGate, paneBackground } = require('./pane-switch');
+const { createSwitchGate, applyPaneBackground } = require('./pane-switch');
 const _switchGate = createSwitchGate();
+const _paneBgStates = new WeakMap();
+const _applyPaneBackground = (view) => applyPaneBackground(view, _effectiveTheme, _paneBgStates);
 
 // Re-adding an existing child moves it to the top of the stack, which keeps the
 // toolbar's dropdown above a lazily created pane.
@@ -661,7 +663,6 @@ function _raiseToolbarView() {
 }
 
 function _applyPaneBackgrounds() {
-  const bg = paneBackground(_effectiveTheme);
   const views = [
     slackView,
     teamsView,
@@ -673,11 +674,8 @@ function _applyPaneBackgrounds() {
     githubView,
   ];
   for (const pane of Object.values(_genericPanes)) views.push(pane.view);
-  for (const v of views) {
-    try {
-      if (v && v.setBackgroundColor) v.setBackgroundColor(bg);
-    } catch {}
-  }
+  // Theme changes only touch views still waiting for their first load.
+  for (const v of views) _applyPaneBackground(v);
 }
 
 // Helper: return the WebContentsView for the given app name, or null.
@@ -4645,9 +4643,7 @@ async function _showNativePaneImpl(appName, ticket) {
     if (!preexisting) layout();
     return 'superseded';
   }
-  try {
-    if (view.setBackgroundColor) view.setBackgroundColor(paneBackground(_effectiveTheme));
-  } catch {}
+  _applyPaneBackground(view);
   if (activeExternalApp === appName && view.webContents && !view.webContents.isDestroyed()) {
     const home =
       appName === 'github'
@@ -4682,7 +4678,7 @@ ipcMain.handle('external-pane:show', async (_e, appName) => {
   return showNativePane(appName, null);
 });
 ipcMain.handle('pane:switch', async (_e, to, seq) => {
-  if (typeof to !== 'string' || !/^[a-z0-9_-]{1,200}$/i.test(to)) return false;
+  if (typeof to !== 'string' || !to || to.length > 200) return false;
   paneTrace.mark('ipc-show', { app: to.slice(0, 64) });
   const ticket = _switchGate.begin(seq);
   if (ticket === null) return 'superseded';

@@ -1,6 +1,12 @@
 const test = require('node:test');
 const assert = require('node:assert');
-const { createSwitchGate, paneBackground, PANE_BG } = require('../shell/pane-switch');
+const {
+  createSwitchGate,
+  paneBackground,
+  applyPaneBackground,
+  PANE_BG,
+  PANE_BG_SETTLED,
+} = require('../shell/pane-switch');
 
 test('begin accepts a fresh seq and returns a ticket', () => {
   const gate = createSwitchGate();
@@ -150,4 +156,173 @@ test('begin rejects Infinity and negative seq', () => {
   assert.strictEqual(gate.begin(Infinity), null);
   assert.strictEqual(gate.begin(-Infinity), null);
   assert.strictEqual(gate.begin(-1), null);
+});
+
+function fakeView({ loading = false, url = '' } = {}) {
+  const calls = [];
+  const listeners = {};
+  let destroyed = false;
+  const view = {
+    calls,
+    listeners,
+    destroy: () => {
+      destroyed = true;
+    },
+    setBackgroundColor: (c) => {
+      if (destroyed) throw new Error('Object has been destroyed');
+      calls.push(c);
+    },
+    webContents: {
+      isDestroyed: () => destroyed,
+      isLoading: () => loading,
+      getURL: () => url,
+      once: (ev, fn) => {
+        listeners[ev] = (listeners[ev] || []).concat(fn);
+      },
+    },
+  };
+  return view;
+}
+
+test('a new view gets the themed colour until its first load finishes, then white', () => {
+  const states = new WeakMap();
+  const v = fakeView({ loading: true, url: 'https://example.com/' });
+  applyPaneBackground(v, 'dark', states);
+  assert.deepStrictEqual(v.calls, [PANE_BG.dark]);
+  v.listeners['did-stop-loading'].forEach((fn) => fn());
+  assert.deepStrictEqual(v.calls, [PANE_BG.dark, PANE_BG_SETTLED]);
+});
+
+test('the first-load listener is registered once per view, however often it is re-applied', () => {
+  const states = new WeakMap();
+  const v = fakeView({ loading: true, url: 'https://example.com/' });
+  applyPaneBackground(v, 'dark', states);
+  applyPaneBackground(v, 'light', states);
+  applyPaneBackground(v, 'dark', states);
+  assert.strictEqual(v.listeners['did-stop-loading'].length, 1);
+  // A theme change before the first load finishes still re-themes the unsettled view.
+  assert.deepStrictEqual(v.calls, [PANE_BG.dark, PANE_BG.light, PANE_BG.dark]);
+});
+
+test('a settled view is never re-themed', () => {
+  const states = new WeakMap();
+  const v = fakeView({ loading: true, url: 'https://example.com/' });
+  applyPaneBackground(v, 'dark', states);
+  v.listeners['did-stop-loading'].forEach((fn) => fn());
+  v.calls.length = 0;
+  applyPaneBackground(v, 'light', states);
+  assert.deepStrictEqual(v.calls, []);
+});
+
+test('a view that finished loading before its first show is settled to white at once', () => {
+  const states = new WeakMap();
+  const v = fakeView({ loading: false, url: 'https://example.com/' });
+  applyPaneBackground(v, 'dark', states);
+  assert.deepStrictEqual(v.calls, [PANE_BG_SETTLED]);
+  assert.strictEqual(v.listeners['did-stop-loading'], undefined);
+  applyPaneBackground(v, 'light', states);
+  assert.deepStrictEqual(v.calls, [PANE_BG_SETTLED]);
+});
+
+test('a view that never started loading is themed and waits for its first load', () => {
+  const states = new WeakMap();
+  const v = fakeView({ loading: false, url: '' });
+  applyPaneBackground(v, 'light', states);
+  assert.deepStrictEqual(v.calls, [PANE_BG.light]);
+  assert.strictEqual(v.listeners['did-stop-loading'].length, 1);
+});
+
+test('a view destroyed before its first load finishes does not throw', () => {
+  const states = new WeakMap();
+  const v = fakeView({ loading: true, url: 'https://example.com/' });
+  applyPaneBackground(v, 'dark', states);
+  v.destroy();
+  assert.doesNotThrow(() => v.listeners['did-stop-loading'].forEach((fn) => fn()));
+  assert.doesNotThrow(() => applyPaneBackground(v, 'dark', states));
+  assert.doesNotThrow(() => applyPaneBackground(null, 'dark', states));
+});
+
+test('main applies pane backgrounds through the settle helper only', () => {
+  const main = read('shell/main.js');
+  assert.match(main, /const _paneBgStates = new WeakMap\(\);/);
+  assert.match(main, /_applyPaneBackground\(view\);\s*if \(activeExternalApp === appName/);
+  assert.match(main, /for \(const v of views\) _applyPaneBackground\(v\);/);
+  assert.doesNotMatch(main, /view\.setBackgroundColor\(paneBackground/);
+  assert.doesNotMatch(main, /v\.setBackgroundColor\(bg\)/);
+});
+
+test('pane:switch rejects only non-strings and empty or over-long names', () => {
+  const main = read('shell/main.js');
+  assert.match(main, /if \(typeof to !== 'string' \|\| !to \|\| to\.length > 200\) return false;/);
+  assert.doesNotMatch(main, /\[a-z0-9_-\]\{1,200\}/);
+});
+
+test('USE_SWITCH_PANE documents that main-side behaviour stays on', () => {
+  const tp = read('web/static/third-pane.js');
+  assert.match(tp, /\/\/ Internal revert switch: only restores the renderer's per-type hide\/show calls;/);
+});
+
+function loadNativeShellAppId(env) {
+  const vm = require('node:vm');
+  const tp = read('web/static/third-pane.js');
+  const m = tp.match(/function _nativeShellAppId\(type\) \{[\s\S]*?\n\}\n/);
+  assert.ok(m, '_nativeShellAppId not found');
+  const sandbox = {
+    window: { gatorShell: env.shell },
+    _nativeSlack: { _inShell: () => env.slackInShell !== false },
+    _outlookNativeEnabled: () => env.native !== false,
+    _onenoteNativeEnabled: () => env.native !== false,
+    _onedriveNativeEnabled: () => env.native !== false,
+    _jiraNativeEnabled: () => env.native !== false,
+    _confluenceNativeEnabled: () => env.native !== false,
+    _githubNativeEnabled: () => env.native !== false,
+    SKILL_MAP: {
+      calendar: { id: 'calendar' },
+      code_agent: { id: 'code_agent' },
+      'my-app': { _customApp: true },
+      'g-gmail': { _googleService: true },
+      browser: { _browserPane: true },
+    },
+    _isShellWebPaneSkill: (skill) =>
+      !!(skill && (skill._customApp || skill._googleService || skill._browserPane)),
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(`${m[0]}\nthis.fn = _nativeShellAppId;`, sandbox);
+  return sandbox.fn;
+}
+
+const IN_SHELL = { isShell: true, switchPane: () => {} };
+
+test('_nativeShellAppId maps skill types to shell app ids when native', () => {
+  const fn = loadNativeShellAppId({ shell: IN_SHELL });
+  assert.strictEqual(fn('teams'), 'teams');
+  assert.strictEqual(fn('slack'), 'slack');
+  assert.strictEqual(fn('email'), 'outlook');
+  for (const t of ['onenote', 'onedrive', 'jira', 'confluence', 'github']) {
+    assert.strictEqual(fn(t), t);
+  }
+  for (const t of ['my-app', 'g-gmail', 'browser']) assert.strictEqual(fn(t), t);
+});
+
+test('_nativeShellAppId is null for classic panes and unknown types', () => {
+  const fn = loadNativeShellAppId({ shell: IN_SHELL });
+  assert.strictEqual(fn('calendar'), null);
+  assert.strictEqual(fn('code_agent'), null);
+  assert.strictEqual(fn('nope'), null);
+});
+
+test('_nativeShellAppId is null for classic-mode native apps', () => {
+  const fn = loadNativeShellAppId({ shell: IN_SHELL, native: false, slackInShell: false });
+  for (const t of ['slack', 'email', 'onenote', 'onedrive', 'jira', 'confluence', 'github']) {
+    assert.strictEqual(fn(t), null, t);
+  }
+  assert.strictEqual(fn('teams'), 'teams');
+});
+
+test('_nativeShellAppId is null outside the shell or without switchPane', () => {
+  for (const shell of [undefined, { isShell: false, switchPane() {} }, { isShell: true }]) {
+    const fn = loadNativeShellAppId({ shell });
+    assert.strictEqual(fn('teams'), null);
+    assert.strictEqual(fn('my-app'), null);
+  }
 });

@@ -2402,7 +2402,8 @@ function _hideAllNativePanes(exceptType) {
   }
 }
 
-// Internal revert switch: false restores the per-type hide+show calls.
+// Internal revert switch: only restores the renderer's per-type hide/show calls; main-side theme
+// background, split cache, toolbar raise and gate invalidation stay on.
 const USE_SWITCH_PANE = true;
 let _paneSwitchSeq = 0;
 
