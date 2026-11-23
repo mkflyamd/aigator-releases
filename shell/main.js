@@ -4606,7 +4606,7 @@ async function showNativePane(appName, ticket) {
   // A view created during an await is already on the stack, so raise the toolbar
   // above it even when this switch was superseded.
   if (!preexisting) _raiseToolbarView();
-  if (ticket !== null && !_switchGate.isCurrent(ticket)) return false;
+  if (ticket !== null && !_switchGate.isCurrent(ticket)) return 'superseded';
   try {
     if (view.setBackgroundColor) view.setBackgroundColor(paneBackground(_effectiveTheme));
   } catch {}
@@ -4645,7 +4645,7 @@ ipcMain.handle('pane:switch', async (_e, to, seq) => {
   if (typeof to !== 'string' || !/^[a-z0-9_-]{1,200}$/i.test(to)) return false;
   paneTrace.mark('ipc-show', { app: to.slice(0, 64) });
   const ticket = _switchGate.begin(seq);
-  if (ticket === null) return false;
+  if (ticket === null) return 'superseded';
   return showNativePane(to, ticket);
 });
 ipcMain.on('pane-trace:click', (_e, app, t) => {

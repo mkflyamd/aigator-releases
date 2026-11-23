@@ -62,9 +62,23 @@ test('pane:switch is wired through main and preload', () => {
   assert.match(main, /async function showNativePane\(appName, ticket\)/);
   assert.match(main, /ipcMain\.handle\('external-pane:show'[\s\S]*?showNativePane\(appName, null\)/);
   assert.match(main, /_switchGate\.invalidate\(\)/);
-  assert.match(main, /if \(!preexisting\) _raiseToolbarView\(\);\s*if \(ticket !== null && !_switchGate\.isCurrent\(ticket\)\) return false;/);
+  assert.match(main, /if \(!preexisting\) _raiseToolbarView\(\);\s*if \(ticket !== null && !_switchGate\.isCurrent\(ticket\)\) return 'superseded';/);
   assert.match(main, /_pushThemeToToolbar\(\);\s*_applyPaneBackgrounds\(\);/);
   assert.strictEqual(main.match(/_pushThemeToToolbar\(\);\s*_applyPaneBackgrounds\(\);/g).length, 2);
   assert.match(main, /_gatorSplitApplied/);
   assert.match(read('shell/preload.js'), /switchPane: \(to, seq\) => ipcRenderer\.invoke\('pane:switch', to, seq\)/);
+});
+
+test('stale switches resolve to superseded, not false', () => {
+  const main = read('shell/main.js');
+  assert.match(main, /if \(ticket === null\) return 'superseded';/);
+  assert.match(main, /'superseded'/);
+});
+
+test('third-pane switches native panes through switchPane behind USE_SWITCH_PANE', () => {
+  const tp = read('web/static/third-pane.js');
+  assert.match(tp, /const USE_SWITCH_PANE = true;/);
+  assert.match(tp, /function _nativeShellAppId\(type\)/);
+  assert.match(tp, /window\.gatorShell\.switchPane\(appId, \+\+_paneSwitchSeq\)/);
+  assert.match(tp, /const _switchTo = USE_SWITCH_PANE \? _nativeShellAppId\(type\) : null;/);
 });
