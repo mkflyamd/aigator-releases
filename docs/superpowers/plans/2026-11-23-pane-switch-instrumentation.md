@@ -24,10 +24,12 @@
 ### Task 1: Pure trace module
 
 **Files:**
+
 - Create: `shell/pane-trace.js`
 - Test: `tests/pane-trace.test.js`
 
 **Interfaces:**
+
 - Produces: `createPaneTrace({ enabled, now, log, schedule, settleMs })` returning `{ enabled, click(app, t?), mark(event, detail?), finish() }`, and `summarize(rec)`. Event names used by later tasks: `'ipc-show'`, `'ipc-hide'` (detail `{ app, noop }`), `'layout'` (detail `{ active }`), `'frame'`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -234,12 +236,14 @@ git commit -m "feat(trace): add an opt-in timing recorder for rail pane switches
 ### Task 2: Wire the trace into the shell and the rail click
 
 **Files:**
+
 - Modify: `shell/main.js` (require near line 14; `_layoutNow` near line 4267; `external-pane:show` near line 4530; `external-pane:hide` near line 4600; `slack-pane:hide` near line 4656)
 - Modify: `shell/preload.js:7-8`
 - Modify: `web/static/app.js:1610-1612` (`selectSkill`)
 - Test: `tests/pane-trace.test.js` (add a wiring test)
 
 **Interfaces:**
+
 - Consumes: `createPaneTrace(...)` from Task 1 with `click`, `mark`, `enabled`.
 - Produces: renderer API `window.gatorShell.paneTraceClick(app)`; IPC channel `pane-trace:click` `(app: string, t: number epoch ms)`.
 
@@ -254,13 +258,19 @@ const read = (rel) => fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
 
 test('the trace is wired through main, preload and the rail click', () => {
   const main = read('shell/main.js');
-  assert.match(main, /require\('\.\/pane-trace'\)\.createPaneTrace\(\{\s*enabled: process\.env\.AIGATOR_PANE_TRACE === '1'/);
+  assert.match(
+    main,
+    /require\('\.\/pane-trace'\)\.createPaneTrace\(\{\s*enabled: process\.env\.AIGATOR_PANE_TRACE === '1'/,
+  );
   assert.match(main, /ipcMain\.on\('pane-trace:click'/);
   assert.match(main, /paneTrace\.mark\('ipc-show'/);
   assert.match(main, /paneTrace\.mark\('ipc-hide'/);
   assert.match(main, /paneTrace\.mark\('layout'/);
   assert.match(main, /paneTrace\.mark\('frame'\)/);
-  assert.match(read('shell/preload.js'), /paneTraceClick: \(app\) => ipcRenderer\.send\('pane-trace:click', app, Date\.now\(\)\)/);
+  assert.match(
+    read('shell/preload.js'),
+    /paneTraceClick: \(app\) => ipcRenderer\.send\('pane-trace:click', app, Date\.now\(\)\)/,
+  );
   assert.match(read('web/static/app.js'), /window\.gatorShell\?\.paneTraceClick\?\.\(id\)/);
 });
 ```
@@ -283,13 +293,13 @@ const paneTrace = require('./pane-trace').createPaneTrace({
 In `_layoutNow`, directly after `if (!win) return;` add:
 
 ```js
-  paneTrace.mark('layout', { active: activeExternalApp });
+paneTrace.mark('layout', { active: activeExternalApp });
 ```
 
 In `external-pane:show`, make the first line of the handler body:
 
 ```js
-  paneTrace.mark('ipc-show', { app: appName });
+paneTrace.mark('ipc-show', { app: appName });
 ```
 
 and replace the final `layout();\n  return true;\n});` of that handler with:
@@ -314,13 +324,13 @@ ipcMain.on('pane-trace:click', (_e, app, t) => {
 In `external-pane:hide`, make the first line of the handler body:
 
 ```js
-  paneTrace.mark('ipc-hide', { app: appName, noop: activeExternalApp !== appName });
+paneTrace.mark('ipc-hide', { app: appName, noop: activeExternalApp !== appName });
 ```
 
 In `slack-pane:hide`, make the first line of the handler body:
 
 ```js
-  paneTrace.mark('ipc-hide', { app: 'slack', noop: activeExternalApp !== 'slack' });
+paneTrace.mark('ipc-hide', { app: 'slack', noop: activeExternalApp !== 'slack' });
 ```
 
 - [ ] **Step 4: Wire `shell/preload.js`**
@@ -336,7 +346,7 @@ Directly after `platform: process.platform,` add:
 In `selectSkill`, directly after `if (!skill) return;` add:
 
 ```js
-  window.gatorShell?.paneTraceClick?.(id);
+window.gatorShell?.paneTraceClick?.(id);
 ```
 
 - [ ] **Step 6: Run the tests and syntax checks**
@@ -361,9 +371,11 @@ git commit -m "feat(trace): record rail click, show/hide IPC, layout passes and 
 ### Task 3: Measurement recipe and a real-shell baseline
 
 **Files:**
+
 - Create: `docs/pane-switch-tracing.md`
 
 **Interfaces:**
+
 - Consumes: the `[pane-trace]` log line from Tasks 1 and 2.
 
 - [ ] **Step 1: Write the recipe**
@@ -385,14 +397,14 @@ Each rail click prints one line to the shell's stdout:
 [pane-trace] {"app":"teams","clickToShowIpcMs":9,"clickToLayoutMs":14,"clickToFrameMs":41,"layoutPasses":2,"nullActivePasses":1,"hideIpcs":14,"noopHideIpcs":13}
 ```
 
-| Field | Meaning |
-|---|---|
-| `clickToShowIpcMs` | Click in the renderer until the shell receives `external-pane:show`. |
-| `clickToLayoutMs` | Click until the first layout pass. |
-| `clickToFrameMs` | Click until the target view has rendered two animation frames. A proxy for "visible", not exact compositor presentation. Missing (`null`) for panes with no native view, such as Calendar and Code. |
-| `layoutPasses` | Layout passes caused by the click. More than 1 means intermediate states were painted. |
-| `nullActivePasses` | Passes that ran with no active external app. For a native-to-native switch this is the full-width Gator flash. For Calendar and Code it is expected. |
-| `hideIpcs` / `noopHideIpcs` | Hide calls received, and how many were ignored because that app was not active. |
+| Field                       | Meaning                                                                                                                                                                                             |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `clickToShowIpcMs`          | Click in the renderer until the shell receives `external-pane:show`.                                                                                                                                |
+| `clickToLayoutMs`           | Click until the first layout pass.                                                                                                                                                                  |
+| `clickToFrameMs`            | Click until the target view has rendered two animation frames. A proxy for "visible", not exact compositor presentation. Missing (`null`) for panes with no native view, such as Calendar and Code. |
+| `layoutPasses`              | Layout passes caused by the click. More than 1 means intermediate states were painted.                                                                                                              |
+| `nullActivePasses`          | Passes that ran with no active external app. For a native-to-native switch this is the full-width Gator flash. For Calendar and Code it is expected.                                                |
+| `hideIpcs` / `noopHideIpcs` | Hide calls received, and how many were ignored because that app was not active.                                                                                                                     |
 
 ## What to look for
 
