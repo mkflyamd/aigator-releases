@@ -4573,11 +4573,12 @@ ipcMain.handle('external-pane:show', async (_e, appName) => {
   }
   layout();
   if (paneTrace.enabled && view.webContents && !view.webContents.isDestroyed()) {
+    const traceToken = paneTrace.token();
     view.webContents
       .executeJavaScript(
         'new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))',
       )
-      .then(() => paneTrace.mark('frame'))
+      .then(() => paneTrace.markFrame(traceToken))
       .catch(() => {});
   }
   return true;

@@ -51,7 +51,15 @@ function createPaneTrace({
     if (event === 'frame') finish();
   }
 
-  return { enabled, click, mark, finish };
+  function token() {
+    return current;
+  }
+
+  function markFrame(tok) {
+    if (tok && tok === current) mark('frame');
+  }
+
+  return { enabled, click, mark, finish, token, markFrame };
 }
 
 module.exports = { createPaneTrace, summarize };

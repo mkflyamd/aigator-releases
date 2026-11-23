@@ -110,6 +110,29 @@ test('a stale settle timer does not finish a newer click', () => {
   assert.strictEqual(lines.length, 1);
 });
 
+test('a late frame probe from an older click is ignored', () => {
+  const { trace, clock, lines } = makeTrace();
+  trace.click('teams', 0);
+  const oldToken = trace.token();
+  trace.click('outlook', 10);
+  clock.t = 20;
+  trace.markFrame(oldToken);
+  assert.strictEqual(lines.length, 1);
+  trace.markFrame(trace.token());
+  assert.strictEqual(lines.length, 2);
+  assert.strictEqual(JSON.parse(lines[1].slice('[pane-trace] '.length)).clickToFrameMs, 10);
+});
+
+test('a frame probe after the click settled is ignored', () => {
+  const { trace, lines, timers } = makeTrace();
+  trace.click('teams', 0);
+  const tok = trace.token();
+  timers[0]();
+  trace.click('slack', 5000);
+  trace.markFrame(tok);
+  assert.strictEqual(lines.length, 1);
+});
+
 const fs = require('node:fs');
 const path = require('node:path');
 const read = (rel) => fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
@@ -121,7 +144,7 @@ test('the trace is wired through main, preload and the rail click', () => {
   assert.match(main, /paneTrace\.mark\('ipc-show'/);
   assert.match(main, /paneTrace\.mark\('ipc-hide'/);
   assert.match(main, /paneTrace\.mark\('layout'/);
-  assert.match(main, /paneTrace\.mark\('frame'\)/);
+  assert.match(main, /paneTrace\.markFrame\(traceToken\)/);
   assert.match(read('shell/preload.js'), /paneTraceClick: \(app\) => ipcRenderer\.send\('pane-trace:click', app, Date\.now\(\)\)/);
   assert.match(read('web/static/app.js'), /window\.gatorShell\?\.paneTraceClick\?\.\(id\)/);
 });
