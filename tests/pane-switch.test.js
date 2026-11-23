@@ -66,13 +66,25 @@ test('pane:switch is wired through main and preload', () => {
   assert.match(main, /require\('\.\/pane-switch'\)/);
   assert.match(main, /ipcMain\.handle\('pane:switch'/);
   assert.match(main, /async function showNativePane\(appName, ticket\)/);
-  assert.match(main, /ipcMain\.handle\('external-pane:show'[\s\S]*?showNativePane\(appName, null\)/);
+  assert.match(
+    main,
+    /ipcMain\.handle\('external-pane:show'[\s\S]*?showNativePane\(appName, null\)/,
+  );
   assert.match(main, /_switchGate\.invalidate\(\)/);
-  assert.match(main, /if \(!preexisting\) _raiseToolbarView\(\);\s*if \(ticket !== null && !_switchGate\.isCurrent\(ticket\)\) \{[^}]*?if \(!preexisting\) layout\(\);\s*return 'superseded';/);
+  assert.match(
+    main,
+    /if \(!preexisting\) _raiseToolbarView\(\);\s*if \(ticket !== null && !_switchGate\.isCurrent\(ticket\)\) \{[^}]*?if \(!preexisting\) layout\(\);\s*return 'superseded';/,
+  );
   assert.match(main, /_pushThemeToToolbar\(\);\s*_applyPaneBackgrounds\(\);/);
-  assert.strictEqual(main.match(/_pushThemeToToolbar\(\);\s*_applyPaneBackgrounds\(\);/g).length, 2);
+  assert.strictEqual(
+    main.match(/_pushThemeToToolbar\(\);\s*_applyPaneBackgrounds\(\);/g).length,
+    2,
+  );
   assert.match(main, /_gatorSplitApplied/);
-  assert.match(read('shell/preload.js'), /switchPane: \(to, seq\) => ipcRenderer\.invoke\('pane:switch', to, seq\)/);
+  assert.match(
+    read('shell/preload.js'),
+    /switchPane: \(to, seq\) => ipcRenderer\.invoke\('pane:switch', to, seq\)/,
+  );
 });
 
 test('stale switches resolve to superseded, not false', () => {
@@ -130,7 +142,9 @@ test('a hide arriving during an in-flight switch leaves nothing native visible',
   const main = read('shell/main.js');
   assert.match(main, /let _pendingSwitchApp = null;/);
   assert.match(main, /_pendingSwitchTicket === ticket/);
-  const hides = main.match(/_switchGate\.invalidate\(\);\s*if \(_pendingSwitchApp !== null\) \{\s*[^}]*activeExternalApp = null;\s*layout\(\);/g);
+  const hides = main.match(
+    /_switchGate\.invalidate\(\);\s*if \(_pendingSwitchApp !== null\) \{\s*[^}]*activeExternalApp = null;\s*layout\(\);/g,
+  );
   assert.strictEqual(hides.length, 2);
   assert.match(main, /ipcMain\.handle\('slack-pane:hide'[\s\S]*?_pendingSwitchApp/);
   assert.match(main, /ipcMain\.handle\('external-pane:hide'[\s\S]*?_pendingSwitchApp/);
@@ -138,7 +152,10 @@ test('a hide arriving during an in-flight switch leaves nothing native visible',
 
 test('a legacy show invalidates any in-flight switch', () => {
   const main = read('shell/main.js');
-  assert.match(main, /ipcMain\.handle\('external-pane:show', async \(_e, appName\) => \{[\s\S]*?_switchGate\.invalidate\(\);/);
+  assert.match(
+    main,
+    /ipcMain\.handle\('external-pane:show', async \(_e, appName\) => \{[\s\S]*?_switchGate\.invalidate\(\);/,
+  );
 });
 
 test('the gate only resets on a real (not in-place) main-frame navigation', () => {
@@ -259,7 +276,10 @@ test('pane:switch rejects only non-strings and empty or over-long names', () => 
 
 test('USE_SWITCH_PANE documents that main-side behaviour stays on', () => {
   const tp = read('web/static/third-pane.js');
-  assert.match(tp, /\/\/ Internal revert switch: only restores the renderer's per-type hide\/show calls;/);
+  assert.match(
+    tp,
+    /\/\/ Internal revert switch: only restores the renderer's per-type hide\/show calls;/,
+  );
 });
 
 function loadNativeShellAppId(env) {
@@ -329,21 +349,33 @@ test('_nativeShellAppId is null outside the shell or without switchPane', () => 
 
 test('the toolbar is raised once after the startup panes are created', () => {
   const main = read('shell/main.js');
-  assert.match(main, /githubView\.setBounds\(\{ x: 1599, y: 0, width: 1, height: 900 \}\);\s*\}\s*_raiseToolbarView\(\);/);
+  assert.match(
+    main,
+    /githubView\.setBounds\(\{ x: 1599, y: 0, width: 1, height: 900 \}\);\s*\}\s*_raiseToolbarView\(\);/,
+  );
 });
 
 function loadPaneSwitchHandler() {
   const vm = require('node:vm');
   const main = read('shell/main.js');
-  const m = main.match(/ipcMain\.handle\('pane:switch', async \(_e, to, seq\) => \{[\s\S]*?\n\}\);/);
+  const m = main.match(
+    /ipcMain\.handle\('pane:switch', async \(_e, to, seq\) => \{[\s\S]*?\n\}\);/,
+  );
   assert.ok(m, 'pane:switch handler not found');
   const calls = [];
   let handler = null;
   const sandbox = {
-    ipcMain: { handle: (name, fn) => { if (name === 'pane:switch') handler = fn; } },
+    ipcMain: {
+      handle: (name, fn) => {
+        if (name === 'pane:switch') handler = fn;
+      },
+    },
     paneTrace: { mark: () => {} },
     _switchGate: createSwitchGate(),
-    showNativePane: async (to, ticket) => { calls.push([to, ticket]); return true; },
+    showNativePane: async (to, ticket) => {
+      calls.push([to, ticket]);
+      return true;
+    },
   };
   vm.createContext(sandbox);
   vm.runInContext(m[0], sandbox);
@@ -381,5 +413,8 @@ test('pane:switch runtime: a stale seq returns superseded without showing', asyn
 
 test('the lazily created GitHub view raises the toolbar above itself', () => {
   const main = read('shell/main.js');
-  assert.match(main, /win\.contentView\.addChildView\(githubView\);\s*_raiseToolbarView\(\);\s*githubView\.setVisible\(false\);/);
+  assert.match(
+    main,
+    /win\.contentView\.addChildView\(githubView\);\s*_raiseToolbarView\(\);\s*githubView\.setVisible\(false\);/,
+  );
 });

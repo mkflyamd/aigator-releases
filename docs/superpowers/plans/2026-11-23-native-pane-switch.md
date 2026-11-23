@@ -26,10 +26,12 @@
 ### Task 1: The switch gate (pure module)
 
 **Files:**
+
 - Create: `shell/pane-switch.js`
 - Test: `tests/pane-switch.test.js`
 
 **Interfaces:**
+
 - Produces: `createSwitchGate()` returning `{ begin(seq): number|null, isCurrent(ticket): boolean, invalidate(): void }`. `begin` returns a ticket for a fresh, strictly increasing finite `seq`, or `null` for a stale or invalid one. `isCurrent(ticket)` is true only while no later `begin` or `invalidate` has happened.
 - Also exports `PANE_BG = { dark: '#0a0f1a', light: '#f0f4f8' }` (the `--bg` values in `web/static/style.css`, lines 90 and 21051) and `paneBackground(theme)` returning `PANE_BG.light` for `'light'` and `PANE_BG.dark` otherwise.
 
@@ -145,11 +147,13 @@ git commit -m "feat(rail): add the pane switch gate so the last click wins"
 ### Task 2: Main process `pane:switch`, theme background, toolbar stacking, split cache
 
 **Files:**
+
 - Modify: `shell/main.js` (the `external-pane:show` handler near line 4534, `external-pane:hide` near 4617, `slack-pane:hide` near 4674, `_syncGatorSplit` near 4432, `shell:set-theme` near 5063, the `nativeTheme.on('updated')` block near 5070, `gatorView` creation near 1305)
 - Modify: `shell/preload.js` (add `switchPane` next to `paneTraceClick`)
 - Test: `tests/pane-switch.test.js` (append a source-grep wiring test, same style as `tests/pane-trace.test.js`)
 
 **Interfaces:**
+
 - Consumes: `createSwitchGate`, `paneBackground` from `./pane-switch`; existing `viewForApp`, `ensureAtlassianView`, `ensureGitHubView`, `createGenericPane`, `APP_HOME_URL`, `getLastSlackUrl`, `activeExternalApp`, `layout`, `paneTrace`, `toolbarView`, `_effectiveTheme`, `_genericPanes`.
 - Produces:
   - Internal `async function showNativePane(appName, ticket)`: the body of today's `external-pane:show` handler from `let view = viewForApp(appName)` through `return true`, with two additions described below. `ticket` is `null` for the legacy handler.
@@ -174,7 +178,7 @@ The `paneTrace.mark('ipc-show', ...)` line moves out of the body into the two ha
 At the top of the function body add `const preexisting = !!viewForApp(appName);` (before any `ensure*View` / `createGenericPane`). After the last `if (!view) return false;` add:
 
 ```js
-  if (ticket !== null && !_switchGate.isCurrent(ticket)) return false;
+if (ticket !== null && !_switchGate.isCurrent(ticket)) return false;
 ```
 
 so that a later click (or a hide) that arrived while a Jira, Confluence, GitHub or generic view was being created discards this result before it changes `activeExternalApp`.
@@ -182,8 +186,8 @@ so that a later click (or a hide) that arrived while a Jira, Confluence, GitHub 
 Right after that check, and before the `activeExternalApp === appName` branch, add:
 
 ```js
-  if (view.setBackgroundColor) view.setBackgroundColor(paneBackground(_effectiveTheme));
-  if (!preexisting) _raiseToolbarView();
+if (view.setBackgroundColor) view.setBackgroundColor(paneBackground(_effectiveTheme));
+if (!preexisting) _raiseToolbarView();
 ```
 
 At module level (near `viewForApp`) add:
@@ -229,7 +233,16 @@ Add:
 ```js
 function _applyPaneBackgrounds() {
   const bg = paneBackground(_effectiveTheme);
-  const views = [slackView, teamsView, outlookView, onedriveView, onenoteView, confluenceView, jiraView, githubView];
+  const views = [
+    slackView,
+    teamsView,
+    outlookView,
+    onedriveView,
+    onenoteView,
+    confluenceView,
+    jiraView,
+    githubView,
+  ];
   for (const pane of Object.values(_genericPanes)) views.push(pane.view);
   for (const v of views) {
     try {
@@ -277,12 +290,18 @@ test('pane:switch is wired through main and preload', () => {
   assert.match(main, /require\('\.\/pane-switch'\)/);
   assert.match(main, /ipcMain\.handle\('pane:switch'/);
   assert.match(main, /async function showNativePane\(appName, ticket\)/);
-  assert.match(main, /ipcMain\.handle\('external-pane:show'[\s\S]*?showNativePane\(appName, null\)/);
+  assert.match(
+    main,
+    /ipcMain\.handle\('external-pane:show'[\s\S]*?showNativePane\(appName, null\)/,
+  );
   assert.match(main, /_switchGate\.invalidate\(\)/);
   assert.match(main, /_raiseToolbarView\(\)/);
   assert.match(main, /_applyPaneBackgrounds\(\)/);
   assert.match(main, /_gatorSplitApplied/);
-  assert.match(read('shell/preload.js'), /switchPane: \(to, seq\) => ipcRenderer\.invoke\('pane:switch', to, seq\)/);
+  assert.match(
+    read('shell/preload.js'),
+    /switchPane: \(to, seq\) => ipcRenderer\.invoke\('pane:switch', to, seq\)/,
+  );
 });
 ```
 
@@ -305,10 +324,12 @@ git commit -m "feat(rail): switch native panes in one IPC, theme the view backgr
 ### Task 3: Renderer uses `switchPane` for native targets (behind `USE_SWITCH_PANE`)
 
 **Files:**
+
 - Modify: `web/static/third-pane.js` (`_openThirdPaneImpl` at about line 2402, the native branches through about line 2955, `_hideAllNativePanes` at about line 2357, `_nativeSlack.activate` at about line 97)
 - Test: `tests/pane-switch.test.js` (append) and any existing test that source-greps `third-pane.js` for the calls you change (run `grep -rl "third-pane.js" tests/` and keep them passing)
 
 **Interfaces:**
+
 - Consumes: `window.gatorShell.switchPane(to, seq)` from Task 2.
 - Produces, at module top level of `third-pane.js`:
 
@@ -339,7 +360,9 @@ function _nativeShellAppId(type) {
     case 'github':
       return _githubNativeEnabled() ? 'github' : null;
     default:
-      return typeof SKILL_MAP !== 'undefined' && _isShellWebPaneSkill(SKILL_MAP[type]) ? type : null;
+      return typeof SKILL_MAP !== 'undefined' && _isShellWebPaneSkill(SKILL_MAP[type])
+        ? type
+        : null;
   }
 }
 
@@ -371,7 +394,7 @@ Run: `node --test tests/pane-switch.test.js` — expect FAIL.
 At the top of `_openThirdPaneImpl`, after `const _prevType = tpState.type;`:
 
 ```js
-  const _switchTo = USE_SWITCH_PANE ? _nativeShellAppId(type) : null;
+const _switchTo = USE_SWITCH_PANE ? _nativeShellAppId(type) : null;
 ```
 
 - [ ] **Step 4: Skip the redundant hides when switching**

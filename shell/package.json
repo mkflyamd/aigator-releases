@@ -36,6 +36,7 @@
       "media-permissions.js",
       "menu.js",
       "navigation-policy.js",
+      "pane-switch.js",
       "pane-trace.js",
       "preload.js",
       "sandbox-repair.js",

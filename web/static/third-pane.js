@@ -2445,9 +2445,11 @@ function _nativeShellAppId(type) {
 // Native->classic: keep the native view up until the classic pane has had a frame to lay out, so the
 // Gator view's resize does not expose blank frames. Skipped if the user has moved on meanwhile.
 function _deferNativeHide(type, fn) {
-  requestAnimationFrame(() => requestAnimationFrame(() => {
-    if (tpState.type === type) fn();
-  }));
+  requestAnimationFrame(() =>
+    requestAnimationFrame(() => {
+      if (tpState.type === type) fn();
+    }),
+  );
 }
 
 function _switchNativePane(appId) {
