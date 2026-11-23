@@ -19,6 +19,13 @@ from config import (
     CONFIG_FILE,
     PATCHABLE_CONFIG_KEYS,
 )
+from google_accounts import (
+    configured_accounts,
+    is_valid_email,
+    normalize_accounts,
+    probe_google_client,
+    signed_in_accounts,
+)
 import shared
 
 router = APIRouter()
@@ -55,6 +62,7 @@ class GithubConfigRequest(BaseModel):
 class GoogleWorkspaceConfigRequest(BaseModel):
     client_id: str
     client_secret: str
+    accounts: list[str] | None = None
 
 
 class UsernameRequest(BaseModel):
@@ -783,14 +791,39 @@ def save_google_workspace(req: GoogleWorkspaceConfigRequest):
         raise HTTPException(status_code=400, detail="Client ID is required")
     if not client_secret:
         raise HTTPException(status_code=400, detail="Client Secret is required")
+    if not client_id.endswith(".apps.googleusercontent.com"):
+        raise HTTPException(
+            status_code=400,
+            detail="Client ID must end with .apps.googleusercontent.com",
+        )
+    if any(ch.isspace() for ch in client_secret):
+        raise HTTPException(status_code=400, detail="Client Secret must not contain spaces or line breaks")
+    accounts = None
+    if req.accounts is not None:
+        accounts = normalize_accounts(req.accounts)
+        for email in accounts:
+            if not is_valid_email(email):
+                raise HTTPException(status_code=400, detail=f"Not a valid email address: {email}")
+    if probe_google_client(client_id, client_secret) == "invalid_client":
+        raise HTTPException(
+            status_code=400,
+            detail="Google rejected this Client ID / secret pair — the client secret is wrong. Copy it again from Google Cloud Console.",
+        )
 
     def _mutate(cfg: dict):
         cfg["google_oauth_client_id"] = client_id
         cfg["google_oauth_client_secret"] = client_secret
+        if accounts is not None:
+            cfg["google_accounts"] = accounts
+            cfg["google_user_email"] = accounts[0] if accounts else ""
         return cfg
 
     _update_config(_mutate)
-    return {"ok": True, "client_id": client_id}
+    return {
+        "ok": True,
+        "client_id": client_id,
+        "accounts": accounts if accounts is not None else configured_accounts(_load_config()),
+    }
 
 
 @router.get("/api/config/google/status")
@@ -811,7 +844,15 @@ def google_workspace_credentials_status():
     )
     configured = bool(client_id and client_secret)
     preview = f"{client_id[:16]}…" if configured and len(client_id) > 20 else client_id
-    return {"configured": configured, "client_id_preview": preview if configured else ""}
+    signed_in = set(signed_in_accounts())
+    return {
+        "configured": configured,
+        "client_id_preview": preview if configured else "",
+        "accounts": [
+            {"email": email, "default": i == 0, "signed_in": email in signed_in}
+            for i, email in enumerate(configured_accounts(cfg))
+        ],
+    }
 
 
 @router.get("/api/config/github/status")
