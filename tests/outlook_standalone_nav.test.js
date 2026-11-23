@@ -128,6 +128,7 @@ function typeInAddressBar(typed, { beforeUnload, listener }) {
   const handler = vm.runInNewContext('(' + navHandler[1] + ')', {
     _isMainToolbar: () => true,
     addressInput,
+    _engineStore: { searchUrl: () => addressInput.SEARCH_URL },
     viewForApp: () => ({ webContents: wc }),
     activeExternalApp: 'outlook',
     console,

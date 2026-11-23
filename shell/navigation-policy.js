@@ -119,6 +119,10 @@ function applyNavigationPolicy(view, opts) {
   // is created (both from fileOpenPattern and from setWindowOpenHandler allow).
   // Lets the caller inject modules (pin buttons etc.) into child windows.
   const onChildWindow = (opts && opts.onChildWindow) || null;
+  // openLinksInPane (optional boolean): general-purpose browser panes keep every http(s)
+  // window.open / target=_blank in the pane instead of sending it to the system browser.
+  // Blank and auth popups still get a child window so sign-in flows keep working.
+  const openLinksInPane = !!(opts && opts.openLinksInPane);
   // attachToolbar (optional function(childWin)): if provided, called on every
   // child window to attach the custom browser toolbar (back/forward/reload +
   // URL bar + window controls). Called BEFORE onChildWindow so pin injection
@@ -180,6 +184,11 @@ function applyNavigationPolicy(view, opts) {
           },
         },
       };
+    }
+
+    if (openLinksInPane && !isBlank && !AUTH_RE.test(url) && /^https?:/i.test(url)) {
+      if (_loadInPane) _loadInPane(url);
+      return { action: 'deny' };
     }
 
     // Inverse model (scalable): same-host, non-auth, non-blank opens load into

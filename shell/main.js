@@ -395,12 +395,17 @@ function attachToolbarToWindow(childWin) {
     // The shared toolbar emits one navigation channel for both main panes and
     // child windows. Child toolbars previously had no handler, so Enter in a
     // visible address bar appeared to do nothing.
-    addressInput.loadAddressInput(childWc, typed, (error, url) => {
-      console.error(`[toolbar] child navigation failed for ${url}: ${error.message}`);
-      try {
-        tbWc.send('toolbar:navigation-error', { url, message: error.message });
-      } catch {}
-    });
+    addressInput.loadAddressInput(
+      childWc,
+      typed,
+      (error, url) => {
+        console.error(`[toolbar] child navigation failed for ${url}: ${error.message}`);
+        try {
+          tbWc.send('toolbar:navigation-error', { url, message: error.message });
+        } catch {}
+      },
+      _engineStore.searchUrl(),
+    );
   };
   const openBrowserHandler = (e, url) => {
     if (e.sender.id !== tbWcId) return;
@@ -616,6 +621,12 @@ const TOOLBAR_H = 40;
 // Extra height the toolbar view grows by while its star bubble is open, so the bubble
 // is not clipped by the 40px bar. The pane stays below TOOLBAR_H and the toolbar overlays it.
 let _toolbarExpandedH = 0;
+
+// The address-bar search engine, shared by every pane and the Browser pane's start page.
+const searchEngine = require('./search-engine');
+const _engineStore = searchEngine.createStore(
+  path.join(app.getPath('userData'), 'search-engine.json'),
+);
 
 // Persist the last Slack workspace URL so we skip the chooser on restart.
 const SLACK_LAST_URL_FILE = path.join(app.getPath('userData'), 'slack-last-url.txt');
@@ -4450,6 +4461,8 @@ const APP_HOME_URL = {
   'g-script': 'https://script.google.com',
 };
 
+const BROWSER_PANE_ID = 'browser';
+
 // Extend APP_HOME_URL with generic pane URLs at runtime.
 function _refreshAppHomeUrls() {
   for (const [id, pane] of Object.entries(_genericPanes)) {
@@ -4486,6 +4499,7 @@ function createGenericPane(appConfig) {
   applyNavigationPolicy(view, {
     name: id,
     homeHosts: homeHosts.length ? homeHosts : ['*'],
+    openLinksInPane: !!appConfig.openLinksInPane,
   });
 
   view.webContents.loadURL(url);
@@ -4517,6 +4531,17 @@ ipcMain.handle('external-pane:show', async (_e, appName) => {
   let view = viewForApp(appName);
   if (!view && (appName === 'jira' || appName === 'confluence'))
     view = await ensureAtlassianView(appName);
+  // The built-in Browser pane: a general-purpose pane that starts on the search engine's home.
+  if (!view && appName === BROWSER_PANE_ID) {
+    try {
+      view = createGenericPane({
+        id: BROWSER_PANE_ID,
+        name: 'Browser',
+        url: _engineStore.homeUrl(),
+        openLinksInPane: true,
+      });
+    } catch {}
+  }
   // Auto-create a generic pane for apps that have a home URL but no pane yet
   // (e.g. Google Workspace service skills g-gmail, g-calendar).
   if (!view && APP_HOME_URL[appName]) {
@@ -4542,6 +4567,20 @@ ipcMain.handle('external-pane:show', async (_e, appName) => {
     activeExternalApp = appName;
   }
   layout();
+  return true;
+});
+ipcMain.handle('search-engine:get', () => ({
+  engine: _engineStore.get(),
+  engines: searchEngine.listEngines(),
+}));
+ipcMain.handle('search-engine:set', (_e, id) => {
+  if (!_engineStore.set(id)) return false;
+  // The Browser pane's start page follows the engine, so a re-click goes to the new home.
+  const pane = _genericPanes[BROWSER_PANE_ID];
+  if (pane) {
+    pane.url = _engineStore.homeUrl();
+    _refreshAppHomeUrls();
+  }
   return true;
 });
 ipcMain.handle('github-pane:refresh', async (_e, baseUrl) => {
@@ -5112,15 +5151,20 @@ ipcMain.on('toolbar:navigate', (e, typed) => {
   if (!_isMainToolbar(e) || typeof typed !== 'string') return;
   const v = viewForApp(activeExternalApp);
   if (v && !v.webContents.isDestroyed()) {
-    addressInput.loadAddressInput(v.webContents, typed, (error, url) => {
-      console.error(`[toolbar] navigation failed for ${url}: ${error.message}`);
-      try {
-        _liveToolbarWebContents()?.send('toolbar:navigation-error', {
-          url,
-          message: error.message,
-        });
-      } catch {}
-    });
+    addressInput.loadAddressInput(
+      v.webContents,
+      typed,
+      (error, url) => {
+        console.error(`[toolbar] navigation failed for ${url}: ${error.message}`);
+        try {
+          _liveToolbarWebContents()?.send('toolbar:navigation-error', {
+            url,
+            message: error.message,
+          });
+        } catch {}
+      },
+      _engineStore.searchUrl(),
+    );
   }
 });
 
