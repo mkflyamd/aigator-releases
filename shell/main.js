@@ -1336,7 +1336,11 @@ function createWindow() {
   // dark instead of Chromium's default white.
   gatorView.setBackgroundColor('#0a0f1a');
   gatorView.webContents.on('did-start-navigation', (_e, _url, _isInPlace, isMainFrame) => {
-    if (isMainFrame) _gatorSplitApplied = null;
+    if (isMainFrame) {
+      _gatorSplitApplied = null;
+      // The renderer's pane-switch seq restarts at 0 on every document load.
+      _switchGate.reset();
+    }
   });
   // A layout between navigation start and commit can toggle the old document.
   gatorView.webContents.on('dom-ready', () => {

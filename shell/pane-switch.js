@@ -22,6 +22,11 @@ function createSwitchGate() {
     invalidate() {
       version += 1;
     },
+    // The renderer's seq restarts at 0 after a reload; forget lastSeq and stale any in-flight ticket.
+    reset() {
+      lastSeq = 0;
+      version += 1;
+    },
   };
 }
 

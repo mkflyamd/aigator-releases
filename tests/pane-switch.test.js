@@ -82,3 +82,25 @@ test('third-pane switches native panes through switchPane behind USE_SWITCH_PANE
   assert.match(tp, /window\.gatorShell\.switchPane\(appId, \+\+_paneSwitchSeq\)/);
   assert.match(tp, /const _switchTo = USE_SWITCH_PANE \? _nativeShellAppId\(type\) : null;/);
 });
+
+test('reset lets the renderer start its seq over after a reload', () => {
+  const gate = createSwitchGate();
+  gate.begin(7);
+  gate.reset();
+  assert.notStrictEqual(gate.begin(1), null);
+});
+
+test('reset makes the previous ticket stale', () => {
+  const gate = createSwitchGate();
+  const t = gate.begin(1);
+  gate.reset();
+  assert.strictEqual(gate.isCurrent(t), false);
+});
+
+test('main resets the switch gate when Gator navigates its main frame', () => {
+  const main = read('shell/main.js');
+  assert.match(
+    main,
+    /'did-start-navigation'[\s\S]*?if \(isMainFrame\) \{\s*_gatorSplitApplied = null;[\s\S]*?_switchGate\.reset\(\);/,
+  );
+});
