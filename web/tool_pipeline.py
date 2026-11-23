@@ -556,3 +556,43 @@ def google_workspace_tool_groups(raw_to_alias: dict[str, str]) -> dict[str, set[
         for skill_id, names in _GOOGLE_SERVICE_TOOLS.items()
         if any(name in raw_to_alias for name in names)
     }
+
+
+GOOGLE_UMBRELLA_ID = "mcp-google-workspace"
+_GOOGLE_DEFAULT_GROUPS = ("g-gmail", "g-calendar", "g-drive")
+_GOOGLE_INTENT_RES = {
+    "g-gmail": re.compile(r"\b(gmail|e-?mails?|inbox|drafts?|labels?|threads?)\b", re.I),
+    "g-calendar": re.compile(r"\b(calendars?|events?|meetings?|schedule|availability|free\s?busy|invites?|rsvp)\b", re.I),
+    "g-drive": re.compile(r"\b(drive|files?|folders?|upload)\b", re.I),
+    "g-docs": re.compile(r"\b(google docs?|docs?|documents?)\b", re.I),
+    "g-sheets": re.compile(r"\b(sheets?|spreadsheets?)\b", re.I),
+    "g-slides": re.compile(r"\b(slides?|presentations?|decks?)\b", re.I),
+    "g-forms": re.compile(r"\b(forms?|surveys?)\b", re.I),
+    "g-tasks": re.compile(r"\b(tasks?|to-?dos?)\b", re.I),
+    "g-contacts": re.compile(r"\b(contacts?)\b", re.I),
+    "g-chat": re.compile(r"\b(google chat|chat spaces?)\b", re.I),
+    "g-script": re.compile(r"\b(apps? script)\b", re.I),
+    "g-search": re.compile(r"\b(programmable search|custom search)\b", re.I),
+}
+
+
+def google_groups_for_message(message: str) -> list[str]:
+    """Pick the Google service groups a request needs; default to mail, calendar and drive."""
+    text = message or ""
+    hits = [gid for gid, pat in _GOOGLE_INTENT_RES.items() if pat.search(text)]
+    return hits or list(_GOOGLE_DEFAULT_GROUPS)
+
+
+def expand_google_umbrella(skill_ids, message: str, available) -> list[str]:
+    """Swap the raw 138-tool Google connection for intent-chosen service groups."""
+    out: list[str] = []
+    for sid in skill_ids:
+        replacement = (
+            [g for g in google_groups_for_message(message) if g in available]
+            if sid == GOOGLE_UMBRELLA_ID
+            else [sid]
+        )
+        for item in replacement:
+            if item not in out:
+                out.append(item)
+    return out

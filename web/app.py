@@ -684,7 +684,7 @@ async def lifespan(app):
             _infer_skills_from_message,
         )
         from skill_router import match_intent, execute_direct
-        from tool_pipeline import select_tools_with_budget
+        from tool_pipeline import expand_google_umbrella, select_tools_with_budget
         provider = get_provider()
         model = get_active_model()
         _now = datetime.now()
@@ -728,6 +728,8 @@ async def lifespan(app):
         # Always filter — never fall back to ALL tools
         # A runner (Python or shell) runs only if the schedule approval named it; nobody is here to approve one now.
         _approved_runners = {_gated_runner_id(s) for s in (skills or [])}
+        skills = expand_google_umbrella(skills or [], prompt, shared.SKILL_TOOLS_MAP)
+        inferred = expand_google_umbrella(inferred or [], prompt, shared.SKILL_TOOLS_MAP)
         active_tools = [
             t for t in _filter_tools(
                 None, False, inferred, unapproved_deps=sorted(_GATED_DEP_SKILLS - _approved_runners)
