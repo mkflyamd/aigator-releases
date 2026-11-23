@@ -546,7 +546,7 @@ def _append_jira_instance_context(system: str, active_skill_ids: list[str], cfg:
     )
 
 
-def _append_google_account_context(system: str, active_skill_ids: list[str], google_email: str) -> str:
+def _append_google_account_context(system: str, active_skill_ids: list[str], accounts: list[str]) -> str:
     """Add Workspace account guidance for backend-defined Google service IDs."""
     from tool_pipeline import is_google_workspace_service
 
@@ -556,11 +556,18 @@ def _append_google_account_context(system: str, active_skill_ids: list[str], goo
         or is_google_workspace_service(skill_id)
         for skill_id in active_skill_ids
     )
-    if not has_workspace or not google_email or "GOOGLE ACCOUNT:" in system:
+    if not has_workspace or not accounts or "GOOGLE ACCOUNT:" in system:
         return system
+    if len(accounts) == 1:
+        return system + (
+            f"\n\nGOOGLE ACCOUNT: The user's Google email is {accounts[0]}. "
+            f"Pass this as the user_google_email parameter to all Google Workspace tools. "
+            f"Do NOT ask the user for their email address."
+        )
     return system + (
-        f"\n\nGOOGLE ACCOUNT: The user's Google email is {google_email}. "
-        f"Pass this as the user_google_email parameter to all Google Workspace tools. "
+        f"\n\nGOOGLE ACCOUNT: The user has these Google accounts: {', '.join(accounts)}. "
+        f"The default is {accounts[0]}. Pass the account the user names as the user_google_email "
+        f"parameter to Google Workspace tools; use the default when they do not name one. "
         f"Do NOT ask the user for their email address."
     )
 
@@ -2100,9 +2107,10 @@ async def chat(req: ChatRequest):
     # and mid-turn reactivation consistently.
     try:
         from config import load_config as _load_cfg
+        from google_accounts import configured_accounts
         _cfg_now = _load_cfg()
         system = _append_google_account_context(
-            system, _all_active, _cfg_now.get("google_user_email", "")
+            system, _all_active, configured_accounts(_cfg_now)
         )
         system = _append_jira_instance_context(system, _all_active, _cfg_now)
     except Exception:
@@ -2575,8 +2583,9 @@ async def chat(req: ChatRequest):
                             _new_system, s, _mid_preamble_done)
                 try:
                     from config import load_config as _load_cfg
+                    from google_accounts import configured_accounts
                     _new_system = _append_google_account_context(
-                        _new_system, _new_skills, _load_cfg().get("google_user_email", "")
+                        _new_system, _new_skills, configured_accounts(_load_cfg())
                     )
                 except Exception:
                     pass

@@ -760,8 +760,9 @@ async def lifespan(app):
                 system, _bg_preamble_done = _append_skill_prompt(system, sid, _bg_preamble_done)
         try:
             from config import load_config as _load_cfg
+            from google_accounts import configured_accounts
             system = _append_google_account_context(
-                system, inferred, _load_cfg().get("google_user_email", "")
+                system, inferred, configured_accounts(_load_cfg())
             )
         except Exception:
             pass
