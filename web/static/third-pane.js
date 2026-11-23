@@ -2442,6 +2442,14 @@ function _nativeShellAppId(type) {
   }
 }
 
+// Native->classic: keep the native view up until the classic pane has had a frame to lay out, so the
+// Gator view's resize does not expose blank frames. Skipped if the user has moved on meanwhile.
+function _deferNativeHide(type, fn) {
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    if (tpState.type === type) fn();
+  }));
+}
+
 function _switchNativePane(appId) {
   return window.gatorShell.switchPane(appId, _nextPaneSwitchSeq());
 }
@@ -2471,14 +2479,15 @@ function _openThirdPaneImpl(type) {
       typeof _nativeSlack !== 'undefined' &&
       _nativeSlack.isNative()
     ) {
-      _nativeSlack.deactivate(!!_switchTo);
+      _nativeSlack.deactivate(true);
+      if (!_switchTo) _deferNativeHide(type, () => window.gatorShell.hideSlack());
     }
     if (
       tpState.type === 'teams' &&
       typeof window.gatorShell !== 'undefined' &&
       window.gatorShell.isShell
     ) {
-      if (!_switchTo) window.gatorShell.hideTeams();
+      if (!_switchTo) _deferNativeHide(type, () => window.gatorShell.hideTeams());
       _shellDrag.unmount();
     }
     if (
@@ -2487,7 +2496,7 @@ function _openThirdPaneImpl(type) {
       window.gatorShell.isShell &&
       _outlookNativeEnabled()
     ) {
-      if (!_switchTo) window.gatorShell.hideOutlook();
+      if (!_switchTo) _deferNativeHide(type, () => window.gatorShell.hideOutlook());
       _shellDrag.unmount();
     }
     if (
@@ -2496,7 +2505,7 @@ function _openThirdPaneImpl(type) {
       window.gatorShell.isShell &&
       _onedriveNativeEnabled()
     ) {
-      if (!_switchTo) window.gatorShell.hideOneDrive();
+      if (!_switchTo) _deferNativeHide(type, () => window.gatorShell.hideOneDrive());
       _shellDrag.unmount();
     }
     if (
@@ -2505,7 +2514,7 @@ function _openThirdPaneImpl(type) {
       window.gatorShell.isShell &&
       _onenoteNativeEnabled()
     ) {
-      if (!_switchTo) window.gatorShell.hideOneNote();
+      if (!_switchTo) _deferNativeHide(type, () => window.gatorShell.hideOneNote());
       _shellDrag.unmount();
     }
     if (
@@ -2514,7 +2523,7 @@ function _openThirdPaneImpl(type) {
       window.gatorShell.isShell &&
       _confluenceNativeEnabled()
     ) {
-      if (!_switchTo) window.gatorShell.hideConfluence();
+      if (!_switchTo) _deferNativeHide(type, () => window.gatorShell.hideConfluence());
       _shellDrag.unmount();
     }
     if (
@@ -2523,7 +2532,7 @@ function _openThirdPaneImpl(type) {
       window.gatorShell.isShell &&
       _jiraNativeEnabled()
     ) {
-      if (!_switchTo) window.gatorShell.hideJira();
+      if (!_switchTo) _deferNativeHide(type, () => window.gatorShell.hideJira());
       _shellDrag.unmount();
     }
     if (
@@ -2532,7 +2541,7 @@ function _openThirdPaneImpl(type) {
       window.gatorShell.isShell &&
       _githubNativeEnabled()
     ) {
-      if (!_switchTo) window.gatorShell.hideGitHub();
+      if (!_switchTo) _deferNativeHide(type, () => window.gatorShell.hideGitHub());
       _shellDrag.unmount();
     }
     // Custom apps & Google services — hide the previous native pane if switching away
@@ -2542,7 +2551,7 @@ function _openThirdPaneImpl(type) {
         window.gatorShell.isShell &&
         window.gatorShell.hideCustomApp
       ) {
-        if (!_switchTo) window.gatorShell.hideCustomApp(tpState.type);
+        if (!_switchTo) _deferNativeHide(type, () => window.gatorShell.hideCustomApp(_prevType));
         _shellDrag.unmount();
       }
     }
@@ -2556,9 +2565,11 @@ function _openThirdPaneImpl(type) {
   if (!_switchTo && typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell) {
     const nativeTypes = ['slack', 'teams', 'email'];
     if (nativeTypes.indexOf(type) === -1) {
-      if (window.gatorShell.hideSlack) window.gatorShell.hideSlack();
-      if (window.gatorShell.hideTeams) window.gatorShell.hideTeams();
-      if (window.gatorShell.hideOutlook) window.gatorShell.hideOutlook();
+      _deferNativeHide(type, () => {
+        if (window.gatorShell.hideSlack) window.gatorShell.hideSlack();
+        if (window.gatorShell.hideTeams) window.gatorShell.hideTeams();
+        if (window.gatorShell.hideOutlook) window.gatorShell.hideOutlook();
+      });
     }
   }
   tpState.type = type;
