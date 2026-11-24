@@ -54,6 +54,10 @@ function makeEl(tag) {
       if (this.parent) this.parent.children = this.parent.children.filter((c) => c !== this);
     },
     scrollIntoView() {},
+    attrs: {},
+    setAttribute(k, v) {
+      this.attrs[k] = v;
+    },
   };
 }
 
@@ -68,7 +72,16 @@ function makeEnv(fetchImpl) {
   const fetches = [];
   const followUps = [];
   const toasts = [];
+  const clock = { ms: 1_000_000_000 };
+  const timers = [];
   const ctx = {
+    Date: { now: () => clock.ms },
+    Math,
+    Number,
+    setInterval: (fn) => timers.push({ fn, live: true }) && timers.length,
+    clearInterval: (id) => {
+      if (timers[id - 1]) timers[id - 1].live = false;
+    },
     document: {
       createElement: makeEl,
       getElementById: (id) => (id === 'messages' ? messages : null),
@@ -97,7 +110,11 @@ function makeEnv(fetchImpl) {
   ['_renderHostCommandCard', '_showSandboxApproval'].forEach((n) =>
     vm.runInContext(extract(n), ctx),
   );
-  return { ctx, messages, fetches, followUps, toasts };
+  const tickClock = (seconds) => {
+    clock.ms += seconds * 1000;
+    timers.filter((t) => t.live).forEach((t) => t.fn());
+  };
+  return { ctx, messages, fetches, followUps, toasts, clock, tickClock };
 }
 
 const evil = '<img src=x onerror=alert(1)> && echo hi';
@@ -274,6 +291,120 @@ const buttonsOf = (env) => walk(env.messages).filter((e) => e.tag === 'button');
     ['/api/host-shell/req1/run', '/api/host-shell/req1/cancel'],
   );
   assert(walk(env6.messages).some((e) => e.tag === 'pre' && /You stopped/.test(e.textContent)));
+
+  // The card says when it will expire, and what happened, in plain words.
+  const textOf = (e) =>
+    walk(e.messages)
+      .map((x) => x.textContent)
+      .join(nl);
+  const withExpiry = (env) => ({ ...data, expires_at: env.clock.ms / 1000 + 600 });
+
+  // Only the last minute is counted down, and the countdown is hidden from screen readers.
+  const env7 = makeEnv(ok);
+  env7.ctx._showSandboxApproval(withExpiry(env7), 'tab-1');
+  env7.tickClock(300);
+  assert(!/Expires in/.test(textOf(env7)), 'no countdown until the last minute');
+  env7.tickClock(245);
+  assert.match(textOf(env7), /Expires in 0:55/);
+  assert(
+    walk(env7.messages).some((e) => /Expires in/.test(e.textContent) && e.attrs['aria-hidden'] === 'true'),
+    'countdown is aria-hidden',
+  );
+
+  // When the time runs out the card says nothing was run and offers Ask again.
+  env7.tickClock(60);
+  assert.match(textOf(env7), /Timed out before you answered. Nothing was run./);
+  assert(!/Expires in/.test(textOf(env7)));
+  assert.deepStrictEqual(
+    buttonsOf(env7).map((b) => b.textContent),
+    ['Ask again'],
+  );
+  assert.strictEqual(env7.fetches.length, 0, 'expiring calls nothing');
+  assert.strictEqual(env7.followUps.length, 0, 'expiring tells the agent nothing');
+  assert(
+    walk(env7.messages).some((e) => e.attrs.role === 'status' && /Timed out/.test(e.textContent)),
+    'expiry is announced once',
+  );
+  assert(!env7.ctx._pendingSandboxCards.get('tab-1').has('req1'), 'expired card not redrawn');
+  await buttonsOf(env7)[0].listeners.click(click);
+  await tick();
+  assert.deepStrictEqual(
+    env7.followUps.map((f) => f.text),
+    ['Please propose that command again.'],
+  );
+  assert(buttonsOf(env7)[0].disabled, 'Ask again is sent once');
+  await buttonsOf(env7)[0].listeners.click(click);
+  assert.strictEqual(env7.followUps.length, 1);
+
+  // A Run that arrives too late (404 or 410) lands in the same expired state.
+  for (const status of [404, 410]) {
+    const late = makeEnv(async () => ({
+      ok: false,
+      status,
+      json: async () => ({ detail: 'This command request expired.' }),
+    }));
+    late.ctx._showSandboxApproval(data, 'tab-1');
+    await buttonsOf(late)[0].listeners.click(click);
+    await tick();
+    await tick();
+    assert.match(textOf(late), /Timed out before you answered/);
+    assert.deepStrictEqual(
+      buttonsOf(late).map((b) => b.textContent),
+      ['Ask again'],
+    );
+    assert.strictEqual(late.followUps.length, 0);
+  }
+
+  // If AI Gator cannot be reached, Run and Cancel stay and the card says so.
+  for (const failure of [
+    async () => {
+      throw new TypeError('Failed to fetch');
+    },
+    async () => ({ ok: false, status: 503, json: async () => ({}) }),
+  ]) {
+    const down = makeEnv(failure);
+    down.ctx._showSandboxApproval(data, 'tab-1');
+    await buttonsOf(down)[0].listeners.click(click);
+    await tick();
+    await tick();
+    assert.match(textOf(down), /Couldn't reach AI Gator. Try again./);
+    assert.deepStrictEqual(
+      buttonsOf(down).map((b) => b.textContent),
+      ['Run', 'Cancel'],
+    );
+    assert(buttonsOf(down).every((b) => !b.disabled));
+    assert.strictEqual(down.followUps.length, 0);
+  }
+
+  // The buttons are off while a request is in flight.
+  let settle = () => {};
+  const slow = makeEnv(
+    () =>
+      new Promise((resolve) => {
+        settle = () => resolve({ ok: true, status: 200, json: async () => ({ ok: true }) });
+      }),
+  );
+  slow.ctx._showSandboxApproval(data, 'tab-1');
+  const slowCancel = buttonsOf(slow)[1].listeners.click(click);
+  await tick();
+  assert(buttonsOf(slow).every((b) => b.disabled), 'both buttons off while cancelling');
+  settle();
+  await slowCancel;
+  await tick();
+  assert.match(textOf(slow), /You cancelled this. Nothing was run./);
+
+  // A non-zero exit code reads as a failure, zero as finished.
+  const failed = makeEnv(async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ ok: true, result: { stdout: '', stderr: 'boom', exit_code: 2 } }),
+  }));
+  failed.ctx._showSandboxApproval(data, 'tab-1');
+  await buttonsOf(failed)[0].listeners.click(click);
+  await tick();
+  await tick();
+  assert.match(textOf(failed), /Failed · exit code 2/);
+  assert.match(textOf(env), /Finished · exit code 0/);
 
   console.log('host_command_card: all assertions passed');
 })().catch((err) => {

@@ -11918,7 +11918,11 @@ function _renderHostCommandCard(data, requestId, cardTab, tabId) {
   const footNote = document.createElement('span');
   footNote.className = 'gcc-refine';
   footNote.textContent = 'Unanswered requests expire after 10 minutes.';
-  footer.appendChild(footNote);
+  footNote.setAttribute('role', 'status');
+  const countdown = document.createElement('span');
+  countdown.className = 'gcc-refine';
+  countdown.setAttribute('aria-hidden', 'true');
+  footer.append(footNote, countdown);
 
   box.append(header, body, actions, footer);
   bubble.appendChild(box);
@@ -11945,13 +11949,56 @@ function _renderHostCommandCard(data, requestId, cardTab, tabId) {
     }
     if (!res.ok) {
       const detail = await res.json().catch(() => ({}));
-      throw new Error(detail?.detail || `HTTP ${res.status}`);
+      const failure = new Error(detail?.detail || `HTTP ${res.status}`);
+      failure.status = res.status;
+      throw failure;
     }
     return res.json();
   };
   let running = false;
+  let busy = false;
+  let settled = false;
+  const deadline = Number(data.expires_at) > 0 ? data.expires_at * 1000 : Date.now() + 600000;
+  let clock = null;
+  const stopClock = () => {
+    if (clock !== null) clearInterval(clock);
+    clock = null;
+    countdown.textContent = '';
+  };
+  const expire = () => {
+    if (settled) return;
+    settled = true;
+    stopClock();
+    actions.remove();
+    _pendingSandboxCards.get(cardTab)?.delete(requestId);
+    footNote.textContent = 'Timed out before you answered. Nothing was run.';
+    const again = document.createElement('button');
+    again.className = 'btn-secondary';
+    again.textContent = 'Ask again';
+    again.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (again.disabled) return;
+      again.disabled = true;
+      _sendSandboxFollowUp(tabId, 'Please propose that command again.').catch((err) => {
+        again.disabled = false;
+        console.warn('[host-shell] follow-up not sent:', err);
+      });
+    });
+    footer.appendChild(again);
+  };
+  clock = setInterval(() => {
+    if (settled || busy) return;
+    const left = Math.ceil((deadline - Date.now()) / 1000);
+    if (left <= 0) {
+      expire();
+      return;
+    }
+    countdown.textContent =
+      left <= 60 ? `Expires in ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}` : '';
+  }, 1000);
   const decide = async (action) => {
-    if (run.disabled) return;
+    if (run.disabled || settled) return;
+    busy = true;
     run.disabled = true;
     if (action === 'run') {
       running = true;
@@ -11962,10 +12009,12 @@ function _renderHostCommandCard(data, requestId, cardTab, tabId) {
     }
     try {
       const out = await send(action);
+      settled = true;
+      stopClock();
       actions.remove();
       _pendingSandboxCards.get(cardTab)?.delete(requestId);
       if (action === 'cancel') {
-        footNote.textContent = 'Cancelled.';
+        footNote.textContent = 'You cancelled this. Nothing was run.';
         _sendSandboxFollowUp(
           tabId,
           `Cancelled. I did not run command request ${requestId}. Do not retry it; carry on without it, or ask me what I want.`,
@@ -11978,18 +12027,26 @@ function _renderHostCommandCard(data, requestId, cardTab, tabId) {
       output.hidden = false;
       footNote.textContent =
         result.exit_code === 0
-          ? 'Finished (exit code 0).'
-          : `Finished (exit code ${result.exit_code}).`;
+          ? '✓ Finished · exit code 0'
+          : `Failed · exit code ${result.exit_code}`;
       _sendSandboxFollowUp(
         tabId,
         `I ran command request ${requestId}. Call host_command_result with that request_id to read the output.`,
       ).catch((e) => console.warn('[host-shell] follow-up not sent:', e));
     } catch (err) {
+      busy = false;
       running = false;
+      if (err.status === 404 || err.status === 410) {
+        expire();
+        return;
+      }
       run.disabled = false;
       cancel.disabled = false;
       cancel.textContent = 'Cancel';
-      footNote.textContent = 'Unanswered requests expire after 10 minutes.';
+      footNote.textContent =
+        err.status && err.status < 500
+          ? 'Unanswered requests expire after 10 minutes.'
+          : "Couldn't reach AI Gator. Try again.";
       _showConnectivityToast(`Could not record your decision: ${err.message}`, 'warn');
     }
   };

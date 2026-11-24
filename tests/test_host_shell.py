@@ -126,6 +126,12 @@ def test_tool_creates_pending_request_and_card(tmp_path):
     assert host_requests.lookup(out["request_id"], "tab-1")[0] == "pending"
 
 
+def test_card_says_when_the_request_expires(tmp_path):
+    card = _propose(tmp_path, command="git status")["_sandbox_approval"]
+    req = host_requests._REQUESTS[card["request_id"]]
+    assert card["expires_at"] == req.created_at + host_requests.REQUEST_TTL_SECONDS
+
+
 def test_tool_flags_risky_commands(tmp_path):
     out = _propose(tmp_path, command="git push origin main")
     assert out["_sandbox_approval"]["risks"] == ["Pushes commits to a remote"]

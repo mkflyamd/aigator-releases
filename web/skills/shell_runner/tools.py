@@ -1100,6 +1100,7 @@ def _tool_run_on_host(
         "request_id": req.id, "context_id": req.context_id, "tool": "run_on_host", "command": req.command,
         "cwd": req.cwd, "shell": req.shell or _DETECTED_SHELL, "reason": req.reason,
         "risks": list(req.risks), "timeout": req.timeout,
+        "expires_at": req.created_at + host_requests.REQUEST_TTL_SECONDS,
         "cwd_is_ai_workspace": Path(req.cwd) == Path(WORK_DIR).resolve(),
         "env_removed": len(environment) - len(host_requests.host_env(environment)),
     }
