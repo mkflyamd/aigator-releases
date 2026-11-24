@@ -1,4 +1,5 @@
 """Always-on skill -- 3 tools (always available regardless of active skill)."""
+import difflib
 import json
 import logging
 import math
@@ -71,7 +72,8 @@ TOOL_DEFS = [
                     "description": (
                         "File paths to read from disk. "
                         "For extract_data: paths to images to extract fields from. "
-                        "For analyze_sequence: ordered list of video frame paths — each is read, "
+                        "For analyze_sequence: ordered list of video frame paths (up to 32; they are sent for "
+                        "analysis in batches of 8 automatically) — each is read, "
                         "labeled with its index/timestamp, and described in the returned timeline."
                     ),
                 },
@@ -482,6 +484,7 @@ _IMAGE_MEDIA_TYPES = {
     ".gif": "image/gif", ".webp": "image/webp",
 }
 _MAX_SEQUENCE_FRAMES = 8
+_MAX_SEQUENCE_BATCHES = 4
 _FRAME_MIN_INTERVAL_SEC = 5
 
 
@@ -542,6 +545,26 @@ async def _analyze_video(video_path: str) -> dict:
     return result
 
 
+async def _analyze_frame_batches(image_paths: list, fps: float) -> dict | None:
+    """Analyze any number of frames by sending them in batches the vision call accepts."""
+    step = _MAX_SEQUENCE_FRAMES
+    if len(image_paths) <= step:
+        return await _analyze_frame_sequence(image_paths, fps)
+    timeline: list = []
+    summaries: list = []
+    for start in range(0, len(image_paths), step):
+        part = await _analyze_frame_sequence(image_paths[start:start + step], fps, start_index=start)
+        if part is None or not part.get("ok"):
+            error = (part or {}).get("error") or "Frame sequence analysis failed for an unknown reason."
+            return {"ok": False, "error": error, "frames_analyzed": len(timeline),
+                    "frames_total": len(image_paths), "timeline": timeline}
+        timeline.extend(part.get("timeline", []))
+        if part.get("summary"):
+            summaries.append(part["summary"])
+    return {"ok": True, "task": "analyze_sequence", "timeline": timeline,
+            "summary": " ".join(summaries), "frame_count": len(timeline)}
+
+
 async def _tool_describe_images(task: str, image_paths: list | None = None,
                                fields: list | None = None, fps: float = 0.2,
                                video_path: str | None = None) -> dict:
@@ -553,11 +576,12 @@ async def _tool_describe_images(task: str, image_paths: list | None = None,
         if not video_path:
             return {"ok": False, "error": "analyze_video requires video_path."}
         return await _analyze_video(video_path)
-    if task == "analyze_sequence" and len(image_paths or []) > _MAX_SEQUENCE_FRAMES:
+    _max_frames = _MAX_SEQUENCE_FRAMES * _MAX_SEQUENCE_BATCHES
+    if task == "analyze_sequence" and len(image_paths or []) > _max_frames:
         return {
             "ok": False,
             "error": (
-                f"analyze_sequence accepts at most {_MAX_SEQUENCE_FRAMES} frames, got {len(image_paths)}. "
+                f"analyze_sequence accepts at most {_max_frames} frames, got {len(image_paths)}. "
                 "For a video file use task='analyze_video' with video_path."
             ),
         }
@@ -575,7 +599,7 @@ async def _tool_describe_images(task: str, image_paths: list | None = None,
                     f"image path(s) do not exist on disk. First missing: {missing[:3]}"
                 ),
             }
-        result = await _analyze_frame_sequence(image_paths, fps)
+        result = await _analyze_frame_batches(image_paths, fps)
         if result is not None and result.get("ok"):
             return result
         if result is not None:
@@ -726,7 +750,7 @@ def _extract_structured_fields(image_paths: list, fields: list) -> dict | None:
     return None
 
 
-async def _analyze_frame_sequence(image_paths: list, fps: float = 0.2) -> dict | None:
+async def _analyze_frame_sequence(image_paths: list, fps: float = 0.2, start_index: int = 0) -> dict | None:
     """Read video frames from disk and return a per-frame timeline via vision API.
 
     Uses httpx.AsyncClient instead of the synchronous Anthropic SDK so the
@@ -754,11 +778,11 @@ async def _analyze_frame_sequence(image_paths: list, fps: float = 0.2) -> dict |
             data = base64.b64encode(path.read_bytes()).decode()
         except Exception:
             continue
-        time_sec = round(i / fps) if fps > 0 else i * 5
+        time_sec = round((start_index + i) / fps) if fps > 0 else (start_index + i) * 5
         time_label = f"{time_sec // 60:02d}:{time_sec % 60:02d}"
         content.append({
             "type": "text",
-            "text": f"--- Frame {i + 1}: {path.name} (timestamp {time_label}) ---",
+            "text": f"--- Frame {start_index + i + 1}: {path.name} (timestamp {time_label}) ---",
         })
         content.append({
             "type": "image",
@@ -976,7 +1000,18 @@ def _tool_read_skill(skill_id: str, file: str = "") -> dict:
             guide = f"# {conn_name} (MCP Connection)\n\nThis skill connects to an external MCP server.\n\n## Available Tools\n\n" + "\n".join(tool_descs)
             return {"skill_guide": guide}
         available = [d.name for d in web_skills_root.iterdir() if d.is_dir() and (d / "SKILL.md").exists()] if web_skills_root.exists() else []
-        return {"error": f"No SKILL.md found for skill '{skill_id}'. Available skills: {available}"}
+        from config import USER_SKILL_DIRS
+        for root in USER_SKILL_DIRS:
+            if root.exists():
+                available.extend(c.parent.name for c in root.rglob("SKILL.md"))
+        available = sorted(set(available))
+        missing = {"error": f"No SKILL.md found for skill '{skill_id}'. Available skills: {available}"}
+        wanted = skill_id.lower()
+        close = [a for a in available if a.lower() in wanted or wanted in a.lower()]
+        close = close or difflib.get_close_matches(wanted, [a.lower() for a in available], n=3, cutoff=0.6)
+        if close:
+            missing["did_you_mean"] = close[:3]
+        return missing
     return result
 
 

@@ -199,3 +199,27 @@ def test_tool_contract():
     import skills.shell_runner.tools as mod
     from skills._skill_utils import validate_tool_contract
     assert validate_tool_contract(mod, "shell_runner") is True
+
+
+def test_failed_command_that_printed_a_local_address_says_the_server_is_unverified():
+    from skills.shell_runner.tools import _tool_run_shell
+    result = _tool_run_shell(
+        command="echo Viewer at http://127.0.0.1:4173/p/demo/ && exit 3")
+    assert result["exit_code"] == 3
+    note = result["exit_note"]
+    assert "http://127.0.0.1:4173/p/demo/" in note and "exited with code 3" in note
+    assert "verify" in note.lower()
+
+
+def test_successful_command_with_a_local_address_has_no_exit_note():
+    from skills.shell_runner.tools import _tool_run_shell
+    result = _tool_run_shell(command="echo Viewer at http://127.0.0.1:4173/")
+    assert result["exit_code"] == 0
+    assert "exit_note" not in result
+
+
+def test_lookup_commands_exiting_one_are_described_as_not_found_not_as_a_failure():
+    from skills.shell_runner.tools import _exit_note
+    assert "not found" in _exit_note("where.exe whisper", 1, "", "").lower()
+    assert "not found" in _exit_note("which ffmpeg", 1, "", "").lower()
+    assert _exit_note("python build.py", 1, "", "") is None

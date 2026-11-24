@@ -721,6 +721,23 @@ def _with_shell_hint(cr, stderr: str) -> str:
     return stderr
 
 
+_LOCAL_URL = re.compile(r"https?://(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?[^\s'\"<>)]*")
+_LOOKUP_COMMAND = re.compile(r"^\s*(?:where(?:\.exe)?|which|command\s+-v|get-command)\b", re.IGNORECASE)
+
+
+def _exit_note(command: str, exit_code, stdout: str, stderr: str) -> str | None:
+    """A caution the model must weigh before reading an exit code as success or failure."""
+    if not exit_code:
+        return None
+    url = _LOCAL_URL.search(f"{stdout}\n{stderr}")
+    if url:
+        return (f"The command printed {url.group(0)} but exited with code {exit_code}, so the server it "
+                "started is probably not running. Verify the address responds before telling the user it is ready.")
+    if exit_code == 1 and _LOOKUP_COMMAND.match(command or ""):
+        return "Exit code 1 from a lookup command means the program was not found; it is not a failure of the task."
+    return None
+
+
 def _run_sandboxed(cr, command, shell, cwd, timeout, background, requested, policy, context_id) -> dict:
     if background:
         return _shell_error(_BACKGROUND_REFUSED_MSG)
@@ -801,6 +818,9 @@ def _run_sandboxed(cr, command, shell, cwd, timeout, background, requested, poli
     new_files = diff_outputs(before, watch_dirs)
     if new_files:
         result["output_files"] = new_files
+    note = _exit_note(command, res.returncode, result["stdout"], result["stderr"])
+    if note:
+        result["exit_note"] = note
     if res.timed_out:
         result["error"] = f"Command timed out after {timeout}s."
     elif res.returncode != 0:
@@ -906,6 +926,9 @@ def _run_unsandboxed(command, shell, cwd, timeout, background) -> dict:
         _new_files = diff_outputs(_before, _watch_dirs)
         if _new_files:
             result["output_files"] = _new_files
+        _note = _exit_note(command, proc.returncode, result["stdout"], result["stderr"])
+        if _note:
+            result["exit_note"] = _note
         if proc.returncode != 0:
             # Include the actual failure text, not just the exit code — the stall
             # banner in agent_loop.py truncates this to 160 chars, so lead with the
