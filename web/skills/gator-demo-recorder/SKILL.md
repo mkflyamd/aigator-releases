@@ -74,6 +74,7 @@ Every statement about a video's duration, a moment in it, or an edit must come f
 - **After a cut or speed-up:** narration `start_at` values were written for the old timeline. Move each one through the result's `time_map` (find the entry whose `old_sec` contains it and map it into `new_sec`), reword or drop any segment whose moment was removed, and render the Phase 3 widget again. The earlier approval is stale, so the user must approve again before `demo_merge_narration`.
 - **Narration merge:** `demo_merge_narration` is the only way to produce the final video. Quote `video_extended_by_sec`, `video_stream_sec`, `audio_stream_sec` and `intro` from its result.
 - **Intro wording:** "Hold" freezes the first frame; "Title card" shows the title text on a plain card. Use the word that matches `intro.mode`.
+- **Before sharing:** call `demo_leak_check` before telling the user a demo or viewer is ready. Never copy files from `source/` into a folder that is served or shared. If `findings` is not empty, fix each one (remove the copied file or the reference) and call it again; do not report the demo as ready while `ok` is false.
 - **On any `error`:** relay `message` and the measured numbers, offer the listed `options`, and do not claim success.
 
 ---

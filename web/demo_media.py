@@ -337,6 +337,51 @@ def manifest(project_id: str | None = None) -> dict:
         update_media(pid, lambda m: m.update(manifest={"generated_at": stamp, "files": files}))
         return {"ok": True, "project_id": pid, "current": current, "files": files, "generated_at": stamp}
 
+# ── leak check ───────────────────────────────────────────────────────────────
+
+_PRIVATE_DIRS = {"source", "work", "previous"}
+_TEXT_SUFFIXES = {".html", ".htm", ".js", ".json", ".srt", ".vtt", ".txt", ".md", ".css"}
+_MAX_TEXT_BYTES = 2_000_000
+
+
+def _source_needles(folder: Path) -> list[str]:
+    src = folder / "source"
+    names = {p.name.lower() for p in src.glob("*") if p.is_file() and p.suffix.lower() in MEDIA_SUFFIXES} \
+        if src.is_dir() else set()
+    return sorted(names)
+
+
+def leak_check(project_id: str | None = None) -> dict:
+    """Flag deliverables (everything outside source/, work/, previous/) that carry or name the raw source media."""
+    with _OP_LOCK:
+        pid, folder = project_for(project_id)
+        needles = _source_needles(folder)
+        findings, checked = [], 0
+        for path in sorted(folder.rglob("*")):
+            parts = path.relative_to(folder).parts
+            if not path.is_file() or parts[0] in _PRIVATE_DIRS or parts == ("project.json",):
+                continue
+            rel, suffix = rel_of(folder, path), path.suffix.lower()
+            if suffix in MEDIA_SUFFIXES:
+                checked += 1
+                if path.name.lower() in needles:
+                    findings.append({"kind": "source_media_in_served", "rel": rel, "matched": path.name})
+                    continue
+                _, ffprobe = find_binaries()
+                tags = _run([ffprobe, "-v", "error", "-show_entries", "format_tags:stream_tags", "-of", "json",
+                             str(path)]).stdout.lower()
+                hit = next((n for n in needles if n in tags), None)
+                if hit:
+                    findings.append({"kind": "source_in_metadata", "rel": rel, "matched": hit})
+            elif suffix in _TEXT_SUFFIXES and path.stat().st_size <= _MAX_TEXT_BYTES:
+                checked += 1
+                text = path.read_text(encoding="utf-8", errors="replace").lower()
+                hit = next((n for n in needles if n in text), None)
+                if hit:
+                    findings.append({"kind": "source_reference", "rel": rel, "matched": hit})
+        return {"ok": not findings, "project_id": pid, "checked": checked, "findings": findings}
+
+
 # ── frames ───────────────────────────────────────────────────────────────────
 
 def inspect_frames(project_id: str | None, source_rel: str, times_sec: list) -> dict:
