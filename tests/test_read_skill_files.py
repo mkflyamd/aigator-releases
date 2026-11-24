@@ -36,7 +36,8 @@ def skill(tmp_path, monkeypatch):
 def test_the_guide_lists_the_files_the_skill_ships(skill):
     out = tools._tool_read_skill("demo-design")
     assert "Read references/DESIGN.md" in out["skill_guide"]
-    assert "references/DESIGN.md" in out["files"] and "assets/logo.png" in out["files"]
+    assert "references/DESIGN.md" in out["skill_files"] and "assets/logo.png" in out["skill_files"]
+    assert "files" not in out
 
 
 def test_a_reference_file_is_returned(skill):
@@ -53,7 +54,8 @@ def test_a_path_outside_the_skill_is_refused(skill):
 
 def test_a_missing_file_lists_what_exists(skill):
     out = tools._tool_read_skill("demo-design", file="references/nope.md")
-    assert "error" in out and "references/DESIGN.md" in out["files"]
+    assert "error" in out and "references/DESIGN.md" in out["skill_files"]
+    assert "files" not in out
 
 
 def test_binary_and_oversized_files_give_a_path_not_content(skill):

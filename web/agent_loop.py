@@ -591,6 +591,17 @@ def _offered_tool_names(tools) -> frozenset[str]:
     return frozenset(names)
 
 
+def _file_chip_entries(result) -> list:
+    """Downloadable files in a tool result, the only entries the chat shows as file cards.
+
+    Other tools also use a `files` key for plain listings (a skill's file paths, a PR's changed
+    files); those are for the model and must not render as blank cards.
+    """
+    if not isinstance(result, dict) or not isinstance(result.get("files"), list):
+        return []
+    return [f for f in result["files"] if isinstance(f, dict) and f.get("name") and f.get("download_url")]
+
+
 def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _SLACK_SAFE_MSG,
                       *, context_id: str | None = None, offered_names: frozenset[str] | None = None):
     """Returns (_run_tool_block, _run_all_into_queue, _SENTINEL) closures."""
@@ -1193,8 +1204,9 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
             await event_queue.put({"kind": "sandbox_approval", "data": result["_sandbox_approval"]})
         if isinstance(result, dict) and "_github_sso" in result:
             await event_queue.put({"kind": "github_sso", "data": result["_github_sso"]})
-        if isinstance(result, dict) and result.get("files"):
-            await event_queue.put({"kind": "files", "files": result["files"]})
+        _chips = _file_chip_entries(result)
+        if _chips:
+            await event_queue.put({"kind": "files", "files": _chips})
         # Cross-skill nudge: a tool may return `suggested_next` — a list of
         # {skill, tool, why} dicts pointing at a better next step (typically on
         # failure). The dict is already serialized into the tool_result the model
