@@ -694,10 +694,11 @@ function _liveToolbarWebContents() {
 const toolbarStar = require('./toolbar-star');
 const _hiddenCustomApps = new Set();
 
-// Star state for the address bar: only user-added apps get a star. Apps pending
-// deletion (Undo window) are ignored so the star empties as soon as Remove is clicked.
+// Star state for the address bar: user-added apps and the built-in Browser get a star. In the
+// Browser it is filled when the page's site is already a starred app. Apps pending deletion
+// (Undo window) are ignored so the star empties as soon as Remove is clicked.
 function _starFor(app, url) {
-  if (!_customAppIds.has(app)) return { state: 'hidden', appId: null, name: '' };
+  if (!_isPinnablePane(app)) return { state: 'hidden', appId: null, name: '' };
   const apps = [..._customAppIds]
     .filter((id) => _genericPanes[id])
     .map((id) => ({ id, url: _genericPanes[id].url }));
