@@ -86,6 +86,8 @@ def _tool_read_file(path: str, encoding: str = "", offset: int = 0, limit: int =
     if is_secrets_path(path):
         return {"error": PROTECTED_MSG}
     p = Path(path)
+    if p.is_dir():
+        return {"error": f"{path} is a folder, not a file. Use list_dir to see what is in it."}
     if not p.exists() or not p.is_file():
         return {"error": f"File not found: {path}"}
 
