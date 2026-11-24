@@ -218,6 +218,12 @@ def test_successful_command_with_a_local_address_has_no_exit_note():
     assert "exit_note" not in result
 
 
+def test_run_shell_description_sends_multi_line_files_to_write_file():
+    import skills.shell_runner.tools as mod
+    desc = next(t for t in mod.TOOL_DEFS if t["name"] == "run_shell")["description"]
+    assert "write_file" in desc and "multi-line" in desc
+
+
 def test_lookup_commands_exiting_one_are_described_as_not_found_not_as_a_failure():
     from skills.shell_runner.tools import _exit_note
     assert "not found" in _exit_note("where.exe whisper", 1, "", "").lower()

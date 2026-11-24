@@ -1022,6 +1022,8 @@ TOOL_DEFS = [
             "approves in the chat; call again with exactly the same values only after the user says they approved. "
             "background=true is not available with the sandbox on. "
             "Use file_ops tools for simple read/write/list — use run_shell when you need a full command pipeline. "
+            "A command is one line: to create a multi-line file (a script, config or HTML page), use write_file "
+            "instead of echo or a heredoc. "
             "Only when the sandbox is off: for a long-running process that does not exit on its own — an LLM "
             'inference server, a dev server (`npm run dev`), a foreground `docker run`, or `ssh host "<server>"` — '
             "set background=true. It returns "
