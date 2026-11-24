@@ -24,14 +24,14 @@ Shares authentication with [m365-teams](../m365-teams/) skill. Authenticate once
 
 ```bash
 # Search for someone
-python3 scripts/search_people.py "Tanmay Shah"
+python3 scripts/search_people.py "Taylor Morgan"
 
 # Get full profile
-python3 scripts/get_profile.py --email tanmay.shah@amd.com
+python3 scripts/get_profile.py --email taylor.morgan@example.com
 
 # See org chain (manager hierarchy)
 python3 scripts/org_chain.py
-python3 scripts/org_chain.py --user tanmay.shah@amd.com
+python3 scripts/org_chain.py --user taylor.morgan@example.com
 ```
 
 ## When to Use
@@ -60,13 +60,13 @@ All scripts support `--json` flag for machine-readable output.
 ```bash
 # Search by name (fuzzy)
 python3 scripts/search_people.py "Kumar"
-python3 scripts/search_people.py "Tanmay" --count 5
+python3 scripts/search_people.py "Taylor" --count 5
 
 # Search by email
-python3 scripts/search_people.py "tanmay.shah@amd.com"
+python3 scripts/search_people.py "taylor.morgan@example.com"
 
 # Get full profile by email
-python3 scripts/get_profile.py --email tanmay.shah@amd.com
+python3 scripts/get_profile.py --email taylor.morgan@example.com
 
 # Get profile by user ID
 python3 scripts/get_profile.py --id 5a63e4ef-a360-4492-9806-f17c5f4f0c8f
@@ -78,7 +78,7 @@ python3 scripts/get_profile.py
 python3 scripts/org_chain.py
 
 # Someone's org chain
-python3 scripts/org_chain.py --user tanmay.shah@amd.com
+python3 scripts/org_chain.py --user taylor.morgan@example.com
 
 # Org chain with depth
 python3 scripts/org_chain.py --depth 5
@@ -91,10 +91,10 @@ python3 scripts/org_chain.py --depth 5
 python3 scripts/search_people.py "name or email"
 
 # Get detailed profile
-python3 scripts/get_profile.py --email user@amd.com --json
+python3 scripts/get_profile.py --email user@contoso.example --json
 
 # Get manager hierarchy
-python3 scripts/org_chain.py --user user@amd.com --json
+python3 scripts/org_chain.py --user user@contoso.example --json
 ```
 
 ## Security

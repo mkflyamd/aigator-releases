@@ -11,12 +11,12 @@ from skills.calendar.tools import _parse_email_list
 
 
 def test_parse_email_list_strips_quotes_and_semicolons():
-    raw = '"Mrinal.Karvir@amd.com"; "Satya.Devineni@amd.com"; "Haichen.Zhang@amd.com"'
+    raw = '"Alex.Rivera@contoso.example"; "Sam.Chen@contoso.example"; "Jordan.Lee@contoso.example"'
     out = _parse_email_list(raw)
     assert out == [
-        "Mrinal.Karvir@amd.com",
-        "Satya.Devineni@amd.com",
-        "Haichen.Zhang@amd.com",
+        "Alex.Rivera@contoso.example",
+        "Sam.Chen@contoso.example",
+        "Jordan.Lee@contoso.example",
     ]
     for addr in out:
         assert '"' not in addr and ";" not in addr

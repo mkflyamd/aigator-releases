@@ -3863,7 +3863,7 @@ async def tp_teams_send_message(req: TeamsSendMessageRequest):
         # auto-fallback used to live here (resolve via `to` when the
         # cached chat_id looked like an unrealized preview stub). It was
         # REMOVED after it delivered a real message to the wrong person —
-        # a scheduled job's draft had chat_topic "ValliyappanRam,AI Agent"
+        # a scheduled job's draft had chat_topic "RiveraCasey,AI Agent"
         # but `to` had been resolved to Ram's *personal* email, and the
         # fallback trusted `to` without any cross-check against
         # chat_topic. `to`/`chat_id`/`chat_topic` are independently

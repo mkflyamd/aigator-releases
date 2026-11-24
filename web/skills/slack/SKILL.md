@@ -62,7 +62,7 @@ NEVER call `slack_read_channel` without `oldest` when the user specifies a time 
 - `in:#channel` — messages in a specific channel
 - `has:link` — messages with links
 - `before:2026-05-01` / `after:2026-04-01` — date filters
-- Combine: `from:@piotr in:#ext-amd-liquid-ai after:2026-04-01`
+- Combine: `from:@piotr in:#ext-acme-beta after:2026-04-01`
 
 ## Sending Messages
 

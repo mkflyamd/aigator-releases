@@ -105,4 +105,4 @@ Outcomes, durations, token counts and tool-call counts stay available.
 | `gator_backend.log`  | 5 MiB (plus one 5 MiB backup)    | 30 days   | on every write; startup; every 24 h |
 | `tasks.db` telemetry | 100,000 rows per telemetry table | 30 days   | startup; every 24 h                 |
 
-These limits follow the AMD logging and data protection requirement to keep diagnostic data only as long as needed.
+These limits keep diagnostic data only as long as needed.

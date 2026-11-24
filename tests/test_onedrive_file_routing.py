@@ -227,8 +227,8 @@ def test_resolve_teams_attachment_reads_properties_files_blob():
     import importlib
     import unittest.mock as _mock
 
-    SHARE_URL = "https://amdcloud-my.sharepoint.com/:w:/g/personal/mdeopuja_amd_com/IABC"
-    FILE_URL  = "https://amdcloud-my.sharepoint.com/personal/mdeopuja_amd_com/Documents/AMD%20Skills.docx"
+    SHARE_URL = "https://amdcloud-my.sharepoint.com/:w:/g/personal/pat_contoso_example/IABC"
+    FILE_URL  = "https://amdcloud-my.sharepoint.com/personal/pat_contoso_example/Documents/AMD%20Skills.docx"
     DRIVE_ID  = "b!W9GOusj2aEGrcqXC0WKHMfakedriveID"
     FAKE_MESSAGE_ID = "1787611789532"
 
@@ -240,7 +240,7 @@ def test_resolve_teams_attachment_reads_properties_files_blob():
             "itemId": None,
             "fileUrl": FILE_URL,
             "shareUrl": SHARE_URL,
-            "siteUrl": "https://amdcloud-my.sharepoint.com/personal/mdeopuja_amd_com",
+            "siteUrl": "https://amdcloud-my.sharepoint.com/personal/pat_contoso_example",
         },
         "sharepointIds": {"driveId": DRIVE_ID},
         "@type": "http://schema.skype.com/File",

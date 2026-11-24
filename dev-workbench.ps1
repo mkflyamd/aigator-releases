@@ -31,9 +31,9 @@ $PrimaryDir     = $PSScriptRoot
 # The worktree MUST live at a path distinct from the primary checkout — git
 # refuses to add a worktree at the main working tree's own path. Derive a
 # sibling folder from the primary's actual name + branch (e.g.
-# "AgenticPOC-dev" -> "AgenticPOC-dev-agent-work") so it can never collide,
+# "aigator-dev" -> "aigator-dev-agent-work") so it can never collide,
 # regardless of what the primary folder is named. (The old code hardcoded
-# "AgenticPOC-dev", which resolved to the primary itself when the repo folder
+# "aigator-dev", which resolved to the primary itself when the repo folder
 # was named that — breaking `git worktree add`.)
 $PrimaryName    = Split-Path $PrimaryDir -Leaf
 $WorktreeDir    = Join-Path (Split-Path $PrimaryDir -Parent) "$PrimaryName-$WorktreeBranch"

@@ -76,7 +76,7 @@ def test_pinned_message_found_on_later_page():
                     "id": target,
                     "time": "2026-08-04T08:39:00Z",
                     "from": "Chaojun Hou",
-                    "content": "For ROCm Docker Image send to dl.rocm-dh-council@amd.com",
+                    "content": "For ROCm Docker Image send to dl.release-council@contoso.example",
                 }
             ],
             "BACKLINK_2",
