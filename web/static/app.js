@@ -1439,6 +1439,17 @@ function _formatBytes(bytes) {
   return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
 }
 
+function _dropEarlierFileCard(row, name) {
+  let replaced = false;
+  row.querySelectorAll('.ofc-wrapper').forEach((w) => {
+    if (w.dataset.fileName === name) {
+      w.remove();
+      replaced = true;
+    }
+  });
+  return replaced;
+}
+
 /* ── File chip remove wiring ─────────────────────────── */
 // The chip lives inside #chat-input, a contenteditable host. A bare `click`
 // listener on a child button is swallowed there because the preceding
@@ -16211,8 +16222,10 @@ form.addEventListener('submit', async (e) => {
                 fileChipsDiv.className = 'output-files-row';
               }
               msg.files.forEach((f) => {
+                const wasRewritten = _dropEarlierFileCard(fileChipsDiv, f.name);
                 const wrapper = document.createElement('div');
                 wrapper.className = 'ofc-wrapper';
+                wrapper.dataset.fileName = f.name;
 
                 // ── Card ──
                 const card = document.createElement('div');
@@ -16241,7 +16254,9 @@ form.addEventListener('submit', async (e) => {
 
                 const mimeLabel = _friendlyMimeLabel(f.mime_type || '', f.name || '');
                 const sizeLabel = _formatBytes(f.size_bytes);
-                const metaText = [mimeLabel, sizeLabel].filter(Boolean).join(' \u00B7 ');
+                const metaText = [mimeLabel, sizeLabel, wasRewritten ? 'updated just now' : '']
+                  .filter(Boolean)
+                  .join(' \u00B7 ');
                 const metaEl = document.createElement('span');
                 metaEl.className = 'ofc-meta';
                 metaEl.textContent = metaText;
