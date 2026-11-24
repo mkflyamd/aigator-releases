@@ -1450,6 +1450,16 @@ function _dropEarlierFileCard(row, name) {
   return replaced;
 }
 
+function _phaseLine(text, startedAtMs, nowMs) {
+  if (!startedAtMs) return { text, level: 'info' };
+  const seconds = Math.max(0, Math.floor((nowMs - startedAtMs) / 1000));
+  if (seconds < 10) return { text, level: 'info' };
+  const minutes = Math.floor(seconds / 60);
+  const clock = minutes ? `${minutes}m ${seconds % 60}s` : `${seconds}s`;
+  if (seconds < 120) return { text: `${text} · ${clock}`, level: 'info' };
+  return { text: `${text} · ${clock} · Taking longer than usual`, level: 'warn' };
+}
+
 /* ── File chip remove wiring ─────────────────────────── */
 // The chip lives inside #chat-input, a contenteditable host. A bare `click`
 // listener on a child button is swallowed there because the preceding
@@ -15463,6 +15473,7 @@ form.addEventListener('submit', async (e) => {
   let _totalInputTokens = 0;
   let _totalOutputTokens = 0;
   let statusLines = [];
+  let statusStartedAt = null;
   let toastLines = [];
   let autoSkills = [];
   let toolCallCards = [];
@@ -15569,6 +15580,7 @@ form.addEventListener('submit', async (e) => {
     _permissionCardShown = false;
     _dropSurvivingTabCards(requestTabId);
     statusLines = [];
+    statusStartedAt = null;
     toastLines = [];
     autoSkills = [];
     toolCallCards = [];
@@ -15581,7 +15593,14 @@ form.addEventListener('submit', async (e) => {
 
     const renderStatusHtml = () => {
       if (!statusLines.length && !toastLines.length) return '';
-      const lines = [...statusLines.map((text) => ({ text, level: 'info' })), ...toastLines];
+      const lines = [
+        ...statusLines.map((text, i) =>
+          i === statusLines.length - 1 && _streamLive()
+            ? { ..._phaseLine(text, statusStartedAt, Date.now()), phase: text }
+            : { text, level: 'info' },
+        ),
+        ...toastLines,
+      ];
       return `<div class="status-steps">${lines
         .map((line) => {
           const lvl = line.level || 'info';
@@ -15589,7 +15608,8 @@ form.addEventListener('submit', async (e) => {
           if (lvl === 'warn') cls.push('status-line-warn');
           else if (lvl === 'error') cls.push('status-line-error');
           else if (lvl === 'success') cls.push('status-line-success');
-          return `<div class="${cls.join(' ')}">${escapeHtml(line.text)}</div>`;
+          const phase = line.phase ? ' data-phase="1"' : '';
+          return `<div class="${cls.join(' ')}"${phase}>${escapeHtml(line.text)}</div>`;
         })
         .join('')}</div>`;
     };
@@ -15825,6 +15845,7 @@ form.addEventListener('submit', async (e) => {
 
     // Show initial status + dots immediately (before first SSE event)
     statusLines.push('Gator is on it...');
+    statusStartedAt = Date.now();
     // Always create the typing-dots placeholder in the DOM — toggle visibility
     // instead of add/remove so scrollHeight never changes (fixes flicker).
     const _dotsPlaceholder = document.createElement('div');
@@ -15865,6 +15886,15 @@ form.addEventListener('submit', async (e) => {
       // Re-append if _renderProse() wiped it (happens on every SSE event)
       if (!_dotsPlaceholder.parentElement) prose.appendChild(_dotsPlaceholder);
       _dotsPlaceholder.style.visibility = wantDots ? 'visible' : 'hidden';
+      // Keep the running phase's clock moving between events, touching only that line's text.
+      const _phaseEl = statusLines.length ? prose.querySelector('.status-line[data-phase]') : null;
+      if (_phaseEl) {
+        const _line = _phaseLine(statusLines[statusLines.length - 1], statusStartedAt, Date.now());
+        if (_phaseEl.textContent !== _line.text) {
+          _phaseEl.textContent = _line.text;
+          _phaseEl.classList.toggle('status-line-warn', _line.level === 'warn');
+        }
+      }
       // Do NOT set scrollTop here — the SSE token handler drives auto-scroll
       // on real content changes. Setting it here caused the flicker (dots
       // add/remove changed scrollHeight, then this scrolled to the new bottom,
@@ -16144,6 +16174,7 @@ form.addEventListener('submit', async (e) => {
               _scheduleRender();
             } else if (msg.status) {
               statusLines.push(msg.status);
+              statusStartedAt = msg.started_at ? msg.started_at * 1000 : Date.now();
               _scheduleRender();
               // Only update tool strip when user is on the submitting tab
               if (_activeTabId === _tabKey) {

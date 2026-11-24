@@ -300,6 +300,11 @@ def _sse_tool_result(call_id: str, status: str, summary: str) -> str:
     return f"data: {json.dumps({'tool_result': {'call_id': call_id, 'status': status, 'summary': summary}})}\n\n"
 
 
+def _sse_status(status: str, started_at: float | None = None) -> str:
+    started_at = time.time() if started_at is None else started_at
+    return f"data: {json.dumps({'status': status, 'started_at': started_at})}\n\n"
+
+
 _TOOL_CALL_FORWARD_TYPES = ("tool_call_start", "tool_call_progress", "tool_call_complete")
 
 
@@ -1692,7 +1697,7 @@ async def _single_agent_loop(
                     break
                 kind = evt["kind"]
                 if kind == "status":
-                    yield f"data: {json.dumps({'status': evt['status']})}\n\n"
+                    yield _sse_status(evt["status"])
                 elif kind == "tool_result":
                     yield _sse_tool_result(evt["call_id"], evt["status"], evt["summary"])
                 elif kind == "pane":
@@ -2241,7 +2246,7 @@ async def run_three_agent_loop(
                     break
                 kind = evt["kind"]
                 if kind == "status":
-                    yield f"data: {json.dumps({'status': evt['status']})}\n\n"
+                    yield _sse_status(evt["status"])
                 elif kind == "tool_result":
                     yield _sse_tool_result(evt["call_id"], evt["status"], evt["summary"])
                 elif kind == "pane":
