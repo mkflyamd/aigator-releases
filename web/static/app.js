@@ -1905,7 +1905,13 @@ function _openSkillPickerDropdown(query) {
 
     const mainZone = document.createElement('span');
     mainZone.className = 'skill-mention-main';
-    _fillMentionMain(mainZone, s.icon, `/${alias}`, `${s.label}${badgeHtml}`, s.description);
+    _fillMentionMain(
+      mainZone,
+      s.icon,
+      `/${escapeHtml(alias)}`,
+      `${escapeHtml(s.label)}${badgeHtml}`,
+      s.description,
+    );
     if (s.description) item.title = s.description;
     mainZone.addEventListener('mousedown', (e) => {
       e.preventDefault();

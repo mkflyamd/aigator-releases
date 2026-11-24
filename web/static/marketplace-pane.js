@@ -1895,7 +1895,9 @@
   // belong in the "/" menu, not a row for the plugin id itself.
   function _isBundleContainer(body, pluginId) {
     const prefix = pluginId + '__';
-    return Array.isArray(body && body.skill_ids) && body.skill_ids.some((id) => id.startsWith(prefix));
+    return (
+      Array.isArray(body && body.skill_ids) && body.skill_ids.some((id) => id.startsWith(prefix))
+    );
   }
 
   function _handleInstallOutcome(ok, body, skill) {
