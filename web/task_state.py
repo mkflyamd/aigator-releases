@@ -27,6 +27,7 @@ class TaskState:
     pending: PendingInfo | None = None
     confidence: float = 0.0
     turns_since_last_update: int = 0
+    used_runners: list[str] = field(default_factory=list)
 
 
 class TaskStateStore:

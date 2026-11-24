@@ -565,6 +565,21 @@ def _grant_tools(available_tools: list, required_tool_names: set, names) -> None
     required_tool_names.update(names)
 
 
+def _not_offered_hint(tool_name: str, offered) -> str:
+    """Hint for a call to a tool this turn does not offer; names the skill to request when one owns it."""
+    hint = "This tool is not available in this conversation. Use only the tools you were given."
+    if "request_skill" not in offered:
+        return hint
+    import shared as _shared
+    owners = sorted(
+        sid for sid, tools in _shared.SKILL_TOOLS_MAP.items()
+        if not sid.startswith("_") and tool_name in tools
+    )
+    if not owners:
+        return hint
+    return f"{hint} If you need it, call request_skill with skill: {', '.join(owners[:3])}."
+
+
 def _offered_tool_names(tools) -> frozenset[str]:
     names = set()
     for d in tools or ():
@@ -1006,7 +1021,7 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
                 {
                     "error": "tool_not_offered",
                     "tool": tc.name,
-                    "hint": "This tool is not available in this conversation. Use only the tools you were given.",
+                    "hint": _not_offered_hint(tc.name, _offered),
                 },
                 f"{tc.name} is not available in this conversation",
             )
