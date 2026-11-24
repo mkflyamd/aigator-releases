@@ -23,7 +23,7 @@ import permissions
 import sandbox
 from sandbox import approvals as sandbox_approvals
 from sandbox import task_grants
-from sandbox.paths import HOME_DENY, PathNotGrantable, is_within, normalize_grant_paths, normalize_hosts
+from sandbox.paths import HOME_DENY, PathNotGrantable, check_grant_size, is_within, normalize_grant_paths, normalize_hosts
 from sandbox.policy import load_policy
 
 SKILL_ID = "code_runner"
@@ -399,6 +399,7 @@ def _check_requested_access(extra_read_paths, extra_write_paths, network_hosts, 
     try:
         read_paths = normalize_grant_paths(extra_read_paths)
         write_paths = normalize_grant_paths(extra_write_paths)
+        check_grant_size([*read_paths, *write_paths])
         hosts = normalize_hosts(network_hosts)
     except (PathNotGrantable, ValueError) as exc:
         return {"error": f"{exc} Do not retry with this value."}
