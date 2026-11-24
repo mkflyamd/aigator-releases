@@ -1,7 +1,9 @@
 import json
 import os
 import socket
+import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -61,6 +63,7 @@ def test_ledger_round_trip_and_corrupt_file(tmp_path, monkeypatch):
     ledger.write_text("not json")
     assert lw._ledger_load() == {
         "runtime": {}, "per_run": [], "scratch": {}, "runtime_born": {}, "package_children": {},
+        "needs_repair": [],
     }
 
 
@@ -212,7 +215,7 @@ def test_post_start_failures_are_not_reported_as_unavailable():
 @pytest.fixture
 def fake(tmp_path, monkeypatch):
     state = SimpleNamespace(grants=[], revokes=[], scrubs=[], revoke_rc=0, grant_error=None, run_error=None, runs=0,
-                           reinherits=[], packages=[])
+                           reinherits=[], packages=[], repairs=0)
     run = tmp_path / "run"
     run.mkdir()
     state.run = run
@@ -228,9 +231,12 @@ def fake(tmp_path, monkeypatch):
         state.grants.append((str(path), perm))
         return 0, ""
 
-    def revoke(path, sid):
+    def revoke(path, sid, **_kw):
         state.revokes.append(str(path))
         return state.revoke_rc, ""
+
+    def start_repair():
+        state.repairs += 1
 
     def run_contained(*args, **kwargs):
         state.runs += 1
@@ -244,6 +250,8 @@ def fake(tmp_path, monkeypatch):
 
     monkeypatch.setattr(lw, "_grant", grant)
     monkeypatch.setattr(lw, "_revoke", revoke)
+    monkeypatch.setattr(lw, "_start_repair", start_repair)
+    monkeypatch.setattr(lw, "_REPAIRING", set())
     monkeypatch.setattr(lw, "_reinherit", reinherit)
     monkeypatch.setattr(lw, "_site_package_dirs", lambda: list(state.packages))
     monkeypatch.setattr(lw, "_run_contained", run_contained)
@@ -616,8 +624,177 @@ def test_the_paused_message_names_the_stuck_folder_and_a_way_forward(fake, monke
     fake.revoke_rc = 5
     with pytest.raises(sandbox.SandboxUnavailable) as info:
         lw.launch(fake.req())
-    assert str(stuck) in str(info.value) and "Restarting AI Gator" in str(info.value)
+    assert str(stuck) in str(info.value) and "background" in str(info.value)
     assert "Settings" not in str(info.value)
+
+
+# ── A slow icacls must never hold a turn: timeouts, repair marks, background repair ──
+
+TIMED_OUT = (-9, "timed out")
+
+
+def test_icacls_gives_up_on_a_run_that_outlasts_its_timeout(monkeypatch):
+    def slow(argv, **kw):
+        assert kw["timeout"] == 7
+        raise subprocess.TimeoutExpired(argv, kw["timeout"])
+
+    monkeypatch.setattr(lw.subprocess, "run", slow)
+    rc, out = lw._icacls(Path("C:/data"), "/grant", timeout=7)
+    assert rc == lw.ICACLS_TIMED_OUT and "timed out" in out
+
+
+def test_grant_and_revoke_run_icacls_with_a_finite_timeout(monkeypatch):
+    seen = []
+    monkeypatch.setattr(lw.subprocess, "run", lambda argv, **kw: seen.append(kw["timeout"]) or SimpleNamespace(
+        returncode=0, stdout="", stderr=""))
+    lw._grant(Path("C:/data"), SID, "M")
+    lw._revoke(Path("C:/data"), SID)
+    assert seen == [lw.GRANT_SECONDS, lw.GRANT_SECONDS]
+    assert 0 < lw.GRANT_SECONDS < 600
+
+
+def test_a_revoke_that_times_out_is_recorded_as_needing_repair(fake, monkeypatch):
+    wide = fake.tmp / "wide"
+    wide.mkdir()
+    lw._ledger_add_per_run(SID, wide)
+    monkeypatch.setattr(lw, "_revoke", lambda path, sid, **kw: TIMED_OUT)
+    assert lw._revoke_ok(SID, wide) is False
+    assert lw._ledger_load()["needs_repair"] == [[SID, str(wide)]]
+
+
+def test_a_clean_root_does_not_clear_an_entry_whose_revoke_was_cut_short(fake, monkeypatch):
+    wide = fake.tmp / "wide"
+    wide.mkdir()
+    lw._ledger_add_per_run(SID, wide)
+    lw._ledger_mark_needs_repair(SID, wide)
+    monkeypatch.setattr(lw, "_dacl_aces", _aces(PROGRAM_FILES_SDDL))  # the root no longer shows the ACE
+    calls = []
+    monkeypatch.setattr(lw, "_revoke", lambda path, sid, **kw: calls.append(Path(path)) or (5, "denied"))
+    assert lw._revoke_ok(SID, wide) is False
+    assert calls == [wide]
+    monkeypatch.setattr(lw, "_revoke", lambda path, sid, **kw: (0, ""))
+    assert lw._revoke_ok(SID, wide) is True
+
+
+def test_a_successful_revoke_clears_the_needs_repair_mark(fake):
+    wide = fake.tmp / "wide"
+    wide.mkdir()
+    lw._ledger_add_per_run(SID, wide)
+    lw._ledger_mark_needs_repair(SID, wide)
+    assert lw._sweep_locked()[0] == 0  # flagged entries are left to the background repair
+    lw._ledger_remove_per_run(SID, wide)
+    data = lw._ledger_load()
+    assert data["per_run"] == [] and data["needs_repair"] == []
+
+
+def test_a_grant_that_times_out_refuses_the_run_and_flags_the_folder(fake, monkeypatch):
+    monkeypatch.setattr(lw, "_grant", lambda path, sid, perm, **kw: TIMED_OUT)
+    monkeypatch.setattr(lw, "_revoke", lambda path, sid, **kw: fake.revokes.append(str(path)) or TIMED_OUT)
+    monkeypatch.setattr(lw, "_dacl_aces", _aces(PROGRAM_FILES_SDDL))  # a half-applied grant can look clean at the root
+    with pytest.raises(sandbox.SandboxUnavailable, match="timed out"):
+        lw.launch(fake.req(write=[fake.tmp]))
+    assert fake.runs == 0
+    assert lw._ledger_load()["needs_repair"] == [[SID, str(fake.tmp)]]
+    assert str(fake.tmp) in fake.revokes  # the whole tree was revoked, not skipped on a clean-looking root
+
+
+def test_a_launch_never_retries_a_cut_short_revoke_itself(fake, monkeypatch):
+    wide = fake.tmp / "wide"
+    wide.mkdir()
+    lw._ledger_add_per_run(SID, wide)
+    lw._ledger_mark_needs_repair(SID, wide)
+    with pytest.raises(sandbox.SandboxUnavailable, match="background"):
+        lw.launch(fake.req())
+    assert fake.revokes == [] and fake.runs == 0
+    assert fake.repairs == 1
+
+
+def test_a_launch_during_a_repair_is_refused_at_once(fake):
+    wide = fake.tmp / "wide"
+    wide.mkdir()
+    lw._ledger_add_per_run(SID, wide)
+    lw._REPAIRING.add((SID, str(wide)))
+    with pytest.raises(sandbox.SandboxUnavailable, match="background"):
+        lw.launch(fake.req())
+    assert fake.revokes == [] and fake.runs == 0
+
+
+def test_teardown_that_leaves_an_entry_behind_starts_the_background_repair(fake, monkeypatch):
+    monkeypatch.setattr(lw, "_revoke", lambda path, sid, **kw: TIMED_OUT)
+    lw.launch(fake.req())
+    assert fake.runs == 1 and fake.repairs == 1
+    assert lw._ledger_load()["per_run"] == [[SID, str(fake.run)]]
+
+
+def test_a_clean_teardown_starts_no_repair(fake):
+    lw.launch(fake.req())
+    assert fake.repairs == 0
+
+
+def test_teardown_stops_at_its_time_budget_and_leaves_the_rest_to_the_repair(fake, monkeypatch):
+    monkeypatch.setattr(lw, "TEARDOWN_SECONDS", 0.0)
+    lw.launch(fake.req(read=[fake.tmp]))
+    assert fake.revokes == []
+    assert len(lw._ledger_load()["per_run"]) == 2 and fake.repairs == 1
+
+
+def test_setup_stops_granting_when_its_time_budget_is_spent(fake, monkeypatch):
+    monkeypatch.setattr(lw, "SETUP_SECONDS", 0.0)
+    with pytest.raises(sandbox.SandboxUnavailable, match="too long"):
+        lw.launch(fake.req(read=[fake.tmp]))
+    assert fake.grants == [] and fake.runs == 0
+
+
+def test_background_repair_revokes_without_holding_the_run_lock(fake, monkeypatch):
+    wide = fake.tmp / "wide"
+    wide.mkdir()
+    lw._ledger_add_per_run(SID, wide)
+    lw._ledger_mark_needs_repair(SID, wide)
+    seen = []
+
+    def revoke(path, sid, **kw):
+        seen.append((lw._RUN_LOCK.locked(), Path(path), kw.get("timeout"), (sid, str(path)) in lw._REPAIRING))
+        return 0, ""
+
+    monkeypatch.setattr(lw, "_revoke", revoke)
+    lw._repair_stale_grants()
+    assert seen == [(False, wide, lw.REPAIR_SECONDS, True)]
+    data = lw._ledger_load()
+    assert data["per_run"] == [] and data["needs_repair"] == []
+    assert lw._REPAIRING == set()
+
+
+def test_background_repair_keeps_an_entry_that_still_will_not_revoke(fake, monkeypatch):
+    wide = fake.tmp / "wide"
+    wide.mkdir()
+    lw._ledger_add_per_run(SID, wide)
+    lw._ledger_mark_needs_repair(SID, wide)
+    monkeypatch.setattr(lw, "_revoke", lambda path, sid, **kw: TIMED_OUT)
+    lw._repair_stale_grants()
+    assert lw._ledger_load()["per_run"] == [[SID, str(wide)]]
+    assert lw._REPAIRING == set()
+
+
+def test_the_startup_sweep_hands_leftovers_to_the_background_repair(fake, monkeypatch):
+    monkeypatch.setattr(lw, "_revoke", lambda path, sid, **kw: TIMED_OUT)
+    lw._ledger_add_per_run(SID, fake.run)
+    assert lw.sweep_stale_grants() == 0
+    assert fake.repairs == 1
+
+
+def test_start_repair_runs_one_background_thread_at_a_time(monkeypatch):
+    gate, ran = threading.Event(), []
+    monkeypatch.setattr(lw, "_repair_stale_grants", lambda: (ran.append(1), gate.wait(5)))
+    monkeypatch.setattr(lw, "_REPAIR_THREAD", None)
+    lw._start_repair()
+    lw._start_repair()
+    thread = lw._REPAIR_THREAD
+    deadline = time.monotonic() + 5
+    while not ran and time.monotonic() < deadline:
+        time.sleep(0.01)
+    gate.set()
+    thread.join(5)
+    assert ran == [1]
 
 
 def test_request_time_check_is_a_noop_off_windows(monkeypatch):
