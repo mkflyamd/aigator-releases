@@ -20,6 +20,9 @@ from tool_pipeline import (
 )
 from tool_repair import (
     LEAKED_CALL_NOTE,
+    drop_thinking_blocks,
+    history_rejected_stalled_chunk,
+    is_history_rejection,
     leaked_call_stalled_chunk,
     leaked_tool_call,
     rejection_summaries,
@@ -1296,6 +1299,7 @@ async def _single_agent_loop(
     available_tools = list(normalized_tools)
     required_tool_names = set(required_tool_names or ())
     _definition_retries = 0
+    _history_retries = 0
     _leaked_call_repairs = 0
     # Turn telemetry identifiers, initialized here so static analysis can see
     # they are defined before the first iteration completes.
@@ -1408,6 +1412,25 @@ async def _single_agent_loop(
                     await _log_turn_end_safe(
                         _turn_id, context_id, task_id, _, "single", model,
                         type(provider).__name__, "tool_configuration_error", None,
+                        [], None, str(exc),
+                        _total_input, _total_output, _overflow_prunes,
+                        _retry_count, _failover_used, _bad_tool_streak,
+                        int((time.monotonic() - _turn_start_ts) * 1000),
+                        len(msgs), active_skills,
+                    )
+                    yield "data: [DONE]\n\n"
+                    return
+                if is_history_rejection(exc):
+                    if _history_retries < 1 and not _any_response_event_emitted:
+                        _history_retries += 1
+                        _log.error("[agent] provider rejected conversation history (%s); stripping thinking and retrying once", exc)
+                        drop_thinking_blocks(msgs)
+                        continue
+                    _log.error("[agent] provider rejected conversation history after cleanup: %s", exc)
+                    yield history_rejected_stalled_chunk()
+                    await _log_turn_end_safe(
+                        _turn_id, context_id, task_id, _, "single", model,
+                        type(provider).__name__, "llm_error", None,
                         [], None, str(exc),
                         _total_input, _total_output, _overflow_prunes,
                         _retry_count, _failover_used, _bad_tool_streak,
@@ -2027,6 +2050,7 @@ async def run_three_agent_loop(
     _last_rejections: list[dict] = []
     available_tools = list(normalized_tools)
     _definition_retries = 0
+    _history_retries = 0
 
     for _iter in range(MAX_ITERATIONS):  # executor tool iterations
         exec_turn = None
@@ -2089,6 +2113,25 @@ async def run_three_agent_loop(
                     await _log_turn_end_safe(
                         turn_telemetry.new_turn_id(), context_id, task_id, _iter, "executor", model,
                         type(provider).__name__, "tool_configuration_error", None,
+                        [], None, str(exc),
+                        _total_input, _total_output, _overflow_prunes,
+                        _exec_retry_count, _failover_used, _bad_tool_streak,
+                        0, len(executor_msgs), active_skills,
+                    )
+                    yield "data: [DONE]\n\n"
+                    return
+                if is_history_rejection(exc):
+                    if _history_retries < 1 and not _executor_response_event_emitted:
+                        _history_retries += 1
+                        _log.error("[executor] provider rejected conversation history (%s); stripping thinking and retrying once", exc)
+                        drop_thinking_blocks(executor_msgs)
+                        draft_text = ""
+                        continue
+                    _log.error("[executor] provider rejected conversation history after cleanup: %s", exc)
+                    yield history_rejected_stalled_chunk()
+                    await _log_turn_end_safe(
+                        turn_telemetry.new_turn_id(), context_id, task_id, _iter, "executor", model,
+                        type(provider).__name__, "llm_error", None,
                         [], None, str(exc),
                         _total_input, _total_output, _overflow_prunes,
                         _exec_retry_count, _failover_used, _bad_tool_streak,
