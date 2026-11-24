@@ -1410,7 +1410,7 @@
         return;
       }
       const skill = { id: data.skill_id, name: picked.name || data.skill_id, tier: 'Community' };
-      if (typeof window.registerUserSkill === 'function') {
+      if (!_isBundleContainer(data, skill.id) && typeof window.registerUserSkill === 'function') {
         window.registerUserSkill(skill.id, skill.name, skill.tier);
       }
       _handleInstallOutcome(true, data, skill);
@@ -1891,6 +1891,13 @@
     return rest.replace(/[-_]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
   }
 
+  // A plugin that bundles skills is a container: only its namespaced skills
+  // belong in the "/" menu, not a row for the plugin id itself.
+  function _isBundleContainer(body, pluginId) {
+    const prefix = pluginId + '__';
+    return Array.isArray(body && body.skill_ids) && body.skill_ids.some((id) => id.startsWith(prefix));
+  }
+
   function _handleInstallOutcome(ok, body, skill) {
     if (ok) {
       const compatibilityWarnings = body.mcp_compatibility_warnings || [];
@@ -2000,7 +2007,11 @@
           );
           const data = second.body || {};
           const ok = second.resp.ok && data.ok === true;
-          if (ok && typeof window.registerUserSkill === 'function') {
+          if (
+            ok &&
+            !_isBundleContainer(data, skill.id) &&
+            typeof window.registerUserSkill === 'function'
+          ) {
             window.registerUserSkill(skill.id, skill.name, skill.tier);
           }
           _handleInstallOutcome(ok, data, skill);

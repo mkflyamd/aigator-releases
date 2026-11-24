@@ -837,6 +837,7 @@ _GOOGLE_SERVICES.forEach((svc) => {
     chipClass: 'chip-skill',
     railHidden: true,
     _userCreated: true,
+    description: s.description || '',
     actions: [],
   });
 });
@@ -1810,6 +1811,26 @@ function _wireMentionRowFocus(item) {
   });
 }
 
+// Fills a "/" menu row's main zone: icon, then the name and badge on one line
+// with an optional one-line description under them. The description is
+// user-installed SKILL.md text, so it is only ever set via textContent.
+function _fillMentionMain(mainZone, iconHtml, nameHtml, badgeHtml, description) {
+  mainZone.innerHTML = `<span class="skill-mention-icon">${iconHtml}</span>`;
+  const text = document.createElement('span');
+  text.className = 'skill-mention-text';
+  const line = document.createElement('span');
+  line.className = 'skill-mention-line';
+  line.innerHTML = `<span class="skill-mention-name">${nameHtml}</span><span class="skill-mention-badge">${badgeHtml}</span>`;
+  text.appendChild(line);
+  if (description) {
+    const desc = document.createElement('span');
+    desc.className = 'skill-mention-desc';
+    desc.textContent = description;
+    text.appendChild(desc);
+  }
+  mainZone.appendChild(text);
+}
+
 function _openSkillPickerDropdown(query) {
   // If dropdown is already open with the same query, don't rebuild (preserves expanded state)
   if (_mentionDropdown && _slashCurrentQuery === query) return;
@@ -1884,7 +1905,8 @@ function _openSkillPickerDropdown(query) {
 
     const mainZone = document.createElement('span');
     mainZone.className = 'skill-mention-main';
-    mainZone.innerHTML = `<span class="skill-mention-icon">${s.icon}</span><span class="skill-mention-name">/${alias}</span><span class="skill-mention-badge">${s.label}${badgeHtml}</span>`;
+    _fillMentionMain(mainZone, s.icon, `/${alias}`, `${s.label}${badgeHtml}`, s.description);
+    if (s.description) item.title = s.description;
     mainZone.addEventListener('mousedown', (e) => {
       e.preventDefault();
       _commitSkillChipOnly(s, '/');
@@ -1988,7 +2010,8 @@ function _openSkillPickerDropdown(query) {
       const mainZone = document.createElement('span');
       mainZone.className = 'skill-mention-main';
       const subtitle = cmd.description || (cmd.plugin_id ? `from ${cmd.plugin_id}` : '');
-      mainZone.innerHTML = `<span class="skill-mention-icon">/</span><span class="skill-mention-name">/${escapeHtml(cmd.name)}</span><span class="skill-mention-badge">${escapeHtml(subtitle)}</span>`;
+      _fillMentionMain(mainZone, '/', `/${escapeHtml(cmd.name)}`, '', subtitle);
+      if (subtitle) item.title = subtitle;
       mainZone.addEventListener('mousedown', (e) => {
         e.preventDefault();
         _commitCommandOnly(cmd);

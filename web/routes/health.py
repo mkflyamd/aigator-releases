@@ -433,6 +433,24 @@ def _skill_display_name(skill_md: Path, fallback: str) -> str:
         return fallback
 
 
+_DESCRIPTION_MAX_CHARS = 160
+_PLACEHOLDER_DESCRIPTION = "User skill"  # skill_manager's default when none was given
+
+
+def _one_line_description(text: str) -> str:
+    """First sentence of a SKILL.md description as plain one-line text for the "/" menu."""
+    text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text or "")
+    text = re.sub(r"[`*_#>]", "", text)
+    text = " ".join(text.split())
+    text = re.split(r"(?<=[.!?])\s", text, maxsplit=1)[0]
+    if text == _PLACEHOLDER_DESCRIPTION:
+        return ""
+    if len(text) > _DESCRIPTION_MAX_CHARS:
+        cut = text[: _DESCRIPTION_MAX_CHARS - 1]
+        text = (cut.rsplit(" ", 1)[0] if " " in cut else cut).rstrip(" ,;:-") + "…"
+    return text
+
+
 def _user_skills_bootstrap(nonce: str = "") -> str:
     """Build a <script> block that injects installed marketplace skills (Community, Verified, Mine)
     plus locally-dropped ~/.agents/skills into the page so they appear in slash
@@ -441,15 +459,23 @@ def _user_skills_bootstrap(nonce: str = "") -> str:
     skills = []
     seen = set()
     for e in load_installed():
-        entry = {
-            "id": e["id"],
-            "name": e.get("display_name", e["id"]),
-            "tier": e.get("tier", "Community"),
-        }
-        deps = shared.SKILL_DEPENDENCIES_MAP.get(e["id"])
-        if deps:
-            entry["requires"] = deps
-        skills.append(entry)
+        plugin_prefix = e["id"] + "__"
+        # A plugin bundling skills is only a container: its skills get their own
+        # rows below, and the container id is not a skill the server can run.
+        is_container = any(s.startswith(plugin_prefix) for s in e.get("skill_ids") or [])
+        if not is_container:
+            entry = {
+                "id": e["id"],
+                "name": e.get("display_name", e["id"]),
+                "tier": e.get("tier", "Community"),
+            }
+            deps = shared.SKILL_DEPENDENCIES_MAP.get(e["id"])
+            if deps:
+                entry["requires"] = deps
+            description = _one_line_description(shared.SKILL_DESCRIPTIONS.get(e["id"], ""))
+            if description:
+                entry["description"] = description
+            skills.append(entry)
         seen.add(e["id"])
         # For plugin bundles, also inject each bundled skill under its
         # namespaced id (e.g. "slack__skills-block-kit") so the "/" dropdown
@@ -458,7 +484,6 @@ def _user_skills_bootstrap(nonce: str = "") -> str:
         # skills are only discovered via the USER_SKILL_DIRS bare-name scan,
         # which registers them under un-namespaced ids that don't match the
         # skill_ids stored in the install record.
-        plugin_prefix = e["id"] + "__"
         for sid in e.get("skill_ids") or []:
             if sid in seen or sid in shared._BUILTIN_SKILL_IDS:
                 continue
@@ -483,6 +508,9 @@ def _user_skills_bootstrap(nonce: str = "") -> str:
                 "tier": e.get("tier", "Community"),
                 "plugin_id": e["id"],
             }
+            description = _one_line_description(shared.SKILL_DESCRIPTIONS.get(sid, ""))
+            if description:
+                bundled_entry["description"] = description
             skills.append(bundled_entry)
     # Skills dropped into user skill roots (e.g. ~/.agents/skills) aren't in the
     # install registry — surface them here so they show up as slash commands.
@@ -499,6 +527,9 @@ def _user_skills_bootstrap(nonce: str = "") -> str:
             deps = shared.SKILL_DEPENDENCIES_MAP.get(sid)
             if deps:
                 entry["requires"] = deps
+            description = _one_line_description(shared.SKILL_DESCRIPTIONS.get(sid, ""))
+            if description:
+                entry["description"] = description
             skills.append(entry)
     return _inline_script(f'window.__USER_SKILLS__ = {script_json(skills)};', nonce)
 

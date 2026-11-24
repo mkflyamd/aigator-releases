@@ -3799,6 +3799,25 @@ body.gator-chat-expanded .gator-expand-btn {
   flex-shrink: 0;
   opacity: 0.7;
 }
+.skill-mention-text {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+.skill-mention-line {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+.skill-mention-desc {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 /* Chevron expand button */
 .skill-mention-chevron-btn {
