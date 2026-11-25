@@ -10327,6 +10327,28 @@ async function _sendSandboxFollowUp(tabId, text) {
   _updatePlaceholder();
 }
 
+// A turn that just finished (or was just stopped) can still be unwinding when the next send arrives, and the
+// server refuses overlapping turns with 409 turn_in_progress. Follow-ups, "Ask again" and Continue send right at
+// that moment, so retry briefly before showing an error.
+async function _postChatRetryingBusyTurn(body, isStopped) {
+  const maxRetries = 6;
+  const retryMs = 400;
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (res.status !== 409 || attempt >= maxRetries || isStopped()) return res;
+    const busy = await res
+      .clone()
+      .json()
+      .catch(() => null);
+    if (busy?.error !== 'turn_in_progress') return res;
+    await new Promise((resolve) => setTimeout(resolve, retryMs));
+  }
+}
+
 function _flushSandboxFollowUp(tabId) {
   const text = _pendingSandboxFollowUps.get(tabId);
   if (!text) {
@@ -16221,11 +16243,7 @@ form.addEventListener('submit', async (e) => {
       // A re-send after an approval must not carry the id: the queued message was removed when this turn began.
       const { queued_id: _spentQueuedId, ...resendBody } = _postBody;
       _permissionResendPayload = resendBody;
-      const _postPromise = fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(_postBody),
-      });
+      const _postPromise = _postChatRetryingBusyTurn(_postBody, () => _userStopped);
       // Stop pressed while the POST is still pending must not wait for the server: release the
       // UI now and cancel the task if the POST ever returns one.
       const _stoppedDuringPost = new Promise((release) => {

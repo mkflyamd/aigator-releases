@@ -156,13 +156,15 @@ class ChatTaskStore:
     def active_task_for(self, context_id: str) -> str | None:
         """Return the id of a turn still alive on this context, else None.
 
-        Alive means its asyncio task has not finished. The `done` and
-        `cancelled` flags are not enough: after Stop the old task is still
-        unwinding (and still holds the per-context turn lock) until its
-        asyncio task ends.
+        A reply that finished on its own (`done`, never stopped) is not live: the
+        per-context turn lock serializes the next turn behind its unwinding. A
+        stopped turn stays live until its asyncio task ends, because the next turn
+        must not register while it still holds the lock.
         """
         for task_id, task in self._store.items():
             if task["context_id"] != context_id:
+                continue
+            if task["done"] and not task["cancelled"]:
                 continue
             asyncio_task = task.get("asyncio_task")
             if asyncio_task is not None:
