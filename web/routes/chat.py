@@ -1274,6 +1274,7 @@ async def chat_stream(task_id: str, request: Request):
     async def _gen():
         import asyncio as _asyncio
         import time as _time
+        from runs.supervisor import get_supervisor
 
         # The task buffer is the only data transport. The per-subscriber queue
         # returned here is merely a coalesced wake signal. A slow browser can
@@ -1325,7 +1326,7 @@ async def chat_stream(task_id: str, request: Request):
                     _silent_intervals += 1
                     yield ": ping\n\n"
                     active = await _asyncio.to_thread(get_supervisor().active_for_turn, task_id)
-                    status = (_run_status(active[0] if active else None, time.time())
+                    status = (_run_status(active[0] if active else None, _time.time())
                               or _heartbeat_status(_silent_intervals))
                     if status is not None:
                         yield f"data: {json.dumps({'status': status})}\n\n"
