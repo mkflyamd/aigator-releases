@@ -115,6 +115,29 @@ def _adopt_pty_session(session_id: str) -> PtySession | None:
         return entry
 
 
+def session_owner(session_id: str) -> dict[str, str] | None:
+    """The project and agent labels a session was created with, or None when they
+    are unknown. A session this backend created carries them; one adopted from the
+    PTY host after a restart is looked up there. Blocking (loopback socket)."""
+    meta = getattr(_pty_sessions.get(session_id), "meta", None)
+    if meta:
+        return meta
+    if not pty_client.host_enabled():
+        return None
+    info = pty_client.find_host(pty_client.instance_key())
+    if info is None:
+        return None
+    try:
+        listed = pty_client.host_request(info, {"op": "list"}).get("sessions", [])
+    except pty_client.HostError:
+        logger.warning("could not ask the PTY host for session owners", exc_info=True)
+        return None
+    for s in listed:
+        if s.get("id") == session_id:
+            return s.get("meta") or None
+    return None
+
+
 def find_host_session(owner: dict[str, str]) -> str | None:
     """Id of the newest live session the host holds for `owner` (the labels given
     when it was created), or None. After a backend restart this is how a project
@@ -207,6 +230,7 @@ def create_pty_session(
     if entry is None:
         pty = spawn_pty(cols=cols, rows=rows, command=command, env=env, cwd=cwd)
         entry = PtySession(pty)
+    entry.meta = dict(meta) if meta else None
     _pty_sessions[session_id] = entry
     return entry
 
