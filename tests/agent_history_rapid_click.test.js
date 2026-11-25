@@ -121,6 +121,7 @@ function loadTerminal() {
   globalThis._genAgentTerminals = {};
 
   const h = require(HISTORY_SRC);
+  const target = { pid: 4242, created: 1700000000.5 };
   const row = (id) => ({ key: id, id, agent: 'claude' });
   const notices = () => timers.filter((t) => t.ms === 3000 && !t.dead);
 
@@ -203,8 +204,8 @@ function loadTerminal() {
         release = resolve;
       });
     };
-    const a = h.takeover({ ...row('f'), liveElsewhere: true });
-    const b = h.takeover({ ...row('g'), liveElsewhere: true });
+    const a = h.takeover({ ...row('f'), liveElsewhere: true }, target);
+    const b = h.takeover({ ...row('g'), liveElsewhere: true }, target);
     assert.strictEqual(h.isRowBusy(row('f')), true);
     assert.strictEqual(h.isRowBusy(row('g')), false, 'the second takeover is ignored');
     await Promise.resolve();
@@ -214,7 +215,7 @@ function loadTerminal() {
     await Promise.all([a, b]);
     assert.strictEqual(h.isRowBusy(row('f')), false, 'failed takeover frees the row');
     posts = 0;
-    const c = h.takeover({ ...row('h'), liveElsewhere: true });
+    const c = h.takeover({ ...row('h'), liveElsewhere: true }, target);
     await Promise.resolve();
     await Promise.resolve();
     assert.strictEqual(posts, 1, 'the guard is released after a failure');
@@ -226,7 +227,7 @@ function loadTerminal() {
   {
     const calls = fakeStart();
     globalThis._ocFetch = async () => ({ ok: true, json: async () => ({}) });
-    await h.takeover({ ...row('i'), liveElsewhere: true });
+    await h.takeover({ ...row('i'), liveElsewhere: true }, target);
     await Promise.resolve();
     assert.strictEqual(calls.length, 1, 'resume starts after a successful takeover');
     assert.strictEqual(h.isRowBusy(row('i')), true);
