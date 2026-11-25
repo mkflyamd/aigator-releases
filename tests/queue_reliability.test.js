@@ -537,6 +537,26 @@ const count = (calls, what) => calls.filter((c) => c === what).length;
     assert.match(send, /class="send-icon/, 'idle Send keeps its arrow');
   }
 
+  // Narrow composers: Stop and Queue go icon-only inside a container query on the composer (not the window), so the
+  // text box keeps the width it has idle. Light theme keeps the dark ink on the accent (white was about 3:1).
+  {
+    const css = fs.readFileSync(path.join(__dirname, '..', 'web', 'static', 'style.css'), 'utf8');
+    const html = fs.readFileSync(path.join(__dirname, '..', 'web', 'static', 'index.html'), 'utf8');
+    assert.match(css, /\.chat-input-area\s*\{[^}]*container:\s*composer-bar\s*\/\s*inline-size/, 'the composer is a container');
+    const query = css.match(/@container composer-bar \(max-width: 480px\) \{([\s\S]*?)\r?\n\}\r?\n/);
+    assert(query, 'a container query on the composer width');
+    assert.match(query[1], /#send-btn\.is-streaming\s*\{[^}]*width:\s*34px[^}]*height:\s*34px[^}]*border-radius:\s*50%/, 'Queue is a 34px circle');
+    assert.match(query[1], /\.queue-label\s*\{\s*display:\s*none/, 'the word goes');
+    assert.match(query[1], /\.chat-stop-btn\s*\{[^}]*width:\s*32px/, 'Stop is a 32px square');
+    assert.match(query[1], /\.stop-label\s*\{\s*display:\s*none/, 'the Stop word goes');
+    assert.match(html, /<span class="stop-label">Stop<\/span>/, 'the Stop word is its own element');
+    assert.doesNotMatch(css, /\[data-theme='light'\] #chat-send-slot\[data-mode='queue'\][^{]*\{[^}]*color:\s*#fff/, 'no white ink on the light accent');
+    const stopRule = css.match(/\.chat-stop-btn \{([^}]*)\}/)[1];
+    assert.match(stopRule, /height:\s*32px/, 'Stop is as tall as the Queue pill');
+    assert.match(stopRule, /border:\s*1px solid var\(--danger\);/, 'the Stop outline is the full danger colour');
+    assert.match(stopRule, /margin-bottom:\s*calc\(0\.35rem \+ 1px\)/, 'and shares the pill centre line');
+  }
+
   console.log('queue reliability: ok');
 })().catch((err) => {
   console.error(err);

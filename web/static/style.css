@@ -5362,6 +5362,7 @@ body.gator-chat-expanded .gator-expand-btn {
 }
 
 .chat-input-area {
+  container: composer-bar / inline-size;
   display: flex;
   align-items: flex-end;
   padding-bottom: 0.35rem; /* breathing room so send-btn doesn't sit flush on bottom border */
@@ -10570,9 +10571,6 @@ html.material-symbols-ready .tp-mi {
   font-size: 0.8rem;
   font-weight: 500;
 }
-[data-theme='light'] #chat-send-slot[data-mode='queue'] #send-btn.is-streaming {
-  color: #fff;
-}
 #chat-send-slot[data-mode='queue'] #send-btn.is-streaming .queue-icon {
   display: block;
   flex-shrink: 0;
@@ -10588,16 +10586,17 @@ html.material-symbols-ready .tp-mi {
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 0.3rem;
-  height: 30px;
-  margin-bottom: 0.45rem;
+  height: 32px;
+  margin-bottom: calc(0.35rem + 1px);
   margin-right: 0.35rem;
   padding: 0 0.6rem;
   font: inherit;
   font-size: 0.78rem;
   color: var(--danger);
   background: transparent;
-  border: 1px solid color-mix(in srgb, var(--danger) 60%, transparent);
+  border: 1px solid var(--danger);
   border-radius: 8px;
   cursor: pointer;
 }
@@ -10606,6 +10605,29 @@ html.material-symbols-ready .tp-mi {
 }
 .chat-stop-btn[hidden] {
   display: none;
+}
+/* A narrow composer: Stop (32) + Queue (34) take the room of mic (34) + Send (34), so the text box keeps its width.
+   Both go icon-only; the labels stay available as aria-label and title. */
+@container composer-bar (max-width: 480px) {
+  #chat-send-slot[data-mode='queue'] #send-btn.is-streaming {
+    width: 34px;
+    height: 34px;
+    margin: 0;
+    padding: 0;
+    gap: 0;
+    border-radius: 50%;
+  }
+  #chat-send-slot[data-mode='queue'] #send-btn.is-streaming .queue-label {
+    display: none;
+  }
+  .chat-stop-btn {
+    width: 32px;
+    padding: 0;
+    gap: 0;
+  }
+  .chat-stop-btn .stop-label {
+    display: none;
+  }
 }
 #chat-send-slot #send-btn.is-streaming ~ #gator-mic-btn,
 #chat-send-slot:has(#send-btn.is-streaming) #gator-mic-btn {
