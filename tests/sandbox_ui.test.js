@@ -333,7 +333,9 @@ const flush = async () => {
     json: async () => ({ detail: 'unknown request' }),
   });
   env3b.ctx._showSandboxApproval({ ...card, request_id: 'req3b' }, 'tab-1');
-  await walk(env3b.messages).filter((e) => e.tag === 'button')[0].listeners.click({ stopPropagation() {} });
+  await walk(env3b.messages)
+    .filter((e) => e.tag === 'button')[0]
+    .listeners.click({ stopPropagation() {} });
   await flush();
   assert.strictEqual(env3b.ctx._pendingSandboxCards.get('tab-1').size, 0);
   assert.deepStrictEqual(env3b.calls.queueDrains, ['tab-1'], 'the queue is released to drain');
