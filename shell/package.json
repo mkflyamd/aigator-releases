@@ -30,6 +30,7 @@
     "files": [
       "address-input.js",
       "atlassian-urls.js",
+      "browser-permissions.js",
       "hud-preload.js",
       "hud_recorder.js",
       "main.js",
