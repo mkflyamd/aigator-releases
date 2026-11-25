@@ -19,7 +19,7 @@ import permissions
 from runs.inline import RunRefused, launch_supervised, run_inline, with_run_fields
 from sandbox import host_requests, saved_permissions, task_grants
 from sandbox.command_programs import programs_in
-from sandbox.paths import PathNotGrantable, is_within, normalize_grant_paths
+from sandbox.paths import PathNotGrantable, check_grant_size, is_within, normalize_grant_paths
 from sandbox.policy import load_policy
 
 from proc_utils import (
@@ -679,6 +679,7 @@ def _locate_cwd(cwd: str, policy, cr):
         return cr._FS_REFUSED_MSG
     try:
         (project,) = normalize_grant_paths([cwd])
+        check_grant_size([project])
     except (PathNotGrantable, ValueError) as exc:
         return f"{exc} Do not retry with this value."
     if not project.is_dir():
@@ -1264,6 +1265,8 @@ TOOL_DEFS = [
             "approves in the chat; call again with exactly the same values only after the user says they approved. "
             "background=true is not available with the sandbox on. "
             "Use file_ops tools for simple read/write/list — use run_shell when you need a full command pipeline. "
+            "A command is one line: to create a multi-line file (a script, config or HTML page), use write_file "
+            "instead of echo or a heredoc. "
             "Only when the sandbox is off: for a long-running process that does not exit on its own — an LLM "
             'inference server, a dev server (`npm run dev`), a foreground `docker run`, or `ssh host "<server>"` — '
             "set background=true. It returns "

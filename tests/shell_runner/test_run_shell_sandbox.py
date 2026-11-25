@@ -261,3 +261,27 @@ def test_run_shell_path_offers_enabled_skill_shims_only(env):
     path = env.fake.requests[0].env["PATH"].split(os.pathsep)
     assert path[0] == "/skills/on-skill/bin"
     assert "/skills/off-skill/bin" not in path
+
+
+def _big_folder(env):
+    from sandbox import paths
+
+    env.mp.setattr(paths, "ACL_GRANTS_WALK_TREE", True)
+    env.mp.setattr(paths, "MAX_GRANT_ENTRIES", 10)
+    big = env.tmp / "big"
+    big.mkdir()
+    for i in range(20):
+        (big / f"f{i}").write_text("x")
+    return big
+
+
+def test_too_broad_cwd_is_refused_without_a_card(env):
+    r = _run(cwd=str(_big_folder(env)))
+    assert "too broad" in r["error"] and "approval_required" not in r
+    assert approvals._REQUESTS == {} and env.fake.requests == []
+
+
+def test_too_broad_extra_path_is_refused_without_a_card(env):
+    r = _run(extra_read_paths=[str(_big_folder(env))])
+    assert "too broad" in r["error"] and "approval_required" not in r
+    assert approvals._REQUESTS == {} and env.fake.requests == []

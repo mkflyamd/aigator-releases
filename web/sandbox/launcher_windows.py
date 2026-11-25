@@ -39,6 +39,7 @@ from . import (
     SandboxResult,
     SandboxRunError,
     SandboxUnavailable,
+    install_node_shim,
 )
 
 _log = logging.getLogger(__name__)
@@ -1151,6 +1152,10 @@ def launch(req: SandboxRequest) -> SandboxResult:
                         )
                     if rc != 0:
                         raise SandboxUnavailable(f"The sandbox could not be given access to {path} ({out}).")
+                try:
+                    install_node_shim(req.env)
+                except OSError as exc:
+                    raise SandboxUnavailable(f"The sandbox could not prepare its Node preload ({exc}).") from exc
                 _check_not_cancelled(req)
                 result = _run_contained(req.argv, req.cwd, req.env, psid, req.timeout, req.network,
                                         req.cancel, req.on_start)

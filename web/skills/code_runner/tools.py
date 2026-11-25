@@ -24,7 +24,7 @@ from runs.inline import RunRefused, launch_supervised, with_run_fields
 import sandbox
 from sandbox import approvals as sandbox_approvals
 from sandbox import task_grants
-from sandbox.paths import HOME_DENY, PathNotGrantable, is_within, normalize_grant_paths, normalize_hosts
+from sandbox.paths import HOME_DENY, PathNotGrantable, check_grant_size, is_within, normalize_grant_paths, normalize_hosts
 from sandbox.policy import load_policy
 
 SKILL_ID = "code_runner"
@@ -325,8 +325,8 @@ def _not_grantable_message(paths, reason: str | None = None) -> str:
     )
     return (
         "The sandbox cannot be given access to " + ", ".join(str(p) for p in paths) + " on this computer: "
-        f"{why} Nothing was run and no approval was asked. Do not request these folders again; use another "
-        "way to get the data (a copy in a folder the user owns), or tell the user it cannot be used."
+        f"{why} Nothing was run and no approval was asked. Do not request these folders again; write into OUTPUT_DIR "
+        "or use a copy in a folder the user owns, or tell the user it cannot be used."
     )
 
 
@@ -400,6 +400,7 @@ def _check_requested_access(extra_read_paths, extra_write_paths, network_hosts, 
     try:
         read_paths = normalize_grant_paths(extra_read_paths)
         write_paths = normalize_grant_paths(extra_write_paths)
+        check_grant_size([*read_paths, *write_paths])
         hosts = normalize_hosts(network_hosts)
     except (PathNotGrantable, ValueError) as exc:
         return {"error": f"{exc} Do not retry with this value."}
@@ -918,12 +919,12 @@ TOOL_DEFS = [
                 "extra_read_paths": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Absolute paths of existing files or folders outside OUTPUT_DIR the code must read. Needs the user's approval; request only what the task needs.",
+                    "description": "Absolute paths of existing files or folders outside OUTPUT_DIR the code must read. Needs the user's approval; request only what the task needs. These can never be granted, so do not ask: ~/.gator (only ~/.gator/outputs is allowed), the home folder, drive roots, system folders. For those, write into OUTPUT_DIR instead.",
                 },
                 "extra_write_paths": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Absolute paths of existing folders or files outside OUTPUT_DIR the code must write. Needs the user's approval.",
+                    "description": "Absolute paths of existing folders or files outside OUTPUT_DIR the code must write. Needs the user's approval. These can never be granted, so do not ask: ~/.gator (only ~/.gator/outputs is allowed), the home folder, drive roots, system folders. For those, write into OUTPUT_DIR instead.",
                 },
                 "network_hosts": {
                     "type": "array",

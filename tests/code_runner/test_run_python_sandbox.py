@@ -470,3 +470,17 @@ def test_launch_time_unavailable_does_not_point_at_a_settings_row_that_is_not_sh
 
     monkeypatch.setattr(sandbox, "launch_sandboxed", refuse)
     assert "Settings" not in cr_mod._tool_run_python(code="print(1)")["error"]
+
+
+def test_too_broad_path_is_refused_without_a_card(calls, tmp_path, monkeypatch):
+    from sandbox import paths
+
+    monkeypatch.setattr(paths, "ACL_GRANTS_WALK_TREE", True)
+    monkeypatch.setattr(paths, "MAX_GRANT_ENTRIES", 10)
+    big = tmp_path / "big"
+    big.mkdir()
+    for i in range(20):
+        (big / f"f{i}").write_text("x")
+    result = cr_mod._tool_run_python(code="1", extra_read_paths=[str(big)], _context_id="tab-1")
+    assert "too broad" in result["error"]
+    assert "approval_required" not in result and approvals._REQUESTS == {} and calls == []

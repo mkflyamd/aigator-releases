@@ -11,7 +11,10 @@ from __future__ import annotations
 
 import logging
 import os
+import re
+import shutil
 import signal
+import stat
 import subprocess
 import sys
 import threading
@@ -183,6 +186,59 @@ _POSIX_ENV = ("PATH", "LANG", "LC_ALL", "LC_CTYPE")
 # Node in an AppContainer fails with `EPERM lstat 'C:\'` unless symlinks are
 # preserved (spike, 2026-10-05). NODE_OPTIONS reaches Node started by user code.
 _NODE_OPTIONS_WINDOWS = "--preserve-symlinks --preserve-symlinks-main"
+# Preloaded into Node on Windows (NODE_OPTIONS --require). The AppContainer cannot read the drive
+# root, so Node's JS realpath fails with EPERM, and libuv hangs creating piped child stdio.
+# node_shim.js routes realpath to the native implementation and fails piped spawns fast.
+_NODE_SHIM = Path(__file__).with_name("node_shim.js")
+_NODE_SHIM_RELPATH = (".gator", "node-shim.js")
+
+
+_NODE_SHIM_REQUIRE = re.compile(r'--require="([^"]+)"')
+
+
+def _node_options_windows(run_dir: Path) -> str:
+    """Windows NODE_OPTIONS preloading the shim from a hidden run-dir subfolder (not listed as output)."""
+    shim = run_dir.joinpath(*_NODE_SHIM_RELPATH)
+    # Forward slashes: NODE_OPTIONS treats a backslash inside quotes as an escape.
+    return f'{_NODE_OPTIONS_WINDOWS} --require="{shim.as_posix()}"'
+
+
+def install_node_shim(env: Mapping[str, str]) -> None:
+    """Write the shim to the path env's NODE_OPTIONS requires. The launcher calls this while holding its
+    run lock, right before spawning, so sandboxed code from an earlier run cannot have altered it."""
+    match = _NODE_SHIM_REQUIRE.search(env.get("NODE_OPTIONS", ""))
+    if match is None:
+        return
+    shim = Path(match.group(1))
+    parent = shim.parent
+    if _is_link(parent) or (parent.exists() and not parent.is_dir()):
+        _remove_planted(parent)
+    parent.mkdir(parents=True, exist_ok=True)
+    if _is_link(shim) or shim.exists():
+        _remove_planted(shim)
+    shim.write_text(_NODE_SHIM.read_text(encoding="utf-8"), encoding="utf-8", newline="\n")
+
+
+def _is_link(path: Path) -> bool:
+    return os.path.islink(path) or os.path.isjunction(path)
+
+
+def _remove_planted(path: Path) -> None:
+    """Remove whatever sandboxed code left at path (file, read-only file, hard link, directory, or a link
+    that would send our write outside the run folder) so the shim can always be rewritten."""
+    if _is_link(path):
+        try:
+            os.unlink(path)
+        except OSError:  # Windows removes a directory link or junction with rmdir
+            os.rmdir(path)
+    elif path.is_dir():
+        shutil.rmtree(path, onexc=lambda func, p, _exc: (os.chmod(p, stat.S_IWRITE), func(p)))
+    else:
+        try:
+            path.unlink()
+        except PermissionError:  # Windows refuses to delete a read-only file
+            os.chmod(path, stat.S_IWRITE)
+            path.unlink()
 
 
 def build_env(parent: Mapping[str, str], run_dir: Path, node_path: str | None,
@@ -195,7 +251,7 @@ def build_env(parent: Mapping[str, str], run_dir: Path, node_path: str | None,
         env = {k: upper[k] for k in _WINDOWS_ENV if k in upper}
         for key in _WINDOWS_RUN_DIR_ENV:
             env[key] = str(run_dir)
-        env["NODE_OPTIONS"] = _NODE_OPTIONS_WINDOWS
+        env["NODE_OPTIONS"] = _node_options_windows(run_dir)
     else:
         env = {k: parent[k] for k in _POSIX_ENV if k in parent}
         env["HOME"] = str(run_dir)
