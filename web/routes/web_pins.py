@@ -5,6 +5,7 @@ import base64
 import binascii
 import json
 import re
+import shutil
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -87,17 +88,24 @@ async def create_web_pin(req: WebPinCreate):
     pin_id = str(uuid.uuid4())
     label = store.derive_label(req.aria_label, req.title, app_cfg.get("name", ""), req.app_id, req.url)
     kind = "element" if req.locator else "view"
-    snap = store.write_snapshot(
-        pin_id,
-        image=image,
-        text=req.text,
-        meta={"app_id": req.app_id, "url": req.url, "title": req.title, "aria_label": req.aria_label, "locator": req.locator, "kind": kind},
-    )
+    try:
+        snap = store.write_snapshot(
+            pin_id,
+            image=image,
+            text=req.text,
+            meta={"app_id": req.app_id, "url": req.url, "title": req.title, "aria_label": req.aria_label, "locator": req.locator, "kind": kind},
+        )
+    except OSError:
+        shutil.rmtree(store.web_pin_dir(pin_id), ignore_errors=True)
+        raise HTTPException(503, "Could not save the pin. Try again.")
     result = set_pin(
         "webpin", pin_id, label,
         {"app_id": req.app_id, "app_name": app_cfg.get("name", ""), "url": req.url, "title": req.title, "kind": kind, "captured_at": snap["captured_at"]},
         req.context_id,
     )
+    if not result["pinned"]:
+        store.delete_if_unreferenced(pin_id)
+        raise HTTPException(503, "Could not save the pin. Try again.")
     return {"id": pin_id, "label": label, "captured_at": snap["captured_at"], "text_hash": snap["text_hash"], "total": result["total"]}
 
 

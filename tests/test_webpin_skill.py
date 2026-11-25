@@ -17,7 +17,7 @@ PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 16
 def _isolate(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "_ROOT", tmp_path / "web_pins")
     monkeypatch.setattr(state, "pinned_contexts", {})
-    monkeypatch.setattr(state, "_save", lambda: None)
+    monkeypatch.setattr(state, "_save", lambda: True)
     monkeypatch.setattr(pending, "_pending", {})
 
 

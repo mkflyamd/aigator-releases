@@ -26,7 +26,7 @@ def client():
 def _isolate(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "_ROOT", tmp_path / "web_pins")
     monkeypatch.setattr(state, "pinned_contexts", {})
-    monkeypatch.setattr(state, "_save", lambda: None)
+    monkeypatch.setattr(state, "_save", lambda: True)
     import routes.web_pins as wp
 
     monkeypatch.setattr(wp, "_custom_apps", lambda: [{"id": "pbi", "name": "Power BI", "url": "https://app.powerbi.com"}])
@@ -57,6 +57,14 @@ def test_create_pin_ok(client):
     assert pins[0]["source"] == "webpin" and pins[0]["meta"]["app_id"] == "pbi"
     assert store.read_snapshot(j["id"])["text"] == "Revenue 4.2M"
     assert store.read_image(j["id"]) == PNG
+
+
+def test_create_pin_save_failure_is_retryable_and_leaves_no_snapshot(client, monkeypatch, tmp_path):
+    monkeypatch.setattr(state, "_save", lambda: False)
+    r = client.post("/api/web-pins", json=_body())
+    assert r.status_code == 503
+    assert state.get_pins("tab-a") == []
+    assert not any((tmp_path / "web_pins").glob("*")) if (tmp_path / "web_pins").exists() else True
 
 
 def test_create_requires_csrf():

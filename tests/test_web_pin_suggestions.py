@@ -23,7 +23,7 @@ def client():
 def _isolate(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "_ROOT", tmp_path / "web_pins")
     monkeypatch.setattr(state, "pinned_contexts", {})
-    monkeypatch.setattr(state, "_save", lambda: None)
+    monkeypatch.setattr(state, "_save", lambda: True)
     monkeypatch.setattr(wp, "_custom_apps", lambda: [{"id": "pbi", "name": "Power BI"}])
 
 
