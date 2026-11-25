@@ -42,6 +42,7 @@ function _ocSpawnTerm(sess) {
   sess.fitAddon = new FitAddon.FitAddon();
   sess.term.loadAddon(sess.fitAddon);
   sess.term.open(sess.container);
+  sess.term.onTitleChange((title) => _ocFollowProgramTitle(sess, title));
 
   sess.container.addEventListener(
     'paste',
@@ -144,6 +145,51 @@ function _ocGuardSize(sess) {
   });
   observer.observe(sess.container);
   sess._sizeObserver = observer;
+}
+
+const _OC_GENERIC_TITLES = new Set(['claude', 'claude code', 'opencode', 'crush', 'codex']);
+const _OC_TITLE_MAX = 40;
+
+// Claude Code prefixes its title with a status glyph that animates while it works (✳ idle, ◐/◑ busy).
+function _ocCleanProgramTitle(raw) {
+  let t = String(raw == null ? '' : raw)
+    .replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ')
+    .replace(/^[\p{So}\p{Sk}\p{Z}\s*·•]+/u, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (_OC_GENERIC_TITLES.has(t.toLowerCase())) return '';
+  if (t.length > _OC_TITLE_MAX) t = t.slice(0, _OC_TITLE_MAX - 1).trimEnd() + '…';
+  return t;
+}
+
+// A manual rename sets sess._manualRename, which ends the following for good.
+function _ocFollowProgramTitle(sess, raw) {
+  if (sess.agent === 'terminal' || sess._closing || sess._manualRename) return;
+  const title = _ocCleanProgramTitle(raw);
+  if (!title || title === sess.label) return;
+  if (typeof _genAgentEditing !== 'undefined' && _genAgentEditing) {
+    // Re-rendering now would destroy the open rename input. xterm does not replay
+    // title events, so keep the latest one and apply it when editing ends.
+    sess._pendingTitle = title;
+    return;
+  }
+  sess.label = title;
+  if (typeof _genAgentRenderTabs === 'function') _genAgentRenderTabs(sess.tabId);
+}
+
+// Applies titles held back during a rename; returns true if any label changed.
+function _ocApplyPendingTitles(state) {
+  let changed = false;
+  state.order.forEach((id) => {
+    const sess = state.sessions[id];
+    if (!sess || !sess._pendingTitle) return;
+    const title = sess._pendingTitle;
+    sess._pendingTitle = null;
+    if (sess._manualRename || sess._closing || title === sess.label) return;
+    sess.label = title;
+    changed = true;
+  });
+  return changed;
 }
 
 function _ocHeaderTabStripId() {

@@ -214,6 +214,7 @@ function _genAgentSyncHeaderTabStripOnTabSwitch(tabId) {
 function _genAgentRenderTabs(tabId) {
   const state = _genAgentTerminals[_caSessionKey(tabId)];
   if (!state || state.order.filter((id) => state.sessions[id]).length === 0) {
+    _genAgentEditing = false;
     _genAgentRemoveHeaderTabStrip();
     return;
   }
@@ -230,7 +231,10 @@ function _genAgentRenderTabs(tabId) {
     if (typeof _caCloseFileDiffIfOpen === 'function') _caCloseFileDiffIfOpen();
     _genAgentNewSession(tabId);
   };
+  // Removing the tabs removes any open rename input, and a removed input may never fire blur.
+  _genAgentEditing = false;
   [...scroll.querySelectorAll('.gtp-tab')].forEach((el) => el.remove());
+  _ocApplyPendingTitles(state);
   state.order.forEach((id) => {
     const sess = state.sessions[id];
     if (!sess) return;
@@ -344,11 +348,19 @@ function _genAgentBeginRename(sess, labelEl) {
     labelEl.removeEventListener('blur', onBlur);
     labelEl.contentEditable = 'false';
     labelEl.classList.remove('editing');
+    // A tab-strip rebuild clears the flag and removes the input; a late blur from that
+    // removal is not a user commit.
+    const live = _genAgentEditing;
     _genAgentEditing = false;
     const next = labelEl.textContent.trim();
-    if (commit && next) sess.label = next;
+    if (commit && live && next) {
+      sess.label = next;
+      sess._manualRename = true;
+    }
     labelEl.textContent = sess.label;
     window.getSelection().removeAllRanges();
+    const state = _genAgentTerminals[_caSessionKey(sess.tabId)];
+    if (live && state && _ocApplyPendingTitles(state)) _genAgentRenderTabs(sess.tabId);
   };
   const onKey = (e) => {
     if (e.key === 'Enter') {
