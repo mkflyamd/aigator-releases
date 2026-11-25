@@ -124,3 +124,72 @@ def test_a_run_can_only_be_probed_a_limited_number_of_times(client, csrf, tmp_pa
 @pytest.mark.parametrize("name", ["run_shell", "run_python", "host_command_result", "probe_local_url"])
 def test_output_from_every_command_tool_is_marked_untrusted(name):
     assert data_sources.is_untrusted(name)
+
+
+def test_refused_probes_do_not_use_up_the_probe_allowance(client, csrf, tmp_path, monkeypatch):
+    monkeypatch.setattr(probe_mod, "MAX_PROBES_PER_RUN", 2)
+    run_id, _ = _run(client, csrf, tmp_path, "prints_url")
+    for _ in range(4):
+        assert "not printed by this run" in shell_tools._tool_probe_local_url(run_id, "http://127.0.0.1:9/", "tab-1")["error"]
+    url = "http://127.0.0.1:4173/p/demo/"
+    for _ in range(2):
+        assert "reached" in shell_tools._tool_probe_local_url(run_id, url, "tab-1")
+    assert "probes" in shell_tools._tool_probe_local_url(run_id, url, "tab-1")["error"]
+
+
+def test_the_urls_a_run_prints_are_known_while_it_is_still_running(client, csrf, tmp_path):
+    req = host_requests.create("tab-1", fakes.command(tmp_path, "serves_viewer"), str(tmp_path), fakes.SHELL, "", 600)
+    assert client.post(f"/api/host-shell/{req.id}/run", json={"context_id": "tab-1"}, headers=csrf).status_code == 200
+    seen = []
+
+    def printed():
+        record = get_supervisor().get(req.id, "tab-1")
+        seen[:] = (record.get("facts") or {}).get("urls_seen") or []
+        return bool(seen)
+
+    assert fakes.wait_for(printed), "the URL never showed up while the run was going"
+    assert get_supervisor().get(req.id, "tab-1")["state"] == "running"
+    told = shell_tools._tool_host_command_result(req.id, "tab-1")
+    assert told["state"] == "running" and told["facts"]["urls_seen"] == seen
+    answer = shell_tools._tool_probe_local_url(req.id, seen[0], "tab-1")
+    assert answer["reached"] is True and answer["status"] == 200
+
+
+def test_a_stopped_turn_ends_its_probe_at_once(client, csrf, tmp_path, monkeypatch):
+    import socket
+    import threading
+
+    from runs.turn import current_turn
+
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen()
+    port = listener.getsockname()[1]
+    monkeypatch.setattr(probe_mod, "backend_ports", lambda: set())  # this listener lives in the backend's own process
+    monkeypatch.setitem(fakes._PROGRAMS, "prints_port", f"print('Viewer at http://127.0.0.1:{port}/p/demo/')")
+    held = []
+    threading.Thread(target=lambda: held.append(listener.accept()[0]), daemon=True).start()
+    try:
+        run_id, _ = _run(client, csrf, tmp_path, "prints_port")
+        box = {}
+
+        def call():
+            token = current_turn.set("turn-1")
+            try:
+                box["out"] = shell_tools._tool_probe_local_url(run_id, f"http://127.0.0.1:{port}/p/demo/", "tab-1")
+            finally:
+                current_turn.reset(token)
+
+        worker = threading.Thread(target=call, daemon=True)
+        worker.start()
+        assert fakes.wait_for(lambda: bool(held)), f"the probe never connected: {box}"
+        started = time.monotonic()
+        get_supervisor().cancel_turn("turn-1")
+        worker.join(5)
+        assert not worker.is_alive() and time.monotonic() - started < 3
+        assert "stopped" in box["out"]["error"]
+        assert get_supervisor().get(run_id, "tab-1")["probe_log"][0].get("stopped") is True
+    finally:
+        for conn in held:
+            conn.close()
+        listener.close()
