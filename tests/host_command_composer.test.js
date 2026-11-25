@@ -92,7 +92,13 @@ function world({ heads = [], turn = false } = {}) {
     sendBtn,
     document: {
       getElementById: (id) =>
-        id === 'chat-input' ? placeholderBox : id === 'send-btn' ? sendBtn : id === 'composer-stop-btn' ? stopBtn : null,
+        id === 'chat-input'
+          ? placeholderBox
+          : id === 'send-btn'
+            ? sendBtn
+            : id === 'composer-stop-btn'
+              ? stopBtn
+              : null,
       createElement: () => {
         const el = { children: [], dataset: {}, listeners: {}, className: '' };
         el.appendChild = (c) => el.children.push(c);
@@ -125,7 +131,10 @@ function world({ heads = [], turn = false } = {}) {
     },
     fetch: async (url) => {
       fetches.push(url);
-      return { ok: true, json: async () => (url.startsWith('/api/host-shell/') ? statusBody : runsBody) };
+      return {
+        ok: true,
+        json: async () => (url.startsWith('/api/host-shell/') ? statusBody : runsBody),
+      };
     },
     _showSandboxApproval: (card, tab, reload) => drawn.push([card.request_id, tab, reload]),
     _queueCall: async () => {
@@ -136,7 +145,10 @@ function world({ heads = [], turn = false } = {}) {
     _submitQueuedItem: async (item) => calls.push(`submit:${item.id}`),
   };
   vm.createContext(ctx);
-  vm.runInContext(`${constSource('_COMPOSER_TEXT')}\n${FUNCTIONS.map(functionSource).join('\n')}`, ctx);
+  vm.runInContext(
+    `${constSource('_COMPOSER_TEXT')}\n${FUNCTIONS.map(functionSource).join('\n')}`,
+    ctx,
+  );
   const pending = () => timers.filter((t) => t.fn);
   const fireAll = async () => {
     for (const t of pending()) {
@@ -145,9 +157,25 @@ function world({ heads = [], turn = false } = {}) {
       await fn();
     }
   };
-  const addRun = (id = 'r1', stop = () => events.push(`stop:${id}`)) => ctx._runStart('tab1', id, stop, true);
+  const addRun = (id = 'r1', stop = () => events.push(`stop:${id}`)) =>
+    ctx._runStart('tab1', id, stop, true);
   const card = (id = 'r1') => ctx._pendingSandboxCards.set('tab1', new Map([[id, {}]]));
-  return { ctx, calls, events, fetches, runsBody, statusBody, drawn, timers, pending, fireAll, addRun, card, sendBtn, placeholderBox };
+  return {
+    ctx,
+    calls,
+    events,
+    fetches,
+    runsBody,
+    statusBody,
+    drawn,
+    timers,
+    pending,
+    fireAll,
+    addRun,
+    card,
+    sendBtn,
+    placeholderBox,
+  };
 }
 
 const view = (w, { streaming = false, canQueue = false } = {}) =>
@@ -180,25 +208,54 @@ const view = (w, { streaming = false, canQueue = false } = {}) =>
     const w = world();
     w.card('r1');
     w.addRun('r1');
-    assert.strictEqual(w.ctx._queueCardHold('tab1'), false, 'the card whose command is running no longer holds');
+    assert.strictEqual(
+      w.ctx._queueCardHold('tab1'),
+      false,
+      'the card whose command is running no longer holds',
+    );
     w.card('r2');
-    assert.strictEqual(w.ctx._queueCardHold('tab1'), true, 'another card still waiting for an answer holds');
+    assert.strictEqual(
+      w.ctx._queueCardHold('tab1'),
+      true,
+      'another card still waiting for an answer holds',
+    );
   }
 
   // ── button modes ──
   {
     const w = world();
-    const m = (streaming, canQueue, cmd, card) => w.ctx._composerButtonMode(streaming, canQueue, cmd, card);
-    assert.strictEqual(m(false, false, true, false), 'stop-command', 'command running, box empty: Stop command');
+    const m = (streaming, canQueue, cmd, card) =>
+      w.ctx._composerButtonMode(streaming, canQueue, cmd, card);
+    assert.strictEqual(
+      m(false, false, true, false),
+      'stop-command',
+      'command running, box empty: Stop command',
+    );
     assert.strictEqual(m(false, true, true, false), 'queue', 'command running, text typed: Queue');
     assert.strictEqual(m(false, false, false, true), 'send', 'card open, box empty: idle Send');
     assert.strictEqual(m(false, true, false, true), 'queue', 'card open, text typed: Queue');
-    assert.strictEqual(m(true, false, false, true), 'send', 'card open with a reply still live: never Stop');
-    assert.strictEqual(m(true, true, false, true), 'queue', 'card open with a reply still live and text: Queue');
-    assert.strictEqual(m(true, false, false, false), 'stop', 'a live reply with an empty box: Stop reply');
+    assert.strictEqual(
+      m(true, false, false, true),
+      'send',
+      'card open with a reply still live: never Stop',
+    );
+    assert.strictEqual(
+      m(true, true, false, true),
+      'queue',
+      'card open with a reply still live and text: Queue',
+    );
+    assert.strictEqual(
+      m(true, false, false, false),
+      'stop',
+      'a live reply with an empty box: Stop reply',
+    );
     assert.strictEqual(m(true, true, false, false), 'queue', 'a live reply with text: Queue');
     assert.strictEqual(m(false, false, false, false), 'send', 'idle: Send');
-    assert.strictEqual(w.ctx._composerButtonMode(true, true), 'queue', 'the reply-only call shape still works');
+    assert.strictEqual(
+      w.ctx._composerButtonMode(true, true),
+      'queue',
+      'the reply-only call shape still works',
+    );
   }
 
   // ── what the composer says in each state ──
@@ -242,11 +299,21 @@ const view = (w, { streaming = false, canQueue = false } = {}) =>
     const w = world();
     w.addRun();
     let prevented = 0;
-    const evt = { button: 0, target: 'send-btn', clientX: 10, clientY: 10, preventDefault: () => prevented++ };
+    const evt = {
+      button: 0,
+      target: 'send-btn',
+      clientX: 10,
+      clientY: 10,
+      preventDefault: () => prevented++,
+    };
     w.ctx._canQueue = false;
     w.ctx.e = evt;
     vm.runInContext('_onComposerButtonClick(e)', w.ctx);
-    assert.deepStrictEqual(w.events.filter((e) => e.startsWith('stop')), ['stop:r1'], 'the card stop ran once');
+    assert.deepStrictEqual(
+      w.events.filter((e) => e.startsWith('stop')),
+      ['stop:r1'],
+      'the card stop ran once',
+    );
     assert.strictEqual(prevented, 1, 'the click does not also submit the empty form');
   }
   {
@@ -255,7 +322,11 @@ const view = (w, { streaming = false, canQueue = false } = {}) =>
     w.ctx._canQueue = true;
     w.ctx.e = { button: 0, target: 'stop-btn', clientX: 500, clientY: 500, preventDefault() {} };
     vm.runInContext('_onComposerButtonClick(e)', w.ctx);
-    assert.deepStrictEqual(w.events.filter((e) => e.startsWith('stop')), ['stop:r1'], 'the outline Stop stops the command');
+    assert.deepStrictEqual(
+      w.events.filter((e) => e.startsWith('stop')),
+      ['stop:r1'],
+      'the outline Stop stops the command',
+    );
   }
   {
     const w = world({ turn: true });
@@ -276,14 +347,22 @@ const view = (w, { streaming = false, canQueue = false } = {}) =>
     w.ctx._canQueue = false;
     w.ctx.e = { button: 0, target: 'send-btn', clientX: 10, clientY: 10, preventDefault() {} };
     vm.runInContext('_onComposerButtonClick(e)', w.ctx);
-    assert.strictEqual(turnStops, 0, 'a click on the button never stops a reply while a card is open');
+    assert.strictEqual(
+      turnStops,
+      0,
+      'a click on the button never stops a reply while a card is open',
+    );
   }
   {
     const w = world();
     w.addRun('r1');
     w.addRun('r2');
     w.ctx._stopCommands('tab1');
-    assert.deepStrictEqual(w.events.filter((e) => e.startsWith('stop')), ['stop:r1', 'stop:r2'], 'every command in the tab');
+    assert.deepStrictEqual(
+      w.events.filter((e) => e.startsWith('stop')),
+      ['stop:r1', 'stop:r2'],
+      'every command in the tab',
+    );
   }
 
   // ── Enter while a command runs or a card is open queues ──
@@ -305,7 +384,10 @@ const view = (w, { streaming = false, canQueue = false } = {}) =>
 
   // A second Enter handler that dispatches an untyped submit slips past the queue gate and sends straight away.
   {
-    const enterSubmitters = source.match(/e\.key === 'Enter' && !e\.shiftKey\) \{[^}]*?dispatchEvent\(new Event\('submit'/g) || [];
+    const enterSubmitters =
+      source.match(
+        /e\.key === 'Enter' && !e\.shiftKey\) \{[^}]*?dispatchEvent\(new Event\('submit'/g,
+      ) || [];
     assert.strictEqual(enterSubmitters.length, 0, 'Enter submits only through _requestTypedSubmit');
   }
 
@@ -318,7 +400,11 @@ const view = (w, { streaming = false, canQueue = false } = {}) =>
     w.ctx._runEnd('tab1', 'r1');
     await w.fireAll();
     await w.ctx._queueDrain('tab1');
-    assert.strictEqual(w.calls.filter((c) => c.startsWith('submit')).length, 1, 'one send once the command ends');
+    assert.strictEqual(
+      w.calls.filter((c) => c.startsWith('submit')).length,
+      1,
+      'one send once the command ends',
+    );
     await w.ctx._queueDrain('tab1');
     assert.strictEqual(w.calls.filter((c) => c.startsWith('submit')).length, 1, 'no double send');
   }
@@ -328,10 +414,18 @@ const view = (w, { streaming = false, canQueue = false } = {}) =>
     w.ctx._runEnd('tab1', 'r1');
     w.ctx._pendingSandboxFollowUps.set('tab1', 'I ran command request r1.');
     await w.ctx._queueDrain('tab1');
-    assert.deepStrictEqual(w.calls, [], 'the follow-up that reads the output goes before the queued message');
+    assert.deepStrictEqual(
+      w.calls,
+      [],
+      'the follow-up that reads the output goes before the queued message',
+    );
     w.ctx._pendingSandboxFollowUps.clear();
     await w.ctx._queueDrain('tab1');
-    assert.strictEqual(w.calls.filter((c) => c.startsWith('submit')).length, 1, 'then the queue drains once');
+    assert.strictEqual(
+      w.calls.filter((c) => c.startsWith('submit')).length,
+      1,
+      'then the queue drains once',
+    );
   }
   {
     const w = world({ turn: true, heads: [{ item: { id: 'a' } }] });
@@ -339,7 +433,11 @@ const view = (w, { streaming = false, canQueue = false } = {}) =>
     w.ctx._runEnd('tab1', 'r1');
     await w.fireAll();
     await w.ctx._queueDrain('tab1');
-    assert.deepStrictEqual(w.calls, [], 'a Run that ended during a live turn does not race that turn');
+    assert.deepStrictEqual(
+      w.calls,
+      [],
+      'a Run that ended during a live turn does not race that turn',
+    );
   }
   {
     const w = world();
@@ -361,7 +459,11 @@ const view = (w, { streaming = false, canQueue = false } = {}) =>
   }
   {
     const w = world();
-    w.ctx._queueByTab.set('tab1', { items: [{ id: 'a' }], paused: true, reason: 'command_stopped' });
+    w.ctx._queueByTab.set('tab1', {
+      items: [{ id: 'a' }],
+      paused: true,
+      reason: 'command_stopped',
+    });
     const s = w.ctx._queueStatus('tab1', 0);
     assert.strictEqual(s.kind, 'paused');
     assert.strictEqual(s.text, 'Paused: you stopped the command');
@@ -371,7 +473,11 @@ const view = (w, { streaming = false, canQueue = false } = {}) =>
   {
     const w = world();
     w.ctx._queueByTab.set('tab1', { items: [{ id: 'a' }], paused: true, reason: 'stopped' });
-    assert.strictEqual(w.ctx._queueStatus('tab1', 0).text, 'Paused: you stopped the reply', 'the reply pause keeps its words');
+    assert.strictEqual(
+      w.ctx._queueStatus('tab1', 0).text,
+      'Paused: you stopped the reply',
+      'the reply pause keeps its words',
+    );
   }
 
   // ── the failsafe bar still appears once a command is over and nothing sent the message ──
@@ -379,10 +485,22 @@ const view = (w, { streaming = false, canQueue = false } = {}) =>
     const w = world();
     w.addRun();
     assert.strictEqual(w.ctx._queueStatus('tab1', 0).kind, 'running');
-    assert.strictEqual(w.ctx._queueStatus('tab1', 10000).kind, 'running', 'no failsafe while the command runs');
+    assert.strictEqual(
+      w.ctx._queueStatus('tab1', 10000).kind,
+      'running',
+      'no failsafe while the command runs',
+    );
     w.ctx._runEnd('tab1', 'r1');
-    assert.strictEqual(w.ctx._queueStatus('tab1', 20000).kind, 'starting', 'sending, with a recheck');
-    assert.strictEqual(w.ctx._queueStatus('tab1', 23100).kind, 'failsafe', 'after 3 s nothing sent: the failsafe bar');
+    assert.strictEqual(
+      w.ctx._queueStatus('tab1', 20000).kind,
+      'starting',
+      'sending, with a recheck',
+    );
+    assert.strictEqual(
+      w.ctx._queueStatus('tab1', 23100).kind,
+      'failsafe',
+      'after 3 s nothing sent: the failsafe bar',
+    );
   }
 
   // ── row 1 loses "Send now" while a command runs ──
@@ -408,15 +526,27 @@ const view = (w, { streaming = false, canQueue = false } = {}) =>
     await w.ctx._runsSeed('tab1');
     assert(w.fetches[0].includes('/api/runs?context_id=tab1'));
     assert.strictEqual(w.ctx._commandRunning('tab1'), true, 'a running command is restored');
-    assert.deepStrictEqual([...w.ctx._runsByTab.get('tab1').keys()], ['r1'], 'only preparing or running runs count');
+    assert.deepStrictEqual(
+      [...w.ctx._runsByTab.get('tab1').keys()],
+      ['r1'],
+      'only preparing or running runs count',
+    );
     assert.strictEqual(view(w).mode, 'stop-command', 'the composer shows Stop command again');
     assert(w.pending().length > 0, 'a run no card follows is watched until it ends');
     w.runsBody.runs = [{ id: 'r1', state: 'finished' }];
     await w.fireAll();
-    assert.strictEqual(w.ctx._commandRunning('tab1'), false, 'the watch ends the run when the server says so');
+    assert.strictEqual(
+      w.ctx._commandRunning('tab1'),
+      false,
+      'the watch ends the run when the server says so',
+    );
     assert.strictEqual(w.pending().filter((t) => t.ms >= 1000).length, 0, 'and stops watching');
     await w.fireAll();
-    assert.strictEqual(w.calls.filter((c) => c === 'head').length, 1, 'the queue drains once when it ends');
+    assert.strictEqual(
+      w.calls.filter((c) => c === 'head').length,
+      1,
+      'the queue drains once when it ends',
+    );
   }
   {
     const w = world();
@@ -426,7 +556,11 @@ const view = (w, { streaming = false, canQueue = false } = {}) =>
     assert.strictEqual(w.pending().length, 0, 'a run a card follows needs no watcher');
     w.runsBody.runs = [];
     await w.ctx._runsSeed('tab1');
-    assert.strictEqual(w.ctx._commandRunning('tab1'), true, 'the card ends its own run, not the seed');
+    assert.strictEqual(
+      w.ctx._commandRunning('tab1'),
+      true,
+      'the card ends its own run, not the seed',
+    );
   }
 
   const settle = () => new Promise((r) => setImmediate(r));
@@ -439,7 +573,11 @@ const view = (w, { streaming = false, canQueue = false } = {}) =>
     w.ctx._stopCommands('tab1');
     w.ctx._runEnd('tab1', 'r1');
     w.ctx._updatePlaceholder();
-    assert.strictEqual(w.placeholderBox.dataset.placeholder, '', 'idle again after Stop: no queue hint');
+    assert.strictEqual(
+      w.placeholderBox.dataset.placeholder,
+      '',
+      'idle again after Stop: no queue hint',
+    );
   }
 
   // ── a reloaded page draws the running command's card again, as the card's own rejoin ──
@@ -452,8 +590,15 @@ const view = (w, { streaming = false, canQueue = false } = {}) =>
     ];
     await w.ctx._runsSeed('tab1');
     await settle();
-    assert.deepStrictEqual(w.drawn, [['r1', 'tab1', true]], 'the host command gets its card back, drawn as a rejoin');
-    assert(w.fetches.includes('/api/host-shell/r1?context_id=tab1'), 'from the card the server kept');
+    assert.deepStrictEqual(
+      w.drawn,
+      [['r1', 'tab1', true]],
+      'the host command gets its card back, drawn as a rejoin',
+    );
+    assert(
+      w.fetches.includes('/api/host-shell/r1?context_id=tab1'),
+      'from the card the server kept',
+    );
     assert(!w.fetches.some((u) => u.includes('py1')), 'a sandbox run has no host card');
     await w.ctx._runsSeed('tab1');
     await settle();
@@ -475,7 +620,11 @@ const view = (w, { streaming = false, canQueue = false } = {}) =>
     w.runsBody.runs = [{ id: 'r1', state: 'running', path: 'host' }];
     await w.ctx._runsSeed('tab1');
     await settle();
-    assert.deepStrictEqual(w.drawn, [], 'a tab nobody is looking at draws its card when it is shown');
+    assert.deepStrictEqual(
+      w.drawn,
+      [],
+      'a tab nobody is looking at draws its card when it is shown',
+    );
     assert.strictEqual(w.ctx._commandRunning('tab1'), true, 'but its command still counts');
   }
   {

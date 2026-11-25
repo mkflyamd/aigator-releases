@@ -1809,7 +1809,12 @@ function _composerView(streaming, canQueue, commandRunning, cardOpen) {
   }[mode];
   return {
     mode,
-    aria: { send: T.sendMessage, stop: T.stopReply, 'stop-command': T.stopCommand, queue: T.queueMessage }[mode],
+    aria: {
+      send: T.sendMessage,
+      stop: T.stopReply,
+      'stop-command': T.stopCommand,
+      queue: T.queueMessage,
+    }[mode],
     title,
     placeholder: streaming || commandRunning || cardOpen ? T.placeholderQueue : '',
     stopHidden: mode !== 'queue' || cardOpen,
@@ -10637,7 +10642,8 @@ function _queueRearmStop(tabId) {
 // shortly, a few times, while the queue still has messages that nothing is holding back.
 function _queueRearm(tabId) {
   const snap = _queueByTab.get(tabId);
-  if (!snap || !snap.items.length || snap.paused || _queueCardHold(tabId) || _commandRunning(tabId)) return;
+  if (!snap || !snap.items.length || snap.paused || _queueCardHold(tabId) || _commandRunning(tabId))
+    return;
   const state = _queueRearms.get(tabId) || { timer: 0, tries: 0 };
   _queueRearms.set(tabId, state);
   if (state.timer) return;
@@ -11073,7 +11079,9 @@ async function _runsSeed(tabId) {
     return;
   }
   const live = new Map(
-    listed.runs.filter((r) => r.state === 'preparing' || r.state === 'running').map((r) => [r.id, r]),
+    listed.runs
+      .filter((r) => r.state === 'preparing' || r.state === 'running')
+      .map((r) => [r.id, r]),
   );
   let ended = false;
   for (const [runId, run] of [...(_runsByTab.get(tabId) || [])]) {
@@ -13157,7 +13165,9 @@ function _showSandboxApproval(data, ownerTabId, reload) {
       }
       if (!res.ok) {
         const detail = await res.json().catch(() => ({}));
-        throw Object.assign(new Error(detail?.detail || `HTTP ${res.status}`), { status: res.status });
+        throw Object.assign(new Error(detail?.detail || `HTTP ${res.status}`), {
+          status: res.status,
+        });
       }
       let outcome = 'Denied.';
       if (decision === 'approve') {
@@ -17142,7 +17152,8 @@ form.addEventListener('submit', async (e) => {
             _queuedUnsent = true;
             _discardQueuedAttempt();
             // The message stays queued, so Resume sends it with its own bubble: say why now without leaving one here.
-            if (pausedQueue) _showConnectivityToast(_queueRefusalMessage(postRes.status, errCode), 'warn');
+            if (pausedQueue)
+              _showConnectivityToast(_queueRefusalMessage(postRes.status, errCode), 'warn');
             _streamOver = true;
             if (_activeTabId === requestTabId) {
               _isStreaming = false;

@@ -208,7 +208,11 @@ const buttonsOf = (env) => walk(env.messages).filter((e) => e.tag === 'button');
     [['tab-1', 'req1', true]],
     'Run registers the command with the tab as a followed run',
   );
-  assert.deepStrictEqual(env.runs.ended, [{ tab: 'tab-1', id: 'req1' }], 'the end is reported once');
+  assert.deepStrictEqual(
+    env.runs.ended,
+    [{ tab: 'tab-1', id: 'req1' }],
+    'the end is reported once',
+  );
   assert.strictEqual(env.runs.drains, 0, 'the follow-up turn drains the queue, not the card');
 
   // Cancel: cancel route, agent told not to retry.
@@ -330,7 +334,10 @@ const buttonsOf = (env) => walk(env.messages).filter((e) => e.tag === 'button');
   // The stop handed to the tab is the card's own Stop: it posts the cancel route once.
   const env6b = makeEnv(async (url, opts) =>
     opts && opts.method === 'POST'
-      ? reply({ ok: true, run: { id: 'req1', state: url.endsWith('/cancel') ? 'cancelled' : 'running' } })
+      ? reply({
+          ok: true,
+          run: { id: 'req1', state: url.endsWith('/cancel') ? 'cancelled' : 'running' },
+        })
       : new Promise(() => {}),
   );
   env6b.ctx._showSandboxApproval(data, 'tab-1');
