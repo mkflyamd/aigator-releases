@@ -87,22 +87,36 @@ def _bundle_stdio_blocked() -> bool:
 def _supervised_call(c: dict, client, tool: str, arguments: dict, context_id: str):
     """One tool call under the Run Supervisor: recorded, bounded by the MCP budget, and left behind (not
     killed) when it outlives that budget or its turn's Stop."""
-    cancel = getattr(client, "cancel_active_call", None)
+    request_ids: list[int] = []
+    if isinstance(client, StdioMCPClient):
+        # The cancel notice names this call's own request id, never another call's on the shared process.
+        def call():
+            return client.call(tool, arguments, on_request=request_ids.append)
+
+        def on_abandon(reason: str) -> None:
+            for request_id in list(request_ids):
+                client.cancel_request(request_id, reason)
+    else:
+        def call():
+            return client.call(tool, arguments)
+
+        on_abandon = None
+    server_id = c.get("id") or c.get("name") or "mcp"
     _, value = get_supervisor().run_mcp_call(
-        context_id=context_id, turn_id=current_turn.get(), server_id=c.get("id", ""),
-        server_name=c.get("name", c.get("id", "")), tool=tool, budgets=timeouts.budgets_for("mcp"),
-        call=lambda: client.call(tool, arguments), on_abandon=cancel)
+        context_id=context_id, turn_id=current_turn.get(), server_id=server_id,
+        server_name=c.get("name", server_id), tool=tool, budgets=timeouts.budgets_for("mcp"),
+        call=call, on_abandon=on_abandon)
     return value
 
 
-def _release_stdio(c: dict) -> None:
+def _release_stdio(c: dict, client=None) -> None:
     try:
         release_from_pool({
             "command": c.get("command", ""),
             "args": c.get("args", []),
             "env": c.get("env", {}),
             "name": c.get("name", ""),
-        })
+        }, client)
     except Exception:
         pass
 
@@ -576,10 +590,11 @@ def _register(conn: dict) -> None:
                         "transport": transport,
                     }
                 except McpAbandoned as e:
-                    # A pooled stdio process that outlived its budget is stuck: release it so the next
-                    # call spawns a fresh one. A Stop leaves the shared process alone.
-                    if is_pooled and e.reason == "timeout":
-                        _release_stdio(c)
+                    # The abandoned call is still waiting on the shared process's single reply queue, so a later
+                    # call could be handed its reply. Closing the process ends that wait and the next call
+                    # starts a fresh one.
+                    if is_pooled:
+                        _release_stdio(c, client)
                     if e.at_cap:
                         _mark_health_result(
                             c.get("id", ""), ok=False,
@@ -603,8 +618,12 @@ def _register(conn: dict) -> None:
                     # flow, or crashed). Release it so the next call spawns a fresh
                     # process instead of reusing the broken one.
                     if is_pooled:
-                        _release_stdio(c)
-                    return {"error": f"MCP server timed out: {e}", "transport": transport}
+                        _release_stdio(c, client)
+                    return {
+                        "error": f"MCP server timed out: {e}. The server may still complete it, so check "
+                                 "before running it again.",
+                        "transport": transport,
+                    }
                 except RuntimeError as e:
                     msg = str(e)
                     is_auth = _is_auth_msg(msg) or "auth_error" in msg

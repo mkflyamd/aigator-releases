@@ -6,6 +6,7 @@ sqlite I/O happens under the lock: state changes are made in memory, then the sn
 """
 from __future__ import annotations
 
+import contextvars
 import logging
 import threading
 import time
@@ -384,7 +385,9 @@ class RunSupervisor:
                         self._abandoned[server_id] = max(0, self._abandoned.get(server_id, 1) - 1)
                 finished.set()
 
-        threading.Thread(target=work, name=f"mcp-{run_id[:8]}", daemon=True).start()
+        # The worker keeps the caller's context (turn id, telemetry suppression) the way asyncio.to_thread does.
+        context = contextvars.copy_context()
+        threading.Thread(target=context.run, args=(work,), name=f"mcp-{run_id[:8]}", daemon=True).start()
         deadline = time.monotonic() + budgets.run_ms / 1000
         while not finished.wait(_MCP_POLL_SECONDS):
             if handle.cancelled or time.monotonic() >= deadline:

@@ -196,3 +196,14 @@ def test_the_status_line_only_reports_commands(sup):
 
 def test_the_mcp_budget_has_a_default():
     assert timeouts.budgets_for("mcp").run_ms > 0
+
+
+def test_the_worker_sees_the_callers_context_variables(sup):
+    import contextvars
+
+    marker = contextvars.ContextVar("marker", default="unset")
+    token = marker.set("from-the-turn")
+    try:
+        assert _call(sup, lambda: marker.get())[1] == "from-the-turn"
+    finally:
+        marker.reset(token)

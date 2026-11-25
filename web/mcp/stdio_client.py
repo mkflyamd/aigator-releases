@@ -26,7 +26,7 @@ import shutil
 import subprocess
 import threading
 import time
-from typing import Any
+from typing import Any, Callable
 
 from proc_utils import ensure_bundled_node_on_path, no_window_kwargs
 
@@ -149,11 +149,18 @@ def acquire_pooled(cfg: dict) -> "StdioMCPClient":
         return client
 
 
-def release_from_pool(cfg: dict) -> None:
-    """Terminate and evict the pooled process for this config (call on connection delete)."""
+def release_from_pool(cfg: dict, client: "StdioMCPClient | None" = None) -> None:
+    """Terminate and evict the pooled process for this config (call on connection delete).
+
+    With `client`, close exactly that process and evict it only if it is still the pooled one, so a caller that
+    gave up on an old process never evicts the fresh one that replaced it.
+    """
     key = _pool_key(cfg)
     with _pool_lock:
-        client = _pool.pop(key, None)
+        if client is None:
+            client = _pool.pop(key, None)
+        elif _pool.get(key) is client:
+            del _pool[key]
     if client is not None:
         try:
             client.close()
@@ -173,7 +180,7 @@ class StdioMCPClient:
         self._reader: threading.Thread | None = None
         self._stderr_lines: list[str] = []
         self._stderr_reader: threading.Thread | None = None
-        self._active_call_id: int | None = None
+        self._id_lock = threading.Lock()
         try:
             self._connect()
         except Exception:
@@ -251,11 +258,20 @@ class StdioMCPClient:
     def _stderr_tail(self, max_lines: int = 10) -> str:
         return "\n".join(self._stderr_lines[-max_lines:]).strip()
 
-    def _send(self, method: str, params: dict | None = None, timeout: float | None = None) -> dict:
+    def _send(
+        self,
+        method: str,
+        params: dict | None = None,
+        timeout: float | None = None,
+        on_request: Callable[[int], None] | None = None,
+    ) -> dict:
         if self._proc is None or self._proc.poll() is not None:
             raise RuntimeError(f"{self._name}: subprocess is not running")
-        req_id = self._next_id
-        self._next_id += 1
+        with self._id_lock:
+            req_id = self._next_id
+            self._next_id += 1
+        if on_request is not None:
+            on_request(req_id)
         msg = {"jsonrpc": "2.0", "method": method, "id": req_id}
         if params is not None:
             msg["params"] = params
@@ -327,13 +343,19 @@ class StdioMCPClient:
             raise RuntimeError(f"tools/list failed: {resp['error']}")
         return resp.get("result", {}).get("tools", [])
 
-    def call(self, tool: str, arguments: dict[str, Any] | None = None) -> str:
+    def call(
+        self,
+        tool: str,
+        arguments: dict[str, Any] | None = None,
+        on_request: Callable[[int], None] | None = None,
+    ) -> str:
         from mcp.audit import schedule_mcp_call
 
         started_at = time.perf_counter()
-        self._active_call_id = self._next_id
         try:
-            resp = self._send("tools/call", {"name": tool, "arguments": arguments or {}})
+            resp = self._send(
+                "tools/call", {"name": tool, "arguments": arguments or {}}, on_request=on_request
+            )
             if "error" in resp:
                 raise RuntimeError(
                     f"{self._name}: {resp['error'].get('message', 'tool call failed')}"
@@ -345,14 +367,10 @@ class StdioMCPClient:
         except Exception:
             schedule_mcp_call(self._cfg, tool, "error", started_at, "mcp_error")
             raise
-        finally:
-            self._active_call_id = None
 
-    def cancel_active_call(self, reason: str = "cancelled") -> None:
-        """Tell the server we stopped waiting for the call in flight (MCP notifications/cancelled). Best effort."""
-        request_id = self._active_call_id
-        if request_id is not None:
-            self._send_notification("notifications/cancelled", {"requestId": request_id, "reason": reason})
+    def cancel_request(self, request_id: int, reason: str = "cancelled") -> None:
+        """Tell the server we stopped waiting for one request (MCP notifications/cancelled). Best effort."""
+        self._send_notification("notifications/cancelled", {"requestId": request_id, "reason": reason})
 
     def close(self) -> None:
         if self._proc is None:
