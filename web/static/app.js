@@ -4669,6 +4669,8 @@ function switchTab(tabId) {
   // Swap
   _activeTabId = tabId;
   setTimeout(() => _flushSandboxFollowUp(tabId), 0);
+  _renderQueue();
+  _queueRefresh(tabId);
   history = _loadTabHistory(tabId);
   _restoreChipsForTab(tabId);
   _saveTabs();
@@ -10327,10 +10329,322 @@ async function _sendSandboxFollowUp(tabId, text) {
 
 function _flushSandboxFollowUp(tabId) {
   const text = _pendingSandboxFollowUps.get(tabId);
-  if (!text || tabId !== _activeTabId || _chatTaskIds.has(tabId)) return;
+  if (!text) {
+    _queueDrain(tabId);
+    return;
+  }
+  if (tabId !== _activeTabId || _chatTaskIds.has(tabId)) return;
   _pendingSandboxFollowUps.delete(tabId);
   _sendSandboxFollowUp(tabId, text).catch((e) => console.warn('[sandbox] follow-up not sent:', e));
 }
+
+// ── Message queue ────────────────────────────────────────────────────────────
+// Enter while a reply is running queues the message on the server (per tab, so a reload or a second
+// window agrees). The end of the turn sends the next one; Stop or an error pauses the queue.
+// Queue text comes from the user: textContent only.
+const _queueByTab = new Map(); // tabId -> { items, paused, reason, max }
+const _queueBusy = new Set(); // tabs with a queued send in flight
+const _queueComposing = new Set(); // tabs whose composer text is being queued right now
+let _queuedSendId = null; // read first thing by the submit handler for the one submit the queue starts
+
+async function _queueCall(method, path, body) {
+  const res = await fetch(path, {
+    method,
+    ...(body
+      ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
+      : {}),
+  });
+  let data = {};
+  try {
+    data = await res.json();
+  } catch {}
+  if (!res.ok) {
+    throw new Error(
+      typeof data.detail === 'string' ? data.detail : `The queue is unavailable (${res.status}).`,
+    );
+  }
+  return data;
+}
+
+function _queueSet(tabId, snap) {
+  _queueByTab.set(tabId, snap);
+  if (tabId === _activeTabId) _renderQueue();
+}
+
+async function _queueRefresh(tabId) {
+  if (!tabId) return;
+  try {
+    _queueSet(tabId, await _queueCall('GET', `/api/queue?context_id=${encodeURIComponent(tabId)}`));
+  } catch (e) {
+    console.warn('[queue] refresh failed:', e);
+  }
+}
+
+// Runs as a queue edit/remove/resume/clear; the server answers with the new snapshot.
+async function _queueAct(tabId, method, path, body) {
+  try {
+    _queueSet(tabId, await _queueCall(method, path, body));
+    return true;
+  } catch (e) {
+    _showConnectivityToast(e.message, 'warn');
+    _queueRefresh(tabId);
+    return false;
+  }
+}
+
+function _queueSendSettled(tabId) {
+  _queueBusy.delete(tabId);
+  _queueRefresh(tabId);
+}
+
+async function _queueComposerMessage() {
+  const tabId = _activeTabId;
+  const input = document.getElementById('chat-input');
+  if (!tabId || !input) return;
+  if (_slashDropdown || _mentionDropdown || _pinDropdown || _channelDropdown) return;
+  if (input.querySelector('[data-media-uploading]')) {
+    _showConnectivityToast('Wait for the upload to finish', 'warn');
+    return;
+  }
+  const typedText = _getInputText().trim();
+  if (typedText.startsWith('/')) {
+    _showConnectivityToast(
+      'Slash commands cannot be queued. Send it when the reply finishes.',
+      'warn',
+    );
+    return;
+  }
+  const finalText = buildFinalMessage(typedText);
+  const images = [..._aigatorImages];
+  if (images.some((i) => !i.base64)) {
+    _showConnectivityToast('Wait for the attachment to finish loading', 'warn');
+    return;
+  }
+  const hasFileChips = input.querySelector('[data-file-path]') !== null;
+  if (!_canSubmitMessage(finalText, hasFileChips, images.length > 0)) return;
+  // The composer is cleared only once the server accepts the message, so a second Enter in that window must not queue it again.
+  if (_queueComposing.has(tabId)) return;
+  _queueComposing.add(tabId);
+  const id = crypto.randomUUID();
+  const payload = {
+    text: finalText,
+    images: images.map((i) => ({
+      mediaType: i.mediaType,
+      base64: i.base64,
+      name: i.name || '',
+      savedPath: i.savedPath || '',
+    })),
+  };
+  let snap;
+  try {
+    snap = await _queueCall('POST', '/api/queue', { context_id: tabId, id, payload });
+  } catch (e) {
+    _showConnectivityToast(e.message, 'warn');
+    return;
+  } finally {
+    _queueComposing.delete(tabId);
+  }
+  if (window._pushPromptHistory) window._pushPromptHistory(typedText);
+  if (_activeTabId === tabId) {
+    input.textContent = '';
+    window._resolvedPeople = [];
+    input.style.height = 'auto';
+    delete input.dataset.userResized;
+    if (images.length) {
+      _aigatorImages = [];
+      _renderAigatorPreviews();
+    }
+    _updateSendSlot();
+    _updatePlaceholder();
+  }
+  _queueSet(tabId, snap);
+  // The reply may have ended while the request was in flight; nothing else would send this one.
+  if (!_chatTaskIds.has(tabId)) _queueDrain(tabId);
+}
+
+async function _queueDrain(tabId) {
+  if (!tabId || tabId !== _activeTabId || _chatTaskIds.has(tabId) || _queueBusy.has(tabId)) return;
+  if (_pendingSandboxFollowUps.has(tabId)) return;
+  _queueBusy.add(tabId);
+  setTimeout(() => _queueBusy.delete(tabId), 20000);
+  let started = false;
+  try {
+    const { item } = await _queueCall(
+      'GET',
+      `/api/queue/head?context_id=${encodeURIComponent(tabId)}`,
+    );
+    if (!item || tabId !== _activeTabId || _chatTaskIds.has(tabId)) {
+      _queueRefresh(tabId);
+      return;
+    }
+    await _submitQueuedItem(item);
+    started = true;
+  } catch (e) {
+    console.warn('[queue] next message not sent:', e);
+  } finally {
+    if (!started) _queueBusy.delete(tabId);
+  }
+}
+
+// The queued message goes through the ordinary submit path, with the composer borrowed for a tick.
+async function _submitQueuedItem(item) {
+  const input = document.getElementById('chat-input');
+  const form = document.getElementById('chat-form');
+  if (!input || !form) return;
+  closeMentionDropdown();
+  _closeSlashDropdown();
+  closePinDropdown();
+  closeChannelDropdown();
+  const draft = Array.from(input.childNodes);
+  const images = _aigatorImages;
+  const people = window._resolvedPeople;
+  input.replaceChildren();
+  input.textContent = item.payload.text || '';
+  _aigatorImages = (item.payload.images || []).map((i) => ({ ...i }));
+  window._resolvedPeople = [];
+  _queuedSendId = item.id;
+  try {
+    form.requestSubmit();
+  } finally {
+    _queuedSendId = null;
+  }
+  // The handler snapshots the composer, then clears it a microtask later; restore the draft after that.
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  input.replaceChildren(...draft);
+  _aigatorImages = images;
+  window._resolvedPeople = people;
+  _renderAigatorPreviews();
+  _updateSendSlot();
+  _updatePlaceholder();
+}
+
+// "Send now": stop the running reply, release the pause that stopping causes, send the first queued message.
+async function _queueSendNow(tabId) {
+  const snap = _queueByTab.get(tabId);
+  if (!snap?.items.length || tabId !== _activeTabId) return;
+  const taskId = _chatTaskIds.get(tabId);
+  if (taskId) {
+    await fetch(`/api/chat/${taskId}/cancel`, { method: 'POST' }).catch(() => {});
+    [..._activeStops].forEach((stop) => stop());
+  }
+  if (await _queueAct(tabId, 'POST', '/api/queue/resume', { context_id: tabId })) {
+    _queueDrain(tabId);
+  }
+}
+
+function _queueButton(label, title, onClick) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'queue-btn';
+  b.textContent = label;
+  b.title = title;
+  b.addEventListener('click', onClick);
+  return b;
+}
+
+function _queueChip(tabId, item, isNext) {
+  const chip = document.createElement('div');
+  chip.className = 'queue-chip';
+  chip.dataset.queueId = item.id;
+  const text = document.createElement('span');
+  text.className = 'queue-chip-text';
+  text.textContent = item.text || '(attachment)';
+  text.title = item.text;
+  chip.appendChild(text);
+  if (item.attachments) {
+    const n = document.createElement('span');
+    n.className = 'queue-chip-badge';
+    n.textContent = `${item.attachments} attached`;
+    chip.appendChild(n);
+  }
+  const edit = _queueButton('Edit', 'Edit this message', () => {
+    const field = document.createElement('input');
+    field.type = 'text';
+    field.className = 'queue-chip-edit';
+    field.value = item.text;
+    let finished = false;
+    const done = (save) => {
+      if (finished) return;
+      finished = true;
+      const next = field.value.trim();
+      if (save && next && next !== item.text) {
+        _queueAct(tabId, 'PUT', `/api/queue/${encodeURIComponent(item.id)}`, {
+          context_id: tabId,
+          text: next,
+        });
+      } else {
+        _renderQueue();
+      }
+    };
+    field.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        e.stopPropagation();
+        done(true);
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        done(false);
+      }
+    });
+    field.addEventListener('blur', () => done(true));
+    text.replaceWith(field);
+    field.focus();
+  });
+  const remove = _queueButton('Remove', 'Remove this message', () =>
+    _queueAct(
+      tabId,
+      'DELETE',
+      `/api/queue/${encodeURIComponent(item.id)}?context_id=${encodeURIComponent(tabId)}`,
+    ),
+  );
+  chip.append(edit, remove);
+  if (isNext) {
+    chip.appendChild(
+      _queueButton('Send now', 'Stop the reply and send this message', () => _queueSendNow(tabId)),
+    );
+  }
+  return chip;
+}
+
+function _renderQueue() {
+  const row = document.getElementById('chat-queue-row');
+  if (!row) return;
+  const tabId = _activeTabId;
+  const snap = _queueByTab.get(tabId);
+  row.replaceChildren();
+  if (!snap || !snap.items.length) {
+    row.hidden = true;
+    return;
+  }
+  row.hidden = false;
+  if (snap.paused) {
+    const bar = document.createElement('div');
+    bar.className = 'queue-paused';
+    const why = document.createElement('span');
+    why.textContent =
+      snap.reason === 'error'
+        ? 'Queue paused · the reply hit an error'
+        : 'Queue paused · you stopped the reply';
+    bar.appendChild(why);
+    bar.appendChild(
+      _queueButton('Resume', 'Send the queued messages one at a time', async () => {
+        if (await _queueAct(tabId, 'POST', '/api/queue/resume', { context_id: tabId })) {
+          _queueDrain(tabId);
+        }
+      }),
+    );
+    bar.appendChild(
+      _queueButton('Clear', 'Remove every queued message', () =>
+        _queueAct(tabId, 'POST', '/api/queue/clear', { context_id: tabId }),
+      ),
+    );
+    row.appendChild(bar);
+  }
+  snap.items.forEach((item, i) => row.appendChild(_queueChip(tabId, item, i === 0)));
+}
+
+window.addEventListener('focus', () => _queueRefresh(_activeTabId));
 
 // ── ask_user card ────────────────────────────────────────────────────────────
 // The card carries the question itself, so it stays next to the options however far up the chat the
@@ -15111,11 +15425,18 @@ function _aigatorClearImagesUI() {
 /* ── Chat Form Submit ────────────────────────────────── */
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
+  // Taken before any early return so a submit the queue started cannot leak its id to the next one.
+  let queuedSendId = _queuedSendId;
+  _queuedSendId = null;
   // Guard against double-submit — per-tab, not global. A stream running in
   // another tab must not block sending from this idle tab. The per-tab map
   // _chatTaskIds is the same source of truth switchTab uses to color the
   // send button, so the gate and the button can never disagree.
-  if (_chatTaskIds.has(_activeTabId)) return;
+  // A message typed while a reply runs waits in the queue instead of being dropped.
+  if (_chatTaskIds.has(_activeTabId)) {
+    await _queueComposerMessage();
+    return;
+  }
   // No auto-dismiss — onboarding panel stays open alongside chat
   // Don't submit while a dropdown is open — the user is navigating, not sending
   if (_slashDropdown || _mentionDropdown || _pinDropdown || _channelDropdown) {
@@ -15895,8 +16216,11 @@ form.addEventListener('submit', async (e) => {
             model: window._currentModel || '',
             ...(_wSuffix ? { system_prompt_suffix: _wSuffix } : {}),
             ..._sendPinFields,
+            ...(queuedSendId ? { queued_id: queuedSendId } : {}),
           };
-      _permissionResendPayload = _postBody;
+      // A re-send after an approval must not carry the id: the queued message was removed when this turn began.
+      const { queued_id: _spentQueuedId, ...resendBody } = _postBody;
+      _permissionResendPayload = resendBody;
       const _postPromise = fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -15908,6 +16232,11 @@ form.addEventListener('submit', async (e) => {
         _abortCtrl._stopPost = () => release(null);
       });
       const postRes = await Promise.race([_postPromise, _stoppedDuringPost]);
+      if (queuedSendId) {
+        _queueSendSettled(requestTabId);
+        // A refused send (409) leaves the message queued, so a retry keeps its id; any other answer spent it.
+        if (postRes && postRes.status !== 409) queuedSendId = null;
+      }
       if (!postRes) {
         _postPromise
           .then((r) => (r.ok ? r.json() : null))
@@ -16713,6 +17042,7 @@ form.addEventListener('submit', async (e) => {
     // The turn is fully finished for this tab: now a queued sandbox follow-up
     // can be sent without racing this turn's cleanup.
     if (!_userStopped) setTimeout(() => _flushSandboxFollowUp(requestTabId), 0);
+    else setTimeout(() => _queueRefresh(requestTabId), 600);
   };
 
   await doSend();
@@ -16983,6 +17313,7 @@ _initScrollOverride();
 
 // Default to Gator Chat on load
 selectSkill('gator');
+_queueRefresh(_activeTabId);
 
 // ── Confirm modal (replaces browser confirm()) ─────────
 function _showConfirmModal(title, body, confirmLabel, onConfirm) {

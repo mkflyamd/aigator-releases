@@ -149,6 +149,10 @@ class ChatTaskStore:
             return []
         return task["chunks"][from_seq:to_seq]
 
+    def context_of(self, task_id: str) -> str | None:
+        task = self._store.get(task_id)
+        return task["context_id"] if task else None
+
     def active_task_for(self, context_id: str) -> str | None:
         """Return the id of a turn still alive on this context, else None.
 

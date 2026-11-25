@@ -23688,3 +23688,62 @@ body.tab-fullscreen {
   fill: var(--text-muted) !important;
   stroke: var(--text-muted) !important;
 }
+
+/* ── Queued messages under the composer ── */
+.chat-queue-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.4rem 0.85rem 0.1rem;
+}
+.chat-queue-row[hidden] {
+  display: none;
+}
+.queue-chip,
+.queue-paused {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+.queue-chip-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+.queue-chip-edit {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.1rem 0.3rem;
+}
+.queue-chip-badge {
+  white-space: nowrap;
+  font-size: 0.7rem;
+}
+.queue-paused {
+  justify-content: space-between;
+}
+.queue-btn {
+  background: transparent;
+  border: none;
+  padding: 0.1rem 0.3rem;
+  font: inherit;
+  color: var(--accent);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.queue-btn:hover {
+  text-decoration: underline;
+}

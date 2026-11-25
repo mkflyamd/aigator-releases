@@ -47,6 +47,13 @@ def parse_slash_command(message: str) -> dict | None:
 router = APIRouter()
 
 
+def _pause_queue(context_id: str | None, reason: str) -> None:
+    """A stopped or failed turn holds back what the user queued behind it until they resume."""
+    if context_id:
+        from chat_queue import get_queue
+        get_queue().pause_if_queued(context_id, reason)
+
+
 # ── Pydantic models ───────────────────────────────────────────────────────────
 
 _GATED_DEP_SKILLS: frozenset[str] = frozenset({"shell_runner", "code_runner"})
@@ -262,6 +269,7 @@ class ChatRequest(BaseModel):
     scoped_skill: str | None = None           # skill ID injected into active_skills for this request
     pinned_skill: str | None = None           # per-tab skill pin (client); activates and locks skill selection
     pinned_project_id: str | None = None      # project the pinned skill is working on
+    queued_id: str | None = None              # a queued message being sent now; removed from the queue when the turn is accepted
 
 
 # ── Tool filtering ────────────────────────────────────────────────────────────
@@ -1365,6 +1373,8 @@ async def cancel_chat(task_id: str):
             cancel_browser_task()
     except Exception:
         pass
+    if cancelled:
+        _pause_queue(shared.chat_task_store.context_of(task_id), "stopped")
     return {"cancelled": cancelled}
 
 
@@ -2680,6 +2690,17 @@ async def chat(req: ChatRequest):
             },
             status_code=409,
         )
+    if req.queued_id:
+        from chat_queue import QueueError, get_queue
+        try:
+            sendable = get_queue().consume(context_id, req.queued_id)
+        except QueueError as exc:
+            return JSONResponse({"error": "queue_unavailable", "detail": exc.message}, status_code=exc.status)
+        if not sendable:
+            return JSONResponse(
+                {"error": "queue_item_gone", "detail": "That queued message was already sent or removed."},
+                status_code=409,
+            )
     task_id = str(_uuid.uuid4())
     shared.chat_task_store.create_task(task_id, context_id)
 
@@ -2766,6 +2787,7 @@ async def chat(req: ChatRequest):
                                 _stall_detail = _last_tool_error[0] if _last_tool_error else f"{_which} timeout"
                                 if len(_stall_detail) > 160:
                                     _stall_detail = _stall_detail[:160] + "…"
+                                _pause_queue(context_id, "error")
                                 shared.chat_task_store.append_chunk(task_id, f"data: {json.dumps({'stalled': True, 'message': f'Gator stopped after going silent ({_stall_detail}). Click Continue to pick up where it left off.'})}\n\n")
                                 break
                             try:
@@ -2882,6 +2904,7 @@ async def chat(req: ChatRequest):
                         )
                         print(f"[stream] unhandled error in background task: {_exc}", flush=True)
                         _tb.print_exc()
+                        _pause_queue(context_id, "error")
                         shared.chat_task_store.append_chunk(task_id, f"data: {json.dumps({'text': 'An unexpected error occurred. Please try again.'})}\n\n")
                         # Turn telemetry: log the unhandled error
                         try:
@@ -2952,6 +2975,7 @@ async def chat(req: ChatRequest):
             _logging.getLogger(__name__).exception(
                 "[run_and_buffer] unhandled error: %s", _outer_exc
             )
+            _pause_queue(context_id, "error")
             shared.chat_task_store.append_chunk(task_id, f"data: {json.dumps({'text': 'An unexpected error occurred. Please try again.'})}\n\n")
             if not shared.chat_task_store.is_done(task_id):
                 shared.chat_task_store.mark_done(task_id)

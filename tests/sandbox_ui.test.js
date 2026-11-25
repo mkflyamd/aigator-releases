@@ -137,8 +137,9 @@ function makeEnv(activeTab) {
   const byId = { messages, 'chat-input': input, 'chat-form': form };
   const toasts = [];
   const fetches = [];
-  const calls = { previews: 0, slot: 0, placeholder: 0 };
+  const calls = { previews: 0, slot: 0, placeholder: 0, queueDrains: [] };
   const ctx = {
+    _queueDrain: (tabId) => calls.queueDrains.push(tabId),
     _aigatorImages: [],
     _renderAigatorPreviews: () => calls.previews++,
     _updateSendSlot: () => calls.slot++,
@@ -392,6 +393,13 @@ const flush = async () => {
   assert.deepStrictEqual(env8.form.sent, ['follow up A']);
   // The user's draft is back in the composer after the send.
   assert.strictEqual(env8.input.textContent, 'my unfinished draft');
+
+  // A sandbox follow-up goes first; the queued messages are drained only when none is waiting.
+  assert.deepStrictEqual(
+    env8.calls.queueDrains,
+    ['tab-1'],
+    'the first flush sent the follow-up; only the second, with none waiting, drains the queue',
+  );
 
   // Queued follow-up for a tab the user is not viewing waits for that tab.
   const env9 = makeEnv('tab-2');
