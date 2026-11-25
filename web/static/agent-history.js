@@ -399,25 +399,51 @@
     return (where.app || 'another program') + ' (process ' + where.pid + ')';
   }
 
+  function startedText(created) {
+    return typeof created === 'number' ? ', started ' + new Date(created * 1000).toLocaleString() : '';
+  }
+
   function takeoverBody(where) {
+    const w = where || {};
     return escapeHtml(
       'This session is open in ' +
-        elsewhereText(where) +
-        '. Gator will close it there and open it here. Anything unsaved in that window is lost.',
+        (w.app || 'another program') +
+        ' (process ' +
+        w.pid +
+        startedText(w.created) +
+        '). Gator will close that process and open the session here. Anything unsaved there is lost.',
+    );
+  }
+
+  function canTakeOver(where) {
+    return !!where && where.can_close === true && where.pid != null && typeof where.created === 'number';
+  }
+
+  function manualCloseText(where) {
+    return (
+      (where && where.reason) ||
+      'This session is open in another window. Close it yourself, then try again.'
     );
   }
 
   function confirmTakeover(row, where) {
+    const target = where || row.elsewhereIn;
+    if (!canTakeOver(target)) {
+      ui.notice[row.key] = manualCloseText(target);
+      render();
+      return;
+    }
     if (typeof _showConfirmModal !== 'function') return;
     _showConfirmModal(
       'Session open elsewhere',
-      takeoverBody(where || row.elsewhereIn),
+      takeoverBody(target),
       'Close and open here',
-      () => takeover(row),
+      () => takeover(row, target),
+      { cancelFirst: true },
     );
   }
 
-  async function takeover(row) {
+  async function takeover(row, target) {
     const { project } = context();
     if (!project) return;
     const headers =
@@ -429,7 +455,13 @@
       const resp = await fetcher()('/api/generic-agent/takeover', {
         method: 'POST',
         headers,
-        body: JSON.stringify({ agent: row.agent, repo_path: project.repo_path, resume_id: row.id }),
+        body: JSON.stringify({
+          agent: row.agent,
+          repo_path: project.repo_path,
+          resume_id: row.id,
+          pid: target.pid,
+          created: target.created,
+        }),
       });
       if (resp.ok) {
         resume(row, true);
@@ -1073,6 +1105,7 @@
     buildRows,
     elsewhereText,
     takeoverBody,
+    canTakeOver,
     syncTabLabels,
     shortAge,
     metaLine,

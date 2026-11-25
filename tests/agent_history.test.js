@@ -383,9 +383,22 @@ const term = (pty, agent, out, viewed) => ({
   assert.strictEqual(h.elsewhereText(null), 'another window');
   assert.strictEqual(
     h.takeoverBody({ app: 'Orca', pid: 51892 }),
-    'This session is open in Orca (process 51892). Gator will close it there and open it here. Anything unsaved in that window is lost.',
+    'This session is open in Orca (process 51892). Gator will close that process and open the session here. Anything unsaved there is lost.',
   );
+  const shown = h.takeoverBody({ app: 'Orca', pid: 51892, created: 1700000000.5 });
+  assert(shown.includes('process 51892, started '), 'the dialog shows the process start time');
   assert(!h.takeoverBody({ app: '<b>x</b>', pid: 1 }).includes('<b>'), 'app text is escaped');
+}
+
+// only a process the server marked closable, with its identity, can be taken over
+{
+  const ok = { app: 'Orca', pid: 7, created: 1700000000.5, can_close: true };
+  assert.strictEqual(h.canTakeOver(ok), true);
+  assert.strictEqual(h.canTakeOver(null), false, 'no identity shown, nothing to confirm');
+  assert.strictEqual(h.canTakeOver({ ...ok, can_close: false }), false, 'unknown application');
+  assert.strictEqual(h.canTakeOver({ ...ok, can_close: undefined }), false, 'an older server');
+  assert.strictEqual(h.canTakeOver({ ...ok, created: null }), false, 'no creation time');
+  assert.strictEqual(h.canTakeOver({ ...ok, pid: null }), false);
 }
 
 console.log('agent_history: ok');

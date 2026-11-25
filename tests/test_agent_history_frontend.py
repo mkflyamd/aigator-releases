@@ -280,3 +280,23 @@ def test_a_session_open_elsewhere_is_taken_over_never_duplicated():
     assert "/api/generic-agent/takeover" in HISTORY
     assert "Close and open here" in HISTORY
     assert "failure.where" in TERM
+
+
+def test_takeover_request_carries_the_process_the_user_confirmed():
+    start = HISTORY.index("async function takeover(row, target)")
+    body = HISTORY[start : HISTORY.index("async function resume", start)]
+    assert "pid: target.pid" in body and "created: target.created" in body
+
+
+def test_takeover_dialog_is_destructive_so_it_starts_on_cancel():
+    start = HISTORY.index("function confirmTakeover(row, where)")
+    body = HISTORY[start : HISTORY.index("async function takeover", start)]
+    assert "{ cancelFirst: true }" in body
+    assert "() => takeover(row, target)" in body
+
+
+def test_a_process_gator_will_not_close_shows_manual_instructions_instead_of_a_dialog():
+    start = HISTORY.index("function confirmTakeover(row, where)")
+    body = HISTORY[start : HISTORY.index("async function takeover", start)]
+    assert body.index("if (!canTakeOver(target))") < body.index("_showConfirmModal(")
+    assert "ui.notice[row.key] = manualCloseText(target)" in body

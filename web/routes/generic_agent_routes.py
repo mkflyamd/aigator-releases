@@ -53,6 +53,8 @@ class GenericAgentTakeoverRequest(BaseModel):
     agent: str
     repo_path: str
     resume_id: str
+    pid: int
+    created: float
 
 
 class HandoffPrepareRequest(BaseModel):
@@ -113,8 +115,12 @@ async def prepare_agent_handoff(req: HandoffPrepareRequest):
                 agent_handoff.prepare_handoff,
                 req.agent, req.project_id, req.repo_path, req.pty_session_id,
             )
+    except agent_handoff.SessionNotOwned:
+        raise HTTPException(status_code=403, detail="That terminal session does not belong to this project and agent.")
     except agent_handoff.NothingToHandOff:
         raise HTTPException(status_code=422, detail="Nothing to hand off from this session.")
+    except OSError:
+        raise HTTPException(status_code=500, detail="The handoff could not be stored securely, so nothing was saved.")
     return {
         "handoff_id": record["handoff_id"],
         "source_agent": record["source_agent"],
@@ -162,9 +168,11 @@ async def takeover_session(req: GenericAgentTakeoverRequest):
             detail="Could not check whether this session is open in a Gator terminal. Try again.",
         )
     try:
-        terminated = await asyncio.to_thread(agent_liveness.takeover, req.agent, found["id"], owners)
+        terminated = await asyncio.to_thread(
+            agent_liveness.takeover, req.agent, found["id"], owners, req.pid, req.created
+        )
     except agent_liveness.TakeoverError as exc:
-        raise HTTPException(status_code=409, detail={"code": "takeover_failed", "message": str(exc)})
+        raise HTTPException(status_code=409, detail={"code": exc.code, "message": str(exc)})
     return {"terminated": terminated}
 
 
@@ -240,7 +248,7 @@ async def _open_terminal(req: GenericAgentTerminalRequest):
                     "code": "session_live",
                     "message": "This session is already open in another window.",
                     "processes": elsewhere,
-                    "where": {"app": agent_liveness.location_label(first["pid"]), "pid": first["pid"]},
+                    "where": agent_liveness.describe(req.agent, first),
                 },
             )
 
