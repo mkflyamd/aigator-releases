@@ -53,6 +53,8 @@ class GenericAgentTakeoverRequest(BaseModel):
     agent: str
     repo_path: str
     resume_id: str
+    pid: int
+    created: float
 
 
 class HandoffPrepareRequest(BaseModel):
@@ -166,9 +168,11 @@ async def takeover_session(req: GenericAgentTakeoverRequest):
             detail="Could not check whether this session is open in a Gator terminal. Try again.",
         )
     try:
-        terminated = await asyncio.to_thread(agent_liveness.takeover, req.agent, found["id"], owners)
+        terminated = await asyncio.to_thread(
+            agent_liveness.takeover, req.agent, found["id"], owners, req.pid, req.created
+        )
     except agent_liveness.TakeoverError as exc:
-        raise HTTPException(status_code=409, detail={"code": "takeover_failed", "message": str(exc)})
+        raise HTTPException(status_code=409, detail={"code": exc.code, "message": str(exc)})
     return {"terminated": terminated}
 
 
@@ -244,7 +248,7 @@ async def _open_terminal(req: GenericAgentTerminalRequest):
                     "code": "session_live",
                     "message": "This session is already open in another window.",
                     "processes": elsewhere,
-                    "where": {"app": agent_liveness.location_label(first["pid"]), "pid": first["pid"]},
+                    "where": agent_liveness.describe(req.agent, first),
                 },
             )
 
