@@ -146,10 +146,17 @@ function spawn(ctx, sess) {
 {
   const fns = source2.match(/\nfunction _genAgentBeginRename\([^)]*\)\s*\{[\s\S]*?\n\}/);
   assert(fns, '_genAgentBeginRename not found');
+  const applySrc = source.match(/\nfunction _ocApplyPendingTitles\([^)]*\)\s*\{[\s\S]*?\n\}/);
+  assert(applySrc, '_ocApplyPendingTitles not found');
   const renameSrc =
-    'let _genAgentEditing = false;\n' + fns[0] + '\nthis._editing = () => _genAgentEditing;';
-  const make = () => {
+    'let _genAgentEditing = false;\n' +
+    fns[0] +
+    applySrc[0] +
+    '\nthis._editing = () => _genAgentEditing;' +
+    '\nthis._setEditing = (v) => { _genAgentEditing = v; };';
+  const make = (sessions = []) => {
     const handlers = {};
+    const renders = [];
     const labelEl = {
       textContent: '',
       classList: { add() {}, remove() {} },
@@ -160,19 +167,23 @@ function spawn(ctx, sess) {
       removeEventListener() {},
       selectNodeContents() {},
     };
+    const state = { order: sessions.map((_, i) => i), sessions: { ...sessions } };
     const ctx = {
       setTimeout: () => 0,
       document: { createRange: () => ({ selectNodeContents() {} }) },
       window: { getSelection: () => ({ removeAllRanges() {}, addRange() {} }) },
+      _caSessionKey: (id) => id,
+      _genAgentTerminals: { tab1: state },
+      _genAgentRenderTabs: (id) => renders.push(id),
     };
     vm.createContext(ctx);
     vm.runInContext(renameSrc, ctx);
-    return { ctx, labelEl, handlers };
+    return { ctx, labelEl, handlers, renders };
   };
 
   {
     const { ctx, labelEl, handlers } = make();
-    const sess = { label: 'program-title' };
+    const sess = { tabId: 'tab1', label: 'program-title' };
     ctx._genAgentBeginRename(sess, labelEl);
     assert.strictEqual(ctx._editing(), true);
     labelEl.textContent = 'Claude 1';
@@ -187,20 +198,68 @@ function spawn(ctx, sess) {
   }
   {
     const { ctx, labelEl, handlers } = make();
-    const sess = { label: 'program-title' };
+    const sess = { tabId: 'tab1', label: 'program-title' };
     ctx._genAgentBeginRename(sess, labelEl);
     labelEl.textContent = 'program-title';
-    handlers.blur();
-    assert.strictEqual(sess._manualRename, undefined, 'blur without a change is not a rename');
+    handlers.keydown({ key: 'Enter', preventDefault() {} });
+    assert.strictEqual(sess._manualRename, true, 'unchanged non-empty commit sets the override');
   }
   {
     const { ctx, labelEl, handlers } = make();
-    const sess = { label: 'program-title' };
+    const sess = { tabId: 'tab1', label: 'program-title' };
+    ctx._genAgentBeginRename(sess, labelEl);
+    labelEl.textContent = 'program-title';
+    handlers.blur();
+    assert.strictEqual(sess._manualRename, true, 'blur commits the shown label as a manual name');
+  }
+  {
+    const { ctx, labelEl, handlers } = make();
+    const sess = { tabId: 'tab1', label: 'program-title' };
+    ctx._genAgentBeginRename(sess, labelEl);
+    labelEl.textContent = '   ';
+    handlers.keydown({ key: 'Enter', preventDefault() {} });
+    assert.strictEqual(sess._manualRename, undefined, 'an empty rename is not an override');
+    assert.strictEqual(sess.label, 'program-title');
+  }
+  {
+    // A tab-strip rebuild clears the flag and removes the input; its late blur is not a commit.
+    const { ctx, labelEl, handlers } = make();
+    const sess = { tabId: 'tab1', label: 'program-title' };
+    ctx._genAgentBeginRename(sess, labelEl);
+    ctx._setEditing(false);
+    handlers.blur();
+    assert.strictEqual(sess._manualRename, undefined);
+  }
+  {
+    const { ctx, labelEl, handlers } = make();
+    const sess = { tabId: 'tab1', label: 'program-title' };
     ctx._genAgentBeginRename(sess, labelEl);
     labelEl.textContent = 'typed';
     handlers.keydown({ key: 'Escape', preventDefault() {} });
     assert.strictEqual(sess.label, 'program-title', 'Escape cancels');
     assert.strictEqual(sess._manualRename, undefined);
+  }
+  {
+    // Titles held back during the rename are applied afterwards, for every session.
+    const a = { tabId: 'tab1', label: 'Claude 1', _pendingTitle: 'a-latest' };
+    const b = { tabId: 'tab1', label: 'Claude 2', _pendingTitle: 'b-latest' };
+    const c = { tabId: 'tab1', label: 'Claude 3', _pendingTitle: 'c-latest', _manualRename: true };
+    const { ctx, labelEl, handlers, renders } = make([a, b, c]);
+    ctx._genAgentBeginRename(a, labelEl);
+    labelEl.textContent = 'Mine';
+    handlers.keydown({ key: 'Enter', preventDefault() {} });
+    assert.strictEqual(a.label, 'Mine', 'the renamed tab keeps the user name');
+    assert.strictEqual(b.label, 'b-latest', 'another session gets its held-back title');
+    assert.strictEqual(c.label, 'Claude 3', 'a manually renamed session ignores it');
+    assert.deepStrictEqual(renders, ['tab1'], 'tab strip re-rendered once');
+  }
+  {
+    const a = { tabId: 'tab1', label: 'Claude 1', _pendingTitle: 'a-latest' };
+    const { ctx, labelEl, handlers } = make([a]);
+    ctx._genAgentBeginRename(a, labelEl);
+    labelEl.textContent = 'ignored';
+    handlers.keydown({ key: 'Escape', preventDefault() {} });
+    assert.strictEqual(a.label, 'a-latest', 'cancelled rename lets the held-back title apply');
   }
 }
 
@@ -235,9 +294,17 @@ function spawn(ctx, sess) {
   emit('✳ typed-while-editing');
   assert.strictEqual(sess.label, 'Claude 1', 'no overwrite while the user is renaming');
   assert.strictEqual(renders.length, 0);
+  assert.strictEqual(sess._pendingTitle, 'typed-while-editing', 'latest title is held back');
+  emit('✳ newer-while-editing');
+  assert.strictEqual(sess._pendingTitle, 'newer-while-editing', 'newest held title wins');
   ctx._genAgentEditing = false;
   emit('✳ typed-while-editing');
   assert.strictEqual(sess.label, 'typed-while-editing', 'follows again once editing ends');
+}
+
+{
+  const m = source2.match(/\nfunction _genAgentRenderTabs\([^)]*\)\s*\{[\s\S]*?\n\}/);
+  assert(/_ocApplyPendingTitles\(state\);/.test(m[0]), 'a rebuild applies held-back titles');
 }
 
 {

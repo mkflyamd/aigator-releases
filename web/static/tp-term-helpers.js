@@ -167,9 +167,29 @@ function _ocFollowProgramTitle(sess, raw) {
   if (sess.agent === 'terminal' || sess._closing || sess._manualRename) return;
   const title = _ocCleanProgramTitle(raw);
   if (!title || title === sess.label) return;
-  if (typeof _genAgentEditing !== 'undefined' && _genAgentEditing) return;
+  if (typeof _genAgentEditing !== 'undefined' && _genAgentEditing) {
+    // Re-rendering now would destroy the open rename input. xterm does not replay
+    // title events, so keep the latest one and apply it when editing ends.
+    sess._pendingTitle = title;
+    return;
+  }
   sess.label = title;
   if (typeof _genAgentRenderTabs === 'function') _genAgentRenderTabs(sess.tabId);
+}
+
+// Applies titles held back during a rename; returns true if any label changed.
+function _ocApplyPendingTitles(state) {
+  let changed = false;
+  state.order.forEach((id) => {
+    const sess = state.sessions[id];
+    if (!sess || !sess._pendingTitle) return;
+    const title = sess._pendingTitle;
+    sess._pendingTitle = null;
+    if (sess._manualRename || sess._closing || title === sess.label) return;
+    sess.label = title;
+    changed = true;
+  });
+  return changed;
 }
 
 function _ocHeaderTabStripId() {
