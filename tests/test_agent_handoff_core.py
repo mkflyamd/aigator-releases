@@ -196,3 +196,92 @@ def test_log_event_has_fields_and_no_secrets(caplog):
         "source_kind=transcript snapshot_bytes=120 redactions=2 gateway_routed=true"
     )
     assert FAKE not in line
+
+
+def _save(**kw):
+    return ah.save_handoff(
+        source_agent="claude", project_id="demo", cwd="/r", source_kind="capture",
+        text=f"output {FAKE}", last_user="u", last_assistant="a", api_key=FAKE, **kw,
+    )
+
+
+def test_saved_handoff_is_owner_only_and_leaves_no_temp_files(tmp_path, monkeypatch):
+    import file_perms
+
+    monkeypatch.setattr(ah, "HANDOFF_DIR", tmp_path / "h")
+    rec = _save()
+    names = sorted(p.name for p in (tmp_path / "h").iterdir())
+    assert names == sorted([rec["handoff_id"] + ".txt", rec["handoff_id"] + ".json"])
+    assert FAKE not in (tmp_path / "h" / (rec["handoff_id"] + ".txt")).read_text()
+    if os.name == "posix":
+        assert ((tmp_path / "h").stat().st_mode & 0o777) == 0o700
+        for p in (tmp_path / "h").iterdir():
+            assert (p.stat().st_mode & 0o777) == 0o600
+    assert ah.load_handoff(rec["handoff_id"])["handoff_id"] == rec["handoff_id"]
+    file_perms.forget(tmp_path / "h")
+
+
+def test_posix_files_are_restricted_before_they_are_moved_into_place(tmp_path, monkeypatch):
+    import file_perms
+
+    monkeypatch.setattr(ah, "HANDOFF_DIR", tmp_path / "h")
+    modes = []
+    monkeypatch.setattr(file_perms.os, "name", "posix")
+    real_chmod = os.chmod
+    monkeypatch.setattr(file_perms.os, "chmod", lambda p, m: (modes.append((os.path.basename(p), m)), real_chmod(p, m))[1])
+    _save()
+    assert modes[0][1] == 0o700, "the folder first"
+    temp_modes = [m for n, m in modes[1:] if n.startswith(".handoff-")]
+    assert temp_modes == [0o600, 0o600], "each file is restricted while still a temp file"
+
+
+def test_windows_path_restricts_each_file_with_icacls(tmp_path, monkeypatch):
+    import file_perms
+
+    monkeypatch.setattr(ah, "HANDOFF_DIR", tmp_path / "h")
+    monkeypatch.setattr(file_perms.os, "name", "nt")
+    calls = []
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        return type("R", (), {"returncode": 0, "stdout": ""})()
+
+    monkeypatch.setattr(file_perms.subprocess, "run", fake_run)
+    monkeypatch.setattr(file_perms, "_done", set())
+    rec = _save()
+    assert all(c[0] == "icacls" and "/inheritance:r" in c and "/grant:r" in c for c in calls)
+    assert len(calls) == 3, "folder plus the two files"
+    assert "(OI)(CI)F" in calls[0][-1] and calls[1][-1].endswith(":F")
+    assert (tmp_path / "h" / (rec["handoff_id"] + ".json")).exists()
+
+
+def test_windows_restriction_failure_saves_nothing(tmp_path, monkeypatch):
+    import file_perms
+
+    monkeypatch.setattr(ah, "HANDOFF_DIR", tmp_path / "h")
+    monkeypatch.setattr(file_perms.os, "name", "nt")
+    monkeypatch.setattr(file_perms, "_done", set())
+
+    def fake_run(cmd, **kw):
+        # let the folder succeed, fail on the first file
+        return type("R", (), {"returncode": 0 if "h" == os.path.basename(cmd[1]) else 5, "stdout": ""})()
+
+    monkeypatch.setattr(file_perms.subprocess, "run", fake_run)
+    with pytest.raises(OSError):
+        _save()
+    assert list((tmp_path / "h").iterdir()) == []
+
+
+def test_failed_record_write_removes_the_snapshot(tmp_path, monkeypatch):
+    monkeypatch.setattr(ah, "HANDOFF_DIR", tmp_path / "h")
+    real = ah._write_private
+
+    def flaky(path, content):
+        if path.suffix == ".json":
+            raise OSError("disk full")
+        real(path, content)
+
+    monkeypatch.setattr(ah, "_write_private", flaky)
+    with pytest.raises(OSError):
+        _save()
+    assert list((tmp_path / "h").iterdir()) == []
