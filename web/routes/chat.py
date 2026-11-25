@@ -1230,6 +1230,9 @@ _WATCHDOG_POLL_S = 1.0
 # first text delta cannot race the POST response and disappear from the UI.
 # Non-SSE/API callers still proceed through the existing buffered replay path.
 _STREAM_SUBSCRIBER_READY_TIMEOUT_S = 3.0
+# After Stop, how long a new message waits for the stopped turn to finish unwinding
+# before it is refused with 409 turn_in_progress.
+_STOP_UNWIND_GRACE_S = 5.0
 
 
 def _heartbeat_status(silent_intervals: int, interval_seconds: int = 15) -> str | None:
@@ -2661,6 +2664,22 @@ async def chat(req: ChatRequest):
             except Exception:
                 pass
 
+    # One live turn per conversation. The check and the registration below have no await
+    # between them, so two requests cannot both pass. A stopped turn may still be unwinding
+    # (and holding the turn lock): give it a moment instead of refusing a quick resend.
+    _live = shared.chat_task_store.active_task_for(context_id)
+    if _live and shared.chat_task_store.is_cancelled(_live):
+        await shared.chat_task_store.wait_for_task_end(_live, _STOP_UNWIND_GRACE_S)
+        _live = shared.chat_task_store.active_task_for(context_id)
+    if _live:
+        return JSONResponse(
+            {
+                "error": "turn_in_progress",
+                "detail": "A reply is still running in this conversation. Stop it or wait for it to finish.",
+                "task_id": _live,
+            },
+            status_code=409,
+        )
     task_id = str(_uuid.uuid4())
     shared.chat_task_store.create_task(task_id, context_id)
 
