@@ -24254,6 +24254,11 @@ body.tab-fullscreen {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.agent-handoff-redaction-note {
+  margin-top: 0.2rem;
+  font-size: 0.72rem;
+  color: var(--text-muted, inherit);
+}
 .agent-handoff-last {
   display: flex;
   gap: 0.5rem;

@@ -95,5 +95,6 @@ def test_existing_live_prepare_still_requires_a_pty_id(env, monkeypatch):
     monkeypatch.setattr(ah, "find_transcript", lambda agent, cwd, home=None, **kw: None)
     monkeypatch.setattr(ah, "_session_started_at", lambda sid: None)
     monkeypatch.setattr(ah, "capture_pane", lambda sid, red=None: "pane")
+    monkeypatch.setattr(ah, "verify_session_owner", lambda agent, project_id, sid: None)
     live = {"agent": "claude", "project_id": "demo", "repo_path": "C:\\work\\app", "pty_session_id": "p1"}
     assert client().post("/api/generic-agent/handoff/prepare", json=live).status_code == 200

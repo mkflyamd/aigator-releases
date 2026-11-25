@@ -113,8 +113,12 @@ async def prepare_agent_handoff(req: HandoffPrepareRequest):
                 agent_handoff.prepare_handoff,
                 req.agent, req.project_id, req.repo_path, req.pty_session_id,
             )
+    except agent_handoff.SessionNotOwned:
+        raise HTTPException(status_code=403, detail="That terminal session does not belong to this project and agent.")
     except agent_handoff.NothingToHandOff:
         raise HTTPException(status_code=422, detail="Nothing to hand off from this session.")
+    except OSError:
+        raise HTTPException(status_code=500, detail="The handoff could not be stored securely, so nothing was saved.")
     return {
         "handoff_id": record["handoff_id"],
         "source_agent": record["source_agent"],

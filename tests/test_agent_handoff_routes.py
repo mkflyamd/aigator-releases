@@ -36,6 +36,11 @@ def handoff_env(tmp_path, monkeypatch):
     monkeypatch.setattr(ah, "_session_started_at", lambda sid: None)
     monkeypatch.setattr(ah, "find_transcript", lambda agent, cwd, home=None, **kw: None)
     monkeypatch.setattr(ah, "capture_pane", lambda sid, red=None: f"pane output {FAKE}")
+    import routes.terminal as terminal
+    monkeypatch.setattr(
+        terminal, "session_owner",
+        lambda sid: {"project_id": "demo", "agent": "claude"} if sid == "s1" else None,
+    )
 
 
 @pytest.fixture
@@ -248,3 +253,63 @@ def test_extra_agent_can_receive_a_handoff(handoff_env, monkeypatch):
         json={"agent": "pi", "project_id": "demo", "repo_path": "/r", "handoff_id": prepared["handoff_id"]},
     )
     assert r.status_code == 200 and r.json()["created"] is True
+
+
+@pytest.mark.parametrize(
+    "owner",
+    [
+        {"project_id": "other", "agent": "claude"},
+        {"project_id": "demo", "agent": "codex"},
+        {"project_id": "demo"},
+        None,
+    ],
+)
+def test_prepare_refuses_a_session_that_is_not_the_claimed_projects(handoff_env, monkeypatch, owner):
+    import routes.terminal as terminal
+    monkeypatch.setattr(terminal, "session_owner", lambda sid: owner)
+    captured = []
+    monkeypatch.setattr(ah, "capture_pane", lambda sid, red=None: captured.append(sid) or "x")
+    r = _app().post("/api/generic-agent/handoff/prepare", json=BODY)
+    assert r.status_code == 403
+    assert captured == [], "nothing is read from a session that is not theirs"
+    assert not (ah.HANDOFF_DIR.exists() and any(ah.HANDOFF_DIR.iterdir()))
+
+
+def test_prepare_unknown_session_is_refused(handoff_env):
+    r = _app().post("/api/generic-agent/handoff/prepare", json={**BODY, "pty_session_id": "nope"})
+    assert r.status_code == 403
+
+
+def test_prepare_reports_a_store_failure_and_keeps_nothing(handoff_env, monkeypatch):
+    import file_perms
+
+    def refuse(path, *, directory=False):
+        if not directory:
+            raise OSError("icacls exited with 5")
+
+    monkeypatch.setattr(file_perms, "restrict_to_owner", refuse)
+    r = _app().post("/api/generic-agent/handoff/prepare", json=BODY)
+    assert r.status_code == 500
+    assert "nothing was saved" in r.json()["detail"]
+    assert list(ah.HANDOFF_DIR.iterdir()) == []
+
+
+def test_session_owner_reads_labels_from_the_live_session_and_the_host(monkeypatch):
+    import routes.terminal as terminal
+
+    monkeypatch.setattr(terminal, "_pty_sessions", {"live": SimpleNamespace(meta={"project_id": "p", "agent": "claude"}), "adopted": SimpleNamespace(meta=None)})
+    assert terminal.session_owner("live") == {"project_id": "p", "agent": "claude"}
+
+    monkeypatch.setattr(terminal.pty_client, "host_enabled", lambda: True)
+    monkeypatch.setattr(terminal.pty_client, "instance_key", lambda: "k")
+    monkeypatch.setattr(terminal.pty_client, "find_host", lambda key: object())
+    monkeypatch.setattr(
+        terminal.pty_client, "host_request",
+        lambda info, req: {"sessions": [{"id": "adopted", "meta": {"project_id": "p", "agent": "codex"}}, {"id": "bare"}]},
+    )
+    assert terminal.session_owner("adopted") == {"project_id": "p", "agent": "codex"}
+    assert terminal.session_owner("bare") is None
+    assert terminal.session_owner("missing") is None
+
+    monkeypatch.setattr(terminal.pty_client, "host_enabled", lambda: False)
+    assert terminal.session_owner("adopted") is None
