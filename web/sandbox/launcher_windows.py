@@ -21,6 +21,7 @@ import os
 import re
 import stat
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -38,7 +39,6 @@ from . import (
     SandboxResult,
     SandboxRunError,
     SandboxUnavailable,
-    install_node_shim,
 )
 
 _log = logging.getLogger(__name__)
@@ -1151,23 +1151,21 @@ def launch(req: SandboxRequest) -> SandboxResult:
                         )
                     if rc != 0:
                         raise SandboxUnavailable(f"The sandbox could not be given access to {path} ({out}).")
-                try:
-                    install_node_shim(req.env)
-                except OSError as exc:
-                    raise SandboxUnavailable(f"The sandbox could not prepare its Node preload ({exc}).") from exc
                 _check_not_cancelled(req)
                 result = _run_contained(req.argv, req.cwd, req.env, psid, req.timeout, req.network,
                                         req.cancel, req.on_start)
                 return result
             finally:
+                failure = sys.exc_info()[1]
                 teardown_deadline = time.monotonic() + (
                     req.teardown_seconds if req.teardown_seconds is not None else TEARDOWN_SECONDS)
                 for path in attempted:
-                    if time.monotonic() >= teardown_deadline:
+                    remaining = teardown_deadline - time.monotonic()
+                    if remaining <= 0:
                         break  # the rest keep their ledger entries and go to the background repair
                     # A failed revoke keeps its ledger entry so the repair retries it.
                     try:
-                        if _revoke_ok(sid, path):
+                        if _revoke_ok(sid, path, timeout=remaining):
                             _ledger_remove_per_run(sid, path)
                     except Exception as exc:  # one failure must not skip the other revokes or the scrub
                         _log.warning("sandbox: could not update the grant ledger (%s)", type(exc).__name__)
@@ -1175,6 +1173,8 @@ def launch(req: SandboxRequest) -> SandboxResult:
                 if _ledger_load()["per_run"]:
                     if result is not None:
                         result.teardown_failed = True
+                    elif failure is not None:
+                        failure.teardown_failed = True
                     _start_repair()
         finally:
             _api().adv.FreeSid(psid)

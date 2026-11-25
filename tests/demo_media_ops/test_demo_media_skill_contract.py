@@ -39,11 +39,3 @@ def test_phase4_merges_through_the_tool_not_inline_code():
 def test_phase5_reports_only_merge_result_facts():
     phase5 = TEXT[TEXT.index("## Phase 5: Deliver"):]
     assert "`demo_merge_narration` result" in phase5
-
-
-def test_visual_checks_are_limited_to_the_frames_actually_viewed():
-    section = _between("## Truthful Media Claims", "## Phase 1")
-    assert "**Visual checks:**" in section
-    bullet = section[section.index("**Visual checks:**"):].split("\n- ")[0]
-    assert "viewed" in bullet and "not viewed" in bullet
-    assert "verified" in bullet

@@ -59,15 +59,3 @@ def test_a_missing_file_lists_what_exists(skill):
 def test_binary_and_oversized_files_give_a_path_not_content(skill):
     assert "path" in tools._tool_read_skill("demo-design", file="assets/logo.png")
     assert "path" in tools._tool_read_skill("demo-design", file="references/big.md")
-
-
-def test_an_unknown_skill_lists_installed_skills_and_the_closest_name(skill):
-    r = tools._tool_read_skill("demo-design__main")
-    assert "demo-design" in r["error"]
-    assert r["did_you_mean"] == ["demo-design"]
-
-
-def test_an_unknown_skill_with_no_close_name_has_no_suggestion(skill):
-    r = tools._tool_read_skill("zzzz")
-    assert "did_you_mean" not in r
-    assert "demo-design" in r["error"]

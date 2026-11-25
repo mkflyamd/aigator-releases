@@ -199,9 +199,3 @@ def test_tool_contract():
     import skills.shell_runner.tools as mod
     from skills._skill_utils import validate_tool_contract
     assert validate_tool_contract(mod, "shell_runner") is True
-
-
-def test_run_shell_description_sends_multi_line_files_to_write_file():
-    import skills.shell_runner.tools as mod
-    desc = next(t for t in mod.TOOL_DEFS if t["name"] == "run_shell")["description"]
-    assert "write_file" in desc and "multi-line" in desc

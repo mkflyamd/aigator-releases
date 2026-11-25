@@ -1,7 +1,4 @@
 import os
-import shutil
-import stat
-import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -33,86 +30,10 @@ def test_build_env_windows_keeps_allow_list_and_drops_tokens(tmp_path):
     for key in ("TEMP", "TMP", "LOCALAPPDATA", "APPDATA", "USERPROFILE"):
         assert env[key] == str(tmp_path)
     assert env["NODE_PATH"] == r"C:\npm\node_modules"
-    shim = tmp_path / ".gator" / "node-shim.js"
-    assert env["NODE_OPTIONS"] == f'--preserve-symlinks --preserve-symlinks-main --require="{shim.as_posix()}"'
-    assert not shim.exists()
-    sandbox.install_node_shim(env)
-    assert "asyncNative" in shim.read_text(encoding="utf-8")
+    assert env["NODE_OPTIONS"] == "--preserve-symlinks --preserve-symlinks-main"
     assert env["PYTHONIOENCODING"] == "utf-8"
     assert FAKE not in env.values()
     assert not any("TOKEN" in k or "KEY" in k for k in env)
-
-
-@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
-def test_node_shim_blocks_piped_spawns_and_closes_callback_form(tmp_path):
-    probe = tmp_path / "probe.js"
-    probe.write_text(
-        "const cp = require('child_process'); const ev = [];\n"
-        "cp.exec('x', (e) => ev.push('cb:' + e.code)).on('close', () => ev.push('close'));\n"
-        "cp.spawn('x', [], { stdio: 'overlapped' }).on('error', () => ev.push('overlapped'));\n"
-        "cp.spawn('x', [], { stdio: ['inherit', 'inherit', 'inherit', 'ipc'] }).on('error', () => ev.push('ipc'));\n"
-        "setTimeout(() => console.log(ev.join(',')), 50);\n",
-        encoding="utf-8",
-    )
-    shim = Path(sandbox.__file__).with_name("node_shim.js")
-    out = subprocess.run(
-        ["node", "--require", str(shim), str(probe)], capture_output=True, text=True, timeout=30, check=True,
-    ).stdout.strip()
-    assert out == "cb:EPERM,close,overlapped,ipc"
-
-
-def test_install_node_shim_restores_a_tampered_copy_and_ignores_envs_without_it(tmp_path):
-    env = sandbox.build_env({}, tmp_path, None, platform="win32")
-    shim = tmp_path / ".gator" / "node-shim.js"
-    sandbox.install_node_shim(env)
-    original = shim.read_text(encoding="utf-8")
-    shim.write_text("tampered", encoding="utf-8")
-    sandbox.install_node_shim(env)
-    assert shim.read_text(encoding="utf-8") == original
-    sandbox.install_node_shim(sandbox.build_env({}, tmp_path / "other", None, platform="linux"))
-    assert not (tmp_path / "other").exists()
-
-
-def _link_dir(link, target):
-    try:
-        os.symlink(target, link, target_is_directory=True)
-    except OSError:
-        if sys.platform != "win32":
-            raise
-        subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(target)], check=True, capture_output=True)
-
-
-@pytest.mark.parametrize(
-    "plant", ["file_at_gator", "dir_at_shim", "read_only_shim", "link_at_gator", "hard_link_shim", "link_inside_dir"]
-)
-def test_install_node_shim_recovers_from_whatever_sandboxed_code_planted(tmp_path, plant):
-    env = sandbox.build_env({}, tmp_path, None, platform="win32")
-    gator, shim = tmp_path / ".gator", tmp_path / ".gator" / "node-shim.js"
-    outside = tmp_path / "outside"
-    outside.mkdir()
-    victim = outside / "victim.txt"
-    victim.write_text("keep", encoding="utf-8")
-    if plant == "hard_link_shim":
-        gator.mkdir()
-        os.link(victim, shim)
-    elif plant == "link_inside_dir":
-        shim.mkdir(parents=True)
-        _link_dir(shim / "escape", outside)
-    elif plant == "file_at_gator":
-        gator.write_text("x", encoding="utf-8")
-    elif plant == "dir_at_shim":
-        (shim / "sub").mkdir(parents=True)
-        (shim / "sub" / "f.txt").write_text("x", encoding="utf-8")
-    elif plant == "read_only_shim":
-        gator.mkdir()
-        shim.write_text("x", encoding="utf-8")
-        shim.chmod(stat.S_IREAD)
-    else:
-        _link_dir(gator, outside)
-    sandbox.install_node_shim(env)
-    assert "asyncNative" in shim.read_text(encoding="utf-8")
-    assert [p.name for p in outside.iterdir()] == ["victim.txt"]
-    assert victim.read_text(encoding="utf-8") == "keep"
 
 
 def test_build_env_posix(tmp_path):
@@ -195,4 +116,3 @@ def test_spec_bundles_sandbox_modules():
     for name in ("sandbox", "sandbox.policy", "sandbox.paths", "sandbox.approvals",
                  "sandbox.launcher_windows", "sandbox.launcher_macos", "sandbox.launcher_linux"):
         assert f'"{name}"' in spec
-    assert '"node_shim.js"' in spec

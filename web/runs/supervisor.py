@@ -285,7 +285,10 @@ class RunSupervisor:
                 handle.watcher.finish()
             message = f"The command could not be started ({type(failure).__name__})."
             result = {"error": message, "stdout": "", "stderr": "", "exit_code": -1}
-            record = self._terminal(run_id, "cancelled" if handle.cancelled else "failed_to_start", error=message)
+            lingering = {"teardown_failed": True} if getattr(failure, "teardown_failed", False) else {}
+            result.update(lingering)
+            record = self._terminal(run_id, "cancelled" if handle.cancelled else "failed_to_start",
+                                    error=message, facts=lingering)
             self._notify(run_id, on_done, result)
             return record, result
         output = f"{result.get('stdout') or ''}{result.get('stderr') or ''}"

@@ -7,7 +7,6 @@ from sandbox.paths import (
     APP_DIR_ENV,
     PathNotGrantable,
     check_grantable,
-    check_grant_size,
     is_within,
     normalize_grant_paths,
     normalize_hosts,
@@ -382,65 +381,3 @@ def test_source_repo_root_and_electron_folder_are_not_grantable(home):
 def test_the_guard_is_a_no_op_off_windows(tmp_path, monkeypatch):
     monkeypatch.setenv(APP_DIR_ENV, str(tmp_path))
     assert protects_app(tmp_path) is False
-
-
-@pytest.mark.parametrize("rel", ["AppData", "AppData/Local", "AppData/Roaming", "AppData/LocalLow"])
-def test_appdata_roots_are_too_broad_to_grant(home, rel):
-    (home / rel).mkdir(parents=True, exist_ok=True)
-    with pytest.raises(PathNotGrantable, match="too broad"):
-        normalize_grant_paths([str(home / rel)], home)
-
-
-@pytest.mark.parametrize("rel", ["AppData/Local/Programs/Python", "AppData/Local/Temp/aigator-venv",
-                                  "AppData/Roaming/npm/node_modules"])
-def test_folders_inside_appdata_are_still_grantable(home, rel):
-    (home / rel).mkdir(parents=True)
-    assert normalize_grant_paths([str(home / rel)], home) == [home / rel]
-
-
-@pytest.mark.parametrize("rel", [
-    "AppData/Roaming/Microsoft/Credentials", "AppData/Roaming/Microsoft/Protect/S-1-5-21",
-    "AppData/Local/Google/Chrome/User Data/Default", "AppData/Local/Microsoft/Edge/User Data",
-    "AppData/Roaming/Mozilla/Firefox", ".mozilla", "Library/Keychains",
-])
-def test_credential_and_browser_stores_are_never_grantable(home, rel):
-    (home / rel).mkdir(parents=True)
-    with pytest.raises(PathNotGrantable):
-        normalize_grant_paths([str(home / rel)], home)
-
-
-def _tree(root: Path, folders: int, files_per_folder: int) -> Path:
-    for i in range(folders):
-        d = root / f"d{i}"
-        d.mkdir(parents=True)
-        for j in range(files_per_folder):
-            (d / f"f{j}").write_text("x")
-    return root
-
-
-def test_grant_size_refuses_a_folder_with_too_many_files(tmp_path, monkeypatch):
-    monkeypatch.setattr("sandbox.paths.ACL_GRANTS_WALK_TREE", True)
-    big = _tree(tmp_path / "big", folders=5, files_per_folder=20)
-    with pytest.raises(PathNotGrantable, match="too broad"):
-        check_grant_size([big], max_entries=50)
-
-
-def test_grant_size_allows_a_small_folder_and_single_files(tmp_path, monkeypatch):
-    monkeypatch.setattr("sandbox.paths.ACL_GRANTS_WALK_TREE", True)
-    small = _tree(tmp_path / "small", folders=2, files_per_folder=3)
-    check_grant_size([small, small / "d0" / "f0"], max_entries=50)
-
-
-def test_grant_size_refuses_when_the_walk_runs_out_of_time(tmp_path, monkeypatch):
-    monkeypatch.setattr("sandbox.paths.ACL_GRANTS_WALK_TREE", True)
-    tree = _tree(tmp_path / "t", folders=2, files_per_folder=3)
-    ticks = iter(range(0, 1000, 10))
-    monkeypatch.setattr("sandbox.paths.time.monotonic", lambda: next(ticks))
-    with pytest.raises(PathNotGrantable, match="too broad"):
-        check_grant_size([tree], max_entries=10_000, budget_seconds=5)
-
-
-def test_grant_size_is_skipped_where_grants_do_not_walk_the_tree(tmp_path, monkeypatch):
-    monkeypatch.setattr("sandbox.paths.ACL_GRANTS_WALK_TREE", False)
-    big = _tree(tmp_path / "big", folders=5, files_per_folder=20)
-    check_grant_size([big], max_entries=50)

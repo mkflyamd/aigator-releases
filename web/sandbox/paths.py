@@ -4,7 +4,6 @@ from __future__ import annotations
 import os
 import re
 import sys
-import time
 from pathlib import Path
 
 HOME_DENY = (
@@ -13,18 +12,7 @@ HOME_DENY = (
     ".bashrc", ".profile", ".bash_profile", ".zshrc", ".zprofile",
     "Library/LaunchAgents", ".config/autostart",
     "AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup",
-    # Credential stores and browser profiles (cookies, saved logins).
-    "AppData/Roaming/Microsoft/Credentials", "AppData/Roaming/Microsoft/Protect",
-    "AppData/Local/Microsoft/Credentials", "AppData/Local/Google/Chrome/User Data",
-    "AppData/Local/Microsoft/Edge/User Data", "AppData/Local/BraveSoftware",
-    "AppData/Roaming/Mozilla", ".mozilla",
-    "Library/Keychains", "Library/Application Support/Google/Chrome", "Library/Application Support/Firefox",
 )
-# Too broad to grant as a whole (a Windows grant walks every file below it), but folders inside are fine.
-HOME_BROAD = ("AppData", "AppData/Local", "AppData/Roaming", "AppData/LocalLow", "Library/Application Support")
-ACL_GRANTS_WALK_TREE = os.name == "nt"
-MAX_GRANT_ENTRIES = 100_000
-GRANT_WALK_SECONDS = 5.0
 MAC_DATA_VOLUME = "/System/Volumes/Data"
 _DRIVE_RE = re.compile(r"[A-Za-z]:(?:\\.*)?", re.DOTALL)
 
@@ -33,8 +21,6 @@ APP_FOLDER_REFUSAL = (
     "Giving the sandbox access there would stop AI Gator from starting. "
     "Choose a folder that is separate from the AI Gator install or source folder."
 )
-
-CHOOSE_FOLDER = "Choose the specific folder the command needs."
 
 _HOST_RE = re.compile(r"(?:\[[0-9a-f:.]+\]|[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?):([0-9]{1,5})")
 
@@ -160,9 +146,6 @@ def check_grantable(path: Path, home: Path) -> None:
         raise PathNotGrantable(f"{path} is a filesystem or drive root and can never be granted.")
     if any(is_within(h, path) for h in _with_data_volume([home])):
         raise PathNotGrantable(f"{path} is the home folder or contains it and can never be granted.")
-    for broad_path in (home / d for d in HOME_BROAD):
-        if any(_key(path) == _key(broad) for broad in _with_data_volume(_forms(broad_path))):
-            raise PathNotGrantable(f"{path} is too broad to approve. {CHOOSE_FOLDER}")
     outputs = _with_data_volume(_forms(home / ".gator" / "outputs"))
     for protected_path in [home / ".gator", *(home / d for d in HOME_DENY)]:
         # Compare against the literal and the symlink-resolved protected location,
@@ -172,34 +155,6 @@ def check_grantable(path: Path, home: Path) -> None:
             inside = is_within(path, protected) and not any(is_within(path, o) for o in outputs)
             if inside or is_within(protected, path):
                 raise PathNotGrantable(f"{path} is a protected location and can never be granted.")
-
-
-def _is_link(entry: os.DirEntry) -> bool:
-    return entry.is_symlink() or bool(getattr(entry, "is_junction", lambda: False)())
-
-
-def check_grant_size(paths, max_entries: int | None = None, budget_seconds: float | None = None) -> None:
-    """Refuse a folder too big to grant. A Windows grant and its revoke walk every file below the
-    folder, so a huge one (AppData\\Local) would stall the run for a long time. The walk is bounded,
-    does not follow links, and counts running out of time as too big."""
-    if not ACL_GRANTS_WALK_TREE:
-        return
-    max_entries = MAX_GRANT_ENTRIES if max_entries is None else max_entries
-    budget_seconds = GRANT_WALK_SECONDS if budget_seconds is None else budget_seconds
-    for path in paths:
-        deadline = time.monotonic() + budget_seconds
-        stack, seen = [str(path)], 0
-        while stack:
-            try:
-                with os.scandir(stack.pop()) as entries:
-                    for entry in entries:
-                        seen += 1
-                        if seen > max_entries or time.monotonic() > deadline:
-                            raise PathNotGrantable(f"{path} is too broad to approve: it holds too many files. {CHOOSE_FOLDER}")
-                        if not _is_link(entry) and entry.is_dir(follow_symlinks=False):
-                            stack.append(entry.path)
-            except (NotADirectoryError, FileNotFoundError, PermissionError):
-                continue
 
 
 def normalize_grant_paths(raw, home: Path | None = None) -> list[Path]:

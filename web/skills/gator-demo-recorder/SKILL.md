@@ -74,7 +74,6 @@ Every statement about a video's duration, a moment in it, or an edit must come f
 - **After a cut or speed-up:** narration `start_at` values were written for the old timeline. Move each one through the result's `time_map` (find the entry whose `old_sec` contains it and map it into `new_sec`), reword or drop any segment whose moment was removed, and render the Phase 3 widget again. The earlier approval is stale, so the user must approve again before `demo_merge_narration`.
 - **Narration merge:** `demo_merge_narration` is the only way to produce the final video. Quote `video_extended_by_sec`, `video_stream_sec`, `audio_stream_sec` and `intro` from its result.
 - **Intro wording:** "Hold" freezes the first frame; "Title card" shows the title text on a plain card. Use the word that matches `intro.mode`.
-- **Visual checks:** a claim about how something looks (layout, overlap, text cut off, a scene "looks fine") covers only the frames you passed to `describe_images` this turn. Report them by time ("viewed at 0:12, 0:40, 1:05") and name any scenes that were not viewed instead of saying the whole video was checked. Use "verified" only for tool-measured values such as durations and stream lengths, never for what a frame looks like.
 - **On any `error`:** relay `message` and the measured numbers, offer the listed `options`, and do not claim success.
 
 ---

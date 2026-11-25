@@ -246,6 +246,19 @@ def test_a_launcher_refusal_reaches_the_caller_unchanged_and_the_run_is_recorded
     assert sup.list("tab-1")[0]["state"] == "failed_to_start"
 
 
+def test_a_refusal_that_left_grants_behind_is_still_a_teardown_fact_on_the_record(sup, monkeypatch):
+    def refuse(req):
+        exc = sandbox.SandboxUnavailable("timed out granting")
+        exc.teardown_failed = True
+        raise exc
+
+    monkeypatch.setattr(sandbox, "launch_sandboxed", refuse)
+    with pytest.raises(sandbox.SandboxUnavailable):
+        inline.launch_supervised(_request(), context_id="tab-1", kind="shell")
+    record = sup.list("tab-1")[0]
+    assert record["state"] == "failed_to_start" and record["facts"]["teardown_failed"] is True
+
+
 def test_a_supervised_launch_over_the_cap_is_refused_before_the_launcher_runs(sup, monkeypatch):
     sleepers = [Sleeper(), Sleeper()]
     threads = [_in_thread(lambda s=s, i=i: _inline(sup, s, turn=f"t{i}")) for i, s in enumerate(sleepers)]
