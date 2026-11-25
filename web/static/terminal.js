@@ -281,7 +281,7 @@
 
   function _renderTabs() {
     if (!STATE.tabsEl) return;
-    // Wipe everything except the + button (which we'll re-append last)
+    // Rebuild all tabs; the + button is a sibling of tabsEl, so it is not touched here
     STATE.tabsEl.innerHTML = '';
     STATE.sessions.forEach((s) => {
       const tab = _el('div', { className: 'gtp-tab' + (s.id === STATE.activeId ? ' active' : '') });
