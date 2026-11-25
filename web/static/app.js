@@ -16930,7 +16930,8 @@ function _showConfirmModal(title, body, confirmLabel, onConfirm, opts) {
   const box = overlay.querySelector('.confirm-modal-box');
   const close = () => {
     overlay.remove();
-    if (invoker && typeof invoker.focus === 'function' && document.contains(invoker)) invoker.focus();
+    if (invoker && typeof invoker.focus === 'function' && document.contains(invoker))
+      invoker.focus();
   };
   overlay.querySelector('.confirm-modal-cancel').addEventListener('click', close);
   overlay.querySelector('.confirm-modal-ok').addEventListener('click', () => {

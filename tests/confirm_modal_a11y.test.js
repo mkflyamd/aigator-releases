@@ -60,7 +60,14 @@ function setup({ invokerInDom = true } = {}) {
 }
 
 function key(k, extra = {}) {
-  return { key: k, prevented: false, preventDefault() { this.prevented = true; }, ...extra };
+  return {
+    key: k,
+    prevented: false,
+    preventDefault() {
+      this.prevented = true;
+    },
+    ...extra,
+  };
 }
 
 // destructive dialogs start on Cancel; others keep the old default
@@ -105,7 +112,9 @@ function key(k, extra = {}) {
 {
   const s = setup();
   let sawRemoved = null;
-  s.ctx._showConfirmModal('t', 'b', 'Go', () => (sawRemoved = s.overlay.removed), { cancelFirst: true });
+  s.ctx._showConfirmModal('t', 'b', 'Go', () => (sawRemoved = s.overlay.removed), {
+    cancelFirst: true,
+  });
   s.ok.listeners.click();
   assert.strictEqual(sawRemoved, true);
 }
