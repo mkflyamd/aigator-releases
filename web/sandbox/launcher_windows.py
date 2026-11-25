@@ -29,7 +29,16 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from .paths import APP_FOLDER_REFUSAL, protects_app
-from . import MAX_RUN_SECONDS, RawArg, SandboxPathNotGrantable, SandboxRequest, SandboxResult, SandboxRunError, SandboxUnavailable
+from . import (
+    MAX_RUN_SECONDS,
+    RawArg,
+    SandboxPathNotGrantable,
+    SandboxRequest,
+    SandboxResult,
+    SandboxRunError,
+    SandboxUnavailable,
+    install_node_shim,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -60,6 +69,21 @@ _RUN_LOCK = threading.Lock()
 _LEDGER_LOCK = threading.Lock()
 _RUN_LOCK_WAIT = float(MAX_RUN_SECONDS + 120)
 _LEDGER_LOCK_WAIT = 120.0
+
+# icacls applies a grant or revoke to every file under a folder, so on a huge folder it can run for an hour.
+# Every call is bounded; what a bounded call could not finish is recorded and finished in the background.
+ICACLS_TIMED_OUT = -9
+QUERY_SECONDS = 30.0      # reading one folder's DACL
+GRANT_SECONDS = 120.0     # one per-run grant or revoke inside a turn
+REINHERIT_SECONDS = 300.0
+REPAIR_SECONDS = 3600.0   # one revoke in the background repair, which no turn waits for
+SETUP_SECONDS = 180.0     # all grants of one launch
+TEARDOWN_SECONDS = 180.0  # all revokes of one launch
+SWEEP_SECONDS = 120.0     # all stale-entry revokes before a launch or at startup
+
+_REPAIRING: set[tuple[str, str]] = set()  # (sid, path) entries the repair thread is working on
+_REPAIR_GUARD = threading.Lock()
+_REPAIR_THREAD: threading.Thread | None = None
 _API: SimpleNamespace | None = None
 _LEDGER_VERSION = 2
 
@@ -380,21 +404,25 @@ def _scrub_container(sid: str) -> None:
 
 # ── icacls and the grant ledger ─────────────────────────────────────────────
 
-def _icacls(path: Path, *args: str) -> tuple[int, str]:
+def _icacls(path: Path, *args: str, timeout: float = QUERY_SECONDS) -> tuple[int, str]:
+    """(returncode, output); ICACLS_TIMED_OUT when icacls was killed for outlasting its timeout."""
     _check_icacls_path(str(path))
-    r = subprocess.run(
-        [_icacls_exe(), str(path), *args], capture_output=True, text=True, errors="replace",
-        creationflags=CREATE_NO_WINDOW,
-    )
+    try:
+        r = subprocess.run(
+            [_icacls_exe(), str(path), *args], capture_output=True, text=True, errors="replace",
+            creationflags=CREATE_NO_WINDOW, timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return ICACLS_TIMED_OUT, f"icacls timed out after {timeout:g}s"
     return r.returncode, (r.stdout + r.stderr).strip()
 
 
-def _grant(path: Path, sid: str, perm: str) -> tuple[int, str]:
-    return _icacls(path, "/grant", ace_spec(sid, perm, Path(path).is_dir()), "/Q")
+def _grant(path: Path, sid: str, perm: str, timeout: float = GRANT_SECONDS) -> tuple[int, str]:
+    return _icacls(path, "/grant", ace_spec(sid, perm, Path(path).is_dir()), "/Q", timeout=timeout)
 
 
-def _revoke(path: Path, sid: str) -> tuple[int, str]:
-    return _icacls(path, "/remove:g", f"*{sid}", "/Q")
+def _revoke(path: Path, sid: str, timeout: float = GRANT_SECONDS) -> tuple[int, str]:
+    return _icacls(path, "/remove:g", f"*{sid}", "/Q", timeout=timeout)
 
 
 # ── Reading a DACL without side effects ─────────────────────────────────────
@@ -539,11 +567,12 @@ def _ledger_load() -> dict:
     scratch = data.get("scratch") if isinstance(data.get("scratch"), dict) else {}
     born = data.get("runtime_born") if isinstance(data.get("runtime_born"), dict) else {}
     packages = data.get("package_children") if isinstance(data.get("package_children"), dict) else {}
+    needs_repair = data.get("needs_repair") if isinstance(data.get("needs_repair"), list) else []
     if data.get("v") != _LEDGER_VERSION:
         # Grants recorded before creation times were kept cannot be told from stale ones: grant them again.
         runtime, born = {}, {}
     return {"runtime": runtime, "per_run": per_run, "scratch": scratch, "runtime_born": born,
-            "package_children": packages}
+            "package_children": packages, "needs_repair": needs_repair}
 
 
 def _ledger_save(data: dict) -> None:
@@ -567,9 +596,30 @@ def _ledger_remove_per_run(sid: str, path: Path) -> None:
     with _ledger_txn():
         data = _ledger_load()
         entry = [sid, str(path)]
-        if entry in data["per_run"]:
-            data["per_run"].remove(entry)
+        changed = False
+        for key in ("per_run", "needs_repair"):
+            if entry in data[key]:
+                data[key].remove(entry)
+                changed = True
+        if changed:
             _ledger_save(data)
+
+
+def _ledger_mark_needs_repair(sid: str, path: Path) -> None:
+    """Record that a grant or revoke on path was cut short, so ACEs may remain below the root.
+
+    Such an entry is only cleared by a revoke that completes: a root whose DACL looks clean proves nothing
+    about the files under it."""
+    with _ledger_txn():
+        data = _ledger_load()
+        entry = [sid, str(path)]
+        if entry not in data["needs_repair"]:
+            data["needs_repair"].append(entry)
+            _ledger_save(data)
+
+
+def _needs_repair(sid: str, path: Path) -> bool:
+    return [sid, str(path)] in _ledger_load()["needs_repair"]
 
 
 def _born(path: Path) -> int | None:
@@ -633,7 +683,7 @@ def _reinherit(path: Path) -> tuple[int, str]:
     A file that was moved into place (pip unpacks a wheel in a temp folder and moves it) keeps the
     temp folder's ACL, so it never receives the sandbox ACE the destination folder carries. Inherited
     ACEs are removed with the parent's, so a later revoke of the runtime grant still cleans these up."""
-    return _icacls(path, "/inheritance:e", "/T", "/C", "/Q")
+    return _icacls(path, "/inheritance:e", "/T", "/C", "/Q", timeout=REINHERIT_SECONDS)
 
 
 def _site_package_dirs() -> list[Path]:
@@ -704,21 +754,29 @@ def _ensure_scratch_grant(sid: str, path: Path) -> bool:
         return True
 
 
-def _revoke_ok(sid: str, path: Path) -> bool:
+def _revoke_ok(sid: str, path: Path, timeout: float | None = None) -> bool:
     """Revoke the SID's ACE on path; True when it is gone (or the path no longer exists).
 
     The DACL decides, not icacls's exit code: a ledger entry whose ACE was never written (the write-ahead
     entry of a grant that failed) or is already gone counts as revoked, and a revoke that errors but leaves no
-    ACE behind counts as done. Only an ACE that is still there keeps the entry."""
+    ACE behind counts as done. Only an ACE that is still there keeps the entry.
+
+    An entry flagged as cut short (a timed-out grant or revoke) is the exception: its root can look clean while
+    files below still carry the ACE, so only a revoke that completes clears it. A revoke that times out here
+    flags the entry."""
+    options = {} if timeout is None else {"timeout": timeout}
     try:
         if not Path(path).exists():
             return True
-        if _ace_present(path, sid) is False:
+        cut_short = _needs_repair(sid, path)
+        if not cut_short and _ace_present(path, sid) is False:
             return True
-        rc, _out = _revoke(path, sid)
+        rc, _out = _revoke(path, sid, **options)
         if rc == 0:
             return True
-        if _ace_present(path, sid) is False:
+        if rc == ICACLS_TIMED_OUT:
+            _ledger_mark_needs_repair(sid, path)
+        elif not cut_short and _ace_present(path, sid) is False:
             return True
     except Exception as exc:
         _log.warning("sandbox: revoke failed for a per-run grant (%s); entry kept for the next sweep", type(exc).__name__)
@@ -727,24 +785,71 @@ def _revoke_ok(sid: str, path: Path) -> bool:
     return False
 
 
-def _sweep_locked() -> tuple[int, int]:
-    """(cleared, remaining) per-run ledger entries. The caller holds _RUN_LOCK (not reentrant)."""
-    with _ledger_txn():
-        data = _ledger_load()
-        entries = list(data["per_run"])
-        kept = [[sid, path] for sid, path in entries if not _revoke_ok(sid, Path(path))]
-        if entries:
-            data["per_run"] = kept
-            _ledger_save(data)
-        return len(entries) - len(kept), len(kept)
+def _sweep_locked(budget: float | None = None) -> tuple[int, int]:
+    """(cleared, remaining) per-run ledger entries. The caller holds _RUN_LOCK (not reentrant).
+
+    Stops starting revokes once the budget is spent. Entries already cut short, or being repaired in the
+    background, are left alone: retrying them here would spend the turn on the same stall."""
+    deadline = time.monotonic() + (SWEEP_SECONDS if budget is None else budget)
+    data = _ledger_load()
+    cut_short = {tuple(entry) for entry in data["needs_repair"]}
+    cleared = 0
+    for sid, path in [tuple(entry) for entry in data["per_run"]]:
+        if (sid, path) in cut_short or (sid, path) in _REPAIRING:
+            continue
+        if time.monotonic() >= deadline:
+            break
+        if _revoke_ok(sid, Path(path)):
+            _ledger_remove_per_run(sid, Path(path))
+            cleared += 1
+    return cleared, len(_ledger_load()["per_run"])
+
+
+def _repair_stale_grants() -> None:
+    """Finish the revokes a turn could not: one at a time, each with a long timeout, no lock held meanwhile.
+
+    The entries are claimed under the run lock, so no run is live. A launch that arrives meanwhile sees the
+    claimed entries and is refused at once; the repair ends when each is revoked or has failed again."""
+    with _run_lock():
+        claimed = [(sid, path) for sid, path in (tuple(e) for e in _ledger_load()["per_run"])]
+        _REPAIRING.update(claimed)
+    try:
+        for sid, path in claimed:
+            try:
+                if _revoke_ok(sid, Path(path), timeout=REPAIR_SECONDS):
+                    _ledger_remove_per_run(sid, Path(path))
+            except Exception as exc:  # one stuck entry must not stop the others
+                _log.warning("sandbox: background repair of a grant failed (%s)", type(exc).__name__)
+    finally:
+        _REPAIRING.difference_update(claimed)
+
+
+def _repair_main() -> None:
+    try:
+        _repair_stale_grants()
+    except Exception as exc:
+        _log.warning("sandbox: background grant repair stopped (%s)", type(exc).__name__)
+
+
+def _start_repair() -> None:
+    """Run the background repair unless one is already running."""
+    global _REPAIR_THREAD
+    with _REPAIR_GUARD:
+        if _REPAIR_THREAD is not None and _REPAIR_THREAD.is_alive():
+            return
+        _REPAIR_THREAD = threading.Thread(target=_repair_main, name="sandbox-grant-repair", daemon=True)
+        _REPAIR_THREAD.start()
 
 
 def sweep_stale_grants() -> int:
     """Revoke per-run grants left by a crashed run. Returns the number of entries cleared.
 
-    An entry whose revoke failed stays in the ledger so a later sweep retries it."""
+    An entry whose revoke failed or timed out stays in the ledger and is handed to the background repair."""
     with _run_lock():
-        return _sweep_locked()[0]
+        cleared, remaining = _sweep_locked()
+    if remaining:
+        _start_repair()
+    return cleared
 
 
 def revoke_runtime_grants() -> int:
@@ -967,12 +1072,13 @@ def launch(req: SandboxRequest) -> SandboxResult:
         # A failed revoke leaves a live ACE for the shared SID that every later run would inherit.
         _cleared, remaining = _sweep_locked()
         if remaining:
+            _start_repair()
             stuck = ", ".join(sorted({path for _sid, path in _ledger_load()["per_run"]}))
             raise SandboxUnavailable(
                 "Access granted to an earlier sandboxed run could not be removed from "
-                f"{stuck}, so the sandbox is paused until it can be. Restarting AI Gator retries the removal; "
-                "if it keeps failing, fix the permissions on that folder (the sandbox's access entry must be "
-                "removable by your account)."
+                f"{stuck} yet, so the sandbox is paused. AI Gator keeps retrying in the background; try again "
+                "in a few minutes. If it keeps failing, restart AI Gator and fix the permissions on that folder "
+                "(the sandbox's access entry must be removable by your account)."
             )
         try:
             psid, sid = ensure_profile(PROFILE_NAME + SHELL_PROFILE_SUFFIX if req.scratch_path else PROFILE_NAME)
@@ -999,22 +1105,43 @@ def launch(req: SandboxRequest) -> SandboxResult:
                 raise SandboxPathNotGrantable(blocked)
             _scrub_container(sid)
             attempted: list[Path] = []
+            setup_deadline = time.monotonic() + SETUP_SECONDS
             try:
                 for path, perm in per_run:
+                    if time.monotonic() >= setup_deadline:
+                        raise SandboxUnavailable(
+                            "Setting up access for the command took too long, so it did not run. "
+                            "Ask again with a smaller folder."
+                        )
                     _ledger_add_per_run(sid, path)
                     attempted.append(path)
                     rc, out = _grant(path, sid, perm)
+                    if rc == ICACLS_TIMED_OUT:
+                        _ledger_mark_needs_repair(sid, path)
+                        raise SandboxUnavailable(
+                            f"Setting up access to {path} timed out, so the command did not run. Some permissions "
+                            "on that folder may have changed. Ask again with a smaller folder."
+                        )
                     if rc != 0:
                         raise SandboxUnavailable(f"The sandbox could not be given access to {path} ({out}).")
+                try:
+                    install_node_shim(req.env)
+                except OSError as exc:
+                    raise SandboxUnavailable(f"The sandbox could not prepare its Node preload ({exc}).") from exc
                 return _run_contained(req.argv, req.cwd, req.env, psid, req.timeout, req.network)
             finally:
+                teardown_deadline = time.monotonic() + TEARDOWN_SECONDS
                 for path in attempted:
-                    # A failed revoke keeps its ledger entry so the startup sweep retries it.
+                    if time.monotonic() >= teardown_deadline:
+                        break  # the rest keep their ledger entries and go to the background repair
+                    # A failed revoke keeps its ledger entry so the repair retries it.
                     try:
                         if _revoke_ok(sid, path):
                             _ledger_remove_per_run(sid, path)
                     except Exception as exc:  # one failure must not skip the other revokes or the scrub
                         _log.warning("sandbox: could not update the grant ledger (%s)", type(exc).__name__)
                 _scrub_container(sid)
+                if _ledger_load()["per_run"]:
+                    _start_repair()
         finally:
             _api().adv.FreeSid(psid)

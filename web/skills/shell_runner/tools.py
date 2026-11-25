@@ -18,7 +18,7 @@ from sandbox import approvals as sandbox_approvals
 import permissions
 from sandbox import host_requests, saved_permissions, task_grants
 from sandbox.command_programs import programs_in
-from sandbox.paths import PathNotGrantable, is_within, normalize_grant_paths
+from sandbox.paths import PathNotGrantable, check_grant_size, is_within, normalize_grant_paths
 from sandbox.policy import load_policy
 
 from proc_utils import (
@@ -678,6 +678,7 @@ def _locate_cwd(cwd: str, policy, cr):
         return cr._FS_REFUSED_MSG
     try:
         (project,) = normalize_grant_paths([cwd])
+        check_grant_size([project])
     except (PathNotGrantable, ValueError) as exc:
         return f"{exc} Do not retry with this value."
     if not project.is_dir():
