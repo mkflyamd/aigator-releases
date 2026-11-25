@@ -2432,7 +2432,7 @@ async def chat(req: ChatRequest):
                     execute_tool=execute_tool, COM_BOUND_TOOLS=shared.COM_BOUND_TOOLS,
                     TOOL_STATUS=shared.TOOL_STATUS, _tool_toast=_tool_toast,
                     _SLACK_SAFE_MSG=shared._SLACK_SAFE_MSG,
-                    context_id=context_id,
+                    context_id=context_id, task_id=task_id,
                 )
                 async for chunk in loop:
                     if chunk.startswith("data: ") and not chunk.startswith("data: [DONE]"):
@@ -2716,6 +2716,11 @@ async def chat(req: ChatRequest):
                 await asyncio.to_thread(get_queue().restore, context_id, taken)
             except QueueError:
                 _log.warning("[chat] queued message %s could not be put back", req.queued_id)
+                return JSONResponse(
+                    {"error": "queue_restore_failed",
+                     "detail": "Your queued message could not be queued back. Please send it again."},
+                    status_code=503,
+                )
             return _turn_busy(_live)
     task_id = str(_uuid.uuid4())
     shared.chat_task_store.create_task(task_id, context_id)

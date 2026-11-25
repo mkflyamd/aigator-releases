@@ -1,8 +1,10 @@
 """Messages typed while a turn runs wait in a per-conversation queue and are sent one at a time."""
 
 import asyncio
+import json
 import os
 import sys
+import types
 import uuid
 
 import pytest
@@ -495,3 +497,125 @@ def test_a_verifier_that_returns_nothing_flags_the_turn_as_failed():
     chunks = asyncio.run(go())
     assert any('"stalled": true' in c for c in chunks)
     assert shared.chat_task_store.had_error(task_id) is True
+
+
+# ── terminal tool failures, the direct router, and restore edge cases ─────────
+
+class _ToolCallingProvider:
+    context_window = 200_000
+
+    def __init__(self):
+        self.calls = 0
+
+    def normalize_tool_schema(self, tool):
+        return tool
+
+    async def stream_turn(self, model, system, messages, tools):
+        self.calls += 1
+        if self.calls == 1 and self.three_agent:
+            yield {"type": "text_delta", "text": "Use Slack."}
+            yield {"type": "done", "stop_reason": "end_turn", "tool_calls": [], "raw_content": [], "usage": {}}
+            return
+        yield {
+            "type": "done", "stop_reason": "tool_use",
+            "tool_calls": [types.SimpleNamespace(name="slack_search_users", inputs={}, id="t1")],
+            "raw_content": [], "usage": {},
+        }
+
+    def build_assistant_message(self, raw):
+        return {"role": "assistant", "content": raw}
+
+    def build_tool_result_message(self, calls, results):
+        return {"role": "user", "content": json.dumps(results)}
+
+
+def _run_tool_loop(monkeypatch, tool_result, three_agent):
+    import agent_loop
+
+    flagged = []
+    monkeypatch.setattr(agent_loop, "_flag_turn_error", lambda task_id: flagged.append(task_id))
+    provider = _ToolCallingProvider()
+    provider.three_agent = three_agent
+    tools = [{"name": "slack_search_users", "description": "", "input_schema": {"type": "object"}}]
+
+    async def execute_tool(name, inputs):
+        return tool_result
+
+    async def collect():
+        if three_agent:
+            gen = agent_loop.run_three_agent_loop(
+                provider, "model", "system", [{"role": "user", "content": "find Ada"}], tools,
+                execute_tool, set(), {}, lambda *_: None, "safe", token_budget=0, task_id="turn-1",
+                context_id="ctx-1")
+        else:
+            gen = agent_loop._single_agent_loop(
+                provider, "model", "system", [{"role": "user", "content": "find Ada"}], tools,
+                execute_tool, set(), {}, lambda *_: None, "safe", task_id="turn-1", context_id="ctx-1")
+        return [chunk async for chunk in gen]
+
+    chunks = asyncio.run(collect())
+    assert chunks[-1] == "data: [DONE]\n\n"
+    return flagged
+
+
+@pytest.mark.parametrize("three_agent", [False, True])
+def test_a_terminal_tool_failure_with_a_message_flags_the_turn(monkeypatch, three_agent):
+    assert _run_tool_loop(monkeypatch, {"error": "team_access_not_granted"}, three_agent) == ["turn-1"]
+
+
+def test_the_direct_router_turn_is_tied_to_its_task_so_a_failure_can_pause_the_queue(queue, monkeypatch, api):
+    import agent_loop
+    import skill_router
+
+    seen = {}
+
+    async def fake_loop(*args, **kwargs):
+        seen.update(kwargs)
+        yield "data: [DONE]\n\n"
+
+    async def fake_direct(intent, execute_tool, user_message=""):
+        return {"ok": True, "data": {"rows": []}}
+
+    async def subscriber_ready(task_id, timeout):
+        return True
+
+    monkeypatch.setattr(shared.chat_task_store, "wait_for_subscriber", subscriber_ready)
+    monkeypatch.setattr(skill_router, "match_intent", lambda message: {"tool": "list_events"})
+    monkeypatch.setattr(skill_router, "execute_direct", fake_direct)
+    monkeypatch.setattr(agent_loop, "_single_agent_loop", fake_loop)
+    ctx = f"q-{uuid.uuid4().hex}"
+    task_id = api.post("/api/chat", json={"message": "what is on today", "context_id": ctx}).json()["task_id"]
+    assert _wait_for(lambda: shared.chat_task_store.is_done(task_id))
+    assert seen.get("task_id") == task_id and seen.get("context_id") == ctx
+
+
+def test_a_message_that_cannot_be_put_back_is_reported_not_called_busy(queue, monkeypatch, api):
+    _hold_turns_open(monkeypatch)
+    ctx = f"q-{uuid.uuid4().hex}"
+    queue.enqueue(ctx, "a", _msg("first"))
+    real_take = queue.take
+
+    def take_then_a_typed_send_wins(context_id, item_id):
+        taken = real_take(context_id, item_id)
+        shared.chat_task_store.create_task("typed-send", context_id)
+        return taken
+
+    def restore_fails(context_id, taken):
+        raise QueueError(503, "queue unavailable")
+
+    monkeypatch.setattr(queue, "take", take_then_a_typed_send_wins)
+    monkeypatch.setattr(queue, "restore", restore_fails)
+    resp = api.post("/api/chat", json={"message": "first", "context_id": ctx, "queued_id": "a"})
+    assert resp.status_code == 503
+    assert resp.json()["error"] == "queue_restore_failed" and "send it again" in resp.json()["detail"]
+    shared.chat_task_store.mark_done("typed-send")
+
+
+def test_a_restored_message_stays_ahead_of_one_queued_while_it_was_out(queue):
+    queue.enqueue("c", "a", _msg("first"))
+    taken = queue.take("c", "a")
+    queue.enqueue("c", "b", _msg("newer"))
+    queue.enqueue("c", "c", _msg("newest"))
+    queue.restore("c", taken)
+    assert [i["id"] for i in queue.snapshot("c")["items"]] == ["a", "b", "c"]
+    assert queue.head("c")["payload"]["text"] == "first"

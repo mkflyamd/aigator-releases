@@ -174,9 +174,16 @@ class MessageQueue:
 
     def restore(self, context_id: str, taken: dict) -> None:
         """Put a taken message back in its original place (same id, same order) because the send did not happen."""
-        self._run(lambda conn: conn.execute(
-            "INSERT OR IGNORE INTO queue (id, context_id, seq, created_at, text, payload, attachments) VALUES (?,?,?,?,?,?,?)",
-            (taken["id"], context_id, taken["seq"], taken["created_at"], taken["text"], taken["payload"], taken["attachments"])))
+        def work(conn):
+            if conn.execute("SELECT 1 FROM queue WHERE id=?", (taken["id"],)).fetchone():
+                return
+            # A newer message may have taken this slot while the first was out; push it and what follows back.
+            conn.execute("UPDATE queue SET seq = seq + 1 WHERE context_id=? AND seq >= ?", (context_id, taken["seq"]))
+            conn.execute(
+                "INSERT INTO queue (id, context_id, seq, created_at, text, payload, attachments) VALUES (?,?,?,?,?,?,?)",
+                (taken["id"], context_id, taken["seq"], taken["created_at"], taken["text"], taken["payload"],
+                 taken["attachments"]))
+        self._run(work)
 
     def consume(self, context_id: str, item_id: str) -> bool:
         return self.take(context_id, item_id) is not None

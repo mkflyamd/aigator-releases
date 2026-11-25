@@ -10478,7 +10478,7 @@ async function _queueComposerMessage() {
     input.querySelector('.chip-person')
   ) {
     _showConnectivityToast(
-      'Jira attachments, pinned references and @mentions cannot be queued. Send it when the reply finishes.',
+      'Jira attachments, pinned references and @mentions cannot be queued. Send it once the reply has finished and the queue is empty (resume or clear a paused queue first).',
       'warn',
     );
     return;

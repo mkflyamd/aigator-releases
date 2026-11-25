@@ -1710,6 +1710,7 @@ async def _single_agent_loop(
         )
         if _terminal_failure or _legacy_terminal:
             if _terminal_failure:
+                _flag_turn_error(task_id)
                 yield f"data: {json.dumps({'text': _terminal_failure['user_message']})}\n\n"
             yield f"data: {json.dumps({'usage': {'input_tokens': _total_input, 'output_tokens': _total_output}})}\n\n"
             await _log_turn_end_safe(
@@ -2225,6 +2226,7 @@ async def run_three_agent_loop(
                 gather_task.cancel()
         _terminal_failure = _terminal_tool_failure(results)
         if _terminal_failure:
+            _flag_turn_error(task_id)
             yield f"data: {json.dumps({'text': _terminal_failure['user_message']})}\n\n"
             yield f"data: {json.dumps({'usage': {'input_tokens': _total_input, 'output_tokens': _total_output}})}\n\n"
             await _log_turn_end_safe(
