@@ -35,7 +35,7 @@ from pty_spawn import spawn_pty
 
 logger = logging.getLogger("pty_host")
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2  # 2: "list" reports each session's child pid, which session takeover relies on
 _OUT_PIECE_CHARS = 64 * 1024
 _LINE_LIMIT = 8 * 1024 * 1024
 _REAP_INTERVAL = 30.0

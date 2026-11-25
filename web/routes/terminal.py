@@ -139,6 +139,8 @@ def pty_pid_map(strict: bool = False) -> dict[int, str]:
                 logger.warning("pty_pid_map: PTY host list failed, owners incomplete: %s", exc)
                 return owners
             for s in sessions:
+                if strict and "pid" not in s:
+                    raise pty_client.HostError("PTY host did not report session pids")
                 if s.get("pid") and not s.get("done"):
                     owners.setdefault(s["pid"], s["id"])
         elif pty_client.host_alive_but_unreachable(pty_client.instance_key()):
@@ -167,6 +169,14 @@ def host_session_labels(session_id: str) -> dict:
         if s["id"] == session_id:
             return s.get("meta") or {}
     return {}
+
+
+def session_owner(session_id: str) -> dict[str, str] | None:
+    """The project and agent labels a session was created with, or None when they
+    are unknown. A session this backend created carries them; one adopted from the
+    PTY host after a restart is looked up there. Blocking (loopback socket)."""
+    meta = getattr(_pty_sessions.get(session_id), "meta", None)
+    return meta or host_session_labels(session_id) or None
 
 
 def find_host_session(owner: dict[str, str]) -> str | None:
@@ -252,6 +262,7 @@ def create_pty_session(
     if entry is None:
         pty = spawn_pty(cols=cols, rows=rows, command=command, env=env, cwd=cwd)
         entry = PtySession(pty)
+    entry.meta = dict(meta) if meta else None
     _pty_sessions[session_id] = entry
     return entry
 
