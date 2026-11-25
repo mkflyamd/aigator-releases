@@ -21,7 +21,8 @@ _MAX_IMAGE = 5 * 1024 * 1024
 _MAX_TEXT = 20_000
 _MAX_B64 = (_MAX_IMAGE + 2) // 3 * 4
 _MAX_LOCATOR = 8_192
-_FAILURE_STATUSES = {"pane_not_visible", "page_mismatch", "pane_unavailable", "timeout", "empty_target"}
+_DEGRADED_STATUSES = {"element_missing", "element_ambiguous"}
+_FAILURE_STATUSES = {"pane_not_visible", "page_mismatch", "pane_unavailable", "timeout", "empty_target"} | _DEGRADED_STATUSES
 
 
 def _custom_apps() -> list[dict]:
@@ -73,6 +74,7 @@ class WebPinSnapshot(BaseModel):
     image_b64: str | None = None
     text: str | None = None
     match: str | None = None
+    confidence: float | None = Field(None, ge=0, le=1)
 
 
 @router.post("/api/web-pins", dependencies=[Depends(verify_csrf)])
@@ -148,6 +150,8 @@ async def post_web_pin_snapshot(pin_id: str, req: WebPinSnapshot):
     if req.status != "ok":
         if req.status not in _FAILURE_STATUSES:
             raise HTTPException(400, "unknown status")
+        if req.status in _DEGRADED_STATUSES:
+            store.update_meta(pin_id, {"degraded": req.status})
         if req.request_id and pending.resolve(req.request_id, pin_id, {"status": req.status}) == "conflict":
             raise HTTPException(409, "request already answered or unknown")
         return {"ok": False, "status": req.status}
@@ -155,7 +159,7 @@ async def post_web_pin_snapshot(pin_id: str, req: WebPinSnapshot):
     _check_text(req.text)
     if req.request_id and not pending.claim(req.request_id, pin_id):
         raise HTTPException(409, "request already answered or unknown")
-    meta = {"match": req.match} if req.match else {}
+    meta = {"match": req.match, "confidence": req.confidence, "degraded": None}
     try:
         snap = store.write_snapshot(pin_id, image=image, text=req.text, meta=meta)
     except Exception:
@@ -163,7 +167,7 @@ async def post_web_pin_snapshot(pin_id: str, req: WebPinSnapshot):
         if req.request_id:
             pending.finish(req.request_id, {"status": "pane_unavailable"})
         raise
-    result = {"status": "ok", "changed": snap["changed"], "captured_at": snap["captured_at"], "match": req.match}
+    result = {"status": "ok", "changed": snap["changed"], "captured_at": snap["captured_at"], "match": req.match, "confidence": req.confidence}
     if req.request_id:
         pending.finish(req.request_id, result)
     return {"ok": True, **result}

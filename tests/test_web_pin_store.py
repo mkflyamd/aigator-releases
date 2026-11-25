@@ -156,3 +156,20 @@ def test_label_prefers_element_label_then_page_title():
 def test_label_never_falls_back_to_the_app_name():
     for title in ("", "Untitled", "app.powerbi.com", "https://app.powerbi.com/r/1"):
         assert store.derive_label("", title, "Power BI", "pbi", "https://app.powerbi.com/r/1") == "Web view"
+
+
+def test_update_meta_merges_without_touching_text_image_or_capture_time():
+    pid = str(uuid.uuid4())
+    store.write_snapshot(pid, image=b"\x89PNG-a", text="hello", meta={"url": "https://x"})
+    before = store.read_snapshot(pid)
+    assert store.update_meta(pid, {"degraded": "element_missing"}) is True
+    after = store.read_snapshot(pid)
+    assert after["meta"] == {"url": "https://x", "degraded": "element_missing"}
+    assert after["text"] == "hello" and after["captured_at"] == before["captured_at"]
+    assert store.read_image(pid) == b"\x89PNG-a"
+
+
+def test_update_meta_on_a_missing_snapshot_does_nothing():
+    pid = str(uuid.uuid4())
+    assert store.update_meta(pid, {"degraded": "element_missing"}) is False
+    assert store.read_snapshot(pid) is None

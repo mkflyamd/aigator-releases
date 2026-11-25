@@ -215,17 +215,57 @@ test('recapture refuses hidden panes and moved pages', async () => {
   });
 });
 
-test('recapture re-finds the element by selector', async () => {
-  const wc = fakeWc({
-    overrides: {
-      'Runtime.evaluate': { result: { subtype: 'node', objectId: 'o9', value: PAGE } },
-      'DOM.describeNode': { node: { backendNodeId: 7 } },
+const LOCATOR = {
+  tag: 'div',
+  type: '',
+  role: 'img',
+  name: 'Revenue',
+  testId: 'data-testid=rev',
+  heading: 'Sales dashboard',
+  ancestor: '',
+  text: 'Revenue 4.2M',
+  rect: { x: 10, y: 120, width: 100, height: 60 },
+};
+
+function scanOverrides(features) {
+  return {
+    'Runtime.evaluate': (p) =>
+      /scan|featuresOf/.test(p.expression)
+        ? { result: { objectId: 'scan' } }
+        : { result: { value: PAGE } },
+    'Runtime.callFunctionOn': (p) => {
+      if (/this\[0\]/.test(p.functionDeclaration))
+        return { result: { value: JSON.stringify({ features, truncated: false }) } };
+      if (/this\[i \+ 1\]/.test(p.functionDeclaration)) return { result: { objectId: 'el' } };
+      return { result: { value: INFO } };
     },
-  });
+    'DOM.describeNode': { node: { backendNodeId: 7 } },
+  };
+}
+
+function feature(over) {
+  return {
+    tag: 'div',
+    type: '',
+    role: '',
+    name: '',
+    testId: '',
+    heading: '',
+    ancestor: '',
+    text: '',
+    rect: { x: 0, y: 0, width: 5, height: 5 },
+    i: 0,
+    ...over,
+  };
+}
+
+test('recapture re-finds the element and reports how it matched', async () => {
+  const wc = fakeWc({ overrides: scanOverrides([feature({ testId: 'data-testid=rev' })]) });
   const { wp, events } = harness(wc);
-  const r = await wp.recapture('custom-x', JSON.parse(INFO).locator, 'https://a.com/r/1');
+  const r = await wp.recapture('custom-x', LOCATOR, 'https://a.com/r/1');
   assert.strictEqual(r.status, 'ok');
-  assert.strictEqual(r.match, 'selector');
+  assert.strictEqual(r.match, 'stable-id');
+  assert.strictEqual(r.confidence, 0.98);
   assert.strictEqual(r.image_b64, 'UE5H');
   assert.strictEqual(events.captured.length, 0);
 });
@@ -237,24 +277,30 @@ test('recapture of a whole-view pin reports match "view"', async () => {
   assert.strictEqual(r.match, 'view');
 });
 
-test('recapture falls back to the whole view when the element is gone', async () => {
-  const wc = fakeWc({
-    overrides: {
-      'Runtime.evaluate': (p) =>
-        /scrollX/.test(p.expression)
-          ? { result: { value: { x: 0, y: 0 } } }
-          : { result: { subtype: 'null', value: PAGE } },
-      'DOM.getDocument': { root: { nodeId: 1 } },
-      'Accessibility.queryAXTree': { nodes: [] },
-      'DOM.getNodeForLocation': () => {
-        throw new Error('no node');
-      },
-    },
-  });
+test('recapture of a deleted element is degraded, not a whole-view capture', async () => {
+  const wc = fakeWc({ overrides: scanOverrides([]) });
   const { wp } = harness(wc);
-  const r = await wp.recapture('custom-x', JSON.parse(INFO).locator, 'https://a.com/r/1');
-  assert.strictEqual(r.status, 'ok');
-  assert.strictEqual(r.match, 'view-fallback');
+  const r = await wp.recapture('custom-x', LOCATOR, 'https://a.com/r/1');
+  assert.deepStrictEqual(r, { status: 'element_missing' });
+  assert.ok(!wc.sent.includes('Page.captureScreenshot'));
+  assert.strictEqual(wc.debugger.isAttached(), false);
+});
+
+test('recapture with several plausible elements asks for a re-pin instead of guessing', async () => {
+  const twin = (i, x) =>
+    feature({
+      i,
+      role: 'img',
+      name: 'Revenue',
+      heading: 'Sales dashboard',
+      text: 'Revenue 4.3M',
+      rect: { x, y: 800, width: 100, height: 60 },
+    });
+  const wc = fakeWc({ overrides: scanOverrides([twin(0, 400), twin(1, 900)]) });
+  const { wp } = harness(wc);
+  const r = await wp.recapture('custom-x', { ...LOCATOR, testId: '', role: '', name: '' }, 'https://a.com/r/1');
+  assert.deepStrictEqual(r, { status: 'element_ambiguous' });
+  assert.ok(!wc.sent.includes('Page.captureScreenshot'));
 });
 
 test('a hung CDP call times out and detaches', async () => {

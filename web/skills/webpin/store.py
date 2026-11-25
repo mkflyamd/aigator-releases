@@ -151,6 +151,16 @@ def write_snapshot(pin_id: str, *, image: bytes | None, text: str | None, meta: 
     return {"captured_at": captured_at, "text_hash": text_hash, "changed": changed}
 
 
+def update_meta(pin_id: str, meta: dict) -> bool:
+    """Change snapshot metadata only; the text, screenshot and capture time stay as they were."""
+    snap = read_snapshot(pin_id)
+    if snap is None:
+        return False
+    snap["meta"] = {**(snap.get("meta") or {}), **meta}
+    _atomic_write(web_pin_dir(pin_id) / "snapshot.json", json.dumps(snap, ensure_ascii=False).encode("utf-8"))
+    return True
+
+
 def delete_if_unreferenced(pin_id: str) -> bool:
     from skills.context import state
 

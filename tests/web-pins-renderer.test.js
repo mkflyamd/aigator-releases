@@ -416,10 +416,32 @@ test('a 409 on the snapshot post (request already answered) is not reported as s
   assert.equal(r.status, 'pane_unavailable');
 });
 
-test('matchNote labels approximate and fallback matches only', () => {
-  assert.match(wp.matchNote('rect'), /approximate/i);
-  assert.match(wp.matchNote('view-fallback'), /whole view/i);
-  for (const m of ['selector', 'role-name', 'view', undefined]) assert.equal(wp.matchNote(m), '');
+test('matchNote labels content and geometry-assisted matches only', () => {
+  assert.match(wp.matchNote('fingerprint'), /matched it by its content/i);
+  assert.match(wp.matchNote('fingerprint-geometry'), /check it is the right one/i);
+  for (const m of ['stable-id', 'role-name', 'view', undefined]) assert.equal(wp.matchNote(m), '');
+});
+
+test('element_missing and element_ambiguous are posted to the server even for a user refresh', async () => {
+  for (const code of ['element_missing', 'element_ambiguous']) {
+    const f = fakeFetch();
+    const shell = fakeShell([{ status: code }]);
+    const r = await wp
+      .createRecapturer({ fetchFn: f, shell, sleep: async () => {} })
+      .recapture('p1', { user: true });
+    assert.equal(r.status, code);
+    assert.deepEqual(posts(f), [{ status: code }]);
+  }
+});
+
+test('a successful recapture forwards match and confidence', async () => {
+  const f = fakeFetch();
+  const shell = fakeShell([{ ...OK, match: 'fingerprint', confidence: 0.82 }]);
+  await wp
+    .createRecapturer({ fetchFn: f, shell, sleep: async () => {} })
+    .recapture('p1', { requestId: 'r1' });
+  assert.equal(posts(f)[0].match, 'fingerprint');
+  assert.equal(posts(f)[0].confidence, 0.82);
 });
 
 test('app.js routes webpin-recapture to the renderer and the renderer checks tab ownership', () => {

@@ -366,3 +366,34 @@ def test_describe_failure_is_logged_without_the_error_message(monkeypatch, caplo
     with caplog.at_level("WARNING", logger="llm.vision"):
         tools.read_web_pin(pid, _context_id="tab-a")
     assert "RuntimeError" in caplog.text and "claude-sonnet-5" in caplog.text and "secret-token-123" not in caplog.text
+
+
+@pytest.mark.parametrize("code", ["element_missing", "element_ambiguous"])
+def test_recapture_re_identification_failures_tell_the_agent_not_to_present_old_data(monkeypatch, code):
+    pid = _pin()
+    sent = []
+    monkeypatch.setattr(shared, "notify_all", lambda m: sent.append(m))
+
+    async def scenario():
+        task = asyncio.create_task(tools.recapture_web_pin(pid, _context_id="tab-a"))
+        while not sent:
+            await asyncio.sleep(0.01)
+        pending.resolve(sent[0]["request_id"], pid, {"status": code})
+        return await task
+
+    out = asyncio.run(scenario())
+    assert out["status"] == code and "pin" in out["message"] and "older snapshot" in out["message"]
+
+
+def test_read_reports_match_confidence_and_degraded_state():
+    pid = str(uuid.uuid4())
+    store.write_snapshot(
+        pid, image=PNG, text="Revenue 4.2M",
+        meta={"app_id": "pbi", "match": "fingerprint", "confidence": 0.82},
+    )
+    state.set_pin("webpin", pid, "Revenue card", {"app_id": "pbi", "app_name": "Power BI", "captured_at": 1.0}, "tab-a")
+    out = tools.read_web_pin(pid, _context_id="tab-a")
+    assert out["match"] == "fingerprint" and out["confidence"] == 0.82 and "degraded" not in out
+    store.update_meta(pid, {"degraded": "element_ambiguous"})
+    out = tools.read_web_pin(pid, _context_id="tab-a")
+    assert "Several elements" in out["degraded"]

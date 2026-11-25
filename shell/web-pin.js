@@ -11,7 +11,13 @@ const HIGHLIGHT = {
   paddingColor: { r: 0, g: 0, b: 0, a: 0 },
   marginColor: { r: 0, g: 0, b: 0, a: 0 },
 };
-const KNOWN_CODES = new Set(['timeout', 'empty_target', 'page_mismatch']);
+const KNOWN_CODES = new Set([
+  'timeout',
+  'empty_target',
+  'page_mismatch',
+  'element_missing',
+  'element_ambiguous',
+]);
 
 function coded(code) {
   const e = new Error(code);
@@ -114,7 +120,7 @@ async function captureElement(cdp, wc, backendNodeId) {
   const { object } = await cdp.send('DOM.resolveNode', { backendNodeId });
   const called = await cdp.send('Runtime.callFunctionOn', {
     objectId: object.objectId,
-    functionDeclaration: core.describeInPage.toString(),
+    functionDeclaration: core.elementFunction(core.describeInPage),
     returnByValue: true,
   });
   const info = JSON.parse(called.result.value);
@@ -319,14 +325,20 @@ function createWebPin({
       // after the capture in case the pane navigated while we were working.
       const samePage = () => !!url && core.urlMatches(wc.getURL(), url);
       if (!samePage()) throw coded('page_mismatch');
-      let result = null;
+      let result;
       if (locator) {
+        // A pinned element is never swapped for a view capture: when it cannot be found with
+        // confidence the pin is degraded and the user is asked to pin it again.
         const hit = await core.resolveTarget(cdp, locator);
-        if (hit)
-          result = { ...(await captureElement(cdp, wc, hit.backendNodeId)), match: hit.match };
+        if (hit.status !== 'ok') throw coded(hit.status);
+        result = {
+          ...(await captureElement(cdp, wc, hit.backendNodeId)),
+          match: hit.match,
+          confidence: hit.confidence,
+        };
+      } else {
+        result = { ...(await captureView(cdp, wc)), match: 'view' };
       }
-      if (!result)
-        result = { ...(await captureView(cdp, wc)), match: locator ? 'view-fallback' : 'view' };
       if (!samePage()) throw coded('page_mismatch');
       return result;
     });

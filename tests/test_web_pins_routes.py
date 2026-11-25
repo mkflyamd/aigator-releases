@@ -113,8 +113,8 @@ def test_user_refresh_snapshot_updates_and_reports_changed(client):
     pid = client.post("/api/web-pins", json=_body()).json()["id"]
     r = client.post(f"/api/web-pins/{pid}/snapshot", json={"image_b64": _b64(PNG), "text": "Revenue 4.2M", "match": "selector"})
     assert r.json()["changed"] is False
-    r = client.post(f"/api/web-pins/{pid}/snapshot", json={"text": "Revenue 5.0M", "match": "rect"})
-    assert r.json()["changed"] is True and r.json()["match"] == "rect"
+    r = client.post(f"/api/web-pins/{pid}/snapshot", json={"text": "Revenue 5.0M", "match": "fingerprint", "confidence": 0.81})
+    assert r.json()["changed"] is True and r.json()["match"] == "fingerprint" and r.json()["confidence"] == 0.81
     assert client.get(f"/api/web-pins/{pid}").json()["text"] == "Revenue 5.0M"
 
 
@@ -166,6 +166,38 @@ def test_snapshot_empty_target_failure_resolves_pending(client):
 
     r, res = asyncio.run(scenario())
     assert r.status_code == 200 and res["status"] == "empty_target"
+
+
+@pytest.mark.parametrize("status", ["element_missing", "element_ambiguous"])
+def test_degraded_status_marks_the_pin_and_keeps_the_old_snapshot(client, status):
+    pid = client.post("/api/web-pins", json=_body()).json()["id"]
+    r = client.post(f"/api/web-pins/{pid}/snapshot", json={"status": status, "text": "SHOULD NOT WRITE"})
+    assert r.json() == {"ok": False, "status": status}
+    j = client.get(f"/api/web-pins/{pid}").json()
+    assert j["text"] == "Revenue 4.2M" and j["meta"]["degraded"] == status
+    assert store.read_image(pid) == PNG
+
+
+def test_successful_refresh_clears_degraded_and_records_confidence(client):
+    pid = client.post("/api/web-pins", json=_body()).json()["id"]
+    client.post(f"/api/web-pins/{pid}/snapshot", json={"status": "element_missing"})
+    client.post(f"/api/web-pins/{pid}/snapshot", json={"text": "Revenue 4.3M", "match": "role-name", "confidence": 0.9})
+    meta = client.get(f"/api/web-pins/{pid}").json()["meta"]
+    assert meta["degraded"] is None and meta["match"] == "role-name" and meta["confidence"] == 0.9
+    assert meta["locator"]["selector"] == "#kpi"
+
+
+def test_non_degrading_failure_does_not_mark_the_pin(client):
+    pid = client.post("/api/web-pins", json=_body()).json()["id"]
+    client.post(f"/api/web-pins/{pid}/snapshot", json={"status": "pane_not_visible"})
+    assert not client.get(f"/api/web-pins/{pid}").json()["meta"].get("degraded")
+
+
+@pytest.mark.parametrize("confidence", [-0.1, 1.5])
+def test_snapshot_confidence_out_of_range_is_rejected(client, confidence):
+    pid = client.post("/api/web-pins", json=_body()).json()["id"]
+    r = client.post(f"/api/web-pins/{pid}/snapshot", json={"text": "x", "match": "fingerprint", "confidence": confidence})
+    assert r.status_code == 422
 
 
 def test_snapshot_unknown_failure_status_is_400(client):
