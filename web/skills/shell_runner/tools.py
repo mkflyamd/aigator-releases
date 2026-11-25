@@ -16,6 +16,7 @@ from uuid import uuid4
 import sandbox
 from sandbox import approvals as sandbox_approvals
 import permissions
+from runs.inline import RunRefused, launch_supervised, run_inline, with_run_fields
 from sandbox import host_requests, saved_permissions, task_grants
 from sandbox.command_programs import programs_in
 from sandbox.paths import PathNotGrantable, check_grant_size, is_within, normalize_grant_paths
@@ -798,7 +799,9 @@ def _run_sandboxed(cr, command, shell, cwd, timeout, background, requested, poli
     )
     start = time.monotonic()
     try:
-        res = sandbox.launch_sandboxed(request)
+        res, record = launch_supervised(request, context_id=context_id, kind="shell")
+    except RunRefused as exc:
+        return _shell_error(str(exc), shell_used, **tags)
     except sandbox.SandboxUnavailable as exc:
         return _shell_error(cr._launch_refusal_message(exc), shell_used, **tags)
     except sandbox.SandboxRunError:
@@ -819,13 +822,14 @@ def _run_sandboxed(cr, command, shell, cwd, timeout, background, requested, poli
     if new_files:
         result["output_files"] = new_files
     if res.timed_out:
+        result["timed_out"] = True
         result["error"] = f"Command timed out after {timeout}s."
     elif res.returncode != 0:
         tail = (res.stderr or res.stdout or "").strip().splitlines()
         reason = " ".join(tail[-3:]) if tail else ""
         result["error"] = (f"Command exited with code {res.returncode}: {reason}" if reason
                            else f"Command exited with code {res.returncode}")
-    return result
+    return with_run_fields(result, record)
 
 
 _CAPTURE_CAP_CHARS = 1_000_000
@@ -1093,7 +1097,12 @@ def _tool_run_shell(
     if mode == "unavailable":
         return _shell_error(cr._unavailable_message(reason, in_settings=True), _DETECTED_SHELL)
     if mode == "off":
-        return _run_unsandboxed(command, shell, cwd, timeout, background)
+        if background:
+            return _run_unsandboxed(command, shell, cwd, timeout, background)
+        record, result = run_inline(
+            "shell", "shell", _context_id, timeout,
+            lambda handle: _run_unsandboxed(command, shell, cwd, timeout, False, on_start=handle.attach))
+        return with_run_fields(result, record)
     return _run_sandboxed(cr, command, shell, cwd, sandbox.clamp_run_timeout(timeout), background, requested, policy, _context_id)
 
 

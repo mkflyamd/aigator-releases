@@ -4,6 +4,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -112,14 +113,16 @@ def test_launch_runs_profile_through_sandbox_exec(monkeypatch, tmp_path):
     calls = []
     sentinel = object()
 
-    def fake_run(argv, cwd, env, timeout):
-        calls.append((argv, cwd, env, timeout))
+    def fake_run(argv, cwd, env, timeout, cancel=None, on_start=None):
+        calls.append((argv, cwd, env, timeout, cancel, on_start))
         return sentinel
 
     monkeypatch.setattr(lm, "run_process_group", fake_run)
-    req = _req()
+    stop, hook = threading.Event(), print
+    req = dataclasses.replace(_req(), cancel=stop, on_start=hook)
     assert lm.launch(req) is sentinel
-    argv, cwd, env, timeout = calls[0]
+    argv, cwd, env, timeout, cancel, on_start = calls[0]
+    assert cancel is stop and on_start is hook
     assert argv[:2] == [str(fake), "-p"]
     assert argv[2] == lm.build_profile(req)
     assert argv[3:] == req.argv

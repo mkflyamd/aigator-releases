@@ -110,3 +110,10 @@ def host_command_status(request_id: str, context_id: str = ""):
     status, req = host_requests.lookup(request_id, context_id)
     result = req.result if req is not None and status == "done" else None
     return {"ok": True, "request_id": request_id, "run": run, "result": result}
+
+
+@router.get("/api/runs")
+def list_runs(context_id: str = "", limit: int = 20):
+    """Recent runs for a tab, newest first, for the status row."""
+    _sync_expiry()
+    return {"ok": True, "runs": get_supervisor().list(context_id)[: max(1, min(limit, 100))]}

@@ -4,6 +4,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -131,14 +132,16 @@ def test_launch_runs_through_bwrap(monkeypatch):
     calls = []
     sentinel = object()
 
-    def fake_run(argv, cwd, env, timeout):
-        calls.append((argv, cwd, env, timeout))
+    def fake_run(argv, cwd, env, timeout, cancel=None, on_start=None):
+        calls.append((argv, cwd, env, timeout, cancel, on_start))
         return sentinel
 
     monkeypatch.setattr(ll, "run_process_group", fake_run)
-    req = _req()
+    stop, hook = threading.Event(), print
+    req = dataclasses.replace(_req(), cancel=stop, on_start=hook)
     assert ll.launch(req) is sentinel
-    argv, cwd, env, timeout = calls[0]
+    argv, cwd, env, timeout, cancel, on_start = calls[0]
+    assert cancel is stop and on_start is hook
     assert argv == ll.build_argv(req, "/usr/bin/bwrap")
     assert (cwd, env, timeout) == (req.cwd, req.env, 5)
 

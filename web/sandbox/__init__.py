@@ -18,15 +18,23 @@ import stat
 import subprocess
 import sys
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Callable, Mapping, Sequence
 
 _log = logging.getLogger(__name__)
 
 
 class SandboxUnavailable(RuntimeError):
     """The platform sandbox cannot run this request; nothing was executed."""
+
+
+class SandboxCancelled(SandboxUnavailable):
+    """Stop arrived before the command started; nothing was executed."""
+
+    def __init__(self):
+        super().__init__("The command was stopped before it started.")
 
 
 class SandboxPathNotGrantable(SandboxUnavailable):
@@ -77,6 +85,10 @@ class SandboxRequest:
     network: bool              # outbound network approved for this run
     timeout: int
     scratch_path: Path | None = None  # app-owned scratch folder; Windows grants it once instead of per run
+    cancel: threading.Event | None = None      # set by Stop: kill the process tree, then clean up
+    on_start: Callable[[int], None] | None = None  # called with the pid once the process is running
+    setup_seconds: float | None = None         # budget for granting access (Windows); None = launcher default
+    teardown_seconds: float | None = None      # budget for revoking access (Windows); None = launcher default
 
 
 @dataclass
@@ -85,6 +97,8 @@ class SandboxResult:
     stdout: str
     stderr: str
     timed_out: bool
+    cancelled: bool = False
+    teardown_failed: bool = False  # access granted for the run could not be fully revoked yet
 
 
 _PROBE_LOCK = threading.Lock()
@@ -264,32 +278,52 @@ def telemetry_record(run_id: str, skill_id: str, level: str, network: bool,
     }
 
 
-def run_process_group(argv: list[str], cwd: Path, env: dict[str, str], timeout: int) -> SandboxResult:
-    """POSIX: run in a new session and kill the whole group on timeout."""
+def _kill_group(proc: subprocess.Popen) -> None:
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def run_process_group(argv: list[str], cwd: Path, env: dict[str, str], timeout: int,
+                      cancel: threading.Event | None = None,
+                      on_start: Callable[[int], None] | None = None) -> SandboxResult:
+    """POSIX: run in a new session and kill the whole group on timeout or Stop."""
     proc = subprocess.Popen(
         argv, cwd=str(cwd), env=env, stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
     )
-    timed_out = False
-    try:
-        out, err = proc.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        timed_out = True
+    if on_start is not None:
         try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+            on_start(proc.pid)
+        except Exception:
+            _log.warning("sandbox: the run-start hook failed")
+    timed_out = cancelled = False
+    deadline = time.monotonic() + timeout
+    while True:
         try:
-            out, err = proc.communicate(timeout=5)
+            out, err = proc.communicate(timeout=max(0.0, min(0.2, deadline - time.monotonic())))
+            break
         except subprocess.TimeoutExpired:
-            proc.kill()
-            for stream in (proc.stdout, proc.stderr):
-                stream.close()
-            proc.wait()
-            out, err = b"", b""
+            cancelled = cancel is not None and cancel.is_set()
+            timed_out = not cancelled and time.monotonic() >= deadline
+            if not (cancelled or timed_out):
+                continue
+            _kill_group(proc)
+            try:
+                out, err = proc.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                for stream in (proc.stdout, proc.stderr):
+                    stream.close()
+                proc.wait()
+                out, err = b"", b""
+            break
+    stopped = timed_out or cancelled
     return SandboxResult(
-        returncode=-1 if timed_out else proc.returncode,
+        returncode=-1 if stopped else proc.returncode,
         stdout=(out or b"").decode("utf-8", "replace"),
         stderr=(err or b"").decode("utf-8", "replace"),
         timed_out=timed_out,
+        cancelled=cancelled,
     )

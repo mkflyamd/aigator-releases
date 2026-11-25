@@ -32,6 +32,7 @@ from .paths import APP_FOLDER_REFUSAL, protects_app
 from . import (
     MAX_RUN_SECONDS,
     RawArg,
+    SandboxCancelled,
     SandboxPathNotGrantable,
     SandboxRequest,
     SandboxResult,
@@ -57,6 +58,7 @@ HANDLE_FLAG_INHERIT = 0x1
 INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
 JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
+WAIT_OBJECT_0 = 0
 WAIT_TIMEOUT = 258
 WAIT_FAILED = 0xFFFFFFFF
 SE_GROUP_ENABLED = 0x4
@@ -77,6 +79,7 @@ QUERY_SECONDS = 30.0      # reading one folder's DACL
 GRANT_SECONDS = 120.0     # one per-run grant or revoke inside a turn
 REINHERIT_SECONDS = 300.0
 REPAIR_SECONDS = 3600.0   # one revoke in the background repair, which no turn waits for
+_STOP_POLL_MS = 100
 SETUP_SECONDS = 180.0     # all grants of one launch
 TEARDOWN_SECONDS = 180.0  # all revokes of one launch
 SWEEP_SECONDS = 120.0     # all stale-entry revokes before a launch or at startup
@@ -886,7 +889,8 @@ def _valid(handle) -> bool:
     return handle.value not in (None, 0, INVALID_HANDLE_VALUE)
 
 
-def _run_contained(argv: list[str], cwd: Path, env: dict[str, str], psid, timeout: int, network: bool) -> SandboxResult:
+def _run_contained(argv: list[str], cwd: Path, env: dict[str, str], psid, timeout: int, network: bool,
+                   cancel=None, on_start=None) -> SandboxResult:
     a = _api()
     k32, wt, HANDLE = a.k32, a.wt, a.HANDLE
     sa = a.SECURITY_ATTRIBUTES(ctypes.sizeof(a.SECURITY_ATTRIBUTES), None, True)
@@ -988,6 +992,11 @@ def _run_contained(argv: list[str], cwd: Path, env: dict[str, str], psid, timeou
         if k32.ResumeThread(thread) == WAIT_FAILED:
             raise ctypes.WinError(ctypes.get_last_error())
         resumed = True
+        if on_start is not None:
+            try:
+                on_start(int(pi.dwProcessId))
+            except Exception:
+                _log.warning("sandbox: the run-start hook failed")
 
         out_chunks: list[bytes] = []
         err_chunks: list[bytes] = []
@@ -1005,11 +1014,20 @@ def _run_contained(argv: list[str], cwd: Path, env: dict[str, str], psid, timeou
             except RuntimeError as exc:
                 raise SandboxRunError(f"The sandboxed process started but its output could not be read ({exc}).") from exc
             pumps.append((t, handle))
-        waited = k32.WaitForSingleObject(proc, int(timeout * 1000))
-        if waited == WAIT_FAILED:
-            raise _run_error(resumed, f"Waiting for the sandboxed process failed (winerror {ctypes.get_last_error()}).")
-        timed_out = waited == WAIT_TIMEOUT
-        if timed_out:
+        deadline = time.monotonic() + timeout
+        timed_out = cancelled = False
+        while True:
+            remaining_ms = int(max(0.0, deadline - time.monotonic()) * 1000)
+            waited = k32.WaitForSingleObject(proc, min(_STOP_POLL_MS, remaining_ms))
+            if waited == WAIT_OBJECT_0:
+                break
+            if waited != WAIT_TIMEOUT:
+                raise _run_error(resumed, f"Waiting for the sandboxed process failed (winerror {ctypes.get_last_error()}).")
+            cancelled = cancel is not None and cancel.is_set()
+            timed_out = not cancelled and time.monotonic() >= deadline
+            if cancelled or timed_out:
+                break
+        if cancelled or timed_out:
             k32.TerminateJobObject(job, 1)
             k32.WaitForSingleObject(proc, 5000)
         code = wt.DWORD()
@@ -1017,10 +1035,11 @@ def _run_contained(argv: list[str], cwd: Path, env: dict[str, str], psid, timeou
         reap()
         finished = True
         return SandboxResult(
-            returncode=-1 if timed_out else int(code.value),
+            returncode=-1 if (timed_out or cancelled) else int(code.value),
             stdout=b"".join(out_chunks).decode("utf-8", "replace"),
             stderr=b"".join(err_chunks).decode("utf-8", "replace"),
             timed_out=timed_out,
+            cancelled=cancelled,
         )
     except OSError as exc:
         raise _run_error(resumed, f"The sandbox could not start the process ({exc}).") from exc
@@ -1053,8 +1072,14 @@ def _same_path(a: Path, b: str) -> bool:
     return _covered_by(a, [b]) and _covered_by(Path(b), [str(a)])
 
 
+def _check_not_cancelled(req: SandboxRequest) -> None:
+    if req.cancel is not None and req.cancel.is_set():
+        raise SandboxCancelled()
+
+
 def launch(req: SandboxRequest) -> SandboxResult:
     with _run_lock():
+        _check_not_cancelled(req)
         runtime, per_run = acl_grants(req)
         shielded = [p for p, _perm in per_run if protects_app(p)]
         if shielded:
@@ -1105,9 +1130,11 @@ def launch(req: SandboxRequest) -> SandboxResult:
                 raise SandboxPathNotGrantable(blocked)
             _scrub_container(sid)
             attempted: list[Path] = []
-            setup_deadline = time.monotonic() + SETUP_SECONDS
+            setup_deadline = time.monotonic() + (req.setup_seconds if req.setup_seconds is not None else SETUP_SECONDS)
+            result = None
             try:
                 for path, perm in per_run:
+                    _check_not_cancelled(req)
                     if time.monotonic() >= setup_deadline:
                         raise SandboxUnavailable(
                             "Setting up access for the command took too long, so it did not run. "
@@ -1128,9 +1155,13 @@ def launch(req: SandboxRequest) -> SandboxResult:
                     install_node_shim(req.env)
                 except OSError as exc:
                     raise SandboxUnavailable(f"The sandbox could not prepare its Node preload ({exc}).") from exc
-                return _run_contained(req.argv, req.cwd, req.env, psid, req.timeout, req.network)
+                _check_not_cancelled(req)
+                result = _run_contained(req.argv, req.cwd, req.env, psid, req.timeout, req.network,
+                                        req.cancel, req.on_start)
+                return result
             finally:
-                teardown_deadline = time.monotonic() + TEARDOWN_SECONDS
+                teardown_deadline = time.monotonic() + (
+                    req.teardown_seconds if req.teardown_seconds is not None else TEARDOWN_SECONDS)
                 for path in attempted:
                     if time.monotonic() >= teardown_deadline:
                         break  # the rest keep their ledger entries and go to the background repair
@@ -1142,6 +1173,8 @@ def launch(req: SandboxRequest) -> SandboxResult:
                         _log.warning("sandbox: could not update the grant ledger (%s)", type(exc).__name__)
                 _scrub_container(sid)
                 if _ledger_load()["per_run"]:
+                    if result is not None:
+                        result.teardown_failed = True
                     _start_repair()
         finally:
             _api().adv.FreeSid(psid)

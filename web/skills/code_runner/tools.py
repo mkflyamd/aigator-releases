@@ -20,6 +20,7 @@ from proc_utils import (
     diff_outputs,
 )
 import permissions
+from runs.inline import RunRefused, launch_supervised, with_run_fields
 import sandbox
 from sandbox import approvals as sandbox_approvals
 from sandbox import task_grants
@@ -727,6 +728,11 @@ def _tool_run_python(
             **tags,
         }
 
+    run_record = None
+
+    def with_facts(result: dict) -> dict:
+        return with_run_fields(result, run_record) if run_record else result
+
     start = time.monotonic()
     try:
         if mode == "enforced":
@@ -756,7 +762,9 @@ def _tool_run_python(
             )
             # Every failure here ends the call: never fall back to running the code unsandboxed.
             try:
-                res = sandbox.launch_sandboxed(request)
+                res, run_record = launch_supervised(request, context_id=_context_id, kind="python")
+            except RunRefused as exc:
+                return fail(str(exc), f"run not started: {exc}")
             except sandbox.SandboxUnavailable as exc:  # raised before anything ran
                 return fail(_launch_refusal_message(exc), f"sandbox unavailable: {exc}")
             except sandbox.SandboxRunError as exc:  # the process may already have run
@@ -800,14 +808,14 @@ def _tool_run_python(
         _write_forensic(run_dir / "stderr.log", stderr)
 
         if timed_out:
-            return {
+            return with_facts({
                 "error": f"Code execution timed out after {timeout}s.",
                 "stdout": "",
                 "files": [],
                 "runtime_ms": elapsed_ms,
                 "forensic": _forensic_paths(run_id, run_dir),
                 **tags,
-            }
+            })
 
         import mimetypes as _mimetypes
 
@@ -840,7 +848,7 @@ def _tool_run_python(
             }
             if external_files:
                 result["output_files"] = external_files
-            return result
+            return with_facts(result)
 
         result = {
             "stdout": stdout,
@@ -852,7 +860,7 @@ def _tool_run_python(
         }
         if external_files:
             result["output_files"] = external_files
-        return result
+        return with_facts(result)
 
     except Exception as exc:
         return fail(str(exc), f"runner exception: {exc}")

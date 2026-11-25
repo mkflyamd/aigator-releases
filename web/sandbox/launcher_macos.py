@@ -102,7 +102,7 @@ def launch(req: SandboxRequest) -> SandboxResult:
     )
     argv = [SANDBOX_EXEC, "-p", build_profile(real), *req.argv]
     try:
-        return run_process_group(argv, real.cwd, req.env, req.timeout)
+        return run_process_group(argv, real.cwd, req.env, req.timeout, req.cancel, req.on_start)
     except (FileNotFoundError, PermissionError) as exc:
         raise SandboxUnavailable(f"macOS sandbox-exec could not be started ({type(exc).__name__}).") from exc
     except OSError as exc:

@@ -424,6 +424,9 @@ async def execute_tool(
     outcome_state: dict[str, str | None] = {}
     telemetry = None
     mcp_token = None
+    from runs.turn import current_turn
+
+    turn_token = current_turn.set(task_id or "")
     try:
         import turn_telemetry as telemetry
         mcp_token = telemetry.mcp_audit_suppressed.set(name.startswith("mcp-"))
@@ -442,6 +445,7 @@ async def execute_tool(
         error_code = "tool_exception"
         return {"error": str(exc)}
     finally:
+        current_turn.reset(turn_token)
         if telemetry is not None and mcp_token is not None:
             telemetry.mcp_audit_suppressed.reset(mcp_token)
         _schedule_tool_telemetry(
