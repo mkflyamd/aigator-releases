@@ -3,6 +3,7 @@
 import logging
 import os
 import time
+from types import SimpleNamespace
 
 import agent_handoff as ah
 import pytest
@@ -226,9 +227,11 @@ def test_posix_files_are_restricted_before_they_are_moved_into_place(tmp_path, m
 
     monkeypatch.setattr(ah, "HANDOFF_DIR", tmp_path / "h")
     modes = []
-    monkeypatch.setattr(file_perms.os, "name", "posix")
     real_chmod = os.chmod
-    monkeypatch.setattr(file_perms.os, "chmod", lambda p, m: (modes.append((os.path.basename(p), m)), real_chmod(p, m))[1])
+    monkeypatch.setattr(
+        file_perms, "os",
+        SimpleNamespace(name="posix", chmod=lambda p, m: (modes.append((os.path.basename(p), m)), real_chmod(p, m))[1]),
+    )
     _save()
     assert modes[0][1] == 0o700, "the folder first"
     temp_modes = [m for n, m in modes[1:] if n.startswith(".handoff-")]
@@ -239,7 +242,7 @@ def test_windows_path_restricts_each_file_with_icacls(tmp_path, monkeypatch):
     import file_perms
 
     monkeypatch.setattr(ah, "HANDOFF_DIR", tmp_path / "h")
-    monkeypatch.setattr(file_perms.os, "name", "nt")
+    monkeypatch.setattr(file_perms, "os", SimpleNamespace(name="nt"))
     calls = []
 
     def fake_run(cmd, **kw):
@@ -259,7 +262,7 @@ def test_windows_restriction_failure_saves_nothing(tmp_path, monkeypatch):
     import file_perms
 
     monkeypatch.setattr(ah, "HANDOFF_DIR", tmp_path / "h")
-    monkeypatch.setattr(file_perms.os, "name", "nt")
+    monkeypatch.setattr(file_perms, "os", SimpleNamespace(name="nt"))
     monkeypatch.setattr(file_perms, "_done", set())
 
     def fake_run(cmd, **kw):
