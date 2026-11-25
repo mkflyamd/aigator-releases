@@ -8,6 +8,9 @@ sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import fakes
 from runs import facts
 
+# A venv's python.exe on Windows is a launcher that spawns the real interpreter, which adds a pid to the tree.
+PYTHON = getattr(sys, "_base_executable", sys.executable)
+
 
 def test_urls_are_found_once_in_order_and_trailing_punctuation_is_dropped():
     text = "Viewer at http://127.0.0.1:4173/p/demo/. Docs: https://example.com/a, again http://127.0.0.1:4173/p/demo/"
@@ -33,7 +36,7 @@ def test_the_watcher_sees_the_port_a_process_listens_on(tmp_path):
         "print(s.getsockname()[1], flush=True)\n"
         "time.sleep(30)\n"
     )
-    proc = subprocess.Popen([sys.executable, str(script)], stdout=subprocess.PIPE, text=True)
+    proc = subprocess.Popen([PYTHON, str(script)], stdout=subprocess.PIPE, text=True)
     try:
         port = int(proc.stdout.readline())
         watcher = facts.TreeWatcher(proc.pid, interval=0.05).start()
@@ -53,7 +56,7 @@ def test_a_child_that_outlives_its_parent_is_reported_as_left_behind(tmp_path):
         f"pathlib.Path({str(pid_file)!r}).write_text(str(child.pid))\n"
         "time.sleep(30)\n"
     )
-    proc = subprocess.Popen([sys.executable, str(script)])
+    proc = subprocess.Popen([PYTHON, str(script)])
     try:
         watcher = facts.TreeWatcher(proc.pid, interval=0.05).start()
         child = fakes.child_pid(tmp_path, "child")
@@ -77,7 +80,7 @@ def test_a_port_held_by_a_process_outside_the_run_is_reported_as_outside_the_tre
         "print(s.getsockname()[1], flush=True)\n"
         "time.sleep(30)\n"
     )
-    proc = subprocess.Popen([sys.executable, str(script)], stdout=subprocess.PIPE, text=True)
+    proc = subprocess.Popen([PYTHON, str(script)], stdout=subprocess.PIPE, text=True)
     try:
         port = int(proc.stdout.readline())
         found = facts.collect(f"Viewer at http://127.0.0.1:{port}/", None)
