@@ -97,3 +97,13 @@ test('the bubble fetches the removal note when opened and ignores a stale answer
   assert(/bubbleOpen\(\) && star\.appId === forApp/.test(open));
   assert(/ipcMain\.handle\('toolbar:star-removal-note'/.test(read('shell', 'main.js')));
 });
+
+test('the address bar star is offered on the built-in Browser pane as well as custom apps', () => {
+  const src = require('node:fs').readFileSync(
+    require('node:path').join(__dirname, '..', 'shell', 'main.js'),
+    'utf8',
+  );
+  const fn = src.match(/function _starFor\(app, url\) \{[\s\S]*?\n\}/)[0];
+  assert(/if \(!_isPinnablePane\(app\)\) return \{ state: 'hidden'/.test(fn));
+  assert(!/_customAppIds\.has\(app\)\) return \{ state: 'hidden'/.test(fn));
+});
