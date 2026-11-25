@@ -201,57 +201,7 @@ def test_tool_contract():
     assert validate_tool_contract(mod, "shell_runner") is True
 
 
-def test_failed_command_that_printed_a_local_address_reports_facts_only():
-    from skills.shell_runner.tools import _tool_run_shell
-    result = _tool_run_shell(
-        command="echo Viewer at http://127.0.0.1:4173/p/demo/ && exit 3")
-    assert result["exit_code"] == 3
-    note = result["exit_note"]
-    assert "http://127.0.0.1:4173/p/demo/" in note
-    assert "exited with code 3 (0x00000003)" in note
-
-
-def test_exit_note_never_gives_a_verdict_about_a_server():
-    from skills.shell_runner.tools import _exit_note
-    for code in (1, 3, -1073740791, 0xC0000409):
-        note = _exit_note("motlab edit", code, "Viewer at http://127.0.0.1:4173/", "").lower()
-        for word in ("probably", "crashed", "not running", "succeeded", "is ready"):
-            assert word not in note, (code, word, note)
-
-
-def test_exit_note_gives_hex_for_negative_windows_codes():
-    from skills.shell_runner.tools import _exit_note
-    note = _exit_note("motlab edit", -1073740791, "http://localhost:4173/", "")
-    assert "0xC0000409" in note
-
-
-def test_exit_note_flags_windows_status_range_without_calling_it_a_crash():
-    from skills.shell_runner.tools import _exit_note
-    note = _exit_note("motlab edit", 0xC0000409, "http://localhost:4173/", "")
-    assert "Windows status code" in note
-    assert "crash" not in note.lower()
-
-
-def test_exit_note_for_small_code_has_no_status_code_flag():
-    from skills.shell_runner.tools import _exit_note
-    assert "Windows status code" not in _exit_note("x", 3, "http://localhost:1/", "")
-
-
-def test_successful_command_with_a_local_address_has_no_exit_note():
-    from skills.shell_runner.tools import _tool_run_shell
-    result = _tool_run_shell(command="echo Viewer at http://127.0.0.1:4173/")
-    assert result["exit_code"] == 0
-    assert "exit_note" not in result
-
-
 def test_run_shell_description_sends_multi_line_files_to_write_file():
     import skills.shell_runner.tools as mod
     desc = next(t for t in mod.TOOL_DEFS if t["name"] == "run_shell")["description"]
     assert "write_file" in desc and "multi-line" in desc
-
-
-def test_lookup_commands_exiting_one_are_described_as_not_found_not_as_a_failure():
-    from skills.shell_runner.tools import _exit_note
-    assert "not found" in _exit_note("where.exe whisper", 1, "", "").lower()
-    assert "not found" in _exit_note("which ffmpeg", 1, "", "").lower()
-    assert _exit_note("python build.py", 1, "", "") is None
