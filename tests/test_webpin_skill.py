@@ -223,10 +223,12 @@ class _FakeProvider:
         return self.reply
 
 
-def _use_models(monkeypatch, active, models, providers):
+def _use_models(monkeypatch, active, models, providers, vision=None):
     from llm import registry
 
-    monkeypatch.setattr(registry, "MODEL_REGISTRY", {m: object() for m in models})
+    can_see = set(vision) if vision is not None else {m for m in models if m.startswith("claude")}
+    entries = {m: registry.ModelEntry(m, "openai", 200000, m, supports_vision=m in can_see) for m in models}
+    monkeypatch.setattr(registry, "MODEL_REGISTRY", entries)
     monkeypatch.setattr(registry, "get_active_model", lambda: active)
     monkeypatch.setattr(registry, "available_models", lambda: list(models))
     monkeypatch.setattr(registry, "get_provider", lambda model_id=None: providers[model_id or active])
@@ -329,3 +331,38 @@ def test_pin_read_result_is_scrubbed_and_marked():
     marked = data_sources.mark_direct_data("read_web_pin", out)
     assert "_notice" in marked
     assert marked["_images"] == out["_images"]
+
+
+def test_vision_choice_follows_model_metadata_not_the_name(monkeypatch):
+    pid = _pin()
+    seer, blind = _FakeProvider(True, "Seer reading"), _FakeProvider(True, "Wrong reading")
+    _use_models(monkeypatch, "deepseek-v4", ["deepseek-v4", "gpt-oss-120b", "house-vl"],
+                {"deepseek-v4": _FakeProvider(False), "gpt-oss-120b": blind, "house-vl": seer}, vision={"house-vl"})
+    out = tools.read_web_pin(pid, _context_id="tab-a")
+    assert "Seer reading" in out["screenshot_description"] and not blind.calls
+
+
+def test_profile_model_vision_overrides_the_family_default():
+    from llm import registry
+
+    profile = {"type": "openai", "models": ["gpt-oss-120b", "claude-sonnet-5", "house-vl"], "active_model": "house-vl",
+               "model_vision": {"gpt-oss-120b": False, "house-vl": True, "bad": "yes"}}
+    saved = (dict(registry.MODEL_REGISTRY), registry._active_model, dict(registry._active_profile))
+    try:
+        registry.load_profile(profile)
+        assert not registry.model_supports_vision("gpt-oss-120b")
+        assert registry.model_supports_vision("claude-sonnet-5") and registry.model_supports_vision("house-vl")
+        assert not registry.model_supports_vision("unknown-model")
+    finally:
+        registry.MODEL_REGISTRY.clear()
+        registry.MODEL_REGISTRY.update(saved[0])
+        registry._active_model, registry._active_profile = saved[1], saved[2]
+
+
+def test_describe_failure_is_logged_without_the_error_message(monkeypatch, caplog):
+    pid = _pin()
+    _use_models(monkeypatch, "deepseek-v4", ["deepseek-v4", "claude-sonnet-5"],
+                {"deepseek-v4": _FakeProvider(False), "claude-sonnet-5": _FakeProvider(True, RuntimeError("secret-token-123"))})
+    with caplog.at_level("WARNING", logger="llm.vision"):
+        tools.read_web_pin(pid, _context_id="tab-a")
+    assert "RuntimeError" in caplog.text and "claude-sonnet-5" in caplog.text and "secret-token-123" not in caplog.text
