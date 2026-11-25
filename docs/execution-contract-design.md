@@ -19,10 +19,10 @@ This is a missing contract, not a set of edge cases.
 The Agent Runtime Hardening design (2026-11-19, WS0-WS9) stands, and the loop stays hand-rolled (G1 closed 2026-11-24: no Agent SDK or CLI as main loop). This contract is the command-execution layer beneath it. Seams:
 
 - **WS1 (killable worker, per-tool timeouts):** the supervisor owns anything that is an OS process. WS1 owns loop-level execution for in-process and MCP tools and calls `start_run` for subprocess tools. This is the same seam as `kind=mcp_call` (`abandoned`).
-- **WS3 (pending-interactions registry):** the single approvals store. `awaiting_approval` on a RunRecord references a registry entry; it does not duplicate approval state. The host card registers there like the other card kinds.
-- **Turn id and per-context turn lock:** WS3 already makes `chat()` return 409 `turn_in_progress` for a conversation with a live task, and WS4 needs a stable turn id for durable sessions. The contract uses that definition and does not build a second one; PR1a depends on it.
-- **Message queue:** WS3's first slice adds the "queued" chip while a card is pending, and hardening PR 11 (`harden/steering`) owns steer and queue. The queue section below is the requirement set for that PR; it is not a separate implementation.
-- **WS4 (durable sessions):** RunRecord shares its sqlite store and secret-scrubbing rules.
+- **WS3 (pending-interactions registry):** the single approvals store. `awaiting_approval` on a RunRecord references a registry entry; it does not duplicate approval state. The host card registers there like the other card kinds. The entry carries `expires_at` (300 s default, 600 s for host) and the registry emits the expired event; the supervisor moves the RunRecord to `expired` from that event, so there is one clock. The run's setup and run budgets do not tick while awaiting approval.
+- **Turn id and per-context turn lock:** hardening PR 1 makes `chat()` return 409 `turn_in_progress` for a conversation with a live task (live means the asyncio task is not done, and the new task is registered in the same step as the check), and WS4 needs a stable turn id for durable sessions. The contract uses that definition and does not build a second one; PR1a depends on hardening PR 1. The turn id is an opaque in-memory id with a 30-minute TTL: RunRecord treats it as opaque and reconciliation never depends on the task still existing.
+- **Message queue:** WS3's first slice adds the "queued" chip while a card is pending. Hardening PR 11 is split: 11a is the queue (based on hardening PR 1, this contract's PR3) and 11b is steer (stays on PR 6). The queue section below is the requirement set for 11a; it is not a separate implementation.
+- **WS4 (durable sessions):** RunRecord shares its sqlite store and secret-scrubbing rules. Until WS4 lands, an `awaiting_approval` record becomes `interrupted` at startup. After WS4 lands, an `awaiting_approval` record whose registry entry is still live stays awaiting.
 - **WS2 (typed events):** run state changes are typed events in the same schema, marked must-deliver for terminal states.
 
 ## Goals
@@ -56,7 +56,7 @@ Persistence hygiene: metadata plus a capped output tail, with a retention purge.
 
 ### States
 
-`awaiting_approval`, `preparing`, `running`, `finished`, `timed_out`, `cancelled`, `denied`, `policy_blocked`, `expired`, `failed_to_start`, `interrupted`, plus `abandoned` for MCP calls. These replace the host states `pending/running/done/denied`; a state-mapping shim keeps `app.js` and existing tests working until migrated.
+`awaiting_approval` (expires after 300 s by default, 600 s for host cards, set per registry entry), `preparing`, `running`, `finished`, `timed_out`, `cancelled`, `denied`, `policy_blocked`, `expired`, `failed_to_start`, `interrupted`, plus `abandoned` for MCP calls. These replace the host states `pending/running/done/denied`; a state-mapping shim keeps `app.js` and existing tests working until migrated.
 
 - One atomic transition into `preparing` inside `start_run`; `claim()` is the approval flavor of it and stays the only way a host run starts.
 - `policy_blocked` (route policy gate) is distinct from `denied` (user clicked No).
@@ -68,10 +68,12 @@ One injectable budget table: setup, run, teardown, each with its own reserved ti
 
 ### Owner scope and Stop
 
-- Turn-scoped runs (finite commands): cancelled by that turn's Stop.
-- Tab-scoped runs (services the user wants kept): not cancelled by turn Stop; each gets its own Stop in the status row.
+- Turn-scoped runs: runs started inside a live turn (sandboxed `run_shell`, `run_python`, unsandboxed `run_shell`). Cancelled by that turn's Stop.
+- Tab-scoped runs: host-card runs and background-agent runs. A host-card run starts after the turn's task has ended, so it is scoped to the card and tab and has its own Stop on the card; turn Stop never touches it.
+- There is no "service" scope. A command that is still running with a port open when its run budget fires ends `timed_out`, with the port facts kept and the tree killed.
 - `cancel(run_id)` tree-kills and runs teardown. Tree kill only on Stop, timeout or quit. Survivors of a finished command are reported in `children_left`, never silently killed or leaked.
-- A turn id must exist and Stop needs a handle that maps to it. If `chat.py` lacks one, add it.
+- `ChatTaskStore.cancel` calls `asyncio_task.cancel()`, which raises `CancelledError` at the turn's await. Teardown (revoke) must run outside the cancelled task: shielded, or in the supervisor's own thread or task. Conformance case: Stop during a run, then assert the grants ledger is clean.
+- A turn id must exist and Stop needs a handle that maps to it; both come from hardening PR 1.
 
 ### Startup reconciliation
 
@@ -79,7 +81,7 @@ At startup, records in `awaiting_approval`, `preparing` or `running` become `int
 
 ### Safety limits
 
-Output cap with a truncation marker. Per-tab concurrency cap: reject with a clear message at the cap (no run queueing).
+Output cap with a truncation marker. Per-tab concurrency cap: reject at the cap (no run queueing) as `failed_to_start` with reason `concurrency_cap`; the model-facing result shows the reason.
 
 ### UI
 
@@ -116,7 +118,7 @@ Thin: each MCP tool call gets a `kind=mcp_call` record with server, tool, durati
 - The queue is server-side, per tab/context, so reloads and a second window agree. Persist in the same sqlite store as RunRecord if cheap; otherwise a restart loses it.
 - One message is popped at a time under the per-context turn lock (atomic, so two windows cannot double-send). Drain only while a UI is attached; otherwise the message stays "queued, will send when you return".
 - Sends on `end_turn` or when the turn is parked on an unresolved approval card. A user Stop and an error turn pause the queue ("Queue paused · Resume · Clear").
-- A queued message is never approval for a pending card. Card expiry (10 minutes) is unchanged.
+- A queued message is never approval for a pending card. Card expiry is unchanged (300 s default, 600 s for host cards, per registry entry).
 - Snapshot the full composer payload at enqueue (attachments, pasted images, model, skill pin, scoped skill), with a stored-size cap. Queue plain messages only: slash commands, card approvals and failover consent are not queueable.
 - Client-generated id per message makes double-Enter idempotent; once popped, a chip is not editable. Small fixed queue cap with a clear message.
 - Every queue POST/PUT/PATCH/DELETE route uses `dependencies=[Depends(verify_csrf)]`.
@@ -134,10 +136,10 @@ Critical path: #172 (exit codes) -> #115 (run-on-host card) -> #114 (sandbox har
 
 - Spec: its own docs-only PR off main (`docs/execution-contract-spec`), so the design is approved before code.
 - PR0: replace the verdict text in `_exit_note` with neutral facts (exit code, hex, URLs seen). `_exit_note` exists only on #172's branch (`fix/agent-tool-limits`, commit 034b2041), so PR0 is a follow-up commit on #172, or "PR0 - Stacked on PR172" if split; never branched off main. Existing tests that assert `_exit_note` strings change.
-- PR1a: supervisor core, RunRecord, sqlite, startup reconciliation, host path via the shim, turn id and per-context turn lock, conformance harness with host cases. Base main after #172, #115, #171, #173 merge.
+- PR1a: supervisor core, RunRecord, sqlite, startup reconciliation, host path via the shim, conformance harness with host cases. Depends on hardening PR 1 (turn id, per-context turn lock). Base main after #172, #115, #171, #173 merge.
 - PR1b: result facts, uniform untrusted marking, `probe_local_url`. Stacked on PR1a.
 - PR2: migrate sandboxed `run_shell` and `run_python` (budgets, real Stop, status row). Stacked on PR1b; #114 merges first.
-- PR3: message queue. Stacked on PR1a, parallel to PR1b/PR2.
+- PR3: message queue (hardening PR 11a). Based on hardening PR 1, not on PR1a; parallel to PR1b/PR2.
 - PR4: `mcp_call` records. Stacked on PR1a.
 
 Conflict notes: keep `app.js` edits in one contiguous block or small module, no reformatting; `app.js` has a BOM and LF line endings, so normalize to LF and keep the BOM. Every new POST/PUT/PATCH/DELETE route (Stop, queue) uses `dependencies=[Depends(verify_csrf)]`; do not add to `tests/csrf_route_baseline.txt`.
