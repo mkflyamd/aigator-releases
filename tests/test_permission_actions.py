@@ -45,7 +45,7 @@ NO_GATE = frozenset("""
 read_skill list_schedules fetch_webpage web_search analyze_mcp_server schedule_task ask_user
 request_skill describe_images mcp_connection_status
 browser_navigate browser_task browser_search
-get_code_changes run_python run_shell stop_shell_process check_shell_process run_on_host host_command_result
+get_code_changes run_python run_shell stop_shell_process check_shell_process run_on_host host_command_result probe_local_url
 get_docx_info update_docx read_docx create_docx
 recalc_excel get_excel_info update_excel create_excel list_excel_sheets read_excel
 pptx_add_autoshape get_pptx_info create_pptx pptx_write_table_cell pptx_replace_picture pptx_list_shapes

@@ -22,6 +22,23 @@ _PROGRAMS = {
         "        signal.signal(getattr(signal, name), signal.SIG_IGN)\n"
         "time.sleep(60)"
     ),
+    "serves_viewer": (
+        "import http.server, threading, time\n"
+        "httpd = http.server.ThreadingHTTPServer(('127.0.0.1', 0), http.server.SimpleHTTPRequestHandler)\n"
+        "threading.Thread(target=httpd.serve_forever, daemon=True).start()\n"
+        "print(f'Viewer at http://127.0.0.1:{httpd.server_address[1]}/', flush=True)\n"
+        "time.sleep(60)"
+    ),
+    "viewer_then_crash": (
+        "import pathlib, subprocess, sys\n"
+        "server = 'import http.server; h = http.server.ThreadingHTTPServer((\"127.0.0.1\", 0), "
+        "http.server.SimpleHTTPRequestHandler); print(h.server_address[1], flush=True); h.serve_forever()'\n"
+        "child = subprocess.Popen([sys.executable, '-c', server], stdout=subprocess.PIPE, text=True)\n"
+        "port = child.stdout.readline().strip()\n"
+        "pathlib.Path(PID_FILE).write_text(str(child.pid))\n"
+        "print(f'Viewer at http://127.0.0.1:{port}/', flush=True)\n"
+        "raise SystemExit(3)"
+    ),
     "detached_child": (
         "import subprocess, sys, pathlib\n"
         "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
