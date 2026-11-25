@@ -921,3 +921,16 @@ def test_a_packaged_build_never_contacts_the_host(monkeypatch):
     finally:
         terminal._pty_sessions.pop("sess-frozen", None)
         fallback.end()
+
+
+def test_a_host_from_before_pid_reporting_is_refused_so_takeover_cannot_trust_it(host):
+    import socket
+
+    info, _ = host
+    assert pty_host.PROTOCOL_VERSION >= 2
+    with socket.create_connection(("127.0.0.1", info["port"]), 5) as s:
+        s.sendall(
+            (json.dumps({"op": "hello", "token": TOKEN, "proto": pty_host.PROTOCOL_VERSION - 1}) + "\n").encode()
+        )
+        reply = json.loads(s.makefile("rb").readline())
+    assert reply["ok"] is False and reply["error"] == "proto"

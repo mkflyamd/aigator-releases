@@ -16899,17 +16899,45 @@ _initScrollOverride();
 selectSkill('gator');
 
 // ── Confirm modal (replaces browser confirm()) ─────────
-function _showConfirmModal(title, body, confirmLabel, onConfirm) {
+// Escape closes; Tab and Shift+Tab wrap inside the dialog.
+function _confirmModalKeydown(e, box, close) {
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    close();
+    return;
+  }
+  if (e.key !== 'Tab') return;
+  const stops = box.querySelectorAll('button, [href], input, select, textarea');
+  if (!stops.length) {
+    e.preventDefault();
+    return;
+  }
+  const first = stops[0];
+  const last = stops[stops.length - 1];
+  const outside = !box.contains(document.activeElement);
+  if (e.shiftKey && (document.activeElement === first || outside)) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && (document.activeElement === last || outside)) {
+    e.preventDefault();
+    first.focus();
+  }
+}
+
+// opts.cancelFirst: start on Cancel instead of the confirm button (destructive actions).
+function _showConfirmModal(title, body, confirmLabel, onConfirm, opts) {
   const existing = document.getElementById('confirm-modal-overlay');
   if (existing) existing.remove();
+  const invoker = document.activeElement;
 
   const overlay = document.createElement('div');
   overlay.id = 'confirm-modal-overlay';
   overlay.className = 'confirm-modal-overlay';
   overlay.innerHTML = `
-    <div class="confirm-modal-box">
-      <div class="confirm-modal-title">${title}</div>
-      <div class="confirm-modal-body">${body}</div>
+    <div class="confirm-modal-box" role="alertdialog" aria-modal="true"
+         aria-labelledby="confirm-modal-title" aria-describedby="confirm-modal-body" tabindex="-1">
+      <div class="confirm-modal-title" id="confirm-modal-title">${title}</div>
+      <div class="confirm-modal-body" id="confirm-modal-body">${body}</div>
       <div class="confirm-modal-actions">
         <button class="btn-ghost confirm-modal-cancel">Cancel</button>
         <button class="btn-primary confirm-modal-ok">${confirmLabel}</button>
@@ -16917,7 +16945,11 @@ function _showConfirmModal(title, body, confirmLabel, onConfirm) {
     </div>`;
   document.body.appendChild(overlay);
 
-  const close = () => overlay.remove();
+  const box = overlay.querySelector('.confirm-modal-box');
+  const close = () => {
+    overlay.remove();
+    if (invoker && typeof invoker.focus === 'function' && document.contains(invoker)) invoker.focus();
+  };
   overlay.querySelector('.confirm-modal-cancel').addEventListener('click', close);
   overlay.querySelector('.confirm-modal-ok').addEventListener('click', () => {
     close();
@@ -16926,8 +16958,9 @@ function _showConfirmModal(title, body, confirmLabel, onConfirm) {
   overlay.addEventListener('click', (e) => {
     if (e.target === overlay) close();
   });
-  // Focus the confirm button
-  overlay.querySelector('.confirm-modal-ok').focus();
+  overlay.addEventListener('keydown', (e) => _confirmModalKeydown(e, box, close));
+  const start = opts && opts.cancelFirst ? '.confirm-modal-cancel' : '.confirm-modal-ok';
+  overlay.querySelector(start).focus();
 }
 
 // Prompt modal — styled replacement for browser prompt().
