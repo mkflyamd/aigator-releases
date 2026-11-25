@@ -283,6 +283,8 @@ def _prepare_env(tmp_path, monkeypatch, keys=()):
     monkeypatch.setattr(ah, "HANDOFF_DIR", tmp_path / "h")
     monkeypatch.setattr(ah, "_configured_api_keys", lambda: list(keys))
     monkeypatch.setattr(ah, "_session_started_at", lambda sid: None)
+    # session ownership has its own tests in test_agent_handoff_routes.py
+    monkeypatch.setattr(ah, "verify_session_owner", lambda agent, project_id, sid: None)
 
 
 def test_prepare_handoff_redacts_every_configured_key(tmp_path, monkeypatch):

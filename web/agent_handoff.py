@@ -1,6 +1,7 @@
 """Agent handoff: continue one coding-agent session in another agent.
 
-Builds a redacted snapshot of the source session (transcript for Claude Code
+Builds a snapshot of the source session, with secrets redacted on a best-effort
+basis (other sensitive text may remain), (transcript for Claude Code
 and Codex, bounded PTY capture otherwise) plus a small prompt that points the
 target agent at it. The target is launched by the normal generic-agent route,
 so its gateway environment is applied there, never here.
@@ -12,11 +13,13 @@ import json
 import logging
 import os
 import re
+import tempfile
 import time
 import uuid
 from collections.abc import Iterable
 from pathlib import Path
 
+import file_perms
 import generic_agent
 
 _log = logging.getLogger("agent_handoff")
@@ -417,6 +420,25 @@ def _clip(text: str, red: Redactor | None = None) -> str:
     return text if len(text) <= MESSAGE_MAX_CHARS else text[:MESSAGE_MAX_CHARS] + " [truncated]"
 
 
+def _write_private(path: Path, content: str) -> None:
+    """Write `content` to `path` so it is never visible to other users and never
+    half-written: a temporary file in the same folder is restricted to the owner
+    first, then moved into place. Raises OSError, leaving nothing behind, when the
+    restriction cannot be applied."""
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=".handoff-", suffix=".tmp")
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
+            fh.write(content)
+        file_perms.restrict_to_owner(tmp)
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    finally:
+        file_perms.forget(tmp)
+
+
 def save_handoff(
     *,
     source_agent: str,
@@ -438,8 +460,9 @@ def save_handoff(
     user = _clip(last_user, red)
     assistant = _clip(last_assistant, red)
     HANDOFF_DIR.mkdir(parents=True, exist_ok=True)
+    file_perms.restrict_to_owner(HANDOFF_DIR, directory=True)
     snap_path = HANDOFF_DIR / f"{handoff_id}.txt"
-    snap_path.write_text(snapshot, encoding="utf-8")
+    _write_private(snap_path, snapshot)
     record = {
         "handoff_id": handoff_id,
         "source_agent": source_agent,
@@ -450,7 +473,11 @@ def save_handoff(
         "last_user_message": user,
         "prompt": build_prompt(source_agent, cwd, snap_path, user, assistant),
     }
-    (HANDOFF_DIR / f"{handoff_id}.json").write_text(json.dumps(record), encoding="utf-8")
+    try:
+        _write_private(HANDOFF_DIR / f"{handoff_id}.json", json.dumps(record))
+    except OSError:
+        snap_path.unlink(missing_ok=True)
+        raise
     return record
 
 
@@ -538,7 +565,22 @@ def _crush_handoff_text(
         return "", "", ""
 
 
+class SessionNotOwned(Exception):
+    """The requested terminal session is not the claimed project's session for the claimed agent."""
+
+
+def verify_session_owner(agent: str, project_id: str, pty_session_id: str) -> None:
+    """Fails closed: a session whose project and agent labels are missing or differ
+    from the claim is refused before anything is captured from it."""
+    from routes.terminal import session_owner
+
+    owner = session_owner(pty_session_id)
+    if not owner or owner.get("project_id") != project_id or owner.get("agent") != agent:
+        raise SessionNotOwned()
+
+
 def prepare_handoff(agent: str, project_id: str, cwd: str, pty_session_id: str) -> dict:
+    verify_session_owner(agent, project_id, pty_session_id)
     red = Redactor(_configured_api_keys())
     text, last_user, last_assistant, kind = "", "", "", "capture"
     import generic_agent
