@@ -12039,7 +12039,8 @@ function _renderHostCommandCard(data, requestId, cardTab, tabId, reload) {
       stopClock();
       actions.remove();
       _pendingSandboxCards.get(cardTab)?.delete(requestId);
-      footNote.textContent = 'Lost contact with AI Gator. The command may still be running. Reload to see where it ended.';
+      footNote.textContent =
+        'Lost contact with AI Gator. The command may still be running. Reload to see where it ended.';
       return;
     }
     settled = true;
@@ -12124,9 +12125,13 @@ function _renderHostCommandCard(data, requestId, cardTab, tabId, reload) {
     // The tab was switched away and back: this card is drawn fresh, but its command may already be running or over.
     // The old card's poll still tells the agent when it ends, so this one only shows where the run stands.
     (async () => {
-      const res = await fetch(`/api/runs?context_id=${encodeURIComponent(contextId)}`).catch(() => null);
+      const res = await fetch(`/api/runs?context_id=${encodeURIComponent(contextId)}`).catch(
+        () => null,
+      );
       const listed = res && res.ok ? await res.json().catch(() => null) : null;
-      const record = Array.isArray(listed?.runs) ? listed.runs.find((r) => r.id === requestId) : null;
+      const record = Array.isArray(listed?.runs)
+        ? listed.runs.find((r) => r.id === requestId)
+        : null;
       if (!record || record.state === 'awaiting_approval' || settled) return;
       if (record.state === 'expired') {
         expire();
@@ -12169,7 +12174,13 @@ function _showSandboxApproval(data, ownerTabId, reload) {
   );
   if (seen) return;
   if (data.tool === 'run_on_host') {
-    _renderHostCommandCard(data, requestId, cardTab, ownerTabId || _activeTabId || 'default', reload);
+    _renderHostCommandCard(
+      data,
+      requestId,
+      cardTab,
+      ownerTabId || _activeTabId || 'default',
+      reload,
+    );
     return;
   }
   const card = document.createElement('div');
