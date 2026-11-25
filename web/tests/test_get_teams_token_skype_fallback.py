@@ -113,7 +113,11 @@ def _call_with_cfg(h, cfg_dir: Path) -> str:
     def patched_home():
         return cfg_dir
 
-    with patch.object(Path, "home", patched_home):
+    import secure_store
+
+    with patch.object(Path, "home", patched_home), patch.object(
+        secure_store, "_home", patched_home
+    ):
         # Reset warned flag so expiry warning path is exercised cleanly
         mod._teams_token_warned = False
         result = mod.get_teams_token()

@@ -33,7 +33,7 @@ jobs:
           uv run coverage run \
             --source=web,packaging \
             --omit='*/tests/*' \
-            -m pytest tests -q
+            -m pytest tests web/tests -q
           test_status=$?
           uv run coverage report --show-missing
           uv run coverage json -o coverage.json

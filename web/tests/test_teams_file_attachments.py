@@ -181,7 +181,7 @@ class TestNormalizeSkypeMessagesSurfacesAttachments:
         # (identified by "reactions": reactions immediately preceding it) now
         # calls the helper instead of hardcoding an empty list.
         assert (
-            '"reactions": reactions,\n            "attachments": _extract_skype_file_attachments('
+            '"reactions": reactions,\n                "attachments": _extract_skype_file_attachments('
             in body
         ), (
             "_normalize_skype_messages's message-append site must call "

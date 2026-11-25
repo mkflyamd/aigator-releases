@@ -52,7 +52,8 @@ class TestLocationLookupSourcePresence:
         """Edit message endpoint must catch LocationLookupFailed."""
         edit_start = TEAMS_SRC.find("tp_teams_edit_message")
         assert edit_start != -1
-        edit_body = TEAMS_SRC[edit_start : edit_start + 2000]
+        edit_end = TEAMS_SRC.find("\n@router.", edit_start)
+        edit_body = TEAMS_SRC[edit_start : edit_end if edit_end != -1 else len(TEAMS_SRC)]
         assert "LocationLookupFailed" in edit_body, (
             "routes/teams.py: tp_teams_edit_message must retry on LocationLookupFailed"
         )

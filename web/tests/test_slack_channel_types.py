@@ -41,9 +41,15 @@ class TestExternalChannelHelperExists:
     def test_channels_endpoint_calls_fetch_external(self):
         route_start = SRC.find("async def slack_channels()")
         assert route_start != -1
-        route_body = SRC[route_start : route_start + 2500]
-        assert "_fetch_external_channels" in route_body, (
-            "The slack_channels route must call _fetch_external_channels() and "
+        route_end = SRC.find("\n@router.", route_start)
+        route_body = SRC[route_start : route_end if route_end != -1 else len(SRC)]
+        assert "_warm_workspace_channels" in route_body
+        warm_start = SRC.find("def _warm_workspace_channels(")
+        assert warm_start != -1
+        warm_end = SRC.find("\ndef ", warm_start + 1)
+        warm_body = SRC[warm_start : warm_end if warm_end != -1 else len(SRC)]
+        assert "_fetch_external_channels" in warm_body, (
+            "The slack_channels route must reach _fetch_external_channels() and "
             "merge the results so Slack Connect channels appear in the pane."
         )
 
