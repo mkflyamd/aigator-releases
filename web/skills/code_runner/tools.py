@@ -20,10 +20,11 @@ from proc_utils import (
     diff_outputs,
 )
 import permissions
+from runs.inline import RunRefused, launch_supervised, with_run_fields
 import sandbox
 from sandbox import approvals as sandbox_approvals
 from sandbox import task_grants
-from sandbox.paths import HOME_DENY, PathNotGrantable, is_within, normalize_grant_paths, normalize_hosts
+from sandbox.paths import HOME_DENY, PathNotGrantable, check_grant_size, is_within, normalize_grant_paths, normalize_hosts
 from sandbox.policy import load_policy
 
 SKILL_ID = "code_runner"
@@ -324,8 +325,8 @@ def _not_grantable_message(paths, reason: str | None = None) -> str:
     )
     return (
         "The sandbox cannot be given access to " + ", ".join(str(p) for p in paths) + " on this computer: "
-        f"{why} Nothing was run and no approval was asked. Do not request these folders again; use another "
-        "way to get the data (a copy in a folder the user owns), or tell the user it cannot be used."
+        f"{why} Nothing was run and no approval was asked. Do not request these folders again; write into OUTPUT_DIR "
+        "or use a copy in a folder the user owns, or tell the user it cannot be used."
     )
 
 
@@ -399,6 +400,7 @@ def _check_requested_access(extra_read_paths, extra_write_paths, network_hosts, 
     try:
         read_paths = normalize_grant_paths(extra_read_paths)
         write_paths = normalize_grant_paths(extra_write_paths)
+        check_grant_size([*read_paths, *write_paths])
         hosts = normalize_hosts(network_hosts)
     except (PathNotGrantable, ValueError) as exc:
         return {"error": f"{exc} Do not retry with this value."}
@@ -726,6 +728,12 @@ def _tool_run_python(
             **tags,
         }
 
+    run_record = None
+    cancelled = False
+
+    def with_facts(result: dict) -> dict:
+        return with_run_fields(result, run_record) if run_record else result
+
     start = time.monotonic()
     try:
         if mode == "enforced":
@@ -755,7 +763,9 @@ def _tool_run_python(
             )
             # Every failure here ends the call: never fall back to running the code unsandboxed.
             try:
-                res = sandbox.launch_sandboxed(request)
+                res, run_record = launch_supervised(request, context_id=_context_id, kind="python")
+            except RunRefused as exc:
+                return fail(str(exc), f"run not started: {exc}")
             except sandbox.SandboxUnavailable as exc:  # raised before anything ran
                 return fail(_launch_refusal_message(exc), f"sandbox unavailable: {exc}")
             except sandbox.SandboxRunError as exc:  # the process may already have run
@@ -766,7 +776,7 @@ def _tool_run_python(
                     "Tell the user; do not retry automatically.",
                     f"sandbox launch OSError: {exc}",
                 )
-            returncode, timed_out = res.returncode, res.timed_out
+            returncode, timed_out, cancelled = res.returncode, res.timed_out, res.cancelled
             stdout, stderr = res.stdout or "", _with_sandbox_hint(res.stderr or "")
         else:
             # Opted out (sandbox unavailable, policy allows it): the old unsandboxed path.
@@ -799,14 +809,24 @@ def _tool_run_python(
         _write_forensic(run_dir / "stderr.log", stderr)
 
         if timed_out:
-            return {
+            return with_facts({
                 "error": f"Code execution timed out after {timeout}s.",
                 "stdout": "",
                 "files": [],
                 "runtime_ms": elapsed_ms,
                 "forensic": _forensic_paths(run_id, run_dir),
                 **tags,
-            }
+            })
+
+        if cancelled:
+            return with_facts({
+                "error": "You stopped this code before it finished.",
+                "stdout": stdout,
+                "files": [],
+                "runtime_ms": elapsed_ms,
+                "forensic": _forensic_paths(run_id, run_dir),
+                **tags,
+            })
 
         import mimetypes as _mimetypes
 
@@ -839,7 +859,7 @@ def _tool_run_python(
             }
             if external_files:
                 result["output_files"] = external_files
-            return result
+            return with_facts(result)
 
         result = {
             "stdout": stdout,
@@ -851,7 +871,7 @@ def _tool_run_python(
         }
         if external_files:
             result["output_files"] = external_files
-        return result
+        return with_facts(result)
 
     except Exception as exc:
         return fail(str(exc), f"runner exception: {exc}")
@@ -899,12 +919,12 @@ TOOL_DEFS = [
                 "extra_read_paths": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Absolute paths of existing files or folders outside OUTPUT_DIR the code must read. Needs the user's approval; request only what the task needs.",
+                    "description": "Absolute paths of existing files or folders outside OUTPUT_DIR the code must read. Needs the user's approval; request only what the task needs. These can never be granted, so do not ask: ~/.gator (only ~/.gator/outputs is allowed), the home folder, drive roots, system folders. For those, write into OUTPUT_DIR instead.",
                 },
                 "extra_write_paths": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Absolute paths of existing folders or files outside OUTPUT_DIR the code must write. Needs the user's approval.",
+                    "description": "Absolute paths of existing folders or files outside OUTPUT_DIR the code must write. Needs the user's approval. These can never be granted, so do not ask: ~/.gator (only ~/.gator/outputs is allowed), the home folder, drive roots, system folders. For those, write into OUTPUT_DIR instead.",
                 },
                 "network_hosts": {
                     "type": "array",

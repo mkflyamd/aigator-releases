@@ -9,6 +9,7 @@ suppresses that. No-op on non-Windows platforms.
 
 import logging
 import os
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -21,6 +22,77 @@ def no_window_kwargs() -> dict:
     if sys.platform == "win32":
         return {"creationflags": subprocess.CREATE_NO_WINDOW}
     return {}
+
+
+def group_kwargs() -> dict:
+    """Popen kwargs that start the child in its own process group (Windows) or session (POSIX), with no console window."""
+    if sys.platform == "win32":
+        return {"creationflags": subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP}
+    return {"start_new_session": True}
+
+
+if sys.platform == "win32":
+    import ctypes
+    from ctypes import wintypes
+
+    _k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    _k32.CreateJobObjectW.restype = wintypes.HANDLE
+    _k32.CreateJobObjectW.argtypes = [wintypes.LPVOID, wintypes.LPCWSTR]
+    _k32.AssignProcessToJobObject.restype = wintypes.BOOL
+    _k32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+    _k32.TerminateJobObject.restype = wintypes.BOOL
+    _k32.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
+    _k32.CloseHandle.restype = wintypes.BOOL
+    _k32.CloseHandle.argtypes = [wintypes.HANDLE]
+
+
+def attach_job(proc: subprocess.Popen) -> None:
+    """Put a freshly started child in a Windows Job Object so its tree can be killed after the parent exits.
+
+    taskkill /T follows parent-pid links, which are gone once the shell exits and leaves a child behind.
+    The job is only terminated on request (no kill-on-close): a command that exits normally leaves its
+    daemons running. No-op on POSIX, where killpg covers the process group.
+    """
+    if sys.platform != "win32":
+        return
+    job = _k32.CreateJobObjectW(None, None)
+    if not job:
+        return
+    if not _k32.AssignProcessToJobObject(job, int(proc._handle)):
+        _k32.CloseHandle(job)
+        return
+    proc._gator_job = job
+
+
+def release_job(proc: subprocess.Popen) -> None:
+    """Drop the job handle once the run is over; processes in the job keep running."""
+    job = getattr(proc, "_gator_job", None)
+    if job:
+        proc._gator_job = None
+        _k32.CloseHandle(job)
+
+
+def kill_process_tree(proc: subprocess.Popen) -> None:
+    """Kill a child started with group_kwargs() and everything it spawned."""
+    if sys.platform == "win32":
+        job = getattr(proc, "_gator_job", None)
+        if job:
+            proc._gator_job = None
+            _k32.TerminateJobObject(job, 1)
+            _k32.CloseHandle(job)
+        subprocess.run(
+            ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+            capture_output=True, check=False, creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    else:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+    try:
+        proc.kill()
+    except OSError:
+        pass
 
 
 # ── Output-file reporter ─────────────────────────────────────────────────────
