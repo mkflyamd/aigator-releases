@@ -50,7 +50,8 @@ function world() {
     _queuedUnsent: false,
     _queueDrain: (id) => ctx.drained.push(id),
     _queueRearmStop: () => {},
-    _queuePostSettled: (_tab, status, code) => status === 0 || (status === 409 && code === 'turn_in_progress'),
+    _queuePostSettled: (_tab, status, code) =>
+      status === 0 || (status === 409 && code === 'turn_in_progress'),
     _discardQueuedAttempt: () => {
       ctx.discards++;
       bubbles.length = 0;

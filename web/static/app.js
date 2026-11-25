@@ -9432,9 +9432,14 @@ function _syncComposerButton() {
   if (!slot || !btn) return;
   const mode = _composerButtonMode(btn.classList.contains('is-streaming'), _composerCanQueue());
   slot.dataset.mode = mode;
-  btn.setAttribute('aria-label', { send: 'Send message', stop: 'Stop reply', queue: 'Queue message' }[mode]);
+  btn.setAttribute(
+    'aria-label',
+    { send: 'Send message', stop: 'Stop reply', queue: 'Queue message' }[mode],
+  );
   if (mode === 'send') btn.removeAttribute('title');
-  else btn.title = mode === 'stop' ? 'Stop reply' : 'Queue this message. It sends when the reply finishes.';
+  else
+    btn.title =
+      mode === 'stop' ? 'Stop reply' : 'Queue this message. It sends when the reply finishes.';
   const stop = document.getElementById('composer-stop-btn');
   if (stop) stop.hidden = mode !== 'queue';
   _updatePlaceholder();
@@ -10623,7 +10628,11 @@ function _queueStatus(tabId, now) {
   } else if (_queueCardHold(tabId)) {
     status = { kind: 'hold', tone: 'warn', text: 'Waiting for your answer on the card' };
   } else if (_chatTaskIds.has(tabId)) {
-    status = { kind: 'running', tone: 'neutral', text: 'Next message sends when this reply finishes' };
+    status = {
+      kind: 'running',
+      tone: 'neutral',
+      text: 'Next message sends when this reply finishes',
+    };
   } else if (_queueBusy.has(tabId)) {
     status = { kind: 'starting', tone: 'accent', text: 'Sending next message' };
   } else if (_queueRearms.get(tabId)?.timer) {
@@ -12622,7 +12631,9 @@ function _showSandboxApproval(data, ownerTabId) {
       }
       if (!res.ok) {
         const detail = await res.json().catch(() => ({}));
-        throw Object.assign(new Error(detail?.detail || `HTTP ${res.status}`), { status: res.status });
+        throw Object.assign(new Error(detail?.detail || `HTTP ${res.status}`), {
+          status: res.status,
+        });
       }
       let outcome = 'Denied.';
       if (decision === 'approve') {
@@ -16610,7 +16621,8 @@ form.addEventListener('submit', async (e) => {
             _queuedUnsent = true;
             _discardQueuedAttempt();
             // The message stays queued, so Resume sends it with its own bubble: say why now without leaving one here.
-            if (pausedQueue) _showConnectivityToast(_queueRefusalMessage(postRes.status, errCode), 'warn');
+            if (pausedQueue)
+              _showConnectivityToast(_queueRefusalMessage(postRes.status, errCode), 'warn');
             _streamOver = true;
             if (_activeTabId === requestTabId) {
               _isStreaming = false;

@@ -91,7 +91,11 @@ ${['_queueBusyStart', '_queueBusyEnd', '_queueRearm', '_queueRearmStop'].map(fun
     await Promise.all([first, second]);
     const posts = w.calls.filter(([m]) => m === 'POST');
     assert.strictEqual(posts.length, 1, 'two Enters before the server answers queue one message');
-    assert.strictEqual(w.input.textContent, '', 'the composer is cleared once the message is queued');
+    assert.strictEqual(
+      w.input.textContent,
+      '',
+      'the composer is cleared once the message is queued',
+    );
   }
 
   {
@@ -99,7 +103,11 @@ ${['_queueBusyStart', '_queueBusyEnd', '_queueRearm', '_queueRearmStop'].map(fun
     await w.ctx._queueComposerMessage();
     assert.strictEqual(w.calls.length, 0, 'a slash command is not queued');
     assert.strictEqual(w.toasts[0][1], 'warn', 'the refusal is a visible warning');
-    assert.strictEqual(w.input.textContent, '/demo something', 'the slash command stays in the composer');
+    assert.strictEqual(
+      w.input.textContent,
+      '/demo something',
+      'the slash command stays in the composer',
+    );
   }
 
   {
@@ -176,7 +184,10 @@ ${['_queueBusyStart', '_queueBusyEnd', '_queueRearm', '_queueRearmStop'].map(fun
 
   {
     const w = world({ chatRunning: false });
-    w.ctx._pendingTabCards.set('tab1', new Map([['note', { survivesTurn: false, expired: false }]]));
+    w.ctx._pendingTabCards.set(
+      'tab1',
+      new Map([['note', { survivesTurn: false, expired: false }]]),
+    );
     await w.ctx._queueDrain('tab1');
     assert.strictEqual(
       w.calls.filter(([m]) => m === 'submit').length,

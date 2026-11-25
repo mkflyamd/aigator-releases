@@ -84,7 +84,20 @@ function world({ heads = [], submit } = {}) {
     fn();
     await new Promise((resolve) => setImmediate(resolve));
   };
-  return { ctx, calls, timers: { get length() { return pending().length; }, get 0() { return pending()[0]; } }, fire, pending };
+  return {
+    ctx,
+    calls,
+    timers: {
+      get length() {
+        return pending().length;
+      },
+      get 0() {
+        return pending()[0];
+      },
+    },
+    fire,
+    pending,
+  };
 }
 
 const count = (calls, what) => calls.filter((c) => c === what).length;
@@ -147,14 +160,30 @@ const count = (calls, what) => calls.filter((c) => c === what).length;
     for (;;) {
       w.ctx._queuePostSettled('tab1', status, code);
       if (!w.pending().length || guard++ > 20) break;
-      assert.strictEqual(w.ctx._queueStatus('tab1', 0).kind, 'starting', `${label}: retrying, not failed yet`);
-      assert.match(w.ctx._queueStatus('tab1', 9000).text, /retry/i, `${label}: says it is retrying until the cap`);
+      assert.strictEqual(
+        w.ctx._queueStatus('tab1', 0).kind,
+        'starting',
+        `${label}: retrying, not failed yet`,
+      );
+      assert.match(
+        w.ctx._queueStatus('tab1', 9000).text,
+        /retry/i,
+        `${label}: says it is retrying until the cap`,
+      );
       await w.fire(0);
     }
-    assert.strictEqual(count(w.calls, 'submit:a'), 4, `${label}: the first send plus one retry per schedule entry, then stop`);
+    assert.strictEqual(
+      count(w.calls, 'submit:a'),
+      4,
+      `${label}: the first send plus one retry per schedule entry, then stop`,
+    );
     assert.strictEqual(w.pending().length, 0, `${label}: nothing left scheduled`);
     const status2 = w.ctx._queueStatus('tab1', 0);
-    assert.strictEqual(status2.kind, 'failsafe', `${label}: the failsafe shows at the cap, not later`);
+    assert.strictEqual(
+      status2.kind,
+      'failsafe',
+      `${label}: the failsafe shows at the cap, not later`,
+    );
     assert.strictEqual(w.ctx._queueStatus('tab1', 50).kind, 'failsafe');
     // A later settle (another refusal) does not start a new round of retries.
     w.ctx._queuePostSettled('tab1', status, code);
@@ -162,7 +191,11 @@ const count = (calls, what) => calls.filter((c) => c === what).length;
     // The user sending it by hand starts afresh.
     w.ctx._queueRearmStop('tab1');
     w.ctx._queuePostSettled('tab1', status, code);
-    assert.strictEqual(w.pending().length, 1, `${label}: Send now, Resume and a new enqueue reset the count`);
+    assert.strictEqual(
+      w.pending().length,
+      1,
+      `${label}: Send now, Resume and a new enqueue reset the count`,
+    );
   }
 
   // An accepted POST starts the next message afresh; other answers that leave the message queued do not retry.
@@ -191,7 +224,9 @@ const count = (calls, what) => calls.filter((c) => c === what).length;
     };
     vm.createContext(ctx);
     vm.runInContext(
-      ['_saveTabDisplayHtml', '_unsaveTabDisplayHtml', '_discardUnsentQueuedSend'].map(functionSource).join('\n'),
+      ['_saveTabDisplayHtml', '_unsaveTabDisplayHtml', '_discardUnsentQueuedSend']
+        .map(functionSource)
+        .join('\n'),
       ctx,
     );
     const history = [];
@@ -212,7 +247,11 @@ const count = (calls, what) => calls.filter((c) => c === what).length;
       ctx._discardUnsentQueuedSend('tab1', attempt());
       assert.strictEqual(bubbles.length, 0, 'a refused attempt leaves no bubble behind');
       assert.strictEqual(history.length, 0, 'and no history entry');
-      assert.deepStrictEqual(JSON.parse(store.get('tab-disp-tab1')), [], 'and nothing in the saved display');
+      assert.deepStrictEqual(
+        JSON.parse(store.get('tab-disp-tab1')),
+        [],
+        'and nothing in the saved display',
+      );
     }
     history.push({ role: 'user', content: 'earlier' });
     attempt();
@@ -239,7 +278,11 @@ const count = (calls, what) => calls.filter((c) => c === what).length;
       });
     const first = w.ctx._queueDrain('tab1');
     await w.ctx._queueDrain('tab1');
-    assert.strictEqual(count(w.calls, 'head'), 1, 'a drain during an in-flight one does not start a second');
+    assert.strictEqual(
+      count(w.calls, 'head'),
+      1,
+      'a drain during an in-flight one does not start a second',
+    );
     assert(w.ctx._queueDirty.has('tab1'), 'it is remembered');
     release();
     await first;
@@ -271,12 +314,20 @@ const count = (calls, what) => calls.filter((c) => c === what).length;
     const early = w.ctx._queueStatus('tab1', 1000);
     assert.strictEqual(early.kind, 'starting');
     assert.strictEqual(early.recheckMs, 3000);
-    assert.strictEqual(w.ctx._queueStatus('tab1', 3900).kind, 'starting', 'not before the window ends');
+    assert.strictEqual(
+      w.ctx._queueStatus('tab1', 3900).kind,
+      'starting',
+      'not before the window ends',
+    );
     const late = w.ctx._queueStatus('tab1', 4000);
     assert.strictEqual(late.kind, 'failsafe');
     assert.strictEqual(late.tone, 'danger');
     w.ctx._chatTaskIds.set('tab1', 'task');
-    assert.strictEqual(w.ctx._queueStatus('tab1', 9000).kind, 'running', 'a running reply is not a failure');
+    assert.strictEqual(
+      w.ctx._queueStatus('tab1', 9000).kind,
+      'running',
+      'a running reply is not a failure',
+    );
     assert.strictEqual(w.ctx._queueStatus('tab1', 9500).tone, 'neutral');
     w.ctx._queueByTab.set('tab1', { items: [], paused: false });
     assert.strictEqual(w.ctx._queueStatus('tab1', 9500), null, 'an empty queue shows nothing');
@@ -295,7 +346,14 @@ const count = (calls, what) => calls.filter((c) => c === what).length;
   // composer clears. (The real click handler, _requestTypedSubmit and _queueComposerMessage run against stubs; the
   // form's submit handler is stood in for by its first routing rule: a typed submit while a reply runs is queued.)
   {
-    const run = async ({ text = 'hello', images = [], chips = [], clicks = 1, target = 'send', dropdown = false }) => {
+    const run = async ({
+      text = 'hello',
+      images = [],
+      chips = [],
+      clicks = 1,
+      target = 'send',
+      dropdown = false,
+    }) => {
       const posts = [];
       const resets = [];
       let stops = 0;
@@ -305,7 +363,14 @@ const count = (calls, what) => calls.filter((c) => c === what).length;
         style: {},
         dataset: {},
         querySelector: (selector) =>
-          chips.some((c) => selector.split(',').map((x) => x.trim()).includes(c)) ? {} : null,
+          chips.some((c) =>
+            selector
+              .split(',')
+              .map((x) => x.trim())
+              .includes(c),
+          )
+            ? {}
+            : null,
       };
       const sendBtn = {
         classList: { contains: () => true },
@@ -395,8 +460,16 @@ const count = (calls, what) => calls.filter((c) => c === what).length;
     assert(queued.ctx._chatTaskIds.has('tab1'), 'the reply is still registered');
     assert.strictEqual(queued.input.textContent, '', 'the composer clears');
     assert.strictEqual(queued.prevented, 1, 'the click is handled, not passed on');
-    assert.deepStrictEqual(queued.resets, ['tab1'], 'a new queued message starts a fresh retry count');
-    assert.strictEqual((await run({ clicks: 2 })).posts.length, 1, 'a double click still queues once');
+    assert.deepStrictEqual(
+      queued.resets,
+      ['tab1'],
+      'a new queued message starts a fresh retry count',
+    );
+    assert.strictEqual(
+      (await run({ clicks: 2 })).posts.length,
+      1,
+      'a double click still queues once',
+    );
     assert.strictEqual(
       (await run({ images: [{ name: 'a.png', base64: 'x' }], text: '' })).posts.length,
       1,
@@ -409,7 +482,11 @@ const count = (calls, what) => calls.filter((c) => c === what).length;
     assert.strictEqual(split.stops, 1, 'the separate Stop button stops');
     assert.strictEqual(split.posts.length, 0, 'and queues nothing');
     const open = await run({ dropdown: true });
-    assert.strictEqual(open.posts.length, 1, 'a click on the Queue pill queues even with a mention dropdown open');
+    assert.strictEqual(
+      open.posts.length,
+      1,
+      'a click on the Queue pill queues even with a mention dropdown open',
+    );
     assert.strictEqual(open.closed, 1, 'the dropdown is closed first');
     assert.strictEqual(open.stops, 0);
     const slash = await run({ text: '/help' });
@@ -428,7 +505,12 @@ const count = (calls, what) => calls.filter((c) => c === what).length;
         document: {
           getElementById: () => ({
             querySelector: (selector) =>
-              (box.chips || []).some((c) => selector.split(',').map((x) => x.trim()).includes(c))
+              (box.chips || []).some((c) =>
+                selector
+                  .split(',')
+                  .map((x) => x.trim())
+                  .includes(c),
+              )
                 ? {}
                 : null,
           }),
@@ -436,29 +518,50 @@ const count = (calls, what) => calls.filter((c) => c === what).length;
       };
       vm.createContext(ctx);
       vm.runInContext(
-        ['_composerCanQueue', '_queueRefusal', '_composerButtonMode'].map(functionSource).join('\n'),
+        ['_composerCanQueue', '_queueRefusal', '_composerButtonMode']
+          .map(functionSource)
+          .join('\n'),
         ctx,
       );
-      return { can: ctx._composerCanQueue(), mode: ctx._composerButtonMode(true, ctx._composerCanQueue()) };
+      return {
+        can: ctx._composerCanQueue(),
+        mode: ctx._composerButtonMode(true, ctx._composerCanQueue()),
+      };
     };
     assert.strictEqual(canQueue({}).mode, 'stop', 'an empty composer while a reply runs is Stop');
     assert.strictEqual(canQueue({ text: '   ' }).mode, 'stop', 'whitespace is empty');
     assert.strictEqual(canQueue({ text: 'hi' }).mode, 'queue');
-    assert.strictEqual(canQueue({ images: [{ name: 'a.png' }] }).mode, 'queue', 'an attached file alone is queueable');
+    assert.strictEqual(
+      canQueue({ images: [{ name: 'a.png' }] }).mode,
+      'queue',
+      'an attached file alone is queueable',
+    );
     assert.strictEqual(
       canQueue({ text: '[File: C:/a.txt]', chips: ['[data-file-path]'] }).mode,
       'queue',
       'a file chip is queueable',
     );
-    assert.strictEqual(canQueue({ skillPrompt: 'summarize' }).mode, 'queue', 'a skill chip with a prompt is queueable');
+    assert.strictEqual(
+      canQueue({ skillPrompt: 'summarize' }).mode,
+      'queue',
+      'a skill chip with a prompt is queueable',
+    );
     assert.strictEqual(
       canQueue({ chips: ['.inline-chip'] }).mode,
       'stop',
       'a skill chip with no text and no prompt has nothing to queue',
     );
     assert.strictEqual(canQueue({ text: '/help' }).mode, 'stop', 'a slash command is refused');
-    assert.strictEqual(canQueue({ text: 'hi', chips: ['.pin-ref-chip'] }).mode, 'stop', 'a pin reference is refused');
-    assert.strictEqual(canQueue({ text: 'hi', chips: ['.chip-person'] }).mode, 'stop', 'an @mention is refused');
+    assert.strictEqual(
+      canQueue({ text: 'hi', chips: ['.pin-ref-chip'] }).mode,
+      'stop',
+      'a pin reference is refused',
+    );
+    assert.strictEqual(
+      canQueue({ text: 'hi', chips: ['.chip-person'] }).mode,
+      'stop',
+      'an @mention is refused',
+    );
     assert.strictEqual(
       canQueue({ text: 'hi', images: [{ name: 'a', jiraAttachment: {} }] }).mode,
       'stop',
@@ -492,7 +595,8 @@ const count = (calls, what) => calls.filter((c) => c === what).length;
     w.ctx.document = { getElementById: () => row, createElement: el };
     w.ctx._queueChip = () => el();
     vm.runInContext(
-      ['_renderQueue', '_queueButton'].map(functionSource).join('\n') + '\nlet _queueRenderTimer = 0;',
+      ['_renderQueue', '_queueButton'].map(functionSource).join('\n') +
+        '\nlet _queueRenderTimer = 0;',
       w.ctx,
     );
     await w.ctx._queueDrain('tab1');
@@ -504,9 +608,16 @@ const count = (calls, what) => calls.filter((c) => c === what).length;
     }
     const bars = () => row.children.filter((c) => c.dataset && c.dataset.queueStatus);
     assert.strictEqual(bars().length, 1, 'the status bar shows once');
-    assert.strictEqual(bars()[0].dataset.queueStatus, 'failsafe', 'and it is the failsafe, as soon as the cap is hit');
+    assert.strictEqual(
+      bars()[0].dataset.queueStatus,
+      'failsafe',
+      'and it is the failsafe, as soon as the cap is hit',
+    );
     const buttons = () => bars()[0].children.filter((c) => c.listeners && c.listeners.click);
-    assert.deepStrictEqual(buttons().map((b) => b.textContent), ['Send now', 'Clear']);
+    assert.deepStrictEqual(
+      buttons().map((b) => b.textContent),
+      ['Send now', 'Clear'],
+    );
     w.ctx._renderQueue();
     assert.strictEqual(bars().length, 1, 'rendering again does not stack a second bar');
     const submitsBefore = count(w.calls, 'submit:a');
@@ -515,7 +626,11 @@ const count = (calls, what) => calls.filter((c) => c === what).length;
     assert.strictEqual(count(w.calls, 'submit:a'), submitsBefore + 1, 'Send now tries again');
     assert(!w.ctx._queueRearms.has('tab1'), 'and the retry count is reset');
     w.ctx._queuePostSettled('tab1', 409, 'turn_in_progress');
-    assert.strictEqual(w.ctx._queueRearms.get('tab1').tries, 1, 'the new round starts from the first retry');
+    assert.strictEqual(
+      w.ctx._queueRearms.get('tab1').tries,
+      1,
+      'the new round starts from the first retry',
+    );
     assert.strictEqual(w.pending().length, 1, 'with a retry scheduled again');
   }
 
@@ -531,9 +646,16 @@ const count = (calls, what) => calls.filter((c) => c === what).length;
     assert(stop, 'separate Stop button found');
     assert.match(stop[0], /title="Stop reply"/, 'the separate Stop button has a title');
     assert.match(stop[0], /aria-label="Stop reply"/, 'the separate Stop button has an aria-label');
-    const send = html.slice(html.indexOf('id="send-btn"'), html.indexOf('<!-- /#chat-send-slot -->'));
+    const send = html.slice(
+      html.indexOf('id="send-btn"'),
+      html.indexOf('<!-- /#chat-send-slot -->'),
+    );
     assert.match(send, /class="queue-icon"/, 'the send button carries a queue icon');
-    assert.match(send, /class="queue-label"[^>]*>\s*Queue\s*</, 'the send button carries the word Queue');
+    assert.match(
+      send,
+      /class="queue-label"[^>]*>\s*Queue\s*</,
+      'the send button carries the word Queue',
+    );
     assert.match(send, /class="send-icon/, 'idle Send keeps its arrow');
   }
 
@@ -542,19 +664,41 @@ const count = (calls, what) => calls.filter((c) => c === what).length;
   {
     const css = fs.readFileSync(path.join(__dirname, '..', 'web', 'static', 'style.css'), 'utf8');
     const html = fs.readFileSync(path.join(__dirname, '..', 'web', 'static', 'index.html'), 'utf8');
-    assert.match(css, /\.chat-input-area\s*\{[^}]*container:\s*composer-bar\s*\/\s*inline-size/, 'the composer is a container');
-    const query = css.match(/@container composer-bar \(max-width: 480px\) \{([\s\S]*?)\r?\n\}\r?\n/);
+    assert.match(
+      css,
+      /\.chat-input-area\s*\{[^}]*container:\s*composer-bar\s*\/\s*inline-size/,
+      'the composer is a container',
+    );
+    const query = css.match(
+      /@container composer-bar \(max-width: 480px\) \{([\s\S]*?)\r?\n\}\r?\n/,
+    );
     assert(query, 'a container query on the composer width');
-    assert.match(query[1], /#send-btn\.is-streaming\s*\{[^}]*width:\s*34px[^}]*height:\s*34px[^}]*border-radius:\s*50%/, 'Queue is a 34px circle');
+    assert.match(
+      query[1],
+      /#send-btn\.is-streaming\s*\{[^}]*width:\s*34px[^}]*height:\s*34px[^}]*border-radius:\s*50%/,
+      'Queue is a 34px circle',
+    );
     assert.match(query[1], /\.queue-label\s*\{\s*display:\s*none/, 'the word goes');
     assert.match(query[1], /\.chat-stop-btn\s*\{[^}]*width:\s*32px/, 'Stop is a 32px square');
     assert.match(query[1], /\.stop-label\s*\{\s*display:\s*none/, 'the Stop word goes');
     assert.match(html, /<span class="stop-label">Stop<\/span>/, 'the Stop word is its own element');
-    assert.doesNotMatch(css, /\[data-theme='light'\] #chat-send-slot\[data-mode='queue'\][^{]*\{[^}]*color:\s*#fff/, 'no white ink on the light accent');
+    assert.doesNotMatch(
+      css,
+      /\[data-theme='light'\] #chat-send-slot\[data-mode='queue'\][^{]*\{[^}]*color:\s*#fff/,
+      'no white ink on the light accent',
+    );
     const stopRule = css.match(/\.chat-stop-btn \{([^}]*)\}/)[1];
     assert.match(stopRule, /height:\s*32px/, 'Stop is as tall as the Queue pill');
-    assert.match(stopRule, /border:\s*1px solid var\(--danger\);/, 'the Stop outline is the full danger colour');
-    assert.match(stopRule, /margin-bottom:\s*calc\(0\.35rem \+ 1px\)/, 'and shares the pill centre line');
+    assert.match(
+      stopRule,
+      /border:\s*1px solid var\(--danger\);/,
+      'the Stop outline is the full danger colour',
+    );
+    assert.match(
+      stopRule,
+      /margin-bottom:\s*calc\(0\.35rem \+ 1px\)/,
+      'and shares the pill centre line',
+    );
   }
 
   console.log('queue reliability: ok');
