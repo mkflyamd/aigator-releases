@@ -17797,7 +17797,7 @@ function _initNotificationStream() {
           const banner = document.createElement('div');
           banner.id = '_slack_reconnect_banner';
           banner.style.cssText =
-            'display:flex;align-items:center;gap:8px;padding:8px 12px;margin:4px 0;background:var(--bg-elevated,#1e1e2e);border:1px solid var(--border,#333);border-radius:8px;font-size:0.85em;color:var(--text-muted,#aaa)';
+            'display:flex;align-items:center;gap:8px;padding:8px 12px;margin:4px 0;background:var(--bg-elevated,#1e1e2e);border:1px solid var(--border,#333);border-radius:8px;font-size:0.85em;color:var(--text-dim,#aaa)';
           banner.innerHTML =
             '<span style="color:#f59e0b">⚠️</span><span>Slack workspace access was restricted. Reconnecting may fix it if a scope was missing.</span>';
           const btn = document.createElement('button');
