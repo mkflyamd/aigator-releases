@@ -43,6 +43,8 @@ function makeEnv() {
     idle: 0,
     _setTabWorking: (id, on) => ctx.working.push([id, on]),
     _flushSandboxFollowUp: () => {},
+    drained: [],
+    _queueDrain: (id) => ctx.drained.push(id),
     setStatus: (s) => {
       if (s === 'idle') ctx.idle++;
     },
@@ -69,6 +71,8 @@ assert.strictEqual(env._isStreaming, true);
 assert.strictEqual(env.idle, 0);
 assert.deepStrictEqual(env.sendBtn.classList.removed, []);
 assert.strictEqual(env._locallyFinishedTasks.has('old'), false);
+// The late event is the server's "idle now": it asks the queue to drain, which refuses while a task runs.
+assert.deepStrictEqual(env.drained, ['tab-1']);
 
 // The same late chat_done, before the newer task is registered (its POST is still in flight).
 env = makeEnv();
@@ -76,6 +80,7 @@ env._locallyFinishedTasks.add('old');
 env.run({ type: 'chat_done', context_id: 'tab-1', task_id: 'old' });
 assert.strictEqual(env._isStreaming, true);
 assert.strictEqual(env.idle, 0);
+assert.deepStrictEqual(env.drained, ['tab-1']);
 
 // A chat_done that names a different task than the running one is ignored.
 env = makeEnv();

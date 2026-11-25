@@ -39,6 +39,12 @@ function world({ text = 'next question', chatRunning = true, chips = [] } = {}) 
     _aigatorImages: [],
     _queueComposing: new Set(),
     _queueBusy: new Set(),
+    _queueBusyTimers: new Map(),
+    _queueRearms: new Map(),
+    _queueDirty: new Set(),
+    _queueByTab: new Map(),
+    _QUEUE_REARM_MS: [500],
+    _renderQueue: () => {},
     _pendingSandboxFollowUps: new Set(),
     _pendingSandboxCards: new Map(),
     _pendingTabCards: new Map(),
@@ -47,6 +53,7 @@ function world({ text = 'next question', chatRunning = true, chips = [] } = {}) 
     window: {},
     crypto: { randomUUID: () => `id${calls.length}` },
     setTimeout: () => 0,
+    clearTimeout: () => {},
     console,
     _getInputText: () => input.textContent,
     buildFinalMessage: (t) => t,
@@ -67,7 +74,8 @@ function world({ text = 'next question', chatRunning = true, chips = [] } = {}) 
   vm.createContext(ctx);
   vm.runInContext(
     `${functionSource('_queueComposerMessage')}\n${functionSource('_queueDrain')}
-${functionSource('_queueCardHold')}`,
+${functionSource('_queueCardHold')}
+${['_queueBusyStart', '_queueBusyEnd', '_queueRearm', '_queueRearmStop'].map(functionSource).join('\n')}`,
     ctx,
   );
   // Function declarations in a vm script become properties of the context.

@@ -1749,8 +1749,10 @@ const _DOC_SKILL_IDS = new Set(['docx', 'excel', 'ppt']);
 function _updatePlaceholder() {
   const inp = document.getElementById('chat-input');
   if (!inp || inp.contentEditable === 'false') return;
-  // Guide div handles all education — placeholder is empty
-  inp.dataset.placeholder = '';
+  // Guide div handles all education — placeholder is empty, except while a reply runs: Enter queues.
+  inp.dataset.placeholder = document.getElementById('send-btn')?.classList.contains('is-streaming')
+    ? 'Enter to queue'
+    : '';
 }
 
 function _setRailActive(id) {
@@ -8713,12 +8715,27 @@ function _shouldStopFromClick(e, btn, rect, streaming) {
     e.clientY <= rect.bottom
   );
 }
+// While a reply runs the one button is Stop (empty composer) or Queue (something typed, with a separate Stop).
+function _composerButtonMode(streaming, hasText) {
+  if (!streaming) return 'send';
+  return hasText ? 'queue' : 'stop';
+}
+function _composerHasText() {
+  return (document.getElementById('chat-input')?.textContent || '').trim().length > 0;
+}
 document.addEventListener(
   'click',
   (e) => {
     if (!_activeStops.size) return;
-    const streaming = sendBtn.classList.contains('is-streaming');
-    if (!_shouldStopFromClick(e, sendBtn, sendBtn.getBoundingClientRect(), streaming)) return;
+    const stopBtn = document.getElementById('stop-btn');
+    const onStopBtn = !!stopBtn && !stopBtn.hidden && stopBtn.contains(e.target);
+    const mode = _composerButtonMode(sendBtn.classList.contains('is-streaming'), _composerHasText());
+    if (
+      !onStopBtn &&
+      !_shouldStopFromClick(e, sendBtn, sendBtn.getBoundingClientRect(), mode === 'stop')
+    ) {
+      return;
+    }
     e.preventDefault();
     [..._activeStops].forEach((stop) => stop());
   },
@@ -9348,7 +9365,26 @@ function _updateSendSlot() {
   if (!slot) return;
   const hasText = (input.textContent || '').trim().length > 0;
   slot.classList.toggle('has-text', hasText);
+  _syncComposerButton();
 }
+
+function _syncComposerButton() {
+  const slot = document.getElementById('chat-send-slot');
+  const btn = document.getElementById('send-btn');
+  if (!slot || !btn) return;
+  const mode = _composerButtonMode(btn.classList.contains('is-streaming'), _composerHasText());
+  slot.dataset.mode = mode;
+  btn.setAttribute('aria-label', { send: 'Send message', stop: 'Stop reply', queue: 'Queue message' }[mode]);
+  if (mode === 'send') btn.removeAttribute('title');
+  else btn.title = mode === 'stop' ? 'Stop reply' : 'Queue this message. It sends when the reply finishes.';
+  const stop = document.getElementById('stop-btn');
+  if (stop) stop.hidden = mode !== 'queue';
+  _updatePlaceholder();
+}
+new MutationObserver(_syncComposerButton).observe(sendBtn, {
+  attributes: true,
+  attributeFilter: ['class'],
+});
 
 input.addEventListener('input', () => {
   _updateSendSlot();
@@ -10372,6 +10408,13 @@ function _flushSandboxFollowUp(tabId) {
 // Queue text comes from the user: textContent only.
 const _queueByTab = new Map(); // tabId -> { items, paused, reason, max }
 const _queueBusy = new Set(); // tabs with a queued send in flight
+const _queueBusyTimers = new Map(); // tabId -> timer that gives up on a send that never settled
+const _queueRearms = new Map(); // tabId -> { timer, tries } for the "ask again shortly" retries
+const _queueDirty = new Set(); // tabs asked to drain while a drain was already looking at the server
+const _queueIdleSince = new Map(); // tabId -> when a queued message first sat unsent with nothing running
+const _QUEUE_REARM_MS = [500, 500, 500, 1000, 1000, 1000, 2000, 2000];
+const _QUEUE_FAILSAFE_MS = 3000;
+let _queueRenderTimer = 0;
 const _queueComposing = new Set(); // tabs whose composer text is being queued right now
 let _queuedSendId = null; // read first thing by the submit handler for the one submit the queue starts
 let _enterSubmit = false; // set by the composer's Enter key so the submit handler can tell typing from a programmatic send
@@ -10442,9 +10485,91 @@ function _queueRefusalMessage(status, code) {
   return '';
 }
 
-function _queueSendSettled(tabId) {
+function _queueBusyStart(tabId) {
+  _queueBusy.add(tabId);
+  clearTimeout(_queueBusyTimers.get(tabId));
+  _queueBusyTimers.set(
+    tabId,
+    setTimeout(() => {
+      _queueBusyTimers.delete(tabId);
+      _queueBusy.delete(tabId);
+      _renderQueue();
+    }, 20000),
+  );
+}
+
+function _queueBusyEnd(tabId) {
   _queueBusy.delete(tabId);
+  clearTimeout(_queueBusyTimers.get(tabId));
+  _queueBusyTimers.delete(tabId);
+}
+
+function _queueRearmStop(tabId) {
+  clearTimeout(_queueRearms.get(tabId)?.timer);
+  _queueRearms.delete(tabId);
+}
+
+// The server said "not yet" (the reply is still finishing) or the send did not go through. Ask again
+// shortly, a few times, while the queue still has messages that nothing is holding back.
+function _queueRearm(tabId) {
+  const snap = _queueByTab.get(tabId);
+  if (!snap || !snap.items.length || snap.paused || _queueCardHold(tabId)) return;
+  const state = _queueRearms.get(tabId) || { timer: 0, tries: 0 };
+  _queueRearms.set(tabId, state);
+  if (state.timer || state.tries >= _QUEUE_REARM_MS.length) return;
+  state.timer = setTimeout(() => {
+    state.timer = 0;
+    _queueDrain(tabId, true);
+  }, _QUEUE_REARM_MS[state.tries++]);
+}
+
+function _queueSendSettled(tabId) {
+  _queueBusyEnd(tabId);
+  _queueDirty.delete(tabId);
   _queueRefresh(tabId);
+}
+
+// What the status line under the composer says, or null when nothing is queued.
+function _queueStatus(tabId, now) {
+  const snap = _queueByTab.get(tabId);
+  if (!snap || !snap.items.length) {
+    _queueIdleSince.delete(tabId);
+    return null;
+  }
+  let status;
+  if (snap.paused) {
+    status = {
+      kind: 'paused',
+      tone: snap.reason === 'error' ? 'danger' : 'warn',
+      text:
+        snap.reason === 'error'
+          ? 'Paused: the reply hit an error'
+          : snap.reason === 'restored'
+            ? 'Paused: restored after restart'
+            : 'Paused: you stopped the reply',
+    };
+  } else if (_queueCardHold(tabId)) {
+    status = { kind: 'hold', tone: 'warn', text: 'Waiting for your answer on the card' };
+  } else if (_chatTaskIds.has(tabId)) {
+    status = { kind: 'running', tone: 'neutral', text: 'Next message sends when this reply finishes' };
+  } else if (_queueBusy.has(tabId)) {
+    status = { kind: 'starting', tone: 'accent', text: 'Sending next message' };
+  }
+  if (status) {
+    _queueIdleSince.delete(tabId);
+    return status;
+  }
+  if (!_queueIdleSince.has(tabId)) _queueIdleSince.set(tabId, now);
+  const waited = now - _queueIdleSince.get(tabId);
+  if (waited >= _QUEUE_FAILSAFE_MS) {
+    return { kind: 'failsafe', tone: 'danger', text: "Didn't send automatically" };
+  }
+  return {
+    kind: 'starting',
+    tone: 'accent',
+    text: 'Sending next message',
+    recheckMs: _QUEUE_FAILSAFE_MS - waited,
+  };
 }
 
 async function _queueComposerMessage() {
@@ -10525,27 +10650,40 @@ async function _queueComposerMessage() {
   if (!_chatTaskIds.has(tabId)) _queueDrain(tabId);
 }
 
-async function _queueDrain(tabId) {
-  if (!tabId || tabId !== _activeTabId || _chatTaskIds.has(tabId) || _queueBusy.has(tabId)) return;
+async function _queueDrain(tabId, fromRearm = false) {
+  if (!tabId || tabId !== _activeTabId || _chatTaskIds.has(tabId)) return;
+  if (_queueBusy.has(tabId)) {
+    _queueDirty.add(tabId);
+    return;
+  }
   if (_pendingSandboxFollowUps.has(tabId) || _queueCardHold(tabId)) return;
-  _queueBusy.add(tabId);
-  setTimeout(() => _queueBusy.delete(tabId), 20000);
+  if (!fromRearm) _queueRearmStop(tabId);
+  _queueBusyStart(tabId);
+  _renderQueue();
   let started = false;
+  let askAgain = false;
   try {
-    const { item } = await _queueCall(
+    const { item, live } = await _queueCall(
       'GET',
       `/api/queue/head?context_id=${encodeURIComponent(tabId)}`,
     );
     if (!item || tabId !== _activeTabId || _chatTaskIds.has(tabId)) {
       _queueRefresh(tabId);
+      askAgain = !!live && !_chatTaskIds.has(tabId);
       return;
     }
     await _submitQueuedItem(item);
     started = true;
   } catch (e) {
     console.warn('[queue] next message not sent:', e);
+    askAgain = true;
   } finally {
-    if (!started) _queueBusy.delete(tabId);
+    if (!started) _queueBusyEnd(tabId);
+    const dirty = _queueDirty.delete(tabId) && !started;
+    if (started) _queueRearmStop(tabId);
+    else if (dirty) setTimeout(() => _queueDrain(tabId), 0);
+    else if (askAgain) _queueRearm(tabId);
+    _renderQueue();
   }
 }
 
@@ -10620,20 +10758,6 @@ function _queueChip(tabId, item, isNext) {
   text.title = item.text;
   chip.appendChild(text);
   const snap = _queueByTab.get(tabId);
-  // Sending is driven from this window, so while nothing is running and nothing is sending, the message
-  // waits for the user to come back (switch to the tab or focus the window).
-  if (
-    snap &&
-    !snap.paused &&
-    !_queueCardHold(tabId) &&
-    !_chatTaskIds.has(tabId) &&
-    !_queueBusy.has(tabId)
-  ) {
-    const note = document.createElement('span');
-    note.className = 'queue-chip-badge';
-    note.textContent = 'queued, will send when you return';
-    chip.appendChild(note);
-  }
   if (item.attachments) {
     const n = document.createElement('span');
     n.className = 'queue-chip-badge';
@@ -10701,36 +10825,39 @@ function _renderQueue() {
     return;
   }
   row.hidden = false;
-  if (!snap.paused && _queueCardHold(tabId)) {
+  const status = _queueStatus(tabId, Date.now());
+  if (status) {
     const bar = document.createElement('div');
-    bar.className = 'queue-paused';
+    bar.className = 'queue-paused queue-status';
+    bar.dataset.queueStatus = status.kind;
     const why = document.createElement('span');
-    why.textContent = 'Waiting for your decision on the card';
+    why.className = 'queue-status-text';
+    const dot = document.createElement('span');
+    dot.className = `queue-status-dot is-${status.tone}`;
+    dot.setAttribute('aria-hidden', 'true');
+    why.append(dot, status.text);
     bar.appendChild(why);
-    row.appendChild(bar);
-  }
-  if (snap.paused) {
-    const bar = document.createElement('div');
-    bar.className = 'queue-paused';
-    const why = document.createElement('span');
-    why.textContent =
-      snap.reason === 'error'
-        ? 'Queue paused · the reply hit an error'
-        : 'Queue paused · you stopped the reply';
-    bar.appendChild(why);
-    bar.appendChild(
-      _queueButton('Resume', 'Send the queued messages one at a time', async () => {
-        if (await _queueAct(tabId, 'POST', '/api/queue/resume', { context_id: tabId })) {
-          _queueDrain(tabId);
-        }
-      }),
+    const clear = _queueButton('Clear', 'Remove every queued message', () =>
+      _queueAct(tabId, 'POST', '/api/queue/clear', { context_id: tabId }),
     );
-    bar.appendChild(
-      _queueButton('Clear', 'Remove every queued message', () =>
-        _queueAct(tabId, 'POST', '/api/queue/clear', { context_id: tabId }),
-      ),
-    );
+    if (status.kind === 'paused') {
+      bar.appendChild(
+        _queueButton('Resume', 'Send the queued messages one at a time', async () => {
+          if (await _queueAct(tabId, 'POST', '/api/queue/resume', { context_id: tabId })) {
+            _queueDrain(tabId);
+          }
+        }),
+      );
+      bar.appendChild(clear);
+    } else if (status.kind === 'failsafe') {
+      bar.appendChild(
+        _queueButton('Send now', 'Send the next queued message', () => _queueDrain(tabId)),
+      );
+      bar.appendChild(clear);
+    }
     row.appendChild(bar);
+    clearTimeout(_queueRenderTimer);
+    if (status.recheckMs) _queueRenderTimer = setTimeout(_renderQueue, status.recheckMs + 20);
   }
   snap.items.forEach((item, i) => row.appendChild(_queueChip(tabId, item, i === 0)));
 }
@@ -10744,7 +10871,10 @@ window.addEventListener('focus', () => _queueReturn(_activeTabId));
 // A closed tab's queued messages are dropped with it.
 function _queuePurgeTab(tabId) {
   _queueByTab.delete(tabId);
-  _queueBusy.delete(tabId);
+  _queueBusyEnd(tabId);
+  _queueRearmStop(tabId);
+  _queueDirty.delete(tabId);
+  _queueIdleSince.delete(tabId);
   _queueCall('POST', '/api/queue/clear', { context_id: tabId }).catch((e) =>
     console.warn('[queue] purge on tab close failed:', e),
   );
@@ -16344,10 +16474,21 @@ form.addEventListener('submit', async (e) => {
       const _stoppedDuringPost = new Promise((release) => {
         _abortCtrl._stopPost = () => release(null);
       });
-      const postRes = await Promise.race([_postPromise, _stoppedDuringPost]);
+      let postRes;
+      try {
+        postRes = await Promise.race([_postPromise, _stoppedDuringPost]);
+      } catch (postErr) {
+        // The request never got an answer, so the message is still queued: ask the queue again.
+        if (queuedSendId) {
+          _queueSendSettled(requestTabId);
+          _queueRearm(requestTabId);
+        }
+        throw postErr;
+      }
       if (queuedSendId) {
         _queueSendSettled(requestTabId);
         // A refused send (409) leaves the message queued, so a retry keeps its id; any other answer spent it.
+        if (postRes && postRes.status === 409) _queueRearm(requestTabId);
         if (postRes && postRes.status !== 409) queuedSendId = null;
       }
       if (!postRes) {
@@ -18236,6 +18377,9 @@ function _initNotificationStream() {
             'info',
           );
         }
+        // The server is idle now: the one moment a queued message can safely follow. Drain itself
+        // refuses while a reply is running here or a send is already in flight.
+        if (msg.context_id) _queueDrain(msg.context_id);
         return;
       }
       if (msg.type === 'mcp_auth_error' && msg.connection_id) {

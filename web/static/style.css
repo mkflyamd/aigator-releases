@@ -5881,14 +5881,13 @@ body.gator-chat-expanded .gator-expand-btn {
 
 /* Streaming state â€” button becomes a stop control */
 #send-btn.is-streaming {
-  background: #ef4444;
+  background: var(--danger);
   color: #fff;
   cursor: pointer;
   opacity: 1;
 }
 #send-btn.is-streaming:hover {
-  background: #dc2626;
-  transform: scale(1.05);
+  background: color-mix(in srgb, var(--danger) 85%, #000);
 }
 #send-btn.is-streaming .send-icon {
   display: none;
@@ -10537,6 +10536,43 @@ html.material-symbols-ready .tp-mi {
   opacity: 1 !important;
   transform: scale(1) !important;
   pointer-events: auto !important;
+}
+/* Streaming with something typed: the button is Queue (accent, send arrow); Stop is its own button. */
+#chat-send-slot[data-mode='queue'] #send-btn.is-streaming {
+  background: var(--accent);
+}
+#chat-send-slot[data-mode='queue'] #send-btn.is-streaming:hover {
+  background: color-mix(in srgb, var(--accent) 85%, #000);
+}
+#chat-send-slot[data-mode='queue'] #send-btn.is-streaming .send-icon {
+  display: block;
+}
+#chat-send-slot[data-mode='queue'] #send-btn.is-streaming .stop-icon {
+  display: none;
+}
+.chat-stop-btn {
+  align-self: flex-end;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  height: 30px;
+  margin-bottom: 0.45rem;
+  margin-right: 0.35rem;
+  padding: 0 0.6rem;
+  font: inherit;
+  font-size: 0.78rem;
+  color: var(--danger);
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--danger) 60%, transparent);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.chat-stop-btn:hover {
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+.chat-stop-btn[hidden] {
+  display: none;
 }
 #chat-send-slot #send-btn.is-streaming ~ #gator-mic-btn,
 #chat-send-slot:has(#send-btn.is-streaming) #gator-mic-btn {
@@ -23734,6 +23770,26 @@ body.tab-fullscreen {
 }
 .queue-paused {
   justify-content: space-between;
+}
+.queue-status-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.queue-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-sub);
+}
+.queue-status-dot.is-accent {
+  background: var(--accent);
+}
+.queue-status-dot.is-warn {
+  background: var(--warning, #f59e0b);
+}
+.queue-status-dot.is-danger {
+  background: var(--danger);
 }
 .queue-btn {
   background: transparent;
