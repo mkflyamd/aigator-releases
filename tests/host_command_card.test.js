@@ -311,7 +311,9 @@ const buttonsOf = (env) => walk(env.messages).filter((e) => e.tag === 'button');
   env7.tickClock(245);
   assert.match(textOf(env7), /Expires in 0:55/);
   assert(
-    walk(env7.messages).some((e) => /Expires in/.test(e.textContent) && e.attrs['aria-hidden'] === 'true'),
+    walk(env7.messages).some(
+      (e) => /Expires in/.test(e.textContent) && e.attrs['aria-hidden'] === 'true',
+    ),
     'countdown is aria-hidden',
   );
 
@@ -391,7 +393,10 @@ const buttonsOf = (env) => walk(env.messages).filter((e) => e.tag === 'button');
   slow.ctx._showSandboxApproval(data, 'tab-1');
   const slowCancel = buttonsOf(slow)[1].listeners.click(click);
   await tick();
-  assert(buttonsOf(slow).every((b) => b.disabled), 'both buttons off while cancelling');
+  assert(
+    buttonsOf(slow).every((b) => b.disabled),
+    'both buttons off while cancelling',
+  );
   settle();
   await slowCancel;
   await tick();
@@ -468,7 +473,13 @@ const buttonsOf = (env) => walk(env.messages).filter((e) => e.tag === 'button');
   // A card drawn again after a tab switch asks which run it belongs to, instead of offering a fresh Run.
   const listing = (state) => (url) =>
     url.startsWith('/api/runs?')
-      ? reply({ ok: true, runs: [{ id: 'other', state: 'finished' }, { id: 'req1', state }] })
+      ? reply({
+          ok: true,
+          runs: [
+            { id: 'other', state: 'finished' },
+            { id: 'req1', state },
+          ],
+        })
       : null;
 
   let polled = 0;
@@ -485,16 +496,26 @@ const buttonsOf = (env) => walk(env.messages).filter((e) => e.tag === 'button');
   assert.strictEqual(rejoin.fetches[0].url, '/api/runs?context_id=tab-1');
   assert.deepStrictEqual(
     buttonsOf(rejoin).map((b) => [b.textContent, b.disabled]),
-    [['Run', true], ['Stop', false]],
+    [
+      ['Run', true],
+      ['Stop', false],
+    ],
     'a running command offers Stop, not a second Run',
   );
   for (let i = 0; i < 12; i += 1) await tick();
-  assert(!rejoin.fetches.some((f) => f.opts && f.opts.method === 'POST'), 'rejoining posts nothing');
+  assert(
+    !rejoin.fetches.some((f) => f.opts && f.opts.method === 'POST'),
+    'rejoining posts nothing',
+  );
   assert.match(textOf(rejoin), /Finished · exit code 0/);
   assert(walk(rejoin.messages).some((e) => e.tag === 'pre' && e.textContent === 'done while away'));
   assert.strictEqual(rejoin.followUps.length, 0, 'the first card already tells the agent');
 
-  const over = makeEnv(async (url) => listing('timed_out')(url) || finished({ stdout: 'partial', stderr: '', exit_code: -1 }, 'timed_out'));
+  const over = makeEnv(
+    async (url) =>
+      listing('timed_out')(url) ||
+      finished({ stdout: 'partial', stderr: '', exit_code: -1 }, 'timed_out'),
+  );
   over.ctx._showSandboxApproval(data, 'tab-1', true);
   for (let i = 0; i < 4; i += 1) await tick();
   assert.strictEqual(buttonsOf(over).length, 0);
@@ -511,7 +532,10 @@ const buttonsOf = (env) => walk(env.messages).filter((e) => e.tag === 'button');
   for (let i = 0; i < 4; i += 1) await tick();
   assert.deepStrictEqual(
     buttonsOf(waiting).map((b) => [b.textContent, b.disabled]),
-    [['Run', false], ['Cancel', false]],
+    [
+      ['Run', false],
+      ['Cancel', false],
+    ],
   );
 
   console.log('host_command_card: all assertions passed');
