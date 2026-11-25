@@ -106,7 +106,24 @@
   function targetWarning(target) {
     return target.gateway_routed
       ? ''
-      : 'Runs on its own configuration, outside the AI Gator gateway.';
+      : 'Runs on its own configuration, outside the AI Gator gateway. ' +
+          'The carried-over session goes to that agent’s own provider, ' +
+          'without AI Gator’s controls.';
+  }
+
+  const REDACTION_NOTE =
+    'Secrets are redacted on a best-effort basis. Other sensitive text may remain.';
+
+  // Where Tab goes next inside the dialog, or null when the browser's own
+  // order stays within it. Focus that is outside the dialog comes back in.
+  function trapTarget(focusables, active, shift) {
+    if (!focusables.length) return null;
+    const i = focusables.indexOf(active);
+    const last = focusables.length - 1;
+    if (i === -1) return shift ? focusables[last] : focusables[0];
+    if (shift && i === 0) return focusables[last];
+    if (!shift && i === last) return focusables[0];
+    return null;
   }
 
   async function waitForReady(sess, probe, opts) {
@@ -243,8 +260,11 @@
     const box = h('div', 'agent-handoff-dialog');
     box.setAttribute('role', 'dialog');
     box.setAttribute('aria-modal', 'true');
-    box.setAttribute('aria-label', 'Continue in another agent');
-    box.appendChild(h('h3', null, 'Hand off to another agent'));
+    const opener = document.activeElement;
+    const heading = h('h3', null, 'Hand off to another agent');
+    heading.id = 'agent-handoff-title-' + dialogSeq;
+    box.setAttribute('aria-labelledby', heading.id);
+    box.appendChild(heading);
 
     // What travels: secondary context, kept compact so the choice below leads.
     const kb = Math.max(1, Math.round(prep.snapshot_bytes / 1024));
@@ -259,9 +279,10 @@
       ' · ' +
       kb +
       ' KB';
-    if (prep.redactions) meta += ' · ' + prep.redactions + ' credential(s) redacted';
+    if (prep.redactions) meta += ' · ' + prep.redactions + ' secret(s) redacted';
     from.appendChild(h('span', 'agent-handoff-meta', meta));
     carry.appendChild(from);
+    carry.appendChild(h('div', 'agent-handoff-redaction-note', REDACTION_NOTE));
     const lastLine = oneLine(prep.last_user_message);
     if (lastLine) {
       const last = h('div', 'agent-handoff-last');
@@ -310,6 +331,8 @@
     function close() {
       overlay.remove();
       document.removeEventListener('keydown', onKey);
+      document.removeEventListener('focusin', onFocusIn);
+      if (opener && opener.isConnected && typeof opener.focus === 'function') opener.focus();
     }
 
     function begin() {
@@ -391,9 +414,25 @@
       select(visible[next].agent);
     }
 
+    function focusables() {
+      return [searchable && search, cancel, go].filter((el) => el && !el.disabled);
+    }
+
+    const onFocusIn = (e) => {
+      if (box.contains(e.target)) return;
+      const first = focusables()[0];
+      if (first) first.focus();
+    };
+
     const onKey = (e) => {
       if (e.key === 'Escape') {
         close();
+      } else if (e.key === 'Tab') {
+        const next = trapTarget(focusables(), document.activeElement, e.shiftKey);
+        if (next) {
+          e.preventDefault();
+          next.focus();
+        }
       } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
         e.preventDefault();
         move(e.key === 'ArrowDown' ? 1 : -1);
@@ -406,6 +445,7 @@
     search.addEventListener('input', renderTargets);
     renderTargets();
     document.addEventListener('keydown', onKey);
+    document.addEventListener('focusin', onFocusIn);
     cancel.addEventListener('click', close);
     overlay.addEventListener('click', (e) => {
       if (e.target === overlay) close();
@@ -483,6 +523,8 @@
     oneLine,
     defaultTarget,
     targetWarning,
+    trapTarget,
+    REDACTION_NOTE,
     errorDetail,
     waitForReady,
     draftPrompt,
