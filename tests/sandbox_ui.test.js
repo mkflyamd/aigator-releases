@@ -137,9 +137,10 @@ function makeEnv(activeTab) {
   const byId = { messages, 'chat-input': input, 'chat-form': form };
   const toasts = [];
   const fetches = [];
-  const calls = { previews: 0, slot: 0, placeholder: 0, queueDrains: [] };
+  const calls = { previews: 0, slot: 0, placeholder: 0, queueDrains: [], queueRenders: 0 };
   const ctx = {
     _queueDrain: (tabId) => calls.queueDrains.push(tabId),
+    _renderQueue: () => calls.queueRenders++,
     _aigatorImages: [],
     _renderAigatorPreviews: () => calls.previews++,
     _updateSendSlot: () => calls.slot++,

@@ -1,8 +1,11 @@
 """Queued chat messages: the chips under the composer. Sending is the chat route's job, not this one's."""
 
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+import shared
 from chat_queue import QueueError, get_queue
 from security import verify_csrf
 
@@ -37,10 +40,16 @@ def queue_snapshot(context_id: str):
 
 
 @router.get("/api/queue/head")
-def queue_head(context_id: str):
-    """The next message to send, or null while the queue is paused or empty."""
+async def queue_head(context_id: str):
+    """The next message to send, or null while the queue is paused or empty, or a reply is still running.
+
+    A reply the user just stopped does not count: it is being unwound, and the send that follows waits for it.
+    """
+    live = shared.chat_task_store.active_task_for(context_id)
+    if live and not shared.chat_task_store.is_cancelled(live):
+        return {"ok": True, "item": None}
     try:
-        return {"ok": True, "item": get_queue().head(context_id)}
+        return {"ok": True, "item": await asyncio.to_thread(get_queue().head, context_id)}
     except QueueError as exc:
         raise _http(exc) from exc
 

@@ -47,11 +47,14 @@ def parse_slash_command(message: str) -> dict | None:
 router = APIRouter()
 
 
-def _pause_queue(context_id: str | None, reason: str) -> None:
+async def _pause_queue(context_id: str | None, reason: str) -> None:
     """A stopped or failed turn holds back what the user queued behind it until they resume."""
     if context_id:
         from chat_queue import get_queue
-        get_queue().pause_if_queued(context_id, reason)
+        try:
+            await asyncio.to_thread(get_queue().pause_if_queued, context_id, reason)
+        except Exception:
+            logging.getLogger(__name__).warning("could not pause the message queue", exc_info=True)
 
 
 # ── Pydantic models ───────────────────────────────────────────────────────────
@@ -1374,7 +1377,7 @@ async def cancel_chat(task_id: str):
     except Exception:
         pass
     if cancelled:
-        _pause_queue(shared.chat_task_store.context_of(task_id), "stopped")
+        await _pause_queue(shared.chat_task_store.context_of(task_id), "stopped")
     return {"cancelled": cancelled}
 
 
@@ -2693,9 +2696,9 @@ async def chat(req: ChatRequest):
     if req.queued_id:
         from chat_queue import QueueError, get_queue
         try:
-            sendable = get_queue().consume(context_id, req.queued_id)
+            sendable = await asyncio.to_thread(get_queue().consume, context_id, req.queued_id)
         except QueueError as exc:
-            return JSONResponse({"error": "queue_unavailable", "detail": exc.message}, status_code=exc.status)
+            return JSONResponse({"error": exc.code, "detail": exc.message}, status_code=exc.status)
         if not sendable:
             return JSONResponse(
                 {"error": "queue_item_gone", "detail": "That queued message was already sent or removed."},
@@ -2787,7 +2790,7 @@ async def chat(req: ChatRequest):
                                 _stall_detail = _last_tool_error[0] if _last_tool_error else f"{_which} timeout"
                                 if len(_stall_detail) > 160:
                                     _stall_detail = _stall_detail[:160] + "…"
-                                _pause_queue(context_id, "error")
+                                shared.chat_task_store.mark_error(task_id)
                                 shared.chat_task_store.append_chunk(task_id, f"data: {json.dumps({'stalled': True, 'message': f'Gator stopped after going silent ({_stall_detail}). Click Continue to pick up where it left off.'})}\n\n")
                                 break
                             try:
@@ -2904,7 +2907,7 @@ async def chat(req: ChatRequest):
                         )
                         print(f"[stream] unhandled error in background task: {_exc}", flush=True)
                         _tb.print_exc()
-                        _pause_queue(context_id, "error")
+                        shared.chat_task_store.mark_error(task_id)
                         shared.chat_task_store.append_chunk(task_id, f"data: {json.dumps({'text': 'An unexpected error occurred. Please try again.'})}\n\n")
                         # Turn telemetry: log the unhandled error
                         try:
@@ -2926,6 +2929,9 @@ async def chat(req: ChatRequest):
                         if not _done_emitted_flag[0]:
                             shared.chat_task_store.append_chunk(task_id, "data: [DONE]\n\n")
                   finally:
+                    # Before mark_done, so a client that reacts to the end of the turn already sees the pause.
+                    if shared.chat_task_store.had_error(task_id):
+                        await _pause_queue(context_id, "error")
                     shared.chat_task_store.mark_done(task_id)
                     # Emit in finally (not at the end of stream()) so a hung,
                     # errored, or cancelled request still notifies other tabs.
@@ -2975,7 +2981,8 @@ async def chat(req: ChatRequest):
             _logging.getLogger(__name__).exception(
                 "[run_and_buffer] unhandled error: %s", _outer_exc
             )
-            _pause_queue(context_id, "error")
+            shared.chat_task_store.mark_error(task_id)
+            await _pause_queue(context_id, "error")
             shared.chat_task_store.append_chunk(task_id, f"data: {json.dumps({'text': 'An unexpected error occurred. Please try again.'})}\n\n")
             if not shared.chat_task_store.is_done(task_id):
                 shared.chat_task_store.mark_done(task_id)

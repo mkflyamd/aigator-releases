@@ -259,11 +259,156 @@ def test_an_unavailable_queue_refuses_the_send_instead_of_dropping_it(tmp_path, 
         chat_queue.reset_queue(None)
 
 
-def test_a_failed_turn_pauses_the_queue_only_when_something_is_waiting(queue):
-    chat_routes._pause_queue("c", "error")
+async def test_a_failed_turn_pauses_the_queue_only_when_something_is_waiting(queue):
+    await chat_routes._pause_queue("c", "error")
     assert queue.snapshot("c")["paused"] is False
     queue.enqueue("c", "a", _msg())
-    chat_routes._pause_queue("c", "error")
+    await chat_routes._pause_queue("c", "error")
     snap = queue.snapshot("c")
     assert snap["paused"] is True and snap["reason"] == "error"
-    chat_routes._pause_queue(None, "error")
+    await chat_routes._pause_queue(None, "error")
+
+
+# ── error turns pause the queue ───────────────────────────────────────────────
+
+@pytest.mark.parametrize("outcome", ["llm_error", "stalled", "leaked_tool_call", "max_iterations", "planner_error"])
+async def test_a_turn_that_ends_in_an_error_outcome_is_flagged(outcome):
+    import agent_loop
+
+    task_id = f"t-{uuid.uuid4().hex}"
+    shared.chat_task_store.create_task(task_id, "c")
+    await agent_loop._log_turn_end_safe(
+        "turn", "c", task_id, 0, "single", "m", "p", outcome, None, [], None, None, 0, 0, 0, 0, False, 0, 0)
+    assert shared.chat_task_store.had_error(task_id) is True
+
+
+@pytest.mark.parametrize("outcome", ["end_turn", "tool_round", "terminal_tool", "ask_user"])
+async def test_a_turn_that_ends_normally_is_not_flagged(outcome):
+    import agent_loop
+
+    task_id = f"t-{uuid.uuid4().hex}"
+    shared.chat_task_store.create_task(task_id, "c")
+    await agent_loop._log_turn_end_safe(
+        "turn", "c", task_id, 0, "single", "m", "p", outcome, None, [], None, None, 0, 0, 0, 0, False, 0, 0)
+    assert shared.chat_task_store.had_error(task_id) is False
+
+
+def _wait_for(predicate, seconds=5):
+    import time
+
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.02)
+    return False
+
+
+def test_a_turn_that_crashes_pauses_the_queue_before_it_is_marked_done(queue, monkeypatch, api):
+    async def subscriber_ready(task_id, timeout):
+        return True
+
+    async def window_fails(*args, **kwargs):
+        raise RuntimeError("the history store broke")
+
+    monkeypatch.setattr(shared.chat_task_store, "wait_for_subscriber", subscriber_ready)
+    monkeypatch.setattr(shared.conversation_store, "get_window", window_fails)
+    ctx = f"q-{uuid.uuid4().hex}"
+    client = api
+    queue.enqueue(ctx, "a", _msg("next"))
+    task_id = client.post("/api/chat", json={"message": "hello", "context_id": ctx}).json()["task_id"]
+    assert _wait_for(lambda: shared.chat_task_store.is_done(task_id))
+    assert shared.chat_task_store.had_error(task_id) is True
+    snap = client.get("/api/queue", params={"context_id": ctx}).json()
+    assert snap["paused"] is True and snap["reason"] == "error"
+
+
+def test_an_outer_failure_pauses_the_queue(queue, monkeypatch, api):
+    async def subscriber_fails(task_id, timeout):
+        raise RuntimeError("could not wait")
+
+    monkeypatch.setattr(shared.chat_task_store, "wait_for_subscriber", subscriber_fails)
+    ctx = f"q-{uuid.uuid4().hex}"
+    client = api
+    queue.enqueue(ctx, "a", _msg("next"))
+    task_id = client.post("/api/chat", json={"message": "hello", "context_id": ctx}).json()["task_id"]
+    assert _wait_for(lambda: shared.chat_task_store.is_done(task_id))
+    assert queue.snapshot(ctx)["paused"] is True
+
+
+def test_a_paused_queue_refuses_a_send_in_the_same_step_that_would_consume_it(queue, monkeypatch, api):
+    _hold_turns_open(monkeypatch)
+    ctx = f"q-{uuid.uuid4().hex}"
+    client = api
+    queue.enqueue(ctx, "a", _msg("next"))
+    queue.pause(ctx, "error")
+    with pytest.raises(QueueError) as err:
+        queue.consume(ctx, "a")
+    assert err.value.status == 409 and err.value.code == "queue_paused"
+    refused = client.post("/api/chat", json={"message": "next", "context_id": ctx, "queued_id": "a"})
+    assert refused.status_code == 409 and refused.json()["error"] == "queue_paused"
+    assert shared.chat_task_store.active_task_for(ctx) is None
+    assert [i["id"] for i in queue.snapshot(ctx)["items"]] == ["a"]
+    queue.resume(ctx)
+    sent = client.post("/api/chat", json={"message": "next", "context_id": ctx, "queued_id": "a"})
+    assert sent.status_code == 200
+    client.post(f"/api/chat/{sent.json()['task_id']}/cancel")
+
+
+def test_the_head_waits_while_a_reply_runs_and_is_offered_once_it_is_stopped(queue, monkeypatch, api):
+    _hold_turns_open(monkeypatch)
+    ctx = f"q-{uuid.uuid4().hex}"
+    client = api
+    task_id = client.post("/api/chat", json={"message": "hello", "context_id": ctx}).json()["task_id"]
+    queue.enqueue(ctx, "a", _msg("next"))
+    assert client.get("/api/queue/head", params={"context_id": ctx}).json()["item"] is None
+    client.post(f"/api/chat/{task_id}/cancel")
+    client.post("/api/queue/resume", json={"context_id": ctx})
+    assert client.get("/api/queue/head", params={"context_id": ctx}).json()["item"]["id"] == "a"
+
+
+# ── what the queue keeps ──────────────────────────────────────────────────────
+
+def test_the_snapshot_is_metadata_only_and_never_reads_the_payload(queue):
+    import sqlite3
+
+    image = {"mediaType": "image/png", "base64": "A" * 1000, "name": "x.png", "savedPath": ""}
+    queue.enqueue("c", "a", _msg("look", [image, image]))
+    snap = queue.snapshot("c")
+    assert snap["items"][0]["attachments"] == 2
+    assert "payload" not in snap["items"][0] and "AAAA" not in str(snap)
+    with sqlite3.connect(queue._path) as conn:
+        conn.execute("UPDATE queue SET payload='not json' WHERE id='a'")
+    assert queue.snapshot("c")["items"][0]["attachments"] == 2
+
+
+def test_a_queue_database_from_before_the_attachment_count_is_upgraded(tmp_path):
+    import sqlite3
+
+    path = tmp_path / "queue.db"
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "CREATE TABLE queue (id TEXT PRIMARY KEY, context_id TEXT NOT NULL, seq INTEGER NOT NULL, "
+            "created_at REAL NOT NULL, text TEXT NOT NULL, payload TEXT NOT NULL)")
+    q = MessageQueue(path)
+    q.enqueue("c", "a", _msg("hi"))
+    assert q.snapshot("c")["items"][0]["attachments"] == 0
+
+
+def test_a_message_nobody_came_back_for_expires(queue, monkeypatch):
+    queue.enqueue("c", "a", _msg("old"))
+    queue.pause("c", "stopped")
+    monkeypatch.setattr(chat_queue, "QUEUE_TTL_SECONDS", -1)
+    assert queue.snapshot("c") == {"items": [], "paused": False, "reason": "", "max": MAX_QUEUED}
+    queue.enqueue("c", "b", _msg("old"))
+    assert queue.head("c") is None
+
+
+def test_slash_commands_are_refused_by_the_server(queue, monkeypatch, api):
+    client = api
+    refused = client.post("/api/queue", json={"context_id": "c", "id": "a", "payload": _msg("  /jira list")})
+    assert refused.status_code == 400 and "Slash" in refused.json()["detail"]
+    client.post("/api/queue", json={"context_id": "c", "id": "b", "payload": _msg("fine")})
+    edited = client.put("/api/queue/b", json={"context_id": "c", "text": "/jira list"})
+    assert edited.status_code == 400
+    assert queue.snapshot("c")["items"][0]["text"] == "fine"

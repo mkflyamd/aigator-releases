@@ -9,7 +9,8 @@ const vm = require('vm');
 const source = fs.readFileSync(path.join(__dirname, '..', 'web', 'static', 'app.js'), 'utf8');
 
 function functionSource(name) {
-  const start = source.indexOf(`async function ${name}(`);
+  let start = source.indexOf(`async function ${name}(`);
+  if (start < 0) start = source.indexOf(`function ${name}(`);
   assert(start > 0, `${name} found`);
   let depth = 0;
   for (let i = source.indexOf('{', start); i < source.length; i++) {
@@ -19,7 +20,7 @@ function functionSource(name) {
   throw new Error(`${name} not closed`);
 }
 
-function world({ text = 'next question', chatRunning = true } = {}) {
+function world({ text = 'next question', chatRunning = true, chips = [] } = {}) {
   const calls = [];
   const toasts = [];
   const pending = [];
@@ -27,7 +28,7 @@ function world({ text = 'next question', chatRunning = true } = {}) {
     textContent: text,
     style: {},
     dataset: {},
-    querySelector: () => null,
+    querySelector: (selector) => (chips.includes(selector) ? {} : null),
   };
   const ctx = {
     _activeTabId: 'tab1',
@@ -39,6 +40,8 @@ function world({ text = 'next question', chatRunning = true } = {}) {
     _queueComposing: new Set(),
     _queueBusy: new Set(),
     _pendingSandboxFollowUps: new Set(),
+    _pendingSandboxCards: new Map(),
+    _pendingTabCards: new Map(),
     _chatTaskIds: new Map(chatRunning ? [['tab1', 'task1']] : []),
     document: { getElementById: (id) => (id === 'chat-input' ? input : null) },
     window: {},
@@ -63,7 +66,8 @@ function world({ text = 'next question', chatRunning = true } = {}) {
   };
   vm.createContext(ctx);
   vm.runInContext(
-    `${functionSource('_queueComposerMessage')}\n${functionSource('_queueDrain')}`,
+    `${functionSource('_queueComposerMessage')}\n${functionSource('_queueDrain')}
+${functionSource('_queueCardHold')}`,
     ctx,
   );
   // Function declarations in a vm script become properties of the context.
@@ -132,6 +136,62 @@ function world({ text = 'next question', chatRunning = true } = {}) {
       1,
       'the busy mark holds until the submit settles',
     );
+  }
+
+  {
+    const w = world({ chatRunning: false });
+    w.ctx._pendingSandboxCards.set('tab1', new Map([['req1', {}]]));
+    await w.ctx._queueDrain('tab1');
+    assert.strictEqual(w.calls.length, 0, 'an unanswered sandbox card holds the queue');
+    w.ctx._pendingSandboxCards.get('tab1').clear();
+    await w.ctx._queueDrain('tab1');
+    assert.strictEqual(
+      w.calls.filter(([m]) => m === 'submit').length,
+      1,
+      'the queue drains once the sandbox card is answered',
+    );
+  }
+
+  {
+    const w = world({ chatRunning: false });
+    w.ctx._pendingTabCards.set('tab1', new Map([['perm', { survivesTurn: true, expired: false }]]));
+    await w.ctx._queueDrain('tab1');
+    assert.strictEqual(w.calls.length, 0, 'an unanswered permission card holds the queue');
+    w.ctx._pendingTabCards.get('tab1').get('perm').expired = true;
+    await w.ctx._queueDrain('tab1');
+    assert.strictEqual(
+      w.calls.filter(([m]) => m === 'submit').length,
+      1,
+      'an expired permission card no longer holds the queue',
+    );
+  }
+
+  {
+    const w = world({ chatRunning: false });
+    w.ctx._pendingTabCards.set('tab1', new Map([['note', { survivesTurn: false, expired: false }]]));
+    await w.ctx._queueDrain('tab1');
+    assert.strictEqual(
+      w.calls.filter(([m]) => m === 'submit').length,
+      1,
+      'a card that ends with its turn does not hold the queue',
+    );
+  }
+
+  {
+    const w = world({ chips: ['.pin-ref-chip'] });
+    await w.ctx._queueComposerMessage();
+    assert.strictEqual(w.calls.length, 0, 'a pin reference chip is not queued');
+    assert.strictEqual(w.toasts[0][1], 'warn');
+    assert.match(w.toasts[0][0], /cannot be queued/);
+    assert.strictEqual(w.input.textContent, 'next question', 'the message stays in the composer');
+  }
+
+  {
+    const w = world();
+    w.ctx._aigatorImages.push({ mediaType: 'image/png', base64: 'x', jiraAttachment: { id: '1' } });
+    await w.ctx._queueComposerMessage();
+    assert.strictEqual(w.calls.length, 0, 'a Jira attachment is not queued');
+    assert.match(w.toasts[0][0], /cannot be queued/);
   }
 
   console.log('queue composer: ok');

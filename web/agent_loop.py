@@ -426,6 +426,13 @@ def _summarize_tool_calls(tool_calls: list, results: list | None = None) -> list
     return out
 
 
+# Turn-end outcomes that surface an error to the user; the message queue pauses behind them.
+_ERROR_OUTCOMES = frozenset({
+    "llm_error", "stalled", "leaked_tool_call", "max_iterations", "tool_configuration_error",
+    "empty_tool_use", "circuit_breaker", "planner_error", "budget_exceeded",
+})
+
+
 async def _log_turn_end_safe(
     turn_id: str, context_id: str | None, task_id: str | None,
     turn_index: int, agent: str, model: str, provider: str,
@@ -440,6 +447,12 @@ async def _log_turn_end_safe(
     not break a chat turn."""
     if not task_id or not context_id:
         return
+    if outcome in _ERROR_OUTCOMES:
+        try:
+            import shared as _shared
+            _shared.chat_task_store.mark_error(task_id)
+        except Exception:
+            pass
     try:
         import turn_telemetry
         await turn_telemetry.log_turn_end(

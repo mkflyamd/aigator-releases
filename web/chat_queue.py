@@ -17,13 +17,15 @@ _log = logging.getLogger(__name__)
 MAX_QUEUED = 5
 MAX_ITEM_BYTES = 6 * 1024 * 1024
 MAX_TEXT_CHARS = 100_000
+QUEUE_TTL_SECONDS = 24 * 3600  # a message nobody came back for is not sent a day later
 
 
 class QueueError(Exception):
-    def __init__(self, status: int, message: str):
+    def __init__(self, status: int, message: str, code: str = "queue_unavailable"):
         super().__init__(message)
         self.status = status
         self.message = message
+        self.code = code
 
 
 class MessageQueue:
@@ -38,7 +40,10 @@ class MessageQueue:
         if not self._ready:
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS queue (id TEXT PRIMARY KEY, context_id TEXT NOT NULL, "
-                "seq INTEGER NOT NULL, created_at REAL NOT NULL, text TEXT NOT NULL, payload TEXT NOT NULL)")
+                "seq INTEGER NOT NULL, created_at REAL NOT NULL, text TEXT NOT NULL, payload TEXT NOT NULL, "
+                "attachments INTEGER NOT NULL DEFAULT 0)")
+            if "attachments" not in {r[1] for r in conn.execute("PRAGMA table_info(queue)")}:
+                conn.execute("ALTER TABLE queue ADD COLUMN attachments INTEGER NOT NULL DEFAULT 0")
             conn.execute("CREATE INDEX IF NOT EXISTS queue_context ON queue (context_id, seq)")
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS queue_state (context_id TEXT PRIMARY KEY, paused INTEGER NOT NULL, "
@@ -64,20 +69,26 @@ class MessageQueue:
         row = conn.execute("SELECT paused, reason FROM queue_state WHERE context_id=?", (context_id,)).fetchone()
         return (bool(row[0]), row[1]) if row else (False, "")
 
+    @staticmethod
+    def _expire(conn) -> None:
+        conn.execute("DELETE FROM queue WHERE created_at < ?", (time.time() - QUEUE_TTL_SECONDS,))
+        conn.execute("DELETE FROM queue_state WHERE context_id NOT IN (SELECT context_id FROM queue)")
+
     def snapshot(self, context_id: str) -> dict:
-        """What the chips need: each entry's text and attachment count, plus whether the queue is paused."""
+        """What the chips need: each entry's text and attachment count, plus whether the queue is paused. Never the payload."""
         def work(conn):
+            self._expire(conn)
             rows = conn.execute(
-                "SELECT id, created_at, text, payload FROM queue WHERE context_id=? ORDER BY seq", (context_id,)).fetchall()
+                "SELECT id, created_at, text, attachments FROM queue WHERE context_id=? ORDER BY seq", (context_id,)).fetchall()
             paused, reason = self._state(conn, context_id)
-            items = [{"id": r[0], "created_at": r[1], "text": r[2],
-                      "attachments": len(json.loads(r[3]).get("images") or [])} for r in rows]
+            items = [{"id": r[0], "created_at": r[1], "text": r[2], "attachments": r[3]} for r in rows]
             return {"items": items, "paused": paused, "reason": reason, "max": MAX_QUEUED}
         return self._run(work)
 
     def head(self, context_id: str) -> dict | None:
         """The next message to send, with its full payload; None while paused or empty."""
         def work(conn):
+            self._expire(conn)
             if self._state(conn, context_id)[0]:
                 return None
             row = conn.execute(
@@ -91,6 +102,8 @@ class MessageQueue:
         text = payload.get("text", "")
         if not text.strip() and not payload.get("images"):
             raise QueueError(400, "There is nothing to queue.")
+        if text.lstrip().startswith("/"):
+            raise QueueError(400, "Slash commands cannot be queued. Send it when the reply finishes.")
         if len(text) > MAX_TEXT_CHARS:
             raise QueueError(413, "That message is too long to queue.")
         blob = json.dumps(payload)
@@ -98,6 +111,7 @@ class MessageQueue:
             raise QueueError(413, "That message and its attachments are too large to queue. Send it when the reply finishes.")
 
         def work(conn):
+            self._expire(conn)
             existing = conn.execute("SELECT context_id FROM queue WHERE id=?", (item_id,)).fetchone()
             if existing:
                 if existing[0] != context_id:
@@ -107,8 +121,9 @@ class MessageQueue:
             if count >= MAX_QUEUED:
                 raise QueueError(429, f"The queue is full ({MAX_QUEUED} messages). Wait for one to send, or remove one.")
             seq = conn.execute("SELECT COALESCE(MAX(seq), 0) + 1 FROM queue").fetchone()[0]
-            conn.execute("INSERT INTO queue (id, context_id, seq, created_at, text, payload) VALUES (?,?,?,?,?,?)",
-                         (item_id, context_id, seq, time.time(), text, blob))
+            conn.execute(
+                "INSERT INTO queue (id, context_id, seq, created_at, text, payload, attachments) VALUES (?,?,?,?,?,?,?)",
+                (item_id, context_id, seq, time.time(), text, blob, len(payload.get("images") or [])))
             return True
         created = self._run(work)
         return {"created": created}
@@ -116,6 +131,8 @@ class MessageQueue:
     def edit(self, context_id: str, item_id: str, text: str) -> None:
         if not isinstance(text, str) or not text.strip() or len(text) > MAX_TEXT_CHARS:
             raise QueueError(400, "That message could not be updated.")
+        if text.lstrip().startswith("/"):
+            raise QueueError(400, "Slash commands cannot be queued. Send it when the reply finishes.")
 
         def work(conn):
             row = conn.execute("SELECT payload FROM queue WHERE id=? AND context_id=?", (item_id, context_id)).fetchone()
@@ -135,8 +152,19 @@ class MessageQueue:
         return self._run(work)
 
     def consume(self, context_id: str, item_id: str) -> bool:
-        """The chat route accepted this message as a turn. False when it is no longer queued (another window sent it)."""
-        return self.remove(context_id, item_id)
+        """The chat route accepted this message as a turn. False when it is no longer queued (another window sent it).
+
+        A paused queue refuses in the same transaction as the delete, so a send that raced a Stop or an error
+        cannot slip a message through after the pause landed. Resume first, then send.
+        """
+        def work(conn):
+            if self._state(conn, context_id)[0]:
+                raise QueueError(409, "The queue is paused. Resume it to send this message.", code="queue_paused")
+            removed = conn.execute("DELETE FROM queue WHERE id=? AND context_id=?", (item_id, context_id)).rowcount > 0
+            if conn.execute("SELECT 1 FROM queue WHERE context_id=? LIMIT 1", (context_id,)).fetchone() is None:
+                conn.execute("DELETE FROM queue_state WHERE context_id=?", (context_id,))
+            return removed
+        return self._run(work)
 
     def clear(self, context_id: str) -> None:
         def work(conn):
