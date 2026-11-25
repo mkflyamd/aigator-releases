@@ -4126,6 +4126,30 @@ function _saveTabDisplayHtml(tabId, html, trimToCount) {
   }
 }
 
+// Takes back the newest saved display entry (a queued send the server did not take).
+function _unsaveTabDisplayHtml(tabId) {
+  if (!tabId) return;
+  const key = 'tab-disp-' + tabId;
+  try {
+    const store = JSON.parse(localStorage.getItem(key) || '[]');
+    store.pop();
+    localStorage.setItem(key, JSON.stringify(store));
+  } catch (e) {
+    console.warn('could not take back the saved display entry for tab', tabId, e);
+  }
+}
+
+// A queued send the server did not take leaves its message in the queue, so the transcript must not keep a copy of
+// it: the retry adds its own.
+function _discardUnsentQueuedSend(tabId, sent) {
+  sent.userMsg?.remove();
+  sent.assistantMsg?.remove();
+  const at = sent.history.lastIndexOf(sent.entry);
+  if (at >= 0) sent.history.splice(at, 1);
+  _saveTabHistory(tabId, sent.history);
+  _unsaveTabDisplayHtml(tabId);
+}
+
 function _loadTabDisplayHtml(tabId) {
   try {
     return JSON.parse(localStorage.getItem('tab-disp-' + tabId) || '[]');
@@ -4669,6 +4693,7 @@ function switchTab(tabId) {
   // Save current (history + chips snapshot)
   _saveActiveTabHistory();
   // Swap
+  _queueRearmStop(_leavingTabId); // the tab being left stops retrying; coming back starts afresh
   _activeTabId = tabId;
   setTimeout(() => _flushSandboxFollowUp(tabId), 0);
   _renderQueue();
@@ -8715,39 +8740,58 @@ function _shouldStopFromClick(e, btn, rect, streaming) {
     e.clientY <= rect.bottom
   );
 }
-// While a reply runs the one button is Stop (empty composer) or Queue (something typed, with a separate Stop).
-function _composerButtonMode(streaming, hasText) {
+// While a reply runs the one button is Stop (nothing the queue can take) or Queue (something it can, with a separate Stop).
+function _composerButtonMode(streaming, canQueue) {
   if (!streaming) return 'send';
-  return hasText ? 'queue' : 'stop';
+  return canQueue ? 'queue' : 'stop';
 }
-// Text, an attached file or any chip is something Enter would queue, so it decides Queue versus Stop.
-function _composerHasContent() {
+// What the composer holds that the queue cannot keep, or '' when it can be queued. Mirrors the server (empty text
+// without an image, a leading "/") and the client's own refusals (Jira attachments, pin references, @mentions).
+function _queueRefusal(typedText, finalText, images, box) {
+  if (typedText.trim().startsWith('/')) return 'slash';
+  if (
+    images.some((i) => i.jiraAttachment) ||
+    box.querySelector('.pin-ref-chip') ||
+    box.querySelector('.chip-person')
+  ) {
+    return 'unsupported';
+  }
+  if (!finalText.trim() && images.length === 0) return 'empty';
+  return '';
+}
+// True when Enter would queue what is in the composer, so it decides Queue versus Stop.
+function _composerCanQueue() {
   const box = document.getElementById('chat-input');
   if (!box) return false;
-  return (
-    (box.textContent || '').trim().length > 0 ||
-    _aigatorImages.length > 0 ||
-    box.querySelector('.inline-chip, .pin-ref-chip, [data-file-path]') !== null
-  );
+  const typed = _getInputText().trim();
+  return _queueRefusal(typed, buildFinalMessage(typed), _aigatorImages, box) === '';
 }
-document.addEventListener(
-  'click',
-  (e) => {
-    if (!_activeStops.size) return;
-    const stopBtn = document.getElementById('composer-stop-btn');
-    const onStopBtn = !!stopBtn && !stopBtn.hidden && stopBtn.contains(e.target);
-    const mode = _composerButtonMode(sendBtn.classList.contains('is-streaming'), _composerHasContent());
-    if (
-      !onStopBtn &&
-      !_shouldStopFromClick(e, sendBtn, sendBtn.getBoundingClientRect(), mode === 'stop')
-    ) {
-      return;
-    }
+// The Enter key and the Queue pill both submit the composer as typed.
+function _requestTypedSubmit() {
+  _enterSubmit = true;
+  try {
+    form.requestSubmit();
+  } finally {
+    _enterSubmit = false;
+  }
+}
+function _onComposerButtonClick(e) {
+  const stopBtn = document.getElementById('composer-stop-btn');
+  const onStopBtn = !!stopBtn && !stopBtn.hidden && stopBtn.contains(e.target);
+  const mode = _composerButtonMode(sendBtn.classList.contains('is-streaming'), _composerCanQueue());
+  const onSendBtn = (streaming) =>
+    _shouldStopFromClick(e, sendBtn, sendBtn.getBoundingClientRect(), streaming);
+  if (!onStopBtn && mode === 'queue' && onSendBtn(true)) {
     e.preventDefault();
-    [..._activeStops].forEach((stop) => stop());
-  },
-  true,
-);
+    _requestTypedSubmit();
+    return;
+  }
+  if (!_activeStops.size) return;
+  if (!onStopBtn && !onSendBtn(mode === 'stop')) return;
+  e.preventDefault();
+  [..._activeStops].forEach((stop) => stop());
+}
+document.addEventListener('click', _onComposerButtonClick, true);
 
 const _COMPACTION_ICON_SVG =
   '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8"/><line x1="10" y1="12" x2="14" y2="12"/></svg>';
@@ -9379,7 +9423,7 @@ function _syncComposerButton() {
   const slot = document.getElementById('chat-send-slot');
   const btn = document.getElementById('send-btn');
   if (!slot || !btn) return;
-  const mode = _composerButtonMode(btn.classList.contains('is-streaming'), _composerHasContent());
+  const mode = _composerButtonMode(btn.classList.contains('is-streaming'), _composerCanQueue());
   slot.dataset.mode = mode;
   btn.setAttribute('aria-label', { send: 'Send message', stop: 'Stop reply', queue: 'Queue message' }[mode]);
   if (mode === 'send') btn.removeAttribute('title');
@@ -9622,12 +9666,7 @@ input.addEventListener('keydown', (e) => {
   }
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
-    _enterSubmit = true;
-    try {
-      form.requestSubmit();
-    } finally {
-      _enterSubmit = false;
-    }
+    _requestTypedSubmit();
   }
 });
 
@@ -10419,6 +10458,7 @@ const _queueByTab = new Map(); // tabId -> { items, paused, reason, max }
 const _queueBusy = new Set(); // tabs with a queued send in flight
 const _queueBusyTimers = new Map(); // tabId -> timer that gives up on a send that never settled
 const _queueRearms = new Map(); // tabId -> { timer, tries } for the "ask again shortly" retries
+const _doSendLive = new Set(); // tabs whose submit handler has not yet run its tail: it drains the queue itself when it ends
 const _queueDirty = new Set(); // tabs asked to drain while a drain was already looking at the server
 const _queueIdleSince = new Map(); // tabId -> when a queued message first sat unsent with nothing running
 const _QUEUE_REARM_MS = [500, 500, 500, 1000, 1000, 1000, 2000, 2000];
@@ -10525,10 +10565,14 @@ function _queueRearm(tabId) {
   if (!snap || !snap.items.length || snap.paused || _queueCardHold(tabId)) return;
   const state = _queueRearms.get(tabId) || { timer: 0, tries: 0 };
   _queueRearms.set(tabId, state);
-  if (state.timer || state.tries >= _QUEUE_REARM_MS.length) return;
+  if (state.timer) return;
+  if (state.tries >= _QUEUE_REARM_MS.length) {
+    _renderQueue(); // out of retries: the status line turns to "Didn't send automatically"
+    return;
+  }
   state.timer = setTimeout(() => {
     state.timer = 0;
-    _queueDrain(tabId, true);
+    _queueDrain(tabId);
   }, _QUEUE_REARM_MS[state.tries++]);
 }
 
@@ -10536,6 +10580,18 @@ function _queueSendSettled(tabId) {
   _queueBusyEnd(tabId);
   _queueDirty.delete(tabId);
   _queueRefresh(tabId);
+}
+
+// The answer to a queued send's POST (status 0: it never got one). It leaves the message queued when the request threw
+// or the server said a turn is still running; ask again, counting against the same retries however many attempts that
+// takes. Any other answer ends the round: an accepted send or a spent message starts the next one afresh.
+// Returns true when the message is still queued.
+function _queuePostSettled(tabId, status, errCode) {
+  _queueSendSettled(tabId);
+  const unsent = status === 0 || (status === 409 && errCode === 'turn_in_progress');
+  if (unsent) _queueRearm(tabId);
+  else if (status !== 409) _queueRearmStop(tabId);
+  return unsent;
 }
 
 // What the status line under the composer says, or null when nothing is queued.
@@ -10563,6 +10619,10 @@ function _queueStatus(tabId, now) {
     status = { kind: 'running', tone: 'neutral', text: 'Next message sends when this reply finishes' };
   } else if (_queueBusy.has(tabId)) {
     status = { kind: 'starting', tone: 'accent', text: 'Sending next message' };
+  } else if (_queueRearms.get(tabId)?.timer) {
+    status = { kind: 'starting', tone: 'accent', text: 'Retrying the next message' };
+  } else if ((_queueRearms.get(tabId)?.tries || 0) >= _QUEUE_REARM_MS.length) {
+    status = { kind: 'failsafe', tone: 'danger', text: "Didn't send automatically" };
   }
   if (status) {
     _queueIdleSince.delete(tabId);
@@ -10591,34 +10651,30 @@ async function _queueComposerMessage() {
     return;
   }
   const typedText = _getInputText().trim();
-  if (typedText.startsWith('/')) {
+  const finalText = buildFinalMessage(typedText);
+  const images = [..._aigatorImages];
+  const refusal = _queueRefusal(typedText, finalText, images, input);
+  if (refusal === 'slash') {
     _showConnectivityToast(
       'Slash commands cannot be queued. Send it when the reply finishes.',
       'warn',
     );
     return;
   }
-  const finalText = buildFinalMessage(typedText);
-  const images = [..._aigatorImages];
   if (images.some((i) => !i.base64)) {
     _showConnectivityToast('Wait for the attachment to finish loading', 'warn');
     return;
   }
   // The queue keeps the text and the image bytes. A Jira attachment, a pin reference or an @mention (its resolved
   // contact is filled in only when the composer is submitted) would be dropped silently, so refuse. The model and the skill pin are read from the tab when the message is sent, not when it is queued.
-  if (
-    images.some((i) => i.jiraAttachment) ||
-    input.querySelector('.pin-ref-chip') ||
-    input.querySelector('.chip-person')
-  ) {
+  if (refusal === 'unsupported') {
     _showConnectivityToast(
       'Jira attachments, pinned references and @mentions cannot be queued. Send it once the reply has finished and the queue is empty (resume or clear a paused queue first).',
       'warn',
     );
     return;
   }
-  const hasFileChips = input.querySelector('[data-file-path]') !== null;
-  if (!_canSubmitMessage(finalText, hasFileChips, images.length > 0)) return;
+  if (refusal === 'empty') return;
   // The composer is cleared only once the server accepts the message, so a second Enter in that window must not queue it again.
   if (_queueComposing.has(tabId)) return;
   _queueComposing.add(tabId);
@@ -10655,18 +10711,18 @@ async function _queueComposerMessage() {
     _updatePlaceholder();
   }
   _queueSet(tabId, snap);
+  _queueRearmStop(tabId);
   // The reply may have ended while the request was in flight; nothing else would send this one.
   if (!_chatTaskIds.has(tabId)) _queueDrain(tabId);
 }
 
-async function _queueDrain(tabId, fromRearm = false) {
+async function _queueDrain(tabId) {
   if (!tabId || tabId !== _activeTabId || _chatTaskIds.has(tabId)) return;
   if (_queueBusy.has(tabId)) {
     _queueDirty.add(tabId);
     return;
   }
   if (_pendingSandboxFollowUps.has(tabId) || _queueCardHold(tabId)) return;
-  if (!fromRearm) _queueRearmStop(tabId);
   _queueBusyStart(tabId);
   _renderQueue();
   let started = false;
@@ -10688,9 +10744,8 @@ async function _queueDrain(tabId, fromRearm = false) {
     askAgain = true;
   } finally {
     if (!started) _queueBusyEnd(tabId);
-    const dirty = _queueDirty.delete(tabId) && !started;
-    if (started) _queueRearmStop(tabId);
-    else if (dirty) setTimeout(() => _queueDrain(tabId), 0);
+    const dirty = _queueDirty.delete(tabId);
+    if (!started && dirty) setTimeout(() => _queueDrain(tabId), 0);
     else if (askAgain) _queueRearm(tabId);
     _renderQueue();
   }
@@ -10743,6 +10798,7 @@ async function _queueSendNow(tabId) {
     [..._activeStops].forEach((stop) => stop());
   }
   if (await _queueAct(tabId, 'POST', '/api/queue/resume', { context_id: tabId })) {
+    _queueRearmStop(tabId);
     _queueDrain(tabId);
   }
 }
@@ -10853,6 +10909,7 @@ function _renderQueue() {
       bar.appendChild(
         _queueButton('Resume', 'Send the queued messages one at a time', async () => {
           if (await _queueAct(tabId, 'POST', '/api/queue/resume', { context_id: tabId })) {
+            _queueRearmStop(tabId);
             _queueDrain(tabId);
           }
         }),
@@ -10860,7 +10917,10 @@ function _renderQueue() {
       bar.appendChild(clear);
     } else if (status.kind === 'failsafe') {
       bar.appendChild(
-        _queueButton('Send now', 'Send the next queued message', () => _queueDrain(tabId)),
+        _queueButton('Send now', 'Send the next queued message', () => {
+          _queueRearmStop(tabId);
+          _queueDrain(tabId);
+        }),
       );
       bar.appendChild(clear);
     }
@@ -15947,7 +16007,7 @@ form.addEventListener('submit', async (e) => {
     if (_activeSkillId === 'gator') _showQuickActions(SKILL_MAP['gator']);
   }
 
-  addMessage('user', displayHtml);
+  const userBubble = addMessage('user', displayHtml);
 
   // Build message payload: vision blocks + text when images present
   // An image-only prompt (no typed text) must NOT include an empty text block —
@@ -15985,10 +16045,11 @@ form.addEventListener('submit', async (e) => {
     .filter((i) => i.savedPath)
     .map((i) => `[attached image: ${i.name || 'image'}, saved at ${i.savedPath}]`)
     .join('\n');
-  requestHistory.push({
+  const historyEntry = {
     role: 'user',
     content: _imageNote ? `${finalText}\n\n${_imageNote}` : finalText,
-  });
+  };
+  requestHistory.push(historyEntry);
   _saveTabHistory(requestTabId, requestHistory);
   // Trim display store to match surviving user turns in the history window
   const _survivingUserTurns = requestHistory
@@ -16014,6 +16075,14 @@ form.addEventListener('submit', async (e) => {
   const prose = addMessage('assistant', '');
   const msgDiv = prose.closest('.message');
   msgDiv.classList.add('typing');
+  let _queuedUnsent = false;
+  const _discardQueuedAttempt = () =>
+    _discardUnsentQueuedSend(requestTabId, {
+      userMsg: userBubble.closest('.message'),
+      assistantMsg: msgDiv,
+      entry: historyEntry,
+      history: requestHistory,
+    });
 
   let full = '';
   let _rawStreamText = '';
@@ -16088,6 +16157,7 @@ form.addEventListener('submit', async (e) => {
     }
   };
   _activeStops.add(_onStop);
+  _doSendLive.add(requestTabId);
 
   // Escape also stops generation while streaming
   const _onEscStop = (e) => {
@@ -16111,6 +16181,8 @@ form.addEventListener('submit', async (e) => {
   // When called with overridePayload (from permission approve), skips input
   // parsing and posts the saved payload directly so post-stream work runs normally.
   const doSend = async (overridePayload) => {
+    _queuedUnsent = false;
+    _doSendLive.add(requestTabId);
     _userScrolledUp = false;
     _gatorWidgetRevealHold = false;
     _browserHITLShown = false;
@@ -16488,19 +16560,17 @@ form.addEventListener('submit', async (e) => {
       try {
         postRes = await Promise.race([_postPromise, _stoppedDuringPost]);
       } catch (postErr) {
-        // The request never got an answer, so the message is still queued: ask the queue again.
+        // The request never got an answer, so the message is still queued: ask the queue again, and keep this
+        // attempt out of the transcript.
         if (queuedSendId) {
-          _queueSendSettled(requestTabId);
-          _queueRearm(requestTabId);
+          _queuePostSettled(requestTabId, 0);
+          _queuedUnsent = true;
+          _discardQueuedAttempt();
         }
         throw postErr;
       }
-      if (queuedSendId) {
-        _queueSendSettled(requestTabId);
-        // A refused send (409) leaves the message queued, so a retry keeps its id; any other answer spent it.
-        if (postRes && postRes.status === 409) _queueRearm(requestTabId);
-        if (postRes && postRes.status !== 409) queuedSendId = null;
-      }
+      if (queuedSendId && !postRes) _queueSendSettled(requestTabId);
+      if (queuedSendId && postRes?.ok) _queuePostSettled(requestTabId, postRes.status);
       if (!postRes) {
         _postPromise
           .then((r) => (r.ok ? r.json() : null))
@@ -16526,6 +16596,24 @@ form.addEventListener('submit', async (e) => {
         const hint = detail
           ? `<div class="err-detail">${escapeHtml(String(detail).slice(0, 200))}</div>`
           : '';
+        if (queuedSendId) {
+          // A refused send (409) leaves the message queued, so a retry keeps its id; any other answer spent it.
+          if (_queuePostSettled(requestTabId, postRes.status, errCode)) {
+            _queuedUnsent = true;
+            _discardQueuedAttempt();
+            _streamOver = true;
+            if (_activeTabId === requestTabId) {
+              _isStreaming = false;
+              _resetBtn();
+              setStatus('ready');
+            } else {
+              _detachStop();
+            }
+            _doSendLive.delete(requestTabId);
+            return;
+          }
+          if (postRes.status !== 409) queuedSendId = null;
+        }
         const queueRefusal = _queueRefusalMessage(postRes.status, errCode);
         const errHtml = queueRefusal
           ? `<div class="err-bubble"><span class="err-icon">&#x26A0;&#xFE0F;</span><span>${escapeHtml(queueRefusal)}</span></div>`
@@ -17314,6 +17402,9 @@ form.addEventListener('submit', async (e) => {
     }
     // The turn is fully finished for this tab: now a queued sandbox follow-up
     // can be sent without racing this turn's cleanup.
+    _doSendLive.delete(requestTabId);
+    // A send the server refused is asked again on the queue's own schedule, never straight away.
+    if (_queuedUnsent) return;
     if (!_userStopped) setTimeout(() => _flushSandboxFollowUp(requestTabId), 0);
     else setTimeout(() => _queueRefresh(requestTabId), 600);
   };
@@ -18389,7 +18480,11 @@ function _initNotificationStream() {
         }
         // The server is idle now: the one moment a queued message can safely follow. Drain itself
         // refuses while a reply is running here or a send is already in flight.
-        if (msg.context_id) _queueDrain(msg.context_id);
+        // The submit handler's own tail does that once it has run; draining first would start the next turn under it.
+        if (msg.context_id) {
+          _queueRearmStop(msg.context_id);
+          if (!_doSendLive.has(msg.context_id)) _queueDrain(msg.context_id);
+        }
         return;
       }
       if (msg.type === 'mcp_auth_error' && msg.connection_id) {

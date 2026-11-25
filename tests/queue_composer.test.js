@@ -73,7 +73,7 @@ function world({ text = 'next question', chatRunning = true, chips = [] } = {}) 
   };
   vm.createContext(ctx);
   vm.runInContext(
-    `${functionSource('_queueComposerMessage')}\n${functionSource('_queueDrain')}
+    `${functionSource('_queueRefusal')}\n${functionSource('_queueComposerMessage')}\n${functionSource('_queueDrain')}
 ${functionSource('_queueCardHold')}
 ${['_queueBusyStart', '_queueBusyEnd', '_queueRearm', '_queueRearmStop'].map(functionSource).join('\n')}`,
     ctx,

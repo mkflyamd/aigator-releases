@@ -44,6 +44,9 @@ function makeEnv() {
     _setTabWorking: (id, on) => ctx.working.push([id, on]),
     _flushSandboxFollowUp: () => {},
     drained: [],
+    stopped: [],
+    _doSendLive: new Set(),
+    _queueRearmStop: (id) => ctx.stopped.push(id),
     _queueDrain: (id) => ctx.drained.push(id),
     setStatus: (s) => {
       if (s === 'idle') ctx.idle++;
@@ -103,6 +106,22 @@ env = makeEnv();
 env._chatTaskIds.set('tab-1', 'x');
 env.run({ type: 'chat_done', context_id: 'tab-1' });
 assert.strictEqual(env._isStreaming, false);
+
+// While the tab's own doSend is still running, chat_done must not drain: the doSend tail drains,
+// and a drain here would reset the button under a turn that is just starting.
+env = makeEnv();
+env._doSendLive.add('tab-1');
+env._chatTaskIds.set('tab-1', 'cur');
+env.run({ type: 'chat_done', context_id: 'tab-1', task_id: 'cur' });
+assert.deepStrictEqual(env.drained, []);
+assert.deepStrictEqual(env.stopped, ['tab-1']);
+
+// With no doSend live on the tab, chat_done drains as before.
+env = makeEnv();
+env._chatTaskIds.set('tab-1', 'cur');
+env.run({ type: 'chat_done', context_id: 'tab-1', task_id: 'cur' });
+assert.deepStrictEqual(env.drained, ['tab-1']);
+assert.deepStrictEqual(env.stopped, ['tab-1']);
 
 // Every local finish path records the task id, and the server sends it.
 assert(/es\.close\(\);\s*_locallyFinishedTasks\.add\(task_id\);/.test(source), '[DONE] path');
