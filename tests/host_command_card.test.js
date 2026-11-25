@@ -465,6 +465,55 @@ const buttonsOf = (env) => walk(env.messages).filter((e) => e.tag === 'button');
   await tick();
   assert.match(textOf(capped), /too many commands are already running/);
 
+  // A card drawn again after a tab switch asks which run it belongs to, instead of offering a fresh Run.
+  const listing = (state) => (url) =>
+    url.startsWith('/api/runs?')
+      ? reply({ ok: true, runs: [{ id: 'other', state: 'finished' }, { id: 'req1', state }] })
+      : null;
+
+  let polled = 0;
+  const rejoin = makeEnv(async (url, opts) => {
+    const listed = listing('running')(url);
+    if (listed) return listed;
+    polled += 1;
+    return polled < 2
+      ? reply({ ok: true, run: { id: 'req1', state: 'running' } })
+      : finished({ stdout: 'done while away', stderr: '', exit_code: 0 });
+  });
+  rejoin.ctx._showSandboxApproval(data, 'tab-1', true);
+  await tick();
+  assert.strictEqual(rejoin.fetches[0].url, '/api/runs?context_id=tab-1');
+  assert.deepStrictEqual(
+    buttonsOf(rejoin).map((b) => [b.textContent, b.disabled]),
+    [['Run', true], ['Stop', false]],
+    'a running command offers Stop, not a second Run',
+  );
+  for (let i = 0; i < 12; i += 1) await tick();
+  assert(!rejoin.fetches.some((f) => f.opts && f.opts.method === 'POST'), 'rejoining posts nothing');
+  assert.match(textOf(rejoin), /Finished · exit code 0/);
+  assert(walk(rejoin.messages).some((e) => e.tag === 'pre' && e.textContent === 'done while away'));
+  assert.strictEqual(rejoin.followUps.length, 0, 'the first card already tells the agent');
+
+  const over = makeEnv(async (url) => listing('timed_out')(url) || finished({ stdout: 'partial', stderr: '', exit_code: -1 }, 'timed_out'));
+  over.ctx._showSandboxApproval(data, 'tab-1', true);
+  for (let i = 0; i < 4; i += 1) await tick();
+  assert.strictEqual(buttonsOf(over).length, 0);
+  assert.match(textOf(over), /Timed out/);
+
+  const declined = makeEnv(async (url) => listing('denied')(url));
+  declined.ctx._showSandboxApproval(data, 'tab-1', true);
+  for (let i = 0; i < 4; i += 1) await tick();
+  assert.strictEqual(buttonsOf(declined).length, 0);
+  assert.match(textOf(declined), /You cancelled this. Nothing was run./);
+
+  const waiting = makeEnv(async (url) => listing('awaiting_approval')(url));
+  waiting.ctx._showSandboxApproval(data, 'tab-1', true);
+  for (let i = 0; i < 4; i += 1) await tick();
+  assert.deepStrictEqual(
+    buttonsOf(waiting).map((b) => [b.textContent, b.disabled]),
+    [['Run', false], ['Cancel', false]],
+  );
+
   console.log('host_command_card: all assertions passed');
 })().catch((err) => {
   console.error(err);

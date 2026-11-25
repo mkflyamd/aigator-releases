@@ -1178,7 +1178,8 @@ def _tool_run_on_host(
 
 def _tool_host_command_result(request_id: str, _context_id: str = "") -> dict:
     """What happened to a command proposed with run_on_host."""
-    status, req = host_requests.lookup(str(request_id or ""), _context_id)
+    host_requests.sync_expiry()
+    status, req = host_requests.lookup_settled(str(request_id or ""), _context_id)
     if status == "none":
         return _shell_error("No such command request in this tab. Do not retry; propose the command again.")
     if status == "expired":

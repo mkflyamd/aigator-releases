@@ -218,7 +218,7 @@ def test_run_route_returns_at_once_and_the_record_carries_the_result(client, csr
     assert body["result"]["stdout"] == "ok"
     assert shell_tools._tool_host_command_result(req.id, "tab-1")["status"] == "done"
     again = client.post(f"/api/host-shell/{req.id}/run", json={"context_id": "tab-1"}, headers=csrf)
-    assert again.status_code == 409
+    assert again.status_code == 200 and again.json()["run"]["state"] == "finished"
 
 
 def test_run_route_called_twice_while_running_returns_the_same_run(client, csrf, tmp_path, monkeypatch):

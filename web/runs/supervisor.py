@@ -60,6 +60,7 @@ class RunSupervisor:
         self._lock = threading.Lock()
         self._records: dict[str, RunRecord] = {}
         self._handles: dict[str, RunHandle] = {}
+        self._workers: dict[str, threading.Thread] = {}
 
     # -- internals ----------------------------------------------------------
 
@@ -191,10 +192,34 @@ class RunSupervisor:
         thread = threading.Thread(target=self._execute, args=(run_id, handle, runner, budgets, on_done),
                                   name=f"run-{run_id[:8]}", daemon=True)
         handle.thread = thread
-        thread.start()
+        with self._lock:
+            self._workers[run_id] = thread
+        try:
+            thread.start()
+        except RuntimeError as exc:
+            with self._lock:
+                self._workers.pop(run_id, None)
+            self._terminal(run_id, "failed_to_start", reason="worker_unavailable")
+            raise RunError(500, "The command could not be started.") from exc
         return snapshot
 
+    @staticmethod
+    def _notify(run_id: str, on_done, result: dict) -> None:
+        if on_done is None:
+            return
+        try:
+            on_done(result)
+        except Exception:
+            _log.exception("run %s on_done failed", run_id[:8])
+
     def _execute(self, run_id: str, handle: RunHandle, runner, budgets: Budgets, on_done) -> None:
+        try:
+            self._execute_inner(run_id, handle, runner, on_done)
+        finally:
+            with self._lock:
+                self._workers.pop(run_id, None)
+
+    def _execute_inner(self, run_id: str, handle: RunHandle, runner, on_done) -> None:
         with self._lock:
             rec = self._records[run_id]
             if rec.state == "preparing":
@@ -208,19 +233,10 @@ class RunSupervisor:
             result = runner(handle) or {}
         except Exception as exc:
             _log.warning("run %s could not start (%s)", run_id[:8], type(exc).__name__)
-            self._terminal(run_id, "failed_to_start", error=f"The command could not be started ({type(exc).__name__}).")
-            if on_done is not None:
-                try:
-                    on_done({"error": f"The command could not be started ({type(exc).__name__}).", "stdout": "",
-                             "stderr": "", "exit_code": -1})
-                except Exception:
-                    _log.exception("run %s on_done failed", run_id[:8])
+            message = f"The command could not be started ({type(exc).__name__})."
+            self._terminal(run_id, "failed_to_start", error=message)
+            self._notify(run_id, on_done, {"error": message, "stdout": "", "stderr": "", "exit_code": -1})
             return
-        if on_done is not None:
-            try:
-                on_done(result)
-            except Exception:
-                _log.exception("run %s on_done failed", run_id[:8])
         tail, truncated = tail_of(f"{result.get('stdout') or ''}{result.get('stderr') or ''}", OUTPUT_TAIL_CHARS)
         common = {"exit": exit_info(result.get("exit_code")), "output_tail": tail, "output_truncated": truncated,
                   "error": str(result.get("error") or "")}
@@ -232,12 +248,12 @@ class RunSupervisor:
             self._terminal(run_id, "failed_to_start", **common)
         else:
             self._terminal(run_id, "finished", **common)
+        self._notify(run_id, on_done, result)
 
     def wait(self, run_id: str, timeout: float) -> None:
         """Block until the run's worker thread ends (tests and shutdown)."""
         with self._lock:
-            handle = self._handles.get(run_id)
-        thread = handle.thread if handle else None
+            thread = self._workers.get(run_id)
         if thread is not None:
             thread.join(timeout)
         deadline = time.monotonic() + timeout
@@ -327,11 +343,16 @@ class RunSupervisor:
         """Startup: records still active when the backend stopped become interrupted, and any process they
         left behind is swept, but only if the pid still belongs to the same process (pid and creation time)."""
         now = self._clock()
-        interrupted = self._store.interrupt_active(now)
+        interrupted = self._store.interrupt_active(now, skip=self._is_mine)
         for data in interrupted:
             self._sweep_process(data.get("owner_pid") or 0, data.get("owner_create_time") or 0.0)
         self._store.purge(now - _RETENTION_SECONDS)
         return [d["id"] for d in interrupted]
+
+    def _is_mine(self, run_id: str) -> bool:
+        """A record this process opened is live, whatever the database says: reconcile only owns older rows."""
+        with self._lock:
+            return run_id in self._records
 
     @staticmethod
     def _sweep_process(pid: int, created: float) -> None:
