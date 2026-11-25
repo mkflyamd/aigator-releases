@@ -39,11 +39,27 @@ _PROGRAMS = {
         "print(f'Viewer at http://127.0.0.1:{port}/', flush=True)\n"
         "raise SystemExit(3)"
     ),
+    # The parent ends normally; its child has its own stdio, so nothing ties the child to the run.
     "detached_child": (
+        "import subprocess, sys, pathlib\n"
+        "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'],\n"
+        "                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+        "pathlib.Path(PID_FILE).write_text(str(p.pid))\n"
+        "print('parent done')"
+    ),
+    # The parent ends, but its child still holds the output pipes, so the run cannot finish on its own.
+    "pipe_holder": (
         "import subprocess, sys, pathlib\n"
         "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
         "pathlib.Path(PID_FILE).write_text(str(p.pid))\n"
         "print('parent done')"
+    ),
+    # A parent and a child that both stay up.
+    "slow_tree": (
+        "import subprocess, sys, pathlib, time\n"
+        "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+        "pathlib.Path(PID_FILE).write_text(str(p.pid))\n"
+        "time.sleep(60)"
     ),
 }
 

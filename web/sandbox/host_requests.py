@@ -17,7 +17,7 @@ import re
 import threading
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 REQUEST_TTL_SECONDS = 600
 RESULT_TTL_SECONDS = 1800
@@ -179,6 +179,44 @@ def lookup(request_id: str, context_id: str, now: float | None = None) -> tuple[
             return "none", None
         _expire_locked(now)
         return req.status, req
+
+
+def sync_expiry() -> None:
+    """Lapse overdue requests and let the supervisor's records follow. Every reader of a request calls this first."""
+    events = expire_due()
+    if not events:
+        return
+    from runs.supervisor import get_supervisor
+
+    for request_id in events:
+        get_supervisor().mark_expired(request_id)
+
+
+_ENDED_STATES = ("finished", "timed_out", "cancelled", "failed_to_start", "interrupted")
+
+
+def _result_from_record(record: dict, req: HostRequest) -> dict:
+    code = (record.get("exit") or {}).get("code")
+    result = {"stdout": record.get("output_tail") or "", "stderr": "", "exit_code": -1 if code is None else code,
+              "ran_on": "host", "cwd": req.cwd}
+    if record.get("error"):
+        result["error"] = record["error"]
+    if record["state"] == "timed_out":
+        result["timed_out"] = True
+    return result
+
+
+def lookup_settled(request_id: str, context_id: str, now: float | None = None) -> tuple[str, HostRequest | None]:
+    """lookup(), except a command whose run record has ended but whose result is not stored yet reads as done."""
+    status, req = lookup(request_id, context_id, now)
+    if status != "running" or req is None:
+        return status, req
+    from runs.supervisor import get_supervisor
+
+    record = get_supervisor().get(request_id, context_id)
+    if record is None or record["state"] not in _ENDED_STATES:
+        return status, req
+    return "done", replace(req, status="done", result=_result_from_record(record, req))
 
 
 def _reset() -> None:

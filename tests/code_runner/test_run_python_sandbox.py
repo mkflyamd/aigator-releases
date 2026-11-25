@@ -227,6 +227,14 @@ def test_launcher_timeout(calls, monkeypatch):
     assert "timed out after 3s" in result["error"] and result["files"] == [] and result["sandbox"] == "enforced"
 
 
+def test_a_stopped_run_tells_the_model_it_was_stopped_not_that_it_exited_with_code_minus_one(calls, monkeypatch):
+    monkeypatch.setattr(sandbox, "launch_sandboxed", lambda req: sandbox.SandboxResult(
+        -1, "partial", "", False, cancelled=True))
+    result = cr_mod._tool_run_python(code="1")
+    assert "stopped" in result["error"] and "exited with code" not in result["error"]
+    assert result["stdout"] == "partial" and result["files"] == []
+
+
 def test_off_mode_marks_results(tmp_path, monkeypatch):
     import config as cfg_mod
 

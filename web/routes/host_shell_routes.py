@@ -7,6 +7,8 @@ executes the command and the card follows the run record.
 from __future__ import annotations
 
 import logging
+import threading
+from contextlib import contextmanager
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -28,10 +30,25 @@ class HostShellDecision(BaseModel):
     context_id: str = ""
 
 
-def _sync_expiry() -> None:
-    """The approval registry owns the clock; the supervisor's records follow its expiry events."""
-    for request_id in host_requests.expire_due():
-        get_supervisor().mark_expired(request_id)
+_STARTED = ("preparing", "running", "finished", "timed_out", "cancelled", "failed_to_start", "interrupted")
+_GUARDS: dict[str, list] = {}
+_GUARDS_LOCK = threading.Lock()
+
+
+@contextmanager
+def _one_at_a_time(request_id: str):
+    """Run and Cancel for one request take turns, so a double-click or a Stop racing a Run sees a settled record."""
+    with _GUARDS_LOCK:
+        guard = _GUARDS.setdefault(request_id, [threading.Lock(), 0])
+        guard[1] += 1
+    try:
+        with guard[0]:
+            yield
+    finally:
+        with _GUARDS_LOCK:
+            guard[1] -= 1
+            if guard[1] == 0:
+                _GUARDS.pop(request_id, None)
 
 
 def _http(exc: Exception) -> HTTPException:
@@ -40,7 +57,12 @@ def _http(exc: Exception) -> HTTPException:
 
 @router.post("/api/host-shell/{request_id}/run", dependencies=[Depends(verify_csrf)])
 def run_host_command(request_id: str, body: HostShellDecision):
-    _sync_expiry()
+    with _one_at_a_time(request_id):
+        return _run_locked(request_id, body)
+
+
+def _run_locked(request_id: str, body: HostShellDecision):
+    host_requests.sync_expiry()
     supervisor = get_supervisor()
     policy = load_policy()
     if policy.require_sandbox or policy.host_shell == "deny":
@@ -51,7 +73,7 @@ def run_host_command(request_id: str, body: HostShellDecision):
             pass
         raise HTTPException(status_code=403, detail=_POLICY_BLOCK)
     run = supervisor.get(request_id, body.context_id)
-    if run is not None and run["state"] in ("preparing", "running"):
+    if run is not None and run["state"] in _STARTED:
         return {"ok": True, "request_id": request_id, "run": run}
     try:
         req = host_requests.claim(request_id, body.context_id)
@@ -76,23 +98,40 @@ def run_host_command(request_id: str, body: HostShellDecision):
     try:
         run = supervisor.start(req.id, req.context_id, runner, budgets, on_done)
     except RunError as exc:
+        _not_started(req, str(exc))
         raise _http(exc) from exc
+    except Exception as exc:
+        _log.warning("host command could not be started (%s)", type(exc).__name__)
+        _not_started(req, type(exc).__name__)
+        raise HTTPException(status_code=500, detail="The command could not be started.") from exc
     if run["state"] == "failed_to_start":
-        host_requests.finish(req.id, {"error": f"The command did not start: {run['reason']}.", "stdout": "",
-                                      "stderr": "", "exit_code": -1, "ran_on": "host", "cwd": req.cwd})
+        _not_started(req, run["reason"])
     return {"ok": True, "request_id": req.id, "run": run}
+
+
+def _not_started(req, why: str) -> None:
+    """A claimed request whose run never began must not stay 'running' for the model and the card."""
+    host_requests.finish(req.id, {"error": f"The command did not start: {why}.", "stdout": "", "stderr": "",
+                                  "exit_code": -1, "ran_on": "host", "cwd": req.cwd})
 
 
 @router.post("/api/host-shell/{request_id}/cancel", dependencies=[Depends(verify_csrf)])
 def cancel_host_command(request_id: str, body: HostShellDecision):
     """Cancel a pending request, or stop a running one by killing its whole process tree."""
-    _sync_expiry()
+    with _one_at_a_time(request_id):
+        return _cancel_locked(request_id, body)
+
+
+def _cancel_locked(request_id: str, body: HostShellDecision):
+    host_requests.sync_expiry()
     supervisor = get_supervisor()
     try:
-        status, _ = host_requests.lookup(request_id, body.context_id)
-        if status == "running":
+        run = supervisor.get(request_id, body.context_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="This command request was not found or has expired.")
+        if run["state"] in ("preparing", "running"):
             run = supervisor.cancel(request_id, body.context_id)
-        else:
+        elif run["state"] == "awaiting_approval":
             host_requests.deny(request_id, body.context_id)
             run = supervisor.deny(request_id, body.context_id)
     except (host_requests.HostRequestError, RunError) as exc:
@@ -103,17 +142,10 @@ def cancel_host_command(request_id: str, body: HostShellDecision):
 @router.get("/api/host-shell/{request_id}")
 def host_command_status(request_id: str, context_id: str = ""):
     """The run record for a card, plus the stored result once the command is over."""
-    _sync_expiry()
+    host_requests.sync_expiry()
     run = get_supervisor().get(request_id, context_id)
     if run is None:
         raise HTTPException(status_code=404, detail="This command request was not found or has expired.")
-    status, req = host_requests.lookup(request_id, context_id)
+    status, req = host_requests.lookup_settled(request_id, context_id)
     result = req.result if req is not None and status == "done" else None
     return {"ok": True, "request_id": request_id, "run": run, "result": result}
-
-
-@router.get("/api/runs")
-def list_runs(context_id: str = "", limit: int = 20):
-    """Recent runs for a tab, newest first, for the status row."""
-    _sync_expiry()
-    return {"ok": True, "runs": get_supervisor().list(context_id)[: max(1, min(limit, 100))]}

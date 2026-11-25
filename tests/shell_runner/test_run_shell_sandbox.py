@@ -195,6 +195,9 @@ def test_result_shaping_and_hint(env):
     assert "[sandbox]" in r["stderr"]
     env.fake.result = sandbox.SandboxResult(-1, "", "", True)
     assert _run("sleep 9", timeout=1)["error"] == "Command timed out after 1s."
+    env.fake.result = sandbox.SandboxResult(-1, "", "", False, cancelled=True)
+    stopped = _run("sleep 9")["error"]
+    assert "stopped" in stopped and "exited with code" not in stopped
 
 
 def test_git_cwd_error_gets_hint(env):

@@ -729,6 +729,7 @@ def _tool_run_python(
         }
 
     run_record = None
+    cancelled = False
 
     def with_facts(result: dict) -> dict:
         return with_run_fields(result, run_record) if run_record else result
@@ -775,7 +776,7 @@ def _tool_run_python(
                     "Tell the user; do not retry automatically.",
                     f"sandbox launch OSError: {exc}",
                 )
-            returncode, timed_out = res.returncode, res.timed_out
+            returncode, timed_out, cancelled = res.returncode, res.timed_out, res.cancelled
             stdout, stderr = res.stdout or "", _with_sandbox_hint(res.stderr or "")
         else:
             # Opted out (sandbox unavailable, policy allows it): the old unsandboxed path.
@@ -811,6 +812,16 @@ def _tool_run_python(
             return with_facts({
                 "error": f"Code execution timed out after {timeout}s.",
                 "stdout": "",
+                "files": [],
+                "runtime_ms": elapsed_ms,
+                "forensic": _forensic_paths(run_id, run_dir),
+                **tags,
+            })
+
+        if cancelled:
+            return with_facts({
+                "error": "You stopped this code before it finished.",
+                "stdout": stdout,
                 "files": [],
                 "runtime_ms": elapsed_ms,
                 "forensic": _forensic_paths(run_id, run_dir),

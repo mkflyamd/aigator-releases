@@ -4274,7 +4274,7 @@ function _renderTabDrafts(tabId) {
 }
 
 function _renderTabSandboxCards(tabId) {
-  _pendingSandboxCards.get(tabId)?.forEach((data) => _showSandboxApproval(data, tabId));
+  _pendingSandboxCards.get(tabId)?.forEach((data) => _showSandboxApproval(data, tabId, true));
 }
 
 function _routeDraftToTab(tabId, draft, data) {
@@ -11831,7 +11831,7 @@ function _showGithubSsoCard(data, ownerTabId) {
 
 // Card for run_on_host: the user reads the exact command, then clicks Run (it runs on their
 // computer, outside the sandbox) or Cancel. The model can only create the request.
-function _renderHostCommandCard(data, requestId, cardTab, tabId) {
+function _renderHostCommandCard(data, requestId, cardTab, tabId, reload) {
   const card = document.createElement('div');
   card.className = 'message assistant';
   card.dataset.sandboxRequest = requestId;
@@ -12028,6 +12028,36 @@ function _renderHostCommandCard(data, requestId, cardTab, tabId) {
         : 'Could not start the command.';
     return `Ended · ${state}`;
   };
+  const follow = async (tellAgent) => {
+    const body = await waitForRun();
+    if (body.gone) {
+      expire();
+      return;
+    }
+    if (body.lost) {
+      settled = true;
+      stopClock();
+      actions.remove();
+      _pendingSandboxCards.get(cardTab)?.delete(requestId);
+      footNote.textContent = 'Lost contact with AI Gator. The command may still be running. Reload to see where it ended.';
+      return;
+    }
+    settled = true;
+    stopClock();
+    actions.remove();
+    _pendingSandboxCards.get(cardTab)?.delete(requestId);
+    const result = body.result || {};
+    const state = body.run?.state;
+    const text = [result.stdout, result.stderr, result.error].filter(Boolean).join('\n');
+    output.textContent = text || '(no output)';
+    output.hidden = false;
+    footNote.textContent = describeRun(state, body.run, result);
+    if (tellAgent)
+      _sendSandboxFollowUp(
+        tabId,
+        `I ran command request ${requestId}. Call host_command_result with that request_id to read the output.`,
+      ).catch((e) => console.warn('[host-shell] follow-up not sent:', e));
+  };
   const decide = async (action) => {
     if (run.disabled || settled) return;
     busy = true;
@@ -12053,33 +12083,7 @@ function _renderHostCommandCard(data, requestId, cardTab, tabId) {
         ).catch((e) => console.warn('[host-shell] follow-up not sent:', e));
         return;
       }
-      const body = await waitForRun();
-      if (body.gone) {
-        expire();
-        return;
-      }
-      if (body.lost) {
-        settled = true;
-        stopClock();
-        actions.remove();
-        _pendingSandboxCards.get(cardTab)?.delete(requestId);
-        footNote.textContent = 'Lost contact with AI Gator. The command may still be running. Reload to see where it ended.';
-        return;
-      }
-      settled = true;
-      stopClock();
-      actions.remove();
-      _pendingSandboxCards.get(cardTab)?.delete(requestId);
-      const result = body.result || {};
-      const state = body.run?.state;
-      const text = [result.stdout, result.stderr, result.error].filter(Boolean).join('\n');
-      output.textContent = text || '(no output)';
-      output.hidden = false;
-      footNote.textContent = describeRun(state, body.run, result);
-      _sendSandboxFollowUp(
-        tabId,
-        `I ran command request ${requestId}. Call host_command_result with that request_id to read the output.`,
-      ).catch((e) => console.warn('[host-shell] follow-up not sent:', e));
+      await follow(true);
     } catch (err) {
       busy = false;
       running = false;
@@ -12116,9 +12120,39 @@ function _renderHostCommandCard(data, requestId, cardTab, tabId) {
   });
   document.getElementById('messages')?.appendChild(card);
   card.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  if (reload) {
+    // The tab was switched away and back: this card is drawn fresh, but its command may already be running or over.
+    // The old card's poll still tells the agent when it ends, so this one only shows where the run stands.
+    (async () => {
+      const res = await fetch(`/api/runs?context_id=${encodeURIComponent(contextId)}`).catch(() => null);
+      const listed = res && res.ok ? await res.json().catch(() => null) : null;
+      const record = Array.isArray(listed?.runs) ? listed.runs.find((r) => r.id === requestId) : null;
+      if (!record || record.state === 'awaiting_approval' || settled) return;
+      if (record.state === 'expired') {
+        expire();
+        return;
+      }
+      if (record.state === 'denied') {
+        settled = true;
+        stopClock();
+        actions.remove();
+        _pendingSandboxCards.get(cardTab)?.delete(requestId);
+        footNote.textContent = 'You cancelled this. Nothing was run.';
+        return;
+      }
+      if (activeStates.includes(record.state)) {
+        busy = true;
+        running = true;
+        run.disabled = true;
+        cancel.textContent = 'Stop';
+        footNote.textContent = 'Running...';
+      }
+      await follow(false);
+    })().catch((err) => console.warn('[host-shell] could not rejoin the run:', err));
+  }
 }
 
-function _showSandboxApproval(data, ownerTabId) {
+function _showSandboxApproval(data, ownerTabId, reload) {
   const requestId = data && typeof data.request_id === 'string' ? data.request_id : '';
   if (!requestId) return;
   // The card belongs to the tab that asked. Keep it for that tab and draw it when the tab is shown,
@@ -12135,7 +12169,7 @@ function _showSandboxApproval(data, ownerTabId) {
   );
   if (seen) return;
   if (data.tool === 'run_on_host') {
-    _renderHostCommandCard(data, requestId, cardTab, ownerTabId || _activeTabId || 'default');
+    _renderHostCommandCard(data, requestId, cardTab, ownerTabId || _activeTabId || 'default', reload);
     return;
   }
   const card = document.createElement('div');

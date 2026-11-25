@@ -7,14 +7,16 @@ sqlite I/O happens under the lock: state changes are made in memory, then the sn
 from __future__ import annotations
 
 import contextvars
+import itertools
 import logging
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 
 from proc_utils import kill_process_tree
-from runs.facts import TreeWatcher, collect as collect_facts
+from runs.facts import TreeWatcher, collect as collect_facts, urls_in
 from runs.records import ACTIVE_STATES, OUTPUT_TAIL_CHARS, RunRecord, RunStore, exit_info, tail_of
 from timeouts import Budgets
 
@@ -23,6 +25,8 @@ _log = logging.getLogger(__name__)
 MAX_RUNNING_PER_CONTEXT = 3
 MAX_ABANDONED_PER_SERVER = 3
 _MCP_POLL_SECONDS = 0.02
+# Refused probes do not use up a run's probe allowance, but the record that logs them stays bounded.
+_MAX_PROBE_LOG = 50
 _MEMORY_KEEP_SECONDS = 1800
 _RETENTION_SECONDS = 7 * 24 * 3600
 
@@ -106,6 +110,9 @@ class RunSupervisor:
         self._lock = threading.Lock()
         self._records: dict[str, RunRecord] = {}
         self._handles: dict[str, RunHandle] = {}
+        self._workers: dict[str, threading.Thread] = {}
+        self._probes: dict[int, tuple[str, str, object]] = {}
+        self._probe_ids = itertools.count(1)
 
     # -- internals ----------------------------------------------------------
 
@@ -246,10 +253,34 @@ class RunSupervisor:
         thread = threading.Thread(target=self._execute, args=(run_id, handle, runner, budgets, on_done),
                                   name=f"run-{run_id[:8]}", daemon=True)
         handle.thread = thread
-        thread.start()
+        with self._lock:
+            self._workers[run_id] = thread
+        try:
+            thread.start()
+        except RuntimeError as exc:
+            with self._lock:
+                self._workers.pop(run_id, None)
+            self._terminal(run_id, "failed_to_start", reason="worker_unavailable")
+            raise RunError(500, "The command could not be started.") from exc
         return snapshot
 
+    @staticmethod
+    def _notify(run_id: str, on_done, result: dict) -> None:
+        if on_done is None:
+            return
+        try:
+            on_done(result)
+        except Exception:
+            _log.exception("run %s on_done failed", run_id[:8])
+
     def _execute(self, run_id: str, handle: RunHandle, runner, budgets: Budgets, on_done) -> None:
+        try:
+            self._execute_inner(run_id, handle, runner, on_done)
+        finally:
+            with self._lock:
+                self._workers.pop(run_id, None)
+
+    def _execute_inner(self, run_id: str, handle: RunHandle, runner, on_done) -> None:
         with self._lock:
             rec = self._records[run_id]
             if rec.state == "preparing":
@@ -277,10 +308,12 @@ class RunSupervisor:
                 handle.watcher.finish()
             message = f"The command could not be started ({type(failure).__name__})."
             result = {"error": message, "stdout": "", "stderr": "", "exit_code": -1}
-            record = self._terminal(run_id, "cancelled" if handle.cancelled else "failed_to_start", error=message)
+            lingering = {"teardown_failed": True} if getattr(failure, "teardown_failed", False) else {}
+            result.update(lingering)
+            record = self._terminal(run_id, "cancelled" if handle.cancelled else "failed_to_start",
+                                    error=message, facts=lingering)
             self._notify(run_id, on_done, result)
             return record, result
-        self._notify(run_id, on_done, result)
         output = f"{result.get('stdout') or ''}{result.get('stderr') or ''}"
         tail, truncated = tail_of(output, OUTPUT_TAIL_CHARS)
         try:
@@ -300,16 +333,9 @@ class RunSupervisor:
             state = "failed_to_start"
         else:
             state = "finished"
-        return self._terminal(run_id, state, **common), result
-
-    @staticmethod
-    def _notify(run_id: str, on_done, result: dict) -> None:
-        if on_done is None:
-            return
-        try:
-            on_done(result)
-        except Exception:
-            _log.exception("run %s on_done failed", run_id[:8])
+        record = self._terminal(run_id, state, **common)
+        self._notify(run_id, on_done, result)
+        return record, result
 
     def run_inline(self, *, context_id: str, turn_id: str, path: str, kind: str, budgets: Budgets,
                    runner) -> tuple[dict, dict]:
@@ -421,7 +447,11 @@ class RunSupervisor:
             return self._abandoned.get(server_id, 0)
 
     def wait(self, run_id: str, timeout: float) -> None:
-        """Block until the run has ended (tests and shutdown)."""
+        """Block until the run has ended and its worker, including on_done, has finished (tests and shutdown)."""
+        with self._lock:
+            thread = self._workers.get(run_id)
+        if thread is not None:
+            thread.join(timeout)
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             with self._lock:
@@ -444,6 +474,7 @@ class RunSupervisor:
         return self._stop(run_id)
 
     def _stop(self, run_id: str) -> dict:
+        self._cancel_probes(run_id=run_id)
         with self._lock:
             handle = self._handles.get(run_id)
             rec = self._records[run_id]
@@ -470,6 +501,7 @@ class RunSupervisor:
         """The turn's Stop: cancel its turn-scoped runs. Tab-scoped runs (host cards) are never touched."""
         if not turn_id:
             return []
+        self._cancel_probes(turn_id=turn_id)
         with self._lock:
             ids = [r.id for r in self._records.values()
                    if r.scope == "turn" and r.turn_id == turn_id and r.state in ("preparing", "running")]
@@ -489,6 +521,7 @@ class RunSupervisor:
 
     def stop_all(self) -> None:
         """App quit: kill every running command."""
+        self._cancel_probes()
         with self._lock:
             ids = [r.id for r in self._records.values() if r.state in ("preparing", "running")]
         for run_id in ids:
@@ -501,19 +534,57 @@ class RunSupervisor:
         if rec is None or rec.context_id != (context_id or ""):
             return None
         with self._lock:
-            return rec.to_dict()
+            data = rec.to_dict()
+        if data["state"] in ACTIVE_STATES and not (data.get("facts") or {}).get("urls_seen"):
+            live = self._live_urls(run_id)
+            if live:
+                data["facts"] = {**(data.get("facts") or {}), "urls_seen": live}
+        return data
+
+    def _live_urls(self, run_id: str) -> list[str]:
+        """URLs printed so far by a run that is still going, read from its live output."""
+        with self._lock:
+            handle = self._handles.get(run_id)
+            read = getattr(getattr(handle, "proc", None), "live_output", None)
+        if read is None:
+            return []
+        try:
+            return urls_in(read())
+        except Exception:
+            return []
 
     def begin_probe(self, run_id: str, context_id: str, url: str, max_probes: int) -> list[str]:
-        """Count a probe against the run's cap and log it on the record. Returns the URLs the run printed."""
+        """Log a probe on the record, counting it against the run's cap. Returns the URLs the run printed so far."""
         rec = self._owned(run_id, context_id)
+        live = self._live_urls(run_id)
         with self._lock:
-            if len(rec.probe_log) >= max_probes:
+            made = [p for p in rec.probe_log if "refused" not in p]
+            if len(made) >= max_probes or len(rec.probe_log) >= _MAX_PROBE_LOG:
                 raise RunError(429, f"This run has already used its {max_probes} probes.")
             rec.probe_log.append({"url": url, "at": self._clock()})
-            urls_seen = list(rec.facts.get("urls_seen") or [])
+            urls_seen = list(rec.facts.get("urls_seen") or []) or live
             snapshot = self._snapshot_locked(rec)
         self._write(snapshot)
         return urls_seen
+
+    @contextmanager
+    def probing(self, run_id: str, turn_id: str, cancel):
+        """While a probe is in flight, a Stop of its run or of its turn calls cancel.cancel()."""
+        token = next(self._probe_ids)
+        with self._lock:
+            self._probes[token] = (run_id, turn_id or "", cancel)
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._probes.pop(token, None)
+
+    def _cancel_probes(self, *, run_id: str = "", turn_id: str = "") -> None:
+        with self._lock:
+            hits = [c for r, t, c in self._probes.values()
+                    if (not run_id and not turn_id) or (run_id and r == run_id) or (turn_id and t == turn_id)]
+        for cancel in hits:
+            cancel.cancel("stopped")
 
     def finish_probe(self, run_id: str, outcome: dict) -> None:
         with self._lock:
@@ -538,11 +609,16 @@ class RunSupervisor:
         """Startup: records still active when the backend stopped become interrupted, and any process they
         left behind is swept, but only if the pid still belongs to the same process (pid and creation time)."""
         now = self._clock()
-        interrupted = self._store.interrupt_active(now)
+        interrupted = self._store.interrupt_active(now, skip=self._is_mine)
         for data in interrupted:
             self._sweep_process(data.get("owner_pid") or 0, data.get("owner_create_time") or 0.0)
         self._store.purge(now - _RETENTION_SECONDS)
         return [d["id"] for d in interrupted]
+
+    def _is_mine(self, run_id: str) -> bool:
+        """A record this process opened is live, whatever the database says: reconcile only owns older rows."""
+        with self._lock:
+            return run_id in self._records
 
     @staticmethod
     def _sweep_process(pid: int, created: float) -> None:

@@ -824,6 +824,8 @@ def _run_sandboxed(cr, command, shell, cwd, timeout, background, requested, poli
     if res.timed_out:
         result["timed_out"] = True
         result["error"] = f"Command timed out after {timeout}s."
+    elif res.cancelled:
+        result["error"] = "You stopped this command before it finished."
     elif res.returncode != 0:
         tail = (res.stderr or res.stdout or "").strip().splitlines()
         reason = " ".join(tail[-3:]) if tail else ""
@@ -903,6 +905,7 @@ def _run_captured(argv, cwd, env, timeout, on_start=None):
     )
     attach_job(proc)
     out_cap, err_cap = _TailCapture(proc.stdout), _TailCapture(proc.stderr)
+    proc.live_output = lambda: out_cap.text() + err_cap.text()
     try:
         if on_start is not None:
             on_start(proc)
@@ -1209,16 +1212,12 @@ def _tool_host_command_result(request_id: str, _context_id: str = "") -> dict:
     from runs.supervisor import get_supervisor
 
     supervisor = get_supervisor()
-    for expired_id in host_requests.expire_due():
-        supervisor.mark_expired(expired_id)
+    host_requests.sync_expiry()
     run_id = str(request_id or "")
     record = supervisor.get(run_id, _context_id)
     if record is None:
         return _shell_error("No such command request in this tab. Do not retry; propose the command again.")
-    _, req = host_requests.lookup(run_id, _context_id)
-    if req is not None and req.status == "done" and record["state"] in ("preparing", "running"):
-        supervisor.wait(run_id, 2)
-        record = supervisor.get(run_id, _context_id) or record
+    _, req = host_requests.lookup_settled(run_id, _context_id)
     return model_result(record, req.result if req is not None else None)
 
 
@@ -1226,6 +1225,7 @@ def _tool_probe_local_url(run_id: str, url: str, _context_id: str = "") -> dict:
     """One read-only GET to a loopback address that a run printed."""
     from runs import probe
     from runs.supervisor import RunError, get_supervisor
+    from runs.turn import current_turn
 
     if not _context_id:
         return _shell_error("probe_local_url needs a chat tab, so it cannot be used in an unattended run.")
@@ -1235,10 +1235,15 @@ def _tool_probe_local_url(run_id: str, url: str, _context_id: str = "") -> dict:
         urls_seen = supervisor.begin_probe(str(run_id or ""), _context_id, url, probe.MAX_PROBES_PER_RUN)
     except RunError as exc:
         return _shell_error(str(exc))
+    cancel = probe.ProbeCancel()
     try:
-        outcome = probe.probe(url, urls_seen)
+        with supervisor.probing(str(run_id), current_turn.get(), cancel):
+            outcome = probe.probe(url, urls_seen, cancel=cancel)
     except probe.ProbeRefused as exc:
         supervisor.finish_probe(str(run_id), {"refused": str(exc)})
+        return _shell_error(str(exc))
+    except probe.ProbeCancelled as exc:
+        supervisor.finish_probe(str(run_id), {"stopped": True})
         return _shell_error(str(exc))
     supervisor.finish_probe(str(run_id), {"reached": outcome.get("reached"), "status": outcome.get("status")})
     return outcome

@@ -132,8 +132,9 @@ class RunStore:
             "SELECT data FROM runs WHERE context_id=? ORDER BY created_at DESC LIMIT ?", (context_id, limit)).fetchall(), [])
         return [json.loads(r[0]) for r in rows]
 
-    def interrupt_active(self, now: float) -> list[dict]:
-        """Startup: records that were still active when the backend stopped become interrupted."""
+    def interrupt_active(self, now: float, skip=None) -> list[dict]:
+        """Startup: records that were still active when the backend stopped become interrupted. `skip(id)` spares
+        a record the caller knows is live."""
         marks = ",".join("?" * len(ACTIVE_STATES))
 
         def work(conn):
@@ -141,6 +142,8 @@ class RunStore:
             changed = []
             for (raw,) in rows:
                 data = json.loads(raw)
+                if skip is not None and skip(data["id"]):
+                    continue
                 data.update(state="interrupted", finished_at=now, rev=int(data.get("rev", 0)) + 1)
                 conn.execute("UPDATE runs SET state=?, finished_at=?, rev=?, data=? WHERE id=?",
                              ("interrupted", now, data["rev"], json.dumps(data), data["id"]))

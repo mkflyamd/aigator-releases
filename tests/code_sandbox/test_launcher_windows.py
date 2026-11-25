@@ -726,6 +726,32 @@ def test_teardown_that_leaves_an_entry_behind_starts_the_background_repair(fake,
     assert lw._ledger_load()["per_run"] == [[SID, str(fake.run)]]
 
 
+def test_a_refused_launch_whose_grants_could_not_be_revoked_says_so(fake, monkeypatch):
+    monkeypatch.setattr(lw, "_grant", lambda path, sid, perm, **kw: TIMED_OUT)
+    monkeypatch.setattr(lw, "_revoke", lambda path, sid, **kw: TIMED_OUT)
+    monkeypatch.setattr(lw, "_dacl_aces", _aces(PROGRAM_FILES_SDDL))
+    with pytest.raises(sandbox.SandboxUnavailable) as caught:
+        lw.launch(fake.req(write=[fake.tmp]))
+    assert caught.value.teardown_failed is True
+    assert fake.repairs == 1
+
+
+def test_a_refused_launch_that_revoked_everything_does_not_claim_a_leftover(fake):
+    fake.grant_error = (1, sandbox.SandboxUnavailable("denied"))
+    with pytest.raises(sandbox.SandboxUnavailable) as caught:
+        lw.launch(fake.req(read=[fake.tmp], write=[fake.tmp / "w"]))
+    assert caught.value.teardown_failed is False
+
+
+def test_each_revoke_gets_only_what_is_left_of_the_teardown_budget(fake, monkeypatch):
+    import dataclasses
+
+    seen = []
+    monkeypatch.setattr(lw, "_revoke_ok", lambda sid, path, timeout=None: seen.append(timeout) or True)
+    lw.launch(dataclasses.replace(fake.req(read=[fake.tmp]), teardown_seconds=30))
+    assert len(seen) == 2 and all(0 < t <= 30 for t in seen) and seen[1] <= seen[0]
+
+
 def test_a_clean_teardown_starts_no_repair(fake):
     lw.launch(fake.req())
     assert fake.repairs == 0

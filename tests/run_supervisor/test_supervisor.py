@@ -256,14 +256,6 @@ def test_the_run_budget_is_handed_to_the_runner(sup):
     assert got["timeout_s"] == 1.5
 
 
-def test_on_done_runs_before_the_record_turns_terminal(sup):
-    order = []
-    _open(sup)
-    sup.start("r1", "tab-1", _ok(), BUDGETS, on_done=lambda result: order.append(sup.get("r1", "tab-1")["state"]))
-    sup.wait("r1", 5)
-    assert order == ["running"]
-
-
 def test_list_returns_the_tabs_runs(sup):
     _open(sup, run_id="a")
     _open(sup, run_id="b", ctx="tab-2")
@@ -338,3 +330,58 @@ def test_budgets_are_injectable_in_milliseconds():
 def test_every_path_has_a_default_budget():
     budgets = timeouts.budgets_for("host")
     assert budgets.run_ms > 0 and budgets.teardown_ms > 0
+
+
+def test_on_done_fires_after_the_record_is_terminal(sup):
+    _open(sup)
+    seen = []
+    sup.start("r1", "tab-1", _ok(), BUDGETS, lambda result: seen.append(sup.get("r1", "tab-1")["state"]))
+    sup.wait("r1", 5)
+    assert _wait_for(lambda: seen)
+    assert seen == ["finished"]
+
+
+def test_wait_returns_only_after_on_done_has_run(sup):
+    _open(sup)
+    done = threading.Event()
+
+    def slow_done(result):
+        time.sleep(0.2)
+        done.set()
+
+    sup.start("r1", "tab-1", _ok(), BUDGETS, slow_done)
+    sup.wait("r1", 5)
+    assert done.is_set()
+
+
+def test_reconcile_leaves_the_runs_this_process_opened_alone(tmp_path):
+    store = RunStore(tmp_path / "runs.db")
+    store.upsert(RunRecord(id="old", context_id="tab-1", path="host", kind="command", scope="tab",
+                           state="running").to_dict())
+    supervisor = RunSupervisor(store)
+    _open(supervisor, run_id="mine")
+    assert supervisor.reconcile() == ["old"]
+    assert supervisor.get("mine", "tab-1")["state"] == "awaiting_approval"
+    assert supervisor.get("old", "tab-1")["state"] == "interrupted"
+
+
+def test_a_worker_that_cannot_start_leaves_a_failed_record_not_a_stuck_one(sup, monkeypatch):
+    _open(sup)
+
+    def refuse(self):
+        raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(threading.Thread, "start", refuse)
+    with pytest.raises(RunError):
+        sup.start("r1", "tab-1", _ok(), BUDGETS)
+    monkeypatch.undo()
+    assert sup.get("r1", "tab-1")["state"] == "failed_to_start"
+
+
+def _wait_for(predicate, seconds=5):
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return False

@@ -21,6 +21,7 @@ import os
 import re
 import stat
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -1160,14 +1161,16 @@ def launch(req: SandboxRequest) -> SandboxResult:
                                         req.cancel, req.on_start)
                 return result
             finally:
+                failure = sys.exc_info()[1]
                 teardown_deadline = time.monotonic() + (
                     req.teardown_seconds if req.teardown_seconds is not None else TEARDOWN_SECONDS)
                 for path in attempted:
-                    if time.monotonic() >= teardown_deadline:
+                    remaining = teardown_deadline - time.monotonic()
+                    if remaining <= 0:
                         break  # the rest keep their ledger entries and go to the background repair
                     # A failed revoke keeps its ledger entry so the repair retries it.
                     try:
-                        if _revoke_ok(sid, path):
+                        if _revoke_ok(sid, path, timeout=remaining):
                             _ledger_remove_per_run(sid, path)
                     except Exception as exc:  # one failure must not skip the other revokes or the scrub
                         _log.warning("sandbox: could not update the grant ledger (%s)", type(exc).__name__)
@@ -1175,6 +1178,8 @@ def launch(req: SandboxRequest) -> SandboxResult:
                 if _ledger_load()["per_run"]:
                     if result is not None:
                         result.teardown_failed = True
+                    elif failure is not None:
+                        failure.teardown_failed = True
                     _start_repair()
         finally:
             _api().adv.FreeSid(psid)

@@ -29,6 +29,8 @@ _log = logging.getLogger(__name__)
 class SandboxUnavailable(RuntimeError):
     """The platform sandbox cannot run this request; nothing was executed."""
 
+    teardown_failed = False  # set when access granted before the refusal could not be fully revoked yet
+
 
 class SandboxCancelled(SandboxUnavailable):
     """Stop arrived before the command started; nothing was executed."""
