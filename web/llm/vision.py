@@ -1,13 +1,17 @@
 """Picking a vision-capable model when the active one cannot receive tool images."""
 from __future__ import annotations
 
-_VISION_PREFIXES = ("claude", "gpt", "gemini")
+import logging
+
+logger = logging.getLogger(__name__)
 # Cheapest first: a short screenshot description does not need a flagship model.
 _COST_ORDER = ("haiku", "mini", "flash", "nano", "sonnet")
 
 
 def is_vision_model(model_id: str) -> bool:
-    return model_id.lower().startswith(_VISION_PREFIXES)
+    from llm import registry
+
+    return registry.model_supports_vision(model_id)
 
 
 def active_receives_tool_images() -> bool:
@@ -46,7 +50,12 @@ def describe_image(image: bytes, prompt: str) -> tuple[str, str] | None:
     provider = registry.get_provider(model)
     try:
         text = provider.describe_image(image, prompt, model)
-    except Exception:
+    except Exception as e:
+        # Class and HTTP status only: the message can carry request details.
+        logger.warning(
+            "vision: describe_image failed model=%s error=%s status=%s",
+            model, type(e).__name__, getattr(e, "status_code", None),
+        )
         return None
     text = (text or "").strip()
     return (text, model) if text else None

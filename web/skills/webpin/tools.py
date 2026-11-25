@@ -39,6 +39,8 @@ _MESSAGES = {
     "pane_unavailable": "The app's pane is not available (closed or still loading). Ask the user to open it, then try again.",
     "empty_target": "The pinned element is currently empty or hidden. Ask the user to open the section it lives in, then try again.",
     "timeout": "Gator did not get a capture back in time. Ask the user to open the app's pane and try again.",
+    "element_missing": "The pinned element could not be found on the page any more, so nothing was refreshed. Tell the user the pin is out of date and ask them to pin the element again. Do not present the older snapshot as current.",
+    "element_ambiguous": "Several elements on the page could be the pinned one and Gator will not guess. Nothing was refreshed. Tell the user and ask them to pin the element again. Do not present the older snapshot as current.",
 }
 
 TOOL_DEFS = [
@@ -111,6 +113,13 @@ def _snapshot_result(pin_id: str, pin: dict) -> dict:
         "age_seconds": max(0, int(time.time() - captured)) if captured is not None else None,
         "text": _wrap_untrusted(snap.get("text", "")),
     }
+    snap_meta = snap.get("meta") or {}
+    if snap_meta.get("match"):
+        out["match"] = snap_meta["match"]
+    if snap_meta.get("confidence") is not None:
+        out["confidence"] = snap_meta["confidence"]
+    if snap_meta.get("degraded"):
+        out["degraded"] = _MESSAGES.get(snap_meta["degraded"], _MESSAGES["element_missing"])
     if img:
         _attach_image(out, pin_id, img)
     return out
@@ -162,7 +171,7 @@ async def recapture_web_pin(pin_id: str, _context_id: str = "default") -> dict:
     out = await asyncio.to_thread(_snapshot_result, pin_id, pin)
     if "error" in out:
         return out
-    out.update({"status": "ok", "changed": bool(res.get("changed")), "match": res.get("match")})
+    out.update({"status": "ok", "changed": bool(res.get("changed")), "match": res.get("match"), "confidence": res.get("confidence")})
     return out
 
 

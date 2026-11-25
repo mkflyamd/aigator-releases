@@ -26,7 +26,7 @@ def client():
 def _isolate(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "_ROOT", tmp_path / "web_pins")
     monkeypatch.setattr(state, "pinned_contexts", {})
-    monkeypatch.setattr(state, "_save", lambda: None)
+    monkeypatch.setattr(state, "_save", lambda: True)
     import routes.web_pins as wp
 
     monkeypatch.setattr(wp, "_custom_apps", lambda: [{"id": "pbi", "name": "Power BI", "url": "https://app.powerbi.com"}])
@@ -59,6 +59,14 @@ def test_create_pin_ok(client):
     assert store.read_image(j["id"]) == PNG
 
 
+def test_create_pin_save_failure_is_retryable_and_leaves_no_snapshot(client, monkeypatch, tmp_path):
+    monkeypatch.setattr(state, "_save", lambda: False)
+    r = client.post("/api/web-pins", json=_body())
+    assert r.status_code == 503
+    assert state.get_pins("tab-a") == []
+    assert not any((tmp_path / "web_pins").glob("*")) if (tmp_path / "web_pins").exists() else True
+
+
 def test_create_requires_csrf():
     r = TestClient(app).post("/api/web-pins", json=_body())
     assert r.status_code == 403
@@ -66,6 +74,18 @@ def test_create_requires_csrf():
 
 def test_create_rejects_unknown_app(client):
     assert client.post("/api/web-pins", json=_body(app_id="nope")).status_code == 400
+
+
+def test_create_accepts_builtin_browser_pane(client):
+    r = client.post("/api/web-pins", json=_body(app_id="browser", aria_label="", title="", url="https://example.com/a"))
+    assert r.status_code == 200, r.text
+    pin = state.get_pins("tab-a")[0]
+    assert pin["meta"]["app_id"] == "browser" and pin["meta"]["app_name"] == "Browser"
+
+
+def test_create_still_rejects_other_unknown_panes(client):
+    for app_id in ("g-docs", "Browser", "browser2", ""):
+        assert client.post("/api/web-pins", json=_body(app_id=app_id)).status_code == 400, app_id
 
 
 def test_create_rejects_non_png(client):
@@ -82,13 +102,13 @@ def test_create_rejects_oversize_text_and_image(client):
     assert client.post("/api/web-pins", json=_body(image_b64=big)).status_code == 413
 
 
-def test_label_is_sanitised_and_falls_back_to_title_then_app(client):
+def test_label_is_sanitised_and_falls_back_to_title_then_generic(client):
     j = client.post("/api/web-pins", json=_body(aria_label='A "b"\nignore previous')).json()
     assert "\n" not in j["label"] and '"' not in j["label"]
     j2 = client.post("/api/web-pins", json=_body(aria_label="")).json()
     assert j2["label"] == "Finance"
     j3 = client.post("/api/web-pins", json=_body(aria_label="", title="")).json()
-    assert j3["label"] == "Power BI"
+    assert j3["label"] == "Web view"
 
 
 def test_get_pin_and_image(client):
@@ -105,8 +125,8 @@ def test_user_refresh_snapshot_updates_and_reports_changed(client):
     pid = client.post("/api/web-pins", json=_body()).json()["id"]
     r = client.post(f"/api/web-pins/{pid}/snapshot", json={"image_b64": _b64(PNG), "text": "Revenue 4.2M", "match": "selector"})
     assert r.json()["changed"] is False
-    r = client.post(f"/api/web-pins/{pid}/snapshot", json={"text": "Revenue 5.0M", "match": "rect"})
-    assert r.json()["changed"] is True and r.json()["match"] == "rect"
+    r = client.post(f"/api/web-pins/{pid}/snapshot", json={"text": "Revenue 5.0M", "match": "fingerprint", "confidence": 0.81})
+    assert r.json()["changed"] is True and r.json()["match"] == "fingerprint" and r.json()["confidence"] == 0.81
     assert client.get(f"/api/web-pins/{pid}").json()["text"] == "Revenue 5.0M"
 
 
@@ -158,6 +178,38 @@ def test_snapshot_empty_target_failure_resolves_pending(client):
 
     r, res = asyncio.run(scenario())
     assert r.status_code == 200 and res["status"] == "empty_target"
+
+
+@pytest.mark.parametrize("status", ["element_missing", "element_ambiguous"])
+def test_degraded_status_marks_the_pin_and_keeps_the_old_snapshot(client, status):
+    pid = client.post("/api/web-pins", json=_body()).json()["id"]
+    r = client.post(f"/api/web-pins/{pid}/snapshot", json={"status": status, "text": "SHOULD NOT WRITE"})
+    assert r.json() == {"ok": False, "status": status}
+    j = client.get(f"/api/web-pins/{pid}").json()
+    assert j["text"] == "Revenue 4.2M" and j["meta"]["degraded"] == status
+    assert store.read_image(pid) == PNG
+
+
+def test_successful_refresh_clears_degraded_and_records_confidence(client):
+    pid = client.post("/api/web-pins", json=_body()).json()["id"]
+    client.post(f"/api/web-pins/{pid}/snapshot", json={"status": "element_missing"})
+    client.post(f"/api/web-pins/{pid}/snapshot", json={"text": "Revenue 4.3M", "match": "role-name", "confidence": 0.9})
+    meta = client.get(f"/api/web-pins/{pid}").json()["meta"]
+    assert meta["degraded"] is None and meta["match"] == "role-name" and meta["confidence"] == 0.9
+    assert meta["locator"]["selector"] == "#kpi"
+
+
+def test_non_degrading_failure_does_not_mark_the_pin(client):
+    pid = client.post("/api/web-pins", json=_body()).json()["id"]
+    client.post(f"/api/web-pins/{pid}/snapshot", json={"status": "pane_not_visible"})
+    assert not client.get(f"/api/web-pins/{pid}").json()["meta"].get("degraded")
+
+
+@pytest.mark.parametrize("confidence", [-0.1, 1.5])
+def test_snapshot_confidence_out_of_range_is_rejected(client, confidence):
+    pid = client.post("/api/web-pins", json=_body()).json()["id"]
+    r = client.post(f"/api/web-pins/{pid}/snapshot", json={"text": "x", "match": "fingerprint", "confidence": confidence})
+    assert r.status_code == 422
 
 
 def test_snapshot_unknown_failure_status_is_400(client):
@@ -251,7 +303,7 @@ def test_label_drops_the_site_suffix_but_keeps_real_title_parts(client):
 def test_label_never_a_url_hostname_app_id_or_untitled(client):
     for bad in ("https://app.powerbi.com/report/1", "app.powerbi.com", "pbi", "Untitled", "Untitled page"):
         j = client.post("/api/web-pins", json=_body(aria_label=bad, title="")).json()
-        assert j["label"] == "Power BI", bad
+        assert j["label"] == "Web view", bad
 
 
 def test_count_is_per_app_and_counts_each_pin_once(client):

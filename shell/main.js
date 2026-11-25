@@ -705,10 +705,11 @@ function _liveToolbarWebContents() {
 const toolbarStar = require('./toolbar-star');
 const _hiddenCustomApps = new Set();
 
-// Star state for the address bar: only user-added apps get a star. Apps pending
-// deletion (Undo window) are ignored so the star empties as soon as Remove is clicked.
+// Star state for the address bar: user-added apps and the built-in Browser get a star. In the
+// Browser it is filled when the page's site is already a starred app. Apps pending deletion
+// (Undo window) are ignored so the star empties as soon as Remove is clicked.
 function _starFor(app, url) {
-  if (!_customAppIds.has(app)) return { state: 'hidden', appId: null, name: '' };
+  if (!_isPinnablePane(app)) return { state: 'hidden', appId: null, name: '' };
   const apps = [..._customAppIds]
     .filter((id) => _genericPanes[id])
     .map((id) => ({ id, url: _genericPanes[id].url }));
@@ -740,11 +741,12 @@ function _toolbarPushState() {
     loading: false,
     visible: !!app,
     appHomeUrls: APP_HOME_URL,
-    isCustomApp: _customAppIds.has(app),
+    pinnable: _isPinnablePane(app),
     star: _starFor(app, url),
     pinMode: !!_webPinPicking && _webPinPicking === app,
     pinLabel: _webPinLabel,
     pinKind: _webPinKind,
+    pinAnnounce: _webPinAnnounce,
   };
   try {
     toolbarWc.send('toolbar:state', state);
@@ -1109,9 +1111,13 @@ let activeExternalApp = null;
 // Web pane pins. _customAppIds holds user-added apps only (the g-* Google panes also use
 // createGenericPane and must not get pin controls). _webPinPicking is the app id in pick mode.
 const _customAppIds = new Set();
+// Built-in panes that open any site like a browser and get pin controls without being starred.
+const _PINNABLE_BUILTIN_PANES = new Set(['browser']);
+const _isPinnablePane = (id) => _customAppIds.has(id) || _PINNABLE_BUILTIN_PANES.has(id);
 let _webPinPicking = null;
 let _webPinLabel = '';
 let _webPinKind = '';
+let _webPinAnnounce = '';
 const _sendToGator = (channel, payload) => {
   if (gatorView && !gatorView.webContents.isDestroyed()) {
     gatorView.webContents.send(channel, payload);
@@ -1119,15 +1125,18 @@ const _sendToGator = (channel, payload) => {
 };
 const _webPin = require('./web-pin').createWebPin({
   getPane: (appId) => {
-    const pane = _customAppIds.has(appId) ? _genericPanes[appId] : null;
+    const pane = _isPinnablePane(appId) ? _genericPanes[appId] : null;
     return pane && pane.view && !pane.view.webContents.isDestroyed() ? pane.view.webContents : null;
   },
   isPaneVisible: (appId) => activeExternalApp === appId,
-  onState: ({ appId, picking, label, kind }) => {
+  onState: ({ appId, picking, label, kind, announce }) => {
     _webPinPicking = picking ? appId : null;
     _webPinLabel = picking ? label : '';
     _webPinKind = picking ? kind || '' : '';
+    // Sent with one push only, so later state pushes do not repeat the announcement.
+    _webPinAnnounce = announce || '';
     _toolbarPushState();
+    _webPinAnnounce = '';
   },
   onCaptured: (payload) => _sendToGator('web-pin:captured', payload),
   onError: (err) => _sendToGator('web-pin:event', { type: 'error', ...err }),
@@ -4989,22 +4998,35 @@ ipcMain.on('toolbar:web-pin-start', (e) => {
     _webPin.stop();
     return;
   }
-  if (_customAppIds.has(activeExternalApp)) _webPin.start(activeExternalApp);
+  if (_isPinnablePane(activeExternalApp)) _webPin.start(activeExternalApp);
 });
 
 ipcMain.on('toolbar:web-pin-view', (e) => {
   if (!_isMainToolbar(e)) return;
-  if (_customAppIds.has(activeExternalApp)) _webPin.pinView(activeExternalApp);
+  if (_isPinnablePane(activeExternalApp)) _webPin.pinView(activeExternalApp);
 });
 
 ipcMain.on('toolbar:web-pin-cancel', (e) => {
   if (!_isMainToolbar(e)) return;
-  _webPin.stop();
+  _webPin.stop(require('./web-pin').CANCELLED);
+});
+
+// Keys typed while the toolbar has focus during picking (the user pressed the Pin button, so
+// focus is here, not in the page). The page path is handled by before-input-event in web-pin.js.
+ipcMain.on('toolbar:web-pin-key', (e, input) => {
+  if (!_isMainToolbar(e) || !_webPinPicking || !input || typeof input !== 'object') return;
+  _webPin.key({
+    key: String(input.key || ''),
+    shift: input.shift === true,
+    control: input.control === true,
+    alt: input.alt === true,
+    meta: input.meta === true,
+  });
 });
 
 ipcMain.handle('web-pin:recapture', (e, appId, locator, url) => {
   if (!gatorView || e.sender.id !== gatorView.webContents.id) return { status: 'pane_unavailable' };
-  if (typeof appId !== 'string' || !_customAppIds.has(appId)) return { status: 'pane_unavailable' };
+  if (typeof appId !== 'string' || !_isPinnablePane(appId)) return { status: 'pane_unavailable' };
   return _webPin.recapture(
     appId,
     locator && typeof locator === 'object' ? locator : null,
@@ -5014,7 +5036,7 @@ ipcMain.handle('web-pin:recapture', (e, appId, locator, url) => {
 
 ipcMain.handle('web-pin:go-to', async (e, appId, url) => {
   if (!gatorView || e.sender.id !== gatorView.webContents.id) return false;
-  if (typeof appId !== 'string' || !_customAppIds.has(appId)) return false;
+  if (typeof appId !== 'string' || !_isPinnablePane(appId)) return false;
   let parsed;
   try {
     parsed = new URL(url);
@@ -5025,8 +5047,12 @@ ipcMain.handle('web-pin:go-to', async (e, appId, url) => {
   const pane = _genericPanes[appId];
   if (!pane || !pane.view || pane.view.webContents.isDestroyed()) return false;
   // loadURL skips will-navigate, so the pane's home-host restriction is enforced here:
-  // only the app's own hosts, and never http for an https app.
-  if (!pane.homeHosts.length || !_hostMatches(parsed.hostname, pane.homeHosts)) return false;
+  // only the app's own hosts, and never http for an https app. A built-in browser pane has no home site.
+  if (
+    !_PINNABLE_BUILTIN_PANES.has(appId) &&
+    (!pane.homeHosts.length || !_hostMatches(parsed.hostname, pane.homeHosts))
+  )
+    return false;
   if (new URL(pane.url).protocol === 'https:' && parsed.protocol !== 'https:') return false;
   try {
     await pane.view.webContents.loadURL(parsed.href);
