@@ -33,6 +33,14 @@ test('unknown engines are rejected and leave the choice alone', () => {
   assert.strictEqual(store.get(), 'google');
 });
 
+test('a failed save reports failure and keeps the previous engine', () => {
+  const file = path.join(tmpFile(), 'missing-dir', 'engine.json');
+  const store = createStore(file);
+  assert.strictEqual(store.set('google'), false);
+  assert.strictEqual(store.get(), 'bing');
+  assert.strictEqual(store.homeUrl(), ENGINES.bing.home);
+});
+
 test('a corrupt or hostile file falls back to the default', () => {
   const file = tmpFile();
   fs.writeFileSync(file, '{not json');

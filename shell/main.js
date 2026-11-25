@@ -10,6 +10,7 @@
   screen,
 } = require('electron');
 const { applyMediaPermissions } = require('./media-permissions');
+const { applyBrowserPermissions } = require('./browser-permissions');
 const { applyNavigationPolicy, setToolbarAttacher, _hostMatches } = require('./navigation-policy');
 const addressInput = require('./address-input');
 const { resolveAtlassianUrls } = require('./atlassian-urls');
@@ -4490,7 +4491,8 @@ function createGenericPane(appConfig) {
 
   const partition = `persist:custom-${id}`;
   const ses = session.fromPartition(partition);
-  applyMediaPermissions(ses);
+  if (id === BROWSER_PANE_ID) applyBrowserPermissions(ses);
+  else applyMediaPermissions(ses);
 
   const view = new WebContentsView({
     webPreferences: { session: ses, contextIsolation: true, nodeIntegration: false },

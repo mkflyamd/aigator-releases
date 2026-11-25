@@ -36,10 +36,12 @@ function createStore(file) {
     get: () => current,
     set(id) {
       if (!isEngineId(id)) return false;
-      current = id;
       try {
         fs.writeFileSync(file, JSON.stringify({ engine: id }));
-      } catch {}
+      } catch {
+        return false;
+      }
+      current = id;
       return true;
     },
     searchUrl: () => ENGINES[current].search,
