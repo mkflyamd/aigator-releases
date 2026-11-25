@@ -865,18 +865,18 @@
     item.dataset.key = row.key;
     item.setAttribute('role', 'listitem');
     const head = el('div', 'ah-row');
-    head.tabIndex = 0;
     const pill = statePill(row);
     const text = metaLine(row, now, agentName);
     const primary = primaryAction(row, rowViewing(row));
-    head.setAttribute('role', 'button');
-    head.setAttribute(
-      'aria-label',
-      [row.title, pill && pill.textContent, text, rowActive(row) ? 'current terminal' : '']
-        .filter(Boolean)
-        .join(', '),
-    );
-    if (primary) head.classList.add('ah-row-clickable');
+    if (primary) {
+      head.tabIndex = 0;
+      head.setAttribute('role', 'button');
+      head.setAttribute(
+        'aria-label',
+        [row.title, pill && pill.textContent, text].filter(Boolean).join(', '),
+      );
+      head.classList.add('ah-row-clickable');
+    }
     if (rowActive(row)) {
       item.classList.add('ah-active');
       head.setAttribute('aria-current', 'true');
