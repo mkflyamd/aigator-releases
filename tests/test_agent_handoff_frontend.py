@@ -154,7 +154,7 @@ def test_reconnect_shows_a_transient_banner_not_text_in_the_terminal():
     assert "[disconnected" not in TERM
     assert "_genAgentShowReconnecting(sess, attempt);" in TERM
     opened = TERM.index("sess.ws.onopen = () => {")
-    assert TERM.index("_genAgentClearReconnecting(sess);", opened) < TERM.index("_ocFit(sess);", opened)
+    assert TERM.index("_genAgentClearReconnecting(sess);", opened) < TERM.index("_ocFit(sess", opened)
     assert ".gtp-reconnect-banner" in (STATIC / "style.css").read_text(encoding="utf-8")
 
 
