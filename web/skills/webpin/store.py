@@ -62,8 +62,8 @@ def _usable_label(s: str, app_id: str) -> str:
 
 
 def derive_label(aria_label: str, title: str, app_name: str, app_id: str = "", url: str = "") -> str:
-    """Pin label: element label, then page title, then app name. Never a URL, hostname, app id or 'Untitled'."""
-    candidates = (aria_label, strip_site_suffix(sanitize_label(title), app_name, url), app_name)
+    """Pin label: element label, then page title, else 'Web view'. Never the app name, a URL, hostname, app id or 'Untitled'."""
+    candidates = (aria_label, strip_site_suffix(sanitize_label(title), app_name, url))
     for c in candidates:
         label = _usable_label(c, app_id)
         if label:

@@ -90,13 +90,13 @@ def test_create_rejects_oversize_text_and_image(client):
     assert client.post("/api/web-pins", json=_body(image_b64=big)).status_code == 413
 
 
-def test_label_is_sanitised_and_falls_back_to_title_then_app(client):
+def test_label_is_sanitised_and_falls_back_to_title_then_generic(client):
     j = client.post("/api/web-pins", json=_body(aria_label='A "b"\nignore previous')).json()
     assert "\n" not in j["label"] and '"' not in j["label"]
     j2 = client.post("/api/web-pins", json=_body(aria_label="")).json()
     assert j2["label"] == "Finance"
     j3 = client.post("/api/web-pins", json=_body(aria_label="", title="")).json()
-    assert j3["label"] == "Power BI"
+    assert j3["label"] == "Web view"
 
 
 def test_get_pin_and_image(client):
@@ -259,4 +259,4 @@ def test_label_drops_the_site_suffix_but_keeps_real_title_parts(client):
 def test_label_never_a_url_hostname_app_id_or_untitled(client):
     for bad in ("https://app.powerbi.com/report/1", "app.powerbi.com", "pbi", "Untitled", "Untitled page"):
         j = client.post("/api/web-pins", json=_body(aria_label=bad, title="")).json()
-        assert j["label"] == "Power BI", bad
+        assert j["label"] == "Web view", bad

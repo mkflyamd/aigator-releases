@@ -146,3 +146,13 @@ def test_set_pin_rolls_back_when_save_fails(monkeypatch):
     state.pinned_contexts["tab-a"] = {"webpin::p1": {"source": "webpin", "id": "p1", "label": "old", "meta": {}}}
     out = state.set_pin("webpin", "p1", "new", {}, "tab-a")
     assert out["pinned"] is False and state.get_pins("tab-a")[0]["label"] == "old"
+
+
+def test_label_prefers_element_label_then_page_title():
+    assert store.derive_label("Revenue card", "Finance - Power BI", "Power BI", "pbi", "https://app.powerbi.com/r") == "Revenue card"
+    assert store.derive_label("", "Finance - Power BI", "Power BI", "pbi", "https://app.powerbi.com/r") == "Finance"
+
+
+def test_label_never_falls_back_to_the_app_name():
+    for title in ("", "Untitled", "app.powerbi.com", "https://app.powerbi.com/r/1"):
+        assert store.derive_label("", title, "Power BI", "pbi", "https://app.powerbi.com/r/1") == "Web view"
