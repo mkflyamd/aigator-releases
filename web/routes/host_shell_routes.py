@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 import timeouts
+from chat_queue import get_queue
 from runs.supervisor import RunError, get_supervisor
 from sandbox import host_requests
 from sandbox.policy import load_policy
@@ -130,6 +131,8 @@ def _cancel_locked(request_id: str, body: HostShellDecision):
         if run is None:
             raise HTTPException(status_code=404, detail="This command request was not found or has expired.")
         if run["state"] in ("preparing", "running"):
+            # Before the stop lands, so the card's end-of-run drain already sees the pause.
+            get_queue().pause_if_queued(body.context_id, "command_stopped")
             run = supervisor.cancel(request_id, body.context_id)
         elif run["state"] == "awaiting_approval":
             host_requests.deny(request_id, body.context_id)

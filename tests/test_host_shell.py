@@ -293,6 +293,56 @@ def test_cancel_route(client, csrf):
     assert run.status_code == 409
 
 
+@pytest.fixture
+def queue(tmp_path):
+    import chat_queue
+
+    q = chat_queue.MessageQueue(tmp_path / "queue.db")
+    chat_queue.reset_queue(q)
+    yield q
+    chat_queue.reset_queue(None)
+
+
+def _start_and_hold(client, csrf, tmp_path, monkeypatch):
+    import threading
+    import time
+
+    release = threading.Event()
+    monkeypatch.setattr(shell_tools, "run_host_request", lambda req, **kw: release.wait(10) and {"stdout": "", "stderr": "", "exit_code": 0})
+    req = host_requests.create("tab-1", "echo hi", str(tmp_path), "", "", 60)
+    client.post(f"/api/host-shell/{req.id}/run", json={"context_id": "tab-1"}, headers=csrf)
+    for _ in range(100):
+        if get_supervisor().get(req.id, "tab-1")["state"] == "running":
+            break
+        time.sleep(0.05)
+    return req, release
+
+
+def test_stopping_a_running_command_pauses_the_queue(client, csrf, tmp_path, monkeypatch, queue):
+    req, release = _start_and_hold(client, csrf, tmp_path, monkeypatch)
+    queue.enqueue("tab-1", "a", {"text": "next", "images": []})
+    r = client.post(f"/api/host-shell/{req.id}/cancel", json={"context_id": "tab-1"}, headers=csrf)
+    release.set()
+    assert r.status_code == 200 and r.json()["status"] == "cancelled"
+    snap = queue.snapshot("tab-1")
+    assert snap["paused"] and snap["reason"] == "command_stopped"
+    assert [i["id"] for i in snap["items"]] == ["a"]
+
+
+def test_stopping_a_command_with_nothing_queued_pauses_nothing(client, csrf, tmp_path, monkeypatch, queue):
+    req, release = _start_and_hold(client, csrf, tmp_path, monkeypatch)
+    client.post(f"/api/host-shell/{req.id}/cancel", json={"context_id": "tab-1"}, headers=csrf)
+    release.set()
+    assert not queue.snapshot("tab-1")["paused"]
+
+
+def test_cancelling_a_card_nobody_ran_does_not_pause_the_queue(client, csrf, queue):
+    queue.enqueue("tab-1", "a", {"text": "next", "images": []})
+    req = host_requests.create("tab-1", "echo hi", "C:/x", "", "", 60)
+    client.post(f"/api/host-shell/{req.id}/cancel", json={"context_id": "tab-1"}, headers=csrf)
+    assert not queue.snapshot("tab-1")["paused"]
+
+
 # --- review findings -----------------------------------------------------
 
 def test_host_env_drops_app_injected_credentials():

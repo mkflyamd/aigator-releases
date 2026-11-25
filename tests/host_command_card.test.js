@@ -72,6 +72,8 @@ function makeEnv(fetchImpl) {
   const fetches = [];
   const followUps = [];
   const toasts = [];
+  const runs = { started: [], ended: [], drains: 0, refreshes: 0 };
+  const registered = new Set();
   const clock = { ms: 1_000_000_000 };
   const timers = [];
   const ctx = {
@@ -94,6 +96,20 @@ function makeEnv(fetchImpl) {
     _tabsWithUpdates: new Set(),
     _showConnectivityToast: (msg, type) => toasts.push({ msg, type }),
     _sendSandboxFollowUp: async (tab, text) => followUps.push({ tab, text }),
+    _runStart: (tab, id, stop, followed) => {
+      registered.add(id);
+      runs.started.push({ tab, id, stop, followed });
+    },
+    _runEnd: (tab, id) => {
+      runs.ended.push({ tab, id });
+      return registered.delete(id);
+    },
+    _queueDrain: () => {
+      runs.drains++;
+    },
+    _queueRefresh: async () => {
+      runs.refreshes++;
+    },
     console,
     Map,
     Set,
@@ -108,14 +124,14 @@ function makeEnv(fetchImpl) {
     },
   };
   vm.createContext(ctx);
-  ['_renderHostCommandCard', '_showSandboxApproval'].forEach((n) =>
+  ['_hostShellPost', '_renderHostCommandCard', '_showSandboxApproval'].forEach((n) =>
     vm.runInContext(extract(n), ctx),
   );
   const tickClock = (seconds) => {
     clock.ms += seconds * 1000;
     timers.filter((t) => t.live).forEach((t) => t.fn());
   };
-  return { ctx, messages, fetches, followUps, toasts, clock, tickClock };
+  return { ctx, messages, fetches, followUps, toasts, clock, tickClock, runs };
 }
 
 const evil = '<img src=x onerror=alert(1)> && echo hi';
@@ -187,6 +203,13 @@ const buttonsOf = (env) => walk(env.messages).filter((e) => e.tag === 'button');
   assert.match(env.followUps[0].text, /host_command_result/);
   assert.match(env.followUps[0].text, /req1/);
   assert(!env.ctx._pendingSandboxCards.get('tab-1').has('req1'), 'card not redrawn later');
+  assert.deepStrictEqual(
+    env.runs.started.map((r) => [r.tab, r.id, r.followed]),
+    [['tab-1', 'req1', true]],
+    'Run registers the command with the tab as a followed run',
+  );
+  assert.deepStrictEqual(env.runs.ended, [{ tab: 'tab-1', id: 'req1' }], 'the end is reported once');
+  assert.strictEqual(env.runs.drains, 0, 'the follow-up turn drains the queue, not the card');
 
   // Cancel: cancel route, agent told not to retry.
   const env2 = makeEnv(ok);
@@ -195,6 +218,7 @@ const buttonsOf = (env) => walk(env.messages).filter((e) => e.tag === 'button');
   await tick();
   await tick();
   assert.strictEqual(env2.fetches[0].url, '/api/host-shell/req1/cancel');
+  assert.strictEqual(env2.runs.started.length, 0, 'cancelling a card nobody ran registers no run');
   assert.match(env2.followUps[0].text, /Do not retry/);
 
   // A server refusal re-enables the buttons and does not tell the agent anything.
@@ -299,6 +323,28 @@ const buttonsOf = (env) => walk(env.messages).filter((e) => e.tag === 'button');
   );
   assert(walk(env6.messages).some((e) => e.tag === 'pre' && /You stopped/.test(e.textContent)));
   assert.match(textOf(env6), /You stopped this command\./);
+  assert.strictEqual(env6.runs.started.length, 1);
+  assert.strictEqual(env6.runs.ended.length, 1, 'the stopped command leaves the tab run set');
+  assert(env6.runs.refreshes >= 1, 'the queue is refreshed after Stop so the pause shows');
+
+  // The stop handed to the tab is the card's own Stop: it posts the cancel route once.
+  const env6b = makeEnv(async (url, opts) =>
+    opts && opts.method === 'POST'
+      ? reply({ ok: true, run: { id: 'req1', state: url.endsWith('/cancel') ? 'cancelled' : 'running' } })
+      : new Promise(() => {}),
+  );
+  env6b.ctx._showSandboxApproval(data, 'tab-1');
+  await buttonsOf(env6b)[0].listeners.click(click);
+  await tick();
+  env6b.runs.started[0].stop();
+  env6b.runs.started[0].stop();
+  await tick();
+  await tick();
+  assert.strictEqual(
+    env6b.fetches.filter((f) => f.url === '/api/host-shell/req1/cancel').length,
+    1,
+    'the composer Stop cancels once, however often it is pressed',
+  );
 
   // The card says when it will expire, and what happened, in plain words.
   const withExpiry = (env) => ({ ...data, expires_at: env.clock.ms / 1000 + 600 });

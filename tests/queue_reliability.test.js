@@ -21,9 +21,17 @@ function functionSource(name) {
   throw new Error(`${name} not closed`);
 }
 
+function constSource(name) {
+  const start = source.indexOf(`const ${name} = {`);
+  assert(start > 0, `${name} found`);
+  return source.slice(start, source.indexOf('\n};', start) + 3);
+}
+
 const FUNCTIONS = [
   '_queueDrain',
   '_queueCardHold',
+  '_tabBusy',
+  '_commandRunning',
   '_queueBusyStart',
   '_queueBusyEnd',
   '_queueRearm',
@@ -51,6 +59,7 @@ function world({ heads = [], submit } = {}) {
     _pendingSandboxFollowUps: new Set(),
     _pendingSandboxCards: new Map(),
     _pendingTabCards: new Map(),
+    _runsByTab: new Map(),
     _chatTaskIds: new Map(),
     console: { warn() {} },
     _renderQueue: () => {},
@@ -74,7 +83,7 @@ function world({ heads = [], submit } = {}) {
     },
   };
   vm.createContext(ctx);
-  vm.runInContext(FUNCTIONS.map(functionSource).join('\n'), ctx);
+  vm.runInContext(`${constSource('_COMPOSER_TEXT')}\n${FUNCTIONS.map(functionSource).join('\n')}`, ctx);
   // Timers still waiting to fire (a cleared timer, such as the busy expiry, is not one).
   const pending = () => timers.filter((t) => t.fn);
   const fire = async (index) => {
@@ -322,6 +331,9 @@ const count = (calls, what) => calls.filter((c) => c === what).length;
         _activeTabId: 'tab1',
         _chatTaskIds: new Map([['tab1', 'task']]),
         _activeStops: new Set([() => stops++]),
+        _runsByTab: new Map(),
+        _pendingSandboxCards: new Map(),
+        _pendingTabCards: new Map(),
         _aigatorImages: images,
         _queueComposing: new Set(),
         _slashDropdown: null,
@@ -363,6 +375,9 @@ const count = (calls, what) => calls.filter((c) => c === what).length;
       vm.runInContext(
         [
           '_composerButtonMode',
+          '_queueCardHold',
+          '_tabBusy',
+          '_commandRunning',
           '_composerCanQueue',
           '_queueRefusal',
           '_shouldStopFromClick',
@@ -545,7 +560,7 @@ const count = (calls, what) => calls.filter((c) => c === what).length;
     assert.match(css, /\.chat-input-area\s*\{[^}]*container:\s*composer-bar\s*\/\s*inline-size/, 'the composer is a container');
     const query = css.match(/@container composer-bar \(max-width: 480px\) \{([\s\S]*?)\r?\n\}\r?\n/);
     assert(query, 'a container query on the composer width');
-    assert.match(query[1], /#send-btn\.is-streaming\s*\{[^}]*width:\s*34px[^}]*height:\s*34px[^}]*border-radius:\s*50%/, 'Queue is a 34px circle');
+    assert.match(query[1], /\[data-mode='queue'\] #send-btn\s*\{[^}]*width:\s*34px[^}]*height:\s*34px[^}]*border-radius:\s*50%/, 'Queue is a 34px circle');
     assert.match(query[1], /\.queue-label\s*\{\s*display:\s*none/, 'the word goes');
     assert.match(query[1], /\.chat-stop-btn\s*\{[^}]*width:\s*32px/, 'Stop is a 32px square');
     assert.match(query[1], /\.stop-label\s*\{\s*display:\s*none/, 'the Stop word goes');

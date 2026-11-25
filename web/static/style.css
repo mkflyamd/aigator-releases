@@ -10544,15 +10544,15 @@ html.material-symbols-ready .tp-mi {
   transform: scale(1) !important;
   pointer-events: auto !important;
 }
-/* Streaming with something typed: the button is Queue (accent, send arrow); Stop is its own button. */
-#chat-send-slot[data-mode='queue'] #send-btn.is-streaming {
+/* Something typed while a reply or a command runs, or a card waits: the button is Queue (accent); Stop is its own button. */
+#chat-send-slot[data-mode='queue'] #send-btn {
   background: var(--accent);
 }
-#chat-send-slot[data-mode='queue'] #send-btn.is-streaming:hover {
+#chat-send-slot[data-mode='queue'] #send-btn:hover {
   background: color-mix(in srgb, var(--accent) 85%, #000);
 }
-#chat-send-slot[data-mode='queue'] #send-btn.is-streaming .send-icon,
-#chat-send-slot[data-mode='queue'] #send-btn.is-streaming .stop-icon {
+#chat-send-slot[data-mode='queue'] #send-btn .send-icon,
+#chat-send-slot[data-mode='queue'] #send-btn .stop-icon {
   display: none;
 }
 /* Queue is a pill: list-plus icon and the word, so it never reads as plain Send. It takes the width the hidden mic frees. */
@@ -10564,7 +10564,7 @@ html.material-symbols-ready .tp-mi {
   width: auto;
   min-width: 34px;
 }
-#chat-send-slot[data-mode='queue'] #send-btn.is-streaming {
+#chat-send-slot[data-mode='queue'] #send-btn {
   position: relative;
   inset: auto;
   width: auto;
@@ -10577,15 +10577,36 @@ html.material-symbols-ready .tp-mi {
   font-size: 0.8rem;
   font-weight: 500;
 }
-#chat-send-slot[data-mode='queue'] #send-btn.is-streaming .queue-icon {
+#chat-send-slot[data-mode='queue'] #send-btn .queue-icon {
   display: block;
   flex-shrink: 0;
 }
-#chat-send-slot[data-mode='queue'] #send-btn.is-streaming .queue-label {
+#chat-send-slot[data-mode='queue'] #send-btn .queue-label {
   display: inline;
 }
-#chat-send-slot[data-mode='queue'] #send-btn.is-streaming .ctx-arc-svg {
+#chat-send-slot[data-mode='queue'] #send-btn .ctx-arc-svg {
   display: none;
+}
+#chat-send-slot[data-mode='queue'] #send-btn,
+#chat-send-slot[data-mode='stop-command'] #send-btn {
+  opacity: 1 !important;
+  transform: scale(1) !important;
+  pointer-events: auto !important;
+}
+/* A command is running and the box is empty: the one button is a red Stop for the command. */
+#chat-send-slot[data-mode='stop-command'] #send-btn {
+  background: var(--danger);
+  color: #fff;
+  cursor: pointer;
+}
+#chat-send-slot[data-mode='stop-command'] #send-btn:hover {
+  background: color-mix(in srgb, var(--danger) 85%, #000);
+}
+#chat-send-slot[data-mode='stop-command'] #send-btn .send-icon {
+  display: none;
+}
+#chat-send-slot[data-mode='stop-command'] #send-btn .stop-icon {
+  display: block;
 }
 .chat-stop-btn {
   align-self: flex-end;
@@ -10615,7 +10636,7 @@ html.material-symbols-ready .tp-mi {
 /* A narrow composer: Stop (32) + Queue (34) take the room of mic (34) + Send (34), so the text box keeps its width.
    Both go icon-only; the labels stay available as aria-label and title. */
 @container composer-bar (max-width: 480px) {
-  #chat-send-slot[data-mode='queue'] #send-btn.is-streaming {
+  #chat-send-slot[data-mode='queue'] #send-btn {
     width: 34px;
     height: 34px;
     margin: 0;
@@ -10623,7 +10644,7 @@ html.material-symbols-ready .tp-mi {
     gap: 0;
     border-radius: 50%;
   }
-  #chat-send-slot[data-mode='queue'] #send-btn.is-streaming .queue-label {
+  #chat-send-slot[data-mode='queue'] #send-btn .queue-label {
     display: none;
   }
   .chat-stop-btn {
@@ -10636,7 +10657,9 @@ html.material-symbols-ready .tp-mi {
   }
 }
 #chat-send-slot #send-btn.is-streaming ~ #gator-mic-btn,
-#chat-send-slot:has(#send-btn.is-streaming) #gator-mic-btn {
+#chat-send-slot:has(#send-btn.is-streaming) #gator-mic-btn,
+#chat-send-slot[data-mode='queue'] #gator-mic-btn,
+#chat-send-slot[data-mode='stop-command'] #gator-mic-btn {
   opacity: 0 !important;
   pointer-events: none !important;
 }
