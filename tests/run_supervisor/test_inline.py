@@ -93,7 +93,8 @@ def test_the_turns_stop_cancels_its_inline_run_and_waits_for_it_to_wind_down(sup
     assert runner.entered.wait(5)
     started = time.monotonic()
     assert len(sup.cancel_turn("turn-1")) == 1
-    assert time.monotonic() - started < 2
+    # taskkill alone takes 2-3 s on managed Windows machines; a runner that never heard Stop waits 10 s.
+    assert time.monotonic() - started < 8
     thread.join(5)
     record, _ = box["out"]
     assert record["state"] == "cancelled"
