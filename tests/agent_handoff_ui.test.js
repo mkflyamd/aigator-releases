@@ -112,10 +112,24 @@ const ESC = String.fromCharCode(27);
   assert.strictEqual(h.oneLine(null), '');
   assert.strictEqual(h.oneLine('x'.repeat(500)).length, 300);
   assert.strictEqual(h.targetWarning(targets[1]), '');
-  assert.strictEqual(
-    h.targetWarning(targets[2]),
-    'Runs on its own configuration, outside the AI Gator gateway.',
-  );
+  const warn = h.targetWarning(targets[2]);
+  assert(warn.startsWith('Runs on its own configuration, outside the AI Gator gateway.'));
+  assert(/own provider/.test(warn), 'says where the carried-over session goes');
+  assert(/best-effort/.test(h.REDACTION_NOTE) && /may remain/.test(h.REDACTION_NOTE));
+  assert(!/guarantee|safe|removed/i.test(h.REDACTION_NOTE), 'does not overclaim');
+}
+
+// trapTarget: Tab and Shift+Tab wrap inside the dialog; stray focus comes back in
+{
+  const [a, b, c] = ['a', 'b', 'c'];
+  const list = [a, b, c];
+  assert.strictEqual(h.trapTarget(list, c, false), a, 'Tab on last wraps to first');
+  assert.strictEqual(h.trapTarget(list, a, true), c, 'Shift+Tab on first wraps to last');
+  assert.strictEqual(h.trapTarget(list, b, false), null, 'middle is left to the browser');
+  assert.strictEqual(h.trapTarget(list, b, true), null);
+  assert.strictEqual(h.trapTarget(list, 'outside', false), a, 'outside focus returns to first');
+  assert.strictEqual(h.trapTarget(list, 'outside', true), c);
+  assert.strictEqual(h.trapTarget([], a, false), null);
 }
 
 // prepare body: a live terminal sends pty_session_id, a stored session sends session_id
