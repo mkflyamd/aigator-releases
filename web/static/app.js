@@ -9469,21 +9469,8 @@ form.addEventListener('copy', (e) => {
   _writeShareableCopy(e, _serializeShareableSelection(), _serializeShareableSelectionHtml());
 });
 
-// Enter = submit (Shift+Enter = newline)
+// Enter submits through _requestTypedSubmit in the keydown handler below (Shift+Enter = newline)
 input.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && !e.shiftKey) {
-    // Don't submit if a dropdown is open (Enter selects from dropdown)
-    if (
-      document.querySelector('.skill-mention-dropdown') ||
-      document.querySelector('.channel-dropdown') ||
-      document.querySelector('.slash-dropdown')
-    )
-      return;
-    e.preventDefault();
-    document
-      .getElementById('chat-form')
-      .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-  }
   // Backspace on empty input removes the last skill chip
   if (e.key === 'Backspace' && _getInputText().trim() === '' && !_getInlineChips().length) {
     if (_activeChips.length) {

@@ -299,6 +299,12 @@ const view = (w, { streaming = false, canQueue = false } = {}) =>
     assert.strictEqual(q(true, 'a'), false, 'a send the queue itself started goes through');
   }
 
+  // A second Enter handler that dispatches an untyped submit slips past the queue gate and sends straight away.
+  {
+    const enterSubmitters = source.match(/e\.key === 'Enter' && !e\.shiftKey\) \{[^}]*?dispatchEvent\(new Event\('submit'/g) || [];
+    assert.strictEqual(enterSubmitters.length, 0, 'Enter submits only through _requestTypedSubmit');
+  }
+
   // ── the queue waits for the command, then drains once; the follow-up goes first ──
   {
     const w = world({ heads: [{ item: { id: 'a' } }] });
