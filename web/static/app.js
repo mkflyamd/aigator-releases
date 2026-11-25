@@ -11996,6 +11996,38 @@ function _renderHostCommandCard(data, requestId, cardTab, tabId) {
     countdown.textContent =
       left <= 60 ? `Expires in ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}` : '';
   }, 1000);
+  const activeStates = ['awaiting_approval', 'preparing', 'running'];
+  const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const waitForRun = async () => {
+    let misses = 0;
+    for (;;) {
+      const res = await fetch(
+        `/api/host-shell/${encodeURIComponent(requestId)}?context_id=${encodeURIComponent(contextId)}`,
+      ).catch(() => null);
+      if (res && (res.status === 404 || res.status === 410)) return { gone: true };
+      const body = res && res.ok ? await res.json().catch(() => null) : null;
+      if (body && body.run && !activeStates.includes(body.run.state)) return body;
+      misses = body ? 0 : misses + 1;
+      if (misses >= 30) return { lost: true };
+      await pause(700);
+    }
+  };
+  const describeRun = (state, record, result) => {
+    if (state === 'finished')
+      return result.exit_code === 0
+        ? '✓ Finished · exit code 0'
+        : `Failed · exit code ${result.exit_code}`;
+    if (state === 'timed_out') return 'Timed out · the command was stopped at its time limit.';
+    if (state === 'cancelled') return 'You stopped this command.';
+    if (state === 'policy_blocked')
+      return 'Blocked · your administrator has turned off running commands on this computer.';
+    if (state === 'interrupted') return 'AI Gator restarted while this command was running.';
+    if (state === 'failed_to_start')
+      return record?.reason === 'concurrency_cap'
+        ? 'Could not start · too many commands are already running in this tab.'
+        : 'Could not start the command.';
+    return `Ended · ${state}`;
+  };
   const decide = async (action) => {
     if (run.disabled || settled) return;
     busy = true;
@@ -12008,12 +12040,12 @@ function _renderHostCommandCard(data, requestId, cardTab, tabId) {
       cancel.disabled = true;
     }
     try {
-      const out = await send(action);
-      settled = true;
-      stopClock();
-      actions.remove();
-      _pendingSandboxCards.get(cardTab)?.delete(requestId);
+      await send(action);
       if (action === 'cancel') {
+        settled = true;
+        stopClock();
+        actions.remove();
+        _pendingSandboxCards.get(cardTab)?.delete(requestId);
         footNote.textContent = 'You cancelled this. Nothing was run.';
         _sendSandboxFollowUp(
           tabId,
@@ -12021,14 +12053,29 @@ function _renderHostCommandCard(data, requestId, cardTab, tabId) {
         ).catch((e) => console.warn('[host-shell] follow-up not sent:', e));
         return;
       }
-      const result = out.result || {};
+      const body = await waitForRun();
+      if (body.gone) {
+        expire();
+        return;
+      }
+      if (body.lost) {
+        settled = true;
+        stopClock();
+        actions.remove();
+        _pendingSandboxCards.get(cardTab)?.delete(requestId);
+        footNote.textContent = 'Lost contact with AI Gator. The command may still be running. Reload to see where it ended.';
+        return;
+      }
+      settled = true;
+      stopClock();
+      actions.remove();
+      _pendingSandboxCards.get(cardTab)?.delete(requestId);
+      const result = body.result || {};
+      const state = body.run?.state;
       const text = [result.stdout, result.stderr, result.error].filter(Boolean).join('\n');
       output.textContent = text || '(no output)';
       output.hidden = false;
-      footNote.textContent =
-        result.exit_code === 0
-          ? '✓ Finished · exit code 0'
-          : `Failed · exit code ${result.exit_code}`;
+      footNote.textContent = describeRun(state, body.run, result);
       _sendSandboxFollowUp(
         tabId,
         `I ran command request ${requestId}. Call host_command_result with that request_id to read the output.`,

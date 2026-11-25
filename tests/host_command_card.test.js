@@ -78,6 +78,7 @@ function makeEnv(fetchImpl) {
     Date: { now: () => clock.ms },
     Math,
     Number,
+    setTimeout: (fn) => setTimeout(fn, 0),
     setInterval: (fn) => timers.push({ fn, live: true }) && timers.length,
     clearInterval: (id) => {
       if (timers[id - 1]) timers[id - 1].live = false;
@@ -134,14 +135,13 @@ const tick = () => new Promise((r) => setTimeout(r, 0));
 const buttonsOf = (env) => walk(env.messages).filter((e) => e.tag === 'button');
 
 (async () => {
-  const ok = async (url) =>
-    url.endsWith('/run')
-      ? {
-          ok: true,
-          status: 200,
-          json: async () => ({ ok: true, result: { stdout: 'built', stderr: '', exit_code: 0 } }),
-        }
-      : { ok: true, status: 200, json: async () => ({ ok: true }) };
+  const reply = (body) => ({ ok: true, status: 200, json: async () => body });
+  const finished = (result, state = 'finished') =>
+    reply({ ok: true, run: { id: 'req1', state }, result });
+  const ok = async (url, opts) =>
+    opts && opts.method === 'POST'
+      ? reply({ ok: true, run: { id: 'req1', state: url.endsWith('/run') ? 'running' : 'denied' } })
+      : finished({ stdout: 'built', stderr: '', exit_code: 0 });
 
   // Render: command is plain text, nothing runs, only Run and Cancel are offered.
   const env = makeEnv(ok);
@@ -175,7 +175,8 @@ const buttonsOf = (env) => walk(env.messages).filter((e) => e.tag === 'button');
   await buttonsOf(env)[0].listeners.click(click);
   await tick();
   await tick();
-  assert.strictEqual(env.fetches.length, 1);
+  assert.strictEqual(env.fetches.length, 2);
+  assert.strictEqual(env.fetches[1].url, '/api/host-shell/req1?context_id=tab-1');
   assert.strictEqual(env.fetches[0].url, '/api/host-shell/req1/run');
   assert.strictEqual(env.fetches[0].opts.method, 'POST');
   assert.strictEqual(env.fetches[0].opts.headers['X-CSRF-Token'], 'aigator-fake-api-key');
@@ -227,7 +228,12 @@ const buttonsOf = (env) => walk(env.messages).filter((e) => e.tag === 'button');
   await tick();
   assert.deepStrictEqual(
     env4.fetches.map((f) => f.url),
-    ['/api/host-shell/req1/run', '/api/csrf', '/api/host-shell/req1/run'],
+    [
+      '/api/host-shell/req1/run',
+      '/api/csrf',
+      '/api/host-shell/req1/run',
+      '/api/host-shell/req1?context_id=tab-1',
+    ],
   );
 
   // Several lines, the AI's own folder and removed variables are all called out on the card.
@@ -258,45 +264,43 @@ const buttonsOf = (env) => walk(env.messages).filter((e) => e.tag === 'button');
     .join(nl);
   assert(!/lines\./.test(plain) && !/working folder/.test(plain) && !/removed/.test(plain));
 
+  const textOf = (e) =>
+    walk(e.messages)
+      .map((x) => x.textContent)
+      .join(nl);
+
   // While a command runs, Cancel becomes Stop and calls the cancel route.
-  let release = () => {};
-  const env6 = makeEnv(async (url) => {
-    if (url.endsWith('/run'))
-      return new Promise((resolve) => {
-        release = () =>
-          resolve({
-            ok: true,
-            status: 200,
-            json: async () => ({
-              ok: true,
-              result: { stdout: '', stderr: '', error: 'You stopped this command', exit_code: -1 },
-            }),
-          });
-      });
-    release();
-    return { ok: true, status: 200, json: async () => ({ ok: true, status: 'stopped' }) };
+  let stopped = false;
+  const env6 = makeEnv(async (url, opts) => {
+    if (opts && opts.method === 'POST') {
+      if (url.endsWith('/cancel')) stopped = true;
+      return reply({ ok: true, run: { id: 'req1', state: stopped ? 'cancelled' : 'running' } });
+    }
+    return stopped
+      ? finished(
+          { stdout: '', stderr: '', error: 'You stopped this command', exit_code: -1 },
+          'cancelled',
+        )
+      : reply({ ok: true, run: { id: 'req1', state: 'running' } });
   });
   env6.ctx._showSandboxApproval(data, 'tab-1');
   buttonsOf(env6)[0].listeners.click(click);
+  await tick();
   await tick();
   const stopBtn = buttonsOf(env6)[1];
   assert.strictEqual(stopBtn.textContent, 'Stop');
   assert(!stopBtn.disabled, 'Stop is clickable while running');
   await stopBtn.listeners.click(click);
-  await tick();
-  await tick();
-  await tick();
-  assert.deepStrictEqual(
-    env6.fetches.map((f) => f.url),
-    ['/api/host-shell/req1/run', '/api/host-shell/req1/cancel'],
+  for (let i = 0; i < 6; i += 1) await tick();
+  assert.strictEqual(env6.fetches[0].url, '/api/host-shell/req1/run');
+  assert(
+    env6.fetches.some((f) => f.url === '/api/host-shell/req1/cancel'),
+    'Stop posts to the cancel route',
   );
   assert(walk(env6.messages).some((e) => e.tag === 'pre' && /You stopped/.test(e.textContent)));
+  assert.match(textOf(env6), /You stopped this command\./);
 
   // The card says when it will expire, and what happened, in plain words.
-  const textOf = (e) =>
-    walk(e.messages)
-      .map((x) => x.textContent)
-      .join(nl);
   const withExpiry = (env) => ({ ...data, expires_at: env.clock.ms / 1000 + 600 });
 
   // Only the last minute is counted down, and the countdown is hidden from screen readers.
@@ -394,17 +398,72 @@ const buttonsOf = (env) => walk(env.messages).filter((e) => e.tag === 'button');
   assert.match(textOf(slow), /You cancelled this. Nothing was run./);
 
   // A non-zero exit code reads as a failure, zero as finished.
-  const failed = makeEnv(async () => ({
-    ok: true,
-    status: 200,
-    json: async () => ({ ok: true, result: { stdout: '', stderr: 'boom', exit_code: 2 } }),
-  }));
+  const failed = makeEnv(async (url, opts) =>
+    opts && opts.method === 'POST'
+      ? reply({ ok: true, run: { id: 'req1', state: 'running' } })
+      : finished({ stdout: '', stderr: 'boom', exit_code: 2 }),
+  );
   failed.ctx._showSandboxApproval(data, 'tab-1');
   await buttonsOf(failed)[0].listeners.click(click);
   await tick();
   await tick();
   assert.match(textOf(failed), /Failed · exit code 2/);
   assert.match(textOf(env), /Finished · exit code 0/);
+
+  // The card polls a running command until its record ends, then says how it ended.
+  let polls = 0;
+  const slowRun = makeEnv(async (url, opts) => {
+    if (opts && opts.method === 'POST')
+      return reply({ ok: true, run: { id: 'req1', state: 'running' } });
+    polls += 1;
+    return polls < 3
+      ? reply({ ok: true, run: { id: 'req1', state: 'running' } })
+      : finished({ stdout: 'late output', stderr: '', exit_code: 0 });
+  });
+  slowRun.ctx._showSandboxApproval(data, 'tab-1');
+  buttonsOf(slowRun)[0].listeners.click(click);
+  for (let i = 0; i < 12; i += 1) await tick();
+  assert(polls >= 3, 'kept polling while the record was running');
+  assert.match(textOf(slowRun), /Finished · exit code 0/);
+  assert.strictEqual(slowRun.followUps.length, 1);
+
+  // Each end state is described plainly and the output captured so far is kept.
+  const endings = [
+    ['timed_out', /Timed out/],
+    ['cancelled', /You stopped this command\./],
+    ['policy_blocked', /administrator/],
+    ['interrupted', /restarted/],
+  ];
+  for (const [state, pattern] of endings) {
+    const ended = makeEnv(async (url, opts) =>
+      opts && opts.method === 'POST'
+        ? reply({ ok: true, run: { id: 'req1', state: 'running' } })
+        : finished({ stdout: 'partial', stderr: '', exit_code: -1 }, state),
+    );
+    ended.ctx._showSandboxApproval(data, 'tab-1');
+    await buttonsOf(ended)[0].listeners.click(click);
+    await tick();
+    await tick();
+    assert.match(textOf(ended), pattern, state);
+    assert(walk(ended.messages).some((e) => e.tag === 'pre' && e.textContent === 'partial'));
+  }
+
+  // A refused start says why.
+  const refused = { id: 'req1', state: 'failed_to_start', reason: 'concurrency_cap' };
+  const capped = makeEnv(async (url, opts) =>
+    opts && opts.method === 'POST'
+      ? reply({ ok: true, run: refused })
+      : reply({
+          ok: true,
+          run: refused,
+          result: { error: 'concurrency_cap', stdout: '', stderr: '', exit_code: -1 },
+        }),
+  );
+  capped.ctx._showSandboxApproval(data, 'tab-1');
+  await buttonsOf(capped)[0].listeners.click(click);
+  await tick();
+  await tick();
+  assert.match(textOf(capped), /too many commands are already running/);
 
   console.log('host_command_card: all assertions passed');
 })().catch((err) => {

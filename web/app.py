@@ -842,6 +842,10 @@ async def lifespan(app):
     import sandbox as _sandbox
     asyncio.create_task(asyncio.to_thread(_sandbox.sweep_stale_grants))
 
+    # Runs still active when the backend last stopped become "interrupted"; their leftover processes are swept.
+    from runs.supervisor import get_supervisor as _get_run_supervisor
+    asyncio.create_task(asyncio.to_thread(_get_run_supervisor().reconcile))
+
     # Respawn any spawned preset MCP servers that were orphaned by a restart
     # (e.g. Google Workspace's workspace-mcp process), then start the background
     # supervisor that keeps them alive.
@@ -862,8 +866,7 @@ async def lifespan(app):
             await _t
         except asyncio.CancelledError:
             pass
-    from sandbox import host_requests as _host_requests
-    _host_requests.stop_all()
+    _get_run_supervisor().stop_all()
     # Cancel in-flight chat tasks so they don't block shutdown holding the
     # per-context lock. Without this, a stuck turn blocks uvicorn's lifespan
     # shutdown until the watchdog's 10s timeout force-kills the process.

@@ -1355,6 +1355,8 @@ async def chat_stream(task_id: str, request: Request):
 async def cancel_chat(task_id: str):
     """Cancel a running chat task."""
     cancelled = shared.chat_task_store.cancel(task_id)
+    from runs.supervisor import get_supervisor
+    await asyncio.to_thread(get_supervisor().cancel_turn, task_id)
     # Also stop browser agent if running
     try:
         from browser_agent import is_browser_active, cancel_browser_task
