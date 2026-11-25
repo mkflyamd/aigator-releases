@@ -388,7 +388,9 @@
   }
 
   function startedText(created) {
-    return typeof created === 'number' ? ', started ' + new Date(created * 1000).toLocaleString() : '';
+    return typeof created === 'number'
+      ? ', started ' + new Date(created * 1000).toLocaleString()
+      : '';
   }
 
   function takeoverBody(where) {
@@ -404,7 +406,9 @@
   }
 
   function canTakeOver(where) {
-    return !!where && where.can_close === true && where.pid != null && typeof where.created === 'number';
+    return (
+      !!where && where.can_close === true && where.pid != null && typeof where.created === 'number'
+    );
   }
 
   function manualCloseText(where) {
