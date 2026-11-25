@@ -62,6 +62,18 @@ function hoverLabel(info) {
   return { label: ancestor ? noun + ' in ' + ancestor : noun, kind: '' };
 }
 
+// Keys that drive element selection while picking. Anything with Ctrl, Alt or Meta is left alone.
+function pickCommand(input) {
+  const i = input || {};
+  if (i.control || i.alt || i.meta) return null;
+  if (i.key === 'Tab') return i.shift ? 'prev' : 'next';
+  if (i.shift) return null;
+  if (i.key === 'ArrowDown') return 'child';
+  if (i.key === 'ArrowUp') return 'parent';
+  if (i.key === 'Enter') return 'select';
+  return null;
+}
+
 function urlMatches(a, b) {
   try {
     const ua = new URL(a);
@@ -121,7 +133,10 @@ function featuresOf(el) {
   };
   const text = textOf(el);
   let name =
-    clean(attr(el, 'aria-label')) || labelled(el) || clean(attr(el, 'title')) || clean(attr(el, 'alt'));
+    clean(attr(el, 'aria-label')) ||
+    labelled(el) ||
+    clean(attr(el, 'title')) ||
+    clean(attr(el, 'alt'));
   if (!name && el.labels && el.labels.length) {
     name = clean(
       Array.from(el.labels)
@@ -129,7 +144,8 @@ function featuresOf(el) {
         .join(' '),
     );
   }
-  if (!name && (role === 'button' || role === 'link' || role === 'heading')) name = text.slice(0, 120);
+  if (!name && (role === 'button' || role === 'link' || role === 'heading'))
+    name = text.slice(0, 120);
   const generated = (id) => /\d{4,}|^:|^(ember|react|rc_|__)|[a-f0-9]{12,}/i.test(id);
   let testId = '';
   for (const a of ['data-testid', 'data-test', 'data-qa', 'data-cy']) {
@@ -215,7 +231,8 @@ function scanInPage(featuresOf, loc, textMax) {
       (loc.testId && el.matches('[data-testid],[data-test],[data-qa],[data-cy],[id]'));
     if (!cheap || el.getClientRects().length === 0) continue;
     const f = featuresOf(el);
-    if (f.tag !== loc.tag && f.role !== loc.role && !(loc.testId && f.testId === loc.testId)) continue;
+    if (f.tag !== loc.tag && f.role !== loc.role && !(loc.testId && f.testId === loc.testId))
+      continue;
     if (els.length >= MAX) {
       truncated = true;
       break;
@@ -268,6 +285,95 @@ function pageTextInPage() {
     text = clean([body && body.textContent, ...extras].filter(Boolean).join('\n'));
   }
   return JSON.stringify({ text, title: document.title || '', url: location.href });
+}
+
+// Keyboard walk through the page's elements, used while picking. Runs in the page with `this`
+// as the current element (or nothing before the first step). dir is next | prev | parent |
+// child. Returns the element to move to, or null when there is nowhere to go. Closure-free.
+function stepInPage(dir) {
+  const cur = this && this.nodeType === 1 ? this : null;
+  const body = document.body;
+  const root = document.documentElement;
+  const SKIP = /^(HTML|HEAD|BODY|SCRIPT|STYLE|NOSCRIPT|LINK|META|TEMPLATE)$/;
+  const TAGS =
+    /^(A|BUTTON|INPUT|SELECT|TEXTAREA|SUMMARY|IMG|SVG|CANVAS|VIDEO|IFRAME|TABLE|UL|OL|FIGURE|ARTICLE|SECTION|ASIDE|NAV|FORM|H[1-6])$/;
+  const visible = (el) => {
+    const r = el.getBoundingClientRect();
+    if (!(r.width >= 4 && r.height >= 4)) return false;
+    if (typeof getComputedStyle !== 'function') return true;
+    const s = getComputedStyle(el);
+    return s.visibility !== 'hidden' && s.display !== 'none';
+  };
+  const attr = (el, a) => (el.getAttribute && el.getAttribute(a)) || '';
+  const meaningful = (el) =>
+    !SKIP.test(el.tagName) &&
+    visible(el) &&
+    (TAGS.test(el.tagName) ||
+      !!attr(el, 'role') ||
+      !!attr(el, 'aria-label') ||
+      !!attr(el, 'data-testid') ||
+      (el.children.length === 0 && (el.textContent || '').trim().length > 0));
+  const inViewport = (el) => {
+    const r = el.getBoundingClientRect();
+    return r.bottom > 0 && r.top < window.innerHeight && r.right > 0 && r.left < window.innerWidth;
+  };
+  const indexIn = (list, n) => Array.prototype.indexOf.call(list, n);
+  const after = (n) => {
+    if (n.children.length) return n.children[0];
+    for (let c = n; c && c !== body; c = c.parentElement) {
+      const p = c.parentElement;
+      if (!p) return null;
+      const i = indexIn(p.children, c);
+      if (i + 1 < p.children.length) return p.children[i + 1];
+    }
+    return null;
+  };
+  const before = (n) => {
+    const p = n.parentElement;
+    if (!p) return null;
+    const i = indexIn(p.children, n);
+    if (i <= 0) return p;
+    let d = p.children[i - 1];
+    while (d.children.length) d = d.children[d.children.length - 1];
+    return d;
+  };
+  const walk = (start, step, accept) => {
+    let n = start;
+    for (let guard = 0; n && guard < 20000; guard++) {
+      n = step(n);
+      if (!n || n === body || n === root) return null;
+      if (meaningful(n) && accept(n)) return n;
+    }
+    return null;
+  };
+  let found = null;
+  if (dir === 'parent') {
+    for (let p = cur && cur.parentElement; p && p !== body && p !== root; p = p.parentElement) {
+      if (!SKIP.test(p.tagName) && visible(p)) {
+        found = p;
+        break;
+      }
+    }
+  } else if (dir === 'child') {
+    if (cur) {
+      const first = (n) => {
+        for (let c = after(n); c && cur.contains(c); c = after(c)) {
+          if (!SKIP.test(c.tagName) && visible(c)) return c;
+        }
+        return null;
+      };
+      found = first(cur);
+    }
+  } else if (dir === 'next') {
+    found = cur ? walk(cur, after, () => true) : walk(body, after, inViewport);
+  } else if (dir === 'prev') {
+    if (cur) found = walk(cur, before, () => true);
+    else {
+      for (let n = walk(body, after, inViewport); n; n = walk(n, after, inViewport)) found = n;
+    }
+  }
+  if (found && found.scrollIntoView) found.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  return found;
 }
 
 // Runs INSIDE the page (this = element); cheap label facts for the hover banner.
@@ -526,6 +632,7 @@ module.exports = {
   captureScale,
   capText,
   hoverLabel,
+  pickCommand,
   urlMatches,
   featuresOf,
   describeInPage,
@@ -534,6 +641,7 @@ module.exports = {
   pageExpression,
   pageTextInPage,
   labelInPage,
+  stepInPage,
   matchLocator,
   resolveTarget,
 };

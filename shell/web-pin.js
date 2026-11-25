@@ -149,6 +149,17 @@ function removeCursor(wc, key) {
     .catch(() => {});
 }
 
+const CANCELLED = 'Pin mode cancelled.';
+const NOTHING_CHOSEN = 'Nothing highlighted yet. Press Tab to choose an element.';
+const PICK_HELP =
+  'Pin mode. Tab and Shift Tab move between elements, Up arrow selects the outer element, Down arrow the inner one, Enter pins the highlighted element, Escape cancels.';
+const NO_MOVE = {
+  next: 'No more elements.',
+  prev: 'No earlier elements.',
+  parent: 'Already the outermost element.',
+  child: 'No inner element.',
+};
+
 function createWebPin({
   getPane,
   isPaneVisible,
@@ -169,14 +180,14 @@ function createWebPin({
   }
 
   // skipCdp is true when the pane or debugger is already gone: reset state only.
-  function teardown(skipCdp) {
+  function teardown(skipCdp, announce) {
     const a = active;
     if (!a) return closing;
     active = null;
     a.wc.removeListener('before-input-event', a.onInput);
     a.wc.removeListener('destroyed', a.onGone);
     a.dbg.removeListener('detach', a.onGone);
-    onState({ appId: a.appId, picking: false, label: '' });
+    onState({ appId: a.appId, picking: false, label: '', announce: announce || '' });
     removeCursor(a.wc, a.cursorKey);
     closing = (async () => {
       if (!skipCdp) {
@@ -192,7 +203,7 @@ function createWebPin({
     return closing;
   }
 
-  const stop = () => teardown(false);
+  const stop = (announce) => teardown(false, typeof announce === 'string' ? announce : '');
 
   async function pick(backendNodeId) {
     const a = active;
@@ -210,6 +221,76 @@ function createWebPin({
     } finally {
       if (active === a) await teardown(false);
     }
+  }
+
+  // One keyboard step: move the highlight to the next, previous, outer or inner element and
+  // announce it, or pin the highlighted one. Steps are queued so key repeat is not dropped.
+  async function step(a, cmd) {
+    if (active !== a || a.picking) return;
+    try {
+      if (cmd === 'select') {
+        if (!a.current) {
+          onState({ appId: a.appId, picking: true, label: '', announce: NOTHING_CHOSEN });
+          return;
+        }
+        const { node } = await a.cdp.send('DOM.describeNode', { objectId: a.current });
+        await pick(node.backendNodeId);
+        return;
+      }
+      const fn = core.stepInPage.toString();
+      const res = a.current
+        ? await a.cdp.send('Runtime.callFunctionOn', {
+            objectId: a.current,
+            functionDeclaration: fn,
+            arguments: [{ value: cmd }],
+          })
+        : await a.cdp.send('Runtime.evaluate', {
+            expression: '(' + fn + ').call(null, ' + JSON.stringify(cmd) + ')',
+          });
+      if (active !== a || a.picking) return;
+      const objectId = res.result && res.result.objectId;
+      if (!objectId) {
+        onState({
+          appId: a.appId,
+          picking: true,
+          label: a.label || '',
+          kind: a.kind || '',
+          announce: NO_MOVE[cmd],
+        });
+        return;
+      }
+      const old = a.current;
+      a.current = objectId;
+      if (old) a.cdp.send('Runtime.releaseObject', { objectId: old }).catch(() => {});
+      await a.cdp.send('Overlay.highlightNode', { highlightConfig: HIGHLIGHT, objectId });
+      const r = await a.cdp.send('Runtime.callFunctionOn', {
+        objectId,
+        functionDeclaration: core.labelInPage.toString(),
+        returnByValue: true,
+      });
+      if (active !== a || a.picking) return;
+      const { label, kind } = core.hoverLabel(JSON.parse(r.result.value));
+      a.label = label;
+      a.kind = kind;
+      onState({
+        appId: a.appId,
+        picking: true,
+        label,
+        kind,
+        announce: kind ? label + ', ' + kind : label,
+      });
+    } catch (e) {
+      if (active === a) onError({ appId: a.appId, code: codeOf(e) });
+    }
+  }
+
+  // Returns true when the key was a picking command, so the caller can keep it from the page.
+  function key(input) {
+    const a = active;
+    const cmd = core.pickCommand(input);
+    if (!a || !cmd) return false;
+    if (!a.picking) a.queue = a.queue.then(() => step(a, cmd));
+    return true;
   }
 
   async function hover(nodeId) {
@@ -272,9 +353,12 @@ function createWebPin({
       return fail(appId, codeOf(e));
     }
     const onInput = (event, input) => {
-      if (input.type === 'keyDown' && input.key === 'Escape') {
+      if (input.type !== 'keyDown') return;
+      if (input.key === 'Escape') {
         event.preventDefault();
-        stop();
+        stop(CANCELLED);
+      } else if (key(input)) {
+        event.preventDefault();
       }
     };
     const dbg = wc.debugger;
@@ -282,13 +366,25 @@ function createWebPin({
     wc.on('before-input-event', onInput);
     wc.on('destroyed', onGone);
     dbg.on('detach', onGone);
-    active = { appId, wc, dbg, cdp, onInput, onGone, cursorKey, picking: false, hovering: false };
+    active = {
+      appId,
+      wc,
+      dbg,
+      cdp,
+      onInput,
+      onGone,
+      cursorKey,
+      picking: false,
+      hovering: false,
+      current: null,
+      queue: Promise.resolve(),
+    };
     cdp.onEvent((method, params) => {
       if (!active || active.cdp !== cdp) return;
       if (method === 'Overlay.inspectNodeRequested') pick(params.backendNodeId);
       else if (method === 'Overlay.nodeHighlightRequested') hover(params.nodeId);
     });
-    onState({ appId, picking: true, label: '' });
+    onState({ appId, picking: true, label: '', announce: PICK_HELP });
     return { ok: true };
   }
 
@@ -345,7 +441,7 @@ function createWebPin({
     return r.status === 'ok' ? { status: 'ok', ...r.payload } : { status: r.status };
   }
 
-  return { start, stop, pinView, recapture };
+  return { start, stop, key, pinView, recapture };
 }
 
-module.exports = { createWebPin, CDP_TIMEOUT_MS };
+module.exports = { createWebPin, CDP_TIMEOUT_MS, CANCELLED };

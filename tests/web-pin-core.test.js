@@ -203,7 +203,11 @@ test('matchLocator: a different element in the old rectangle is never taken for 
     rect: { ...PIN.rect },
   });
   assert.deepStrictEqual(core.matchLocator(PIN, [squatter]), { status: 'element_missing' });
-  const sameTag = cand(2, { heading: 'Sales dashboard', text: 'Unrelated footnote', rect: { ...PIN.rect } });
+  const sameTag = cand(2, {
+    heading: 'Sales dashboard',
+    text: 'Unrelated footnote',
+    rect: { ...PIN.rect },
+  });
   assert.deepStrictEqual(core.matchLocator(PIN, [sameTag]), { status: 'element_missing' });
 });
 
@@ -284,7 +288,13 @@ test('resolveTarget treats a page with no scan result as missing', async () => {
 function domEl(tag, opts = {}, children = []) {
   const el = fakeEl(tag, opts, children);
   const r = opts.rect || { left: 1, top: 2, width: 30, height: 40 };
-  el.getBoundingClientRect = () => r;
+  const box = { ...r, right: r.left + r.width, bottom: r.top + r.height };
+  el.getBoundingClientRect = () => box;
+  el.nodeType = 1;
+  el.scrolled = 0;
+  el.scrollIntoView = () => {
+    el.scrolled++;
+  };
   el.getClientRects = () => (r.width && r.height ? [r] : []);
   el.matches = () => false;
   el.id = (opts.attrs && opts.attrs.id) || '';
@@ -306,7 +316,10 @@ test('describeInPage runs standalone in the page and records the semantic finger
     text: 'Revenue 4.2M',
   });
   domEl('section', { attrs: { 'aria-label': 'Overview' } }, [h, chart]);
-  const fn = vm.runInContext('(' + core.elementFunction(core.describeInPage) + ')', inPageContext());
+  const fn = vm.runInContext(
+    '(' + core.elementFunction(core.describeInPage) + ')',
+    inPageContext(),
+  );
   const info = JSON.parse(fn.call(chart));
   assert.strictEqual(info.ariaLabel, 'Revenue');
   assert.strictEqual(info.text, 'Revenue 4.2M');
@@ -324,10 +337,12 @@ test('describeInPage runs standalone in the page and records the semantic finger
 });
 
 test('featuresOf ignores generated ids and takes a button name from its text', () => {
-  const run = (el) =>
-    vm.runInContext('(' + core.featuresOf.toString() + ')', inPageContext())(el);
+  const run = (el) => vm.runInContext('(' + core.featuresOf.toString() + ')', inPageContext())(el);
   assert.strictEqual(run(domEl('div', { attrs: { id: 'r1234567' } })).testId, '');
-  assert.strictEqual(run(domEl('div', { attrs: { id: 'revenue-card' } })).testId, 'id=revenue-card');
+  assert.strictEqual(
+    run(domEl('div', { attrs: { id: 'revenue-card' } })).testId,
+    'id=revenue-card',
+  );
   const b = run(domEl('button', { text: 'Export' }));
   assert.deepStrictEqual([b.role, b.name], ['button', 'Export']);
 });
@@ -466,4 +481,77 @@ test('labelInPage: control kinds and own text, never a tag name', () => {
     kind: '',
   });
   assert.deepStrictEqual(labelOf(fakeEl('div')), { label: 'This area', kind: '' });
+});
+
+test('pickCommand maps only the picking keys and ignores chords', () => {
+  const c = core.pickCommand;
+  assert.strictEqual(c({ key: 'Tab' }), 'next');
+  assert.strictEqual(c({ key: 'Tab', shift: true }), 'prev');
+  assert.strictEqual(c({ key: 'ArrowDown' }), 'child');
+  assert.strictEqual(c({ key: 'ArrowUp' }), 'parent');
+  assert.strictEqual(c({ key: 'Enter' }), 'select');
+  for (const bad of [
+    { key: 'Tab', control: true },
+    { key: 'Enter', alt: true },
+    { key: 'ArrowUp', meta: true },
+    { key: 'ArrowUp', shift: true },
+    { key: 'a' },
+    null,
+  ])
+    assert.strictEqual(c(bad), null);
+});
+
+function stepTree() {
+  const hidden = domEl('div', { rect: { left: 0, top: 0, width: 0, height: 0 }, text: 'x' });
+  const title = domEl('h2', { text: 'Sales' });
+  const num = domEl('span', { text: '4.2M' });
+  const card = domEl('div', { attrs: { 'aria-label': 'Revenue' } }, [num]);
+  const wrap = domEl('div', {}, [hidden, title, card]);
+  const below = domEl('p', {
+    text: 'far below',
+    rect: { left: 0, top: 5000, width: 50, height: 20 },
+  });
+  const body = domEl('body', {}, [wrap, below]);
+  const html = domEl('html', {}, [body]);
+  const step = (dir, from) => {
+    const ctx = vm.createContext({
+      window: { innerWidth: 800, innerHeight: 600 },
+      document: { body, documentElement: html },
+    });
+    return vm.runInContext('(' + core.stepInPage.toString() + ')', ctx).call(from || null, dir);
+  };
+  return { step, title, num, card, wrap, below, hidden };
+}
+
+test('stepInPage walks meaningful visible elements in document order', () => {
+  const { step, title, num, card, below } = stepTree();
+  assert.strictEqual(step('next'), title);
+  assert.strictEqual(step('next', title), card);
+  assert.strictEqual(step('next', card), num);
+  assert.strictEqual(step('next', num), below);
+  assert.strictEqual(step('next', below), null);
+  assert.strictEqual(step('prev', below), num);
+  assert.strictEqual(step('prev', card), title);
+  assert.strictEqual(step('prev', title), null);
+});
+
+test('stepInPage starts inside the viewport and scrolls the element into view', () => {
+  const { step, title, below } = stepTree();
+  assert.strictEqual(step('next'), title);
+  assert.strictEqual(title.scrolled, 1);
+  assert.strictEqual(step('prev'), title.parentElement.children[2].children[0]);
+  assert.strictEqual(below.scrolled, 0);
+});
+
+test('stepInPage moves to the outer and inner element and stops at the edges', () => {
+  const { step, num, card, wrap, hidden, title } = stepTree();
+  assert.strictEqual(step('parent', num), card);
+  assert.strictEqual(step('parent', card), wrap);
+  assert.strictEqual(step('parent', wrap), null);
+  assert.notStrictEqual(hidden, undefined);
+  assert.strictEqual(step('child', wrap), title);
+  assert.strictEqual(step('child', card), num);
+  assert.strictEqual(step('child', num), null);
+  assert.strictEqual(step('child'), null);
+  assert.strictEqual(step('parent'), null);
 });

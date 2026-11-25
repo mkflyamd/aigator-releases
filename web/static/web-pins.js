@@ -11,7 +11,8 @@
     page_mismatch: 'The app is on a different page than when this was pinned.',
     timeout: 'The page took too long to answer. Try again.',
     empty_target: 'That spot has nothing to capture. Pick a larger area.',
-    element_missing: "Gator can't find the pinned element on this page any more. Pin it again to refresh it.",
+    element_missing:
+      "Gator can't find the pinned element on this page any more. Pin it again to refresh it.",
     element_ambiguous:
       'More than one element on the page could be the pinned one. Pin it again so Gator knows which.',
   };
@@ -231,7 +232,27 @@
     return tab && tab.title ? tab.title : 'another tab';
   }
 
+  // Results are also spoken: the toast has no live region of its own.
+  function announce(message) {
+    if (typeof document === 'undefined' || !document.body) return;
+    let el = document.getElementById('wp-live');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'wp-live';
+      el.setAttribute('role', 'status');
+      el.setAttribute('aria-live', 'polite');
+      el.style.cssText =
+        'position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap';
+      document.body.appendChild(el);
+    }
+    el.textContent = '';
+    setTimeout(() => {
+      el.textContent = message;
+    }, 60);
+  }
+
   function toast(message, type) {
+    announce(message);
     if (typeof _showConnectivityToast === 'function')
       _showConnectivityToast(message, type || 'warning');
   }

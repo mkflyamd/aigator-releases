@@ -671,3 +671,19 @@ test('card refresh error codes surface through the shared error messages', async
   await flush();
   assert.deepEqual(toasts, [env.WebPins.errorMessage('timeout')]);
 });
+
+test('results are spoken through one polite live region as well as toasted', async () => {
+  const { env, toasts } = makeEnv({
+    fetchImpl: async () => ({ ok: false, status: 500, json: async () => ({}) }),
+  });
+  env.setTimeout = (fn) => fn();
+  await env.WebPins.onCaptured(payload);
+  await flush();
+  const live = env.document.getElementById('wp-live');
+  assert.ok(live);
+  assert.equal(live.attrs.role, 'status');
+  assert.equal(live.attrs['aria-live'], 'polite');
+  assert.equal(live.textContent, toasts[toasts.length - 1]);
+  env.WebPins.onEvent && env.WebPins.onEvent({ type: 'error', code: 'element_missing' });
+  assert.equal(env.document.body.all((e) => e.id === 'wp-live').length, 1);
+});

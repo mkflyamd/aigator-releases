@@ -715,6 +715,7 @@ function _toolbarPushState() {
     pinMode: !!_webPinPicking && _webPinPicking === app,
     pinLabel: _webPinLabel,
     pinKind: _webPinKind,
+    pinAnnounce: _webPinAnnounce,
   };
   try {
     toolbarWc.send('toolbar:state', state);
@@ -1062,6 +1063,7 @@ const _customAppIds = new Set();
 let _webPinPicking = null;
 let _webPinLabel = '';
 let _webPinKind = '';
+let _webPinAnnounce = '';
 const _sendToGator = (channel, payload) => {
   if (gatorView && !gatorView.webContents.isDestroyed()) {
     gatorView.webContents.send(channel, payload);
@@ -1073,11 +1075,14 @@ const _webPin = require('./web-pin').createWebPin({
     return pane && pane.view && !pane.view.webContents.isDestroyed() ? pane.view.webContents : null;
   },
   isPaneVisible: (appId) => activeExternalApp === appId,
-  onState: ({ appId, picking, label, kind }) => {
+  onState: ({ appId, picking, label, kind, announce }) => {
     _webPinPicking = picking ? appId : null;
     _webPinLabel = picking ? label : '';
     _webPinKind = picking ? kind || '' : '';
+    // Sent with one push only, so later state pushes do not repeat the announcement.
+    _webPinAnnounce = announce || '';
     _toolbarPushState();
+    _webPinAnnounce = '';
   },
   onCaptured: (payload) => _sendToGator('web-pin:captured', payload),
   onError: (err) => _sendToGator('web-pin:event', { type: 'error', ...err }),
@@ -4909,7 +4914,20 @@ ipcMain.on('toolbar:web-pin-view', (e) => {
 
 ipcMain.on('toolbar:web-pin-cancel', (e) => {
   if (!_isMainToolbar(e)) return;
-  _webPin.stop();
+  _webPin.stop(require('./web-pin').CANCELLED);
+});
+
+// Keys typed while the toolbar has focus during picking (the user pressed the Pin button, so
+// focus is here, not in the page). The page path is handled by before-input-event in web-pin.js.
+ipcMain.on('toolbar:web-pin-key', (e, input) => {
+  if (!_isMainToolbar(e) || !_webPinPicking || !input || typeof input !== 'object') return;
+  _webPin.key({
+    key: String(input.key || ''),
+    shift: input.shift === true,
+    control: input.control === true,
+    alt: input.alt === true,
+    meta: input.meta === true,
+  });
 });
 
 ipcMain.handle('web-pin:recapture', (e, appId, locator, url) => {

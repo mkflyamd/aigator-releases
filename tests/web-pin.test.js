@@ -112,7 +112,9 @@ test('pick flow captures the clicked element after hiding the highlight', async 
   const wc = fakeWc();
   const { wp, events } = harness(wc);
   assert.deepStrictEqual(await wp.start('custom-x'), { ok: true });
-  assert.deepStrictEqual(events.states.at(-1), { appId: 'custom-x', picking: true, label: '' });
+  const first = events.states.at(-1);
+  assert.deepStrictEqual([first.appId, first.picking, first.label], ['custom-x', true, '']);
+  assert.match(first.announce, /Tab.*Enter.*Escape/);
   wc.debugger.emit('message', {}, 'Overlay.inspectNodeRequested', { backendNodeId: 5 });
   await waitFor(() => events.captured.length === 1);
   const c = events.captured[0];
@@ -298,7 +300,11 @@ test('recapture with several plausible elements asks for a re-pin instead of gue
     });
   const wc = fakeWc({ overrides: scanOverrides([twin(0, 400), twin(1, 900)]) });
   const { wp } = harness(wc);
-  const r = await wp.recapture('custom-x', { ...LOCATOR, testId: '', role: '', name: '' }, 'https://a.com/r/1');
+  const r = await wp.recapture(
+    'custom-x',
+    { ...LOCATOR, testId: '', role: '', name: '' },
+    'https://a.com/r/1',
+  );
   assert.deepStrictEqual(r, { status: 'element_ambiguous' });
   assert.ok(!wc.sent.includes('Page.captureScreenshot'));
 });
@@ -559,4 +565,138 @@ test('a destroyed pane is not asked to remove the pointer', async () => {
   wc.emit('destroyed');
   await wp.stop();
   assert.deepStrictEqual(wc.css.removed, []);
+});
+
+// ---- keyboard selection ----
+function keyboardWc(steps) {
+  const queue = [...steps];
+  const log = [];
+  const wc = fakeWc({
+    overrides: {
+      'Runtime.callFunctionOn': (p) => {
+        if (p.functionDeclaration.includes('stepInPage')) {
+          log.push(p.arguments[0].value);
+          return queue.shift() || { result: { subtype: 'null', value: null } };
+        }
+        if (p.functionDeclaration.includes('labelInPage'))
+          return {
+            result: { value: JSON.stringify({ name: 'Item ' + p.objectId, kind: 'Chart' }) },
+          };
+        return { result: { value: INFO } };
+      },
+      'Runtime.evaluate': (p) => {
+        if (p.expression.includes('stepInPage')) {
+          log.push(JSON.parse(p.expression.match(/\.call\(null, ("[a-z]+")\)/)[1]));
+          return queue.shift() || { result: { value: null } };
+        }
+        return { result: { value: PAGE } };
+      },
+      'DOM.describeNode': (p) => ({ node: { backendNodeId: 40 + Number(p.objectId.slice(1)) } }),
+    },
+  });
+  wc.stepLog = log;
+  return wc;
+}
+
+function press(wc, key, extra = {}) {
+  let prevented = false;
+  wc.emit(
+    'before-input-event',
+    {
+      preventDefault() {
+        prevented = true;
+      },
+    },
+    { type: 'keyDown', key, ...extra },
+  );
+  return () => prevented;
+}
+
+test('Tab highlights the next element, announces it and keeps the key from the page', async () => {
+  const wc = keyboardWc([{ result: { objectId: 'e1' } }]);
+  const { wp, events } = harness(wc);
+  await wp.start('custom-x');
+  const prevented = press(wc, 'Tab');
+  await waitFor(() => events.states.some((s) => s.announce === 'Item e1, Chart'));
+  assert.ok(prevented());
+  assert.ok(wc.sent.includes('Overlay.highlightNode'));
+  assert.strictEqual(wc.params['Overlay.highlightNode'].objectId, 'e1');
+  assert.strictEqual(events.captured.length, 0);
+});
+
+test('arrow keys walk to the outer and inner element from the current one', async () => {
+  const wc = keyboardWc([
+    { result: { objectId: 'e1' } },
+    { result: { objectId: 'e2' } },
+    { result: { objectId: 'e3' } },
+  ]);
+  const { wp, events } = harness(wc);
+  await wp.start('custom-x');
+  press(wc, 'Tab');
+  press(wc, 'ArrowUp');
+  press(wc, 'ArrowDown');
+  await waitFor(() => events.states.some((s) => s.announce === 'Item e3, Chart'));
+  assert.deepStrictEqual(wc.stepLog, ['next', 'parent', 'child']);
+});
+
+test('Shift+Tab goes backwards and other modified keys are left to the page', async () => {
+  const wc = keyboardWc([{ result: { objectId: 'e1' } }]);
+  const { wp, events } = harness(wc);
+  await wp.start('custom-x');
+  assert.ok(!press(wc, 'Tab', { control: true })());
+  assert.ok(!press(wc, 'a')());
+  assert.ok(press(wc, 'Tab', { shift: true })());
+  await waitFor(() => events.states.some((s) => s.announce === 'Item e1, Chart'));
+  assert.deepStrictEqual(wc.stepLog, ['prev']);
+});
+
+test('Tab with nowhere to go announces it and keeps the previous highlight', async () => {
+  const wc = keyboardWc([]);
+  const { wp, events } = harness(wc);
+  await wp.start('custom-x');
+  press(wc, 'Tab');
+  await waitFor(() => events.states.some((s) => s.announce === 'No more elements.'));
+  assert.ok(!wc.sent.includes('Overlay.highlightNode'));
+});
+
+test('Enter pins the highlighted element and uses the same capture as a click', async () => {
+  const wc = keyboardWc([{ result: { objectId: 'e7' } }]);
+  const { wp, events } = harness(wc);
+  await wp.start('custom-x');
+  press(wc, 'Tab');
+  press(wc, 'Enter');
+  await waitFor(() => events.captured.length === 1);
+  assert.strictEqual(wc.params['DOM.describeNode'].objectId, 'e7');
+  assert.strictEqual(wc.params['DOM.resolveNode'].backendNodeId, 47);
+  assert.strictEqual(events.captured[0].aria_label, 'Revenue');
+  await waitFor(() => !wc.debugger.isAttached());
+});
+
+test('Enter with nothing highlighted pins nothing and says so', async () => {
+  const wc = keyboardWc([]);
+  const { wp, events } = harness(wc);
+  await wp.start('custom-x');
+  press(wc, 'Enter');
+  await waitFor(() => events.states.some((s) => /Nothing highlighted/.test(s.announce || '')));
+  assert.strictEqual(events.captured.length, 0);
+  assert.ok(wc.debugger.isAttached());
+});
+
+test('the key method serves keys typed in the toolbar and ignores them when not picking', async () => {
+  const wc = keyboardWc([{ result: { objectId: 'e1' } }]);
+  const { wp, events } = harness(wc);
+  assert.strictEqual(wp.key({ key: 'Tab' }), false);
+  await wp.start('custom-x');
+  assert.strictEqual(wp.key({ key: 'Tab' }), true);
+  assert.strictEqual(wp.key({ key: 'x' }), false);
+  await waitFor(() => events.states.some((s) => s.announce === 'Item e1, Chart'));
+});
+
+test('cancelling by Escape announces it', async () => {
+  const wc = fakeWc();
+  const { wp, events } = harness(wc);
+  await wp.start('custom-x');
+  press(wc, 'Escape');
+  await waitFor(() => events.states.at(-1).picking === false);
+  assert.strictEqual(events.states.at(-1).announce, 'Pin mode cancelled.');
 });
