@@ -88,7 +88,7 @@ assert.ok(
   'post-stream pin respects the hold',
 );
 assert.ok(
-  /const doSend = async \(overridePayload\) => \{\s*_userScrolledUp = false;\s*_gatorWidgetRevealHold = false;/.test(
+  /const doSend = async \(overridePayload\) => \{(?:\s*_queuedUnsent = false;|\s*_doSendLive\.add\(requestTabId\);)*\s*_userScrolledUp = false;\s*_gatorWidgetRevealHold = false;/.test(
     src,
   ),
   'doSend clears the hold',
