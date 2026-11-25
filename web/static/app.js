@@ -8775,6 +8775,12 @@ function _requestTypedSubmit() {
     _enterSubmit = false;
   }
 }
+// An open @, / or pin dropdown would make the queue refuse the message, so the Queue pill closes it first.
+function _closeComposerDropdowns() {
+  closeMentionDropdown();
+  closePinDropdown();
+  closeChannelDropdown();
+}
 function _onComposerButtonClick(e) {
   const stopBtn = document.getElementById('composer-stop-btn');
   const onStopBtn = !!stopBtn && !stopBtn.hidden && stopBtn.contains(e.target);
@@ -8783,6 +8789,7 @@ function _onComposerButtonClick(e) {
     _shouldStopFromClick(e, sendBtn, sendBtn.getBoundingClientRect(), streaming);
   if (!onStopBtn && mode === 'queue' && onSendBtn(true)) {
     e.preventDefault();
+    _closeComposerDropdowns();
     _requestTypedSubmit();
     return;
   }
@@ -16598,9 +16605,12 @@ form.addEventListener('submit', async (e) => {
           : '';
         if (queuedSendId) {
           // A refused send (409) leaves the message queued, so a retry keeps its id; any other answer spent it.
-          if (_queuePostSettled(requestTabId, postRes.status, errCode)) {
+          const pausedQueue = postRes.status === 409 && errCode === 'queue_paused';
+          if (_queuePostSettled(requestTabId, postRes.status, errCode) || pausedQueue) {
             _queuedUnsent = true;
             _discardQueuedAttempt();
+            // The message stays queued, so Resume sends it with its own bubble: say why now without leaving one here.
+            if (pausedQueue) _showConnectivityToast(_queueRefusalMessage(postRes.status, errCode), 'warn');
             _streamOver = true;
             if (_activeTabId === requestTabId) {
               _isStreaming = false;
@@ -16630,6 +16640,7 @@ form.addEventListener('submit', async (e) => {
         } else {
           _detachStop();
         }
+        _doSendLive.delete(requestTabId);
         return;
       }
 

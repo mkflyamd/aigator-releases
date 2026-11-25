@@ -295,7 +295,7 @@ const count = (calls, what) => calls.filter((c) => c === what).length;
   // composer clears. (The real click handler, _requestTypedSubmit and _queueComposerMessage run against stubs; the
   // form's submit handler is stood in for by its first routing rule: a typed submit while a reply runs is queued.)
   {
-    const run = async ({ text = 'hello', images = [], chips = [], clicks = 1, target = 'send' }) => {
+    const run = async ({ text = 'hello', images = [], chips = [], clicks = 1, target = 'send', dropdown = false }) => {
       const posts = [];
       const resets = [];
       let stops = 0;
@@ -314,6 +314,7 @@ const count = (calls, what) => calls.filter((c) => c === what).length;
       };
       const stopBtn = { hidden: false, contains: (t) => t === 'stop' };
       const form = { requestSubmit: () => ctx._queueComposerMessage() };
+      let closed = 0;
       const ctx = {
         window: {},
         crypto: { randomUUID: () => `id-${posts.length}` },
@@ -324,9 +325,19 @@ const count = (calls, what) => calls.filter((c) => c === what).length;
         _aigatorImages: images,
         _queueComposing: new Set(),
         _slashDropdown: null,
-        _mentionDropdown: null,
+        _mentionDropdown: dropdown ? {} : null,
         _pinDropdown: null,
         _channelDropdown: null,
+        closeMentionDropdown: () => {
+          closed++;
+          ctx._mentionDropdown = null;
+        },
+        closePinDropdown: () => {
+          ctx._pinDropdown = null;
+        },
+        closeChannelDropdown: () => {
+          ctx._channelDropdown = null;
+        },
         _getInputText: () => input.textContent,
         buildFinalMessage: (t) => t,
         _showConnectivityToast: () => {},
@@ -357,6 +368,7 @@ const count = (calls, what) => calls.filter((c) => c === what).length;
           '_shouldStopFromClick',
           '_requestTypedSubmit',
           '_onComposerButtonClick',
+          '_closeComposerDropdowns',
           '_queueComposerMessage',
         ]
           .map(functionSource)
@@ -373,7 +385,7 @@ const count = (calls, what) => calls.filter((c) => c === what).length;
         });
       }
       await new Promise((resolve) => setImmediate(resolve));
-      return { posts, stops, prevented, input, ctx, resets };
+      return { posts, stops, prevented, input, ctx, resets, closed };
     };
     const queued = await run({});
     assert.strictEqual(queued.posts.length, 1, 'a click on the Queue pill enqueues exactly once');
@@ -396,6 +408,10 @@ const count = (calls, what) => calls.filter((c) => c === what).length;
     const split = await run({ target: 'stop' });
     assert.strictEqual(split.stops, 1, 'the separate Stop button stops');
     assert.strictEqual(split.posts.length, 0, 'and queues nothing');
+    const open = await run({ dropdown: true });
+    assert.strictEqual(open.posts.length, 1, 'a click on the Queue pill queues even with a mention dropdown open');
+    assert.strictEqual(open.closed, 1, 'the dropdown is closed first');
+    assert.strictEqual(open.stops, 0);
     const slash = await run({ text: '/help' });
     assert.strictEqual(slash.posts.length, 0, 'a slash command is not queued');
     assert.strictEqual(slash.stops, 1, 'so the button is Stop, not Queue');
@@ -448,6 +464,59 @@ const count = (calls, what) => calls.filter((c) => c === what).length;
       'stop',
       'a Jira attachment is refused',
     );
+  }
+
+  // The failsafe status: after the retry cap it shows once with Send now and Clear, and Send now starts afresh.
+  {
+    const w = world({ heads: Array(20).fill({ item: { id: 'a' } }) });
+    const el = () => ({
+      children: [],
+      dataset: {},
+      listeners: {},
+      setAttribute() {},
+      append(...n) {
+        this.children.push(...n);
+      },
+      appendChild(n) {
+        this.children.push(n);
+        return n;
+      },
+      replaceChildren(...n) {
+        this.children = n;
+      },
+      addEventListener(type, fn) {
+        this.listeners[type] = fn;
+      },
+    });
+    const row = el();
+    w.ctx.document = { getElementById: () => row, createElement: el };
+    w.ctx._queueChip = () => el();
+    vm.runInContext(
+      ['_renderQueue', '_queueButton'].map(functionSource).join('\n') + '\nlet _queueRenderTimer = 0;',
+      w.ctx,
+    );
+    await w.ctx._queueDrain('tab1');
+    let guard = 0;
+    for (;;) {
+      w.ctx._queuePostSettled('tab1', 409, 'turn_in_progress');
+      if (!w.pending().length || guard++ > 20) break;
+      await w.fire(0);
+    }
+    const bars = () => row.children.filter((c) => c.dataset && c.dataset.queueStatus);
+    assert.strictEqual(bars().length, 1, 'the status bar shows once');
+    assert.strictEqual(bars()[0].dataset.queueStatus, 'failsafe', 'and it is the failsafe, as soon as the cap is hit');
+    const buttons = () => bars()[0].children.filter((c) => c.listeners && c.listeners.click);
+    assert.deepStrictEqual(buttons().map((b) => b.textContent), ['Send now', 'Clear']);
+    w.ctx._renderQueue();
+    assert.strictEqual(bars().length, 1, 'rendering again does not stack a second bar');
+    const submitsBefore = count(w.calls, 'submit:a');
+    buttons()[0].listeners.click();
+    await new Promise((r) => setImmediate(r));
+    assert.strictEqual(count(w.calls, 'submit:a'), submitsBefore + 1, 'Send now tries again');
+    assert(!w.ctx._queueRearms.has('tab1'), 'and the retry count is reset');
+    w.ctx._queuePostSettled('tab1', 409, 'turn_in_progress');
+    assert.strictEqual(w.ctx._queueRearms.get('tab1').tries, 1, 'the new round starts from the first retry');
+    assert.strictEqual(w.pending().length, 1, 'with a retry scheduled again');
   }
 
   // Markup: Stop has its label, Queue has its own icon and word, idle Send stays a plain arrow.
