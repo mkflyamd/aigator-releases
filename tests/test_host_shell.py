@@ -321,9 +321,19 @@ def _start_and_hold(client, csrf, tmp_path, monkeypatch):
 def test_stopping_a_running_command_pauses_the_queue(client, csrf, tmp_path, monkeypatch, queue):
     req, release = _start_and_hold(client, csrf, tmp_path, monkeypatch)
     queue.enqueue("tab-1", "a", {"text": "next", "images": []})
+    supervisor = get_supervisor()
+    real_cancel = supervisor.cancel
+    paused_at_cancel = []
+
+    def spy(*args, **kwargs):
+        paused_at_cancel.append(queue.snapshot("tab-1")["paused"])
+        return real_cancel(*args, **kwargs)
+
+    monkeypatch.setattr(supervisor, "cancel", spy)
     r = client.post(f"/api/host-shell/{req.id}/cancel", json={"context_id": "tab-1"}, headers=csrf)
     release.set()
     assert r.status_code == 200 and r.json()["status"] == "cancelled"
+    assert paused_at_cancel == [True], "the queue is paused before the run is cancelled, so no drain can slip in"
     snap = queue.snapshot("tab-1")
     assert snap["paused"] and snap["reason"] == "command_stopped"
     assert [i["id"] for i in snap["items"]] == ["a"]
