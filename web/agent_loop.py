@@ -1162,7 +1162,7 @@ def _make_tool_runner(execute_tool, COM_BOUND_TOOLS, TOOL_STATUS, _tool_toast, _
                          "sensitive": data_sources.sensitivity_markers(_draft_data)},
             })
         elif not _is_error:
-            _read = data_sources.source_for_call(tc.name, tc.inputs)
+            _read = data_sources.read_source_for_call(tc.name, tc.inputs)
             if _read is not None and _read.flow_id:
                 _sources_read.add(_read.label)
                 _source_ids.add(_read.flow_id)
