@@ -49,6 +49,10 @@ _WEB_TOOLS = frozenset({"fetch_webpage", "web_search"})
 # Page content from a browser run: untrusted, but gated by the browser's own per-call card, not a source card.
 _BROWSER_TOOLS = frozenset({"browser_task", "browser_navigate", "browser_search"})
 _DENY_WINDOW_S = 10.0
+# A web pin is page content the user pinned themselves, so reading it needs no card; it still counts as website
+# content for blocked_data_flows and is scrubbed like any other web content.
+_WEBPIN_TOOLS = frozenset({"read_web_pin", "recapture_web_pin"})
+WEBPIN_SOURCE = Source(key="webpin", label="a pinned web view", kind="web", flow_id="web")
 
 
 def _data_source(prefix: str, label: str, flow_id: str, gate: str | None, grouped: bool = False) -> Source:
@@ -147,8 +151,17 @@ def source_for_call(tool_name: str, inputs: dict | None) -> Source | None:
     return _native_source(tool_name, inputs) or _mcp_source(tool_name, inputs)
 
 
+def read_source_for_call(tool_name: str, inputs: dict | None) -> Source | None:
+    """The source a finished call read from, for blocked_data_flows tracking. Unlike source_for_call this includes
+    sources that never raise an approval card."""
+    if tool_name in _WEBPIN_TOOLS:
+        return WEBPIN_SOURCE
+    return source_for_call(tool_name, inputs)
+
+
 def is_untrusted(tool_name: str) -> bool:
-    return tool_name in _WEB_TOOLS or tool_name in _BROWSER_TOOLS or _native_source(tool_name) is not None or _mcp_source(tool_name) is not None
+    return (tool_name in _WEB_TOOLS or tool_name in _BROWSER_TOOLS or tool_name in _WEBPIN_TOOLS
+            or _native_source(tool_name) is not None or _mcp_source(tool_name) is not None)
 
 
 def mark_direct_data(tool_name: str, data):
