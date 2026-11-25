@@ -307,7 +307,9 @@ const buttonsOf = (env) => walk(env.messages).filter((e) => e.tag === 'button');
   env7.tickClock(245);
   assert.match(textOf(env7), /Expires in 0:55/);
   assert(
-    walk(env7.messages).some((e) => /Expires in/.test(e.textContent) && e.attrs['aria-hidden'] === 'true'),
+    walk(env7.messages).some(
+      (e) => /Expires in/.test(e.textContent) && e.attrs['aria-hidden'] === 'true',
+    ),
     'countdown is aria-hidden',
   );
 
@@ -387,7 +389,10 @@ const buttonsOf = (env) => walk(env.messages).filter((e) => e.tag === 'button');
   slow.ctx._showSandboxApproval(data, 'tab-1');
   const slowCancel = buttonsOf(slow)[1].listeners.click(click);
   await tick();
-  assert(buttonsOf(slow).every((b) => b.disabled), 'both buttons off while cancelling');
+  assert(
+    buttonsOf(slow).every((b) => b.disabled),
+    'both buttons off while cancelling',
+  );
   settle();
   await slowCancel;
   await tick();
