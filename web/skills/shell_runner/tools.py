@@ -726,13 +726,18 @@ _LOOKUP_COMMAND = re.compile(r"^\s*(?:where(?:\.exe)?|which|command\s+-v|get-com
 
 
 def _exit_note(command: str, exit_code, stdout: str, stderr: str) -> str | None:
-    """A caution the model must weigh before reading an exit code as success or failure."""
+    """Facts about a non-zero exit, with no verdict on whether a server the command started is alive."""
     if not exit_code:
         return None
     url = _LOCAL_URL.search(f"{stdout}\n{stderr}")
     if url:
-        return (f"The command printed {url.group(0)} but exited with code {exit_code}, so the server it "
-                "started is probably not running. Verify the address responds before telling the user it is ready.")
+        raw = exit_code & 0xFFFFFFFF
+        note = (f"The command printed {url.group(0)} and exited with code {exit_code} (0x{raw:08X}). "
+                "The exit code describes the command process only; it does not show whether anything "
+                "is listening at that address.")
+        if raw >= 0xC0000000:
+            note += " A code in the 0xC0000000 range is a Windows status code."
+        return note
     if exit_code == 1 and _LOOKUP_COMMAND.match(command or ""):
         return "Exit code 1 from a lookup command means the program was not found; it is not a failure of the task."
     return None

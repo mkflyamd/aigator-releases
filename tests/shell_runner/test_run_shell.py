@@ -201,14 +201,40 @@ def test_tool_contract():
     assert validate_tool_contract(mod, "shell_runner") is True
 
 
-def test_failed_command_that_printed_a_local_address_says_the_server_is_unverified():
+def test_failed_command_that_printed_a_local_address_reports_facts_only():
     from skills.shell_runner.tools import _tool_run_shell
     result = _tool_run_shell(
         command="echo Viewer at http://127.0.0.1:4173/p/demo/ && exit 3")
     assert result["exit_code"] == 3
     note = result["exit_note"]
-    assert "http://127.0.0.1:4173/p/demo/" in note and "exited with code 3" in note
-    assert "verify" in note.lower()
+    assert "http://127.0.0.1:4173/p/demo/" in note
+    assert "exited with code 3 (0x00000003)" in note
+
+
+def test_exit_note_never_gives_a_verdict_about_a_server():
+    from skills.shell_runner.tools import _exit_note
+    for code in (1, 3, -1073740791, 0xC0000409):
+        note = _exit_note("motlab edit", code, "Viewer at http://127.0.0.1:4173/", "").lower()
+        for word in ("probably", "crashed", "not running", "succeeded", "is ready"):
+            assert word not in note, (code, word, note)
+
+
+def test_exit_note_gives_hex_for_negative_windows_codes():
+    from skills.shell_runner.tools import _exit_note
+    note = _exit_note("motlab edit", -1073740791, "http://localhost:4173/", "")
+    assert "0xC0000409" in note
+
+
+def test_exit_note_flags_windows_status_range_without_calling_it_a_crash():
+    from skills.shell_runner.tools import _exit_note
+    note = _exit_note("motlab edit", 0xC0000409, "http://localhost:4173/", "")
+    assert "Windows status code" in note
+    assert "crash" not in note.lower()
+
+
+def test_exit_note_for_small_code_has_no_status_code_flag():
+    from skills.shell_runner.tools import _exit_note
+    assert "Windows status code" not in _exit_note("x", 3, "http://localhost:1/", "")
 
 
 def test_successful_command_with_a_local_address_has_no_exit_note():
