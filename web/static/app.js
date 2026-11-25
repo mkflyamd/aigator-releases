@@ -8720,16 +8720,23 @@ function _composerButtonMode(streaming, hasText) {
   if (!streaming) return 'send';
   return hasText ? 'queue' : 'stop';
 }
-function _composerHasText() {
-  return (document.getElementById('chat-input')?.textContent || '').trim().length > 0;
+// Text, an attached file or any chip is something Enter would queue, so it decides Queue versus Stop.
+function _composerHasContent() {
+  const box = document.getElementById('chat-input');
+  if (!box) return false;
+  return (
+    (box.textContent || '').trim().length > 0 ||
+    _aigatorImages.length > 0 ||
+    box.querySelector('.inline-chip, .pin-ref-chip, [data-file-path]') !== null
+  );
 }
 document.addEventListener(
   'click',
   (e) => {
     if (!_activeStops.size) return;
-    const stopBtn = document.getElementById('stop-btn');
+    const stopBtn = document.getElementById('composer-stop-btn');
     const onStopBtn = !!stopBtn && !stopBtn.hidden && stopBtn.contains(e.target);
-    const mode = _composerButtonMode(sendBtn.classList.contains('is-streaming'), _composerHasText());
+    const mode = _composerButtonMode(sendBtn.classList.contains('is-streaming'), _composerHasContent());
     if (
       !onStopBtn &&
       !_shouldStopFromClick(e, sendBtn, sendBtn.getBoundingClientRect(), mode === 'stop')
@@ -9372,12 +9379,12 @@ function _syncComposerButton() {
   const slot = document.getElementById('chat-send-slot');
   const btn = document.getElementById('send-btn');
   if (!slot || !btn) return;
-  const mode = _composerButtonMode(btn.classList.contains('is-streaming'), _composerHasText());
+  const mode = _composerButtonMode(btn.classList.contains('is-streaming'), _composerHasContent());
   slot.dataset.mode = mode;
   btn.setAttribute('aria-label', { send: 'Send message', stop: 'Stop reply', queue: 'Queue message' }[mode]);
   if (mode === 'send') btn.removeAttribute('title');
   else btn.title = mode === 'stop' ? 'Stop reply' : 'Queue this message. It sends when the reply finishes.';
-  const stop = document.getElementById('stop-btn');
+  const stop = document.getElementById('composer-stop-btn');
   if (stop) stop.hidden = mode !== 'queue';
   _updatePlaceholder();
 }
@@ -9385,6 +9392,8 @@ new MutationObserver(_syncComposerButton).observe(sendBtn, {
   attributes: true,
   attributeFilter: ['class'],
 });
+// Chips are added and removed without an input event; the button follows them.
+new MutationObserver(_syncComposerButton).observe(input, { childList: true, subtree: true });
 
 input.addEventListener('input', () => {
   _updateSendSlot();
@@ -15623,6 +15632,7 @@ function _renderAigatorPreviews() {
   previews.innerHTML = '';
   previews.classList.toggle('hidden', _aigatorImages.length === 0);
   attachBtn?.classList.toggle('has-files', _aigatorImages.length > 0);
+  _syncComposerButton();
 
   _aigatorImages.forEach((img, i) => {
     const wrap = document.createElement('div');

@@ -225,9 +225,9 @@ const count = (calls, what) => calls.filter((c) => c === what).length;
         sendBtn,
         document: {
           addEventListener: (_type, fn) => (handler = fn),
-          getElementById: (id) => (id === 'stop-btn' ? stopBtn : null),
+          getElementById: (id) => (id === 'composer-stop-btn' ? stopBtn : null),
         },
-        _composerHasText: () => hasText,
+        _composerHasContent: () => hasText,
         _shouldStopFromClick: (e, _btn, _rect, streaming) => streaming && e.inside,
       };
       vm.createContext(ctx);
@@ -238,6 +238,53 @@ const count = (calls, what) => calls.filter((c) => c === what).length;
     assert.strictEqual(run(true, false), false, 'a click on Queue does not stop the reply');
     assert.strictEqual(run(false, false), true, 'a click on Stop (empty composer) stops');
     assert.strictEqual(run(true, true), true, 'the separate Stop button stops');
+  }
+
+  // Attachments and chips count as content: with a file attached and an empty box the button is Queue, not Stop.
+  {
+    const hasContent = (box) => {
+      const ctx = {
+        _aigatorImages: box.images || [],
+        document: {
+          getElementById: () => ({
+            textContent: box.text || '',
+            querySelector: (selector) =>
+              (box.chips || []).some((c) => selector.split(',').map((x) => x.trim()).includes(c))
+                ? {}
+                : null,
+          }),
+        },
+      };
+      vm.createContext(ctx);
+      vm.runInContext(`${functionSource('_composerHasContent')}
+${functionSource('_composerButtonMode')}`, ctx);
+      return { has: ctx._composerHasContent(), mode: ctx._composerButtonMode(true, ctx._composerHasContent()) };
+    };
+    assert.strictEqual(hasContent({}).mode, 'stop', 'an empty composer while a reply runs is Stop');
+    assert.strictEqual(hasContent({ text: '  ' }).mode, 'stop', 'whitespace is empty');
+    assert.strictEqual(hasContent({ text: 'hi' }).mode, 'queue');
+    assert.strictEqual(hasContent({ images: [{ name: 'a.png' }] }).mode, 'queue', 'an attached file is content');
+    assert.strictEqual(hasContent({ chips: ['[data-file-path]'] }).mode, 'queue', 'a file chip is content');
+    assert.strictEqual(hasContent({ chips: ['.inline-chip'] }).mode, 'queue', 'an inline chip is content');
+    assert.strictEqual(hasContent({ chips: ['.pin-ref-chip'] }).mode, 'queue', 'a pin reference chip is content');
+  }
+
+  // Markup: Stop has its label, Queue has its own icon and word, idle Send stays a plain arrow.
+  {
+    const html = fs.readFileSync(path.join(__dirname, '..', 'web', 'static', 'index.html'), 'utf8');
+    assert.strictEqual(
+      (html.match(/id="composer-stop-btn"/g) || []).length,
+      1,
+      'the id is unique (the server panel has its own stop-btn)',
+    );
+    const stop = html.match(/<button[^>]*id="composer-stop-btn"[^>]*>/);
+    assert(stop, 'separate Stop button found');
+    assert.match(stop[0], /title="Stop reply"/, 'the separate Stop button has a title');
+    assert.match(stop[0], /aria-label="Stop reply"/, 'the separate Stop button has an aria-label');
+    const send = html.slice(html.indexOf('id="send-btn"'), html.indexOf('<!-- /#chat-send-slot -->'));
+    assert.match(send, /class="queue-icon"/, 'the send button carries a queue icon');
+    assert.match(send, /class="queue-label"[^>]*>\s*Queue\s*</, 'the send button carries the word Queue');
+    assert.match(send, /class="send-icon/, 'idle Send keeps its arrow');
   }
 
   console.log('queue reliability: ok');
