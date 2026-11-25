@@ -48,6 +48,10 @@ class MessageQueue:
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS queue_state (context_id TEXT PRIMARY KEY, paused INTEGER NOT NULL, "
                 "reason TEXT NOT NULL)")
+            # Whatever is still queued when the backend starts was typed in an earlier run; hold it for the user.
+            conn.execute(
+                "INSERT OR IGNORE INTO queue_state (context_id, paused, reason) "
+                "SELECT DISTINCT context_id, 1, 'restored' FROM queue")
             self._ready = True
         return conn
 

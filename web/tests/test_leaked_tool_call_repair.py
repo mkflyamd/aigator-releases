@@ -67,3 +67,29 @@ def test_leaked_call_twice_stalls_instead_of_looping():
 def test_plain_text_is_not_treated_as_a_leak():
     assert not tool_repair.leaked_tool_call("I'll schedule that for Friday at noon.")
     assert tool_repair.leaked_tool_call(LEAKED)
+
+
+def _run_with_task(provider):
+    import shared
+
+    task_id = "t-leaked-repair"
+    shared.chat_task_store.create_task(task_id, "ctx-leaked-repair")
+
+    async def go():
+        async for _ in agent_loop._single_agent_loop(
+            provider, "claude-sonnet-5", "sys", [{"role": "user", "content": "hi"}], [],
+            lambda *a, **k: {}, set(), {}, lambda *a, **k: None, "safe",
+            context_id="ctx-leaked-repair", task_id=task_id,
+        ):
+            pass
+
+    asyncio.run(go())
+    return shared.chat_task_store.had_error(task_id)
+
+
+def test_a_repaired_leaked_call_does_not_flag_the_turn_as_failed():
+    assert _run_with_task(_ScriptedProvider([LEAKED, "Scheduled."])) is False
+
+
+def test_a_leaked_call_that_stalls_flags_the_turn_as_failed():
+    assert _run_with_task(_ScriptedProvider([LEAKED, LEAKED])) is True

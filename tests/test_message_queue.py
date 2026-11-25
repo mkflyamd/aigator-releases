@@ -130,6 +130,7 @@ def test_the_queue_survives_a_restart(tmp_path):
     first = MessageQueue(tmp_path / "queue.db")
     first.enqueue("c", "a", _msg("kept"))
     again = MessageQueue(tmp_path / "queue.db")
+    again.resume("c")
     assert again.head("c")["payload"]["text"] == "kept"
 
 
@@ -273,7 +274,7 @@ async def test_a_failed_turn_pauses_the_queue_only_when_something_is_waiting(que
 
 # ── error turns pause the queue ───────────────────────────────────────────────
 
-@pytest.mark.parametrize("outcome", ["llm_error", "stalled", "leaked_tool_call", "max_iterations", "planner_error"])
+@pytest.mark.parametrize("outcome", ["llm_error", "stalled", "max_iterations", "planner_error"])
 async def test_a_turn_that_ends_in_an_error_outcome_is_flagged(outcome):
     import agent_loop
 
@@ -284,7 +285,7 @@ async def test_a_turn_that_ends_in_an_error_outcome_is_flagged(outcome):
     assert shared.chat_task_store.had_error(task_id) is True
 
 
-@pytest.mark.parametrize("outcome", ["end_turn", "tool_round", "terminal_tool", "ask_user"])
+@pytest.mark.parametrize("outcome", ["end_turn", "tool_round", "terminal_tool", "ask_user", "leaked_tool_call"])
 async def test_a_turn_that_ends_normally_is_not_flagged(outcome):
     import agent_loop
 
@@ -363,10 +364,38 @@ def test_the_head_waits_while_a_reply_runs_and_is_offered_once_it_is_stopped(que
     client = api
     task_id = client.post("/api/chat", json={"message": "hello", "context_id": ctx}).json()["task_id"]
     queue.enqueue(ctx, "a", _msg("next"))
-    assert client.get("/api/queue/head", params={"context_id": ctx}).json()["item"] is None
+    waiting = client.get("/api/queue/head", params={"context_id": ctx}).json()
+    assert waiting["item"] is None and waiting["live"] is True
     client.post(f"/api/chat/{task_id}/cancel")
     client.post("/api/queue/resume", json={"context_id": ctx})
-    assert client.get("/api/queue/head", params={"context_id": ctx}).json()["item"]["id"] == "a"
+    offered = client.get("/api/queue/head", params={"context_id": ctx}).json()
+    assert offered["item"]["id"] == "a" and not offered.get("live")
+
+
+def test_the_head_reports_a_live_turn_until_it_is_marked_done(queue, api):
+    ctx = f"q-{uuid.uuid4().hex}"
+    task_id = f"t-{uuid.uuid4().hex}"
+    shared.chat_task_store.create_task(task_id, ctx)
+    queue.enqueue(ctx, "a", _msg("next"))
+    shared.chat_task_store.append_chunk(task_id, "data: [DONE]\n\n")
+    between = api.get("/api/queue/head", params={"context_id": ctx}).json()
+    assert between["item"] is None and between["live"] is True
+    shared.chat_task_store.mark_done(task_id)
+    after = api.get("/api/queue/head", params={"context_id": ctx}).json()
+    assert after["item"]["id"] == "a" and not after.get("live")
+
+
+def test_a_queue_that_survives_a_restart_comes_back_paused_and_never_sends_itself(tmp_path):
+    path = tmp_path / "queue.db"
+    before = MessageQueue(path)
+    before.enqueue("c", "a", _msg("typed yesterday"))
+    after = MessageQueue(path)
+    snap = after.snapshot("c")
+    assert snap["paused"] is True and snap["reason"] == "restored"
+    assert after.head("c") is None
+    after.resume("c")
+    assert after.head("c")["id"] == "a"
+    assert after.snapshot("c")["paused"] is False
 
 
 # ── what the queue keeps ──────────────────────────────────────────────────────

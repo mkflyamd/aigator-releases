@@ -43,11 +43,12 @@ def queue_snapshot(context_id: str):
 async def queue_head(context_id: str):
     """The next message to send, or null while the queue is paused or empty, or a reply is still running.
 
+    `live` tells the browser the null is only "not yet": the turn is still finishing, so ask again shortly.
     A reply the user just stopped does not count: it is being unwound, and the send that follows waits for it.
     """
     live = shared.chat_task_store.active_task_for(context_id)
     if live and not shared.chat_task_store.is_cancelled(live):
-        return {"ok": True, "item": None}
+        return {"ok": True, "item": None, "live": True}
     try:
         return {"ok": True, "item": await asyncio.to_thread(get_queue().head, context_id)}
     except QueueError as exc:

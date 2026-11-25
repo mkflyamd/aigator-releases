@@ -428,7 +428,7 @@ def _summarize_tool_calls(tool_calls: list, results: list | None = None) -> list
 
 # Turn-end outcomes that surface an error to the user; the message queue pauses behind them.
 _ERROR_OUTCOMES = frozenset({
-    "llm_error", "stalled", "leaked_tool_call", "max_iterations", "tool_configuration_error",
+    "llm_error", "stalled", "max_iterations", "tool_configuration_error",
     "empty_tool_use", "circuit_breaker", "planner_error", "budget_exceeded",
 })
 
