@@ -3,6 +3,7 @@ import pathlib
 import socket
 import sys
 import threading
+import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent.parent / "web"))
 
@@ -123,3 +124,63 @@ def test_a_name_that_resolves_off_loopback_is_refused(monkeypatch):
     url = "http://localhost:4173/"
     with pytest.raises(ProbeRefused, match="loopback"):
         probe(url, [url], blocked_ports=set())
+
+
+def test_when_the_backend_ports_cannot_be_read_nothing_is_probed(monkeypatch, server):
+    import psutil
+
+    def broken(*args, **kwargs):
+        raise psutil.AccessDenied(1)
+
+    monkeypatch.setattr(psutil, "Process", broken)
+    with pytest.raises(ProbeRefused, match="could not tell"):
+        probe_mod.backend_ports()
+    with pytest.raises(ProbeRefused, match="could not tell"):
+        probe(server + "/", [server + "/"])
+
+
+def test_an_ipv6_loopback_host_header_is_bracketed():
+    assert probe_mod._host_header("::1", 4173) == "[::1]:4173"
+    assert probe_mod._host_header("127.0.0.1", 4173) == "127.0.0.1:4173"
+    assert probe_mod._host_header("localhost", 80) == "localhost:80"
+
+
+@pytest.fixture
+def silent_server():
+    """Accepts connections and never answers."""
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen()
+    held = []
+    stop = threading.Event()
+
+    def accept():
+        listener.settimeout(0.2)
+        while not stop.is_set():
+            try:
+                held.append(listener.accept()[0])
+            except OSError:
+                continue
+
+    threading.Thread(target=accept, daemon=True).start()
+    yield f"http://127.0.0.1:{listener.getsockname()[1]}"
+    stop.set()
+    for conn in held:
+        conn.close()
+    listener.close()
+
+
+def test_a_server_that_never_answers_ends_at_the_total_deadline_not_the_socket_timeout(silent_server):
+    started = time.monotonic()
+    out = probe(silent_server + "/", [silent_server + "/"], blocked_ports=set(), total_seconds=0.6)
+    assert out["reached"] is False and out["error"] == "TimeoutError"
+    assert time.monotonic() - started < probe_mod.TIMEOUT_SECONDS - 1
+
+
+def test_a_stop_ends_a_probe_that_is_waiting_on_a_silent_server(silent_server):
+    cancel = probe_mod.ProbeCancel()
+    threading.Timer(0.3, cancel.cancel).start()
+    started = time.monotonic()
+    with pytest.raises(probe_mod.ProbeCancelled):
+        probe(silent_server + "/", [silent_server + "/"], blocked_ports=set(), cancel=cancel)
+    assert time.monotonic() - started < 3

@@ -56,3 +56,31 @@ def test_a_refused_start_shows_its_reason():
 def test_no_result_for_any_state_or_exit_uses_verdict_words(state, code):
     out = model_result(_record(state, code, _FACTS, reason="concurrency_cap"), {"stdout": "", "stderr": ""})
     assert not _VERDICT_WORDS.search(json.dumps(out)), out
+
+
+def _messages_in(path):
+    import ast
+
+    tree = ast.parse(pathlib.Path(path).read_text(encoding="utf-8"))
+    found = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and getattr(node.func, "id", getattr(node.func, "attr", "")) in (
+                "_shell_error", "ProbeRefused"):
+            found += [n.value for arg in node.args for n in ast.walk(arg)
+                      if isinstance(n, ast.Constant) and isinstance(n.value, str)]
+        if isinstance(node, ast.Assign) and any(getattr(t, "id", "").endswith("_MSG") for t in node.targets):
+            found += [n.value for n in ast.walk(node.value) if isinstance(n, ast.Constant) and isinstance(n.value, str)]
+    return found
+
+
+@pytest.mark.parametrize("path", ["web/skills/shell_runner/tools.py", "web/runs/probe.py"])
+def test_no_error_or_refusal_message_the_model_can_read_uses_verdict_words(path):
+    root = pathlib.Path(__file__).parent.parent.parent
+    messages = _messages_in(root / path)
+    assert messages, "the scan found no messages, so it checks nothing"
+    assert not [m for m in messages if _VERDICT_WORDS.search(m)]
+
+
+def test_a_run_with_no_exit_code_gets_no_abnormal_exit_note():
+    out = model_result(_record("timed_out", None, _FACTS), {})
+    assert "ports_opened" not in out.get("message", "")

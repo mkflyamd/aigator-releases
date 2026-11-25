@@ -41,7 +41,7 @@ def model_result(record: dict, result: dict | None) -> dict:
         note = f"The command did not start: {reason}."
     if exit_info:
         out["exit"] = {"code": exit_info.get("code"), "hex": exit_info.get("hex"), "class": exit_class(exit_info)}
-        if exit_info.get("code") != 0 and any(facts.get(k) for k in ("urls_seen", "ports_opened", "children_left")):
+        if exit_info.get("code") not in (0, None) and any(facts.get(k) for k in ("urls_seen", "ports_opened", "children_left")):
             note = (note + " " + _ABNORMAL_EXIT_NOTE).strip()
     if facts:
         out["facts"] = facts
