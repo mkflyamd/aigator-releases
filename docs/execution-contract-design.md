@@ -110,16 +110,16 @@ Read-only, no approval card. `urls_seen` is the allow-list, but it is attacker-i
 
 ## MCP calls
 
-Thin: each MCP tool call gets a `kind=mcp_call` record with server, tool, duration, timeout and state only. A timed-out or cancelled call becomes `abandoned`, not `cancelled`: the worker thread cannot be killed and the server may still finish the side effect. Send MCP `notifications/cancelled` best effort. Cap abandoned workers per server; at the cap mark the server unhealthy and stop dispatching. Own small PR after the sandboxed-path migration.
+Thin: each MCP tool call gets a `kind=mcp_call` record with server, tool, duration, timeout and state only. A timed-out or cancelled call becomes `abandoned`, not `cancelled`: the worker thread cannot be killed and the server may still finish the side effect. Send MCP `notifications/cancelled` best effort. Cap abandoned workers per server; at the cap mark the server unhealthy and stop dispatching. Release the pooled stdio client on every abandon, so a stuck worker ends and a late reply cannot reach a later call. MCP calls made through the draft-approve endpoint have no record or budget in v1: the user approved that call directly. Own small PR after the sandboxed-path migration.
 
 ## Message queue
 
 - Enter while a turn runs queues the message as a chip under the composer (edit, remove, "Send now" = Stop then send).
 - The queue is server-side, per tab/context, so reloads and a second window agree. Persist in the same sqlite store as RunRecord if cheap; otherwise a restart loses it.
 - One message is popped at a time under the per-context turn lock (atomic, so two windows cannot double-send). Drain only while a UI is attached; otherwise the message stays "queued, will send when you return".
-- Sends on `end_turn` or when the turn is parked on an unresolved approval card. A user Stop and an error turn pause the queue ("Queue paused · Resume · Clear").
+- Sends when a turn ends. While an approval card (host or permission) is unresolved the queue holds ("Waiting for your decision on the card") and drains once the card is resolved or expired; a queued send must never dismiss a card the user has not decided on. A user Stop and any turn that ended in an error pause the queue ("Queue paused · Resume · Clear").
 - A queued message is never approval for a pending card. Card expiry is unchanged (300 s default, 600 s for host cards, per registry entry).
-- Snapshot the full composer payload at enqueue (attachments, pasted images, model, skill pin, scoped skill), with a stored-size cap. Queue plain messages only: slash commands, card approvals and failover consent are not queueable.
+- Snapshot the message text and pasted images at enqueue, with a stored-size cap; model and skill pin are read from the tab when the message is sent. Queue plain messages only: slash commands, card approvals and failover consent are not queueable, and a composer holding chips that cannot be snapshotted (Jira attachment, pin references) is refused with a message rather than queued with the chips dropped.
 - Client-generated id per message makes double-Enter idempotent; once popped, a chip is not editable. Small fixed queue cap with a clear message.
 - Every queue POST/PUT/PATCH/DELETE route uses `dependencies=[Depends(verify_csrf)]`.
 - Prerequisite: a turn id and a single turn-lock owner per context (a turn parked on a card and a new turn on the same context must not both own it).
@@ -148,4 +148,4 @@ Each PR grows the conformance suite. `docs/shell-automation-workflows-design.md`
 
 ## Out of scope for this contract (separate fixes)
 
-Tool-routing bugs (shell_runner not offered under a locked skill, the thinking-last 400), unevidenced claims ("fictional data" with no leak check), platform shell mismatch (cmd.exe multi-line input), and the folder-grant size preflight (already guarded by df428715).
+Tool-routing bugs (shell_runner not offered under a locked skill, the thinking-last 400), unevidenced claims ("fictional data" with no leak check), platform shell mismatch (cmd.exe multi-line input), and the folder-grant size preflight (already guarded by df428715). Unsandboxed `run_shell(background=True)` bypasses `run_inline`, so it has no RunRecord or Stop; moving it onto the supervisor is a separate change.
