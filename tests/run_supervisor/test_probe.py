@@ -87,7 +87,7 @@ def test_a_closed_port_is_reported_not_raised():
 @pytest.mark.parametrize("url, why", [
     ("https://127.0.0.1:4173/", "Only http"),
     ("ftp://127.0.0.1:4173/", "Only http"),
-    ("http://user:pw@127.0.0.1:4173/", "user name"),
+    ("http://user:pw@127.0.0.1:4173/", "user name"),  # pragma: allowlist secret
     ("http://example.com:4173/", "127.0.0.1"),
     ("http://192.168.1.5:4173/", "127.0.0.1"),
     ("http://127.0.0.1.example.com:4173/", "127.0.0.1"),
