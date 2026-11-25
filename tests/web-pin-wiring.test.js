@@ -16,15 +16,43 @@ function after(src, header, len = 700) {
 }
 
 test('toolbar web-pin channels only accept the main toolbar', () => {
-  for (const ch of ['toolbar:web-pin-start', 'toolbar:web-pin-view', 'toolbar:web-pin-cancel']) {
+  for (const ch of [
+    'toolbar:web-pin-start',
+    'toolbar:web-pin-view',
+    'toolbar:web-pin-cancel',
+    'toolbar:web-pin-key',
+  ]) {
     assert.match(after(main, `ipcMain.on('${ch}'`, 200), /_isMainToolbar\(e\)/, ch);
   }
 });
 
-test('web-pin:recapture only accepts the Gator renderer and custom app ids', () => {
+test('web-pin:recapture only accepts the Gator renderer and pinnable pane ids', () => {
   const body = after(main, "ipcMain.handle('web-pin:recapture'");
   assert.match(body, /gatorView\.webContents\.id/);
-  assert.match(body, /_customAppIds\.has\(appId\)/);
+  assert.match(body, /_isPinnablePane\(appId\)/);
+});
+
+test('pinnable panes are custom apps plus the built-in browser pane, nothing else', () => {
+  assert.match(main, /const _PINNABLE_BUILTIN_PANES = new Set\(\['browser'\]\);/);
+  assert.match(
+    main,
+    /const _isPinnablePane = \(id\) => _customAppIds\.has\(id\) \|\| _PINNABLE_BUILTIN_PANES\.has\(id\);/,
+  );
+  assert.match(main, /pinnable: _isPinnablePane\(app\)/);
+  assert.match(
+    after(main, 'getPane', 300),
+    /_isPinnablePane\(appId\) \? _genericPanes\[appId\] : null/,
+  );
+  assert.match(
+    main,
+    /if \(_isPinnablePane\(activeExternalApp\)\) _webPin\.start\(activeExternalApp\)/,
+  );
+  assert.match(
+    main,
+    /if \(_isPinnablePane\(activeExternalApp\)\) _webPin\.pinView\(activeExternalApp\)/,
+  );
+  assert.match(toolbar, /\.tb\.is-pinnable \.tb-pin-group/);
+  assert.match(toolbar, /state\.pinnable === 'boolean'/);
 });
 
 test('custom app panes are created through createCustomApp, not createGenericPane', () => {
@@ -86,13 +114,17 @@ test('pin banner shows the hovered kind dimly, hides it before the label truncat
   assert.match(main, /pinKind: _webPinKind/);
 });
 
-test('web-pin:go-to is gatorView-only, custom-app-only, http(s)-only and limited to the pane home hosts', () => {
-  const body = after(main, "ipcMain.handle('web-pin:go-to'", 1500);
+test('web-pin:go-to is gatorView-only, pinnable-pane-only, http(s)-only and limited to the pane home hosts except for built-in browser panes', () => {
+  const body = after(main, "ipcMain.handle('web-pin:go-to'", 1700);
   assert.match(body, /gatorView\.webContents\.id/);
-  assert.match(body, /_customAppIds\.has\(appId\)/);
+  assert.match(body, /_isPinnablePane\(appId\)/);
   assert.match(body, /'https:'/);
-  // loadURL skips will-navigate, so the pane's own host restriction is re-applied here.
-  assert.match(body, /_hostMatches\(parsed\.hostname, pane\.homeHosts\)/);
+  // loadURL skips will-navigate, so a custom pane's own host restriction is re-applied here.
+  // A built-in browser pane has no home site, so it is exempt.
+  assert.match(
+    body,
+    /!_PINNABLE_BUILTIN_PANES\.has\(appId\) &&\s*\(!pane\.homeHosts\.length \|\| !_hostMatches\(parsed\.hostname, pane\.homeHosts\)\)/,
+  );
   assert.match(
     body,
     /new URL\(pane\.url\)\.protocol === 'https:' && parsed\.protocol !== 'https:'/,
@@ -103,4 +135,27 @@ test('web-pin:go-to is gatorView-only, custom-app-only, http(s)-only and limited
     /_genericPanes\[id\] = \{[^}]*homeHosts/,
   );
   assert.match(preload, /webPinGoTo: \(appId, url\) => ipcRenderer\.invoke\('web-pin:go-to'/);
+});
+
+test('keyboard picking: toolbar forwards Tab, arrows and Enter only while picking, and the cancel button keeps Enter', () => {
+  assert.match(toolbar, /PIN_KEYS = new Set\(\['Tab', 'ArrowUp', 'ArrowDown', 'Enter'\]\)/);
+  assert.match(
+    toolbar,
+    /classList\.contains\('is-pinning'\)[\s\S]{0,120}PIN_KEYS\.has\(e\.key\)[\s\S]{0,160}tb-pinbar-cancel[\s\S]{0,200}toolbar:web-pin-key/,
+  );
+  const body = after(main, "ipcMain.on('toolbar:web-pin-key'", 700);
+  assert.match(body, /_webPinPicking/);
+  assert.match(body, /_webPin\.key\(/);
+});
+
+test('pick mode is announced through a polite live region outside the hidden banner', () => {
+  assert.match(toolbar, /id="tb-pin-live" role="status" aria-live="polite"/);
+  assert.match(toolbar, /\.tb-pin-live \{[^}]*position: absolute[^}]*clip:/);
+  assert.match(toolbar, /state\.pinAnnounce/);
+  assert.match(main, /pinAnnounce: _webPinAnnounce/);
+  // Sent with one push only, so a later state push does not repeat it.
+  assert.match(
+    main,
+    /_webPinAnnounce = announce \|\| '';\s*_toolbarPushState\(\);\s*_webPinAnnounce = '';/,
+  );
 });

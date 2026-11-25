@@ -11,6 +11,10 @@
     page_mismatch: 'The app is on a different page than when this was pinned.',
     timeout: 'The page took too long to answer. Try again.',
     empty_target: 'That spot has nothing to capture. Pick a larger area.',
+    element_missing:
+      "Gator can't find the pinned element on this page any more. Pin it again to refresh it.",
+    element_ambiguous:
+      'More than one element on the page could be the pinned one. Pin it again so Gator knows which.',
   };
 
   function errorMessage(code) {
@@ -34,13 +38,14 @@
   }
 
   function matchNote(match) {
-    if (match === 'rect') return 'Refreshed. The element moved, so this capture is approximate.';
-    if (match === 'view-fallback')
-      return 'Could not find the pinned element, so Gator captured the whole view.';
+    if (match === 'fingerprint')
+      return 'Refreshed. The element changed since it was pinned, so Gator matched it by its content.';
+    if (match === 'fingerprint-geometry')
+      return 'Refreshed. Two elements looked alike, so Gator chose the one where the pin was. Check it is the right one.';
     return '';
   }
 
-  // The five codes the shell emits; the snapshot route accepts all of them. Anything outside
+  // The codes the shell emits; the snapshot route accepts all of them. Anything outside
   // this set is posted as pane_unavailable so the waiting agent tool is still released.
   const POSTABLE_FAILURES = new Set([
     'pane_not_visible',
@@ -48,7 +53,11 @@
     'pane_unavailable',
     'timeout',
     'empty_target',
+    'element_missing',
+    'element_ambiguous',
   ]);
+  // The server records these on the pin, so they are posted for a user refresh too.
+  const DEGRADING_FAILURES = new Set(['element_missing', 'element_ambiguous']);
 
   function createRecapturer({ fetchFn, shell, sleep }) {
     const base = (pinId) => `/api/web-pins/${encodeURIComponent(pinId)}`;
@@ -85,7 +94,7 @@
       }
       const meta = (detail && detail.meta) || {};
       const fail = async (code) => {
-        if (requestId) {
+        if (requestId || DEGRADING_FAILURES.has(code)) {
           await post(pinId, {
             request_id: requestId,
             status: POSTABLE_FAILURES.has(code) ? code : 'pane_unavailable',
@@ -126,6 +135,7 @@
         image_b64: res.image_b64,
         text: res.text,
         match: res.match,
+        confidence: res.confidence,
       });
       if (!out.ok) {
         // The route validates image/text (400/413) before it claims the request, so a rejected
@@ -222,7 +232,27 @@
     return tab && tab.title ? tab.title : 'another tab';
   }
 
+  // Results are also spoken: the toast has no live region of its own.
+  function announce(message) {
+    if (typeof document === 'undefined' || !document.body) return;
+    let el = document.getElementById('wp-live');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'wp-live';
+      el.setAttribute('role', 'status');
+      el.setAttribute('aria-live', 'polite');
+      el.style.cssText =
+        'position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap';
+      document.body.appendChild(el);
+    }
+    el.textContent = '';
+    setTimeout(() => {
+      el.textContent = message;
+    }, 60);
+  }
+
   function toast(message, type) {
+    announce(message);
     if (typeof _showConnectivityToast === 'function')
       _showConnectivityToast(message, type || 'warning');
   }
@@ -424,10 +454,19 @@
     if (open) open.style.display = 'none';
     const metaEl = card.querySelector('.pin-card-meta');
     const appName = (pin.meta && pin.meta.app_name) || 'Web view';
+    let degraded = false;
+    let lastAt = null;
     const paintMeta = (at) => {
       if (!metaEl) return;
-      metaEl.textContent = `${appName} · ${ageLabel(at)}`;
-      metaEl.classList.toggle('is-stale', isStale(at));
+      if (at != null) lastAt = at;
+      if (degraded) {
+        metaEl.textContent = `${appName} · element not found, pin it again`;
+        metaEl.classList.add('is-stale');
+        return;
+      }
+      if (lastAt == null) return;
+      metaEl.textContent = `${appName} · ${ageLabel(lastAt)}`;
+      metaEl.classList.toggle('is-stale', isStale(lastAt));
     };
     if (changedPins.has(pin.id)) card.classList.add('has-change');
     const ask = card.querySelector('.pin-card-ask');
@@ -456,6 +495,7 @@
       btn.disabled = false;
       btn.classList.remove('is-spinning');
       if (r.status === 'ok') {
+        degraded = false;
         afterRefresh(pin.id, r);
         paintMeta(r.captured_at);
         card.classList.toggle('has-change', !!r.changed);
@@ -466,6 +506,10 @@
       } else if (r.status === 'page_mismatch' && r.url) {
         offerGoTo(metaEl, r.appId, r.url);
       } else {
+        if (DEGRADING_FAILURES.has(r.status)) {
+          degraded = true;
+          paintMeta(null);
+        }
         toast(errorMessage(r.status));
       }
     });
@@ -474,6 +518,7 @@
       .then((j) => {
         if (!j) return;
         captured.set(pin.id, j.captured_at);
+        degraded = !!(j.meta && j.meta.degraded);
         paintMeta(j.captured_at);
       })
       .catch(() => {});

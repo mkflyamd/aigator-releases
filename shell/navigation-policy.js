@@ -181,6 +181,7 @@ function applyNavigationPolicy(view, opts) {
             session: parentSession,
             contextIsolation: true,
             nodeIntegration: false,
+            sandbox: true,
           },
         },
       };
@@ -232,6 +233,7 @@ function applyNavigationPolicy(view, opts) {
             session: parentSession,
             contextIsolation: true,
             nodeIntegration: false,
+            sandbox: true,
           },
         },
       };
@@ -285,6 +287,7 @@ function applyNavigationPolicy(view, opts) {
             session: parentSession,
             contextIsolation: true,
             nodeIntegration: false,
+            sandbox: true,
           },
         });
         child.webContents.on('will-prevent-unload', (ev) => {

@@ -27,9 +27,9 @@ Use the DevTools inspect mechanism through the Chrome DevTools Protocol (CDP) th
 
 New module `shell/web-pin.js`, wired from `shell/main.js`.
 
-**Which panes.** Pinning is offered only for apps in config `custom_apps`. `_genericPanes` is not the test, because it also holds the on-demand `g-*` Google Workspace panes. `_toolbarPushState` adds `isCustomApp` to `toolbar:state`, computed from `custom_apps`.
+**Which panes.** Pinning is offered for apps in config `custom_apps` and for the built-in `browser` pane (`_PINNABLE_BUILTIN_PANES`). `_genericPanes` is not the test, because it also holds the on-demand `g-*` Google Workspace panes. `_toolbarPushState` adds `pinnable` to `toolbar:state`, computed by `_isPinnablePane`. The `browser` pane has no home site, so `web-pin:go-to` does not restrict its hosts. The backend accepts `browser` as a fixed app named "Browser".
 
-**Toolbar.** The toolbar is its own `WebContentsView` with its own preload (`shell/toolbar-preload.js`). Two buttons appear when `isCustomApp` is true:
+**Toolbar.** The toolbar is its own `WebContentsView` with its own preload (`shell/toolbar-preload.js`). Two buttons appear when `pinnable` is true:
 
 - **Pin element** sends `toolbar:web-pin-start`.
 - **Pin view** sends `toolbar:web-pin-view`.
@@ -52,13 +52,15 @@ Every CDP call has a timeout of 8 seconds. If the debugger cannot attach, the to
 
 - **Image:** `Page.captureScreenshot`. For an element, `clip` is the element's box from `DOM.getBoxModel`. For Pin view, the viewport. Scaled so the longest side is at most 1600 px. PNG.
 - **Text:** for an element, its `innerText` plus its `aria-label`, via `Runtime.callFunctionOn`. For Pin view, `document.body.innerText`. Capped at 20,000 characters. Tables and matrices that virtualize rows contribute the visible rows only; the image carries the rest.
-- **Locator** (used by recapture, never shown to the agent):
-  - `selector`: set only when the element or a close ancestor has an `id` or `data-testid`; otherwise empty.
-  - `role` and `name` from the element's accessibility node.
-  - `rect`: x, y, width, height relative to the document, plus the viewport size at capture.
+- **Locator** (used by recapture, never shown to the agent): a description of the element that does not depend on where it sits on the page.
+  - `testId`: a `data-testid`, `data-test`, `data-qa`, `data-cy` or hand-written `id` on the element; generated-looking ids are ignored.
+  - `tag`, `type`, `role` and accessible `name` (aria-label, labelledby, title, alt, label or visible text).
+  - `heading` and `ancestor`: the nearest heading and the nearest labelled ancestor.
+  - `text`: the element's own text, capped at 300 characters.
+  - `rect`: x, y, width, height relative to the document. Used only as a weak tie-break.
 - **Page:** `url`, `title`, `captured_at`.
 
-A Pin view locator is `rect` only (the viewport).
+A Pin view has no locator (the viewport is captured).
 
 ## Storage and API (backend)
 
@@ -88,9 +90,12 @@ Routes:
 
 The shell action is `web-pin:recapture { app_id, locator }`. It requires the app's pane to be the active, visible external app; otherwise it returns `{ status: "pane_not_visible" }` and does not capture, because a hidden pane may not produce a screenshot frame. It then resolves the target in this order:
 
-1. `selector` via `DOM.querySelector`. `match = "exact"`.
-2. `role` + `name` via the accessibility tree. `match = "role-name"`.
-3. `rect` clip at the same document offset. `match = "rect"` (approximate).
+1. `testId`, when exactly one element on the page has it and the same tag. `match = "stable-id"`.
+2. `role` + normalized `name`, when exactly one element matches. `match = "role-name"`.
+3. A content fingerprint (name, heading, text, ancestor, tag) scored against every element. The best score must reach 0.7 and be clearly ahead of the next one. `match = "fingerprint"`.
+4. If several candidates tie on the fingerprint, `rect` overlap may pick one only when exactly one tied candidate overlaps the old box. `match = "fingerprint-geometry"`, confidence capped at 0.7.
+
+Position never identifies an element on its own. If nothing reaches the threshold the shell returns `{ status: "element_missing" }`; if several plausible candidates remain it returns `{ status: "element_ambiguous" }`. In both cases nothing is captured, the previous snapshot is kept, the pin is marked degraded (`meta.degraded`) so the card and the agent both see it, and the user is asked to pin the element again. A whole-view capture is never substituted. A successful recapture reports `match` and `confidence`, and keeps the original locator so repeated matches cannot drift.
 
 If the pane's current URL path differs from the pin's `url` path it returns `{ status: "page_mismatch" }`. If the pane does not exist it returns `{ status: "pane_unavailable" }`. Statuses are returned to the caller, never swallowed.
 
@@ -140,6 +145,6 @@ Page text and images are untrusted content. The tool result wraps them in a labe
   - Capture quality and text on `app.powerbi.com` report pages, an embedded report, and a canvas or custom visual.
   - Whether `Page.captureScreenshot` works on a pane hidden with `setVisible(false)`. If it does, the `pane_not_visible` rule can be relaxed; if it does not, the rule stays.
   - If the overlay does not render in a `WebContentsView`, fall back to an injected transparent picker layer plus `DOM.getNodeForLocation`; the rest of the design is unchanged.
-- **Node tests (`tests/*.test.js`):** locator builder; recapture resolution order and `match` values; toolbar handler rejects non-main-toolbar senders; `isCustomApp` excludes `g-*` panes; chip insertion goes through `insertPinChipAtCaret`; pin context id is the active tab.
+- **Node tests (`tests/*.test.js`):** locator builder; recapture resolution order and `match` values; toolbar handler rejects non-main-toolbar senders; `pinnable` excludes `g-*` panes; chip insertion goes through `insertPinChipAtCaret`; pin context id is the active tab.
 - **Pytest:** `web_pins` routes (caps, UUID validation, file layout, label sanitising), `web_pin_dir` rejects traversal ids, cleanup keeps the directory while another context still holds the pin, CSRF inventory, the `webpin` prompt line, skill activation from a `webpin` pin, `read_web_pin` returns `_images`, and `recapture_web_pin` for success, timeout, page mismatch and duplicate `request_id` using a faked `notify_all`.
 - **Manual:** Power BI dashboard on the Finance tenant: pin a visual, pin the view, change a slicer, recapture from the orb and from chat; confirm the agent answers from the new snapshot.

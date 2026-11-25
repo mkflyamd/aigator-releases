@@ -31,6 +31,9 @@ class ModelEntry:
     # informational: it lets a UI surface a note for other multi-request
     # patterns this doesn't cover, without blocking model selection.
     low_concurrency: bool = False
+    # Whether the model accepts images. A profile's `model_vision` map ({model_id: bool}) is authoritative; a model it
+    # does not list falls back to the known vision families below.
+    supports_vision: bool = False
 
 
 # Runtime state — populated by load_profile()
@@ -59,6 +62,15 @@ _LOW_CONCURRENCY_PATTERNS = ("glm-", "-distill-", "llama-4-", "qwen")
 def _is_low_concurrency_model(model_id: str) -> bool:
     lower = model_id.lower()
     return any(pattern in lower for pattern in _LOW_CONCURRENCY_PATTERNS)
+
+
+_VISION_FAMILIES = ("claude", "gpt", "gemini")
+
+
+def _supports_vision(model_id: str, overrides: dict[str, bool]) -> bool:
+    if model_id in overrides:
+        return overrides[model_id]
+    return model_id.lower().startswith(_VISION_FAMILIES)
 
 
 def get_active_model() -> str:
@@ -98,6 +110,12 @@ def model_supports_thinking(model_id: str) -> bool:
     return entry.supports_thinking if entry else False
 
 
+def model_supports_vision(model_id: str) -> bool:
+    with _lock:
+        entry = MODEL_REGISTRY.get(model_id)
+    return entry.supports_vision if entry else False
+
+
 def is_low_concurrency_model(model_id: str) -> bool:
     with _lock:
         entry = MODEL_REGISTRY.get(model_id)
@@ -131,6 +149,12 @@ def load_profile(profile: dict) -> None:
                         ctx_windows[_k] = _i
                 except (TypeError, ValueError):
                     pass
+        _raw_vision = profile.get("model_vision")
+        vision_overrides = (
+            {k: v for k, v in _raw_vision.items() if isinstance(k, str) and isinstance(v, bool)}
+            if isinstance(_raw_vision, dict)
+            else {}
+        )
         MODEL_REGISTRY.clear()
         for mid in profile.get("models", []):
             # Route Claude models through AnthropicProvider when anthropic_url is set
@@ -145,6 +169,7 @@ def load_profile(profile: dict) -> None:
                 display_name=mid,
                 supports_thinking=False,
                 low_concurrency=_is_low_concurrency_model(mid),
+                supports_vision=_supports_vision(mid, vision_overrides),
             )
 
         active = profile.get("active_model", "")
@@ -164,6 +189,7 @@ def load_profile(profile: dict) -> None:
                     display_name=active,
                     supports_thinking=False,
                     low_concurrency=_is_low_concurrency_model(active),
+                    supports_vision=_supports_vision(active, vision_overrides),
                 )
             _active_model = active
         elif MODEL_REGISTRY:
