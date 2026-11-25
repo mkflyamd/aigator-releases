@@ -319,6 +319,25 @@ const flush = async () => {
   assert.strictEqual(env3.form.submits, 0);
   assert(btns3.every((b) => !b.disabled));
   assert.strictEqual(env3.toasts.length, 1);
+  assert.strictEqual(
+    env3.ctx._pendingSandboxCards.get('tab-1').size,
+    1,
+    'a decision that failed for another reason leaves the card, and the queue hold, in place',
+  );
+
+  // A request the server no longer knows cannot be decided, so it stops holding the queue.
+  const env3b = makeEnv('tab-1');
+  env3b.ctx.fetch = async () => ({
+    ok: false,
+    status: 404,
+    json: async () => ({ detail: 'unknown request' }),
+  });
+  env3b.ctx._showSandboxApproval({ ...card, request_id: 'req3b' }, 'tab-1');
+  await walk(env3b.messages).filter((e) => e.tag === 'button')[0].listeners.click({ stopPropagation() {} });
+  await flush();
+  assert.strictEqual(env3b.ctx._pendingSandboxCards.get('tab-1').size, 0);
+  assert.deepStrictEqual(env3b.calls.queueDrains, ['tab-1'], 'the queue is released to drain');
+  assert(env3b.calls.queueRenders > 0, 'the queue bar is redrawn');
 
   // A card owned by another tab is never drawn in the active tab's chat.
   const env4 = makeEnv('tab-2');

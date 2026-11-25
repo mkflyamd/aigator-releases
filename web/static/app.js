@@ -10431,6 +10431,17 @@ function _queueCardHold(tabId) {
   return false;
 }
 
+function _queueRefusalMessage(status, code) {
+  if (status !== 409) return '';
+  if (code === 'queue_paused') {
+    return 'The queue is paused, so this message was not sent. Resume the queue to send it.';
+  }
+  if (code === 'queue_item_gone') {
+    return 'This queued message was already sent or removed.';
+  }
+  return '';
+}
+
 function _queueSendSettled(tabId) {
   _queueBusy.delete(tabId);
   _queueRefresh(tabId);
@@ -10459,11 +10470,15 @@ async function _queueComposerMessage() {
     _showConnectivityToast('Wait for the attachment to finish loading', 'warn');
     return;
   }
-  // The queue keeps the text and the image bytes. A Jira attachment or a pin reference would be dropped silently,
-  // so refuse. The model and the skill pin are read from the tab when the message is sent, not when it is queued.
-  if (images.some((i) => i.jiraAttachment) || input.querySelector('.pin-ref-chip')) {
+  // The queue keeps the text and the image bytes. A Jira attachment, a pin reference or an @mention (its resolved
+  // contact is filled in only when the composer is submitted) would be dropped silently, so refuse. The model and the skill pin are read from the tab when the message is sent, not when it is queued.
+  if (
+    images.some((i) => i.jiraAttachment) ||
+    input.querySelector('.pin-ref-chip') ||
+    input.querySelector('.chip-person')
+  ) {
     _showConnectivityToast(
-      'Jira attachments and pinned references cannot be queued. Send it when the reply finishes.',
+      'Jira attachments, pinned references and @mentions cannot be queued. Send it when the reply finishes.',
       'warn',
     );
     return;
@@ -12401,7 +12416,7 @@ function _showSandboxApproval(data, ownerTabId) {
       }
       if (!res.ok) {
         const detail = await res.json().catch(() => ({}));
-        throw new Error(detail?.detail || `HTTP ${res.status}`);
+        throw Object.assign(new Error(detail?.detail || `HTTP ${res.status}`), { status: res.status });
       }
       let outcome = 'Denied.';
       if (decision === 'approve') {
@@ -12425,6 +12440,13 @@ function _showSandboxApproval(data, ownerTabId) {
       setBusy(false);
       // 'warn', not 'error': _showConnectivityToast mutes error toasts.
       _showConnectivityToast(`Could not record your decision: ${err.message}`, 'warn');
+      // The server no longer knows this request (it expired or was answered elsewhere): nothing is left to decide,
+      // so the card must not keep the queue waiting.
+      if (err.status === 404 || err.status === 410) {
+        _pendingSandboxCards.get(cardTab)?.delete(requestId);
+        _renderQueue();
+        _queueDrain(cardTab);
+      }
     }
   };
   scopeButtons.forEach((btn) =>
@@ -16342,16 +16364,21 @@ form.addEventListener('submit', async (e) => {
 
       if (!postRes.ok) {
         let detail = '';
+        let errCode = '';
         try {
           const j = await postRes.json();
           detail = j.detail || j.error || '';
+          errCode = j.error || '';
         } catch {
           detail = await postRes.text().catch(() => '');
         }
         const hint = detail
           ? `<div class="err-detail">${escapeHtml(String(detail).slice(0, 200))}</div>`
           : '';
-        const errHtml = `<div class="err-bubble"><span class="err-icon">&#x26A0;&#xFE0F;</span><span>Something went wrong (${postRes.status}). You can retry or rephrase your message.</span>${hint}<button class="retry-btn">&#x21BA; Retry</button></div>`;
+        const queueRefusal = _queueRefusalMessage(postRes.status, errCode);
+        const errHtml = queueRefusal
+          ? `<div class="err-bubble"><span class="err-icon">&#x26A0;&#xFE0F;</span><span>${escapeHtml(queueRefusal)}</span></div>`
+          : `<div class="err-bubble"><span class="err-icon">&#x26A0;&#xFE0F;</span><span>Something went wrong (${postRes.status}). You can retry or rephrase your message.</span>${hint}<button class="retry-btn">&#x21BA; Retry</button></div>`;
         prose.textContent = '';
         prose.insertAdjacentHTML('afterbegin', errHtml);
         prose.querySelector('.retry-btn')?.addEventListener('click', doSend);

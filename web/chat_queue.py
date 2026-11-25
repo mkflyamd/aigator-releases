@@ -151,20 +151,35 @@ class MessageQueue:
             return removed
         return self._run(work)
 
-    def consume(self, context_id: str, item_id: str) -> bool:
-        """The chat route accepted this message as a turn. False when it is no longer queued (another window sent it).
+    def take(self, context_id: str, item_id: str) -> dict | None:
+        """Remove a message because the chat route is about to send it, and hand back the row so it can be restored.
 
-        A paused queue refuses in the same transaction as the delete, so a send that raced a Stop or an error
-        cannot slip a message through after the pause landed. Resume first, then send.
+        None when it is no longer queued (another window sent it). A paused queue refuses in the same transaction
+        as the delete, so a send that raced a Stop or an error cannot slip a message through after the pause
+        landed. Resume first, then send.
         """
         def work(conn):
             if self._state(conn, context_id)[0]:
                 raise QueueError(409, "The queue is paused. Resume it to send this message.", code="queue_paused")
-            removed = conn.execute("DELETE FROM queue WHERE id=? AND context_id=?", (item_id, context_id)).rowcount > 0
+            row = conn.execute(
+                "SELECT id, seq, created_at, text, payload, attachments FROM queue WHERE id=? AND context_id=?",
+                (item_id, context_id)).fetchone()
+            if row is None:
+                return None
+            conn.execute("DELETE FROM queue WHERE id=?", (item_id,))
             if conn.execute("SELECT 1 FROM queue WHERE context_id=? LIMIT 1", (context_id,)).fetchone() is None:
                 conn.execute("DELETE FROM queue_state WHERE context_id=?", (context_id,))
-            return removed
+            return {"id": row[0], "seq": row[1], "created_at": row[2], "text": row[3], "payload": row[4], "attachments": row[5]}
         return self._run(work)
+
+    def restore(self, context_id: str, taken: dict) -> None:
+        """Put a taken message back in its original place (same id, same order) because the send did not happen."""
+        self._run(lambda conn: conn.execute(
+            "INSERT OR IGNORE INTO queue (id, context_id, seq, created_at, text, payload, attachments) VALUES (?,?,?,?,?,?,?)",
+            (taken["id"], context_id, taken["seq"], taken["created_at"], taken["text"], taken["payload"], taken["attachments"])))
+
+    def consume(self, context_id: str, item_id: str) -> bool:
+        return self.take(context_id, item_id) is not None
 
     def clear(self, context_id: str) -> None:
         def work(conn):

@@ -412,3 +412,86 @@ def test_slash_commands_are_refused_by_the_server(queue, monkeypatch, api):
     edited = client.put("/api/queue/b", json={"context_id": "c", "text": "/jira list"})
     assert edited.status_code == 400
     assert queue.snapshot("c")["items"][0]["text"] == "fine"
+
+
+# ── error paths that end in a clean [DONE] still pause the queue ──────────────
+
+def test_a_queued_send_that_races_a_typed_send_puts_its_message_back(queue, monkeypatch, api):
+    _hold_turns_open(monkeypatch)
+    ctx = f"q-{uuid.uuid4().hex}"
+    queue.enqueue(ctx, "a", _msg("first"))
+    queue.enqueue(ctx, "b", _msg("second"))
+    real_take = queue.take
+
+    def take_then_a_typed_send_wins(context_id, item_id):
+        taken = real_take(context_id, item_id)
+        shared.chat_task_store.create_task("typed-send", context_id)
+        return taken
+
+    monkeypatch.setattr(queue, "take", take_then_a_typed_send_wins)
+    refused = api.post("/api/chat", json={"message": "first", "context_id": ctx, "queued_id": "a"})
+    assert refused.status_code == 409
+    assert refused.json()["error"] == "turn_in_progress" and refused.json()["task_id"] == "typed-send"
+    items = queue.snapshot(ctx)["items"]
+    assert [i["id"] for i in items] == ["a", "b"]
+    assert [i["text"] for i in items] == ["first", "second"]
+    assert shared.chat_task_store.active_task_for(ctx) == "typed-send"
+    shared.chat_task_store.mark_done("typed-send")
+
+
+def test_a_taken_message_can_be_restored_in_place(queue):
+    queue.enqueue("c", "a", _msg("first", [{"mediaType": "image/png", "base64": "x", "name": "", "savedPath": ""}]))
+    queue.enqueue("c", "b", _msg("second"))
+    taken = queue.take("c", "a")
+    assert [i["id"] for i in queue.snapshot("c")["items"]] == ["b"]
+    queue.restore("c", taken)
+    queue.restore("c", taken)
+    snap = queue.snapshot("c")
+    assert [i["id"] for i in snap["items"]] == ["a", "b"] and snap["items"][0]["attachments"] == 1
+    assert queue.head("c")["payload"]["text"] == "first"
+
+
+def test_a_tool_budget_overflow_turn_pauses_the_queue(queue, monkeypatch, api):
+    import types
+
+    import tool_pipeline
+
+    async def subscriber_ready(task_id, timeout):
+        return True
+
+    monkeypatch.setattr(shared.chat_task_store, "wait_for_subscriber", subscriber_ready)
+    monkeypatch.setattr(
+        tool_pipeline, "select_tools_with_budget",
+        lambda *a, **k: types.SimpleNamespace(required_overflow=True, tools=[], omitted_names=[]))
+    ctx = f"q-{uuid.uuid4().hex}"
+    queue.enqueue(ctx, "a", _msg("next"))
+    task_id = api.post("/api/chat", json={"message": "hello", "context_id": ctx}).json()["task_id"]
+    assert _wait_for(lambda: shared.chat_task_store.is_done(task_id))
+    assert "Tool budget overflow" in "".join(shared.chat_task_store.get_chunks(task_id))
+    assert shared.chat_task_store.had_error(task_id) is True
+    snap = queue.snapshot(ctx)
+    assert snap["paused"] is True and snap["reason"] == "error"
+
+
+def test_a_verifier_that_returns_nothing_flags_the_turn_as_failed():
+    import agent_loop
+
+    class Empty:
+        def build_assistant_message(self, raw):
+            return {"role": "assistant", "content": raw}
+
+        async def stream_turn(self, model, system, msgs, tools):
+            yield {"type": "done", "stop_reason": "end_turn", "tool_calls": [], "raw_content": "", "usage": {}}
+
+    task_id = f"t-{uuid.uuid4().hex}"
+    shared.chat_task_store.create_task(task_id, "c")
+
+    async def go():
+        return [c async for c in agent_loop.run_three_agent_loop(
+            provider=Empty(), model="m", system="s", msgs=[{"role": "user", "content": "hi"}],
+            normalized_tools=[], execute_tool=None, COM_BOUND_TOOLS=set(), TOOL_STATUS={},
+            _tool_toast=lambda *a, **k: None, _SLACK_SAFE_MSG="__safe__", context_id="c", task_id=task_id)]
+
+    chunks = asyncio.run(go())
+    assert any('"stalled": true' in c for c in chunks)
+    assert shared.chat_task_store.had_error(task_id) is True

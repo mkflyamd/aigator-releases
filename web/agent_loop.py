@@ -433,6 +433,17 @@ _ERROR_OUTCOMES = frozenset({
 })
 
 
+def _flag_turn_error(task_id: str | None) -> None:
+    """Mark the turn as ended in an error the user sees, so the message queue pauses behind it."""
+    if not task_id:
+        return
+    try:
+        import shared as _shared
+        _shared.chat_task_store.mark_error(task_id)
+    except Exception:
+        pass
+
+
 async def _log_turn_end_safe(
     turn_id: str, context_id: str | None, task_id: str | None,
     turn_index: int, agent: str, model: str, provider: str,
@@ -448,11 +459,7 @@ async def _log_turn_end_safe(
     if not task_id or not context_id:
         return
     if outcome in _ERROR_OUTCOMES:
-        try:
-            import shared as _shared
-            _shared.chat_task_store.mark_error(task_id)
-        except Exception:
-            pass
+        _flag_turn_error(task_id)
     try:
         import turn_telemetry
         await turn_telemetry.log_turn_end(
@@ -2325,6 +2332,7 @@ async def run_three_agent_loop(
             _log.warning("[verifier] streaming failed: %s — falling back to draft_text", _verif_exc)
 
         if not verif_text and not draft_text:
+            _flag_turn_error(task_id)
             yield f"data: {json.dumps({'stalled': True, 'message': 'Gator completed the task but could not produce a final answer — the verifier and executor both returned empty. Click Continue to retry.'})}\n\n"
             break
         if verif_text.startswith("RETRY:") and _retry < 2:

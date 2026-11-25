@@ -194,6 +194,23 @@ ${functionSource('_queueCardHold')}`,
     assert.match(w.toasts[0][0], /cannot be queued/);
   }
 
+  {
+    const w = world({ chips: ['.chip-person'] });
+    await w.ctx._queueComposerMessage();
+    assert.strictEqual(w.calls.length, 0, 'an @mention chip is not queued');
+    assert.match(w.toasts[0][0], /@mentions cannot be queued/);
+    assert.strictEqual(w.input.textContent, 'next question', 'the message stays in the composer');
+  }
+
+  {
+    const w = world();
+    vm.runInContext(functionSource('_queueRefusalMessage'), w.ctx);
+    assert.match(w.ctx._queueRefusalMessage(409, 'queue_paused'), /queue is paused/);
+    assert.match(w.ctx._queueRefusalMessage(409, 'queue_item_gone'), /already sent or removed/);
+    assert.strictEqual(w.ctx._queueRefusalMessage(409, 'turn_in_progress'), '');
+    assert.strictEqual(w.ctx._queueRefusalMessage(500, 'queue_paused'), '');
+  }
+
   console.log('queue composer: ok');
 })().catch((err) => {
   console.error(err);

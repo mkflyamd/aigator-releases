@@ -2351,6 +2351,7 @@ async def chat(req: ChatRequest):
             )
             yield f"data: {_json.dumps({'status': _overflow_msg})}\n\n"
             yield f"data: {_json.dumps({'text': _overflow_msg})}\n\n"
+            shared.chat_task_store.mark_error(task_id)
             yield "data: [DONE]\n\n"
             return
 
@@ -2678,32 +2679,44 @@ async def chat(req: ChatRequest):
                 pass
 
     # One live turn per conversation. The check and the registration below have no await
-    # between them, so two requests cannot both pass. A stopped turn may still be unwinding
+    # between them, so two requests cannot both pass (a queued send re-checks after taking its message). A stopped turn may still be unwinding
     # (and holding the turn lock): give it a moment instead of refusing a quick resend.
+    def _turn_busy(live_id):
+        return JSONResponse(
+            {
+                "error": "turn_in_progress",
+                "detail": "A reply is still running in this conversation. Stop it or wait for it to finish.",
+                "task_id": live_id,
+            },
+            status_code=409,
+        )
+
     _live = shared.chat_task_store.active_task_for(context_id)
     if _live and shared.chat_task_store.is_cancelled(_live):
         await shared.chat_task_store.wait_for_task_end(_live, _STOP_UNWIND_GRACE_S)
         _live = shared.chat_task_store.active_task_for(context_id)
     if _live:
-        return JSONResponse(
-            {
-                "error": "turn_in_progress",
-                "detail": "A reply is still running in this conversation. Stop it or wait for it to finish.",
-                "task_id": _live,
-            },
-            status_code=409,
-        )
+        return _turn_busy(_live)
     if req.queued_id:
         from chat_queue import QueueError, get_queue
         try:
-            sendable = await asyncio.to_thread(get_queue().consume, context_id, req.queued_id)
+            taken = await asyncio.to_thread(get_queue().take, context_id, req.queued_id)
         except QueueError as exc:
             return JSONResponse({"error": exc.code, "detail": exc.message}, status_code=exc.status)
-        if not sendable:
+        if not taken:
             return JSONResponse(
                 {"error": "queue_item_gone", "detail": "That queued message was already sent or removed."},
                 status_code=409,
             )
+        # The take awaited, so a typed send or another window may have registered a turn in the meantime.
+        # Put the message back where it was and refuse; nothing else may start a second live turn.
+        _live = shared.chat_task_store.active_task_for(context_id)
+        if _live:
+            try:
+                await asyncio.to_thread(get_queue().restore, context_id, taken)
+            except QueueError:
+                _log.warning("[chat] queued message %s could not be put back", req.queued_id)
+            return _turn_busy(_live)
     task_id = str(_uuid.uuid4())
     shared.chat_task_store.create_task(task_id, context_id)
 
