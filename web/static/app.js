@@ -11072,22 +11072,36 @@ async function _runsSeed(tabId) {
     if ([...(_runsByTab.get(tabId)?.values() || [])].some((r) => !r.followed)) _runsWatchArm(tabId);
     return;
   }
-  const live = new Set(
-    listed.runs.filter((r) => r.state === 'preparing' || r.state === 'running').map((r) => r.id),
+  const live = new Map(
+    listed.runs.filter((r) => r.state === 'preparing' || r.state === 'running').map((r) => [r.id, r]),
   );
   let ended = false;
   for (const [runId, run] of [...(_runsByTab.get(tabId) || [])]) {
     if (!run.followed && !live.has(runId)) ended = _runEnd(tabId, runId) || ended;
   }
-  for (const runId of live) {
+  for (const [runId, record] of live) {
     if (!_runsByTab.get(tabId)?.has(runId)) {
       _runStart(tabId, runId, () => _stopRunDirect(tabId, runId), false);
+      if (record.path === 'host') _runCardRestore(tabId, runId);
     }
   }
   if ([...(_runsByTab.get(tabId)?.values() || [])].some((r) => !r.followed)) _runsWatchArm(tabId);
   if (ended) {
     _queueRefresh(tabId);
     await _queueDrain(tabId);
+  }
+}
+
+// After a reload no card is on the page for a command that is still running. Draw it again from the server's copy:
+// the card rejoins the run, shows Running..., and sends the follow-up when the command ends.
+async function _runCardRestore(tabId, runId) {
+  if (tabId !== _activeTabId || _pendingSandboxCards.get(tabId)?.has(runId)) return;
+  const res = await fetch(
+    `/api/host-shell/${encodeURIComponent(runId)}?context_id=${encodeURIComponent(tabId)}`,
+  ).catch(() => null);
+  const body = res && res.ok ? await res.json().catch(() => null) : null;
+  if (body?.card && tabId === _activeTabId && _runsByTab.get(tabId)?.has(runId)) {
+    _showSandboxApproval(body.card, tabId, true);
   }
 }
 

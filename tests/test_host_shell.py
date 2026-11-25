@@ -339,6 +339,14 @@ def test_stopping_a_running_command_pauses_the_queue(client, csrf, tmp_path, mon
     assert [i["id"] for i in snap["items"]] == ["a"]
 
 
+def test_status_carries_the_card_so_a_reloaded_page_can_draw_it_again(client, tmp_path):
+    proposed = _propose(tmp_path, reason="check the build")
+    sent = proposed["_sandbox_approval"]
+    body = client.get(f"/api/host-shell/{sent['request_id']}", params={"context_id": "tab-1"}).json()
+    assert body["card"] == sent
+    assert client.get(f"/api/host-shell/{sent['request_id']}", params={"context_id": "tab-2"}).status_code == 404
+
+
 def test_stopping_a_command_with_nothing_queued_pauses_nothing(client, csrf, tmp_path, monkeypatch, queue):
     req, release = _start_and_hold(client, csrf, tmp_path, monkeypatch)
     client.post(f"/api/host-shell/{req.id}/cancel", json={"context_id": "tab-1"}, headers=csrf)

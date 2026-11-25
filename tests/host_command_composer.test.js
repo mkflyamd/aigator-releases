@@ -38,6 +38,7 @@ const FUNCTIONS = [
   '_runStart',
   '_runEnd',
   '_runsSeed',
+  '_runCardRestore',
   '_runsWatchStop',
   '_runsWatchArm',
   '_queueStatus',
@@ -61,6 +62,8 @@ function world({ heads = [], turn = false } = {}) {
   const events = [];
   const fetches = [];
   const runsBody = { runs: [] };
+  const statusBody = { card: null };
+  const drawn = [];
   const placeholderBox = { dataset: {}, contentEditable: 'true' };
   const sendBtn = {
     classList: { contains: (c) => c === 'is-streaming' && ctx._streaming },
@@ -122,8 +125,9 @@ function world({ heads = [], turn = false } = {}) {
     },
     fetch: async (url) => {
       fetches.push(url);
-      return { ok: true, json: async () => runsBody };
+      return { ok: true, json: async () => (url.startsWith('/api/host-shell/') ? statusBody : runsBody) };
     },
+    _showSandboxApproval: (card, tab, reload) => drawn.push([card.request_id, tab, reload]),
     _queueCall: async () => {
       calls.push('head');
       const next = queue.shift();
@@ -143,7 +147,7 @@ function world({ heads = [], turn = false } = {}) {
   };
   const addRun = (id = 'r1', stop = () => events.push(`stop:${id}`)) => ctx._runStart('tab1', id, stop, true);
   const card = (id = 'r1') => ctx._pendingSandboxCards.set('tab1', new Map([[id, {}]]));
-  return { ctx, calls, events, fetches, runsBody, timers, pending, fireAll, addRun, card, sendBtn, placeholderBox };
+  return { ctx, calls, events, fetches, runsBody, statusBody, drawn, timers, pending, fireAll, addRun, card, sendBtn, placeholderBox };
 }
 
 const view = (w, { streaming = false, canQueue = false } = {}) =>
@@ -423,6 +427,64 @@ const view = (w, { streaming = false, canQueue = false } = {}) =>
     w.runsBody.runs = [];
     await w.ctx._runsSeed('tab1');
     assert.strictEqual(w.ctx._commandRunning('tab1'), true, 'the card ends its own run, not the seed');
+  }
+
+  const settle = () => new Promise((r) => setImmediate(r));
+  // ── the placeholder follows the command: queue hint while it runs, empty again once it ends or is stopped ──
+  {
+    const w = world();
+    w.addRun('r1');
+    w.ctx._updatePlaceholder();
+    assert.strictEqual(w.placeholderBox.dataset.placeholder, 'Enter to queue');
+    w.ctx._stopCommands('tab1');
+    w.ctx._runEnd('tab1', 'r1');
+    w.ctx._updatePlaceholder();
+    assert.strictEqual(w.placeholderBox.dataset.placeholder, '', 'idle again after Stop: no queue hint');
+  }
+
+  // ── a reloaded page draws the running command's card again, as the card's own rejoin ──
+  {
+    const w = world();
+    w.statusBody.card = { request_id: 'r1', command: 'sleep 40' };
+    w.runsBody.runs = [
+      { id: 'r1', state: 'running', path: 'host' },
+      { id: 'py1', state: 'running', path: 'sandbox' },
+    ];
+    await w.ctx._runsSeed('tab1');
+    await settle();
+    assert.deepStrictEqual(w.drawn, [['r1', 'tab1', true]], 'the host command gets its card back, drawn as a rejoin');
+    assert(w.fetches.includes('/api/host-shell/r1?context_id=tab1'), 'from the card the server kept');
+    assert(!w.fetches.some((u) => u.includes('py1')), 'a sandbox run has no host card');
+    await w.ctx._runsSeed('tab1');
+    await settle();
+    assert.strictEqual(w.drawn.length, 1, 'the card is drawn once, not on every poll');
+  }
+  {
+    const w = world();
+    w.statusBody.card = { request_id: 'r1' };
+    w.ctx._pendingSandboxCards.set('tab1', new Map([['r1', {}]]));
+    w.runsBody.runs = [{ id: 'r1', state: 'running', path: 'host' }];
+    await w.ctx._runsSeed('tab1');
+    await settle();
+    assert.deepStrictEqual(w.drawn, [], 'a card this page already has is not drawn twice');
+  }
+  {
+    const w = world();
+    w.ctx._activeTabId = 'tab2';
+    w.statusBody.card = { request_id: 'r1' };
+    w.runsBody.runs = [{ id: 'r1', state: 'running', path: 'host' }];
+    await w.ctx._runsSeed('tab1');
+    await settle();
+    assert.deepStrictEqual(w.drawn, [], 'a tab nobody is looking at draws its card when it is shown');
+    assert.strictEqual(w.ctx._commandRunning('tab1'), true, 'but its command still counts');
+  }
+  {
+    const w = world();
+    w.runsBody.runs = [{ id: 'r1', state: 'running', path: 'host' }];
+    await w.ctx._runsSeed('tab1');
+    await settle();
+    assert.deepStrictEqual(w.drawn, [], 'no card from the server draws nothing');
+    assert.strictEqual(view(w).mode, 'stop-command', 'and the Stop command button still works');
   }
 
   console.log('host_command_composer: ok');

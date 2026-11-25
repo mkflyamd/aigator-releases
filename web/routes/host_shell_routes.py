@@ -151,4 +151,7 @@ def host_command_status(request_id: str, context_id: str = ""):
         raise HTTPException(status_code=404, detail="This command request was not found or has expired.")
     status, req = host_requests.lookup_settled(request_id, context_id)
     result = req.result if req is not None and status == "done" else None
-    return {"ok": True, "request_id": request_id, "run": run, "result": result}
+    from skills.shell_runner.tools import host_command_card
+
+    card = host_command_card(req) if req is not None else None
+    return {"ok": True, "request_id": request_id, "run": run, "result": result, "card": card}

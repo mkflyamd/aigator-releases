@@ -1193,8 +1193,16 @@ def _tool_run_on_host(
         timeout = 120
     reason = host_requests.strip_hidden_characters(str(reason or ""))[:500]
     req = host_requests.create(_context_id, command, cwd, shell, reason, timeout)
+    return {"status": "awaiting_user_click", "request_id": req.id, "message": _HOST_AWAITING_MSG,
+            "_sandbox_approval": host_command_card(req)}
+
+
+def host_command_card(req) -> dict:
+    """What the Run card shows for a request. A reloaded page asks for it again to draw a command that is still running."""
+    from config import WORK_DIR
+
     environment = dict(os.environ)
-    card = {
+    return {
         "request_id": req.id, "context_id": req.context_id, "tool": "run_on_host", "command": req.command,
         "cwd": req.cwd, "shell": req.shell or _DETECTED_SHELL, "reason": req.reason,
         "risks": list(req.risks), "timeout": req.timeout,
@@ -1202,8 +1210,6 @@ def _tool_run_on_host(
         "cwd_is_ai_workspace": Path(req.cwd) == Path(WORK_DIR).resolve(),
         "env_removed": len(environment) - len(host_requests.host_env(environment)),
     }
-    return {"status": "awaiting_user_click", "request_id": req.id, "message": _HOST_AWAITING_MSG,
-            "_sandbox_approval": card}
 
 
 def _tool_host_command_result(request_id: str, _context_id: str = "") -> dict:
