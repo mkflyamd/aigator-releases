@@ -173,6 +173,7 @@ class StdioMCPClient:
         self._reader: threading.Thread | None = None
         self._stderr_lines: list[str] = []
         self._stderr_reader: threading.Thread | None = None
+        self._active_call_id: int | None = None
         try:
             self._connect()
         except Exception:
@@ -330,6 +331,7 @@ class StdioMCPClient:
         from mcp.audit import schedule_mcp_call
 
         started_at = time.perf_counter()
+        self._active_call_id = self._next_id
         try:
             resp = self._send("tools/call", {"name": tool, "arguments": arguments or {}})
             if "error" in resp:
@@ -343,6 +345,14 @@ class StdioMCPClient:
         except Exception:
             schedule_mcp_call(self._cfg, tool, "error", started_at, "mcp_error")
             raise
+        finally:
+            self._active_call_id = None
+
+    def cancel_active_call(self, reason: str = "cancelled") -> None:
+        """Tell the server we stopped waiting for the call in flight (MCP notifications/cancelled). Best effort."""
+        request_id = self._active_call_id
+        if request_id is not None:
+            self._send_notification("notifications/cancelled", {"requestId": request_id, "reason": reason})
 
     def close(self) -> None:
         if self._proc is None:

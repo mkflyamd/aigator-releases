@@ -23,6 +23,9 @@ _DEFAULTS = {
     # background repair, so a Stop never waits longer than this.
     "sandbox": Budgets(setup_ms=180_000, run_ms=60_000, teardown_ms=10_000),
     "shell": Budgets(setup_ms=0, run_ms=60_000, teardown_ms=5_000),
+    # One MCP tool call. A stdio server also has its own 30 s wait per request; this bounds HTTP servers and a
+    # slow stdio call that keeps answering.
+    "mcp": Budgets(setup_ms=0, run_ms=120_000, teardown_ms=2_000),
 }
 _overrides: dict[str, dict[str, int]] = {}
 
