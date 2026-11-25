@@ -1,5 +1,7 @@
 // Hovering or focusing a link in a chat reply adds a "Copy link" button after it; clicking
-// the button writes the link URL to the clipboard and shows "Copied!" for a moment.
+// the button writes the link URL to the clipboard and shows "Copied!" for a moment. The button
+// is a fixed-position overlay placed from the link's last line box, so showing or hiding it
+// never moves the surrounding text.
 
 const assert = require('assert');
 const fs = require('fs');
@@ -11,7 +13,7 @@ const source = fs.readFileSync(path.join(__dirname, '..', 'web', 'static', 'app.
 const css = fs.readFileSync(path.join(__dirname, '..', 'web', 'static', 'style.css'), 'utf8');
 
 const block = source.match(
-  /function _showChatLinkCopy\([\s\S]*?messages\.addEventListener\('click'[\s\S]*?\n\}\);/,
+  /let _activeChatLinkCopy[\s\S]*?messages\.addEventListener\('click'[\s\S]*?\n\}\);/,
 );
 assert(block, 'chat link copy handlers not found in app.js');
 
@@ -21,19 +23,30 @@ function makeButton() {
     dataset: {},
     attrs: {},
     textContent: '',
+    style: {},
+    offsetWidth: 70,
+    offsetHeight: 20,
     classList: { contains: (c) => btn.className.split(/\s+/).includes(c) },
     setAttribute(name, value) {
       btn.attrs[name] = value;
+    },
+    remove() {
+      if (btn.owner && btn.owner.nextElementSibling === btn) btn.owner.nextElementSibling = null;
     },
   };
   return btn;
 }
 
-function makeLink(href) {
+const ONE_LINE = [{ left: 100, right: 300, top: 200, bottom: 216 }];
+
+function makeLink(href, rects = ONE_LINE) {
   const link = {
     href,
     nextElementSibling: null,
+    getClientRects: () => rects,
     after(node) {
+      node.owner = link;
+      node.previousElementSibling = link;
       link.nextElementSibling = node;
     },
   };
@@ -49,6 +62,7 @@ function setup(writeText) {
       addEventListener(type, fn) {
         (listeners[type] ||= []).push(fn);
       },
+      getBoundingClientRect: () => ({ left: 0, right: 800, top: 0, bottom: 600 }),
     },
     document: { createElement: () => makeButton() },
     navigator: {
@@ -142,4 +156,110 @@ test('the copy button stays clickable while the pointer crosses from the link on
   );
   const reveal = css.match(/\n([^{}]*\.chat-link-copy:hover[^{}]*)\{[^}]*opacity:\s*1/);
   assert(reveal, 'the button must stay visible while it is hovered');
+});
+
+test('the button is placed above the last line of a wrapped link, right-aligned to it', () => {
+  const { fire } = setup(() => Promise.resolve());
+  const link = makeLink('https://example.com/a', [
+    { left: 100, right: 300, top: 200, bottom: 216 },
+    { left: 20, right: 150, top: 220, bottom: 236 },
+  ]);
+  fire('mouseover', hoverTarget(link));
+  // 20px tall button overlapping the link by 2px so the pointer never crosses a gap
+  assert.strictEqual(link.nextElementSibling.style.top, '202px');
+  assert.strictEqual(link.nextElementSibling.style.left, '80px');
+});
+
+test('the button stays inside the message list horizontally and flips below at the top edge', () => {
+  const { fire } = setup(() => Promise.resolve());
+  const nearLeft = makeLink('https://example.com/a', [
+    { left: 0, right: 30, top: 100, bottom: 116 },
+  ]);
+  fire('mouseover', hoverTarget(nearLeft));
+  assert.strictEqual(nearLeft.nextElementSibling.style.left, '4px');
+
+  const nearRight = makeLink('https://example.com/b', [
+    { left: 700, right: 900, top: 100, bottom: 116 },
+  ]);
+  fire('mouseover', hoverTarget(nearRight));
+  assert.strictEqual(nearRight.nextElementSibling.style.left, '726px');
+
+  const atTop = makeLink('https://example.com/c', [{ left: 100, right: 300, top: 5, bottom: 21 }]);
+  fire('focusin', hoverTarget(atTop));
+  assert.strictEqual(atTop.nextElementSibling.style.top, '19px');
+});
+
+test('hovering again re-places the existing button instead of adding a second one', () => {
+  const { fire } = setup(() => Promise.resolve());
+  const rects = [{ left: 100, right: 300, top: 200, bottom: 216 }];
+  const link = makeLink('https://example.com/a', rects);
+  fire('mouseover', hoverTarget(link));
+  const btn = link.nextElementSibling;
+  rects[0] = { left: 100, right: 300, top: 300, bottom: 316 };
+  fire('mouseover', hoverTarget(link));
+  assert.strictEqual(link.nextElementSibling, btn);
+  assert.strictEqual(btn.style.top, '282px');
+});
+
+test('scrolling keeps the button on its link instead of leaving it behind', () => {
+  const { fire } = setup(() => Promise.resolve());
+  const rects = [{ left: 100, right: 300, top: 200, bottom: 216 }];
+  const link = makeLink('https://example.com/a', rects);
+  fire('mouseover', hoverTarget(link));
+  const btn = link.nextElementSibling;
+  assert.strictEqual(btn.style.top, '182px');
+  rects[0] = { left: 100, right: 300, top: 150, bottom: 166 };
+  fire('scroll', {});
+  assert.strictEqual(link.nextElementSibling, btn, 'the button must survive a scroll');
+  assert.strictEqual(btn.style.top, '132px');
+});
+
+test('a keyboard-focused link scrolled into view keeps its button', () => {
+  const { fire } = setup(() => Promise.resolve());
+  const rects = [{ left: 100, right: 300, top: 900, bottom: 916 }];
+  const link = makeLink('https://example.com/a', rects);
+  fire('focusin', hoverTarget(link));
+  const btn = link.nextElementSibling;
+  assert(btn, 'focusing a link adds its button even while the link is off screen');
+  assert.strictEqual(btn.style.display, 'none', 'off screen: nothing floats over other text');
+  rects[0] = { left: 100, right: 300, top: 300, bottom: 316 };
+  fire('scroll', {});
+  assert.strictEqual(link.nextElementSibling, btn);
+  assert.strictEqual(btn.style.display, '');
+  assert.strictEqual(btn.style.top, '282px');
+});
+
+test('a link scrolled above the message list hides its button until it scrolls back', () => {
+  const { fire } = setup(() => Promise.resolve());
+  const rects = [{ left: 100, right: 300, top: 200, bottom: 216 }];
+  const link = makeLink('https://example.com/a', rects);
+  fire('mouseover', hoverTarget(link));
+  const btn = link.nextElementSibling;
+  assert.strictEqual(btn.style.display, '');
+  rects[0] = { left: 100, right: 300, top: -80, bottom: -64 };
+  fire('scroll', {});
+  assert.strictEqual(btn.style.display, 'none');
+  rects[0] = { left: 100, right: 300, top: 40, bottom: 56 };
+  fire('scroll', {});
+  assert.strictEqual(btn.style.display, '');
+  assert.strictEqual(btn.style.top, '22px');
+});
+
+test('only the most recently placed button is kept on screen', () => {
+  const { fire } = setup(() => Promise.resolve());
+  const first = makeLink('https://example.com/a');
+  const second = makeLink('https://example.com/b');
+  fire('focusin', hoverTarget(first));
+  fire('mouseover', hoverTarget(second));
+  assert.strictEqual(first.nextElementSibling, null, 'an earlier button must not be left stranded');
+  assert(second.nextElementSibling);
+});
+
+test('the copy button is out of the text flow, so showing or hiding it moves nothing', () => {
+  const body = rule('.chat-link-copy');
+  assert(/position:\s*fixed/.test(body), 'an in-flow button shifts the text after the link');
+  assert(!/margin(-left)?:/.test(body), 'margins on the button push text around');
+  assert(/visibility:\s*hidden/.test(body), 'a hidden button must not keep a hit area');
+  const reveal = css.match(/\n([^{}]*\.chat-link-copy:hover[^{}]*)\{([^}]*)\}/);
+  assert(/visibility:\s*visible/.test(reveal[2]), 'the reveal rule must make the button visible');
 });
