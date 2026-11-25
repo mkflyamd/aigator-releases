@@ -196,7 +196,7 @@ Write-Ok "pre-commit clean"
 #  9. Tests
 if (-not $SkipTests) {
     Write-Step "Running tests"
-    uv run pytest tests -q --tb=short 2>&1 | ForEach-Object { Write-Host "  $_" }
+    uv run pytest -q --tb=short 2>&1 | ForEach-Object { Write-Host "  $_" }
     if ($LASTEXITCODE -ne 0) { Die "tests failed" }
     Write-Ok "all tests pass"
 }
