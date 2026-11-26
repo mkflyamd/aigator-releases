@@ -164,6 +164,23 @@ def test_the_preview_lists_the_server_command_and_packages():
     assert summary["digest"] == P.files_digest(FILES)
 
 
+def test_the_consent_step_shows_the_whole_command_and_every_package_however_long():
+    many = [f"package-number-{n}>=1.0.{n}" for n in range(30)]
+    deps = ", ".join(f'"{d}"' for d in ["fastmcp>=3.2.0", *many])
+    pyproject = PYPROJECT.replace(b'["fastmcp>=3.2.0,<4.0.0", "click>=8.0.0"]', f"[{deps}]".encode())
+    files = {**FILES, "pyproject.toml": pyproject}
+    spec = infer_launch_spec(files)
+
+    summary = P.summarize_package(files)
+
+    command = "uv " + " ".join(spec.args())
+    assert len(command) > P.MAX_MCP_LEN
+    assert f"Starts the MCP server 'snowflake-mcp' on your computer (not sandboxed): {command}" in summary["lines"]
+    assert not any("\u2026" in line for line in summary["lines"])
+    packages = next(line for line in summary["lines"] if line.startswith("Downloads and installs"))
+    assert all(dep in packages for dep in spec.dependencies)
+
+
 def test_the_preview_says_so_when_policy_blocks_the_server():
     policy = MagicMock(block_bundle_stdio_mcp=True)
     with patch("sandbox.policy.load_policy", return_value=policy):
@@ -392,3 +409,255 @@ def test_choosing_the_skill_offers_the_servers_tools(deps_map):
 
     assert "snowflake_query" not in [t["name"] for t in before]
     assert [t["name"] for t in after if t["name"] in {"snowflake_query", "unrelated"}] == ["snowflake_query"]
+
+
+# ── policy is enforced before anything is downloaded or started ──────────────
+
+
+def _policy(**changes):
+    from sandbox.policy import Policy
+
+    return Policy(**changes)
+
+
+def _import_under_policy(inst, files, policy):
+    client = _route_client()
+    payload = {
+        "kind": "folder",
+        "name": "snowflake-mcp",
+        "files": [{"path": p, "b64": base64.b64encode(b).decode()} for p, b in files.items()],
+    }
+    with (
+        patch("sandbox.policy.load_policy", return_value=policy),
+        patch("routes.marketplace.load_installed_skill_prompts"),
+        patch("routes.marketplace.load_skill_tools"),
+        patch("marketplace.installer.shutil.which", return_value="/bin/uv"),
+        patch("subprocess.run") as run,
+        patch("marketplace.installer._warm_uv_cache", wraps=inst._warm_uv_cache) as warm,
+        patch("mcp.manager.add_or_update", return_value={"ok": True, "tool_count": 1}) as connect,
+        patch("mcp.manager._upsert_raw_connection") as placeholder,
+        patch("mcp.manager._restamp_connection_after_add_or_update", return_value={"ok": True}),
+    ):
+        digest = client.post("/api/marketplace/install-local", json=payload).json()["summary"]["digest"]
+        second = client.post("/api/marketplace/install-local", json={**payload, "consent": True, "digest": digest})
+    assert second.status_code == 200, second.text
+    return second.json(), run, warm, connect, placeholder
+
+
+def test_a_policy_that_blocks_bundle_servers_stops_everything_before_the_warm_up(installer):
+    from mcp.manager import BUNDLE_STDIO_BLOCKED_MSG
+
+    body, run, warm, connect, placeholder = _import_under_policy(
+        installer, FILES, _policy(block_bundle_stdio_mcp=True)
+    )
+
+    warm.assert_not_called()
+    run.assert_not_called()
+    connect.assert_not_called()
+    assert body["mcp_error"] == BUNDLE_STDIO_BLOCKED_MSG
+    assert placeholder.call_args.args[0]["connect_error"] == BUNDLE_STDIO_BLOCKED_MSG
+
+
+def test_pinned_installs_policy_stops_an_unpinned_server_before_anything_runs(installer):
+    from marketplace.installer import PINNED_INSTALLS_MCP_MSG
+
+    body, run, warm, connect, placeholder = _import_under_policy(
+        installer, FILES, _policy(require_pinned_installs=True)
+    )
+
+    warm.assert_not_called()
+    run.assert_not_called()
+    connect.assert_not_called()
+    placeholder.assert_not_called()
+    assert body["mcp_error"] == PINNED_INSTALLS_MCP_MSG
+    assert "mcp_connection_ids" not in body
+
+
+def test_pinned_installs_policy_allows_a_server_whose_packages_are_all_pinned(installer):
+    pinned = PYPROJECT.replace(b'["fastmcp>=3.2.0,<4.0.0", "click>=8.0.0"]', b'["fastmcp==3.2.1", "click==8.1.7"]')
+
+    body, run, warm, connect, _ = _import_under_policy(
+        installer, {**FILES, "pyproject.toml": pinned}, _policy(require_pinned_installs=True)
+    )
+
+    warm.assert_called_once()
+    run.assert_called_once()
+    connect.assert_called_once()
+    assert "mcp_error" not in body
+
+
+@pytest.mark.parametrize(
+    "requirement, pinned",
+    [
+        ("fastmcp==3.2.1", True),
+        ("fastmcp[cli]==3.2.1", True),
+        ("fastmcp==3.2.1 ; python_version >= '3.11'", True),
+        ("fastmcp>=3.2.0", False),
+        ("fastmcp==3.*", False),
+        ("fastmcp~=3.2", False),
+        ("fastmcp", False),
+    ],
+)
+def test_only_an_exact_version_counts_as_pinned(requirement, pinned):
+    from marketplace.mcp_inference import LaunchSpec
+
+    assert (LaunchSpec("s", "a.py", (requirement,)).unpinned() == []) is pinned
+
+
+def test_the_preview_says_so_when_pinning_policy_blocks_the_server():
+    with patch("sandbox.policy.load_policy", return_value=_policy(require_pinned_installs=True)):
+        summary = P.summarize_package(FILES)
+
+    assert any(line.startswith("Blocked by your administrator's policy") for line in summary["lines"])
+    assert not any("Downloads and installs" in line for line in summary["lines"])
+
+
+# ── the skill and its server live and stop together ──────────────────────────
+
+
+@pytest.fixture
+def imported(installer, tmp_path, monkeypatch):
+    import config
+    from marketplace import kill_switch, loader
+
+    monkeypatch.setattr(config, "INSTALLED_SKILLS_DIR", tmp_path)
+    monkeypatch.setattr(config, "PLUGINS_DIR", tmp_path / "plugins")
+    monkeypatch.setattr(kill_switch, "_refresh_prompts", lambda: None)
+    monkeypatch.setattr(loader, "load_skill_tools", lambda *a, **k: {"ok": True})
+    _, second, register, _ = _import(installer, FILES)
+    skill_id = second.json()["skill_id"]
+    assert register.call_count == 1
+    return installer, kill_switch, skill_id
+
+
+def _restart(register_result):
+    return (
+        patch("mcp.manager.register_plugin_mcp_server", return_value=register_result),
+        patch("marketplace.installer._warm_uv_cache"),
+    )
+
+
+def test_disabling_the_skill_stops_and_unregisters_its_server(imported):
+    installer, kill_switch, skill_id = imported
+
+    with patch("marketplace.installer._teardown_plugin_mcp") as teardown:
+        assert kill_switch.disable(skill_id) == {"ok": True}
+
+    teardown.assert_called_once_with(skill_id)
+    assert next(e for e in installer.load_installed() if e["id"] == skill_id)["disabled"] is True
+
+
+def test_the_server_is_really_removed_from_the_connection_manager_when_disabled(imported):
+    from mcp import manager
+
+    _, kill_switch, skill_id = imported
+    removed = []
+    connections = [{"id": CONNECTION, "plugin_id": skill_id}]
+    with patch.object(manager, "remove", side_effect=lambda cid: removed.append(cid) or {"ok": True}), \
+            patch.object(manager, "_load_connections", return_value=connections):
+        kill_switch.disable(skill_id)
+
+    assert removed == [CONNECTION]
+
+
+def test_enabling_the_skill_starts_the_approved_server_again(imported):
+    installer, kill_switch, skill_id = imported
+    kill_switch.disable(skill_id)
+    ok = {"ok": True, "id": CONNECTION, "enabled": True}
+
+    register, warm = _restart(ok)
+    with register as started, warm as warmed:
+        result = kill_switch.enable(skill_id)
+
+    assert result == {"ok": True}
+    warmed.assert_called_once()
+    owner, name, provisional, missing = started.call_args.args
+    assert (owner, name, missing) == (skill_id, "snowflake-mcp", [])
+    assert provisional["args"] == EXPECTED_ARGS
+    assert provisional["cwd"] == str(installer.INSTALLED_SKILLS_DIR / skill_id)
+
+
+def test_enabling_starts_what_was_approved_even_if_the_files_changed_since(imported):
+    installer, kill_switch, skill_id = imported
+    kill_switch.disable(skill_id)
+    skill_dir = installer.INSTALLED_SKILLS_DIR / skill_id
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "pyproject.toml").write_bytes(PYPROJECT.replace(b"click>=8.0.0", b"evil-package"))
+
+    register, warm = _restart({"ok": True, "id": CONNECTION, "enabled": True})
+    with register as started, warm:
+        kill_switch.enable(skill_id)
+
+    assert started.call_args.args[2]["args"] == EXPECTED_ARGS
+
+
+def test_a_server_that_fails_on_enable_is_reported_and_the_skill_still_enables(imported):
+    installer, kill_switch, skill_id = imported
+    kill_switch.disable(skill_id)
+
+    register, warm = _restart({"ok": False, "id": CONNECTION, "error": "uv isn't installed"})
+    with register, warm:
+        result = kill_switch.enable(skill_id)
+
+    assert result == {"ok": True, "mcp_error": "uv isn't installed"}
+    assert not next(e for e in installer.load_installed() if e["id"] == skill_id).get("disabled")
+
+
+def test_a_server_that_crashes_while_registering_is_cleaned_up(imported):
+    installer, kill_switch, skill_id = imported
+    kill_switch.disable(skill_id)
+
+    with patch("mcp.manager.register_plugin_mcp_server", side_effect=RuntimeError("boom")), \
+            patch("marketplace.installer._warm_uv_cache"), \
+            patch("marketplace.installer._teardown_plugin_mcp") as teardown:
+        result = kill_switch.enable(skill_id)
+
+    assert result == {"ok": True, "mcp_error": "boom"}
+    teardown.assert_called_once_with(skill_id)
+
+
+def test_enabling_an_already_enabled_skill_leaves_its_server_alone(imported):
+    _, kill_switch, skill_id = imported
+
+    register, warm = _restart({"ok": True, "id": CONNECTION, "enabled": True})
+    with register as started, warm:
+        assert kill_switch.enable(skill_id) == {"ok": True}
+
+    started.assert_not_called()
+
+
+def test_a_skill_without_an_approved_server_never_gets_one_on_enable(installer, tmp_path, monkeypatch):
+    import config
+    from marketplace import kill_switch, loader
+
+    monkeypatch.setattr(config, "INSTALLED_SKILLS_DIR", tmp_path)
+    monkeypatch.setattr(config, "PLUGINS_DIR", tmp_path / "plugins")
+    monkeypatch.setattr(kill_switch, "_refresh_prompts", lambda: None)
+    monkeypatch.setattr(loader, "load_skill_tools", lambda *a, **k: {"ok": True})
+    skill_dir = tmp_path / "plain"
+    skill_dir.mkdir()
+    for path, data in FILES.items():
+        (skill_dir / path).parent.mkdir(parents=True, exist_ok=True)
+        (skill_dir / path).write_bytes(data)
+    installer.save_installed([{"id": "plain", "version": "1.0", "tier": "Community", "disabled": True}])
+
+    with patch("mcp.manager.register_plugin_mcp_server") as register, \
+            patch("marketplace.installer._warm_uv_cache") as warm:
+        assert kill_switch.enable("plain") == {"ok": True}
+
+    register.assert_not_called()
+    warm.assert_not_called()
+
+
+def test_the_enable_and_disable_routes_report_a_server_that_did_not_start(imported):
+    _, kill_switch, skill_id = imported
+    client = _route_client()
+
+    assert client.post(f"/api/marketplace/disable/{skill_id}").json() == {
+        "ok": True, "skill_id": skill_id, "disabled": True,
+    }
+    register, warm = _restart({"ok": False, "id": CONNECTION, "error": "uv isn't installed"})
+    with register, warm:
+        body = client.post(f"/api/marketplace/enable/{skill_id}").json()
+
+    assert body == {"ok": True, "skill_id": skill_id, "disabled": False, "mcp_error": "uv isn't installed"}

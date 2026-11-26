@@ -18,6 +18,7 @@ _MAX_SOURCE_BYTES = 512 * 1024
 _SERVER_PACKAGES = {"fastmcp", "mcp"}
 _UNSAFE = re.compile(r"[\x00-\x1f\x7f]")
 _REQ_NAME = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)")
+_EXACT_PIN = re.compile(r"^\s*[A-Za-z0-9][A-Za-z0-9._-]*\s*(\[[A-Za-z0-9._,\s-]*\])?\s*===?\s*[A-Za-z0-9][A-Za-z0-9._+!-]*\s*(;.*)?$")
 
 
 @dataclass(frozen=True)
@@ -36,6 +37,21 @@ class LaunchSpec:
         out += [f"--with={dep}" for dep in self.dependencies]
         out.append(self.entry)
         return out
+
+    def unpinned(self) -> list[str]:
+        return [dep for dep in self.dependencies if not _EXACT_PIN.match(dep)]
+
+    def to_record(self) -> dict:
+        return {"name": self.name, "entry": self.entry, "dependencies": list(self.dependencies), "python": self.python}
+
+    @classmethod
+    def from_record(cls, record: dict) -> "LaunchSpec":
+        return cls(
+            name=record["name"],
+            entry=record["entry"],
+            dependencies=tuple(record["dependencies"]),
+            python=record.get("python", ""),
+        )
 
 
 def infer_launch_spec(files: dict[str, bytes]) -> LaunchSpec | None:

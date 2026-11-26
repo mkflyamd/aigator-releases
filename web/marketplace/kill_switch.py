@@ -40,21 +40,25 @@ def disable(skill_id: str) -> dict:
     if inner_ids is not None:
         _step(f"stop MCP servers of {skill_id}", installer._teardown_plugin_mcp, skill_id)
         _step(f"remove commands of {skill_id}", deregister_plugin_commands, entry.get("command_ids") or [])
+    else:
+        _step(f"stop the MCP server of {skill_id}", installer.stop_inferred_mcp_server, skill_id)
     _step("refresh skill prompts", _refresh_prompts)
     return {"ok": True}
 
 
-def _enable_tools(skill_id: str, entry: dict, skill_dir) -> None:
+def _enable_tools(skill_id: str, entry: dict, skill_dir) -> dict:
     if entry.get("skill_ids") is not None:
         installer._register_plugin_mcp_servers(skill_id, skill_dir)
         register_plugin_commands(skill_id, skill_dir)
-    elif skill_dir.exists():
-        result = loader.load_skill_tools(skill_id, skill_dir, entry.get("tier") or "Community")
-        if not result.get("ok"):
-            logger.warning("kill switch: tools of %s did not reload: %s", skill_id, result.get("error"))
-    else:
+        return {}
+    if not skill_dir.exists():
         logger.warning("kill switch: skill folder of %s not found at %s; its tools were not reloaded",
                        skill_id, skill_dir)
+        return {}
+    result = loader.load_skill_tools(skill_id, skill_dir, entry.get("tier") or "Community")
+    if not result.get("ok"):
+        logger.warning("kill switch: tools of %s did not reload: %s", skill_id, result.get("error"))
+    return installer.start_inferred_mcp_server(skill_id)
 
 
 def enable(skill_id: str) -> dict:
@@ -65,5 +69,12 @@ def enable(skill_id: str) -> dict:
         return {"ok": True}  # already enabled: restoring again would reset live MCP connections
     state.set_disabled(skill_id, False)
     _step("refresh skill prompts", _refresh_prompts)
-    _step(f"restore {skill_id}", _enable_tools, skill_id, entry, state.skill_dir_for(entry))
-    return {"ok": True}
+    out = {"ok": True}
+    try:
+        started = _enable_tools(skill_id, entry, state.skill_dir_for(entry))
+    except Exception as exc:
+        logger.warning("kill switch: restore %s failed", skill_id, exc_info=True)
+        started = {"mcp_error": str(exc)} if entry.get("inferred_mcp") else {}
+    if started.get("mcp_error"):
+        out["mcp_error"] = started["mcp_error"]
+    return out

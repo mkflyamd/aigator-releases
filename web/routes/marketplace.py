@@ -771,7 +771,10 @@ def _switch(skill_id: str, action, disabled: bool) -> dict:
     if not result.get("ok"):
         error = result.get("error", "failed")
         raise HTTPException(status_code=404 if "not found" in error else 500, detail=error)
-    return {"ok": True, "skill_id": skill_id, "disabled": disabled}
+    out = {"ok": True, "skill_id": skill_id, "disabled": disabled}
+    if result.get("mcp_error"):
+        out["mcp_error"] = result["mcp_error"]
+    return out
 
 
 @router.post("/api/marketplace/disable/{skill_id}", dependencies=[Depends(verify_csrf)])

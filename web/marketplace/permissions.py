@@ -148,7 +148,7 @@ def _visible(text) -> str:
     return _UNSAFE_CHARS.sub("?", str(text))
 
 
-def _mcp_line(name: str, config) -> str:
+def _mcp_line(name: str, config, truncate: bool = True) -> str:
     safe_name = _visible(name)
     config = config if isinstance(config, dict) else {}
     command = config.get("command")
@@ -156,7 +156,7 @@ def _mcp_line(name: str, config) -> str:
         args = config.get("args")
         parts = [command, *(args if isinstance(args, list) else [])]
         shown = _visible(" ".join(str(p) for p in parts))
-        if len(shown) > MAX_MCP_LEN:
+        if truncate and len(shown) > MAX_MCP_LEN:
             shown = shown[:MAX_MCP_LEN] + "\u2026"
         from sandbox.policy import load_policy
 
@@ -203,9 +203,16 @@ def summarize_package(files: dict[str, bytes]) -> dict:
     inferred = None if manifest else infer_launch_spec(files)
     if inferred is not None:
         servers = [inferred.name]
-        line = _mcp_line(inferred.name, {"command": inferred.command, "args": inferred.args()})
+        line = _mcp_line(inferred.name, {"command": inferred.command, "args": inferred.args()}, truncate=False)
         lines.append(line)
-        if line.startswith("Starts"):
+        from sandbox.policy import load_policy
+
+        if line.startswith("Starts") and load_policy().require_pinned_installs and inferred.unpinned():
+            lines[-1] = (
+                f"Blocked by your administrator's policy, so it will not start: the MCP server "
+                f"'{_visible(inferred.name)}' has Python packages that are not pinned to an exact version"
+            )
+        elif line.startswith("Starts"):
             lines.append("Downloads and installs these Python packages the first time it starts: "
                          + ", ".join(_visible(dep) for dep in inferred.dependencies))
     return {
