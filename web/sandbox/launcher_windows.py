@@ -24,7 +24,7 @@ import subprocess
 import tempfile
 import threading
 import time
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -790,6 +790,13 @@ def _sweep_locked(budget: float | None = None) -> tuple[int, int]:
 
     Stops starting revokes once the budget is spent. Entries already cut short, or being repaired in the
     background, are left alone: retrying them here would spend the turn on the same stall."""
+    try:
+        with _file_lock("repair.lock", 0.0):
+            pass
+    except SandboxUnavailable:
+        # Another process's repair is mid-revoke: clearing its entries now would let this launch grant a path
+        # whose revoke is still running.
+        return 0, len(_ledger_load()["per_run"])
     deadline = time.monotonic() + (SWEEP_SECONDS if budget is None else budget)
     data = _ledger_load()
     cut_short = {tuple(entry) for entry in data["needs_repair"]}
@@ -809,19 +816,26 @@ def _repair_stale_grants() -> None:
     """Finish the revokes a turn could not: one at a time, each with a long timeout, no lock held meanwhile.
 
     The entries are claimed under the run lock, so no run is live. A launch that arrives meanwhile sees the
-    claimed entries and is refused at once; the repair ends when each is revoked or has failed again."""
-    with _run_lock():
-        claimed = [(sid, path) for sid, path in (tuple(e) for e in _ledger_load()["per_run"])]
-        _REPAIRING.update(claimed)
-    try:
-        for sid, path in claimed:
+    claimed entries and is refused at once; the repair ends when each is revoked or has failed again. The
+    cross-process repair lock is taken under the run lock and held to the end, so only one process repairs and
+    no other process's sweep clears an entry whose revoke is still running."""
+    with ExitStack() as repair:
+        with _run_lock():
             try:
-                if _revoke_ok(sid, Path(path), timeout=REPAIR_SECONDS):
-                    _ledger_remove_per_run(sid, Path(path))
-            except Exception as exc:  # one stuck entry must not stop the others
-                _log.warning("sandbox: background repair of a grant failed (%s)", type(exc).__name__)
-    finally:
-        _REPAIRING.difference_update(claimed)
+                repair.enter_context(_file_lock("repair.lock", 0.0))
+            except SandboxUnavailable:
+                return
+            claimed = [(sid, path) for sid, path in (tuple(e) for e in _ledger_load()["per_run"])]
+            _REPAIRING.update(claimed)
+        try:
+            for sid, path in claimed:
+                try:
+                    if _revoke_ok(sid, Path(path), timeout=REPAIR_SECONDS):
+                        _ledger_remove_per_run(sid, Path(path))
+                except Exception as exc:  # one stuck entry must not stop the others
+                    _log.warning("sandbox: background repair of a grant failed (%s)", type(exc).__name__)
+        finally:
+            _REPAIRING.difference_update(claimed)
 
 
 def _repair_main() -> None:

@@ -5,6 +5,7 @@ import subprocess
 import sys
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -717,6 +718,67 @@ def test_a_launch_during_a_repair_is_refused_at_once(fake):
     with pytest.raises(sandbox.SandboxUnavailable, match="background"):
         lw.launch(fake.req())
     assert fake.revokes == [] and fake.runs == 0
+
+
+@pytest.fixture
+def repair_lock(monkeypatch):
+    """The cross-process repair lock, modelled in memory so it behaves the same on every OS."""
+    state = SimpleNamespace(held_elsewhere=False, held=0)
+    real = lw._file_lock
+
+    @contextmanager
+    def file_lock(name, wait):
+        if name != "repair.lock":
+            with real(name, wait):
+                yield
+            return
+        if state.held_elsewhere or state.held:
+            raise sandbox.SandboxUnavailable("busy")
+        state.held += 1
+        try:
+            yield
+        finally:
+            state.held -= 1
+
+    monkeypatch.setattr(lw, "_file_lock", file_lock)
+    return state
+
+
+def test_a_launch_never_clears_entries_another_process_is_repairing(fake, repair_lock):
+    wide = fake.tmp / "wide"
+    wide.mkdir()
+    lw._ledger_add_per_run(SID, wide)
+    repair_lock.held_elsewhere = True
+    with pytest.raises(sandbox.SandboxUnavailable, match="background"):
+        lw.launch(fake.req())
+    assert fake.revokes == [] and fake.runs == 0
+    assert lw._ledger_load()["per_run"] == [[SID, str(wide)]]
+
+
+def test_a_second_process_does_not_start_a_repair_while_one_is_running(fake, repair_lock):
+    wide = fake.tmp / "wide"
+    wide.mkdir()
+    lw._ledger_add_per_run(SID, wide)
+    repair_lock.held_elsewhere = True
+    lw._repair_stale_grants()
+    assert fake.revokes == [] and lw._REPAIRING == set()
+    assert lw._ledger_load()["per_run"] == [[SID, str(wide)]]
+
+
+def test_the_repair_holds_the_repair_lock_for_every_revoke_and_lets_go_after(fake, repair_lock, monkeypatch):
+    wide = fake.tmp / "wide"
+    wide.mkdir()
+    lw._ledger_add_per_run(SID, wide)
+    lw._ledger_mark_needs_repair(SID, wide)
+    held_during = []
+
+    def revoke(path, sid, **kw):
+        held_during.append(repair_lock.held)
+        return 0, ""
+
+    monkeypatch.setattr(lw, "_revoke", revoke)
+    lw._repair_stale_grants()
+    assert held_during == [1] and repair_lock.held == 0
 
 
 def test_teardown_that_leaves_an_entry_behind_starts_the_background_repair(fake, monkeypatch):
