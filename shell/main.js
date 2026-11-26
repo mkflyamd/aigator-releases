@@ -661,6 +661,36 @@ function saveLastSlackUrl(url) {
   }
 }
 
+const { createSwitchGate, applyPaneBackground } = require('./pane-switch');
+const _switchGate = createSwitchGate();
+const _paneBgStates = new WeakMap();
+const _applyPaneBackground = (view) => applyPaneBackground(view, _effectiveTheme, _paneBgStates);
+
+// Re-adding an existing child moves it to the top of the stack, which keeps the
+// toolbar's dropdown above a lazily created pane.
+function _raiseToolbarView() {
+  if (!win || !toolbarView) return;
+  try {
+    win.contentView.addChildView(toolbarView);
+  } catch {}
+}
+
+function _applyPaneBackgrounds() {
+  const views = [
+    slackView,
+    teamsView,
+    outlookView,
+    onedriveView,
+    onenoteView,
+    confluenceView,
+    jiraView,
+    githubView,
+  ];
+  for (const pane of Object.values(_genericPanes)) views.push(pane.view);
+  // Theme changes only touch views still waiting for their first load.
+  for (const v of views) _applyPaneBackground(v);
+}
+
 // Helper: return the WebContentsView for the given app name, or null.
 function viewForApp(appName) {
   if (appName === 'slack') return slackView;
@@ -672,7 +702,7 @@ function viewForApp(appName) {
   if (appName === 'jira') return jiraView;
   if (appName === 'github') return githubView;
   // Generic panes
-  if (_genericPanes[appName]) return _genericPanes[appName].view;
+  if (Object.hasOwn(_genericPanes, appName)) return _genericPanes[appName].view;
   return null;
 }
 
@@ -1044,6 +1074,7 @@ async function createGitHubView() {
       },
     );
     win.contentView.addChildView(githubView);
+    _raiseToolbarView();
     githubView.setVisible(false);
     githubView.webContents.loadURL(GITHUB_URL).catch((error) => {
       console.error(`[github] could not navigate to ${GITHUB_URL}: ${error.message}`);
@@ -1330,6 +1361,20 @@ function createWindow() {
   // Match the splash so the unpainted moment before the page's first frame is
   // dark instead of Chromium's default white.
   gatorView.setBackgroundColor('#0a0f1a');
+  gatorView.webContents.on('did-start-navigation', (_e, _url, isInPlace, isMainFrame) => {
+    if (isMainFrame) {
+      _gatorSplitApplied = null;
+      // Only a real document load restarts the renderer's pane-switch seq (not a hash change).
+      if (!isInPlace) _switchGate.reset();
+    }
+  });
+  // A layout between navigation start and commit can toggle the old document.
+  gatorView.webContents.on('dom-ready', () => {
+    _gatorSplitApplied = null;
+  });
+  gatorView.webContents.on('did-finish-load', () => {
+    _gatorSplitApplied = null;
+  });
 
   // Raise the listener cap on the Gator webContents. gatorView gets a dom-ready
   // listener added on EVERY navigation (see early-context redispatch below),
@@ -3169,6 +3214,7 @@ setTimeout(scanAll, 500);
     win.contentView.addChildView(githubView);
     githubView.setBounds({ x: 1599, y: 0, width: 1, height: 900 });
   }
+  _raiseToolbarView();
 
   // ΓöÇΓöÇ Outlook pin module: inject ONCE on dom-ready ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
   // Selectors confirmed by spike/native-outlook-pane/:
@@ -4294,6 +4340,7 @@ function layout() {
   }, 0);
 }
 
+let _gatorSplitApplied = null;
 function _layoutNow() {
   if (!win) return;
   paneTrace.mark('layout', { active: activeExternalApp });
@@ -4460,9 +4507,13 @@ function _syncGatorSqueezed(squeezed) {
 
 function _syncGatorSplit(split) {
   if (!gatorView || !gatorView.webContents || gatorView.webContents.isDestroyed()) return;
+  if (_gatorSplitApplied === split) return;
+  _gatorSplitApplied = split;
   gatorView.webContents
     .executeJavaScript("document.body.classList.toggle('gator-split', " + split + ');')
-    .catch(() => {});
+    .catch(() => {
+      _gatorSplitApplied = null;
+    });
 }
 
 // Generic external-pane IPC ΓÇö used by both Slack and Teams.
@@ -4575,6 +4626,7 @@ function createGenericPane(appConfig) {
   win.contentView.addChildView(view);
   view.setBounds({ x: 1599, y: 0, width: 1, height: 900 });
   _attachToolbarListeners(view, id);
+  _raiseToolbarView();
 
   _genericPanes[id] = { id, name, url, view, partition, homeHosts };
   _refreshAppHomeUrls();
@@ -4596,8 +4648,29 @@ function createCustomApp(appConfig) {
   return view;
 }
 
-ipcMain.handle('external-pane:show', async (_e, appName) => {
-  paneTrace.mark('ipc-show', { app: appName });
+// The native switch currently in flight (set synchronously, cleared when that same ticket
+// finishes). A hide that arrives meanwhile must leave nothing native visible.
+let _pendingSwitchApp = null;
+let _pendingSwitchTicket = null;
+
+async function showNativePane(appName, ticket) {
+  if (ticket !== null) {
+    _pendingSwitchApp = appName;
+    _pendingSwitchTicket = ticket;
+  }
+  try {
+    return await _showNativePaneImpl(appName, ticket);
+  } finally {
+    // A later switch may have replaced the pending value; only clear our own.
+    if (ticket !== null && _pendingSwitchTicket === ticket) {
+      _pendingSwitchApp = null;
+      _pendingSwitchTicket = null;
+    }
+  }
+}
+
+async function _showNativePaneImpl(appName, ticket) {
+  const preexisting = !!viewForApp(appName);
   let view = viewForApp(appName);
   if (!view && (appName === 'jira' || appName === 'confluence'))
     view = await ensureAtlassianView(appName);
@@ -4614,13 +4687,30 @@ ipcMain.handle('external-pane:show', async (_e, appName) => {
   }
   // Auto-create a generic pane for apps that have a home URL but no pane yet
   // (e.g. Google Workspace service skills g-gmail, g-calendar).
-  if (!view && APP_HOME_URL[appName]) {
+  if (!view && Object.hasOwn(APP_HOME_URL, appName) && APP_HOME_URL[appName]) {
     try {
       view = createGenericPane({ id: appName, name: appName, url: APP_HOME_URL[appName] });
     } catch {}
   }
   if (appName === 'github' && !view) view = await ensureGitHubView();
-  if (!view) return false;
+  if (!view) {
+    // The target could not be created: do not leave the previous pane showing while the
+    // renderer redirects to Settings. The legacy path (no ticket) already hid it renderer-side.
+    if (ticket !== null && _switchGate.isCurrent(ticket)) {
+      activeExternalApp = null;
+      layout();
+    }
+    return false;
+  }
+  // A view created during an await is already on the stack, so raise the toolbar
+  // above it even when this switch was superseded.
+  if (!preexisting) _raiseToolbarView();
+  if (ticket !== null && !_switchGate.isCurrent(ticket)) {
+    // Park the just-created view at its proper (hidden) bounds.
+    if (!preexisting) layout();
+    return 'superseded';
+  }
+  _applyPaneBackground(view);
   if (activeExternalApp === appName && view.webContents && !view.webContents.isDestroyed()) {
     const home =
       appName === 'github'
@@ -4647,6 +4737,19 @@ ipcMain.handle('external-pane:show', async (_e, appName) => {
       .catch(() => {});
   }
   return true;
+}
+ipcMain.handle('external-pane:show', async (_e, appName) => {
+  // A legacy show (closeDrawer, restore, post-approval) must not be replaced by an in-flight switch.
+  _switchGate.invalidate();
+  paneTrace.mark('ipc-show', { app: appName });
+  return showNativePane(appName, null);
+});
+ipcMain.handle('pane:switch', async (_e, to, seq) => {
+  if (typeof to !== 'string' || !to || to.length > 200) return false;
+  paneTrace.mark('ipc-show', { app: to.slice(0, 64) });
+  const ticket = _switchGate.begin(seq);
+  if (ticket === null) return 'superseded';
+  return showNativePane(to, ticket);
 });
 ipcMain.on('pane-trace:click', (_e, app, t) => {
   if (typeof app === 'string' && Number.isFinite(t)) paneTrace.click(app.slice(0, 64), t);
@@ -4681,7 +4784,12 @@ ipcMain.handle('github-pane:refresh', async (_e, baseUrl) => {
 });
 ipcMain.handle('external-pane:hide', (_e, appName) => {
   paneTrace.mark('ipc-hide', { app: appName, noop: activeExternalApp !== appName });
-  if (activeExternalApp === appName) {
+  _switchGate.invalidate();
+  if (_pendingSwitchApp !== null) {
+    // Close / classic open / Settings arrived mid-switch: nothing native may stay visible.
+    activeExternalApp = null;
+    layout();
+  } else if (activeExternalApp === appName) {
     activeExternalApp = null;
     layout();
   }
@@ -4738,7 +4846,11 @@ ipcMain.handle('external-pane:get-width', () => extTileWidth);
 // which already knows how to resolve Slack's view and home URL.
 ipcMain.handle('slack-pane:hide', () => {
   paneTrace.mark('ipc-hide', { app: 'slack', noop: activeExternalApp !== 'slack' });
-  if (activeExternalApp === 'slack') {
+  _switchGate.invalidate();
+  if (_pendingSwitchApp !== null) {
+    activeExternalApp = null;
+    layout();
+  } else if (activeExternalApp === 'slack') {
     activeExternalApp = null;
     layout();
   }
@@ -5145,6 +5257,7 @@ ipcMain.handle('web-pin:go-to', async (e, appId, url) => {
 ipcMain.handle('shell:set-theme', (_e, choice) => {
   _effectiveTheme = _resolveTheme(choice);
   _pushThemeToToolbar();
+  _applyPaneBackgrounds();
 });
 
 // OS theme changes affect 'system' mode ΓÇö re-resolve and push if needed.
@@ -5160,6 +5273,7 @@ nativeTheme.on('updated', () => {
     if (newEffective !== _effectiveTheme) {
       _effectiveTheme = newEffective;
       _pushThemeToToolbar();
+      _applyPaneBackgrounds();
     }
   } catch {}
 });

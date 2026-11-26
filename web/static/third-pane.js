@@ -94,12 +94,13 @@ const _nativeSlack = {
     return this.mode;
   },
 
-  activate() {
+  activate(switchTo) {
     if (!this.isNative()) return;
     if (this._inShell()) {
       // Shell mode: tell the shell to show the Slack tile (tiled WebContentsView).
       // The shell handles layout — Gator shrinks, Slack fills the right tile.
-      window.gatorShell.showSlack();
+      if (switchTo) window.gatorShell.switchPane(switchTo, _nextPaneSwitchSeq());
+      else window.gatorShell.showSlack();
       this._startContextListener();
       this._mountDragHandle();
       return;
@@ -113,10 +114,12 @@ const _nativeSlack = {
     this._startContextPolling();
   },
 
-  deactivate() {
+  // skipHide: the caller is about to switchPane, and main's hide handler would
+  // cancel that switch. Everything else still tears down.
+  deactivate(skipHide) {
     if (!this.isNative()) return;
     if (this._inShell()) {
-      window.gatorShell.hideSlack();
+      if (!skipHide) window.gatorShell.hideSlack();
       this._unmountDragHandle();
       this._removeChip();
       this._currentCtx = null;
@@ -2399,8 +2402,66 @@ function _hideAllNativePanes(exceptType) {
   }
 }
 
+// Internal revert switch: only restores the renderer's per-type hide/show calls; main-side theme
+// background, split cache, toolbar raise and gate invalidation stay on.
+const USE_SWITCH_PANE = true;
+let _paneSwitchSeq = 0;
+
+// Monotonic across reloads and Gator windows: seeded from the clock so a restarted renderer
+// never falls below the shell's last accepted seq.
+function _nextPaneSwitchSeq() {
+  _paneSwitchSeq = Math.max(_paneSwitchSeq + 1, Date.now());
+  return _paneSwitchSeq;
+}
+
+// Shell app id this skill type opens natively, or null for classic panes / browser mode.
+function _nativeShellAppId(type) {
+  const shell = window.gatorShell;
+  if (!shell || !shell.isShell || typeof shell.switchPane !== 'function') return null;
+  switch (type) {
+    case 'teams':
+      return 'teams';
+    case 'slack':
+      return _nativeSlack._inShell() ? 'slack' : null;
+    case 'email':
+      return _outlookNativeEnabled() ? 'outlook' : null;
+    case 'onenote':
+      return _onenoteNativeEnabled() ? 'onenote' : null;
+    case 'onedrive':
+      return _onedriveNativeEnabled() ? 'onedrive' : null;
+    case 'jira':
+      return _jiraNativeEnabled() ? 'jira' : null;
+    case 'confluence':
+      return _confluenceNativeEnabled() ? 'confluence' : null;
+    case 'github':
+      return _githubNativeEnabled() ? 'github' : null;
+    default:
+      return typeof SKILL_MAP !== 'undefined' && _isShellWebPaneSkill(SKILL_MAP[type])
+        ? type
+        : null;
+  }
+}
+
+// Native->classic: keep the native view up until the classic pane has had a frame to lay out, so the
+// Gator view's resize does not expose blank frames. Skipped if the user has moved on meanwhile.
+function _deferNativeHide(type, fn) {
+  requestAnimationFrame(() =>
+    requestAnimationFrame(() => {
+      if (tpState.type === type) fn();
+    }),
+  );
+}
+
+function _switchNativePane(appId) {
+  return window.gatorShell.switchPane(appId, _nextPaneSwitchSeq());
+}
+
 function _openThirdPaneImpl(type) {
   const _prevType = tpState.type;
+  // One decision per open: non-null means a single pane:switch replaces every
+  // hide + show below. Main's hide handlers invalidate the switch gate, so no
+  // gatorShell.hide* may run before the switch when this is set.
+  const _switchTo = USE_SWITCH_PANE ? _nativeShellAppId(type) : null;
   _tpOpenMark = {
     type,
     t0: typeof performance !== 'undefined' ? performance.now() : 0,
@@ -2420,14 +2481,15 @@ function _openThirdPaneImpl(type) {
       typeof _nativeSlack !== 'undefined' &&
       _nativeSlack.isNative()
     ) {
-      _nativeSlack.deactivate();
+      _nativeSlack.deactivate(true);
+      if (!_switchTo) _deferNativeHide(type, () => window.gatorShell.hideSlack());
     }
     if (
       tpState.type === 'teams' &&
       typeof window.gatorShell !== 'undefined' &&
       window.gatorShell.isShell
     ) {
-      window.gatorShell.hideTeams();
+      if (!_switchTo) _deferNativeHide(type, () => window.gatorShell.hideTeams());
       _shellDrag.unmount();
     }
     if (
@@ -2436,7 +2498,7 @@ function _openThirdPaneImpl(type) {
       window.gatorShell.isShell &&
       _outlookNativeEnabled()
     ) {
-      window.gatorShell.hideOutlook();
+      if (!_switchTo) _deferNativeHide(type, () => window.gatorShell.hideOutlook());
       _shellDrag.unmount();
     }
     if (
@@ -2445,7 +2507,7 @@ function _openThirdPaneImpl(type) {
       window.gatorShell.isShell &&
       _onedriveNativeEnabled()
     ) {
-      window.gatorShell.hideOneDrive();
+      if (!_switchTo) _deferNativeHide(type, () => window.gatorShell.hideOneDrive());
       _shellDrag.unmount();
     }
     if (
@@ -2454,7 +2516,7 @@ function _openThirdPaneImpl(type) {
       window.gatorShell.isShell &&
       _onenoteNativeEnabled()
     ) {
-      window.gatorShell.hideOneNote();
+      if (!_switchTo) _deferNativeHide(type, () => window.gatorShell.hideOneNote());
       _shellDrag.unmount();
     }
     if (
@@ -2463,7 +2525,7 @@ function _openThirdPaneImpl(type) {
       window.gatorShell.isShell &&
       _confluenceNativeEnabled()
     ) {
-      window.gatorShell.hideConfluence();
+      if (!_switchTo) _deferNativeHide(type, () => window.gatorShell.hideConfluence());
       _shellDrag.unmount();
     }
     if (
@@ -2472,7 +2534,7 @@ function _openThirdPaneImpl(type) {
       window.gatorShell.isShell &&
       _jiraNativeEnabled()
     ) {
-      window.gatorShell.hideJira();
+      if (!_switchTo) _deferNativeHide(type, () => window.gatorShell.hideJira());
       _shellDrag.unmount();
     }
     if (
@@ -2481,7 +2543,7 @@ function _openThirdPaneImpl(type) {
       window.gatorShell.isShell &&
       _githubNativeEnabled()
     ) {
-      window.gatorShell.hideGitHub();
+      if (!_switchTo) _deferNativeHide(type, () => window.gatorShell.hideGitHub());
       _shellDrag.unmount();
     }
     // Custom apps & Google services — hide the previous native pane if switching away
@@ -2491,7 +2553,7 @@ function _openThirdPaneImpl(type) {
         window.gatorShell.isShell &&
         window.gatorShell.hideCustomApp
       ) {
-        window.gatorShell.hideCustomApp(tpState.type);
+        if (!_switchTo) _deferNativeHide(type, () => window.gatorShell.hideCustomApp(_prevType));
         _shellDrag.unmount();
       }
     }
@@ -2502,12 +2564,14 @@ function _openThirdPaneImpl(type) {
   // etc.), hide ALL native apps — not just the one in tpState.type. The spin
   // logo or a prior state change may have left a native app visible in the shell
   // even though tpState.type doesn't match, causing two panes to stack.
-  if (typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell) {
+  if (!_switchTo && typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell) {
     const nativeTypes = ['slack', 'teams', 'email'];
     if (nativeTypes.indexOf(type) === -1) {
-      if (window.gatorShell.hideSlack) window.gatorShell.hideSlack();
-      if (window.gatorShell.hideTeams) window.gatorShell.hideTeams();
-      if (window.gatorShell.hideOutlook) window.gatorShell.hideOutlook();
+      _deferNativeHide(type, () => {
+        if (window.gatorShell.hideSlack) window.gatorShell.hideSlack();
+        if (window.gatorShell.hideTeams) window.gatorShell.hideTeams();
+        if (window.gatorShell.hideOutlook) window.gatorShell.hideOutlook();
+      });
     }
   }
   tpState.type = type;
@@ -2689,10 +2753,11 @@ function _openThirdPaneImpl(type) {
         }
         _stopThreadPolling();
         _stopChatListPolling();
-        if (_prevType === 'slack') window.gatorShell.hideSlack();
+        if (!_switchTo && _prevType === 'slack') window.gatorShell.hideSlack();
       }
       // No width restore — the shell's extTileWidth persists across app switches.
-      window.gatorShell.showTeams();
+      if (_switchTo) _switchNativePane(_switchTo);
+      else window.gatorShell.showTeams();
       _shellDrag.mount();
       _dividerBtns.show();
       return;
@@ -2717,9 +2782,12 @@ function _openThirdPaneImpl(type) {
         _stopChatListPolling();
       }
       // No width restore — the shell's extTileWidth persists across app switches.
-      if (window.gatorShell.hideSlack) window.gatorShell.hideSlack();
-      if (window.gatorShell.hideTeams) window.gatorShell.hideTeams();
-      window.gatorShell.showOutlook();
+      if (!_switchTo) {
+        if (window.gatorShell.hideSlack) window.gatorShell.hideSlack();
+        if (window.gatorShell.hideTeams) window.gatorShell.hideTeams();
+      }
+      if (_switchTo) _switchNativePane(_switchTo);
+      else window.gatorShell.showOutlook();
       _shellDrag.mount();
       _dividerBtns.show();
       return;
@@ -2745,11 +2813,14 @@ function _openThirdPaneImpl(type) {
         _stopChatListPolling();
       }
       // Hide other native panes so they don't linger behind OneNote.
-      if (window.gatorShell.hideSlack) window.gatorShell.hideSlack();
-      if (window.gatorShell.hideTeams) window.gatorShell.hideTeams();
-      if (window.gatorShell.hideOutlook) window.gatorShell.hideOutlook();
-      if (window.gatorShell.hideOneDrive) window.gatorShell.hideOneDrive();
-      window.gatorShell.showOneNote();
+      if (!_switchTo) {
+        if (window.gatorShell.hideSlack) window.gatorShell.hideSlack();
+        if (window.gatorShell.hideTeams) window.gatorShell.hideTeams();
+        if (window.gatorShell.hideOutlook) window.gatorShell.hideOutlook();
+        if (window.gatorShell.hideOneDrive) window.gatorShell.hideOneDrive();
+      }
+      if (_switchTo) _switchNativePane(_switchTo);
+      else window.gatorShell.showOneNote();
       _shellDrag.mount();
       _dividerBtns.show();
       return;
@@ -2777,11 +2848,14 @@ function _openThirdPaneImpl(type) {
         _stopChatListPolling();
       }
       // Hide other native panes so they don't linger behind OneDrive.
-      if (window.gatorShell.hideSlack) window.gatorShell.hideSlack();
-      if (window.gatorShell.hideTeams) window.gatorShell.hideTeams();
-      if (window.gatorShell.hideOutlook) window.gatorShell.hideOutlook();
-      if (window.gatorShell.hideOneNote) window.gatorShell.hideOneNote();
-      window.gatorShell.showOneDrive();
+      if (!_switchTo) {
+        if (window.gatorShell.hideSlack) window.gatorShell.hideSlack();
+        if (window.gatorShell.hideTeams) window.gatorShell.hideTeams();
+        if (window.gatorShell.hideOutlook) window.gatorShell.hideOutlook();
+        if (window.gatorShell.hideOneNote) window.gatorShell.hideOneNote();
+      }
+      if (_switchTo) _switchNativePane(_switchTo);
+      else window.gatorShell.showOneDrive();
       _shellDrag.mount();
       _dividerBtns.show();
       return;
@@ -2809,13 +2883,18 @@ function _openThirdPaneImpl(type) {
         _stopThreadPolling();
         _stopChatListPolling();
       }
-      if (window.gatorShell.hideSlack) window.gatorShell.hideSlack();
-      if (window.gatorShell.hideTeams) window.gatorShell.hideTeams();
-      if (window.gatorShell.hideOutlook) window.gatorShell.hideOutlook();
-      if (window.gatorShell.hideOneDrive) window.gatorShell.hideOneDrive();
-      if (window.gatorShell.hideOneNote) window.gatorShell.hideOneNote();
-      if (window.gatorShell.hideConfluence) window.gatorShell.hideConfluence();
-      _redirectIfNotShown('jira', window.gatorShell.showJira());
+      if (!_switchTo) {
+        if (window.gatorShell.hideSlack) window.gatorShell.hideSlack();
+        if (window.gatorShell.hideTeams) window.gatorShell.hideTeams();
+        if (window.gatorShell.hideOutlook) window.gatorShell.hideOutlook();
+        if (window.gatorShell.hideOneDrive) window.gatorShell.hideOneDrive();
+        if (window.gatorShell.hideOneNote) window.gatorShell.hideOneNote();
+        if (window.gatorShell.hideConfluence) window.gatorShell.hideConfluence();
+      }
+      _redirectIfNotShown(
+        'jira',
+        _switchTo ? _switchNativePane(_switchTo) : window.gatorShell.showJira(),
+      );
       _shellDrag.mount();
       _dividerBtns.show();
       return;
@@ -2831,7 +2910,8 @@ function _openThirdPaneImpl(type) {
       _githubNativeEnabled()
     ) {
       // prettier-ignore
-      window.gatorShell.showGitHub().then((shown) => {
+      (_switchTo ? _switchNativePane(_switchTo) : window.gatorShell.showGitHub()).then((shown) => {
+          if (shown === 'superseded') return;
           if (!shown) {
             _redirectToSetup('github');
             return;
@@ -2843,13 +2923,15 @@ function _openThirdPaneImpl(type) {
           }
           _stopThreadPolling();
           _stopChatListPolling();
-          if (window.gatorShell.hideSlack) window.gatorShell.hideSlack();
-          if (window.gatorShell.hideTeams) window.gatorShell.hideTeams();
-          if (window.gatorShell.hideOutlook) window.gatorShell.hideOutlook();
-          if (window.gatorShell.hideOneDrive) window.gatorShell.hideOneDrive();
-          if (window.gatorShell.hideOneNote) window.gatorShell.hideOneNote();
-          if (window.gatorShell.hideConfluence) window.gatorShell.hideConfluence();
-          if (window.gatorShell.hideJira) window.gatorShell.hideJira();
+          if (!_switchTo) {
+            if (window.gatorShell.hideSlack) window.gatorShell.hideSlack();
+            if (window.gatorShell.hideTeams) window.gatorShell.hideTeams();
+            if (window.gatorShell.hideOutlook) window.gatorShell.hideOutlook();
+            if (window.gatorShell.hideOneDrive) window.gatorShell.hideOneDrive();
+            if (window.gatorShell.hideOneNote) window.gatorShell.hideOneNote();
+            if (window.gatorShell.hideConfluence) window.gatorShell.hideConfluence();
+            if (window.gatorShell.hideJira) window.gatorShell.hideJira();
+          }
           _shellDrag.mount();
           _dividerBtns.show();
         }, () => {
@@ -2876,9 +2958,9 @@ function _openThirdPaneImpl(type) {
       // branch hiding Slack). Unconditional so it works even when re-opening
       // Slack while Teams is the active external view but _prevType is stale
       // (e.g. triggered from the pin orb). Harmless no-op if Teams isn't shown.
-      if (window.gatorShell.hideTeams) window.gatorShell.hideTeams();
+      if (!_switchTo && window.gatorShell.hideTeams) window.gatorShell.hideTeams();
       // No width restore — the shell's extTileWidth persists across app switches.
-      _nativeSlack.activate();
+      _nativeSlack.activate(_switchTo);
       _dividerBtns.show();
       return; // skip the rest of openThirdPane — no third pane in shell mode
     }
@@ -2912,13 +2994,18 @@ function _openThirdPaneImpl(type) {
         _stopThreadPolling();
         _stopChatListPolling();
       }
-      if (window.gatorShell.hideSlack) window.gatorShell.hideSlack();
-      if (window.gatorShell.hideTeams) window.gatorShell.hideTeams();
-      if (window.gatorShell.hideOutlook) window.gatorShell.hideOutlook();
-      if (window.gatorShell.hideOneDrive) window.gatorShell.hideOneDrive();
-      if (window.gatorShell.hideOneNote) window.gatorShell.hideOneNote();
-      if (window.gatorShell.hideJira) window.gatorShell.hideJira();
-      _redirectIfNotShown('confluence', window.gatorShell.showConfluence());
+      if (!_switchTo) {
+        if (window.gatorShell.hideSlack) window.gatorShell.hideSlack();
+        if (window.gatorShell.hideTeams) window.gatorShell.hideTeams();
+        if (window.gatorShell.hideOutlook) window.gatorShell.hideOutlook();
+        if (window.gatorShell.hideOneDrive) window.gatorShell.hideOneDrive();
+        if (window.gatorShell.hideOneNote) window.gatorShell.hideOneNote();
+        if (window.gatorShell.hideJira) window.gatorShell.hideJira();
+      }
+      _redirectIfNotShown(
+        'confluence',
+        _switchTo ? _switchNativePane(_switchTo) : window.gatorShell.showConfluence(),
+      );
       _shellDrag.mount();
       _dividerBtns.show();
       return;
@@ -2941,8 +3028,9 @@ function _openThirdPaneImpl(type) {
         _stopChatListPolling();
       }
       // Hide all native panes (hardcoded + custom) so they don't linger.
-      _hideAllNativePanes(type);
-      window.gatorShell.showCustomApp(type);
+      if (!_switchTo) _hideAllNativePanes(type);
+      if (_switchTo) _switchNativePane(_switchTo);
+      else window.gatorShell.showCustomApp(type);
       _shellDrag.mount();
       _dividerBtns.show();
       return;

@@ -106,8 +106,17 @@ for (const [type, label, section] of [
 }
 
 test('third pane uses the redirect for Jira, Confluence and GitHub native branches', () => {
-  assert(source.includes("_redirectIfNotShown('jira', window.gatorShell.showJira())"));
-  assert(source.includes("_redirectIfNotShown('confluence', window.gatorShell.showConfluence())"));
+  // Both the switchPane path and the legacy show path must feed the redirect.
+  assert(
+    /_redirectIfNotShown\(\s*'jira',\s*_switchTo \? _switchNativePane\(_switchTo\) : window\.gatorShell\.showJira\(\),?\s*\)/.test(
+      source,
+    ),
+  );
+  assert(
+    /_redirectIfNotShown\(\s*'confluence',\s*_switchTo \? _switchNativePane\(_switchTo\) : window\.gatorShell\.showConfluence\(\),?\s*\)/.test(
+      source,
+    ),
+  );
   assert(/if \(!shown\) \{\s*_redirectToSetup\('github'\);/.test(source));
 });
 
