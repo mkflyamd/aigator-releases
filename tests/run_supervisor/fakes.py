@@ -6,6 +6,7 @@ import sys
 import time
 from pathlib import Path
 
+# The viewer fakes use socketserver: http.server.HTTPServer calls socket.getfqdn() on bind, which can stall on macOS runners.
 # cmd quotes a Windows path the same way everywhere; bash and WSL would mangle it.
 SHELL = "cmd" if sys.platform == "win32" else ""
 
@@ -23,15 +24,15 @@ _PROGRAMS = {
         "time.sleep(60)"
     ),
     "serves_viewer": (
-        "import http.server, threading, time\n"
-        "httpd = http.server.ThreadingHTTPServer(('127.0.0.1', 0), http.server.SimpleHTTPRequestHandler)\n"
+        "import http.server, socketserver, threading, time\n"
+        "httpd = socketserver.ThreadingTCPServer(('127.0.0.1', 0), http.server.SimpleHTTPRequestHandler)\n"
         "threading.Thread(target=httpd.serve_forever, daemon=True).start()\n"
         "print(f'Viewer at http://127.0.0.1:{httpd.server_address[1]}/', flush=True)\n"
         "time.sleep(60)"
     ),
     "viewer_then_crash": (
         "import pathlib, subprocess, sys\n"
-        "server = 'import http.server; h = http.server.ThreadingHTTPServer((\"127.0.0.1\", 0), "
+        "server = 'import http.server, socketserver; h = socketserver.ThreadingTCPServer((\"127.0.0.1\", 0), "
         "http.server.SimpleHTTPRequestHandler); print(h.server_address[1], flush=True); h.serve_forever()'\n"
         "child = subprocess.Popen([sys.executable, '-c', server], stdout=subprocess.PIPE, text=True)\n"
         "port = child.stdout.readline().strip()\n"
