@@ -118,23 +118,23 @@ def install(provider, ref: dict, *, version: int, digest: str) -> dict:
     if not digest or got["digest"] != digest:
         raise ShareError("content_changed", "The skill changed since you reviewed it. Review it again before installing.")
     skill_id = got["manifest"]["name"]
-    collision = _collision(skill_id)
-    if collision:
-        raise ShareError("collision", _COLLISION_TEXT[collision])
-
-    result = installer.install_skill_md(
-        skill_id, "", str(got["version"]), "Community", "", got["zip_bytes"], expected_digest=digest
-    )
-    if not result.get("ok"):
-        return result
     author = _author(got["manifest"])
-    skill_state.update_entry(
-        result["skill_id"],
-        {
-            "share_source": {"drive_id": ref["drive_id"], "folder_id": ref["folder_id"]},
-            "shared_version": got["version"],
-            "files_digest": digest,
-            "shared_by": author,
-        },
-    )
+    with installer._SKILL_OPS_LOCK:  # the name check and the install are one step, so two installs cannot both pass it
+        collision = _collision(skill_id)
+        if collision:
+            raise ShareError("collision", _COLLISION_TEXT[collision])
+        result = installer.install_skill_md(
+            skill_id, "", str(got["version"]), "Community", "", got["zip_bytes"], expected_digest=digest
+        )
+        if not result.get("ok"):
+            return result
+        skill_state.update_entry(
+            result["skill_id"],
+            {
+                "share_source": {"drive_id": ref["drive_id"], "folder_id": ref["folder_id"]},
+                "shared_version": got["version"],
+                "files_digest": digest,
+                "shared_by": author,
+            },
+        )
     return {**result, "version": got["version"], "digest": digest, "shared_by": author}

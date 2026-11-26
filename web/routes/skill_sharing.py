@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field, field_validator
 from marketplace import installer, skill_audit
 from marketplace.loader import load_skill_tools
 from routes.marketplace import (
+    _enforce_pinned,
     _enforce_tier,
     _install_failure,
     _note_tools_error,
@@ -65,6 +66,7 @@ class PublishRequest(BaseModel):
     people: list[str] = Field(default_factory=list, max_length=50)
     root: FolderRef | None = None
     audience_ack: bool = False
+    inventory_digest: str = Field(min_length=1, max_length=128)
 
     @field_validator("people")
     @classmethod
@@ -143,7 +145,12 @@ def check_share_location(
         raise HTTPException(
             status_code=400, detail={"error": "invalid", "message": "Give both drive_id and folder_id, or neither."}
         )
-    return _call(destinations.check, _call(_provider), skill_id, drive_id, folder_id, _call(_author_name))
+    return _call(destinations.check, _call(_provider), skill_id, drive_id, folder_id)
+
+
+@router.get("/api/skills/share/inventory")
+def share_inventory(skill_id: str = Query(min_length=1, max_length=128)):
+    return _call(publisher.inventory, skill_id)
 
 
 @router.post("/api/skills/share/publish", dependencies=[Depends(verify_csrf)])
@@ -159,6 +166,7 @@ def publish_skill(req: PublishRequest):
         root=root,
         people=req.people,
         audience_ack=req.audience_ack,
+        inventory_digest=req.inventory_digest,
     )
 
 
@@ -178,6 +186,7 @@ def review_shared_skill(req: ReviewRequest):
 @router.post("/api/skills/share/install", dependencies=[Depends(verify_csrf)])
 def install_shared_skill(req: InstallRequest):
     _enforce_tier("shared-skill", "Community")
+    _enforce_pinned(None, req.link)
     _require_digest(req.digest)
     ref = _call(messages.parse_share_link, req.link)
     provider = _call(_provider)

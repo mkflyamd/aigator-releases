@@ -70,7 +70,7 @@ def test_there_is_no_current_destination_before_publishing_or_when_it_is_gone(pr
 
 
 def test_check_with_no_ids_checks_the_default_folder(provider, skills_dir):
-    out = destinations.check(provider, "weekly-report", "", "", "A")
+    out = destinations.check(provider, "weekly-report", "", "")
     assert out["ok"] is True
     assert out["can_write"] is True
     assert out["audience"]["kind"] == "private"
@@ -79,14 +79,14 @@ def test_check_with_no_ids_checks_the_default_folder(provider, skills_dir):
 
 
 def test_check_reports_a_missing_folder(provider, skills_dir):
-    out = destinations.check(provider, "weekly-report", "d1", "nope", "A")
+    out = destinations.check(provider, "weekly-report", "d1", "nope")
     assert out == {"ok": False, "reason": "not_found", "can_write": None, "location": None, "audience": None, "existing": None}
 
 
 def test_check_reports_a_file_as_not_a_folder(provider, skills_dir):
     chosen = provider.child_folder(provider.default_root(), "X")
     provider.not_folders.add(chosen["folder_id"])
-    out = destinations.check(provider, "weekly-report", "d1", chosen["folder_id"], "A")
+    out = destinations.check(provider, "weekly-report", "d1", chosen["folder_id"])
     assert out["ok"] is False
     assert out["reason"] == "not_a_folder"
 
@@ -94,36 +94,65 @@ def test_check_reports_a_file_as_not_a_folder(provider, skills_dir):
 def test_check_lets_other_errors_through(provider, skills_dir):
     provider.describe_folder = lambda d, f: (_ for _ in ()).throw(ShareError("throttled", "slow"))
     with pytest.raises(ShareError) as err:
-        destinations.check(provider, "weekly-report", "d1", "f1", "A")
+        destinations.check(provider, "weekly-report", "d1", "f1")
     assert err.value.code == "throttled"
 
 
 def test_write_access_is_known_on_my_own_drive_and_unknown_elsewhere(provider, skills_dir):
     chosen = provider.child_folder(provider.default_root(), "X")
-    assert destinations.check(provider, "s", "d1", chosen["folder_id"], "A")["can_write"] is True
+    assert destinations.check(provider, "s", "d1", chosen["folder_id"])["can_write"] is True
     provider.my_drive_id = lambda: "other"
-    assert destinations.check(provider, "s", "d1", chosen["folder_id"], "A")["can_write"] is None
+    assert destinations.check(provider, "s", "d1", chosen["folder_id"])["can_write"] is None
 
 
 def test_check_passes_the_audience_through(provider, skills_dir):
     chosen = provider.child_folder(provider.default_root(), "X")
     provider.audiences[chosen["folder_id"]] = {"kind": "org", "name": "Your organization", "approx_count": None}
-    assert destinations.check(provider, "s", "d1", chosen["folder_id"], "A")["audience"]["kind"] == "org"
+    assert destinations.check(provider, "s", "d1", chosen["folder_id"])["audience"]["kind"] == "org"
 
 
 def test_check_flags_a_skill_already_there_as_mine_or_not(provider, make_mine):
     chosen = provider.child_folder(provider.default_root(), "X")
     skill_id = make_mine()
     publisher.publish(provider, skill_id, author="Ann", root=chosen)
-    mine = destinations.check(provider, skill_id, "d1", chosen["folder_id"], " ann ")["existing"]
+    mine = destinations.check(provider, skill_id, "d1", chosen["folder_id"])["existing"]
     assert mine["yours"] is True
     assert mine["version"] == 1
     assert mine["author"] == "Ann"
-    theirs = destinations.check(provider, skill_id, "d1", chosen["folder_id"], "Bob")["existing"]
+    provider.user_id = "u-someone-else"
+    theirs = destinations.check(provider, skill_id, "d1", chosen["folder_id"])["existing"]
     assert theirs["yours"] is False
-    assert destinations.check(provider, skill_id, "d1", chosen["folder_id"], "")["existing"]["yours"] is False
+    provider.user_id = ""
+    assert destinations.check(provider, skill_id, "d1", chosen["folder_id"])["existing"]["yours"] is False
+
+
+def test_a_matching_display_name_does_not_make_a_skill_yours(provider, make_mine):
+    chosen = provider.child_folder(provider.default_root(), "X")
+    skill_id = make_mine()
+    publisher.publish(provider, skill_id, author="Ann", root=chosen)
+    provider.user_id = "u-impostor"
+    found = destinations.existing_skill(provider, chosen, skill_id)
+    assert found["author"] == "Ann"
+    assert found["yours"] is False
+
+
+def test_a_skill_with_no_recorded_owner_id_is_not_yours(provider, make_mine):
+    chosen = provider.child_folder(provider.default_root(), "X")
+    skill_id = make_mine()
+    theirs = provider.child_folder(chosen, skill_id)
+    provider.files[(theirs["folder_id"], "skill.json")] = (
+        json.dumps({"latest": 1, "versions": [], "author": "Ann"}).encode(),
+        '"e1"',
+    )
+    assert destinations.existing_skill(provider, chosen, skill_id)["yours"] is False
+
+
+def test_check_reports_the_default_folders_real_audience(provider, skills_dir):
+    root = provider.default_root()
+    provider.audiences[root["folder_id"]] = {"kind": "anyone", "name": "Anyone with the link", "approx_count": None}
+    assert destinations.check(provider, "weekly-report", "", "")["audience"]["kind"] == "anyone"
 
 
 def test_check_finds_nothing_when_the_folder_has_no_such_skill(provider, skills_dir):
     chosen = provider.child_folder(provider.default_root(), "X")
-    assert destinations.check(provider, "other-skill", "d1", chosen["folder_id"], "A")["existing"] is None
+    assert destinations.check(provider, "other-skill", "d1", chosen["folder_id"])["existing"] is None

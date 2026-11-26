@@ -371,10 +371,21 @@ def test_audience_of_an_unshared_folder_in_my_own_onedrive_is_private():
     assert GraphSharingProvider(gc).audience("d1", "f9", "Mine")["kind"] == "private"
 
 
-@pytest.mark.parametrize("scope", ["organization", "anonymous"])
-def test_audience_with_a_wide_link_is_the_organization(scope):
+@pytest.mark.parametrize(
+    ("scope", "kind", "name"),
+    [("organization", "org", "Your organization"), ("anonymous", "anyone", "Anyone with the link")],
+)
+def test_audience_with_a_wide_link_names_who_can_open_it(scope, kind, name):
     gc = _drive_gc(perms=[{"roles": ["owner"]}, {"roles": ["read"], "link": {"scope": scope}}])
-    assert GraphSharingProvider(gc).audience("d1", "f9", "Mine")["kind"] == "org"
+    out = GraphSharingProvider(gc).audience("d1", "f9", "Mine")
+    assert (out["kind"], out["name"]) == (kind, name)
+
+
+def test_an_anonymous_link_wins_over_an_organization_link():
+    gc = _drive_gc(
+        perms=[{"link": {"scope": "organization"}}, {"roles": ["read"], "link": {"scope": "anonymous"}}]
+    )
+    assert GraphSharingProvider(gc).audience("d1", "f9", "Mine")["kind"] == "anyone"
 
 
 def test_audience_counts_the_people_a_folder_is_already_shared_with():
@@ -394,3 +405,9 @@ def test_audience_is_not_private_when_the_permissions_cannot_be_read():
 def test_audience_of_a_folder_in_someone_elses_onedrive_is_not_private():
     gc = _drive_gc(perms=[{"roles": ["owner"]}], my_id="mine")
     assert GraphSharingProvider(gc).audience("d1", "f9", "Theirs")["kind"] == "folder"
+
+
+def test_my_user_id_is_the_directory_id_not_a_display_name():
+    gc = FakeGc()
+    gc.items["/me"] = {"id": "aad-111", "displayName": "Ann"}
+    assert GraphSharingProvider(gc).my_user_id() == "aad-111"

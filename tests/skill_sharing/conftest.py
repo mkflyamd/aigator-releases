@@ -29,6 +29,7 @@ class FakeProvider:
         self.fail_on = {}
         self.audiences = {}
         self.not_folders = set()
+        self.user_id = "u-me"
         self.parents = {}
         self._n = 0
 
@@ -57,6 +58,9 @@ class FakeProvider:
 
     def my_drive_id(self):
         return "d1"
+
+    def my_user_id(self):
+        return self.user_id
 
     def describe_folder(self, drive_id, folder_id):
         found = next((f for f in self.folders.values() if f["folder_id"] == folder_id), None)

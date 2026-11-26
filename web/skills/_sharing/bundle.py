@@ -18,6 +18,7 @@ _SCRIPT_SUFFIXES = (
     ".vbs", ".wsf", ".psm1", ".mjs", ".cjs", ".rb", ".pl", ".dll", ".jar", ".msi", ".com",
 )
 _SKIP_DIRS = {"__pycache__", ".git"}
+_SECRET_SUFFIXES = (".pem", ".key", ".pfx", ".p12", ".kdbx")
 _SHARE_NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
 _RESERVED_NAMES = {"mine"}
 INVALID_NAME_MESSAGE = (
@@ -58,16 +59,36 @@ def has_scripts(files: dict[str, bytes]) -> bool:
     return False
 
 
-def read_skill_dir(skill_dir: Path) -> dict[str, bytes]:
+def _skip_reason(rel: Path) -> str:
+    """Why a file is never shared, or "" when it is included. The contract: regular files only, no hidden
+    files or folders, no caches or version-control data, no key or certificate files."""
+    parts = rel.parts
+    if any(part in _SKIP_DIRS for part in parts):
+        return "cache or version-control data"
+    if any(part.startswith(".") for part in parts):
+        return "hidden file"
+    if rel.name.lower().endswith(_SECRET_SUFFIXES):
+        return "key or certificate file"
+    return ""
+
+
+def scan_skill_dir(skill_dir: Path) -> tuple[dict[str, bytes], list[dict]]:
+    """Apply the inclusion contract. Returns (files that will be shared, [{path, reason}] left out)."""
     from marketplace import github_fetcher
 
     files: dict[str, bytes] = {}
+    skipped: list[dict] = []
     total = 0
     for item in sorted(skill_dir.rglob("*")):
         rel = item.relative_to(skill_dir)
-        if any(part in _SKIP_DIRS for part in rel.parts):
+        if item.is_symlink():
+            skipped.append({"path": rel.as_posix(), "reason": "link"})
             continue
-        if item.is_symlink() or not item.is_file():
+        if not item.is_file():
+            continue
+        reason = _skip_reason(rel)
+        if reason:
+            skipped.append({"path": rel.as_posix(), "reason": reason})
             continue
         data = item.read_bytes()
         total += len(data)
@@ -76,7 +97,22 @@ def read_skill_dir(skill_dir: Path) -> dict[str, bytes]:
         files[rel.as_posix()] = data
     if "SKILL.md" not in files:
         raise ShareError("invalid", "This skill has no SKILL.md, so it cannot be shared.")
-    return files
+    return files, skipped
+
+
+def read_skill_dir(skill_dir: Path) -> dict[str, bytes]:
+    return scan_skill_dir(skill_dir)[0]
+
+
+def inventory(skill_dir: Path) -> dict:
+    """The exact files a publish would upload, plus the digest a publish must quote to prove it matches."""
+    files, skipped = scan_skill_dir(skill_dir)
+    return {
+        "files": [{"path": path, "size": len(files[path])} for path in sorted(files)],
+        "skipped": skipped,
+        "total_bytes": sum(len(data) for data in files.values()),
+        "inventory_digest": files_digest(files),
+    }
 
 
 def build_manifest(
