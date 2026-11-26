@@ -158,7 +158,36 @@
     return !!row.ptySessionId && !!activeId && row.ptySessionId === activeId;
   }
 
-  function filterGroups(rows, query) {
+  // A row keeps this identity when a new live session gets its transcript and its key changes.
+  function rowIdentity(r) {
+    return r.ptySessionId || r.key;
+  }
+
+  // When each Working and Needs you row entered that state. Those two groups sort on it,
+  // oldest first, because it never changes while the row stays put. Last activity changes
+  // on every burst of output and made rows jump away from the pointer.
+  function stampSince(since, rows, nowMs) {
+    const seen = new Set();
+    rows.forEach((r) => {
+      if (r.group !== 'working' && r.group !== 'needs_you') return;
+      const id = rowIdentity(r);
+      seen.add(id);
+      const entry = since.get(id);
+      if (!entry || entry.state !== r.state) since.set(id, { state: r.state, at: nowMs });
+    });
+    since.forEach((_, id) => {
+      if (!seen.has(id)) since.delete(id);
+    });
+  }
+
+  function rowOrder(groupKey, since) {
+    if (!since || (groupKey !== 'working' && groupKey !== 'needs_you'))
+      return (a, b) => b.lastActive - a.lastActive;
+    const at = (r) => (since.get(rowIdentity(r)) || { at: 0 }).at;
+    return (a, b) => at(a) - at(b) || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
+  }
+
+  function filterGroups(rows, query, since) {
     const words = String(query || '')
       .toLowerCase()
       .split(/\s+/)
@@ -170,10 +199,28 @@
     return GROUPS.map((g) => ({
       key: g.key,
       title: g.title,
-      rows: rows
-        .filter((r) => r.group === g.key && hit(r))
-        .sort((a, b) => b.lastActive - a.lastActive),
+      rows: rows.filter((r) => r.group === g.key && hit(r)).sort(rowOrder(g.key, since)),
     })).filter((g) => g.rows.length);
+  }
+
+  // The identities in each group, to remember what the user last saw.
+  function layoutOf(groups) {
+    return groups.map((g) => ({ key: g.key, title: g.title, ids: g.rows.map(rowIdentity) }));
+  }
+
+  // While the user is aiming at a row, every row stays where they last saw it. Rows keep
+  // their place but show their latest data, so a status pill still updates; rows that are
+  // new to the list wait until the pointer or focus leaves.
+  function holdLayout(groups, layout) {
+    const byId = new Map();
+    groups.forEach((g) => g.rows.forEach((r) => byId.set(rowIdentity(r), r)));
+    return layout
+      .map((g) => ({
+        key: g.key,
+        title: g.title,
+        rows: g.ids.map((id) => byId.get(id)).filter(Boolean),
+      }))
+      .filter((g) => g.rows.length);
   }
 
   // Where the preview card goes: just right of the panel, level with the row, never off
@@ -217,6 +264,8 @@
     starting: {},
     takeoverBusy: false,
     rows: new Map(),
+    since: new Map(),
+    layout: null,
     sig: '',
   };
 
@@ -844,12 +893,17 @@
       activateRow(ui.rows.get(rowKey(e.target)));
     });
     list.addEventListener('mouseover', (e) => pointAt(rowKey(e.target)));
-    list.addEventListener('mouseleave', () => pointAt(null));
+    list.addEventListener('mouseleave', () => {
+      pointAt(null);
+      releaseHold(list);
+    });
     list.addEventListener('focusin', (e) => {
       if (!fly.rendering) focusRow(rowKey(e.target));
     });
     list.addEventListener('focusout', (e) => {
-      if (fly.rendering || rowKey(e.relatedTarget) === rowKey(e.target)) return;
+      if (fly.rendering) return;
+      if (!list.contains(e.relatedTarget)) releaseHold(list);
+      if (rowKey(e.relatedTarget) === rowKey(e.target)) return;
       blurRow(rowKey(e.target));
     });
     list.addEventListener('scroll', () => {
@@ -1039,6 +1093,21 @@
     }
   }
 
+  // True while the user may be aiming at a row: the pointer is over the list or keyboard focus
+  // is in it. A row left focused by a mouse click does not count, or the list would stay
+  // frozen after the pointer left.
+  function listHeld(list) {
+    return list.matches(':hover') || !!list.querySelector(':focus-visible');
+  }
+
+  // Apply the changes held back while the user was aiming at a row. The pointer or focus is
+  // leaving, so no row is under it any more. Waits one beat for :hover to clear.
+  function releaseHold(list) {
+    setTimeout(() => {
+      if (!listHeld(list)) render();
+    }, 0);
+  }
+
   function render() {
     const list = document.getElementById('ca-hist-list');
     if (!list) return;
@@ -1053,7 +1122,15 @@
     ) {
       _genAgentRenderTabs(context().tabId);
     }
-    const groups = filterGroups(rows, ui.query);
+    stampSince(ui.since, rows, now);
+    const free = filterGroups(rows, ui.query, ui.since);
+    const scope = ui.query + '|' + (context().project ? context().project.name : '');
+    let groups = free;
+    if (ui.layout && ui.layout.scope === scope && ui.loaded && listHeld(list)) {
+      groups = holdLayout(free, ui.layout.groups);
+    } else {
+      ui.layout = { scope, groups: layoutOf(free) };
+    }
     ui.rows = new Map(rows.map((r) => [r.key, r]));
     const sig = JSON.stringify([
       ui.error,
@@ -1172,6 +1249,9 @@
     isActiveTerminal,
     syncActive,
     filterGroups,
+    stampSince,
+    layoutOf,
+    holdLayout,
     flyoutPlacement,
     show,
     refresh,
