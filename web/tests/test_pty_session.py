@@ -388,3 +388,59 @@ def test_a_viewer_who_attaches_as_the_terminal_is_suspended_is_told_so_not_that_
             }
     finally:
         terminal._pty_sessions.pop("sess-susp", None)
+
+
+def test_a_viewer_of_a_failed_wake_is_told_why_and_gets_the_unsent_message(monkeypatch, tmp_path):
+    import agent_suspend
+
+    monkeypatch.setattr(agent_suspend, "STATE_FILE", tmp_path / "suspended-agents.json")
+    pty = _FakePty()
+    session = PtySession(pty)
+    terminal._pty_sessions["sess-failed"] = session
+    failure = {"reason": "The stored session is gone.", "message": "please look", "sender": "Turn issues", "at": 1.0}
+    try:
+        now = time.time()
+        agent_suspend._remember(
+            "sess-failed",
+            {"agent": "claude", "project_id": "demo", "session_id": "claude-sess-9", "at": now, "failed": failure},
+            now,
+        )
+        with _client(monkeypatch).websocket_connect("/api/terminal/agent?session_id=sess-failed") as ws:
+            assert _wait(lambda: session.ws_clients == 1)
+            pty.end()
+            payload = json.loads(ws.receive_text())
+        assert payload["type"] == "suspended" and payload["session_id"] == "claude-sess-9"
+        assert payload["failed"] == failure
+    finally:
+        terminal._pty_sessions.pop("sess-failed", None)
+
+
+def test_a_viewer_of_a_woken_terminal_is_told_who_woke_it(monkeypatch):
+    pty = _FakePty()
+    session = PtySession(pty)
+    session.meta = {"agent": "claude", "woken_by": "Turn issues", "woken_preview": "please look"}
+    terminal._pty_sessions["sess-woken"] = session
+    try:
+        with _client(monkeypatch).websocket_connect("/api/terminal/agent?session_id=sess-woken") as ws:
+            assert json.loads(ws.receive_text()) == {
+                "type": "woken",
+                "data": "woken by Turn issues",
+                "preview": "please look",
+            }
+    finally:
+        terminal._pty_sessions.pop("sess-woken", None)
+        pty.end()
+
+
+def test_an_ordinary_terminal_sends_no_woken_message(monkeypatch):
+    pty = _FakePty()
+    session = PtySession(pty)
+    session.meta = {"agent": "claude"}
+    terminal._pty_sessions["sess-plain"] = session
+    try:
+        with _client(monkeypatch).websocket_connect("/api/terminal/agent?session_id=sess-plain") as ws:
+            pty.feed("hello")
+            assert "woken" not in ws.receive_text()
+    finally:
+        terminal._pty_sessions.pop("sess-plain", None)
+        pty.end()

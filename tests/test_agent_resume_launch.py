@@ -2,6 +2,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+import agent_mcp
 import agent_sessions as ags
 import agent_state
 import generic_agent
@@ -50,8 +51,18 @@ def test_resume_spawns_the_resume_command_and_pins_the_session(env):
         {"agent": "claude", "repo_path": "C:\\work\\app", "id": "abc-1", "source": "windows", "extra": ("-c", "x=1")}
     ]
     spawn = env["spawn"][-1]
-    assert spawn["command"] == ["C:\\bin\\claude.exe", "--resume", "abc-1", "--settings", agent_state.claude_settings_path()]
+    assert spawn["command"] == [
+        "C:\\bin\\claude.exe",
+        "--resume",
+        "abc-1",
+        "--settings",
+        agent_state.claude_settings_path(),
+        "--mcp-config",
+        agent_mcp.mcp_config_path(),
+    ]
     assert spawn["cwd"] == "C:\\work\\app"
+    token = spawn["env"].pop(agent_mcp.TOKEN_ENV)
+    assert agent_mcp.caller_for(token)["pty_id"] == r.json()["pty_session_id"]
     assert spawn["env"] == {"K": "v", **agent_state.launch_env(r.json()["pty_session_id"])}
     assert generic_agent.pinned_session_id(r.json()["pty_session_id"]) == "abc-1"
 
@@ -159,3 +170,38 @@ def test_a_resumed_codex_terminal_is_linked_to_its_session(env, monkeypatch):
     pty = r.json()["pty_session_id"]
     assert generic_agent.linked_session_id(pty) == "x1"
     assert generic_agent.pinned_session_id(pty) is None
+
+
+async def test_a_wake_resumes_under_the_old_terminal_id_and_marks_who_woke_it(env, monkeypatch):
+    cleared = []
+    monkeypatch.setattr(agent_state, "clear", cleared.append)
+    req = generic_agent_routes.GenericAgentTerminalRequest(**BODY)
+    old = "11111111-2222-3333-4444-555555555555"
+    result = await generic_agent_routes.resume_suspended(req, old, "Turn issues", "please look")
+    assert result == {"pty_session_id": old, "created": True}
+    spawn = env["spawn"][-1]
+    assert spawn["sid"] == old
+    assert spawn["meta"]["woken_by"] == "Turn issues" and spawn["meta"]["woken_preview"] == "please look"
+    assert spawn["meta"]["project_id"] == "demo" and spawn["meta"]["agent"] == "claude"
+    assert cleared == [old]
+    assert generic_agent.pinned_session_id(old) == "abc-1"
+    assert agent_mcp.caller_for(spawn["env"][agent_mcp.TOKEN_ENV])["pty_id"] == old
+
+
+def test_an_ordinary_resume_takes_a_new_terminal_id_and_is_not_marked_as_woken(env):
+    r = client().post("/api/generic-agent/terminal", json=BODY)
+    spawn = env["spawn"][-1]
+    assert spawn["sid"] == r.json()["pty_session_id"]
+    assert "woken_by" not in spawn["meta"]
+
+
+async def test_a_wake_of_a_session_that_is_already_running_returns_that_terminal(env, monkeypatch):
+    import routes.terminal as terminal
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(generic_agent, "ptys_for_session", lambda agent, sid: ["live-1"])
+    monkeypatch.setattr(terminal, "get_pty_session", lambda sid: SimpleNamespace(done=False))
+    req = generic_agent_routes.GenericAgentTerminalRequest(**BODY)
+    result = await generic_agent_routes.resume_suspended(req, "old-pty", "Turn issues")
+    assert result == {"pty_session_id": "live-1", "created": False}
+    assert env["spawn"] == []

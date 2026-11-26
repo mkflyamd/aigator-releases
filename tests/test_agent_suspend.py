@@ -141,7 +141,9 @@ def world(tmp_path, monkeypatch):
     monkeypatch.setattr(agent_suspend, "_unwatched_since", {})
     monkeypatch.setattr(terminal, "live_pty_labels", lambda: dict(w["live"]))
     monkeypatch.setattr(terminal, "has_viewer", lambda pid, grace_seconds=90.0, visible_only=True: pid in w["watched"])
-    monkeypatch.setattr(agent_suspend, "_transcript_is_current", lambda meta, at: w["transcript_ok"])
+    monkeypatch.setattr(
+        agent_suspend, "_current_session", lambda meta, at: {"title": "Design head"} if w["transcript_ok"] else None
+    )
     monkeypatch.setattr(agent_suspend.agent_state, "read_states", lambda ids: {i: w["states"][i] for i in ids if i in w["states"]})
 
     def close(pid):
@@ -196,6 +198,45 @@ def test_suspending_records_how_to_resume_and_drops_the_terminal_bookkeeping(wor
     assert record["at"] == NOW + IDLE
     assert generic_agent.get_active_session("demo", "claude") is None
     assert generic_agent.linked_session_id(a) is None
+
+
+def test_the_record_keeps_the_session_title_so_a_peer_can_be_named(world):
+    a = pty_id()
+    world["live"][a] = labels(session="claude-sess-9")
+    world["states"][a] = idle_for(IDLE * 4)
+    agent_suspend.sweep(NOW)
+    agent_suspend.sweep(NOW + IDLE)
+    assert agent_suspend.suspended_record(a)["title"] == "Design head"
+
+
+def test_suspended_claude_agents_are_listed_for_other_agents_to_find(world):
+    a, b = pty_id(), pty_id()
+    world["live"][a] = labels(session="claude-sess-9")
+    world["live"][b] = labels(session="claude-sess-10")
+    world["states"][a] = world["states"][b] = idle_for(IDLE * 4)
+    agent_suspend.sweep(NOW)
+    agent_suspend.sweep(NOW + IDLE)
+    listed = json.loads(agent_suspend.targets_file().read_text(encoding="utf-8"))
+    assert {t["session_id"] for t in listed} == {"claude-sess-9", "claude-sess-10"}
+    assert listed[0]["name"] == "Design head" and listed[0]["project_id"] == "demo" and listed[0]["agent"] == "claude"
+    assert listed[0]["suspended_since"].endswith("+00:00")
+    agent_suspend.forget(a)
+    listed = json.loads(agent_suspend.targets_file().read_text(encoding="utf-8"))
+    assert [t["session_id"] for t in listed] == ["claude-sess-10"]
+
+
+def test_a_record_whose_wake_failed_is_kept_with_why_and_is_not_listed_as_a_target(world):
+    a = pty_id()
+    world["live"][a] = labels(session="claude-sess-9")
+    world["states"][a] = idle_for(IDLE * 4)
+    agent_suspend.sweep(NOW)
+    agent_suspend.sweep(NOW + IDLE)
+    agent_suspend.mark_failed(a, {"reason": "transcript missing", "message": "hi", "sender": "Turn issues", "at": NOW})
+    assert agent_suspend.suspended_record(a)["failed"]["reason"] == "transcript missing"
+    assert json.loads(agent_suspend.targets_file().read_text(encoding="utf-8")) == []
+    agent_suspend.clear_failed(a)
+    assert "failed" not in agent_suspend.suspended_record(a)
+    assert len(json.loads(agent_suspend.targets_file().read_text(encoding="utf-8"))) == 1
 
 
 def test_the_record_survives_a_backend_restart(world):
@@ -351,10 +392,10 @@ def _suspend_after(monkeypatch, change):
     that precedes the kill."""
     def lookup(meta, at):
         change()
-        return True
+        return {"title": "Design head"}
 
     agent_suspend.sweep(NOW)
-    monkeypatch.setattr(agent_suspend, "_transcript_is_current", lookup)
+    monkeypatch.setattr(agent_suspend, "_current_session", lookup)
     return agent_suspend.sweep(NOW + IDLE)
 
 
@@ -410,18 +451,18 @@ def _stored(monkeypatch, record, repo="C:/repo"):
 def test_the_stored_session_must_exist_and_be_at_least_as_recent_as_the_idle_state(monkeypatch):
     meta = labels(session="sess-1")
     _stored(monkeypatch, {"id": "sess-1", "last_active_at": NOW})
-    assert agent_suspend._transcript_is_current(meta, NOW) is True
+    assert agent_suspend._current_session(meta, NOW)["id"] == "sess-1"
     # The Stop hook stamps idle just after the last transcript write.
-    assert agent_suspend._transcript_is_current(meta, NOW + 1) is True
+    assert agent_suspend._current_session(meta, NOW + 1) is not None
     stale = NOW + agent_suspend.TRANSCRIPT_SLACK_SECONDS + 1
-    assert agent_suspend._transcript_is_current(meta, stale) is False
+    assert agent_suspend._current_session(meta, stale) is None
 
 
 def test_no_stored_session_or_no_project_means_it_is_not_current(monkeypatch):
     _stored(monkeypatch, None)
-    assert agent_suspend._transcript_is_current(labels(session="sess-1"), NOW) is False
+    assert agent_suspend._current_session(labels(session="sess-1"), NOW) is None
     _stored(monkeypatch, {"id": "sess-1", "last_active_at": NOW})
-    assert agent_suspend._transcript_is_current({**labels(session="sess-1"), "project_id": "gone"}, NOW) is False
+    assert agent_suspend._current_session({**labels(session="sess-1"), "project_id": "gone"}, NOW) is None
 
 
 def test_the_cap_only_suspends_terminals_that_have_been_idle_a_while(world):
@@ -442,7 +483,7 @@ def test_the_record_file_is_written_through_a_per_process_temp_name(world, monke
     real = agent_suspend.os.replace
     monkeypatch.setattr(agent_suspend.os, "replace", lambda src, dst: replaced.append(src.name) or real(src, dst))
     agent_suspend._remember("p", {"session_id": "s", "at": NOW}, NOW)
-    assert replaced == [f"suspended-agents.json.{agent_suspend.os.getpid()}.tmp"]
+    assert replaced[0] == f"suspended-agents.json.{agent_suspend.os.getpid()}.tmp"
 
 
 def test_a_record_file_error_cannot_turn_a_closed_tab_into_a_500(world, monkeypatch):

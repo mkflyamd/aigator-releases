@@ -18,6 +18,7 @@ import logging
 import os
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import agent_state
@@ -85,17 +86,70 @@ def _load() -> dict[str, dict]:
     return data if isinstance(data, dict) else {}
 
 
+def _write_atomic(path: Path, body: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(body, encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def targets_file() -> Path:
+    return STATE_FILE.parent / "wake" / "targets.json"
+
+
+def _write_targets(records: dict[str, dict]) -> None:
+    """The suspended agents another agent can ask Gator to wake, for agents that
+    do not find a peer in ListAgents."""
+    targets = [
+        {
+            "name": r.get("title") or r["session_id"],
+            "session_id": r["session_id"],
+            "agent": r["agent"],
+            "project_id": r.get("project_id"),
+            "suspended_since": datetime.fromtimestamp(r["at"], timezone.utc).isoformat(timespec="seconds"),
+        }
+        for r in records.values()
+        if r.get("agent") == "claude" and r.get("session_id") and not r.get("failed")
+    ]
+    _write_atomic(targets_file(), json.dumps(targets, indent=2))
+
+
 def _save(records: dict[str, dict]) -> None:
-    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    tmp = STATE_FILE.with_name(f"{STATE_FILE.name}.{os.getpid()}.tmp")
-    tmp.write_text(json.dumps(records), encoding="utf-8")
-    os.replace(tmp, STATE_FILE)
+    _write_atomic(STATE_FILE, json.dumps(records))
+    try:
+        _write_targets(records)
+    except (OSError, KeyError, TypeError, ValueError):
+        logger.warning("could not write the wake targets file", exc_info=True)
 
 
 def suspended_record(pty_id: str) -> dict | None:
     with _file_lock:
         record = _load().get(pty_id)
     return record if isinstance(record, dict) else None
+
+
+def all_records() -> dict[str, dict]:
+    with _file_lock:
+        return {k: v for k, v in _load().items() if isinstance(v, dict)}
+
+
+def mark_failed(pty_id: str, failure: dict) -> None:
+    """Keep a record whose wake failed, with why and the message that was not delivered."""
+    with _file_lock:
+        records = _load()
+        record = records.get(pty_id)
+        if isinstance(record, dict):
+            records[pty_id] = {**record, "failed": failure}
+            _save(records)
+
+
+def clear_failed(pty_id: str) -> None:
+    with _file_lock:
+        records = _load()
+        record = records.get(pty_id)
+        if isinstance(record, dict) and "failed" in record:
+            records[pty_id] = {k: v for k, v in record.items() if k != "failed"}
+            _save(records)
 
 
 def forget(pty_id: str) -> None:
@@ -116,8 +170,8 @@ def _remember(pty_id: str, record: dict, now: float) -> None:
         _save(records)
 
 
-def _transcript_is_current(meta: dict, idle_at: float) -> bool:
-    """True when the stored session the tab would resume is on disk and has not gone
+def _current_session(meta: dict, idle_at: float) -> dict | None:
+    """The stored session the tab would resume, when it is on disk and has not gone
     stale (an agent that continues under a new session id leaves the old one behind)."""
     from agent_sessions import find_session
     from skills.code_agent.projects import get_project
@@ -125,12 +179,12 @@ def _transcript_is_current(meta: dict, idle_at: float) -> bool:
     repo_path = (get_project(meta.get("project_id") or "") or {}).get("repo_path")
     if not repo_path:
         logger.debug("not suspending %s: no project %r", meta.get("session_id"), meta.get("project_id"))
-        return False
+        return None
     try:
         rec = find_session(repo_path, meta["agent"], meta["session_id"])
     except Exception:
         logger.warning("could not look up the stored session for %s", meta.get("session_id"), exc_info=True)
-        return False
+        return None
     current = rec is not None and rec["last_active_at"] >= idle_at - TRANSCRIPT_SLACK_SECONDS
     if not current:
         logger.debug(
@@ -138,13 +192,25 @@ def _transcript_is_current(meta: dict, idle_at: float) -> bool:
             meta["session_id"],
             "not found" if rec is None else "older than the idle state",
         )
-    return current
+    return rec if current else None
 
 
 def _suspend(pty_id: str, meta: dict, idle_at: float, now: float) -> bool:
+    import agent_wake
+
+    if not agent_wake.claim(meta["session_id"]):
+        return False
+    try:
+        return _suspend_claimed(pty_id, meta, idle_at, now)
+    finally:
+        agent_wake.release(meta["session_id"])
+
+
+def _suspend_claimed(pty_id: str, meta: dict, idle_at: float, now: float) -> bool:
     from routes import terminal
 
-    if not _transcript_is_current(meta, idle_at):
+    stored = _current_session(meta, idle_at)
+    if not stored:
         return False
     # Last look before the kill: it was viewed, or the agent moved on, while the
     # lookup above ran.
@@ -154,7 +220,14 @@ def _suspend(pty_id: str, meta: dict, idle_at: float, now: float) -> bool:
     if not state or state["state"] != "idle" or state["at"] != idle_at:
         return False
     agent, project_id = meta["agent"], meta.get("project_id")
-    _remember(pty_id, {"agent": agent, "project_id": project_id, "session_id": meta["session_id"], "at": now}, now)
+    record = {
+        "agent": agent,
+        "project_id": project_id,
+        "session_id": meta["session_id"],
+        "title": stored.get("title") or "",
+        "at": now,
+    }
+    _remember(pty_id, record, now)
     if not terminal.close_pty_session(pty_id):
         logger.warning("could not suspend terminal %s", pty_id)
         forget(pty_id)

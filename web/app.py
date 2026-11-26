@@ -103,6 +103,7 @@ from routes.recorder import router as recorder_router
 from routes.dictation import router as dictation_router
 from routes.demo_clips import router as demo_clips_router
 from routes.demo_projects import router as demo_projects_router
+import agent_mcp
 import updater as _updater
 
 # ── Apply config to environment ──────────────────────────────────────────────
@@ -932,6 +933,10 @@ async def lifespan(app):
 
 app = FastAPI(title="AI Gator", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
+# Agents wake each other here. Deliberately a mounted sub-app, outside the route table and so
+# outside the CSRF inventory: CSRF guards browser calls made with ambient credentials, and this
+# door takes none. Every request needs the bearer token Gator issued to that one agent session.
+app.mount(agent_mcp.MOUNT_PATH, agent_mcp.app)
 
 # ── Routers ──────────────────────────────────────────────────────────────────
 app.include_router(email_router)
