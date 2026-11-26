@@ -27,6 +27,7 @@ def rec(agent, sid, title, last, source="windows"):
 
 @pytest.fixture(autouse=True)
 def env(monkeypatch):
+    monkeypatch.setattr(ags, "ensure_fresh", lambda repo: None)
     monkeypatch.setattr(
         asr.code_projects, "get_project",
         lambda name: {"name": name, "repo_path": "C:\\work\\app"} if name == "demo" else None,
@@ -34,7 +35,6 @@ def env(monkeypatch):
     monkeypatch.setattr(generic_agent, "is_installed", lambda a: a in ("claude", "codex"))
     monkeypatch.setattr(generic_agent, "linked_session_id", lambda pty: "c1" if pty == "p1" else None)
     monkeypatch.setattr(ags, "wsl_sessions", lambda repo: ([], False))
-    monkeypatch.setattr(ags, "cached_wsl_records", lambda repo: [])
     monkeypatch.setattr(ah, "_configured_api_keys", lambda: [FAKE])
     monkeypatch.setattr(ah, "_session_started_at", lambda sid: None)
 
@@ -98,18 +98,18 @@ def test_list_joins_codex_by_start_time(scanned, monkeypatch):
     assert {s["id"]: s.get("pty_session_id") for s in r.json()["sessions"]}["x1"] == "p9"
 
 
-def write_transcript(path: Path):
-    lines = [
-        {"type": "user", "cwd": "C:\\work\\app", "message": {"role": "user", "content": "hello"}},
-        {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": f"key {FAKE}"}]}},
-    ]
-    path.write_text("\n".join(json.dumps(o) for o in lines) + "\n", encoding="utf-8")
+def test_list_refreshes_the_index_before_reading_it(scanned, monkeypatch):
+    order = []
+    monkeypatch.setattr(ags, "ensure_fresh", lambda repo: order.append(("fresh", repo)))
+    real = ags.scan_project
+    monkeypatch.setattr(ags, "scan_project", lambda *a, **kw: order.append("scan") or real(*a, **kw))
+    client().get("/api/agent-sessions", params={"project_name": "demo"})
+    assert order == [("fresh", "C:\\work\\app"), "scan"]
 
 
-def test_preview_returns_redacted_messages(tmp_path, monkeypatch):
-    p = tmp_path / "c1.jsonl"
-    write_transcript(p)
-    monkeypatch.setattr(ags, "find_session", lambda repo, agent, sid, **kw: {"agent": "claude", "path": str(p)})
+def test_preview_returns_redacted_messages(monkeypatch):
+    stored = [{"role": "user", "text": "hello"}, {"role": "assistant", "text": f"key {FAKE}"}]
+    monkeypatch.setattr(ags, "find_session", lambda repo, agent, sid, **kw: {"agent": "claude", "preview": stored})
     r = client().get("/api/agent-sessions/claude/c1/preview", params={"project_name": "demo"})
     assert r.status_code == 200
     msgs = r.json()["messages"]
@@ -122,12 +122,16 @@ def test_preview_rejects_bad_agent_and_id():
     assert client().get("/api/agent-sessions/claude/bad%20id/preview", params={"project_name": "demo"}).status_code == 400
 
 
-def test_preview_unknown_project_session_or_deleted_file_is_404(tmp_path, monkeypatch):
+def test_preview_unknown_project_session_or_unreadable_store_is_404(monkeypatch):
     assert client().get("/api/agent-sessions/claude/c1/preview", params={"project_name": "nope"}).status_code == 404
     monkeypatch.setattr(ags, "find_session", lambda repo, agent, sid, **kw: None)
     assert client().get("/api/agent-sessions/claude/c1/preview", params={"project_name": "demo"}).status_code == 404
-    gone = {"agent": "claude", "path": str(tmp_path / "gone.jsonl")}
-    monkeypatch.setattr(ags, "find_session", lambda repo, agent, sid, **kw: gone)
+    monkeypatch.setattr(ags, "find_session", lambda repo, agent, sid, **kw: {"agent": "crush"})
+
+    def unreadable(rec):
+        raise OSError("database is gone")
+
+    monkeypatch.setattr(ags, "preview", unreadable)
     assert client().get("/api/agent-sessions/claude/c1/preview", params={"project_name": "demo"}).status_code == 404
 
 

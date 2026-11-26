@@ -41,6 +41,7 @@ def _live_terminals(pty: list[str]) -> list[dict]:
 
 def _list_sessions(repo_path: str, pty: list[str]) -> dict:
     agents = tuple(a for a in agent_sessions.AGENTS if generic_agent.is_installed(a))
+    agent_sessions.ensure_fresh(repo_path)
     records = agent_sessions.scan_project(repo_path, agents=agents)
     wsl, pending = agent_sessions.wsl_sessions(repo_path)
     records = sorted([*records, *wsl], key=lambda r: r["last_active_at"], reverse=True)
