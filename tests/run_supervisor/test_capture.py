@@ -68,9 +68,31 @@ def test_the_on_start_hook_gets_the_process(tmp_path):
     assert len(seen) == 1 and hasattr(seen[0], "pid")
 
 
-def test_a_child_that_outlives_its_parent_and_holds_the_pipes_ends_in_a_timeout_with_the_child_dead(tmp_path):
+def test_a_child_with_its_own_stdio_that_outlives_its_parent_is_left_running(tmp_path):
+    argv = _argv(tmp_path, "detached_child")
+    started = time.monotonic()
+    code, out, _ = shell_tools._run_captured(argv, str(tmp_path), None, 60)
+    pid = fakes.child_pid(tmp_path, "detached_child")
+    try:
+        assert code == 0 and "parent done" in out
+        assert time.monotonic() - started < 20
+        assert fakes.alive(pid), "the survivor is reported as a fact, not killed"
+    finally:
+        import psutil
+
+        psutil.Process(pid).kill()
+
+
+def test_a_child_that_outlives_its_parent_and_holds_the_pipes_does_not_keep_the_command_running(tmp_path):
     argv = _argv(tmp_path, "pipe_holder")
-    with pytest.raises(subprocess.TimeoutExpired):
-        shell_tools._run_captured(argv, str(tmp_path), None, 3)
+    started = time.monotonic()
+    code, out, _ = shell_tools._run_captured(argv, str(tmp_path), None, 60)
     pid = fakes.child_pid(tmp_path, "pipe_holder")
-    assert fakes.wait_for(lambda: not fakes.alive(pid)), "the detached child survived the timeout"
+    try:
+        assert code == 0 and "parent done" in out
+        assert time.monotonic() - started < 20
+        assert fakes.alive(pid), "the survivor is reported as a fact, not killed"
+    finally:
+        import psutil
+
+        psutil.Process(pid).kill()

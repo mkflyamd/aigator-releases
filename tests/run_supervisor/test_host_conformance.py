@@ -104,12 +104,21 @@ def test_a_command_that_outlives_its_budget_is_timed_out_and_its_whole_tree_is_k
     assert fakes.wait_for(lambda: not fakes.alive(pid)), "the child survived the timeout"
 
 
-def test_a_command_that_ends_while_its_child_holds_the_output_is_timed_out_and_the_child_is_killed(client, csrf, tmp_path):
-    req = _start(client, csrf, tmp_path, "pipe_holder", run_ms=2500)
+def test_a_command_that_ends_while_its_child_holds_the_output_is_finished_and_the_child_is_reported(client, csrf, tmp_path):
+    req = _start(client, csrf, tmp_path, "pipe_holder", run_ms=30_000)
     pid = fakes.child_pid(tmp_path, "pipe_holder")
-    body = _finish(client, req.id)
-    assert body["run"]["state"] == "timed_out"
-    assert fakes.wait_for(lambda: not fakes.alive(pid)), "the pipe-holding child survived the timeout"
+    try:
+        body = _finish(client, req.id)
+        assert body["run"]["state"] == "finished"
+        assert fakes.alive(pid)
+        assert body["run"]["facts"]["children_left"]
+    finally:
+        import psutil
+
+        try:
+            psutil.Process(pid).kill()
+        except psutil.Error:
+            pass
 
 
 def test_a_command_that_finishes_leaves_its_detached_child_running(client, csrf, tmp_path):
@@ -120,6 +129,7 @@ def test_a_command_that_finishes_leaves_its_detached_child_running(client, csrf,
         assert body["run"]["state"] == "finished"
         assert "parent done" in body["result"]["stdout"]
         assert fakes.alive(pid), "a finished command's child is not killed behind the user's back"
+        assert body["run"]["facts"]["children_left"], "the survivor is reported"
     finally:
         import psutil
 
@@ -226,7 +236,7 @@ def test_a_run_that_could_not_start_does_not_leave_the_request_running(
     status, stored = host_requests.lookup(req.id, "tab-1")
     assert status == "done" and "did not start" in stored.result["error"]
     told = shell_tools._tool_host_command_result(req.id, "tab-1")
-    assert told["status"] == "done" and told["exit_code"] == -1
+    assert "did not start" in told["error"]
 
 
 def test_stop_on_a_request_nobody_ran_denies_it_and_it_cannot_be_run_afterwards(client, csrf, tmp_path, own_supervisor):
@@ -280,7 +290,7 @@ def test_a_tab_can_list_its_own_runs_to_find_the_one_a_card_belongs_to(client, c
 def test_the_model_reading_an_unanswered_request_sees_it_expired_and_the_record_follows(tmp_path, own_supervisor):
     req = host_requests.create("tab-1", "echo", str(tmp_path), fakes.SHELL, "", 60, now=time.time() - 700)
     told = shell_tools._tool_host_command_result(req.id, "tab-1")
-    assert "within 10 minutes" in told["error"]
+    assert told["state"] == "expired" and "within 10 minutes" in told["message"]
     assert own_supervisor.get(req.id, "tab-1")["state"] == "expired"
 
 
@@ -300,7 +310,7 @@ def test_a_command_whose_record_has_ended_reads_as_done_before_its_result_is_sto
     assert own_supervisor.get(req.id, "tab-1")["state"] == "finished"
     status, shown = host_requests.lookup_settled(req.id, "tab-1")
     assert status == "done" and shown.result["stdout"] == "out" and shown.result["exit_code"] == 0
-    assert shell_tools._tool_host_command_result(req.id, "tab-1")["status"] == "done"
+    assert shell_tools._tool_host_command_result(req.id, "tab-1")["state"] == "finished"
     release.set()
 
 

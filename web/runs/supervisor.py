@@ -6,18 +6,23 @@ sqlite I/O happens under the lock: state changes are made in memory, then the sn
 """
 from __future__ import annotations
 
+import itertools
 import logging
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 from proc_utils import kill_process_tree
+from runs.facts import TreeWatcher, collect as collect_facts, urls_in
 from runs.records import ACTIVE_STATES, OUTPUT_TAIL_CHARS, RunRecord, RunStore, exit_info, tail_of
 from timeouts import Budgets
 
 _log = logging.getLogger(__name__)
 
 MAX_RUNNING_PER_CONTEXT = 3
+# Refused probes do not use up a run's probe allowance, but the record that logs them stays bounded.
+_MAX_PROBE_LOG = 50
 _MEMORY_KEEP_SECONDS = 1800
 _RETENTION_SECONDS = 7 * 24 * 3600
 
@@ -38,6 +43,7 @@ class RunHandle:
         self.teardown_ms = teardown_ms
         self._cancelled = threading.Event()
         self.proc = None
+        self.watcher = None
         self.thread: threading.Thread | None = None
 
     @property
@@ -61,6 +67,8 @@ class RunSupervisor:
         self._records: dict[str, RunRecord] = {}
         self._handles: dict[str, RunHandle] = {}
         self._workers: dict[str, threading.Thread] = {}
+        self._probes: dict[int, tuple[str, str, object]] = {}
+        self._probe_ids = itertools.count(1)
 
     # -- internals ----------------------------------------------------------
 
@@ -125,7 +133,13 @@ class RunSupervisor:
             if rec is None:
                 return
             rec.owner_pid, rec.owner_create_time = pid, created
+            handle = self._handles.get(run_id)
             snapshot = self._snapshot_locked(rec)
+        if handle is not None and pid:
+            try:
+                handle.watcher = TreeWatcher(pid).start()
+            except Exception:
+                _log.warning("run %s: process tree watcher did not start", run_id[:8])
         self._write(snapshot)
 
     def _forget_old_locked(self, now: float) -> None:
@@ -233,13 +247,21 @@ class RunSupervisor:
             result = runner(handle) or {}
         except Exception as exc:
             _log.warning("run %s could not start (%s)", run_id[:8], type(exc).__name__)
+            if handle.watcher is not None:
+                handle.watcher.finish()
             message = f"The command could not be started ({type(exc).__name__})."
             self._terminal(run_id, "failed_to_start", error=message)
             self._notify(run_id, on_done, {"error": message, "stdout": "", "stderr": "", "exit_code": -1})
             return
-        tail, truncated = tail_of(f"{result.get('stdout') or ''}{result.get('stderr') or ''}", OUTPUT_TAIL_CHARS)
+        output = f"{result.get('stdout') or ''}{result.get('stderr') or ''}"
+        tail, truncated = tail_of(output, OUTPUT_TAIL_CHARS)
+        try:
+            found = collect_facts(output, handle.watcher)
+        except Exception:
+            _log.warning("run %s: facts could not be collected", run_id[:8])
+            found = {}
         common = {"exit": exit_info(result.get("exit_code")), "output_tail": tail, "output_truncated": truncated,
-                  "error": str(result.get("error") or "")}
+                  "error": str(result.get("error") or ""), "facts": found}
         if handle.cancelled:
             self._terminal(run_id, "cancelled", **common)
         elif result.get("timed_out"):
@@ -278,6 +300,7 @@ class RunSupervisor:
         return self._stop(run_id)
 
     def _stop(self, run_id: str) -> dict:
+        self._cancel_probes(run_id=run_id)
         with self._lock:
             handle = self._handles.get(run_id)
             rec = self._records[run_id]
@@ -306,6 +329,7 @@ class RunSupervisor:
         """The turn's Stop: cancel its turn-scoped runs. Tab-scoped runs (host cards) are never touched."""
         if not turn_id:
             return []
+        self._cancel_probes(turn_id=turn_id)
         with self._lock:
             ids = [r.id for r in self._records.values()
                    if r.scope == "turn" and r.turn_id == turn_id and r.state in ("preparing", "running")]
@@ -315,6 +339,7 @@ class RunSupervisor:
 
     def stop_all(self) -> None:
         """App quit: kill every running command."""
+        self._cancel_probes()
         with self._lock:
             ids = [r.id for r in self._records.values() if r.state in ("preparing", "running")]
         for run_id in ids:
@@ -327,7 +352,66 @@ class RunSupervisor:
         if rec is None or rec.context_id != (context_id or ""):
             return None
         with self._lock:
-            return rec.to_dict()
+            data = rec.to_dict()
+        if data["state"] in ACTIVE_STATES and not (data.get("facts") or {}).get("urls_seen"):
+            live = self._live_urls(run_id)
+            if live:
+                data["facts"] = {**(data.get("facts") or {}), "urls_seen": live}
+        return data
+
+    def _live_urls(self, run_id: str) -> list[str]:
+        """URLs printed so far by a run that is still going, read from its live output."""
+        with self._lock:
+            handle = self._handles.get(run_id)
+            read = getattr(getattr(handle, "proc", None), "live_output", None)
+        if read is None:
+            return []
+        try:
+            return urls_in(read())
+        except Exception:
+            return []
+
+    def begin_probe(self, run_id: str, context_id: str, url: str, max_probes: int) -> list[str]:
+        """Log a probe on the record, counting it against the run's cap. Returns the URLs the run printed so far."""
+        rec = self._owned(run_id, context_id)
+        live = self._live_urls(run_id)
+        with self._lock:
+            made = [p for p in rec.probe_log if "refused" not in p]
+            if len(made) >= max_probes or len(rec.probe_log) >= _MAX_PROBE_LOG:
+                raise RunError(429, f"This run has already used its {max_probes} probes.")
+            rec.probe_log.append({"url": url, "at": self._clock()})
+            urls_seen = list(rec.facts.get("urls_seen") or []) or live
+            snapshot = self._snapshot_locked(rec)
+        self._write(snapshot)
+        return urls_seen
+
+    @contextmanager
+    def probing(self, run_id: str, turn_id: str, cancel):
+        """While a probe is in flight, a Stop of its run or of its turn calls cancel.cancel()."""
+        token = next(self._probe_ids)
+        with self._lock:
+            self._probes[token] = (run_id, turn_id or "", cancel)
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._probes.pop(token, None)
+
+    def _cancel_probes(self, *, run_id: str = "", turn_id: str = "") -> None:
+        with self._lock:
+            hits = [c for r, t, c in self._probes.values()
+                    if (not run_id and not turn_id) or (run_id and r == run_id) or (turn_id and t == turn_id)]
+        for cancel in hits:
+            cancel.cancel("stopped")
+
+    def finish_probe(self, run_id: str, outcome: dict) -> None:
+        with self._lock:
+            rec = self._records.get(run_id)
+            if rec is None or not rec.probe_log:
+                return
+            rec.probe_log[-1].update(outcome)
+            snapshot = self._snapshot_locked(rec)
+        self._write(snapshot)
 
     def list(self, context_id: str) -> list[dict]:
         merged = {r["id"]: r for r in self._store.list(context_id)}

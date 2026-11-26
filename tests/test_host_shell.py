@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 import routes.host_shell_routes as host_routes
 from app import app
+from runs.supervisor import get_supervisor
 from sandbox import host_requests
 from sandbox.policy import FAIL_CLOSED_POLICY, Policy, parse_policy
 from skills.shell_runner import tools as shell_tools
@@ -170,10 +171,11 @@ def test_tool_clamps_timeout(tmp_path):
 def test_result_tool_reports_each_state(tmp_path):
     out = _propose(tmp_path)
     rid = out["request_id"]
-    assert shell_tools._tool_host_command_result(rid, "tab-1")["status"] == "pending"
+    assert shell_tools._tool_host_command_result(rid, "tab-1")["state"] == "awaiting_approval"
     assert "error" in shell_tools._tool_host_command_result(rid, "tab-2")
     host_requests.deny(rid, "tab-1")
-    assert shell_tools._tool_host_command_result(rid, "tab-1")["status"] == "denied"
+    get_supervisor().deny(rid, "tab-1")
+    assert shell_tools._tool_host_command_result(rid, "tab-1")["state"] == "denied"
 
 
 def test_run_host_request_runs_command_and_marks_host(tmp_path):
@@ -216,7 +218,8 @@ def test_run_route_returns_at_once_and_the_record_carries_the_result(client, csr
     body = _poll(client, req.id)
     assert body["run"]["state"] == "finished"
     assert body["result"]["stdout"] == "ok"
-    assert shell_tools._tool_host_command_result(req.id, "tab-1")["status"] == "done"
+    told = shell_tools._tool_host_command_result(req.id, "tab-1")
+    assert told["state"] == "finished" and told["exit"]["code"] == 0 and told["stdout"] == "ok"
     again = client.post(f"/api/host-shell/{req.id}/run", json={"context_id": "tab-1"}, headers=csrf)
     assert again.status_code == 200 and again.json()["run"]["state"] == "finished"
 
