@@ -47,6 +47,16 @@ def parse_slash_command(message: str) -> dict | None:
 router = APIRouter()
 
 
+async def _pause_queue(context_id: str | None, reason: str) -> None:
+    """A stopped or failed turn holds back what the user queued behind it until they resume."""
+    if context_id:
+        from chat_queue import get_queue
+        try:
+            await asyncio.to_thread(get_queue().pause_if_queued, context_id, reason)
+        except Exception:
+            logging.getLogger(__name__).warning("could not pause the message queue", exc_info=True)
+
+
 # ── Pydantic models ───────────────────────────────────────────────────────────
 
 _GATED_DEP_SKILLS: frozenset[str] = frozenset({"shell_runner", "code_runner"})
@@ -262,6 +272,7 @@ class ChatRequest(BaseModel):
     scoped_skill: str | None = None           # skill ID injected into active_skills for this request
     pinned_skill: str | None = None           # per-tab skill pin (client); activates and locks skill selection
     pinned_project_id: str | None = None      # project the pinned skill is working on
+    queued_id: str | None = None              # a queued message being sent now; removed from the queue when the turn is accepted
 
 
 # ── Tool filtering ────────────────────────────────────────────────────────────
@@ -388,6 +399,23 @@ def _blocked_gated_deps(skill_ids: list[str], req) -> list[tuple[str, dict]]:
             seen.add(runner)
             blocked.append((sid, {"id": runner, "reason": _RUNNER_REASONS.get(runner, "Run code on your computer.")}))
     return blocked
+
+
+async def _take_queued_for_gate(queued_id: str, context_id: str):
+    """Remove a queued message that the permission card is answering; the refusal response, or None when taken."""
+    from chat_queue import QueueError, get_queue
+    from fastapi.responses import JSONResponse
+
+    try:
+        taken = await asyncio.to_thread(get_queue().take, context_id or "default", queued_id)
+    except QueueError as exc:
+        return JSONResponse({"error": exc.code, "detail": exc.message}, status_code=exc.status)
+    if not taken:
+        return JSONResponse(
+            {"error": "queue_item_gone", "detail": "That queued message was already sent or removed."},
+            status_code=409,
+        )
+    return None
 
 
 def _permission_gate_response(blocked: list[tuple[str, dict]], context_id: str):
@@ -1365,6 +1393,8 @@ async def cancel_chat(task_id: str):
             cancel_browser_task()
     except Exception:
         pass
+    if cancelled:
+        await _pause_queue(shared.chat_task_store.context_of(task_id), "stopped")
     return {"cancelled": cancelled}
 
 
@@ -2093,6 +2123,12 @@ async def chat(req: ChatRequest):
     _gate_order = [s for s in (req.active_skill, *(req.active_skills or [])) if s] + sorted(_all_active)
     _blocked = _blocked_gated_deps(_gate_order, req)
     if _blocked:
+        # The card answers this send, and the approved resend carries no queued id, so the row must leave the
+        # queue now or the drain would send the same message again.
+        if req.queued_id:
+            _gone = await _take_queued_for_gate(req.queued_id, req.context_id)
+            if _gone is not None:
+                return _gone
         return _permission_gate_response(_blocked, req.context_id)
     # Google Workspace service skills are registered by mcp.manager as
     # service-specific tool groups. Do not activate the complete 100+ tool
@@ -2338,6 +2374,7 @@ async def chat(req: ChatRequest):
             )
             yield f"data: {_json.dumps({'status': _overflow_msg})}\n\n"
             yield f"data: {_json.dumps({'text': _overflow_msg})}\n\n"
+            shared.chat_task_store.mark_error(task_id)
             yield "data: [DONE]\n\n"
             return
 
@@ -2418,7 +2455,7 @@ async def chat(req: ChatRequest):
                     execute_tool=execute_tool, COM_BOUND_TOOLS=shared.COM_BOUND_TOOLS,
                     TOOL_STATUS=shared.TOOL_STATUS, _tool_toast=_tool_toast,
                     _SLACK_SAFE_MSG=shared._SLACK_SAFE_MSG,
-                    context_id=context_id,
+                    context_id=context_id, task_id=task_id,
                 )
                 async for chunk in loop:
                     if chunk.startswith("data: ") and not chunk.startswith("data: [DONE]"):
@@ -2665,21 +2702,49 @@ async def chat(req: ChatRequest):
                 pass
 
     # One live turn per conversation. The check and the registration below have no await
-    # between them, so two requests cannot both pass. A stopped turn may still be unwinding
+    # between them, so two requests cannot both pass (a queued send re-checks after taking its message). A stopped turn may still be unwinding
     # (and holding the turn lock): give it a moment instead of refusing a quick resend.
+    def _turn_busy(live_id):
+        return JSONResponse(
+            {
+                "error": "turn_in_progress",
+                "detail": "A reply is still running in this conversation. Stop it or wait for it to finish.",
+                "task_id": live_id,
+            },
+            status_code=409,
+        )
+
     _live = shared.chat_task_store.active_task_for(context_id)
     if _live and shared.chat_task_store.is_cancelled(_live):
         await shared.chat_task_store.wait_for_task_end(_live, _STOP_UNWIND_GRACE_S)
         _live = shared.chat_task_store.active_task_for(context_id)
     if _live:
-        return JSONResponse(
-            {
-                "error": "turn_in_progress",
-                "detail": "A reply is still running in this conversation. Stop it or wait for it to finish.",
-                "task_id": _live,
-            },
-            status_code=409,
-        )
+        return _turn_busy(_live)
+    if req.queued_id:
+        from chat_queue import QueueError, get_queue
+        try:
+            taken = await asyncio.to_thread(get_queue().take, context_id, req.queued_id)
+        except QueueError as exc:
+            return JSONResponse({"error": exc.code, "detail": exc.message}, status_code=exc.status)
+        if not taken:
+            return JSONResponse(
+                {"error": "queue_item_gone", "detail": "That queued message was already sent or removed."},
+                status_code=409,
+            )
+        # The take awaited, so a typed send or another window may have registered a turn in the meantime.
+        # Put the message back where it was and refuse; nothing else may start a second live turn.
+        _live = shared.chat_task_store.active_task_for(context_id)
+        if _live:
+            try:
+                await asyncio.to_thread(get_queue().restore, context_id, taken)
+            except QueueError:
+                _log.warning("[chat] queued message %s could not be put back", req.queued_id)
+                return JSONResponse(
+                    {"error": "queue_restore_failed",
+                     "detail": "Your queued message could not be queued back. Please send it again."},
+                    status_code=503,
+                )
+            return _turn_busy(_live)
     task_id = str(_uuid.uuid4())
     shared.chat_task_store.create_task(task_id, context_id)
 
@@ -2766,6 +2831,7 @@ async def chat(req: ChatRequest):
                                 _stall_detail = _last_tool_error[0] if _last_tool_error else f"{_which} timeout"
                                 if len(_stall_detail) > 160:
                                     _stall_detail = _stall_detail[:160] + "…"
+                                shared.chat_task_store.mark_error(task_id)
                                 shared.chat_task_store.append_chunk(task_id, f"data: {json.dumps({'stalled': True, 'message': f'Gator stopped after going silent ({_stall_detail}). Click Continue to pick up where it left off.'})}\n\n")
                                 break
                             try:
@@ -2882,6 +2948,7 @@ async def chat(req: ChatRequest):
                         )
                         print(f"[stream] unhandled error in background task: {_exc}", flush=True)
                         _tb.print_exc()
+                        shared.chat_task_store.mark_error(task_id)
                         shared.chat_task_store.append_chunk(task_id, f"data: {json.dumps({'text': 'An unexpected error occurred. Please try again.'})}\n\n")
                         # Turn telemetry: log the unhandled error
                         try:
@@ -2903,6 +2970,9 @@ async def chat(req: ChatRequest):
                         if not _done_emitted_flag[0]:
                             shared.chat_task_store.append_chunk(task_id, "data: [DONE]\n\n")
                   finally:
+                    # Before mark_done, so a client that reacts to the end of the turn already sees the pause.
+                    if shared.chat_task_store.had_error(task_id):
+                        await _pause_queue(context_id, "error")
                     shared.chat_task_store.mark_done(task_id)
                     # Emit in finally (not at the end of stream()) so a hung,
                     # errored, or cancelled request still notifies other tabs.
@@ -2952,6 +3022,8 @@ async def chat(req: ChatRequest):
             _logging.getLogger(__name__).exception(
                 "[run_and_buffer] unhandled error: %s", _outer_exc
             )
+            shared.chat_task_store.mark_error(task_id)
+            await _pause_queue(context_id, "error")
             shared.chat_task_store.append_chunk(task_id, f"data: {json.dumps({'text': 'An unexpected error occurred. Please try again.'})}\n\n")
             if not shared.chat_task_store.is_done(task_id):
                 shared.chat_task_store.mark_done(task_id)

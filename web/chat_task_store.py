@@ -55,6 +55,7 @@ class ChatTaskStore:
             "chunks": [],
             "done": False,
             "cancelled": False,
+            "errored": False,
             "context_id": context_id,
             "created_at": time.monotonic(),
             "subscribers": [],
@@ -78,6 +79,16 @@ class ChatTaskStore:
             return
         task["done"] = True
         self._notify_subscribers(task)
+
+    def mark_error(self, task_id: str) -> None:
+        """The turn emitted an error event (LLM error, stall, step limit). The message queue pauses behind it."""
+        task = self._store.get(task_id)
+        if task is not None:
+            task["errored"] = True
+
+    def had_error(self, task_id: str) -> bool:
+        task = self._store.get(task_id)
+        return bool(task and task["errored"])
 
     def cancel(self, task_id: str) -> bool:
         task = self._store.get(task_id)
@@ -148,6 +159,10 @@ class ChatTaskStore:
         if task is None:
             return []
         return task["chunks"][from_seq:to_seq]
+
+    def context_of(self, task_id: str) -> str | None:
+        task = self._store.get(task_id)
+        return task["context_id"] if task else None
 
     def active_task_for(self, context_id: str) -> str | None:
         """Return the id of a turn still alive on this context, else None.

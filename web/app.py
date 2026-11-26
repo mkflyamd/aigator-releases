@@ -67,6 +67,7 @@ logger = logging.getLogger(__name__)
 # ── Route imports ─────────────────────────────────────────────────────────────
 from routes.email import router as email_router
 from routes.drafts import router as drafts_router
+from routes.queue_routes import router as queue_router
 from routes.slack import router as slack_router
 from routes.teams import router as teams_router
 from routes.jira import router as jira_router
@@ -900,6 +901,7 @@ app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), na
 # ── Routers ──────────────────────────────────────────────────────────────────
 app.include_router(email_router)
 app.include_router(drafts_router)
+app.include_router(queue_router)
 app.include_router(slack_router)
 app.include_router(teams_router)
 app.include_router(jira_router)

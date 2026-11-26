@@ -98,8 +98,10 @@ assert(
   'pin fields must be in the post body',
 );
 assert(
-  /_permissionResendPayload = _postBody;/.test(source),
-  'the approved retry must re-send the post body, pin fields included',
+  /const \{ queued_id: _spentQueuedId, \.\.\.resendBody \} = _postBody;\s*_permissionResendPayload = resendBody;/.test(
+    source,
+  ),
+  'the approved retry must re-send the post body, pin fields included, minus the spent queued_id',
 );
 
 // The pin chip is drawn whenever the active tab changes or loads, not only in switchTab

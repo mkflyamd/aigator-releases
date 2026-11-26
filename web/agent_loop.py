@@ -426,6 +426,24 @@ def _summarize_tool_calls(tool_calls: list, results: list | None = None) -> list
     return out
 
 
+# Turn-end outcomes that surface an error to the user; the message queue pauses behind them.
+_ERROR_OUTCOMES = frozenset({
+    "llm_error", "stalled", "max_iterations", "tool_configuration_error",
+    "empty_tool_use", "circuit_breaker", "planner_error", "budget_exceeded",
+})
+
+
+def _flag_turn_error(task_id: str | None) -> None:
+    """Mark the turn as ended in an error the user sees, so the message queue pauses behind it."""
+    if not task_id:
+        return
+    try:
+        import shared as _shared
+        _shared.chat_task_store.mark_error(task_id)
+    except Exception:
+        pass
+
+
 async def _log_turn_end_safe(
     turn_id: str, context_id: str | None, task_id: str | None,
     turn_index: int, agent: str, model: str, provider: str,
@@ -440,6 +458,8 @@ async def _log_turn_end_safe(
     not break a chat turn."""
     if not task_id or not context_id:
         return
+    if outcome in _ERROR_OUTCOMES:
+        _flag_turn_error(task_id)
     try:
         import turn_telemetry
         await turn_telemetry.log_turn_end(
@@ -1690,6 +1710,7 @@ async def _single_agent_loop(
         )
         if _terminal_failure or _legacy_terminal:
             if _terminal_failure:
+                _flag_turn_error(task_id)
                 yield f"data: {json.dumps({'text': _terminal_failure['user_message']})}\n\n"
             yield f"data: {json.dumps({'usage': {'input_tokens': _total_input, 'output_tokens': _total_output}})}\n\n"
             await _log_turn_end_safe(
@@ -2205,6 +2226,7 @@ async def run_three_agent_loop(
                 gather_task.cancel()
         _terminal_failure = _terminal_tool_failure(results)
         if _terminal_failure:
+            _flag_turn_error(task_id)
             yield f"data: {json.dumps({'text': _terminal_failure['user_message']})}\n\n"
             yield f"data: {json.dumps({'usage': {'input_tokens': _total_input, 'output_tokens': _total_output}})}\n\n"
             await _log_turn_end_safe(
@@ -2312,6 +2334,7 @@ async def run_three_agent_loop(
             _log.warning("[verifier] streaming failed: %s — falling back to draft_text", _verif_exc)
 
         if not verif_text and not draft_text:
+            _flag_turn_error(task_id)
             yield f"data: {json.dumps({'stalled': True, 'message': 'Gator completed the task but could not produce a final answer — the verifier and executor both returned empty. Click Continue to retry.'})}\n\n"
             break
         if verif_text.startswith("RETRY:") and _retry < 2:

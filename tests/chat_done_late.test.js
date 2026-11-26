@@ -43,6 +43,11 @@ function makeEnv() {
     idle: 0,
     _setTabWorking: (id, on) => ctx.working.push([id, on]),
     _flushSandboxFollowUp: () => {},
+    drained: [],
+    stopped: [],
+    _doSendLive: new Set(),
+    _queueRearmStop: (id) => ctx.stopped.push(id),
+    _queueDrain: (id) => ctx.drained.push(id),
     setStatus: (s) => {
       if (s === 'idle') ctx.idle++;
     },
@@ -69,6 +74,8 @@ assert.strictEqual(env._isStreaming, true);
 assert.strictEqual(env.idle, 0);
 assert.deepStrictEqual(env.sendBtn.classList.removed, []);
 assert.strictEqual(env._locallyFinishedTasks.has('old'), false);
+// The late event is the server's "idle now": it asks the queue to drain, which refuses while a task runs.
+assert.deepStrictEqual(env.drained, ['tab-1']);
 
 // The same late chat_done, before the newer task is registered (its POST is still in flight).
 env = makeEnv();
@@ -76,6 +83,7 @@ env._locallyFinishedTasks.add('old');
 env.run({ type: 'chat_done', context_id: 'tab-1', task_id: 'old' });
 assert.strictEqual(env._isStreaming, true);
 assert.strictEqual(env.idle, 0);
+assert.deepStrictEqual(env.drained, ['tab-1']);
 
 // A chat_done that names a different task than the running one is ignored.
 env = makeEnv();
@@ -98,6 +106,22 @@ env = makeEnv();
 env._chatTaskIds.set('tab-1', 'x');
 env.run({ type: 'chat_done', context_id: 'tab-1' });
 assert.strictEqual(env._isStreaming, false);
+
+// While the tab's own doSend is still running, chat_done must not drain: the doSend tail drains,
+// and a drain here would reset the button under a turn that is just starting.
+env = makeEnv();
+env._doSendLive.add('tab-1');
+env._chatTaskIds.set('tab-1', 'cur');
+env.run({ type: 'chat_done', context_id: 'tab-1', task_id: 'cur' });
+assert.deepStrictEqual(env.drained, []);
+assert.deepStrictEqual(env.stopped, ['tab-1']);
+
+// With no doSend live on the tab, chat_done drains as before.
+env = makeEnv();
+env._chatTaskIds.set('tab-1', 'cur');
+env.run({ type: 'chat_done', context_id: 'tab-1', task_id: 'cur' });
+assert.deepStrictEqual(env.drained, ['tab-1']);
+assert.deepStrictEqual(env.stopped, ['tab-1']);
 
 // Every local finish path records the task id, and the server sends it.
 assert(/es\.close\(\);\s*_locallyFinishedTasks\.add\(task_id\);/.test(source), '[DONE] path');
