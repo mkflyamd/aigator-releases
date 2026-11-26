@@ -36,3 +36,13 @@ def test_cadence_of_subsequent_heartbeats():
 
 def test_respects_custom_interval_seconds():
     assert _heartbeat_status(3, interval_seconds=10) == "Still working... (30s)"
+
+
+def test_a_turn_with_a_command_in_flight_gets_a_run_status_instead_of_the_generic_heartbeat():
+    from routes.chat import _run_status
+
+    assert _run_status(None, 100.0) is None
+    assert _run_status({"state": "preparing", "created_at": 90.0}, 100.0) == "Preparing the sandbox · 10s"
+    assert _run_status({"state": "running", "created_at": 50.0, "run_started_at": 90.0}, 100.0) == "Running a command · 10s"
+    assert _run_status({"state": "running", "created_at": 0.0, "run_started_at": 60.0}, 100.0).endswith(
+        "taking longer than usual, Stop cancels it")

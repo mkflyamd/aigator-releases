@@ -10,6 +10,7 @@ import itertools
 import logging
 import threading
 import time
+import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -33,6 +34,21 @@ class RunError(Exception):
         self.status_code = status_code
 
 
+class _PidProc:
+    """A process known only by pid (the sandbox launchers report one), enough for kill_process_tree."""
+
+    def __init__(self, pid: int):
+        self.pid = pid
+
+    def kill(self) -> None:
+        try:
+            import psutil
+
+            psutil.Process(self.pid).kill()
+        except Exception:
+            pass
+
+
 class RunHandle:
     """What a runner gets: its run budget, whether Stop was requested, and a place to hand over its process."""
 
@@ -45,6 +61,8 @@ class RunHandle:
         self.proc = None
         self.watcher = None
         self.thread: threading.Thread | None = None
+        self.inline = False  # runs on the calling tool thread, so it may still be queued with nothing started
+        self.done = threading.Event()  # set when the runner has returned: nothing of the run is left to wind down
 
     @property
     def cancelled(self) -> bool:
@@ -56,6 +74,10 @@ class RunHandle:
         self._supervisor._process_started(self.run_id, proc)
         if self.cancelled:
             kill_process_tree(proc)
+
+    def started(self, pid: int) -> None:
+        """The sandbox launchers report a pid instead of a Popen."""
+        self.attach(_PidProc(int(pid)))
 
 
 class RunSupervisor:
@@ -133,6 +155,8 @@ class RunSupervisor:
             if rec is None:
                 return
             rec.owner_pid, rec.owner_create_time = pid, created
+            if rec.state == "preparing":
+                rec.state, rec.run_started_at = "running", self._clock()
             handle = self._handles.get(run_id)
             snapshot = self._snapshot_locked(rec)
         if handle is not None and pid:
@@ -243,16 +267,30 @@ class RunSupervisor:
                 snapshot = None
         if snapshot is not None:
             self._write(snapshot)
+        self._run_and_conclude(run_id, handle, runner, on_done)
+
+    def _run_and_conclude(self, run_id: str, handle: RunHandle, runner, on_done) -> tuple[dict, dict]:
+        """Call the runner, then record how the run ended. Returns the final record and the runner's result."""
+        failure: Exception | None = None
+        result: dict = {}
         try:
             result = runner(handle) or {}
         except Exception as exc:
-            _log.warning("run %s could not start (%s)", run_id[:8], type(exc).__name__)
+            failure = exc
+        finally:
+            handle.done.set()
+        if failure is not None:
+            _log.warning("run %s could not start (%s)", run_id[:8], type(failure).__name__)
             if handle.watcher is not None:
                 handle.watcher.finish()
-            message = f"The command could not be started ({type(exc).__name__})."
-            self._terminal(run_id, "failed_to_start", error=message)
-            self._notify(run_id, on_done, {"error": message, "stdout": "", "stderr": "", "exit_code": -1})
-            return
+            message = f"The command could not be started ({type(failure).__name__})."
+            result = {"error": message, "stdout": "", "stderr": "", "exit_code": -1}
+            lingering = {"teardown_failed": True} if getattr(failure, "teardown_failed", False) else {}
+            result.update(lingering)
+            record = self._terminal(run_id, "cancelled" if handle.cancelled else "failed_to_start",
+                                    error=message, facts=lingering)
+            self._notify(run_id, on_done, result)
+            return record, result
         output = f"{result.get('stdout') or ''}{result.get('stderr') or ''}"
         tail, truncated = tail_of(output, OUTPUT_TAIL_CHARS)
         try:
@@ -260,20 +298,53 @@ class RunSupervisor:
         except Exception:
             _log.warning("run %s: facts could not be collected", run_id[:8])
             found = {}
+        if result.get("teardown_failed"):
+            found["teardown_failed"] = True
         common = {"exit": exit_info(result.get("exit_code")), "output_tail": tail, "output_truncated": truncated,
                   "error": str(result.get("error") or ""), "facts": found}
         if handle.cancelled:
-            self._terminal(run_id, "cancelled", **common)
+            state = "cancelled"
         elif result.get("timed_out"):
-            self._terminal(run_id, "timed_out", **common)
+            state = "timed_out"
         elif handle.proc is None and result.get("error"):
-            self._terminal(run_id, "failed_to_start", **common)
+            state = "failed_to_start"
         else:
-            self._terminal(run_id, "finished", **common)
+            state = "finished"
+        record = self._terminal(run_id, state, **common)
         self._notify(run_id, on_done, result)
+        return record, result
+
+    def run_inline(self, *, context_id: str, turn_id: str, path: str, kind: str, budgets: Budgets,
+                   runner) -> tuple[dict, dict]:
+        """A model-called command that needs no approval card: it runs on the calling tool thread, owned by
+        the turn, so the turn's Stop reaches it. Returns the final record and the runner's result."""
+        now = self._clock()
+        run_id = uuid.uuid4().hex
+        rec = RunRecord(id=run_id, context_id=context_id or "", path=path, kind=kind, scope="turn",
+                        state="preparing", turn_id=turn_id or "", created_at=now, setup_started_at=now)
+        with self._lock:
+            self._forget_old_locked(now)
+            running = sum(1 for r in self._records.values()
+                          if r.context_id == rec.context_id and r.state in ("preparing", "running"))
+            over_cap = running >= self._cap
+            if over_cap:
+                rec.state, rec.reason, rec.finished_at = "failed_to_start", "concurrency_cap", now
+                handle = None
+            else:
+                handle = RunHandle(self, run_id, budgets.run_ms / 1000, budgets.teardown_ms)
+                handle.thread = threading.current_thread()
+                handle.inline = True
+                self._handles[run_id] = handle
+            self._records[run_id] = rec
+            snapshot = self._snapshot_locked(rec)
+        self._write(snapshot)
+        if handle is None:
+            return snapshot, {"error": f"Too many commands are already running in this tab (limit {self._cap}). "
+                                       "Wait for one to finish; do not retry automatically."}
+        return self._run_and_conclude(run_id, handle, runner, None)
 
     def wait(self, run_id: str, timeout: float) -> None:
-        """Block until the run's worker thread ends (tests and shutdown)."""
+        """Block until the run has ended and its worker, including on_done, has finished (tests and shutdown)."""
         with self._lock:
             thread = self._workers.get(run_id)
         if thread is not None:
@@ -311,19 +382,17 @@ class RunSupervisor:
         handle._cancelled.set()
         if handle.proc is not None:
             kill_process_tree(handle.proc)
-        budget_s = handle.teardown_ms / 1000
-        if handle.thread is not None:
-            handle.thread.join(budget_s)
-            wound_down = not handle.thread.is_alive()
-        else:
-            wound_down = True
+        wound_down = handle.done.wait(handle.teardown_ms / 1000)
         if wound_down:
             with self._lock:
                 state = rec.state
             if state in ACTIVE_STATES:
                 self.wait(run_id, 1)
             return rec.to_dict()
-        return self._terminal(run_id, "cancelled", facts={"teardown_failed": True})
+        # An inline command still queued behind another launch has no process and nothing to tear down: its own
+        # thread sees Stop and ends. Anything else that outlived its teardown budget is reported.
+        facts = {} if handle.inline and handle.proc is None else {"teardown_failed": True}
+        return self._terminal(run_id, "cancelled", facts=facts)
 
     def cancel_turn(self, turn_id: str) -> list[str]:
         """The turn's Stop: cancel its turn-scoped runs. Tab-scoped runs (host cards) are never touched."""
@@ -336,6 +405,15 @@ class RunSupervisor:
         for run_id in ids:
             self._stop(run_id)
         return ids
+
+    def active_for_turn(self, turn_id: str) -> list[dict]:
+        """The turn's runs that are still preparing or running, oldest first."""
+        if not turn_id:
+            return []
+        with self._lock:
+            recs = [r.to_dict() for r in self._records.values()
+                    if r.scope == "turn" and r.turn_id == turn_id and r.state in ("preparing", "running")]
+        return sorted(recs, key=lambda r: r["created_at"])
 
     def stop_all(self) -> None:
         """App quit: kill every running command."""

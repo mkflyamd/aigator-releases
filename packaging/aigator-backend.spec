@@ -12,6 +12,7 @@ datas = [
     (str(web / "skills"), "skills"),
     (str(web / "skills"), "web/skills"),
     (str(web / "dictation" / "models.json"), "dictation"),
+    (str(web / "sandbox" / "node_shim.js"), "sandbox"),
     (str(root / "tray" / "aigator_icon.png"), "tray"),
     (str(root / "version.txt"), "."),
 ]

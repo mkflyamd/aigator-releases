@@ -19,6 +19,10 @@ class Budgets:
 
 _DEFAULTS = {
     "host": Budgets(setup_ms=0, run_ms=120_000, teardown_ms=5_000),
+    # Setup and teardown are the sandbox's grant and revoke of folder access; what teardown leaves goes to the
+    # background repair, so a Stop never waits longer than this.
+    "sandbox": Budgets(setup_ms=180_000, run_ms=60_000, teardown_ms=10_000),
+    "shell": Budgets(setup_ms=0, run_ms=60_000, teardown_ms=5_000),
 }
 _overrides: dict[str, dict[str, int]] = {}
 

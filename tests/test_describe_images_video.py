@@ -9,13 +9,62 @@ from skills._always_on import tools as ao
 HANDLER = ao.TOOL_HANDLERS["describe_images"]
 
 
-async def test_analyze_sequence_rejects_more_than_eight_frames():
+async def test_analyze_sequence_rejects_more_than_thirty_two_frames():
     paths = [f"/tmp/code_runner_out/frames/frame_{i:04d}.png" for i in range(42)]
     r = await HANDLER(task="analyze_sequence", image_paths=paths)
 
     assert r["ok"] is False
-    assert "at most 8" in r["error"] and "analyze_video" in r["error"]
+    assert "at most 32" in r["error"] and "analyze_video" in r["error"]
     assert "do not exist" not in r["error"]
+
+
+async def test_analyze_sequence_splits_a_long_list_into_batches_of_eight(tmp_path, monkeypatch):
+    paths = []
+    for i in range(20):
+        f = tmp_path / f"frame_{i:04d}.png"
+        f.write_bytes(b"x")
+        paths.append(str(f))
+    calls = []
+
+    async def fake(chunk, fps=0.2, start_index=0):
+        calls.append((len(chunk), start_index))
+        timeline = [{"frame": Path(p).name, "time_sec": round((start_index + i) / fps), "description": "d"}
+                    for i, p in enumerate(chunk)]
+        return {"ok": True, "task": "analyze_sequence", "timeline": timeline,
+                "summary": f"batch{len(calls)}", "frame_count": len(timeline)}
+
+    monkeypatch.setattr(ao, "_analyze_frame_sequence", fake)
+    r = await HANDLER(task="analyze_sequence", image_paths=paths, fps=1)
+
+    assert calls == [(8, 0), (8, 8), (4, 16)]
+    assert r["ok"] is True and r["frame_count"] == 20
+    assert [f["frame"] for f in r["timeline"]] == [Path(p).name for p in paths]
+    assert r["timeline"][19]["time_sec"] == 19
+    assert r["summary"] == "batch1 batch2 batch3"
+
+
+async def test_a_failed_batch_is_reported_with_the_frames_already_analyzed(tmp_path, monkeypatch):
+    paths = []
+    for i in range(12):
+        f = tmp_path / f"frame_{i:04d}.png"
+        f.write_bytes(b"x")
+        paths.append(str(f))
+    n = 0
+
+    async def fake(chunk, fps=0.2, start_index=0):
+        nonlocal n
+        n += 1
+        if n == 2:
+            return {"ok": False, "error": "Gateway returned HTTP 502"}
+        return {"ok": True, "task": "analyze_sequence", "summary": "s", "frame_count": len(chunk),
+                "timeline": [{"frame": "f", "time_sec": 0, "description": "d"}] * len(chunk)}
+
+    monkeypatch.setattr(ao, "_analyze_frame_sequence", fake)
+    r = await HANDLER(task="analyze_sequence", image_paths=paths)
+
+    assert r["ok"] is False
+    assert "HTTP 502" in r["error"]
+    assert r["frames_analyzed"] == 8 and r["frames_total"] == 12
 
 
 async def test_analyze_sequence_with_eight_missing_frames_still_reports_missing():
