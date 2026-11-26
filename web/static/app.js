@@ -4428,6 +4428,7 @@ const _locallyFinishedTasks = new Set(); // task ids already cleaned up here; th
 const _tabsWithUpdates = new Set(); // tabIds with completed responses the user hasn't seen
 const _pendingTabCards = new Map(); // tabId -> Map(cardId -> {draw, expired}); drawn again each time the tab is shown
 const _pendingSandboxCards = new Map(); // tabId -> Map(requestId -> card data); drawn again each time the tab is shown
+const _hostRunsInFlight = new Map(); // requestId -> the Run request still going, so a redrawn card shows Stop
 const _tabsWorking = new Set(); // tabIds with an in-flight request (animated working line)
 let _revealActiveTabOnRender = false; // true = unconditionally scroll active tab into view on next render
 let _preserveScrollOnRender = false; // true = closing a tab; keep scroll position, only nudge if needed
@@ -11996,19 +11997,19 @@ function _renderHostCommandCard(data, requestId, cardTab, tabId) {
     countdown.textContent =
       left <= 60 ? `Expires in ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}` : '';
   }, 1000);
-  const decide = async (action) => {
-    if (run.disabled || settled) return;
+  const showRunning = () => {
+    running = true;
     busy = true;
     run.disabled = true;
-    if (action === 'run') {
-      running = true;
-      cancel.textContent = 'Stop';
-      footNote.textContent = 'Running...';
-    } else {
-      cancel.disabled = true;
-    }
+    cancel.textContent = 'Stop';
+    footNote.textContent = 'Running...';
+  };
+  // Settles this card from a decision's request. A card redrawn mid-run follows the same Run request,
+  // so only the first card to see it end tells the agent or the user.
+  const follow = async (action, call) => {
     try {
-      const out = await send(action);
+      const out = await call;
+      const first = action !== 'run' || _hostRunsInFlight.delete(requestId);
       settled = true;
       stopClock();
       actions.remove();
@@ -12029,11 +12030,13 @@ function _renderHostCommandCard(data, requestId, cardTab, tabId) {
         result.exit_code === 0
           ? '✓ Finished · exit code 0'
           : `Failed · exit code ${result.exit_code}`;
+      if (!first) return;
       _sendSandboxFollowUp(
         tabId,
         `I ran command request ${requestId}. Call host_command_result with that request_id to read the output.`,
       ).catch((e) => console.warn('[host-shell] follow-up not sent:', e));
     } catch (err) {
+      const first = action !== 'run' || _hostRunsInFlight.delete(requestId);
       busy = false;
       running = false;
       if (err.status === 404 || err.status === 410) {
@@ -12047,8 +12050,21 @@ function _renderHostCommandCard(data, requestId, cardTab, tabId) {
         err.status && err.status < 500
           ? 'Unanswered requests expire after 10 minutes.'
           : "Couldn't reach AI Gator. Try again.";
-      _showConnectivityToast(`Could not record your decision: ${err.message}`, 'warn');
+      if (first) _showConnectivityToast(`Could not record your decision: ${err.message}`, 'warn');
     }
+  };
+  const decide = async (action) => {
+    if (run.disabled || settled) return;
+    busy = true;
+    run.disabled = true;
+    if (action === 'run') {
+      showRunning();
+    } else {
+      cancel.disabled = true;
+    }
+    const call = send(action);
+    if (action === 'run') _hostRunsInFlight.set(requestId, call);
+    await follow(action, call);
   };
   run.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -12069,6 +12085,11 @@ function _renderHostCommandCard(data, requestId, cardTab, tabId) {
   });
   document.getElementById('messages')?.appendChild(card);
   card.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  const inFlight = _hostRunsInFlight.get(requestId);
+  if (inFlight) {
+    showRunning();
+    follow('run', inFlight);
+  }
 }
 
 function _showSandboxApproval(data, ownerTabId) {

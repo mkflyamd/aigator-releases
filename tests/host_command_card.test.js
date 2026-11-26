@@ -90,6 +90,7 @@ function makeEnv(fetchImpl) {
     window: { __CSRF_TOKEN__: 'aigator-fake-api-key' },
     _activeTabId: 'tab-1',
     _pendingSandboxCards: new Map([['tab-1', new Map([['req1', {}]])]]),
+    _hostRunsInFlight: new Map(),
     _tabsWithUpdates: new Set(),
     _showConnectivityToast: (msg, type) => toasts.push({ msg, type }),
     _sendSandboxFollowUp: async (tab, text) => followUps.push({ tab, text }),
@@ -397,6 +398,69 @@ const buttonsOf = (env) => walk(env.messages).filter((e) => e.tag === 'button');
   await slowCancel;
   await tick();
   assert.match(textOf(slow), /You cancelled this. Nothing was run./);
+
+  // A tab switch redraws the card while the command is still running: it must show Stop, not Run,
+  // and settle from the same run when it ends.
+  let finishRun = () => {};
+  const away = makeEnv((url) =>
+    url.endsWith('/run')
+      ? new Promise((resolve) => {
+          finishRun = () =>
+            resolve({
+              ok: true,
+              status: 200,
+              json: async () => ({
+                ok: true,
+                result: { stdout: 'served', stderr: '', exit_code: 0 },
+              }),
+            });
+        })
+      : Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) }),
+  );
+  away.ctx._showSandboxApproval(data, 'tab-1');
+  buttonsOf(away)[0].listeners.click(click);
+  await tick();
+  away.messages.children = [];
+  away.ctx._showSandboxApproval(data, 'tab-1');
+  assert.strictEqual(away.messages.children.length, 1, 'the running card is drawn again');
+  assert.deepStrictEqual(
+    buttonsOf(away).map((b) => [b.textContent, b.disabled]),
+    [
+      ['Run', true],
+      ['Stop', false],
+    ],
+    'redrawn running card offers Stop and no live Run',
+  );
+  assert.match(textOf(away), /Running\.\.\./);
+  buttonsOf(away)[1].listeners.click(click);
+  await tick();
+  assert.strictEqual(away.fetches[away.fetches.length - 1].url, '/api/host-shell/req1/cancel');
+  assert.match(textOf(away), /Stopping\.\.\./);
+  finishRun();
+  await tick();
+  await tick();
+  assert(walk(away.messages).some((e) => e.tag === 'pre' && e.textContent === 'served'));
+  assert.strictEqual(buttonsOf(away).length, 0, 'buttons removed when the run ends');
+  assert.strictEqual(away.followUps.length, 1, 'the agent is told once, not once per card');
+  assert.strictEqual(away.ctx._hostRunsInFlight.size, 0);
+
+  // If that run is refused, the redrawn card goes back to Run and Cancel.
+  const refused = makeEnv(async () => ({ ok: false, status: 503, json: async () => ({}) }));
+  refused.ctx._hostRunsInFlight.set(
+    'req1',
+    Promise.reject(Object.assign(new Error('refused'), { status: 503 })),
+  );
+  refused.ctx._showSandboxApproval(data, 'tab-1');
+  await tick();
+  await tick();
+  assert.deepStrictEqual(
+    buttonsOf(refused).map((b) => [b.textContent, b.disabled]),
+    [
+      ['Run', false],
+      ['Cancel', false],
+    ],
+  );
+  assert.strictEqual(refused.toasts.length, 1);
 
   // A non-zero exit code reads as a failure, zero as finished.
   const failed = makeEnv(async () => ({
