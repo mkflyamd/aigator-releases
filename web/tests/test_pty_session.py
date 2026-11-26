@@ -309,3 +309,82 @@ def test_viewer_count_tracks_connections(monkeypatch):
     finally:
         terminal._pty_sessions.pop("sess-viewed", None)
         pty.end()
+
+
+def _hidden(session):
+    return len(session.ws_hidden)
+
+
+def test_a_connection_that_reports_hidden_is_not_a_viewer_until_the_grace_lapses(monkeypatch):
+    pty = _FakePty()
+    session = PtySession(pty)
+    session.ws_disconnected_at = 0.0  # long past: no grace to lean on
+    terminal._pty_sessions["sess-hidden"] = session
+    try:
+        with _client(monkeypatch).websocket_connect(
+            "/api/terminal/agent?session_id=sess-hidden"
+        ) as ws:
+            assert _wait(lambda: session.ws_clients == 1)
+            assert terminal.has_viewer("sess-hidden")  # never reported: viewing
+            ws.send_text(json.dumps({"type": "visible", "value": False}))
+            assert _wait(lambda: _hidden(session) == 1)
+            assert terminal.has_viewer("sess-hidden")  # the 90s grace starts now
+            session.ws_disconnected_at = time.time() - 91
+            assert not terminal.has_viewer("sess-hidden")
+            assert terminal.is_pty_viewed("sess-hidden")  # still connected for the reaper
+            ws.send_text(json.dumps({"type": "visible", "value": True}))
+            assert _wait(lambda: _hidden(session) == 0)
+            assert terminal.has_viewer("sess-hidden")
+        assert _wait(lambda: session.ws_clients == 0)
+    finally:
+        terminal._pty_sessions.pop("sess-hidden", None)
+        pty.end()
+
+
+def test_one_visible_connection_keeps_the_terminal_watched(monkeypatch):
+    pty = _FakePty()
+    session = PtySession(pty)
+    session.ws_disconnected_at = 0.0
+    terminal._pty_sessions["sess-two"] = session
+    client = _client(monkeypatch)
+    try:
+        with client.websocket_connect("/api/terminal/agent?session_id=sess-two") as a, client.websocket_connect(
+            "/api/terminal/agent?session_id=sess-two"
+        ):
+            assert _wait(lambda: session.ws_clients == 2)
+            a.send_text(json.dumps({"type": "visible", "value": False}))
+            assert _wait(lambda: _hidden(session) == 1)
+            assert terminal.has_viewer("sess-two")
+        assert _wait(lambda: session.ws_clients == 0 and _hidden(session) == 0)
+    finally:
+        terminal._pty_sessions.pop("sess-two", None)
+        pty.end()
+
+
+def test_a_viewer_who_attaches_as_the_terminal_is_suspended_is_told_so_not_that_it_crashed(
+    monkeypatch, tmp_path
+):
+    import agent_suspend
+
+    monkeypatch.setattr(agent_suspend, "STATE_FILE", tmp_path / "suspended-agents.json")
+    pty = _FakePty()
+    session = PtySession(pty)
+    terminal._pty_sessions["sess-susp"] = session
+    try:
+        agent_suspend._remember(
+            "sess-susp",
+            {"agent": "claude", "project_id": "demo", "session_id": "claude-sess-9", "at": time.time()},
+            time.time(),
+        )
+        with _client(monkeypatch).websocket_connect(
+            "/api/terminal/agent?session_id=sess-susp"
+        ) as ws:
+            assert _wait(lambda: session.ws_clients == 1)
+            pty.end()
+            assert json.loads(ws.receive_text()) == {
+                "type": "suspended",
+                "data": "Suspended - click to resume",
+                "session_id": "claude-sess-9",
+            }
+    finally:
+        terminal._pty_sessions.pop("sess-susp", None)

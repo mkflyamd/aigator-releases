@@ -49,3 +49,53 @@ def test_restart_controls_use_awaited_restart_helper():
     assert "void _genAgentRestartSession(tabId, ptySessionId)" in SOURCE
     assert "void _genAgentRestartSession(sess.tabId, sess.ptySessionId);" in SOURCE
     assert "const restarted = await _genAgentRestartSession(sess.tabId, sess.ptySessionId);" in SOURCE
+
+
+def test_suspended_terminal_offers_resume_and_restart_resumes_the_stored_session():
+    handler = SOURCE.split("} else if (msg.type === 'suspended') {", 1)[1].split(
+        "} else if (msg.type === 'exit')", 1
+    )[0]
+    assert "sess._dead = true;" in handler
+    assert "sess._resumeId = msg.session_id || null;" in handler
+    assert "_genAgentShowRestartOverlay(sess, msg.data || 'Suspended - click to resume');" in handler
+    restart = SOURCE.split("async function _genAgentRestartSession", 1)[1].split(
+        "function _genAgentShowStartPrompt", 1
+    )[0]
+    assert "resumeId: sess._resumeId || undefined," in restart
+    assert "sess._resumeId ? 'Resume session' : 'Restart session'" in SOURCE
+
+
+def test_a_failed_resume_offers_a_resume_retry_not_a_fresh_start():
+    start = SOURCE.split("async function _genAgentStart(", 1)[1].split(
+        "function _genAgentAttachTerminal", 1
+    )[0]
+    assert "(err && err.message) || 'Could not start ' + agent,\n          opts.resumeId," in start
+    prompt = SOURCE.split("function _genAgentShowStartPrompt(", 1)[1].split(
+        "function _genAgentHideStartPrompt", 1
+    )[0]
+    assert "errMsg, resumeId) {" in SOURCE
+    assert "resumeId ? 'Resume' : 'Start'" in prompt
+    assert "_genAgentStart(tabId, agent, projectId, repoPath, resumeId ? { resumeId } : undefined)" in " ".join(
+        prompt.split()
+    )
+
+
+def test_each_terminal_tells_the_backend_whether_it_is_on_screen():
+    report = SOURCE.split("function _genAgentReportVisible(", 1)[1].split("document.addEventListener", 1)[0]
+    assert "JSON.stringify({ type: 'visible', value: visible })" in report
+    assert "document.visibilityState === 'hidden'" in SOURCE.split("function _genAgentIsVisible(", 1)[1].split(
+        "function _genAgentReportVisible", 1
+    )[0]
+    assert "document.addEventListener('visibilitychange'" in SOURCE
+    activate = SOURCE.split("function _genAgentActivateSession(", 1)[1].split("function _genAgentNewSession", 1)[0]
+    assert "state.order.forEach((id) => _genAgentReportVisible(state.sessions[id]));" in activate
+    opened = SOURCE.split("sess.ws.onopen = () => {", 1)[1].split("sess.ws.onmessage", 1)[0]
+    assert "_genAgentReportVisible(sess, true);" in opened
+
+
+def test_visibility_is_re_reported_on_a_timer_for_every_terminal():
+    assert "function _genAgentReportAllVisible() {" in SOURCE
+    assert "document.addEventListener('visibilitychange', _genAgentReportAllVisible);" in SOURCE
+    assert "setInterval(_genAgentReportAllVisible, 15000);" in SOURCE
+    body = SOURCE.split("function _genAgentReportAllVisible() {", 1)[1].split("document.addEventListener", 1)[0]
+    assert "Object.values(_genAgentTerminals)" in body and "_genAgentReportVisible(s)" in body

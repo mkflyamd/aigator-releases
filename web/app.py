@@ -844,6 +844,8 @@ async def lifespan(app):
             except Exception:
                 pass
 
+    import agent_suspend as _agent_suspend
+    _agent_suspend_task = asyncio.create_task(_agent_suspend.run())
     _cleanup_task = asyncio.create_task(_chat_store_cleanup())
     _logging_retention_task = asyncio.create_task(_logging_retention_loop())
 
@@ -889,7 +891,8 @@ async def lifespan(app):
     _logging_retention_task.cancel()
     _catalog_sync_task.cancel()
     _teams_remote_control_task.cancel()
-    for _t in (_update_check_task, _cleanup_task, _logging_retention_task, _catalog_sync_task, _teams_remote_control_task):
+    _agent_suspend_task.cancel()
+    for _t in (_update_check_task, _cleanup_task, _logging_retention_task, _catalog_sync_task, _teams_remote_control_task, _agent_suspend_task):
         try:
             await _t
         except asyncio.CancelledError:
