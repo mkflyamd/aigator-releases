@@ -232,6 +232,16 @@ def create_pty_session(
     return entry
 
 
+def live_pty_labels() -> dict[str, dict]:
+    """id -> labels for every live PTY: those the PTY host holds (including ones
+    this backend has not adopted since a restart) and in-process ones. Blocking."""
+    found = {s["id"]: s.get("meta") or {} for s in _list_host_sessions() if not s.get("done")}
+    for session_id, entry in list(_pty_sessions.items()):
+        if not entry.done and session_id not in found:
+            found[session_id] = entry.meta or {}
+    return found
+
+
 def close_pty_session(session_id: str) -> None:
     entry = _pty_sessions.pop(session_id, None)
     if entry:
@@ -239,6 +249,14 @@ def close_pty_session(session_id: str) -> None:
             entry.close()
         except Exception:
             pass
+        return
+    # Not adopted by this backend (it restarted since): the host still has it.
+    info = pty_client.find_host(pty_client.instance_key()) if pty_client.host_enabled() else None
+    if info is not None:
+        try:
+            pty_client.host_request(info, {"op": "close", "id": session_id})
+        except pty_client.HostError:
+            logger.warning("could not close PTY session %s on the host", session_id)
 
 
 def is_pty_alive(session_id: str) -> bool:
@@ -263,8 +281,13 @@ def is_pty_viewed(session_id: str, grace_seconds: float = 90.0) -> bool:
     server open forever, exhausting the port range. Gating on 'viewed' means a
     forgotten/closed terminal stops protecting its server once the grace lapses,
     so the normal idle reaper reclaims it."""
-    if not is_pty_alive(session_id):
-        return False
+    return is_pty_alive(session_id) and has_viewer(session_id, grace_seconds)
+
+
+def has_viewer(session_id: str, grace_seconds: float = 90.0) -> bool:
+    """True iff a WebSocket is connected to this backend's session now, or was
+    within `grace_seconds`. Never adopts a session from the PTY host: one this
+    backend has not adopted has no viewer."""
     entry = _pty_sessions.get(session_id)
     if not entry:
         return False
@@ -309,6 +332,22 @@ async def agent_terminal_ws(ws: WebSocket, session_id: str, seq: int = 0):
         None, get_pty_session, session_id
     )
     if not entry:
+        import agent_suspend
+
+        suspended = await asyncio.to_thread(agent_suspend.suspended_record, session_id)
+        if suspended:
+            await ws.accept()
+            await ws.send_text(
+                json.dumps(
+                    {
+                        "type": "suspended",
+                        "data": "Suspended - click to resume",
+                        "session_id": suspended["session_id"],
+                    }
+                )
+            )
+            await ws.close()
+            return
         # NOT an exit: the PTY either hasn't been created yet (the client can
         # race the spawn, which squats a pool slot for ~15-20s) or it was
         # idle-reaped while the client kept the id in its session state.
