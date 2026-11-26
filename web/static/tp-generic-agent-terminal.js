@@ -573,6 +573,28 @@ function _genAgentForceRestartTab(tabId, ptySessionId, btn) {
   });
 }
 
+// Tell the backend whether this terminal is on screen, so a background tab does
+// not count as watched when it decides which idle terminals to suspend.
+function _genAgentIsVisible(sess) {
+  if (document.visibilityState === 'hidden') return false;
+  if (sess._parked) return true;
+  return !!(sess.container && sess.container.getClientRects().length);
+}
+
+function _genAgentReportVisible(sess, force) {
+  if (!sess || !sess.ws || sess.ws.readyState !== WebSocket.OPEN) return;
+  const visible = _genAgentIsVisible(sess);
+  if (!force && sess._reportedVisible === visible) return;
+  sess._reportedVisible = visible;
+  sess.ws.send(JSON.stringify({ type: 'visible', value: visible }));
+}
+
+document.addEventListener('visibilitychange', () => {
+  Object.values(_genAgentTerminals).forEach((st) =>
+    Object.values(st.sessions || {}).forEach((s) => _genAgentReportVisible(s)),
+  );
+});
+
 // Show one session, hide the rest (hide, don't destroy - same as OpenCode).
 function _genAgentActivateSession(tabId, ptyId) {
   const state = _genAgentTerminals[_caSessionKey(tabId)];
@@ -584,6 +606,7 @@ function _genAgentActivateSession(tabId, ptyId) {
     if (s && s.container) s.container.style.display = id === ptyId ? '' : 'none';
   });
   _genAgentUpdateActiveTab(tabId);
+  state.order.forEach((id) => _genAgentReportVisible(state.sessions[id]));
   const sess = state.sessions[ptyId];
   if (sess) sess._viewedAt = Date.now();
   if (sess && sess.term)
@@ -809,7 +832,7 @@ async function _genAgentRestartSession(tabId, ptyId) {
   return true;
 }
 
-function _genAgentShowStartPrompt(tabId, agent, projectId, repoPath, errMsg) {
+function _genAgentShowStartPrompt(tabId, agent, projectId, repoPath, errMsg, resumeId) {
   const state = _genAgentEnsureTermsContainer(tabId);
   if (!state) return;
   state.agent = agent;
@@ -830,7 +853,7 @@ function _genAgentShowStartPrompt(tabId, agent, projectId, repoPath, errMsg) {
   const agentLabel = _genAgentLabel(agent);
   const busy = state._starting === true;
   const busyLabel = isBareTerminal ? 'Opening…' : 'Starting…';
-  const idleLabel = isBareTerminal ? 'Open' : 'Start';
+  const idleLabel = isBareTerminal ? 'Open' : resumeId ? 'Resume' : 'Start';
   const title = isBareTerminal ? 'Open a terminal' : 'Start ' + agentLabel;
   const sub = isBareTerminal
     ? 'Open a plain shell in ' + projectId + "'s directory - run any tool you like."
@@ -865,7 +888,12 @@ function _genAgentShowStartPrompt(tabId, agent, projectId, repoPath, errMsg) {
     // Same one-tick defer as the OpenCode prompt: _genAgentStart hides this
     // button synchronously before its first await, so calling it in the same
     // tick would never let the busy state paint.
-    setTimeout(() => _genAgentStart(tabId, agent, projectId, repoPath), 0);
+    // A failed resume retries the same stored session, never a fresh one.
+    setTimeout(
+      () =>
+        _genAgentStart(tabId, agent, projectId, repoPath, resumeId ? { resumeId } : undefined),
+      0,
+    );
   });
 }
 
@@ -1081,6 +1109,7 @@ async function _genAgentStart(tabId, agent, projectId, repoPath, opts) {
           projectId,
           repoPath,
           (err && err.message) || 'Could not start ' + agent,
+          opts.resumeId,
         );
       } else {
         if (typeof addMessage === 'function')
@@ -1415,6 +1444,7 @@ function _genAgentConnect(sess, retryDelay) {
   sess.ws.onopen = () => {
     _ocNoteEcho(sess);
     _genAgentClearReconnecting(sess);
+    _genAgentReportVisible(sess, true);
     if (wasRetrying && sess._retryAttempt) {
       // Don't write [reconnected] text into the terminal - for TUI apps like
       // opencode it injects text into the alternate screen and corrupts the

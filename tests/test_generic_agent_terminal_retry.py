@@ -63,3 +63,31 @@ def test_suspended_terminal_offers_resume_and_restart_resumes_the_stored_session
     )[0]
     assert "resumeId: sess._resumeId || undefined," in restart
     assert "sess._resumeId ? 'Resume session' : 'Restart session'" in SOURCE
+
+
+def test_a_failed_resume_offers_a_resume_retry_not_a_fresh_start():
+    start = SOURCE.split("async function _genAgentStart(", 1)[1].split(
+        "function _genAgentAttachTerminal", 1
+    )[0]
+    assert "(err && err.message) || 'Could not start ' + agent,\n          opts.resumeId," in start
+    prompt = SOURCE.split("function _genAgentShowStartPrompt(", 1)[1].split(
+        "function _genAgentHideStartPrompt", 1
+    )[0]
+    assert "errMsg, resumeId) {" in SOURCE
+    assert "resumeId ? 'Resume' : 'Start'" in prompt
+    assert "_genAgentStart(tabId, agent, projectId, repoPath, resumeId ? { resumeId } : undefined)" in " ".join(
+        prompt.split()
+    )
+
+
+def test_each_terminal_tells_the_backend_whether_it_is_on_screen():
+    report = SOURCE.split("function _genAgentReportVisible(", 1)[1].split("document.addEventListener", 1)[0]
+    assert "JSON.stringify({ type: 'visible', value: visible })" in report
+    assert "document.visibilityState === 'hidden'" in SOURCE.split("function _genAgentIsVisible(", 1)[1].split(
+        "function _genAgentReportVisible", 1
+    )[0]
+    assert "document.addEventListener('visibilitychange'" in SOURCE
+    activate = SOURCE.split("function _genAgentActivateSession(", 1)[1].split("function _genAgentNewSession", 1)[0]
+    assert "state.order.forEach((id) => _genAgentReportVisible(state.sessions[id]));" in activate
+    opened = SOURCE.split("sess.ws.onopen = () => {", 1)[1].split("sess.ws.onmessage", 1)[0]
+    assert "_genAgentReportVisible(sess, true);" in opened
