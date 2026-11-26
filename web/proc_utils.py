@@ -85,8 +85,10 @@ def kill_process_tree(proc: subprocess.Popen) -> None:
             capture_output=True, check=False, creationflags=subprocess.CREATE_NO_WINDOW,
         )
     else:
+        # killpg(0) signals the caller's own group, so a launcher that reports no real pid must not reach it.
         try:
-            os.killpg(proc.pid, signal.SIGKILL)
+            if proc.pid > 1:
+                os.killpg(proc.pid, signal.SIGKILL)
         except (ProcessLookupError, PermissionError):
             pass
     try:
