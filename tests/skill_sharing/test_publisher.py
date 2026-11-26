@@ -439,6 +439,15 @@ def test_sharing_with_nobody_still_publishes(provider, make_mine):
     assert provider.grants == []
 
 
+def test_a_repeat_publish_of_the_same_content_grants_the_people_it_is_given(provider, make_mine):
+    skill_id = make_mine()
+    publisher.publish(provider, skill_id, author="A", people=["a@contoso.com"])
+    again = publisher.publish(provider, skill_id, author="A", people=["b@contoso.com"])
+
+    assert again["reused"] is True
+    assert [emails for _folder, emails in provider.grants] == [["a@contoso.com"], ["b@contoso.com"]]
+
+
 def test_concurrent_publishes_of_one_skill_are_serialised(provider, make_mine):
     import threading
     import time

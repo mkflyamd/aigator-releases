@@ -90,6 +90,8 @@ class DraftRequest(BaseModel):
     channel: str = Field(pattern="^email$")
     people: list[Person] = Field(min_length=1, max_length=50)
     message: str = Field(min_length=1, max_length=4000)
+    message_html: str = Field(default="", max_length=8000)
+    note: str = Field(default="", max_length=1000)
 
 
 class ReviewRequest(BaseModel):
@@ -153,6 +155,11 @@ def share_inventory(skill_id: str = Query(min_length=1, max_length=128)):
     return _call(publisher.inventory, skill_id)
 
 
+@router.get("/api/skills/share/preview")
+def preview_share_message(skill_id: str = Query(min_length=1, max_length=128)):
+    return _call(publisher.preview_message, skill_id, author=_call(_author_name))
+
+
 @router.post("/api/skills/share/publish", dependencies=[Depends(verify_csrf)])
 def publish_skill(req: PublishRequest):
     provider = _call(_provider)
@@ -173,7 +180,14 @@ def publish_skill(req: PublishRequest):
 @router.post("/api/skills/share/draft", dependencies=[Depends(verify_csrf)])
 def draft_share_message(req: DraftRequest):
     people = [p.model_dump() for p in req.people]
-    return _call(drafts.build, skill_id=req.skill_id, people=people, message=req.message)
+    return _call(
+        drafts.build,
+        skill_id=req.skill_id,
+        people=people,
+        message=req.message,
+        message_html=req.message_html,
+        note=req.note,
+    )
 
 
 @router.post("/api/skills/share/review", dependencies=[Depends(verify_csrf)])

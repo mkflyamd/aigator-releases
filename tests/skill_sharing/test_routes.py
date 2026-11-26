@@ -16,6 +16,7 @@ from skills._sharing import messages, publisher
 from skills._sharing.errors import ShareError
 
 PUBLISH = "/api/skills/share/publish"
+PREVIEW = "/api/skills/share/preview"
 REVIEW = "/api/skills/share/review"
 INSTALL = "/api/skills/share/install"
 DRAFT = "/api/skills/share/draft"
@@ -77,6 +78,20 @@ def test_publish_returns_the_link_and_records_the_share(env, make_mine):
     assert skill_state.get_entry(skill_id)["published_version"] == 1
 
 
+def test_publish_response_says_when_the_saved_folder_was_replaced(env, make_mine):
+    skill_id = make_mine()
+    first = _post(env, PUBLISH, {"skill_id": skill_id}).json()
+    assert first["relinked"] is False
+    for key in [k for k, f in env.provider.folders.items() if f["folder_id"] == first["folder"]["folder_id"]]:
+        del env.provider.folders[key]
+
+    again = _post(env, PUBLISH, {"skill_id": skill_id})
+
+    assert again.status_code == 200
+    assert again.json()["relinked"] is True
+    assert again.json()["folder"]["folder_id"] != first["folder"]["folder_id"]
+
+
 def test_publish_reports_addresses_that_could_not_be_granted(env, make_mine):
     env.provider.ungrantable.add("outside@gmail.com")
     res = _post(env, PUBLISH, {"skill_id": make_mine(), "people": ["a@contoso.com", "outside@gmail.com"]})
@@ -94,7 +109,32 @@ def test_draft_route_hands_the_people_and_message_to_the_drafter(env):
     with patch("routes.skill_sharing.drafts.build", return_value={"drafts": [], "unmatched": []}) as build:
         res = _post(env, DRAFT, _draft_body())
     assert res.status_code == 200
-    build.assert_called_once_with(skill_id="s", people=[{"name": "Ann", "email": "A@Contoso.com"}], message="Hello")
+    build.assert_called_once_with(
+        skill_id="s", people=[{"name": "Ann", "email": "A@Contoso.com"}], message="Hello", message_html="", note=""
+    )
+
+
+def test_draft_route_passes_the_html_message_through(env):
+    with patch("routes.skill_sharing.drafts.build", return_value={"drafts": [], "unmatched": []}) as build:
+        res = _post(env, DRAFT, _draft_body(message_html="<p>Hi</p>"))
+    assert res.status_code == 200
+    assert build.call_args.kwargs["message_html"] == "<p>Hi</p>"
+
+
+def test_draft_route_passes_the_note_through(env):
+    with patch("routes.skill_sharing.drafts.build", return_value={"drafts": [], "unmatched": []}) as build:
+        res = _post(env, DRAFT, _draft_body(note="Hi Ann"))
+    assert res.status_code == 200
+    assert build.call_args.kwargs["note"] == "Hi Ann"
+
+
+def test_the_note_is_in_the_drafted_email_and_nothing_is_sent(env):
+    with patch("routes.drafts.approve_draft") as approve:
+        res = _post(env, DRAFT, _draft_body(note="Hi Ann"))
+    assert res.status_code == 200
+    approve.assert_not_called()
+    data = res.json()["drafts"][0]["data"]
+    assert data["body"] == "Hi Ann\n\nHello"
 
 
 def test_draft_route_names_are_optional(env):
@@ -337,6 +377,36 @@ def test_publish_to_a_folder_that_is_gone_is_a_404(env, make_mine):
 def test_the_new_read_routes_need_no_csrf_token(env, make_mine):
     assert env.http.get(LOCATIONS, params={"skill_id": make_mine()}).status_code == 200
 
+
+def test_preview_shows_the_real_message_with_the_link_left_out_and_writes_nothing(env, make_mine):
+    skill_id = make_mine()
+    res = env.http.get(PREVIEW, params={"skill_id": skill_id})
+
+    assert res.status_code == 200
+    assert res.json()["title"] == "Weekly Report"
+    message = res.json()["message"]
+    assert "Mayuresh Kulkarni" in message
+    assert "Weekly Report" in message
+    assert messages.LINK_PLACEHOLDER in message
+    assert "aigator://share?d=" not in message
+    assert env.provider.folders == {} and env.provider.writes == [] and env.provider.grants == []
+    assert skill_state.get_entry(skill_id).get("share_source") is None
+
+
+def test_preview_is_the_published_message_with_only_the_link_and_address_swapped(env, make_mine):
+    skill_id = make_mine()
+    preview = env.http.get(PREVIEW, params={"skill_id": skill_id}).json()["message"]
+    published = _post(env, PUBLISH, {"skill_id": skill_id}).json()
+    expected = published["message"].replace(published["link"], messages.LINK_PLACEHOLDER).replace(
+        published["web_url"], messages.LINK_PLACEHOLDER
+    )
+    assert preview == expected
+
+
+def test_preview_refuses_a_skill_that_is_not_yours(env):
+    res = env.http.get(PREVIEW, params={"skill_id": "nothing-here"})
+    assert res.status_code == 400
+    assert res.json()["detail"]["error"] == "not_mine"
 
 def test_publish_requires_the_reviewed_file_list_digest(env, make_mine):
     skill_id = make_mine()

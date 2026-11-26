@@ -262,7 +262,7 @@ const json = (v) => JSON.stringify(v);
 
   // The card uses the editor for replies and new emails, and sends only what changed, on both paths.
   assert(
-    /\(type === 'email-reply' \|\| type === 'email-send'\) &&\s*Array\.isArray\(data\.to_people\)/.test(
+    /\(type === 'email-reply' \|\| type === 'email-send'\) &&\s*(?:!data\.locked &&\s*)?Array\.isArray\(data\.to_people\)/.test(
       source,
     ),
   );
@@ -275,7 +275,9 @@ const json = (v) => JSON.stringify(v);
 
   // A new email's subject is a text box whose edit rides along; the data-flow line needs a source.
   assert(
-    /type === 'email-send'\s*\?\s*'<div class="gcc-meta-row">[^']*gcc-subject-input/.test(source),
+    /type === 'email-send'(?: && !data\.locked)?\s*\?\s*'<div class="gcc-meta-row">[^']*gcc-subject-input/.test(
+      source,
+    ),
   );
   assert(/edited_subject: subject/.test(source));
   assert(/destinationLabel && sourcesRead\.length/.test(source));

@@ -1057,6 +1057,16 @@
       ver.className = 'mp-installed-version';
       ver.textContent = 'v' + (skill.version || '?');
       meta.appendChild(ver);
+      if (
+        skill.tier === 'Mine' &&
+        Number.isInteger(skill.published_version) &&
+        skill.published_version > 0
+      ) {
+        const chip = document.createElement('span');
+        chip.className = 'mp-share-chip';
+        chip.textContent = 'Shared · v' + skill.published_version;
+        meta.appendChild(chip);
+      }
 
       const name = document.createElement('div');
       name.className = 'mp-installed-name';
@@ -1078,7 +1088,7 @@
         const shareBtn = document.createElement('button');
         shareBtn.className = 'mp-row-btn';
         shareBtn.textContent = 'Share';
-        shareBtn.title = 'Download this skill as a .skill file to send to a colleague';
+        shareBtn.title = 'Share with colleagues through OneDrive, or download a file';
         shareBtn.dataset.action = 'share-mine';
         shareBtn.dataset.skillId = skill.id;
         actions.appendChild(shareBtn);
@@ -1359,7 +1369,88 @@
       wrap.appendChild(localRow);
     }
 
+    // ── Open a skill someone shared (works with or without Electron) ────
+    const shareDivider = document.createElement('div');
+    shareDivider.className = 'mp-import-divider';
+    shareDivider.textContent = 'or open a skill someone shared with you';
+    wrap.appendChild(shareDivider);
+
+    const shareLabel = document.createElement('label');
+    shareLabel.className = 'mp-import-label';
+    shareLabel.textContent = 'Share link:';
+    const shareInputId = 'mp-share-link-input';
+    shareLabel.setAttribute('for', shareInputId);
+
+    const shareRow = document.createElement('div');
+    shareRow.className = 'mp-import-row';
+    const shareInput = document.createElement('input');
+    shareInput.type = 'text';
+    shareInput.id = shareInputId;
+    shareInput.className = 'mp-input mp-import-url';
+    shareInput.placeholder = 'aigator://share?d=...';
+    shareInput.setAttribute('autocomplete', 'off');
+    const reviewBtn = document.createElement('button');
+    reviewBtn.type = 'button';
+    reviewBtn.className = 'ap-card-btn primary';
+    reviewBtn.textContent = 'Review';
+    const reviewShared = () => _reviewSharedLink(shareInput.value, errorArea);
+    reviewBtn.addEventListener('click', reviewShared);
+    shareInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        reviewShared();
+      }
+    });
+    shareInput.addEventListener('paste', (e) => {
+      const pasted = e.clipboardData ? e.clipboardData.getData('text') : '';
+      const sharing = window.SkillSharing;
+      const link =
+        sharing && typeof sharing.extractLink === 'function' ? sharing.extractLink(pasted) : '';
+      if (!link) return;
+      e.preventDefault();
+      shareInput.value = link;
+    });
+    shareRow.appendChild(shareInput);
+    shareRow.appendChild(reviewBtn);
+    wrap.appendChild(shareLabel);
+    wrap.appendChild(shareRow);
+
     content.appendChild(wrap);
+  }
+
+  // Review a pasted share link. Nothing installs until the user clicks Install
+  // in the review modal; a successful install is registered the same way the
+  // local-file install is (see _pickLocalSkill).
+  function _reviewSharedLink(text, errorArea) {
+    if (errorArea) errorArea.textContent = '';
+    const sharing = window.SkillSharing;
+    if (!sharing || typeof sharing.openLinkReview !== 'function') {
+      if (errorArea) errorArea.textContent = 'Sharing is not available right now.';
+      return;
+    }
+    const link = sharing.extractLink(text);
+    if (!link) {
+      if (errorArea) errorArea.textContent = 'Paste the aigator://share link you were sent.';
+      return;
+    }
+    return sharing.openLinkReview(link, {
+      postJson: _postJson,
+      showAlert: _showAlert,
+      errorMessage: _errorMessage,
+      appendPermissionList: _appendPermissionList,
+      onInstalled: (result, review) => {
+        const skill = {
+          id: result.skill_id,
+          name: (review && review.title) || result.skill_id,
+          tier: 'Community',
+        };
+        if (typeof window.registerUserSkill === 'function') {
+          window.registerUserSkill(skill.id, skill.name, skill.tier);
+        }
+        _handleInstallOutcome(true, result, skill);
+        _switchTab('installed');
+      },
+    });
   }
 
   async function _pickLocalSkill(kind, errorArea) {
@@ -2424,7 +2515,48 @@
     });
   }
 
-  async function _shareMineSkill(skillId) {
+  // Share opens the modal (save to OneDrive, pick people, review the email in the draft card).
+  function _shareMineSkill(skillId) {
+    if (window.SkillSharing && typeof window.SkillSharing.openShareModal === 'function') {
+      window.SkillSharing.openShareModal(skillId, {
+        postJson: _postJson,
+        getJson: _getJson,
+        downloadSkill: _downloadMineSkill,
+        showAlert: _showAlert,
+        searchPeople: _searchPeople,
+        showToast: window._showConnectivityToast,
+        showDraftCard: (type, data) => window._injectDraftApprovalCard(type, data),
+        refresh,
+      });
+      return;
+    }
+    return _downloadMineSkill(skillId);
+  }
+
+  async function _getJson(url) {
+    const resp = await fetch(url);
+    let body = null;
+    try {
+      body = await resp.json();
+    } catch (e) {
+      body = null;
+    }
+    return { resp, body };
+  }
+
+  // Same source the prompt bar's @ mentions use: people in the user's own org.
+  // A failed search throws, so the modal does not remember it as "no results".
+  async function _searchPeople(query, signal) {
+    const resp = await fetch(
+      '/api/people/search?q=' + encodeURIComponent(query) + '&org_only=true',
+      { signal },
+    );
+    if (!resp.ok) throw new Error('People search failed');
+    const body = await resp.json().catch(() => ({}));
+    return Array.isArray(body.people) ? body.people : [];
+  }
+
+  async function _downloadMineSkill(skillId) {
     try {
       const resp = await fetch('/api/marketplace/export/' + encodeURIComponent(skillId));
       if (!resp.ok) {
