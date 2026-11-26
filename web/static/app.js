@@ -16565,7 +16565,7 @@ form.addEventListener('submit', async (e) => {
             ..._sendPinFields,
             ...(queuedSendId ? { queued_id: queuedSendId } : {}),
           };
-      // A re-send after an approval must not carry the id: the queued message was removed when this turn began.
+      // A re-send after an approval must not carry the id: the server removed the queued message when it answered with a turn or a permission card.
       const { queued_id: _spentQueuedId, ...resendBody } = _postBody;
       _permissionResendPayload = resendBody;
       const _postPromise = _postChatRetryingBusyTurn(_postBody, () => _userStopped);

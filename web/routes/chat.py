@@ -401,6 +401,23 @@ def _blocked_gated_deps(skill_ids: list[str], req) -> list[tuple[str, dict]]:
     return blocked
 
 
+async def _take_queued_for_gate(queued_id: str, context_id: str):
+    """Remove a queued message that the permission card is answering; the refusal response, or None when taken."""
+    from chat_queue import QueueError, get_queue
+    from fastapi.responses import JSONResponse
+
+    try:
+        taken = await asyncio.to_thread(get_queue().take, context_id or "default", queued_id)
+    except QueueError as exc:
+        return JSONResponse({"error": exc.code, "detail": exc.message}, status_code=exc.status)
+    if not taken:
+        return JSONResponse(
+            {"error": "queue_item_gone", "detail": "That queued message was already sent or removed."},
+            status_code=409,
+        )
+    return None
+
+
 def _permission_gate_response(blocked: list[tuple[str, dict]], context_id: str):
     """Answer the chat POST with a permission_required event instead of running the turn."""
     import asyncio as _asyncio
@@ -2106,6 +2123,12 @@ async def chat(req: ChatRequest):
     _gate_order = [s for s in (req.active_skill, *(req.active_skills or [])) if s] + sorted(_all_active)
     _blocked = _blocked_gated_deps(_gate_order, req)
     if _blocked:
+        # The card answers this send, and the approved resend carries no queued id, so the row must leave the
+        # queue now or the drain would send the same message again.
+        if req.queued_id:
+            _gone = await _take_queued_for_gate(req.queued_id, req.context_id)
+            if _gone is not None:
+                return _gone
         return _permission_gate_response(_blocked, req.context_id)
     # Google Workspace service skills are registered by mcp.manager as
     # service-specific tool groups. Do not activate the complete 100+ tool

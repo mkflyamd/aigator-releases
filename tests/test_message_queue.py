@@ -55,7 +55,8 @@ def test_an_id_cannot_be_reused_by_another_conversation(queue):
 
 
 def test_the_queue_holds_five_messages(queue):
-    for n in range(MAX_QUEUED):
+    assert MAX_QUEUED == 5
+    for n in range(5):
         queue.enqueue("c", f"id{n}", _msg(f"m{n}"))
     with pytest.raises(QueueError) as err:
         queue.enqueue("c", "extra", _msg())
@@ -187,7 +188,7 @@ def test_the_chips_round_trip_through_the_routes(queue, monkeypatch, api):
 
 def test_a_full_queue_answers_429_with_a_readable_message(queue, monkeypatch, api):
     client = api
-    for n in range(MAX_QUEUED):
+    for n in range(5):
         client.post("/api/queue", json={"context_id": "c", "id": f"i{n}", "payload": _msg()})
     full = client.post("/api/queue", json={"context_id": "c", "id": "more", "payload": _msg()})
     assert full.status_code == 429
@@ -648,3 +649,32 @@ def test_a_restored_message_stays_ahead_of_one_queued_while_it_was_out(queue):
     queue.restore("c", taken)
     assert [i["id"] for i in queue.snapshot("c")["items"]] == ["a", "b", "c"]
     assert queue.head("c")["payload"]["text"] == "first"
+
+
+_GATED_MESSAGE = "lets record a demo gator-demo-recorder"
+
+
+def _queue_a_gated_message(client, ctx):
+    client.post("/api/queue", json={"context_id": ctx, "id": "q1", "payload": _msg(_GATED_MESSAGE)})
+    return {"message": _GATED_MESSAGE, "context_id": ctx, "queued_id": "q1"}
+
+
+def test_a_queued_message_answered_by_the_permission_card_leaves_the_queue(queue, api):
+    ctx = f"q-{uuid.uuid4().hex}"
+    body = _queue_a_gated_message(api, ctx)
+    res = api.post("/api/chat", json=body)
+    assert res.status_code == 200
+    first = shared.chat_task_store.get_chunks(res.json()["task_id"])
+    assert any("permission_required" in c for c in first)
+    assert api.get("/api/queue", params={"context_id": ctx}).json()["items"] == []
+    again = api.post("/api/chat", json=body)
+    assert again.status_code == 409 and again.json()["error"] == "queue_item_gone"
+
+
+def test_a_paused_queue_does_not_let_a_queued_message_through_the_permission_card(queue, api):
+    ctx = f"q-{uuid.uuid4().hex}"
+    body = _queue_a_gated_message(api, ctx)
+    queue.pause(ctx, "stopped")
+    res = api.post("/api/chat", json=body)
+    assert res.status_code == 409 and res.json()["error"] == "queue_paused"
+    assert [i["id"] for i in api.get("/api/queue", params={"context_id": ctx}).json()["items"]] == ["q1"]
