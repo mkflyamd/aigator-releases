@@ -335,4 +335,3 @@ def test_created_session_keeps_its_labels_so_handoff_prepare_accepts_it(tmp_path
         assert r.status_code == 200
     finally:
         terminal.close_pty_session("s9")
-
