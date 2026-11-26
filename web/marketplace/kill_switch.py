@@ -30,6 +30,11 @@ def _refresh_prompts() -> None:
 
 
 def disable(skill_id: str) -> dict:
+    with installer.skill_lifecycle_lock(skill_id):
+        return _disable_locked(skill_id)
+
+
+def _disable_locked(skill_id: str) -> dict:
     entry, error = _find(skill_id)
     if error:
         return error
@@ -62,6 +67,11 @@ def _enable_tools(skill_id: str, entry: dict, skill_dir) -> dict:
 
 
 def enable(skill_id: str) -> dict:
+    with installer.skill_lifecycle_lock(skill_id):
+        return _enable_locked(skill_id)
+
+
+def _enable_locked(skill_id: str) -> dict:
     entry, error = _find(skill_id)
     if error:
         return error
@@ -77,4 +87,6 @@ def enable(skill_id: str) -> dict:
         started = {"mcp_error": str(exc)} if entry.get("inferred_mcp") else {}
     if started.get("mcp_error"):
         out["mcp_error"] = started["mcp_error"]
+        if started.get("policy_blocked"):
+            out["policy_blocked"] = True
     return out

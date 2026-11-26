@@ -48,6 +48,17 @@ _BUNDLE_SWAP_LOCK = threading.Lock()
 # install, uninstall and create requests. Always taken before _INSTALL_INDEX_LOCK.
 _SKILL_OPS_LOCK = threading.RLock()
 
+# One lock per skill id so enable, disable, uninstall and the first start of an imported
+# skill's MCP server never overlap (enable can take minutes). Lock order is always
+# lifecycle lock -> _SKILL_OPS_LOCK -> _INSTALL_INDEX_LOCK.
+_SKILL_LIFECYCLE_LOCKS: dict[str, threading.RLock] = {}
+_SKILL_LIFECYCLE_GUARD = threading.Lock()
+
+
+def skill_lifecycle_lock(skill_id: str) -> threading.RLock:
+    with _SKILL_LIFECYCLE_GUARD:
+        return _SKILL_LIFECYCLE_LOCKS.setdefault(skill_id, threading.RLock())
+
 
 def skill_ops_serialized(fn):
     """Run `fn` holding _SKILL_OPS_LOCK so skill file and index changes never interleave."""
@@ -506,7 +517,7 @@ def _teardown_plugin_mcp(plugin_id: str) -> None:
 
 def uninstall_skill(skill_id: str) -> dict:
     """Uninstall a skill or plugin bundle by id (serialized against installs)."""
-    with _SKILL_OPS_LOCK:
+    with skill_lifecycle_lock(skill_id), _SKILL_OPS_LOCK:
         return _uninstall_skill_unlocked(skill_id)
 
 
@@ -533,7 +544,7 @@ def _uninstall_skill_unlocked(skill_id: str) -> dict:
     # A server shipped by a local import runs with the skill folder as its working
     # directory, so stop it before the folder is deleted (Windows cannot delete a
     # folder a process is running in).
-    stop_inferred_mcp_server(skill_id)
+    stop_inferred_mcp_server(skill_id, uninstalling=True)
 
     removed = False
     for d in [skill_dir, mine_dir]:
@@ -1285,7 +1296,7 @@ def _warm_uv_cache(spec, skill_dir: Path) -> None:
 
 PINNED_INSTALLS_MCP_MSG = (
     "Your administrator's policy only allows installs pinned to an exact version, "
-    "and this server's Python packages are not."
+    "and this server's Python packages or Python version are not."
 )
 
 
@@ -1298,7 +1309,7 @@ def _start_inferred_mcp_server(skill_id: str, spec) -> dict:
 
     policy = load_policy()
     if policy.require_pinned_installs and spec.unpinned():
-        return {"mcp_error": PINNED_INSTALLS_MCP_MSG}
+        return {"mcp_error": PINNED_INSTALLS_MCP_MSG, "policy_blocked": True}
 
     skill_dir = INSTALLED_SKILLS_DIR / skill_id
     provisional = {
@@ -1323,6 +1334,8 @@ def _start_inferred_mcp_server(skill_id: str, spec) -> dict:
         _save_inferred_mcp(skill_id, {"mcp_connection_ids": out["mcp_connection_ids"]})
     if not result.get("ok"):
         out["mcp_error"] = result.get("error", "")
+        if policy.block_bundle_stdio_mcp:
+            out["policy_blocked"] = True
     return out
 
 
@@ -1356,8 +1369,9 @@ def register_inferred_mcp_server(skill_id: str, files: dict[str, bytes]) -> dict
     spec = infer_launch_spec(files)
     if spec is None:
         return {}
-    _save_inferred_mcp(skill_id, {"inferred_mcp": spec.to_record()})
-    return _start_inferred_mcp_server(skill_id, spec)
+    with skill_lifecycle_lock(skill_id):
+        _save_inferred_mcp(skill_id, {"inferred_mcp": spec.to_record()})
+        return _start_inferred_mcp_server(skill_id, spec)
 
 
 def start_inferred_mcp_server(skill_id: str) -> dict:
@@ -1366,9 +1380,13 @@ def start_inferred_mcp_server(skill_id: str) -> dict:
     return _start_inferred_mcp_server(skill_id, spec) if spec else {}
 
 
-def stop_inferred_mcp_server(skill_id: str) -> None:
-    """Stop and unregister the MCP server of an imported skill (disable, uninstall)."""
-    if _inferred_spec(skill_id) is not None:
+def stop_inferred_mcp_server(skill_id: str, uninstalling: bool = False) -> None:
+    """Stop and unregister the MCP server of an imported skill (disable, uninstall).
+    Uninstall also removes servers an earlier build registered without an approved spec."""
+    entry = next((e for e in load_installed() if e.get("id") == skill_id), None)
+    if entry is None or entry.get("skill_ids") is not None:
+        return
+    if entry.get("inferred_mcp") or (uninstalling and entry.get("mcp_connection_ids")):
         _teardown_plugin_mcp(skill_id)
 
 

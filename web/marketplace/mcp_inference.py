@@ -19,6 +19,7 @@ _SERVER_PACKAGES = {"fastmcp", "mcp"}
 _UNSAFE = re.compile(r"[\x00-\x1f\x7f]")
 _REQ_NAME = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)")
 _EXACT_PIN = re.compile(r"^\s*[A-Za-z0-9][A-Za-z0-9._-]*\s*(\[[A-Za-z0-9._,\s-]*\])?\s*===?\s*[A-Za-z0-9][A-Za-z0-9._+!-]*\s*(;.*)?$")
+_EXACT_PYTHON = re.compile(r"^\d+\.\d+\.\d+$")
 
 
 @dataclass(frozen=True)
@@ -39,7 +40,11 @@ class LaunchSpec:
         return out
 
     def unpinned(self) -> list[str]:
-        return [dep for dep in self.dependencies if not _EXACT_PIN.match(dep)]
+        """Packages not pinned with ==, and a Python request that is not an exact X.Y.Z."""
+        out = [dep for dep in self.dependencies if not _EXACT_PIN.match(dep)]
+        if self.python and not _EXACT_PYTHON.match(self.python):
+            out.append("Python " + self.python)
+        return out
 
     def to_record(self) -> dict:
         return {"name": self.name, "entry": self.entry, "dependencies": list(self.dependencies), "python": self.python}

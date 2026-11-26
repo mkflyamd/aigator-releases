@@ -774,6 +774,8 @@ def _switch(skill_id: str, action, disabled: bool) -> dict:
     out = {"ok": True, "skill_id": skill_id, "disabled": disabled}
     if result.get("mcp_error"):
         out["mcp_error"] = result["mcp_error"]
+        if result.get("policy_blocked"):
+            out["policy_blocked"] = True
     return out
 
 

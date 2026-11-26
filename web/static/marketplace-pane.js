@@ -189,7 +189,10 @@
         return;
       }
       if (typeof body.mcp_error === 'string' && body.mcp_error) {
-        _showAlert(_mcpPartialMessage(skillId, body.mcp_error), 'warning');
+        _showAlert(
+          _mcpPartialMessage(skillId, body.mcp_error, 'enabled', body.policy_blocked === true),
+          'error',
+        );
       }
       await refresh();
     } catch (err) {
@@ -1894,13 +1897,18 @@
     return rest.replace(/[-_]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
   }
 
-  function _mcpPartialMessage(name, mcpError) {
+  function _mcpPartialMessage(name, mcpError, did, policyBlocked) {
+    const lead = '\u201C' + name + '\u201D was ' + did + ', but ';
+    const left = 'The skill\u2019s instructions are available; its server tools are not. ';
+    if (policyBlocked) {
+      return lead + 'your administrator\u2019s policy blocked its MCP server. ' + left;
+    }
     return (
-      '\u201C' +
-      name +
-      '\u201D was imported, but its MCP server did not start (' +
+      lead +
+      'its MCP server did not start (' +
       mcpError +
-      '). The skill\u2019s instructions are available; its server tools are not. ' +
+      '). ' +
+      left +
       'To try again, fix the cause, then Disable and Enable the skill.'
     );
   }
@@ -1938,7 +1946,10 @@
         );
       }
       if (mcpError) {
-        _showAlert(_mcpPartialMessage(skill.name, mcpError), 'warning');
+        _showAlert(
+          _mcpPartialMessage(skill.name, mcpError, 'imported', body.policy_blocked === true),
+          'error',
+        );
       }
       // Bug fix (post-milestone live testing): a claude-plugins-official
       // plugin BUNDLE's skill_ids (namespaced "{plugin_id}__{subpath}" per

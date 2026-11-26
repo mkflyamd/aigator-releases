@@ -3,6 +3,7 @@ registered without any setup script."""
 import base64
 import importlib
 import json
+import threading
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -474,7 +475,9 @@ def test_pinned_installs_policy_stops_an_unpinned_server_before_anything_runs(in
 
 
 def test_pinned_installs_policy_allows_a_server_whose_packages_are_all_pinned(installer):
-    pinned = PYPROJECT.replace(b'["fastmcp>=3.2.0,<4.0.0", "click>=8.0.0"]', b'["fastmcp==3.2.1", "click==8.1.7"]')
+    pinned = PYPROJECT.replace(b'["fastmcp>=3.2.0,<4.0.0", "click>=8.0.0"]', b'["fastmcp==3.2.1", "click==8.1.7"]').replace(
+        b'">=3.11,<3.13"', b'"3.12.4"'
+    )
 
     body, run, warm, connect, _ = _import_under_policy(
         installer, {**FILES, "pyproject.toml": pinned}, _policy(require_pinned_installs=True)
@@ -661,3 +664,144 @@ def test_the_enable_and_disable_routes_report_a_server_that_did_not_start(import
         body = client.post(f"/api/marketplace/enable/{skill_id}").json()
 
     assert body == {"ok": True, "skill_id": skill_id, "disabled": False, "mcp_error": "uv isn't installed"}
+
+
+# ── review follow-ups: one lifecycle lock, legacy teardown, exact Python, policy wording ──
+
+
+def _slow_start(live):
+    started, release = threading.Event(), threading.Event()
+
+    def register(plugin_id, name, provisional, missing):
+        started.set()
+        assert release.wait(5)
+        live.add(plugin_id)
+        return {"ok": True, "id": CONNECTION, "enabled": True}
+
+    return started, release, register
+
+
+@pytest.mark.parametrize("action", ["disable", "uninstall"])
+def test_a_disable_or_uninstall_during_a_slow_enable_leaves_no_running_server(imported, action):
+    installer, kill_switch, skill_id = imported
+    kill_switch.disable(skill_id)
+    live: set = set()
+    started, release, register = _slow_start(live)
+    act = kill_switch.disable if action == "disable" else installer.uninstall_skill
+
+    with patch("mcp.manager.register_plugin_mcp_server", side_effect=register), \
+            patch("marketplace.installer._warm_uv_cache"), \
+            patch("marketplace.installer._teardown_plugin_mcp", side_effect=live.discard):
+        enabling = threading.Thread(target=kill_switch.enable, args=(skill_id,), daemon=True)
+        enabling.start()
+        assert started.wait(5)
+        acting = threading.Thread(target=act, args=(skill_id,), daemon=True)
+        acting.start()
+        acting.join(0.3)
+        assert acting.is_alive(), "the second operation must wait for the enable to finish"
+        release.set()
+        enabling.join(5)
+        acting.join(5)
+
+    assert not live
+    entry = next((e for e in installer.load_installed() if e["id"] == skill_id), None)
+    assert (entry is None) if action == "uninstall" else entry["disabled"] is True
+
+
+def test_uninstall_still_removes_a_server_registered_before_launch_specs_were_recorded(installer, tmp_path):
+    (tmp_path / "old").mkdir()
+    installer.save_installed(
+        [{"id": "old", "version": "1.0", "tier": "Community", "mcp_connection_ids": [CONNECTION]}]
+    )
+
+    with patch("marketplace.installer._teardown_plugin_mcp") as teardown:
+        installer.stop_inferred_mcp_server("old")
+        teardown.assert_not_called()
+        assert installer.uninstall_skill("old")["ok"] is True
+
+    teardown.assert_called_once_with("old")
+
+
+@pytest.mark.parametrize(
+    "python, pinned",
+    [("3.12.4", True), ("", True), ("3.12", False), (">=3.11,<3.13", False), ("3.12.*", False)],
+)
+def test_pinned_installs_need_an_exact_python_version_too(python, pinned):
+    from marketplace.mcp_inference import LaunchSpec
+
+    assert (LaunchSpec("s", "a.py", ("fastmcp==3.2.1",), python).unpinned() == []) is pinned
+
+
+def test_pinned_installs_policy_stops_a_server_that_lets_uv_choose_the_python(installer):
+    from marketplace.installer import PINNED_INSTALLS_MCP_MSG
+
+    pinned_packages = PYPROJECT.replace(
+        b'["fastmcp>=3.2.0,<4.0.0", "click>=8.0.0"]', b'["fastmcp==3.2.1", "click==8.1.7"]'
+    )
+
+    body, run, warm, connect, placeholder = _import_under_policy(
+        installer, {**FILES, "pyproject.toml": pinned_packages}, _policy(require_pinned_installs=True)
+    )
+
+    warm.assert_not_called()
+    run.assert_not_called()
+    connect.assert_not_called()
+    assert body["mcp_error"] == PINNED_INSTALLS_MCP_MSG
+    assert body["policy_blocked"] is True
+
+
+def test_the_preview_names_the_python_version_when_pinning_policy_blocks_it():
+    pinned_packages = PYPROJECT.replace(
+        b'["fastmcp>=3.2.0,<4.0.0", "click>=8.0.0"]', b'["fastmcp==3.2.1", "click==8.1.7"]'
+    )
+    with patch("sandbox.policy.load_policy", return_value=_policy(require_pinned_installs=True)):
+        summary = P.summarize_package({**FILES, "pyproject.toml": pinned_packages})
+
+    assert any("Python version" in line and line.startswith("Blocked by") for line in summary["lines"])
+
+
+def test_a_policy_block_is_flagged_so_the_user_is_not_told_to_retry(installer):
+    body, *_ = _import_under_policy(installer, FILES, _policy(block_bundle_stdio_mcp=True))
+
+    assert body["policy_blocked"] is True
+
+
+def test_an_unreadable_policy_file_fails_closed_before_any_download(installer, tmp_path):
+    from marketplace.mcp_inference import infer_launch_spec
+    from sandbox import policy as policy_module
+
+    broken = tmp_path / "policy.json"
+    broken.write_text("{not json", encoding="utf-8")
+    policy_module._reset_cache()
+    installer.save_installed(
+        [{"id": "s", "version": "1.0", "tier": "Community", "inferred_mcp": infer_launch_spec(FILES).to_record()}]
+    )
+    with (
+        patch.object(policy_module, "policy_path", return_value=broken),
+        patch("subprocess.run") as run,
+        patch("marketplace.installer._warm_uv_cache") as warm,
+        patch("mcp.manager.add_or_update") as connect,
+        patch("mcp.manager._upsert_raw_connection"),
+    ):
+        result = installer.start_inferred_mcp_server("s")
+    policy_module._reset_cache()
+
+    warm.assert_not_called()
+    run.assert_not_called()
+    connect.assert_not_called()
+    assert result["policy_blocked"] is True
+
+
+def test_the_enable_route_flags_a_policy_block(imported):
+    _, _, skill_id = imported
+    client = _route_client()
+    client.post(f"/api/marketplace/disable/{skill_id}")
+
+    with patch("sandbox.policy.load_policy", return_value=_policy(block_bundle_stdio_mcp=True)), \
+            patch("mcp.manager._upsert_raw_connection"), \
+            patch("marketplace.installer._warm_uv_cache") as warm:
+        body = client.post(f"/api/marketplace/enable/{skill_id}").json()
+
+    warm.assert_not_called()
+    assert body["policy_blocked"] is True
+    assert body["mcp_error"]

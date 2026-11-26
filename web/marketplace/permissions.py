@@ -210,7 +210,7 @@ def summarize_package(files: dict[str, bytes]) -> dict:
         if line.startswith("Starts") and load_policy().require_pinned_installs and inferred.unpinned():
             lines[-1] = (
                 f"Blocked by your administrator's policy, so it will not start: the MCP server "
-                f"'{_visible(inferred.name)}' has Python packages that are not pinned to an exact version"
+                f"'{_visible(inferred.name)}' has Python packages or a Python version that are not pinned to an exact version"
             )
         elif line.startswith("Starts"):
             lines.append("Downloads and installs these Python packages the first time it starts: "
