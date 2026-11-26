@@ -75,6 +75,7 @@ from routes.onenote import router as onenote_router
 from routes.calendar import router as calendar_router
 from routes.actions import router as actions_router
 from routes.aigator import router as aigator_router
+from routes.usage_sharing import router as usage_sharing_router
 from routes.config_routes import router as config_router
 from routes.sandbox_routes import router as sandbox_router
 from routes.auth import router as auth_router
@@ -878,7 +879,7 @@ async def lifespan(app):
     _logging_retention_task.cancel()
     _catalog_sync_task.cancel()
     _teams_remote_control_task.cancel()
-    for _t in (_update_check_task, _cleanup_task, _logging_retention_task, _catalog_sync_task, _teams_remote_control_task):
+    for _t in (_update_check_task, _usage_report_task, _cleanup_task, _logging_retention_task, _catalog_sync_task, _teams_remote_control_task):
         try:
             await _t
         except asyncio.CancelledError:
@@ -931,6 +932,7 @@ app.include_router(onenote_router)
 app.include_router(calendar_router)
 app.include_router(actions_router)
 app.include_router(aigator_router)
+app.include_router(usage_sharing_router)
 app.include_router(config_router)
 app.include_router(auth_router)
 app.include_router(sandbox_router)

@@ -26,7 +26,8 @@ MAX_AGE_DAYS = 7
 _REPORT_INTERVAL_S = 24 * 60 * 60
 _SENT_KEYS_KEPT = 60
 _MAX_TOP_TOOLS = 10
-_MAX_MODEL_PART = 64
+NOTICE_VERSION = 1
+_MODEL_FAMILIES = ("claude", "gpt", "gemini", "llama", "qwen", "glm", "deepseek", "mistral")
 _TOOL_PLACEHOLDER = "<tool>"
 _PLAIN_NAME = re.compile(r"^[A-Za-z0-9_.-]+$")
 _SIGNAL_FIELDS = (
@@ -84,6 +85,67 @@ def _save_state(state: dict) -> None:
     state["sent"] = state["sent"][-_SENT_KEYS_KEPT:]
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
     STATE_FILE.write_text(json.dumps(state), encoding="utf-8")
+
+
+def consent_choice(state: dict | None = None) -> str:
+    """'on' or 'off' once the user answered the current notice, else 'unset'."""
+    state = _load_state() if state is None else state
+    if state.get("consent") == "off":
+        return "off"
+    if state.get("consent") == "on" and state.get("notice_version") == NOTICE_VERSION:
+        return "on"
+    return "unset"
+
+
+def set_consent(choice: str) -> None:
+    if choice not in ("on", "off"):
+        raise ValueError(choice)
+    state = _load_state()
+    state["consent"] = choice
+    state["notice_version"] = NOTICE_VERSION
+    _save_state(state)
+
+
+def _record_result(state: dict, result: str, sent: int = 0) -> None:
+    latest = _load_state()
+    for key in ("consent", "notice_version"):
+        if key in latest:
+            state[key] = latest[key]
+    state["last_result"] = result
+    if sent:
+        state["last_sent_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    _save_state(state)
+
+
+def delivery_status(cfg: dict | None) -> dict:
+    """Non-sensitive status for Settings: no counts, emails or error text."""
+    if not is_enabled(cfg):
+        return {"available": False, "consent": "unset", "status": "off", "last_sent_at": None}
+    state = _load_state()
+    consent = consent_choice(state)
+    last_sent_at = state.get("last_sent_at")
+    if consent == "unset":
+        status = "not_started"
+    elif consent == "off":
+        status = "off"
+    elif state.get("last_result") == "signin":
+        status = "signin"
+    elif state.get("last_result") == "failed":
+        status = "delayed"
+    elif last_sent_at:
+        status = "sent"
+    else:
+        status = "waiting"
+    return {"available": True, "consent": consent, "status": status, "last_sent_at": last_sent_at}
+
+
+def model_family(model) -> str:
+    """Closed set of vendor families, so a user-defined model name is never exported."""
+    lowered = model.lower() if isinstance(model, str) else ""
+    for family in _MODEL_FAMILIES:
+        if family in lowered:
+            return family
+    return "custom"
 
 
 def _counts_by_day(since_day: str) -> dict[str, list[int]]:
@@ -160,17 +222,15 @@ def _signals_by_day(since_day: str) -> dict[str, dict]:
             for day, value in _query(con, sql, (since_day,)):
                 scalars.setdefault(day, _blank_signals())[field] = value or 0
 
-        for day, provider, model, n in _query(
+        for day, model, n in _query(
             con,
-            "SELECT substr(created_at, 1, 10), provider, model, COUNT(*) FROM turn_log "
-            "WHERE created_at >= ? GROUP BY 1, 2, 3",
+            "SELECT substr(created_at, 1, 10), model, COUNT(*) FROM turn_log "
+            "WHERE created_at >= ? AND model IS NOT NULL AND model != '' GROUP BY 1, 2",
             (since_day,),
         ):
-            if all(
-                isinstance(part, str) and len(part) <= _MAX_MODEL_PART and _PLAIN_NAME.match(part)
-                for part in (provider, model)
-            ):
-                detail(day)["models"][f"{provider}/{model}"] = n
+            models = detail(day)["models"]
+            family = model_family(model)
+            models[family] = models.get(family, 0) + n
 
         for day, raw in _query(
             con,
@@ -258,7 +318,7 @@ def _send(gc, site: str, list_id: str, link: str, fields: dict) -> str:
 
 async def report_pending(cfg: dict | None = None, today: date | None = None) -> int:
     """Send each unsent active past day (up to MAX_AGE_DAYS back). Returns rows sent. Never raises."""
-    if not is_enabled(cfg):
+    if not is_enabled(cfg) or consent_choice() != "on":
         return 0
     site = cfg["usage_list_site_id"]
     list_id = cfg["usage_list_id"]
@@ -267,6 +327,7 @@ async def report_pending(cfg: dict | None = None, today: date | None = None) -> 
         gc = await asyncio.to_thread(_graph_client)
         email = email_from_token(await asyncio.to_thread(gc.get_token))
         if not email:
+            _record_result(_load_state(), "signin")
             return 0
         today = today or datetime.now(timezone.utc).date()
         since = (today - timedelta(days=MAX_AGE_DAYS)).isoformat()
@@ -276,10 +337,13 @@ async def report_pending(cfg: dict | None = None, today: date | None = None) -> 
         sent_keys = set(state["sent"])
         version = _app_version()
         sent = 0
+        failed = False
         for day in sorted(days):
             key = f"{email}|{day}"
             if day >= today.isoformat() or key in sent_keys:
                 continue
+            if consent_choice() != "on":
+                break
             messages, tool_runs = days[day]
             fields = {
                 "Title": key,
@@ -296,21 +360,46 @@ async def report_pending(cfg: dict | None = None, today: date | None = None) -> 
                 outcome = await asyncio.to_thread(_send, gc, site, list_id, link, fields)
             except Exception as exc:
                 _log.warning("Usage report for %s not sent: %s", day, sanitize(str(exc)))
+                failed = True
                 break
             state["sent"].append(key)
             sent += outcome == "sent"
-        _save_state(state)
+        if failed:
+            _record_result(state, "failed")
+        else:
+            _record_result(state, "sent" if sent else state.get("last_result", ""), sent)
         return sent
     except Exception as exc:
         _log.warning("Usage report failed: %s", sanitize(str(exc)))
+        try:
+            _record_result(_load_state(), "failed")
+        except Exception:
+            pass
         return 0
 
 
+_wake: asyncio.Event | None = None
+
+
+def request_report() -> None:
+    """Ask the running loop to report now (after the user turns sharing on)."""
+    if _wake is not None:
+        _wake.set()
+
+
 async def run_usage_report_loop(cfg: dict) -> None:
-    """Background loop: report at startup, then once a day."""
+    """Background loop: report at startup, then once a day or when asked."""
+    global _wake
+    _wake = asyncio.Event()
     try:
         while True:
             await report_pending(cfg)
-            await asyncio.sleep(_REPORT_INTERVAL_S)
+            try:
+                await asyncio.wait_for(_wake.wait(), _REPORT_INTERVAL_S)
+            except asyncio.TimeoutError:
+                pass
+            _wake.clear()
     except asyncio.CancelledError:
         pass
+    finally:
+        _wake = None
