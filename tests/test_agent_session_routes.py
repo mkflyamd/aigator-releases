@@ -101,7 +101,8 @@ def test_list_joins_codex_by_start_time(scanned, monkeypatch):
 def live_claude(monkeypatch, name):
     import agent_liveness
 
-    proc = {"pid": 7, "session_id": "c1", "name": name, "started_at": 5.0, "source": "claude-registry"}
+    proc = {"pid": 7, "session_id": "c1", "name": name, "started_at": 5.0, "created": 50.5,
+            "source": "claude-registry"}
     monkeypatch.setattr(agent_liveness, "live_processes", lambda agent, sid=None: [proc] if agent == "claude" else [])
 
 
@@ -119,6 +120,79 @@ def test_list_does_not_flag_a_session_gator_owns_but_shows_its_live_name(scanned
     data = client().get("/api/agent-sessions", params={"project_name": "demo", "pty": ["claude:p1"]}).json()
     c1 = next(s for s in data["sessions"] if s["id"] == "c1")
     assert c1["pty_session_id"] == "p1" and "live_elsewhere" not in c1 and c1["title"] == "Live name"
+
+
+def test_list_links_a_live_process_to_the_gator_terminal_that_owns_it(scanned, monkeypatch):
+    import agent_liveness
+    from routes import terminal
+
+    live_claude(monkeypatch, "Live name")
+    monkeypatch.setattr(terminal, "pty_pid_map", lambda strict=False: {99: "p-owner"})
+    monkeypatch.setattr(agent_liveness, "owning_pty", lambda pid, owners: owners.get(99) if pid == 7 else None)
+    data = client().get("/api/agent-sessions", params={"project_name": "demo"}).json()
+    c1 = next(s for s in data["sessions"] if s["id"] == "c1")
+    assert c1["pty_session_id"] == "p-owner" and "live_elsewhere" not in c1 and c1["title"] == "Live name"
+
+
+def test_list_still_flags_a_process_no_gator_terminal_owns(scanned, monkeypatch):
+    import agent_liveness
+    from routes import terminal
+
+    live_claude(monkeypatch, "Live name")
+    monkeypatch.setattr(terminal, "pty_pid_map", lambda strict=False: {99: "p-owner"})
+    monkeypatch.setattr(agent_liveness, "owning_pty", lambda pid, owners: None)
+    data = client().get("/api/agent-sessions", params={"project_name": "demo"}).json()
+    c1 = next(s for s in data["sessions"] if s["id"] == "c1")
+    assert c1["live_elsewhere"] is True and "pty_session_id" not in c1
+
+
+def test_list_says_where_a_session_open_outside_gator_is_running(scanned, monkeypatch):
+    import agent_liveness
+    from routes import terminal
+
+    live_claude(monkeypatch, "Live name")
+    monkeypatch.setattr(terminal, "pty_pid_map", lambda strict=False: {})
+    monkeypatch.setattr(agent_liveness, "owning_pty", lambda pid, owners: None)
+    monkeypatch.setattr(agent_liveness, "location_label", lambda pid: "Orca" if pid == 7 else None)
+    monkeypatch.setattr(agent_liveness, "closable", lambda agent, pid: (True, None))
+    data = client().get("/api/agent-sessions", params={"project_name": "demo"}).json()
+    c1 = next(s for s in data["sessions"] if s["id"] == "c1")
+    assert c1["live_elsewhere_in"] == {
+        "app": "Orca", "pid": 7, "created": 50.5, "session_id": "c1", "can_close": True, "reason": None,
+    }
+
+
+def test_list_does_not_offer_to_close_a_process_it_cannot_tell_from_a_gator_terminal(scanned, monkeypatch):
+    import agent_liveness
+    from routes import terminal
+
+    live_claude(monkeypatch, "Live name")
+
+    def strict_fails(strict=False):
+        if strict:
+            raise terminal.pty_client.HostError("old host")
+        return {}
+
+    monkeypatch.setattr(terminal, "pty_pid_map", strict_fails)
+    monkeypatch.setattr(agent_liveness, "owning_pty", lambda pid, owners: None)
+    monkeypatch.setattr(agent_liveness, "location_label", lambda pid: "Orca")
+    monkeypatch.setattr(agent_liveness, "closable", lambda agent, pid: (True, None))
+    data = client().get("/api/agent-sessions", params={"project_name": "demo"}).json()
+    c1 = next(s for s in data["sessions"] if s["id"] == "c1")
+    assert c1["live_elsewhere"] is True
+    assert c1["live_elsewhere_in"]["can_close"] is False and c1["live_elsewhere_in"]["reason"]
+
+
+def test_list_does_not_offer_to_close_an_unrecognised_process(scanned, monkeypatch):
+    import agent_liveness
+
+    live_claude(monkeypatch, "Live name")
+    monkeypatch.setattr(agent_liveness, "owning_pty", lambda pid, owners: None)
+    monkeypatch.setattr(agent_liveness, "closable", lambda agent, pid: (False, "Close it yourself."))
+    data = client().get("/api/agent-sessions", params={"project_name": "demo"}).json()
+    c1 = next(s for s in data["sessions"] if s["id"] == "c1")
+    assert c1["live_elsewhere_in"]["can_close"] is False
+    assert c1["live_elsewhere_in"]["reason"] == "Close it yourself."
 
 
 def test_list_keeps_the_stored_title_when_nothing_is_live(scanned):

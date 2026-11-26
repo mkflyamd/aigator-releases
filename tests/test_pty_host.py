@@ -9,6 +9,7 @@ import time
 
 import pytest
 
+import agent_liveness
 import pty_client
 import pty_host
 from pty_host import PtyHost
@@ -19,6 +20,8 @@ TOKEN = "aigator-fake-api-key"
 
 
 class _FakePty:
+    pid = 4242
+
     def __init__(self):
         self._q = queue.Queue()
         self._alive = True
@@ -579,6 +582,53 @@ def test_create_waits_longer_than_a_normal_host_request(monkeypatch):
     assert timeouts["create"] == pty_client.CREATE_TIMEOUT > 5.0
 
 
+def test_status_and_list_report_the_child_pid_and_creation_time(host):
+    info, spawned = host
+    _create(info, sid="s-pid")
+    status = pty_client.host_request(info, {"op": "status", "id": "s-pid"})
+    assert status["pid"] == 4242 and isinstance(status["created_at"], float)
+    listed = pty_client.host_request(info, {"op": "list"})["sessions"]
+    assert listed == [
+        {
+            "id": "s-pid",
+            "done": False,
+            "pid": 4242,
+            "created_at": status["created_at"],
+            "meta": None,
+        }
+    ]
+
+
+def test_adopted_session_keeps_the_creation_time_the_host_recorded(host, monkeypatch):
+    info, spawned = host
+    _create(info, sid="s-old")
+    created = pty_client.host_request(info, {"op": "status", "id": "s-old"})["created_at"]
+    time.sleep(0.05)
+    monkeypatch.setattr(pty_client, "host_enabled", lambda: True)
+    monkeypatch.setattr(pty_client, "find_host", lambda key: info)
+    terminal._pty_sessions.pop("s-old", None)
+    try:
+        entry = terminal.get_pty_session("s-old")
+        assert entry.created_at == created
+    finally:
+        terminal._pty_sessions.pop("s-old", None)
+        spawned[0][1].end()
+
+
+def test_pty_pid_map_includes_host_sessions_this_backend_has_not_adopted(host, monkeypatch):
+    info, spawned = host
+    _create(info, sid="s-unadopted")
+    monkeypatch.setattr(pty_client, "host_enabled", lambda: True)
+    monkeypatch.setattr(pty_client, "find_host", lambda key: info)
+    terminal._pty_sessions.pop("s-unadopted", None)
+    try:
+        assert terminal.pty_pid_map() == {4242: "s-unadopted"}
+        spawned[0][1].end()
+        assert _wait(lambda: terminal.pty_pid_map() == {})
+    finally:
+        terminal._pty_sessions.pop("s-unadopted", None)
+
+
 # ── Ownership across a backend restart ────────────────────────────────────────
 # The backend's (project, agent) -> session map dies with it, so the host
 # remembers who a session was created for and a restarted backend reclaims it.
@@ -766,6 +816,34 @@ def test_a_finished_session_is_not_reattached_after_a_restart(restarted_backend)
     assert reply.json()["pty_session_id"] != "finished"
 
 
+def test_a_reattached_agent_stays_mapped_to_its_terminal_for_takeover(
+    restarted_backend, monkeypatch
+):
+    info, spawned, open_terminal, _ = restarted_backend
+    _create(info, sid="running", meta=_meta())
+    assert terminal.pty_pid_map() == {4242: "running"}
+
+    reply = open_terminal()
+
+    assert reply.json() == {"pty_session_id": "running", "created": False}
+    assert len(spawned) == 1
+    assert terminal.pty_pid_map() == {4242: "running"}
+
+    class _Proc:
+        def __init__(self, pid, parents=()):
+            self.pid = pid
+            self._parents = list(parents)
+
+        def parents(self):
+            return self._parents
+
+    shell = _Proc(4242)
+    monkeypatch.setattr(
+        "agent_liveness.psutil.Process", lambda pid: _Proc(pid, [shell]) if pid != 4242 else shell
+    )
+    assert agent_liveness.owning_pty(9001, terminal.pty_pid_map()) == "running"
+
+
 def test_no_matching_session_in_the_host_starts_a_new_agent(restarted_backend):
     info, spawned, open_terminal, _ = restarted_backend
     _create(info, sid="other", meta=_meta(project="elsewhere"))
@@ -843,3 +921,16 @@ def test_a_packaged_build_never_contacts_the_host(monkeypatch):
     finally:
         terminal._pty_sessions.pop("sess-frozen", None)
         fallback.end()
+
+
+def test_a_host_from_before_pid_reporting_is_refused_so_takeover_cannot_trust_it(host):
+    import socket
+
+    info, _ = host
+    assert pty_host.PROTOCOL_VERSION >= 2
+    with socket.create_connection(("127.0.0.1", info["port"]), 5) as s:
+        s.sendall(
+            (json.dumps({"op": "hello", "token": TOKEN, "proto": pty_host.PROTOCOL_VERSION - 1}) + "\n").encode()
+        )
+        reply = json.loads(s.makefile("rb").readline())
+    assert reply["ok"] is False and reply["error"] == "proto"
