@@ -242,21 +242,26 @@ def live_pty_labels() -> dict[str, dict]:
     return found
 
 
-def close_pty_session(session_id: str) -> None:
+def close_pty_session(session_id: str) -> bool:
+    """Close a PTY. True when it is gone (or never existed), False when closing failed."""
     entry = _pty_sessions.pop(session_id, None)
     if entry:
         try:
             entry.close()
         except Exception:
-            pass
-        return
+            logger.warning("could not close PTY session %s", session_id, exc_info=True)
+            return False
+        return True
     # Not adopted by this backend (it restarted since): the host still has it.
     info = pty_client.find_host(pty_client.instance_key()) if pty_client.host_enabled() else None
-    if info is not None:
-        try:
-            pty_client.host_request(info, {"op": "close", "id": session_id})
-        except pty_client.HostError:
-            logger.warning("could not close PTY session %s on the host", session_id)
+    if info is None:
+        return True
+    try:
+        pty_client.host_request(info, {"op": "close", "id": session_id})
+    except pty_client.HostError:
+        logger.warning("could not close PTY session %s on the host", session_id)
+        return False
+    return True
 
 
 def is_pty_alive(session_id: str) -> bool:
@@ -281,17 +286,25 @@ def is_pty_viewed(session_id: str, grace_seconds: float = 90.0) -> bool:
     server open forever, exhausting the port range. Gating on 'viewed' means a
     forgotten/closed terminal stops protecting its server once the grace lapses,
     so the normal idle reaper reclaims it."""
-    return is_pty_alive(session_id) and has_viewer(session_id, grace_seconds)
+    return is_pty_alive(session_id) and has_viewer(
+        session_id, grace_seconds, visible_only=False
+    )
 
 
-def has_viewer(session_id: str, grace_seconds: float = 90.0) -> bool:
+def has_viewer(
+    session_id: str, grace_seconds: float = 90.0, visible_only: bool = True
+) -> bool:
     """True iff a WebSocket is connected to this backend's session now, or was
-    within `grace_seconds`. Never adopts a session from the PTY host: one this
-    backend has not adopted has no viewer."""
+    within `grace_seconds`. A connection whose tab reported itself hidden does not
+    count unless visible_only is False. Never adopts a session from the PTY host:
+    one this backend has not adopted has no viewer."""
     entry = _pty_sessions.get(session_id)
     if not entry:
         return False
-    if entry.ws_clients > 0:
+    connected = entry.ws_clients
+    if visible_only:
+        connected -= len(entry.ws_hidden)
+    if connected > 0:
         return True
     return (time.time() - entry.ws_disconnected_at) < grace_seconds
 
@@ -419,17 +432,26 @@ async def agent_terminal_ws(ws: WebSocket, session_id: str, seq: int = 0):
         finally:
             entry.unsubscribe(wake)
         stop.set()
+        import agent_suspend
+
+        # A suspend records the session before it kills the process, so a viewer
+        # that attached in between is told to offer a resume, not "exited".
+        suspended = await asyncio.to_thread(agent_suspend.suspended_record, session_id)
         try:
-            await ws.send_text(
-                json.dumps(
-                    {
-                        "type": "exit",
-                        "data": None
-                        if already_done
-                        else _agent_exit_text(getattr(entry, "meta", None)),
-                    }
-                )
-            )
+            if suspended:
+                final = {
+                    "type": "suspended",
+                    "data": "Suspended - click to resume",
+                    "session_id": suspended["session_id"],
+                }
+            else:
+                final = {
+                    "type": "exit",
+                    "data": None
+                    if already_done
+                    else _agent_exit_text(getattr(entry, "meta", None)),
+                }
+            await ws.send_text(json.dumps(final))
         except Exception:
             pass
 
@@ -451,6 +473,13 @@ async def agent_terminal_ws(ws: WebSocket, session_id: str, seq: int = 0):
                         entry.write(data)
                     except Exception:
                         break
+            elif mtype == "visible":
+                if msg.get("value") is False:
+                    entry.ws_hidden.add(ws)
+                    if entry.ws_clients - len(entry.ws_hidden) <= 0:
+                        entry.ws_disconnected_at = time.time()
+                else:
+                    entry.ws_hidden.discard(ws)
             elif mtype == "resize" and entry.size_owner in (None, ws):
                 entry.size_owner = ws
                 try:
@@ -469,6 +498,7 @@ async def agent_terminal_ws(ws: WebSocket, session_id: str, seq: int = 0):
         # This viewer is gone; record when so is_pty_viewed's grace window starts.
         # The session (and its reader) keeps running; only the viewer count
         # drops. Guard against a popped entry (close raced the disconnect).
+        entry.ws_hidden.discard(ws)
         if _pty_sessions.get(session_id) is entry:
             entry.ws_clients = max(0, entry.ws_clients - 1)
             entry.ws_disconnected_at = time.time()

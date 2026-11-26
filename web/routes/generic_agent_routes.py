@@ -12,6 +12,7 @@ never needed to know which of those callers it's serving.
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -23,6 +24,8 @@ import agent_state
 import agent_suspend
 import generic_agent
 from security import verify_csrf
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -76,7 +79,10 @@ async def close_generic_agent_terminal(req: GenericAgentTerminalCloseRequest):
     from routes.terminal import close_pty_session
 
     await asyncio.to_thread(close_pty_session, req.pty_session_id)
-    await asyncio.to_thread(agent_suspend.forget, req.pty_session_id)
+    try:
+        await asyncio.to_thread(agent_suspend.forget, req.pty_session_id)
+    except OSError:
+        logger.warning("could not clear the suspended record for %s", req.pty_session_id, exc_info=True)
     generic_agent.unpin_session(req.pty_session_id)
     if generic_agent.get_active_session(req.project_id, req.agent) == req.pty_session_id:
         generic_agent.clear_active_session(req.project_id, req.agent)

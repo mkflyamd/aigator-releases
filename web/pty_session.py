@@ -33,6 +33,9 @@ class PtySession:
         # sessions start "recently seen" so the reaper's normal last_activity
         # grace covers the pre-connect window.
         self.ws_clients = 0
+        # Connections whose tab reported itself not visible (a background tab). A
+        # client that never reports visibility is counted as viewing.
+        self.ws_hidden: set = set()
         # The viewer whose window size the PTY follows: the last one to attach or type.
         self.size_owner = None
         self.ws_disconnected_at = time.time()

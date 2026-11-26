@@ -29,6 +29,12 @@ IDLE_SUSPEND_SECONDS = 1800
 MAX_LIVE_AGENT_TERMINALS = 4
 SWEEP_INTERVAL = 60.0
 VIEWED_GRACE_SECONDS = 90.0
+# Over the terminal cap, only a terminal idle at least this long may go: a turn that
+# just finished is likely to be followed by another.
+CAP_MIN_IDLE_SECONDS = 300
+# The idle state is stamped by the agent's Stop hook, just after its last transcript
+# write, so the transcript may predate it by a little.
+TRANSCRIPT_SLACK_SECONDS = 120
 RECORD_RETENTION_SECONDS = 14 * 86400
 
 STATE_FILE = Path.home() / ".gator" / "suspended-agents.json"
@@ -67,7 +73,7 @@ def choose(
         if now - at >= IDLE_SUSPEND_SECONDS and now - unwatched_since.get(pty, now) >= IDLE_SUSPEND_SECONDS
     ]
     excess = sum(1 for meta in live.values() if _counts_as_agent(meta)) - len(timed_out) - MAX_LIVE_AGENT_TERMINALS
-    rest = [pty for _at, pty in suspendable if pty not in timed_out]
+    rest = [pty for at, pty in suspendable if pty not in timed_out and now - at >= CAP_MIN_IDLE_SECONDS]
     return timed_out + rest[: max(excess, 0)]
 
 
@@ -81,7 +87,7 @@ def _load() -> dict[str, dict]:
 
 def _save(records: dict[str, dict]) -> None:
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    tmp = STATE_FILE.with_name(STATE_FILE.name + ".tmp")
+    tmp = STATE_FILE.with_name(f"{STATE_FILE.name}.{os.getpid()}.tmp")
     tmp.write_text(json.dumps(records), encoding="utf-8")
     os.replace(tmp, STATE_FILE)
 
@@ -110,15 +116,39 @@ def _remember(pty_id: str, record: dict, now: float) -> None:
         _save(records)
 
 
-def _suspend(pty_id: str, meta: dict, now: float) -> bool:
+def _transcript_is_current(meta: dict, idle_at: float) -> bool:
+    """True when the stored session the tab would resume is on disk and has not gone
+    stale (an agent that continues under a new session id leaves the old one behind)."""
+    from agent_sessions import find_session
+    from skills.code_agent.projects import get_project
+
+    repo_path = (get_project(meta.get("project_id") or "") or {}).get("repo_path")
+    if not repo_path:
+        return False
+    try:
+        rec = find_session(repo_path, meta["agent"], meta["session_id"])
+    except Exception:
+        logger.warning("could not look up the stored session for %s", meta.get("session_id"), exc_info=True)
+        return False
+    return rec is not None and rec["last_active_at"] >= idle_at - TRANSCRIPT_SLACK_SECONDS
+
+
+def _suspend(pty_id: str, meta: dict, idle_at: float, now: float) -> bool:
     from routes import terminal
 
+    if not _transcript_is_current(meta, idle_at):
+        return False
+    # Last look before the kill: it was viewed, or the agent moved on, while the
+    # lookup above ran.
+    if terminal.has_viewer(pty_id, VIEWED_GRACE_SECONDS):
+        return False
+    state = agent_state.read_states([pty_id]).get(pty_id)
+    if not state or state["state"] != "idle" or state["at"] != idle_at:
+        return False
     agent, project_id = meta["agent"], meta.get("project_id")
     _remember(pty_id, {"agent": agent, "project_id": project_id, "session_id": meta["session_id"], "at": now}, now)
-    try:
-        terminal.close_pty_session(pty_id)
-    except Exception:
-        logger.warning("could not suspend terminal %s", pty_id, exc_info=True)
+    if not terminal.close_pty_session(pty_id):
+        logger.warning("could not suspend terminal %s", pty_id)
         forget(pty_id)
         return False
     generic_agent.unpin_session(pty_id)
@@ -144,10 +174,7 @@ def sweep(now: float | None = None) -> list[str]:
             _unwatched_since.setdefault(pty, now)
     suspended = []
     for pty in choose(live, states, watched, _unwatched_since, now):
-        # Looked at between the check above and now: leave it running.
-        if terminal.has_viewer(pty, VIEWED_GRACE_SECONDS):
-            continue
-        if _suspend(pty, live[pty], now):
+        if _suspend(pty, live[pty], states[pty]["at"], now):
             suspended.append(pty)
             _unwatched_since.pop(pty, None)
     return suspended
