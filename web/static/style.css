@@ -23546,3 +23546,303 @@ body.tab-fullscreen {
   fill: var(--text-muted) !important;
   stroke: var(--text-muted) !important;
 }
+
+.agent-handoff-toasts {
+  position: fixed;
+  bottom: 1.2rem;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  z-index: 100001;
+  pointer-events: none;
+}
+.agent-handoff-toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.5rem 0.9rem;
+  border-radius: 8px;
+  font-size: 0.82rem;
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+.agent-handoff-toast-success {
+  background: var(--success);
+}
+.agent-handoff-toast-warn {
+  background: var(--warn);
+}
+.agent-handoff-toast-offer {
+  background: var(--accent);
+  color: var(--bg);
+}
+.agent-handoff-toast-btn,
+.agent-handoff-toast-close {
+  background: rgba(255, 255, 255, 0.2);
+  color: #fff;
+  border: 0;
+  border-radius: 5px;
+  padding: 0.2rem 0.6rem;
+  cursor: pointer;
+  font: inherit;
+}
+.agent-handoff-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 100000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.agent-handoff-dialog {
+  background: var(--surface);
+  color: var(--text);
+  border-radius: 10px;
+  padding: 1.1rem 1.3rem;
+  width: min(440px, 92vw);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+.agent-handoff-dialog h3 {
+  margin: 0 0 0.7rem;
+  font-size: 1rem;
+}
+.agent-handoff-label {
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.65;
+  margin-bottom: 0.3rem;
+}
+.agent-handoff-section {
+  margin: 0.9rem 0 0.2rem;
+}
+.agent-handoff-carry {
+  background: rgba(127, 127, 127, 0.1);
+  border-radius: 8px;
+  padding: 0.5rem 0.65rem;
+}
+.agent-handoff-from {
+  display: flex;
+  align-items: center;
+  font-size: 0.78rem;
+}
+.agent-handoff-meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-handoff-redaction-note {
+  margin-top: 0.2rem;
+  font-size: 0.72rem;
+  color: var(--text-muted, inherit);
+}
+.agent-handoff-last {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.3rem;
+  font-size: 0.78rem;
+  cursor: default;
+}
+.agent-handoff-last-key {
+  flex: none;
+  opacity: 0.6;
+}
+.agent-handoff-last-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-handoff-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 0.8rem;
+}
+.agent-handoff-btn {
+  padding: 0.35rem 0.9rem;
+  border-radius: 6px;
+  border: 1px solid rgba(127, 127, 127, 0.4);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.agent-handoff-btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg);
+}
+.agent-handoff-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.gtp-tab-handoff {
+  font-size: 0.8rem;
+}
+.gtp-tab-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin-right: 6px;
+  color: var(--text);
+}
+.gtp-tab-icon svg,
+.gtp-tab-icon img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 2px;
+}
+.gtp-new-menu {
+  position: fixed;
+  z-index: 100000;
+  min-width: 140px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid rgba(127, 127, 127, 0.35);
+  border-radius: 8px;
+  padding: 0.25rem;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  max-height: 70vh;
+  overflow-y: auto;
+}
+.gtp-new-menu-item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  color: inherit;
+  border: 0;
+  border-radius: 5px;
+  padding: 0.35rem 0.6rem;
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.gtp-new-menu-item:hover,
+.gtp-new-menu-item:focus-visible {
+  background: rgba(127, 127, 127, 0.2);
+  outline: none;
+}
+.gtp-new-menu-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.gtp-new-menu-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: rgba(127, 127, 127, 0.3);
+}
+.gtp-new-menu-item .gtp-tab-icon {
+  margin-right: 8px;
+}
+.gtp-reconnect-banner {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  z-index: 4;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: rgba(120, 53, 15, 0.92);
+  color: #fde68a;
+  font-size: 0.75rem;
+  pointer-events: none;
+}
+.agent-handoff-search {
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0.2rem 0 0.4rem;
+  padding: 0.4rem 0.6rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: inherit;
+  font: inherit;
+  font-size: 0.85rem;
+}
+.agent-handoff-search:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.agent-handoff-targets {
+  max-height: min(40vh, 18rem);
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border2) transparent;
+  margin-top: 0.2rem;
+}
+.agent-handoff-targets::-webkit-scrollbar {
+  width: 4px;
+}
+.agent-handoff-targets::-webkit-scrollbar-track {
+  background: transparent;
+}
+.agent-handoff-targets::-webkit-scrollbar-thumb {
+  background: var(--border2);
+  border-radius: 2px;
+}
+.agent-handoff-group-title {
+  position: sticky;
+  z-index: 1;
+  top: 0;
+  background: var(--surface);
+  padding: 0.35rem 0.5rem 0.2rem;
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.65;
+}
+.agent-handoff-option {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.4rem 0.5rem;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  font-size: 0.85rem;
+  cursor: pointer;
+  user-select: none;
+}
+.agent-handoff-option:hover {
+  background: rgba(127, 127, 127, 0.14);
+}
+.agent-handoff-option.is-selected {
+  background: rgba(127, 127, 127, 0.18);
+  border-color: var(--accent);
+}
+.agent-handoff-option.is-missing {
+  opacity: 0.45;
+  cursor: default;
+}
+.agent-handoff-option.is-missing:hover {
+  background: transparent;
+}
+.agent-handoff-empty {
+  padding: 0.8rem 0.5rem;
+  font-size: 0.8rem;
+  opacity: 0.65;
+}
+.agent-handoff-note {
+  min-height: 1.1rem;
+  margin-top: 0.45rem;
+  font-size: 0.72rem;
+  color: var(--warn);
+}
+.gtp-new-menu-badge {
+  margin-left: auto;
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  font-size: 0.65rem;
+  opacity: 0.7;
+}

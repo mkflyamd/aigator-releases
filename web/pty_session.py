@@ -22,6 +22,11 @@ class PtySession:
     ):
         self.pty = pty
         self.done = False
+        # When this PTY (or, for an adopted one, its backend-side wrapper) came
+        # into being. Agent handoff uses it to ignore transcripts that predate
+        # the session.
+        self.created_at = time.time()
+        self.meta: dict[str, str] | None = None
         # ws_clients / ws_disconnected_at drive is_pty_viewed(): a server is only
         # protected from the idle reaper while its terminal is actually on-screen
         # (a live WebSocket), NOT merely while the attach process exists. Fresh

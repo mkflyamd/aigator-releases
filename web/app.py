@@ -695,6 +695,12 @@ async def lifespan(app):
 
     set_notify_callback(_on_task_done)
 
+    import agent_handoff
+    try:
+        await asyncio.to_thread(agent_handoff.purge_expired)
+    except Exception as exc:
+        logger.warning("agent handoff purge failed: %s", type(exc).__name__)
+
     import loop_watchdog
     loop_watchdog.start(asyncio.get_running_loop())
 
@@ -862,6 +868,10 @@ async def lifespan(app):
     # Remove AppContainer ACEs left by a crashed sandboxed run (Windows; no-op elsewhere).
     import sandbox as _sandbox
     asyncio.create_task(asyncio.to_thread(_sandbox.sweep_stale_grants))
+
+    # Probe WSL for coding agents now so the first agent menu or handoff dialog is instant.
+    import generic_agent as _generic_agent
+    _generic_agent.warm_agent_caches()
 
     # Respawn any spawned preset MCP servers that were orphaned by a restart
     # (e.g. Google Workspace's workspace-mcp process), then start the background

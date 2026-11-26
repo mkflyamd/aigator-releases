@@ -1,0 +1,3 @@
+Claude usage limit reached. Your limit will reset at 3pm (America/Los_Angeles).
+5-hour limit reached ∙ resets 3pm
+You've hit your limit · resets 5pm
