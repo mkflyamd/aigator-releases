@@ -221,6 +221,8 @@ def _remove_planted(path: Path) -> None:
         try:
             path.unlink()
         except PermissionError:  # Windows refuses to delete a read-only file
+            if path.lstat().st_nlink > 1:  # chmod would change the shared inode of a file outside the run folder
+                raise
             os.chmod(path, stat.S_IWRITE)
             path.unlink()
 

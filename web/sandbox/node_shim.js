@@ -43,10 +43,16 @@ function blockedError() {
 }
 
 function usesPipe(stdio) {
-  const isPipe = (s) =>
-    s === undefined || s === null || s === 'pipe' || s === 'overlapped' || s === 'ipc';
-  if (typeof stdio === 'string' || stdio === undefined || stdio === null) return isPipe(stdio);
-  return Array.from({ length: Math.max(3, stdio.length || 0) }, (_, i) => stdio[i]).some(isPipe);
+  const isPipe = (s, defaultsToPipe) =>
+    (defaultsToPipe && (s === undefined || s === null)) ||
+    s === 'pipe' ||
+    s === 'overlapped' ||
+    s === 'ipc';
+  if (typeof stdio === 'string' || stdio === undefined || stdio === null)
+    return isPipe(stdio, true);
+  return Array.from({ length: Math.max(3, stdio.length || 0) }, (_, i) => stdio[i]).some((s, i) =>
+    isPipe(s, i < 3),
+  );
 }
 
 function failedChild(err, callback) {

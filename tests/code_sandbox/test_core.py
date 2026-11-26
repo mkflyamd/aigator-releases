@@ -51,6 +51,8 @@ def test_node_shim_blocks_piped_spawns_and_closes_callback_form(tmp_path):
         "cp.exec('x', (e) => ev.push('cb:' + e.code)).on('close', () => ev.push('close'));\n"
         "cp.spawn('x', [], { stdio: 'overlapped' }).on('error', () => ev.push('overlapped'));\n"
         "cp.spawn('x', [], { stdio: ['inherit', 'inherit', 'inherit', 'ipc'] }).on('error', () => ev.push('ipc'));\n"
+        "cp.spawn('x', [], { stdio: ['inherit', 'inherit', 'inherit', undefined] })"
+        ".on('error', (e) => ev.push('fourth:' + e.code));\n"
         "setTimeout(() => console.log(ev.join(',')), 50);\n",
         encoding="utf-8",
     )
@@ -58,7 +60,7 @@ def test_node_shim_blocks_piped_spawns_and_closes_callback_form(tmp_path):
     out = subprocess.run(
         ["node", "--require", str(shim), str(probe)], capture_output=True, text=True, timeout=30, check=True,
     ).stdout.strip()
-    assert out == "cb:EPERM,close,overlapped,ipc"
+    assert out == "cb:EPERM,close,overlapped,ipc,fourth:ENOENT"
 
 
 def test_install_node_shim_restores_a_tampered_copy_and_ignores_envs_without_it(tmp_path):
@@ -113,6 +115,24 @@ def test_install_node_shim_recovers_from_whatever_sandboxed_code_planted(tmp_pat
     assert "asyncNative" in shim.read_text(encoding="utf-8")
     assert [p.name for p in outside.iterdir()] == ["victim.txt"]
     assert victim.read_text(encoding="utf-8") == "keep"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="only Windows refuses to delete a read-only file")
+def test_install_node_shim_does_not_clear_read_only_on_a_hard_linked_file(tmp_path):
+    env = sandbox.build_env({}, tmp_path, None, platform="win32")
+    gator, shim = tmp_path / ".gator", tmp_path / ".gator" / "node-shim.js"
+    victim = tmp_path / "victim.txt"
+    victim.write_text("keep", encoding="utf-8")
+    victim.chmod(stat.S_IREAD)
+    gator.mkdir()
+    os.link(victim, shim)
+    try:
+        with pytest.raises(PermissionError):
+            sandbox.install_node_shim(env)
+        assert not os.access(victim, os.W_OK)
+        assert victim.read_text(encoding="utf-8") == "keep"
+    finally:
+        victim.chmod(stat.S_IWRITE)
 
 
 def test_build_env_posix(tmp_path):
