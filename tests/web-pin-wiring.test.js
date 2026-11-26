@@ -131,7 +131,7 @@ test('web-pin:go-to is gatorView-only, pinnable-pane-only, http(s)-only and limi
   );
   assert.doesNotMatch(body, /startsWith\('https:'\)/);
   assert.match(
-    after(main, 'function createGenericPane(', 1400),
+    after(main, 'function createGenericPane(', 1800),
     /_genericPanes\[id\] = \{[^}]*homeHosts/,
   );
   assert.match(preload, /webPinGoTo: \(appId, url\) => ipcRenderer\.invoke\('web-pin:go-to'/);
