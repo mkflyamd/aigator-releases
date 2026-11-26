@@ -4,6 +4,7 @@ Endpoints:
   GET  /api/code_agent/projects        — list saved projects
   POST /api/code_agent/projects        — add a new project
   PUT  /api/code_agent/projects/active — set active project
+  DELETE /api/code_agent/projects/{name} — remove a project from the list (folder untouched)
   GET  /api/code_agent/git/status      — git status for a project
   GET  /api/code_agent/git/log         — recent commits
   GET  /api/code_agent/git/diff        — file diff
@@ -111,6 +112,21 @@ async def add_project(req: AddProjectRequest):
         raise HTTPException(
             status_code=500, detail="Could not add the project. Please try again."
         )
+
+
+# ── DELETE /projects/{name} ───────────────────────────────────────────────────
+
+
+@router.delete("/projects/{name}", dependencies=[Depends(verify_csrf)])
+async def remove_project(name: str):
+    """Remove a project from Gator's list. The folder on disk is never touched."""
+    from skills.code_agent.projects import remove_project as _remove, get_active_project
+
+    try:
+        _remove(name)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return {"status": "removed", "active": get_active_project()}
 
 
 # ── PUT /projects/active ──────────────────────────────────────────────────────

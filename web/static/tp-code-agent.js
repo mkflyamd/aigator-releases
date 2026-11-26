@@ -4,7 +4,7 @@
 // ── State ──────────────────────────────────────────────────────────────────────
 let _caProjects = []; // [{name, repo_path, source}]
 let _caActiveProject = null; // active project name string (global to this browser tab)
-let _caLeftView = 'scm'; // 'scm' | 'explorer' | 'history' — which view the left pane shows
+let _caLeftView = 'history'; // 'history' | 'scm' | 'explorer' — which view the left pane shows
 let _caOpenDiffFile = null; // repo-relative path of the file currently open in the right pane (if a Changes diff), else null
 
 // ── Session scoping ───────────────────────────────────────────────────────────
@@ -103,7 +103,7 @@ function _initCodeAgentPane() {
     leftCol.style.display = '';
     // Render source control panel into the left column
     leftCol.innerHTML = _caSourceControlPanel();
-    if (_caLeftView !== 'scm') _caSetLeftView(_caLeftView);
+    if (_caLeftView !== 'history') _caSetLeftView(_caLeftView);
   }
   const rightCol = document.getElementById('tp-right-col');
   if (rightCol) {
@@ -122,6 +122,7 @@ function _initCodeAgentPane() {
     _caRenderProjectSwitcher(_caActiveProject, _caProjects);
     _caRefreshSourceControl();
     _caStartSourceControlPolling();
+    if (_caActiveProject) _caSetLeftView(_caStoredLeftView(_caActiveProject));
     // Re-attach any already-live terminal into the freshly-rebuilt DOM BEFORE
     // deciding whether to show Start/Resume. This path runs on a full return
     // from another skill (Teams/Email), which tears down and rebuilds
@@ -167,11 +168,11 @@ function _caSourceControlPanel() {
   return `
     <div class="ca-sc-panel">
       <div class="ca-sc-viewtabs">
+        <button class="ca-sc-viewtab active" id="ca-viewtab-history" aria-pressed="true" title="History" aria-label="History"${gatorActionAttrs('_caSetLeftView', ['history'])}>${_CA_TAB_ICON_HISTORY}</button>
+        <button class="ca-sc-viewtab" id="ca-viewtab-scm" aria-pressed="false" title="Changes" aria-label="Changes"${gatorActionAttrs('_caSetLeftView', ['scm'])}>${_CA_TAB_ICON_CHANGES}</button>
         <button class="ca-sc-viewtab" id="ca-viewtab-explorer" aria-pressed="false" title="Files" aria-label="Files"${gatorActionAttrs('_caSetLeftView', ['explorer'])}>${_CA_TAB_ICON_FILES}</button>
-        <button class="ca-sc-viewtab active" id="ca-viewtab-scm" aria-pressed="true" title="Changes" aria-label="Changes"${gatorActionAttrs('_caSetLeftView', ['scm'])}>${_CA_TAB_ICON_CHANGES}</button>
-        <button class="ca-sc-viewtab" id="ca-viewtab-history" aria-pressed="false" title="History" aria-label="History"${gatorActionAttrs('_caSetLeftView', ['history'])}>${_CA_TAB_ICON_HISTORY}</button>
       </div>
-      <div id="ca-scm-view" class="ca-scm-view">
+      <div id="ca-scm-view" class="ca-scm-view" style="display:none">
         <div class="ca-sc-section-wrapper">
           <div class="ca-sc-section-label" id="ca-sc-files-label" style="display:none">CHANGES</div>
           <div id="ca-sc-files" class="ca-sc-scroll-region ca-sc-files-scroll">
@@ -188,7 +189,7 @@ function _caSourceControlPanel() {
           <div class="ca-sc-loading"></div>
         </div>
       </div>
-      <div id="ca-hist-view" class="ca-hist-view" style="display:none">
+      <div id="ca-hist-view" class="ca-hist-view">
         <div class="ah-search">
           <input
             id="ca-hist-search"
@@ -203,12 +204,28 @@ function _caSourceControlPanel() {
     </div>`;
 }
 
-// ── Left pane view toggle (Source Control / Explorer / History) ─────────────
+// ── Left pane view toggle (History / Changes / Files) ───────────────────────
+const _CA_LEFT_VIEWS = ['history', 'scm', 'explorer'];
+const _CA_LEFT_VIEW_KEY = 'gator.codeagent.leftview.';
+
+function _caStoredLeftView(project) {
+  try {
+    const v = localStorage.getItem(_CA_LEFT_VIEW_KEY + project);
+    if (_CA_LEFT_VIEWS.includes(v)) return v;
+  } catch (_) {}
+  return 'history';
+}
+
 function _caSetLeftView(view) {
-  const panes = { scm: 'ca-scm-view', explorer: 'ca-fe-view', history: 'ca-hist-view' };
-  if (!panes[view]) view = 'scm';
+  const panes = { history: 'ca-hist-view', scm: 'ca-scm-view', explorer: 'ca-fe-view' };
+  if (!panes[view]) view = 'history';
   if (!Object.values(panes).every((id) => document.getElementById(id))) return;
   _caLeftView = view;
+  if (_caActiveProject) {
+    try {
+      localStorage.setItem(_CA_LEFT_VIEW_KEY + _caActiveProject, view);
+    } catch (_) {}
+  }
   Object.entries(panes).forEach(([name, id]) => {
     document.getElementById(id).style.display = name === view ? '' : 'none';
     const tab = document.getElementById('ca-viewtab-' + name);
@@ -891,11 +908,11 @@ function _caEmptyState() {
   return `
     <div class="ca-empty-state">
       <div class="ca-empty-icon">&lt;/&gt;</div>
-      <div class="ca-empty-title">Connect your first app</div>
-      <div class="ca-empty-subtitle">Point Gator at your codebase to start making changes in plain English.</div>
+      <div class="ca-empty-title">Open a project folder</div>
+      <div class="ca-empty-subtitle">Point Gator at a folder to start working with a coding agent.</div>
       <div class="ca-empty-actions">
-        <button class="ca-btn-secondary"${gatorActionAttrs('_caAddLocalProject')}>Browse for folder</button>
-        <button class="ca-btn-secondary"${gatorActionAttrs('_caAddGitHubProject')}>Paste a GitHub link</button>
+        <button class="ca-btn-primary"${gatorActionAttrs('_caAddLocalProject')}>Open folder…</button>
+        <button class="ca-btn-link"${gatorActionAttrs('_caAddGitHubProject')}>Paste a GitHub link</button>
       </div>
     </div>`;
 }
@@ -909,20 +926,16 @@ function _caNoProjectSelectedState() {
     <div class="ca-empty-state">
       <div class="ca-empty-icon">&lt;/&gt;</div>
       <div class="ca-empty-title">Select a project to get started</div>
-      <div class="ca-empty-subtitle">Pick one of your connected apps and I'll open its OpenCode terminal here.</div>
+      <div class="ca-empty-subtitle">Pick one of your projects to open its terminals here.</div>
       <div class="ca-empty-actions">
         <button class="ca-btn-secondary"${gatorActionAttrs('_caShowSessionDropdown')}>Select project ▾</button>
       </div>
     </div>`;
 }
 
-// ── Session selector (project + agent, one chip → one unified dropdown) ──────
-// The left-pane header is narrow. Two separate pills (project ▾ + agent ▾)
-// crammed in together were unclear and truncated. Now a SINGLE chip shows the
-// current state compactly — "● myrepo · OpenCode ▾" — and opens one dropdown
-// with two labeled sections (PROJECT / CODING AGENT). One click, one menu,
-// half the horizontal footprint. A coding "session" = project + agent, which
-// is exactly what this picks.
+// ── Project chip ──────────────────────────────────────────────────────────────
+// One chip ("● project ▾") opens the Projects menu. Rendered in the left pane
+// and cloned into the topbar, next to the Needs-you count.
 function _caRenderProjectSwitcher(activeProject, allProjects) {
   const area = document.getElementById('ca-sc-project-area');
   if (area) {
@@ -934,18 +947,24 @@ function _caRenderProjectSwitcher(activeProject, allProjects) {
     .forEach((el) => el.remove());
 
   const proj = activeProject ? (allProjects || []).find((p) => p.name === activeProject) : null;
-  const agentLabel = proj ? _CA_AGENT_LABELS[_caProjectAgent(proj)] || _caProjectAgent(proj) : '';
-
   const chip = document.createElement('span');
   chip.className = 'ca-project-switcher ca-session-chip';
-  // "● project · Agent ▾" — the dot signals a project is active; without one
-  // it reads "Select project ▾". The agent label follows after "· " so both
-  // pieces of state are glanceable in the chip itself.
-  chip.textContent = proj ? '● ' + proj.name + ' · ' + agentLabel + ' ▾' : 'Select project ▾';
+  chip.tabIndex = 0;
+  chip.setAttribute('role', 'button');
+  chip.setAttribute('aria-haspopup', 'menu');
+  // "● project ▾": the dot signals a project is active. Which agent a terminal
+  // runs is chosen in the tab strip's "+" menu, so it is not shown here.
+  chip.textContent = proj ? '● ' + proj.name + ' ▾' : 'Select project ▾';
   chip.title = proj
-    ? 'Project: ' + proj.name + '  ·  Agent: ' + agentLabel + ' — click to switch'
+    ? 'Project: ' + proj.name + ' — click to switch'
     : 'Select a project to work on';
   chip.onclick = _caShowSessionDropdown;
+  chip.onkeydown = (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      _caShowSessionDropdown();
+    }
+  };
   if (area) area.appendChild(chip);
 
   // Also render into the topbar's code-agent area (if the Code tab is active
@@ -955,7 +974,17 @@ function _caRenderProjectSwitcher(activeProject, allProjects) {
     topbarArea.innerHTML = '';
     const topbarChip = chip.cloneNode(true);
     topbarChip.onclick = _caShowSessionDropdown;
+    topbarChip.onkeydown = chip.onkeydown;
     topbarArea.appendChild(topbarChip);
+    const attn = document.createElement('span');
+    attn.id = 'ca-topbar-attn';
+    attn.className = 'ca-topbar-attn';
+    attn.hidden = true;
+    attn.setAttribute('role', 'status');
+    topbarArea.appendChild(attn);
+    if (window.agentHistory && typeof window.agentHistory.updateDot === 'function') {
+      window.agentHistory.updateDot();
+    }
   }
 }
 
@@ -1240,182 +1269,252 @@ window.addEventListener('gator:theme-change', () => {
   _caRefreshThemePill();
 });
 
-// Small "using: <agent>" pill next to the project switcher - lets the user
-// pick which coding agent this project uses. Persists via PUT /projects/
-// agent; defaults to opencode for any project that's never set this, so
-// every existing project's behavior is unchanged until a user explicitly
-// opts a project into a different agent.
-//
-// Switching while a session is live detaches it first - same "hide, don't
-// destroy" treatment already used for switching PROJECTS (_genAgentDetachAllForTab
-// closes the WebSocket/disposes xterm but never touches the backend
-// session/process). That keeps the pane clean without being destructive,
-// and means switching back later reattaches to the SAME still-running
-// session with its conversation state intact.
-const _CA_AGENT_LABELS = {
-  'opencode-bare': 'OpenCode',
-  claude: 'Claude Code',
-  codex: 'Codex',
-  crush: 'Crush',
-  terminal: 'Terminal',
-};
-// "terminal" is a plain shell in the project directory - not a coding agent
-// at all, but the maximally-flexible fallback for a tool that isn't in this
-// list (or no tool - just wanting a shell scoped to the project).
-const _CA_AGENT_OPTIONS = ['opencode-bare', 'claude', 'codex', 'crush', 'terminal'];
-
-function _caAgentHasLiveSession(agent) {
-  if (typeof _activeTabId === 'undefined') return false;
-  return (
-    typeof _genAgentIsTerminalMounted === 'function' &&
-    _genAgentIsTerminalMounted(_activeTabId, agent)
-  );
+// Remembers the agent picked from a terminal tab's "+" menu as the project's
+// default, so the next "+" menu marks it and a cold reopen offers it first.
+async function _caRememberProjectAgent(projectName, agent) {
+  const proj = _caProjects.find((p) => p.name === projectName);
+  if (!proj || _caProjectAgent(proj) === agent) return;
+  try {
+    const headers = await _caHeadersAsync();
+    const resp = await _caFetchWithCsrfRetry('/api/code_agent/projects/agent', {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({ name: projectName, agent }),
+    });
+    if (resp.ok) proj.agent = agent;
+  } catch (_) {}
 }
 
-// Detaches (never destroys) the generic-agent terminal state for this tab, so
-// the pane is clean before showing a different agent's prompt. A no-op when
-// there's nothing mounted.
-function _caDetachCurrentAgentTab() {
-  if (typeof _activeTabId === 'undefined') return;
-  if (typeof _genAgentDetachAllForTab === 'function') _genAgentDetachAllForTab(_activeTabId);
+// The first project opens in this window. Once one is active here, others open
+// in a new window so this window's running terminals are never torn down.
+// In the Electron shell, openGatorWindow creates a real BrowserWindow (the
+// Gator view's setWindowOpenHandler would otherwise deny window.open and send
+// it to the system browser); browser mode falls back to window.open.
+function _caOpenProject(name) {
+  if (!_caActiveProject) {
+    _caSetActiveProject(name);
+    return;
+  }
+  const url = new URL(window.location.href);
+  url.search = '';
+  url.searchParams.set('open_project', name);
+  if (window.gatorShell && typeof window.gatorShell.openGatorWindow === 'function') {
+    window.gatorShell.openGatorWindow(url.toString());
+  } else {
+    window.open(url.toString(), '_blank');
+  }
 }
 
-// Unified dropdown for the session selector — two labeled sections in one
-// menu: PROJECT (switch / add) then CODING AGENT (per-project, persists via
-// PUT /projects/agent). Replaces the former separate _caShowProjectDropdown
-// and _caShowAgentDropdown so the user picks both halves of a session from a
-// single affordance. The project list and agent list logic are unchanged from
-// those two functions — only the container is merged.
+async function _caRemoveProject(name) {
+  const headers = await _caHeadersAsync();
+  const resp = await _caFetchWithCsrfRetry('/api/code_agent/projects/' + encodeURIComponent(name), {
+    method: 'DELETE',
+    headers,
+  });
+  if (!resp.ok) throw new Error('remove failed');
+  await _caLoadProjects();
+}
+
+const _CA_RECENT_COUNT = 5;
+const _CA_SEARCH_MIN_PROJECTS = 7;
+
+// The Projects menu: switch, search, remove, or open a folder. One job only;
+// which agent a terminal runs is chosen where terminals are created (the tab
+// strip's "+" menu).
 function _caShowSessionDropdown() {
   document.querySelector('.ca-project-dropdown')?.remove();
 
   // If projects haven't loaded yet, load them first then re-show.
   if (_caProjects.length === 0) {
-    _caLoadProjects().then(() => _caShowSessionDropdown());
+    _caLoadProjects().then(() => {
+      if (_caProjects.length > 0) _caShowSessionDropdown();
+    });
     return;
   }
 
+  const helpers = window.codePickerHelpers;
   const dropdown = document.createElement('div');
   dropdown.className = 'ca-project-dropdown';
+  dropdown.setAttribute('role', 'menu');
+  dropdown.setAttribute('aria-label', 'Projects');
 
-  // ── Section: PROJECT ───────────────────────────────────────────────
-  const projHeader = document.createElement('div');
-  projHeader.className = 'ca-project-section';
-  projHeader.textContent = 'PROJECT';
-  dropdown.appendChild(projHeader);
+  let search = null;
+  if (_caProjects.length > _CA_SEARCH_MIN_PROJECTS) {
+    search = document.createElement('input');
+    search.type = 'search';
+    search.className = 'ca-project-search';
+    search.placeholder = 'Search projects';
+    search.setAttribute('aria-label', 'Search projects');
+    search.autocomplete = 'off';
+    dropdown.appendChild(search);
+  }
+  const list = document.createElement('div');
+  list.className = 'ca-project-list';
+  dropdown.appendChild(list);
 
-  _caProjects.forEach((p) => {
-    const item = document.createElement('div');
-    const isCurrent = p.name === _caActiveProject;
-    item.className = 'ca-project-item' + (isCurrent ? ' ca-project-item--active' : '');
-    item.textContent = (isCurrent ? '● ' : '') + p.name;
-    if (isCurrent) {
-      item.title = 'Current project';
-      item.style.cursor = 'default';
-    } else if (!_caActiveProject) {
-      item.title = 'Select ' + p.name;
-      item.onclick = () => {
-        dropdown.remove();
-        _caSetActiveProject(p.name);
-      };
-    } else {
-      // Switching from an existing project — open in a new window.
-      // In the Electron shell, openGatorWindow creates a real BrowserWindow
-      // (the Gator view's setWindowOpenHandler would otherwise deny the
-      // window.open and send it to the system browser). Browser mode falls
-      // back to window.open.
-      item.title = 'Open ' + p.name + ' in a new window';
-      item.onclick = () => {
-        dropdown.remove();
-        const _newUrl = new URL(window.location.href);
-        _newUrl.search = '';
-        _newUrl.searchParams.set('open_project', p.name);
-        const _url = _newUrl.toString();
-        if (window.gatorShell && typeof window.gatorShell.openGatorWindow === 'function') {
-          window.gatorShell.openGatorWindow(_url);
-        } else {
-          window.open(_url, '_blank');
-        }
-      };
-    }
-    dropdown.appendChild(item);
-  });
-
-  const addDivider = document.createElement('div');
-  addDivider.className = 'ca-project-divider';
-  dropdown.appendChild(addDivider);
-
+  const divider = document.createElement('div');
+  divider.className = 'ca-project-divider';
+  dropdown.appendChild(divider);
   const addItem = document.createElement('div');
   addItem.className = 'ca-project-item ca-project-add';
-  addItem.textContent = '+ Add app';
+  addItem.setAttribute('role', 'menuitem');
+  addItem.tabIndex = -1;
+  addItem.textContent = 'Open folder…';
   addItem.onclick = () => {
-    dropdown.remove();
+    close();
     _caAddLocalProject();
   };
   dropdown.appendChild(addItem);
 
-  // ── Section: CODING AGENT ──────────────────────────────────────────
-  // Only meaningful once a project is selected — the agent is a per-project
-  // setting (PUT /projects/agent needs a project name). Hide the whole section
-  // when no project is active so the menu doesn't show inert choices.
-  const activeProj = _caActiveProject ? _caProjects.find((p) => p.name === _caActiveProject) : null;
-  if (activeProj) {
-    const agentHeader = document.createElement('div');
-    agentHeader.className = 'ca-project-section';
-    agentHeader.textContent = 'CODING AGENT';
-    dropdown.appendChild(agentHeader);
+  const addSection = (text) => {
+    const header = document.createElement('div');
+    header.className = 'ca-project-section';
+    header.textContent = text;
+    list.appendChild(header);
+  };
 
-    const current = _caProjectAgent(activeProj);
-    _CA_AGENT_OPTIONS.forEach((agent) => {
-      const item = document.createElement('div');
-      const isCurrent = agent === current;
-      item.className = 'ca-project-item' + (isCurrent ? ' ca-project-item--active' : '');
-      item.textContent = (isCurrent ? '● ' : '') + (_CA_AGENT_LABELS[agent] || agent);
-      if (isCurrent) {
-        item.style.cursor = 'default';
-      } else {
-        item.onclick = async () => {
-          dropdown.remove();
-          const headers =
-            typeof _caHeadersAsync === 'function'
-              ? await _caHeadersAsync()
-              : { 'Content-Type': 'application/json' };
-          try {
-            const resp = await fetch('/api/code_agent/projects/agent', {
-              method: 'PUT',
-              headers,
-              body: JSON.stringify({ name: activeProj.name, agent }),
-            });
-            if (!resp.ok) {
-              alert('Could not change the coding agent for this project.');
-              return;
-            }
-            // Detach (never destroy) BOTH agent modules' state BEFORE switching,
-            // same "hide, don't destroy" treatment as switching projects - keeps
-            // the pane clean without killing anything, and means switching back
-            // later reattaches to a still-running session rather than losing it.
-            _caDetachCurrentAgentTab();
-            activeProj.agent = agent;
-            _caRenderProjectSwitcher(_caActiveProject, _caProjects);
-            // Re-show the Start/Resume prompt for the newly-selected agent —
-            // otherwise it stays rendered for the PREVIOUS agent (e.g.
-            // "Launch OpenCode for X" left showing after switching to Claude).
-            if (
-              typeof _activeTabId !== 'undefined' &&
-              typeof _caShowAgentStartOrTerminal === 'function' &&
-              activeProj.repo_path
-            ) {
-              _caShowAgentStartOrTerminal(_activeTabId, activeProj, activeProj.repo_path);
-            }
-          } catch (_) {
-            alert('Could not change the coding agent for this project.');
-          }
-        };
+  const confirmRow = (p) => {
+    const row = document.createElement('div');
+    row.className = 'ca-project-item ca-project-confirm';
+    const msg = document.createElement('div');
+    msg.className = 'ca-project-confirm-msg';
+    msg.textContent = 'Remove from Gator? Your files are not touched.';
+    const actions = document.createElement('div');
+    actions.className = 'ca-project-confirm-actions';
+    const yes = document.createElement('button');
+    yes.type = 'button';
+    yes.className = 'ca-project-confirm-yes';
+    yes.textContent = 'Remove';
+    const no = document.createElement('button');
+    no.type = 'button';
+    no.className = 'ca-project-confirm-no';
+    no.textContent = 'Cancel';
+    yes.onclick = async () => {
+      yes.disabled = true;
+      try {
+        await _caRemoveProject(p.name);
+        if (_caProjects.length === 0) {
+          close();
+          _caRenderPane();
+          _caRenderProjectSwitcher(_caActiveProject, _caProjects);
+          return;
+        }
+        render();
+      } catch (_) {
+        msg.textContent = 'Could not remove ' + p.name + '. Try again.';
+        yes.disabled = false;
       }
-      dropdown.appendChild(item);
-    });
+    };
+    no.onclick = () => render();
+    actions.append(yes, no);
+    row.append(msg, actions);
+    return row;
+  };
+
+  const projectRow = (p) => {
+    const isCurrent = p.name === _caActiveProject;
+    const row = document.createElement('div');
+    row.className =
+      'ca-project-item ca-project-row' + (isCurrent ? ' ca-project-item--active' : '');
+    row.setAttribute('role', 'menuitem');
+    row.tabIndex = -1;
+    const dot = document.createElement('span');
+    dot.className = 'ca-project-dot';
+    dot.setAttribute('aria-hidden', 'true');
+    const text = document.createElement('span');
+    text.className = 'ca-project-text';
+    const name = document.createElement('span');
+    name.className = 'ca-project-name';
+    name.textContent = p.name;
+    const path = document.createElement('span');
+    path.className = 'ca-project-path';
+    path.textContent = p.repo_path || '';
+    path.title = p.repo_path || '';
+    text.append(name, path);
+    row.append(dot, text);
+    if (isCurrent) {
+      row.title = 'Open in this window';
+      row.style.cursor = 'default';
+    } else {
+      row.title = _caActiveProject ? 'Open ' + p.name + ' in a new window' : 'Select ' + p.name;
+      row.onclick = () => {
+        close();
+        _caOpenProject(p.name);
+      };
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'ca-project-remove';
+      remove.title = 'Remove from Gator';
+      remove.setAttribute('aria-label', 'Remove ' + p.name + ' from Gator');
+      remove.textContent = '×';
+      remove.onclick = (e) => {
+        e.stopPropagation();
+        row.replaceWith(confirmRow(p));
+      };
+      row.appendChild(remove);
+    }
+    return row;
+  };
+
+  function render() {
+    list.replaceChildren();
+    const query = search ? search.value : '';
+    const sorted = helpers.sortProjects(_caProjects);
+    if (query.trim()) {
+      const hits = helpers.filterProjects(sorted, query);
+      if (!hits.length) addSection('No matching projects');
+      hits.forEach((p) => list.appendChild(projectRow(p)));
+      return;
+    }
+    const recent = sorted.filter((p) => p.last_opened).slice(0, _CA_RECENT_COUNT);
+    const rest = sorted.filter((p) => !recent.includes(p));
+    if (recent.length) {
+      addSection('Recent');
+      recent.forEach((p) => list.appendChild(projectRow(p)));
+    }
+    if (rest.length) {
+      if (recent.length) addSection('All projects');
+      rest.forEach((p) => list.appendChild(projectRow(p)));
+    }
   }
 
+  function close() {
+    dropdown.remove();
+    document.removeEventListener('click', onOutside);
+    document.removeEventListener('keydown', onKey, true);
+  }
+  function onOutside(e) {
+    if (!dropdown.contains(e.target) && !e.target.classList.contains('ca-project-switcher')) {
+      close();
+    }
+  }
+  const focusables = () => [
+    ...(search ? [search] : []),
+    ...dropdown.querySelectorAll('.ca-project-row, .ca-project-add'),
+  ];
+  function onKey(e) {
+    if (!dropdown.isConnected) {
+      close();
+      return;
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      close();
+      document.querySelector('.ca-session-chip')?.focus?.();
+    } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const items = focusables();
+      const at = items.indexOf(document.activeElement);
+      const step = e.key === 'ArrowDown' ? 1 : -1;
+      items[(at + step + items.length) % items.length]?.focus();
+    } else if (e.key === 'Enter' && document.activeElement?.classList.contains('ca-project-item')) {
+      e.preventDefault();
+      document.activeElement.click();
+    }
+  }
+
+  render();
+  if (search) search.addEventListener('input', render);
   document.body.appendChild(dropdown);
 
   // Position below the chip.
@@ -1437,14 +1536,9 @@ function _caShowSessionDropdown() {
     dropdown.style.left = rect.left + 'px';
   }
 
-  // Close on outside click.
-  const _close = (e) => {
-    if (!dropdown.contains(e.target) && !e.target.classList.contains('ca-project-switcher')) {
-      dropdown.remove();
-      document.removeEventListener('click', _close);
-    }
-  };
-  setTimeout(() => document.addEventListener('click', _close), 0);
+  (search || focusables()[0])?.focus();
+  document.addEventListener('keydown', onKey, true);
+  setTimeout(() => document.addEventListener('click', onOutside), 0);
 }
 
 function _caSetActiveProject(name) {
@@ -1470,6 +1564,7 @@ function _caSetActiveProject(name) {
   _caRenderPane();
   _caRenderProjectSwitcher(_caActiveProject, _caProjects);
   _caRefreshSourceControl();
+  if (name) _caSetLeftView(_caStoredLeftView(name));
 
   // Persist active project on the server so new sessions use the right repo
   _caHeadersAsync().then((hdrs) => {
@@ -1513,9 +1608,18 @@ function _caLoadProjects() {
           url.searchParams.delete('open_project');
           history.replaceState({}, '', url);
         } catch (_) {}
-      } else if (!_caActiveProject) {
+      } else {
+        // The open project may have been removed in another window. Follow the server's
+        // active pointer (it moves to the next most recent) so chat and this view agree;
+        // with none left the no-project states show instead of a blank pane.
+        _caActiveProject = window.codePickerHelpers.resolveActiveProject(
+          _caProjects,
+          _caActiveProject,
+          data.active,
+        );
         // Auto-select if only one project exists
-        _caActiveProject = _caProjects.length === 1 ? _caProjects[0].name : null;
+        if (!_caActiveProject)
+          _caActiveProject = _caProjects.length === 1 ? _caProjects[0].name : null;
       }
       // NOTE: no fire-and-forget /api/opencode/warm here anymore. Guided start
       // means OpenCode only spawns on an explicit user click (Start/Resume), so

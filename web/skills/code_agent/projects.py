@@ -7,8 +7,13 @@ Active project pointer lives in ~/.gator/config.json.
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
+import tempfile
+import threading
+import time
+from contextlib import contextmanager
 from pathlib import Path
 
 from proc_utils import no_window_kwargs
@@ -37,20 +42,45 @@ def _ensure_dirs() -> None:
     PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
 
 
+# One lock for every read and read-modify-write: route handlers run on worker
+# threads and the event loop at once, and Windows refuses os.replace while a
+# reader has the file open.
+_CONFIG_LOCK = threading.RLock()
+
+
 def _load_config() -> dict:
-    if CONFIG_FILE.exists():
-        try:
-            return json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
-        except Exception:
-            pass
-    return {"active_project": None, "projects": {}}
+    with _CONFIG_LOCK:
+        if CONFIG_FILE.exists():
+            try:
+                return json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        return {"active_project": None, "projects": {}}
 
 
 def _save_config(cfg: dict) -> None:
-    GATOR_HOME.mkdir(parents=True, exist_ok=True)
-    CONFIG_FILE.write_text(
-        json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
+    with _CONFIG_LOCK:
+        GATOR_HOME.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=GATOR_HOME, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, indent=2, ensure_ascii=False)
+            os.replace(tmp, CONFIG_FILE)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+
+
+@contextmanager
+def _config_txn():
+    """Load the config, let the caller change it, and save it, all under the lock."""
+    with _CONFIG_LOCK:
+        cfg = _load_config()
+        yield cfg
+        _save_config(cfg)
 
 
 def _sanitize_name(name: str) -> str:
@@ -74,9 +104,10 @@ def _sanitize_name(name: str) -> str:
 
 
 def list_projects() -> list[dict]:
-    """Return list of project dicts for all saved projects."""
+    """Return saved projects, most recently opened first; never-opened ones keep saved order."""
     cfg = _load_config()
-    return [{"name": name, **meta} for name, meta in cfg.get("projects", {}).items()]
+    items = [{"name": name, **meta} for name, meta in cfg.get("projects", {}).items()]
+    return sorted(items, key=lambda p: p.get("last_opened", 0), reverse=True)
 
 
 def get_project(name: str) -> dict | None:
@@ -95,9 +126,31 @@ def get_active_project() -> str | None:
 
 def set_active_project(name: str) -> None:
     """Set active project in config.json. Persists across server restarts."""
-    cfg = _load_config()
-    cfg["active_project"] = name
-    _save_config(cfg)
+    with _config_txn() as cfg:
+        cfg["active_project"] = name
+        meta = cfg.get("projects", {}).get(name)
+        if meta is not None:
+            meta["last_opened"] = time.time()
+
+
+def remove_project(name: str) -> None:
+    """Forget a project. Never deletes the project's folder or a clone with content;
+    only Gator's own empty metadata folder is removed."""
+    safe_name = _sanitize_name(name)
+    with _config_txn() as cfg:
+        projects = cfg.get("projects", {})
+        if safe_name not in projects:
+            raise ValueError(f"Project not found: {safe_name}")
+        del projects[safe_name]
+        if cfg.get("active_project") == safe_name:
+            remaining = sorted(
+                projects, key=lambda n: projects[n].get("last_opened", 0), reverse=True
+            )
+            cfg["active_project"] = remaining[0] if remaining else None
+    try:
+        (PROJECTS_DIR / safe_name).rmdir()
+    except OSError:
+        pass
 
 
 def set_project_agent(name: str, agent: str) -> None:
@@ -105,12 +158,11 @@ def set_project_agent(name: str, agent: str) -> None:
     always implicit for any project without this key - existing projects are
     completely unaffected by this field's existence). See web/generic_agent.py
     for the other supported values."""
-    cfg = _load_config()
-    projects = cfg.setdefault("projects", {})
-    if name not in projects:
-        raise ValueError(f"Project not found: {name}")
-    projects[name]["agent"] = agent
-    _save_config(cfg)
+    with _config_txn() as cfg:
+        projects = cfg.setdefault("projects", {})
+        if name not in projects:
+            raise ValueError(f"Project not found: {name}")
+        projects[name]["agent"] = agent
 
 
 def get_active_pty_session() -> str | None:
@@ -126,9 +178,18 @@ def set_active_pty_session(pty_session_id: str) -> None:
     """Record the most recently activated pty_session_id. Best-effort, fire-
     and-forget from the frontend on every session activation - stale values
     are harmless (write_pty_session just fails closed on a dead/unknown id)."""
-    cfg = _load_config()
-    cfg["active_pty_session"] = pty_session_id
-    _save_config(cfg)
+    with _config_txn() as cfg:
+        cfg["active_pty_session"] = pty_session_id
+
+
+def _is_clone_of(clone_dir: Path, url: str) -> bool:
+    result = subprocess.run(
+        ["git", "-C", str(clone_dir), "remote", "get-url", "origin"],
+        capture_output=True,
+        text=True,
+        **no_window_kwargs(),
+    )
+    return result.returncode == 0 and result.stdout.strip() == url
 
 
 def add_project(
@@ -205,19 +266,26 @@ def add_project(
             )
         # Clone into ~/.gator/projects/<name>/
         clone_dir = PROJECTS_DIR / safe_name
-        if clone_dir.exists():
+        if safe_name in _load_config().get("projects", {}):
             raise ValueError(f"Project '{safe_name}' already exists")
-        # Run git clone via args list (not shell=True)
-        result = subprocess.run(
-            ["git", "clone", repo_path, str(clone_dir)],
-            capture_output=True,
-            text=True,
-            **no_window_kwargs(),
-        )
-        if result.returncode != 0:
-            raise ValueError(
-                f"Could not clone repository: {result.stderr.splitlines()[-1] if result.stderr else 'unknown error'}"
+        if clone_dir.exists():
+            # A clone kept when the project was removed is reused, never re-cloned.
+            if not _is_clone_of(clone_dir, repo_path):
+                raise ValueError(
+                    f"'{clone_dir}' exists and is not a clone of this repository"
+                )
+        else:
+            # Run git clone via args list (not shell=True)
+            result = subprocess.run(
+                ["git", "clone", repo_path, str(clone_dir)],
+                capture_output=True,
+                text=True,
+                **no_window_kwargs(),
             )
+            if result.returncode != 0:
+                raise ValueError(
+                    f"Could not clone repository: {result.stderr.splitlines()[-1] if result.stderr else 'unknown error'}"
+                )
         resolved_path = str(clone_dir)
 
     else:
@@ -228,13 +296,12 @@ def add_project(
     project_dir.mkdir(parents=True, exist_ok=True)
 
     # Save to config
-    cfg = _load_config()
     project_meta = {"repo_path": resolved_path, "source": source}
-    cfg.setdefault("projects", {})[safe_name] = project_meta
-    # Set as active if first project
-    if not cfg.get("active_project"):
-        cfg["active_project"] = safe_name
-    _save_config(cfg)
+    with _config_txn() as cfg:
+        cfg.setdefault("projects", {})[safe_name] = project_meta
+        # Set as active if first project
+        if not cfg.get("active_project"):
+            cfg["active_project"] = safe_name
 
     return {"name": safe_name, **project_meta}
 

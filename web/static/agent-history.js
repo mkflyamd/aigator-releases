@@ -47,6 +47,10 @@
     return (terminals || []).some((t) => liveState(t, nowMs) === 'needs_you');
   }
 
+  function attentionCount(terminals, nowMs) {
+    return (terminals || []).filter((t) => liveState(t, nowMs) === 'needs_you').length;
+  }
+
   function groupOf(state, lastActive, nowMs) {
     return state === 'needs_you' || state === 'working' ? state : dayGroup(lastActive, nowMs);
   }
@@ -263,6 +267,12 @@
     const text = attention ? 'History (a session needs you)' : 'History';
     btn.title = text;
     btn.setAttribute('aria-label', text);
+    const count = attentionCount(agents, Date.now());
+    const badge = document.getElementById('ca-topbar-attn');
+    if (badge) {
+      badge.hidden = count === 0;
+      badge.textContent = count + ' need' + (count === 1 ? 's' : '') + ' you';
+    }
   }
 
   function applyTabState(tabEl, term, nowMs) {
@@ -933,6 +943,7 @@
     relTime,
     liveState,
     needsYou,
+    attentionCount,
     buildRows,
     syncTabLabels,
     shortAge,
