@@ -5953,6 +5953,7 @@ function openDrawer() {
   if (typeof _refreshUsageBar === 'function') _refreshUsageBar();
 }
 window._showConnectivityToast = _showConnectivityToast;
+window._injectDraftApprovalCard = _injectDraftApprovalCard;
 function _showConnectivityToast(message, type = 'success') {
   // Error toasts muted — too noisy for users switching tabs (re-enable when UX is refined)
   if (type === 'error') return;
@@ -12906,6 +12907,13 @@ function _injectDraftApprovalCard(
       action: 'Send to ' + (data.to || ''),
       sendLabel: 'Send',
       openLabel: 'Open draft in Outlook',
+      ...(data.locked
+        ? {
+            customBody: `<div class="gcc-locked-body">${_draftEditorSeedHtml(data, data.body)}</div>`,
+            viewAvailable: false,
+            footerNote: 'This is the exact message. It sends only when you press Send.',
+          }
+        : {}),
     },
     'slack-post': {
       paneLabel: '@slack',
@@ -13106,7 +13114,9 @@ function _injectDraftApprovalCard(
   card.dataset.draftType = type;
   card.dataset.ownerTabId = ownerTabId || '';
   const replyRecipients =
-    (type === 'email-reply' || type === 'email-send') && Array.isArray(data.to_people)
+    (type === 'email-reply' || type === 'email-send') &&
+    !data.locked &&
+    Array.isArray(data.to_people)
       ? _buildReplyRecipientRows(data)
       : null;
   card.innerHTML = `
@@ -13138,7 +13148,7 @@ function _injectDraftApprovalCard(
               ${data.cc ? `<div class="gcc-meta-row"><span class="gcc-meta-key">CC</span><span class="gcc-meta-val">${escapeHtml(data.cc)}</span></div>` : ''}`
               }
               ${
-                type === 'email-send'
+                type === 'email-send' && !data.locked
                   ? '<div class="gcc-meta-row"><span class="gcc-meta-key">Subject</span><span class="gcc-meta-val"><input type="text" class="gcc-subject-input" maxlength="255" aria-label="Subject"></span></div>'
                   : data.subject
                     ? `<div class="gcc-meta-row"><span class="gcc-meta-key">Subject</span><span class="gcc-meta-val"><strong>${escapeHtml(data.subject)}</strong></span></div>`
@@ -13375,7 +13385,9 @@ function _injectDraftApprovalCard(
           _removeTabDraft(ownerTabId, draftId);
           card.remove();
           _showConnectivityToast(
-            'This draft expired or is no longer available. Ask Gator to re-draft it.',
+            data.locked
+              ? 'This share email expired. Share the skill again to draft a new one.'
+              : 'This draft expired or is no longer available. Ask Gator to re-draft it.',
             'info',
           );
         }

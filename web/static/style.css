@@ -7006,6 +7006,12 @@ button[data-default-action]:focus:not(:disabled)::after {
   padding-right: 10px;
 }
 
+.gcc-locked-body {
+  margin-top: 6px;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
 .gcc-fields {
   display: flex;
   flex-direction: column;

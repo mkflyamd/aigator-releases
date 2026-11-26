@@ -2515,7 +2515,7 @@
     });
   }
 
-  // Share opens the modal (save to OneDrive, pick people, send the email).
+  // Share opens the modal (save to OneDrive, pick people, review the email in the draft card).
   function _shareMineSkill(skillId) {
     if (window.SkillSharing && typeof window.SkillSharing.openShareModal === 'function') {
       window.SkillSharing.openShareModal(skillId, {
@@ -2525,6 +2525,7 @@
         showAlert: _showAlert,
         searchPeople: _searchPeople,
         showToast: window._showConnectivityToast,
+        showDraftCard: (type, data) => window._injectDraftApprovalCard(type, data),
         refresh,
       });
       return;

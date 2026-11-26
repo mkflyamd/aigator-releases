@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - All LLM and Graph access stays behind the existing routes; this plan adds no new route.
-- Email, Teams and Slack messages are never sent without explicit approval. The user's click on Share and send, on a screen that shows the recipients and the exact message, is that approval. Nothing is sent before that click, and the email goes only to the people shown.
+- Email, Teams and Slack messages are never sent without explicit approval. The user's click on Share and review email, on a screen that shows the recipients and the exact message, is that approval. Nothing is sent before that click, and the email goes only to the people shown.
 - Fake credentials in tests: only `aigator-fake-api-key`.
 - The project is called "AI Gator", never "POC".
 - No `Co-Authored-By` lines in commit messages.
@@ -64,7 +64,7 @@
 
 Behaviour of `openShareModal` (reuse the existing `mp-modal-overlay` / `mp-modal` / `mp-modal-title` / `mp-modal-body` / `mp-modal-actions` classes and `ap-card-btn` buttons; modal has `role="dialog"`, `aria-modal="true"`, labelled by its title, closes on Escape and on Cancel):
 
-1. Form view. Title `Share "<skillId>"`. A labelled text input "Share with (work email addresses)". Hint text: "They can use the skill but not change it. Nothing is emailed until you click Share and send; the email goes only to the people shown." Buttons: Cancel, "Download file instead", "Share" (primary).
+1. Form view. Title `Share "<skillId>"`. A labelled text input "Share with (work email addresses)". Hint text: "They can use the skill but not change it. Nothing is emailed until you click Share and review email; the email goes only to the people shown." Buttons: Cancel, "Download file instead", "Share" (primary).
 2. "Download file instead" closes the modal and calls `deps.downloadSkill(skillId)`.
 3. "Share" validates with `parseEmails`: no addresses, or any `bad` entries, shows an inline error naming the first bad entry and does not call the server. Otherwise it disables both buttons, shows "Sharing...", calls `deps.postJson('/api/skills/share/publish', { skill_id, people: emails })`. A non-ok response shows `shareErrorText` inline, re-enables the buttons and keeps the typed text.
 4. Result view on success. Heading `Shared as version <N>` (or `Already shared, no changes since version <N>` when `reused`). Line `Access granted to <emails joined by ", ">`. A read-only textarea holding `message`. Buttons: "Copy message" (uses `navigator.clipboard.writeText`, button text changes to "Copied"), "Copy link", "Open in OneDrive" (an `<a target="_blank" rel="noopener">` shown only when `web_url` starts with `https://`), "Done". Done closes the modal and calls `deps.refresh()`.
