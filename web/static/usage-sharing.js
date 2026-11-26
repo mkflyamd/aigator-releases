@@ -2,9 +2,9 @@
 (function () {
   'use strict';
 
-  var NOTICE_TITLE = 'AI Gator shares usage with your organization';
+  var NOTICE_TITLE = 'AI Gator collects usage analytics';
   var NOTICE_INTRO =
-    'Your IT team asked for this so they can see how AI Gator is used across the company.';
+    'To understand how AI Gator is used and improve it, it collects usage analytics.';
   var FACTS = [
     [
       'What is sent',
