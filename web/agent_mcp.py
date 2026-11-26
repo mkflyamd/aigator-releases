@@ -89,26 +89,39 @@ def _digest(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+def _update(change) -> None:
+    """Apply a change on top of what is on disk: another backend instance may have
+    issued or revoked tokens since this one last looked."""
+    with _lock:
+        fresh = _load_tokens()
+        change(fresh)
+        _tokens.clear()
+        _tokens.update(fresh)
+        _save_tokens()
+
+
 def issue(pty_id: str, project_id: str | None) -> str:
     """A new token for this terminal. A terminal that is launched again (a wake reuses
     its id) replaces its old token."""
     token = secrets.token_urlsafe(32)
-    with _lock:
-        for key in [k for k, v in _tokens.items() if v["pty_id"] == pty_id]:
-            del _tokens[key]
-        _tokens[_digest(token)] = {"pty_id": pty_id, "project_id": project_id}
-        _save_tokens()
+
+    def add(tokens: dict) -> None:
+        for key in [k for k, v in tokens.items() if v["pty_id"] == pty_id]:
+            del tokens[key]
+        tokens[_digest(token)] = {"pty_id": pty_id, "project_id": project_id}
+
+    _update(add)
     return token
 
 
 def revoke(pty_id: str) -> None:
     """The terminal is closed: its token stops working."""
-    with _lock:
-        gone = [k for k, v in _tokens.items() if v["pty_id"] == pty_id]
-        for key in gone:
-            del _tokens[key]
-        if gone:
-            _save_tokens()
+
+    def drop(tokens: dict) -> None:
+        for key in [k for k, v in tokens.items() if v["pty_id"] == pty_id]:
+            del tokens[key]
+
+    _update(drop)
 
 
 def caller_for(token: str | None) -> dict | None:

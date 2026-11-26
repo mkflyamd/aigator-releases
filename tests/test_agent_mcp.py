@@ -331,6 +331,15 @@ def test_tokens_survive_a_backend_restart_as_digests_and_revocation_survives_too
     assert agent_mcp._load_tokens() == {}
 
 
+def test_a_second_backend_instance_keeps_the_tokens_the_first_one_issued(door):
+    first = agent_mcp.issue("pty-1", "demo")
+    agent_mcp._tokens.clear()  # the other instance loaded the file before the first token existed
+    second = agent_mcp.issue("pty-2", "demo")
+    assert agent_mcp.caller_for(first)["pty_id"] == "pty-1"
+    assert agent_mcp.caller_for(second)["pty_id"] == "pty-2"
+    assert set(agent_mcp._load_tokens()) == {agent_mcp._digest(first), agent_mcp._digest(second)}
+
+
 def test_a_damaged_token_file_means_no_tokens_not_a_crash(door):
     agent_mcp._tokens_file().parent.mkdir(parents=True, exist_ok=True)
     agent_mcp._tokens_file().write_text("{not json", encoding="utf-8")
