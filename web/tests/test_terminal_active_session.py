@@ -33,3 +33,17 @@ def test_agent_terminal_ws_records_active_pty_session(monkeypatch):
     finally:
         terminal._pty_sessions.pop("sess-1", None)
     assert projects.get_active_pty_session() == "sess-1"
+
+
+def test_agent_exit_text_names_the_agent():
+    assert terminal._agent_exit_text({"project_id": "p", "agent": "claude"}) == (
+        "Claude Code process exited unexpectedly."
+    )
+    assert terminal._agent_exit_text({"project_id": "p", "agent": "codex"}) == (
+        "Codex process exited unexpectedly."
+    )
+
+
+def test_agent_exit_text_is_neutral_without_an_agent():
+    assert terminal._agent_exit_text(None) == "The agent process exited unexpectedly."
+    assert terminal._agent_exit_text({}) == "The agent process exited unexpectedly."
