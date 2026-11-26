@@ -896,8 +896,7 @@ function _genAgentShowStartPrompt(tabId, agent, projectId, repoPath, errMsg, res
     // tick would never let the busy state paint.
     // A failed resume retries the same stored session, never a fresh one.
     setTimeout(
-      () =>
-        _genAgentStart(tabId, agent, projectId, repoPath, resumeId ? { resumeId } : undefined),
+      () => _genAgentStart(tabId, agent, projectId, repoPath, resumeId ? { resumeId } : undefined),
       0,
     );
   });
