@@ -5,6 +5,7 @@ import subprocess
 import sys
 import threading
 import time
+import types
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent.parent / "web"))
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
@@ -319,3 +320,12 @@ def test_a_turns_active_runs_are_listed_until_they_finish(sup):
     sup.cancel_turn("turn-1")
     thread.join(5)
     assert sup.active_for_turn("turn-1") == []
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the POSIX kill path")
+@pytest.mark.parametrize("pid", [0, 1])
+def test_stop_never_signals_a_group_it_does_not_own_when_the_launcher_reports_no_real_pid(monkeypatch, pid):
+    import proc_utils
+
+    monkeypatch.setattr(proc_utils.os, "killpg", lambda *a: pytest.fail("signalled a process group"))
+    proc_utils.kill_process_tree(types.SimpleNamespace(pid=pid, kill=lambda: None))
