@@ -354,7 +354,13 @@ function _genAgentRenderTabs(tabId) {
     const label = document.createElement('span');
     label.className = 'gtp-tab-label';
     label.textContent = sess.label;
-    label.title = sess.label;
+    const folderInfo =
+      typeof _caFolderInfo === 'function' && window.codeBranchHelpers
+        ? _caFolderInfo(state.projectId, sess.cwd || state.repoPath)
+        : null;
+    label.title = folderInfo
+      ? window.codeBranchHelpers.tabTooltip(sess.label, folderInfo.branch, folderInfo.inWorktree)
+      : sess.label;
     // Per-tab actions (hand off, pop out, restart) live in one kebab menu. Restart
     // is the escape hatch for a session that is alive but silently wedged, which
     // the cold-start watchdog and exit-restart overlay never catch.
@@ -377,6 +383,12 @@ function _genAgentRenderTabs(tabId) {
     tab.appendChild(_genAgentTabIcon(sess.agent || state.agent));
     if (window.agentHistory) window.agentHistory.applyTabState(tab, sess, Date.now());
     tab.appendChild(label);
+    if (folderInfo && folderInfo.inWorktree) {
+      const wt = document.createElement('span');
+      wt.className = 'gtp-tab-wt';
+      wt.textContent = 'worktree';
+      tab.appendChild(wt);
+    }
     tab.appendChild(kebab);
     tab.appendChild(x);
     tab.addEventListener('click', (e) => {
@@ -673,12 +685,19 @@ function _genAgentActivateSession(tabId, ptyId) {
     }, 20);
 }
 
+// Folder new terminals open in: the worktree selected in Changes, else the project folder.
+function _genAgentFolder(state) {
+  return (
+    (typeof _caActiveFolder === 'function' && _caActiveFolder(state.projectId)) || state.repoPath
+  );
+}
+
 // "+" menu choice - always spawns an independent new process of the chosen
 // agent. state.agent stays the project's agent so a cold reopen is unchanged.
 function _genAgentNewSession(tabId, agent) {
   const state = _genAgentTerminals[_caSessionKey(tabId)];
   if (!state || !state.agent) return;
-  _genAgentStart(tabId, agent, state.projectId, state.repoPath, {
+  _genAgentStart(tabId, agent, state.projectId, _genAgentFolder(state), {
     forceNew: true,
     keepStateAgent: true,
   });
@@ -863,7 +882,7 @@ function _genAgentCloseSession(tabId, ptyId, backendAlreadyClosed = false) {
   if (state.order.length === 0) {
     state.activeId = null;
     _genAgentRenderTabs(tabId);
-    _genAgentShowStartPrompt(tabId, state.agent, state.projectId, state.repoPath);
+    _genAgentShowStartPrompt(tabId, state.agent, state.projectId, _genAgentFolder(state));
     return;
   }
   const next = state.order[Math.min(idx, state.order.length - 1)];
@@ -885,10 +904,16 @@ async function _genAgentRestartSession(tabId, ptyId) {
     return false;
   }
   _genAgentCloseSession(tabId, ptyId, true);
-  _genAgentStart(tabId, sess.agent || state.agent, state.projectId, state.repoPath, {
-    forceNew: hadOthers,
-    keepStateAgent: sess.agent !== state.agent,
-  });
+  _genAgentStart(
+    tabId,
+    sess.agent || state.agent,
+    state.projectId,
+    sess.cwd || _genAgentFolder(state),
+    {
+      forceNew: hadOthers,
+      keepStateAgent: sess.agent !== state.agent,
+    },
+  );
   return true;
 }
 
@@ -960,7 +985,10 @@ function _genAgentShowStartPrompt(tabId, agent, projectId, repoPath, errMsg) {
     // Same one-tick defer as the OpenCode prompt: _genAgentStart hides this
     // button synchronously before its first await, so calling it in the same
     // tick would never let the busy state paint.
-    setTimeout(() => _genAgentStart(tabId, agent, projectId, repoPath), 0);
+    // The worktree can change after this prompt was drawn, so resolve the folder on click.
+    const folder =
+      (typeof _caActiveFolder === 'function' && _caActiveFolder(projectId)) || repoPath;
+    setTimeout(() => _genAgentStart(tabId, agent, projectId, folder), 0);
   });
 }
 
@@ -1042,6 +1070,7 @@ async function _genAgentStart(tabId, agent, projectId, repoPath, opts) {
       ptySessionId: null,
       container,
       agent,
+      cwd: repoPath,
       label: base + ' ' + state.seq,
       _retryDelay: 0,
     };
