@@ -37,7 +37,7 @@ The Agent Runtime Hardening design (2026-11-19, WS0-WS9) stands, and the loop st
 
 - MCP server process lifecycle (session-long and shared). Individual MCP tool calls are covered by a thin record (see MCP calls).
 - A detach mode for long-running servers. For a real server, "run it in your terminal" stays correct.
-- Loosening `_check_fetch_target`; `fetch_webpage` keeps blocking loopback.
+- Changing `_check_fetch_target`. It rejects only a URL with no host and an over-long path and query, and does not block loopback; `probe_local_url` is the separate, narrower path for a printed local address.
 - Verifying the Node/motlab crash itself. It is a motlab/Node 24 Windows bug, reproduced with file, pipe and console stdout.
 
 ## Architecture: Run Supervisor
