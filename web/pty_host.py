@@ -192,7 +192,10 @@ class PtyHost:
                 pump.cancel()
             self._release(attached_id)
             self._connections -= 1
-            self._last_connection = time.time()
+            # A connection that never attached (a list/status poll) is not a backend
+            # holding sessions, so it must not keep an orphaned host alive.
+            if attached_id is not None:
+                self._last_connection = time.time()
             writer.close()
 
     def _release(self, sid: str | None) -> None:

@@ -333,6 +333,60 @@ def test_host_asks_to_exit_only_after_no_backend_for_the_orphan_timeout():
     assert host.reap(t0 + 10_000, orphan_timeout=600, done_ttl=100) is False
 
 
+def _serve(pty_host_obj):
+    ready = threading.Event()
+    box = {}
+
+    def run():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        server = loop.run_until_complete(
+            asyncio.start_server(pty_host_obj.handle, "127.0.0.1", 0)
+        )
+        box["loop"] = loop
+        box["port"] = server.sockets[0].getsockname()[1]
+        ready.set()
+        loop.run_forever()
+        server.close()
+        loop.close()
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    assert ready.wait(5)
+    return {"port": box["port"], "token": TOKEN}, box["loop"], thread
+
+
+def test_polling_connections_do_not_keep_an_orphaned_host_alive():
+    host = PtyHost(TOKEN, spawn=lambda **kw: _FakePty())
+    info, loop, thread = _serve(host)
+    try:
+        orphaned_since = time.time() - 1000
+        host._last_connection = orphaned_since
+        for _ in range(3):
+            assert pty_client.host_request(info, {"op": "list"})["ok"]
+        assert _wait(lambda: host._connections == 0)
+        assert host._last_connection == orphaned_since
+        assert host.reap(time.time(), orphan_timeout=5, done_ttl=100) is True
+    finally:
+        loop.call_soon_threadsafe(loop.stop)
+        thread.join(5)
+
+
+def test_a_backend_that_attached_and_left_restarts_the_orphan_clock():
+    host = PtyHost(TOKEN, spawn=lambda **kw: _FakePty())
+    info, loop, thread = _serve(host)
+    try:
+        _create(info)
+        host._last_connection = time.time() - 1000
+        remote = pty_client.RemotePty(info, "s1")
+        remote.detach()
+        assert _wait(lambda: host._connections == 0)
+        assert host.reap(time.time(), orphan_timeout=5, done_ttl=100) is False
+    finally:
+        loop.call_soon_threadsafe(loop.stop)
+        thread.join(5)
+
+
 def test_attach_counts_are_released_when_the_backend_disconnects(host):
     info, spawned = host
     _create(info)
