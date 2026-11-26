@@ -353,8 +353,9 @@ def _wsl_probe(max_age: float = _WSL_REPROBE_SECONDS) -> tuple[str | None, dict[
         name, _, path = line.strip().partition("=")
         if name in names and path.startswith("/") and not path.startswith("/mnt/"):
             found.setdefault(names[name], name)
-    if out is not None:
-        _wsl_state_save(distro, found=found, found_at=time.time())
+    if out is None:
+        return distro, saved.get("found", {})
+    _wsl_state_save(distro, found=found, found_at=time.time())
     return distro, found
 
 

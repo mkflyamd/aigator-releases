@@ -117,6 +117,21 @@ def test_a_failed_probe_is_not_remembered(monkeypatch):
     assert not generic_agent._WSL_STATE.exists()
 
 
+def test_a_failed_reprobe_keeps_the_last_saved_agents(monkeypatch):
+    _probe_env(monkeypatch, True, None)
+    _save_state(Ubuntu={"found": {"claude": "claude"}, "found_at": 1})
+    assert generic_agent._wsl_probe() == ("Ubuntu", {"claude": "claude"})
+    assert _saved()["found"] == {"claude": "claude"}
+
+
+def test_redetect_is_throttled_to_once_a_minute(monkeypatch):
+    calls = _probe_env(monkeypatch, True)
+    monkeypatch.setattr(generic_agent, "wsl_agents", lambda: ("Ubuntu", {}))
+    _save_state(Ubuntu={"found": {}, "found_at": time.time() - 10})
+    generic_agent.redetect_wsl_agents()
+    assert calls == []
+
+
 def test_a_damaged_state_file_does_not_start_a_stopped_distro_that_was_never_probed(monkeypatch):
     calls = _probe_env(monkeypatch, False)
     generic_agent._WSL_STATE.write_text("", "utf-8")
