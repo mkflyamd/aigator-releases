@@ -24415,3 +24415,13 @@ body.tab-fullscreen {
   fill: var(--text-muted) !important;
   stroke: var(--text-muted) !important;
 }
+.ss-files {
+  margin: 0 0 10px;
+  padding-left: 18px;
+  max-height: 160px;
+  overflow-y: auto;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border2) transparent;
+}

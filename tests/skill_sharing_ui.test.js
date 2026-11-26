@@ -347,6 +347,15 @@ const PREVIEW = {
   message:
     'I shared a skill with you. Open it here: (link added when you send)\nFolder: (link added when you send)',
 };
+const INVENTORY = {
+  files: [
+    { path: 'SKILL.md', size: 120 },
+    { path: 'notes/ref.md', size: 2048 },
+  ],
+  skipped: [{ path: '.env', reason: 'hidden file' }],
+  total_bytes: 2168,
+  inventory_digest: 'inv-1',
+};
 const DRAFT = {
   drafts: [
     {
@@ -368,6 +377,7 @@ function defaultGet(url) {
   if (url.startsWith('/api/skills/share/locations')) return json(clone(LOCATIONS));
   if (url.startsWith('/api/skills/share/check')) return json(checkBody(PRIVATE));
   if (url.startsWith('/api/skills/share/preview')) return json(clone(PREVIEW));
+  if (url.startsWith('/api/skills/share/inventory')) return json(clone(INVENTORY));
   return fail(404, 'not_found', 'No route ' + url);
 }
 
@@ -1789,7 +1799,7 @@ test('opening the screen lists each person as Can view and shows the whole messa
   assert(t.text().includes('These people can open the skill and will get this email.'));
   assert.strictEqual(sendBtn(t).disabled, false);
   assert.strictEqual(t.btn('Copy link').disabled, false);
-  assert.deepStrictEqual(t.calls.get.slice(-1), [PREVIEW_ROUTE + '?skill_id=weekly-report']);
+  assert.ok(t.calls.get.includes(PREVIEW_ROUTE + '?skill_id=weekly-report'));
   assert.deepStrictEqual(t.calls.post, [], 'nothing is saved by opening the screen');
 });
 
@@ -1865,8 +1875,47 @@ test('the save request carries the skill, the folder as no root for the default,
       people: [ANN_EMAIL, 'bob@contoso.com'],
       root: null,
       audience_ack: false,
+      inventory_digest: 'inv-1',
     },
   });
+});
+
+test('the exact files, and what is left out, are listed before anything is saved', async () => {
+  const t = await toSend({}, ['ann']);
+  const text = t.cls('ss-files')[0].textContent;
+  assert.ok(text.includes('SKILL.md (120 B)'));
+  assert.ok(text.includes('notes/ref.md (2 KB)'));
+  assert.ok(text.includes('.env: left out (hidden file)'));
+  assert.strictEqual(publishCalls(t).length, 0);
+});
+
+test('nothing can be sent until the file list has loaded', async () => {
+  const g = gated(['/api/skills/share/inventory']);
+  const t = await toSend({ get: (url) => g(url.split('?')[0]) }, ['ann']);
+  assert.strictEqual(sendBtn(t).disabled, true);
+  g.pending['/api/skills/share/inventory'][0].resolve(json(clone(INVENTORY)));
+  await flush();
+  assert.strictEqual(sendBtn(t).disabled, false);
+});
+
+test('a file list that changed is reloaded and the save is not retried on its own', async () => {
+  let served = 0;
+  const t = await toSend(
+    {
+      get: (url) =>
+        url.startsWith('/api/skills/share/inventory')
+          ? json(Object.assign(clone(INVENTORY), { inventory_digest: 'inv-' + ++served }))
+          : undefined,
+      post: failOn(PUBLISH_ROUTE, 409, 'content_changed', 'The skill changed. Review the files again.'),
+    },
+    ['ann'],
+  );
+  await t.press(SEND);
+  await flush();
+  assert.strictEqual(publishCalls(t).length, 1);
+  assert.strictEqual(publishCalls(t)[0].payload.inventory_digest, 'inv-1');
+  assert.strictEqual(served, 2);
+  assert.ok(alertText(t).some((m) => m.includes('Review the files again')));
 });
 
 test('a recent folder is sent as its drive and folder ids', async () => {

@@ -658,6 +658,12 @@
     return { code: code, text: shareErrorText(out.resp, out.body) };
   }
 
+  function sizeText(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return Math.round(bytes / 1024) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  }
+
   function openShareModal(skillId, deps) {
     var published = false;
     var S = {
@@ -675,6 +681,9 @@
       preview: null,
       previewing: false,
       previewError: '',
+      inventory: null,
+      loadingInventory: false,
+      inventoryError: '',
       draft: null,
       maybeSent: false,
       result: null,
@@ -1400,6 +1409,7 @@
 
     var NOTE_MAX = 1000;
     var PREVIEW_ERROR = 'Could not load the message. Try again.';
+    var INVENTORY_ERROR = 'Could not list the files. Try again.';
     var UNSENT_ACCESS_GIVEN = 'Access was given; email not sent.';
     var MAYBE_SENT = 'May have been sent. Check Sent Items.';
     var sh = {};
@@ -1431,7 +1441,7 @@
     }
 
     function canAct() {
-      return !!S.preview && !S.publishing;
+      return !!S.preview && !!S.inventory && !S.publishing;
     }
 
     function canSend() {
@@ -1496,6 +1506,45 @@
           S.preview = { message: b.message, title: b.title || skillId };
         }
         if (sh.send) fillPreview();
+      });
+    }
+
+    function fillInventory() {
+      if (!sh.send || shell.closed) return;
+      _clear(sh.files);
+      sh.filesError.textContent = S.inventoryError;
+      sh.filesError.hidden = !S.inventoryError;
+      sh.filesRetry.hidden = !S.inventoryError;
+      var inv = S.inventory;
+      sh.filesLabel.hidden = !inv;
+      if (inv) {
+        sh.filesLabel.textContent =
+          'Files that will be shared (' + inv.files.length + ', ' + sizeText(inv.total_bytes) + ')';
+        inv.files.forEach(function (f) {
+          sh.files.appendChild(_el('li', '', f.path + ' (' + sizeText(f.size) + ')'));
+        });
+        inv.skipped.forEach(function (f) {
+          sh.files.appendChild(_el('li', 'ss-hint', f.path + ': left out (' + f.reason + ')'));
+        });
+      }
+      sh.files.hidden = !inv;
+      updateButtons();
+    }
+
+    function loadInventory() {
+      if (S.inventory || S.loadingInventory) return;
+      S.loadingInventory = true;
+      S.inventoryError = '';
+      get('/api/skills/share/inventory?skill_id=' + encodeURIComponent(skillId)).then(function (r) {
+        S.loadingInventory = false;
+        if (shell.closed) return;
+        var b = r.body || {};
+        if (!ok(r) || !Array.isArray(b.files) || !Array.isArray(b.skipped) || !b.inventory_digest) {
+          S.inventoryError = shareErrorText(r.resp, r.body, INVENTORY_ERROR);
+        } else {
+          S.inventory = b;
+        }
+        fillInventory();
       });
     }
 
@@ -1589,6 +1638,7 @@
         }),
         root: root,
         audience_ack: !!S.ack,
+        inventory_digest: S.inventory ? S.inventory.inventory_digest : '',
       });
       if (ok(out)) published = true;
       if (shell.closed) {
@@ -1597,6 +1647,10 @@
       }
       if (!ok(out)) {
         S.error = _errorInfo(out);
+        if (S.error.code === 'content_changed') {
+          S.inventory = null;
+          loadInventory();
+        }
         return null;
       }
       S.error = null;
@@ -1909,6 +1963,20 @@
       shell.body.appendChild(sh.previewError);
       shell.body.appendChild(sh.retry);
 
+      sh.filesLabel = _el('p', 'ss-label');
+      sh.files = _el('ul', 'ss-files');
+      sh.filesError = _el('p', 'ss-error');
+      sh.filesError.setAttribute('role', 'alert');
+      sh.filesRetry = _el('button', 'ss-link-btn', 'Try again');
+      sh.filesRetry.type = 'button';
+      sh.filesRetry.addEventListener('click', function () {
+        loadInventory();
+      });
+      shell.body.appendChild(sh.filesLabel);
+      shell.body.appendChild(sh.files);
+      shell.body.appendChild(sh.filesError);
+      shell.body.appendChild(sh.filesRetry);
+
       var linkRow = _el('div', 'ss-linkrow');
       linkRow.appendChild(_el('span', 'ss-label', 'Link'));
       sh.linkText = _el('span', 'ss-link-text', 'Added when you send');
@@ -1960,6 +2028,8 @@
       if (S.result) showPublished(S.result);
       fillPreview();
       loadPreview();
+      fillInventory();
+      loadInventory();
       finish();
       field.input.focus();
     }
