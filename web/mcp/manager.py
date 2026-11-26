@@ -590,10 +590,10 @@ def _register(conn: dict) -> None:
                         "transport": transport,
                     }
                 except McpAbandoned as e:
-                    # The abandoned call is still waiting on the shared process's single reply queue, so a later
-                    # call could be handed its reply. Closing the process ends that wait and the next call
-                    # starts a fresh one.
-                    if is_pooled:
+                    # The abandoned request's own wait has ended and its late reply will be dropped, so other calls
+                    # on the shared process are unharmed. With nothing else in flight the process is replaced, so
+                    # a server that has hung does not get the next call.
+                    if is_pooled and not client.in_flight():
                         _release_stdio(c, client)
                     if e.at_cap:
                         _mark_health_result(

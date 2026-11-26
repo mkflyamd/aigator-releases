@@ -44,6 +44,7 @@ _INIT_PARAMS = {
 }
 
 _EOF = object()  # sentinel pushed by reader thread when stdout closes
+_ABANDONED = object()  # sentinel for a call whose caller stopped waiting: its reply is dropped when it arrives
 
 # Maximum messages buffered from a stdio server before back-pressure kicks in.
 # Caps memory if a misbehaving server floods stdout.
@@ -128,10 +129,7 @@ def acquire_pooled(cfg: dict) -> "StdioMCPClient":
             # immediately with an EOF signal rather than waiting up to 30s for
             # the queue.get() timeout. Without this, the agent loop hangs for
             # the full timeout after a chrome-devtools/browser process dies.
-            try:
-                existing._queue.put_nowait(_EOF)
-            except Exception:
-                pass
+            existing._wake_waiters(_EOF)
             try:
                 existing.close()
             except Exception:
@@ -177,7 +175,10 @@ class StdioMCPClient:
         self._timeout = timeout
         self._proc: subprocess.Popen | None = None
         self._next_id = 1
-        self._queue: queue.Queue = queue.Queue(maxsize=_QUEUE_MAXSIZE)
+        # One reply mailbox per request in flight, so a call only ever sees the reply carrying its own id and
+        # one call being abandoned never disturbs another.
+        self._pending: dict[int, queue.Queue] = {}
+        self._eof = False
         self._reader: threading.Thread | None = None
         self._stderr_lines: list[str] = []
         self._stderr_reader: threading.Thread | None = None
@@ -235,19 +236,67 @@ class StdioMCPClient:
             **no_window_kwargs(),
         )
 
+    def _open_mailbox(self) -> tuple[int, queue.Queue]:
+        box: queue.Queue = queue.Queue(maxsize=_QUEUE_MAXSIZE)
+        with self._id_lock:
+            req_id = self._next_id
+            self._next_id += 1
+            self._pending[req_id] = box
+            if self._eof:
+                box.put_nowait(_EOF)
+        return req_id, box
+
+    def _close_mailbox(self, req_id: int) -> None:
+        with self._id_lock:
+            self._pending.pop(req_id, None)
+
+    def in_flight(self) -> int:
+        """How many requests are waiting for a reply on this process."""
+        with self._id_lock:
+            return len(self._pending)
+
+    def _wake_waiters(self, item) -> None:
+        with self._id_lock:
+            if item is _EOF:
+                self._eof = True
+            boxes = list(self._pending.values())
+        for box in boxes:
+            try:
+                box.put_nowait(item)
+            except queue.Full:
+                pass
+
+    def _route(self, line: str) -> None:
+        try:
+            msg = json.loads(line)
+        except json.JSONDecodeError:
+            # Not JSON-RPC, so it cannot be tied to a request: every waiter reports it.
+            with self._id_lock:
+                boxes = list(self._pending.values())
+            for box in boxes:
+                try:
+                    box.put_nowait(line)
+                except queue.Full:
+                    _log.warning("[stdio] %s: output queue full — dropping line", self._name)
+            return
+        req_id = msg.get("id") if isinstance(msg, dict) else None
+        with self._id_lock:
+            box = self._pending.get(req_id) if isinstance(req_id, int) else None
+        if box is None:
+            return  # a notification, or the reply to a request nobody waits for any more
+        try:
+            box.put(line, timeout=5)
+        except queue.Full:
+            _log.warning("[stdio] %s: output queue full — dropping line", self._name)
+
     def _reader_loop(self, stdout) -> None:
         try:
             for line in iter(stdout.readline, ""):
-                try:
-                    self._queue.put(line, timeout=5)
-                except queue.Full:
-                    _log.warning(
-                        "[stdio] %s: output queue full — dropping line", self._name
-                    )
+                self._route(line)
         except Exception:
             pass
         finally:
-            self._queue.put(_EOF)
+            self._wake_waiters(_EOF)
 
     def _stderr_loop(self, stderr) -> None:
         try:
@@ -268,9 +317,13 @@ class StdioMCPClient:
     ) -> dict:
         if self._proc is None or self._proc.poll() is not None:
             raise RuntimeError(f"{self._name}: subprocess is not running")
-        with self._id_lock:
-            req_id = self._next_id
-            self._next_id += 1
+        req_id, box = self._open_mailbox()
+        try:
+            return self._exchange(req_id, box, method, params, timeout, on_request)
+        finally:
+            self._close_mailbox(req_id)
+
+    def _exchange(self, req_id, box, method, params, timeout, on_request) -> dict:
         if on_request is not None:
             on_request(req_id)
         msg = {"jsonrpc": "2.0", "method": method, "id": req_id}
@@ -286,7 +339,7 @@ class StdioMCPClient:
 
         actual_timeout = timeout if timeout is not None else self._timeout
         try:
-            line = self._queue.get(timeout=actual_timeout)
+            line = box.get(timeout=actual_timeout)
         except queue.Empty:
             self.close()
             stderr = self._stderr_tail()
@@ -294,6 +347,8 @@ class StdioMCPClient:
             raise TimeoutError(
                 f"MCP server did not respond within {actual_timeout}s{detail}"
             )
+        if line is _ABANDONED:
+            raise RuntimeError(f"{self._name}: the caller stopped waiting for this request")
         if line is _EOF:
             if self._stderr_reader:
                 self._stderr_reader.join(timeout=1.0)
@@ -370,7 +425,17 @@ class StdioMCPClient:
             raise
 
     def cancel_request(self, request_id: int, reason: str = "cancelled") -> None:
-        """Tell the server we stopped waiting for one request (MCP notifications/cancelled). Best effort."""
+        """Stop waiting for one request and tell the server (MCP notifications/cancelled). Best effort.
+
+        Only this request's wait ends: a reply that still arrives for it is dropped, and the process and every
+        other call on it carry on."""
+        with self._id_lock:
+            box = self._pending.pop(request_id, None)
+        if box is not None:
+            try:
+                box.put_nowait(_ABANDONED)
+            except queue.Full:
+                pass
         self._send_notification("notifications/cancelled", {"requestId": request_id, "reason": reason})
 
     def close(self) -> None:

@@ -64,6 +64,7 @@ class Hang:
 def _client(call):
     client = MagicMock()
     client.call.side_effect = call
+    client.in_flight.return_value = 0
     return client
 
 
@@ -106,6 +107,7 @@ def test_a_stopped_turn_walks_away_cancels_its_own_request_and_releases_the_proc
     handler = _register(monkeypatch, transport="stdio")
     hang = Hang()
     client = MagicMock(spec=StdioMCPClient)
+    client.in_flight.return_value = 0
 
     def call(tool, arguments, on_request=None):
         on_request(41)
@@ -222,7 +224,8 @@ def _stdio_client():
     client._timeout = 5
     client._next_id = 7
     client._id_lock = threading.Lock()
-    client._queue = queue.Queue()
+    client._pending = {}
+    client._eof = False
     client._stderr_lines = []
     client._stderr_reader = None
     client._proc = MagicMock()
@@ -233,27 +236,78 @@ def _stdio_client():
 
 def test_stdio_cancel_names_only_the_request_it_was_given():
     client = _stdio_client()
-    ids = {"a": [], "b": []}
-    threads = []
     with patch("mcp.audit.schedule_mcp_call"):
-        for name in ("a", "b"):
-            thread = threading.Thread(target=client.call, args=("lookup", {}), kwargs={"on_request": ids[name].append},
-                                      daemon=True)
-            thread.start()
-            deadline = time.monotonic() + 5
-            while not ids[name] and time.monotonic() < deadline:
-                time.sleep(0.005)
-            threads.append(thread)
-        assert ids == {"a": [7], "b": [8]}
-        client.cancel_request(ids["b"][0], "stopped")
-        for _ in threads:
-            client._queue.put(json.dumps({"jsonrpc": "2.0", "result": {"content": []}}) + "\n")
+        ids, _, threads = _start_calls(client, 2)
+        assert ids == [[7], [8]]
+        client.cancel_request(ids[1][0], "stopped")
+        client._route(_reply(7, "for a"))
         for thread in threads:
             thread.join(5)
     notices = [json.loads(line) for line in client._proc.stdin.getvalue().splitlines()
                if "notifications/cancelled" in line]
     assert notices == [{"jsonrpc": "2.0", "method": "notifications/cancelled",
                         "params": {"requestId": 8, "reason": "stopped"}}]
+
+
+def _reply(request_id, text):
+    return json.dumps({"jsonrpc": "2.0", "id": request_id, "result": {"content": [{"type": "text", "text": text}]}}) + "\n"
+
+
+def _start_calls(client, count):
+    ids = [[] for _ in range(count)]
+    outcomes = [{} for _ in range(count)]
+    threads = []
+
+    def run(slot):
+        try:
+            outcomes[slot]["value"] = client.call("lookup", {}, on_request=ids[slot].append)
+        except Exception as exc:  # noqa: BLE001 - the test reads what each call ended with
+            outcomes[slot]["error"] = exc
+
+    for slot in range(count):
+        thread = threading.Thread(target=run, args=(slot,), daemon=True)
+        thread.start()
+        deadline = time.monotonic() + 5
+        while not ids[slot] and time.monotonic() < deadline:
+            time.sleep(0.005)
+        threads.append(thread)
+    return ids, outcomes, threads
+
+
+def test_each_call_on_a_shared_stdio_process_gets_only_the_reply_with_its_own_id():
+    client = _stdio_client()
+    with patch("mcp.audit.schedule_mcp_call"):
+        ids, outcomes, threads = _start_calls(client, 2)
+        client._route(_reply(ids[1][0], "for second"))
+        client._route(_reply(ids[0][0], "for first"))
+        for thread in threads:
+            thread.join(5)
+    assert [o.get("value") for o in outcomes] == ["for first", "for second"]
+
+
+def test_abandoning_one_call_leaves_the_other_calls_on_the_same_stdio_process_waiting_for_their_replies():
+    client = _stdio_client()
+    with patch("mcp.audit.schedule_mcp_call"):
+        ids, outcomes, threads = _start_calls(client, 2)
+        client.cancel_request(ids[0][0], "stopped")
+        threads[0].join(5)
+        assert not threads[0].is_alive() and "error" in outcomes[0]
+        assert threads[1].is_alive() and client.in_flight() == 1
+        client._proc.terminate.assert_not_called()
+        client._route(_reply(ids[0][0], "too late, nobody is waiting"))
+        client._route(_reply(ids[1][0], "still wanted"))
+        threads[1].join(5)
+    assert outcomes[1] == {"value": "still wanted"}
+
+
+def test_a_dying_stdio_process_still_wakes_every_call_waiting_on_it():
+    client = _stdio_client()
+    with patch("mcp.audit.schedule_mcp_call"):
+        ids, outcomes, threads = _start_calls(client, 2)
+        client._wake_waiters(stdio_client._EOF)
+        for thread in threads:
+            thread.join(5)
+    assert all("subprocess closed stdout" in str(o["error"]) for o in outcomes)
 
 
 def test_releasing_an_old_process_does_not_evict_the_fresh_one_that_replaced_it():
@@ -305,3 +359,69 @@ def test_a_real_stdio_server_that_outlives_its_budget_gets_its_own_cancel_and_a_
         assert second_pid != first_pid
     finally:
         stdio_client.release_from_pool(cfg)
+
+
+def test_stopping_one_call_on_a_real_stdio_server_does_not_fail_another_call_on_the_same_process(
+        monkeypatch, sup, tmp_path):
+    log = tmp_path / "fake-mcp.log"
+    cfg = {"command": sys.executable, "args": [FAKE_SERVER], "env": {"FAKE_MCP_LOG": str(log)}, "name": "Demo"}
+    handlers = _register(monkeypatch, transport="stdio", tools=("slow", "later", "pid"), **cfg)
+    out = {}
+
+    def run(slot, turn):
+        token = current_turn.set(turn)
+        try:
+            out[slot] = handlers[slot](_context_id="tab-1")
+        finally:
+            current_turn.reset(token)
+
+    try:
+        first_pid = handlers["pid"](_context_id="tab-1")["result"]
+        with patch("mcp.manager._mark_health_result"):
+            slow = threading.Thread(target=run, args=("slow", "turn-slow"), daemon=True)
+            later = threading.Thread(target=run, args=("later", "turn-later"), daemon=True)
+            slow.start()
+            assert _wait_for(lambda: log.exists() and "slow" in log.read_text())
+            later.start()
+            assert _wait_for(lambda: "later" in log.read_text())
+            assert len(sup.cancel_turn("turn-slow")) == 1
+            slow.join(5)
+            later.join(10)
+        assert "stopped" in out["slow"]["error"]
+        assert out["later"] == {"result": "answered"}
+        assert handlers["pid"](_context_id="tab-1")["result"] == first_pid
+    finally:
+        stdio_client.release_from_pool(cfg)
+
+
+def test_stopping_a_stdio_call_does_not_release_the_process_while_another_call_is_in_flight(monkeypatch, sup):
+    handler = _register(monkeypatch, transport="stdio")
+    hang = Hang()
+    client = MagicMock(spec=StdioMCPClient)
+    client.in_flight.return_value = 1
+
+    def call(tool, arguments, on_request=None):
+        on_request(41)
+        return hang(tool, arguments)
+
+    client.call.side_effect = call
+    out = {}
+
+    def run():
+        token = current_turn.set("turn-1")
+        try:
+            with patch("mcp.manager._client_for", return_value=client), patch("mcp.manager._mark_health_result"), \
+                    patch("mcp.manager.release_from_pool") as release:
+                out["result"] = handler(_context_id="tab-1")
+                out["release"] = release
+        finally:
+            current_turn.reset(token)
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    assert hang.entered.wait(5)
+    assert len(sup.cancel_turn("turn-1")) == 1
+    thread.join(5)
+    hang.release.set()
+    client.cancel_request.assert_called_once_with(41, "stopped")
+    out["release"].assert_not_called()

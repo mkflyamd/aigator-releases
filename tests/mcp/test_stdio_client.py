@@ -194,7 +194,8 @@ def test_acquire_pooled_poisons_old_queue_on_restart():
     def _reader():
         t0 = time.monotonic()
         try:
-            val = client._queue.get(timeout=10.0)  # would normally hang 10s
+            _, box = client._open_mailbox()
+            val = box.get(timeout=10.0)  # would normally hang 10s
         except Exception as e:
             val = e
         result.append(time.monotonic() - t0)
