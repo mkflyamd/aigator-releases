@@ -10,7 +10,7 @@
   screen,
 } = require('electron');
 const { applyMediaPermissions } = require('./media-permissions');
-const { applyNavigationPolicy, setToolbarAttacher } = require('./navigation-policy');
+const { applyNavigationPolicy, setToolbarAttacher, _hostMatches } = require('./navigation-policy');
 const { resolveAtlassianUrls } = require('./atlassian-urls');
 const { createHudRecorder } = require('./hud_recorder');
 const path = require('path');
@@ -711,6 +711,11 @@ function _toolbarPushState() {
     loading: false,
     visible: !!app,
     appHomeUrls: APP_HOME_URL,
+    isCustomApp: _customAppIds.has(app),
+    pinMode: !!_webPinPicking && _webPinPicking === app,
+    pinLabel: _webPinLabel,
+    pinKind: _webPinKind,
+    pinAnnounce: _webPinAnnounce,
   };
   try {
     toolbarWc.send('toolbar:state', state);
@@ -1051,6 +1056,37 @@ let _pendingCustomApps = [];
 // activeExternalApp: which external pane is currently shown ('slack'|'teams'|'custom-gmail'|null).
 // Only one is visible at a time ΓÇö activating one hides the other.
 let activeExternalApp = null;
+
+// Web pane pins. _customAppIds holds user-added apps only (the g-* Google panes also use
+// createGenericPane and must not get pin controls). _webPinPicking is the app id in pick mode.
+const _customAppIds = new Set();
+let _webPinPicking = null;
+let _webPinLabel = '';
+let _webPinKind = '';
+let _webPinAnnounce = '';
+const _sendToGator = (channel, payload) => {
+  if (gatorView && !gatorView.webContents.isDestroyed()) {
+    gatorView.webContents.send(channel, payload);
+  }
+};
+const _webPin = require('./web-pin').createWebPin({
+  getPane: (appId) => {
+    const pane = _customAppIds.has(appId) ? _genericPanes[appId] : null;
+    return pane && pane.view && !pane.view.webContents.isDestroyed() ? pane.view.webContents : null;
+  },
+  isPaneVisible: (appId) => activeExternalApp === appId,
+  onState: ({ appId, picking, label, kind, announce }) => {
+    _webPinPicking = picking ? appId : null;
+    _webPinLabel = picking ? label : '';
+    _webPinKind = picking ? kind || '' : '';
+    // Sent with one push only, so later state pushes do not repeat the announcement.
+    _webPinAnnounce = announce || '';
+    _toolbarPushState();
+    _webPinAnnounce = '';
+  },
+  onCaptured: (payload) => _sendToGator('web-pin:captured', payload),
+  onError: (err) => _sendToGator('web-pin:event', { type: 'error', ...err }),
+});
 // Dedup guard for the injected hide/show button poller (see below).
 // Hoisted to module scope so the gator-pane:show/hide IPC handlers (which can
 // also change Gator's visibility, e.g. from a dock click) can keep it in sync
@@ -4141,7 +4177,7 @@ setTimeout(scanAll, 500);
   if (_pendingCustomApps && _pendingCustomApps.length) {
     for (const appCfg of _pendingCustomApps) {
       try {
-        createGenericPane(appCfg);
+        createCustomApp(appCfg);
       } catch (e) {
         console.error('[custom-app] failed to create pane:', appCfg.id, e);
       }
@@ -4183,6 +4219,7 @@ function layout() {
 
 function _layoutNow() {
   if (!win) return;
+  if (_webPinPicking && _webPinPicking !== activeExternalApp) _webPin.stop();
   const [w, h] = win.getContentSize();
   const activeView = viewForApp(activeExternalApp);
 
@@ -4410,8 +4447,23 @@ function createGenericPane(appConfig) {
   win.contentView.addChildView(view);
   view.setBounds({ x: 1599, y: 0, width: 1, height: 900 });
 
-  _genericPanes[id] = { id, name, url, view, partition };
+  _genericPanes[id] = { id, name, url, view, partition, homeHosts };
   _refreshAppHomeUrls();
+  return view;
+}
+
+// A user-added app pane: a generic pane plus pin support (right-click menu, toolbar buttons).
+function createCustomApp(appConfig) {
+  const view = createGenericPane(appConfig);
+  if (!_customAppIds.has(appConfig.id)) {
+    _customAppIds.add(appConfig.id);
+    view.webContents.on('context-menu', () => {
+      Menu.buildFromTemplate([
+        { label: 'Pin this view to Gator', click: () => _webPin.pinView(appConfig.id) },
+        { label: 'Pin an element...', click: () => _webPin.start(appConfig.id) },
+      ]).popup();
+    });
+  }
   return view;
 }
 
@@ -4469,7 +4521,7 @@ ipcMain.handle('external-pane:hide', (_e, appName) => {
 // Create a custom app pane at runtime (when user adds an app via Settings)
 ipcMain.handle('custom-app:create', (_e, appConfig) => {
   try {
-    createGenericPane(appConfig);
+    createCustomApp(appConfig);
     return { ok: true };
   } catch (e) {
     return { ok: false, error: String(e) };
@@ -4844,6 +4896,73 @@ ipcMain.on('toolbar:ready', (e) => {
   if (!_isMainToolbar(e)) return;
   _toolbarPushState();
   _pushThemeToToolbar();
+});
+
+ipcMain.on('toolbar:web-pin-start', (e) => {
+  if (!_isMainToolbar(e)) return;
+  if (_webPinPicking) {
+    _webPin.stop();
+    return;
+  }
+  if (_customAppIds.has(activeExternalApp)) _webPin.start(activeExternalApp);
+});
+
+ipcMain.on('toolbar:web-pin-view', (e) => {
+  if (!_isMainToolbar(e)) return;
+  if (_customAppIds.has(activeExternalApp)) _webPin.pinView(activeExternalApp);
+});
+
+ipcMain.on('toolbar:web-pin-cancel', (e) => {
+  if (!_isMainToolbar(e)) return;
+  _webPin.stop(require('./web-pin').CANCELLED);
+});
+
+// Keys typed while the toolbar has focus during picking (the user pressed the Pin button, so
+// focus is here, not in the page). The page path is handled by before-input-event in web-pin.js.
+ipcMain.on('toolbar:web-pin-key', (e, input) => {
+  if (!_isMainToolbar(e) || !_webPinPicking || !input || typeof input !== 'object') return;
+  _webPin.key({
+    key: String(input.key || ''),
+    shift: input.shift === true,
+    control: input.control === true,
+    alt: input.alt === true,
+    meta: input.meta === true,
+  });
+});
+
+ipcMain.handle('web-pin:recapture', (e, appId, locator, url) => {
+  if (!gatorView || e.sender.id !== gatorView.webContents.id) return { status: 'pane_unavailable' };
+  if (typeof appId !== 'string' || !_customAppIds.has(appId)) return { status: 'pane_unavailable' };
+  return _webPin.recapture(
+    appId,
+    locator && typeof locator === 'object' ? locator : null,
+    typeof url === 'string' ? url : '',
+  );
+});
+
+ipcMain.handle('web-pin:go-to', async (e, appId, url) => {
+  if (!gatorView || e.sender.id !== gatorView.webContents.id) return false;
+  if (typeof appId !== 'string' || !_customAppIds.has(appId)) return false;
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return false;
+  const pane = _genericPanes[appId];
+  if (!pane || !pane.view || pane.view.webContents.isDestroyed()) return false;
+  // loadURL skips will-navigate, so the pane's home-host restriction is enforced here:
+  // only the app's own hosts, and never http for an https app.
+  if (!pane.homeHosts.length || !_hostMatches(parsed.hostname, pane.homeHosts)) return false;
+  if (new URL(pane.url).protocol === 'https:' && parsed.protocol !== 'https:') return false;
+  try {
+    await pane.view.webContents.loadURL(parsed.href);
+    return true;
+  } catch (err) {
+    // ERR_ABORTED (-3) is what loadURL rejects with when a redirect replaces the navigation.
+    return !!err && (err.errno === -3 || err.code === 'ERR_ABORTED');
+  }
 });
 
 // ΓöÇΓöÇ Theme IPC (renderer ΓåÆ main ΓåÆ toolbar) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ

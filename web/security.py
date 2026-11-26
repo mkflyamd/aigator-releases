@@ -126,6 +126,8 @@ SENSITIVE_ROUTES: frozenset[str] = frozenset({
     "POST /api/teams/chats/{chat_id}/send",
     "POST /api/teams/send-message",
     "POST /api/upload/onedrive",
+    "POST /api/web-pins",
+    "POST /api/web-pins/{pin_id}/snapshot",
     "POST /api/widgets",
     "DELETE /api/widgets/{widget_id}",
     "PATCH /api/widgets/{widget_id}",

@@ -14,6 +14,25 @@ from .base import LLMProvider, StreamEvent, ToolCall, TurnResult
 from .gateway import LLM_GATEWAY_URL, gateway_headers, profile_headers
 from tool_pipeline import parse_tool_definition_error, project_json_schema
 
+# The API only accepts these image types and rejects images over ~5 MB; one bad
+# image in a stored tool result would otherwise 400 every later turn.
+_IMAGE_MEDIA_TYPES = frozenset({"image/jpeg", "image/png", "image/gif", "image/webp"})
+_MAX_IMAGE_B64_CHARS = 5 * 1024 * 1024
+
+
+def _usable_images(images: Any) -> tuple[list[dict], int]:
+    """Split tool images into (acceptable to the API, number dropped)."""
+    if not isinstance(images, list):
+        return [], 0
+    ok = [
+        img for img in images
+        if isinstance(img, dict)
+        and isinstance(img.get("base64"), str)
+        and img.get("media_type", "image/png") in _IMAGE_MEDIA_TYPES
+        and len(img["base64"]) <= _MAX_IMAGE_B64_CHARS
+    ]
+    return ok, len(images) - len(ok)
+
 logger = logging.getLogger(__name__)
 
 LLM_GATEWAY = LLM_GATEWAY_URL  # re-export for config_routes compatibility
@@ -86,6 +105,7 @@ class AnthropicProvider(LLMProvider):
 
     supports_thinking = False  # enabled per-model at call time
     supports_vision = True
+    receives_tool_images = True
 
     def __init__(self) -> None:
         self._client: anthropic.Anthropic | None = None
@@ -648,11 +668,17 @@ class AnthropicProvider(LLMProvider):
         total_chars = 0
         for tc, result in zip(tool_calls, results):
             result = compress_tool_result(tc.name, result, total_chars)
+            counted = (
+                {k: v for k, v in result.items() if k != "_images"}
+                if isinstance(result, dict)
+                else result
+            )
             total_chars += len(
-                result if isinstance(result, str) else json.dumps(result, default=str)
+                counted if isinstance(counted, str) else json.dumps(counted, default=str)
             )
             if isinstance(result, dict) and "_images" in result:
-                images = result["_images"]
+                # A non-list _images (e.g. None) means no images.
+                images, omitted = _usable_images(result["_images"])
                 result_without_images = {
                     k: v for k, v in result.items() if k != "_images"
                 }
@@ -676,11 +702,18 @@ class AnthropicProvider(LLMProvider):
                             "text": f"[Embedded image: {img.get('name', 'image')}]",
                         }
                     )
+                if omitted:
+                    blocks.append(
+                        {
+                            "type": "text",
+                            "text": f"[{omitted} image(s) omitted: unsupported type or too large]",
+                        }
+                    )
                 content.append(
                     {
                         "type": "tool_result",
                         "tool_use_id": tc.id,
-                        "content": blocks,
+                        "content": blocks if images or omitted else blocks[0]["text"],
                     }
                 )
             else:
@@ -727,6 +760,25 @@ class AnthropicProvider(LLMProvider):
             model=model or get_active_model() or "Claude-Haiku-4.5",
             max_tokens=max_tokens,
             messages=[{"role": "user", "content": prompt}],
+        )
+        return "".join(b.text for b in response.content if hasattr(b, "text")).strip()
+
+    def describe_image(
+        self, image: bytes, prompt: str, model: str | None = None, max_tokens: int = 700
+    ) -> str:
+        import base64
+        from llm.registry import get_active_model
+        client = self._client.with_options(timeout=_SIMPLE_TIMEOUT, max_retries=0)
+        response = client.messages.create(
+            model=model or get_active_model() or "Claude-Haiku-4.5",
+            max_tokens=max_tokens,
+            messages=[{"role": "user", "content": [
+                {"type": "image", "source": {
+                    "type": "base64", "media_type": "image/png",
+                    "data": base64.b64encode(image).decode("ascii"),
+                }},
+                {"type": "text", "text": prompt},
+            ]}],
         )
         return "".join(b.text for b in response.content if hasattr(b, "text")).strip()
 

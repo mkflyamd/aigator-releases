@@ -255,3 +255,49 @@ def test_pr_result_leads_with_status_so_the_inline_preview_shows_it(pr):
 
 def test_pr_result_is_much_smaller_than_the_raw_payload(pr):
     assert _size(pr) < 100_000
+
+
+# ── tool-result images survive truncation ────────────────────────────────────
+
+
+def _big_image_b64() -> str:
+    import base64
+
+    return base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x01" * 60_000).decode("ascii")
+
+
+def test_truncation_keeps_images_and_does_not_count_them(tmp_path, monkeypatch):
+    monkeypatch.setattr(trunc, "_outputs_dir", lambda: tmp_path)
+    img = {"base64": _big_image_b64(), "media_type": "image/png", "name": "web-pin.png"}
+    assert len(img["base64"]) > 60_000
+    out = trunc.truncate_tool_result({"text": "hello", "_images": [img]}, tool_name="read_web_pin")
+    assert out["text"] == "hello"
+    assert out["_images"] == [img]
+    assert list(tmp_path.iterdir()) == []  # image alone never spills to disk
+
+
+def test_truncation_still_stubs_large_text_but_keeps_images(tmp_path, monkeypatch):
+    monkeypatch.setattr(trunc, "_outputs_dir", lambda: tmp_path)
+    img = {"base64": _big_image_b64(), "media_type": "image/png", "name": "web-pin.png"}
+    out = trunc.truncate_tool_result({"text": "t" * 100_000, "_images": [img]}, tool_name="read_web_pin")
+    assert out["_images"] == [img]
+    assert trunc.OVERFLOW_MARKER in out["text"]
+    spilled = next(tmp_path.rglob("tool_output.txt")).read_text(encoding="utf-8")
+    assert "base64" not in spilled
+
+
+def test_truncation_combined_stub_keeps_images(tmp_path, monkeypatch):
+    monkeypatch.setattr(trunc, "_outputs_dir", lambda: tmp_path)
+    img = {"base64": _big_image_b64(), "media_type": "image/png", "name": "web-pin.png"}
+    # each field under the per-field cap, combined over the budget
+    result = {"text": "a" * 20_000, "output": "b" * 20_000, "_images": [img]}
+    out = trunc.truncate_tool_result(result, tool_name="read_web_pin")
+    assert out["_images"] == [img]
+    assert trunc.OVERFLOW_MARKER in out["result"]
+
+
+def test_image_bytes_do_not_trigger_text_compression():
+    from context_utils import compress_tool_result
+
+    result = {"text": "hello", "_images": [{"base64": _big_image_b64(), "media_type": "image/png"}]}
+    assert compress_tool_result("read_web_pin", result, 0) is result

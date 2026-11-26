@@ -182,7 +182,9 @@ def _tool_pin_item(source: str, query: str, _context_id: str | None = None) -> d
         chosen = exact[0]
 
     if chosen is not None:
-        set_pin(source, chosen["id"], chosen["label"], chosen.get("meta", {}), cid)
+        saved = set_pin(source, chosen["id"], chosen["label"], chosen.get("meta", {}), cid)
+        if not saved.get("pinned"):
+            return {"error": "Could not save the pin. Try again."}
         return {
             "pinned": True,
             "source": source,

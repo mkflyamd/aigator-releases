@@ -407,3 +407,20 @@ def test_linux_deb_depends_on_bubblewrap_and_docs_explain_it():
     from web.sandbox.launcher_linux import BWRAP_BLOCKED
 
     assert "Linux: bubblewrap" in BWRAP_BLOCKED
+
+
+def test_shell_files_required_at_startup_are_bundled():
+    # electron-builder's build.files is an allow-list: a local require() of a shell file
+    # that is not listed throws "Cannot find module" in the packaged app at startup.
+    import re
+
+    shell = ROOT / "shell"
+    package = json.loads((shell / "package.json").read_text(encoding="utf-8"))
+    bundled = set(package["build"]["files"])
+    require_re = re.compile(r"require\('\./([\w.-]+)'\)")
+
+    for source in ("main.js", "web-pin.js"):
+        text = (shell / source).read_text(encoding="utf-8")
+        for name in require_re.findall(text):
+            filename = name if name.endswith(".js") else name + ".js"
+            assert filename in bundled, f"{source} requires ./{name} but {filename} is not in build.files"

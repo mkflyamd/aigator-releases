@@ -2675,7 +2675,7 @@ function buildPinChipEl(pin) {
   chip.dataset.pinId = pin.id;
   chip.title = `${pin.source}: ${pin.label}`;
   const iconHtml = _pinSourceIcon(pin.source, 14);
-  if (iconHtml.startsWith('<img')) {
+  if (iconHtml.startsWith('<img') || iconHtml.startsWith('<svg')) {
     chip.innerHTML = `${iconHtml} ${escapeHtml(pin.label)}`;
   } else {
     chip.textContent = `${iconHtml} ${pin.label}`;
@@ -5601,6 +5601,7 @@ async function _showPinPopover() {
       slack: { img: 'slack.svg', label: 'Slack' },
       calendar: { img: 'calendar.svg', label: 'Calendar' },
       github: { img: 'github.svg', label: 'GitHub' },
+      webpin: { label: 'Web view' },
     };
 
     const addCard = (p) => {
@@ -5616,7 +5617,9 @@ async function _showPinPopover() {
                 ? p.meta?.type || 'chat'
                 : p.source === 'calendar'
                   ? _calendarPinMeta(p.meta)
-                  : '';
+                  : p.source === 'webpin'
+                    ? p.meta?.app_name || ''
+                    : '';
       const card = document.createElement('div');
       card.className = 'pin-card';
       card.innerHTML = `
@@ -5650,6 +5653,7 @@ async function _showPinPopover() {
       scopeBtn.classList.toggle('is-global', p.scope === 'global');
       scopeBtn.setAttribute('aria-pressed', String(p.scope === 'global'));
       // ↗ Open item in its native pane (or browser for external sources)
+      if (p.source === 'webpin' && window.WebPins) window.WebPins.decorateCard(card, p);
       card.querySelector('.pin-card-open').addEventListener('click', () => {
         cleanup();
         const webUrl = p.meta?.web_url || p.meta?.url;
@@ -17820,6 +17824,12 @@ function _initNotificationStream() {
       if (msg.type === 'pane_signal' && msg.pane) {
         console.log('[notify-stream] pane signal received:', msg.pane);
         _handlePaneSignal(msg.pane, msg.paneData || {});
+        return;
+      }
+      if (msg.type === 'webpin-recapture') {
+        // Ownership (_tabs.some) is checked inside onRecaptureRequest.
+        if (window.WebPins && window.WebPins.onRecaptureRequest)
+          window.WebPins.onRecaptureRequest(msg);
         return;
       }
       if (msg.type === 'draft_signal' && msg.draft) {

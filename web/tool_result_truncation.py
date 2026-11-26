@@ -81,9 +81,23 @@ def truncate_tool_result(result: object, *, tool_name: str = "") -> object:
     tools are inspected (result, stdout, content, text, output). Deep
     recursive traversal is deliberately avoided — we don't want to silently
     truncate structured data like JSON arrays or tool metadata.
+
+    A top-level ``_images`` list (base64 tool images) is never truncated and
+    never counts against the text budget.
     """
     if not isinstance(result, dict):
         return result
+
+    # Image blocks travel to the provider as multimodal content, not as text, so
+    # they are set aside before measuring and put back on whatever is returned.
+    if isinstance(result.get("_images"), list):
+        images = result["_images"]
+        text_only = truncate_tool_result(
+            {k: v for k, v in result.items() if k != "_images"}, tool_name=tool_name
+        )
+        if isinstance(text_only, dict):
+            return {**text_only, "_images": images}
+        return text_only
 
     try:
         # Indented so the overflow file has many short lines; grep_files and

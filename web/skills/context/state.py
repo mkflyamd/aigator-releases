@@ -81,10 +81,25 @@ def set_pin(
     key = f"{source}::{item_id}"
     entry = {"source": source, "id": item_id, "label": label, "meta": meta or {}}
     with _lock:
-        pinned_contexts.setdefault(context_id, {})[key] = entry
-        _save()
-        total = len(pinned_contexts[context_id])
+        bucket = pinned_contexts.setdefault(context_id, {})
+        previous = bucket.get(key)
+        bucket[key] = entry
+        if not _save():
+            if previous is None:
+                bucket.pop(key, None)
+            else:
+                bucket[key] = previous
+            return {"pinned": False, "label": label, "source": source, "id": item_id, "total": len(bucket)}
+        total = len(bucket)
     return {"pinned": True, "label": label, "source": source, "id": item_id, "total": total}
+
+
+def _cleanup_web_pin(source: str, item_id: str) -> None:
+    if source != "webpin":
+        return
+    from skills.webpin.store import delete_if_unreferenced
+
+    delete_if_unreferenced(item_id)
 
 
 def set_pin_scope(
@@ -120,11 +135,15 @@ def remove_pin(
             if pinned_contexts.get(bucket, {}).pop(key, None) is not None:
                 removed = True
         _save()
+    # Outside the lock: the cleanup re-takes it to check for remaining references.
+    _cleanup_web_pin(source, item_id)
     return {"unpinned": removed, "source": source, "id": item_id}
 
 
 def clear_pins(context_id: str = "default") -> dict:
     with _lock:
-        count = len(pinned_contexts.pop(context_id, {}))
+        dropped = pinned_contexts.pop(context_id, {})
         _save()
-    return {"cleared": count, "context_id": context_id}
+    for entry in dropped.values():
+        _cleanup_web_pin(entry.get("source", ""), entry.get("id", ""))
+    return {"cleared": len(dropped), "context_id": context_id}

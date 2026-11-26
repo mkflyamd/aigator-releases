@@ -462,7 +462,15 @@ class OpenAIProvider(LLMProvider):
             raise ValueError("build_tool_result_message called with empty tool_calls list")
         content: list[dict] = []
         for tc, result in zip(tool_calls, results):
+            omitted = 0
+            if isinstance(result, dict) and "_images" in result:
+                # This provider's history is text-only; base64 would be megabytes of noise.
+                imgs = result["_images"]
+                omitted = len(imgs) if isinstance(imgs, list) else 0
+                result = {k: v for k, v in result.items() if k != "_images"}
             result_str = result if isinstance(result, str) else json.dumps(result, default=str)
+            if omitted:
+                result_str += f"\n[{omitted} image(s) omitted: this provider cannot receive tool images]"
             content.append({
                 "type": "tool_result",
                 "tool_use_id": tc.id,
@@ -501,6 +509,26 @@ class OpenAIProvider(LLMProvider):
                 response = client.chat.completions.create(
                     model=mdl, max_completion_tokens=max_tokens, messages=msgs,
                 )
+            else:
+                raise
+        return (response.choices[0].message.content or "").strip()
+
+    def describe_image(self, image: bytes, prompt: str, model: str | None = None, max_tokens: int = 700) -> str:
+        import base64
+        from llm.registry import get_active_model
+        mdl = model or get_active_model() or self._profile.get("active_model", "")
+        url = "data:image/png;base64," + base64.b64encode(image).decode("ascii")
+        msgs = [{"role": "user", "content": [
+            {"type": "image_url", "image_url": {"url": url}},
+            {"type": "text", "text": prompt},
+        ]}]
+        client = self._client.with_options(timeout=_SIMPLE_TIMEOUT, max_retries=0)
+        try:
+            response = client.chat.completions.create(model=mdl, max_tokens=max_tokens, messages=msgs)
+        except Exception as err:
+            err_str = str(err)
+            if "max_tokens" in err_str and "max_completion_tokens" in err_str:
+                response = client.chat.completions.create(model=mdl, max_completion_tokens=max_tokens, messages=msgs)
             else:
                 raise
         return (response.choices[0].message.content or "").strip()

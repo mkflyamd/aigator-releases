@@ -1673,6 +1673,12 @@ async def chat(req: ChatRequest):
                     from skills.onenote.state import pin_site_text as _pin_site_text
                     _site_txt = _pin_site_text(m.get("site_id"))
                     _pin_lines.append(f"- OneNote: \"{lbl}\" (page_id: {pid}, notebook: {m.get('notebook','?')}, section: {m.get('section','?')}{_site_txt}) \u2192 use update_onenote_page or read with this page_id{' and site_id' if _site_txt else ''}")
+            elif s == "webpin":
+                from skills.webpin.prompt import web_pin_prompt_line as _web_pin_line
+
+                _wp_line = _web_pin_line(lbl, pid, m)
+                if _wp_line:
+                    _pin_lines.append(_wp_line)
             elif s == "onedrive":
                 _od_drive = m.get('drive_id', '')
                 _od_drive_hint = f", drive_id: {_od_drive}" if _od_drive else ""
@@ -1842,6 +1848,12 @@ async def chat(req: ChatRequest):
             "\n- If given a SharePoint share-link you cannot resolve, say so explicitly. NEVER silently substitute a name-search guess — if you fall back to search, label it clearly as a guess and ask the user to confirm before continuing."
             "\n- If read_onedrive_file returns unresolved=True, stop and tell the user the link could not be resolved; do not proceed with assumptions."
         )
+    if _pins:
+        from skills.webpin.prompt import web_pin_compare_line as _web_pin_compare_line
+
+        _wp_compare = _web_pin_compare_line(_pins)
+        if _wp_compare:
+            system += "\n\n" + _wp_compare
     # Legacy: keep OneNote state in sync for tools that read it directly,
     # but ONLY inject into prompt if this is the default context (no tabs)
     # to prevent pin bleed across tabs.

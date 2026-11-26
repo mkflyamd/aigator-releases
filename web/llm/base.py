@@ -44,6 +44,8 @@ class LLMProvider(ABC):
 
     supports_thinking: bool = False
     supports_vision: bool = True
+    # True only when build_tool_result_message forwards tool-result images to the model.
+    receives_tool_images: bool = False
     # Conservative gateway defaults. Providers/profiles may override these.
     max_tools: int = 128
     max_tool_name_length: int = 64
@@ -103,4 +105,12 @@ class LLMProvider(ABC):
         """
         raise NotImplementedError(
             f"{type(self).__name__} does not implement simple_complete"
+        )
+
+    def describe_image(
+        self, image: bytes, prompt: str, model: str | None = None, max_tokens: int = 700
+    ) -> str:
+        """Ask a vision-capable model to describe a PNG. Subclasses that can see images override this."""
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement describe_image"
         )

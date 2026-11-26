@@ -144,4 +144,20 @@ contextBridge.exposeInMainWorld('gatorShell', {
   // the "My Widgets" drawer eye toggle). excluded=true → hidden during capture.
   setWidgetCaptureExcluded: (widgetId, excluded) =>
     ipcRenderer.invoke('hud:set-capture-for-widget', widgetId, excluded),
+
+  // -- Web pane pins --
+  // Re-read a pinned page or element from its custom-app pane (Gator renderer only).
+  webPinRecapture: (appId, locator, url) =>
+    ipcRenderer.invoke('web-pin:recapture', appId, locator, url),
+  webPinGoTo: (appId, url) => ipcRenderer.invoke('web-pin:go-to', appId, url),
+  onWebPinCaptured: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('web-pin:captured', listener);
+    return () => ipcRenderer.removeListener('web-pin:captured', listener);
+  },
+  onWebPinEvent: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('web-pin:event', listener);
+    return () => ipcRenderer.removeListener('web-pin:event', listener);
+  },
 });

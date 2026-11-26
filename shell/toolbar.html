@@ -411,6 +411,141 @@
         margin-left: auto;
       }
 
+      /* Web pane pins: shown only while a custom app is the active pane. */
+      .tb-pin-group {
+        display: none;
+        align-items: center;
+        gap: 2px;
+        margin-left: 4px;
+        -webkit-app-region: no-drag;
+      }
+      .tb.is-custom .tb-pin-group {
+        display: flex;
+      }
+      .tb-pin-emoji {
+        font-size: 14px;
+        line-height: 1;
+      }
+      .tb-btn.is-active {
+        color: var(--accent);
+        background: rgba(var(--accent-rgb), 0.14);
+      }
+      .tb-pin-live {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip: rect(0 0 0 0);
+        white-space: nowrap;
+      }
+      .tb-pinbar {
+        display: none;
+        flex: 1 1 auto;
+        min-width: 120px;
+        align-items: center;
+        gap: 8px;
+        height: 28px;
+        padding: 0 4px 0 10px;
+        border: 1px solid rgba(var(--accent-rgb), 0.5);
+        border-radius: 6px;
+        background: rgba(var(--accent-rgb), 0.12);
+        color: var(--text);
+        font-size: 11px;
+        white-space: nowrap;
+        overflow: hidden;
+        -webkit-app-region: no-drag;
+      }
+      .tb.is-pinning .tb-url {
+        display: none;
+      }
+      .tb.is-pinning .tb-pinbar {
+        display: flex;
+      }
+      .tb-pinbar-label {
+        flex: 0 1 auto;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        color: var(--accent);
+      }
+      .tb-pinbar:not(.has-kind) .tb-pinbar-label,
+      .tb-pinbar-kind {
+        margin-right: auto;
+      }
+      .tb-pinbar-kind {
+        display: none;
+        flex: 0 0 auto;
+        margin-left: -3px;
+        color: var(--text-dim);
+      }
+      .tb-pinbar.has-kind .tb-pinbar-kind {
+        display: block;
+      }
+      .tb-pinbar-kind::before {
+        content: '\00b7\00a0';
+      }
+      [data-theme='light'] .tb-pinbar-label {
+        color: #15803d;
+      }
+      .tb-pinbar > svg,
+      .tb-pinbar kbd,
+      .tb-pinbar .tb-btn {
+        flex: 0 0 auto;
+      }
+      .tb-pinbar.has-label .tb-pinbar-prompt,
+      .tb-pinbar.has-label .tb-pinbar-prompt-short,
+      .tb-pinbar.has-label .tb-pinbar-hint {
+        display: none;
+      }
+      .tb-pinbar-prompt-short {
+        display: none;
+        flex: 0 1 auto;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .tb-pinbar-prompt,
+      .tb-pinbar-hint {
+        flex: 0 1 auto;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      @media (max-width: 520px) {
+        .tb-pinbar-hint {
+          display: none;
+        }
+      }
+      @media (max-width: 480px) {
+        .tb-pinbar.has-kind .tb-pinbar-kind {
+          display: none;
+        }
+        .tb-pinbar.has-kind .tb-pinbar-label {
+          margin-right: auto;
+        }
+      }
+      @media (max-width: 400px) {
+        .tb-pinbar kbd,
+        .tb-pinbar-prompt {
+          display: none;
+        }
+        .tb-pinbar:not(.has-label) .tb-pinbar-prompt-short {
+          display: block;
+        }
+        .tb-pinbar {
+          min-width: 142px;
+        }
+      }
+      .tb-pinbar kbd {
+        padding: 1px 5px;
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        background: var(--surface);
+        color: var(--text-dim);
+        font: inherit;
+        font-size: 10px;
+      }
+
       /* Hidden state — toolbar view is set invisible from main process, but keep
      a class for completeness. */
       .tb.is-hidden {
@@ -510,6 +645,79 @@
             <circle cx="12" cy="5" r="1" />
             <circle cx="12" cy="12" r="1" />
             <circle cx="12" cy="19" r="1" />
+          </svg>
+        </button>
+      </div>
+
+      <div class="tb-pin-live" id="tb-pin-live" role="status" aria-live="polite"></div>
+      <div class="tb-pinbar" id="tb-pinbar" role="status">
+        <svg
+          viewBox="0 0 24 24"
+          width="13"
+          height="13"
+          fill="none"
+          stroke="var(--accent)"
+          stroke-width="2.5"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <circle cx="12" cy="12" r="8" />
+          <line x1="12" y1="2" x2="12" y2="6" />
+          <line x1="12" y1="18" x2="12" y2="22" />
+          <line x1="2" y1="12" x2="6" y2="12" />
+          <line x1="18" y1="12" x2="22" y2="12" />
+        </svg>
+        <span class="tb-pinbar-prompt">Click or press Tab to choose what to pin</span
+        ><span class="tb-pinbar-prompt-short">Click to pin</span>
+        <span class="tb-pinbar-label" id="tb-pinbar-label" aria-live="off"></span
+        ><span class="tb-pinbar-kind" id="tb-pinbar-kind" aria-live="off"></span> <kbd>Esc</kbd
+        ><span class="tb-pinbar-hint" style="color: var(--text-dim)">to cancel</span>
+        <button
+          class="tb-btn"
+          id="tb-pinbar-cancel"
+          title="Cancel pinning"
+          aria-label="Cancel pinning"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.5"
+            stroke-linecap="round"
+          >
+            <line x1="6" y1="6" x2="18" y2="18" />
+            <line x1="18" y1="6" x2="6" y2="18" />
+          </svg>
+        </button>
+      </div>
+
+      <div class="tb-pin-group" id="tb-pin-group">
+        <button
+          class="tb-btn"
+          id="tb-pin"
+          title="Pin an element to Gator"
+          aria-label="Pin an element to Gator"
+        >
+          <span class="tb-pin-emoji" aria-hidden="true">&#x1F4CC;</span>
+        </button>
+        <button
+          class="tb-btn"
+          id="tb-pin-view"
+          title="Pin this view to Gator"
+          aria-label="Pin this view to Gator"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.5"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path
+              d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"
+            />
+            <circle cx="12" cy="12" r="2.5" />
           </svg>
         </button>
       </div>
@@ -833,6 +1041,51 @@
           ipcRenderer.send('toolbar:hard-reload');
         });
 
+        // ── Web pane pins ─────────────────────────────────────────────────────
+        const elBar = document.getElementById('tb');
+        const elPin = document.getElementById('tb-pin');
+        const elPinLabel = document.getElementById('tb-pinbar-label');
+        const elPinKind = document.getElementById('tb-pinbar-kind');
+        const elPinBar = document.getElementById('tb-pinbar');
+        elPin.addEventListener('click', () => ipcRenderer.send('toolbar:web-pin-start'));
+        document
+          .getElementById('tb-pin-view')
+          .addEventListener('click', () => ipcRenderer.send('toolbar:web-pin-view'));
+        document
+          .getElementById('tb-pinbar-cancel')
+          .addEventListener('click', () => ipcRenderer.send('toolbar:web-pin-cancel'));
+        const PIN_KEYS = new Set(['Tab', 'ArrowUp', 'ArrowDown', 'Enter']);
+        const elPinLive = document.getElementById('tb-pin-live');
+        let pinLiveTimer = null;
+        // Clear first so the same sentence twice in a row is announced again.
+        function announcePin(text) {
+          elPinLive.textContent = '';
+          clearTimeout(pinLiveTimer);
+          pinLiveTimer = setTimeout(() => {
+            elPinLive.textContent = text;
+          }, 60);
+        }
+        function renderPin(state) {
+          if (typeof state.pinAnnounce === 'string' && state.pinAnnounce)
+            announcePin(state.pinAnnounce);
+          if (typeof state.isCustomApp === 'boolean')
+            elBar.classList.toggle('is-custom', state.isCustomApp);
+          if (typeof state.pinMode === 'boolean') {
+            const wasPinning = elBar.classList.contains('is-pinning');
+            elBar.classList.toggle('is-pinning', state.pinMode);
+            elPin.classList.toggle('is-active', state.pinMode);
+            // The banner (and its Cancel button) hides when picking ends; keep keyboard focus on the Pin button.
+            if (wasPinning && !state.pinMode && document.hasFocus()) elPin.focus();
+          }
+          if (typeof state.pinLabel === 'string') {
+            elPinLabel.textContent = state.pinLabel;
+            elPinBar.classList.toggle('has-label', state.pinLabel.length > 0);
+            const kind = state.pinLabel && typeof state.pinKind === 'string' ? state.pinKind : '';
+            elPinKind.textContent = kind;
+            elPinBar.classList.toggle('has-kind', kind.length > 0);
+          }
+        }
+
         // ── Keyboard shortcuts ────────────────────────────────────────────────
         document.addEventListener('keydown', (e) => {
           const meta = e.ctrlKey || e.metaKey;
@@ -850,6 +1103,21 @@
             ipcRenderer.send('toolbar:forward');
           } else if (e.key === 'Escape' && elMenu.classList.contains('is-open')) {
             closeMenu();
+          } else if (e.key === 'Escape' && elBar.classList.contains('is-pinning')) {
+            ipcRenderer.send('toolbar:web-pin-cancel');
+          } else if (
+            elBar.classList.contains('is-pinning') &&
+            PIN_KEYS.has(e.key) &&
+            !(e.key === 'Enter' && e.target && e.target.id === 'tb-pinbar-cancel')
+          ) {
+            e.preventDefault();
+            ipcRenderer.send('toolbar:web-pin-key', {
+              key: e.key,
+              shift: e.shiftKey,
+              control: e.ctrlKey,
+              alt: e.altKey,
+              meta: e.metaKey,
+            });
           }
         });
 
@@ -858,6 +1126,7 @@
         // callback receives only the state payload.
         ipcRenderer.on('toolbar:state', (state) => {
           if (!state) return;
+          renderPin(state);
           if (typeof state.url === 'string') renderUrl(state.url);
           if (typeof state.app === 'string' || state.app === null) renderApp(state.app);
           if (state.nav) renderNavState(state.nav);
