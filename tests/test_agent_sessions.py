@@ -1,5 +1,6 @@
 import json
 import os
+import sqlite3
 import subprocess
 from datetime import datetime, timezone
 
@@ -612,7 +613,7 @@ def test_a_stopped_distro_keeps_the_last_wsl_sessions(monkeypatch, tmp_path):
 def test_an_unreadable_wsl_store_does_not_empty_the_index(monkeypatch, tmp_path):
     wsl_project(monkeypatch, tmp_path)
     ags.ensure_fresh(PROJECT)
-    monkeypatch.setattr(ags, "_walk", lambda unit: None)
+    monkeypatch.setattr(ags, "_walk", lambda unit, slugs=None: None)
     ags._SYNCED.clear()
     ags.refresh_index(PROJECT)
     assert [r["id"] for r in ags.wsl_sessions(PROJECT)[0]] == ["w1"]
@@ -676,7 +677,7 @@ def test_worktrees_share_one_walk_per_store(tmp_path, monkeypatch):
     homes = [home_for(tmp_path), ags.SourceHome("windows", tmp_path, "C:\\work\\app-wt")]
     walked = []
     real = ags._walk
-    monkeypatch.setattr(ags, "_walk", lambda unit: walked.append(unit.key) or real(unit))
+    monkeypatch.setattr(ags, "_walk", lambda unit, slugs=None: walked.append(unit.key) or real(unit, slugs))
     assert sorted(r["id"] for r in scan(homes=homes)) == ["main", "wt"]
     assert len(walked) == len(set(walked)) == 2  # claude and codex, once each however many worktrees
 
@@ -730,3 +731,153 @@ def test_find_session_refreshes_for_a_session_newer_than_the_index(tmp_path):
     put_claude(tmp_path, "c2", [claude_user("two")])
     assert find(tmp_path, "claude", "c2")["title"] == "two"
     assert find(tmp_path, "claude", "nope") is None
+
+
+def test_find_session_sees_a_transcript_written_after_the_last_refresh(tmp_path, monkeypatch):
+    monkeypatch.setattr(ags.generic_agent, "wsl_agents", lambda: (None, {}))
+    h = [home_for(tmp_path)]
+    p = put_claude(tmp_path, "s", [claude_user("question")], mtime=1_700_000_000)
+    ags.refresh_index(PROJECT, homes=h)
+    with open(p, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(claude_assistant("answer")) + "\n")
+    os.utime(p, (1_700_000_500, 1_700_000_500))
+    rec = ags.find_session(PROJECT, "claude", "s", homes=h)
+    assert rec["last_active_at"] == 1_700_000_500
+    assert rec["preview"][-1] == {"role": "assistant", "text": "answer"}
+
+
+def test_find_session_does_not_reread_an_unchanged_transcript(tmp_path, monkeypatch):
+    monkeypatch.setattr(ags.generic_agent, "wsl_agents", lambda: (None, {}))
+    h = [home_for(tmp_path)]
+    put_claude(tmp_path, "s", [claude_user("question")])
+    ags.refresh_index(PROJECT, homes=h)
+    monkeypatch.setattr(ags, "touch", lambda *a, **kw: pytest.fail("nothing changed on disk"))
+    assert ags.find_session(PROJECT, "claude", "s", homes=h)["id"] == "s"
+
+
+def test_find_session_never_stats_a_wsl_file(monkeypatch, tmp_path):
+    wsl_project(monkeypatch, tmp_path)
+    ags.ensure_fresh(PROJECT)
+    real = ags.os.stat
+
+    def stat(path, *a, **kw):
+        if "wsl-home" in str(path):
+            pytest.fail("a WSL file would start the distro")
+        return real(path, *a, **kw)
+
+    monkeypatch.setattr(ags.os, "stat", stat)
+    assert ags.find_session(PROJECT, "claude", "w1", homes=[])["id"] == "w1"
+
+
+def _scandirs(monkeypatch):
+    seen = []
+    real = ags.os.scandir
+
+    def scandir(path):
+        seen.append(str(path))
+        return real(path)
+
+    monkeypatch.setattr(ags.os, "scandir", scandir)
+    return seen
+
+
+def test_a_wsl_claude_walk_lists_only_this_projects_folders(monkeypatch, tmp_path):
+    wsl_project(monkeypatch, tmp_path)
+    wsl_home = tmp_path / "wsl-home"
+    put_claude(wsl_home, "o1", [{**claude_user("elsewhere"), "cwd": "/mnt/c/other"}], slug="-mnt-c-other")
+    seen = _scandirs(monkeypatch)
+    ags.ensure_fresh(PROJECT)
+    names = [os.path.basename(d) for d in seen]
+    assert "-mnt-c-work-app" in names and "-mnt-c-other" not in names
+    assert [r["id"] for r in ags.wsl_sessions(PROJECT)[0]] == ["w1"]
+
+
+def test_a_wsl_refresh_keeps_the_rows_of_folders_it_did_not_list(monkeypatch, tmp_path):
+    wsl_project(monkeypatch, tmp_path)
+    wsl_home = tmp_path / "wsl-home"
+    put_claude(wsl_home, "o1", [{**claude_user("elsewhere"), "cwd": "/mnt/c/other"}], slug="-mnt-c-other")
+    unit = ags._units([ags.SourceHome("wsl:Ubuntu", wsl_home, "/mnt/c/other")])[0]
+    ags._sync_unit(unit, ags.ah.Redactor([]))  # another project's refresh indexed it
+    ags.ensure_fresh(PROJECT)
+    assert len(ags.index.known(unit.key)) == 2
+    (wsl_home / ".claude" / "projects" / "-mnt-c-work-app" / "w1.jsonl").unlink()
+    ags._SYNCED.clear()
+    ags.refresh_index(PROJECT)
+    assert [os.path.basename(p) for p in ags.index.known(unit.key)] == ["o1.jsonl"]
+
+
+def test_only_the_agents_found_in_the_distro_are_read(monkeypatch, tmp_path):
+    wsl_project(monkeypatch, tmp_path)
+    seen = _scandirs(monkeypatch)
+    ags.ensure_fresh(PROJECT)
+    assert not [d for d in seen if "wsl-home" in d and ".codex" in d]  # no Codex in this distro
+    assert [d for d in seen if "wsl-home" in d and ".claude" in d]
+
+
+def test_a_windows_store_that_does_not_exist_is_empty(tmp_path):
+    p = put_claude(tmp_path, "c1", [claude_user("one")])
+    assert [r["id"] for r in scan(homes=[home_for(tmp_path)])] == ["c1"]
+    p.unlink()
+    (tmp_path / ".claude" / "projects" / "C--work-app").rmdir()
+    (tmp_path / ".claude" / "projects").rmdir()
+    assert scan(homes=[home_for(tmp_path)]) == []
+
+
+def test_a_windows_store_that_cannot_be_read_keeps_its_rows(tmp_path, monkeypatch):
+    put_claude(tmp_path, "c1", [claude_user("one")])
+    assert [r["id"] for r in scan(homes=[home_for(tmp_path)])] == ["c1"]
+    real = ags.os.scandir
+
+    def denied(path):
+        if str(path).endswith("projects"):
+            raise PermissionError(path)
+        return real(path)
+
+    monkeypatch.setattr(ags.os, "scandir", denied)
+    assert [r["id"] for r in scan(homes=[home_for(tmp_path)])] == ["c1"]
+
+
+def test_a_folder_that_cannot_be_listed_keeps_its_rows_while_the_others_update(tmp_path, monkeypatch):
+    put_claude(tmp_path, "c1", [claude_user("one")])
+    put_claude(tmp_path, "w1", [{**claude_user("wt"), "cwd": "C:\\work\\app-wt"}], slug="C--work-app-wt")
+    homes = [home_for(tmp_path), ags.SourceHome("windows", tmp_path, "C:\\work\\app-wt")]
+    assert sorted(r["id"] for r in scan(homes=homes)) == ["c1", "w1"]
+    real = ags.os.scandir
+
+    def denied(path):
+        if str(path).endswith("C--work-app"):
+            raise PermissionError(path)
+        return real(path)
+
+    monkeypatch.setattr(ags.os, "scandir", denied)
+    put_claude(tmp_path, "w2", [{**claude_user("wt2"), "cwd": "C:\\work\\app-wt"}], slug="C--work-app-wt")
+    assert sorted(r["id"] for r in scan(homes=homes)) == ["c1", "w1", "w2"]
+
+
+def test_a_unit_another_refresh_is_reading_is_left_alone(tmp_path):
+    put_claude(tmp_path, "c1", [claude_user("one")])
+    unit = ags._units([home_for(tmp_path)])[0]
+    lock = ags._UNIT_LOCKS.setdefault(unit.key, ags.threading.Lock())
+    with lock:
+        assert ags._sync_unit(unit, ags.ah.Redactor([])) is False
+    assert ags.index.known(unit.key) == {}
+    assert ags._sync_unit(unit, ags.ah.Redactor([])) is True
+    assert len(ags.index.known(unit.key)) == 1
+
+
+def test_a_failed_read_of_the_index_is_logged_not_silent(tmp_path, monkeypatch, caplog):
+    def broken(*a, **kw):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(ags.index, "rows", broken)
+    with caplog.at_level("WARNING"):
+        assert ags.scan_project(PROJECT, homes=[home_for(tmp_path)], agents=("claude",)) == []
+    assert "database is locked" in caplog.text
+
+
+def test_rows_of_other_folders_are_filtered_when_there_are_too_many_folders_for_sql(tmp_path):
+    put_claude(tmp_path, "c1", [claude_user("one")])
+    put_claude(tmp_path, "x1", [{**claude_user("elsewhere"), "cwd": "C:\\elsewhere"}], slug="C--elsewhere")
+    ags.refresh_index(PROJECT, homes=[home_for(tmp_path)])
+    homes = [home_for(tmp_path), *(ags.SourceHome("windows", tmp_path, f"C:\\n{i}") for i in range(ags.index._MAX_KEYS))]
+    assert [r["id"] for r in ags.scan_project(PROJECT, homes=homes, agents=("claude",))] == ["c1"]

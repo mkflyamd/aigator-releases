@@ -79,3 +79,44 @@ def test_a_busy_database_is_not_mistaken_for_a_corrupt_one(monkeypatch):
         index.known("u1")
     monkeypatch.setattr(index.sqlite3, "connect", real)
     assert index.known("u1") == {"a": (1, 10)}
+
+
+def test_a_failed_insert_does_not_delete_the_index():
+    index.apply([row("a")], [])
+    with pytest.raises(sqlite3.IntegrityError):
+        index.apply([{**row("b"), "title": None}], [])
+    assert index.known("u1") == {"a": (1, 10)}
+
+
+def test_only_a_damaged_file_or_another_schema_counts_as_corrupt():
+    for exc in (
+        sqlite3.IntegrityError("x"), sqlite3.ProgrammingError("x"), sqlite3.DataError("x"),
+        sqlite3.OperationalError("database is locked"),
+    ):
+        assert index._corrupt(exc) is False
+    for code in (sqlite3.SQLITE_CORRUPT, sqlite3.SQLITE_NOTADB):
+        exc = sqlite3.DatabaseError("damaged")
+        exc.sqlite_errorcode = code
+        assert index._corrupt(exc) is True
+    assert index._corrupt(index._WrongVersion("another schema")) is True
+
+
+def test_reading_an_existing_index_does_not_need_the_write_lock():
+    index.apply([row("a")], [])
+    writer = sqlite3.connect(index.INDEX_PATH)
+    writer.execute("BEGIN IMMEDIATE")
+    try:
+        assert index.known("u1") == {"a": (1, 10)}
+        assert [r["path"] for r in index.rows("windows", "claude", ["c:/work/app"])] == ["a"]
+        assert index.populated() == {"u1"}
+    finally:
+        writer.rollback()
+        writer.close()
+
+
+def test_deleted_conversation_text_is_overwritten():
+    con = index._open()
+    try:
+        assert con.execute("PRAGMA secure_delete").fetchone()[0] == 1
+    finally:
+        con.close()

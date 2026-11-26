@@ -3,7 +3,8 @@
 One row per transcript file, keyed by path with the mtime and size it was parsed
 at, so a refresh only re-parses files that changed and drops rows for files that
 are gone. Lives in ~/.gator in WAL mode; a corrupt file or a different schema
-version is deleted and rebuilt from the transcripts.
+version is deleted and rebuilt from the transcripts. It holds every project's
+sessions, previews included, so the file is kept with secure_delete on.
 """
 from __future__ import annotations
 
@@ -36,7 +37,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE INDEX IF NOT EXISTS sessions_unit ON sessions(unit);
 CREATE INDEX IF NOT EXISTS sessions_source_agent ON sessions(source, agent);
 """
-_LIST_COLUMNS = "path, home, source, session_id, cwd, cwd_key, title, branch, started_at, last_active_at"
+_LIST_COLUMNS = "path, home, source, session_id, cwd, cwd_key, title, branch, started_at, last_active_at, mtime_ns, size"
 _WRITE_LOCK = threading.Lock()
 _MAX_KEYS = 500  # SQLite caps bound parameters; past this the caller's own filter does the work
 
@@ -49,12 +50,15 @@ def _open() -> sqlite3.Connection:
     INDEX_PATH.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(INDEX_PATH, timeout=10)
     try:
-        if con.execute("PRAGMA user_version").fetchone()[0] not in (0, VERSION):
+        version = con.execute("PRAGMA user_version").fetchone()[0]
+        if version not in (0, VERSION):
             raise _WrongVersion("agent session index has another schema version")
         con.execute("PRAGMA journal_mode=WAL")
         con.execute("PRAGMA synchronous=NORMAL")
-        con.executescript(_SCHEMA)
-        con.execute(f"PRAGMA user_version={VERSION}")
+        con.execute("PRAGMA secure_delete=ON")
+        if version == 0:  # a new file; readers of an existing one never write
+            con.executescript(_SCHEMA)
+            con.execute(f"PRAGMA user_version={VERSION}")
         return con
     except BaseException:
         con.close()
@@ -67,8 +71,14 @@ def _discard() -> None:
             Path(f"{INDEX_PATH}{suffix}").unlink()
 
 
+_SQLITE_CORRUPT, _SQLITE_NOTADB = 11, 26
+
+
 def _corrupt(exc: sqlite3.Error) -> bool:
-    return isinstance(exc, sqlite3.DatabaseError) and not isinstance(exc, sqlite3.OperationalError)
+    """True only when the file itself is damaged or another schema, never for one bad row or a busy database."""
+    if isinstance(exc, _WrongVersion):
+        return True
+    return getattr(exc, "sqlite_errorcode", 0) & 0xFF in (_SQLITE_CORRUPT, _SQLITE_NOTADB)
 
 
 @contextlib.contextmanager

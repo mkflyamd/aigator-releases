@@ -8,6 +8,7 @@ OpenCode keep sessions in SQLite databases and are read from those directly.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -22,6 +23,8 @@ import agent_handoff as ah
 import agent_session_index as index
 import agent_session_stores
 import generic_agent
+
+_log = logging.getLogger(__name__)
 
 HEAD_BYTES = 256 * 1024
 TAIL_BYTES = 256 * 1024
@@ -442,38 +445,63 @@ def _units(homes: list[SourceHome]) -> list[Unit]:
     return list(dict.fromkeys(units))
 
 
-def _walk(unit: Unit) -> dict[str, os.stat_result] | None:
-    """{path: stat} of the unit's transcript files, or None when its folder cannot be read."""
-    files: dict[str, os.stat_result] = {}
-    if unit.kind == "claude":
-        try:
-            dirs = [d.path for d in os.scandir(unit.root) if d.is_dir()]
-        except OSError:
-            return None
-        for d in dirs:
-            try:
-                entries = list(os.scandir(d))
-            except OSError:
-                continue
-            for e in entries:
-                if e.name.endswith(".jsonl"):
-                    try:
-                        if e.is_file():
-                            files[e.path] = e.stat()
-                    except OSError:
-                        continue  # vanished between scandir and stat
-        return files
-    if not unit.root.is_dir():
+def _slug(cwd: str) -> str:
+    """The name Claude Code gives a folder's directory under .claude/projects."""
+    if cwd.startswith("\\\\?\\"):
+        cwd = cwd[4:]
+    return re.sub(r"[^A-Za-z0-9]", "-", cwd).lower()
+
+
+def _entries(path: str) -> list[os.DirEntry]:
+    return list(os.scandir(path))
+
+
+def _walk(unit: Unit, slugs: frozenset[str] | None = None) -> tuple[dict[str, os.stat_result], set[str]] | None:
+    """({path: stat} of the unit's transcript files, folders that could not be read), or
+    None when the unit cannot be read at all. A Windows store that does not exist is
+    empty; a WSL one that cannot be reached is not known to be. With slugs, only those
+    Claude project folders are listed."""
+    try:
+        top = _entries(str(unit.root))
+    except FileNotFoundError:
+        return ({}, set()) if unit.source == "windows" else None
+    except OSError:
         return None
-    for dirpath, _dirs, names in os.walk(unit.root):
-        for name in names:
-            if name.startswith("rollout-") and name.endswith(".jsonl"):
-                p = os.path.join(dirpath, name)
-                try:
-                    files[p] = os.stat(p)
-                except OSError:
-                    continue
-    return files
+    claude = unit.kind == "claude"
+    files: dict[str, os.stat_result] = {}
+    unread: set[str] = set()
+    stack = [(top, 0)]
+    while stack:
+        entries, depth = stack.pop()
+        for e in entries:
+            try:
+                if e.name.endswith(".jsonl") and (depth > 0 if claude else e.name.startswith("rollout-")):
+                    if e.is_file():
+                        files[e.path] = e.stat()
+                elif e.is_dir() and not (claude and (depth > 0 or (slugs is not None and e.name.lower() not in slugs))):
+                    try:
+                        stack.append((_entries(e.path), depth + 1))
+                    except FileNotFoundError:
+                        pass
+                    except OSError:
+                        unread.add(e.path)
+            except OSError:
+                continue  # vanished between scandir and stat
+    return files, unread
+
+
+def _covered(path: str, unread: set[str], slugs: frozenset[str] | None, claude: bool) -> bool:
+    """Whether a walk looked at the folder this file is in, so its absence means it is gone."""
+    d = os.path.dirname(path)
+    if claude and slugs is not None and os.path.basename(d).lower() not in slugs:
+        return False
+    while True:
+        if d in unread:
+            return False
+        parent = os.path.dirname(d)
+        if parent == d:
+            return True
+        d = parent
 
 
 def _transcript_messages(agent: str, path: str, size: int) -> list[tuple[str, str]]:
@@ -536,48 +564,69 @@ def _wsl_key(repo_path: str) -> str:
     return f"wsl-project|{repo_path}"
 
 
-def _sync_unit(unit: Unit, red) -> None:
+_UNIT_LOCKS: dict[str, threading.Lock] = {}
+
+
+def _sync_unit(unit: Unit, red, slugs: frozenset[str] | None = None) -> bool:
     """Bring one unit's rows up to date: parse only new or changed files and drop the
-    rows of files that are gone."""
-    files = _walk(unit)
-    if files is None:
-        if unit.source != "windows":
-            return  # an unreadable WSL share is a stopped distro, not an empty store
-        files = {}
+    rows of files that are gone. A unit that cannot be read, or that another refresh is
+    already reading, is left as it is. Returns False when it was left because of that
+    other refresh."""
+    lock = _UNIT_LOCKS.setdefault(unit.key, threading.Lock())
+    if not lock.acquire(blocking=False):
+        return False
     try:
-        known = index.known(unit.key)
-        gone = [p for p in known if p not in files]
-        batch: list[dict] = []
-        for path, st in sorted(files.items(), key=lambda f: f[1].st_mtime_ns, reverse=True):
-            if known.get(path) == (st.st_mtime_ns, st.st_size):
-                continue
-            row = _index_row(unit, path, st, red)
-            if row:
-                batch.append(row)
-            if len(batch) >= _SYNC_BATCH:
-                index.apply(batch, [])
-                batch = []
-        if batch or gone:
-            index.apply(batch, gone)
-    except sqlite3.Error:
-        _SYNCED.clear()  # the index may have been rebuilt from scratch; check every unit again
-        return
-    _SYNCED[unit.key] = time.monotonic()
+        walked = _walk(unit, slugs)
+        if walked is None:
+            return True
+        files, unread = walked
+        try:
+            known = index.known(unit.key)
+            claude = unit.kind == "claude"
+            gone = [p for p in known if p not in files and _covered(p, unread, slugs, claude)]
+            batch: list[dict] = []
+            for path, st in sorted(files.items(), key=lambda f: f[1].st_mtime_ns, reverse=True):
+                if known.get(path) == (st.st_mtime_ns, st.st_size):
+                    continue
+                row = _index_row(unit, path, st, red)
+                if row:
+                    batch.append(row)
+                if len(batch) >= _SYNC_BATCH:
+                    index.apply(batch, [])
+                    batch = []
+            if batch or gone:
+                index.apply(batch, gone)
+        except sqlite3.Error as exc:
+            _log.warning("History index could not be updated: %s", exc)
+            _SYNCED.clear()  # the index may have been rebuilt from scratch; check every unit again
+            return True
+        _SYNCED[unit.key] = time.monotonic()
+        return True
+    finally:
+        lock.release()
 
 
 def _sync_wsl(repo_path: str, red) -> None:
+    """Read this project's folders of the WSL stores. The distro was running a moment
+    ago; each Claude store is listed only for the project's own folders so the read is
+    short and does not scan every project in the distro."""
     try:
-        homes, _agents = wsl_homes(repo_path)
+        homes, agents = wsl_homes(repo_path)
     except WslStopped:
-        homes = []
+        homes, agents = [], ()
+    slugs = frozenset(_slug(sh.cwd) for sh in homes)
+    done = True
     for unit in _units(homes):
-        _sync_unit(unit, red)
-    _SYNCED[_wsl_key(repo_path)] = time.monotonic()
+        if unit.kind in agents:
+            done = _sync_unit(unit, red, slugs) and done
+    if done:
+        _SYNCED[_wsl_key(repo_path)] = time.monotonic()
 
 
 def refresh_index(repo_path: str, *, homes=None, only_stale: bool = False, include_wsl: bool = True) -> None:
     """Re-read the transcript stores behind a project into the index. WSL stores are
-    read only for the project's own folders and only while the distro is running."""
+    read only while the distro is running, and only for the agents found in it; a WSL
+    Claude store is listed for the project's own folders only."""
     own = homes is None
     red = ah.Redactor(ah._configured_api_keys())
     for unit in _units(windows_homes(repo_path) if own else homes):
@@ -617,11 +666,11 @@ def ensure_fresh(repo_path: str) -> None:
         )
 
 
-def touch(path) -> None:
+def touch(path, units: list[Unit] | None = None) -> None:
     """Re-index one Windows-side transcript now instead of waiting for the next refresh."""
     p = Path(path)
-    for unit in _home_units("windows", Path.home()):
-        if unit.root not in p.parents or not p.name.endswith(".jsonl"):
+    for unit in units or _home_units("windows", Path.home()):
+        if unit.source != "windows" or unit.root not in p.parents or not p.name.endswith(".jsonl"):
             continue
         try:
             st = p.stat()
@@ -645,12 +694,15 @@ def _indexed(homes: list[SourceHome], agent: str, *, session_id: str | None = No
             linux = {_norm_dir(c): sh for sh in group if (c := wsl_cwd(sh.cwd, ""))}
         try:
             rows = index.rows(source, agent, [*here, *linux], session_id=session_id, with_preview=with_preview)
-        except sqlite3.Error:
+        except sqlite3.Error as exc:
+            _log.warning("History index could not be read: %s", exc)
             _SYNCED.clear()
             continue
         ledgers: dict[str, dict] = {}
         for r in rows:
             sh = here.get(r["cwd_key"]) or linux.get(r["cwd_key"])
+            if sh is None:
+                continue
             rec_source = _codex_source(sh, r["cwd"]) if agent == "codex" else source
             if not rec_source:
                 continue
@@ -667,6 +719,7 @@ def _indexed(homes: list[SourceHome], agent: str, *, session_id: str | None = No
                 "id": r["session_id"], "agent": agent, "title": r["title"], "branch": r["branch"],
                 "started_at": r["started_at"], "last_active_at": r["last_active_at"], "state": "done",
                 "path": r["path"], "cwd": r["cwd"], "source": rec_source,
+                "indexed_source": r["source"], "mtime_ns": r["mtime_ns"], "size": r["size"],
             }
             if with_preview:
                 rec["preview"] = json.loads(r["preview"])
@@ -694,9 +747,27 @@ def _lookup(agent: str, session_id: str, homes: list[SourceHome]) -> list[dict]:
     return _indexed(homes, agent, session_id=session_id, with_preview=True)
 
 
+def _changed_on_disk(rec: dict) -> bool:
+    """Whether a Windows-side transcript has been written to since it was indexed.
+    WSL files are not looked at: that would start the distro."""
+    if rec["indexed_source"] != "windows":
+        return False
+    try:
+        st = os.stat(rec["path"])
+    except OSError:
+        return True
+    return (st.st_mtime_ns, st.st_size) != (rec["mtime_ns"], rec["size"])
+
+
 def find_session(repo_path: str, agent: str, session_id: str, *, homes=None) -> dict | None:
+    """One session of this project, current as of now: a transcript changed since the
+    last refresh is re-indexed first, so callers that run while nobody is viewing
+    History do not see an old last_active_at."""
     homes = windows_homes(repo_path) if homes is None else homes
     found = _lookup(agent, session_id, [*homes, *_wsl_query_homes(repo_path)])
+    if found and agent not in _SCANNERS and _changed_on_disk(found[0]):
+        touch(found[0]["path"], _units(homes))
+        found = _lookup(agent, session_id, [*homes, *_wsl_query_homes(repo_path)])
     if not found and agent not in _SCANNERS:
         refresh_index(repo_path, homes=homes)  # the session is newer than the last refresh
         found = _lookup(agent, session_id, homes)
