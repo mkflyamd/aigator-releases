@@ -89,6 +89,7 @@ def test_a_viewer_left_running_after_its_launcher_exits_with_an_error_is_reporte
 def test_a_server_stopped_at_its_time_limit_keeps_its_port_facts_and_is_gone(client, csrf, tmp_path):
     run_id, record = _run(client, csrf, tmp_path, "serves_viewer", run_ms=2500)
     assert record["state"] == "timed_out"
+    assert record["facts"]["urls_seen"], record
     url = record["facts"]["urls_seen"][0]
     port = int(url.rsplit(":", 1)[1].strip("/"))
     assert port in record["facts"]["ports_opened"]
@@ -147,7 +148,7 @@ def test_the_urls_a_run_prints_are_known_while_it_is_still_running(client, csrf,
         seen[:] = (record.get("facts") or {}).get("urls_seen") or []
         return bool(seen)
 
-    assert fakes.wait_for(printed), "the URL never showed up while the run was going"
+    assert fakes.wait_for(printed), f"the URL never showed up while the run was going: {get_supervisor().get(req.id, 'tab-1')}"
     assert get_supervisor().get(req.id, "tab-1")["state"] == "running"
     told = shell_tools._tool_host_command_result(req.id, "tab-1")
     assert told["state"] == "running" and told["facts"]["urls_seen"] == seen

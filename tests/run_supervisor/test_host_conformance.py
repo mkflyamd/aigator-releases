@@ -318,7 +318,9 @@ def test_a_backend_that_died_mid_run_reports_interrupted_after_restart(client, c
     store_path = tmp_path / "restart.db"
     reset_supervisor(RunSupervisor(RunStore(store_path)))
     req = _start(client, csrf, tmp_path, "slow")
-    assert fakes.wait_for(lambda: _status(client, req.id)["run"]["state"] == "running")
+    # Running with its process recorded: a record written before the process starts would be rewritten over the
+    # restart's interrupted mark.
+    assert fakes.wait_for(lambda: get_supervisor().get(req.id, "tab-1")["owner_pid"])
     # A new backend process over the same store: it never saw the run end.
     restarted = RunSupervisor(RunStore(store_path))
     assert req.id in restarted.reconcile()
