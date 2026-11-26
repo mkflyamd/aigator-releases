@@ -984,6 +984,7 @@ async function _genAgentStart(tabId, agent, projectId, repoPath, opts) {
               rows: dims.rows,
               handoff_id: opts.handoffId,
               resume_id: opts.resumeId,
+              allow_duplicate: !!opts.allowDuplicate,
             }),
           })
         : await fetch('/api/generic-agent/terminal', {
@@ -998,15 +999,24 @@ async function _genAgentStart(tabId, agent, projectId, repoPath, opts) {
               rows: dims.rows,
               handoff_id: opts.handoffId,
               resume_id: opts.resumeId,
+              allow_duplicate: !!opts.allowDuplicate,
             }),
           });
     if (!resp.ok) {
       let detail = 'Could not start ' + agent;
+      let code = null;
       try {
         const d = await resp.json();
-        if (d && d.detail) detail = d.detail;
+        if (d && d.detail && typeof d.detail === 'object') {
+          code = d.detail.code || null;
+          detail = d.detail.message || detail;
+        } else if (d && d.detail) {
+          detail = d.detail;
+        }
       } catch (_) {}
-      throw new Error(detail);
+      const failure = new Error(detail);
+      failure.code = code;
+      throw failure;
     }
     const data = await resp.json();
     // Staleness guard: bail without attaching if the user has since switched
@@ -1070,6 +1080,11 @@ async function _genAgentStart(tabId, agent, projectId, repoPath, opts) {
       // error text inside a permanently stuck spinner instead of a clickable
       // retry. Same bug fixed in _ocStartOrResume.
       current._starting = false;
+      const sessionLive = !!(
+        err &&
+        err.code === 'session_live' &&
+        typeof opts.onSessionLive === 'function'
+      );
       // Only fall back to the full-pane prompt if there are no other live
       // sessions - if a "+" spawn failed, keep the existing tabs and surface
       // the error rather than blowing away the working terminals.
@@ -1079,14 +1094,15 @@ async function _genAgentStart(tabId, agent, projectId, repoPath, opts) {
           stateAgent,
           projectId,
           repoPath,
-          (err && err.message) || 'Could not start ' + agent,
+          sessionLive ? '' : (err && err.message) || 'Could not start ' + agent,
         );
       } else {
-        if (typeof addMessage === 'function')
+        if (typeof addMessage === 'function' && !sessionLive)
           addMessage('assistant', '⚠️ ' + ((err && err.message) || 'Could not start ' + agent));
         const active = _genAgentActiveSess(current);
         if (active) _genAgentActivateSession(tabId, active.ptySessionId);
       }
+      if (sessionLive) opts.onSessionLive(err);
     }
   } finally {
     if (state._starting) state._starting = false;
