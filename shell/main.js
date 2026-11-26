@@ -13,6 +13,9 @@ const { applyMediaPermissions } = require('./media-permissions');
 const { applyBrowserPermissions, createPermissionPrompt } = require('./browser-permissions');
 const { applyNavigationPolicy, setToolbarAttacher, _hostMatches } = require('./navigation-policy');
 const addressInput = require('./address-input');
+const paneTrace = require('./pane-trace').createPaneTrace({
+  enabled: process.env.AIGATOR_PANE_TRACE === '1',
+});
 const { resolveAtlassianUrls } = require('./atlassian-urls');
 const { createHudRecorder } = require('./hud_recorder');
 const path = require('path');
@@ -4293,6 +4296,7 @@ function layout() {
 
 function _layoutNow() {
   if (!win) return;
+  paneTrace.mark('layout', { active: activeExternalApp });
   if (_webPinPicking && _webPinPicking !== activeExternalApp) _webPin.stop();
   const [w, h] = win.getContentSize();
   const activeView = viewForApp(activeExternalApp);
@@ -4593,6 +4597,7 @@ function createCustomApp(appConfig) {
 }
 
 ipcMain.handle('external-pane:show', async (_e, appName) => {
+  paneTrace.mark('ipc-show', { app: appName });
   let view = viewForApp(appName);
   if (!view && (appName === 'jira' || appName === 'confluence'))
     view = await ensureAtlassianView(appName);
@@ -4632,7 +4637,19 @@ ipcMain.handle('external-pane:show', async (_e, appName) => {
     activeExternalApp = appName;
   }
   layout();
+  if (paneTrace.enabled && view.webContents && !view.webContents.isDestroyed()) {
+    const traceToken = paneTrace.token();
+    view.webContents
+      .executeJavaScript(
+        'new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))',
+      )
+      .then(() => paneTrace.markFrame(traceToken))
+      .catch(() => {});
+  }
   return true;
+});
+ipcMain.on('pane-trace:click', (_e, app, t) => {
+  if (typeof app === 'string' && Number.isFinite(t)) paneTrace.click(app.slice(0, 64), t);
 });
 ipcMain.handle('search-engine:get', () => ({
   engine: _engineStore.get(),
@@ -4663,6 +4680,7 @@ ipcMain.handle('github-pane:refresh', async (_e, baseUrl) => {
   }
 });
 ipcMain.handle('external-pane:hide', (_e, appName) => {
+  paneTrace.mark('ipc-hide', { app: appName, noop: activeExternalApp !== appName });
   if (activeExternalApp === appName) {
     activeExternalApp = null;
     layout();
@@ -4719,6 +4737,7 @@ ipcMain.handle('external-pane:get-width', () => extTileWidth);
 // goes through the generic external-pane:show handler (see preload.js),
 // which already knows how to resolve Slack's view and home URL.
 ipcMain.handle('slack-pane:hide', () => {
+  paneTrace.mark('ipc-hide', { app: 'slack', noop: activeExternalApp !== 'slack' });
   if (activeExternalApp === 'slack') {
     activeExternalApp = null;
     layout();

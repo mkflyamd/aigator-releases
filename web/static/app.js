@@ -1610,6 +1610,7 @@ function _setPromptDisabled(disabled) {
 function selectSkill(id) {
   const skill = SKILL_MAP[id];
   if (!skill) return;
+  window.gatorShell?.paneTraceClick?.(id);
 
   // Coming-soon skills show inline panel instead of acting
   if (_COMING_SOON_SKILLS[id]) {
