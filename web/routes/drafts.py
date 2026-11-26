@@ -12,6 +12,7 @@ so email.py contains only email-read/inbox/send routes.
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
 import re
 from functools import partial
@@ -21,6 +22,7 @@ _eid = lambda mid: quote(mid, safe="")  # encode Graph resource ID for path segm
 from fastapi import APIRouter, Depends, HTTPException
 
 from security import verify_csrf
+from skills._sharing import drafts as _sharing_drafts
 
 router = APIRouter()
 _log = logging.getLogger(__name__)
@@ -440,6 +442,7 @@ async def approve_draft(draft_id: str, body: dict = None):
             status_code=404,
             detail="Draft not found or expired. Please ask Gator to re-draft.",
         )
+    original_params = copy.deepcopy(draft["params"]) if draft.get("share_digest") else None
     # Apply user edits if provided. email-reply/email-forward store their
     # editable text under "body"/"comment" (not "message"), so the edit must
     # land in the same key the draft type branch below reads.
@@ -468,8 +471,15 @@ async def approve_draft(draft_id: str, body: dict = None):
         if dtype == "email-send":
             p.update(_send_subject_edit(body))
             _fold_send_recipients(p)
+            if original_params is not None and _sharing_drafts.content_digest(p) != draft["share_digest"]:
+                p.clear()
+                p.update(original_params)
+                raise HTTPException(
+                    status_code=409,
+                    detail="This message was approved as shown and can't be edited here. Share the skill again to change it.",
+                )
 
-        # â”€â”€ Email â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # â”€â”€ Emailâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         if dtype == "email-reply":
             from skills._m365.helpers import get_graph_client
 
