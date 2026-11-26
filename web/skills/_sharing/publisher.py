@@ -129,21 +129,24 @@ def _fixed_folder(entry: dict, skill_id: str) -> dict | None:
     return None
 
 
-def _vet_root(provider, skill_id: str, root: dict | None, author: str, audience_ack: bool) -> tuple[dict, dict]:
+def _require_audience_ack(audience: dict, audience_ack: bool) -> None:
+    if audience["kind"] != "private" and not audience_ack:
+        raise ShareError(
+            "audience_unacknowledged",
+            f"{audience['name']} can already see this folder. Confirm who it is shared with before saving the skill here.",
+        )
+
+
+def _vet_root(provider, skill_id: str, root: dict | None, audience_ack: bool) -> tuple[dict, dict]:
     """Check the chosen folder (or the default) before anything is written. Returns (location, audience)."""
     if root:
         location = provider.describe_folder(root["drive_id"], root["folder_id"])
-        audience = provider.audience(location["drive_id"], location["folder_id"], location["name"])
-        if audience["kind"] != "private" and not audience_ack:
-            raise ShareError(
-                "audience_unacknowledged",
-                "Other people can already see this folder. Confirm who it is shared with before saving the skill here.",
-            )
     else:
         default = provider.default_root()
         location = provider.describe_folder(default["drive_id"], default["folder_id"])
-        audience = {"kind": "private", "name": "Only you", "approx_count": None}
-    existing = destinations.existing_skill(provider, location, skill_id, author)
+    audience = provider.audience(location["drive_id"], location["folder_id"], location["name"])
+    _require_audience_ack(audience, audience_ack)
+    existing = destinations.existing_skill(provider, location, skill_id)
     if existing and not existing["yours"]:
         raise ShareError(
             "not_yours",
@@ -183,9 +186,18 @@ def publish(
     root: dict | None = None,
     people: Sequence[str] = (),
     audience_ack: bool = False,
+    inventory_digest: str | None = None,
 ) -> dict:
     with _publish_lock(skill_id):
-        return _publish(provider, skill_id, author=author, root=root, people=people, audience_ack=audience_ack)
+        return _publish(
+            provider,
+            skill_id,
+            author=author,
+            root=root,
+            people=people,
+            audience_ack=audience_ack,
+            inventory_digest=inventory_digest,
+        )
 
 
 def _publish(
@@ -196,26 +208,43 @@ def _publish(
     root: dict | None,
     people: Sequence[str],
     audience_ack: bool,
+    inventory_digest: str | None,
 ) -> dict:
     entry, files = _mine_skill(skill_id)
     digest = files_digest(files)
+    if inventory_digest is not None and inventory_digest != digest:
+        raise ShareError(
+            "content_changed",
+            "The skill's files changed since you reviewed the list. Review the files again before sharing.",
+        )
+    my_id = provider.my_user_id()
+    if not my_id:
+        raise ShareError("forbidden", "Could not confirm who you are in Microsoft 365, so nothing was shared.")
     folder = _fixed_folder(entry, skill_id)
     location = audience = None
     relinked = False
     if folder:
         try:
             saved_path = provider.describe_folder(folder["drive_id"], folder["folder_id"])["path"]
+            audience = provider.audience(folder["drive_id"], folder["folder_id"], skill_id)
+            _require_audience_ack(audience, audience_ack)
         except ShareError as err:
-            if err.code == "not_found":
-                folder, relinked = None, True
+            if err.code != "not_found":
+                raise
+            folder, relinked = None, True
             saved_path = [skill_id]
     if not folder:
-        location, audience = _vet_root(provider, skill_id, root, author, audience_ack)
+        location, audience = _vet_root(provider, skill_id, root, audience_ack)
         folder = provider.child_folder(location, skill_id)
         saved_path = [*location["path"], skill_id]
 
     current = provider.read_json(folder, "skill.json")
     doc, etag = (checked_doc(current[0]), current[1]) if current else (None, "")
+    if doc is not None and doc.get("author_id") != my_id:
+        raise ShareError(
+            "not_yours",
+            f'A skill named "{skill_id}" by {doc.get("author") or "someone else"} is already in that folder.',
+        )
 
     if doc is not None and _latest_digest(doc) == digest:
         version, reused = doc["latest"], True
@@ -236,6 +265,7 @@ def _publish(
                 "title": manifest["title"],
                 "description": manifest["description"],
                 "author": author,
+                "author_id": my_id,
                 "latest": version,
                 "versions": [
                     *(doc["versions"] if doc else []),
@@ -281,3 +311,14 @@ def _publish(
         "audience": audience,
         "relinked": relinked,
     }
+
+
+def inventory(skill_id: str) -> dict:
+    """The exact files that publishing this Mine skill would upload, and what is left out."""
+    entry = skill_state.get_entry(skill_id)
+    if not entry or entry.get("tier") != "Mine" or entry.get("id") != skill_id:
+        raise ShareError("not_mine", "Only skills you created can be shared.")
+    skill_dir = installer.INSTALLED_SKILLS_DIR / "mine" / skill_id
+    if not skill_dir.is_dir():
+        raise ShareError("not_found", "The skill's files could not be found.")
+    return bundle.inventory(skill_dir)

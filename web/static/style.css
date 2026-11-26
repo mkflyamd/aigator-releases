@@ -7006,6 +7006,12 @@ button[data-default-action]:focus:not(:disabled)::after {
   padding-right: 10px;
 }
 
+.gcc-locked-body {
+  margin-top: 6px;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
 .gcc-fields {
   display: flex;
   flex-direction: column;
@@ -24441,4 +24447,14 @@ body.tab-fullscreen {
 .confirm-diagram .arrowMarkerPath {
   fill: var(--text-muted) !important;
   stroke: var(--text-muted) !important;
+}
+.ss-files {
+  margin: 0 0 10px;
+  padding-left: 18px;
+  max-height: 160px;
+  overflow-y: auto;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border2) transparent;
 }

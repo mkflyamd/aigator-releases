@@ -658,6 +658,12 @@
     return { code: code, text: shareErrorText(out.resp, out.body) };
   }
 
+  function sizeText(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return Math.round(bytes / 1024) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  }
+
   function openShareModal(skillId, deps) {
     var published = false;
     var S = {
@@ -675,8 +681,9 @@
       preview: null,
       previewing: false,
       previewError: '',
-      draft: null,
-      maybeSent: false,
+      inventory: null,
+      loadingInventory: false,
+      inventoryError: '',
       result: null,
       publishing: false,
       error: null,
@@ -1391,17 +1398,18 @@
       finish();
     }
 
-    // ── Step 2: share and send ─────────────────────────────────────────────
+    // ── Step 2: share and review email ─────────────────────────────────────────────
     //
     // One screen. It shows everyone who gets the email and the whole message
-    // before anything happens. The one primary button is the approval: it saves
-    // the skill, gives access, drafts the email and approves that draft in a
-    // single click. Nothing is written to OneDrive until that click or Copy link.
+    // before anything happens. The one primary button saves the skill, gives
+    // access and drafts the email, then hands the draft to the standard review
+    // card, where approving sends it. Nothing is written to OneDrive until that
+    // click or Copy link.
 
     var NOTE_MAX = 1000;
     var PREVIEW_ERROR = 'Could not load the message. Try again.';
+    var INVENTORY_ERROR = 'Could not list the files. Try again.';
     var UNSENT_ACCESS_GIVEN = 'Access was given; email not sent.';
-    var MAYBE_SENT = 'May have been sent. Check Sent Items.';
     var sh = {};
 
     function shown(p) {
@@ -1431,11 +1439,11 @@
     }
 
     function canAct() {
-      return !!S.preview && !S.publishing;
+      return !!S.preview && !!S.inventory && !S.publishing;
     }
 
     function canSend() {
-      return canAct() && !S.maybeSent && sh.field.people().length > 0;
+      return canAct() && sh.field.people().length > 0;
     }
 
     function updateButtons() {
@@ -1499,6 +1507,45 @@
       });
     }
 
+    function fillInventory() {
+      if (!sh.send || shell.closed) return;
+      _clear(sh.files);
+      sh.filesError.textContent = S.inventoryError;
+      sh.filesError.hidden = !S.inventoryError;
+      sh.filesRetry.hidden = !S.inventoryError;
+      var inv = S.inventory;
+      sh.filesLabel.hidden = !inv;
+      if (inv) {
+        sh.filesLabel.textContent =
+          'Files that will be shared (' + inv.files.length + ', ' + sizeText(inv.total_bytes) + ')';
+        inv.files.forEach(function (f) {
+          sh.files.appendChild(_el('li', '', f.path + ' (' + sizeText(f.size) + ')'));
+        });
+        inv.skipped.forEach(function (f) {
+          sh.files.appendChild(_el('li', 'ss-hint', f.path + ': left out (' + f.reason + ')'));
+        });
+      }
+      sh.files.hidden = !inv;
+      updateButtons();
+    }
+
+    function loadInventory() {
+      if (S.inventory || S.loadingInventory) return;
+      S.loadingInventory = true;
+      S.inventoryError = '';
+      get('/api/skills/share/inventory?skill_id=' + encodeURIComponent(skillId)).then(function (r) {
+        S.loadingInventory = false;
+        if (shell.closed) return;
+        var b = r.body || {};
+        if (!ok(r) || !Array.isArray(b.files) || !Array.isArray(b.skipped) || !b.inventory_digest) {
+          S.inventoryError = shareErrorText(r.resp, r.body, INVENTORY_ERROR);
+        } else {
+          S.inventory = b;
+        }
+        fillInventory();
+      });
+    }
+
     function showFailure(info) {
       _clear(sh.errors);
       if (!info) return;
@@ -1551,7 +1598,7 @@
       S.result = res;
       rememberFolder(res);
       fillPreview();
-      sh.linkText.textContent = res.link || 'Added when you send';
+      sh.linkText.textContent = res.link || 'Added when you share';
       _clear(sh.saved);
       var entry = selectedEntry();
       var where =
@@ -1589,6 +1636,7 @@
         }),
         root: root,
         audience_ack: !!S.ack,
+        inventory_digest: S.inventory ? S.inventory.inventory_digest : '',
       });
       if (ok(out)) published = true;
       if (shell.closed) {
@@ -1597,6 +1645,10 @@
       }
       if (!ok(out)) {
         S.error = _errorInfo(out);
+        if (S.error.code === 'content_changed') {
+          S.inventory = null;
+          loadInventory();
+        }
         return null;
       }
       S.error = null;
@@ -1675,7 +1727,7 @@
       var row = _el('div', 'ss-stop-actions');
       var buttons = [];
       if (given.length && notGiven.length) {
-        var remove = _button('Remove ' + notGivenText + ' and send');
+        var remove = _button('Remove ' + notGivenText + ' and continue');
         remove.addEventListener('click', function () {
           if (S.publishing) return;
           notGiven.forEach(function (p) {
@@ -1685,7 +1737,7 @@
         });
         buttons.push(remove);
       }
-      var anyway = _button('Send anyway');
+      var anyway = _button('Continue anyway');
       anyway.addEventListener('click', function () {
         onShareAndSend(true);
       });
@@ -1699,28 +1751,15 @@
       sh.stop.appendChild(box);
     }
 
-    // A draft is reused only while nothing it was made from has changed.
-    function draftKey(people, res) {
-      return JSON.stringify([
-        people
-          .map(function (p) {
-            return p.email;
-          })
-          .sort(),
-        noteText(),
-        res.message || '',
-      ]);
-    }
-
-    function draftIdOf(body) {
+    function cardOf(body) {
       var first = body && Array.isArray(body.drafts) ? body.drafts[0] : null;
-      var id = first && first.data && first.data.draft_id;
-      return typeof id === 'string' ? id : '';
+      var data = first && first.data;
+      return data && typeof data.draft_id === 'string' && data.draft_id ? data : null;
     }
 
     // The whole send, in order: save and give access, stop if anyone could not
-    // be given access, draft the email, approve it. `sendAnyway` carries on past
-    // that stop for the people shown.
+    // be given access, draft the email and hand it to the standard review card
+    // for approval. `sendAnyway` carries on past that stop for the people shown.
     async function onShareAndSend(sendAnyway) {
       if (!canSend() || commitTyped()) return;
       var people = sh.field.people();
@@ -1743,59 +1782,32 @@
         return;
       }
 
-      var key = draftKey(people, res);
-      var id = S.draft && S.draft.key === key ? S.draft.id : '';
-      if (!id) {
-        sh.status.textContent = 'Preparing the email...';
-        var made = await post('/api/skills/share/draft', {
-          skill_id: skillId,
-          channel: 'email',
-          people: people.map(function (p) {
-            return p.name ? { name: p.name, email: p.email } : { email: p.email };
-          }),
-          message: res.message || '',
-          message_html: res.message_html || '',
-          note: noteText(),
-        });
-        if (shell.closed) return;
-        id = ok(made) ? draftIdOf(made.body) : '';
-        if (!id) {
-          setBusy(false, '', sh.send);
-          showFailure({
-            code: '',
-            text:
-              UNSENT_ACCESS_GIVEN +
-              ' ' +
-              shareErrorText(made.resp, made.body, 'Could not prepare the email. Try again.'),
-          });
-          return;
-        }
-        S.draft = { id: id, key: key };
-      }
-
-      sh.status.textContent = 'Sending...';
-      var sent = await post('/api/drafts/' + encodeURIComponent(id) + '/approve', {});
+      sh.status.textContent = 'Preparing the email...';
+      var made = await post('/api/skills/share/draft', {
+        skill_id: skillId,
+        channel: 'email',
+        people: people.map(function (p) {
+          return p.name ? { name: p.name, email: p.email } : { email: p.email };
+        }),
+        message: res.message || '',
+        message_html: res.message_html || '',
+        note: noteText(),
+      });
       if (shell.closed) return;
-      if (ok(sent)) {
-        S.draft = null;
-        shell.close();
-        toastSent(people);
+      var card = ok(made) ? cardOf(made.body) : null;
+      if (!card) {
+        setBusy(false, '', sh.send);
+        showFailure({
+          code: '',
+          text:
+            UNSENT_ACCESS_GIVEN +
+            ' ' +
+            shareErrorText(made.resp, made.body, 'Could not prepare the email. Try again.'),
+        });
         return;
       }
-      var status = sent && sent.resp ? sent.resp.status : undefined;
-      var lost = status === undefined || status === 404 || status === 409;
-      // A lost reply, or a draft that is gone or already in flight, may mean it is
-      // out already, so it is never retried blindly.
-      if (lost) {
-        S.maybeSent = true;
-        S.draft = null;
-      }
-      setBusy(false, '', sh.send);
-      if (lost) {
-        showFailure({ code: '', text: MAYBE_SENT });
-        return;
-      }
-      showFailure({ code: '', text: UNSENT_ACCESS_GIVEN });
+      deps.showDraftCard('email-send', card);
+      shell.close();
     }
 
     function renderShare() {
@@ -1909,9 +1921,23 @@
       shell.body.appendChild(sh.previewError);
       shell.body.appendChild(sh.retry);
 
+      sh.filesLabel = _el('p', 'ss-label');
+      sh.files = _el('ul', 'ss-files');
+      sh.filesError = _el('p', 'ss-error');
+      sh.filesError.setAttribute('role', 'alert');
+      sh.filesRetry = _el('button', 'ss-link-btn', 'Try again');
+      sh.filesRetry.type = 'button';
+      sh.filesRetry.addEventListener('click', function () {
+        loadInventory();
+      });
+      shell.body.appendChild(sh.filesLabel);
+      shell.body.appendChild(sh.files);
+      shell.body.appendChild(sh.filesError);
+      shell.body.appendChild(sh.filesRetry);
+
       var linkRow = _el('div', 'ss-linkrow');
       linkRow.appendChild(_el('span', 'ss-label', 'Link'));
-      sh.linkText = _el('span', 'ss-link-text', 'Added when you send');
+      sh.linkText = _el('span', 'ss-link-text', 'Added when you share');
       linkRow.appendChild(sh.linkText);
       sh.copy = _button('Copy link');
       sh.copy.addEventListener('click', onCopy);
@@ -1941,7 +1967,7 @@
         S.people = field.people();
         go(1);
       });
-      sh.send = _button('Share and send', true);
+      sh.send = _button('Share and review email', true);
       sh.send.addEventListener('click', function () {
         onShareAndSend(false);
       });
@@ -1960,6 +1986,8 @@
       if (S.result) showPublished(S.result);
       fillPreview();
       loadPreview();
+      fillInventory();
+      loadInventory();
       finish();
       field.input.focus();
     }

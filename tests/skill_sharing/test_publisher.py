@@ -379,7 +379,7 @@ def test_a_shared_folder_needs_the_audience_acknowledged(provider, make_mine):
     assert out["version"] == 1
 
 
-def test_an_existing_destination_is_not_vetted_again(provider, make_mine, skills_dir):
+def test_a_saved_destination_is_used_and_a_different_chosen_folder_is_ignored(provider, make_mine, skills_dir):
     skill_id = make_mine()
     first = publisher.publish(provider, skill_id, author="A")
     wide = _chosen(provider, "Wide")
@@ -387,7 +387,7 @@ def test_an_existing_destination_is_not_vetted_again(provider, make_mine, skills
     (skills_dir / "mine" / skill_id / "SKILL.md").write_text("---\nname: Weekly Report\n---\n\nChanged\n", encoding="utf-8")
     out = publisher.publish(provider, skill_id, author="A", root=wide)
     assert out["folder"]["folder_id"] == first["folder"]["folder_id"]
-    assert out["audience"] is None
+    assert out["audience"]["kind"] == "private"
     assert out["saved_path"] == ["OneDrive", "AI Gator Skills", skill_id]
 
 
@@ -532,3 +532,82 @@ def test_stale_skill_json_fails_with_a_conflict_and_is_not_overwritten(provider,
 
     assert err.value.code == "conflict"
     assert _stored_doc(provider, folder, "skill.json")["by"] == "other"
+
+
+def _publish_as_me(provider, skill_id, **kw):
+    return publisher.publish(provider, skill_id, author="A", **kw)
+
+
+def test_the_default_folder_audience_is_checked_not_assumed(provider, make_mine):
+    root = provider.default_root()
+    provider.audiences[root["folder_id"]] = {"kind": "anyone", "name": "Anyone with the link", "approx_count": None}
+    skill_id = make_mine()
+    with pytest.raises(ShareError) as err:
+        _publish_as_me(provider, skill_id)
+    assert err.value.code == "audience_unacknowledged"
+    assert "Anyone with the link" in err.value.message
+    assert provider.writes == []
+    out = _publish_as_me(provider, skill_id, audience_ack=True)
+    assert out["audience"]["kind"] == "anyone"
+
+
+def test_a_saved_skill_folder_is_rechecked_on_every_publish(provider, make_mine):
+    skill_id = make_mine()
+    first = _publish_as_me(provider, skill_id)
+    provider.audiences[first["folder"]["folder_id"]] = {"kind": "org", "name": "Your organization", "approx_count": None}
+    provider.writes.clear()
+    with pytest.raises(ShareError) as err:
+        _publish_as_me(provider, skill_id)
+    assert err.value.code == "audience_unacknowledged"
+    assert provider.writes == []
+    again = _publish_as_me(provider, skill_id, audience_ack=True)
+    assert again["skill_id"] == skill_id
+
+
+def test_a_display_name_match_cannot_take_over_someone_elses_skill(provider, make_mine):
+    chosen = provider.child_folder(provider.default_root(), "Team")
+    skill_id = make_mine()
+    _publish_as_me(provider, skill_id, root=chosen)
+    provider.user_id = "u-impostor"
+    provider.writes.clear()
+    with pytest.raises(ShareError) as err:
+        _publish_as_me(provider, skill_id, root=chosen)
+    assert err.value.code == "not_yours"
+    assert provider.writes == []
+
+
+def test_a_saved_link_to_someone_elses_skill_is_refused(provider, make_mine):
+    skill_id = make_mine()
+    _publish_as_me(provider, skill_id)
+    provider.user_id = "u-impostor"
+    provider.writes.clear()
+    with pytest.raises(ShareError) as err:
+        _publish_as_me(provider, skill_id)
+    assert err.value.code == "not_yours"
+    assert provider.writes == []
+
+
+def test_the_owner_id_is_recorded_in_skill_json(provider, make_mine):
+    out = _publish_as_me(provider, make_mine())
+    doc = json.loads(provider.files[(out["folder"]["folder_id"], "skill.json")][0])
+    assert doc["author_id"] == "u-me"
+
+
+def test_publish_refuses_when_the_user_identity_is_unknown(provider, make_mine):
+    provider.user_id = ""
+    with pytest.raises(ShareError):
+        _publish_as_me(provider, make_mine())
+    assert provider.writes == []
+
+
+def test_publish_is_bound_to_the_file_list_the_user_reviewed(provider, make_mine):
+    skill_id = make_mine()
+    reviewed = publisher.inventory(skill_id)["inventory_digest"]
+    out = _publish_as_me(provider, skill_id, inventory_digest=reviewed)
+    assert out["digest"] == reviewed
+    (publisher.installer.INSTALLED_SKILLS_DIR / "mine" / skill_id / "notes.md").write_text("added later")
+    provider.writes.clear()
+    with pytest.raises(ShareError) as err:
+        _publish_as_me(provider, skill_id, inventory_digest=reviewed)
+    assert err.value.code == "content_changed"
+    assert provider.writes == []

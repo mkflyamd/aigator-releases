@@ -159,3 +159,49 @@ def test_valid_share_names(name):
 @pytest.mark.parametrize("name", ["", "a" * 65, "mine", "-lead", "Upper", "has space", "../x", 7, None])
 def test_invalid_share_names(name):
     assert bundle.valid_share_name(name) is False
+
+
+def _skill_dir(tmp_path, extra):
+    folder = tmp_path / "skill"
+    folder.mkdir()
+    (folder / "SKILL.md").write_bytes(SKILL_MD)
+    for rel, data in extra.items():
+        target = folder / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+    return folder
+
+
+def test_the_inclusion_contract_leaves_out_hidden_secret_and_cache_files(tmp_path):
+    folder = _skill_dir(
+        tmp_path,
+        {
+            "notes/ref.md": b"ref",
+            ".env": b"aigator-fake-api-key",
+            "creds/.aws/config": b"x",
+            "server.pem": b"x",
+            "id.KEY": b"x",
+            "__pycache__/a.pyc": b"x",
+            ".git/config": b"x",
+        },
+    )
+    files, skipped = bundle.scan_skill_dir(folder)
+    assert sorted(files) == ["SKILL.md", "notes/ref.md"]
+    reasons = {item["path"]: item["reason"] for item in skipped}
+    assert reasons[".env"] == "hidden file"
+    assert reasons["creds/.aws/config"] == "hidden file"
+    assert reasons["server.pem"] == "key or certificate file"
+    assert reasons["id.KEY"] == "key or certificate file"
+    assert reasons["__pycache__/a.pyc"] == "cache or version-control data"
+    assert reasons[".git/config"] == "cache or version-control data"
+
+
+def test_inventory_digest_matches_the_files_that_are_uploaded(tmp_path):
+    folder = _skill_dir(tmp_path, {"notes/ref.md": b"ref", ".env": b"x"})
+    out = bundle.inventory(folder)
+    assert [f["path"] for f in out["files"]] == ["SKILL.md", "notes/ref.md"]
+    assert out["files"][1]["size"] == 3
+    assert out["total_bytes"] == len(SKILL_MD) + 3
+    assert out["inventory_digest"] == files_digest(bundle.read_skill_dir(folder))
+    (folder / "notes" / "ref.md").write_bytes(b"changed")
+    assert bundle.inventory(folder)["inventory_digest"] != out["inventory_digest"]

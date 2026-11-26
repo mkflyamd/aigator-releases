@@ -51,19 +51,23 @@ def default_location(provider) -> dict:
     }
 
 
-def existing_skill(provider, root: dict, skill_id: str, author: str) -> dict | None:
-    """The skill.json already at <root>/<skill_id>, as {title, version, author, yours}."""
+def existing_skill(provider, root: dict, skill_id: str) -> dict | None:
+    """The skill.json already at <root>/<skill_id>, as {title, version, author, yours}.
+
+    `yours` compares the provider's stable user id, never the display name, which anyone can set to match yours.
+    """
     folder = provider.child_folder(root, skill_id, create=False)
     found = provider.read_json(folder, "skill.json") if folder else None
     if not found:
         return None
     doc = found[0]
     doc_author = str(doc.get("author") or "")
+    my_id = provider.my_user_id()
     return {
         "title": doc.get("title") or skill_id,
         "version": doc.get("latest"),
         "author": doc_author,
-        "yours": bool(author) and doc_author.strip().lower() == author.strip().lower(),
+        "yours": bool(my_id) and doc.get("author_id") == my_id,
     }
 
 
@@ -79,7 +83,7 @@ def locations(provider, skill_id: str) -> dict:
     return {"default": default_location(provider), "recent": load_recent(), "current": current}
 
 
-def check(provider, skill_id: str, drive_id: str, folder_id: str, author: str) -> dict:
+def check(provider, skill_id: str, drive_id: str, folder_id: str) -> dict:
     if drive_id and folder_id:
         try:
             location = provider.describe_folder(drive_id, folder_id)
@@ -92,7 +96,10 @@ def check(provider, skill_id: str, drive_id: str, folder_id: str, author: str) -
         can_write = True if drive_id == provider.my_drive_id() else None
     else:
         location = default_location(provider)
-        audience = {"kind": "private", "name": "Only you", "approx_count": None}
+        if location["folder_id"]:
+            audience = provider.audience(location["drive_id"], location["folder_id"], location["name"])
+        else:
+            audience = {"kind": "private", "name": "Only you", "approx_count": None}
         can_write = True
-    existing = existing_skill(provider, location, skill_id, author) if location["folder_id"] else None
+    existing = existing_skill(provider, location, skill_id) if location["folder_id"] else None
     return {"ok": True, "reason": "", "can_write": can_write, "location": location, "audience": audience, "existing": existing}
