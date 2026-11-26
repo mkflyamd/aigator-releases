@@ -13,6 +13,9 @@ import shared
 from config import load_config as _load_config, save_config as _save_config, update_config as _update_config
 from mcp.generic_client import GenericMCPClient, OAuthRequiredError
 from mcp.stdio_client import StdioMCPClient, CommandNotFoundError, ConflictError, acquire_pooled, release_from_pool
+from runs.supervisor import McpAbandoned, McpDispatchRefused, get_supervisor
+from runs.turn import current_turn
+import timeouts
 from mcp.connection_fixer import suggest_fix, is_recoverable
 from tool_pipeline import (
     ToolCompatibilityError,
@@ -79,6 +82,43 @@ def _bundle_stdio_blocked() -> bool:
     from sandbox.policy import load_policy
 
     return load_policy().block_bundle_stdio_mcp
+
+
+def _supervised_call(c: dict, client, tool: str, arguments: dict, context_id: str):
+    """One tool call under the Run Supervisor: recorded, bounded by the MCP budget, and left behind (not
+    killed) when it outlives that budget or its turn's Stop."""
+    request_ids: list[int] = []
+    if isinstance(client, StdioMCPClient):
+        # The cancel notice names this call's own request id, never another call's on the shared process.
+        def call():
+            return client.call(tool, arguments, on_request=request_ids.append)
+
+        def on_abandon(reason: str) -> None:
+            for request_id in list(request_ids):
+                client.cancel_request(request_id, reason)
+    else:
+        def call():
+            return client.call(tool, arguments)
+
+        on_abandon = None
+    server_id = c.get("id") or c.get("name") or "mcp"
+    _, value = get_supervisor().run_mcp_call(
+        context_id=context_id, turn_id=current_turn.get(), server_id=server_id,
+        server_name=c.get("name", server_id), tool=tool, budgets=timeouts.budgets_for("mcp"),
+        call=call, on_abandon=on_abandon)
+    return value
+
+
+def _release_stdio(c: dict, client=None) -> None:
+    try:
+        release_from_pool({
+            "command": c.get("command", ""),
+            "args": c.get("args", []),
+            "env": c.get("env", {}),
+            "name": c.get("name", ""),
+        }, client)
+    except Exception:
+        pass
 
 
 def _client_for(conn: dict, pooled: bool = True):
@@ -428,6 +468,7 @@ def _register(conn: dict) -> None:
         def _make_handler(orig_name: str, c: dict, limit_param: str | None, hints: dict):
             def _handler(**kwargs):
                 transport = c.get("transport", "http")
+                context_id = str(kwargs.get("_context_id") or "")
                 # Strip internal server-injected keys (e.g. _context_id) — MCP
                 # servers only accept the parameters declared in their input schema.
                 kwargs = {k: v for k, v in kwargs.items() if not k.startswith("_")}
@@ -520,7 +561,7 @@ def _register(conn: dict) -> None:
                     # client.call() raises McpError → RuntimeError("auth_error:...")
                     # when the server reports a tool-level failure (isError=True),
                     # so we don't need to inspect the response text for auth keywords.
-                    raw = client.call(orig_name, kwargs)
+                    raw = _supervised_call(c, client, orig_name, kwargs, context_id)
                     # A real tool response is a stronger liveness signal than a
                     # separate Settings health probe.  In particular, a local
                     # streamable-HTTP server can be briefly unavailable while it
@@ -539,21 +580,50 @@ def _register(conn: dict) -> None:
                     return {"error": f"Command not found: {e}", "transport": transport}
                 except ConflictError as e:
                     return {"error": f"MCP conflict: {e}", "transport": transport}
+                except McpDispatchRefused as e:
+                    return {
+                        "error": (
+                            f"{c.get('name', 'This server')} still has {e.abandoned} earlier calls running that "
+                            "have not answered, so no new call was sent. Tell the user the server has not "
+                            "answered; do not retry automatically."
+                        ),
+                        "transport": transport,
+                    }
+                except McpAbandoned as e:
+                    # The abandoned request's own wait has ended and its late reply will be dropped, so other calls
+                    # on the shared process are unharmed. With nothing else in flight the process is replaced, so
+                    # a server that has hung does not get the next call.
+                    if is_pooled and not client.in_flight():
+                        _release_stdio(c, client)
+                    if e.at_cap:
+                        _mark_health_result(
+                            c.get("id", ""), ok=False,
+                            error="Earlier calls to this server have not answered.",
+                        )
+                    server = c.get("name", c.get("id", "the server"))
+                    if e.reason == "stopped":
+                        why = f"AI Gator stopped waiting for {orig_name} on {server} because the turn was stopped."
+                    else:
+                        why = (
+                            f"{orig_name} on {server} was still running after "
+                            f"{timeouts.budgets_for('mcp').run_ms // 1000}s and AI Gator stopped waiting for it."
+                        )
+                    return {
+                        "error": f"{why} The server may still complete it, so check before running it again.",
+                        "transport": transport,
+                        "_mcp_call": {"run_id": e.record["id"], "state": e.record["state"], "reason": e.reason},
+                    }
                 except TimeoutError as e:
                     # Pooled stdio process is hung (e.g. waiting for OAuth browser
                     # flow, or crashed). Release it so the next call spawns a fresh
                     # process instead of reusing the broken one.
                     if is_pooled:
-                        try:
-                            release_from_pool({
-                                "command": c.get("command", ""),
-                                "args": c.get("args", []),
-                                "env": c.get("env", {}),
-                                "name": c.get("name", ""),
-                            })
-                        except Exception:
-                            pass
-                    return {"error": f"MCP server timed out: {e}", "transport": transport}
+                        _release_stdio(c, client)
+                    return {
+                        "error": f"MCP server timed out: {e}. The server may still complete it, so check "
+                                 "before running it again.",
+                        "transport": transport,
+                    }
                 except RuntimeError as e:
                     msg = str(e)
                     is_auth = _is_auth_msg(msg) or "auth_error" in msg
