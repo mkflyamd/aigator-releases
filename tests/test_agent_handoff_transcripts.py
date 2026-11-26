@@ -5,6 +5,7 @@ import os
 import time
 
 import agent_handoff as ah
+import generic_agent
 import pytest
 
 FAKE = "aigator-fake-api-key"
@@ -417,3 +418,102 @@ def test_pty_session_records_its_start_time():
     before = time.time()
     s = PtySession(DeadPty())
     assert before <= s.created_at <= time.time()
+
+
+def _crush_project(tmp_path, sessions, messages):
+    from tests.test_agent_session_stores import make_crush
+
+    make_crush(tmp_path, sessions, messages)
+    return str(tmp_path)
+
+
+def _crush_msgs(session, *turns):
+    out = []
+    for i, (role, parts) in enumerate(turns, 1):
+        out.append((f"{session}-{i}", session, role, json.dumps(parts), i))
+    return out
+
+
+def _text(t):
+    return {"type": "text", "data": {"text": t}}
+
+
+def test_crush_handoff_reads_its_own_session_store_not_the_pane(tmp_path, monkeypatch):
+    _prepare_env(tmp_path / "h", monkeypatch, [FAKE])
+    cwd = _crush_project(
+        tmp_path / "proj",
+        [("s1", None, "T", 3, 100, 200)],
+        _crush_msgs(
+            "s1",
+            ("user", [_text(f"use {FAKE} to fix the loader")]),
+            ("assistant", [{"type": "tool_call", "data": {"name": "bash", "input": '{"command": "git status"}'}}]),
+            ("assistant", [_text("Loader fixed.")]),
+        ),
+    )
+    monkeypatch.setattr(ah, "_session_started_at", lambda sid: 150.0)
+    monkeypatch.setattr(ah, "capture_pane", lambda sid, red=None: "garbled repaint frames")
+    rec = ah.prepare_handoff("crush", "demo", cwd, "s1")
+    snap = (tmp_path / "h" / "h" / f"{rec['handoff_id']}.txt").read_text(encoding="utf-8")
+    assert rec["source_kind"] == "transcript" and "garbled" not in snap
+    assert "## User\nuse [REDACTED] to fix the loader" in snap
+    assert "- tool bash:" in snap and "git status" in snap
+    assert "## Assistant\nLoader fixed." in snap
+    assert rec["last_user_message"].startswith("use [REDACTED]")
+
+
+def test_crush_handoff_picks_the_session_active_since_this_terminal_started(tmp_path, monkeypatch):
+    _prepare_env(tmp_path / "h", monkeypatch)
+    cwd = _crush_project(
+        tmp_path / "proj",
+        [("old", None, "Old", 1, 10, 20), ("mine", None, "Mine", 1, 300, 400)],
+        _crush_msgs("old", ("user", [_text("an old chat")])) + _crush_msgs("mine", ("user", [_text("this tab")])),
+    )
+    monkeypatch.setattr(ah, "_session_started_at", lambda sid: 290.0)
+    rec = ah.prepare_handoff("crush", "demo", cwd, "s1")
+    snap = (tmp_path / "h" / "h" / f"{rec['handoff_id']}.txt").read_text(encoding="utf-8")
+    assert "this tab" in snap and "an old chat" not in snap
+
+
+def test_crush_handoff_does_not_guess_between_two_sessions_active_since_start(tmp_path, monkeypatch):
+    _prepare_env(tmp_path / "h", monkeypatch)
+    cwd = _crush_project(
+        tmp_path / "proj",
+        [("mine", None, "Mine", 1, 300, 400), ("other", None, "Other", 1, 310, 420)],
+        _crush_msgs("mine", ("user", [_text("this tab")])) + _crush_msgs("other", ("user", [_text("another terminal")])),
+    )
+    monkeypatch.setattr(ah, "_session_started_at", lambda sid: 290.0)
+    monkeypatch.setattr(ah, "capture_pane", lambda sid, red=None: "pane text")
+    rec = ah.prepare_handoff("crush", "demo", cwd, "s1")
+    assert rec["source_kind"] == "capture"
+
+
+def test_crush_handoff_uses_the_session_this_terminal_resumed(tmp_path, monkeypatch):
+    _prepare_env(tmp_path / "h", monkeypatch)
+    cwd = _crush_project(
+        tmp_path / "proj",
+        [("mine", None, "Mine", 1, 10, 20), ("other", None, "Other", 1, 310, 420)],
+        _crush_msgs("mine", ("user", [_text("this tab")])) + _crush_msgs("other", ("user", [_text("another terminal")])),
+    )
+    monkeypatch.setattr(ah, "_session_started_at", lambda sid: 290.0)
+    monkeypatch.setattr(generic_agent, "linked_session_id", lambda sid: "mine" if sid == "s1" else None)
+    rec = ah.prepare_handoff("crush", "demo", cwd, "s1")
+    snap = (tmp_path / "h" / "h" / f"{rec['handoff_id']}.txt").read_text(encoding="utf-8")
+    assert "this tab" in snap and "another terminal" not in snap
+
+
+def test_crush_handoff_falls_back_to_the_pane_without_a_session_since_start(tmp_path, monkeypatch):
+    _prepare_env(tmp_path / "h", monkeypatch)
+    cwd = _crush_project(
+        tmp_path / "proj", [("old", None, "Old", 1, 10, 20)], _crush_msgs("old", ("user", [_text("an old chat")]))
+    )
+    monkeypatch.setattr(ah, "_session_started_at", lambda sid: 290.0)
+    monkeypatch.setattr(ah, "capture_pane", lambda sid, red=None: "pane text")
+    assert ah.prepare_handoff("crush", "demo", cwd, "s1")["source_kind"] == "capture"
+
+
+def test_crush_handoff_falls_back_to_the_pane_for_a_corrupt_database(tmp_path, monkeypatch):
+    _prepare_env(tmp_path / "h", monkeypatch)
+    (tmp_path / "proj" / ".crush").mkdir(parents=True)
+    (tmp_path / "proj" / ".crush" / "crush.db").write_bytes(b"not a database")
+    monkeypatch.setattr(ah, "capture_pane", lambda sid, red=None: "pane text")
+    assert ah.prepare_handoff("crush", "demo", str(tmp_path / "proj"), "s1")["source_kind"] == "capture"

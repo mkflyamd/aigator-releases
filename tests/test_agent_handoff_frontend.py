@@ -97,7 +97,7 @@ def test_menu_lists_installed_extras_below_the_core_agents():
 
 
 def test_output_feeds_limit_detector_and_activity_clock():
-    assert "sess._lastOutputAt = Date.now();" in TERM
+    assert "agentHistory.noteOutput(sess, Date.now());" in TERM
     assert "agentLimitDetect.feed(sess, msg.data, (s) => agentHandoff.offerOnLimit(s))" in TERM
 
 
@@ -109,7 +109,7 @@ def test_output_branch_tracks_bracketed_paste_mode():
     assert "sess._bracketedPaste = paste.enabled;" in TERM
     assert "sess._bracketedPasteTail = paste.tail;" in TERM
     # tracked in the same branch that stamps the output clock
-    assert TERM.index("sess._lastOutputAt = Date.now();") < TERM.index("sess._bracketedPaste = paste.enabled;")
+    assert TERM.index("agentHistory.noteOutput(sess, Date.now());") < TERM.index("sess._bracketedPaste = paste.enabled;")
     assert "const BRACKETED_ON = ESC + '[?2004h';" in HANDOFF
     assert "const BRACKETED_OFF = ESC + '[?2004l';" in HANDOFF
 
@@ -124,7 +124,7 @@ def test_readiness_requires_bracketed_paste():
 def test_readiness_clock_ignores_the_working_indicator_quiet_window():
     # output right after a connect or resize must still count, or a fast-painting target never looks ready
     assert "lastOutputAt: sess._lastRawOutputAt," in HANDOFF
-    assert TERM.index("sess._lastRawOutputAt = Date.now();") < TERM.index("if (Date.now() >= (sess._quietUntil || 0)) {")
+    assert TERM.index("sess._lastRawOutputAt = Date.now();") < TERM.index("if (Date.now() >= (sess._quietUntil || 0) && window.agentHistory) {")
 
 
 def test_paste_text_is_stripped_of_terminal_controls():

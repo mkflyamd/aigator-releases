@@ -383,6 +383,23 @@ def _render_codex(path: Path, red: Redactor | None = None) -> tuple[str, str, st
     return _bound("\n\n".join(lines), red), last_user, last_assistant
 
 
+def _render_crush(db: Path, session_id: str, red: Redactor | None = None) -> tuple[str, str, str]:
+    import agent_session_stores
+
+    lines: list[str] = []
+    last_user = last_assistant = ""
+    for role, text in agent_session_stores.transcript_crush(db, session_id):
+        if role == "tool":
+            lines.append(f"- tool {_one_line(text, red)}")
+        elif role == "user":
+            lines.append(f"## User\n{text}")
+            last_user = text
+        else:
+            lines.append(f"## Assistant\n{text}")
+            last_assistant = text
+    return _bound("\n\n".join(lines), red), last_user, last_assistant
+
+
 def render_transcript(agent: str, path: Path, red: Redactor | None = None) -> tuple[str, str, str]:
     return _render_claude(path, red) if agent == "claude" else _render_codex(path, red)
 
@@ -532,6 +549,22 @@ def _session_started_at(pty_session_id: str) -> float | None:
     return started if isinstance(started, (int, float)) else None
 
 
+def _crush_handoff_text(
+    cwd: str, started_at: float | None, known_id: str | None, red: Redactor
+) -> tuple[str, str, str]:
+    """Crush repaints a full-screen UI, so the pane is unreadable; its own database is not."""
+    import agent_session_stores
+
+    found = agent_session_stores.latest_crush_session(cwd, started_at, known_id)
+    if found is None:
+        return "", "", ""
+    try:
+        return _render_crush(*found, red)
+    except Exception as exc:
+        _log.warning("agent_handoff crush session unreadable (%s); using the pane capture", type(exc).__name__)
+        return "", "", ""
+
+
 class SessionNotOwned(Exception):
     """The requested terminal session is not the claimed project's session for the claimed agent."""
 
@@ -552,6 +585,16 @@ def prepare_handoff(agent: str, project_id: str, cwd: str, pty_session_id: str) 
     text, last_user, last_assistant, kind = "", "", "", "capture"
     import generic_agent
 
+    if agent == "crush":
+        text, last_user, last_assistant = _crush_handoff_text(
+            cwd, _session_started_at(pty_session_id), generic_agent.linked_session_id(pty_session_id), red
+        )
+        if text.strip():
+            return _save_prepared(
+                agent=agent, project_id=project_id, cwd=cwd, kind="transcript", text=text,
+                last_user=last_user, last_assistant=last_assistant, red=red,
+            )
+        red.count = 0
     transcript = find_transcript(
         agent,
         cwd,

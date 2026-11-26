@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 import agent_handoff
 import agent_sessions
+import agent_state
 import generic_agent
 from skills.code_agent import projects as code_projects
 
@@ -55,6 +56,11 @@ def _list_sessions(repo_path: str, pty: list[str]) -> dict:
 async def list_agent_sessions(project_name: str, pty: list[str] = Query(default=[])):
     repo_path = _repo_path(project_name)
     return await asyncio.to_thread(_list_sessions, repo_path, pty)
+
+
+@router.get("/api/agent-state")
+async def agent_state_for(pty: list[str] = Query(default=[])):
+    return {"states": await asyncio.to_thread(agent_state.read_states, pty)}
 
 
 @router.get("/api/agent-sessions/{agent}/{session_id}/preview")

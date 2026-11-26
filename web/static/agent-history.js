@@ -35,12 +35,49 @@
     return new Date(ts * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
   }
 
-  // term._lastOutputAt and term._viewedAt are epoch milliseconds.
-  function liveState(term, nowMs) {
+  // A hook turn that has produced no output at all for this long is treated as
+  // abandoned: Esc and crashes fire no hook, so "working" would otherwise stick.
+  const HOOK_STALE_MS = 120000;
+
+  // The agent's own report (term._hookState.at is epoch seconds), or null when
+  // there is none or it can no longer be trusted.
+  function hookState(term, nowMs) {
+    const hook = term._hookState;
+    if (!hook) return null;
+    const atMs = hook.at * 1000;
+    if (hook.state === 'asking') return 'needs_you';
+    if (hook.state === 'idle') return atMs > (term._viewedAt || 0) ? 'needs_you' : 'done';
+    const lastSeen = Math.max(atMs, term._lastRawOutputAt || 0);
+    return nowMs - lastSeen < HOOK_STALE_MS ? 'working' : null;
+  }
+
+  // Fallback when no hook reports. term._lastOutputAt, _workedAt and _viewedAt are
+  // epoch milliseconds; _workedAt only advances during a sustained work episode, so
+  // a lone repaint (resize, focus, reconnect replay) can show Working but never asks
+  // for attention.
+  function outputState(term, nowMs) {
     const out = term._lastOutputAt || 0;
     if (out && nowMs - out < WORKING_MS) return 'working';
-    if (out && out > (term._viewedAt || 0)) return 'needs_you';
+    if ((term._workedAt || 0) > (term._viewedAt || 0)) return 'needs_you';
     return 'done';
+  }
+
+  function liveState(term, nowMs) {
+    return hookState(term, nowMs) || outputState(term, nowMs);
+  }
+
+  const EPISODE_GAP_MS = 3000;
+  const EPISODE_MIN_MS = 3000;
+
+  // Record agent output (echo and repaint noise already filtered by the caller).
+  // Output with gaps under EPISODE_GAP_MS is one episode; only an episode lasting
+  // EPISODE_MIN_MS counts as work.
+  function noteOutput(term, nowMs) {
+    if (!term._episodeLastAt || nowMs - term._episodeLastAt >= EPISODE_GAP_MS)
+      term._episodeStartAt = nowMs;
+    term._episodeLastAt = nowMs;
+    if (nowMs - term._episodeStartAt >= EPISODE_MIN_MS) term._workedAt = nowMs;
+    term._lastOutputAt = nowMs;
   }
 
   function needsYou(terminals, nowMs) {
@@ -913,7 +950,34 @@
     load();
   }
 
+  let hookBusy = false;
+
+  // Agents with hooks write their own state to disk; the backend reads it for us.
+  async function pollHookStates() {
+    if (hookBusy) return;
+    const live = liveSessions().filter((t) => t.ptySessionId && t.agent !== 'terminal');
+    if (!live.length) return;
+    hookBusy = true;
+    try {
+      const params = new URLSearchParams();
+      live.forEach((t) => params.append('pty', t.ptySessionId));
+      const resp = await fetcher()('/api/agent-state?' + params.toString());
+      if (!resp.ok) return;
+      const { states } = await resp.json();
+      live.forEach((t) => {
+        t._hookState = (states && states[t.ptySessionId]) || null;
+      });
+      updateDot();
+      updateTabDots();
+    } catch (_) {
+      // keep the last known state; the output heuristic covers a missed poll
+    } finally {
+      hookBusy = false;
+    }
+  }
+
   function tick() {
+    pollHookStates();
     updateDot();
     updateTabDots();
     if (!panelVisible()) {
@@ -929,6 +993,7 @@
 
   const api = {
     WORKING_MS,
+    noteOutput,
     dayGroup,
     relTime,
     liveState,

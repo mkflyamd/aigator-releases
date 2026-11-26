@@ -30,7 +30,7 @@ const at = (m, d, hh, mm) => new Date(2026, m, d, hh, mm).getTime() / 1000;
   assert.strictEqual(h.relTime(ago(-60), NOW), 'just now');
 }
 
-// live state: working, needs you, done
+// live state from output alone: a work episode (not a lone repaint) is needed for Needs you
 {
   assert.strictEqual(h.WORKING_MS, 12000);
   assert.strictEqual(h.liveState({}, NOW), 'done', 'no output yet');
@@ -41,25 +41,113 @@ const at = (m, d, hh, mm) => new Date(2026, m, d, hh, mm).getTime() / 1000;
     'working',
     'a pause shorter than the hold stays Working',
   );
+  const worked = (out, viewed) => ({ _lastOutputAt: out, _workedAt: out, _viewedAt: viewed });
+  assert.strictEqual(h.liveState(worked(NOW - 20000, NOW - 30000), NOW), 'needs_you');
+  assert.strictEqual(h.liveState(worked(NOW - 20000), NOW), 'needs_you', 'never viewed');
+  assert.strictEqual(h.liveState(worked(NOW - 20000, NOW - 15000), NOW), 'done');
+  assert.strictEqual(h.liveState(worked(NOW - 20000, NOW - 20000), NOW), 'done');
   assert.strictEqual(
-    h.liveState({ _lastOutputAt: NOW - 20000, _viewedAt: NOW - 30000 }, NOW),
+    h.liveState({ _lastOutputAt: NOW - 20000, _viewedAt: 0 }, NOW),
+    'done',
+    'a repaint burst that never became a work episode never asks for attention',
+  );
+}
+
+// agent-reported (hook) state wins over output timing
+{
+  const hook = (state, secAgo, extra) =>
+    Object.assign({ _hookState: { state, at: NOW / 1000 - secAgo } }, extra || {});
+  assert.strictEqual(
+    h.liveState(hook('working', 2, { _lastOutputAt: NOW - 60000 }), NOW),
+    'working',
+  );
+  assert.strictEqual(
+    h.liveState(hook('idle', 30, { _lastOutputAt: NOW - 500, _workedAt: NOW - 500 }), NOW),
     'needs_you',
-  );
-  assert.strictEqual(h.liveState({ _lastOutputAt: NOW - 20000 }, NOW), 'needs_you', 'never viewed');
-  assert.strictEqual(
-    h.liveState({ _lastOutputAt: NOW - 20000, _viewedAt: NOW - 15000 }, NOW),
-    'done',
+    'finished and not yet seen, regardless of spinner output',
   );
   assert.strictEqual(
-    h.liveState({ _lastOutputAt: NOW - 20000, _viewedAt: NOW - 20000 }, NOW),
+    h.liveState(hook('idle', 30, { _viewedAt: NOW - 1000 }), NOW),
     'done',
+    'finished and seen',
+  );
+  assert.strictEqual(
+    h.liveState(hook('idle', 30, { _viewedAt: NOW - 40000, _lastOutputAt: NOW - 100 }), NOW),
+    'needs_you',
+    'output after the viewer left does not clear a finished turn',
+  );
+  assert.strictEqual(
+    h.liveState(hook('asking', 600, { _viewedAt: NOW, _lastOutputAt: NOW - 600000 }), NOW),
+    'needs_you',
+    'a question stays until the agent moves on, even while viewed',
+  );
+  assert.strictEqual(
+    h.liveState(
+      hook('asking', 5, { _viewedAt: NOW, _hookState: { state: 'working', at: NOW / 1000 } }),
+      NOW,
+    ),
+    'working',
+    'the next hook event replaces the question',
+  );
+  assert.strictEqual(
+    h.liveState(hook('working', 300, { _lastRawOutputAt: NOW - 200000 }), NOW),
+    'done',
+    'working with no output for two minutes is stale (Esc and crashes fire no hook)',
+  );
+  assert.strictEqual(
+    h.liveState(hook('working', 300, { _lastRawOutputAt: NOW - 1000 }), NOW),
+    'working',
+    'a long quiet hook turn with live output stays working',
+  );
+  assert.strictEqual(
+    h.liveState(
+      hook('working', 300, {
+        _lastRawOutputAt: NOW - 200000,
+        _lastOutputAt: NOW - 200000,
+        _workedAt: NOW - 200000,
+      }),
+      NOW,
+    ),
+    'needs_you',
+    'a stale working hook falls back to the output heuristic',
+  );
+}
+
+// output noted as a work episode: continuous output for a few seconds, not a lone burst
+{
+  const feed = (t, times) => times.forEach((ms) => h.noteOutput(t, NOW + ms));
+  const burst = {};
+  feed(burst, [0, 100, 200]);
+  assert.strictEqual(burst._lastOutputAt, NOW + 200);
+  assert.strictEqual(burst._workedAt, undefined, 'a quick repaint burst is not work');
+  assert.strictEqual(h.liveState(burst, NOW + 30000), 'done');
+
+  const steady = {};
+  feed(steady, [0, 1000, 2000, 3000, 4000]);
+  assert.strictEqual(steady._workedAt, NOW + 4000, 'continuous output for 3 s is work');
+  assert.strictEqual(h.liveState(steady, NOW + 30000), 'needs_you');
+
+  const apart = {};
+  feed(apart, [0, 1000, 2000, 9000, 10000, 11000]);
+  assert.strictEqual(
+    apart._workedAt,
+    undefined,
+    'bursts separated by a long gap are separate episodes',
+  );
+
+  const resumed = {};
+  feed(resumed, [0, 1000, 2000, 3000, 20000]);
+  assert.strictEqual(
+    resumed._workedAt,
+    NOW + 3000,
+    'a later lone burst does not extend the old episode',
   );
 }
 
 // needsYou looks only at live terminals
 {
-  const quiet = { _lastOutputAt: NOW - 20000, _viewedAt: 0 };
-  const busy = { _lastOutputAt: NOW - 500, _viewedAt: 0 };
+  const quiet = { _lastOutputAt: NOW - 20000, _workedAt: NOW - 20000, _viewedAt: 0 };
+  const busy = { _lastOutputAt: NOW - 500, _workedAt: NOW - 500, _viewedAt: 0 };
   assert.strictEqual(h.needsYou([busy, quiet], NOW), true);
   assert.strictEqual(h.needsYou([busy], NOW), false);
   assert.strictEqual(h.needsYou([], NOW), false);
@@ -84,6 +172,7 @@ const term = (pty, agent, out, viewed) => ({
   ptySessionId: pty,
   agent,
   _lastOutputAt: out,
+  _workedAt: out,
   _viewedAt: viewed,
 });
 
