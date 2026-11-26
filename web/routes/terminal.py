@@ -320,6 +320,16 @@ def write_pty_session(session_id: str, data: str) -> bool:
         return False
 
 
+def _agent_exit_text(meta: dict | None) -> str:
+    """The exit notice for an agent session, naming the agent when its labels are known."""
+    agent = (meta or {}).get("agent")
+    if not agent:
+        return "The agent process exited unexpectedly."
+    from generic_agent import agent_label
+
+    return f"{agent_label(agent)} process exited unexpectedly."
+
+
 @router.websocket("/api/terminal/agent")
 async def agent_terminal_ws(ws: WebSocket, session_id: str, seq: int = 0):
     """Named PTY WebSocket for coding agent sessions.
@@ -412,7 +422,7 @@ async def agent_terminal_ws(ws: WebSocket, session_id: str, seq: int = 0):
                         "type": "exit",
                         "data": None
                         if already_done
-                        else "OpenCode process exited unexpectedly.",
+                        else _agent_exit_text(getattr(entry, "meta", None)),
                     }
                 )
             )
