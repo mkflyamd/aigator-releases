@@ -166,11 +166,18 @@ PROJECT = "C:\\work\\app"
 
 
 @pytest.fixture(autouse=True)
-def _clear_cache():
+def _fresh_index(tmp_path_factory, monkeypatch):
+    monkeypatch.setattr(ags.index, "INDEX_PATH", tmp_path_factory.mktemp("index") / "agent-session-index.db")
     ags._CACHE.clear()
-    ags._WSL.clear()
+    ags._SYNCED.clear()
     ags._WORKTREES.clear()
     yield
+
+
+def scan(**kw):
+    """Bring the index up to date from the files on disk, then read the project from it."""
+    ags.refresh_index(PROJECT, homes=kw["homes"])
+    return ags.scan_project(PROJECT, **kw)
 
 
 def home_for(tmp_path):
@@ -206,18 +213,18 @@ def test_same_dir_ignores_case_slashes_and_long_prefix():
 def test_scan_finds_this_projects_sessions_newest_first(tmp_path):
     put_claude(tmp_path, "c-old", [claude_user("old one")], mtime=1_700_000_000)
     put_codex(tmp_path, "x-new", [codex_meta_line(id="x-new"), codex_msg("user", "new one")], mtime=1_800_000_000)
-    put_claude(tmp_path, "c-other", [claude_user("elsewhere")], slug="C--other-app")
+    put_claude(tmp_path, "c-other", [{**claude_user("elsewhere"), "cwd": "C:\\other-app"}], slug="C--other-app")
     put_codex(tmp_path, "x-other", [codex_meta_line(id="x-other", cwd="C:\\other"), codex_msg("user", "nope")])
-    recs = ags.scan_project(PROJECT, homes=[home_for(tmp_path)])
+    recs = scan(homes=[home_for(tmp_path)])
     assert [r["id"] for r in recs] == ["x-new", "c-old"]
     assert {r["source"] for r in recs} == {"windows"}
 
 
-def test_scan_matches_slug_case_insensitively_but_rejects_slug_collisions(tmp_path):
+def test_scan_matches_the_folder_by_cwd_not_by_slug_dir(tmp_path):
     put_claude(tmp_path, "same", [claude_user("mine")], slug="c--WORK-app")
     collide = {**claude_user("not mine"), "cwd": "C:\\work-app"}
     put_claude(tmp_path, "collide", [collide])
-    recs = ags.scan_project(PROJECT, homes=[home_for(tmp_path)])
+    recs = scan(homes=[home_for(tmp_path)])
     assert [r["id"] for r in recs] == ["same"]
 
 
@@ -225,13 +232,13 @@ def test_scan_respects_agent_filter_and_cap(tmp_path, monkeypatch):
     put_claude(tmp_path, "c1", [claude_user("one")], mtime=1_700_000_001)
     put_claude(tmp_path, "c2", [claude_user("two")], mtime=1_700_000_002)
     put_codex(tmp_path, "x1", [codex_meta_line(id="x1"), codex_msg("user", "three")], mtime=1_700_000_003)
-    assert [r["id"] for r in ags.scan_project(PROJECT, homes=[home_for(tmp_path)], agents=("claude",))] == ["c2", "c1"]
+    assert [r["id"] for r in scan(homes=[home_for(tmp_path)], agents=("claude",))] == ["c2", "c1"]
     monkeypatch.setattr(ags, "MAX_SESSIONS", 2)
-    assert [r["id"] for r in ags.scan_project(PROJECT, homes=[home_for(tmp_path)])] == ["x1", "c2"]
+    assert [r["id"] for r in scan(homes=[home_for(tmp_path)])] == ["x1", "c2"]
 
 
 def test_scan_missing_agent_directories_give_an_empty_list(tmp_path):
-    assert ags.scan_project(PROJECT, homes=[home_for(tmp_path)]) == []
+    assert scan(homes=[home_for(tmp_path)]) == []
 
 
 def test_scan_parses_each_unchanged_file_once(tmp_path, monkeypatch):
@@ -239,12 +246,12 @@ def test_scan_parses_each_unchanged_file_once(tmp_path, monkeypatch):
     calls = []
     real = ags.parse_claude
     monkeypatch.setattr(ags, "parse_claude", lambda path, st: calls.append(1) or real(path, st))
-    ags.scan_project(PROJECT, homes=[home_for(tmp_path)])
-    ags.scan_project(PROJECT, homes=[home_for(tmp_path)])
+    scan(homes=[home_for(tmp_path)])
+    scan(homes=[home_for(tmp_path)])
     assert len(calls) == 1
     with open(p, "a", encoding="utf-8") as fh:
         fh.write(json.dumps(claude_assistant("more")) + "\n")
-    ags.scan_project(PROJECT, homes=[home_for(tmp_path)])
+    scan(homes=[home_for(tmp_path)])
     assert len(calls) == 2
 
 
@@ -254,6 +261,10 @@ def test_find_session_returns_the_record_or_none(tmp_path):
     assert ags.find_session(PROJECT, "claude", "c1", homes=h)["title"] == "one"
     assert ags.find_session(PROJECT, "claude", "nope", homes=h) is None
     assert ags.find_session(PROJECT, "codex", "c1", homes=h) is None
+
+
+def find(tmp_path, agent, sid):
+    return ags.find_session(PROJECT, agent, sid, homes=[home_for(tmp_path)])
 
 
 def mk(agent, sid, started, source="windows"):
@@ -304,8 +315,8 @@ def test_preview_merges_turns_redacts_and_caps(tmp_path, monkeypatch):
     for i in range(5):
         objs += [claude_user(f"question {i}"), claude_assistant(f"answer {i}")]
     objs.append(claude_assistant("key is aigator-fake-api-key " + "z" * 700))
-    p = jl(tmp_path / "s.jsonl", objs)
-    msgs = ags.preview({"agent": "claude", "path": str(p)})
+    put_claude(tmp_path, "s", objs)
+    msgs = ags.preview(find(tmp_path, "claude", "s"))
     assert len(msgs) == ags.PREVIEW_EXCHANGES
     assert msgs[0] == {"role": "user", "text": "question 2"}
     assert msgs[-1]["role"] == "assistant"
@@ -314,9 +325,20 @@ def test_preview_merges_turns_redacts_and_caps(tmp_path, monkeypatch):
     assert len(msgs[-1]["text"]) <= ags.PREVIEW_CHARS
 
 
-def test_preview_of_a_deleted_file_raises(tmp_path):
-    with pytest.raises(OSError):
-        ags.preview({"agent": "claude", "path": str(tmp_path / "gone.jsonl")})
+def test_preview_comes_from_the_index_not_the_transcript(tmp_path):
+    p = put_claude(tmp_path, "s", [claude_user("question"), claude_assistant("answer")])
+    rec = find(tmp_path, "claude", "s")
+    p.unlink()
+    assert ags.preview(rec) == [{"role": "user", "text": "question"}, {"role": "assistant", "text": "answer"}]
+
+
+def test_preview_is_redacted_before_it_is_stored(tmp_path, monkeypatch):
+    monkeypatch.setattr(ags.ah, "_configured_api_keys", lambda: ["aigator-fake-api-key"])
+    put_claude(tmp_path, "s", [claude_user("question"), claude_assistant("key is aigator-fake-api-key")])
+    ags.refresh_index(PROJECT, homes=[home_for(tmp_path)])
+    with ags.index._db() as con:
+        (stored,) = con.execute("SELECT preview FROM sessions").fetchone()
+    assert "aigator-fake-api-key" not in stored and "[REDACTED]" in stored
 
 
 def test_scan_skips_a_transcript_that_vanishes_between_stat_and_read(tmp_path, monkeypatch):
@@ -330,9 +352,9 @@ def test_scan_skips_a_transcript_that_vanishes_between_stat_and_read(tmp_path, m
         return real(path, st)
 
     monkeypatch.setattr(ags, "parse_claude", flaky)
-    assert [r["id"] for r in ags.scan_project(PROJECT, homes=[home_for(tmp_path)])] == ["ok"]
+    assert [r["id"] for r in scan(homes=[home_for(tmp_path)])] == ["ok"]
     monkeypatch.setattr(ags, "parse_claude", real)
-    assert [r["id"] for r in ags.scan_project(PROJECT, homes=[home_for(tmp_path)])] == ["gone", "ok"]
+    assert [r["id"] for r in scan(homes=[home_for(tmp_path)])] == ["gone", "ok"]
 
 
 def test_scan_skips_a_transcript_that_vanishes_between_scandir_and_stat(tmp_path, monkeypatch):
@@ -356,7 +378,7 @@ def test_scan_skips_a_transcript_that_vanishes_between_scandir_and_stat(tmp_path
         return [Vanished(e) if e.name == "gone.jsonl" else e for e in real(path)]
 
     monkeypatch.setattr(ags.os, "scandir", scandir)
-    assert [r["id"] for r in ags.scan_project(PROJECT, homes=[home_for(tmp_path)])] == ["ok"]
+    assert [r["id"] for r in scan(homes=[home_for(tmp_path)])] == ["ok"]
 
 
 def test_wsl_cwd_maps_windows_and_unc_paths():
@@ -385,20 +407,6 @@ def test_wsl_homes_does_not_touch_a_stopped_distro(monkeypatch, tmp_path):
     assert listed == []
 
 
-def test_a_stopped_distro_keeps_the_last_wsl_sessions(monkeypatch):
-    kept = [{**mk("claude", "w1", 100, "wsl:Ubuntu"), "cwd": "/mnt/c/work/app"}]
-    ags._WSL[PROJECT] = (0.0, kept)
-
-    def stopped(repo):
-        raise ags.WslStopped
-
-    monkeypatch.setattr(ags, "wsl_homes", stopped)
-    monkeypatch.setattr(ags.generic_agent, "_stale_while_revalidate", lambda key, refresh: refresh())
-    records, pending = ags.wsl_sessions(PROJECT)
-    assert [r["id"] for r in records] == ["w1"] and pending is False
-    assert [r["id"] for r in ags.cached_wsl_records(PROJECT)] == ["w1"]
-
-
 def test_wsl_homes_lists_user_homes_and_installed_agents(monkeypatch, tmp_path):
     monkeypatch.setattr(ags.generic_agent, "wsl_distro_running", lambda d: True)
     monkeypatch.setattr(ags.generic_agent, "wsl_agents", lambda: ("Ubuntu", {"claude": "claude"}))
@@ -424,14 +432,14 @@ def test_scan_reads_wsl_sessions_recorded_with_mnt_paths(tmp_path):
     sh = ags.SourceHome("wsl:Ubuntu", tmp_path, "/mnt/c/work/app")
     rec = {**claude_user("from wsl"), "cwd": "/mnt/c/work/app"}
     put_claude(tmp_path, "w1", [rec], slug="-mnt-c-work-app")
-    out = ags.scan_project(PROJECT, homes=[sh], agents=("claude",))
+    out = scan(homes=[sh], agents=("claude",))
     assert [(r["id"], r["source"]) for r in out] == [("w1", "wsl:Ubuntu")]
 
 
 def test_codex_scan_skips_compressed_rollouts(tmp_path):
     p = put_codex(tmp_path, "x1", [codex_meta_line(id="x1"), codex_msg("user", "hi")])
     p.rename(str(p) + ".zst")
-    assert ags.scan_project(PROJECT, homes=[home_for(tmp_path)], agents=("codex",)) == []
+    assert scan(homes=[home_for(tmp_path)], agents=("codex",)) == []
 
 
 def test_codex_scan_hides_threads_copied_from_another_agent(tmp_path):
@@ -440,7 +448,7 @@ def test_codex_scan_hides_threads_copied_from_another_agent(tmp_path):
     put_codex(tmp_path, "k1", [codex_meta_line(id="k1"), *msgs])
     imports = {"records": [{"imported_thread_id": "i1", "imported_at": 1_000}, "junk", {"title": "no id"}]}
     (tmp_path / ".codex" / "external_agent_session_imports.json").write_text(json.dumps(imports), encoding="utf-8")
-    out = ags.scan_project(PROJECT, homes=[home_for(tmp_path)], agents=("codex",))
+    out = scan(homes=[home_for(tmp_path)], agents=("codex",))
     assert [r["id"] for r in out] == ["k1"]
 
 
@@ -452,7 +460,7 @@ def test_codex_scan_keeps_an_imported_thread_the_user_continued_in_codex(tmp_pat
     records = [{"imported_thread_id": i, "imported_at": imported_at} for i in ("i1", "i2")]
     (tmp_path / ".codex" / "external_agent_session_imports.json").write_text(
         json.dumps({"records": records}), encoding="utf-8")
-    out = ags.scan_project(PROJECT, homes=[home_for(tmp_path)], agents=("codex",))
+    out = scan(homes=[home_for(tmp_path)], agents=("codex",))
     assert [r["id"] for r in out] == ["i1"]
 
 
@@ -468,7 +476,7 @@ def test_codex_scan_keeps_a_continued_import_whose_user_turn_is_older_than_the_t
     records = [{"imported_thread_id": "i1", "imported_at": imported_at}]
     (tmp_path / ".codex" / "external_agent_session_imports.json").write_text(
         json.dumps({"records": records}), encoding="utf-8")
-    out = ags.scan_project(PROJECT, homes=[home_for(tmp_path)], agents=("codex",))
+    out = scan(homes=[home_for(tmp_path)], agents=("codex",))
     assert [r["id"] for r in out] == ["i1"]
 
 
@@ -477,14 +485,14 @@ def test_codex_scan_survives_a_malformed_import_time(tmp_path):
     records = [{"imported_thread_id": "i1", "imported_at": [1]}, {"imported_thread_id": "i2", "imported_at": "x"}]
     (tmp_path / ".codex" / "external_agent_session_imports.json").write_text(
         json.dumps({"records": records}), encoding="utf-8")
-    out = ags.scan_project(PROJECT, homes=[home_for(tmp_path)], agents=("codex",))
+    out = scan(homes=[home_for(tmp_path)], agents=("codex",))
     assert [r["id"] for r in out] == ["k1"]
 
 
 def test_codex_scan_survives_a_corrupt_import_list(tmp_path):
     put_codex(tmp_path, "k1", [codex_meta_line(id="k1"), codex_msg("user", "hi")])
     (tmp_path / ".codex" / "external_agent_session_imports.json").write_text("{not json", encoding="utf-8")
-    out = ags.scan_project(PROJECT, homes=[home_for(tmp_path)], agents=("codex",))
+    out = scan(homes=[home_for(tmp_path)], agents=("codex",))
     assert [r["id"] for r in out] == ["k1"]
 
 
@@ -496,7 +504,7 @@ def test_codex_scan_reads_the_project_local_codex_folder(monkeypatch, tmp_path):
     put_codex(proj, "w1", [codex_meta_line(id="w1", cwd="/mnt/c/work/app"), *msgs])
     put_codex(proj, "n1", [codex_meta_line(id="n1", cwd="C:\\work\\app"), *msgs])
     put_codex(proj, "o1", [codex_meta_line(id="o1", cwd="/mnt/c/work/other"), *msgs])
-    out = ags.scan_project(PROJECT, homes=[home_for(tmp_path)], agents=("codex",))
+    out = scan(homes=[home_for(tmp_path)], agents=("codex",))
     assert sorted((r["id"], r["source"]) for r in out) == [("n1", "windows"), ("w1", "wsl:Ubuntu")]
 
 
@@ -505,7 +513,7 @@ def test_codex_scan_hides_a_linux_path_session_when_wsl_is_absent(monkeypatch, t
     monkeypatch.setattr(ags, "_codex_roots", lambda sh: [proj / ".codex" / "sessions"])
     monkeypatch.setattr(ags.generic_agent, "wsl_agents", lambda: (None, {}))
     put_codex(proj, "w1", [codex_meta_line(id="w1", cwd="/mnt/c/work/app"), codex_msg("user", "hello")])
-    assert ags.scan_project(PROJECT, homes=[home_for(tmp_path)], agents=("codex",)) == []
+    assert scan(homes=[home_for(tmp_path)], agents=("codex",)) == []
 
 
 def test_codex_roots_add_the_project_folder_only_for_windows_homes(tmp_path):
@@ -562,29 +570,163 @@ def test_wsl_homes_cover_each_worktree(monkeypatch, tmp_path):
     assert [h.cwd for h in homes] == ["/mnt/c/work/app", "/mnt/c/work/app-wt"]
 
 
-def test_wsl_sessions_never_blocks_and_serves_the_cached_result(monkeypatch, tmp_path):
-    sh = ags.SourceHome("wsl:Ubuntu", tmp_path, "/mnt/c/work/app")
-    rec = {**claude_user("from wsl"), "cwd": "/mnt/c/work/app"}
-    put_claude(tmp_path, "w1", [rec], slug="-mnt-c-work-app")
-    monkeypatch.setattr(ags, "wsl_homes", lambda repo: ([sh], ("claude",)))
+def wsl_project(monkeypatch, tmp_path, *, running=True):
+    """A project whose Windows side is empty and whose WSL side has one Claude session."""
+    wsl_home = tmp_path / "wsl-home"
+    sh = ags.SourceHome("wsl:Ubuntu", wsl_home, "/mnt/c/work/app")
+    put_claude(wsl_home, "w1", [{**claude_user("from wsl"), "cwd": "/mnt/c/work/app"}], slug="-mnt-c-work-app")
+    monkeypatch.setattr(ags, "windows_homes", lambda repo: [home_for(tmp_path / "win-home")])
+    monkeypatch.setattr(ags, "project_dirs", lambda repo: [PROJECT])
+    monkeypatch.setattr(ags.generic_agent, "wsl_agents", lambda: ("Ubuntu", {"claude": "claude"}))
     monkeypatch.setattr(ags.generic_agent, "_stale_while_revalidate", lambda key, refresh: refresh())
-    first, pending = ags.wsl_sessions(PROJECT)
-    assert (first, pending) == ([], True)
-    second, pending = ags.wsl_sessions(PROJECT)
-    assert [r["id"] for r in second] == ["w1"]
-    assert pending is False
-    assert [r["id"] for r in ags.cached_wsl_records(PROJECT)] == ["w1"]
+    state = {"running": running}
+
+    def homes(repo):
+        if not state["running"]:
+            raise ags.WslStopped
+        return [sh], ("claude",)
+
+    monkeypatch.setattr(ags, "wsl_homes", homes)
+    return state
 
 
-def test_wsl_sessions_without_wsl_settles_to_empty(monkeypatch):
-    monkeypatch.setattr(ags, "wsl_homes", lambda repo: ([], ()))
-    monkeypatch.setattr(ags.generic_agent, "_stale_while_revalidate", lambda key, refresh: refresh())
-    ags.wsl_sessions(PROJECT)
+def test_wsl_sessions_come_from_the_index_and_are_pending_until_the_first_refresh(monkeypatch, tmp_path):
+    wsl_project(monkeypatch, tmp_path)
+    assert ags.wsl_sessions(PROJECT) == ([], True)
+    ags.ensure_fresh(PROJECT)
+    records, pending = ags.wsl_sessions(PROJECT)
+    assert [(r["id"], r["source"]) for r in records] == [("w1", "wsl:Ubuntu")] and pending is False
+
+
+def test_a_stopped_distro_keeps_the_last_wsl_sessions(monkeypatch, tmp_path):
+    state = wsl_project(monkeypatch, tmp_path)
+    ags.ensure_fresh(PROJECT)
+    state["running"] = False
+    monkeypatch.setattr(ags, "_wsl_user_homes", lambda distro: pytest.fail("a stopped distro must not be read"))
+    ags._SYNCED.clear()
+    ags.ensure_fresh(PROJECT)
+    records, pending = ags.wsl_sessions(PROJECT)
+    assert [r["id"] for r in records] == ["w1"] and pending is False
+
+
+def test_an_unreadable_wsl_store_does_not_empty_the_index(monkeypatch, tmp_path):
+    wsl_project(monkeypatch, tmp_path)
+    ags.ensure_fresh(PROJECT)
+    monkeypatch.setattr(ags, "_walk", lambda unit: None)
+    ags._SYNCED.clear()
+    ags.refresh_index(PROJECT)
+    assert [r["id"] for r in ags.wsl_sessions(PROJECT)[0]] == ["w1"]
+
+
+def test_wsl_sessions_without_wsl_is_empty_and_not_pending(monkeypatch):
+    monkeypatch.setattr(ags.generic_agent, "wsl_agents", lambda: (None, {}))
     assert ags.wsl_sessions(PROJECT) == ([], False)
 
 
-def test_find_session_also_searches_cached_wsl_records(tmp_path):
-    ags._WSL[PROJECT] = (0.0, [{**mk("claude", "w1", 100, "wsl:Ubuntu"), "cwd": "/mnt/c/work/app"}])
-    found = ags.find_session(PROJECT, "claude", "w1", homes=[home_for(tmp_path)])
-    assert found["source"] == "wsl:Ubuntu"
-    assert ags.find_session(PROJECT, "codex", "w1", homes=[home_for(tmp_path)]) is None
+def test_listing_wsl_sessions_never_asks_whether_the_distro_runs(monkeypatch, tmp_path):
+    wsl_project(monkeypatch, tmp_path)
+    ags.ensure_fresh(PROJECT)
+    monkeypatch.setattr(ags.generic_agent, "wsl_distro_running", lambda d: pytest.fail("wsl.exe is for the refresh"))
+    monkeypatch.setattr(ags.generic_agent, "_stale_while_revalidate", lambda key, refresh: None)
+    assert [r["id"] for r in ags.wsl_sessions(PROJECT)[0]] == ["w1"]
+
+
+def test_find_session_also_searches_indexed_wsl_sessions(monkeypatch, tmp_path):
+    wsl_project(monkeypatch, tmp_path)
+    ags.ensure_fresh(PROJECT)
+    h = [home_for(tmp_path / "win-home")]
+    found = ags.find_session(PROJECT, "claude", "w1", homes=h)
+    assert found["source"] == "wsl:Ubuntu" and found["preview"][0]["text"] == "from wsl"
+    assert ags.find_session(PROJECT, "codex", "w1", homes=h) is None
+
+
+# ----------------------------------------------------------------- the index
+
+def test_the_index_survives_a_restart_without_reparsing(tmp_path, monkeypatch):
+    put_claude(tmp_path, "c1", [claude_user("one")])
+    assert [r["id"] for r in scan(homes=[home_for(tmp_path)])] == ["c1"]
+    ags._SYNCED.clear()
+    ags._CACHE.clear()
+    monkeypatch.setattr(ags, "parse_claude", lambda *a: pytest.fail("parsed an unchanged file"))
+    assert [r["id"] for r in scan(homes=[home_for(tmp_path)])] == ["c1"]
+
+
+def test_a_changed_file_is_reparsed_and_a_vanished_one_is_dropped(tmp_path):
+    p1 = put_claude(tmp_path, "c1", [claude_user("one")])
+    put_claude(tmp_path, "c2", [claude_user("two")])
+    assert sorted(r["id"] for r in scan(homes=[home_for(tmp_path)])) == ["c1", "c2"]
+    p1.unlink()
+    assert [r["id"] for r in scan(homes=[home_for(tmp_path)])] == ["c2"]
+
+
+def test_files_that_are_not_user_sessions_are_not_parsed_again(tmp_path, monkeypatch):
+    put_claude(tmp_path, "sdk", [claude_user("x", entrypoint="sdk-cli")])
+    calls = []
+    real = ags.parse_claude
+    monkeypatch.setattr(ags, "parse_claude", lambda path, st: calls.append(1) or real(path, st))
+    assert scan(homes=[home_for(tmp_path)]) == []
+    assert scan(homes=[home_for(tmp_path)]) == []
+    assert len(calls) == 1
+
+
+def test_worktrees_share_one_walk_per_store(tmp_path, monkeypatch):
+    put_claude(tmp_path, "main", [claude_user("in main")])
+    put_claude(tmp_path, "wt", [{**claude_user("in worktree"), "cwd": "C:\\work\\app-wt"}], slug="C--work-app-wt")
+    put_claude(tmp_path, "other", [{**claude_user("elsewhere"), "cwd": "C:\\other"}], slug="C--other")
+    homes = [home_for(tmp_path), ags.SourceHome("windows", tmp_path, "C:\\work\\app-wt")]
+    walked = []
+    real = ags._walk
+    monkeypatch.setattr(ags, "_walk", lambda unit: walked.append(unit.key) or real(unit))
+    assert sorted(r["id"] for r in scan(homes=homes)) == ["main", "wt"]
+    assert len(walked) == len(set(walked)) == 2  # claude and codex, once each however many worktrees
+
+
+def test_touch_indexes_one_file_now(tmp_path, monkeypatch):
+    monkeypatch.setattr(ags.Path, "home", staticmethod(lambda: tmp_path))
+    p = put_claude(tmp_path, "c1", [claude_user("one")])
+    ags.touch(p)
+    assert [r["id"] for r in ags.scan_project(PROJECT, homes=[home_for(tmp_path)])] == ["c1"]
+    p.unlink()
+    ags.touch(p)
+    assert ags.scan_project(PROJECT, homes=[home_for(tmp_path)]) == []
+
+
+def test_ensure_fresh_blocks_for_the_first_build_then_refreshes_in_the_background(tmp_path, monkeypatch):
+    put_claude(tmp_path, "c1", [claude_user("one")])
+    monkeypatch.setattr(ags, "windows_homes", lambda repo: [home_for(tmp_path)])
+    monkeypatch.setattr(ags.generic_agent, "wsl_agents", lambda: (None, {}))
+    background = []
+    monkeypatch.setattr(ags.generic_agent, "_stale_while_revalidate", lambda key, refresh: background.append(refresh))
+    ags.ensure_fresh(PROJECT)
+    assert [r["id"] for r in ags.scan_project(PROJECT, homes=[home_for(tmp_path)])] == ["c1"]  # built before returning
+    assert background == []
+    ags.ensure_fresh(PROJECT)
+    assert background == []  # fresh: no work at all
+    put_claude(tmp_path, "c2", [claude_user("two")])
+    monkeypatch.setattr(ags, "SYNC_SECONDS", -1)
+    ags.ensure_fresh(PROJECT)
+    assert len(background) == 1  # stale: handed to the background, the request is not held
+    assert [r["id"] for r in ags.scan_project(PROJECT, homes=[home_for(tmp_path)])] == ["c1"]
+    background[0]()
+    assert sorted(r["id"] for r in ags.scan_project(PROJECT, homes=[home_for(tmp_path)])) == ["c1", "c2"]
+
+
+def test_a_populated_index_is_served_at_once_after_a_restart(tmp_path, monkeypatch):
+    put_claude(tmp_path, "c1", [claude_user("one")])
+    monkeypatch.setattr(ags, "windows_homes", lambda repo: [home_for(tmp_path)])
+    monkeypatch.setattr(ags.generic_agent, "wsl_agents", lambda: (None, {}))
+    ags.ensure_fresh(PROJECT)
+    ags._SYNCED.clear()
+    background = []
+    monkeypatch.setattr(ags.generic_agent, "_stale_while_revalidate", lambda key, refresh: background.append(refresh))
+    monkeypatch.setattr(ags, "_walk", lambda unit: pytest.fail("the request must not walk the stores"))
+    ags.ensure_fresh(PROJECT)
+    assert len(background) == 1
+
+
+def test_find_session_refreshes_for_a_session_newer_than_the_index(tmp_path):
+    put_claude(tmp_path, "c1", [claude_user("one")])
+    scan(homes=[home_for(tmp_path)])
+    put_claude(tmp_path, "c2", [claude_user("two")])
+    assert find(tmp_path, "claude", "c2")["title"] == "two"
+    assert find(tmp_path, "claude", "nope") is None
