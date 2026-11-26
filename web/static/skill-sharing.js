@@ -2057,9 +2057,26 @@
     var title = String(review.title || review.skill_id || 'skill');
     var shell = _openShell('Review "' + title + '"');
 
+    var isUpdate =
+      !review.collision &&
+      review.installed_version !== undefined &&
+      review.installed_version !== null;
+    var upToDate = isUpdate && review.up_to_date === true;
+    var verb = isUpdate ? 'Update' : 'Install';
     var collision = COLLISION_TEXT[review.collision];
     if (review.collision && !collision) collision = 'A skill with this name already exists.';
     if (collision) shell.body.appendChild(_el('p', 'mp-modal-compat-risk ss-collision', collision));
+    if (isUpdate) {
+      shell.body.appendChild(
+        _el(
+          'p',
+          'ss-meta',
+          upToDate
+            ? 'Already up to date (v' + review.installed_version + ').'
+            : 'Update v' + review.installed_version + ' to v' + review.version,
+        ),
+      );
+    }
     if (review.description) shell.body.appendChild(_el('p', 'ss-desc', String(review.description)));
     var by = 'Shared by ' + (review.author || 'unknown') + ', version ' + review.version;
     shell.body.appendChild(_el('p', 'ss-meta', by));
@@ -2101,16 +2118,35 @@
     shell.body.appendChild(detailsBtn);
     shell.body.appendChild(fingerprint);
 
-    shell.body.appendChild(_el('p', 'ss-hint', 'Nothing is installed until you choose Install.'));
+    if (!upToDate) {
+      shell.body.appendChild(
+        _el(
+          'p',
+          'ss-hint',
+          (isUpdate ? 'Nothing changes' : 'Nothing is installed') +
+            ' until you choose ' +
+            verb +
+            '.',
+        ),
+      );
+    }
     var errorEl = _el('p', 'ss-error');
     errorEl.setAttribute('role', 'alert');
     shell.body.appendChild(errorEl);
 
-    var cancelBtn = _button('Cancel');
-    var installBtn = _button('Install', true);
+    var cancelBtn = _button(upToDate ? 'Close' : 'Cancel');
+    shell.actions.appendChild(cancelBtn);
+    if (upToDate) {
+      shell.setFocusables([detailsBtn, cancelBtn]);
+      cancelBtn.addEventListener('click', function () {
+        shell.close();
+      });
+      cancelBtn.focus();
+      return shell;
+    }
+    var installBtn = _button(verb, true);
     installBtn.disabled = !!collision;
     if (collision) installBtn.title = 'Resolve the name clash above to install';
-    shell.actions.appendChild(cancelBtn);
     shell.actions.appendChild(installBtn);
     shell.setFocusables([detailsBtn, cancelBtn, installBtn]);
 
@@ -2140,11 +2176,11 @@
             ? deps.errorMessage
               ? deps.errorMessage(out.body)
               : shareErrorText(out.resp, out.body)
-            : 'Could not install this skill. Try again.';
+            : 'Could not ' + verb.toLowerCase() + ' this skill. Try again.';
         return;
       }
       if (deps.onInstalled) deps.onInstalled(out.body, review);
-      else deps.showAlert('Installed "' + title + '".', 'success');
+      else deps.showAlert(verb + 'd "' + title + '".', 'success');
       if (deps.refresh) deps.refresh();
       shell.close();
     }

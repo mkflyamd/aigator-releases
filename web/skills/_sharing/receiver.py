@@ -7,7 +7,7 @@ from marketplace.github_fetcher import MAX_TOTAL_BYTES
 from marketplace import state as skill_state
 from marketplace.permissions import declared_permissions, files_digest, summarize_package
 
-from . import bundle
+from . import bundle, messages
 from .errors import ShareError
 from .provider import JSON_MAX_BYTES as MAX_JSON_BYTES
 from .publisher import checked_doc
@@ -81,13 +81,21 @@ def _fetch(provider, ref: dict, version: int | None) -> dict:
     }
 
 
-def _collision(skill_id: str) -> str:
+def _existing(skill_id: str, ref: dict) -> tuple[str, dict | None]:
+    """(collision, installed entry). A Community copy from this same folder is an update, not a collision."""
     entry = skill_state.get_entry(skill_id)
     if entry:
-        return "mine" if entry.get("tier") == "Mine" else "installed"
+        source = entry.get("share_source") or {}
+        if (
+            entry.get("tier") == "Community"
+            and source.get("drive_id") == ref["drive_id"]
+            and source.get("folder_id") == ref["folder_id"]
+        ):
+            return "", entry
+        return ("mine" if entry.get("tier") == "Mine" else "installed"), None
     if (_NATIVE_DIR / skill_id).exists():
-        return "native"
-    return ""
+        return "native", None
+    return "", None
 
 
 def _author(manifest: dict) -> str:
@@ -97,6 +105,7 @@ def _author(manifest: dict) -> str:
 def review(provider, ref: dict, version: int | None = None) -> dict:
     got = _fetch(provider, ref, version)
     manifest, files = got["manifest"], got["files"]
+    collision, installed = _existing(manifest["name"], ref)
     return {
         "skill_id": manifest["name"],
         "title": str(manifest.get("title") or manifest["name"]),
@@ -109,7 +118,9 @@ def review(provider, ref: dict, version: int | None = None) -> dict:
         "has_scripts": bundle.has_scripts(files),
         "requested_tools": declared_permissions(files).to_dict(),
         "summary": summarize_package(files),
-        "collision": _collision(manifest["name"]),
+        "collision": collision,
+        "installed_version": installed.get("shared_version") if installed else None,
+        "up_to_date": bool(installed) and installed.get("files_digest") == got["digest"],
     }
 
 
@@ -120,11 +131,18 @@ def install(provider, ref: dict, *, version: int, digest: str) -> dict:
     skill_id = got["manifest"]["name"]
     author = _author(got["manifest"])
     with installer._SKILL_OPS_LOCK:  # the name check and the install are one step, so two installs cannot both pass it
-        collision = _collision(skill_id)
+        collision, installed = _existing(skill_id, ref)
         if collision:
             raise ShareError("collision", _COLLISION_TEXT[collision])
         result = installer.install_skill_md(
-            skill_id, "", str(got["version"]), "Community", "", got["zip_bytes"], expected_digest=digest
+            skill_id,
+            "",
+            str(got["version"]),
+            "Community",
+            "",
+            got["zip_bytes"],
+            expected_digest=digest,
+            replace_files=installed is not None,
         )
         if not result.get("ok"):
             return result
@@ -138,3 +156,30 @@ def install(provider, ref: dict, *, version: int, digest: str) -> dict:
             },
         )
     return {**result, "version": got["version"], "digest": digest, "shared_by": author}
+
+
+def check_update(provider, skill_id: str) -> dict:
+    """Is there a newer version in the folder a received skill came from? Reads skill.json only."""
+    entry = skill_state.get_entry(skill_id)
+    source = (entry or {}).get("share_source") or {}
+    if not entry or entry.get("tier") != "Community" or not source.get("folder_id") or not source.get("drive_id"):
+        raise ShareError("invalid", "This skill was not shared with you.")
+    ref = {"drive_id": source["drive_id"], "folder_id": source["folder_id"]}
+    installed = entry.get("shared_version") if isinstance(entry.get("shared_version"), int) else 0
+    try:
+        found = provider.read_json(ref, "skill.json", MAX_JSON_BYTES)
+    except ShareError as err:
+        if err.code == "forbidden":
+            return {"status": "no_access", "installed": installed}
+        if err.code != "not_found":
+            raise
+        found = None
+    if found is None:
+        return {"status": "removed", "installed": installed}
+    latest = checked_doc(found[0])["latest"]
+    return {
+        "status": "update" if latest > installed else "current",
+        "installed": installed,
+        "latest": latest,
+        "link": messages.make_share_link(ref),
+    }

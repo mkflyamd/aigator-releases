@@ -269,12 +269,15 @@ def install_skill_md(
     install_url: str = "",
     _local_zip_bytes: bytes | None = None,
     expected_digest: str = "",
+    replace_files: bool = False,
 ) -> dict:
     """Install a skill from inline SKILL.md, a URL, or raw ZIP bytes.
 
     The whole package is read first. If expected_digest is given and the
     content's digest differs (the content changed since the user approved it),
-    nothing is written and the error is "content_changed". skill_id may be
+    nothing is written and the error is "content_changed". With replace_files,
+    files of an existing install that the new package does not contain are
+    removed once the new files are written. skill_id may be
     empty when _local_zip_bytes is supplied; it is derived from the SKILL.md
     frontmatter name (or the folder name) in that case.
 
@@ -327,17 +330,23 @@ def install_skill_md(
             logger.warning("Skill install write failed for %s: %s", skill_id, exc)
             return {"ok": False, "error": f"Install failed: {exc}"}
 
+        if replace_files:
+            delete_orphans(skill_dir, sorted(set(list_existing_skill_files(skill_dir)) - set(files)))
+
         with _INSTALL_INDEX_LOCK:
-            entries = [e for e in load_installed() if e.get("id") != skill_id]
-            entries.append(
-                {
-                    "id": skill_id,
-                    "version": version,
-                    "tier": tier,
-                    "installed_at": datetime.now(timezone.utc).isoformat(),
-                    "has_tools": (skill_dir / "tools.py").exists(),
-                }
-            )
+            existing = load_installed()
+            was_disabled = replace_files and any(e.get("id") == skill_id and e.get("disabled") for e in existing)
+            entries = [e for e in existing if e.get("id") != skill_id]
+            entry = {
+                "id": skill_id,
+                "version": version,
+                "tier": tier,
+                "installed_at": datetime.now(timezone.utc).isoformat(),
+                "has_tools": (skill_dir / "tools.py").exists(),
+            }
+            if was_disabled:
+                entry["disabled"] = True
+            entries.append(entry)
             save_installed(entries)
         return {
             "ok": True,
