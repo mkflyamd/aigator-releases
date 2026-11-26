@@ -375,7 +375,32 @@ def test_mnt_paths_compare_case_insensitively():
     assert not ags._same_dir("/home/me/App", "/home/me/app")
 
 
+def test_wsl_homes_does_not_touch_a_stopped_distro(monkeypatch, tmp_path):
+    monkeypatch.setattr(ags.generic_agent, "wsl_agents", lambda: ("Ubuntu", {"claude": "claude"}))
+    monkeypatch.setattr(ags.generic_agent, "wsl_distro_running", lambda d: False)
+    listed = []
+    monkeypatch.setattr(ags, "_wsl_user_homes", lambda distro: listed.append(distro) or [tmp_path])
+    with pytest.raises(ags.WslStopped):
+        ags.wsl_homes("C:\\work\\app")
+    assert listed == []
+
+
+def test_a_stopped_distro_keeps_the_last_wsl_sessions(monkeypatch):
+    kept = [{**mk("claude", "w1", 100, "wsl:Ubuntu"), "cwd": "/mnt/c/work/app"}]
+    ags._WSL[PROJECT] = (0.0, kept)
+
+    def stopped(repo):
+        raise ags.WslStopped
+
+    monkeypatch.setattr(ags, "wsl_homes", stopped)
+    monkeypatch.setattr(ags.generic_agent, "_stale_while_revalidate", lambda key, refresh: refresh())
+    records, pending = ags.wsl_sessions(PROJECT)
+    assert [r["id"] for r in records] == ["w1"] and pending is False
+    assert [r["id"] for r in ags.cached_wsl_records(PROJECT)] == ["w1"]
+
+
 def test_wsl_homes_lists_user_homes_and_installed_agents(monkeypatch, tmp_path):
+    monkeypatch.setattr(ags.generic_agent, "wsl_distro_running", lambda d: True)
     monkeypatch.setattr(ags.generic_agent, "wsl_agents", lambda: ("Ubuntu", {"claude": "claude"}))
     monkeypatch.setattr(ags, "_wsl_user_homes", lambda distro: [tmp_path])
     homes, agents = ags.wsl_homes("C:\\work\\app")
@@ -384,6 +409,7 @@ def test_wsl_homes_lists_user_homes_and_installed_agents(monkeypatch, tmp_path):
 
 
 def test_wsl_homes_is_empty_without_wsl_or_agents(monkeypatch, tmp_path):
+    monkeypatch.setattr(ags.generic_agent, "wsl_distro_running", lambda d: True)
     monkeypatch.setattr(ags, "_wsl_user_homes", lambda distro: [tmp_path])
     monkeypatch.setattr(ags.generic_agent, "wsl_agents", lambda: (None, {}))
     assert ags.wsl_homes("C:\\work\\app") == ([], ())
@@ -528,6 +554,7 @@ def test_windows_homes_scan_each_worktree(repo_with_worktree):
 
 
 def test_wsl_homes_cover_each_worktree(monkeypatch, tmp_path):
+    monkeypatch.setattr(ags.generic_agent, "wsl_distro_running", lambda d: True)
     monkeypatch.setattr(ags.generic_agent, "wsl_agents", lambda: ("Ubuntu", {"claude": "claude"}))
     monkeypatch.setattr(ags, "_wsl_user_homes", lambda distro: [tmp_path])
     monkeypatch.setattr(ags, "project_dirs", lambda repo: ["C:\\work\\app", "C:\\work\\app-wt"])

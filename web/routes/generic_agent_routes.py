@@ -126,6 +126,7 @@ async def prepare_agent_handoff(req: HandoffPrepareRequest):
 @router.get("/api/generic-agent/installed")
 async def installed_generic_agents():
     agents = generic_agent.launchable_agents()
+    await asyncio.to_thread(generic_agent.redetect_wsl_agents)
     found = await asyncio.to_thread(lambda: [generic_agent.is_installed(a) for a in agents])
     installed = dict(zip(agents, found))
     routed = await asyncio.to_thread(
