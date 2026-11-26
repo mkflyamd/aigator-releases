@@ -159,3 +159,14 @@ test('pick mode is announced through a polite live region outside the hidden ban
     /_webPinAnnounce = announce \|\| '';\s*_toolbarPushState\(\);\s*_webPinAnnounce = '';/,
   );
 });
+
+test('focus returns to the Pin button when picking ends, and Esc only cancels picking', () => {
+  assert.match(
+    toolbar,
+    /wasPinning && !state\.pinMode && document\.hasFocus\(\)\) elPin\.focus\(\)/,
+  );
+  assert.match(
+    toolbar,
+    /e\.key === 'Escape' && elBar\.classList\.contains\('is-pinning'\)\) \{\s*ipcRenderer\.send\('toolbar:web-pin-cancel'\)/,
+  );
+});
