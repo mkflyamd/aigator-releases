@@ -41,6 +41,13 @@ def test_read_file_missing(tmp_path):
     assert "error" in result
 
 
+def test_read_file_on_a_folder_points_to_list_dir(tmp_path):
+    from skills.file_ops.tools import _tool_read_file
+
+    result = _tool_read_file(path=str(tmp_path))
+    assert "folder" in result["error"] and "list_dir" in result["error"]
+
+
 def test_read_file_too_large(tmp_path, monkeypatch):
     import skills.file_ops.tools as fo_mod
 

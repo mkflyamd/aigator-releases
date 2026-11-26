@@ -919,7 +919,7 @@ def _read_skill_file(skill_dir: Path, file: str) -> dict:
     if not target.is_relative_to(root):
         return {"error": "file must be inside the skill folder"}
     if not target.is_file():
-        return {"error": f"No file '{file}' in this skill.", "files": _skill_files(skill_dir)}
+        return {"error": f"No file '{file}' in this skill.", "skill_files": _skill_files(skill_dir)}
     if target.suffix.lower() not in _SKILL_FILE_TEXT_SUFFIXES:
         return {"path": str(target), "note": "Not a text file, so it is not read here. Use this path from a script."}
     if target.stat().st_size > _SKILL_FILE_MAX_BYTES:
@@ -954,7 +954,7 @@ def _tool_read_skill(skill_id: str, file: str = "") -> dict:
         result["skill_guide"] = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
         listing = _skill_files(skill_dir)
         if listing:
-            result["files"] = listing
+            result["skill_files"] = listing
     if not result:
         # Check if this is a registered MCP connection — no SKILL.md needed, describe its tools
         # g-* synthetic skills (g-gmail, g-sheets, etc.) route to the mcp-google-workspace connection

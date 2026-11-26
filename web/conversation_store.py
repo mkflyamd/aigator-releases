@@ -16,6 +16,8 @@ MAX_TURNS = 20
 # stubbed only when they exceed this threshold (avoids stubbing short snippets).
 MAX_ASSISTANT_MSG_BYTES = 8 * 1024
 
+INTERRUPTED_MSG = "⚠️ My previous response was interrupted before it could complete. Please resend your message and I'll try again."
+
 
 class ConversationStore:
     def __init__(self) -> None:
@@ -385,7 +387,7 @@ def _drop_orphaned_tool_use(messages: list[dict]) -> list[dict]:
                     cleaned.append(
                         {
                             "role": "assistant",
-                            "content": "⚠️ My previous response was interrupted before it could complete. Please resend your message and I'll try again.",
+                            "content": INTERRUPTED_MSG,
                         }
                     )
                     injected = True

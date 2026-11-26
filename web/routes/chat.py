@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from config import load_config as _load_config
 from conversation_store import index_of_message
+from resume_note import resume_note
 import shared
 from security import verify_csrf
 from skill_pin import pin_context_block as _pin_context_block, resolve_pin as _resolve_pin
@@ -2486,10 +2487,11 @@ async def chat(req: ChatRequest):
                 turn_user_msg=_turn_user_msg,
             )
 
-        _current_loop = _build_loop(_selected_active_tools, system, msgs, _required_names)
+        _turn_system = system + resume_note(history_window)
+        _current_loop = _build_loop(_selected_active_tools, _turn_system, msgs, _required_names)
         _loop_tools = _selected_active_tools
         _loop_required = _required_names
-        _current_system = system
+        _current_system = _turn_system
         _current_msgs = msgs
         _assistant_text_parts: list[str] = []
         _retry_count = 0
