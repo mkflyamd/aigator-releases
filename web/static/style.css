@@ -23059,22 +23059,7 @@ body.tab-fullscreen {
 .usage-notice-actions {
   align-items: center;
 }
-.usage-notice-note {
-  margin-right: auto;
-  font-size: 0.78rem;
-  color: var(--text-sub);
-}
-.usage-sharing-toast {
-  position: fixed;
-  right: 1.25rem;
-  bottom: 4.5rem;
-  z-index: 9100;
-  max-width: 22rem;
-  padding: 0.6rem 1rem;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
-  font-size: 0.82rem;
-  color: var(--text);
+.toggle-switch input:disabled + .toggle-track {
+  opacity: 0.55;
+  cursor: not-allowed;
 }

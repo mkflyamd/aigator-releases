@@ -69,7 +69,6 @@ def env(tmp_path, monkeypatch):
     con.close()
     monkeypatch.setattr(usage_report, "TASKS_DB", db)
     monkeypatch.setattr(usage_report, "STATE_FILE", tmp_path / "usage_report.json")
-    usage_report.set_consent("on")
     graph = FakeGraph()
     monkeypatch.setattr(usage_report, "_graph_client", lambda: graph)
     monkeypatch.setattr(usage_report, "_app_version", lambda: "9.9.9")
@@ -475,66 +474,36 @@ def test_builtin_tools_exclude_namespaced_marketplace_and_mcp_names(monkeypatch)
     assert usage_report._builtin_tools() == {"read_calendar"}
 
 
-async def test_nothing_is_sent_before_the_user_answers(env):
+async def test_sends_by_default_without_any_acknowledgement(env):
     db, graph = env
-    usage_report.STATE_FILE.unlink()
+    assert not usage_report.STATE_FILE.exists()
     _add(db, "usage_log", "2026-11-08", 1)
-    assert usage_report.consent_choice() == "unset"
-    assert await usage_report.report_pending(CFG, today=TODAY) == 0
-    assert graph.posts == []
-
-
-async def test_nothing_is_sent_after_the_user_turns_sharing_off(env):
-    db, graph = env
-    usage_report.set_consent("off")
-    _add(db, "usage_log", "2026-11-08", 1)
-    assert await usage_report.report_pending(CFG, today=TODAY) == 0
-    assert graph.posts == []
-
-
-async def test_turning_sharing_back_on_sends_the_pending_day(env):
-    db, graph = env
-    usage_report.set_consent("off")
-    _add(db, "usage_log", "2026-11-08", 1)
-    await usage_report.report_pending(CFG, today=TODAY)
-    usage_report.set_consent("on")
     assert await usage_report.report_pending(CFG, today=TODAY) == 1
-
-
-def test_a_new_notice_version_needs_a_new_answer_but_off_stays_off(env, monkeypatch):
-    monkeypatch.setattr(usage_report, "NOTICE_VERSION", usage_report.NOTICE_VERSION + 1)
-    assert usage_report.consent_choice() == "unset"
-    usage_report.set_consent("off")
-    monkeypatch.setattr(usage_report, "NOTICE_VERSION", usage_report.NOTICE_VERSION + 1)
-    assert usage_report.consent_choice() == "off"
-
-
-def test_set_consent_rejects_other_values(env):
-    with pytest.raises(ValueError):
-        usage_report.set_consent("maybe")
-
-
-async def test_consent_changed_during_a_send_is_not_overwritten(env, monkeypatch):
-    db, graph = env
-    _add(db, "usage_log", "2026-11-08", 1)
-    _add(db, "usage_log", "2026-11-07", 1)
-    real_send = usage_report._send
-
-    def send_then_opt_out(*args, **kwargs):
-        result = real_send(*args, **kwargs)
-        usage_report.set_consent("off")
-        return result
-
-    monkeypatch.setattr(usage_report, "_send", send_then_opt_out)
-    assert await usage_report.report_pending(CFG, today=TODAY) == 1
-    assert usage_report.consent_choice() == "off"
     assert len(graph.posts) == 1
 
 
-def test_delivery_status_follows_the_consent_and_last_result(env):
+async def test_a_stored_off_choice_from_an_earlier_build_is_ignored(env):
+    db, graph = env
+    usage_report.STATE_FILE.write_text('{"consent": "off", "notice_version": 1}', encoding="utf-8")
+    _add(db, "usage_log", "2026-11-08", 1)
+    assert await usage_report.report_pending(CFG, today=TODAY) == 1
+    assert usage_report.delivery_status(CFG)["status"] == "sent"
+
+
+async def test_nothing_is_sent_when_an_admin_has_not_enabled_reporting(env):
+    db, graph = env
+    _add(db, "usage_log", "2026-11-08", 1)
+    assert await usage_report.report_pending({}, today=TODAY) == 0
+    assert graph.posts == []
+
+
+def test_there_is_no_way_to_opt_out_in_code():
+    assert not hasattr(usage_report, "set_consent")
+    assert not hasattr(usage_report, "consent_choice")
+
+
+def test_delivery_status_starts_waiting_and_is_unavailable_without_admin_config(env):
     assert usage_report.delivery_status(CFG)["status"] == "waiting"
-    usage_report.set_consent("off")
-    assert usage_report.delivery_status(CFG)["status"] == "off"
     assert usage_report.delivery_status({})["available"] is False
 
 
@@ -559,25 +528,4 @@ async def test_delivery_status_reports_sent_delayed_and_signin(env):
 
 
 def test_delivery_status_exposes_nothing_but_status_fields(env):
-    assert set(usage_report.delivery_status(CFG)) == {"available", "consent", "status", "last_sent_at"}
-
-
-async def test_request_report_wakes_the_loop_early(env, monkeypatch):
-    import asyncio
-
-    runs = []
-
-    async def fake_report(cfg, today=None):
-        runs.append(1)
-        return 0
-
-    monkeypatch.setattr(usage_report, "report_pending", fake_report)
-    task = asyncio.create_task(usage_report.run_usage_report_loop(CFG))
-    await asyncio.sleep(0.05)
-    assert runs == [1]
-    usage_report.request_report()
-    await asyncio.sleep(0.05)
-    assert runs == [1, 1]
-    task.cancel()
-    await task
-    usage_report.request_report()
+    assert set(usage_report.delivery_status(CFG)) == {"available", "status", "last_sent_at"}

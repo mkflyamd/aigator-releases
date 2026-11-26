@@ -44,27 +44,26 @@ Model names are never sent: each model is counted under a vendor family from a c
 
 "Created By" is stamped by SharePoint from the token, so the sender cannot forge another user's rows.
 
-## Consent
+## Notice and Settings
 
-Nothing is sent until the user answers a first-run notice. The answer belongs to the user: an admin turning reporting on only makes the Settings section appear and never turns sharing on.
+Reporting is mandatory. It is on whenever an admin has made it available (list IDs set), and the user cannot turn it off. The Settings toggle stays as a locked affordance in case opt-out is revisited.
 
-- State in `usage_report.json`: `consent` (`on` or `off`), `notice_version`, `last_result` and `last_sent_at`. With no `consent`, or with `on` for an older `notice_version`, the choice is unset and nothing is sent. An `off` stays `off` when the notice changes.
-- The notice opens once reporting is available and the choice is unset, at the next moment no other dialog or onboarding is open. Buttons: **Turn off** and **Keep sharing**. Esc decides later: nothing is saved and the notice shows again on the next launch. Clicking outside the dialog does nothing. Focus starts on the title.
-- The notice lists what is sent (work email, a random install ID, operating system and version, counts of messages, tokens, errors, and the features, tools and model families used), what is never sent (messages, prompts, files, paths), where it goes (the company's SharePoint list) and how to turn it off.
-- Settings, General, Privacy has one toggle, **Share usage with my organization**, a one-line delivery status, and **What is sent**, which reopens the notice read-only with a single **Close** button. The section is hidden when reporting is not available. Turning the toggle on before an answer opens the notice first.
-- Delivery status is one of Not started, Off, Waiting, Delayed, Sign-in needed or Sent, with the last report time when there is one.
-- Routes: `GET /api/usage-sharing` returns `{available, consent, status, last_sent_at}`. `POST /api/usage-sharing` with `{enabled}` saves the answer, wakes the reporter and returns the same status. The POST requires the CSRF token.
+- No consent state is stored or read. A `consent` or `notice_version` left in `usage_report.json` by an earlier build is ignored. State holds `install_id`, `sent`, `last_result` and `last_sent_at`.
+- The notice is informational. It opens once reporting is available and the browser has not stored an acknowledgement (`localStorage` key `aigator.usageNoticeAck`), at the next moment no other dialog or onboarding is open. It has one **OK** button. Esc closes it without acknowledging, so it shows again on the next launch. Sending never waits for the acknowledgement. Focus starts on the title.
+- The notice lists what is sent (account info, a random install ID, operating system and version, counts of messages, tokens, errors, and the features, tools and model families used) and what is never sent (messages, prompts, files, paths). It does not name where the data is stored.
+- Settings, General, Privacy has the **Share usage with my organization** toggle, shown checked and disabled, a one-line delivery status, and **What is sent**, which reopens the notice read-only with a single **Close** button. The section is hidden when reporting is not available.
+- Delivery status is one of Waiting, Delayed, Sign-in needed or Sent, with the last report time when there is one. No user-visible text names the storage backend.
+- Routes: `GET /api/usage-sharing` returns `{available, status, last_sent_at}`. There is no write route.
 
 ## Component: `web/usage_report.py`
 
 The counts are read from `tasks.db`, which already records them. There are no new counters.
 
-| Function                                  | Purpose                                                                                                                                                                |
-| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `report_pending(cfg, today=None) -> int`  | Sends each unsent active past day. Returns the number of rows sent. Never raises.                                                                                      |
-| `run_usage_report_loop(cfg)`              | Background loop: `report_pending` at startup, then once a day or when `request_report()` is called. Started in `app.py`'s lifespan, cancelled and awaited at shutdown. |
-| `consent_choice()`, `set_consent(choice)` | Read and save the user's answer. `report_pending` sends nothing unless the choice is `on`, and checks it again before each day it sends.                               |
-| `delivery_status(cfg)`                    | Status fields for Settings. No counts, emails or error text.                                                                                                           |
+| Function                                 | Purpose                                                                                                                           |
+| ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `report_pending(cfg, today=None) -> int` | Sends each unsent active past day. Returns the number of rows sent. Never raises.                                                 |
+| `run_usage_report_loop(cfg)`             | Background loop: `report_pending` at startup, then once a day. Started in `app.py`'s lifespan, cancelled and awaited at shutdown. |
+| `delivery_status(cfg)`                   | Status fields for Settings. No counts, emails or error text.                                                                      |
 
 - State lives in `~/.gator/usage_report.json`: the `InstallId` and the `email|date` keys already sent (last 60).
 - Config keys in `config.json`: `usage_list_site_id`, `usage_list_id`, `usage_list_link`. Nothing is shipped in the source. Reporting is off until both the site ID and the list ID are set.
@@ -113,10 +112,9 @@ The existing "Gator Usage" list is used. Gator's token can write rows but not ch
 - Each new signal is counted from `tasks.db` for its day, and missing tables or columns give zeros.
 - Background-only days stay inactive with the new signals present.
 - `Details` never contains user-added MCP server or skill names.
-- Nothing is sent while the choice is unset or off, and a day that was pending is sent after the user turns sharing on.
-- A new `notice_version` asks again, but an earlier off stays off.
-- A choice saved while a send is running is not overwritten, and no further day is sent after an opt-out.
+- A day is sent without any acknowledgement, a stored `off` from an earlier build is ignored, and nothing is sent when an admin has not enabled reporting.
+- `set_consent` and `consent_choice` no longer exist.
 - Models are counted by vendor family and a custom model name is never sent.
-- Delivery status follows the choice and the last result, and exposes only the four status fields.
-- `tests/test_usage_sharing_routes.py`: the status route, the choice route with and without a CSRF token, and that Keep sharing wakes the reporter.
-- `tests/usage_sharing_ui.test.js`: the notice opens on first run, Esc saves nothing, toggling on before an answer opens the notice first, Keep sharing and Turn off save the matching answer, and the read-only version only closes.
+- Delivery status follows the last result and exposes only `available`, `status` and `last_sent_at`.
+- `tests/test_usage_sharing_routes.py`: the status route, and that no write route exists.
+- `tests/usage_sharing_ui.test.js`: the notice opens on first run with one OK and only the two fact rows, Esc does not acknowledge, OK does, the toggle ships locked and makes no request, no text names SharePoint, and the read-only version only closes.

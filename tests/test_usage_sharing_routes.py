@@ -1,4 +1,4 @@
-"""Usage-sharing consent routes: status, choice, CSRF."""
+"""Usage-sharing status route: read-only, no opt-out."""
 
 import pathlib
 import sys
@@ -28,13 +28,9 @@ def client(tmp_path, monkeypatch):
     return TestClient(app)
 
 
-def _csrf():
-    return {"X-CSRF-Token": security.get_csrf_token(HOST), "Host": HOST}
-
-
-def test_status_starts_not_started_when_reporting_is_available(client):
+def test_status_starts_waiting_when_reporting_is_available(client):
     body = client.get("/api/usage-sharing").json()
-    assert body == {"available": True, "consent": "unset", "status": "not_started", "last_sent_at": None}
+    assert body == {"available": True, "status": "waiting", "last_sent_at": None}
 
 
 def test_status_is_unavailable_without_admin_config(client, monkeypatch):
@@ -42,28 +38,9 @@ def test_status_is_unavailable_without_admin_config(client, monkeypatch):
     assert client.get("/api/usage-sharing").json()["available"] is False
 
 
-def test_choice_requires_the_csrf_token(client):
-    assert client.post("/api/usage-sharing", json={"enabled": True}).status_code == 403
-    assert usage_report.consent_choice() == "unset"
-
-
-def test_keep_sharing_saves_consent_and_wakes_the_reporter(client, monkeypatch):
-    woke = []
-    monkeypatch.setattr(usage_report, "request_report", lambda: woke.append(1))
-    body = client.post("/api/usage-sharing", json={"enabled": True}, headers=_csrf()).json()
-    assert body["consent"] == "on"
-    assert usage_report.consent_choice() == "on"
-    assert woke == [1]
-
-
-def test_turn_off_saves_consent_and_does_not_wake_the_reporter(client, monkeypatch):
-    woke = []
-    monkeypatch.setattr(usage_report, "request_report", lambda: woke.append(1))
-    body = client.post("/api/usage-sharing", json={"enabled": False}, headers=_csrf()).json()
-    assert body["consent"] == "off"
-    assert body["status"] == "off"
-    assert woke == []
-
-
-def test_choice_needs_a_boolean(client):
-    assert client.post("/api/usage-sharing", json={}, headers=_csrf()).status_code == 422
+def test_there_is_no_opt_out_route(client):
+    headers = {"X-CSRF-Token": security.get_csrf_token(HOST), "Host": HOST}
+    for method in ("post", "put", "patch", "delete"):
+        response = getattr(client, method)("/api/usage-sharing", headers=headers)
+        assert response.status_code == 405
+    assert [r.methods for r in router.routes] == [{"GET"}]

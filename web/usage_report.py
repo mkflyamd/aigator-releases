@@ -26,7 +26,6 @@ MAX_AGE_DAYS = 7
 _REPORT_INTERVAL_S = 24 * 60 * 60
 _SENT_KEYS_KEPT = 60
 _MAX_TOP_TOOLS = 10
-NOTICE_VERSION = 1
 _MODEL_FAMILIES = ("claude", "gpt", "gemini", "llama", "qwen", "glm", "deepseek", "mistral")
 _TOOL_PLACEHOLDER = "<tool>"
 _PLAIN_NAME = re.compile(r"^[A-Za-z0-9_.-]+$")
@@ -87,30 +86,7 @@ def _save_state(state: dict) -> None:
     STATE_FILE.write_text(json.dumps(state), encoding="utf-8")
 
 
-def consent_choice(state: dict | None = None) -> str:
-    """'on' or 'off' once the user answered the current notice, else 'unset'."""
-    state = _load_state() if state is None else state
-    if state.get("consent") == "off":
-        return "off"
-    if state.get("consent") == "on" and state.get("notice_version") == NOTICE_VERSION:
-        return "on"
-    return "unset"
-
-
-def set_consent(choice: str) -> None:
-    if choice not in ("on", "off"):
-        raise ValueError(choice)
-    state = _load_state()
-    state["consent"] = choice
-    state["notice_version"] = NOTICE_VERSION
-    _save_state(state)
-
-
 def _record_result(state: dict, result: str, sent: int = 0) -> None:
-    latest = _load_state()
-    for key in ("consent", "notice_version"):
-        if key in latest:
-            state[key] = latest[key]
     state["last_result"] = result
     if sent:
         state["last_sent_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -120,15 +96,10 @@ def _record_result(state: dict, result: str, sent: int = 0) -> None:
 def delivery_status(cfg: dict | None) -> dict:
     """Non-sensitive status for Settings: no counts, emails or error text."""
     if not is_enabled(cfg):
-        return {"available": False, "consent": "unset", "status": "off", "last_sent_at": None}
+        return {"available": False, "status": "off", "last_sent_at": None}
     state = _load_state()
-    consent = consent_choice(state)
     last_sent_at = state.get("last_sent_at")
-    if consent == "unset":
-        status = "not_started"
-    elif consent == "off":
-        status = "off"
-    elif state.get("last_result") == "signin":
+    if state.get("last_result") == "signin":
         status = "signin"
     elif state.get("last_result") == "failed":
         status = "delayed"
@@ -136,7 +107,7 @@ def delivery_status(cfg: dict | None) -> dict:
         status = "sent"
     else:
         status = "waiting"
-    return {"available": True, "consent": consent, "status": status, "last_sent_at": last_sent_at}
+    return {"available": True, "status": status, "last_sent_at": last_sent_at}
 
 
 def model_family(model) -> str:
@@ -318,7 +289,7 @@ def _send(gc, site: str, list_id: str, link: str, fields: dict) -> str:
 
 async def report_pending(cfg: dict | None = None, today: date | None = None) -> int:
     """Send each unsent active past day (up to MAX_AGE_DAYS back). Returns rows sent. Never raises."""
-    if not is_enabled(cfg) or consent_choice() != "on":
+    if not is_enabled(cfg):
         return 0
     site = cfg["usage_list_site_id"]
     list_id = cfg["usage_list_id"]
@@ -342,8 +313,6 @@ async def report_pending(cfg: dict | None = None, today: date | None = None) -> 
             key = f"{email}|{day}"
             if day >= today.isoformat() or key in sent_keys:
                 continue
-            if consent_choice() != "on":
-                break
             messages, tool_runs = days[day]
             fields = {
                 "Title": key,
@@ -378,28 +347,11 @@ async def report_pending(cfg: dict | None = None, today: date | None = None) -> 
         return 0
 
 
-_wake: asyncio.Event | None = None
-
-
-def request_report() -> None:
-    """Ask the running loop to report now (after the user turns sharing on)."""
-    if _wake is not None:
-        _wake.set()
-
-
 async def run_usage_report_loop(cfg: dict) -> None:
-    """Background loop: report at startup, then once a day or when asked."""
-    global _wake
-    _wake = asyncio.Event()
+    """Background loop: report at startup, then once a day."""
     try:
         while True:
             await report_pending(cfg)
-            try:
-                await asyncio.wait_for(_wake.wait(), _REPORT_INTERVAL_S)
-            except asyncio.TimeoutError:
-                pass
-            _wake.clear()
+            await asyncio.sleep(_REPORT_INTERVAL_S)
     except asyncio.CancelledError:
         pass
-    finally:
-        _wake = None
