@@ -34,7 +34,7 @@ def sup(tmp_path):
     reset_supervisor(None)
 
 
-def _register(monkeypatch, transport="http", conn_id="mcp-demo"):
+def _register(monkeypatch, transport="http", conn_id="mcp-demo", tools=("lookup",), **overrides):
     monkeypatch.setattr(shared, "TOOL_DISPATCH", {})
     monkeypatch.setattr(shared, "TOOLS", [])
     monkeypatch.setattr(shared, "TOOL_STATUS", {})
@@ -42,11 +42,12 @@ def _register(monkeypatch, transport="http", conn_id="mcp-demo"):
     conn = {
         "id": conn_id, "name": "Demo", "transport": transport, "url": "https://demo.example.com/mcp",
         "command": "demo-mcp", "args": [], "env": {},
-        "cached_tools": [{"name": "lookup", "description": "d", "input_schema": SCHEMA}],
+        "cached_tools": [{"name": t, "description": "d", "input_schema": SCHEMA} for t in tools],
+        **overrides,
     }
     manager._register(conn)
-    (alias,) = [a for a in shared.TOOL_DISPATCH if "lookup" in a]
-    return shared.TOOL_DISPATCH[alias]
+    handlers = {t: shared.TOOL_DISPATCH[next(a for a in shared.TOOL_DISPATCH if t in a)] for t in tools}
+    return handlers[tools[0]] if len(tools) == 1 else handlers
 
 
 class Hang:
@@ -265,3 +266,42 @@ def test_releasing_an_old_process_does_not_evict_the_fresh_one_that_replaced_it(
         assert stdio_client._pool == {}
     old.close.assert_called_once()
     fresh.close.assert_called_once()
+
+
+# ── a real stdio server, no mocks ───────────────────────────────────────────
+
+FAKE_SERVER = os.path.join(os.path.dirname(__file__), "mcp", "fixtures", "fake_mcp_server.py")
+
+
+def _wait_for(predicate, timeout=10.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.02)
+    return False
+
+
+def test_a_real_stdio_server_that_outlives_its_budget_gets_its_own_cancel_and_a_fresh_process(
+        monkeypatch, sup, tmp_path):
+    log = tmp_path / "fake-mcp.log"
+    cfg = {"command": sys.executable, "args": [FAKE_SERVER], "env": {"FAKE_MCP_LOG": str(log)}, "name": "Demo"}
+    handlers = _register(monkeypatch, transport="stdio", tools=("slow", "pid"), **cfg)
+    try:
+        first_pid = handlers["pid"](_context_id="tab-1")["result"]
+
+        with timeouts.override("mcp", run_ms=400), patch("mcp.manager._mark_health_result"):
+            started = time.monotonic()
+            result = handlers["slow"](_context_id="tab-1")
+        assert time.monotonic() - started < 5
+        assert "still running" in result["error"] and "may still complete" in result["error"]
+        assert result["_mcp_call"]["state"] == "abandoned"
+
+        calls = [line.split()[1] for line in log.read_text().splitlines() if line.startswith("call ")]
+        assert len(calls) == 1
+        assert _wait_for(lambda: f"cancelled {calls[0]}" in log.read_text().splitlines())
+
+        second_pid = handlers["pid"](_context_id="tab-1")["result"]
+        assert second_pid != first_pid
+    finally:
+        stdio_client.release_from_pool(cfg)

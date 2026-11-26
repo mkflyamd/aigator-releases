@@ -12,8 +12,22 @@ Supports:
 """
 
 import json
+import os
 import sys
+import threading
 import time
+
+# `slow` answers only after 30s unless the client sends notifications/cancelled for it. With FAKE_MCP_LOG set,
+# every slow call and every cancel notice is appended there as "call <id> <tool>" / "cancelled <id>".
+_cancelled: dict = {}
+_write_lock = threading.Lock()
+
+
+def _log(line):
+    path = os.environ.get("FAKE_MCP_LOG")
+    if path:
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
 
 
 def respond(request_id, result=None, error=None):
@@ -22,8 +36,14 @@ def respond(request_id, result=None, error=None):
         msg["error"] = error
     else:
         msg["result"] = result
-    sys.stdout.write(json.dumps(msg) + "\n")
-    sys.stdout.flush()
+    with _write_lock:
+        sys.stdout.write(json.dumps(msg) + "\n")
+        sys.stdout.flush()
+
+
+def _slow(req_id):
+    if not _cancelled.setdefault(req_id, threading.Event()).wait(30):
+        respond(req_id, {"content": [{"type": "text", "text": "late"}]})
 
 
 def main():
@@ -50,6 +70,10 @@ def main():
             )
         elif method == "notifications/initialized":
             continue  # no response for notifications
+        elif method == "notifications/cancelled":
+            request_id = req.get("params", {}).get("requestId")
+            _log(f"cancelled {request_id}")
+            _cancelled.setdefault(request_id, threading.Event()).set()
         elif method == "tools/list":
             respond(
                 req_id,
@@ -71,6 +95,11 @@ def main():
             args = req.get("params", {}).get("arguments", {})
             if tool == "echo":
                 respond(req_id, {"content": [{"type": "text", "text": str(args)}]})
+            elif tool == "pid":
+                respond(req_id, {"content": [{"type": "text", "text": str(os.getpid())}]})
+            elif tool == "slow":
+                _log(f"call {req_id} slow")
+                threading.Thread(target=_slow, args=(req_id,), daemon=True).start()
             elif tool == "crash":
                 sys.exit(1)
             elif tool == "hang":
