@@ -124,7 +124,7 @@ def _transcript_is_current(meta: dict, idle_at: float) -> bool:
 
     repo_path = (get_project(meta.get("project_id") or "") or {}).get("repo_path")
     if not repo_path:
-        logger.info("not suspending %s: no project %r", meta.get("session_id"), meta.get("project_id"))
+        logger.debug("not suspending %s: no project %r", meta.get("session_id"), meta.get("project_id"))
         return False
     try:
         rec = find_session(repo_path, meta["agent"], meta["session_id"])
@@ -133,7 +133,7 @@ def _transcript_is_current(meta: dict, idle_at: float) -> bool:
         return False
     current = rec is not None and rec["last_active_at"] >= idle_at - TRANSCRIPT_SLACK_SECONDS
     if not current:
-        logger.info(
+        logger.debug(
             "not suspending %s: stored session %s",
             meta["session_id"],
             "not found" if rec is None else "older than the idle state",
