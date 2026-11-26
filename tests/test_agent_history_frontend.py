@@ -215,8 +215,22 @@ def test_history_list_has_a_valid_list_structure_and_named_rows():
     assert "section.setAttribute('aria-labelledby', label.id);" in HISTORY
     row = HISTORY.split("function buildRow(")[1].split("function ")[0]
     assert "item.setAttribute('role', 'listitem');" in row
-    assert "head.setAttribute('role', 'group');" in row
+    assert "head.setAttribute('role', 'button');" in row
     assert "'aria-label'," in row
+
+
+def test_row_button_semantics_only_when_a_primary_action_exists():
+    row = HISTORY.split("function buildRow(")[1].split("function ")[0]
+    gated = row.split("if (primary) {")[1].split("\n    }\n")[0]
+    for part in ("head.tabIndex = 0;", "head.setAttribute('role', 'button');", "'aria-label',"):
+        assert part in gated
+        assert part not in row.replace(gated, "")
+
+
+def test_current_terminal_is_conveyed_by_aria_current_not_the_row_label():
+    assert "current terminal" not in HISTORY
+    assert "head.setAttribute('aria-current', 'true')" in HISTORY
+    assert "head.removeAttribute('aria-current')" in HISTORY
 
 
 def test_left_view_tabs_expose_which_pane_is_active():
@@ -246,6 +260,18 @@ def test_terminal_tabs_use_the_history_state_dot():
 def test_tab_label_shows_its_full_name_on_hover():
     assert "label.title = sess.label;" in TERM
     assert "labelEl.title = sess.label;" in TERM
+
+
+def test_whole_row_activates_primary_action_and_marks_active_terminal():
+    bind = HISTORY.split("function bindList()")[1].split("\n  }\n")[0]
+    assert "e.target.closest('button, a, input')" in bind
+    assert "e.key !== 'Enter' && e.key !== ' '" in bind
+    assert "activateRow(" in bind
+    assert "primaryAction(row, rowViewing(row))" in HISTORY
+    assert "'aria-current'" in HISTORY
+    assert "rowActive(r)," in HISTORY
+    css = _history_css()
+    assert ".ah-item.ah-active::before" in css
 
 
 def test_a_session_open_elsewhere_is_taken_over_never_duplicated():

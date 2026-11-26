@@ -403,6 +403,44 @@ function _genAgentRenderTabs(tabId) {
     });
     scroll.insertBefore(tab, newBtn);
   });
+  _genAgentEnsureTabArrows(scroll);
+  _genAgentRevealActiveTab(scroll);
+}
+
+// Left/right overflow arrows, the same ones the chat tab bar uses (app.js
+// _wireTabScrollArrows + .tab-scroll-arrow): pinned to the strip's edges and
+// shown only while there are tabs scrolled out of view.
+function _genAgentEnsureTabArrows(scroll) {
+  if (!scroll._updateArrows) {
+    scroll.querySelectorAll('.tab-scroll-arrow').forEach((el) => el.remove());
+    const make = (side, glyph, title) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'tab-scroll-arrow tab-scroll-arrow-' + side;
+      btn.textContent = glyph;
+      btn.title = title;
+      btn.setAttribute('aria-label', title);
+      return btn;
+    };
+    const arrowL = make('left', '‹', 'Scroll left');
+    const arrowR = make('right', '›', 'Scroll right');
+    scroll.insertBefore(arrowL, scroll.firstChild);
+    scroll.appendChild(arrowR);
+    scroll._updateArrows = _wireTabScrollArrows(scroll, arrowL, arrowR);
+    if (typeof ResizeObserver === 'function')
+      new ResizeObserver(scroll._updateArrows).observe(scroll);
+  }
+  scroll._updateArrows();
+}
+
+// Bring the active tab fully into view, clear of the arrows, but only when it is
+// not already visible so re-renders never jerk the strip.
+function _genAgentRevealActiveTab(scroll) {
+  const el = scroll.querySelector('.gtp-tab.active');
+  if (!el) return;
+  const { outOfView, target } = _tabRevealInfo(scroll, el);
+  if (outOfView) scroll.scrollLeft = target;
+  if (scroll._updateArrows) scroll._updateArrows();
 }
 
 // Toggle the .active class on existing tab DOM elements — like terminal.js's
@@ -418,6 +456,8 @@ function _genAgentUpdateActiveTab(tabId) {
   scroll.querySelectorAll('.gtp-tab').forEach((el) => {
     el.classList.toggle('active', el.dataset.sid === state.activeId);
   });
+  _genAgentRevealActiveTab(scroll);
+  if (window.agentHistory) window.agentHistory.syncActive();
 }
 
 function _genAgentBeginRename(sess, labelEl) {

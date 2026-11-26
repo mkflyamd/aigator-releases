@@ -399,16 +399,26 @@
   // changes on its own — compute the palette from the current theme and
   // re-apply it live (see the 'gator:theme-change' listener below).
   function _xtermTheme() {
+    // Shared with the code-agent terminals (tp-code-agent.js) so both get the
+    // same light palette; the fallback covers the load window before it runs.
+    if (typeof _caXtermTheme === 'function') return _caXtermTheme();
     const light = document.documentElement.getAttribute('data-theme') === 'light';
     return light
       ? { background: '#ffffff', foreground: '#0f172a', cursor: '#0f172a' }
       : { background: '#0b0d12', foreground: '#d4d4d4', cursor: '#d4d4d4' };
   }
 
+  function _xtermMinContrast() {
+    return typeof _caXtermMinContrast === 'function' ? _caXtermMinContrast() : 1;
+  }
+
   window.addEventListener('gator:theme-change', () => {
     const theme = _xtermTheme();
+    const contrast = _xtermMinContrast();
     STATE.sessions.forEach((sess) => {
-      if (sess.term) sess.term.options.theme = theme;
+      if (!sess.term) return;
+      sess.term.options.theme = theme;
+      sess.term.options.minimumContrastRatio = contrast;
     });
   });
 
@@ -419,6 +429,7 @@
       fontSize: 13,
       cursorBlink: true,
       theme: _xtermTheme(),
+      minimumContrastRatio: _xtermMinContrast(),
       scrollback: 5000,
       convertEol: true,
     });
