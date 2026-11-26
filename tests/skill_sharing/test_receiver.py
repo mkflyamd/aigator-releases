@@ -321,3 +321,86 @@ def test_two_installs_of_one_name_are_serialized_and_leave_one_entry(provider, m
     assert never_met == [1, 1]
     assert results == ["installed", "installed"]
     assert len(installer.load_installed()) == 1
+
+
+def _second_share(provider, out):
+    """The same skill name published to a different shared folder, so it counts as another source."""
+    other = provider._folder("another-owner", "Weekly Report", True)
+    other_v1 = provider.child_folder(other, "v1")
+    source_v1 = _version_folder(provider, out)
+    for source, target in ((out["folder"], other), (source_v1, other_v1)):
+        for (folder_id, name), value in list(provider.files.items()):
+            if folder_id == source["folder_id"]:
+                provider.files[(target["folder_id"], name)] = value
+    return {"drive_id": other["drive_id"], "folder_id": other["folder_id"]}
+
+
+def test_install_never_replaces_a_skill_installed_from_another_share(provider, make_mine, skills_dir):
+    skill_id, out = _published(provider, make_mine)
+    _recipient(skills_dir)
+    receiver.install(provider, _ref(out), version=1, digest=out["digest"])
+    before_file = (skills_dir / skill_id / "SKILL.md").read_bytes()
+    before_entry = dict(skill_state.get_entry(skill_id))
+    other = _second_share(provider, out)
+
+    with pytest.raises(ShareError) as err:
+        receiver.install(provider, other, version=1, digest=out["digest"])
+
+    assert err.value.code == "collision"
+    assert (skills_dir / skill_id / "SKILL.md").read_bytes() == before_file
+    assert skill_state.get_entry(skill_id) == before_entry
+    assert len(installer.load_installed()) == 1
+
+
+def test_install_never_replaces_a_built_in_skill(provider, make_mine, skills_dir):
+    _skill_id, out = _published(provider, make_mine, name="Email")
+    _recipient(skills_dir)
+
+    with pytest.raises(ShareError) as err:
+        receiver.install(provider, _ref(out), version=1, digest=out["digest"])
+
+    assert err.value.code == "collision"
+    assert installer.load_installed() == []
+
+
+def test_two_installs_of_one_name_from_different_shares_let_exactly_one_win(provider, make_mine, skills_dir):
+    import threading
+
+    skill_id, out = _published(provider, make_mine)
+    _recipient(skills_dir)
+    refs = [_ref(out), _second_share(provider, out)]
+    results = []
+
+    def go(ref):
+        try:
+            receiver.install(provider, ref, version=1, digest=out["digest"])
+            results.append("installed")
+        except ShareError as err:
+            results.append(err.code)
+
+    real_existing = receiver._existing
+    both_checked = threading.Barrier(2, timeout=0.5)
+
+    def slow_existing(name, ref):
+        found = real_existing(name, ref)
+        try:
+            both_checked.wait()
+        except threading.BrokenBarrierError:
+            pass
+        return found
+
+    receiver._existing = slow_existing
+    try:
+        threads = [threading.Thread(target=go, args=(ref,)) for ref in refs]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+    finally:
+        receiver._existing = real_existing
+
+    assert sorted(results) == ["collision", "installed"]
+    assert len(installer.load_installed()) == 1
+    assert skill_state.get_entry(skill_id)["share_source"] in [
+        {"drive_id": ref["drive_id"], "folder_id": ref["folder_id"]} for ref in refs
+    ]
