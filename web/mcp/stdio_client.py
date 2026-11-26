@@ -48,6 +48,7 @@ _EOF = object()  # sentinel pushed by reader thread when stdout closes
 # Maximum messages buffered from a stdio server before back-pressure kicks in.
 # Caps memory if a misbehaving server floods stdout.
 _QUEUE_MAXSIZE = 256
+_CLOSE_GRACE_SECONDS = 1.0  # how long a server gets to exit on its own once stdin closes, before it is terminated
 
 
 # ── Preflight checks ──────────────────────────────────────────────────────────
@@ -383,6 +384,12 @@ class StdioMCPClient:
         try:
             if self._proc.stdin and not self._proc.stdin.closed:
                 self._proc.stdin.close()
+        except Exception:
+            pass
+        try:
+            # The MCP stdio shutdown: stdin closes and the server is given a moment to finish what it has read
+            # (a cancel notice sent just before close) before it is terminated.
+            self._proc.wait(timeout=_CLOSE_GRACE_SECONDS)
         except Exception:
             pass
         try:
