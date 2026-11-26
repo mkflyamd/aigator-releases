@@ -90,6 +90,10 @@ class GraphSharingProvider:
     def my_drive_id(self) -> str:
         return self._get("/me/drive", **{"$select": "id"}).get("id", "")
 
+    def my_user_id(self) -> str:
+        """The signed-in user's stable directory id, the identity a shared skill's ownership is checked against."""
+        return self._get("/me", **{"$select": "id"}).get("id", "")
+
     def describe_folder(self, drive_id: str, folder_id: str) -> dict:
         """The folder as a location with a display path. Raises not_found, or invalid when it is not a folder."""
         item = self._get(
@@ -115,7 +119,7 @@ class GraphSharingProvider:
         }
 
     def audience(self, drive_id: str, folder_id: str, name: str) -> dict:
-        """Who can already see inside this folder: private, library, org or folder."""
+        """Who can already see inside this folder: private, library, anyone, org or folder."""
         drive = self._get(f"/drives/{_q(drive_id)}", **{"$select": "name,driveType"})
         if drive.get("driveType") == "documentLibrary":
             return {"kind": "library", "name": drive.get("name") or name, "approx_count": None}
@@ -124,10 +128,11 @@ class GraphSharingProvider:
         except Exception:
             return {"kind": "folder", "name": name, "approx_count": None}
         entries = perms.get("value", []) if isinstance(perms, dict) else []
-        for entry in entries:
-            scope = (entry.get("link") or {}).get("scope")
-            if scope in ("organization", "anonymous"):
-                return {"kind": "org", "name": "Your organization", "approx_count": None}
+        scopes = {(entry.get("link") or {}).get("scope") for entry in entries}
+        if "anonymous" in scopes:
+            return {"kind": "anyone", "name": "Anyone with the link", "approx_count": None}
+        if "organization" in scopes:
+            return {"kind": "org", "name": "Your organization", "approx_count": None}
         others = [e for e in entries if "owner" not in (e.get("roles") or [])]
         if others or drive_id != self.my_drive_id():
             return {"kind": "folder", "name": name, "approx_count": len(others) or None}

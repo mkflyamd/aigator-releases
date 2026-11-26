@@ -12,7 +12,7 @@ from marketplace import state as skill_state
 from routes.skill_sharing import router
 from sandbox import policy as _policy
 from security import get_csrf_token
-from skills._sharing import messages
+from skills._sharing import messages, publisher
 from skills._sharing.errors import ShareError
 
 PUBLISH = "/api/skills/share/publish"
@@ -41,6 +41,12 @@ def env(provider, skills_dir):
 
 
 def _post(env, path, body, headers=True):
+    if path == PUBLISH and "skill_id" in body and "inventory_digest" not in body:
+        try:
+            digest = publisher.inventory(body["skill_id"])["inventory_digest"]
+        except ShareError:
+            digest = "unreviewed"
+        body = {**body, "inventory_digest": digest}
     return env.http.post(path, json=body, headers={"X-CSRF-Token": get_csrf_token("testserver")} if headers else {})
 
 
@@ -401,3 +407,48 @@ def test_preview_refuses_a_skill_that_is_not_yours(env):
     res = env.http.get(PREVIEW, params={"skill_id": "nothing-here"})
     assert res.status_code == 400
     assert res.json()["detail"]["error"] == "not_mine"
+
+def test_publish_requires_the_reviewed_file_list_digest(env, make_mine):
+    skill_id = make_mine()
+    res = env.http.post(
+        PUBLISH, json={"skill_id": skill_id}, headers={"X-CSRF-Token": get_csrf_token("testserver")}
+    )
+    assert res.status_code == 422
+    assert env.provider.writes == []
+
+
+def test_publish_rejects_a_file_list_that_is_out_of_date(env, make_mine):
+    skill_id = make_mine()
+    res = _post(env, PUBLISH, {"skill_id": skill_id, "inventory_digest": "stale"})
+    assert res.status_code == 409
+    assert res.json()["detail"]["error"] == "content_changed"
+    assert env.provider.writes == []
+
+
+def test_inventory_lists_exactly_what_would_be_uploaded(env, make_mine):
+    skill_id = make_mine()
+    folder = env.skills_dir / "mine" / skill_id
+    (folder / ".env").write_text("TOKEN=aigator-fake-api-key")
+    res = env.http.get("/api/skills/share/inventory", params={"skill_id": skill_id})
+    assert res.status_code == 200
+    body = res.json()
+    assert "SKILL.md" in [f["path"] for f in body["files"]]
+    assert ".env" not in [f["path"] for f in body["files"]]
+    assert {"path": ".env", "reason": "hidden file"} in body["skipped"]
+    published = _post(env, PUBLISH, {"skill_id": skill_id, "inventory_digest": body["inventory_digest"]})
+    assert published.status_code == 200
+
+
+def test_inventory_of_a_skill_that_is_not_yours_is_refused(env):
+    res = env.http.get("/api/skills/share/inventory", params={"skill_id": "does-not-exist"})
+    assert res.status_code == 400
+
+
+def test_install_obeys_the_pinned_installs_policy(env, make_mine, tmp_path):
+    _skill_id, shared = _published_for_a_recipient(env, make_mine)
+    (tmp_path / "sandbox-policy.json").write_text(json.dumps({"require_pinned_installs": True}), encoding="utf-8")
+    _policy._reset_cache()
+    res = _post(env, INSTALL, {"link": shared["link"], "version": 1, "digest": shared["digest"]})
+    assert res.status_code == 403
+    assert "pinned" in res.json()["detail"]
+    assert installer.load_installed() == []

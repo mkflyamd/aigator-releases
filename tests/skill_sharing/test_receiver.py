@@ -281,3 +281,41 @@ def test_a_version_list_without_the_wanted_version_is_invalid(provider, make_min
         else:
             receiver.install(provider, _ref(out), version=1, digest=out["digest"])
     assert err.value.code == "invalid"
+
+
+def test_two_installs_of_one_name_cannot_both_pass_the_collision_check(provider, make_mine, skills_dir):
+    import threading
+
+    _skill_id, out = _published(provider, make_mine)
+    _recipient(skills_dir)
+    reviewed = receiver.review(provider, _ref(out))
+    real_collision = receiver._collision
+    both_checked = threading.Barrier(2, timeout=0.5)
+    results = []
+
+    def slow_collision(skill_id):
+        found = real_collision(skill_id)
+        try:
+            both_checked.wait()
+        except threading.BrokenBarrierError:
+            pass
+        return found
+
+    def go():
+        try:
+            receiver.install(provider, _ref(out), version=1, digest=reviewed["digest"])
+            results.append("installed")
+        except ShareError as err:
+            results.append(err.code)
+
+    receiver._collision = slow_collision
+    try:
+        threads = [threading.Thread(target=go) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+    finally:
+        receiver._collision = real_collision
+    assert sorted(results) == ["collision", "installed"]
+    assert len(installer.load_installed()) == 1
