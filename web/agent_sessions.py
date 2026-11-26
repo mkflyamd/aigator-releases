@@ -6,6 +6,7 @@ Claude Code and Codex already keep, and caches the parsed result by
 """
 from __future__ import annotations
 
+import contextvars
 import json
 import os
 import re
@@ -396,18 +397,32 @@ def _is_import_copy(p: Path, st, thread_id, imports: dict) -> bool:
     return continued is False  # an unreadable rollout stays listed rather than vanishing
 
 
+_ROLLOUT_LISTINGS: contextvars.ContextVar[dict | None] = contextvars.ContextVar("rollout_listings", default=None)
+
+
+def _rollout_files(root: Path) -> list:
+    """Every rollout under root with its stat. Worktrees share one store, so a scan
+    lists it once however many worktrees the project has."""
+    memo = _ROLLOUT_LISTINGS.get()
+    if memo is not None and root in memo:
+        return memo[root]
+    files = []
+    for dirpath, _dirs, names in os.walk(root):
+        for name in names:
+            if name.startswith("rollout-") and name.endswith(".jsonl"):
+                p = os.path.join(dirpath, name)
+                try:
+                    files.append((os.stat(p), Path(p)))
+                except OSError:
+                    continue
+    if memo is not None:
+        memo[root] = files
+    return files
+
+
 def _scan_codex(sh: SourceHome) -> list[dict]:
     imports = _codex_imports(sh)
-    files = []
-    for root in _codex_roots(sh):
-        for dirpath, _dirs, names in os.walk(root):
-            for name in names:
-                if name.startswith("rollout-") and name.endswith(".jsonl"):
-                    p = os.path.join(dirpath, name)
-                    try:
-                        files.append((os.stat(p), Path(p)))
-                    except OSError:
-                        continue
+    files = [f for root in _codex_roots(sh) for f in _rollout_files(root)]
     files.sort(key=lambda f: f[0].st_mtime, reverse=True)
     out = []
     for st, p in files[:MAX_CODEX_SCAN]:
@@ -476,9 +491,13 @@ def windows_homes(repo_path: str) -> list[SourceHome]:
 def scan_project(repo_path: str, *, homes=None, agents=AGENTS) -> list[dict]:
     homes = windows_homes(repo_path) if homes is None else homes
     out: list[dict] = []
-    for sh in homes:
-        for agent in agents:
-            out.extend(_SCANNERS[agent](sh))
+    token = _ROLLOUT_LISTINGS.set({})
+    try:
+        for sh in homes:
+            for agent in agents:
+                out.extend(_SCANNERS[agent](sh))
+    finally:
+        _ROLLOUT_LISTINGS.reset(token)
     out.sort(key=lambda r: r["last_active_at"], reverse=True)
     return out[:MAX_SESSIONS]
 
