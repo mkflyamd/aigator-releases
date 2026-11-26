@@ -308,6 +308,31 @@ def test_a_terminal_that_exited_on_its_own_loses_its_token(door):
     assert agent_mcp.caller_for(token) is None
 
 
+def test_a_host_that_does_not_answer_does_not_cost_a_live_agent_its_token(monkeypatch):
+    import pty_client
+
+    monkeypatch.setattr(pty_client, "host_enabled", lambda: True)
+    monkeypatch.setattr(pty_client, "find_host", lambda key: {"port": 1})
+
+    def broken(info, request):
+        raise pty_client.HostError("no answer")
+
+    monkeypatch.setattr(pty_client, "host_request", broken)
+    assert agent_mcp._terminal_alive("pty-unknown") is True
+
+
+def test_a_terminal_the_host_says_is_gone_or_done_is_not_alive(monkeypatch):
+    import pty_client
+
+    monkeypatch.setattr(pty_client, "host_enabled", lambda: True)
+    monkeypatch.setattr(pty_client, "find_host", lambda key: {"port": 1})
+    answers = {"pty-1": {"exists": True, "done": False}, "pty-2": {"exists": True, "done": True}}
+    monkeypatch.setattr(pty_client, "host_request", lambda info, request: answers.get(request["id"], {"exists": False}))
+    assert agent_mcp._terminal_alive("pty-1") is True
+    assert agent_mcp._terminal_alive("pty-2") is False
+    assert agent_mcp._terminal_alive("pty-3") is False
+
+
 def test_closing_a_terminal_revokes_its_token_only_when_the_close_worked(door, monkeypatch):
     from routes import terminal
 

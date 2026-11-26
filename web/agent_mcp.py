@@ -236,9 +236,24 @@ async def _dispatch(caller: dict, body: dict) -> dict | None:
 
 
 def _terminal_alive(pty_id: str) -> bool:
+    """False only when the terminal is known to be gone. A PTY host that cannot be
+    reached or does not answer keeps the token: a live agent must not lose it to a hiccup."""
+    import pty_client
     from routes import terminal
 
-    return pty_id in terminal.live_pty_labels()
+    entry = terminal._pty_sessions.get(pty_id)
+    if entry is not None:
+        return not entry.done
+    if not pty_client.host_enabled():
+        return False
+    info = pty_client.find_host(pty_client.instance_key())
+    if info is None:
+        return True
+    try:
+        status = pty_client.host_request(info, {"op": "status", "id": pty_id})
+    except pty_client.HostError:
+        return True
+    return bool(status.get("exists")) and not status.get("done")
 
 
 def _bearer(request: Request) -> str | None:
