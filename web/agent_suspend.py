@@ -32,9 +32,9 @@ VIEWED_GRACE_SECONDS = 90.0
 # Over the terminal cap, only a terminal idle at least this long may go: a turn that
 # just finished is likely to be followed by another.
 CAP_MIN_IDLE_SECONDS = 300
-# The idle state is stamped by the agent's Stop hook, just after its last transcript
-# write, so the transcript may predate it by a little.
-TRANSCRIPT_SLACK_SECONDS = 120
+# The idle state is stamped by the Stop hook, which lands under a second after the
+# last transcript write, so the transcript may predate it by about that much.
+TRANSCRIPT_SLACK_SECONDS = 2.0
 RECORD_RETENTION_SECONDS = 14 * 86400
 
 STATE_FILE = Path.home() / ".gator" / "suspended-agents.json"
@@ -124,13 +124,21 @@ def _transcript_is_current(meta: dict, idle_at: float) -> bool:
 
     repo_path = (get_project(meta.get("project_id") or "") or {}).get("repo_path")
     if not repo_path:
+        logger.info("not suspending %s: no project %r", meta.get("session_id"), meta.get("project_id"))
         return False
     try:
         rec = find_session(repo_path, meta["agent"], meta["session_id"])
     except Exception:
         logger.warning("could not look up the stored session for %s", meta.get("session_id"), exc_info=True)
         return False
-    return rec is not None and rec["last_active_at"] >= idle_at - TRANSCRIPT_SLACK_SECONDS
+    current = rec is not None and rec["last_active_at"] >= idle_at - TRANSCRIPT_SLACK_SECONDS
+    if not current:
+        logger.info(
+            "not suspending %s: stored session %s",
+            meta["session_id"],
+            "not found" if rec is None else "older than the idle state",
+        )
+    return current
 
 
 def _suspend(pty_id: str, meta: dict, idle_at: float, now: float) -> bool:

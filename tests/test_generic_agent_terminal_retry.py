@@ -91,3 +91,11 @@ def test_each_terminal_tells_the_backend_whether_it_is_on_screen():
     assert "state.order.forEach((id) => _genAgentReportVisible(state.sessions[id]));" in activate
     opened = SOURCE.split("sess.ws.onopen = () => {", 1)[1].split("sess.ws.onmessage", 1)[0]
     assert "_genAgentReportVisible(sess, true);" in opened
+
+
+def test_visibility_is_re_reported_on_a_timer_for_every_terminal():
+    assert "function _genAgentReportAllVisible() {" in SOURCE
+    assert "document.addEventListener('visibilitychange', _genAgentReportAllVisible);" in SOURCE
+    assert "setInterval(_genAgentReportAllVisible, 15000);" in SOURCE
+    body = SOURCE.split("function _genAgentReportAllVisible() {", 1)[1].split("document.addEventListener", 1)[0]
+    assert "Object.values(_genAgentTerminals)" in body and "_genAgentReportVisible(s)" in body

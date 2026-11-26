@@ -412,7 +412,7 @@ def test_the_stored_session_must_exist_and_be_at_least_as_recent_as_the_idle_sta
     _stored(monkeypatch, {"id": "sess-1", "last_active_at": NOW})
     assert agent_suspend._transcript_is_current(meta, NOW) is True
     # The Stop hook stamps idle just after the last transcript write.
-    assert agent_suspend._transcript_is_current(meta, NOW + 30) is True
+    assert agent_suspend._transcript_is_current(meta, NOW + 1) is True
     stale = NOW + agent_suspend.TRANSCRIPT_SLACK_SECONDS + 1
     assert agent_suspend._transcript_is_current(meta, stale) is False
 

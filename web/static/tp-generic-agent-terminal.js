@@ -589,11 +589,17 @@ function _genAgentReportVisible(sess, force) {
   sess.ws.send(JSON.stringify({ type: 'visible', value: visible }));
 }
 
-document.addEventListener('visibilitychange', () => {
+function _genAgentReportAllVisible() {
   Object.values(_genAgentTerminals).forEach((st) =>
     Object.values(st.sessions || {}).forEach((s) => _genAgentReportVisible(s)),
   );
-});
+}
+
+document.addEventListener('visibilitychange', _genAgentReportAllVisible);
+// Switching the Code project tab, opening a diff or file view, or changing Gator's
+// main pane hides a terminal without any event this file sees; poll for it. Reports
+// are deduped, and the backend's grace is far shorter than its idle threshold.
+setInterval(_genAgentReportAllVisible, 15000);
 
 // Show one session, hide the rest (hide, don't destroy - same as OpenCode).
 function _genAgentActivateSession(tabId, ptyId) {
