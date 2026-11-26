@@ -823,12 +823,12 @@ def _run_sandboxed(cr, command, shell, cwd, timeout, background, requested, poli
     new_files = diff_outputs(before, watch_dirs)
     if new_files:
         result["output_files"] = new_files
-    note = _exit_note(command, res.returncode, result["stdout"], result["stderr"])
-    if note:
-        result["exit_note"] = note
     if res.timed_out:
         result["error"] = f"Command timed out after {timeout}s."
     elif res.returncode != 0:
+        note = _exit_note(command, res.returncode, result["stdout"], result["stderr"])
+        if note:
+            result["exit_note"] = note
         tail = (res.stderr or res.stdout or "").strip().splitlines()
         reason = " ".join(tail[-3:]) if tail else ""
         result["error"] = (f"Command exited with code {res.returncode}: {reason}" if reason
