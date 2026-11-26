@@ -804,6 +804,7 @@ async function _genAgentRestartSession(tabId, ptyId) {
   _genAgentStart(tabId, sess.agent || state.agent, state.projectId, state.repoPath, {
     forceNew: hadOthers,
     keepStateAgent: sess.agent !== state.agent,
+    resumeId: sess._resumeId || undefined,
   });
   return true;
 }
@@ -1509,6 +1510,13 @@ function _genAgentConnect(sess, retryDelay) {
         clearTimeout(sess._noOutputTimer);
         _genAgentShowRestartOverlay(sess, 'Session expired — restart to reconnect');
       }
+    } else if (msg.type === 'suspended') {
+      // Gator stopped this idle agent to free its memory. Restarting the tab
+      // resumes the stored session instead of starting a fresh one.
+      sess._dead = true;
+      sess._resumeId = msg.session_id || null;
+      clearTimeout(sess._noOutputTimer);
+      _genAgentShowRestartOverlay(sess, msg.data || 'Suspended - click to resume');
     } else if (msg.type === 'exit') {
       sess._dead = true;
       clearTimeout(sess._noOutputTimer);
@@ -1568,7 +1576,7 @@ function _genAgentShowRestartOverlay(sess, reason) {
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.className = 'oc-restart-btn';
-  btn.textContent = 'Restart session';
+  btn.textContent = sess._resumeId ? 'Resume session' : 'Restart session';
   btn.addEventListener('click', async () => {
     btn.disabled = true;
     const restarted = await _genAgentRestartSession(sess.tabId, sess.ptySessionId);

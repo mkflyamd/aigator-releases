@@ -49,3 +49,17 @@ def test_restart_controls_use_awaited_restart_helper():
     assert "void _genAgentRestartSession(tabId, ptySessionId)" in SOURCE
     assert "void _genAgentRestartSession(sess.tabId, sess.ptySessionId);" in SOURCE
     assert "const restarted = await _genAgentRestartSession(sess.tabId, sess.ptySessionId);" in SOURCE
+
+
+def test_suspended_terminal_offers_resume_and_restart_resumes_the_stored_session():
+    handler = SOURCE.split("} else if (msg.type === 'suspended') {", 1)[1].split(
+        "} else if (msg.type === 'exit')", 1
+    )[0]
+    assert "sess._dead = true;" in handler
+    assert "sess._resumeId = msg.session_id || null;" in handler
+    assert "_genAgentShowRestartOverlay(sess, msg.data || 'Suspended - click to resume');" in handler
+    restart = SOURCE.split("async function _genAgentRestartSession", 1)[1].split(
+        "function _genAgentShowStartPrompt", 1
+    )[0]
+    assert "resumeId: sess._resumeId || undefined," in restart
+    assert "sess._resumeId ? 'Resume session' : 'Restart session'" in SOURCE
