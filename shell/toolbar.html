@@ -19,6 +19,7 @@
         --border: #1e3a52;
         --border2: #2a4a6b;
         --accent: #4ade80;
+        --on-accent: #04210f;
         --text: #dbeafe;
         --text-dim: #6b8db5;
         --text-sub: #4a6a8a;
@@ -36,6 +37,7 @@
         --border: #cbd5e1;
         --border2: #94a3b8;
         --accent: #16a34a;
+        --on-accent: #ffffff;
         --text: #0f172a;
         --text-dim: #475569;
         --text-sub: #64748b;
@@ -445,6 +447,102 @@
         color: #fff;
       }
 
+      /* Local-network permission bar: sits under the 40px bar and pushes the page down. */
+      .tb-perm {
+        container-type: inline-size;
+      }
+      .tb-perm[hidden] {
+        display: none;
+      }
+      .pbar {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 8px 12px;
+        background: var(--surface2);
+        border-bottom: 1px solid var(--border2);
+        font-size: 13px;
+      }
+      .pbar > svg {
+        width: 18px;
+        height: 18px;
+        flex: none;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 2;
+        stroke-linejoin: round;
+        color: var(--text-dim);
+      }
+      .pbar .pmsg {
+        flex: 1;
+        min-width: 0;
+        overflow-wrap: anywhere;
+      }
+      .pbar .pmsg b {
+        font-weight: 700;
+      }
+      .pbar .pmsg span {
+        color: var(--text-dim);
+      }
+      .pbar .pact {
+        display: flex;
+        gap: 8px;
+        flex: none;
+      }
+      .pbar .pbtn {
+        height: 30px;
+        padding: 0 12px;
+        border-radius: 9px;
+        border: 1px solid var(--border2);
+        background: transparent;
+        color: var(--text);
+        font: inherit;
+        font-weight: 600;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      .pbar .pbtn:hover {
+        background: var(--hover-bg);
+      }
+      .pbar .pbtn.is-primary {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: var(--on-accent);
+      }
+      .pbar .pbtn.is-primary:hover {
+        filter: brightness(1.07);
+      }
+      .pbar:focus {
+        outline: none;
+      }
+      .pbar:focus-visible,
+      .pbar .pbtn:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: -2px;
+      }
+      @container (max-width: 520px) {
+        .pbar {
+          display: grid;
+          grid-template-columns: 18px minmax(0, 1fr);
+          align-items: start;
+          row-gap: 8px;
+          column-gap: 10px;
+          padding: 10px 12px;
+        }
+        .pbar .pact {
+          grid-column: 1 / -1;
+          justify-content: flex-end;
+        }
+      }
+      @container (max-width: 300px) {
+        .pbar .pact {
+          flex-direction: column;
+        }
+        .pbar .pact .pbtn {
+          width: 100%;
+        }
+      }
+
       .tb-menu {
         position: absolute;
         top: var(--tb-h);
@@ -831,6 +929,22 @@
       <div class="tb-bubble-actions">
         <button type="button" class="tb-bubble-remove" id="tb-bubble-remove">Remove</button>
         <button type="button" class="tb-bubble-done" id="tb-bubble-done">Done</button>
+      </div>
+    </div>
+
+    <div class="tb-perm" id="tb-perm" hidden>
+      <div class="pbar" id="tb-pbar" role="group" tabindex="-1" aria-labelledby="tb-pbar-msg">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 3l7 3v5c0 4.5-3 8.2-7 10-4-1.8-7-5.5-7-10V6z" />
+        </svg>
+        <p class="pmsg" id="tb-pbar-msg">
+          <b id="tb-pbar-host"></b> wants to connect to devices on your local network.
+          <span>Some company sign-in checks need this.</span>
+        </p>
+        <div class="pact">
+          <button type="button" class="pbtn" id="tb-pbar-no">Not now</button>
+          <button type="button" class="pbtn is-primary" id="tb-pbar-yes">Allow this time</button>
+        </div>
       </div>
     </div>
 
@@ -1321,10 +1435,49 @@
           }
         }
 
+        // ── Local-network permission bar (Browser pane) ───────────────────────
+        const elPerm = document.getElementById('tb-perm');
+        const elPbar = document.getElementById('tb-pbar');
+        const elPbarHost = document.getElementById('tb-pbar-host');
+        let permHost = '';
+        function permOpen() {
+          return !elPerm.hidden;
+        }
+        function answerPerm(allow) {
+          ipcRenderer.send('toolbar:permission-answer', allow === true);
+        }
+        function renderPerm(state) {
+          const host = typeof state.permHost === 'string' ? state.permHost : '';
+          if (host !== permHost) {
+            permHost = host;
+            elPerm.hidden = !host;
+            if (host) {
+              elPbarHost.textContent = host;
+              if (state.permTake) elPbar.focus();
+              else
+                announcePin(
+                  'Permission request from ' +
+                    host +
+                    ': wants to connect to devices on your local network.',
+                );
+            }
+          }
+          if (typeof state.permAnnounce === 'string' && state.permAnnounce)
+            announcePin(state.permAnnounce);
+        }
+        document.getElementById('tb-pbar-yes').addEventListener('click', () => answerPerm(true));
+        document.getElementById('tb-pbar-no').addEventListener('click', () => answerPerm(false));
+        new ResizeObserver(() => {
+          if (permOpen()) ipcRenderer.send('toolbar:permission-height', elPerm.offsetHeight);
+        }).observe(elPerm);
+
         // ── Keyboard shortcuts ────────────────────────────────────────────────
         document.addEventListener('keydown', (e) => {
           const meta = e.ctrlKey || e.metaKey;
-          if (meta && e.key.toLowerCase() === 'r') {
+          if (e.key === 'Escape' && permOpen()) {
+            e.preventDefault();
+            answerPerm(false);
+          } else if (meta && e.key.toLowerCase() === 'r') {
             e.preventDefault();
             pulseSpin();
             ipcRenderer.send(e.shiftKey ? 'toolbar:hard-reload' : 'toolbar:reload');
@@ -1364,6 +1517,7 @@
         ipcRenderer.on('toolbar:state', (state) => {
           if (!state) return;
           renderPin(state);
+          renderPerm(state);
           if (typeof state.url === 'string') renderUrl(state.url);
           if (typeof state.app === 'string' || state.app === null) renderApp(state.app);
           if (state.star) renderStar(state.star);

@@ -10,7 +10,7 @@
   screen,
 } = require('electron');
 const { applyMediaPermissions } = require('./media-permissions');
-const { applyBrowserPermissions } = require('./browser-permissions');
+const { applyBrowserPermissions, createPermissionPrompt } = require('./browser-permissions');
 const { applyNavigationPolicy, setToolbarAttacher, _hostMatches } = require('./navigation-policy');
 const addressInput = require('./address-input');
 const paneTrace = require('./pane-trace').createPaneTrace({
@@ -625,6 +625,18 @@ const TOOLBAR_H = 40;
 // Extra height the toolbar view grows by while its star bubble is open, so the bubble
 // is not clipped by the 40px bar. The pane stays below TOOLBAR_H and the toolbar overlays it.
 let _toolbarExpandedH = 0;
+// The Browser pane's local-network permission bar sits under the toolbar and pushes the page down.
+// _permBarH is the height the toolbar page measured for it (the bar wraps on narrow panes).
+let _permBarHost = '';
+let _permBarH = 46;
+let _permBarTake = false;
+let _permBarAnnounce = '';
+function _permBarShown() {
+  return !!_permBarHost && activeExternalApp === BROWSER_PANE_ID;
+}
+function _permBarOffset() {
+  return _permBarShown() ? _permBarH : 0;
+}
 
 // The address-bar search engine, shared by every pane and the Browser pane's start page.
 const searchEngine = require('./search-engine');
@@ -781,7 +793,12 @@ function _toolbarPushState() {
     pinLabel: _webPinLabel,
     pinKind: _webPinKind,
     pinAnnounce: _webPinAnnounce,
+    permHost: _permBarShown() ? _permBarHost : '',
+    permTake: _permBarTake,
+    permAnnounce: _permBarAnnounce,
   };
+  _permBarTake = false;
+  _permBarAnnounce = '';
   try {
     toolbarWc.send('toolbar:state', state);
   } catch {}
@@ -4390,8 +4407,9 @@ function _layoutNow() {
     const gatorSliver = STICKY_RIGHT_RAIL ? DOCK_W : 1;
     const extW = w - gatorSliver;
     if (showToolbar) {
-      toolbarView.setBounds({ x: 0, y: 0, width: extW, height: TOOLBAR_H + _toolbarExpandedH });
-      activeView.setBounds({ x: 0, y: TOOLBAR_H, width: extW, height: h - TOOLBAR_H });
+      const top = TOOLBAR_H + _permBarOffset();
+      toolbarView.setBounds({ x: 0, y: 0, width: extW, height: top + _toolbarExpandedH });
+      activeView.setBounds({ x: 0, y: top, width: extW, height: h - top });
     } else {
       activeView.setBounds({ x: 0, y: 0, width: extW, height: h });
     }
@@ -4410,13 +4428,14 @@ function _layoutNow() {
     const gatorW = Math.max(w - extTileWidth, GATOR_MIN_WIDTH);
     const extW = w - gatorW;
     if (showToolbar) {
+      const top = TOOLBAR_H + _permBarOffset();
       toolbarView.setBounds({
         x: 0,
         y: 0,
         width: extW - SEAM,
-        height: TOOLBAR_H + _toolbarExpandedH,
+        height: top + _toolbarExpandedH,
       });
-      activeView.setBounds({ x: 0, y: TOOLBAR_H, width: extW - SEAM, height: h - TOOLBAR_H });
+      activeView.setBounds({ x: 0, y: top, width: extW - SEAM, height: h - top });
     } else {
       activeView.setBounds({ x: 0, y: 0, width: extW - SEAM, height: h });
     }
@@ -4528,6 +4547,32 @@ const APP_HOME_URL = {
 
 const BROWSER_PANE_ID = 'browser';
 
+// Local-network requests from sites in the Browser pane surface as a bar under the toolbar.
+const _browserPrompt = createPermissionPrompt({
+  onChange: (ev) => {
+    if (ev.type === 'show') {
+      _permBarHost = ev.host;
+      _permBarTake =
+        activeExternalApp === BROWSER_PANE_ID && !(gatorView && gatorView.webContents.isFocused());
+    } else {
+      const wasShown = _permBarShown();
+      _permBarHost = '';
+      _permBarTake = false;
+      if (wasShown) {
+        _permBarAnnounce = ev.allowed
+          ? `Allowed this time: ${ev.host} can connect to devices on your local network.`
+          : `Blocked: ${ev.host} cannot connect to devices on your local network.`;
+        const tb = _liveToolbarWebContents();
+        const pane = viewForApp(BROWSER_PANE_ID);
+        if (tb && tb.isFocused() && pane && !pane.webContents.isDestroyed())
+          pane.webContents.focus();
+      }
+    }
+    layout();
+    _toolbarPushState();
+  },
+});
+
 // Extend APP_HOME_URL with generic pane URLs at runtime.
 function _refreshAppHomeUrls() {
   for (const [id, pane] of Object.entries(_genericPanes)) {
@@ -4546,13 +4591,22 @@ function createGenericPane(appConfig) {
 
   const partition = `persist:custom-${id}`;
   const ses = session.fromPartition(partition);
-  if (id === BROWSER_PANE_ID) applyBrowserPermissions(ses);
+  if (id === BROWSER_PANE_ID) applyBrowserPermissions(ses, _browserPrompt);
   else applyMediaPermissions(ses);
 
   const view = new WebContentsView({
     webPreferences: { session: ses, contextIsolation: true, nodeIntegration: false },
   });
   view.webContents.setBackgroundThrottling(false);
+  if (id === BROWSER_PANE_ID) {
+    // Registered before pick mode's own Escape handler, so Esc closes an open bar first.
+    view.webContents.on('before-input-event', (event, input) => {
+      if (input.type === 'keyDown' && input.key === 'Escape' && _permBarShown()) {
+        event.preventDefault();
+        _browserPrompt.answer(false);
+      }
+    });
+  }
 
   // Derive homeHosts from the URL's hostname so navigation policy keeps
   // same-host links in-pane and sends external links to the system browser.
@@ -5333,6 +5387,19 @@ ipcMain.on('toolbar:set-expanded', (e, h) => {
   if (!_isMainToolbar(e)) return;
   _toolbarExpandedH = Math.max(0, Math.min(Number(h) || 0, 400));
   layout();
+});
+
+ipcMain.on('toolbar:permission-answer', (e, allow) => {
+  if (!_isMainToolbar(e)) return;
+  _browserPrompt.answer(allow === true);
+});
+
+ipcMain.on('toolbar:permission-height', (e, h) => {
+  if (!_isMainToolbar(e)) return;
+  const next = Math.max(0, Math.min(Math.round(Number(h)) || 0, 120));
+  if (!next || next === _permBarH) return;
+  _permBarH = next;
+  if (_permBarShown()) layout();
 });
 
 // Star actions are relayed to the Gator renderer, which owns the config calls, the dock
