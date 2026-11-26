@@ -246,3 +246,8 @@ def test_terminal_tabs_use_the_history_state_dot():
 def test_tab_label_shows_its_full_name_on_hover():
     assert "label.title = sess.label;" in TERM
     assert "labelEl.title = sess.label;" in TERM
+
+def test_refresh_interval_counts_from_when_the_scan_finishes():
+    # A scan can take longer than FETCH_MS; stamping only at request start made the next one fire at once.
+    finally_block = re.search(r"\} finally \{\s*ui\.busy = false;(.*?)\}", HISTORY, re.S)
+    assert finally_block and "ui.fetchedAt = Date.now();" in finally_block.group(1)

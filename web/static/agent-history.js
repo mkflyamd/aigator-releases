@@ -346,6 +346,7 @@
       ui.error = true;
     } finally {
       ui.busy = false;
+      ui.fetchedAt = Date.now();
     }
     ui.loaded = true;
     render();
