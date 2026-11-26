@@ -19,14 +19,26 @@ const t0 = 1_000_000;
 const line = (...a) => JSON.parse(JSON.stringify(ctx._phaseLine(...a)));
 const at = (seconds) => t0 + seconds * 1000;
 
-assert.deepStrictEqual(line('Searching Jira...', t0, at(3)), { text: 'Searching Jira...', level: 'info' });
-assert.deepStrictEqual(line('Searching Jira...', t0, at(45)), { text: 'Searching Jira... · 45s', level: 'info' });
-assert.deepStrictEqual(line('Searching Jira...', t0, at(95)), { text: 'Searching Jira... · 1m 35s', level: 'info' });
+assert.deepStrictEqual(line('Searching Jira...', t0, at(3)), {
+  text: 'Searching Jira...',
+  level: 'info',
+});
+assert.deepStrictEqual(line('Searching Jira...', t0, at(45)), {
+  text: 'Searching Jira... · 45s',
+  level: 'info',
+});
+assert.deepStrictEqual(line('Searching Jira...', t0, at(95)), {
+  text: 'Searching Jira... · 1m 35s',
+  level: 'info',
+});
 assert.deepStrictEqual(line('Searching Jira...', t0, at(130)), {
   text: 'Searching Jira... · 2m 10s · Taking longer than usual',
   level: 'warn',
 });
-assert.deepStrictEqual(line('Searching Jira...', null, at(130)), { text: 'Searching Jira...', level: 'info' });
+assert.deepStrictEqual(line('Searching Jira...', null, at(130)), {
+  text: 'Searching Jira...',
+  level: 'info',
+});
 
 assert.ok(source.includes('msg.started_at'), 'the status handler must read started_at');
 

@@ -52,7 +52,7 @@ def test_a_host_command_nobody_has_read_yet_is_called_out():
         _text("assistant", "Click Run on the card."),
     ]
     note = resume_note(history)
-    assert "5dddd2e1d18f41e8947ea7217a64762a" in note
+    assert "5dddd2e1d18f41e8947ea7217a64762a" in note  # pragma: allowlist secret
     assert "host_command_result" in note
 
 

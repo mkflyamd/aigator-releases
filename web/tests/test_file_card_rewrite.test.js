@@ -21,14 +21,19 @@ function fakeRow(names) {
   const cards = names.map((n) => ({
     dataset: { fileName: n },
     removed: false,
-    remove() { this.removed = true; },
+    remove() {
+      this.removed = true;
+    },
   }));
   return { cards, querySelectorAll: () => cards };
 }
 
 const row = fakeRow(['demo.html', 'notes.txt']);
 assert.strictEqual(ctx._dropEarlierFileCard(row, 'demo.html'), true);
-assert.deepStrictEqual(row.cards.map((c) => c.removed), [true, false]);
+assert.deepStrictEqual(
+  row.cards.map((c) => c.removed),
+  [true, false],
+);
 
 const other = fakeRow(['notes.txt']);
 assert.strictEqual(ctx._dropEarlierFileCard(other, 'demo.html'), false);
