@@ -724,7 +724,7 @@ def test_uninstall_still_removes_a_server_registered_before_launch_specs_were_re
 
 @pytest.mark.parametrize(
     "python, pinned",
-    [("3.12.4", True), ("", True), ("3.12", False), (">=3.11,<3.13", False), ("3.12.*", False)],
+    [("3.12.4", True), ("==3.12.4", True), ("", True), ("3.12", False), (">=3.11,<3.13", False), ("3.12.*", False)],
 )
 def test_pinned_installs_need_an_exact_python_version_too(python, pinned):
     from marketplace.mcp_inference import LaunchSpec
@@ -805,3 +805,57 @@ def test_the_enable_route_flags_a_policy_block(imported):
     warm.assert_not_called()
     assert body["policy_blocked"] is True
     assert body["mcp_error"]
+
+
+# ── review follow-ups 2: a disable or uninstall before the server is registered ──
+
+
+def _nothing_starts():
+    return (
+        patch("mcp.manager.register_plugin_mcp_server"),
+        patch("marketplace.installer._warm_uv_cache"),
+        patch("mcp.manager.add_or_update"),
+        patch("mcp.manager._upsert_raw_connection"),
+    )
+
+
+def test_a_skill_disabled_before_its_server_is_registered_gets_no_server(imported):
+    installer, kill_switch, skill_id = imported
+    kill_switch.disable(skill_id)
+
+    register, warm, connect, placeholder = _nothing_starts()
+    with register as started, warm as warmed, connect, placeholder as raw:
+        assert installer.register_inferred_mcp_server(skill_id, FILES) == {}
+
+    started.assert_not_called()
+    warmed.assert_not_called()
+    raw.assert_not_called()
+
+
+def test_a_skill_uninstalled_before_its_server_is_registered_gets_no_server(imported):
+    installer, _, skill_id = imported
+    installer.uninstall_skill(skill_id)
+
+    register, warm, connect, placeholder = _nothing_starts()
+    with register as started, warm as warmed, connect, placeholder as raw:
+        assert installer.register_inferred_mcp_server(skill_id, FILES) == {}
+
+    started.assert_not_called()
+    warmed.assert_not_called()
+    raw.assert_not_called()
+    assert not any(e["id"] == skill_id for e in installer.load_installed())
+
+
+def test_a_real_project_with_an_exact_requires_python_starts_under_pinned_installs(installer):
+    pyproject = PYPROJECT.replace(
+        b'["fastmcp>=3.2.0,<4.0.0", "click>=8.0.0"]', b'["fastmcp==3.2.1", "click==8.1.7"]'
+    ).replace(b'">=3.11,<3.13"', b'"==3.12.4"')
+    assert infer_launch_spec({**FILES, "pyproject.toml": pyproject}).python == "==3.12.4"
+
+    body, run, warm, connect, _ = _import_under_policy(
+        installer, {**FILES, "pyproject.toml": pyproject}, _policy(require_pinned_installs=True)
+    )
+
+    warm.assert_called_once()
+    connect.assert_called_once()
+    assert "mcp_error" not in body

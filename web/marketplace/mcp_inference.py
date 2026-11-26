@@ -19,7 +19,7 @@ _SERVER_PACKAGES = {"fastmcp", "mcp"}
 _UNSAFE = re.compile(r"[\x00-\x1f\x7f]")
 _REQ_NAME = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)")
 _EXACT_PIN = re.compile(r"^\s*[A-Za-z0-9][A-Za-z0-9._-]*\s*(\[[A-Za-z0-9._,\s-]*\])?\s*===?\s*[A-Za-z0-9][A-Za-z0-9._+!-]*\s*(;.*)?$")
-_EXACT_PYTHON = re.compile(r"^\d+\.\d+\.\d+$")
+_EXACT_PYTHON = re.compile(r"^(==)?\d+\.\d+\.\d+$")
 
 
 @dataclass(frozen=True)

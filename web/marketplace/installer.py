@@ -1370,6 +1370,9 @@ def register_inferred_mcp_server(skill_id: str, files: dict[str, bytes]) -> dict
     if spec is None:
         return {}
     with skill_lifecycle_lock(skill_id):
+        entry = next((e for e in load_installed() if e.get("id") == skill_id), None)
+        if entry is None or entry.get("disabled"):
+            return {}
         _save_inferred_mcp(skill_id, {"inferred_mcp": spec.to_record()})
         return _start_inferred_mcp_server(skill_id, spec)
 
