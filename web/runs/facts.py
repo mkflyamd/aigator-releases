@@ -4,6 +4,7 @@ Nothing here decides whether a run "worked". These are observations the model an
 """
 from __future__ import annotations
 
+import os
 import re
 import threading
 import time
@@ -90,6 +91,8 @@ class TreeWatcher:
             members = [root, *root.children(recursive=True)]
         except psutil.Error:
             members = []
+        known = {proc.pid for proc in members}
+        members += [proc for proc in self._group_members() if proc.pid not in known]
         walked = set()
         for proc in members:
             try:
@@ -108,6 +111,22 @@ class TreeWatcher:
                     self._ports |= _listening_ports(proc)
             except psutil.Error:
                 continue
+
+    def _group_members(self) -> list:
+        """POSIX: a child whose parent has exited is handed to init and can no longer be walked to, but it stays
+        in the run's process group, which the run was started as the leader of."""
+        if os.name == "nt":
+            return []
+        import psutil
+
+        found = []
+        for proc in psutil.process_iter():
+            try:
+                if os.getpgid(proc.pid) == self._pid:
+                    found.append(proc)
+            except (OSError, psutil.Error):
+                continue
+        return found
 
     @property
     def pids(self) -> set[int]:
@@ -134,17 +153,30 @@ class TreeWatcher:
         return {"ports_opened": sorted(self._ports), "children_left": left}
 
 
-def port_owner(port: int, tree_pids: set[int]) -> dict | None:
-    """Which process listens on a loopback port, and whether it is in the run's own process tree."""
+def _listening_pid(port: int) -> int | None:
     import psutil
 
     try:
         for conn in psutil.net_connections(kind="tcp"):
             if conn.status == psutil.CONN_LISTEN and conn.laddr and conn.laddr.port == port and conn.pid:
-                return {"owner_pid": conn.pid, "owner_in_run_tree": conn.pid in tree_pids}
+                return conn.pid
+        return None
+    except psutil.AccessDenied:
+        pass  # macOS lists every socket only to root; the processes this user owns can still be asked one by one
     except (psutil.Error, OSError):
         return None
+    for proc in psutil.process_iter():
+        if port in _listening_ports(proc):
+            return proc.pid
     return None
+
+
+def port_owner(port: int, tree_pids: set[int]) -> dict | None:
+    """Which process listens on a loopback port, and whether it is in the run's own process tree."""
+    pid = _listening_pid(port)
+    if not pid:
+        return None
+    return {"owner_pid": pid, "owner_in_run_tree": pid in tree_pids}
 
 
 def collect(text: str, watcher: "TreeWatcher | None") -> dict:
