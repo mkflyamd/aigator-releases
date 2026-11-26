@@ -255,3 +255,9 @@ def test_lookup_commands_exiting_one_are_described_as_not_found_not_as_a_failure
     assert "not found" in _exit_note("where.exe whisper", 1, "", "").lower()
     assert "not found" in _exit_note("which ffmpeg", 1, "", "").lower()
     assert _exit_note("python build.py", 1, "", "") is None
+
+
+@pytest.mark.parametrize("command", ["which node && npm test", "where git; npm test", "which node || npm test", "which node | head"])
+def test_a_lookup_chained_with_another_command_is_not_called_a_non_failure(command):
+    from skills.shell_runner.tools import _exit_note
+    assert _exit_note(command, 1, "", "FAIL test_x") is None

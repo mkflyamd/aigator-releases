@@ -723,6 +723,7 @@ def _with_shell_hint(cr, stderr: str) -> str:
 
 _LOCAL_URL = re.compile(r"https?://(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?[^\s'\"<>)]*")
 _LOOKUP_COMMAND = re.compile(r"^\s*(?:where(?:\.exe)?|which|command\s+-v|get-command)\b", re.IGNORECASE)
+_CHAINED = re.compile(r"&&|\|\||[;|\r\n]")  # the exit code may then belong to a later command, not the lookup
 
 
 def _exit_note(command: str, exit_code, stdout: str, stderr: str) -> str | None:
@@ -738,7 +739,7 @@ def _exit_note(command: str, exit_code, stdout: str, stderr: str) -> str | None:
         if raw >= 0xC0000000:
             note += " A code in the 0xC0000000 range is a Windows status code."
         return note
-    if exit_code == 1 and _LOOKUP_COMMAND.match(command or ""):
+    if exit_code == 1 and _LOOKUP_COMMAND.match(command or "") and not _CHAINED.search(command):
         return "Exit code 1 from a lookup command means the program was not found; it is not a failure of the task."
     return None
 
