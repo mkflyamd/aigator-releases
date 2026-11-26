@@ -1743,16 +1743,98 @@ function _ensureAddSkillBtn() {
   }
 }
 
+// Declared this early because _updatePlaceholder runs during startup, before the tab system below is set up.
+let _tabs = [];
+let _activeTabId = '';
+const _chatTaskIds = new Map(); // tabId -> task_id for the active chat request
+const _pendingTabCards = new Map(); // tabId -> Map(cardId -> {draw, expired}); drawn again each time the tab is shown
+const _pendingSandboxCards = new Map(); // tabId -> Map(requestId -> card data); drawn again each time the tab is shown
+const _runsByTab = new Map(); // tabId -> Map(runId -> { stop, followed }): host commands preparing or running in that tab
+const _runsWatch = new Map(); // tabId -> timer that polls the tab's run records while a command nobody follows runs
+// Every word the composer shows while a reply or a command runs, or a card waits for an answer.
+const _COMPOSER_TEXT = {
+  placeholderQueue: 'Enter to queue',
+  sendMessage: 'Send message',
+  queueMessage: 'Queue message',
+  stopReply: 'Stop reply',
+  stopCommand: 'Stop command',
+  queueReply: 'Queue this message. It sends when the reply finishes.',
+  queueCommand: 'Queue this message. It sends when the command finishes.',
+  queueCard: 'Queue this message. It sends after you answer the card.',
+  statusReply: 'Next message sends when this reply finishes',
+  statusCommand: 'Next message sends when this command finishes',
+  statusCard: 'Waiting for your answer on the card',
+  pausedReply: 'Paused: you stopped the reply',
+  pausedCommand: 'Paused: you stopped the command',
+  pausedError: 'Paused: the reply hit an error',
+  pausedRestored: 'Paused: restored after restart',
+};
+
+// Busy means a reply is live or a host command is preparing or running. A card waiting for an answer is not busy:
+// nothing is running, but the queue still holds because a queued message is never the answer to a card.
+function _commandRunning(tabId) {
+  return (_runsByTab.get(tabId)?.size || 0) > 0;
+}
+function _tabBusy(tabId) {
+  return _chatTaskIds.has(tabId) || _commandRunning(tabId);
+}
+// A card the user still has to answer. The card whose command is already running is not one.
+function _queueCardHold(tabId) {
+  const runs = _runsByTab.get(tabId);
+  for (const requestId of _pendingSandboxCards.get(tabId)?.keys() || []) {
+    if (!runs?.has(requestId)) return true;
+  }
+  for (const entry of _pendingTabCards.get(tabId)?.values() || []) {
+    if (entry.survivesTurn && !entry.expired) return true;
+  }
+  return false;
+}
+// The button is Send, Stop (reply), Stop command, or Queue (with its own outline Stop beside it). A card waiting for
+// an answer never offers Stop, and a Stop never cancels the other kind of work.
+function _composerButtonMode(streaming, canQueue, commandRunning = false, cardOpen = false) {
+  if (cardOpen) return canQueue ? 'queue' : 'send';
+  if (streaming) return canQueue ? 'queue' : 'stop';
+  if (commandRunning) return canQueue ? 'queue' : 'stop-command';
+  return 'send';
+}
+function _composerView(streaming, canQueue, commandRunning, cardOpen) {
+  const T = _COMPOSER_TEXT;
+  const mode = _composerButtonMode(streaming, canQueue, commandRunning, cardOpen);
+  const stopsCommand = commandRunning && !streaming && !cardOpen;
+  const title = {
+    send: '',
+    stop: T.stopReply,
+    'stop-command': T.stopCommand,
+    queue: cardOpen ? T.queueCard : stopsCommand ? T.queueCommand : T.queueReply,
+  }[mode];
+  return {
+    mode,
+    aria: {
+      send: T.sendMessage,
+      stop: T.stopReply,
+      'stop-command': T.stopCommand,
+      queue: T.queueMessage,
+    }[mode],
+    title,
+    placeholder: streaming || commandRunning || cardOpen ? T.placeholderQueue : '',
+    stopHidden: mode !== 'queue' || cardOpen,
+    stopLabel: stopsCommand ? T.stopCommand : T.stopReply,
+  };
+}
+
 /* ── Dynamic placeholder ──────────────────────────────── */
 const _DOC_SKILL_IDS = new Set(['docx', 'excel', 'ppt']);
 
 function _updatePlaceholder() {
   const inp = document.getElementById('chat-input');
   if (!inp || inp.contentEditable === 'false') return;
-  // Guide div handles all education — placeholder is empty, except while a reply runs: Enter queues.
-  inp.dataset.placeholder = document.getElementById('send-btn')?.classList.contains('is-streaming')
-    ? 'Enter to queue'
-    : '';
+  // Guide div handles all education — placeholder is empty, except while a reply or command runs or a card waits: Enter queues.
+  inp.dataset.placeholder = _composerView(
+    !!document.getElementById('send-btn')?.classList.contains('is-streaming'),
+    false,
+    _commandRunning(_activeTabId),
+    _queueCardHold(_activeTabId),
+  ).placeholder;
 }
 
 function _setRailActive(id) {
@@ -4300,7 +4382,7 @@ function _renderTabDrafts(tabId) {
 }
 
 function _renderTabSandboxCards(tabId) {
-  _pendingSandboxCards.get(tabId)?.forEach((data) => _showSandboxApproval(data, tabId));
+  _pendingSandboxCards.get(tabId)?.forEach((data) => _showSandboxApproval(data, tabId, true));
 }
 
 function _routeDraftToTab(tabId, draft, data) {
@@ -4446,14 +4528,9 @@ function _restoreChipsForTab(tabId) {
   _renderPinChip(tabId);
 }
 
-let _tabs = [];
-let _activeTabId = '';
 const _inflightRequests = new Map();
-const _chatTaskIds = new Map(); // tabId -> task_id for the active chat request
 const _locallyFinishedTasks = new Set(); // task ids already cleaned up here; their chat_done is late
 const _tabsWithUpdates = new Set(); // tabIds with completed responses the user hasn't seen
-const _pendingTabCards = new Map(); // tabId -> Map(cardId -> {draw, expired}); drawn again each time the tab is shown
-const _pendingSandboxCards = new Map(); // tabId -> Map(requestId -> card data); drawn again each time the tab is shown
 const _tabsWorking = new Set(); // tabIds with an in-flight request (animated working line)
 let _revealActiveTabOnRender = false; // true = unconditionally scroll active tab into view on next render
 let _preserveScrollOnRender = false; // true = closing a tab; keep scroll position, only nudge if needed
@@ -4821,6 +4898,9 @@ function switchTab(tabId) {
     sendBtn.disabled = false;
     setStatus('idle');
   }
+  // The button, hint and queue line depend on this tab's commands and cards too, not only on its reply.
+  _syncComposerButton();
+  _runsSeed(tabId);
 
   // Clear any tab update indicator when switching to that tab
   _tabsWithUpdates.delete(tabId);
@@ -4922,6 +5002,8 @@ function closeTab(tabId) {
     _pendingSandboxFollowUps.delete(tabId);
     _pendingSandboxCards.delete(tabId);
     _pendingTabCards.delete(tabId);
+    _runsByTab.delete(tabId);
+    _runsWatchStop(tabId);
     _queuePurgeTab(tabId);
     // Clear pin context and stored state
     fetch(`/api/context/pins?context_id=${tabId}`, { method: 'DELETE' }).catch((err) =>
@@ -8740,11 +8822,6 @@ function _shouldStopFromClick(e, btn, rect, streaming) {
     e.clientY <= rect.bottom
   );
 }
-// While a reply runs the one button is Stop (nothing the queue can take) or Queue (something it can, with a separate Stop).
-function _composerButtonMode(streaming, canQueue) {
-  if (!streaming) return 'send';
-  return canQueue ? 'queue' : 'stop';
-}
 // What the composer holds that the queue cannot keep, or '' when it can be queued. Mirrors the server (empty text
 // without an image, a leading "/") and the client's own refusals (Jira attachments, pin references, @mentions).
 function _queueRefusal(typedText, finalText, images, box) {
@@ -8784,13 +8861,23 @@ function _closeComposerDropdowns() {
 function _onComposerButtonClick(e) {
   const stopBtn = document.getElementById('composer-stop-btn');
   const onStopBtn = !!stopBtn && !stopBtn.hidden && stopBtn.contains(e.target);
-  const mode = _composerButtonMode(sendBtn.classList.contains('is-streaming'), _composerCanQueue());
-  const onSendBtn = (streaming) =>
-    _shouldStopFromClick(e, sendBtn, sendBtn.getBoundingClientRect(), streaming);
+  const streaming = sendBtn.classList.contains('is-streaming');
+  const cardOpen = _queueCardHold(_activeTabId);
+  const commandRunning = _commandRunning(_activeTabId);
+  const mode = _composerButtonMode(streaming, _composerCanQueue(), commandRunning, cardOpen);
+  const onSendBtn = (active) =>
+    _shouldStopFromClick(e, sendBtn, sendBtn.getBoundingClientRect(), active);
   if (!onStopBtn && mode === 'queue' && onSendBtn(true)) {
     e.preventDefault();
     _closeComposerDropdowns();
     _requestTypedSubmit();
+    return;
+  }
+  // A command with no reply running: the Stop here is the command's own stop, never the reply's.
+  if (commandRunning && !streaming && !cardOpen) {
+    if (!onStopBtn && !(mode === 'stop-command' && onSendBtn(true))) return;
+    e.preventDefault();
+    _stopCommands(_activeTabId);
     return;
   }
   if (!_activeStops.size) return;
@@ -9387,21 +9474,8 @@ form.addEventListener('copy', (e) => {
   _writeShareableCopy(e, _serializeShareableSelection(), _serializeShareableSelectionHtml());
 });
 
-// Enter = submit (Shift+Enter = newline)
+// Enter submits through _requestTypedSubmit in the keydown handler below (Shift+Enter = newline)
 input.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && !e.shiftKey) {
-    // Don't submit if a dropdown is open (Enter selects from dropdown)
-    if (
-      document.querySelector('.skill-mention-dropdown') ||
-      document.querySelector('.channel-dropdown') ||
-      document.querySelector('.slash-dropdown')
-    )
-      return;
-    e.preventDefault();
-    document
-      .getElementById('chat-form')
-      .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-  }
   // Backspace on empty input removes the last skill chip
   if (e.key === 'Backspace' && _getInputText().trim() === '' && !_getInlineChips().length) {
     if (_activeChips.length) {
@@ -9430,18 +9504,22 @@ function _syncComposerButton() {
   const slot = document.getElementById('chat-send-slot');
   const btn = document.getElementById('send-btn');
   if (!slot || !btn) return;
-  const mode = _composerButtonMode(btn.classList.contains('is-streaming'), _composerCanQueue());
-  slot.dataset.mode = mode;
-  btn.setAttribute(
-    'aria-label',
-    { send: 'Send message', stop: 'Stop reply', queue: 'Queue message' }[mode],
+  const view = _composerView(
+    btn.classList.contains('is-streaming'),
+    _composerCanQueue(),
+    _commandRunning(_activeTabId),
+    _queueCardHold(_activeTabId),
   );
-  if (mode === 'send') btn.removeAttribute('title');
-  else
-    btn.title =
-      mode === 'stop' ? 'Stop reply' : 'Queue this message. It sends when the reply finishes.';
+  slot.dataset.mode = view.mode;
+  btn.setAttribute('aria-label', view.aria);
+  if (view.title) btn.title = view.title;
+  else btn.removeAttribute('title');
   const stop = document.getElementById('composer-stop-btn');
-  if (stop) stop.hidden = mode !== 'queue';
+  if (stop) {
+    stop.hidden = view.stopHidden;
+    stop.title = view.stopLabel;
+    stop.setAttribute('aria-label', view.stopLabel);
+  }
   _updatePlaceholder();
 }
 new MutationObserver(_syncComposerButton).observe(sendBtn, {
@@ -10525,16 +10603,6 @@ async function _queueAct(tabId, method, path, body) {
   }
 }
 
-// An approval card that outlives its turn (a permission request, a sandbox grant) is still waiting for the user.
-// A queued message is never an answer to it, so the queue holds until the card is resolved.
-function _queueCardHold(tabId) {
-  if (_pendingSandboxCards.get(tabId)?.size) return true;
-  for (const entry of _pendingTabCards.get(tabId)?.values() || []) {
-    if (entry.survivesTurn && !entry.expired) return true;
-  }
-  return false;
-}
-
 function _queueRefusalMessage(status, code) {
   if (status !== 409) return '';
   if (code === 'queue_paused') {
@@ -10574,7 +10642,8 @@ function _queueRearmStop(tabId) {
 // shortly, a few times, while the queue still has messages that nothing is holding back.
 function _queueRearm(tabId) {
   const snap = _queueByTab.get(tabId);
-  if (!snap || !snap.items.length || snap.paused || _queueCardHold(tabId)) return;
+  if (!snap || !snap.items.length || snap.paused || _queueCardHold(tabId) || _commandRunning(tabId))
+    return;
   const state = _queueRearms.get(tabId) || { timer: 0, tries: 0 };
   _queueRearms.set(tabId, state);
   if (state.timer) return;
@@ -10620,19 +10689,19 @@ function _queueStatus(tabId, now) {
       tone: snap.reason === 'error' ? 'danger' : 'warn',
       text:
         snap.reason === 'error'
-          ? 'Paused: the reply hit an error'
+          ? _COMPOSER_TEXT.pausedError
           : snap.reason === 'restored'
-            ? 'Paused: restored after restart'
-            : 'Paused: you stopped the reply',
+            ? _COMPOSER_TEXT.pausedRestored
+            : snap.reason === 'command_stopped'
+              ? _COMPOSER_TEXT.pausedCommand
+              : _COMPOSER_TEXT.pausedReply,
     };
   } else if (_queueCardHold(tabId)) {
-    status = { kind: 'hold', tone: 'warn', text: 'Waiting for your answer on the card' };
+    status = { kind: 'hold', tone: 'warn', text: _COMPOSER_TEXT.statusCard };
   } else if (_chatTaskIds.has(tabId)) {
-    status = {
-      kind: 'running',
-      tone: 'neutral',
-      text: 'Next message sends when this reply finishes',
-    };
+    status = { kind: 'running', tone: 'neutral', text: _COMPOSER_TEXT.statusReply };
+  } else if (_commandRunning(tabId)) {
+    status = { kind: 'running', tone: 'neutral', text: _COMPOSER_TEXT.statusCommand };
   } else if (_queueBusy.has(tabId)) {
     status = { kind: 'starting', tone: 'accent', text: 'Sending next message' };
   } else if (_queueRearms.get(tabId)?.timer) {
@@ -10729,11 +10798,11 @@ async function _queueComposerMessage() {
   _queueSet(tabId, snap);
   _queueRearmStop(tabId);
   // The reply may have ended while the request was in flight; nothing else would send this one.
-  if (!_chatTaskIds.has(tabId)) _queueDrain(tabId);
+  if (!_tabBusy(tabId)) _queueDrain(tabId);
 }
 
 async function _queueDrain(tabId) {
-  if (!tabId || tabId !== _activeTabId || _chatTaskIds.has(tabId)) return;
+  if (!tabId || tabId !== _activeTabId || _tabBusy(tabId)) return;
   if (_queueBusy.has(tabId)) {
     _queueDirty.add(tabId);
     return;
@@ -10748,7 +10817,7 @@ async function _queueDrain(tabId) {
       'GET',
       `/api/queue/head?context_id=${encodeURIComponent(tabId)}`,
     );
-    if (!item || tabId !== _activeTabId || _chatTaskIds.has(tabId)) {
+    if (!item || tabId !== _activeTabId || _tabBusy(tabId)) {
       _queueRefresh(tabId);
       askAgain = !!live && !_chatTaskIds.has(tabId);
       return;
@@ -10887,7 +10956,7 @@ function _queueChip(tabId, item, isNext) {
     ),
   );
   chip.append(edit, remove);
-  if (isNext) {
+  if (isNext && !_commandRunning(tabId)) {
     chip.appendChild(
       _queueButton('Send now', 'Stop the reply and send this message', () => _queueSendNow(tabId)),
     );
@@ -10949,7 +11018,145 @@ function _renderQueue() {
 
 // Returning to the window sends what was queued while nothing could drain it (the reply ended unseen).
 function _queueReturn(tabId) {
-  _queueRefresh(tabId).then(() => _queueDrain(tabId));
+  Promise.all([_queueRefresh(tabId), _runsSeed(tabId)]).then(() => _queueDrain(tabId));
+}
+
+// ── Host commands in the tab ─────────────────────────────────────────────────
+// The tab's preparing or running commands. A card that follows its own run registers it with its stop; after a reload
+// no card follows, so the run list from the server seeds them and a poll ends them. Turn Stop never touches these.
+function _runStart(tabId, runId, stop, followed) {
+  if (!tabId || !runId) return;
+  if (!_runsByTab.has(tabId)) _runsByTab.set(tabId, new Map());
+  _runsByTab.get(tabId).set(runId, { stop, followed: !!followed });
+  if (followed) {
+    if (![..._runsByTab.get(tabId).values()].some((r) => !r.followed)) _runsWatchStop(tabId);
+  } else {
+    _runsWatchArm(tabId);
+  }
+  _syncComposerButton();
+  _renderQueue();
+}
+
+// Returns true when the run was registered. The caller decides what comes next (a follow-up to the agent or a drain).
+function _runEnd(tabId, runId) {
+  const runs = _runsByTab.get(tabId);
+  if (!runs || !runs.delete(runId)) return false;
+  if (!runs.size) _runsByTab.delete(tabId);
+  if (![...runs.values()].some((r) => !r.followed)) _runsWatchStop(tabId);
+  _syncComposerButton();
+  _renderQueue();
+  return true;
+}
+
+function _runsWatchStop(tabId) {
+  clearTimeout(_runsWatch.get(tabId));
+  _runsWatch.delete(tabId);
+}
+
+function _runsWatchArm(tabId) {
+  if (_runsWatch.has(tabId)) return;
+  _runsWatch.set(
+    tabId,
+    setTimeout(() => {
+      _runsWatch.delete(tabId);
+      return _runsSeed(tabId);
+    }, 1000),
+  );
+}
+
+function _stopCommands(tabId) {
+  [...(_runsByTab.get(tabId)?.values() || [])].forEach((run) => run.stop());
+}
+
+// Brings the tab's run set in line with the server: adds commands running that nothing here knows about, ends the
+// ones nobody follows that are over (and drains the queue then), and keeps polling while any are left.
+async function _runsSeed(tabId) {
+  if (!tabId) return;
+  const res = await fetch(`/api/runs?context_id=${encodeURIComponent(tabId)}`).catch(() => null);
+  const listed = res && res.ok ? await res.json().catch(() => null) : null;
+  if (!Array.isArray(listed?.runs)) {
+    if ([...(_runsByTab.get(tabId)?.values() || [])].some((r) => !r.followed)) _runsWatchArm(tabId);
+    return;
+  }
+  const live = new Map(
+    listed.runs
+      .filter((r) => r.state === 'preparing' || r.state === 'running')
+      .map((r) => [r.id, r]),
+  );
+  let ended = false;
+  for (const [runId, run] of [...(_runsByTab.get(tabId) || [])]) {
+    if (!run.followed && !live.has(runId)) ended = _runEnd(tabId, runId) || ended;
+  }
+  for (const [runId, record] of live) {
+    if (!_runsByTab.get(tabId)?.has(runId)) {
+      _runStart(tabId, runId, () => _stopRunDirect(tabId, runId), false);
+      if (record.path === 'host') _runCardRestore(tabId, runId);
+    }
+  }
+  if ([...(_runsByTab.get(tabId)?.values() || [])].some((r) => !r.followed)) _runsWatchArm(tabId);
+  if (ended) {
+    _queueRefresh(tabId);
+    await _queueDrain(tabId);
+  }
+}
+
+// After a reload no card is on the page for a command that is still running. Draw it again from the server's copy:
+// the card rejoins the run, shows Running..., and sends the follow-up when the command ends.
+async function _runCardRestore(tabId, runId) {
+  if (tabId !== _activeTabId || _pendingSandboxCards.get(tabId)?.has(runId)) return;
+  const res = await fetch(
+    `/api/host-shell/${encodeURIComponent(runId)}?context_id=${encodeURIComponent(tabId)}`,
+  ).catch(() => null);
+  const body = res && res.ok ? await res.json().catch(() => null) : null;
+  if (body?.card && tabId === _activeTabId && _runsByTab.get(tabId)?.has(runId)) {
+    _showSandboxApproval(body.card, tabId, true);
+  }
+}
+
+// Stop for a command no card in this page follows (after a reload): the same cancel the card sends.
+async function _stopRunDirect(tabId, runId) {
+  try {
+    await _hostShellPost(runId, 'cancel', tabId);
+  } catch (err) {
+    _showConnectivityToast(`Could not stop the command: ${err.message}`, 'warn');
+    return;
+  }
+  _queueRefresh(tabId);
+}
+
+async function _hostShellPost(requestId, action, contextId) {
+  const post = () =>
+    fetch(`/api/host-shell/${encodeURIComponent(requestId)}/${action}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': window.__CSRF_TOKEN__ || '',
+      },
+      body: JSON.stringify({ context_id: contextId }),
+    });
+  let res = await post();
+  if (res.status === 403) {
+    const fresh = await fetch('/api/csrf')
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null);
+    if (fresh?.csrf_token) window.__CSRF_TOKEN__ = fresh.csrf_token;
+    res = await post();
+  }
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}));
+    const failure = new Error(detail?.detail || `HTTP ${res.status}`);
+    failure.status = res.status;
+    throw failure;
+  }
+  return res.json();
+}
+
+// A typed message waits in the queue while a reply or a command runs, while a card waits for an answer, and behind
+// messages already queued. A send nobody typed (a card's follow-up) and the queue's own send go straight through.
+function _submitShouldQueue(tabId, typedSubmit, queuedSendId) {
+  if (_chatTaskIds.has(tabId)) return true;
+  if (!typedSubmit || queuedSendId) return false;
+  return !!_queueByTab.get(tabId)?.items.length || _commandRunning(tabId) || _queueCardHold(tabId);
 }
 window.addEventListener('focus', () => _queueReturn(_activeTabId));
 
@@ -12462,7 +12669,324 @@ function _showGithubSsoCard(data, ownerTabId) {
   _pinConfirmCardInView(card);
 }
 
-function _showSandboxApproval(data, ownerTabId) {
+// Card for run_on_host: the user reads the exact command, then clicks Run (it runs on their
+// computer, outside the sandbox) or Cancel. The model can only create the request.
+function _renderHostCommandCard(data, requestId, cardTab, tabId, reload) {
+  const card = document.createElement('div');
+  card.className = 'message assistant';
+  card.dataset.sandboxRequest = requestId;
+  const bubble = document.createElement('div');
+  bubble.className = 'bubble card-bubble';
+  const box = document.createElement('div');
+  box.className = 'gator-compose-card gator-draft-card';
+
+  const header = document.createElement('div');
+  header.className = 'gcc-header';
+  const title = document.createElement('div');
+  title.className = 'gcc-title';
+  title.textContent = 'AI Gator wants you to run a command';
+  header.appendChild(title);
+
+  const body = document.createElement('div');
+  body.className = 'gcc-body';
+  const addRow = (label, value, asPre, wrap) => {
+    if (typeof value !== 'string' || !value) return;
+    const row = document.createElement('div');
+    row.className = 'gcc-field-row gcc-field-row--block';
+    const key = document.createElement('span');
+    key.className = 'gcc-field-key';
+    key.textContent = label;
+    const val = document.createElement(asPre ? 'pre' : 'span');
+    val.className = wrap ? 'gcc-field-val gcc-field-val--wrap' : 'gcc-field-val';
+    val.textContent = value;
+    row.append(key, val);
+    body.appendChild(row);
+  };
+  const lineCount = typeof data.command === 'string' ? data.command.split(/\r?\n/).length : 0;
+  addRow('Why', data.reason, false);
+  addRow('Command', data.command, true, true);
+  if (lineCount > 1) {
+    const lines = document.createElement('div');
+    lines.className = 'gcc-refine';
+    lines.textContent = `This command has ${lineCount} lines. Read all of them before you click Run.`;
+    body.appendChild(lines);
+  }
+  addRow('Folder', data.cwd, false);
+  addRow('Shell', data.shell, false);
+  if (Array.isArray(data.risks) && data.risks.length) {
+    const warn = document.createElement('div');
+    warn.className = 'gcc-refine';
+    warn.textContent = `Check carefully: ${data.risks.join('; ')}.`;
+    body.appendChild(warn);
+  }
+  if (data.cwd_is_ai_workspace) {
+    const work = document.createElement('div');
+    work.className = 'gcc-refine';
+    work.textContent =
+      "This is AI Gator's own working folder. Files in it were written by the AI, so a script here runs code the AI wrote.";
+    body.appendChild(work);
+  }
+  const removed = Number(data.env_removed) || 0;
+  if (removed > 0) {
+    const env = document.createElement('div');
+    env.className = 'gcc-refine';
+    env.textContent = `${removed} environment variable${removed === 1 ? '' : 's'} removed (tokens, keys and passwords stay out of the command).`;
+    body.appendChild(env);
+  }
+  const note = document.createElement('div');
+  note.className = 'gcc-refine';
+  note.textContent =
+    'Runs as you on this computer, outside the sandbox, with your own tools, sign-in and network.';
+  body.appendChild(note);
+  const output = document.createElement('pre');
+  output.className = 'gcc-field-val gcc-field-val--wrap';
+  output.hidden = true;
+  body.appendChild(output);
+
+  const actions = document.createElement('div');
+  actions.className = 'gcc-actions';
+  const run = document.createElement('button');
+  run.className = 'gcc-approve-btn';
+  run.textContent = 'Run';
+  const cancel = document.createElement('button');
+  cancel.className = 'btn-secondary';
+  cancel.textContent = 'Cancel';
+  actions.append(run, cancel);
+
+  const footer = document.createElement('div');
+  footer.className = 'gcc-footer';
+  const footNote = document.createElement('span');
+  footNote.className = 'gcc-refine';
+  footNote.textContent = 'Unanswered requests expire after 10 minutes.';
+  footNote.setAttribute('role', 'status');
+  const countdown = document.createElement('span');
+  countdown.className = 'gcc-refine';
+  countdown.setAttribute('aria-hidden', 'true');
+  footer.append(footNote, countdown);
+
+  box.append(header, body, actions, footer);
+  bubble.appendChild(box);
+  card.appendChild(bubble);
+
+  const contextId = typeof data.context_id === 'string' ? data.context_id : tabId;
+  const send = (action) => _hostShellPost(requestId, action, contextId);
+  let running = false;
+  let busy = false;
+  let settled = false;
+  const deadline = Number(data.expires_at) > 0 ? data.expires_at * 1000 : Date.now() + 600000;
+  let clock = null;
+  const stopClock = () => {
+    if (clock !== null) clearInterval(clock);
+    clock = null;
+    countdown.textContent = '';
+  };
+  const expire = () => {
+    if (settled) return;
+    settled = true;
+    stopClock();
+    actions.remove();
+    _pendingSandboxCards.get(cardTab)?.delete(requestId);
+    footNote.textContent = 'Timed out before you answered. Nothing was run.';
+    const again = document.createElement('button');
+    again.className = 'btn-secondary';
+    again.textContent = 'Ask again';
+    again.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (again.disabled) return;
+      again.disabled = true;
+      _sendSandboxFollowUp(tabId, 'Please propose that command again.').catch((err) => {
+        again.disabled = false;
+        console.warn('[host-shell] follow-up not sent:', err);
+      });
+    });
+    footer.appendChild(again);
+  };
+  clock = setInterval(() => {
+    if (settled || busy) return;
+    const left = Math.ceil((deadline - Date.now()) / 1000);
+    if (left <= 0) {
+      expire();
+      return;
+    }
+    countdown.textContent =
+      left <= 60 ? `Expires in ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}` : '';
+  }, 1000);
+  const activeStates = ['awaiting_approval', 'preparing', 'running'];
+  const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const waitForRun = async () => {
+    let misses = 0;
+    for (;;) {
+      const res = await fetch(
+        `/api/host-shell/${encodeURIComponent(requestId)}?context_id=${encodeURIComponent(contextId)}`,
+      ).catch(() => null);
+      if (res && (res.status === 404 || res.status === 410)) return { gone: true };
+      const body = res && res.ok ? await res.json().catch(() => null) : null;
+      if (body && body.run && !activeStates.includes(body.run.state)) return body;
+      misses = body ? 0 : misses + 1;
+      if (misses >= 30) return { lost: true };
+      await pause(700);
+    }
+  };
+  const describeRun = (state, record, result) => {
+    if (state === 'finished')
+      return result.exit_code === 0
+        ? '✓ Finished · exit code 0'
+        : `Failed · exit code ${result.exit_code}`;
+    if (state === 'timed_out') return 'Timed out · the command was stopped at its time limit.';
+    if (state === 'cancelled') return 'You stopped this command.';
+    if (state === 'policy_blocked')
+      return 'Blocked · your administrator has turned off running commands on this computer.';
+    if (state === 'interrupted') return 'AI Gator restarted while this command was running.';
+    if (state === 'failed_to_start')
+      return record?.reason === 'concurrency_cap'
+        ? 'Could not start · too many commands are already running in this tab.'
+        : 'Could not start the command.';
+    return `Ended · ${state}`;
+  };
+  // The composer's Stop command and this card's own Stop button do the same thing.
+  const stopRun = () => {
+    if (cancel.disabled) return;
+    cancel.disabled = true;
+    footNote.textContent = 'Stopping...';
+    send('cancel')
+      .then(() => _queueRefresh(tabId))
+      .catch((err) => {
+        cancel.disabled = false;
+        _showConnectivityToast(`Could not stop the command: ${err.message}`, 'warn');
+      });
+  };
+  const follow = async (tellAgent) => {
+    const body = await waitForRun();
+    if (body.gone) {
+      expire();
+      if (_runEnd(tabId, requestId)) _queueDrain(tabId);
+      return;
+    }
+    if (body.lost) {
+      settled = true;
+      stopClock();
+      actions.remove();
+      _pendingSandboxCards.get(cardTab)?.delete(requestId);
+      footNote.textContent =
+        'Lost contact with AI Gator. The command may still be running. Reload to see where it ended.';
+      if (_runEnd(tabId, requestId)) _queueDrain(tabId);
+      return;
+    }
+    settled = true;
+    stopClock();
+    actions.remove();
+    _pendingSandboxCards.get(cardTab)?.delete(requestId);
+    const registered = _runEnd(tabId, requestId);
+    const result = body.result || {};
+    const state = body.run?.state;
+    const text = [result.stdout, result.stderr, result.error].filter(Boolean).join('\n');
+    output.textContent = text || '(no output)';
+    output.hidden = false;
+    footNote.textContent = describeRun(state, body.run, result);
+    // The agent reads the output first; the follow-up turn's end drains the queue. With no follow-up, drain now.
+    if (tellAgent)
+      _sendSandboxFollowUp(
+        tabId,
+        `I ran command request ${requestId}. Call host_command_result with that request_id to read the output.`,
+      ).catch((e) => console.warn('[host-shell] follow-up not sent:', e));
+    else if (registered) _queueDrain(tabId);
+  };
+  const decide = async (action) => {
+    if (run.disabled || settled) return;
+    busy = true;
+    run.disabled = true;
+    if (action === 'run') {
+      running = true;
+      cancel.textContent = 'Stop';
+      footNote.textContent = 'Running...';
+    } else {
+      cancel.disabled = true;
+    }
+    try {
+      await send(action);
+      if (action === 'run') _runStart(tabId, requestId, stopRun, true);
+      if (action === 'cancel') {
+        settled = true;
+        stopClock();
+        actions.remove();
+        _pendingSandboxCards.get(cardTab)?.delete(requestId);
+        footNote.textContent = 'You cancelled this. Nothing was run.';
+        _sendSandboxFollowUp(
+          tabId,
+          `Cancelled. I did not run command request ${requestId}. Do not retry it; carry on without it, or ask me what I want.`,
+        ).catch((e) => console.warn('[host-shell] follow-up not sent:', e));
+        return;
+      }
+      await follow(true);
+    } catch (err) {
+      busy = false;
+      running = false;
+      if (err.status === 404 || err.status === 410) {
+        expire();
+        return;
+      }
+      run.disabled = false;
+      cancel.disabled = false;
+      cancel.textContent = 'Cancel';
+      footNote.textContent =
+        err.status && err.status < 500
+          ? 'Unanswered requests expire after 10 minutes.'
+          : "Couldn't reach AI Gator. Try again.";
+      _showConnectivityToast(`Could not record your decision: ${err.message}`, 'warn');
+    }
+  };
+  run.addEventListener('click', (e) => {
+    e.stopPropagation();
+    decide('run');
+  });
+  cancel.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (!running) {
+      decide('cancel');
+      return;
+    }
+    stopRun();
+  });
+  document.getElementById('messages')?.appendChild(card);
+  card.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  if (reload) {
+    // The tab was switched away and back: this card is drawn fresh, but its command may already be running or over.
+    // The old card's poll still tells the agent when it ends, so this one only shows where the run stands.
+    (async () => {
+      const res = await fetch(`/api/runs?context_id=${encodeURIComponent(contextId)}`).catch(
+        () => null,
+      );
+      const listed = res && res.ok ? await res.json().catch(() => null) : null;
+      const record = Array.isArray(listed?.runs)
+        ? listed.runs.find((r) => r.id === requestId)
+        : null;
+      if (!record || record.state === 'awaiting_approval' || settled) return;
+      if (record.state === 'expired') {
+        expire();
+        return;
+      }
+      if (record.state === 'denied') {
+        settled = true;
+        stopClock();
+        actions.remove();
+        _pendingSandboxCards.get(cardTab)?.delete(requestId);
+        footNote.textContent = 'You cancelled this. Nothing was run.';
+        return;
+      }
+      if (activeStates.includes(record.state)) {
+        busy = true;
+        running = true;
+        run.disabled = true;
+        cancel.textContent = 'Stop';
+        footNote.textContent = 'Running...';
+        _runStart(tabId, requestId, stopRun, true);
+      }
+      await follow(false);
+    })().catch((err) => console.warn('[host-shell] could not rejoin the run:', err));
+  }
+}
+
+function _showSandboxApproval(data, ownerTabId, reload) {
   const requestId = data && typeof data.request_id === 'string' ? data.request_id : '';
   if (!requestId) return;
   // The card belongs to the tab that asked. Keep it for that tab and draw it when the tab is shown,
@@ -12478,6 +13002,16 @@ function _showSandboxApproval(data, ownerTabId) {
     (el) => el.dataset.sandboxRequest === requestId,
   );
   if (seen) return;
+  if (data.tool === 'run_on_host') {
+    _renderHostCommandCard(
+      data,
+      requestId,
+      cardTab,
+      ownerTabId || _activeTabId || 'default',
+      reload,
+    );
+    return;
+  }
   const card = document.createElement('div');
   card.className = 'message assistant';
   card.dataset.sandboxRequest = requestId;
@@ -15765,10 +16299,7 @@ form.addEventListener('submit', async (e) => {
   // send button, so the gate and the button can never disagree.
   // A message typed while a reply runs waits in the queue instead of being dropped. One typed while older
   // messages are still queued (paused, held for a card, or about to send) lines up behind them, never ahead.
-  if (
-    _chatTaskIds.has(_activeTabId) ||
-    (typedSubmit && !queuedSendId && _queueByTab.get(_activeTabId)?.items.length)
-  ) {
+  if (_submitShouldQueue(_activeTabId, typedSubmit, queuedSendId)) {
     await _queueComposerMessage();
     return;
   }

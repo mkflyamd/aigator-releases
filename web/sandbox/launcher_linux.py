@@ -133,7 +133,7 @@ def launch(req: SandboxRequest) -> SandboxResult:
     except ValueError as exc:
         raise SandboxUnavailable(f"A sandbox path was refused: {exc}") from exc
     try:
-        return run_process_group(argv, real.cwd, req.env, req.timeout)
+        return run_process_group(argv, real.cwd, req.env, req.timeout, req.cancel, req.on_start)
     except (FileNotFoundError, PermissionError) as exc:
         raise SandboxUnavailable(f"bubblewrap could not be started ({type(exc).__name__}).") from exc
     except OSError as exc:

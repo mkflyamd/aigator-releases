@@ -1259,6 +1259,17 @@ def _heartbeat_status(silent_intervals: int, interval_seconds: int = 15) -> str 
     return f"Still working... ({silent_intervals * interval_seconds}s)"
 
 
+def _run_status(record: dict | None, now: float) -> str | None:
+    """The status line for a turn's command that is still going, or None when nothing is running."""
+    if not record:
+        return None
+    preparing = record["state"] == "preparing"
+    since = record["created_at"] if preparing else (record.get("run_started_at") or record["created_at"])
+    seconds = max(0, int(now - since))
+    text = f"{'Preparing the sandbox' if preparing else 'Running a command'} · {seconds}s"
+    return text + " · taking longer than usual, Stop cancels it" if seconds >= 30 else text
+
+
 @router.get("/api/chat/stream/{task_id}")
 async def chat_stream(task_id: str, request: Request):
     """SSE stream for a running chat task. Supports Last-Event-ID reconnect/replay."""
@@ -1276,6 +1287,8 @@ async def chat_stream(task_id: str, request: Request):
 
     async def _gen():
         import asyncio as _asyncio
+        import time as _time
+        from runs.supervisor import get_supervisor
 
         # The task buffer is the only data transport. The per-subscriber queue
         # returned here is merely a coalesced wake signal. A slow browser can
@@ -1326,7 +1339,9 @@ async def chat_stream(task_id: str, request: Request):
                 except _asyncio.TimeoutError:
                     _silent_intervals += 1
                     yield ": ping\n\n"
-                    status = _heartbeat_status(_silent_intervals)
+                    active = await _asyncio.to_thread(get_supervisor().active_for_turn, task_id)
+                    status = (_run_status(active[0] if active else None, _time.time())
+                              or _heartbeat_status(_silent_intervals))
                     if status is not None:
                         yield f"data: {json.dumps({'status': status})}\n\n"
                     continue
@@ -1369,6 +1384,8 @@ async def chat_stream(task_id: str, request: Request):
 async def cancel_chat(task_id: str):
     """Cancel a running chat task."""
     cancelled = shared.chat_task_store.cancel(task_id)
+    from runs.supervisor import get_supervisor
+    await asyncio.to_thread(get_supervisor().cancel_turn, task_id)
     # Also stop browser agent if running
     try:
         from browser_agent import is_browser_active, cancel_browser_task

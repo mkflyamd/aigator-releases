@@ -111,6 +111,19 @@ def _restore_shared_state():
 
 
 @pytest.fixture(autouse=True)
+def _fresh_run_supervisor(tmp_path):
+    """A new Run Supervisor over a temp store per test, so runs never leak between tests."""
+    from runs.records import RunStore
+    from runs.supervisor import RunSupervisor, reset_supervisor
+
+    supervisor = RunSupervisor(RunStore(tmp_path / "runs.db"))
+    reset_supervisor(supervisor)
+    yield supervisor
+    supervisor.stop_all()
+    reset_supervisor(None)
+
+
+@pytest.fixture(autouse=True)
 def _hermetic_sandbox_policy(tmp_path, monkeypatch):
     """Never read the machine-wide sandbox policy (ProgramData, /Library, /etc) in tests."""
     from sandbox import policy

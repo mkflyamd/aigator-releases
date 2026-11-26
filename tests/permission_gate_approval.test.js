@@ -28,7 +28,8 @@ test('the global fetch wrapper refreshes a stale CSRF token and retries once', (
 });
 
 test('a failed approval offers Ask again instead of a dead end', () => {
-  const i = app.indexOf("'Ask again'");
-  assert(i > 0);
-  assert(/doSend\(retryPayload\)/.test(app.slice(i, i + 300)));
+  // Other cards (the host-command card) have their own Ask again; this one is the chat permission gate's.
+  const offsets = [...app.matchAll(/'Ask again'/g)].map((m) => m.index);
+  assert(offsets.length > 0);
+  assert(offsets.some((i) => /doSend\(retryPayload\)/.test(app.slice(i, i + 300))));
 });

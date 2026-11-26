@@ -48,6 +48,7 @@ function world({ text = 'next question', chatRunning = true, chips = [] } = {}) 
     _pendingSandboxFollowUps: new Set(),
     _pendingSandboxCards: new Map(),
     _pendingTabCards: new Map(),
+    _runsByTab: new Map(),
     _chatTaskIds: new Map(chatRunning ? [['tab1', 'task1']] : []),
     document: { getElementById: (id) => (id === 'chat-input' ? input : null) },
     window: {},
@@ -74,7 +75,7 @@ function world({ text = 'next question', chatRunning = true, chips = [] } = {}) 
   vm.createContext(ctx);
   vm.runInContext(
     `${functionSource('_queueRefusal')}\n${functionSource('_queueComposerMessage')}\n${functionSource('_queueDrain')}
-${functionSource('_queueCardHold')}
+${['_queueCardHold', '_tabBusy', '_commandRunning'].map(functionSource).join('\n')}
 ${['_queueBusyStart', '_queueBusyEnd', '_queueRearm', '_queueRearmStop'].map(functionSource).join('\n')}`,
     ctx,
   );

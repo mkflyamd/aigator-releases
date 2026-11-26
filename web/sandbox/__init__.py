@@ -11,19 +11,32 @@ from __future__ import annotations
 
 import logging
 import os
+import re
+import shutil
 import signal
+import stat
 import subprocess
 import sys
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Callable, Mapping, Sequence
 
 _log = logging.getLogger(__name__)
 
 
 class SandboxUnavailable(RuntimeError):
     """The platform sandbox cannot run this request; nothing was executed."""
+
+    teardown_failed = False  # set when access granted before the refusal could not be fully revoked yet
+
+
+class SandboxCancelled(SandboxUnavailable):
+    """Stop arrived before the command started; nothing was executed."""
+
+    def __init__(self):
+        super().__init__("The command was stopped before it started.")
 
 
 class SandboxPathNotGrantable(SandboxUnavailable):
@@ -74,6 +87,10 @@ class SandboxRequest:
     network: bool              # outbound network approved for this run
     timeout: int
     scratch_path: Path | None = None  # app-owned scratch folder; Windows grants it once instead of per run
+    cancel: threading.Event | None = None      # set by Stop: kill the process tree, then clean up
+    on_start: Callable[[int], None] | None = None  # called with the pid once the process is running
+    setup_seconds: float | None = None         # budget for granting access (Windows); None = launcher default
+    teardown_seconds: float | None = None      # budget for revoking access (Windows); None = launcher default
 
 
 @dataclass
@@ -82,6 +99,8 @@ class SandboxResult:
     stdout: str
     stderr: str
     timed_out: bool
+    cancelled: bool = False
+    teardown_failed: bool = False  # access granted for the run could not be fully revoked yet
 
 
 _PROBE_LOCK = threading.Lock()
@@ -167,6 +186,59 @@ _POSIX_ENV = ("PATH", "LANG", "LC_ALL", "LC_CTYPE")
 # Node in an AppContainer fails with `EPERM lstat 'C:\'` unless symlinks are
 # preserved (spike, 2026-10-05). NODE_OPTIONS reaches Node started by user code.
 _NODE_OPTIONS_WINDOWS = "--preserve-symlinks --preserve-symlinks-main"
+# Preloaded into Node on Windows (NODE_OPTIONS --require). The AppContainer cannot read the drive
+# root, so Node's JS realpath fails with EPERM, and libuv hangs creating piped child stdio.
+# node_shim.js routes realpath to the native implementation and fails piped spawns fast.
+_NODE_SHIM = Path(__file__).with_name("node_shim.js")
+_NODE_SHIM_RELPATH = (".gator", "node-shim.js")
+
+
+_NODE_SHIM_REQUIRE = re.compile(r'--require="([^"]+)"')
+
+
+def _node_options_windows(run_dir: Path) -> str:
+    """Windows NODE_OPTIONS preloading the shim from a hidden run-dir subfolder (not listed as output)."""
+    shim = run_dir.joinpath(*_NODE_SHIM_RELPATH)
+    # Forward slashes: NODE_OPTIONS treats a backslash inside quotes as an escape.
+    return f'{_NODE_OPTIONS_WINDOWS} --require="{shim.as_posix()}"'
+
+
+def install_node_shim(env: Mapping[str, str]) -> None:
+    """Write the shim to the path env's NODE_OPTIONS requires. The launcher calls this while holding its
+    run lock, right before spawning, so sandboxed code from an earlier run cannot have altered it."""
+    match = _NODE_SHIM_REQUIRE.search(env.get("NODE_OPTIONS", ""))
+    if match is None:
+        return
+    shim = Path(match.group(1))
+    parent = shim.parent
+    if _is_link(parent) or (parent.exists() and not parent.is_dir()):
+        _remove_planted(parent)
+    parent.mkdir(parents=True, exist_ok=True)
+    if _is_link(shim) or shim.exists():
+        _remove_planted(shim)
+    shim.write_text(_NODE_SHIM.read_text(encoding="utf-8"), encoding="utf-8", newline="\n")
+
+
+def _is_link(path: Path) -> bool:
+    return os.path.islink(path) or os.path.isjunction(path)
+
+
+def _remove_planted(path: Path) -> None:
+    """Remove whatever sandboxed code left at path (file, read-only file, hard link, directory, or a link
+    that would send our write outside the run folder) so the shim can always be rewritten."""
+    if _is_link(path):
+        try:
+            os.unlink(path)
+        except OSError:  # Windows removes a directory link or junction with rmdir
+            os.rmdir(path)
+    elif path.is_dir():
+        shutil.rmtree(path, onexc=lambda func, p, _exc: (os.chmod(p, stat.S_IWRITE), func(p)))
+    else:
+        try:
+            path.unlink()
+        except PermissionError:  # Windows refuses to delete a read-only file
+            os.chmod(path, stat.S_IWRITE)
+            path.unlink()
 
 
 def build_env(parent: Mapping[str, str], run_dir: Path, node_path: str | None,
@@ -179,7 +251,7 @@ def build_env(parent: Mapping[str, str], run_dir: Path, node_path: str | None,
         env = {k: upper[k] for k in _WINDOWS_ENV if k in upper}
         for key in _WINDOWS_RUN_DIR_ENV:
             env[key] = str(run_dir)
-        env["NODE_OPTIONS"] = _NODE_OPTIONS_WINDOWS
+        env["NODE_OPTIONS"] = _node_options_windows(run_dir)
     else:
         env = {k: parent[k] for k in _POSIX_ENV if k in parent}
         env["HOME"] = str(run_dir)
@@ -208,32 +280,52 @@ def telemetry_record(run_id: str, skill_id: str, level: str, network: bool,
     }
 
 
-def run_process_group(argv: list[str], cwd: Path, env: dict[str, str], timeout: int) -> SandboxResult:
-    """POSIX: run in a new session and kill the whole group on timeout."""
+def _kill_group(proc: subprocess.Popen) -> None:
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def run_process_group(argv: list[str], cwd: Path, env: dict[str, str], timeout: int,
+                      cancel: threading.Event | None = None,
+                      on_start: Callable[[int], None] | None = None) -> SandboxResult:
+    """POSIX: run in a new session and kill the whole group on timeout or Stop."""
     proc = subprocess.Popen(
         argv, cwd=str(cwd), env=env, stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
     )
-    timed_out = False
-    try:
-        out, err = proc.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        timed_out = True
+    if on_start is not None:
         try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+            on_start(proc.pid)
+        except Exception:
+            _log.warning("sandbox: the run-start hook failed")
+    timed_out = cancelled = False
+    deadline = time.monotonic() + timeout
+    while True:
         try:
-            out, err = proc.communicate(timeout=5)
+            out, err = proc.communicate(timeout=max(0.0, min(0.2, deadline - time.monotonic())))
+            break
         except subprocess.TimeoutExpired:
-            proc.kill()
-            for stream in (proc.stdout, proc.stderr):
-                stream.close()
-            proc.wait()
-            out, err = b"", b""
+            cancelled = cancel is not None and cancel.is_set()
+            timed_out = not cancelled and time.monotonic() >= deadline
+            if not (cancelled or timed_out):
+                continue
+            _kill_group(proc)
+            try:
+                out, err = proc.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                for stream in (proc.stdout, proc.stderr):
+                    stream.close()
+                proc.wait()
+                out, err = b"", b""
+            break
+    stopped = timed_out or cancelled
     return SandboxResult(
-        returncode=-1 if timed_out else proc.returncode,
+        returncode=-1 if stopped else proc.returncode,
         stdout=(out or b"").decode("utf-8", "replace"),
         stderr=(err or b"").decode("utf-8", "replace"),
         timed_out=timed_out,
+        cancelled=cancelled,
     )
