@@ -175,6 +175,36 @@ def is_opencode_bare(agent: str) -> bool:
     return agent == OPENCODE_BARE_AGENT
 
 
+def _windows_registry_path() -> str:
+    """The PATH Windows would give a freshly started process (machine + user).
+    A running server keeps the PATH it started with, so an install made since
+    (winget, npm -g) is only visible here."""
+    if sys.platform != "win32":
+        return ""
+    import winreg
+
+    keys = (
+        (winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"),
+        (winreg.HKEY_CURRENT_USER, "Environment"),
+    )
+    parts = []
+    for hive, sub in keys:
+        try:
+            with winreg.OpenKey(hive, sub) as key:
+                parts.append(os.path.expandvars(winreg.QueryValueEx(key, "Path")[0]))
+        except OSError:
+            continue
+    return os.pathsep.join(parts)
+
+
+def _which(name: str) -> str | None:
+    found = shutil.which(name)
+    if found:
+        return found
+    registry_path = _windows_registry_path()
+    return shutil.which(name, path=registry_path) if registry_path else None
+
+
 def find_agent_binary(agent: str) -> str | None:
     """Resolve the agent's binary on PATH. None if not installed - the route
     layer turns this into a clear "not installed" error rather than a
@@ -184,7 +214,7 @@ def find_agent_binary(agent: str) -> str | None:
         return None
     aliases = EXTRA_AGENTS[agent][2] if agent in EXTRA_AGENTS else ()
     for name in (argv[0], *aliases):
-        found = shutil.which(name)
+        found = _which(name)
         if found:
             return found
     return None
@@ -371,12 +401,12 @@ def codex_config_routes_to_gateway(profile: dict) -> bool:
     return urlparse(provider.get("base_url") or "").hostname in gateway_hosts
 
 
-def _wsl_command(agent: str, repo_path: str) -> list[str] | None:
+def _wsl_command(agent: str, repo_path: str, resume_args: tuple[str, ...] = ()) -> list[str] | None:
     distro, found = wsl_agents()
     name = found.get(agent)
     if not distro or not name:
         return None
-    argv = [name, *SUPPORTED_AGENTS[agent][1:]]
+    argv = [name, *SUPPORTED_AGENTS[agent][1:], *resume_args]
     cmd = ["wsl.exe", "-d", distro]
     if repo_path:
         cmd += ["--cd", repo_path]
@@ -412,6 +442,42 @@ def build_command(agent: str, repo_path: str = "", extra_args: tuple[str, ...] =
     if not resolved:
         return _wsl_command(agent, repo_path) if _wsl_capable(agent) else None
     return [resolved, *argv[1:], *extra_args]
+
+
+_RESUME_VERBS = {
+    "claude": ("--resume",),
+    "codex": ("resume",),
+    "crush": ("--session",),
+    OPENCODE_BARE_AGENT: ("--session",),
+}
+
+
+def can_resume(agent: str) -> bool:
+    return agent in _RESUME_VERBS
+
+
+def build_resume_command(
+    agent: str,
+    repo_path: str,
+    session_id: str,
+    source: str = "windows",
+    extra_args: tuple[str, ...] = (),
+) -> list[str] | None:
+    """argv that reopens a stored session in the agent's own resume mode, in the
+    place the session lives. A WSL session resumes inside its distro with the
+    Linux path, never a UNC path."""
+    verb = _RESUME_VERBS.get(agent)
+    if not verb:
+        return None
+    if source == "windows":
+        resolved = find_agent_binary(agent)
+        if not resolved:
+            return None
+        return [resolved, *SUPPORTED_AGENTS[agent][1:], *extra_args, *verb, session_id]
+    distro, _found = wsl_agents()
+    if not distro or source != f"wsl:{distro}":
+        return None
+    return _wsl_command(agent, repo_path, (*verb, session_id))
 
 
 # (project_id, agent) -> pty_session_id of that project+agent's current
@@ -452,23 +518,60 @@ def new_session_id() -> str:
 _pinned_sessions: dict[str, str] = {}
 
 
+# Every terminal whose stored session Gator knows (resumed, or a WSL Claude launch), whatever
+# the agent, so the history panel can link it. Kept apart from _pinned_sessions, which handoff
+# reads for native Claude only.
+_linked_sessions: dict[str, tuple[str, str]] = {}
+
+
 def pin_session(agent: str, command: list[str], pty_session_id: str) -> list[str]:
-    if agent != "claude" or not command or Path(command[0]).stem.lower() == "wsl":
+    if agent != "claude" or not command:
         return command
     transcript_id = str(uuid.uuid4())
+    if Path(command[0]).stem.lower() == "wsl":
+        # Handoff keeps looking WSL transcripts up unpinned; only the history link is recorded.
+        if command[-2:-1] != ["-lc"]:
+            return command
+        _linked_sessions[pty_session_id] = (agent, transcript_id)
+        return [*command[:-1], f"{command[-1]} --session-id {transcript_id}"]
     _pinned_sessions[pty_session_id] = transcript_id
     return [*command, "--session-id", transcript_id]
+
+
+def pin_resume(agent: str, command: list[str], pty_session_id: str, session_id: str) -> list[str]:
+    if command:
+        _linked_sessions[pty_session_id] = (agent, session_id)
+        if agent == "claude" and Path(command[0]).stem.lower() != "wsl":
+            _pinned_sessions[pty_session_id] = session_id
+    return command
 
 
 def pinned_session_id(pty_session_id: str) -> str | None:
     return _pinned_sessions.get(pty_session_id)
 
 
+def linked_session_id(pty_session_id: str) -> str | None:
+    linked = _linked_sessions.get(pty_session_id)
+    return linked[1] if linked else _pinned_sessions.get(pty_session_id)
+
+
+def ptys_for_session(agent: str, session_id: str) -> list[str]:
+    found = [pty for pty, (a, sid) in _linked_sessions.items() if a == agent and sid == session_id]
+    if agent == "claude":
+        found += [pty for pty, sid in _pinned_sessions.items() if sid == session_id and pty not in found]
+    return found
+
+
+def relink_session(agent: str, pty_session_id: str, session_id: str) -> None:
+    _linked_sessions[pty_session_id] = (agent, session_id)
+
+
 def unpin_session(pty_session_id: str) -> None:
     _pinned_sessions.pop(pty_session_id, None)
+    _linked_sessions.pop(pty_session_id, None)
 
 
-def build_opencode_bare_command(repo_path: str) -> list[str] | None:
+def build_opencode_bare_command(repo_path: str, session_id: str | None = None) -> list[str] | None:
     """argv for a single bare `opencode` process rooted at repo_path — no
     `serve`, no `attach`. None if opencode can't be found (mirrors
     build_command's contract for the route layer's "not installed" error).
@@ -476,16 +579,17 @@ def build_opencode_bare_command(repo_path: str) -> list[str] | None:
     Resolved on PATH via shutil.which("opencode"), same as claude/codex/crush -
     install with `npm install -g opencode-ai`. AI Gator does not bundle or pin it.
 
-    No --session resume: a lost/restarted PTY just starts a fresh OpenCode
-    session, same tradeoff _active_sessions already documents for every other
-    agent here.
+    A lost/restarted PTY just starts a fresh OpenCode session, same tradeoff
+    _active_sessions already documents for every other agent here; only a
+    History "Resume" passes session_id.
     """
     import shutil
 
-    resolved = shutil.which("opencode")
-    if resolved:
-        return [_wrap_windows_cmd(resolved), repo_path]
-    return None
+    resolved = _which("opencode")
+    if not resolved:
+        return None
+    resume = [*_RESUME_VERBS[OPENCODE_BARE_AGENT], session_id] if session_id else []
+    return [_wrap_windows_cmd(resolved), *resume, repo_path]
 
 
 def _wrap_windows_cmd(path: str) -> str:

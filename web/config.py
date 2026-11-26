@@ -175,10 +175,6 @@ PATCHABLE_CONFIG_KEYS = frozenset({
     # False (the default), browser Notifications are created with silent:true.
     "notifications_enabled",
     "notification_sounds_enabled",
-    # Coding-agent terminal theme: "dark" (default), "light", "auto" (follows
-    # the Gator UI theme). TUI apps like Crush use dark-oriented color schemes,
-    # so dark is the safe default. Users can toggle from the Code tab topbar.
-    "terminal_theme",
     # Tool budget — optional skills the user has explicitly enabled as always-on.
     # Values are skill_id strings from shared._OPTIONAL_ALWAYS_ON_SKILLS.
     # Empty list (default) means no optional skills are always-on;

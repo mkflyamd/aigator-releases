@@ -4,12 +4,8 @@
 // ── State ──────────────────────────────────────────────────────────────────────
 let _caProjects = []; // [{name, repo_path, source}]
 let _caActiveProject = null; // active project name string (global to this browser tab)
-let _caLeftView = 'scm'; // 'scm' | 'explorer' — which view the left pane shows
+let _caLeftView = 'scm'; // 'scm' | 'explorer' | 'history' — which view the left pane shows
 let _caOpenDiffFile = null; // repo-relative path of the file currently open in the right pane (if a Changes diff), else null
-
-// Terminal theme: 'dark' (default), 'light', 'auto' (follows Gator UI theme).
-// Stored in ~/.gator/config.json via PUT /api/config.
-let _caTerminalTheme = 'dark';
 
 // ── Session scoping ───────────────────────────────────────────────────────────
 // When true (default), the coding-agent terminal session is SHARED across all
@@ -107,6 +103,7 @@ function _initCodeAgentPane() {
     leftCol.style.display = '';
     // Render source control panel into the left column
     leftCol.innerHTML = _caSourceControlPanel();
+    if (_caLeftView !== 'scm') _caSetLeftView(_caLeftView);
   }
   const rightCol = document.getElementById('tp-right-col');
   if (rightCol) {
@@ -114,14 +111,10 @@ function _initCodeAgentPane() {
   }
 
   // Populate the topbar with Code-tab controls (project chip, refresh, theme,
-  // Hide Gator). Load the saved terminal theme first, then populate.
+  // Hide Gator). The terminal theme follows the app theme (ThemeManager).
   _caPopulateTopbar();
   _caInstallBodyObserver();
-  _caLoadTerminalTheme().then(() => {
-    // Re-populate to reflect the loaded theme in the toggle button label.
-    _caPopulateTopbar();
-    _caApplyTerminalTheme();
-  });
+  _caApplyTerminalTheme();
 
   // If projects already loaded (e.g. by URL param handler), skip the fetch
   const _doRender = () => {
@@ -163,12 +156,20 @@ function _initCodeAgentPane() {
 }
 
 // ── Source Control Panel (left column) ────────────────────────────────────────
+const _CA_TAB_ICON_FILES =
+  '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
+const _CA_TAB_ICON_CHANGES =
+  '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="8" r="2.5"/><path d="M6 8.5v7"/><path d="M18 10.5c0 4-5 4-9 5"/></svg>';
+const _CA_TAB_ICON_HISTORY =
+  '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/></svg>';
+
 function _caSourceControlPanel() {
   return `
     <div class="ca-sc-panel">
       <div class="ca-sc-viewtabs">
-        <button class="ca-sc-viewtab active" id="ca-viewtab-scm"${gatorActionAttrs('_caSetLeftView', ['scm'])}>Source Control</button>
-        <button class="ca-sc-viewtab" id="ca-viewtab-explorer"${gatorActionAttrs('_caSetLeftView', ['explorer'])}>Explorer</button>
+        <button class="ca-sc-viewtab" id="ca-viewtab-explorer" aria-pressed="false" title="Files" aria-label="Files"${gatorActionAttrs('_caSetLeftView', ['explorer'])}>${_CA_TAB_ICON_FILES}</button>
+        <button class="ca-sc-viewtab active" id="ca-viewtab-scm" aria-pressed="true" title="Changes" aria-label="Changes"${gatorActionAttrs('_caSetLeftView', ['scm'])}>${_CA_TAB_ICON_CHANGES}</button>
+        <button class="ca-sc-viewtab" id="ca-viewtab-history" aria-pressed="false" title="History" aria-label="History"${gatorActionAttrs('_caSetLeftView', ['history'])}>${_CA_TAB_ICON_HISTORY}</button>
       </div>
       <div id="ca-scm-view" class="ca-scm-view">
         <div class="ca-sc-section-wrapper">
@@ -187,26 +188,42 @@ function _caSourceControlPanel() {
           <div class="ca-sc-loading"></div>
         </div>
       </div>
+      <div id="ca-hist-view" class="ca-hist-view" style="display:none">
+        <div class="ah-search">
+          <input
+            id="ca-hist-search"
+            type="search"
+            placeholder="Search this project's sessions"
+            aria-label="Search this project's sessions"
+            autocomplete="off"
+          />
+        </div>
+        <div id="ca-hist-list" class="ah-list"></div>
+      </div>
     </div>`;
 }
 
-// ── Left pane view toggle (Source Control ↔ Explorer) ───────────────────────
+// ── Left pane view toggle (Source Control / Explorer / History) ─────────────
 function _caSetLeftView(view) {
-  const scmView = document.getElementById('ca-scm-view');
-  const feView = document.getElementById('ca-fe-view');
-  if (!scmView || !feView) return;
-  const showExplorer = view === 'explorer';
-  _caLeftView = showExplorer ? 'explorer' : 'scm';
-  scmView.style.display = showExplorer ? 'none' : '';
-  feView.style.display = showExplorer ? '' : 'none';
-  document.getElementById('ca-viewtab-scm')?.classList.toggle('active', !showExplorer);
-  document.getElementById('ca-viewtab-explorer')?.classList.toggle('active', showExplorer);
-  if (showExplorer) _caLoadFileTree('', document.getElementById('ca-fe-root'), 0);
+  const panes = { scm: 'ca-scm-view', explorer: 'ca-fe-view', history: 'ca-hist-view' };
+  if (!panes[view]) view = 'scm';
+  if (!Object.values(panes).every((id) => document.getElementById(id))) return;
+  _caLeftView = view;
+  Object.entries(panes).forEach(([name, id]) => {
+    document.getElementById(id).style.display = name === view ? '' : 'none';
+    const tab = document.getElementById('ca-viewtab-' + name);
+    tab?.classList.toggle('active', name === view);
+    tab?.setAttribute('aria-pressed', String(name === view));
+  });
+  if (view === 'explorer') _caLoadFileTree('', document.getElementById('ca-fe-root'), 0);
+  if (view === 'history' && window.agentHistory) agentHistory.show();
 }
 
 function _caLeftViewRefresh() {
   if (_caLeftView === 'explorer') {
     _caLoadFileTree('', document.getElementById('ca-fe-root'), 0);
+  } else if (_caLeftView === 'history') {
+    if (window.agentHistory) agentHistory.refresh();
   } else {
     _caRefreshSourceControl(true);
   }
@@ -1027,27 +1044,24 @@ function _caPopulateTopbar() {
   chipArea.className = 'ca-tb-chip-area';
   urlBar.appendChild(chipArea);
 
-  // Terminal theme pill — fixed width so toggling doesn't shift the layout.
+  // App theme pill — fixed width so toggling doesn't shift the layout.
   // "Dark"/"Light"/"Auto" are all 4-5 chars; min-width + center-align keeps
-  // the address bar stable.
+  // the address bar stable. It holds no state of its own: the label comes from
+  // ThemeManager and a click flips the app theme (Settings, terminals and this
+  // pill all follow via the gator:theme-change event).
   const themePill = document.createElement('button');
   themePill.className = 'ca-tb-app ca-tb-theme-pill';
-  themePill.title = 'Terminal theme: ' + _caTerminalTheme;
   const themeDot = document.createElement('span');
   themeDot.className = 'ca-tb-app-dot';
   const themeLabel = document.createElement('span');
   themeLabel.className = 'ca-tb-theme-label';
-  themeLabel.textContent = _caTerminalTheme.charAt(0).toUpperCase() + _caTerminalTheme.slice(1);
   themePill.appendChild(themeDot);
   themePill.appendChild(themeLabel);
+  _caSetThemePillLabel(themePill);
   themePill.onclick = () => {
-    const themes = ['dark', 'light', 'auto'];
-    const idx = themes.indexOf(_caTerminalTheme);
-    _caTerminalTheme = themes[(idx + 1) % themes.length];
-    themeLabel.textContent = _caTerminalTheme.charAt(0).toUpperCase() + _caTerminalTheme.slice(1);
-    themePill.title = 'Terminal theme: ' + _caTerminalTheme;
-    _caApplyTerminalTheme();
-    _caSaveTerminalTheme(_caTerminalTheme);
+    const order = ['dark', 'light', 'system'];
+    const idx = order.indexOf(ThemeManager.getActive());
+    ThemeManager.set(order[(idx + 1) % order.length]);
   };
   urlBar.appendChild(themePill);
 
@@ -1186,17 +1200,11 @@ function _caInstallBodyObserver() {
 // ── Terminal theme ─────────────────────────────────────────────────────────────
 
 function _caXtermTheme() {
-  if (_caTerminalTheme === 'light') {
-    return { background: '#ffffff', foreground: '#0f172a', cursor: '#0f172a' };
-  }
-  if (_caTerminalTheme === 'auto') {
-    const light = document.documentElement.getAttribute('data-theme') === 'light';
-    return light
-      ? { background: '#ffffff', foreground: '#0f172a', cursor: '#0f172a' }
-      : { background: '#0b0d12', foreground: '#d4d4d4', cursor: '#d4d4d4' };
-  }
-  // dark (default)
-  return { background: '#0b0d12', foreground: '#d4d4d4', cursor: '#d4d4d4' };
+  // The app theme is the single source of truth (ThemeManager sets data-theme).
+  const light = document.documentElement.getAttribute('data-theme') === 'light';
+  return light
+    ? { background: '#ffffff', foreground: '#0f172a', cursor: '#0f172a' }
+    : { background: '#0b0d12', foreground: '#d4d4d4', cursor: '#d4d4d4' };
 }
 
 function _caApplyTerminalTheme() {
@@ -1211,32 +1219,26 @@ function _caApplyTerminalTheme() {
   }
 }
 
-async function _caSaveTerminalTheme(theme) {
-  try {
-    const hdrs =
-      typeof _caHeadersAsync === 'function'
-        ? await _caHeadersAsync()
-        : { 'Content-Type': 'application/json' };
-    await fetch('/api/config', {
-      method: 'PATCH',
-      headers: hdrs,
-      body: JSON.stringify({ terminal_theme: theme }),
-    });
-  } catch (_) {
-    /* non-fatal */
-  }
+// Pill label mirrors ThemeManager: Auto for system, else Light/Dark.
+function _caSetThemePillLabel(pill) {
+  const active = ThemeManager.getActive();
+  const label = active === 'system' ? 'Auto' : active === 'light' ? 'Light' : 'Dark';
+  const labelEl = pill.querySelector('.ca-tb-theme-label');
+  if (labelEl) labelEl.textContent = label;
+  pill.title = 'Theme: ' + label;
 }
 
-async function _caLoadTerminalTheme() {
-  try {
-    const resp = await fetch('/api/config');
-    if (!resp.ok) return;
-    const cfg = await resp.json();
-    if (cfg.terminal_theme) _caTerminalTheme = cfg.terminal_theme;
-  } catch (_) {
-    /* non-fatal */
-  }
+function _caRefreshThemePill() {
+  const pill = document.querySelector('.ca-tb-theme-pill');
+  if (pill) _caSetThemePillLabel(pill);
 }
+
+// Registered once: a theme flip from Settings, the pill, or the OS re-tints
+// the live terminals and refreshes the pill label.
+window.addEventListener('gator:theme-change', () => {
+  _caApplyTerminalTheme();
+  _caRefreshThemePill();
+});
 
 // Small "using: <agent>" pill next to the project switcher - lets the user
 // pick which coding agent this project uses. Persists via PUT /projects/

@@ -132,6 +132,21 @@ const ESC = String.fromCharCode(27);
   assert.strictEqual(h.trapTarget([], a, false), null);
 }
 
+// prepare body: a live terminal sends pty_session_id, a stored session sends session_id
+{
+  const state = { projectId: 'demo', repoPath: 'C:\\work\\app' };
+  assert.deepStrictEqual(h.prepareBody({ sess: { agent: 'claude', ptySessionId: 'p1' } }, state), {
+    agent: 'claude',
+    project_id: 'demo',
+    repo_path: 'C:\\work\\app',
+    pty_session_id: 'p1',
+  });
+  assert.deepStrictEqual(
+    h.prepareBody({ sess: { agent: 'codex' }, stored: { agent: 'codex', id: 'abc-1' } }, state),
+    { agent: 'codex', project_id: 'demo', repo_path: 'C:\\work\\app', session_id: 'abc-1' },
+  );
+}
+
 // draftPrompt: waits for readiness, pastes without Enter; times out without pasting
 (async () => {
   let t = 0;

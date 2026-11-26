@@ -115,43 +115,40 @@ def _adopt_pty_session(session_id: str) -> PtySession | None:
         return entry
 
 
+def _list_host_sessions() -> list[dict]:
+    if not pty_client.host_enabled():
+        return []
+    info = pty_client.find_host(pty_client.instance_key())
+    if info is None:
+        return []
+    try:
+        return pty_client.host_request(info, {"op": "list"}).get("sessions", [])
+    except pty_client.HostError:
+        logger.warning("could not ask the PTY host for sessions", exc_info=True)
+        return []
+
+
+def host_session_labels(session_id: str) -> dict:
+    """The labels the host holds for one session (empty if unknown). Blocking."""
+    for s in _list_host_sessions():
+        if s["id"] == session_id:
+            return s.get("meta") or {}
+    return {}
+
+
 def session_owner(session_id: str) -> dict[str, str] | None:
     """The project and agent labels a session was created with, or None when they
     are unknown. A session this backend created carries them; one adopted from the
     PTY host after a restart is looked up there. Blocking (loopback socket)."""
     meta = getattr(_pty_sessions.get(session_id), "meta", None)
-    if meta:
-        return meta
-    if not pty_client.host_enabled():
-        return None
-    info = pty_client.find_host(pty_client.instance_key())
-    if info is None:
-        return None
-    try:
-        listed = pty_client.host_request(info, {"op": "list"}).get("sessions", [])
-    except pty_client.HostError:
-        logger.warning("could not ask the PTY host for session owners", exc_info=True)
-        return None
-    for s in listed:
-        if s.get("id") == session_id:
-            return s.get("meta") or None
-    return None
+    return meta or host_session_labels(session_id) or None
 
 
 def find_host_session(owner: dict[str, str]) -> str | None:
     """Id of the newest live session the host holds for `owner` (the labels given
     when it was created), or None. After a backend restart this is how a project
     finds the agent that is still running for it. Blocking (loopback socket)."""
-    if not pty_client.host_enabled():
-        return None
-    info = pty_client.find_host(pty_client.instance_key())
-    if info is None:
-        return None
-    try:
-        listed = pty_client.host_request(info, {"op": "list"}).get("sessions", [])
-    except pty_client.HostError:
-        logger.warning("could not ask the PTY host for sessions", exc_info=True)
-        return None
+    listed = _list_host_sessions()
     # The host lists sessions in creation order; the last match is the newest.
     mine = [
         s["id"]

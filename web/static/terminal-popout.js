@@ -9,15 +9,12 @@
 
   const statusEl = document.getElementById('status');
 
-  // Same light/dark choice as the in-app terminals (Settings > terminal theme).
+  // Same light/dark choice as the in-app terminals: the app theme, which the
+  // page's inline script copies from localStorage into data-theme.
   const DARK = { background: '#0b0d12', foreground: '#d4d4d4', cursor: '#d4d4d4' };
   const LIGHT = { background: '#ffffff', foreground: '#0f172a', cursor: '#0f172a' };
-  function xtermTheme(setting) {
-    if (setting === 'light') return LIGHT;
-    if (setting === 'auto') {
-      return document.documentElement.getAttribute('data-theme') === 'light' ? LIGHT : DARK;
-    }
-    return DARK;
+  function xtermTheme() {
+    return document.documentElement.getAttribute('data-theme') === 'light' ? LIGHT : DARK;
   }
   function applyTheme(theme) {
     term.options.theme = theme;
@@ -28,7 +25,7 @@
     fontFamily: 'Consolas, "Courier New", monospace',
     fontSize: 13,
     cursorBlink: true,
-    theme: DARK,
+    theme: xtermTheme(),
     scrollback: 5000,
     convertEol: false,
   });
@@ -100,10 +97,17 @@
     };
   }
 
-  fetch('/api/config')
-    .then((r) => (r.ok ? r.json() : {}))
-    .then((cfg) => applyTheme(xtermTheme(cfg.terminal_theme)))
-    .catch(() => {});
+  applyTheme(xtermTheme());
+  // The main window writes the effective theme to localStorage when it flips.
+  window.addEventListener('storage', (e) => {
+    if (e.key === 'gator-theme-effective') {
+      document.documentElement.setAttribute(
+        'data-theme',
+        e.newValue === 'light' ? 'light' : 'dark',
+      );
+      applyTheme(xtermTheme());
+    }
+  });
 
   term.onData((data) => send({ type: 'input', data }));
   window.addEventListener('resize', refit);

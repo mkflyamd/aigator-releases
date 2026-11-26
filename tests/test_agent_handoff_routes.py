@@ -205,7 +205,7 @@ def test_installed_route_reports_each_launchable_agent(monkeypatch):
 
 def test_extra_agents_resolve_by_primary_name_or_alias(monkeypatch):
     on_path = {"cbc": "/bin/cbc", "pi": "/bin/pi"}
-    monkeypatch.setattr(generic_agent.shutil, "which", lambda name: on_path.get(name))
+    monkeypatch.setattr(generic_agent.shutil, "which", lambda name, path=None: on_path.get(name) if path is None else None)
     assert generic_agent.build_command("pi") == ["/bin/pi"]
     assert generic_agent.build_command("codebuddy") == ["/bin/cbc"]
     assert generic_agent.build_command("gemini") is None
@@ -313,3 +313,25 @@ def test_session_owner_reads_labels_from_the_live_session_and_the_host(monkeypat
 
     monkeypatch.setattr(terminal.pty_client, "host_enabled", lambda: False)
     assert terminal.session_owner("adopted") is None
+
+
+def test_created_session_keeps_its_labels_so_handoff_prepare_accepts_it(tmp_path, monkeypatch):
+    import routes.terminal as terminal
+
+    monkeypatch.setattr(ah, "HANDOFF_DIR", tmp_path / "h")
+    monkeypatch.setattr(ah, "_configured_api_keys", lambda: [FAKE])
+    monkeypatch.setattr(ah, "_session_started_at", lambda sid: None)
+    monkeypatch.setattr(ah, "find_transcript", lambda agent, cwd, home=None, **kw: None)
+    monkeypatch.setattr(ah, "capture_pane", lambda sid, red=None: f"pane output {FAKE}")
+    monkeypatch.setattr(terminal.pty_client, "host_enabled", lambda: False)
+    fake_pty = SimpleNamespace(isalive=lambda: False, read=lambda n: "", close=lambda: None)
+    monkeypatch.setattr(terminal, "spawn_pty", lambda **kw: fake_pty)
+
+    labels = {"project_id": "demo", "agent": "claude"}
+    terminal.create_pty_session("s9", meta=labels)
+    try:
+        assert terminal.session_owner("s9") == labels
+        r = _app().post("/api/generic-agent/handoff/prepare", json={**BODY, "pty_session_id": "s9"})
+        assert r.status_code == 200
+    finally:
+        terminal.close_pty_session("s9")
