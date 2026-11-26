@@ -78,6 +78,7 @@ from routes.actions import router as actions_router
 from routes.aigator import router as aigator_router
 from routes.config_routes import router as config_router
 from routes.host_shell_routes import router as host_shell_router
+from routes.runs_routes import router as runs_router
 from routes.permissions_routes import router as permissions_router
 from routes.sandbox_routes import router as sandbox_router
 from routes.auth import router as auth_router
@@ -842,6 +843,10 @@ async def lifespan(app):
     import sandbox as _sandbox
     asyncio.create_task(asyncio.to_thread(_sandbox.sweep_stale_grants))
 
+    # Runs still active when the backend last stopped become "interrupted"; their leftover processes are swept.
+    from runs.supervisor import get_supervisor as _get_run_supervisor
+    asyncio.create_task(asyncio.to_thread(_get_run_supervisor().reconcile))
+
     # Respawn any spawned preset MCP servers that were orphaned by a restart
     # (e.g. Google Workspace's workspace-mcp process), then start the background
     # supervisor that keeps them alive.
@@ -862,8 +867,7 @@ async def lifespan(app):
             await _t
         except asyncio.CancelledError:
             pass
-    from sandbox import host_requests as _host_requests
-    _host_requests.stop_all()
+    _get_run_supervisor().stop_all()
     # Cancel in-flight chat tasks so they don't block shutdown holding the
     # per-context lock. Without this, a stuck turn blocks uvicorn's lifespan
     # shutdown until the watchdog's 10s timeout force-kills the process.
@@ -916,6 +920,7 @@ app.include_router(config_router)
 app.include_router(auth_router)
 app.include_router(sandbox_router)
 app.include_router(host_shell_router)
+app.include_router(runs_router)
 app.include_router(permissions_router)
 app.include_router(health_router)
 app.include_router(chat_router)

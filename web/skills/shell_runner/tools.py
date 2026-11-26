@@ -21,8 +21,10 @@ from sandbox.paths import PathNotGrantable, is_within, normalize_grant_paths
 from sandbox.policy import load_policy
 
 from proc_utils import (
+    attach_job,
     group_kwargs,
     kill_process_tree,
+    release_job,
     no_window_kwargs,
     watched_output_dirs,
     snapshot_outputs,
@@ -824,26 +826,92 @@ def _run_sandboxed(cr, command, shell, cwd, timeout, background, requested, poli
     return result
 
 
+_CAPTURE_CAP_CHARS = 1_000_000
+
+
+class _TailCapture:
+    """Reads one pipe to EOF, keeping only the last _CAPTURE_CAP_CHARS characters."""
+
+    def __init__(self, stream):
+        self._stream = stream
+        self._chunks: list[str] = []
+        self._kept = 0
+        self._omitted = 0
+        self.thread = threading.Thread(target=self._pump, daemon=True)
+        self.thread.start()
+
+    def _compact(self):
+        text = "".join(self._chunks)
+        cap = _CAPTURE_CAP_CHARS
+        if len(text) > cap:
+            self._omitted += len(text) - cap
+            text = text[-cap:]
+        self._chunks = [text]
+        self._kept = len(text)
+
+    def _pump(self):
+        try:
+            while True:
+                chunk = self._stream.read(65536)
+                if not chunk:
+                    return
+                self._chunks.append(chunk)
+                self._kept += len(chunk)
+                if self._kept > 2 * _CAPTURE_CAP_CHARS:
+                    self._compact()
+        except (ValueError, OSError):
+            return
+
+    def text(self) -> str:
+        self._compact()
+        body = self._chunks[0] if self._chunks else ""
+        if self._omitted:
+            return f"[first {self._omitted} characters omitted]\n{body}"
+        return body
+
+
 def _run_captured(argv, cwd, env, timeout, on_start=None):
-    """Run argv to completion in its own process group; on timeout kill the whole tree, not just the shell."""
+    """Run argv to completion in its own process group; on timeout kill the whole tree, not just the shell.
+
+    Output is held as a bounded tail, so a command that floods its pipes cannot exhaust memory.
+    """
     proc = subprocess.Popen(
         argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         text=True, encoding="utf-8", errors="replace", **group_kwargs(),
     )
-    if on_start is not None:
-        on_start(proc)
+    attach_job(proc)
+    out_cap, err_cap = _TailCapture(proc.stdout), _TailCapture(proc.stderr)
     try:
-        out, err = proc.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
+        if on_start is not None:
+            on_start(proc)
+        deadline = time.monotonic() + timeout
+        proc.wait(timeout=timeout)
+        # A child that outlives the shell can hold the pipes open; that counts against the same deadline.
+        for cap in (out_cap, err_cap):
+            cap.thread.join(max(0.0, deadline - time.monotonic()))
+        if out_cap.thread.is_alive() or err_cap.thread.is_alive():
+            raise subprocess.TimeoutExpired(argv, timeout)
+    except BaseException as exc:
         kill_process_tree(proc)
-        try:
-            proc.communicate(timeout=5)
-        except subprocess.TimeoutExpired:
-            for stream in (proc.stdout, proc.stderr):
+        for cap in (out_cap, err_cap):
+            cap.thread.join(5)
+        if isinstance(exc, subprocess.TimeoutExpired):
+            exc.output, exc.stderr = out_cap.text(), err_cap.text()
+        for cap, stream in ((out_cap, proc.stdout), (err_cap, proc.stderr)):
+            if cap.thread.is_alive():
+                continue  # closing a pipe another thread is blocked reading can hang
+            try:
                 stream.close()
-            proc.wait()
+            except (ValueError, OSError):
+                pass
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
         raise
-    return proc.returncode, out, err
+    finally:
+        release_job(proc)
+    return proc.returncode, out_cap.text(), err_cap.text()
 
 
 def _run_unsandboxed(command, shell, cwd, timeout, background, env=None, as_typed=False, on_start=None) -> dict:
@@ -947,14 +1015,15 @@ def _run_unsandboxed(command, shell, cwd, timeout, background, env=None, as_type
             )
         return result
 
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as exc:
         elapsed_ms = int((time.monotonic() - start) * 1000)
         return {
-            "stdout": "",
-            "stderr": "",
+            "stdout": exc.output if isinstance(exc.output, str) else "",
+            "stderr": exc.stderr if isinstance(exc.stderr, str) else "",
             "exit_code": -1,
             "shell_used": shell_used,
             "runtime_ms": elapsed_ms,
+            "timed_out": True,
             "error": f"Command timed out after {timeout}s.",
         }
     except Exception as exc:
@@ -1030,11 +1099,10 @@ def _tail(text: str) -> str:
     return f"[first {len(text) - limit} characters omitted]\n" + text[-limit:]
 
 
-def run_host_request(req) -> dict:
+def run_host_request(req, on_start=None, timeout=None) -> dict:
     """Run an approved request outside the sandbox with the user's own environment (secrets removed)."""
-    result = _run_unsandboxed(req.command, req.shell, req.cwd, req.timeout, False,
-                              env=host_requests.host_env(os.environ), as_typed=True,
-                              on_start=lambda proc: host_requests.attach(req.id, proc))
+    result = _run_unsandboxed(req.command, req.shell, req.cwd, req.timeout if timeout is None else timeout, False,
+                              env=host_requests.host_env(os.environ), as_typed=True, on_start=on_start)
     result["stdout"] = _tail(result.get("stdout") or "")
     result["stderr"] = _tail(result.get("stderr") or "")
     result["ran_on"] = "host"
@@ -1110,7 +1178,8 @@ def _tool_run_on_host(
 
 def _tool_host_command_result(request_id: str, _context_id: str = "") -> dict:
     """What happened to a command proposed with run_on_host."""
-    status, req = host_requests.lookup(str(request_id or ""), _context_id)
+    host_requests.sync_expiry()
+    status, req = host_requests.lookup_settled(str(request_id or ""), _context_id)
     if status == "none":
         return _shell_error("No such command request in this tab. Do not retry; propose the command again.")
     if status == "expired":

@@ -6,6 +6,10 @@ routes/host_shell_routes.py. Every request is single use: it runs once, for the
 tab that asked, and expires 10 minutes after it was created. In-memory
 (single-process desktop backend): a restart forgets pending requests, which only
 means asking again.
+
+This module is the approval registry for host cards. The run itself (its state, process,
+Stop and persisted record) belongs to runs/supervisor.py; creating a request opens its
+record there, and the one expiry clock here tells the supervisor when a request lapsed.
 """
 from __future__ import annotations
 
@@ -13,9 +17,7 @@ import re
 import threading
 import time
 import uuid
-from dataclasses import dataclass
-
-from proc_utils import kill_process_tree
+from dataclasses import dataclass, replace
 
 REQUEST_TTL_SECONDS = 600
 RESULT_TTL_SECONDS = 1800
@@ -59,15 +61,15 @@ class HostRequest:
     timeout: int
     risks: tuple[str, ...]
     created_at: float
-    status: str = "pending"  # pending | running | done | denied
+    expires_at: float
+    status: str = "pending"  # pending | running | done | denied | expired
     result: dict | None = None
     finished_at: float = 0.0
-    proc: object | None = None
-    stopped: bool = False
 
 
 _LOCK = threading.Lock()
 _REQUESTS: dict[str, HostRequest] = {}
+_EXPIRED_EVENTS: list[str] = []
 
 
 def risk_flags(command: str) -> tuple[str, ...]:
@@ -93,16 +95,38 @@ def _purge(now: float) -> None:
         del _REQUESTS[rid]
 
 
+def _expire_locked(now: float) -> None:
+    for req in _REQUESTS.values():
+        if req.status == "pending" and now >= req.expires_at:
+            req.status, req.finished_at = "expired", now
+            _EXPIRED_EVENTS.append(req.id)
+
+
+def expire_due(now: float | None = None) -> list[str]:
+    """The one expiry clock: lapse every overdue pending request and return the ids not yet reported."""
+    now = time.time() if now is None else now
+    with _LOCK:
+        _expire_locked(now)
+        events = list(_EXPIRED_EVENTS)
+        _EXPIRED_EVENTS.clear()
+    return events
+
+
 def create(context_id: str, command: str, cwd: str, shell: str, reason: str, timeout: int,
            now: float | None = None) -> HostRequest:
     now = time.time() if now is None else now
     req = HostRequest(
         id=uuid.uuid4().hex, context_id=context_id or "", command=command, cwd=cwd, shell=shell,
         reason=reason, timeout=timeout, risks=risk_flags(command), created_at=now,
+        expires_at=now + REQUEST_TTL_SECONDS,
     )
     with _LOCK:
         _purge(now)
         _REQUESTS[req.id] = req
+    from runs.supervisor import get_supervisor
+
+    get_supervisor().open_approval(run_id=req.id, context_id=req.context_id, path="host", kind="command",
+                                   scope="tab", expires_at=req.expires_at)
     return req
 
 
@@ -120,10 +144,11 @@ def claim(request_id: str, context_id: str, now: float | None = None) -> HostReq
     now = time.time() if now is None else now
     with _LOCK:
         req = _owned(request_id, context_id)
+        _expire_locked(now)
+        if req.status == "expired":
+            raise HostRequestError(410, "This command request expired (requests last 10 minutes). Ask AI Gator to propose it again.")
         if req.status != "pending":
             raise HostRequestError(409, f"This command request was already {req.status}.")
-        if now - req.created_at > REQUEST_TTL_SECONDS:
-            raise HostRequestError(410, "This command request expired (requests last 10 minutes). Ask AI Gator to propose it again.")
         req.status = "running"
         return req
 
@@ -133,43 +158,6 @@ def finish(request_id: str, result: dict, now: float | None = None) -> None:
         req = _REQUESTS.get(request_id)
         if req is not None:
             req.status, req.result, req.finished_at = "done", result, time.time() if now is None else now
-            req.proc = None
-
-
-def attach(request_id: str, proc) -> None:
-    """Remember the running process so Stop and app quit can kill it; kill it now if Stop already came."""
-    with _LOCK:
-        req = _REQUESTS.get(request_id)
-        if req is None:
-            return
-        req.proc = proc
-        kill_now = req.stopped
-    if kill_now:
-        kill_process_tree(proc)
-
-
-def stop(request_id: str, context_id: str) -> HostRequest:
-    """Kill the whole process tree of a running request. Raises unless it is running and this tab's."""
-    with _LOCK:
-        req = _owned(request_id, context_id)
-        if req.status != "running":
-            raise HostRequestError(409, f"This command request is {req.status}, not running.")
-        req.stopped = True
-        proc = req.proc
-    if proc is not None:
-        kill_process_tree(proc)
-    return req
-
-
-def stop_all() -> None:
-    """App quit: kill every command still running."""
-    with _LOCK:
-        running = [r for r in _REQUESTS.values() if r.status == "running"]
-        for req in running:
-            req.stopped = True
-        procs = [r.proc for r in running if r.proc is not None]
-    for proc in procs:
-        kill_process_tree(proc)
 
 
 def deny(request_id: str, context_id: str, now: float | None = None) -> HostRequest:
@@ -189,11 +177,49 @@ def lookup(request_id: str, context_id: str, now: float | None = None) -> tuple[
         req = _REQUESTS.get(request_id)
         if req is None or req.context_id != (context_id or ""):
             return "none", None
-        if req.status == "pending" and now - req.created_at > REQUEST_TTL_SECONDS:
-            return "expired", req
+        _expire_locked(now)
         return req.status, req
+
+
+def sync_expiry() -> None:
+    """Lapse overdue requests and let the supervisor's records follow. Every reader of a request calls this first."""
+    events = expire_due()
+    if not events:
+        return
+    from runs.supervisor import get_supervisor
+
+    for request_id in events:
+        get_supervisor().mark_expired(request_id)
+
+
+_ENDED_STATES = ("finished", "timed_out", "cancelled", "failed_to_start", "interrupted")
+
+
+def _result_from_record(record: dict, req: HostRequest) -> dict:
+    code = (record.get("exit") or {}).get("code")
+    result = {"stdout": record.get("output_tail") or "", "stderr": "", "exit_code": -1 if code is None else code,
+              "ran_on": "host", "cwd": req.cwd}
+    if record.get("error"):
+        result["error"] = record["error"]
+    if record["state"] == "timed_out":
+        result["timed_out"] = True
+    return result
+
+
+def lookup_settled(request_id: str, context_id: str, now: float | None = None) -> tuple[str, HostRequest | None]:
+    """lookup(), except a command whose run record has ended but whose result is not stored yet reads as done."""
+    status, req = lookup(request_id, context_id, now)
+    if status != "running" or req is None:
+        return status, req
+    from runs.supervisor import get_supervisor
+
+    record = get_supervisor().get(request_id, context_id)
+    if record is None or record["state"] not in _ENDED_STATES:
+        return status, req
+    return "done", replace(req, status="done", result=_result_from_record(record, req))
 
 
 def _reset() -> None:
     with _LOCK:
         _REQUESTS.clear()
+        _EXPIRED_EVENTS.clear()

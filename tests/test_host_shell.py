@@ -194,44 +194,91 @@ def test_routes_require_csrf(client):
     assert host_requests.lookup(req.id, "tab-1")[0] == "pending"
 
 
-def test_run_route_runs_once_and_stores_result(client, csrf, tmp_path, monkeypatch):
-    monkeypatch.setattr(shell_tools, "run_host_request", lambda req: {"stdout": "ok", "stderr": "", "exit_code": 0})
+def _poll(client, request_id, context_id="tab-1", seconds=30):
+    """Follow the run record the way the card does, until the command is over."""
+    import time
+
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        body = client.get(f"/api/host-shell/{request_id}", params={"context_id": context_id}).json()
+        if body["run"]["state"] not in ("awaiting_approval", "preparing", "running"):
+            return body
+        time.sleep(0.05)
+    raise AssertionError("the run never finished")
+
+
+def test_run_route_returns_at_once_and_the_record_carries_the_result(client, csrf, tmp_path, monkeypatch):
+    monkeypatch.setattr(shell_tools, "run_host_request", lambda req, **kw: {"stdout": "ok", "stderr": "", "exit_code": 0})
     req = host_requests.create("tab-1", "echo hi", str(tmp_path), "", "", 60)
     r = client.post(f"/api/host-shell/{req.id}/run", json={"context_id": "tab-1"}, headers=csrf)
     assert r.status_code == 200
-    assert r.json()["result"]["stdout"] == "ok"
+    assert r.json()["run"]["state"] in ("preparing", "running", "finished")
+    body = _poll(client, req.id)
+    assert body["run"]["state"] == "finished"
+    assert body["result"]["stdout"] == "ok"
     assert shell_tools._tool_host_command_result(req.id, "tab-1")["status"] == "done"
     again = client.post(f"/api/host-shell/{req.id}/run", json={"context_id": "tab-1"}, headers=csrf)
-    assert again.status_code == 409
+    assert again.status_code == 200 and again.json()["run"]["state"] == "finished"
+
+
+def test_run_route_called_twice_while_running_returns_the_same_run(client, csrf, tmp_path, monkeypatch):
+    import threading
+
+    release = threading.Event()
+    monkeypatch.setattr(shell_tools, "run_host_request", lambda req, **kw: release.wait(10) and {"stdout": "", "stderr": "", "exit_code": 0})
+    req = host_requests.create("tab-1", "echo hi", str(tmp_path), "", "", 60)
+    first = client.post(f"/api/host-shell/{req.id}/run", json={"context_id": "tab-1"}, headers=csrf)
+    second = client.post(f"/api/host-shell/{req.id}/run", json={"context_id": "tab-1"}, headers=csrf)
+    release.set()
+    assert first.status_code == second.status_code == 200
+    assert first.json()["run"]["id"] == second.json()["run"]["id"]
+    assert _poll(client, req.id)["run"]["state"] == "finished"
+
+
+def test_status_route_is_scoped_to_the_tab(client, tmp_path):
+    req = host_requests.create("tab-1", "echo hi", str(tmp_path), "", "", 60)
+    assert client.get(f"/api/host-shell/{req.id}", params={"context_id": "tab-1"}).json()["run"]["state"] == "awaiting_approval"
+    assert client.get(f"/api/host-shell/{req.id}", params={"context_id": "tab-2"}).status_code == 404
+
+
+def test_an_unanswered_request_shows_as_expired_on_the_record(client, tmp_path, monkeypatch):
+    req = host_requests.create("tab-1", "echo hi", str(tmp_path), "", "", 60)
+    now = req.expires_at + 1
+    monkeypatch.setattr(host_requests.time, "time", lambda: now)
+    body = client.get(f"/api/host-shell/{req.id}", params={"context_id": "tab-1"}).json()
+    assert body["run"]["state"] == "expired"
 
 
 def test_run_route_rejects_other_tab(client, csrf, monkeypatch):
     ran = []
-    monkeypatch.setattr(shell_tools, "run_host_request", lambda req: ran.append(req) or {})
+    monkeypatch.setattr(shell_tools, "run_host_request", lambda req, **kw: ran.append(req) or {})
     req = host_requests.create("tab-1", "echo hi", "C:/x", "", "", 60)
     r = client.post(f"/api/host-shell/{req.id}/run", json={"context_id": "tab-2"}, headers=csrf)
     assert r.status_code == 409
     assert not ran
 
 
-def test_run_route_refused_by_policy(client, csrf, monkeypatch):
+def test_run_route_refused_by_policy_records_a_policy_block(client, csrf, monkeypatch):
     monkeypatch.setattr(host_routes, "load_policy", lambda: Policy(host_shell="deny"))
     req = host_requests.create("tab-1", "echo hi", "C:/x", "", "", 60)
     r = client.post(f"/api/host-shell/{req.id}/run", json={"context_id": "tab-1"}, headers=csrf)
     assert r.status_code == 403
-    assert host_requests.lookup(req.id, "tab-1")[0] == "pending"
+    body = client.get(f"/api/host-shell/{req.id}", params={"context_id": "tab-1"}).json()
+    assert body["run"]["state"] == "policy_blocked"
+    assert "administrator" in body["run"]["reason"]
 
 
 def test_run_route_survives_a_failing_runner(client, csrf, monkeypatch):
-    def boom(req):
+    def boom(req, **kw):
         raise OSError("nope")
 
     monkeypatch.setattr(shell_tools, "run_host_request", boom)
     req = host_requests.create("tab-1", "echo hi", "C:/x", "", "", 60)
     r = client.post(f"/api/host-shell/{req.id}/run", json={"context_id": "tab-1"}, headers=csrf)
     assert r.status_code == 200
-    assert r.json()["result"]["exit_code"] == -1
-    assert host_requests.lookup(req.id, "tab-1")[0] == "done"
+    body = _poll(client, req.id)
+    assert body["run"]["state"] == "failed_to_start"
+    assert body["result"]["exit_code"] == -1
 
 
 def test_cancel_route(client, csrf):
@@ -470,64 +517,54 @@ def test_timeout_kills_the_whole_process_tree(tmp_path):
     assert _wait_for(lambda: not _alive(grandchild)), "the grandchild survived the timeout"
 
 
-def test_stop_kills_a_running_request_and_marks_it_stopped(tmp_path):
-    import threading
-
+def _run_sleeper(client, csrf, tmp_path, timeout=60):
     pid_file, command = _sleeper(tmp_path)
-    req = host_requests.create("tab-1", command, str(tmp_path), _SLEEPER_SHELL, "", 60)
-    host_requests.claim(req.id, "tab-1")
-    worker = threading.Thread(target=lambda: shell_tools.run_host_request(req))
-    worker.start()
+    req = host_requests.create("tab-1", command, str(tmp_path), _SLEEPER_SHELL, "", timeout)
+    r = client.post(f"/api/host-shell/{req.id}/run", json={"context_id": "tab-1"}, headers=csrf)
+    assert r.status_code == 200
     assert _wait_for(pid_file.exists), "the command never started"
-    grandchild = int(pid_file.read_text())
-    host_requests.stop(req.id, "tab-1")
-    worker.join(30)
-    assert not worker.is_alive()
-    assert req.stopped is True
+    return req, int(pid_file.read_text())
+
+
+def test_stop_kills_a_running_command_and_the_record_says_cancelled(client, csrf, tmp_path):
+    req, grandchild = _run_sleeper(client, csrf, tmp_path)
+    r = client.post(f"/api/host-shell/{req.id}/cancel", json={"context_id": "tab-1"}, headers=csrf)
+    assert r.status_code == 200
+    body = _poll(client, req.id)
+    assert body["run"]["state"] == "cancelled"
+    assert "stopped" in body["result"]["error"]
     assert _wait_for(lambda: not _alive(grandchild)), "the grandchild survived Stop"
 
 
-def test_stop_all_kills_every_running_command(tmp_path):
-    import threading
+def test_stopping_twice_is_harmless(client, csrf, tmp_path):
+    req, _ = _run_sleeper(client, csrf, tmp_path)
+    first = client.post(f"/api/host-shell/{req.id}/cancel", json={"context_id": "tab-1"}, headers=csrf)
+    second = client.post(f"/api/host-shell/{req.id}/cancel", json={"context_id": "tab-1"}, headers=csrf)
+    assert first.status_code == 200
+    assert second.status_code in (200, 409)
+    assert _poll(client, req.id)["run"]["state"] == "cancelled"
 
-    pid_file, command = _sleeper(tmp_path)
-    req = host_requests.create("tab-1", command, str(tmp_path), _SLEEPER_SHELL, "", 60)
-    host_requests.claim(req.id, "tab-1")
-    worker = threading.Thread(target=lambda: shell_tools.run_host_request(req))
-    worker.start()
-    assert _wait_for(pid_file.exists)
-    grandchild = int(pid_file.read_text())
-    host_requests.stop_all()
-    worker.join(30)
-    assert not worker.is_alive()
+
+def test_stop_all_kills_every_running_command(client, csrf, tmp_path):
+    from runs.supervisor import get_supervisor
+
+    req, grandchild = _run_sleeper(client, csrf, tmp_path)
+    get_supervisor().stop_all()
+    assert _poll(client, req.id)["run"]["state"] == "cancelled"
     assert _wait_for(lambda: not _alive(grandchild))
 
 
-def test_stop_needs_a_running_request_in_the_same_tab():
-    req = host_requests.create("tab-1", "echo hi", "C:/x", "", "", 60)
-    with pytest.raises(host_requests.HostRequestError):
-        host_requests.stop(req.id, "tab-1")
-    host_requests.claim(req.id, "tab-1")
-    with pytest.raises(host_requests.HostRequestError):
-        host_requests.stop(req.id, "tab-2")
+def test_a_command_that_outlives_its_budget_ends_timed_out_with_its_output_kept(client, csrf, tmp_path):
+    import timeouts
 
+    fakes_dir = pathlib.Path(__file__).parent / "run_supervisor"
+    sys.path.insert(0, str(fakes_dir))
+    import fakes
 
-def test_cancel_route_stops_a_running_command(client, csrf, monkeypatch):
-    stopped = []
-    monkeypatch.setattr(host_requests, "stop", lambda rid, ctx: stopped.append(rid) or host_requests.lookup(rid, ctx)[1])
-    req = host_requests.create("tab-1", "echo hi", "C:/x", "", "", 60)
-    host_requests.claim(req.id, "tab-1")
-    r = client.post(f"/api/host-shell/{req.id}/cancel", json={"context_id": "tab-1"}, headers=csrf)
-    assert r.status_code == 200
-    assert stopped == [req.id]
-
-
-def test_run_route_reports_a_stopped_command(client, csrf, monkeypatch):
-    def stopped_runner(req):
-        req.stopped = True
-        return {"stdout": "", "stderr": "", "exit_code": -1}
-
-    monkeypatch.setattr(shell_tools, "run_host_request", stopped_runner)
-    req = host_requests.create("tab-1", "echo hi", "C:/x", "", "", 60)
-    r = client.post(f"/api/host-shell/{req.id}/run", json={"context_id": "tab-1"}, headers=csrf)
-    assert "stopped" in r.json()["result"]["error"]
+    fakes._PROGRAMS["says_ready"] = "import time\nprint('ready', flush=True)\ntime.sleep(60)"
+    req = host_requests.create("tab-1", fakes.command(tmp_path, "says_ready"), str(tmp_path), fakes.SHELL, "", 600)
+    with timeouts.override("host", run_ms=1500):
+        client.post(f"/api/host-shell/{req.id}/run", json={"context_id": "tab-1"}, headers=csrf)
+        body = _poll(client, req.id)
+    assert body["run"]["state"] == "timed_out"
+    assert "ready" in body["result"]["stdout"]
