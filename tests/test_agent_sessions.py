@@ -408,6 +408,24 @@ def test_codex_scan_skips_compressed_rollouts(tmp_path):
     assert ags.scan_project(PROJECT, homes=[home_for(tmp_path)], agents=("codex",)) == []
 
 
+def test_codex_scan_lists_a_shared_rollout_store_once_for_all_worktrees(tmp_path, monkeypatch):
+    put_codex(tmp_path, "x1", [codex_meta_line(id="x1"), codex_msg("user", "hi")])
+    homes = [ags.SourceHome("windows", tmp_path, f"C:\\work\\app-wt{i}") for i in range(5)]
+    shared = str(tmp_path / ".codex" / "sessions")
+    walked = []
+    real_walk = os.walk
+
+    def counting_walk(top, *a, **kw):
+        walked.append(str(top))
+        return real_walk(top, *a, **kw)
+
+    monkeypatch.setattr(ags.os, "walk", counting_walk)
+    ags.scan_project(PROJECT, homes=homes, agents=("codex",))
+    assert walked.count(shared) == 1
+    ags.scan_project(PROJECT, homes=homes, agents=("codex",))
+    assert walked.count(shared) == 2
+
+
 def test_codex_scan_hides_threads_copied_from_another_agent(tmp_path):
     msgs = [codex_msg("user", "Review this change for security vulnerabilities.")]
     put_codex(tmp_path, "i1", [codex_meta_line(id="i1"), *msgs])
