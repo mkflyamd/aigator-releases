@@ -580,6 +580,10 @@ def _wsl_user_homes(distro: str) -> list[Path]:
         return []
 
 
+class WslStopped(Exception):
+    """The distro is not running; reading its files over \\\\wsl.localhost would start it."""
+
+
 def wsl_homes(repo_path: str) -> tuple[list[SourceHome], tuple[str, ...]]:
     distro, found = generic_agent.wsl_agents()
     agents = tuple(a for a in AGENTS if a in found)
@@ -588,12 +592,19 @@ def wsl_homes(repo_path: str) -> tuple[list[SourceHome], tuple[str, ...]]:
     cwds = [c for c in (wsl_cwd(d, distro) for d in project_dirs(repo_path)) if c]
     if not cwds:
         return [], ()
+    if not generic_agent.wsl_distro_running(distro):
+        raise WslStopped
     homes = _wsl_user_homes(distro)
     return [SourceHome(f"wsl:{distro}", home, cwd) for cwd in cwds for home in homes], agents
 
 
 def _refresh_wsl(repo_path: str) -> None:
-    homes, agents = wsl_homes(repo_path)
+    try:
+        homes, agents = wsl_homes(repo_path)
+    except WslStopped:
+        previous = _WSL.get(repo_path)
+        _WSL[repo_path] = (time.monotonic(), previous[1] if previous else [])
+        return
     records = scan_project(repo_path, homes=homes, agents=agents) if homes else []
     _WSL[repo_path] = (time.monotonic(), records)
 

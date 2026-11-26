@@ -28,6 +28,7 @@ accepted below for the other agents).
 """
 from __future__ import annotations
 
+import json
 import os
 import shlex
 import shutil
@@ -225,8 +226,43 @@ def find_agent_binary(agent: str) -> str | None:
 # SUPPORTED_AGENTS at all.
 _WSL_TTL_SECONDS = 60
 _WSL_PROBE_TIMEOUT = 20
+_WSL_STATE = Path.home() / ".gator" / "wsl-agents.json"
 _wsl_cache: tuple[float, tuple[str | None, dict[str, str]]] = (0.0, (None, {}))
 _wsl_first_probe = threading.Lock()
+
+
+def _wsl_state(distro: str) -> dict:
+    """What the last probe of this distro found, kept on disk so a stopped
+    distro never has to be started just to be asked again."""
+    try:
+        data = json.loads(_WSL_STATE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) and data.get("distro") == distro else {}
+
+
+def _wsl_state_save(distro: str, **fields) -> None:
+    try:
+        _WSL_STATE.parent.mkdir(parents=True, exist_ok=True)
+        _WSL_STATE.write_text(json.dumps({**_wsl_state(distro), "distro": distro, **fields}), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def wsl_distro_running(distro: str) -> bool:
+    """Whether the distro is up right now. Listing running distros asks the WSL
+    service and does not start anything."""
+    try:
+        proc = subprocess.run(
+            ["wsl.exe", "--list", "--running", "-q"],
+            capture_output=True,
+            timeout=_WSL_PROBE_TIMEOUT,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    names = proc.stdout.decode("utf-16-le", "replace").lstrip("\ufeff").split()
+    return distro.casefold() in {n.casefold() for n in names}
 
 
 def _wsl_capable(agent: str) -> bool:
@@ -273,6 +309,9 @@ def _wsl_probe() -> tuple[str | None, dict[str, str]]:
     distro = _wsl_default_distro()
     if not distro:
         return None, {}
+    saved = _wsl_state(distro)
+    if "found" in saved and not wsl_distro_running(distro):
+        return distro, saved["found"]
     names: dict[str, str] = {}
     for agent in SUPPORTED_AGENTS:
         if _wsl_capable(agent):
@@ -280,18 +319,20 @@ def _wsl_probe() -> tuple[str | None, dict[str, str]]:
                 names[name] = agent
     script = 'for n in %s; do p=$(command -v "$n") && echo "$n=$p"; done; exit 0' % " ".join(shlex.quote(n) for n in names)
     # A cold distro can return nothing on the first call, so try twice.
-    out = ""
+    out = None
     for _ in range(2):
         # The script goes in on stdin: wsl.exe runs its argv through a shell that
         # would expand the loop's $variables before bash sees them.
-        out = _wsl_run(["-d", distro, "--", "bash", "-l"], script) or ""
-        if "=" in out:
+        out = _wsl_run(["-d", distro, "--", "bash", "-l"], script)
+        if out and "=" in out:
             break
     found: dict[str, str] = {}
-    for line in out.splitlines():
+    for line in (out or "").splitlines():
         name, _, path = line.strip().partition("=")
         if name in names and path.startswith("/") and not path.startswith("/mnt/"):
             found.setdefault(names[name], name)
+    if out is not None:
+        _wsl_state_save(distro, found=found)
     return distro, found
 
 
@@ -346,10 +387,15 @@ def _read_codex_config() -> str:
             return ""
     distro, found = wsl_agents()
     if distro and "codex" in found:
-        return _wsl_run(
+        if not wsl_distro_running(distro):
+            return _wsl_state(distro).get("codex_config", "")
+        text = _wsl_run(
             ["-d", distro, "--", "bash"],
             'cat "${CODEX_HOME:-$HOME/.codex}/config.toml" 2>/dev/null; exit 0',
-        ) or ""
+        )
+        if text is not None:
+            _wsl_state_save(distro, codex_config=text)
+        return text or ""
     return ""
 
 
