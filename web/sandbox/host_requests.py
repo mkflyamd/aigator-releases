@@ -64,10 +64,13 @@ class HostRequest:
     finished_at: float = 0.0
     proc: object | None = None
     stopped: bool = False
+    needs_enable: bool = False
+    started_at: float = 0.0
 
 
 _LOCK = threading.Lock()
 _REQUESTS: dict[str, HostRequest] = {}
+_ENABLE_DECLINED: set[str] = set()
 
 
 def risk_flags(command: str) -> tuple[str, ...]:
@@ -125,6 +128,7 @@ def claim(request_id: str, context_id: str, now: float | None = None) -> HostReq
         if now - req.created_at > REQUEST_TTL_SECONDS:
             raise HostRequestError(410, "This command request expired (requests last 10 minutes). Ask AI Gator to propose it again.")
         req.status = "running"
+        req.started_at = now
         return req
 
 
@@ -177,6 +181,8 @@ def cancel(request_id: str, context_id: str, now: float | None = None) -> HostRe
         req = _owned(request_id, context_id)
         if req.status == "pending":
             req.status, req.finished_at = "denied", now
+            if req.needs_enable:
+                _ENABLE_DECLINED.add(req.context_id)
             return req
         if req.status != "running":
             return req
@@ -199,6 +205,52 @@ def lookup(request_id: str, context_id: str, now: float | None = None) -> tuple[
         return req.status, req
 
 
+def enable_declined(context_id: str) -> bool:
+    return (context_id or "") in _ENABLE_DECLINED
+
+
+def user_enabled() -> bool:
+    from config import load_config
+
+    return load_config().get("host_commands") is True
+
+
+def set_user_enabled(enabled: bool) -> None:
+    from config import update_config
+
+    import shared
+
+    def _apply(cfg: dict) -> dict:
+        if enabled:
+            cfg["host_commands"] = True
+        else:
+            cfg.pop("host_commands", None)
+        return cfg
+
+    update_config(_apply)
+    if enabled:
+        shared.cfg["host_commands"] = True
+    else:
+        shared.cfg.pop("host_commands", None)
+        stop_all()
+
+
+_UNSAFE_DISPLAY = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029\u200b-\u200f\u202a-\u202e\u2060\u2066-\u2069\ufeff]+")
+
+
+def _display_text(value: str, limit: int) -> str:
+    text = _UNSAFE_DISPLAY.sub(" ", value).strip()
+    return text[:limit] + "..." if len(text) > limit else text
+
+
+def running_commands() -> list[dict]:
+    with _LOCK:
+        return [{"request_id": r.id, "context_id": r.context_id, "command": _display_text(r.command, 300),
+                 "started_at": r.started_at, "stopping": r.stopped}
+                for r in _REQUESTS.values() if r.status == "running"]
+
+
 def _reset() -> None:
     with _LOCK:
         _REQUESTS.clear()
+        _ENABLE_DECLINED.clear()

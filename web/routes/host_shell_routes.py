@@ -22,11 +22,49 @@ class HostShellDecision(BaseModel):
     context_id: str = ""
 
 
+class HostShellEnabled(BaseModel):
+    enabled: bool
+
+
+def _admin_off() -> bool:
+    policy = load_policy()
+    return policy.require_sandbox or policy.host_shell == "deny"
+
+
+def _status() -> dict:
+    if _admin_off():
+        state = "admin_off"
+    else:
+        state = "on" if host_requests.user_enabled() else "off"
+    return {"state": state, "running": host_requests.running_commands()}
+
+
+@router.get("/api/host-shell/status")
+def host_shell_status():
+    return _status()
+
+
+@router.put("/api/host-shell/enabled", dependencies=[Depends(verify_csrf)])
+def set_host_shell_enabled(body: HostShellEnabled):
+    """The user's Turn on, or the switch in Settings or the chip. Turning it off also stops running commands."""
+    if _admin_off():
+        raise HTTPException(status_code=403, detail="Your administrator has turned off running commands on this computer.")
+    host_requests.set_user_enabled(body.enabled)
+    return {"ok": True, **_status()}
+
+
+@router.post("/api/host-shell/stop-all", dependencies=[Depends(verify_csrf)])
+def stop_all_host_commands():
+    host_requests.stop_all()
+    return {"ok": True, **_status()}
+
+
 @router.post("/api/host-shell/{request_id}/run", dependencies=[Depends(verify_csrf)])
 def run_host_command(request_id: str, body: HostShellDecision):  # sync: runs in the threadpool while the command executes
-    policy = load_policy()
-    if policy.require_sandbox or policy.host_shell == "deny":
+    if _admin_off():
         raise HTTPException(status_code=403, detail="Your administrator has turned off running commands on this computer.")
+    if not host_requests.user_enabled():
+        raise HTTPException(status_code=409, detail="Running commands is turned off. Turn it on, then run the command.")
     try:
         req = host_requests.claim(request_id, body.context_id)
     except host_requests.HostRequestError as exc:

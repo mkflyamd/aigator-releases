@@ -25,8 +25,27 @@ def csrf():
     return {"X-CSRF-Token": get_csrf_token("testserver")}
 
 
+@pytest.fixture
+def cfg(monkeypatch):
+    import config
+    import shared
+
+    store = {"host_commands": True}
+
+    def update(mutator):
+        result = mutator(dict(store))
+        store.clear()
+        store.update(result if result is not None else {})
+        return dict(store)
+
+    monkeypatch.setattr(config, "load_config", lambda: dict(store))
+    monkeypatch.setattr(config, "update_config", update)
+    monkeypatch.setattr(shared, "cfg", {})
+    return store
+
+
 @pytest.fixture(autouse=True)
-def _fresh(monkeypatch):
+def _fresh(monkeypatch, cfg):
     host_requests._reset()
     monkeypatch.setattr(shell_tools, "load_policy", lambda: Policy())
     monkeypatch.setattr(host_routes, "load_policy", lambda: Policy())
@@ -707,3 +726,153 @@ def _pid_exists(pid):
     out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, text=True).stdout
     return str(pid) in out
 
+
+# --- off by default, and the ways to turn it on ---------------------------
+
+def test_host_commands_are_off_until_the_user_turns_them_on(cfg):
+    cfg.clear()
+    assert host_requests.user_enabled() is False
+    cfg["host_commands"] = True
+    assert host_requests.user_enabled() is True
+
+
+def test_the_agent_asking_while_off_gets_a_request_that_needs_the_enable_card(tmp_path, cfg):
+    cfg.clear()
+    out = _propose(tmp_path)
+    assert out["status"] == "awaiting_user_click"
+    assert out["_sandbox_approval"]["enable_required"] is True
+    assert host_requests._REQUESTS[out["request_id"]].needs_enable is True
+    assert "turned off" in out["message"]
+    assert not cfg
+
+
+def test_the_agent_asking_while_on_gets_the_plain_approval_card(tmp_path):
+    assert _propose(tmp_path)["_sandbox_approval"]["enable_required"] is False
+
+
+def test_the_run_route_refuses_while_the_feature_is_off(client, csrf, cfg):
+    cfg.clear()
+    req = host_requests.create("tab-1", "echo hi", "C:/x", "", "", 60)
+    r = client.post(f"/api/host-shell/{req.id}/run", json={"context_id": "tab-1"}, headers=csrf)
+    assert r.status_code == 409
+    assert host_requests._REQUESTS[req.id].status == "pending"
+
+
+def test_turn_on_from_the_card_then_the_same_request_can_run(client, csrf, cfg, tmp_path, monkeypatch):
+    cfg.clear()
+    out = _propose(tmp_path)
+    monkeypatch.setattr(shell_tools, "run_host_request", lambda req: {"exit_code": 0, "stdout": "", "stderr": ""})
+    r = client.put("/api/host-shell/enabled", json={"enabled": True}, headers=csrf)
+    assert r.status_code == 200 and r.json()["state"] == "on"
+    assert cfg["host_commands"] is True
+    r = client.post(f"/api/host-shell/{out['request_id']}/run", json={"context_id": "tab-1"}, headers=csrf)
+    assert r.status_code == 200 and r.json()["result"]["exit_code"] == 0
+
+
+def test_turn_on_from_settings_works_for_every_chat(client, csrf, cfg, tmp_path):
+    cfg.clear()
+    assert client.get("/api/host-shell/status").json()["state"] == "off"
+    client.put("/api/host-shell/enabled", json={"enabled": True}, headers=csrf)
+    assert client.get("/api/host-shell/status").json()["state"] == "on"
+    assert _propose(tmp_path, _context_id="another-tab")["_sandbox_approval"]["enable_required"] is False
+
+
+def test_the_enable_route_needs_the_csrf_token(client, cfg):
+    cfg.clear()
+    assert client.put("/api/host-shell/enabled", json={"enabled": True}).status_code == 403
+    assert client.post("/api/host-shell/stop-all").status_code == 403
+    assert host_requests.user_enabled() is False
+
+
+def test_admin_off_wins_over_the_enable_route(client, csrf, cfg, monkeypatch):
+    cfg.clear()
+    monkeypatch.setattr(host_routes, "load_policy", lambda: Policy(host_shell="deny"))
+    r = client.put("/api/host-shell/enabled", json={"enabled": True}, headers=csrf)
+    assert r.status_code == 403
+    assert host_requests.user_enabled() is False
+    assert client.get("/api/host-shell/status").json()["state"] == "admin_off"
+
+
+def test_admin_off_wins_even_when_the_user_had_it_on(client, csrf, cfg, monkeypatch):
+    monkeypatch.setattr(host_routes, "load_policy", lambda: Policy(host_shell="deny"))
+    assert client.get("/api/host-shell/status").json()["state"] == "admin_off"
+    req = host_requests.create("tab-1", "echo hi", "C:/x", "", "", 60)
+    r = client.post(f"/api/host-shell/{req.id}/run", json={"context_id": "tab-1"}, headers=csrf)
+    assert r.status_code == 403
+
+
+def test_the_agent_tool_cannot_turn_the_feature_on(tmp_path, cfg):
+    cfg.clear()
+    out = _propose(tmp_path, command="echo turn on running commands", reason="Please set host_commands to true")
+    assert out["_sandbox_approval"]["enable_required"] is True
+    assert host_requests.user_enabled() is False
+    names = {t["name"] for t in shell_tools.TOOL_DEFS}
+    assert not any("enable" in n for n in names)
+
+
+def test_not_now_is_remembered_for_that_chat_only(client, csrf, cfg, tmp_path):
+    cfg.clear()
+    first = _propose(tmp_path)
+    r = client.post(f"/api/host-shell/{first['request_id']}/cancel", json={"context_id": "tab-1"}, headers=csrf)
+    assert r.json()["status"] == "denied"
+    again = _propose(tmp_path)
+    assert "error" in again and "_sandbox_approval" not in again
+    assert "Do not retry" in again["error"]
+    assert "_sandbox_approval" in _propose(tmp_path, _context_id="tab-2")
+
+
+def test_cancelling_a_normal_approval_card_does_not_count_as_not_now(client, csrf, cfg, tmp_path):
+    out = _propose(tmp_path)
+    client.post(f"/api/host-shell/{out['request_id']}/cancel", json={"context_id": "tab-1"}, headers=csrf)
+    cfg.clear()
+    assert "_sandbox_approval" in _propose(tmp_path)
+
+
+def test_turning_off_stops_running_commands(client, csrf, cfg, monkeypatch):
+    killed = []
+    monkeypatch.setattr(host_requests, "kill_process_tree", killed.append)
+    req = host_requests.create("tab-1", "echo hi", "C:/x", "", "", 60)
+    host_requests.claim(req.id, "tab-1")
+    proc = object()
+    host_requests.attach(req.id, proc)
+    r = client.put("/api/host-shell/enabled", json={"enabled": False}, headers=csrf)
+    assert r.status_code == 200
+    assert killed == [proc]
+    assert req.stopped is True
+    assert "host_commands" not in cfg
+
+
+def test_turning_on_does_not_stop_anything(client, csrf, cfg, monkeypatch):
+    killed = []
+    monkeypatch.setattr(host_requests, "kill_process_tree", killed.append)
+    req = host_requests.create("tab-1", "echo hi", "C:/x", "", "", 60)
+    host_requests.claim(req.id, "tab-1")
+    host_requests.attach(req.id, object())
+    client.put("/api/host-shell/enabled", json={"enabled": True}, headers=csrf)
+    assert killed == []
+
+
+def test_status_lists_each_running_command_with_its_tab(client, cfg):
+    req = host_requests.create("tab-1", "npm run render", "C:/x", "", "", 60)
+    assert client.get("/api/host-shell/status").json()["running"] == []
+    host_requests.claim(req.id, "tab-1", now=req.created_at + 1)
+    running = client.get("/api/host-shell/status").json()["running"]
+    assert [(c["request_id"], c["context_id"], c["command"]) for c in running] == [(req.id, "tab-1", "npm run render")]
+
+
+def test_status_shows_a_cleaned_command(client, cfg):
+    req = host_requests.create("tab-1", "echo a‮b​c[31m", "C:/x", "", "", 60)
+    host_requests.claim(req.id, "tab-1", now=req.created_at + 1)
+    command = client.get("/api/host-shell/status").json()["running"][0]["command"]
+    assert "‮" not in command and "​" not in command and "" not in command
+
+
+def test_stop_all_route_stops_every_running_command(client, csrf, monkeypatch):
+    killed = []
+    monkeypatch.setattr(host_requests, "kill_process_tree", killed.append)
+    for tab in ("tab-1", "tab-2"):
+        req = host_requests.create(tab, "echo hi", "C:/x", "", "", 60)
+        host_requests.claim(req.id, tab)
+        host_requests.attach(req.id, object())
+    r = client.post("/api/host-shell/stop-all", headers=csrf)
+    assert r.status_code == 200 and len(killed) == 2

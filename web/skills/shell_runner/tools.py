@@ -1083,6 +1083,16 @@ _HOST_AWAITING_MSG = (
     "what it does and why, then stop and wait. When the user says they ran it, call host_command_result "
     "with this request_id to read the output. If they decline, do not retry."
 )
+_HOST_ENABLE_MSG = (
+    "Running commands on the user's computer is turned off. A card in the chat asks them to turn it on, and "
+    "if they do, a second card shows this exact command; nothing has run. Tell the user in one sentence what the "
+    "command does and why, then stop and wait. When the user says they ran it, call host_command_result with "
+    "this request_id to read the output. If they decline, do not retry."
+)
+_HOST_NOT_NOW_MSG = (
+    "The user chose not to turn on running commands in this chat. Do not retry. "
+    "Tell the user the exact command and ask them to run it themselves."
+)
 
 
 def _track_host_process(request_id):
@@ -1127,6 +1137,9 @@ def _tool_run_on_host(
     policy = load_policy()
     if policy.require_sandbox or policy.host_shell == "deny":
         return _shell_error(_HOST_DISABLED_MSG)
+    needs_enable = not host_requests.user_enabled()
+    if needs_enable and host_requests.enable_declined(_context_id):
+        return _shell_error(_HOST_NOT_NOW_MSG)
     command = command.strip() if isinstance(command, str) else ""
     if not command:
         return _shell_error("command is required.")
@@ -1165,6 +1178,7 @@ def _tool_run_on_host(
         timeout = 120
     reason = host_requests.strip_hidden_characters(str(reason or ""))[:500]
     req = host_requests.create(_context_id, command, cwd, shell, reason, timeout)
+    req.needs_enable = needs_enable
     environment = dict(os.environ)
     card = {
         "request_id": req.id, "context_id": req.context_id, "tool": "run_on_host", "command": req.command,
@@ -1173,9 +1187,10 @@ def _tool_run_on_host(
         "expires_at": req.created_at + host_requests.REQUEST_TTL_SECONDS,
         "cwd_is_ai_workspace": _is_inside(req.cwd, WORK_DIR),
         "env_removed": len(environment) - len(host_requests.host_env(environment)),
+        "enable_required": needs_enable,
     }
-    return {"status": "awaiting_user_click", "request_id": req.id, "message": _HOST_AWAITING_MSG,
-            "_sandbox_approval": card}
+    return {"status": "awaiting_user_click", "request_id": req.id,
+            "message": _HOST_ENABLE_MSG if needs_enable else _HOST_AWAITING_MSG, "_sandbox_approval": card}
 
 
 def _tool_host_command_result(request_id: str, _context_id: str = "") -> dict:

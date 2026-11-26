@@ -772,6 +772,28 @@
               </div>
             </div>
 
+            <!-- ═══ Run commands on this computer ═══ -->
+            <div class="srow integration-row-sep" id="host-shell-row">
+              <div class="srow-info">
+                <div class="srow-label" id="host-shell-label">Run commands on this computer</div>
+                <div class="srow-sub" id="host-shell-desc">
+                  Let Gator run commands you approve, on this computer, outside the sandbox, with
+                  your own access to files, programs and network. You see each command before it
+                  runs. Off by default.
+                </div>
+                <div class="host-status" id="host-shell-status"></div>
+              </div>
+              <button
+                class="host-switch"
+                id="host-shell-switch"
+                type="button"
+                role="switch"
+                aria-checked="false"
+                aria-labelledby="host-shell-label"
+                aria-describedby="host-shell-desc"
+              ></button>
+            </div>
+
             <!-- ═══ Google Workspace ═══ -->
             <div class="srow integration-row-sep">
               <div class="section-status st-dim" id="google-ws-dot"></div>
@@ -1626,10 +1648,14 @@
 
         <div class="chat-body">
           <!-- Pin Orb -->
-          <button class="pin-orb" id="pin-orb" title="Pinned context">
-            <span class="pin-orb-icon">&#x1F4CC;</span>
-            <span class="pin-orb-badge hidden" id="pin-orb-badge">0</span>
-          </button>
+          <div class="chat-strip">
+            <div class="host-chip-slot" id="host-chip-slot"></div>
+            <span class="visually-hidden" role="status" id="host-chip-sr"></span>
+            <button class="pin-orb" id="pin-orb" title="Pinned context">
+              <span class="pin-orb-icon">&#x1F4CC;</span>
+              <span class="pin-orb-badge hidden" id="pin-orb-badge">0</span>
+            </button>
+          </div>
           <div id="messages" class="messages">
             <div class="message assistant">
               <div class="bubble">
