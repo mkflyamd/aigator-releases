@@ -31,11 +31,13 @@ def env(monkeypatch):
     monkeypatch.setattr(generic_agent, "_active_sessions", {})
     monkeypatch.setattr(
         ags, "find_session",
-        lambda repo, agent, sid, **kw: {"id": sid, "agent": agent, "source": "windows", "cwd": repo} if sid == "abc-1" else None,
+        lambda repo, agent, sid, **kw: {"id": sid, "agent": agent, "source": "windows", "cwd": repo, "title": "Fix the login bug"} if sid == "abc-1" else None,
     )
 
-    def fake_resume(agent, repo_path, session_id, source="windows", extra_args=()):
-        calls["resume"].append({"agent": agent, "repo_path": repo_path, "id": session_id, "source": source, "extra": extra_args})
+    def fake_resume(agent, repo_path, session_id, source="windows", extra_args=(), title=""):
+        calls["resume"].append(
+            {"agent": agent, "repo_path": repo_path, "id": session_id, "source": source, "extra": extra_args, "title": title}
+        )
         return [f"C:\\bin\\{agent}.exe", "--resume", session_id]
 
     monkeypatch.setattr(generic_agent, "build_resume_command", fake_resume)
@@ -46,7 +48,7 @@ def test_resume_spawns_the_resume_command_and_pins_the_session(env):
     r = client().post("/api/generic-agent/terminal", json=BODY)
     assert r.status_code == 200 and r.json()["created"] is True
     assert env["resume"] == [
-        {"agent": "claude", "repo_path": "C:\\work\\app", "id": "abc-1", "source": "windows", "extra": ("-c", "x=1")}
+        {"agent": "claude", "repo_path": "C:\\work\\app", "id": "abc-1", "source": "windows", "extra": ("-c", "x=1"), "title": "Fix the login bug"}
     ]
     spawn = env["spawn"][-1]
     assert spawn["command"] == ["C:\\bin\\claude.exe", "--resume", "abc-1"]
