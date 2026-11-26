@@ -746,6 +746,16 @@ def test_find_session_sees_a_transcript_written_after_the_last_refresh(tmp_path,
     assert rec["preview"][-1] == {"role": "assistant", "text": "answer"}
 
 
+def test_records_leave_the_index_with_only_their_public_fields(tmp_path, monkeypatch):
+    monkeypatch.setattr(ags.generic_agent, "wsl_agents", lambda: (None, {}))
+    h = [home_for(tmp_path)]
+    put_claude(tmp_path, "s", [claude_user("question")])
+    ags.refresh_index(PROJECT, homes=h)
+    fields = {"id", "agent", "title", "branch", "started_at", "last_active_at", "state", "path", "cwd", "source"}
+    assert set(ags.scan_project(PROJECT, homes=h)[0]) == fields
+    assert set(ags.find_session(PROJECT, "claude", "s", homes=h)) == fields | {"preview"}
+
+
 def test_find_session_does_not_reread_an_unchanged_transcript(tmp_path, monkeypatch):
     monkeypatch.setattr(ags.generic_agent, "wsl_agents", lambda: (None, {}))
     h = [home_for(tmp_path)]

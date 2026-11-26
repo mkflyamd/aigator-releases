@@ -4,7 +4,9 @@ One row per transcript file, keyed by path with the mtime and size it was parsed
 at, so a refresh only re-parses files that changed and drops rows for files that
 are gone. Lives in ~/.gator in WAL mode; a corrupt file or a different schema
 version is deleted and rebuilt from the transcripts. It holds every project's
-sessions, previews included, so the file is kept with secure_delete on.
+sessions, previews included. Every connection comes from _open, which turns
+secure_delete on for that connection; pages still in the WAL are only scrubbed
+once it is checkpointed.
 """
 from __future__ import annotations
 

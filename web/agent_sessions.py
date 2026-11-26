@@ -727,6 +727,13 @@ def _indexed(homes: list[SourceHome], agent: str, *, session_id: str | None = No
     return out
 
 
+_INDEX_KEYS = ("indexed_source", "mtime_ns", "size")
+
+
+def _without_index_keys(rec: dict) -> dict:
+    return {k: v for k, v in rec.items() if k not in _INDEX_KEYS}
+
+
 def scan_project(repo_path: str, *, homes=None, agents=AGENTS) -> list[dict]:
     """The project's sessions, newest first, read from the index (see ensure_fresh)."""
     homes = windows_homes(repo_path) if homes is None else homes
@@ -738,7 +745,7 @@ def scan_project(repo_path: str, *, homes=None, agents=AGENTS) -> list[dict]:
         else:
             out.extend(_indexed(homes, agent))
     out.sort(key=lambda r: r["last_active_at"], reverse=True)
-    return out[:MAX_SESSIONS]
+    return [_without_index_keys(r) for r in out[:MAX_SESSIONS]]
 
 
 def _lookup(agent: str, session_id: str, homes: list[SourceHome]) -> list[dict]:
@@ -771,7 +778,7 @@ def find_session(repo_path: str, agent: str, session_id: str, *, homes=None) -> 
     if not found and agent not in _SCANNERS:
         refresh_index(repo_path, homes=homes)  # the session is newer than the last refresh
         found = _lookup(agent, session_id, homes)
-    return found[0] if found else None
+    return _without_index_keys(found[0]) if found else None
 
 
 _JOIN_BEFORE = 5
