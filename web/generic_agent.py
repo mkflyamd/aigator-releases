@@ -226,27 +226,49 @@ def find_agent_binary(agent: str) -> str | None:
 # SUPPORTED_AGENTS at all.
 _WSL_TTL_SECONDS = 60
 _WSL_PROBE_TIMEOUT = 20
+# Asking a running distro keeps it running: a distro with nothing to do stops
+# after about a minute, so a probe every minute would hold it up for good.
+_WSL_REPROBE_SECONDS = 1800
 _WSL_STATE = Path.home() / ".gator" / "wsl-agents.json"
+_wsl_state_lock = threading.Lock()
 _wsl_cache: tuple[float, tuple[str | None, dict[str, str]]] = (0.0, (None, {}))
 _wsl_first_probe = threading.Lock()
+
+
+def _wsl_state_all() -> dict:
+    try:
+        data = json.loads(_WSL_STATE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def _wsl_state(distro: str) -> dict:
     """What the last probe of this distro found, kept on disk so a stopped
     distro never has to be started just to be asked again."""
-    try:
-        data = json.loads(_WSL_STATE.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    return data if isinstance(data, dict) and data.get("distro") == distro else {}
+    entry = _wsl_state_all().get(distro)
+    return entry if isinstance(entry, dict) else {}
 
 
 def _wsl_state_save(distro: str, **fields) -> None:
-    try:
-        _WSL_STATE.parent.mkdir(parents=True, exist_ok=True)
-        _WSL_STATE.write_text(json.dumps({**_wsl_state(distro), "distro": distro, **fields}), encoding="utf-8")
-    except OSError:
-        pass
+    with _wsl_state_lock:
+        data = _wsl_state_all()
+        data[distro] = {**_wsl_state(distro), **fields}
+        tmp = _WSL_STATE.with_name(_WSL_STATE.name + ".tmp")
+        try:
+            _WSL_STATE.parent.mkdir(parents=True, exist_ok=True)
+            tmp.write_text(json.dumps(data), encoding="utf-8")
+            os.replace(tmp, _WSL_STATE)
+        except OSError:
+            pass
+
+
+def _wsl_state_usable(saved: dict, key: str, distro: str, max_age: float) -> bool:
+    """Whether the saved copy of `key` can stand in for asking the distro: it is
+    recent, or the distro is stopped and asking would start it."""
+    if key not in saved:
+        return False
+    return time.time() - saved.get(key + "_at", 0) < max_age or not wsl_distro_running(distro)
 
 
 def wsl_distro_running(distro: str) -> bool:
@@ -300,7 +322,7 @@ def _wsl_default_distro() -> str | None:
     return None
 
 
-def _wsl_probe() -> tuple[str | None, dict[str, str]]:
+def _wsl_probe(max_age: float = _WSL_REPROBE_SECONDS) -> tuple[str | None, dict[str, str]]:
     """(distro, {agent id: executable name}) for catalog agents found inside the
     default WSL distro. Hits under /mnt are the Windows PATH leaking in, which the
     Windows lookup already covers."""
@@ -310,7 +332,7 @@ def _wsl_probe() -> tuple[str | None, dict[str, str]]:
     if not distro:
         return None, {}
     saved = _wsl_state(distro)
-    if "found" in saved and not wsl_distro_running(distro):
+    if _wsl_state_usable(saved, "found", distro, max_age):
         return distro, saved["found"]
     names: dict[str, str] = {}
     for agent in SUPPORTED_AGENTS:
@@ -332,7 +354,7 @@ def _wsl_probe() -> tuple[str | None, dict[str, str]]:
         if name in names and path.startswith("/") and not path.startswith("/mnt/"):
             found.setdefault(names[name], name)
     if out is not None:
-        _wsl_state_save(distro, found=found)
+        _wsl_state_save(distro, found=found, found_at=time.time())
     return distro, found
 
 
@@ -375,6 +397,15 @@ def wsl_agents() -> tuple[str | None, dict[str, str]]:
     return value
 
 
+def redetect_wsl_agents() -> None:
+    """Look again for a WSL agent the user may just have installed. Only a distro
+    that is already running is asked, so this never starts one."""
+    global _wsl_cache
+    distro, _found = wsl_agents()
+    if distro and wsl_distro_running(distro):
+        _wsl_cache = (time.monotonic(), _wsl_probe(max_age=_WSL_TTL_SECONDS))
+
+
 _codex_cfg_cache: tuple[float, str] = (0.0, "")
 
 
@@ -387,14 +418,17 @@ def _read_codex_config() -> str:
             return ""
     distro, found = wsl_agents()
     if distro and "codex" in found:
+        saved = _wsl_state(distro)
+        if _wsl_state_usable(saved, "codex_config", distro, _WSL_REPROBE_SECONDS):
+            return saved["codex_config"]
         if not wsl_distro_running(distro):
-            return _wsl_state(distro).get("codex_config", "")
+            return ""
         text = _wsl_run(
             ["-d", distro, "--", "bash"],
             'cat "${CODEX_HOME:-$HOME/.codex}/config.toml" 2>/dev/null; exit 0',
         )
         if text is not None:
-            _wsl_state_save(distro, codex_config=text)
+            _wsl_state_save(distro, codex_config=text, codex_config_at=time.time())
         return text or ""
     return ""
 
@@ -461,8 +495,8 @@ def _wsl_command(agent: str, repo_path: str, resume_args: tuple[str, ...] = ()) 
 
 def is_installed(agent: str) -> bool:
     """Whether this agent can be spawned right now. The Windows PATH is checked
-    per call so an agent installed mid-session shows up without a restart; WSL is
-    probed in the background at most once a minute because it can boot the distro."""
+    per call so an agent installed mid-session shows up without a restart; WSL comes
+    from the saved probe, because asking a distro starts it and keeps it up."""
     if agent == TERMINAL_AGENT:
         return True
     if agent == OPENCODE_BARE_AGENT:

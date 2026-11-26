@@ -1,6 +1,7 @@
 """Agents installed inside WSL are detected and launched through wsl.exe."""
 
 import json
+import time
 
 import pytest
 
@@ -66,38 +67,95 @@ def test_probe_output_keeps_only_native_linux_hits(monkeypatch):
     assert generic_agent._wsl_probe() == ("Ubuntu", {"codex": "codex"})
 
 
+def _save_state(**distros):
+    generic_agent._WSL_STATE.write_text(json.dumps(distros), "utf-8")
+
+
+def _saved(distro="Ubuntu"):
+    return json.loads(generic_agent._WSL_STATE.read_text("utf-8"))[distro]
+
+
 def test_first_probe_boots_the_distro_once_and_remembers_the_result(monkeypatch):
     calls = _probe_env(monkeypatch, False)
     assert generic_agent._wsl_probe() == ("Ubuntu", {"codex": "codex"})
     assert len(calls) == 1
-    assert json.loads(generic_agent._WSL_STATE.read_text("utf-8"))["found"] == {"codex": "codex"}
+    assert _saved()["found"] == {"codex": "codex"}
 
 
 def test_a_stopped_distro_is_never_probed_again(monkeypatch):
     calls = _probe_env(monkeypatch, False)
-    generic_agent._WSL_STATE.write_text(json.dumps({"distro": "Ubuntu", "found": {"claude": "claude"}}), "utf-8")
+    _save_state(Ubuntu={"found": {"claude": "claude"}, "found_at": 1})
     assert generic_agent._wsl_probe() == ("Ubuntu", {"claude": "claude"})
     assert calls == []
 
 
-def test_a_running_distro_is_reprobed_so_new_installs_show_up(monkeypatch):
+def test_a_running_distro_is_not_asked_again_while_the_saved_result_is_recent(monkeypatch):
     calls = _probe_env(monkeypatch, True)
-    generic_agent._WSL_STATE.write_text(json.dumps({"distro": "Ubuntu", "found": {}}), "utf-8")
+    _save_state(Ubuntu={"found": {"claude": "claude"}, "found_at": time.time() - 60})
+    assert generic_agent._wsl_probe() == ("Ubuntu", {"claude": "claude"})
+    assert calls == []
+
+
+def test_a_running_distro_is_reprobed_once_the_saved_result_is_old(monkeypatch):
+    calls = _probe_env(monkeypatch, True)
+    _save_state(Ubuntu={"found": {}, "found_at": time.time() - generic_agent._WSL_REPROBE_SECONDS - 1})
     assert generic_agent._wsl_probe() == ("Ubuntu", {"codex": "codex"})
     assert len(calls) == 1
 
 
-def test_saved_result_for_another_distro_is_ignored(monkeypatch):
+def test_each_distro_keeps_its_own_saved_result(monkeypatch):
     calls = _probe_env(monkeypatch, False)
-    generic_agent._WSL_STATE.write_text(json.dumps({"distro": "Debian", "found": {"claude": "claude"}}), "utf-8")
+    _save_state(Debian={"found": {"claude": "claude"}, "found_at": 1})
     assert generic_agent._wsl_probe() == ("Ubuntu", {"codex": "codex"})
     assert len(calls) == 1
+    assert _saved("Debian")["found"] == {"claude": "claude"}
 
 
 def test_a_failed_probe_is_not_remembered(monkeypatch):
     _probe_env(monkeypatch, False, None)
     assert generic_agent._wsl_probe() == ("Ubuntu", {})
     assert not generic_agent._WSL_STATE.exists()
+
+
+def test_a_damaged_state_file_does_not_start_a_stopped_distro_that_was_never_probed(monkeypatch):
+    calls = _probe_env(monkeypatch, False)
+    generic_agent._WSL_STATE.write_text("", "utf-8")
+    assert generic_agent._wsl_probe() == ("Ubuntu", {"codex": "codex"})
+    assert len(calls) == 1
+    assert _saved()["found"] == {"codex": "codex"}
+
+
+def test_concurrent_saves_keep_both_fields(monkeypatch):
+    import threading
+
+    def save(**fields):
+        for _ in range(40):
+            generic_agent._wsl_state_save("Ubuntu", **fields)
+
+    threads = [
+        threading.Thread(target=save, kwargs={"found": {"codex": "codex"}}),
+        threading.Thread(target=save, kwargs={"codex_config": "x"}),
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert _saved() == {"found": {"codex": "codex"}, "codex_config": "x"}
+
+
+def test_redetect_asks_a_running_distro_but_never_starts_a_stopped_one(monkeypatch):
+    calls = _probe_env(monkeypatch, True)
+    monkeypatch.setattr(generic_agent, "wsl_agents", lambda: ("Ubuntu", {}))
+    _save_state(Ubuntu={"found": {}, "found_at": time.time() - 120})
+    generic_agent.redetect_wsl_agents()
+    assert len(calls) == 1
+    assert generic_agent._wsl_cache[1] == ("Ubuntu", {"codex": "codex"})
+
+    calls.clear()
+    monkeypatch.setattr(generic_agent, "wsl_distro_running", lambda d: False)
+    _save_state(Ubuntu={"found": {}, "found_at": 1})
+    generic_agent.redetect_wsl_agents()
+    assert calls == []
 
 
 def test_running_check_reads_the_utf16_listing_without_starting_wsl(monkeypatch):
@@ -124,20 +182,35 @@ def test_codex_config_of_a_stopped_distro_comes_from_the_saved_copy(monkeypatch)
     calls = _probe_env(monkeypatch, False)
     monkeypatch.setattr(generic_agent, "find_agent_binary", lambda a: None)
     monkeypatch.setattr(generic_agent, "wsl_agents", lambda: ("Ubuntu", {"codex": "codex"}))
-    generic_agent._WSL_STATE.write_text(
-        json.dumps({"distro": "Ubuntu", "found": {"codex": "codex"}, "codex_config": 'model = "x"'}), "utf-8"
-    )
+    _save_state(Ubuntu={"found": {"codex": "codex"}, "codex_config": 'model = "x"', "codex_config_at": 1})
     assert generic_agent._read_codex_config() == 'model = "x"'
     assert calls == []
 
 
-def test_codex_config_of_a_running_distro_is_read_and_saved(monkeypatch):
+def test_codex_config_of_a_running_distro_is_not_reread_while_the_saved_copy_is_recent(monkeypatch):
+    calls = _probe_env(monkeypatch, True)
+    monkeypatch.setattr(generic_agent, "find_agent_binary", lambda a: None)
+    monkeypatch.setattr(generic_agent, "wsl_agents", lambda: ("Ubuntu", {"codex": "codex"}))
+    _save_state(Ubuntu={"codex_config": 'model = "x"', "codex_config_at": time.time() - 60})
+    assert generic_agent._read_codex_config() == 'model = "x"'
+    assert calls == []
+
+
+def test_codex_config_of_a_running_distro_is_read_and_saved_when_none_is_saved(monkeypatch):
     calls = _probe_env(monkeypatch, True, 'model = "y"')
     monkeypatch.setattr(generic_agent, "find_agent_binary", lambda a: None)
     monkeypatch.setattr(generic_agent, "wsl_agents", lambda: ("Ubuntu", {"codex": "codex"}))
     assert generic_agent._read_codex_config() == 'model = "y"'
     assert len(calls) == 1
-    assert json.loads(generic_agent._WSL_STATE.read_text("utf-8"))["codex_config"] == 'model = "y"'
+    assert _saved()["codex_config"] == 'model = "y"'
+
+
+def test_codex_config_is_empty_for_a_stopped_distro_that_never_saved_one(monkeypatch):
+    calls = _probe_env(monkeypatch, False)
+    monkeypatch.setattr(generic_agent, "find_agent_binary", lambda a: None)
+    monkeypatch.setattr(generic_agent, "wsl_agents", lambda: ("Ubuntu", {"codex": "codex"}))
+    assert generic_agent._read_codex_config() == ""
+    assert calls == []
 
 
 def test_expired_wsl_cache_is_served_stale_while_refreshing_in_the_background(monkeypatch):
