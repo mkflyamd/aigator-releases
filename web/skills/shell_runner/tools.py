@@ -22,6 +22,7 @@ from sandbox.policy import load_policy
 
 from proc_utils import (
     group_kwargs,
+    bind_to_backend_lifetime,
     kill_process_tree,
     no_window_kwargs,
     watched_output_dirs,
@@ -824,29 +825,90 @@ def _run_sandboxed(cr, command, shell, cwd, timeout, background, requested, poli
     return result
 
 
-def _run_captured(argv, cwd, env, timeout, on_start=None):
-    """Run argv to completion in its own process group; on timeout kill the whole tree, not just the shell."""
+class _BoundedTail:
+    """The last `limit` characters of a stream; older text is counted, not kept."""
+
+    def __init__(self, limit: int):
+        self.limit = limit
+        self.omitted = 0
+        self._text = ""
+
+    @property
+    def held(self) -> int:
+        return len(self._text)
+
+    def add(self, chunk: str) -> None:
+        self._text += chunk
+        if len(self._text) > self.limit:
+            self.omitted += len(self._text) - self.limit
+            self._text = self._text[-self.limit:]
+
+    def text(self) -> str:
+        if not self.omitted:
+            return self._text
+        return f"[first {self.omitted} characters omitted]\n" + self._text
+
+
+def _drain(stream, tail: _BoundedTail) -> None:
+    try:
+        while True:
+            chunk = stream.read(8192)
+            if not chunk:
+                return
+            tail.add(chunk)
+    except (OSError, ValueError):
+        return
+
+
+def _run_captured(argv, cwd, env, timeout, on_start=None, output_limit=None):
+    """Run argv to completion in its own process group; on timeout kill the whole tree, not just the shell.
+
+    With output_limit, stdout and stderr are read as the command runs and only their last output_limit
+    characters are kept, so a chatty command cannot fill memory.
+    """
     proc = subprocess.Popen(
         argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         text=True, encoding="utf-8", errors="replace", **group_kwargs(),
     )
     if on_start is not None:
         on_start(proc)
+    if output_limit is None:
+        try:
+            out, err = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            kill_process_tree(proc)
+            try:
+                proc.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                for stream in (proc.stdout, proc.stderr):
+                    stream.close()
+                proc.wait()
+            raise
+        return proc.returncode, out, err
+
+    tails = (_BoundedTail(output_limit), _BoundedTail(output_limit))
+    readers = [threading.Thread(target=_drain, args=(stream, tail), daemon=True)
+               for stream, tail in zip((proc.stdout, proc.stderr), tails)]
+    for reader in readers:
+        reader.start()
+    deadline = time.monotonic() + timeout
     try:
-        out, err = proc.communicate(timeout=timeout)
+        proc.wait(timeout=timeout)
+        for reader in readers:
+            reader.join(max(0.0, deadline - time.monotonic()))
+        if any(reader.is_alive() for reader in readers):
+            raise subprocess.TimeoutExpired(argv, timeout)
     except subprocess.TimeoutExpired:
         kill_process_tree(proc)
-        try:
-            proc.communicate(timeout=5)
-        except subprocess.TimeoutExpired:
-            for stream in (proc.stdout, proc.stderr):
-                stream.close()
-            proc.wait()
+        proc.wait()
+        for reader in readers:
+            reader.join(5)
         raise
-    return proc.returncode, out, err
+    return proc.returncode, tails[0].text(), tails[1].text()
 
 
-def _run_unsandboxed(command, shell, cwd, timeout, background, env=None, as_typed=False, on_start=None) -> dict:
+def _run_unsandboxed(command, shell, cwd, timeout, background, env=None, as_typed=False, on_start=None,
+                     output_limit=None) -> dict:
     # Windows auto-correct: `python3` doesn't exist on Windows (it opens the
     # Microsoft Store stub). The model often uses `python3` out of habit from
     # Linux/macOS. Replace with `python` on Windows only — `python` is the
@@ -921,7 +983,7 @@ def _run_unsandboxed(command, shell, cwd, timeout, background, env=None, as_type
 
     start = time.monotonic()
     try:
-        returncode, stdout, stderr = _run_captured(argv_prefix + [command], cwd_path, env, timeout, on_start)
+        returncode, stdout, stderr = _run_captured(argv_prefix + [command], cwd_path, env, timeout, on_start, output_limit)
         elapsed_ms = int((time.monotonic() - start) * 1000)
         result = {
             "stdout": stdout or "",
@@ -1023,23 +1085,30 @@ _HOST_AWAITING_MSG = (
 )
 
 
-def _tail(text: str) -> str:
-    limit = host_requests.OUTPUT_LIMIT
-    if len(text) <= limit:
-        return text
-    return f"[first {len(text) - limit} characters omitted]\n" + text[-limit:]
+def _track_host_process(request_id):
+    def on_start(proc):
+        bind_to_backend_lifetime(proc)
+        host_requests.attach(request_id, proc)
+    return on_start
 
 
 def run_host_request(req) -> dict:
     """Run an approved request outside the sandbox with the user's own environment (secrets removed)."""
     result = _run_unsandboxed(req.command, req.shell, req.cwd, req.timeout, False,
                               env=host_requests.host_env(os.environ), as_typed=True,
-                              on_start=lambda proc: host_requests.attach(req.id, proc))
-    result["stdout"] = _tail(result.get("stdout") or "")
-    result["stderr"] = _tail(result.get("stderr") or "")
+                              on_start=_track_host_process(req.id),
+                              output_limit=host_requests.OUTPUT_LIMIT)
     result["ran_on"] = "host"
     result["cwd"] = req.cwd
     return result
+
+
+def _is_inside(path, root) -> bool:
+    """True when path is root or lies under it, after resolving links; letter case counts only where the OS says so."""
+    try:
+        return Path(os.path.normcase(os.path.realpath(path))).is_relative_to(os.path.normcase(os.path.realpath(root)))
+    except (OSError, ValueError):
+        return False
 
 
 def _tool_run_on_host(
@@ -1072,8 +1141,9 @@ def _tool_run_on_host(
     token, position = _find_delete_command(command)
     if token is not None:
         return _shell_error(
-            f"Delete operations are blocked: matched command '{token}' at position {position}. "
-            "Ask the user to run this command manually.", _DETECTED_SHELL)
+            f"This looks like a delete command ('{token}' at position {position}). AI Gator does not propose "
+            "delete commands. This check is only a hint: it catches common spellings, not every one. "
+            "Tell the user what you wanted to remove and ask them to do it themselves.", _DETECTED_SHELL)
     if shell not in ("", "bash", "powershell", "cmd"):
         return _shell_error("shell must be bash, powershell or cmd.")
     if cwd:
@@ -1101,7 +1171,7 @@ def _tool_run_on_host(
         "cwd": req.cwd, "shell": req.shell or _DETECTED_SHELL, "reason": req.reason,
         "risks": list(req.risks), "timeout": req.timeout,
         "expires_at": req.created_at + host_requests.REQUEST_TTL_SECONDS,
-        "cwd_is_ai_workspace": Path(req.cwd) == Path(WORK_DIR).resolve(),
+        "cwd_is_ai_workspace": _is_inside(req.cwd, WORK_DIR),
         "env_removed": len(environment) - len(host_requests.host_env(environment)),
     }
     return {"status": "awaiting_user_click", "request_id": req.id, "message": _HOST_AWAITING_MSG,
@@ -1239,8 +1309,9 @@ TOOL_DEFS = [
             "clicks Run. Use it when run_shell cannot do the job: node, npm, git or gh that the sandbox cannot start, "
             "sign-in prompts, anything that needs the user's network or credentials, publishing or pushing the "
             "user asked for. Try run_shell first for ordinary build or scratch work. One foreground command that "
-            "ends by itself; no servers, no interactive prompts. Never propose a command that deletes files; common "
-            "delete spellings are filtered out, and the card the user reads is the real safeguard. "
+            "ends by itself; no servers, no interactive prompts. Never propose a command that deletes files. A filter "
+            "gives a hint when it spots common delete spellings but misses others; the card the user reads is the "
+            "real safeguard. "
             "After proposing, stop and wait. When the user says they ran it, call host_command_result with the "
             "request_id. Never propose the same command twice."
         ),

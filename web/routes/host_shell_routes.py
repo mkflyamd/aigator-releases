@@ -48,13 +48,9 @@ def run_host_command(request_id: str, body: HostShellDecision):  # sync: runs in
 
 @router.post("/api/host-shell/{request_id}/cancel", dependencies=[Depends(verify_csrf)])
 def cancel_host_command(request_id: str, body: HostShellDecision):
-    """Cancel a pending request, or stop a running one by killing its whole process tree."""
+    """Cancel a pending request, or stop a running one by killing its whole process tree. A request that already ended is reported, not an error."""
     try:
-        status, _ = host_requests.lookup(request_id, body.context_id)
-        if status == "running":
-            req = host_requests.stop(request_id, body.context_id)
-        else:
-            req = host_requests.deny(request_id, body.context_id)
+        req = host_requests.cancel(request_id, body.context_id)
     except host_requests.HostRequestError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
     return {"ok": True, "request_id": req.id, "status": req.status}

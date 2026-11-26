@@ -148,19 +148,6 @@ def attach(request_id: str, proc) -> None:
         kill_process_tree(proc)
 
 
-def stop(request_id: str, context_id: str) -> HostRequest:
-    """Kill the whole process tree of a running request. Raises unless it is running and this tab's."""
-    with _LOCK:
-        req = _owned(request_id, context_id)
-        if req.status != "running":
-            raise HostRequestError(409, f"This command request is {req.status}, not running.")
-        req.stopped = True
-        proc = req.proc
-    if proc is not None:
-        kill_process_tree(proc)
-    return req
-
-
 def stop_all() -> None:
     """App quit: kill every command still running."""
     with _LOCK:
@@ -180,6 +167,24 @@ def deny(request_id: str, context_id: str, now: float | None = None) -> HostRequ
             raise HostRequestError(409, f"This command request was already {req.status}.")
         req.status, req.finished_at = "denied", now
         return req
+
+
+def cancel(request_id: str, context_id: str, now: float | None = None) -> HostRequest:
+    """The user's Cancel or Stop click. Pending is denied, running is killed, and one that already ended
+    (the click raced the command finishing, or was repeated) is returned as it is, so the outcome is not an error."""
+    now = time.time() if now is None else now
+    with _LOCK:
+        req = _owned(request_id, context_id)
+        if req.status == "pending":
+            req.status, req.finished_at = "denied", now
+            return req
+        if req.status != "running":
+            return req
+        req.stopped = True
+        proc = req.proc
+    if proc is not None:
+        kill_process_tree(proc)
+    return req
 
 
 def lookup(request_id: str, context_id: str, now: float | None = None) -> tuple[str, HostRequest | None]:

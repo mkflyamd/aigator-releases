@@ -11884,7 +11884,7 @@ function _renderHostCommandCard(data, requestId, cardTab, tabId) {
     const work = document.createElement('div');
     work.className = 'gcc-refine';
     work.textContent =
-      "This is AI Gator's own working folder. Files in it were written by the AI, so a script here runs code the AI wrote.";
+      "This is AI Gator's own working folder, or inside it. Files there were written by the AI, so a script here runs code the AI wrote.";
     body.appendChild(work);
   }
   const removed = Number(data.env_removed) || 0;
@@ -12014,6 +12014,10 @@ function _renderHostCommandCard(data, requestId, cardTab, tabId) {
       stopClock();
       actions.remove();
       _pendingSandboxCards.get(cardTab)?.delete(requestId);
+      if (action === 'cancel' && out?.status === 'done') {
+        footNote.textContent = 'This command had already finished.';
+        return;
+      }
       if (action === 'cancel') {
         footNote.textContent = 'You cancelled this. Nothing was run.';
         _sendSandboxFollowUp(

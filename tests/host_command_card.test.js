@@ -248,7 +248,7 @@ const buttonsOf = (env) => walk(env.messages).filter((e) => e.tag === 'button');
     .map((e) => e.textContent)
     .join(nl);
   assert.match(text5, /3 lines/);
-  assert.match(text5, /AI Gator's own working folder/);
+  assert.match(text5, /AI Gator's own working folder, or inside it/);
   assert.match(text5, /3 environment variables removed/);
   assert(
     walk(env5.messages).some((e) => e.tag === 'pre' && /gcc-field-val--wrap/.test(e.className)),
@@ -292,6 +292,23 @@ const buttonsOf = (env) => walk(env.messages).filter((e) => e.tag === 'button');
     ['/api/host-shell/req1/run', '/api/host-shell/req1/cancel'],
   );
   assert(walk(env6.messages).some((e) => e.tag === 'pre' && /You stopped/.test(e.textContent)));
+
+  // A Cancel that arrives after the command already ended is reported as finished, never as cancelled.
+  const env6b = makeEnv(async (url) => {
+    if (url === '/api/csrf')
+      return { ok: true, status: 200, json: async () => ({ csrf_token: 'aigator-fake-api-key' }) };
+    return { ok: true, status: 200, json: async () => ({ ok: true, status: 'done' }) };
+  });
+  env6b.ctx._showSandboxApproval(data, 'tab-1');
+  await buttonsOf(env6b)[1].listeners.click(click);
+  await tick();
+  await tick();
+  const text6b = walk(env6b.messages)
+    .map((e) => e.textContent)
+    .join(nl);
+  assert.match(text6b, /already finished/);
+  assert(!/You cancelled this/.test(text6b));
+  assert.strictEqual(env6b.followUps.length, 0, 'the agent is not told it was cancelled');
 
   // The card says when it will expire, and what happened, in plain words.
   const textOf = (e) =>

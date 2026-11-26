@@ -271,7 +271,7 @@ def test_default_working_folder_is_created(tmp_path, monkeypatch):
     "(rm -rf build)",
     "{ rm -rf build; }",
 ])
-def test_delete_inside_compound_commands_is_refused(tmp_path, command):
+def test_delete_inside_compound_commands_is_flagged(tmp_path, command):
     out = _propose(tmp_path, command=command)
     assert "error" in out
     assert not host_requests._REQUESTS
@@ -280,7 +280,7 @@ def test_delete_inside_compound_commands_is_refused(tmp_path, command):
 def test_run_host_request_runs_the_command_as_typed(tmp_path, monkeypatch):
     seen = {}
 
-    def fake_captured(argv, cwd, env, timeout, on_start=None):
+    def fake_captured(argv, cwd, env, timeout, on_start=None, output_limit=None):
         seen["argv"] = argv
         return 0, "", ""
 
@@ -373,7 +373,7 @@ def test_host_env_keeps_names_that_only_look_similar():
     "find . -print0 | xargs -0 -n 1 rm",
     "sudo -u root rm x",
 ])
-def test_delete_behind_prefix_flags_is_refused(tmp_path, command):
+def test_delete_behind_prefix_flags_is_flagged(tmp_path, command):
     out = _propose(tmp_path, command=command)
     assert "error" in out
     assert not host_requests._REQUESTS
@@ -480,7 +480,7 @@ def test_stop_kills_a_running_request_and_marks_it_stopped(tmp_path):
     worker.start()
     assert _wait_for(pid_file.exists), "the command never started"
     grandchild = int(pid_file.read_text())
-    host_requests.stop(req.id, "tab-1")
+    host_requests.cancel(req.id, "tab-1")
     worker.join(30)
     assert not worker.is_alive()
     assert req.stopped is True
@@ -503,23 +503,17 @@ def test_stop_all_kills_every_running_command(tmp_path):
     assert _wait_for(lambda: not _alive(grandchild))
 
 
-def test_stop_needs_a_running_request_in_the_same_tab():
-    req = host_requests.create("tab-1", "echo hi", "C:/x", "", "", 60)
-    with pytest.raises(host_requests.HostRequestError):
-        host_requests.stop(req.id, "tab-1")
-    host_requests.claim(req.id, "tab-1")
-    with pytest.raises(host_requests.HostRequestError):
-        host_requests.stop(req.id, "tab-2")
-
-
 def test_cancel_route_stops_a_running_command(client, csrf, monkeypatch):
-    stopped = []
-    monkeypatch.setattr(host_requests, "stop", lambda rid, ctx: stopped.append(rid) or host_requests.lookup(rid, ctx)[1])
+    killed = []
+    monkeypatch.setattr(host_requests, "kill_process_tree", killed.append)
     req = host_requests.create("tab-1", "echo hi", "C:/x", "", "", 60)
     host_requests.claim(req.id, "tab-1")
+    proc = object()
+    host_requests.attach(req.id, proc)
     r = client.post(f"/api/host-shell/{req.id}/cancel", json={"context_id": "tab-1"}, headers=csrf)
     assert r.status_code == 200
-    assert stopped == [req.id]
+    assert killed == [proc]
+    assert req.stopped is True
 
 
 def test_run_route_reports_a_stopped_command(client, csrf, monkeypatch):
@@ -531,3 +525,185 @@ def test_run_route_reports_a_stopped_command(client, csrf, monkeypatch):
     req = host_requests.create("tab-1", "echo hi", "C:/x", "", "", 60)
     r = client.post(f"/api/host-shell/{req.id}/run", json={"context_id": "tab-1"}, headers=csrf)
     assert "stopped" in r.json()["result"]["error"]
+
+
+# --- review round 3 ------------------------------------------------------
+
+def _card_for(cwd):
+    out = shell_tools._tool_run_on_host(command="echo ok", cwd=str(cwd), reason="t", _context_id="tab-1")
+    assert "error" not in out
+    return out["_sandbox_approval"]
+
+
+def test_card_warns_for_the_ai_working_folder_and_everything_inside_it(tmp_path, monkeypatch):
+    import config
+
+    work = tmp_path / "work"
+    (work / "build" / "deep").mkdir(parents=True)
+    monkeypatch.setattr(config, "WORK_DIR", work)
+    assert _card_for(work)["cwd_is_ai_workspace"] is True
+    assert _card_for(work / "build")["cwd_is_ai_workspace"] is True
+    assert _card_for(work / "build" / "deep")["cwd_is_ai_workspace"] is True
+
+
+def test_card_does_not_warn_for_a_sibling_that_shares_the_name_prefix(tmp_path, monkeypatch):
+    import config
+
+    work = tmp_path / "work"
+    work.mkdir()
+    sibling = tmp_path / "work-projects"
+    sibling.mkdir()
+    monkeypatch.setattr(config, "WORK_DIR", work)
+    assert _card_for(sibling)["cwd_is_ai_workspace"] is False
+    assert _card_for(tmp_path)["cwd_is_ai_workspace"] is False
+
+
+def test_working_folder_check_ignores_letter_case_on_windows(tmp_path, monkeypatch):
+    import config
+
+    work = tmp_path / "Work"
+    (work / "Sub").mkdir(parents=True)
+    monkeypatch.setattr(config, "WORK_DIR", work)
+    shouted = str(work / "Sub").swapcase()
+    assert shell_tools._is_inside(shouted, work) is (sys.platform == "win32")
+
+
+def test_working_folder_check_follows_a_link_out_of_the_folder(tmp_path, monkeypatch):
+    import config
+
+    work = tmp_path / "work"
+    work.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    link = work / "link"
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks need privileges on this machine")
+    monkeypatch.setattr(config, "WORK_DIR", work)
+    assert _card_for(link)["cwd_is_ai_workspace"] is False
+
+
+def test_delete_filter_is_described_as_a_hint_not_a_refusal(tmp_path):
+    out = _propose(tmp_path, command="rm -rf build")
+    message = out["error"].lower()
+    assert "hint" in message
+    assert "blocked" not in message and "refused" not in message
+
+
+def test_delete_filter_hint_is_worded_the_same_in_the_skill_and_the_tool_description():
+    skill = (pathlib.Path(shell_tools.__file__).parent / "SKILL.md").read_text(encoding="utf-8")
+    spec = next(t for t in shell_tools.TOOL_DEFS if t["name"] == "run_on_host")["description"]
+    for text in (skill, spec):
+        assert "hint" in text
+        assert "filtered out" not in text
+
+
+def test_bounded_tail_keeps_the_end_and_never_holds_more_than_the_limit():
+    tail = shell_tools._BoundedTail(100)
+    for i in range(1000):
+        tail.add(f"line {i:04d}\n")
+        assert tail.held <= 100
+    text = tail.text()
+    assert text.endswith("line 0999\n")
+    assert text.startswith("[first ") and "characters omitted]" in text
+    assert tail.omitted == 1000 * 10 - 100
+
+
+def test_bounded_tail_adds_no_marker_when_nothing_was_dropped():
+    tail = shell_tools._BoundedTail(100)
+    tail.add("hello\n")
+    assert tail.text() == "hello\n"
+
+
+def test_a_noisy_command_is_bounded_while_it_runs(tmp_path):
+    script = tmp_path / "noisy.py"
+    script.write_text("import sys\nfor i in range(20000):\n    sys.stdout.write('x' * 100 + '\\n')\n"
+                      "sys.stderr.write('done-err')\n", encoding="utf-8")
+    command = f'"{sys.executable}" "{script}"'
+    shell = "powershell" if sys.platform == "win32" else ""
+    if sys.platform == "win32":
+        command = f'& {command}'
+    result = shell_tools._run_unsandboxed(command, shell, str(tmp_path), 60, False, as_typed=True,
+                                          output_limit=host_requests.OUTPUT_LIMIT)
+    assert result["exit_code"] == 0
+    assert len(result["stdout"]) < host_requests.OUTPUT_LIMIT + 100
+    assert "characters omitted" in result["stdout"]
+    assert result["stderr"].strip() == "done-err"
+
+
+def test_host_request_output_is_not_marked_twice(tmp_path):
+    script = tmp_path / "noisy.py"
+    script.write_text("print('y' * 90000)\n", encoding="utf-8")
+    command = f'"{sys.executable}" "{script}"'
+    if sys.platform == "win32":
+        command = f'& {command}'
+    req = host_requests.create("tab-1", command, str(tmp_path), "powershell" if sys.platform == "win32" else "", "", 60)
+    result = shell_tools.run_host_request(req)
+    assert result["stdout"].count("characters omitted") == 1
+
+
+def test_stop_on_a_finished_request_reports_it_instead_of_an_error():
+    req = host_requests.create("tab-1", "echo hi", "C:/x", "", "", 60)
+    host_requests.claim(req.id, "tab-1")
+    host_requests.finish(req.id, {"exit_code": 0})
+    assert host_requests.cancel(req.id, "tab-1").status == "done"
+    assert host_requests.cancel(req.id, "tab-1").status == "done"
+
+
+def test_cancel_twice_on_a_pending_request_stays_denied():
+    req = host_requests.create("tab-1", "echo hi", "C:/x", "", "", 60)
+    assert host_requests.cancel(req.id, "tab-1").status == "denied"
+    assert host_requests.cancel(req.id, "tab-1").status == "denied"
+
+
+def test_cancel_still_checks_the_tab():
+    req = host_requests.create("tab-1", "echo hi", "C:/x", "", "", 60)
+    with pytest.raises(host_requests.HostRequestError):
+        host_requests.cancel(req.id, "tab-2")
+
+
+def test_cancel_route_when_the_command_just_finished_is_a_200_with_the_outcome(client, csrf):
+    req = host_requests.create("tab-1", "echo hi", "C:/x", "", "", 60)
+    host_requests.claim(req.id, "tab-1")
+    host_requests.finish(req.id, {"exit_code": 0})
+    r = client.post(f"/api/host-shell/{req.id}/cancel", json={"context_id": "tab-1"}, headers=csrf)
+    assert r.status_code == 200
+    assert r.json()["status"] == "done"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows ends a hard-killed parent's children with a job object")
+def test_a_host_command_dies_when_the_backend_is_force_killed(tmp_path):
+    import subprocess
+    import textwrap
+
+    web = pathlib.Path(__file__).parent.parent / "web"
+    pid_file = tmp_path / "child.pid"
+    parent = tmp_path / "parent.py"
+    parent.write_text(textwrap.dedent(f"""
+        import subprocess, sys, time
+        sys.path.insert(0, {str(web)!r})
+        from proc_utils import bind_to_backend_lifetime, group_kwargs
+        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"], **group_kwargs())
+        bind_to_backend_lifetime(child)
+        open({str(pid_file)!r}, "w").write(str(child.pid))
+        time.sleep(120)
+    """), encoding="utf-8")
+    backend = subprocess.Popen([sys.executable, str(parent)])
+    try:
+        assert _wait_for(pid_file.exists), "the stand-in backend never started its command"
+        child_pid = int(pid_file.read_text())
+        assert _wait_for(lambda: _pid_exists(child_pid))
+        backend.kill()
+        backend.wait(10)
+        assert _wait_for(lambda: not _pid_exists(child_pid)), "the command outlived the force-killed backend"
+    finally:
+        backend.kill()
+
+
+def _pid_exists(pid):
+    import subprocess
+
+    out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, text=True).stdout
+    return str(pid) in out
+

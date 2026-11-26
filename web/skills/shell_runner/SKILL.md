@@ -23,7 +23,7 @@ Some commands cannot work inside the sandbox: node, npm, git or gh installed und
 - It shows the user a card with the exact command, folder and shell. Nothing runs until they click Run. They can click Cancel.
 - Give a one-sentence `reason` that says why the command is needed and why it cannot run in the sandbox.
 - After calling it, stop and wait. When the user says they ran it, call `host_command_result` with the `request_id` to read stdout, stderr and the exit code. If they cancelled, do not propose it again.
-- One foreground command that ends by itself. No servers, no interactive prompts. Never propose a command that deletes files: common delete spellings are filtered out, but the card the user reads is the real safeguard.
+- One foreground command that ends by itself. No servers, no interactive prompts. Never propose a command that deletes files. A filter gives a hint when it spots common delete spellings but misses others; the card the user reads is the real safeguard.
 - Try `run_shell` first for ordinary build and scratch work; use `run_on_host` when the sandbox is the obstacle.
 
 ## Prefer file_ops for simple file tasks
