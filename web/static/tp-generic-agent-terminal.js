@@ -1643,8 +1643,11 @@ function _genAgentShowWokenBanner(sess, msg) {
   banner.className = 'gtp-woken-banner';
   banner.setAttribute('role', 'status');
   const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  banner.textContent = (msg.data || 'woken by another agent') + ' at ' + time;
-  if (msg.preview) banner.title = msg.preview;
+  banner.textContent =
+    (msg.data || 'woken by another agent') +
+    ' at ' +
+    time +
+    (msg.preview ? ': ' + msg.preview : '');
   banner.addEventListener('click', () => banner.remove());
   sess.container.appendChild(banner);
 }

@@ -222,6 +222,12 @@ async def _dispatch(caller: dict, body: dict) -> dict | None:
     return {"jsonrpc": "2.0", "id": request_id, "result": result}
 
 
+def _terminal_alive(pty_id: str) -> bool:
+    from routes import terminal
+
+    return pty_id in terminal.live_pty_labels()
+
+
 def _bearer(request: Request) -> str | None:
     scheme, _, value = request.headers.get("authorization", "").partition(" ")
     return value.strip() if scheme.lower() == "bearer" else None
@@ -229,6 +235,10 @@ def _bearer(request: Request) -> str | None:
 
 async def _respond(request: Request) -> Response:
     caller = caller_for(_bearer(request))
+    # A terminal that exited by itself never went through close, so its token is checked here.
+    if caller is not None and not await asyncio.to_thread(_terminal_alive, caller["pty_id"]):
+        revoke(caller["pty_id"])
+        caller = None
     if caller is None:
         return JSONResponse({"error": "unauthorized"}, status_code=401, headers={"WWW-Authenticate": "Bearer"})
     if request.method != "POST":

@@ -45,6 +45,7 @@ _ESCAPES = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\
 _CONTROL = re.compile("[\x00-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]")
 
 _lock = threading.Lock()
+_audit_lock = threading.Lock()
 _in_flight: set[str] = set()
 _sent: dict[str, deque] = {}
 
@@ -75,7 +76,7 @@ def clean(text: str) -> str:
 def frame(sender_name: str, message: str) -> str:
     """The text that is typed into the target. It always starts with the tag, so it can
     never begin with a command character."""
-    name = clean(sender_name)[:NAME_MAX_CHARS] or "another agent"
+    name = " ".join(clean(sender_name).replace("[", " ").replace("]", " ").split())[:NAME_MAX_CHARS] or "another agent"
     body = clean(message)
     if not body:
         raise WakeRefused("invalid", "The message is empty.")
@@ -123,9 +124,10 @@ def _audit(sender: dict, target: dict | None, outcome: str, text: str, now: floa
     path = audit_file()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
-        lines = [*lines[-(AUDIT_KEEP - 1) :], json.dumps(line)]
-        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        with _audit_lock:
+            lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+            lines = [*lines[-(AUDIT_KEEP - 1) :], json.dumps(line)]
+            path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     except OSError:
         logger.warning("could not write the wake audit line", exc_info=True)
 
@@ -358,7 +360,7 @@ async def wake_and_deliver(
             await asyncio.to_thread(
                 agent_suspend.mark_failed,
                 entry["pty_id"],
-                {"reason": exc.reason, "message": clean(message)[:MESSAGE_MAX_BYTES], "sender": clean(sender.get("name", "")), "at": now},
+                {"reason": exc.reason, "message": clean(message)[:PREVIEW_CHARS], "sender": clean(sender.get("name", "")), "at": now},
             )
         await asyncio.to_thread(_audit, sender, entry, f"{exc.code}: {exc.reason}", clean(message), now)
         raise

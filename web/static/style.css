@@ -24381,14 +24381,14 @@ body.tab-fullscreen {
   z-index: 4;
   max-width: 70%;
   padding: 3px 10px;
-  border-radius: 999px;
+  border-radius: 12px;
   background: rgba(30, 58, 95, 0.92);
   color: #bfdbfe;
   font-size: 0.75rem;
   cursor: pointer;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  max-height: 4.5em;
+  overflow-wrap: anywhere;
 }
 .agent-handoff-search {
   width: 100%;

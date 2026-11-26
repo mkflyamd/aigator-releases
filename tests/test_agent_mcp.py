@@ -18,6 +18,8 @@ TOKEN_HEADER = "Authorization"
 @pytest.fixture
 def door(tmp_path, monkeypatch):
     monkeypatch.setattr(agent_mcp, "_tokens", {})
+    alive = {"yes": True}
+    monkeypatch.setattr(agent_mcp, "_terminal_alive", lambda pty_id: alive["yes"])
     monkeypatch.setattr(agent_suspend, "STATE_FILE", tmp_path / "suspended-agents.json")
     monkeypatch.setattr(agent_state, "HOOKS_DIR", tmp_path / "hooks")
     monkeypatch.setattr(agent_mcp, "backend_port", lambda: "8002")
@@ -31,7 +33,7 @@ def door(tmp_path, monkeypatch):
         return {"status": "delivered", "woke": True}
 
     monkeypatch.setattr(agent_wake, "wake_and_deliver", deliver)
-    return {"sessions": sessions, "calls": calls, "client": TestClient(agent_mcp.app)}
+    return {"sessions": sessions, "calls": calls, "alive": alive, "client": TestClient(agent_mcp.app)}
 
 
 def rpc(method, params=None, request_id=1):
@@ -296,6 +298,14 @@ def test_a_closed_terminals_token_stops_working(door):
     assert agent_mcp.caller_for(token) is None
     assert agent_mcp.caller_for(other)["pty_id"] == "pty-2"
     assert door["client"].post("/", json=rpc("ping"), headers=bearer(token)).status_code == 401
+
+
+def test_a_terminal_that_exited_on_its_own_loses_its_token(door):
+    token = agent_mcp.issue("pty-1", "demo")
+    assert door["client"].post("/", json=rpc("ping"), headers=bearer(token)).status_code == 200
+    door["alive"]["yes"] = False
+    assert door["client"].post("/", json=rpc("ping"), headers=bearer(token)).status_code == 401
+    assert agent_mcp.caller_for(token) is None
 
 
 def test_closing_a_terminal_revokes_its_token_only_when_the_close_worked(door, monkeypatch):
