@@ -1306,8 +1306,11 @@
           if (typeof state.pinAnnounce === 'string' && state.pinAnnounce)
             announcePin(state.pinAnnounce);
           if (typeof state.pinMode === 'boolean') {
+            const wasPinning = elBar.classList.contains('is-pinning');
             elBar.classList.toggle('is-pinning', state.pinMode);
             elPin.classList.toggle('is-active', state.pinMode);
+            // The banner (and its Cancel button) hides when picking ends; keep keyboard focus on the Pin button.
+            if (wasPinning && !state.pinMode && document.hasFocus()) elPin.focus();
           }
           if (typeof state.pinLabel === 'string') {
             elPinLabel.textContent = state.pinLabel;
