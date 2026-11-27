@@ -299,6 +299,14 @@ async def test_every_message_is_audited_with_a_short_preview(world):
     assert world.audit[2]["code"] == "not_found"
 
 
+async def test_a_refused_message_is_audited_by_size_only(world):
+    await world.relay.submit(A, "Nobody", "secret text")
+    refused = world.audit[-1]
+    assert refused["code"] == "not_found"
+    assert refused["message_bytes"] == len("secret text") and "message" not in refused
+    assert "secret text" not in str(world.audit)
+
+
 def test_audit_file_is_capped(tmp_path, monkeypatch):
     monkeypatch.setattr(agent_suspend, "STATE_FILE", tmp_path / "suspended-agents.json")
     for i in range(core.AUDIT_KEEP + 5):

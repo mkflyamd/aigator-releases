@@ -11,7 +11,9 @@ import agent_state
 import agent_suspend
 import agent_wake
 import generic_agent
+from relay import core as relay_core
 from relay import service
+from relay import settings as relay_settings
 from relay.core import Relay
 from relay.model import pty_endpoint
 from sandbox import policy as pol
@@ -22,6 +24,7 @@ TOKEN_HEADER = "Authorization"
 @pytest.fixture
 def door(tmp_path, monkeypatch):
     monkeypatch.setattr(agent_mcp, "_tokens", {})
+    monkeypatch.setattr(agent_wake, "_last_unauthorized", float("-inf"))
     alive = {"yes": True}
     monkeypatch.setattr(agent_mcp, "_terminal_alive", lambda pty_id: alive["yes"])
     monkeypatch.setattr(agent_suspend, "STATE_FILE", tmp_path / "suspended-agents.json")
@@ -171,9 +174,10 @@ def test_the_door_is_the_only_mounted_sub_app_and_is_outside_the_route_table():
     assert not [p for p in gator.app.openapi()["paths"] if p.startswith(agent_mcp.MOUNT_PATH)]
 
 
-def test_through_the_real_app_every_method_and_path_needs_the_token():
+def test_through_the_real_app_every_method_and_path_needs_the_token(tmp_path, monkeypatch):
     import app as gator
 
+    monkeypatch.setattr(agent_suspend, "STATE_FILE", tmp_path / "suspended-agents.json")
     client = TestClient(gator.app)
     for method in ("get", "post", "put", "patch", "delete"):
         for path in (f"{agent_mcp.MOUNT_PATH}/", agent_mcp.MOUNT_PATH, f"{agent_mcp.MOUNT_PATH}/x/y"):
@@ -305,6 +309,124 @@ def test_an_unexpected_failure_does_not_leak_details(door):
     _, token = launch(door, "sess-a")
     result = door["client"].post("/", json=tool_call(), headers=bearer(token)).json()["result"]
     assert result["isError"] is True and "secret" not in result["content"][0]["text"]
+
+
+# --- refusals leave an audit line -----------------------------------------------
+
+
+def test_a_request_with_no_token_is_audited_as_unauthorized(door):
+    door["client"].post("/", json=tool_call(message="secret text"))
+    (line,) = agent_wake.recent_audit()
+    assert (line["outcome"], line["reason"]) == ("unauthorized", "No token was sent.")
+    assert (line["sender"], line["target"], line["message_bytes"]) == ("", "", 0)
+    assert "secret" not in agent_wake.audit_file().read_text(encoding="utf-8")
+
+
+def test_a_wrong_token_is_audited_without_the_token(door):
+    door["client"].post("/", json=tool_call(), headers=bearer("aigator-fake-api-key"))
+    (line,) = agent_wake.recent_audit()
+    assert (line["outcome"], line["reason"]) == ("unauthorized", "The token is not known or was revoked.")
+    assert "aigator-fake-api-key" not in agent_wake.audit_file().read_text(encoding="utf-8")
+
+
+def test_a_terminal_that_has_ended_is_audited_as_unauthorized(door):
+    _, token = launch(door, "sess-a")
+    door["alive"]["yes"] = False
+    door["client"].post("/", json=tool_call(), headers=bearer(token))
+    assert agent_wake.recent_audit()[-1]["reason"] == "The terminal that held this token has ended."
+
+
+def test_a_flood_of_unauthorized_requests_leaves_one_audit_line(door):
+    for _ in range(20):
+        door["client"].post("/", json=rpc("ping"))
+    assert len(agent_wake.recent_audit()) == 1
+
+
+def test_arguments_that_are_not_text_are_audited_as_invalid_with_the_sender(door):
+    _, token = launch(door, "sess-a")
+    for arguments in ({"to": 5, "message": "hi"}, {"to": "x"}):
+        body = rpc("tools/call", {"name": agent_mcp.TOOL_NAME, "arguments": arguments})
+        door["client"].post("/", json=body, headers=bearer(token))
+    first, second = agent_wake.recent_audit()
+    assert (first["outcome"], first["sender"], first["target"], first["message_bytes"]) == ("invalid", "name-of-sess-a", "", 2)
+    assert (second["target"], second["message_bytes"]) == ("x", 0)
+
+
+def test_an_unexpected_failure_is_audited_without_the_message_or_the_details(door, monkeypatch):
+    async def boom(*args, **kwargs):
+        raise RuntimeError("C:/secret/path exploded")
+
+    monkeypatch.setattr(service._relay, "submit", boom)
+    _, token = launch(door, "sess-a")
+    door["client"].post("/", json=tool_call(to="Design head", message="private words"), headers=bearer(token))
+    (line,) = agent_wake.recent_audit()
+    assert (line["outcome"], line["target"], line["message_bytes"]) == ("failed", "Design head", len("private words"))
+    text = agent_wake.audit_file().read_text(encoding="utf-8")
+    assert "secret" not in text and "private" not in text
+
+
+def _admin_denies(door, tmp_path, monkeypatch):
+    (tmp_path / "sandbox-policy.json").write_text('{"agent_messaging": "deny"}')
+
+
+def _user_switched_off(door, tmp_path, monkeypatch):
+    relay_settings.set_user_messaging(False)
+
+
+def _target_opted_out(door, tmp_path, monkeypatch):
+    relay_settings.set_opted_out("pty:target-1", True)
+
+
+def _hop_cap_reached(door, tmp_path, monkeypatch):
+    monkeypatch.setattr(relay_core, "MAX_HOPS", 0)
+
+
+def _target_is_busy(door, tmp_path, monkeypatch):
+    service._relay._busy.add("pty:target-1")
+
+
+def _nobody_by_that_name(door, tmp_path, monkeypatch):
+    door["adapter"].targets = []
+
+
+@pytest.mark.parametrize(
+    "code, arrange",
+    [
+        ("admin_denied", _admin_denies),
+        ("switched_off", _user_switched_off),
+        ("opted_out", _target_opted_out),
+        ("hop_limit", _hop_cap_reached),
+        ("busy", _target_is_busy),
+        ("not_found", _nobody_by_that_name),
+    ],
+)
+def test_a_refusal_made_by_the_relay_is_audited_by_size_only(door, tmp_path, monkeypatch, code, arrange):
+    arrange(door, tmp_path, monkeypatch)
+    _, token = launch(door, "sess-a")
+    result = door["client"].post("/", json=tool_call(message="private words"), headers=bearer(token)).json()["result"]
+    assert result["isError"] is True and json.loads(result["content"][0]["text"])["status"] == code
+    (line,) = agent_wake.recent_audit()
+    assert (line["outcome"], line["sender"], line["target"]) == (code, "name-of-sess-a", "Design head")
+    assert line["message_bytes"] == len("private words")
+    assert "private" not in agent_wake.audit_file().read_text(encoding="utf-8")
+    assert door["calls"] == []
+
+
+def test_the_hourly_limit_is_audited_by_size_only(door):
+    _, token = launch(door, "sess-a")
+    for _ in range(relay_core.UNLINKED_LIMIT + 1):
+        door["client"].post("/", json=tool_call(message="private words"), headers=bearer(token))
+    *delivered, last = agent_wake.recent_audit()
+    assert delivered == [] and last["outcome"] == "rate_limited"
+    assert last["message_bytes"] == len("private words")
+    assert "private" not in agent_wake.audit_file().read_text(encoding="utf-8")
+    assert len(door["calls"]) == relay_core.UNLINKED_LIMIT
+
+
+def test_a_delivered_message_leaves_no_wake_audit_line(door):
+    _, token = launch(door, "sess-a")
+    door["client"].post("/", json=tool_call(), headers=bearer(token))
+    assert agent_wake.recent_audit() == []
 
 
 # --- launching Claude with the door ---------------------------------------------

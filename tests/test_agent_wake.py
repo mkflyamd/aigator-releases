@@ -380,14 +380,11 @@ async def test_a_rate_limited_wake_does_not_spoil_the_suspended_record(world):
 # --- the audit trail ----------------------------------------------------------
 
 
-async def test_every_attempt_that_reaches_a_target_leaves_an_audit_line_with_who_what_and_to_whom(world):
+async def test_a_delivery_leaves_an_audit_line_with_who_what_and_to_whom(world):
     suspend(world)
     await send(message="x" * 500)
-    world["resume_error"] = None
-    with pytest.raises(agent_wake.WakeRefused):
-        await send(target="nobody")
     lines = agent_wake.recent_audit()
-    assert len(lines) == 1  # the unknown name never reached a target
+    assert len(lines) == 1
     line = lines[0]
     assert line["sender"] == "Turn issues" and line["target"] == "Design head"
     assert line["outcome"] == "delivered"
@@ -395,12 +392,132 @@ async def test_every_attempt_that_reaches_a_target_leaves_an_audit_line_with_who
     assert line["at"].endswith("+00:00")
 
 
-async def test_a_failed_wake_is_in_the_audit_with_its_reason(world):
+async def test_a_failed_wake_is_in_the_audit_with_its_reason_and_the_size_of_the_message(world):
     suspend(world)
     world["resume_error"] = "The stored session is gone."
     with pytest.raises(agent_wake.WakeRefused):
+        await send(message="launch codes 1234")
+    line = agent_wake.recent_audit()[-1]
+    assert (line["outcome"], line["reason"]) == ("failed", "The stored session is gone.")
+    assert (line["sender"], line["target"]) == ("Turn issues", "Design head")
+    assert line["message_bytes"] == len("launch codes 1234")
+    assert line["at"].endswith("+00:00")
+
+
+def audited_refusal(world):
+    lines = agent_wake.recent_audit()
+    assert len(lines) == 1
+    return lines[0]
+
+
+async def test_a_refusal_never_keeps_the_message_text(world):
+    suspend(world)
+    for target, secret in (("nobody", "secret one"), ("Design head", "secret two")):
+        world["resume_error"] = "nope" if target == "Design head" else None
+        with pytest.raises(agent_wake.WakeRefused):
+            await send(target=target, message=secret)
+    text = agent_wake.audit_file().read_text(encoding="utf-8")
+    assert "secret" not in text
+    assert all("message" not in line for line in agent_wake.recent_audit())
+
+
+async def test_an_unknown_name_is_audited_as_not_found_with_the_target_as_typed(world):
+    with pytest.raises(agent_wake.WakeRefused):
+        await send(target="nobody", message="abc")
+    line = audited_refusal(world)
+    assert (line["outcome"], line["target"], line["message_bytes"]) == ("not_found", "nobody", 3)
+    assert line["sender"] == "Turn issues"
+
+
+async def test_another_projects_session_gets_the_same_answer_and_the_same_audit_as_an_unknown_one(world):
+    suspend(world, title="Hidden", session="s-other", project="other-project")
+    answers = []
+    for target in ("Hidden", "nobody"):
+        with pytest.raises(agent_wake.WakeRefused) as exc:
+            await send(target=target, message="abc")
+        answers.append(exc.value.as_result())
+    lines = agent_wake.recent_audit()
+    assert answers[0] == answers[1] and answers[0]["status"] == "not_found"
+    assert [line["target"] for line in lines] == ["Hidden", "nobody"]
+    assert {(line["outcome"], line["reason"], line["message_bytes"]) for line in lines} == {
+        ("not_found", answers[0]["reason"], 3)
+    }
+    assert world["resumed"] == [] and world["typed"] == []
+
+
+async def test_an_ambiguous_name_is_audited(world):
+    suspend(world, session="s-1")
+    suspend(world, session="s-2")
+    with pytest.raises(agent_wake.WakeRefused):
         await send()
-    assert "failed: The stored session is gone." == agent_wake.recent_audit()[-1]["outcome"]
+    assert audited_refusal(world)["outcome"] == "ambiguous"
+
+
+async def test_an_empty_oversized_or_self_addressed_message_is_audited_as_invalid(world):
+    suspend(world)
+    go_live(world, session=SENDER["session_id"], title="Turn issues")
+    for target, message in (("Design head", " "), ("Design head", "y" * (agent_wake.MESSAGE_MAX_BYTES + 1)), ("Turn issues", "hi")):
+        with pytest.raises(agent_wake.WakeRefused):
+            await send(target=target, message=message)
+    lines = agent_wake.recent_audit()
+    assert [line["outcome"] for line in lines] == ["invalid"] * 3
+    assert [line["message_bytes"] for line in lines] == [1, agent_wake.MESSAGE_MAX_BYTES + 1, 2]
+
+
+async def test_a_target_that_already_has_a_message_pending_is_audited_as_busy(world):
+    suspend(world)
+    agent_wake._in_flight.add(TARGET_SESSION)
+    with pytest.raises(agent_wake.WakeRefused):
+        await send()
+    assert audited_refusal(world)["outcome"] == "busy"
+
+
+async def test_a_rate_limited_sender_is_audited(world):
+    go_live(world)
+    for _ in range(agent_wake.SENDER_LIMIT):
+        await send()
+    with pytest.raises(agent_wake.WakeRefused):
+        await send()
+    last = agent_wake.recent_audit()[-1]
+    assert last["outcome"] == "rate_limited" and last["target"] == "Design head"
+
+
+async def test_an_agent_that_never_gets_ready_is_audited_as_not_ready(world):
+    suspend(world)
+    world["ready_ok"] = False
+    with pytest.raises(agent_wake.WakeRefused):
+        await send()
+    line = audited_refusal(world)
+    assert (line["outcome"], line["reason"]) == ("not_ready", "The agent is busy with a turn.")
+
+
+async def test_a_typed_target_is_one_short_clean_line(world):
+    with pytest.raises(agent_wake.WakeRefused):
+        await send(target="\x1b[31mred\x1b[0m\nline" + "z" * 500)
+    target = audited_refusal(world)["target"]
+    assert target.startswith("red line") and "\x1b" not in target and len(target) == agent_wake.NAME_MAX_CHARS
+
+
+async def test_a_refusal_leaves_earlier_audit_lines_exactly_as_they_were(world):
+    old = json.dumps({"at": "2026-11-26T00:00:00+00:00", "sender": "A", "target": "B", "outcome": "delivered", "message": "hi"})
+    agent_wake.audit_file().parent.mkdir(parents=True)
+    agent_wake.audit_file().write_text(old + "\n", encoding="utf-8")
+    with pytest.raises(agent_wake.WakeRefused):
+        await send(target="nobody")
+    assert agent_wake.audit_file().read_text(encoding="utf-8").splitlines()[0] == old
+
+
+def test_unauthorized_knocks_are_audited_once_a_minute(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_suspend, "STATE_FILE", tmp_path / "suspended-agents.json")
+    monkeypatch.setattr(agent_wake, "_last_unauthorized", float("-inf"))
+    for now in (100.0, 101.0, 159.0, 161.0):
+        agent_wake.audit_refusal(None, "", "unauthorized", "No token was sent.", "", now)
+    assert [line["at"] for line in agent_wake.recent_audit()] == [
+        "1970-01-01T00:01:40+00:00",
+        "1970-01-01T00:02:41+00:00",
+    ]
+    agent_wake.audit_refusal(None, "", "invalid", "x", "", 162.0)
+    assert len(agent_wake.recent_audit()) == 3
 
 
 async def test_the_audit_file_keeps_only_the_latest_lines(world, monkeypatch):

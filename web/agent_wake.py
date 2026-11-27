@@ -40,6 +40,7 @@ USER_TYPING_SECONDS = 20.0
 READY_POLL_SECONDS = 0.5
 PASTE_TO_ENTER_SECONDS = 0.4
 AUDIT_KEEP = 200
+UNAUTHORIZED_AUDIT_SECONDS = 60.0
 
 BRACKETED_PASTE_ON = "\x1b[?2004h"
 
@@ -50,6 +51,7 @@ _lock = threading.Lock()
 _audit_lock = threading.Lock()
 _in_flight: set[str] = set()
 _sent: dict[str, deque] = {}
+_last_unauthorized = float("-inf")
 
 
 class WakeRefused(Exception):
@@ -116,13 +118,51 @@ def _spend_sender_slot(sender_key: str, now: float) -> None:
 
 
 def _audit(sender: dict, target: dict | None, outcome: str, text: str, now: float) -> None:
-    line = {
-        "at": datetime.fromtimestamp(now, timezone.utc).isoformat(timespec="seconds"),
-        "sender": clean(sender.get("name", ""))[:NAME_MAX_CHARS],
-        "target": (target or {}).get("title") or (target or {}).get("session_id") or "",
-        "outcome": outcome,
-        "message": text[:PREVIEW_CHARS],
-    }
+    _write_audit(
+        {
+            "at": _stamp(now),
+            "sender": clean(sender.get("name", ""))[:NAME_MAX_CHARS],
+            "target": (target or {}).get("title") or (target or {}).get("session_id") or "",
+            "outcome": outcome,
+            "message": text[:PREVIEW_CHARS],
+        }
+    )
+
+
+def audit_refusal(sender: dict | None, target, code: str, reason: str, message, now: float | None = None) -> None:
+    """One audit line for an attempt that delivered nothing. The message text is never
+    kept, only its size: refused text may be sensitive. Blocking."""
+    now = time.time() if now is None else now
+    if code == "unauthorized" and not _unauthorized_due(now):
+        return
+    _write_audit(
+        {
+            "at": _stamp(now),
+            "sender": clean((sender or {}).get("name", ""))[:NAME_MAX_CHARS],
+            "target": clean(target)[:NAME_MAX_CHARS] if isinstance(target, str) else "",
+            "outcome": code,
+            "reason": reason,
+            "message_bytes": len(message.encode("utf-8")) if isinstance(message, str) else 0,
+        }
+    )
+
+
+def _stamp(now: float) -> str:
+    return datetime.fromtimestamp(now, timezone.utc).isoformat(timespec="seconds")
+
+
+def _unauthorized_due(now: float) -> bool:
+    """Anything on this machine can knock without a token, so those lines are kept to one
+    a minute: a flood must not push the real ones out of the trimmed file."""
+    global _last_unauthorized
+    with _lock:
+        if now - _last_unauthorized < UNAUTHORIZED_AUDIT_SECONDS:
+            return False
+        _last_unauthorized = now
+        return True
+
+
+def _write_audit(line: dict) -> None:
     path = audit_file()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -360,7 +400,15 @@ async def wake_and_deliver(
     """Deliver one message to the named agent, waking it first when it is suspended.
 
     `sender` is {"name", "session_id", "project_id"} as known to the front door. Raises
-    WakeRefused with a code and a reason when nothing was delivered."""
+    WakeRefused with a code and a reason when nothing was delivered; every refusal is audited."""
+    try:
+        return await _wake_and_deliver(sender, target, message, allow_cross_project)
+    except WakeRefused as exc:
+        await asyncio.to_thread(audit_refusal, sender, target, exc.code, exc.reason, message)
+        raise
+
+
+async def _wake_and_deliver(sender: dict, target: str, message: str, allow_cross_project: bool) -> dict:
     check_switches()
     frame(sender.get("name", ""), message)
     matches = await asyncio.to_thread(find_targets, target, sender.get("project_id"), allow_cross_project)
@@ -417,7 +465,6 @@ async def deliver_entry(sender: dict, entry: dict, message: str, *, spend_slot: 
                 entry["pty_id"],
                 {"reason": exc.reason, "message": clean(message)[:PREVIEW_CHARS], "sender": clean(sender.get("name", "")), "at": now},
             )
-        await asyncio.to_thread(_audit, sender, entry, f"{exc.code}: {exc.reason}", clean(message), now)
         raise
     finally:
         release(key)

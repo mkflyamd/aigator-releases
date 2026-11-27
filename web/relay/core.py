@@ -243,21 +243,24 @@ class Relay:
             self._canceled.discard(task.id)
             state, code, reason = TaskState.CANCELED, "canceled", "Stopped by the user."
         task.state, task.code, task.reason = state, code, reason
-        self._audit(
-            {
-                "at": iso(now),
-                "event": "message",
-                "task": task.id,
-                "context": task.context_id,
-                "sender": task.sender.id,
-                "target": task.target.id if task.target else "",
-                "state": state.value,
-                "code": code,
-                "reason": reason,
-                "hop": task.hop,
-                "message": task.text[:PREVIEW_CHARS],
-            }
-        )
+        line = {
+            "at": iso(now),
+            "event": "message",
+            "task": task.id,
+            "context": task.context_id,
+            "sender": task.sender.id,
+            "target": task.target.id if task.target else "",
+            "state": state.value,
+            "code": code,
+            "reason": reason,
+            "hop": task.hop,
+        }
+        # Text that was refused may be sensitive: only a delivered message keeps a preview.
+        if state is TaskState.WORKING:
+            line["message"] = task.text[:PREVIEW_CHARS]
+        else:
+            line["message_bytes"] = len(task.text.encode("utf-8"))
+        self._audit(line)
         return task.as_a2a()
 
     def _refuse(self, task: Task, code: str, reason: str, now: float, *, permanent: bool = True, **extra) -> dict:
