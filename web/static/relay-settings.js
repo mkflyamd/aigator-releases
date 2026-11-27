@@ -112,7 +112,7 @@
     const locked = !state.self_chat_admin_allows;
     const sub = locked
       ? 'Your administrator has turned this off.'
-      : 'Only your own private Teams or Slack chat. Messages to anyone else always wait for your approval.';
+      : 'Your permission for features that post to your own private Teams or Slack chat. Messages to anyone else always wait for your approval.';
     return el(
       'div',
       { className: 'srow' },
@@ -121,13 +121,13 @@
         { className: 'srow-info' },
         el('div', {
           className: 'srow-label',
-          textContent: 'Post to my own Teams and Slack chat without asking',
+          textContent: 'Allow posting to my own Teams and Slack chat',
         }),
         el('div', { className: 'srow-sub', textContent: sub }),
       ),
       toggle(
         'relay-self-chat-autosend',
-        'Post to my own Teams and Slack chat without asking',
+        'Allow posting to my own Teams and Slack chat',
         state.self_chat_autosend && !locked,
         locked,
         (on) => act('POST', '/api/relay/self-chat-autosend', { enabled: on }),

@@ -81,8 +81,8 @@ def user_allows_self_chat_autosend() -> bool:
 
 
 def self_chat_autosend_allowed() -> bool:
-    """True only when the administrator and the user both allow Gator to post to the user's own
-    Teams/Slack self-chat without asking. Off by default. Anything else stays draft-only."""
+    """True only when the administrator and the user both allow posting to the user's own
+    Teams/Slack self-chat. Off by default. Anything else stays draft-only."""
     return admin_allows_self_chat_autosend() and user_allows_self_chat_autosend()
 
 
