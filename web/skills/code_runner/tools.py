@@ -324,8 +324,8 @@ def _not_grantable_message(paths, reason: str | None = None) -> str:
     )
     return (
         "The sandbox cannot be given access to " + ", ".join(str(p) for p in paths) + " on this computer: "
-        f"{why} Nothing was run and no approval was asked. Do not request these folders again; use another "
-        "way to get the data (a copy in a folder the user owns), or tell the user it cannot be used."
+        f"{why} Nothing was run and no approval was asked. Do not request these folders again; write into OUTPUT_DIR "
+        "or use a copy in a folder the user owns, or tell the user it cannot be used."
     )
 
 
@@ -899,12 +899,12 @@ TOOL_DEFS = [
                 "extra_read_paths": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Absolute paths of existing files or folders outside OUTPUT_DIR the code must read. Needs the user's approval; request only what the task needs.",
+                    "description": "Absolute paths of existing files or folders outside OUTPUT_DIR the code must read. Needs the user's approval; request only what the task needs. These can never be granted, so do not ask: ~/.gator (only ~/.gator/outputs is allowed), the home folder, drive roots, system folders. For those, write into OUTPUT_DIR instead.",
                 },
                 "extra_write_paths": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Absolute paths of existing folders or files outside OUTPUT_DIR the code must write. Needs the user's approval.",
+                    "description": "Absolute paths of existing folders or files outside OUTPUT_DIR the code must write. Needs the user's approval. These can never be granted, so do not ask: ~/.gator (only ~/.gator/outputs is allowed), the home folder, drive roots, system folders. For those, write into OUTPUT_DIR instead.",
                 },
                 "network_hosts": {
                     "type": "array",

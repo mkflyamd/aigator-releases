@@ -197,6 +197,13 @@ def test_result_shaping_and_hint(env):
     assert _run("sleep 9", timeout=1)["error"] == "Command timed out after 1s."
 
 
+def test_a_timed_out_command_gets_no_exit_note_because_it_never_exited_on_its_own(env):
+    env.fake.result = sandbox.SandboxResult(-1, "Viewer at http://127.0.0.1:4173/\n", "", True)
+    r = _run("serve", timeout=1)
+    assert r["error"] == "Command timed out after 1s."
+    assert "exit_note" not in r
+
+
 def test_git_cwd_error_gets_hint(env):
     env.fake.result = sandbox.SandboxResult(128, "", "fatal: Unable to read current working directory: x\n", False)
     assert "[sandbox]" in _run("git status")["stderr"]
