@@ -139,7 +139,7 @@
     const off = offReason();
     let sub = 'Turn an agent off to stop other agents messaging it.';
     if (off) sub = `${off} Agents cannot be changed until it is on.`;
-    else if (!state.agents.length) sub = 'No Claude agents yet.';
+    else if (!state.agents.length) sub = 'No agents yet.';
     const head = el(
       'div',
       { className: 'srow' },

@@ -1,6 +1,6 @@
 """The front door agents use to wake each other: a small MCP server over HTTP.
 
-Each Claude agent Gator launches gets its own secret in GATOR_AGENT_TOKEN and an MCP
+Each agent Gator launches gets its own secret in GATOR_AGENT_TOKEN and an MCP
 config that sends it as a bearer token. Gator keeps token -> terminal, so who is
 asking always comes from that record and never from anything the agent writes.
 
@@ -26,6 +26,7 @@ import agent_state
 import agent_suspend
 import agent_wake
 import generic_agent
+from agent_capabilities import relayable
 from relay.model import META_KEY, TaskState, pty_endpoint
 from relay.service import get_relay
 
@@ -45,7 +46,7 @@ INSTRUCTIONS = (
 TOOL = {
     "name": TOOL_NAME,
     "description": (
-        "Send one message to another Claude agent session in this project, waking it if "
+        "Send one message to another agent session in this project, waking it if "
         "AI Gator suspended it. Name it by session name or session id. The recipient sees "
         "who sent it. Only existing sessions are woken."
     ),
@@ -102,7 +103,7 @@ def _update(change) -> None:
         _save_tokens()
 
 
-def issue(pty_id: str, project_id: str | None) -> str:
+def issue(pty_id: str, project_id: str | None, agent: str = "claude") -> str:
     """A new token for this terminal. A terminal that is launched again (a wake reuses
     its id) replaces its old token."""
     token = secrets.token_urlsafe(32)
@@ -110,10 +111,15 @@ def issue(pty_id: str, project_id: str | None) -> str:
     def add(tokens: dict) -> None:
         for key in [k for k, v in tokens.items() if v["pty_id"] == pty_id]:
             del tokens[key]
-        tokens[_digest(token)] = {"pty_id": pty_id, "project_id": project_id}
+        tokens[_digest(token)] = {"pty_id": pty_id, "project_id": project_id, **({} if agent == "claude" else {"agent": agent})}
 
     _update(add)
     return token
+
+
+def holds_token(pty_id: str) -> bool:
+    with _lock:
+        return any(v["pty_id"] == pty_id for v in _tokens.values())
 
 
 def revoke(pty_id: str) -> None:
@@ -163,24 +169,31 @@ def mcp_config_path() -> str:
     return str(path)
 
 
+def crush_mcp_line() -> str:
+    """The crushrc line that gives Crush the same door; the token is read from the environment at launch."""
+    url = f"http://127.0.0.1:{backend_port()}{MOUNT_PATH}/"
+    return f'mcp add {SERVER_NAME} --type http --url {url} --header Authorization "Bearer ${TOKEN_ENV}"'
+
+
 def serves(agent: str, command: list[str] | None) -> bool:
-    return agent == "claude" and bool(command) and not agent_state.is_wsl_command(command)
+    return relayable(agent) and bool(command) and not agent_state.is_wsl_command(command)
 
 
 def launch_env(agent: str, command: list[str] | None, pty_id: str, project_id: str | None) -> dict[str, str]:
-    return {TOKEN_ENV: issue(pty_id, project_id)} if serves(agent, command) else {}
+    return {TOKEN_ENV: issue(pty_id, project_id, agent)} if serves(agent, command) else {}
 
 
 def with_gator_mcp(agent: str, command: list[str] | None) -> list[str] | None:
-    if not serves(agent, command):
+    if agent != "claude" or not serves(agent, command):
         return command
     return [*command, "--mcp-config", mcp_config_path()]
 
 
 async def _sender(caller: dict) -> dict:
     """Who is asking, from Gator's own records of that terminal."""
-    session_id = generic_agent.linked_session_id(caller["pty_id"]) or ""
-    title = await asyncio.to_thread(agent_wake.title_of, caller["project_id"], "claude", session_id) if session_id else ""
+    session_id = generic_agent.linked_session_id(caller["pty_id"]) or agent_state.read_session(caller["pty_id"]) or ""
+    agent = caller.get("agent", "claude")
+    title = await asyncio.to_thread(agent_wake.title_of, caller["project_id"], agent, session_id) if session_id else ""
     return {
         "name": title or session_id[:8] or "another agent",
         "session_id": session_id,
