@@ -21,24 +21,29 @@ const code = [
   'baseName',
   'agentName',
   'agentState',
-  'agentContext',
+  'agentSummary',
+  'sortedAgents',
+  'agentShown',
+  'agentCounts',
   'pickerText',
   'endName',
   'untilText',
+  'pausedReason',
 ]
   .map(fn)
   .join('\n');
 
-function world(agents, tabs) {
+function world(agents, tabs, ui) {
   const ctx = {
     state: { agents },
+    ui: ui || { query: '', filter: 'all' },
     _genAgentTerminals: { k: { sessions: tabs || {} } },
     _genAgentLabel: (agent) => agent.charAt(0).toUpperCase() + agent.slice(1),
     Date,
   };
   vm.createContext(ctx);
   vm.runInContext(
-    `${code};\nthis.api = { agentName, agentContext, pickerText, endName, untilText };`,
+    `${code};\nthis.api = { agentName, agentSummary, sortedAgents, agentShown, agentCounts, pickerText, endName, untilText, pausedReason };`,
     ctx,
   );
   return ctx.api;
@@ -85,11 +90,47 @@ const agent = (id, extra) => ({
   agents.forEach((a) => assert(!/[0-9a-f]{8}/.test(api.agentName(a)), api.agentName(a)));
 }
 
-// context line is project and state
+// summary counts running, sleeping and blocked agents
 {
-  const sleeping = agent('aaaa1111', { state: 'suspended' });
-  const api = world([sleeping]);
-  assert.strictEqual(api.agentContext(sleeping), 'aigator-releases · Sleeping');
+  assert(/^No agents are open/.test(world([]).agentSummary()));
+  const one = agent('aaaa1111', { name: 'Opus' });
+  assert.strictEqual(
+    world([one]).agentSummary(),
+    '1 agent is open: 1 running, 0 sleeping. All accept messages.',
+  );
+  const sleeping = agent('bbbb2222', { name: 'Sonnet', state: 'suspended', opted_out: true });
+  assert.strictEqual(
+    world([one, sleeping]).agentSummary(),
+    '2 agents are open: 1 running, 1 sleeping. 1 blocked.',
+  );
+}
+
+// running first, then sleeping, then by name; the filter and search narrow the list
+{
+  const zed = agent('aaaa1111', { name: 'Zed' });
+  const abe = agent('bbbb2222', { name: 'Abe', state: 'suspended' });
+  const bob = agent('cccc3333', { name: 'Bob', opted_out: true });
+  const plain = (v) => JSON.parse(JSON.stringify(v));
+  const ids = (api) =>
+    plain(
+      api
+        .sortedAgents()
+        .filter(api.agentShown)
+        .map((a) => a.id),
+    );
+  assert.deepStrictEqual(ids(world([abe, zed, bob])), [bob.id, zed.id, abe.id]);
+  const sleepingOnly = world([zed, abe, bob], null, { query: '', filter: 'Sleeping' });
+  assert.deepStrictEqual(ids(sleepingOnly), [abe.id]);
+  const blockedOnly = world([zed, abe, bob], null, { query: '', filter: 'Blocked' });
+  assert.deepStrictEqual(ids(blockedOnly), [bob.id]);
+  const searched = world([zed, abe, bob], null, { query: ' ZE', filter: 'all' });
+  assert.deepStrictEqual(ids(searched), [zed.id]);
+  assert.deepStrictEqual(plain(world([zed, abe, bob]).agentCounts()), {
+    all: 3,
+    Running: 2,
+    Sleeping: 1,
+    Blocked: 1,
+  });
 }
 
 // the picker names the project only when agents from several projects are open
@@ -108,8 +149,15 @@ const agent = (id, extra) => ({
   const open = agent('aaaa1111', { name: 'Opus' });
   const api = world([open]);
   assert.strictEqual(api.endName({ id: open.id, name: 'old' }), 'Opus');
-  assert.strictEqual(api.endName({ id: 'pty:gone', name: 'Memory leak' }), 'Memory leak');
-  assert.strictEqual(api.endName({ id: 'pty:gone', name: '' }), 'A closed agent');
+  assert.strictEqual(api.endName({ id: 'pty:gone', name: 'Memory leak' }), 'Memory leak (closed)');
+  assert.strictEqual(api.endName({ id: 'pty:gone', name: '' }), 'Closed agent');
+}
+
+// pause reasons read as sentences
+{
+  const api = world([]);
+  assert.strictEqual(api.pausedReason({ paused: 'limit_reached' }), 'Hourly limit reached');
+  assert.strictEqual(api.pausedReason({ paused: 'repeated' }), 'Same message sent several times');
 }
 
 // the deadline names tomorrow when it is not today

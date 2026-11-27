@@ -4,7 +4,14 @@
   if (!root) return;
 
   const LINK_HOURS = [1, 4, 8, 24];
+  const FILTERS = [
+    ['all', 'All'],
+    ['Running', 'Running'],
+    ['Sleeping', 'Sleeping'],
+    ['Blocked', 'Blocked'],
+  ];
   let state = null;
+  const ui = { open: false, query: '', filter: 'all' };
 
   function el(tag, props, ...kids) {
     const node = document.createElement(tag);
@@ -80,8 +87,40 @@
     return a.state === 'suspended' ? 'Sleeping' : 'Running';
   }
 
-  function agentContext(a) {
-    return [a.project_id, agentState(a)].filter(Boolean).join(' · ');
+  function agentSummary() {
+    const n = state.agents.length;
+    if (!n) return 'No agents are open. Open one and it will show up here.';
+    const running = state.agents.filter((a) => agentState(a) === 'Running').length;
+    const blocked = state.agents.filter((a) => a.opted_out).length;
+    const open = n === 1 ? '1 agent is' : `${n} agents are`;
+    const tail = blocked ? `${blocked} blocked.` : 'All accept messages.';
+    return `${open} open: ${running} running, ${n - running} sleeping. ${tail}`;
+  }
+
+  // Running first, then Sleeping, then by name.
+  function sortedAgents() {
+    return [...state.agents].sort((a, b) => {
+      if (agentState(a) !== agentState(b)) return agentState(a) === 'Running' ? -1 : 1;
+      return agentName(a).localeCompare(agentName(b));
+    });
+  }
+
+  function agentShown(a) {
+    const q = ui.query.trim().toLowerCase();
+    if (q && !agentName(a).toLowerCase().includes(q)) return false;
+    if (ui.filter === 'Running' || ui.filter === 'Sleeping') return agentState(a) === ui.filter;
+    if (ui.filter === 'Blocked') return a.opted_out;
+    return true;
+  }
+
+  function agentCounts() {
+    const count = (test) => state.agents.filter(test).length;
+    return {
+      all: state.agents.length,
+      Running: count((a) => agentState(a) === 'Running'),
+      Sleeping: count((a) => agentState(a) === 'Sleeping'),
+      Blocked: count((a) => a.opted_out),
+    };
   }
 
   // The project is only worth saying when agents from more than one project are open.
@@ -93,7 +132,8 @@
   // A pair's ends are stored when the pair is made; show the live name while the agent is open.
   function endName(end) {
     const open = state.agents.find((a) => a.id === end.id);
-    return open ? agentName(open) : end.name || 'A closed agent';
+    if (open) return agentName(open);
+    return end.name ? `${end.name} (closed)` : 'Closed agent';
   }
 
   function untilText(iso) {
@@ -179,11 +219,115 @@
     );
   }
 
-  function agentRows() {
+  function dot(kind) {
+    const node = el('span', { className: `relay-dot relay-dot-${kind}` });
+    node.setAttribute('aria-hidden', 'true');
+    return node;
+  }
+
+  function agentRow(a, off) {
+    return el(
+      'div',
+      { className: 'relay-agent-row' },
+      el('span', { className: 'relay-agent-name', textContent: pickerText(a) }),
+      el(
+        'span',
+        { className: 'relay-agent-state' },
+        dot(agentState(a).toLowerCase()),
+        agentState(a),
+      ),
+      toggle(
+        `relay-accepts-${a.id}`,
+        `Accepts messages for ${agentName(a)}`,
+        !a.opted_out,
+        Boolean(off),
+        (on) => act('POST', '/api/relay/opt-out', { endpoint_id: a.id, opted_out: !on }),
+      ),
+    );
+  }
+
+  function agentsPanel(off) {
+    const search = el('input', {
+      type: 'search',
+      id: 'relay-agent-search',
+      className: 'llm-select relay-agent-search',
+      placeholder: 'Find an agent',
+      value: ui.query,
+    });
+    search.setAttribute('aria-label', 'Find an agent');
+    const chips = el('div', { className: 'seg-group seg-sm' });
+    const chipFor = {};
+    FILTERS.forEach(([value, label]) => {
+      const chip = el('button', { className: 'seg-btn', type: 'button' });
+      chip.addEventListener('click', () => {
+        ui.filter = value;
+        fillList();
+      });
+      chipFor[value] = chip;
+      chips.append(chip);
+    });
+    const count = el('span', { className: 'relay-agent-count' });
+    count.setAttribute('aria-live', 'polite');
+    const list = el('div', { className: 'relay-agent-list', id: 'relay-agents-list', tabIndex: 0 });
+    list.setAttribute('role', 'region');
+    list.setAttribute('aria-label', 'Agents');
+    const fillList = () => {
+      const counts = agentCounts();
+      FILTERS.forEach(([value, label]) => {
+        const chip = chipFor[value];
+        const number = counts[value === 'all' ? 'all' : value];
+        chip.textContent = `${label} ${number}`;
+        chip.classList.toggle('active', ui.filter === value);
+        chip.setAttribute('aria-pressed', String(ui.filter === value));
+      });
+      const shown = sortedAgents().filter(agentShown);
+      count.textContent = `${shown.length} of ${state.agents.length} agents`;
+      list.replaceChildren(
+        ...(shown.length
+          ? shown.map((a) => agentRow(a, off))
+          : [
+              el('div', {
+                className: 'srow-sub relay-agent-empty',
+                textContent: 'No agent matches. Clear the search or choose All.',
+              }),
+            ]),
+      );
+    };
+    search.addEventListener('input', () => {
+      ui.query = search.value;
+      fillList();
+    });
+    fillList();
+    return el(
+      'div',
+      { className: 'relay-agents-panel', id: 'relay-agents-panel' },
+      search,
+      chips,
+      el(
+        'div',
+        { className: 'relay-agent-countline' },
+        count,
+        el('span', { textContent: 'Accepts messages' }),
+      ),
+      list,
+    );
+  }
+
+  function agentsBlock() {
     const off = offReason();
-    let sub = 'Turn an agent off to stop other agents messaging it.';
-    if (off) sub = `${off} Agents cannot be changed until it is on.`;
-    else if (!state.agents.length) sub = 'No agents are open. Open one and it will show up here.';
+    const open = ui.open && !off && state.agents.length > 0;
+    const manage = el('button', {
+      className: 'btn-secondary',
+      id: 'relay-manage-agents',
+      textContent: open ? 'Done' : 'Manage agents',
+      disabled: Boolean(off) || !state.agents.length,
+    });
+    manage.setAttribute('aria-expanded', String(open));
+    manage.setAttribute('aria-controls', 'relay-agents-panel');
+    manage.addEventListener('click', () => {
+      ui.open = !ui.open;
+      render();
+    });
     const head = el(
       'div',
       { className: 'srow' },
@@ -191,37 +335,46 @@
         'div',
         { className: 'srow-info' },
         el('div', { className: 'srow-label', textContent: 'Agents' }),
-        el('div', { className: 'srow-sub', textContent: sub }),
+        el('div', {
+          className: 'srow-sub',
+          textContent: off ? `${off} Agents cannot be changed until it is on.` : agentSummary(),
+        }),
       ),
+      el('div', { className: 'srow-actions' }, manage),
     );
-    const rows = state.agents.map((a) =>
-      el(
-        'div',
-        { className: 'srow' },
-        el(
+    if (open) return [head, agentsPanel(off)];
+    const blocked = sortedAgents().filter((a) => a.opted_out);
+    return [
+      head,
+      ...blocked.map((a) => {
+        const again = el('button', {
+          className: 'btn-secondary',
+          textContent: 'Allow again',
+          disabled: Boolean(off),
+        });
+        again.dataset.key = `allow-${a.id}`;
+        again.setAttribute('aria-label', `Allow messages to ${agentName(a)} again`);
+        again.addEventListener('click', () =>
+          act('POST', '/api/relay/opt-out', { endpoint_id: a.id, opted_out: false }),
+        );
+        return el(
           'div',
-          { className: 'srow-info' },
-          el('div', { className: 'srow-label', textContent: agentName(a) }),
-          el('div', {
-            className: 'srow-sub',
-            textContent: `${agentContext(a)} · Accepts messages from other agents`,
-          }),
-        ),
-        toggle(
-          `relay-accepts-${a.id}`,
-          `Accepts messages for ${agentName(a)}`,
-          !a.opted_out,
-          Boolean(off),
-          (on) => act('POST', '/api/relay/opt-out', { endpoint_id: a.id, opted_out: !on }),
-        ),
-      ),
-    );
-    return [head, ...rows];
+          { className: 'srow' },
+          el(
+            'div',
+            { className: 'srow-info' },
+            el('div', { className: 'srow-label', textContent: pickerText(a) }),
+            el('div', { className: 'srow-sub' }, dot('blocked'), 'Blocked'),
+          ),
+          el('div', { className: 'srow-actions' }, again),
+        );
+      }),
+    ];
   }
 
   function pausedReason(l) {
-    if (l.paused === 'limit_reached') return 'hourly limit reached';
-    return 'same message sent several times';
+    if (l.paused === 'limit_reached') return 'Hourly limit reached';
+    return 'Same message sent several times';
   }
 
   function linkRows() {
@@ -271,12 +424,14 @@
             className: 'srow-label',
             textContent: `${endName(l.a)} and ${endName(l.b)}`,
           }),
-          el('div', {
-            className: 'srow-sub',
-            textContent: l.paused
-              ? `Paused: ${pausedReason(l)} · Allowed until ${untilText(l.expires_at)}`
-              : `Allowed until ${untilText(l.expires_at)}`,
-          }),
+          el(
+            'div',
+            { className: 'srow-sub' },
+            dot(l.paused ? 'paused' : 'allowed'),
+            l.paused
+              ? `Paused · ${pausedReason(l)} · Ends at ${untilText(l.expires_at)}`
+              : `Allowed · Can message each other until ${untilText(l.expires_at)}`,
+          ),
         ),
         el('div', { className: 'srow-actions' }, ...buttons),
       );
@@ -344,7 +499,7 @@
       );
     }
     if (state.links.length) {
-      const endAll = el('button', { className: 'btn-secondary', textContent: 'Remove all' });
+      const endAll = el('button', { className: 'btn-secondary', textContent: 'Remove all pairs' });
       endAll.addEventListener('click', () => act('POST', '/api/relay/stop-all'));
       rows.push(el('div', { className: 'srow' }, el('div', { className: 'srow-actions' }, endAll)));
     }
@@ -371,9 +526,12 @@
     }
     const active = root.contains(document.activeElement) ? document.activeElement : null;
     const key = active && (active.id || active.dataset.key);
+    const scrolled = root.querySelector('#relay-agents-list')?.scrollTop || 0;
     const endKeys = () => [...root.querySelectorAll('[data-key^="end-"]')];
     const endIndex = key && key.startsWith('end-') ? endKeys().indexOf(active) : -1;
-    root.replaceChildren(switchRow(), ...agentRows(), ...linkRows(), selfChatRow());
+    root.replaceChildren(switchRow(), ...agentsBlock(), ...linkRows(), selfChatRow());
+    const box = root.querySelector('#relay-agents-list');
+    if (box) box.scrollTop = scrolled;
     if (!key) return;
     const find = (k) =>
       [...root.querySelectorAll('[id], [data-key]')].find((n) => n.id === k || n.dataset.key === k);
