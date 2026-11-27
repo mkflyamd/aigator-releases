@@ -10,6 +10,7 @@ import time
 from dataclasses import dataclass
 from typing import Awaitable, Callable
 
+from remote.guard import limit
 from remote.session_host import HostError, Project, SessionHost
 
 _log = logging.getLogger(__name__)
@@ -55,8 +56,10 @@ class RemoteService:
         host: SessionHost,
         default_project: Callable[[], Project | None],
         clock: Callable[[], float] = time.time,
-        idle_seconds: float = IDLE_SECONDS,
+        idle_seconds: float | Callable[[], float] = IDLE_SECONDS,
+        channel: str = "default",
     ):
+        self._channel = channel
         self._host = host
         self._default_project = default_project
         self._clock = clock
@@ -102,17 +105,42 @@ class RemoteService:
             n += 1
         return f"{base}-{n}"
 
-    async def start(self, project: Project, text: str) -> Session:
+    async def restore(self) -> None:
+        """Rebuilds the session table from the host after a backend restart. Raises
+        RemoteError when the host cannot be asked, so the caller retries rather than
+        treat the table as empty."""
         try:
-            spawned = await self._host.spawn(project)
+            restored = await self._host.restore(self._channel)
         except HostError as exc:
             raise RemoteError(str(exc)) from exc
         now = self._clock()
+        for r in restored:
+            session_id = f"pty:{r.pty_id}"
+            if session_id in self._sessions:
+                continue
+            self._sessions[session_id] = Session(
+                id=session_id,
+                pty_id=r.pty_id,
+                project=r.project,
+                short=r.short,
+                vendor_session_id=r.vendor_session_id,
+                created_at=r.created_at or now,
+                last_activity=now,
+            )
+
+    async def start(self, project: Project, text: str) -> Session:
+        now = self._clock()
+        short = self._short_for(project)
+        labels = {"remote_channel": self._channel, "remote_short": short, "remote_created": str(now)}
+        try:
+            spawned = await self._host.spawn(project, labels)
+        except HostError as exc:
+            raise RemoteError(str(exc)) from exc
         session = Session(
             id=f"pty:{spawned.pty_id}",
             pty_id=spawned.pty_id,
             project=project,
-            short=self._short_for(project),
+            short=short,
             vendor_session_id=spawned.vendor_session_id,
             created_at=now,
             last_activity=now,
@@ -181,7 +209,7 @@ class RemoteService:
                 self._sessions.pop(session.id, None)
                 await self._emit("failed", session, "The agent process exited.")
                 continue
-            if self._clock() - session.last_activity >= self._idle:
+            if self._clock() - session.last_activity >= limit(self._idle):
                 try:
                     await self.stop(session.id)
                 except RemoteError:

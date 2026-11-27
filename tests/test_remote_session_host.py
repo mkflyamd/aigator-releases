@@ -15,7 +15,7 @@ class _Entry:
 
 
 def _host_with_reply(monkeypatch, reply):
-    monkeypatch.setattr(terminal, "get_pty_session", lambda sid: _Entry())
+    monkeypatch.setattr(terminal, "session_owner", lambda sid: _Entry.meta)
     monkeypatch.setattr(projects, "get_project", lambda name: {"repo_path": "C:/repo/demo"})
     monkeypatch.setattr(agent_sessions, "find_session", lambda repo, agent, sid: object())
     monkeypatch.setattr(agent_sessions, "_transcript_messages", lambda rec: [("user", "q"), ("assistant", reply)])

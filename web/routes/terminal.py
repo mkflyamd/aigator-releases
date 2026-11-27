@@ -115,7 +115,14 @@ def _adopt_pty_session(session_id: str) -> PtySession | None:
         return entry
 
 
-def _list_host_sessions() -> list[dict]:
+class HostUnreachable(Exception):
+    """The PTY host is running but did not answer, so what it holds is unknown."""
+
+
+def _list_host_sessions(strict: bool = False) -> list[dict]:
+    """Sessions the host holds. A host that is off, or that never ran, holds none. A
+    host that does not answer yields none too, unless `strict`, which raises
+    HostUnreachable so a caller can tell "no sessions" from "could not ask"."""
     if not pty_client.host_enabled():
         return []
     info = pty_client.find_host(pty_client.instance_key())
@@ -125,23 +132,33 @@ def _list_host_sessions() -> list[dict]:
         return pty_client.host_request(info, {"op": "list"}).get("sessions", [])
     except pty_client.HostError:
         logger.warning("could not ask the PTY host for sessions", exc_info=True)
+        if strict:
+            raise HostUnreachable("the PTY host did not answer") from None
         return []
 
 
-def host_session_labels(session_id: str) -> dict:
+def host_sessions() -> list[dict]:
+    """Every session the PTY host holds. Raises HostUnreachable when the host does not
+    answer. Blocking."""
+    return _list_host_sessions(strict=True)
+
+
+def host_session_labels(session_id: str, strict: bool = False) -> dict:
     """The labels the host holds for one session (empty if unknown). Blocking."""
-    for s in _list_host_sessions():
+    for s in _list_host_sessions(strict):
         if s["id"] == session_id:
             return s.get("meta") or {}
     return {}
 
 
-def session_owner(session_id: str) -> dict[str, str] | None:
+def session_owner(session_id: str, strict: bool = False) -> dict[str, str] | None:
     """The project and agent labels a session was created with, or None when they
     are unknown. A session this backend created carries them; one adopted from the
-    PTY host after a restart is looked up there. Blocking (loopback socket)."""
+    PTY host after a restart is looked up there. With `strict`, a host that does
+    not answer raises HostUnreachable instead of reading as "no labels".
+    Blocking (loopback socket)."""
     meta = getattr(_pty_sessions.get(session_id), "meta", None)
-    return meta or host_session_labels(session_id) or None
+    return meta or host_session_labels(session_id, strict) or None
 
 
 def find_host_session(owner: dict[str, str]) -> str | None:

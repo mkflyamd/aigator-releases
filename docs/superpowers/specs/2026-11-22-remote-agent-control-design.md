@@ -45,6 +45,8 @@ Owns headless sessions. A remote session is a PTY registered in `web/routes/term
 - `SessionHost` and `LocalPtyHost` live in their own module (`web/remote/session_host.py`), so the cross-agent relay's terminal adapter can wrap them later.
 - Pinned sessions are exempt from the viewer-based reaper. A pinned session ends on `stop`, process exit, or after `remote_session_idle_hours` (default 8) with no input or output.
 - Opening the Code tab on a pinned session attaches to it and replays `output_buf`, as it does today.
+- Restart survival: the PTY host keeps the PTYs running when the backend restarts. At spawn each remote session is labelled on the host with its channel, short name and start time, beside the existing `remote_pinned`, `project_id` and vendor `session_id` labels. After a restart the service rebuilds its sessions from those labels, keeping those of its own channel whose project still exists and whose process has not exited, and the command layer waits for that before running any command. If the host does not answer, nothing is rebuilt and the next poll tries again; this is reported as a host error, never as "no sessions".
+- Closing a terminal in the Code tab is refused with an error, and the session left open, when the host cannot be asked whether the terminal is a remote session.
 
 `SessionHost` is the interface the service calls for spawn, write, read-output, kill and liveness. `LocalPtyHost` wraps the existing PTY registry. A later server tier adds another host without touching the service or API.
 
@@ -127,7 +129,11 @@ Teams and Slack messages to the user's own self-chat may auto-send (PR #189 reco
 
 ### Settings
 
-Replaces the "Teams remote control" toggle with "Remote control" with per-channel switches (Teams, Slack), `remote_default_project`, `remote_session_idle_hours`, `remote_stale_minutes`. The existing `teams_remote_control_enabled` value is read as the Teams switch.
+The "Remote control" section holds per-channel switches (Teams, Slack), a default project, and three limits. Values are saved through `PATCH /api/config` and checked before they are stored.
+
+- `teams_remote_control_enabled`, `slack_remote_control_enabled`: booleans. The existing Teams value is the Teams switch.
+- `remote_default_project`: chosen from a dropdown of existing projects, or left on "Active project". A name that is not a project is rejected on save. If the chosen project is later deleted, a command that needs it is refused with `[Gator] The default project "X" no longer exists. Choose another in Settings, then resend.` and does not fall back to the active project.
+- `remote_session_idle_hours` (default 8, 1 to 72), `remote_stale_minutes` (default 15, 1 to 120), `remote_armed_max_hours` (default 24, 1 to 168). Each is read when it is used, so a change applies to running sessions without a restart. A stored value that is not valid falls back to its default.
 
 ## Compatibility with the current `/code` path
 
@@ -147,7 +153,7 @@ Agent-initiated messages stay same-project only and go through `web/agent_mcp.py
 4. Closing the Code tab does not end a remotely started session. It ends on `@gator stop`, process exit, or the idle limit.
 5. A message sent while Gator was off is run once if newer than 15 minutes and skipped with a notice otherwise. A Gator restart never runs the same message twice.
 6. Gator posts only into the user's own self-chat, verified before each post, and its own posts never trigger a command, by prefix and by recorded message id.
-   6a. A session keeps its id and its vendor session id across a backend restart, and `@gator <name>` resumes it.
+   6a. A remote session survives a backend restart. `@gator list` shows it under the same short name and `@gator <name> <text>` reaches it. Sessions that have exited are dropped.
    6b. More than 20 commands in 10 minutes are rate limited, `@gator stop all` disarms remote control, and remote control disarms at the absolute cap.
 7. Every new mutating route uses `verify_csrf`, and `tests/test_csrf_route_inventory.py` passes with no baseline changes.
 8. Opening the Code tab later attaches to the live session and shows its recent output.

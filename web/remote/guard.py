@@ -18,13 +18,18 @@ RATE_WINDOW_SECONDS = 600.0
 ARMED_MAX_SECONDS = 24 * 3600.0
 
 
+def limit(value: float | Callable[[], float]) -> float:
+    """A limit that is either fixed or read fresh each time (from Settings)."""
+    return value() if callable(value) else value
+
+
 class Guard:
     def __init__(
         self,
         clock: Callable[[], float] = time.time,
         rate_limit: int = RATE_LIMIT,
         rate_window: float = RATE_WINDOW_SECONDS,
-        armed_max_seconds: float = ARMED_MAX_SECONDS,
+        armed_max_seconds: float | Callable[[], float] = ARMED_MAX_SECONDS,
     ):
         self._clock = clock
         self._rate_limit = rate_limit
@@ -43,7 +48,7 @@ class Guard:
         self._armed_at = None
 
     def expired(self) -> bool:
-        return self._armed_at is not None and self._clock() - self._armed_at >= self._armed_max
+        return self._armed_at is not None and self._clock() - self._armed_at >= limit(self._armed_max)
 
     @property
     def armed(self) -> bool:

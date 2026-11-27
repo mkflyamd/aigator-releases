@@ -33,8 +33,18 @@ class HostSession:
     vendor_session_id: str | None = None
 
 
+@dataclass(frozen=True)
+class RestoredSession:
+    pty_id: str
+    project: Project
+    short: str
+    vendor_session_id: str | None
+    created_at: float
+
+
 class SessionHost(Protocol):
-    async def spawn(self, project: Project) -> HostSession: ...
+    async def spawn(self, project: Project, labels: dict[str, str] | None = None) -> HostSession: ...
+    async def restore(self, channel: str) -> list[RestoredSession]: ...
     async def deliver(self, pty_id: str, text: str) -> None: ...
     async def alive(self, pty_id: str) -> bool: ...
     async def kill(self, pty_id: str) -> None: ...
@@ -47,7 +57,7 @@ class LocalPtyHost:
     """Headless Claude Code sessions in this machine's PTY registry, pinned so neither the
     Code tab closing nor the idle-suspend sweep ends them."""
 
-    async def spawn(self, project: Project) -> HostSession:
+    async def spawn(self, project: Project, labels: dict[str, str] | None = None) -> HostSession:
         import generic_agent
         from fastapi import HTTPException
         from routes import generic_agent_routes
@@ -56,11 +66,54 @@ class LocalPtyHost:
             agent=project.agent, project_id=project.id, repo_path=project.repo_path, force_new=True
         )
         try:
-            result = await generic_agent_routes.open_pinned_terminal(req)
+            result = await generic_agent_routes.open_pinned_terminal(req, labels)
         except HTTPException as exc:
             raise HostError(f"Could not start {project.agent}: {exc.detail}") from exc
         pty_id = result["pty_session_id"]
         return HostSession(pty_id=pty_id, vendor_session_id=generic_agent.linked_session_id(pty_id))
+
+    async def restore(self, channel: str) -> list[RestoredSession]:
+        """The live remote sessions this channel started, read from the PTY host's labels.
+        They outlive a backend restart; the labels carry what the backend forgot."""
+        return await asyncio.to_thread(self._restore, channel)
+
+    @staticmethod
+    def _restore(channel: str) -> list[RestoredSession]:
+        from routes import terminal
+        from skills.code_agent.projects import get_project
+
+        try:
+            listed = terminal.host_sessions()
+        except terminal.HostUnreachable as exc:
+            raise HostError("The terminal host did not answer.") from exc
+        found = []
+        for entry in listed:
+            meta = entry.get("meta") or {}
+            if entry.get("done") or meta.get("remote_pinned") != "1" or meta.get("remote_channel") != channel:
+                continue
+            project = get_project(meta.get("project_id") or "")
+            if not project or not project.get("repo_path") or not meta.get("remote_short"):
+                _log.warning("remote session %s has no project or name to restore; left running", entry.get("id"))
+                continue
+            try:
+                created = float(meta.get("remote_created") or 0)
+            except ValueError:
+                created = 0.0
+            found.append(
+                RestoredSession(
+                    pty_id=entry["id"],
+                    project=Project(
+                        id=project["name"],
+                        name=project["name"],
+                        repo_path=project["repo_path"],
+                        agent=meta.get("agent") or AGENT,
+                    ),
+                    short=meta["remote_short"],
+                    vendor_session_id=meta.get("session_id"),
+                    created_at=created,
+                )
+            )
+        return found
 
     async def deliver(self, pty_id: str, text: str) -> None:
         import agent_wake
@@ -99,8 +152,7 @@ class LocalPtyHost:
         from routes import terminal
         from skills.code_agent.projects import get_project
 
-        entry = terminal.get_pty_session(pty_id)
-        meta = (entry.meta if entry else None) or {}
+        meta = terminal.session_owner(pty_id) or {}
         repo = (get_project(meta.get("project_id") or "") or {}).get("repo_path")
         if not repo or not meta.get("session_id"):
             return ""
