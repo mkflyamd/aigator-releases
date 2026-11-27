@@ -191,6 +191,27 @@ async def test_link_hourly_limit_pauses_the_link_until_resumed(world):
     assert state_of(await world.relay.send_on_link(link.id, A, "again")) == WORKING
 
 
+async def test_resuming_a_limit_paused_link_inside_the_hour_lets_messages_through(world):
+    link = world.relay.create_link(A, B)
+    for i in range(core.LINK_LIMIT):
+        await world.relay.send_on_link(link.id, A, f"m{i}")
+    assert code_of(await world.relay.send_on_link(link.id, A, "over")) == "limit_reached"
+    assert world.relay.resume_link(link.id)
+    assert state_of(await world.relay.send_on_link(link.id, A, "after resume")) == WORKING
+    for i in range(core.LINK_LIMIT - 1):
+        assert state_of(await world.relay.send_on_link(link.id, A, f"n{i}")) == WORKING
+    assert code_of(await world.relay.send_on_link(link.id, A, "over again")) == "limit_reached"
+
+
+async def test_resuming_a_repeat_paused_link_inside_the_hour_lets_a_new_message_through(world):
+    link = world.relay.create_link(A, B)
+    for _ in range(3):
+        await world.relay.send_on_link(link.id, A, "ping")
+    assert world.relay.links()[0]["paused"] == "repeated"
+    assert world.relay.resume_link(link.id)
+    assert state_of(await world.relay.send_on_link(link.id, A, "something else")) == WORKING
+
+
 async def test_same_message_over_and_over_pauses_the_link(world):
     link = world.relay.create_link(A, B)
     assert state_of(await world.relay.send_on_link(link.id, A, "ping")) == WORKING
