@@ -78,9 +78,14 @@ Channel-independent. The grammar is `@gator <command or text>`. A message is a c
 
 Short names are the addressing scheme. A session is named after its project (`budget`), with `-2`, `-3` added when a project has more than one live session (`budget-2`). A Gator chat tab is addressed by its tab name, in the same namespace. If a tab name collides with a session short name, the command is refused with the list. The default project is a Settings value (`remote_default_project`), falling back to the active project. When the default project has more than one live session and no name is given, the command is refused with the list.
 
-Input is trimmed, capped at 4096 bytes and sent as one line plus Enter. Replies longer than 3500 characters are truncated with "(truncated, N more characters)".
+Input is trimmed, capped at 4096 bytes and sent as one line plus Enter.
 
-The command layer posts a reply when a session emits `completed` (agent finished its turn) or `input-required` (agent is asking the user something), containing the agent's last message. Tool-by-tool progress is not posted. Each reply starts with `[Gator - <agent> - <project>]`, for example `[Gator - Claude - budget]`.
+The command layer posts a reply when a session emits `completed` (agent finished its turn) or `input-required` (agent is asking the user something), containing the agent's last message with its line breaks. Tool-by-tool progress is not posted. Each reply starts with `[Gator - <agent> - <project>]`, for example `[Gator - Claude - budget]`, followed by the outcome on the same line and the agent's words on the next:
+
+- Done: `Done.` then the reply. Waiting: `Waiting for your answer.` then the question.
+- No text read back: `Done. No text came back. Open the <agent> tab in AI Gator.` A bare `Done.` is never sent.
+- Process exited: `The agent process exited. Send a message to start a new session.`
+- Replies over 3,500 characters stay one message. The first line carries the agent's first sentence (up to 200 characters), the body is cut at a paragraph or line boundary in the last half of the 3,500 characters (else at whitespace, never inside a word), an open code fence is closed, and the last line is `Trimmed, <n> more characters. Open the <agent> tab in AI Gator for the full reply.` Slack recommends at most 4,000 characters in `text` and Teams allows about 100 KB, so one message stays within both.
 
 ### Channel adapters
 

@@ -112,8 +112,9 @@ def _last_value(objs: list[dict], typ: str, field: str) -> str:
     return ""
 
 
-def _claude_message(o: dict):
-    """(role, one-line text) for a real user or assistant turn, else None."""
+def _claude_message(o: dict, flat: bool = True):
+    """(role, one-line text) for a real user or assistant turn, else None. flat=False keeps
+    the line breaks of an assistant turn."""
     if o.get("type") not in ("user", "assistant") or o.get("isMeta"):
         return None
     msg = o.get("message")
@@ -129,11 +130,14 @@ def _claude_message(o: dict):
     else:
         return None
     text = "\n".join(parts)
-    text = real_user_text(text) if o["type"] == "user" else " ".join(text.split())
+    if o["type"] == "user":
+        text = real_user_text(text)
+    else:
+        text = " ".join(text.split()) if flat else text.strip()
     return (o["type"], text) if text else None
 
 
-def _codex_message(o: dict):
+def _codex_message(o: dict, flat: bool = True):
     if o.get("type") != "response_item":
         return None
     p = o.get("payload")
@@ -151,7 +155,7 @@ def _codex_message(o: dict):
             return None
         text = real_user_text(text)
     else:
-        text = " ".join(text.split())
+        text = " ".join(text.split()) if flat else text.strip()
     return (p["role"], text) if text else None
 
 
@@ -532,6 +536,14 @@ def _transcript_messages(rec: dict) -> list[tuple[str, str]]:
     path = Path(rec["path"])
     extract = _claude_message if rec["agent"] == "claude" else _codex_message
     return [m for m in map(extract, _read_tail(path, path.stat().st_size)) if m]
+
+
+def last_assistant_text(rec: dict) -> str:
+    """The agent's latest reply with its line breaks, or "" when there is none yet."""
+    path = Path(rec["path"])
+    extract = _claude_message if rec["agent"] == "claude" else _codex_message
+    pairs = [m for m in (extract(o, flat=False) for o in _read_tail(path, path.stat().st_size)) if m]
+    return next((text for role, text in reversed(pairs) if role == "assistant"), "")
 
 
 def _store_messages(rec: dict) -> list[tuple[str, str]]:

@@ -25,10 +25,10 @@ HELP = (
     "Commands: `@gator <text>` runs it in your Claude session. `@gator <name> <text>` picks a session. "
     "`@gator list`, `@gator status [name]`, `@gator stop [name]`, `@gator stop all`, `@gator help`."
 )
-_EVENT_TEXT = {
+_HEADLINES = {
     "completed": "Done.",
     "input-required": "Waiting for your answer.",
-    "failed": "The agent process exited.",
+    "failed": "The agent process exited. Send a message to start a new session.",
     "canceled": "Stopped.",
 }
 
@@ -217,8 +217,11 @@ class RemoteRunner:
         await self._post(commands.agent_reply(AGENT_LABEL, session.short, text))
 
     async def _on_event(self, event: Event) -> None:
-        text = event.text.strip() or _EVENT_TEXT.get(event.kind, event.kind)
-        await self._ack(event.session, text)
+        headline = _HEADLINES.get(event.kind, event.kind)
+        if event.kind in ("completed", "input-required"):
+            await self._post(commands.agent_result(AGENT_LABEL, event.session.short, headline, event.text))
+        else:
+            await self._ack(event.session, headline)
 
     async def tick(self) -> None:
         if self._guard.expired():

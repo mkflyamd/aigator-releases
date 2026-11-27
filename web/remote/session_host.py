@@ -166,11 +166,10 @@ class LocalPtyHost:
                 time.sleep(_TRANSCRIPT_WAIT)
             try:
                 rec = agent_sessions.find_session(repo, meta.get("agent") or AGENT, meta["session_id"])
-                pairs = agent_sessions._transcript_messages(rec) if rec else []
+                text = agent_sessions.last_assistant_text(rec) if rec else ""
             except Exception:
                 _log.warning("could not read the transcript for %s", pty_id, exc_info=True)
                 return ""
-            text = next((t for role, t in reversed(pairs) if role == "assistant"), "")
             if text:
                 break
         if not text:

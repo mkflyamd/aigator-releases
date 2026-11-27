@@ -391,7 +391,7 @@ async def test_completed_turn_posts_the_agent_reply(w):
     w.host.states["pty-1"] = {"state": "idle", "at": w.clock.now + 5}
     w.host.last["pty-1"] = "Two files are open."
     await w.runner.tick()
-    assert w.channel.posted[-1] == "[Gator - Claude - budget] Two files are open."
+    assert w.channel.posted[-1] == "[Gator - Claude - budget] Done.\nTwo files are open."
 
 
 async def test_a_question_from_the_agent_is_forwarded(w):
@@ -400,8 +400,7 @@ async def test_a_question_from_the_agent_is_forwarded(w):
     w.host.states["pty-1"] = {"state": "asking", "at": w.clock.now + 5}
     w.host.last["pty-1"] = "Delete the folder?"
     await w.runner.tick()
-    assert "Delete the folder?" in w.channel.posted[-1]
-    assert w.channel.posted[-1].startswith("[Gator - Claude - budget]")
+    assert w.channel.posted[-1] == "[Gator - Claude - budget] Waiting for your answer.\nDelete the folder?"
 
 
 async def test_an_agent_that_exits_is_reported(w):
@@ -409,7 +408,18 @@ async def test_an_agent_that_exits_is_reported(w):
     await w.feed(w.msg(101, "@gator go"))
     w.host.alive_ids.clear()
     await w.runner.tick()
-    assert "exited" in w.channel.posted[-1]
+    assert w.channel.posted[-1] == (
+        "[Gator - Claude - budget] The agent process exited. Send a message to start a new session."
+    )
+
+
+async def test_a_finished_turn_with_no_text_is_never_a_bare_done(w):
+    await baselined(w)
+    await w.feed(w.msg(101, "@gator go"))
+    w.host.states["pty-1"] = {"state": "idle", "at": w.clock.now + 5}
+    w.host.last["pty-1"] = ""
+    await w.runner.tick()
+    assert w.channel.posted[-1] == "[Gator - Claude - budget] Done. No text came back. Open the Claude tab in AI Gator."
 
 
 async def test_a_reply_that_echoes_a_command_cannot_form_one(w):
