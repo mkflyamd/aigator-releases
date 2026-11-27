@@ -3,12 +3,11 @@ with "[Gator", so Gator's own replies can never read back as a command."""
 
 from __future__ import annotations
 
-import html
 import logging
 import re
 from datetime import datetime, timezone
 
-from remote.channel import ChannelRefused, InboundMessage, require_autosend
+from remote.channel import ChannelRefused, InboundMessage, require_autosend, teams_html
 from remote.commands import SYSTEM_PREFIX
 from remote.state import State
 
@@ -84,7 +83,7 @@ class TeamsSelfChat:
         if not text.lstrip().startswith(SYSTEM_PREFIX):
             raise ChannelRefused(f"replies must start with {SYSTEM_PREFIX}")
         require_autosend()
-        content = html.escape(text, quote=False).replace("\r\n", "\n").replace("\n", "<br>")
+        content = teams_html(text)
         try:
             message_id = send_message(self._chat_id, content)
         except Exception as exc:

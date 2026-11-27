@@ -147,6 +147,14 @@ def test_post_escapes_slack_control_characters(tmp_path, slack):
     assert slack.posts()[0][1]["text"] == "[Gator - Claude - x] &lt;!channel&gt; a &amp; b"
 
 
+def test_post_converts_markdown_to_slack_mrkdwn(tmp_path, slack):
+    channel = SlackSelfDM(state=State(tmp_path / "s.json"))
+    channel.post("[Gator - Claude - x] **Done** with `ls`\n- one\n- two")
+    text = slack.posts()[0][1]["text"]
+    assert "**" not in text
+    assert text == "[Gator - Claude - x] *Done* with `ls`\n\n• one\n• two"
+
+
 def test_a_failed_post_raises_refused_and_records_nothing(tmp_path, slack):
     state = State(tmp_path / "s.json")
     slack.fail_post = "token_revoked"
@@ -214,9 +222,13 @@ async def test_slack_command_runs_and_the_reply_is_posted_to_the_self_dm(tmp_pat
     await w.deliver()
     await w.deliver(w.say(w.ts(), "@gator say ok"))
     assert w.host.delivered == [("pty-1", "say ok")]
+    assert slack.posts() == []
+    w.host.states["pty-1"] = {"state": "idle", "at": w.clock.now + 5}
+    w.host.last["pty-1"] = "Two files are open."
+    await w.runner.tick()
     (post,) = slack.posts()
     assert post[1]["channel"] == SELF_DM
-    assert post[1]["text"].startswith("[Gator - Claude - budget] Started")
+    assert post[1]["text"] == "[Gator - Claude - budget] Two files are open."
 
 
 async def test_gator_own_posts_are_never_read_back_as_commands(tmp_path, slack):
@@ -224,6 +236,9 @@ async def test_gator_own_posts_are_never_read_back_as_commands(tmp_path, slack):
     await w.deliver()
     first = w.say(w.ts(), "@gator say ok")
     await w.deliver(first)
+    w.host.states["pty-1"] = {"state": "idle", "at": w.clock.now + 5}
+    w.host.last["pty-1"] = "Two files are open."
+    await w.runner.tick()
     (post,) = slack.posts()
     echoed = w.say("1700000000.000001", post[1]["text"])
     await w.deliver(echoed, first)

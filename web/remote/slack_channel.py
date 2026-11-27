@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 
-from remote.channel import ChannelRefused, InboundMessage, require_autosend
+from remote.channel import ChannelRefused, InboundMessage, require_autosend, slack_mrkdwn
 from remote.commands import SYSTEM_PREFIX
 from remote.state import State
 
@@ -34,10 +34,6 @@ def _own_user_id() -> str:
 
 def _unescape(text: str) -> str:
     return text.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
-
-
-def _escape(text: str) -> str:
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 def _epoch(ts: str) -> float:
@@ -120,7 +116,7 @@ class SlackSelfDM:
         if not text.lstrip().startswith(SYSTEM_PREFIX):
             raise ChannelRefused(f"replies must start with {SYSTEM_PREFIX}")
         require_autosend()
-        sent = _api("chat.postMessage", {"channel": self._channel_id, "text": _escape(text)}, method="POST")
+        sent = _api("chat.postMessage", {"channel": self._channel_id, "text": slack_mrkdwn(text)}, method="POST")
         if not sent.get("ok"):
             raise ChannelRefused(f"Slack error: {sent.get('error', 'unknown')}")
         message_id = str(sent.get("ts") or "")

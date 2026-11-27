@@ -66,19 +66,25 @@ async def test_polls_only_every_poll_interval(s):
     assert s.channel.polls == 2
 
 
-async def test_recovery_from_a_failed_poll_says_online_again(s):
+async def test_a_failed_poll_and_its_recovery_never_say_online_again(s):
     s.enabled = True
     await s.loop.step()
     s.channel.fail = True
     s.clock.now += 10
     await s.loop.step()
-    s.clock.now += 10
-    await s.loop.step()
-    assert s.channel.posted == [commands.online()]
     s.channel.fail = False
     s.clock.now += 10
     await s.loop.step()
-    assert s.channel.posted == [commands.online(), commands.online()]
+    assert s.channel.posted == [commands.online()]
+
+
+async def test_a_restart_with_the_chat_window_open_says_nothing(s):
+    s.enabled = True
+    s.runner._window.open(s.clock.now)
+    assert s.runner._window.is_open()
+    await s.loop.step()
+    await s.loop.step()
+    assert s.channel.posted == []
 
 
 async def test_turning_the_switch_off_disarms(s):

@@ -11,9 +11,9 @@ import time
 from typing import Callable
 
 from config import load_config
+from remote import commands, settings
 from remote.guard import Guard
 from remote.runner import RemoteRunner
-from remote import settings
 from remote.service import RemoteError, RemoteService
 from remote.session_host import LocalPtyHost, Project
 from remote.slack_channel import SlackSelfDM
@@ -103,7 +103,6 @@ class RemoteLoop:
             if not self._poll_failing:
                 _log.warning("Remote control poll failed: %s", exc)
             self._poll_failing = True
-            self._need_online = True
             return
         self._poll_failing = False
         if self._need_online:
@@ -116,7 +115,12 @@ def _build_loop(channel, state: State, enabled: Callable[[], bool]) -> RemoteLoo
         LocalPtyHost(), default_project=default_project, idle_seconds=settings.idle_seconds, channel=channel.name
     )
     runner = RemoteRunner(
-        channel, service, Guard(armed_max_seconds=settings.armed_max_seconds), state, stale_seconds=settings.stale_seconds
+        channel,
+        service,
+        Guard(armed_max_seconds=settings.armed_max_seconds),
+        state,
+        stale_seconds=settings.stale_seconds,
+        first_prompt_hint=commands.BREVITY_HINT,
     )
     return RemoteLoop(runner, enabled)
 

@@ -2,7 +2,6 @@
 until 30 minutes of quiet. Every post it makes goes through the auto-send gate."""
 
 import ast
-import html
 import io
 import re
 import sys
@@ -122,7 +121,7 @@ async def test_an_untagged_message_runs_inside_the_window(w):
     await opened(w)
     await say(w, "run the tests")
     assert w.host.delivered == [("pty-1", "run the tests")]
-    assert w.channel.posted[-1] == commands.working_ack("Claude", "budget", "Started. Working on it.")
+    assert w.channel.posted == [commands.greeting()]
 
 
 async def test_an_untagged_message_is_ignored_when_no_window_is_open(w):
@@ -477,6 +476,7 @@ def test_not_found_text_strips_newlines_and_caps_the_name():
 
 CROC_KEYS = {"greeting", "bye", "closed"}
 TIPS_KEYS = {"greeting", "help_open", "help_closed"}
+NO_NEXT_KEYS = {"done", "waiting_open", "progress"}
 QUIET_NOTE = "It also closes after 30 minutes of quiet."
 
 
@@ -509,7 +509,8 @@ def _deck():
         "which_session": commands.which_session(["budget", "other"]),
         "which_to_stop": commands.which_to_stop(["budget", "other"]),
         "status": commands.session_status("Claude", "budget", commands.WORKING, 1000.0, 2000.0),
-        "started": commands.working_ack("Claude", "budget", "Started. Working on it."),
+        "working": commands.working("Claude", "budget", "main", False),
+        "progress": commands.progress("Claude", "budget", 130),
         "done": commands.agent_result("Claude", "budget", "Done.", "Two files are open."),
         "done_empty": commands.agent_result("Claude", "budget", "Done.", ""),
         "done_long": commands.agent_result("Claude", "budget", "Done.", "Outcome. " + "word " * 2000),
@@ -553,6 +554,9 @@ def test_the_croc_appears_only_in_the_greeting_bye_and_the_quiet_close():
 
 @pytest.mark.parametrize("key", list(_deck()))
 def test_every_message_ends_with_a_next_block_of_one_to_three_options(key):
+    if key in NO_NEXT_KEYS:
+        assert "Next:" not in _deck()[key]
+        return
     options, rest = _next_block(_deck()[key])
     if key in TIPS_KEYS:
         assert len(options) == 5
@@ -618,10 +622,10 @@ def test_the_deck_texts_match_the_copy():
         f"Last activity {commands.clock_time(2000.0)}.\n\n"
         "Next:\n• Reply here to talk to it.\n• `stop budget` to stop it."
     )
-    assert deck["started"] == (
-        "[Gator - Claude - budget] Started. Working on it.\n\n"
-        "Next:\n• `status budget` to see what it is doing.\n• `stop budget` to stop it."
+    assert deck["working"] == (
+        "[Gator - Claude - budget] Working on it.\nBranch: main\n\nNext:\n• `stop` to stop it."
     )
+    assert deck["progress"] == "[Gator - Claude - budget] Still working, 2 min."
     assert deck["agent_stopped"] == (
         "[Gator - Claude - budget] Stopped.\n\n"
         "Next:\n• Send a message to start it again.\n• `list` to see what is running."
@@ -630,9 +634,10 @@ def test_the_deck_texts_match_the_copy():
         "[Gator - Claude - budget] The agent process exited.\n\nNext:\n• Send a message to start a new session."
     )
     assert deck["waiting_choices"].endswith(
-        "Next:\n• `Use the repo root`\n• `Use web/`\n• Or type your own answer."
+        "Next:\n• `Use the repo root`\n• `Use web/`"
     )
-    assert deck["waiting_open"].endswith("Next:\n• Type your answer.\n• `stop budget` to stop it instead.")
+    assert deck["waiting_open"] == "[Gator - Claude - budget] Waiting for your answer.\nWhich?"
+    assert deck["done"] == "[Gator - Claude - budget] Done.\nTwo files are open."
 
 
 def test_the_prefix_literal_has_one_home():
@@ -693,9 +698,11 @@ async def test_everything_a_whole_session_posts_carries_the_prefix_and_a_next_bl
     w.host.last["pty-1"] = "Which one?"
     await w.runner.tick()
     await say(w, "bye")
-    assert len(w.channel.posted) >= 8
+    assert len(w.channel.posted) >= 7
     assert all(p.startswith(commands.SYSTEM_PREFIX) for p in w.channel.posted)
-    assert all("\n\nNext:\n" in p for p in w.channel.posted)
+    agent_replies = [p for p in w.channel.posted if p.startswith(commands.SYSTEM_PREFIX + " - ") and "Next:" not in p]
+    assert agent_replies == [commands.agent_result("Claude", "budget", "Waiting for your answer.", "Which one?", True)]
+    assert all("\n\nNext:\n" in p for p in w.channel.posted if p not in agent_replies)
 
 
 async def test_a_session_that_asked_a_question_is_listed_as_waiting_for_you(w):
@@ -894,10 +901,13 @@ def test_the_adapters_send_a_multi_line_croc_message_intact(tmp_path, chat):
     if chat.name == "teams":
         content = sent[1]
         assert "\n" not in content
-        assert content == html.escape(text, quote=False).replace("\n", "<br>")
-        lines = content.split("<br>")
-        assert lines[0] == f"[Gator] {commands.CROC} Gator on watch. This chat is open, so you can skip `@gator`."
-        assert "• `stop all` to stop everything and turn Remote control off." in lines
+        paragraphs = re.findall(r"<div>(.*?)</div>", content)
+        assert "".join(f"<div>{p}</div>" for p in paragraphs) == content
+        lines = [line for p in paragraphs for line in p.split("<br>")]
+        assert lines[0] == (
+            f"[Gator] {commands.CROC} Gator on watch. This chat is open, so you can skip <code>@gator</code>."
+        )
+        assert "• <code>stop all</code> to stop everything and turn Remote control off." in lines
         assert lines[-1] == QUIET_NOTE
     else:
         assert sent[1]["text"] == text

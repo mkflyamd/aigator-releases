@@ -30,6 +30,23 @@ class Project:
     agent: str = AGENT
 
 
+def current_branch(repo_path: str) -> str | None:
+    """Blocking. The checked-out branch, or None when it cannot be read or HEAD is detached."""
+    import subprocess
+
+    from proc_utils import no_window_kwargs
+
+    try:
+        out = subprocess.run(
+            ["git", "-C", repo_path, "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5, check=False,
+            **no_window_kwargs(),
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return out if out and out != "HEAD" else None
+
+
 @dataclass(frozen=True)
 class HostSession:
     pty_id: str

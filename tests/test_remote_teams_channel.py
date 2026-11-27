@@ -22,7 +22,7 @@ def test_post_to_the_own_self_chat_sends_and_records_the_id(tmp_path, sent):
     state = State(tmp_path / "s.json")
     chat = TeamsSelfChat(state=state)
     assert chat.post("[Gator] Online") == "777"
-    assert sent == [("48:notes", "[Gator] Online")]
+    assert sent == [("48:notes", "<div>[Gator] Online</div>")]
     assert state.is_own_post("teams", "777")
 
 
@@ -51,6 +51,18 @@ def test_post_escapes_markup_so_agent_text_is_not_rendered_as_html(tmp_path, sen
     html = sent[0][1]
     assert "<b>" not in html
     assert "&lt;b&gt;hi&lt;/b&gt; &amp; bye<br>line two" in html
+
+
+def test_post_converts_markdown_to_teams_html(tmp_path, sent):
+    chat = TeamsSelfChat(state=State(tmp_path / "s.json"))
+    chat.post("[Gator - Claude - x] **Done** with `ls`\n> a note\n- one\n- two")
+    html = sent[0][1]
+    assert "**" not in html
+    assert "&gt; a note" not in html
+    assert html == (
+        "<div>[Gator - Claude - x] <strong>Done</strong> with <code>ls</code></div>"
+        "<blockquote>a note</blockquote><ul><li>one</li><li>two</li></ul>"
+    )
 
 
 def test_a_failed_send_posts_nothing_and_raises_refused(tmp_path, monkeypatch, autosend_gate):
