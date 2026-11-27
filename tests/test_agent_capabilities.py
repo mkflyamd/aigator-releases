@@ -156,6 +156,16 @@ def test_two_terminals_that_record_the_same_session_are_both_refused(world):
     assert "session_id" not in labels[first] and "session_id" not in labels[second]
 
 
+def test_a_closed_terminals_leftover_file_does_not_block_a_resume(world):
+    closed = pty_id()
+    record_session(closed)
+    resumed = go_live(world, session=None)
+    record_session(resumed)
+    assert terminal.live_pty_labels()[resumed]["session_id"] == SESSION
+    sender = asyncio.run(agent_mcp._sender({"pty_id": resumed, "project_id": "demo", "agent": "crush"}))
+    assert sender["session_id"] == SESSION
+
+
 def test_a_terminal_can_move_to_a_new_session_that_nobody_else_holds(world):
     pid = go_live(world, session=None)
     record_session(pid, "first-1")

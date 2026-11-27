@@ -191,9 +191,14 @@ def with_gator_mcp(agent: str, command: list[str] | None) -> list[str] | None:
 
 def recorded_session(pty_id: str, agent: str, live: dict[str, dict] | None = None) -> str | None:
     """The session id a Crush hook recorded for a terminal, unless Gator already knows another
-    terminal (running, suspended or linked at launch) under that id."""
+    live, suspended or launch-linked terminal under that id. A closed terminal's leftover file
+    holds nothing: its token was revoked and it is not in the live list."""
+    with _lock:
+        peers = {v["pty_id"] for v in _tokens.values()} | set(live or {})
+    peers.discard(pty_id)
     taken = {r.get("session_id") for p, r in agent_suspend.all_records().items() if p != pty_id}
     taken |= {m.get("session_id") for p, m in (live or {}).items() if p != pty_id}
+    taken |= {agent_state.read_session(p) for p in peers}
     found = agent_state.read_session(pty_id, {t for t in taken if t})
     if found and set(generic_agent.ptys_for_session(agent, found)) - {pty_id}:
         return None

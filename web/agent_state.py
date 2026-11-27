@@ -112,23 +112,15 @@ def crush_hook_lines() -> list[str]:
 
 
 def read_session(pty_id: str, taken: frozenset[str] | set[str] = frozenset()) -> str | None:
-    """The session id a Crush hook recorded for this terminal, if one has run. An id that another
-    terminal holds, or that another terminal's hook also recorded, is refused: the agent writes this
-    file, so it must not be able to claim a peer's session."""
+    """The session id a Crush hook recorded for this terminal, if one has run. An id in `taken`
+    (held by another terminal) is refused: the agent writes this file, so it must not be able to
+    claim a peer's session."""
     try:
         uuid.UUID(pty_id)
         found = (STATE_DIR / f"{pty_id}.session").read_text(encoding="utf-8").strip()
     except (ValueError, OSError):
         return None
-    if not _SESSION_ID.fullmatch(found) or found in taken:
-        return None
-    try:
-        others = [p for p in STATE_DIR.glob("*.session") if p.name != f"{pty_id}.session"]
-        if any(p.read_text(encoding="utf-8").strip() == found for p in others):
-            return None
-    except OSError:
-        return None
-    return found
+    return found if _SESSION_ID.fullmatch(found) and found not in taken else None
 
 
 _crush_hooks_cache: dict[str, bool] = {}
