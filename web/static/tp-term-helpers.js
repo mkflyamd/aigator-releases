@@ -154,7 +154,31 @@ function _ocFit(sess, force) {
   // before the session has produced visible output; after that, let the PTY's
   // resize notification drive the application's normal redraw.
   if (changed && !sess._hasOutput) sess.term.reset();
+  if (changed && sess._hasOutput) {
+    sess._trimArmed = true;
+    _ocTrimSoon(sess);
+  }
   if (_ocSendSize(sess)) _ocNoteEcho(sess);
+}
+
+// The agent repaints its whole screen on a real resize and xterm's reflow wraps the old one
+// differently, so a screenful of ghost lands in scrollback. Once the repaint has gone quiet, drop
+// the scrollback in xterm only (nothing goes to the PTY; History keeps the full session). Skipped
+// while the user has scrolled up or the alternate buffer is showing.
+const _OC_TRIM_QUIET_MS = 300;
+
+function _ocTrimSoon(sess) {
+  clearTimeout(sess._trimTimer);
+  sess._trimTimer = setTimeout(() => {
+    const term = sess.term;
+    if (!sess._trimArmed || !term || sess._closing) return;
+    sess._trimArmed = false;
+    term.write('', () => {
+      const buf = term.buffer.active;
+      if (buf.type !== 'normal' || buf.viewportY !== buf.baseY) return;
+      term.write('\x1b[3J');
+    });
+  }, _OC_TRIM_QUIET_MS);
 }
 
 // Every real size change makes the agent repaint its whole screen and leave a ghost copy, so the
