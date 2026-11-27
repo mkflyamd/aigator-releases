@@ -106,6 +106,8 @@ npm --prefix shell run dist -- --win --x64 --publish never   # or --mac/--linux
 
 `npm run dist` auto-runs `packaging/sync_version.py` (syncs `version.txt` → `shell/package.json`). Output: `dist/installers/`. Packages are unsigned locally. Publishing a GitHub release triggers `.github/workflows/release-desktop.yml` (Win x64, macOS x64/arm64, Linux x64).
 
+A local `npm run dist` needs `uv run python tools/generate_third_party_notices.py` run first (it writes `dist/THIRD_PARTY_NOTICES.txt`), or `extraResources` fails.
+
 ## OpenCode integration
 
 OpenCode runs as a bare PTY process (`opencode-bare` in `web/generic_agent.py`), resolved on PATH like claude/codex/crush and routed through the gateway via injected config. AI Gator does not bundle or pin it; users install it with `npm install -g opencode-ai`.

@@ -9,7 +9,7 @@ own real shape instead.
 Bug (2026-09-30 incident, round 2): the fix for round 1 then used
 `names.includes(',')` as a recipient-COUNT heuristic on the "no chat_id
 yet" fallback path — also wrong, because this org's directory formats a
-SINGLE person's name as "Last, First" (e.g. "Valliyappan, Ram",
+SINGLE person's name as "Last, First" (e.g. "Rivera, Casey",
 "Kulkarni, Mayuresh"), so almost every single-recipient draft's name
 already contains a comma. That mislabeled ordinary 1:1 drafts as "Group
 message to ...".
@@ -65,7 +65,7 @@ class TestPreviewStubIsDirectMessage:
     def test_preview_id_with_topic_and_no_names(self):
         label = _call({
             "chat_id": "19:preview-ab0dc05a-05dd-4c99-a9af-c33a85ce1997",
-            "chat_topic": "ValliyappanRam,AI Agent",
+            "chat_topic": "RiveraCasey,AI Agent",
             "to": "",
             "to_names": "",
         })
@@ -85,17 +85,17 @@ class TestLastCommaFirstNameIsNotMistakenForMultipleRecipients:
         label = _call({
             "chat_id": "",
             "chat_topic": "",
-            "to": "AIAgent.ValliyappanRam@amd.com",
-            "to_names": "ValliyappanRam, AI Agent",
+            "to": "AIAgent.RiveraCasey@contoso.example",
+            "to_names": "RiveraCasey, AI Agent",
         })
-        assert label == "Direct message to ValliyappanRam, AI Agent"
+        assert label == "Direct message to RiveraCasey, AI Agent"
         assert "Group" not in label
 
     def test_single_recipient_comma_name_ordinary_case(self):
         label = _call({
             "chat_id": "",
             "chat_topic": "",
-            "to": "Mayuresh.Kulkarni@amd.com",
+            "to": "Sky.Parker@contoso.example",
             "to_names": "Kulkarni, Mayuresh",
         })
         assert label == "Direct message to Kulkarni, Mayuresh"
@@ -107,9 +107,9 @@ class TestLastCommaFirstNameIsNotMistakenForMultipleRecipients:
         fall through to the buggy path."""
         label = _call({
             "chat_id": "19:preview-abc123",
-            "chat_topic": "ValliyappanRam,AI Agent",
-            "to": "AIAgent.ValliyappanRam@amd.com",
-            "to_names": "ValliyappanRam, AI Agent",
+            "chat_topic": "RiveraCasey,AI Agent",
+            "to": "AIAgent.RiveraCasey@contoso.example",
+            "to_names": "RiveraCasey, AI Agent",
         })
         assert label.startswith("Direct message")
         assert "Group" not in label
@@ -120,7 +120,7 @@ class TestGenuineMultiRecipientIsStillGroup:
         label = _call({
             "chat_id": "",
             "chat_topic": "",
-            "to": "a@amd.com,b@amd.com",
+            "to": "a@contoso.example,b@contoso.example",
             "to_names": "A, B",
         })
         assert label.startswith("Group")
@@ -150,7 +150,7 @@ class TestMaterializedOneOnOneStillDirectMessage:
             "chat_id": "19:58a43704-8640-49e9-a193-ac526bec1238_dc59cb67-abcd@unq.gbl.spaces",
             "chat_topic": "",
             "to": "",
-            "to_names": "Valliyappan, Ram",
+            "to_names": "Rivera, Casey",
         })
         assert label.startswith("Direct message")
         assert "Group" not in label

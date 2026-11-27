@@ -2,7 +2,7 @@
 
 One small interface over three mechanisms: Windows AppContainer
 (launcher_windows), macOS Seatbelt (launcher_macos) and Linux bubblewrap
-(launcher_linux). Spec: docs/superpowers/specs/2026-10-05-code-runner-sandbox-design.md.
+(launcher_linux).
 
 Standard library only: tests/code_sandbox/posix_sandbox_check.py imports this
 package from a bare WSL python3.

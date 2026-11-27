@@ -1,4 +1,4 @@
-"""Demo project routes — see docs/superpowers/specs/2026-10-19-demo-project-state-design.md."""
+"""Demo project routes."""
 
 from pathlib import Path
 

@@ -61,7 +61,7 @@ class TestStatusSyncOnApprove:
     def test_approve_success_syncs_sent_status(self, td):
         client = TestClient(app)
         draft_id = _drafts.create_draft(
-            "email-send", {"to": "bob@amd.com", "message": "hi"}, {}
+            "email-send", {"to": "bob@contoso.example", "message": "hi"}, {}
         )
         _run(td.record_draft("task-1", draft_id, "email-send", {"draft_id": draft_id}, {}))
 
@@ -100,7 +100,7 @@ class TestRestartRecoveryRehydration:
         _run(td.record_draft(
             "task-1", draft_id, "email-send",
             {"draft_id": draft_id},
-            {"to": "bob@amd.com", "message": "hi"},
+            {"to": "bob@contoso.example", "message": "hi"},
         ))
         assert _drafts.get_draft(draft_id) is None  # confirm "restart" state
 
@@ -117,7 +117,7 @@ class TestRestartRecoveryRehydration:
         _run(td.record_draft(
             "task-1", draft_id, "email-send",
             {"draft_id": draft_id},
-            {"to": "bob@amd.com", "message": "hi"},
+            {"to": "bob@contoso.example", "message": "hi"},
         ))
         # Backdate past the TTL.
         monkeypatch.setattr(td, "TASK_DRAFT_TTL_SECONDS", 60)
@@ -151,7 +151,7 @@ class TestRestartRecoveryRehydration:
         draft_id = "crashed-mid-send"
         _run(td.record_draft(
             "task-1", draft_id, "email-send",
-            {"draft_id": draft_id}, {"to": "bob@amd.com", "message": "hi"},
+            {"draft_id": draft_id}, {"to": "bob@contoso.example", "message": "hi"},
         ))
         _run(td.sync_status(draft_id, "sending"))  # simulate the crash point
         assert _drafts.get_draft(draft_id) is None  # confirm "restart" state

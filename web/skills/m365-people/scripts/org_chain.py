@@ -3,7 +3,7 @@
 
 Usage:
     python3 org_chain.py                              # Your org chain
-    python3 org_chain.py --user tanmay.shah@example.com   # Someone's org chain
+    python3 org_chain.py --user taylor.morgan@example.com   # Someone's org chain
     python3 org_chain.py --depth 5                    # Up to 5 levels
     python3 org_chain.py --json
 """

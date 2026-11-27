@@ -57,7 +57,7 @@ class TestComposeToolIsDraftOnly:
         gc = _graph_capture()
         with patch("skills._m365.helpers.get_graph_client", return_value=gc):
             res = _tool_email_open_compose(
-                to="bob@amd.com", subject="Status", body="Here is the status.")
+                to="bob@contoso.example", subject="Status", body="Here is the status.")
 
         assert res["_draft"] == "email-send"
         assert "_pane" not in res
@@ -76,15 +76,15 @@ class TestApproveEmailSend:
         client = TestClient(app)
         gc = _graph_capture()
         did = create_draft("email-send",
-                           {"to": "bob@amd.com", "subject": "Q3 plan",
+                           {"to": "bob@contoso.example", "subject": "Q3 plan",
                             "body": "Draft body text."},
-                           {"to": ["bob@amd.com"], "subject": "Q3 plan"})
+                           {"to": ["bob@contoso.example"], "subject": "Q3 plan"})
         with patch("skills._m365.helpers.get_graph_client", return_value=gc):
             r = _approve(client, did)
         assert r.status_code == 200, r.text
         msg = _sendmail_payload(gc)
         assert msg["subject"] == "Q3 plan"
-        assert msg["toRecipients"] == [{"emailAddress": {"address": "bob@amd.com"}}]
+        assert msg["toRecipients"] == [{"emailAddress": {"address": "bob@contoso.example"}}]
         assert "Draft body text." in msg["body"]["content"]
 
     def test_edited_message_overrides_body(self):
@@ -92,9 +92,9 @@ class TestApproveEmailSend:
         client = TestClient(app)
         gc = _graph_capture()
         did = create_draft("email-send",
-                           {"to": "bob@amd.com", "subject": "Q3 plan",
+                           {"to": "bob@contoso.example", "subject": "Q3 plan",
                             "body": "ORIGINAL DRAFT"},
-                           {"to": ["bob@amd.com"], "subject": "Q3 plan"})
+                           {"to": ["bob@contoso.example"], "subject": "Q3 plan"})
         with patch("skills._m365.helpers.get_graph_client", return_value=gc):
             r = _approve(client, did, body={"edited_message": "HUMAN EDITED TEXT"})
         assert r.status_code == 200, r.text
@@ -129,7 +129,7 @@ class TestApproveEmailSend:
         client = TestClient(app)
         gc = _graph_capture()
         did = create_draft("email-forward",
-                           {"message_id": "M1", "to": "carol@amd.com",
+                           {"message_id": "M1", "to": "carol@contoso.example",
                             "comment": "ORIGINAL COMMENT"},
                            {})
         with patch("skills._m365.helpers.get_graph_client", return_value=gc):
@@ -165,8 +165,8 @@ class TestApproveIsCsrfGated:
         client = TestClient(app)
         gc = _graph_capture()
         did = create_draft("email-send",
-                           {"to": "bob@amd.com", "subject": "x", "body": "y"},
-                           {"to": ["bob@amd.com"], "subject": "x"})
+                           {"to": "bob@contoso.example", "subject": "x", "body": "y"},
+                           {"to": ["bob@contoso.example"], "subject": "x"})
         with patch("skills._m365.helpers.get_graph_client", return_value=gc):
             r = client.post(f"/api/drafts/{did}/approve")  # no X-CSRF-Token
         assert r.status_code in (401, 403), r.text
@@ -217,7 +217,7 @@ class TestOpenPinnedEmailResolvesConversationId:
         detail = {
             "id": self.MSG_ID,
             "subject": "New Time Proposed: Skills/CLI-TUI regroup post AAI",
-            "from": {"emailAddress": {"name": "Mrinal Karvir", "address": "mrinal@amd.com"}},
+            "from": {"emailAddress": {"name": "Alex Rivera", "address": "alex@contoso.example"}},
             "toRecipients": [], "ccRecipients": [], "bccRecipients": [],
             "receivedDateTime": "2026-07-29T14:30:00Z",
             "body": {"contentType": "text", "content": "Will 30 mins before work?"},
