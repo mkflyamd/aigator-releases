@@ -40,7 +40,7 @@ class RelayOptOutRequest(BaseModel):
 
 
 def _endpoint(entry: dict) -> Endpoint:
-    return pty_endpoint(entry["pty_id"], entry["title"] or entry["session_id"][:8], entry["project_id"])
+    return pty_endpoint(entry["pty_id"], entry["title"], entry["project_id"])
 
 
 @router.get("/api/relay", dependencies=[Depends(verify_csrf)])
@@ -49,7 +49,14 @@ async def relay_state():
     agents = []
     for entry in entries:
         endpoint = _endpoint(entry)
-        agents.append({**endpoint.as_dict(), "state": entry["state"], "opted_out": settings.opted_out(endpoint.id)})
+        agents.append(
+            {
+                **endpoint.as_dict(),
+                "agent": entry["agent"],
+                "state": entry["state"],
+                "opted_out": settings.opted_out(endpoint.id),
+            }
+        )
     return {
         "admin_allows": settings.admin_allows_messaging(),
         "enabled": settings.user_allows_messaging(),
