@@ -57,6 +57,7 @@ class RemoteRunner:
         self._autosend_noticed = False
         self._window = ChatWindow(channel.name, state, clock)
         self._already_open = False
+        self._not_sent_noticed = False
         service.subscribe(self._on_event)
 
     def sync_enabled(self, enabled: bool) -> None:
@@ -112,28 +113,45 @@ class RemoteRunner:
             if self._is_own(message):
                 continue
             await self._close_if_expired()
-            command = commands.parse(message.text) or self._untagged(message)
+            command = commands.parse(message.text) or await self._untagged(message)
             if command is None or not self._guard.armed:
                 continue
-            if self._clock() - message.created_at > limit(self._stale):
+            if message.created_at > 0 and self._clock() - message.created_at > limit(self._stale):
                 skipped += 1
                 continue
             if command.kind == "open":
                 self._already_open = self._window.open(message.created_at)
+                if not self._already_open:
+                    self._not_sent_noticed = False
             elif command.kind not in ("stop_all", "bye"):
                 self._window.extend()
             await self._run(command)
         if skipped:
             await self._post(commands.stale_skipped(skipped, limit(self._stale)))
 
-    def _untagged(self, message: InboundMessage) -> commands.Command | None:
-        """An ordinary message inside the open window, routed like `@gator <text>`. Anything that
-        arrived before the window opened, or that the older `/code` relay owns, is not ours."""
-        if not self._window.is_open() or message.created_at < self._window.opened_at():
+    async def _untagged(self, message: InboundMessage) -> commands.Command | None:
+        """An ordinary message inside the open window, routed like `@gator <text>`. Anything with no
+        timestamp, that arrived before the window opened, or that the older `/code` relay owns, is not
+        ours. A long message or one with an attachment is not sent to the agent: the self-chat is
+        often a notepad, so pasted mail or logs must not become prompts."""
+        if not self._window.is_open() or message.created_at <= 0 or message.created_at < self._window.opened_at():
             return None
-        if not message.text.strip() or LEGACY_CODE_RE.match(message.text):
+        text = message.text.strip()
+        if not text or LEGACY_CODE_RE.match(message.text):
             return None
-        return commands.parse(f"@gator {message.text.strip()}")
+        if len(text) > commands.UNTAGGED_MAX_CHARS or message.attachments:
+            await self._note_not_sent(message)
+            return None
+        return commands.parse(f"@gator {text}")
+
+    async def _note_not_sent(self, message: InboundMessage) -> None:
+        """One plain line per window, however many messages are held back."""
+        if self._not_sent_noticed or not self._guard.armed:
+            return
+        if self._clock() - message.created_at > limit(self._stale):
+            return
+        self._not_sent_noticed = True
+        await self._post(commands.not_sent())
 
     async def _close_if_expired(self) -> None:
         if self._window.expired():

@@ -41,14 +41,11 @@ def _escape(text: str) -> str:
 
 
 def _epoch(ts: str) -> float:
-    """Unix seconds from a Slack ts. An unreadable ts counts as now so the message is not
-    assumed stale."""
-    import time
-
+    """Unix seconds from a Slack ts. An unreadable ts is 0.0, which the runner never runs untagged."""
     try:
         return float(ts)
     except (TypeError, ValueError):
-        return time.time()
+        return 0.0
 
 
 class SlackSelfDM:
@@ -97,10 +94,23 @@ class SlackSelfDM:
         data = _api("conversations.history", {"channel": channel, "limit": HISTORY_LIMIT})
         if not data.get("ok"):
             raise RuntimeError(f"Slack history failed: {data.get('error', 'unknown')}")
+        own = _own_user_id()
+        if not own:
+            _log.warning("Remote control could not tell who the Slack user is, so it read no messages")
+            return []
         return [
-            InboundMessage(id=str(raw["ts"]), text=_unescape(raw.get("text") or "").strip(), created_at=_epoch(raw["ts"]))
+            InboundMessage(
+                id=str(raw["ts"]),
+                text=_unescape(raw.get("text") or "").strip(),
+                created_at=_epoch(raw["ts"]),
+                attachments=bool(raw.get("files")),
+            )
             for raw in data.get("messages", [])
-            if raw.get("ts") and not raw.get("subtype")
+            if raw.get("ts")
+            and raw.get("subtype") in (None, "file_share")
+            and raw.get("user") == own
+            and not raw.get("bot_id")
+            and not raw.get("app_id")
         ]
 
     def post(self, text: str, reply_to: str | None = None) -> str:

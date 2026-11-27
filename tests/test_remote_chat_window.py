@@ -10,7 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from remote import commands
+from remote import commands, slack_channel
+from remote.channel import InboundMessage
 from remote.guard import Guard
 from remote.runner import RemoteRunner
 from remote.service import RemoteService
@@ -83,10 +84,11 @@ async def test_the_greeting_has_the_tips_and_help_repeats_them_under_a_fresh_pre
     await say(w, "@gator hi")
     await say(w, "@gator help")
     greeting, helped = w.channel.posted
+    note = commands.EVERYTHING_GOES_TO_AGENT
     assert greeting.startswith(
-        f"[Gator] {commands.CROC} Gator on watch. This chat is open, so you can skip `@gator`.\n\nNext:\n"
+        f"[Gator] {commands.CROC} Gator on watch. This chat is open, so you can skip `@gator`.\n{note}\n\nNext:\n"
     )
-    assert helped.startswith("[Gator] This chat is open, so you can skip `@gator`.\n\nNext:\n")
+    assert helped.startswith(f"[Gator] This chat is open, so you can skip `@gator`.\n{note}\n\nNext:\n")
     assert "Gator on watch" not in helped and commands.CROC not in helped
     assert greeting.split("\n\nNext:\n", 1)[1] == helped.split("\n\nNext:\n", 1)[1]
     assert helped.endswith("It also closes after 30 minutes of quiet.")
@@ -486,6 +488,7 @@ def _deck():
         "help_open": commands.help_text(True),
         "help_closed": commands.help_text(False),
         "already_open": commands.already_open(),
+        "not_sent": commands.not_sent(),
         "closed": commands.chat_closed_quiet(),
         "bye": commands.chat_closed_bye(),
         "timeout": commands.timed_out(24 * 3600),
@@ -893,7 +896,7 @@ def test_the_adapters_send_a_multi_line_croc_message_intact(tmp_path, chat):
         assert lines[-1] == QUIET_NOTE
     else:
         assert sent[1]["text"] == text
-        assert text.count("\n") == sent[1]["text"].count("\n") == 9
+        assert text.count("\n") == sent[1]["text"].count("\n") == 10
 
 
 def test_tp_teams_send_survives_an_emoji_under_a_cp1252_console(monkeypatch):
@@ -924,3 +927,205 @@ def test_tp_teams_send_survives_an_emoji_under_a_cp1252_console(monkeypatch):
     out = teams.tp_teams_send("48:notes", teams.TeamsSendRequest(message=f"[Gator] {commands.CROC} Gator on watch."))
     assert out["ok"] is True and out["message_id"] == "9"
     assert commands.CROC in sent[0]["content"]
+
+
+# ---------------------------------------------------------------- the notepad guard: untagged text is not always for the agent
+
+CAP = commands.UNTAGGED_MAX_CHARS
+LONG = "word " * (CAP // 5 + 10)
+
+
+def _inbound(w, text, **fields):
+    w.seq = getattr(w, "seq", 100) + 1
+    return InboundMessage(id=str(w.seq), text=text, created_at=fields.pop("created_at", w.clock.now), **fields)
+
+
+def test_the_cap_and_the_greeting_line_are_named_constants():
+    assert commands.UNTAGGED_MAX_CHARS == 1500
+    assert commands.EVERYTHING_GOES_TO_AGENT in commands.greeting()
+    assert commands.EVERYTHING_GOES_TO_AGENT in commands.help_text(True)
+    assert commands.not_sent() == commands.system_reply(commands.NOT_SENT_BODY, [commands.NOT_SENT_OPTION])
+
+
+async def test_an_oversize_untagged_message_is_not_sent_and_gets_one_plain_line(w):
+    await opened(w)
+    await say(w, LONG)
+    assert len(LONG.strip()) > CAP
+    assert w.host.delivered == []
+    assert w.channel.posted == [commands.greeting(), commands.not_sent()]
+
+
+async def test_a_message_of_exactly_the_cap_is_still_sent(w):
+    await opened(w)
+    await say(w, "x" * CAP)
+    assert w.host.delivered == [("pty-1", "x" * CAP)]
+    assert commands.not_sent() not in w.channel.posted
+
+
+async def test_the_same_long_text_sent_with_the_tag_is_sent(w):
+    await opened(w)
+    await say(w, f"@gator {LONG}")
+    assert w.host.delivered == [("pty-1", LONG.strip())]
+    assert commands.not_sent() not in w.channel.posted
+
+
+async def test_the_long_tagged_message_is_sent_even_with_the_chat_closed(w):
+    await baselined(w)
+    await say(w, f"@gator {LONG}")
+    assert w.host.delivered == [("pty-1", LONG.strip())]
+
+
+async def test_an_untagged_message_with_an_attachment_is_not_sent_and_gets_the_plain_line(w):
+    await opened(w)
+    await w.feed(_inbound(w, "see the attached file", attachments=True))
+    assert w.host.delivered == []
+    assert w.channel.posted == [commands.greeting(), commands.not_sent()]
+
+
+async def test_a_tagged_message_with_an_attachment_is_sent_as_text(w):
+    await opened(w)
+    await w.feed(_inbound(w, "@gator look at this", attachments=True))
+    assert w.host.delivered == [("pty-1", "look at this")]
+
+
+async def test_an_attachment_with_no_text_is_ignored_quietly(w):
+    await opened(w)
+    await w.feed(_inbound(w, "", attachments=True))
+    assert w.host.delivered == []
+    assert w.channel.posted == [commands.greeting()]
+
+
+async def test_the_plain_line_is_posted_once_per_window_not_once_per_message(w):
+    await opened(w)
+    for _ in range(4):
+        await say(w, LONG)
+    await w.feed(_inbound(w, "pasted", attachments=True))
+    assert w.channel.posted == [commands.greeting(), commands.not_sent()]
+    await say(w, "bye")
+    await say(w, "@gator hi")
+    await say(w, LONG)
+    await say(w, LONG)
+    assert w.channel.posted.count(commands.not_sent()) == 2
+    assert w.host.delivered == []
+
+
+async def test_a_held_back_message_does_not_slide_the_window(w):
+    await opened(w)
+    w.clock.now += 20 * MINUTE
+    await say(w, LONG)
+    w.clock.now += 11 * MINUTE
+    await say(w, "run the tests")
+    assert w.host.delivered == []
+    assert commands.chat_closed_quiet() in w.channel.posted
+
+
+async def test_the_plain_line_is_not_posted_once_remote_control_is_stopped(w):
+    await opened(w)
+    await say(w, "stop all")
+    posted = len(w.channel.posted)
+    await say(w, LONG)
+    assert len(w.channel.posted) == posted
+
+
+async def test_an_untagged_message_with_no_timestamp_is_never_run_and_a_tagged_one_still_is(w):
+    await opened(w)
+    await w.feed(_inbound(w, "run the tests", created_at=0.0))
+    assert w.host.delivered == []
+    await w.feed(_inbound(w, "@gator run the tests", created_at=0.0))
+    assert w.host.delivered == [("pty-1", "run the tests")]
+
+
+def _with_attachment(chat, message):
+    if chat.name == "teams":
+        message["attachments"] = [{"name": "report.pdf"}]
+    else:
+        message["files"] = [{"id": "F1"}]
+        message["subtype"] = "file_share"
+    return message
+
+
+async def _window_on(runner, chat, clock):
+    await _history(runner, chat)
+    hi = chat.say(1, "@gator hi", clock.now)
+    await _history(runner, chat, hi)
+    return hi
+
+
+async def test_on_each_channel_an_oversize_untagged_message_is_held_back_but_the_tagged_one_runs(tmp_path, chat):
+    runner, host, clock, state = _runner(chat, tmp_path)
+    hi = await _window_on(runner, chat, clock)
+    big = chat.say(2, LONG, clock.now)
+    await _history(runner, chat, big, hi)
+    assert host.delivered == []
+    assert len(chat.posts()) == 2
+    assert "was not sent to the agent" in str(chat.posts()[1])
+    tagged = chat.say(3, f"@gator {LONG}", clock.now)
+    await _history(runner, chat, tagged, big, hi)
+    assert host.delivered == [("pty-1", LONG.strip())]
+
+
+async def test_on_each_channel_an_attachment_is_held_back_once_per_window(tmp_path, chat):
+    runner, host, clock, state = _runner(chat, tmp_path)
+    hi = await _window_on(runner, chat, clock)
+    one = _with_attachment(chat, chat.say(2, "see this", clock.now))
+    two = _with_attachment(chat, chat.say(3, "and this", clock.now))
+    await _history(runner, chat, one, hi)
+    await _history(runner, chat, two, one, hi)
+    assert host.delivered == []
+    assert len(chat.posts()) == 2
+
+
+async def test_on_each_channel_with_the_gate_off_the_message_is_still_held_back_and_nothing_is_posted(
+    tmp_path, chat, autosend_gate
+):
+    autosend_gate["on"] = False
+    runner, host, clock, state = _runner(chat, tmp_path)
+    hi = await _window_on(runner, chat, clock)
+    await _history(runner, chat, chat.say(2, LONG, clock.now), hi)
+    assert host.delivered == []
+    assert chat.posts() == []
+
+
+async def test_on_each_channel_a_recorded_own_post_id_is_never_read_as_the_user(tmp_path, chat):
+    runner, host, clock, state = _runner(chat, tmp_path)
+    hi = await _window_on(runner, chat, clock)
+    echo = chat.say(2, "run the tests", clock.now)
+    state.record_post(chat.name, echo.get("id") or echo["ts"])
+    await _history(runner, chat, echo, hi)
+    assert host.delivered == []
+
+
+@pytest.fixture
+def slack(monkeypatch, autosend_gate):
+    return SlackWorldFake(monkeypatch)
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [{"user": "U999"}, {"bot_id": "B1"}, {"app_id": "A1"}, {"user": None}, {"subtype": "bot_message"}],
+    ids=["other sender", "bot id", "app id", "no sender", "bot subtype"],
+)
+async def test_slack_ignores_a_message_that_is_not_the_user_typing(tmp_path, slack, extra):
+    runner, host, clock, state = _runner(slack, tmp_path)
+    hi = await _window_on(runner, slack, clock)
+    other = {**slack.say(2, "run the tests", clock.now), **extra}
+    await _history(runner, slack, other, hi)
+    assert host.delivered == []
+    tagged = {**slack.say(3, "@gator run the tests", clock.now), **extra}
+    await _history(runner, slack, tagged, other, hi)
+    assert host.delivered == []
+
+
+async def test_slack_reads_nothing_when_it_cannot_tell_who_the_user_is(tmp_path, slack, monkeypatch):
+    runner, host, clock, state = _runner(slack, tmp_path)
+    hi = await _window_on(runner, slack, clock)
+    monkeypatch.setattr(slack_channel, "_own_user_id", lambda: "")
+    await _history(runner, slack, slack.say(2, "@gator run the tests", clock.now), hi)
+    assert host.delivered == []
+
+
+async def test_slack_reads_the_users_own_message(tmp_path, slack):
+    runner, host, clock, state = _runner(slack, tmp_path)
+    hi = await _window_on(runner, slack, clock)
+    await _history(runner, slack, slack.say(2, "run the tests", clock.now), hi)
+    assert host.delivered == [("pty-1", "run the tests")]

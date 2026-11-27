@@ -77,17 +77,12 @@ def test_poll_returns_inbound_messages_newest_first(monkeypatch):
     assert msgs[0].created_at - msgs[1].created_at == 5
 
 
-def test_an_unparseable_timestamp_counts_as_now_not_as_stale(monkeypatch):
-    import time
-
+def test_a_missing_or_unparseable_timestamp_has_no_time(monkeypatch):
     raw = [
         {"id": "3", "message_type": "message", "body": "@gator a", "body_html": "", "created_at": ""},
         {"id": "2", "message_type": "message", "body": "@gator b", "body_html": "", "created_at": "garbage"},
         {"id": "1", "message_type": "message", "body": "@gator c", "body_html": ""},
     ]
     monkeypatch.setattr(teams_channel, "fetch_messages", lambda chat_id: raw)
-    before = time.time()
     messages = TeamsSelfChat().poll()
-    assert len(messages) == 3
-    for message in messages:
-        assert before <= message.created_at <= time.time()
+    assert [m.created_at for m in messages] == [0.0, 0.0, 0.0]

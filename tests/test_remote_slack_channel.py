@@ -1,4 +1,3 @@
-import time
 
 import pytest
 
@@ -169,11 +168,10 @@ def test_poll_returns_messages_newest_first_with_ts_ids_and_unescaped_text(slack
     assert slack.calls[-1][1] == {"channel": SELF_DM, "limit": slack_channel.HISTORY_LIMIT}
 
 
-def test_an_unreadable_ts_counts_as_now_not_as_stale(slack):
+def test_an_unreadable_ts_has_no_time(slack):
     slack.history = [{"ts": "garbage", "user": ME, "text": "@gator x"}]
-    before = time.time()
     (message,) = SlackSelfDM().poll()
-    assert before <= message.created_at <= time.time()
+    assert message.created_at == 0.0
 
 
 def test_a_history_error_raises(monkeypatch):

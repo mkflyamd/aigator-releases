@@ -27,6 +27,7 @@ class InboundMessage:
     id: str
     text: str
     created_at: float  # epoch seconds; 0.0 when the channel gave no usable timestamp
+    attachments: bool = False
 
 
 class Channel(Protocol):

@@ -6,7 +6,6 @@ from __future__ import annotations
 import html
 import logging
 import re
-import time
 from datetime import datetime, timezone
 
 from remote.channel import ChannelRefused, InboundMessage, require_autosend
@@ -37,14 +36,13 @@ def send_message(chat_id: str, content: str) -> str:
 
 
 def _epoch(composetime: str) -> float:
-    """Unix seconds. A missing or unreadable time counts as now: Teams gave no age, so the
-    message is not assumed stale."""
+    """Unix seconds. A missing or unreadable time is 0.0, which the runner never runs untagged."""
     if not composetime:
-        return time.time()
+        return 0.0
     try:
         stamp = datetime.fromisoformat(_FRACTION.sub(r"\1", composetime.replace("Z", "+00:00")))
     except ValueError:
-        return time.time()
+        return 0.0
     if stamp.tzinfo is None:
         stamp = stamp.replace(tzinfo=timezone.utc)
     return stamp.timestamp()
@@ -69,7 +67,12 @@ class TeamsSelfChat:
 
     def poll(self) -> list[InboundMessage]:
         return [
-            InboundMessage(id=str(raw.get("id", "")), text=_text(raw), created_at=_epoch(raw.get("created_at", "")))
+            InboundMessage(
+                id=str(raw.get("id", "")),
+                text=_text(raw),
+                created_at=_epoch(raw.get("created_at", "")),
+                attachments=bool(raw.get("attachments")),
+            )
             for raw in fetch_messages(self._chat_id)
             if raw.get("message_type") == "message"
         ]

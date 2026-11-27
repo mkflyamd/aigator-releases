@@ -18,6 +18,10 @@ NAME_MAX_CHARS = 40
 TEXT_MAX_BYTES = 4096
 REPLY_MAX_CHARS = 3500
 LEAD_MAX_CHARS = 200
+UNTAGGED_MAX_CHARS = 1500
+EVERYTHING_GOES_TO_AGENT = "Everything you type here goes to the agent."
+NOT_SENT_BODY = "That message was not sent to the agent because it is long or has an attachment."
+NOT_SENT_OPTION = "`@gator <request>` sends a request on purpose."
 SYSTEM_PREFIX = "[Gator"
 SETTINGS_SECTION = "Remote control"
 CROC = "\U0001F40A"
@@ -119,16 +123,24 @@ def _tip_options(chat_open: bool) -> list[str]:
 
 def greeting() -> str:
     return system_reply(
-        "Gator on watch. This chat is open, so you can skip `@gator`.",
+        f"Gator on watch. This chat is open, so you can skip `@gator`.\n{EVERYTHING_GOES_TO_AGENT}",
         _tip_options(True),
         croc=True,
         after=_quiet_note(),
     )
 
 
+def not_sent() -> str:
+    return system_reply(NOT_SENT_BODY, [NOT_SENT_OPTION])
+
+
 def help_text(chat_open: bool = True) -> str:
     if chat_open:
-        return system_reply("This chat is open, so you can skip `@gator`.", _tip_options(True), after=_quiet_note())
+        return system_reply(
+            f"This chat is open, so you can skip `@gator`.\n{EVERYTHING_GOES_TO_AGENT}",
+            _tip_options(True),
+            after=_quiet_note(),
+        )
     return system_reply("This chat is closed, so start each message with `@gator`.", _tip_options(False))
 
 

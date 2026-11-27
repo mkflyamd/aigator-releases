@@ -2,6 +2,7 @@
 gate is on, and still only into the user's own chat. Commands run either way."""
 
 import logging
+from datetime import datetime, timezone
 
 import pytest
 
@@ -44,7 +45,8 @@ class TeamsWorld:
         return self.sent
 
     def say(self, seq, text, now):
-        return {"id": str(seq), "message_type": "message", "body": text, "body_html": "", "created_at": ""}
+        stamp = datetime.fromtimestamp(now, timezone.utc).isoformat()
+        return {"id": str(seq), "message_type": "message", "body": text, "body_html": "", "created_at": stamp}
 
 
 class SlackWorldFake:
