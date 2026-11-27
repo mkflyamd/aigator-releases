@@ -124,9 +124,14 @@
   }
 
   // The project is only worth saying when agents from more than one project are open.
-  function pickerText(a) {
+  function projectLabel(a) {
     const mixed = state.agents.some((o) => o.project_id !== state.agents[0].project_id);
-    return mixed && a.project_id ? `${agentName(a)} · ${a.project_id}` : agentName(a);
+    return mixed ? a.project_id || '' : '';
+  }
+
+  function pickerText(a) {
+    const project = projectLabel(a);
+    return project ? `${agentName(a)} · ${project}` : agentName(a);
   }
 
   // A pair's ends are stored when the pair is made; show the live name while the agent is open.
@@ -229,7 +234,14 @@
     return el(
       'div',
       { className: 'relay-agent-row' },
-      el('span', { className: 'relay-agent-name', textContent: pickerText(a) }),
+      el(
+        'span',
+        { className: 'relay-agent-name', title: pickerText(a) },
+        agentName(a),
+        ...(projectLabel(a)
+          ? [el('span', { className: 'relay-agent-project', textContent: projectLabel(a) })]
+          : []),
+      ),
       el(
         'span',
         { className: 'relay-agent-state' },
