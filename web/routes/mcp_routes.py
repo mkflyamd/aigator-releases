@@ -1,4 +1,5 @@
 """MCP connection management routes."""
+import copy
 import dataclasses
 import logging
 import os
@@ -613,7 +614,12 @@ def get_google_preset():
         or cfg.get("google_oauth_client_secret")
         or ""
     )
-    out = dict(_GOOGLE_PRESET)
+    from google_accounts import configured_accounts
+    out = copy.deepcopy(_GOOGLE_PRESET)
+    accounts = configured_accounts(cfg)
+    if accounts:
+        # The default account becomes login_hint in workspace-mcp's sign-in link.
+        out["servers"][0]["env_defaults"]["USER_GOOGLE_EMAIL"] = accounts[0]
     if shared_id:
         out["shared_client_id"] = shared_id
     if shared_secret:

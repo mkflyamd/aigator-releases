@@ -20648,14 +20648,72 @@ if (document.readyState === 'loading') {
 // GitHub/Jira/Confluence: /api/config already returns these in plaintext, so
 // the secret field gets the real value (masked visually by type="password",
 // revealable via the Show/hide eye button), not an empty field.
+// Same shape as the Jira site rows: the first row is the default account.
+function addGoogleAccountRow(value = '', signedIn = null) {
+  const list = document.querySelector('#google-ws-accounts .site-list');
+  if (!list) return null;
+  const isDefault = list.children.length === 0;
+  const row = document.createElement('div');
+  row.className = 'site-row';
+  const input = document.createElement('input');
+  input.type = 'email';
+  input.className = 'key-field';
+  input.autocomplete = 'off';
+  input.spellcheck = false;
+  input.placeholder = isDefault ? 'Your Google email (e.g. you@gmail.com)' : 'Another Google email';
+  input.value = value;
+  row.appendChild(input);
+  if (signedIn !== null) {
+    const status = document.createElement('span');
+    status.className = 'site-row-tag';
+    status.textContent = signedIn ? 'Signed in' : 'Not signed in';
+    row.appendChild(status);
+  }
+  if (isDefault) {
+    const tag = document.createElement('span');
+    tag.className = 'site-row-tag';
+    tag.textContent = 'Default';
+    row.appendChild(tag);
+  } else {
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'site-remove';
+    remove.title = 'Remove account';
+    remove.setAttribute('aria-label', 'Remove account');
+    remove.textContent = '×';
+    remove.addEventListener('click', () => row.remove());
+    row.appendChild(remove);
+  }
+  list.appendChild(row);
+  return input;
+}
+
+function setGoogleAccounts(accounts) {
+  const list = document.querySelector('#google-ws-accounts .site-list');
+  if (!list) return;
+  list.replaceChildren();
+  const rows = accounts && accounts.length ? accounts : [{ email: '', signed_in: null }];
+  rows.forEach((a) => addGoogleAccountRow(a.email, a.signed_in));
+}
+
+function googleAccountValues() {
+  const list = document.querySelector('#google-ws-accounts .site-list');
+  if (!list) return [];
+  return Array.from(list.querySelectorAll('input'))
+    .map((i) => i.value.trim())
+    .filter(Boolean);
+}
+
 async function _refreshGoogleWsCredentials() {
   try {
-    const [presetRes, cfgRes] = await Promise.all([
+    const [presetRes, cfgRes, statusRes] = await Promise.all([
       fetch('/api/config/mcp/presets/google'),
       fetch('/api/config'),
+      fetch('/api/config/google/status'),
     ]);
     const preset = await presetRes.json();
     const cfg = await cfgRes.json();
+    if (statusRes.ok) setGoogleAccounts((await statusRes.json()).accounts || []);
     const redirectEl = document.getElementById('google-ws-redirect-uri');
     if (redirectEl && preset.redirect_uri) redirectEl.textContent = preset.redirect_uri;
     const cidInput = document.getElementById('google-ws-client-id-input');
@@ -20681,7 +20739,6 @@ async function _saveGoogleWsCredentials() {
   const csecInput = document.getElementById('google-ws-client-secret-input');
   const saveBtn = document.getElementById('google-ws-cred-save-btn');
   const msg = document.getElementById('google-ws-cred-msg');
-  const connectBtn = document.getElementById('google-ws-connect-btn');
   const clientId = cidInput.value.trim();
   const clientSecret = csecInput.value.trim();
   if (!clientId || !clientSecret) {
@@ -20696,7 +20753,11 @@ async function _saveGoogleWsCredentials() {
     const res = await fetch('/api/config/google', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ client_id: clientId, client_secret: clientSecret }),
+      body: JSON.stringify({
+        client_id: clientId,
+        client_secret: clientSecret,
+        accounts: googleAccountValues(),
+      }),
     });
     const d = await res.json();
     if (!res.ok) {
@@ -20706,21 +20767,13 @@ async function _saveGoogleWsCredentials() {
       return;
     }
     saveBtn.textContent = 'Update';
-    // Not connected yet — a saved credential is useless on its own, so finish
-    // the job and connect right away instead of making the user find and
-    // click a second "Connect" button above. Only skip this when a
-    // connection already exists (rotating the secret shouldn't silently
-    // tear down and reconnect a working session).
-    const alreadyConnected = connectBtn && connectBtn.classList.contains('hidden');
-    if (alreadyConnected) {
-      msg.textContent = '✓ Credentials updated';
-      msg.style.color = 'var(--success)';
-    } else {
-      msg.textContent = '✓ Saved — connecting…';
-      msg.style.color = 'var(--success)';
-      await _connectGoogleWorkspace();
-      if (msg.textContent.indexOf('Failed') === -1) msg.textContent = '';
-    }
+    // Always reconnect: the running server only reads the client secret and
+    // default account at launch, so a changed value must restart it.
+    msg.textContent = '✓ Saved — connecting…';
+    msg.style.color = 'var(--success)';
+    await _connectGoogleWorkspace();
+    if (msg.textContent.indexOf('Failed') === -1) msg.textContent = '';
+    _refreshGoogleWsCredentials();
   } catch (err) {
     msg.textContent = '✗ ' + err.message;
     msg.style.color = 'var(--danger)';
@@ -21010,6 +21063,10 @@ function _initGoogleWorkspaceSettings() {
   _refreshGoogleWsCredentials();
   const credSaveBtn = document.getElementById('google-ws-cred-save-btn');
   if (credSaveBtn) credSaveBtn.addEventListener('click', () => _saveGoogleWsCredentials());
+  document.getElementById('google-ws-add-account')?.addEventListener('click', () => {
+    const input = addGoogleAccountRow();
+    if (input) input.focus();
+  });
   if (connectBtn) {
     connectBtn.addEventListener('click', (e) => {
       e.stopPropagation();

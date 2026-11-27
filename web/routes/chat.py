@@ -15,6 +15,7 @@ from conversation_store import index_of_message
 import shared
 from security import verify_csrf
 from skill_pin import pin_context_block as _pin_context_block, resolve_pin as _resolve_pin
+from tool_pipeline import GOOGLE_UMBRELLA_ID, expand_google_umbrella
 
 import re as _re
 
@@ -456,6 +457,7 @@ def _filter_tools(active_skill: str, has_images: bool, active_skills: list[str] 
     for sid in (active_skills or []):
         if _is_routable(sid):
             primary_ids.add(sid)
+    primary_ids = set(expand_google_umbrella(sorted(primary_ids), message, shared.SKILL_TOOLS_MAP))
     _unapproved = set(unapproved_deps or [])
     # A runner chosen directly is gated like one pulled in as a dependency.
     skill_ids = {
@@ -546,7 +548,17 @@ def _append_jira_instance_context(system: str, active_skill_ids: list[str], cfg:
     )
 
 
-def _append_google_account_context(system: str, active_skill_ids: list[str], google_email: str) -> str:
+def _tool_budget_overflow_message(required_count: int, max_tools: int, active_count: int) -> str:
+    return (
+        f"⚠️ Tool budget overflow: this request needs {required_count} required tools "
+        f"but the active model accepts at most {max_tools}. "
+        f"Total active tools: {active_count}. "
+        f"To resolve: disable optional skills in Settings → Tools, or deselect skills "
+        f"not needed for this request."
+    )
+
+
+def _append_google_account_context(system: str, active_skill_ids: list[str], accounts: list[str]) -> str:
     """Add Workspace account guidance for backend-defined Google service IDs."""
     from tool_pipeline import is_google_workspace_service
 
@@ -556,11 +568,18 @@ def _append_google_account_context(system: str, active_skill_ids: list[str], goo
         or is_google_workspace_service(skill_id)
         for skill_id in active_skill_ids
     )
-    if not has_workspace or not google_email or "GOOGLE ACCOUNT:" in system:
+    if not has_workspace or not accounts or "GOOGLE ACCOUNT:" in system:
         return system
+    if len(accounts) == 1:
+        return system + (
+            f"\n\nGOOGLE ACCOUNT: The user's Google email is {accounts[0]}. "
+            f"Pass this as the user_google_email parameter to all Google Workspace tools. "
+            f"Do NOT ask the user for their email address."
+        )
     return system + (
-        f"\n\nGOOGLE ACCOUNT: The user's Google email is {google_email}. "
-        f"Pass this as the user_google_email parameter to all Google Workspace tools. "
+        f"\n\nGOOGLE ACCOUNT: The user has these Google accounts: {', '.join(accounts)}. "
+        f"The default is {accounts[0]}. Pass the account the user names as the user_google_email "
+        f"parameter to Google Workspace tools; use the default when they do not name one. "
         f"Do NOT ask the user for their email address."
     )
 
@@ -838,7 +857,7 @@ def _mcp_catalog() -> dict[str, str]:
                 continue
             cid = conn.get("id")
             name = _sanitize_catalog_text(conn.get("name") or cid or "", max_len=40)
-            if not cid:
+            if not cid or cid == GOOGLE_UMBRELLA_ID:
                 continue
             tools = conn.get("cached_tools", []) or []
             tool_names = [_sanitize_catalog_text(t.get("name", ""), max_len=30)
@@ -2021,7 +2040,10 @@ async def chat(req: ChatRequest):
     # Refresh installed skill prompts so SKILL.md edits (including `requires:`)
     # take effect on the next request without a server restart.
     shared.load_installed_skill_prompts()
-    _all_active = list(set(_explicit_no_gator + _pin_skills + _inferred))
+    _explicit_skill_ids = set(expand_google_umbrella(sorted(_explicit_skill_ids), _msg_text, shared.SKILL_TOOLS_MAP))
+    _all_active = expand_google_umbrella(
+        list(set(_explicit_no_gator + _pin_skills + _inferred)), _msg_text, shared.SKILL_TOOLS_MAP
+    )
     # Rank + cap AUTO-detected skills before dep expansion so a dropped skill
     # doesn't drag in its dependencies. Explicit skills are exempt (never capped).
     # Ranking is by provenance (official vendor sources beat flaky in-house native);
@@ -2100,9 +2122,10 @@ async def chat(req: ChatRequest):
     # and mid-turn reactivation consistently.
     try:
         from config import load_config as _load_cfg
+        from google_accounts import configured_accounts
         _cfg_now = _load_cfg()
         system = _append_google_account_context(
-            system, _all_active, _cfg_now.get("google_user_email", "")
+            system, _all_active, configured_accounts(_cfg_now)
         )
         system = _append_jira_instance_context(system, _all_active, _cfg_now)
     except Exception:
@@ -2290,8 +2313,11 @@ async def chat(req: ChatRequest):
             _required_skill_ids.update(
                 sid for sid in _all_active if sid.startswith("mcp-") and sid.endswith(("-read", "-write"))
             )
-        if req.active_skill and req.active_skill in shared.SKILL_TOOLS_MAP:
-            _required_skill_ids.add(req.active_skill)
+        for _sid in expand_google_umbrella(
+            [req.active_skill] if req.active_skill else [], _msg_text, shared.SKILL_TOOLS_MAP
+        ):
+            if _sid in shared.SKILL_TOOLS_MAP:
+                _required_skill_ids.add(_sid)
         if _image_analysis_requested and "fetch_image" in _all_active:
             _required_skill_ids.add("fetch_image")
         _required_names = _required_tool_names(_required_skill_ids)
@@ -2326,13 +2352,7 @@ async def chat(req: ChatRequest):
             _max = int(getattr(provider, "max_tools", 128))
             _required_count = len(_required_names)
             _active_count = len(active_tools)
-            _overflow_msg = (
-                f"⚠️ Tool budget overflow: this request needs {_required_count} required tools "
-                f"but the active model accepts at most {_max}. "
-                f"Total active tools: {_active_count}. "
-                f"To resolve: disable optional skills in Settings → Tools, or deselect skills "
-                f"not needed for this request."
-            )
+            _overflow_msg = _tool_budget_overflow_message(_required_count, _max, _active_count)
             yield f"data: {_json.dumps({'status': _overflow_msg})}\n\n"
             yield f"data: {_json.dumps({'text': _overflow_msg})}\n\n"
             yield "data: [DONE]\n\n"
@@ -2523,7 +2543,12 @@ async def chat(req: ChatRequest):
                 _new_skills: list[str] = []
                 if _retry_count < _MAX_AUTO_ACTIVATE_RETRIES and not use_three_agent:
                     _turn_text = "".join(_turn_text_parts)
-                    _new_skills = _detect_requested_skills(_turn_text, _all_active)
+                    _new_skills = [
+                        s for s in expand_google_umbrella(
+                            _detect_requested_skills(_turn_text, _all_active), _msg_text, shared.SKILL_TOOLS_MAP
+                        )
+                        if s not in _all_active
+                    ]
 
                 if not _new_skills and _retry_count < _MAX_AUTO_ACTIVATE_RETRIES and not use_three_agent:
                     _already = _already_active_skill_requests("".join(_after_last_tool_parts), _all_active)
@@ -2559,8 +2584,17 @@ async def chat(req: ChatRequest):
                     required_names=_mid_required,
                     priority_groups=[set(shared.SKILL_TOOLS_MAP.get(s, set())) for s in _new_skills],
                 )
-                if not _mid_selection.required_overflow:
-                    _new_tools = _mid_selection.tools
+                if _mid_selection.required_overflow:
+                    _mid_msg = _tool_budget_overflow_message(
+                        len(_mid_required), int(getattr(provider, "max_tools", 128)), len(_new_tools)
+                    )
+                    yield f"data: {_json.dumps({'status': _mid_msg})}\n\n"
+                    yield f"data: {_json.dumps({'text': _mid_msg})}\n\n"
+                    _stream_emitted_done = True
+                    _done_emitted_flag[0] = True
+                    yield "data: [DONE]\n\n"
+                    return
+                _new_tools = _mid_selection.tools
                 # MCP skills have tools but no SKILL.md prompt — skip those that
                 # aren't in SKILL_PROMPTS; their tools alone are enough for the
                 # model to use. Route through _append_skill_prompt so a plugin
@@ -2575,8 +2609,9 @@ async def chat(req: ChatRequest):
                             _new_system, s, _mid_preamble_done)
                 try:
                     from config import load_config as _load_cfg
+                    from google_accounts import configured_accounts
                     _new_system = _append_google_account_context(
-                        _new_system, _new_skills, _load_cfg().get("google_user_email", "")
+                        _new_system, _new_skills, configured_accounts(_load_cfg())
                     )
                 except Exception:
                     pass

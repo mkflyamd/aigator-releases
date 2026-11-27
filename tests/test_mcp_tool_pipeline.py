@@ -475,11 +475,27 @@ def test_google_service_id_is_recognized_as_workspace_activation():
 def test_google_account_context_covers_single_and_midturn_google_service():
     from routes.chat import _append_google_account_context
 
-    initial = _append_google_account_context("system", ["g-gmail"], "person@example.test")
-    midturn = _append_google_account_context("system", ["g-calendar"], "person@example.test")
+    initial = _append_google_account_context("system", ["g-gmail"], ["person@example.test"])
+    midturn = _append_google_account_context("system", ["g-calendar"], ["person@example.test"])
     assert "user_google_email" in initial
     assert "person@example.test" in initial
     assert "user_google_email" in midturn
+
+
+def test_google_account_context_lists_several_accounts_and_the_default():
+    from routes.chat import _append_google_account_context
+
+    out = _append_google_account_context("system", ["g-gmail"], ["me@example.test", "work@example.test"])
+    assert "me@example.test" in out and "work@example.test" in out
+    assert "default" in out.lower()
+    assert out.count("GOOGLE ACCOUNT:") == 1
+    assert _append_google_account_context(out, ["g-gmail"], ["me@example.test"]) == out
+
+
+def test_google_account_context_is_empty_without_accounts():
+    from routes.chat import _append_google_account_context
+
+    assert _append_google_account_context("system", ["g-gmail"], []) == "system"
 
 
 def test_background_selected_google_skill_bypasses_builtin_direct_router():

@@ -6,7 +6,7 @@ AI Gator integrates Google Workspace (Gmail, Google Calendar, and more) via the
 open-source [workspace-mcp](https://github.com/taylorwilsdon/google_workspace_mcp)
 server, published on [PyPI](https://pypi.org/project/workspace-mcp/) as
 `workspace-mcp`. The server wraps Google's GA REST APIs (not the Preview-gated
-MCP APIs) and exposes them as MCP tools over stdio transport.
+MCP APIs) and exposes them as MCP tools over streamable-http transport.
 
 ## Why workspace-mcp
 
@@ -29,22 +29,74 @@ Workspace services with 120+ tools:
 
 ```
 AI Gator (port 8000)
-  └─ stdio MCP client (web/mcp/stdio_client.py)
-       └─ subprocess: uvx workspace-mcp --tools gmail calendar
-            ├─ Reads GOOGLE_OAUTH_CLIENT_ID / SECRET from env vars
-            ├─ Calls Gmail REST API (gmail.googleapis.com) — GA
-            ├─ Calls Calendar REST API (calendar-json.googleapis.com) — GA
+  └─ HTTP MCP client ── http://127.0.0.1:8080/mcp
+       └─ detached process: uvx workspace-mcp --transport streamable-http --tool-tier complete
+            ├─ Reads GOOGLE_OAUTH_CLIENT_ID / SECRET and USER_GOOGLE_EMAIL from env vars
+            ├─ Calls the Google REST APIs (Gmail, Calendar, Drive, ...) — GA
             └─ OAuth callback server on port 8080 (WORKSPACE_MCP_PORT)
 ```
 
-The server runs as a **separate process** on the user's machine. AI Gator
-communicates with it over stdin/stdout (JSON-RPC per the MCP spec). No data
-passes through any third party — the server calls Google's APIs directly.
+The server runs as a **separate process** on the user's machine, started by
+`POST /api/config/mcp/presets/spawn` (`web/routes/mcp_routes.py`). AI Gator
+talks to it over streamable HTTP. No data passes through any third party — the
+server calls Google's APIs directly.
+
+## Google accounts
+
+Settings → Apps → Google Workspace has a **Google accounts** list, shaped like
+the Jira site rows:
+
+- The user types one email per row. The first row is the default account and is
+  stored in `google_accounts` in `config.json`. `google_user_email` mirrors the
+  default so older configs keep working.
+- **Save** validates the Client ID suffix, the secret, and every email, then
+  sends a dummy authorization code to `https://oauth2.googleapis.com/token`. An
+  `invalid_client` answer means Google rejects the Client ID / secret pair, and
+  the save is refused. Network failures do not block the save.
+- **Save always reconnects.** The running server reads the client secret and the
+  default account only at launch, so every save respawns it.
+- `GET /api/config/google/status` returns each account with `default` and
+  `signed_in` (a credentials file exists under `~/.google_workspace_mcp/credentials/`).
+
+### Login hint
+
+The preset endpoint (`GET /api/config/mcp/presets/google`) sets
+`USER_GOOGLE_EMAIL` in the server's env from the default account. workspace-mcp
+adds `login_hint=<email>` to the Google sign-in link when it has an email, so
+Google opens the right account chooser entry.
+
+### Account resolver
+
+`web/google_accounts.py` resolves `user_google_email` in code, before the
+approval gate, for every workspace-mcp tool that takes the argument
+(`web/mcp/manager.py`):
+
+- a missing or unknown value becomes the default account;
+- a value that matches a configured account is kept (case-insensitive);
+- with no configured account the call returns an error naming Settings instead
+  of reaching Google.
+
+Approval cards therefore store the resolved email. The system prompt lists all
+configured accounts and the default (`_append_google_account_context` in
+`web/routes/chat.py`).
+
+## Tool budget
+
+workspace-mcp at `--tool-tier complete` exposes about 138 tools, which is more
+than a model's tool limit (128 for Claude models). AI Gator never loads that
+connection whole. `expand_google_umbrella` (`web/tool_pipeline.py`) replaces the
+`mcp-google-workspace` connection with the `g-*` service groups the message
+asks for (Gmail, Calendar, Drive, Docs, Sheets, Slides, Forms, Tasks, Contacts,
+Chat, Search, Apps Script), defaulting to Gmail, Calendar and Drive. It runs for
+explicit selection, the active skill, mid-turn skill activation and scheduled
+runs, and the raw connection is hidden from the skill catalog. When a request
+still needs more required tools than the model allows, the chat reports the
+counts and asks the user to disable optional skills.
 
 ## OAuth flow
 
 1. AI Gator injects `GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET`
-   as env vars on the stdio connection (from shared config)
+   as env vars when it spawns the server (from shared config)
 2. On first tool call (e.g. "check my Gmail"), the server has no stored
    credentials and returns an auth URL
 3. The user clicks the URL, signs in to Google, authorizes the app
@@ -111,17 +163,19 @@ cannot reach.
 
 ## Key files
 
-| File                          | Role                                                                           |
-| ----------------------------- | ------------------------------------------------------------------------------ |
-| `web/routes/mcp_routes.py`    | Preset definition, resolve endpoint, MCP connection CRUD                       |
-| `web/mcp/manager.py`          | HITL gate (`_is_gated_tool`, `_summarize_gated_call`), tool dispatch           |
-| `web/mcp/stdio_client.py`     | Stdio transport — spawns and communicates with the server process              |
-| `web/skills/_drafts.py`       | Draft store for HITL approval flow                                             |
-| `web/routes/email.py`         | Draft approval endpoint (`/api/drafts/{id}/approve`) — replays gated MCP calls |
-| `web/static/mcp_add_modal.js` | Connect wizard — preset flow, GitHub URL fetcher                               |
-| `web/static/app.js`           | Draft approval card UI, chat rendering                                         |
-| `web/oauth/flow.py`           | OAuth flow for remote MCP servers (not used for workspace-mcp)                 |
-| `web/oauth/dcr.py`            | BYOC provider registration — Google-specific params (no `resource` param)      |
+| File                          | Role                                                                                   |
+| ----------------------------- | -------------------------------------------------------------------------------------- |
+| `web/routes/mcp_routes.py`    | Preset definition, resolve and spawn endpoints, MCP connection CRUD                    |
+| `web/google_accounts.py`      | Account list, account resolver, client-secret probe                                    |
+| `web/routes/config_routes.py` | `POST /api/config/google` (validate and save), `GET /api/config/google/status`         |
+| `web/tool_pipeline.py`        | Google service groups, `expand_google_umbrella`                                        |
+| `web/mcp/manager.py`          | HITL gate (`_is_gated_tool`, `_summarize_gated_call`), account resolver, tool dispatch |
+| `web/skills/_drafts.py`       | Draft store for HITL approval flow                                                     |
+| `web/routes/email.py`         | Draft approval endpoint (`/api/drafts/{id}/approve`) — replays gated MCP calls         |
+| `web/static/mcp_add_modal.js` | Connect wizard — preset flow, GitHub URL fetcher                                       |
+| `web/static/app.js`           | Draft approval card UI, chat rendering                                                 |
+| `web/oauth/flow.py`           | OAuth flow for remote MCP servers (not used for workspace-mcp)                         |
+| `web/oauth/dcr.py`            | BYOC provider registration — Google-specific params (no `resource` param)              |
 
 ## Corporate proxy support
 

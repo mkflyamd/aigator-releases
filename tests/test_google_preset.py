@@ -118,3 +118,25 @@ def test_preset_http_servers_match_url_fetcher_known_doc_urls():
             f"Preset URL {url} not in url_fetcher _KNOWN_DOC_URLS — "
             "the wizard and the paste-flow would create duplicate connections."
         )
+
+
+def test_preset_injects_default_account_as_login_hint(monkeypatch):
+    monkeypatch.setattr(
+        "config.load_config", lambda: {"google_accounts": ["me@example.test", "work@example.test"]}
+    )
+    env = _preset()["servers"][0]["env_defaults"]
+    assert env["USER_GOOGLE_EMAIL"] == "me@example.test"
+
+
+def test_preset_has_no_login_hint_without_accounts(monkeypatch):
+    monkeypatch.setattr("config.load_config", lambda: {})
+    env = _preset()["servers"][0]["env_defaults"]
+    assert "USER_GOOGLE_EMAIL" not in env
+
+
+def test_preset_injection_does_not_mutate_the_module_constant(monkeypatch):
+    from routes.mcp_routes import _GOOGLE_PRESET
+
+    monkeypatch.setattr("config.load_config", lambda: {"google_accounts": ["me@example.test"]})
+    _preset()
+    assert "USER_GOOGLE_EMAIL" not in _GOOGLE_PRESET["servers"][0]["env_defaults"]

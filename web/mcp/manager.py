@@ -424,13 +424,26 @@ def _register(conn: dict) -> None:
 
         conn_snapshot = dict(conn)  # closure capture — full record so _client_for has everything
         limit_param = _discover_limit_param(input_schema)
+        takes_email = _is_workspace_mcp(conn) and "user_google_email" in (
+            (input_schema.get("properties") or {}) if isinstance(input_schema, dict) else {}
+        )
 
-        def _make_handler(orig_name: str, c: dict, limit_param: str | None, hints: dict):
+        def _make_handler(orig_name: str, c: dict, limit_param: str | None, hints: dict, takes_email: bool = False):
             def _handler(**kwargs):
                 transport = c.get("transport", "http")
                 # Strip internal server-injected keys (e.g. _context_id) — MCP
                 # servers only accept the parameters declared in their input schema.
                 kwargs = {k: v for k, v in kwargs.items() if not k.startswith("_")}
+                if takes_email:
+                    # Account choice is enforced in code, not left to the model, and
+                    # happens before the approval gate so cards store the real email.
+                    from google_accounts import GoogleAccountError, resolve_google_account_for_call
+                    try:
+                        kwargs["user_google_email"] = resolve_google_account_for_call(
+                            kwargs.get("user_google_email")
+                        )
+                    except GoogleAccountError as exc:
+                        return {"error": str(exc), "transport": transport}
                 if _is_unverified_jira_mcp_mutation(orig_name, c, hints):
                     # A raw Jira write is parked as an approval card, like the
                     # workspace-mcp writes below: the call only runs from the
@@ -606,7 +619,7 @@ def _register(conn: dict) -> None:
                                 pass
             return _handler
 
-        shared.TOOL_DISPATCH[namespaced] = _make_handler(orig_name, conn_snapshot, limit_param, _tool_hints(t))
+        shared.TOOL_DISPATCH[namespaced] = _make_handler(orig_name, conn_snapshot, limit_param, _tool_hints(t), takes_email)
         shared.MCP_TOOL_CLASSIFIERS[namespaced] = _make_classifier(orig_name, conn_snapshot, _tool_hints(t))
         shared.TOOL_STATUS[namespaced] = f"Calling {name}..."
         tool_names.add(namespaced)
