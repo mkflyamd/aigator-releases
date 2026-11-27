@@ -179,4 +179,3 @@ async def test_activity_resets_the_idle_clock(svc, host, clock):
 async def test_output_delegates_with_a_cursor(svc):
     s = await svc.start(BUDGET, "a")
     assert await svc.output(s.id, 4) == ("out", 7)
-
