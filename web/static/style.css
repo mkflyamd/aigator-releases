@@ -23688,3 +23688,59 @@ body.tab-fullscreen {
   fill: var(--text-muted) !important;
   stroke: var(--text-muted) !important;
 }
+
+/* Usage sharing notice and toast */
+.usage-notice-box {
+  width: 540px;
+  max-height: calc(100vh - 2rem);
+  overflow: auto;
+}
+.usage-notice-title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--text);
+}
+.usage-notice-title:focus {
+  outline: none;
+}
+.usage-notice-title:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+  border-radius: 4px;
+}
+.usage-notice-intro {
+  margin: 0;
+  font-size: 0.84rem;
+  color: var(--text-sub);
+}
+.usage-notice-facts {
+  margin: 0;
+  display: grid;
+  grid-template-columns: 8rem minmax(0, 1fr);
+  gap: 0.6rem 0.9rem;
+  padding: 0.75rem 0.9rem;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 0.8rem;
+}
+.usage-notice-facts dt {
+  color: var(--text-sub);
+  font-weight: 600;
+}
+.usage-notice-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.usage-notice-facts ul {
+  margin: 0;
+  padding-left: 1rem;
+}
+.usage-notice-actions {
+  align-items: center;
+}
+.toggle-switch input:disabled + .toggle-track {
+  opacity: 0.55;
+  cursor: not-allowed;
+}

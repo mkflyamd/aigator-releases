@@ -1080,6 +1080,36 @@
               </div>
             </div>
 
+            <!-- Privacy: shown only when an admin makes usage reporting available -->
+            <div id="usage-sharing-section" hidden>
+              <div class="spanel-divider">Privacy</div>
+              <div class="srow">
+                <div class="srow-info">
+                  <div class="srow-label" id="usage-sharing-label">Share usage analytics</div>
+                  <div class="srow-sub" id="usage-sharing-desc">
+                    Usage counts and version info. Never your messages or files.
+                  </div>
+                  <div class="srow-sub" id="usage-sharing-status" role="status"></div>
+                </div>
+                <div class="srow-actions">
+                  <button type="button" class="btn-ghost" id="usage-sharing-review">
+                    What is sent
+                  </button>
+                  <label class="toggle-switch" style="margin: 0">
+                    <input
+                      type="checkbox"
+                      id="usage-sharing-toggle"
+                      checked
+                      disabled
+                      aria-labelledby="usage-sharing-label"
+                      aria-describedby="usage-sharing-desc usage-sharing-status"
+                    />
+                    <span class="toggle-track"></span>
+                  </label>
+                </div>
+              </div>
+            </div>
+
             <!-- Browser Engine -->
             <div class="spanel-divider">Browser Engine</div>
             <div class="srow">
@@ -1284,6 +1314,13 @@
         id="about-version"
         style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.2rem"
       ></div>
+      <div
+        id="about-usage-note"
+        class="hidden"
+        style="font-size: 0.7rem; color: var(--text-muted); margin-top: 0.5rem"
+      >
+        May collect issues and usage to improve AI Gator.
+      </div>
       <div class="about-divider"></div>
       <button
         id="about-restart-tour"
@@ -2036,6 +2073,7 @@
       document.write('<scr' + 'ipt src="/static/speech.js' + _cb + '"><\/scr' + 'ipt>');
       document.write('<scr' + 'ipt src="/static/demo-media.js' + _cb + '"><\/scr' + 'ipt>');
       document.write('<scr' + 'ipt src="/static/app.js' + _cb + '"><\/scr' + 'ipt>');
+      document.write('<scr' + 'ipt src="/static/usage-sharing.js' + _cb + '"><\/scr' + 'ipt>');
       document.write('<scr' + 'ipt src="/static/third-pane.js' + _cb + '"><\/scr' + 'ipt>');
       document.write('<scr' + 'ipt src="/static/agents-pane.js' + _cb + '"><\/scr' + 'ipt>');
     </script>
