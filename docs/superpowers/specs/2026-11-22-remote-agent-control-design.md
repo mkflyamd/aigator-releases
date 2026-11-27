@@ -62,15 +62,15 @@ Every call carries a `Principal(channel, identity, scopes)`. Scopes are `read`, 
 
 Channel-independent. The grammar is `@gator <command or text>`. A message is a command only if it starts with `@gator` (case-insensitive) followed by whitespace. Everything else in the self-chat is an ordinary note and is ignored.
 
-| Message | Action |
-|---|---|
-| `@gator <name> <text>` | `send` to the session or chat tab with short name `<name>` |
-| `@gator <text>` | `send` to the default project's session, starting one if none is live |
-| `@gator list` | sessions and chat tabs with short name, agent, state, age |
-| `@gator status [<name>]` | state and the last agent message |
-| `@gator stop [<name>]` | `stop` |
-| `@gator stop all` | stop every remote session and disarm remote control |
-| `@gator help` | command list |
+| Message                  | Action                                                                |
+| ------------------------ | --------------------------------------------------------------------- |
+| `@gator <name> <text>`   | `send` to the session or chat tab with short name `<name>`            |
+| `@gator <text>`          | `send` to the default project's session, starting one if none is live |
+| `@gator list`            | sessions and chat tabs with short name, agent, state, age             |
+| `@gator status [<name>]` | state and the last agent message                                      |
+| `@gator stop [<name>]`   | `stop`                                                                |
+| `@gator stop all`        | stop every remote session and disarm remote control                   |
+| `@gator help`            | command list                                                          |
 
 `list`, `status`, `stop` and `help` are reserved words and are never session names. If the first word after `@gator` is not a reserved word and not a known short name, the whole text goes to the default session.
 
@@ -146,8 +146,8 @@ Agent-initiated messages stay same-project only and go through `web/agent_mcp.py
 4. Closing the Code tab does not end a remotely started session. It ends on `@gator stop`, process exit, or the idle limit.
 5. A message sent while Gator was off is run once if newer than 15 minutes and skipped with a notice otherwise. A Gator restart never runs the same message twice.
 6. Gator posts only into the user's own self-chat, verified before each post, and its own posts never trigger a command, by prefix and by recorded message id.
-6a. A session keeps its id and its vendor session id across a backend restart, and `@gator <name>` resumes it.
-6b. More than 20 commands in 10 minutes are rate limited, `@gator stop all` disarms remote control, and remote control disarms at the absolute cap.
+   6a. A session keeps its id and its vendor session id across a backend restart, and `@gator <name>` resumes it.
+   6b. More than 20 commands in 10 minutes are rate limited, `@gator stop all` disarms remote control, and remote control disarms at the absolute cap.
 7. Every new mutating route uses `verify_csrf`, and `tests/test_csrf_route_inventory.py` passes with no baseline changes.
 8. Opening the Code tab later attaches to the live session and shows its recent output.
 9. The existing `/code` OpenCode path still works until slice 1 lands.
