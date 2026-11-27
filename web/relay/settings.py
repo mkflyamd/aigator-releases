@@ -19,12 +19,27 @@ def settings_file() -> Path:
     return agent_suspend.STATE_FILE.parent / "relay" / "settings.json"
 
 
-def _load() -> dict:
+def _load() -> dict | None:
+    """No file yet means the defaults. A file that exists but cannot be trusted returns None:
+    callers then deny, because it may hold opt-outs the user relied on."""
     try:
-        found = json.loads(settings_file().read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        text = settings_file().read_text(encoding="utf-8")
+    except FileNotFoundError:
         return {}
-    return found if isinstance(found, dict) else {}
+    except OSError:
+        return None
+    try:
+        found = json.loads(text)
+    except ValueError:
+        return None
+    if not isinstance(found, dict):
+        return None
+    opted = found.get("opted_out", [])
+    if "agent_messaging" in found and not isinstance(found["agent_messaging"], bool):
+        return None
+    if not isinstance(opted, list) or not all(isinstance(e, str) for e in opted):
+        return None
+    return found
 
 
 def _save(data: dict) -> None:
@@ -39,7 +54,8 @@ def admin_allows_messaging() -> bool:
 
 
 def user_allows_messaging() -> bool:
-    return _load().get("agent_messaging", True) is not False
+    data = _load()
+    return data is not None and data.get("agent_messaging", True) is not False
 
 
 def messaging_allowed() -> bool:
@@ -47,21 +63,24 @@ def messaging_allowed() -> bool:
 
 
 def set_user_messaging(enabled: bool) -> None:
+    """The user's own switch: it also repairs a file that could not be trusted."""
     with _lock:
-        data = _load()
+        data = _load() or {}
         data["agent_messaging"] = bool(enabled)
         _save(data)
 
 
 def opted_out(endpoint_id: str) -> bool:
-    opted = _load().get("opted_out", [])
-    return isinstance(opted, list) and endpoint_id in opted
+    data = _load()
+    return data is None or endpoint_id in data.get("opted_out", [])
 
 
 def set_opted_out(endpoint_id: str, value: bool) -> None:
     with _lock:
         data = _load()
-        opted = {e for e in data.get("opted_out", []) if isinstance(e, str)}
+        if data is None:
+            data = {"agent_messaging": False}
+        opted = set(data.get("opted_out", []))
         opted.add(endpoint_id) if value else opted.discard(endpoint_id)
         data["opted_out"] = sorted(opted)
         _save(data)

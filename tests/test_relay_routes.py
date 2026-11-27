@@ -2,6 +2,7 @@ import pathlib
 import sys
 import time
 import uuid
+from datetime import datetime
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "web"))
 
@@ -102,6 +103,13 @@ def test_a_link_is_made_between_two_known_agents_and_can_be_stopped(client, csrf
     assert client.get("/api/relay", headers=csrf).json()["links"] == []
     assert client.delete(f"/api/relay/links/{link['id']}", headers=csrf).status_code == 200
     assert client.delete("/api/relay/links/nope", headers=csrf).status_code == 404
+
+
+def test_a_link_with_no_hours_lasts_eight_hours(client, csrf, world):
+    a, b = agent(world, "alpha"), agent(world, "beta")
+    link = client.post("/api/relay/links", json={"a": a, "b": b}, headers=csrf).json()
+    lasts = datetime.fromisoformat(link["expires_at"]).timestamp() - time.time()
+    assert abs(lasts - 8 * 3600) < 60
 
 
 def test_a_link_needs_two_different_agents_that_exist(client, csrf, world):

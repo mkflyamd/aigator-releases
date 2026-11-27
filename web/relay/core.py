@@ -124,7 +124,7 @@ def write_audit(line: dict) -> None:
         with _audit_lock:
             lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
             lines = [*lines[-(AUDIT_KEEP - 1) :], json.dumps(line)]
-            path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            agent_suspend._write_atomic(path, "\n".join(lines) + "\n")
     except OSError:
         logger.warning("could not write the relay audit line", exc_info=True)
 
@@ -188,7 +188,7 @@ class Relay:
     def _cancel_pending(self, matches) -> None:
         for task_id, runner in list(self._running.items()):
             task = self._tasks.get(task_id)
-            if task is not None and matches(task):
+            if task is not None and not runner.done() and matches(task):
                 self._canceled.add(task_id)
                 task.state, task.code, task.reason = TaskState.CANCELED, "canceled", "Stopped by the user."
                 runner.cancel()

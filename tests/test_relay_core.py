@@ -1,6 +1,7 @@
 """The relay core: switches, sender stamping, idempotency, hop depth, limits, links, audit."""
 
 import asyncio
+from pathlib import Path
 
 import pytest
 
@@ -246,6 +247,20 @@ async def test_stop_all_cancels_in_flight_messages_and_ends_links(world):
     assert code_of(await world.relay.send_on_link(link.id, A, "no")) == "no_link"
 
 
+async def test_stop_all_after_the_delivery_finished_does_not_report_it_as_canceled(world):
+    deliver = world.adapter.deliver
+
+    async def delivered_then_stopped(sender, target, text, mode):
+        result = await deliver(sender, target, text, mode)
+        asyncio.get_running_loop().call_soon(world.relay.stop_all)
+        return result
+
+    world.adapter.deliver = delivered_then_stopped
+    task = await world.relay.submit(D, "Beta", "already in")
+    assert world.adapter.delivered and state_of(task) == WORKING
+    assert world.audit[-1]["state"] == WORKING
+
+
 async def test_a_link_expires(world):
     link = world.relay.create_link(A, B, seconds=10)
     assert state_of(await world.relay.send_on_link(link.id, A, "in time")) == WORKING
@@ -314,3 +329,19 @@ def test_audit_file_is_capped(tmp_path, monkeypatch):
     lines = core.audit_file().read_text(encoding="utf-8").splitlines()
     assert len(lines) == core.AUDIT_KEEP
     assert lines[-1] == '{"n": %d}' % (core.AUDIT_KEEP + 4)
+
+
+def test_a_write_that_fails_halfway_leaves_the_audit_file_as_it_was(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_suspend, "STATE_FILE", tmp_path / "suspended-agents.json")
+    core.write_audit({"n": 1})
+    before = core.audit_file().read_text(encoding="utf-8")
+    real_write = Path.write_text
+
+    def torn(self, data, *args, **kwargs):
+        real_write(self, data[:3], *args, **kwargs)
+        raise OSError("disk full")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "write_text", torn)
+        core.write_audit({"n": 2})
+    assert core.audit_file().read_text(encoding="utf-8") == before

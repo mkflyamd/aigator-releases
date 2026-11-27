@@ -55,10 +55,44 @@ def test_opt_out_survives_the_user_switch(world):
     assert settings.opted_out("pty:a")
 
 
-@pytest.mark.parametrize("text", ["not json", "[]", '{"agent_messaging": "no", "opted_out": 3}'])
-def test_unreadable_settings_fall_back_to_defaults(world, text):
+@pytest.mark.parametrize(
+    "text",
+    ["not json", "[]", '{"agent_messaging": "no"}', '{"opted_out": 3}', '{"opted_out": [1]}'],
+)
+def test_settings_that_cannot_be_trusted_turn_messaging_off_and_deny_every_agent(world, text):
     path = settings.settings_file()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text)
+    assert not settings.user_allows_messaging()
+    assert not settings.messaging_allowed()
+    assert settings.opted_out("pty:a")
+
+
+def test_a_settings_file_that_cannot_be_read_turns_messaging_off_and_denies_every_agent(world):
+    settings.settings_file().mkdir(parents=True)
+    assert not settings.user_allows_messaging()
+    assert settings.opted_out("pty:a")
+
+
+def test_no_settings_file_yet_means_the_defaults(world):
+    assert not settings.settings_file().exists()
+    assert settings.user_allows_messaging()
+    assert not settings.opted_out("pty:a")
+
+
+def test_opting_an_agent_out_of_a_damaged_file_keeps_messaging_off(world):
+    path = settings.settings_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("not json")
+    settings.set_opted_out("pty:a", True)
+    assert not settings.user_allows_messaging()
+    assert settings.opted_out("pty:a")
+
+
+def test_the_users_own_switch_repairs_a_damaged_file(world):
+    path = settings.settings_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("not json")
+    settings.set_user_messaging(True)
     assert settings.user_allows_messaging()
     assert not settings.opted_out("pty:a")
