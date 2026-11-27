@@ -5,6 +5,7 @@
   const LS_LAYOUT_KEY = 'gator.terminal.layout';
   const LS_SIZE_H_KEY = 'gator.terminal.height';
   const LS_SIZE_V_KEY = 'gator.terminal.width';
+  const MIN_FIT_PX = 40;
 
   const STATE = {
     panel: null,
@@ -93,6 +94,13 @@
     panel.appendChild(tabs);
     panel.appendChild(terms);
     document.body.appendChild(panel);
+
+    // Refit on any size change of the terminals area (window, reparent, banner, hidden -> shown),
+    // not just window resize events, or xterm keeps its old rows and the bottom is clipped.
+    new ResizeObserver(() => {
+      clearTimeout(STATE._fitTimer);
+      STATE._fitTimer = setTimeout(_fitActive, 80);
+    }).observe(terms);
 
     STATE.panel = panel;
     STATE.tabsEl = tabsScroll;
@@ -377,21 +385,34 @@
     }, 20);
   }
 
+  // A hidden or squeezed panel cannot be measured: FitAddon reads the inline 100% size of a
+  // display:none element as 100px and would shrink xterm and the PTY to ~12x6, and a TUI resized to a
+  // bogus size and back leaves its prompt bar misplaced until a keypress forces a full redraw.
   function _fit(sess) {
     if (!sess || !sess.fitAddon || !sess.term) return;
+    const el = sess.el;
+    if (!el || !el.offsetParent || el.clientWidth < MIN_FIT_PX || el.clientHeight < MIN_FIT_PX) {
+      return;
+    }
     try {
       sess.fitAddon.fit();
-      if (sess.ws && sess.ws.readyState === WebSocket.OPEN) {
-        const { cols, rows } = sess.term;
-        const last = sess._sentSize;
-        if (!last || last.cols !== cols || last.rows !== rows) {
-          sess._sentSize = { cols, rows };
-          sess.ws.send(JSON.stringify({ type: 'resize', cols, rows }));
-        }
-      }
     } catch (e) {
-      /* not visible yet */
+      return;
     }
+    _syncPtySize(sess);
+  }
+
+  // Send the size once per websocket and whenever it changes; a reconnect gets a new PTY whose size
+  // is independent of xterm's, so it is always synced even when the grid is unchanged.
+  function _syncPtySize(sess) {
+    const ws = sess.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    const { cols, rows } = sess.term;
+    if (sess._sentWs === ws && sess._sentCols === cols && sess._sentRows === rows) return;
+    ws.send(JSON.stringify({ type: 'resize', cols, rows }));
+    sess._sentWs = ws;
+    sess._sentCols = cols;
+    sess._sentRows = rows;
   }
 
   function _fitActive() {
@@ -486,8 +507,6 @@
     const delay = retryDelay || 0;
 
     sess.ws = new WebSocket(url);
-    // Each connection spawns a fresh shell at the default size, so it needs the first frame.
-    sess._sentSize = null;
     sess.ws.onopen = () => {
       sess._retryDelay = 0;
       _fit(sess);
@@ -652,7 +671,6 @@
     _updatePush();
     _updateVerticalFlag();
     setTimeout(_fitActive, 50);
-    window.addEventListener('resize', _fitActive);
     if (!STATE._watching) {
       STATE._watching = true;
       _watchPanesForConflicts();
