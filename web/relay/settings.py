@@ -43,6 +43,17 @@ def _load() -> dict | None:
     return found
 
 
+def _salvage() -> dict:
+    """What a damaged file still tells us for certain: the agents the user opted out."""
+    try:
+        found = json.loads(settings_file().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    opted = found.get("opted_out") if isinstance(found, dict) else None
+    kept = sorted({e for e in opted if isinstance(e, str)}) if isinstance(opted, list) else []
+    return {"opted_out": kept} if kept else {}
+
+
 def _save(data: dict) -> None:
     try:
         agent_suspend._write_atomic(settings_file(), json.dumps(data))
@@ -66,7 +77,9 @@ def messaging_allowed() -> bool:
 def set_user_messaging(enabled: bool) -> None:
     """The user's own switch: it also repairs a file that could not be trusted."""
     with _lock:
-        data = _load() or {}
+        data = _load()
+        if data is None:
+            data = _salvage()
         data["agent_messaging"] = bool(enabled)
         _save(data)
 
@@ -90,7 +103,7 @@ def set_user_self_chat_autosend(enabled: bool) -> None:
     with _lock:
         data = _load()
         if data is None:
-            data = {"agent_messaging": False}
+            data = {**_salvage(), "agent_messaging": False}
         data["self_chat_autosend"] = bool(enabled)
         _save(data)
 
@@ -104,7 +117,7 @@ def set_opted_out(endpoint_id: str, value: bool) -> None:
     with _lock:
         data = _load()
         if data is None:
-            data = {"agent_messaging": False}
+            data = {**_salvage(), "agent_messaging": False}
         opted = set(data.get("opted_out", []))
         opted.add(endpoint_id) if value else opted.discard(endpoint_id)
         data["opted_out"] = sorted(opted)
