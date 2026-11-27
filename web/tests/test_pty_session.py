@@ -1,11 +1,12 @@
 import json
 import queue
 import time
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from pty_session import PtySession
+from pty_session import PtySession, _complete_prefix_length
 from routes import terminal
 from skills.code_agent import projects
 
@@ -451,3 +452,316 @@ def test_an_ordinary_terminal_sends_no_woken_message(monkeypatch):
     finally:
         terminal._pty_sessions.pop("sess-plain", None)
         pty.end()
+
+
+ESC = "\x1b"
+
+
+def _stored(session):
+    return list(session._chunks)
+
+
+def test_a_csi_sequence_split_across_reads_is_stored_whole():
+    pty = _FakePty()
+    session = PtySession(pty)
+    pty.feed("ab" + ESC + "[3")
+    pty.feed("1mcd")
+    assert _wait(lambda: session.read_from(0)[1] == len("ab" + ESC + "[31mcd"))
+    assert _stored(session) == ["ab", ESC + "[31mcd"]
+    pty.end()
+
+
+def test_an_osc_sequence_ended_by_bel_or_st_is_stored_whole():
+    pty = _FakePty()
+    session = PtySession(pty)
+    pty.feed("x" + ESC + "]0;ti")
+    pty.feed("tle\x07y" + ESC + "]8;;http")
+    st = ESC + "\\"
+    pty.feed("://a" + st + "z")
+    assert _wait(
+        lambda: session.read_from(0)[1]
+        == len("x" + ESC + "]0;title\x07y" + ESC + "]8;;http://a" + st + "z")
+    )
+    assert _stored(session) == [
+        "x",
+        ESC + "]0;title\x07y",
+        ESC + "]8;;http://a" + st + "z",
+    ]
+    pty.end()
+
+
+def test_a_window_that_starts_mid_stream_never_starts_inside_a_sequence():
+    pty = _FakePty()
+    session = PtySession(pty, max_chunks=1)
+    pty.feed("aaa" + ESC + "[3")
+    pty.feed("1mbbb")
+    total = len("aaa" + ESC + "[31mbbb")
+    assert _wait(lambda: session.read_from(0)[1] == total)
+    assert session.first_offset == 3
+    assert session.read_from(0) == (ESC + "[31mbbb", total)
+    pty.end()
+
+
+def test_a_held_back_tail_is_released_after_a_short_wait():
+    pty = _FakePty()
+    session = PtySession(pty)
+    pty.feed("abc" + ESC)
+    assert _wait(lambda: session.read_from(0)[0] == "abc")
+    assert session.read_from(0)[0] == "abc"
+    assert _wait(lambda: session.read_from(0)[0] == "abc" + ESC, timeout=2.0)
+    pty.end()
+
+
+def test_a_held_back_tail_is_released_when_the_process_ends():
+    pty = _FakePty()
+    session = PtySession(pty)
+    pty.feed("abc" + ESC + "[")
+    assert _wait(lambda: session.read_from(0)[1] == 3)
+    pty.end()
+    assert _wait(lambda: session.done)
+    assert session.read_from(0) == ("abc" + ESC + "[", 5)
+
+
+def test_a_stale_release_does_not_flush_a_tail_that_has_since_grown():
+    pty = _FakePty()
+    session = PtySession(pty)
+    pty.feed("a" + ESC)
+    assert _wait(lambda: session._held == ESC)
+    stale = session._held_gen
+    pty.feed("[3")
+    assert _wait(lambda: session._held == ESC + "[3")
+    session._flush_held(stale)
+    assert session.read_from(0) == ("a", 1)
+    pty.end()
+
+
+def test_a_very_long_unterminated_sequence_is_not_held_back_forever():
+    pty = _FakePty()
+    session = PtySession(pty)
+    text = ESC + "]0;" + "a" * 6000
+    pty.feed(text)
+    assert _wait(lambda: session.read_from(0)[1] == len(text))
+    pty.end()
+
+
+def test_output_without_escapes_is_stored_as_read():
+    pty = _FakePty()
+    session = PtySession(pty)
+    pty.feed("hello ")
+    pty.feed("world")
+    assert _wait(lambda: session.read_from(0)[1] == 11)
+    assert _stored(session) == ["hello ", "world"]
+    pty.end()
+
+
+def test_resizes_are_recorded_at_the_offset_where_they_happened():
+    pty = _FakePty()
+    session = PtySession(pty, initial_size=(120, 40))
+    pty.feed("aaaa")
+    assert _wait(lambda: session.read_from(0)[1] == 4)
+    session.resize(100, 30)
+    session.resize(100, 30)  # no change: nothing to replay
+    pty.feed("bb")
+    assert _wait(lambda: session.read_from(0)[1] == 6)
+    session.resize(80, 24)
+    pty.feed("cc")
+    assert _wait(lambda: session.read_from(0)[1] == 8)
+    assert pty.size == (80, 24)
+    assert session.size_at(0) == (120, 40)
+    assert session.size_at(3) == (120, 40)
+    assert session.size_at(4) == (100, 30)
+    assert session.size_at(5) == (100, 30)
+    assert session.size_at(6) == (80, 24)
+    assert session.size_events(0, 8) == [(4, 100, 30), (6, 80, 24)]
+    assert session.size_events(4, 8) == [(6, 80, 24)]
+    assert session.size_events(0, 6) == [(4, 100, 30)]
+    assert [s[1:] for s in session.sizes_after(1)] == [(4, 100, 30), (6, 80, 24)]
+    pty.end()
+
+
+def test_a_session_that_never_resized_has_no_sizes_to_replay():
+    pty = _FakePty()
+    session = PtySession(pty)
+    pty.feed("aaaa")
+    assert _wait(lambda: session.read_from(0)[1] == 4)
+    assert session.size_at(0) is None
+    assert session.size_events(0, 4) == []
+    pty.end()
+
+
+def test_sizes_older_than_the_window_collapse_to_the_one_the_window_starts_at():
+    pty = _FakePty()
+    session = PtySession(pty, max_chunks=2, initial_size=(120, 40))
+    pty.feed("aa")
+    assert _wait(lambda: session.read_from(0)[1] == 2)
+    session.resize(100, 30)
+    pty.feed("bb")
+    assert _wait(lambda: session.read_from(0)[1] == 4)
+    session.resize(90, 20)
+    pty.feed("cc")
+    pty.feed("dd")
+    assert _wait(lambda: session.read_from(0)[1] == 8)
+    assert session.first_offset == 4
+    assert session.size_at(session.first_offset) == (90, 20)
+    assert [s[1:] for s in session.sizes_after(0)] == [(4, 90, 20)]
+    pty.end()
+
+
+def test_the_size_log_is_capped(monkeypatch):
+    import pty_session
+
+    monkeypatch.setattr(pty_session, "PTY_SIZES_MAX", 3)
+    pty = _FakePty()
+    session = PtySession(pty, initial_size=(100, 30))
+    for i, cols in enumerate((90, 80, 70, 60, 50), start=1):
+        pty.feed("x")
+        assert _wait(lambda: session.read_from(0)[1] == i)
+        session.resize(cols, 30)
+    assert [s[2] for s in session.sizes_after(0)] == [70, 60, 50]
+    pty.end()
+
+
+def _replay_messages(ws, count):
+    return [json.loads(ws.receive_text()) for _ in range(count)]
+
+
+def _resized_session():
+    pty = _FakePty()
+    session = PtySession(pty, initial_size=(120, 40))
+    pty.feed("aaaa")
+    assert _wait(lambda: session.read_from(0)[1] == 4)
+    session.resize(100, 30)
+    pty.feed("bb")
+    assert _wait(lambda: session.read_from(0)[1] == 6)
+    session.resize(80, 24)
+    pty.feed("cc")
+    assert _wait(lambda: session.read_from(0)[1] == 8)
+    return pty, session
+
+
+def test_ws_replays_the_recorded_resizes_between_the_output_they_apply_to(monkeypatch):
+    pty, session = _resized_session()
+    terminal._pty_sessions["sess-sizes"] = session
+    try:
+        with _client(monkeypatch).websocket_connect(
+            "/api/terminal/agent?session_id=sess-sizes"
+        ) as ws:
+            assert _replay_messages(ws, 7) == [
+                {"type": "replay_size", "cols": 120, "rows": 40},
+                {"type": "output", "data": "aaaa", "seq": 4},
+                {"type": "replay_size", "cols": 100, "rows": 30},
+                {"type": "output", "data": "bb", "seq": 6},
+                {"type": "replay_size", "cols": 80, "rows": 24},
+                {"type": "output", "data": "cc", "seq": 8},
+                {"type": "replay_end"},
+            ]
+            # a resize after the replay is the viewer's own business: only output follows
+            session.resize(60, 20)
+            pty.feed("live")
+            assert json.loads(ws.receive_text()) == {"type": "output", "data": "live", "seq": 12}
+    finally:
+        terminal._pty_sessions.pop("sess-sizes", None)
+        pty.end()
+
+
+def test_ws_reconnect_mid_stream_replays_only_the_resizes_it_missed(monkeypatch):
+    pty, session = _resized_session()
+    terminal._pty_sessions["sess-sizes-mid"] = session
+    try:
+        with _client(monkeypatch).websocket_connect(
+            "/api/terminal/agent?session_id=sess-sizes-mid&seq=4"
+        ) as ws:
+            assert _replay_messages(ws, 5) == [
+                {"type": "replay_size", "cols": 100, "rows": 30},
+                {"type": "output", "data": "bb", "seq": 6},
+                {"type": "replay_size", "cols": 80, "rows": 24},
+                {"type": "output", "data": "cc", "seq": 8},
+                {"type": "replay_end"},
+            ]
+        # a resume after the last resize has nothing to relay out
+        with _client(monkeypatch).websocket_connect(
+            "/api/terminal/agent?session_id=sess-sizes-mid&seq=7"
+        ) as ws:
+            assert json.loads(ws.receive_text()) == {"type": "output", "data": "c", "seq": 8}
+    finally:
+        terminal._pty_sessions.pop("sess-sizes-mid", None)
+        pty.end()
+
+
+def test_ws_replay_of_a_truncated_window_starts_at_the_size_that_window_was_drawn_for(monkeypatch):
+    pty = _FakePty()
+    session = PtySession(pty, max_chunks=2, initial_size=(120, 40))
+    for chunk in ("aa", "bb"):
+        pty.feed(chunk)
+    assert _wait(lambda: session.read_from(0)[1] == 4)
+    session.resize(90, 20)
+    for chunk in ("cc", "dd"):
+        pty.feed(chunk)
+    assert _wait(lambda: session.read_from(0)[1] == 8)
+    terminal._pty_sessions["sess-sizes-trunc"] = session
+    try:
+        with _client(monkeypatch).websocket_connect(
+            "/api/terminal/agent?session_id=sess-sizes-trunc"
+        ) as ws:
+            assert _replay_messages(ws, 4) == [
+                {"type": "truncated"},
+                {"type": "replay_size", "cols": 90, "rows": 20},
+                {"type": "output", "data": "ccdd", "seq": 8},
+                {"type": "replay_end"},
+            ]
+    finally:
+        terminal._pty_sessions.pop("sess-sizes-trunc", None)
+        pty.end()
+
+
+def test_ws_sends_no_replay_messages_when_the_session_never_had_a_size(monkeypatch):
+    pty = _FakePty()
+    session = PtySession(pty)
+    terminal._pty_sessions["sess-nosize"] = session
+    try:
+        pty.feed("abc")
+        assert _wait(lambda: session.read_from(0)[1] == 3)
+        with _client(monkeypatch).websocket_connect(
+            "/api/terminal/agent?session_id=sess-nosize"
+        ) as ws:
+            assert json.loads(ws.receive_text()) == {"type": "output", "data": "abc", "seq": 3}
+            pty.feed("d")
+            assert json.loads(ws.receive_text())["data"] == "d"
+    finally:
+        terminal._pty_sessions.pop("sess-nosize", None)
+        pty.end()
+
+
+def _transcript():
+    path = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "claude_transcript.json"
+    return json.loads(path.read_text(encoding="utf-8"))["chunks"]
+
+
+def _feed_in_awkward_pieces(pty, text, size=97):
+    for i in range(0, len(text), size):
+        pty.feed(text[i : i + size])
+
+
+def test_a_real_transcript_read_in_awkward_pieces_is_stored_without_loss():
+    full = "".join(_transcript())
+    pty = _FakePty()
+    session = PtySession(pty)
+    _feed_in_awkward_pieces(pty, full)
+    assert _wait(lambda: session.read_from(0)[1] == len(full))
+    assert session.read_from(0)[0] == full
+    pty.end()
+
+
+def test_a_real_transcript_window_never_starts_inside_an_escape_sequence():
+    full = "".join(_transcript())
+    pty = _FakePty()
+    session = PtySession(pty, max_chunks=25)
+    _feed_in_awkward_pieces(pty, full)
+    assert _wait(lambda: session.read_from(0)[1] == len(full))
+    start = session.first_offset
+    assert 0 < start < len(full)
+    assert session.read_from(0)[0] == full[start:]
+    assert _complete_prefix_length(full[:start]) == start
+    for chunk in _stored(session):
+        assert _complete_prefix_length(chunk) == len(chunk)
+    pty.end()

@@ -897,3 +897,51 @@ def test_a_packaged_build_never_contacts_the_host(monkeypatch):
     finally:
         terminal._pty_sessions.pop("sess-frozen", None)
         fallback.end()
+
+
+def test_the_mirror_learns_the_hosts_sizes_and_the_offsets_they_apply_at(host):
+    info, spawned = host
+    _create(info)
+    pty = spawned[0][1]
+    remote = pty_client.RemotePty(info, "s1")
+    mirror = PtySession(remote, start_offset=remote.start_offset)
+    pty.feed("aaaa")
+    assert _wait(lambda: mirror.read_from(0)[1] == 4)
+    mirror.resize(80, 24)  # the host records it; the mirror learns it from the host
+    assert _wait(lambda: pty.size == (80, 24))
+    pty.feed("bb")
+    assert _wait(lambda: mirror.read_from(0)[1] == 6)
+    assert _wait(lambda: mirror.size_at(4) == (80, 24))
+    assert mirror.size_at(3) == (100, 30)
+    assert mirror.size_events(0, 6) == [(4, 80, 24)]
+    pty.end()
+
+
+def test_a_backend_that_attaches_late_gets_the_whole_size_history(host):
+    info, spawned = host
+    _create(info)
+    pty = spawned[0][1]
+    first = pty_client.RemotePty(info, "s1")
+    early = PtySession(first, start_offset=first.start_offset)
+    pty.feed("aaaa")
+    assert _wait(lambda: early.read_from(0)[1] == 4)
+    early.resize(80, 24)
+    assert _wait(lambda: pty.size == (80, 24))
+    pty.feed("bb")
+    assert _wait(lambda: early.read_from(0)[1] == 6)
+
+    late = PtySession(pty_client.RemotePty(info, "s1", offset=0), start_offset=0)
+    assert _wait(lambda: late.read_from(0)[1] == 6 and late.size_at(4) == (80, 24))
+    assert late.size_at(0) == (100, 30)
+    pty.end()
+
+
+def test_a_client_of_an_older_backend_ignores_the_size_messages(host):
+    info, spawned = host
+    _create(info)
+    remote = pty_client.RemotePty(info, "s1")  # no size listener, like a backend without it
+    remote.resize(80, 24)
+    assert _wait(lambda: spawned[0][1].size == (80, 24))
+    spawned[0][1].feed("after the resize")
+    assert remote.read() == "after the resize"
+    remote.detach()

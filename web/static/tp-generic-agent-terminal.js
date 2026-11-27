@@ -1534,6 +1534,10 @@ function _genAgentConnect(sess, retryDelay) {
         resize(cols);
         _ocMarkSizeSent(sess);
       }
+    } else if (msg.type === 'replay_size') {
+      _ocReplaySize(sess, msg.cols, msg.rows);
+    } else if (msg.type === 'replay_end') {
+      _ocReplayEnd(sess);
     } else if (msg.type === 'notready') {
       // Transient: PTY not spawned yet, or reaped while we held its id. Do NOT
       // set _dead — onclose then runs the normal backoff reconnect. After a few
