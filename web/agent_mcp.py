@@ -26,6 +26,8 @@ import agent_state
 import agent_suspend
 import agent_wake
 import generic_agent
+from relay.model import META_KEY, TaskState, pty_endpoint
+from relay.service import get_relay
 
 logger = logging.getLogger(__name__)
 
@@ -198,16 +200,23 @@ async def _call_tool(caller: dict, arguments: dict) -> dict:
         reason = "Both 'to' and 'message' are required text."
         await asyncio.to_thread(agent_wake.audit_refusal, sender, to, "invalid", reason, message)
         return _text_result(reason, True)
+    endpoint = pty_endpoint(caller["pty_id"], sender["name"], sender["project_id"])
     try:
-        result = await agent_wake.wake_and_deliver(sender, to, message)
-    except agent_wake.WakeRefused as exc:
-        return _text_result(json.dumps(exc.as_result()), True)
+        task = await get_relay().submit(endpoint, to, message)
     except Exception:
-        logger.exception("wake failed")
+        logger.exception("relay failed")
         reason = "AI Gator could not deliver the message."
         await asyncio.to_thread(agent_wake.audit_refusal, sender, to, "failed", reason, message)
         return _text_result(reason, True)
-    return _text_result(json.dumps(result))
+    meta = task["metadata"][META_KEY]
+    if task["status"]["state"] == TaskState.WORKING.value:
+        delivered = {"status": "delivered", "woke": bool(meta.get("woke")), "target": meta["target"], "task_id": task["id"]}
+        return _text_result(json.dumps(delivered))
+    refused = {"status": meta["code"], "reason": task["status"]["message"]["parts"][0]["text"]}
+    if "candidates" in meta:
+        refused["candidates"] = meta["candidates"]
+    await asyncio.to_thread(agent_wake.audit_refusal, sender, to, refused["status"], refused["reason"], message)
+    return _text_result(json.dumps(refused), True)
 
 
 def _rpc_error(request_id, code: int, message: str) -> dict:

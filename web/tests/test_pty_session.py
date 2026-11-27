@@ -418,13 +418,20 @@ def test_a_viewer_of_a_failed_wake_is_told_why_and_gets_the_unsent_message(monke
 def test_a_viewer_of_a_woken_terminal_is_told_who_woke_it(monkeypatch):
     pty = _FakePty()
     session = PtySession(pty)
-    session.meta = {"agent": "claude", "woken_by": "Turn issues", "woken_preview": "please look"}
+    session.meta = {
+        "agent": "claude",
+        "woken_by": "Turn issues",
+        "woken_preview": "please look",
+        "woken_at": "1764181620000",
+    }
     terminal._pty_sessions["sess-woken"] = session
     try:
         with _client(monkeypatch).websocket_connect("/api/terminal/agent?session_id=sess-woken") as ws:
             assert json.loads(ws.receive_text()) == {
                 "type": "woken",
                 "data": "woken by Turn issues",
+                "by": "Turn issues",
+                "at": "1764181620000",
                 "preview": "please look",
             }
     finally:

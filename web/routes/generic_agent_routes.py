@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -250,6 +251,7 @@ async def _open_terminal(
     if woken_by:
         owner["woken_by"] = woken_by
         owner["woken_preview"] = woken_preview
+        owner["woken_at"] = str(int(time.time() * 1000))
     if not force_new:
         existing = generic_agent.get_active_session(req.project_id, req.agent)
         from_host = False

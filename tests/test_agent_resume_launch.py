@@ -182,6 +182,7 @@ async def test_a_wake_resumes_under_the_old_terminal_id_and_marks_who_woke_it(en
     spawn = env["spawn"][-1]
     assert spawn["sid"] == old
     assert spawn["meta"]["woken_by"] == "Turn issues" and spawn["meta"]["woken_preview"] == "please look"
+    assert spawn["meta"]["woken_at"].isdigit()
     assert spawn["meta"]["project_id"] == "demo" and spawn["meta"]["agent"] == "claude"
     assert cleared == [old]
     assert generic_agent.pinned_session_id(old) == "abc-1"
