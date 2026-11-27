@@ -81,6 +81,36 @@ def _cacheable_block_index(content: list) -> int | None:
     return None
 
 
+_THINKING_TYPES = ("thinking", "redacted_thinking")
+_EMPTY_TURN_PLACEHOLDER = "(no response)"
+
+
+def _sanitize_history_for_send(messages: list[dict]) -> list[dict]:
+    """Return a copy of `messages` the API will accept.
+
+    Assistant list content must not end in a thinking block and must not be
+    empty. Empty text blocks are dropped, trailing thinking blocks are stripped
+    (thinking that precedes text or tool_use is kept), and a message left with
+    nothing becomes a short text placeholder. Inputs are never mutated.
+    """
+    out: list[dict] = []
+    for msg in messages:
+        content = msg.get("content")
+        if msg.get("role") != "assistant" or not isinstance(content, list):
+            out.append(msg)
+            continue
+        blocks = [b for b in content if not _is_empty_text_block(b)]
+        while blocks and isinstance(blocks[-1], dict) and blocks[-1].get("type") in _THINKING_TYPES:
+            blocks.pop()
+        if not blocks:
+            blocks = [{"type": "text", "text": _EMPTY_TURN_PLACEHOLDER}]
+        if blocks == content:
+            out.append(msg)
+        else:
+            out.append({**msg, "content": blocks})
+    return out
+
+
 class AnthropicProvider(LLMProvider):
     """LLM provider for Claude models via Anthropic API or a compatible gateway."""
 
@@ -184,7 +214,7 @@ class AnthropicProvider(LLMProvider):
                 )
 
         # Cache breakpoint 3: last prior history message (moves forward each turn)
-        cached_messages = list(messages)
+        cached_messages = _sanitize_history_for_send(messages)
         if shared.PROMPT_CACHING_ENABLED and len(cached_messages) >= 2:
             idx = len(cached_messages) - 2
             msg = dict(cached_messages[idx])
@@ -332,9 +362,9 @@ class AnthropicProvider(LLMProvider):
             )
             partial_raw = _done_event.get("raw_content", [])
             if partial_raw:
-                kwargs["messages"] = list(kwargs["messages"]) + [
-                    {"role": "assistant", "content": partial_raw}
-                ]
+                kwargs["messages"] = _sanitize_history_for_send(
+                    list(kwargs["messages"]) + [{"role": "assistant", "content": partial_raw}]
+                )
 
     async def _stream_with_sdk(self, kwargs: dict) -> AsyncIterator[StreamEvent]:
         """Use the Anthropic SDK streaming API.

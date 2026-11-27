@@ -37,6 +37,10 @@ def _tool_demo_inspect_frames(source: str, times_sec: list, project_id: str = ""
     return _call(demo_media.inspect_frames, _opt(project_id), source, times_sec)
 
 
+def _tool_demo_leak_check(project_id: str = "") -> dict:
+    return _call(demo_media.leak_check, _opt(project_id))
+
+
 def _tool_demo_replace_interval(start_sec: float, end_sec: float, insert_source: str,
                                 insert_start_sec: float = 0, base: str = "", project_id: str = "") -> dict:
     return _call(demo_media.replace_interval, _opt(project_id), start_sec, end_sec, insert_source,
@@ -89,6 +93,16 @@ TOOL_DEFS = [
             },
             "required": ["source", "times_sec"],
         },
+    },
+    {
+        "name": "demo_leak_check",
+        "description": (
+            "Check the deliverables of a demo project (everything outside source/, work/ and previous/) for "
+            "leaks of the raw recording: copies of source media, text files (html, js, json, srt) that name a "
+            "source file, and media metadata that names one. Call it before telling the user a demo or viewer "
+            "is ready to share, and fix every finding first."
+        ),
+        "input_schema": {"type": "object", "properties": {"project_id": _PROJECT}, "required": []},
     },
     {
         "name": "demo_replace_interval",
@@ -201,6 +215,7 @@ TOOL_DEFS = [
 TOOL_STATUS = {
     "demo_media_manifest": "Checking demo media...",
     "demo_inspect_frames": "Extracting video frames...",
+    "demo_leak_check": "Checking the demo for leaked source media...",
     "demo_replace_interval": "Replacing video section...",
     "demo_append_clip": "Appending clip...",
     "demo_cut_intervals": "Cutting video sections...",
@@ -211,6 +226,7 @@ TOOL_STATUS = {
 TOOL_HANDLERS = {
     "demo_media_manifest": _tool_demo_media_manifest,
     "demo_inspect_frames": _tool_demo_inspect_frames,
+    "demo_leak_check": _tool_demo_leak_check,
     "demo_replace_interval": _tool_demo_replace_interval,
     "demo_append_clip": _tool_demo_append_clip,
     "demo_cut_intervals": _tool_demo_cut_intervals,

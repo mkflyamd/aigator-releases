@@ -3,7 +3,7 @@ from pathlib import Path
 SKILL = Path(__file__).resolve().parents[2] / "web" / "skills" / "gator-demo-recorder" / "SKILL.md"
 TEXT = SKILL.read_text(encoding="utf-8")
 TOOLS = ("demo_media_manifest", "demo_inspect_frames", "demo_replace_interval",
-         "demo_append_clip", "demo_cut_intervals", "demo_speed_interval", "demo_merge_narration")
+         "demo_append_clip", "demo_cut_intervals", "demo_speed_interval", "demo_merge_narration", "demo_leak_check")
 MERGE_ERRORS = ("approval_superseded", "narration_not_approved", "approval_corrupt", "approval_stale_media",
                 "out_of_range", "sync_mismatch", "output_verification_failed", "tts_failed")
 

@@ -78,14 +78,15 @@ class ConversationStore:
                 _strip_image_blocks(_repair_all(recent))
             )
 
-    async def recent_tool_names(self, context_id: str, last_n: int = 24) -> set[str]:
-        """Names of tools the model actually ran in the last `last_n` messages.
+    async def recent_tool_names(self, context_id: str, last_n: int | None = 24) -> set[str]:
+        """Names of tools the model actually ran in the last `last_n` messages (all when None).
 
         A call the allow-list refused (`tool_not_offered`) is not counted: a tool the
         model merely asked for must not become a reason to offer it next turn.
         """
         async with self._lock:
-            recent = list(self._store.get(context_id, []))[-last_n:]
+            history = list(self._store.get(context_id, []))
+        recent = history if last_n is None else history[-last_n:]
         refused: set[str] = set()
         for msg in recent:
             blocks = msg.get("content") if isinstance(msg.get("content"), list) else []

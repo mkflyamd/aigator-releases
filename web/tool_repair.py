@@ -51,6 +51,46 @@ def stalled_chunk(summaries: list[dict]) -> str:
     return f"data: {json.dumps(payload)}\n\n"
 
 
+_HISTORY_REJECTION = re.compile(
+    r"cannot be thinking|must be non-empty|non-empty content|text content blocks must",
+    re.IGNORECASE,
+)
+
+
+def is_history_rejection(exc: Exception) -> bool:
+    """True for a provider 400 saying the conversation history itself is malformed."""
+    if getattr(exc, "status_code", None) != 400:
+        return False
+    return bool(_HISTORY_REJECTION.search(str(exc)))
+
+
+def drop_thinking_blocks(msgs: list[dict]) -> None:
+    """Remove every thinking/redacted_thinking block from `msgs` in place; a message left
+    empty gets a short text placeholder so the history stays valid."""
+    for msg in msgs:
+        content = msg.get("content")
+        if msg.get("role") != "assistant" or not isinstance(content, list):
+            continue
+        kept = [
+            b for b in content
+            if not (isinstance(b, dict) and b.get("type") in ("thinking", "redacted_thinking"))
+        ]
+        if len(kept) != len(content):
+            msg["content"] = kept or [{"type": "text", "text": "(no response)"}]
+
+
+def history_rejected_stalled_chunk() -> str:
+    """SSE `stalled` event for a history 400 that survived one thinking-stripped retry."""
+    payload = {
+        "stalled": True,
+        "message": "The model rejected this conversation's saved history even after cleanup "
+                   "— click Continue to retry, or start a new chat.",
+        "retry_note": "Note: the previous attempt failed because the saved conversation "
+                      "history was rejected. Continue the user's original request.",
+    }
+    return f"data: {json.dumps(payload)}\n\n"
+
+
 _LEAKED_CALL = re.compile(r"<\s*[|｜]\s*(?:DSML|tool[▁_ ]?calls?)", re.IGNORECASE)
 
 LEAKED_CALL_NOTE = (

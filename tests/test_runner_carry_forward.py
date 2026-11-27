@@ -1,230 +1,91 @@
-"""A chat that already ran code keeps the code runner when a later message names a skill, and a
-model that asks for a skill that is already on is told so instead of the turn ending empty."""
+"""A runner (shell/code) the user approved or the chat already used must stay
+offered for the rest of the chat: not only while its tool call is inside the
+last 24 messages, and not only when the turn has no pinned skill."""
 
 import asyncio
-import json
-import os
-import sys
-import time
-import uuid
+import pathlib
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "web"))
+import app  # noqa: F401 — importing populates the skill registries at startup
+import shared
+from conversation_store import ConversationStore
+from task_state import TaskStateStore
 
-import app  # noqa: E402,F401
-import data_sources  # noqa: E402
-import pytest  # noqa: E402
-import shared  # noqa: E402
-from routes import chat as chat_routes  # noqa: E402
-from routes.chat import (  # noqa: E402
-    _already_active_note,
-    _already_active_skill_requests,
-    _detect_requested_skills,
-    _gated_runners_for_tools,
-)
+CHAT_SRC = (pathlib.Path(__file__).parent.parent / "web" / "routes" / "chat.py").read_text(encoding="utf-8")
 
 
-@pytest.fixture
-def runners(monkeypatch):
-    monkeypatch.setitem(shared.SKILL_TOOLS_MAP, "shell_runner", {"run_shell"})
-    monkeypatch.setitem(shared.SKILL_TOOLS_MAP, "code_runner", {"run_python"})
-    for n in ("run_shell", "run_python"):
-        monkeypatch.setattr(
-            shared, "TOOLS",
-            [*shared.TOOLS, {"name": n, "description": "t", "input_schema": {"type": "object", "properties": {}}}],
+def _tool_turn(name, tid):
+    return [
+        {"role": "assistant", "content": [{"type": "tool_use", "id": tid, "name": name, "input": {}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": tid, "content": "ok"}]},
+    ]
+
+
+def _chatter(n):
+    out = []
+    for i in range(n):
+        out.append({"role": "user", "content": f"q{i}"})
+        out.append({"role": "assistant", "content": [{"type": "text", "text": f"a{i}"}]})
+    return out
+
+
+def test_a_tool_run_long_ago_is_still_reported_when_the_window_is_unbounded():
+    store = ConversationStore()
+    msgs = [*_tool_turn("run_on_host", "t1"), *_chatter(40)]
+
+    async def run():
+        await store.append("tab", msgs)
+        return (
+            await store.recent_tool_names("tab"),
+            await store.recent_tool_names("tab", last_n=None),
         )
 
-
-def test_only_runners_whose_tools_ran_are_carried(runners):
-    assert _gated_runners_for_tools({"run_python", "slack_search_public_and_private"}) == ["code_runner"]
-    assert _gated_runners_for_tools({"run_shell", "run_python"}) == ["code_runner", "shell_runner"]
-    assert _gated_runners_for_tools({"slack_search_public_and_private"}) == []
-    assert _gated_runners_for_tools(None) == []
+    windowed, everything = asyncio.run(run())
+    assert "run_on_host" not in windowed
+    assert "run_on_host" in everything
 
 
-def _seed_run_python(ctx):
-    data_sources.allow(ctx, "capability:code_runner")
-    msgs = [
-        {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "run_python", "input": {}}]},
-        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]},
-    ]
-    asyncio.run(shared.conversation_store.append(ctx, msgs))
+def _runner_tool():
+    for sid in ("shell_runner", "code_runner"):
+        tools = shared.SKILL_TOOLS_MAP.get(sid)
+        if tools:
+            return sid, sorted(tools)[0]
+    raise AssertionError("no runner skill registered")
 
 
-def _offered_skills(monkeypatch, message, seeded):
-    from fastapi import FastAPI
-    from fastapi.testclient import TestClient
+def test_a_runner_used_in_an_earlier_turn_stays_in_play(monkeypatch):
+    from routes import chat
 
-    ctx = f"carry-{uuid.uuid4().hex}"
-    if seeded:
-        _seed_run_python(ctx)
-    seen = {}
-    real = chat_routes._filter_tools
+    store = TaskStateStore()
+    monkeypatch.setattr(shared, "task_state_store", store)
+    monkeypatch.setattr(chat, "_granted_runners", lambda ctx: [])
+    sid, tool = _runner_tool()
 
-    def spy(active_skill, has_images, active_skills=None, **kw):
-        seen["skills"] = list(active_skills or [])
-        seen["tools"] = [t["name"] for t in real(active_skill, has_images, active_skills, **kw)]
-        return real(active_skill, has_images, active_skills, **kw)
-
-    monkeypatch.setattr(chat_routes, "_filter_tools", spy)
-    monkeypatch.setattr(chat_routes, "_classify_skills_via_llm", lambda *a, **k: [])
-    api = FastAPI()
-    api.include_router(chat_routes.router)
-    with TestClient(api) as client:
-        res = client.post("/api/chat", json={"message": message, "context_id": ctx})
-        assert res.status_code == 200
-        for _ in range(50):
-            if "skills" in seen:
-                break
-            time.sleep(0.1)
-    return seen
+    assert chat._runners_in_play("tab", {tool}) == [sid]
+    # Later turn: the tool call has scrolled out of the history window.
+    assert chat._runners_in_play("tab", set()) == [sid]
+    # Another chat is unaffected.
+    assert chat._runners_in_play("other-tab", set()) == []
 
 
-def test_naming_a_skill_keeps_the_runner_the_chat_already_used(runners, monkeypatch):
-    seen = _offered_skills(monkeypatch, "check my slack messages", seeded=True)
-    assert "code_runner" in seen["skills"]
-    assert "run_python" in seen["tools"]
+def test_a_granted_runner_is_in_play_without_any_tool_run(monkeypatch):
+    from routes import chat
+
+    monkeypatch.setattr(shared, "task_state_store", TaskStateStore())
+    monkeypatch.setattr(chat, "_granted_runners", lambda ctx: ["shell_runner"])
+    assert chat._runners_in_play("tab", set()) == ["shell_runner"]
 
 
-def test_a_message_with_no_signal_keeps_the_runner(runners, monkeypatch):
-    seen = _offered_skills(monkeypatch, "proceed", seeded=True)
-    assert "code_runner" in seen["skills"] and "run_python" in seen["tools"]
+def test_asking_about_runners_does_not_create_an_empty_tab_state(monkeypatch):
+    from routes import chat
+
+    store = TaskStateStore()
+    monkeypatch.setattr(shared, "task_state_store", store)
+    monkeypatch.setattr(chat, "_granted_runners", lambda ctx: [])
+    chat._runners_in_play("tab", set())
+    assert store.get("tab") is None
 
 
-def test_a_chat_that_never_ran_code_is_not_given_the_runner(runners, monkeypatch):
-    seen = _offered_skills(monkeypatch, "check my slack messages", seeded=False)
-    assert "code_runner" not in seen["skills"]
-    assert "run_python" not in seen["tools"]
-
-
-def test_a_model_still_cannot_grant_itself_a_runner(runners):
-    assert _detect_requested_skills("/code_runner", []) == []
-    assert _detect_requested_skills("/shell_runner", ["ppt"]) == []
-
-
-def test_a_bare_skill_turn_for_an_active_skill_is_recognised():
-    assert _already_active_skill_requests("/code_runner", ["code_runner", "ppt"]) == ["code_runner"]
-    assert _already_active_skill_requests("  /ppt\n/code_runner ", ["code_runner", "ppt"]) == ["ppt", "code_runner"]
-
-
-def test_a_skill_token_on_its_own_line_inside_prose_is_recognised():
-    turn = "I'll set up the schedule first.\n\n/calendar\n\nI need the calendar skill active.\nNothing will be sent."
-    assert _already_active_skill_requests(turn, ["calendar", "teams"]) == ["calendar"]
-
-
-def test_prose_or_inactive_skills_are_not_treated_as_a_stall():
-    assert _already_active_skill_requests("I will use /code_runner for this", ["code_runner"]) == []
-    assert _already_active_skill_requests("Done. See ./out/code.py", ["code_runner"]) == []
-    assert _already_active_skill_requests("/jira", ["code_runner"]) == []
-    assert _already_active_skill_requests("", ["code_runner"]) == []
-
-
-def test_the_note_lists_the_tools_it_can_actually_use(runners):
-    note = _already_active_note(["code_runner"], {"run_python", "other"})
-    assert "run_python" in note and "already active" in note
-    held = _already_active_note(["code_runner"], {"other"})
-    assert "run_python" not in held and "none of its tools" in held
-
-
-def test_the_loop_answers_an_already_active_request_instead_of_ending(runners, monkeypatch):
-    import agent_loop
-    from fastapi import FastAPI
-    from fastapi.testclient import TestClient
-
-    calls = []
-
-    def fake_loop(**kw):
-        calls.append({**kw, "msgs": list(kw["msgs"])})
-        said = "/code_runner" if len(calls) == 1 else "Running it now."
-        kw["msgs"].append({"role": "assistant", "content": [{"type": "text", "text": said}]})
-
-        async def gen():
-            yield f"data: {json.dumps({'token': said})}\n\n"
-            yield "data: [DONE]\n\n"
-
-        return gen()
-
-    ctx = f"carry-{uuid.uuid4().hex}"
-    _seed_run_python(ctx)
-    monkeypatch.setattr(agent_loop, "_single_agent_loop", fake_loop)
-    monkeypatch.setattr(chat_routes, "_classify_skills_via_llm", lambda *a, **k: [])
-    api = FastAPI()
-    api.include_router(chat_routes.router)
-    with TestClient(api) as client:
-        task_id = client.post("/api/chat", json={"message": "proceed", "context_id": ctx}).json()["task_id"]
-        for _ in range(100):
-            if any("[DONE]" in c for c in shared.chat_task_store.get_chunks(task_id)) and len(calls) >= 2:
-                break
-            time.sleep(0.1)
-
-    assert len(calls) == 2, "the empty skill-name turn must be retried, not ended"
-    retry = calls[1]["msgs"]
-    assert [m["role"] for m in retry[-3:]].count("assistant") == 1
-    assert retry[-2]["role"] == "assistant" and retry[-1]["role"] == "user"
-    assert "run_python" in retry[-1]["content"] and "already active" in retry[-1]["content"]
-    assert "run_python" in {t["name"] for t in calls[1]["normalized_tools"]}
-
-
-def _run_scripted_loop(monkeypatch, first_run_chunks, expected_calls):
-    import agent_loop
-    from fastapi import FastAPI
-    from fastapi.testclient import TestClient
-
-    calls = []
-
-    def fake_loop(**kw):
-        calls.append({**kw, "msgs": list(kw["msgs"])})
-        chunks = first_run_chunks if len(calls) == 1 else [{"token": "Running it now."}]
-        said = "".join(c.get("token", "") for c in chunks)
-        kw["msgs"].append({"role": "assistant", "content": [{"type": "text", "text": said}]})
-
-        async def gen():
-            for c in chunks:
-                yield f"data: {json.dumps(c)}\n\n"
-            yield "data: [DONE]\n\n"
-
-        return gen()
-
-    ctx = f"carry-{uuid.uuid4().hex}"
-    _seed_run_python(ctx)
-    monkeypatch.setattr(agent_loop, "_single_agent_loop", fake_loop)
-    monkeypatch.setattr(chat_routes, "_classify_skills_via_llm", lambda *a, **k: [])
-    api = FastAPI()
-    api.include_router(chat_routes.router)
-    with TestClient(api) as client:
-        task_id = client.post("/api/chat", json={"message": "proceed", "context_id": ctx}).json()["task_id"]
-        for _ in range(100):
-            if any("[DONE]" in c for c in shared.chat_task_store.get_chunks(task_id)) and len(calls) >= expected_calls:
-                break
-            time.sleep(0.1)
-        time.sleep(0.3)
-    return calls
-
-
-TOOL_DONE = {"tool_result": {"call_id": "c1", "status": "ok", "summary": "read"}}
-
-
-def test_a_skill_line_after_the_last_tool_result_is_retried(runners, monkeypatch):
-    calls = _run_scripted_loop(
-        monkeypatch,
-        [TOOL_DONE, {"token": "Plan first.\n\n/code_runner\n\nI need it active."}],
-        expected_calls=2,
-    )
-    assert len(calls) == 2
-    assert "already active" in calls[1]["msgs"][-1]["content"]
-
-
-def test_a_skill_line_before_later_tool_work_is_not_retried(runners, monkeypatch):
-    calls = _run_scripted_loop(
-        monkeypatch,
-        [{"token": "/code_runner\n"}, TOOL_DONE, {"token": "All done."}],
-        expected_calls=2,
-    )
-    assert len(calls) == 1
-
-
-def test_a_runner_alias_cannot_be_self_granted_or_carried_as_a_plain_skill():
-    aliases = [s for s in shared.SKILL_TOOLS_MAP if s in ("code-runner", "python-runner")]
-    assert aliases, "code_runner registers aliases"
-    for alias in aliases:
-        assert _detect_requested_skills(f"/{alias}", []) == []
-        assert alias not in chat_routes._skills_for_tools(shared.SKILL_TOOLS_MAP[alias])
+def test_runner_carry_forward_is_not_skipped_when_a_skill_is_pinned():
+    call = next(l for l in CHAT_SRC.splitlines() if "_carried_runners = _runners_in_play(" in l)
+    assert call.startswith("    _carried_runners"), "must sit outside the not-locked branch"
+    assert "last_n=None" in CHAT_SRC

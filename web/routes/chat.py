@@ -1152,6 +1152,21 @@ def _gated_runners_for_tools(tool_names) -> list[str]:
     )
 
 
+def _runners_in_play(context_id: str | None, tool_names) -> list[str]:
+    """Runners this chat has used (remembered per tab) plus those the user approved.
+
+    The tool history is a sliding window, so a runner used early in a long chat is
+    remembered on the tab state instead of being re-derived each turn.
+    """
+    used = _gated_runners_for_tools(tool_names)
+    state = shared.task_state_store.get(context_id) if context_id else None
+    if state is not None:
+        used = list(dict.fromkeys([*state.used_runners, *used]))
+    if used and context_id:
+        shared.task_state_store.get_or_create(context_id).used_runners = used
+    return list(dict.fromkeys([*used, *_granted_runners(context_id)]))
+
+
 def _classify_skills_via_llm(message: str, extra_skills: dict | None = None) -> list[str] | None:
     """Use a fast LLM call to classify which skills a message needs.
 
@@ -1994,12 +2009,12 @@ async def chat(req: ChatRequest):
                 print(f"[skill-detect] answer to a question keeps the skills it was asked under: {_answer_carried}", flush=True)
                 _inferred = [*_inferred, *_answer_carried]
 
-        # A runner the chat already used stays available whether this message names another
-        # skill ("use ppt") or gives no signal at all ("proceed").
-        _carried_runners = list(dict.fromkeys([*_gated_runners_for_tools(_tools_already_run), *_granted_runners(_context_id)]))
-        if _carried_runners:
-            print(f"[skill-detect] runners already used in this chat stay available: {_carried_runners}", flush=True)
-            _inferred = list(dict.fromkeys([*_inferred, *_carried_runners]))
+    # A runner the chat already used stays available whether this message names another
+    # skill ("use ppt"), gives no signal at all ("proceed"), or a skill is pinned.
+    _carried_runners = _runners_in_play(_context_id, await shared.conversation_store.recent_tool_names(_context_id, last_n=None))
+    if _carried_runners:
+        print(f"[skill-detect] runners already used in this chat stay available: {_carried_runners}", flush=True)
+        _inferred = list(dict.fromkeys([*_inferred, *_carried_runners]))
 
     # A request to describe/recap an existing image needs authenticated image
     # retrieval before the first model turn. Waiting for reactive activation
