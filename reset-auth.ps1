@@ -41,7 +41,7 @@ if (-not $KeepRunning) {
 
     # Python backends: tray, watchdog, uvicorn (dev + stable)
     Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -match 'aigator_tray|watchdog\.py|web\.app:app|dev\.ps1|uvicorn' } |
+        Where-Object { $_.CommandLine -match 'aigator_tray|watchdog\.py|web\.app:app|dev\.ps1|uvicorn|pty_host\.py' } |
         ForEach-Object {
             Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
             Write-Host "  killed Python PID $($_.ProcessId) ($($_.Name))" -ForegroundColor DarkGray

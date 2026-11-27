@@ -23,7 +23,7 @@ function Stop-Gator {
     # Identity sweep: stop any process whose command line invokes a gator entry
     # point, on any port. Mirrors tray/aigator_tray.py _kill_gator_instances.
     Get-CimInstance Win32_Process |
-        Where-Object { $_.CommandLine -match 'aigator_tray\.py|watchdog\.py|web\.app:app' } |
+        Where-Object { $_.CommandLine -match 'aigator_tray\.py|watchdog\.py|web\.app:app|pty_host\.py' } |
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
     # Port backstop: anything still listening on the default ports.
     foreach ($port in 8000, 8001) {
