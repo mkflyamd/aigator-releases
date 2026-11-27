@@ -19,6 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 import agent_handoff
+import agent_liveness
 import agent_mcp
 import agent_sessions
 import agent_state
@@ -54,6 +55,14 @@ class GenericAgentTerminalRequest(BaseModel):
     resume_id: str | None = None  # reopen a stored session in its own agent; reuses its live terminal if it has one
 
 
+class GenericAgentTakeoverRequest(BaseModel):
+    agent: str
+    repo_path: str
+    resume_id: str
+    pid: int
+    created: float
+
+
 class HandoffPrepareRequest(BaseModel):
     agent: str
     project_id: str
@@ -81,11 +90,12 @@ async def close_generic_agent_terminal(req: GenericAgentTerminalCloseRequest):
     ends on `@gator stop`, process exit or the remote idle limit, never because
     a Code tab was closed.
     """
-    from routes.terminal import HostUnreachable, close_pty_session, session_owner
+    import pty_client
+    from routes.terminal import close_pty_session, session_owner
 
     try:
         owner = await asyncio.to_thread(session_owner, req.pty_session_id, True)
-    except HostUnreachable:
+    except pty_client.HostError:
         raise HTTPException(
             status_code=503,
             detail="Could not check whether this terminal is a remote-control session, so it was left open. Try again.",
@@ -164,6 +174,35 @@ async def installed_generic_agents():
     return {"installed": installed, "gateway_routed": routed}
 
 
+@router.post("/api/generic-agent/takeover", dependencies=[Depends(verify_csrf)])
+async def takeover_session(req: GenericAgentTakeoverRequest):
+    """Close a session open outside Gator so it can be resumed in a Gator terminal."""
+    import pty_client
+    from routes.terminal import pty_pid_map
+
+    if not generic_agent.is_supported(req.agent) or not generic_agent.can_resume(req.agent):
+        raise HTTPException(status_code=400, detail=f"{req.agent!r} cannot resume a session.")
+    if not agent_sessions.SESSION_ID_RE.fullmatch(req.resume_id):
+        raise HTTPException(status_code=400, detail="Invalid session id.")
+    found = await asyncio.to_thread(agent_sessions.find_session, req.repo_path, req.agent, req.resume_id)
+    if found is None:
+        raise HTTPException(status_code=404, detail="Session not found in this project.")
+    try:
+        owners = await asyncio.to_thread(pty_pid_map, True)
+    except pty_client.HostError:
+        raise HTTPException(
+            status_code=503,
+            detail="Could not check whether this session is open in a Gator terminal. Try again.",
+        )
+    try:
+        terminated = await asyncio.to_thread(
+            agent_liveness.takeover, req.agent, found["id"], owners, req.pid, req.created
+        )
+    except agent_liveness.TakeoverError as exc:
+        raise HTTPException(status_code=409, detail={"code": exc.code, "message": str(exc)})
+    return {"terminated": terminated}
+
+
 @router.post("/api/generic-agent/terminal", dependencies=[Depends(verify_csrf)])
 async def generic_agent_terminal(req: GenericAgentTerminalRequest):
     if not req.resume_id:
@@ -207,12 +246,14 @@ async def _open_terminal(
     always spawn rather than adopt the first tab's PTY. The last one spawned
     becomes the project's tracked session (what a cold reopen reattaches to).
     """
+    import pty_client
     from routes.terminal import (
         close_pty_session,
         create_pty_session,
         find_host_session,
         get_pty_session,
         host_session_labels,
+        pty_pid_map,
     )
 
     if not generic_agent.is_supported(req.agent):
@@ -233,6 +274,32 @@ async def _open_terminal(
             entry = await asyncio.to_thread(get_pty_session, live_id)
             if entry and not entry.done:
                 return {"pty_session_id": live_id, "created": False}
+        elsewhere = await asyncio.to_thread(agent_liveness.live_processes, req.agent, resume["id"])
+        if elsewhere:
+            # A restart empties the in-memory pins, but the process is still a child of the
+            # Gator terminal that started it: reattach to that terminal rather than duplicate it.
+            try:
+                owners = await asyncio.to_thread(pty_pid_map, True)
+            except pty_client.HostError:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Could not check whether this session is already open in a Gator terminal. Try again.",
+                )
+            for proc in elsewhere:
+                owner = agent_liveness.owning_pty(proc["pid"], owners)
+                entry = owner and await asyncio.to_thread(get_pty_session, owner)
+                if entry and not entry.done:
+                    return {"pty_session_id": owner, "created": False}
+            first = elsewhere[0]
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "session_live",
+                    "message": "This session is already open in another window.",
+                    "processes": elsewhere,
+                    "where": agent_liveness.describe(req.agent, first),
+                },
+            )
 
     handoff = None
     if req.handoff_id:

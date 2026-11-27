@@ -114,6 +114,8 @@
         state,
         group: groupOf(state, lastActive, nowMs),
         ptySessionId: term ? term.ptySessionId : null,
+        liveElsewhere: !term && !!s.live_elsewhere,
+        elsewhereIn: !term && s.live_elsewhere ? s.live_elsewhere_in || null : null,
       };
     });
     live.forEach((term, pty) => {
@@ -131,6 +133,8 @@
         state,
         group: groupOf(state, lastActive, nowMs),
         ptySessionId: pty,
+        liveElsewhere: false,
+        elsewhereIn: null,
       });
     });
     return rows;
@@ -411,18 +415,117 @@
     _genAgentActivateSession(tabId, row.ptySessionId);
   }
 
-  async function resume(row) {
+  function escapeHtml(text) {
+    return String(text).replace(/[&<>"']/g, (c) => '&#' + c.charCodeAt(0) + ';');
+  }
+
+  function elsewhereText(where) {
+    if (!where) return 'another window';
+    return (where.app || 'another program') + ' (process ' + where.pid + ')';
+  }
+
+  function startedText(created) {
+    return typeof created === 'number'
+      ? ', started ' + new Date(created * 1000).toLocaleString()
+      : '';
+  }
+
+  function takeoverBody(where) {
+    const w = where || {};
+    return escapeHtml(
+      'This session is open in ' +
+        (w.app || 'another program') +
+        ' (process ' +
+        w.pid +
+        startedText(w.created) +
+        '). Gator will close that process and open the session here. Anything unsaved there is lost.',
+    );
+  }
+
+  function canTakeOver(where) {
+    return (
+      !!where && where.can_close === true && where.pid != null && typeof where.created === 'number'
+    );
+  }
+
+  function manualCloseText(where) {
+    return (
+      (where && where.reason) ||
+      'This session is open in another window. Close it yourself, then try again.'
+    );
+  }
+
+  function confirmTakeover(row, where) {
+    const target = where || row.elsewhereIn;
+    if (!canTakeOver(target)) {
+      ui.notice[row.key] = manualCloseText(target);
+      render();
+      return;
+    }
+    if (typeof _showConfirmModal !== 'function') return;
+    _showConfirmModal(
+      'Session open elsewhere',
+      takeoverBody(target),
+      'Close and open here',
+      () => takeover(row, target),
+      { cancelFirst: true },
+    );
+  }
+
+  async function takeover(row, target) {
+    const { project } = context();
+    if (!project) return;
+    const headers =
+      typeof _caHeadersAsync === 'function'
+        ? await _caHeadersAsync()
+        : { 'Content-Type': 'application/json' };
+    let message = 'Could not close the session where it is open.';
+    try {
+      const resp = await fetcher()('/api/generic-agent/takeover', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          agent: row.agent,
+          repo_path: project.repo_path,
+          resume_id: row.id,
+          pid: target.pid,
+          created: target.created,
+        }),
+      });
+      if (resp.ok) {
+        resume(row, true);
+        return;
+      }
+      const d = await resp.json();
+      if (d && d.detail)
+        message = typeof d.detail === 'object' ? d.detail.message || message : d.detail;
+    } catch (_) {}
+    ui.notice[row.key] = message;
+    render();
+  }
+
+  async function resume(row, tookOver) {
     const { tabId, project } = context();
     if (!project || typeof _genAgentStart !== 'function') return;
     if (typeof _genAgentStartInFlight === 'function' && _genAgentStartInFlight(tabId)) return;
+    if (row.liveElsewhere && !tookOver) {
+      confirmTakeover(row);
+      return;
+    }
+    let asked = false;
     const before = terminalState(tabId);
     const count = before ? before.order.length : 0;
     closeFileView();
     await _genAgentStart(tabId, row.agent, project.name, project.repo_path, {
       forceNew: true,
       resumeId: row.id,
+      onSessionLive: (err) => {
+        asked = true;
+        confirmTakeover(row, err && err.where);
+      },
       keepStateAgent: !!(before && before.agent),
     });
+    if (asked) return;
     const after = terminalState(tabId);
     if (after && after.order.length > count) {
       delete ui.notice[row.key];
@@ -592,6 +695,11 @@
   }
 
   function statePill(row) {
+    if (row.liveElsewhere) {
+      const pill = el('span', 'ah-pill ah-pill-elsewhere', 'Open elsewhere');
+      pill.title = 'Open in ' + elsewhereText(row.elsewhereIn);
+      return pill;
+    }
     if (row.state !== 'needs_you' && row.state !== 'working') return null;
     const text = row.state === 'needs_you' ? 'Needs you' : 'Working';
     return el('span', 'ah-pill ah-pill-' + row.state, text);
@@ -999,6 +1107,9 @@
     liveState,
     needsYou,
     buildRows,
+    elsewhereText,
+    takeoverBody,
+    canTakeOver,
     syncTabLabels,
     shortAge,
     metaLine,

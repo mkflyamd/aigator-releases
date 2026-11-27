@@ -98,6 +98,10 @@ def _adopt_pty_session(session_id: str) -> PtySession | None:
             logger.exception("could not adopt PTY session %s from the host", session_id)
             return None
         entry = PtySession(remote, start_offset=remote.start_offset)
+        # The wrapper was just built, but the session began when the host spawned it.
+        created_at = status.get("created_at")
+        if isinstance(created_at, (int, float)):
+            entry.created_at = created_at
         # The host replays its retained output into the new buffer on a reader
         # thread. A client resuming at its last seq must not see a short stream
         # end and mistake it for a different stream, so wait for the replay. If
@@ -115,33 +119,60 @@ def _adopt_pty_session(session_id: str) -> PtySession | None:
         return entry
 
 
-class HostUnreachable(Exception):
-    """The PTY host is running but did not answer, so what it holds is unknown."""
+def pty_pid_map(strict: bool = False) -> dict[int, str]:
+    """Child pid -> PTY id for every live PTY, including ones the PTY host still
+    holds that this backend has not adopted yet (after a restart). Blocking.
+    When the host cannot be listed, return what this process knows, or raise
+    HostError if strict."""
+    owners = {}
+    for sid, entry in list(_pty_sessions.items()):
+        if entry.pid and not entry.done:
+            owners[entry.pid] = sid
+    if pty_client.host_enabled():
+        info = pty_client.find_host(pty_client.instance_key())
+        if info is not None:
+            try:
+                sessions = pty_client.host_request(info, {"op": "list"}).get("sessions", [])
+            except pty_client.HostError as exc:
+                if strict:
+                    raise
+                logger.warning("pty_pid_map: PTY host list failed, owners incomplete: %s", exc)
+                return owners
+            for s in sessions:
+                if strict and "pid" not in s:
+                    raise pty_client.HostError("PTY host did not report session pids")
+                if s.get("pid") and not s.get("done"):
+                    owners.setdefault(s["pid"], s["id"])
+        elif pty_client.host_alive_but_unreachable(pty_client.instance_key()):
+            if strict:
+                raise pty_client.HostError("PTY host is running but did not answer")
+            logger.warning("pty_pid_map: PTY host did not answer, owners incomplete")
+    return owners
 
 
 def _list_host_sessions(strict: bool = False) -> list[dict]:
     """Sessions the host holds. A host that is off, or that never ran, holds none. A
     host that does not answer yields none too, unless `strict`, which raises
-    HostUnreachable so a caller can tell "no sessions" from "could not ask"."""
+    pty_client.HostError so a caller can tell "no sessions" from "could not ask"."""
     if not pty_client.host_enabled():
         return []
     key = pty_client.instance_key()
     info = pty_client.find_host(key)
     if info is None:
-        if strict and pty_client.host_process_running(key):
-            raise HostUnreachable("the PTY host did not answer")
+        if strict and pty_client.host_alive_but_unreachable(key):
+            raise pty_client.HostError("the PTY host did not answer")
         return []
     try:
         return pty_client.host_request(info, {"op": "list"}).get("sessions", [])
     except pty_client.HostError:
         logger.warning("could not ask the PTY host for sessions", exc_info=True)
         if strict:
-            raise HostUnreachable("the PTY host did not answer") from None
+            raise
         return []
 
 
 def host_sessions() -> list[dict]:
-    """Every session the PTY host holds. Raises HostUnreachable when the host does not
+    """Every session the PTY host holds. Raises pty_client.HostError when the host does not
     answer. Blocking."""
     return _list_host_sessions(strict=True)
 
@@ -158,7 +189,7 @@ def session_owner(session_id: str, strict: bool = False) -> dict[str, str] | Non
     """The project and agent labels a session was created with, or None when they
     are unknown. A session this backend created carries them; one adopted from the
     PTY host after a restart is looked up there. With `strict`, a host that does
-    not answer raises HostUnreachable instead of reading as "no labels".
+    not answer raises HostError instead of reading as "no labels".
     Blocking (loopback socket)."""
     meta = getattr(_pty_sessions.get(session_id), "meta", None)
     return meta or host_session_labels(session_id, strict) or None

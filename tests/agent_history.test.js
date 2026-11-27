@@ -418,4 +418,56 @@ const term = (pty, agent, out, viewed) => ({
   delete global.document;
 }
 
+// a session open in another window is flagged, unless Gator already owns a terminal for it
+{
+  const sessions = [
+    rec('s1', 'claude', 'Elsewhere', at(10, 15, 9, 0), { live_elsewhere: true }),
+    rec('s2', 'claude', 'Owned', at(10, 15, 9, 0), { live_elsewhere: true, pty_session_id: 'p2' }),
+    rec('s3', 'claude', 'Closed', at(10, 15, 9, 0)),
+  ];
+  const rows = h.buildRows(sessions, [term('p2', 'claude', NOW - 1000, 0)], NOW);
+  const by = Object.fromEntries(rows.map((r) => [r.id, r]));
+  assert.strictEqual(by.s1.liveElsewhere, true);
+  assert.strictEqual(by.s2.liveElsewhere, false);
+  assert.strictEqual(by.s3.liveElsewhere, false);
+  assert.deepStrictEqual(h.rowActions(by.s1), ['resume', 'handoff']);
+}
+
+// a session open outside Gator says where, and takes over instead of duplicating
+{
+  const sessions = [
+    rec('s1', 'claude', 'Elsewhere', at(10, 15, 9, 0), {
+      live_elsewhere: true,
+      live_elsewhere_in: { app: 'Orca', pid: 51892 },
+    }),
+    rec('s2', 'claude', 'Unknown app', at(10, 15, 9, 0), {
+      live_elsewhere: true,
+      live_elsewhere_in: { app: null, pid: 71308 },
+    }),
+  ];
+  const by = Object.fromEntries(h.buildRows(sessions, [], NOW).map((r) => [r.id, r]));
+  assert.deepStrictEqual(by.s1.elsewhereIn, { app: 'Orca', pid: 51892 });
+  assert.strictEqual(h.elsewhereText(by.s1.elsewhereIn), 'Orca (process 51892)');
+  assert.strictEqual(h.elsewhereText(by.s2.elsewhereIn), 'another program (process 71308)');
+  assert.strictEqual(h.elsewhereText(null), 'another window');
+  assert.strictEqual(
+    h.takeoverBody({ app: 'Orca', pid: 51892 }),
+    'This session is open in Orca (process 51892). Gator will close that process and open the session here. Anything unsaved there is lost.',
+  );
+  const shown = h.takeoverBody({ app: 'Orca', pid: 51892, created: 1700000000.5 });
+  assert(shown.includes('process 51892, started '), 'the dialog shows the process start time');
+  assert(!h.takeoverBody({ app: '<b>x</b>', pid: 1 }).includes('<b>'), 'app text is escaped');
+}
+
+// only a process the server marked closable, with its identity, can be taken over
+{
+  const ok = { app: 'Orca', pid: 7, created: 1700000000.5, can_close: true };
+  assert.strictEqual(h.canTakeOver(ok), true);
+  assert.strictEqual(h.canTakeOver(null), false, 'no identity shown, nothing to confirm');
+  assert.strictEqual(h.canTakeOver({ ...ok, can_close: false }), false, 'unknown application');
+  assert.strictEqual(h.canTakeOver({ ...ok, can_close: undefined }), false, 'an older server');
+  assert.strictEqual(h.canTakeOver({ ...ok, created: null }), false, 'no creation time');
+  assert.strictEqual(h.canTakeOver({ ...ok, pid: null }), false);
+}
+
 console.log('agent_history: ok');

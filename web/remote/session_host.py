@@ -84,7 +84,7 @@ class LocalPtyHost:
 
         try:
             listed = terminal.host_sessions()
-        except terminal.HostUnreachable as exc:
+        except terminal.pty_client.HostError as exc:
             raise HostError("The terminal host did not answer.") from exc
         found = []
         for entry in listed:
