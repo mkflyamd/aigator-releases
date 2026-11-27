@@ -512,6 +512,14 @@
         color: var(--accent);
         background: rgba(var(--accent-rgb), 0.14);
       }
+      .tb-pin-live {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip: rect(0 0 0 0);
+        white-space: nowrap;
+      }
       .tb-pinbar {
         display: none;
         flex: 1 1 auto;
@@ -726,6 +734,7 @@
         </button>
       </div>
 
+      <div class="tb-pin-live" id="tb-pin-live" role="status" aria-live="polite"></div>
       <div class="tb-pinbar" id="tb-pinbar" role="status">
         <svg
           viewBox="0 0 24 24"
@@ -743,7 +752,7 @@
           <line x1="2" y1="12" x2="6" y2="12" />
           <line x1="18" y1="12" x2="22" y2="12" />
         </svg>
-        <span class="tb-pinbar-prompt">Click what you want to pin</span
+        <span class="tb-pinbar-prompt">Click or press Tab to choose what to pin</span
         ><span class="tb-pinbar-prompt-short">Click to pin</span>
         <span class="tb-pinbar-label" id="tb-pinbar-label" aria-live="off"></span
         ><span class="tb-pinbar-kind" id="tb-pinbar-kind" aria-live="off"></span> <kbd>Esc</kbd
@@ -1280,12 +1289,28 @@
         document
           .getElementById('tb-pinbar-cancel')
           .addEventListener('click', () => ipcRenderer.send('toolbar:web-pin-cancel'));
+        const PIN_KEYS = new Set(['Tab', 'ArrowUp', 'ArrowDown', 'Enter']);
+        const elPinLive = document.getElementById('tb-pin-live');
+        let pinLiveTimer = null;
+        // Clear first so the same sentence twice in a row is announced again.
+        function announcePin(text) {
+          elPinLive.textContent = '';
+          clearTimeout(pinLiveTimer);
+          pinLiveTimer = setTimeout(() => {
+            elPinLive.textContent = text;
+          }, 60);
+        }
         function renderPin(state) {
           if (typeof state.pinnable === 'boolean')
             elBar.classList.toggle('is-pinnable', state.pinnable);
+          if (typeof state.pinAnnounce === 'string' && state.pinAnnounce)
+            announcePin(state.pinAnnounce);
           if (typeof state.pinMode === 'boolean') {
+            const wasPinning = elBar.classList.contains('is-pinning');
             elBar.classList.toggle('is-pinning', state.pinMode);
             elPin.classList.toggle('is-active', state.pinMode);
+            // The banner (and its Cancel button) hides when picking ends; keep keyboard focus on the Pin button.
+            if (wasPinning && !state.pinMode && document.hasFocus()) elPin.focus();
           }
           if (typeof state.pinLabel === 'string') {
             elPinLabel.textContent = state.pinLabel;
@@ -1317,6 +1342,19 @@
             closeMenu();
           } else if (e.key === 'Escape' && elBar.classList.contains('is-pinning')) {
             ipcRenderer.send('toolbar:web-pin-cancel');
+          } else if (
+            elBar.classList.contains('is-pinning') &&
+            PIN_KEYS.has(e.key) &&
+            !(e.key === 'Enter' && e.target && e.target.id === 'tb-pinbar-cancel')
+          ) {
+            e.preventDefault();
+            ipcRenderer.send('toolbar:web-pin-key', {
+              key: e.key,
+              shift: e.shiftKey,
+              control: e.ctrlKey,
+              alt: e.altKey,
+              meta: e.metaKey,
+            });
           }
         });
 

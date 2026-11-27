@@ -1,5 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert');
+const vm = require('node:vm');
 const core = require('../shell/web-pin-core');
 
 test('clipFromQuad uses min/max of the quad and adds the scroll offset', () => {
@@ -99,6 +100,133 @@ test('urlMatches compares origin and pathname only', () => {
   assert.ok(!core.urlMatches('not a url', 'https://a.com'));
 });
 
+const PIN = {
+  tag: 'div',
+  type: '',
+  role: 'img',
+  name: 'Revenue',
+  testId: '',
+  heading: 'Sales dashboard',
+  ancestor: '',
+  text: 'Revenue by region North South 4.2M',
+  rect: { x: 100, y: 200, width: 300, height: 200 },
+};
+
+function cand(i, over = {}) {
+  return {
+    tag: 'div',
+    type: '',
+    role: '',
+    name: '',
+    testId: '',
+    heading: '',
+    ancestor: '',
+    text: '',
+    rect: { x: 0, y: 0, width: 10, height: 10 },
+    i,
+    ...over,
+  };
+}
+
+const SAME = {
+  role: 'img',
+  name: 'Revenue',
+  heading: 'Sales dashboard',
+  text: 'Revenue by region North South 4.3M',
+};
+
+test('matchLocator: a stable test id survives a move and a rename', () => {
+  const loc = { ...PIN, testId: 'data-testid=rev' };
+  const moved = cand(3, {
+    testId: 'data-testid=rev',
+    name: 'Total revenue',
+    rect: { x: 700, y: 900, width: 300, height: 200 },
+  });
+  const m = core.matchLocator(loc, [cand(1, { testId: 'data-testid=cost' }), moved]);
+  assert.deepStrictEqual(m, { status: 'ok', index: 3, match: 'stable-id', confidence: 0.98 });
+});
+
+test('matchLocator: a moved element is still found by role and name', () => {
+  const moved = cand(2, { ...SAME, rect: { x: 900, y: 40, width: 300, height: 200 } });
+  const m = core.matchLocator(PIN, [cand(1, { role: 'img', name: 'Cost' }), moved]);
+  assert.strictEqual(m.index, 2);
+  assert.strictEqual(m.match, 'role-name');
+});
+
+test('matchLocator: a changed selector or renamed label is found by fingerprint, not position', () => {
+  const renamed = cand(5, {
+    ...SAME,
+    name: 'Total revenue',
+    rect: { x: 5, y: 5, width: 50, height: 50 },
+  });
+  const other = cand(6, { role: 'img', name: 'Cost', heading: 'Costs', text: 'Cost by region' });
+  const m = core.matchLocator(PIN, [other, renamed]);
+  assert.strictEqual(m.status, 'ok');
+  assert.strictEqual(m.index, 5);
+  assert.strictEqual(m.match, 'fingerprint');
+  assert.ok(m.confidence >= 0.7 && m.confidence <= 1);
+});
+
+test('matchLocator: duplicate role and name are told apart by the rest of the fingerprint', () => {
+  const north = cand(1, { ...SAME, heading: 'Marketing', text: 'Revenue by channel Web Retail' });
+  const real = cand(2, { ...SAME });
+  const m = core.matchLocator(PIN, [north, real]);
+  assert.strictEqual(m.index, 2);
+  assert.strictEqual(m.match, 'fingerprint');
+});
+
+test('matchLocator: indistinguishable duplicates are ambiguous unless exactly one sits where the pin was', () => {
+  const a = cand(1, { ...SAME, rect: { x: 900, y: 900, width: 300, height: 200 } });
+  const b = cand(2, { ...SAME, rect: { x: 1400, y: 900, width: 300, height: 200 } });
+  assert.deepStrictEqual(core.matchLocator(PIN, [a, b]), { status: 'element_ambiguous' });
+  const home = cand(3, { ...SAME, rect: { x: 105, y: 205, width: 300, height: 200 } });
+  const m = core.matchLocator(PIN, [a, b, home]);
+  assert.strictEqual(m.index, 3);
+  assert.strictEqual(m.match, 'fingerprint-geometry');
+  assert.ok(m.confidence <= 0.7);
+  const twin = cand(4, { ...SAME, rect: { x: 110, y: 210, width: 300, height: 200 } });
+  assert.deepStrictEqual(core.matchLocator(PIN, [home, twin]), { status: 'element_ambiguous' });
+});
+
+test('matchLocator: a deleted element is reported missing, not replaced by something similar-looking', () => {
+  assert.deepStrictEqual(core.matchLocator(PIN, []), { status: 'element_missing' });
+  const unrelated = cand(1, { role: 'img', name: 'Cost', heading: 'Costs', text: 'Cost by team' });
+  assert.deepStrictEqual(core.matchLocator(PIN, [unrelated]), { status: 'element_missing' });
+});
+
+test('matchLocator: a different element in the old rectangle is never taken for the pinned one', () => {
+  const squatter = cand(1, {
+    role: 'img',
+    name: 'Headcount',
+    heading: 'People',
+    text: 'Headcount by team',
+    rect: { ...PIN.rect },
+  });
+  assert.deepStrictEqual(core.matchLocator(PIN, [squatter]), { status: 'element_missing' });
+  const sameTag = cand(2, {
+    heading: 'Sales dashboard',
+    text: 'Unrelated footnote',
+    rect: { ...PIN.rect },
+  });
+  assert.deepStrictEqual(core.matchLocator(PIN, [sameTag]), { status: 'element_missing' });
+});
+
+test('matchLocator: a locator with only position and tag cannot identify anything', () => {
+  const bare = { tag: 'div', type: '', rect: PIN.rect };
+  assert.deepStrictEqual(core.matchLocator(bare, [cand(1, { rect: { ...PIN.rect } })]), {
+    status: 'element_missing',
+  });
+  assert.deepStrictEqual(core.matchLocator(null, [cand(1)]), { status: 'element_missing' });
+});
+
+test('matchLocator: numbers changing on a live dashboard do not break the match', () => {
+  const loc = { ...PIN, role: '', name: '', text: 'Revenue 4.2M vs 3.9M last year' };
+  const now = cand(1, { heading: 'Sales dashboard', text: 'Revenue 4.5M vs 4.2M last year' });
+  const m = core.matchLocator(loc, [now]);
+  assert.strictEqual(m.status, 'ok');
+  assert.strictEqual(m.match, 'fingerprint');
+});
+
 function fakeCdp(handlers) {
   const calls = [];
   return {
@@ -112,63 +240,131 @@ function fakeCdp(handlers) {
   };
 }
 
-const LOC = {
-  selector: '#kpi',
-  role: 'img',
-  name: 'Revenue',
-  rect: { x: 100, y: 200, width: 40, height: 20 },
-};
+function scanCdp(features) {
+  return fakeCdp({
+    'Runtime.evaluate': { result: { objectId: 'scan' } },
+    'Runtime.callFunctionOn': (p) =>
+      /this\[0\]/.test(p.functionDeclaration)
+        ? { result: { value: JSON.stringify({ features, truncated: false }) } }
+        : { result: { objectId: 'el' + p.arguments[0].value } },
+    'DOM.describeNode': (p) => ({ node: { backendNodeId: Number(p.objectId.slice(2)) + 100 } }),
+    'Runtime.releaseObjectGroup': {},
+  });
+}
 
-test('resolveTarget prefers a unique selector', async () => {
-  const cdp = fakeCdp({
-    'Runtime.evaluate': { result: { subtype: 'node', objectId: 'o1' } },
-    'DOM.describeNode': { node: { backendNodeId: 7 } },
-  });
-  assert.deepStrictEqual(await core.resolveTarget(cdp, LOC), {
-    backendNodeId: 7,
-    match: 'selector',
-  });
-});
-
-test('resolveTarget falls back to a unique role+name', async () => {
-  const cdp = fakeCdp({
-    'Runtime.evaluate': { result: { subtype: 'null' } },
-    'DOM.getDocument': { root: { nodeId: 1 } },
-    'Accessibility.queryAXTree': { nodes: [{ backendDOMNodeId: 9 }] },
-  });
-  assert.deepStrictEqual(await core.resolveTarget(cdp, LOC), {
-    backendNodeId: 9,
+test('resolveTarget returns the matched node with its method and confidence, and releases the scan', async () => {
+  const cdp = scanCdp([cand(0), cand(1, { ...SAME })]);
+  assert.deepStrictEqual(await core.resolveTarget(cdp, PIN), {
+    status: 'ok',
+    backendNodeId: 101,
     match: 'role-name',
+    confidence: 0.9,
+  });
+  assert.ok(cdp.calls.includes('Runtime.releaseObjectGroup'));
+});
+
+test('resolveTarget reports missing or ambiguous without describing any node', async () => {
+  const none = scanCdp([cand(0, { name: 'Cost', role: 'img', heading: 'Costs', text: 'Cost' })]);
+  assert.deepStrictEqual(await core.resolveTarget(none, PIN), { status: 'element_missing' });
+  assert.ok(!none.calls.includes('DOM.describeNode'));
+  assert.ok(none.calls.includes('Runtime.releaseObjectGroup'));
+  const twins = scanCdp([
+    cand(0, { ...SAME, rect: { x: 900, y: 900, width: 300, height: 200 } }),
+    cand(1, { ...SAME, rect: { x: 1500, y: 900, width: 300, height: 200 } }),
+  ]);
+  assert.deepStrictEqual(await core.resolveTarget(twins, { ...PIN, role: '', name: '' }), {
+    status: 'element_ambiguous',
+  });
+  assert.deepStrictEqual(await core.resolveTarget(fakeCdp({}), null), {
+    status: 'element_missing',
   });
 });
 
-test('resolveTarget falls back to rect when role+name is ambiguous', async () => {
-  const cdp = fakeCdp({
-    'Runtime.evaluate': (p) =>
-      /scrollX/.test(p.expression)
-        ? { result: { value: { x: 0, y: 100 } } }
-        : { result: { subtype: 'null' } },
-    'DOM.getDocument': { root: { nodeId: 1 } },
-    'Accessibility.queryAXTree': { nodes: [{ backendDOMNodeId: 9 }, { backendDOMNodeId: 10 }] },
-    'DOM.getNodeForLocation': (p) => {
-      assert.deepStrictEqual([p.x, p.y], [120, 110]);
-      return { backendNodeId: 11 };
-    },
-  });
-  assert.deepStrictEqual(await core.resolveTarget(cdp, LOC), { backendNodeId: 11, match: 'rect' });
+test('resolveTarget treats a page with no scan result as missing', async () => {
+  const cdp = fakeCdp({ 'Runtime.evaluate': { result: { subtype: 'null' } } });
+  assert.deepStrictEqual(await core.resolveTarget(cdp, PIN), { status: 'element_missing' });
 });
 
-test('resolveTarget returns null when nothing matches or locator is empty', async () => {
-  const none = fakeCdp({
-    'Runtime.evaluate': { result: { subtype: 'null' } },
-    'DOM.getDocument': { root: { nodeId: 1 } },
-    'Accessibility.queryAXTree': { nodes: [] },
-    'DOM.getNodeForLocation': () => {
-      throw new Error('no node');
-    },
+function domEl(tag, opts = {}, children = []) {
+  const el = fakeEl(tag, opts, children);
+  const r = opts.rect || { left: 1, top: 2, width: 30, height: 40 };
+  const box = { ...r, right: r.left + r.width, bottom: r.top + r.height };
+  el.getBoundingClientRect = () => box;
+  el.nodeType = 1;
+  el.scrolled = 0;
+  el.scrollIntoView = () => {
+    el.scrolled++;
+  };
+  el.getClientRects = () => (r.width && r.height ? [r] : []);
+  el.matches = () => false;
+  el.id = (opts.attrs && opts.attrs.id) || '';
+  el.querySelector = (sel) => el.querySelectorAll(sel)[0] || null;
+  return el;
+}
+
+function inPageContext(extra = {}) {
+  return vm.createContext({
+    window: { scrollX: 0, scrollY: 100 },
+    document: { getElementById: () => null, ...extra },
   });
-  assert.strictEqual(await core.resolveTarget(none, LOC), null);
-  assert.strictEqual(await core.resolveTarget(fakeCdp({}), null), null);
+}
+
+test('describeInPage runs standalone in the page and records the semantic fingerprint', () => {
+  const h = domEl('h3', { text: 'Sales dashboard' });
+  const chart = domEl('div', {
+    attrs: { 'data-testid': 'rev', 'aria-label': 'Revenue', role: 'img' },
+    text: 'Revenue 4.2M',
+  });
+  domEl('section', { attrs: { 'aria-label': 'Overview' } }, [h, chart]);
+  const fn = vm.runInContext(
+    '(' + core.elementFunction(core.describeInPage) + ')',
+    inPageContext(),
+  );
+  const info = JSON.parse(fn.call(chart));
+  assert.strictEqual(info.ariaLabel, 'Revenue');
+  assert.strictEqual(info.text, 'Revenue 4.2M');
+  assert.deepStrictEqual(info.locator, {
+    tag: 'div',
+    type: '',
+    role: 'img',
+    name: 'Revenue',
+    testId: 'data-testid=rev',
+    heading: 'Sales dashboard',
+    ancestor: 'Overview',
+    text: 'Revenue 4.2M',
+    rect: { x: 1, y: 102, width: 30, height: 40 },
+  });
+});
+
+test('featuresOf ignores generated ids and takes a button name from its text', () => {
+  const run = (el) => vm.runInContext('(' + core.featuresOf.toString() + ')', inPageContext())(el);
+  assert.strictEqual(run(domEl('div', { attrs: { id: 'r1234567' } })).testId, '');
+  assert.strictEqual(
+    run(domEl('div', { attrs: { id: 'revenue-card' } })).testId,
+    'id=revenue-card',
+  );
+  const b = run(domEl('button', { text: 'Export' }));
+  assert.deepStrictEqual([b.role, b.name], ['button', 'Export']);
+});
+
+test('scanInPage returns visible candidates and their elements in the same order', () => {
+  const a = domEl('div', { attrs: { role: 'img', 'aria-label': 'Revenue' }, text: 'a' });
+  const hidden = domEl('div', { rect: { left: 0, top: 0, width: 0, height: 0 } });
+  const other = domEl('p', { text: 'b' });
+  const b = domEl('div', { attrs: { role: 'img', 'aria-label': 'Cost' }, text: 'c' });
+  const ctx = inPageContext({ querySelectorAll: () => [a, hidden, other, b] });
+  const out = vm.runInContext(core.pageExpression(core.scanInPage, PIN), ctx);
+  const { features, truncated } = JSON.parse(out[0]);
+  assert.strictEqual(truncated, false);
+  assert.deepStrictEqual(
+    features.map((f) => [f.i, f.name]),
+    [
+      [0, 'Revenue'],
+      [1, 'Cost'],
+    ],
+  );
+  assert.strictEqual(out[1], a);
+  assert.strictEqual(out[2], b);
 });
 
 test('pin cursor css is one safe author rule with a hotspot and a crosshair fallback', () => {
@@ -356,4 +552,77 @@ test('cutPointInPage returns the top of the first rendered text node that does n
     Object.assign(global, saved);
     for (const k of Object.keys(saved)) if (saved[k] === undefined) delete global[k];
   }
+});
+
+test('pickCommand maps only the picking keys and ignores chords', () => {
+  const c = core.pickCommand;
+  assert.strictEqual(c({ key: 'Tab' }), 'next');
+  assert.strictEqual(c({ key: 'Tab', shift: true }), 'prev');
+  assert.strictEqual(c({ key: 'ArrowDown' }), 'child');
+  assert.strictEqual(c({ key: 'ArrowUp' }), 'parent');
+  assert.strictEqual(c({ key: 'Enter' }), 'select');
+  for (const bad of [
+    { key: 'Tab', control: true },
+    { key: 'Enter', alt: true },
+    { key: 'ArrowUp', meta: true },
+    { key: 'ArrowUp', shift: true },
+    { key: 'a' },
+    null,
+  ])
+    assert.strictEqual(c(bad), null);
+});
+
+function stepTree() {
+  const hidden = domEl('div', { rect: { left: 0, top: 0, width: 0, height: 0 }, text: 'x' });
+  const title = domEl('h2', { text: 'Sales' });
+  const num = domEl('span', { text: '4.2M' });
+  const card = domEl('div', { attrs: { 'aria-label': 'Revenue' } }, [num]);
+  const wrap = domEl('div', {}, [hidden, title, card]);
+  const below = domEl('p', {
+    text: 'far below',
+    rect: { left: 0, top: 5000, width: 50, height: 20 },
+  });
+  const body = domEl('body', {}, [wrap, below]);
+  const html = domEl('html', {}, [body]);
+  const step = (dir, from) => {
+    const ctx = vm.createContext({
+      window: { innerWidth: 800, innerHeight: 600 },
+      document: { body, documentElement: html },
+    });
+    return vm.runInContext('(' + core.stepInPage.toString() + ')', ctx).call(from || null, dir);
+  };
+  return { step, title, num, card, wrap, below, hidden };
+}
+
+test('stepInPage walks meaningful visible elements in document order', () => {
+  const { step, title, num, card, below } = stepTree();
+  assert.strictEqual(step('next'), title);
+  assert.strictEqual(step('next', title), card);
+  assert.strictEqual(step('next', card), num);
+  assert.strictEqual(step('next', num), below);
+  assert.strictEqual(step('next', below), null);
+  assert.strictEqual(step('prev', below), num);
+  assert.strictEqual(step('prev', card), title);
+  assert.strictEqual(step('prev', title), null);
+});
+
+test('stepInPage starts inside the viewport and scrolls the element into view', () => {
+  const { step, title, below } = stepTree();
+  assert.strictEqual(step('next'), title);
+  assert.strictEqual(title.scrolled, 1);
+  assert.strictEqual(step('prev'), title.parentElement.children[2].children[0]);
+  assert.strictEqual(below.scrolled, 0);
+});
+
+test('stepInPage moves to the outer and inner element and stops at the edges', () => {
+  const { step, num, card, wrap, hidden, title } = stepTree();
+  assert.strictEqual(step('parent', num), card);
+  assert.strictEqual(step('parent', card), wrap);
+  assert.strictEqual(step('parent', wrap), null);
+  assert.notStrictEqual(hidden, undefined);
+  assert.strictEqual(step('child', wrap), title);
+  assert.strictEqual(step('child', card), num);
+  assert.strictEqual(step('child', num), null);
+  assert.strictEqual(step('child'), null);
+  assert.strictEqual(step('parent'), null);
 });

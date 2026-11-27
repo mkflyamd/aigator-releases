@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import shutil
 import time
+import uuid
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -60,8 +62,8 @@ def _usable_label(s: str, app_id: str) -> str:
 
 
 def derive_label(aria_label: str, title: str, app_name: str, app_id: str = "", url: str = "") -> str:
-    """Pin label: element label, then page title, then app name. Never a URL, hostname, app id or 'Untitled'."""
-    candidates = (aria_label, strip_site_suffix(sanitize_label(title), app_name, url), app_name)
+    """Pin label: element label, then page title, else 'Web view'. Never the app name, a URL, hostname, app id or 'Untitled'."""
+    candidates = (aria_label, strip_site_suffix(sanitize_label(title), app_name, url))
     for c in candidates:
         label = _usable_label(c, app_id)
         if label:
@@ -80,14 +82,27 @@ def read_snapshot(pin_id: str) -> dict | None:
 
 
 def read_image(pin_id: str, tile: int = 1) -> bytes | None:
-    """Tile 1 is the snapshot image; a tall capture's later tiles follow top to bottom."""
-    f = web_pin_dir(pin_id) / ("snapshot.png" if tile == 1 else f"tile-{tile}.png")
-    return f.read_bytes() if f.exists() else None
+    """The screenshot, only if it is the one this snapshot was written with. Tile 1 is the snapshot image; a tall
+    capture's later tiles follow top to bottom."""
+    d = web_pin_dir(pin_id)
+    snap = read_snapshot(pin_id) or {}
+    if tile == 1:
+        expected, name = snap.get("image_sha"), "snapshot.png"
+    else:
+        shas = snap.get("tile_shas") or []
+        expected, name = (shas[tile - 2] if 2 <= tile < len(shas) + 2 else None), f"tile-{tile}.png"
+    if not expected:
+        return None
+    try:
+        data = (d / name).read_bytes()
+    except OSError:
+        return None
+    return data if hashlib.sha256(data).hexdigest() == expected else None
 
 
 def tile_count(pin_id: str) -> int:
-    d = web_pin_dir(pin_id)
-    return 1 + len(list(d.glob("tile-*.png"))) if (d / "snapshot.png").exists() else 0
+    snap = read_snapshot(pin_id) or {}
+    return 1 + len(snap.get("tile_shas") or []) if snap.get("image_sha") else 0
 
 
 def read_description(pin_id: str, image: bytes) -> dict | None:
@@ -102,18 +117,29 @@ def read_description(pin_id: str, image: bytes) -> dict | None:
     return data if data.get("text") else None
 
 
+def _atomic_write(path: Path, data: bytes) -> None:
+    tmp = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        tmp.write_bytes(data)
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
 def write_description(pin_id: str, image: bytes, text: str, model: str) -> None:
     d = web_pin_dir(pin_id)
     d.mkdir(parents=True, exist_ok=True)
-    (d / "description.json").write_text(
-        json.dumps({"image_sha": hashlib.sha256(image).hexdigest(), "text": text, "model": model}, ensure_ascii=False),
-        encoding="utf-8",
-    )
+    payload = {"image_sha": hashlib.sha256(image).hexdigest(), "text": text, "model": model}
+    _atomic_write(d / "description.json", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
 
 
 def write_snapshot(
     pin_id: str, *, image: bytes | None, text: str | None, meta: dict, tiles: list[bytes] | None = None
 ) -> dict:
+    """Write one capture. The text and the screenshot always come from the same capture: an omitted image removes the
+    previous one. snapshot.json is written last and records the image and tile hashes, so a write that stops half way
+    leaves the previous snapshot readable and a mismatched image is never served."""
     d = web_pin_dir(pin_id)
     d.mkdir(parents=True, exist_ok=True)
     prev = read_snapshot(pin_id)
@@ -123,19 +149,35 @@ def write_snapshot(
     merged_meta = {**((prev or {}).get("meta") or {}), **(meta or {})}
     captured_at = time.time()
     if image is not None:
-        (d / "snapshot.png").write_bytes(image)
-        for old in d.glob("tile-*.png"):
-            old.unlink()
-        for n, tile in enumerate(tiles or [], start=2):
-            (d / f"tile-{n}.png").write_bytes(tile)
-    (d / "snapshot.json").write_text(
-        json.dumps(
-            {"text": new_text, "meta": merged_meta, "captured_at": captured_at, "text_hash": text_hash},
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
+        _atomic_write(d / "snapshot.png", image)
+    tiles = (tiles or []) if image is not None else []
+    for n, tile in enumerate(tiles, start=2):
+        _atomic_write(d / f"tile-{n}.png", tile)
+    body = {
+        "text": new_text,
+        "meta": merged_meta,
+        "captured_at": captured_at,
+        "text_hash": text_hash,
+        "image_sha": hashlib.sha256(image).hexdigest() if image is not None else None,
+        "tile_shas": [hashlib.sha256(t).hexdigest() for t in tiles],
+    }
+    _atomic_write(d / "snapshot.json", json.dumps(body, ensure_ascii=False).encode("utf-8"))
+    if image is None:
+        (d / "snapshot.png").unlink(missing_ok=True)
+    for old in d.glob("tile-*.png"):
+        if int(old.stem.split("-")[1]) > len(tiles) + 1:
+            old.unlink(missing_ok=True)
     return {"captured_at": captured_at, "text_hash": text_hash, "changed": changed}
+
+
+def update_meta(pin_id: str, meta: dict) -> bool:
+    """Change snapshot metadata only; the text, screenshot and capture time stay as they were."""
+    snap = read_snapshot(pin_id)
+    if snap is None:
+        return False
+    snap["meta"] = {**(snap.get("meta") or {}), **meta}
+    _atomic_write(web_pin_dir(pin_id) / "snapshot.json", json.dumps(snap, ensure_ascii=False).encode("utf-8"))
+    return True
 
 
 def delete_if_unreferenced(pin_id: str) -> bool:
@@ -146,7 +188,11 @@ def delete_if_unreferenced(pin_id: str) -> bool:
     except ValueError:
         return False
     with state._lock:
-        if pin_id in json.dumps(state.pinned_contexts, default=str):
+        if any(
+            isinstance(e, dict) and e.get("source") == "webpin" and e.get("id") == pin_id
+            for entries in state.pinned_contexts.values()
+            for e in entries.values()
+        ):
             return False
         shutil.rmtree(d, ignore_errors=True)
     return True

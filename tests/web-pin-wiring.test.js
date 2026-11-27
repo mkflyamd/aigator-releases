@@ -16,7 +16,12 @@ function after(src, header, len = 700) {
 }
 
 test('toolbar web-pin channels only accept the main toolbar', () => {
-  for (const ch of ['toolbar:web-pin-start', 'toolbar:web-pin-view', 'toolbar:web-pin-cancel']) {
+  for (const ch of [
+    'toolbar:web-pin-start',
+    'toolbar:web-pin-view',
+    'toolbar:web-pin-cancel',
+    'toolbar:web-pin-key',
+  ]) {
     assert.match(after(main, `ipcMain.on('${ch}'`, 200), /_isMainToolbar\(e\)/, ch);
   }
 });
@@ -130,4 +135,38 @@ test('web-pin:go-to is gatorView-only, pinnable-pane-only, http(s)-only and limi
     /_genericPanes\[id\] = \{[^}]*homeHosts/,
   );
   assert.match(preload, /webPinGoTo: \(appId, url\) => ipcRenderer\.invoke\('web-pin:go-to'/);
+});
+
+test('keyboard picking: toolbar forwards Tab, arrows and Enter only while picking, and the cancel button keeps Enter', () => {
+  assert.match(toolbar, /PIN_KEYS = new Set\(\['Tab', 'ArrowUp', 'ArrowDown', 'Enter'\]\)/);
+  assert.match(
+    toolbar,
+    /classList\.contains\('is-pinning'\)[\s\S]{0,120}PIN_KEYS\.has\(e\.key\)[\s\S]{0,160}tb-pinbar-cancel[\s\S]{0,200}toolbar:web-pin-key/,
+  );
+  const body = after(main, "ipcMain.on('toolbar:web-pin-key'", 700);
+  assert.match(body, /_webPinPicking/);
+  assert.match(body, /_webPin\.key\(/);
+});
+
+test('pick mode is announced through a polite live region outside the hidden banner', () => {
+  assert.match(toolbar, /id="tb-pin-live" role="status" aria-live="polite"/);
+  assert.match(toolbar, /\.tb-pin-live \{[^}]*position: absolute[^}]*clip:/);
+  assert.match(toolbar, /state\.pinAnnounce/);
+  assert.match(main, /pinAnnounce: _webPinAnnounce/);
+  // Sent with one push only, so a later state push does not repeat it.
+  assert.match(
+    main,
+    /_webPinAnnounce = announce \|\| '';\s*_toolbarPushState\(\);\s*_webPinAnnounce = '';/,
+  );
+});
+
+test('focus returns to the Pin button when picking ends, and Esc only cancels picking', () => {
+  assert.match(
+    toolbar,
+    /wasPinning && !state\.pinMode && document\.hasFocus\(\)\) elPin\.focus\(\)/,
+  );
+  assert.match(
+    toolbar,
+    /e\.key === 'Escape' && elBar\.classList\.contains\('is-pinning'\)\) \{\s*ipcRenderer\.send\('toolbar:web-pin-cancel'\)/,
+  );
 });

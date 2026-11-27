@@ -81,9 +81,16 @@ def set_pin(
     key = f"{source}::{item_id}"
     entry = {"source": source, "id": item_id, "label": label, "meta": meta or {}}
     with _lock:
-        pinned_contexts.setdefault(context_id, {})[key] = entry
-        _save()
-        total = len(pinned_contexts[context_id])
+        bucket = pinned_contexts.setdefault(context_id, {})
+        previous = bucket.get(key)
+        bucket[key] = entry
+        if not _save():
+            if previous is None:
+                bucket.pop(key, None)
+            else:
+                bucket[key] = previous
+            return {"pinned": False, "label": label, "source": source, "id": item_id, "total": len(bucket)}
+        total = len(bucket)
     return {"pinned": True, "label": label, "source": source, "id": item_id, "total": total}
 
 
