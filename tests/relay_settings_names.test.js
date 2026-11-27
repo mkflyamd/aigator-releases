@@ -25,6 +25,7 @@ const code = [
   'sortedAgents',
   'agentShown',
   'agentCounts',
+  'projectLabel',
   'pickerText',
   'endName',
   'untilText',

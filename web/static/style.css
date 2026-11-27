@@ -2832,14 +2832,27 @@ select.llm-select option {
   flex: 0 0 auto;
   margin-left: 0;
 }
+#relay-settings .srow {
+  flex-wrap: nowrap;
+}
+#relay-settings .srow-info {
+  flex: 1 1 0;
+}
+#relay-settings .srow-actions {
+  flex: none;
+  margin-left: 0;
+}
 .relay-agent-name {
   flex: 1 1 auto;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
   font-size: 0.86rem;
   color: var(--text);
+}
+.relay-agent-project {
+  display: block;
+  font-size: 0.74rem;
+  color: var(--text-sub);
 }
 .relay-agent-state {
   font-size: 0.78rem;
