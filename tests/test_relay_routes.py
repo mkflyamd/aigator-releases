@@ -80,6 +80,8 @@ def test_every_change_needs_the_csrf_token(client, world):
     assert client.post("/api/relay/links", json={"a": a, "b": b}).status_code == 403
     assert client.delete("/api/relay/links/x").status_code == 403
     assert client.post("/api/relay/stop-all").status_code == 403
+    assert client.post("/api/relay/self-chat-autosend", json={"enabled": True}).status_code == 403
+    assert relay_settings.user_allows_self_chat_autosend() is False
     assert client.post("/api/relay/opt-out", json={"endpoint_id": a, "opted_out": True}).status_code == 403
     assert relay_settings.user_allows_messaging() is True
 
@@ -89,6 +91,17 @@ def test_the_user_switch_round_trips(client, csrf, world):
     assert client.get("/api/relay", headers=csrf).json()["enabled"] is False
     client.post("/api/relay/settings", json={"enabled": True}, headers=csrf)
     assert client.get("/api/relay", headers=csrf).json()["enabled"] is True
+
+
+def test_the_self_chat_switch_round_trips_and_shows_the_admin_lock(client, csrf, world):
+    state = client.get("/api/relay", headers=csrf).json()
+    assert state["self_chat_autosend"] is False and state["self_chat_admin_allows"] is True
+    assert client.post("/api/relay/self-chat-autosend", json={"enabled": True}, headers=csrf).json() == {"enabled": True}
+    assert client.get("/api/relay", headers=csrf).json()["self_chat_autosend"] is True
+    world["policy"].write_text('{"self_chat_autosend": "deny"}')
+    pol._reset_cache()
+    assert client.get("/api/relay", headers=csrf).json()["self_chat_admin_allows"] is False
+    assert relay_settings.self_chat_autosend_allowed() is False
 
 
 def test_a_link_is_made_between_two_known_agents_and_can_be_stopped(client, csrf, world):

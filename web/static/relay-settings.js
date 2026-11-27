@@ -108,6 +108,33 @@
     );
   }
 
+  function selfChatRow() {
+    const locked = !state.self_chat_admin_allows;
+    const sub = locked
+      ? 'Your administrator has turned this off.'
+      : 'Only your own private Teams or Slack chat. Messages to anyone else always wait for your approval.';
+    return el(
+      'div',
+      { className: 'srow' },
+      el(
+        'div',
+        { className: 'srow-info' },
+        el('div', {
+          className: 'srow-label',
+          textContent: 'Post to my own Teams and Slack chat without asking',
+        }),
+        el('div', { className: 'srow-sub', textContent: sub }),
+      ),
+      toggle(
+        'relay-self-chat-autosend',
+        'Post to my own Teams and Slack chat without asking',
+        state.self_chat_autosend && !locked,
+        locked,
+        (on) => act('POST', '/api/relay/self-chat-autosend', { enabled: on }),
+      ),
+    );
+  }
+
   function agentRows() {
     const off = offReason();
     let sub = 'Turn an agent off to stop other agents messaging it.';
@@ -280,7 +307,7 @@
     const key = active && (active.id || active.dataset.key);
     const endKeys = () => [...root.querySelectorAll('[data-key^="end-"]')];
     const endIndex = key && key.startsWith('end-') ? endKeys().indexOf(active) : -1;
-    root.replaceChildren(switchRow(), ...agentRows(), ...linkRows());
+    root.replaceChildren(switchRow(), ...agentRows(), ...linkRows(), selfChatRow());
     if (!key) return;
     const find = (k) =>
       [...root.querySelectorAll('[id], [data-key]')].find((n) => n.id === k || n.dataset.key === k);

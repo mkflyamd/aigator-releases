@@ -35,8 +35,9 @@ def _load() -> dict | None:
     if not isinstance(found, dict):
         return None
     opted = found.get("opted_out", [])
-    if "agent_messaging" in found and not isinstance(found["agent_messaging"], bool):
-        return None
+    for key in ("agent_messaging", "self_chat_autosend"):
+        if key in found and not isinstance(found[key], bool):
+            return None
     if not isinstance(opted, list) or not all(isinstance(e, str) for e in opted):
         return None
     return found
@@ -67,6 +68,30 @@ def set_user_messaging(enabled: bool) -> None:
     with _lock:
         data = _load() or {}
         data["agent_messaging"] = bool(enabled)
+        _save(data)
+
+
+def admin_allows_self_chat_autosend() -> bool:
+    return policy.load_policy().self_chat_autosend == "allow"
+
+
+def user_allows_self_chat_autosend() -> bool:
+    data = _load()
+    return data is not None and data.get("self_chat_autosend", False) is True
+
+
+def self_chat_autosend_allowed() -> bool:
+    """True only when the administrator and the user both allow Gator to post to the user's own
+    Teams/Slack self-chat without asking. Off by default. Anything else stays draft-only."""
+    return admin_allows_self_chat_autosend() and user_allows_self_chat_autosend()
+
+
+def set_user_self_chat_autosend(enabled: bool) -> None:
+    with _lock:
+        data = _load()
+        if data is None:
+            data = {"agent_messaging": False}
+        data["self_chat_autosend"] = bool(enabled)
         _save(data)
 
 

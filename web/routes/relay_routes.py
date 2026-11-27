@@ -24,6 +24,10 @@ class RelaySettingsRequest(BaseModel):
     enabled: bool
 
 
+class SelfChatAutosendRequest(BaseModel):
+    enabled: bool
+
+
 class RelayLinkRequest(BaseModel):
     a: str
     b: str
@@ -49,6 +53,8 @@ async def relay_state():
     return {
         "admin_allows": settings.admin_allows_messaging(),
         "enabled": settings.user_allows_messaging(),
+        "self_chat_admin_allows": settings.admin_allows_self_chat_autosend(),
+        "self_chat_autosend": settings.user_allows_self_chat_autosend(),
         "agents": agents,
         "links": get_relay().links(),
     }
@@ -58,6 +64,12 @@ async def relay_state():
 def set_relay_settings(body: RelaySettingsRequest):
     settings.set_user_messaging(body.enabled)
     return {"enabled": settings.user_allows_messaging()}
+
+
+@router.post("/api/relay/self-chat-autosend", dependencies=[Depends(verify_csrf)])
+def set_self_chat_autosend(body: SelfChatAutosendRequest):
+    settings.set_user_self_chat_autosend(body.enabled)
+    return {"enabled": settings.user_allows_self_chat_autosend()}
 
 
 @router.post("/api/relay/links", dependencies=[Depends(verify_csrf)])

@@ -102,6 +102,7 @@ SENSITIVE_ROUTES: frozenset[str] = frozenset({
     "DELETE /api/relay/links/{link_id}",
     "POST /api/relay/links/{link_id}/resume",
     "POST /api/relay/opt-out",
+    "POST /api/relay/self-chat-autosend",
     "POST /api/relay/settings",
     "POST /api/relay/stop-all",
     "POST /api/scheduler/jobs",
