@@ -17,7 +17,15 @@ function fn(name) {
   return match[0];
 }
 
-const code = ['baseName', 'agentName', 'agentState', 'agentContext', 'endName', 'untilText']
+const code = [
+  'baseName',
+  'agentName',
+  'agentState',
+  'agentContext',
+  'pickerText',
+  'endName',
+  'untilText',
+]
   .map(fn)
   .join('\n');
 
@@ -29,7 +37,10 @@ function world(agents, tabs) {
     Date,
   };
   vm.createContext(ctx);
-  vm.runInContext(`${code};\nthis.api = { agentName, agentContext, endName, untilText };`, ctx);
+  vm.runInContext(
+    `${code};\nthis.api = { agentName, agentContext, pickerText, endName, untilText };`,
+    ctx,
+  );
   return ctx.api;
 }
 
@@ -79,6 +90,17 @@ const agent = (id, extra) => ({
   const sleeping = agent('aaaa1111', { state: 'suspended' });
   const api = world([sleeping]);
   assert.strictEqual(api.agentContext(sleeping), 'aigator-releases · Sleeping');
+}
+
+// the picker names the project only when agents from several projects are open
+{
+  const one = agent('aaaa1111', { name: 'Opus' });
+  const same = agent('bbbb2222', { name: 'Sonnet' });
+  const other = agent('cccc3333', { name: 'Memory leak', project_id: 'other-project' });
+  assert.strictEqual(world([one, same]).pickerText(one), 'Opus');
+  const api = world([one, same, other]);
+  assert.strictEqual(api.pickerText(other), 'Memory leak · other-project');
+  assert.strictEqual(api.pickerText(one), 'Opus · aigator-releases');
 }
 
 // a pair's end shows the live name while open, else the stored name, else a plain fallback
