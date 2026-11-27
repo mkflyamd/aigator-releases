@@ -32,7 +32,14 @@ DOT = "·"
 CHOICES_SHOWN = 2
 CHOICE_MAX_CHARS = 60
 WORKING, WAITING, IDLE = "working", "waiting for you", "idle"
+ACK_DELAY_SECONDS = 15.0
+PROGRESS_SECONDS = 120.0
+ELAPSED_MIN_SECONDS = 60.0
+BREVITY_HINT = "(This session was started from a chat app. Keep replies short, in plain text, with no tables.)"
 _CHOICE_RE = re.compile(r"^\s*(?:\d{1,2}|[A-Za-z])[.)]\s+(.+?)\s*$")
+OWN_MESSAGE_RE = re.compile(r"^\[[^\]\r\n]{0,80}\] " + CROC)
+UNKNOWN_MENTION_SHOWN = 3
+LEADING_MENTION_RE =re.compile(r"^@([\w.-]+):?(?:\s+(.*))?$", re.DOTALL)
 
 
 @dataclass(frozen=True)
@@ -75,15 +82,27 @@ def next_block(options: list[str]) -> str:
     return "Next:\n" + "\n".join(f"{BULLET} {option}" for option in options)
 
 
+def _tidy(text: str) -> str:
+    """No trailing spaces and never more than one blank line in a row, so chat apps do not stretch the message."""
+    lines = [line.rstrip() for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n")]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+
+
 def system_reply(body: str, options: list[str], *, croc: bool = False, after: str = "") -> str:
     """A [Gator] notice: the state and body, a blank line, the Next block, then an optional closing line."""
     mark = f" {CROC}" if croc else ""
     tail = f"\n\n{after}" if after else ""
-    return f"{SYSTEM_PREFIX}]{mark} {body}\n\n{next_block(options)}{tail}"
+    return _tidy(f"{SYSTEM_PREFIX}]{mark} {body}\n\n{next_block(options)}{tail}")
 
 
 def agent_reply(agent: str, project: str, text: str, options: list[str]) -> str:
-    return f"{SYSTEM_PREFIX} - {agent} - {project}] {text.strip()}\n\n{next_block(options)}"
+    tail = f"\n\n{next_block(options)}" if options else ""
+    return _tidy(f"{SYSTEM_PREFIX} - {agent} - {project}] {text.strip()}{tail}")
+
+
+def is_own_message(text: str) -> bool:
+    """A message Gator wrote: the fixed `[Gator` start, or any `[label] 🐊` start, so the agent label can change."""
+    return text.lstrip().startswith(SYSTEM_PREFIX) or bool(OWN_MESSAGE_RE.match(text.lstrip()))
 
 
 def in_words(seconds: float) -> str:
@@ -244,6 +263,19 @@ def which_to_stop(names: list[str]) -> str:
     return system_reply("Which session should stop?", options)
 
 
+def unknown_mention(name: str, known: list[str], agent: str) -> str:
+    """A leading @name that is not a session. Sent nowhere; the options are the sessions that exist."""
+    shown = " ".join(name.split())[:NAME_MAX_CHARS]
+    body = f"I don't know {shown}. Start with `@gator` to send it to {agent}."
+    if not known:
+        return _tidy(f"{SYSTEM_PREFIX}] {body}")
+    return system_reply(body, [f"`{n}: your message`" for n in known[:UNKNOWN_MENTION_SHOWN]])
+
+
+def mention_needs_text(name: str) -> str:
+    return system_reply(f"What should {name} do?", [f"`{name}: your message`"])
+
+
 def session_status(agent: str, name: str, state: str, since: float, last_activity: float) -> str:
     lead = {WORKING: "Working", WAITING: "Waiting for you", IDLE: "Idle"}[state]
     text = f"{lead} since {clock_time(since)}.\nLast activity {clock_time(last_activity)}."
@@ -252,6 +284,43 @@ def session_status(agent: str, name: str, state: str, since: float, last_activit
 
 def working_ack(agent: str, name: str, text: str) -> str:
     return agent_reply(agent, name, text, [f"`status {name}` to see what it is doing.", f"`stop {name}` to stop it."])
+
+
+def working(agent: str, name: str, branch: str | None, several: bool) -> str:
+    """The one message sent when a turn has not finished after ACK_DELAY_SECONDS."""
+    body = "Working on it." + (f"\nBranch: {branch}" if branch else "")
+    return agent_reply(agent, name, body, [f"`stop{f' {name}' if several else ''}` to stop it."])
+
+
+def elapsed_words(seconds: float) -> str:
+    """Like 2 min, 12 min or 1 h 5 min: no seconds once past a minute."""
+    hours, minutes = divmod(max(1, int(seconds // 60)), 60)
+    if hours and minutes:
+        return f"{hours} h {minutes} min"
+    return f"{hours} h" if hours else f"{minutes} min"
+
+
+def progress(agent: str, name: str, elapsed: float) -> str:
+    return agent_reply(agent, name, f"Still working, {elapsed_words(elapsed)}.", [])
+
+
+def done_headline(elapsed: float | None) -> str:
+    if elapsed is None or elapsed <= ELAPSED_MIN_SECONDS:
+        return "Done."
+    return f"Done in {elapsed_words(elapsed)}."
+
+
+def asks_a_question(text: str) -> bool:
+    """True when the agent's last line is a question, or the line above a closing list of options is."""
+    lines = [line for line in text.strip().splitlines() if line.strip()]
+    run = 0
+    for line in reversed(lines):
+        if not _CHOICE_RE.match(line):
+            break
+        run += 1
+    if run >= CHOICES_SHOWN:
+        lines = lines[:-run]
+    return bool(lines) and lines[-1].rstrip().rstrip("`*_\"')").endswith("?")
 
 
 def agent_stopped(agent: str, name: str) -> str:
@@ -299,32 +368,35 @@ def _choices(question: str) -> list[str]:
     return run
 
 
-def agent_result(agent: str, project: str, headline: str, text: str, waiting: bool = False) -> str:
-    """A turn's outcome: the headline, then the agent's words on the next line. Over
-    REPLY_MAX_CHARS the headline carries a one-sentence lead and the reply ends with a
-    trim line, all in one message. Every reply ends with what the user can do next."""
+def agent_result(
+    agent: str, project: str, headline: str, text: str, waiting: bool = False, several: bool = False
+) -> str:
+    """A turn's outcome. An empty headline is a quick answer: the prefix and the agent's words, nothing
+    else. Otherwise the headline, then the agent's words on the next line. Over REPLY_MAX_CHARS the
+    headline carries a one-sentence lead and the reply ends with a trim line, all in one message. A
+    question ends with its choices as options; an empty or trimmed reply ends with what the user can do."""
     prefix = f"{SYSTEM_PREFIX} - {agent} - {project}]"
-    body = text.strip()
+    body = _tidy(text)
     open_tab = f"Open the {agent} tab in AI Gator"
     answer = "Type your answer."
     keep_going = "Reply here to keep going in this session."
     if not body:
         options = [f"{open_tab} to see it.", answer if waiting else keep_going]
-        return f"{prefix} {headline} No text came back.\n\n{next_block(options)}"
+        return _tidy(f"{prefix} {headline or 'Done.'} No text came back.\n\n{next_block(options)}")
     if len(body) <= REPLY_MAX_CHARS:
-        if waiting:
-            choices = _choices(body)
-            options = (
-                [*(f"`{c}`" for c in choices), "Or type your own answer."]
-                if choices
-                else [answer, f"`stop {project}` to stop it instead."]
-            )
-        else:
-            options = [keep_going, "`list` to see all sessions.", "`bye` to close this chat."]
-        return f"{prefix} {headline}\n{body}\n\n{next_block(options)}"
+        if not headline:
+            return _tidy(f"{prefix} {body}")
+        if not waiting:
+            return _tidy(f"{prefix} {headline}\n{body}")
+        tag = f"{project}: " if several else ""
+        options = [f"`{tag}{c}`" for c in _choices(body)]
+        tail = f"\n\n{next_block(options)}" if options else ""
+        return _tidy(f"{prefix} {headline}\n{body}{tail}")
     shown = _first_part(body)
     more = len(body) - len(shown)
     if shown.count("```") % 2:
         shown += "\n```"
     options = [f"{open_tab} for the full reply.", answer if waiting else "Reply here to keep going."]
-    return f"{prefix} {headline} {_lead(body)}\n\n{shown}\n\nTrimmed, {more} more characters.\n\n{next_block(options)}"
+    return _tidy(
+        f"{prefix} {headline or 'Done.'} {_lead(body)}\n\n{shown}\n\nTrimmed, {more} more characters.\n\n{next_block(options)}"
+    )

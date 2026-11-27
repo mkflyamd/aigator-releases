@@ -22,6 +22,20 @@ def require_autosend() -> None:
         raise AutosendOff("posting to your own chat is switched off")
 
 
+def teams_html(text: str) -> str:
+    """Agent markdown as Teams HTML, so `**bold**` and a leading `>` do not show as raw characters."""
+    from skills._rich_text import _markdown_to_html, render
+
+    return render("teams", _markdown_to_html(text)).content
+
+
+def slack_mrkdwn(text: str) -> str:
+    """Agent markdown as Slack mrkdwn, escaped for Slack."""
+    from skills._rich_text import _markdown_to_html, render
+
+    return render("slack", _markdown_to_html(text, mrkdwn=True)).content
+
+
 @dataclass(frozen=True)
 class InboundMessage:
     id: str

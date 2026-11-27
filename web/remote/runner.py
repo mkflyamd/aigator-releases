@@ -9,12 +9,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from dataclasses import dataclass
 from typing import Callable
 
 from remote import commands
 from remote.channel import AutosendOff, Channel, InboundMessage
 from remote.guard import Guard, limit
 from remote.service import Event, RemoteError, RemoteService, Session
+from remote.session_host import current_branch
 from remote.state import State
 from remote.window import ChatWindow
 from teams_remote_control import _COMMAND_RE as LEGACY_CODE_RE
@@ -23,11 +25,21 @@ _log = logging.getLogger(__name__)
 
 STALE_SECONDS = 15 * 60.0
 AGENT_LABEL = "Claude"
-_HEADLINES = {"completed": "Done.", "input-required": "Waiting for your answer."}
+WAITING_HEADLINE = "Waiting for your answer."
+_TAGS = ("gator", AGENT_LABEL.lower())
 
 
 class _Reply(RemoteError):
     """A RemoteError whose text is already a finished chat message."""
+
+
+@dataclass
+class _Turn:
+    """One request being worked on. `acked` means the user has been told it is taking a while."""
+
+    started: float
+    last_note: float
+    acked: bool = False
 
 
 def _state_word(session: Session) -> str:
@@ -45,6 +57,8 @@ class RemoteRunner:
         state: State,
         clock: Callable[[], float] = time.time,
         stale_seconds: float | Callable[[], float] = STALE_SECONDS,
+        first_prompt_hint: str = "",
+        branch_of: Callable[[str], str | None] = current_branch,
     ):
         self._channel = channel
         self._service = service
@@ -52,6 +66,9 @@ class RemoteRunner:
         self._state = state
         self._clock = clock
         self._stale = stale_seconds
+        self._hint = first_prompt_hint
+        self._branch_of = branch_of
+        self._turns: dict[str, _Turn] = {}
         self._enabled = False
         self._timeout_noticed = False
         self._autosend_noticed = False
@@ -81,7 +98,9 @@ class RemoteRunner:
         await self._service.restore()
 
     async def announce_online(self) -> None:
-        await self._post(commands.online())
+        """Its text is about opening a chat, so it is not said into one that is already open."""
+        if not self._window.is_open():
+            await self._post(commands.online())
 
     async def _post(self, text: str) -> None:
         try:
@@ -162,7 +181,7 @@ class RemoteRunner:
             await self._post(commands.chat_closed_quiet())
 
     def _is_own(self, message: InboundMessage) -> bool:
-        return message.text.lstrip().startswith(commands.SYSTEM_PREFIX) or self._state.is_own_post(
+        return commands.is_own_message(message.text) or self._state.is_own_post(
             self._channel.name, message.id
         )
 
@@ -241,8 +260,25 @@ class RemoteRunner:
         return commands.session_status(AGENT_LABEL, s.short, _state_word(s), since, s.last_activity)
 
     async def _send(self, text: str) -> None:
-        """A message to a session. `name text` and `name: text` pick one; otherwise the waiting session
-        if exactly one waits, else the only running one, else a new session in the default project."""
+        """A message to a session. `@name text`, `name text` and `name: text` pick one; otherwise the
+        waiting session if exactly one waits, else the only running one, else a new session in the
+        default project."""
+        mention = commands.LEADING_MENTION_RE.match(text)
+        if mention:
+            name, rest = mention.group(1), (mention.group(2) or "").strip()
+            session = self._service.resolve(name)
+            if session is not None:
+                if not rest:
+                    raise _Reply(commands.mention_needs_text(session.short))
+                await self._deliver(session, rest)
+                return
+            if name.lower() not in _TAGS:
+                recent = sorted(self._service.list(), key=lambda s: s.last_activity, reverse=True)
+                raise _Reply(commands.unknown_mention(name, [s.short for s in recent], AGENT_LABEL))
+            if not rest:
+                await self._post(commands.help_text(self._window.is_open()))
+                return
+            text = rest
         first, _, rest = text.partition(" ")
         named = self._service.resolve(first.rstrip(":"))
         if named is not None and rest.strip():
@@ -260,27 +296,57 @@ class RemoteRunner:
             project = self._service.default_project()
             if project is None:
                 raise RemoteError("No default project is set. Choose one in Settings, then resend.")
-            session = await self._service.start(project, text)
-            await self._ack(session, "Started. Working on it.")
+            prompt = f"{text}\n\n{self._hint}" if self._hint else text
+            self._begin(await self._service.start(project, prompt))
 
     async def _deliver(self, session: Session, text: str) -> None:
         await self._service.send(session.id, text)
-        await self._ack(session, "Sent. Working on it.")
+        self._begin(session)
 
-    async def _ack(self, session: Session, text: str) -> None:
-        await self._post(commands.working_ack(AGENT_LABEL, session.short, text))
+    def _begin(self, session: Session) -> None:
+        now = self._clock()
+        self._turns[session.id] = _Turn(started=now, last_note=now)
 
     async def _on_event(self, event: Event) -> None:
-        short = event.session.short
-        if event.kind in _HEADLINES:
-            waiting = event.kind == "input-required"
-            await self._post(commands.agent_result(AGENT_LABEL, short, _HEADLINES[event.kind], event.text, waiting))
+        session = event.session
+        short = session.short
+        turn = self._turns.pop(session.id, None)
+        several = len(self._service.list()) > 1
+        if event.kind in ("completed", "input-required"):
+            waiting = event.kind == "input-required" or commands.asks_a_question(event.text)
+            session.waiting = waiting
+            if waiting:
+                headline = WAITING_HEADLINE
+            elif turn is None:
+                headline = "Done."
+            elif not turn.acked:
+                headline = ""
+            else:
+                headline = commands.done_headline(self._clock() - turn.started)
+            await self._post(commands.agent_result(AGENT_LABEL, short, headline, event.text, waiting, several))
         elif event.kind == "failed":
             await self._post(commands.agent_exited(AGENT_LABEL, short))
         elif event.kind == "canceled":
             await self._post(commands.agent_stopped(AGENT_LABEL, short))
         else:
             await self._post(commands.working_ack(AGENT_LABEL, short, event.kind))
+
+    async def _report_progress(self) -> None:
+        """A turn that outlives ACK_DELAY_SECONDS gets one 'Working on it', then 'Still working' every
+        PROGRESS_SECONDS. A turn that finishes first never gets either, so a quick answer is one message."""
+        now = self._clock()
+        live = {s.id: s for s in self._service.list()}
+        for session_id, turn in list(self._turns.items()):
+            session = live.get(session_id)
+            if session is None:
+                self._turns.pop(session_id, None)
+            elif not turn.acked and now - turn.started >= commands.ACK_DELAY_SECONDS:
+                turn.acked, turn.last_note = True, now
+                branch = await asyncio.to_thread(self._branch_of, session.project.repo_path)
+                await self._post(commands.working(AGENT_LABEL, session.short, branch, len(live) > 1))
+            elif turn.acked and now - turn.last_note >= commands.PROGRESS_SECONDS:
+                turn.last_note = now
+                await self._post(commands.progress(AGENT_LABEL, session.short, now - turn.started))
 
     async def tick(self) -> None:
         if self._guard.expired():
@@ -293,3 +359,4 @@ class RemoteRunner:
         if self._guard.armed:
             await self._close_if_expired()
             await self._service.tick()
+            await self._report_progress()

@@ -102,6 +102,8 @@ class World:
         self.clock = Clock()
         self.host = FakeHost()
         self.state = State(tmp_path / "state.json")
+        self.hint = ""
+        self.branch = "main"
         self.build()
 
     def build(self):
@@ -109,7 +111,14 @@ class World:
         self.service = RemoteService(self.host, default_project=lambda: BUDGET, clock=self.clock)
         self.channel = FakeChannel(self.state)
         self.runner = RemoteRunner(
-            self.channel, self.service, self.guard, self.state, clock=self.clock, stale_seconds=900
+            self.channel,
+            self.service,
+            self.guard,
+            self.state,
+            clock=self.clock,
+            stale_seconds=900,
+            first_prompt_hint=self.hint,
+            branch_of=lambda path: self.branch,
         )
         self.runner.sync_enabled(True)
 
@@ -146,12 +155,11 @@ async def test_first_command_in_a_previously_empty_chat_is_not_swallowed_as_the_
     assert w.host.delivered == [("pty-1", "first ever")]
 
 
-async def test_command_starts_the_default_session_and_acknowledges(w):
+async def test_command_starts_the_default_session_and_says_nothing_until_it_is_slow(w):
     await baselined(w)
     await w.feed(w.msg(101, "@gator what is open?"))
     assert w.host.delivered == [("pty-1", "what is open?")]
-    assert len(w.channel.posted) == 1
-    assert w.channel.posted[0].startswith("[Gator - Claude - budget]")
+    assert w.channel.posted == []
 
 
 async def test_ordinary_notes_are_ignored(w):
@@ -390,7 +398,140 @@ async def test_completed_turn_posts_the_agent_reply(w):
     w.host.states["pty-1"] = {"state": "idle", "at": w.clock.now + 5}
     w.host.last["pty-1"] = "Two files are open."
     await w.runner.tick()
-    assert w.channel.posted[-1] == commands.agent_result("Claude", "budget", "Done.", "Two files are open.")
+    assert w.channel.posted == ["[Gator - Claude - budget] Two files are open."]
+
+
+async def _finish(w, text, state="idle"):
+    w.host.states["pty-1"] = {"state": state, "at": w.clock.now + 1}
+    w.host.last["pty-1"] = text
+    await w.runner.tick()
+
+
+async def test_a_slow_turn_gets_one_working_message_with_the_branch(w):
+    await baselined(w)
+    await w.feed(w.msg(101, "@gator go"))
+    w.clock.now += commands.ACK_DELAY_SECONDS - 1
+    await w.runner.tick()
+    assert w.channel.posted == []
+    w.clock.now += 2
+    await w.runner.tick()
+    await w.runner.tick()
+    assert w.channel.posted == [commands.working("Claude", "budget", "main", False)]
+    assert "Branch: main" in w.channel.posted[0]
+
+
+async def test_working_leaves_the_branch_out_when_there_is_none(w):
+    w.branch = None
+    await baselined(w)
+    await w.feed(w.msg(101, "@gator go"))
+    w.clock.now += 20
+    await w.runner.tick()
+    assert "Branch" not in w.channel.posted[0]
+
+
+async def test_still_working_is_posted_at_most_every_two_minutes(w):
+    await baselined(w)
+    await w.feed(w.msg(101, "@gator go"))
+    for step in (20, 100, 100, 100, 30):
+        w.clock.now += step
+        await w.runner.tick()
+    assert w.channel.posted == [
+        commands.working("Claude", "budget", "main", False),
+        commands.progress("Claude", "budget", 220),
+        commands.progress("Claude", "budget", 350),
+    ]
+
+
+async def test_done_between_fifteen_seconds_and_a_minute_is_plain_done(w):
+    await baselined(w)
+    await w.feed(w.msg(101, "@gator go"))
+    w.clock.now += 30
+    await w.runner.tick()
+    await _finish(w, "All good.")
+    assert w.channel.posted[-1] == "[Gator - Claude - budget] Done.\nAll good."
+
+
+async def test_done_past_a_minute_says_how_long_it_took(w):
+    await baselined(w)
+    await w.feed(w.msg(101, "@gator go"))
+    w.clock.now += 20
+    await w.runner.tick()
+    w.clock.now += 5 * 60
+    await _finish(w, "All good.")
+    assert w.channel.posted[-1].startswith("[Gator - Claude - budget] Done in 5 min.\nAll good.")
+
+
+async def test_a_turn_that_finished_first_never_gets_a_late_working_message(w):
+    await baselined(w)
+    await w.feed(w.msg(101, "@gator go"))
+    await _finish(w, "Quick.")
+    w.clock.now += 60
+    await w.runner.tick()
+    assert w.channel.posted == ["[Gator - Claude - budget] Quick."]
+
+
+async def test_a_trailing_question_is_sent_as_waiting_with_the_answers_as_options(w):
+    await baselined(w)
+    await w.feed(w.msg(101, "@gator go"))
+    await _finish(w, "Which one?\n1. Alpha\n2. Beta")
+    assert w.channel.posted == [
+        "[Gator - Claude - budget] Waiting for your answer.\nWhich one?\n1. Alpha\n2. Beta\n\nNext:\n• `Alpha`\n• `Beta`"
+    ]
+    assert w.service.list()[0].waiting is True
+
+
+async def test_the_first_prompt_of_a_new_session_carries_the_brevity_hint_and_later_ones_do_not(w):
+    w.hint = commands.BREVITY_HINT
+    w.build()
+    await baselined(w)
+    await w.feed(w.msg(101, "@gator go"))
+    await w.feed(w.msg(102, "@gator again"))
+    assert w.host.delivered == [("pty-1", f"go\n\n{commands.BREVITY_HINT}"), ("pty-1", "again")]
+
+
+async def test_a_leading_name_that_is_a_session_routes_to_it(w):
+    await baselined(w)
+    await w.feed(w.msg(101, "@gator go"))
+    await w.feed(w.msg(102, "@budget run the tests"))
+    await w.feed(w.msg(103, "@gator @Budget: and lint"))
+    assert w.host.delivered == [("pty-1", "go"), ("pty-1", "and lint")]
+
+
+async def test_a_leading_name_that_is_not_a_session_gets_one_reply_and_is_not_sent(w):
+    await baselined(w)
+    await w.feed(w.msg(101, "@gator go"))
+    await w.feed(w.msg(102, "@gator @ghost hello there"))
+    assert w.host.delivered == [("pty-1", "go")]
+    assert w.channel.posted == [commands.unknown_mention("ghost", ["budget"], "Claude")]
+
+
+async def test_a_leading_gator_or_agent_name_is_just_the_request(w):
+    await baselined(w)
+    await w.feed(w.msg(101, "@gator @gator go"))
+    await w.feed(w.msg(102, "@gator @claude again"))
+    assert w.host.delivered == [("pty-1", "go"), ("pty-1", "again")]
+
+
+async def test_an_email_address_is_not_a_leading_name(w):
+    await baselined(w)
+    await w.feed(w.msg(101, "@gator @ann@example.com hello"))
+    assert w.host.delivered == [("pty-1", "@ann@example.com hello")]
+
+
+@pytest.mark.parametrize("text", ["[Claude - proj] \U0001F40A x", "[Ranger - proj - sess] \U0001F40A x", "[Gator] \U0001F40A x"])
+async def test_a_message_in_the_gator_shape_never_triggers_a_command(w, text):
+    await baselined(w)
+    await w.feed(w.msg(101, f"{text} @gator stop all"))
+    assert w.host.delivered == []
+    assert w.guard.armed is True
+
+
+async def test_a_normal_note_that_starts_with_a_bracket_is_not_ignored(w):
+    await baselined(w)
+    await w.feed(w.msg(101, "[todo] @gator fix it"))
+    assert w.host.delivered == []
+    await w.feed(w.msg(102, "@gator [todo] fix it"))
+    assert w.host.delivered == [("pty-1", "[todo] fix it")]
 
 
 async def test_a_question_from_the_agent_is_forwarded(w):
