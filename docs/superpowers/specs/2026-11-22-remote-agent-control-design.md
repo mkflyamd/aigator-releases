@@ -93,7 +93,8 @@ class Channel:
 ```
 
 - `TeamsSelfChat`: the existing Skype-client polling of `48:notes`, refactored out of `teams_remote_control.py`, plus a new `post`.
-- `SlackSelfDM`: polls the user's own DM channel with the existing user-scoped Slack token (history scope) and posts with chat:write.
+- `SlackSelfDM`: polls the user's own DM channel with the existing user-scoped Slack token (history scope) and posts with chat:write. The channel is found with `conversations.open` on the signed-in user's own id, and `conversations.info` confirms it is a one-to-one DM whose other member is that user before any post. Message ids are Slack `ts` strings such as `1700000000.000200`. They are compared as strings by position in the history page, never as numbers, and `float(ts)` is the message time used for the 15-minute stale check. Slack escapes `&`, `<` and `>` in message text, so the adapter unescapes inbound text and escapes outbound text. Edits, joins and other messages with a `subtype` are not commands.
+- Teams and Slack run side by side. Each channel has its own switch (`teams_remote_control_enabled`, `slack_remote_control_enabled`), armed state, rate limit, last-processed id, recorded post ids and session list, so `@gator stop all` in one chat stops only that chat's sessions.
 - Adding a channel means implementing this class and registering it. Nothing else changes.
 
 Trust: v1 channels are the user's own private self-chat or DM, so the sender is the signed-in user. Bot-style channels (WhatsApp, Telegram, Discord) later need a sender allow-list with a pairing code and an admin policy, off by default. They are out of scope here.

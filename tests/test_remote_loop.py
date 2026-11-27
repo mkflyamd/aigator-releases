@@ -107,3 +107,67 @@ def test_the_switch_is_the_existing_teams_remote_control_setting(monkeypatch):
     assert remote_loop.teams_switch_on() is True
     monkeypatch.setattr(remote_loop, "load_config", lambda: {})
     assert remote_loop.teams_switch_on() is False
+
+
+def test_each_channel_has_its_own_switch(monkeypatch):
+    config = {"teams_remote_control_enabled": True, "slack_remote_control_enabled": False}
+    monkeypatch.setattr(remote_loop, "load_config", lambda: config)
+    assert remote_loop.teams_switch_on() is True
+    assert remote_loop.slack_switch_on() is False
+    config["slack_remote_control_enabled"] = True
+    assert remote_loop.slack_switch_on() is True
+
+
+class SlackPolling(PollingChannel):
+    name = "slack"
+
+
+def test_the_slack_switch_is_an_allowed_config_key():
+    from config import PATCHABLE_CONFIG_KEYS
+
+    assert "slack_remote_control_enabled" in PATCHABLE_CONFIG_KEYS
+
+
+async def test_the_slack_loop_follows_only_the_slack_switch(tmp_path, monkeypatch):
+    config = {"teams_remote_control_enabled": True, "slack_remote_control_enabled": False}
+    monkeypatch.setattr(remote_loop, "load_config", lambda: config)
+    monkeypatch.setattr(remote_loop, "LocalPtyHost", FakeHost)
+    channels = {}
+    monkeypatch.setattr(remote_loop, "TeamsSelfChat", lambda state: channels.setdefault("teams", PollingChannel(state)))
+    monkeypatch.setattr(remote_loop, "SlackSelfDM", lambda state: channels.setdefault("slack", SlackPolling(state)))
+    teams_loop, slack_loop = remote_loop.build_loops(State(tmp_path / "s.json"))
+    await teams_loop.step()
+    await slack_loop.step()
+    assert channels["teams"].polls == 1
+    assert channels["slack"].polls == 0
+    config["slack_remote_control_enabled"] = True
+    await slack_loop.step()
+    assert channels["slack"].polls == 1
+
+
+async def test_a_slow_channel_step_does_not_hold_the_other_channel(monkeypatch):
+    import asyncio
+
+    release = asyncio.Event()
+    steps = {"teams": 0}
+
+    class Blocked:
+        async def step(self):
+            await release.wait()
+
+    class Quick:
+        async def step(self):
+            steps["teams"] += 1
+
+    monkeypatch.setattr(remote_loop, "STEP_SECONDS", 0.001)
+    monkeypatch.setattr(remote_loop, "build_loops", lambda: [Quick(), Blocked()])
+    task = asyncio.create_task(remote_loop.remote_control_loop())
+    try:
+        for _ in range(200):
+            if steps["teams"] >= 3:
+                break
+            await asyncio.sleep(0.005)
+        assert steps["teams"] >= 3
+    finally:
+        release.set()
+        task.cancel()
