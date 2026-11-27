@@ -2,7 +2,10 @@
 until 30 minutes of quiet. Every post it makes goes through the auto-send gate."""
 
 import ast
+import html
+import io
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -80,10 +83,34 @@ async def test_the_greeting_has_the_tips_and_help_repeats_them_under_a_fresh_pre
     await say(w, "@gator hi")
     await say(w, "@gator help")
     greeting, helped = w.channel.posted
-    assert greeting.startswith("[Gator] Gator on watch. This chat is open, so you can skip `@gator`.\n")
-    assert helped.startswith("[Gator] Type a request and it runs in your Claude session.\n")
-    assert greeting.split("\n", 1)[1] == helped.split("] ", 1)[1]
-    assert "30 minutes of quiet" in helped
+    assert greeting.startswith(
+        f"[Gator] {commands.CROC} Gator on watch. This chat is open, so you can skip `@gator`.\n\nNext:\n"
+    )
+    assert helped.startswith("[Gator] This chat is open, so you can skip `@gator`.\n\nNext:\n")
+    assert "Gator on watch" not in helped and commands.CROC not in helped
+    assert greeting.split("\n\nNext:\n", 1)[1] == helped.split("\n\nNext:\n", 1)[1]
+    assert helped.endswith("It also closes after 30 minutes of quiet.")
+
+
+async def test_help_with_the_chat_closed_tells_the_user_to_tag_every_message(w):
+    await baselined(w)
+    await say(w, "@gator help")
+    helped = w.channel.posted[-1]
+    assert helped.startswith("[Gator] This chat is closed, so start each message with `@gator`.\n\nNext:\n")
+    assert "• `@gator hi` to open this chat, then skip `@gator`." in helped
+    assert "• `@gator stop all` to stop everything." in helped
+    assert "30 minutes" not in helped
+
+
+async def test_hi_while_the_chat_is_open_says_so_and_extends_the_window(w):
+    await opened(w)
+    w.clock.now += 20 * MINUTE
+    await say(w, "@gator hi")
+    assert w.channel.posted == [commands.greeting(), commands.already_open()]
+    assert w.channel.posted[-1].startswith("[Gator] This chat is already open.\n\nNext:\n")
+    w.clock.now += 20 * MINUTE
+    await say(w, "run the tests")
+    assert w.host.delivered == [("pty-1", "run the tests")]
 
 
 # ---------------------------------------------------------------- untagged messages inside and outside
@@ -93,7 +120,7 @@ async def test_an_untagged_message_runs_inside_the_window(w):
     await opened(w)
     await say(w, "run the tests")
     assert w.host.delivered == [("pty-1", "run the tests")]
-    assert w.channel.posted[-1] == "[Gator - Claude - budget] Started. Working on it."
+    assert w.channel.posted[-1] == commands.working_ack("Claude", "budget", "Started. Working on it.")
 
 
 async def test_an_untagged_message_is_ignored_when_no_window_is_open(w):
@@ -119,7 +146,7 @@ async def test_an_untagged_stop_all_works_and_closes_the_window(w):
     await say(w, "run the tests")
     await say(w, "stop all")
     assert w.host.killed == ["pty-1"]
-    assert w.channel.posted[-1] == "[Gator] Stopped 1 session."
+    assert w.channel.posted[-1] == commands.stopped(1)
     assert window_of(w) is None
 
 
@@ -129,10 +156,10 @@ async def test_blank_untagged_messages_are_ignored(w):
     assert w.channel.posted == [commands.greeting()]
 
 
-async def test_an_untagged_greeting_word_repeats_the_greeting(w):
+async def test_an_untagged_greeting_word_says_the_chat_is_already_open(w):
     await opened(w)
     await say(w, "hi")
-    assert w.channel.posted == [commands.greeting(), commands.greeting()]
+    assert w.channel.posted == [commands.greeting(), commands.already_open()]
     assert w.host.delivered == []
 
 
@@ -386,7 +413,8 @@ async def test_the_slow_down_notice_says_how_long_to_wait_in_words(w):
     for _ in range(5):
         await say(w, "list")
     slow = [p for p in w.channel.posted if "Slow down" in p]
-    assert slow == ["[Gator] Slow down, that was too many messages at once. Try again in 10 minutes."]
+    assert slow == [commands.slow_down(600)]
+    assert "• Wait 10 minutes, then send it again." in slow[0]
 
 
 def test_guard_wait_seconds_counts_down_from_the_oldest_command():
@@ -433,23 +461,31 @@ def test_in_words_reads_naturally():
 async def test_an_echoed_session_name_is_capped_and_flattened(w):
     await baselined(w)
     await say(w, "@gator status " + "n" * 200)
-    assert w.channel.posted[-1] == f"[Gator] No session named {'n' * 40}. Send `list` to see what is running."
+    assert w.channel.posted[-1] == commands.session_not_found("n" * 200)
+    assert w.channel.posted[-1].startswith(f"[Gator] No session named {'n' * 40}.\n\nNext:\n")
 
 
 def test_not_found_text_strips_newlines_and_caps_the_name():
     out = commands.session_not_found("ab\ncd\r\n" + "x" * 100)
-    assert "\n" not in out.split("\n")[0] and out.count("\n") == 0
-    assert out == f"[Gator] No session named ab cd {'x' * 34}. Send `list` to see what is running."
+    assert out.split("\n")[0] == f"[Gator] No session named ab cd {'x' * 34}."
+    assert out.endswith("Next:\n• `list` to see what is running.")
 
 
 # ---------------------------------------------------------------- the copy deck
 
+CROC_KEYS = {"greeting", "bye", "closed"}
+TIPS_KEYS = {"greeting", "help_open", "help_closed"}
+QUIET_NOTE = "It also closes after 30 minutes of quiet."
+
 
 def _deck():
-    rows = [("budget", "Budget", "working"), ("other", "Other", "waiting for you")]
+    rows = [("budget", "Budget", commands.WORKING), ("other", "Other", commands.WAITING)]
+    question = "Which folder?\n1. Use the repo root\n2. Use web/"
     return {
         "greeting": commands.greeting(),
-        "help": commands.help_text(),
+        "help_open": commands.help_text(True),
+        "help_closed": commands.help_text(False),
+        "already_open": commands.already_open(),
         "closed": commands.chat_closed_quiet(),
         "bye": commands.chat_closed_bye(),
         "timeout": commands.timed_out(24 * 3600),
@@ -457,48 +493,142 @@ def _deck():
         "stale_one": commands.stale_skipped(1, 900),
         "stale_many": commands.stale_skipped(3, 900),
         "list": commands.session_list(rows),
+        "list_idle": commands.session_list([("budget", "Budget", commands.IDLE)]),
         "list_empty": commands.session_list([]),
         "not_found": commands.session_not_found("nope"),
         "stopped_one": commands.stopped(1),
         "stopped_many": commands.stopped(3),
+        "stop_all_failed": commands.stop_all_failed("budget", "other"),
         "no_sessions": commands.no_sessions(),
+        "online": commands.online(),
+        "error": commands.error_reply("No default project is set. Choose one in Settings, then resend."),
+        "which_session": commands.which_session(["budget", "other"]),
+        "which_to_stop": commands.which_to_stop(["budget", "other"]),
+        "status": commands.session_status("Claude", "budget", commands.WORKING, 1000.0, 2000.0),
+        "started": commands.working_ack("Claude", "budget", "Started. Working on it."),
+        "done": commands.agent_result("Claude", "budget", "Done.", "Two files are open."),
+        "done_empty": commands.agent_result("Claude", "budget", "Done.", ""),
+        "done_long": commands.agent_result("Claude", "budget", "Done.", "Outcome. " + "word " * 2000),
+        "waiting_choices": commands.agent_result("Claude", "budget", "Waiting for your answer.", question, True),
+        "waiting_open": commands.agent_result("Claude", "budget", "Waiting for your answer.", "Which?", True),
+        "agent_stopped": commands.agent_stopped("Claude", "budget"),
+        "agent_exited": commands.agent_exited("Claude", "budget"),
     }
 
 
-@pytest.mark.parametrize("key", list(_deck()))
-def test_every_system_message_starts_with_the_one_shared_prefix(key):
-    assert _deck()[key].startswith(commands.SYSTEM_PREFIX + "] ")
+def _next_block(text):
+    """(options, what follows them). Exactly one Next marker; options are the bullet lines under it."""
+    head, marker, tail = text.partition("\n\nNext:\n")
+    assert marker and "\n\nNext:\n" not in tail
+    lines = tail.split("\n")
+    options = []
+    for line in lines:
+        if not line.startswith("• "):
+            break
+        options.append(line)
+    return options, lines[len(options) :]
 
 
 @pytest.mark.parametrize("key", list(_deck()))
-def test_the_deck_has_no_emoji_exclamation_marks_or_bold(key):
+def test_every_message_starts_with_the_one_shared_prefix_and_never_has_the_croc_before_it(key):
+    text = _deck()[key]
+    assert text.startswith(commands.SYSTEM_PREFIX + "]") or text.startswith(commands.SYSTEM_PREFIX + " - ")
+    assert text.count(commands.SYSTEM_PREFIX) == 1
+    if commands.CROC in text:
+        assert text.index(commands.CROC) > text.index("]")
+
+
+def test_the_croc_appears_only_in_the_greeting_bye_and_the_quiet_close():
+    deck = _deck()
+    assert {k for k, v in deck.items() if commands.CROC in v} == CROC_KEYS
+    assert deck["timeout"].count(commands.CROC) == 0
+    for key in CROC_KEYS:
+        assert deck[key].startswith(f"[Gator] {commands.CROC} ")
+        assert deck[key].count(commands.CROC) == 1
+
+
+@pytest.mark.parametrize("key", list(_deck()))
+def test_every_message_ends_with_a_next_block_of_one_to_three_options(key):
+    options, rest = _next_block(_deck()[key])
+    if key in TIPS_KEYS:
+        assert len(options) == 5
+        assert rest == (["", QUIET_NOTE] if key != "help_closed" else [])
+    else:
+        assert 1 <= len(options) <= 3
+        assert rest == []
+
+
+@pytest.mark.parametrize("key", list(_deck()))
+def test_the_deck_has_no_exclamation_marks_bold_or_other_emoji(key):
     text = _deck()[key]
     assert "!" not in text and "**" not in text and "*" not in text.replace("`", "")
-    assert set(text) - set(text.encode("ascii", "ignore").decode()) <= {"·"}
+    assert set(text) - set(text.encode("ascii", "ignore").decode()) <= {"·", "•", commands.CROC}
+    assert len(text.split("\n")) <= 30
 
 
 def test_wordplay_lives_only_in_the_greeting_and_bye_lines():
     deck = _deck()
     assert [k for k, v in deck.items() if "Gator on watch." in v] == ["greeting"]
     assert [k for k, v in deck.items() if "Gator out." in v] == ["bye"]
-    assert "Gator on watch" not in commands.agent_result("Claude", "budget", "Done.", "text")
+    for text in deck.values():
+        assert not re.search(r"\b(teeth|snap|bite|swamp)\b|see you later", text, re.IGNORECASE)
 
 
 def test_the_deck_texts_match_the_copy():
     deck = _deck()
-    assert deck["closed"] == "[Gator] Chat closed after 30 minutes of quiet. Send `@gator hi` to open it again."
-    assert deck["bye"] == "[Gator] Chat closed. Gator out. Send `@gator hi` to open it again."
+    reopen = "Next:\n• `@gator hi` to open it again."
+    assert deck["closed"] == f"[Gator] {commands.CROC} Chat closed after 30 minutes of quiet.\n\n{reopen}"
+    assert deck["bye"] == f"[Gator] {commands.CROC} Chat closed. Gator out.\n\n{reopen}"
+    assert deck["already_open"] == (
+        "[Gator] This chat is already open.\n\nNext:\n• Type a request to run it.\n• `help` to see all options."
+    )
     assert deck["stale_one"] == (
-        "[Gator] Skipped a message you sent while AI Gator was off, because it was more than 15 minutes old. "
-        "Send it again if you still need it."
+        "[Gator] Skipped a message you sent while AI Gator was off, because it was more than 15 minutes old.\n\n"
+        "Next:\n• Send it again if you still need it."
     )
     assert deck["stale_many"].startswith("[Gator] Skipped 3 messages you sent while AI Gator was off")
-    assert deck["list"] == (
-        "[Gator] 2 sessions running:\n1. budget · Budget · working\n2. other · Other · waiting for you"
+    assert deck["slow_down"] == (
+        "[Gator] Slow down, that was too many messages at once.\n\nNext:\n• Wait 10 minutes, then send it again."
     )
-    assert deck["stopped_one"] == "[Gator] Stopped 1 session."
-    assert deck["stopped_many"] == "[Gator] Stopped 3 sessions."
-    assert deck["no_sessions"] == "[Gator] No remote sessions are running."
+    assert deck["timeout"] == (
+        "[Gator] Remote control turned itself off after 24 hours.\n\n"
+        "Next:\n• Open AI Gator, then Settings, then Remote control, and switch it on."
+    )
+    assert deck["list"] == (
+        "[Gator] 2 sessions running:\n1. budget · Budget · working\n2. other · Other · waiting for you\n\n"
+        "Next:\n• `other: your answer` to answer the one that is waiting.\n"
+        "• `status budget` for details.\n• `stop all` to stop everything."
+    )
+    assert "• `budget: your request` to talk to a session." in deck["list_idle"]
+    assert deck["no_sessions"] == (
+        "[Gator] No remote sessions are running.\n\nNext:\n• Send a request and it starts a new session."
+    )
+    assert deck["not_found"] == "[Gator] No session named nope.\n\nNext:\n• `list` to see what is running."
+    assert deck["which_session"] == (
+        "[Gator] Which session?\n\nNext:\n• `budget: your message`\n• `other: your message`\n• `list` to see them all."
+    )
+    assert deck["stopped_one"].startswith("[Gator] Stopped 1 session.\n\n")
+    assert deck["stopped_many"].startswith("[Gator] Stopped 3 sessions.\n\n")
+    assert deck["status"] == (
+        f"[Gator - Claude - budget] Working since {commands.clock_time(1000.0)}.\n"
+        f"Last activity {commands.clock_time(2000.0)}.\n\n"
+        "Next:\n• Reply here to talk to it.\n• `stop budget` to stop it."
+    )
+    assert deck["started"] == (
+        "[Gator - Claude - budget] Started. Working on it.\n\n"
+        "Next:\n• `status budget` to see what it is doing.\n• `stop budget` to stop it."
+    )
+    assert deck["agent_stopped"] == (
+        "[Gator - Claude - budget] Stopped.\n\n"
+        "Next:\n• Send a message to start it again.\n• `list` to see what is running."
+    )
+    assert deck["agent_exited"] == (
+        "[Gator - Claude - budget] The agent process exited.\n\nNext:\n• Send a message to start a new session."
+    )
+    assert deck["waiting_choices"].endswith(
+        "Next:\n• `Use the repo root`\n• `Use web/`\n• Or type your own answer."
+    )
+    assert deck["waiting_open"].endswith("Next:\n• Type your answer.\n• `stop budget` to stop it instead.")
 
 
 def test_the_prefix_literal_has_one_home():
@@ -532,16 +662,22 @@ def test_the_loop_guard_and_the_adapters_read_the_shared_prefix():
 
 def test_the_timeout_notice_names_the_real_settings_section():
     html = (ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    before_toggle = html[: html.index('id="teams-remote-control-toggle"')]
-    label = re.findall(r'class="spanel-divider"[^>]*>([^<]+)<', before_toggle)[-1].strip()
+    tab = re.search(r'data-tab="remote"[^>]*>\s*(?:<span[^>]*>[^<]*</span>)?\s*([^<]+)<', html)
+    if tab:
+        label = tab.group(1).strip()
+    else:
+        before_toggle = html[: html.index('id="teams-remote-control-toggle"')]
+        label = re.findall(r'class="spanel-divider"[^>]*>([^<]+)<', before_toggle)[-1].strip()
     assert commands.SETTINGS_SECTION == label
-    assert f"AI Gator settings, under {label}." in commands.timed_out(3600)
+    assert f"Open AI Gator, then Settings, then {label}, and switch it on." in commands.timed_out(3600)
+    assert f"Settings, then {label}, and switch it off and on" in commands.stopped(1)
 
 
-async def test_everything_a_whole_session_posts_carries_the_prefix(w):
+async def test_everything_a_whole_session_posts_carries_the_prefix_and_a_next_block(w):
     await opened(w)
     await say(w, "run the tests")
     await say(w, "list")
+    await say(w, "status")
     await say(w, "status nope")
     await say(w, "help")
     await say(w, "too old", age=2000)
@@ -549,8 +685,9 @@ async def test_everything_a_whole_session_posts_carries_the_prefix(w):
     w.host.last["pty-1"] = "Which one?"
     await w.runner.tick()
     await say(w, "bye")
-    assert len(w.channel.posted) >= 7
+    assert len(w.channel.posted) >= 8
     assert all(p.startswith(commands.SYSTEM_PREFIX) for p in w.channel.posted)
+    assert all("\n\nNext:\n" in p for p in w.channel.posted)
 
 
 async def test_a_session_that_asked_a_question_is_listed_as_waiting_for_you(w):
@@ -560,10 +697,73 @@ async def test_a_session_that_asked_a_question_is_listed_as_waiting_for_you(w):
     w.host.last["pty-1"] = "Which one?"
     await w.runner.tick()
     await say(w, "list")
-    assert w.channel.posted[-1].endswith("1. budget · Budget · waiting for you")
+    assert "1. budget · Budget · waiting for you" in w.channel.posted[-1]
+    assert "• `budget: your answer` to answer the one that is waiting." in w.channel.posted[-1]
     await say(w, "the first one")
     await say(w, "list")
-    assert w.channel.posted[-1].endswith("1. budget · Budget · working")
+    assert "1. budget · Budget · working" in w.channel.posted[-1]
+    assert "• `budget: your request` to talk to a session." in w.channel.posted[-1]
+
+
+async def test_status_of_one_session_says_its_state_since_when_and_last_activity(w):
+    await opened(w)
+    await say(w, "run the tests")
+    await say(w, "status budget")
+    out = w.channel.posted[-1]
+    assert out.startswith("[Gator - Claude - budget] Working since ")
+    assert "\nLast activity " in out
+    assert "• `stop budget` to stop it." in out
+
+
+async def test_status_with_no_name_and_one_session_describes_that_session(w):
+    await opened(w)
+    await say(w, "run the tests")
+    await say(w, "status")
+    assert w.channel.posted[-1].startswith("[Gator - Claude - budget] Working since ")
+
+
+async def test_the_deck_wording_for_a_stop_that_needs_a_name_and_for_an_exit(w):
+    await opened(w)
+    await w.service.start(BUDGET, "a")
+    await w.service.start(OTHER, "b")
+    await say(w, "stop")
+    assert w.channel.posted[-1] == commands.which_to_stop(["budget", "other"])
+    w.host.alive_ids.clear()
+    await w.runner.tick()
+    assert commands.agent_exited("Claude", "budget") in w.channel.posted
+    assert commands.agent_exited("Claude", "other") in w.channel.posted
+
+
+async def test_stop_all_failing_says_so_and_keeps_remote_control_on(w):
+    await opened(w)
+    await say(w, "run the tests")
+
+    w.host.fail_kill = {"pty-1"}
+    await say(w, "stop all")
+    assert w.channel.posted[-1].startswith("[Gator] Could not stop budget")
+    assert "Remote control stays on." in w.channel.posted[-1]
+    assert w.guard.armed is True
+
+
+# ---------------------------------------------------------------- the loop guard reads back no deck message
+
+
+@pytest.mark.parametrize("key", list(_deck()))
+async def test_the_loop_guard_ignores_every_deck_message_read_back_untagged(w, key):
+    await opened(w)
+    await say(w, _deck()[key])
+    assert w.host.delivered == []
+    assert w.channel.posted == [commands.greeting()]
+
+
+async def test_the_loop_guard_ignores_the_croc_greeting_and_a_recorded_id_catches_a_stripped_prefix(w):
+    await opened(w)
+    await say(w, f"[Gator] {commands.CROC} Gator on watch. do the thing")
+    assert w.host.delivered == []
+    w.state.record_post("teams", "777")
+    stripped = _deck()["greeting"].split("] ", 1)[1]
+    await w.feed(w.msg(777, stripped))
+    assert w.host.delivered == []
 
 
 # ---------------------------------------------------------------- Teams and Slack behind the real adapters
@@ -666,3 +866,61 @@ async def test_on_each_channel_the_timeout_notice_is_gated_too(tmp_path, chat, a
     await runner.tick()
     assert state.window(chat.name) is None
     assert chat.posts() == []
+
+
+async def test_on_each_channel_the_loop_guard_ignores_every_deck_message(tmp_path, chat):
+    runner, host, clock, state = _runner(chat, tmp_path)
+    await _history(runner, chat)
+    hi = chat.say(1, "@gator hi", clock.now)
+    await _history(runner, chat, hi)
+    echoes = [chat.say(10 + i, text, clock.now) for i, text in enumerate(_deck().values())]
+    await _history(runner, chat, *reversed(echoes), hi)
+    assert host.delivered == []
+    assert len(chat.posts()) == 1
+
+
+def test_the_adapters_send_a_multi_line_croc_message_intact(tmp_path, chat):
+    text = commands.greeting()
+    chat.adapter(State(tmp_path / "s.json")).post(text)
+    sent = chat.posts()[0]
+    if chat.name == "teams":
+        content = sent[1]
+        assert "\n" not in content
+        assert content == html.escape(text, quote=False).replace("\n", "<br>")
+        lines = content.split("<br>")
+        assert lines[0] == f"[Gator] {commands.CROC} Gator on watch. This chat is open, so you can skip `@gator`."
+        assert "• `stop all` to stop everything." in lines
+        assert lines[-1] == QUIET_NOTE
+    else:
+        assert sent[1]["text"] == text
+        assert text.count("\n") == sent[1]["text"].count("\n") == 9
+
+
+def test_tp_teams_send_survives_an_emoji_under_a_cp1252_console(monkeypatch):
+    import httpx
+    from routes import teams
+
+    class Skype:
+        def get_auth(self):
+            return "token", "https://chat.example"
+
+        def get_global_service(self):
+            return None
+
+    class Reply:
+        status_code = 200
+        text = '{"id": "9"}'
+
+        def json(self):
+            return {"id": "9"}
+
+    sent = []
+    monkeypatch.setattr(teams, "_get_skype_module", lambda: Skype())
+    monkeypatch.setattr(teams, "_get_my_name", lambda: "Me")
+    monkeypatch.setattr(teams, "_invalidate_chats_cache", lambda: None)
+    monkeypatch.setattr(httpx, "post", lambda url, **kwargs: sent.append(kwargs["json"]) or Reply())
+    console = io.TextIOWrapper(io.BytesIO(), encoding="cp1252", errors="strict")
+    monkeypatch.setattr(sys, "stdout", console)
+    out = teams.tp_teams_send("48:notes", teams.TeamsSendRequest(message=f"[Gator] {commands.CROC} Gator on watch."))
+    assert out["ok"] is True and out["message_id"] == "9"
+    assert commands.CROC in sent[0]["content"]

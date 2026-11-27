@@ -31,10 +31,16 @@ class ChatWindow:
         window = self._state.window(self._channel)
         return window[0] if window else 0.0
 
-    def open(self, message_time: float) -> None:
-        """`message_time` is the channel's timestamp of the greeting; messages older than it never count."""
+    def open(self, message_time: float) -> bool:
+        """`message_time` is the channel's timestamp of the greeting; messages older than it never count.
+        Returns whether the chat was already open, in which case the greeting only extends it."""
+        was_open = self.is_open()
+        if was_open:
+            self.extend()
+            return True
         now = self._clock()
         self._state.set_window(self._channel, message_time if message_time > 0 else now, now + self._seconds)
+        return False
 
     def extend(self) -> None:
         window = self._state.window(self._channel)

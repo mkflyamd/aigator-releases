@@ -1,4 +1,5 @@
 import pytest
+from remote import commands
 
 from remote import loop as remote_loop
 from remote.guard import Guard
@@ -52,7 +53,7 @@ async def test_enabling_arms_polls_and_says_online_once(s):
     await s.loop.step()
     await s.loop.step()
     assert s.guard.armed is True
-    assert s.channel.posted == ["[Gator] Online"]
+    assert s.channel.posted == [commands.online()]
 
 
 async def test_polls_only_every_poll_interval(s):
@@ -73,11 +74,11 @@ async def test_recovery_from_a_failed_poll_says_online_again(s):
     await s.loop.step()
     s.clock.now += 10
     await s.loop.step()
-    assert s.channel.posted == ["[Gator] Online"]
+    assert s.channel.posted == [commands.online()]
     s.channel.fail = False
     s.clock.now += 10
     await s.loop.step()
-    assert s.channel.posted == ["[Gator] Online", "[Gator] Online"]
+    assert s.channel.posted == [commands.online(), commands.online()]
 
 
 async def test_turning_the_switch_off_disarms(s):

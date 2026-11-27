@@ -285,7 +285,7 @@ async def test_list_and_stop_all_work_over_slack(tmp_path, slack):
     c = w.say(w.ts(seq=3), "@gator stop all")
     await w.deliver(c, b, a)
     assert w.host.killed == ["pty-1"]
-    assert slack.posts()[-1][1]["text"] == "[Gator] Stopped 1 session."
+    assert slack.posts()[-1][1]["text"] == commands.stopped(1)
     assert w.state.disarmed("slack") is True
 
 

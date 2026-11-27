@@ -23,18 +23,17 @@ _log = logging.getLogger(__name__)
 
 STALE_SECONDS = 15 * 60.0
 AGENT_LABEL = "Claude"
-_HEADLINES = {
-    "completed": "Done.",
-    "input-required": "Waiting for your answer.",
-    "failed": "The agent process exited. Send a message to start a new session.",
-    "canceled": "Stopped.",
-}
+_HEADLINES = {"completed": "Done.", "input-required": "Waiting for your answer."}
+
+
+class _Reply(RemoteError):
+    """A RemoteError whose text is already a finished chat message."""
 
 
 def _state_word(session: Session) -> str:
     if session.waiting:
-        return "waiting for you"
-    return "working" if session.awaiting_since is not None else "idle"
+        return commands.WAITING
+    return commands.WORKING if session.awaiting_since is not None else commands.IDLE
 
 
 class RemoteRunner:
@@ -57,6 +56,7 @@ class RemoteRunner:
         self._timeout_noticed = False
         self._autosend_noticed = False
         self._window = ChatWindow(channel.name, state, clock)
+        self._already_open = False
         service.subscribe(self._on_event)
 
     def sync_enabled(self, enabled: bool) -> None:
@@ -80,7 +80,7 @@ class RemoteRunner:
         await self._service.restore()
 
     async def announce_online(self) -> None:
-        await self._post(commands.system_reply("Online"))
+        await self._post(commands.online())
 
     async def _post(self, text: str) -> None:
         try:
@@ -119,7 +119,7 @@ class RemoteRunner:
                 skipped += 1
                 continue
             if command.kind == "open":
-                self._window.open(message.created_at)
+                self._already_open = self._window.open(message.created_at)
             elif command.kind not in ("stop_all", "bye"):
                 self._window.extend()
             await self._run(command)
@@ -153,25 +153,27 @@ class RemoteRunner:
             return
         try:
             await self._dispatch(command)
+        except _Reply as exc:
+            await self._post(str(exc))
         except RemoteError as exc:
-            await self._post(commands.system_reply(str(exc)))
+            await self._post(commands.error_reply(str(exc)))
         except Exception:
             _log.warning("Remote command %s failed", command.kind, exc_info=True)
-            await self._post(commands.system_reply("That command failed and was not retried."))
+            await self._post(commands.error_reply("That command failed and was not retried."))
 
     async def _dispatch(self, command: commands.Command) -> None:
         kind = command.kind
         if kind == "help":
-            await self._post(commands.help_text())
+            await self._post(commands.help_text(self._window.is_open()))
         elif kind == "open":
-            await self._post(commands.greeting())
+            await self._post(commands.already_open() if self._already_open else commands.greeting())
         elif kind == "bye":
             self._window.close()
             await self._post(commands.chat_closed_bye())
         elif kind == "list":
             await self._post(self._describe(self._service.list()))
         elif kind == "status":
-            await self._post(self._describe(self._pick(command.name)))
+            await self._post(self._status(command.name))
         elif kind == "stop":
             await self._service.stop(self._pick(command.name, required=True)[0].id)
         elif kind == "stop_all":
@@ -182,11 +184,9 @@ class RemoteRunner:
     async def _stop_all(self) -> None:
         stopped, failed = await self._service.stop_all()
         if failed:
-            names = ", ".join(s.short for s in failed)
-            done = f" Stopped: {', '.join(s.short for s in stopped)}." if stopped else ""
             await self._post(
-                commands.system_reply(
-                    f"Could not stop {names}; still running.{done} Remote control stays on. Send `@gator stop all` to try again."
+                commands.stop_all_failed(
+                    ", ".join(s.short for s in failed), ", ".join(s.short for s in stopped)
                 )
             )
             return
@@ -199,50 +199,67 @@ class RemoteRunner:
         if name:
             session = self._service.resolve(name)
             if session is None:
-                raise RemoteError(commands.not_found_text(name))
+                raise _Reply(commands.session_not_found(name))
             return [session]
         sessions = self._service.list()
         if required and len(sessions) != 1:
-            raise RemoteError(self._need_a_name(sessions))
+            if not sessions:
+                raise _Reply(commands.no_sessions())
+            raise _Reply(commands.which_to_stop([s.short for s in sessions]))
         return sessions
-
-    def _need_a_name(self, sessions: list[Session]) -> str:
-        if not sessions:
-            return "No remote sessions are running."
-        return f"Which session? Name one: {', '.join(s.short for s in sessions)}."
 
     def _describe(self, sessions: list[Session]) -> str:
         return commands.session_list([(s.short, s.project.name, _state_word(s)) for s in sessions])
 
+    def _status(self, name: str | None) -> str:
+        sessions = self._pick(name)
+        if len(sessions) != 1:
+            return self._describe(sessions)
+        s = sessions[0]
+        since = s.awaiting_since if s.awaiting_since is not None else s.last_activity
+        return commands.session_status(AGENT_LABEL, s.short, _state_word(s), since, s.last_activity)
+
     async def _send(self, text: str) -> None:
+        """A message to a session. `name text` and `name: text` pick one; otherwise the waiting session
+        if exactly one waits, else the only running one, else a new session in the default project."""
         first, _, rest = text.partition(" ")
-        named = self._service.resolve(first)
+        named = self._service.resolve(first.rstrip(":"))
         if named is not None and rest.strip():
-            await self._service.send(named.id, rest.strip())
-            await self._ack(named, "Sent. Working on it.")
+            await self._deliver(named, rest.strip())
             return
-        project = self._service.default_project()
-        if project is None:
-            raise RemoteError("No default project is set. Choose one in Settings, then resend.")
-        sessions = [s for s in self._service.list() if s.project.id == project.id]
-        if len(sessions) > 1:
-            raise RemoteError(self._need_a_name(sessions) + " Start with the name, e.g. `@gator <name> <text>`.")
-        if sessions:
-            await self._service.send(sessions[0].id, text)
-            await self._ack(sessions[0], "Sent. Working on it.")
-            return
-        session = await self._service.start(project, text)
-        await self._ack(session, "Started. Working on it.")
+        sessions = self._service.list()
+        waiting = [s for s in sessions if s.waiting]
+        if len(waiting) == 1:
+            await self._deliver(waiting[0], text)
+        elif len(sessions) == 1:
+            await self._deliver(sessions[0], text)
+        elif sessions:
+            raise _Reply(commands.which_session([s.short for s in sessions]))
+        else:
+            project = self._service.default_project()
+            if project is None:
+                raise RemoteError("No default project is set. Choose one in Settings, then resend.")
+            session = await self._service.start(project, text)
+            await self._ack(session, "Started. Working on it.")
+
+    async def _deliver(self, session: Session, text: str) -> None:
+        await self._service.send(session.id, text)
+        await self._ack(session, "Sent. Working on it.")
 
     async def _ack(self, session: Session, text: str) -> None:
-        await self._post(commands.agent_reply(AGENT_LABEL, session.short, text))
+        await self._post(commands.working_ack(AGENT_LABEL, session.short, text))
 
     async def _on_event(self, event: Event) -> None:
-        headline = _HEADLINES.get(event.kind, event.kind)
-        if event.kind in ("completed", "input-required"):
-            await self._post(commands.agent_result(AGENT_LABEL, event.session.short, headline, event.text))
+        short = event.session.short
+        if event.kind in _HEADLINES:
+            waiting = event.kind == "input-required"
+            await self._post(commands.agent_result(AGENT_LABEL, short, _HEADLINES[event.kind], event.text, waiting))
+        elif event.kind == "failed":
+            await self._post(commands.agent_exited(AGENT_LABEL, short))
+        elif event.kind == "canceled":
+            await self._post(commands.agent_stopped(AGENT_LABEL, short))
         else:
-            await self._ack(event.session, headline)
+            await self._post(commands.working_ack(AGENT_LABEL, short, event.kind))
 
     async def tick(self) -> None:
         if self._guard.expired():

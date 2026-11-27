@@ -3203,7 +3203,7 @@ def tp_teams_send(chat_id: str, req: TeamsSendRequest):
             if skype_mentions:
                 body["properties"] = {"mentions": json.dumps(skype_mentions)}
         print(
-            f"[teams-send] body messagetype={body['messagetype']} content={body['content'][:120]!r}",
+            f"[teams-send] body messagetype={body['messagetype']} content={body['content'][:120]!a}",
             flush=True,
         )
         _send_headers = {

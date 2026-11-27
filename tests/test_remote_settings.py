@@ -4,6 +4,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from remote import commands
 from remote import loop as remote_loop
 from remote import settings
 from remote.guard import Guard
@@ -158,7 +159,9 @@ async def test_a_message_with_a_missing_default_project_gets_a_gator_refusal_and
     await w.feed(w.msg(100, "old note"))
     await w.feed(w.msg(101, "@gator say ok"))
     assert w.host.n == 0
-    assert w.channel.posted == ['[Gator] The default project "Gone" no longer exists. Choose another in Settings, then resend.']
+    assert w.channel.posted == [
+        commands.error_reply('The default project "Gone" no longer exists. Choose another in Settings, then resend.')
+    ]
 
 
 @pytest.mark.parametrize(

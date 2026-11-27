@@ -67,7 +67,7 @@ Channel-independent. The grammar is `@gator <command or text>`. A message is a c
 | Message                  | Action                                                                |
 | ------------------------ | --------------------------------------------------------------------- |
 | `@gator <name> <text>`   | `send` to the session or chat tab with short name `<name>`            |
-| `@gator <text>`          | `send` to the default project's session, starting one if none is live |
+| `@gator <text>`          | `send`, routed as described below                                     |
 | `@gator list`            | sessions and chat tabs with short name, agent, state, age             |
 | `@gator status [<name>]` | state and the last agent message                                      |
 | `@gator stop [<name>]`   | `stop`                                                                |
@@ -76,20 +76,22 @@ Channel-independent. The grammar is `@gator <command or text>`. A message is a c
 | `@gator bye`             | close the chat window                                                 |
 | `@gator help`            | the tips                                                              |
 
-`list`, `status`, `stop`, `help`, `bye` and the greeting words (`hi`, `hello`, `hey`, `start`) are reserved words and are never session names. A reserved word on its own, with only trailing punctuation, is a command; inside a longer request it is ordinary text, so `@gator hi there, what changed?` goes to the agent. This is a deliberate change: `@gator hello` used to start a Claude run and now opens the chat window instead. If the first word after `@gator` is not a reserved word and not a known short name, the whole text goes to the default session.
+`list`, `status`, `stop`, `help`, `bye` and the greeting words (`hi`, `hello`, `hey`, `start`) are reserved words and are never session names. A reserved word on its own, with only trailing punctuation, is a command; inside a longer request it is ordinary text, so `@gator hi there, what changed?` goes to the agent. This is a deliberate change: `@gator hello` used to start a Claude run and now opens the chat window instead. If the first word after `@gator` is not a reserved word and not a known short name, the text is routed as below.
 
-Short names are the addressing scheme. A session is named after its project (`budget`), with `-2`, `-3` added when a project has more than one live session (`budget-2`). A Gator chat tab is addressed by its tab name, in the same namespace. If a tab name collides with a session short name, the command is refused with the list. The default project is a Settings value (`remote_default_project`), falling back to the active project. When the default project has more than one live session and no name is given, the command is refused with the list.
+Routing of a message that names no session, tagged or untagged: it goes to the one session that is waiting for an answer, if exactly one is. Otherwise it goes to the only running session. With no session running, a new one starts in the default project. With several running and none or several waiting, Gator replies `Which session?` with the names as options. `<name> <text>` and `<name>: <text>` always pick that session. Before this change an unnamed message always went to the default project's session, so a tagged message now reaches a session in another project when it is the only one running or the only one waiting.
+
+Short names are the addressing scheme. A session is named after its project (`budget`), with `-2`, `-3` added when a project has more than one live session (`budget-2`). A Gator chat tab is addressed by its tab name, in the same namespace. If a tab name collides with a session short name, the command is refused with the list. The default project is a Settings value (`remote_default_project`), falling back to the active project.
 
 Input is trimmed, capped at 4096 bytes and sent as one line plus Enter.
 
 #### Chat window
 
-`@gator hi` opens a window, per channel, in which untagged messages in the own chat are treated as if they started with `@gator`. Gator answers with the tips: how to type a request, `list`, `status [name]`, `stop [name]`, `stop all`, `bye`, `help`, and that the chat closes after 30 minutes of quiet.
+`@gator hi` opens a window, per channel, in which untagged messages in the own chat are treated as if they started with `@gator`. Gator answers with the greeting and tips: how to type a request, `list`, `status`, `stop all`, `bye`, and that the chat closes after 30 minutes of quiet. `help` posts the same under a new prefix without the crocodile and without "Gator on watch." (when the chat is closed it explains `@gator hi` and `@gator <request>` instead). `@gator hi` while the chat is open replies `This chat is already open.` and extends the window. An untagged `hi` does the same.
 
 - Only the greeting opens the window. A tagged request never opens it, so personal notes in the self-chat do not turn into commands by accident.
 - The window slides. Every command, tagged or untagged, moves its end to 30 minutes after that command. `status` and `list` count.
 - It closes on `bye`, on `stop all`, when remote control is switched off or disarmed, when the absolute cap fires, and after 30 minutes of quiet. `stop [name]` stops one session and leaves the chat open.
-- Expiry is checked when a message arrives and on each tick. The first check that finds it expired posts one `Chat closed after 30 minutes of quiet.` notice. Closing by `bye`, `stop all`, switching off or the cap is silent apart from that command's own reply.
+- Expiry is checked when a message arrives and on each tick. The first check that finds it expired posts one `Chat closed after 30 minutes of quiet.` notice, with the crocodile. Closing by `bye`, `stop all`, switching off or the cap is silent apart from that command's own reply.
 - The window is stored in `~/.gator/remote_control_state.json` under the channel as `window: {opened_at, until}`. After a restart an open window continues and an expired one stays closed without a notice. Nothing is run again on restart: the last processed id still applies.
 - An untagged message only counts if its own timestamp is at or after the greeting's, so messages that were already in the chat, or arrive late, never run. A message with no timestamp is never run untagged.
 - Untagged text that starts with `[Gator` is never read, the same as everywhere else, and untagged text that matches the older `/code` relay pattern (the compiled pattern in `teams_remote_control.py`, imported and not copied) is left to that relay: it is not run and not answered.
@@ -97,14 +99,22 @@ Input is trimmed, capped at 4096 bytes and sent as one line plus Enter.
 
 #### Copy
 
-System notices start with `[Gator]` and agent replies with `[Gator - <agent> - <project>]`. The prefix is one constant, `SYSTEM_PREFIX`, in the command layer; the loop guard, both adapters and every notice read it, and a test fails if any other module spells it out or any notice lacks it. No emoji, exclamation marks or bold. The only wordplay is `Gator on watch.` in the greeting and `Gator out.` in the bye. Limits and waits are written in words (`24 hours`, `10 minutes`). A session name typed by the user is echoed back as one line capped at 40 characters. The timeout notice names the Settings section `Remote control`, and a test compares that with the section label in the page.
+The wording of every message is the copy deck (`REMOTE-CONTROL-CHAT-COPY.md` in the design repo); `commands.py` implements it and tests compare the two. The rules the code enforces:
 
-The command layer posts a reply when a session emits `completed` (agent finished its turn) or `input-required` (agent is asking the user something), containing the agent's last message with its line breaks. Tool-by-tool progress is not posted. Each reply starts with `[Gator - <agent> - <project>]`, for example `[Gator - Claude - budget]`, followed by the outcome on the same line and the agent's words on the next:
+- System notices start with `[Gator]` and agent replies with `[Gator - <agent> - <project>]`. The prefix is one constant, `SYSTEM_PREFIX`, in the command layer; the loop guard, both adapters and every notice read it, and a test fails if any other module spells it out or any notice lacks it.
+- One crocodile, after the prefix, only in the greeting, `bye` and the quiet-close notice. No exclamation marks, no bold, no other emoji. The only wordplay is `Gator on watch.` and `Gator out.`.
+- Every message ends with a `Next:` block of one to three `•` options, typed options in backticks, so the chat is never a dead end. The greeting and `help` carry five options and a closing line about the 30 minutes, as the deck has them.
+- Line breaks are real: Teams gets `<br>` from the adapter, Slack gets newlines. A test sends a multi-line crocodile message through both adapters.
+- Limits and waits are written in words (`24 hours`, `10 minutes`). A session name typed by the user is echoed back as one line capped at 40 characters. The timeout notice names the Settings section `Remote control`, and a test compares that with the section label in the page.
+- After `stop all` the guard is disarmed, so the stop-all reply tells the user to switch Remote control off and on in Settings. The deck's "Send a request to start again" would be false there.
+- `status [name]` replies `<state> since <time>` and `Last activity <time>`. Options use the session short name, which the prefix's project slot shows, because the agent name is not an address.
 
-- Done: `Done.` then the reply. Waiting: `Waiting for your answer.` then the question.
+The command layer posts a reply when a session emits `completed` (agent finished its turn) or `input-required` (agent is asking the user something), containing the agent's last message with its line breaks. Tool-by-tool progress is not posted:
+
+- Done: `Done.` then the reply. Waiting: `Waiting for your answer.` then the question. When the question ends in two short, safe numbered or lettered choices, those become the first two options; a choice that would parse as a command is never offered.
 - No text read back: `Done. No text came back. Open the <agent> tab in AI Gator.` A bare `Done.` is never sent.
-- Process exited: `The agent process exited. Send a message to start a new session.`
-- Replies over 3,500 characters stay one message. The first line carries the agent's first sentence (up to 200 characters), the body is cut at a paragraph or line boundary in the last half of the 3,500 characters (else at whitespace, never inside a word), an open code fence is closed, and the last line is `Trimmed, <n> more characters. Open the <agent> tab in AI Gator for the full reply.` Slack recommends at most 4,000 characters in `text` and Teams allows about 100 KB, so one message stays within both.
+- Process exited: `The agent process exited.` Stopped: `Stopped.`
+- Replies over 3,500 characters stay one message. The first line carries the agent's first sentence (up to 200 characters), the body is cut at a paragraph or line boundary in the last half of the 3,500 characters (else at whitespace, never inside a word), an open code fence is closed, and the last line before `Next:` is `Trimmed, <n> more characters.` Slack recommends at most 4,000 characters in `text` and Teams allows about 100 KB, so one message stays within both.
 
 ### Channel adapters
 
