@@ -100,6 +100,7 @@ SENSITIVE_ROUTES: frozenset[str] = frozenset({
     "POST /api/onenote/sections/{section_id}/pages",
     "POST /api/relay/links",
     "DELETE /api/relay/links/{link_id}",
+    "POST /api/relay/links/{link_id}/resume",
     "POST /api/relay/opt-out",
     "POST /api/relay/settings",
     "POST /api/relay/stop-all",

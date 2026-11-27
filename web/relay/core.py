@@ -312,7 +312,7 @@ class Relay:
                 task, "invalid", f"The message is longer than {agent_wake.MESSAGE_MAX_BYTES} bytes.", now
             )
         if link is not None and link.paused:
-            return self._refuse(task, "link_paused", "This link is paused. Review it, then keep going.", now)
+            return self._refuse(task, "link_paused", "This link is paused. The user can resume it in Settings.", now)
 
         if link is not None:
             matches = [link.other(sender.id)]

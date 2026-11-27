@@ -83,6 +83,15 @@ def stop_relay_link(link_id: str):
     return {"stopped": link_id}
 
 
+@router.post("/api/relay/links/{link_id}/resume", dependencies=[Depends(verify_csrf)])
+def resume_relay_link(link_id: str):
+    if not settings.messaging_allowed():
+        raise HTTPException(status_code=403, detail="Agent messaging is switched off.")
+    if not get_relay().resume_link(link_id):
+        raise HTTPException(status_code=404, detail="No such link.")
+    return {"resumed": link_id}
+
+
 @router.post("/api/relay/stop-all", dependencies=[Depends(verify_csrf)])
 def stop_all_relay():
     get_relay().stop_all()

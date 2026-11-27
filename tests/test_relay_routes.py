@@ -135,6 +135,26 @@ def test_no_link_while_messaging_is_off(client, csrf, world):
     assert client.post("/api/relay/links", json={"a": a, "b": b}, headers=csrf).status_code == 403
 
 
+def test_a_paused_link_shows_why_and_the_user_can_resume_it(client, csrf, world):
+    a, b = agent(world, "alpha"), agent(world, "beta")
+    link = client.post("/api/relay/links", json={"a": a, "b": b}, headers=csrf).json()
+    service._relay._links[link["id"]].paused = "limit_reached"
+    shown = client.get("/api/relay", headers=csrf).json()["links"][0]
+    assert shown["paused"] == "limit_reached"
+    assert client.post(f"/api/relay/links/{link['id']}/resume").status_code == 403
+    assert client.post(f"/api/relay/links/{link['id']}/resume", headers=csrf).json() == {"resumed": link["id"]}
+    assert client.get("/api/relay", headers=csrf).json()["links"][0]["paused"] == ""
+    assert client.post("/api/relay/links/nope/resume", headers=csrf).status_code == 404
+
+
+def test_a_link_cannot_be_resumed_while_messaging_is_off(client, csrf, world):
+    a, b = agent(world, "alpha"), agent(world, "beta")
+    link = client.post("/api/relay/links", json={"a": a, "b": b}, headers=csrf).json()
+    service._relay._links[link["id"]].paused = "repeated"
+    client.post("/api/relay/settings", json={"enabled": False}, headers=csrf)
+    assert client.post(f"/api/relay/links/{link['id']}/resume", headers=csrf).status_code == 403
+
+
 def test_stop_all_ends_every_link(client, csrf, world):
     a, b, c = agent(world, "alpha"), agent(world, "beta"), agent(world, "gamma")
     client.post("/api/relay/links", json={"a": a, "b": b}, headers=csrf)
