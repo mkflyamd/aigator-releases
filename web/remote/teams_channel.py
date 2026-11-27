@@ -79,7 +79,7 @@ class TeamsSelfChat:
             _log.warning("Remote control refused to post: %s is not the own self-chat", self._chat_id)
             raise ChannelRefused("not the own self-chat")
         if not text.lstrip().startswith(SYSTEM_PREFIX):
-            raise ChannelRefused("replies must start with [Gator")
+            raise ChannelRefused(f"replies must start with {SYSTEM_PREFIX}")
         require_autosend()
         content = html.escape(text, quote=False).replace("\r\n", "\n").replace("\n", "<br>")
         try:

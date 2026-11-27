@@ -108,7 +108,7 @@ class SlackSelfDM:
             _log.warning("Remote control refused to post: %s is not the own self-DM", self._channel_id)
             raise ChannelRefused("not the own self-DM")
         if not text.lstrip().startswith(SYSTEM_PREFIX):
-            raise ChannelRefused("replies must start with [Gator")
+            raise ChannelRefused(f"replies must start with {SYSTEM_PREFIX}")
         require_autosend()
         sent = _api("chat.postMessage", {"channel": self._channel_id, "text": _escape(text)}, method="POST")
         if not sent.get("ok"):

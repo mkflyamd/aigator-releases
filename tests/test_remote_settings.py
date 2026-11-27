@@ -156,7 +156,7 @@ async def test_a_message_with_a_missing_default_project_gets_a_gator_refusal_and
     w = World(tmp_path)
     w.service._default_project = remote_loop.default_project
     await w.feed(w.msg(100, "old note"))
-    await w.feed(w.msg(101, "@gator hello"))
+    await w.feed(w.msg(101, "@gator say ok"))
     assert w.host.n == 0
     assert w.channel.posted == ['[Gator] The default project "Gone" no longer exists. Choose another in Settings, then resend.']
 

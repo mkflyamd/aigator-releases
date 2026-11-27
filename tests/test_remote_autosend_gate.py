@@ -130,18 +130,18 @@ async def test_commands_still_run_with_the_gate_off_but_nothing_is_posted(tmp_pa
     runner, host, clock = _runner(chat, tmp_path)
     await runner.announce_online()
     await _deliver(runner, chat)
-    await _deliver(runner, chat, chat.say(1, "@gator hello", clock.now))
-    assert host.delivered == [("pty-1", "hello")]
+    await _deliver(runner, chat, chat.say(1, "@gator say ok", clock.now))
+    assert host.delivered == [("pty-1", "say ok")]
     assert chat.posts() == []
 
 
 async def test_stop_all_still_stops_with_the_gate_off_and_says_nothing(tmp_path, chat, autosend_gate):
     runner, host, clock = _runner(chat, tmp_path)
     await _deliver(runner, chat)
-    await _deliver(runner, chat, chat.say(1, "@gator hello", clock.now))
+    await _deliver(runner, chat, chat.say(1, "@gator say ok", clock.now))
     posted = len(chat.posts())
     autosend_gate["on"] = False
-    await _deliver(runner, chat, chat.say(2, "@gator stop all", clock.now), chat.say(1, "@gator hello", clock.now))
+    await _deliver(runner, chat, chat.say(2, "@gator stop all", clock.now), chat.say(1, "@gator say ok", clock.now))
     assert host.killed == ["pty-1"]
     assert len(chat.posts()) == posted
 
@@ -150,7 +150,7 @@ async def test_replies_resume_when_the_gate_is_turned_on_and_nothing_old_is_sent
     autosend_gate["on"] = False
     runner, host, clock = _runner(chat, tmp_path)
     await _deliver(runner, chat)
-    first = chat.say(1, "@gator hello", clock.now)
+    first = chat.say(1, "@gator say ok", clock.now)
     await _deliver(runner, chat, first)
     assert chat.posts() == []
     autosend_gate["on"] = True

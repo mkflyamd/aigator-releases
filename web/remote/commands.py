@@ -2,20 +2,25 @@
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 
 TRIGGER_RE = re.compile(r"^\s*@gator(?:\s+(.*))?$", re.IGNORECASE | re.DOTALL)
-RESERVED = ("list", "status", "stop", "help")
+GREETING_WORDS = ("hi", "hello", "hey", "start")
+RESERVED = ("list", "status", "stop", "help", "bye", *GREETING_WORDS)
+WINDOW_SECONDS = 30 * 60.0
+NAME_MAX_CHARS = 40
 TEXT_MAX_BYTES = 4096
 REPLY_MAX_CHARS = 3500
 LEAD_MAX_CHARS = 200
 SYSTEM_PREFIX = "[Gator"
+SETTINGS_SECTION = "Remote control"
 
 
 @dataclass(frozen=True)
 class Command:
-    kind: str  # send | list | status | stop | stop_all | help
+    kind: str  # send | list | status | stop | stop_all | help | open | bye
     name: str | None = None
     text: str = ""
 
@@ -32,6 +37,11 @@ def parse(message: str) -> Command | None:
     rest = _cap_bytes((match.group(1) or "").strip())
     if not rest:
         return Command("help")
+    whole = rest.rstrip(".!?, ").lower()
+    if whole in GREETING_WORDS:
+        return Command("open")
+    if whole == "bye":
+        return Command("bye")
     word, _, tail = rest.partition(" ")
     tail = tail.strip()
     key = word.lower()
@@ -46,6 +56,89 @@ def parse(message: str) -> Command | None:
 
 def system_reply(text: str) -> str:
     return f"{SYSTEM_PREFIX}] {text}"
+
+
+def in_words(seconds: float) -> str:
+    """A span in words for chat copy: "24 hours", "10 minutes", "30 seconds"."""
+    total = max(1, math.ceil(seconds))
+    if total % 3600 == 0:
+        n, unit = total // 3600, "hour"
+    elif total >= 60:
+        n, unit = math.ceil(total / 60), "minute"
+    else:
+        n, unit = total, "second"
+    return f"{n} {unit}{'' if n == 1 else 's'}"
+
+
+def _tips() -> str:
+    return (
+        "Type a request and it runs in your Claude session.\n"
+        "`list` \u00b7 `status [name]` \u00b7 `stop [name]` \u00b7 `stop all`\n"
+        "`bye` closes the chat. `help` shows this again.\n"
+        f"It also closes after {in_words(WINDOW_SECONDS)} of quiet."
+    )
+
+
+def greeting() -> str:
+    return system_reply(f"Gator on watch. This chat is open, so you can skip `@gator`.\n{_tips()}")
+
+
+def help_text() -> str:
+    return system_reply(_tips())
+
+
+def chat_closed_quiet() -> str:
+    return system_reply(f"Chat closed after {in_words(WINDOW_SECONDS)} of quiet. Send `@gator hi` to open it again.")
+
+
+def chat_closed_bye() -> str:
+    return system_reply("Chat closed. Gator out. Send `@gator hi` to open it again.")
+
+
+def timed_out(seconds: float) -> str:
+    return system_reply(
+        f"Remote control turned itself off after {in_words(seconds)}. "
+        f"Turn it back on in AI Gator settings, under {SETTINGS_SECTION}."
+    )
+
+
+def slow_down(wait_seconds: float) -> str:
+    return system_reply(f"Slow down, that was too many messages at once. Try again in {in_words(wait_seconds)}.")
+
+
+def stale_skipped(count: int, limit_seconds: float) -> str:
+    what = "a message" if count == 1 else f"{count} messages"
+    return system_reply(
+        f"Skipped {what} you sent while AI Gator was off, because it was more than {in_words(limit_seconds)} old. "
+        "Send it again if you still need it."
+    )
+
+
+def stopped(count: int) -> str:
+    return system_reply(f"Stopped {count} session{'' if count == 1 else 's'}.")
+
+
+def no_sessions() -> str:
+    return system_reply("No remote sessions are running.")
+
+
+def not_found_text(name: str) -> str:
+    """The user-typed name is echoed back, so it is flattened to one line and capped."""
+    shown = " ".join(name.split())[:NAME_MAX_CHARS]
+    return f"No session named {shown}. Send `list` to see what is running."
+
+
+def session_not_found(name: str) -> str:
+    return system_reply(not_found_text(name))
+
+
+def session_list(rows: list[tuple[str, str, str]]) -> str:
+    """rows are (name, project, state); state is one of working, waiting for you, idle."""
+    if not rows:
+        return no_sessions()
+    head = f"{len(rows)} session{'' if len(rows) == 1 else 's'} running:"
+    lines = [f"{i}. {name} \u00b7 {project} \u00b7 {state}" for i, (name, project, state) in enumerate(rows, 1)]
+    return system_reply("\n".join([head, *lines]))
 
 
 def agent_reply(agent: str, project: str, text: str) -> str:

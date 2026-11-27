@@ -1,6 +1,6 @@
 """Turns channel messages into service calls and service events into channel replies.
 
-Loop guards: Gator's own posts are ignored by the "[Gator" prefix and by recorded post ids.
+Loop guards: Gator's own posts are ignored by the SYSTEM_PREFIX and by recorded post ids.
 Each batch advances the stored last-processed id before anything runs, so a crash or restart
 never runs a message twice."""
 
@@ -16,21 +16,25 @@ from remote.channel import AutosendOff, Channel, InboundMessage
 from remote.guard import Guard, limit
 from remote.service import Event, RemoteError, RemoteService, Session
 from remote.state import State
+from remote.window import ChatWindow
+from teams_remote_control import _COMMAND_RE as LEGACY_CODE_RE
 
 _log = logging.getLogger(__name__)
 
 STALE_SECONDS = 15 * 60.0
 AGENT_LABEL = "Claude"
-HELP = (
-    "Commands: `@gator <text>` runs it in your Claude session. `@gator <name> <text>` picks a session. "
-    "`@gator list`, `@gator status [name]`, `@gator stop [name]`, `@gator stop all`, `@gator help`."
-)
 _HEADLINES = {
     "completed": "Done.",
     "input-required": "Waiting for your answer.",
     "failed": "The agent process exited. Send a message to start a new session.",
     "canceled": "Stopped.",
 }
+
+
+def _state_word(session: Session) -> str:
+    if session.waiting:
+        return "waiting for you"
+    return "working" if session.awaiting_since is not None else "idle"
 
 
 class RemoteRunner:
@@ -52,6 +56,7 @@ class RemoteRunner:
         self._enabled = False
         self._timeout_noticed = False
         self._autosend_noticed = False
+        self._window = ChatWindow(channel.name, state, clock)
         service.subscribe(self._on_event)
 
     def sync_enabled(self, enabled: bool) -> None:
@@ -68,6 +73,7 @@ class RemoteRunner:
                 self._state.set_disarmed(channel, False)
             if self._enabled:
                 self._guard.disarm()
+            self._window.close()
         self._enabled = enabled
 
     async def restore(self) -> None:
@@ -105,17 +111,34 @@ class RemoteRunner:
         for message in reversed(fresh):
             if self._is_own(message):
                 continue
-            command = commands.parse(message.text)
+            await self._close_if_expired()
+            command = commands.parse(message.text) or self._untagged(message)
             if command is None or not self._guard.armed:
                 continue
             if self._clock() - message.created_at > limit(self._stale):
                 skipped += 1
                 continue
+            if command.kind == "open":
+                self._window.open(message.created_at)
+            elif command.kind not in ("stop_all", "bye"):
+                self._window.extend()
             await self._run(command)
         if skipped:
-            await self._post(
-                commands.system_reply(f"Skipped {skipped} message(s) received while I was offline. Resend if still needed.")
-            )
+            await self._post(commands.stale_skipped(skipped, limit(self._stale)))
+
+    def _untagged(self, message: InboundMessage) -> commands.Command | None:
+        """An ordinary message inside the open window, routed like `@gator <text>`. Anything that
+        arrived before the window opened, or that the older `/code` relay owns, is not ours."""
+        if not self._window.is_open() or message.created_at < self._window.opened_at():
+            return None
+        if not message.text.strip() or LEGACY_CODE_RE.match(message.text):
+            return None
+        return commands.parse(f"@gator {message.text.strip()}")
+
+    async def _close_if_expired(self) -> None:
+        if self._window.expired():
+            self._window.close()
+            await self._post(commands.chat_closed_quiet())
 
     def _is_own(self, message: InboundMessage) -> bool:
         return message.text.lstrip().startswith(commands.SYSTEM_PREFIX) or self._state.is_own_post(
@@ -126,7 +149,7 @@ class RemoteRunner:
         stops = command.kind in ("stop", "stop_all")
         if not stops and not self._guard.allow_command():
             if self._guard.slow_down_due():
-                await self._post(commands.system_reply("Slow down: too many commands in the last 10 minutes. This one was dropped."))
+                await self._post(commands.slow_down(self._guard.wait_seconds()))
             return
         try:
             await self._dispatch(command)
@@ -139,12 +162,16 @@ class RemoteRunner:
     async def _dispatch(self, command: commands.Command) -> None:
         kind = command.kind
         if kind == "help":
-            await self._post(commands.system_reply(HELP))
+            await self._post(commands.help_text())
+        elif kind == "open":
+            await self._post(commands.greeting())
+        elif kind == "bye":
+            self._window.close()
+            await self._post(commands.chat_closed_bye())
         elif kind == "list":
-            await self._post(commands.system_reply(self._describe(self._service.list())))
+            await self._post(self._describe(self._service.list()))
         elif kind == "status":
-            sessions = self._pick(command.name)
-            await self._post(commands.system_reply(self._describe(sessions)))
+            await self._post(self._describe(self._pick(command.name)))
         elif kind == "stop":
             await self._service.stop(self._pick(command.name, required=True)[0].id)
         elif kind == "stop_all":
@@ -165,15 +192,14 @@ class RemoteRunner:
             return
         self._guard.stop_all()
         self._state.set_disarmed(self._channel.name, True)
-        names = f" ({', '.join(s.short for s in stopped)})" if stopped else ""
-        count = f"Stopped {len(stopped)} remote session(s){names}." if stopped else "No remote sessions were running."
-        await self._post(commands.system_reply(f"{count} Remote control is off until you re-arm it in Settings."))
+        self._window.close()
+        await self._post(commands.stopped(len(stopped)) if stopped else commands.no_sessions())
 
     def _pick(self, name: str | None, required: bool = False) -> list[Session]:
         if name:
             session = self._service.resolve(name)
             if session is None:
-                raise RemoteError(f"No session named {name}. Send `@gator list` to see the running ones.")
+                raise RemoteError(commands.not_found_text(name))
             return [session]
         sessions = self._service.list()
         if required and len(sessions) != 1:
@@ -186,12 +212,7 @@ class RemoteRunner:
         return f"Which session? Name one: {', '.join(s.short for s in sessions)}."
 
     def _describe(self, sessions: list[Session]) -> str:
-        if not sessions:
-            return "No remote sessions are running."
-        return "Sessions:\n" + "\n".join(
-            f"- {s.short} ({AGENT_LABEL}, {s.project.name}) {'working' if s.awaiting_since is not None else 'idle'}"
-            for s in sessions
-        )
+        return commands.session_list([(s.short, s.project.name, _state_word(s)) for s in sessions])
 
     async def _send(self, text: str) -> None:
         first, _, rest = text.partition(" ")
@@ -226,9 +247,11 @@ class RemoteRunner:
     async def tick(self) -> None:
         if self._guard.expired():
             self._guard.disarm()
+            self._window.close()
             if not self._timeout_noticed:
                 self._timeout_noticed = True
-                await self._post(commands.system_reply("Remote control timed out. Re-arm it in Settings."))
+                await self._post(commands.timed_out(self._guard.armed_max_seconds))
             return
         if self._guard.armed:
+            await self._close_if_expired()
             await self._service.tick()

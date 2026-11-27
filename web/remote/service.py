@@ -32,6 +32,7 @@ class Session:
     created_at: float
     last_activity: float
     awaiting_since: float | None = None
+    waiting: bool = False
     last_event_at: float = 0.0
     stopping: bool = False
 
@@ -165,6 +166,7 @@ class RemoteService:
         except HostError as exc:
             raise RemoteError(str(exc)) from exc
         session.last_activity = session.awaiting_since = self._clock()
+        session.waiting = False
 
     async def stop(self, session_id: str) -> None:
         session = self.get(session_id)
@@ -221,6 +223,7 @@ class RemoteService:
             return
         if state["state"] == "asking":
             kind = "input-required"
+            session.waiting = True
         elif state["state"] == "idle" and session.awaiting_since is not None and state["at"] >= session.awaiting_since:
             kind = "completed"
         else:
@@ -228,5 +231,6 @@ class RemoteService:
         session.last_event_at = state["at"]
         if kind == "completed":
             session.awaiting_since = None
+            session.waiting = False
         session.last_activity = max(session.last_activity, state["at"])
         await self._emit(kind, session, await self._host.last_message(session.pty_id))

@@ -62,7 +62,7 @@ Every call carries a `Principal(channel, identity, scopes)`. Scopes are `read`, 
 
 ### Command layer
 
-Channel-independent. The grammar is `@gator <command or text>`. A message is a command only if it starts with `@gator` (case-insensitive) followed by whitespace. Everything else in the self-chat is an ordinary note and is ignored.
+Channel-independent. The grammar is `@gator <command or text>`. A message is a command only if it starts with `@gator` (case-insensitive) followed by whitespace, or if it arrives while the chat window is open (see Chat window). Everything else in the self-chat is an ordinary note and is ignored.
 
 | Message                  | Action                                                                |
 | ------------------------ | --------------------------------------------------------------------- |
@@ -72,13 +72,32 @@ Channel-independent. The grammar is `@gator <command or text>`. A message is a c
 | `@gator status [<name>]` | state and the last agent message                                      |
 | `@gator stop [<name>]`   | `stop`                                                                |
 | `@gator stop all`        | stop every remote session and disarm remote control                   |
-| `@gator help`            | command list                                                          |
+| `@gator hi`              | open the chat window and post the tips (also `hello`, `hey`, `start`) |
+| `@gator bye`             | close the chat window                                                 |
+| `@gator help`            | the tips                                                              |
 
-`list`, `status`, `stop` and `help` are reserved words and are never session names. If the first word after `@gator` is not a reserved word and not a known short name, the whole text goes to the default session.
+`list`, `status`, `stop`, `help`, `bye` and the greeting words (`hi`, `hello`, `hey`, `start`) are reserved words and are never session names. A reserved word on its own, with only trailing punctuation, is a command; inside a longer request it is ordinary text, so `@gator hi there, what changed?` goes to the agent. This is a deliberate change: `@gator hello` used to start a Claude run and now opens the chat window instead. If the first word after `@gator` is not a reserved word and not a known short name, the whole text goes to the default session.
 
 Short names are the addressing scheme. A session is named after its project (`budget`), with `-2`, `-3` added when a project has more than one live session (`budget-2`). A Gator chat tab is addressed by its tab name, in the same namespace. If a tab name collides with a session short name, the command is refused with the list. The default project is a Settings value (`remote_default_project`), falling back to the active project. When the default project has more than one live session and no name is given, the command is refused with the list.
 
 Input is trimmed, capped at 4096 bytes and sent as one line plus Enter.
+
+#### Chat window
+
+`@gator hi` opens a window, per channel, in which untagged messages in the own chat are treated as if they started with `@gator`. Gator answers with the tips: how to type a request, `list`, `status [name]`, `stop [name]`, `stop all`, `bye`, `help`, and that the chat closes after 30 minutes of quiet.
+
+- Only the greeting opens the window. A tagged request never opens it, so personal notes in the self-chat do not turn into commands by accident.
+- The window slides. Every command, tagged or untagged, moves its end to 30 minutes after that command. `status` and `list` count.
+- It closes on `bye`, on `stop all`, when remote control is switched off or disarmed, when the absolute cap fires, and after 30 minutes of quiet. `stop [name]` stops one session and leaves the chat open.
+- Expiry is checked when a message arrives and on each tick. The first check that finds it expired posts one `Chat closed after 30 minutes of quiet.` notice. Closing by `bye`, `stop all`, switching off or the cap is silent apart from that command's own reply.
+- The window is stored in `~/.gator/remote_control_state.json` under the channel as `window: {opened_at, until}`. After a restart an open window continues and an expired one stays closed without a notice. Nothing is run again on restart: the last processed id still applies.
+- An untagged message only counts if its own timestamp is at or after the greeting's, so messages that were already in the chat, or arrive late, never run. A message with no timestamp is never run untagged.
+- Untagged text that starts with `[Gator` is never read, the same as everywhere else, and untagged text that matches the older `/code` relay pattern (the compiled pattern in `teams_remote_control.py`, imported and not copied) is left to that relay: it is not run and not answered.
+- Every post the window makes (tips, closed notice, bye, replies to untagged messages) goes through the auto-send gate. With the gate off the window and commands still work and nothing is posted.
+
+#### Copy
+
+System notices start with `[Gator]` and agent replies with `[Gator - <agent> - <project>]`. The prefix is one constant, `SYSTEM_PREFIX`, in the command layer; the loop guard, both adapters and every notice read it, and a test fails if any other module spells it out or any notice lacks it. No emoji, exclamation marks or bold. The only wordplay is `Gator on watch.` in the greeting and `Gator out.` in the bye. Limits and waits are written in words (`24 hours`, `10 minutes`). A session name typed by the user is echoed back as one line capped at 40 characters. The timeout notice names the Settings section `Remote control`, and a test compares that with the section label in the page.
 
 The command layer posts a reply when a session emits `completed` (agent finished its turn) or `input-required` (agent is asking the user something), containing the agent's last message with its line breaks. Tool-by-tool progress is not posted. Each reply starts with `[Gator - <agent> - <project>]`, for example `[Gator - Claude - budget]`, followed by the outcome on the same line and the agent's words on the next:
 
@@ -119,11 +138,11 @@ Teams and Slack messages to the user's own self-chat may auto-send (PR #189 reco
 ### Delivery guarantees
 
 - At-most-once. The adapter persists the last processed message id and records intent before writing to a PTY, in `~/.gator/remote_control_state.json`. A restart neither replays nor silently skips.
-- Staleness. A message older than `remote_stale_minutes` (default 15) at pickup is not run. Gator posts `[Gator] Skipped N message(s) received while I was offline. Resend if still needed.` Messages inside the window run once.
+- Staleness. A message older than `remote_stale_minutes` (default 15) at pickup is not run. Gator posts `[Gator] Skipped N messages you sent while AI Gator was off, because it was more than 15 minutes old. Send it again if you still need it.` Messages inside the limit run once.
 - Liveness. On startup and on recovery from a failed poll, Gator posts `[Gator] Online`. Failures it can report (no live session, expired token, agent exited, unknown name) get an immediate reply naming the reason. Replies with `[Gator]` are the only signal the user needs: no reply within a minute of a command means Gator is offline.
 - Poll cadence: 3 seconds while a session is active or a command arrived in the last 180 seconds, otherwise 10 seconds.
-- Inbound rate limit: at most 20 commands per 10 minutes per channel. Excess commands get one `[Gator] Slow down` reply and are dropped.
-- Absolute cap: remote control disarms after `remote_armed_max_hours` (default 24), whether or not sessions are active, and posts `[Gator] Remote control timed out. Re-arm it in Settings.` The idle limit applies to individual sessions within that window.
+- Inbound rate limit: at most 20 commands per 10 minutes per channel. Excess commands get one `[Gator] Slow down, that was too many messages at once. Try again in 10 minutes.` reply per window, with the real wait in words, and are dropped.
+- Absolute cap: remote control disarms after `remote_armed_max_hours` (default 24), whether or not sessions are active, and posts `[Gator] Remote control turned itself off after 24 hours. Turn it back on in AI Gator settings, under Remote control.` The idle limit applies to individual sessions within that window.
 - Expiry, rate limit and stop-all live in one guard-rails module that the cross-agent relay shares. Components depend on its small interface (expiry timer, sliding-window rate limit, stop-all registry), not on where the module lives.
 
 ### Headless and power behavior
