@@ -49,7 +49,7 @@
       if (e.target === overlay) overlay.remove();
     });
     function tryUnlock() {
-      if (passInput.value === 'maykulka') {
+      if (passInput.value === 'aigator-fake-api-key') {
         _aoUnlocked = true;
         overlay.remove();
         _aoShowPanel();

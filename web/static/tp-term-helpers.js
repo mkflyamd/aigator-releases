@@ -110,46 +110,68 @@ function _ocSpawnTerm(sess) {
   });
 }
 
-// Every real size change makes the agent repaint its whole screen and leave a ghost copy, so a
-// resize frame goes out only when the size differs from the last one sent for this session.
-function _ocSendSize(sess) {
-  if (!sess.term || !sess.ws || sess.ws.readyState !== WebSocket.OPEN) return false;
-  const { cols, rows } = sess.term;
-  const last = sess._sentSize;
-  if (last && last.cols === cols && last.rows === rows) return false;
-  sess._sentSize = { cols, rows };
-  sess.ws.send(JSON.stringify({ type: 'resize', cols, rows }));
-  return true;
-}
-
 // A pane squeezed below a few rows is mid-layout, not a size worth telling the agent about.
 const _OC_MIN_FIT_HEIGHT = 60;
 
-function _ocFit(sess) {
+// force: also tell the PTY when xterm's own size is unchanged. Needed when the
+// websocket (re)opens, because the PTY's size is independent of xterm's and may
+// be stale (e.g. a reattached shell keeps the size of its previous viewer).
+function _ocFit(sess, force) {
   if (!sess || !sess.fitAddon || !sess.term || sess._parked) return;
   const el = sess.container;
   if (!el || !el.offsetParent || el.clientWidth < 40 || el.clientHeight < _OC_MIN_FIT_HEIGHT) {
+    // A hidden panel cannot be measured, but a (re)connect still has to tell the
+    // PTY the last fitted size so a TUI redraws. A never-fitted xterm still holds
+    // its 80x24 default, which would be a bogus size for the PTY.
+    if (force && sess._ocFitted) _ocSendSize(sess);
     return;
   }
   const prevCols = sess.term.cols;
   const prevRows = sess.term.rows;
   try {
     sess.fitAddon.fit();
+    sess._ocFitted = true;
   } catch (_) {
     /* not visible yet */
+  }
+  // Output written while hidden leaves xterm's scroll area a screen short; fit() no-ops at the same size.
+  try {
+    sess.term._core?.viewport?.syncScrollArea?.(true);
+  } catch (_) {
+    /* xterm internals changed */
   }
   // Only send resize + clear if dimensions actually changed. Sending a
   // resize when nothing changed makes TUI apps redraw needlessly; clearing
   // the buffer on a no-op resize would wipe the screen for nothing.
-  if (sess.term.cols === prevCols && sess.term.rows === prevRows) return;
+  const changed = sess.term.cols !== prevCols || sess.term.rows !== prevRows;
+  if (!changed && !force) return;
   // A post-start reset clears the TUI frame xterm has already painted. That
   // is especially visible for a newly opened second session: it receives and
   // renders OpenCode's first frame, then this late fit wipes it and leaves a
   // blank canvas until OpenCode eventually redraws. A reset is safe only
   // before the session has produced visible output; after that, let the PTY's
   // resize notification drive the application's normal redraw.
-  if (!sess._hasOutput) sess.term.reset();
+  if (changed && !sess._hasOutput) sess.term.reset();
   if (_ocSendSize(sess)) _ocNoteEcho(sess);
+}
+
+// Every real size change makes the agent repaint its whole screen and leave a ghost copy, so the
+// size goes out once per websocket and again only when it changes. A new socket always sends: its
+// PTY may hold a stale size.
+function _ocSendSize(sess) {
+  const ws = sess.ws;
+  if (!sess.term || !ws || ws.readyState !== WebSocket.OPEN) return false;
+  const { cols, rows } = sess.term;
+  if (sess._sentWs === ws && sess._sentCols === cols && sess._sentRows === rows) return false;
+  ws.send(JSON.stringify({ type: 'resize', cols, rows }));
+  _ocMarkSizeSent(sess);
+  return true;
+}
+
+function _ocMarkSizeSent(sess) {
+  sess._sentWs = sess.ws;
+  sess._sentCols = sess.term.cols;
+  sess._sentRows = sess.term.rows;
 }
 
 function _ocGuardSize(sess) {

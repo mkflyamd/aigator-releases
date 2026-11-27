@@ -237,15 +237,15 @@ function world({ reducedMotion = false } = {}) {
 {
   const branch = source.match(/msg\.type === 'woken'\) \{([\s\S]*?)\n    \} else if/);
   assert(branch, 'woken branch not found');
-  const run = (awaitingWake, sentSize = null) => {
+  const run = (awaitingWake, alreadySent = false) => {
     const sent = [];
     const sess = {
-      _sentSize: sentSize,
       _awaitingWake: awaitingWake,
       term: { cols: 120, rows: 34, reset: () => {} },
       ws: { readyState: 1, send: (m) => sent.push(JSON.parse(m)) },
       container: { querySelector: () => null },
     };
+    if (alreadySent) Object.assign(sess, { _sentWs: sess.ws, _sentCols: 120, _sentRows: 34 });
     const ctx = {
       sess,
       msg: {},
@@ -264,7 +264,7 @@ function world({ reducedMotion = false } = {}) {
   assert.deepStrictEqual(run(true), [{ type: 'resize', cols: 120, rows: 34 }]);
   assert.deepStrictEqual(run(false), [], 'a replayed woken message does not resize again');
   assert.deepStrictEqual(
-    run(true, { cols: 120, rows: 34 }),
+    run(true, true),
     [{ type: 'resize', cols: 120, rows: 34 }],
     'a woken session is a new PTY, so it is told its size even if the size matches the last frame',
   );

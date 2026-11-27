@@ -91,7 +91,7 @@ class TestFetchExternalChannelsLogic:
         # Slack Connect channels come back as private_channel with is_ext_shared=True
         ch = {
             "id": "CEXT001",
-            "name": "ext-amd-cohere",
+            "name": "ext-acme-alpha",
             "is_ext_shared": True,
             "purpose": {"value": "Cohere"},
             "topic": {"value": ""},

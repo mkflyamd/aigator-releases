@@ -1,12 +1,11 @@
 """Safety tests for adding attendees to an existing Outlook event.
 
-The legacy tool name is forward_calendar_event, but its supported operation is
-an attendee mutation. These tests prevent string recipients becoming character
+These tests prevent string recipients becoming character
 attendees and prevent recurring-series or mismatched-occurrence mutations.
 """
 from unittest.mock import MagicMock, patch
 
-from skills.calendar.tools import _tool_forward_calendar_event
+from skills.calendar.tools import _tool_add_calendar_attendees
 from skills._m365 import helpers as m365_helpers
 
 
@@ -26,12 +25,12 @@ def test_string_recipient_is_one_complete_attendee_not_characters():
     gc = MagicMock()
     gc.get.side_effect = [
         _event(),
-        {"attendees": [{"emailAddress": {"address": "Marc.Charest@amd.com"}}]},
+        {"attendees": [{"emailAddress": {"address": "Pat.Example@contoso.example"}}]},
     ]
     with patch.object(m365_helpers, "get_cal_client", return_value=gc):
-        result = _tool_forward_calendar_event(
+        result = _tool_add_calendar_attendees(
             "EVENT1",
-            "Marc.Charest@amd.com",
+            "Pat.Example@contoso.example",
             expected_subject="Cohere Internal Sync",
             expected_start="2026-09-14",
         )
@@ -40,7 +39,7 @@ def test_string_recipient_is_one_complete_attendee_not_characters():
     payload = gc.patch.call_args.args[1]
     assert payload["attendees"] == [
         {
-            "emailAddress": {"address": "Marc.Charest@amd.com"},
+            "emailAddress": {"address": "Pat.Example@contoso.example"},
             "type": "required",
             "status": {"response": "none"},
         }
@@ -52,28 +51,28 @@ def test_comma_and_quoted_recipients_are_normalized_and_deduplicated():
     gc.get.side_effect = [
         _event(),
         {"attendees": [
-            {"emailAddress": {"address": "Marc.Charest@amd.com"}},
-            {"emailAddress": {"address": "Second.Person@amd.com"}},
+            {"emailAddress": {"address": "Pat.Example@contoso.example"}},
+            {"emailAddress": {"address": "Second.Person@contoso.example"}},
         ]},
     ]
     with patch.object(m365_helpers, "get_cal_client", return_value=gc):
-        result = _tool_forward_calendar_event(
+        result = _tool_add_calendar_attendees(
             "EVENT1",
-            '"Marc.Charest@amd.com"; second.person@amd.com, MARC.CHAREST@amd.com',
+            '"Pat.Example@contoso.example"; second.person@contoso.example, PAT.EXAMPLE@contoso.example',
             expected_start="2026-09-14",
         )
 
     assert result["updated"] is True
     addresses = [a["emailAddress"]["address"] for a in gc.patch.call_args.args[1]["attendees"]]
-    assert addresses == ["Marc.Charest@amd.com", "second.person@amd.com"]
+    assert addresses == ["Pat.Example@contoso.example", "second.person@contoso.example"]
 
 
 def test_series_master_is_rejected_without_patch():
     gc = MagicMock()
     gc.get.return_value = _event(type="seriesMaster")
     with patch.object(m365_helpers, "get_cal_client", return_value=gc):
-        result = _tool_forward_calendar_event(
-            "SERIES1", ["Marc.Charest@amd.com"], expected_start="2026-09-14"
+        result = _tool_add_calendar_attendees(
+            "SERIES1", ["Pat.Example@contoso.example"], expected_start="2026-09-14"
         )
 
     assert result["updated"] is False
@@ -85,8 +84,8 @@ def test_expected_date_mismatch_is_rejected_without_patch():
     gc = MagicMock()
     gc.get.return_value = _event()
     with patch.object(m365_helpers, "get_cal_client", return_value=gc):
-        result = _tool_forward_calendar_event(
-            "EVENT1", ["Marc.Charest@amd.com"], expected_start="2026-09-15"
+        result = _tool_add_calendar_attendees(
+            "EVENT1", ["Pat.Example@contoso.example"], expected_start="2026-09-15"
         )
 
     assert result["updated"] is False
@@ -98,8 +97,8 @@ def test_expected_time_mismatch_is_rejected_without_patch():
     gc = MagicMock()
     gc.get.return_value = _event()
     with patch.object(m365_helpers, "get_cal_client", return_value=gc):
-        result = _tool_forward_calendar_event(
-            "EVENT1", ["Marc.Charest@amd.com"], expected_start="2026-09-14T12:30"
+        result = _tool_add_calendar_attendees(
+            "EVENT1", ["Pat.Example@contoso.example"], expected_start="2026-09-14T12:30"
         )
 
     assert result["updated"] is False
@@ -111,8 +110,8 @@ def test_missing_graph_start_is_rejected_without_patch():
     gc = MagicMock()
     gc.get.return_value = _event(start={})
     with patch.object(m365_helpers, "get_cal_client", return_value=gc):
-        result = _tool_forward_calendar_event(
-            "EVENT1", ["Marc.Charest@amd.com"], expected_start="2026-09-14"
+        result = _tool_add_calendar_attendees(
+            "EVENT1", ["Pat.Example@contoso.example"], expected_start="2026-09-14"
         )
 
     assert result["updated"] is False
@@ -125,8 +124,8 @@ def test_patch_failure_never_falls_back_to_forward_email():
     gc.get.return_value = _event()
     gc.patch.side_effect = RuntimeError("timeout")
     with patch.object(m365_helpers, "get_cal_client", return_value=gc):
-        result = _tool_forward_calendar_event(
-            "EVENT1", ["Marc.Charest@amd.com"], expected_start="2026-09-14"
+        result = _tool_add_calendar_attendees(
+            "EVENT1", ["Pat.Example@contoso.example"], expected_start="2026-09-14"
         )
 
     assert result["updated"] is False
@@ -138,8 +137,8 @@ def test_verification_failure_never_falls_back_to_forward_email():
     gc = MagicMock()
     gc.get.side_effect = [_event(), RuntimeError("temporary Graph read failure")]
     with patch.object(m365_helpers, "get_cal_client", return_value=gc):
-        result = _tool_forward_calendar_event(
-            "EVENT1", ["Marc.Charest@amd.com"], expected_start="2026-09-14"
+        result = _tool_add_calendar_attendees(
+            "EVENT1", ["Pat.Example@contoso.example"], expected_start="2026-09-14"
         )
 
     assert result["updated"] is False
@@ -151,18 +150,18 @@ def test_missing_verified_attendee_is_not_a_success():
     gc = MagicMock()
     gc.get.side_effect = [_event(), {"attendees": []}]
     with patch.object(m365_helpers, "get_cal_client", return_value=gc):
-        result = _tool_forward_calendar_event(
-            "EVENT1", ["Marc.Charest@amd.com"], expected_start="2026-09-14"
+        result = _tool_add_calendar_attendees(
+            "EVENT1", ["Pat.Example@contoso.example"], expected_start="2026-09-14"
         )
 
     assert result["updated"] is False
-    assert result["missing_attendees"] == ["Marc.Charest@amd.com"]
+    assert result["missing_attendees"] == ["Pat.Example@contoso.example"]
 
 
 def test_expected_start_is_required_before_event_lookup():
     gc = MagicMock()
     with patch.object(m365_helpers, "get_cal_client", return_value=gc):
-        result = _tool_forward_calendar_event("EVENT1", ["Marc.Charest@amd.com"])
+        result = _tool_add_calendar_attendees("EVENT1", ["Pat.Example@contoso.example"])
 
     assert result["updated"] is False
     assert "Expected occurrence start" in result["error"]

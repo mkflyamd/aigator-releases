@@ -10,7 +10,7 @@ from skills import _rich_text as rt
 
 ORIG = {
     "subject": "Plan",
-    "from_addr": "amy@amd.com",
+    "from_addr": "amy@contoso.example",
     "from_name": "Amy",
     "to_recipients": [],
     "cc_recipients": [],
@@ -28,7 +28,7 @@ def _params(result):
 def test_email_compose_converts_markdown_body():
     from skills.email.tools import _tool_email_open_compose
 
-    res = _tool_email_open_compose(to="bob@amd.com", subject="S", body="Hi **Bob**")
+    res = _tool_email_open_compose(to="bob@contoso.example", subject="S", body="Hi **Bob**")
     assert _params(res)["body_html"] == "<p>Hi <strong>Bob</strong></p>"
     assert res["data"]["body_html"] == "<p>Hi <strong>Bob</strong></p>"
     assert res["data"]["format_capabilities"] == rt.capabilities("email")
@@ -38,7 +38,7 @@ def test_email_compose_sanitizes_llm_body_html():
     from skills.email.tools import _tool_email_open_compose
 
     res = _tool_email_open_compose(
-        to="bob@amd.com", subject="S", body="x", body_html="<p>x</p><script>alert(1)</script>"
+        to="bob@contoso.example", subject="S", body="x", body_html="<p>x</p><script>alert(1)</script>"
     )
     assert _params(res)["body_html"] == "<p>x</p>"
     assert res["data"]["body_html"] == "<p>x</p>"
@@ -60,7 +60,7 @@ def test_email_forward_seeds_body_html():
     from skills.email.tools import _tool_forward_email
 
     with patch("skills.email.tools._fetch_original_email_context", return_value=ORIG):
-        res = _tool_forward_email("AAMk1", "bob@amd.com", "FYI")
+        res = _tool_forward_email("AAMk1", "bob@contoso.example", "FYI")
     params = _params(res)
     assert params["comment"] == "FYI"
     assert params["body_html"] == "<p>FYI</p>"
@@ -105,7 +105,7 @@ def test_teams_compose_seeds_body_html_with_mention_chip():
     from skills.teams.tools import _tool_teams_open_compose
 
     res = _tool_teams_open_compose(
-        to="peer@amd.com",
+        to="peer@contoso.example",
         message="Hi @Alex McKinney,\n\nplease review.",
         mentions=[
             {

@@ -69,6 +69,26 @@ TOOL_DISPATCH: dict = {}
 TOOL_STATUS: dict[str, str] = {}
 SKILL_TOOLS_MAP: dict[str, set[str]] = {}
 MCP_TOOL_DIAGNOSTICS: dict[str, dict] = {}
+MCP_TOOL_CLASSIFIERS: dict = {}  # MCP tool alias -> callable(kwargs) -> "read" | "draft" | "other"
+
+
+def handler_arguments(fn):
+    """(parameters, names accepted, takes **kwargs, takes the whole input as one dict) for a tool handler."""
+    import inspect
+    sig = inspect.signature(fn)
+    params = list(sig.parameters.values())
+    has_var_keyword = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params)
+    # Handlers that take a single positional `args: dict` param (e.g. the extension_setup__ tools) must be called as
+    # fn(inputs), not fn(**inputs). Only when the sole parameter is annotated as dict (or has no annotation and no
+    # default). `from __future__ import annotations` stringizes annotations, so a dict param reads back as "dict".
+    p0 = params[0] if len(params) == 1 else None
+    single_dict_arg = (
+        p0 is not None
+        and p0.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.POSITIONAL_ONLY)
+        and (p0.annotation in (dict, "dict")
+             or (p0.annotation is inspect.Parameter.empty and p0.default is inspect.Parameter.empty))
+    )
+    return params, set(sig.parameters), has_var_keyword, single_dict_arg
 SKILL_DEPENDENCIES_MAP: dict[
     str, list[dict]
 ] = {}  # skill_id -> [{"id": ..., "reason": ...}]

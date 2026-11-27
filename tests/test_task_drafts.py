@@ -31,15 +31,15 @@ def td(tmp_path, monkeypatch):
 def test_record_and_list_for_task(td):
     _run(td.record_draft(
         "task-1", "draft-1", "email-send",
-        {"draft_id": "draft-1", "to": "bob@amd.com"},
-        {"to": "bob@amd.com", "message": "hi"},
+        {"draft_id": "draft-1", "to": "bob@contoso.example"},
+        {"to": "bob@contoso.example", "message": "hi"},
     ))
     drafts = _run(td.list_for_task("task-1"))
     assert len(drafts) == 1
     assert drafts[0]["draft_id"] == "draft-1"
     assert drafts[0]["draft_type"] == "email-send"
     assert drafts[0]["status"] == "pending"
-    assert drafts[0]["draft_data"] == {"draft_id": "draft-1", "to": "bob@amd.com"}
+    assert drafts[0]["draft_data"] == {"draft_id": "draft-1", "to": "bob@contoso.example"}
     assert "params" not in drafts[0], "list_for_task must never leak the mutation payload"
     assert drafts[0]["expired"] is False
 
@@ -76,10 +76,10 @@ def test_get_for_rehydrate_includes_params(td):
     _run(td.record_draft(
         "task-1", "draft-1", "email-send",
         {"draft_id": "draft-1"},
-        {"to": "bob@amd.com", "message": "the real payload"},
+        {"to": "bob@contoso.example", "message": "the real payload"},
     ))
     row = _run(td.get_for_rehydrate("draft-1"))
-    assert row["params"] == {"to": "bob@amd.com", "message": "the real payload"}
+    assert row["params"] == {"to": "bob@contoso.example", "message": "the real payload"}
     assert row["draft_type"] == "email-send"
     assert row["expired"] is False
 

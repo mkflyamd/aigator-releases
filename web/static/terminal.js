@@ -5,6 +5,7 @@
   const LS_LAYOUT_KEY = 'gator.terminal.layout';
   const LS_SIZE_H_KEY = 'gator.terminal.height';
   const LS_SIZE_V_KEY = 'gator.terminal.width';
+  const MIN_FIT_PX = 40;
 
   const STATE = {
     panel: null,
@@ -15,7 +16,8 @@
     activeId: null,
     nextId: 1,
     opened: false,
-    layout: null,
+    layout: null, // layout currently displayed
+    preferred: null, // user's chosen layout (mirrors localStorage)
     fullscreen: false,
     layoutBtn: null,
     fullscreenBtn: null,
@@ -92,6 +94,13 @@
     panel.appendChild(tabs);
     panel.appendChild(terms);
     document.body.appendChild(panel);
+
+    // Refit on any size change of the terminals area (window, reparent, banner, hidden -> shown),
+    // not just window resize events, or xterm keeps its old rows and the bottom is clipped.
+    new ResizeObserver(() => {
+      clearTimeout(STATE._fitTimer);
+      STATE._fitTimer = setTimeout(_fitActive, 80);
+    }).observe(terms);
 
     STATE.panel = panel;
     STATE.tabsEl = tabsScroll;
@@ -187,7 +196,6 @@
       if (iconEl)
         iconEl.textContent = layout === 'horizontal' ? 'side_navigation' : 'bottom_navigation';
     }
-    localStorage.setItem(LS_LAYOUT_KEY, layout);
     _updatePush();
     _updateVerticalFlag();
     setTimeout(_fitActive, 30);
@@ -377,21 +385,34 @@
     }, 20);
   }
 
+  // A hidden or squeezed panel cannot be measured: FitAddon reads the inline 100% size of a
+  // display:none element as 100px and would shrink xterm and the PTY to ~12x6, and a TUI resized to a
+  // bogus size and back leaves its prompt bar misplaced until a keypress forces a full redraw.
   function _fit(sess) {
     if (!sess || !sess.fitAddon || !sess.term) return;
+    const el = sess.el;
+    if (!el || !el.offsetParent || el.clientWidth < MIN_FIT_PX || el.clientHeight < MIN_FIT_PX) {
+      return;
+    }
     try {
       sess.fitAddon.fit();
-      if (sess.ws && sess.ws.readyState === WebSocket.OPEN) {
-        const { cols, rows } = sess.term;
-        const last = sess._sentSize;
-        if (!last || last.cols !== cols || last.rows !== rows) {
-          sess._sentSize = { cols, rows };
-          sess.ws.send(JSON.stringify({ type: 'resize', cols, rows }));
-        }
-      }
     } catch (e) {
-      /* not visible yet */
+      return;
     }
+    _syncPtySize(sess);
+  }
+
+  // Send the size once per websocket and whenever it changes; a reconnect gets a new PTY whose size
+  // is independent of xterm's, so it is always synced even when the grid is unchanged.
+  function _syncPtySize(sess) {
+    const ws = sess.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    const { cols, rows } = sess.term;
+    if (sess._sentWs === ws && sess._sentCols === cols && sess._sentRows === rows) return;
+    ws.send(JSON.stringify({ type: 'resize', cols, rows }));
+    sess._sentWs = ws;
+    sess._sentCols = cols;
+    sess._sentRows = rows;
   }
 
   function _fitActive() {
@@ -486,8 +507,6 @@
     const delay = retryDelay || 0;
 
     sess.ws = new WebSocket(url);
-    // Each connection spawns a fresh shell at the default size, so it needs the first frame.
-    sess._sentSize = null;
     sess.ws.onopen = () => {
       sess._retryDelay = 0;
       _fit(sess);
@@ -598,20 +617,35 @@
     );
   }
 
+  // A tiled native app (gator-split) or a squeezed Gator (gator-squeezed) leaves
+  // the Gator viewport as narrow as 400px, which cannot fit chat + dock + the
+  // 420px vertical terminal.
+  function _verticalBlocked() {
+    const cl = document.body.classList;
+    return cl.contains('gator-split') || cl.contains('gator-squeezed');
+  }
+
   function _closeConflictingPanes() {
-    // Explicit user request for vertical — close any pane occupying the .layout row.
-    // Reuse the panes' own close buttons so their internal state stays consistent.
-    const tpClose = document.getElementById('tp-detail-close');
-    if (tpClose) tpClose.click();
+    // Explicit user request for vertical — close any pane occupying the .layout row
+    // through the panes' own close paths so their internal state stays consistent.
+    if (typeof closeThirdPane === 'function') closeThirdPane();
     const bpClose = document.getElementById('bp-close-btn');
     if (bpClose) bpClose.click();
   }
 
-  function setLayout(layout) {
+  // `auto` marks a display-only change made by the conflict watcher: the user's
+  // stored preference (STATE.preferred / localStorage) is left untouched so the
+  // terminal can return to it when the conflict goes away.
+  function setLayout(layout, { auto = false } = {}) {
     if (layout !== 'horizontal' && layout !== 'vertical') return;
     _ensurePanel();
+    if (!auto) {
+      STATE.preferred = layout;
+      localStorage.setItem(LS_LAYOUT_KEY, layout);
+    }
+    if (layout === 'vertical' && _verticalBlocked()) layout = 'horizontal';
     // User explicitly chose vertical — make room by closing any conflicting pane.
-    if (layout === 'vertical' && !STATE.fullscreen && _conflictingPaneOpen()) {
+    if (layout === 'vertical' && !auto && !STATE.fullscreen && _conflictingPaneOpen()) {
       _closeConflictingPanes();
     }
     _applyLayout(layout);
@@ -625,14 +659,7 @@
     // horizontal - a full auto-reparent every time the terminal is toggled
     // on felt like the whole page shifting, when the user just wants their
     // vertical terminal back.
-    if (
-      (STATE.layout || _loadLayout()) === 'vertical' &&
-      !STATE.fullscreen &&
-      _conflictingPaneOpen()
-    ) {
-      _closeConflictingPanes();
-    }
-    _applyLayout(STATE.layout || _loadLayout());
+    setLayout(STATE.preferred || _loadLayout());
     if (STATE.fullscreenBtn) {
       const iconEl = STATE.fullscreenBtn.querySelector('.material-symbols-outlined');
       if (iconEl && !iconEl.textContent)
@@ -644,7 +671,6 @@
     _updatePush();
     _updateVerticalFlag();
     setTimeout(_fitActive, 50);
-    window.addEventListener('resize', _fitActive);
     if (!STATE._watching) {
       STATE._watching = true;
       _watchPanesForConflicts();
@@ -663,14 +689,22 @@
     else open();
   }
 
-  // Auto-flip vertical → horizontal when another left-rail pane opens, so they don't fight for width.
-  // Non-destructive: shell sessions are preserved; user can flip back to vertical when the other pane closes.
+  // Auto-flip vertical → horizontal when another left-rail pane or a native app
+  // tile appears, so they don't fight for width. Display-only: the stored
+  // preference is kept, and the terminal returns to vertical once nothing
+  // conflicts any more. Shell sessions are preserved throughout.
   function _watchPanesForConflicts() {
     const check = () => {
-      if (!STATE.opened || STATE.layout !== 'vertical' || STATE.fullscreen) return;
-      if (_conflictingPaneOpen()) setLayout('horizontal');
+      if (!STATE.opened || STATE.fullscreen) return;
+      const conflict = _verticalBlocked() || _conflictingPaneOpen();
+      if (STATE.layout === 'vertical' && conflict) {
+        setLayout('horizontal', { auto: true });
+      } else if (STATE.layout === 'horizontal' && STATE.preferred === 'vertical' && !conflict) {
+        setLayout('vertical', { auto: true });
+      }
     };
     const obs = new MutationObserver(check);
+    obs.observe(document.body, { attributes: true, attributeFilter: ['class'] });
     ['third-pane', 'browser-pane'].forEach((id) => {
       const el = document.getElementById(id);
       if (el) obs.observe(el, { attributes: true, attributeFilter: ['class', 'style'] });

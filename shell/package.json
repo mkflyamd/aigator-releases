@@ -36,6 +36,7 @@
       "menu.js",
       "navigation-policy.js",
       "preload.js",
+      "sandbox-repair.js",
       "splash.html",
       "toolbar-preload.js",
       "toolbar.html"
@@ -52,6 +53,10 @@
       {
         "from": "../models/dictation",
         "to": "models/dictation"
+      },
+      {
+        "from": "../dist/THIRD_PARTY_NOTICES.txt",
+        "to": "THIRD_PARTY_NOTICES.txt"
       }
     ],
     "directories": {

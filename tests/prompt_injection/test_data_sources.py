@@ -61,7 +61,7 @@ def test_prompt_text_names_the_source_and_the_tool():
     s = ds.source_for_call("search_email", {})
     p = ds.prompt_for(s, "search_email")
     assert "Outlook mail" in p["title"] and "search_email" in p["action"]
-    assert "use Outlook mail" in p["action"] and "read from" not in p["action"]
+    assert "read from Outlook mail" in p["action"] and "stays allowed until you close this tab" in p["action"]
     assert p["allow_label"] == "Allow for this tab" and p["deny_label"] == "Deny"
 
 

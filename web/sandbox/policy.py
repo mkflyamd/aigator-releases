@@ -34,6 +34,7 @@ class Policy:
     approved_digests: tuple[str, ...] | None = None   # None = off; a list = only these package digests install
     blocked_data_flows: tuple[str, ...] = ()   # "source>destination" pairs; a draft is refused after data from source was read
     block_bundle_stdio_mcp: bool = False   # True = stdio MCP servers from marketplace bundles do not start (they run unsandboxed)
+    persistent_permissions: str = "allow"   # allow | deny; deny = "Always allow" on approval cards is hidden and stored rules are ignored
     agent_messaging: str = "allow"   # allow | deny; deny = agents cannot message each other and the user's switch is hidden
     self_chat_autosend: str = "allow"   # allow | deny; deny = nothing auto-sends to the user's own Teams/Slack chat
 
@@ -43,7 +44,7 @@ class Policy:
 
 DEFAULT_POLICY = Policy()
 FAIL_CLOSED_POLICY = Policy(code_runner="enabled", network="deny", filesystem="strict", require_sandbox=True,
-                            saved_permissions="deny", marketplace_allowed_tiers=("Native", "Verified"),
+                            saved_permissions="deny", persistent_permissions="deny", marketplace_allowed_tiers=("Native", "Verified"),
                             require_pinned_installs=True, block_bundle_stdio_mcp=True,
                             agent_messaging="deny", self_chat_autosend="deny")
 _ALLOWED = {
@@ -51,6 +52,7 @@ _ALLOWED = {
     "network": {"ask", "deny"},
     "filesystem": {"ask", "strict"},
     "saved_permissions": {"allow", "deny"},
+    "persistent_permissions": {"allow", "deny"},
     "agent_messaging": {"allow", "deny"},
     "self_chat_autosend": {"allow", "deny"},
 }

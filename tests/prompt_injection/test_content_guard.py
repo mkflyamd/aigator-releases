@@ -23,7 +23,7 @@ def test_markdown_image_carrying_data_in_the_url_is_removed():
 
 
 def test_ordinary_business_text_is_untouched():
-    text = "Please send the report to bob@amd.com by Friday. Logo: ![logo](https://amd.com/logo.png)"
+    text = "Please send the report to bob@contoso.example by Friday. Logo: ![logo](https://amd.com/logo.png)"
     assert cg.scrub(text) == (text, 0)
 
 

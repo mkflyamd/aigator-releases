@@ -23,10 +23,13 @@ import stat
 import subprocess
 import tempfile
 import threading
+import time
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
-from . import RawArg, SandboxPathNotGrantable, SandboxRequest, SandboxResult, SandboxRunError, SandboxUnavailable
+from .paths import APP_FOLDER_REFUSAL, protects_app
+from . import MAX_RUN_SECONDS, RawArg, SandboxPathNotGrantable, SandboxRequest, SandboxResult, SandboxRunError, SandboxUnavailable
 
 _log = logging.getLogger(__name__)
 
@@ -55,12 +58,60 @@ HRESULT_ALREADY_EXISTS = ctypes.c_long(0x800700B7).value
 
 _RUN_LOCK = threading.Lock()
 _LEDGER_LOCK = threading.Lock()
+_RUN_LOCK_WAIT = float(MAX_RUN_SECONDS + 120)
+_LEDGER_LOCK_WAIT = 120.0
 _API: SimpleNamespace | None = None
 _LEDGER_VERSION = 2
 
 
 def ledger_path() -> Path:
     return Path.home() / ".gator" / "sandbox" / "grants.json"
+
+
+@contextmanager
+def _file_lock(name: str, wait: float):
+    """Exclusive OS lock shared by every AI Gator process of this user (the OS drops it if the holder dies)."""
+    try:
+        import msvcrt
+    except ImportError:
+        yield
+        return
+    path = ledger_path().parent / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT)
+    try:
+        deadline = time.monotonic() + wait
+        while True:
+            try:
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise SandboxUnavailable(
+                        "Another AI Gator window is using the sandbox and did not finish in time. Try again."
+                    ) from None
+                time.sleep(0.05)
+        try:
+            yield
+        finally:
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+    finally:
+        os.close(fd)
+
+
+@contextmanager
+def _run_lock():
+    """One sandbox launch or sweep at a time across all processes: a sweep must not revoke a live run's grants."""
+    with _RUN_LOCK, _file_lock("run.lock", _RUN_LOCK_WAIT):
+        yield
+
+
+@contextmanager
+def _ledger_txn():
+    """Ledger read-modify-write that no other thread or process can interleave with."""
+    with _LEDGER_LOCK, _file_lock("ledger.lock", _LEDGER_LOCK_WAIT):
+        yield
 
 
 # ── Pure helpers (unit-tested on every OS) ──────────────────────────────────
@@ -504,7 +555,7 @@ def _ledger_save(data: dict) -> None:
 
 
 def _ledger_add_per_run(sid: str, path: Path) -> None:
-    with _LEDGER_LOCK:
+    with _ledger_txn():
         data = _ledger_load()
         entry = [sid, str(path)]
         if entry not in data["per_run"]:
@@ -513,7 +564,7 @@ def _ledger_add_per_run(sid: str, path: Path) -> None:
 
 
 def _ledger_remove_per_run(sid: str, path: Path) -> None:
-    with _LEDGER_LOCK:
+    with _ledger_txn():
         data = _ledger_load()
         entry = [sid, str(path)]
         if entry in data["per_run"]:
@@ -532,7 +583,7 @@ def _ensure_runtime_grants(sid: str, paths: list[Path]) -> None:
     """Persistent read/execute grants. A folder's creation time is recorded with its grant, so a folder
     that was deleted and recreated (a reinstalled skill) is granted again instead of trusted as done.
     """
-    with _LEDGER_LOCK:
+    with _ledger_txn():
         data = _ledger_load()
         done = set(data["runtime"].get(sid, []))
         born = dict(data["runtime_born"].get(sid, {}))
@@ -604,7 +655,7 @@ def _ensure_package_inheritance(sid: str, directories, granted: list[str]) -> No
     The runtime grant is recorded once per folder, so a package installed later (by pip or by hand)
     would never be seen. The first look at a folder re-applies inheritance to the whole folder; after
     that, only entries that are new or changed since the last run."""
-    with _LEDGER_LOCK:
+    with _ledger_txn():
         data = _ledger_load()
         stored = data["package_children"].setdefault(sid, {})
         changed = False
@@ -641,7 +692,7 @@ def _ensure_scratch_grant(sid: str, path: Path) -> bool:
         key = f"{os.path.normcase(str(path))}|{Path(path).stat().st_ctime_ns}"
     except OSError:
         return False
-    with _LEDGER_LOCK:
+    with _ledger_txn():
         data = _ledger_load()
         if key in data["scratch"].get(sid, []):
             return True
@@ -678,7 +729,7 @@ def _revoke_ok(sid: str, path: Path) -> bool:
 
 def _sweep_locked() -> tuple[int, int]:
     """(cleared, remaining) per-run ledger entries. The caller holds _RUN_LOCK (not reentrant)."""
-    with _LEDGER_LOCK:
+    with _ledger_txn():
         data = _ledger_load()
         entries = list(data["per_run"])
         kept = [[sid, path] for sid, path in entries if not _revoke_ok(sid, Path(path))]
@@ -692,13 +743,13 @@ def sweep_stale_grants() -> int:
     """Revoke per-run grants left by a crashed run. Returns the number of entries cleared.
 
     An entry whose revoke failed stays in the ledger so a later sweep retries it."""
-    with _RUN_LOCK:
+    with _run_lock():
         return _sweep_locked()[0]
 
 
 def revoke_runtime_grants() -> int:
     """Remove the persistent runtime ACEs (tests and manual cleanup)."""
-    with _RUN_LOCK, _LEDGER_LOCK:
+    with _run_lock(), _ledger_txn():
         data = _ledger_load()
         count = 0
         for sid, paths in data["runtime"].items():
@@ -898,8 +949,11 @@ def _same_path(a: Path, b: str) -> bool:
 
 
 def launch(req: SandboxRequest) -> SandboxResult:
-    with _RUN_LOCK:
+    with _run_lock():
         runtime, per_run = acl_grants(req)
+        shielded = [p for p, _perm in per_run if protects_app(p)]
+        if shielded:
+            raise SandboxPathNotGrantable(shielded, reason=APP_FOLDER_REFUSAL)
         runtime_dirs = [str(path) for path, _perm in runtime]
         for path, perm in runtime + per_run + ([(Path(req.scratch_path), "M")] if req.scratch_path else []):
             try:
