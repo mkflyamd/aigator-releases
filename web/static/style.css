@@ -2779,6 +2779,76 @@ select.llm-select option {
   background-color: var(--surface, #1e293b);
   color: var(--text, #e2e8f0);
 }
+.relay-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+  background: var(--text-sub);
+}
+.relay-dot-running,
+.relay-dot-allowed {
+  background: var(--success);
+}
+.relay-dot-paused,
+.relay-dot-blocked {
+  background: var(--warn);
+}
+.relay-agents-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 0 12px;
+}
+.relay-agent-search {
+  width: 100%;
+  box-sizing: border-box;
+}
+.relay-agent-countline {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.78rem;
+  color: var(--text-sub);
+}
+.relay-agent-list {
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface1);
+}
+.relay-agent-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.relay-agent-row:last-child {
+  border-bottom: 0;
+}
+.relay-agent-row .srow-actions {
+  flex: 0 0 auto;
+  margin-left: 0;
+}
+.relay-agent-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.86rem;
+  color: var(--text);
+}
+.relay-agent-state {
+  font-size: 0.78rem;
+  color: var(--text-sub);
+  white-space: nowrap;
+}
+.relay-agent-empty {
+  padding: 12px;
+}
 .llm-secret-wrap {
   position: relative;
   display: flex;
