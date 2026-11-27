@@ -83,6 +83,7 @@ function world({ reducedMotion = false } = {}) {
   const timers = [];
   const storage = new Map();
   let io = null;
+  const fits = [];
   const ctx = {
     document: { createElement: () => new FakeElement() },
     window: { matchMedia: () => ({ matches: reducedMotion }) },
@@ -106,7 +107,7 @@ function world({ reducedMotion = false } = {}) {
     clearTimeout: (timer) => {
       if (timer) timer.live = false;
     },
-    _ocFit: () => {},
+    _ocFit: (sess) => fits.push(sess),
     _genAgentSetWokenMark: () => {},
     Date,
   };
@@ -117,6 +118,7 @@ function world({ reducedMotion = false } = {}) {
     ctx,
     sess,
     storage,
+    fits,
     live: () => timers.filter((t) => t.live),
     onScreen: (visible) => io.callback([{ isIntersecting: visible }]),
     show: (msg) => ctx._genAgentShowWokenBanner(sess, msg),
@@ -204,6 +206,58 @@ function world({ reducedMotion = false } = {}) {
   w.show({ by: 'Design head', at: 1000 });
   assert.strictEqual(w.sess._woken, undefined);
   assert.strictEqual(w.live().length, 0);
+}
+
+// the strip floats over the terminal: showing and dismissing it never refits the terminal, because
+// a refit changes the row count and every row-count change makes the agent repaint its screen
+{
+  for (const reducedMotion of [false, true]) {
+    const w = world({ reducedMotion });
+    w.show({ by: 'Design head', at: 1000 });
+    w.onScreen(true);
+    w.live()[0].callback();
+    if (!reducedMotion) w.live()[0].callback();
+    assert.strictEqual(w.sess._woken, null);
+    assert.strictEqual(w.fits.length, 0, 'no refit when the strip appears or goes');
+  }
+  const w = world();
+  w.show({ by: 'Design head', at: 1000 });
+  w.sess._woken.el.children[2].fire('click');
+  assert.strictEqual(w.fits.length, 0, 'no refit when the user dismisses it');
+}
+
+// and the stylesheet does not give the strip a band by padding the terminal
+{
+  const css = fs.readFileSync(path.join(__dirname, '..', 'web', 'static', 'style.css'), 'utf8');
+  assert(!/\.gtp-term--woken[^{]*\.xterm\s*\{/.test(css), 'no rule resizes .xterm for the strip');
+}
+
+// a session woken after a suspend was spawned at the default size, so the terminal tells it its
+// real size; the strip no longer refits, so nothing else would
+{
+  const branch = source.match(/msg\.type === 'woken'\) \{([\s\S]*?)\n    \} else if/);
+  assert(branch, 'woken branch not found');
+  const run = (awaitingWake) => {
+    const sent = [];
+    const sess = {
+      _awaitingWake: awaitingWake,
+      term: { cols: 120, rows: 34, reset: () => {} },
+      ws: { readyState: 1, send: (m) => sent.push(JSON.parse(m)) },
+      container: { querySelector: () => null },
+    };
+    const ctx = {
+      sess,
+      msg: {},
+      WebSocket: { OPEN: 1 },
+      clearTimeout,
+      _genAgentShowWokenBanner: () => {},
+    };
+    vm.createContext(ctx);
+    vm.runInContext(branch[1], ctx);
+    return sent;
+  };
+  assert.deepStrictEqual(run(true), [{ type: 'resize', cols: 120, rows: 34 }]);
+  assert.deepStrictEqual(run(false), [], 'a replayed woken message does not resize again');
 }
 
 console.log('woken strip timer: ok');

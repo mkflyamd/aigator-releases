@@ -24374,16 +24374,9 @@ body.tab-fullscreen {
   font-size: 0.75rem;
   pointer-events: none;
 }
-/* "Woken by <agent>" status line. It sits in a 28px band reserved above the terminal (xterm's
-   top padding, which the fit addon subtracts), so it never covers output. */
-.gtp-term--woken .xterm {
-  box-sizing: border-box;
-  padding-top: 28px;
-}
-.gtp-term--woken-leaving .xterm {
-  padding-top: 0;
-  transition: padding-top 150ms ease 150ms;
-}
+/* "Woken by <agent>" status line. It floats over the top of the terminal instead of taking a band
+   out of it: a band changes the row count, and every row-count change makes the agent repaint
+   its screen, which leaves another copy of its live region in the scrollback. */
 .gtp-woken-strip {
   position: absolute;
   top: 0;
@@ -24458,7 +24451,6 @@ body.tab-fullscreen {
   background: var(--accent);
 }
 @media (prefers-reduced-motion: reduce) {
-  .gtp-term--woken-leaving .xterm,
   .gtp-woken-strip {
     transition: none;
   }
