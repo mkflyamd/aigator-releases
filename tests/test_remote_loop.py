@@ -107,3 +107,12 @@ def test_the_switch_is_the_existing_teams_remote_control_setting(monkeypatch):
     assert remote_loop.teams_switch_on() is True
     monkeypatch.setattr(remote_loop, "load_config", lambda: {})
     assert remote_loop.teams_switch_on() is False
+
+
+def test_each_channel_has_its_own_switch(monkeypatch):
+    config = {"teams_remote_control_enabled": True, "slack_remote_control_enabled": False}
+    monkeypatch.setattr(remote_loop, "load_config", lambda: config)
+    assert remote_loop.teams_switch_on() is True
+    assert remote_loop.slack_switch_on() is False
+    config["slack_remote_control_enabled"] = True
+    assert remote_loop.slack_switch_on() is True

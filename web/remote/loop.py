@@ -1,5 +1,6 @@
-"""Background loop for Teams remote control: ticks sessions every few seconds, polls the
-self-chat on a slower cadence. Gated on the existing `teams_remote_control_enabled` setting,
+"""Background loop for remote control: ticks sessions every few seconds, polls each channel's
+self-chat on a slower cadence. Teams and Slack run side by side, each with its own state,
+guard, session list and switch (`teams_remote_control_enabled`, `slack_remote_control_enabled`),
 read fresh each cycle."""
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from remote.guard import Guard
 from remote.runner import RemoteRunner
 from remote.service import RemoteService
 from remote.session_host import LocalPtyHost, Project
+from remote.slack_channel import SlackSelfDM
 from remote.state import State
 from remote.teams_channel import TeamsSelfChat
 
@@ -25,6 +27,10 @@ POLL_SECONDS = 10.0
 
 def teams_switch_on() -> bool:
     return bool(load_config().get("teams_remote_control_enabled"))
+
+
+def slack_switch_on() -> bool:
+    return bool(load_config().get("slack_remote_control_enabled"))
 
 
 def default_project() -> Project | None:
@@ -79,15 +85,21 @@ class RemoteLoop:
             await self._runner.announce_online()
 
 
+def _build_loop(channel, state: State, enabled: Callable[[], bool]) -> RemoteLoop:
+    service = RemoteService(LocalPtyHost(), default_project=default_project)
+    return RemoteLoop(RemoteRunner(channel, service, Guard(), state), enabled)
+
+
 async def remote_control_loop() -> None:
     state = State()
-    channel = TeamsSelfChat(state=state)
-    guard = Guard()
-    service = RemoteService(LocalPtyHost(), default_project=default_project)
-    loop = RemoteLoop(RemoteRunner(channel, service, guard, state), teams_switch_on)
+    loops = [
+        _build_loop(TeamsSelfChat(state=state), state, teams_switch_on),
+        _build_loop(SlackSelfDM(state=state), state, slack_switch_on),
+    ]
     while True:
         await asyncio.sleep(STEP_SECONDS)
-        try:
-            await loop.step()
-        except Exception:
-            _log.warning("Remote control step failed", exc_info=True)
+        for loop in loops:
+            try:
+                await loop.step()
+            except Exception:
+                _log.warning("Remote control step failed", exc_info=True)

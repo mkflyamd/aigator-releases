@@ -122,6 +122,8 @@ PATCHABLE_CONFIG_KEYS = frozenset({
     # Teams remote control of the OpenCode terminal - off by default, see
     # web/teams_remote_control.py
     "teams_remote_control_enabled",
+    # Slack self-DM remote control, same switch semantics - see web/remote/slack_channel.py
+    "slack_remote_control_enabled",
     # Global kill-switch for agent-completed browser payments - default False,
     # deliberately not surfaced as a Settings UI toggle (see issue #152:
     # product decision is "not ready to let this app move money"). Enforced
