@@ -139,7 +139,7 @@
     const off = offReason();
     let sub = 'Turn an agent off to stop other agents messaging it.';
     if (off) sub = `${off} Agents cannot be changed until it is on.`;
-    else if (!state.agents.length) sub = 'No Claude agents yet.';
+    else if (!state.agents.length) sub = 'No agents are open. Open one and it will show up here.';
     const head = el(
       'div',
       { className: 'srow' },
@@ -160,7 +160,7 @@
           el('div', { className: 'srow-label', textContent: agentLabel(a) }),
           el('div', {
             className: 'srow-sub',
-            textContent: `${a.state} - Accepts messages from other agents`,
+            textContent: `${a.state === 'suspended' ? 'Sleeping' : 'Running'} - Accepts messages from other agents`,
           }),
         ),
         toggle(
@@ -239,7 +239,7 @@
     });
     if (state.agents.length >= 2 && !off) {
       const pick = (id, label) => {
-        const select = el('select', { id });
+        const select = el('select', { id, className: 'llm-select' });
         select.setAttribute('aria-label', label);
         state.agents.forEach((a) =>
           select.append(el('option', { value: a.id, textContent: agentLabel(a) })),
@@ -249,10 +249,16 @@
       const a = pick('relay-link-a', 'Agent');
       const b = pick('relay-link-b', 'Other agent');
       b.selectedIndex = 1;
-      const hours = el('select', { id: 'relay-link-hours' });
+      const hours = el('select', { id: 'relay-link-hours', className: 'llm-select' });
       hours.setAttribute('aria-label', 'For');
       LINK_HOURS.forEach((h) =>
-        hours.append(el('option', { value: String(h), textContent: `${h} h`, selected: h === 8 })),
+        hours.append(
+          el('option', {
+            value: String(h),
+            textContent: h === 1 ? '1 hour' : `${h} hours`,
+            selected: h === 8,
+          }),
+        ),
       );
       const make = el('button', { className: 'btn-secondary', textContent: 'Link them' });
       make.addEventListener('click', () =>

@@ -1801,6 +1801,7 @@ function _genAgentDecorateWokenTab(tabEl, sess) {
   mark.append(dot, word);
   const label = tabEl.querySelector('.gtp-tab-label');
   if (label) label.after(mark);
+  if (tabEl.dataset.titleBeforeWoken === undefined) tabEl.dataset.titleBeforeWoken = tabEl.title;
   tabEl.title = 'Woken by ' + sess._wokenMark;
 }
 
@@ -1824,7 +1825,10 @@ function _genAgentClearWokenMark(tabId, ptyId) {
   );
   if (tabEl) {
     tabEl.querySelectorAll('.gtp-tab-woken').forEach((n) => n.remove());
-    tabEl.removeAttribute('title');
+    const before = tabEl.dataset.titleBeforeWoken;
+    delete tabEl.dataset.titleBeforeWoken;
+    if (before) tabEl.title = before;
+    else tabEl.removeAttribute('title');
   }
 }
 
