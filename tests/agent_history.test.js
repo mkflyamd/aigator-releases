@@ -401,4 +401,173 @@ const term = (pty, agent, out, viewed) => ({
   assert.strictEqual(h.canTakeOver({ ...ok, pid: null }), false);
 }
 
+// Working and Needs you keep a stable order: when each row entered its state, oldest first,
+// so a row never moves while it stays in the group. Output on any row must not reorder them.
+{
+  const sessions = [
+    rec('w1', 'claude', 'First', at(10, 15, 9, 0), { pty_session_id: 'pw1' }),
+    rec('w2', 'claude', 'Second', at(10, 15, 9, 0), { pty_session_id: 'pw2' }),
+    rec('d1', 'claude', 'Older done', at(10, 15, 8, 0)),
+    rec('d2', 'claude', 'Newer done', at(10, 15, 10, 0)),
+  ];
+  const since = new Map();
+  const workers = [term('pw1', 'claude', NOW - 1000, 0), term('pw2', 'claude', NOW - 1000, 0)];
+  const order = (t) => {
+    const rows = h.buildRows(sessions, workers, t);
+    h.stampSince(since, rows, t);
+    return h.filterGroups(rows, '', since);
+  };
+  const ids = (groups, key) => groups.find((g) => g.key === key).rows.map((r) => r.id);
+
+  let groups = order(NOW);
+  assert.deepStrictEqual(ids(groups, 'working').sort(), ['w1', 'w2']);
+  const firstOrder = ids(groups, 'working');
+
+  workers[1]._lastOutputAt = NOW + 500;
+  groups = order(NOW + 500);
+  assert.deepStrictEqual(ids(groups, 'working'), firstOrder, 'newer output does not reorder');
+  workers[0]._lastOutputAt = NOW + 1000;
+  groups = order(NOW + 1000);
+  assert.deepStrictEqual(ids(groups, 'working'), firstOrder, 'nor does output on the other row');
+
+  assert.deepStrictEqual(ids(groups, 'today'), ['d2', 'd1'], 'Today still sorts by last activity');
+
+  // a third row starts working later: it joins at the bottom
+  sessions.push(rec('w3', 'claude', 'Third', at(10, 15, 9, 0), { pty_session_id: 'pw3' }));
+  workers.push(term('pw3', 'claude', NOW + 2000, 0));
+  groups = order(NOW + 2000);
+  assert.deepStrictEqual(ids(groups, 'working'), [...firstOrder, 'w3']);
+
+  // a row that stops and starts again re-enters at the bottom of the group
+  const stopped = workers[0];
+  stopped._lastOutputAt = NOW - 60000;
+  groups = order(NOW + 3000);
+  assert(!ids(groups, 'working').includes(stopped.ptySessionId === 'pw1' ? 'w1' : 'w2'));
+  stopped._lastOutputAt = NOW + 20000;
+  groups = order(NOW + 20500);
+  assert.strictEqual(ids(groups, 'working').slice(-1)[0], 'w1', 'a restart goes to the bottom');
+}
+
+// the same row keeps its place when a new session gets its transcript and its key changes
+{
+  const since = new Map();
+  const workers = [term('pa', 'claude', NOW - 500, 0), term('pb', 'claude', NOW - 500, 0)];
+  let rows = h.buildRows([], workers, NOW);
+  h.stampSince(since, rows, NOW);
+  const before = h.filterGroups(rows, '', since)[0].rows.map((r) => r.ptySessionId);
+  const sess = [rec('late', 'claude', 'Late', at(10, 15, 9, 0), { pty_session_id: 'pa' })];
+  rows = h.buildRows(sess, workers, NOW + 100);
+  h.stampSince(since, rows, NOW + 100);
+  const after = h.filterGroups(rows, '', since)[0].rows.map((r) => r.ptySessionId);
+  assert.deepStrictEqual(after, before, 'getting a transcript id does not move the row');
+}
+
+// rows that first appear together are ordered by their own activity, not by key
+{
+  const since = new Map();
+  const sessions = [
+    rec('a', 'claude', 'A', at(10, 15, 9, 0), { pty_session_id: 'pa' }),
+    rec('b', 'claude', 'B', at(10, 15, 9, 0), { pty_session_id: 'pb' }),
+    rec('c', 'claude', 'C', at(10, 15, 9, 0), { pty_session_id: 'pc' }),
+  ];
+  const workers = [
+    term('pa', 'claude', NOW - 1000, 0),
+    term('pb', 'claude', NOW - 9000, 0),
+    term('pc', 'claude', NOW - 5000, 0),
+  ];
+  const rows = h.buildRows(sessions, workers, NOW);
+  h.stampSince(since, rows, NOW);
+  const working = h.filterGroups(rows, '', since).find((g) => g.key === 'working');
+  assert.deepStrictEqual(
+    working.rows.map((r) => r.id),
+    ['b', 'c', 'a'],
+    'first render: oldest activity first, not key order',
+  );
+  workers[1]._lastOutputAt = NOW + 400;
+  const again = h.buildRows(sessions, workers, NOW + 500);
+  h.stampSince(since, again, NOW + 500);
+  assert.deepStrictEqual(
+    h
+      .filterGroups(again, '', since)
+      .find((g) => g.key === 'working')
+      .rows.map((r) => r.id),
+    ['b', 'c', 'a'],
+  );
+}
+
+// without a since map the old last-activity order still applies
+{
+  const sessions = [
+    rec('x', 'claude', 'X', at(10, 15, 9, 0), { pty_session_id: 'px' }),
+    rec('y', 'claude', 'Y', at(10, 15, 9, 0), { pty_session_id: 'py' }),
+  ];
+  const rows = h.buildRows(
+    sessions,
+    [term('px', 'claude', NOW - 3000, 0), term('py', 'claude', NOW - 1000, 0)],
+    NOW,
+  );
+  assert.deepStrictEqual(
+    h
+      .filterGroups(rows, '')
+      .find((g) => g.key === 'working')
+      .rows.map((r) => r.id),
+    ['y', 'x'],
+  );
+}
+
+// holding the layout: rows stay where the user saw them, take fresh data, new rows wait
+{
+  const sessions = [
+    rec('a', 'claude', 'A', at(10, 15, 9, 0), { pty_session_id: 'pa' }),
+    rec('b', 'claude', 'B', at(10, 15, 9, 0), { pty_session_id: 'pb' }),
+    rec('t', 'claude', 'Old today', at(10, 15, 8, 0)),
+  ];
+  const workers = [term('pa', 'claude', NOW - 500, 0), term('pb', 'claude', NOW - 500, 0)];
+  const since = new Map();
+  const free = (t) => {
+    const rows = h.buildRows(sessions, workers, t);
+    h.stampSince(since, rows, t);
+    return h.filterGroups(rows, '', since);
+  };
+  const shownIds = (groups) => groups.map((g) => [g.key, g.rows.map((r) => r.id)]);
+
+  const seen = free(NOW);
+  const layout = h.layoutOf(seen);
+  assert.deepStrictEqual(shownIds(seen), [
+    ['working', ['a', 'b']],
+    ['today', ['t']],
+  ]);
+
+  // a finishes unviewed (moves to Needs you) and c starts working while the user is aiming
+  workers[0]._lastOutputAt = NOW - 60000;
+  workers[0]._workedAt = NOW - 60000;
+  sessions.push(rec('c', 'claude', 'C', at(10, 15, 9, 0), { pty_session_id: 'pc' }));
+  workers.push(term('pc', 'claude', NOW + 4000, 0));
+  const now = free(NOW + 4000);
+  assert.deepStrictEqual(
+    shownIds(now),
+    [
+      ['needs_you', ['a']],
+      ['working', ['b', 'c']],
+      ['today', ['t']],
+    ],
+    'the free layout has moved',
+  );
+
+  const held = h.holdLayout(now, layout);
+  assert.deepStrictEqual(
+    shownIds(held),
+    [
+      ['working', ['a', 'b']],
+      ['today', ['t']],
+    ],
+    'the held layout has not, and the new row waits',
+  );
+  assert.strictEqual(held[0].rows[0].state, 'needs_you', 'a held row shows its latest state');
+
+  // a row that vanished is dropped, and an emptied group disappears
+  const gone = h.holdLayout([now.find((g) => g.key === 'today')], layout);
+  assert.deepStrictEqual(shownIds(gone), [['today', ['t']]]);
+}
+
 console.log('agent_history: ok');
