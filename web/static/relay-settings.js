@@ -197,6 +197,33 @@
     );
   }
 
+  function selfChatRow() {
+    const locked = !state.self_chat_admin_allows;
+    const sub = locked
+      ? 'Your administrator has turned this off.'
+      : 'Your permission for features that post to your own private Teams or Slack chat. Messages to anyone else always wait for your approval.';
+    return el(
+      'div',
+      { className: 'srow' },
+      el(
+        'div',
+        { className: 'srow-info' },
+        el('div', {
+          className: 'srow-label',
+          textContent: 'Allow posting to my own Teams and Slack chat',
+        }),
+        el('div', { className: 'srow-sub', textContent: sub }),
+      ),
+      toggle(
+        'relay-self-chat-autosend',
+        'Allow posting to my own Teams and Slack chat',
+        state.self_chat_autosend && !locked,
+        locked,
+        (on) => act('POST', '/api/relay/self-chat-autosend', { enabled: on }),
+      ),
+    );
+  }
+
   function dot(kind) {
     const node = el('span', { className: `relay-dot relay-dot-${kind}` });
     node.setAttribute('aria-hidden', 'true');
@@ -514,7 +541,7 @@
     const scrolled = root.querySelector('#relay-agents-list')?.scrollTop || 0;
     const endKeys = () => [...root.querySelectorAll('[data-key^="end-"]')];
     const endIndex = key && key.startsWith('end-') ? endKeys().indexOf(active) : -1;
-    root.replaceChildren(switchRow(), ...agentsBlock(), ...linkRows());
+    root.replaceChildren(switchRow(), ...agentsBlock(), ...linkRows(), selfChatRow());
     const box = root.querySelector('#relay-agents-list');
     if (box) box.scrollTop = scrolled;
     if (!key) return;

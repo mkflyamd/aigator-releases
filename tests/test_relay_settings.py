@@ -116,3 +116,61 @@ def test_the_users_own_switch_repairs_a_damaged_file(world):
     settings.set_user_messaging(True)
     assert settings.user_allows_messaging()
     assert not settings.opted_out("pty:a")
+
+
+def test_self_chat_autosend_is_off_until_the_user_turns_it_on(world):
+    assert settings.admin_allows_self_chat_autosend()
+    assert not settings.user_allows_self_chat_autosend()
+    assert not settings.self_chat_autosend_allowed()
+    settings.set_user_self_chat_autosend(True)
+    assert settings.self_chat_autosend_allowed()
+    settings.set_user_self_chat_autosend(False)
+    assert not settings.self_chat_autosend_allowed()
+
+
+def test_the_admin_deny_beats_the_users_self_chat_switch(world):
+    (world / "sandbox-policy.json").write_text('{"self_chat_autosend": "deny"}')
+    settings.set_user_self_chat_autosend(True)
+    assert not settings.admin_allows_self_chat_autosend()
+    assert not settings.self_chat_autosend_allowed()
+
+
+def test_a_broken_admin_policy_turns_self_chat_autosend_off(world):
+    settings.set_user_self_chat_autosend(True)
+    (world / "sandbox-policy.json").write_text("not json")
+    assert not settings.self_chat_autosend_allowed()
+
+
+@pytest.mark.parametrize("text", ["not json", '{"self_chat_autosend": "yes"}', '{"self_chat_autosend": 1}'])
+def test_an_untrusted_settings_file_turns_self_chat_autosend_off(world, text):
+    path = settings.settings_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    assert not settings.self_chat_autosend_allowed()
+
+
+def test_the_self_chat_switch_does_not_turn_agent_messaging_back_on_in_a_damaged_file(world):
+    path = settings.settings_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("not json")
+    settings.set_user_self_chat_autosend(True)
+    assert settings.self_chat_autosend_allowed()
+    assert not settings.user_allows_messaging()
+
+
+def test_the_self_chat_switch_keeps_opt_outs_from_a_partly_valid_file(world):
+    path = settings.settings_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('{"self_chat_autosend": "yes", "opted_out": ["pty:a"]}')
+    settings.set_user_self_chat_autosend(True)
+    assert settings.opted_out("pty:a")
+    assert not settings.user_allows_messaging()
+
+
+def test_the_self_chat_switch_and_the_messaging_switch_do_not_disturb_each_other(world):
+    settings.set_user_self_chat_autosend(True)
+    settings.set_user_messaging(False)
+    assert settings.self_chat_autosend_allowed()
+    settings.set_user_messaging(True)
+    settings.set_user_self_chat_autosend(False)
+    assert settings.user_allows_messaging()
