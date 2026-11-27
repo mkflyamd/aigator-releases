@@ -12,7 +12,7 @@ import time
 from typing import Callable
 
 from remote import commands
-from remote.channel import Channel, InboundMessage
+from remote.channel import AutosendOff, Channel, InboundMessage
 from remote.guard import Guard, limit
 from remote.service import Event, RemoteError, RemoteService, Session
 from remote.state import State
@@ -51,6 +51,7 @@ class RemoteRunner:
         self._stale = stale_seconds
         self._enabled = False
         self._timeout_noticed = False
+        self._autosend_noticed = False
         service.subscribe(self._on_event)
 
     def sync_enabled(self, enabled: bool) -> None:
@@ -61,6 +62,7 @@ class RemoteRunner:
             if not self._state.disarmed(channel):
                 self._guard.arm()
             self._timeout_noticed = False
+            self._autosend_noticed = False
         elif not enabled:
             if self._state.disarmed(channel):
                 self._state.set_disarmed(channel, False)
@@ -77,6 +79,10 @@ class RemoteRunner:
     async def _post(self, text: str) -> None:
         try:
             await asyncio.to_thread(self._channel.post, text)
+        except AutosendOff:
+            if not self._autosend_noticed:
+                self._autosend_noticed = True
+                _log.info("Remote control is not replying on %s: auto-send is off", self._channel.name)
         except Exception as exc:
             _log.warning("Remote control could not post a reply: %s", exc)
 

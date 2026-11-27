@@ -1007,6 +1007,9 @@
               </div>
             </div>
 
+            <div class="spanel-divider">Agent messaging</div>
+            <div id="relay-settings"></div>
+
             <!-- Appearance -->
             <div class="spanel-divider">Appearance</div>
             <div class="srow">
@@ -1185,6 +1188,25 @@
               <div class="srow-actions">
                 <label class="toggle-switch" style="margin: 0">
                   <input type="checkbox" id="slack-remote-control-toggle" />
+                  <span class="toggle-track"></span>
+                </label>
+              </div>
+            </div>
+            <div class="srow">
+              <div class="section-status" id="rc-autosend-dot"></div>
+              <div class="srow-info">
+                <div class="srow-label">Reply in my own chat</div>
+                <div class="srow-sub" id="rc-autosend-sub">
+                  Replies to your own Teams and Slack chat are off until you turn this on.
+                </div>
+              </div>
+              <div class="srow-actions">
+                <label class="toggle-switch" style="margin: 0">
+                  <input
+                    type="checkbox"
+                    id="rc-autosend-toggle"
+                    aria-label="Reply in my own chat"
+                  />
                   <span class="toggle-track"></span>
                 </label>
               </div>
@@ -2095,6 +2117,7 @@
     </script>
 
     <script src="/static/marketplace-pane.js"></script>
+    <script src="/static/relay-settings.js"></script>
     <script>
       var _cacb = '?t=' + Date.now();
       document.write('<scr' + 'ipt src="/static/tp-code-agent.js' + _cacb + '"><\/scr' + 'ipt>');

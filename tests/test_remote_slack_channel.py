@@ -46,7 +46,7 @@ class FakeSlack:
 
 
 @pytest.fixture
-def slack(monkeypatch):
+def slack(monkeypatch, autosend_gate):
     fake = FakeSlack()
     monkeypatch.setattr(slack_channel, "_api", fake)
     monkeypatch.setattr(slack_channel, "_own_user_id", lambda: ME)

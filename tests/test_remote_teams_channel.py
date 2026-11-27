@@ -7,7 +7,7 @@ from remote.teams_channel import TeamsSelfChat
 
 
 @pytest.fixture
-def sent(monkeypatch):
+def sent(monkeypatch, autosend_gate):
     calls = []
 
     def fake_send(chat_id, html):
@@ -53,7 +53,7 @@ def test_post_escapes_markup_so_agent_text_is_not_rendered_as_html(tmp_path, sen
     assert "&lt;b&gt;hi&lt;/b&gt; &amp; bye<br>line two" in html
 
 
-def test_a_failed_send_posts_nothing_and_raises_refused(tmp_path, monkeypatch):
+def test_a_failed_send_posts_nothing_and_raises_refused(tmp_path, monkeypatch, autosend_gate):
     def boom(chat_id, html):
         raise RuntimeError("token expired")
 

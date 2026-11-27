@@ -24374,21 +24374,94 @@ body.tab-fullscreen {
   font-size: 0.75rem;
   pointer-events: none;
 }
-.gtp-woken-banner {
+/* "Woken by <agent>" status line. It sits in a 28px band reserved above the terminal (xterm's
+   top padding, which the fit addon subtracts), so it never covers output. */
+.gtp-term--woken .xterm {
+  box-sizing: border-box;
+  padding-top: 28px;
+}
+.gtp-term--woken-leaving .xterm {
+  padding-top: 0;
+  transition: padding-top 150ms ease 150ms;
+}
+.gtp-woken-strip {
   position: absolute;
-  top: 8px;
-  right: 12px;
+  top: 0;
+  left: 0;
+  right: 0;
   z-index: 4;
-  max-width: 70%;
-  padding: 3px 10px;
-  border-radius: 12px;
-  background: rgba(30, 58, 95, 0.92);
-  color: #bfdbfe;
-  font-size: 0.75rem;
-  cursor: pointer;
+  box-sizing: border-box;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  background: var(--surface2);
+  border-bottom: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 12px;
+  transition: opacity 150ms ease;
+}
+.gtp-term--woken-leaving .gtp-woken-strip {
+  opacity: 0;
+}
+.gtp-woken-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.gtp-woken-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  white-space: pre;
+}
+.gtp-woken-lead,
+.gtp-woken-tail {
+  flex: none;
+}
+.gtp-woken-name {
+  min-width: 0;
   overflow: hidden;
-  max-height: 4.5em;
-  overflow-wrap: anywhere;
+  text-overflow: ellipsis;
+  color: var(--text);
+  font-weight: 500;
+}
+.gtp-woken-dismiss {
+  flex: none;
+  background: transparent;
+  border: none;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  font-size: 12px;
+  cursor: pointer;
+}
+.gtp-woken-dismiss:hover {
+  color: var(--text);
+  background: var(--surface3);
+}
+.gtp-woken-dismiss:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.gtp-tab-woken {
+  display: inline-flex;
+  align-items: center;
+}
+.gtp-tab-woken-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+@media (prefers-reduced-motion: reduce) {
+  .gtp-term--woken-leaving .xterm,
+  .gtp-woken-strip {
+    transition: none;
+  }
 }
 .agent-handoff-search {
   width: 100%;

@@ -491,6 +491,8 @@ async def agent_terminal_ws(ws: WebSocket, session_id: str, seq: int = 0):
                     {
                         "type": "woken",
                         "data": f"woken by {woken_by}",
+                        "by": woken_by,
+                        "at": entry.meta.get("woken_at", ""),
                         "preview": entry.meta.get("woken_preview", ""),
                     }
                 )
@@ -512,6 +514,7 @@ async def agent_terminal_ws(ws: WebSocket, session_id: str, seq: int = 0):
                 data = msg.get("data", "")
                 if data:
                     entry.size_owner = ws
+                    entry.last_user_input = time.time()
                     try:
                         entry.write(data)
                     except Exception:

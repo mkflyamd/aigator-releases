@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 
-from remote.channel import ChannelRefused, InboundMessage
+from remote.channel import ChannelRefused, InboundMessage, require_autosend
 from remote.commands import SYSTEM_PREFIX
 from remote.state import State
 
@@ -109,6 +109,7 @@ class SlackSelfDM:
             raise ChannelRefused("not the own self-DM")
         if not text.lstrip().startswith(SYSTEM_PREFIX):
             raise ChannelRefused("replies must start with [Gator")
+        require_autosend()
         sent = _api("chat.postMessage", {"channel": self._channel_id, "text": _escape(text)}, method="POST")
         if not sent.get("ok"):
             raise ChannelRefused(f"Slack error: {sent.get('error', 'unknown')}")
