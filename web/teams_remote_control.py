@@ -8,11 +8,9 @@ Teams account, not an open door for arbitrary senders. A command is only
 recognized with an explicit "/code " prefix, so the self-chat stays usable
 for ordinary notes-to-self without every line being treated as terminal input.
 
-Deliberately fire-and-forget: no confirmation is ever sent back to Teams —
-that would be Gator autonomously sending a Teams message, which CLAUDE.md's
-human-in-the-loop rule forbids without explicit approval. The terminal's own
-echo of the injected keystrokes is the only feedback, visible next time
-Gator's Code tab is open.
+This "/code" path stays fire-and-forget: no confirmation is sent back to
+Teams. The "@gator" command grammar and its "[Gator" replies to the same
+self-chat live in web/remote/ and run in their own loop.
 """
 
 from __future__ import annotations

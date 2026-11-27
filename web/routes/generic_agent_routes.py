@@ -76,8 +76,18 @@ async def close_generic_agent_terminal(req: GenericAgentTerminalCloseRequest):
     projects, but the per-session close button means the user is done with
     this PTY. Remove it from both registries so it cannot reappear on a later
     pane mount.
+
+    A terminal started by remote control is pinned and only detaches here: it
+    ends on `@gator stop`, process exit or the remote idle limit, never because
+    a Code tab was closed.
     """
-    from routes.terminal import close_pty_session
+    from routes.terminal import close_pty_session, session_owner
+
+    owner = await asyncio.to_thread(session_owner, req.pty_session_id)
+    if (owner or {}).get("remote_pinned"):
+        if generic_agent.get_active_session(req.project_id, req.agent) == req.pty_session_id:
+            generic_agent.clear_active_session(req.project_id, req.agent)
+        return {"ok": True, "detached": True}
 
     await asyncio.to_thread(close_pty_session, req.pty_session_id)
     try:
@@ -165,12 +175,18 @@ async def resume_suspended(req: GenericAgentTerminalRequest, pty_id: str, woken_
         return await _open_terminal(req, reuse_pty_id=pty_id, woken_by=woken_by, woken_preview=woken_preview)
 
 
+async def open_pinned_terminal(req: GenericAgentTerminalRequest) -> dict:
+    """A new terminal for remote control: labelled so the idle-suspend sweep never takes it."""
+    return await _open_terminal(req, pinned=True)
+
+
 async def _open_terminal(
     req: GenericAgentTerminalRequest,
     *,
     reuse_pty_id: str | None = None,
     woken_by: str | None = None,
     woken_preview: str = "",
+    pinned: bool = False,
 ):
     """Reattach this project's live session if one exists, else spawn fresh.
 
@@ -220,6 +236,8 @@ async def _open_terminal(
     force_new = req.force_new or handoff is not None or resume is not None
 
     owner = {"project_id": req.project_id, "agent": req.agent}
+    if pinned:
+        owner["remote_pinned"] = "1"
     if woken_by:
         owner["woken_by"] = woken_by
         owner["woken_preview"] = woken_preview

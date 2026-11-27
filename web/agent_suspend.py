@@ -62,7 +62,7 @@ def choose(
     suspendable = []
     for pty, meta in live.items():
         state = states.get(pty)
-        if not _counts_as_agent(meta) or not meta.get("session_id"):
+        if not _counts_as_agent(meta) or not meta.get("session_id") or meta.get("remote_pinned"):
             continue
         if not state or state["state"] != "idle" or pty in watched:
             continue

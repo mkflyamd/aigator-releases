@@ -1,0 +1,123 @@
+"""Where remote sessions run. The service calls this interface only, so a server-hosted
+tier or the cross-agent relay's terminal adapter can wrap or replace LocalPtyHost."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import re
+from dataclasses import dataclass
+from typing import Protocol
+
+_log = logging.getLogger(__name__)
+
+AGENT = "claude"
+_ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-_]")
+
+
+class HostError(Exception):
+    """The host could not do what was asked; the message is for the user."""
+
+
+@dataclass(frozen=True)
+class Project:
+    id: str
+    name: str
+    repo_path: str
+    agent: str = AGENT
+
+
+@dataclass(frozen=True)
+class HostSession:
+    pty_id: str
+    vendor_session_id: str | None = None
+
+
+class SessionHost(Protocol):
+    async def spawn(self, project: Project) -> HostSession: ...
+    async def deliver(self, pty_id: str, text: str) -> None: ...
+    async def alive(self, pty_id: str) -> bool: ...
+    async def kill(self, pty_id: str) -> None: ...
+    async def state(self, pty_id: str) -> dict | None: ...
+    async def last_message(self, pty_id: str) -> str: ...
+    async def output(self, pty_id: str, since: int) -> tuple[str, int]: ...
+
+
+class LocalPtyHost:
+    """Headless Claude Code sessions in this machine's PTY registry, pinned so neither the
+    Code tab closing nor the idle-suspend sweep ends them."""
+
+    async def spawn(self, project: Project) -> HostSession:
+        import generic_agent
+        from fastapi import HTTPException
+        from routes import generic_agent_routes
+
+        req = generic_agent_routes.GenericAgentTerminalRequest(
+            agent=project.agent, project_id=project.id, repo_path=project.repo_path, force_new=True
+        )
+        try:
+            result = await generic_agent_routes.open_pinned_terminal(req)
+        except HTTPException as exc:
+            raise HostError(f"Could not start {project.agent}: {exc.detail}") from exc
+        pty_id = result["pty_session_id"]
+        return HostSession(pty_id=pty_id, vendor_session_id=generic_agent.linked_session_id(pty_id))
+
+    async def deliver(self, pty_id: str, text: str) -> None:
+        import agent_wake
+
+        try:
+            await agent_wake._wait_ready(pty_id, agent_wake.LIVE_READY_SECONDS)
+            await agent_wake._type_message(pty_id, agent_wake.clean(text))
+        except agent_wake.WakeRefused as exc:
+            raise HostError(exc.reason) from exc
+
+    async def alive(self, pty_id: str) -> bool:
+        from routes import terminal
+
+        return await asyncio.to_thread(terminal.is_pty_alive, pty_id)
+
+    async def kill(self, pty_id: str) -> None:
+        import generic_agent
+        from routes import terminal
+
+        if not await asyncio.to_thread(terminal.close_pty_session, pty_id):
+            raise HostError("The terminal could not be closed.")
+        generic_agent.unpin_session(pty_id)
+
+    async def state(self, pty_id: str) -> dict | None:
+        import agent_state
+
+        return (await asyncio.to_thread(agent_state.read_states, [pty_id])).get(pty_id)
+
+    async def last_message(self, pty_id: str) -> str:
+        return await asyncio.to_thread(self._last_message, pty_id)
+
+    @staticmethod
+    def _last_message(pty_id: str) -> str:
+        import agent_handoff
+        import agent_sessions
+        from routes import terminal
+        from skills.code_agent.projects import get_project
+
+        entry = terminal.get_pty_session(pty_id)
+        meta = (entry.meta if entry else None) or {}
+        repo = (get_project(meta.get("project_id") or "") or {}).get("repo_path")
+        if not repo or not meta.get("session_id"):
+            return ""
+        try:
+            rec = agent_sessions.find_session(repo, meta.get("agent") or AGENT, meta["session_id"])
+            pairs = agent_sessions._transcript_messages(rec) if rec else []
+        except Exception:
+            _log.warning("could not read the transcript for %s", pty_id, exc_info=True)
+            return ""
+        text = next((t for role, t in reversed(pairs) if role == "assistant"), "")
+        return agent_handoff.Redactor(agent_handoff._configured_api_keys())(text)
+
+    async def output(self, pty_id: str, since: int) -> tuple[str, int]:
+        from routes import terminal
+
+        entry = await asyncio.to_thread(terminal.get_pty_session, pty_id)
+        if entry is None:
+            raise HostError("That session is no longer running.")
+        text, end = entry.read_from(since)
+        return _ANSI.sub("", text), end
