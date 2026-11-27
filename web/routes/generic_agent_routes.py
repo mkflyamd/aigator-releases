@@ -81,10 +81,10 @@ async def close_generic_agent_terminal(req: GenericAgentTerminalCloseRequest):
     ends on `@gator stop`, process exit or the remote idle limit, never because
     a Code tab was closed.
     """
-    from routes.terminal import close_pty_session, get_pty_session
+    from routes.terminal import close_pty_session, session_owner
 
-    entry = await asyncio.to_thread(get_pty_session, req.pty_session_id)
-    if ((entry.meta if entry else None) or {}).get("remote_pinned"):
+    owner = await asyncio.to_thread(session_owner, req.pty_session_id)
+    if (owner or {}).get("remote_pinned"):
         if generic_agent.get_active_session(req.project_id, req.agent) == req.pty_session_id:
             generic_agent.clear_active_session(req.project_id, req.agent)
         return {"ok": True, "detached": True}
