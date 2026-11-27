@@ -45,7 +45,7 @@ NO_GATE = frozenset("""
 read_skill list_schedules fetch_webpage web_search analyze_mcp_server schedule_task ask_user
 request_skill describe_images mcp_connection_status
 browser_navigate browser_task browser_search
-get_code_changes run_python run_shell stop_shell_process check_shell_process
+get_code_changes run_python run_shell stop_shell_process check_shell_process run_on_host host_command_result
 get_docx_info update_docx read_docx create_docx
 recalc_excel get_excel_info update_excel create_excel list_excel_sheets read_excel
 pptx_add_autoshape get_pptx_info create_pptx pptx_write_table_cell pptx_replace_picture pptx_list_shapes
@@ -102,6 +102,12 @@ def test_messages_and_notifying_jira_changes_are_irreversible_and_draft_backed(t
 def test_direct_irreversible_tools_have_no_remembered_gate(tool):
     assert actions.BUILTIN_ACTIONS[tool] == actions.IRREVERSIBLE
     assert actions.gate_action(tool) is None
+
+
+def test_run_on_host_asks_every_time_and_can_never_be_remembered():
+    assert "run_on_host" not in actions.BUILTIN_ACTIONS
+    assert actions.action_for_call("run_on_host") == actions.IRREVERSIBLE
+    assert actions.gate_action("run_on_host") is None
 
 
 def test_a_meeting_draft_is_backed_by_its_card_and_the_availability_grid_only_reads():

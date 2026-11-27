@@ -9,6 +9,7 @@ suppresses that. No-op on non-Windows platforms.
 
 import logging
 import os
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -21,6 +22,91 @@ def no_window_kwargs() -> dict:
     if sys.platform == "win32":
         return {"creationflags": subprocess.CREATE_NO_WINDOW}
     return {}
+
+
+def group_kwargs() -> dict:
+    """Popen kwargs that start the child in its own process group (Windows) or session (POSIX), with no console window."""
+    if sys.platform == "win32":
+        return {"creationflags": subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP}
+    return {"start_new_session": True}
+
+
+def kill_process_tree(proc: subprocess.Popen) -> None:
+    """Kill a child started with group_kwargs() and everything it spawned."""
+    if sys.platform == "win32":
+        subprocess.run(
+            ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+            capture_output=True, check=False, creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    else:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+    try:
+        proc.kill()
+    except OSError:
+        pass
+
+
+_job_handle = None
+
+
+def bind_to_backend_lifetime(proc: subprocess.Popen) -> None:
+    """Windows: make Windows end `proc` and everything it spawns when this process ends, even when it is
+    force-killed (the packaged app's quit) and no cleanup code runs. Other systems end children on SIGTERM
+    through the app's shutdown hook. Call it right after starting the child."""
+    global _job_handle
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+        kernel32.CreateJobObjectW.argtypes = [wintypes.LPVOID, wintypes.LPCWSTR]
+        kernel32.SetInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD]
+        kernel32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+
+        class _BasicLimits(ctypes.Structure):
+            _fields_ = [("PerProcessUserTimeLimit", ctypes.c_int64), ("PerJobUserTimeLimit", ctypes.c_int64),
+                        ("LimitFlags", wintypes.DWORD), ("MinimumWorkingSetSize", ctypes.c_size_t),
+                        ("MaximumWorkingSetSize", ctypes.c_size_t), ("ActiveProcessLimit", wintypes.DWORD),
+                        ("Affinity", ctypes.c_size_t), ("PriorityClass", wintypes.DWORD),
+                        ("SchedulingClass", wintypes.DWORD)]
+
+        class _IoCounters(ctypes.Structure):
+            _fields_ = [(name, ctypes.c_uint64) for name in (
+                "ReadOperationCount", "WriteOperationCount", "OtherOperationCount",
+                "ReadTransferCount", "WriteTransferCount", "OtherTransferCount")]
+
+        class _ExtendedLimits(ctypes.Structure):
+            _fields_ = [("BasicLimitInformation", _BasicLimits), ("IoInfo", _IoCounters),
+                        ("ProcessMemoryLimit", ctypes.c_size_t), ("JobMemoryLimit", ctypes.c_size_t),
+                        ("PeakProcessMemoryUsed", ctypes.c_size_t), ("PeakJobMemoryUsed", ctypes.c_size_t)]
+
+        if _job_handle is None:
+            job = kernel32.CreateJobObjectW(None, None)
+            if not job:
+                raise OSError(ctypes.get_last_error(), "CreateJobObject failed")
+            info = _ExtendedLimits()
+            info.BasicLimitInformation.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+            if not kernel32.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info)):
+                raise OSError(ctypes.get_last_error(), "SetInformationJobObject failed")
+            _job_handle = job
+        process = kernel32.OpenProcess(0x0101, False, proc.pid)  # PROCESS_SET_QUOTA | PROCESS_TERMINATE
+        if not process:
+            raise OSError(ctypes.get_last_error(), "OpenProcess failed")
+        try:
+            if not kernel32.AssignProcessToJobObject(_job_handle, process):
+                raise OSError(ctypes.get_last_error(), "AssignProcessToJobObject failed")
+        finally:
+            kernel32.CloseHandle(process)
+    except Exception:
+        logging.getLogger(__name__).warning("Could not tie a host command to the app's lifetime", exc_info=True)
 
 
 # ── Output-file reporter ─────────────────────────────────────────────────────

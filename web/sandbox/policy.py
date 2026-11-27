@@ -34,6 +34,7 @@ class Policy:
     approved_digests: tuple[str, ...] | None = None   # None = off; a list = only these package digests install
     blocked_data_flows: tuple[str, ...] = ()   # "source>destination" pairs; a draft is refused after data from source was read
     block_bundle_stdio_mcp: bool = False   # True = stdio MCP servers from marketplace bundles do not start (they run unsandboxed)
+    host_shell: str = "allow"          # allow | deny; deny = run_on_host (runs outside the sandbox, as the user) is refused
     persistent_permissions: str = "allow"   # allow | deny; deny = "Always allow" on approval cards is hidden and stored rules are ignored
 
     def as_dict(self) -> dict:
@@ -42,13 +43,14 @@ class Policy:
 
 DEFAULT_POLICY = Policy()
 FAIL_CLOSED_POLICY = Policy(code_runner="enabled", network="deny", filesystem="strict", require_sandbox=True,
-                            saved_permissions="deny", persistent_permissions="deny", marketplace_allowed_tiers=("Native", "Verified"),
+                            saved_permissions="deny", host_shell="deny", persistent_permissions="deny", marketplace_allowed_tiers=("Native", "Verified"),
                             require_pinned_installs=True, block_bundle_stdio_mcp=True)
 _ALLOWED = {
     "code_runner": {"enabled", "disabled"},
     "network": {"ask", "deny"},
     "filesystem": {"ask", "strict"},
     "saved_permissions": {"allow", "deny"},
+    "host_shell": {"allow", "deny"},
     "persistent_permissions": {"allow", "deny"},
 }
 _TIERS = {"Native", "Verified", "Community", "Mine"}
@@ -109,6 +111,7 @@ def parse_policy(text: str) -> Policy:
             if not isinstance(value, str) or value not in allowed:
                 raise ValueError(f"invalid value for {key}")
             values[key] = value
+    values.setdefault("host_shell", "deny")  # a managed install opts in to host commands
     if "require_sandbox" in data:
         if not isinstance(data["require_sandbox"], bool):
             raise ValueError("require_sandbox must be true or false")

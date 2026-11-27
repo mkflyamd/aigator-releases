@@ -4428,6 +4428,16 @@ const _locallyFinishedTasks = new Set(); // task ids already cleaned up here; th
 const _tabsWithUpdates = new Set(); // tabIds with completed responses the user hasn't seen
 const _pendingTabCards = new Map(); // tabId -> Map(cardId -> {draw, expired}); drawn again each time the tab is shown
 const _pendingSandboxCards = new Map(); // tabId -> Map(requestId -> card data); drawn again each time the tab is shown
+const _hostRunsInFlight = new Map(); // requestId -> the Run request still going, so a redrawn card shows Stop
+const _hostShell = {
+  state: 'off',
+  running: [],
+  stopping: new Set(),
+  menu: false,
+  sig: '',
+  timer: null,
+  tick: null,
+};
 const _tabsWorking = new Set(); // tabIds with an in-flight request (animated working line)
 let _revealActiveTabOnRender = false; // true = unconditionally scroll active tab into view on next render
 let _preserveScrollOnRender = false; // true = closing a tab; keep scroll position, only nudge if needed
@@ -11829,6 +11839,732 @@ function _showGithubSsoCard(data, ownerTabId) {
   _pinConfirmCardInView(card);
 }
 
+// Card for run_on_host: the user reads the exact command, then clicks Run (it runs on their
+// computer, outside the sandbox) or Cancel. The model can only create the request.
+function _hostEl(tag, className, text) {
+  const el = document.createElement(tag);
+  if (className) el.className = className;
+  if (text !== undefined) el.textContent = text;
+  return el;
+}
+
+function _hostDot(kind) {
+  return _hostEl('i', kind ? `host-dot ${kind}` : 'host-dot');
+}
+
+function _hostSay(text) {
+  const live = document.getElementById('host-chip-sr');
+  if (live) live.textContent = text;
+}
+
+async function _hostShellCall(method, url, body) {
+  const send = () =>
+    fetch(url, {
+      method,
+      headers: {
+        'X-CSRF-Token': window.__CSRF_TOKEN__ || '',
+        ...(body ? { 'Content-Type': 'application/json' } : {}),
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  let res = await send();
+  if (res.status === 403) {
+    const fresh = await fetch('/api/csrf')
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null);
+    if (fresh?.csrf_token) window.__CSRF_TOKEN__ = fresh.csrf_token;
+    res = await send();
+  }
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}));
+    const failure = new Error(detail?.detail || `HTTP ${res.status}`);
+    failure.status = res.status;
+    throw failure;
+  }
+  return res.json();
+}
+
+function _hostShellApply(status) {
+  if (!status || typeof status.state !== 'string') return;
+  const wasStopping = _hostShell.stopping.size > 0;
+  _hostShell.state = status.state;
+  _hostShell.running = Array.isArray(status.running) ? status.running : [];
+  const live = new Set(_hostShell.running.map((c) => c.request_id));
+  _hostShell.stopping.forEach((id) => {
+    if (!live.has(id)) _hostShell.stopping.delete(id);
+  });
+  if (wasStopping && _hostShell.stopping.size === 0) _hostSay('Stopped');
+  _hostShellRender();
+}
+
+function _hostShellSchedule() {
+  clearTimeout(_hostShell.timer);
+  const busy = _hostShell.running.length > 0 || _hostShell.state === 'on';
+  _hostShell.timer = setTimeout(_hostShellRefresh, busy ? 2000 : 10000);
+}
+
+async function _hostShellRefresh() {
+  try {
+    const res = await fetch('/api/host-shell/status');
+    if (res.ok) _hostShellApply(await res.json());
+  } catch (e) {
+    console.warn('[host-shell] status not read:', e);
+  }
+  _hostShellSchedule();
+}
+
+function _hostElapsed(startedAt) {
+  const secs = startedAt ? Math.max(0, Math.floor(Date.now() / 1000 - Number(startedAt))) : 0;
+  return `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
+}
+
+function _hostShellTick() {
+  document.querySelectorAll('.host-tm').forEach((el) => {
+    el.textContent = _hostElapsed(el.dataset.start);
+  });
+}
+
+function _hostShellRender() {
+  _hostShellRenderChip();
+  _hostShellRenderSettings();
+}
+
+function _hostShellRenderSettings() {
+  const sw = document.getElementById('host-shell-switch');
+  const st = document.getElementById('host-shell-status');
+  if (!sw || !st) return;
+  const adminOff = _hostShell.state === 'admin_off';
+  const on = _hostShell.state === 'on';
+  sw.setAttribute('aria-checked', String(on));
+  sw.disabled = adminOff;
+  const word = adminOff ? 'Turned off by your administrator' : on ? 'On' : 'Off';
+  st.replaceChildren(_hostDot(adminOff ? 'warn' : on ? 'ok' : ''), _hostEl('b', '', word));
+}
+
+function _hostShellRenderChip() {
+  const slot = document.getElementById('host-chip-slot');
+  if (!slot) return;
+  const { state, running, stopping } = _hostShell;
+  const n = running.length;
+  if (state === 'admin_off' || (state !== 'on' && n === 0)) {
+    _hostShell.menu = false;
+    _hostShell.sig = '';
+    slot.replaceChildren();
+    clearInterval(_hostShell.tick);
+    _hostShell.tick = null;
+    return;
+  }
+  const isStopping = (c) => stopping.has(c.request_id) || c.stopping === true;
+  const sig = JSON.stringify([
+    state,
+    _hostShell.menu,
+    running.map((c) => [c.request_id, c.command, isStopping(c)]),
+  ]);
+  if (sig === _hostShell.sig) return;
+  _hostShell.sig = sig;
+  const active = document.activeElement;
+  const refocus = active && slot.contains(active) ? [active.dataset.chip, active.dataset.id] : null;
+  const stoppingAll = n > 0 && running.every(isStopping);
+
+  const chip = _hostEl('div', n === 0 ? 'host-chip solo' : 'host-chip');
+  const main = _hostEl('button', 'host-chip-main');
+  main.type = 'button';
+  main.dataset.chip = 'menu';
+  main.setAttribute('aria-haspopup', 'true');
+  main.setAttribute('aria-expanded', String(_hostShell.menu));
+  if (n === 0) {
+    main.setAttribute('aria-label', 'Commands on. Open commands menu');
+    main.append(_hostDot('ok'), _hostEl('span', 'lb', 'Commands on'), _hostEl('span', 'ct', 'On'));
+  } else {
+    main.setAttribute('aria-label', `${n} running. Open commands menu`);
+    const beacon = _hostEl('span', 'host-bc');
+    beacon.setAttribute('aria-hidden', 'true');
+    beacon.append(_hostEl('i'), _hostEl('i'), _hostEl('i'));
+    const label = _hostEl('span', 'lb');
+    label.appendChild(_hostEl('b', '', `${n} running`));
+    main.append(beacon, label, _hostEl('span', 'ct', String(n)));
+  }
+  chip.appendChild(main);
+  if (n > 0) {
+    const stop = _hostEl('button', 'host-chip-stop');
+    stop.type = 'button';
+    stop.dataset.chip = 'stop';
+    stop.disabled = stoppingAll;
+    stop.setAttribute('aria-label', n === 1 ? 'Stop command' : `Stop all ${n} commands`);
+    stop.title = n === 1 ? 'Stop command' : 'Stop all';
+    const square = _hostEl('i', 'host-square');
+    square.setAttribute('aria-hidden', 'true');
+    stop.append(
+      square,
+      _hostEl('span', 'lb', stoppingAll ? 'Stopping...' : n === 1 ? 'Stop' : 'Stop all'),
+    );
+    chip.appendChild(stop);
+  }
+  const parts = [chip];
+
+  if (_hostShell.menu) {
+    const pop = _hostEl('div', 'host-pop');
+    pop.setAttribute('role', 'group');
+    pop.setAttribute('aria-label', 'Running commands');
+    pop.appendChild(_hostEl('div', 'host-pop-head', n ? 'Running commands' : 'Commands'));
+    if (!n) pop.appendChild(_hostEl('div', 'host-pop-row host-pop-none', 'Nothing is running.'));
+    running.forEach((c) => {
+      const row = _hostEl('div', 'host-pop-row');
+      const code = _hostEl('code', '', c.command);
+      code.title = c.command;
+      const time = _hostEl('span', 'host-tm', _hostElapsed(c.started_at));
+      time.dataset.start = String(c.started_at || '');
+      const stop = _hostEl(
+        'button',
+        'btn-secondary host-sm',
+        isStopping(c) ? 'Stopping...' : 'Stop',
+      );
+      stop.type = 'button';
+      stop.dataset.chip = 'stop1';
+      stop.dataset.id = c.request_id;
+      stop.disabled = isStopping(c);
+      stop.setAttribute('aria-label', `Stop command: ${c.command}`);
+      row.append(code, time, stop);
+      pop.appendChild(row);
+    });
+    const sw = _hostEl('div', 'host-pop-switch');
+    const text = _hostEl('div', 'host-pop-text');
+    const title = _hostEl('b', '', 'Run commands on this computer');
+    title.id = 'host-pop-switch-title';
+    text.append(title, document.createTextNode('Each command still needs your OK in the chat.'));
+    if (n) {
+      text.appendChild(
+        _hostEl(
+          'span',
+          'host-pop-warn',
+          `Turning off also stops ${n === 1 ? '1 running command' : `${n} running commands`}.`,
+        ),
+      );
+    }
+    const toggle = _hostEl('button', 'host-switch');
+    toggle.type = 'button';
+    toggle.dataset.chip = 'sw';
+    toggle.setAttribute('role', 'switch');
+    toggle.setAttribute('aria-checked', String(state === 'on'));
+    toggle.setAttribute('aria-labelledby', 'host-pop-switch-title');
+    sw.append(text, toggle);
+    pop.appendChild(sw);
+    parts.push(pop);
+    if (!_hostShell.tick) _hostShell.tick = setInterval(_hostShellTick, 1000);
+  } else {
+    clearInterval(_hostShell.tick);
+    _hostShell.tick = null;
+  }
+  slot.replaceChildren(...parts);
+  if (refocus) {
+    const same = Array.from(slot.querySelectorAll('[data-chip]')).find(
+      (el) => el.dataset.chip === refocus[0] && el.dataset.id === refocus[1],
+    );
+    if (same && !same.disabled) same.focus();
+  }
+}
+
+async function _hostShellStop(ids, all) {
+  ids.forEach((id) => _hostShell.stopping.add(id));
+  _hostShell.sig = '';
+  _hostShellRender();
+  _hostSay(ids.length > 1 ? `Stopping ${ids.length} commands` : 'Stopping command');
+  try {
+    if (all) {
+      _hostShellApply(await _hostShellCall('POST', '/api/host-shell/stop-all'));
+    } else {
+      const cmd = _hostShell.running.find((c) => c.request_id === ids[0]);
+      await _hostShellCall('POST', `/api/host-shell/${encodeURIComponent(ids[0])}/cancel`, {
+        context_id: cmd?.context_id,
+      });
+    }
+  } catch (e) {
+    ids.forEach((id) => _hostShell.stopping.delete(id));
+    _hostShell.sig = '';
+    _hostShellRender();
+    _showConnectivityToast(`Could not stop the command: ${e.message}`, 'warn');
+  }
+  _hostShellRefresh();
+}
+
+async function _hostShellSetEnabled(enabled) {
+  try {
+    if (!enabled) _hostShell.running.forEach((c) => _hostShell.stopping.add(c.request_id));
+    const out = await _hostShellCall('PUT', '/api/host-shell/enabled', { enabled });
+    _hostShell.sig = '';
+    _hostShellApply(out);
+    _hostSay(enabled ? 'Running commands is on' : 'Running commands is off');
+    _hostShellRefresh();
+    return true;
+  } catch (e) {
+    _hostShell.stopping.clear();
+    _hostShell.sig = '';
+    _hostShellRender();
+    _showConnectivityToast('Could not change running commands. Try again.', 'warn');
+    return false;
+  }
+}
+
+function _initHostShell() {
+  const slot = document.getElementById('host-chip-slot');
+  slot?.addEventListener('click', (e) => {
+    const btn = e.target.closest ? e.target.closest('[data-chip]') : null;
+    if (!btn || btn.disabled) return;
+    const kind = btn.dataset.chip;
+    if (kind === 'menu') {
+      _hostShell.menu = !_hostShell.menu;
+      _hostShell.sig = '';
+      _hostShellRender();
+    } else if (kind === 'stop') {
+      _hostShellStop(
+        _hostShell.running.map((c) => c.request_id),
+        true,
+      );
+    } else if (kind === 'stop1') {
+      _hostShellStop([btn.dataset.id], false);
+    } else if (kind === 'sw') {
+      _hostShellSetEnabled(_hostShell.state !== 'on');
+    }
+  });
+  const toggle = document.getElementById('host-shell-switch');
+  toggle?.addEventListener('click', async () => {
+    if (toggle.disabled) return;
+    toggle.disabled = true;
+    await _hostShellSetEnabled(_hostShell.state !== 'on');
+    toggle.disabled = _hostShell.state === 'admin_off';
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || !_hostShell.menu) return;
+    _hostShell.menu = false;
+    _hostShell.sig = '';
+    _hostShellRender();
+    slot?.querySelector('[data-chip="menu"]')?.focus();
+  });
+  _hostShellRefresh();
+}
+
+function _renderHostEnableCard(data, requestId, cardTab, tabId) {
+  const card = _hostEl('div', 'message assistant');
+  card.dataset.sandboxRequest = requestId;
+  const bubble = _hostEl('div', 'bubble card-bubble');
+  const holder = _hostEl('div', 'host-enable');
+  const live = _hostEl('p', 'visually-hidden');
+  live.setAttribute('role', 'status');
+  bubble.append(holder, live);
+  card.appendChild(bubble);
+  const contextId = typeof data.context_id === 'string' ? data.context_id : tabId;
+
+  const line = (kind, lead, rest) => {
+    const row = _hostEl('div', 'host-enable-line');
+    row.tabIndex = -1;
+    const text = _hostEl('span');
+    text.append(_hostEl('b', '', lead), document.createTextNode(` ${rest}`));
+    row.append(_hostDot(kind), text);
+    return row;
+  };
+  const draw = (state) => {
+    if (state === 'on') {
+      const row = line('ok', 'On.', 'Running commands is on. You can turn it off in Settings.');
+      holder.replaceChildren(row);
+      return row;
+    }
+    if (state === 'declined') {
+      const row = line(
+        '',
+        'Not turned on.',
+        'The command was not run. You can turn it on in Settings.',
+      );
+      holder.replaceChildren(row);
+      return row;
+    }
+    const box = _hostEl('div', 'gator-compose-card gator-draft-card');
+    box.setAttribute('role', 'group');
+    box.setAttribute('aria-label', 'Turn on running commands');
+    const header = _hostEl('div', 'gcc-header');
+    const status = _hostEl('span', 'host-st');
+    status.append(_hostDot('warn'), _hostEl('b', '', state === 'blocked' ? 'Blocked' : 'Off'));
+    header.append(_hostEl('div', 'gcc-title', 'Run on your PC'), status);
+    const body = _hostEl('div', 'gcc-body');
+    if (state === 'blocked') {
+      body.append(
+        _hostEl('div', 'host-enable-title', 'Running commands is turned off'),
+        _hostEl(
+          'p',
+          'host-enable-text',
+          'Gator wanted to run a command on this computer to finish your request. Your administrator has turned off running commands on this computer, so it was not run.',
+        ),
+      );
+      box.append(header, body);
+      holder.replaceChildren(box);
+      return null;
+    }
+    const list = _hostEl('ul', 'host-enable-list');
+    const first = _hostEl('li');
+    first.append(
+      document.createTextNode('Commands run '),
+      _hostEl('b', '', 'outside the sandbox'),
+      document.createTextNode(', '),
+      _hostEl('b', '', 'with your own access'),
+      document.createTextNode(' to your files, programs and network.'),
+    );
+    list.append(
+      first,
+      _hostEl(
+        'li',
+        '',
+        'You see each command and approve it before it runs. Gator never runs one without your OK.',
+      ),
+      _hostEl('li', '', 'You can turn this off any time in Settings.'),
+    );
+    body.append(
+      _hostEl('div', 'host-enable-title', 'Turn on running commands?'),
+      _hostEl(
+        'p',
+        'host-enable-text',
+        'Gator wants to run a command on this computer to finish your request. Running commands is off.',
+      ),
+      list,
+    );
+    if (state === 'error') {
+      const err = _hostEl('p', 'host-enable-err', 'Couldn’t turn this on. Try again.');
+      err.setAttribute('role', 'alert');
+      body.appendChild(err);
+    }
+    const actions = _hostEl('div', 'gcc-actions');
+    const turnOn = _hostEl(
+      'button',
+      'gcc-approve-btn',
+      state === 'busy' ? 'Turning on...' : 'Turn on',
+    );
+    const notNow = _hostEl('button', 'btn-secondary host-quiet', 'Not now');
+    turnOn.disabled = state === 'busy';
+    notNow.disabled = state === 'busy';
+    turnOn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      enable();
+    });
+    notNow.addEventListener('click', (e) => {
+      e.stopPropagation();
+      decline();
+    });
+    actions.append(turnOn, notNow);
+    box.append(header, body, actions);
+    holder.replaceChildren(box);
+    return null;
+  };
+  const enable = async () => {
+    draw('busy');
+    try {
+      _hostShellApply(await _hostShellCall('PUT', '/api/host-shell/enabled', { enabled: true }));
+    } catch (e) {
+      if (e.status === 403 && /administrator/i.test(e.message)) {
+        draw('blocked');
+        live.textContent = 'Running commands is turned off by your administrator';
+        return;
+      }
+      draw('error');
+      live.textContent = 'Could not turn on running commands';
+      return;
+    }
+    delete data.enable_required;
+    const row = draw('on');
+    live.textContent = 'Running commands is on';
+    row.focus();
+    delete card.dataset.sandboxRequest;
+    _renderHostCommandCard(data, requestId, cardTab, tabId);
+  };
+  let declining = false;
+  const decline = async () => {
+    if (declining) return;
+    declining = true;
+    try {
+      await _hostShellCall('POST', `/api/host-shell/${encodeURIComponent(requestId)}/cancel`, {
+        context_id: contextId,
+      });
+    } catch (e) {
+      console.warn('[host-shell] decline not recorded:', e);
+    }
+    _pendingSandboxCards.get(cardTab)?.delete(requestId);
+    draw('declined').focus();
+    live.textContent = 'Running commands not turned on';
+    _sendSandboxFollowUp(
+      tabId,
+      `I did not turn on running commands, so I did not run command request ${requestId}. Do not retry it; carry on without it, or ask me what I want.`,
+    ).catch((err) => console.warn('[host-shell] follow-up not sent:', err));
+  };
+  draw('ask');
+  document.getElementById('messages')?.appendChild(card);
+  card.scrollIntoView({ behavior: 'smooth', block: 'end' });
+}
+
+function _renderHostCommandCard(data, requestId, cardTab, tabId) {
+  if (data.enable_required === true && _hostShell.state !== 'on') {
+    _renderHostEnableCard(data, requestId, cardTab, tabId);
+    return;
+  }
+  const card = document.createElement('div');
+  card.className = 'message assistant';
+  card.dataset.sandboxRequest = requestId;
+  const bubble = document.createElement('div');
+  bubble.className = 'bubble card-bubble';
+  const box = document.createElement('div');
+  box.className = 'gator-compose-card gator-draft-card';
+
+  const header = document.createElement('div');
+  header.className = 'gcc-header';
+  const title = document.createElement('div');
+  title.className = 'gcc-title';
+  title.textContent = 'AI Gator wants you to run a command';
+  header.appendChild(title);
+
+  const body = document.createElement('div');
+  body.className = 'gcc-body';
+  const addRow = (label, value, asPre, wrap) => {
+    if (typeof value !== 'string' || !value) return;
+    const row = document.createElement('div');
+    row.className = 'gcc-field-row gcc-field-row--block';
+    const key = document.createElement('span');
+    key.className = 'gcc-field-key';
+    key.textContent = label;
+    const val = document.createElement(asPre ? 'pre' : 'span');
+    val.className = wrap ? 'gcc-field-val gcc-field-val--wrap' : 'gcc-field-val';
+    val.textContent = value;
+    row.append(key, val);
+    body.appendChild(row);
+  };
+  const lineCount = typeof data.command === 'string' ? data.command.split(/\r?\n/).length : 0;
+  addRow('Why', data.reason, false);
+  addRow('Command', data.command, true, true);
+  if (lineCount > 1) {
+    const lines = document.createElement('div');
+    lines.className = 'gcc-refine';
+    lines.textContent = `This command has ${lineCount} lines. Read all of them before you click Run.`;
+    body.appendChild(lines);
+  }
+  addRow('Folder', data.cwd, false);
+  addRow('Shell', data.shell, false);
+  if (Array.isArray(data.risks) && data.risks.length) {
+    const warn = document.createElement('div');
+    warn.className = 'gcc-refine';
+    warn.textContent = `Check carefully: ${data.risks.join('; ')}.`;
+    body.appendChild(warn);
+  }
+  if (data.cwd_is_ai_workspace) {
+    const work = document.createElement('div');
+    work.className = 'gcc-refine';
+    work.textContent =
+      "This is AI Gator's own working folder, or inside it. Files there were written by the AI, so a script here runs code the AI wrote.";
+    body.appendChild(work);
+  }
+  const removed = Number(data.env_removed) || 0;
+  if (removed > 0) {
+    const env = document.createElement('div');
+    env.className = 'gcc-refine';
+    env.textContent = `${removed} environment variable${removed === 1 ? '' : 's'} removed (tokens, keys and passwords stay out of the command).`;
+    body.appendChild(env);
+  }
+  const note = document.createElement('div');
+  note.className = 'gcc-refine';
+  note.textContent =
+    'Runs as you on this computer, outside the sandbox, with your own tools, sign-in and network.';
+  body.appendChild(note);
+  const output = document.createElement('pre');
+  output.className = 'gcc-field-val gcc-field-val--wrap';
+  output.hidden = true;
+  body.appendChild(output);
+
+  const actions = document.createElement('div');
+  actions.className = 'gcc-actions';
+  const run = document.createElement('button');
+  run.className = 'gcc-approve-btn';
+  run.textContent = 'Run';
+  const cancel = document.createElement('button');
+  cancel.className = 'btn-secondary';
+  cancel.textContent = 'Cancel';
+  actions.append(run, cancel);
+
+  const footer = document.createElement('div');
+  footer.className = 'gcc-footer';
+  const footNote = document.createElement('span');
+  footNote.className = 'gcc-refine';
+  footNote.textContent = 'Unanswered requests expire after 10 minutes.';
+  footNote.setAttribute('role', 'status');
+  const countdown = document.createElement('span');
+  countdown.className = 'gcc-refine';
+  countdown.setAttribute('aria-hidden', 'true');
+  footer.append(footNote, countdown);
+
+  box.append(header, body, actions, footer);
+  bubble.appendChild(box);
+  card.appendChild(bubble);
+
+  const contextId = typeof data.context_id === 'string' ? data.context_id : tabId;
+  const send = async (action) => {
+    const post = () =>
+      fetch(`/api/host-shell/${encodeURIComponent(requestId)}/${action}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': window.__CSRF_TOKEN__ || '',
+        },
+        body: JSON.stringify({ context_id: contextId }),
+      });
+    let res = await post();
+    if (res.status === 403) {
+      const fresh = await fetch('/api/csrf')
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null);
+      if (fresh?.csrf_token) window.__CSRF_TOKEN__ = fresh.csrf_token;
+      res = await post();
+    }
+    if (!res.ok) {
+      const detail = await res.json().catch(() => ({}));
+      const failure = new Error(detail?.detail || `HTTP ${res.status}`);
+      failure.status = res.status;
+      throw failure;
+    }
+    return res.json();
+  };
+  let running = false;
+  let busy = false;
+  let settled = false;
+  const deadline = Number(data.expires_at) > 0 ? data.expires_at * 1000 : Date.now() + 600000;
+  let clock = null;
+  const stopClock = () => {
+    if (clock !== null) clearInterval(clock);
+    clock = null;
+    countdown.textContent = '';
+  };
+  const expire = () => {
+    if (settled) return;
+    settled = true;
+    stopClock();
+    actions.remove();
+    _pendingSandboxCards.get(cardTab)?.delete(requestId);
+    footNote.textContent = 'Timed out before you answered. Nothing was run.';
+    const again = document.createElement('button');
+    again.className = 'btn-secondary';
+    again.textContent = 'Ask again';
+    again.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (again.disabled) return;
+      again.disabled = true;
+      _sendSandboxFollowUp(tabId, 'Please propose that command again.').catch((err) => {
+        again.disabled = false;
+        console.warn('[host-shell] follow-up not sent:', err);
+      });
+    });
+    footer.appendChild(again);
+  };
+  clock = setInterval(() => {
+    if (settled || busy) return;
+    const left = Math.ceil((deadline - Date.now()) / 1000);
+    if (left <= 0) {
+      expire();
+      return;
+    }
+    countdown.textContent =
+      left <= 60 ? `Expires in ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}` : '';
+  }, 1000);
+  const showRunning = () => {
+    running = true;
+    busy = true;
+    run.disabled = true;
+    cancel.textContent = 'Stop';
+    footNote.textContent = 'Running...';
+  };
+  // Settles this card from a decision's request. A card redrawn mid-run follows the same Run request,
+  // so only the first card to see it end tells the agent or the user.
+  const follow = async (action, call) => {
+    try {
+      const out = await call;
+      const first = action !== 'run' || _hostRunsInFlight.delete(requestId);
+      settled = true;
+      stopClock();
+      actions.remove();
+      _pendingSandboxCards.get(cardTab)?.delete(requestId);
+      if (action === 'cancel' && out?.status === 'done') {
+        footNote.textContent = 'This command had already finished.';
+        return;
+      }
+      if (action === 'cancel') {
+        footNote.textContent = 'You cancelled this. Nothing was run.';
+        _sendSandboxFollowUp(
+          tabId,
+          `Cancelled. I did not run command request ${requestId}. Do not retry it; carry on without it, or ask me what I want.`,
+        ).catch((e) => console.warn('[host-shell] follow-up not sent:', e));
+        return;
+      }
+      const result = out.result || {};
+      const text = [result.stdout, result.stderr, result.error].filter(Boolean).join('\n');
+      output.textContent = text || '(no output)';
+      output.hidden = false;
+      footNote.textContent =
+        result.exit_code === 0
+          ? '✓ Finished · exit code 0'
+          : `Failed · exit code ${result.exit_code}`;
+      if (!first) return;
+      _sendSandboxFollowUp(
+        tabId,
+        `I ran command request ${requestId}. Call host_command_result with that request_id to read the output.`,
+      ).catch((e) => console.warn('[host-shell] follow-up not sent:', e));
+    } catch (err) {
+      const first = action !== 'run' || _hostRunsInFlight.delete(requestId);
+      busy = false;
+      running = false;
+      if (err.status === 404 || err.status === 410) {
+        expire();
+        return;
+      }
+      run.disabled = false;
+      cancel.disabled = false;
+      cancel.textContent = 'Cancel';
+      footNote.textContent =
+        err.status && err.status < 500
+          ? 'Unanswered requests expire after 10 minutes.'
+          : "Couldn't reach AI Gator. Try again.";
+      if (first) _showConnectivityToast(`Could not record your decision: ${err.message}`, 'warn');
+    }
+  };
+  const decide = async (action) => {
+    if (run.disabled || settled) return;
+    busy = true;
+    run.disabled = true;
+    if (action === 'run') {
+      showRunning();
+    } else {
+      cancel.disabled = true;
+    }
+    const call = send(action);
+    if (action === 'run') _hostRunsInFlight.set(requestId, call);
+    await follow(action, call);
+  };
+  run.addEventListener('click', (e) => {
+    e.stopPropagation();
+    decide('run');
+  });
+  cancel.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (!running) {
+      decide('cancel');
+      return;
+    }
+    cancel.disabled = true;
+    footNote.textContent = 'Stopping...';
+    send('cancel').catch((err) => {
+      cancel.disabled = false;
+      _showConnectivityToast(`Could not stop the command: ${err.message}`, 'warn');
+    });
+  });
+  document.getElementById('messages')?.appendChild(card);
+  card.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  const inFlight = _hostRunsInFlight.get(requestId);
+  if (inFlight) {
+    showRunning();
+    follow('run', inFlight);
+  }
+}
+
 function _showSandboxApproval(data, ownerTabId) {
   const requestId = data && typeof data.request_id === 'string' ? data.request_id : '';
   if (!requestId) return;
@@ -11845,6 +12581,10 @@ function _showSandboxApproval(data, ownerTabId) {
     (el) => el.dataset.sandboxRequest === requestId,
   );
   if (seen) return;
+  if (data.tool === 'run_on_host') {
+    _renderHostCommandCard(data, requestId, cardTab, ownerTabId || _activeTabId || 'default');
+    return;
+  }
   const card = document.createElement('div');
   card.className = 'message assistant';
   card.dataset.sandboxRequest = requestId;
@@ -20374,6 +21114,7 @@ function _initOnReady() {
   _initGoogleWorkspaceSettings();
   _initClearCredentialsSettings();
   _initSandboxSettings();
+  _initHostShell();
   _initPermissionSettings();
 }
 

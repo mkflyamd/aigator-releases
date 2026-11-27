@@ -13,6 +13,7 @@ const { applyMediaPermissions } = require('./media-permissions');
 const { applyNavigationPolicy, setToolbarAttacher } = require('./navigation-policy');
 const { resolveAtlassianUrls } = require('./atlassian-urls');
 const { createHudRecorder } = require('./hud_recorder');
+const { confirmQuit } = require('./quit-guard');
 const path = require('path');
 const { spawn } = require('child_process');
 const http = require('http');
@@ -1163,6 +1164,11 @@ function createWindow() {
     webPreferences: { contextIsolation: true, nodeIntegration: false },
   });
   win.loadURL('data:text/html,<html><body style="margin:0;background:transparent"></body></html>');
+  win.on('close', (e) => {
+    if (_quitConfirmed) return;
+    e.preventDefault();
+    _confirmThenQuit();
+  });
 
   // ΓöÇΓöÇ Gator view ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
   // Gator has no explicit partition, so it (and any window.open() popup it
@@ -5930,7 +5936,29 @@ app.on('activate', () => {
 app.on('window-all-closed', () => {
   if (!IS_MAC) quit();
 });
-app.on('before-quit', () => {
+let _quitConfirmed = false;
+function _confirmThenQuit() {
+  const { dialog } = require('electron');
+  confirmQuit({
+    backendRequest: _backendRequest,
+    showConfirm: (options) => {
+      const withType = { type: 'warning', ...options };
+      return win && !win.isDestroyed()
+        ? dialog.showMessageBox(win, withType)
+        : dialog.showMessageBox(withType);
+    },
+  }).then((ok) => {
+    if (!ok) return;
+    _quitConfirmed = true;
+    app.quit();
+  });
+}
+app.on('before-quit', (e) => {
+  if (!_quitConfirmed) {
+    e.preventDefault();
+    _confirmThenQuit();
+    return;
+  }
   if (_toolbarNavPoll) {
     clearInterval(_toolbarNavPoll);
     _toolbarNavPoll = null;

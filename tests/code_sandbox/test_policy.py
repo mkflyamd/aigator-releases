@@ -16,14 +16,28 @@ def test_missing_file_gives_defaults(policy_file):
     assert pol.load_policy() == pol.Policy("enabled", "ask", "ask", False)
 
 
+def test_managed_policy_without_host_shell_denies_host_commands(policy_file):
+    policy_file.write_text('{"network": "deny"}')
+    assert pol.load_policy().host_shell == "deny"
+
+
+def test_managed_policy_can_allow_host_commands(policy_file):
+    policy_file.write_text('{"host_shell": "allow"}')
+    assert pol.load_policy().host_shell == "allow"
+
+
+def test_no_policy_file_allows_host_commands(policy_file):
+    assert pol.load_policy().host_shell == "allow"
+
+
 def test_valid_file_is_parsed(policy_file):
     policy_file.write_text('{"code_runner": "disabled", "network": "deny", "filesystem": "strict", "require_sandbox": true}')
-    assert pol.load_policy() == pol.Policy("disabled", "deny", "strict", True)
+    assert pol.load_policy() == pol.Policy("disabled", "deny", "strict", True, host_shell="deny")
 
 
 def test_partial_file_keeps_defaults_for_missing_keys(policy_file):
     policy_file.write_text('{"network": "deny"}')
-    assert pol.load_policy() == pol.Policy("enabled", "deny", "ask", False)
+    assert pol.load_policy() == pol.Policy("enabled", "deny", "ask", False, host_shell="deny")
 
 
 @pytest.mark.parametrize("text", [
@@ -33,7 +47,7 @@ def test_partial_file_keeps_defaults_for_missing_keys(policy_file):
 def test_invalid_file_fails_closed(policy_file, text):
     policy_file.write_text(text)
     assert pol.load_policy() == pol.FAIL_CLOSED_POLICY
-    assert pol.FAIL_CLOSED_POLICY == pol.Policy("enabled", "deny", "strict", True, "deny", ("Native", "Verified"), True, block_bundle_stdio_mcp=True, persistent_permissions="deny")
+    assert pol.FAIL_CLOSED_POLICY == pol.Policy("enabled", "deny", "strict", True, "deny", ("Native", "Verified"), True, block_bundle_stdio_mcp=True, host_shell="deny", persistent_permissions="deny")
 
 
 @pytest.mark.parametrize("text", [
@@ -99,7 +113,7 @@ def test_cache_follows_mtime(policy_file):
     policy_file.write_text('{"network": "ask", "filesystem": "strict"}')
     st = policy_file.stat()
     os.utime(policy_file, ns=(st.st_atime_ns, st.st_mtime_ns + 10_000_000))
-    assert pol.load_policy() == pol.Policy("enabled", "ask", "strict", False)
+    assert pol.load_policy() == pol.Policy("enabled", "ask", "strict", False, host_shell="deny")
 
 
 def test_policy_paths_per_platform(monkeypatch):
@@ -112,7 +126,7 @@ def test_policy_paths_per_platform(monkeypatch):
 def test_as_dict():
     assert pol.Policy().as_dict() == {
         "code_runner": "enabled", "network": "ask", "filesystem": "ask", "require_sandbox": False,
-        "saved_permissions": "allow", "persistent_permissions": "allow",
+        "saved_permissions": "allow", "host_shell": "allow", "persistent_permissions": "allow",
         "marketplace_allowed_tiers": ("Native", "Verified", "Community", "Mine"),
         "require_pinned_installs": False, "approved_digests": None, "blocked_data_flows": (),
         "block_bundle_stdio_mcp": False,
