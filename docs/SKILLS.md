@@ -259,7 +259,7 @@ Layered Anthropic's `anthropics/skills` marketplace capabilities into Gator Chat
 
 - **COM automation:** `web/skills/_office_com.py` — shared helpers for all 3 apps
 - **Shared utilities:** `web/skills/_skill_utils.py` — `@skill_handler`, `resolve_com_target()`, `batch_wrapper()`, `validate_tool_contract()`
-- **Shared scripts:** `web/skills/_scripts/office/` — validate, pack, unpack, soffice (one copy)
+- **Shared scripts:** `web/skills/_scripts/office/` — validate, soffice, helpers (one copy)
 - **Auto-skill detection:** Keywords in user messages auto-activate relevant skills ("put this in a word doc" activates docx)
 - **Batch mode:** All 3 update tools support batch operations to prevent truncation during live editing
 - **File picker:** Native Windows file dialog via `/api/file-picker`, composes chip in prompt bar

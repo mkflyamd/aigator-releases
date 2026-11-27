@@ -4,24 +4,36 @@ sockets may be blocked (e.g., sandboxed VMs).  Detects the restriction
 at runtime and applies an LD_PRELOAD shim if needed.
 
 Usage:
-    from office.soffice import run_soffice, get_soffice_env
+    from office.soffice import run_soffice
 
-    # Option 1 – run soffice directly
     result = run_soffice(["--headless", "--convert-to", "pdf", "input.docx"])
 
-    # Option 2 – get env dict for your own subprocess calls
-    env = get_soffice_env()
-    subprocess.run([require_soffice(), ...], env=env)
+Call soffice through run_soffice, not through subprocess with get_soffice_env():
+the env dict carries the shim but names no user profile, and a non-root sandbox
+cannot bootstrap the default one -- soffice aborts with "User installation could
+not be completed" and converts nothing. get_soffice_env() stays public for the
+callers that build their own argv (they must pass -env:UserInstallation too).
+They launch LibreOffice with require_soffice(), which also finds a Windows or macOS
+install that is not on PATH.
 """
 
+# Modified by the AI Gator project: adds Windows/macOS LibreOffice discovery, SofficeNotFound, and run_basic_macro (private profile, kill on timeout).
+
+from __future__ import annotations
+
+import contextlib
 import os
+import re
 import shutil
 import socket
 import subprocess
 import sys
 import tempfile
 import threading
+import zipfile
+from collections.abc import Iterable
 from pathlib import Path
+
 
 NOT_INSTALLED_MESSAGE = (
     "LibreOffice is not installed on this computer, so formulas could not be recalculated here. "
@@ -86,9 +98,21 @@ def get_soffice_env() -> dict:
     return env
 
 
-def run_soffice(args: list[str], **kwargs) -> subprocess.CompletedProcess:
-    env = get_soffice_env()
-    return subprocess.run([require_soffice()] + args, env=env, **kwargs)
+def run_soffice(args: Iterable[str], **kwargs) -> subprocess.CompletedProcess:
+    args = list(args)
+    with contextlib.ExitStack() as stack:
+        if not any(str(a).startswith("-env:UserInstallation") for a in args):
+            profile = stack.enter_context(
+                tempfile.TemporaryDirectory(prefix="lo_profile_", ignore_cleanup_errors=True)
+            )
+            args = [f"-env:UserInstallation={Path(profile).as_uri()}"] + args
+        if _draws_the_document(args):
+            copies = Path(stack.enter_context(
+                tempfile.TemporaryDirectory(prefix="lo_input_", ignore_cleanup_errors=True)
+            ))
+            args = [_without_outside_links(str(a), copies / str(i)) for i, a in enumerate(args)]
+        return subprocess.run([require_soffice()] + args, env=get_soffice_env(), **kwargs)
+
 
 
 _CREATE_NO_WINDOW = 0x08000000
@@ -149,6 +173,80 @@ def run_basic_macro(
 
 _SHIM_SO = Path(tempfile.gettempdir()) / "lo_socket_shim.so"
 
+_DRAWN_FORMATS = frozenset(
+    {"pdf", "png", "jpg", "jpeg", "gif", "bmp", "tif", "tiff", "webp", "svg", "eps", "emf", "wmf"}
+)
+_WEB_OR_MAIL = re.compile(r"^(?:https?|mailto):", re.I)
+_RELS_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
+_NO_RELS = f'<Relationships xmlns="{_RELS_NS}"/>'.encode()
+_MAX_RELS_BYTES = 32 * 1024 * 1024
+
+
+def _draws_the_document(args: list) -> bool:
+    for flag, value in zip(args, args[1:]):
+        if str(flag) in ("--convert-to", "-convert-to"):
+            return str(value).split(":")[0].lower() in _DRAWN_FORMATS
+    return False
+
+
+def _cut_outside_links(rels: bytes) -> bytes | None:
+    from defusedxml import ElementTree
+
+    try:
+        root = ElementTree.fromstring(rels)
+    except (ElementTree.ParseError, ValueError, LookupError):
+        return _NO_RELS
+    cut = False
+    for entry in root.iter():
+        if entry.get("TargetMode", "Internal") == "Internal":
+            continue
+        if _WEB_OR_MAIL.match(entry.get("Target", "")):
+            continue
+        entry.set("TargetMode", "External")
+        entry.set("Target", "about:blank")
+        cut = True
+    if not cut:
+        return None
+    for element in root.iter():
+        element.tag = element.tag.rsplit("}", 1)[-1]
+    root.set("xmlns", _RELS_NS)
+    return ElementTree.tostring(root)
+
+
+def _without_outside_links(arg: str, folder: Path) -> str:
+
+    if not os.path.isfile(arg) or not zipfile.is_zipfile(arg):
+        return arg
+    with open(arg, "rb") as file:
+        if file.read(4) != b"PK\x03\x04":  
+            return arg
+    with zipfile.ZipFile(arg) as package:
+        cut = {}
+        for member in package.infolist():
+            if member.filename.lower().endswith(".rels"):
+                try:
+                    data = package.read(member) if member.file_size <= _MAX_RELS_BYTES else None
+                except Exception:  
+                    data = None
+                rels = _NO_RELS if data is None else _cut_outside_links(data)
+                if rels is not None:
+                    cut[member.filename] = rels
+        if not cut:
+            return arg
+        folder.mkdir()
+        copy = folder / Path(arg).name
+        with zipfile.ZipFile(copy, "w") as out:
+            for member in package.infolist():
+                entry = zipfile.ZipInfo(member.filename, member.date_time)
+                entry.compress_type = member.compress_type
+                if member.filename in cut:
+                    entry.compress_type = zipfile.ZIP_DEFLATED  
+                    out.writestr(entry, cut[member.filename])
+                else:
+                    with package.open(member) as source, out.open(entry, "w", force_zip64=True) as target:
+                        shutil.copyfileobj(source, target)
+    return str(copy)
+
 
 def _needs_shim() -> bool:
     if not sys.platform.startswith("linux"):
@@ -166,7 +264,7 @@ def _ensure_shim() -> Path:
         return _SHIM_SO
 
     src = Path(tempfile.gettempdir()) / "lo_socket_shim.c"
-    src.write_text(_SHIM_SOURCE)
+    src.write_text(_SHIM_SOURCE, encoding="utf-8")
     subprocess.run(
         ["gcc", "-shared", "-fPIC", "-o", str(_SHIM_SO), str(src), "-ldl"],
         check=True,
@@ -174,6 +272,7 @@ def _ensure_shim() -> Path:
     )
     src.unlink()
     return _SHIM_SO
+
 
 
 _SHIM_SOURCE = r"""
@@ -286,8 +385,8 @@ int close(int fd) {
 """
 
 
+
 if __name__ == "__main__":
     import sys
-
     result = run_soffice(sys.argv[1:])
     sys.exit(result.returncode)

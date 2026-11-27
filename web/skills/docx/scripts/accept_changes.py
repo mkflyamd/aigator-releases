@@ -3,6 +3,8 @@
 Requires LibreOffice (soffice) to be installed.
 """
 
+# Modified by the AI Gator project: runs the macro through run_basic_macro with a private profile, reports a missing LibreOffice, adds a sys.path bootstrap.
+
 import argparse
 import shutil
 import subprocess
