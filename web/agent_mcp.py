@@ -189,10 +189,21 @@ def with_gator_mcp(agent: str, command: list[str] | None) -> list[str] | None:
     return [*command, "--mcp-config", mcp_config_path()]
 
 
+def recorded_session(pty_id: str, agent: str, live: dict[str, dict] | None = None) -> str | None:
+    """The session id a Crush hook recorded for a terminal, unless Gator already knows another
+    terminal (running, suspended or linked at launch) under that id."""
+    taken = {r.get("session_id") for p, r in agent_suspend.all_records().items() if p != pty_id}
+    taken |= {m.get("session_id") for p, m in (live or {}).items() if p != pty_id}
+    found = agent_state.read_session(pty_id, {t for t in taken if t})
+    if found and set(generic_agent.ptys_for_session(agent, found)) - {pty_id}:
+        return None
+    return found
+
+
 async def _sender(caller: dict) -> dict:
     """Who is asking, from Gator's own records of that terminal."""
-    session_id = generic_agent.linked_session_id(caller["pty_id"]) or agent_state.read_session(caller["pty_id"]) or ""
     agent = caller.get("agent", "claude")
+    session_id = generic_agent.linked_session_id(caller["pty_id"]) or recorded_session(caller["pty_id"], agent) or ""
     title = await asyncio.to_thread(agent_wake.title_of, caller["project_id"], agent, session_id) if session_id else ""
     return {
         "name": title or session_id[:8] or "another agent",

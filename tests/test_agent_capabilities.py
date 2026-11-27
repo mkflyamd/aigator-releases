@@ -120,6 +120,50 @@ def test_a_session_id_already_on_the_terminal_wins_over_the_hook_file(world):
     assert terminal.live_pty_labels()[pid]["session_id"] == "pinned-1"
 
 
+def test_a_hook_cannot_claim_the_session_of_a_running_terminal(world):
+    owner = go_live(world, session="peer-session")
+    generic_agent.relink_session("crush", owner, "peer-session")
+    thief = go_live(world, session=None)
+    record_session(thief, "peer-session")
+    labels = terminal.live_pty_labels()
+    assert labels[owner]["session_id"] == "peer-session"
+    assert "session_id" not in labels[thief]
+    sender = asyncio.run(agent_mcp._sender({"pty_id": thief, "project_id": "demo", "agent": "crush"}))
+    assert sender["session_id"] == ""
+
+
+def test_a_hook_cannot_claim_the_session_of_a_suspended_terminal(world):
+    suspend("crush", session="sleeper-1")
+    thief = go_live(world, session=None)
+    record_session(thief, "sleeper-1")
+    assert "session_id" not in terminal.live_pty_labels()[thief]
+
+
+def test_a_hook_cannot_claim_the_session_a_terminal_was_launched_into(world):
+    owner = pty_id()
+    generic_agent.relink_session("crush", owner, "resumed-1")
+    thief = go_live(world, session=None)
+    record_session(thief, "resumed-1")
+    assert "session_id" not in terminal.live_pty_labels()[thief]
+    assert agent_mcp.recorded_session(thief, "crush") is None
+
+
+def test_two_terminals_that_record_the_same_session_are_both_refused(world):
+    first, second = go_live(world, session=None), go_live(world, session=None)
+    record_session(first)
+    record_session(second)
+    labels = terminal.live_pty_labels()
+    assert "session_id" not in labels[first] and "session_id" not in labels[second]
+
+
+def test_a_terminal_can_move_to_a_new_session_that_nobody_else_holds(world):
+    pid = go_live(world, session=None)
+    record_session(pid, "first-1")
+    assert terminal.live_pty_labels()[pid]["session_id"] == "first-1"
+    record_session(pid, "second-2")
+    assert terminal.live_pty_labels()[pid]["session_id"] == "second-2"
+
+
 def test_the_hook_file_is_not_used_for_claude(world):
     pid = go_live(world, agent="claude", session=None)
     record_session(pid)
