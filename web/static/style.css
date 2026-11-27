@@ -130,6 +130,7 @@ body {
   --bg-card: var(--surface1);
   --bg-hover: var(--surface2);
   --hover: var(--surface2);
+  --bg-elevated: var(--surface2);
   --input-bg: var(--surface2);
   --surface4: var(--surface3);
   --border3: var(--border2);
