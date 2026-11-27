@@ -1454,14 +1454,9 @@ function _genAgentConnect(sess, retryDelay) {
     _genAgentClearReconnecting(sess);
     _genAgentReportVisible(sess, true);
     if (wasRetrying && sess._retryAttempt) {
-      // Don't write [reconnected] text into the terminal - for TUI apps like
-      // opencode it injects text into the alternate screen and corrupts the
-      // layout. Instead send a resize event to force the TUI to fully redraw.
-      if (sess.term && sess.ws.readyState === WebSocket.OPEN) {
-        sess.ws.send(
-          JSON.stringify({ type: 'resize', cols: sess.term.cols, rows: sess.term.rows }),
-        );
-      }
+      // Don't write [reconnected] text into the terminal - it corrupts a TUI's
+      // alternate screen. The replay repaints it; only a changed size needs telling.
+      _ocSendSize(sess);
     }
     _ocFit(sess);
     if (sess._redrawOnOpen && sess.term) {
@@ -1472,6 +1467,7 @@ function _genAgentConnect(sess, retryDelay) {
       const resize = (c) => sess.ws.send(JSON.stringify({ type: 'resize', cols: c, rows }));
       resize(Math.max(cols - 1, 2));
       resize(cols);
+      sess._sentSize = { cols, rows };
     }
     // The wake watch re-attaches a suspended tab every few seconds; it must not take focus.
     if (!sess._resumeId) sess.term && sess.term.focus();
@@ -1537,6 +1533,7 @@ function _genAgentConnect(sess, retryDelay) {
         const resize = (c) => sess.ws.send(JSON.stringify({ type: 'resize', cols: c, rows }));
         resize(Math.max(cols - 1, 2));
         resize(cols);
+        sess._sentSize = { cols, rows };
       }
     } else if (msg.type === 'notready') {
       // Transient: PTY not spawned yet, or reaped while we held its id. Do NOT
@@ -1569,11 +1566,8 @@ function _genAgentConnect(sess, retryDelay) {
       if (sess._awaitingWake && sess.term) {
         sess.term.reset();
         // The woken agent was spawned at the default size, not this terminal's.
-        if (sess.ws && sess.ws.readyState === WebSocket.OPEN) {
-          sess.ws.send(
-            JSON.stringify({ type: 'resize', cols: sess.term.cols, rows: sess.term.rows }),
-          );
-        }
+        sess._sentSize = null;
+        _ocSendSize(sess);
       }
       sess._awaitingWake = false;
       const overlay = sess.container && sess.container.querySelector('.oc-restart-overlay');

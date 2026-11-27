@@ -110,10 +110,27 @@ function _ocSpawnTerm(sess) {
   });
 }
 
+// Every real size change makes the agent repaint its whole screen and leave a ghost copy, so a
+// resize frame goes out only when the size differs from the last one sent for this session.
+function _ocSendSize(sess) {
+  if (!sess.term || !sess.ws || sess.ws.readyState !== WebSocket.OPEN) return false;
+  const { cols, rows } = sess.term;
+  const last = sess._sentSize;
+  if (last && last.cols === cols && last.rows === rows) return false;
+  sess._sentSize = { cols, rows };
+  sess.ws.send(JSON.stringify({ type: 'resize', cols, rows }));
+  return true;
+}
+
+// A pane squeezed below a few rows is mid-layout, not a size worth telling the agent about.
+const _OC_MIN_FIT_HEIGHT = 60;
+
 function _ocFit(sess) {
   if (!sess || !sess.fitAddon || !sess.term || sess._parked) return;
   const el = sess.container;
-  if (!el || !el.offsetParent || el.clientWidth < 40) return;
+  if (!el || !el.offsetParent || el.clientWidth < 40 || el.clientHeight < _OC_MIN_FIT_HEIGHT) {
+    return;
+  }
   const prevCols = sess.term.cols;
   const prevRows = sess.term.rows;
   try {
@@ -132,16 +149,7 @@ function _ocFit(sess) {
   // before the session has produced visible output; after that, let the PTY's
   // resize notification drive the application's normal redraw.
   if (!sess._hasOutput) sess.term.reset();
-  if (sess.ws && sess.ws.readyState === WebSocket.OPEN) {
-    _ocNoteEcho(sess);
-    sess.ws.send(
-      JSON.stringify({
-        type: 'resize',
-        cols: sess.term.cols,
-        rows: sess.term.rows,
-      }),
-    );
-  }
+  if (_ocSendSize(sess)) _ocNoteEcho(sess);
 }
 
 function _ocGuardSize(sess) {

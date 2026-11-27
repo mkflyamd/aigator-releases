@@ -253,6 +253,10 @@ function world({ reducedMotion = false } = {}) {
       _genAgentShowWokenBanner: () => {},
     };
     vm.createContext(ctx);
+    vm.runInContext(
+      fs.readFileSync(path.join(__dirname, '..', 'web', 'static', 'tp-term-helpers.js'), 'utf8'),
+      ctx,
+    );
     vm.runInContext(branch[1], ctx);
     return sent;
   };

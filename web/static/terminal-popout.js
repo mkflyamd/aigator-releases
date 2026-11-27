@@ -37,6 +37,7 @@
   let seq = 0;
   let attempt = 0;
   let ended = false;
+  let sentSize = null;
 
   function send(obj) {
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
@@ -48,7 +49,10 @@
     } catch {
       return;
     }
-    send({ type: 'resize', cols: term.cols, rows: term.rows });
+    const { cols, rows } = term;
+    if (sentSize && sentSize.cols === cols && sentSize.rows === rows) return;
+    sentSize = { cols, rows };
+    send({ type: 'resize', cols, rows });
   }
 
   function connect() {
@@ -83,6 +87,7 @@
         const { cols, rows } = term;
         send({ type: 'resize', cols: Math.max(cols - 1, 2), rows });
         send({ type: 'resize', cols, rows });
+        sentSize = { cols, rows };
       } else if (msg.type === 'exit') {
         ended = true;
         term.write('\r\n\x1b[33m[' + (msg.data || 'Session ended') + ']\x1b[0m\r\n');

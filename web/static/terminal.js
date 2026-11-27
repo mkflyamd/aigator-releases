@@ -382,9 +382,12 @@
     try {
       sess.fitAddon.fit();
       if (sess.ws && sess.ws.readyState === WebSocket.OPEN) {
-        sess.ws.send(
-          JSON.stringify({ type: 'resize', cols: sess.term.cols, rows: sess.term.rows }),
-        );
+        const { cols, rows } = sess.term;
+        const last = sess._sentSize;
+        if (!last || last.cols !== cols || last.rows !== rows) {
+          sess._sentSize = { cols, rows };
+          sess.ws.send(JSON.stringify({ type: 'resize', cols, rows }));
+        }
       }
     } catch (e) {
       /* not visible yet */
