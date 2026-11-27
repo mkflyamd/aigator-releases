@@ -213,12 +213,14 @@ class PtyHost:
         if op == "create":
             if sid in self.sessions:
                 return {"ok": False, "error": "exists"}
+            cols = int(msg.get("cols", 220))
+            rows = int(msg.get("rows", 24))
             try:
                 pty = await loop.run_in_executor(
                     None,
                     lambda: self._spawn(
-                        cols=int(msg.get("cols", 220)),
-                        rows=int(msg.get("rows", 24)),
+                        cols=cols,
+                        rows=rows,
                         command=msg.get("command"),
                         env=msg.get("env"),
                         cwd=msg.get("cwd"),
@@ -227,7 +229,7 @@ class PtyHost:
             except Exception as exc:
                 logger.exception("spawn failed")
                 return {"ok": False, "error": f"spawn failed: {exc}"}
-            self.sessions[sid] = PtySession(pty)
+            self.sessions[sid] = PtySession(pty, initial_size=(cols, rows))
             meta = _clean_meta(msg.get("meta"))
             if meta:
                 self._meta[sid] = meta
@@ -270,14 +272,16 @@ class PtyHost:
         return asyncio.create_task(self._pump(session, wake, data, end, writer))
 
     async def _pump(self, session, wake, data, end, writer) -> None:
+        sent_n = 0
         try:
             while True:
+                sent_n = await self._send_sizes(writer, session, sent_n)
                 await self._send_output(writer, end - len(data), data)
                 wake.clear()
                 finished = session.done
                 data, new_end = session.read_from(end)
                 end = new_end
-                if not data:
+                if not data and not session.sizes_after(sent_n):
                     if finished:
                         break
                     await wake.wait()
@@ -286,6 +290,15 @@ class PtyHost:
             pass
         finally:
             session.unsubscribe(wake)
+
+    async def _send_sizes(self, writer, session, sent_n: int) -> int:
+        """Tell the backend each size the PTY has had, so its mirror can replay the output at them."""
+        for n, off, cols, rows in session.sizes_after(sent_n):
+            await self._send(
+                writer, {"t": "size", "n": n, "off": off, "cols": cols, "rows": rows}
+            )
+            sent_n = n
+        return sent_n
 
     async def _send_output(self, writer, offset: int, data: str) -> None:
         for i in range(0, len(data), _OUT_PIECE_CHARS):

@@ -163,7 +163,7 @@ assert(!/_sentSize/.test(read('tp-generic-agent-terminal.js')));
   };
   let open = true;
   vm.createContext(ctx);
-  vm.runInContext(`let sentSize = null; ${src}`, ctx);
+  vm.runInContext(`let sentSize = null; let replayPane = null; ${src}`, ctx);
   ctx.refit();
   ctx.refit();
   assert.deepStrictEqual(sent, [{ type: 'resize', cols: 100, rows: 30 }]);

@@ -226,7 +226,7 @@ def create_pty_session(
         )
     if entry is None:
         pty = spawn_pty(cols=cols, rows=rows, command=command, env=env, cwd=cwd)
-        entry = PtySession(pty)
+        entry = PtySession(pty, initial_size=(cols, rows))
     entry.meta = dict(meta) if meta else None
     _pty_sessions[session_id] = entry
     return entry
@@ -351,6 +351,36 @@ def _suspended_payload(record: dict) -> dict:
     return payload
 
 
+async def _send_replay(ws: WebSocket, entry: PtySession, data: str, end: int, fresh: bool) -> None:
+    """Send the buffered output a (re)connecting client missed, with the terminal sizes it was
+    drawn at in between, so the client lays it out the way the agent did."""
+    start = end - len(data)
+    events = entry.size_events(start if fresh else start - 1, end)
+    initial = entry.size_at(start) if fresh else None
+    if initial is None and not events:
+        await ws.send_text(json.dumps({"type": "output", "data": data, "seq": end}))
+        return
+    if initial:
+        await ws.send_text(
+            json.dumps({"type": "replay_size", "cols": initial[0], "rows": initial[1]})
+        )
+    pos = start
+    for i, (off, cols, rows) in enumerate(events):
+        if i + 1 < len(events) and events[i + 1][0] == off:
+            continue  # two resizes with no output between: only the last one shows
+        if off > pos:
+            await ws.send_text(
+                json.dumps({"type": "output", "data": data[pos - start : off - start], "seq": off})
+            )
+            pos = off
+        await ws.send_text(json.dumps({"type": "replay_size", "cols": cols, "rows": rows}))
+    if end > pos:
+        await ws.send_text(
+            json.dumps({"type": "output", "data": data[pos - start :], "seq": end})
+        )
+    await ws.send_text(json.dumps({"type": "replay_end"}))
+
+
 @router.websocket("/api/terminal/agent")
 async def agent_terminal_ws(ws: WebSocket, session_id: str, seq: int = 0):
     """Named PTY WebSocket for coding agent sessions.
@@ -418,6 +448,9 @@ async def agent_terminal_ws(ws: WebSocket, session_id: str, seq: int = 0):
             seq = end
         else:
             seq = start_seq if start_seq <= end else 0
+        # A replay of a fresh terminal (or one that must repaint) starts from the oldest
+        # retained output, whatever the client's seq was.
+        fresh = seq <= entry.first_offset
         # The replay begins mid-stream when the buffer has already dropped what
         # this client would have seen next; tell it so it can repaint.
         if seq < entry.first_offset:
@@ -427,17 +460,22 @@ async def agent_terminal_ws(ws: WebSocket, session_id: str, seq: int = 0):
                 entry.unsubscribe(wake)
                 return
         try:
+            replaying = True
             while not stop.is_set():
                 wake.clear()
                 finished = entry.done
                 data, seq = entry.read_from(seq)
                 if data:
                     try:
-                        await ws.send_text(
-                            json.dumps({"type": "output", "data": data, "seq": seq})
-                        )
+                        if replaying:
+                            await _send_replay(ws, entry, data, seq, fresh)
+                        else:
+                            await ws.send_text(
+                                json.dumps({"type": "output", "data": data, "seq": seq})
+                            )
                     except Exception:
                         return
+                replaying = False
                 if finished:
                     break
                 await wake.wait()

@@ -174,6 +174,11 @@ class RemotePty:
         self.start_offset = int(reply["start"])
         self.end_offset = int(reply.get("end", self.start_offset))
         self._sock.settimeout(None)
+        self._size_listener = None
+
+    def set_size_listener(self, listener) -> None:
+        """listener(offset, cols, rows) is called, from read(), for each size the host reports."""
+        self._size_listener = listener
 
     def read(self, n: int = 4096) -> str:
         while True:
@@ -188,6 +193,10 @@ class RemotePty:
             kind = msg.get("t")
             if kind == "out":
                 return msg["data"]
+            if kind == "size":
+                if self._size_listener:
+                    self._size_listener(int(msg["off"]), int(msg["cols"]), int(msg["rows"]))
+                continue
             if kind == "exit":
                 self._alive = False
                 raise EOFError

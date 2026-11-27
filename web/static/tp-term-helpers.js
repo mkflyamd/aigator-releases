@@ -118,6 +118,8 @@ const _OC_MIN_FIT_HEIGHT = 60;
 // be stale (e.g. a reattached shell keeps the size of its previous viewer).
 function _ocFit(sess, force) {
   if (!sess || !sess.fitAddon || !sess.term || sess._parked) return;
+  // The terminal holds a replayed size, not the pane's, until the replay ends.
+  if (sess._replayingSizes && sess._replayWs === sess.ws) return;
   const el = sess.container;
   if (!el || !el.offsetParent || el.clientWidth < 40 || el.clientHeight < _OC_MIN_FIT_HEIGHT) {
     // A hidden panel cannot be measured, but a (re)connect still has to tell the
@@ -166,6 +168,38 @@ function _ocSendSize(sess) {
   ws.send(JSON.stringify({ type: 'resize', cols, rows }));
   _ocMarkSizeSent(sess);
   return true;
+}
+
+// A reconnect replays the buffered output together with the sizes the agent drew it at, so it lays
+// out as drawn. xterm queues writes but resizes at once, so each resize waits behind the output
+// written before it. The pane's own size comes back when the replay ends; nothing goes to the PTY.
+function _ocReplaySize(sess, cols, rows) {
+  const term = sess.term;
+  if (!term || !Number.isInteger(cols) || !Number.isInteger(rows) || cols < 2 || rows < 1) return;
+  if (!sess._replayingSizes || sess._replayWs !== sess.ws) {
+    sess._replayingSizes = true;
+    sess._replayWs = sess.ws;
+    sess._replayPane = { cols: term.cols, rows: term.rows };
+  }
+  term.write('', () => term.resize(cols, rows));
+}
+
+function _ocReplayEnd(sess) {
+  const term = sess.term;
+  if (!term || !sess._replayingSizes) return;
+  term.write('', () => {
+    sess._replayingSizes = false;
+    let size = null;
+    try {
+      size = sess.fitAddon && sess.fitAddon.proposeDimensions();
+    } catch (_) {
+      /* not visible yet */
+    }
+    if (!size || !(size.cols > 0) || !(size.rows > 0)) size = sess._replayPane;
+    if (size.cols !== term.cols || size.rows !== term.rows) term.resize(size.cols, size.rows);
+    // A pane that changed during the replay was not told to the PTY; _ocSendSize skips a size it already sent.
+    _ocSendSize(sess);
+  });
 }
 
 function _ocMarkSizeSent(sess) {

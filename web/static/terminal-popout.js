@@ -45,7 +45,34 @@
     return true;
   }
 
+  // While a reconnect replays, the terminal holds the sizes the output was drawn at (see
+  // tp-term-helpers.js); the pane's own size is kept here and comes back when the replay ends.
+  let replayPane = null;
+
+  function replaySize(cols, rows) {
+    if (!Number.isInteger(cols) || !Number.isInteger(rows) || cols < 2 || rows < 1) return;
+    if (!replayPane) replayPane = { cols: term.cols, rows: term.rows };
+    term.write('', () => term.resize(cols, rows));
+  }
+
+  function replayEnd() {
+    if (!replayPane) return;
+    term.write('', () => {
+      let size = null;
+      try {
+        size = fit.proposeDimensions();
+      } catch {
+        /* not visible yet */
+      }
+      if (!size || !(size.cols > 0) || !(size.rows > 0)) size = replayPane;
+      replayPane = null;
+      if (size.cols !== term.cols || size.rows !== term.rows) term.resize(size.cols, size.rows);
+      refit();
+    });
+  }
+
   function refit() {
+    if (replayPane) return;
     try {
       fit.fit();
     } catch {
@@ -69,6 +96,7 @@
     );
     ws.onopen = () => {
       statusEl.textContent = '';
+      replayPane = null;
       refit();
       term.focus();
     };
@@ -89,6 +117,10 @@
         send({ type: 'resize', cols: Math.max(cols - 1, 2), rows });
         send({ type: 'resize', cols, rows });
         sentSize = { cols, rows };
+      } else if (msg.type === 'replay_size') {
+        replaySize(msg.cols, msg.rows);
+      } else if (msg.type === 'replay_end') {
+        replayEnd();
       } else if (msg.type === 'exit') {
         ended = true;
         term.write('\r\n\x1b[33m[' + (msg.data || 'Session ended') + ']\x1b[0m\r\n');
