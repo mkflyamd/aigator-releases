@@ -100,7 +100,7 @@ async def test_help_with_the_chat_closed_tells_the_user_to_tag_every_message(w):
     helped = w.channel.posted[-1]
     assert helped.startswith("[Gator] This chat is closed, so start each message with `@gator`.\n\nNext:\n")
     assert "• `@gator hi` to open this chat, then skip `@gator`." in helped
-    assert "• `@gator stop all` to stop everything." in helped
+    assert "• `@gator stop all` to stop everything and turn Remote control off." in helped
     assert "30 minutes" not in helped
 
 
@@ -488,7 +488,8 @@ def _deck():
         "help_open": commands.help_text(True),
         "help_closed": commands.help_text(False),
         "already_open": commands.already_open(),
-        "not_sent": commands.not_sent(),
+        "too_long": commands.too_long(),
+        "attachment": commands.attachment_not_sent(),
         "closed": commands.chat_closed_quiet(),
         "bye": commands.chat_closed_bye(),
         "timeout": commands.timed_out(24 * 3600),
@@ -600,7 +601,7 @@ def test_the_deck_texts_match_the_copy():
     assert deck["list"] == (
         "[Gator] 2 sessions running:\n1. budget · Budget · working\n2. other · Other · waiting for you\n\n"
         "Next:\n• `other: your answer` to answer the one that is waiting.\n"
-        "• `status budget` for details.\n• `stop all` to stop everything."
+        "• `status budget` for details.\n• `stop all` to stop everything and turn Remote control off."
     )
     assert "• `budget: your request` to talk to a session." in deck["list_idle"]
     assert deck["no_sessions"] == (
@@ -610,8 +611,8 @@ def test_the_deck_texts_match_the_copy():
     assert deck["which_session"] == (
         "[Gator] Which session?\n\nNext:\n• `budget: your message`\n• `other: your message`\n• `list` to see them all."
     )
-    assert deck["stopped_one"].startswith("[Gator] Stopped 1 session.\n\n")
-    assert deck["stopped_many"].startswith("[Gator] Stopped 3 sessions.\n\n")
+    assert deck["stopped_one"].startswith("[Gator] Stopped 1 session. Remote control is off.\n\n")
+    assert deck["stopped_many"].startswith("[Gator] Stopped 3 sessions. Remote control is off.\n\n")
     assert deck["status"] == (
         f"[Gator - Claude - budget] Working since {commands.clock_time(1000.0)}.\n"
         f"Last activity {commands.clock_time(2000.0)}.\n\n"
@@ -673,7 +674,11 @@ def test_the_timeout_notice_names_the_real_settings_section():
         label = re.findall(r'class="spanel-divider"[^>]*>([^<]+)<', before_toggle)[-1].strip()
     assert commands.SETTINGS_SECTION == label
     assert f"Open AI Gator, then Settings, then {label}, and switch it on." in commands.timed_out(3600)
-    assert f"Settings, then {label}, and switch it off and on" in commands.stopped(1)
+    assert commands.stopped(1) == (
+        "[Gator] Stopped 1 session. Remote control is off.\n\n"
+        "Next:\n• Open AI Gator and turn Remote control on again."
+    )
+    assert commands.stopped(3).splitlines()[0] == "[Gator] Stopped 3 sessions. Remote control is off."
 
 
 async def test_everything_a_whole_session_posts_carries_the_prefix_and_a_next_block(w):
@@ -892,7 +897,7 @@ def test_the_adapters_send_a_multi_line_croc_message_intact(tmp_path, chat):
         assert content == html.escape(text, quote=False).replace("\n", "<br>")
         lines = content.split("<br>")
         assert lines[0] == f"[Gator] {commands.CROC} Gator on watch. This chat is open, so you can skip `@gator`."
-        assert "• `stop all` to stop everything." in lines
+        assert "• `stop all` to stop everything and turn Remote control off." in lines
         assert lines[-1] == QUIET_NOTE
     else:
         assert sent[1]["text"] == text
@@ -944,7 +949,13 @@ def test_the_cap_and_the_greeting_line_are_named_constants():
     assert commands.UNTAGGED_MAX_CHARS == 1500
     assert commands.EVERYTHING_GOES_TO_AGENT in commands.greeting()
     assert commands.EVERYTHING_GOES_TO_AGENT in commands.help_text(True)
-    assert commands.not_sent() == commands.system_reply(commands.NOT_SENT_BODY, [commands.NOT_SENT_OPTION])
+    assert commands.too_long() == (
+        "[Gator] That message is too long to run from this chat, so it was not sent.\n\n"
+        "Next:\n• Start it with `@gator` to send it anyway.\n• Or shorten it and send it again."
+    )
+    assert commands.attachment_not_sent() == (
+        "[Gator] Attachments are not sent from this chat.\n\nNext:\n• Describe what you need in text, and send that."
+    )
 
 
 async def test_an_oversize_untagged_message_is_not_sent_and_gets_one_plain_line(w):
@@ -952,21 +963,21 @@ async def test_an_oversize_untagged_message_is_not_sent_and_gets_one_plain_line(
     await say(w, LONG)
     assert len(LONG.strip()) > CAP
     assert w.host.delivered == []
-    assert w.channel.posted == [commands.greeting(), commands.not_sent()]
+    assert w.channel.posted == [commands.greeting(), commands.too_long()]
 
 
 async def test_a_message_of_exactly_the_cap_is_still_sent(w):
     await opened(w)
     await say(w, "x" * CAP)
     assert w.host.delivered == [("pty-1", "x" * CAP)]
-    assert commands.not_sent() not in w.channel.posted
+    assert commands.too_long() not in w.channel.posted
 
 
 async def test_the_same_long_text_sent_with_the_tag_is_sent(w):
     await opened(w)
     await say(w, f"@gator {LONG}")
     assert w.host.delivered == [("pty-1", LONG.strip())]
-    assert commands.not_sent() not in w.channel.posted
+    assert commands.too_long() not in w.channel.posted
 
 
 async def test_the_long_tagged_message_is_sent_even_with_the_chat_closed(w):
@@ -979,7 +990,7 @@ async def test_an_untagged_message_with_an_attachment_is_not_sent_and_gets_the_p
     await opened(w)
     await w.feed(_inbound(w, "see the attached file", attachments=True))
     assert w.host.delivered == []
-    assert w.channel.posted == [commands.greeting(), commands.not_sent()]
+    assert w.channel.posted == [commands.greeting(), commands.attachment_not_sent()]
 
 
 async def test_a_tagged_message_with_an_attachment_is_sent_as_text(w):
@@ -1000,12 +1011,14 @@ async def test_the_plain_line_is_posted_once_per_window_not_once_per_message(w):
     for _ in range(4):
         await say(w, LONG)
     await w.feed(_inbound(w, "pasted", attachments=True))
-    assert w.channel.posted == [commands.greeting(), commands.not_sent()]
+    await w.feed(_inbound(w, "pasted again", attachments=True))
+    assert w.channel.posted == [commands.greeting(), commands.too_long(), commands.attachment_not_sent()]
     await say(w, "bye")
     await say(w, "@gator hi")
     await say(w, LONG)
     await say(w, LONG)
-    assert w.channel.posted.count(commands.not_sent()) == 2
+    assert w.channel.posted.count(commands.too_long()) == 2
+    assert w.channel.posted.count(commands.attachment_not_sent()) == 1
     assert w.host.delivered == []
 
 
@@ -1058,7 +1071,7 @@ async def test_on_each_channel_an_oversize_untagged_message_is_held_back_but_the
     await _history(runner, chat, big, hi)
     assert host.delivered == []
     assert len(chat.posts()) == 2
-    assert "was not sent to the agent" in str(chat.posts()[1])
+    assert "too long to run from this chat" in str(chat.posts()[1])
     tagged = chat.say(3, f"@gator {LONG}", clock.now)
     await _history(runner, chat, tagged, big, hi)
     assert host.delivered == [("pty-1", LONG.strip())]
@@ -1073,6 +1086,7 @@ async def test_on_each_channel_an_attachment_is_held_back_once_per_window(tmp_pa
     await _history(runner, chat, two, one, hi)
     assert host.delivered == []
     assert len(chat.posts()) == 2
+    assert "Attachments are not sent from this chat" in str(chat.posts()[1])
 
 
 async def test_on_each_channel_with_the_gate_off_the_message_is_still_held_back_and_nothing_is_posted(

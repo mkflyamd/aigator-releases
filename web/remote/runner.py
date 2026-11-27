@@ -57,7 +57,7 @@ class RemoteRunner:
         self._autosend_noticed = False
         self._window = ChatWindow(channel.name, state, clock)
         self._already_open = False
-        self._not_sent_noticed = False
+        self._not_sent_noticed: set[str] = set()
         service.subscribe(self._on_event)
 
     def sync_enabled(self, enabled: bool) -> None:
@@ -122,7 +122,7 @@ class RemoteRunner:
             if command.kind == "open":
                 self._already_open = self._window.open(message.created_at)
                 if not self._already_open:
-                    self._not_sent_noticed = False
+                    self._not_sent_noticed.clear()
             elif command.kind not in ("stop_all", "bye"):
                 self._window.extend()
             await self._run(command)
@@ -139,19 +139,22 @@ class RemoteRunner:
         text = message.text.strip()
         if not text or LEGACY_CODE_RE.match(message.text):
             return None
-        if len(text) > commands.UNTAGGED_MAX_CHARS or message.attachments:
-            await self._note_not_sent(message)
+        if message.attachments:
+            await self._note_not_sent(message, "attachment", commands.attachment_not_sent)
+            return None
+        if len(text) > commands.UNTAGGED_MAX_CHARS:
+            await self._note_not_sent(message, "too long", commands.too_long)
             return None
         return commands.parse(f"@gator {text}")
 
-    async def _note_not_sent(self, message: InboundMessage) -> None:
-        """One plain line per window, however many messages are held back."""
-        if self._not_sent_noticed or not self._guard.armed:
+    async def _note_not_sent(self, message: InboundMessage, reason: str, reply: Callable[[], str]) -> None:
+        """One plain line per reason per window, however many messages are held back."""
+        if reason in self._not_sent_noticed or not self._guard.armed:
             return
         if self._clock() - message.created_at > limit(self._stale):
             return
-        self._not_sent_noticed = True
-        await self._post(commands.not_sent())
+        self._not_sent_noticed.add(reason)
+        await self._post(reply())
 
     async def _close_if_expired(self) -> None:
         if self._window.expired():

@@ -20,8 +20,10 @@ REPLY_MAX_CHARS = 3500
 LEAD_MAX_CHARS = 200
 UNTAGGED_MAX_CHARS = 1500
 EVERYTHING_GOES_TO_AGENT = "Everything you type here goes to the agent."
-NOT_SENT_BODY = "That message was not sent to the agent because it is long or has an attachment."
-NOT_SENT_OPTION = "`@gator <request>` sends a request on purpose."
+TOO_LONG_BODY = "That message is too long to run from this chat, so it was not sent."
+TOO_LONG_OPTIONS = ["Start it with `@gator` to send it anyway.", "Or shorten it and send it again."]
+ATTACHMENT_BODY = "Attachments are not sent from this chat."
+ATTACHMENT_OPTION = "Describe what you need in text, and send that."
 SYSTEM_PREFIX = "[Gator"
 SETTINGS_SECTION = "Remote control"
 CROC = "\U0001F40A"
@@ -116,7 +118,7 @@ def _tip_options(chat_open: bool) -> list[str]:
         first,
         f"`{tag}list` to see what is running.",
         f"`{tag}status` to see what each session is doing.",
-        f"`{tag}stop all` to stop everything.",
+        f"`{tag}stop all` to stop everything and turn Remote control off.",
         last,
     ]
 
@@ -130,8 +132,12 @@ def greeting() -> str:
     )
 
 
-def not_sent() -> str:
-    return system_reply(NOT_SENT_BODY, [NOT_SENT_OPTION])
+def too_long() -> str:
+    return system_reply(TOO_LONG_BODY, TOO_LONG_OPTIONS)
+
+
+def attachment_not_sent() -> str:
+    return system_reply(ATTACHMENT_BODY, [ATTACHMENT_OPTION])
 
 
 def help_text(chat_open: bool = True) -> str:
@@ -189,10 +195,9 @@ def error_reply(text: str) -> str:
 
 
 def stopped(count: int) -> str:
-    """`stop all` also switches remote control off, so the way back is Settings, not a new request."""
-    body = f"Stopped {count} session{'' if count == 1 else 's'}."
     return system_reply(
-        body, [f"Open AI Gator, then Settings, then {SETTINGS_SECTION}, and switch it off and on to start again."]
+        f"Stopped {count} session{'' if count == 1 else 's'}. Remote control is off.",
+        ["Open AI Gator and turn Remote control on again."],
     )
 
 
@@ -225,7 +230,7 @@ def session_list(rows: list[tuple[str, str, str]]) -> str:
         if waiting
         else f"`{rows[0][0]}: your request` to talk to a session."
     )
-    return system_reply("\n".join([head, *lines]), [first, f"`status {rows[0][0]}` for details.", "`stop all` to stop everything."])
+    return system_reply("\n".join([head, *lines]), [first, f"`status {rows[0][0]}` for details.", "`stop all` to stop everything and turn Remote control off."])
 
 
 def which_session(names: list[str]) -> str:
@@ -235,7 +240,7 @@ def which_session(names: list[str]) -> str:
 
 
 def which_to_stop(names: list[str]) -> str:
-    options = [f"`stop {name}`" for name in names[:CHOICES_SHOWN]] + ["`stop all` to stop everything."]
+    options = [f"`stop {name}`" for name in names[:CHOICES_SHOWN]] + ["`stop all` to stop everything and turn Remote control off."]
     return system_reply("Which session should stop?", options)
 
 
