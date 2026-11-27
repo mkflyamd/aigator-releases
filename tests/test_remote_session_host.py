@@ -176,4 +176,6 @@ def test_last_assistant_text_reads_the_newest_reply_and_previews_stay_flat(tmp_p
     )
     rec = {"agent": "claude", "path": str(transcript)}
     assert agent_sessions.last_assistant_text(rec) == "new\nanswer"
-    assert agent_sessions._transcript_messages(rec)[-1] == ("assistant", "new answer")
+    newest = json.loads(transcript.read_text(encoding="utf-8").splitlines()[-1])
+    assert agent_sessions._claude_message(newest) == ("assistant", "new answer")
+    assert agent_sessions._claude_message(newest, flat=False) == ("assistant", "new\nanswer")
