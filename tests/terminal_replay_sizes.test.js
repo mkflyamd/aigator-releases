@@ -90,7 +90,10 @@ async function replayWithSizes(term, sess) {
   reference.resize(PANE.cols, PANE.rows);
   await flush(reference);
   const expected = screenText(reference);
-  assert(expected.includes('Claude Code') && expected.includes('Cerebrating'), 'the transcript drew');
+  assert(
+    expected.includes('Claude Code') && expected.includes('Cerebrating'),
+    'the transcript drew',
+  );
 
   // without the sizes, the same bytes laid out at the pane's width come out different
   {
