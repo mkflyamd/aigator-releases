@@ -107,7 +107,7 @@ VS Code uses one Ctrl+Shift+P widget for everything: commands (`>`), files (no p
 
 In VS Code, every action has a string ID (`workbench.action.foo`, `editor.action.bar`). Keybindings, menus, palette entries, programmatic callers all route through `executeCommand(id, args)`. `when`-clauses (`editorFocus`, `inDebugMode`, `resourceExtname == .ts`) gate visibility/enablement declaratively.
 
-**Gator today**: keyboard shortcuts are hardcoded in `app.js` (Ctrl+O at line 537, Ctrl+K ~2815, Ctrl+J via index.html 704, Shift+{ via 701). No central registry, no way to enumerate or rebind.
+**Gator today**: keyboard shortcuts are hardcoded in `app.js` (Ctrl+O at line 537, Ctrl+K ~2815, Ctrl+J via index.html 704, Shift+? via 701). No central registry, no way to enumerate or rebind.
 
 **Proposal**
 
