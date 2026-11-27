@@ -84,6 +84,12 @@
     return [a.project_id, agentState(a)].filter(Boolean).join(' · ');
   }
 
+  // The project is only worth saying when agents from more than one project are open.
+  function pickerText(a) {
+    const mixed = state.agents.some((o) => o.project_id !== state.agents[0].project_id);
+    return mixed && a.project_id ? `${agentName(a)} · ${a.project_id}` : agentName(a);
+  }
+
   // A pair's ends are stored when the pair is made; show the live name while the agent is open.
   function endName(end) {
     const open = state.agents.find((a) => a.id === end.id);
@@ -284,9 +290,16 @@
       const fill = (select, skip) => {
         const keep = select.value;
         select.replaceChildren();
-        state.agents
-          .filter((a) => a.id !== skip)
-          .forEach((a) => select.append(el('option', { value: a.id, textContent: agentName(a) })));
+        const left = state.agents.filter((a) => a.id !== skip);
+        ['Running', 'Sleeping'].forEach((group) => {
+          const members = left.filter((a) => agentState(a) === group);
+          if (!members.length) return;
+          const box = el('optgroup', { label: group });
+          members.forEach((a) =>
+            box.append(el('option', { value: a.id, textContent: pickerText(a) })),
+          );
+          select.append(box);
+        });
         if (keep && [...select.options].some((o) => o.value === keep)) select.value = keep;
       };
       const a = pick('relay-link-a', 'First agent');
