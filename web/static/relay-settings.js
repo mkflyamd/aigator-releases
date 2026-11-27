@@ -19,7 +19,10 @@
     const send = () =>
       fetch(url, {
         method,
-        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': window.__CSRF_TOKEN__ || '' },
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': window.__CSRF_TOKEN__ || '',
+        },
         body: body === undefined ? undefined : JSON.stringify(body),
       });
     let res = await send();
@@ -47,15 +50,24 @@
 
   function agentLabel(a) {
     const name = a.name || a.id;
-    const same = state.agents.filter((o) => (o.name || o.id) === name && o.project_id === a.project_id);
+    const same = state.agents.filter(
+      (o) => (o.name || o.id) === name && o.project_id === a.project_id,
+    );
     const tail = same.length > 1 ? ` #${a.id.slice(4, 8)}` : '';
     return `${name}${tail}${a.project_id ? ` (${a.project_id})` : ''}`;
   }
 
   function switchRow() {
     const locked = !state.admin_allows;
-    const box = el('input', { type: 'checkbox', id: 'relay-enabled', checked: state.enabled && !locked, disabled: locked });
-    box.addEventListener('change', () => act('POST', '/api/relay/settings', { enabled: box.checked }));
+    const box = el('input', {
+      type: 'checkbox',
+      id: 'relay-enabled',
+      checked: state.enabled && !locked,
+      disabled: locked,
+    });
+    box.addEventListener('change', () =>
+      act('POST', '/api/relay/settings', { enabled: box.checked }),
+    );
     const sub = locked
       ? 'Your administrator has turned agent messaging off.'
       : 'Agents in the same project can message each other. You can link agents across projects below.';
@@ -74,7 +86,12 @@
   function agentsBlock() {
     const block = el('div', { className: 'srow-info' });
     block.append(el('div', { className: 'srow-label', textContent: 'Agents' }));
-    block.append(el('div', { className: 'srow-sub', textContent: 'Tick an agent to stop other agents messaging it.' }));
+    block.append(
+      el('div', {
+        className: 'srow-sub',
+        textContent: 'Tick an agent to stop other agents messaging it.',
+      }),
+    );
     if (!state.agents.length) {
       block.append(el('div', { className: 'srow-sub', textContent: 'No Claude agents yet.' }));
     }
@@ -101,19 +118,27 @@
     block.append(
       el('div', {
         className: 'srow-sub',
-        textContent: 'A link lets two agents message each other, even across projects, until it expires.',
+        textContent:
+          'A link lets two agents message each other, even across projects, until it expires.',
       }),
     );
     state.links.forEach((l) => {
       const stop = el('button', { className: 'btn-secondary', textContent: 'Stop' });
-      stop.addEventListener('click', () => act('DELETE', `/api/relay/links/${encodeURIComponent(l.id)}`));
-      const until = new Date(l.expires_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+      stop.addEventListener('click', () =>
+        act('DELETE', `/api/relay/links/${encodeURIComponent(l.id)}`),
+      );
+      const until = new Date(l.expires_at).toLocaleTimeString([], {
+        hour: 'numeric',
+        minute: '2-digit',
+      });
       const note = l.paused ? ' - paused' : '';
       block.append(
         el(
           'div',
           { className: 'srow-sub saved-permission-item' },
-          el('span', { textContent: `${agentLabel(l.a)} and ${agentLabel(l.b)}, until ${until}${note}` }),
+          el('span', {
+            textContent: `${agentLabel(l.a)} and ${agentLabel(l.b)}, until ${until}${note}`,
+          }),
           stop,
         ),
       );
@@ -121,22 +146,39 @@
     if (state.agents.length >= 2 && state.admin_allows && state.enabled) {
       const pick = (id) => {
         const select = el('select', { id });
-        state.agents.forEach((a) => select.append(el('option', { value: a.id, textContent: agentLabel(a) })));
+        state.agents.forEach((a) =>
+          select.append(el('option', { value: a.id, textContent: agentLabel(a) })),
+        );
         return select;
       };
       const a = pick('relay-link-a');
       const b = pick('relay-link-b');
       b.selectedIndex = 1;
       const hours = el('select', { id: 'relay-link-hours' });
-      LINK_HOURS.forEach((h) => hours.append(el('option', { value: String(h), textContent: `${h} h`, selected: h === 8 })));
+      LINK_HOURS.forEach((h) =>
+        hours.append(el('option', { value: String(h), textContent: `${h} h`, selected: h === 8 })),
+      );
       const make = el('button', { className: 'btn-secondary', textContent: 'Link them' });
       make.addEventListener('click', () =>
         act('POST', '/api/relay/links', { a: a.value, b: b.value, hours: Number(hours.value) }),
       );
-      block.append(el('div', { className: 'srow-sub saved-permission-item' }, a, el('span', { textContent: 'and' }), b, hours, make));
+      block.append(
+        el(
+          'div',
+          { className: 'srow-sub saved-permission-item' },
+          a,
+          el('span', { textContent: 'and' }),
+          b,
+          hours,
+          make,
+        ),
+      );
     }
     if (state.links.length) {
-      const stopAll = el('button', { className: 'btn-secondary', textContent: 'Stop all agent messaging' });
+      const stopAll = el('button', {
+        className: 'btn-secondary',
+        textContent: 'Stop all agent messaging',
+      });
       stopAll.addEventListener('click', () => act('POST', '/api/relay/stop-all'));
       block.append(el('div', { className: 'srow-sub' }, stopAll));
     }

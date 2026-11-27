@@ -1771,10 +1771,12 @@ function _genAgentWokenDismiss(sess, immediate) {
   _genAgentWokenMarkSeen(sess, w.at);
   const finish = () => {
     w.el.remove();
-    if (sess.container) sess.container.classList.remove('gtp-term--woken', 'gtp-term--woken-leaving');
+    if (sess.container)
+      sess.container.classList.remove('gtp-term--woken', 'gtp-term--woken-leaving');
     _ocFit(sess);
   };
-  const reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const reduced =
+    window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   if (immediate || reduced || !sess.container) {
     finish();
     return;
