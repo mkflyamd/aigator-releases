@@ -49,6 +49,12 @@ def list_connections():
 
 @router.post("/api/config/mcp")
 def add_connection(req: MCPConnectionRequest):
+    return save_connection(req)
+
+
+def save_connection(req: MCPConnectionRequest) -> dict:
+    """Validate and save an MCP connection. Shared by the route and the chat
+    connect_mcp_server tool. Raises HTTPException(400) on invalid input."""
     logger.info("save transport=%s name=%r url=%r command=%r args=%r",
                 req.transport, req.name, req.url, req.command, req.args)
     if req.transport == "stdio":
