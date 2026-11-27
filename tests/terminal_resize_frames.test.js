@@ -98,54 +98,50 @@ vm.runInContext(read('tp-term-helpers.js'), helperCtx);
   assert.strictEqual(sent.length, 2);
 }
 
-// a reconnect at the size the PTY already has sends nothing; at a new size it sends one frame
+// a new socket always gets the size, even when it equals what the previous socket was sent: the
+// PTY behind a reconnect may hold a stale size from its last viewer
 {
-  const gen = read('tp-generic-agent-terminal.js');
-  const block = cut(
-    gen,
-    /if \(wasRetrying && sess\._retryAttempt\) \{[\s\S]*?\n    \}\n    _ocFit/,
-    'reconnect block',
-  ).replace(/_ocFit$/, '');
-  const run = (sess) => {
-    const ctx = { sess, wasRetrying: true, _ocSendSize: helperCtx._ocSendSize };
-    vm.createContext(ctx);
-    vm.runInContext(block, ctx);
-  };
   const { sess, sent } = fakeSession();
-  sess._retryAttempt = 1;
-  sess._sentSize = { cols: 100, rows: 30 };
-  run(sess);
-  assert.deepStrictEqual(sent, [], 'reconnect at the same size sends no frame');
-  sess.term.cols = 90;
-  run(sess);
-  assert.deepStrictEqual(sent, [{ type: 'resize', cols: 90, rows: 30 }]);
+  assert.strictEqual(helperCtx._ocSendSize(sess), true);
+  assert.strictEqual(helperCtx._ocSendSize(sess), false);
+  sess.ws = { readyState: 1, send: (m) => sent.push(JSON.parse(m)) };
+  assert.strictEqual(helperCtx._ocSendSize(sess), true, 'first frame on a new socket');
+  assert.strictEqual(helperCtx._ocSendSize(sess), false, 'then quiet at the same size');
+  assert.strictEqual(sent.length, 2);
+  // a forced fit on a reconnect still goes out once, and a plain same-size refit after it is quiet
+  sess.ws = { readyState: 1, send: (m) => sent.push(JSON.parse(m)) };
+  helperCtx._ocFit(sess, true);
+  helperCtx._ocFit(sess);
+  assert.strictEqual(sent.length, 3);
 }
 
-// the dock shell terminal sends only a changed size
+// the dock shell terminal sends the size once per socket and again only when it changes
 {
-  const src = cut(read('terminal.js'), /function _fit\(sess\) \{[\s\S]*?\n  \}/, 'dock _fit');
+  const src = cut(
+    read('terminal.js'),
+    /function _syncPtySize\(sess\) \{[\s\S]*?\n  \}/,
+    'dock sync',
+  );
   const { sess, sent } = fakeSession();
   const ctx = { WebSocket: { OPEN: 1 } };
   vm.createContext(ctx);
   vm.runInContext(src, ctx);
-  ctx._fit(sess);
-  ctx._fit(sess);
-  ctx._fit(sess);
+  ctx._syncPtySize(sess);
+  ctx._syncPtySize(sess);
+  ctx._syncPtySize(sess);
   assert.deepStrictEqual(sent, [{ type: 'resize', cols: 100, rows: 30 }], 'first frame only');
   sess.term.rows = 20;
-  ctx._fit(sess);
+  ctx._syncPtySize(sess);
   assert.strictEqual(sent.length, 2);
+  sess.ws = { readyState: 1, send: (m) => sent.push(JSON.parse(m)) };
+  ctx._syncPtySize(sess);
+  assert.strictEqual(sent.length, 3, 'a reconnect at the same size still sends one frame');
 }
 
-// every new dock shell connection spawns a fresh shell, so it forgets what was sent and sends first
-{
-  const src = cut(
-    read('terminal.js'),
-    /function _connect\(sess, retryDelay\) \{[\s\S]*?sess\.ws\.onopen/,
-    'dock _connect',
-  );
-  assert(/sess\.ws = new WebSocket\(url\);\s*\/\/[^\n]*\n\s*sess\._sentSize = null;/.test(src));
-}
+// the dock does not keep a second size tracker next to the per-socket one
+assert(!/_sentSize/.test(read('terminal.js')));
+assert(!/_sentSize/.test(read('tp-term-helpers.js')));
+assert(!/_sentSize/.test(read('tp-generic-agent-terminal.js')));
 
 // the pop-out window sends only a changed size, and still sends the first one
 {
@@ -192,9 +188,9 @@ vm.runInContext(read('tp-term-helpers.js'), helperCtx);
   );
   const { sess, sent } = fakeSession();
   sess._redrawOnOpen = true;
-  sess._sentSize = { cols: 100, rows: 30 };
+  Object.assign(sess, { _sentWs: sess.ws, _sentCols: 100, _sentRows: 30 });
   vm.createContext(sess);
-  vm.runInContext(block, Object.assign(sess, { sess }));
+  vm.runInContext(block, Object.assign(sess, { sess, _ocMarkSizeSent: helperCtx._ocMarkSizeSent }));
   assert.deepStrictEqual(
     sent,
     [

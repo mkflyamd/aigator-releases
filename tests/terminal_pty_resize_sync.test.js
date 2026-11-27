@@ -44,6 +44,7 @@ function makeContext() {
     open() {}
     onData() {}
     attachCustomKeyEventHandler() {}
+    onTitleChange() {}
     focus() {}
     reset() {}
     write() {}
@@ -63,8 +64,12 @@ function makeContext() {
     className: '',
     classList: { add() {}, remove() {} },
     addEventListener() {},
+    setAttribute() {},
+    removeAttribute() {},
+    remove() {},
     appendChild() {},
     querySelector: () => null,
+    getClientRects: () => [{}],
   });
 
   const ctx = {
@@ -75,9 +80,11 @@ function makeContext() {
       observe() {}
     },
     location: { protocol: 'http:', host: 'localhost' },
-    document: { createElement: makeEl, getElementById: () => null },
+    window: {},
+    document: { createElement: makeEl, getElementById: () => null, addEventListener() {} },
     requestAnimationFrame: (cb) => cb(),
     setTimeout: (cb) => timers.push(cb),
+    setInterval() {},
     clearTimeout: () => {},
     console,
   };
@@ -182,6 +189,53 @@ const resizes = (ws) => ws.sent.filter((m) => m.type === 'resize');
     [{ type: 'resize', cols: 84, rows: 43 }],
     'scheduled reconnect while hidden sends exactly one resize with the last fitted size',
   );
+}
+
+// 4. Reconnect cases. A reconnect always sends exactly one frame on the new socket, at the same
+// size (the PTY behind it may hold a stale size) or at a size that changed while it was down; a
+// refit at an unchanged size on an already-synced socket sends nothing more.
+{
+  const connectAndDrop = () => {
+    const w = makeContext();
+    const sess = { tabId: 't', ptySessionId: 'pty-5', agent: 'terminal', container: w.makeEl() };
+    w.ctx.sess = sess;
+    vm.runInContext('_ocSpawnTerm(sess); _ocFit(sess); _genAgentConnect(sess);', w.ctx);
+    w.sockets[0].open();
+    return { ...w, sess };
+  };
+  const reconnect = (w) => {
+    w.sockets[w.sockets.length - 1].readyState = 3;
+    vm.runInContext('_genAgentConnect(sess);', w.ctx);
+    w.sockets[w.sockets.length - 1].open();
+    return w.sockets[w.sockets.length - 1];
+  };
+
+  // same size: one frame on the new socket, none from refits afterwards
+  {
+    const w = connectAndDrop();
+    const second = reconnect(w);
+    assert.deepStrictEqual(resizes(second), [{ type: 'resize', cols: 84, rows: 43 }]);
+    vm.runInContext('_ocFit(sess); _ocFit(sess);', w.ctx);
+    assert.strictEqual(resizes(second).length, 1, 'same-size refits on a synced socket are quiet');
+  }
+
+  // size changed while down: the reconnect carries the new size, once
+  {
+    const w = connectAndDrop();
+    w.laidOut.cols = 100;
+    w.laidOut.rows = 30;
+    const second = reconnect(w);
+    assert.deepStrictEqual(resizes(second), [{ type: 'resize', cols: 100, rows: 30 }]);
+  }
+
+  // stale PTY size behind a reattach: the first frame on every new socket still goes out
+  {
+    const w = connectAndDrop();
+    for (let i = 0; i < 3; i += 1) {
+      const next = reconnect(w);
+      assert.deepStrictEqual(resizes(next), [{ type: 'resize', cols: 84, rows: 43 }]);
+    }
+  }
 }
 
 console.log('terminal_pty_resize_sync: ok');

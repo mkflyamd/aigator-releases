@@ -188,6 +188,10 @@ function makeEnv({
         return 1;
       }
     },
+    ResizeObserver: class {
+      observe() {}
+      disconnect() {}
+    },
     MutationObserver: class {
       constructor(cb) {
         this.cb = cb;
