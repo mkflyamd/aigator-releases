@@ -70,6 +70,15 @@ vm.runInContext(read('tp-term-helpers.js'), helperCtx);
   assert.deepStrictEqual(hidden.sent, [], 'a hidden pane sends nothing');
 }
 
+// a pane squeezed and then restored to the size it had sends no frame at all
+{
+  const { sess, sent } = fakeSession({ fitTo: () => ({ cols: 100, rows: 30 }), height: 30 });
+  helperCtx._ocFit(sess);
+  sess.container.clientHeight = 600;
+  helperCtx._ocFit(sess);
+  assert.deepStrictEqual(sent, []);
+}
+
 // a fit that lands on the size the terminal already has sends nothing
 {
   const { sess, sent } = fakeSession({ fitTo: () => ({ cols: 100, rows: 30 }) });
@@ -128,6 +137,16 @@ vm.runInContext(read('tp-term-helpers.js'), helperCtx);
   assert.strictEqual(sent.length, 2);
 }
 
+// every new dock shell connection spawns a fresh shell, so it forgets what was sent and sends first
+{
+  const src = cut(
+    read('terminal.js'),
+    /function _connect\(sess, retryDelay\) \{[\s\S]*?sess\.ws\.onopen/,
+    'dock _connect',
+  );
+  assert(/sess\.ws = new WebSocket\(url\);\s*\/\/[^\n]*\n\s*sess\._sentSize = null;/.test(src));
+}
+
 // the pop-out window sends only a changed size, and still sends the first one
 {
   const src = cut(
@@ -140,8 +159,13 @@ vm.runInContext(read('tp-term-helpers.js'), helperCtx);
   const ctx = {
     term,
     fit: { fit: () => {} },
-    send: (m) => sent.push(JSON.parse(JSON.stringify(m))),
+    send: (m) => {
+      if (!open) return false;
+      sent.push(JSON.parse(JSON.stringify(m)));
+      return true;
+    },
   };
+  let open = true;
   vm.createContext(ctx);
   vm.runInContext(`let sentSize = null; ${src}`, ctx);
   ctx.refit();
@@ -150,6 +174,35 @@ vm.runInContext(read('tp-term-helpers.js'), helperCtx);
   term.cols = 120;
   ctx.refit();
   assert.strictEqual(sent.length, 2);
+  // a refit while the socket is closed is not remembered as sent, so the reconnect sends it
+  open = false;
+  term.cols = 140;
+  ctx.refit();
+  open = true;
+  ctx.refit();
+  assert.deepStrictEqual(sent[2], { type: 'resize', cols: 140, rows: 30 });
+}
+
+// returning from a pop-out still nudges cols-1 then cols, since the PTY may hold the pop-out's size
+{
+  const block = cut(
+    read('tp-generic-agent-terminal.js'),
+    /if \(sess\._redrawOnOpen && sess\.term\) \{[\s\S]*?\n    \}\n/,
+    'pop-out return block',
+  );
+  const { sess, sent } = fakeSession();
+  sess._redrawOnOpen = true;
+  sess._sentSize = { cols: 100, rows: 30 };
+  vm.createContext(sess);
+  vm.runInContext(block, Object.assign(sess, { sess }));
+  assert.deepStrictEqual(
+    sent,
+    [
+      { type: 'resize', cols: 99, rows: 30 },
+      { type: 'resize', cols: 100, rows: 30 },
+    ],
+    'the nudge goes out even though the size matches the last frame',
+  );
 }
 
 // the repaint nudges stay: truncated replays and returns from a pop-out still send cols-1, cols

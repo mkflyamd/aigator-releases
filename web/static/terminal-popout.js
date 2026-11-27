@@ -40,7 +40,9 @@
   let sentSize = null;
 
   function send(obj) {
-    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    ws.send(JSON.stringify(obj));
+    return true;
   }
 
   function refit() {
@@ -51,8 +53,7 @@
     }
     const { cols, rows } = term;
     if (sentSize && sentSize.cols === cols && sentSize.rows === rows) return;
-    sentSize = { cols, rows };
-    send({ type: 'resize', cols, rows });
+    if (send({ type: 'resize', cols, rows })) sentSize = { cols, rows };
   }
 
   function connect() {

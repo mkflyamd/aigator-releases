@@ -486,6 +486,8 @@
     const delay = retryDelay || 0;
 
     sess.ws = new WebSocket(url);
+    // Each connection spawns a fresh shell at the default size, so it needs the first frame.
+    sess._sentSize = null;
     sess.ws.onopen = () => {
       sess._retryDelay = 0;
       _fit(sess);
