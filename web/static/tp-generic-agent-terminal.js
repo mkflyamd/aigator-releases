@@ -1649,7 +1649,7 @@ function _genAgentShowWokenBanner(sess, msg) {
   if (!sess.container) return;
   const at = Number(msg.at) || Date.now();
   // A reconnect replays the same wake; only a new wake is news.
-  if (sess._wokenLastAt === at) return;
+  if (sess._wokenLastAt === at || _genAgentWokenSeenAt(sess) === String(at)) return;
   sess._wokenLastAt = at;
   const by = msg.by || String(msg.data || '').replace(/^woken by /i, '') || 'another agent';
   const existing = sess._woken;
@@ -1708,6 +1708,26 @@ function _genAgentShowWokenBanner(sess, msg) {
   _genAgentSetWokenMark(sess, by);
 }
 
+// The backend replays its wake notice on every connect, so a reload would show the strip again.
+// Remember which wake the user has already had on screen long enough to read.
+function _genAgentWokenSeenKey(sess) {
+  return 'gtp-woken-seen:' + sess.ptySessionId;
+}
+
+function _genAgentWokenSeenAt(sess) {
+  try {
+    return sessionStorage.getItem(_genAgentWokenSeenKey(sess));
+  } catch (_) {
+    return null;
+  }
+}
+
+function _genAgentWokenMarkSeen(sess, at) {
+  try {
+    sessionStorage.setItem(_genAgentWokenSeenKey(sess), String(at));
+  } catch (_) {}
+}
+
 function _genAgentWokenRenderText(w) {
   const time = new Date(w.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
   const lead = document.createElement('span');
@@ -1748,6 +1768,7 @@ function _genAgentWokenDismiss(sess, immediate) {
   clearTimeout(w.timer);
   if (w.io) w.io.disconnect();
   sess._woken = null;
+  _genAgentWokenMarkSeen(sess, w.at);
   const finish = () => {
     w.el.remove();
     if (sess.container) sess.container.classList.remove('gtp-term--woken', 'gtp-term--woken-leaving');
