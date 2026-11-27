@@ -158,6 +158,15 @@ def test_the_self_chat_switch_does_not_turn_agent_messaging_back_on_in_a_damaged
     assert not settings.user_allows_messaging()
 
 
+def test_the_self_chat_switch_keeps_opt_outs_from_a_partly_valid_file(world):
+    path = settings.settings_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('{"self_chat_autosend": "yes", "opted_out": ["pty:a"]}')
+    settings.set_user_self_chat_autosend(True)
+    assert settings.opted_out("pty:a")
+    assert not settings.user_allows_messaging()
+
+
 def test_the_self_chat_switch_and_the_messaging_switch_do_not_disturb_each_other(world):
     settings.set_user_self_chat_autosend(True)
     settings.set_user_messaging(False)

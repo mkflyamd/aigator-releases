@@ -103,7 +103,7 @@ def set_user_self_chat_autosend(enabled: bool) -> None:
     with _lock:
         data = _load()
         if data is None:
-            data = {"agent_messaging": False}
+            data = {**_salvage(), "agent_messaging": False}
         data["self_chat_autosend"] = bool(enabled)
         _save(data)
 
