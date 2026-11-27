@@ -378,6 +378,7 @@ function _genAgentRenderTabs(tabId) {
     tab.appendChild(_genAgentTabIcon(sess.agent || state.agent));
     if (window.agentHistory) window.agentHistory.applyTabState(tab, sess, Date.now());
     tab.appendChild(label);
+    _genAgentDecorateWokenTab(tab, sess);
     tab.appendChild(kebab);
     tab.appendChild(x);
     tab.addEventListener('click', (e) => {
@@ -612,6 +613,7 @@ function _genAgentActivateSession(tabId, ptyId) {
     if (s && s.container) s.container.style.display = id === ptyId ? '' : 'none';
   });
   _genAgentUpdateActiveTab(tabId);
+  _genAgentClearWokenMark(tabId, ptyId);
   state.order.forEach((id) => _genAgentReportVisible(state.sessions[id]));
   const sess = state.sessions[ptyId];
   if (sess) sess._viewedAt = Date.now();
@@ -1306,6 +1308,7 @@ function _genAgentDetachSession(tabId, ptyId) {
   try {
     sess.ws && sess.ws.close();
   } catch (_) {}
+  _genAgentWokenDrop(sess);
   try {
     sess.term && sess.term.dispose();
   } catch (_) {}
@@ -1637,19 +1640,196 @@ function _genAgentShowWakeFailure(sess, failed) {
   }
 }
 
+const GEN_AGENT_WOKEN_MS = 8000;
+const GEN_AGENT_WOKEN_FADE_MS = 150;
+
+// A read-only status line saying why this agent started typing. The message itself is already
+// in the terminal under its "from another agent" prefix, so it is never repeated here.
 function _genAgentShowWokenBanner(sess, msg) {
-  if (!sess.container || sess.container.querySelector('.gtp-woken-banner')) return;
-  const banner = document.createElement('div');
-  banner.className = 'gtp-woken-banner';
-  banner.setAttribute('role', 'status');
-  const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  banner.textContent =
-    (msg.data || 'woken by another agent') +
-    ' at ' +
-    time +
-    (msg.preview ? ': ' + msg.preview : '');
-  banner.addEventListener('click', () => banner.remove());
-  sess.container.appendChild(banner);
+  if (!sess.container) return;
+  const at = Number(msg.at) || Date.now();
+  // A reconnect replays the same wake; only a new wake is news.
+  if (sess._wokenLastAt === at || _genAgentWokenSeenAt(sess) === String(at)) return;
+  sess._wokenLastAt = at;
+  const by = msg.by || String(msg.data || '').replace(/^woken by /i, '') || 'another agent';
+  const existing = sess._woken;
+  if (existing && existing.by === by) {
+    existing.count += 1;
+    existing.at = at;
+    _genAgentWokenRenderText(existing);
+    _genAgentWokenArm(sess);
+    return;
+  }
+  if (existing) _genAgentWokenDrop(sess);
+
+  const el = document.createElement('div');
+  el.className = 'gtp-woken-strip';
+  el.setAttribute('role', 'status');
+  const dot = document.createElement('span');
+  dot.className = 'gtp-woken-dot';
+  dot.setAttribute('aria-hidden', 'true');
+  const text = document.createElement('span');
+  text.className = 'gtp-woken-text';
+  const dismiss = document.createElement('button');
+  dismiss.type = 'button';
+  dismiss.className = 'gtp-woken-dismiss';
+  dismiss.textContent = 'Dismiss';
+  el.append(dot, text, dismiss);
+
+  const w = { el, text, by, at, count: 1, timer: null, visible: false, held: false, io: null };
+  sess._woken = w;
+  dismiss.addEventListener('click', () => _genAgentWokenDismiss(sess, true));
+  const hold = (held) => {
+    w.held = held;
+    _genAgentWokenArm(sess);
+  };
+  el.addEventListener('mouseenter', () => hold(true));
+  el.addEventListener('mouseleave', () => hold(el.matches(':focus-within')));
+  el.addEventListener('focusin', () => hold(true));
+  el.addEventListener('focusout', () => hold(el.matches(':hover')));
+  _genAgentWokenRenderText(w);
+
+  sess.container.classList.add('gtp-term--woken');
+  sess.container.appendChild(el);
+  _ocFit(sess);
+
+  // The timer starts only once the strip is actually on screen, so a wake that lands on a
+  // background tab is still there when the user switches to it.
+  if (typeof IntersectionObserver === 'function') {
+    w.io = new IntersectionObserver((entries) => {
+      w.visible = entries[entries.length - 1].isIntersecting;
+      _genAgentWokenArm(sess);
+    });
+    w.io.observe(el);
+  } else {
+    w.visible = true;
+    _genAgentWokenArm(sess);
+  }
+  _genAgentSetWokenMark(sess, by);
+}
+
+// The backend replays its wake notice on every connect, so a reload would show the strip again.
+// Remember which wake the user has already had on screen long enough to read.
+function _genAgentWokenSeenKey(sess) {
+  return 'gtp-woken-seen:' + sess.ptySessionId;
+}
+
+function _genAgentWokenSeenAt(sess) {
+  try {
+    return sessionStorage.getItem(_genAgentWokenSeenKey(sess));
+  } catch (_) {
+    return null;
+  }
+}
+
+function _genAgentWokenMarkSeen(sess, at) {
+  try {
+    sessionStorage.setItem(_genAgentWokenSeenKey(sess), String(at));
+  } catch (_) {}
+}
+
+function _genAgentWokenRenderText(w) {
+  const time = new Date(w.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  const lead = document.createElement('span');
+  lead.className = 'gtp-woken-lead';
+  lead.textContent = 'Woken by ';
+  const name = document.createElement('span');
+  name.className = 'gtp-woken-name';
+  name.textContent = w.by;
+  name.title = w.by;
+  const tail = document.createElement('span');
+  tail.className = 'gtp-woken-tail';
+  tail.textContent = ' · ' + time + (w.count > 1 ? ' (' + w.count + ' messages)' : '');
+  w.text.replaceChildren(lead, name, tail);
+}
+
+function _genAgentWokenArm(sess) {
+  const w = sess._woken;
+  if (!w) return;
+  clearTimeout(w.timer);
+  w.timer = null;
+  if (!w.visible || w.held) return;
+  w.timer = setTimeout(() => _genAgentWokenDismiss(sess, false), GEN_AGENT_WOKEN_MS);
+}
+
+function _genAgentWokenDrop(sess) {
+  const w = sess._woken;
+  if (!w) return;
+  clearTimeout(w.timer);
+  if (w.io) w.io.disconnect();
+  w.el.remove();
+  sess._woken = null;
+  if (sess.container) sess.container.classList.remove('gtp-term--woken', 'gtp-term--woken-leaving');
+}
+
+function _genAgentWokenDismiss(sess, immediate) {
+  const w = sess._woken;
+  if (!w) return;
+  clearTimeout(w.timer);
+  if (w.io) w.io.disconnect();
+  sess._woken = null;
+  _genAgentWokenMarkSeen(sess, w.at);
+  const finish = () => {
+    w.el.remove();
+    if (sess.container)
+      sess.container.classList.remove('gtp-term--woken', 'gtp-term--woken-leaving');
+    _ocFit(sess);
+  };
+  const reduced =
+    window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (immediate || reduced || !sess.container) {
+    finish();
+    return;
+  }
+  sess.container.classList.add('gtp-term--woken-leaving');
+  setTimeout(finish, GEN_AGENT_WOKEN_FADE_MS * 2);
+}
+
+// The only thing visible when the woken tab is not selected: a dot plus the word "Woken"
+// (tooltip and screen-reader text), cleared when the user selects the tab.
+function _genAgentDecorateWokenTab(tabEl, sess) {
+  tabEl.querySelectorAll('.gtp-tab-woken').forEach((n) => n.remove());
+  if (!sess._wokenMark) return;
+  const mark = document.createElement('span');
+  mark.className = 'gtp-tab-woken';
+  const dot = document.createElement('span');
+  dot.className = 'gtp-tab-woken-dot';
+  dot.setAttribute('aria-hidden', 'true');
+  const word = document.createElement('span');
+  word.className = 'visually-hidden';
+  word.textContent = 'Woken';
+  mark.append(dot, word);
+  const label = tabEl.querySelector('.gtp-tab-label');
+  if (label) label.after(mark);
+  if (tabEl.dataset.titleBeforeWoken === undefined) tabEl.dataset.titleBeforeWoken = tabEl.title;
+  tabEl.title = 'Woken by ' + sess._wokenMark;
+}
+
+function _genAgentSetWokenMark(sess, by) {
+  const state = _genAgentTerminals[_caSessionKey(sess.tabId)];
+  if (!state || state.activeId === sess.ptySessionId) return;
+  sess._wokenMark = by;
+  const tabEl = document.querySelector(
+    '#' + _genAgentHeaderTabStripId() + ' .gtp-tab[data-sid="' + sess.ptySessionId + '"]',
+  );
+  if (tabEl) _genAgentDecorateWokenTab(tabEl, sess);
+}
+
+function _genAgentClearWokenMark(tabId, ptyId) {
+  const state = _genAgentTerminals[_caSessionKey(tabId)];
+  const sess = state && state.sessions[ptyId];
+  if (!sess || !sess._wokenMark) return;
+  sess._wokenMark = null;
+  const tabEl = document.querySelector(
+    '#' + _genAgentHeaderTabStripId() + ' .gtp-tab[data-sid="' + ptyId + '"]',
+  );
+  if (tabEl) {
+    tabEl.querySelectorAll('.gtp-tab-woken').forEach((n) => n.remove());
+    const before = tabEl.dataset.titleBeforeWoken;
+    delete tabEl.dataset.titleBeforeWoken;
+    if (before) tabEl.title = before;
+    else tabEl.removeAttribute('title');
+  }
 }
 
 function _genAgentShowRestartOverlay(sess, reason) {

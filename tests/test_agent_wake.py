@@ -621,6 +621,43 @@ def test_working_asking_and_unreported_agents_are_not_ready(monkeypatch):
     assert agent_wake._ready_now(pid, FakePty("\x1b[?2004h")) == "unknown"
 
 
+def test_an_agent_whose_user_is_typing_is_not_ready_until_they_stop(monkeypatch):
+    pid = pty_id()
+    monkeypatch.setattr(agent_state, "read_states", lambda ids: {pid: {"state": "idle", "at": 1.0}})
+    typing = FakePty("\x1b[?2004h")
+    typing.last_user_input = time.time() - 2
+    assert agent_wake._ready_now(pid, typing) == "typing"
+    typing.last_user_input = time.time() - agent_wake.USER_TYPING_SECONDS - 1
+    assert agent_wake._ready_now(pid, typing) == "ready"
+    typing.last_user_input = 0.0
+    assert agent_wake._ready_now(pid, typing) == "ready"
+
+
+async def test_a_message_is_not_pasted_while_the_user_is_typing(monkeypatch):
+    async def fake_pty(pid):
+        return FakePty()
+
+    monkeypatch.setattr(agent_wake, "_pty", fake_pty)
+    monkeypatch.setattr(agent_wake, "_ready_now", lambda pid, entry: "typing")
+    monkeypatch.setattr(agent_wake, "READY_POLL_SECONDS", 0.01)
+    with pytest.raises(agent_wake.WakeRefused) as exc:
+        await agent_wake._wait_ready(pty_id(), 0.05)
+    assert exc.value.code == "not_ready" and "typing" in exc.value.reason
+
+
+def test_a_new_terminal_has_had_no_user_input():
+    from pty_session import PtySession
+
+    class Idle:
+        def isalive(self):
+            return False
+
+        def read(self, n):
+            return ""
+
+    assert PtySession(Idle()).last_user_input == 0.0
+
+
 async def test_waiting_gives_up_on_an_agent_stuck_at_a_permission_prompt(monkeypatch):
     async def fake_pty(pid):
         return FakePty()
@@ -684,3 +721,206 @@ async def test_a_terminal_that_refuses_the_write_is_a_failure(monkeypatch):
     monkeypatch.setattr(terminal, "write_pty_session", lambda pid, data: False)
     with pytest.raises(agent_wake.WakeRefused):
         await agent_wake._type_message(pty_id(), "hello")
+
+
+# --- the relay switches also gate this door ------------------------------------
+
+
+@pytest.fixture
+def policy_file(world, tmp_path, monkeypatch):
+    from sandbox import policy as pol
+
+    path = tmp_path / "sandbox-policy.json"
+    monkeypatch.setattr(pol, "policy_path", lambda: path)
+    monkeypatch.setattr(pol, "_is_posix", lambda: False)
+    pol._reset_cache()
+    return path
+
+
+async def test_an_admin_lock_stops_a_wake(world, policy_file):
+    policy_file.write_text('{"agent_messaging": "deny"}')
+    suspend(world)
+    with pytest.raises(agent_wake.WakeRefused) as exc:
+        await send()
+    assert exc.value.code == "admin_denied"
+    assert world["resumed"] == [] and world["typed"] == []
+
+
+async def test_a_broken_admin_policy_stops_a_wake(world, policy_file):
+    policy_file.write_text("not json")
+    suspend(world)
+    with pytest.raises(agent_wake.WakeRefused) as exc:
+        await send()
+    assert exc.value.code == "admin_denied"
+
+
+async def test_the_user_switch_stops_a_wake(world, policy_file):
+    from relay import settings
+
+    settings.set_user_messaging(False)
+    suspend(world)
+    with pytest.raises(agent_wake.WakeRefused) as exc:
+        await send()
+    assert exc.value.code == "switched_off"
+    assert world["resumed"] == [] and world["typed"] == []
+
+
+async def test_an_agent_that_opted_out_is_not_woken_or_messaged(world, policy_file):
+    from relay import settings
+
+    sleeping = suspend(world)
+    settings.set_opted_out(f"pty:{sleeping}", True)
+    with pytest.raises(agent_wake.WakeRefused) as exc:
+        await send()
+    assert exc.value.code == "opted_out"
+    assert world["resumed"] == [] and world["typed"] == []
+
+    settings.set_opted_out(f"pty:{sleeping}", False)
+    live = go_live(world, session="sess-live", title="Live one")
+    settings.set_opted_out(f"pty:{live}", True)
+    with pytest.raises(agent_wake.WakeRefused) as exc:
+        await send(target="Live one")
+    assert exc.value.code == "opted_out"
+    assert world["typed"] == []
+
+
+# --- the relay's terminal adapter ----------------------------------------------
+
+
+@pytest.fixture
+def relay_world(world, policy_file):
+    from relay.core import Relay
+    from relay.terminal_adapter import TerminalAdapter
+
+    world["relay"] = Relay(audit=lambda line: None)
+    world["relay"].register(TerminalAdapter())
+    return world
+
+
+def sender_endpoint(project="demo", name="Turn issues"):
+    from relay.model import pty_endpoint
+
+    return pty_endpoint(pty_id(), name, project)
+
+
+async def test_the_relay_wakes_a_suspended_agent_and_types_the_message(relay_world):
+    from relay.model import META_KEY
+
+    sleeping = suspend(relay_world)
+    task = await relay_world["relay"].submit(sender_endpoint(), "Design head", "please look at PR 12")
+    assert task["status"]["state"] == "TASK_STATE_WORKING"
+    assert task["metadata"][META_KEY]["woke"] is True
+    assert task["metadata"][META_KEY]["target"]["id"] == f"pty:{sleeping}"
+    assert [pid for pid, _ in relay_world["typed"]] == [sleeping]
+    assert relay_world["typed"][0][1].startswith("[Message from Turn issues via AI Gator")
+
+
+async def test_the_relay_messages_a_live_agent_without_waking_it(relay_world):
+    from relay.model import META_KEY
+
+    live = go_live(relay_world)
+    task = await relay_world["relay"].submit(sender_endpoint(), "Design head", "hello")
+    assert task["status"]["state"] == "TASK_STATE_WORKING"
+    assert task["metadata"][META_KEY]["woke"] is False
+    assert relay_world["resumed"] == [] and [pid for pid, _ in relay_world["typed"]] == [live]
+
+
+async def test_the_relay_finds_an_agent_by_its_endpoint_id(relay_world):
+    sleeping = suspend(relay_world, title="Same name")
+    suspend(relay_world, title="Same name", session="sess-twin")
+    ambiguous = await relay_world["relay"].submit(sender_endpoint(), "Same name", "hi")
+    assert ambiguous["metadata"]["ai.gator.relay"]["code"] == "ambiguous"
+    chosen = await relay_world["relay"].submit(sender_endpoint(), f"pty:{sleeping}", "hi")
+    assert chosen["status"]["state"] == "TASK_STATE_WORKING"
+
+
+async def test_the_relay_does_not_reach_into_another_project_without_a_link(relay_world):
+    suspend(relay_world, project="elsewhere")
+    task = await relay_world["relay"].submit(sender_endpoint(), "Design head", "hi")
+    assert task["metadata"]["ai.gator.relay"]["code"] == "not_found"
+    assert relay_world["resumed"] == [] and relay_world["typed"] == []
+
+
+async def test_a_link_lets_two_agents_in_different_projects_message_each_other(relay_world):
+    from relay.model import pty_endpoint
+
+    sleeping = suspend(relay_world, project="elsewhere")
+    sender = sender_endpoint()
+    link = relay_world["relay"].create_link(sender, pty_endpoint(sleeping, "Design head", "elsewhere"))
+    task = await relay_world["relay"].submit(sender, "Design head", "hi")
+    assert task["status"]["state"] == "TASK_STATE_WORKING"
+    assert task["contextId"] == f"link:{link.id}"
+    assert [pid for pid, _ in relay_world["typed"]] == [sleeping]
+
+
+async def test_the_relay_keeps_the_wake_door_s_own_safeguards(relay_world):
+    from relay.model import META_KEY, pty_endpoint
+
+    target = go_live(relay_world)
+    mine = pty_endpoint(target, "Design head", "demo")
+    task = await relay_world["relay"].submit(mine, "Design head", "talking to myself")
+    assert task["metadata"][META_KEY]["code"] == "invalid"
+    relay_world["ready_ok"] = False
+    busy = await relay_world["relay"].submit(sender_endpoint(), "Design head", "are you there")
+    assert busy["metadata"][META_KEY]["code"] == "not_ready"
+    assert busy["status"]["state"] == "TASK_STATE_FAILED"
+    assert relay_world["typed"] == []
+
+
+async def test_the_relay_core_limit_not_the_wake_limit_applies_on_a_link(relay_world):
+    from relay.model import pty_endpoint
+
+    live = go_live(relay_world)
+    sender = sender_endpoint()
+    link = relay_world["relay"].create_link(sender, pty_endpoint(live, "Design head", "demo"))
+    for i in range(agent_wake.SENDER_LIMIT + 3):
+        task = await relay_world["relay"].send_on_link(link.id, sender, f"message {i}")
+        assert task["status"]["state"] == "TASK_STATE_WORKING", i
+
+
+def test_only_what_a_person_types_counts_as_user_input(monkeypatch):
+    import threading
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from pty_session import PtySession
+
+    class BlockingPty:
+        def __init__(self):
+            self.stop = threading.Event()
+            self.written = []
+
+        def isalive(self):
+            return not self.stop.is_set()
+
+        def read(self, n):
+            self.stop.wait(5)
+            return ""
+
+        def write(self, data):
+            self.written.append(data)
+
+        def close(self):
+            self.stop.set()
+
+    fake = BlockingPty()
+    session = PtySession(fake)
+    pid = pty_id()
+    monkeypatch.setitem(terminal._pty_sessions, pid, session)
+    try:
+        assert terminal.write_pty_session(pid, "injected by gator")
+        assert session.last_user_input == 0.0
+        app = FastAPI()
+        app.include_router(terminal.router)
+        before = time.time()
+        with TestClient(app).websocket_connect(f"/api/terminal/agent?session_id={pid}") as ws:
+            ws.send_text(json.dumps({"type": "input", "data": "hello"}))
+            for _ in range(100):
+                if session.last_user_input:
+                    break
+                time.sleep(0.02)
+        assert session.last_user_input >= before
+        assert fake.written == ["injected by gator", "hello"]
+    finally:
+        fake.stop.set()
