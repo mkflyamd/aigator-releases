@@ -10,6 +10,7 @@ from relay import settings
 from remote import slack_channel, teams_channel
 from remote.channel import AutosendOff, ChannelRefused
 from remote.guard import Guard
+from remote.master import Master
 from remote.runner import RemoteRunner
 from remote.service import RemoteService
 from remote.slack_channel import SlackSelfDM
@@ -116,6 +117,7 @@ def _runner(chat, tmp_path):
     host = FakeHost()
     service = RemoteService(host, default_project=lambda: BUDGET, clock=clock)
     runner = RemoteRunner(chat.adapter(state), service, Guard(clock=clock), state, clock=clock)
+    Master(state, clock).arm()
     runner.sync_enabled(True)
     return runner, host, clock
 
@@ -163,6 +165,7 @@ async def test_a_reply_to_a_command_is_not_sent_to_a_chat_that_is_not_the_own_ch
     state = State(tmp_path / "s.json")
     service = RemoteService(FakeHost(), default_project=lambda: BUDGET, clock=clock)
     runner = RemoteRunner(chat.adapter(state, own=False), service, Guard(clock=clock), state, clock=clock)
+    Master(state, clock).arm()
     runner.sync_enabled(True)
     await runner.announce_online()
     assert chat.posts() == []
@@ -178,6 +181,7 @@ async def test_the_switch_being_off_is_logged_once_per_arming_period(tmp_path, c
     state = State(tmp_path / "s.json")
     service = RemoteService(FakeHost(), default_project=lambda: BUDGET, clock=clock)
     runner = RemoteRunner(OffChannel(state), service, Guard(clock=clock), state, clock=clock)
+    Master(state, clock).arm()
     runner.sync_enabled(True)
     with caplog.at_level(logging.INFO, logger="remote.runner"):
         for _ in range(3):

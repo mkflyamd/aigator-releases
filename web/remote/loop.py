@@ -12,12 +12,13 @@ from typing import Callable
 
 from config import load_config
 from remote.guard import Guard
+from remote.master import Master
 from remote.runner import RemoteRunner
 from remote import settings
 from remote.service import RemoteError, RemoteService
 from remote.session_host import LocalPtyHost, Project
 from remote.slack_channel import SlackSelfDM
-from remote.state import State
+from remote.state import State, shared
 from remote.teams_channel import TeamsSelfChat
 
 _log = logging.getLogger(__name__)
@@ -64,6 +65,7 @@ class RemoteLoop:
         self._last_poll: float | None = None
         self._need_online = True
         self._poll_failing = False
+        self._was_live = False
         self._restored = False
         self._restore_failing = False
 
@@ -88,11 +90,16 @@ class RemoteLoop:
         self._runner.sync_enabled(enabled)
         if not enabled:
             self._need_online = True
+            self._was_live = False
             self._last_poll = None
             return
         if not await self._restore():
             return
         await self._runner.tick()
+        live = self._runner.live
+        if live and not self._was_live:
+            self._need_online = True
+        self._was_live = live
         now = self._clock()
         if self._last_poll is not None and now - self._last_poll < self._poll_every:
             return
@@ -106,7 +113,7 @@ class RemoteLoop:
             self._need_online = True
             return
         self._poll_failing = False
-        if self._need_online:
+        if self._need_online and live:
             self._need_online = False
             await self._runner.announce_online()
 
@@ -116,13 +123,13 @@ def _build_loop(channel, state: State, enabled: Callable[[], bool]) -> RemoteLoo
         LocalPtyHost(), default_project=default_project, idle_seconds=settings.idle_seconds, channel=channel.name
     )
     runner = RemoteRunner(
-        channel, service, Guard(armed_max_seconds=settings.armed_max_seconds), state, stale_seconds=settings.stale_seconds
+        channel, service, Guard(), state, stale_seconds=settings.stale_seconds, master=Master(state)
     )
     return RemoteLoop(runner, enabled)
 
 
 def build_loops(state: State | None = None) -> list[RemoteLoop]:
-    state = state or State()
+    state = state or shared()
     return [
         _build_loop(TeamsSelfChat(state=state), state, teams_switch_on),
         _build_loop(SlackSelfDM(state=state), state, slack_switch_on),

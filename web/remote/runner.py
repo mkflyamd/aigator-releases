@@ -13,7 +13,9 @@ from typing import Callable
 
 from remote import commands
 from remote.channel import AutosendOff, Channel, InboundMessage
+from remote import master as master_window
 from remote.guard import Guard, limit
+from remote.master import Master
 from remote.service import Event, RemoteError, RemoteService, Session
 from remote.state import State
 
@@ -42,6 +44,7 @@ class RemoteRunner:
         state: State,
         clock: Callable[[], float] = time.time,
         stale_seconds: float | Callable[[], float] = STALE_SECONDS,
+        master: Master | None = None,
     ):
         self._channel = channel
         self._service = service
@@ -49,26 +52,33 @@ class RemoteRunner:
         self._state = state
         self._clock = clock
         self._stale = stale_seconds
+        self._master = master or Master(state, clock)
         self._enabled = False
         self._timeout_noticed = False
         self._autosend_noticed = False
         service.subscribe(self._on_event)
 
     def sync_enabled(self, enabled: bool) -> None:
-        """Arms on the off-to-on edge only, so the cap stays in force until the switch is turned
-        off and on again. `stop all` is stored, so it also holds across a backend restart."""
+        """The channel joins the shared window while its switch is on. `stop all` is stored, so it
+        holds across a backend restart until the switch is turned off and on again."""
         channel = self._channel.name
         if enabled and not self._enabled:
-            if not self._state.disarmed(channel):
-                self._guard.arm()
-            self._timeout_noticed = False
             self._autosend_noticed = False
-        elif not enabled:
-            if self._state.disarmed(channel):
-                self._state.set_disarmed(channel, False)
-            if self._enabled:
-                self._guard.disarm()
+        elif not enabled and self._state.disarmed(channel):
+            self._state.set_disarmed(channel, False)
         self._enabled = enabled
+        self._sync_guard()
+
+    def _sync_guard(self) -> None:
+        if self._enabled and self._master.active() and not self._state.disarmed(self._channel.name):
+            self._guard.arm()
+        else:
+            self._guard.disarm()
+
+    @property
+    def live(self) -> bool:
+        """Armed now: the switch is on, the window is open, and `stop all` has not been sent."""
+        return self._enabled and self._guard.armed and self._master.active()
 
     async def restore(self) -> None:
         await self._service.restore()
@@ -106,7 +116,7 @@ class RemoteRunner:
             if self._is_own(message):
                 continue
             command = commands.parse(message.text)
-            if command is None or not self._guard.armed:
+            if command is None or not self.live:
                 continue
             if self._clock() - message.created_at > limit(self._stale):
                 skipped += 1
@@ -217,15 +227,42 @@ class RemoteRunner:
         await self._post(commands.agent_reply(AGENT_LABEL, session.short, text))
 
     async def _on_event(self, event: Event) -> None:
+        if not self.live:
+            return
         text = event.text.strip() or _EVENT_TEXT.get(event.kind, event.kind)
         await self._ack(event.session, text)
 
     async def tick(self) -> None:
-        if self._guard.expired():
-            self._guard.disarm()
-            if not self._timeout_noticed:
-                self._timeout_noticed = True
-                await self._post(commands.system_reply("Remote control timed out. Re-arm it in Settings."))
+        self._sync_guard()
+        if self._master.expired():
+            await self._expire()
+        elif self.live:
+            await self._warn_if_due()
+        await self._service.tick()
+
+    async def _expire(self) -> None:
+        """Stops every session the way `stop all` does, then says so once. A session that will
+        not stop is retried on the next tick and the notice waits until none are left."""
+        deadline = self._master.record()["deadline"]
+        channel = self._channel.name
+        if self._state.channel_value(channel, "expiry_handled") == deadline:
             return
-        if self._guard.armed:
-            await self._service.tick()
+        stopped, failed = await self._service.stop_all()
+        if failed:
+            _log.warning("Remote control expired but %s would not stop; retrying", ", ".join(s.short for s in failed))
+            return
+        self._guard.stop_all()
+        self._state.set_channel_value(channel, "expiry_handled", deadline)
+        await self._post(commands.system_reply("Remote control timed out. Re-arm it in Settings."))
+
+    async def _warn_if_due(self) -> None:
+        deadline = self._master.record()["deadline"]
+        channel = self._channel.name
+        if self._master.remaining() > master_window.WARN_SECONDS:
+            return
+        if self._state.channel_value(channel, "warned") == deadline:
+            return
+        self._state.set_channel_value(channel, "warned", deadline)
+        await self._post(
+            commands.system_reply("Remote control turns off in 15 minutes. Turn it back on in Settings if you need more time.")
+        )

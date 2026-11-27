@@ -2,6 +2,7 @@ import pytest
 
 from remote import loop as remote_loop
 from remote.guard import Guard
+from remote.master import Master
 from remote.loop import RemoteLoop
 from remote.runner import RemoteRunner
 from remote.service import RemoteService
@@ -30,7 +31,8 @@ class Setup:
         self.channel = PollingChannel(self.state)
         self.guard = Guard(clock=self.clock)
         service = RemoteService(FakeHost(), default_project=lambda: Project("p", "P", "C:/p"), clock=self.clock)
-        self.runner = RemoteRunner(self.channel, service, self.guard, self.state, clock=self.clock)
+        self.master = Master(self.state, self.clock)
+        self.runner = RemoteRunner(self.channel, service, self.guard, self.state, clock=self.clock, master=self.master)
         self.enabled = False
         self.loop = RemoteLoop(self.runner, lambda: self.enabled, clock=self.clock, poll_every=10.0)
 
@@ -48,6 +50,7 @@ async def test_disabled_does_nothing(s):
 
 
 async def test_enabling_arms_polls_and_says_online_once(s):
+    s.master.arm()
     s.enabled = True
     await s.loop.step()
     await s.loop.step()
@@ -56,6 +59,7 @@ async def test_enabling_arms_polls_and_says_online_once(s):
 
 
 async def test_polls_only_every_poll_interval(s):
+    s.master.arm()
     s.enabled = True
     await s.loop.step()
     await s.loop.step()
@@ -66,6 +70,7 @@ async def test_polls_only_every_poll_interval(s):
 
 
 async def test_recovery_from_a_failed_poll_says_online_again(s):
+    s.master.arm()
     s.enabled = True
     await s.loop.step()
     s.channel.fail = True
@@ -81,6 +86,7 @@ async def test_recovery_from_a_failed_poll_says_online_again(s):
 
 
 async def test_turning_the_switch_off_disarms(s):
+    s.master.arm()
     s.enabled = True
     await s.loop.step()
     s.enabled = False

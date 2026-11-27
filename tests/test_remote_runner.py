@@ -2,6 +2,7 @@ import pytest
 
 from remote.channel import ChannelRefused, InboundMessage
 from remote.guard import Guard
+from remote.master import Master
 from remote.runner import RemoteRunner
 from remote.service import RemoteService
 from remote.session_host import HostError, HostSession, Project
@@ -101,6 +102,7 @@ class World:
         self.clock = Clock()
         self.host = FakeHost()
         self.state = State(tmp_path / "state.json")
+        Master(self.state, self.clock).arm()
         self.build()
 
     def build(self):
@@ -305,16 +307,6 @@ async def test_rearming_after_stop_all_needs_the_switch_toggled(w):
     w.runner.sync_enabled(False)
     w.runner.sync_enabled(True)
     assert w.guard.armed is True
-
-
-async def test_remote_control_disarms_at_the_absolute_cap_and_says_so_once(w):
-    await baselined(w)
-    w.clock.now += 24 * 3600 + 1
-    await w.runner.tick()
-    await w.runner.tick()
-    assert w.channel.posted == ["[Gator] Remote control timed out. Re-arm it in Settings."]
-    await w.feed(w.msg(101, "@gator late", age=0))
-    assert w.host.delivered == []
 
 
 async def test_announce_online(w):

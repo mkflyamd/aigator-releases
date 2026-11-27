@@ -11,7 +11,6 @@ DEFAULT_PROJECT_KEY = "remote_default_project"
 LIMITS = {
     "remote_session_idle_hours": (8.0, 1.0, 72.0, "Session idle limit (hours)", 3600.0),
     "remote_stale_minutes": (15.0, 1.0, 120.0, "Stale message limit (minutes)", 60.0),
-    "remote_armed_max_hours": (24.0, 1.0, 168.0, "Remote control time limit (hours)", 3600.0),
 }
 KEYS = frozenset((*SWITCH_KEYS, DEFAULT_PROJECT_KEY, *LIMITS))
 
@@ -30,10 +29,6 @@ def idle_seconds() -> float:
 
 def stale_seconds() -> float:
     return _seconds("remote_stale_minutes")
-
-
-def armed_max_seconds() -> float:
-    return _seconds("remote_armed_max_hours")
 
 
 def validate(body: dict) -> str | None:

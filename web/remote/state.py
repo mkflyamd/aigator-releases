@@ -11,6 +11,7 @@ from pathlib import Path
 _log = logging.getLogger(__name__)
 
 POSTED_IDS_KEEP = 200
+MASTER_KEY = "master"
 
 
 def default_path() -> Path:
@@ -18,6 +19,8 @@ def default_path() -> Path:
 
 
 class State:
+    """One JSON file. A process shares one instance (`shared()`), so the lock covers every writer."""
+
     def __init__(self, path: Path | None = None):
         self._path = path
         self._lock = threading.Lock()
@@ -55,6 +58,30 @@ class State:
             self._channel(data, channel)["last_id"] = message_id
             self._save(data)
 
+    def channel_value(self, channel: str, key: str):
+        with self._lock:
+            return (self._load().get(channel) or {}).get(key)
+
+    def set_channel_value(self, channel: str, key: str, value) -> None:
+        with self._lock:
+            data = self._load()
+            self._channel(data, channel)[key] = value
+            self._save(data)
+
+    def master(self) -> dict | None:
+        with self._lock:
+            value = self._load().get(MASTER_KEY)
+        return value if isinstance(value, dict) else None
+
+    def set_master(self, record: dict | None) -> None:
+        with self._lock:
+            data = self._load()
+            if record is None:
+                data.pop(MASTER_KEY, None)
+            else:
+                data[MASTER_KEY] = record
+            self._save(data)
+
     def disarmed(self, channel: str) -> bool:
         with self._lock:
             return (self._load().get(channel) or {}).get("disarmed") is True
@@ -78,3 +105,16 @@ class State:
         with self._lock:
             ids = (self._load().get(channel) or {}).get("posted_ids", [])
         return message_id in ids
+
+
+_shared: State | None = None
+_shared_lock = threading.Lock()
+
+
+def shared() -> State:
+    """The process-wide state: the loops and the routes must write through the same lock."""
+    global _shared
+    with _shared_lock:
+        if _shared is None:
+            _shared = State()
+        return _shared
