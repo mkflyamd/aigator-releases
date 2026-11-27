@@ -10,6 +10,7 @@ import perf
 import shared
 from security import verify_csrf
 from skills._m365.helpers import GraphClient, html_to_text
+from skills._office_com import get_outlook_inbox_unread
 
 router = APIRouter()
 
@@ -343,6 +344,12 @@ def _email_inbox(skip: int, top: int, filter: str, delta: bool, folder: str):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/api/email/native-unread")
+def tp_email_native_unread():
+    """Inbox unread count from desktop Outlook, or null when it is not running."""
+    return {"count": get_outlook_inbox_unread()}
 
 
 @router.get("/api/email/search")

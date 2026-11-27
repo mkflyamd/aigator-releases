@@ -12,6 +12,7 @@
 const { applyMediaPermissions } = require('./media-permissions');
 const { applyNavigationPolicy, setToolbarAttacher } = require('./navigation-policy');
 const { resolveAtlassianUrls } = require('./atlassian-urls');
+const { slackBadgeFromTitle, teamsBadgeFromTitle } = require('./native-badge');
 const { createHudRecorder } = require('./hud_recorder');
 const path = require('path');
 const { spawn } = require('child_process');
@@ -4074,32 +4075,28 @@ setTimeout(scanAll, 500);
   }, 300);
 
   // ΓöÇΓöÇ Slack unread badge poller ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
-  // The Slack Web API token is for a different/old workspace, so we can't
-  // fetch unread counts via conversations.list. Instead, read the count
-  // directly from the Slack WebContentsView's DOM: Slack marks unread
-  // channels/DMs with .p-channel_sidebar__channel--unread. Forward the count
-  // to the Gator view's updateRailBadge so the dock badge stays in sync.
-  // Runs regardless of which app is active (Slack is always loaded).
-  let _lastSlackUnread = -1;
+  // Slack and Teams put their own unread counts in the window title ("1 new item",
+  // "(5) Chat | ..."). Forward those so the rail badge shows the number the user sees in
+  // the native app. A null (page not signed in) tells the rail to fall back to its own count.
+  // Sent every tick, not only on change, so a reloaded Gator view picks the counts back up.
+  // Runs regardless of which app is active (both views are always loaded).
   setInterval(() => {
-    if (!slackView || !slackView.webContents || slackView.webContents.isDestroyed()) return;
-    // The Slack view may be hidden (setVisible(false)) but its DOM is still
-    // live ΓÇö executeJavaScript works on hidden views.
-    slackView.webContents
-      .executeJavaScript('document.querySelectorAll(".p-channel_sidebar__channel--unread").length')
-      .then((count) => {
-        if (typeof count !== 'number') return;
-        if (count === _lastSlackUnread) return; // no change
-        _lastSlackUnread = count;
-        if (gatorView && gatorView.webContents && !gatorView.webContents.isDestroyed()) {
-          gatorView.webContents
-            .executeJavaScript(
-              'if(typeof updateRailBadge==="function"){updateRailBadge("slack",' + count + ');}',
-            )
-            .catch(() => {});
-        }
-      })
-      .catch(() => {});
+    if (!gatorView || !gatorView.webContents || gatorView.webContents.isDestroyed()) return;
+    const report = (view, id, parse) => {
+      if (!view || !view.webContents || view.webContents.isDestroyed()) return;
+      const count = parse(view.webContents.getTitle());
+      gatorView.webContents
+        .executeJavaScript(
+          'if(typeof updateNativeBadge==="function"){updateNativeBadge("' +
+            id +
+            '",' +
+            count +
+            ');}',
+        )
+        .catch(() => {});
+    };
+    report(slackView, 'slack', slackBadgeFromTitle);
+    report(teamsView, 'teams', teamsBadgeFromTitle);
   }, 15000);
 
   // Pass a getter for the active external view so Back/Forward in the Navigate
