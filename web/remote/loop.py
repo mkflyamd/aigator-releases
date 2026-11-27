@@ -90,16 +90,23 @@ def _build_loop(channel, state: State, enabled: Callable[[], bool]) -> RemoteLoo
     return RemoteLoop(RemoteRunner(channel, service, Guard(), state), enabled)
 
 
-async def remote_control_loop() -> None:
-    state = State()
-    loops = [
+def build_loops(state: State | None = None) -> list[RemoteLoop]:
+    state = state or State()
+    return [
         _build_loop(TeamsSelfChat(state=state), state, teams_switch_on),
         _build_loop(SlackSelfDM(state=state), state, slack_switch_on),
     ]
+
+
+async def _run_channel(loop: RemoteLoop) -> None:
+    """One task per channel: a command that waits on its agent holds only its own channel."""
     while True:
         await asyncio.sleep(STEP_SECONDS)
-        for loop in loops:
-            try:
-                await loop.step()
-            except Exception:
-                _log.warning("Remote control step failed", exc_info=True)
+        try:
+            await loop.step()
+        except Exception:
+            _log.warning("Remote control step failed", exc_info=True)
+
+
+async def remote_control_loop() -> None:
+    await asyncio.gather(*(_run_channel(loop) for loop in build_loops()))

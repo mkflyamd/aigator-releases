@@ -95,6 +95,37 @@ def test_an_unknown_own_user_id_posts_nothing(tmp_path, slack, monkeypatch):
     assert slack.posts() == []
 
 
+def test_a_check_that_cannot_be_made_posts_nothing(tmp_path, slack, monkeypatch):
+    def api(endpoint, params=None, method="GET"):
+        if endpoint == "conversations.info":
+            raise ConnectionError("network down")
+        return slack(endpoint, params, method)
+
+    monkeypatch.setattr(slack_channel, "_api", api)
+    channel = SlackSelfDM(channel_id=SELF_DM, state=State(tmp_path / "s.json"))
+    with pytest.raises(ChannelRefused, match="not the own self-DM"):
+        channel.post("[Gator] hello")
+    assert slack.posts() == []
+
+
+def test_no_self_dm_to_open_posts_nothing(tmp_path, slack, monkeypatch):
+    def api(endpoint, params=None, method="GET"):
+        if endpoint == "conversations.open":
+            return {"ok": False, "error": "user_not_found"}
+        return slack(endpoint, params, method)
+
+    monkeypatch.setattr(slack_channel, "_api", api)
+    channel = SlackSelfDM(state=State(tmp_path / "s.json"))
+    with pytest.raises(ChannelRefused):
+        channel.post("[Gator] hello")
+    assert slack.posts() == []
+
+
+def test_the_self_dm_is_opened_with_the_own_user_id(slack):
+    SlackSelfDM().poll()
+    assert slack.calls[0] == ("conversations.open", {"users": ME}, "POST")
+
+
 def test_the_ownership_check_is_cached_after_it_passes(tmp_path, slack):
     channel = SlackSelfDM(state=State(tmp_path / "s.json"))
     channel.poll()
