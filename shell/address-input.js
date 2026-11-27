@@ -10,20 +10,20 @@ const IPV4 = /^\d{1,3}(?:\.\d{1,3}){3}$/;
 const DOMAIN =
   /^(?:[\p{L}\p{N}](?:[\p{L}\p{N}-]*[\p{L}\p{N}])?\.)+(?:[\p{L}]{2,}|xn--[a-z0-9-]+)$/iu;
 
-function search(text) {
-  return { kind: 'search', url: SEARCH_URL + encodeURIComponent(text), explicit: false };
+function search(text, searchUrl) {
+  return { kind: 'search', url: searchUrl + encodeURIComponent(text), explicit: false };
 }
 
-function toUrl(text, scheme, explicit) {
+function toUrl(text, scheme, explicit, searchUrl) {
   try {
     const parsed = new URL(`${scheme}://${text}`);
     return { kind: 'url', url: parsed.href, explicit };
   } catch {
-    return search(text);
+    return search(text, searchUrl);
   }
 }
 
-function resolveAddressInput(raw) {
+function resolveAddressInput(raw, searchUrl = SEARCH_URL) {
   const text = String(raw == null ? '' : raw).trim();
   if (!text) return null;
 
@@ -34,23 +34,23 @@ function resolveAddressInput(raw) {
       return null;
     }
   }
-  if (/\s/.test(text)) return search(text);
+  if (/\s/.test(text)) return search(text, searchUrl);
 
   const authority = text.split(/[/?#]/, 1)[0];
   const hostPort = authority.match(HOST_PORT);
   // "localhost:3000" looks like a scheme to SCHEME, so only treat it as one when it is not host:port.
   if (SCHEME.test(text) && !hostPort) return null;
-  if (!hostPort) return search(text);
+  if (!hostPort) return search(text, searchUrl);
 
   const host = hostPort[1].toLowerCase();
   const hasPort = !!hostPort[2];
   const isIp = IPV4.test(host) || host.startsWith('[');
   const isLocal = host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local');
-  if (isIp || isLocal) return toUrl(text, 'http', false);
-  if (DOMAIN.test(host)) return toUrl(text, 'https', false);
+  if (isIp || isLocal) return toUrl(text, 'http', false, searchUrl);
+  if (DOMAIN.test(host)) return toUrl(text, 'https', false, searchUrl);
   // A bare intranet name only counts as an address when a port makes the intent clear.
-  if (hasPort && !host.includes('.')) return toUrl(text, 'http', false);
-  return search(text);
+  if (hasPort && !host.includes('.')) return toUrl(text, 'http', false, searchUrl);
+  return search(text, searchUrl);
 }
 
 const NAME_NOT_RESOLVED = (err) =>
@@ -63,8 +63,8 @@ const ABORTED = (err) => !!err && (err.code === 'ERR_ABORTED' || err.errno === -
 // Loads what the user typed into `wc`. A guessed address that does not resolve (for example
 // "foo.bar") falls back to a search, like a browser. `onError` gets real failures only;
 // ERR_ABORTED is what loadURL rejects with when a redirect or unload prompt replaces the load.
-function loadAddressInput(wc, typed, onError) {
-  const target = resolveAddressInput(typed);
+function loadAddressInput(wc, typed, onError, searchUrl = SEARCH_URL) {
+  const target = resolveAddressInput(typed, searchUrl);
   if (!target) {
     if (onError) onError(new Error('That address cannot be opened here.'), String(typed || ''));
     return;
@@ -77,7 +77,7 @@ function loadAddressInput(wc, typed, onError) {
       isBareHost(typed) &&
       NAME_NOT_RESOLVED(error)
     ) {
-      const fallback = search(String(typed).trim());
+      const fallback = search(String(typed).trim(), searchUrl);
       wc.loadURL(fallback.url).catch((err) => {
         if (!ABORTED(err) && onError) onError(err, fallback.url);
       });

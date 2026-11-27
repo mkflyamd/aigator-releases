@@ -88,6 +88,8 @@ contextBridge.exposeInMainWorld('gatorShell', {
   // ── Generic custom app panes ───────────────────────────────────────
   // show/hide/navigate for any custom app by id (e.g. 'custom-gmail').
   showCustomApp: (id) => ipcRenderer.invoke('external-pane:show', id),
+  getSearchEngine: () => ipcRenderer.invoke('search-engine:get'),
+  setSearchEngine: (id) => ipcRenderer.invoke('search-engine:set', id),
   hideCustomApp: (id) => ipcRenderer.invoke('external-pane:hide', id),
   createCustomApp: (appConfig) => ipcRenderer.invoke('custom-app:create', appConfig),
   customAppSetHidden: (id, hidden) => ipcRenderer.invoke('custom-app:set-hidden', id, hidden),

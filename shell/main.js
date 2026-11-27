@@ -10,6 +10,7 @@
   screen,
 } = require('electron');
 const { applyMediaPermissions } = require('./media-permissions');
+const { applyBrowserPermissions, createPermissionPrompt } = require('./browser-permissions');
 const { applyNavigationPolicy, setToolbarAttacher, _hostMatches } = require('./navigation-policy');
 const addressInput = require('./address-input');
 const { resolveAtlassianUrls } = require('./atlassian-urls');
@@ -395,12 +396,17 @@ function attachToolbarToWindow(childWin) {
     // The shared toolbar emits one navigation channel for both main panes and
     // child windows. Child toolbars previously had no handler, so Enter in a
     // visible address bar appeared to do nothing.
-    addressInput.loadAddressInput(childWc, typed, (error, url) => {
-      console.error(`[toolbar] child navigation failed for ${url}: ${error.message}`);
-      try {
-        tbWc.send('toolbar:navigation-error', { url, message: error.message });
-      } catch {}
-    });
+    addressInput.loadAddressInput(
+      childWc,
+      typed,
+      (error, url) => {
+        console.error(`[toolbar] child navigation failed for ${url}: ${error.message}`);
+        try {
+          tbWc.send('toolbar:navigation-error', { url, message: error.message });
+        } catch {}
+      },
+      _engineStore.searchUrl(),
+    );
   };
   const openBrowserHandler = (e, url) => {
     if (e.sender.id !== tbWcId) return;
@@ -616,6 +622,24 @@ const TOOLBAR_H = 40;
 // Extra height the toolbar view grows by while its star bubble is open, so the bubble
 // is not clipped by the 40px bar. The pane stays below TOOLBAR_H and the toolbar overlays it.
 let _toolbarExpandedH = 0;
+// The Browser pane's local-network permission bar sits under the toolbar and pushes the page down.
+// _permBarH is the height the toolbar page measured for it (the bar wraps on narrow panes).
+let _permBarHost = '';
+let _permBarH = 46;
+let _permBarTake = false;
+let _permBarAnnounce = '';
+function _permBarShown() {
+  return !!_permBarHost && activeExternalApp === BROWSER_PANE_ID;
+}
+function _permBarOffset() {
+  return _permBarShown() ? _permBarH : 0;
+}
+
+// The address-bar search engine, shared by every pane and the Browser pane's start page.
+const searchEngine = require('./search-engine');
+const _engineStore = searchEngine.createStore(
+  path.join(app.getPath('userData'), 'search-engine.json'),
+);
 
 // Persist the last Slack workspace URL so we skip the chooser on restart.
 const SLACK_LAST_URL_FILE = path.join(app.getPath('userData'), 'slack-last-url.txt');
@@ -736,7 +760,12 @@ function _toolbarPushState() {
     pinLabel: _webPinLabel,
     pinKind: _webPinKind,
     pinAnnounce: _webPinAnnounce,
+    permHost: _permBarShown() ? _permBarHost : '',
+    permTake: _permBarTake,
+    permAnnounce: _permBarAnnounce,
   };
+  _permBarTake = false;
+  _permBarAnnounce = '';
   try {
     toolbarWc.send('toolbar:state', state);
   } catch {}
@@ -4327,8 +4356,9 @@ function _layoutNow() {
     const gatorSliver = STICKY_RIGHT_RAIL ? DOCK_W : 1;
     const extW = w - gatorSliver;
     if (showToolbar) {
-      toolbarView.setBounds({ x: 0, y: 0, width: extW, height: TOOLBAR_H + _toolbarExpandedH });
-      activeView.setBounds({ x: 0, y: TOOLBAR_H, width: extW, height: h - TOOLBAR_H });
+      const top = TOOLBAR_H + _permBarOffset();
+      toolbarView.setBounds({ x: 0, y: 0, width: extW, height: top + _toolbarExpandedH });
+      activeView.setBounds({ x: 0, y: top, width: extW, height: h - top });
     } else {
       activeView.setBounds({ x: 0, y: 0, width: extW, height: h });
     }
@@ -4347,13 +4377,14 @@ function _layoutNow() {
     const gatorW = Math.max(w - extTileWidth, GATOR_MIN_WIDTH);
     const extW = w - gatorW;
     if (showToolbar) {
+      const top = TOOLBAR_H + _permBarOffset();
       toolbarView.setBounds({
         x: 0,
         y: 0,
         width: extW - SEAM,
-        height: TOOLBAR_H + _toolbarExpandedH,
+        height: top + _toolbarExpandedH,
       });
-      activeView.setBounds({ x: 0, y: TOOLBAR_H, width: extW - SEAM, height: h - TOOLBAR_H });
+      activeView.setBounds({ x: 0, y: top, width: extW - SEAM, height: h - top });
     } else {
       activeView.setBounds({ x: 0, y: 0, width: extW - SEAM, height: h });
     }
@@ -4459,6 +4490,34 @@ const APP_HOME_URL = {
   'g-script': 'https://script.google.com',
 };
 
+const BROWSER_PANE_ID = 'browser';
+
+// Local-network requests from sites in the Browser pane surface as a bar under the toolbar.
+const _browserPrompt = createPermissionPrompt({
+  onChange: (ev) => {
+    if (ev.type === 'show') {
+      _permBarHost = ev.host;
+      _permBarTake =
+        activeExternalApp === BROWSER_PANE_ID && !(gatorView && gatorView.webContents.isFocused());
+    } else {
+      const wasShown = _permBarShown();
+      _permBarHost = '';
+      _permBarTake = false;
+      if (wasShown) {
+        _permBarAnnounce = ev.allowed
+          ? `Allowed this time: ${ev.host} can connect to devices on your local network.`
+          : `Blocked: ${ev.host} cannot connect to devices on your local network.`;
+        const tb = _liveToolbarWebContents();
+        const pane = viewForApp(BROWSER_PANE_ID);
+        if (tb && tb.isFocused() && pane && !pane.webContents.isDestroyed())
+          pane.webContents.focus();
+      }
+    }
+    layout();
+    _toolbarPushState();
+  },
+});
+
 // Extend APP_HOME_URL with generic pane URLs at runtime.
 function _refreshAppHomeUrls() {
   for (const [id, pane] of Object.entries(_genericPanes)) {
@@ -4477,12 +4536,22 @@ function createGenericPane(appConfig) {
 
   const partition = `persist:custom-${id}`;
   const ses = session.fromPartition(partition);
-  applyMediaPermissions(ses);
+  if (id === BROWSER_PANE_ID) applyBrowserPermissions(ses, _browserPrompt);
+  else applyMediaPermissions(ses);
 
   const view = new WebContentsView({
     webPreferences: { session: ses, contextIsolation: true, nodeIntegration: false },
   });
   view.webContents.setBackgroundThrottling(false);
+  if (id === BROWSER_PANE_ID) {
+    // Registered before pick mode's own Escape handler, so Esc closes an open bar first.
+    view.webContents.on('before-input-event', (event, input) => {
+      if (input.type === 'keyDown' && input.key === 'Escape' && _permBarShown()) {
+        event.preventDefault();
+        _browserPrompt.answer(false);
+      }
+    });
+  }
 
   // Derive homeHosts from the URL's hostname so navigation policy keeps
   // same-host links in-pane and sends external links to the system browser.
@@ -4495,6 +4564,7 @@ function createGenericPane(appConfig) {
   applyNavigationPolicy(view, {
     name: id,
     homeHosts: homeHosts.length ? homeHosts : ['*'],
+    openLinksInPane: !!appConfig.openLinksInPane,
   });
 
   view.webContents.loadURL(url);
@@ -4526,6 +4596,17 @@ ipcMain.handle('external-pane:show', async (_e, appName) => {
   let view = viewForApp(appName);
   if (!view && (appName === 'jira' || appName === 'confluence'))
     view = await ensureAtlassianView(appName);
+  // The built-in Browser pane: a general-purpose pane that starts on the search engine's home.
+  if (!view && appName === BROWSER_PANE_ID) {
+    try {
+      view = createGenericPane({
+        id: BROWSER_PANE_ID,
+        name: 'Browser',
+        url: _engineStore.homeUrl(),
+        openLinksInPane: true,
+      });
+    } catch {}
+  }
   // Auto-create a generic pane for apps that have a home URL but no pane yet
   // (e.g. Google Workspace service skills g-gmail, g-calendar).
   if (!view && APP_HOME_URL[appName]) {
@@ -4551,6 +4632,20 @@ ipcMain.handle('external-pane:show', async (_e, appName) => {
     activeExternalApp = appName;
   }
   layout();
+  return true;
+});
+ipcMain.handle('search-engine:get', () => ({
+  engine: _engineStore.get(),
+  engines: searchEngine.listEngines(),
+}));
+ipcMain.handle('search-engine:set', (_e, id) => {
+  if (!_engineStore.set(id)) return false;
+  // The Browser pane's start page follows the engine, so a re-click goes to the new home.
+  const pane = _genericPanes[BROWSER_PANE_ID];
+  if (pane) {
+    pane.url = _engineStore.homeUrl();
+    _refreshAppHomeUrls();
+  }
   return true;
 });
 ipcMain.handle('github-pane:refresh', async (_e, baseUrl) => {
@@ -5138,15 +5233,20 @@ ipcMain.on('toolbar:navigate', (e, typed) => {
   if (!_isMainToolbar(e) || typeof typed !== 'string') return;
   const v = viewForApp(activeExternalApp);
   if (v && !v.webContents.isDestroyed()) {
-    addressInput.loadAddressInput(v.webContents, typed, (error, url) => {
-      console.error(`[toolbar] navigation failed for ${url}: ${error.message}`);
-      try {
-        _liveToolbarWebContents()?.send('toolbar:navigation-error', {
-          url,
-          message: error.message,
-        });
-      } catch {}
-    });
+    addressInput.loadAddressInput(
+      v.webContents,
+      typed,
+      (error, url) => {
+        console.error(`[toolbar] navigation failed for ${url}: ${error.message}`);
+        try {
+          _liveToolbarWebContents()?.send('toolbar:navigation-error', {
+            url,
+            message: error.message,
+          });
+        } catch {}
+      },
+      _engineStore.searchUrl(),
+    );
   }
 });
 
@@ -5154,6 +5254,19 @@ ipcMain.on('toolbar:set-expanded', (e, h) => {
   if (!_isMainToolbar(e)) return;
   _toolbarExpandedH = Math.max(0, Math.min(Number(h) || 0, 400));
   layout();
+});
+
+ipcMain.on('toolbar:permission-answer', (e, allow) => {
+  if (!_isMainToolbar(e)) return;
+  _browserPrompt.answer(allow === true);
+});
+
+ipcMain.on('toolbar:permission-height', (e, h) => {
+  if (!_isMainToolbar(e)) return;
+  const next = Math.max(0, Math.min(Math.round(Number(h)) || 0, 120));
+  if (!next || next === _permBarH) return;
+  _permBarH = next;
+  if (_permBarShown()) layout();
 });
 
 // Star actions are relayed to the Gator renderer, which owns the config calls, the dock

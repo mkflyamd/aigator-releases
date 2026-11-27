@@ -133,3 +133,24 @@ test('a mistyped address with a path or query is never sent to the search engine
     assert.strictEqual(errors.length, 1, typed);
   }
 });
+
+test('typed text is searched with the supplied engine', () => {
+  const google = 'https://www.google.com/search?q=';
+  assert.strictEqual(resolveAddressInput('cnn', google).url, 'https://www.google.com/search?q=cnn');
+  assert.strictEqual(
+    resolveAddressInput('weather in paris', google).url,
+    'https://www.google.com/search?q=weather%20in%20paris',
+  );
+  assert.strictEqual(resolveAddressInput('example.com', google).url, 'https://example.com/');
+});
+
+test('the unresolved-name fallback uses the supplied engine', async () => {
+  const ddg = 'https://duckduckgo.com/?q=';
+  const wc = fakeWc([Object.assign(new Error('dns'), { code: 'ERR_NAME_NOT_RESOLVED' })]);
+  loadAddressInput(wc, 'notarealsite.zzz', () => {}, ddg);
+  await tick();
+  assert.deepStrictEqual(wc.loaded, [
+    'https://notarealsite.zzz/',
+    'https://duckduckgo.com/?q=notarealsite.zzz',
+  ]);
+});

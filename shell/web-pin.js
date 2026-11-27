@@ -373,6 +373,8 @@ function createWebPin({
     const onInput = (event, input) => {
       if (input.type !== 'keyDown') return;
       if (input.key === 'Escape') {
+        // Another handler already used this Esc (e.g. closing a permission bar).
+        if (event.defaultPrevented) return;
         event.preventDefault();
         stop(CANCELLED);
       } else if (key(input)) {

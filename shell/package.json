@@ -30,6 +30,7 @@
     "files": [
       "address-input.js",
       "atlassian-urls.js",
+      "browser-permissions.js",
       "hud-preload.js",
       "hud_recorder.js",
       "main.js",
@@ -38,6 +39,7 @@
       "navigation-policy.js",
       "preload.js",
       "sandbox-repair.js",
+      "search-engine.js",
       "splash.html",
       "toolbar-preload.js",
       "toolbar-star.js",

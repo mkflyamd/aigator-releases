@@ -669,6 +669,7 @@ const SKILL_REGISTRY = [
     label: 'Browse Web',
     icon: ICON('browser'),
     chipAlias: 'browse',
+    _browserPane: true,
     category: 'Productivity',
     chipClass: 'chip-browser',
     connected: true,
@@ -1029,6 +1030,7 @@ const DEFAULT_DOCK_FAVS = [
   'jira',
   'slack',
   'code_agent',
+  'browser',
 ];
 const DOCK_ICON_MAP = { email: 'outlook' };
 const _dockIconFile = (id) => DOCK_ICON_MAP[id] || id;
@@ -1547,7 +1549,14 @@ const _TP_SKILL_IDS = new Set([
   'slack',
   'confluence',
   'code_agent',
+  'browser',
 ]); // defined before third-pane.js loads
+
+// Skills that open as a native shell web pane: user-added apps, Google Workspace services,
+// and the built-in Browser.
+function _isShellWebPaneSkill(skill) {
+  return !!(skill && (skill._customApp || skill._googleService || skill._browserPane));
+}
 // Google Workspace service skills — open as native shell panes.
 _GOOGLE_SERVICES.forEach((svc) => {
   _TP_SKILL_IDS.add(svc.id);
@@ -6008,8 +6017,7 @@ function openDrawer() {
       // code_agent pane both go through hideCustomApp — covers all current and
       // future custom-pane types in one branch.
       const skill = typeof SKILL_MAP !== 'undefined' ? SKILL_MAP[t] : null;
-      const isCustomPane =
-        (skill && (skill._customApp || skill._googleService)) || t === 'code_agent';
+      const isCustomPane = _isShellWebPaneSkill(skill) || t === 'code_agent';
       if (isCustomPane && window.gatorShell.hideCustomApp) {
         window._settingsSavedApp = t;
         window.gatorShell.hideCustomApp(t);
@@ -6379,12 +6387,11 @@ function closeDrawer() {
     ];
     // Only restore if the current pane is still a native app type (or null =
     // no pane opened while settings was up).
-    if (currentType === null || nativeTypes.indexOf(currentType) !== -1) {
+    if (currentType === null || currentType === app || nativeTypes.indexOf(currentType) !== -1) {
       // Custom apps (Google Workspace, custom web apps) and code_agent restore
       // through showCustomApp — covers all current and future custom-pane types.
       const skill = typeof SKILL_MAP !== 'undefined' ? SKILL_MAP[app] : null;
-      const isCustomPane =
-        (skill && (skill._customApp || skill._googleService)) || app === 'code_agent';
+      const isCustomPane = _isShellWebPaneSkill(skill) || app === 'code_agent';
       if (isCustomPane && window.gatorShell.showCustomApp) {
         window.gatorShell.showCustomApp(app);
       } else if (app === 'slack' && window.gatorShell.showSlack) window.gatorShell.showSlack();
@@ -18217,7 +18224,7 @@ const GatorChat = {
     if (GATOR_NATIVE_PANE_TYPES.indexOf(t) !== -1) return true;
     // Custom web apps and Google Workspace services are also native shell panes
     const skill = typeof SKILL_MAP !== 'undefined' ? SKILL_MAP[t] : null;
-    return !!(skill && (skill._customApp || skill._googleService));
+    return _isShellWebPaneSkill(skill);
   },
 
   _paneOpen() {
@@ -20529,10 +20536,35 @@ function _initOnReady() {
     .catch(() => {});
   const addBtn = document.getElementById('custom-app-add-btn');
   if (addBtn) addBtn.addEventListener('click', _addCustomApp);
+  _initSearchEngineSetting();
   _initGoogleWorkspaceSettings();
   _initClearCredentialsSettings();
   _initSandboxSettings();
   _initPermissionSettings();
+}
+
+async function _initSearchEngineSetting() {
+  const row = document.getElementById('search-engine-row');
+  const select = document.getElementById('search-engine-select');
+  const shell = window.gatorShell;
+  if (!row || !select || !shell || !shell.getSearchEngine) return;
+  try {
+    const { engine, engines } = await shell.getSearchEngine();
+    select.replaceChildren(
+      ...engines.map((e) => {
+        const opt = document.createElement('option');
+        opt.value = e.id;
+        opt.textContent = e.name;
+        return opt;
+      }),
+    );
+    select.value = engine;
+    select.addEventListener('change', async () => {
+      const ok = await shell.setSearchEngine(select.value);
+      if (!ok) select.value = (await shell.getSearchEngine()).engine;
+    });
+    row.classList.remove('hidden');
+  } catch {}
 }
 
 function _initClearCredentialsSettings() {

@@ -2388,7 +2388,7 @@ function _hideAllNativePanes(exceptType) {
   // Custom apps — hide via showCustomApp's hide counterpart
   if (typeof SKILL_MAP !== 'undefined') {
     for (const [id, skill] of Object.entries(SKILL_MAP)) {
-      if ((skill._customApp || skill._googleService) && id !== exceptType) {
+      if (_isShellWebPaneSkill(skill) && id !== exceptType) {
         if (window.gatorShell.hideCustomApp) {
           try {
             window.gatorShell.hideCustomApp(id);
@@ -2485,11 +2485,7 @@ function _openThirdPaneImpl(type) {
       _shellDrag.unmount();
     }
     // Custom apps & Google services — hide the previous native pane if switching away
-    if (
-      typeof SKILL_MAP !== 'undefined' &&
-      SKILL_MAP[tpState.type] &&
-      (SKILL_MAP[tpState.type]._customApp || SKILL_MAP[tpState.type]._googleService)
-    ) {
+    if (typeof SKILL_MAP !== 'undefined' && _isShellWebPaneSkill(SKILL_MAP[tpState.type])) {
       if (
         typeof window.gatorShell !== 'undefined' &&
         window.gatorShell.isShell &&
@@ -2930,8 +2926,8 @@ function _openThirdPaneImpl(type) {
     title.innerHTML = _tpIcon('confluence') + 'Confluence';
   } else if (type === 'code_agent') {
     title.innerHTML = '&lt;/&gt; Code';
-  } else if (SKILL_MAP[type] && (SKILL_MAP[type]._customApp || SKILL_MAP[type]._googleService)) {
-    // Custom web apps & Google Workspace services — same shell-mode pattern as
+  } else if (_isShellWebPaneSkill(SKILL_MAP[type])) {
+    // Custom web apps, Google Workspace services and the Browser — same shell-mode pattern as
     // Teams/Outlook/Slack. Show the native pane, mount drag spacer, show
     // expand/collapse button.
     if (typeof window.gatorShell !== 'undefined' && window.gatorShell.isShell) {
@@ -3293,7 +3289,7 @@ function closeThirdPane() {
   if (typeof SKILL_MAP !== 'undefined' && tpState.type && SKILL_MAP[tpState.type]) {
     const s = SKILL_MAP[tpState.type];
     if (
-      (s._customApp || s._googleService) &&
+      _isShellWebPaneSkill(s) &&
       typeof window.gatorShell !== 'undefined' &&
       window.gatorShell.isShell &&
       window.gatorShell.hideCustomApp
