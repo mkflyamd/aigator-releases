@@ -54,13 +54,18 @@ class RemoteRunner:
         service.subscribe(self._on_event)
 
     def sync_enabled(self, enabled: bool) -> None:
-        """Arms on the off-to-on edge only, so `stop all` and the cap stay in force until the
-        switch is turned off and on again."""
+        """Arms on the off-to-on edge only, so the cap stays in force until the switch is turned
+        off and on again. `stop all` is stored, so it also holds across a backend restart."""
+        channel = self._channel.name
         if enabled and not self._enabled:
-            self._guard.arm()
+            if not self._state.disarmed(channel):
+                self._guard.arm()
             self._timeout_noticed = False
-        elif not enabled and self._enabled:
-            self._guard.disarm()
+        elif not enabled:
+            if self._state.disarmed(channel):
+                self._state.set_disarmed(channel, False)
+            if self._enabled:
+                self._guard.disarm()
         self._enabled = enabled
 
     async def announce_online(self) -> None:
@@ -134,11 +139,26 @@ class RemoteRunner:
         elif kind == "stop":
             await self._service.stop(self._pick(command.name, required=True)[0].id)
         elif kind == "stop_all":
-            await self._service.stop_all()
-            self._guard.stop_all()
-            await self._post(commands.system_reply("Stopped every remote session. Remote control is off until you re-arm it in Settings."))
+            await self._stop_all()
         else:
             await self._send(command.text)
+
+    async def _stop_all(self) -> None:
+        stopped, failed = await self._service.stop_all()
+        if failed:
+            names = ", ".join(s.short for s in failed)
+            done = f" Stopped: {', '.join(s.short for s in stopped)}." if stopped else ""
+            await self._post(
+                commands.system_reply(
+                    f"Could not stop {names}; still running.{done} Remote control stays on. Send `@gator stop all` to try again."
+                )
+            )
+            return
+        self._guard.stop_all()
+        self._state.set_disarmed(self._channel.name, True)
+        names = f" ({', '.join(s.short for s in stopped)})" if stopped else ""
+        count = f"Stopped {len(stopped)} remote session(s){names}." if stopped else "No remote sessions were running."
+        await self._post(commands.system_reply(f"{count} Remote control is off until you re-arm it in Settings."))
 
     def _pick(self, name: str | None, required: bool = False) -> list[Session]:
         if name:
@@ -171,16 +191,16 @@ class RemoteRunner:
             await self._service.send(named.id, rest.strip())
             await self._ack(named, "Sent. Working on it.")
             return
-        sessions = self._service.list()
+        project = self._service.default_project()
+        if project is None:
+            raise RemoteError("No default project is set. Choose one in Settings, then resend.")
+        sessions = [s for s in self._service.list() if s.project.id == project.id]
         if len(sessions) > 1:
             raise RemoteError(self._need_a_name(sessions) + " Start with the name, e.g. `@gator <name> <text>`.")
         if sessions:
             await self._service.send(sessions[0].id, text)
             await self._ack(sessions[0], "Sent. Working on it.")
             return
-        project = self._service.default_project()
-        if project is None:
-            raise RemoteError("No default project is set. Choose one in Settings, then resend.")
         session = await self._service.start(project, text)
         await self._ack(session, "Started. Working on it.")
 

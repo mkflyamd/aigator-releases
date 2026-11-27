@@ -6,6 +6,7 @@ from __future__ import annotations
 import html
 import logging
 import re
+import time
 from datetime import datetime, timezone
 
 from remote.channel import ChannelRefused, InboundMessage
@@ -36,12 +37,14 @@ def send_message(chat_id: str, content: str) -> str:
 
 
 def _epoch(composetime: str) -> float:
+    """Unix seconds. A missing or unreadable time counts as now: Teams gave no age, so the
+    message is not assumed stale."""
     if not composetime:
-        return 0.0
+        return time.time()
     try:
         stamp = datetime.fromisoformat(_FRACTION.sub(r"\1", composetime.replace("Z", "+00:00")))
     except ValueError:
-        return 0.0
+        return time.time()
     if stamp.tzinfo is None:
         stamp = stamp.replace(tzinfo=timezone.utc)
     return stamp.timestamp()

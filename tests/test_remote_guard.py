@@ -18,6 +18,16 @@ def test_rate_limit_allows_20_then_refuses_within_10_minutes():
     assert guard.allow_command() is True
 
 
+def test_rate_window_boundary_is_exactly_600_seconds():
+    clock = Clock()
+    guard = Guard(clock=clock)
+    assert all(guard.allow_command() for _ in range(20))
+    clock.now += 599
+    assert guard.allow_command() is False
+    clock.now += 1
+    assert guard.allow_command() is True
+
+
 def test_slow_down_notice_is_due_once_per_window():
     clock = Clock()
     guard = Guard(clock=clock)

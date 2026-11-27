@@ -8,6 +8,10 @@ from remote.session_host import HostError, HostSession, Project
 from remote.state import State
 
 
+class ProcessExit(BaseException):
+    """What a process exit looks like to the runner: it is not an Exception."""
+
+
 class FakeHost:
     def __init__(self):
         self.n = 0
@@ -17,6 +21,8 @@ class FakeHost:
         self.delivered = []
         self.killed = []
         self.crash_on_deliver = False
+        self.exit_on_deliver = False
+        self.fail_kill = set()
 
     async def spawn(self, project):
         self.n += 1
@@ -25,6 +31,8 @@ class FakeHost:
         return HostSession(pty_id=pty, vendor_session_id=f"vendor-{self.n}")
 
     async def deliver(self, pty_id, text):
+        if self.exit_on_deliver:
+            raise ProcessExit()
         if self.crash_on_deliver:
             raise RuntimeError("boom")
         self.delivered.append((pty_id, text))
@@ -33,6 +41,8 @@ class FakeHost:
         return pty_id in self.alive_ids
 
     async def kill(self, pty_id):
+        if pty_id in self.fail_kill:
+            raise HostError("The terminal could not be closed.")
         self.killed.append(pty_id)
         self.alive_ids.discard(pty_id)
 
@@ -206,11 +216,24 @@ async def test_stop_all_still_works_after_the_rate_limit_is_hit(w):
     assert w.guard.armed is False
 
 
-async def test_a_command_with_no_timestamp_is_treated_as_stale(w):
+async def test_a_process_exit_right_after_delivery_is_not_replayed_after_restart(w):
     await baselined(w)
+    w.host.exit_on_deliver = True
+    with pytest.raises(ProcessExit):
+        await w.feed(w.msg(101, "@gator first"))
+    w.host.exit_on_deliver = False
     w.restart()
-    await w.feed(InboundMessage(id="101", text="@gator who knows when", created_at=0.0))
+    await w.feed(w.msg(101, "@gator first"))
     assert w.host.delivered == []
+
+
+async def test_a_message_is_stale_only_after_exactly_15_minutes(w):
+    await baselined(w)
+    await w.feed(w.msg(101, "@gator on the limit", age=900))
+    assert w.host.delivered == [("pty-1", "on the limit")]
+    await w.feed(w.msg(102, "@gator one second over", age=901))
+    assert w.host.delivered == [("pty-1", "on the limit")]
+    assert any("Skipped 1 message" in p for p in w.channel.posted)
 
 
 async def test_stop_all_stops_sessions_and_disarms(w):
@@ -222,6 +245,46 @@ async def test_stop_all_stops_sessions_and_disarms(w):
     delivered = len(w.host.delivered)
     await w.feed(w.msg(103, "@gator again"))
     assert len(w.host.delivered) == delivered
+
+
+async def test_stop_all_survives_a_backend_restart(w):
+    await baselined(w)
+    await w.feed(w.msg(101, "@gator stop all"))
+    w.restart()
+    assert w.guard.armed is False
+    await w.feed(w.msg(102, "@gator again"))
+    assert w.host.delivered == []
+
+
+async def test_toggling_the_switch_after_a_restart_rearms(w):
+    await baselined(w)
+    await w.feed(w.msg(101, "@gator stop all"))
+    w.restart()
+    w.runner.sync_enabled(False)
+    w.runner.sync_enabled(True)
+    assert w.guard.armed is True
+
+
+async def test_a_failed_stop_is_reported_by_name_and_keeps_remote_control_armed(w):
+    await baselined(w)
+    await w.service.start(BUDGET, "a")
+    await w.service.start(BUDGET, "b")
+    w.host.fail_kill = {"pty-2"}
+    await w.feed(w.msg(101, "@gator stop all"))
+    reply = w.channel.posted[-1]
+    assert "budget-2" in reply and "still running" in reply
+    assert "Stopped every" not in reply
+    assert w.guard.armed is True
+    w.restart()
+    assert w.guard.armed is True
+
+
+async def test_stop_all_names_the_sessions_it_stopped(w):
+    await baselined(w)
+    await w.service.start(BUDGET, "a")
+    await w.feed(w.msg(101, "@gator stop all"))
+    assert "budget" in w.channel.posted[-1]
+    assert "re-arm" in w.channel.posted[-1]
 
 
 async def test_rearming_after_stop_all_needs_the_switch_toggled(w):
@@ -307,7 +370,8 @@ async def test_stop_by_name(w):
 async def test_help_lists_the_commands(w):
     await baselined(w)
     await w.feed(w.msg(101, "@gator help"))
-    assert "@gator list" in w.channel.posted[-1] or "list" in w.channel.posted[-1]
+    for command in ("@gator <text>", "@gator <name> <text>", "@gator list", "@gator status [name]", "@gator stop [name]", "@gator stop all"):
+        assert command in w.channel.posted[-1]
     assert not w.channel.posted[-1].lower().startswith("@gator")
 
 
@@ -346,3 +410,100 @@ async def test_a_reply_that_echoes_a_command_cannot_form_one(w):
     await w.runner.tick()
     assert w.channel.posted[-1].startswith("[Gator")
     assert not w.channel.posted[-1].lower().lstrip().startswith("@gator")
+
+
+async def test_bare_text_goes_to_the_default_project_not_a_live_session_elsewhere(w):
+    await baselined(w)
+    await w.service.start(OTHER, "elsewhere")
+    await w.feed(w.msg(101, "@gator hello"))
+    assert w.host.delivered[-1] == ("pty-2", "hello")
+    assert [s.project.id for s in w.service.list()] == ["other", "budget"]
+
+
+async def test_bare_text_picks_the_default_projects_session_among_several_projects(w):
+    await baselined(w)
+    await w.service.start(BUDGET, "a")
+    await w.service.start(OTHER, "b")
+    await w.feed(w.msg(101, "@gator hello"))
+    assert w.host.delivered[-1] == ("pty-1", "hello")
+
+
+async def test_the_default_project_with_two_sessions_is_refused_naming_only_its_sessions(w):
+    await baselined(w)
+    await w.service.start(BUDGET, "a")
+    await w.service.start(OTHER, "b")
+    await w.service.start(BUDGET, "c")
+    await w.feed(w.msg(101, "@gator hello"))
+    assert w.host.delivered == [("pty-1", "a"), ("pty-2", "b"), ("pty-3", "c")]
+    assert "budget-2" in w.channel.posted[-1]
+    assert "other" not in w.channel.posted[-1]
+
+
+async def test_a_named_send_reaches_a_session_in_another_project(w):
+    await baselined(w)
+    await w.service.start(OTHER, "b")
+    await w.feed(w.msg(101, "@gator other hello"))
+    assert w.host.delivered[-1] == ("pty-1", "hello")
+
+
+@pytest.fixture
+def refusing(tmp_path, monkeypatch):
+    """The real Teams adapter pointed at a chat that is not the user's own self-chat."""
+    from remote import teams_channel
+
+    sent = []
+    monkeypatch.setattr(teams_channel, "send_message", lambda chat_id, content: sent.append((chat_id, content)) or "1")
+    world = World(tmp_path)
+    world.channel = teams_channel.TeamsSelfChat(chat_id="19:someone@thread.v2", state=world.state)
+    world.runner = RemoteRunner(
+        world.channel, world.service, world.guard, world.state, clock=world.clock, stale_seconds=900
+    )
+    world.runner.sync_enabled(True)
+    world.sent = sent
+    return world
+
+
+async def test_online_notice_is_never_posted_to_another_chat(refusing):
+    await refusing.runner.announce_online()
+    assert refusing.sent == []
+
+
+async def test_command_acknowledgement_is_never_posted_to_another_chat(refusing):
+    await baselined(refusing)
+    await refusing.feed(refusing.msg(101, "@gator hello"))
+    assert refusing.host.delivered == [("pty-1", "hello")]
+    assert refusing.sent == []
+
+
+async def test_command_reply_and_refusal_are_never_posted_to_another_chat(refusing):
+    await baselined(refusing)
+    await refusing.feed(refusing.msg(101, "@gator help"))
+    await refusing.feed(refusing.msg(102, "@gator status nope"))
+    assert refusing.sent == []
+
+
+async def test_agent_event_posts_are_never_sent_to_another_chat(refusing):
+    await baselined(refusing)
+    await refusing.feed(refusing.msg(101, "@gator hello"))
+    refusing.host.states["pty-1"] = {"state": "idle", "at": refusing.clock.now + 5}
+    refusing.host.last["pty-1"] = "Done."
+    await refusing.runner.tick()
+    assert refusing.sent == []
+
+
+async def test_stop_all_notice_is_never_posted_to_another_chat(refusing):
+    await baselined(refusing)
+    await refusing.feed(refusing.msg(101, "@gator stop all"))
+    assert refusing.sent == []
+
+
+async def test_timeout_notice_is_never_posted_to_another_chat(refusing):
+    refusing.clock.now += 24 * 3600 + 1
+    await refusing.runner.tick()
+    assert refusing.sent == []
+
+
+async def test_skipped_notice_is_never_posted_to_another_chat(refusing):
+    await baselined(refusing)
+    await refusing.feed(refusing.msg(101, "@gator old", age=3600))
+    assert refusing.sent == []

@@ -41,3 +41,35 @@ def test_pinned_idle_terminal_is_never_chosen_for_suspend():
     states = {p: {"state": "idle", "at": NOW - IDLE - 1} for p in live}
     since = {p: NOW - IDLE - 60 for p in live}
     assert agent_suspend.choose(live, states, set(), since, NOW) == [normal]
+
+
+class _Entry:
+    def __init__(self, meta):
+        self.meta = meta
+
+
+def _close_fakes(monkeypatch, meta):
+    import routes.terminal as terminal
+
+    closed, unpinned = [], []
+    monkeypatch.setattr(terminal, "get_pty_session", lambda sid: _Entry(meta))
+    monkeypatch.setattr(terminal, "close_pty_session", lambda sid: closed.append(sid) or True)
+    monkeypatch.setattr(generic_agent, "unpin_session", lambda sid: unpinned.append(sid))
+    monkeypatch.setattr(agent_suspend, "forget", lambda sid: None)
+    monkeypatch.setattr(generic_agent, "_active_sessions", {})
+    return closed, unpinned
+
+
+async def test_closing_a_code_tab_does_not_end_a_remote_pinned_session(monkeypatch):
+    closed, unpinned = _close_fakes(monkeypatch, {"remote_pinned": "1"})
+    req = generic_agent_routes.GenericAgentTerminalCloseRequest(agent="claude", project_id="demo", pty_session_id="pty-9")
+    result = await generic_agent_routes.close_generic_agent_terminal(req)
+    assert result["ok"] is True
+    assert closed == [] and unpinned == []
+
+
+async def test_closing_a_code_tab_still_ends_an_ordinary_session(monkeypatch):
+    closed, unpinned = _close_fakes(monkeypatch, {"project_id": "demo"})
+    req = generic_agent_routes.GenericAgentTerminalCloseRequest(agent="claude", project_id="demo", pty_session_id="pty-9")
+    await generic_agent_routes.close_generic_agent_terminal(req)
+    assert closed == ["pty-9"] and unpinned == ["pty-9"]

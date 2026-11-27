@@ -14,6 +14,7 @@ class FakeHost:
         self.delivered = []
         self.killed = []
         self.fail_deliver = None
+        self.fail_kill = set()
 
     async def spawn(self, project):
         self.n += 1
@@ -30,6 +31,8 @@ class FakeHost:
         return pty_id in self.alive_ids
 
     async def kill(self, pty_id):
+        if pty_id in self.fail_kill:
+            raise HostError("The terminal could not be closed.")
         self.killed.append(pty_id)
         self.alive_ids.discard(pty_id)
 
@@ -154,8 +157,37 @@ async def test_stop_kills_and_removes_the_session(svc, host):
 async def test_stop_all_stops_every_session(svc, host):
     await svc.start(BUDGET, "a")
     await svc.start(BUDGET, "b")
-    await svc.stop_all()
+    stopped, failed = await svc.stop_all()
     assert sorted(host.killed) == ["pty-1", "pty-2"]
+    assert svc.list() == []
+    assert sorted(s.short for s in stopped) == ["budget", "budget-2"]
+    assert failed == []
+
+
+async def test_stop_all_reports_the_sessions_it_could_not_stop(svc, host):
+    await svc.start(BUDGET, "a")
+    await svc.start(BUDGET, "b")
+    host.fail_kill = {"pty-2"}
+    stopped, failed = await svc.stop_all()
+    assert [s.short for s in stopped] == ["budget"]
+    assert [s.short for s in failed] == ["budget-2"]
+    assert [s.short for s in svc.list()] == ["budget-2"]
+
+
+async def test_a_failed_first_delivery_leaves_no_session_and_kills_the_pty(svc, host):
+    host.fail_deliver = "The agent is waiting for the user to answer a permission prompt."
+    with pytest.raises(RemoteError, match="permission prompt"):
+        await svc.start(BUDGET, "a")
+    assert svc.list() == []
+    assert host.killed == ["pty-1"]
+    assert host.alive_ids == set()
+
+
+async def test_a_failed_rollback_kill_still_raises_the_delivery_error(svc, host):
+    host.fail_deliver = "no prompt reached"
+    host.fail_kill = {"pty-1"}
+    with pytest.raises(RemoteError, match="no prompt reached"):
+        await svc.start(BUDGET, "a")
     assert svc.list() == []
 
 

@@ -117,8 +117,15 @@ class RemoteService:
             created_at=now,
             last_activity=now,
         )
+        try:
+            await self._deliver(session, text)
+        except Exception:
+            try:
+                await self._host.kill(spawned.pty_id)
+            except Exception:
+                _log.warning("could not roll back %s after a failed first delivery", session.id, exc_info=True)
+            raise
         self._sessions[session.id] = session
-        await self._deliver(session, text)
         return session
 
     async def send(self, session_id: str, text: str) -> None:
@@ -144,12 +151,19 @@ class RemoteService:
         self._sessions.pop(session.id, None)
         await self._emit("canceled", session)
 
-    async def stop_all(self) -> None:
+    async def stop_all(self) -> tuple[list[Session], list[Session]]:
+        """Returns (stopped, failed): only what was really stopped, and what is still running."""
+        stopped: list[Session] = []
+        failed: list[Session] = []
         for session in self.list():
             try:
                 await self.stop(session.id)
             except RemoteError:
                 _log.warning("stop-all: could not stop %s", session.id, exc_info=True)
+                failed.append(session)
+            else:
+                stopped.append(session)
+        return stopped, failed
 
     async def output(self, session_id: str, since: int) -> tuple[str, int]:
         session = self.get(session_id)

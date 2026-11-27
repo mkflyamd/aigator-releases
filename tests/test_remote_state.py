@@ -33,3 +33,13 @@ def test_corrupt_file_is_treated_as_empty(tmp_path):
     p = tmp_path / "s.json"
     p.write_text("{not json", encoding="utf-8")
     assert State(p).last_id("teams") is None
+
+
+def test_disarmed_flag_persists_across_instances_and_clears(tmp_path):
+    path = tmp_path / "s.json"
+    assert State(path).disarmed("teams") is False
+    State(path).set_disarmed("teams", True)
+    assert State(path).disarmed("teams") is True
+    assert State(path).disarmed("slack") is False
+    State(path).set_disarmed("teams", False)
+    assert State(path).disarmed("teams") is False

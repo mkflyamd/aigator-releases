@@ -55,6 +55,16 @@ class State:
             self._channel(data, channel)["last_id"] = message_id
             self._save(data)
 
+    def disarmed(self, channel: str) -> bool:
+        with self._lock:
+            return (self._load().get(channel) or {}).get("disarmed") is True
+
+    def set_disarmed(self, channel: str, value: bool) -> None:
+        with self._lock:
+            data = self._load()
+            self._channel(data, channel)["disarmed"] = value
+            self._save(data)
+
     def record_post(self, channel: str, message_id: str) -> None:
         with self._lock:
             data = self._load()
