@@ -89,6 +89,26 @@ def test_opting_an_agent_out_of_a_damaged_file_keeps_messaging_off(world):
     assert settings.opted_out("pty:a")
 
 
+def test_the_users_own_switch_keeps_opt_outs_from_a_partly_valid_file(world):
+    path = settings.settings_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('{"agent_messaging": "no", "opted_out": ["pty:a", 7]}')
+    settings.set_user_messaging(True)
+    assert settings.user_allows_messaging()
+    assert settings.opted_out("pty:a")
+    assert not settings.opted_out("pty:b")
+
+
+def test_opting_another_agent_out_of_a_partly_valid_file_keeps_the_earlier_opt_outs(world):
+    path = settings.settings_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('{"agent_messaging": "no", "opted_out": ["pty:a"]}')
+    settings.set_opted_out("pty:b", True)
+    assert not settings.user_allows_messaging()
+    assert settings.opted_out("pty:a")
+    assert settings.opted_out("pty:b")
+
+
 def test_the_users_own_switch_repairs_a_damaged_file(world):
     path = settings.settings_file()
     path.parent.mkdir(parents=True, exist_ok=True)
