@@ -145,7 +145,7 @@ def _app_js():
 def test_the_approved_retry_resends_the_exact_posted_body():
     src = _app_js()
     assert "_permissionResendPayload = _postBody;" in src
-    assert src.index("_permissionResendPayload = _postBody;") < src.index("fetch('/api/chat', {\r\n" if "\r\n" in src else "fetch('/api/chat', {\n", src.index("const _postBody"))
+    assert src.index("_permissionResendPayload = _postBody;") < src.index("_postChatRetryingBusyTurn(_postBody", src.index("const _postBody"))
     assert not re.search(r"let _permissionResendPayload = \{", src)
 
 

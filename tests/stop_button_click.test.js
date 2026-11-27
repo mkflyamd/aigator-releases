@@ -46,7 +46,7 @@ test('stop is dispatched through one delegated listener, not a per-turn button l
 });
 
 test('stop pressed while /api/chat is still pending releases the UI and cancels the late task', () => {
-  const post = source.indexOf("const _postPromise = fetch('/api/chat'");
+  const post = source.indexOf('const _postPromise = _postChatRetryingBusyTurn(');
   assert(post > 0, 'POST is kept as a promise so stop can race it');
   const after = source.slice(post, post + 1500);
   assert(after.includes('Promise.race([_postPromise, _stoppedDuringPost])'));

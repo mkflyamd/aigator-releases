@@ -149,6 +149,36 @@ class ChatTaskStore:
             return []
         return task["chunks"][from_seq:to_seq]
 
+    def active_task_for(self, context_id: str) -> str | None:
+        """Return the id of a turn still alive on this context, else None.
+
+        A reply that finished on its own (`done`, never stopped) is not live: the
+        per-context turn lock serializes the next turn behind its unwinding. A
+        stopped turn stays live until its asyncio task ends, because the next turn
+        must not register while it still holds the lock.
+        """
+        for task_id, task in self._store.items():
+            if task["context_id"] != context_id:
+                continue
+            if task["done"] and not task["cancelled"]:
+                continue
+            asyncio_task = task.get("asyncio_task")
+            if asyncio_task is not None:
+                if not asyncio_task.done():
+                    return task_id
+            elif not task["done"] and not task["cancelled"]:
+                return task_id
+        return None
+
+    async def wait_for_task_end(self, task_id: str, timeout: float) -> bool:
+        """Wait for a turn's asyncio task to finish. True if it has ended."""
+        task = self._store.get(task_id)
+        asyncio_task = task.get("asyncio_task") if task else None
+        if asyncio_task is None or asyncio_task.done():
+            return True
+        await asyncio.wait({asyncio_task}, timeout=timeout)
+        return asyncio_task.done()
+
     def get_context_id(self, task_id: str) -> str | None:
         task = self._store.get(task_id)
         return task["context_id"] if task else None
