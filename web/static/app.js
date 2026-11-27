@@ -8748,8 +8748,77 @@ function _buildCompactionMarker(turnCount, summaryText) {
 
 _initTabSystem();
 
+// The Copy link button is a fixed-position overlay (out of the text flow, so it never moves
+// the text around it) placed above the last line of the link, right-aligned to it.
+let _activeChatLinkCopy = null;
+
+function _placeChatLinkCopy(link, btn) {
+  if (_activeChatLinkCopy && _activeChatLinkCopy !== btn) _activeChatLinkCopy.remove();
+  _activeChatLinkCopy = btn;
+  btn.style.display = '';
+  const rects = link.getClientRects();
+  const last = rects[rects.length - 1];
+  if (!last) return;
+  const bounds = messages.getBoundingClientRect();
+  if (last.bottom < bounds.top || last.top > bounds.bottom) {
+    btn.style.display = 'none'; // link scrolled out of view: keep the button off other text
+    return;
+  }
+  const overlap = 2; // overlap the link so the pointer never crosses a gap
+  const margin = 4;
+  let top = last.top - btn.offsetHeight + overlap;
+  if (top < bounds.top) top = last.bottom - overlap;
+  const maxLeft = bounds.right - btn.offsetWidth - margin;
+  const left = Math.min(Math.max(last.right - btn.offsetWidth, bounds.left + margin), maxLeft);
+  btn.style.top = top + 'px';
+  btn.style.left = left + 'px';
+}
+
+function _showChatLinkCopy(e) {
+  const link = e.target.closest('.prose a[href]');
+  if (!link) return;
+
+  let copyBtn = link.nextElementSibling;
+  if (!copyBtn?.classList.contains('chat-link-copy')) {
+    copyBtn = document.createElement('button');
+    copyBtn.type = 'button';
+    copyBtn.className = 'chat-link-copy';
+    copyBtn.dataset.href = link.href;
+    copyBtn.title = 'Copy link';
+    copyBtn.setAttribute('aria-label', 'Copy link');
+    copyBtn.textContent = 'Copy link';
+    link.after(copyBtn);
+  }
+  _placeChatLinkCopy(link, copyBtn);
+}
+
+messages.addEventListener('mouseover', _showChatLinkCopy);
+messages.addEventListener('focusin', _showChatLinkCopy);
+messages.addEventListener(
+  'scroll',
+  () => {
+    const link = _activeChatLinkCopy?.previousElementSibling;
+    if (link) _placeChatLinkCopy(link, _activeChatLinkCopy);
+  },
+  { capture: true, passive: true },
+);
+
 // Delegated handler: open local file paths in default OS app
 messages.addEventListener('click', (e) => {
+  const copyLinkBtn = e.target.closest('.chat-link-copy');
+  if (copyLinkBtn) {
+    navigator.clipboard
+      .writeText(copyLinkBtn.dataset.href || '')
+      .then(() => {
+        copyLinkBtn.textContent = 'Copied!';
+        setTimeout(() => {
+          copyLinkBtn.textContent = 'Copy link';
+        }, 1500);
+      })
+      .catch(() => {});
+    return;
+  }
+
   const btn = e.target.closest('.file-path-btn');
   if (!btn) return;
   const path = btn.dataset.path;
