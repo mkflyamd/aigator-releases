@@ -232,4 +232,32 @@ function world({ reducedMotion = false } = {}) {
   assert(!/\.gtp-term--woken[^{]*\.xterm\s*\{/.test(css), 'no rule resizes .xterm for the strip');
 }
 
+// a session woken after a suspend was spawned at the default size, so the terminal tells it its
+// real size; the strip no longer refits, so nothing else would
+{
+  const branch = source.match(/msg\.type === 'woken'\) \{([\s\S]*?)\n    \} else if/);
+  assert(branch, 'woken branch not found');
+  const run = (awaitingWake) => {
+    const sent = [];
+    const sess = {
+      _awaitingWake: awaitingWake,
+      term: { cols: 120, rows: 34, reset: () => {} },
+      ws: { readyState: 1, send: (m) => sent.push(JSON.parse(m)) },
+      container: { querySelector: () => null },
+    };
+    const ctx = {
+      sess,
+      msg: {},
+      WebSocket: { OPEN: 1 },
+      clearTimeout,
+      _genAgentShowWokenBanner: () => {},
+    };
+    vm.createContext(ctx);
+    vm.runInContext(branch[1], ctx);
+    return sent;
+  };
+  assert.deepStrictEqual(run(true), [{ type: 'resize', cols: 120, rows: 34 }]);
+  assert.deepStrictEqual(run(false), [], 'a replayed woken message does not resize again');
+}
+
 console.log('woken strip timer: ok');

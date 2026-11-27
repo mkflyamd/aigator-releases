@@ -1566,7 +1566,15 @@ function _genAgentConnect(sess, retryDelay) {
       sess._dead = false;
       sess._resumeId = null;
       clearTimeout(sess._wakeWatch);
-      if (sess._awaitingWake && sess.term) sess.term.reset();
+      if (sess._awaitingWake && sess.term) {
+        sess.term.reset();
+        // The woken agent was spawned at the default size, not this terminal's.
+        if (sess.ws && sess.ws.readyState === WebSocket.OPEN) {
+          sess.ws.send(
+            JSON.stringify({ type: 'resize', cols: sess.term.cols, rows: sess.term.rows }),
+          );
+        }
+      }
       sess._awaitingWake = false;
       const overlay = sess.container && sess.container.querySelector('.oc-restart-overlay');
       if (overlay) overlay.remove();
