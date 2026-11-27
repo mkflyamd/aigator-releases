@@ -187,32 +187,56 @@ def find_targets(target: str, project_id: str | None, allow_cross_project: bool 
         found.append(entry)
 
     for pty_id, record in agent_suspend.all_records().items():
-        consider(
-            {
-                "state": "suspended",
-                "pty_id": pty_id,
-                "agent": record.get("agent", ""),
-                "project_id": record.get("project_id"),
-                "session_id": record.get("session_id", ""),
-                "title": record.get("title") or "",
-            }
-        )
+        consider(_suspended_entry(pty_id, record))
     for pty_id, meta in terminal.live_pty_labels().items():
         if meta.get("agent") != "claude" or not meta.get("session_id"):
             continue
         if not allow_cross_project and meta.get("project_id") != project_id:
             continue
-        consider(
-            {
-                "state": "live",
-                "pty_id": pty_id,
-                "agent": "claude",
-                "project_id": meta.get("project_id"),
-                "session_id": meta["session_id"],
-                "title": title_of(meta.get("project_id"), "claude", meta["session_id"]),
-            }
-        )
+        consider(_live_entry(pty_id, meta))
     return found
+
+
+def _suspended_entry(pty_id: str, record: dict) -> dict:
+    return {
+        "state": "suspended",
+        "pty_id": pty_id,
+        "agent": record.get("agent", ""),
+        "project_id": record.get("project_id"),
+        "session_id": record.get("session_id", ""),
+        "title": record.get("title") or "",
+    }
+
+
+def _live_entry(pty_id: str, meta: dict) -> dict:
+    return {
+        "state": "live",
+        "pty_id": pty_id,
+        "agent": "claude",
+        "project_id": meta.get("project_id"),
+        "session_id": meta["session_id"],
+        "title": title_of(meta.get("project_id"), "claude", meta["session_id"]),
+    }
+
+
+def find_by_pty(pty_id: str) -> dict | None:
+    """The suspended or running Claude session that holds this terminal id. Blocking."""
+    from routes import terminal
+
+    record = agent_suspend.all_records().get(pty_id)
+    if record is not None and record.get("agent") == "claude" and record.get("session_id"):
+        return _suspended_entry(pty_id, record)
+    meta = terminal.live_pty_labels().get(pty_id)
+    if meta and meta.get("agent") == "claude" and meta.get("session_id"):
+        return _live_entry(pty_id, meta)
+    return None
+
+
+def check_switches() -> None:
+    if not relay_settings.admin_allows_messaging():
+        raise WakeRefused("admin_denied", "Your administrator has turned off agent messaging.")
+    if not relay_settings.user_allows_messaging():
+        raise WakeRefused("switched_off", "Agent messaging is switched off.")
 
 
 def _candidate(entry: dict) -> dict:
@@ -318,12 +342,8 @@ async def wake_and_deliver(
 
     `sender` is {"name", "session_id", "project_id"} as known to the front door. Raises
     WakeRefused with a code and a reason when nothing was delivered."""
-    now = time.time()
-    if not relay_settings.admin_allows_messaging():
-        raise WakeRefused("admin_denied", "Your administrator has turned off agent messaging.")
-    if not relay_settings.user_allows_messaging():
-        raise WakeRefused("switched_off", "Agent messaging is switched off.")
-    text = frame(sender.get("name", ""), message)
+    check_switches()
+    frame(sender.get("name", ""), message)
     matches = await asyncio.to_thread(find_targets, target, sender.get("project_id"), allow_cross_project)
     if not matches:
         raise WakeRefused("not_found", "No suspended or running Claude agent with that name or id in this project.")
@@ -333,8 +353,16 @@ async def wake_and_deliver(
             "More than one agent has that name; choose one by session id.",
             candidates=[_candidate(m) for m in matches],
         )
-    entry = matches[0]
-    if entry["session_id"] == sender.get("session_id"):
+    return await deliver_entry(sender, matches[0], message)
+
+
+async def deliver_entry(sender: dict, entry: dict, message: str, *, spend_slot: bool = True) -> dict:
+    """Deliver one message to a session `find_targets` or `find_by_pty` returned, waking it
+    first when it is suspended. The relay core passes spend_slot=False: it keeps its own limits."""
+    now = time.time()
+    check_switches()
+    text = frame(sender.get("name", ""), message)
+    if entry["session_id"] == sender.get("session_id") or entry["pty_id"] == sender.get("pty_id"):
         raise WakeRefused("invalid", "An agent cannot message itself.")
     if relay_settings.opted_out(f"pty:{entry['pty_id']}"):
         raise WakeRefused("opted_out", "That agent does not accept messages from other agents.")
@@ -342,7 +370,8 @@ async def wake_and_deliver(
     if not claim(key):
         raise WakeRefused("busy", "This agent is being woken, messaged or suspended right now; try again shortly.")
     try:
-        _spend_sender_slot(sender.get("pty_id") or sender.get("session_id") or sender.get("name", ""), now)
+        if spend_slot:
+            _spend_sender_slot(sender.get("pty_id") or sender.get("session_id") or sender.get("name", ""), now)
         if entry["state"] == "suspended":
             entry["record"] = agent_suspend.suspended_record(entry["pty_id"])
             if entry["record"] is None:

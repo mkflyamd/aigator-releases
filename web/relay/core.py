@@ -58,8 +58,9 @@ class Adapter(Protocol):
 
     async def resolve(self, ref: str, sender: Endpoint, *, allow_cross_project: bool) -> list[Endpoint]: ...
 
-    async def deliver(self, sender: Endpoint, target: Endpoint, text: str, mode: str) -> str:
-        """Returns how it arrived: "submitted" or "drafted". Raises Refused when it did not."""
+    async def deliver(self, sender: Endpoint, target: Endpoint, text: str, mode: str) -> str | tuple[str, dict]:
+        """Returns how it arrived, "submitted" or "drafted", optionally with extra details
+        for the task. Raises Refused when it did not."""
         ...
 
 
@@ -181,8 +182,23 @@ class Relay:
     async def submit(
         self, sender: Endpoint, target_ref: str, text: str, *, message_id: str | None = None, mode: str = SUBMIT
     ) -> dict:
-        """An agent-initiated message: same project only, no link."""
+        """An agent-initiated message. It goes over an active link when the target is the other
+        end of one the sender has; otherwise it is same project only."""
+        link = self._link_to(sender, target_ref)
+        if link is not None:
+            return await self._run(sender, None, link.id, text, message_id or new_id(), SUBMIT)
         return await self._run(sender, target_ref, None, text, message_id or new_id(), mode)
+
+    def _link_to(self, sender: Endpoint, ref: str) -> Link | None:
+        wanted = agent_wake.clean(ref).casefold()
+        if not wanted:
+            return None
+        now = self._clock()
+        for link in self._links.values():
+            other = link.other(sender.id)
+            if other is not None and link.active(now) and wanted in (other.id.casefold(), other.name.casefold()):
+                return link
+        return None
 
     async def send_on_link(
         self, link_id: str, sender: Endpoint, text: str, *, message_id: str | None = None
@@ -335,7 +351,9 @@ class Relay:
         runner = asyncio.ensure_future(adapter.deliver(sender, target, cleaned, mode))
         self._running[task.id] = runner
         try:
-            task.delivery = await runner
+            outcome = await runner
+            task.delivery, details = outcome if isinstance(outcome, tuple) else (outcome, {})
+            task.extra.update(details)
         except asyncio.CancelledError:
             if task.id in self._canceled:
                 return self._finish(task, TaskState.CANCELED, "canceled", "Stopped by the user.", now)

@@ -628,3 +628,97 @@ async def test_an_agent_that_opted_out_is_not_woken_or_messaged(world, policy_fi
         await send(target="Live one")
     assert exc.value.code == "opted_out"
     assert world["typed"] == []
+
+
+# --- the relay's terminal adapter ----------------------------------------------
+
+
+@pytest.fixture
+def relay_world(world, policy_file):
+    from relay.core import Relay
+    from relay.terminal_adapter import TerminalAdapter
+
+    world["relay"] = Relay(audit=lambda line: None)
+    world["relay"].register(TerminalAdapter())
+    return world
+
+
+def sender_endpoint(project="demo", name="Turn issues"):
+    from relay.model import pty_endpoint
+
+    return pty_endpoint(pty_id(), name, project)
+
+
+async def test_the_relay_wakes_a_suspended_agent_and_types_the_message(relay_world):
+    from relay.model import META_KEY
+
+    sleeping = suspend(relay_world)
+    task = await relay_world["relay"].submit(sender_endpoint(), "Design head", "please look at PR 12")
+    assert task["status"]["state"] == "TASK_STATE_WORKING"
+    assert task["metadata"][META_KEY]["woke"] is True
+    assert task["metadata"][META_KEY]["target"]["id"] == f"pty:{sleeping}"
+    assert [pid for pid, _ in relay_world["typed"]] == [sleeping]
+    assert relay_world["typed"][0][1].startswith("[Message from Turn issues via AI Gator")
+
+
+async def test_the_relay_messages_a_live_agent_without_waking_it(relay_world):
+    from relay.model import META_KEY
+
+    live = go_live(relay_world)
+    task = await relay_world["relay"].submit(sender_endpoint(), "Design head", "hello")
+    assert task["status"]["state"] == "TASK_STATE_WORKING"
+    assert task["metadata"][META_KEY]["woke"] is False
+    assert relay_world["resumed"] == [] and [pid for pid, _ in relay_world["typed"]] == [live]
+
+
+async def test_the_relay_finds_an_agent_by_its_endpoint_id(relay_world):
+    sleeping = suspend(relay_world, title="Same name")
+    suspend(relay_world, title="Same name", session="sess-twin")
+    ambiguous = await relay_world["relay"].submit(sender_endpoint(), "Same name", "hi")
+    assert ambiguous["metadata"]["ai.gator.relay"]["code"] == "ambiguous"
+    chosen = await relay_world["relay"].submit(sender_endpoint(), f"pty:{sleeping}", "hi")
+    assert chosen["status"]["state"] == "TASK_STATE_WORKING"
+
+
+async def test_the_relay_does_not_reach_into_another_project_without_a_link(relay_world):
+    suspend(relay_world, project="elsewhere")
+    task = await relay_world["relay"].submit(sender_endpoint(), "Design head", "hi")
+    assert task["metadata"]["ai.gator.relay"]["code"] == "not_found"
+    assert relay_world["resumed"] == [] and relay_world["typed"] == []
+
+
+async def test_a_link_lets_two_agents_in_different_projects_message_each_other(relay_world):
+    from relay.model import pty_endpoint
+
+    sleeping = suspend(relay_world, project="elsewhere")
+    sender = sender_endpoint()
+    link = relay_world["relay"].create_link(sender, pty_endpoint(sleeping, "Design head", "elsewhere"))
+    task = await relay_world["relay"].submit(sender, "Design head", "hi")
+    assert task["status"]["state"] == "TASK_STATE_WORKING"
+    assert task["contextId"] == f"link:{link.id}"
+    assert [pid for pid, _ in relay_world["typed"]] == [sleeping]
+
+
+async def test_the_relay_keeps_the_wake_door_s_own_safeguards(relay_world):
+    from relay.model import META_KEY, pty_endpoint
+
+    target = go_live(relay_world)
+    mine = pty_endpoint(target, "Design head", "demo")
+    task = await relay_world["relay"].submit(mine, "Design head", "talking to myself")
+    assert task["metadata"][META_KEY]["code"] == "invalid"
+    relay_world["ready_ok"] = False
+    busy = await relay_world["relay"].submit(sender_endpoint(), "Design head", "are you there")
+    assert busy["metadata"][META_KEY]["code"] == "not_ready"
+    assert busy["status"]["state"] == "TASK_STATE_FAILED"
+    assert relay_world["typed"] == []
+
+
+async def test_the_relay_core_limit_not_the_wake_limit_applies_on_a_link(relay_world):
+    from relay.model import pty_endpoint
+
+    live = go_live(relay_world)
+    sender = sender_endpoint()
+    link = relay_world["relay"].create_link(sender, pty_endpoint(live, "Design head", "demo"))
+    for i in range(agent_wake.SENDER_LIMIT + 3):
+        task = await relay_world["relay"].send_on_link(link.id, sender, f"message {i}")
+        assert task["status"]["state"] == "TASK_STATE_WORKING", i
