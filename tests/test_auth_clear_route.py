@@ -35,6 +35,26 @@ def _seed():
 
 
 @pytest.fixture(autouse=True)
+def _restore_pat_state(monkeypatch):
+    # /api/auth/clear pops the PAT env vars and in-memory config keys for the
+    # whole process, so put them back or later tests lose them.
+    import os
+
+    import shared
+    from config import _PAT_KEYS
+    from routes.auth import _PAT_ENV
+
+    for var in _PAT_ENV:
+        if var in os.environ:
+            monkeypatch.setenv(var, os.environ[var])
+    saved = {k: shared.cfg[k] for k in _PAT_KEYS if k in shared.cfg}
+    yield
+    for k in _PAT_KEYS:
+        shared.cfg.pop(k, None)
+    shared.cfg.update(saved)
+
+
+@pytest.fixture(autouse=True)
 def _no_network(monkeypatch):
     import routes.auth as auth
 

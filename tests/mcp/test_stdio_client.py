@@ -79,7 +79,10 @@ def test_env_merge_preserves_path():
 def test_timeout_kills_hung_server():
     import time
 
-    client = StdioMCPClient(_cfg(), timeout=0.5)
+    client = StdioMCPClient(_cfg())
+    # Shorten the timeout only after the initialize handshake: a slow process
+    # spawn under load must not fail the constructor.
+    client._timeout = 0.5
     proc = client._proc
     try:
         with pytest.raises(TimeoutError):
