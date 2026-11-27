@@ -9,6 +9,7 @@ Supports:
   - tools/call "crash"   → exits 1 immediately (for crash recovery tests)
   - tools/call "hang"    → sleeps forever (for timeout tests)
   - tools/call "garbage" → writes a non-JSON line to stdout
+  - tools/call "noisy"   → floods stderr with undecodable bytes, then replies
 """
 
 import json
@@ -79,6 +80,10 @@ def main():
             elif tool == "garbage":
                 sys.stdout.write("this is not json\n")
                 sys.stdout.flush()
+            elif tool == "noisy":
+                sys.stderr.buffer.write(b"\x90\xff undecodable log line\n" * 12000)
+                sys.stderr.buffer.flush()
+                respond(req_id, {"content": [{"type": "text", "text": "done"}]})
             else:
                 respond(
                     req_id, error={"code": -32601, "message": f"unknown tool: {tool}"}
