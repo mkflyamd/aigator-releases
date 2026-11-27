@@ -539,11 +539,15 @@ def _transcript_messages(rec: dict) -> list[tuple[str, str]]:
 
 
 def last_assistant_text(rec: dict) -> str:
-    """The agent's latest reply with its line breaks, or "" when there is none yet."""
+    """The agent's latest reply with its line breaks. "" when there is none yet, including when the
+    newest user message has no answer after it, so an earlier turn's reply is never returned."""
     path = Path(rec["path"])
     extract = _claude_message if rec["agent"] == "claude" else _codex_message
     pairs = [m for m in (extract(o, flat=False) for o in _read_tail(path, path.stat().st_size)) if m]
-    return next((text for role, text in reversed(pairs) if role == "assistant"), "")
+    if not pairs:
+        return ""
+    role, text = pairs[-1]
+    return text if role == "assistant" else ""
 
 
 def _store_messages(rec: dict) -> list[tuple[str, str]]:
