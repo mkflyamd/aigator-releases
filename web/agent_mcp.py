@@ -193,16 +193,20 @@ def _text_result(text: str, is_error: bool = False) -> dict:
 
 async def _call_tool(caller: dict, arguments: dict) -> dict:
     to, message = arguments.get("to"), arguments.get("message")
-    if not isinstance(to, str) or not isinstance(message, str):
-        return _text_result("Both 'to' and 'message' are required text.", True)
     sender = await _sender(caller)
+    if not isinstance(to, str) or not isinstance(message, str):
+        reason = "Both 'to' and 'message' are required text."
+        await asyncio.to_thread(agent_wake.audit_refusal, sender, to, "invalid", reason, message)
+        return _text_result(reason, True)
     try:
         result = await agent_wake.wake_and_deliver(sender, to, message)
     except agent_wake.WakeRefused as exc:
         return _text_result(json.dumps(exc.as_result()), True)
     except Exception:
         logger.exception("wake failed")
-        return _text_result("AI Gator could not deliver the message.", True)
+        reason = "AI Gator could not deliver the message."
+        await asyncio.to_thread(agent_wake.audit_refusal, sender, to, "failed", reason, message)
+        return _text_result(reason, True)
     return _text_result(json.dumps(result))
 
 
@@ -262,12 +266,16 @@ def _bearer(request: Request) -> str | None:
 
 
 async def _respond(request: Request) -> Response:
-    caller = caller_for(_bearer(request))
+    token = _bearer(request)
+    caller = caller_for(token)
+    reason = "No token was sent." if not token else "The token is not known or was revoked."
     # A terminal that exited by itself never went through close, so its token is checked here.
     if caller is not None and not await asyncio.to_thread(_terminal_alive, caller["pty_id"]):
         revoke(caller["pty_id"])
         caller = None
+        reason = "The terminal that held this token has ended."
     if caller is None:
+        await asyncio.to_thread(agent_wake.audit_refusal, None, "", "unauthorized", reason, "")
         return JSONResponse({"error": "unauthorized"}, status_code=401, headers={"WWW-Authenticate": "Bearer"})
     if request.method != "POST":
         return Response(status_code=405, headers={"Allow": "POST"})

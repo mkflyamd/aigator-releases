@@ -18,6 +18,7 @@ TOKEN_HEADER = "Authorization"
 @pytest.fixture
 def door(tmp_path, monkeypatch):
     monkeypatch.setattr(agent_mcp, "_tokens", {})
+    monkeypatch.setattr(agent_wake, "_last_unauthorized", float("-inf"))
     alive = {"yes": True}
     monkeypatch.setattr(agent_mcp, "_terminal_alive", lambda pty_id: alive["yes"])
     monkeypatch.setattr(agent_suspend, "STATE_FILE", tmp_path / "suspended-agents.json")
@@ -142,9 +143,10 @@ def test_the_door_is_the_only_mounted_sub_app_and_is_outside_the_route_table():
     assert not [p for p in gator.app.openapi()["paths"] if p.startswith(agent_mcp.MOUNT_PATH)]
 
 
-def test_through_the_real_app_every_method_and_path_needs_the_token():
+def test_through_the_real_app_every_method_and_path_needs_the_token(tmp_path, monkeypatch):
     import app as gator
 
+    monkeypatch.setattr(agent_suspend, "STATE_FILE", tmp_path / "suspended-agents.json")
     client = TestClient(gator.app)
     for method in ("get", "post", "put", "patch", "delete"):
         for path in (f"{agent_mcp.MOUNT_PATH}/", agent_mcp.MOUNT_PATH, f"{agent_mcp.MOUNT_PATH}/x/y"):
@@ -260,6 +262,60 @@ def test_an_unexpected_failure_does_not_leak_details(door, monkeypatch):
     _, token = launch(door, "sess-a")
     result = door["client"].post("/", json=tool_call(), headers=bearer(token)).json()["result"]
     assert result["isError"] is True and "secret" not in result["content"][0]["text"]
+
+
+# --- refusals leave an audit line -----------------------------------------------
+
+
+def test_a_request_with_no_token_is_audited_as_unauthorized(door):
+    door["client"].post("/", json=tool_call(message="secret text"))
+    (line,) = agent_wake.recent_audit()
+    assert (line["outcome"], line["reason"]) == ("unauthorized", "No token was sent.")
+    assert (line["sender"], line["target"], line["message_bytes"]) == ("", "", 0)
+    assert "secret" not in agent_wake.audit_file().read_text(encoding="utf-8")
+
+
+def test_a_wrong_token_is_audited_without_the_token(door):
+    door["client"].post("/", json=tool_call(), headers=bearer("aigator-fake-api-key"))
+    (line,) = agent_wake.recent_audit()
+    assert (line["outcome"], line["reason"]) == ("unauthorized", "The token is not known or was revoked.")
+    assert "aigator-fake-api-key" not in agent_wake.audit_file().read_text(encoding="utf-8")
+
+
+def test_a_terminal_that_has_ended_is_audited_as_unauthorized(door):
+    _, token = launch(door, "sess-a")
+    door["alive"]["yes"] = False
+    door["client"].post("/", json=tool_call(), headers=bearer(token))
+    assert agent_wake.recent_audit()[-1]["reason"] == "The terminal that held this token has ended."
+
+
+def test_a_flood_of_unauthorized_requests_leaves_one_audit_line(door):
+    for _ in range(20):
+        door["client"].post("/", json=rpc("ping"))
+    assert len(agent_wake.recent_audit()) == 1
+
+
+def test_arguments_that_are_not_text_are_audited_as_invalid_with_the_sender(door):
+    _, token = launch(door, "sess-a")
+    for arguments in ({"to": 5, "message": "hi"}, {"to": "x"}):
+        body = rpc("tools/call", {"name": agent_mcp.TOOL_NAME, "arguments": arguments})
+        door["client"].post("/", json=body, headers=bearer(token))
+    first, second = agent_wake.recent_audit()
+    assert (first["outcome"], first["sender"], first["target"], first["message_bytes"]) == ("invalid", "name-of-sess-a", "", 2)
+    assert (second["target"], second["message_bytes"]) == ("x", 0)
+
+
+def test_an_unexpected_failure_is_audited_without_the_message_or_the_details(door, monkeypatch):
+    async def boom(sender, target, message, **kwargs):
+        raise RuntimeError("C:/secret/path exploded")
+
+    monkeypatch.setattr(agent_wake, "wake_and_deliver", boom)
+    _, token = launch(door, "sess-a")
+    door["client"].post("/", json=tool_call(to="Design head", message="private words"), headers=bearer(token))
+    (line,) = agent_wake.recent_audit()
+    assert (line["outcome"], line["target"], line["message_bytes"]) == ("failed", "Design head", len("private words"))
+    text = agent_wake.audit_file().read_text(encoding="utf-8")
+    assert "secret" not in text and "private" not in text
 
 
 # --- launching Claude with the door ---------------------------------------------
