@@ -1691,7 +1691,6 @@ function _genAgentShowWokenBanner(sess, msg) {
 
   sess.container.classList.add('gtp-term--woken');
   sess.container.appendChild(el);
-  _ocFit(sess);
 
   // The timer starts only once the strip is actually on screen, so a wake that lands on a
   // background tab is still there when the user switches to it.
@@ -1773,7 +1772,6 @@ function _genAgentWokenDismiss(sess, immediate) {
     w.el.remove();
     if (sess.container)
       sess.container.classList.remove('gtp-term--woken', 'gtp-term--woken-leaving');
-    _ocFit(sess);
   };
   const reduced =
     window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
