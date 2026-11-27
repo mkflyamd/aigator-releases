@@ -8,7 +8,7 @@ High-signal guidance for agents working in the **AI Gator** repo. Supplement to 
 - **LLM gateway**: every LLM call goes through `web/llm/gateway.py` (`from llm.gateway import ...` works because `web/` is on `sys.path`). Never construct gateway headers/URLs inline. See `docs/gateway-setup.md`.
 - **Commits**: no `Co-Authored-By` lines.
 - **Git verification**: never use `--no-verify` or otherwise bypass, disable, skip, or suppress Git hooks when committing or pushing code, under any circumstances. If a hook fails, fix the failure before continuing.
-- **Human-in-the-loop**: email, Teams, and Slack messages are **draft-only** — never auto-send.
+- **Human-in-the-loop**: email, Teams, and Slack messages are **draft-only** — never auto-send. Exception: a Teams or Slack message may auto-send only when the recipient is verified as the user's own private self-chat or DM; messages to other people, channels, group chats and email stay draft-only with explicit human approval.
 
 ## Architecture
 

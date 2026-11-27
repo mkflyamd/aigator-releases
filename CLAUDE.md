@@ -40,3 +40,5 @@ Every new POST/PUT/PATCH/DELETE route must use `dependencies=[Depends(verify_csr
 ## Human-in-the-Loop
 
 Email, Teams, and Slack messages must NEVER auto-send. Always draft-only and require explicit human approval before sending.
+
+Exception: a Teams or Slack message may auto-send only when the recipient is verified as the user's own private self-chat or DM; messages to other people, channels, group chats and email stay draft-only with explicit human approval.
