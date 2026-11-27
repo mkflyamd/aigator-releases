@@ -17214,6 +17214,8 @@ fetch('/api/teams/chats')
     _rcProjectDrop = window.buildDropdown(options, chosen || '', async (value) => {
       if (await _rcSave({ remote_default_project: value })) {
         if (sub) sub.textContent = value || 'Active project';
+      } else {
+        _rcLoad();
       }
     });
     slot.appendChild(_rcProjectDrop.el);
@@ -17252,9 +17254,9 @@ fetch('/api/teams/chats')
   _rcNumbers.forEach((n) => {
     const input = document.getElementById(n.input);
     if (!input) return;
-    input.addEventListener('change', () => {
+    input.addEventListener('change', async () => {
       const value = input.value.trim() === '' ? NaN : Number(input.value);
-      _rcSave({ [n.key]: value });
+      if (!(await _rcSave({ [n.key]: value }))) _rcLoad();
     });
   });
 

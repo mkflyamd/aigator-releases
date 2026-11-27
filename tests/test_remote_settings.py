@@ -151,3 +151,23 @@ async def test_a_message_with_a_missing_default_project_gets_a_gator_refusal_and
     await w.feed(w.msg(101, "@gator hello"))
     assert w.host.n == 0
     assert w.channel.posted == ['[Gator] The default project "Gone" no longer exists. Choose another in Settings, then resend.']
+
+
+@pytest.mark.parametrize(
+    "key,low,high",
+    [("remote_session_idle_hours", 1, 72), ("remote_stale_minutes", 1, 120), ("remote_armed_max_hours", 1, 168)],
+)
+def test_the_limits_accept_both_ends_of_their_range(known_projects, key, low, high):
+    assert settings.validate({key: low}) is None
+    assert settings.validate({key: high}) is None
+    assert settings.validate({key: low - 1}) is not None
+    assert settings.validate({key: high + 1}) is not None
+
+
+def test_saving_an_out_of_range_limit_is_a_400_and_stores_nothing(monkeypatch, known_projects):
+    saved = []
+    client, store = _client(monkeypatch, saved)
+    r = client.patch("/api/config", json={"remote_stale_minutes": 500})
+    assert r.status_code == 400
+    assert "1 to 120" in r.json()["detail"]
+    assert saved == []

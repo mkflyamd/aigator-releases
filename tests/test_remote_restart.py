@@ -200,3 +200,38 @@ async def test_the_last_message_of_a_restored_session_is_read_from_the_host_labe
 def test_remote_loop_keeps_one_service_per_channel_named_for_it(tmp_path):
     loops = remote_loop.build_loops(State(tmp_path / "s.json"))
     assert [loop._runner._service._channel for loop in loops] == ["teams", "slack"]
+
+
+def test_a_running_host_that_does_not_answer_is_unreachable_not_empty(monkeypatch):
+    monkeypatch.setattr(terminal.pty_client, "host_enabled", lambda: True)
+    monkeypatch.setattr(terminal.pty_client, "instance_key", lambda: "k")
+    monkeypatch.setattr(terminal.pty_client, "find_host", lambda key: None)
+    monkeypatch.setattr(terminal.pty_client, "host_process_running", lambda key: True)
+    with pytest.raises(terminal.HostUnreachable):
+        terminal.host_sessions()
+    assert terminal._list_host_sessions() == []
+
+
+def test_a_stale_host_file_or_no_host_holds_no_sessions(monkeypatch):
+    monkeypatch.setattr(terminal.pty_client, "host_enabled", lambda: True)
+    monkeypatch.setattr(terminal.pty_client, "instance_key", lambda: "k")
+    monkeypatch.setattr(terminal.pty_client, "find_host", lambda key: None)
+    monkeypatch.setattr(terminal.pty_client, "host_process_running", lambda key: False)
+    assert terminal.host_sessions() == []
+
+
+def test_the_host_process_check_reads_the_pid_from_the_host_file(tmp_path, monkeypatch):
+    import json
+
+    import psutil
+
+    f = tmp_path / "host.json"
+    monkeypatch.setattr(terminal.pty_client, "host_file", lambda key: f)
+    assert terminal.pty_client.host_process_running("k") is False
+    f.write_text(json.dumps({"pid": 4242, "port": 1, "token": "t"}), encoding="utf-8")
+    monkeypatch.setattr(psutil, "pid_exists", lambda pid: pid == 4242)
+    assert terminal.pty_client.host_process_running("k") is True
+    f.write_text(json.dumps({"pid": 1, "port": 1, "token": "t"}), encoding="utf-8")
+    assert terminal.pty_client.host_process_running("k") is False
+    f.write_text("not json", encoding="utf-8")
+    assert terminal.pty_client.host_process_running("k") is False

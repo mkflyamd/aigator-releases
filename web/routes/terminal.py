@@ -125,8 +125,11 @@ def _list_host_sessions(strict: bool = False) -> list[dict]:
     HostUnreachable so a caller can tell "no sessions" from "could not ask"."""
     if not pty_client.host_enabled():
         return []
-    info = pty_client.find_host(pty_client.instance_key())
+    key = pty_client.instance_key()
+    info = pty_client.find_host(key)
     if info is None:
+        if strict and pty_client.host_process_running(key):
+            raise HostUnreachable("the PTY host did not answer")
         return []
     try:
         return pty_client.host_request(info, {"op": "list"}).get("sessions", [])
