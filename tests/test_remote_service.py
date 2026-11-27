@@ -136,6 +136,23 @@ async def test_completed_event_when_idle_follows_a_send(svc, host, clock):
     assert len(svc.events) == 1
 
 
+async def test_idle_written_while_the_prompt_is_still_being_typed_is_not_a_finished_turn(svc, host, clock):
+    async def slow_deliver(pty_id, text):
+        clock.now += 6
+        host.states[pty_id] = {"state": "idle", "at": clock.now}
+        clock.now += 2
+        host.delivered.append((pty_id, text))
+
+    host.deliver = slow_deliver
+    await svc.start(BUDGET, "hello")
+    await svc.tick()
+    assert svc.events == []
+    host.states["pty-1"] = {"state": "idle", "at": clock.now + 20}
+    host.last["pty-1"] = "Hello. Here is where things stand."
+    await svc.tick()
+    assert [(e.kind, e.text) for e in svc.events] == [("completed", "Hello. Here is where things stand.")]
+
+
 async def test_input_required_event_when_the_agent_asks(svc, host, clock):
     await svc.start(BUDGET, "a")
     host.states["pty-1"] = {"state": "asking", "at": clock.now + 1}

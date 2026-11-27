@@ -160,13 +160,11 @@ class RemoteService:
         await self._deliver(self.get(session_id), text)
 
     async def _deliver(self, session: Session, text: str) -> None:
-        sent_at = self._clock()
         try:
             await self._host.deliver(session.pty_id, text)
         except HostError as exc:
             raise RemoteError(str(exc)) from exc
-        session.last_activity = self._clock()
-        session.awaiting_since = sent_at
+        session.last_activity = session.awaiting_since = self._clock()
 
     async def stop(self, session_id: str) -> None:
         session = self.get(session_id)
