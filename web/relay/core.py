@@ -75,6 +75,7 @@ class Link:
     expires_at: float
     stopped: bool = False
     paused: str = ""
+    settled: frozenset[str] = frozenset()
 
     def other(self, endpoint_id: str) -> Endpoint | None:
         if endpoint_id == self.a.id:
@@ -167,6 +168,7 @@ class Relay:
         link = self._links.get(link_id)
         if link is None or not link.active(self._clock()):
             return False
+        link.settled = frozenset(t.id for t in self._tasks.values() if t.context_id == f"link:{link.id}")
         link.paused = ""
         return True
 
@@ -276,16 +278,21 @@ class Relay:
         task.extra.update(extra)
         return self._finish(task, TaskState.REJECTED if permanent else TaskState.FAILED, code, reason, now)
 
-    def _count(self, task: Task, now: float, *, on_link: bool) -> int:
-        """Messages this hour that were not refused or failed, the current one included."""
+    def _count(self, task: Task, now: float, *, on_link: bool, settled: frozenset[str] = frozenset()) -> int:
+        """Messages this hour that were not refused or failed, the current one included.
+        Those the user already settled by resuming the link do not count again."""
         if on_link:
-            same = lambda t: t.context_id == task.context_id  # noqa: E731
+            same = lambda t: t.context_id == task.context_id and t.id not in settled  # noqa: E731
         else:
             same = lambda t: t.sender.id == task.sender.id and not t.context_id.startswith("link:")  # noqa: E731
         return sum(1 for t in self._tasks.values() if now - t.created_at < HOUR and t.state in COUNTED_STATES and same(t))
 
-    def _repeated(self, task: Task) -> bool:
-        earlier = [t for t in self._tasks.values() if t is not task and t.context_id == task.context_id and t.sender.id == task.sender.id]
+    def _repeated(self, task: Task, settled: frozenset[str] = frozenset()) -> bool:
+        earlier = [
+            t
+            for t in self._tasks.values()
+            if t is not task and t.context_id == task.context_id and t.sender.id == task.sender.id and t.id not in settled
+        ]
         tail = earlier[-(REPEAT_LIMIT - 1) :]
         return len(tail) == REPEAT_LIMIT - 1 and all(t.text == task.text for t in tail)
 
@@ -354,10 +361,10 @@ class Relay:
             return self._refuse(task, "hop_limit", "This conversation went back and forth too many times.", now)
 
         if link is not None:
-            if self._repeated(task):
+            if self._repeated(task, link.settled):
                 link.paused = "repeated"
                 return self._refuse(task, "repeated", "The same message was sent several times; the link is paused.", now)
-            if self._count(task, now, on_link=True) > LINK_LIMIT:
+            if self._count(task, now, on_link=True, settled=link.settled) > LINK_LIMIT:
                 link.paused = "limit_reached"
                 return self._refuse(task, "limit_reached", "This link reached its hourly limit and is paused.", now)
         elif self._count(task, now, on_link=False) > UNLINKED_LIMIT:
