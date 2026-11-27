@@ -1511,6 +1511,7 @@ function _genAgentConnect(sess, retryDelay) {
       // Always write - mode-setting sequences still have to reach the terminal.
       // Only a chunk that paints something counts as the session having started,
       // so a PTY that emits its preamble and dies can't disarm the watchdog.
+      if (sess._trimArmed) _ocTrimSoon(sess);
       if (!sess._hasOutput && hasVisibleOutput) {
         sess._hasOutput = true;
         clearTimeout(sess._noOutputTimer);

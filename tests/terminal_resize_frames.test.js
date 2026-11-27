@@ -38,6 +38,8 @@ const helperCtx = {
   WebSocket: { OPEN: 1 },
   Date,
   AbortSignal: {},
+  setTimeout: () => 0,
+  clearTimeout() {},
   _ocNoteEchoCalls: 0,
 };
 vm.createContext(helperCtx);
