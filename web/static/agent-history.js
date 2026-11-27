@@ -198,6 +198,8 @@
   const HOVER_MS = 300;
   const GRACE_MS = 150;
   const PREVIEW_DEBOUNCE_MS = 200;
+  const BUSY_MAX_MS = 35000;
+  const FLASH_MS = 3000;
 
   const ui = {
     sessions: [],
@@ -212,6 +214,8 @@
     query: '',
     previews: {},
     notice: {},
+    starting: {},
+    takeoverBusy: false,
     rows: new Map(),
     sig: '',
   };
@@ -430,6 +434,29 @@
     );
   }
 
+  function isRowBusy(row) {
+    return ui.starting[row.key] !== undefined;
+  }
+
+  // Busy covers the spawn POST and the seconds until the terminal first paints.
+  function setRowBusy(row, on) {
+    const key = row.key;
+    clearTimeout(ui.starting[key]);
+    if (on) ui.starting[key] = setTimeout(() => setRowBusy({ key }, false), BUSY_MAX_MS);
+    else delete ui.starting[key];
+    render();
+  }
+
+  function flash(row, text) {
+    ui.notice[row.key] = text;
+    render();
+    setTimeout(() => {
+      if (ui.notice[row.key] !== text) return;
+      delete ui.notice[row.key];
+      render();
+    }, FLASH_MS);
+  }
+
   function confirmTakeover(row, where) {
     const target = where || row.elsewhereIn;
     if (!canTakeOver(target)) {
@@ -438,6 +465,10 @@
       return;
     }
     if (typeof _showConfirmModal !== 'function') return;
+    if (document.getElementById('confirm-modal-overlay')) {
+      flash(row, 'Answer the open prompt first.');
+      return;
+    }
     _showConfirmModal(
       'Session open elsewhere',
       takeoverBody(target),
@@ -449,13 +480,15 @@
 
   async function takeover(row, target) {
     const { project } = context();
-    if (!project) return;
-    const headers =
-      typeof _caHeadersAsync === 'function'
-        ? await _caHeadersAsync()
-        : { 'Content-Type': 'application/json' };
+    if (!project || ui.takeoverBusy) return;
+    ui.takeoverBusy = true;
+    setRowBusy(row, true);
     let message = 'Could not close the session where it is open.';
     try {
+      const headers =
+        typeof _caHeadersAsync === 'function'
+          ? await _caHeadersAsync()
+          : { 'Content-Type': 'application/json' };
       const resp = await fetcher()('/api/generic-agent/takeover', {
         method: 'POST',
         headers,
@@ -468,6 +501,7 @@
         }),
       });
       if (resp.ok) {
+        ui.takeoverBusy = false;
         resume(row, true);
         return;
       }
@@ -475,40 +509,55 @@
       if (d && d.detail)
         message = typeof d.detail === 'object' ? d.detail.message || message : d.detail;
     } catch (_) {}
+    ui.takeoverBusy = false;
     ui.notice[row.key] = message;
-    render();
+    setRowBusy(row, false);
   }
 
   async function resume(row, tookOver) {
     const { tabId, project } = context();
     if (!project || typeof _genAgentStart !== 'function') return;
-    if (typeof _genAgentStartInFlight === 'function' && _genAgentStartInFlight(tabId)) return;
+    if (!tookOver && isRowBusy(row)) {
+      flash(row, 'Already opening this session.');
+      return;
+    }
+    if (
+      !tookOver &&
+      ((typeof _genAgentStartInFlight === 'function' && _genAgentStartInFlight(tabId)) ||
+        ui.takeoverBusy)
+    ) {
+      flash(row, 'Another session is still opening.');
+      return;
+    }
     if (row.liveElsewhere && !tookOver) {
       confirmTakeover(row);
       return;
     }
+    setRowBusy(row, true);
     let asked = false;
     const before = terminalState(tabId);
-    const count = before ? before.order.length : 0;
     closeFileView();
-    await _genAgentStart(tabId, row.agent, project.name, project.repo_path, {
+    const id = await _genAgentStart(tabId, row.agent, project.name, project.repo_path, {
       forceNew: true,
       resumeId: row.id,
       onSessionLive: (err) => {
         asked = true;
         confirmTakeover(row, err && err.where);
       },
+      onFirstPaint: () => setRowBusy(row, false),
       keepStateAgent: !!(before && before.agent),
     });
-    if (asked) return;
-    const after = terminalState(tabId);
-    if (after && after.order.length > count) {
+    if (asked) {
+      setRowBusy(row, false);
+      return;
+    }
+    if (id) {
       delete ui.notice[row.key];
       load();
       return;
     }
     ui.notice[row.key] = 'Could not resume this session.';
-    render();
+    setRowBusy(row, false);
     load();
   }
 
@@ -900,6 +949,10 @@
     const item = el('div', 'ah-item ah-state-' + row.state);
     item.dataset.key = row.key;
     item.setAttribute('role', 'listitem');
+    if (isRowBusy(row)) {
+      item.classList.add('ah-busy');
+      item.setAttribute('aria-busy', 'true');
+    }
     const head = el('div', 'ah-row');
     const pill = statePill(row);
     const text = metaLine(row, now, agentName);
@@ -1018,6 +1071,7 @@
           metaLine(r, now, agentName),
           rowViewing(r),
           rowActive(r),
+          isRowBusy(r),
           ui.notice[r.key] || '',
         ]),
       ]),
@@ -1125,6 +1179,9 @@
     applyTabState,
     isViewing,
     liveSessions,
+    resume,
+    takeover,
+    isRowBusy,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.agentHistory = api;

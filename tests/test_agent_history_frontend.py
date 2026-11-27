@@ -282,6 +282,21 @@ def test_a_session_open_elsewhere_is_taken_over_never_duplicated():
     assert "failure.where" in TERM
 
 
+def test_busy_rows_expose_aria_busy_and_respect_reduced_motion():
+    row = HISTORY.split("function buildRow(")[1].split("function ")[0]
+    assert "item.setAttribute('aria-busy', 'true');" in row
+    assert "isRowBusy(r)," in HISTORY.split("const sig = JSON.stringify(")[1]
+    reduced_blocks = CSS.split("@media (prefers-reduced-motion: reduce)")[1:]
+    assert any(".ah-item.ah-busy .ah-main" in blk for blk in reduced_blocks)
+
+
+def test_terminal_reports_first_paint_and_reuses_an_existing_session():
+    assert "onFirstPaint: () => setRowBusy(row, false)," in HISTORY
+    assert "_genAgentFirePaint(sess);" in TERM.split("function _genAgentRevealSession(")[1]
+    assert "_genAgentFirePaint(sess);" in TERM.split("function _genAgentDetachSession(")[1]
+    assert "const existing = current.sessions[data.pty_session_id];" in TERM
+
+
 def test_takeover_request_carries_the_process_the_user_confirmed():
     start = HISTORY.index("async function takeover(row, target)")
     body = HISTORY[start : HISTORY.index("async function resume", start)]
