@@ -36,6 +36,7 @@
       "menu.js",
       "navigation-policy.js",
       "preload.js",
+      "sandbox-repair.js",
       "splash.html",
       "toolbar-preload.js",
       "toolbar.html"

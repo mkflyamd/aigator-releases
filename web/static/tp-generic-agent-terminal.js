@@ -1453,12 +1453,11 @@ function _genAgentConnect(sess, retryDelay) {
     _ocNoteEcho(sess);
     _genAgentClearReconnecting(sess);
     _genAgentReportVisible(sess, true);
-    if (wasRetrying && sess._retryAttempt) {
-      // Don't write [reconnected] text into the terminal - it corrupts a TUI's
-      // alternate screen. The replay repaints it; only a changed size needs telling.
-      _ocSendSize(sess);
-    }
-    _ocFit(sess);
+    // Always push xterm's size to the PTY on (re)connect: the PTY may hold a
+    // stale size, and on a reconnect the resize also makes a TUI fully redraw
+    // without writing text into its alternate screen. A return from a pop-out
+    // nudges below instead, which ends on the current size.
+    _ocFit(sess, !sess._redrawOnOpen);
     if (sess._redrawOnOpen && sess.term) {
       // Back from a pop-out: the PTY may already be this size, and a resize to
       // the same size makes no app redraw. Nudge it so the app repaints.
@@ -1467,7 +1466,7 @@ function _genAgentConnect(sess, retryDelay) {
       const resize = (c) => sess.ws.send(JSON.stringify({ type: 'resize', cols: c, rows }));
       resize(Math.max(cols - 1, 2));
       resize(cols);
-      sess._sentSize = { cols, rows };
+      _ocMarkSizeSent(sess);
     }
     // The wake watch re-attaches a suspended tab every few seconds; it must not take focus.
     if (!sess._resumeId) sess.term && sess.term.focus();
@@ -1533,7 +1532,7 @@ function _genAgentConnect(sess, retryDelay) {
         const resize = (c) => sess.ws.send(JSON.stringify({ type: 'resize', cols: c, rows }));
         resize(Math.max(cols - 1, 2));
         resize(cols);
-        sess._sentSize = { cols, rows };
+        _ocMarkSizeSent(sess);
       }
     } else if (msg.type === 'notready') {
       // Transient: PTY not spawned yet, or reaped while we held its id. Do NOT
@@ -1566,7 +1565,7 @@ function _genAgentConnect(sess, retryDelay) {
       if (sess._awaitingWake && sess.term) {
         sess.term.reset();
         // The woken agent was spawned at the default size, not this terminal's.
-        sess._sentSize = null;
+        sess._sentWs = null;
         _ocSendSize(sess);
       }
       sess._awaitingWake = false;

@@ -367,8 +367,12 @@ class GraphClient:
         headers: dict | None = None,
         content: bytes | None = None,
         label: str = "",
+        retry_unanswered: bool = True,
     ) -> httpx.Response:
-        """Central request method: caps in-flight Graph calls, then retries with connection pooling."""
+        """Central request method: caps in-flight Graph calls, then retries with connection pooling.
+
+        ``retry_unanswered=False`` is for writes that must not be sent twice: a timeout, dropped connection or
+        502/503/504 does not prove the server did nothing, so the call fails instead of repeating itself."""
         semaphore = _gate.semaphore
         if not semaphore.acquire(blocking=False):
             raise GraphAPIError(
@@ -378,7 +382,12 @@ class GraphClient:
             )
         try:
             return self._request_with_retries(
-                method, url, headers=headers, content=content, label=label
+                method,
+                url,
+                headers=headers,
+                content=content,
+                label=label,
+                retry_unanswered=retry_unanswered,
             )
         finally:
             semaphore.release()
@@ -391,6 +400,7 @@ class GraphClient:
         headers: dict | None = None,
         content: bytes | None = None,
         label: str = "",
+        retry_unanswered: bool = True,
     ) -> httpx.Response:
         hdrs = headers or self._headers()
         pool = _get_http_pool()
@@ -428,7 +438,8 @@ class GraphClient:
             except httpx.HTTPStatusError as e:
                 code = e.response.status_code
                 body = e.response.text[:500]
-                if code in (429, 502, 503, 504) and attempt < self._MAX_RETRIES:
+                retryable = code == 429 or (retry_unanswered and code in (502, 503, 504))
+                if retryable and attempt < self._MAX_RETRIES:
                     retry_after = int(e.response.headers.get("Retry-After", "30"))
                     wait = min(retry_after, 300) if code == 429 else min(2**attempt, 15)
                 else:
@@ -466,7 +477,11 @@ class GraphClient:
                     e,
                 )
                 wait = min(2**attempt, 10)
-                if attempt < self._MAX_RETRIES and time.monotonic() - started + wait < _RETRY_BUDGET_S:
+                if (
+                    retry_unanswered
+                    and attempt < self._MAX_RETRIES
+                    and time.monotonic() - started + wait < _RETRY_BUDGET_S
+                ):
                     time.sleep(wait)
                     last_err = e
                     continue
@@ -565,10 +580,13 @@ class GraphClient:
     def put_binary(
         self, path: str, data: bytes, content_type: str = "application/octet-stream"
     ) -> Any:
-        """Upload raw bytes via PUT — used for OneDrive simple upload (<4 MB)."""
+        """Upload raw bytes via PUT — used for OneDrive simple upload (<4 MB).
+
+        Sent once: if the answer is lost the file may already be stored, and a repeat would store it again as
+        ``name (1)``. The caller decides how to check the destination."""
         url = f"{GRAPH_BASE}{self._encode_path(path)}"
         headers = {**self._headers(), "Content-Type": content_type}
-        resp = self._request("PUT", url, headers=headers, content=data, label=path)
+        resp = self._request("PUT", url, headers=headers, content=data, label=path, retry_unanswered=False)
         return resp.json() if resp.content else {"status": "ok"}
 
     def delete(self, path: str) -> dict:
