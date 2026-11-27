@@ -119,6 +119,24 @@ const scrollback = (term) => term.buffer.active.length - term.rows;
     assert.strictEqual(trims.length, 2, 'the next real resize trims again');
   }
 
+  // the screen the user is looking at is untouched, and so is the cursor
+  {
+    const { term, paint, resizeTo } = makeSession();
+    await paint(200);
+    resizeTo(90, 30);
+    const screen = () => {
+      const b = term.buffer.active;
+      const rows = [];
+      for (let i = 0; i < term.rows; i++) rows.push(b.getLine(b.baseY + i).translateToString(true));
+      return rows.join('\n') + `|${b.cursorX},${b.cursorY}`;
+    };
+    const before = screen();
+    await advance(1000);
+    await flush(term);
+    assert.strictEqual(scrollback(term), 0);
+    assert.strictEqual(screen(), before);
+  }
+
   // output after the resize pushes the trim back: it waits for the repaint to go quiet
   {
     const { sess, term, trims, paint, resizeTo } = makeSession();
