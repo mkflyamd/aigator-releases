@@ -192,8 +192,8 @@ function _genAgentEnsureHeaderTabStrip() {
     newBtn.title = 'New terminal';
     newBtn.innerHTML =
       '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>';
-    scroll.appendChild(newBtn);
     strip.appendChild(scroll);
+    strip.appendChild(newBtn);
     strip._scroll = scroll;
     strip._newBtn = newBtn;
     hdr.insertBefore(strip, hdr.firstChild);
@@ -224,7 +224,7 @@ function _genAgentRenderTabs(tabId) {
   // first created, which can be absent on a surviving DOM node and leave a
   // stale tab strip after a session is closed.
   const scroll = strip.querySelector('.gtp-tabs-scroll');
-  const newBtn = scroll && scroll.querySelector('.gtp-tab-new');
+  const newBtn = strip.querySelector('.gtp-tab-new');
   if (!scroll || !newBtn) return;
   newBtn.onclick = () => {
     if (typeof _caCloseFileDiffIfOpen === 'function') _caCloseFileDiffIfOpen();
@@ -286,7 +286,7 @@ function _genAgentRenderTabs(tabId) {
       tab.remove();
       _genAgentCloseSession(tabId, id);
     });
-    scroll.insertBefore(tab, newBtn);
+    scroll.appendChild(tab);
   });
 }
 

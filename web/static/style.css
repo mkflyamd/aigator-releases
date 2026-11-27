@@ -19890,7 +19890,7 @@ body.gator-terminal-vertical .main-resize {
   display: flex;
   align-items: stretch;
   gap: 2px;
-  flex: 1;
+  flex: 0 1 auto;
   min-width: 0;
   overflow-x: auto;
   overflow-y: hidden;
@@ -19907,7 +19907,7 @@ body.gator-terminal-vertical .main-resize {
   flex-shrink: 0;
   background: #10131b;
   border-left: 1px solid var(--border, #2a2f3a);
-  margin-left: 4px;
+  margin-left: auto;
 }
 .gtp-tab {
   display: inline-flex;
@@ -20015,6 +20015,7 @@ body.gator-terminal-vertical .main-resize {
   justify-content: center;
   height: 100%;
   width: 26px;
+  flex-shrink: 0;
   background: transparent;
   border: none;
   color: var(--text-dim, #94a3b8);

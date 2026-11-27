@@ -115,8 +115,8 @@
     });
     fullscreenBtn.addEventListener('click', toggleFullscreen);
     newTabBtn.addEventListener('click', () => newSession());
-    tabsScroll.appendChild(newTabBtn);
     tabs.appendChild(tabsScroll);
+    tabs.appendChild(newTabBtn);
     tabs.appendChild(actions);
     STATE.newTabBtn = newTabBtn;
     STATE.actionsEl = actions;
@@ -289,7 +289,7 @@
 
   function _renderTabs() {
     if (!STATE.tabsEl) return;
-    // Wipe everything except the + button (which we'll re-append last)
+    // Rebuild all tabs; the + button is a sibling of tabsEl, so it is not touched here
     STATE.tabsEl.innerHTML = '';
     STATE.sessions.forEach((s) => {
       const tab = _el('div', { className: 'gtp-tab' + (s.id === STATE.activeId ? ' active' : '') });
@@ -321,7 +321,6 @@
       s.tabEl = tab;
       STATE.tabsEl.appendChild(tab);
     });
-    if (STATE.newTabBtn) STATE.tabsEl.appendChild(STATE.newTabBtn);
   }
 
   function _updateActiveTab() {
