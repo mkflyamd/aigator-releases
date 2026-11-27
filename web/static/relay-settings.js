@@ -62,8 +62,9 @@
     return `${name}${tail}${a.project_id ? ` (${a.project_id})` : ''}`;
   }
 
-  function toggle(id, checked, disabled, onChange) {
+  function toggle(id, label, checked, disabled, onChange) {
     const input = el('input', { type: 'checkbox', id, checked, disabled });
+    input.setAttribute('aria-label', label);
     input.addEventListener('change', () => onChange(input.checked));
     return el(
       'div',
@@ -97,8 +98,12 @@
         el('div', { className: 'srow-label', textContent: 'Let agents message each other' }),
         el('div', { className: 'srow-sub', textContent: sub }),
       ),
-      toggle('relay-enabled', state.enabled && !locked, locked, (on) =>
-        act('POST', '/api/relay/settings', { enabled: on }),
+      toggle(
+        'relay-enabled',
+        'Let agents message each other',
+        state.enabled && !locked,
+        locked,
+        (on) => act('POST', '/api/relay/settings', { enabled: on }),
       ),
     );
   }
@@ -131,8 +136,12 @@
             textContent: `${a.state} - Accepts messages from other agents`,
           }),
         ),
-        toggle(`relay-accepts-${a.id}`, !a.opted_out, Boolean(off), (on) =>
-          act('POST', '/api/relay/opt-out', { endpoint_id: a.id, opted_out: !on }),
+        toggle(
+          `relay-accepts-${a.id}`,
+          `Accepts messages for ${agentLabel(a)}`,
+          !a.opted_out,
+          Boolean(off),
+          (on) => act('POST', '/api/relay/opt-out', { endpoint_id: a.id, opted_out: !on }),
         ),
       ),
     );
@@ -153,7 +162,12 @@
       el(
         'div',
         { className: 'srow-info' },
-        el('div', { className: 'srow-label', textContent: 'Links' }),
+        el('div', {
+          className: 'srow-label',
+          textContent: 'Links',
+          tabIndex: -1,
+          id: 'relay-links-heading',
+        }),
         el('div', {
           className: 'srow-sub',
           textContent: off
@@ -168,12 +182,14 @@
         minute: '2-digit',
       });
       const end = el('button', { className: 'btn-secondary', textContent: 'End link' });
+      end.dataset.key = `end-${l.id}`;
       end.addEventListener('click', () =>
         act('DELETE', `/api/relay/links/${encodeURIComponent(l.id)}`),
       );
       const buttons = [end];
       if (l.paused) {
         const resume = el('button', { className: 'btn-secondary', textContent: 'Resume' });
+        resume.dataset.key = `resume-${l.id}`;
         resume.addEventListener('click', () =>
           act('POST', `/api/relay/links/${encodeURIComponent(l.id)}/resume`),
         );
@@ -260,13 +276,29 @@
       );
       return;
     }
+    const active = root.contains(document.activeElement) ? document.activeElement : null;
+    const key = active && (active.id || active.dataset.key);
+    const endKeys = () => [...root.querySelectorAll('[data-key^="end-"]')];
+    const endIndex = key && key.startsWith('end-') ? endKeys().indexOf(active) : -1;
     root.replaceChildren(switchRow(), ...agentRows(), ...linkRows());
+    if (!key) return;
+    const find = (k) =>
+      [...root.querySelectorAll('[id], [data-key]')].find((n) => n.id === k || n.dataset.key === k);
+    let target = find(key);
+    if (!target && key.startsWith('resume-')) target = find(`end-${key.slice('resume-'.length)}`);
+    if (!target && endIndex >= 0) {
+      const ends = endKeys();
+      target =
+        ends[Math.min(endIndex, ends.length - 1)] || root.querySelector('#relay-links-heading');
+    }
+    if (target) target.focus();
   }
 
   async function refresh() {
     try {
       state = await call('GET', '/api/relay');
     } catch (e) {
+      if (state) return;
       state = null;
     }
     render();
