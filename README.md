@@ -99,3 +99,12 @@ Apache 2.0, see [LICENSE](LICENSE).
 ## Trademarks
 
 The AI Gator name and logos are not covered by the Apache license, and AI Gator is not affiliated with Microsoft, Slack, Atlassian, GitHub, Anthropic or AMD. See [TRADEMARKS.md](TRADEMARKS.md).
+
+---
+
+## Legal
+
+- [Terms of Use](TERMS.md)
+- [Privacy Policy](PRIVACY.md)
+- [Trademarks](TRADEMARKS.md)
+- [License](LICENSE)
