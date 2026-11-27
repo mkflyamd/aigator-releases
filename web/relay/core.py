@@ -103,6 +103,20 @@ def audit_file() -> Path:
 _audit_lock = threading.Lock()
 
 
+def recent_audit(limit: int = 50) -> list[dict]:
+    try:
+        lines = audit_file().read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    found: list[dict] = []
+    for line in lines[-limit:]:
+        try:
+            found.append(json.loads(line))
+        except ValueError:
+            continue
+    return found[::-1]
+
+
 def write_audit(line: dict) -> None:
     path = audit_file()
     try:

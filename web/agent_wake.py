@@ -232,6 +232,21 @@ def find_by_pty(pty_id: str) -> dict | None:
     return None
 
 
+def list_entries() -> list[dict]:
+    """Every Claude session that can be messaged, suspended or running. Blocking."""
+    from routes import terminal
+
+    found = {
+        pty_id: _suspended_entry(pty_id, record)
+        for pty_id, record in agent_suspend.all_records().items()
+        if record.get("agent") == "claude" and record.get("session_id")
+    }
+    for pty_id, meta in terminal.live_pty_labels().items():
+        if pty_id not in found and meta.get("agent") == "claude" and meta.get("session_id"):
+            found[pty_id] = _live_entry(pty_id, meta)
+    return list(found.values())
+
+
 def check_switches() -> None:
     if not relay_settings.admin_allows_messaging():
         raise WakeRefused("admin_denied", "Your administrator has turned off agent messaging.")
