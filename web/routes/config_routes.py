@@ -232,11 +232,12 @@ async def patch_config(request: Request):
     refusal = remote_settings.validate(body)
     if refusal:
         raise HTTPException(status_code=400, detail=refusal)
-    cfg = _load_config()
-    for k, v in body.items():
-        if k in PATCHABLE_CONFIG_KEYS:
-            cfg[k] = v
-    _save_config(cfg)
+    def _apply(cfg):
+        for k, v in body.items():
+            if k in PATCHABLE_CONFIG_KEYS:
+                cfg[k] = v
+
+    cfg = _update_config(_apply)
     from log_sanitizer import refresh_privacy_mode
 
     refresh_privacy_mode()

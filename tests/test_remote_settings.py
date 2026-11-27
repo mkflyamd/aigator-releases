@@ -59,8 +59,16 @@ def test_out_of_range_or_mistyped_values_are_refused(known_projects, key, value)
 
 def _client(monkeypatch, saved):
     store = {}
-    monkeypatch.setattr(config_routes, "_load_config", lambda: dict(store))
-    monkeypatch.setattr(config_routes, "_save_config", lambda cfg: (store.clear(), store.update(cfg), saved.append(dict(cfg))))
+
+    def update(mutator):
+        cfg = dict(store)
+        mutator(cfg)
+        store.clear()
+        store.update(cfg)
+        saved.append(dict(cfg))
+        return cfg
+
+    monkeypatch.setattr(config_routes, "_update_config", update)
     app = FastAPI()
     app.include_router(config_routes.router)
     app.dependency_overrides[verify_csrf] = lambda: None
@@ -171,3 +179,17 @@ def test_saving_an_out_of_range_limit_is_a_400_and_stores_nothing(monkeypatch, k
     assert r.status_code == 400
     assert "1 to 120" in r.json()["detail"]
     assert saved == []
+
+
+def test_a_save_is_applied_inside_update_config_so_other_writes_are_not_lost(monkeypatch, known_projects):
+    seen = []
+    monkeypatch.setattr(config_routes, "_update_config", lambda m: (seen.append(m), {"remote_stale_minutes": 30})[1])
+    app = FastAPI()
+    app.include_router(config_routes.router)
+    app.dependency_overrides[verify_csrf] = lambda: None
+    r = TestClient(app).patch("/api/config", json={"remote_stale_minutes": 30, "github_url": "ignored"})
+    assert r.status_code == 200
+    assert len(seen) == 1
+    cfg = {"github_url": "keep"}
+    seen[0](cfg)
+    assert cfg == {"github_url": "keep", "remote_stale_minutes": 30}
