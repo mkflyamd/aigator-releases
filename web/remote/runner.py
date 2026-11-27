@@ -13,7 +13,7 @@ from typing import Callable
 
 from remote import commands
 from remote.channel import Channel, InboundMessage
-from remote.guard import Guard
+from remote.guard import Guard, limit
 from remote.service import Event, RemoteError, RemoteService, Session
 from remote.state import State
 
@@ -41,7 +41,7 @@ class RemoteRunner:
         guard: Guard,
         state: State,
         clock: Callable[[], float] = time.time,
-        stale_seconds: float = STALE_SECONDS,
+        stale_seconds: float | Callable[[], float] = STALE_SECONDS,
     ):
         self._channel = channel
         self._service = service
@@ -67,6 +67,9 @@ class RemoteRunner:
             if self._enabled:
                 self._guard.disarm()
         self._enabled = enabled
+
+    async def restore(self) -> None:
+        await self._service.restore()
 
     async def announce_online(self) -> None:
         await self._post(commands.system_reply("Online"))
@@ -99,7 +102,7 @@ class RemoteRunner:
             command = commands.parse(message.text)
             if command is None or not self._guard.armed:
                 continue
-            if self._clock() - message.created_at > self._stale:
+            if self._clock() - message.created_at > limit(self._stale):
                 skipped += 1
                 continue
             await self._run(command)

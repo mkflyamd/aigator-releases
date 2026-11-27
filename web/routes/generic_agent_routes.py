@@ -81,9 +81,15 @@ async def close_generic_agent_terminal(req: GenericAgentTerminalCloseRequest):
     ends on `@gator stop`, process exit or the remote idle limit, never because
     a Code tab was closed.
     """
-    from routes.terminal import close_pty_session, session_owner
+    from routes.terminal import HostUnreachable, close_pty_session, session_owner
 
-    owner = await asyncio.to_thread(session_owner, req.pty_session_id)
+    try:
+        owner = await asyncio.to_thread(session_owner, req.pty_session_id, True)
+    except HostUnreachable:
+        raise HTTPException(
+            status_code=503,
+            detail="Could not check whether this terminal is a remote-control session, so it was left open. Try again.",
+        ) from None
     if (owner or {}).get("remote_pinned"):
         if generic_agent.get_active_session(req.project_id, req.agent) == req.pty_session_id:
             generic_agent.clear_active_session(req.project_id, req.agent)
@@ -175,9 +181,10 @@ async def resume_suspended(req: GenericAgentTerminalRequest, pty_id: str, woken_
         return await _open_terminal(req, reuse_pty_id=pty_id, woken_by=woken_by, woken_preview=woken_preview)
 
 
-async def open_pinned_terminal(req: GenericAgentTerminalRequest) -> dict:
-    """A new terminal for remote control: labelled so the idle-suspend sweep never takes it."""
-    return await _open_terminal(req, pinned=True)
+async def open_pinned_terminal(req: GenericAgentTerminalRequest, labels: dict[str, str] | None = None) -> dict:
+    """A new terminal for remote control: labelled so the idle-suspend sweep never takes it.
+    `labels` are kept by the PTY host beside the session, so a restarted backend can find it."""
+    return await _open_terminal(req, pinned=True, extra_labels=labels)
 
 
 async def _open_terminal(
@@ -187,6 +194,7 @@ async def _open_terminal(
     woken_by: str | None = None,
     woken_preview: str = "",
     pinned: bool = False,
+    extra_labels: dict[str, str] | None = None,
 ):
     """Reattach this project's live session if one exists, else spawn fresh.
 
@@ -238,6 +246,7 @@ async def _open_terminal(
     owner = {"project_id": req.project_id, "agent": req.agent}
     if pinned:
         owner["remote_pinned"] = "1"
+        owner.update(extra_labels or {})
     if woken_by:
         owner["woken_by"] = woken_by
         owner["woken_preview"] = woken_preview

@@ -53,7 +53,7 @@ def _close_fakes(monkeypatch, meta, host_labels=None):
 
     closed, unpinned = [], []
     monkeypatch.setattr(terminal, "_pty_sessions", {"pty-9": _Registered(meta)} if meta is not None else {})
-    monkeypatch.setattr(terminal, "host_session_labels", lambda sid: host_labels or {})
+    monkeypatch.setattr(terminal, "host_session_labels", lambda sid, strict=False: host_labels or {})
     monkeypatch.setattr(terminal, "close_pty_session", lambda sid: closed.append(sid) or True)
     monkeypatch.setattr(generic_agent, "unpin_session", lambda sid: unpinned.append(sid))
     monkeypatch.setattr(agent_suspend, "forget", lambda sid: None)
@@ -90,3 +90,63 @@ async def test_closing_an_adopted_ordinary_session_still_ends_it(monkeypatch):
     req = generic_agent_routes.GenericAgentTerminalCloseRequest(agent="claude", project_id="demo", pty_session_id="pty-9")
     await generic_agent_routes.close_generic_agent_terminal(req)
     assert closed == ["pty-9"] and unpinned == ["pty-9"]
+
+
+def _adopted_with_unreachable_host(monkeypatch):
+    # An adopted PTY carries no meta of its own; the host is the only place the pin is recorded.
+    import routes.terminal as terminal
+
+    closed, unpinned = [], []
+    monkeypatch.setattr(terminal, "_pty_sessions", {"pty-9": _Registered(None)})
+    monkeypatch.setattr(terminal.pty_client, "host_enabled", lambda: True)
+    monkeypatch.setattr(terminal.pty_client, "instance_key", lambda: "k")
+    monkeypatch.setattr(terminal.pty_client, "find_host", lambda key: object())
+    monkeypatch.setattr(terminal, "close_pty_session", lambda sid: closed.append(sid) or True)
+    monkeypatch.setattr(generic_agent, "unpin_session", lambda sid: unpinned.append(sid))
+    monkeypatch.setattr(agent_suspend, "forget", lambda sid: None)
+    monkeypatch.setattr(generic_agent, "_active_sessions", {})
+    return terminal, closed, unpinned
+
+
+async def test_closing_an_adopted_session_is_refused_when_the_host_cannot_say_if_it_is_pinned(monkeypatch):
+    import pytest
+    from fastapi import HTTPException
+
+    terminal, closed, unpinned = _adopted_with_unreachable_host(monkeypatch)
+
+    def silent(info, request):
+        raise terminal.pty_client.HostError("no answer")
+
+    monkeypatch.setattr(terminal.pty_client, "host_request", silent)
+    req = generic_agent_routes.GenericAgentTerminalCloseRequest(agent="claude", project_id="demo", pty_session_id="pty-9")
+    with pytest.raises(HTTPException) as refused:
+        await generic_agent_routes.close_generic_agent_terminal(req)
+    assert refused.value.status_code == 503
+    assert "left open" in refused.value.detail
+    assert closed == [] and unpinned == []
+
+
+async def test_closing_an_adopted_session_proceeds_when_the_host_answers_without_a_pin(monkeypatch):
+    terminal, closed, unpinned = _adopted_with_unreachable_host(monkeypatch)
+    monkeypatch.setattr(
+        terminal.pty_client, "host_request", lambda info, request: {"sessions": [{"id": "pty-9", "meta": {"project_id": "demo"}}]}
+    )
+    req = generic_agent_routes.GenericAgentTerminalCloseRequest(agent="claude", project_id="demo", pty_session_id="pty-9")
+    await generic_agent_routes.close_generic_agent_terminal(req)
+    assert closed == ["pty-9"] and unpinned == ["pty-9"]
+
+
+def test_session_owner_tells_a_silent_host_from_a_host_with_no_labels(monkeypatch):
+    import pytest
+
+    terminal, _, _ = _adopted_with_unreachable_host(monkeypatch)
+
+    def silent(info, request):
+        raise terminal.pty_client.HostError("no answer")
+
+    monkeypatch.setattr(terminal.pty_client, "host_request", silent)
+    assert terminal.session_owner("pty-9") is None
+    with pytest.raises(terminal.HostUnreachable):
+        terminal.session_owner("pty-9", strict=True)
+    monkeypatch.setattr(terminal.pty_client, "host_request", lambda info, request: {"sessions": [{"id": "pty-9"}]})
+    assert terminal.session_owner("pty-9", strict=True) is None

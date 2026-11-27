@@ -1161,12 +1161,12 @@
               </div>
             </details>
 
-            <!-- Automation -->
-            <div class="spanel-divider" style="margin-top: 8px">Automation</div>
+            <!-- Remote control -->
+            <div class="spanel-divider" style="margin-top: 8px">Remote control</div>
             <div class="srow">
               <div class="section-status" id="teams-remote-control-dot"></div>
               <div class="srow-info">
-                <div class="srow-label">Type into OpenCode from Teams</div>
+                <div class="srow-label">Teams</div>
                 <div class="srow-sub" id="teams-remote-control-sub">Off</div>
               </div>
               <div class="srow-actions">
@@ -1176,13 +1176,93 @@
                 </label>
               </div>
             </div>
-            <div class="srow-note">
-              Lets you type a command in your Teams "Chat with yourself" and have it sent to the
-              active OpenCode code terminal here. Prefix the message with <code>/code</code> &mdash;
-              for example, <code>/code git status</code>. The command is typed into the OpenCode
-              session only; it does not reach Gator's chat, email, or other tools. Only your own
-              self-chat is read, and only on this device. Nothing is ever sent back to Teams.
+            <div class="srow">
+              <div class="section-status" id="slack-remote-control-dot"></div>
+              <div class="srow-info">
+                <div class="srow-label">Slack</div>
+                <div class="srow-sub" id="slack-remote-control-sub">Off</div>
+              </div>
+              <div class="srow-actions">
+                <label class="toggle-switch" style="margin: 0">
+                  <input type="checkbox" id="slack-remote-control-toggle" />
+                  <span class="toggle-track"></span>
+                </label>
+              </div>
             </div>
+            <div class="srow-note">
+              Type <code>@gator</code> and a request in your Teams "Chat with yourself" or your
+              Slack direct message to yourself, and it runs in a Claude session on this device.
+              <code>@gator list</code> shows the running sessions and
+              <code>@gator &lt;name&gt; &lt;text&gt;</code> picks one. Only your own self-chat is
+              read, and sessions keep running if Gator restarts.
+            </div>
+            <div class="srow">
+              <div class="section-status st-dim"></div>
+              <div class="srow-info">
+                <div class="srow-label">Default project</div>
+                <div class="srow-sub" id="remote-default-project-sub">Active project</div>
+              </div>
+              <div class="srow-actions" id="remote-default-project-slot"></div>
+            </div>
+            <div class="srow">
+              <div class="section-status st-dim"></div>
+              <div class="srow-info">
+                <div class="srow-label">Session idle limit</div>
+                <div class="srow-sub">Hours without a command before a session stops</div>
+              </div>
+              <div class="srow-actions">
+                <input
+                  id="remote-session-idle-hours"
+                  type="number"
+                  min="1"
+                  max="72"
+                  step="1"
+                  class="key-field"
+                  style="width: 80px; font-size: 0.82rem; padding: 5px 10px"
+                />
+              </div>
+            </div>
+            <div class="srow">
+              <div class="section-status st-dim"></div>
+              <div class="srow-info">
+                <div class="srow-label">Stale message limit</div>
+                <div class="srow-sub">
+                  Minutes before a message sent while Gator was off is skipped
+                </div>
+              </div>
+              <div class="srow-actions">
+                <input
+                  id="remote-stale-minutes"
+                  type="number"
+                  min="1"
+                  max="120"
+                  step="1"
+                  class="key-field"
+                  style="width: 80px; font-size: 0.82rem; padding: 5px 10px"
+                />
+              </div>
+            </div>
+            <div class="srow">
+              <div class="section-status st-dim"></div>
+              <div class="srow-info">
+                <div class="srow-label">Time limit</div>
+                <div class="srow-sub">
+                  Hours after switching on before remote control turns itself off
+                </div>
+              </div>
+              <div class="srow-actions">
+                <input
+                  id="remote-armed-max-hours"
+                  type="number"
+                  min="1"
+                  max="168"
+                  step="1"
+                  class="key-field"
+                  style="width: 80px; font-size: 0.82rem; padding: 5px 10px"
+                />
+              </div>
+            </div>
+            <div class="srow-note" id="remote-settings-error" style="display: none"></div>
 
             <!-- Server -->
             <div class="spanel-divider" style="margin-top: 8px">Server</div>

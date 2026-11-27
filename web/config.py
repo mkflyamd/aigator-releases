@@ -124,6 +124,11 @@ PATCHABLE_CONFIG_KEYS = frozenset({
     "teams_remote_control_enabled",
     # Slack self-DM remote control, same switch semantics - see web/remote/slack_channel.py
     "slack_remote_control_enabled",
+    # Remote control settings, checked on save by remote/settings.py
+    "remote_default_project",
+    "remote_session_idle_hours",
+    "remote_stale_minutes",
+    "remote_armed_max_hours",
     # Global kill-switch for agent-completed browser payments - default False,
     # deliberately not surfaced as a Settings UI toggle (see issue #152:
     # product decision is "not ready to let this app move money"). Enforced

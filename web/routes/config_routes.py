@@ -227,11 +227,17 @@ async def toggle_optional_skill(request: Request):
 @router.patch("/api/config")
 async def patch_config(request: Request):
     body = await request.json()
-    cfg = _load_config()
-    for k, v in body.items():
-        if k in PATCHABLE_CONFIG_KEYS:
-            cfg[k] = v
-    _save_config(cfg)
+    from remote import settings as remote_settings
+
+    refusal = remote_settings.validate(body)
+    if refusal:
+        raise HTTPException(status_code=400, detail=refusal)
+    def _apply(cfg):
+        for k, v in body.items():
+            if k in PATCHABLE_CONFIG_KEYS:
+                cfg[k] = v
+
+    cfg = _update_config(_apply)
     from log_sanitizer import refresh_privacy_mode
 
     refresh_privacy_mode()

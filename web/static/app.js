@@ -17139,36 +17139,129 @@ fetch('/api/teams/chats')
       }).catch(() => {});
     });
 
-  // ── Teams remote control toggle (persisted to server config) ──
-  const _trcToggle = document.getElementById('teams-remote-control-toggle');
-  const _trcDot = document.getElementById('teams-remote-control-dot');
-  const _trcSub = document.getElementById('teams-remote-control-sub');
-  let _trcEnabled = false;
+  // ── Remote control settings (persisted to server config) ──
+  const _rcSwitches = [
+    {
+      key: 'teams_remote_control_enabled',
+      toggle: 'teams-remote-control-toggle',
+      dot: 'teams-remote-control-dot',
+      sub: 'teams-remote-control-sub',
+    },
+    {
+      key: 'slack_remote_control_enabled',
+      toggle: 'slack-remote-control-toggle',
+      dot: 'slack-remote-control-dot',
+      sub: 'slack-remote-control-sub',
+    },
+  ];
+  const _rcNumbers = [
+    { key: 'remote_session_idle_hours', input: 'remote-session-idle-hours', fallback: 8 },
+    { key: 'remote_stale_minutes', input: 'remote-stale-minutes', fallback: 15 },
+    { key: 'remote_armed_max_hours', input: 'remote-armed-max-hours', fallback: 24 },
+  ];
+  const _rcError = document.getElementById('remote-settings-error');
+  let _rcProjectDrop = null;
 
-  function _syncTrcUI() {
-    if (_trcToggle) _trcToggle.checked = _trcEnabled;
-    if (_trcDot) _trcDot.className = 'section-status ' + (_trcEnabled ? 'st-ok' : 'st-dim');
-    if (_trcSub) _trcSub.textContent = _trcEnabled ? 'On' : 'Off';
+  function _rcShowError(message) {
+    if (!_rcError) return;
+    _rcError.textContent = message || '';
+    _rcError.style.display = message ? '' : 'none';
   }
 
-  fetch('/api/config')
-    .then((r) => r.json())
-    .then((cfg) => {
-      _trcEnabled = !!cfg.teams_remote_control_enabled;
-      _syncTrcUI();
-    })
-    .catch(() => {});
-
-  if (_trcToggle)
-    _trcToggle.addEventListener('change', async () => {
-      _trcEnabled = _trcToggle.checked;
-      _syncTrcUI();
-      await fetch('/api/config', {
+  async function _rcSave(patch) {
+    try {
+      const r = await fetch('/api/config', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ teams_remote_control_enabled: _trcEnabled }),
-      }).catch(() => {});
+        body: JSON.stringify(patch),
+      });
+      if (r.ok) {
+        _rcShowError('');
+        return true;
+      }
+      let detail = 'Could not save this setting.';
+      try {
+        detail = (await r.json()).detail || detail;
+      } catch (_) {}
+      _rcShowError(detail);
+    } catch (_) {
+      _rcShowError('Could not reach Gator to save this setting.');
+    }
+    return false;
+  }
+
+  function _rcSyncSwitch(sw, on) {
+    const toggle = document.getElementById(sw.toggle);
+    const dot = document.getElementById(sw.dot);
+    const sub = document.getElementById(sw.sub);
+    if (toggle) toggle.checked = on;
+    if (dot) dot.className = 'section-status ' + (on ? 'st-ok' : 'st-dim');
+    if (sub) sub.textContent = on ? 'On' : 'Off';
+  }
+
+  function _rcBuildProjectDropdown(names, chosen) {
+    const slot = document.getElementById('remote-default-project-slot');
+    const sub = document.getElementById('remote-default-project-sub');
+    if (!slot || !window.buildDropdown) return;
+    if (_rcProjectDrop) _rcProjectDrop.destroy();
+    slot.textContent = '';
+    const options = [{ value: '', label: 'Active project' }];
+    names.forEach((n) => options.push({ value: n, label: n }));
+    if (chosen && !names.includes(chosen)) {
+      options.push({ value: chosen, label: chosen + ' (missing)' });
+    }
+    if (sub) sub.textContent = chosen || 'Active project';
+    _rcProjectDrop = window.buildDropdown(options, chosen || '', async (value) => {
+      if (await _rcSave({ remote_default_project: value })) {
+        if (sub) sub.textContent = value || 'Active project';
+      } else {
+        _rcLoad();
+      }
     });
+    slot.appendChild(_rcProjectDrop.el);
+  }
+
+  async function _rcLoad() {
+    try {
+      const [cfg, projects] = await Promise.all([
+        fetch('/api/config').then((r) => r.json()),
+        fetch('/api/code_agent/projects')
+          .then((r) => (r.ok ? r.json() : { projects: [] }))
+          .catch(() => ({ projects: [] })),
+      ]);
+      _rcSwitches.forEach((sw) => _rcSyncSwitch(sw, !!cfg[sw.key]));
+      _rcNumbers.forEach((n) => {
+        const input = document.getElementById(n.input);
+        if (input) input.value = cfg[n.key] ?? n.fallback;
+      });
+      _rcBuildProjectDropdown(
+        (projects.projects || []).map((p) => p.name),
+        cfg.remote_default_project || '',
+      );
+    } catch (_) {}
+  }
+
+  _rcSwitches.forEach((sw) => {
+    const toggle = document.getElementById(sw.toggle);
+    if (!toggle) return;
+    toggle.addEventListener('change', async () => {
+      const on = toggle.checked;
+      _rcSyncSwitch(sw, on);
+      if (!(await _rcSave({ [sw.key]: on }))) _rcSyncSwitch(sw, !on);
+    });
+  });
+
+  _rcNumbers.forEach((n) => {
+    const input = document.getElementById(n.input);
+    if (!input) return;
+    input.addEventListener('change', async () => {
+      const value = input.value.trim() === '' ? NaN : Number(input.value);
+      if (!(await _rcSave({ [n.key]: value }))) _rcLoad();
+    });
+  });
+
+  document.getElementById('settings-trigger')?.addEventListener('click', _rcLoad);
+  _rcLoad();
 
   // ── Browser Display toggle (persisted to server config) ──
   const _bdSub = document.getElementById('browser-display-sub');

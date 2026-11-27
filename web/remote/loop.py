@@ -13,7 +13,8 @@ from typing import Callable
 from config import load_config
 from remote.guard import Guard
 from remote.runner import RemoteRunner
-from remote.service import RemoteService
+from remote import settings
+from remote.service import RemoteError, RemoteService
 from remote.session_host import LocalPtyHost, Project
 from remote.slack_channel import SlackSelfDM
 from remote.state import State
@@ -34,11 +35,16 @@ def slack_switch_on() -> bool:
 
 
 def default_project() -> Project | None:
+    """The Settings project, else the active one. A Settings project that no longer exists is
+    refused outright; it never falls back to another project."""
     from skills.code_agent import projects
 
-    name = load_config().get("remote_default_project") or projects.get_active_project()
+    chosen = load_config().get(settings.DEFAULT_PROJECT_KEY)
+    name = chosen or projects.get_active_project()
     meta = projects.get_project(name) if name else None
     if not meta or not meta.get("repo_path"):
+        if chosen:
+            raise RemoteError(f'The default project "{chosen}" no longer exists. Choose another in Settings, then resend.')
         return None
     return Project(id=meta["name"], name=meta["name"], repo_path=meta["repo_path"])
 
@@ -58,6 +64,24 @@ class RemoteLoop:
         self._last_poll: float | None = None
         self._need_online = True
         self._poll_failing = False
+        self._restored = False
+        self._restore_failing = False
+
+    async def _restore(self) -> bool:
+        """After a backend restart the sessions are still running in the PTY host. Commands wait
+        until they are known, or a plain message would start a second agent next to a live one."""
+        if self._restored:
+            return True
+        try:
+            await self._runner.restore()
+        except RemoteError as exc:
+            if not self._restore_failing:
+                _log.warning("Remote control could not restore its sessions yet: %s", exc)
+            self._restore_failing = True
+            return False
+        self._restore_failing = False
+        self._restored = True
+        return True
 
     async def step(self) -> None:
         enabled = self._enabled()
@@ -65,6 +89,8 @@ class RemoteLoop:
         if not enabled:
             self._need_online = True
             self._last_poll = None
+            return
+        if not await self._restore():
             return
         await self._runner.tick()
         now = self._clock()
@@ -86,8 +112,13 @@ class RemoteLoop:
 
 
 def _build_loop(channel, state: State, enabled: Callable[[], bool]) -> RemoteLoop:
-    service = RemoteService(LocalPtyHost(), default_project=default_project)
-    return RemoteLoop(RemoteRunner(channel, service, Guard(), state), enabled)
+    service = RemoteService(
+        LocalPtyHost(), default_project=default_project, idle_seconds=settings.idle_seconds, channel=channel.name
+    )
+    runner = RemoteRunner(
+        channel, service, Guard(armed_max_seconds=settings.armed_max_seconds), state, stale_seconds=settings.stale_seconds
+    )
+    return RemoteLoop(runner, enabled)
 
 
 def build_loops(state: State | None = None) -> list[RemoteLoop]:

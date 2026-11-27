@@ -13,8 +13,12 @@ class ProcessExit(BaseException):
 
 
 class FakeHost:
+    restore_fails = False
+
     def __init__(self):
         self.n = 0
+        self.restorable = []
+        self.spawn_labels = []
         self.alive_ids = set()
         self.states = {}
         self.last = {}
@@ -24,11 +28,17 @@ class FakeHost:
         self.exit_on_deliver = False
         self.fail_kill = set()
 
-    async def spawn(self, project):
+    async def spawn(self, project, labels=None):
+        self.spawn_labels.append(labels)
         self.n += 1
         pty = f"pty-{self.n}"
         self.alive_ids.add(pty)
         return HostSession(pty_id=pty, vendor_session_id=f"vendor-{self.n}")
+
+    async def restore(self, channel):
+        if self.restore_fails:
+            raise HostError("The terminal host did not answer.")
+        return list(self.restorable)
 
     async def deliver(self, pty_id, text):
         if self.exit_on_deliver:

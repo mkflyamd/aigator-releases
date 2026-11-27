@@ -70,6 +70,18 @@ def find_host(key: str) -> dict | None:
     return probe(key)
 
 
+def host_process_running(key: str) -> bool:
+    """True if the host file names a process that is still running. With a host that
+    did not answer, this tells a hung host from a stale file left by one that died."""
+    try:
+        pid = int(json.loads(host_file(key).read_text(encoding="utf-8"))["pid"])
+        import psutil
+
+        return psutil.pid_exists(pid)
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+
+
 def _launch_host(key: str) -> None:
     """Run the short-lived --detach launcher. The host it starts is orphaned when
     the launcher exits, so killing the backend's process tree cannot reach it."""
