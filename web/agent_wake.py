@@ -25,6 +25,7 @@ from pathlib import Path
 import agent_sessions
 import agent_state
 import agent_suspend
+from relay import settings as relay_settings
 
 logger = logging.getLogger(__name__)
 
@@ -318,6 +319,10 @@ async def wake_and_deliver(
     `sender` is {"name", "session_id", "project_id"} as known to the front door. Raises
     WakeRefused with a code and a reason when nothing was delivered."""
     now = time.time()
+    if not relay_settings.admin_allows_messaging():
+        raise WakeRefused("admin_denied", "Your administrator has turned off agent messaging.")
+    if not relay_settings.user_allows_messaging():
+        raise WakeRefused("switched_off", "Agent messaging is switched off.")
     text = frame(sender.get("name", ""), message)
     matches = await asyncio.to_thread(find_targets, target, sender.get("project_id"), allow_cross_project)
     if not matches:
@@ -331,6 +336,8 @@ async def wake_and_deliver(
     entry = matches[0]
     if entry["session_id"] == sender.get("session_id"):
         raise WakeRefused("invalid", "An agent cannot message itself.")
+    if relay_settings.opted_out(f"pty:{entry['pty_id']}"):
+        raise WakeRefused("opted_out", "That agent does not accept messages from other agents.")
     key = entry["session_id"]
     if not claim(key):
         raise WakeRefused("busy", "This agent is being woken, messaged or suspended right now; try again shortly.")

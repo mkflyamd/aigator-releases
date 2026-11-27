@@ -567,3 +567,64 @@ async def test_a_terminal_that_refuses_the_write_is_a_failure(monkeypatch):
     monkeypatch.setattr(terminal, "write_pty_session", lambda pid, data: False)
     with pytest.raises(agent_wake.WakeRefused):
         await agent_wake._type_message(pty_id(), "hello")
+
+
+# --- the relay switches also gate this door ------------------------------------
+
+
+@pytest.fixture
+def policy_file(world, tmp_path, monkeypatch):
+    from sandbox import policy as pol
+
+    path = tmp_path / "sandbox-policy.json"
+    monkeypatch.setattr(pol, "policy_path", lambda: path)
+    monkeypatch.setattr(pol, "_is_posix", lambda: False)
+    pol._reset_cache()
+    return path
+
+
+async def test_an_admin_lock_stops_a_wake(world, policy_file):
+    policy_file.write_text('{"agent_messaging": "deny"}')
+    suspend(world)
+    with pytest.raises(agent_wake.WakeRefused) as exc:
+        await send()
+    assert exc.value.code == "admin_denied"
+    assert world["resumed"] == [] and world["typed"] == []
+
+
+async def test_a_broken_admin_policy_stops_a_wake(world, policy_file):
+    policy_file.write_text("not json")
+    suspend(world)
+    with pytest.raises(agent_wake.WakeRefused) as exc:
+        await send()
+    assert exc.value.code == "admin_denied"
+
+
+async def test_the_user_switch_stops_a_wake(world, policy_file):
+    from relay import settings
+
+    settings.set_user_messaging(False)
+    suspend(world)
+    with pytest.raises(agent_wake.WakeRefused) as exc:
+        await send()
+    assert exc.value.code == "switched_off"
+    assert world["resumed"] == [] and world["typed"] == []
+
+
+async def test_an_agent_that_opted_out_is_not_woken_or_messaged(world, policy_file):
+    from relay import settings
+
+    sleeping = suspend(world)
+    settings.set_opted_out(f"pty:{sleeping}", True)
+    with pytest.raises(agent_wake.WakeRefused) as exc:
+        await send()
+    assert exc.value.code == "opted_out"
+    assert world["resumed"] == [] and world["typed"] == []
+
+    settings.set_opted_out(f"pty:{sleeping}", False)
+    live = go_live(world, session="sess-live", title="Live one")
+    settings.set_opted_out(f"pty:{live}", True)
+    with pytest.raises(agent_wake.WakeRefused) as exc:
+        await send(target="Live one")
+    assert exc.value.code == "opted_out"
+    assert world["typed"] == []
