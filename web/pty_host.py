@@ -35,7 +35,7 @@ from pty_spawn import spawn_pty
 
 logger = logging.getLogger("pty_host")
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2  # 2: "list" reports each session's child pid, which session takeover relies on
 _OUT_PIECE_CHARS = 64 * 1024
 _LINE_LIMIT = 8 * 1024 * 1024
 _REAP_INTERVAL = 30.0
@@ -239,13 +239,21 @@ class PtyHost:
                 "exists": session is not None,
                 "alive": bool(session and not session.done and session.isalive()),
                 "done": bool(session and session.done),
+                "pid": session.pid if session else None,
+                "created_at": session.created_at if session else None,
             }
         if op == "list":
             return {
                 "ok": True,
                 # Creation order, so a caller can take the newest match.
                 "sessions": [
-                    {"id": k, "done": s.done, "meta": self._meta.get(k)}
+                    {
+                        "id": k,
+                        "done": s.done,
+                        "pid": s.pid,
+                        "created_at": s.created_at,
+                        "meta": self._meta.get(k),
+                    }
                     for k, s in self.sessions.items()
                 ],
             }

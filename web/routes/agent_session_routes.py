@@ -11,6 +11,7 @@ import asyncio
 from fastapi import APIRouter, HTTPException, Query
 
 import agent_handoff
+import agent_liveness
 import agent_sessions
 import agent_state
 import generic_agent
@@ -40,6 +41,42 @@ def _live_terminals(pty: list[str]) -> list[dict]:
     return live
 
 
+def _join_live_processes(records: list[dict], redact) -> list[dict]:
+    """Mark sessions open outside Gator and show the live process's own name for any live session."""
+    import pty_client
+    from routes import terminal
+
+    newest = {}
+    for agent in {r["agent"] for r in records}:
+        for proc in sorted(agent_liveness.live_processes(agent), key=lambda p: p["started_at"]):
+            newest[(agent, proc["session_id"])] = proc
+    owners_known = True
+    owners = {}
+    if newest:
+        try:
+            owners = terminal.pty_pid_map(True)
+        except pty_client.HostError:
+            owners_known = False
+            owners = terminal.pty_pid_map()
+    out = []
+    for rec in records:
+        proc = newest.get((rec["agent"], rec["id"]))
+        if proc is None:
+            out.append(rec)
+            continue
+        rec = dict(rec)
+        if proc["name"]:
+            rec["title"] = redact(proc["name"])
+        owner = agent_liveness.owning_pty(proc["pid"], owners)
+        if owner:
+            rec["pty_session_id"] = owner
+        elif "pty_session_id" not in rec:
+            rec["live_elsewhere"] = True
+            rec["live_elsewhere_in"] = agent_liveness.describe(rec["agent"], proc, owners_known)
+        out.append(rec)
+    return out
+
+
 def _list_sessions(repo_path: str, pty: list[str]) -> dict:
     agents = tuple(a for a in agent_sessions.AGENTS if generic_agent.is_installed(a))
     records = agent_sessions.scan_project(repo_path, agents=agents)
@@ -48,7 +85,7 @@ def _list_sessions(repo_path: str, pty: list[str]) -> dict:
     records = records[: agent_sessions.MAX_SESSIONS]
     red = agent_handoff.Redactor(agent_handoff._configured_api_keys())
     records = [dict(r, title=red(r["title"])) for r in records]
-    joined = agent_sessions.join_live(records, _live_terminals(pty))
+    joined = _join_live_processes(agent_sessions.join_live(records, _live_terminals(pty)), red)
     return {"sessions": [agent_sessions.public(r) for r in joined], "wsl_pending": pending}
 
 

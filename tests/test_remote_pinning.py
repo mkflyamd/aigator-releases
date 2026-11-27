@@ -126,6 +126,21 @@ async def test_closing_an_adopted_session_is_refused_when_the_host_cannot_say_if
     assert closed == [] and unpinned == []
 
 
+async def test_closing_a_session_is_refused_when_the_host_is_running_but_silent(monkeypatch):
+    import pytest
+    from fastapi import HTTPException
+
+    terminal, closed, unpinned = _adopted_with_unreachable_host(monkeypatch)
+    monkeypatch.setattr(terminal.pty_client, "find_host", lambda key: None)
+    monkeypatch.setattr(terminal.pty_client, "host_alive_but_unreachable", lambda key: True)
+    req = generic_agent_routes.GenericAgentTerminalCloseRequest(agent="claude", project_id="demo", pty_session_id="pty-9")
+    with pytest.raises(HTTPException) as refused:
+        await generic_agent_routes.close_generic_agent_terminal(req)
+    assert refused.value.status_code == 503
+    assert closed == [] and unpinned == []
+    assert "pty-9" in terminal._pty_sessions
+
+
 async def test_closing_an_adopted_session_proceeds_when_the_host_answers_without_a_pin(monkeypatch):
     terminal, closed, unpinned = _adopted_with_unreachable_host(monkeypatch)
     monkeypatch.setattr(
@@ -146,7 +161,7 @@ def test_session_owner_tells_a_silent_host_from_a_host_with_no_labels(monkeypatc
 
     monkeypatch.setattr(terminal.pty_client, "host_request", silent)
     assert terminal.session_owner("pty-9") is None
-    with pytest.raises(terminal.HostUnreachable):
+    with pytest.raises(terminal.pty_client.HostError):
         terminal.session_owner("pty-9", strict=True)
     monkeypatch.setattr(terminal.pty_client, "host_request", lambda info, request: {"sessions": [{"id": "pty-9"}]})
     assert terminal.session_owner("pty-9", strict=True) is None

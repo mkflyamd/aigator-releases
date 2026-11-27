@@ -15,6 +15,8 @@ import threading
 import time
 from pathlib import Path
 
+import psutil
+
 from pty_host import (
     PROTOCOL_VERSION,
     host_command,
@@ -70,16 +72,15 @@ def find_host(key: str) -> dict | None:
     return probe(key)
 
 
-def host_process_running(key: str) -> bool:
-    """True if the host file names a process that is still running. With a host that
-    did not answer, this tells a hung host from a stale file left by one that died."""
+def host_alive_but_unreachable(key: str) -> bool:
+    """True when the host file names a running process that find_host could not reach
+    (slow hello, other protocol version). Its terminals exist but cannot be listed.
+    A missing or stale host file means there is no host holding anything."""
     try:
         pid = int(json.loads(host_file(key).read_text(encoding="utf-8"))["pid"])
-        import psutil
-
-        return psutil.pid_exists(pid)
     except (OSError, ValueError, KeyError, TypeError):
         return False
+    return psutil.pid_exists(pid)
 
 
 def _launch_host(key: str) -> None:

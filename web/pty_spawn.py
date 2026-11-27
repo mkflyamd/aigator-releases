@@ -101,6 +101,7 @@ def spawn_pty(
 class _WinPtyAdapter:
     def __init__(self, proc):
         self._p = proc
+        self.pid = proc.pid
 
     def read(self, n: int = 4096) -> str:
         # pywinpty.read returns str (decoded utf-8 with replacement)
@@ -160,6 +161,7 @@ class _PosixPty:
         )
         os.close(slave)
         self._master = master
+        self.pid = self._proc.pid
 
     def read(self, n: int = 4096) -> str:
         data = os.read(self._master, n)
