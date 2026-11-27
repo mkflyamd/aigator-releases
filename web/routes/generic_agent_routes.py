@@ -165,12 +165,18 @@ async def resume_suspended(req: GenericAgentTerminalRequest, pty_id: str, woken_
         return await _open_terminal(req, reuse_pty_id=pty_id, woken_by=woken_by, woken_preview=woken_preview)
 
 
+async def open_pinned_terminal(req: GenericAgentTerminalRequest) -> dict:
+    """A new terminal for remote control: labelled so the idle-suspend sweep never takes it."""
+    return await _open_terminal(req, pinned=True)
+
+
 async def _open_terminal(
     req: GenericAgentTerminalRequest,
     *,
     reuse_pty_id: str | None = None,
     woken_by: str | None = None,
     woken_preview: str = "",
+    pinned: bool = False,
 ):
     """Reattach this project's live session if one exists, else spawn fresh.
 
@@ -220,6 +226,8 @@ async def _open_terminal(
     force_new = req.force_new or handoff is not None or resume is not None
 
     owner = {"project_id": req.project_id, "agent": req.agent}
+    if pinned:
+        owner["remote_pinned"] = "1"
     if woken_by:
         owner["woken_by"] = woken_by
         owner["woken_preview"] = woken_preview

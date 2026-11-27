@@ -1,0 +1,87 @@
+"""Teams "Chat with yourself" adapter. Posts only to that one chat, only text that starts
+with "[Gator", so Gator's own replies can never read back as a command."""
+
+from __future__ import annotations
+
+import html
+import logging
+import re
+from datetime import datetime, timezone
+
+from remote.channel import ChannelRefused, InboundMessage
+from remote.commands import SYSTEM_PREFIX
+from remote.state import State
+
+_log = logging.getLogger(__name__)
+
+SELF_CHAT_ID = "48:notes"
+_FRACTION = re.compile(r"(\.\d{6})\d+")
+
+
+def fetch_messages(chat_id: str) -> list[dict]:
+    """Blocking. Recent messages of one chat, newest first, as the Teams route returns them."""
+    from routes.teams import _get_my_mri, _get_my_name, _get_skype_module, _normalize_skype_messages
+
+    skype = _get_skype_module()
+    skype_token, messaging_service = skype.get_auth()
+    raw, _ = skype.read_messages(chat_id, skype_token, messaging_service, limit=10)
+    return _normalize_skype_messages(raw, _get_my_mri(), _get_my_name())
+
+
+def send_message(chat_id: str, content: str) -> str:
+    """Blocking. Sends through the same route the Teams pane uses; returns the message id."""
+    from routes.teams import TeamsSendRequest, tp_teams_send
+
+    return str(tp_teams_send(chat_id, TeamsSendRequest(message=content)).get("message_id") or "")
+
+
+def _epoch(composetime: str) -> float:
+    if not composetime:
+        return 0.0
+    try:
+        stamp = datetime.fromisoformat(_FRACTION.sub(r"\1", composetime.replace("Z", "+00:00")))
+    except ValueError:
+        return 0.0
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=timezone.utc)
+    return stamp.timestamp()
+
+
+def _text(raw: dict) -> str:
+    from skills._m365.helpers import html_to_text
+
+    body_html = raw.get("body_html") or ""
+    return (html_to_text(body_html).strip() if body_html else "") or (raw.get("body") or "").strip()
+
+
+class TeamsSelfChat:
+    name = "teams"
+
+    def __init__(self, chat_id: str = SELF_CHAT_ID, state: State | None = None):
+        self._chat_id = chat_id
+        self._state = state or State()
+
+    def is_own_self_chat(self) -> bool:
+        return self._chat_id == SELF_CHAT_ID
+
+    def poll(self) -> list[InboundMessage]:
+        return [
+            InboundMessage(id=str(raw.get("id", "")), text=_text(raw), created_at=_epoch(raw.get("created_at", "")))
+            for raw in fetch_messages(self._chat_id)
+            if raw.get("message_type") == "message"
+        ]
+
+    def post(self, text: str, reply_to: str | None = None) -> str:
+        if not self.is_own_self_chat():
+            _log.warning("Remote control refused to post: %s is not the own self-chat", self._chat_id)
+            raise ChannelRefused("not the own self-chat")
+        if not text.lstrip().startswith(SYSTEM_PREFIX):
+            raise ChannelRefused("replies must start with [Gator")
+        content = html.escape(text, quote=False).replace("\r\n", "\n").replace("\n", "<br>")
+        try:
+            message_id = send_message(self._chat_id, content)
+        except Exception as exc:
+            raise ChannelRefused(str(exc)) from exc
+        if message_id:
+            self._state.record_post(self.name, message_id)
+        return message_id

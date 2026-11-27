@@ -1,0 +1,75 @@
+from remote.guard import Guard
+
+
+class Clock:
+    def __init__(self):
+        self.now = 1000.0
+
+    def __call__(self):
+        return self.now
+
+
+def test_rate_limit_allows_20_then_refuses_within_10_minutes():
+    clock = Clock()
+    guard = Guard(clock=clock)
+    assert all(guard.allow_command() for _ in range(20))
+    assert guard.allow_command() is False
+    clock.now += 601
+    assert guard.allow_command() is True
+
+
+def test_slow_down_notice_is_due_once_per_window():
+    clock = Clock()
+    guard = Guard(clock=clock)
+    for _ in range(20):
+        guard.allow_command()
+    assert guard.allow_command() is False
+    assert guard.slow_down_due() is True
+    assert guard.allow_command() is False
+    assert guard.slow_down_due() is False
+
+
+def test_armed_expires_at_the_absolute_cap():
+    clock = Clock()
+    guard = Guard(clock=clock, armed_max_seconds=24 * 3600)
+    assert guard.armed is False
+    guard.arm()
+    assert guard.armed is True
+    clock.now += 24 * 3600 - 1
+    assert guard.expired() is False
+    clock.now += 2
+    assert guard.expired() is True
+    assert guard.armed is False
+
+
+def test_disarm_and_rearm():
+    guard = Guard(clock=Clock())
+    guard.arm()
+    guard.disarm()
+    assert guard.armed is False
+    guard.arm()
+    assert guard.armed is True
+
+
+def test_stop_all_runs_every_registered_stop_and_disarms():
+    guard = Guard(clock=Clock())
+    guard.arm()
+    stopped = []
+    guard.register_stop("a", lambda: stopped.append("a"))
+    guard.register_stop("b", lambda: stopped.append("b"))
+    guard.stop_all()
+    assert sorted(stopped) == ["a", "b"]
+    assert guard.armed is False
+
+
+def test_stop_all_survives_a_failing_stop():
+    guard = Guard(clock=Clock())
+    stopped = []
+
+    def boom():
+        raise RuntimeError("x")
+
+    guard.register_stop("bad", boom)
+    guard.register_stop("good", lambda: stopped.append("good"))
+    guard.stop_all()
+    assert stopped == ["good"]

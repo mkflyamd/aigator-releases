@@ -869,6 +869,9 @@ async def lifespan(app):
     from teams_remote_control import teams_remote_control_loop
     _teams_remote_control_task = asyncio.create_task(teams_remote_control_loop())
 
+    from remote.loop import remote_control_loop
+    _remote_control_task = asyncio.create_task(remote_control_loop())
+
     # Remove AppContainer ACEs left by a crashed sandboxed run (Windows; no-op elsewhere).
     import sandbox as _sandbox
     asyncio.create_task(asyncio.to_thread(_sandbox.sweep_stale_grants))
@@ -892,8 +895,9 @@ async def lifespan(app):
     _logging_retention_task.cancel()
     _catalog_sync_task.cancel()
     _teams_remote_control_task.cancel()
+    _remote_control_task.cancel()
     _agent_suspend_task.cancel()
-    for _t in (_update_check_task, _cleanup_task, _logging_retention_task, _catalog_sync_task, _teams_remote_control_task, _agent_suspend_task):
+    for _t in (_update_check_task, _cleanup_task, _logging_retention_task, _catalog_sync_task, _teams_remote_control_task, _remote_control_task, _agent_suspend_task):
         try:
             await _t
         except asyncio.CancelledError:
