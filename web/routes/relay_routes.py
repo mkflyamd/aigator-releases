@@ -39,7 +39,7 @@ def _endpoint(entry: dict) -> Endpoint:
     return pty_endpoint(entry["pty_id"], entry["title"] or entry["session_id"][:8], entry["project_id"])
 
 
-@router.get("/api/relay")
+@router.get("/api/relay", dependencies=[Depends(verify_csrf)])
 async def relay_state():
     entries = await asyncio.to_thread(agent_wake.list_entries)
     agents = []
@@ -97,6 +97,6 @@ def set_relay_opt_out(body: RelayOptOutRequest):
     return {"endpoint_id": body.endpoint_id, "opted_out": settings.opted_out(body.endpoint_id)}
 
 
-@router.get("/api/relay/audit")
+@router.get("/api/relay/audit", dependencies=[Depends(verify_csrf)])
 def relay_audit(limit: int = 50):
     return {"events": recent_audit(max(1, min(limit, 200)))}

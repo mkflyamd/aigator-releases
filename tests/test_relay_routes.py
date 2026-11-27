@@ -52,19 +52,25 @@ def agent(world, session, project="demo"):
     return f"pty:{pid}"
 
 
-def test_state_lists_the_agents_and_the_switches(client, world):
+def test_state_lists_the_agents_and_the_switches(client, csrf, world):
     first = agent(world, "alpha")
-    body = client.get("/api/relay").json()
+    body = client.get("/api/relay", headers=csrf).json()
     assert body["admin_allows"] is True and body["enabled"] is True
     assert [a["id"] for a in body["agents"]] == [first]
     assert body["agents"][0]["name"] == "alpha" and body["agents"][0]["opted_out"] is False
     assert body["links"] == []
 
 
-def test_the_admin_lock_shows_in_the_state(client, world):
+def test_the_admin_lock_shows_in_the_state(client, csrf, world):
     world["policy"].write_text('{"agent_messaging": "deny"}')
     pol._reset_cache()
-    assert client.get("/api/relay").json()["admin_allows"] is False
+    assert client.get("/api/relay", headers=csrf).json()["admin_allows"] is False
+
+
+def test_reads_need_the_csrf_token_too(client, world):
+    agent(world, "alpha")
+    assert client.get("/api/relay").status_code == 403
+    assert client.get("/api/relay/audit").status_code == 403
 
 
 def test_every_change_needs_the_csrf_token(client, world):
@@ -79,9 +85,9 @@ def test_every_change_needs_the_csrf_token(client, world):
 
 def test_the_user_switch_round_trips(client, csrf, world):
     assert client.post("/api/relay/settings", json={"enabled": False}, headers=csrf).json() == {"enabled": False}
-    assert client.get("/api/relay").json()["enabled"] is False
+    assert client.get("/api/relay", headers=csrf).json()["enabled"] is False
     client.post("/api/relay/settings", json={"enabled": True}, headers=csrf)
-    assert client.get("/api/relay").json()["enabled"] is True
+    assert client.get("/api/relay", headers=csrf).json()["enabled"] is True
 
 
 def test_a_link_is_made_between_two_known_agents_and_can_be_stopped(client, csrf, world):
@@ -91,9 +97,9 @@ def test_a_link_is_made_between_two_known_agents_and_can_be_stopped(client, csrf
     link = made.json()
     assert {link["a"]["id"], link["b"]["id"]} == {a, b}
     assert link["b"]["project_id"] == "other" and link["active"] is True
-    assert [item["id"] for item in client.get("/api/relay").json()["links"]] == [link["id"]]
+    assert [item["id"] for item in client.get("/api/relay", headers=csrf).json()["links"]] == [link["id"]]
     assert client.delete(f"/api/relay/links/{link['id']}", headers=csrf).status_code == 200
-    assert client.get("/api/relay").json()["links"] == []
+    assert client.get("/api/relay", headers=csrf).json()["links"] == []
     assert client.delete(f"/api/relay/links/{link['id']}", headers=csrf).status_code == 200
     assert client.delete("/api/relay/links/nope", headers=csrf).status_code == 404
 
@@ -125,23 +131,23 @@ def test_stop_all_ends_every_link(client, csrf, world):
     a, b, c = agent(world, "alpha"), agent(world, "beta"), agent(world, "gamma")
     client.post("/api/relay/links", json={"a": a, "b": b}, headers=csrf)
     client.post("/api/relay/links", json={"a": b, "b": c}, headers=csrf)
-    assert len(client.get("/api/relay").json()["links"]) == 2
+    assert len(client.get("/api/relay", headers=csrf).json()["links"]) == 2
     assert client.post("/api/relay/stop-all", headers=csrf).json() == {"stopped": True}
-    assert client.get("/api/relay").json()["links"] == []
+    assert client.get("/api/relay", headers=csrf).json()["links"] == []
 
 
 def test_an_agent_can_opt_out_and_back_in(client, csrf, world):
     a = agent(world, "alpha")
     out = client.post("/api/relay/opt-out", json={"endpoint_id": a, "opted_out": True}, headers=csrf)
     assert out.json() == {"endpoint_id": a, "opted_out": True}
-    assert client.get("/api/relay").json()["agents"][0]["opted_out"] is True
+    assert client.get("/api/relay", headers=csrf).json()["agents"][0]["opted_out"] is True
     client.post("/api/relay/opt-out", json={"endpoint_id": a, "opted_out": False}, headers=csrf)
-    assert client.get("/api/relay").json()["agents"][0]["opted_out"] is False
+    assert client.get("/api/relay", headers=csrf).json()["agents"][0]["opted_out"] is False
     assert client.post("/api/relay/opt-out", json={"endpoint_id": "chat:x", "opted_out": True}, headers=csrf).status_code == 400
 
 
 def test_the_audit_lists_newest_first(client, csrf, world):
     for n in range(3):
         write_audit({"event": "test", "n": n})
-    events = client.get("/api/relay/audit?limit=2").json()["events"]
+    events = client.get("/api/relay/audit?limit=2", headers=csrf).json()["events"]
     assert [e["n"] for e in events] == [2, 1]
