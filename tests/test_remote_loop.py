@@ -178,3 +178,13 @@ async def test_a_slow_channel_step_does_not_hold_the_other_channel(monkeypatch):
     finally:
         release.set()
         task.cancel()
+
+
+async def test_switching_off_and_on_again_does_not_say_online_a_second_time(s):
+    s.enabled = True
+    await s.loop.step()
+    s.enabled = False
+    await s.loop.step()
+    s.enabled = True
+    await s.loop.step()
+    assert s.channel.posted == [commands.online()]

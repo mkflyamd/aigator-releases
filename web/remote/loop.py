@@ -87,7 +87,6 @@ class RemoteLoop:
         enabled = self._enabled()
         self._runner.sync_enabled(enabled)
         if not enabled:
-            self._need_online = True
             self._last_poll = None
             return
         if not await self._restore():

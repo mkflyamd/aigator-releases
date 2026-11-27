@@ -150,7 +150,7 @@ def _inline(text: str, mrkdwn: bool = False) -> str:
 
     s = re.sub(r"`([^`\n]+)`", stash, s)
     s = re.sub(
-        r"\[([^\]\n]+)\]\(((?:https?://|mailto:)[^\s)]+)\)", r'<a href="\2">\1</a>', s
+        r'\[([^\]\n]+)\]\(((?:https?://|mailto:)[^\s)"]+)\)', r'<a href="\2">\1</a>', s
     )
     s = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", s)
     if mrkdwn:

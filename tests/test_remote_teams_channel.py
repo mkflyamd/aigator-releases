@@ -98,3 +98,9 @@ def test_a_missing_or_unparseable_timestamp_has_no_time(monkeypatch):
     monkeypatch.setattr(teams_channel, "fetch_messages", lambda chat_id: raw)
     messages = TeamsSelfChat().poll()
     assert [m.created_at for m in messages] == [0.0, 0.0, 0.0]
+
+
+def test_a_quote_in_a_link_cannot_add_an_attribute(tmp_path, sent):
+    chat = TeamsSelfChat(state=State(tmp_path / "s.json"))
+    chat.post('[Gator - Claude - x] [a](https://a.com/"onmouseover="alert(1))')
+    assert "<a " not in sent[0][1]
