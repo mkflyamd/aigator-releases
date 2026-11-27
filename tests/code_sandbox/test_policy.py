@@ -33,7 +33,7 @@ def test_partial_file_keeps_defaults_for_missing_keys(policy_file):
 def test_invalid_file_fails_closed(policy_file, text):
     policy_file.write_text(text)
     assert pol.load_policy() == pol.FAIL_CLOSED_POLICY
-    assert pol.FAIL_CLOSED_POLICY == pol.Policy("enabled", "deny", "strict", True, "deny", ("Native", "Verified"), True, block_bundle_stdio_mcp=True)
+    assert pol.FAIL_CLOSED_POLICY == pol.Policy("enabled", "deny", "strict", True, "deny", ("Native", "Verified"), True, block_bundle_stdio_mcp=True, agent_messaging="deny", self_chat_autosend="deny")
 
 
 @pytest.mark.parametrize("text", [
@@ -114,8 +114,19 @@ def test_as_dict():
         "code_runner": "enabled", "network": "ask", "filesystem": "ask", "require_sandbox": False,
         "saved_permissions": "allow", "marketplace_allowed_tiers": ("Native", "Verified", "Community", "Mine"),
         "require_pinned_installs": False, "approved_digests": None, "blocked_data_flows": (),
-        "block_bundle_stdio_mcp": False,
+        "block_bundle_stdio_mcp": False, "agent_messaging": "allow", "self_chat_autosend": "allow",
     }
+
+
+@pytest.mark.parametrize("key", ["agent_messaging", "self_chat_autosend"])
+def test_relay_switches(key):
+    from sandbox.policy import parse_policy, DEFAULT_POLICY, FAIL_CLOSED_POLICY
+    assert getattr(DEFAULT_POLICY, key) == "allow"
+    assert getattr(parse_policy('{"%s": "deny"}' % key), key) == "deny"
+    assert getattr(FAIL_CLOSED_POLICY, key) == "deny"
+    for bad in ('"maybe"', "true", "1", "null"):
+        with pytest.raises(ValueError):
+            parse_policy('{"%s": %s}' % (key, bad))
 
 
 def test_block_bundle_stdio_mcp_field():
