@@ -32,8 +32,7 @@ def test_echo_and_repaint_output_does_not_count_as_working():
     assert "_ocNoteEcho(sess);" in TERM[on_open : on_open + 120]
     on_data = helpers.index("sess.term.onData((data) => {")
     assert "_ocNoteEcho(sess);" in helpers[on_data : helpers.index("type: 'input'", on_data)]
-    resize = helpers.index("type: 'resize'")
-    assert "_ocNoteEcho(sess);" in helpers[resize - 120 : resize]
+    assert "if (_ocSendSize(sess)) _ocNoteEcho(sess);" in helpers
 
 
 def test_handoff_dialog_takes_a_stored_session():

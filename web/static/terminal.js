@@ -382,9 +382,12 @@
     try {
       sess.fitAddon.fit();
       if (sess.ws && sess.ws.readyState === WebSocket.OPEN) {
-        sess.ws.send(
-          JSON.stringify({ type: 'resize', cols: sess.term.cols, rows: sess.term.rows }),
-        );
+        const { cols, rows } = sess.term;
+        const last = sess._sentSize;
+        if (!last || last.cols !== cols || last.rows !== rows) {
+          sess._sentSize = { cols, rows };
+          sess.ws.send(JSON.stringify({ type: 'resize', cols, rows }));
+        }
       }
     } catch (e) {
       /* not visible yet */
@@ -483,6 +486,8 @@
     const delay = retryDelay || 0;
 
     sess.ws = new WebSocket(url);
+    // Each connection spawns a fresh shell at the default size, so it needs the first frame.
+    sess._sentSize = null;
     sess.ws.onopen = () => {
       sess._retryDelay = 0;
       _fit(sess);

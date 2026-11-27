@@ -237,9 +237,10 @@ function world({ reducedMotion = false } = {}) {
 {
   const branch = source.match(/msg\.type === 'woken'\) \{([\s\S]*?)\n    \} else if/);
   assert(branch, 'woken branch not found');
-  const run = (awaitingWake) => {
+  const run = (awaitingWake, sentSize = null) => {
     const sent = [];
     const sess = {
+      _sentSize: sentSize,
       _awaitingWake: awaitingWake,
       term: { cols: 120, rows: 34, reset: () => {} },
       ws: { readyState: 1, send: (m) => sent.push(JSON.parse(m)) },
@@ -253,11 +254,20 @@ function world({ reducedMotion = false } = {}) {
       _genAgentShowWokenBanner: () => {},
     };
     vm.createContext(ctx);
+    vm.runInContext(
+      fs.readFileSync(path.join(__dirname, '..', 'web', 'static', 'tp-term-helpers.js'), 'utf8'),
+      ctx,
+    );
     vm.runInContext(branch[1], ctx);
     return sent;
   };
   assert.deepStrictEqual(run(true), [{ type: 'resize', cols: 120, rows: 34 }]);
   assert.deepStrictEqual(run(false), [], 'a replayed woken message does not resize again');
+  assert.deepStrictEqual(
+    run(true, { cols: 120, rows: 34 }),
+    [{ type: 'resize', cols: 120, rows: 34 }],
+    'a woken session is a new PTY, so it is told its size even if the size matches the last frame',
+  );
 }
 
 console.log('woken strip timer: ok');
