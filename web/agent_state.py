@@ -51,6 +51,9 @@ def _claude_settings() -> dict:
             "PostToolUse": _command_hook(_write_cmd("working")),
             "Notification": _command_hook(_write_cmd("asking"), "permission_prompt|elicitation_dialog"),
             "Stop": _command_hook(_write_cmd("idle")),
+            # A woken agent is ready for a message once it has started; compact and clear
+            # also fire SessionStart, and those happen mid-turn.
+            "SessionStart": _command_hook(_write_cmd("idle"), "startup|resume"),
             "SessionEnd": _command_hook(_REMOVE_CMD),
         }
     }
@@ -133,6 +136,15 @@ def read_states(pty_ids: list[str]) -> dict[str, dict]:
         if word in WORDS:
             out[pty] = {"state": word, "at": at}
     return out
+
+
+def clear(pty_id: str) -> None:
+    """Drop a terminal's reported state, so a reused id does not inherit its last word."""
+    try:
+        uuid.UUID(pty_id)
+        (STATE_DIR / pty_id).unlink(missing_ok=True)
+    except (ValueError, OSError):
+        pass
 
 
 def cleanup(max_age_seconds: float = STATE_MAX_AGE_SECONDS) -> None:

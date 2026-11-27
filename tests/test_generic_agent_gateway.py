@@ -4,6 +4,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+import agent_mcp
 import agent_state
 import generic_agent
 from routes import generic_agent_routes
@@ -100,7 +101,10 @@ def test_launch_injects_the_gateway_env_only_for_bound_agents(spawned):
     pi = _app().post("/api/generic-agent/terminal", json={**body, "agent": "pi"})
     assert claude.status_code == 200 and pi.status_code == 200
     state_env = agent_state.launch_env
-    assert spawned[0]["env"] == {"ANTHROPIC_API_KEY": FAKE, **state_env(claude.json()["pty_session_id"])}
+    claude_env = dict(spawned[0]["env"])
+    token = claude_env.pop(agent_mcp.TOKEN_ENV)
+    assert agent_mcp.caller_for(token)["pty_id"] == claude.json()["pty_session_id"]
+    assert claude_env == {"ANTHROPIC_API_KEY": FAKE, **state_env(claude.json()["pty_session_id"])}
     assert spawned[1]["env"] == state_env(pi.json()["pty_session_id"])
 
 

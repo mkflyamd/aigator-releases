@@ -86,9 +86,19 @@ def test_claude_settings_map_events_to_states():
     assert "asking" in cmd("Notification")
     assert hooks["Notification"][0]["matcher"] == "permission_prompt|elicitation_dialog"
     assert "rm -f" in cmd("SessionEnd")
+    assert "idle" in cmd("SessionStart")
+    assert hooks["SessionStart"][0]["matcher"] == "startup|resume"
     assert "idle_prompt" not in json.dumps(hooks)
     for event in hooks:
         assert "GATOR_PTY_ID" in cmd(event)
+
+
+def test_clear_drops_a_reported_state_and_ignores_bad_ids():
+    put(PTY, "idle")
+    agent_state.clear(PTY)
+    agent_state.clear("../../etc/passwd")
+    agent_state.clear(str(uuid.uuid4()))
+    assert agent_state.read_states([PTY]) == {}
 
 
 def test_with_claude_hooks_appends_settings_for_a_native_claude_only():

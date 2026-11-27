@@ -19,6 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 import agent_handoff
+import agent_mcp
 import agent_sessions
 import agent_state
 import agent_suspend
@@ -156,7 +157,21 @@ async def generic_agent_terminal(req: GenericAgentTerminalRequest):
         return await _open_terminal(req)
 
 
-async def _open_terminal(req: GenericAgentTerminalRequest):
+async def resume_suspended(req: GenericAgentTerminalRequest, pty_id: str, woken_by: str, woken_preview: str = "") -> dict:
+    """Resume a suspended session under its old terminal id, so a tab still holding
+    that id reattaches. Returns the terminal, or the live one when the session is
+    already running."""
+    async with _resume_lock:
+        return await _open_terminal(req, reuse_pty_id=pty_id, woken_by=woken_by, woken_preview=woken_preview)
+
+
+async def _open_terminal(
+    req: GenericAgentTerminalRequest,
+    *,
+    reuse_pty_id: str | None = None,
+    woken_by: str | None = None,
+    woken_preview: str = "",
+):
     """Reattach this project's live session if one exists, else spawn fresh.
 
     Unlike OpenCode's ensure_instance()+attach split, there's no separate
@@ -205,6 +220,9 @@ async def _open_terminal(req: GenericAgentTerminalRequest):
     force_new = req.force_new or handoff is not None or resume is not None
 
     owner = {"project_id": req.project_id, "agent": req.agent}
+    if woken_by:
+        owner["woken_by"] = woken_by
+        owner["woken_preview"] = woken_preview
     if not force_new:
         existing = generic_agent.get_active_session(req.project_id, req.agent)
         from_host = False
@@ -314,7 +332,10 @@ async def _open_terminal(req: GenericAgentTerminalRequest):
         # No gateway config for the profile -> launch on the user's own setup.
         env = generic_agent.with_wsl_env(command, binding[1] if binding else None)
 
-    pty_session_id = generic_agent.new_session_id()
+    pty_session_id = reuse_pty_id or generic_agent.new_session_id()
+    if reuse_pty_id:
+        # Not the last word the old process left: the new one reports its own.
+        agent_state.clear(pty_session_id)
     if command:
         if resume is not None:
             command = generic_agent.pin_resume(req.agent, command, pty_session_id, resume["id"])
@@ -323,6 +344,8 @@ async def _open_terminal(req: GenericAgentTerminalRequest):
     if not agent_state.is_wsl_command(command):
         env = {**(env or {}), **agent_state.launch_env(pty_session_id)}
         command = agent_state.with_claude_hooks(req.agent, command)
+        env.update(agent_mcp.launch_env(req.agent, command, pty_session_id, req.project_id))
+        command = agent_mcp.with_gator_mcp(req.agent, command)
     # Use the frontend's measured dimensions if provided (non-zero), so TUI
     # apps (Crush, Claude Code) spawn at the correct size and don't garble on
     # the late resize. Fall back to create_pty_session's defaults otherwise.

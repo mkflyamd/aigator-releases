@@ -244,6 +244,15 @@ def live_pty_labels() -> dict[str, dict]:
 
 def close_pty_session(session_id: str) -> bool:
     """Close a PTY. True when it is gone (or never existed), False when closing failed."""
+    import agent_mcp
+
+    closed = _close_pty_session(session_id)
+    if closed:
+        agent_mcp.revoke(session_id)
+    return closed
+
+
+def _close_pty_session(session_id: str) -> bool:
     entry = _pty_sessions.pop(session_id, None)
     if entry:
         try:
@@ -331,6 +340,17 @@ def _agent_exit_text(meta: dict | None) -> str:
     return f"{agent_label(agent)} process exited unexpectedly."
 
 
+def _suspended_payload(record: dict) -> dict:
+    payload = {
+        "type": "suspended",
+        "data": "Suspended - click to resume",
+        "session_id": record["session_id"],
+    }
+    if record.get("failed"):
+        payload["failed"] = record["failed"]
+    return payload
+
+
 @router.websocket("/api/terminal/agent")
 async def agent_terminal_ws(ws: WebSocket, session_id: str, seq: int = 0):
     """Named PTY WebSocket for coding agent sessions.
@@ -350,15 +370,7 @@ async def agent_terminal_ws(ws: WebSocket, session_id: str, seq: int = 0):
         suspended = await asyncio.to_thread(agent_suspend.suspended_record, session_id)
         if suspended:
             await ws.accept()
-            await ws.send_text(
-                json.dumps(
-                    {
-                        "type": "suspended",
-                        "data": "Suspended - click to resume",
-                        "session_id": suspended["session_id"],
-                    }
-                )
-            )
+            await ws.send_text(json.dumps(_suspended_payload(suspended)))
             await ws.close()
             return
         # NOT an exit: the PTY either hasn't been created yet (the client can
@@ -439,11 +451,7 @@ async def agent_terminal_ws(ws: WebSocket, session_id: str, seq: int = 0):
         suspended = await asyncio.to_thread(agent_suspend.suspended_record, session_id)
         try:
             if suspended:
-                final = {
-                    "type": "suspended",
-                    "data": "Suspended - click to resume",
-                    "session_id": suspended["session_id"],
-                }
+                final = _suspended_payload(suspended)
             else:
                 final = {
                     "type": "exit",
@@ -452,6 +460,21 @@ async def agent_terminal_ws(ws: WebSocket, session_id: str, seq: int = 0):
                     else _agent_exit_text(getattr(entry, "meta", None)),
                 }
             await ws.send_text(json.dumps(final))
+        except Exception:
+            pass
+
+    woken_by = (getattr(entry, "meta", None) or {}).get("woken_by")
+    if woken_by:
+        try:
+            await ws.send_text(
+                json.dumps(
+                    {
+                        "type": "woken",
+                        "data": f"woken by {woken_by}",
+                        "preview": entry.meta.get("woken_preview", ""),
+                    }
+                )
+            )
         except Exception:
             pass
 

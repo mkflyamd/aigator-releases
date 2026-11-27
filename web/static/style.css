@@ -24374,6 +24374,22 @@ body.tab-fullscreen {
   font-size: 0.75rem;
   pointer-events: none;
 }
+.gtp-woken-banner {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  z-index: 4;
+  max-width: 70%;
+  padding: 3px 10px;
+  border-radius: 12px;
+  background: rgba(30, 58, 95, 0.92);
+  color: #bfdbfe;
+  font-size: 0.75rem;
+  cursor: pointer;
+  overflow: hidden;
+  max-height: 4.5em;
+  overflow-wrap: anywhere;
+}
 .agent-handoff-search {
   width: 100%;
   box-sizing: border-box;

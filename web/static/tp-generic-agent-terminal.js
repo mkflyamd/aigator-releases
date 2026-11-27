@@ -1470,7 +1470,8 @@ function _genAgentConnect(sess, retryDelay) {
       resize(Math.max(cols - 1, 2));
       resize(cols);
     }
-    sess.term && sess.term.focus();
+    // The wake watch re-attaches a suspended tab every few seconds; it must not take focus.
+    if (!sess._resumeId) sess.term && sess.term.focus();
     if (!sess._hasOutput) _genAgentArmNoOutputWatchdog(sess);
   };
   sess.ws.onmessage = (ev) => {
@@ -1550,8 +1551,23 @@ function _genAgentConnect(sess, retryDelay) {
       // resumes the stored session instead of starting a fresh one.
       sess._dead = true;
       sess._resumeId = msg.session_id || null;
+      // A wake restarts the stream under the same id, so the next attach replays it all.
+      sess._outputSeq = 0;
+      sess._awaitingWake = true;
       clearTimeout(sess._noOutputTimer);
       _genAgentShowRestartOverlay(sess, msg.data || 'Suspended - click to resume');
+      if (msg.failed) _genAgentShowWakeFailure(sess, msg.failed);
+      _genAgentWatchForWake(sess);
+    } else if (msg.type === 'woken') {
+      // Another agent woke this session: it is running again under the same id.
+      sess._dead = false;
+      sess._resumeId = null;
+      clearTimeout(sess._wakeWatch);
+      if (sess._awaitingWake && sess.term) sess.term.reset();
+      sess._awaitingWake = false;
+      const overlay = sess.container && sess.container.querySelector('.oc-restart-overlay');
+      if (overlay) overlay.remove();
+      _genAgentShowWokenBanner(sess, msg);
     } else if (msg.type === 'exit') {
       sess._dead = true;
       clearTimeout(sess._noOutputTimer);
@@ -1593,6 +1609,47 @@ function _genAgentShowReconnecting(sess, attempt) {
 function _genAgentClearReconnecting(sess) {
   const banner = sess.container && sess.container.querySelector('.gtp-reconnect-banner');
   if (banner) banner.remove();
+}
+
+const GEN_AGENT_WAKE_WATCH_MS = 5000;
+
+// A suspended tab can be woken by another agent. Looking again every few seconds is
+// cheap (the backend answers a suspended id with one small message) and lets the tab
+// reattach to the session without the user clicking.
+function _genAgentWatchForWake(sess) {
+  clearTimeout(sess._wakeWatch);
+  sess._wakeWatch = setTimeout(() => {
+    if (!sess.term || sess._closing || sess._parked || sess._restarting || !sess._resumeId) return;
+    _genAgentConnect(sess, 0);
+  }, GEN_AGENT_WAKE_WATCH_MS);
+}
+
+function _genAgentShowWakeFailure(sess, failed) {
+  const overlay = sess.container && sess.container.querySelector('.oc-restart-overlay');
+  if (!overlay) return;
+  const msgEl = overlay.querySelector('.oc-restart-msg');
+  if (msgEl) msgEl.textContent = 'could not wake: ' + (failed.reason || 'unknown reason');
+  if (failed.message && !overlay.querySelector('.oc-restart-kept')) {
+    const kept = document.createElement('div');
+    kept.className = 'oc-restart-msg oc-restart-kept';
+    kept.textContent = 'Message from ' + (failed.sender || 'another agent') + ': ' + failed.message;
+    msgEl.after(kept);
+  }
+}
+
+function _genAgentShowWokenBanner(sess, msg) {
+  if (!sess.container || sess.container.querySelector('.gtp-woken-banner')) return;
+  const banner = document.createElement('div');
+  banner.className = 'gtp-woken-banner';
+  banner.setAttribute('role', 'status');
+  const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  banner.textContent =
+    (msg.data || 'woken by another agent') +
+    ' at ' +
+    time +
+    (msg.preview ? ': ' + msg.preview : '');
+  banner.addEventListener('click', () => banner.remove());
+  sess.container.appendChild(banner);
 }
 
 function _genAgentShowRestartOverlay(sess, reason) {
