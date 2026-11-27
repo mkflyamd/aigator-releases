@@ -165,7 +165,9 @@
 
   // When each Working and Needs you row entered that state. Those two groups sort on it,
   // oldest first, because it never changes while the row stays put. Last activity changes
-  // on every burst of output and made rows jump away from the pointer.
+  // on every burst of output and made rows jump away from the pointer. A row seen for the
+  // first time is stamped from its own last activity, not the render time, so rows that
+  // appear together on first load still sort by when they really started.
   function stampSince(since, rows, nowMs) {
     const seen = new Set();
     rows.forEach((r) => {
@@ -173,7 +175,8 @@
       const id = rowIdentity(r);
       seen.add(id);
       const entry = since.get(id);
-      if (!entry || entry.state !== r.state) since.set(id, { state: r.state, at: nowMs });
+      if (!entry) since.set(id, { state: r.state, at: Math.min(r.lastActive * 1000, nowMs) });
+      else if (entry.state !== r.state) since.set(id, { state: r.state, at: nowMs });
     });
     since.forEach((_, id) => {
       if (!seen.has(id)) since.delete(id);

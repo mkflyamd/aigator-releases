@@ -462,6 +462,39 @@ const term = (pty, agent, out, viewed) => ({
   assert.deepStrictEqual(after, before, 'getting a transcript id does not move the row');
 }
 
+// rows that first appear together are ordered by their own activity, not by key
+{
+  const since = new Map();
+  const sessions = [
+    rec('a', 'claude', 'A', at(10, 15, 9, 0), { pty_session_id: 'pa' }),
+    rec('b', 'claude', 'B', at(10, 15, 9, 0), { pty_session_id: 'pb' }),
+    rec('c', 'claude', 'C', at(10, 15, 9, 0), { pty_session_id: 'pc' }),
+  ];
+  const workers = [
+    term('pa', 'claude', NOW - 1000, 0),
+    term('pb', 'claude', NOW - 9000, 0),
+    term('pc', 'claude', NOW - 5000, 0),
+  ];
+  const rows = h.buildRows(sessions, workers, NOW);
+  h.stampSince(since, rows, NOW);
+  const working = h.filterGroups(rows, '', since).find((g) => g.key === 'working');
+  assert.deepStrictEqual(
+    working.rows.map((r) => r.id),
+    ['b', 'c', 'a'],
+    'first render: oldest activity first, not key order',
+  );
+  workers[1]._lastOutputAt = NOW + 400;
+  const again = h.buildRows(sessions, workers, NOW + 500);
+  h.stampSince(since, again, NOW + 500);
+  assert.deepStrictEqual(
+    h
+      .filterGroups(again, '', since)
+      .find((g) => g.key === 'working')
+      .rows.map((r) => r.id),
+    ['b', 'c', 'a'],
+  );
+}
+
 // without a since map the old last-activity order still applies
 {
   const sessions = [
