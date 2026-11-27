@@ -261,6 +261,40 @@ async def test_stop_all_after_the_delivery_finished_does_not_report_it_as_cancel
     assert world.audit[-1]["state"] == WORKING
 
 
+async def test_a_flood_of_refusals_does_not_evict_a_message_in_flight(world, monkeypatch):
+    monkeypatch.setattr(core, "TASKS_KEEP", 3)
+    world.adapter.gate = asyncio.Event()
+    pending = asyncio.ensure_future(world.relay.submit(D, "Beta", "slow"))
+    await asyncio.sleep(0)
+    for n in range(10):
+        await world.relay.submit(A, "Beta", "", message_id=f"empty-{n}")
+    world.relay.stop_all()
+    assert state_of(await pending) == CANCELED
+    assert world.adapter.delivered == []
+
+
+async def test_a_flood_of_refusals_does_not_reset_the_hourly_limit(world, monkeypatch):
+    monkeypatch.setattr(core, "TASKS_KEEP", 8)
+    for n in range(core.UNLINKED_LIMIT):
+        assert state_of(await world.relay.submit(A, "Beta", f"note {n}")) == WORKING
+    for n in range(20):
+        await world.relay.submit(A, "Beta", "", message_id=f"empty-{n}")
+    over = await world.relay.submit(A, "Beta", "one more")
+    assert state_of(over) == REJECTED and code_of(over) == "rate_limited"
+    assert len(world.adapter.delivered) == core.UNLINKED_LIMIT
+
+
+async def test_old_tasks_are_still_forgotten_once_the_hour_has_passed(world, monkeypatch):
+    monkeypatch.setattr(core, "TASKS_KEEP", 3)
+    for n in range(core.UNLINKED_LIMIT):
+        await world.relay.submit(A, "Beta", f"note {n}")
+    world.now[0] += core.HOUR + 1
+    for n in range(5):
+        await world.relay.submit(A, "Beta", "", message_id=f"empty-{n}")
+    assert len(world.relay._tasks) <= 3
+    assert state_of(await world.relay.submit(A, "Beta", "fresh hour")) == WORKING
+
+
 async def test_a_link_expires(world):
     link = world.relay.create_link(A, B, seconds=10)
     assert state_of(await world.relay.send_on_link(link.id, A, "in time")) == WORKING

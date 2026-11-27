@@ -35,6 +35,7 @@ DEFAULT_LINK_SECONDS = 8 * HOUR
 TASKS_KEEP = 500
 AUDIT_KEEP = 1000
 PREVIEW_CHARS = 200
+COUNTED_STATES = (TaskState.SUBMITTED, TaskState.WORKING, TaskState.COMPLETED)
 
 SUBMIT = "submit"
 DRAFT = "draft"
@@ -233,10 +234,18 @@ class Relay:
         task = Task(new_id(), context_id, message_id, sender, None, text, 1, now)
         self._tasks[task.id] = task
         self._by_message[(sender.id, message_id)] = task.id
-        while len(self._tasks) > TASKS_KEEP:
-            old_id, old = self._tasks.popitem(last=False)
-            self._by_message.pop((old.sender.id, old.message_id), None)
+        surplus = len(self._tasks) - TASKS_KEEP
+        if surplus > 0:
+            for old in [t for t in self._tasks.values() if self._evictable(t, now)][:surplus]:
+                del self._tasks[old.id]
+                self._by_message.pop((old.sender.id, old.message_id), None)
         return task
+
+    def _evictable(self, task: Task, now: float) -> bool:
+        """A task still in flight, or one the hourly limits still count, must stay."""
+        if task.id in self._running:
+            return False
+        return not (now - task.created_at < HOUR and task.state in COUNTED_STATES)
 
     def _finish(self, task: Task, state: TaskState, code: str, reason: str, now: float) -> dict:
         if task.id in self._canceled:
@@ -269,12 +278,11 @@ class Relay:
 
     def _count(self, task: Task, now: float, *, on_link: bool) -> int:
         """Messages this hour that were not refused or failed, the current one included."""
-        counted = (TaskState.SUBMITTED, TaskState.WORKING, TaskState.COMPLETED)
         if on_link:
             same = lambda t: t.context_id == task.context_id  # noqa: E731
         else:
             same = lambda t: t.sender.id == task.sender.id and not t.context_id.startswith("link:")  # noqa: E731
-        return sum(1 for t in self._tasks.values() if now - t.created_at < HOUR and t.state in counted and same(t))
+        return sum(1 for t in self._tasks.values() if now - t.created_at < HOUR and t.state in COUNTED_STATES and same(t))
 
     def _repeated(self, task: Task) -> bool:
         earlier = [t for t in self._tasks.values() if t is not task and t.context_id == task.context_id and t.sender.id == task.sender.id]
