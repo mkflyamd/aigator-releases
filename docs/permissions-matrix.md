@@ -29,7 +29,7 @@ A change that notifies another person counts as not reversible, even when the co
 - Jira and Confluence changes that notify watchers
 - permanent deletes
 
-Teams and Slack messages are therefore not reversible, which is what keeps them draft-only. CLAUDE.md requires that email, Teams and Slack messages never auto-send.
+Teams and Slack messages are therefore not reversible, which is what keeps them draft-only. CLAUDE.md requires that email, Teams and Slack messages never auto-send, except to the user's own private self-chat or DM.
 
 Reversible requires real version history or a recycle bin. A tool whose undo is unclear is treated as not reversible. A tool with no action type is also not reversible, and a built-in tool without one fails the test.
 
