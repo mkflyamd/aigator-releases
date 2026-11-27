@@ -6,7 +6,6 @@ from __future__ import annotations
 import html
 import logging
 import re
-import time
 from datetime import datetime, timezone
 
 from remote.channel import ChannelRefused, InboundMessage, require_autosend
@@ -37,14 +36,13 @@ def send_message(chat_id: str, content: str) -> str:
 
 
 def _epoch(composetime: str) -> float:
-    """Unix seconds. A missing or unreadable time counts as now: Teams gave no age, so the
-    message is not assumed stale."""
+    """Unix seconds. A missing or unreadable time is 0.0, which the runner never runs untagged."""
     if not composetime:
-        return time.time()
+        return 0.0
     try:
         stamp = datetime.fromisoformat(_FRACTION.sub(r"\1", composetime.replace("Z", "+00:00")))
     except ValueError:
-        return time.time()
+        return 0.0
     if stamp.tzinfo is None:
         stamp = stamp.replace(tzinfo=timezone.utc)
     return stamp.timestamp()
@@ -69,7 +67,12 @@ class TeamsSelfChat:
 
     def poll(self) -> list[InboundMessage]:
         return [
-            InboundMessage(id=str(raw.get("id", "")), text=_text(raw), created_at=_epoch(raw.get("created_at", "")))
+            InboundMessage(
+                id=str(raw.get("id", "")),
+                text=_text(raw),
+                created_at=_epoch(raw.get("created_at", "")),
+                attachments=bool(raw.get("attachments")),
+            )
             for raw in fetch_messages(self._chat_id)
             if raw.get("message_type") == "message"
         ]
@@ -79,7 +82,7 @@ class TeamsSelfChat:
             _log.warning("Remote control refused to post: %s is not the own self-chat", self._chat_id)
             raise ChannelRefused("not the own self-chat")
         if not text.lstrip().startswith(SYSTEM_PREFIX):
-            raise ChannelRefused("replies must start with [Gator")
+            raise ChannelRefused(f"replies must start with {SYSTEM_PREFIX}")
         require_autosend()
         content = html.escape(text, quote=False).replace("\r\n", "\n").replace("\n", "<br>")
         try:

@@ -1,8 +1,7 @@
-import time
 
 import pytest
 
-from remote import slack_channel
+from remote import commands, slack_channel
 from remote.channel import ChannelRefused, InboundMessage
 from remote.guard import Guard
 from remote.runner import RemoteRunner
@@ -169,11 +168,10 @@ def test_poll_returns_messages_newest_first_with_ts_ids_and_unescaped_text(slack
     assert slack.calls[-1][1] == {"channel": SELF_DM, "limit": slack_channel.HISTORY_LIMIT}
 
 
-def test_an_unreadable_ts_counts_as_now_not_as_stale(slack):
+def test_an_unreadable_ts_has_no_time(slack):
     slack.history = [{"ts": "garbage", "user": ME, "text": "@gator x"}]
-    before = time.time()
     (message,) = SlackSelfDM().poll()
-    assert before <= message.created_at <= time.time()
+    assert message.created_at == 0.0
 
 
 def test_a_history_error_raises(monkeypatch):
@@ -214,8 +212,8 @@ class SlackWorld:
 async def test_slack_command_runs_and_the_reply_is_posted_to_the_self_dm(tmp_path, slack):
     w = SlackWorld(tmp_path, slack)
     await w.deliver()
-    await w.deliver(w.say(w.ts(), "@gator hello"))
-    assert w.host.delivered == [("pty-1", "hello")]
+    await w.deliver(w.say(w.ts(), "@gator say ok"))
+    assert w.host.delivered == [("pty-1", "say ok")]
     (post,) = slack.posts()
     assert post[1]["channel"] == SELF_DM
     assert post[1]["text"].startswith("[Gator - Claude - budget] Started")
@@ -224,7 +222,7 @@ async def test_slack_command_runs_and_the_reply_is_posted_to_the_self_dm(tmp_pat
 async def test_gator_own_posts_are_never_read_back_as_commands(tmp_path, slack):
     w = SlackWorld(tmp_path, slack)
     await w.deliver()
-    first = w.say(w.ts(), "@gator hello")
+    first = w.say(w.ts(), "@gator say ok")
     await w.deliver(first)
     (post,) = slack.posts()
     echoed = w.say("1700000000.000001", post[1]["text"])
@@ -263,7 +261,7 @@ async def test_a_ts_older_than_the_stale_window_is_skipped_with_a_notice(tmp_pat
     await w.deliver(w.say(w.ts(offset=1800), "@gator late"))
     assert w.host.delivered == []
     (post,) = slack.posts()
-    assert "Skipped 1 message(s)" in post[1]["text"]
+    assert post[1]["text"] == commands.stale_skipped(1, 900)
 
 
 async def test_a_message_not_addressed_to_gator_is_ignored(tmp_path, slack):
@@ -277,15 +275,15 @@ async def test_a_message_not_addressed_to_gator_is_ignored(tmp_path, slack):
 async def test_list_and_stop_all_work_over_slack(tmp_path, slack):
     w = SlackWorld(tmp_path, slack)
     await w.deliver()
-    a = w.say(w.ts(seq=1), "@gator hello")
+    a = w.say(w.ts(seq=1), "@gator say ok")
     await w.deliver(a)
     b = w.say(w.ts(seq=2), "@gator list")
     await w.deliver(b, a)
-    assert "- budget (Claude, Budget)" in slack.posts()[-1][1]["text"]
+    assert "1. budget \u00b7 Budget \u00b7 working" in slack.posts()[-1][1]["text"]
     c = w.say(w.ts(seq=3), "@gator stop all")
     await w.deliver(c, b, a)
     assert w.host.killed == ["pty-1"]
-    assert "Stopped 1 remote session(s)" in slack.posts()[-1][1]["text"]
+    assert slack.posts()[-1][1]["text"] == commands.stopped(1)
     assert w.state.disarmed("slack") is True
 
 
@@ -311,17 +309,17 @@ async def test_stop_all_on_slack_leaves_teams_armed_and_its_sessions_running(tmp
         return InboundMessage(id=mid, text=text, created_at=clock.now)
 
     await teams.process([teams_msg("t0", "x")])
-    await teams.process([teams_msg("t1", "@gator hi"), teams_msg("t0", "x")])
+    await teams.process([teams_msg("t1", "@gator say ok"), teams_msg("t0", "x")])
     slack.history = []
     await slack_runner.poll()
-    slack.history = [{"ts": f"{now}.000001", "user": ME, "text": "@gator hi"}]
+    slack.history = [{"ts": f"{now}.000001", "user": ME, "text": "@gator say ok"}]
     await slack_runner.poll()
     assert len(teams_service.list()) == 1
     assert len(slack_service.list()) == 1
 
     slack.history = [
         {"ts": f"{now}.000002", "user": ME, "text": "@gator stop all"},
-        {"ts": f"{now}.000001", "user": ME, "text": "@gator hi"},
+        {"ts": f"{now}.000001", "user": ME, "text": "@gator say ok"},
     ]
     await slack_runner.poll()
     assert slack_service.list() == []
