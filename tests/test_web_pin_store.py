@@ -98,6 +98,17 @@ def test_image_not_served_when_it_does_not_match_the_snapshot():
     assert store.read_image(pid) is None
 
 
+def test_tiles_are_served_only_when_they_match_and_a_shorter_refresh_drops_the_rest():
+    pid = str(uuid.uuid4())
+    store.write_snapshot(pid, image=b"\x89PNG-a", tiles=[b"\x89PNG-b", b"\x89PNG-c"], text="t", meta={})
+    assert store.tile_count(pid) == 3 and store.read_image(pid, 3) == b"\x89PNG-c"
+    (store.web_pin_dir(pid) / "tile-2.png").write_bytes(b"\x89PNG-torn")
+    assert store.read_image(pid, 2) is None
+    store.write_snapshot(pid, image=b"\x89PNG-a", tiles=[b"\x89PNG-b"], text="t", meta={})
+    assert store.tile_count(pid) == 2 and store.read_image(pid, 3) is None
+    assert not (store.web_pin_dir(pid) / "tile-3.png").exists()
+
+
 def test_failed_write_leaves_previous_snapshot_and_no_temp_files(monkeypatch):
     import os
 

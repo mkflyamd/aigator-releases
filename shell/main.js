@@ -11,6 +11,7 @@
 } = require('electron');
 const { applyMediaPermissions } = require('./media-permissions');
 const { applyNavigationPolicy, setToolbarAttacher, _hostMatches } = require('./navigation-policy');
+const addressInput = require('./address-input');
 const { resolveAtlassianUrls } = require('./atlassian-urls');
 const { createHudRecorder } = require('./hud_recorder');
 const path = require('path');
@@ -389,12 +390,12 @@ function attachToolbarToWindow(childWin) {
       childWc.reloadIgnoringCache();
     } catch {}
   };
-  const navigateHandler = (e, url) => {
-    if (e.sender.id !== tbWcId || typeof url !== 'string' || !/^https:\/\//.test(url)) return;
+  const navigateHandler = (e, typed) => {
+    if (e.sender.id !== tbWcId || typeof typed !== 'string') return;
     // The shared toolbar emits one navigation channel for both main panes and
     // child windows. Child toolbars previously had no handler, so Enter in a
     // visible address bar appeared to do nothing.
-    childWc.loadURL(url).catch((error) => {
+    addressInput.loadAddressInput(childWc, typed, (error, url) => {
       console.error(`[toolbar] child navigation failed for ${url}: ${error.message}`);
       try {
         tbWc.send('toolbar:navigation-error', { url, message: error.message });
@@ -612,6 +613,9 @@ const DOCK_W = 56;
 // keep it visually flush with the native pane's left edge, and hide it
 // cleanly without fighting Gator's topbar z-index/layout.
 const TOOLBAR_H = 40;
+// Extra height the toolbar view grows by while its star bubble is open, so the bubble
+// is not clipped by the 40px bar. The pane stays below TOOLBAR_H and the toolbar overlays it.
+let _toolbarExpandedH = 0;
 
 // Persist the last Slack workspace URL so we skip the chooser on restart.
 const SLACK_LAST_URL_FILE = path.join(app.getPath('userData'), 'slack-last-url.txt');
@@ -687,6 +691,21 @@ function _liveToolbarWebContents() {
   }
 }
 
+const toolbarStar = require('./toolbar-star');
+const _hiddenCustomApps = new Set();
+
+// Star state for the address bar: user-added apps and the built-in Browser get a star. In the
+// Browser it is filled when the page's site is already a starred app. Apps pending deletion
+// (Undo window) are ignored so the star empties as soon as Remove is clicked.
+function _starFor(app, url) {
+  if (!_isPinnablePane(app)) return { state: 'hidden', appId: null, name: '' };
+  const apps = [..._customAppIds]
+    .filter((id) => _genericPanes[id])
+    .map((id) => ({ id, url: _genericPanes[id].url }));
+  const s = toolbarStar.starState(url, apps, _hiddenCustomApps);
+  return { state: s.state, appId: s.appId, name: s.appId ? _genericPanes[s.appId].name : '' };
+}
+
 function _toolbarPushState() {
   const toolbarWc = _liveToolbarWebContents();
   if (!toolbarWc) return;
@@ -711,7 +730,8 @@ function _toolbarPushState() {
     loading: false,
     visible: !!app,
     appHomeUrls: APP_HOME_URL,
-    isCustomApp: _customAppIds.has(app),
+    pinnable: _isPinnablePane(app),
+    star: _starFor(app, url),
     pinMode: !!_webPinPicking && _webPinPicking === app,
     pinLabel: _webPinLabel,
     pinKind: _webPinKind,
@@ -786,6 +806,7 @@ function _attachToolbarListeners(view, appName) {
     _toolbarPushState();
   });
   const notifyJiraNavigation = () => {
+    if (_genericPanes[appName]) return;
     const url = wc.getURL() || '';
     // The renderer owns the active tab/context.  It forwards this trusted
     // Electron navigation to the CSRF-protected backend binding endpoint.
@@ -797,6 +818,21 @@ function _attachToolbarListeners(view, appName) {
         .catch(() => {});
     }
   };
+  // Ctrl+L / Alt+D jump to the address bar, as in a browser.
+  wc.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown' || activeExternalApp !== appName) return;
+    const key = String(input.key || '').toLowerCase();
+    const mod = input.control || input.meta;
+    if (!((mod && !input.alt && !input.shift && key === 'l') || (input.alt && !mod && key === 'd')))
+      return;
+    const toolbarWc = _liveToolbarWebContents();
+    if (!toolbarWc) return;
+    event.preventDefault();
+    try {
+      toolbarWc.focus();
+      toolbarWc.send('toolbar:focus-url');
+    } catch {}
+  });
   wc.on('did-navigate', () => {
     if (activeExternalApp === appName) _toolbarPushState();
     notifyJiraNavigation();
@@ -1006,9 +1042,13 @@ let createAtlassianView = null;
 const atlassianViewPromises = {};
 
 function _fetchConfigJson() {
+  return _fetchGatorJson('/api/config');
+}
+
+function _fetchGatorJson(path) {
   return new Promise((resolve) => {
     http
-      .get(GATOR_URL.replace(/\/$/, '') + '/api/config', (response) => {
+      .get(GATOR_URL.replace(/\/$/, '') + path, (response) => {
         let body = '';
         response.setEncoding('utf8');
         response.on('data', (chunk) => {
@@ -1060,6 +1100,9 @@ let activeExternalApp = null;
 // Web pane pins. _customAppIds holds user-added apps only (the g-* Google panes also use
 // createGenericPane and must not get pin controls). _webPinPicking is the app id in pick mode.
 const _customAppIds = new Set();
+// Built-in panes that open any site like a browser and get pin controls without being starred.
+const _PINNABLE_BUILTIN_PANES = new Set(['browser']);
+const _isPinnablePane = (id) => _customAppIds.has(id) || _PINNABLE_BUILTIN_PANES.has(id);
 let _webPinPicking = null;
 let _webPinLabel = '';
 let _webPinKind = '';
@@ -1071,7 +1114,7 @@ const _sendToGator = (channel, payload) => {
 };
 const _webPin = require('./web-pin').createWebPin({
   getPane: (appId) => {
-    const pane = _customAppIds.has(appId) ? _genericPanes[appId] : null;
+    const pane = _isPinnablePane(appId) ? _genericPanes[appId] : null;
     return pane && pane.view && !pane.view.webContents.isDestroyed() ? pane.view.webContents : null;
   },
   isPaneVisible: (appId) => activeExternalApp === appId,
@@ -1351,6 +1394,8 @@ function createWindow() {
       sandbox: false,
     },
   });
+  // Transparent so the area below the bar (shown only while the star bubble or menu is open) lets the pane show through.
+  toolbarView.setBackgroundColor('#00000000');
   toolbarView.webContents.loadFile(path.join(__dirname, 'toolbar.html'));
   win.contentView.addChildView(toolbarView);
   // Hide until an external app activates. _layoutNow() will show it.
@@ -4242,7 +4287,8 @@ function _layoutNow() {
   if (githubView && githubView.setVisible) githubView.setVisible(activeExternalApp === 'github');
   // Generic panes
   for (const [paneId, pane] of Object.entries(_genericPanes)) {
-    if (pane.view && pane.view.setVisible) pane.view.setVisible(activeExternalApp === paneId);
+    if (pane.view && pane.view.setVisible)
+      pane.view.setVisible(activeExternalApp === paneId && !_hiddenCustomApps.has(paneId));
   }
 
   // Toolbar: shown only when an external app is active. Sits flush at the top
@@ -4266,7 +4312,10 @@ function _layoutNow() {
     // issues on Windows). The toolbar is a lightweight HTML page so blanking
     // its compositor surface is fine — unlike Slack/Teams which go white if
     // parked off-screen (see M6 in native-pane-pin-injection.md).
-    if (!showToolbar) toolbarView.setBounds({ x: w, y: 0, width: 1, height: 1 });
+    if (!showToolbar) {
+      _toolbarExpandedH = 0;
+      toolbarView.setBounds({ x: w, y: 0, width: 1, height: 1 });
+    }
     if (_toolbarVisible !== showToolbar) {
       _toolbarVisible = showToolbar;
       toolbarView.setVisible(showToolbar);
@@ -4278,7 +4327,7 @@ function _layoutNow() {
     const gatorSliver = STICKY_RIGHT_RAIL ? DOCK_W : 1;
     const extW = w - gatorSliver;
     if (showToolbar) {
-      toolbarView.setBounds({ x: 0, y: 0, width: extW, height: TOOLBAR_H });
+      toolbarView.setBounds({ x: 0, y: 0, width: extW, height: TOOLBAR_H + _toolbarExpandedH });
       activeView.setBounds({ x: 0, y: TOOLBAR_H, width: extW, height: h - TOOLBAR_H });
     } else {
       activeView.setBounds({ x: 0, y: 0, width: extW, height: h });
@@ -4298,7 +4347,12 @@ function _layoutNow() {
     const gatorW = Math.max(w - extTileWidth, GATOR_MIN_WIDTH);
     const extW = w - gatorW;
     if (showToolbar) {
-      toolbarView.setBounds({ x: 0, y: 0, width: extW - SEAM, height: TOOLBAR_H });
+      toolbarView.setBounds({
+        x: 0,
+        y: 0,
+        width: extW - SEAM,
+        height: TOOLBAR_H + _toolbarExpandedH,
+      });
       activeView.setBounds({ x: 0, y: TOOLBAR_H, width: extW - SEAM, height: h - TOOLBAR_H });
     } else {
       activeView.setBounds({ x: 0, y: 0, width: extW - SEAM, height: h });
@@ -4446,6 +4500,7 @@ function createGenericPane(appConfig) {
   view.webContents.loadURL(url);
   win.contentView.addChildView(view);
   view.setBounds({ x: 1599, y: 0, width: 1, height: 900 });
+  _attachToolbarListeners(view, id);
 
   _genericPanes[id] = { id, name, url, view, partition, homeHosts };
   _refreshAppHomeUrls();
@@ -4904,12 +4959,12 @@ ipcMain.on('toolbar:web-pin-start', (e) => {
     _webPin.stop();
     return;
   }
-  if (_customAppIds.has(activeExternalApp)) _webPin.start(activeExternalApp);
+  if (_isPinnablePane(activeExternalApp)) _webPin.start(activeExternalApp);
 });
 
 ipcMain.on('toolbar:web-pin-view', (e) => {
   if (!_isMainToolbar(e)) return;
-  if (_customAppIds.has(activeExternalApp)) _webPin.pinView(activeExternalApp);
+  if (_isPinnablePane(activeExternalApp)) _webPin.pinView(activeExternalApp);
 });
 
 ipcMain.on('toolbar:web-pin-cancel', (e) => {
@@ -4932,7 +4987,7 @@ ipcMain.on('toolbar:web-pin-key', (e, input) => {
 
 ipcMain.handle('web-pin:recapture', (e, appId, locator, url) => {
   if (!gatorView || e.sender.id !== gatorView.webContents.id) return { status: 'pane_unavailable' };
-  if (typeof appId !== 'string' || !_customAppIds.has(appId)) return { status: 'pane_unavailable' };
+  if (typeof appId !== 'string' || !_isPinnablePane(appId)) return { status: 'pane_unavailable' };
   return _webPin.recapture(
     appId,
     locator && typeof locator === 'object' ? locator : null,
@@ -4942,7 +4997,7 @@ ipcMain.handle('web-pin:recapture', (e, appId, locator, url) => {
 
 ipcMain.handle('web-pin:go-to', async (e, appId, url) => {
   if (!gatorView || e.sender.id !== gatorView.webContents.id) return false;
-  if (typeof appId !== 'string' || !_customAppIds.has(appId)) return false;
+  if (typeof appId !== 'string' || !_isPinnablePane(appId)) return false;
   let parsed;
   try {
     parsed = new URL(url);
@@ -4953,8 +5008,12 @@ ipcMain.handle('web-pin:go-to', async (e, appId, url) => {
   const pane = _genericPanes[appId];
   if (!pane || !pane.view || pane.view.webContents.isDestroyed()) return false;
   // loadURL skips will-navigate, so the pane's home-host restriction is enforced here:
-  // only the app's own hosts, and never http for an https app.
-  if (!pane.homeHosts.length || !_hostMatches(parsed.hostname, pane.homeHosts)) return false;
+  // only the app's own hosts, and never http for an https app. A built-in browser pane has no home site.
+  if (
+    !_PINNABLE_BUILTIN_PANES.has(appId) &&
+    (!pane.homeHosts.length || !_hostMatches(parsed.hostname, pane.homeHosts))
+  )
+    return false;
   if (new URL(pane.url).protocol === 'https:' && parsed.protocol !== 'https:') return false;
   try {
     await pane.view.webContents.loadURL(parsed.href);
@@ -5075,11 +5134,11 @@ ipcMain.on('toolbar:collapse-gator', (e) => {
   _syncGatorSqueezed(!gatorVisible);
 });
 
-ipcMain.on('toolbar:navigate', (e, url) => {
-  if (!_isMainToolbar(e) || typeof url !== 'string' || !/^https:\/\//.test(url)) return;
+ipcMain.on('toolbar:navigate', (e, typed) => {
+  if (!_isMainToolbar(e) || typeof typed !== 'string') return;
   const v = viewForApp(activeExternalApp);
   if (v && !v.webContents.isDestroyed()) {
-    v.webContents.loadURL(url).catch((error) => {
+    addressInput.loadAddressInput(v.webContents, typed, (error, url) => {
       console.error(`[toolbar] navigation failed for ${url}: ${error.message}`);
       try {
         _liveToolbarWebContents()?.send('toolbar:navigation-error', {
@@ -5091,17 +5150,84 @@ ipcMain.on('toolbar:navigate', (e, url) => {
   }
 });
 
-ipcMain.on('toolbar:save-custom-app', (e, url) => {
-  if (!_isMainToolbar(e) || !url || !gatorView || gatorView.webContents.isDestroyed()) return;
-  try {
-    gatorView.webContents
-      .executeJavaScript(
-        'if(typeof window._shellSuggestCustomApp==="function")window._shellSuggestCustomApp(' +
-          JSON.stringify(url) +
-          ')',
-      )
-      .catch(() => {});
-  } catch {}
+ipcMain.on('toolbar:set-expanded', (e, h) => {
+  if (!_isMainToolbar(e)) return;
+  _toolbarExpandedH = Math.max(0, Math.min(Number(h) || 0, 400));
+  layout();
+});
+
+// Star actions are relayed to the Gator renderer, which owns the config calls, the dock
+// and the Undo toast.
+ipcMain.on('toolbar:star-add', (e) => {
+  if (!_isMainToolbar(e) || !activeExternalApp) return;
+  const v = viewForApp(activeExternalApp);
+  if (!v || v.webContents.isDestroyed()) return;
+  _sendToGator('custom-app:star-event', {
+    kind: 'add',
+    url: v.webContents.getURL(),
+    name: toolbarStar.defaultAppName(v.webContents.getTitle(), v.webContents.getURL()),
+    fromAppId: activeExternalApp,
+  });
+});
+ipcMain.on('toolbar:star-rename', (e, appId, name) => {
+  if (!_isMainToolbar(e) || !_customAppIds.has(appId) || typeof name !== 'string') return;
+  _sendToGator('custom-app:star-event', { kind: 'rename', appId, name: name.trim().slice(0, 40) });
+});
+ipcMain.handle('toolbar:star-removal-note', async (e, appId) => {
+  if (!_isMainToolbar(e) || !_customAppIds.has(appId)) {
+    return { count: null, note: toolbarStar.removalNote(null) };
+  }
+  const data = await _fetchGatorJson('/api/web-pins/count?app_id=' + encodeURIComponent(appId));
+  const count = data && Number.isInteger(data.count) ? data.count : null;
+  return { count, note: toolbarStar.removalNote(count) };
+});
+// The add toast's Rename action lives in the Gator renderer; the bubble lives in the toolbar.
+ipcMain.on('custom-app:open-rename', (_e, appId) => {
+  if (typeof appId !== 'string' || !_customAppIds.has(appId)) return;
+  const toolbarWc = _liveToolbarWebContents();
+  if (toolbarWc) toolbarWc.send('toolbar:open-bubble', appId);
+});
+ipcMain.on('toolbar:star-remove', (e, appId) => {
+  if (!_isMainToolbar(e) || !_customAppIds.has(appId)) return;
+  _sendToGator('custom-app:star-event', { kind: 'remove', appId });
+});
+
+// Undo window: a removed app's pane is hidden but kept alive until the renderer commits.
+ipcMain.handle('custom-app:set-hidden', (_e, appId, hidden) => {
+  if (typeof appId !== 'string' || !_customAppIds.has(appId)) return false;
+  if (hidden) {
+    _hiddenCustomApps.add(appId);
+    if (activeExternalApp === appId) activeExternalApp = null;
+  } else {
+    _hiddenCustomApps.delete(appId);
+  }
+  layout();
+  return true;
+});
+
+ipcMain.handle('custom-app:teardown', async (_e, appId) => {
+  if (typeof appId !== 'string' || !_customAppIds.has(appId)) return false;
+  const pane = _genericPanes[appId];
+  if (activeExternalApp === appId) activeExternalApp = null;
+  _customAppIds.delete(appId);
+  _hiddenCustomApps.delete(appId);
+  delete _genericPanes[appId];
+  delete APP_HOME_URL[appId];
+  if (pane && pane.view) {
+    try {
+      win.contentView.removeChildView(pane.view);
+    } catch {}
+    try {
+      pane.view.webContents.close();
+    } catch {}
+  }
+  if (pane && pane.partition) {
+    try {
+      await session.fromPartition(pane.partition).clearStorageData();
+    } catch {}
+  }
+  layout();
+  return true;
 });
 
 // Poll nav state (canGoBack/canGoForward) at 500ms so the toolbar buttons
@@ -5124,7 +5250,8 @@ let _toolbarNavPoll = setInterval(() => {
     return;
   }
   try {
-    toolbarWc.send('toolbar:state', { nav, url: wc.getURL() || '' });
+    const url = wc.getURL() || '';
+    toolbarWc.send('toolbar:state', { nav, url, star: _starFor(activeExternalApp, url) });
   } catch {}
 }, 500);
 

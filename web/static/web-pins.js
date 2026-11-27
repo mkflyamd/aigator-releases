@@ -133,6 +133,7 @@
         request_id: requestId,
         status: 'ok',
         image_b64: res.image_b64,
+        tiles_b64: res.tiles_b64,
         text: res.text,
         match: res.match,
         confidence: res.confidence,
@@ -363,6 +364,7 @@
           context_id: contextId,
           app_id: p.appId,
           image_b64: p.image_b64,
+          tiles_b64: p.tiles_b64,
           text: p.text,
           locator: p.locator,
           url: p.url,
@@ -524,7 +526,13 @@
       .catch(() => {});
   }
 
-  root.WebPins = Object.assign(api, { onCaptured, decorateCard, tickChips, onRecaptureRequest });
+  root.WebPins = Object.assign(api, {
+    onCaptured,
+    decorateCard,
+    tickChips,
+    onRecaptureRequest,
+    clearSuggestions,
+  });
 
   const shell = root.gatorShell;
   if (shell && shell.isShell && shell.onWebPinCaptured && shell.onWebPinEvent) {

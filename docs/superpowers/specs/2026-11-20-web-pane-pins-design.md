@@ -27,9 +27,9 @@ Use the DevTools inspect mechanism through the Chrome DevTools Protocol (CDP) th
 
 New module `shell/web-pin.js`, wired from `shell/main.js`.
 
-**Which panes.** Pinning is offered only for apps in config `custom_apps`. `_genericPanes` is not the test, because it also holds the on-demand `g-*` Google Workspace panes. `_toolbarPushState` adds `isCustomApp` to `toolbar:state`, computed from `custom_apps`.
+**Which panes.** Pinning is offered for apps in config `custom_apps` and for the built-in `browser` pane (`_PINNABLE_BUILTIN_PANES`). `_genericPanes` is not the test, because it also holds the on-demand `g-*` Google Workspace panes. `_toolbarPushState` adds `pinnable` to `toolbar:state`, computed by `_isPinnablePane`. The `browser` pane has no home site, so `web-pin:go-to` does not restrict its hosts. The backend accepts `browser` as a fixed app named "Browser".
 
-**Toolbar.** The toolbar is its own `WebContentsView` with its own preload (`shell/toolbar-preload.js`). Two buttons appear when `isCustomApp` is true:
+**Toolbar.** The toolbar is its own `WebContentsView` with its own preload (`shell/toolbar-preload.js`). Two buttons appear when `pinnable` is true:
 
 - **Pin element** sends `toolbar:web-pin-start`.
 - **Pin view** sends `toolbar:web-pin-view`.
@@ -50,7 +50,7 @@ Every CDP call has a timeout of 8 seconds. If the debugger cannot attach, the to
 
 ## Snapshot
 
-- **Image:** `Page.captureScreenshot`. For an element, `clip` is the element's box from `DOM.getBoxModel`. For Pin view, the viewport. Scaled so the longest side is at most 1600 px. PNG.
+- **Image:** `Page.captureScreenshot`. For an element, `clip` is the element's box from `DOM.getBoxModel`. For Pin view, the viewport. PNG. An element taller than 1,200 px is captured as up to eight equal full-width tiles, top to bottom, so each stays readable; the first tile is the pin image and `read_web_pin` takes a `tile` argument for the others. When the text is capped, the capture ends at the cut point, so the image never shows content the text does not cover.
 - **Text:** for an element, its `innerText` plus its `aria-label`, via `Runtime.callFunctionOn`. For Pin view, `document.body.innerText`. Capped at 20,000 characters. Tables and matrices that virtualize rows contribute the visible rows only; the image carries the rest.
 - **Locator** (used by recapture, never shown to the agent): a description of the element that does not depend on where it sits on the page.
   - `testId`: a `data-testid`, `data-test`, `data-qa`, `data-cy` or hand-written `id` on the element; generated-looking ids are ignored.
@@ -77,7 +77,7 @@ The image and text live outside `pinned_contexts.json`:
 
 Routes:
 
-- `POST /api/web-pins` takes `{ context_id, app_id, image_b64, text, locator, url, title }`. Validates `app_id` is a configured custom app, caps the image at 5 MB and text at 20,000 characters (413 otherwise), writes the files, calls `set_pin("webpin", id, label, meta, context_id)`, returns the pin. The renderer never calls the unprotected `/api/context/pin` for web pins.
+- `POST /api/web-pins` takes `{ context_id, app_id, image_b64, tiles_b64, text, locator, url, title }`. Validates `app_id` is a configured custom app, caps the image at 5 MB and text at 20,000 characters (413 otherwise), writes the files, calls `set_pin("webpin", id, label, meta, context_id)`, returns the pin. The renderer never calls the unprotected `/api/context/pin` for web pins.
 - `GET /api/web-pins/{id}` returns the snapshot JSON.
 - `GET /api/web-pins/{id}/image` returns the PNG, for the pin orb thumbnail.
 - `POST /api/web-pins/{id}/snapshot` replaces the snapshot after a recapture. Takes `{ request_id?, image_b64, text, match }`.
@@ -145,6 +145,6 @@ Page text and images are untrusted content. The tool result wraps them in a labe
   - Capture quality and text on `app.powerbi.com` report pages, an embedded report, and a canvas or custom visual.
   - Whether `Page.captureScreenshot` works on a pane hidden with `setVisible(false)`. If it does, the `pane_not_visible` rule can be relaxed; if it does not, the rule stays.
   - If the overlay does not render in a `WebContentsView`, fall back to an injected transparent picker layer plus `DOM.getNodeForLocation`; the rest of the design is unchanged.
-- **Node tests (`tests/*.test.js`):** locator builder; recapture resolution order and `match` values; toolbar handler rejects non-main-toolbar senders; `isCustomApp` excludes `g-*` panes; chip insertion goes through `insertPinChipAtCaret`; pin context id is the active tab.
+- **Node tests (`tests/*.test.js`):** locator builder; recapture resolution order and `match` values; toolbar handler rejects non-main-toolbar senders; `pinnable` excludes `g-*` panes; chip insertion goes through `insertPinChipAtCaret`; pin context id is the active tab.
 - **Pytest:** `web_pins` routes (caps, UUID validation, file layout, label sanitising), `web_pin_dir` rejects traversal ids, cleanup keeps the directory while another context still holds the pin, CSRF inventory, the `webpin` prompt line, skill activation from a `webpin` pin, `read_web_pin` returns `_images`, and `recapture_web_pin` for success, timeout, page mismatch and duplicate `request_id` using a faked `notify_all`.
 - **Manual:** Power BI dashboard on the Finance tenant: pin a visual, pin the view, change a slicer, recapture from the orb and from chat; confirm the agent answers from the new snapshot.

@@ -567,6 +567,82 @@ test('a destroyed pane is not asked to remove the pointer', async () => {
   assert.deepStrictEqual(wc.css.removed, []);
 });
 
+async function pickWith(overrides) {
+  const wc = fakeWc({ overrides });
+  const h = harness(wc);
+  await h.wp.start('custom-x');
+  wc.debugger.emit('message', {}, 'Overlay.inspectNodeRequested', { backendNodeId: 5 });
+  await waitFor(() => h.events.captured.length === 1);
+  return { wc, captured: h.events.captured[0] };
+}
+
+test('a tall element is captured as readable tiles instead of one shrunken image', async () => {
+  const clips = [];
+  const { captured } = await pickWith({
+    'DOM.getBoxModel': { model: { border: [10, 20, 110, 20, 110, 3020, 10, 3020] } },
+    'Page.captureScreenshot': (p) => {
+      clips.push(p.clip);
+      return { data: 'T' + clips.length };
+    },
+  });
+  assert.deepStrictEqual(
+    clips.map((c) => [c.y, c.height, c.scale]),
+    [
+      [120, 1000, 1.6],
+      [1120, 1000, 1.6],
+      [2120, 1000, 1.6],
+    ],
+  );
+  assert.strictEqual(captured.image_b64, 'T1');
+  assert.deepStrictEqual(captured.tiles_b64, ['T2', 'T3']);
+});
+
+test('a short element stays a single image with no extra tiles', async () => {
+  const { captured } = await pickWith({});
+  assert.strictEqual(captured.image_b64, 'UE5H');
+  assert.deepStrictEqual(captured.tiles_b64, []);
+});
+
+test('when the text is cut the capture ends at the cut point', async () => {
+  const clips = [];
+  const { captured, wc } = await pickWith({
+    'DOM.getBoxModel': { model: { border: [10, 20, 110, 20, 110, 3020, 10, 3020] } },
+    'Runtime.callFunctionOn': (p) =>
+      /createTreeWalker/.test(p.functionDeclaration)
+        ? { result: { value: JSON.stringify({ bottom: 620 }) } }
+        : { result: { value: JSON.stringify({ ...JSON.parse(INFO), text: 'x'.repeat(30000) }) } },
+    'Page.captureScreenshot': (p) => {
+      clips.push(p.clip);
+      return { data: 'UE5H' };
+    },
+  });
+  assert.strictEqual(wc.params['Runtime.callFunctionOn'].arguments[0].value, 20000 - 12);
+  assert.deepStrictEqual(
+    clips.map((c) => [c.y, c.height]),
+    [[120, 500]],
+  );
+  assert.deepStrictEqual(captured.tiles_b64, []);
+  assert.ok(captured.text.endsWith('[truncated]'));
+});
+
+test('a failed cut lookup keeps the whole element rather than failing the pin', async () => {
+  const clips = [];
+  const { captured } = await pickWith({
+    'Runtime.callFunctionOn': (p) => {
+      if (/createTreeWalker/.test(p.functionDeclaration)) throw new Error('boom');
+      return {
+        result: { value: JSON.stringify({ ...JSON.parse(INFO), text: 'x'.repeat(30000) }) },
+      };
+    },
+    'Page.captureScreenshot': (p) => {
+      clips.push(p.clip);
+      return { data: 'UE5H' };
+    },
+  });
+  assert.strictEqual(clips[0].height, 60);
+  assert.strictEqual(captured.image_b64, 'UE5H');
+});
+
 // ---- keyboard selection ----
 function keyboardWc(steps) {
   const queue = [...steps];

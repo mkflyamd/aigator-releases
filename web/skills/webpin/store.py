@@ -81,18 +81,28 @@ def read_snapshot(pin_id: str) -> dict | None:
         return None
 
 
-def read_image(pin_id: str) -> bytes | None:
-    """The screenshot, only if it is the one this snapshot was written with."""
+def read_image(pin_id: str, tile: int = 1) -> bytes | None:
+    """The screenshot, only if it is the one this snapshot was written with. Tile 1 is the snapshot image; a tall
+    capture's later tiles follow top to bottom."""
     d = web_pin_dir(pin_id)
-    snap = read_snapshot(pin_id)
-    expected = (snap or {}).get("image_sha")
+    snap = read_snapshot(pin_id) or {}
+    if tile == 1:
+        expected, name = snap.get("image_sha"), "snapshot.png"
+    else:
+        shas = snap.get("tile_shas") or []
+        expected, name = (shas[tile - 2] if 2 <= tile < len(shas) + 2 else None), f"tile-{tile}.png"
     if not expected:
         return None
     try:
-        data = (d / "snapshot.png").read_bytes()
+        data = (d / name).read_bytes()
     except OSError:
         return None
     return data if hashlib.sha256(data).hexdigest() == expected else None
+
+
+def tile_count(pin_id: str) -> int:
+    snap = read_snapshot(pin_id) or {}
+    return 1 + len(snap.get("tile_shas") or []) if snap.get("image_sha") else 0
 
 
 def read_description(pin_id: str, image: bytes) -> dict | None:
@@ -124,10 +134,12 @@ def write_description(pin_id: str, image: bytes, text: str, model: str) -> None:
     _atomic_write(d / "description.json", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
 
 
-def write_snapshot(pin_id: str, *, image: bytes | None, text: str | None, meta: dict) -> dict:
+def write_snapshot(
+    pin_id: str, *, image: bytes | None, text: str | None, meta: dict, tiles: list[bytes] | None = None
+) -> dict:
     """Write one capture. The text and the screenshot always come from the same capture: an omitted image removes the
-    previous one. snapshot.json is written last and records the image hash, so a write that stops half way leaves the
-    previous snapshot readable and a mismatched image is never served."""
+    previous one. snapshot.json is written last and records the image and tile hashes, so a write that stops half way
+    leaves the previous snapshot readable and a mismatched image is never served."""
     d = web_pin_dir(pin_id)
     d.mkdir(parents=True, exist_ok=True)
     prev = read_snapshot(pin_id)
@@ -138,16 +150,23 @@ def write_snapshot(pin_id: str, *, image: bytes | None, text: str | None, meta: 
     captured_at = time.time()
     if image is not None:
         _atomic_write(d / "snapshot.png", image)
+    tiles = (tiles or []) if image is not None else []
+    for n, tile in enumerate(tiles, start=2):
+        _atomic_write(d / f"tile-{n}.png", tile)
     body = {
         "text": new_text,
         "meta": merged_meta,
         "captured_at": captured_at,
         "text_hash": text_hash,
         "image_sha": hashlib.sha256(image).hexdigest() if image is not None else None,
+        "tile_shas": [hashlib.sha256(t).hexdigest() for t in tiles],
     }
     _atomic_write(d / "snapshot.json", json.dumps(body, ensure_ascii=False).encode("utf-8"))
     if image is None:
         (d / "snapshot.png").unlink(missing_ok=True)
+    for old in d.glob("tile-*.png"):
+        if int(old.stem.split("-")[1]) > len(tiles) + 1:
+            old.unlink(missing_ok=True)
     return {"captured_at": captured_at, "text_hash": text_hash, "changed": changed}
 
 

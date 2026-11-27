@@ -76,6 +76,18 @@ def test_create_rejects_unknown_app(client):
     assert client.post("/api/web-pins", json=_body(app_id="nope")).status_code == 400
 
 
+def test_create_accepts_builtin_browser_pane(client):
+    r = client.post("/api/web-pins", json=_body(app_id="browser", aria_label="", title="", url="https://example.com/a"))
+    assert r.status_code == 200, r.text
+    pin = state.get_pins("tab-a")[0]
+    assert pin["meta"]["app_id"] == "browser" and pin["meta"]["app_name"] == "Browser"
+
+
+def test_create_still_rejects_other_unknown_panes(client):
+    for app_id in ("g-docs", "Browser", "browser2", ""):
+        assert client.post("/api/web-pins", json=_body(app_id=app_id)).status_code == 400, app_id
+
+
 def test_create_rejects_non_png(client):
     assert client.post("/api/web-pins", json=_body(image_b64=_b64(b"GIF89a-----"))).status_code == 400
 
@@ -292,3 +304,52 @@ def test_label_never_a_url_hostname_app_id_or_untitled(client):
     for bad in ("https://app.powerbi.com/report/1", "app.powerbi.com", "pbi", "Untitled", "Untitled page"):
         j = client.post("/api/web-pins", json=_body(aria_label=bad, title="")).json()
         assert j["label"] == "Web view", bad
+
+
+def test_count_is_per_app_and_counts_each_pin_once(client):
+    first = client.post("/api/web-pins", json=_body()).json()["id"]
+    client.post("/api/web-pins", json=_body(context_id="tab-b"))
+    state.set_pin_scope("webpin", first, "global", "tab-a")
+    state.set_pin("slack", "C1:1", "A thread", {"app_id": "pbi"}, "tab-a")
+    assert client.get("/api/web-pins/count", params={"app_id": "pbi"}).json()["count"] == 2
+    assert client.get("/api/web-pins/count", params={"app_id": "other"}).json()["count"] == 0
+
+
+def test_removing_an_app_deletes_only_its_pins_and_snapshots(client, monkeypatch):
+    import config
+
+    monkeypatch.setattr(config, "update_config", lambda mutator: mutator({"custom_apps": [{"id": "pbi"}]}))
+    mine = client.post("/api/web-pins", json=_body()).json()["id"]
+    state.set_pin("webpin", "keep", "Other app pin", {"app_id": "other"}, "tab-a")
+    state.set_pin("slack", "C1:1", "A thread", {}, "tab-a")
+    assert store.read_snapshot(mine) is not None
+    assert client.delete("/api/config/custom-apps/pbi").status_code == 200
+    assert store.read_snapshot(mine) is None
+    assert sorted(p["id"] for p in state.get_pins("tab-a")) == ["C1:1", "keep"]
+    assert client.get("/api/web-pins/count", params={"app_id": "pbi"}).json()["count"] == 0
+
+
+TILE2 = b"\x89PNG\r\n\x1a\n" + b"2" * 32
+TILE3 = b"\x89PNG\r\n\x1a\n" + b"3" * 32
+
+
+def test_create_stores_extra_tiles(client):
+    r = client.post("/api/web-pins", json=_body(tiles_b64=[_b64(TILE2), _b64(TILE3)]))
+    assert r.status_code == 200, r.text
+    pid = r.json()["id"]
+    assert store.tile_count(pid) == 3
+    assert [store.read_image(pid, n) for n in (1, 2, 3)] == [PNG, TILE2, TILE3]
+
+
+def test_create_rejects_a_bad_tile_and_too_many_tiles(client):
+    assert client.post("/api/web-pins", json=_body(tiles_b64=[_b64(b"GIF89a-----")])).status_code == 400
+    assert client.post("/api/web-pins", json=_body(tiles_b64=[_b64(TILE2)] * 8)).status_code == 422
+
+
+def test_refresh_replaces_tiles_and_a_text_only_refresh_drops_them(client):
+    pid = client.post("/api/web-pins", json=_body(tiles_b64=[_b64(TILE2), _b64(TILE3)])).json()["id"]
+    r = client.post(f"/api/web-pins/{pid}/snapshot", json={"image_b64": _b64(PNG), "tiles_b64": [_b64(TILE3)], "text": "x"})
+    assert r.status_code == 200, r.text
+    assert [store.read_image(pid, n) for n in (1, 2, 3)] == [PNG, TILE3, None]
+    client.post(f"/api/web-pins/{pid}/snapshot", json={"text": "y"})
+    assert store.tile_count(pid) == 0 and store.read_image(pid) is None

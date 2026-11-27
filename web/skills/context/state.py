@@ -140,6 +140,33 @@ def remove_pin(
     return {"unpinned": removed, "source": source, "id": item_id}
 
 
+def _web_pin_ids_for_app(app_id: str) -> set[str]:
+    return {
+        e.get("id", "")
+        for bucket in pinned_contexts.values()
+        for e in bucket.values()
+        if e.get("source") == "webpin" and (e.get("meta") or {}).get("app_id") == app_id
+    }
+
+
+def count_web_pins_for_app(app_id: str) -> int:
+    with _lock:
+        return len(_web_pin_ids_for_app(app_id))
+
+
+def remove_web_pins_for_app(app_id: str) -> int:
+    with _lock:
+        ids = _web_pin_ids_for_app(app_id)
+        for bucket in pinned_contexts.values():
+            for key in [k for k, e in bucket.items() if e.get("source") == "webpin" and e.get("id") in ids]:
+                del bucket[key]
+        if ids:
+            _save()
+    for pin_id in ids:
+        _cleanup_web_pin("webpin", pin_id)
+    return len(ids)
+
+
 def clear_pins(context_id: str = "default") -> dict:
     with _lock:
         dropped = pinned_contexts.pop(context_id, {})

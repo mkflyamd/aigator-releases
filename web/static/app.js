@@ -1695,7 +1695,8 @@ function _addSkillChip(skillId) {
     ? `<span class="skill-alpha-badge">${skill.labelBadge}</span>`
     : '';
   const iconHtml = skill.icon ? `<span class="chip-skill-icon">${skill.icon}</span>` : '';
-  chip.innerHTML = `${iconHtml}${alias}${alphaBadge ? ' ' + alphaBadge : ''} <button class="chip-remove" aria-label="Remove ${skill.label} context">\u2715</button>`;
+  chip.innerHTML = `${iconHtml}${alias}${alphaBadge ? ' ' + alphaBadge : ''} <button class="chip-remove">\u2715</button>`;
+  chip.querySelector('.chip-remove').setAttribute('aria-label', `Remove ${skill.label} context`);
   chip.querySelector('.chip-remove').addEventListener('click', (e) => {
     e.stopPropagation();
     removeChip(skillId);
@@ -1884,7 +1885,7 @@ function _openSkillPickerDropdown(query) {
 
     const mainZone = document.createElement('span');
     mainZone.className = 'skill-mention-main';
-    mainZone.innerHTML = `<span class="skill-mention-icon">${s.icon}</span><span class="skill-mention-name">/${alias}</span><span class="skill-mention-badge">${s.label}${badgeHtml}</span>`;
+    mainZone.innerHTML = `<span class="skill-mention-icon">${s.icon}</span><span class="skill-mention-name">/${alias}</span><span class="skill-mention-badge">${escapeHtml(s.label)}${badgeHtml}</span>`;
     mainZone.addEventListener('mousedown', (e) => {
       e.preventDefault();
       _commitSkillChipOnly(s, '/');
@@ -15543,6 +15544,7 @@ form.addEventListener('submit', async (e) => {
     .filter((m) => m.role === 'user').length;
   _saveTabDisplayHtml(requestTabId, displayHtml, _survivingUserTurns);
   input.textContent = '';
+  if (window.WebPins && window.WebPins.clearSuggestions) window.WebPins.clearSuggestions();
   // A provider choice belongs to one composed draft, not the whole app or
   // tab. The next message can intentionally choose another transport.
   _messagingScope = '';
@@ -20366,6 +20368,13 @@ async function _loadCustomApps() {
     const res = await fetch('/api/config/custom-apps');
     const data = await res.json();
     list.innerHTML = '';
+    if (!(data.apps || []).length) {
+      const empty = document.createElement('div');
+      empty.className = 'custom-apps-empty';
+      empty.textContent =
+        'No web apps yet. Open any site, then click the star in the address bar to add it.';
+      list.appendChild(empty);
+    }
     (data.apps || []).forEach((app) => {
       const row = document.createElement('div');
       row.className = 'custom-app-row';
@@ -20434,9 +20443,27 @@ async function _addCustomApp() {
 }
 
 async function _removeCustomApp(appId, appName) {
-  if (!confirm(`Remove "${appName}"?`)) return;
+  let pins = null;
   try {
-    await fetch(`/api/config/custom-apps/${encodeURIComponent(appId)}`, { method: 'DELETE' });
+    const r = await fetch(`/api/web-pins/count?app_id=${encodeURIComponent(appId)}`);
+    if (r.ok) pins = (await r.json()).count;
+  } catch {}
+  const what =
+    pins === 0
+      ? 'Its settings and saved sign-in'
+      : Number.isInteger(pins) && pins > 0
+        ? `Its ${pins} ${pins === 1 ? 'pin' : 'pins'}, settings and saved sign-in`
+        : 'Its pins, settings and saved sign-in';
+  if (!confirm(`Remove "${appName}"? ${what} will be deleted.`)) return;
+  try {
+    const res = await fetch(`/api/config/custom-apps/${encodeURIComponent(appId)}`, {
+      method: 'DELETE',
+    });
+    if (!res.ok) throw new Error('server returned ' + res.status);
+    if (typeof tpState !== 'undefined' && tpState.type === appId) closeThirdPane();
+    if (window.gatorShell && window.gatorShell.customAppTeardown) {
+      await window.gatorShell.customAppTeardown(appId);
+    }
     _loadCustomApps();
     // Remove from skill registry
     const idx = SKILL_REGISTRY.findIndex((s) => s.id === appId);

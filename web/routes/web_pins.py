@@ -20,15 +20,23 @@ _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 _MAX_IMAGE = 5 * 1024 * 1024
 _MAX_TEXT = 20_000
 _MAX_B64 = (_MAX_IMAGE + 2) // 3 * 4
+_MAX_TILES = 8
 _MAX_LOCATOR = 8_192
 _DEGRADED_STATUSES = {"element_missing", "element_ambiguous"}
 _FAILURE_STATUSES = {"pane_not_visible", "page_mismatch", "pane_unavailable", "timeout", "empty_target"} | _DEGRADED_STATUSES
+
+
+_BUILTIN_PINNABLE = {"browser": {"id": "browser", "name": "Browser"}}
 
 
 def _custom_apps() -> list[dict]:
     from config import load_config
 
     return load_config().get("custom_apps", [])
+
+
+def _pinnable_app(app_id: str) -> dict | None:
+    return next((a for a in _custom_apps() if a.get("id") == app_id), None) or _BUILTIN_PINNABLE.get(app_id)
 
 
 def _decode_png(image_b64: str) -> bytes:
@@ -54,6 +62,7 @@ class WebPinCreate(BaseModel):
     context_id: str
     app_id: str
     image_b64: str
+    tiles_b64: list[str] = Field(default_factory=list, max_length=_MAX_TILES - 1)
     text: str = ""
     locator: dict | None = None
     url: str = Field("", max_length=4096)
@@ -72,6 +81,7 @@ class WebPinSnapshot(BaseModel):
     request_id: str | None = None
     status: str = "ok"
     image_b64: str | None = None
+    tiles_b64: list[str] = Field(default_factory=list, max_length=_MAX_TILES - 1)
     text: str | None = None
     match: str | None = None
     confidence: float | None = Field(None, ge=0, le=1)
@@ -82,10 +92,11 @@ async def create_web_pin(req: WebPinCreate):
     from skills.context.state import set_pin
     from skills.webpin import store
 
-    app_cfg = next((a for a in _custom_apps() if a.get("id") == req.app_id), None)
+    app_cfg = _pinnable_app(req.app_id)
     if not app_cfg:
         raise HTTPException(400, "unknown custom app")
     image = _decode_png(req.image_b64)
+    tiles = [_decode_png(t) for t in req.tiles_b64]
     _check_text(req.text)
     pin_id = str(uuid.uuid4())
     label = store.derive_label(req.aria_label, req.title, app_cfg.get("name", ""), req.app_id, req.url)
@@ -94,6 +105,7 @@ async def create_web_pin(req: WebPinCreate):
         snap = store.write_snapshot(
             pin_id,
             image=image,
+            tiles=tiles,
             text=req.text,
             meta={"app_id": req.app_id, "url": req.url, "title": req.title, "aria_label": req.aria_label, "locator": req.locator, "kind": kind},
         )
@@ -109,6 +121,13 @@ async def create_web_pin(req: WebPinCreate):
         store.delete_if_unreferenced(pin_id)
         raise HTTPException(503, "Could not save the pin. Try again.")
     return {"id": pin_id, "label": label, "captured_at": snap["captured_at"], "text_hash": snap["text_hash"], "total": result["total"]}
+
+
+@router.get("/api/web-pins/count")
+def count_web_pins(app_id: str):
+    from skills.context.state import count_web_pins_for_app
+
+    return {"app_id": app_id, "count": count_web_pins_for_app(app_id)}
 
 
 def _snapshot_or_404(pin_id: str) -> dict:
@@ -156,12 +175,13 @@ async def post_web_pin_snapshot(pin_id: str, req: WebPinSnapshot):
             raise HTTPException(409, "request already answered or unknown")
         return {"ok": False, "status": req.status}
     image = _decode_png(req.image_b64) if req.image_b64 else None
+    tiles = [_decode_png(t) for t in req.tiles_b64] if image else []
     _check_text(req.text)
     if req.request_id and not pending.claim(req.request_id, pin_id):
         raise HTTPException(409, "request already answered or unknown")
     meta = {"match": req.match, "confidence": req.confidence, "degraded": None}
     try:
-        snap = store.write_snapshot(pin_id, image=image, text=req.text, meta=meta)
+        snap = store.write_snapshot(pin_id, image=image, tiles=tiles, text=req.text, meta=meta)
     except Exception:
         # The request is already claimed, so nobody else will answer it: release the agent now.
         if req.request_id:
