@@ -281,8 +281,16 @@ def test_the_crushrc_line_reads_the_token_from_the_environment(world, monkeypatc
     )
 
 
+def test_a_crush_sender_cannot_take_the_session_of_a_live_claude_terminal(world):
+    go_live(world, agent="claude", session="claude-sess", token=False)
+    thief = go_live(world, session=None)
+    record_session(thief, "claude-sess")
+    sender = asyncio.run(agent_mcp._sender({"pty_id": thief, "project_id": "demo", "agent": "crush"}))
+    assert sender["session_id"] == ""
+
+
 def test_a_crush_sender_is_named_from_its_recorded_session(world):
-    pid = pty_id()
+    pid = go_live(world, session=None)
     record_session(pid)
     sender = asyncio.run(agent_mcp._sender({"pty_id": pid, "project_id": "demo", "agent": "crush"}))
     assert sender == {"name": "Crushy", "session_id": SESSION, "project_id": "demo", "pty_id": pid}

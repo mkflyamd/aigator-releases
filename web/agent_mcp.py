@@ -208,7 +208,12 @@ def recorded_session(pty_id: str, agent: str, live: dict[str, dict] | None = Non
 async def _sender(caller: dict) -> dict:
     """Who is asking, from Gator's own records of that terminal."""
     agent = caller.get("agent", "claude")
-    session_id = generic_agent.linked_session_id(caller["pty_id"]) or recorded_session(caller["pty_id"], agent) or ""
+    session_id = generic_agent.linked_session_id(caller["pty_id"]) or ""
+    if not session_id:
+        from routes import terminal
+
+        live = await asyncio.to_thread(terminal.live_pty_labels)
+        session_id = (live.get(caller["pty_id"]) or {}).get("session_id") or ""
     title = await asyncio.to_thread(agent_wake.title_of, caller["project_id"], agent, session_id) if session_id else ""
     return {
         "name": title or session_id[:8] or "another agent",
