@@ -45,6 +45,11 @@
   async function act(method, url, body) {
     try {
       await call(method, url, body);
+      if (url === '/api/relay/self-chat-autosend') {
+        window.dispatchEvent(
+          new CustomEvent('gator:self-chat-autosend', { detail: { source: 'relay' } }),
+        );
+      }
     } catch (e) {
       if (typeof _showConnectivityToast === 'function') {
         _showConnectivityToast(e.reason || 'Could not change agent messaging.', 'warn');
@@ -337,5 +342,8 @@
       if (!panel.classList.contains('hidden')) refresh();
     }).observe(panel, { attributes: true, attributeFilter: ['class'] });
   }
+  window.addEventListener('gator:self-chat-autosend', (e) => {
+    if (e.detail?.source !== 'relay') refresh();
+  });
   refresh();
 })();

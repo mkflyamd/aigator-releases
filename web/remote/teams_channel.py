@@ -9,7 +9,7 @@ import re
 import time
 from datetime import datetime, timezone
 
-from remote.channel import ChannelRefused, InboundMessage
+from remote.channel import ChannelRefused, InboundMessage, require_autosend
 from remote.commands import SYSTEM_PREFIX
 from remote.state import State
 
@@ -80,6 +80,7 @@ class TeamsSelfChat:
             raise ChannelRefused("not the own self-chat")
         if not text.lstrip().startswith(SYSTEM_PREFIX):
             raise ChannelRefused("replies must start with [Gator")
+        require_autosend()
         content = html.escape(text, quote=False).replace("\r\n", "\n").replace("\n", "<br>")
         try:
             message_id = send_message(self._chat_id, content)

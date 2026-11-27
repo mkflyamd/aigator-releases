@@ -46,6 +46,17 @@ def _isolated_secure_store(tmp_path, monkeypatch):
     yield
 
 
+@pytest.fixture
+def autosend_gate(monkeypatch):
+    """The self-chat auto-send gate, set on purpose. Starts on; a test turns it off with
+    `autosend_gate["on"] = False`."""
+    from relay import settings
+
+    gate = {"on": True}
+    monkeypatch.setattr(settings, "self_chat_autosend_allowed", lambda: gate["on"])
+    return gate
+
+
 @pytest.fixture(autouse=True)
 def _jira_browse_url_default():
     """Ensure jira_browse_url() succeeds in CI where JIRA_BASE_URL is not set.

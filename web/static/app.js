@@ -17221,7 +17221,57 @@ fetch('/api/teams/chats')
     slot.appendChild(_rcProjectDrop.el);
   }
 
+  const _rcAutosendOff = 'Replies to your own Teams and Slack chat are off until you turn this on.';
+
+  async function _rcRelayCall(method, url, body) {
+    const send = () =>
+      fetch(url, {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': window.__CSRF_TOKEN__ || '',
+        },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+    let r = await send();
+    if (r.status === 403) {
+      const fresh = await fetch('/api/csrf')
+        .then((c) => (c.ok ? c.json() : null))
+        .catch(() => null);
+      if (fresh?.csrf_token) window.__CSRF_TOKEN__ = fresh.csrf_token;
+      r = await send();
+    }
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.json();
+  }
+
+  function _rcSyncAutosend(found) {
+    const toggle = document.getElementById('rc-autosend-toggle');
+    const dot = document.getElementById('rc-autosend-dot');
+    const sub = document.getElementById('rc-autosend-sub');
+    const on = !!(found && found.admin && found.on);
+    if (toggle) {
+      toggle.checked = on;
+      toggle.disabled = !found || !found.admin;
+    }
+    if (dot) dot.className = 'section-status ' + (on ? 'st-ok' : 'st-dim');
+    if (!sub) return;
+    if (!found) sub.textContent = 'Could not load this setting.';
+    else if (!found.admin) sub.textContent = 'Your administrator has turned this off.';
+    else sub.textContent = on ? 'Gator replies in your own Teams and Slack chat.' : _rcAutosendOff;
+  }
+
+  async function _rcLoadAutosend() {
+    try {
+      const state = await _rcRelayCall('GET', '/api/relay');
+      _rcSyncAutosend({ admin: !!state.self_chat_admin_allows, on: !!state.self_chat_autosend });
+    } catch (_) {
+      _rcSyncAutosend(null);
+    }
+  }
+
   async function _rcLoad() {
+    _rcLoadAutosend();
     try {
       const [cfg, projects] = await Promise.all([
         fetch('/api/config').then((r) => r.json()),
@@ -17249,6 +17299,23 @@ fetch('/api/teams/chats')
       _rcSyncSwitch(sw, on);
       if (!(await _rcSave({ [sw.key]: on }))) _rcSyncSwitch(sw, !on);
     });
+  });
+
+  document.getElementById('rc-autosend-toggle')?.addEventListener('change', async (e) => {
+    const on = e.target.checked;
+    try {
+      await _rcRelayCall('POST', '/api/relay/self-chat-autosend', { enabled: on });
+      _rcShowError('');
+      window.dispatchEvent(
+        new CustomEvent('gator:self-chat-autosend', { detail: { source: 'remote' } }),
+      );
+    } catch (_) {
+      _rcShowError('Could not save this setting.');
+    }
+    _rcLoadAutosend();
+  });
+  window.addEventListener('gator:self-chat-autosend', (e) => {
+    if (e.detail?.source !== 'remote') _rcLoadAutosend();
   });
 
   _rcNumbers.forEach((n) => {

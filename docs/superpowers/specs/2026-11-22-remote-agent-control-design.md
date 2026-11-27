@@ -103,8 +103,9 @@ Trust: v1 channels are the user's own private self-chat or DM, so the sender is 
 
 ### Outbound messages and HITL
 
-Teams and Slack messages to the user's own self-chat may auto-send (PR #189 records this exception). Everything else stays draft-only: email, messages to other people, channels and threads.
+Teams and Slack messages to the user's own self-chat may auto-send (PR #189 records this exception) when the auto-send gate is on. Everything else stays draft-only: email, messages to other people, channels and threads.
 
+- The gate is `relay.settings.self_chat_autosend_allowed()`: the administrator's `self_chat_autosend` policy must be `allow` and the user's own switch must be on. The switch is off for everyone until they turn it on, including users who already switched Teams or Slack remote control on. Every adapter calls the gate right before it sends, so every Gator post is covered: replies, `[Gator] Online`, notices and agent output. With the gate off nothing is posted, nothing is queued for later, and commands still run. The runner logs this once per arming period.
 - Before every post the adapter verifies the recipient is the user's own self-chat: Teams chat id `48:notes`, or the Slack DM channel whose other member is the signed-in user. If the check fails or cannot be made, nothing is posted.
 - Every post starts with `[Gator` and never starts with `@gator`, so an agent's output cannot form a command when it is echoed.
 - Loop guard: replies land in the same chat the poller reads, so the poller must never treat Gator's own posts as commands. It ignores any message that starts with `[Gator`, and it also ignores any message whose id is one Gator recorded when posting (the ids are kept in `~/.gator/remote_control_state.json`). Either check alone is enough to drop the message.
@@ -129,9 +130,10 @@ Teams and Slack messages to the user's own self-chat may auto-send (PR #189 reco
 
 ### Settings
 
-The "Remote control" section holds per-channel switches (Teams, Slack), a default project, and three limits. Values are saved through `PATCH /api/config` and checked before they are stored.
+The "Remote control" section holds per-channel switches (Teams, Slack), the reply switch, a default project, and three limits. Values are saved through `PATCH /api/config` and checked before they are stored.
 
 - `teams_remote_control_enabled`, `slack_remote_control_enabled`: booleans. The existing Teams value is the Teams switch.
+- "Reply in my own chat" sits directly under the channel switches and shows "Replies to your own Teams and Slack chat are off until you turn this on." while it is off. It is the user's own auto-send switch, saved through `POST /api/relay/self-chat-autosend` and read from `GET /api/relay`; it is the same setting as "Allow posting to my own Teams and Slack chat" under Agent messaging, and the two stay in step. If the administrator's policy is not `allow`, it is shown off and disabled with "Your administrator has turned this off."
 - `remote_default_project`: chosen from a dropdown of existing projects, or left on "Active project". A name that is not a project is rejected on save. If the chosen project is later deleted, a command that needs it is refused with `[Gator] The default project "X" no longer exists. Choose another in Settings, then resend.` and does not fall back to the active project.
 - `remote_session_idle_hours` (default 8, 1 to 72), `remote_stale_minutes` (default 15, 1 to 120), `remote_armed_max_hours` (default 24, 1 to 168). Each is read when it is used, so a change applies to running sessions without a restart. A stored value that is not valid falls back to its default.
 
@@ -147,12 +149,12 @@ Agent-initiated messages stay same-project only and go through `web/agent_mcp.py
 
 ## Acceptance criteria
 
-1. With Gator running, the Code tab closed and the screen locked, `@gator what is open?` in the Teams self-chat produces a `[Gator]` reply with the agent's answer in the same chat.
+1. With Gator running, the auto-send switch on, the Code tab closed and the screen locked, `@gator what is open?` in the Teams self-chat produces a `[Gator]` reply with the agent's answer in the same chat.
 2. The same works from the Slack self-DM.
 3. `@gator list`, `@gator status`, `@gator stop` and `@gator <name> <text>` work from both channels.
 4. Closing the Code tab does not end a remotely started session. It ends on `@gator stop`, process exit, or the idle limit.
 5. A message sent while Gator was off is run once if newer than 15 minutes and skipped with a notice otherwise. A Gator restart never runs the same message twice.
-6. Gator posts only into the user's own self-chat, verified before each post, and its own posts never trigger a command, by prefix and by recorded message id.
+6. Gator posts only into the user's own self-chat, verified before each post and only while the auto-send gate is on, and its own posts never trigger a command, by prefix and by recorded message id.
    6a. A remote session survives a backend restart. `@gator list` shows it under the same short name and `@gator <name> <text>` reaches it. Sessions that have exited are dropped.
    6b. More than 20 commands in 10 minutes are rate limited, `@gator stop all` disarms remote control, and remote control disarms at the absolute cap.
 7. Every new mutating route uses `verify_csrf`, and `tests/test_csrf_route_inventory.py` passes with no baseline changes.
