@@ -15544,6 +15544,7 @@ form.addEventListener('submit', async (e) => {
     .filter((m) => m.role === 'user').length;
   _saveTabDisplayHtml(requestTabId, displayHtml, _survivingUserTurns);
   input.textContent = '';
+  if (window.WebPins && window.WebPins.clearSuggestions) window.WebPins.clearSuggestions();
   // A provider choice belongs to one composed draft, not the whole app or
   // tab. The next message can intentionally choose another transport.
   _messagingScope = '';

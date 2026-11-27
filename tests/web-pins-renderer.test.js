@@ -293,6 +293,27 @@ test('suggestion chips fill the composer only on the owning tab, and rows never 
   assert.equal(rows().length, 0);
 });
 
+test('clearSuggestions removes the chip row, and the chat submit handler calls it when the composer empties', async () => {
+  const { env, chips, form } = makeEnv({
+    fetchImpl: async (url, opts) =>
+      opts && opts.method === 'POST'
+        ? jsonRes({ id: 'p1', label: 'L', captured_at: 1 })
+        : jsonRes({ suggestions: [{ text: 'ask this', kind: 'question' }] }),
+  });
+  await env.WebPins.onCaptured(payload);
+  await flush();
+  const rows = () => form.parentElement.all((e) => e.id === 'wp-suggest');
+  assert.equal(rows().length, 1);
+  env.WebPins.clearSuggestions();
+  assert.equal(rows().length, 0);
+  assert.ok(chips.length >= 1);
+  const app = read('web', 'static', 'app.js');
+  assert.match(
+    app,
+    /input\.textContent = '';\s*if \(window\.WebPins && window\.WebPins\.clearSuggestions\) window\.WebPins\.clearSuggestions\(\);/,
+  );
+});
+
 // ---- Task 9: recapture round trip ----
 const DETAIL = {
   meta: { app_id: 'custom-pbi', locator: { selector: '#a' }, url: 'https://x.test/y' },

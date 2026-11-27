@@ -526,7 +526,13 @@
       .catch(() => {});
   }
 
-  root.WebPins = Object.assign(api, { onCaptured, decorateCard, tickChips, onRecaptureRequest });
+  root.WebPins = Object.assign(api, {
+    onCaptured,
+    decorateCard,
+    tickChips,
+    onRecaptureRequest,
+    clearSuggestions,
+  });
 
   const shell = root.gatorShell;
   if (shell && shell.isShell && shell.onWebPinCaptured && shell.onWebPinEvent) {
