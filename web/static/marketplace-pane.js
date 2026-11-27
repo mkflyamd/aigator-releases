@@ -188,6 +188,12 @@
         _showAlert('Could not ' + verb + ': ' + _errorMessage(body), 'error');
         return;
       }
+      if (typeof body.mcp_error === 'string' && body.mcp_error) {
+        _showAlert(
+          _mcpPartialMessage(skillId, body.mcp_error, 'enabled', body.policy_blocked === true),
+          'error',
+        );
+      }
       await refresh();
     } catch (err) {
       _showAlert('Network error: ' + err.message, 'error');
@@ -1891,10 +1897,27 @@
     return rest.replace(/[-_]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
   }
 
+  function _mcpPartialMessage(name, mcpError, did, policyBlocked) {
+    const lead = '\u201C' + name + '\u201D was ' + did + ', but ';
+    const left = 'The skill\u2019s instructions are available; its server tools are not. ';
+    if (policyBlocked) {
+      return lead + 'your administrator\u2019s policy blocked its MCP server. ' + left;
+    }
+    return (
+      lead +
+      'its MCP server did not start (' +
+      mcpError +
+      '). ' +
+      left +
+      'To try again, fix the cause, then Disable and Enable the skill.'
+    );
+  }
+
   function _handleInstallOutcome(ok, body, skill) {
     if (ok) {
       const compatibilityWarnings = body.mcp_compatibility_warnings || [];
       const toolsError = typeof body.tools_error === 'string' ? body.tools_error : '';
+      const mcpError = typeof body.mcp_error === 'string' ? body.mcp_error : '';
       if (compatibilityWarnings.length) {
         const quarantined = compatibilityWarnings.reduce(
           (total, item) => total + (item.quarantined || 0),
@@ -1910,7 +1933,7 @@
             ' quarantined. Review Settings > Connections for details.',
           'warning',
         );
-      } else if (!toolsError) {
+      } else if (!toolsError && !mcpError) {
         _showAlert(
           '\u201C' + skill.name + '\u201D installed. AI Gator will use this skill immediately.',
           'success',
@@ -1920,6 +1943,12 @@
         _showAlert(
           'Installed, but the skill\u2019s tools could not be loaded: ' + toolsError,
           'warning',
+        );
+      }
+      if (mcpError) {
+        _showAlert(
+          _mcpPartialMessage(skill.name, mcpError, 'imported', body.policy_blocked === true),
+          'error',
         );
       }
       // Bug fix (post-milestone live testing): a claude-plugins-official

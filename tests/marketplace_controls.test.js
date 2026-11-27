@@ -275,6 +275,7 @@ async function postJsonCase(initialToken, script) {
     const alerts = [];
     const ctx = {
       _showAlert: (msg, kind) => alerts.push([msg, kind]),
+      _mcpPartialMessage: extractFn('_mcpPartialMessage'),
       refresh: () => {},
       window: {},
     };
@@ -290,6 +291,72 @@ async function postJsonCase(initialToken, script) {
     alerts.length = 0;
     outcome(true, { ok: true }, { id: 's', name: 'S', tier: 'Community' });
     assert.deepStrictEqual(plain(alerts.map((a) => a[1])), ['success']);
+  }
+
+  // ── _handleInstallOutcome: imported, but the skill's MCP server did not start ──
+  {
+    const alerts = [];
+    const ctx = {
+      _showAlert: (msg, kind) => alerts.push([msg, kind]),
+      _mcpPartialMessage: extractFn('_mcpPartialMessage'),
+      refresh: () => {},
+      window: {},
+    };
+    const outcome = extractFn('_handleInstallOutcome', ctx);
+    outcome(
+      true,
+      { ok: true, mcp_error: "uv isn't installed" },
+      { id: 's', name: 'S', tier: 'Community' },
+    );
+    assert.deepStrictEqual(plain(alerts.map((a) => a[1])), ['error']);
+    const message = alerts[0][0];
+    assert(!message.includes('installed. AI Gator will use this skill immediately'));
+    assert(message.includes('was imported, but'));
+    assert(message.includes("uv isn't installed"));
+    assert(message.includes('Disable and Enable the skill'));
+  }
+
+  // ── a policy block is not something the user can fix and retry ──
+  {
+    const alerts = [];
+    const ctx = {
+      _showAlert: (msg, kind) => alerts.push([msg, kind]),
+      _mcpPartialMessage: extractFn('_mcpPartialMessage'),
+      refresh: () => {},
+      window: {},
+    };
+    extractFn('_handleInstallOutcome', ctx)(
+      true,
+      { ok: true, mcp_error: 'blocked', policy_blocked: true },
+      { id: 's', name: 'S', tier: 'Community' },
+    );
+    const message = alerts[0][0];
+    assert(message.includes('administrator\u2019s policy blocked its MCP server'));
+    assert(!message.includes('Disable and Enable'));
+  }
+
+  // ── _setSkillDisabled: enabling reports a server that did not start ──
+  {
+    const alerts = [];
+    let refreshed = false;
+    const ctx = {
+      _postJson: async () => ({
+        resp: { ok: true },
+        body: { ok: true, mcp_error: "uv isn't installed" },
+      }),
+      _showAlert: (msg, kind) => alerts.push([msg, kind]),
+      _mcpPartialMessage: extractFn('_mcpPartialMessage'),
+      _errorMessage: () => '',
+      refresh: async () => {
+        refreshed = true;
+      },
+    };
+    await extractFn('_setSkillDisabled', ctx)('s', false);
+    assert.deepStrictEqual(plain(alerts.map((a) => a[1])), ['error']);
+    assert(alerts[0][0].includes('was enabled, but'));
+    assert(!alerts[0][0].includes('was imported'));
+    assert(alerts[0][0].includes("uv isn't installed"));
+    assert(refreshed);
   }
 
   // ── Wiring: no install call bypasses the helpers ───────────────────────

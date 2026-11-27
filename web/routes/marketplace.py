@@ -757,6 +757,9 @@ def install_local(req: LocalInstallRequest):
 
     _record_grants(result, result["skill_id"])
     skill_audit.log_install(result["skill_id"], "Community", "local", req.digest)
+    preview = _installer.preview_package(local_zip_bytes=zip_bytes)
+    if preview.get("ok"):
+        result.update(_installer.register_inferred_mcp_server(result["skill_id"], preview["files"]))
     load_installed_skill_prompts()
     skill_dir = __import__("config").INSTALLED_SKILLS_DIR / result["skill_id"]
     _note_tools_error(result, load_skill_tools(result["skill_id"], skill_dir, "Community"))
@@ -768,7 +771,12 @@ def _switch(skill_id: str, action, disabled: bool) -> dict:
     if not result.get("ok"):
         error = result.get("error", "failed")
         raise HTTPException(status_code=404 if "not found" in error else 500, detail=error)
-    return {"ok": True, "skill_id": skill_id, "disabled": disabled}
+    out = {"ok": True, "skill_id": skill_id, "disabled": disabled}
+    if result.get("mcp_error"):
+        out["mcp_error"] = result["mcp_error"]
+        if result.get("policy_blocked"):
+            out["policy_blocked"] = True
+    return out
 
 
 @router.post("/api/marketplace/disable/{skill_id}", dependencies=[Depends(verify_csrf)])

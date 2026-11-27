@@ -48,6 +48,17 @@ _BUNDLE_SWAP_LOCK = threading.Lock()
 # install, uninstall and create requests. Always taken before _INSTALL_INDEX_LOCK.
 _SKILL_OPS_LOCK = threading.RLock()
 
+# One lock per skill id so enable, disable, uninstall and the first start of an imported
+# skill's MCP server never overlap (enable can take minutes). Lock order is always
+# lifecycle lock -> _SKILL_OPS_LOCK -> _INSTALL_INDEX_LOCK.
+_SKILL_LIFECYCLE_LOCKS: dict[str, threading.RLock] = {}
+_SKILL_LIFECYCLE_GUARD = threading.Lock()
+
+
+def skill_lifecycle_lock(skill_id: str) -> threading.RLock:
+    with _SKILL_LIFECYCLE_GUARD:
+        return _SKILL_LIFECYCLE_LOCKS.setdefault(skill_id, threading.RLock())
+
 
 def skill_ops_serialized(fn):
     """Run `fn` holding _SKILL_OPS_LOCK so skill file and index changes never interleave."""
@@ -506,7 +517,7 @@ def _teardown_plugin_mcp(plugin_id: str) -> None:
 
 def uninstall_skill(skill_id: str) -> dict:
     """Uninstall a skill or plugin bundle by id (serialized against installs)."""
-    with _SKILL_OPS_LOCK:
+    with skill_lifecycle_lock(skill_id), _SKILL_OPS_LOCK:
         return _uninstall_skill_unlocked(skill_id)
 
 
@@ -529,6 +540,11 @@ def _uninstall_skill_unlocked(skill_id: str) -> dict:
 
     entries = load_installed()
     entry = next((e for e in entries if e.get("id") == skill_id), None)
+
+    # A server shipped by a local import runs with the skill folder as its working
+    # directory, so stop it before the folder is deleted (Windows cannot delete a
+    # folder a process is running in).
+    stop_inferred_mcp_server(skill_id, uninstalling=True)
 
     removed = False
     for d in [skill_dir, mine_dir]:
@@ -1249,6 +1265,132 @@ def _register_plugin_mcp_servers(plugin_id: str, plugin_dir: Path) -> list[str]:
         )
         connection_ids.append(result["id"])
     return connection_ids
+
+
+_UV_WARM_TIMEOUT_S = 240
+
+
+def _warm_uv_cache(spec, skill_dir: Path) -> None:
+    """Fetch the server's Python packages now. The first `uv run` can take longer
+    than the 30s an MCP server gets to answer its first request, so without this
+    the first connection would time out. A failure here is ignored: the connection
+    attempt that follows reports the real error."""
+    import subprocess
+    from proc_utils import no_window_kwargs
+
+    uv = shutil.which(spec.command)
+    if not uv:
+        return
+    args = [uv, *spec.args()[:-1], "python", "-c", "pass"]
+    try:
+        subprocess.run(
+            args,
+            cwd=skill_dir,
+            capture_output=True,
+            timeout=_UV_WARM_TIMEOUT_S,
+            **no_window_kwargs(),
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.info("uv cache warm-up for %s did not finish: %s", skill_dir.name, exc)
+
+
+PINNED_INSTALLS_MCP_MSG = (
+    "Your administrator's policy only allows installs pinned to an exact version, "
+    "and this server's Python packages or Python version are not."
+)
+
+
+def _start_inferred_mcp_server(skill_id: str, spec) -> dict:
+    """Policy first, then network and processes: nothing is downloaded or started
+    until the admin policy has allowed it. Returns {"mcp_connection_ids": [...]}
+    and/or "mcp_error"."""
+    from mcp import manager as _mcp_manager
+    from sandbox.policy import load_policy
+
+    policy = load_policy()
+    if policy.require_pinned_installs and spec.unpinned():
+        return {"mcp_error": PINNED_INSTALLS_MCP_MSG, "policy_blocked": True}
+
+    skill_dir = INSTALLED_SKILLS_DIR / skill_id
+    provisional = {
+        "transport": "stdio",
+        "command": spec.command,
+        "args": spec.args(),
+        "env": {},
+        "name": spec.name,
+        "cwd": str(skill_dir),
+    }
+    out: dict = {}
+    try:
+        if not policy.block_bundle_stdio_mcp:
+            _warm_uv_cache(spec, skill_dir)
+        result = _mcp_manager.register_plugin_mcp_server(skill_id, spec.name, provisional, [])
+    except Exception as exc:
+        logger.warning("Registering the MCP server of skill %s failed: %s", skill_id, exc)
+        _teardown_plugin_mcp(skill_id)
+        return {"mcp_error": str(exc)}
+    if result.get("id"):
+        out["mcp_connection_ids"] = [result["id"]]
+        _save_inferred_mcp(skill_id, {"mcp_connection_ids": out["mcp_connection_ids"]})
+    if not result.get("ok"):
+        out["mcp_error"] = result.get("error", "")
+        if policy.block_bundle_stdio_mcp:
+            out["policy_blocked"] = True
+    return out
+
+
+def _save_inferred_mcp(skill_id: str, changes: dict) -> None:
+    with _INSTALL_INDEX_LOCK:
+        entries = load_installed()
+        for entry in entries:
+            if entry.get("id") == skill_id:
+                entry.update(changes)
+        save_installed(entries)
+
+
+def _inferred_spec(skill_id: str):
+    from marketplace.mcp_inference import LaunchSpec
+
+    entry = next((e for e in load_installed() if e.get("id") == skill_id), None)
+    record = entry.get("inferred_mcp") if entry and entry.get("skill_ids") is None else None
+    return LaunchSpec.from_record(record) if record else None
+
+
+def register_inferred_mcp_server(skill_id: str, files: dict[str, bytes]) -> dict:
+    """Register the MCP server a locally imported skill ships, if its files match
+    marketplace.mcp_inference's rule. Called only after the user approved the
+    preview that listed it. The approved launch spec is kept on the install record
+    so enabling the skill again starts exactly what was approved. Returns {} when
+    nothing matches, otherwise {"mcp_connection_ids": [...]} and/or "mcp_error"."""
+    from marketplace.mcp_inference import infer_launch_spec
+
+    if _discover_plugin_mcp_manifest_from_files(files):
+        return {}
+    spec = infer_launch_spec(files)
+    if spec is None:
+        return {}
+    with skill_lifecycle_lock(skill_id):
+        entry = next((e for e in load_installed() if e.get("id") == skill_id), None)
+        if entry is None or entry.get("disabled"):
+            return {}
+        _save_inferred_mcp(skill_id, {"inferred_mcp": spec.to_record()})
+        return _start_inferred_mcp_server(skill_id, spec)
+
+
+def start_inferred_mcp_server(skill_id: str) -> dict:
+    """Start the approved MCP server of an imported skill again (enable)."""
+    spec = _inferred_spec(skill_id)
+    return _start_inferred_mcp_server(skill_id, spec) if spec else {}
+
+
+def stop_inferred_mcp_server(skill_id: str, uninstalling: bool = False) -> None:
+    """Stop and unregister the MCP server of an imported skill (disable, uninstall).
+    Uninstall also removes servers an earlier build registered without an approved spec."""
+    entry = next((e for e in load_installed() if e.get("id") == skill_id), None)
+    if entry is None or entry.get("skill_ids") is not None:
+        return
+    if entry.get("inferred_mcp") or (uninstalling and entry.get("mcp_connection_ids")):
+        _teardown_plugin_mcp(skill_id)
 
 
 def namespaced_skill_id(

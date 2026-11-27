@@ -81,6 +81,21 @@ def _bundle_stdio_blocked() -> bool:
     return load_policy().block_bundle_stdio_mcp
 
 
+def _stdio_cfg(conn: dict) -> dict:
+    """The launch config for a stdio connection. The pool is keyed on it, so
+    spawning and releasing must build it the same way. `cwd` is present only
+    when the connection sets one."""
+    cfg = {
+        "command": conn.get("command", ""),
+        "args": conn.get("args", []),
+        "env": conn.get("env", {}),
+        "name": conn.get("name", ""),
+    }
+    if conn.get("cwd"):
+        cfg["cwd"] = conn["cwd"]
+    return cfg
+
+
 def _client_for(conn: dict, pooled: bool = True):
     """Instantiate the right client class for a connection's transport.
 
@@ -92,12 +107,8 @@ def _client_for(conn: dict, pooled: bool = True):
     if conn.get("transport") == "stdio":
         if conn.get("plugin_id") and _bundle_stdio_blocked():
             raise RuntimeError(BUNDLE_STDIO_BLOCKED_MSG)
-        cfg = {
-            "command": conn["command"],
-            "args": conn.get("args", []),
-            "env": conn.get("env", {}),
-            "name": conn.get("name", ""),
-        }
+        cfg = _stdio_cfg(conn)
+        cfg["command"] = conn["command"]
         if pooled:
             return acquire_pooled(cfg)
         return StdioMCPClient(cfg)
@@ -545,12 +556,7 @@ def _register(conn: dict) -> None:
                     # process instead of reusing the broken one.
                     if is_pooled:
                         try:
-                            release_from_pool({
-                                "command": c.get("command", ""),
-                                "args": c.get("args", []),
-                                "env": c.get("env", {}),
-                                "name": c.get("name", ""),
-                            })
+                            release_from_pool(_stdio_cfg(c))
                         except Exception:
                             pass
                     return {"error": f"MCP server timed out: {e}", "transport": transport}
@@ -943,6 +949,8 @@ def _build_connection_record(skill_id: str, name: str, transport: str,
         conn["command"] = provisional["command"]
         conn["args"] = provisional["args"]
         conn["env"] = provisional["env"]
+        if provisional.get("cwd"):
+            conn["cwd"] = provisional["cwd"]
     else:
         conn["url"] = provisional["url"]
         conn["auth_type"] = provisional["auth_type"]
@@ -1113,6 +1121,8 @@ def add_or_update(entry: dict) -> dict:
             "env": dict(entry.get("env", {})),
             "name": entry.get("name", "") or "",
         }
+        if entry.get("cwd"):
+            provisional["cwd"] = entry["cwd"]
     else:
         # Strip whitespace only — preserve the trailing slash. Some MCP servers
         # (e.g. Nabu) 307-redirect `/path` → `/path/` AND downgrade scheme on
@@ -1328,12 +1338,7 @@ def remove(connection_id: str) -> dict:
         _unregister(connection_id)
     # Terminate the pooled stdio process (if any) outside the mutation lock.
     if removed and removed.get("transport") == "stdio":
-        release_from_pool({
-            "command": removed.get("command", ""),
-            "args": removed.get("args", []),
-            "env": removed.get("env", {}),
-            "name": removed.get("name", ""),
-        })
+        release_from_pool(_stdio_cfg(removed))
     # Wipe stored OAuth token/provider so a re-add re-authorizes fresh rather
     # than silently reusing a stale token (a frequent source of 401/403 after
     # the user "removed and re-added" a connection to fix auth).
@@ -1433,6 +1438,8 @@ def _build_disabled_connection(
         conn["command"] = provisional.get("command", "")
         conn["args"] = provisional.get("args", [])
         conn["env"] = provisional.get("env", {})
+        if provisional.get("cwd"):
+            conn["cwd"] = provisional["cwd"]
     else:
         conn["url"] = provisional.get("url", "")
         conn["auth_type"] = provisional.get("auth_type", "none")
@@ -1525,6 +1532,8 @@ def register_plugin_mcp_server(
         entry["command"] = provisional.get("command", "")
         entry["args"] = provisional.get("args", [])
         entry["env"] = provisional.get("env", {})
+        if provisional.get("cwd"):
+            entry["cwd"] = provisional["cwd"]
     else:
         entry["url"] = provisional.get("url", "")
         entry["auth_type"] = provisional.get("auth_type", "none")

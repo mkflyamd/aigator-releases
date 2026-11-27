@@ -177,6 +177,27 @@ def enabled_skill_bin_dirs() -> list[str]:
     return [d for sid, d in tracked.items() if sid not in disabled]
 
 
+def link_skill_mcp_connections(skill_id: str) -> None:
+    """Make an MCP server that was set up from a skill's own files one of that skill's dependencies,
+    so choosing the skill also offers the server's tools. Plugin bundles keep their own wiring."""
+    try:
+        entry = state.get_entry(skill_id)
+    except Exception:
+        logger.warning("Could not read the install record of %s", skill_id, exc_info=True)
+        return
+    if not entry or entry.get("skill_ids") is not None:
+        return
+    deps = shared.SKILL_DEPENDENCIES_MAP.get(skill_id, [])
+    present = {d["id"] for d in deps}
+    added = [
+        {"id": cid, "reason": "MCP server shipped with this skill"}
+        for cid in entry.get("mcp_connection_ids") or []
+        if cid not in present
+    ]
+    if added:
+        shared.SKILL_DEPENDENCIES_MAP[skill_id] = [*deps, *added]
+
+
 def load_skill_tools(skill_id: str, skill_dir: Path, tier: str) -> dict:
     """Register a skill's tools. tools.py is never imported here: its tool list is read, and each call runs, in the OS sandbox.
     Returns {"ok": True} or {"ok": False, "error": ...}.
@@ -247,6 +268,7 @@ def load_skill_tools(skill_id: str, skill_dir: Path, tier: str) -> dict:
                     shared.SKILL_DEPENDENCIES_MAP[skill_id] = _auto_deps
         except Exception:
             pass  # malformed frontmatter — skip dependency registration
+    link_skill_mcp_connections(skill_id)
 
     tools_py = skill_dir / "tools.py"
     if not tools_py.exists():

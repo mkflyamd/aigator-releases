@@ -100,11 +100,12 @@ _pool_lock = threading.Lock()
 
 
 def _pool_key(cfg: dict) -> tuple:
-    return (
+    key = (
         cfg.get("command", ""),
         tuple(cfg.get("args", [])),
         frozenset((cfg.get("env") or {}).items()),
     )
+    return key + (cfg["cwd"],) if cfg.get("cwd") else key
 
 
 def acquire_pooled(cfg: dict) -> "StdioMCPClient":
@@ -223,6 +224,7 @@ class StdioMCPClient:
             env=env,
             text=True,
             bufsize=1,
+            **({"cwd": self._cfg["cwd"]} if self._cfg.get("cwd") else {}),
             **no_window_kwargs(),
         )
 
