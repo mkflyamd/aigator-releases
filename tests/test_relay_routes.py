@@ -59,7 +59,19 @@ def test_state_lists_the_agents_and_the_switches(client, csrf, world):
     assert body["admin_allows"] is True and body["enabled"] is True
     assert [a["id"] for a in body["agents"]] == [first]
     assert body["agents"][0]["name"] == "alpha" and body["agents"][0]["opted_out"] is False
+    assert body["agents"][0]["agent"] == "claude"
     assert body["links"] == []
+
+
+def test_an_agent_without_a_title_is_sent_with_an_empty_name_not_a_session_id(client, csrf, world, monkeypatch):
+    monkeypatch.setattr("agent_wake.title_of", lambda project, agent, session: "")
+    pid = str(uuid.uuid4())
+    now = time.time()
+    agent_suspend._remember(
+        pid, {"agent": "claude", "project_id": "demo", "session_id": "a3267b7a-0000", "title": "", "at": now}, now
+    )
+    body = client.get("/api/relay", headers=csrf).json()
+    assert body["agents"][0]["name"] == ""
 
 
 def test_the_admin_lock_shows_in_the_state(client, csrf, world):
