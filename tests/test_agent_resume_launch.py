@@ -169,11 +169,28 @@ def test_a_resumed_opencode_terminal_passes_the_session_to_the_bare_command(env,
 
     monkeypatch.setattr(generic_agent, "build_opencode_bare_command", fake_bare)
     monkeypatch.setattr(generic_agent, "build_opencode_bare_env", lambda: {"OPENCODE_CONFIG_CONTENT": "{}"})
+    monkeypatch.setattr(agent_state, "opencode_supports_plugin", lambda exe: True)
+    monkeypatch.setattr(generic_agent, "find_agent_binary", lambda agent: f"C:\\bin\\{agent}.exe")
     r = client().post("/api/generic-agent/terminal", json={**BODY, "agent": "opencode-bare"})
     assert r.status_code == 200
     assert seen == [("C:\\work\\app", "abc-1")]
-    assert env["spawn"][-1]["env"] == {"OPENCODE_CONFIG_CONTENT": "{}", **agent_state.launch_env(r.json()["pty_session_id"])}
-    assert generic_agent.linked_session_id(r.json()["pty_session_id"]) == "abc-1"
+    pty = r.json()["pty_session_id"]
+    spawn_env = dict(env["spawn"][-1]["env"])
+    token = spawn_env.pop(agent_mcp.TOKEN_ENV)
+    assert agent_mcp.caller_for(token) == {"pty_id": pty, "project_id": "demo", "agent": "opencode-bare"}
+    assert spawn_env == {"OPENCODE_CONFIG_CONTENT": "{}", **agent_state.launch_env(pty)}
+    assert generic_agent.linked_session_id(pty) == "abc-1"
+
+
+def test_an_opencode_terminal_gets_no_token_when_plugins_cannot_be_confirmed(env, monkeypatch):
+    monkeypatch.setattr(generic_agent, "build_opencode_bare_command", lambda repo, sid=None: ["C:\\bin\\opencode.exe", repo])
+    monkeypatch.setattr(generic_agent, "build_opencode_bare_env", lambda: {"OPENCODE_CONFIG_CONTENT": "{}"})
+    monkeypatch.setattr(agent_state, "opencode_supports_plugin", lambda exe: False)
+    monkeypatch.setattr(generic_agent, "find_agent_binary", lambda agent: f"C:\\bin\\{agent}.exe")
+    r = client().post("/api/generic-agent/terminal", json={**BODY, "agent": "opencode-bare"})
+    assert r.status_code == 200
+    assert agent_mcp.TOKEN_ENV not in env["spawn"][-1]["env"]
+    assert not agent_mcp.holds_token(r.json()["pty_session_id"])
 
 
 def test_a_resumed_codex_terminal_is_linked_to_its_session(env, monkeypatch):

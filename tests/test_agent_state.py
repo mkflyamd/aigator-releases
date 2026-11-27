@@ -204,6 +204,146 @@ def test_crush_crushrc_includes_hooks_only_when_supported(monkeypatch):
     assert "hook add" not in rc and "mcp add gator" not in rc and "GATOR_PTY_ID" not in rc
 
 
+@pytest.mark.parametrize(
+    ("version_output", "expected"),
+    [("opencode v2.3.0", True), ("2.0.0", True), ("opencode v10.1.0", True), ("opencode v1.14.2", False), ("", False)],
+)
+def test_opencode_plugins_need_opencode_2(monkeypatch, version_output, expected):
+    agent_state._opencode_plugin_cache.clear()
+    monkeypatch.setattr(agent_state, "_run_version", lambda exe: version_output)
+    assert agent_state.opencode_supports_plugin("opencode.cmd") is expected
+    assert agent_state.hooks_supported("opencode-bare", "opencode.cmd") is expected
+
+
+def test_no_opencode_binary_means_no_plugin_support():
+    assert not agent_state.opencode_supports_plugin(None)
+    assert not agent_state.hooks_supported("opencode-bare", None)
+
+
+def test_crush_keeps_its_own_version_check(monkeypatch):
+    monkeypatch.setattr(agent_state, "crush_supports_hooks", lambda exe: exe == "crush.exe")
+    monkeypatch.setattr(agent_state, "opencode_supports_plugin", lambda exe: False)
+    assert agent_state.hooks_supported("crush", "crush.exe")
+    assert not agent_state.hooks_supported("opencode-bare", "crush.exe")
+
+
+def test_the_opencode_plugin_is_written_once_and_rewritten_when_it_changes(dirs, monkeypatch):
+    monkeypatch.setattr(agent_state, "OPENCODE_DIR", dirs / "relay-plugin")
+    folder = agent_state.opencode_plugin_dir()
+    plugin = agent_state.OPENCODE_DIR / "index.js"
+    assert folder == plugin.parent.as_posix() and plugin.read_text(encoding="utf-8") == agent_state._OPENCODE_PLUGIN
+    plugin.write_text("tampered", encoding="utf-8")
+    agent_state.opencode_plugin_dir()
+    assert plugin.read_text(encoding="utf-8") == agent_state._OPENCODE_PLUGIN
+
+
+_PLUGIN_DRIVER = """
+import { existsSync, readFileSync } from "node:fs"
+import { pathToFileURL } from "node:url"
+const [, , pluginPath, eventsJson] = process.argv
+const dir = process.env.GATOR_AGENT_STATE_DIR
+const pty = process.env.GATOR_PTY_ID || "none"
+const read = (p) => (existsSync(p) ? readFileSync(p, "utf8") : null)
+const snaps = []
+const snap = () => snaps.push([read(`${dir}/${pty}`), read(`${dir}/${pty}.session`)])
+async function* stream() {
+  snap()
+  for (const event of JSON.parse(eventsJson)) {
+    yield event
+    snap()
+  }
+}
+const plugin = (await import(pathToFileURL(pluginPath).href)).default
+const dispose = plugin.setup({ event: { subscribe: () => stream() } })
+await new Promise((resolve) => setTimeout(resolve, 300))
+if (dispose) dispose()
+snap()
+console.log(JSON.stringify(snaps))
+"""
+
+
+def _run_opencode_plugin(tmp_path, events, with_pty=True):
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("no node on this machine")
+    plugin = tmp_path / "plugin.mjs"
+    plugin.write_text(agent_state._OPENCODE_PLUGIN, encoding="utf-8")
+    driver = tmp_path / "driver.mjs"
+    driver.write_text(_PLUGIN_DRIVER, encoding="utf-8")
+    env = {**os.environ, "GATOR_AGENT_STATE_DIR": agent_state.STATE_DIR.as_posix()}
+    env.pop("GATOR_PTY_ID", None)
+    if with_pty:
+        env["GATOR_PTY_ID"] = PTY
+    out = subprocess.run([node, str(driver), str(plugin), json.dumps(events)], env=env, capture_output=True, text=True, check=True)  # noqa: S603
+    return json.loads(out.stdout)
+
+
+def _ev(kind, session="ses_main"):
+    return {"type": kind, "data": {"sessionID": session}}
+
+
+def test_the_opencode_plugin_reports_ready_working_idle_and_the_main_session(tmp_path):
+    snaps = _run_opencode_plugin(
+        tmp_path,
+        [_ev("session.execution.started"), _ev("session.execution.succeeded")],
+    )
+    assert snaps[0] == ["idle", None]
+    assert snaps[1] == ["working", "ses_main"]
+    assert snaps[2] == ["idle", "ses_main"]
+    assert agent_state.read_session(PTY) == "ses_main"
+
+
+def test_the_opencode_plugin_stays_working_until_the_child_session_ends_and_keeps_the_main_id(tmp_path):
+    snaps = _run_opencode_plugin(
+        tmp_path,
+        [
+            _ev("session.execution.started"),
+            _ev("session.execution.started", "ses_child"),
+            _ev("session.execution.succeeded", "ses_child"),
+            _ev("session.execution.interrupted"),
+        ],
+    )
+    assert [s[0] for s in snaps[1:5]] == ["working", "working", "working", "idle"]
+    assert {s[1] for s in snaps[1:5]} == {"ses_main"}
+
+
+@pytest.mark.parametrize("ending", ["session.execution.failed", "session.execution.interrupted"])
+def test_the_opencode_plugin_goes_idle_when_a_run_fails_or_is_interrupted(tmp_path, ending):
+    snaps = _run_opencode_plugin(tmp_path, [_ev("session.execution.started"), _ev(ending)])
+    assert snaps[2][0] == "idle"
+
+
+def test_the_opencode_plugin_reports_asking_during_a_permission_and_working_after(tmp_path):
+    snaps = _run_opencode_plugin(
+        tmp_path,
+        [_ev("session.execution.started"), _ev("permission.asked"), _ev("permission.replied"), _ev("session.execution.succeeded")],
+    )
+    assert [s[0] for s in snaps[1:5]] == ["working", "asking", "working", "idle"]
+
+
+def test_the_opencode_plugin_does_not_claim_working_for_a_permission_answered_while_idle(tmp_path):
+    snaps = _run_opencode_plugin(tmp_path, [_ev("permission.replied")])
+    assert snaps[1][0] == "idle"
+
+
+def test_the_opencode_plugin_follows_a_new_session_started_after_the_last_one_ended(tmp_path):
+    snaps = _run_opencode_plugin(
+        tmp_path,
+        [_ev("session.execution.started"), _ev("session.execution.succeeded"), _ev("session.execution.started", "ses_next")],
+    )
+    assert snaps[3] == ["working", "ses_next"]
+
+
+def test_the_opencode_plugin_removes_its_state_but_keeps_the_session_when_it_is_disposed(tmp_path):
+    snaps = _run_opencode_plugin(tmp_path, [_ev("session.execution.started")])
+    assert snaps[-1] == [None, "ses_main"]
+
+
+def test_the_opencode_plugin_writes_nothing_outside_gator(tmp_path):
+    _run_opencode_plugin(tmp_path, [_ev("session.execution.started")], with_pty=False)
+    assert list(agent_state.STATE_DIR.iterdir()) == []
+
+
 def _app():
     app = FastAPI()
     app.include_router(agent_session_routes.router)

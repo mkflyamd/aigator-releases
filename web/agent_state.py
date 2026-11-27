@@ -20,6 +20,8 @@ HOOKS_DIR = Path.home() / ".gator" / "agent-hooks"
 WORDS = ("working", "asking", "idle")
 STATE_MAX_AGE_SECONDS = 86400
 CRUSH_HOOKS_MIN = (0, 99)
+OPENCODE_PLUGIN_MIN_MAJOR = 2
+OPENCODE_DIR = Path.home() / ".gator" / "opencode" / "relay-plugin"
 
 _PTY_FILE = '"$GATOR_AGENT_STATE_DIR/$GATOR_PTY_ID"'
 _GUARD = '[ -n "$GATOR_PTY_ID" ] && '
@@ -142,6 +144,92 @@ def crush_supports_hooks(exe: str | None) -> bool:
         match = re.search(r"(\d+)\.(\d+)", _run_version(exe))
         _crush_hooks_cache[exe] = bool(match) and (int(match[1]), int(match[2])) >= CRUSH_HOOKS_MIN
     return _crush_hooks_cache[exe]
+
+
+_opencode_plugin_cache: dict[str, bool] = {}
+
+
+def opencode_supports_plugin(exe: str | None) -> bool:
+    """OpenCode 2.x loads directory plugins and emits the session events the relay plugin reads."""
+    if not exe:
+        return False
+    if exe not in _opencode_plugin_cache:
+        match = re.search(r"(\d+)\.(\d+)", _run_version(exe))
+        _opencode_plugin_cache[exe] = bool(match) and int(match[1]) >= OPENCODE_PLUGIN_MIN_MAJOR
+    return _opencode_plugin_cache[exe]
+
+
+def hooks_supported(agent: str, exe: str | None) -> bool:
+    """Whether this build of the agent can report its state and session; unknown builds fail closed."""
+    if agent == "opencode-bare":
+        return opencode_supports_plugin(exe)
+    return crush_supports_hooks(exe)
+
+
+_OPENCODE_PLUGIN = """\
+import { rmSync, writeFileSync } from "node:fs"
+
+const dir = process.env.GATOR_AGENT_STATE_DIR
+const pty = process.env.GATOR_PTY_ID
+const file = dir && pty ? `${dir}/${pty}` : ""
+
+const write = (path, text) => {
+  try {
+    writeFileSync(path, text)
+  } catch {}
+}
+
+export default {
+  id: "gator-relay",
+  setup(ctx) {
+    if (!file) return
+    const running = new Set()
+    write(file, "idle")
+    const controller = new AbortController()
+    void (async () => {
+      try {
+        for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
+          const id = event.data && event.data.sessionID
+          switch (event.type) {
+            case "session.execution.started":
+              if (id && running.size === 0) write(`${file}.session`, id)
+              if (id) running.add(id)
+              write(file, "working")
+              break
+            case "session.execution.succeeded":
+            case "session.execution.failed":
+            case "session.execution.interrupted":
+              running.delete(id)
+              if (running.size === 0) write(file, "idle")
+              break
+            case "permission.asked":
+              write(file, "asking")
+              break
+            case "permission.replied":
+              if (running.size > 0) write(file, "working")
+              break
+          }
+        }
+      } catch {}
+    })()
+    return () => {
+      controller.abort()
+      try {
+        rmSync(file, { force: true })
+      } catch {}
+    }
+  },
+}
+"""
+
+
+def opencode_plugin_dir() -> str:
+    """Write the plugin OpenCode loads to report its state and session, and return its directory."""
+    OPENCODE_DIR.mkdir(parents=True, exist_ok=True)
+    plugin = OPENCODE_DIR / "index.js"
+    if not plugin.exists() or plugin.read_text(encoding="utf-8") != _OPENCODE_PLUGIN:
+        plugin.write_text(_OPENCODE_PLUGIN, encoding="utf-8")
+    return OPENCODE_DIR.as_posix()
 
 
 def read_states(pty_ids: list[str]) -> dict[str, dict]:

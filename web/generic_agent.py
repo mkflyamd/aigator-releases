@@ -38,6 +38,7 @@ import time
 import uuid
 from pathlib import Path
 
+import agent_capabilities
 import agent_state
 
 # name -> argv. Extend here to add a new agent; no other file needs to know
@@ -211,6 +212,8 @@ def find_agent_binary(agent: str) -> str | None:
     """Resolve the agent's binary on PATH. None if not installed - the route
     layer turns this into a clear "not installed" error rather than a
     confusing PTY that dies instantly."""
+    if agent == OPENCODE_BARE_AGENT:
+        return _which("opencode")
     argv = SUPPORTED_AGENTS.get(agent)
     if not argv:
         return None
@@ -591,7 +594,10 @@ def build_opencode_bare_command(repo_path: str, session_id: str | None = None) -
     if not resolved:
         return None
     resume = [*_RESUME_VERBS[OPENCODE_BARE_AGENT], session_id] if session_id else []
-    return [_wrap_windows_cmd(resolved), *resume, repo_path]
+    # The relay plugin and its token only reach a private server; the shared background
+    # service does not inherit this terminal's environment.
+    standalone = ["--standalone"] if agent_capabilities.relayable(OPENCODE_BARE_AGENT) else []
+    return [_wrap_windows_cmd(resolved), *standalone, *resume, repo_path]
 
 
 def _wrap_windows_cmd(path: str) -> str:
@@ -710,6 +716,11 @@ def build_opencode_bare_env() -> dict[str, str]:
         "model": default_model,
         "provider": provider,
     }
+    if agent_capabilities.relayable(OPENCODE_BARE_AGENT):
+        import agent_mcp
+
+        config["plugins"] = [agent_state.opencode_plugin_dir()]
+        config["mcp"] = {"servers": {agent_mcp.SERVER_NAME: agent_mcp.opencode_mcp_server()}}
     return {
         "OPENCODE_CONFIG_CONTENT": json.dumps(config, ensure_ascii=False),
         "GATOR_OPENCODE_KEY": profile["api_key"],
