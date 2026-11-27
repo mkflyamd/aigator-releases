@@ -1,5 +1,7 @@
 """The text Gator posts to Teams comes from the agent's transcript, so secrets are redacted first."""
 
+import logging
+
 import agent_handoff
 import agent_sessions
 from remote.commands import agent_reply
@@ -43,3 +45,37 @@ async def test_redacted_text_still_gets_the_3500_character_truncation(monkeypatc
     posted = agent_reply("Claude", "demo", await host.last_message("pty-1"))
     assert FAKE_KEY not in posted
     assert "truncated" in posted
+
+
+async def test_a_transcript_that_catches_up_after_the_stop_hook_is_waited_for(monkeypatch):
+    host = _host_with_reply(monkeypatch, "unused")
+    monkeypatch.setattr("remote.session_host.time.sleep", lambda s: None)
+    answers = iter([[], [("user", "q")], [("user", "q"), ("assistant", "the real answer")]])
+    monkeypatch.setattr(agent_sessions, "_transcript_messages", lambda rec: next(answers))
+    assert await host.last_message("pty-1") == "the real answer"
+
+
+async def test_a_transcript_with_no_reply_warns_instead_of_failing_silently(monkeypatch, caplog):
+    host = _host_with_reply(monkeypatch, "unused")
+    monkeypatch.setattr("remote.session_host.time.sleep", lambda s: None)
+    monkeypatch.setattr(agent_sessions, "_transcript_messages", lambda rec: [("user", "q")])
+    with caplog.at_level(logging.WARNING, logger="remote.session_host"):
+        assert await host.last_message("pty-1") == ""
+    assert "no assistant reply yet" in caplog.text
+
+
+async def test_a_session_without_a_vendor_id_warns_instead_of_failing_silently(monkeypatch, caplog):
+    host = _host_with_reply(monkeypatch, "unused")
+    monkeypatch.setattr(terminal, "session_owner", lambda sid: {"project_id": "demo", "agent": "claude"})
+    with caplog.at_level(logging.WARNING, logger="remote.session_host"):
+        assert await host.last_message("pty-1") == ""
+    assert "cannot be read" in caplog.text
+
+
+async def test_an_unknown_session_record_warns(monkeypatch, caplog):
+    host = _host_with_reply(monkeypatch, "unused")
+    monkeypatch.setattr("remote.session_host.time.sleep", lambda s: None)
+    monkeypatch.setattr(agent_sessions, "find_session", lambda repo, agent, sid: None)
+    with caplog.at_level(logging.WARNING, logger="remote.session_host"):
+        assert await host.last_message("pty-1") == ""
+    assert "no assistant reply yet" in caplog.text
