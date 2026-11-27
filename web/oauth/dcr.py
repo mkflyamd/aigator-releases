@@ -143,18 +143,29 @@ def _candidate_protected_resource_urls(mcp_url: str) -> list[str]:
     return uniq
 
 
+def _as_metadata_urls(issuer: str) -> list[str]:
+    """Candidate AS metadata URLs. RFC 8414 §3.1 inserts the well-known segment
+    between host and path for issuers with a path; the appended forms are kept
+    for servers that follow OIDC Discovery or the older convention."""
+    parsed = urllib.parse.urlparse(issuer)
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+    path = parsed.path.rstrip("/")
+    urls = []
+    if path:
+        urls.append(f"{origin}/.well-known/oauth-authorization-server{path}")
+        urls.append(f"{origin}/.well-known/openid-configuration{path}")
+    urls.append(f"{issuer}/.well-known/oauth-authorization-server")
+    urls.append(f"{issuer}/.well-known/openid-configuration")
+    urls.append(issuer)  # some servers serve the doc at the issuer URL directly
+    return urls
+
+
 def _resolve_as_from_protected_resource(pr_meta: dict) -> dict | None:
     """Given Protected Resource Metadata, fetch the first authorization server's metadata."""
     auth_servers = pr_meta.get("authorization_servers") or []
     for issuer in auth_servers:
-        # Per RFC 8414, AS metadata lives at {issuer}/.well-known/oauth-authorization-server
-        # or {issuer}/.well-known/openid-configuration.
         issuer = issuer.rstrip("/")
-        for url in (
-            f"{issuer}/.well-known/oauth-authorization-server",
-            f"{issuer}/.well-known/openid-configuration",
-            issuer,  # some servers serve the doc at the issuer URL directly
-        ):
+        for url in _as_metadata_urls(issuer):
             meta = _fetch_json(url)
             if (
                 meta
