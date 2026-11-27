@@ -38,6 +38,9 @@ class PtySession:
         self.ws_hidden: set = set()
         # The viewer whose window size the PTY follows: the last one to attach or type.
         self.size_owner = None
+        # When a person last typed into this terminal (0 = never). Input Gator injects itself
+        # does not count, so a message is never pasted over what the user is typing.
+        self.last_user_input = 0.0
         self.ws_disconnected_at = time.time()
         self._max_chunks = max_chunks
         # Positions are absolute character offsets, not chunk indexes, so a

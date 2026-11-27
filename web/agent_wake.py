@@ -36,6 +36,7 @@ SENDER_LIMIT = 5
 SENDER_WINDOW_SECONDS = 3600.0
 WAKE_READY_SECONDS = 90.0
 LIVE_READY_SECONDS = 300.0
+USER_TYPING_SECONDS = 20.0
 READY_POLL_SECONDS = 0.5
 PASTE_TO_ENTER_SECONDS = 0.4
 AUDIT_KEEP = 200
@@ -306,6 +307,8 @@ def _ready_now(pty_id: str, pty_entry) -> str:
         return "unknown"
     if state["state"] != "idle":
         return state["state"]
+    if time.time() - getattr(pty_entry, "last_user_input", 0.0) < USER_TYPING_SECONDS:
+        return "typing"
     try:
         output, _ = pty_entry.read_from(0)
         painted = BRACKETED_PASTE_ON in output or pty_entry.first_offset > 0
@@ -332,6 +335,7 @@ async def _wait_ready(pty_id: str, timeout: float) -> None:
     reason = {
         "asking": "The agent is waiting for the user to answer a permission prompt.",
         "working": "The agent is busy with a turn.",
+        "typing": "The user is typing in that terminal.",
     }.get(last, "The agent did not become ready in time.")
     raise WakeRefused("not_ready", reason)
 

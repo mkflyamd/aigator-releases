@@ -492,6 +492,7 @@ async def agent_terminal_ws(ws: WebSocket, session_id: str, seq: int = 0):
                 data = msg.get("data", "")
                 if data:
                     entry.size_owner = ws
+                    entry.last_user_input = time.time()
                     try:
                         entry.write(data)
                     except Exception:

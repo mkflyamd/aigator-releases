@@ -504,6 +504,43 @@ def test_working_asking_and_unreported_agents_are_not_ready(monkeypatch):
     assert agent_wake._ready_now(pid, FakePty("\x1b[?2004h")) == "unknown"
 
 
+def test_an_agent_whose_user_is_typing_is_not_ready_until_they_stop(monkeypatch):
+    pid = pty_id()
+    monkeypatch.setattr(agent_state, "read_states", lambda ids: {pid: {"state": "idle", "at": 1.0}})
+    typing = FakePty("\x1b[?2004h")
+    typing.last_user_input = time.time() - 2
+    assert agent_wake._ready_now(pid, typing) == "typing"
+    typing.last_user_input = time.time() - agent_wake.USER_TYPING_SECONDS - 1
+    assert agent_wake._ready_now(pid, typing) == "ready"
+    typing.last_user_input = 0.0
+    assert agent_wake._ready_now(pid, typing) == "ready"
+
+
+async def test_a_message_is_not_pasted_while_the_user_is_typing(monkeypatch):
+    async def fake_pty(pid):
+        return FakePty()
+
+    monkeypatch.setattr(agent_wake, "_pty", fake_pty)
+    monkeypatch.setattr(agent_wake, "_ready_now", lambda pid, entry: "typing")
+    monkeypatch.setattr(agent_wake, "READY_POLL_SECONDS", 0.01)
+    with pytest.raises(agent_wake.WakeRefused) as exc:
+        await agent_wake._wait_ready(pty_id(), 0.05)
+    assert exc.value.code == "not_ready" and "typing" in exc.value.reason
+
+
+def test_a_new_terminal_has_had_no_user_input():
+    from pty_session import PtySession
+
+    class Idle:
+        def isalive(self):
+            return False
+
+        def read(self, n):
+            return ""
+
+    assert PtySession(Idle()).last_user_input == 0.0
+
+
 async def test_waiting_gives_up_on_an_agent_stuck_at_a_permission_prompt(monkeypatch):
     async def fake_pty(pid):
         return FakePty()
@@ -722,3 +759,51 @@ async def test_the_relay_core_limit_not_the_wake_limit_applies_on_a_link(relay_w
     for i in range(agent_wake.SENDER_LIMIT + 3):
         task = await relay_world["relay"].send_on_link(link.id, sender, f"message {i}")
         assert task["status"]["state"] == "TASK_STATE_WORKING", i
+
+
+def test_only_what_a_person_types_counts_as_user_input(monkeypatch):
+    import threading
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from pty_session import PtySession
+
+    class BlockingPty:
+        def __init__(self):
+            self.stop = threading.Event()
+            self.written = []
+
+        def isalive(self):
+            return not self.stop.is_set()
+
+        def read(self, n):
+            self.stop.wait(5)
+            return ""
+
+        def write(self, data):
+            self.written.append(data)
+
+        def close(self):
+            self.stop.set()
+
+    fake = BlockingPty()
+    session = PtySession(fake)
+    pid = pty_id()
+    monkeypatch.setitem(terminal._pty_sessions, pid, session)
+    try:
+        assert terminal.write_pty_session(pid, "injected by gator")
+        assert session.last_user_input == 0.0
+        app = FastAPI()
+        app.include_router(terminal.router)
+        before = time.time()
+        with TestClient(app).websocket_connect(f"/api/terminal/agent?session_id={pid}") as ws:
+            ws.send_text(json.dumps({"type": "input", "data": "hello"}))
+            for _ in range(100):
+                if session.last_user_input:
+                    break
+                time.sleep(0.02)
+        assert session.last_user_input >= before
+        assert fake.written == ["injected by gator", "hello"]
+    finally:
+        fake.stop.set()
