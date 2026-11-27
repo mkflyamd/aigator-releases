@@ -286,3 +286,74 @@ test('labelInPage: control kinds and own text, never a tag name', () => {
   });
   assert.deepStrictEqual(labelOf(fakeEl('div')), { label: 'This area', kind: '' });
 });
+
+test('isTruncated matches what capText would cut', () => {
+  assert.strictEqual(core.isTruncated('short'), false);
+  assert.strictEqual(core.isTruncated('a\n\n\n\nb'), false);
+  assert.strictEqual(core.isTruncated('x'.repeat(core.MAX_TEXT)), false);
+  assert.strictEqual(core.isTruncated('x'.repeat(core.MAX_TEXT + 1)), true);
+  assert.strictEqual(core.isTruncated(null), false);
+});
+
+test('clipToCut ends the clip at the cut and leaves unusable cuts alone', () => {
+  const clip = { x: 5, y: 100, width: 300, height: 4000, scale: 1 };
+  assert.deepStrictEqual(core.clipToCut(clip, 900), { ...clip, height: 800 });
+  assert.strictEqual(core.clipToCut(clip, null), clip);
+  assert.strictEqual(core.clipToCut(clip, 100), clip);
+  assert.strictEqual(core.clipToCut(clip, 5000), clip);
+});
+
+test('tileClips keeps a short clip whole and splits a tall one into equal full-width tiles', () => {
+  const short = { x: 0, y: 10, width: 400, height: 1200, scale: 1 };
+  assert.deepStrictEqual(core.tileClips(short), [short]);
+  const tiles = core.tileClips({ x: 7, y: 100, width: 400, height: 3000, scale: 1 });
+  assert.deepStrictEqual(
+    tiles.map((t) => [t.x, t.y, t.width, t.height]),
+    [
+      [7, 100, 400, 1000],
+      [7, 1100, 400, 1000],
+      [7, 2100, 400, 1000],
+    ],
+  );
+});
+
+test('tileClips never makes more than eight tiles and still covers the whole clip', () => {
+  const tiles = core.tileClips({ x: 0, y: 0, width: 400, height: 40000, scale: 1 });
+  assert.strictEqual(tiles.length, 8);
+  const last = tiles.at(-1);
+  assert.strictEqual(last.y + last.height, 40000);
+});
+
+test('cutPointInPage returns the top of the first rendered text node that does not fit', () => {
+  const node = (text, top) => ({ nodeValue: text, rects: top === null ? [] : [{ top }] });
+  const nodes = [
+    node('aaaa', 10),
+    node('   ', 20),
+    node('hidden', null),
+    node('bbbb', 30),
+    node('cccc', 50),
+  ];
+  let i = 0;
+  const saved = { document: global.document, NodeFilter: global.NodeFilter, window: global.window };
+  global.NodeFilter = { SHOW_TEXT: 4 };
+  global.window = { scrollY: 1000 };
+  global.document = {
+    createTreeWalker: () => ({ nextNode: () => nodes[i++] || null }),
+    createRange: () => {
+      let n;
+      return {
+        selectNodeContents: (x) => (n = x),
+        getClientRects: () => n.rects,
+      };
+    },
+  };
+  try {
+    // "aaaa"+1 and "bbbb"+1 use 10 of 12 characters; "cccc" does not fit
+    assert.strictEqual(JSON.parse(core.cutPointInPage.call({}, 12)).bottom, 1050);
+    i = 0;
+    assert.strictEqual(JSON.parse(core.cutPointInPage.call({}, 1000)).bottom, null);
+  } finally {
+    Object.assign(global, saved);
+    for (const k of Object.keys(saved)) if (saved[k] === undefined) delete global[k];
+  }
+});

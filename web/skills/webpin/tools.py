@@ -47,11 +47,16 @@ TOOL_DEFS = [
         "description": (
             "Read a pinned web-app view or element: returns the page text captured at pin time plus the screenshot "
             "(or, when the active model cannot see images, a written description of it). "
+            "A tall element is captured as several screenshot tiles, top to bottom; the result says how many "
+            "and you read the others with tile. "
             "This is a snapshot, not live data. Use it whenever the user asks about a pinned web pin."
         ),
         "input_schema": {
             "type": "object",
-            "properties": {"pin_id": {"type": "string", "description": "The pin_id from the pinned-context list."}},
+            "properties": {
+                "pin_id": {"type": "string", "description": "The pin_id from the pinned-context list."},
+                "tile": {"type": "integer", "minimum": 1, "description": "Which screenshot tile to return, 1 is the top. Default 1."},
+            },
             "required": ["pin_id"],
         },
     },
@@ -92,11 +97,14 @@ def _in_tab(pin_id: str, context_id: str) -> dict | None:
     return None
 
 
-def _snapshot_result(pin_id: str, pin: dict) -> dict:
+def _snapshot_result(pin_id: str, pin: dict, tile: int = 1) -> dict:
     snap = store.read_snapshot(pin_id)
     if not snap:
         return {"error": "Snapshot is missing on disk. Ask the user to pin the view again."}
-    img = store.read_image(pin_id)
+    tiles = store.tile_count(pin_id)
+    if tile > max(tiles, 1):
+        return {"error": f"This pin's screenshot has only {tiles} tile(s)."}
+    img = store.read_image(pin_id, tile)
     meta = pin.get("meta", {})
     try:
         captured = float(snap.get("captured_at") or meta.get("captured_at"))
@@ -111,6 +119,13 @@ def _snapshot_result(pin_id: str, pin: dict) -> dict:
         "age_seconds": max(0, int(time.time() - captured)) if captured is not None else None,
         "text": _wrap_untrusted(snap.get("text", "")),
     }
+    if tiles > 1:
+        out["tile"] = tile
+        out["tiles"] = tiles
+        out["tile_note"] = (
+            f"The screenshot is {tiles} tiles from top to bottom and this is tile {tile}. "
+            "Call read_web_pin with tile for the others when the question needs them."
+        )
     if img:
         _attach_image(out, pin_id, img)
     return out
@@ -137,11 +152,15 @@ def _attach_image(out: dict, pin_id: str, img: bytes) -> None:
     )
 
 
-def read_web_pin(pin_id: str, _context_id: str = "default") -> dict:
+def read_web_pin(pin_id: str, tile: int = 1, _context_id: str = "default") -> dict:
     pin = _in_tab(pin_id, _context_id)
     if not pin:
         return {"error": "That web pin is not in this tab."}
-    return _snapshot_result(pin_id, pin)
+    try:
+        tile = max(1, int(tile))
+    except (TypeError, ValueError):
+        tile = 1
+    return _snapshot_result(pin_id, pin, tile)
 
 
 async def recapture_web_pin(pin_id: str, _context_id: str = "default") -> dict:

@@ -3,6 +3,8 @@
 const MAX_SIDE = 1600;
 const MAX_TEXT = 20000;
 const TRUNC = '\n[truncated]';
+const TILE_HEIGHT = 1200;
+const MAX_TILES = 8;
 
 function clipFromQuad(quad, offset) {
   const xs = [quad[0], quad[2], quad[4], quad[6]];
@@ -30,6 +32,31 @@ function capText(text, max = MAX_TEXT) {
     .trim();
   if (t.length <= max) return t;
   return t.slice(0, max - TRUNC.length) + TRUNC;
+}
+
+function isTruncated(text, max = MAX_TEXT) {
+  return (
+    String(text == null ? '' : text)
+      .replace(/\n{3,}/g, '\n\n')
+      .trim().length > max
+  );
+}
+
+// Ends the clip where the text cut falls (bottom is a document y), so the picture never
+// shows content the text does not cover.
+function clipToCut(clip, bottom) {
+  if (!Number.isFinite(bottom)) return clip;
+  const height = bottom - clip.y;
+  return height >= 1 && height < clip.height ? { ...clip, height } : clip;
+}
+
+// A tall clip becomes equal full-width tiles, top to bottom, so each stays readable
+// instead of the whole thing shrinking to fit one image.
+function tileClips(clip, tileHeight = TILE_HEIGHT, maxTiles = MAX_TILES) {
+  const count = Math.min(maxTiles, Math.ceil(clip.height / tileHeight));
+  if (count <= 1) return [clip];
+  const height = clip.height / count;
+  return Array.from({ length: count }, (_, i) => ({ ...clip, y: clip.y + i * height, height }));
 }
 
 const HOVER_LABEL_MAX = 40;
@@ -157,6 +184,26 @@ function describeInPage() {
     text: textOf(el),
     locator: { selector: selectorFor(el), role, name, rect },
   });
+}
+
+// Runs INSIDE the page via Runtime.callFunctionOn (this = the element). Returns the document y
+// of the top of the first rendered text node that would not fit in `budget` characters, or null.
+function cutPointInPage(budget) {
+  const walker = document.createTreeWalker(this, NodeFilter.SHOW_TEXT);
+  let used = 0;
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    const t = (n.nodeValue || '').replace(/\s+/g, ' ').trim();
+    if (!t) continue;
+    const range = document.createRange();
+    range.selectNodeContents(n);
+    const rects = range.getClientRects();
+    if (!rects.length) continue;
+    if (used + t.length + 1 > budget) {
+      return JSON.stringify({ bottom: rects[0].top + window.scrollY });
+    }
+    used += t.length + 1;
+  }
+  return JSON.stringify({ bottom: null });
 }
 
 // Runs INSIDE the page (this = window or document); returns the visible text of the whole view.
@@ -336,9 +383,14 @@ module.exports = {
   PIN_CURSOR_CSS,
   MAX_SIDE,
   MAX_TEXT,
+  TRUNC,
   clipFromQuad,
   captureScale,
   capText,
+  isTruncated,
+  clipToCut,
+  tileClips,
+  cutPointInPage,
   hoverLabel,
   urlMatches,
   describeInPage,

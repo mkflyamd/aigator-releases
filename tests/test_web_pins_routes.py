@@ -287,3 +287,29 @@ def test_removing_an_app_deletes_only_its_pins_and_snapshots(client, monkeypatch
     assert store.read_snapshot(mine) is None
     assert sorted(p["id"] for p in state.get_pins("tab-a")) == ["C1:1", "keep"]
     assert client.get("/api/web-pins/count", params={"app_id": "pbi"}).json()["count"] == 0
+
+
+TILE2 = b"\x89PNG\r\n\x1a\n" + b"2" * 32
+TILE3 = b"\x89PNG\r\n\x1a\n" + b"3" * 32
+
+
+def test_create_stores_extra_tiles(client):
+    r = client.post("/api/web-pins", json=_body(tiles_b64=[_b64(TILE2), _b64(TILE3)]))
+    assert r.status_code == 200, r.text
+    pid = r.json()["id"]
+    assert store.tile_count(pid) == 3
+    assert [store.read_image(pid, n) for n in (1, 2, 3)] == [PNG, TILE2, TILE3]
+
+
+def test_create_rejects_a_bad_tile_and_too_many_tiles(client):
+    assert client.post("/api/web-pins", json=_body(tiles_b64=[_b64(b"GIF89a-----")])).status_code == 400
+    assert client.post("/api/web-pins", json=_body(tiles_b64=[_b64(TILE2)] * 8)).status_code == 422
+
+
+def test_refresh_replaces_tiles_and_a_text_only_refresh_keeps_them(client):
+    pid = client.post("/api/web-pins", json=_body(tiles_b64=[_b64(TILE2), _b64(TILE3)])).json()["id"]
+    r = client.post(f"/api/web-pins/{pid}/snapshot", json={"image_b64": _b64(PNG), "tiles_b64": [_b64(TILE3)], "text": "x"})
+    assert r.status_code == 200, r.text
+    assert [store.read_image(pid, n) for n in (1, 2, 3)] == [PNG, TILE3, None]
+    client.post(f"/api/web-pins/{pid}/snapshot", json={"text": "y"})
+    assert store.tile_count(pid) == 2

@@ -50,7 +50,7 @@ Every CDP call has a timeout of 8 seconds. If the debugger cannot attach, the to
 
 ## Snapshot
 
-- **Image:** `Page.captureScreenshot`. For an element, `clip` is the element's box from `DOM.getBoxModel`. For Pin view, the viewport. Scaled so the longest side is at most 1600 px. PNG.
+- **Image:** `Page.captureScreenshot`. For an element, `clip` is the element's box from `DOM.getBoxModel`. For Pin view, the viewport. PNG. An element taller than 1,200 px is captured as up to eight equal full-width tiles, top to bottom, so each stays readable; the first tile is the pin image and `read_web_pin` takes a `tile` argument for the others. When the text is capped, the capture ends at the cut point, so the image never shows content the text does not cover.
 - **Text:** for an element, its `innerText` plus its `aria-label`, via `Runtime.callFunctionOn`. For Pin view, `document.body.innerText`. Capped at 20,000 characters. Tables and matrices that virtualize rows contribute the visible rows only; the image carries the rest.
 - **Locator** (used by recapture, never shown to the agent):
   - `selector`: set only when the element or a close ancestor has an `id` or `data-testid`; otherwise empty.
@@ -75,7 +75,7 @@ The image and text live outside `pinned_contexts.json`:
 
 Routes:
 
-- `POST /api/web-pins` takes `{ context_id, app_id, image_b64, text, locator, url, title }`. Validates `app_id` is a configured custom app, caps the image at 5 MB and text at 20,000 characters (413 otherwise), writes the files, calls `set_pin("webpin", id, label, meta, context_id)`, returns the pin. The renderer never calls the unprotected `/api/context/pin` for web pins.
+- `POST /api/web-pins` takes `{ context_id, app_id, image_b64, tiles_b64, text, locator, url, title }`. Validates `app_id` is a configured custom app, caps the image at 5 MB and text at 20,000 characters (413 otherwise), writes the files, calls `set_pin("webpin", id, label, meta, context_id)`, returns the pin. The renderer never calls the unprotected `/api/context/pin` for web pins.
 - `GET /api/web-pins/{id}` returns the snapshot JSON.
 - `GET /api/web-pins/{id}/image` returns the PNG, for the pin orb thumbnail.
 - `POST /api/web-pins/{id}/snapshot` replaces the snapshot after a recapture. Takes `{ request_id?, image_b64, text, match }`.

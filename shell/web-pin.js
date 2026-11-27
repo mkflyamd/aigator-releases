@@ -109,6 +109,21 @@ async function captureView(cdp, wc) {
   };
 }
 
+// Best effort: a failed lookup keeps the whole clip rather than failing the pin.
+async function clipAtTextCut(cdp, objectId, clip) {
+  try {
+    const r = await cdp.send('Runtime.callFunctionOn', {
+      objectId,
+      functionDeclaration: core.cutPointInPage.toString(),
+      arguments: [{ value: core.MAX_TEXT - core.TRUNC.length }],
+      returnByValue: true,
+    });
+    return core.clipToCut(clip, JSON.parse(r.result.value).bottom);
+  } catch (_) {
+    return clip;
+  }
+}
+
 async function captureElement(cdp, wc, backendNodeId) {
   await cdp.send('DOM.scrollIntoViewIfNeeded', { backendNodeId }).catch(() => {});
   const { object } = await cdp.send('DOM.resolveNode', { backendNodeId });
@@ -121,12 +136,15 @@ async function captureElement(cdp, wc, backendNodeId) {
   const { model } = await cdp.send('DOM.getBoxModel', { backendNodeId });
   const { cssVisualViewport: v } = await cdp.send('Page.getLayoutMetrics');
   // Box-model quads are viewport-relative; screenshot clips are document-relative.
-  const clip = core.clipFromQuad(model.border, { x: v.pageX, y: v.pageY });
+  let clip = core.clipFromQuad(model.border, { x: v.pageX, y: v.pageY });
   if (!(clip.width >= 1 && clip.height >= 1)) throw coded('empty_target');
+  if (core.isTruncated(info.text)) clip = await clipAtTextCut(cdp, object.objectId, clip);
   const page = await readPage(cdp);
-  const image_b64 = await shoot(cdp, clip, v);
+  const tiles = [];
+  for (const tile of core.tileClips(clip)) tiles.push(await shoot(cdp, tile, v));
   return {
-    image_b64,
+    image_b64: tiles[0],
+    tiles_b64: tiles.slice(1),
     text: core.capText(info.text),
     locator: info.locator,
     url: wc.getURL(),

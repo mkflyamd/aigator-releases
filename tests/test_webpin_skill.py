@@ -309,3 +309,37 @@ def test_recapture_for_latest_needs_no_approval():
 def test_generic_label_reads_as_your_pinned_page():
     assert "your pinned page" in _line("Web view", 31 * 60)
     assert "your pinned page" in _line("", 31 * 60)
+
+
+def _tiled_pin(ctx="tab-a"):
+    pid = str(uuid.uuid4())
+    store.write_snapshot(
+        pid, image=PNG, tiles=[PNG + b"2", PNG + b"3"], text="Cards 1-9",
+        meta={"app_id": "pbi", "url": "https://app.powerbi.com/r/1"},
+    )
+    state.set_pin("webpin", pid, "Dashboard", {"app_id": "pbi", "app_name": "Power BI", "captured_at": 1.0}, ctx)
+    return pid
+
+
+def test_read_returns_the_first_tile_and_says_how_many_there_are(monkeypatch):
+    _use_models(monkeypatch, "vision", ["vision"], {"vision": _FakeProvider(True)})
+    out = tools.read_web_pin(_tiled_pin(), _context_id="tab-a")
+    assert (out["tile"], out["tiles"]) == (1, 3)
+    assert "tile" in out["tile_note"]
+    assert base64.b64decode(out["_images"][0]["base64"]) == PNG
+
+
+def test_read_tile_returns_that_tile_and_rejects_one_past_the_end(monkeypatch):
+    _use_models(monkeypatch, "vision", ["vision"], {"vision": _FakeProvider(True)})
+    pid = _tiled_pin()
+    out = tools.read_web_pin(pid, tile=3, _context_id="tab-a")
+    assert out["tile"] == 3
+    assert base64.b64decode(out["_images"][0]["base64"]) == PNG + b"3"
+    assert "only 3 tile" in tools.read_web_pin(pid, tile=4, _context_id="tab-a")["error"]
+    assert tools.read_web_pin(pid, tile="junk", _context_id="tab-a")["tile"] == 1
+
+
+def test_single_image_pin_has_no_tile_fields(monkeypatch):
+    _use_models(monkeypatch, "vision", ["vision"], {"vision": _FakeProvider(True)})
+    out = tools.read_web_pin(_pin(), _context_id="tab-a")
+    assert "tiles" not in out and "tile_note" not in out

@@ -79,9 +79,15 @@ def read_snapshot(pin_id: str) -> dict | None:
         return None
 
 
-def read_image(pin_id: str) -> bytes | None:
-    f = web_pin_dir(pin_id) / "snapshot.png"
+def read_image(pin_id: str, tile: int = 1) -> bytes | None:
+    """Tile 1 is the snapshot image; a tall capture's later tiles follow top to bottom."""
+    f = web_pin_dir(pin_id) / ("snapshot.png" if tile == 1 else f"tile-{tile}.png")
     return f.read_bytes() if f.exists() else None
+
+
+def tile_count(pin_id: str) -> int:
+    d = web_pin_dir(pin_id)
+    return 1 + len(list(d.glob("tile-*.png"))) if (d / "snapshot.png").exists() else 0
 
 
 def read_description(pin_id: str, image: bytes) -> dict | None:
@@ -105,7 +111,9 @@ def write_description(pin_id: str, image: bytes, text: str, model: str) -> None:
     )
 
 
-def write_snapshot(pin_id: str, *, image: bytes | None, text: str | None, meta: dict) -> dict:
+def write_snapshot(
+    pin_id: str, *, image: bytes | None, text: str | None, meta: dict, tiles: list[bytes] | None = None
+) -> dict:
     d = web_pin_dir(pin_id)
     d.mkdir(parents=True, exist_ok=True)
     prev = read_snapshot(pin_id)
@@ -116,6 +124,10 @@ def write_snapshot(pin_id: str, *, image: bytes | None, text: str | None, meta: 
     captured_at = time.time()
     if image is not None:
         (d / "snapshot.png").write_bytes(image)
+        for old in d.glob("tile-*.png"):
+            old.unlink()
+        for n, tile in enumerate(tiles or [], start=2):
+            (d / f"tile-{n}.png").write_bytes(tile)
     (d / "snapshot.json").write_text(
         json.dumps(
             {"text": new_text, "meta": merged_meta, "captured_at": captured_at, "text_hash": text_hash},
