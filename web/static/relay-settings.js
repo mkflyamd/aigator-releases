@@ -53,13 +53,51 @@
     refresh();
   }
 
-  function agentLabel(a) {
-    const name = a.name || a.id;
-    const same = state.agents.filter(
-      (o) => (o.name || o.id) === name && o.project_id === a.project_id,
-    );
-    const tail = same.length > 1 ? ` #${a.id.slice(4, 8)}` : '';
-    return `${name}${tail}${a.project_id ? ` (${a.project_id})` : ''}`;
+  // The name on the agent's terminal tab, else its session title, else "<Agent> session".
+  function baseName(a) {
+    if (typeof _genAgentTerminals !== 'undefined') {
+      const ptyId = a.id.slice(4);
+      for (const term of Object.values(_genAgentTerminals)) {
+        const sess = term.sessions && term.sessions[ptyId];
+        if (sess && sess.label) return sess.label;
+      }
+    }
+    if (a.name) return a.name;
+    const kind =
+      a.agent && typeof _genAgentLabel === 'function' ? _genAgentLabel(a.agent) : 'Agent';
+    return `${kind} session`;
+  }
+
+  // Two agents with the same name read "Opus" and "Opus (2)".
+  function agentName(a) {
+    const mine = baseName(a);
+    const twins = state.agents.filter((o) => baseName(o) === mine);
+    const place = twins.findIndex((o) => o.id === a.id);
+    return place > 0 ? `${mine} (${place + 1})` : mine;
+  }
+
+  function agentState(a) {
+    return a.state === 'suspended' ? 'Sleeping' : 'Running';
+  }
+
+  function agentContext(a) {
+    return [a.project_id, agentState(a)].filter(Boolean).join(' · ');
+  }
+
+  // A pair's ends are stored when the pair is made; show the live name while the agent is open.
+  function endName(end) {
+    const open = state.agents.find((a) => a.id === end.id);
+    return open ? agentName(open) : end.name || 'A closed agent';
+  }
+
+  function untilText(iso) {
+    const at = new Date(iso);
+    const time = at.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    const day = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    const days = Math.round((day(at) - day(new Date())) / 86400000);
+    if (days <= 0) return time;
+    if (days === 1) return `tomorrow ${time}`;
+    return `${at.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`;
   }
 
   function toggle(id, label, checked, disabled, onChange) {
@@ -88,7 +126,7 @@
     const locked = !state.admin_allows;
     const sub = locked
       ? 'Your administrator has turned agent messaging off.'
-      : 'Agents in the same project can message each other. You can link agents across projects below.';
+      : 'Agents in the same project can message each other. You can allow pairs across projects below.';
     return el(
       'div',
       { className: 'srow' },
@@ -130,15 +168,15 @@
         el(
           'div',
           { className: 'srow-info' },
-          el('div', { className: 'srow-label', textContent: agentLabel(a) }),
+          el('div', { className: 'srow-label', textContent: agentName(a) }),
           el('div', {
             className: 'srow-sub',
-            textContent: `${a.state === 'suspended' ? 'Sleeping' : 'Running'} - Accepts messages from other agents`,
+            textContent: `${agentContext(a)} · Accepts messages from other agents`,
           }),
         ),
         toggle(
           `relay-accepts-${a.id}`,
-          `Accepts messages for ${agentLabel(a)}`,
+          `Accepts messages for ${agentName(a)}`,
           !a.opted_out,
           Boolean(off),
           (on) => act('POST', '/api/relay/opt-out', { endpoint_id: a.id, opted_out: !on }),
@@ -148,10 +186,9 @@
     return [head, ...rows];
   }
 
-  function pausedNote(l) {
-    if (l.paused === 'limit_reached') return ' - Paused: hourly limit reached';
-    if (l.paused) return ' - Paused: same message sent several times';
-    return '';
+  function pausedReason(l) {
+    if (l.paused === 'limit_reached') return 'hourly limit reached';
+    return 'same message sent several times';
   }
 
   function linkRows() {
@@ -164,24 +201,20 @@
         { className: 'srow-info' },
         el('div', {
           className: 'srow-label',
-          textContent: 'Links',
+          textContent: 'Allowed pairs',
           tabIndex: -1,
           id: 'relay-links-heading',
         }),
         el('div', {
           className: 'srow-sub',
           textContent: off
-            ? `${off} New links cannot be made until it is on.`
-            : 'A link lets two agents message each other, even across projects, until it expires.',
+            ? `${off} New pairs cannot be allowed until it is on.`
+            : 'Two agents you allow to message each other, even across projects, until the time runs out.',
         }),
       ),
     );
     const rows = state.links.map((l) => {
-      const until = new Date(l.expires_at).toLocaleTimeString([], {
-        hour: 'numeric',
-        minute: '2-digit',
-      });
-      const end = el('button', { className: 'btn-secondary', textContent: 'End link' });
+      const end = el('button', { className: 'btn-secondary', textContent: 'Remove' });
       end.dataset.key = `end-${l.id}`;
       end.addEventListener('click', () =>
         act('DELETE', `/api/relay/links/${encodeURIComponent(l.id)}`),
@@ -203,9 +236,14 @@
           { className: 'srow-info' },
           el('div', {
             className: 'srow-label',
-            textContent: `${agentLabel(l.a)} and ${agentLabel(l.b)}`,
+            textContent: `${endName(l.a)} and ${endName(l.b)}`,
           }),
-          el('div', { className: 'srow-sub', textContent: `Until ${until}${pausedNote(l)}` }),
+          el('div', {
+            className: 'srow-sub',
+            textContent: l.paused
+              ? `Paused: ${pausedReason(l)} · Allowed until ${untilText(l.expires_at)}`
+              : `Allowed until ${untilText(l.expires_at)}`,
+          }),
         ),
         el('div', { className: 'srow-actions' }, ...buttons),
       );
@@ -214,16 +252,23 @@
       const pick = (id, label) => {
         const select = el('select', { id, className: 'llm-select' });
         select.setAttribute('aria-label', label);
-        state.agents.forEach((a) =>
-          select.append(el('option', { value: a.id, textContent: agentLabel(a) })),
-        );
         return select;
       };
-      const a = pick('relay-link-a', 'Agent');
-      const b = pick('relay-link-b', 'Other agent');
-      b.selectedIndex = 1;
+      const fill = (select, skip) => {
+        const keep = select.value;
+        select.replaceChildren();
+        state.agents
+          .filter((a) => a.id !== skip)
+          .forEach((a) => select.append(el('option', { value: a.id, textContent: agentName(a) })));
+        if (keep && [...select.options].some((o) => o.value === keep)) select.value = keep;
+      };
+      const a = pick('relay-link-a', 'First agent');
+      const b = pick('relay-link-b', 'Second agent');
+      fill(a);
+      fill(b, a.value);
+      a.addEventListener('change', () => fill(b, a.value));
       const hours = el('select', { id: 'relay-link-hours', className: 'llm-select' });
-      hours.setAttribute('aria-label', 'For');
+      hours.setAttribute('aria-label', 'For how long');
       LINK_HOURS.forEach((h) =>
         hours.append(
           el('option', {
@@ -233,7 +278,7 @@
           }),
         ),
       );
-      const make = el('button', { className: 'btn-secondary', textContent: 'Link them' });
+      const make = el('button', { className: 'btn-secondary', textContent: 'Allow' });
       make.addEventListener('click', () =>
         act('POST', '/api/relay/links', { a: a.value, b: b.value, hours: Number(hours.value) }),
       );
@@ -247,9 +292,11 @@
               className: 'srow-info',
               style: 'display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center',
             },
+            el('span', { textContent: 'Allow' }),
             a,
             el('span', { textContent: 'and' }),
             b,
+            el('span', { textContent: 'to message each other for' }),
             hours,
             make,
           ),
@@ -257,7 +304,7 @@
       );
     }
     if (state.links.length) {
-      const endAll = el('button', { className: 'btn-secondary', textContent: 'End all links' });
+      const endAll = el('button', { className: 'btn-secondary', textContent: 'Remove all' });
       endAll.addEventListener('click', () => act('POST', '/api/relay/stop-all'));
       rows.push(el('div', { className: 'srow' }, el('div', { className: 'srow-actions' }, endAll)));
     }
