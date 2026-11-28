@@ -4,6 +4,7 @@ import pytest
 from remote import commands, slack_channel
 from remote.channel import ChannelRefused, InboundMessage
 from remote.guard import Guard
+from remote.master import Master
 from remote.runner import RemoteRunner
 from remote.service import RemoteService
 from remote.slack_channel import SlackSelfDM
@@ -204,6 +205,7 @@ class SlackWorld:
         self.host = FakeHost()
         service = RemoteService(self.host, default_project=lambda: BUDGET, clock=self.clock)
         self.runner = RemoteRunner(SlackSelfDM(state=self.state), service, Guard(clock=self.clock), self.state, clock=self.clock)
+        Master(self.state, self.clock).arm()
         self.runner.sync_enabled(True)
 
     def ts(self, offset=0.0, seq=1):
@@ -312,6 +314,7 @@ async def test_stop_all_on_slack_leaves_teams_armed_and_its_sessions_running(tmp
         service = RemoteService(host, default_project=lambda: BUDGET, clock=clock)
         guard = Guard(clock=clock)
         runner = RemoteRunner(channel, service, guard, state, clock=clock)
+        Master(state, clock).arm()
         runner.sync_enabled(True)
         guards[channel.name] = guard
         return runner, service

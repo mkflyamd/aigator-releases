@@ -155,7 +155,7 @@ Teams and Slack messages to the user's own self-chat may auto-send (PR #189 reco
 - Liveness. Once per backend start, and only while the chat window is closed, Gator posts `[🐊 Gator] Online`. Failures it can report (no live session, expired token, agent exited, unknown name) get an immediate reply naming the reason. Replies with `[🐊 Gator]` are the only signal the user needs: no reply within a minute of a command means Gator is offline.
 - Poll cadence: 3 seconds while a session is active or a command arrived in the last 180 seconds, otherwise 10 seconds.
 - Inbound rate limit: at most 20 commands per 10 minutes per channel. Excess commands get one `[🐊 Gator] Slow down, that was too many messages at once. Try again in 10 minutes.` reply per window, with the real wait in words, and are dropped.
-- Absolute cap: remote control disarms after `remote_armed_max_hours` (default 24), whether or not sessions are active, and posts `[🐊 Gator] Remote control turned itself off after 24 hours. Turn it back on in AI Gator settings, under Remote control.` The idle limit applies to individual sessions within that window.
+- Absolute cap: remote control runs in one 12 hour window shared by Teams and Slack, fixed in code and not a setting. The window opens when remote control is switched on (`POST /api/remote/arm`, or turning a channel switch on) and its deadline is stored as a wall-clock time, so a restart neither extends nor reopens it and a clock moved backwards counts as expired. Switching on while a window is running does not extend it. About 15 minutes before the deadline each channel posts one "Remote control turns off in 15 minutes." notice (`commands.turns_off_soon`). At the deadline every remote session is stopped the same way `stop all` stops them, a session that will not stop is retried every tick, and only then does the channel post "Remote control turned itself off after 12 hours." once (`commands.timed_out`). After the deadline nothing is posted and no command runs; the idle limit still stops idle sessions. `GET /api/remote/status` reports the state, `POST /api/remote/arm`, `/restart` and `/disarm` change it; `/restart` closes and reopens the window in one call and is refused, leaving the current window open, whenever arm would be refused.
 - Expiry, rate limit and stop-all live in one guard-rails module that the cross-agent relay shares. Components depend on its small interface (expiry timer, sliding-window rate limit, stop-all registry), not on where the module lives.
 
 ### Headless and power behavior
@@ -167,12 +167,12 @@ Teams and Slack messages to the user's own self-chat may auto-send (PR #189 reco
 
 ### Settings
 
-The "Remote control" section holds per-channel switches (Teams, Slack), the reply switch, a default project, and three limits. Values are saved through `PATCH /api/config` and checked before they are stored.
+The "Remote control" section holds per-channel switches (Teams, Slack), the reply switch, a default project, and two limits. Values are saved through `PATCH /api/config` and checked before they are stored.
 
 - `teams_remote_control_enabled`, `slack_remote_control_enabled`: booleans. The existing Teams value is the Teams switch.
 - "Reply in my own chat" sits directly under the channel switches and shows "Replies to your own Teams and Slack chat are off until you turn this on." while it is off. It is the user's own auto-send switch, saved through `POST /api/relay/self-chat-autosend` and read from `GET /api/relay`; it is the same setting as "Allow posting to my own Teams and Slack chat" under Agent messaging, and the two stay in step. If the administrator's policy is not `allow`, it is shown off and disabled with "Your administrator has turned this off."
 - `remote_default_project`: chosen from a dropdown of existing projects, or left on "Active project". A name that is not a project is rejected on save. If the chosen project is later deleted, a command that needs it is refused with `[🐊 Gator] The default project "X" no longer exists. Choose another in Settings, then resend.` and does not fall back to the active project.
-- `remote_session_idle_hours` (default 8, 1 to 72), `remote_stale_minutes` (default 15, 1 to 120), `remote_armed_max_hours` (default 24, 1 to 168). Each is read when it is used, so a change applies to running sessions without a restart. A stored value that is not valid falls back to its default.
+- `remote_session_idle_hours` (default 8, 1 to 72), `remote_stale_minutes` (default 15, 1 to 120). Each is read when it is used, so a change applies to running sessions without a restart. A stored value that is not valid falls back to its default.
 
 ## Compatibility with the current `/code` path
 

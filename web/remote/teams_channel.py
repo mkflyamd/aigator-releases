@@ -1,5 +1,5 @@
 """Teams "Chat with yourself" adapter. Posts only to that one chat, only text that starts
-with "[Gator", so Gator's own replies can never read back as a command."""
+with the crocodile marker, so Gator's own replies can never read back as a command."""
 
 from __future__ import annotations
 

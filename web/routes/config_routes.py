@@ -224,6 +224,17 @@ async def toggle_optional_skill(request: Request):
     }
 
 
+def _sync_remote_window(cfg: dict, switched_on: list[str]) -> None:
+    """Turning a channel switch on opens the 12 hour window; turning the last one off closes it."""
+    from remote import settings as remote_settings, status
+    from remote.state import shared
+
+    if not any(cfg.get(k) for k in remote_settings.SWITCH_KEYS):
+        status.disarm(shared())
+    elif switched_on:
+        status.arm(shared())
+
+
 @router.patch("/api/config")
 async def patch_config(request: Request):
     body = await request.json()
@@ -232,12 +243,17 @@ async def patch_config(request: Request):
     refusal = remote_settings.validate(body)
     if refusal:
         raise HTTPException(status_code=400, detail=refusal)
+    switched_on: list[str] = []
+
     def _apply(cfg):
         for k, v in body.items():
             if k in PATCHABLE_CONFIG_KEYS:
+                if k in remote_settings.SWITCH_KEYS and v is True and not cfg.get(k):
+                    switched_on.append(k)
                 cfg[k] = v
 
     cfg = _update_config(_apply)
+    _sync_remote_window(cfg, switched_on)
     from log_sanitizer import refresh_privacy_mode
 
     refresh_privacy_mode()

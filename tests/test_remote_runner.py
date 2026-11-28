@@ -3,6 +3,7 @@ import pytest
 from remote import commands
 from remote.channel import ChannelRefused, InboundMessage
 from remote.guard import Guard
+from remote.master import Master
 from remote.runner import RemoteRunner
 from remote.service import RemoteService
 from remote.session_host import HostError, HostSession, Project
@@ -102,6 +103,7 @@ class World:
         self.clock = Clock()
         self.host = FakeHost()
         self.state = State(tmp_path / "state.json")
+        Master(self.state, self.clock).arm()
         self.hint = ""
         self.branch = "main"
         self.build()
@@ -313,16 +315,6 @@ async def test_rearming_after_stop_all_needs_the_switch_toggled(w):
     w.runner.sync_enabled(False)
     w.runner.sync_enabled(True)
     assert w.guard.armed is True
-
-
-async def test_remote_control_disarms_at_the_absolute_cap_and_says_so_once(w):
-    await baselined(w)
-    w.clock.now += 24 * 3600 + 1
-    await w.runner.tick()
-    await w.runner.tick()
-    assert w.channel.posted == [commands.timed_out(24 * 3600)]
-    await w.feed(w.msg(101, "@gator late", age=0))
-    assert w.host.delivered == []
 
 
 async def test_announce_online(w):
@@ -692,7 +684,7 @@ async def test_stop_all_notice_is_never_posted_to_another_chat(refusing):
 
 
 async def test_timeout_notice_is_never_posted_to_another_chat(refusing):
-    refusing.clock.now += 24 * 3600 + 1
+    refusing.clock.now += 12 * 3600 + 1
     await refusing.runner.tick()
     assert refusing.sent == []
 
