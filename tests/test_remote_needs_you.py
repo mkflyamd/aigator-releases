@@ -246,3 +246,34 @@ async def test_a_post_that_failed_holds_no_place_and_is_tried_again_after_a_minu
     w.clock.now += 61
     await w.runner.tick()
     assert len(routed(w)) == 3
+
+
+async def test_a_quote_reply_goes_through_the_stale_screen_check_before_anything_is_typed(w):
+    await opened(w)
+    await say(w, "run the tests")
+    await show(w, "pty-1", BASH_PERMISSION)
+    posted = routed(w)[0]["message_id"]
+    w.host.states["pty-1"] = {"state": "working", "at": w.clock.now + 9}
+    await quote_reply(w, posted, "allow")
+    assert w.host.typed == []
+    assert w.channel.posted[-1] == f"[Gator - budget - Budget] {prompts.ALREADY_ANSWERED}"
+
+
+async def test_a_quote_reply_to_a_draft_is_refused_and_types_nothing(w):
+    await opened(w)
+    await say(w, "run the tests")
+    await show(w, "pty-1", {"tool_name": "mcp__outlook__send_email", "tool_input": {"to": "a@example.com"}})
+    await quote_reply(w, routed(w)[0]["message_id"], "allow")
+    assert w.host.typed == []
+    assert "Not sent: this one has to be answered in AI Gator." in w.channel.posted[-1]
+
+
+async def test_a_quote_reply_to_a_long_command_only_accepts_deny(w):
+    await opened(w)
+    await say(w, "run the tests")
+    await show(w, "pty-1", {**BASH_PERMISSION, "tool_input": {"command": "echo " + "x" * 400}})
+    posted = routed(w)[0]["message_id"]
+    await quote_reply(w, posted, "allow")
+    assert w.host.typed == []
+    await quote_reply(w, posted, "deny")
+    assert w.host.typed == [("pty-1", (prompts.ESCAPE,))]
