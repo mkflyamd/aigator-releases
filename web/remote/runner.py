@@ -55,6 +55,7 @@ class RemoteRunner:
         self._master = master or Master(state, clock)
         self._enabled = False
         self._timeout_noticed = False
+        self._stop_failure_logged: float | None = None
         self._autosend_noticed = False
         service.subscribe(self._on_event)
 
@@ -243,24 +244,33 @@ class RemoteRunner:
     @property
     def deadline_pending(self) -> bool:
         """The window has closed and this channel's sessions have not been stopped for it yet."""
+        return self._unhandled_deadline() is not None
+
+    def _unhandled_deadline(self) -> float | None:
         record = self._master.record()
-        return (
-            record is not None
-            and self._master.expired()
-            and self._state.channel_value(self._channel.name, "expiry_handled") != record["deadline"]
-        )
+        if record is None or not self._master.expired():
+            return None
+        if self._state.channel_value(self._channel.name, "expiry_handled") == record["deadline"]:
+            return None
+        return record["deadline"]
 
     async def _stop_at_deadline(self) -> bool:
         """Stops every session the way `stop all` does. A session that will not stop is retried on
-        the next tick, so the caller only goes on once none are left."""
-        if not self.deadline_pending:
+        the next tick, so the caller only goes on once none are left. True when the stop
+        finished for a window that is still closed."""
+        deadline = self._unhandled_deadline()
+        if deadline is None:
             return False
         stopped, failed = await self._service.stop_all()
         if failed:
-            _log.warning("Remote control expired but %s would not stop; retrying", ", ".join(s.short for s in failed))
+            if self._stop_failure_logged != deadline:
+                self._stop_failure_logged = deadline
+                _log.warning("Remote control expired but %s would not stop; retrying", ", ".join(s.short for s in failed))
+            return False
+        self._state.set_channel_value(self._channel.name, "expiry_handled", deadline)
+        if self._master.active():
             return False
         self._guard.stop_all()
-        self._state.set_channel_value(self._channel.name, "expiry_handled", self._master.record()["deadline"])
         return True
 
     async def stop_after_deadline(self) -> None:
@@ -272,7 +282,10 @@ class RemoteRunner:
             await self._post(commands.system_reply("Remote control timed out. Re-arm it in Settings."))
 
     async def _warn_if_due(self) -> None:
-        deadline = self._master.record()["deadline"]
+        record = self._master.record()
+        if record is None:
+            return
+        deadline = record["deadline"]
         channel = self._channel.name
         if self._master.remaining() > master_window.WARN_SECONDS:
             return

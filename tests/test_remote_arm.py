@@ -158,6 +158,22 @@ async def test_idle_sessions_are_still_stopped_after_the_window_closes(w):
     assert w.host.killed == ["pty-1"]
 
 
+async def test_a_window_armed_while_the_sessions_are_stopping_gets_no_timed_out_notice(w):
+    await started(w)
+    w.clock.now += 12 * HOUR + 1
+    real_stop_all = w.service.stop_all
+
+    async def stop_all_then_rearm():
+        result = await real_stop_all()
+        Master(w.state, w.clock).arm()
+        return result
+
+    w.service.stop_all = stop_all_then_rearm
+    await w.runner.tick()
+    assert w.channel.posted == []
+    assert Master(w.state, w.clock).active()
+
+
 async def test_one_window_closes_both_channels(tmp_path):
     clock = Clock()
     state = State(tmp_path / "s.json")
