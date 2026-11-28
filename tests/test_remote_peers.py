@@ -414,7 +414,7 @@ async def test_list_shows_the_other_agents_with_how_to_reach_them(pw):
     reply = pw.channel.posted[-1]
     assert "Other agents in this project:" in reply
     assert "- Design Head" in reply and "- MergeBrain" in reply
-    assert "`@gator Design Head your message`" in reply or "`@gator MergeBrain your message`" in reply
+    assert "`@gator MergeBrain your message`" in reply
 
 
 async def test_list_caps_the_agents_and_counts_the_rest(tmp_path):
