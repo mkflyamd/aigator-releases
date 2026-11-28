@@ -186,7 +186,7 @@ Agent-initiated messages stay same-project only and go through `web/agent_mcp.py
 
 ## Acceptance criteria
 
-1. With Gator running, the auto-send switch on, the Code tab closed and the screen locked, `@gator what is open?` in the Teams self-chat produces a `[🐊 Gator]` reply with the agent's answer in the same chat.
+1. With Gator running, the auto-send switch on, the Code tab closed and the screen locked, `@gator what is open?` in the Teams self-chat produces a `[🐊 Gator - {project}]` reply with the agent's answer in the same chat.
 2. The same works from the Slack self-DM.
 3. `@gator list`, `@gator status`, `@gator stop` and `@gator <name> <text>` work from both channels.
 4. Closing the Code tab does not end a remotely started session. It ends on `@gator stop`, process exit, or the idle limit.
