@@ -204,6 +204,13 @@ def not_armed() -> str:
     )
 
 
+def timed_out_reply(seconds: float) -> str:
+    return system_reply(
+        f"Remote control timed out after {in_words(seconds)}.",
+        [f"Open AI Gator, then Settings, then {SETTINGS_SECTION}, and switch it on."],
+    )
+
+
 def slow_down(wait_seconds: float) -> str:
     return system_reply(
         "Slow down, that was too many messages at once.", [f"Wait {in_words(wait_seconds)}, then send it again."]

@@ -79,7 +79,7 @@ class RemoteRunner:
         self._window = ChatWindow(channel.name, state, clock)
         self._already_open = False
         self._not_sent_noticed: set[str] = set()
-        self._not_armed_noticed = False
+        self._not_armed_noticed: object = None
         service.subscribe(self._on_event)
 
     def sync_enabled(self, enabled: bool) -> None:
@@ -186,14 +186,19 @@ class RemoteRunner:
         return commands.parse(f"@gator {text}")
 
     async def _note_not_armed(self, message: InboundMessage) -> None:
-        """A switch that is on with no window ever opened (an upgrade, or after Disarm) gets one
-        plain line, and nothing runs. After a window has run out the channel stays silent."""
-        if self._not_armed_noticed or not self._enabled or self._master.record() is not None:
+        """A command that arrives while the switch is on but no window is open gets one plain line,
+        and nothing runs: "timed out" when a window ran out, "not turned on" when none was opened
+        (an upgrade, or after Disarm). Said once per window."""
+        if not self._enabled or self._unhandled_deadline() is not None:
+            return
+        record = self._master.record()
+        key = record["deadline"] if record else "never"
+        if self._not_armed_noticed == key:
             return
         if message.created_at > 0 and self._clock() - message.created_at > limit(self._stale):
             return
-        self._not_armed_noticed = True
-        await self._post(commands.not_armed())
+        self._not_armed_noticed = key
+        await self._post(commands.not_armed() if record is None else commands.timed_out_reply(master_window.ARM_SECONDS))
 
     async def _note_not_sent(self, message: InboundMessage, reason: str, reply: Callable[[], str]) -> None:
         """One plain line per reason per window, however many messages are held back."""
@@ -382,7 +387,7 @@ class RemoteRunner:
     async def tick(self) -> None:
         self._sync_guard()
         if self._master.active():
-            self._not_armed_noticed = False
+            self._not_armed_noticed = None
         if self._master.expired():
             await self._expire()
         elif self.live:
