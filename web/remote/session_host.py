@@ -94,6 +94,10 @@ class Declined(HostError):
     """The caller's `proceed` said no just before the text would have been typed."""
 
 
+class NoTypedAnswer(HostError):
+    """The question is still showing but its screen has no row that takes typed words, so nothing was typed."""
+
+
 class OpenElsewhere(HostError):
     """The lane's saved session is running in another terminal, so it is never woken a second time."""
 
@@ -582,7 +586,8 @@ class LocalPtyHost:
             raise HostError("That session is no longer running.")
         if entry.last_user_input > shown.at:
             raise StalePrompt("It was answered at the terminal.")
-        if shown.kind == prompts.PERMISSION or keys == (prompts.ESCAPE,):
+        typed = shown.kind == prompts.QUESTION and prompts.types_text(keys)
+        if shown.kind == prompts.PERMISSION or keys == (prompts.ESCAPE,) or typed:
             _, end = entry.read_from(10**12)
             tail, _ = entry.read_from(max(0, end - SCREEN_TAIL_CHARS))
             tail = _ANSI.sub("", tail)
@@ -591,6 +596,8 @@ class LocalPtyHost:
                     raise StalePrompt("The terminal is no longer showing that permission.")
             elif not prompts.escape_footer_showing(tail):
                 raise StalePrompt("The terminal is no longer showing that question.")
+            elif typed and not prompts.other_row_showing(tail, len(shown.choices)):
+                raise NoTypedAnswer("The terminal's question has no row for typed words.")
         for index, key in enumerate(keys):
             if index:
                 await asyncio.sleep(prompts.KEY_PAUSE_SECONDS)

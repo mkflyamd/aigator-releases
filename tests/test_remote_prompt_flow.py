@@ -5,7 +5,7 @@ import pytest
 
 from remote import commands, prompts, runner
 from remote.service import PROMPT_GRACE_SECONDS
-from remote.session_host import HostError
+from remote.session_host import HostError, NoTypedAnswer
 from tests.test_remote_chat_window import MINUTE, WINDOW, opened, say, window_of
 from tests.test_remote_prompts import ASK_USER_QUESTION, BASH_PERMISSION
 from tests.test_remote_runner import BUDGET, OTHER, World, _finish
@@ -122,6 +122,22 @@ async def test_a_quote_reply_to_the_question_is_typed_as_its_own_answer(w):
 
     await quote_reply(w, routed(w)[0]["message_id"], "green please")
     assert w.host.typed == [("pty-1", (prompts.DOWN, prompts.DOWN, "green please", prompts.ENTER))]
+
+
+async def test_a_screen_without_the_other_row_refuses_typed_words_and_keeps_the_question(w, monkeypatch):
+    async def refuse(pty_id, prompt_id, keys, ends_turn=False):
+        raise NoTypedAnswer("no row")
+
+    await opened(w)
+    await say(w, "run the tests")
+    await show(w, "pty-1", ASK_USER_QUESTION)
+    monkeypatch.setattr(w.host, "answer", refuse)
+    await say(w, "@gator green please")
+    assert w.host.typed == []
+    assert w.service.list()[0].waiting
+    last = w.channel.posted[-1]
+    assert "Not sent: that question's screen has no row to type your own words into. Pick 1 or 2, or `esc`" in last
+    assert "Or type your own answer." not in last
 
 
 async def test_typed_words_answer_a_question_as_its_own_answer(w):

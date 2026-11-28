@@ -2,6 +2,7 @@
 Claude Code's PermissionRequest hook wrote when captured live (ids and paths made up)."""
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -347,6 +348,39 @@ DIALOG = "Doyouwanttoproceed?\n❯1.Yes\n2.Yes,andalwaysallow\n3.No\n\nEsctocanc
 )
 def test_the_permission_dialog_must_be_the_last_thing_on_screen(tail, showing):
     assert prompts.permission_dialog_showing(tail) is showing
+
+
+def _captured(name):
+    """A real AskUserQuestion screen from Claude Code 2.1.283 (ANSI stripped), as the Remote tail would read it."""
+    return (Path(__file__).parent / "fixtures" / "ask_user_question" / name).read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "name, choices, showing",
+    [
+        ("two_options.txt", 2, True),
+        ("four_options.txt", 4, True),
+        ("two_options.txt", 4, False),
+        ("four_options.txt", 2, False),
+        ("with_previews.txt", 2, False),
+    ],
+)
+def test_typed_words_need_the_type_something_row_after_exactly_the_choices(name, choices, showing):
+    assert prompts.other_row_showing(_captured(name), choices) is showing
+
+
+def test_the_type_something_row_must_be_on_the_newest_screen():
+    tail = _captured("two_options.txt")
+    assert prompts.other_row_showing("noise\n" + tail, 2)
+    assert not prompts.other_row_showing(tail + "\n✢Marinating…", 2)
+    assert not prompts.other_row_showing(tail.replace("Chataboutthis", ""), 2)
+    assert not prompts.other_row_showing("", 2)
+
+
+def test_only_typed_words_are_gated():
+    assert prompts.types_text((prompts.DOWN, prompts.DOWN, "Purple", prompts.ENTER))
+    assert not prompts.types_text((prompts.DOWN, prompts.ENTER))
+    assert not prompts.types_text((prompts.ESCAPE,))
 
 
 def _bash(command):

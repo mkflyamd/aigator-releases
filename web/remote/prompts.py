@@ -50,6 +50,7 @@ OPEN_APP_DRAFT = "Open AI Gator to review it and send."
 OPEN_APP_QUESTION = "Open AI Gator to answer this one."
 OPEN_APP_PERMISSION = "Open AI Gator to review and answer this permission."
 ESC_OPTION = "`esc` to cancel it. The session keeps running."
+NO_TYPED_ANSWER = "that question's screen has no row to type your own words into."
 TYPE_OPTION = "Or type your own answer."
 
 
@@ -288,6 +289,27 @@ def escape_footer_showing(tail: str) -> bool:
     return cut >= 0 and _FOOTER_TAIL.fullmatch(flat[cut + len(_FOOTER) :]) is not None
 
 
+def no_typed_answer(prompt: Prompt) -> str:
+    return f"{NO_TYPED_ANSWER} Pick {_digits(len(prompt.choices))}, or `esc` to cancel it."
+
+
+def types_text(keys: tuple[str, ...]) -> bool:
+    """True when `keys` type words, not only move and press Enter or Escape."""
+    return any(key not in (ENTER, DOWN, ESCAPE) for key in keys)
+
+
+def other_row_showing(tail: str, choices: int) -> bool:
+    """True when the newest thing on the terminal (ANSI already stripped) is a question dialog with `choices`
+    options followed by its "Type something." row and its "Chat about this" row, so `choices` Down presses land
+    on the row that takes typed words. A question with previews has no such row."""
+    flat = re.sub(r"\s+", "", tail)
+    cut = flat.rfind(_FOOTER)
+    if cut < 0 or _FOOTER_TAIL.fullmatch(flat[cut + len(_FOOTER) :]) is None:
+        return False
+    chat = flat.rfind(f"{choices + 2}.Chataboutthis", 0, cut)
+    return chat >= 0 and flat.rfind(f"{choices + 1}.Typesomething.", 0, chat) >= 0
+
+
 def _pick(prompt: Prompt, number: int) -> Answer:
     return Answer((*(DOWN,) * (number - 1), ENTER), f"Got it: {prompt.choices[number - 1].label}.")
 
@@ -301,7 +323,7 @@ def _facts(prompt: Prompt) -> list[str]:
     return lines
 
 
-def _options(prompt: Prompt) -> list[str]:
+def _options(prompt: Prompt, typing: bool = True) -> list[str]:
     if prompt.kind == PERMISSION:
         if prompt.cut:
             return [f"`{DENY}` to deny.", OPEN_APP_COMMAND]
@@ -310,7 +332,7 @@ def _options(prompt: Prompt) -> list[str]:
         out = []
         for number, choice in enumerate(prompt.choices, 1):
             out.append(f"`{number}` {choice.label}" + (f": {choice.description}" if choice.description else ""))
-        return [*out, TYPE_OPTION]
+        return [*out, TYPE_OPTION] if typing else [*out, ESC_OPTION]
     if prompt.kind == PERMISSION_APP:
         return [OPEN_APP_PERMISSION, ESC_OPTION]
     return [OPEN_APP_QUESTION, ESC_OPTION]
@@ -341,7 +363,8 @@ def waiting_message(
     body = _facts(prompt) if prompt.kind in (PERMISSION, PERMISSION_APP) else ([prompt.question] if prompt.question else [])
     if prompt.kind == APP_ONLY and prompt.why_app:
         body.append(f"This one cannot be answered here: {prompt.why_app}.")
-    return _tidy(f"{tag} {head}\n" + "\n".join(body) + f"\n\n{next_block(_options(prompt))}")
+    typing = not refused.startswith(NO_TYPED_ANSWER)
+    return _tidy(f"{tag} {head}\n" + "\n".join(body) + f"\n\n{next_block(_options(prompt, typing))}")
 
 
 def more_waiting(rows: list[tuple[str, float]]) -> str:

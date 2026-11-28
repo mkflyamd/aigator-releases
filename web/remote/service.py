@@ -19,7 +19,7 @@ from typing import Awaitable, Callable
 
 from remote import commands, prompts
 from remote.guard import limit
-from remote.session_host import Declined, HostError, OpenElsewhere, Project, RestoredSession, SessionHost, StalePrompt
+from remote.session_host import Declined, HostError, NoTypedAnswer, OpenElsewhere, Project, RestoredSession, SessionHost, StalePrompt
 from remote.state import State
 
 _log = logging.getLogger(__name__)
@@ -446,6 +446,8 @@ class RemoteService:
         except StalePrompt as exc:
             session.waiting, session.prompt, session.asking_since = False, None, None
             raise PromptGone(str(exc)) from exc
+        except NoTypedAnswer as exc:
+            raise PromptRefused(shown, prompts.no_typed_answer(shown)) from exc
         except HostError as exc:
             raise RemoteError(str(exc)) from exc
         session.last_activity = self._clock()

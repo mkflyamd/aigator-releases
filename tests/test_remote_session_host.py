@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+from pathlib import Path
 
 import pytest
 
@@ -11,7 +12,7 @@ import agent_sessions
 import agent_state
 from remote import prompts
 from remote.commands import agent_result
-from remote.session_host import HostError, LocalPtyHost, StalePrompt
+from remote.session_host import HostError, LocalPtyHost, NoTypedAnswer, StalePrompt
 from routes import terminal
 from skills.code_agent import projects
 
@@ -256,6 +257,50 @@ async def test_the_keys_are_typed_in_order_and_the_prompt_is_cleared(typed):
     assert typed == [(PTY, prompts.DOWN), (PTY, prompts.ENTER)]
     assert agent_state.read_prompt(PTY) is None
     assert agent_state.read_states([PTY])[PTY]["state"] == "asking"
+
+
+def _ask(*labels):
+    options = [{"label": label, "description": ""} for label in labels]
+    return {"tool_name": "AskUserQuestion", "tool_input": {"questions": [{"question": "Which?", "options": options}]}}
+
+
+def _real_screen(name):
+    return (Path(__file__).parent / "fixtures" / "ask_user_question" / name).read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "name, labels",
+    [("two_options.txt", ("Red", "Blue")), ("four_options.txt", ("Apple", "Banana", "Cherry", "Date"))],
+)
+async def test_typed_words_go_down_onto_the_other_row_of_a_real_question_screen(typed, screen, name, labels):
+    screen.text = _real_screen(name)
+    _show(_ask(*labels))
+    host = LocalPtyHost()
+    shown = await host.prompt(PTY)
+    keys = (*(prompts.DOWN,) * len(labels), "Purple", prompts.ENTER)
+    await host.answer(PTY, shown.id, keys)
+    assert [key for _, key in typed] == list(keys)
+
+
+@pytest.mark.parametrize("name", ["with_previews.txt", "four_options.txt"])
+async def test_typed_words_are_refused_when_the_screen_has_no_row_for_them(typed, screen, name):
+    screen.text = _real_screen(name)
+    _show(_ask("Compact", "Roomy"))
+    host = LocalPtyHost()
+    shown = await host.prompt(PTY)
+    with pytest.raises(NoTypedAnswer):
+        await host.answer(PTY, shown.id, (prompts.DOWN, prompts.DOWN, "Purple", prompts.ENTER))
+    assert typed == []
+    assert agent_state.read_prompt(PTY) is not None
+
+
+async def test_a_numbered_pick_does_not_need_the_other_row(typed, screen):
+    screen.text = _real_screen("with_previews.txt")
+    _show(_ask("Compact", "Roomy"))
+    host = LocalPtyHost()
+    shown = await host.prompt(PTY)
+    await host.answer(PTY, shown.id, (prompts.DOWN, prompts.ENTER))
+    assert [key for _, key in typed] == [prompts.DOWN, prompts.ENTER]
 
 
 async def test_a_denied_turn_is_reported_idle_because_the_agent_fires_no_hook(typed):
