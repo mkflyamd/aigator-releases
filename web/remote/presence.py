@@ -24,8 +24,10 @@ def is_away() -> bool:
 
 
 def _screen_locked() -> bool:
-    """Locked only when the input desktop is refused with "access denied" and nobody has touched the machine for a
-    few seconds. Any other failure (a sandboxed process, session 0, a remote session, the UAC prompt) is not a lock."""
+    """Locked when the input desktop is refused with "access denied" and nobody has touched the machine for a few
+    seconds. The UAC secure desktop is refused the same way, so only the idle gate tells it from a lock: a person
+    answering the prompt has just touched the machine. Any other failure (a sandboxed process, session 0, a remote
+    session) is not a lock."""
     desktop, error = _open_input_desktop()
     if desktop:
         _close_desktop(desktop)
