@@ -260,6 +260,9 @@
             <button class="smodal-tab" data-tab="general">
               <span class="tab-icon">⊞</span>General
             </button>
+            <button class="smodal-tab" data-tab="remote">
+              <span class="tab-icon">⇄</span>Remote control
+            </button>
           </nav>
           <div class="smodal-sidebar-footer">
             <button
@@ -1164,8 +1167,39 @@
               </div>
             </details>
 
-            <!-- Remote control -->
-            <div class="spanel-divider" style="margin-top: 8px">Remote control</div>
+            <!-- Server -->
+            <div class="spanel-divider" style="margin-top: 8px">Server</div>
+            <div class="srow">
+              <div class="section-status" id="server-dot"></div>
+              <div class="srow-info">
+                <div class="srow-label">Server</div>
+                <div class="srow-sub" id="server-label">Checking…</div>
+              </div>
+              <div class="srow-actions server-row">
+                <button id="restart-btn" class="btn-ghost">Restart</button>
+                <button id="stop-btn" class="btn-danger">Stop</button>
+                <button id="start-btn" class="btn-primary hidden">Start</button>
+              </div>
+            </div>
+
+            <!-- Storage -->
+            <div class="spanel-divider" style="margin-top: 8px">Storage</div>
+            <div id="storage-rows">
+              <div class="srow">
+                <div class="section-status"></div>
+                <div class="srow-info">
+                  <div class="srow-sub" id="storage-loading">Loading…</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ═══ Remote control Panel ═══ -->
+          <div class="smodal-panel hidden" id="spanel-remote">
+            <div class="spanel-title">Remote control</div>
+            <div class="spanel-sub">Run Claude sessions from Teams and Slack.</div>
+
+            <div class="spanel-divider">From Teams and Slack</div>
             <div class="srow">
               <div class="section-status" id="teams-remote-control-dot"></div>
               <div class="srow-info">
@@ -1267,26 +1301,6 @@
             <div class="srow">
               <div class="section-status st-dim"></div>
               <div class="srow-info">
-                <div class="srow-label">Time limit</div>
-                <div class="srow-sub">
-                  Hours after switching on before remote control turns itself off
-                </div>
-              </div>
-              <div class="srow-actions">
-                <input
-                  id="remote-armed-max-hours"
-                  type="number"
-                  min="1"
-                  max="168"
-                  step="1"
-                  class="key-field"
-                  style="width: 80px; font-size: 0.82rem; padding: 5px 10px"
-                />
-              </div>
-            </div>
-            <div class="srow">
-              <div class="section-status st-dim"></div>
-              <div class="srow-info">
                 <div class="srow-label">Messages to other agents</div>
                 <div class="srow-sub">
                   Most messages per hour you can send to one other agent from chat. 0 for no limit
@@ -1306,32 +1320,9 @@
             </div>
             <div class="srow-note" id="remote-settings-error" style="display: none"></div>
 
-            <!-- Server -->
-            <div class="spanel-divider" style="margin-top: 8px">Server</div>
-            <div class="srow">
-              <div class="section-status" id="server-dot"></div>
-              <div class="srow-info">
-                <div class="srow-label">Server</div>
-                <div class="srow-sub" id="server-label">Checking…</div>
-              </div>
-              <div class="srow-actions server-row">
-                <button id="restart-btn" class="btn-ghost">Restart</button>
-                <button id="stop-btn" class="btn-danger">Stop</button>
-                <button id="start-btn" class="btn-primary hidden">Start</button>
-              </div>
-            </div>
-
-            <!-- Storage -->
-            <div class="spanel-divider" style="margin-top: 8px">Storage</div>
-            <div id="storage-rows">
-              <div class="srow">
-                <div class="section-status"></div>
-                <div class="srow-info">
-                  <div class="srow-sub" id="storage-loading">Loading…</div>
-                </div>
-              </div>
-            </div>
+            <div id="remote-agents-slot"></div>
           </div>
+          <!-- /spanel-remote -->
 
           <!-- Tools panel -->
           <div class="smodal-panel hidden" id="spanel-tools">

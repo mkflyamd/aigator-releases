@@ -3,12 +3,13 @@ from remote import commands
 
 from remote import loop as remote_loop
 from remote.guard import Guard
+from remote.master import Master
 from remote.loop import RemoteLoop
 from remote.runner import RemoteRunner
 from remote.service import RemoteService
 from remote.session_host import Project
 from remote.state import State
-from tests.test_remote_runner import Clock, FakeChannel, FakeHost
+from tests.test_remote_runner import BUDGET, Clock, FakeChannel, FakeHost
 
 
 class PollingChannel(FakeChannel):
@@ -30,8 +31,11 @@ class Setup:
         self.state = State(tmp_path / "s.json")
         self.channel = PollingChannel(self.state)
         self.guard = Guard(clock=self.clock)
-        service = RemoteService(FakeHost(), default_project=lambda: Project("p", "P", "C:/p"), clock=self.clock)
-        self.runner = RemoteRunner(self.channel, service, self.guard, self.state, clock=self.clock)
+        self.host = FakeHost()
+        service = RemoteService(self.host, default_project=lambda: Project("p", "P", "C:/p"), clock=self.clock)
+        self.master = Master(self.state, self.clock)
+        self.service = service
+        self.runner = RemoteRunner(self.channel, service, self.guard, self.state, clock=self.clock, master=self.master)
         self.enabled = False
         self.loop = RemoteLoop(self.runner, lambda: self.enabled, clock=self.clock, poll_every=10.0)
 
@@ -49,6 +53,7 @@ async def test_disabled_does_nothing(s):
 
 
 async def test_enabling_arms_polls_and_says_online_once(s):
+    s.master.arm()
     s.enabled = True
     await s.loop.step()
     await s.loop.step()
@@ -57,6 +62,7 @@ async def test_enabling_arms_polls_and_says_online_once(s):
 
 
 async def test_polls_only_every_poll_interval(s):
+    s.master.arm()
     s.enabled = True
     await s.loop.step()
     await s.loop.step()
@@ -67,6 +73,7 @@ async def test_polls_only_every_poll_interval(s):
 
 
 async def test_a_failed_poll_and_its_recovery_never_say_online_again(s):
+    s.master.arm()
     s.enabled = True
     await s.loop.step()
     s.channel.fail = True
@@ -88,11 +95,23 @@ async def test_a_restart_with_the_chat_window_open_says_nothing(s):
 
 
 async def test_turning_the_switch_off_disarms(s):
+    s.master.arm()
     s.enabled = True
     await s.loop.step()
     s.enabled = False
     await s.loop.step()
     assert s.guard.armed is False
+
+
+async def test_a_channel_whose_switch_is_off_still_stops_its_sessions_at_the_deadline(s):
+    s.master.arm()
+    await s.service.start(BUDGET, "job")
+    s.clock.now += 12 * 3600 + 1
+    await s.loop.step()
+    await s.loop.step()
+    assert s.host.killed == ["pty-1"]
+    assert s.service.list() == []
+    assert s.channel.posted == []
 
 
 def test_default_project_prefers_the_remote_setting_then_the_active_project(monkeypatch):
@@ -181,6 +200,7 @@ async def test_a_slow_channel_step_does_not_hold_the_other_channel(monkeypatch):
 
 
 async def test_switching_off_and_on_again_does_not_say_online_a_second_time(s):
+    s.master.arm()
     s.enabled = True
     await s.loop.step()
     s.enabled = False
