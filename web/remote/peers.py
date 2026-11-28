@@ -149,10 +149,11 @@ def addressable(peer: Peer, reserved: frozenset[str]) -> bool:
     return title != peer.session_id and title.split()[0].casefold() not in reserved
 
 
-def resolve(peers: list[Peer], text: str, reserved: frozenset[str]) -> Resolved | None:
+def resolve(peers: list[Peer], text: str, reserved: frozenset[str], colon_only: bool = False) -> Resolved | None:
     """The peer a message starts with. The name is the whole session name, the session id or its first
     eight characters, matched exactly apart from case, and followed by a space, a colon or the end.
-    The longest name wins; two sessions with the same name are returned as candidates."""
+    The longest name wins; two sessions with the same name are returned as candidates. With `colon_only`
+    a name counts only when a colon follows it."""
     text = text.strip()
     if text.startswith("@"):
         text = text[1:].lstrip()
@@ -168,6 +169,8 @@ def resolve(peers: list[Peer], text: str, reserved: frozenset[str]) -> Resolved 
                 continue
             rest = text[n:]
             if rest and not (rest[0].isspace() or rest[0] == ":"):
+                continue
+            if colon_only and not rest.startswith(":"):
                 continue
             if n > best:
                 best, found = n, {}

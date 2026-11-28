@@ -452,3 +452,28 @@ def test_the_list_text_with_only_agents_says_no_remote_sessions_are_running():
     text = commands.session_list([], [("MergeBrain", "live")], 0, "MergeBrain")
     assert "No remote sessions are running." in text
     assert "Send a request and it starts a new session." in text
+
+
+async def test_an_answer_that_starts_with_an_agents_name_goes_to_the_waiting_session(pw):
+    await baselined(pw)
+    await pw.say("@gator start something")
+    pw.service.list()[0].waiting = True
+    pw.host.delivered.clear()
+    await pw.say("@gator MergeBrain is done")
+    assert pw.gateway.sent == []
+    assert pw.host.delivered == [("pty-1", "MergeBrain is done")]
+
+
+async def test_a_colon_still_reaches_the_agent_while_a_session_waits(pw):
+    await baselined(pw)
+    await pw.say("@gator start something")
+    pw.service.list()[0].waiting = True
+    pw.host.delivered.clear()
+    await pw.say("@gator MergeBrain: rebase please")
+    assert pw.gateway.sent == [("MergeBrain", "rebase please", "Teams chat")]
+    assert pw.host.delivered == []
+
+
+def test_colon_only_ignores_a_name_followed_by_a_space():
+    assert resolve(peers_of("MergeBrain"), "MergeBrain hi", RESERVED, colon_only=True) is None
+    assert resolve(peers_of("MergeBrain"), "MergeBrain: hi", RESERVED, colon_only=True).text == "hi"

@@ -290,10 +290,10 @@ class RemoteRunner:
             reach,
         )
 
-    async def _try_peer(self, text: str) -> bool:
+    async def _try_peer(self, text: str, colon_only: bool = False) -> bool:
         """Sends `text` to the other agent its first words name. False when they name none."""
         peers = await self._peer_list()
-        found = resolve_peer(peers, text, self._reserved()) if peers else None
+        found = resolve_peer(peers, text, self._reserved(), colon_only) if peers else None
         if found is None:
             return False
         if found.peer is None:
@@ -355,10 +355,12 @@ class RemoteRunner:
         if named is not None and rest.strip():
             await self._deliver(named, rest.strip())
             return
-        if tagged and await self._try_peer(text):
-            return
         sessions = self._service.list()
         waiting = [s for s in sessions if s.waiting]
+        # A waiting session is being answered: the answer may start with a peer's name, so only
+        # `name: text` reaches the peer then.
+        if tagged and await self._try_peer(text, colon_only=bool(waiting)):
+            return
         if len(waiting) == 1:
             await self._deliver(waiting[0], text)
         elif len(sessions) == 1:
