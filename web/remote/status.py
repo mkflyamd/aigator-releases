@@ -17,6 +17,7 @@ REASONS = {
     "replies_blocked_admin": "Your administrator has switched off replies to your own chat, so remote control cannot answer you.",
     "replies_off": "Replies to your own chat are off. Turn them on in Settings first.",
     "stopped_from_chat": "You stopped remote control from chat.",
+    "off": "Remote control is not turned on. Arm it in Settings.",
     "expiring": "The time is up. Stopping your remote sessions.",
     "expired": "Remote control reached its 12 hour limit and turned off.",
 }
