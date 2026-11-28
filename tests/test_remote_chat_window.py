@@ -423,16 +423,21 @@ async def test_the_window_is_stored_per_channel(tmp_path):
 # ---------------------------------------------------------------- the rate limit notice
 
 
-async def test_the_slow_down_notice_says_how_long_to_wait_in_words(w):
+async def test_a_flood_gets_one_notice_then_one_with_the_count_of_the_rest(w):
     await opened(w)
     for _ in range(19):
         await say(w, "list")
-    assert not any("Slow down" in p for p in w.channel.posted)
+    assert not any("Not sent" in p for p in w.channel.posted)
     for _ in range(5):
         await say(w, "list")
-    slow = [p for p in w.channel.posted if "Slow down" in p]
+    slow = [p for p in w.channel.posted if "Not sent" in p]
     assert slow == [commands.slow_down(600)]
     assert "• Wait 10 minutes, then send it again." in slow[0]
+    w.clock.now += 30
+    await w.runner.tick()
+    slow = [p for p in w.channel.posted if "Not sent" in p]
+    assert slow[1:] == [commands.slow_down(570, 4)]
+    assert "4 messages, because too many came at once" in slow[1]
 
 
 def test_guard_wait_seconds_counts_down_from_the_oldest_command():
@@ -497,7 +502,7 @@ AGENT_KEYS = {
     "status_sleeping", "status_failed", "waking", "wake_failed", "lane_lost",
 }
 TIPS_KEYS = {"greeting", "help_open", "help_closed"}
-NO_NEXT_KEYS = {"done", "waiting_open", "progress", "list_idle", "status"}
+NO_NEXT_KEYS = {"done", "done_long", "waiting_open", "progress", "list_idle"}
 QUIET_NOTE = "It also closes after 30 minutes of quiet."
 
 
@@ -529,14 +534,16 @@ def _deck():
         "error": commands.error_reply("No default project is set. Choose one in Settings, then resend."),
         "which_session": commands.which_session(["budget", "other"]),
         "which_to_stop": commands.which_to_stop(["budget", "other"]),
-        "status": commands.session_status("budget", commands.WORKING, 1000.0, 2000.0),
+        "status": commands.session_status(
+            "budget", commands.WORKING, 1000.0, 2000.0, now=1240.0, last_step="running tests"
+        ),
         "working": commands.working("budget", "main", False),
         "progress": commands.progress("budget", 130),
-        "done": commands.agent_result("Claude", "budget", "Done.", "Two files are open."),
-        "done_empty": commands.agent_result("Claude", "budget", "Done.", ""),
-        "done_long": commands.agent_result("Claude", "budget", "Done.", "Outcome. " + "word " * 2000),
-        "waiting_choices": commands.agent_result("Claude", "budget", "Waiting for your answer.", question, True),
-        "waiting_open": commands.agent_result("Claude", "budget", "Waiting for your answer.", "Which?", True),
+        "done": commands.agent_result("Claude", "budget", "Done.", "Two files are open.")[0],
+        "done_empty": commands.agent_result("Claude", "budget", "Done.", "")[0],
+        "done_long": commands.agent_result("Claude", "budget", "Done.", "Outcome. " + "word " * 2000)[0],
+        "waiting_choices": commands.agent_result("Claude", "budget", "Waiting for your answer.", question, True)[0],
+        "waiting_open": commands.agent_result("Claude", "budget", "Waiting for your answer.", "Which?", True)[0],
         "agent_stopped": commands.agent_stopped("budget"),
         "agent_exited": commands.agent_exited("budget"),
         "list_sleeping": commands.session_list([("budget", "Budget", commands.SLEEPING, 0.0, "")]),
@@ -612,12 +619,12 @@ def test_the_deck_texts_match_the_copy():
         "[\U0001F40A Gator] This chat is already open.\n\nNext:\n• Type a request to run it.\n• `help` to see all options."
     )
     assert deck["stale_one"] == (
-        "[\U0001F40A Gator] Skipped a message you sent while AI Gator was off, because it was more than 15 minutes old.\n\n"
+        "[\U0001F40A Gator] Not sent: a message you sent while AI Gator was off, because it was more than 15 minutes old.\n\n"
         "Next:\n• Send it again if you still need it."
     )
-    assert deck["stale_many"].startswith("[\U0001F40A Gator] Skipped 3 messages you sent while AI Gator was off")
+    assert deck["stale_many"].startswith("[\U0001F40A Gator] Not sent: 3 messages you sent while AI Gator was off")
     assert deck["slow_down"] == (
-        "[\U0001F40A Gator] Slow down, that was too many messages at once.\n\nNext:\n• Wait 10 minutes, then send it again."
+        "[\U0001F40A Gator] Not sent: too many messages at once.\n\nNext:\n• Wait 10 minutes, then send it again."
     )
     assert deck["timeout"] == (
         "[\U0001F40A Gator] Remote control turned itself off after 24 hours.\n\n"
@@ -638,8 +645,7 @@ def test_the_deck_texts_match_the_copy():
     assert deck["stopped_one"].startswith("[\U0001F40A Gator] Stopped 1 session. Remote control is off.\n\n")
     assert deck["stopped_many"].startswith("[\U0001F40A Gator] Stopped 3 sessions. Remote control is off.\n\n")
     assert deck["status"] == (
-        f"[\U0001F40A Gator - budget] Working since {commands.clock_time(1000.0)}.\n"
-        f"Last activity {commands.clock_time(2000.0)}."
+        "[\U0001F40A Gator - budget] Working for 4 min. Last step: running tests.\n\nNext:\n• `stop` to stop it."
     )
     assert deck["working"] == (
         "[\U0001F40A Gator - budget] Working on it.\nBranch: main\n\nNext:\n• `stop` to stop it."
@@ -731,7 +737,7 @@ async def test_everything_a_whole_session_posts_carries_the_prefix_and_a_next_bl
         for p in w.channel.posted
         if p.startswith(_BASE + " - ") and "Next:" not in p and "Working since" not in p
     ]
-    assert agent_replies == [commands.agent_result("Claude", "budget", "Waiting for your answer.", "Which one?", True, project="Budget")]
+    assert agent_replies == [commands.agent_result("Claude", "budget", "Waiting for your answer.", "Which one?", True, project="Budget")[0]]
     no_next = [p for p in w.channel.posted if "\n\nNext:\n" not in p]
     assert all(p.startswith(_BASE + " - ") or p.startswith(_BASE + "] 1 session") for p in no_next)
 
@@ -759,15 +765,15 @@ async def test_status_of_one_session_says_its_state_since_when_and_last_activity
     await say(w, "run the tests")
     await say(w, "status budget")
     out = w.channel.posted[-1]
-    assert out.startswith("[\U0001F40A Gator - Budget] Working since ")
-    assert "Next:" not in out and "Last activity" not in out
+    assert out.startswith("[\U0001F40A Gator - Budget] Working for ")
+    assert "Next:\n• `stop` to stop it." in out and "Last activity" not in out
 
 
 async def test_status_with_no_name_and_one_session_describes_that_session(w):
     await opened(w)
     await say(w, "run the tests")
     await say(w, "status")
-    assert w.channel.posted[-1].startswith("[\U0001F40A Gator - Budget] Working since ")
+    assert w.channel.posted[-1].startswith("[\U0001F40A Gator - Budget] Working for ")
 
 
 async def test_the_deck_wording_for_a_stop_that_needs_a_name_and_for_an_exit(w):
@@ -875,6 +881,9 @@ async def test_on_each_channel_with_the_gate_off_the_window_works_and_nothing_is
     run = chat.say(2, "run the tests", clock.now)
     await _history(runner, chat, run, hi)
     assert host.delivered == [("pty-1", "run the tests")]
+    host.states["pty-1"] = {"state": "idle", "at": clock.now + 1}
+    host.last["pty-1"] = "Done."
+    await runner.tick()
     clock.now += WINDOW + 1
     await runner.tick()
     assert state.window(chat.name) is None
@@ -1031,8 +1040,8 @@ def test_the_cap_and_the_greeting_line_are_named_constants():
     assert commands.UNTAGGED_MAX_CHARS == 1500
     assert commands.EVERYTHING_GOES_TO_AGENT in commands.greeting()
     assert commands.too_long() == (
-        "[\U0001F40A Gator] That message is too long to run from this chat, so it was not sent.\n\n"
-        "Next:\n• Start it with `@gator` to send it anyway.\n• Or shorten it and send it again."
+        "[\U0001F40A Gator] Not sent: over 1500 characters.\n\n"
+        "Next:\n• Add `@gator` to send up to 4096.\n• Or shorten it and send it again."
     )
     assert commands.attachment_not_sent() == (
         "[\U0001F40A Gator] Attachments are not sent from this chat.\n\nNext:\n• Describe what you need in text, and send that."
@@ -1087,18 +1096,18 @@ async def test_an_attachment_with_no_text_is_ignored_quietly(w):
     assert w.channel.posted == [commands.greeting()]
 
 
-async def test_the_plain_line_is_posted_once_per_window_not_once_per_message(w):
+async def test_too_long_is_said_every_time_and_the_attachment_line_once_per_window(w):
     await opened(w)
     for _ in range(4):
         await say(w, LONG)
     await w.feed(_inbound(w, "pasted", attachments=True))
     await w.feed(_inbound(w, "pasted again", attachments=True))
-    assert w.channel.posted == [commands.greeting(), commands.too_long(), commands.attachment_not_sent()]
+    assert w.channel.posted == [commands.greeting()] + [commands.too_long()] * 4 + [commands.attachment_not_sent()]
     await say(w, "bye")
     await say(w, "@gator hi")
     await say(w, LONG)
     await say(w, LONG)
-    assert w.channel.posted.count(commands.too_long()) == 2
+    assert w.channel.posted.count(commands.too_long()) == 6
     assert w.channel.posted.count(commands.attachment_not_sent()) == 1
     assert w.host.delivered == []
 
@@ -1152,7 +1161,7 @@ async def test_on_each_channel_an_oversize_untagged_message_is_held_back_but_the
     await _history(runner, chat, big, hi)
     assert host.delivered == []
     assert len(chat.posts()) == 2
-    assert "too long to run from this chat" in str(chat.posts()[1])
+    assert "Not sent: over 1500 characters" in str(chat.posts()[1])
     tagged = chat.say(3, f"@gator {LONG}", clock.now)
     await _history(runner, chat, tagged, big, hi)
     assert host.delivered == [("pty-1", LONG.strip())]

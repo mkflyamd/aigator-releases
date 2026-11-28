@@ -7,13 +7,14 @@ import logging
 import re
 from datetime import datetime, timezone
 
-from remote.channel import ChannelRefused, InboundMessage, require_autosend, teams_html
+from remote.channel import ChannelRefused, InboundMessage, PostUncertain, require_autosend, teams_html
 from remote.commands import is_own_message
 from remote.state import State
 
 _log = logging.getLogger(__name__)
 
 SELF_CHAT_ID = "48:notes"
+_SERVER_ANSWERED = "Skype API:"  # the detail Teams gives when the server answered with an error
 _FRACTION = re.compile(r"(\.\d{6})\d+")
 _QUOTE = re.compile(
     r"<blockquote\b[^>]*itemtype=[\"']http://schema\.skype\.com/Reply[\"'][^>]*>.*?</blockquote>",
@@ -92,6 +93,9 @@ class TeamsSelfChat:
             if raw.get("message_type") == "message"
         ]
 
+    def poll_replies(self) -> list[InboundMessage]:
+        return []
+
     def post(self, text: str, reply_to: str | None = None) -> str:
         if not self.is_own_self_chat():
             _log.warning("Remote control refused to post: %s is not the own self-chat", self._chat_id)
@@ -103,7 +107,9 @@ class TeamsSelfChat:
         try:
             message_id = send_message(self._chat_id, content)
         except Exception as exc:
-            raise ChannelRefused(str(exc)) from exc
+            if str(getattr(exc, "detail", "")).startswith(_SERVER_ANSWERED):
+                raise ChannelRefused(str(exc)) from exc
+            raise PostUncertain(str(exc)) from exc
         if message_id:
             self._state.record_post(self.name, message_id)
         return message_id

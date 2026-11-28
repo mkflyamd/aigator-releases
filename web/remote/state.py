@@ -14,6 +14,7 @@ _log = logging.getLogger(__name__)
 
 POSTED_IDS_KEEP = 200
 PROMPT_MESSAGES_KEEP = 50
+UNROUTED_PREFIX = "unrouted:"  # the id kept for a prompt message the channel gave no id for: no reply can route to it
 LANE_STATES = ("live", "sleeping", "failed")
 MASTER_KEY = "master"
 READ_TRIES = 4
@@ -168,7 +169,7 @@ class State:
     def record_prompt_message(
         self, channel: str, message_id: str, session_id: str, prompt_id: str, expires_at: float, now: float
     ) -> None:
-        """Which posted message asked which session's prompt. Only recorded; nothing reads it to route a reply yet."""
+        """Which posted message asked which session's prompt, so a reply to that message reaches that session."""
         with self._lock:
             data = self._load()
             entry = self._channel(data, channel)
@@ -183,20 +184,56 @@ class State:
             entry["prompt_messages"] = kept[-PROMPT_MESSAGES_KEEP:]
             self._save(data)
 
-    def clear_prompt_messages(self, channel: str, session_id: str) -> None:
+    def clear_prompt_messages(self, channel: str, session_id: str, keep_prompt_id: str = "") -> None:
+        """Forgets the prompt messages of a session, except the one for `keep_prompt_id`."""
         with self._lock:
             data = self._load()
             entry = self._channel(data, channel)
             before = entry.get("prompt_messages", [])
-            after = [m for m in before if not (isinstance(m, dict) and m.get("session_id") == session_id)]
+
+            def gone_one(m) -> bool:
+                return isinstance(m, dict) and m.get("session_id") == session_id and m.get("prompt_id") != keep_prompt_id
+
+            after = [m for m in before if not gone_one(m)]
             if len(after) != len(before):
+                closed_at = time.time()
+                gone = [{**m, "closed_at": closed_at} for m in before if gone_one(m)]
                 entry["prompt_messages"] = after
+                entry["prompt_closed"] = [*entry.get("prompt_closed", []), *gone][-PROMPT_MESSAGES_KEEP:]
                 self._save(data)
 
     def prompt_messages(self, channel: str) -> list[dict]:
         with self._lock:
             found = (self._load().get(channel) or {}).get("prompt_messages", [])
         return [m for m in found if isinstance(m, dict)]
+
+    def recently_closed_prompt_messages(self, channel: str, since: float) -> list[dict]:
+        """Prompt messages whose prompt closed after `since` (unix seconds), for replies that still arrive."""
+        with self._lock:
+            found = (self._load().get(channel) or {}).get("prompt_closed", [])
+        return [m for m in found if isinstance(m, dict) and m.get("closed_at", 0) > since]
+
+    def find_prompt_message(self, channel: str, message_id: str, now: float) -> tuple[dict, bool] | None:
+        """The record for a posted prompt message and whether it is still open, or None when this chat
+        never posted it or it has expired. A closed one is a prompt that has been answered or replaced."""
+        with self._lock:
+            entry = self._load().get(channel) or {}
+            for key, is_open in (("prompt_messages", True), ("prompt_closed", False)):
+                for m in entry.get(key, []):
+                    if isinstance(m, dict) and m.get("message_id") == message_id and m.get("expires_at", 0) > now:
+                        return dict(m), is_open
+        return None
+
+    def advance_reply_cursor(self, channel: str, message_id: str, reply_ts: str) -> None:
+        """Remembers the newest reply read in the thread of a prompt message, so each reply is read once."""
+        with self._lock:
+            data = self._load()
+            entry = self._channel(data, channel)
+            for m in [*entry.get("prompt_messages", []), *entry.get("prompt_closed", [])]:
+                if isinstance(m, dict) and m.get("message_id") == message_id:
+                    m["reply_ts"] = reply_ts
+                    self._save(data)
+                    return
 
     def lanes(self, channel: str) -> dict[str, dict]:
         """The channel's lanes by project id. A lane is the project's one remote session, live or

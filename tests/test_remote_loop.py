@@ -24,6 +24,9 @@ class PollingChannel(FakeChannel):
             raise RuntimeError("token expired")
         return []
 
+    def poll_replies(self):
+        return []
+
 
 class Setup:
     def __init__(self, tmp_path):
@@ -106,7 +109,7 @@ async def test_polls_only_every_poll_interval(s):
     assert s.channel.polls == 2
 
 
-async def test_a_failed_poll_and_its_recovery_never_say_online_again(s):
+async def test_a_failed_poll_and_its_recovery_say_why_once_and_never_online_again(s):
     s.master.arm()
     s.enabled = True
     await s.loop.step()
@@ -116,7 +119,11 @@ async def test_a_failed_poll_and_its_recovery_never_say_online_again(s):
     s.channel.fail = False
     s.clock.now += 10
     await s.loop.step()
-    assert s.channel.posted == [commands.online()]
+    s.clock.now += 10
+    await s.loop.step()
+    assert s.channel.posted[0] == commands.online()
+    assert len(s.channel.posted) == 2
+    assert s.channel.posted[1].startswith("[🐊 Gator] Back online.")
 
 
 async def test_a_restart_with_the_chat_window_open_says_nothing(s):

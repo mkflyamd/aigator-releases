@@ -12,7 +12,9 @@ import re
 from dataclasses import dataclass
 from typing import Callable
 
-from remote.commands import _tidy, agent_prefix, next_block
+import agent_wake
+
+from remote.commands import _tidy, agent_prefix, elapsed_words, next_block, system_reply
 
 COMMAND_MAX_CHARS = 150
 PATH_MAX_CHARS = 200
@@ -39,11 +41,17 @@ _SPLIT_RE = re.compile(r"[^A-Za-z0-9]+|(?<=[a-z])(?=[A-Z])")
 
 ALLOW, DENY = "allow", "deny"
 ALLOWED, DENIED = "Allowed once.", "Denied."
+CANCELLED = "Cancelled. The session is still running."
+ANSWER_SENT = "Sent your answer."
+ANSWER_MAX_CHARS = 500
 ALREADY_ANSWERED = "That was already answered in AI Gator."
 OPEN_APP_COMMAND = "Open AI Gator to review the whole command before allowing it."
 OPEN_APP_DRAFT = "Open AI Gator to review it and send."
 OPEN_APP_QUESTION = "Open AI Gator to answer this one."
 OPEN_APP_PERMISSION = "Open AI Gator to review and answer this permission."
+ESC_OPTION = "`esc` to cancel it. The session keeps running."
+NO_TYPED_ANSWER = "that question's screen has no row to type your own words into."
+TYPE_OPTION = "Or type your own answer."
 
 
 @dataclass(frozen=True)
@@ -192,9 +200,17 @@ def _digits(count: int) -> str:
     return f"1 to {count}" if count > 2 else "1 or 2"
 
 
-def resolve(prompt: Prompt, text: str) -> Answer | Refused:
-    """The keys that answer `prompt` with the user's reply, or why the reply is not an answer."""
-    reply = " ".join(text.split())
+def interrupt(prompt: Prompt) -> Answer:
+    """Escape: cancels whatever the agent is asking and ends its turn. The session itself stays up."""
+    return Answer((ESCAPE,), CANCELLED, ends_turn=True)
+
+
+def resolve(prompt: Prompt, text: str, free_text: bool = False) -> Answer | Refused:
+    """The keys that answer `prompt` with the user's reply, or why the reply is not an answer. With `free_text`,
+    a reply to a question that is not one of its choices is typed as the question's own "other" answer: only for a
+    quote-reply to the question or a tagged message, never for a note that merely arrived while it waited.
+    Whatever is typed is plain text: control characters and escape sequences never reach the terminal."""
+    reply = agent_wake.clean(text)
     if prompt.kind == PERMISSION:
         word = reply.lower().rstrip(".!")
         if word == ALLOW and not prompt.cut:
@@ -213,6 +229,18 @@ def resolve(prompt: Prompt, text: str) -> Answer | Refused:
     for number, choice in enumerate(prompt.choices, 1):
         if reply.lower() == choice.label.lower():
             return _pick(prompt, number)
+    if free_text and reply:
+        if len(reply) > ANSWER_MAX_CHARS:
+            return Refused(
+                f"that answer is {len(reply)} characters and the limit is {ANSWER_MAX_CHARS}. "
+                "Shorten it and send it again, or answer it in AI Gator."
+            )
+        return Answer((*(DOWN,) * len(prompt.choices), reply, ENTER), ANSWER_SENT)
+    if reply:
+        return Refused(
+            f"pick {_digits(len(prompt.choices))}. To answer in your own words, reply to this message "
+            "or start with `@gator`."
+        )
     return Refused(f"pick {_digits(len(prompt.choices))}, or answer it in AI Gator.")
 
 
@@ -253,6 +281,35 @@ def permission_dialog_showing(tail: str, prompt: Prompt | None = None) -> bool:
     return bool(identity) and identity in _BOXES.sub("", flat[call:])
 
 
+def escape_footer_showing(tail: str) -> bool:
+    """True when the newest thing on the terminal (ANSI already stripped) is a dialog whose footer offers Esc to
+    cancel, so an Escape typed now cancels that dialog and not something painted after it."""
+    flat = re.sub(r"\s+", "", tail)
+    cut = flat.rfind(_FOOTER)
+    return cut >= 0 and _FOOTER_TAIL.fullmatch(flat[cut + len(_FOOTER) :]) is not None
+
+
+def no_typed_answer(prompt: Prompt) -> str:
+    return f"{NO_TYPED_ANSWER} Pick {_digits(len(prompt.choices))}, or `esc` to cancel it."
+
+
+def types_text(keys: tuple[str, ...]) -> bool:
+    """True when `keys` type words, not only move and press Enter or Escape."""
+    return any(key not in (ENTER, DOWN, ESCAPE) for key in keys)
+
+
+def other_row_showing(tail: str, choices: int) -> bool:
+    """True when the newest thing on the terminal (ANSI already stripped) is a question dialog with `choices`
+    options followed by its "Type something." row and its "Chat about this" row, so `choices` Down presses land
+    on the row that takes typed words. A question with previews has no such row."""
+    flat = re.sub(r"\s+", "", tail)
+    cut = flat.rfind(_FOOTER)
+    if cut < 0 or _FOOTER_TAIL.fullmatch(flat[cut + len(_FOOTER) :]) is None:
+        return False
+    chat = flat.rfind(f"{choices + 2}.Chataboutthis", 0, cut)
+    return chat >= 0 and flat.rfind(f"{choices + 1}.Typesomething.", 0, chat) >= 0
+
+
 def _pick(prompt: Prompt, number: int) -> Answer:
     return Answer((*(DOWN,) * (number - 1), ENTER), f"Got it: {prompt.choices[number - 1].label}.")
 
@@ -266,7 +323,7 @@ def _facts(prompt: Prompt) -> list[str]:
     return lines
 
 
-def _options(prompt: Prompt) -> list[str]:
+def _options(prompt: Prompt, typing: bool = True) -> list[str]:
     if prompt.kind == PERMISSION:
         if prompt.cut:
             return [f"`{DENY}` to deny.", OPEN_APP_COMMAND]
@@ -275,10 +332,10 @@ def _options(prompt: Prompt) -> list[str]:
         out = []
         for number, choice in enumerate(prompt.choices, 1):
             out.append(f"`{number}` {choice.label}" + (f": {choice.description}" if choice.description else ""))
-        return out
+        return [*out, TYPE_OPTION] if typing else [*out, ESC_OPTION]
     if prompt.kind == PERMISSION_APP:
-        return [OPEN_APP_PERMISSION]
-    return [OPEN_APP_QUESTION]
+        return [OPEN_APP_PERMISSION, ESC_OPTION]
+    return [OPEN_APP_QUESTION, ESC_OPTION]
 
 
 def label(session: str, project: str) -> str:
@@ -286,19 +343,39 @@ def label(session: str, project: str) -> str:
     return agent_prefix(session, project, several=True)
 
 
-def waiting_message(session: str, project: str, prompt: Prompt, *, refused: str = "") -> str:
-    """One message for one waiting session. `refused` turns it into the answer to a reply that was not sent."""
-    head = f"Not sent: {refused}" if refused else f"Needs you: {prompt.lead}."
+def waiting_message(
+    session: str,
+    project: str,
+    prompt: Prompt,
+    *,
+    refused: str = "",
+    waited: float | None = None,
+    prefix: str = "",
+) -> str:
+    """One message for one waiting session. `refused` turns it into the answer to a reply that was not sent.
+    `waited` is set only for a message that went out after a wait. `prefix` replaces the label of a session
+    that is not Remote's own (another agent, a terminal)."""
+    tag = prefix or label(session, project)
+    after = f", waiting {elapsed_words(waited)}" if waited is not None else ""
+    head = f"Not sent: {refused}" if refused else f"Needs you: {prompt.lead}{after}."
     if prompt.kind == DRAFT:
-        return _tidy(f"{label(session, project)} {head}\n{OPEN_APP_DRAFT}")
+        return _tidy(f"{tag} {head}\n\n{next_block([OPEN_APP_DRAFT, ESC_OPTION])}")
     body = _facts(prompt) if prompt.kind in (PERMISSION, PERMISSION_APP) else ([prompt.question] if prompt.question else [])
     if prompt.kind == APP_ONLY and prompt.why_app:
         body.append(f"This one cannot be answered here: {prompt.why_app}.")
-    return _tidy(f"{label(session, project)} {head}\n" + "\n".join(body) + f"\n\n{next_block(_options(prompt))}")
+    typing = not refused.startswith(NO_TYPED_ANSWER)
+    return _tidy(f"{tag} {head}\n" + "\n".join(body) + f"\n\n{next_block(_options(prompt, typing))}")
 
 
-def confirmation(session: str, project: str, done: str) -> str:
-    return _tidy(f"{label(session, project)} {done}")
+def more_waiting(rows: list[tuple[str, float]]) -> str:
+    """The one line naming sessions that wait with no message of their own. rows are (session, seconds waiting)."""
+    names = ", ".join(f"{name} ({elapsed_words(seconds)})" for name, seconds in rows)
+    noun = "session needs" if len(rows) == 1 else "sessions need"
+    return system_reply(f"{len(rows)} more {noun} you: {names}.", ["`list` to see them."])
+
+
+def confirmation(session: str, project: str, done: str, *, prefix: str = "") -> str:
+    return _tidy(f"{prefix or label(session, project)} {done}")
 
 
 def answer_word(prompt: Prompt | None) -> str:

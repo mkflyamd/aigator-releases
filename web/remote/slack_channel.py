@@ -6,14 +6,19 @@ is the message time."""
 from __future__ import annotations
 
 import logging
+import re
+import time
 
-from remote.channel import ChannelRefused, InboundMessage, require_autosend, slack_mrkdwn
+from remote.channel import ChannelRefused, InboundMessage, PostUncertain, require_autosend, slack_mrkdwn
 from remote.commands import is_own_message
-from remote.state import State
+from remote.state import UNROUTED_PREFIX, State
 
 _log = logging.getLogger(__name__)
 
+_ERROR_CODE = re.compile(r"[a-z0-9_]+")  # a Slack error code: Slack answered. Anything else is a network failure
+
 HISTORY_LIMIT = 10
+RECENT_SECONDS = 15 * 60.0
 
 
 def _api(endpoint: str, params: dict | None = None, method: str = "GET") -> dict:
@@ -109,6 +114,58 @@ class SlackSelfDM:
             and not raw.get("app_id")
         ]
 
+    def poll_replies(self) -> list[InboundMessage]:
+        """Thread replies under the prompt messages waiting for an answer, and under those closed within the
+        last RECENT_SECONDS so a late reply is told it was already answered. `conversations.history` does not
+        list them. The newest ts read per thread is stored, so each reply comes back once."""
+        found: list[InboundMessage] = []
+        now = time.time()
+        records = [
+            m
+            for m in [
+                *self._state.prompt_messages(self.name),
+                *self._state.recently_closed_prompt_messages(self.name, now - RECENT_SECONDS),
+            ]
+            if m.get("expires_at", 0) > now and not str(m.get("message_id", "")).startswith(UNROUTED_PREFIX)
+        ]
+        if not records:
+            return found
+        channel = self._resolve_channel()
+        own = _own_user_id()
+        if not own:
+            return found
+        for record in records:
+            parent = str(record["message_id"])
+            seen = str(record.get("reply_ts") or parent)
+            data = _api("conversations.replies", {"channel": channel, "ts": parent, "oldest": seen, "limit": HISTORY_LIMIT})
+            if not data.get("ok"):
+                _log.warning("Slack replies failed: %s", data.get("error", "unknown"))
+                continue
+            replies = [
+                raw
+                for raw in data.get("messages", [])
+                if raw.get("ts")
+                and float(raw["ts"]) > float(seen)
+                and raw.get("subtype") in (None, "file_share")
+                and raw.get("user") == own
+                and not raw.get("bot_id")
+                and not raw.get("app_id")
+            ]
+            if not replies:
+                continue
+            self._state.advance_reply_cursor(self.name, parent, max((str(r["ts"]) for r in replies), key=float))
+            found.extend(
+                InboundMessage(
+                    id=str(raw["ts"]),
+                    text=_unescape(raw.get("text") or "").strip(),
+                    created_at=_epoch(raw["ts"]),
+                    attachments=bool(raw.get("files")),
+                    reply_to=parent,
+                )
+                for raw in replies
+            )
+        return sorted(found, key=lambda m: m.created_at, reverse=True)
+
     def post(self, text: str, reply_to: str | None = None) -> str:
         if not self.is_own_self_chat():
             _log.warning("Remote control refused to post: %s is not the own self-DM", self._channel_id)
@@ -118,7 +175,10 @@ class SlackSelfDM:
         require_autosend()
         sent = _api("chat.postMessage", {"channel": self._channel_id, "text": slack_mrkdwn(text)}, method="POST")
         if not sent.get("ok"):
-            raise ChannelRefused(f"Slack error: {sent.get('error', 'unknown')}")
+            error = str(sent.get("error") or "unknown")
+            if _ERROR_CODE.fullmatch(error):
+                raise ChannelRefused(f"Slack error: {error}")
+            raise PostUncertain(f"Slack error: {error}")
         message_id = str(sent.get("ts") or "")
         if message_id:
             self._state.record_post(self.name, message_id)

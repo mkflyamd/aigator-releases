@@ -13,16 +13,21 @@ import time
 from dataclasses import dataclass
 from typing import Callable
 
-from remote import commands, prompts
-from remote.channel import AutosendOff, Channel, InboundMessage
+from remote import commands, needs_you, prompts
+from remote.bystanders import TerminalWatch
+from remote.channel import AutosendOff, Channel, InboundMessage, PostUncertain
 from remote import master as master_window
 from remote.guard import Guard, limit
 from remote.peers import Peer, PeerDirectory, PeerRefused, addressable, resolve as resolve_peer
 from remote.master import Master
 from remote.service import (
     ADOPTED,
+    LIVE,
+    SLEEPING,
+    STARTED,
     Aborted,
     Asleep,
+    Elsewhere,
     Event,
     PromptGone,
     PromptRefused,
@@ -31,8 +36,8 @@ from remote.service import (
     RemoteService,
     Session,
 )
-from remote.session_host import current_branch
-from remote.state import State
+from remote.session_host import Project, current_branch
+from remote.state import UNROUTED_PREFIX, State
 from remote.window import ChatWindow
 from teams_remote_control import _COMMAND_RE as LEGACY_CODE_RE
 
@@ -42,7 +47,13 @@ STALE_SECONDS = 15 * 60.0
 AGENT_LABEL = "Claude"
 WAITING_HEADLINE = commands.WAITING_HEADLINE
 PROMPT_ROUTE_SECONDS = 12 * 3600.0
+RETRY_POST_SECONDS = 60.0
 PROMPT_HOLD_SECONDS = 2 * 3600.0
+PART_PAUSE_SECONDS = 1.0
+# Why an open terminal cannot be messaged at all, as opposed to not right now: the lane then starts afresh.
+NOT_MESSAGEABLE = frozenset(("opted_out", "unsafe_mode", "unknown_mode", "switched_off", "admin_denied"))
+# Refusals that a moment can mend; every other code stays until someone changes the other agent's setup.
+TRANSIENT_REFUSALS = frozenset(("not_ready", "busy", "failed"))
 _TAGS = ("gator", AGENT_LABEL.lower())
 _RESERVED_NAMES = frozenset((*commands.RESERVED, "all", *_TAGS))
 
@@ -64,6 +75,12 @@ def _state_word(session: Session) -> str:
     return commands.WORKING if session.awaiting_since is not None else commands.IDLE
 
 
+def _left_behind(stopped: list[Session]) -> tuple[list[str], list[str]]:
+    asleep = [s.short for s in stopped if s.state == commands.SLEEPING]
+    waiting = [s.short for s in stopped if s.waiting and s.prompt is not None]
+    return asleep, waiting
+
+
 class RemoteRunner:
     def __init__(
         self,
@@ -77,6 +94,8 @@ class RemoteRunner:
         first_prompt_hint: str = "",
         branch_of: Callable[[str], str | None] = current_branch,
         peers: PeerDirectory | None = None,
+        terminals: TerminalWatch | None = None,
+        away: Callable[[], bool] = lambda: False,
     ):
         self._channel = channel
         self._service = service
@@ -88,6 +107,10 @@ class RemoteRunner:
         self._hint = first_prompt_hint
         self._branch_of = branch_of
         self._peers = peers
+        self._terminals = terminals
+        self._away = away
+        self._app: dict[str, Session] = {}
+        self._answered: dict[str, float] = {}
         self._turns: dict[str, _Turn] = {}
         self._holds: dict[str, tuple[str, float]] = {}
         self._enabled = False
@@ -95,8 +118,17 @@ class RemoteRunner:
         self._autosend_noticed = False
         self._window = ChatWindow(channel.name, state, clock)
         self._already_open = False
-        self._not_sent_noticed: set[str] = set()
+        self._attachment_noticed = False
+        self._summarized: set[tuple[str, str]] = set()
+        self._unsent: dict[tuple[str, str], float] = {}
+        self._unrecorded: set[tuple[str, str]] = set()
         self._wakes: set[asyncio.Task] = set()
+        self._outbox: dict[str, list[str]] = {}
+        self._drains: dict[str, asyncio.Task] = {}
+        self._seen_epoch = guard.epoch
+        self._abandoned = 0
+        self._parts_lock = asyncio.Lock()
+        self._restart_said = False
         self._not_armed_noticed: object = None
         service.subscribe(self._on_event)
 
@@ -119,6 +151,44 @@ class RemoteRunner:
         else:
             self._guard.disarm()
             self._service.abort_wakes()
+        if self._guard.epoch != self._seen_epoch:
+            self._seen_epoch = self._guard.epoch
+            self._abandon_unsent()
+
+    def _proceed(self):
+        """True while Remote control stays on, and has not been turned off and on again, since this was made."""
+        epoch = self._guard.epoch
+        return lambda: self._guard.armed and self._guard.epoch == epoch
+
+    def _take_unsent(self, *, wake_texts: bool) -> int:
+        """Empties every queue of messages that were not typed yet and returns how many there were. A session that
+        is being stopped is not counted: the stop says what happened to it."""
+        sessions = {s.id: s for s in self._service.list()}
+        count = 0
+        for session_id, box in self._outbox.items():
+            session = sessions.get(session_id)
+            if session is not None and not session.stopping:
+                count += len(box)
+            box.clear()
+        for session in sessions.values():
+            if session.waking and not session.stopping:
+                count += len(session.queued) + (1 if wake_texts and not session.wake_delivering else 0)
+            session.queued.clear()
+        return count
+
+    def _abandon_unsent(self) -> None:
+        """Remote control was turned off: nothing that is waiting to be typed is typed later. The count is said by
+        the next tick."""
+        self._abandoned += self._take_unsent(wake_texts=False)
+        for task in self._drains.values():
+            task.cancel()
+        self._drains.clear()
+        self._outbox.clear()
+
+    async def _say_abandoned(self) -> None:
+        count, self._abandoned = self._abandoned, 0
+        if count and self._enabled:
+            await self._post(commands.messages_not_sent(count))
 
     @property
     def live(self) -> bool:
@@ -131,34 +201,109 @@ class RemoteRunner:
 
     async def restore(self) -> None:
         await self._service.restore()
+        states = [s.state for s in self._service.list()]
+        lost = self._state.channel_value(self._channel.name, "lost_at_shutdown") or 0
+        if lost:
+            self._state.set_channel_value(self._channel.name, "lost_at_shutdown", None)
+        if self.live and (LIVE in states or SLEEPING in states or lost):
+            self._restart_said = True
+            await self._post(commands.restarted(states.count(LIVE), states.count(SLEEPING), lost))
+
+    def connection_failed(self, exc: Exception) -> None:
+        """Remembers why the chat cannot be reached, for the Remote control pill and for the line said once it is back."""
+        reason = " ".join(str(exc).split())[:120] or type(exc).__name__
+        record = self._state.channel_value(self._channel.name, "connection") or {"since": self._clock()}
+        self._state.set_channel_value(self._channel.name, "connection", {**record, "reason": reason})
+
+    async def connection_recovered(self) -> None:
+        record = self._state.channel_value(self._channel.name, "connection")
+        if not record:
+            return
+        self._state.set_channel_value(self._channel.name, "connection", None)
+        if self.live:
+            await self._post(
+                commands.reconnected(self._channel.name, self._clock() - record["since"], record["reason"])
+            )
 
     async def shutdown(self) -> None:
         """Ends the background wakes before the backend goes down."""
         self._service.abort_wakes()
+        lost = self._take_unsent(wake_texts=True)
+        if lost:
+            self._state.set_channel_value(self._channel.name, "lost_at_shutdown", lost)
         tasks = list(self._wakes)
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
 
     async def announce_online(self) -> None:
-        """Its text is about opening a chat, so it is not said into one that is already open."""
-        if not self._window.is_open():
+        """Its text is about opening a chat, so it is not said into one that is already open, nor right after the
+        restart line, which already says the chat is back."""
+        said, self._restart_said = self._restart_said, False
+        if not said and not self._window.is_open():
             await self._post(commands.online())
 
     async def _post(self, text: str) -> str:
-        """The id of the posted message, or "" when nothing was posted."""
+        """The id of the posted message, or "" when nothing was posted or the channel gave no id."""
+        return await self._try_post(text) or ""
+
+    async def _post_all(self, parts: list[str]) -> None:
+        """One reply. A reply in several parts goes out from a task of its own, paced and one reply at a time, so
+        the polling loop never waits on the channel."""
+        if len(parts) == 1:
+            await self._post(parts[0])
+        elif parts:
+            self._spawn(self._send_parts(parts))
+
+    def _spawn(self, coro) -> None:
+        task = asyncio.create_task(coro)
+        self._wakes.add(task)
+        task.add_done_callback(self._wakes.discard)
+
+    async def _send_parts(self, parts: list[str]) -> None:
+        """Each part is tried twice, but only after a failure the channel was told of: a part whose post got no
+        answer may be in the chat already, so it is said so and never sent again. A part that does not go is said
+        so, and the rest follow."""
+        async with self._parts_lock:
+            for number, part in enumerate(parts, 1):
+                if number > 1:
+                    await asyncio.sleep(PART_PAUSE_SECONDS)
+                try:
+                    if await self._post_now(part) is not None:
+                        continue
+                    await asyncio.sleep(PART_PAUSE_SECONDS)
+                    if await self._post_now(part) is not None:
+                        continue
+                    notice = commands.part_not_sent(number, len(parts))
+                except PostUncertain:
+                    notice = commands.part_unsure(number, len(parts))
+                await self._post_now(notice, quiet=True)
+
+    async def _try_post(self, text: str) -> str | None:
+        """The id of the posted message ("" when the channel posted but gave no id), or None when it did not post.
+        Waits for a reply in parts to finish, so nothing lands between its parts."""
+        async with self._parts_lock:
+            return await self._post_now(text, quiet=True)
+
+    async def _post_now(self, text: str, quiet: bool = False) -> str | None:
+        """One post. Raises PostUncertain when the chat may have received it, unless `quiet`."""
         try:
             return await asyncio.to_thread(self._channel.post, text) or ""
         except AutosendOff:
             if not self._autosend_noticed:
                 self._autosend_noticed = True
                 _log.info("Remote control is not replying on %s: auto-send is off", self._channel.name)
+        except PostUncertain as exc:
+            _log.warning("Remote control got no answer posting a reply: %s", exc)
+            if not quiet:
+                raise
         except Exception as exc:
             _log.warning("Remote control could not post a reply: %s", exc)
-        return ""
+        return None
 
     async def poll(self) -> None:
         await self.process(await asyncio.to_thread(self._channel.poll))
+        await self.process_replies(await asyncio.to_thread(self._channel.poll_replies))
 
     async def process(self, messages: list[InboundMessage]) -> None:
         """`messages` is newest first, as the channel returns it."""
@@ -177,24 +322,55 @@ class RemoteRunner:
             if self._is_own(message):
                 continue
             await self._close_if_expired()
-            command = commands.parse(message.text) or await self._untagged(message)
-            if command is None:
-                continue
-            if not self.live:
-                await self._note_not_armed(message)
-                continue
-            if message.created_at > 0 and self._clock() - message.created_at > limit(self._stale):
+            command = self._reply_command(message) or commands.parse(message.text) or await self._untagged(message)
+            if await self._execute(message, command):
                 skipped += 1
-                continue
-            if command.kind == "open":
-                self._already_open = self._window.open(message.created_at)
-                if not self._already_open:
-                    self._not_sent_noticed.clear()
-            elif command.kind not in ("stop_all", "bye"):
-                self._window.extend()
-            await self._run(dataclasses.replace(command, sent_at=message.created_at))
         if skipped:
             await self._post(commands.stale_skipped(skipped, limit(self._stale)))
+
+    async def process_replies(self, messages: list[InboundMessage]) -> None:
+        """Replies the channel lists apart from its messages, newest first. Each one is read once."""
+        skipped = 0
+        for message in reversed(messages):
+            if not self._is_own(message) and await self._execute(message, self._reply_command(message)):
+                skipped += 1
+        if skipped:
+            await self._post(commands.stale_skipped(skipped, limit(self._stale)))
+
+    async def _execute(self, message: InboundMessage, command: commands.Command | None) -> bool:
+        """Runs `command` if it may run. True when it was dropped for being too old."""
+        if command is None:
+            return False
+        if not self.live:
+            await self._note_not_armed(message)
+            return False
+        if message.created_at > 0 and self._clock() - message.created_at > limit(self._stale):
+            return True
+        if command.kind == "open":
+            self._already_open = self._window.open(message.created_at)
+            if not self._already_open:
+                self._attachment_noticed = False
+        elif command.kind not in ("stop_all", "bye"):
+            self._window.extend()
+        await self._run(dataclasses.replace(command, sent_at=message.created_at))
+        return False
+
+    def _reply_command(self, message: InboundMessage) -> commands.Command | None:
+        """A quote-reply or thread reply to a prompt message this chat posted answers that prompt, with the
+        chat window closed and no `@gator`. An explicit command in it, such as `@gator stop`, still runs."""
+        if not message.reply_to:
+            return None
+        if self._state.find_prompt_message(self._channel.name, message.reply_to, self._clock()) is None:
+            return None
+        typed = commands.parse(message.text)
+        if typed is not None and typed.kind == "interrupt":
+            return dataclasses.replace(typed, reply_to=message.reply_to)
+        if typed is not None and typed.kind != "send":
+            return typed
+        text = typed.text if typed else message.text.strip()
+        if text.lower().rstrip(".!") in commands.INTERRUPT_WORDS:
+            return commands.Command("interrupt", reply_to=message.reply_to)
+        return commands.Command("answer", text=text, reply_to=message.reply_to) if text else None
 
     async def _untagged(self, message: InboundMessage) -> commands.Command | None:
         """An ordinary message inside the open window, routed like `@gator <text>`. Anything with no
@@ -207,13 +383,14 @@ class RemoteRunner:
         if not text or LEGACY_CODE_RE.match(message.text):
             return None
         mention = commands.LEADING_MENTION_RE.match(text)
-        if mention and mention.group(1).lower() not in _TAGS and self._service.resolve(mention.group(1)) is None:
+        if mention and mention.group(1).lower() != "gator" and self._service.resolve(mention.group(1)) is None:
             return None
         if message.attachments:
-            await self._note_not_sent(message, "attachment", commands.attachment_not_sent)
+            if not self._attachment_noticed and await self._note_not_sent(message, commands.attachment_not_sent):
+                self._attachment_noticed = True
             return None
         if len(text) > commands.UNTAGGED_MAX_CHARS:
-            await self._note_not_sent(message, "too long", commands.too_long)
+            await self._note_not_sent(message, commands.too_long)
             return None
         command = commands.parse(f"@gator {text}")
         return dataclasses.replace(command, tagged=False) if command else None
@@ -233,26 +410,27 @@ class RemoteRunner:
         self._not_armed_noticed = key
         await self._post(commands.not_armed() if record is None else commands.timed_out_reply(master_window.ARM_SECONDS))
 
-    async def _note_not_sent(self, message: InboundMessage, reason: str, reply: Callable[[], str]) -> None:
-        """One plain line per reason per window, however many messages are held back."""
-        if reason in self._not_sent_noticed or not self.live:
-            return
-        if self._clock() - message.created_at > limit(self._stale):
-            return
-        self._not_sent_noticed.add(reason)
+    async def _note_not_sent(self, message: InboundMessage, reply: Callable[[], str]) -> bool:
+        if not self.live or self._clock() - message.created_at > limit(self._stale):
+            return False
         await self._post(reply())
+        return True
 
     def _anyone_waiting(self) -> bool:
-        """True while some session shows a prompt, for at most PROMPT_HOLD_SECONDS each. A session that only
-        sounds like it asked something has no prompt and does not keep the chat open."""
+        """True while some session shows a prompt or is working on a request, for at most PROMPT_HOLD_SECONDS
+        each. A session that only sounds like it asked something has no prompt and does not keep the chat open."""
         now = self._clock()
         holds, held = {}, False
         for session in self._service.list():
-            if session.prompt is None:
+            if session.prompt is not None:
+                marker = session.prompt.id
+            elif session.awaiting_since is not None and session.state == LIVE:
+                marker = f"turn:{session.awaiting_since}"
+            else:
                 continue
             seen_id, since = self._holds.get(session.id, ("", now))
-            since = since if seen_id == session.prompt.id else now
-            holds[session.id] = (session.prompt.id, since)
+            since = since if seen_id == marker else now
+            holds[session.id] = (marker, since)
             held = held or now - since < PROMPT_HOLD_SECONDS
         self._holds = holds
         return held
@@ -268,10 +446,9 @@ class RemoteRunner:
         )
 
     async def _run(self, command: commands.Command) -> None:
-        stops = command.kind in ("stop", "stop_all")
-        if not stops and not self._guard.allow_command():
-            if self._guard.slow_down_due():
-                await self._post(commands.slow_down(self._guard.wait_seconds()))
+        if not self._exempt_from_rate_limit(command) and not self._guard.allow_command():
+            if count := self._guard.drop():
+                await self._post(commands.slow_down(self._guard.wait_seconds(), count))
             return
         try:
             await self._dispatch(command)
@@ -282,6 +459,34 @@ class RemoteRunner:
         except Exception:
             _log.warning("Remote command %s failed", command.kind, exc_info=True)
             await self._post(commands.command_failed())
+
+    def _exempt_from_rate_limit(self, command: commands.Command) -> bool:
+        """Stopping and answering a waiting prompt are never held back by the limit."""
+        if command.kind in ("stop", "stop_all", "answer", "interrupt"):
+            return True
+        if command.kind != "send":
+            return False
+        target = self._reply_target(command.text)
+        return target is not None and isinstance(prompts.resolve(*target), prompts.Answer)
+
+    def _reply_target(self, text: str) -> tuple[prompts.Prompt, str] | None:
+        """The prompt `_send` would answer with `text`, and the reply it would type: only the session the
+        message goes to, never another session's prompt."""
+        mention = commands.LEADING_MENTION_RE.match(text)
+        if mention:
+            name, rest = mention.group(1), (mention.group(2) or "").strip()
+            session = self._service.resolve(name)
+            if session is not None:
+                return (session.prompt, rest) if session.waiting and session.prompt is not None and rest else None
+            if name.lower() not in _TAGS:
+                return None
+            text = rest
+        first, _, rest = text.partition(" ")
+        named = self._service.resolve(first.rstrip(":"))
+        if named is not None and rest.strip():
+            return (named.prompt, rest.strip()) if named.waiting and named.prompt is not None else None
+        waiting = [s for s in [*self._service.list(), *self._watched_waiting()] if s.waiting and s.prompt is not None]
+        return (waiting[0].prompt, text) if len(waiting) == 1 else None
 
     async def _dispatch(self, command: commands.Command) -> None:
         kind = command.kind
@@ -295,11 +500,15 @@ class RemoteRunner:
         elif kind == "list":
             await self._post(await self._list_text())
         elif kind == "status":
-            await self._post(self._status(command.name))
+            await self._post(await self._status(command.name))
         elif kind == "stop":
             await self._service.stop(self._pick(command.name, required=True)[0].id)
         elif kind == "stop_all":
             await self._stop_all()
+        elif kind == "answer":
+            await self._answer_quoted(command)
+        elif kind == "interrupt":
+            await self._interrupt(command)
         else:
             await self._send(command.text, command.tagged, command.sent_at)
 
@@ -315,7 +524,10 @@ class RemoteRunner:
         self._guard.stop_all()
         self._state.set_disarmed(self._channel.name, True)
         self._window.close()
-        await self._post(commands.stopped(len(stopped)) if stopped else commands.no_sessions())
+        asleep, waiting = _left_behind(stopped)
+        await self._post(
+            commands.stopped(len(stopped), asleep=asleep, waiting=waiting) if stopped else commands.no_sessions()
+        )
 
     def _pick(self, name: str | None, required: bool = False) -> list[Session]:
         if name:
@@ -333,6 +545,9 @@ class RemoteRunner:
     def _since(self, session: Session) -> float:
         if session.waiting:
             return session.last_event_at or session.last_activity
+        turn = self._turns.get(session.id)
+        if turn is not None and session.awaiting_since is not None:
+            return turn.started
         return session.awaiting_since if session.awaiting_since is not None else session.last_activity
 
     def _reserved(self) -> frozenset[str]:
@@ -393,7 +608,7 @@ class RemoteRunner:
         except Exception:
             _log.warning("could not audit a refused message to %s", peer_name, exc_info=True)
 
-    async def _message_peer(self, peer: Peer, text: str) -> None:
+    async def _message_peer(self, peer: Peer, text: str, project: Project | None = None) -> None:
         if not text:
             raise Refusal(commands.mention_needs_text(commands.peer_label(peer.name)))
         wait = self._peers.limiter.wait_seconds(peer.session_id)
@@ -403,8 +618,10 @@ class RemoteRunner:
         try:
             delivery = await self._peers.deliver(peer, text, f"{self._channel.name.title()} chat")
         except PeerRefused as exc:
-            raise Refusal(commands.peer_refused(peer.name, exc.reason)) from exc
-        project = self._service.default_project()
+            raise Refusal(
+                commands.peer_refused(peer.name, exc.reason, permanent=exc.code not in TRANSIENT_REFUSALS)
+            ) from exc
+        project = project or self._service.default_project()
         if project is not None:
             try:
                 self._service.adopt(delivery.pty_id, project, peer.name, peer.session_id)
@@ -422,15 +639,23 @@ class RemoteRunner:
     def _describe(self, sessions: list[Session]) -> str:
         return commands.session_list(self._session_rows(sessions))
 
-    def _status(self, name: str | None) -> str:
+    async def _status(self, name: str | None) -> str:
         sessions = self._pick(name)
         if len(sessions) != 1:
             return self._describe(sessions)
         s = sessions[0]
         if s.prompt is not None:
             return prompts.waiting_message(s.short, s.project.name, s.prompt)
+        word = _state_word(s)
         return commands.session_status(
-            s.short, _state_word(s), self._since(s), s.last_activity, project=s.project.name, several=self._several(s)
+            s.short,
+            word,
+            self._since(s),
+            s.last_activity,
+            project=s.project.name,
+            several=self._several(s),
+            now=self._clock(),
+            last_step=await self._service.last_step(s) if word == commands.WORKING else "",
         )
 
     async def _send(self, text: str, tagged: bool = True, sent_at: float = 0.0) -> None:
@@ -463,14 +688,20 @@ class RemoteRunner:
             return
         sessions = self._service.list()
         waiting = [s for s in sessions if s.waiting]
+        watched = self._watched_waiting()
         # A waiting session is being answered: the answer may start with a peer's name, so only
         # `name: text` reaches the peer then.
-        if tagged and await self._try_peer(text, colon_only=bool(waiting)):
+        if tagged and await self._try_peer(text, colon_only=bool(waiting or watched)):
+            return
+        if any(isinstance(prompts.resolve(s.prompt, text), prompts.Answer) for s in watched):
+            if len(waiting) + len(watched) > 1:
+                raise Refusal(commands.which_prompt())
+            await self._answer(watched[0], text, sent_at)
             return
         if len(waiting) == 1:
-            await self._deliver(waiting[0], text, sent_at)
+            await self._deliver(waiting[0], text, sent_at, tagged)
         elif len(sessions) == 1:
-            await self._deliver(sessions[0], text, sent_at)
+            await self._deliver(sessions[0], text, sent_at, tagged)
         elif sessions:
             raise Refusal(commands.which_session([s.short for s in sessions]))
         else:
@@ -480,13 +711,24 @@ class RemoteRunner:
             prompt = f"{text}\n\n{self._hint}" if self._hint else text
             self._begin(await self._service.start(project, prompt))
 
-    async def _deliver(self, session: Session, text: str, sent_at: float = 0.0) -> None:
+    async def _deliver(self, session: Session, text: str, sent_at: float = 0.0, tagged: bool = True) -> None:
         if await self._service.needs_wake(session):
+            if await self._route_elsewhere(session, text):
+                return
             await self._start_wake(session, text)
             return
         await self._service.refresh(session.id)
         if session.waiting and session.prompt is not None:
-            await self._answer(session, text, sent_at)
+            await self._answer(session, text, sent_at, free_text=tagged)
+            return
+        busy = session.awaiting_since is not None and session.kind == STARTED
+        elapsed = self._clock() - self._since(session)
+        if busy or self._outbox.get(session.id):
+            self._turns.setdefault(session.id, _Turn(started=self._clock() - elapsed, last_note=self._clock()))
+            self._enqueue(session, text)
+            await self._post(
+                self._lane_copy(commands.busy_queued, session, elapsed, await self._service.last_step(session))
+            )
             return
         try:
             await self._service.send(session.id, text)
@@ -496,62 +738,338 @@ class RemoteRunner:
         except Refusal:
             raise
         except RemoteError as exc:
-            raise Refusal(self._lane_copy(commands.send_failed, session, str(exc))) from exc
+            raise Refusal(
+                self._lane_copy(commands.send_failed, session, str(exc), permanent=exc.permanent)
+            ) from exc
         self._state.clear_prompt_messages(self._channel.name, session.id)
         self._begin(session)
 
-    async def _answer(self, session: Session, text: str, sent_at: float = 0.0) -> None:
-        """A reply to a session that is showing a permission or a question: typed as that answer, or
-        not typed at all, and said so."""
-        short, project = session.short, session.project.name
+    def _enqueue(self, session: Session, text: str) -> None:
+        """A message to a working session is typed in order by a task of its own: typing waits for the session
+        to take input, which can take minutes, and the polling loop must not wait with it."""
+        box = self._outbox.setdefault(session.id, [])
+        box.append(text)
+        if len(box) == 1:
+            task = asyncio.create_task(self._drain(session, box, self._proceed()))
+            self._drains[session.id] = task
+            self._wakes.add(task)
+            task.add_done_callback(self._wakes.discard)
+
+    async def _drain(self, session: Session, box: list[str], proceed: Callable[[], bool]) -> None:
         try:
-            result = await self._service.answer(session.id, text, sent_at)
+            while box:
+                text = box[0]
+                if session.stopping:
+                    box.clear()
+                    return
+                if not proceed():
+                    self._abandoned += len(box)
+                    box.clear()
+                    return
+                try:
+                    await self._service.send(session.id, text, proceed)
+                except Aborted:
+                    if not session.stopping:
+                        self._abandoned += len(box)
+                    box.clear()
+                    return
+                except Asleep:
+                    try:
+                        await self._start_wake(session, text)
+                    except Refusal as exc:
+                        await self._post(str(exc))
+                        await self._drop_queued(session, box)
+                        return
+                except Refusal as exc:
+                    await self._post(str(exc))
+                except RemoteError as exc:
+                    if not session.stopping:
+                        await self._post(
+                            self._lane_copy(commands.send_failed, session, str(exc), permanent=exc.permanent)
+                        )
+                except Exception:
+                    _log.warning("Remote send to %s failed", session.short, exc_info=True)
+                    await self._post(self._lane_copy(commands.send_failed, session, "It could not be typed."))
+                else:
+                    self._state.clear_prompt_messages(self._channel.name, session.id)
+                box.pop(0)
+        finally:
+            if self._outbox.get(session.id) is box:
+                del self._outbox[session.id]
+            if self._drains.get(session.id) is asyncio.current_task():
+                del self._drains[session.id]
+
+    async def _answer(
+        self, session: Session, text: str, sent_at: float = 0.0, *, interrupt: bool = False, free_text: bool = False
+    ) -> None:
+        """A reply to a session that is showing a permission or a question: typed as that answer, or
+        not typed at all, and said so. `interrupt` cancels the prompt with Escape instead."""
+        short, project, prefix = session.short, session.project.name, self._prefix(session)
+        try:
+            result = await self._service.answer_session(session, text, sent_at, interrupt=interrupt, free_text=free_text)
         except PromptRefused as exc:
-            raise Refusal(prompts.waiting_message(short, project, exc.prompt, refused=exc.reason)) from exc
+            raise Refusal(
+                prompts.waiting_message(short, project, exc.prompt, refused=exc.reason, prefix=prefix)
+            ) from exc
         except PromptGone as exc:
             self._state.clear_prompt_messages(self._channel.name, session.id)
-            raise Refusal(prompts.confirmation(short, project, prompts.ALREADY_ANSWERED)) from exc
+            raise Refusal(prompts.confirmation(short, project, prompts.ALREADY_ANSWERED, prefix=prefix)) from exc
         self._state.clear_prompt_messages(self._channel.name, session.id)
-        if not result.ends_turn:
+        if session.id in self._app:
+            self._answered[session.pty_id] = session.last_event_at
+        elif not result.ends_turn and session.kind != ADOPTED:
             self._begin(session)
-        await self._post(prompts.confirmation(short, project, result.done))
+        await self._post(prompts.confirmation(short, project, result.done, prefix=prefix))
+        await self._notify_waiting()
 
-    async def _post_prompt(self, session: Session, prompt: prompts.Prompt) -> None:
-        """One message for this session, remembered by its message id with the prompt and an expiry."""
-        message_id = await self._post(prompts.waiting_message(session.short, session.project.name, prompt))
-        if message_id:
-            now = self._clock()
-            self._state.record_prompt_message(
-                self._channel.name, message_id, session.id, prompt.id, now + PROMPT_ROUTE_SECONDS, now
+    async def _answer_quoted(self, command: commands.Command) -> None:
+        """The reply to one prompt message goes to that message's session, and only while that prompt is the
+        one the session is showing. Otherwise nothing is typed and the user is told it was already answered."""
+        await self._answer(self._quoted_session(command), command.text, free_text=True)
+
+    async def _interrupt(self, command: commands.Command) -> None:
+        """`esc`: cancels the prompt a session is showing and keeps the session. A quote-reply names its prompt;
+        otherwise the one waiting session, or the one named."""
+        if command.reply_to:
+            await self._answer(self._quoted_session(command), "", interrupt=True)
+            return
+        waiting = [
+            s
+            for s in [*self._service.list(), *self._service.watched(ADOPTED), *self._app.values()]
+            if s.waiting and s.prompt is not None
+        ]
+        if command.name:
+            waiting = [s for s in waiting if command.name in (s.short.lower(), s.name.lower())]
+        if not waiting:
+            raise Refusal(commands.nothing_to_cancel())
+        if len(waiting) > 1:
+            raise Refusal(commands.which_to_cancel([s.short for s in waiting]))
+        await self._answer(waiting[0], "", command.sent_at, interrupt=True)
+
+    def _quoted_session(self, command: commands.Command) -> Session:
+        found = self._state.find_prompt_message(self._channel.name, command.reply_to or "", self._clock())
+        record, is_open = found if found else ({}, False)
+        session = self._tracked(record.get("session_id", ""))
+        if session is None:
+            raise Refusal(commands.system_reply(prompts.ALREADY_ANSWERED, []))
+        shown = session.prompt
+        if not (is_open and session.waiting and shown is not None and shown.id == record["prompt_id"]):
+            raise Refusal(
+                prompts.confirmation(
+                    session.short, session.project.name, prompts.ALREADY_ANSWERED, prefix=self._prefix(session)
+                )
             )
+        return session
+
+    def _prefix(self, session: Session) -> str:
+        """The label of a prompt message: Remote's own sessions use the default, another agent its name, a
+        terminal Remote did not start its project."""
+        if session.id in self._app:
+            return commands.agent_prefix(session.project.name)
+        if session.kind == ADOPTED:
+            return commands.peer_prefix(session.name, session.project.name)
+        return ""
+
+    def _tracked(self, session_id: str) -> Session | None:
+        """A session whose prompts can reach chat: one Remote started, one it watches, or a waiting terminal."""
+        return (
+            self._app.get(session_id)
+            or next((s for s in self._service.list() if s.id == session_id), None)
+            or next((s for s in self._service.watched(ADOPTED) if s.id == session_id), None)
+        )
+
+    def _watched_waiting(self) -> list[Session]:
+        """Sessions Remote did not start that wait on a prompt chat can answer."""
+        return [
+            s
+            for s in [*self._service.watched(ADOPTED), *self._app.values()]
+            if s.waiting and s.prompt is not None and s.prompt.answerable
+        ]
+
+    async def _post_prompt(self, session: Session, prompt: prompts.Prompt) -> bool:
+        """One message for this session, remembered by its message id with the prompt and an expiry. A session
+        started outside chat says how long it has waited."""
+        now = self._clock()
+        waited = None if session.from_chat else now - self._since(session)
+        text = prompts.waiting_message(
+            session.short, session.project.name, prompt, waited=waited, prefix=self._prefix(session)
+        )
+        message_id = await self._try_post(text)
+        if message_id is None:
+            return False
+        # Posted but the channel gave no id: remember it as sent so it is never posted twice; no reply can route to it.
+        route_id = message_id or f"{UNROUTED_PREFIX}{prompt.id}"
+        try:
+            self._state.record_prompt_message(
+                self._channel.name, route_id, session.id, prompt.id, now + PROMPT_ROUTE_SECONDS, now
+            )
+        except Exception as exc:
+            # The message is out; a record that could not be saved must not make the next tick post it again.
+            _log.warning("Remote control could not save the record of a prompt message: %s", exc)
+            self._unrecorded.add((session.id, prompt.id))
+        return True
+
+    async def _scan_terminals(self) -> None:
+        """The AI Gator terminals that Remote did not start and that are waiting, as sessions kept apart from
+        the service's. Their prompt is read like any other and answered through the same guards; Remote never
+        starts, wakes or closes one."""
+        if self._terminals is None:
+            return
+        try:
+            skip = {s.pty_id for s in [*self._service.list(), *self._service.watched(ADOPTED)]}
+            seen = await asyncio.to_thread(self._terminals.waiting, skip)
+        except Exception as exc:
+            _log.warning("Remote control could not look at the terminals: %s", exc)
+            return
+        found: dict[str, Session] = {}
+        for item in seen:
+            if item.state_at <= self._answered.get(item.pty_id, float("-inf")):
+                continue
+            session_id = f"app:{item.pty_id}"
+            found[session_id] = self._app.get(session_id) or Session(
+                id=session_id,
+                pty_id=item.pty_id,
+                project=item.project,
+                short=item.project.name,
+                vendor_session_id=None,
+                created_at=item.prompt.at,
+                last_activity=item.prompt.at,
+                from_chat=False,
+                kind=ADOPTED,
+            )
+            session = found[session_id]
+            if session.prompt is None or session.prompt.id != item.prompt.id:
+                session.prompt, session.waiting = item.prompt, True
+                session.prompt_seen_at = self._clock()
+                session.last_event_at, session.last_activity = item.state_at, item.prompt.at
+        self._app = found
+
+    async def _notify_waiting(self) -> None:
+        """Posts a message for each waiting session that is due one and has a place, and names the rest once."""
+        sessions = [*self._service.list(), *self._service.watched(ADOPTED), *self._app.values()]
+        showing = {(s.id, s.prompt.id) for s in sessions if s.waiting and s.prompt is not None}
+        for record in self._state.prompt_messages(self._channel.name):
+            if (record["session_id"], record["prompt_id"]) not in showing:
+                self._state.clear_prompt_messages(self._channel.name, record["session_id"])
+        self._unrecorded &= showing
+        posted = {(m["session_id"], m["prompt_id"]) for m in self._state.prompt_messages(self._channel.name)}
+        posted |= self._unrecorded
+        now = self._clock()
+        self._unsent = {k: at for k, at in self._unsent.items() if k in showing and now - at < RETRY_POST_SECONDS}
+        due = needs_you.plan(
+            [s for s in sessions if (s.id, s.prompt.id if s.prompt else "") not in self._unsent],
+            posted,
+            self._since,
+            now,
+            self._away(),
+        )
+        for session in due.send:
+            if not await self._post_prompt(session, session.prompt):
+                self._unsent[(session.id, session.prompt.id)] = now
+        rest = {(s.id, s.prompt.id) for s in due.rest}
+        if rest - self._summarized:
+            now = self._clock()
+            await self._post(prompts.more_waiting([(s.short, now - self._since(s)) for s in due.rest]))
+        self._summarized = rest
+
+    async def _route_elsewhere(self, session: Session, text: str) -> bool:
+        """A lane whose saved session is open in another terminal is never woken, so the message goes where the
+        session is: typed into that terminal the way a message to any other agent is (only when it is idle,
+        never woken, closed or suspended from here). When that terminal cannot be messaged at all, the lane is
+        kept, marked failed, and the chat is told. True when the message was dealt with."""
+        other = await self._service.open_elsewhere(session)
+        if other is None:
+            return False
+        try:
+            peer = await self._peers.by_pty(other) if self._peers is not None else None
+        except Exception as exc:
+            _log.warning("Remote control could not look up the terminal that holds %s: %s", session.short, exc)
+            peer = None
+        if peer is not None:
+            try:
+                await self._message_peer(peer, text, session.project)
+                return True
+            except Refusal as exc:
+                cause = exc.__cause__
+                if not (isinstance(cause, PeerRefused) and cause.code in NOT_MESSAGEABLE):
+                    raise
+        self._service.mark_opened_elsewhere(session)
+        await self._post(self._lane_copy(commands.lane_opened_elsewhere, session))
+        return True
 
     async def _start_wake(self, session: Session, text: str) -> None:
         """Answers at once and wakes in the background: a wake takes seconds, and the polling loop
         must keep running. begin_wake refuses a second wake of the same lane and one too soon after
         a failure, so a burst of messages cannot start more than one."""
+        if session.waking:
+            if len(session.queued) >= commands.WAKE_QUEUE_MAX:
+                await self._post(self._lane_copy(commands.wake_queue_full, session))
+                return
+            session.queued.append(text)
+            await self._post(self._lane_copy(commands.still_waking, session))
+            return
         self._service.begin_wake(session)
         await self._post(self._lane_copy(commands.waking, session))
-        task = asyncio.create_task(self._wake(session, text))
+        task = asyncio.create_task(self._wake(session, text, self._proceed()))
         self._service.attach_wake(session, task)
         self._wakes.add(task)
         task.add_done_callback(self._wakes.discard)
 
-    async def _wake(self, session: Session, text: str) -> None:
+    async def _wake(self, session: Session, text: str, proceed: Callable[[], bool]) -> None:
         try:
-            await self._service.wake(session, text, proceed=lambda: self._guard.armed)
+            await self._service.wake(session, text, proceed=proceed)
         except Aborted:
+            if not session.stopping:
+                self._abandoned += 1 + len(session.queued)
+            session.queued.clear()
             return
+        except Elsewhere:
+            queued, session.queued = session.queued[:], []
+            await self._after_elsewhere(session, text, queued)
         except RemoteError as exc:
-            if session.stopping:
-                return
-            await self._post(self._lane_copy(commands.wake_failed, session, str(exc), permanent=exc.permanent))
+            if not session.stopping:
+                await self._post(self._lane_copy(commands.wake_failed, session, str(exc), permanent=exc.permanent))
+            await self._drop_queued(session, session.queued)
         except Exception:
             _log.warning("Remote wake of %s failed", session.short, exc_info=True)
-            if session.stopping:
-                return
-            await self._post(self._lane_copy(commands.wake_failed, session))
+            if not session.stopping:
+                await self._post(self._lane_copy(commands.wake_failed, session))
+            await self._drop_queued(session, session.queued)
         else:
             self._begin(session)
+            queued, session.queued = session.queued[:], []
+            for later in queued:
+                self._enqueue(session, later)
+
+    async def _drop_queued(self, session: Session, queued: list[str]) -> None:
+        count, queued[:] = len(queued), []
+        if count and not session.stopping:
+            await self._post(self._lane_copy(commands.queued_not_sent, session, count))
+
+    async def _after_elsewhere(self, session: Session, text: str, queued: list[str]) -> None:
+        """The session was opened in another terminal while it was waking: the same routing as before the wake,
+        for the message that woke it and then for each one that was queued behind it, in order."""
+        if session.stopping:
+            return
+        pending = [text, *queued]
+        while pending:
+            try:
+                if await self._route_elsewhere(session, pending[0]):
+                    pending.pop(0)
+                    if session.state == commands.FAILED:
+                        await self._drop_queued(session, pending)
+                        return
+                    continue
+            except Refusal as exc:
+                await self._post(str(exc))
+            except RemoteError as exc:
+                await self._post(self._lane_copy(commands.send_failed, session, str(exc), permanent=exc.permanent))
+            else:
+                await self._post(
+                    self._lane_copy(commands.wake_failed, session, "The session changed while it was waking.")
+                )
+            break
+        await self._drop_queued(session, pending[1:])
 
     def _begin(self, session: Session) -> None:
         now = self._clock()
@@ -569,11 +1087,16 @@ class RemoteRunner:
         """What another agent answered to a message sent from chat, or that it closed before answering."""
         session = event.session
         project = session.project.name
-        if event.kind in ("completed", "input-required"):
-            waiting = event.kind == "input-required" or commands.asks_a_question(event.text)
+        keep = session.prompt.id if event.kind == "input-required" and session.prompt is not None else ""
+        self._state.clear_prompt_messages(self._channel.name, session.id, keep)
+        if event.kind == "input-required":
+            if self.live:
+                await self._notify_waiting()
+        elif event.kind == "completed":
+            waiting = commands.asks_a_question(event.text)
             session.waiting = waiting
             ref = self._peer_ref(session)
-            await self._post(commands.peer_result(session.name, project, event.text, waiting, ref))
+            await self._post_all(commands.peer_result(session.name, project, event.text, waiting, ref))
         elif event.kind == "detached" and event.text:
             await self._post(commands.peer_exited(session.name, project))
 
@@ -588,9 +1111,12 @@ class RemoteRunner:
         short = session.short
         several = self._several(session)
         project = session.project.name
-        self._state.clear_prompt_messages(self._channel.name, session.id)
+        keep = session.prompt.id if event.kind == "input-required" and session.prompt is not None else ""
+        self._state.clear_prompt_messages(self._channel.name, session.id, keep)
+        if event.kind in ("completed", "input-required"):
+            self._window.extend()
         if event.kind == "input-required" and session.prompt is not None:
-            await self._post_prompt(session, session.prompt)
+            await self._notify_waiting()
         elif event.kind in ("completed", "input-required"):
             waiting = event.kind == "input-required" or commands.asks_a_question(event.text)
             session.waiting = waiting
@@ -602,7 +1128,7 @@ class RemoteRunner:
                 headline = ""
             else:
                 headline = commands.done_headline(self._clock() - turn.started)
-            await self._post(
+            await self._post_all(
                 commands.agent_result(AGENT_LABEL, short, headline, event.text, waiting, several, project=project)
             )
         elif event.kind == "failed":
@@ -643,14 +1169,21 @@ class RemoteRunner:
                 turn.last_note = now
                 await self._post(
                     commands.progress(
-                        session.short, now - turn.started, project=session.project.name, several=len(live) > 1
+                        session.short,
+                        now - turn.started,
+                        await self._service.last_step(session),
+                        project=session.project.name,
+                        several=len(live) > 1,
                     )
                 )
 
     async def tick(self) -> None:
         self._sync_guard()
+        if self.live and (count := self._guard.dropped_to_announce()):
+            await self._post(commands.slow_down(self._guard.wait_seconds(), count))
         if self._master.active():
             self._not_armed_noticed = None
+        await self._say_abandoned()
         if self._master.expired():
             await self._expire()
         elif self.live:
@@ -659,8 +1192,14 @@ class RemoteRunner:
             if self._anyone_waiting():
                 self._window.hold()
             await self._close_if_expired()
-            await self._report_progress()
         await self._service.tick()
+        if self.live:
+            await self._report_progress()
+            await self._scan_terminals()
+            await self._notify_waiting()
+        else:
+            self._app = {}
+            self._restart_said = False
 
     @property
     def deadline_pending(self) -> bool:
@@ -675,33 +1214,35 @@ class RemoteRunner:
             return None
         return record["deadline"]
 
-    async def _stop_at_deadline(self) -> bool:
+    async def _stop_at_deadline(self) -> list[Session] | None:
         """Stops every session the way `stop all` does. A session that will not stop is retried on
-        the next tick, so the caller only goes on once none are left. True when the stop
-        finished for a window that is still closed."""
+        the next tick, so the caller only goes on once none are left. The sessions it stopped when the
+        stop finished for a window that is still closed, else None."""
         deadline = self._unhandled_deadline()
         if deadline is None:
-            return False
+            return None
         stopped, failed = await self._service.stop_all()
         if failed:
             if self._stop_failure_logged != deadline:
                 self._stop_failure_logged = deadline
                 _log.warning("Remote control expired but %s would not stop; retrying", ", ".join(s.short for s in failed))
-            return False
+            return None
         self._state.set_channel_value(self._channel.name, "expiry_handled", deadline)
         if self._master.active():
-            return False
+            return None
         self._guard.stop_all()
         self._window.close()
-        return True
+        return stopped
 
     async def stop_after_deadline(self) -> None:
         """A channel whose switch is off still stops its sessions at the deadline, and says nothing."""
         await self._stop_at_deadline()
 
     async def _expire(self) -> None:
-        if await self._stop_at_deadline():
-            await self._post(commands.timed_out(master_window.ARM_SECONDS))
+        stopped = await self._stop_at_deadline()
+        if stopped is not None:
+            asleep, waiting = _left_behind(stopped)
+            await self._post(commands.timed_out(master_window.ARM_SECONDS, asleep=asleep, waiting=waiting))
 
     async def _warn_if_due(self) -> None:
         record = self._master.record()

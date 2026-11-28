@@ -131,6 +131,47 @@ async def test_a_message_is_typed_once_local_keystrokes_are_old_enough(calls):
     assert calls.typed == [("pty-1", "hello")]
 
 
+async def test_a_message_is_not_typed_when_proceed_says_no_after_the_wait(calls):
+    with pytest.raises(session_host.Declined):
+        await LocalPtyHost().deliver("pty-1", "hello", proceed=lambda: False)
+    assert calls.typed == []
+    assert agent_wake.claim("vendor-1")
+
+
+async def test_proceed_is_asked_after_the_wait_for_the_session_not_before(calls, monkeypatch):
+    state = {"on": True}
+
+    async def turned_off_while_waiting(pty_id, timeout):
+        state["on"] = False
+
+    monkeypatch.setattr(agent_wake, "_wait_ready", turned_off_while_waiting)
+    with pytest.raises(session_host.Declined):
+        await LocalPtyHost().deliver("pty-1", "hello", proceed=lambda: state["on"])
+    assert calls.typed == []
+
+
+async def test_a_cancel_between_the_paste_and_the_enter_waits_for_the_enter(calls, monkeypatch):
+    import asyncio
+
+    steps = []
+    pasted = asyncio.Event()
+
+    async def paste_then_enter(pty_id, text):
+        steps.append("paste")
+        pasted.set()
+        await asyncio.sleep(0.05)
+        steps.append("enter")
+
+    monkeypatch.setattr(agent_wake, "_type_message", paste_then_enter)
+    task = asyncio.create_task(LocalPtyHost().deliver("pty-1", "hello"))
+    await pasted.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert steps == ["paste", "enter"]
+    assert agent_wake.claim("vendor-1")
+
+
 async def test_a_message_waits_its_turn_when_the_session_is_being_woken_or_suspended(calls):
     assert agent_wake.claim("vendor-1")
     with pytest.raises(HostError, match="woken or suspended"):
@@ -190,7 +231,7 @@ async def test_a_session_live_in_another_terminal_is_never_resumed_a_second_time
     calls.live_labels = {"pty-7": {"agent": "claude", "session_id": "vendor-1"}}
     with pytest.raises(HostError, match="open in another terminal") as err:
         await wake(calls, "pty-1", PROJECT, LABELS)
-    assert not err.value.permanent
+    assert err.value.permanent
     assert calls.resumed == []
     assert agent_wake.claim("vendor-1")
 
@@ -201,6 +242,56 @@ async def test_a_session_linked_to_a_running_local_terminal_is_never_resumed_a_s
     with pytest.raises(HostError, match="open in another terminal"):
         await wake(calls, "pty-1", PROJECT, LABELS)
     assert calls.resumed == []
+
+
+async def test_the_wake_guard_raises_the_open_elsewhere_type_so_the_runner_can_route(calls):
+    calls.live_labels = {"pty-7": {"agent": "claude", "session_id": "vendor-1"}}
+    with pytest.raises(session_host.OpenElsewhere):
+        await wake(calls, "pty-1", PROJECT, LABELS)
+
+
+async def test_the_holder_of_the_saved_session_is_named_before_any_wake(calls):
+    calls.live_labels = {"pty-7": {"agent": "claude", "session_id": "vendor-1"}}
+    assert await LocalPtyHost().open_elsewhere("pty-1", PROJECT, "vendor-1") == "pty-7"
+    assert calls.resumed == []
+
+
+async def test_a_local_terminal_linked_to_the_saved_session_is_named_as_its_holder(calls):
+    calls.ptys["pty-7"] = FakePty()
+    calls.other_ptys = ["pty-7"]
+    assert await LocalPtyHost().open_elsewhere("pty-1", PROJECT, "vendor-1") == "pty-7"
+
+
+async def test_a_session_nobody_else_holds_has_no_holder(calls):
+    assert await LocalPtyHost().open_elsewhere("pty-1", PROJECT, "vendor-1") is None
+    calls.ptys["pty-7"] = FakePty(done=True)
+    calls.other_ptys = ["pty-7"]
+    assert await LocalPtyHost().open_elsewhere("pty-1", PROJECT, "vendor-1") is None
+
+
+async def test_the_lane_is_never_its_own_holder(calls):
+    calls.live_labels = {"pty-1": {"agent": "claude", "session_id": "vendor-1"}}
+    assert await LocalPtyHost().open_elsewhere("pty-1", PROJECT, "vendor-1") is None
+
+
+async def test_a_lane_with_no_saved_session_has_no_holder(calls):
+    calls.record = None
+    assert await LocalPtyHost().open_elsewhere("pty-1", PROJECT, None) is None
+
+
+async def test_the_lane_id_is_used_when_the_suspend_record_is_gone(calls):
+    calls.record = None
+    calls.live_labels = {"pty-7": {"agent": "claude", "session_id": "vendor-9"}}
+    assert await LocalPtyHost().open_elsewhere("pty-1", PROJECT, "vendor-9") == "pty-7"
+
+
+async def test_a_terminal_host_that_does_not_answer_is_an_error_never_nobody(calls, monkeypatch):
+    def down(strict=False):
+        raise pty_client.HostError("down")
+
+    monkeypatch.setattr(terminal, "live_pty_labels", down)
+    with pytest.raises(HostError, match="did not answer"):
+        await LocalPtyHost().open_elsewhere("pty-1", PROJECT, "vendor-1")
 
 
 async def test_a_finished_local_terminal_does_not_block_the_wake(calls):

@@ -19,7 +19,7 @@ from typing import Awaitable, Callable
 
 from remote import commands, prompts
 from remote.guard import limit
-from remote.session_host import HostError, Project, RestoredSession, SessionHost, StalePrompt
+from remote.session_host import Declined, HostError, NoTypedAnswer, OpenElsewhere, Project, RestoredSession, SessionHost, StalePrompt
 from remote.state import State
 
 _log = logging.getLogger(__name__)
@@ -48,6 +48,10 @@ class Refusal(RemoteError):
 
 class Asleep(RemoteError):
     """The lane was asleep when the message reached it: wake it, then send."""
+
+
+class Elsewhere(RemoteError):
+    """The lane's saved session is running in another terminal, so it cannot be woken."""
 
 
 class Aborted(RemoteError):
@@ -82,6 +86,7 @@ class Session:
     last_event_at: float = 0.0
     stopping: bool = False
     prompt: prompts.Prompt | None = None
+    from_chat: bool = True  # False for a session someone started in AI Gator: its prompts go to chat after a wait
     asking_since: float | None = None
     prompt_seen_at: float = 0.0
     state: str = LIVE
@@ -91,6 +96,7 @@ class Session:
     wake_task: asyncio.Task | None = field(default=None, repr=False, compare=False)
     wake_cancelled: bool = False
     wake_delivering: bool = False
+    queued: list[str] = field(default_factory=list, repr=False, compare=False)
     kind: str = STARTED  # ADOPTED: someone else's session that Remote only watches, never closes
     name: str = ""
     misses: int = 0
@@ -229,6 +235,7 @@ class RemoteService:
                 "vendor_session_id": session.vendor_session_id,
                 "created_at": session.created_at,
                 "last_activity": session.last_activity,
+                "awaiting_since": session.awaiting_since,
                 "state": session.state,
                 "failure": session.failure,
             },
@@ -264,9 +271,14 @@ class RemoteService:
             keep = next((r for r in found if r.pty_id == lane.get("pty_id")), found[-1])
             if lane and lane["pty_id"] != keep.pty_id:
                 old = self._session_from_lane(lane, now)
-                if await self._host.sleeping(old.pty_id) or await self._host.saved(old.project, old.vendor_session_id):
-                    # Something is saved for the stored lane. A newer terminal must not cost the user
-                    # that: the lane is kept, marked failed, and `stop` is what clears it.
+                if (
+                    await self._host.alive(old.pty_id)
+                    or await self._host.sleeping(old.pty_id)
+                    or await self._host.saved(old.project, old.vendor_session_id)
+                ):
+                    # A terminal is still running or something is saved for the stored lane. A newer
+                    # terminal must not cost the user that: the lane is kept, marked failed, and `stop`
+                    # is what clears it. Only a dead terminal is killed.
                     _log.warning(
                         "remote lane %s for %s has a saved session; the newer terminal %s is left alone",
                         lane["short"], project_id, keep.pty_id,
@@ -289,6 +301,7 @@ class RemoteService:
                 vendor_session_id=keep.vendor_session_id,
                 created_at=keep.created_at or now,
                 last_activity=lane.get("last_activity", now) if same else now,
+                awaiting_since=lane.get("awaiting_since") if same else None,
             )
             self._sessions[session.id] = session
             self._persist(session)
@@ -343,6 +356,7 @@ class RemoteService:
             vendor_session_id=lane.get("vendor_session_id"),
             created_at=lane.get("created_at") or now,
             last_activity=lane.get("last_activity") or now,
+            awaiting_since=lane.get("awaiting_since"),
             state=lane["state"],
             failure=lane.get("failure") or "",
         )
@@ -379,24 +393,27 @@ class RemoteService:
         self._persist(session)
         return session
 
-    async def send(self, session_id: str, text: str) -> None:
+    async def send(self, session_id: str, text: str, proceed: Callable[[], bool] | None = None) -> None:
         """Types `text` into a running session. A failure is looked at again: the idle sweep may
-        have suspended the process in the meantime, and then the message needs a wake, not an error."""
+        have suspended the process in the meantime, and then the message needs a wake, not an error.
+        `proceed` is asked at the moment of typing: a no raises Aborted and nothing is typed."""
         session = self.get(session_id)
         try:
-            await self._deliver(session, text)
-        except Refusal:
+            await self._deliver(session, text, proceed)
+        except (Refusal, Aborted):
             raise
         except RemoteError:
             if await self.needs_wake(session):
                 raise Asleep(f"{session.short} is asleep.") from None
             raise
 
-    async def _deliver(self, session: Session, text: str) -> None:
+    async def _deliver(self, session: Session, text: str, proceed: Callable[[], bool] | None = None) -> None:
         if session.kind != STARTED:
             raise Refusal("Messages to another agent go through its name, not through Remote control.")
         try:
-            await self._host.deliver(session.pty_id, text)
+            await self._host.deliver(session.pty_id, text, proceed=proceed)
+        except Declined as exc:
+            raise Aborted(session.short) from exc
         except HostError as exc:
             raise RemoteError(str(exc), exc.permanent) from exc
         session.last_activity = session.awaiting_since = self._clock()
@@ -404,19 +421,29 @@ class RemoteService:
         session.prompt = session.asking_since = None
         self._persist(session)
 
+    async def last_step(self, session: Session) -> str:
+        try:
+            return await self._host.last_step(session.pty_id)
+        except Exception:
+            _log.warning("could not read the last step of %s", session.id, exc_info=True)
+            return ""
+
     async def answer(self, session_id: str, text: str, sent_at: float = 0.0) -> prompts.Answer:
-        """Types the reply into the prompt the session is showing. Only a session Remote started has one:
-        another agent's prompts are answered in its own terminal. A reply written before that prompt was first seen
-        was meant for an earlier one, and is not typed."""
-        session = self.get(session_id)
-        if session.kind != STARTED:
-            raise Refusal("Messages to another agent go through its name, not through Remote control.")
+        return await self.answer_session(self.get(session_id), text, sent_at)
+
+    async def answer_session(
+        self, session: Session, text: str, sent_at: float = 0.0, *, interrupt: bool = False, free_text: bool = False
+    ) -> prompts.Answer:
+        """Types the reply into the prompt the session is showing, for a session Remote started, one it watches
+        after messaging it, or a terminal it only looks at. A reply written before that prompt was first seen
+        was meant for an earlier one, and is not typed; the host types nothing unless the same prompt is
+        still the one on screen. `interrupt` cancels the prompt with Escape instead of answering it."""
         shown = session.prompt
         if shown is None:
             raise RemoteError("That session is not waiting on a prompt.")
         if 0 < sent_at < session.prompt_seen_at:
             raise PromptRefused(shown, "that was for an earlier question.")
-        result = prompts.resolve(shown, text)
+        result = prompts.interrupt(shown) if interrupt else prompts.resolve(shown, text, free_text)
         if isinstance(result, prompts.Refused):
             raise PromptRefused(shown, result.reason)
         try:
@@ -424,11 +451,14 @@ class RemoteService:
         except StalePrompt as exc:
             session.waiting, session.prompt, session.asking_since = False, None, None
             raise PromptGone(str(exc)) from exc
+        except NoTypedAnswer as exc:
+            raise PromptRefused(shown, prompts.no_typed_answer(shown)) from exc
         except HostError as exc:
             raise RemoteError(str(exc)) from exc
         session.last_activity = self._clock()
         session.awaiting_since = None if result.ends_turn else session.last_activity
         session.waiting, session.prompt, session.asking_since = False, None, None
+        self._persist(session)
         return result
 
     async def needs_wake(self, session: Session) -> bool:
@@ -449,6 +479,22 @@ class RemoteService:
             session.state = SLEEPING
             self._persist(session)
         return session.state != LIVE
+
+    async def open_elsewhere(self, session: Session) -> str | None:
+        """The terminal that is running this lane's saved session in its place, asked before a wake is
+        started so the message goes where the session is. None for a lane that is waking, stopping or failed."""
+        if session.waking or session.stopping or session.state == FAILED:
+            return None
+        try:
+            return await self._host.open_elsewhere(session.pty_id, session.project, session.vendor_session_id)
+        except HostError as exc:
+            raise RemoteError(str(exc)) from exc
+
+    def mark_opened_elsewhere(self, session: Session) -> None:
+        """Keeps a lane whose saved session someone else is running, marked failed. Nothing is killed or
+        dropped: the terminal that holds the session is not this lane's, and `stop` is what clears the lane."""
+        session.state, session.failure = FAILED, commands.LANE_ELSEWHERE_REASON
+        self._persist(session)
 
     def begin_wake(self, session: Session) -> None:
         """Claims the lane for one wake, or refuses. Synchronous, so two messages in a row cannot
@@ -497,6 +543,8 @@ class RemoteService:
             except HostError as exc:
                 if cancelled():
                     raise Aborted(session.short) from exc
+                if isinstance(exc, OpenElsewhere):
+                    raise Elsewhere(str(exc), True) from exc
                 if exc.permanent:
                     session.state, session.failure = FAILED, str(exc)
                     self._persist(session)
@@ -514,7 +562,7 @@ class RemoteService:
             if cancelled() or not proceed():
                 raise Aborted(session.short)
             session.wake_delivering = True
-            await self._deliver(session, text)
+            await self._deliver(session, text, proceed)
         finally:
             session.waking = session.wake_delivering = False
 
@@ -663,24 +711,25 @@ class RemoteService:
         if adopted and (session.awaiting_since is None or state["at"] < session.awaiting_since):
             return
         if asking:
-            # An adopted agent's prompt is never read or answered here: it is answered in its own terminal.
-            if not adopted:
-                if session.waiting and session.prompt is not None:
-                    again = await self._host.prompt(session.pty_id)
-                    if again is None or again.id == session.prompt.id:
-                        session.last_event_at = state["at"]
-                        return
-                    session.prompt, session.prompt_seen_at = again, self._clock()
-                else:
-                    session.prompt, session.prompt_seen_at = await self._host.prompt(session.pty_id), self._clock()
+            if session.waiting and session.prompt is not None:
+                again = await self._host.prompt(session.pty_id)
+                if again is None or again.id == session.prompt.id:
+                    session.last_event_at = state["at"]
+                    return
+                session.prompt, session.prompt_seen_at = again, self._clock()
+            else:
+                session.prompt, session.prompt_seen_at = await self._host.prompt(session.pty_id), self._clock()
             session.waiting = True
             session.last_event_at = state["at"]
-            if not adopted and session.prompt is None:
+            if session.prompt is None:
                 session.asking_since = self._clock()
                 return
             kind = "input-required"
         elif state["state"] == "idle" and session.awaiting_since is not None and state["at"] >= session.awaiting_since:
             kind = "completed"
+        elif state["state"] == "working" and session.prompt is not None:
+            session.waiting, session.prompt, session.last_event_at = False, None, state["at"]
+            return
         else:
             return
         if kind == "completed":
@@ -690,7 +739,7 @@ class RemoteService:
             session.prompt = None
         session.last_activity = max(session.last_activity, state["at"])
         self._persist(session)
-        text = "" if kind == "input-required" and not adopted else await self._host.last_message(session.pty_id)
+        text = "" if kind == "input-required" else await self._host.last_message(session.pty_id)
         if kind == "completed" and adopted:
             self._sessions.pop(session.id, None)  # watched for one answer; the next message adopts it again
         await self._emit(kind, session, text)
@@ -703,7 +752,8 @@ class RemoteService:
         if session.prompt is None:
             if self._clock() - session.asking_since < PROMPT_GRACE_SECONDS:
                 return
-            text = await self._host.last_message(session.pty_id)
+            # Another agent's own words are never carried to chat: its ask is the prompt or nothing.
+            text = "" if session.kind == ADOPTED else await self._host.last_message(session.pty_id)
             if not text:
                 session.prompt = prompts.unreadable(at, prompts.UNSEEN_WHY)
         session.asking_since = None

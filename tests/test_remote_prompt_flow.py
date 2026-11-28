@@ -5,10 +5,10 @@ import pytest
 
 from remote import commands, prompts, runner
 from remote.service import PROMPT_GRACE_SECONDS
-from remote.session_host import HostError
+from remote.session_host import HostError, NoTypedAnswer
 from tests.test_remote_chat_window import MINUTE, WINDOW, opened, say, window_of
 from tests.test_remote_prompts import ASK_USER_QUESTION, BASH_PERMISSION
-from tests.test_remote_runner import BUDGET, OTHER, World
+from tests.test_remote_runner import BUDGET, OTHER, World, _finish
 
 
 @pytest.fixture
@@ -104,14 +104,50 @@ async def test_a_number_picks_that_menu_row(w):
     assert w.channel.posted[-1] == "[\U0001F40A Gator - budget - Budget] Got it: Blue."
 
 
-async def test_typed_words_are_not_typed_into_a_question_and_it_keeps_waiting(w):
+async def test_an_untagged_note_is_never_typed_as_a_free_text_answer(w):
     await opened(w)
     await say(w, "run the tests")
     await show(w, "pty-1", ASK_USER_QUESTION)
     await say(w, "green please")
-    assert w.host.typed == []
-    assert "Not sent: pick 1 or 2, or answer it in AI Gator." in w.channel.posted[-1]
+    assert w.host.typed == [] and w.host.delivered == [("pty-1", "run the tests")]
+    assert "reply to this message or start with `@gator`" in w.channel.posted[-1]
     assert w.service.list()[0].waiting
+
+
+async def test_a_quote_reply_to_the_question_is_typed_as_its_own_answer(w):
+    await opened(w)
+    await say(w, "run the tests")
+    await show(w, "pty-1", ASK_USER_QUESTION)
+    from tests.test_remote_needs_you import quote_reply
+
+    await quote_reply(w, routed(w)[0]["message_id"], "green please")
+    assert w.host.typed == [("pty-1", (prompts.DOWN, prompts.DOWN, "green please", prompts.ENTER))]
+
+
+async def test_a_screen_without_the_other_row_refuses_typed_words_and_keeps_the_question(w, monkeypatch):
+    async def refuse(pty_id, prompt_id, keys, ends_turn=False):
+        raise NoTypedAnswer("no row")
+
+    await opened(w)
+    await say(w, "run the tests")
+    await show(w, "pty-1", ASK_USER_QUESTION)
+    monkeypatch.setattr(w.host, "answer", refuse)
+    await say(w, "@gator green please")
+    assert w.host.typed == []
+    assert w.service.list()[0].waiting
+    last = w.channel.posted[-1]
+    assert "Not sent: that question's screen has no row to type your own words into. Pick 1 or 2, or `esc`" in last
+    assert "Or type your own answer." not in last
+
+
+async def test_typed_words_answer_a_question_as_its_own_answer(w):
+    await opened(w)
+    await say(w, "run the tests")
+    await show(w, "pty-1", ASK_USER_QUESTION)
+    await say(w, "@gator green please")
+    assert w.host.typed == [("pty-1", (prompts.DOWN, prompts.DOWN, "green please", prompts.ENTER))]
+    assert w.channel.posted[-1] == "[\U0001F40A Gator - budget - Budget] Sent your answer."
+    assert not w.service.list()[0].waiting
 
 
 async def test_a_reply_that_is_not_an_answer_to_a_permission_says_what_is_asked_and_types_nothing(w):
@@ -143,7 +179,8 @@ async def test_a_draft_cannot_be_answered_from_chat(w):
     await say(w, "run the tests")
     await show(w, "pty-1", {"tool_name": "mcp__outlook__send_email", "tool_input": {"to": "a@example.com"}})
     assert w.channel.posted[-1] == (
-        "[\U0001F40A Gator - budget - Budget] Needs you: a draft to review.\nOpen AI Gator to review it and send."
+        "[\U0001F40A Gator - budget - Budget] Needs you: a draft to review.\n\n"
+        "Next:\n• Open AI Gator to review it and send.\n• `esc` to cancel it. The session keeps running."
     )
     await say(w, "allow")
     assert w.host.typed == []
@@ -259,6 +296,9 @@ async def test_the_quiet_close_fires_once_nobody_is_waiting(w):
     await say(w, "run the tests")
     await show(w, "pty-1", BASH_PERMISSION)
     await say(w, "allow")
+    w.clock.now += 10
+    await _finish(w, "All green.")
+    assert any("All green." in p for p in w.channel.posted)
     w.channel.posted.clear()
     w.clock.now += WINDOW + 1
     await w.runner.tick()
@@ -318,16 +358,17 @@ def test_list_offers_no_next_block_when_nothing_is_waiting():
 
 
 def test_status_leaves_out_last_activity_when_it_is_the_same_minute():
-    same = commands.session_status("budget", commands.WORKING, 1000.0, 1010.0)
+    same = commands.session_status("budget", commands.IDLE, 1000.0, 1010.0)
     assert "Last activity" not in same
-    later = commands.session_status("budget", commands.WORKING, 1000.0, 5000.0)
+    later = commands.session_status("budget", commands.IDLE, 1000.0, 5000.0)
     assert "Last activity" in later
 
 
 async def test_a_session_that_only_sounds_like_it_asked_does_not_keep_the_chat_open(w):
     await opened(w)
     await say(w, "run the tests")
-    w.service.list()[0].waiting = True
+    await _finish(w, "Which one do you want?")
+    assert w.service.list()[0].waiting
     w.channel.posted.clear()
     w.clock.now += WINDOW + 1
     await w.runner.tick()
@@ -371,10 +412,10 @@ def refuse_typing_while_asking(w):
     """What the terminal does: a message typed at a permission dialog is refused, not sent."""
     original = w.host.deliver
 
-    async def deliver(pty_id, text):
+    async def deliver(pty_id, text, proceed=None):
         if w.host.states.get(pty_id, {}).get("state") == "asking":
             raise HostError("The agent is waiting for the user to answer a permission prompt.")
-        await original(pty_id, text)
+        await original(pty_id, text, proceed)
 
     w.host.deliver = deliver
 
@@ -387,7 +428,7 @@ async def test_a_reply_before_the_tick_has_seen_the_prompt_shows_it_and_types_no
     w.host.states["pty-1"] = {"state": "asking", "at": when}
     w.host.prompts["pty-1"] = prompts.parse(BASH_PERMISSION, when)
     w.channel.posted.clear()
-    await say(w, "what is the status")
+    await say(w, "is it done yet")
     assert w.channel.posted == [
         "[\U0001F40A Gator - budget - Budget] Not sent: this session is waiting on a permission.\n"
         "Tool: Bash\nCommand: echo hi > out.txt\n\n"
@@ -402,7 +443,7 @@ async def test_a_reply_while_the_agent_asks_with_no_prompt_file_points_to_the_ap
     refuse_typing_while_asking(w)
     w.host.states["pty-1"] = {"state": "asking", "at": w.clock.now + 5}
     w.channel.posted.clear()
-    await say(w, "what is the status")
+    await say(w, "is it done yet")
     [out] = w.channel.posted
     assert "waiting for the user" not in out
     assert prompts.OPEN_APP_QUESTION in out and "Not sent:" in out

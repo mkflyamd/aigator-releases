@@ -12,10 +12,12 @@ from typing import Callable
 
 from config import load_config
 from remote import commands, settings
+from remote.bystanders import LocalTerminalWatch
 from remote.guard import Guard
 from remote.peers import PeerDirectory, WakeGateway
 from remote.master import Master
 from remote.owner import ChannelOwner
+from remote.presence import is_away
 from remote.runner import RemoteRunner
 from remote.service import RemoteError, RemoteService
 from remote.session_host import LocalPtyHost, Project
@@ -84,6 +86,7 @@ class RemoteLoop:
             if not self._restore_failing:
                 _log.warning("Remote control could not restore its sessions yet: %s", exc)
             self._restore_failing = True
+            self._runner.connection_failed(exc)
             return False
         self._restore_failing = False
         self._restored = True
@@ -123,8 +126,10 @@ class RemoteLoop:
             if not self._poll_failing:
                 _log.warning("Remote control poll failed: %s", exc)
             self._poll_failing = True
+            self._runner.connection_failed(exc)
             return
         self._poll_failing = False
+        await self._runner.connection_recovered()
         if self._need_online and live:
             self._need_online = False
             await self._runner.announce_online()
@@ -147,6 +152,8 @@ def _build_loop(channel, state: State, enabled: Callable[[], bool]) -> RemoteLoo
         master=Master(state),
         first_prompt_hint=commands.BREVITY_HINT,
         peers=PeerDirectory(WakeGateway(), settings.peer_messages_per_hour),
+        terminals=LocalTerminalWatch(),
+        away=is_away,
     )
     return RemoteLoop(runner, enabled, owner=ChannelOwner(channel.name))
 

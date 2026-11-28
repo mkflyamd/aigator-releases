@@ -7,23 +7,28 @@ from __future__ import annotations
 
 import math
 import re
+import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
 from remote import settings
 
 TRIGGER_RE = re.compile(r"^\s*@gator(?:\s+(.*))?$", re.IGNORECASE | re.DOTALL)
+_ASKING_RE = re.compile(r"^what(?:'s|’s| is)\s+(?:the\s+)?", re.IGNORECASE)
 GREETING_WORDS = ("hi", "hello", "hey", "start")
-RESERVED = ("list", "status", "stop", "help", "bye", *GREETING_WORDS)
+INTERRUPT_WORDS = ("esc", "escape")
+RESERVED = ("list", "status", "stop", "help", "bye", *INTERRUPT_WORDS, *GREETING_WORDS)
 WINDOW_SECONDS = 30 * 60.0
 NAME_MAX_CHARS = 40
 TEXT_MAX_BYTES = 4096
 REPLY_MAX_CHARS = 3500
-LEAD_MAX_CHARS = 200
+REPLY_CEILING_CHARS = 60000
+REPLY_MAX_PARTS = 12
 UNTAGGED_MAX_CHARS = 1500
 EVERYTHING_GOES_TO_AGENT = "Everything you type here goes to the agent."
-TOO_LONG_BODY = "That message is too long to run from this chat, so it was not sent."
-TOO_LONG_OPTIONS = ["Start it with `@gator` to send it anyway.", "Or shorten it and send it again."]
+TOO_LONG_BODY = f"Not sent: over {UNTAGGED_MAX_CHARS} characters."
+TOO_LONG_OPTIONS = [f"Add `@gator` to send up to {TEXT_MAX_BYTES}.", "Or shorten it and send it again."]
 ATTACHMENT_BODY = "Attachments are not sent from this chat."
 ATTACHMENT_OPTION = "Describe what you need in text, and send that."
 SETTINGS_SECTION = "Remote control"
@@ -36,8 +41,8 @@ DOT = "·"
 CHOICES_SHOWN = 2
 CHOICE_MAX_CHARS = 60
 WORKING, WAITING, IDLE = "working", "waiting for you", "idle"
-ACK_DELAY_SECONDS = 15.0
-PROGRESS_SECONDS = 120.0
+ACK_DELAY_SECONDS = 5.0
+PROGRESS_SECONDS = 300.0
 ELAPSED_MIN_SECONDS = 60.0
 SLEEPING, FAILED = "sleeping", "failed"
 BREVITY_HINT = "(This session was started from a chat app. Keep replies short, in plain text, with no tables.)"
@@ -51,15 +56,26 @@ LEADING_MENTION_RE =re.compile(r"^@([\w.-]+):?(?:\s+(.*))?$", re.DOTALL)
 
 @dataclass(frozen=True)
 class Command:
-    kind: str  # send | list | status | stop | stop_all | help | open | bye
+    kind: str  # send | list | status | stop | stop_all | help | open | bye | answer | interrupt
     name: str | None = None
     text: str = ""
+    reply_to: str | None = None  # answer: the id of the posted prompt message this reply is for
     tagged: bool = True  # False for an ordinary message routed by the open chat window
     sent_at: float = 0.0  # when the user wrote it, as the channel says; 0 when it does not
 
 
 def _cap_bytes(text: str) -> str:
     return text.encode("utf-8")[:TEXT_MAX_BYTES].decode("utf-8", "ignore")
+
+
+def _reserved_phrase(rest: str) -> str:
+    """`status?`, `what is the status` and `what's the list?` read as the reserved word. Only a reserved word
+    alone, or `status`/`stop` with one name, is rewritten; any other text goes to the agent as typed."""
+    plain = _ASKING_RE.sub("", rest.rstrip(".!?, ").strip())
+    words = plain.split()
+    if words and words[0].lower() in RESERVED and (len(words) == 1 or (len(words) == 2 and words[0].lower() in ("status", "stop"))):
+        return plain
+    return rest
 
 
 def parse(message: str) -> Command | None:
@@ -70,6 +86,7 @@ def parse(message: str) -> Command | None:
     rest = _cap_bytes((match.group(1) or "").strip())
     if not rest:
         return Command("help")
+    rest = _reserved_phrase(rest)
     whole = rest.rstrip(".!?, ").lower()
     if whole in GREETING_WORDS:
         return Command("open")
@@ -80,8 +97,8 @@ def parse(message: str) -> Command | None:
     key = word.lower()
     if key == "stop" and tail.lower() == "all":
         return Command("stop_all")
-    if key in ("status", "stop"):
-        return Command(key, name=tail.split()[0].lower() if tail else None)
+    if key in ("status", "stop", *INTERRUPT_WORDS):
+        return Command("interrupt" if key in INTERRUPT_WORDS else key, name=tail.split()[0].lower() if tail else None)
     if key in ("list", "help"):
         return Command(key)
     return Command("send", text=rest)
@@ -204,9 +221,19 @@ def chat_closed_bye() -> str:
     return system_reply("Chat closed. Gator out.", ["`@gator hi` to open it again."])
 
 
-def timed_out(seconds: float) -> str:
+def _left_behind(asleep: Sequence[str], waiting: Sequence[str]) -> str:
+    """What the stop ended that someone might still have been counting on."""
+    parts = []
+    if asleep:
+        parts.append(f" Asleep, so their saved sessions are gone: {', '.join(asleep)}.")
+    if waiting:
+        parts.append(f" Still waiting for an answer, now unanswered: {', '.join(waiting)}.")
+    return "".join(parts)
+
+
+def timed_out(seconds: float, *, asleep: Sequence[str] = (), waiting: Sequence[str] = ()) -> str:
     return system_reply(
-        f"Remote control turned itself off after {in_words(seconds)}.",
+        f"Remote control turned itself off after {in_words(seconds)}.{_left_behind(asleep, waiting)}",
         [f"Open AI Gator, then Settings, then {SETTINGS_SECTION}, and switch it on."],
     )
 
@@ -220,21 +247,39 @@ def turns_off_soon(seconds: float) -> str:
 
 def not_armed() -> str:
     return system_reply(
-        "Remote control is not turned on.",
+        "Not sent: Remote control is not turned on.",
         [f"Open AI Gator, then Settings, then {SETTINGS_SECTION}, and switch it on."],
     )
 
 
 def timed_out_reply(seconds: float) -> str:
     return system_reply(
-        f"Remote control timed out after {in_words(seconds)}.",
+        f"Not sent: Remote control timed out after {in_words(seconds)}.",
         [f"Open AI Gator, then Settings, then {SETTINGS_SECTION}, and switch it on."],
     )
 
 
-def slow_down(wait_seconds: float) -> str:
+def slow_down(wait_seconds: float, dropped: int = 1) -> str:
+    if dropped == 1:
+        return system_reply(
+            "Not sent: too many messages at once.", [f"Wait {in_words(wait_seconds)}, then send it again."]
+        )
     return system_reply(
-        "Slow down, that was too many messages at once.", [f"Wait {in_words(wait_seconds)}, then send it again."]
+        f"Not sent: {dropped} messages, because too many came at once.",
+        [f"Wait {in_words(wait_seconds)}, then send them again."],
+    )
+
+
+def part_not_sent(number: int, total: int) -> str:
+    return system_reply(
+        f"Part {number} of {total} did not send.", ["Ask for the reply again, or open the agent's tab in AI Gator."]
+    )
+
+
+def part_unsure(number: int, total: int) -> str:
+    return system_reply(
+        f"Part {number} of {total} may not have arrived: the chat did not answer.",
+        ["Check the chat before asking for the reply again."],
     )
 
 
@@ -242,7 +287,8 @@ def stale_skipped(count: int, limit_seconds: float) -> str:
     one = count == 1
     what = "a message" if one else f"{count} messages"
     return system_reply(
-        f"Skipped {what} you sent while AI Gator was off, because it was more than {in_words(limit_seconds)} old.",
+        f"Not sent: {what} you sent while AI Gator was off, because {'it was' if one else 'they were'} "
+        f"more than {in_words(limit_seconds)} old.",
         ["Send it again if you still need it." if one else "Send them again if you still need them."],
     )
 
@@ -251,13 +297,27 @@ def online() -> str:
     return system_reply("Online.", ["`@gator hi` to open a chat."])
 
 
+def restarted(running: int, asleep: int, lost: int = 0) -> str:
+    text = f"Gator restarted: {running} running, {asleep} asleep."
+    if lost:
+        text += f" {lost} queued message{' was' if lost == 1 else 's were'} not sent."
+    return system_reply(text, ["`list` to see them."])
+
+
+def reconnected(channel: str, seconds: float, reason: str) -> str:
+    return system_reply(
+        f"Back online. Gator could not reach {channel.title()} for {in_words(seconds)}: {reason}",
+        ["`list` to see what is running."],
+    )
+
+
 def error_reply(text: str) -> str:
     return system_reply(text, ["`help` to see what you can do."])
 
 
-def stopped(count: int) -> str:
+def stopped(count: int, *, asleep: Sequence[str] = (), waiting: Sequence[str] = ()) -> str:
     return system_reply(
-        f"Stopped {count} session{'' if count == 1 else 's'}. Remote control is off.",
+        f"Stopped {count} session{'' if count == 1 else 's'}. Remote control is off.{_left_behind(asleep, waiting)}",
         ["Open AI Gator and turn Remote control on again."],
     )
 
@@ -371,7 +431,7 @@ def peer_exited(name: str, project: str) -> str:
     )
 
 
-def peer_result(name: str, project: str, text: str, waiting: bool = False, ref: str | None = None) -> str:
+def peer_result(name: str, project: str, text: str, waiting: bool = False, ref: str | None = None) -> list[str]:
     """Another agent's answer to a message sent from chat, under its own name. `text` has already been
     through the same redaction as Remote's own replies. `ref` is what the person types to reach it."""
     return agent_result(
@@ -385,10 +445,17 @@ def peer_result(name: str, project: str, text: str, waiting: bool = False, ref: 
     )
 
 
-def peer_refused(name: str, reason: str) -> str:
-    return system_reply(
-        f"Did not send to {peer_label(name)}. {reason}", ["Send it again when that has changed.", "`list` to see the other agents."]
-    )
+def which_prompt() -> str:
+    """More than one session waits on a prompt and the reply names none of them."""
+    return system_reply("Several sessions are waiting on you. Which one?", ["Reply to the message of the one you mean."])
+
+
+def peer_refused(name: str, reason: str, permanent: bool = False) -> str:
+    """Nothing was typed. A refusal that time can mend says to send again; one it cannot only points at `list`."""
+    options = ["`list` to see the agents you can message."]
+    if not permanent:
+        options.insert(0, "Send it again in a moment.")
+    return system_reply(f"Did not send to {peer_label(name)}. {reason}", options)
 
 
 def peer_limit(name: str, limit: int, wait_seconds: float) -> str:
@@ -413,6 +480,15 @@ def which_session(names: list[str]) -> str:
     return system_reply("Which session?", options)
 
 
+def nothing_to_cancel() -> str:
+    return system_reply("Nothing is waiting on a prompt, so there is nothing to cancel.", ["`status` to see what each session is doing."])
+
+
+def which_to_cancel(names: list[str]) -> str:
+    options = [f"`esc {name}`" for name in names[:CHOICES_SHOWN]]
+    return system_reply("Several sessions are waiting on a prompt. Which one should be cancelled?", options)
+
+
 def which_to_stop(names: list[str]) -> str:
     options = [f"`stop {name}`" for name in names[:CHOICES_SHOWN]] + ["`stop all` to stop everything and turn Remote control off."]
     return system_reply("Which session should stop?", options)
@@ -432,19 +508,46 @@ def mention_needs_text(name: str) -> str:
 
 
 def session_status(
-    session: str, state: str, since: float, last_activity: float, *, project: str | None = None, several: bool = False
+    session: str,
+    state: str,
+    since: float,
+    last_activity: float,
+    *,
+    project: str | None = None,
+    several: bool = False,
+    now: float | None = None,
+    last_step: str = "",
 ) -> str:
     last = f"Last activity {clock_time(last_activity)}."
     if state == SLEEPING:
         text, options = f"Asleep to free memory.\n{last}", ["Reply here to wake it.", f"`stop {session}` to stop it."]
     elif state == FAILED:
         text, options = f"Could not be woken.\n{last}", [f"`stop {session}`, then send a message to start a new one."]
+    elif state == WORKING:
+        text = f"Working for {elapsed_words((time.time() if now is None else now) - since)}."
+        text += f" Last step: {last_step}." if last_step else ""
+        options = [_stop_option(session, several)]
     else:
-        lead = {WORKING: "Working", WAITING: "Waiting for you", IDLE: "Idle"}[state]
+        lead = {WAITING: "Waiting for you", IDLE: "Idle"}[state]
         text, options = f"{lead} since {clock_time(since)}.", []
         if clock_time(last_activity) != clock_time(since):
             text += f"\n{last}"
     return agent_reply(session, text, options, project=project, several=several)
+
+
+def _stop_option(session: str, several: bool) -> str:
+    return f"`stop{f' {session}' if several else ''}` to stop it."
+
+
+def busy_queued(
+    session: str, elapsed: float, last_step: str, *, project: str | None = None, several: bool = False
+) -> str:
+    """The reply to a message that arrives while the session is still working: what it is doing, and that the
+    message is queued behind it."""
+    body = f"Working for {elapsed_words(elapsed)}."
+    body += f" Last step: {last_step}." if last_step else ""
+    body += "\nYour message is queued, so no need to resend."
+    return agent_reply(session, body, [_stop_option(session, several)], project=project, several=several)
 
 
 def working_ack(session: str, text: str, *, project: str | None = None, several: bool = False) -> str:
@@ -455,8 +558,7 @@ def working_ack(session: str, text: str, *, project: str | None = None, several:
 def working(session: str, branch: str | None, several: bool, *, project: str | None = None) -> str:
     """The one message sent when a turn has not finished after ACK_DELAY_SECONDS."""
     body = "Working on it." + (f"\nBranch: {branch}" if branch else "")
-    option = f"`stop{f' {session}' if several else ''}` to stop it."
-    return agent_reply(session, body, [option], project=project, several=several)
+    return agent_reply(session, body, [_stop_option(session, several)], project=project, several=several)
 
 
 def elapsed_words(seconds: float) -> str:
@@ -467,8 +569,12 @@ def elapsed_words(seconds: float) -> str:
     return f"{hours} h" if hours else f"{minutes} min"
 
 
-def progress(session: str, elapsed: float, *, project: str | None = None, several: bool = False) -> str:
-    return agent_reply(session, f"Still working, {elapsed_words(elapsed)}.", [], project=project, several=several)
+def progress(
+    session: str, elapsed: float, last_step: str = "", *, project: str | None = None, several: bool = False
+) -> str:
+    body = f"Still working, {elapsed_words(elapsed)}."
+    body += f" Last step: {last_step}." if last_step else ""
+    return agent_reply(session, body, [], project=project, several=several)
 
 
 def done_headline(elapsed: float | None) -> str:
@@ -499,7 +605,7 @@ def waking(session: str, *, project: str | None = None, several: bool = False) -
     """Posted the moment a message reaches a sleeping session, before the wake finishes."""
     return agent_reply(
         session,
-        "Waking up. Your message goes in once it is ready.",
+        "Waking this session. Your message goes in when it is up, so no need to resend.",
         [f"`status {session}` to check on it."],
         project=project,
         several=several,
@@ -519,12 +625,60 @@ def wake_failed(
     return agent_reply(session, f"Nothing was sent.\n{reason}", [option], project=project, several=several)
 
 
-def still_waking(session: str, *, project: str | None = None, several: bool = False) -> str:
-    """A message that arrives while the wake is under way. It is not queued."""
+LANE_ELSEWHERE_REASON = "This session is open in another terminal on this computer."
+
+
+def lane_opened_elsewhere(session: str, *, project: str | None = None, several: bool = False) -> str:
+    """The lane's saved session is open in another terminal that cannot take the message from here."""
     return agent_reply(
         session,
-        "Still waking up. That message was not sent.",
-        ["Send it again once it is ready.", f"`status {session}` to check on it."],
+        f"{LANE_ELSEWHERE_REASON} Your message was not sent, and the session was not woken.",
+        [f"Message it in that terminal, or `stop {session}` to forget this lane."],
+        project=project,
+        several=several,
+    )
+
+
+def still_waking(session: str, *, project: str | None = None, several: bool = False) -> str:
+    """A message that arrives while the wake is under way: it is queued behind the first one."""
+    return agent_reply(
+        session,
+        "Still waking up. Your message is queued, so no need to resend.",
+        [f"`status {session}` to check on it."],
+        project=project,
+        several=several,
+    )
+
+
+WAKE_QUEUE_MAX = 10
+
+
+def wake_queue_full(session: str, *, project: str | None = None, several: bool = False) -> str:
+    return agent_reply(
+        session,
+        f"Not sent: {WAKE_QUEUE_MAX} messages are already waiting for it to wake. Send this one again once it is up.",
+        [f"`status {session}` to check on it."],
+        project=project,
+        several=several,
+    )
+
+
+def messages_not_sent(count: int) -> str:
+    """Remote control turned off while messages were waiting to be typed."""
+    noun = "message" if count == 1 else "messages"
+    return system_reply(
+        f"{count} queued {noun} not sent, because Remote control turned off.",
+        [f"Send {'it' if count == 1 else 'them'} again once it is back on."],
+    )
+
+
+def queued_not_sent(session: str, count: int, *, project: str | None = None, several: bool = False) -> str:
+    """The wake failed after messages were promised a place behind the first one."""
+    noun = "message" if count == 1 else "messages"
+    return agent_reply(
+        session,
+        f"{count} queued {noun} not sent.",
+        [f"Send {'it' if count == 1 else 'them'} again to retry, or `stop {session}`."],
         project=project,
         several=several,
     )
@@ -550,11 +704,15 @@ def already_has_session(session: str, *, project: str | None = None, several: bo
     )
 
 
-def send_failed(session: str, reason: str, *, project: str | None = None, several: bool = False) -> str:
-    return agent_reply(
-        session, f"Nothing was sent.\n{reason}", [f"Send your message again to retry, or `stop {session}`."],
-        project=project, several=several,
+def send_failed(
+    session: str, reason: str, *, permanent: bool = False, project: str | None = None, several: bool = False
+) -> str:
+    option = (
+        f"`stop {session}`, then send a message to start a new session."
+        if permanent
+        else f"Send your message again to retry, or `stop {session}`."
     )
+    return agent_reply(session, f"Nothing was sent.\n{reason}", [option], project=project, several=several)
 
 
 def duplicate_lane(session: str, *, project: str | None = None, several: bool = False) -> str:
@@ -605,26 +763,6 @@ def agent_exited(session: str, *, project: str | None = None, several: bool = Fa
     )
 
 
-def _lead(body: str) -> str:
-    """The agent's first sentence, at most LEAD_MAX_CHARS, cut at a word boundary."""
-    first = re.split(r"(?<=[.?!])\s|\n", body.strip(), maxsplit=1)[0]
-    if len(first) <= LEAD_MAX_CHARS:
-        return first
-    return first[:LEAD_MAX_CHARS].rsplit(" ", 1)[0]
-
-
-def _first_part(body: str) -> str:
-    """Up to REPLY_MAX_CHARS of body, cut at a paragraph or line boundary in the last half of
-    the window, else at any whitespace, never inside a word."""
-    window = body[:REPLY_MAX_CHARS]
-    for floor in (REPLY_MAX_CHARS // 2, 1):
-        for boundary in ("\n\n", "\n", " "):
-            cut = window.rfind(boundary)
-            if cut >= floor:
-                return window[:cut].rstrip()
-    return window
-
-
 def _choices(question: str) -> list[str]:
     """Exactly two short numbered or lettered options at the end of an agent's question. Anything that
     would read as a Gator command when typed back (stop, list, ...) is not offered."""
@@ -642,6 +780,25 @@ def _choices(question: str) -> list[str]:
     return run
 
 
+def _split(body: str) -> list[str]:
+    """The body in pieces of at most REPLY_MAX_CHARS, each cut at a paragraph boundary when one is in reach, else
+    at a line, else at whitespace, never inside a word. A code fence left open by a cut is closed and opened again."""
+    pieces: list[str] = []
+    rest = body
+    while len(rest) > REPLY_MAX_CHARS:
+        window = rest[:REPLY_MAX_CHARS]
+        cuts = [window.rfind(boundary) for boundary in ("\n\n", "\n", " ")]
+        cut = next((c for c in cuts if c > REPLY_MAX_CHARS // 2), max(cuts))
+        cut = cut if cut > 0 else REPLY_MAX_CHARS
+        piece, rest = rest[:cut].rstrip(), rest[cut:].lstrip()
+        if piece.count("```") % 2:
+            piece += "\n```"
+            rest = "```\n" + rest
+        pieces.append(piece)
+    pieces.append(rest)
+    return pieces
+
+
 def agent_result(
     agent: str,
     session: str,
@@ -653,33 +810,42 @@ def agent_result(
     project: str | None = None,
     prefix: str | None = None,
     reply_to: str | None = None,
-) -> str:
-    """A turn's outcome. An empty headline is a quick answer: the prefix and the agent's words, nothing
-    else. Otherwise the headline, then the agent's words on the next line. Over REPLY_MAX_CHARS the
-    headline carries a one-sentence lead and the reply ends with a trim line, all in one message. A
-    question ends with its choices as options; an empty or trimmed reply ends with what the user can do."""
+) -> list[str]:
+    """A turn's outcome as the messages to post, in order. An empty headline is a quick answer: the prefix and the
+    agent's words, nothing else. Otherwise the headline, then the agent's words on the next line. A reply over
+    REPLY_MAX_CHARS is never cut: it goes out in parts, each with the prefix and `(n/N)` ending its first line.
+    Only a reply past REPLY_MAX_PARTS parts stops, and says so in its last part. A question ends with its choices as
+    options; an empty reply ends with what the user can do."""
     prefix = prefix or agent_prefix(session, project, several)
     body = _tidy(text)
-    open_tab = f"Open the {agent} tab in AI Gator"
     answer = f"`{reply_to}your answer` to answer it." if reply_to else "Type your answer."
     keep_going = f"`{reply_to}your message` to keep going." if reply_to else "Reply here to keep going in this session."
     if not body:
-        options = [f"{open_tab} to see it.", answer if waiting else keep_going]
-        return _tidy(f"{prefix} {headline or 'Done.'} No text came back.\n\n{next_block(options)}")
-    if len(body) <= REPLY_MAX_CHARS:
-        if not headline:
-            return _tidy(f"{prefix} {body}")
-        if not waiting:
-            return _tidy(f"{prefix} {headline}\n{body}")
-        tag = reply_to if reply_to is not None else (f"{session}: " if several else "")
-        options = [f"`{tag}{c}`" for c in _choices(body)]
-        tail = f"\n\n{next_block(options)}" if options else ""
-        return _tidy(f"{prefix} {headline}\n{body}{tail}")
-    shown = _first_part(body)
-    more = len(body) - len(shown)
-    if shown.count("```") % 2:
-        shown += "\n```"
-    options = [f"{open_tab} for the full reply.", answer if waiting else (keep_going if reply_to else "Reply here to keep going.")]
-    return _tidy(
-        f"{prefix} {headline or 'Done.'} {_lead(body)}\n\n{shown}\n\nTrimmed, {more} more characters.\n\n{next_block(options)}"
-    )
+        options = [f"Open the {agent} tab in AI Gator to see it.", answer if waiting else keep_going]
+        return [_tidy(f"{prefix} {headline or 'Done.'} No text came back.\n\n{next_block(options)}")]
+    ceiling = len(body) > REPLY_CEILING_CHARS
+    if ceiling:
+        body = body[:REPLY_CEILING_CHARS].rsplit(" ", 1)[0]
+    pieces = _split(body)
+    if len(pieces) > REPLY_MAX_PARTS:
+        ceiling, pieces = True, pieces[:REPLY_MAX_PARTS]
+    if ceiling:
+        pieces[-1] += (
+            f"\n\nThis reply is longer than {REPLY_MAX_PARTS} messages, so the rest was not sent."
+            f" Open the {agent} tab in AI Gator for all of it."
+        )
+    tag = reply_to if reply_to is not None else (f"{session}: " if several else "")
+    options = [f"`{tag}{c}`" for c in _choices(body)] if waiting and headline else []
+    tail = f"\n\n{next_block(options)}" if options else ""
+    count = len(pieces)
+    parts = []
+    for number, piece in enumerate(pieces, 1):
+        more = f" ({number}/{count})" if count > 1 else ""
+        if headline:
+            head = f"{prefix} {headline}{more}\n{piece}"
+        elif count > 1:
+            head = f"{prefix}{more}\n{piece}"
+        else:
+            head = f"{prefix} {piece}"
+        parts.append(_tidy(head + (tail if number == count else "")))
+    return parts

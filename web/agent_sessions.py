@@ -550,6 +550,45 @@ def last_assistant_text(rec: dict) -> str:
     return text if role == "assistant" else ""
 
 
+_STEP_VERBS = {"Read": "reading", "Edit": "editing", "Write": "writing", "MultiEdit": "editing", "NotebookEdit": "editing"}
+_STEP_FIELDS = ("description", "command", "file_path", "path")
+STEP_MAX = 60
+_STEP_REDACT_MAX = 300
+
+
+def _step_line(block: dict) -> str:
+    """The whole line a tool call stands for, capped only so redaction stays cheap. The agent's own prose and the
+    url, query and pattern of a call are not used: they say more than a progress line should."""
+    if block.get("type") != "tool_use":
+        return ""
+    name, args = str(block.get("name") or ""), block.get("input") or {}
+    detail = next((str(args[k]) for k in _STEP_FIELDS if isinstance(args.get(k), str) and args[k].strip()), "")
+    if name in _STEP_VERBS and detail:
+        detail = f"{_STEP_VERBS[name]} {Path(detail).name}"
+    elif name == "Bash" and detail:
+        detail = detail.splitlines()[0]
+        detail = detail if args.get("description") else f"running {detail}"
+    return (detail or name)[:_STEP_REDACT_MAX].rstrip()
+
+
+def last_step(rec: dict) -> str:
+    """One short line on what the agent last did since the newest request: its latest tool call or note.
+    "" when it has done nothing yet, or the agent keeps no such transcript."""
+    if rec["agent"] != "claude":
+        return ""
+    red = ah.Redactor(ah._configured_api_keys())
+    path = Path(rec["path"])
+    for o in reversed(_read_tail(path, path.stat().st_size)):
+        message = _claude_message(o)
+        if message and message[0] == "user":
+            return ""
+        blocks = (o.get("message") or {}).get("content") if o.get("type") == "assistant" else None
+        for block in reversed(blocks if isinstance(blocks, list) else []):
+            if isinstance(block, dict) and (step := _step_line(block)):
+                return red(step)[:STEP_MAX].rstrip()
+    return ""
+
+
 def _store_messages(rec: dict) -> list[tuple[str, str]]:
     read = agent_session_stores.PREVIEWERS[rec["agent"]]
     try:

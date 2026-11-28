@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+from pathlib import Path
 
 import pytest
 
@@ -11,7 +12,7 @@ import agent_sessions
 import agent_state
 from remote import prompts
 from remote.commands import agent_result
-from remote.session_host import HostError, LocalPtyHost, StalePrompt
+from remote.session_host import HostError, LocalPtyHost, NoTypedAnswer, StalePrompt
 from routes import terminal
 from skills.code_agent import projects
 
@@ -46,11 +47,12 @@ async def test_known_token_shapes_in_the_last_assistant_message_are_redacted(mon
     assert "ghp_" + "a" * 30 not in text
 
 
-async def test_redacted_text_still_gets_the_3500_character_truncation(monkeypatch):
-    host = _host_with_reply(monkeypatch, f"{FAKE_KEY} " + "x" * 5000)
-    posted = agent_result("Claude", "demo", "Done.", await host.last_message("pty-1"))
-    assert FAKE_KEY not in posted
-    assert "Trimmed," in posted
+async def test_redacted_text_is_still_split_into_parts(monkeypatch):
+    host = _host_with_reply(monkeypatch, f"{FAKE_KEY} " + "x " * 3000)
+    parts = agent_result("Claude", "demo", "Done.", await host.last_message("pty-1"))
+    assert len(parts) == 2
+    assert all(FAKE_KEY not in part for part in parts)
+    assert "[REDACTED]" in parts[0]
 
 
 async def test_a_transcript_that_catches_up_after_the_stop_hook_is_waited_for(monkeypatch):
@@ -257,6 +259,50 @@ async def test_the_keys_are_typed_in_order_and_the_prompt_is_cleared(typed):
     assert agent_state.read_states([PTY])[PTY]["state"] == "asking"
 
 
+def _ask(*labels):
+    options = [{"label": label, "description": ""} for label in labels]
+    return {"tool_name": "AskUserQuestion", "tool_input": {"questions": [{"question": "Which?", "options": options}]}}
+
+
+def _real_screen(name):
+    return (Path(__file__).parent / "fixtures" / "ask_user_question" / name).read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "name, labels",
+    [("two_options.txt", ("Red", "Blue")), ("four_options.txt", ("Apple", "Banana", "Cherry", "Date"))],
+)
+async def test_typed_words_go_down_onto_the_other_row_of_a_real_question_screen(typed, screen, name, labels):
+    screen.text = _real_screen(name)
+    _show(_ask(*labels))
+    host = LocalPtyHost()
+    shown = await host.prompt(PTY)
+    keys = (*(prompts.DOWN,) * len(labels), "Purple", prompts.ENTER)
+    await host.answer(PTY, shown.id, keys)
+    assert [key for _, key in typed] == list(keys)
+
+
+@pytest.mark.parametrize("name", ["with_previews.txt", "four_options.txt"])
+async def test_typed_words_are_refused_when_the_screen_has_no_row_for_them(typed, screen, name):
+    screen.text = _real_screen(name)
+    _show(_ask("Compact", "Roomy"))
+    host = LocalPtyHost()
+    shown = await host.prompt(PTY)
+    with pytest.raises(NoTypedAnswer):
+        await host.answer(PTY, shown.id, (prompts.DOWN, prompts.DOWN, "Purple", prompts.ENTER))
+    assert typed == []
+    assert agent_state.read_prompt(PTY) is not None
+
+
+async def test_a_numbered_pick_does_not_need_the_other_row(typed, screen):
+    screen.text = _real_screen("with_previews.txt")
+    _show(_ask("Compact", "Roomy"))
+    host = LocalPtyHost()
+    shown = await host.prompt(PTY)
+    await host.answer(PTY, shown.id, (prompts.DOWN, prompts.ENTER))
+    assert [key for _, key in typed] == [prompts.DOWN, prompts.ENTER]
+
+
 async def test_a_denied_turn_is_reported_idle_because_the_agent_fires_no_hook(typed):
     _show(BASH)
     host = LocalPtyHost()
@@ -367,6 +413,29 @@ async def test_a_question_is_checked_by_terminal_input_not_by_the_permission_scr
         await host.answer(PTY, shown.id, (prompts.ENTER,))
 
 
+QUESTION_DIALOG = "Q?\n❯1.A\n2.B\n3.Typesomething.\nEntertoselect·↑/↓tonavigate·Esctocancel"
+
+
+async def test_escape_cancels_a_question_only_while_its_dialog_is_the_last_thing_on_screen(typed, screen):
+    _show(ASK)
+    host = LocalPtyHost()
+    shown = await host.prompt(PTY)
+    screen.text = QUESTION_DIALOG
+    await host.answer(PTY, shown.id, (prompts.ESCAPE,), True)
+    assert typed == [(PTY, prompts.ESCAPE)]
+
+
+@pytest.mark.parametrize("after", ["\n✢Marinating…", "\n● Interrupted · What should Claude do instead?"])
+async def test_escape_is_not_typed_once_something_is_painted_after_the_question(typed, screen, after):
+    _show(ASK)
+    host = LocalPtyHost()
+    shown = await host.prompt(PTY)
+    screen.text = QUESTION_DIALOG + after
+    with pytest.raises(StalePrompt):
+        await host.answer(PTY, shown.id, (prompts.ESCAPE,), True)
+    assert typed == []
+
+
 async def test_a_session_that_is_gone_is_an_error(typed, monkeypatch):
     _show(BASH)
     host = LocalPtyHost()
@@ -403,3 +472,54 @@ async def test_the_dialog_of_the_same_tool_call_is_typed_into_even_when_the_comm
     shown = await host.prompt(PTY)
     await host.answer(PTY, shown.id, (prompts.ENTER,))
     assert typed == [(PTY, prompts.ENTER)]
+
+
+def _terminal_remote_did_not_start():
+    from remote.service import ADOPTED, RemoteService, Session
+    from remote.session_host import Project, read_prompt
+
+    project = Project(id="Budget", name="Budget", repo_path="C:/repo")
+    session = Session(
+        id=f"app:{PTY}",
+        pty_id=PTY,
+        project=project,
+        short="Budget",
+        vendor_session_id=None,
+        created_at=1.0,
+        last_activity=1.0,
+        from_chat=False,
+        kind=ADOPTED,
+    )
+    session.prompt, session.waiting = read_prompt(PTY), True
+    return RemoteService(LocalPtyHost(), default_project=lambda: project), session
+
+
+async def test_an_allow_for_a_terminal_remote_did_not_start_is_typed_when_its_dialog_is_on_screen(typed):
+    _show(BASH)
+    service, session = _terminal_remote_did_not_start()
+    result = await service.answer_session(session, "allow")
+    assert result.keys == (prompts.ENTER,)
+    assert typed == [(PTY, prompts.ENTER)]
+
+
+async def test_an_allow_for_a_terminal_remote_did_not_start_is_not_typed_into_another_dialog(typed, screen):
+    from remote.service import PromptGone
+
+    _show(BASH)
+    service, session = _terminal_remote_did_not_start()
+    screen.text = LATER_DIALOG
+    with pytest.raises(PromptGone):
+        await service.answer_session(session, "allow")
+    assert typed == []
+    assert not session.waiting and session.prompt is None
+
+
+async def test_an_allow_for_a_terminal_remote_did_not_start_is_not_typed_after_its_user_typed(typed, screen):
+    from remote.service import PromptGone
+
+    _show(BASH)
+    service, session = _terminal_remote_did_not_start()
+    screen.last_user_input = session.prompt.at + 1
+    with pytest.raises(PromptGone):
+        await service.answer_session(session, "allow")
+    assert typed == []

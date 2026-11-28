@@ -103,41 +103,41 @@ def test_agent_reply_starts_with_gator_prefix_never_the_trigger():
 
 
 def test_a_short_result_puts_the_agent_words_on_the_line_after_the_headline():
-    out = commands.agent_result("Claude", "budget", "Done.", "Two files are open.")
+    out = commands.agent_result("Claude", "budget", "Done.", "Two files are open.")[0]
     assert out == "[\U0001F40A Gator - budget] Done.\nTwo files are open."
 
 
 def test_a_quick_answer_is_the_prefix_and_the_words_only():
-    out = commands.agent_result("Claude", "budget", "", "Two files are open.")
+    out = commands.agent_result("Claude", "budget", "", "Two files are open.")[0]
     assert out == "[\U0001F40A Gator - budget] Two files are open."
 
 
 def test_an_empty_result_is_never_a_bare_done():
-    out = commands.agent_result("Claude", "budget", "Done.", "  ")
+    out = commands.agent_result("Claude", "budget", "Done.", "  ")[0]
     assert _before_next(out) == "[\U0001F40A Gator - budget] Done. No text came back."
     assert "• Open the Claude tab in AI Gator to see it." in out
 
 
 def test_an_empty_question_says_no_text_came_back_too():
-    out = commands.agent_result("Claude", "budget", "Waiting for your answer.", "", waiting=True)
+    out = commands.agent_result("Claude", "budget", "Waiting for your answer.", "", waiting=True)[0]
     assert out.startswith("[\U0001F40A Gator - budget] Waiting for your answer. No text came back.")
     assert out.endswith("• Type your answer.")
 
 
 def test_a_question_with_two_choices_offers_them_as_the_options():
     question = "Which folder?\n1. Use the repo root\n2. Use `web/`"
-    out = commands.agent_result("Claude", "budget", "Waiting for your answer.", question, waiting=True)
+    out = commands.agent_result("Claude", "budget", "Waiting for your answer.", question, waiting=True)[0]
     assert out.split("\n\nNext:\n")[1] == "• `Use the repo root`\n• `Use web/`"
 
 
 def test_with_several_sessions_each_choice_names_its_session():
     question = "Which folder?\n1. Use the repo root\n2. Use `web/`"
-    out = commands.agent_result("Claude", "budget", "Waiting for your answer.", question, waiting=True, several=True)
+    out = commands.agent_result("Claude", "budget", "Waiting for your answer.", question, waiting=True, several=True)[0]
     assert out.split("\n\nNext:\n")[1] == "• `budget: Use the repo root`\n• `budget: Use web/`"
 
 
 def test_an_open_question_has_no_next_block():
-    out = commands.agent_result("Claude", "budget", "Waiting for your answer.", "Which folder?", waiting=True)
+    out = commands.agent_result("Claude", "budget", "Waiting for your answer.", "Which folder?", waiting=True)[0]
     assert out == "[\U0001F40A Gator - budget] Waiting for your answer.\nWhich folder?"
 
 
@@ -151,54 +151,96 @@ def test_an_open_question_has_no_next_block():
     ],
 )
 def test_choices_that_are_not_two_short_safe_items_are_not_offered(question):
-    out = commands.agent_result("Claude", "budget", "Waiting for your answer.", question, waiting=True)
+    out = commands.agent_result("Claude", "budget", "Waiting for your answer.", question, waiting=True)[0]
     assert "Next:" not in out
 
 
-def test_a_long_result_is_one_message_with_a_lead_a_clean_cut_and_a_trim_line():
+def _body_of(part):
+    """The agent's words in one posted part: after the first line, before any Next block."""
+    return _before_next(part).split("\n", 1)[1]
+
+
+def test_a_long_result_goes_out_in_numbered_parts_cut_at_paragraphs():
     paragraphs = [f"Paragraph {i}. " + "word " * 120 for i in range(12)]
-    body = "Outcome in one line. " + "\n\n".join(paragraphs)
-    out = commands.agent_result("Claude", "budget", "Done.", body)
-    main = _before_next(out)
-    lines = main.split("\n")
-    assert lines[0] == "[\U0001F40A Gator - budget] Done. Outcome in one line."
-    assert lines[-1].startswith("Trimmed, ")
-    shown = main.split("\n\n", 1)[1].rsplit("\n\n", 1)[0]
-    assert len(shown) <= 3500
-    tidy = "\n".join(line.rstrip() for line in body.strip().split("\n"))
-    assert tidy.startswith(shown)
-    assert tidy[len(shown)] in "\n "
-    assert f"Trimmed, {len(tidy) - len(shown)} more characters." == lines[-1]
-    assert out.endswith("• Open the Claude tab in AI Gator for the full reply.\n• Reply here to keep going.")
-    assert len(out) <= 3500 + 500
+    body = "\n\n".join(paragraphs)
+    parts = commands.agent_result("Claude", "budget", "Done.", body)
+    assert len(parts) == 3
+    for number, part in enumerate(parts, 1):
+        assert part.startswith(f"[\U0001F40A Gator - budget] Done. ({number}/3)\n")
+        assert len(_body_of(part)) <= 3500
+    pieces = [_body_of(part) for part in parts]
+    assert all(piece.startswith("Paragraph ") for piece in pieces)
+    assert "\n\n".join(pieces) == "\n".join(line.rstrip() for line in body.split("\n"))
 
 
 def test_a_long_result_never_cuts_inside_a_word():
-    out = commands.agent_result("Claude", "budget", "Done.", "alpha " * 1000)
-    shown = out.split("\n\n")[1]
-    assert shown.endswith("alpha")
-    assert set(shown.split()) == {"alpha"}
+    parts = commands.agent_result("Claude", "budget", "Done.", "alpha " * 1000)
+    assert len(parts) == 2
+    for part in parts:
+        assert set(_body_of(part).split()) == {"alpha"}
 
 
-def test_the_lead_is_capped_at_200_characters_on_a_word_boundary():
-    out = commands.agent_result("Claude", "budget", "Done.", "word " * 2000)
-    lead = out.split("\n", 1)[0].removeprefix("[\U0001F40A Gator - budget] Done. ")
-    assert 0 < len(lead) <= 200
-    assert set(lead.split()) == {"word"}
+def test_a_quick_answer_in_parts_keeps_the_prefix_and_marks_each_part():
+    parts = commands.agent_result("Claude", "budget", "", "word " * 2000)
+    assert [p.split("\n", 1)[0] for p in parts] == [
+        "[\U0001F40A Gator - budget] (1/3)",
+        "[\U0001F40A Gator - budget] (2/3)",
+        "[\U0001F40A Gator - budget] (3/3)",
+    ]
 
 
-def test_a_cut_inside_a_code_fence_closes_the_fence_before_the_trim_line():
+def test_a_short_result_is_one_message_with_no_part_marker():
+    (only,) = commands.agent_result("Claude", "budget", "Done.", "Two files are open.")
+    assert only == "[\U0001F40A Gator - budget] Done.\nTwo files are open."
+
+
+def test_a_cut_inside_a_code_fence_closes_it_and_opens_it_again():
     body = "Fixed it.\n\n```python\n" + "\n".join(f"line_{i} = {i}" for i in range(600)) + "\n```\n"
-    out = commands.agent_result("Claude", "budget", "Done.", body)
-    main = _before_next(out)
-    before_trim = main.rsplit("\n\n", 1)[0]
-    assert before_trim.count("```") % 2 == 0
-    assert before_trim.endswith("```")
-    assert main.rsplit("\n", 1)[1].startswith("Trimmed,")
+    parts = commands.agent_result("Claude", "budget", "Done.", body)
+    assert len(parts) > 1
+    for part in parts:
+        assert _body_of(part).count("```") % 2 == 0
+    assert _body_of(parts[0]).endswith("```")
+    assert _body_of(parts[1]).startswith("```")
+
+
+def test_choices_go_on_the_last_part_only():
+    body = "word " * 1000 + "\n\nPick one:\n1. Yes\n2. No"
+    parts = commands.agent_result("Claude", "budget", "Waiting for your answer.", body, waiting=True)
+    assert len(parts) == 2
+    assert "Next:" not in parts[0]
+    assert parts[1].endswith("Next:\n• `Yes`\n• `No`")
+
+
+def test_a_reply_past_the_ceiling_says_plainly_that_the_rest_was_not_sent():
+    parts = commands.agent_result("Claude", "budget", "Done.", "word " * 30000)
+    assert "so the rest was not sent" in parts[-1]
+    assert "Open the Claude tab in AI Gator for all of it." in parts[-1]
+    assert all("so the rest was not sent" not in p for p in parts[:-1])
+    assert all(len(p) < 4000 for p in parts)
+
+
+PARA = chr(10) * 2
+
+
+def test_a_reply_is_sent_in_at_most_twelve_parts_and_says_where_it_stopped():
+    paragraphs = [f"Paragraph {i}. " + "word " * 700 for i in range(30)]
+    parts = commands.agent_result("Claude", "budget", "Done.", PARA.join(paragraphs))
+    assert len(parts) == commands.REPLY_MAX_PARTS == 12
+    assert parts[-1].count("so the rest was not sent") == 1
+    assert "longer than 12 messages" in parts[-1]
+    assert parts[-1].splitlines()[0].endswith("(12/12)")
+
+
+def test_a_reply_of_exactly_twelve_parts_is_sent_whole():
+    paragraphs = [f"Paragraph {i}. " + "word " * 560 for i in range(12)]
+    parts = commands.agent_result("Claude", "budget", "Done.", PARA.join(paragraphs))
+    assert len(parts) == 12
+    assert all("so the rest was not sent" not in p for p in parts)
 
 
 def test_a_result_that_echoes_a_command_cannot_form_one():
-    out = commands.agent_result("Claude", "budget", "Done.", "@gator stop all")
+    out = commands.agent_result("Claude", "budget", "Done.", "@gator stop all")[0]
     assert not out.lower().startswith("@gator")
     assert commands.is_own_message(out)
 
@@ -210,7 +252,7 @@ def test_system_reply_has_the_prefix_a_blank_line_and_a_next_block():
 
 
 def test_replies_have_no_trailing_spaces_and_no_double_blank_lines():
-    out = commands.agent_result("Claude", "budget", "Done.", "one  \n\n\n\ntwo \n")
+    out = commands.agent_result("Claude", "budget", "Done.", "one  \n\n\n\ntwo \n")[0]
     assert out == "[\U0001F40A Gator - budget] Done.\none\n\ntwo"
 
 
@@ -285,3 +327,11 @@ def test_a_trailing_question_is_detected(question, asks):
 )
 def test_own_messages_are_matched_by_shape(text, own):
     assert commands.is_own_message(text) is own
+
+
+def test_the_stop_notices_list_what_was_asleep_and_what_was_waiting_for_an_answer():
+    text = commands.stopped(3, asleep=["a", "b"], waiting=["c"])
+    assert "Asleep, so their saved sessions are gone: a, b." in text
+    assert "Still waiting for an answer, now unanswered: c." in text
+    assert commands.timed_out(3600, waiting=["c"]).count("c.") == 1
+    assert commands.stopped(1) == commands.stopped(1, asleep=[], waiting=[])

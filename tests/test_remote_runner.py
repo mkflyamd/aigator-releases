@@ -6,7 +6,7 @@ from remote.guard import Guard
 from remote.master import Master
 from remote.runner import RemoteRunner
 from remote.service import PROMPT_GRACE_SECONDS, RemoteService
-from remote.session_host import HostError, HostSession, Project, StalePrompt
+from remote.session_host import OPEN_ELSEWHERE_MESSAGE, Declined, HostError, HostSession, OpenElsewhere, Project, StalePrompt
 from remote.state import State
 
 
@@ -39,6 +39,7 @@ class FakeHost:
         self.woke_with = []
         self.unreachable = False
         self.suspend_on_deliver = False
+        self.elsewhere = {}
 
     async def spawn(self, project, labels=None):
         self.spawn_labels.append(labels)
@@ -52,7 +53,9 @@ class FakeHost:
             raise HostError("The terminal host did not answer.")
         return list(self.restorable)
 
-    async def deliver(self, pty_id, text):
+    async def deliver(self, pty_id, text, proceed=None):
+        if proceed is not None and not proceed():
+            raise Declined("Remote control turned off before the message was typed.")
         if self.exit_on_deliver:
             raise ProcessExit()
         if self.crash_on_deliver:
@@ -80,11 +83,18 @@ class FakeHost:
     async def saved(self, project, vendor_session_id):
         return vendor_session_id in self.saved_ids
 
+    async def open_elsewhere(self, pty_id, project, vendor_session_id):
+        if self.unreachable:
+            raise HostError("The terminal host did not answer.")
+        return self.elsewhere.get(pty_id)
+
     async def wake(self, pty_id, project, labels, vendor_session_id=None, cancelled=lambda: False):
         self.woken.append((pty_id, project.id, labels))
         self.woke_with.append((vendor_session_id, cancelled))
         if self.wake_gate is not None:
             await self.wake_gate.wait()
+        if pty_id in self.elsewhere:
+            raise OpenElsewhere(OPEN_ELSEWHERE_MESSAGE)
         if self.wake_error is not None:
             raise self.wake_error
         self.sleeping_ids.discard(pty_id)
@@ -99,6 +109,9 @@ class FakeHost:
 
     async def last_message(self, pty_id):
         return self.last.get(pty_id, "")
+
+    async def last_step(self, pty_id):
+        return getattr(self, "steps", {}).get(pty_id, "")
 
     async def output(self, pty_id, since):
         return ("", since)
@@ -155,6 +168,7 @@ class World:
         Master(self.state, self.clock).arm()
         self.hint = ""
         self.branch = "main"
+        self.terminals = None
         self.build()
 
     def build(self):
@@ -170,6 +184,7 @@ class World:
             stale_seconds=900,
             first_prompt_hint=self.hint,
             branch_of=lambda path: self.branch,
+            terminals=self.terminals,
         )
         self.runner.sync_enabled(True)
 
@@ -265,7 +280,7 @@ async def test_messages_sent_while_offline_run_once_when_fresh_and_are_skipped_w
         w.msg(103, "@gator fresh", age=14 * 60),
     )
     assert w.host.delivered == [("pty-1", "fresh")]
-    notice = [p for p in w.channel.posted if "Skipped" in p]
+    notice = [p for p in w.channel.posted if "Not sent" in p]
     assert notice == [commands.stale_skipped(2, 900)]
 
 
@@ -274,7 +289,7 @@ async def test_more_than_20_commands_in_10_minutes_are_rate_limited(w):
     for i in range(21):
         await w.feed(w.msg(101 + i, f"@gator msg {i}"))
     assert len(w.host.delivered) == 20
-    assert sum("Slow down" in p for p in w.channel.posted) == 1
+    assert sum("Not sent: too many" in p for p in w.channel.posted) == 21 - 20
 
 
 async def test_stop_all_still_works_after_the_rate_limit_is_hit(w):
@@ -471,17 +486,19 @@ async def test_working_leaves_the_branch_out_when_there_is_none(w):
     assert "Branch" not in w.channel.posted[0]
 
 
-async def test_still_working_is_posted_at_most_every_two_minutes(w):
+async def test_still_working_is_posted_every_five_minutes_and_names_the_last_step(w):
     await baselined(w)
     await w.feed(w.msg(101, "@gator go"))
-    for step in (20, 100, 100, 100, 30):
+    w.host.steps = {"pty-1": "running tests"}
+    for step in (20, 150, 150, 150, 150):
         w.clock.now += step
         await w.runner.tick()
     assert w.channel.posted == [
         commands.working("budget", "main", False, project="Budget"),
-        commands.progress("budget", 220, project="Budget"),
-        commands.progress("budget", 350, project="Budget"),
+        commands.progress("budget", 320, "running tests", project="Budget"),
+        commands.progress("budget", 620, "running tests", project="Budget"),
     ]
+    assert "Last step: running tests." in w.channel.posted[1]
 
 
 async def test_done_between_fifteen_seconds_and_a_minute_is_plain_done(w):
@@ -604,7 +621,7 @@ async def test_a_question_from_the_agent_is_forwarded(w):
     await w.runner.tick()
     assert w.channel.posted[-1] == commands.agent_result(
         "Claude", "budget", "Waiting for your answer.", "Delete the folder?", waiting=True, project="Budget"
-    )
+    )[0]
 
 
 async def test_an_agent_that_exits_is_reported(w):
@@ -621,7 +638,7 @@ async def test_a_finished_turn_with_no_text_is_never_a_bare_done(w):
     w.host.states["pty-1"] = {"state": "idle", "at": w.clock.now + 5}
     w.host.last["pty-1"] = ""
     await w.runner.tick()
-    assert w.channel.posted[-1] == commands.agent_result("Claude", "budget", "Done.", "", project="Budget")
+    assert w.channel.posted[-1] == commands.agent_result("Claude", "budget", "Done.", "", project="Budget")[0]
     assert "No text came back." in w.channel.posted[-1]
 
 

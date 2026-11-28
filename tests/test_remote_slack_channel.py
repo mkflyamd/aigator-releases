@@ -1,8 +1,10 @@
 
+import time
+
 import pytest
 
 from remote import commands, slack_channel
-from remote.channel import ChannelRefused, InboundMessage
+from remote.channel import ChannelRefused, InboundMessage, PostUncertain
 from remote.guard import Guard
 from remote.master import Master
 from remote.runner import RemoteRunner
@@ -23,6 +25,7 @@ class FakeSlack:
         self.channels = {SELF_DM: {"is_im": True, "user": ME}, OTHER_DM: {"is_im": True, "user": "U222"}}
         self.fail_post = None
         self.next_ts = 1
+        self.threads = {}
 
     def __call__(self, endpoint, params=None, method="GET"):
         self.calls.append((endpoint, dict(params or {}), method))
@@ -33,6 +36,9 @@ class FakeSlack:
             return {"ok": True, "channel": info} if info else {"ok": False, "error": "channel_not_found"}
         if endpoint == "conversations.history":
             return {"ok": True, "messages": self.history}
+        if endpoint == "conversations.replies":
+            parent = {"ts": params["ts"], "user": ME, "text": "[Gator] prompt"}
+            return {"ok": True, "messages": [parent, *self.threads.get(params["ts"], [])]}
         if endpoint == "chat.postMessage":
             if self.fail_post:
                 return {"ok": False, "error": self.fail_post}
@@ -60,6 +66,18 @@ def test_post_to_the_own_self_dm_sends_and_records_the_ts(tmp_path, slack):
     assert ts == "1700000000.000001"
     assert slack.posts() == [("chat.postMessage", {"channel": SELF_DM, "text": "[\U0001F40A Gator] Online"}, "POST")]
     assert state.is_own_post("slack", "1700000000.000001")
+
+
+@pytest.mark.parametrize(
+    "error, uncertain",
+    [("ratelimited", False), ("not_authed", False), ("The read operation timed out", True), ("<urlopen error x>", True)],
+)
+def test_only_a_post_slack_never_answered_may_be_in_the_chat(tmp_path, slack, error, uncertain):
+    slack.fail_post = error
+    channel = SlackSelfDM(state=State(tmp_path / "s.json"))
+    with pytest.raises(ChannelRefused) as caught:
+        channel.post("[🐊 Gator] hello")
+    assert isinstance(caught.value, PostUncertain) is uncertain
 
 
 def test_post_to_any_other_dm_is_refused_and_logged(tmp_path, slack, caplog):
@@ -357,3 +375,84 @@ def test_channel_state_is_kept_per_channel(tmp_path):
     assert state.last_id("slack") == "1700000000.000200"
     assert state.is_own_post("slack", "1700000001.000100")
     assert not state.is_own_post("teams", "1700000001.000100")
+
+
+def reply(ts, text, user=ME, **extra):
+    return {"ts": ts, "user": user, "text": text, **extra}
+
+
+def test_thread_replies_under_an_open_prompt_message_come_back_once_with_the_parent_as_reply_to(tmp_path, slack):
+    state = State(tmp_path / "s.json")
+    channel = SlackSelfDM(state=state)
+    state.record_prompt_message("slack", "1700000000.000001", "pty:1", "p1", time.time() + 3600, time.time())
+    slack.threads["1700000000.000001"] = [
+        reply("1700000001.000001", "allow"),
+        reply("1700000002.000001", "deny"),
+    ]
+    got = channel.poll_replies()
+    assert [(m.id, m.text, m.reply_to) for m in got] == [
+        ("1700000002.000001", "deny", "1700000000.000001"),
+        ("1700000001.000001", "allow", "1700000000.000001"),
+    ]
+    assert channel.poll_replies() == []
+    slack.threads["1700000000.000001"].append(reply("1700000003.000001", "2"))
+    assert [m.text for m in channel.poll_replies()] == ["2"]
+
+
+def test_thread_replies_from_someone_else_or_a_bot_are_not_read(tmp_path, slack):
+    state = State(tmp_path / "s.json")
+    channel = SlackSelfDM(state=state)
+    state.record_prompt_message("slack", "1700000000.000001", "pty:1", "p1", time.time() + 3600, time.time())
+    slack.threads["1700000000.000001"] = [
+        reply("1700000001.000001", "allow", user="U222"),
+        reply("1700000002.000001", "allow", bot_id="B1"),
+        reply("1700000003.000001", "allow", subtype="channel_join"),
+    ]
+    assert channel.poll_replies() == []
+
+
+def test_no_replies_are_asked_for_when_no_prompt_message_is_open_or_it_has_expired(tmp_path, slack):
+    state = State(tmp_path / "s.json")
+    channel = SlackSelfDM(state=state)
+    assert channel.poll_replies() == []
+    state.record_prompt_message("slack", "1700000000.000001", "pty:1", "p1", time.time() - 1, time.time() - 10)
+    assert channel.poll_replies() == []
+    assert [c for c in slack.calls if c[0] == "conversations.replies"] == []
+
+
+def test_a_reply_under_a_prompt_that_closed_a_minute_ago_is_still_read_so_it_can_be_told_it_was_answered(tmp_path, slack):
+    state = State(tmp_path / "s.json")
+    channel = SlackSelfDM(state=state)
+    state.record_prompt_message("slack", "1700000000.000001", "pty:1", "p1", time.time() + 3600, time.time())
+    state.clear_prompt_messages("slack", "pty:1")
+    slack.threads["1700000000.000001"] = [reply("1700000001.000001", "allow")]
+    [got] = channel.poll_replies()
+    assert got.reply_to == "1700000000.000001"
+    assert channel.poll_replies() == []
+
+
+def test_a_prompt_closed_long_ago_is_no_longer_polled(tmp_path, slack):
+    state = State(tmp_path / "s.json")
+    channel = SlackSelfDM(state=state)
+    state.record_prompt_message("slack", "1700000000.000001", "pty:1", "p1", time.time() + 3600, time.time())
+    state.clear_prompt_messages("slack", "pty:1")
+    assert channel.poll_replies() == []
+    stored = state._load()["slack"]["prompt_closed"]
+    stored[0]["closed_at"] = time.time() - 3600
+    state._save(state._load() | {"slack": {**state._load()["slack"], "prompt_closed": stored}})
+    slack.calls.clear()
+    assert channel.poll_replies() == []
+    assert [c for c in slack.calls if c[0] == "conversations.replies"] == []
+
+
+def test_a_prompt_posted_without_an_id_is_not_asked_for_replies(tmp_path, slack, caplog):
+    from remote.state import UNROUTED_PREFIX
+
+    state = State(tmp_path / "s.json")
+    channel = SlackSelfDM(state=state)
+    state.record_prompt_message("slack", f"{UNROUTED_PREFIX}p1", "pty:1", "p1", time.time() + 3600, time.time())
+    slack.calls.clear()
+    with caplog.at_level("WARNING"):
+        assert channel.poll_replies() == []
+    assert not [c for c in slack.calls if c[0] == "conversations.replies"]
+    assert caplog.records == []

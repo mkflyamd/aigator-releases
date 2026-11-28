@@ -1,0 +1,14 @@
+☐ Fruit
+Which fruit?
+❯ 1. Apple
+   A crisp, round fruit that is sweet to tart and comes in red, green, oryllow.
+2. Banana
+Asoft,sweet,elongatedfruitwithayellowpeelthatisrichinpotassium.
+3.Cherry
+Asmall,roundstonefruitthatisjuicyandsweet-tart,usuallydeepred.
+4.Date
+Achewy,caramel-sweetfruitfromthedatepalm,ofteneatendried.
+5.Typesomething.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+6.Chataboutthis
+Entertoselect·↑/↓tonavigate·Esctocancel

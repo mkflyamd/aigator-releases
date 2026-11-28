@@ -249,15 +249,19 @@ class PeerDirectory:
     async def peers(self, project_id: str, exclude_pty: set[str], *, refresh: bool = False) -> list[Peer]:
         """Live ones first, then suspended, each by name. The listing reads session titles from disk,
         so it is reused for a few seconds unless a fresh one is asked for."""
+        entries = await self._entries(refresh)
+        peers = [Peer(e) for e in entries if e.get("project_id") == project_id and e["pty_id"] not in exclude_pty]
+        return sorted(peers, key=lambda p: (p.state != "live", p.name.casefold(), p.session_id))
+
+    async def by_pty(self, pty_id: str) -> Peer | None:
+        """The reachable agent running in this terminal, from a fresh listing, whatever its project."""
+        return next((Peer(e) for e in await self._entries(True) if e["pty_id"] == pty_id), None)
+
+    async def _entries(self, refresh: bool) -> list[dict]:
         now = self._clock()
         if refresh or self._cached is None or now - self._cached[0] >= self._cache_seconds:
             self._cached = (now, await asyncio.to_thread(self._gateway.entries))
-        peers = [
-            Peer(e)
-            for e in self._cached[1]
-            if e.get("project_id") == project_id and e["pty_id"] not in exclude_pty
-        ]
-        return sorted(peers, key=lambda p: (p.state != "live", p.name.casefold(), p.session_id))
+        return self._cached[1]
 
     async def deliver(self, peer: Peer, text: str, sender_name: str) -> Delivery:
         delivery = await self._gateway.deliver(peer, text, sender_name)

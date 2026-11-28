@@ -19,6 +19,7 @@ _log = logging.getLogger(__name__)
 
 AGENT = "claude"
 _TRANSCRIPT_TRIES = 4
+_STEP_RECORDS: dict[tuple[str, str, str], dict] = {}
 _TRANSCRIPT_WAIT = 0.5
 SCREEN_TAIL_CHARS = 12000
 _ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-_]")
@@ -48,6 +49,19 @@ RESUME_PROMPT_MESSAGE = (
 )
 
 
+async def _finish_even_if_cancelled(coro) -> None:
+    """The paste and the Enter that follows are one step: a cancel between them would leave the text half typed
+    in the session's input."""
+    task = asyncio.ensure_future(coro)
+    try:
+        await asyncio.shield(task)
+    except asyncio.CancelledError:
+        await asyncio.wait({task})
+        if not task.cancelled():
+            task.exception()
+        raise
+
+
 class HostError(Exception):
     """The host could not do what was asked; the message is for the user. `permanent` means
     trying again cannot help (the saved session or its project is gone)."""
@@ -59,6 +73,33 @@ class HostError(Exception):
 
 class StalePrompt(HostError):
     """The prompt being answered is gone or has changed, so nothing was typed."""
+
+
+def read_prompt(pty_id: str, redact=None) -> Prompt | None:
+    """What the agent in this terminal is asking, from the hook file it wrote, redacted and capped. None when
+    it wrote none. Everything that shows or answers a prompt reads it here, so the ids always agree."""
+    import agent_handoff
+    import agent_state
+    from remote import prompts
+
+    found = agent_state.read_prompt(pty_id)
+    if not found:
+        return None
+    redact = redact or agent_handoff.Redactor(agent_handoff._configured_api_keys())
+    parsed = prompts.parse(found["payload"], found["at"], redact) if found["payload"] is not None else None
+    return parsed or prompts.unreadable(found["at"])
+
+
+class Declined(HostError):
+    """The caller's `proceed` said no just before the text would have been typed."""
+
+
+class NoTypedAnswer(HostError):
+    """The question is still showing but its screen has no row that takes typed words, so nothing was typed."""
+
+
+class OpenElsewhere(HostError):
+    """The lane's saved session is running in another terminal, so it is never woken a second time."""
 
 
 @dataclass(frozen=True)
@@ -104,10 +145,11 @@ class RestoredSession:
 class SessionHost(Protocol):
     async def spawn(self, project: Project, labels: dict[str, str] | None = None) -> HostSession: ...
     async def restore(self, channel: str) -> list[RestoredSession]: ...
-    async def deliver(self, pty_id: str, text: str) -> None: ...
+    async def deliver(self, pty_id: str, text: str, proceed: Callable[[], bool] | None = None) -> None: ...
     async def alive(self, pty_id: str) -> bool: ...
     async def sleeping(self, pty_id: str) -> bool: ...
     async def saved(self, project: Project, vendor_session_id: str | None) -> bool: ...
+    async def open_elsewhere(self, pty_id: str, project: Project, vendor_session_id: str | None) -> str | None: ...
     async def wake(
         self,
         pty_id: str,
@@ -119,6 +161,7 @@ class SessionHost(Protocol):
     async def kill(self, pty_id: str) -> None: ...
     async def state(self, pty_id: str) -> dict | None: ...
     async def last_message(self, pty_id: str) -> str: ...
+    async def last_step(self, pty_id: str) -> str: ...
     async def output(self, pty_id: str, since: int) -> tuple[str, int]: ...
     async def prompt(self, pty_id: str) -> Prompt | None: ...
     async def answer(self, pty_id: str, prompt_id: str, keys: tuple[str, ...], ends_turn: bool = False) -> None: ...
@@ -189,9 +232,10 @@ class LocalPtyHost:
             )
         return found
 
-    async def deliver(self, pty_id: str, text: str) -> None:
+    async def deliver(self, pty_id: str, text: str, proceed: Callable[[], bool] | None = None) -> None:
         """Types one message into a running session. The session's wake/suspend slot is held for
-        the delivery, so the idle sweep cannot suspend it in the middle of the paste."""
+        the delivery, so the idle sweep cannot suspend it in the middle of the paste. `proceed` is asked at the
+        moment of typing, after the wait for the session to take input, and a no types nothing."""
         import agent_wake
         from routes import terminal
 
@@ -204,7 +248,9 @@ class LocalPtyHost:
             # The wait can be long: someone may have opened the terminal meanwhile.
             await asyncio.sleep(TYPE_SETTLE_SECONDS)
             await asyncio.to_thread(self._refuse_if_in_use, pty_id)
-            await agent_wake._type_message(pty_id, agent_wake.clean(text))
+            if proceed is not None and not proceed():
+                raise Declined("Remote control turned off before the message was typed.")
+            await _finish_even_if_cancelled(agent_wake._type_message(pty_id, agent_wake.clean(text)))
         except agent_wake.WakeRefused as exc:
             raise HostError(exc.reason) from exc
         finally:
@@ -256,6 +302,20 @@ class LocalPtyHost:
             _log.warning("could not look up the stored session %s", vendor_session_id, exc_info=True)
             return False
         return found is not None
+
+    async def open_elsewhere(self, pty_id: str, project: Project, vendor_session_id: str | None) -> str | None:
+        """The terminal other than this lane's that is running the lane's saved session, or None. A host
+        that does not answer raises HostError: "could not ask" is never taken for "nobody has it"."""
+        import agent_suspend
+
+        record = await asyncio.to_thread(agent_suspend.suspended_record, pty_id) or {}
+        session_id = record.get("session_id") or vendor_session_id
+        if not session_id:
+            return None
+        try:
+            return await asyncio.to_thread(self._open_elsewhere, pty_id, record.get("agent") or project.agent, session_id)
+        except pty_client.HostError as exc:
+            raise HostError(HOST_UNREACHABLE_MESSAGE) from exc
 
     async def wake(
         self,
@@ -322,7 +382,7 @@ class LocalPtyHost:
             except pty_client.HostError as exc:
                 raise HostError(HOST_UNREACHABLE_MESSAGE) from exc
             if elsewhere:
-                raise HostError(OPEN_ELSEWHERE_MESSAGE)
+                raise OpenElsewhere(OPEN_ELSEWHERE_MESSAGE, True)
             if cancelled():
                 raise HostError(WAKE_CANCELLED_MESSAGE)
 
@@ -340,7 +400,7 @@ class LocalPtyHost:
             await asyncio.to_thread(self._close_again, pty_id)
             raise HostError("The session could not be woken.") from exc
         if result["pty_session_id"] != pty_id:
-            raise HostError(OPEN_ELSEWHERE_MESSAGE)
+            raise OpenElsewhere(OPEN_ELSEWHERE_MESSAGE, True)
         try:
             await self._wait_awake(pty_id, cancelled)
         except BaseException:
@@ -351,21 +411,21 @@ class LocalPtyHost:
         await asyncio.to_thread(agent_suspend.forget, pty_id)
 
     @staticmethod
-    def _open_elsewhere(pty_id: str, agent: str, session_id: str) -> bool:
-        """True when a terminal other than this lane's holds the session: the user resumed it in
-        the Code tab. Two processes must never share one stored session. Raises pty_client.HostError
+    def _open_elsewhere(pty_id: str, agent: str, session_id: str) -> str | None:
+        """The terminal other than this lane's that holds the session: the user resumed it in the
+        Code tab. Two processes must never share one stored session. Raises pty_client.HostError
         when the terminal host cannot be asked."""
         import generic_agent
         from routes import terminal
 
         for live_id, meta in terminal.live_pty_labels(strict=True).items():
             if live_id != pty_id and meta.get("agent") == agent and meta.get("session_id") == session_id:
-                return True
+                return live_id
         for other in generic_agent.ptys_for_session(agent, session_id):
             entry = terminal.get_pty_session(other)
             if other != pty_id and entry is not None and not entry.done:
-                return True
-        return False
+                return other
+        return None
 
     async def _wait_awake(self, pty_id: str, cancelled: Callable[[], bool] = lambda: False) -> None:
         """Waits for the resumed session to take input. A large old session makes Claude ask how to
@@ -464,6 +524,34 @@ class LocalPtyHost:
             return ""
         return agent_handoff.Redactor(agent_handoff._configured_api_keys())(text)
 
+    async def last_step(self, pty_id: str) -> str:
+        return await asyncio.to_thread(self._last_step, pty_id)
+
+    @staticmethod
+    def _last_step(pty_id: str) -> str:
+        import agent_sessions
+        from routes import terminal
+        from skills.code_agent.projects import get_project
+
+        meta = terminal.session_owner(pty_id) or {}
+        repo = (get_project(meta.get("project_id") or "") or {}).get("repo_path")
+        if not repo or not meta.get("session_id"):
+            return ""
+        key = (repo, meta.get("agent") or AGENT, meta["session_id"])
+        try:
+            rec = _STEP_RECORDS.get(key)
+            if rec is None:
+                rec = agent_sessions.find_session(*key)
+                if rec:
+                    if len(_STEP_RECORDS) >= 64:
+                        _STEP_RECORDS.clear()
+                    _STEP_RECORDS[key] = rec
+            return agent_sessions.last_step(rec) if rec else ""
+        except Exception:
+            _STEP_RECORDS.pop(key, None)
+            _log.warning("could not read the last step of %s", pty_id, exc_info=True)
+            return ""
+
     async def output(self, pty_id: str, since: int) -> tuple[str, int]:
         from routes import terminal
 
@@ -478,16 +566,7 @@ class LocalPtyHost:
 
     @staticmethod
     def _prompt(pty_id: str) -> Prompt | None:
-        import agent_handoff
-        import agent_state
-        from remote import prompts
-
-        found = agent_state.read_prompt(pty_id)
-        if not found:
-            return None
-        redact = agent_handoff.Redactor(agent_handoff._configured_api_keys())
-        parsed = prompts.parse(found["payload"], found["at"], redact) if found["payload"] is not None else None
-        return parsed or prompts.unreadable(found["at"])
+        return read_prompt(pty_id)
 
     async def answer(self, pty_id: str, prompt_id: str, keys: tuple[str, ...], ends_turn: bool = False) -> None:
         """Types `keys` only while the agent is still showing the prompt `prompt_id`. No hook fires when the
@@ -507,11 +586,18 @@ class LocalPtyHost:
             raise HostError("That session is no longer running.")
         if entry.last_user_input > shown.at:
             raise StalePrompt("It was answered at the terminal.")
-        if shown.kind == prompts.PERMISSION:
+        typed = shown.kind == prompts.QUESTION and prompts.types_text(keys)
+        if shown.kind == prompts.PERMISSION or keys == (prompts.ESCAPE,) or typed:
             _, end = entry.read_from(10**12)
             tail, _ = entry.read_from(max(0, end - SCREEN_TAIL_CHARS))
-            if not prompts.permission_dialog_showing(_ANSI.sub("", tail), shown):
-                raise StalePrompt("The terminal is no longer showing that permission.")
+            tail = _ANSI.sub("", tail)
+            if shown.kind == prompts.PERMISSION:
+                if not prompts.permission_dialog_showing(tail, shown):
+                    raise StalePrompt("The terminal is no longer showing that permission.")
+            elif not prompts.escape_footer_showing(tail):
+                raise StalePrompt("The terminal is no longer showing that question.")
+            elif typed and not prompts.other_row_showing(tail, len(shown.choices)):
+                raise NoTypedAnswer("The terminal's question has no row for typed words.")
         for index, key in enumerate(keys):
             if index:
                 await asyncio.sleep(prompts.KEY_PAUSE_SECONDS)

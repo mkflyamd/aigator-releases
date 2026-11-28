@@ -2,6 +2,7 @@
 Claude Code's PermissionRequest hook wrote when captured live (ids and paths made up)."""
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -55,7 +56,7 @@ def test_the_captured_ask_user_question_is_a_numbered_question():
     assert prompts.waiting_message("budget", "Budget", prompt) == (
         "[\U0001F40A Gator - budget - Budget] Needs you: a question.\n"
         "Which color do you prefer?\n\n"
-        "Next:\n• `1` Red: Choose red\n• `2` Blue: Choose blue"
+        "Next:\n• `1` Red: Choose red\n• `2` Blue: Choose blue\n• Or type your own answer."
     )
 
 
@@ -131,7 +132,8 @@ def test_a_draft_tool_is_not_answerable_and_points_to_the_app():
         prompt = parsed({"tool_name": tool, "tool_input": {"body": "hello"}})
         assert prompt.kind == prompts.DRAFT and not prompt.answerable
         assert prompts.waiting_message("a", "p", prompt) == (
-            "[\U0001F40A Gator - a - p] Needs you: a draft to review.\nOpen AI Gator to review it and send."
+            "[\U0001F40A Gator - a - p] Needs you: a draft to review.\n\n"
+            "Next:\n• Open AI Gator to review it and send.\n• `esc` to cancel it. The session keeps running."
         )
         assert isinstance(prompts.resolve(prompt, "allow"), prompts.Refused)
         assert isinstance(prompts.resolve(prompt, "1"), prompts.Refused)
@@ -174,7 +176,7 @@ def test_an_app_only_permission_still_shows_what_it_is_and_points_to_the_app():
     assert prompts.waiting_message("a", "p", prompt) == (
         "[\U0001F40A Gator - a - p] Needs you: permission.\n"
         "Tool: WebFetch\nURL: https://example.com/docs\n\n"
-        "Next:\n• Open AI Gator to review and answer this permission."
+        "Next:\n• Open AI Gator to review and answer this permission.\n• `esc` to cancel it. The session keeps running."
     )
 
 
@@ -272,9 +274,24 @@ def test_a_number_out_of_range_types_nothing_and_says_what_to_pick():
 
 
 @pytest.mark.parametrize("reply", ["green, please", "hi\x1b[B\x03there", "x" * 600])
-def test_free_text_is_not_typed_into_a_question_because_its_other_row_was_not_seen_live(reply):
+def test_free_text_is_not_typed_unless_the_reply_is_a_quote_or_tagged(reply):
     out = prompts.resolve(parsed(ASK_USER_QUESTION), reply)
-    assert out == prompts.Refused("pick 1 or 2, or answer it in AI Gator.")
+    assert out == prompts.Refused(
+        "pick 1 or 2. To answer in your own words, reply to this message or start with `@gator`."
+    )
+
+
+def test_free_text_is_typed_as_plain_text_with_no_control_characters():
+    out = prompts.resolve(parsed(ASK_USER_QUESTION), "hi\x1b[B\x03there\x1b]0;x\x07 now\r\nok", free_text=True)
+    assert out.keys == (prompts.DOWN, prompts.DOWN, "hi there now ok", prompts.ENTER)
+
+
+def test_an_answer_over_the_limit_is_refused_not_cut_and_says_so():
+    at_limit = prompts.resolve(parsed(ASK_USER_QUESTION), "x" * prompts.ANSWER_MAX_CHARS, free_text=True)
+    assert isinstance(at_limit, prompts.Answer) and len(at_limit.keys[2]) == prompts.ANSWER_MAX_CHARS
+    out = prompts.resolve(parsed(ASK_USER_QUESTION), "x" * 501, free_text=True)
+    assert isinstance(out, prompts.Refused)
+    assert "501 characters" in out.reason and "limit is 500" in out.reason and "Shorten it" in out.reason
 
 
 
@@ -331,6 +348,39 @@ DIALOG = "Doyouwanttoproceed?\n❯1.Yes\n2.Yes,andalwaysallow\n3.No\n\nEsctocanc
 )
 def test_the_permission_dialog_must_be_the_last_thing_on_screen(tail, showing):
     assert prompts.permission_dialog_showing(tail) is showing
+
+
+def _captured(name):
+    """A real AskUserQuestion screen from Claude Code 2.1.283 (ANSI stripped), as the Remote tail would read it."""
+    return (Path(__file__).parent / "fixtures" / "ask_user_question" / name).read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "name, choices, showing",
+    [
+        ("two_options.txt", 2, True),
+        ("four_options.txt", 4, True),
+        ("two_options.txt", 4, False),
+        ("four_options.txt", 2, False),
+        ("with_previews.txt", 2, False),
+    ],
+)
+def test_typed_words_need_the_type_something_row_after_exactly_the_choices(name, choices, showing):
+    assert prompts.other_row_showing(_captured(name), choices) is showing
+
+
+def test_the_type_something_row_must_be_on_the_newest_screen():
+    tail = _captured("two_options.txt")
+    assert prompts.other_row_showing("noise\n" + tail, 2)
+    assert not prompts.other_row_showing(tail + "\n✢Marinating…", 2)
+    assert not prompts.other_row_showing(tail.replace("Chataboutthis", ""), 2)
+    assert not prompts.other_row_showing("", 2)
+
+
+def test_only_typed_words_are_gated():
+    assert prompts.types_text((prompts.DOWN, prompts.DOWN, "Purple", prompts.ENTER))
+    assert not prompts.types_text((prompts.DOWN, prompts.ENTER))
+    assert not prompts.types_text((prompts.ESCAPE,))
 
 
 def _bash(command):

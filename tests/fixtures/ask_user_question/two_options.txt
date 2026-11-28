@@ -1,0 +1,10 @@
+☐ Color
+Which color?
+❯ 1. Red
+   Red
+2. Blue
+Blue
+3.Typesomething.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+4.Chataboutthis
+Entertoselect·↑/↓tonavigate·Esctocancel

@@ -143,6 +143,7 @@ class FakeGateway:
         self.calls = 0
         self.sent = []
         self.refuse = None
+        self.refuse_code = "unsafe_mode"
         self.woke = False
 
     def entries(self):
@@ -151,7 +152,7 @@ class FakeGateway:
 
     async def deliver(self, peer, text, sender_name):
         if self.refuse:
-            raise PeerRefused(self.refuse, "unsafe_mode")
+            raise PeerRefused(self.refuse, self.refuse_code)
         self.sent.append((peer.name, text, sender_name))
         return Delivery(self.woke, peer.pty_id)
 
@@ -406,7 +407,7 @@ async def test_a_refusal_is_said_and_does_not_count(pw):
     await baselined(pw)
     pw.gateway.refuse = "It is set to run without asking for permission, so I will not message it."
     await pw.say("@gator MergeBrain hi")
-    assert pw.channel.posted == [commands.peer_refused("MergeBrain", pw.gateway.refuse)]
+    assert pw.channel.posted == [commands.peer_refused("MergeBrain", pw.gateway.refuse, True)]
     pw.gateway.refuse = None
     await pw.say("@gator MergeBrain hi")
     assert len(pw.gateway.sent) == 1

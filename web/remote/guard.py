@@ -15,6 +15,7 @@ _log = logging.getLogger(__name__)
 
 RATE_LIMIT = 20
 RATE_WINDOW_SECONDS = 600.0
+SLOW_NOTICE_SECONDS = 30.0
 
 
 def limit(value: float | Callable[[], float]) -> float:
@@ -33,8 +34,10 @@ class Guard:
         self._rate_limit = rate_limit
         self._rate_window = rate_window
         self._armed = False
+        self.epoch = 0
         self._events: deque[float] = deque()
         self._slow_notice_at: float | None = None
+        self._dropped = 0
         self._stops: dict[str, Callable[[], None]] = {}
         self._lock = threading.Lock()
 
@@ -42,7 +45,13 @@ class Guard:
         self._armed = True
 
     def disarm(self) -> None:
+        """`epoch` counts the times Remote control was turned off: work begun in an earlier epoch is not carried
+        out in a later one, even when it is armed again by then."""
+        if self._armed:
+            self.epoch += 1
         self._armed = False
+        with self._lock:
+            self._dropped = 0
 
     @property
     def armed(self) -> bool:
@@ -68,13 +77,22 @@ class Guard:
         with self._lock:
             return max(0.0, self._rate_window - (now - self._events[0])) if self._events else 0.0
 
-    def slow_down_due(self) -> bool:
-        """True once per rate window, so a flood gets one notice rather than one per command."""
+    def drop(self) -> int:
+        """Count a dropped command. Returns how many to announce now, or 0 while a notice went out in the last
+        30 seconds; the ones held back are counted in the next notice."""
+        with self._lock:
+            self._dropped += 1
+        return self.dropped_to_announce()
+
+    def dropped_to_announce(self) -> int:
         now = self._clock()
-        if self._slow_notice_at is not None and now - self._slow_notice_at < self._rate_window:
-            return False
-        self._slow_notice_at = now
-        return True
+        with self._lock:
+            if not self._dropped:
+                return 0
+            if self._slow_notice_at is not None and now - self._slow_notice_at < SLOW_NOTICE_SECONDS:
+                return 0
+            count, self._dropped, self._slow_notice_at = self._dropped, 0, now
+            return count
 
     def register_stop(self, key: str, stop: Callable[[], None]) -> None:
         self._stops[key] = stop
