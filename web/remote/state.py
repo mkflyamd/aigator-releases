@@ -82,6 +82,16 @@ class State:
                 data[MASTER_KEY] = record
             self._save(data)
 
+    def mark_master_seen(self, armed_at: float, now: float) -> None:
+        """Records the latest clock reading on the window that was armed at `armed_at`; a window
+        that was closed or replaced in the meantime is left alone."""
+        with self._lock:
+            data = self._load()
+            record = data.get(MASTER_KEY)
+            if isinstance(record, dict) and record.get("armed_at") == armed_at:
+                record["seen"] = now
+                self._save(data)
+
     def disarmed(self, channel: str) -> bool:
         with self._lock:
             return (self._load().get(channel) or {}).get("disarmed") is True

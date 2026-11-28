@@ -62,6 +62,24 @@ def test_a_clock_moved_backwards_counts_as_expired(tmp_path):
     assert master.expired() and not master.active()
 
 
+def test_a_clock_set_back_after_the_window_opened_counts_as_expired(tmp_path):
+    clock = Clock()
+    master = Master(State(tmp_path / "s.json"), clock)
+    armed_at = master.arm()["armed_at"]
+    clock.now += HOUR
+    assert master.active()
+    clock.now = armed_at + 60
+    assert master.expired() and not master.active()
+    assert Master(State(tmp_path / "s.json"), clock).expired()
+
+
+def test_the_window_is_closed_at_the_deadline_exactly(tmp_path):
+    clock = Clock()
+    master = Master(State(tmp_path / "s.json"), clock)
+    clock.now = master.arm()["deadline"]
+    assert master.expired() and not master.active()
+
+
 def test_a_stored_deadline_beyond_12_hours_is_cut_back(tmp_path):
     clock = Clock()
     state = State(tmp_path / "s.json")
