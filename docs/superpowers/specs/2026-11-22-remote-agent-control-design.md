@@ -130,7 +130,7 @@ Teams and Slack messages to the user's own self-chat may auto-send (PR #189 reco
 
 ### Settings
 
-The "Remote control" section holds per-channel switches (Teams, Slack), the reply switch, a default project, and three limits. Values are saved through `PATCH /api/config` and checked before they are stored.
+The "Remote control" section holds per-channel switches (Teams, Slack), the reply switch, a default project, and two limits. Values are saved through `PATCH /api/config` and checked before they are stored.
 
 - `teams_remote_control_enabled`, `slack_remote_control_enabled`: booleans. The existing Teams value is the Teams switch.
 - "Reply in my own chat" sits directly under the channel switches and shows "Replies to your own Teams and Slack chat are off until you turn this on." while it is off. It is the user's own auto-send switch, saved through `POST /api/relay/self-chat-autosend` and read from `GET /api/relay`; it is the same setting as "Allow posting to my own Teams and Slack chat" under Agent messaging, and the two stay in step. If the administrator's policy is not `allow`, it is shown off and disabled with "Your administrator has turned this off."
