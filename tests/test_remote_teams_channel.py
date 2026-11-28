@@ -22,7 +22,7 @@ def test_post_to_the_own_self_chat_sends_and_records_the_id(tmp_path, sent):
     state = State(tmp_path / "s.json")
     chat = TeamsSelfChat(state=state)
     assert chat.post("[Gator] Online") == "777"
-    assert sent == [("48:notes", "[Gator] Online")]
+    assert sent == [("48:notes", "<div>[Gator] Online</div>")]
     assert state.is_own_post("teams", "777")
 
 
@@ -53,6 +53,18 @@ def test_post_escapes_markup_so_agent_text_is_not_rendered_as_html(tmp_path, sen
     assert "&lt;b&gt;hi&lt;/b&gt; &amp; bye<br>line two" in html
 
 
+def test_post_converts_markdown_to_teams_html(tmp_path, sent):
+    chat = TeamsSelfChat(state=State(tmp_path / "s.json"))
+    chat.post("[Gator - Claude - x] **Done** with `ls`\n> a note\n- one\n- two")
+    html = sent[0][1]
+    assert "**" not in html
+    assert "&gt; a note" not in html
+    assert html == (
+        "<div>[Gator - Claude - x] <strong>Done</strong> with <code>ls</code></div>"
+        "<blockquote>a note</blockquote><ul><li>one</li><li>two</li></ul>"
+    )
+
+
 def test_a_failed_send_posts_nothing_and_raises_refused(tmp_path, monkeypatch, autosend_gate):
     def boom(chat_id, html):
         raise RuntimeError("token expired")
@@ -77,17 +89,18 @@ def test_poll_returns_inbound_messages_newest_first(monkeypatch):
     assert msgs[0].created_at - msgs[1].created_at == 5
 
 
-def test_an_unparseable_timestamp_counts_as_now_not_as_stale(monkeypatch):
-    import time
-
+def test_a_missing_or_unparseable_timestamp_has_no_time(monkeypatch):
     raw = [
         {"id": "3", "message_type": "message", "body": "@gator a", "body_html": "", "created_at": ""},
         {"id": "2", "message_type": "message", "body": "@gator b", "body_html": "", "created_at": "garbage"},
         {"id": "1", "message_type": "message", "body": "@gator c", "body_html": ""},
     ]
     monkeypatch.setattr(teams_channel, "fetch_messages", lambda chat_id: raw)
-    before = time.time()
     messages = TeamsSelfChat().poll()
-    assert len(messages) == 3
-    for message in messages:
-        assert before <= message.created_at <= time.time()
+    assert [m.created_at for m in messages] == [0.0, 0.0, 0.0]
+
+
+def test_a_quote_in_a_link_cannot_add_an_attribute(tmp_path, sent):
+    chat = TeamsSelfChat(state=State(tmp_path / "s.json"))
+    chat.post('[Gator - Claude - x] [a](https://a.com/"onmouseover="alert(1))')
+    assert "<a " not in sent[0][1]

@@ -94,5 +94,15 @@ def arm(state: State, clock: Callable[[], float] = time.time) -> str | None:
     return None
 
 
+def restart(state: State, clock: Callable[[], float] = time.time) -> str | None:
+    """Gives the window a fresh 12 hours. Returns the state that refused it, leaving the current
+    window as it is, or None when the new window is running."""
+    blocked = blocker()
+    if blocked:
+        return blocked
+    Master(state, clock).restart()
+    return None
+
+
 def disarm(state: State, clock: Callable[[], float] = time.time) -> None:
     Master(state, clock).disarm()

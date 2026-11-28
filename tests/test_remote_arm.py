@@ -4,7 +4,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from remote import status
+from remote import commands, status
 from remote.guard import Guard
 from remote.master import ARM_SECONDS, Master
 from remote.runner import RemoteRunner
@@ -14,7 +14,7 @@ from routes import config_routes, remote_control
 from security import verify_csrf
 from tests.test_remote_runner import BUDGET, Clock, FakeChannel, FakeHost, World
 
-TIMED_OUT = "[Gator] Remote control timed out. Re-arm it in Settings."
+TIMED_OUT = commands.timed_out(ARM_SECONDS)
 HOUR = 3600.0
 
 
@@ -59,6 +59,24 @@ def test_a_clock_moved_backwards_counts_as_expired(tmp_path):
     master = Master(State(tmp_path / "s.json"), clock)
     master.arm()
     clock.now -= 60
+    assert master.expired() and not master.active()
+
+
+def test_a_clock_set_back_after_the_window_opened_counts_as_expired(tmp_path):
+    clock = Clock()
+    master = Master(State(tmp_path / "s.json"), clock)
+    armed_at = master.arm()["armed_at"]
+    clock.now += HOUR
+    assert master.active()
+    clock.now = armed_at + 60
+    assert master.expired() and not master.active()
+    assert Master(State(tmp_path / "s.json"), clock).expired()
+
+
+def test_the_window_is_closed_at_the_deadline_exactly(tmp_path):
+    clock = Clock()
+    master = Master(State(tmp_path / "s.json"), clock)
+    clock.now = master.arm()["deadline"]
     assert master.expired() and not master.active()
 
 
@@ -140,6 +158,22 @@ async def test_idle_sessions_are_still_stopped_after_the_window_closes(w):
     assert w.host.killed == ["pty-1"]
 
 
+async def test_a_window_armed_while_the_sessions_are_stopping_gets_no_timed_out_notice(w):
+    await started(w)
+    w.clock.now += 12 * HOUR + 1
+    real_stop_all = w.service.stop_all
+
+    async def stop_all_then_rearm():
+        result = await real_stop_all()
+        Master(w.state, w.clock).arm()
+        return result
+
+    w.service.stop_all = stop_all_then_rearm
+    await w.runner.tick()
+    assert w.channel.posted == []
+    assert Master(w.state, w.clock).active()
+
+
 async def test_one_window_closes_both_channels(tmp_path):
     clock = Clock()
     state = State(tmp_path / "s.json")
@@ -167,6 +201,7 @@ async def test_one_warning_goes_out_15_minutes_before_the_deadline(w):
     await w.runner.tick()
     await w.runner.tick()
     assert len(w.channel.posted) == 1
+    assert w.channel.posted == [commands.turns_off_soon(15 * 60)]
     assert "turns off in 15 minutes" in w.channel.posted[0]
     w.restart()
     await w.runner.tick()
@@ -259,12 +294,68 @@ def test_arming_is_refused_while_replies_are_off(client, monkeypatch):
     assert c.get("/api/remote/status").json()["state"] == "replies_off"
 
 
+def test_arming_while_refused_opens_no_window(client, monkeypatch):
+    c, _, state = client
+    monkeypatch.setattr(status.relay_settings, "user_allows_self_chat_autosend", lambda: False)
+    assert c.post("/api/remote/arm").status_code == 409
+    assert state.master() is None
+
+
+def test_restart_gives_a_running_window_a_fresh_12_hours(client):
+    import time
+
+    c, _, state = client
+    now = time.time()
+    state.set_master({"armed_at": now - 5 * HOUR, "deadline": now + 7 * HOUR})
+    restarted = c.post("/api/remote/restart")
+    body = restarted.json()
+    assert restarted.status_code == 200 and body["state"] == "on"
+    assert set(body) == {"state", "reason", "channels", "armed_at", "expires_at", "now"}
+    assert body["armed_at"] >= now
+    assert body["expires_at"] - body["armed_at"] == ARM_SECONDS
+
+
+def test_restart_after_the_window_ran_out_opens_a_new_one_and_re_arms_a_stopped_channel(client):
+    import time
+
+    c, _, state = client
+    now = time.time()
+    state.set_master({"armed_at": now - 13 * HOUR, "deadline": now - HOUR})
+    state.set_channel_value("teams", "expiry_handled", now - HOUR)
+    state.set_disarmed("teams", True)
+    assert c.get("/api/remote/status").json()["state"] == "expired"
+    assert c.post("/api/remote/restart").json()["state"] == "on"
+    assert state.disarmed("teams") is False
+
+
+def test_restart_when_replies_are_off_is_refused_and_keeps_the_current_window(client, monkeypatch):
+    import time
+
+    c, _, state = client
+    now = time.time()
+    window = {"armed_at": now - 2 * HOUR, "deadline": now + 10 * HOUR}
+    state.set_master(dict(window))
+    monkeypatch.setattr(status.relay_settings, "user_allows_self_chat_autosend", lambda: False)
+    refused = c.post("/api/remote/restart")
+    assert refused.status_code == 409 and "Replies" in refused.json()["detail"]
+    assert state.master() == window
+
+
+def test_restart_with_nothing_set_up_is_refused_and_opens_no_window(client):
+    c, cfg, state = client
+    cfg["teams_remote_control_enabled"] = False
+    cfg["slack_remote_control_enabled"] = False
+    assert c.post("/api/remote/restart").status_code == 409
+    assert state.master() is None
+
+
 def test_the_arm_and_disarm_routes_need_the_csrf_token():
     app = FastAPI()
     app.include_router(remote_control.router)
     plain = TestClient(app)
     assert plain.post("/api/remote/arm").status_code in (401, 403)
     assert plain.post("/api/remote/disarm").status_code in (401, 403)
+    assert plain.post("/api/remote/restart").status_code in (401, 403)
 
 
 def test_switching_a_channel_on_opens_the_window_and_the_last_one_off_closes_it(client):

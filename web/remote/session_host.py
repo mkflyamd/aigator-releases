@@ -6,12 +6,15 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
 from dataclasses import dataclass
 from typing import Protocol
 
 _log = logging.getLogger(__name__)
 
 AGENT = "claude"
+_TRANSCRIPT_TRIES = 4
+_TRANSCRIPT_WAIT = 0.5
 _ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-_]")
 
 
@@ -25,6 +28,23 @@ class Project:
     name: str
     repo_path: str
     agent: str = AGENT
+
+
+def current_branch(repo_path: str) -> str | None:
+    """Blocking. The checked-out branch, or None when it cannot be read or HEAD is detached."""
+    import subprocess
+
+    from proc_utils import no_window_kwargs
+
+    try:
+        out = subprocess.run(
+            ["git", "-C", repo_path, "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5, check=False,
+            **no_window_kwargs(),
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return out if out and out != "HEAD" else None
 
 
 @dataclass(frozen=True)
@@ -155,14 +175,23 @@ class LocalPtyHost:
         meta = terminal.session_owner(pty_id) or {}
         repo = (get_project(meta.get("project_id") or "") or {}).get("repo_path")
         if not repo or not meta.get("session_id"):
+            _log.warning("no project or vendor session id for %s; its reply cannot be read", pty_id)
             return ""
-        try:
-            rec = agent_sessions.find_session(repo, meta.get("agent") or AGENT, meta["session_id"])
-            pairs = agent_sessions._transcript_messages(rec) if rec else []
-        except Exception:
-            _log.warning("could not read the transcript for %s", pty_id, exc_info=True)
+        text = ""
+        for attempt in range(_TRANSCRIPT_TRIES):
+            if attempt:
+                time.sleep(_TRANSCRIPT_WAIT)
+            try:
+                rec = agent_sessions.find_session(repo, meta.get("agent") or AGENT, meta["session_id"])
+                text = agent_sessions.last_assistant_text(rec) if rec else ""
+            except Exception:
+                _log.warning("could not read the transcript for %s", pty_id, exc_info=True)
+                return ""
+            if text:
+                break
+        if not text:
+            _log.warning("the transcript of %s has no assistant reply yet", pty_id)
             return ""
-        text = next((t for role, t in reversed(pairs) if role == "assistant"), "")
         return agent_handoff.Redactor(agent_handoff._configured_api_keys())(text)
 
     async def output(self, pty_id: str, since: int) -> tuple[str, int]:

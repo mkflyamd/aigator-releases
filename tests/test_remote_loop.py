@@ -1,4 +1,5 @@
 import pytest
+from remote import commands
 
 from remote import loop as remote_loop
 from remote.guard import Guard
@@ -8,7 +9,7 @@ from remote.runner import RemoteRunner
 from remote.service import RemoteService
 from remote.session_host import Project
 from remote.state import State
-from tests.test_remote_runner import Clock, FakeChannel, FakeHost
+from tests.test_remote_runner import BUDGET, Clock, FakeChannel, FakeHost
 
 
 class PollingChannel(FakeChannel):
@@ -30,8 +31,10 @@ class Setup:
         self.state = State(tmp_path / "s.json")
         self.channel = PollingChannel(self.state)
         self.guard = Guard(clock=self.clock)
-        service = RemoteService(FakeHost(), default_project=lambda: Project("p", "P", "C:/p"), clock=self.clock)
+        self.host = FakeHost()
+        service = RemoteService(self.host, default_project=lambda: Project("p", "P", "C:/p"), clock=self.clock)
         self.master = Master(self.state, self.clock)
+        self.service = service
         self.runner = RemoteRunner(self.channel, service, self.guard, self.state, clock=self.clock, master=self.master)
         self.enabled = False
         self.loop = RemoteLoop(self.runner, lambda: self.enabled, clock=self.clock, poll_every=10.0)
@@ -55,7 +58,7 @@ async def test_enabling_arms_polls_and_says_online_once(s):
     await s.loop.step()
     await s.loop.step()
     assert s.guard.armed is True
-    assert s.channel.posted == ["[Gator] Online"]
+    assert s.channel.posted == [commands.online()]
 
 
 async def test_polls_only_every_poll_interval(s):
@@ -69,20 +72,26 @@ async def test_polls_only_every_poll_interval(s):
     assert s.channel.polls == 2
 
 
-async def test_recovery_from_a_failed_poll_says_online_again(s):
+async def test_a_failed_poll_and_its_recovery_never_say_online_again(s):
     s.master.arm()
     s.enabled = True
     await s.loop.step()
     s.channel.fail = True
     s.clock.now += 10
     await s.loop.step()
-    s.clock.now += 10
-    await s.loop.step()
-    assert s.channel.posted == ["[Gator] Online"]
     s.channel.fail = False
     s.clock.now += 10
     await s.loop.step()
-    assert s.channel.posted == ["[Gator] Online", "[Gator] Online"]
+    assert s.channel.posted == [commands.online()]
+
+
+async def test_a_restart_with_the_chat_window_open_says_nothing(s):
+    s.enabled = True
+    s.runner._window.open(s.clock.now)
+    assert s.runner._window.is_open()
+    await s.loop.step()
+    await s.loop.step()
+    assert s.channel.posted == []
 
 
 async def test_turning_the_switch_off_disarms(s):
@@ -92,6 +101,17 @@ async def test_turning_the_switch_off_disarms(s):
     s.enabled = False
     await s.loop.step()
     assert s.guard.armed is False
+
+
+async def test_a_channel_whose_switch_is_off_still_stops_its_sessions_at_the_deadline(s):
+    s.master.arm()
+    await s.service.start(BUDGET, "job")
+    s.clock.now += 12 * 3600 + 1
+    await s.loop.step()
+    await s.loop.step()
+    assert s.host.killed == ["pty-1"]
+    assert s.service.list() == []
+    assert s.channel.posted == []
 
 
 def test_default_project_prefers_the_remote_setting_then_the_active_project(monkeypatch):
@@ -177,3 +197,14 @@ async def test_a_slow_channel_step_does_not_hold_the_other_channel(monkeypatch):
     finally:
         release.set()
         task.cancel()
+
+
+async def test_switching_off_and_on_again_does_not_say_online_a_second_time(s):
+    s.master.arm()
+    s.enabled = True
+    await s.loop.step()
+    s.enabled = False
+    await s.loop.step()
+    s.enabled = True
+    await s.loop.step()
+    assert s.channel.posted == [commands.online()]

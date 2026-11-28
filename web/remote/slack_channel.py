@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 
-from remote.channel import ChannelRefused, InboundMessage, require_autosend
+from remote.channel import ChannelRefused, InboundMessage, require_autosend, slack_mrkdwn
 from remote.commands import SYSTEM_PREFIX
 from remote.state import State
 
@@ -36,19 +36,12 @@ def _unescape(text: str) -> str:
     return text.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
 
 
-def _escape(text: str) -> str:
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
-
 def _epoch(ts: str) -> float:
-    """Unix seconds from a Slack ts. An unreadable ts counts as now so the message is not
-    assumed stale."""
-    import time
-
+    """Unix seconds from a Slack ts. An unreadable ts is 0.0, which the runner never runs untagged."""
     try:
         return float(ts)
     except (TypeError, ValueError):
-        return time.time()
+        return 0.0
 
 
 class SlackSelfDM:
@@ -97,10 +90,23 @@ class SlackSelfDM:
         data = _api("conversations.history", {"channel": channel, "limit": HISTORY_LIMIT})
         if not data.get("ok"):
             raise RuntimeError(f"Slack history failed: {data.get('error', 'unknown')}")
+        own = _own_user_id()
+        if not own:
+            _log.warning("Remote control could not tell who the Slack user is, so it read no messages")
+            return []
         return [
-            InboundMessage(id=str(raw["ts"]), text=_unescape(raw.get("text") or "").strip(), created_at=_epoch(raw["ts"]))
+            InboundMessage(
+                id=str(raw["ts"]),
+                text=_unescape(raw.get("text") or "").strip(),
+                created_at=_epoch(raw["ts"]),
+                attachments=bool(raw.get("files")),
+            )
             for raw in data.get("messages", [])
-            if raw.get("ts") and not raw.get("subtype")
+            if raw.get("ts")
+            and raw.get("subtype") in (None, "file_share")
+            and raw.get("user") == own
+            and not raw.get("bot_id")
+            and not raw.get("app_id")
         ]
 
     def post(self, text: str, reply_to: str | None = None) -> str:
@@ -108,9 +114,9 @@ class SlackSelfDM:
             _log.warning("Remote control refused to post: %s is not the own self-DM", self._channel_id)
             raise ChannelRefused("not the own self-DM")
         if not text.lstrip().startswith(SYSTEM_PREFIX):
-            raise ChannelRefused("replies must start with [Gator")
+            raise ChannelRefused(f"replies must start with {SYSTEM_PREFIX}")
         require_autosend()
-        sent = _api("chat.postMessage", {"channel": self._channel_id, "text": _escape(text)}, method="POST")
+        sent = _api("chat.postMessage", {"channel": self._channel_id, "text": slack_mrkdwn(text)}, method="POST")
         if not sent.get("ok"):
             raise ChannelRefused(f"Slack error: {sent.get('error', 'unknown')}")
         message_id = str(sent.get("ts") or "")
