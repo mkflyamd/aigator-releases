@@ -240,20 +240,36 @@ class RemoteRunner:
             await self._warn_if_due()
         await self._service.tick()
 
-    async def _expire(self) -> None:
-        """Stops every session the way `stop all` does, then says so once. A session that will
-        not stop is retried on the next tick and the notice waits until none are left."""
-        deadline = self._master.record()["deadline"]
-        channel = self._channel.name
-        if self._state.channel_value(channel, "expiry_handled") == deadline:
-            return
+    @property
+    def deadline_pending(self) -> bool:
+        """The window has closed and this channel's sessions have not been stopped for it yet."""
+        record = self._master.record()
+        return (
+            record is not None
+            and self._master.expired()
+            and self._state.channel_value(self._channel.name, "expiry_handled") != record["deadline"]
+        )
+
+    async def _stop_at_deadline(self) -> bool:
+        """Stops every session the way `stop all` does. A session that will not stop is retried on
+        the next tick, so the caller only goes on once none are left."""
+        if not self.deadline_pending:
+            return False
         stopped, failed = await self._service.stop_all()
         if failed:
             _log.warning("Remote control expired but %s would not stop; retrying", ", ".join(s.short for s in failed))
-            return
+            return False
         self._guard.stop_all()
-        self._state.set_channel_value(channel, "expiry_handled", deadline)
-        await self._post(commands.system_reply("Remote control timed out. Re-arm it in Settings."))
+        self._state.set_channel_value(self._channel.name, "expiry_handled", self._master.record()["deadline"])
+        return True
+
+    async def stop_after_deadline(self) -> None:
+        """A channel whose switch is off still stops its sessions at the deadline, and says nothing."""
+        await self._stop_at_deadline()
+
+    async def _expire(self) -> None:
+        if await self._stop_at_deadline():
+            await self._post(commands.system_reply("Remote control timed out. Re-arm it in Settings."))
 
     async def _warn_if_due(self) -> None:
         deadline = self._master.record()["deadline"]

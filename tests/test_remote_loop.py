@@ -8,7 +8,7 @@ from remote.runner import RemoteRunner
 from remote.service import RemoteService
 from remote.session_host import Project
 from remote.state import State
-from tests.test_remote_runner import Clock, FakeChannel, FakeHost
+from tests.test_remote_runner import BUDGET, Clock, FakeChannel, FakeHost
 
 
 class PollingChannel(FakeChannel):
@@ -30,8 +30,10 @@ class Setup:
         self.state = State(tmp_path / "s.json")
         self.channel = PollingChannel(self.state)
         self.guard = Guard(clock=self.clock)
-        service = RemoteService(FakeHost(), default_project=lambda: Project("p", "P", "C:/p"), clock=self.clock)
+        self.host = FakeHost()
+        service = RemoteService(self.host, default_project=lambda: Project("p", "P", "C:/p"), clock=self.clock)
         self.master = Master(self.state, self.clock)
+        self.service = service
         self.runner = RemoteRunner(self.channel, service, self.guard, self.state, clock=self.clock, master=self.master)
         self.enabled = False
         self.loop = RemoteLoop(self.runner, lambda: self.enabled, clock=self.clock, poll_every=10.0)
@@ -92,6 +94,17 @@ async def test_turning_the_switch_off_disarms(s):
     s.enabled = False
     await s.loop.step()
     assert s.guard.armed is False
+
+
+async def test_a_channel_whose_switch_is_off_still_stops_its_sessions_at_the_deadline(s):
+    s.master.arm()
+    await s.service.start(BUDGET, "job")
+    s.clock.now += 12 * 3600 + 1
+    await s.loop.step()
+    await s.loop.step()
+    assert s.host.killed == ["pty-1"]
+    assert s.service.list() == []
+    assert s.channel.posted == []
 
 
 def test_default_project_prefers_the_remote_setting_then_the_active_project(monkeypatch):

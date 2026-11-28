@@ -92,6 +92,8 @@ class RemoteLoop:
             self._need_online = True
             self._was_live = False
             self._last_poll = None
+            if self._runner.deadline_pending and await self._restore():
+                await self._runner.stop_after_deadline()
             return
         if not await self._restore():
             return
