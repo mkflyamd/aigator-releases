@@ -42,6 +42,33 @@ def test_a_flood_gets_one_notice_per_30_seconds_with_the_count_it_dropped():
     assert guard.drop() == 0
 
 
+def test_commands_dropped_before_a_disarm_are_not_announced_after_it():
+    clock = Clock()
+    guard = Guard(clock=clock)
+    guard.arm()
+    for _ in range(20):
+        guard.allow_command()
+    guard.drop()
+    for _ in range(3):
+        guard.drop()
+    guard.disarm()
+    clock.now += 60
+    guard.arm()
+    assert guard.dropped_to_announce() == 0
+
+
+def test_the_epoch_moves_only_when_an_armed_guard_is_disarmed():
+    guard = Guard()
+    guard.disarm()
+    assert guard.epoch == 0
+    guard.arm()
+    guard.arm()
+    assert guard.epoch == 0
+    guard.disarm()
+    guard.disarm()
+    assert guard.epoch == 1
+
+
 def test_disarm_and_rearm():
     guard = Guard(clock=Clock())
     guard.arm()

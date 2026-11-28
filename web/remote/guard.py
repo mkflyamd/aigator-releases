@@ -50,6 +50,8 @@ class Guard:
         if self._armed:
             self.epoch += 1
         self._armed = False
+        with self._lock:
+            self._dropped = 0
 
     @property
     def armed(self) -> bool:
