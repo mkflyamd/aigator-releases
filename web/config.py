@@ -129,7 +129,6 @@ PATCHABLE_CONFIG_KEYS = frozenset({
     "remote_agent_name",
     "remote_session_idle_hours",
     "remote_stale_minutes",
-    "remote_armed_max_hours",
     "remote_peer_messages_per_hour",
     # Global kill-switch for agent-completed browser payments - default False,
     # deliberately not surfaced as a Settings UI toggle (see issue #152:

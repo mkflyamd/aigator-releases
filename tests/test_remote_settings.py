@@ -7,7 +7,6 @@ from fastapi.testclient import TestClient
 from remote import commands
 from remote import loop as remote_loop
 from remote import settings
-from remote.guard import Guard
 from remote.service import RemoteError, RemoteService
 from routes import config_routes
 from skills.code_agent import projects
@@ -45,7 +44,7 @@ def test_a_known_project_blank_and_in_range_numbers_are_accepted(known_projects)
     assert settings.validate({"remote_default_project": "Budget"}) is None
     assert settings.validate({"remote_default_project": ""}) is None
     assert settings.validate({"remote_default_project": None}) is None
-    assert settings.validate({"remote_session_idle_hours": 8, "remote_stale_minutes": 15, "remote_armed_max_hours": 24, "remote_peer_messages_per_hour": 30}) is None
+    assert settings.validate({"remote_session_idle_hours": 8, "remote_stale_minutes": 15, "remote_peer_messages_per_hour": 30}) is None
     assert settings.validate({"remote_peer_messages_per_hour": 0}) is None
     assert settings.validate({"teams_remote_control_enabled": True, "slack_remote_control_enabled": False}) is None
 
@@ -64,7 +63,6 @@ def test_an_unknown_project_is_refused_with_a_clear_reason(known_projects):
         ("remote_session_idle_hours", True),
         ("remote_session_idle_hours", None),
         ("remote_stale_minutes", 121),
-        ("remote_armed_max_hours", 0.5),
         ("remote_peer_messages_per_hour", -1),
         ("remote_peer_messages_per_hour", 1001),
         ("remote_peer_messages_per_hour", 2.5),
@@ -120,16 +118,16 @@ def test_saving_valid_remote_settings_stores_them(monkeypatch, known_projects):
 def test_the_limits_come_from_config_and_fall_back_to_the_defaults(monkeypatch):
     cfg = {}
     monkeypatch.setattr(settings, "load_config", lambda: cfg)
-    assert (settings.idle_seconds(), settings.stale_seconds(), settings.armed_max_seconds()) == (8 * 3600, 15 * 60, 24 * 3600)
+    assert (settings.idle_seconds(), settings.stale_seconds()) == (8 * 3600, 15 * 60)
     assert settings.peer_messages_per_hour() == 30
-    cfg.update(remote_session_idle_hours=2, remote_stale_minutes=5, remote_armed_max_hours=1.5, remote_peer_messages_per_hour=0)
+    cfg.update(remote_session_idle_hours=2, remote_stale_minutes=5, remote_peer_messages_per_hour=0)
     assert settings.peer_messages_per_hour() == 0
-    assert (settings.idle_seconds(), settings.stale_seconds(), settings.armed_max_seconds()) == (7200, 300, 5400)
-    cfg.update(remote_session_idle_hours="x", remote_stale_minutes=0, remote_armed_max_hours=True, remote_peer_messages_per_hour=-3)
+    assert (settings.idle_seconds(), settings.stale_seconds()) == (7200, 300)
+    cfg.update(remote_session_idle_hours="x", remote_stale_minutes=0, remote_peer_messages_per_hour=-3)
     assert settings.peer_messages_per_hour() == 30
     cfg.update(remote_peer_messages_per_hour=0.5)
     assert settings.peer_messages_per_hour() == 30
-    assert (settings.idle_seconds(), settings.stale_seconds(), settings.armed_max_seconds()) == (8 * 3600, 15 * 60, 24 * 3600)
+    assert (settings.idle_seconds(), settings.stale_seconds()) == (8 * 3600, 15 * 60)
 
 
 async def test_a_changed_idle_limit_applies_to_a_running_service(monkeypatch):
@@ -144,18 +142,6 @@ async def test_a_changed_idle_limit_applies_to_a_running_service(monkeypatch):
     cfg["remote_session_idle_hours"] = 1
     await service.tick()
     assert service.list() == []
-
-
-def test_a_changed_armed_limit_applies_to_a_running_guard(monkeypatch):
-    cfg = {}
-    monkeypatch.setattr(settings, "load_config", lambda: cfg)
-    clock = Clock()
-    guard = Guard(clock=clock, armed_max_seconds=settings.armed_max_seconds)
-    guard.arm()
-    clock.now += 2 * 3600
-    assert guard.armed
-    cfg["remote_armed_max_hours"] = 1
-    assert not guard.armed
 
 
 def test_the_default_project_is_the_chosen_one_else_the_active_one(monkeypatch, known_projects):
@@ -190,7 +176,7 @@ async def test_a_message_with_a_missing_default_project_gets_a_gator_refusal_and
 
 @pytest.mark.parametrize(
     "key,low,high",
-    [("remote_session_idle_hours", 1, 72), ("remote_stale_minutes", 1, 120), ("remote_armed_max_hours", 1, 168)],
+    [("remote_session_idle_hours", 1, 72), ("remote_stale_minutes", 1, 120)],
 )
 def test_the_limits_accept_both_ends_of_their_range(known_projects, key, low, high):
     assert settings.validate({key: low}) is None
@@ -227,3 +213,12 @@ def test_the_peer_message_limit_accepts_zero_and_a_thousand_but_nothing_beyond(k
     assert settings.validate({key: 0}) is None
     assert settings.validate({key: 1000}) is None
     assert "whole number" in settings.validate({key: 1.5})
+
+
+def test_the_removed_armed_hours_setting_is_ignored_and_never_stored(monkeypatch, known_projects):
+    saved = []
+    client, store = _client(monkeypatch, saved)
+    r = client.patch("/api/config", json={"remote_armed_max_hours": 72, "remote_stale_minutes": 30})
+    assert r.status_code == 200
+    assert "remote_armed_max_hours" not in store
+    assert store["remote_stale_minutes"] == 30

@@ -252,10 +252,12 @@ def create_pty_session(
     return entry
 
 
-def live_pty_labels() -> dict[str, dict]:
+def live_pty_labels(strict: bool = False) -> dict[str, dict]:
     """id -> labels for every live PTY: those the PTY host holds (including ones
-    this backend has not adopted since a restart) and in-process ones. Blocking."""
-    found = {s["id"]: s.get("meta") or {} for s in _list_host_sessions() if not s.get("done")}
+    this backend has not adopted since a restart) and in-process ones. With `strict`,
+    a host that does not answer raises HostUnreachable instead of reading as "none".
+    Blocking."""
+    found = {s["id"]: s.get("meta") or {} for s in _list_host_sessions(strict) if not s.get("done")}
     for session_id, entry in list(_pty_sessions.items()):
         if not entry.done and session_id not in found:
             found[session_id] = entry.meta or {}
@@ -299,6 +301,22 @@ def is_pty_alive(session_id: str) -> bool:
     'terminal actually on-screen' signal."""
     entry = get_pty_session(session_id)
     if not entry or entry.done:
+        return False
+    try:
+        return bool(entry.isalive())
+    except Exception:
+        return False
+
+
+def pty_alive_strict(session_id: str) -> bool:
+    """is_pty_alive that never guesses: the PTY host is asked, and one that does not answer
+    raises HostUnreachable instead of reading as "not running". An in-process PTY (no host
+    behind it) is judged locally. Blocking."""
+    for s in _list_host_sessions(strict=True):
+        if s["id"] == session_id:
+            return not s.get("done")
+    entry = _pty_sessions.get(session_id)
+    if entry is None or isinstance(entry.pty, pty_client.RemotePty) or entry.done:
         return False
     try:
         return bool(entry.isalive())

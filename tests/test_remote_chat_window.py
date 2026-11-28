@@ -12,6 +12,7 @@ import pytest
 from remote import commands, slack_channel
 from remote.channel import InboundMessage
 from remote.guard import Guard
+from remote.master import Master
 from remote.runner import RemoteRunner
 from remote.service import RemoteService
 from remote.state import State
@@ -337,11 +338,11 @@ async def test_turning_remote_control_off_closes_the_window(w):
     assert window_of(w) is None
 
 
-async def test_the_absolute_cap_closes_the_window_and_posts_only_the_timeout_notice(w):
+async def test_the_12_hour_deadline_closes_the_window_and_posts_only_the_timeout_notice(w):
     await opened(w)
-    w.clock.now += 24 * 3600
+    w.clock.now += 12 * 3600 + 1
     await w.runner.tick()
-    assert w.channel.posted == [commands.greeting(), commands.timed_out(24 * 3600)]
+    assert w.channel.posted == [commands.greeting(), commands.timed_out(12 * 3600)]
     assert window_of(w) is None
 
 
@@ -385,6 +386,7 @@ async def test_a_restart_does_not_run_anything_twice_or_run_what_came_before_the
 async def test_the_window_is_stored_per_channel(tmp_path):
     clock = Clock()
     state = State(tmp_path / "state.json")
+    Master(state, clock).arm()
     teams, slack = FakeChannel(state), FakeChannel(state)
     slack.name = "slack"
     runners = {}
@@ -477,6 +479,7 @@ def test_not_found_text_strips_newlines_and_caps_the_name():
 AGENT_KEYS = {
     "status", "working", "progress", "done", "done_empty", "done_long",
     "waiting_choices", "waiting_open", "agent_stopped", "agent_exited",
+    "status_sleeping", "status_failed", "waking", "wake_failed", "lane_lost",
 }
 TIPS_KEYS = {"greeting", "help_open", "help_closed"}
 NO_NEXT_KEYS = {"done", "waiting_open", "progress"}
@@ -521,6 +524,12 @@ def _deck():
         "waiting_open": commands.agent_result("Claude", "budget", "Waiting for your answer.", "Which?", True),
         "agent_stopped": commands.agent_stopped("budget"),
         "agent_exited": commands.agent_exited("budget"),
+        "list_sleeping": commands.session_list([("budget", "Budget", commands.SLEEPING)]),
+        "status_sleeping": commands.session_status("budget", commands.SLEEPING, 1000.0, 2000.0),
+        "status_failed": commands.session_status("budget", commands.FAILED, 1000.0, 2000.0),
+        "waking": commands.waking("budget"),
+        "wake_failed": commands.wake_failed("budget", "The session could not be woken."),
+        "lane_lost": commands.lane_lost("budget"),
     }
 
 
@@ -668,7 +677,9 @@ def test_the_loop_guard_and_the_adapters_share_one_own_message_check():
 
 def test_the_timeout_notice_names_the_real_settings_section():
     html = (ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    tab = re.search(r'data-tab="remote"[^>]*>\s*(?:<span[^>]*>[^<]*</span>)?\s*([^<]+)<', html)
+    tab = re.search(
+        r'data-tab="remote"[^>]*>\s*(?:<span[^>]*>(?:[^<]|<svg.*?</svg>)*</span\s*>)?\s*([^<]+)<', html, re.S
+    )
     if tab:
         label = tab.group(1).strip()
     else:
@@ -791,6 +802,7 @@ def _runner(chat, tmp_path):
     state = State(tmp_path / "s.json")
     host = FakeHost()
     service = RemoteService(host, default_project=lambda: BUDGET, clock=clock)
+    Master(state, clock).arm()
     runner = RemoteRunner(chat.adapter(state), service, Guard(clock=clock), state, clock=clock)
     runner.sync_enabled(True)
     return runner, host, clock, state

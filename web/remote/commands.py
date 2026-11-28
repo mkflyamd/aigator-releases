@@ -39,6 +39,7 @@ WORKING, WAITING, IDLE = "working", "waiting for you", "idle"
 ACK_DELAY_SECONDS = 15.0
 PROGRESS_SECONDS = 120.0
 ELAPSED_MIN_SECONDS = 60.0
+SLEEPING, FAILED = "sleeping", "failed"
 BREVITY_HINT = "(This session was started from a chat app. Keep replies short, in plain text, with no tables.)"
 _CHOICE_RE = re.compile(r"^\s*(?:\d{1,2}|[A-Za-z])[.)]\s+(.+?)\s*$")
 LEGACY_OWN_RE = re.compile(r"^\[[^\]\r\n]{0,80}\] " + CROC)
@@ -209,6 +210,13 @@ def timed_out(seconds: float) -> str:
     return system_reply(
         f"Remote control turned itself off after {in_words(seconds)}.",
         [f"Open AI Gator, then Settings, then {SETTINGS_SECTION}, and switch it on."],
+    )
+
+
+def turns_off_soon(seconds: float) -> str:
+    return system_reply(
+        f"Remote control turns off in {in_words(seconds)}.",
+        [f"Need more time? Open AI Gator, then Settings, then {SETTINGS_SECTION}, and turn it back on."],
     )
 
 
@@ -391,11 +399,16 @@ def mention_needs_text(name: str) -> str:
 def session_status(
     session: str, state: str, since: float, last_activity: float, *, project: str | None = None, several: bool = False
 ) -> str:
-    lead = {WORKING: "Working", WAITING: "Waiting for you", IDLE: "Idle"}[state]
-    text = f"{lead} since {clock_time(since)}.\nLast activity {clock_time(last_activity)}."
-    return agent_reply(
-        session, text, ["Reply here to talk to it.", f"`stop {session}` to stop it."], project=project, several=several
-    )
+    last = f"Last activity {clock_time(last_activity)}."
+    if state == SLEEPING:
+        text, options = f"Asleep to free memory.\n{last}", ["Reply here to wake it.", f"`stop {session}` to stop it."]
+    elif state == FAILED:
+        text, options = f"Could not be woken.\n{last}", [f"`stop {session}`, then send a message to start a new one."]
+    else:
+        lead = {WORKING: "Working", WAITING: "Waiting for you", IDLE: "Idle"}[state]
+        text = f"{lead} since {clock_time(since)}.\n{last}"
+        options = ["Reply here to talk to it.", f"`stop {session}` to stop it."]
+    return agent_reply(session, text, options, project=project, several=several)
 
 
 def working_ack(session: str, text: str, *, project: str | None = None, several: bool = False) -> str:
@@ -444,6 +457,110 @@ def asks_a_question(text: str) -> bool:
 def agent_stopped(session: str, *, project: str | None = None, several: bool = False) -> str:
     options = ["Send a message to start it again.", "`list` to see what is running."]
     return agent_reply(session, "Stopped.", options, project=project, several=several)
+
+
+def waking(session: str, *, project: str | None = None, several: bool = False) -> str:
+    """Posted the moment a message reaches a sleeping session, before the wake finishes."""
+    return agent_reply(
+        session,
+        "Waking up. Your message goes in once it is ready.",
+        [f"`status {session}` to check on it."],
+        project=project,
+        several=several,
+    )
+
+
+def wake_failed(
+    session: str, reason: str = "The session could not be woken.", *, permanent: bool = False,
+    project: str | None = None, several: bool = False,
+) -> str:
+    """Nothing was sent. A transient failure can be retried by sending again; a permanent one cannot."""
+    option = (
+        f"`stop {session}`, then send a message to start a new session."
+        if permanent
+        else f"Send your message again to retry, or `stop {session}`."
+    )
+    return agent_reply(session, f"Nothing was sent.\n{reason}", [option], project=project, several=several)
+
+
+def still_waking(session: str, *, project: str | None = None, several: bool = False) -> str:
+    """A message that arrives while the wake is under way. It is not queued."""
+    return agent_reply(
+        session,
+        "Still waking up. That message was not sent.",
+        ["Send it again once it is ready.", f"`status {session}` to check on it."],
+        project=project,
+        several=several,
+    )
+
+
+def wake_too_soon(session: str, wait_seconds: float, *, project: str | None = None, several: bool = False) -> str:
+    return agent_reply(
+        session,
+        "Could not be woken a moment ago. Nothing was sent.",
+        [f"Try again in {int(wait_seconds) + 1} seconds."],
+        project=project,
+        several=several,
+    )
+
+
+def already_has_session(session: str, *, project: str | None = None, several: bool = False) -> str:
+    return agent_reply(
+        session,
+        "Already has a session in this project.",
+        [f"`{session}: your message` to use it.", f"`stop {session}` to end it first."],
+        project=project,
+        several=several,
+    )
+
+
+def send_failed(session: str, reason: str, *, project: str | None = None, several: bool = False) -> str:
+    return agent_reply(
+        session, f"Nothing was sent.\n{reason}", [f"Send your message again to retry, or `stop {session}`."],
+        project=project, several=several,
+    )
+
+
+def duplicate_lane(session: str, *, project: str | None = None, several: bool = False) -> str:
+    """A second running terminal for a project that already has a remote session."""
+    return agent_reply(
+        session,
+        "A second remote terminal for this project is running. It was left alone, and chat cannot manage it.",
+        ["Close it in AI Gator."],
+        project=project,
+        several=several,
+    )
+
+
+LANE_REPLACED_REASON = "A newer remote terminal for this project replaced this lane."
+
+
+def lane_replaced(session: str, *, project: str | None = None, several: bool = False) -> str:
+    """After a restart a newer terminal was found for a project whose lane still has a saved session."""
+    return agent_reply(
+        session,
+        f"{LANE_REPLACED_REASON} Its saved session was kept, and the newer terminal was left running.",
+        [f"`stop {session}` to clear the saved session.", "Close the newer terminal in AI Gator if it is not wanted."],
+        project=project,
+        several=several,
+    )
+
+
+def no_default_project() -> str:
+    return system_reply(
+        "No default project is set, so there is nowhere to start a session.",
+        [f"Pick a default project in AI Gator {SETTINGS_SECTION} settings."],
+    )
+
+
+def command_failed() -> str:
+    return system_reply("That command failed and was not retried.", ["`help` to see what you can do."])
+
+
+def lane_lost(session: str, *, project: str | None = None, several: bool = False) -> str:
+    return agent_reply(
+        session, "The saved session is gone.", ["Send a message to start a new session."], project=project, several=several
+    )
 
 
 def agent_exited(session: str, *, project: str | None = None, several: bool = False) -> str:

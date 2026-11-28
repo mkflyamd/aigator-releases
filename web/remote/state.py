@@ -1,4 +1,5 @@
-"""Persisted remote-control state: last processed message id, ids Gator itself posted, chat window."""
+"""Persisted remote-control state: last processed message id, ids Gator itself posted, chat window,
+and each channel's lanes (one remote session per project, live, sleeping or failed)."""
 
 from __future__ import annotations
 
@@ -11,6 +12,8 @@ from pathlib import Path
 _log = logging.getLogger(__name__)
 
 POSTED_IDS_KEEP = 200
+LANE_STATES = ("live", "sleeping", "failed")
+MASTER_KEY = "master"
 
 
 def default_path() -> Path:
@@ -18,6 +21,8 @@ def default_path() -> Path:
 
 
 class State:
+    """One JSON file. A process shares one instance (`shared()`), so the lock covers every writer."""
+
     def __init__(self, path: Path | None = None):
         self._path = path
         self._lock = threading.Lock()
@@ -54,6 +59,40 @@ class State:
             data = self._load()
             self._channel(data, channel)["last_id"] = message_id
             self._save(data)
+
+    def channel_value(self, channel: str, key: str):
+        with self._lock:
+            return (self._load().get(channel) or {}).get(key)
+
+    def set_channel_value(self, channel: str, key: str, value) -> None:
+        with self._lock:
+            data = self._load()
+            self._channel(data, channel)[key] = value
+            self._save(data)
+
+    def master(self) -> dict | None:
+        with self._lock:
+            value = self._load().get(MASTER_KEY)
+        return value if isinstance(value, dict) else None
+
+    def set_master(self, record: dict | None) -> None:
+        with self._lock:
+            data = self._load()
+            if record is None:
+                data.pop(MASTER_KEY, None)
+            else:
+                data[MASTER_KEY] = record
+            self._save(data)
+
+    def mark_master_seen(self, armed_at: float, now: float) -> None:
+        """Records the latest clock reading on the window that was armed at `armed_at`; a window
+        that was closed or replaced in the meantime is left alone."""
+        with self._lock:
+            data = self._load()
+            record = data.get(MASTER_KEY)
+            if isinstance(record, dict) and record.get("armed_at") == armed_at:
+                record["seen"] = now
+                self._save(data)
 
     def disarmed(self, channel: str) -> bool:
         with self._lock:
@@ -102,3 +141,53 @@ class State:
         with self._lock:
             ids = (self._load().get(channel) or {}).get("posted_ids", [])
         return message_id in ids
+
+    def lanes(self, channel: str) -> dict[str, dict]:
+        """The channel's lanes by project id. A lane is the project's one remote session, live or
+        asleep; it outlives the process and a backend restart."""
+        with self._lock:
+            stored = (self._load().get(channel) or {}).get("lanes")
+        if not isinstance(stored, dict):
+            return {}
+        return {pid: lane for pid, lane in stored.items() if _valid_lane(pid, lane)}
+
+    def put_lane(self, channel: str, lane: dict) -> None:
+        """Adds the lane, or replaces the one the project already has: never two per project."""
+        with self._lock:
+            data = self._load()
+            entry = self._channel(data, channel)
+            lanes = entry.get("lanes")
+            if not isinstance(lanes, dict):
+                lanes = entry["lanes"] = {}
+            if lanes.get(lane["project_id"]) != lane:
+                lanes[lane["project_id"]] = lane
+                self._save(data)
+
+    def drop_lane(self, channel: str, project_id: str) -> None:
+        with self._lock:
+            data = self._load()
+            lanes = self._channel(data, channel).get("lanes")
+            if isinstance(lanes, dict) and lanes.pop(project_id, None) is not None:
+                self._save(data)
+
+
+def _valid_lane(project_id: str, lane) -> bool:
+    return (
+        isinstance(lane, dict)
+        and lane.get("project_id") == project_id
+        and all(isinstance(lane.get(k), str) and lane[k] for k in ("pty_id", "short", "repo_path"))
+        and lane.get("state") in LANE_STATES
+    )
+
+
+_shared: State | None = None
+_shared_lock = threading.Lock()
+
+
+def shared() -> State:
+    """The process-wide state: the loops and the routes must write through the same lock."""
+    global _shared
+    with _shared_lock:
+        if _shared is None:
+            _shared = State()
+        return _shared

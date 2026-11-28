@@ -1,5 +1,5 @@
 """Slack self-DM adapter. Posts only to the user's own DM with themselves, only text that
-starts with "[Gator", so Gator's own replies can never read back as a command. Slack message
+starts with the crocodile marker, so Gator's own replies can never read back as a command. Slack message
 ids are `ts` strings such as "1700000000.000200"; they are kept as strings and `float(ts)`
 is the message time."""
 

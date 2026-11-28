@@ -179,6 +179,97 @@ async def test_a_question_after_the_message_is_reported_and_watching_goes_on(svc
     assert len(service.watched(ADOPTED)) == 1
 
 
+# ---------------------------------------------------------------- next to a lane
+
+class Lanes:
+    def __init__(self):
+        self.put = []
+        self.dropped = []
+
+    def put_lane(self, channel, lane):
+        self.put.append(lane)
+
+    def drop_lane(self, channel, project_id):
+        self.dropped.append(project_id)
+
+    def lanes(self, channel):
+        return {}
+
+
+@pytest.fixture
+def laned():
+    clock, host, store = Clock(), FakeHost(), Lanes()
+    host.alive_ids.add("p-1")
+    service = RemoteService(host, default_project=lambda: BUDGET, clock=clock, idle_seconds=100, state=store)
+    events = []
+    service.subscribe(events.append)
+    return service, host, clock, events, store
+
+
+async def test_an_adopted_session_is_never_saved_as_a_lane(laned):
+    service, host, clock, events, store = laned
+    adopt(service)
+    host.states["p-1"] = {"state": "idle", "at": clock.now + 5}
+    host.last["p-1"] = "the answer"
+    await service.tick()
+    assert [e.kind for e in events] == ["completed"]
+    assert store.put == []
+    assert store.dropped == []
+
+
+async def test_an_adopted_session_does_not_count_as_a_lane_of_its_project(laned):
+    service, *_ = laned
+    adopt(service)
+    assert service.lane_of(BUDGET.id) is None
+    assert service.several(await service.start(BUDGET, "task")) is False
+
+
+async def test_an_adopted_session_that_was_suspended_is_never_woken_or_closed(laned):
+    service, host, clock, events, store = laned
+    adopt(service)
+    host.suspend("p-1")
+    await service.tick()
+    await service.tick()
+    assert host.woken == []
+    assert host.killed == []
+    assert store.put == []
+    assert [(e.kind, bool(e.text)) for e in events] == [("detached", True)]
+
+
+async def test_the_answer_still_comes_while_a_remote_lane_sleeps(laned):
+    service, host, clock, events, store = laned
+    lane = await service.start(BUDGET, "task")
+    host.suspend(lane.pty_id)
+    adopt(service)
+    host.states["p-1"] = {"state": "idle", "at": clock.now + 5}
+    host.last["p-1"] = "the answer"
+    await service.tick()
+    assert ("completed", "the answer") in [(e.kind, e.text) for e in events if e.session.kind == ADOPTED]
+    assert service.lane_of(BUDGET.id).state == "sleeping"
+    assert host.woken == []
+
+
+async def test_stop_all_stops_only_the_lane_remote_started(laned):
+    service, host, *_ = laned
+    lane = await service.start(BUDGET, "task")
+    adopt(service)
+    stopped, failed = await service.stop_all()
+    assert [s.id for s in stopped] == [lane.id]
+    assert failed == []
+    assert host.killed == [lane.pty_id]
+    assert len(service.watched(ADOPTED)) == 1
+
+
+async def test_a_restart_restores_the_lane_and_leaves_a_peer_alone(laned):
+    service, host, clock, events, store = laned
+    adopt(service)
+    host.restorable = []
+    fresh = RemoteService(host, default_project=lambda: BUDGET, state=store)
+    await fresh.restore()
+    assert fresh.watched(ADOPTED) == []
+    assert host.killed == []
+
+
 # ---------------------------------------------------------------- the host
 
 class Terminal:
@@ -193,6 +284,11 @@ def fake_terminal(monkeypatch):
     monkeypatch.setattr(terminal, "session_owner", lambda pty_id: fake.meta)
     monkeypatch.setattr(terminal, "close_pty_session", lambda pty_id: fake.closed.append(pty_id) or True)
     monkeypatch.setattr(generic_agent, "unpin_session", lambda pty_id: None)
+
+    async def alive(self, pty_id):
+        return True
+
+    monkeypatch.setattr(LocalPtyHost, "alive", alive)
     return fake
 
 

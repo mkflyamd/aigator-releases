@@ -14,11 +14,12 @@ from config import load_config
 from remote import commands, settings
 from remote.guard import Guard
 from remote.peers import PeerDirectory, WakeGateway
+from remote.master import Master
 from remote.runner import RemoteRunner
 from remote.service import RemoteError, RemoteService
 from remote.session_host import LocalPtyHost, Project
 from remote.slack_channel import SlackSelfDM
-from remote.state import State
+from remote.state import State, shared
 from remote.teams_channel import TeamsSelfChat
 
 _log = logging.getLogger(__name__)
@@ -65,6 +66,7 @@ class RemoteLoop:
         self._last_poll: float | None = None
         self._need_online = True
         self._poll_failing = False
+        self._was_live = False
         self._restored = False
         self._restore_failing = False
 
@@ -84,15 +86,26 @@ class RemoteLoop:
         self._restored = True
         return True
 
+    async def shutdown(self) -> None:
+        await self._runner.shutdown()
+
     async def step(self) -> None:
         enabled = self._enabled()
         self._runner.sync_enabled(enabled)
         if not enabled:
+            if not self._runner.window_open:
+                self._was_live = False
             self._last_poll = None
+            if self._runner.deadline_pending and await self._restore():
+                await self._runner.stop_after_deadline()
             return
         if not await self._restore():
             return
         await self._runner.tick()
+        live = self._runner.live
+        if live and not self._was_live:
+            self._need_online = True
+        self._was_live = live
         now = self._clock()
         if self._last_poll is not None and now - self._last_poll < self._poll_every:
             return
@@ -105,21 +118,26 @@ class RemoteLoop:
             self._poll_failing = True
             return
         self._poll_failing = False
-        if self._need_online:
+        if self._need_online and live:
             self._need_online = False
             await self._runner.announce_online()
 
 
 def _build_loop(channel, state: State, enabled: Callable[[], bool]) -> RemoteLoop:
     service = RemoteService(
-        LocalPtyHost(channel.name), default_project=default_project, idle_seconds=settings.idle_seconds, channel=channel.name
+        LocalPtyHost(channel.name),
+        default_project=default_project,
+        idle_seconds=settings.idle_seconds,
+        channel=channel.name,
+        state=state,
     )
     runner = RemoteRunner(
         channel,
         service,
-        Guard(armed_max_seconds=settings.armed_max_seconds),
+        Guard(),
         state,
         stale_seconds=settings.stale_seconds,
+        master=Master(state),
         first_prompt_hint=commands.BREVITY_HINT,
         peers=PeerDirectory(WakeGateway(), settings.peer_messages_per_hour),
     )
@@ -127,7 +145,7 @@ def _build_loop(channel, state: State, enabled: Callable[[], bool]) -> RemoteLoo
 
 
 def build_loops(state: State | None = None) -> list[RemoteLoop]:
-    state = state or State()
+    state = state or shared()
     return [
         _build_loop(TeamsSelfChat(state=state), state, teams_switch_on),
         _build_loop(SlackSelfDM(state=state), state, slack_switch_on),
@@ -136,12 +154,15 @@ def build_loops(state: State | None = None) -> list[RemoteLoop]:
 
 async def _run_channel(loop: RemoteLoop) -> None:
     """One task per channel: a command that waits on its agent holds only its own channel."""
-    while True:
-        await asyncio.sleep(STEP_SECONDS)
-        try:
-            await loop.step()
-        except Exception:
-            _log.warning("Remote control step failed", exc_info=True)
+    try:
+        while True:
+            await asyncio.sleep(STEP_SECONDS)
+            try:
+                await loop.step()
+            except Exception:
+                _log.warning("Remote control step failed", exc_info=True)
+    finally:
+        await asyncio.shield(loop.shutdown())
 
 
 async def remote_control_loop() -> None:
