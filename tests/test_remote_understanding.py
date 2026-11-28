@@ -122,6 +122,44 @@ async def test_a_queued_message_is_dropped_when_the_wake_fails(w):
     gate.set()
     await woken(w)
     assert session.queued == []
+    assert w.channel.posted[-1] == commands.queued_not_sent("budget", 1, project="Budget")
+
+
+async def test_a_failed_wake_counts_every_queued_message_it_did_not_send(w):
+    gate = w.host.wake_gate = asyncio.Event()
+    await asleep(w)
+    for n in range(102, 106):
+        await w.feed(w.msg(n, f"@gator task {n}"))
+    w.host.wake_error = Exception("boom")
+    gate.set()
+    await woken(w)
+    assert w.channel.posted[-1] == commands.queued_not_sent("budget", 3, project="Budget")
+    assert "3 queued messages not sent." in w.channel.posted[-1]
+
+
+async def test_the_wake_queue_is_capped_and_says_so(w):
+    gate = w.host.wake_gate = asyncio.Event()
+    session = await asleep(w)
+    for n in range(102, 102 + commands.WAKE_QUEUE_MAX + 2):
+        await w.feed(w.msg(n, f"@gator task {n}"))
+    assert len(session.queued) == commands.WAKE_QUEUE_MAX
+    assert w.channel.posted[-1] == commands.wake_queue_full("budget", project="Budget")
+    gate.set()
+    await woken(w)
+    await asyncio.gather(*list(w.runner._wakes))
+    assert len(w.host.delivered) == 1 + commands.WAKE_QUEUE_MAX + 1
+
+
+async def test_a_message_sent_as_the_wake_finishes_does_not_overtake_the_queued_ones(w):
+    gate = w.host.wake_gate = asyncio.Event()
+    await asleep(w)
+    await w.feed(w.msg(102, "@gator second task"))
+    await w.feed(w.msg(103, "@gator third task"))
+    gate.set()
+    await woken(w)
+    await w.feed(w.msg(104, "@gator fourth task"))
+    await asyncio.gather(*list(w.runner._wakes))
+    assert [t for _, t in w.host.delivered] == ["first task", "second task", "third task", "fourth task"]
 
 
 def _transcript(tmp_path, *entries):

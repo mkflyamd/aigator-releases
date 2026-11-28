@@ -662,6 +662,19 @@ async def test_a_session_opened_elsewhere_while_it_wakes_is_routed_the_same_way(
     assert lane.waking is False
 
 
+async def test_messages_queued_during_a_wake_follow_the_first_to_the_terminal_it_moved_to(pw):
+    gate = pw.host.wake_gate = asyncio.Event()
+    lane = await asleep(pw)
+    await pw.feed(pw.msg(102, "@gator second task"))
+    await pw.feed(pw.msg(103, "@gator third task"))
+    await pw.feed(pw.msg(104, "@gator fourth task"))
+    pw.host.elsewhere[lane.pty_id] = "pty-open"
+    gate.set()
+    await woken(pw)
+    assert [text for _, text, _ in pw.gateway.sent] == ["second task", "third task", "fourth task"]
+    assert lane.queued == []
+
+
 async def test_a_session_that_stopped_being_open_elsewhere_while_it_woke_is_not_blamed_on_the_terminal(w):
     from remote.session_host import OPEN_ELSEWHERE_MESSAGE, OpenElsewhere
 

@@ -866,6 +866,9 @@ class RemoteRunner:
         must keep running. begin_wake refuses a second wake of the same lane and one too soon after
         a failure, so a burst of messages cannot start more than one."""
         if session.waking:
+            if len(session.queued) >= commands.WAKE_QUEUE_MAX:
+                await self._post(self._lane_copy(commands.wake_queue_full, session))
+                return
             session.queued.append(text)
             await self._post(self._lane_copy(commands.still_waking, session))
             return
@@ -880,47 +883,52 @@ class RemoteRunner:
         try:
             await self._service.wake(session, text, proceed=lambda: self._guard.armed)
         except Aborted:
+            session.queued.clear()
             return
         except Elsewhere:
-            await self._after_elsewhere(session, text)
+            queued, session.queued = session.queued[:], []
+            await self._after_elsewhere(session, text, queued)
         except RemoteError as exc:
-            if session.stopping:
-                return
-            await self._post(self._lane_copy(commands.wake_failed, session, str(exc), permanent=exc.permanent))
+            if not session.stopping:
+                await self._post(self._lane_copy(commands.wake_failed, session, str(exc), permanent=exc.permanent))
+            await self._drop_queued(session, session.queued)
         except Exception:
             _log.warning("Remote wake of %s failed", session.short, exc_info=True)
-            if session.stopping:
-                return
-            await self._post(self._lane_copy(commands.wake_failed, session))
+            if not session.stopping:
+                await self._post(self._lane_copy(commands.wake_failed, session))
+            await self._drop_queued(session, session.queued)
         else:
             self._begin(session)
-            await self._send_queued(session)
-        finally:
-            session.queued.clear()
+            queued, session.queued = session.queued[:], []
+            for later in queued:
+                self._enqueue(session, later)
 
-    async def _send_queued(self, session: Session) -> None:
-        """Messages that arrived while the lane was waking follow the one that woke it, in order."""
-        for text in list(session.queued):
-            try:
-                await self._service.send(session.id, text)
-            except RemoteError as exc:
-                await self._post(self._lane_copy(commands.send_failed, session, str(exc), permanent=exc.permanent))
-                return
+    async def _drop_queued(self, session: Session, queued: list[str]) -> None:
+        count, queued[:] = len(queued), []
+        if count and not session.stopping:
+            await self._post(self._lane_copy(commands.queued_not_sent, session, count))
 
-    async def _after_elsewhere(self, session: Session, text: str) -> None:
-        """The session was opened in another terminal while it was waking: the same routing as before the wake."""
+    async def _after_elsewhere(self, session: Session, text: str, queued: list[str]) -> None:
+        """The session was opened in another terminal while it was waking: the same routing as before the wake,
+        for the message that woke it and then for each one that was queued behind it, in order."""
         if session.stopping:
             return
-        try:
-            if await self._route_elsewhere(session, text):
-                return
-        except Refusal as exc:
-            await self._post(str(exc))
-            return
-        except RemoteError as exc:
-            await self._post(self._lane_copy(commands.send_failed, session, str(exc), permanent=exc.permanent))
-            return
-        await self._post(self._lane_copy(commands.wake_failed, session, "The session changed while it was waking."))
+        pending = [text, *queued]
+        while pending:
+            try:
+                if await self._route_elsewhere(session, pending[0]):
+                    pending.pop(0)
+                    continue
+            except Refusal as exc:
+                await self._post(str(exc))
+            except RemoteError as exc:
+                await self._post(self._lane_copy(commands.send_failed, session, str(exc), permanent=exc.permanent))
+            else:
+                await self._post(
+                    self._lane_copy(commands.wake_failed, session, "The session changed while it was waking.")
+                )
+            break
+        await self._drop_queued(session, pending[1:])
 
     def _begin(self, session: Session) -> None:
         now = self._clock()

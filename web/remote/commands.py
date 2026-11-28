@@ -614,6 +614,31 @@ def still_waking(session: str, *, project: str | None = None, several: bool = Fa
     )
 
 
+WAKE_QUEUE_MAX = 10
+
+
+def wake_queue_full(session: str, *, project: str | None = None, several: bool = False) -> str:
+    return agent_reply(
+        session,
+        f"Not sent: {WAKE_QUEUE_MAX} messages are already waiting for it to wake. Send this one again once it is up.",
+        [f"`status {session}` to check on it."],
+        project=project,
+        several=several,
+    )
+
+
+def queued_not_sent(session: str, count: int, *, project: str | None = None, several: bool = False) -> str:
+    """The wake failed after messages were promised a place behind the first one."""
+    noun = "message" if count == 1 else "messages"
+    return agent_reply(
+        session,
+        f"{count} queued {noun} not sent.",
+        [f"Send {'it' if count == 1 else 'them'} again to retry, or `stop {session}`."],
+        project=project,
+        several=several,
+    )
+
+
 def wake_too_soon(session: str, wait_seconds: float, *, project: str | None = None, several: bool = False) -> str:
     return agent_reply(
         session,
