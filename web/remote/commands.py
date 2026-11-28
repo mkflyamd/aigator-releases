@@ -7,12 +7,14 @@ from __future__ import annotations
 
 import math
 import re
+import time
 from dataclasses import dataclass
 from datetime import datetime
 
 from remote import settings
 
 TRIGGER_RE = re.compile(r"^\s*@gator(?:\s+(.*))?$", re.IGNORECASE | re.DOTALL)
+_ASKING_RE = re.compile(r"^what(?:'s|’s| is)\s+(?:the\s+)?", re.IGNORECASE)
 GREETING_WORDS = ("hi", "hello", "hey", "start")
 INTERRUPT_WORDS = ("esc", "escape")
 RESERVED = ("list", "status", "stop", "help", "bye", *INTERRUPT_WORDS, *GREETING_WORDS)
@@ -37,8 +39,8 @@ DOT = "·"
 CHOICES_SHOWN = 2
 CHOICE_MAX_CHARS = 60
 WORKING, WAITING, IDLE = "working", "waiting for you", "idle"
-ACK_DELAY_SECONDS = 15.0
-PROGRESS_SECONDS = 120.0
+ACK_DELAY_SECONDS = 5.0
+PROGRESS_SECONDS = 300.0
 ELAPSED_MIN_SECONDS = 60.0
 SLEEPING, FAILED = "sleeping", "failed"
 BREVITY_HINT = "(This session was started from a chat app. Keep replies short, in plain text, with no tables.)"
@@ -64,6 +66,16 @@ def _cap_bytes(text: str) -> str:
     return text.encode("utf-8")[:TEXT_MAX_BYTES].decode("utf-8", "ignore")
 
 
+def _reserved_phrase(rest: str) -> str:
+    """`status?`, `what is the status` and `what's the list?` read as the reserved word. Only a reserved word
+    alone, or `status`/`stop` with one name, is rewritten; any other text goes to the agent as typed."""
+    plain = _ASKING_RE.sub("", rest.rstrip(".!?, ").strip())
+    words = plain.split()
+    if words and words[0].lower() in RESERVED and (len(words) == 1 or (len(words) == 2 and words[0].lower() in ("status", "stop"))):
+        return plain
+    return rest
+
+
 def parse(message: str) -> Command | None:
     """None for anything that is not an `@gator` command (an ordinary note)."""
     match = TRIGGER_RE.match(message or "")
@@ -72,6 +84,7 @@ def parse(message: str) -> Command | None:
     rest = _cap_bytes((match.group(1) or "").strip())
     if not rest:
         return Command("help")
+    rest = _reserved_phrase(rest)
     whole = rest.rstrip(".!?, ").lower()
     if whole in GREETING_WORDS:
         return Command("open")
@@ -462,19 +475,46 @@ def mention_needs_text(name: str) -> str:
 
 
 def session_status(
-    session: str, state: str, since: float, last_activity: float, *, project: str | None = None, several: bool = False
+    session: str,
+    state: str,
+    since: float,
+    last_activity: float,
+    *,
+    project: str | None = None,
+    several: bool = False,
+    now: float | None = None,
+    last_step: str = "",
 ) -> str:
     last = f"Last activity {clock_time(last_activity)}."
     if state == SLEEPING:
         text, options = f"Asleep to free memory.\n{last}", ["Reply here to wake it.", f"`stop {session}` to stop it."]
     elif state == FAILED:
         text, options = f"Could not be woken.\n{last}", [f"`stop {session}`, then send a message to start a new one."]
+    elif state == WORKING:
+        text = f"Working for {elapsed_words((time.time() if now is None else now) - since)}."
+        text += f" Last step: {last_step}." if last_step else ""
+        options = [_stop_option(session, several)]
     else:
-        lead = {WORKING: "Working", WAITING: "Waiting for you", IDLE: "Idle"}[state]
+        lead = {WAITING: "Waiting for you", IDLE: "Idle"}[state]
         text, options = f"{lead} since {clock_time(since)}.", []
         if clock_time(last_activity) != clock_time(since):
             text += f"\n{last}"
     return agent_reply(session, text, options, project=project, several=several)
+
+
+def _stop_option(session: str, several: bool) -> str:
+    return f"`stop{f' {session}' if several else ''}` to stop it."
+
+
+def busy_queued(
+    session: str, elapsed: float, last_step: str, *, project: str | None = None, several: bool = False
+) -> str:
+    """The reply to a message that arrives while the session is still working: what it is doing, and that the
+    message is queued behind it."""
+    body = f"Working for {elapsed_words(elapsed)}."
+    body += f" Last step: {last_step}." if last_step else ""
+    body += "\nYour message is queued, so no need to resend."
+    return agent_reply(session, body, [_stop_option(session, several)], project=project, several=several)
 
 
 def working_ack(session: str, text: str, *, project: str | None = None, several: bool = False) -> str:
@@ -485,8 +525,7 @@ def working_ack(session: str, text: str, *, project: str | None = None, several:
 def working(session: str, branch: str | None, several: bool, *, project: str | None = None) -> str:
     """The one message sent when a turn has not finished after ACK_DELAY_SECONDS."""
     body = "Working on it." + (f"\nBranch: {branch}" if branch else "")
-    option = f"`stop{f' {session}' if several else ''}` to stop it."
-    return agent_reply(session, body, [option], project=project, several=several)
+    return agent_reply(session, body, [_stop_option(session, several)], project=project, several=several)
 
 
 def elapsed_words(seconds: float) -> str:
@@ -497,8 +536,12 @@ def elapsed_words(seconds: float) -> str:
     return f"{hours} h" if hours else f"{minutes} min"
 
 
-def progress(session: str, elapsed: float, *, project: str | None = None, several: bool = False) -> str:
-    return agent_reply(session, f"Still working, {elapsed_words(elapsed)}.", [], project=project, several=several)
+def progress(
+    session: str, elapsed: float, last_step: str = "", *, project: str | None = None, several: bool = False
+) -> str:
+    body = f"Still working, {elapsed_words(elapsed)}."
+    body += f" Last step: {last_step}." if last_step else ""
+    return agent_reply(session, body, [], project=project, several=several)
 
 
 def done_headline(elapsed: float | None) -> str:
@@ -561,11 +604,11 @@ def lane_moved_on(session: str, *, project: str | None = None, several: bool = F
 
 
 def still_waking(session: str, *, project: str | None = None, several: bool = False) -> str:
-    """A message that arrives while the wake is under way. It is not queued."""
+    """A message that arrives while the wake is under way: it is queued behind the first one."""
     return agent_reply(
         session,
-        "Still waking up. That message was not sent.",
-        ["Send it again once it is ready.", f"`status {session}` to check on it."],
+        "Still waking up. Your message is queued, so no need to resend.",
+        [f"`status {session}` to check on it."],
         project=project,
         several=several,
     )

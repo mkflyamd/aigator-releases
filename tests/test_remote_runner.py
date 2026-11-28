@@ -108,6 +108,9 @@ class FakeHost:
     async def last_message(self, pty_id):
         return self.last.get(pty_id, "")
 
+    async def last_step(self, pty_id):
+        return getattr(self, "steps", {}).get(pty_id, "")
+
     async def output(self, pty_id, since):
         return ("", since)
 
@@ -481,17 +484,19 @@ async def test_working_leaves_the_branch_out_when_there_is_none(w):
     assert "Branch" not in w.channel.posted[0]
 
 
-async def test_still_working_is_posted_at_most_every_two_minutes(w):
+async def test_still_working_is_posted_every_five_minutes_and_names_the_last_step(w):
     await baselined(w)
     await w.feed(w.msg(101, "@gator go"))
-    for step in (20, 100, 100, 100, 30):
+    w.host.steps = {"pty-1": "running tests"}
+    for step in (20, 150, 150, 150, 150):
         w.clock.now += step
         await w.runner.tick()
     assert w.channel.posted == [
         commands.working("budget", "main", False, project="Budget"),
-        commands.progress("budget", 220, project="Budget"),
-        commands.progress("budget", 350, project="Budget"),
+        commands.progress("budget", 320, "running tests", project="Budget"),
+        commands.progress("budget", 620, "running tests", project="Budget"),
     ]
+    assert "Last step: running tests." in w.channel.posted[1]
 
 
 async def test_done_between_fifteen_seconds_and_a_minute_is_plain_done(w):

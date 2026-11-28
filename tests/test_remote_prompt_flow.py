@@ -322,9 +322,9 @@ def test_list_offers_no_next_block_when_nothing_is_waiting():
 
 
 def test_status_leaves_out_last_activity_when_it_is_the_same_minute():
-    same = commands.session_status("budget", commands.WORKING, 1000.0, 1010.0)
+    same = commands.session_status("budget", commands.IDLE, 1000.0, 1010.0)
     assert "Last activity" not in same
-    later = commands.session_status("budget", commands.WORKING, 1000.0, 5000.0)
+    later = commands.session_status("budget", commands.IDLE, 1000.0, 5000.0)
     assert "Last activity" in later
 
 
@@ -392,7 +392,7 @@ async def test_a_reply_before_the_tick_has_seen_the_prompt_shows_it_and_types_no
     w.host.states["pty-1"] = {"state": "asking", "at": when}
     w.host.prompts["pty-1"] = prompts.parse(BASH_PERMISSION, when)
     w.channel.posted.clear()
-    await say(w, "what is the status")
+    await say(w, "is it done yet")
     assert w.channel.posted == [
         "[\U0001F40A Gator - budget - Budget] Not sent: this session is waiting on a permission.\n"
         "Tool: Bash\nCommand: echo hi > out.txt\n\n"
@@ -407,7 +407,7 @@ async def test_a_reply_while_the_agent_asks_with_no_prompt_file_points_to_the_ap
     refuse_typing_while_asking(w)
     w.host.states["pty-1"] = {"state": "asking", "at": w.clock.now + 5}
     w.channel.posted.clear()
-    await say(w, "what is the status")
+    await say(w, "is it done yet")
     [out] = w.channel.posted
     assert "waiting for the user" not in out
     assert prompts.OPEN_APP_QUESTION in out and "Not sent:" in out

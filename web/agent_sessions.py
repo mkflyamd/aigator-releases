@@ -550,6 +550,45 @@ def last_assistant_text(rec: dict) -> str:
     return text if role == "assistant" else ""
 
 
+_STEP_VERBS = {"Read": "reading", "Edit": "editing", "Write": "writing", "MultiEdit": "editing", "NotebookEdit": "editing"}
+_STEP_FIELDS = ("description", "command", "file_path", "path", "pattern", "query", "url")
+STEP_MAX = 60
+
+
+def _step_line(block: dict) -> str:
+    if block.get("type") == "text":
+        text = block.get("text")
+        line = next((ln.strip() for ln in text.splitlines() if ln.strip()), "") if isinstance(text, str) else ""
+        return line.rstrip(".:")[:STEP_MAX]
+    if block.get("type") != "tool_use":
+        return ""
+    name, args = str(block.get("name") or ""), block.get("input") or {}
+    detail = next((str(args[k]) for k in _STEP_FIELDS if isinstance(args.get(k), str) and args[k].strip()), "")
+    if name in _STEP_VERBS and detail:
+        detail = f"{_STEP_VERBS[name]} {Path(detail).name}"
+    elif name == "Bash" and detail:
+        detail = detail.splitlines()[0]
+        detail = detail if args.get("description") else f"running {detail}"
+    return (detail or name)[:STEP_MAX].rstrip()
+
+
+def last_step(rec: dict) -> str:
+    """One short line on what the agent last did since the newest request: its latest tool call or note.
+    "" when it has done nothing yet, or the agent keeps no such transcript."""
+    if rec["agent"] != "claude":
+        return ""
+    path = Path(rec["path"])
+    for o in reversed(_read_tail(path, path.stat().st_size)):
+        message = _claude_message(o)
+        if message and message[0] == "user":
+            return ""
+        blocks = (o.get("message") or {}).get("content") if o.get("type") == "assistant" else None
+        for block in reversed(blocks if isinstance(blocks, list) else []):
+            if isinstance(block, dict) and (step := _step_line(block)):
+                return step
+    return ""
+
+
 def _store_messages(rec: dict) -> list[tuple[str, str]]:
     read = agent_session_stores.PREVIEWERS[rec["agent"]]
     try:

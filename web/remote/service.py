@@ -96,6 +96,7 @@ class Session:
     wake_task: asyncio.Task | None = field(default=None, repr=False, compare=False)
     wake_cancelled: bool = False
     wake_delivering: bool = False
+    queued: list[str] = field(default_factory=list, repr=False, compare=False)
     kind: str = STARTED  # ADOPTED: someone else's session that Remote only watches, never closes
     name: str = ""
     misses: int = 0
@@ -411,6 +412,13 @@ class RemoteService:
         session.waiting = False
         session.prompt = session.asking_since = None
         self._persist(session)
+
+    async def last_step(self, session: Session) -> str:
+        try:
+            return await self._host.last_step(session.pty_id)
+        except Exception:
+            _log.warning("could not read the last step of %s", session.id, exc_info=True)
+            return ""
 
     async def answer(self, session_id: str, text: str, sent_at: float = 0.0) -> prompts.Answer:
         return await self.answer_session(self.get(session_id), text, sent_at)

@@ -139,6 +139,7 @@ class SessionHost(Protocol):
     async def kill(self, pty_id: str) -> None: ...
     async def state(self, pty_id: str) -> dict | None: ...
     async def last_message(self, pty_id: str) -> str: ...
+    async def last_step(self, pty_id: str) -> str: ...
     async def output(self, pty_id: str, since: int) -> tuple[str, int]: ...
     async def prompt(self, pty_id: str) -> Prompt | None: ...
     async def answer(self, pty_id: str, prompt_id: str, keys: tuple[str, ...], ends_turn: bool = False) -> None: ...
@@ -497,6 +498,28 @@ class LocalPtyHost:
             _log.warning("the transcript of %s has no assistant reply yet", pty_id)
             return ""
         return agent_handoff.Redactor(agent_handoff._configured_api_keys())(text)
+
+    async def last_step(self, pty_id: str) -> str:
+        return await asyncio.to_thread(self._last_step, pty_id)
+
+    @staticmethod
+    def _last_step(pty_id: str) -> str:
+        import agent_handoff
+        import agent_sessions
+        from routes import terminal
+        from skills.code_agent.projects import get_project
+
+        meta = terminal.session_owner(pty_id) or {}
+        repo = (get_project(meta.get("project_id") or "") or {}).get("repo_path")
+        if not repo or not meta.get("session_id"):
+            return ""
+        try:
+            rec = agent_sessions.find_session(repo, meta.get("agent") or AGENT, meta["session_id"])
+            step = agent_sessions.last_step(rec) if rec else ""
+        except Exception:
+            _log.warning("could not read the last step of %s", pty_id, exc_info=True)
+            return ""
+        return agent_handoff.Redactor(agent_handoff._configured_api_keys())(step) if step else ""
 
     async def output(self, pty_id: str, since: int) -> tuple[str, int]:
         from routes import terminal

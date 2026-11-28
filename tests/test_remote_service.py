@@ -76,6 +76,9 @@ class FakeHost:
     async def last_message(self, pty_id):
         return self.last.get(pty_id, "")
 
+    async def last_step(self, pty_id):
+        return getattr(self, "steps", {}).get(pty_id, "")
+
     async def output(self, pty_id, since):
         return ("out", since + 3)
 

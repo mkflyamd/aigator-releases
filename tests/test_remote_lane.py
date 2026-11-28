@@ -140,7 +140,7 @@ async def test_a_second_message_while_the_lane_wakes_does_not_wake_it_twice(w):
     gate.set()
     await woken(w)
     assert len(w.host.woken) == 1
-    assert w.host.delivered == [("pty-1", "first task"), ("pty-1", "second task")]
+    assert w.host.delivered == [("pty-1", "first task"), ("pty-1", "second task"), ("pty-1", "third task")]
 
 
 async def test_a_wake_that_failed_is_reported_and_no_fresh_session_is_started(w):
@@ -255,7 +255,7 @@ async def test_shutting_down_ends_the_background_wakes(w):
     assert w.host.delivered == [("pty-1", "first task")]
 
 
-async def test_a_message_that_arrives_mid_wake_gets_the_short_waking_line_and_is_not_queued(w):
+async def test_a_message_that_arrives_mid_wake_gets_the_short_waking_line_and_follows_the_first(w):
     gate = w.host.wake_gate = asyncio.Event()
     await asleep(w)
     await w.feed(w.msg(102, "@gator second task"))
@@ -263,7 +263,7 @@ async def test_a_message_that_arrives_mid_wake_gets_the_short_waking_line_and_is
     assert w.channel.posted[-1] == commands.still_waking("budget", project="Budget")
     gate.set()
     await woken(w)
-    assert [t for _, t in w.host.delivered] == ["first task", "second task"]
+    assert [t for _, t in w.host.delivered] == ["first task", "second task", "third task"]
 
 
 async def test_nothing_wakes_once_remote_control_has_expired(w):
@@ -583,8 +583,8 @@ def pw(tmp_path):
 
 async def test_a_lane_open_in_another_terminal_gets_the_message_there_and_is_never_woken(pw):
     await open_elsewhere(pw)
-    await pw.feed(pw.msg(102, "@gator what is the status"))
-    assert pw.gateway.sent == [("Releases", "what is the status", "Teams chat")]
+    await pw.feed(pw.msg(102, "@gator is it done yet"))
+    assert pw.gateway.sent == [("Releases", "is it done yet", "Teams chat")]
     assert pw.host.woken == []
     assert pw.channel.posted[-1] == commands.peer_sent("Releases", False)
     assert commands.waking("budget", project="Budget") not in pw.channel.posted
@@ -594,14 +594,14 @@ async def test_a_lane_open_in_another_terminal_gets_the_message_there_and_is_nev
 
 async def test_the_reply_of_the_open_terminal_is_watched_for(pw):
     await open_elsewhere(pw)
-    await pw.feed(pw.msg(102, "@gator what is the status"))
+    await pw.feed(pw.msg(102, "@gator is it done yet"))
     assert [s.pty_id for s in pw.service.watched("adopted")] == ["pty-open"]
 
 
 async def test_an_open_terminal_that_is_busy_is_told_so_and_nothing_else_happens(pw):
     await open_elsewhere(pw)
     pw.gateway.refuse, pw.gateway.refuse_code = "The agent is busy with a turn.", "not_ready"
-    await pw.feed(pw.msg(102, "@gator what is the status"))
+    await pw.feed(pw.msg(102, "@gator is it done yet"))
     assert pw.channel.posted[-1] == commands.peer_refused("Releases", "The agent is busy with a turn.")
     assert "busy with a turn" in pw.channel.posted[-1]
     assert "Send your message again to retry" not in posted(pw)

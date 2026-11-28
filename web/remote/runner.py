@@ -24,6 +24,7 @@ from remote.service import (
     ADOPTED,
     LIVE,
     SLEEPING,
+    STARTED,
     Aborted,
     Asleep,
     Elsewhere,
@@ -377,7 +378,7 @@ class RemoteRunner:
         elif kind == "list":
             await self._post(await self._list_text())
         elif kind == "status":
-            await self._post(self._status(command.name))
+            await self._post(await self._status(command.name))
         elif kind == "stop":
             await self._service.stop(self._pick(command.name, required=True)[0].id)
         elif kind == "stop_all":
@@ -419,6 +420,9 @@ class RemoteRunner:
     def _since(self, session: Session) -> float:
         if session.waiting:
             return session.last_event_at or session.last_activity
+        turn = self._turns.get(session.id)
+        if turn is not None and session.awaiting_since is not None:
+            return turn.started
         return session.awaiting_since if session.awaiting_since is not None else session.last_activity
 
     def _reserved(self) -> frozenset[str]:
@@ -510,15 +514,23 @@ class RemoteRunner:
     def _describe(self, sessions: list[Session]) -> str:
         return commands.session_list(self._session_rows(sessions))
 
-    def _status(self, name: str | None) -> str:
+    async def _status(self, name: str | None) -> str:
         sessions = self._pick(name)
         if len(sessions) != 1:
             return self._describe(sessions)
         s = sessions[0]
         if s.prompt is not None:
             return prompts.waiting_message(s.short, s.project.name, s.prompt)
+        word = _state_word(s)
         return commands.session_status(
-            s.short, _state_word(s), self._since(s), s.last_activity, project=s.project.name, several=self._several(s)
+            s.short,
+            word,
+            self._since(s),
+            s.last_activity,
+            project=s.project.name,
+            several=self._several(s),
+            now=self._clock(),
+            last_step=await self._service.last_step(s) if word == commands.WORKING else "",
         )
 
     async def _send(self, text: str, tagged: bool = True, sent_at: float = 0.0) -> None:
@@ -584,6 +596,8 @@ class RemoteRunner:
         if session.waiting and session.prompt is not None:
             await self._answer(session, text, sent_at)
             return
+        busy = session.awaiting_since is not None and session.kind == STARTED
+        elapsed = self._clock() - self._since(session)
         try:
             await self._service.send(session.id, text)
         except Asleep:
@@ -596,7 +610,15 @@ class RemoteRunner:
                 self._lane_copy(commands.send_failed, session, str(exc), permanent=exc.permanent)
             ) from exc
         self._state.clear_prompt_messages(self._channel.name, session.id)
-        self._begin(session)
+        if not busy:
+            self._begin(session)
+            return
+        self._turns.setdefault(session.id, _Turn(started=self._clock() - elapsed, last_note=self._clock()))
+        await self._post(
+            self._lane_copy(
+                commands.busy_queued, session, elapsed, await self._service.last_step(session)
+            )
+        )
 
     async def _answer(self, session: Session, text: str, sent_at: float = 0.0, *, interrupt: bool = False) -> None:
         """A reply to a session that is showing a permission or a question: typed as that answer, or
@@ -800,6 +822,10 @@ class RemoteRunner:
         """Answers at once and wakes in the background: a wake takes seconds, and the polling loop
         must keep running. begin_wake refuses a second wake of the same lane and one too soon after
         a failure, so a burst of messages cannot start more than one."""
+        if session.waking:
+            session.queued.append(text)
+            await self._post(self._lane_copy(commands.still_waking, session))
+            return
         self._service.begin_wake(session)
         await self._post(self._lane_copy(commands.waking, session))
         task = asyncio.create_task(self._wake(session, text))
@@ -825,6 +851,18 @@ class RemoteRunner:
             await self._post(self._lane_copy(commands.wake_failed, session))
         else:
             self._begin(session)
+            await self._send_queued(session)
+        finally:
+            session.queued.clear()
+
+    async def _send_queued(self, session: Session) -> None:
+        """Messages that arrived while the lane was waking follow the one that woke it, in order."""
+        for text in list(session.queued):
+            try:
+                await self._service.send(session.id, text)
+            except RemoteError as exc:
+                await self._post(self._lane_copy(commands.send_failed, session, str(exc), permanent=exc.permanent))
+                return
 
     async def _after_elsewhere(self, session: Session, text: str) -> None:
         """The session was opened in another terminal while it was waking: the same routing as before the wake."""
@@ -939,7 +977,11 @@ class RemoteRunner:
                 turn.last_note = now
                 await self._post(
                     commands.progress(
-                        session.short, now - turn.started, project=session.project.name, several=len(live) > 1
+                        session.short,
+                        now - turn.started,
+                        await self._service.last_step(session),
+                        project=session.project.name,
+                        several=len(live) > 1,
                     )
                 )
 
@@ -955,9 +997,9 @@ class RemoteRunner:
             if self._anyone_waiting():
                 self._window.hold()
             await self._close_if_expired()
-            await self._report_progress()
         await self._service.tick()
         if self.live:
+            await self._report_progress()
             await self._scan_terminals()
             await self._notify_waiting()
         else:

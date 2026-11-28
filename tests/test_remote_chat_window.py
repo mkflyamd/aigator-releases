@@ -497,7 +497,7 @@ AGENT_KEYS = {
     "status_sleeping", "status_failed", "waking", "wake_failed", "lane_lost",
 }
 TIPS_KEYS = {"greeting", "help_open", "help_closed"}
-NO_NEXT_KEYS = {"done", "done_long", "waiting_open", "progress", "list_idle", "status"}
+NO_NEXT_KEYS = {"done", "done_long", "waiting_open", "progress", "list_idle"}
 QUIET_NOTE = "It also closes after 30 minutes of quiet."
 
 
@@ -529,7 +529,9 @@ def _deck():
         "error": commands.error_reply("No default project is set. Choose one in Settings, then resend."),
         "which_session": commands.which_session(["budget", "other"]),
         "which_to_stop": commands.which_to_stop(["budget", "other"]),
-        "status": commands.session_status("budget", commands.WORKING, 1000.0, 2000.0),
+        "status": commands.session_status(
+            "budget", commands.WORKING, 1000.0, 2000.0, now=1240.0, last_step="running tests"
+        ),
         "working": commands.working("budget", "main", False),
         "progress": commands.progress("budget", 130),
         "done": commands.agent_result("Claude", "budget", "Done.", "Two files are open.")[0],
@@ -638,8 +640,7 @@ def test_the_deck_texts_match_the_copy():
     assert deck["stopped_one"].startswith("[\U0001F40A Gator] Stopped 1 session. Remote control is off.\n\n")
     assert deck["stopped_many"].startswith("[\U0001F40A Gator] Stopped 3 sessions. Remote control is off.\n\n")
     assert deck["status"] == (
-        f"[\U0001F40A Gator - budget] Working since {commands.clock_time(1000.0)}.\n"
-        f"Last activity {commands.clock_time(2000.0)}."
+        "[\U0001F40A Gator - budget] Working for 4 min. Last step: running tests.\n\nNext:\n• `stop` to stop it."
     )
     assert deck["working"] == (
         "[\U0001F40A Gator - budget] Working on it.\nBranch: main\n\nNext:\n• `stop` to stop it."
@@ -759,15 +760,15 @@ async def test_status_of_one_session_says_its_state_since_when_and_last_activity
     await say(w, "run the tests")
     await say(w, "status budget")
     out = w.channel.posted[-1]
-    assert out.startswith("[\U0001F40A Gator - Budget] Working since ")
-    assert "Next:" not in out and "Last activity" not in out
+    assert out.startswith("[\U0001F40A Gator - Budget] Working for ")
+    assert "Next:\n• `stop` to stop it." in out and "Last activity" not in out
 
 
 async def test_status_with_no_name_and_one_session_describes_that_session(w):
     await opened(w)
     await say(w, "run the tests")
     await say(w, "status")
-    assert w.channel.posted[-1].startswith("[\U0001F40A Gator - Budget] Working since ")
+    assert w.channel.posted[-1].startswith("[\U0001F40A Gator - Budget] Working for ")
 
 
 async def test_the_deck_wording_for_a_stop_that_needs_a_name_and_for_an_exit(w):
