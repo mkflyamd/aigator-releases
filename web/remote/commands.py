@@ -55,6 +55,7 @@ class Command:
     name: str | None = None
     text: str = ""
     tagged: bool = True  # False for an ordinary message routed by the open chat window
+    sent_at: float = 0.0  # when the user wrote it, as the channel says; 0 when it does not
 
 
 def _cap_bytes(text: str) -> str:

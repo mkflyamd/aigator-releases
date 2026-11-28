@@ -192,7 +192,7 @@ class RemoteRunner:
                     self._not_sent_noticed.clear()
             elif command.kind not in ("stop_all", "bye"):
                 self._window.extend()
-            await self._run(command)
+            await self._run(dataclasses.replace(command, sent_at=message.created_at))
         if skipped:
             await self._post(commands.stale_skipped(skipped, limit(self._stale)))
 
@@ -301,7 +301,7 @@ class RemoteRunner:
         elif kind == "stop_all":
             await self._stop_all()
         else:
-            await self._send(command.text, command.tagged)
+            await self._send(command.text, command.tagged, command.sent_at)
 
     async def _stop_all(self) -> None:
         stopped, failed = await self._service.stop_all()
@@ -433,7 +433,7 @@ class RemoteRunner:
             s.short, _state_word(s), self._since(s), s.last_activity, project=s.project.name, several=self._several(s)
         )
 
-    async def _send(self, text: str, tagged: bool = True) -> None:
+    async def _send(self, text: str, tagged: bool = True, sent_at: float = 0.0) -> None:
         """A message to a session. `@name text`, `name text` and `name: text` pick one; otherwise the
         waiting session if exactly one waits, else the only running one, else a new session in the
         default project. Another agent in the project is reached by its name, and only when the message
@@ -445,7 +445,7 @@ class RemoteRunner:
             if session is not None:
                 if not rest:
                     raise Refusal(commands.mention_needs_text(session.short))
-                await self._deliver(session, rest)
+                await self._deliver(session, rest, sent_at)
                 return
             if name.lower() not in _TAGS:
                 if tagged and await self._try_peer(text):
@@ -459,7 +459,7 @@ class RemoteRunner:
         first, _, rest = text.partition(" ")
         named = self._service.resolve(first.rstrip(":"))
         if named is not None and rest.strip():
-            await self._deliver(named, rest.strip())
+            await self._deliver(named, rest.strip(), sent_at)
             return
         sessions = self._service.list()
         waiting = [s for s in sessions if s.waiting]
@@ -468,9 +468,9 @@ class RemoteRunner:
         if tagged and await self._try_peer(text, colon_only=bool(waiting)):
             return
         if len(waiting) == 1:
-            await self._deliver(waiting[0], text)
+            await self._deliver(waiting[0], text, sent_at)
         elif len(sessions) == 1:
-            await self._deliver(sessions[0], text)
+            await self._deliver(sessions[0], text, sent_at)
         elif sessions:
             raise Refusal(commands.which_session([s.short for s in sessions]))
         else:
@@ -480,13 +480,13 @@ class RemoteRunner:
             prompt = f"{text}\n\n{self._hint}" if self._hint else text
             self._begin(await self._service.start(project, prompt))
 
-    async def _deliver(self, session: Session, text: str) -> None:
+    async def _deliver(self, session: Session, text: str, sent_at: float = 0.0) -> None:
         if await self._service.needs_wake(session):
             await self._start_wake(session, text)
             return
         await self._service.refresh(session.id)
         if session.waiting and session.prompt is not None:
-            await self._answer(session, text)
+            await self._answer(session, text, sent_at)
             return
         try:
             await self._service.send(session.id, text)
@@ -500,12 +500,12 @@ class RemoteRunner:
         self._state.clear_prompt_messages(self._channel.name, session.id)
         self._begin(session)
 
-    async def _answer(self, session: Session, text: str) -> None:
+    async def _answer(self, session: Session, text: str, sent_at: float = 0.0) -> None:
         """A reply to a session that is showing a permission or a question: typed as that answer, or
         not typed at all, and said so."""
         short, project = session.short, session.project.name
         try:
-            result = await self._service.answer(session.id, text)
+            result = await self._service.answer(session.id, text, sent_at)
         except PromptRefused as exc:
             raise Refusal(prompts.waiting_message(short, project, exc.prompt, refused=exc.reason)) from exc
         except PromptGone as exc:

@@ -510,7 +510,7 @@ class LocalPtyHost:
         if shown.kind == prompts.PERMISSION:
             _, end = entry.read_from(10**12)
             tail, _ = entry.read_from(max(0, end - SCREEN_TAIL_CHARS))
-            if not prompts.permission_dialog_showing(_ANSI.sub("", tail)):
+            if not prompts.permission_dialog_showing(_ANSI.sub("", tail), shown):
                 raise StalePrompt("The terminal is no longer showing that permission.")
         for index, key in enumerate(keys):
             if index:

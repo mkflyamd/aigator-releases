@@ -83,6 +83,7 @@ class Session:
     stopping: bool = False
     prompt: prompts.Prompt | None = None
     asking_since: float | None = None
+    prompt_seen_at: float = 0.0
     state: str = LIVE
     waking: bool = False
     last_wake_at: float = float("-inf")
@@ -403,15 +404,18 @@ class RemoteService:
         session.prompt = session.asking_since = None
         self._persist(session)
 
-    async def answer(self, session_id: str, text: str) -> prompts.Answer:
+    async def answer(self, session_id: str, text: str, sent_at: float = 0.0) -> prompts.Answer:
         """Types the reply into the prompt the session is showing. Only a session Remote started has one:
-        another agent's prompts are answered in its own terminal."""
+        another agent's prompts are answered in its own terminal. A reply written before that prompt was first seen
+        was meant for an earlier one, and is not typed."""
         session = self.get(session_id)
         if session.kind != STARTED:
             raise Refusal("Messages to another agent go through its name, not through Remote control.")
         shown = session.prompt
         if shown is None:
             raise RemoteError("That session is not waiting on a prompt.")
+        if 0 < sent_at < session.prompt_seen_at:
+            raise PromptRefused(shown, "that was for an earlier question.")
         result = prompts.resolve(shown, text)
         if isinstance(result, prompts.Refused):
             raise PromptRefused(shown, result.reason)
@@ -639,6 +643,7 @@ class RemoteService:
         if session.prompt is not None or not state or state["state"] != "asking":
             return
         session.prompt = await self._host.prompt(session.pty_id) or prompts.unreadable(state["at"], prompts.UNSEEN_WHY)
+        session.prompt_seen_at = min(self._clock(), state["at"])
         session.waiting, session.asking_since = True, None
         session.last_event_at = max(session.last_event_at, state["at"])
 
@@ -665,9 +670,9 @@ class RemoteService:
                     if again is None or again.id == session.prompt.id:
                         session.last_event_at = state["at"]
                         return
-                    session.prompt = again
+                    session.prompt, session.prompt_seen_at = again, self._clock()
                 else:
-                    session.prompt = await self._host.prompt(session.pty_id)
+                    session.prompt, session.prompt_seen_at = await self._host.prompt(session.pty_id), self._clock()
             session.waiting = True
             session.last_event_at = state["at"]
             if not adopted and session.prompt is None:
@@ -693,7 +698,7 @@ class RemoteService:
     async def _find_late_prompt(self, session: Session, at: float) -> None:
         """The agent says it is asking but wrote no prompt yet. After PROMPT_GRACE_SECONDS the question is its last
         message, or, when there is none, an app-only stand-in: an ask is never posted as an empty message."""
-        session.prompt = await self._host.prompt(session.pty_id)
+        session.prompt, session.prompt_seen_at = await self._host.prompt(session.pty_id), self._clock()
         text = ""
         if session.prompt is None:
             if self._clock() - session.asking_since < PROMPT_GRACE_SECONDS:

@@ -445,3 +445,40 @@ async def test_the_asking_state_rewritten_for_the_same_prompt_is_posted_once(w):
     assert w.channel.posted == []
     await show(w, "pty-1", {**BASH_PERMISSION, "tool_input": {"command": "ls"}}, at=30)
     assert len(w.channel.posted) == 1 and "Command: ls" in w.channel.posted[0]
+
+
+RM_BUILD = {**BASH_PERMISSION, "tool_input": {"command": "rm -rf build"}}
+
+
+async def test_a_reply_written_before_the_current_question_was_seen_is_not_typed_into_it(w):
+    await opened(w)
+    await say(w, "run the tests")
+    await show(w, "pty-1", BASH_PERMISSION)
+    w.clock.now += 30
+    await show(w, "pty-1", RM_BUILD)
+    w.channel.posted.clear()
+    await say(w, "allow", age=20)
+    assert w.host.typed == []
+    assert w.channel.posted[-1].startswith("[\U0001F40A Gator - budget - Budget] Not sent: that was for an earlier question.")
+    assert "Command: rm -rf build" in w.channel.posted[-1]
+    assert w.service.list()[0].waiting
+
+
+async def test_a_reply_written_after_the_current_question_was_posted_is_typed(w):
+    await opened(w)
+    await say(w, "run the tests")
+    await show(w, "pty-1", BASH_PERMISSION)
+    w.clock.now += 30
+    await show(w, "pty-1", RM_BUILD)
+    w.clock.now += 5
+    await say(w, "allow", age=1)
+    assert w.host.typed == [("pty-1", (prompts.ENTER,))]
+
+
+async def test_a_reply_to_a_question_the_tick_had_not_posted_yet_still_answers_it(w):
+    await opened(w)
+    await say(w, "run the tests")
+    w.host.states["pty-1"] = {"state": "asking", "at": w.clock.now - 2}
+    w.host.prompts["pty-1"] = prompts.parse(BASH_PERMISSION, w.clock.now - 2)
+    await say(w, "allow")
+    assert w.host.typed == [("pty-1", (prompts.ENTER,))]
