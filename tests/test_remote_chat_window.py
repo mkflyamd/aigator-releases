@@ -423,7 +423,7 @@ async def test_the_window_is_stored_per_channel(tmp_path):
 # ---------------------------------------------------------------- the rate limit notice
 
 
-async def test_every_dropped_command_says_it_was_not_sent_and_how_long_to_wait(w):
+async def test_a_flood_gets_one_notice_then_one_with_the_count_of_the_rest(w):
     await opened(w)
     for _ in range(19):
         await say(w, "list")
@@ -431,8 +431,13 @@ async def test_every_dropped_command_says_it_was_not_sent_and_how_long_to_wait(w
     for _ in range(5):
         await say(w, "list")
     slow = [p for p in w.channel.posted if "Not sent" in p]
-    assert slow == [commands.slow_down(600)] * 5
+    assert slow == [commands.slow_down(600)]
     assert "• Wait 10 minutes, then send it again." in slow[0]
+    w.clock.now += 30
+    await w.runner.tick()
+    slow = [p for p in w.channel.posted if "Not sent" in p]
+    assert slow[1:] == [commands.slow_down(570, 4)]
+    assert "4 messages, because too many came at once" in slow[1]
 
 
 def test_guard_wait_seconds_counts_down_from_the_oldest_command():

@@ -248,9 +248,14 @@ def timed_out_reply(seconds: float) -> str:
     )
 
 
-def slow_down(wait_seconds: float) -> str:
+def slow_down(wait_seconds: float, dropped: int = 1) -> str:
+    if dropped == 1:
+        return system_reply(
+            "Not sent: too many messages at once.", [f"Wait {in_words(wait_seconds)}, then send it again."]
+        )
     return system_reply(
-        "Not sent: too many messages at once.", [f"Wait {in_words(wait_seconds)}, then send it again."]
+        f"Not sent: {dropped} messages, because too many came at once.",
+        [f"Wait {in_words(wait_seconds)}, then send them again."],
     )
 
 

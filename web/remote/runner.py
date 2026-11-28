@@ -373,7 +373,8 @@ class RemoteRunner:
 
     async def _run(self, command: commands.Command) -> None:
         if not self._exempt_from_rate_limit(command) and not self._guard.allow_command():
-            await self._post(commands.slow_down(self._guard.wait_seconds()))
+            if count := self._guard.drop():
+                await self._post(commands.slow_down(self._guard.wait_seconds(), count))
             return
         try:
             await self._dispatch(command)
@@ -1060,6 +1061,8 @@ class RemoteRunner:
 
     async def tick(self) -> None:
         self._sync_guard()
+        if self.live and (count := self._guard.dropped_to_announce()):
+            await self._post(commands.slow_down(self._guard.wait_seconds(), count))
         if self._master.active():
             self._not_armed_noticed = None
         if self._master.expired():
