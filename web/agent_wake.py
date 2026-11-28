@@ -25,6 +25,7 @@ from pathlib import Path
 import agent_sessions
 import agent_state
 import agent_suspend
+from agent_capabilities import live_target_ok, relayable
 from relay import settings as relay_settings
 
 logger = logging.getLogger(__name__)
@@ -218,7 +219,7 @@ def find_targets(target: str, project_id: str | None, allow_cross_project: bool 
     seen: set[str] = set()
 
     def consider(entry: dict) -> None:
-        if entry["agent"] != "claude" or not entry["session_id"] or entry["session_id"] in seen:
+        if not relayable(entry["agent"]) or not entry["session_id"] or entry["session_id"] in seen:
             return
         if not allow_cross_project and entry["project_id"] != project_id:
             return
@@ -230,7 +231,7 @@ def find_targets(target: str, project_id: str | None, allow_cross_project: bool 
     for pty_id, record in agent_suspend.all_records().items():
         consider(_suspended_entry(pty_id, record))
     for pty_id, meta in terminal.live_pty_labels().items():
-        if meta.get("agent") != "claude" or not meta.get("session_id"):
+        if not meta.get("session_id") or not live_target_ok(meta.get("agent"), pty_id):
             continue
         if not allow_cross_project and meta.get("project_id") != project_id:
             continue
@@ -253,37 +254,37 @@ def _live_entry(pty_id: str, meta: dict) -> dict:
     return {
         "state": "live",
         "pty_id": pty_id,
-        "agent": "claude",
+        "agent": meta["agent"],
         "project_id": meta.get("project_id"),
         "session_id": meta["session_id"],
-        "title": title_of(meta.get("project_id"), "claude", meta["session_id"]),
+        "title": title_of(meta.get("project_id"), meta["agent"], meta["session_id"]),
     }
 
 
 def find_by_pty(pty_id: str) -> dict | None:
-    """The suspended or running Claude session that holds this terminal id. Blocking."""
+    """The suspended or running agent session that holds this terminal id. Blocking."""
     from routes import terminal
 
     record = agent_suspend.all_records().get(pty_id)
-    if record is not None and record.get("agent") == "claude" and record.get("session_id"):
+    if record is not None and relayable(record.get("agent")) and record.get("session_id"):
         return _suspended_entry(pty_id, record)
     meta = terminal.live_pty_labels().get(pty_id)
-    if meta and meta.get("agent") == "claude" and meta.get("session_id"):
+    if meta and meta.get("session_id") and live_target_ok(meta.get("agent"), pty_id):
         return _live_entry(pty_id, meta)
     return None
 
 
 def list_entries() -> list[dict]:
-    """Every Claude session that can be messaged, suspended or running. Blocking."""
+    """Every agent session that can be messaged, suspended or running. Blocking."""
     from routes import terminal
 
     found = {
         pty_id: _suspended_entry(pty_id, record)
         for pty_id, record in agent_suspend.all_records().items()
-        if record.get("agent") == "claude" and record.get("session_id")
+        if relayable(record.get("agent")) and record.get("session_id")
     }
     for pty_id, meta in terminal.live_pty_labels().items():
-        if pty_id not in found and meta.get("agent") == "claude" and meta.get("session_id"):
+        if pty_id not in found and meta.get("session_id") and live_target_ok(meta.get("agent"), pty_id):
             found[pty_id] = _live_entry(pty_id, meta)
     return list(found.values())
 
@@ -413,7 +414,7 @@ async def _wake_and_deliver(sender: dict, target: str, message: str, allow_cross
     frame(sender.get("name", ""), message)
     matches = await asyncio.to_thread(find_targets, target, sender.get("project_id"), allow_cross_project)
     if not matches:
-        raise WakeRefused("not_found", "No suspended or running Claude agent with that name or id in this project.")
+        raise WakeRefused("not_found", "No suspended or running agent with that name or id in this project.")
     if len(matches) > 1:
         raise WakeRefused(
             "ambiguous",

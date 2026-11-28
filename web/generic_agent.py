@@ -812,7 +812,9 @@ def _build_crushrc(profile: dict, models: list[str]) -> str:
         f"model small {small_ref}",
     ]
     if agent_state.crush_supports_hooks(find_agent_binary("crush")):
-        lines += ["", *agent_state.crush_hook_lines()]
+        import agent_mcp
+
+        lines += ["", *agent_state.crush_hook_lines(), agent_mcp.crush_mcp_line()]
     return "\n".join(lines)
 
 

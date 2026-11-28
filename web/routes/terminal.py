@@ -234,11 +234,21 @@ def create_pty_session(
 
 def live_pty_labels() -> dict[str, dict]:
     """id -> labels for every live PTY: those the PTY host holds (including ones
-    this backend has not adopted since a restart) and in-process ones. Blocking."""
+    this backend has not adopted since a restart) and in-process ones. Blocking.
+    An agent that learns its session id after launch has it filled in once a hook recorded it."""
+    import agent_capabilities
+    import agent_mcp
+
     found = {s["id"]: s.get("meta") or {} for s in _list_host_sessions() if not s.get("done")}
     for session_id, entry in list(_pty_sessions.items()):
         if not entry.done and session_id not in found:
             found[session_id] = entry.meta or {}
+    launched = dict(found)
+    for pty_id, meta in launched.items():
+        if not meta.get("session_id") and agent_capabilities.session_from_hook(meta.get("agent")):
+            recorded = agent_mcp.recorded_session(pty_id, meta.get("agent"), launched)
+            if recorded:
+                found[pty_id] = {**meta, "session_id": recorded}
     return found
 
 

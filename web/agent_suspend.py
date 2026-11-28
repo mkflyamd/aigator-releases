@@ -21,6 +21,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+import agent_capabilities
 import agent_state
 import generic_agent
 
@@ -109,7 +110,7 @@ def _write_targets(records: dict[str, dict]) -> None:
             "suspended_since": datetime.fromtimestamp(r["at"], timezone.utc).isoformat(timespec="seconds"),
         }
         for r in records.values()
-        if r.get("agent") == "claude" and r.get("session_id") and not r.get("failed")
+        if agent_capabilities.relayable(r.get("agent")) and r.get("session_id") and not r.get("failed")
     ]
     _write_atomic(targets_file(), json.dumps(targets, indent=2))
 

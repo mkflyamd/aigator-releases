@@ -2,6 +2,8 @@
 
 import json
 import os
+import shutil
+import subprocess
 import time
 import uuid
 
@@ -112,6 +114,7 @@ def test_with_claude_hooks_appends_settings_for_a_native_claude_only():
 
 
 CRUSH_EVENTS = {
+    "SessionStart": "idle",
     "TurnStart": "working",
     "PermissionRequest": "asking",
     "PermissionResult": "working",
@@ -127,6 +130,55 @@ def test_crush_hook_lines_cover_each_event():
         line = next(ln for ln in lines if ln.startswith(f"hook add {event} "))
         assert word in line and "GATOR_PTY_ID" in line
     assert any(ln.startswith("hook add SessionEnd ") and "rm -f" in ln for ln in lines)
+    assert all("CRUSH_SESSION_ID" in ln for ln in lines if ln.startswith("hook add ") and "SessionEnd" not in ln)
+
+
+def run_crush_hook(event, env):
+    """Run one generated hook command the way Crush's shell would, if a POSIX shell is here."""
+    sh = shutil.which("sh")
+    if sh is None:
+        pytest.skip("no POSIX shell on this machine")
+    line = next(ln for ln in agent_state.crush_hook_lines() if ln.startswith(f"hook add {event} "))
+    command = line.split(" --command '", 1)[1].rsplit("'", 1)[0]
+    base = {**os.environ, "GATOR_AGENT_STATE_DIR": agent_state.STATE_DIR.as_posix(), "GATOR_PTY_ID": PTY}
+    subprocess.run([sh, "-c", command], env={**base, **env}, check=True)  # noqa: S603
+
+
+def test_a_crush_hook_leaves_its_session_id_beside_the_state():
+    run_crush_hook("TurnStart", {"CRUSH_SESSION_ID": "sess-1"})
+    assert agent_state.read_states([PTY])[PTY]["state"] == "working"
+    assert (agent_state.STATE_DIR / f"{PTY}.session").read_text(encoding="utf-8") == "sess-1"
+    assert agent_state.read_session(PTY) == "sess-1"
+
+
+def test_a_crush_hook_without_a_session_id_keeps_the_one_already_recorded():
+    run_crush_hook("TurnStart", {"CRUSH_SESSION_ID": "sess-1"})
+    run_crush_hook("TurnEnd", {"CRUSH_SESSION_ID": ""})
+    assert agent_state.read_states([PTY])[PTY]["state"] == "idle"
+    assert agent_state.read_session(PTY) == "sess-1"
+
+
+def test_a_crush_hook_outside_gator_writes_nothing():
+    sh = shutil.which("sh")
+    if sh is None:
+        pytest.skip("no POSIX shell on this machine")
+    line = next(ln for ln in agent_state.crush_hook_lines() if ln.startswith("hook add TurnEnd "))
+    command = line.split(" --command '", 1)[1].rsplit("'", 1)[0]
+    env = {k: v for k, v in os.environ.items() if k != "GATOR_PTY_ID"}
+    subprocess.run([sh, "-c", command], env={**env, "GATOR_AGENT_STATE_DIR": agent_state.STATE_DIR.as_posix()})  # noqa: S603
+    assert list(agent_state.STATE_DIR.iterdir()) == []
+
+
+def test_loading_the_crushrc_marks_a_crush_terminal_ready():
+    ready = agent_state.crush_hook_lines()[0]
+    assert ready.startswith("if ") and "printf idle" in ready and "GATOR_PTY_ID" in ready
+    sh = shutil.which("sh")
+    if sh is None:
+        pytest.skip("no POSIX shell on this machine")
+    base = {**os.environ, "GATOR_AGENT_STATE_DIR": agent_state.STATE_DIR.as_posix(), "GATOR_PTY_ID": PTY}
+    subprocess.run([sh, "-c", ready], env=base, check=True)  # noqa: S603
+    assert agent_state.read_states([PTY])[PTY]["state"] == "idle"
+    assert subprocess.run([sh, "-c", ready], env={k: v for k, v in base.items() if k != "GATOR_PTY_ID"}).returncode == 0  # noqa: S603
 
 
 @pytest.mark.parametrize(
@@ -143,9 +195,13 @@ def test_crush_crushrc_includes_hooks_only_when_supported(monkeypatch):
     profile = {"api_key": "aigator-fake-api-key", "api_key_header": "x-api-key", "anthropic_url": "https://gw"}  # pragma: allowlist secret
     monkeypatch.setattr(generic_agent, "find_agent_binary", lambda agent: "crush.exe")
     monkeypatch.setattr(agent_state, "crush_supports_hooks", lambda exe: True)
-    assert "hook add TurnEnd " in generic_agent._build_crushrc(profile, ["claude-sonnet"])
+    rc = generic_agent._build_crushrc(profile, ["claude-sonnet"])
+    assert "hook add TurnEnd " in rc and "hook add SessionStart " in rc
+    assert 'mcp add gator --type http --url http://127.0.0.1:' in rc
+    assert '--header Authorization "Bearer $GATOR_AGENT_TOKEN"' in rc
     monkeypatch.setattr(agent_state, "crush_supports_hooks", lambda exe: False)
-    assert "hook add" not in generic_agent._build_crushrc(profile, ["claude-sonnet"])
+    rc = generic_agent._build_crushrc(profile, ["claude-sonnet"])
+    assert "hook add" not in rc and "mcp add gator" not in rc and "GATOR_PTY_ID" not in rc
 
 
 def _app():

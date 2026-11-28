@@ -136,13 +136,28 @@ def test_resuming_after_the_terminal_exited_spawns_again(env, monkeypatch):
 
 def test_a_resumed_crush_terminal_keeps_the_gateway_env_and_links_its_session(env, monkeypatch):
     monkeypatch.setattr(generic_agent, "build_crush_env", lambda: {"CRUSH_GLOBAL_CONFIG": "cfg"})
+    monkeypatch.setattr(agent_state, "crush_supports_hooks", lambda exe: True)
+    monkeypatch.setattr(generic_agent, "find_agent_binary", lambda agent: f"C:\\bin\\{agent}.exe")
     r = client().post("/api/generic-agent/terminal", json={**BODY, "agent": "crush"})
     assert r.status_code == 200
     assert env["resume"][-1]["agent"] == "crush" and env["resume"][-1]["id"] == "abc-1"
     spawn = env["spawn"][-1]
     assert spawn["command"] == ["C:\\bin\\crush.exe", "--resume", "abc-1"]
-    assert spawn["env"] == {"CRUSH_GLOBAL_CONFIG": "cfg", **agent_state.launch_env(r.json()["pty_session_id"])}
-    assert generic_agent.linked_session_id(r.json()["pty_session_id"]) == "abc-1"
+    pty = r.json()["pty_session_id"]
+    token = spawn["env"].pop(agent_mcp.TOKEN_ENV)
+    assert agent_mcp.caller_for(token) == {"pty_id": pty, "project_id": "demo", "agent": "crush"}
+    assert spawn["env"] == {"CRUSH_GLOBAL_CONFIG": "cfg", **agent_state.launch_env(pty)}
+    assert generic_agent.linked_session_id(pty) == "abc-1"
+
+
+def test_a_crush_terminal_gets_no_token_when_its_hooks_cannot_be_confirmed(env, monkeypatch):
+    monkeypatch.setattr(generic_agent, "build_crush_env", lambda: {"CRUSH_GLOBAL_CONFIG": "cfg"})
+    monkeypatch.setattr(agent_state, "crush_supports_hooks", lambda exe: False)
+    monkeypatch.setattr(generic_agent, "find_agent_binary", lambda agent: f"C:\\bin\\{agent}.exe")
+    r = client().post("/api/generic-agent/terminal", json={**BODY, "agent": "crush"})
+    assert r.status_code == 200
+    assert agent_mcp.TOKEN_ENV not in env["spawn"][-1]["env"]
+    assert not agent_mcp.holds_token(r.json()["pty_session_id"])
 
 
 def test_a_resumed_opencode_terminal_passes_the_session_to_the_bare_command(env, monkeypatch):
