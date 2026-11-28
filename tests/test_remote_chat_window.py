@@ -673,7 +673,11 @@ def test_the_loop_guard_and_the_adapters_read_the_shared_prefix():
 
 def test_the_timeout_notice_names_the_real_settings_section():
     html = (ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    tab = re.search(r'data-tab="remote"[^>]*>\s*(?:<span[^>]*>[^<]*</span>)?\s*([^<]+)<', html)
+    tab = re.search(
+        r'data-tab="remote"[^>]*>\s*(?:<span[^>]*>(?:[^<]|<svg.*?</svg>)*</span\s*>)?\s*([^<]+)<',
+        html,
+        re.S,
+    )
     if tab:
         label = tab.group(1).strip()
     else:
