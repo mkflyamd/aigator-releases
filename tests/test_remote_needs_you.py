@@ -380,3 +380,40 @@ async def test_a_prompt_whose_record_cannot_be_saved_is_still_posted_only_once(w
         w.clock.now += 61
         await w.runner.tick()
     assert len([t for t in w.channel.posted if "Needs you" in t]) == 1
+
+
+async def test_a_prompt_is_posted_at_once_when_the_user_is_away(w):
+    await opened(w)
+    await app_session(w)
+    w.channel.posted.clear()
+    w.runner._away = lambda: True
+    await show(w, "pty-1", BASH_PERMISSION)
+    [text] = w.channel.posted
+    assert text.startswith("[🐊 Gator - budget - Budget] Needs you: permission")
+    assert len(routed(w)) == 1
+
+
+async def test_a_prompt_that_waits_while_the_user_is_at_the_machine_goes_out_the_moment_they_leave(w):
+    await opened(w)
+    await app_session(w)
+    w.channel.posted.clear()
+    await show(w, "pty-1", BASH_PERMISSION)
+    w.clock.now += 30
+    await w.runner.tick()
+    assert w.channel.posted == []
+    w.runner._away = lambda: True
+    await w.runner.tick()
+    assert len(w.channel.posted) == 1
+    await w.runner.tick()
+    assert len(w.channel.posted) == 1
+
+
+async def test_away_still_holds_to_three_messages_and_a_summary_line(w):
+    await several(w, 4)
+    for session in w.service.list():
+        session.from_chat = False
+    w.runner._away = lambda: True
+    for n in range(1, 5):
+        await show(w, f"pty-{n}", BASH_PERMISSION)
+    assert len(routed(w)) == 3
+    assert any("more" in p or "also" in p.lower() for p in w.channel.posted)

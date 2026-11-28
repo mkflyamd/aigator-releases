@@ -17,6 +17,7 @@ from remote.guard import Guard
 from remote.peers import PeerDirectory, WakeGateway
 from remote.master import Master
 from remote.owner import ChannelOwner
+from remote.presence import is_away
 from remote.runner import RemoteRunner
 from remote.service import RemoteError, RemoteService
 from remote.session_host import LocalPtyHost, Project
@@ -152,6 +153,7 @@ def _build_loop(channel, state: State, enabled: Callable[[], bool]) -> RemoteLoo
         first_prompt_hint=commands.BREVITY_HINT,
         peers=PeerDirectory(WakeGateway(), settings.peer_messages_per_hour),
         terminals=LocalTerminalWatch(),
+        away=is_away,
     )
     return RemoteLoop(runner, enabled, owner=ChannelOwner(channel.name))
 

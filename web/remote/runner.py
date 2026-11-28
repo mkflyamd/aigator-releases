@@ -88,6 +88,7 @@ class RemoteRunner:
         branch_of: Callable[[str], str | None] = current_branch,
         peers: PeerDirectory | None = None,
         terminals: TerminalWatch | None = None,
+        away: Callable[[], bool] = lambda: False,
     ):
         self._channel = channel
         self._service = service
@@ -100,6 +101,7 @@ class RemoteRunner:
         self._branch_of = branch_of
         self._peers = peers
         self._terminals = terminals
+        self._away = away
         self._app: dict[str, Session] = {}
         self._answered: dict[str, float] = {}
         self._turns: dict[str, _Turn] = {}
@@ -780,6 +782,7 @@ class RemoteRunner:
             posted,
             self._since,
             now,
+            self._away(),
         )
         for session in due.send:
             if not await self._post_prompt(session, session.prompt):
