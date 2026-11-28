@@ -4,7 +4,7 @@
 (function (root) {
   'use strict';
 
-  const AGENT = 'Ranger';
+  const AGENT = 'Gator';
   const WINDOW_SECONDS = 12 * 3600;
   const WARN_HOUR = 3600;
   const WARN_QUARTER = 900;
@@ -73,10 +73,17 @@
     return status.expires_at - status.now - (now - fetchedAt) / 1000;
   }
 
+  function elapsed(minutes) {
+    const h = Math.floor(minutes / 60);
+    const m = minutes % 60;
+    const parts = [];
+    if (h) parts.push(h + ' h');
+    if (m || !h) parts.push(m + ' min');
+    return parts.join(' ');
+  }
+
   function leftShort(minutes) {
-    return minutes >= 60
-      ? Math.floor(minutes / 60) + 'h ' + (minutes % 60) + 'm left'
-      : minutes + 'm left';
+    return elapsed(minutes) + ' left';
   }
 
   function leftSpoken(minutes) {
@@ -126,7 +133,7 @@
       view.title = 'Remote control on';
       view.sw.on = true;
       view.timer = {
-        text: quarter ? 'Turns off in ' + minutes + 'm' : leftShort(minutes),
+        text: quarter ? 'Turns off in ' + elapsed(minutes) : leftShort(minutes),
         spoken: quarter ? 'Turns off in ' + leftSpoken(minutes) : leftSpoken(minutes) + ' left',
         minutes,
       };
@@ -138,7 +145,7 @@
       } else if (quarter) {
         view.note = 'Sessions already started keep running, but Gator stops reporting on them.';
         view.noteWarn = true;
-        view.acts = [{ act: 'restart', label: 'Restart 12 hours' }];
+        view.acts = [{ act: 'restart', label: 'Restart 12 hours', primary: true }];
       }
       view.bar = Math.max(2, Math.round((remaining / WINDOW_SECONDS) * 100));
     } else if (state === 'replies_off' && windowOpen(status)) {
@@ -163,8 +170,8 @@
       view.sw.disabled = true;
     } else if (state === 'expiring') {
       view.eye = 'expired';
-      view.title = 'Remote control is stopping';
-      view.sub = reason;
+      view.title = 'Turning off';
+      view.sub = 'Finishing up.';
       view.sw.disabled = true;
     } else if (state === 'expired' || state === 'stopped_from_chat') {
       view.eye = 'expired';
@@ -178,7 +185,7 @@
 
   function cardHtml(view) {
     const timer = view.timer
-      ? '<span role="timer"><span aria-hidden="true">' +
+      ? '<span role="timer" class="rcp-nw"><span aria-hidden="true">' +
         esc(view.timer.text) +
         '</span><span class="rcp-sr">' +
         esc(view.timer.spoken) +
@@ -186,7 +193,7 @@
       : '';
     const sub = esc(view.sub) + timer;
     const sw = view.sw.show
-      ? '<button type="button" class="rcp-sw" role="switch" data-rcp="switch" aria-checked="' +
+      ? '<button type="button" class="toggle-track rcp-sw" role="switch" data-rcp="switch" aria-checked="' +
         view.sw.on +
         '" aria-label="Remote control"' +
         (view.sw.disabled ? ' aria-disabled="true"' : '') +
@@ -204,7 +211,9 @@
         view.acts
           .map(
             (a) =>
-              '<button type="button" class="rcp-btn" data-rcp="' +
+              '<button type="button" class="rcp-btn' +
+              (a.primary ? ' is-primary' : '') +
+              '" data-rcp="' +
               a.act +
               '">' +
               esc(a.label) +
@@ -276,7 +285,9 @@
       rows +
       '</ul><ul class="rcp-bul"><li>Send <code>@gator hi</code> in either chat to open a 30-minute chat. While it is open, everything you type there goes to ' +
       AGENT +
-      '.</li><li>It stays on for 12 hours, then turns itself off. Turn it on again any time.</li><li>Gator only replies in your own chat. It sends nothing to other people from here.</li>' +
+      '.</li><li>It stays on for 12 hours, then turns itself off. Turn it on again any time.</li><li>' +
+      AGENT +
+      ' only replies in your own chat. It sends nothing to other people from here.</li>' +
       (repliesOff
         ? '<li>Replies in your own chat are off. Turning on Remote control turns them on too.</li>'
         : '') +

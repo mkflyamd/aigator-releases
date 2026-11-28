@@ -259,7 +259,7 @@ test('every server state maps to the card the design shows', () => {
   const vmOf = (state, extra, left) => pill.viewModel(base({ state, ...extra }), left);
   assert.strictEqual(vmOf('off').title, 'Remote control');
   assert(/Turns itself off after 12 hours/.test(vmOf('off').sub));
-  assert(/Ranger/.test(vmOf('off').sub));
+  assert(/Gator/.test(vmOf('off').sub));
   assert.strictEqual(vmOf('off').sw.on, false);
 
   assert.strictEqual(vmOf('not_set_up').acts[0].act, 'setup');
@@ -280,17 +280,21 @@ test('every server state maps to the card the design shows', () => {
   assert.strictEqual(admin.sw.disabled, true);
   assert.strictEqual(admin.sub, 'Your administrator has switched off replies.');
 
-  ['expired', 'stopped_from_chat', 'expiring'].forEach((state) => {
+  ['expired', 'stopped_from_chat'].forEach((state) => {
     const v = vmOf(state, { reason: 'because ' + state });
     assert.strictEqual(v.eye, 'expired', state);
     assert.strictEqual(v.sub, 'because ' + state, 'the server reason is shown');
   });
-  assert.strictEqual(vmOf('expiring', { reason: 'x' }).sw.disabled, true);
+  const expiring = vmOf('expiring', { reason: 'x' });
+  assert.strictEqual(expiring.eye, 'expired');
+  assert.strictEqual(expiring.title, 'Turning off');
+  assert.strictEqual(expiring.sub, 'Finishing up.');
+  assert.strictEqual(expiring.sw.disabled, true);
 
   const on = vmOf('on', {}, 702 * 60);
   assert.strictEqual(on.tone, 'on');
   assert.strictEqual(on.title, 'Remote control on');
-  assert.strictEqual(on.timer.text, '11h 42m left');
+  assert.strictEqual(on.timer.text, '11 h 42 min left');
   assert.strictEqual(on.timer.spoken, '11 hours 42 minutes left');
   assert.strictEqual(on.acts.length, 0);
 
@@ -299,11 +303,32 @@ test('every server state maps to the card the design shows', () => {
   assert.strictEqual(hour.eye, 'warn');
   assert.strictEqual(hour.note, 'Turns off soon. Restart to keep it on.');
   assert.strictEqual(hour.acts[0].label, 'Restart 12 hours');
+  assert(!hour.acts[0].primary, 'secondary at 1 hour');
 
   const quarter = vmOf('warn_15m', {}, 14 * 60);
-  assert.strictEqual(quarter.timer.text, 'Turns off in 14m');
+  assert.strictEqual(quarter.timer.text, 'Turns off in 14 min');
   assert.strictEqual(quarter.timer.spoken, 'Turns off in 14 minutes');
   assert(/keep running/.test(quarter.note));
+  assert.strictEqual(quarter.acts[0].primary, true, 'primary at 15 minutes');
+  assert(/class="rcp-btn is-primary" data-rcp="restart"/.test(pill.cardHtml(quarter)));
+});
+
+test('time copy drops zero parts and never splits across lines', () => {
+  const left = (min) => pill.viewModel(running(min * 60), min * 60).timer;
+  assert.strictEqual(left(660).text, '11 h left');
+  assert.strictEqual(left(665).text, '11 h 5 min left');
+  assert.strictEqual(left(50).text, '50 min left');
+  assert.strictEqual(left(660).spoken, '11 hours left');
+  const html = pill.cardHtml(pill.viewModel(running(665 * 60), 665 * 60));
+  assert(/<span role="timer" class="rcp-nw">/.test(html));
+});
+
+test('the sheet names Gator in the reply promise', () => {
+  assert(
+    /Gator only replies in your own chat\. It sends nothing to other people from here\./.test(
+      pill.sheetHtml(base()),
+    ),
+  );
 });
 
 test('the card is accessible markup: switch, timer with spoken form, decorative eye', () => {
@@ -352,7 +377,7 @@ test('one poller; the pill survives a History re-render and a shell rebuild', as
   assert.strictEqual(rp.fetches, 1, 'first tick fetched once');
   let slot = doc.getElementById('remote-pill-slot');
   assert(/data-remote-pill/.test(slot.innerHTML), 'card painted');
-  assert(/11h 40m left/.test(slot.innerHTML));
+  assert(/11 h 40 min left/.test(slot.innerHTML));
   assert(/rcp-badge/.test(strip.innerHTML), 'header badge while on');
   assert.strictEqual(tabEye.getAttribute('data-state'), 'on');
 
@@ -361,7 +386,7 @@ test('one poller; the pill survives a History re-render and a shell rebuild', as
   env.timers[0]();
   await settle();
   assert.strictEqual(rp.fetches, 1);
-  assert(/11h 39m left/.test(slot.innerHTML));
+  assert(/11 h 39 min left/.test(slot.innerHTML));
 
   // the real History render runs and clears only its list
   const history = loadHistory(doc);

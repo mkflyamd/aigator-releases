@@ -99,16 +99,13 @@
   flex-direction: column;
   gap: 8px;
   padding: 10px 12px;
-  border: 1px solid var(--border2);
-  border-radius: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
   background: var(--surface);
   color: var(--text);
 }
-.rcp[data-tone='on'] {
-  border-color: var(--ok);
-}
-.rcp[data-tone='warn'] {
-  border-color: var(--warn);
+.rcp-nw {
+  white-space: nowrap;
 }
 .rcp-row {
   display: flex;
@@ -153,11 +150,11 @@
   min-height: 32px;
   padding: 0 12px;
   border: 1px solid var(--border2);
-  border-radius: 10px;
+  border-radius: var(--radius-sm);
   background: var(--surface2);
   color: var(--text);
   font-size: 0.78rem;
-  font-weight: 550;
+  font-weight: 600;
   cursor: pointer;
   transition:
     background 0.15s,
@@ -189,33 +186,15 @@
 }
 
 .rcp-sw {
-  flex: none;
-  position: relative;
-  width: 44px;
-  height: 26px;
   padding: 0;
-  border: 1px solid var(--border2);
-  border-radius: 13px;
-  background: var(--surface3);
   cursor: pointer;
-}
-.rcp-sw::after {
-  content: '';
-  position: absolute;
-  top: 3px;
-  left: 3px;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: var(--text-dim);
-  transition: transform 0.15s;
 }
 .rcp-sw[aria-checked='true'] {
   background: var(--accent);
   border-color: var(--accent);
 }
 .rcp-sw[aria-checked='true']::after {
-  transform: translateX(18px);
+  transform: translateX(16px);
   background: #000;
 }
 .rcp-sw[aria-disabled='true'] {
@@ -229,6 +208,7 @@
   outline-offset: 2px;
 }
 @media (prefers-reduced-motion: reduce) {
+  .rcp-sw,
   .rcp-sw::after,
   .rcp-btn {
     transition: none;
@@ -269,7 +249,7 @@
   overflow: auto;
   padding: 20px 22px;
   border: 1px solid var(--border2);
-  border-radius: 16px;
+  border-radius: var(--radius);
   background: var(--surface);
   color: var(--text);
 }
