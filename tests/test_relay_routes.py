@@ -34,7 +34,7 @@ def csrf():
 def world(tmp_path, monkeypatch):
     live: dict = {}
     monkeypatch.setattr(agent_suspend, "STATE_FILE", tmp_path / "suspended-agents.json")
-    monkeypatch.setattr(terminal, "live_pty_labels", lambda: dict(live))
+    monkeypatch.setattr(terminal, "live_pty_labels", lambda strict=False: dict(live))
     monkeypatch.setattr("agent_wake.title_of", lambda project, agent, session: f"title-{session}")
     path = tmp_path / "sandbox-policy.json"
     monkeypatch.setattr(pol, "policy_path", lambda: path)

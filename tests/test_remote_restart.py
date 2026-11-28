@@ -2,6 +2,7 @@
 
 import pytest
 
+import pty_client
 from remote import loop as remote_loop
 from remote.guard import Guard
 from remote.master import Master
@@ -140,7 +141,7 @@ class _Terminal:
 
     def host_sessions(self):
         if self.unreachable:
-            raise terminal.HostUnreachable("down")
+            raise pty_client.HostError("down")
         return self.listed
 
 
@@ -208,7 +209,7 @@ def test_a_running_host_that_does_not_answer_is_unreachable_not_empty(monkeypatc
     monkeypatch.setattr(terminal.pty_client, "instance_key", lambda: "k")
     monkeypatch.setattr(terminal.pty_client, "find_host", lambda key: None)
     monkeypatch.setattr(terminal.pty_client, "host_process_running", lambda key: True)
-    with pytest.raises(terminal.HostUnreachable):
+    with pytest.raises(pty_client.HostError):
         terminal.host_sessions()
     assert terminal._list_host_sessions() == []
 

@@ -30,7 +30,7 @@ def world(tmp_path, monkeypatch):
     monkeypatch.setattr(agent_suspend, "STATE_FILE", tmp_path / "suspended-agents.json")
     monkeypatch.setattr(agent_wake, "_in_flight", set())
     monkeypatch.setattr(agent_wake, "_sent", {})
-    monkeypatch.setattr(terminal, "live_pty_labels", lambda: dict(w["live"]))
+    monkeypatch.setattr(terminal, "live_pty_labels", lambda strict=False: dict(w["live"]))
     monkeypatch.setattr(agent_wake, "title_of", lambda project, agent, session: w["titles"].get(session, ""))
 
     async def resume(entry, sender_name, preview):

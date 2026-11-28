@@ -147,7 +147,7 @@ def test_session_owner_tells_a_silent_host_from_a_host_with_no_labels(monkeypatc
 
     monkeypatch.setattr(terminal.pty_client, "host_request", silent)
     assert terminal.session_owner("pty-9") is None
-    with pytest.raises(terminal.HostUnreachable):
+    with pytest.raises(terminal.pty_client.HostError):
         terminal.session_owner("pty-9", strict=True)
     monkeypatch.setattr(terminal.pty_client, "host_request", lambda info, request: {"sessions": [{"id": "pty-9"}]})
     assert terminal.session_owner("pty-9", strict=True) is None

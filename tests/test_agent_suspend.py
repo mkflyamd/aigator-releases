@@ -139,7 +139,7 @@ def world(tmp_path, monkeypatch):
     w = {"live": {}, "states": {}, "watched": set(), "closed": [], "close_fails": False, "transcript_ok": True}
     monkeypatch.setattr(agent_suspend, "STATE_FILE", tmp_path / "suspended-agents.json")
     monkeypatch.setattr(agent_suspend, "_unwatched_since", {})
-    monkeypatch.setattr(terminal, "live_pty_labels", lambda: dict(w["live"]))
+    monkeypatch.setattr(terminal, "live_pty_labels", lambda strict=False: dict(w["live"]))
     monkeypatch.setattr(terminal, "has_viewer", lambda pid, grace_seconds=90.0, visible_only=True: pid in w["watched"])
     monkeypatch.setattr(
         agent_suspend, "_current_session", lambda meta, at: {"title": "Design head"} if w["transcript_ok"] else None

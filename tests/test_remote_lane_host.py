@@ -8,6 +8,7 @@ import agent_sessions
 import agent_suspend
 import agent_wake
 import generic_agent
+import pty_client
 from remote import session_host
 from remote.session_host import HostError, LocalPtyHost, Project
 from routes import generic_agent_routes, terminal
@@ -302,7 +303,7 @@ async def test_a_live_lane_that_will_not_close_is_reported_and_keeps_its_record(
 
 async def test_a_host_that_does_not_answer_refuses_the_wake_instead_of_guessing(calls, monkeypatch):
     def silent(sid):
-        raise terminal.HostUnreachable("down")
+        raise pty_client.HostError("down")
 
     monkeypatch.setattr(terminal, "pty_alive_strict", silent)
     with pytest.raises(HostError, match="did not answer") as err:
@@ -314,7 +315,7 @@ async def test_a_host_that_does_not_answer_refuses_the_wake_instead_of_guessing(
 
 async def test_a_host_that_stops_answering_before_the_spawn_refuses_it(calls, monkeypatch):
     def silent(strict=False):
-        raise terminal.HostUnreachable("down")
+        raise pty_client.HostError("down")
 
     monkeypatch.setattr(terminal, "live_pty_labels", silent)
     with pytest.raises(HostError, match="did not answer"):
@@ -415,9 +416,9 @@ def test_the_strict_alive_check_asks_the_host_and_lets_an_unreachable_host_raise
 
     def silent(strict=False):
         if strict:
-            raise terminal.HostUnreachable("down")
+            raise pty_client.HostError("down")
         return []
 
     monkeypatch.setattr(terminal, "_list_host_sessions", silent)
-    with pytest.raises(terminal.HostUnreachable):
+    with pytest.raises(pty_client.HostError):
         terminal.pty_alive_strict("a")
