@@ -672,7 +672,12 @@ class RemoteRunner:
                 try:
                     await self._service.send(session.id, text)
                 except Asleep:
-                    await self._start_wake(session, text)
+                    try:
+                        await self._start_wake(session, text)
+                    except Refusal as exc:
+                        await self._post(str(exc))
+                        await self._drop_queued(session, box)
+                        return
                 except Refusal as exc:
                     await self._post(str(exc))
                 except RemoteError as exc:
