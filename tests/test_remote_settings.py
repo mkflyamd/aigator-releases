@@ -182,3 +182,12 @@ def test_a_save_is_applied_inside_update_config_so_other_writes_are_not_lost(mon
     cfg = {"github_url": "keep"}
     seen[0](cfg)
     assert cfg == {"github_url": "keep", "remote_stale_minutes": 30}
+
+
+def test_the_removed_armed_hours_setting_is_ignored_and_never_stored(monkeypatch, known_projects):
+    saved = []
+    client, store = _client(monkeypatch, saved)
+    r = client.patch("/api/config", json={"remote_armed_max_hours": 72, "remote_stale_minutes": 30})
+    assert r.status_code == 200
+    assert "remote_armed_max_hours" not in store
+    assert store["remote_stale_minutes"] == 30
