@@ -56,17 +56,17 @@ _TOKEN_PATTERNS = [
     (re.compile(r"(://[^\s/:@]{1,128}:)[^\s/]{1,256}(@)"), r"\1[REDACTED]\2"),
     (
         re.compile(
-            r"(?i)((?:aws[_-]?)?secret[_-]?access[_-]?key[\"']?[ \t]*[:=][ \t]*)"
+            r"(?i)((?:aws[_-]?)?secret[_-]?access[_-]?key[\"']?[ \t]*[:=]\s*)"
             + _NOT_YET_REDACTED
             + r"\S{8,}"
         ),
         r"\1[REDACTED]",
     ),
     # Header and assignment forms keep the name and redact only the value.
-    (re.compile(r"(?i)(\bx-api-key[ \t]*:[ \t]*)" + _NOT_YET_REDACTED + r"\S+"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)(\bx-api-key[ \t]*:\s*)" + _NOT_YET_REDACTED + r"\S+"), r"\1[REDACTED]"),
     (
         re.compile(
-            r"(?i)((?:api[_-]?key|token|secret|password)[\"']?[ \t]*[:=][ \t]*)"
+            r"(?i)((?:api[_-]?key|token|secret|password)[\"']?[ \t]*[:=]\s*)"
             + _NOT_YET_REDACTED
             + r"\S{8,}"
         ),

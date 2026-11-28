@@ -4,7 +4,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from remote import status
+from remote import commands, status
 from remote.guard import Guard
 from remote.master import ARM_SECONDS, Master
 from remote.runner import RemoteRunner
@@ -14,7 +14,7 @@ from routes import config_routes, remote_control
 from security import verify_csrf
 from tests.test_remote_runner import BUDGET, Clock, FakeChannel, FakeHost, World
 
-TIMED_OUT = "[Gator] Remote control timed out. Re-arm it in Settings."
+TIMED_OUT = commands.timed_out(ARM_SECONDS)
 HOUR = 3600.0
 
 
@@ -201,6 +201,7 @@ async def test_one_warning_goes_out_15_minutes_before_the_deadline(w):
     await w.runner.tick()
     await w.runner.tick()
     assert len(w.channel.posted) == 1
+    assert w.channel.posted == [commands.turns_off_soon(15 * 60)]
     assert "turns off in 15 minutes" in w.channel.posted[0]
     w.restart()
     await w.runner.tick()

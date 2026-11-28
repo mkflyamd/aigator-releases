@@ -1,4 +1,4 @@
-"""Persisted remote-control state: last processed message id and ids Gator itself posted."""
+"""Persisted remote-control state: last processed message id, ids Gator itself posted, chat window."""
 
 from __future__ import annotations
 
@@ -101,6 +101,30 @@ class State:
             data = self._load()
             self._channel(data, channel)["disarmed"] = value
             self._save(data)
+
+    def window(self, channel: str) -> tuple[float, float] | None:
+        """(opened_at, until) of the chat window, or None when it is closed."""
+        with self._lock:
+            value = (self._load().get(channel) or {}).get("window")
+        if not isinstance(value, dict):
+            return None
+        opened, until = value.get("opened_at"), value.get("until")
+        if isinstance(opened, (int, float)) and isinstance(until, (int, float)):
+            return float(opened), float(until)
+        return None
+
+    def set_window(self, channel: str, opened_at: float, until: float) -> None:
+        with self._lock:
+            data = self._load()
+            self._channel(data, channel)["window"] = {"opened_at": opened_at, "until": until}
+            self._save(data)
+
+    def clear_window(self, channel: str) -> None:
+        with self._lock:
+            data = self._load()
+            entry = self._channel(data, channel)
+            if entry.pop("window", None) is not None:
+                self._save(data)
 
     def record_post(self, channel: str, message_id: str) -> None:
         with self._lock:

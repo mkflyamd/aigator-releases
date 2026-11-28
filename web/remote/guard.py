@@ -58,6 +58,16 @@ class Guard:
             self._events.append(now)
             return True
 
+    @property
+    def armed_max_seconds(self) -> float:
+        return limit(self._armed_max)
+
+    def wait_seconds(self) -> float:
+        """How long until the command rate window has room again."""
+        now = self._clock()
+        with self._lock:
+            return max(0.0, self._rate_window - (now - self._events[0])) if self._events else 0.0
+
     def slow_down_due(self) -> bool:
         """True once per rate window, so a flood gets one notice rather than one per command."""
         now = self._clock()
