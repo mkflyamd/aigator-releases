@@ -171,7 +171,7 @@ async def test_ordinary_notes_are_ignored(w):
 
 async def test_a_message_with_the_gator_prefix_never_triggers_a_command(w):
     await baselined(w)
-    await w.feed(w.msg(101, "[Ranger - budget] \U0001F40A @gator stop all"))
+    await w.feed(w.msg(101, "[Gator - budget] \U0001F40A @gator stop all"))
     await w.feed(w.msg(102, "  [Gator] @gator do it"))
     assert w.host.delivered == []
     assert w.channel.posted == []
@@ -398,7 +398,7 @@ async def test_completed_turn_posts_the_agent_reply(w):
     w.host.states["pty-1"] = {"state": "idle", "at": w.clock.now + 5}
     w.host.last["pty-1"] = "Two files are open."
     await w.runner.tick()
-    assert w.channel.posted == ["[Ranger - Budget] \U0001F40A Two files are open."]
+    assert w.channel.posted == ["[Gator - Budget] \U0001F40A Two files are open."]
 
 
 async def _finish(w, text, state="idle"):
@@ -448,7 +448,7 @@ async def test_done_between_fifteen_seconds_and_a_minute_is_plain_done(w):
     w.clock.now += 30
     await w.runner.tick()
     await _finish(w, "All good.")
-    assert w.channel.posted[-1] == "[Ranger - Budget] \U0001F40A Done.\nAll good."
+    assert w.channel.posted[-1] == "[Gator - Budget] \U0001F40A Done.\nAll good."
 
 
 async def test_done_past_a_minute_says_how_long_it_took(w):
@@ -458,7 +458,7 @@ async def test_done_past_a_minute_says_how_long_it_took(w):
     await w.runner.tick()
     w.clock.now += 5 * 60
     await _finish(w, "All good.")
-    assert w.channel.posted[-1].startswith("[Ranger - Budget] \U0001F40A Done in 5 min.\nAll good.")
+    assert w.channel.posted[-1].startswith("[Gator - Budget] \U0001F40A Done in 5 min.\nAll good.")
 
 
 async def test_a_turn_that_finished_first_never_gets_a_late_working_message(w):
@@ -467,7 +467,7 @@ async def test_a_turn_that_finished_first_never_gets_a_late_working_message(w):
     await _finish(w, "Quick.")
     w.clock.now += 60
     await w.runner.tick()
-    assert w.channel.posted == ["[Ranger - Budget] \U0001F40A Quick."]
+    assert w.channel.posted == ["[Gator - Budget] \U0001F40A Quick."]
 
 
 async def test_a_trailing_question_is_sent_as_waiting_with_the_answers_as_options(w):
@@ -475,7 +475,7 @@ async def test_a_trailing_question_is_sent_as_waiting_with_the_answers_as_option
     await w.feed(w.msg(101, "@gator go"))
     await _finish(w, "Which one?\n1. Alpha\n2. Beta")
     assert w.channel.posted == [
-        "[Ranger - Budget] \U0001F40A Waiting for your answer.\nWhich one?\n1. Alpha\n2. Beta\n\nNext:\n• `Alpha`\n• `Beta`"
+        "[Gator - Budget] \U0001F40A Waiting for your answer.\nWhich one?\n1. Alpha\n2. Beta\n\nNext:\n• `Alpha`\n• `Beta`"
     ]
     assert w.service.list()[0].waiting is True
 
@@ -518,7 +518,7 @@ async def test_an_email_address_is_not_a_leading_name(w):
     assert w.host.delivered == [("pty-1", "@ann@example.com hello")]
 
 
-@pytest.mark.parametrize("text", ["[Ranger - proj] \U0001F40A x", "[Claude - proj] \U0001F40A x", "[Ranger - proj - sess] \U0001F40A x", "[Gator] \U0001F40A x"])
+@pytest.mark.parametrize("text", ["[Gator - proj] \U0001F40A x", "[Claude - proj] \U0001F40A x", "[Gator - proj - sess] \U0001F40A x", "[Gator] \U0001F40A x"])
 async def test_a_message_in_the_gator_shape_never_triggers_a_command(w, text):
     await baselined(w)
     await w.feed(w.msg(101, f"{text} @gator stop all"))

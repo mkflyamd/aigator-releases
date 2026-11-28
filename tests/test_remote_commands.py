@@ -8,14 +8,14 @@ def test_plain_note_is_not_a_command():
 
 
 def test_the_agent_prefix_has_two_slots_alone_and_three_while_several_sessions_are_live():
-    assert commands.agent_prefix("budget", "Budget") == "[Ranger - Budget] \U0001F40A"
-    assert commands.agent_prefix("budget", "Budget", several=True) == "[Ranger - budget - Budget] \U0001F40A"
-    assert commands.agent_prefix("budget") == "[Ranger - budget] \U0001F40A"
+    assert commands.agent_prefix("budget", "Budget") == "[Gator - Budget] \U0001F40A"
+    assert commands.agent_prefix("budget", "Budget", several=True) == "[Gator - budget - Budget] \U0001F40A"
+    assert commands.agent_prefix("budget") == "[Gator - budget] \U0001F40A"
 
 
-def test_the_loop_guard_ignores_the_ranger_prefix_and_not_a_plain_bracket_note():
-    assert commands.is_own_message("[Ranger - proj] \U0001F40A Done.")
-    assert commands.is_own_message("[Ranger - one - proj] \U0001F40A Done.")
+def test_the_loop_guard_ignores_the_agent_prefix_and_not_a_plain_bracket_note():
+    assert commands.is_own_message("[Gator - proj] \U0001F40A Done.")
+    assert commands.is_own_message("[Gator - one - proj] \U0001F40A Done.")
     assert not commands.is_own_message("[todo] x")
 
 
@@ -65,29 +65,29 @@ def _before_next(out: str) -> str:
 
 def test_agent_reply_starts_with_gator_prefix_never_the_trigger():
     out = commands.agent_reply("budget", "@gator stop all", ["Reply here."])
-    assert out.startswith("[Ranger - budget] \U0001F40A ")
+    assert out.startswith("[Gator - budget] \U0001F40A ")
     assert not out.lower().startswith("@gator")
 
 
 def test_a_short_result_puts_the_agent_words_on_the_line_after_the_headline():
     out = commands.agent_result("Claude", "budget", "Done.", "Two files are open.")
-    assert out == "[Ranger - budget] \U0001F40A Done.\nTwo files are open."
+    assert out == "[Gator - budget] \U0001F40A Done.\nTwo files are open."
 
 
 def test_a_quick_answer_is_the_prefix_and_the_words_only():
     out = commands.agent_result("Claude", "budget", "", "Two files are open.")
-    assert out == "[Ranger - budget] \U0001F40A Two files are open."
+    assert out == "[Gator - budget] \U0001F40A Two files are open."
 
 
 def test_an_empty_result_is_never_a_bare_done():
     out = commands.agent_result("Claude", "budget", "Done.", "  ")
-    assert _before_next(out) == "[Ranger - budget] \U0001F40A Done. No text came back."
+    assert _before_next(out) == "[Gator - budget] \U0001F40A Done. No text came back."
     assert "• Open the Claude tab in AI Gator to see it." in out
 
 
 def test_an_empty_question_says_no_text_came_back_too():
     out = commands.agent_result("Claude", "budget", "Waiting for your answer.", "", waiting=True)
-    assert out.startswith("[Ranger - budget] \U0001F40A Waiting for your answer. No text came back.")
+    assert out.startswith("[Gator - budget] \U0001F40A Waiting for your answer. No text came back.")
     assert out.endswith("• Type your answer.")
 
 
@@ -105,7 +105,7 @@ def test_with_several_sessions_each_choice_names_its_session():
 
 def test_an_open_question_has_no_next_block():
     out = commands.agent_result("Claude", "budget", "Waiting for your answer.", "Which folder?", waiting=True)
-    assert out == "[Ranger - budget] \U0001F40A Waiting for your answer.\nWhich folder?"
+    assert out == "[Gator - budget] \U0001F40A Waiting for your answer.\nWhich folder?"
 
 
 @pytest.mark.parametrize(
@@ -128,7 +128,7 @@ def test_a_long_result_is_one_message_with_a_lead_a_clean_cut_and_a_trim_line():
     out = commands.agent_result("Claude", "budget", "Done.", body)
     main = _before_next(out)
     lines = main.split("\n")
-    assert lines[0] == "[Ranger - budget] \U0001F40A Done. Outcome in one line."
+    assert lines[0] == "[Gator - budget] \U0001F40A Done. Outcome in one line."
     assert lines[-1].startswith("Trimmed, ")
     shown = main.split("\n\n", 1)[1].rsplit("\n\n", 1)[0]
     assert len(shown) <= 3500
@@ -149,7 +149,7 @@ def test_a_long_result_never_cuts_inside_a_word():
 
 def test_the_lead_is_capped_at_200_characters_on_a_word_boundary():
     out = commands.agent_result("Claude", "budget", "Done.", "word " * 2000)
-    lead = out.split("\n", 1)[0].removeprefix("[Ranger - budget] \U0001F40A Done. ")
+    lead = out.split("\n", 1)[0].removeprefix("[Gator - budget] \U0001F40A Done. ")
     assert 0 < len(lead) <= 200
     assert set(lead.split()) == {"word"}
 
@@ -178,7 +178,7 @@ def test_system_reply_has_the_prefix_a_blank_line_and_a_next_block():
 
 def test_replies_have_no_trailing_spaces_and_no_double_blank_lines():
     out = commands.agent_result("Claude", "budget", "Done.", "one  \n\n\n\ntwo \n")
-    assert out == "[Ranger - budget] \U0001F40A Done.\none\n\ntwo"
+    assert out == "[Gator - budget] \U0001F40A Done.\none\n\ntwo"
 
 
 def test_done_says_the_elapsed_time_only_past_a_minute():
@@ -192,25 +192,25 @@ def test_done_says_the_elapsed_time_only_past_a_minute():
 
 def test_working_names_the_branch_and_offers_stop():
     assert commands.working("budget", "main", False) == (
-        "[Ranger - budget] \U0001F40A Working on it.\nBranch: main\n\nNext:\n• `stop` to stop it."
+        "[Gator - budget] \U0001F40A Working on it.\nBranch: main\n\nNext:\n• `stop` to stop it."
     )
     assert commands.working("budget", None, True, project="Budget") == (
-        "[Ranger - budget - Budget] \U0001F40A Working on it.\n\nNext:\n• `stop budget` to stop it."
+        "[Gator - budget - Budget] \U0001F40A Working on it.\n\nNext:\n• `stop budget` to stop it."
     )
 
 
 def test_still_working_has_no_options():
-    assert commands.progress("budget", 130) == "[Ranger - budget] \U0001F40A Still working, 2 min."
+    assert commands.progress("budget", 130) == "[Gator - budget] \U0001F40A Still working, 2 min."
 
 
 def test_an_unknown_name_lists_at_most_three_sessions():
     out = commands.unknown_mention("ghost", ["a", "b", "c", "d"])
     assert out == (
-        "[Gator] I don't know ghost. Start with `@gator` to send it to Ranger.\n\n"
+        "[Gator] I don't know ghost. Start with `@gator` to send it to the agent.\n\n"
         "Next:\n• `a: your message`\n• `b: your message`\n• `c: your message`"
     )
     assert commands.unknown_mention("ghost", []) == (
-        "[Gator] I don't know ghost. Start with `@gator` to send it to Ranger."
+        "[Gator] I don't know ghost. Start with `@gator` to send it to the agent."
     )
 
 
@@ -233,8 +233,8 @@ def test_a_trailing_question_is_detected(question, asks):
     [
         ("[Gator] \U0001F40A x", True),
         ("[Claude - proj] \U0001F40A x", True),
-        ("[Ranger - proj - sess] \U0001F40A x", True),
-        ("[Ranger - proj] \U0001F40A Done.", True),
+        ("[Gator - proj - sess] \U0001F40A x", True),
+        ("[Gator - proj] \U0001F40A Done.", True),
         ("  [Gator] x", True),
         ("[todo] fix it", False),
         ("[todo] \U0001F40A fix it", True),

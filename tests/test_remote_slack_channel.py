@@ -143,16 +143,16 @@ def test_post_that_could_form_a_command_is_refused(tmp_path, slack):
 
 def test_post_escapes_slack_control_characters(tmp_path, slack):
     channel = SlackSelfDM(state=State(tmp_path / "s.json"))
-    channel.post("[Ranger - x] \U0001F40A <!channel> a & b")
-    assert slack.posts()[0][1]["text"] == "[Ranger - x] \U0001F40A &lt;!channel&gt; a &amp; b"
+    channel.post("[Gator - x] \U0001F40A <!channel> a & b")
+    assert slack.posts()[0][1]["text"] == "[Gator - x] \U0001F40A &lt;!channel&gt; a &amp; b"
 
 
 def test_post_converts_markdown_to_slack_mrkdwn(tmp_path, slack):
     channel = SlackSelfDM(state=State(tmp_path / "s.json"))
-    channel.post("[Ranger - x] \U0001F40A **Done** with `ls`\n- one\n- two")
+    channel.post("[Gator - x] \U0001F40A **Done** with `ls`\n- one\n- two")
     text = slack.posts()[0][1]["text"]
     assert "**" not in text
-    assert text == "[Ranger - x] \U0001F40A *Done* with `ls`\n\n• one\n• two"
+    assert text == "[Gator - x] \U0001F40A *Done* with `ls`\n\n• one\n• two"
 
 
 def test_a_failed_post_raises_refused_and_records_nothing(tmp_path, slack):
@@ -228,7 +228,7 @@ async def test_slack_command_runs_and_the_reply_is_posted_to_the_self_dm(tmp_pat
     await w.runner.tick()
     (post,) = slack.posts()
     assert post[1]["channel"] == SELF_DM
-    assert post[1]["text"] == "[Ranger - Budget] \U0001F40A Two files are open."
+    assert post[1]["text"] == "[Gator - Budget] \U0001F40A Two files are open."
 
 
 async def test_gator_own_posts_are_never_read_back_as_commands(tmp_path, slack):

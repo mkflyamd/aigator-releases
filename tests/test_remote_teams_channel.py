@@ -45,16 +45,16 @@ def test_post_that_could_form_a_command_is_refused(tmp_path, sent):
     assert sent == []
 
 
-def test_a_ranger_reply_is_posted(tmp_path, sent):
+def test_an_agent_reply_is_posted(tmp_path, sent):
     chat = TeamsSelfChat(state=State(tmp_path / "s.json"))
-    chat.post("[Ranger - Budget] \U0001F40A Done.")
-    chat.post("[Ranger - budget - Budget] \U0001F40A Done.")
+    chat.post("[Gator - Budget] \U0001F40A Done.")
+    chat.post("[Gator - budget - Budget] \U0001F40A Done.")
     assert len(sent) == 2
 
 
 def test_post_escapes_markup_so_agent_text_is_not_rendered_as_html(tmp_path, sent):
     chat = TeamsSelfChat(state=State(tmp_path / "s.json"))
-    chat.post("[Ranger - x] \U0001F40A <b>hi</b> & bye\nline two")
+    chat.post("[Gator - x] \U0001F40A <b>hi</b> & bye\nline two")
     html = sent[0][1]
     assert "<b>" not in html
     assert "&lt;b&gt;hi&lt;/b&gt; &amp; bye<br>line two" in html
@@ -62,12 +62,12 @@ def test_post_escapes_markup_so_agent_text_is_not_rendered_as_html(tmp_path, sen
 
 def test_post_converts_markdown_to_teams_html(tmp_path, sent):
     chat = TeamsSelfChat(state=State(tmp_path / "s.json"))
-    chat.post("[Ranger - x] \U0001F40A **Done** with `ls`\n> a note\n- one\n- two")
+    chat.post("[Gator - x] \U0001F40A **Done** with `ls`\n> a note\n- one\n- two")
     html = sent[0][1]
     assert "**" not in html
     assert "&gt; a note" not in html
     assert html == (
-        "<div>[Ranger - x] \U0001F40A <strong>Done</strong> with <code>ls</code></div>"
+        "<div>[Gator - x] \U0001F40A <strong>Done</strong> with <code>ls</code></div>"
         "<blockquote>a note</blockquote><ul><li>one</li><li>two</li></ul>"
     )
 
@@ -109,5 +109,5 @@ def test_a_missing_or_unparseable_timestamp_has_no_time(monkeypatch):
 
 def test_a_quote_in_a_link_cannot_add_an_attribute(tmp_path, sent):
     chat = TeamsSelfChat(state=State(tmp_path / "s.json"))
-    chat.post('[Ranger - x] \U0001F40A [a](https://a.com/"onmouseover="alert(1))')
+    chat.post('[Gator - x] \U0001F40A [a](https://a.com/"onmouseover="alert(1))')
     assert "<a " not in sent[0][1]

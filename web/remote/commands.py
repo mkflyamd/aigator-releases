@@ -10,7 +10,6 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 
-AGENT_NAME = "Ranger"
 TRIGGER_RE = re.compile(r"^\s*@gator(?:\s+(.*))?$", re.IGNORECASE | re.DOTALL)
 GREETING_WORDS = ("hi", "hello", "hey", "start")
 RESERVED = ("list", "status", "stop", "help", "bye", *GREETING_WORDS)
@@ -97,10 +96,10 @@ def system_reply(body: str, options: list[str], *, croc: bool = False, after: st
 
 
 def agent_prefix(session: str, project: str | None = None, several: bool = False) -> str:
-    """`[Ranger - {project}] 🐊`, or `[Ranger - {session} - {project}] 🐊` while several sessions are live."""
+    """`[Gator - {project}] 🐊`, or `[Gator - {session} - {project}] 🐊` while several sessions are live."""
     project = project or session
-    tag = f"{AGENT_NAME} - {session} - {project}" if several else f"{AGENT_NAME} - {project}"
-    return f"[{tag}] {CROC}"
+    tag = f"{session} - {project}" if several else project
+    return f"{SYSTEM_PREFIX} - {tag}] {CROC}"
 
 
 def agent_reply(
@@ -276,7 +275,7 @@ def which_to_stop(names: list[str]) -> str:
 def unknown_mention(name: str, known: list[str]) -> str:
     """A leading @name that is not a session. Sent nowhere; the options are the sessions that exist."""
     shown = " ".join(name.split())[:NAME_MAX_CHARS]
-    body = f"I don't know {shown}. Start with `@gator` to send it to {AGENT_NAME}."
+    body = f"I don't know {shown}. Start with `@gator` to send it to the agent."
     if not known:
         return _tidy(f"{SYSTEM_PREFIX}] {body}")
     return system_reply(body, [f"`{n}: your message`" for n in known[:UNKNOWN_MENTION_SHOWN]])

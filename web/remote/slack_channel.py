@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 
 from remote.channel import ChannelRefused, InboundMessage, require_autosend, slack_mrkdwn
-from remote.commands import SYSTEM_PREFIX, is_own_message
+from remote.commands import SYSTEM_PREFIX
 from remote.state import State
 
 _log = logging.getLogger(__name__)
@@ -113,8 +113,8 @@ class SlackSelfDM:
         if not self.is_own_self_chat():
             _log.warning("Remote control refused to post: %s is not the own self-DM", self._channel_id)
             raise ChannelRefused("not the own self-DM")
-        if not is_own_message(text):
-            raise ChannelRefused(f"replies must start with {SYSTEM_PREFIX} or an agent prefix")
+        if not text.lstrip().startswith(SYSTEM_PREFIX):
+            raise ChannelRefused(f"replies must start with {SYSTEM_PREFIX}")
         require_autosend()
         sent = _api("chat.postMessage", {"channel": self._channel_id, "text": slack_mrkdwn(text)}, method="POST")
         if not sent.get("ok"):
