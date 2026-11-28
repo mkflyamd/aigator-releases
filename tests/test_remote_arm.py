@@ -12,7 +12,7 @@ from remote.service import RemoteService
 from remote.state import State
 from routes import config_routes, remote_control
 from security import verify_csrf
-from tests.test_remote_runner import BUDGET, Clock, FakeChannel, FakeHost, World
+from tests.test_remote_runner import BUDGET, OTHER, Clock, FakeChannel, FakeHost, World
 
 TIMED_OUT = commands.timed_out(ARM_SECONDS)
 HOUR = 3600.0
@@ -29,8 +29,8 @@ def w(tmp_path):
 
 async def started(w, count=1):
     await w.feed(w.msg(100, "old note"))
-    for i in range(count):
-        await w.service.start(BUDGET, f"job {i}")
+    for i, project in enumerate([BUDGET, OTHER][:count]):
+        await w.service.start(project, f"job {i}")
 
 
 def test_the_window_is_12_hours_and_a_second_arm_does_not_extend_it(tmp_path):

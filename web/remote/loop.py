@@ -89,6 +89,9 @@ class RemoteLoop:
         self._restored = True
         return True
 
+    async def shutdown(self) -> None:
+        await self._runner.shutdown()
+
     async def step(self) -> None:
         enabled = self._enabled()
         if enabled and self._owner is not None and not self._owner.acquire():
@@ -129,7 +132,11 @@ class RemoteLoop:
 
 def _build_loop(channel, state: State, enabled: Callable[[], bool]) -> RemoteLoop:
     service = RemoteService(
-        LocalPtyHost(), default_project=default_project, idle_seconds=settings.idle_seconds, channel=channel.name
+        LocalPtyHost(),
+        default_project=default_project,
+        idle_seconds=settings.idle_seconds,
+        channel=channel.name,
+        state=state,
     )
     runner = RemoteRunner(
         channel,
@@ -154,12 +161,15 @@ def build_loops(state: State | None = None) -> list[RemoteLoop]:
 
 async def _run_channel(loop: RemoteLoop) -> None:
     """One task per channel: a command that waits on its agent holds only its own channel."""
-    while True:
-        await asyncio.sleep(STEP_SECONDS)
-        try:
-            await loop.step()
-        except Exception:
-            _log.warning("Remote control step failed", exc_info=True)
+    try:
+        while True:
+            await asyncio.sleep(STEP_SECONDS)
+            try:
+                await loop.step()
+            except Exception:
+                _log.warning("Remote control step failed", exc_info=True)
+    finally:
+        await asyncio.shield(loop.shutdown())
 
 
 async def remote_control_loop() -> None:

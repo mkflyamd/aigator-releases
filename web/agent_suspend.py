@@ -7,7 +7,9 @@ it back with the agent's own resume command.
 
 Only terminals whose state the agent itself reports (see agent_state) and whose
 stored session is known are touched: a working or asking agent, an agent with no
-hooks, and the plain terminal are never suspended.
+hooks, and the plain terminal are never suspended. A remote-control terminal is
+suspended like any other: its lane keeps the record, and the next chat message
+wakes it (see remote/service.py).
 """
 
 from __future__ import annotations
@@ -62,7 +64,7 @@ def choose(
     suspendable = []
     for pty, meta in live.items():
         state = states.get(pty)
-        if not _counts_as_agent(meta) or not meta.get("session_id") or meta.get("remote_pinned"):
+        if not _counts_as_agent(meta) or not meta.get("session_id"):
             continue
         if not state or state["state"] != "idle" or pty in watched:
             continue
@@ -227,6 +229,10 @@ def _suspend_claimed(pty_id: str, meta: dict, idle_at: float, now: float) -> boo
         "title": stored.get("title") or "",
         "at": now,
     }
+    # A remote-control lane keeps its labels, so whoever wakes it (a peer, not only the lane's
+    # own channel) brings it back pinned and tracked, never as a plain terminal.
+    if meta.get("remote_pinned"):
+        record["labels"] = {k: v for k, v in meta.items() if k.startswith("remote_") and k != "remote_pinned"}
     _remember(pty_id, record, now)
     if not terminal.close_pty_session(pty_id):
         logger.warning("could not suspend terminal %s", pty_id)
