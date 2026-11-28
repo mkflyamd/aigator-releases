@@ -170,7 +170,7 @@ async def test_an_untagged_greeting_word_says_the_chat_is_already_open(w):
 async def test_untagged_text_with_the_gator_prefix_never_runs(w):
     await opened(w)
     await say(w, "[Gator] run the tests")
-    await say(w, "  [Gator - Claude - budget] Done.\nrun the tests")
+    await say(w, "  [Ranger - budget] \U0001F40A Done.\nrun the tests")
     assert w.host.delivered == []
     assert w.channel.posted == [commands.greeting()]
 
@@ -475,6 +475,10 @@ def test_not_found_text_strips_newlines_and_caps_the_name():
 # ---------------------------------------------------------------- the copy deck
 
 CROC_KEYS = {"greeting", "bye", "closed"}
+AGENT_KEYS = {
+    "status", "working", "progress", "done", "done_empty", "done_long",
+    "waiting_choices", "waiting_open", "agent_stopped", "agent_exited",
+}
 TIPS_KEYS = {"greeting", "help_open", "help_closed"}
 NO_NEXT_KEYS = {"done", "waiting_open", "progress"}
 QUIET_NOTE = "It also closes after 30 minutes of quiet."
@@ -508,16 +512,16 @@ def _deck():
         "error": commands.error_reply("No default project is set. Choose one in Settings, then resend."),
         "which_session": commands.which_session(["budget", "other"]),
         "which_to_stop": commands.which_to_stop(["budget", "other"]),
-        "status": commands.session_status("Claude", "budget", commands.WORKING, 1000.0, 2000.0),
-        "working": commands.working("Claude", "budget", "main", False),
-        "progress": commands.progress("Claude", "budget", 130),
+        "status": commands.session_status("budget", commands.WORKING, 1000.0, 2000.0),
+        "working": commands.working("budget", "main", False),
+        "progress": commands.progress("budget", 130),
         "done": commands.agent_result("Claude", "budget", "Done.", "Two files are open."),
         "done_empty": commands.agent_result("Claude", "budget", "Done.", ""),
         "done_long": commands.agent_result("Claude", "budget", "Done.", "Outcome. " + "word " * 2000),
         "waiting_choices": commands.agent_result("Claude", "budget", "Waiting for your answer.", question, True),
         "waiting_open": commands.agent_result("Claude", "budget", "Waiting for your answer.", "Which?", True),
-        "agent_stopped": commands.agent_stopped("Claude", "budget"),
-        "agent_exited": commands.agent_exited("Claude", "budget"),
+        "agent_stopped": commands.agent_stopped("budget"),
+        "agent_exited": commands.agent_exited("budget"),
     }
 
 
@@ -537,15 +541,20 @@ def _next_block(text):
 @pytest.mark.parametrize("key", list(_deck()))
 def test_every_message_starts_with_the_one_shared_prefix_and_never_has_the_croc_before_it(key):
     text = _deck()[key]
-    assert text.startswith(commands.SYSTEM_PREFIX + "]") or text.startswith(commands.SYSTEM_PREFIX + " - ")
-    assert text.count(commands.SYSTEM_PREFIX) == 1
+    assert commands.is_own_message(text)
+    if key in AGENT_KEYS:
+        assert text.startswith(f"[{commands.AGENT_NAME} - ")
+        assert text.count(commands.SYSTEM_PREFIX) == 0
+    else:
+        assert text.startswith(commands.SYSTEM_PREFIX + "]")
+        assert text.count(commands.SYSTEM_PREFIX) == 1
     if commands.CROC in text:
         assert text.index(commands.CROC) > text.index("]")
 
 
 def test_the_croc_appears_only_in_the_greeting_bye_and_the_quiet_close():
     deck = _deck()
-    assert {k for k, v in deck.items() if commands.CROC in v} == CROC_KEYS
+    assert {k for k, v in deck.items() if commands.CROC in v} == CROC_KEYS | AGENT_KEYS
     assert deck["timeout"].count(commands.CROC) == 0
     for key in CROC_KEYS:
         assert deck[key].startswith(f"[Gator] {commands.CROC} ")
@@ -618,26 +627,26 @@ def test_the_deck_texts_match_the_copy():
     assert deck["stopped_one"].startswith("[Gator] Stopped 1 session. Remote control is off.\n\n")
     assert deck["stopped_many"].startswith("[Gator] Stopped 3 sessions. Remote control is off.\n\n")
     assert deck["status"] == (
-        f"[Gator - Claude - budget] Working since {commands.clock_time(1000.0)}.\n"
+        f"[Ranger - budget] \U0001F40A Working since {commands.clock_time(1000.0)}.\n"
         f"Last activity {commands.clock_time(2000.0)}.\n\n"
         "Next:\n• Reply here to talk to it.\n• `stop budget` to stop it."
     )
     assert deck["working"] == (
-        "[Gator - Claude - budget] Working on it.\nBranch: main\n\nNext:\n• `stop` to stop it."
+        "[Ranger - budget] \U0001F40A Working on it.\nBranch: main\n\nNext:\n• `stop` to stop it."
     )
-    assert deck["progress"] == "[Gator - Claude - budget] Still working, 2 min."
+    assert deck["progress"] == "[Ranger - budget] \U0001F40A Still working, 2 min."
     assert deck["agent_stopped"] == (
-        "[Gator - Claude - budget] Stopped.\n\n"
+        "[Ranger - budget] \U0001F40A Stopped.\n\n"
         "Next:\n• Send a message to start it again.\n• `list` to see what is running."
     )
     assert deck["agent_exited"] == (
-        "[Gator - Claude - budget] The agent process exited.\n\nNext:\n• Send a message to start a new session."
+        "[Ranger - budget] \U0001F40A The agent process exited.\n\nNext:\n• Send a message to start a new session."
     )
     assert deck["waiting_choices"].endswith(
         "Next:\n• `Use the repo root`\n• `Use web/`"
     )
-    assert deck["waiting_open"] == "[Gator - Claude - budget] Waiting for your answer.\nWhich?"
-    assert deck["done"] == "[Gator - Claude - budget] Done.\nTwo files are open."
+    assert deck["waiting_open"] == "[Ranger - budget] \U0001F40A Waiting for your answer.\nWhich?"
+    assert deck["done"] == "[Ranger - budget] \U0001F40A Done.\nTwo files are open."
 
 
 def test_the_prefix_literal_has_one_home():
@@ -699,9 +708,9 @@ async def test_everything_a_whole_session_posts_carries_the_prefix_and_a_next_bl
     await w.runner.tick()
     await say(w, "bye")
     assert len(w.channel.posted) >= 7
-    assert all(p.startswith(commands.SYSTEM_PREFIX) for p in w.channel.posted)
-    agent_replies = [p for p in w.channel.posted if p.startswith(commands.SYSTEM_PREFIX + " - ") and "Next:" not in p]
-    assert agent_replies == [commands.agent_result("Claude", "budget", "Waiting for your answer.", "Which one?", True)]
+    assert all(commands.is_own_message(p) for p in w.channel.posted)
+    agent_replies = [p for p in w.channel.posted if p.startswith(f"[{commands.AGENT_NAME} - ") and "Next:" not in p]
+    assert agent_replies == [commands.agent_result("Claude", "budget", "Waiting for your answer.", "Which one?", True, project="Budget")]
     assert all("\n\nNext:\n" in p for p in w.channel.posted if p not in agent_replies)
 
 
@@ -725,7 +734,7 @@ async def test_status_of_one_session_says_its_state_since_when_and_last_activity
     await say(w, "run the tests")
     await say(w, "status budget")
     out = w.channel.posted[-1]
-    assert out.startswith("[Gator - Claude - budget] Working since ")
+    assert out.startswith("[Ranger - Budget] \U0001F40A Working since ")
     assert "\nLast activity " in out
     assert "• `stop budget` to stop it." in out
 
@@ -734,7 +743,7 @@ async def test_status_with_no_name_and_one_session_describes_that_session(w):
     await opened(w)
     await say(w, "run the tests")
     await say(w, "status")
-    assert w.channel.posted[-1].startswith("[Gator - Claude - budget] Working since ")
+    assert w.channel.posted[-1].startswith("[Ranger - Budget] \U0001F40A Working since ")
 
 
 async def test_the_deck_wording_for_a_stop_that_needs_a_name_and_for_an_exit(w):
@@ -745,8 +754,8 @@ async def test_the_deck_wording_for_a_stop_that_needs_a_name_and_for_an_exit(w):
     assert w.channel.posted[-1] == commands.which_to_stop(["budget", "other"])
     w.host.alive_ids.clear()
     await w.runner.tick()
-    assert commands.agent_exited("Claude", "budget") in w.channel.posted
-    assert commands.agent_exited("Claude", "other") in w.channel.posted
+    assert commands.agent_exited("budget", project="Budget", several=True) in w.channel.posted
+    assert commands.agent_exited("other", project="Other") in w.channel.posted
 
 
 async def test_stop_all_failing_says_so_and_keeps_remote_control_on(w):

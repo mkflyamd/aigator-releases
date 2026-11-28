@@ -10,6 +10,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 
+AGENT_NAME = "Ranger"
 TRIGGER_RE = re.compile(r"^\s*@gator(?:\s+(.*))?$", re.IGNORECASE | re.DOTALL)
 GREETING_WORDS = ("hi", "hello", "hey", "start")
 RESERVED = ("list", "status", "stop", "help", "bye", *GREETING_WORDS)
@@ -95,9 +96,18 @@ def system_reply(body: str, options: list[str], *, croc: bool = False, after: st
     return _tidy(f"{SYSTEM_PREFIX}]{mark} {body}\n\n{next_block(options)}{tail}")
 
 
-def agent_reply(agent: str, project: str, text: str, options: list[str]) -> str:
+def agent_prefix(session: str, project: str | None = None, several: bool = False) -> str:
+    """`[Ranger - {project}] 🐊`, or `[Ranger - {session} - {project}] 🐊` while several sessions are live."""
+    project = project or session
+    tag = f"{AGENT_NAME} - {session} - {project}" if several else f"{AGENT_NAME} - {project}"
+    return f"[{tag}] {CROC}"
+
+
+def agent_reply(
+    session: str, text: str, options: list[str], *, project: str | None = None, several: bool = False
+) -> str:
     tail = f"\n\n{next_block(options)}" if options else ""
-    return _tidy(f"{SYSTEM_PREFIX} - {agent} - {project}] {text.strip()}{tail}")
+    return _tidy(f"{agent_prefix(session, project, several)} {text.strip()}{tail}")
 
 
 def is_own_message(text: str) -> bool:
@@ -263,10 +273,10 @@ def which_to_stop(names: list[str]) -> str:
     return system_reply("Which session should stop?", options)
 
 
-def unknown_mention(name: str, known: list[str], agent: str) -> str:
+def unknown_mention(name: str, known: list[str]) -> str:
     """A leading @name that is not a session. Sent nowhere; the options are the sessions that exist."""
     shown = " ".join(name.split())[:NAME_MAX_CHARS]
-    body = f"I don't know {shown}. Start with `@gator` to send it to {agent}."
+    body = f"I don't know {shown}. Start with `@gator` to send it to {AGENT_NAME}."
     if not known:
         return _tidy(f"{SYSTEM_PREFIX}] {body}")
     return system_reply(body, [f"`{n}: your message`" for n in known[:UNKNOWN_MENTION_SHOWN]])
@@ -276,20 +286,26 @@ def mention_needs_text(name: str) -> str:
     return system_reply(f"What should {name} do?", [f"`{name}: your message`"])
 
 
-def session_status(agent: str, name: str, state: str, since: float, last_activity: float) -> str:
+def session_status(
+    session: str, state: str, since: float, last_activity: float, *, project: str | None = None, several: bool = False
+) -> str:
     lead = {WORKING: "Working", WAITING: "Waiting for you", IDLE: "Idle"}[state]
     text = f"{lead} since {clock_time(since)}.\nLast activity {clock_time(last_activity)}."
-    return agent_reply(agent, name, text, ["Reply here to talk to it.", f"`stop {name}` to stop it."])
+    return agent_reply(
+        session, text, ["Reply here to talk to it.", f"`stop {session}` to stop it."], project=project, several=several
+    )
 
 
-def working_ack(agent: str, name: str, text: str) -> str:
-    return agent_reply(agent, name, text, [f"`status {name}` to see what it is doing.", f"`stop {name}` to stop it."])
+def working_ack(session: str, text: str, *, project: str | None = None, several: bool = False) -> str:
+    options = [f"`status {session}` to see what it is doing.", f"`stop {session}` to stop it."]
+    return agent_reply(session, text, options, project=project, several=several)
 
 
-def working(agent: str, name: str, branch: str | None, several: bool) -> str:
+def working(session: str, branch: str | None, several: bool, *, project: str | None = None) -> str:
     """The one message sent when a turn has not finished after ACK_DELAY_SECONDS."""
     body = "Working on it." + (f"\nBranch: {branch}" if branch else "")
-    return agent_reply(agent, name, body, [f"`stop{f' {name}' if several else ''}` to stop it."])
+    option = f"`stop{f' {session}' if several else ''}` to stop it."
+    return agent_reply(session, body, [option], project=project, several=several)
 
 
 def elapsed_words(seconds: float) -> str:
@@ -300,8 +316,8 @@ def elapsed_words(seconds: float) -> str:
     return f"{hours} h" if hours else f"{minutes} min"
 
 
-def progress(agent: str, name: str, elapsed: float) -> str:
-    return agent_reply(agent, name, f"Still working, {elapsed_words(elapsed)}.", [])
+def progress(session: str, elapsed: float, *, project: str | None = None, several: bool = False) -> str:
+    return agent_reply(session, f"Still working, {elapsed_words(elapsed)}.", [], project=project, several=several)
 
 
 def done_headline(elapsed: float | None) -> str:
@@ -323,12 +339,15 @@ def asks_a_question(text: str) -> bool:
     return bool(lines) and lines[-1].rstrip().rstrip("`*_\"')").endswith("?")
 
 
-def agent_stopped(agent: str, name: str) -> str:
-    return agent_reply(agent, name, "Stopped.", ["Send a message to start it again.", "`list` to see what is running."])
+def agent_stopped(session: str, *, project: str | None = None, several: bool = False) -> str:
+    options = ["Send a message to start it again.", "`list` to see what is running."]
+    return agent_reply(session, "Stopped.", options, project=project, several=several)
 
 
-def agent_exited(agent: str, name: str) -> str:
-    return agent_reply(agent, name, "The agent process exited.", ["Send a message to start a new session."])
+def agent_exited(session: str, *, project: str | None = None, several: bool = False) -> str:
+    return agent_reply(
+        session, "The agent process exited.", ["Send a message to start a new session."], project=project, several=several
+    )
 
 
 def _lead(body: str) -> str:
@@ -369,13 +388,20 @@ def _choices(question: str) -> list[str]:
 
 
 def agent_result(
-    agent: str, project: str, headline: str, text: str, waiting: bool = False, several: bool = False
+    agent: str,
+    session: str,
+    headline: str,
+    text: str,
+    waiting: bool = False,
+    several: bool = False,
+    *,
+    project: str | None = None,
 ) -> str:
     """A turn's outcome. An empty headline is a quick answer: the prefix and the agent's words, nothing
     else. Otherwise the headline, then the agent's words on the next line. Over REPLY_MAX_CHARS the
     headline carries a one-sentence lead and the reply ends with a trim line, all in one message. A
     question ends with its choices as options; an empty or trimmed reply ends with what the user can do."""
-    prefix = f"{SYSTEM_PREFIX} - {agent} - {project}]"
+    prefix = agent_prefix(session, project, several)
     body = _tidy(text)
     open_tab = f"Open the {agent} tab in AI Gator"
     answer = "Type your answer."
@@ -388,7 +414,7 @@ def agent_result(
             return _tidy(f"{prefix} {body}")
         if not waiting:
             return _tidy(f"{prefix} {headline}\n{body}")
-        tag = f"{project}: " if several else ""
+        tag = f"{session}: " if several else ""
         options = [f"`{tag}{c}`" for c in _choices(body)]
         tail = f"\n\n{next_block(options)}" if options else ""
         return _tidy(f"{prefix} {headline}\n{body}{tail}")

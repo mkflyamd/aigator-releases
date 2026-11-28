@@ -257,7 +257,9 @@ class RemoteRunner:
             return self._describe(sessions)
         s = sessions[0]
         since = s.awaiting_since if s.awaiting_since is not None else s.last_activity
-        return commands.session_status(AGENT_LABEL, s.short, _state_word(s), since, s.last_activity)
+        return commands.session_status(
+            s.short, _state_word(s), since, s.last_activity, project=s.project.name, several=self._several(s)
+        )
 
     async def _send(self, text: str) -> None:
         """A message to a session. `@name text`, `name text` and `name: text` pick one; otherwise the
@@ -274,7 +276,7 @@ class RemoteRunner:
                 return
             if name.lower() not in _TAGS:
                 recent = sorted(self._service.list(), key=lambda s: s.last_activity, reverse=True)
-                raise _Reply(commands.unknown_mention(name, [s.short for s in recent], AGENT_LABEL))
+                raise _Reply(commands.unknown_mention(name, [s.short for s in recent]))
             if not rest:
                 await self._post(commands.help_text(self._window.is_open()))
                 return
@@ -311,7 +313,8 @@ class RemoteRunner:
         session = event.session
         short = session.short
         turn = self._turns.pop(session.id, None)
-        several = len(self._service.list()) > 1
+        several = self._several(session)
+        project = session.project.name
         if event.kind in ("completed", "input-required"):
             waiting = event.kind == "input-required" or commands.asks_a_question(event.text)
             session.waiting = waiting
@@ -323,13 +326,19 @@ class RemoteRunner:
                 headline = ""
             else:
                 headline = commands.done_headline(self._clock() - turn.started)
-            await self._post(commands.agent_result(AGENT_LABEL, short, headline, event.text, waiting, several))
+            await self._post(
+                commands.agent_result(AGENT_LABEL, short, headline, event.text, waiting, several, project=project)
+            )
         elif event.kind == "failed":
-            await self._post(commands.agent_exited(AGENT_LABEL, short))
+            await self._post(commands.agent_exited(short, project=project, several=several))
         elif event.kind == "canceled":
-            await self._post(commands.agent_stopped(AGENT_LABEL, short))
+            await self._post(commands.agent_stopped(short, project=project, several=several))
         else:
-            await self._post(commands.working_ack(AGENT_LABEL, short, event.kind))
+            await self._post(commands.working_ack(short, event.kind, project=project, several=several))
+
+    def _several(self, session: Session) -> bool:
+        """True while more than one session is live, counting one that has just left the table."""
+        return len({s.id for s in self._service.list()} | {session.id}) > 1
 
     async def _report_progress(self) -> None:
         """A turn that outlives ACK_DELAY_SECONDS gets one 'Working on it', then 'Still working' every
@@ -343,10 +352,16 @@ class RemoteRunner:
             elif not turn.acked and now - turn.started >= commands.ACK_DELAY_SECONDS:
                 turn.acked, turn.last_note = True, now
                 branch = await asyncio.to_thread(self._branch_of, session.project.repo_path)
-                await self._post(commands.working(AGENT_LABEL, session.short, branch, len(live) > 1))
+                await self._post(
+                    commands.working(session.short, branch, len(live) > 1, project=session.project.name)
+                )
             elif turn.acked and now - turn.last_note >= commands.PROGRESS_SECONDS:
                 turn.last_note = now
-                await self._post(commands.progress(AGENT_LABEL, session.short, now - turn.started))
+                await self._post(
+                    commands.progress(
+                        session.short, now - turn.started, project=session.project.name, several=len(live) > 1
+                    )
+                )
 
     async def tick(self) -> None:
         if self._guard.expired():
