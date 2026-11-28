@@ -163,3 +163,38 @@ async def test_a_lost_connection_shows_its_reason_in_the_pill_and_in_chat_once_b
     await r.runner.connection_recovered()
     assert len(r.channel.posted) == 1
     assert status.compute(r.state, r.clock, config)["state"] != "connection_failed"
+
+
+async def test_a_note_sent_while_a_prompt_waits_is_still_rate_limited(w):
+    await opened(w)
+    await say(w, "run the tests")
+    await show(w, "pty-1", BASH_PERMISSION)
+    for _ in range(25):
+        w.guard.allow_command()
+    w.channel.posted.clear()
+    await say(w, "some other thought")
+    assert len(w.channel.posted) == 1 and w.channel.posted[0].startswith("[\U0001F40A Gator] Not sent:")
+    assert w.host.typed == []
+
+
+async def test_a_restart_that_said_so_does_not_also_say_online(r):
+    await opened(r)
+    await say(r, "run the tests")
+    r.state.clear_window("teams")
+    r.restart()
+    r.channel.posted.clear()
+    await r.runner.restore()
+    await r.runner.announce_online()
+    assert r.channel.posted == [commands.restarted(1, 0)]
+    await r.runner.announce_online()
+    assert r.channel.posted[1:] == [commands.online()]
+
+
+async def test_a_start_with_nothing_to_restore_still_says_online(r):
+    await opened(r)
+    r.state.clear_window("teams")
+    r.restart()
+    r.channel.posted.clear()
+    await r.runner.restore()
+    await r.runner.announce_online()
+    assert r.channel.posted == [commands.online()]

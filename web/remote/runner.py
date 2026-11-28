@@ -119,6 +119,7 @@ class RemoteRunner:
         self._wakes: set[asyncio.Task] = set()
         self._outbox: dict[str, list[str]] = {}
         self._parts_lock = asyncio.Lock()
+        self._restart_said = False
         self._not_armed_noticed: object = None
         service.subscribe(self._on_event)
 
@@ -155,6 +156,7 @@ class RemoteRunner:
         await self._service.restore()
         states = [s.state for s in self._service.list()]
         if self.live and (LIVE in states or SLEEPING in states):
+            self._restart_said = True
             await self._post(commands.restarted(states.count(LIVE), states.count(SLEEPING)))
 
     def connection_failed(self, exc: Exception) -> None:
@@ -182,8 +184,10 @@ class RemoteRunner:
         await asyncio.gather(*tasks, return_exceptions=True)
 
     async def announce_online(self) -> None:
-        """Its text is about opening a chat, so it is not said into one that is already open."""
-        if not self._window.is_open():
+        """Its text is about opening a chat, so it is not said into one that is already open, nor right after the
+        restart line, which already says the chat is back."""
+        said, self._restart_said = self._restart_said, False
+        if not said and not self._window.is_open():
             await self._post(commands.online())
 
     async def _post(self, text: str) -> str:
@@ -390,7 +394,10 @@ class RemoteRunner:
         """Stopping and answering a waiting prompt are never held back by the limit."""
         if command.kind in ("stop", "stop_all", "answer", "interrupt"):
             return True
-        return command.kind == "send" and any(s.prompt is not None for s in self._service.list())
+        if command.kind != "send":
+            return False
+        shown = [s.prompt for s in [*self._service.list(), *self._watched_waiting()] if s.prompt is not None]
+        return any(isinstance(prompts.resolve(p, command.text), prompts.Answer) for p in shown)
 
     async def _dispatch(self, command: commands.Command) -> None:
         kind = command.kind

@@ -280,6 +280,14 @@ def permission_dialog_showing(tail: str, prompt: Prompt | None = None) -> bool:
     return bool(identity) and identity in _BOXES.sub("", flat[call:])
 
 
+def escape_footer_showing(tail: str) -> bool:
+    """True when the newest thing on the terminal (ANSI already stripped) is a dialog whose footer offers Esc to
+    cancel, so an Escape typed now cancels that dialog and not something painted after it."""
+    flat = re.sub(r"\s+", "", tail)
+    cut = flat.rfind(_FOOTER)
+    return cut >= 0 and _FOOTER_TAIL.fullmatch(flat[cut + len(_FOOTER) :]) is not None
+
+
 def _pick(prompt: Prompt, number: int) -> Answer:
     return Answer((*(DOWN,) * (number - 1), ENTER), f"Got it: {prompt.choices[number - 1].label}.")
 

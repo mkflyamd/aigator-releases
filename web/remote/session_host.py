@@ -562,11 +562,15 @@ class LocalPtyHost:
             raise HostError("That session is no longer running.")
         if entry.last_user_input > shown.at:
             raise StalePrompt("It was answered at the terminal.")
-        if shown.kind == prompts.PERMISSION:
+        if shown.kind == prompts.PERMISSION or keys == (prompts.ESCAPE,):
             _, end = entry.read_from(10**12)
             tail, _ = entry.read_from(max(0, end - SCREEN_TAIL_CHARS))
-            if not prompts.permission_dialog_showing(_ANSI.sub("", tail), shown):
-                raise StalePrompt("The terminal is no longer showing that permission.")
+            tail = _ANSI.sub("", tail)
+            if shown.kind == prompts.PERMISSION:
+                if not prompts.permission_dialog_showing(tail, shown):
+                    raise StalePrompt("The terminal is no longer showing that permission.")
+            elif not prompts.escape_footer_showing(tail):
+                raise StalePrompt("The terminal is no longer showing that question.")
         for index, key in enumerate(keys):
             if index:
                 await asyncio.sleep(prompts.KEY_PAUSE_SECONDS)

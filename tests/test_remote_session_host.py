@@ -368,6 +368,29 @@ async def test_a_question_is_checked_by_terminal_input_not_by_the_permission_scr
         await host.answer(PTY, shown.id, (prompts.ENTER,))
 
 
+QUESTION_DIALOG = "Q?\n❯1.A\n2.B\n3.Typesomething.\nEntertoselect·↑/↓tonavigate·Esctocancel"
+
+
+async def test_escape_cancels_a_question_only_while_its_dialog_is_the_last_thing_on_screen(typed, screen):
+    _show(ASK)
+    host = LocalPtyHost()
+    shown = await host.prompt(PTY)
+    screen.text = QUESTION_DIALOG
+    await host.answer(PTY, shown.id, (prompts.ESCAPE,), True)
+    assert typed == [(PTY, prompts.ESCAPE)]
+
+
+@pytest.mark.parametrize("after", ["\n✢Marinating…", "\n● Interrupted · What should Claude do instead?"])
+async def test_escape_is_not_typed_once_something_is_painted_after_the_question(typed, screen, after):
+    _show(ASK)
+    host = LocalPtyHost()
+    shown = await host.prompt(PTY)
+    screen.text = QUESTION_DIALOG + after
+    with pytest.raises(StalePrompt):
+        await host.answer(PTY, shown.id, (prompts.ESCAPE,), True)
+    assert typed == []
+
+
 async def test_a_session_that_is_gone_is_an_error(typed, monkeypatch):
     _show(BASH)
     host = LocalPtyHost()
