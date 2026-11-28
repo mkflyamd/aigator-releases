@@ -282,6 +282,18 @@ def waiting_message(
     return _tidy(f"{label(session, project)} {head}\n" + "\n".join(body) + f"\n\n{next_block(_options(prompt))}")
 
 
+ANSWER_IN_APP = "Answer this one in AI Gator."
+
+
+def elsewhere_message(project: str, prompt: Prompt) -> str:
+    """The stand-in for a session Remote did not start: that it waits and which kind, never what it asks."""
+    if prompt.kind == PERMISSION_APP:
+        what = f"permission ({prompt.tool})" if prompt.tool else "permission"
+    else:
+        what = "asking a question"
+    return system_reply(f"Needs you: {what} in {project}. Answer in AI Gator.", [])
+
+
 def more_waiting(rows: list[tuple[str, float]]) -> str:
     """The one line naming sessions that wait with no message of their own. rows are (session, seconds waiting)."""
     names = ", ".join(f"{name} ({elapsed_words(seconds)})" for name, seconds in rows)

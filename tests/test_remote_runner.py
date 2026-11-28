@@ -155,6 +155,7 @@ class World:
         Master(self.state, self.clock).arm()
         self.hint = ""
         self.branch = "main"
+        self.terminals = None
         self.build()
 
     def build(self):
@@ -170,6 +171,7 @@ class World:
             stale_seconds=900,
             first_prompt_hint=self.hint,
             branch_of=lambda path: self.branch,
+            terminals=self.terminals,
         )
         self.runner.sync_enabled(True)
 

@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from remote import commands, needs_you, prompts
+from remote.bystanders import TerminalWatch
 from remote.channel import AutosendOff, Channel, InboundMessage
 from remote import master as master_window
 from remote.guard import Guard, limit
@@ -79,6 +80,7 @@ class RemoteRunner:
         first_prompt_hint: str = "",
         branch_of: Callable[[str], str | None] = current_branch,
         peers: PeerDirectory | None = None,
+        terminals: TerminalWatch | None = None,
     ):
         self._channel = channel
         self._service = service
@@ -90,6 +92,8 @@ class RemoteRunner:
         self._hint = first_prompt_hint
         self._branch_of = branch_of
         self._peers = peers
+        self._terminals = terminals
+        self._app: dict[str, Session] = {}
         self._turns: dict[str, _Turn] = {}
         self._holds: dict[str, tuple[str, float]] = {}
         self._enabled = False
@@ -560,20 +564,29 @@ class RemoteRunner:
         one the session is showing. Otherwise nothing is typed and the user is told it was already answered."""
         found = self._state.find_prompt_message(self._channel.name, command.reply_to or "", self._clock())
         record, is_open = found if found else ({}, False)
-        session = next((s for s in self._service.list() if s.id == record.get("session_id")), None)
+        app = self._app.get(record.get("session_id", ""))
+        session = app or next((s for s in self._service.list() if s.id == record.get("session_id")), None)
         if session is None:
             raise Refusal(commands.system_reply(prompts.ALREADY_ANSWERED, []))
         shown = session.prompt
         if not (is_open and session.waiting and shown is not None and shown.id == record["prompt_id"]):
+            if app:
+                raise Refusal(commands.system_reply(prompts.ALREADY_ANSWERED, []))
             raise Refusal(prompts.confirmation(session.short, session.project.name, prompts.ALREADY_ANSWERED))
+        if app:
+            raise Refusal(commands.system_reply(prompts.ANSWER_IN_APP, []))
         await self._answer(session, command.text)
 
     async def _post_prompt(self, session: Session, prompt: prompts.Prompt) -> bool:
         """One message for this session, remembered by its message id with the prompt and an expiry. A session
         started outside chat says how long it has waited."""
         now = self._clock()
-        waited = None if session.from_chat else now - self._since(session)
-        message_id = await self._try_post(prompts.waiting_message(session.short, session.project.name, prompt, waited=waited))
+        if session.id in self._app:
+            text = prompts.elsewhere_message(session.project.name, prompt)
+        else:
+            waited = None if session.from_chat else now - self._since(session)
+            text = prompts.waiting_message(session.short, session.project.name, prompt, waited=waited)
+        message_id = await self._try_post(text)
         if message_id is None:
             return False
         # Posted but the channel gave no id: remember it as sent so it is never posted twice; no reply can route to it.
@@ -583,9 +596,40 @@ class RemoteRunner:
         )
         return True
 
+    async def _scan_terminals(self) -> None:
+        """The AI Gator terminals that Remote did not start and that are waiting, as content-free sessions kept
+        apart from the service's: nothing is typed into them from here."""
+        if self._terminals is None:
+            return
+        try:
+            skip = {s.pty_id for s in self._service.list()}
+            seen = await asyncio.to_thread(self._terminals.waiting, skip)
+        except Exception as exc:
+            _log.warning("Remote control could not look at the terminals: %s", exc)
+            return
+        found: dict[str, Session] = {}
+        for item in seen:
+            session_id = f"app:{item.pty_id}"
+            found[session_id] = self._app.get(session_id) or Session(
+                id=session_id,
+                pty_id=item.pty_id,
+                project=item.project,
+                short=item.project.name,
+                vendor_session_id=None,
+                created_at=item.prompt.at,
+                last_activity=item.prompt.at,
+                from_chat=False,
+                kind=ADOPTED,
+            )
+            session = found[session_id]
+            if session.prompt is None or session.prompt.id != item.prompt.id:
+                session.prompt, session.waiting = item.prompt, True
+                session.last_event_at = session.last_activity = item.prompt.at
+        self._app = found
+
     async def _notify_waiting(self) -> None:
         """Posts a message for each waiting session that is due one and has a place, and names the rest once."""
-        sessions = self._service.list()
+        sessions = [*self._service.list(), *self._app.values()]
         showing = {(s.id, s.prompt.id) for s in sessions if s.waiting and s.prompt is not None}
         for record in self._state.prompt_messages(self._channel.name):
             if (record["session_id"], record["prompt_id"]) not in showing:
@@ -745,7 +789,10 @@ class RemoteRunner:
             await self._report_progress()
         await self._service.tick()
         if self.live:
+            await self._scan_terminals()
             await self._notify_waiting()
+        else:
+            self._app = {}
 
     @property
     def deadline_pending(self) -> bool:

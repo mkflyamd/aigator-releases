@@ -12,6 +12,7 @@ from typing import Callable
 
 from config import load_config
 from remote import commands, settings
+from remote.bystanders import LocalTerminalWatch
 from remote.guard import Guard
 from remote.peers import PeerDirectory, WakeGateway
 from remote.master import Master
@@ -147,6 +148,7 @@ def _build_loop(channel, state: State, enabled: Callable[[], bool]) -> RemoteLoo
         master=Master(state),
         first_prompt_hint=commands.BREVITY_HINT,
         peers=PeerDirectory(WakeGateway(), settings.peer_messages_per_hour),
+        terminals=LocalTerminalWatch(),
     )
     return RemoteLoop(runner, enabled, owner=ChannelOwner(channel.name))
 
