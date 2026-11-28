@@ -14,7 +14,7 @@ from remote.channel import InboundMessage
 from remote.guard import Guard
 from remote.master import Master
 from remote.runner import RemoteRunner
-from remote.service import RemoteService
+from remote.service import PROMPT_GRACE_SECONDS, RemoteService
 from remote.state import State
 from tests.test_remote_autosend_gate import SlackWorldFake, TeamsWorld
 from tests.test_remote_runner import BUDGET, OTHER, Clock, FakeChannel, FakeHost, World, baselined
@@ -700,6 +700,8 @@ async def test_everything_a_whole_session_posts_carries_the_prefix_and_a_next_bl
     w.host.states["pty-1"] = {"state": "asking", "at": w.clock.now + 5}
     w.host.last["pty-1"] = "Which one?"
     await w.runner.tick()
+    w.clock.now += PROMPT_GRACE_SECONDS
+    await w.runner.tick()
     await say(w, "bye")
     assert len(w.channel.posted) >= 7
     assert all(p.startswith(_BASE) for p in w.channel.posted)
@@ -719,9 +721,12 @@ async def test_a_session_that_asked_a_question_is_listed_as_waiting_for_you(w):
     w.host.states["pty-1"] = {"state": "asking", "at": w.clock.now + 5}
     w.host.last["pty-1"] = "Which one?"
     await w.runner.tick()
+    w.clock.now += PROMPT_GRACE_SECONDS
+    await w.runner.tick()
     await say(w, "list")
     assert "Needs you:\n1. budget · waiting " in w.channel.posted[-1]
     assert "• `budget: your answer` to answer the longest-waiting one." in w.channel.posted[-1]
+    w.host.states["pty-1"]["state"] = "working"
     await say(w, "the first one")
     await say(w, "list")
     assert "Working:\n1. budget · " in w.channel.posted[-1]

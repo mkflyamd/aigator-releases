@@ -17,6 +17,7 @@ from remote.session_host import HostError, Project, SessionHost, StalePrompt
 _log = logging.getLogger(__name__)
 
 IDLE_SECONDS = 8 * 3600.0
+PROMPT_GRACE_SECONDS = 3.0
 
 
 class RemoteError(Exception):
@@ -50,6 +51,7 @@ class Session:
     last_event_at: float = 0.0
     stopping: bool = False
     prompt: prompts.Prompt | None = None
+    asking_since: float | None = None
 
 
 @dataclass(frozen=True)
@@ -182,7 +184,7 @@ class RemoteService:
             raise RemoteError(str(exc)) from exc
         session.last_activity = session.awaiting_since = self._clock()
         session.waiting = False
-        session.prompt = None
+        session.prompt = session.asking_since = None
 
     async def answer(self, session_id: str, text: str) -> prompts.Answer:
         """Types the reply into the prompt the session is showing."""
@@ -196,13 +198,13 @@ class RemoteService:
         try:
             await self._host.answer(session.pty_id, shown.id, result.keys, result.ends_turn)
         except StalePrompt as exc:
-            session.waiting, session.prompt = False, None
+            session.waiting, session.prompt, session.asking_since = False, None, None
             raise PromptGone(str(exc)) from exc
         except HostError as exc:
             raise RemoteError(str(exc)) from exc
         session.last_activity = self._clock()
         session.awaiting_since = None if result.ends_turn else session.last_activity
-        session.waiting, session.prompt = False, None
+        session.waiting, session.prompt, session.asking_since = False, None, None
         return result
 
     async def stop(self, session_id: str) -> None:
@@ -254,28 +256,66 @@ class RemoteService:
                 continue
             await self._check_state(session)
 
+    async def refresh(self, session_id: str) -> None:
+        """For a reply that comes before the next tick has seen the session ask: the prompt is known now, and an
+        app-only stand-in covers one that has no file, so the reply is answered with what is showing."""
+        session = self.get(session_id)
+        state = await self._host.state(session.pty_id)
+        if session.prompt is not None or not state or state["state"] != "asking":
+            return
+        session.prompt = await self._host.prompt(session.pty_id) or prompts.unreadable(state["at"], prompts.UNSEEN_WHY)
+        session.waiting, session.asking_since = True, None
+        session.last_event_at = max(session.last_event_at, state["at"])
+
     async def _check_state(self, session: Session) -> None:
         state = await self._host.state(session.pty_id)
-        if state and state["state"] == "asking" and session.waiting and session.prompt is None:
-            session.prompt = await self._host.prompt(session.pty_id)
-            if session.prompt is not None:
-                await self._emit("input-required", session, "")
-                return
+        asking = bool(state) and state["state"] == "asking"
+        if not asking:
+            session.asking_since = None
+        if asking and session.asking_since is not None:
+            await self._find_late_prompt(session, state["at"])
+            return
         if not state or state["at"] <= session.last_event_at:
             return
-        if state["state"] == "asking":
-            kind = "input-required"
+        if asking:
+            if session.waiting and session.prompt is not None:
+                again = await self._host.prompt(session.pty_id)
+                if again is None or again.id == session.prompt.id:
+                    session.last_event_at = state["at"]
+                    return
+                session.prompt = again
+            else:
+                session.prompt = await self._host.prompt(session.pty_id)
             session.waiting = True
-            session.prompt = await self._host.prompt(session.pty_id)
+            session.last_event_at = state["at"]
+            if session.prompt is None:
+                session.asking_since = self._clock()
+                return
+            kind = "input-required"
         elif state["state"] == "idle" and session.awaiting_since is not None and state["at"] >= session.awaiting_since:
             kind = "completed"
         else:
             return
-        session.last_event_at = state["at"]
         if kind == "completed":
+            session.last_event_at = state["at"]
             session.awaiting_since = None
             session.waiting = False
             session.prompt = None
         session.last_activity = max(session.last_activity, state["at"])
-        text = "" if kind == "input-required" and session.prompt else await self._host.last_message(session.pty_id)
+        text = "" if kind == "input-required" else await self._host.last_message(session.pty_id)
         await self._emit(kind, session, text)
+
+    async def _find_late_prompt(self, session: Session, at: float) -> None:
+        """The agent says it is asking but wrote no prompt yet. After PROMPT_GRACE_SECONDS the question is its last
+        message, or, when there is none, an app-only stand-in: an ask is never posted as an empty message."""
+        session.prompt = await self._host.prompt(session.pty_id)
+        text = ""
+        if session.prompt is None:
+            if self._clock() - session.asking_since < PROMPT_GRACE_SECONDS:
+                return
+            text = await self._host.last_message(session.pty_id)
+            if not text:
+                session.prompt = prompts.unreadable(at, prompts.UNSEEN_WHY)
+        session.asking_since = None
+        session.last_activity = max(session.last_activity, at)
+        await self._emit("input-required", session, text)

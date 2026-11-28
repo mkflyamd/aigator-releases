@@ -5,7 +5,7 @@ from remote.channel import ChannelRefused, InboundMessage
 from remote.guard import Guard
 from remote.master import Master
 from remote.runner import RemoteRunner
-from remote.service import RemoteService
+from remote.service import PROMPT_GRACE_SECONDS, RemoteService
 from remote.session_host import HostError, HostSession, Project, StalePrompt
 from remote.state import State
 
@@ -564,6 +564,8 @@ async def test_a_question_from_the_agent_is_forwarded(w):
     await w.feed(w.msg(101, "@gator go"))
     w.host.states["pty-1"] = {"state": "asking", "at": w.clock.now + 5}
     w.host.last["pty-1"] = "Delete the folder?"
+    await w.runner.tick()
+    w.clock.now += PROMPT_GRACE_SECONDS
     await w.runner.tick()
     assert w.channel.posted[-1] == commands.agent_result(
         "Claude", "budget", "Waiting for your answer.", "Delete the folder?", waiting=True, project="Budget"

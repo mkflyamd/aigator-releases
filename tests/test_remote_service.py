@@ -2,7 +2,7 @@ import pytest
 
 from remote import prompts
 from remote.guard import Guard
-from remote.service import Event, PromptGone, PromptRefused, RemoteError, RemoteService
+from remote.service import PROMPT_GRACE_SECONDS, Event, PromptGone, PromptRefused, RemoteError, RemoteService
 from remote.session_host import HostError, HostSession, Project, StalePrompt
 
 
@@ -173,6 +173,8 @@ async def test_input_required_event_when_the_agent_asks(svc, host, clock):
     host.states["pty-1"] = {"state": "asking", "at": clock.now + 1}
     host.last["pty-1"] = "May I run rm?"
     await svc.tick()
+    clock.now += PROMPT_GRACE_SECONDS
+    await svc.tick()
     assert [(e.kind, e.text) for e in svc.events] == [("input-required", "May I run rm?")]
     await svc.tick()
     assert len(svc.events) == 1
@@ -279,6 +281,9 @@ async def test_an_ask_without_a_prompt_file_still_posts_the_transcript(svc, host
     await svc.start(BUDGET, "a")
     host.states["pty-1"] = {"state": "asking", "at": clock.now + 1}
     host.last["pty-1"] = "May I run rm?"
+    await svc.tick()
+    assert svc.events == []
+    clock.now += PROMPT_GRACE_SECONDS
     await svc.tick()
     assert [(e.kind, e.text) for e in svc.events] == [("input-required", "May I run rm?")]
     assert svc.list()[0].prompt is None

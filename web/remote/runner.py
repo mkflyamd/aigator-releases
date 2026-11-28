@@ -316,6 +316,8 @@ class RemoteRunner:
         if len(sessions) != 1:
             return self._describe(sessions)
         s = sessions[0]
+        if s.prompt is not None:
+            return prompts.waiting_message(s.short, s.project.name, s.prompt)
         return commands.session_status(
             s.short, _state_word(s), self._since(s), s.last_activity, project=s.project.name, several=self._several(s)
         )
@@ -361,6 +363,7 @@ class RemoteRunner:
             self._begin(await self._service.start(project, prompt))
 
     async def _deliver(self, session: Session, text: str) -> None:
+        await self._service.refresh(session.id)
         if session.waiting and session.prompt is not None:
             await self._answer(session, text)
             return
