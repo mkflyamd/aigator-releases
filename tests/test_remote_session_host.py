@@ -374,3 +374,13 @@ async def test_a_session_that_is_gone_is_an_error(typed, monkeypatch):
     monkeypatch.setattr(terminal, "get_pty_session", lambda pty: None)
     with pytest.raises(HostError):
         await host.answer(PTY, shown.id, (prompts.ENTER,))
+
+
+async def test_an_oversize_prompt_file_is_an_app_only_prompt_that_cannot_be_answered(typed):
+    agent_state.set_state(PTY, "asking")
+    (agent_state.STATE_DIR / (PTY + ".prompt")).write_text("x" * (agent_state.PROMPT_MAX_BYTES + 1), encoding="utf-8")
+    shown = await LocalPtyHost().prompt(PTY)
+    assert shown.kind == prompts.APP_ONLY and not shown.answerable
+    message = prompts.waiting_message("a", "p", shown)
+    assert "it is too large to show here" in message and prompts.OPEN_APP_QUESTION in message
+    assert isinstance(prompts.resolve(shown, "allow"), prompts.Refused)

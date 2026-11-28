@@ -180,6 +180,11 @@ def parse(payload: dict, at: float, redact: Callable[[str], str] = str) -> Promp
     )
 
 
+def unreadable(at: float) -> Prompt:
+    """A prompt file that could not be read (too large, or not the hook's JSON): there is still something to answer."""
+    return Prompt(hashlib.sha256(f"unreadable:{at}".encode()).hexdigest()[:12], APP_ONLY, at=at, why_app="it is too large to show here")
+
+
 def _digits(count: int) -> str:
     return f"1 to {count}" if count > 2 else "1 or 2"
 

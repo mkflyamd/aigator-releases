@@ -226,7 +226,8 @@ class LocalPtyHost:
         if not found:
             return None
         redact = agent_handoff.Redactor(agent_handoff._configured_api_keys())
-        return prompts.parse(found["payload"], found["at"], redact)
+        parsed = prompts.parse(found["payload"], found["at"], redact) if found["payload"] is not None else None
+        return parsed or prompts.unreadable(found["at"])
 
     async def answer(self, pty_id: str, prompt_id: str, keys: tuple[str, ...], ends_turn: bool = False) -> None:
         """Types `keys` only while the agent is still showing the prompt `prompt_id`. No hook fires when the

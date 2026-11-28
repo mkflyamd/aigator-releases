@@ -27,6 +27,7 @@ STALE_SECONDS = 15 * 60.0
 AGENT_LABEL = "Claude"
 WAITING_HEADLINE = "Waiting for your answer."
 PROMPT_ROUTE_SECONDS = 12 * 3600.0
+PROMPT_HOLD_SECONDS = 2 * 3600.0
 _TAGS = ("gator", AGENT_LABEL.lower())
 
 
@@ -70,6 +71,7 @@ class RemoteRunner:
         self._hint = first_prompt_hint
         self._branch_of = branch_of
         self._turns: dict[str, _Turn] = {}
+        self._holds: dict[str, tuple[str, float]] = {}
         self._enabled = False
         self._timeout_noticed = False
         self._autosend_noticed = False
@@ -179,7 +181,19 @@ class RemoteRunner:
         await self._post(reply())
 
     def _anyone_waiting(self) -> bool:
-        return any(s.waiting for s in self._service.list())
+        """True while some session shows a prompt, for at most PROMPT_HOLD_SECONDS each. A session that only
+        sounds like it asked something has no prompt and does not keep the chat open."""
+        now = self._clock()
+        holds, held = {}, False
+        for session in self._service.list():
+            if session.prompt is None:
+                continue
+            seen_id, since = self._holds.get(session.id, ("", now))
+            since = since if seen_id == session.prompt.id else now
+            holds[session.id] = (session.prompt.id, since)
+            held = held or now - since < PROMPT_HOLD_SECONDS
+        self._holds = holds
+        return held
 
     async def _close_if_expired(self) -> None:
         if self._window.expired() and not self._anyone_waiting():

@@ -3,7 +3,7 @@ reply types exactly that answer, or nothing."""
 
 import pytest
 
-from remote import commands, prompts
+from remote import commands, prompts, runner
 from tests.test_remote_chat_window import MINUTE, WINDOW, opened, say, window_of
 from tests.test_remote_prompts import ASK_USER_QUESTION, BASH_PERMISSION
 from tests.test_remote_runner import BUDGET, OTHER, World
@@ -320,3 +320,46 @@ def test_status_leaves_out_last_activity_when_it_is_the_same_minute():
     assert "Last activity" not in same
     later = commands.session_status("Claude", "budget", commands.WORKING, 1000.0, 5000.0)
     assert "Last activity" in later
+
+
+async def test_a_session_that_only_sounds_like_it_asked_does_not_keep_the_chat_open(w):
+    await opened(w)
+    await say(w, "run the tests")
+    w.service.list()[0].waiting = True
+    w.channel.posted.clear()
+    w.clock.now += WINDOW + 1
+    await w.runner.tick()
+    assert commands.chat_closed_quiet() in w.channel.posted
+    assert window_of(w) is None
+
+
+async def test_a_shown_prompt_holds_the_chat_open_only_up_to_the_cap(w):
+    await opened(w)
+    await say(w, "run the tests")
+    await show(w, "pty-1", BASH_PERMISSION)
+    w.channel.posted.clear()
+    step = runner.PROMPT_HOLD_SECONDS / 4
+    for _ in range(3):
+        w.clock.now += step
+        await w.runner.tick()
+    assert window_of(w) is not None
+    for _ in range(2):
+        w.clock.now += step
+        await w.runner.tick()
+    assert commands.chat_closed_quiet() in w.channel.posted
+    assert window_of(w) is None
+
+
+async def test_a_prompt_that_shows_up_after_the_asking_state_is_posted_when_it_does(w):
+    await opened(w)
+    await say(w, "run the tests")
+    when = w.clock.now + 5
+    w.host.states["pty-1"] = {"state": "asking", "at": when}
+    await w.runner.tick()
+    assert w.service.list()[0].waiting and w.service.list()[0].prompt is None
+    w.channel.posted.clear()
+    w.host.prompts["pty-1"] = prompts.parse(BASH_PERMISSION, when)
+    await w.runner.tick()
+    assert len(w.channel.posted) == 1 and "Tool: Bash" in w.channel.posted[0]
+    await say(w, "allow")
+    assert w.host.typed == [("pty-1", (prompts.ENTER,))]

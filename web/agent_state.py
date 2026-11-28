@@ -151,17 +151,21 @@ def read_states(pty_ids: list[str]) -> dict[str, dict]:
 
 
 def read_prompt(pty_id: str) -> dict | None:
-    """The prompt the agent is showing: {"at": event time, "payload": the hook's JSON}, or None."""
+    """The prompt the agent is showing: {"at": event time, "payload": the hook's JSON}, or None when there is none.
+    A file that is too large or not a JSON object is still a prompt: its payload is None."""
     try:
         uuid.UUID(pty_id)
         path = STATE_DIR / (pty_id + PROMPT_SUFFIX)
         with open(path, "rb") as fh:
             raw = fh.read(PROMPT_MAX_BYTES + 1)
         at = path.stat().st_mtime
-        payload = json.loads(raw.decode("utf-8")) if len(raw) <= PROMPT_MAX_BYTES else None
     except (ValueError, OSError):
         return None
-    return {"at": at, "payload": payload} if isinstance(payload, dict) else None
+    try:
+        payload = json.loads(raw.decode("utf-8")) if len(raw) <= PROMPT_MAX_BYTES else None
+    except ValueError:
+        payload = None
+    return {"at": at, "payload": payload if isinstance(payload, dict) else None}
 
 
 def set_state(pty_id: str, word: str) -> None:

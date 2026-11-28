@@ -148,9 +148,10 @@ def test_read_prompt_returns_the_payload_and_its_event_time():
         pytest.param("x" * (agent_state.PROMPT_MAX_BYTES + 1), id="oversize"),
     ],
 )
-def test_read_prompt_ignores_unreadable_or_oversize_files(content):
+def test_read_prompt_reports_an_unreadable_or_oversize_file_as_a_prompt_with_no_payload(content):
     (agent_state.STATE_DIR / (PTY + ".prompt")).write_text(content, encoding="utf-8")
-    assert agent_state.read_prompt(PTY) is None
+    found = agent_state.read_prompt(PTY)
+    assert found["payload"] is None and found["at"] > 0
 
 
 def test_read_prompt_ignores_a_missing_file_and_a_bad_id():
