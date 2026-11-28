@@ -6,6 +6,7 @@ is the message time."""
 from __future__ import annotations
 
 import logging
+import time
 
 from remote.channel import ChannelRefused, InboundMessage, require_autosend, slack_mrkdwn
 from remote.commands import SYSTEM_PREFIX
@@ -108,6 +109,49 @@ class SlackSelfDM:
             and not raw.get("bot_id")
             and not raw.get("app_id")
         ]
+
+    def poll_replies(self) -> list[InboundMessage]:
+        """Thread replies under the prompt messages still waiting for an answer. `conversations.history` does
+        not list them. The newest ts read per thread is stored, so each reply comes back once."""
+        found: list[InboundMessage] = []
+        records = [m for m in self._state.prompt_messages(self.name) if m.get("expires_at", 0) > time.time()]
+        if not records:
+            return found
+        channel = self._resolve_channel()
+        own = _own_user_id()
+        if not own:
+            return found
+        for record in records:
+            parent = str(record["message_id"])
+            seen = str(record.get("reply_ts") or parent)
+            data = _api("conversations.replies", {"channel": channel, "ts": parent, "oldest": seen, "limit": HISTORY_LIMIT})
+            if not data.get("ok"):
+                _log.warning("Slack replies failed: %s", data.get("error", "unknown"))
+                continue
+            replies = [
+                raw
+                for raw in data.get("messages", [])
+                if raw.get("ts")
+                and float(raw["ts"]) > float(seen)
+                and raw.get("subtype") in (None, "file_share")
+                and raw.get("user") == own
+                and not raw.get("bot_id")
+                and not raw.get("app_id")
+            ]
+            if not replies:
+                continue
+            self._state.advance_reply_cursor(self.name, parent, max((str(r["ts"]) for r in replies), key=float))
+            found.extend(
+                InboundMessage(
+                    id=str(raw["ts"]),
+                    text=_unescape(raw.get("text") or "").strip(),
+                    created_at=_epoch(raw["ts"]),
+                    attachments=bool(raw.get("files")),
+                    reply_to=parent,
+                )
+                for raw in replies
+            )
+        return sorted(found, key=lambda m: m.created_at, reverse=True)
 
     def post(self, text: str, reply_to: str | None = None) -> str:
         if not self.is_own_self_chat():

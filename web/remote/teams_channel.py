@@ -92,6 +92,9 @@ class TeamsSelfChat:
             if raw.get("message_type") == "message"
         ]
 
+    def poll_replies(self) -> list[InboundMessage]:
+        return []
+
     def post(self, text: str, reply_to: str | None = None) -> str:
         if not self.is_own_self_chat():
             _log.warning("Remote control refused to post: %s is not the own self-chat", self._chat_id)

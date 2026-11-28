@@ -1,4 +1,6 @@
 
+import time
+
 import pytest
 
 from remote import commands, slack_channel
@@ -22,6 +24,7 @@ class FakeSlack:
         self.channels = {SELF_DM: {"is_im": True, "user": ME}, OTHER_DM: {"is_im": True, "user": "U222"}}
         self.fail_post = None
         self.next_ts = 1
+        self.threads = {}
 
     def __call__(self, endpoint, params=None, method="GET"):
         self.calls.append((endpoint, dict(params or {}), method))
@@ -32,6 +35,9 @@ class FakeSlack:
             return {"ok": True, "channel": info} if info else {"ok": False, "error": "channel_not_found"}
         if endpoint == "conversations.history":
             return {"ok": True, "messages": self.history}
+        if endpoint == "conversations.replies":
+            parent = {"ts": params["ts"], "user": ME, "text": "[Gator] prompt"}
+            return {"ok": True, "messages": [parent, *self.threads.get(params["ts"], [])]}
         if endpoint == "chat.postMessage":
             if self.fail_post:
                 return {"ok": False, "error": self.fail_post}
@@ -354,3 +360,46 @@ def test_channel_state_is_kept_per_channel(tmp_path):
     assert state.last_id("slack") == "1700000000.000200"
     assert state.is_own_post("slack", "1700000001.000100")
     assert not state.is_own_post("teams", "1700000001.000100")
+
+
+def reply(ts, text, user=ME, **extra):
+    return {"ts": ts, "user": user, "text": text, **extra}
+
+
+def test_thread_replies_under_an_open_prompt_message_come_back_once_with_the_parent_as_reply_to(tmp_path, slack):
+    state = State(tmp_path / "s.json")
+    channel = SlackSelfDM(state=state)
+    state.record_prompt_message("slack", "1700000000.000001", "pty:1", "p1", time.time() + 3600, time.time())
+    slack.threads["1700000000.000001"] = [
+        reply("1700000001.000001", "allow"),
+        reply("1700000002.000001", "deny"),
+    ]
+    got = channel.poll_replies()
+    assert [(m.id, m.text, m.reply_to) for m in got] == [
+        ("1700000002.000001", "deny", "1700000000.000001"),
+        ("1700000001.000001", "allow", "1700000000.000001"),
+    ]
+    assert channel.poll_replies() == []
+    slack.threads["1700000000.000001"].append(reply("1700000003.000001", "2"))
+    assert [m.text for m in channel.poll_replies()] == ["2"]
+
+
+def test_thread_replies_from_someone_else_or_a_bot_are_not_read(tmp_path, slack):
+    state = State(tmp_path / "s.json")
+    channel = SlackSelfDM(state=state)
+    state.record_prompt_message("slack", "1700000000.000001", "pty:1", "p1", time.time() + 3600, time.time())
+    slack.threads["1700000000.000001"] = [
+        reply("1700000001.000001", "allow", user="U222"),
+        reply("1700000002.000001", "allow", bot_id="B1"),
+        reply("1700000003.000001", "allow", subtype="channel_join"),
+    ]
+    assert channel.poll_replies() == []
+
+
+def test_no_replies_are_asked_for_when_no_prompt_message_is_open_or_it_has_expired(tmp_path, slack):
+    state = State(tmp_path / "s.json")
+    channel = SlackSelfDM(state=state)
+    assert channel.poll_replies() == []
+    state.record_prompt_message("slack", "1700000000.000001", "pty:1", "p1", time.time() - 1, time.time() - 10)
+    assert channel.poll_replies() == []
+    assert [c for c in slack.calls if c[0] == "conversations.replies"] == []

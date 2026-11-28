@@ -12,7 +12,7 @@ import re
 from dataclasses import dataclass
 from typing import Callable
 
-from remote.commands import SYSTEM_PREFIX, _tidy, next_block
+from remote.commands import SYSTEM_PREFIX, _tidy, elapsed_words, next_block, system_reply
 
 COMMAND_MAX_CHARS = 150
 PATH_MAX_CHARS = 200
@@ -237,15 +237,26 @@ def label(session: str, project: str) -> str:
     return f"{SYSTEM_PREFIX} - {session} - {project}]"
 
 
-def waiting_message(session: str, project: str, prompt: Prompt, *, refused: str = "") -> str:
-    """One message for one waiting session. `refused` turns it into the answer to a reply that was not sent."""
-    head = f"Not sent: {refused}" if refused else f"Needs you: {prompt.lead}."
+def waiting_message(
+    session: str, project: str, prompt: Prompt, *, refused: str = "", waited: float | None = None
+) -> str:
+    """One message for one waiting session. `refused` turns it into the answer to a reply that was not sent.
+    `waited` is set only for a message that went out after a wait."""
+    after = f", waiting {elapsed_words(waited)}" if waited is not None else ""
+    head = f"Not sent: {refused}" if refused else f"Needs you: {prompt.lead}{after}."
     if prompt.kind == DRAFT:
         return _tidy(f"{label(session, project)} {head}\n{OPEN_APP_DRAFT}")
     body = _facts(prompt) if prompt.kind == PERMISSION else ([prompt.question] if prompt.question else [])
     if prompt.kind == APP_ONLY and prompt.why_app:
         body.append(f"This one cannot be answered here: {prompt.why_app}.")
     return _tidy(f"{label(session, project)} {head}\n" + "\n".join(body) + f"\n\n{next_block(_options(prompt))}")
+
+
+def more_waiting(rows: list[tuple[str, float]]) -> str:
+    """The one line naming sessions that wait with no message of their own. rows are (session, seconds waiting)."""
+    names = ", ".join(f"{name} ({elapsed_words(seconds)})" for name, seconds in rows)
+    noun = "session needs" if len(rows) == 1 else "sessions need"
+    return system_reply(f"{len(rows)} more {noun} you: {names}.", ["`list` to see them."])
 
 
 def confirmation(session: str, project: str, done: str) -> str:

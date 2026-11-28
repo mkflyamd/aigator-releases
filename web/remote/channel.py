@@ -51,6 +51,10 @@ class Channel(Protocol):
     def poll(self) -> list[InboundMessage]:
         """Recent messages, newest first."""
 
+    def poll_replies(self) -> list[InboundMessage]:
+        """Replies, newest first, that arrive somewhere `poll` does not list them (a Slack thread), each
+        returned once, with `reply_to` set. Empty where a reply is an ordinary message (a Teams quote-reply)."""
+
     def post(self, text: str, reply_to: str | None = None) -> str:
         """Post to the user's own chat only. Returns the new message id."""
 

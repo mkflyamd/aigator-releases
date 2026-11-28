@@ -23,6 +23,9 @@ class PollingChannel(FakeChannel):
             raise RuntimeError("token expired")
         return []
 
+    def poll_replies(self):
+        return []
+
 
 class Setup:
     def __init__(self, tmp_path):

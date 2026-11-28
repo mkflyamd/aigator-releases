@@ -44,9 +44,10 @@ LEADING_MENTION_RE =re.compile(r"^@([\w.-]+):?(?:\s+(.*))?$", re.DOTALL)
 
 @dataclass(frozen=True)
 class Command:
-    kind: str  # send | list | status | stop | stop_all | help | open | bye
+    kind: str  # send | list | status | stop | stop_all | help | open | bye | answer
     name: str | None = None
     text: str = ""
+    reply_to: str | None = None  # answer: the id of the posted prompt message this reply is for
 
 
 def _cap_bytes(text: str) -> str:

@@ -107,7 +107,7 @@ class State:
     def record_prompt_message(
         self, channel: str, message_id: str, session_id: str, prompt_id: str, expires_at: float, now: float
     ) -> None:
-        """Which posted message asked which session's prompt. Only recorded; nothing reads it to route a reply yet."""
+        """Which posted message asked which session's prompt, so a reply to that message reaches that session."""
         with self._lock:
             data = self._load()
             entry = self._channel(data, channel)
@@ -129,10 +129,33 @@ class State:
             before = entry.get("prompt_messages", [])
             after = [m for m in before if not (isinstance(m, dict) and m.get("session_id") == session_id)]
             if len(after) != len(before):
+                gone = [m for m in before if isinstance(m, dict) and m.get("session_id") == session_id]
                 entry["prompt_messages"] = after
+                entry["prompt_closed"] = [*entry.get("prompt_closed", []), *gone][-PROMPT_MESSAGES_KEEP:]
                 self._save(data)
 
     def prompt_messages(self, channel: str) -> list[dict]:
         with self._lock:
             found = (self._load().get(channel) or {}).get("prompt_messages", [])
         return [m for m in found if isinstance(m, dict)]
+
+    def find_prompt_message(self, channel: str, message_id: str, now: float) -> tuple[dict, bool] | None:
+        """The record for a posted prompt message and whether it is still open, or None when this chat
+        never posted it or it has expired. A closed one is a prompt that has been answered or replaced."""
+        with self._lock:
+            entry = self._load().get(channel) or {}
+            for key, is_open in (("prompt_messages", True), ("prompt_closed", False)):
+                for m in entry.get(key, []):
+                    if isinstance(m, dict) and m.get("message_id") == message_id and m.get("expires_at", 0) > now:
+                        return dict(m), is_open
+        return None
+
+    def advance_reply_cursor(self, channel: str, message_id: str, reply_ts: str) -> None:
+        """Remembers the newest reply read in the thread of a prompt message, so each reply is read once."""
+        with self._lock:
+            data = self._load()
+            for m in self._channel(data, channel).get("prompt_messages", []):
+                if isinstance(m, dict) and m.get("message_id") == message_id:
+                    m["reply_ts"] = reply_ts
+                    self._save(data)
+                    return

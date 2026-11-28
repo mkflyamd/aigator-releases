@@ -50,6 +50,7 @@ class Session:
     last_event_at: float = 0.0
     stopping: bool = False
     prompt: prompts.Prompt | None = None
+    from_chat: bool = True  # False for a session someone started in AI Gator: its prompts go to chat after a wait
 
 
 @dataclass(frozen=True)
@@ -264,6 +265,9 @@ class RemoteService:
             session.prompt = await self._host.prompt(session.pty_id)
         elif state["state"] == "idle" and session.awaiting_since is not None and state["at"] >= session.awaiting_since:
             kind = "completed"
+        elif state["state"] == "working" and session.prompt is not None:
+            session.waiting, session.prompt, session.last_event_at = False, None, state["at"]
+            return
         else:
             return
         session.last_event_at = state["at"]
