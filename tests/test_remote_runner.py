@@ -497,6 +497,17 @@ async def test_a_turn_that_finished_first_never_gets_a_late_working_message(w):
     assert w.channel.posted == ["[\U0001F40A Gator - Budget] Quick."]
 
 
+async def test_a_turn_that_finished_while_not_live_gets_no_still_working_later(w):
+    await baselined(w)
+    await w.feed(w.msg(101, "@gator go"))
+    w.runner.sync_enabled(False)
+    await _finish(w, "Done quietly.")
+    w.runner.sync_enabled(True)
+    w.clock.now += 400
+    await w.runner.tick()
+    assert w.channel.posted == []
+
+
 async def test_a_trailing_question_is_sent_as_waiting_with_the_answers_as_options(w):
     await baselined(w)
     await w.feed(w.msg(101, "@gator go"))
