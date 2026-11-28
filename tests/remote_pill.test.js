@@ -308,7 +308,7 @@ test('every server state maps to the card the design shows', () => {
   const quarter = vmOf('warn_15m', {}, 14 * 60);
   assert.strictEqual(quarter.timer.text, 'Turns off in 14 min');
   assert.strictEqual(quarter.timer.spoken, 'Turns off in 14 minutes');
-  assert(/keep running/.test(quarter.note));
+  assert(/Sessions stop when it turns off/.test(quarter.note));
   assert.strictEqual(quarter.acts[0].primary, true, 'primary at 15 minutes');
   assert(/class="rcp-btn is-primary" data-rcp="restart"/.test(pill.cardHtml(quarter)));
 });
@@ -458,6 +458,27 @@ test('turning on opens the sheet once, then arms with the CSRF header; restart i
   await settle();
   const writes = env.calls.filter((c) => c[0] === 'POST').map((c) => c[1]);
   assert.deepStrictEqual(writes, ['/api/remote/disarm', '/api/remote/arm']);
+});
+
+test('a refused restart says Remote control is off and shows the reason', async () => {
+  const doc = makeDocument();
+  rebuildShell(doc, loadTemplate());
+  const env = makeEnv(doc, running(41945));
+  const rp = pill.create(env);
+  rp.start();
+  await settle();
+  env.refuse = 'Replies to your own chat are off. Turn them on in Settings first.';
+  await click(doc, 'restart');
+  await settle();
+  assert.strictEqual(rp.status.state, 'off');
+  const err = doc.getElementById('remote-pill-slot').querySelector('[data-rcp-err]');
+  assert.strictEqual(err.textContent, 'Could not restart, so Remote control is off. ' + env.refuse);
+});
+
+test('the sheet makes no promise the server does not keep', () => {
+  const sheet = pill.sheetHtml(base());
+  assert(!/30-minute|30 minute/.test(sheet));
+  assert(/Send <code>@gator<\/code> and what you want in either chat\./.test(sheet));
 });
 
 test('a refusal shows the server reason and the switch stays where the server says', async () => {

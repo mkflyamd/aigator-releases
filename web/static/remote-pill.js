@@ -143,7 +143,7 @@
         view.noteWarn = true;
         view.acts = [{ act: 'restart', label: 'Restart 12 hours' }];
       } else if (quarter) {
-        view.note = 'Sessions already started keep running, but Gator stops reporting on them.';
+        view.note = 'Sessions stop when it turns off. Restart to keep them going.';
         view.noteWarn = true;
         view.acts = [{ act: 'restart', label: 'Restart 12 hours', primary: true }];
       }
@@ -283,9 +283,9 @@
       AGENT +
       ' answers in the same chat.</p><ul class="rcp-chs">' +
       rows +
-      '</ul><ul class="rcp-bul"><li>Send <code>@gator hi</code> in either chat to open a 30-minute chat. While it is open, everything you type there goes to ' +
+      '</ul><ul class="rcp-bul"><li>Send <code>@gator</code> and what you want in either chat. ' +
       AGENT +
-      '.</li><li>It stays on for 12 hours, then turns itself off. Turn it on again any time.</li><li>' +
+      ' runs it and answers in the same chat.</li><li>It stays on for 12 hours, then turns itself off. Turn it on again any time.</li><li>' +
       AGENT +
       ' only replies in your own chat. It sends nothing to other people from here.</li>' +
       (repliesOff
@@ -423,10 +423,9 @@
       }
       if (key === lastAnnounce) return;
       lastAnnounce = key;
-      if (key === 'warn_1h')
-        say('Remote control turns off in 1 hour. Sessions already started keep running.');
+      if (key === 'warn_1h') say('Remote control turns off in 1 hour. Sessions stop when it does.');
       else if (key === 'warn_15m')
-        say('Remote control turns off in 15 minutes. Sessions already started keep running.');
+        say('Remote control turns off in 15 minutes. Sessions stop when it does.');
       else if (key === 'expired' || key === 'expiring')
         say('Remote control turned off after 12 hours.');
       else if (key === 'stopped_from_chat') say('Remote control turned off from your chat.');
@@ -528,7 +527,11 @@
       if (what === 'restart') {
         return act(async () => {
           await disarm();
-          return arm();
+          try {
+            return await arm();
+          } catch (error) {
+            throw new Error('Could not restart, so Remote control is off. ' + error.message);
+          }
         }, 'Remote control restarted. On for 12 hours.');
       }
       if (what === 'replies') {
