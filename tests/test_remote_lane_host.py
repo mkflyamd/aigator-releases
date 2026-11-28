@@ -190,7 +190,7 @@ async def test_a_session_live_in_another_terminal_is_never_resumed_a_second_time
     calls.live_labels = {"pty-7": {"agent": "claude", "session_id": "vendor-1"}}
     with pytest.raises(HostError, match="open in another terminal") as err:
         await wake(calls, "pty-1", PROJECT, LABELS)
-    assert not err.value.permanent
+    assert err.value.permanent
     assert calls.resumed == []
     assert agent_wake.claim("vendor-1")
 

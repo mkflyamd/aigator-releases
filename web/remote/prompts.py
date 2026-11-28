@@ -39,11 +39,16 @@ _SPLIT_RE = re.compile(r"[^A-Za-z0-9]+|(?<=[a-z])(?=[A-Z])")
 
 ALLOW, DENY = "allow", "deny"
 ALLOWED, DENIED = "Allowed once.", "Denied."
+CANCELLED = "Cancelled. The session is still running."
+ANSWER_SENT = "Sent your answer."
+ANSWER_MAX_CHARS = 500
 ALREADY_ANSWERED = "That was already answered in AI Gator."
 OPEN_APP_COMMAND = "Open AI Gator to review the whole command before allowing it."
 OPEN_APP_DRAFT = "Open AI Gator to review it and send."
 OPEN_APP_QUESTION = "Open AI Gator to answer this one."
 OPEN_APP_PERMISSION = "Open AI Gator to review and answer this permission."
+ESC_OPTION = "`esc` to cancel it. The session keeps running."
+TYPE_OPTION = "Or type your own answer."
 
 
 @dataclass(frozen=True)
@@ -192,8 +197,14 @@ def _digits(count: int) -> str:
     return f"1 to {count}" if count > 2 else "1 or 2"
 
 
-def resolve(prompt: Prompt, text: str) -> Answer | Refused:
-    """The keys that answer `prompt` with the user's reply, or why the reply is not an answer."""
+def interrupt(prompt: Prompt) -> Answer:
+    """Escape: cancels whatever the agent is asking and ends its turn. The session itself stays up."""
+    return Answer((ESCAPE,), CANCELLED, ends_turn=True)
+
+
+def resolve(prompt: Prompt, text: str, free_text: bool = False) -> Answer | Refused:
+    """The keys that answer `prompt` with the user's reply, or why the reply is not an answer. With `free_text`,
+    a reply to a question that is not one of its choices is typed as the question's own "other" answer."""
     reply = " ".join(text.split())
     if prompt.kind == PERMISSION:
         word = reply.lower().rstrip(".!")
@@ -213,6 +224,8 @@ def resolve(prompt: Prompt, text: str) -> Answer | Refused:
     for number, choice in enumerate(prompt.choices, 1):
         if reply.lower() == choice.label.lower():
             return _pick(prompt, number)
+    if free_text and reply:
+        return Answer((*(DOWN,) * len(prompt.choices), reply[:ANSWER_MAX_CHARS], ENTER), ANSWER_SENT)
     return Refused(f"pick {_digits(len(prompt.choices))}, or answer it in AI Gator.")
 
 
@@ -275,10 +288,10 @@ def _options(prompt: Prompt) -> list[str]:
         out = []
         for number, choice in enumerate(prompt.choices, 1):
             out.append(f"`{number}` {choice.label}" + (f": {choice.description}" if choice.description else ""))
-        return out
+        return [*out, TYPE_OPTION]
     if prompt.kind == PERMISSION_APP:
-        return [OPEN_APP_PERMISSION]
-    return [OPEN_APP_QUESTION]
+        return [OPEN_APP_PERMISSION, ESC_OPTION]
+    return [OPEN_APP_QUESTION, ESC_OPTION]
 
 
 def label(session: str, project: str) -> str:
@@ -302,7 +315,7 @@ def waiting_message(
     after = f", waiting {elapsed_words(waited)}" if waited is not None else ""
     head = f"Not sent: {refused}" if refused else f"Needs you: {prompt.lead}{after}."
     if prompt.kind == DRAFT:
-        return _tidy(f"{tag} {head}\n{OPEN_APP_DRAFT}")
+        return _tidy(f"{tag} {head}\n\n{next_block([OPEN_APP_DRAFT, ESC_OPTION])}")
     body = _facts(prompt) if prompt.kind in (PERMISSION, PERMISSION_APP) else ([prompt.question] if prompt.question else [])
     if prompt.kind == APP_ONLY and prompt.why_app:
         body.append(f"This one cannot be answered here: {prompt.why_app}.")

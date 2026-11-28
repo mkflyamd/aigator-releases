@@ -497,7 +497,7 @@ AGENT_KEYS = {
     "status_sleeping", "status_failed", "waking", "wake_failed", "lane_lost",
 }
 TIPS_KEYS = {"greeting", "help_open", "help_closed"}
-NO_NEXT_KEYS = {"done", "waiting_open", "progress", "list_idle", "status"}
+NO_NEXT_KEYS = {"done", "done_long", "waiting_open", "progress", "list_idle", "status"}
 QUIET_NOTE = "It also closes after 30 minutes of quiet."
 
 
@@ -532,11 +532,11 @@ def _deck():
         "status": commands.session_status("budget", commands.WORKING, 1000.0, 2000.0),
         "working": commands.working("budget", "main", False),
         "progress": commands.progress("budget", 130),
-        "done": commands.agent_result("Claude", "budget", "Done.", "Two files are open."),
-        "done_empty": commands.agent_result("Claude", "budget", "Done.", ""),
-        "done_long": commands.agent_result("Claude", "budget", "Done.", "Outcome. " + "word " * 2000),
-        "waiting_choices": commands.agent_result("Claude", "budget", "Waiting for your answer.", question, True),
-        "waiting_open": commands.agent_result("Claude", "budget", "Waiting for your answer.", "Which?", True),
+        "done": commands.agent_result("Claude", "budget", "Done.", "Two files are open.")[0],
+        "done_empty": commands.agent_result("Claude", "budget", "Done.", "")[0],
+        "done_long": commands.agent_result("Claude", "budget", "Done.", "Outcome. " + "word " * 2000)[0],
+        "waiting_choices": commands.agent_result("Claude", "budget", "Waiting for your answer.", question, True)[0],
+        "waiting_open": commands.agent_result("Claude", "budget", "Waiting for your answer.", "Which?", True)[0],
         "agent_stopped": commands.agent_stopped("budget"),
         "agent_exited": commands.agent_exited("budget"),
         "list_sleeping": commands.session_list([("budget", "Budget", commands.SLEEPING, 0.0, "")]),
@@ -731,7 +731,7 @@ async def test_everything_a_whole_session_posts_carries_the_prefix_and_a_next_bl
         for p in w.channel.posted
         if p.startswith(_BASE + " - ") and "Next:" not in p and "Working since" not in p
     ]
-    assert agent_replies == [commands.agent_result("Claude", "budget", "Waiting for your answer.", "Which one?", True, project="Budget")]
+    assert agent_replies == [commands.agent_result("Claude", "budget", "Waiting for your answer.", "Which one?", True, project="Budget")[0]]
     no_next = [p for p in w.channel.posted if "\n\nNext:\n" not in p]
     assert all(p.startswith(_BASE + " - ") or p.startswith(_BASE + "] 1 session") for p in no_next)
 

@@ -46,11 +46,12 @@ async def test_known_token_shapes_in_the_last_assistant_message_are_redacted(mon
     assert "ghp_" + "a" * 30 not in text
 
 
-async def test_redacted_text_still_gets_the_3500_character_truncation(monkeypatch):
-    host = _host_with_reply(monkeypatch, f"{FAKE_KEY} " + "x" * 5000)
-    posted = agent_result("Claude", "demo", "Done.", await host.last_message("pty-1"))
-    assert FAKE_KEY not in posted
-    assert "Trimmed," in posted
+async def test_redacted_text_is_still_split_into_parts(monkeypatch):
+    host = _host_with_reply(monkeypatch, f"{FAKE_KEY} " + "x " * 3000)
+    parts = agent_result("Claude", "demo", "Done.", await host.last_message("pty-1"))
+    assert len(parts) == 2
+    assert all(FAKE_KEY not in part for part in parts)
+    assert "[REDACTED]" in parts[0]
 
 
 async def test_a_transcript_that_catches_up_after_the_stop_hook_is_waited_for(monkeypatch):

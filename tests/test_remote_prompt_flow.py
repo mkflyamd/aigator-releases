@@ -104,14 +104,14 @@ async def test_a_number_picks_that_menu_row(w):
     assert w.channel.posted[-1] == "[\U0001F40A Gator - budget - Budget] Got it: Blue."
 
 
-async def test_typed_words_are_not_typed_into_a_question_and_it_keeps_waiting(w):
+async def test_typed_words_answer_a_question_as_its_own_answer(w):
     await opened(w)
     await say(w, "run the tests")
     await show(w, "pty-1", ASK_USER_QUESTION)
     await say(w, "green please")
-    assert w.host.typed == []
-    assert "Not sent: pick 1 or 2, or answer it in AI Gator." in w.channel.posted[-1]
-    assert w.service.list()[0].waiting
+    assert w.host.typed == [("pty-1", (prompts.DOWN, prompts.DOWN, "green please", prompts.ENTER))]
+    assert w.channel.posted[-1] == "[\U0001F40A Gator - budget - Budget] Sent your answer."
+    assert not w.service.list()[0].waiting
 
 
 async def test_a_reply_that_is_not_an_answer_to_a_permission_says_what_is_asked_and_types_nothing(w):
@@ -143,7 +143,8 @@ async def test_a_draft_cannot_be_answered_from_chat(w):
     await say(w, "run the tests")
     await show(w, "pty-1", {"tool_name": "mcp__outlook__send_email", "tool_input": {"to": "a@example.com"}})
     assert w.channel.posted[-1] == (
-        "[\U0001F40A Gator - budget - Budget] Needs you: a draft to review.\nOpen AI Gator to review it and send."
+        "[\U0001F40A Gator - budget - Budget] Needs you: a draft to review.\n\n"
+        "Next:\n• Open AI Gator to review it and send.\n• `esc` to cancel it. The session keeps running."
     )
     await say(w, "allow")
     assert w.host.typed == []

@@ -407,7 +407,7 @@ async def test_a_refusal_is_said_and_does_not_count(pw):
     await baselined(pw)
     pw.gateway.refuse = "It is set to run without asking for permission, so I will not message it."
     await pw.say("@gator MergeBrain hi")
-    assert pw.channel.posted == [commands.peer_refused("MergeBrain", pw.gateway.refuse)]
+    assert pw.channel.posted == [commands.peer_refused("MergeBrain", pw.gateway.refuse, True)]
     pw.gateway.refuse = None
     await pw.say("@gator MergeBrain hi")
     assert len(pw.gateway.sent) == 1

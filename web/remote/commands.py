@@ -14,12 +14,13 @@ from remote import settings
 
 TRIGGER_RE = re.compile(r"^\s*@gator(?:\s+(.*))?$", re.IGNORECASE | re.DOTALL)
 GREETING_WORDS = ("hi", "hello", "hey", "start")
-RESERVED = ("list", "status", "stop", "help", "bye", *GREETING_WORDS)
+INTERRUPT_WORDS = ("esc", "escape")
+RESERVED = ("list", "status", "stop", "help", "bye", *INTERRUPT_WORDS, *GREETING_WORDS)
 WINDOW_SECONDS = 30 * 60.0
 NAME_MAX_CHARS = 40
 TEXT_MAX_BYTES = 4096
 REPLY_MAX_CHARS = 3500
-LEAD_MAX_CHARS = 200
+REPLY_CEILING_CHARS = 60000
 UNTAGGED_MAX_CHARS = 1500
 EVERYTHING_GOES_TO_AGENT = "Everything you type here goes to the agent."
 TOO_LONG_BODY = "That message is too long to run from this chat, so it was not sent."
@@ -51,7 +52,7 @@ LEADING_MENTION_RE =re.compile(r"^@([\w.-]+):?(?:\s+(.*))?$", re.DOTALL)
 
 @dataclass(frozen=True)
 class Command:
-    kind: str  # send | list | status | stop | stop_all | help | open | bye | answer
+    kind: str  # send | list | status | stop | stop_all | help | open | bye | answer | interrupt
     name: str | None = None
     text: str = ""
     reply_to: str | None = None  # answer: the id of the posted prompt message this reply is for
@@ -81,8 +82,8 @@ def parse(message: str) -> Command | None:
     key = word.lower()
     if key == "stop" and tail.lower() == "all":
         return Command("stop_all")
-    if key in ("status", "stop"):
-        return Command(key, name=tail.split()[0].lower() if tail else None)
+    if key in ("status", "stop", *INTERRUPT_WORDS):
+        return Command("interrupt" if key in INTERRUPT_WORDS else key, name=tail.split()[0].lower() if tail else None)
     if key in ("list", "help"):
         return Command(key)
     return Command("send", text=rest)
@@ -372,7 +373,7 @@ def peer_exited(name: str, project: str) -> str:
     )
 
 
-def peer_result(name: str, project: str, text: str, waiting: bool = False, ref: str | None = None) -> str:
+def peer_result(name: str, project: str, text: str, waiting: bool = False, ref: str | None = None) -> list[str]:
     """Another agent's answer to a message sent from chat, under its own name. `text` has already been
     through the same redaction as Remote's own replies. `ref` is what the person types to reach it."""
     return agent_result(
@@ -391,10 +392,12 @@ def which_prompt() -> str:
     return system_reply("Several sessions are waiting on you. Which one?", ["Reply to the message of the one you mean."])
 
 
-def peer_refused(name: str, reason: str) -> str:
-    return system_reply(
-        f"Did not send to {peer_label(name)}. {reason}", ["Send it again when that has changed.", "`list` to see the other agents."]
-    )
+def peer_refused(name: str, reason: str, permanent: bool = False) -> str:
+    """Nothing was typed. A refusal that time can mend says to send again; one it cannot only points at `list`."""
+    options = ["`list` to see the agents you can message."]
+    if not permanent:
+        options.insert(0, "Send it again in a moment.")
+    return system_reply(f"Did not send to {peer_label(name)}. {reason}", options)
 
 
 def peer_limit(name: str, limit: int, wait_seconds: float) -> str:
@@ -417,6 +420,15 @@ def which_session(names: list[str]) -> str:
     """Several sessions are running and none, or more than one, is waiting: ask which one."""
     options = [f"`{name}: your message`" for name in names[:CHOICES_SHOWN]] + ["`list` to see them all."]
     return system_reply("Which session?", options)
+
+
+def nothing_to_cancel() -> str:
+    return system_reply("Nothing is waiting on a prompt, so there is nothing to cancel.", ["`status` to see what each session is doing."])
+
+
+def which_to_cancel(names: list[str]) -> str:
+    options = [f"`esc {name}`" for name in names[:CHOICES_SHOWN]]
+    return system_reply("Several sessions are waiting on a prompt. Which one should be cancelled?", options)
 
 
 def which_to_stop(names: list[str]) -> str:
@@ -505,7 +517,7 @@ def waking(session: str, *, project: str | None = None, several: bool = False) -
     """Posted the moment a message reaches a sleeping session, before the wake finishes."""
     return agent_reply(
         session,
-        "Waking up. Your message goes in once it is ready.",
+        "Waking this session. Your message goes in when it is up, so no need to resend.",
         [f"`status {session}` to check on it."],
         project=project,
         several=several,
@@ -567,11 +579,15 @@ def already_has_session(session: str, *, project: str | None = None, several: bo
     )
 
 
-def send_failed(session: str, reason: str, *, project: str | None = None, several: bool = False) -> str:
-    return agent_reply(
-        session, f"Nothing was sent.\n{reason}", [f"Send your message again to retry, or `stop {session}`."],
-        project=project, several=several,
+def send_failed(
+    session: str, reason: str, *, permanent: bool = False, project: str | None = None, several: bool = False
+) -> str:
+    option = (
+        f"`stop {session}`, then send a message to start a new session."
+        if permanent
+        else f"Send your message again to retry, or `stop {session}`."
     )
+    return agent_reply(session, f"Nothing was sent.\n{reason}", [option], project=project, several=several)
 
 
 def duplicate_lane(session: str, *, project: str | None = None, several: bool = False) -> str:
@@ -622,26 +638,6 @@ def agent_exited(session: str, *, project: str | None = None, several: bool = Fa
     )
 
 
-def _lead(body: str) -> str:
-    """The agent's first sentence, at most LEAD_MAX_CHARS, cut at a word boundary."""
-    first = re.split(r"(?<=[.?!])\s|\n", body.strip(), maxsplit=1)[0]
-    if len(first) <= LEAD_MAX_CHARS:
-        return first
-    return first[:LEAD_MAX_CHARS].rsplit(" ", 1)[0]
-
-
-def _first_part(body: str) -> str:
-    """Up to REPLY_MAX_CHARS of body, cut at a paragraph or line boundary in the last half of
-    the window, else at any whitespace, never inside a word."""
-    window = body[:REPLY_MAX_CHARS]
-    for floor in (REPLY_MAX_CHARS // 2, 1):
-        for boundary in ("\n\n", "\n", " "):
-            cut = window.rfind(boundary)
-            if cut >= floor:
-                return window[:cut].rstrip()
-    return window
-
-
 def _choices(question: str) -> list[str]:
     """Exactly two short numbered or lettered options at the end of an agent's question. Anything that
     would read as a Gator command when typed back (stop, list, ...) is not offered."""
@@ -659,6 +655,25 @@ def _choices(question: str) -> list[str]:
     return run
 
 
+def _split(body: str) -> list[str]:
+    """The body in pieces of at most REPLY_MAX_CHARS, each cut at a paragraph boundary when one is in reach, else
+    at a line, else at whitespace, never inside a word. A code fence left open by a cut is closed and opened again."""
+    pieces: list[str] = []
+    rest = body
+    while len(rest) > REPLY_MAX_CHARS:
+        window = rest[:REPLY_MAX_CHARS]
+        cuts = [window.rfind(boundary) for boundary in ("\n\n", "\n", " ")]
+        cut = next((c for c in cuts if c > REPLY_MAX_CHARS // 2), max(cuts))
+        cut = cut if cut > 0 else REPLY_MAX_CHARS
+        piece, rest = rest[:cut].rstrip(), rest[cut:].lstrip()
+        if piece.count("```") % 2:
+            piece += "\n```"
+            rest = "```\n" + rest
+        pieces.append(piece)
+    pieces.append(rest)
+    return pieces
+
+
 def agent_result(
     agent: str,
     session: str,
@@ -670,33 +685,40 @@ def agent_result(
     project: str | None = None,
     prefix: str | None = None,
     reply_to: str | None = None,
-) -> str:
-    """A turn's outcome. An empty headline is a quick answer: the prefix and the agent's words, nothing
-    else. Otherwise the headline, then the agent's words on the next line. Over REPLY_MAX_CHARS the
-    headline carries a one-sentence lead and the reply ends with a trim line, all in one message. A
-    question ends with its choices as options; an empty or trimmed reply ends with what the user can do."""
+) -> list[str]:
+    """A turn's outcome as the messages to post, in order. An empty headline is a quick answer: the prefix and the
+    agent's words, nothing else. Otherwise the headline, then the agent's words on the next line. A reply over
+    REPLY_MAX_CHARS is never cut: it goes out in parts, each with the prefix and `(n/N)` ending its first line.
+    Only a reply past REPLY_CEILING_CHARS stops, and says so in its last part. A question ends with its choices as
+    options; an empty reply ends with what the user can do."""
     prefix = prefix or agent_prefix(session, project, several)
     body = _tidy(text)
-    open_tab = f"Open the {agent} tab in AI Gator"
     answer = f"`{reply_to}your answer` to answer it." if reply_to else "Type your answer."
     keep_going = f"`{reply_to}your message` to keep going." if reply_to else "Reply here to keep going in this session."
     if not body:
-        options = [f"{open_tab} to see it.", answer if waiting else keep_going]
-        return _tidy(f"{prefix} {headline or 'Done.'} No text came back.\n\n{next_block(options)}")
-    if len(body) <= REPLY_MAX_CHARS:
-        if not headline:
-            return _tidy(f"{prefix} {body}")
-        if not waiting:
-            return _tidy(f"{prefix} {headline}\n{body}")
-        tag = reply_to if reply_to is not None else (f"{session}: " if several else "")
-        options = [f"`{tag}{c}`" for c in _choices(body)]
-        tail = f"\n\n{next_block(options)}" if options else ""
-        return _tidy(f"{prefix} {headline}\n{body}{tail}")
-    shown = _first_part(body)
-    more = len(body) - len(shown)
-    if shown.count("```") % 2:
-        shown += "\n```"
-    options = [f"{open_tab} for the full reply.", answer if waiting else (keep_going if reply_to else "Reply here to keep going.")]
-    return _tidy(
-        f"{prefix} {headline or 'Done.'} {_lead(body)}\n\n{shown}\n\nTrimmed, {more} more characters.\n\n{next_block(options)}"
-    )
+        options = [f"Open the {agent} tab in AI Gator to see it.", answer if waiting else keep_going]
+        return [_tidy(f"{prefix} {headline or 'Done.'} No text came back.\n\n{next_block(options)}")]
+    ceiling = len(body) > REPLY_CEILING_CHARS
+    if ceiling:
+        body = body[:REPLY_CEILING_CHARS].rsplit(" ", 1)[0]
+    pieces = _split(body)
+    if ceiling:
+        pieces[-1] += (
+            f"\n\nThis reply is longer than {REPLY_CEILING_CHARS:,} characters, so the rest was not sent."
+            f" Open the {agent} tab in AI Gator for all of it."
+        )
+    tag = reply_to if reply_to is not None else (f"{session}: " if several else "")
+    options = [f"`{tag}{c}`" for c in _choices(body)] if waiting and headline else []
+    tail = f"\n\n{next_block(options)}" if options else ""
+    count = len(pieces)
+    parts = []
+    for number, piece in enumerate(pieces, 1):
+        more = f" ({number}/{count})" if count > 1 else ""
+        if headline:
+            head = f"{prefix} {headline}{more}\n{piece}"
+        elif count > 1:
+            head = f"{prefix}{more}\n{piece}"
+        else:
+            head = f"{prefix} {piece}"
+        parts.append(_tidy(head + (tail if number == count else "")))
+    return parts

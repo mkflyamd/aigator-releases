@@ -412,17 +412,19 @@ class RemoteService:
     async def answer(self, session_id: str, text: str, sent_at: float = 0.0) -> prompts.Answer:
         return await self.answer_session(self.get(session_id), text, sent_at)
 
-    async def answer_session(self, session: Session, text: str, sent_at: float = 0.0) -> prompts.Answer:
+    async def answer_session(
+        self, session: Session, text: str, sent_at: float = 0.0, *, interrupt: bool = False, free_text: bool = False
+    ) -> prompts.Answer:
         """Types the reply into the prompt the session is showing, for a session Remote started, one it watches
         after messaging it, or a terminal it only looks at. A reply written before that prompt was first seen
         was meant for an earlier one, and is not typed; the host types nothing unless the same prompt is
-        still the one on screen."""
+        still the one on screen. `interrupt` cancels the prompt with Escape instead of answering it."""
         shown = session.prompt
         if shown is None:
             raise RemoteError("That session is not waiting on a prompt.")
         if 0 < sent_at < session.prompt_seen_at:
             raise PromptRefused(shown, "that was for an earlier question.")
-        result = prompts.resolve(shown, text)
+        result = prompts.interrupt(shown) if interrupt else prompts.resolve(shown, text, free_text)
         if isinstance(result, prompts.Refused):
             raise PromptRefused(shown, result.reason)
         try:
@@ -523,7 +525,7 @@ class RemoteService:
                 if cancelled():
                     raise Aborted(session.short) from exc
                 if isinstance(exc, OpenElsewhere):
-                    raise Elsewhere(str(exc)) from exc
+                    raise Elsewhere(str(exc), True) from exc
                 if exc.permanent:
                     session.state, session.failure = FAILED, str(exc)
                     self._persist(session)

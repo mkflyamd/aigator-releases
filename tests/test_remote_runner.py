@@ -614,7 +614,7 @@ async def test_a_question_from_the_agent_is_forwarded(w):
     await w.runner.tick()
     assert w.channel.posted[-1] == commands.agent_result(
         "Claude", "budget", "Waiting for your answer.", "Delete the folder?", waiting=True, project="Budget"
-    )
+    )[0]
 
 
 async def test_an_agent_that_exits_is_reported(w):
@@ -631,7 +631,7 @@ async def test_a_finished_turn_with_no_text_is_never_a_bare_done(w):
     w.host.states["pty-1"] = {"state": "idle", "at": w.clock.now + 5}
     w.host.last["pty-1"] = ""
     await w.runner.tick()
-    assert w.channel.posted[-1] == commands.agent_result("Claude", "budget", "Done.", "", project="Budget")
+    assert w.channel.posted[-1] == commands.agent_result("Claude", "budget", "Done.", "", project="Budget")[0]
     assert "No text came back." in w.channel.posted[-1]
 
 

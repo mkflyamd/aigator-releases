@@ -48,6 +48,8 @@ RETRY_POST_SECONDS = 60.0
 PROMPT_HOLD_SECONDS = 2 * 3600.0
 # Why an open terminal cannot be messaged at all, as opposed to not right now: the lane then starts afresh.
 NOT_MESSAGEABLE = frozenset(("opted_out", "unsafe_mode", "unknown_mode", "switched_off", "admin_denied"))
+# Refusals that a moment can mend; every other code stays until someone changes the other agent's setup.
+TRANSIENT_REFUSALS = frozenset(("not_ready", "busy", "failed"))
 _TAGS = ("gator", AGENT_LABEL.lower())
 _RESERVED_NAMES = frozenset((*commands.RESERVED, "all", *_TAGS))
 
@@ -161,6 +163,11 @@ class RemoteRunner:
         """The id of the posted message, or "" when nothing was posted or the channel gave no id."""
         return await self._try_post(text) or ""
 
+    async def _post_all(self, parts: list[str]) -> None:
+        """The parts of one reply, in order."""
+        for part in parts:
+            await self._post(part)
+
     async def _try_post(self, text: str) -> str | None:
         """The id of the posted message ("" when the channel posted but gave no id), or None when it did not post."""
         try:
@@ -235,9 +242,13 @@ class RemoteRunner:
         if self._state.find_prompt_message(self._channel.name, message.reply_to, self._clock()) is None:
             return None
         typed = commands.parse(message.text)
+        if typed is not None and typed.kind == "interrupt":
+            return dataclasses.replace(typed, reply_to=message.reply_to)
         if typed is not None and typed.kind != "send":
             return typed
         text = typed.text if typed else message.text.strip()
+        if text.lower().rstrip(".!") in commands.INTERRUPT_WORDS:
+            return commands.Command("interrupt", reply_to=message.reply_to)
         return commands.Command("answer", text=text, reply_to=message.reply_to) if text else None
 
     async def _untagged(self, message: InboundMessage) -> commands.Command | None:
@@ -346,6 +357,8 @@ class RemoteRunner:
             await self._stop_all()
         elif kind == "answer":
             await self._answer_quoted(command)
+        elif kind == "interrupt":
+            await self._interrupt(command)
         else:
             await self._send(command.text, command.tagged, command.sent_at)
 
@@ -449,7 +462,9 @@ class RemoteRunner:
         try:
             delivery = await self._peers.deliver(peer, text, f"{self._channel.name.title()} chat")
         except PeerRefused as exc:
-            raise Refusal(commands.peer_refused(peer.name, exc.reason)) from exc
+            raise Refusal(
+                commands.peer_refused(peer.name, exc.reason, permanent=exc.code not in TRANSIENT_REFUSALS)
+            ) from exc
         project = project or self._service.default_project()
         if project is not None:
             try:
@@ -550,16 +565,18 @@ class RemoteRunner:
         except Refusal:
             raise
         except RemoteError as exc:
-            raise Refusal(self._lane_copy(commands.send_failed, session, str(exc))) from exc
+            raise Refusal(
+                self._lane_copy(commands.send_failed, session, str(exc), permanent=exc.permanent)
+            ) from exc
         self._state.clear_prompt_messages(self._channel.name, session.id)
         self._begin(session)
 
-    async def _answer(self, session: Session, text: str, sent_at: float = 0.0) -> None:
+    async def _answer(self, session: Session, text: str, sent_at: float = 0.0, *, interrupt: bool = False) -> None:
         """A reply to a session that is showing a permission or a question: typed as that answer, or
-        not typed at all, and said so."""
+        not typed at all, and said so. `interrupt` cancels the prompt with Escape instead."""
         short, project, prefix = session.short, session.project.name, self._prefix(session)
         try:
-            result = await self._service.answer_session(session, text, sent_at)
+            result = await self._service.answer_session(session, text, sent_at, interrupt=interrupt, free_text=True)
         except PromptRefused as exc:
             raise Refusal(
                 prompts.waiting_message(short, project, exc.prompt, refused=exc.reason, prefix=prefix)
@@ -578,6 +595,28 @@ class RemoteRunner:
     async def _answer_quoted(self, command: commands.Command) -> None:
         """The reply to one prompt message goes to that message's session, and only while that prompt is the
         one the session is showing. Otherwise nothing is typed and the user is told it was already answered."""
+        await self._answer(self._quoted_session(command), command.text)
+
+    async def _interrupt(self, command: commands.Command) -> None:
+        """`esc`: cancels the prompt a session is showing and keeps the session. A quote-reply names its prompt;
+        otherwise the one waiting session, or the one named."""
+        if command.reply_to:
+            await self._answer(self._quoted_session(command), "", interrupt=True)
+            return
+        waiting = [
+            s
+            for s in [*self._service.list(), *self._service.watched(ADOPTED), *self._app.values()]
+            if s.waiting and s.prompt is not None
+        ]
+        if command.name:
+            waiting = [s for s in waiting if command.name in (s.short.lower(), s.name.lower())]
+        if not waiting:
+            raise Refusal(commands.nothing_to_cancel())
+        if len(waiting) > 1:
+            raise Refusal(commands.which_to_cancel([s.short for s in waiting]))
+        await self._answer(waiting[0], "", command.sent_at, interrupt=True)
+
+    def _quoted_session(self, command: commands.Command) -> Session:
         found = self._state.find_prompt_message(self._channel.name, command.reply_to or "", self._clock())
         record, is_open = found if found else ({}, False)
         session = self._tracked(record.get("session_id", ""))
@@ -590,7 +629,7 @@ class RemoteRunner:
                     session.short, session.project.name, prompts.ALREADY_ANSWERED, prefix=self._prefix(session)
                 )
             )
-        await self._answer(session, command.text)
+        return session
 
     def _prefix(self, session: Session) -> str:
         """The label of a prompt message: Remote's own sessions use the default, another agent its name, a
@@ -771,7 +810,7 @@ class RemoteRunner:
             await self._post(str(exc))
             return
         except RemoteError as exc:
-            await self._post(self._lane_copy(commands.send_failed, session, str(exc)))
+            await self._post(self._lane_copy(commands.send_failed, session, str(exc), permanent=exc.permanent))
             return
         await self._post(self._lane_copy(commands.wake_failed, session, "The session changed while it was waking."))
 
@@ -799,7 +838,7 @@ class RemoteRunner:
             waiting = commands.asks_a_question(event.text)
             session.waiting = waiting
             ref = self._peer_ref(session)
-            await self._post(commands.peer_result(session.name, project, event.text, waiting, ref))
+            await self._post_all(commands.peer_result(session.name, project, event.text, waiting, ref))
         elif event.kind == "detached" and event.text:
             await self._post(commands.peer_exited(session.name, project))
 
@@ -828,7 +867,7 @@ class RemoteRunner:
                 headline = ""
             else:
                 headline = commands.done_headline(self._clock() - turn.started)
-            await self._post(
+            await self._post_all(
                 commands.agent_result(AGENT_LABEL, short, headline, event.text, waiting, several, project=project)
             )
         elif event.kind == "failed":

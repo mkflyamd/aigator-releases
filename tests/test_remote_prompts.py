@@ -55,7 +55,7 @@ def test_the_captured_ask_user_question_is_a_numbered_question():
     assert prompts.waiting_message("budget", "Budget", prompt) == (
         "[\U0001F40A Gator - budget - Budget] Needs you: a question.\n"
         "Which color do you prefer?\n\n"
-        "Next:\n• `1` Red: Choose red\n• `2` Blue: Choose blue"
+        "Next:\n• `1` Red: Choose red\n• `2` Blue: Choose blue\n• Or type your own answer."
     )
 
 
@@ -131,7 +131,8 @@ def test_a_draft_tool_is_not_answerable_and_points_to_the_app():
         prompt = parsed({"tool_name": tool, "tool_input": {"body": "hello"}})
         assert prompt.kind == prompts.DRAFT and not prompt.answerable
         assert prompts.waiting_message("a", "p", prompt) == (
-            "[\U0001F40A Gator - a - p] Needs you: a draft to review.\nOpen AI Gator to review it and send."
+            "[\U0001F40A Gator - a - p] Needs you: a draft to review.\n\n"
+            "Next:\n• Open AI Gator to review it and send.\n• `esc` to cancel it. The session keeps running."
         )
         assert isinstance(prompts.resolve(prompt, "allow"), prompts.Refused)
         assert isinstance(prompts.resolve(prompt, "1"), prompts.Refused)
@@ -174,7 +175,7 @@ def test_an_app_only_permission_still_shows_what_it_is_and_points_to_the_app():
     assert prompts.waiting_message("a", "p", prompt) == (
         "[\U0001F40A Gator - a - p] Needs you: permission.\n"
         "Tool: WebFetch\nURL: https://example.com/docs\n\n"
-        "Next:\n• Open AI Gator to review and answer this permission."
+        "Next:\n• Open AI Gator to review and answer this permission.\n• `esc` to cancel it. The session keeps running."
     )
 
 

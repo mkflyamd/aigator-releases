@@ -356,7 +356,7 @@ class LocalPtyHost:
             except pty_client.HostError as exc:
                 raise HostError(HOST_UNREACHABLE_MESSAGE) from exc
             if elsewhere:
-                raise OpenElsewhere(OPEN_ELSEWHERE_MESSAGE)
+                raise OpenElsewhere(OPEN_ELSEWHERE_MESSAGE, True)
             if cancelled():
                 raise HostError(WAKE_CANCELLED_MESSAGE)
 
@@ -374,7 +374,7 @@ class LocalPtyHost:
             await asyncio.to_thread(self._close_again, pty_id)
             raise HostError("The session could not be woken.") from exc
         if result["pty_session_id"] != pty_id:
-            raise OpenElsewhere(OPEN_ELSEWHERE_MESSAGE)
+            raise OpenElsewhere(OPEN_ELSEWHERE_MESSAGE, True)
         try:
             await self._wait_awake(pty_id, cancelled)
         except BaseException:
