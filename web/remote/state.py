@@ -184,19 +184,20 @@ class State:
             entry["prompt_messages"] = kept[-PROMPT_MESSAGES_KEEP:]
             self._save(data)
 
-    def clear_prompt_messages(self, channel: str, session_id: str) -> None:
+    def clear_prompt_messages(self, channel: str, session_id: str, keep_prompt_id: str = "") -> None:
+        """Forgets the prompt messages of a session, except the one for `keep_prompt_id`."""
         with self._lock:
             data = self._load()
             entry = self._channel(data, channel)
             before = entry.get("prompt_messages", [])
-            after = [m for m in before if not (isinstance(m, dict) and m.get("session_id") == session_id)]
+
+            def gone_one(m) -> bool:
+                return isinstance(m, dict) and m.get("session_id") == session_id and m.get("prompt_id") != keep_prompt_id
+
+            after = [m for m in before if not gone_one(m)]
             if len(after) != len(before):
                 closed_at = time.time()
-                gone = [
-                    {**m, "closed_at": closed_at}
-                    for m in before
-                    if isinstance(m, dict) and m.get("session_id") == session_id
-                ]
+                gone = [{**m, "closed_at": closed_at} for m in before if gone_one(m)]
                 entry["prompt_messages"] = after
                 entry["prompt_closed"] = [*entry.get("prompt_closed", []), *gone][-PROMPT_MESSAGES_KEEP:]
                 self._save(data)

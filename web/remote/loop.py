@@ -85,6 +85,7 @@ class RemoteLoop:
             if not self._restore_failing:
                 _log.warning("Remote control could not restore its sessions yet: %s", exc)
             self._restore_failing = True
+            self._runner.connection_failed(exc)
             return False
         self._restore_failing = False
         self._restored = True
@@ -124,8 +125,10 @@ class RemoteLoop:
             if not self._poll_failing:
                 _log.warning("Remote control poll failed: %s", exc)
             self._poll_failing = True
+            self._runner.connection_failed(exc)
             return
         self._poll_failing = False
+        await self._runner.connection_recovered()
         if self._need_online and live:
             self._need_online = False
             await self._runner.announce_online()

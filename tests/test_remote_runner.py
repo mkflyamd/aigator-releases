@@ -275,7 +275,7 @@ async def test_messages_sent_while_offline_run_once_when_fresh_and_are_skipped_w
         w.msg(103, "@gator fresh", age=14 * 60),
     )
     assert w.host.delivered == [("pty-1", "fresh")]
-    notice = [p for p in w.channel.posted if "Skipped" in p]
+    notice = [p for p in w.channel.posted if "Not sent" in p]
     assert notice == [commands.stale_skipped(2, 900)]
 
 
@@ -284,7 +284,7 @@ async def test_more_than_20_commands_in_10_minutes_are_rate_limited(w):
     for i in range(21):
         await w.feed(w.msg(101 + i, f"@gator msg {i}"))
     assert len(w.host.delivered) == 20
-    assert sum("Slow down" in p for p in w.channel.posted) == 1
+    assert sum("Not sent: too many" in p for p in w.channel.posted) == 21 - 20
 
 
 async def test_stop_all_still_works_after_the_rate_limit_is_hit(w):

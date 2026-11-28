@@ -76,9 +76,16 @@ def compute(state: State, clock: Callable[[], float] = time.time, config: dict |
             name = "on"
     else:
         name = blocker(config) or "off"
+    text = reason(name)
+    if name in ("on", "warn_1h", "warn_15m"):
+        for channel in channels:
+            down = state.channel_value(channel["name"], "connection") if channel["armed"] else None
+            if down:
+                name, text = "connection_failed", f"Cannot reach {channel['name'].title()}: {down['reason']}"
+                break
     return {
         "state": name,
-        "reason": reason(name),
+        "reason": text,
         "channels": channels,
         "armed_at": record["armed_at"] if window else None,
         "expires_at": record["deadline"] if record is not None else None,

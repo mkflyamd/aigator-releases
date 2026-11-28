@@ -431,7 +431,7 @@ async def test_a_newer_terminal_never_costs_a_sleeping_lane_its_saved_session(w)
     assert w.host.sleeping_ids == {"pty-1"}
     assert "pty-5" in w.host.alive_ids
     assert w.state.lanes("teams")["budget"]["state"] == "failed"
-    assert w.channel.posted[-1] == commands.lane_replaced(session.short, project="Budget")
+    assert commands.lane_replaced(session.short, project="Budget") in w.channel.posted
     assert sum(text == commands.lane_replaced(session.short, project="Budget") for text in w.channel.posted) == 1
     await w.feed(w.msg(103, "@gator again"))
     assert "stop budget" in w.channel.posted[-1]

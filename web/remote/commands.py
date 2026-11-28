@@ -23,8 +23,8 @@ REPLY_MAX_CHARS = 3500
 REPLY_CEILING_CHARS = 60000
 UNTAGGED_MAX_CHARS = 1500
 EVERYTHING_GOES_TO_AGENT = "Everything you type here goes to the agent."
-TOO_LONG_BODY = "That message is too long to run from this chat, so it was not sent."
-TOO_LONG_OPTIONS = ["Start it with `@gator` to send it anyway.", "Or shorten it and send it again."]
+TOO_LONG_BODY = f"Not sent: over {UNTAGGED_MAX_CHARS} characters."
+TOO_LONG_OPTIONS = [f"Add `@gator` to send up to {TEXT_MAX_BYTES}.", "Or shorten it and send it again."]
 ATTACHMENT_BODY = "Attachments are not sent from this chat."
 ATTACHMENT_OPTION = "Describe what you need in text, and send that."
 SETTINGS_SECTION = "Remote control"
@@ -222,21 +222,21 @@ def turns_off_soon(seconds: float) -> str:
 
 def not_armed() -> str:
     return system_reply(
-        "Remote control is not turned on.",
+        "Not sent: Remote control is not turned on.",
         [f"Open AI Gator, then Settings, then {SETTINGS_SECTION}, and switch it on."],
     )
 
 
 def timed_out_reply(seconds: float) -> str:
     return system_reply(
-        f"Remote control timed out after {in_words(seconds)}.",
+        f"Not sent: Remote control timed out after {in_words(seconds)}.",
         [f"Open AI Gator, then Settings, then {SETTINGS_SECTION}, and switch it on."],
     )
 
 
 def slow_down(wait_seconds: float) -> str:
     return system_reply(
-        "Slow down, that was too many messages at once.", [f"Wait {in_words(wait_seconds)}, then send it again."]
+        "Not sent: too many messages at once.", [f"Wait {in_words(wait_seconds)}, then send it again."]
     )
 
 
@@ -244,13 +244,25 @@ def stale_skipped(count: int, limit_seconds: float) -> str:
     one = count == 1
     what = "a message" if one else f"{count} messages"
     return system_reply(
-        f"Skipped {what} you sent while AI Gator was off, because it was more than {in_words(limit_seconds)} old.",
+        f"Not sent: {what} you sent while AI Gator was off, because {'it was' if one else 'they were'} "
+        f"more than {in_words(limit_seconds)} old.",
         ["Send it again if you still need it." if one else "Send them again if you still need them."],
     )
 
 
 def online() -> str:
     return system_reply("Online.", ["`@gator hi` to open a chat."])
+
+
+def restarted(running: int, asleep: int) -> str:
+    return system_reply(f"Gator restarted: {running} running, {asleep} asleep.", ["`list` to see them."])
+
+
+def reconnected(channel: str, seconds: float, reason: str) -> str:
+    return system_reply(
+        f"Back online. Gator could not reach {channel.title()} for {in_words(seconds)}: {reason}",
+        ["`list` to see what is running."],
+    )
 
 
 def error_reply(text: str) -> str:

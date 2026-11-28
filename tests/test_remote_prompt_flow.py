@@ -8,7 +8,7 @@ from remote.service import PROMPT_GRACE_SECONDS
 from remote.session_host import HostError
 from tests.test_remote_chat_window import MINUTE, WINDOW, opened, say, window_of
 from tests.test_remote_prompts import ASK_USER_QUESTION, BASH_PERMISSION
-from tests.test_remote_runner import BUDGET, OTHER, World
+from tests.test_remote_runner import BUDGET, OTHER, World, _finish
 
 
 @pytest.fixture
@@ -260,6 +260,9 @@ async def test_the_quiet_close_fires_once_nobody_is_waiting(w):
     await say(w, "run the tests")
     await show(w, "pty-1", BASH_PERMISSION)
     await say(w, "allow")
+    w.clock.now += 10
+    await _finish(w, "All green.")
+    assert any("All green." in p for p in w.channel.posted)
     w.channel.posted.clear()
     w.clock.now += WINDOW + 1
     await w.runner.tick()
@@ -328,7 +331,8 @@ def test_status_leaves_out_last_activity_when_it_is_the_same_minute():
 async def test_a_session_that_only_sounds_like_it_asked_does_not_keep_the_chat_open(w):
     await opened(w)
     await say(w, "run the tests")
-    w.service.list()[0].waiting = True
+    await _finish(w, "Which one do you want?")
+    assert w.service.list()[0].waiting
     w.channel.posted.clear()
     w.clock.now += WINDOW + 1
     await w.runner.tick()

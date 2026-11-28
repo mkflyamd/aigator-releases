@@ -22,6 +22,8 @@ from remote.peers import Peer, PeerDirectory, PeerRefused, addressable, resolve 
 from remote.master import Master
 from remote.service import (
     ADOPTED,
+    LIVE,
+    SLEEPING,
     Aborted,
     Asleep,
     Elsewhere,
@@ -106,7 +108,7 @@ class RemoteRunner:
         self._autosend_noticed = False
         self._window = ChatWindow(channel.name, state, clock)
         self._already_open = False
-        self._not_sent_noticed: set[str] = set()
+        self._attachment_noticed = False
         self._summarized: set[tuple[str, str]] = set()
         self._unsent: dict[tuple[str, str], float] = {}
         self._unrecorded: set[tuple[str, str]] = set()
@@ -145,6 +147,25 @@ class RemoteRunner:
 
     async def restore(self) -> None:
         await self._service.restore()
+        states = [s.state for s in self._service.list()]
+        if self.live and (LIVE in states or SLEEPING in states):
+            await self._post(commands.restarted(states.count(LIVE), states.count(SLEEPING)))
+
+    def connection_failed(self, exc: Exception) -> None:
+        """Remembers why the chat cannot be reached, for the Remote control pill and for the line said once it is back."""
+        reason = " ".join(str(exc).split())[:120] or type(exc).__name__
+        record = self._state.channel_value(self._channel.name, "connection") or {"since": self._clock()}
+        self._state.set_channel_value(self._channel.name, "connection", {**record, "reason": reason})
+
+    async def connection_recovered(self) -> None:
+        record = self._state.channel_value(self._channel.name, "connection")
+        if not record:
+            return
+        self._state.set_channel_value(self._channel.name, "connection", None)
+        if self.live:
+            await self._post(
+                commands.reconnected(self._channel.name, self._clock() - record["since"], record["reason"])
+            )
 
     async def shutdown(self) -> None:
         """Ends the background wakes before the backend goes down."""
@@ -228,7 +249,7 @@ class RemoteRunner:
         if command.kind == "open":
             self._already_open = self._window.open(message.created_at)
             if not self._already_open:
-                self._not_sent_noticed.clear()
+                self._attachment_noticed = False
         elif command.kind not in ("stop_all", "bye"):
             self._window.extend()
         await self._run(dataclasses.replace(command, sent_at=message.created_at))
@@ -262,13 +283,14 @@ class RemoteRunner:
         if not text or LEGACY_CODE_RE.match(message.text):
             return None
         mention = commands.LEADING_MENTION_RE.match(text)
-        if mention and mention.group(1).lower() not in _TAGS and self._service.resolve(mention.group(1)) is None:
+        if mention and mention.group(1).lower() != "gator" and self._service.resolve(mention.group(1)) is None:
             return None
         if message.attachments:
-            await self._note_not_sent(message, "attachment", commands.attachment_not_sent)
+            if not self._attachment_noticed and await self._note_not_sent(message, commands.attachment_not_sent):
+                self._attachment_noticed = True
             return None
         if len(text) > commands.UNTAGGED_MAX_CHARS:
-            await self._note_not_sent(message, "too long", commands.too_long)
+            await self._note_not_sent(message, commands.too_long)
             return None
         command = commands.parse(f"@gator {text}")
         return dataclasses.replace(command, tagged=False) if command else None
@@ -288,26 +310,27 @@ class RemoteRunner:
         self._not_armed_noticed = key
         await self._post(commands.not_armed() if record is None else commands.timed_out_reply(master_window.ARM_SECONDS))
 
-    async def _note_not_sent(self, message: InboundMessage, reason: str, reply: Callable[[], str]) -> None:
-        """One plain line per reason per window, however many messages are held back."""
-        if reason in self._not_sent_noticed or not self.live:
-            return
-        if self._clock() - message.created_at > limit(self._stale):
-            return
-        self._not_sent_noticed.add(reason)
+    async def _note_not_sent(self, message: InboundMessage, reply: Callable[[], str]) -> bool:
+        if not self.live or self._clock() - message.created_at > limit(self._stale):
+            return False
         await self._post(reply())
+        return True
 
     def _anyone_waiting(self) -> bool:
-        """True while some session shows a prompt, for at most PROMPT_HOLD_SECONDS each. A session that only
-        sounds like it asked something has no prompt and does not keep the chat open."""
+        """True while some session shows a prompt or is working on a request, for at most PROMPT_HOLD_SECONDS
+        each. A session that only sounds like it asked something has no prompt and does not keep the chat open."""
         now = self._clock()
         holds, held = {}, False
         for session in self._service.list():
-            if session.prompt is None:
+            if session.prompt is not None:
+                marker = session.prompt.id
+            elif session.awaiting_since is not None and session.state == LIVE:
+                marker = f"turn:{session.awaiting_since}"
+            else:
                 continue
             seen_id, since = self._holds.get(session.id, ("", now))
-            since = since if seen_id == session.prompt.id else now
-            holds[session.id] = (session.prompt.id, since)
+            since = since if seen_id == marker else now
+            holds[session.id] = (marker, since)
             held = held or now - since < PROMPT_HOLD_SECONDS
         self._holds = holds
         return held
@@ -323,10 +346,8 @@ class RemoteRunner:
         )
 
     async def _run(self, command: commands.Command) -> None:
-        stops = command.kind in ("stop", "stop_all")
-        if not stops and not self._guard.allow_command():
-            if self._guard.slow_down_due():
-                await self._post(commands.slow_down(self._guard.wait_seconds()))
+        if not self._exempt_from_rate_limit(command) and not self._guard.allow_command():
+            await self._post(commands.slow_down(self._guard.wait_seconds()))
             return
         try:
             await self._dispatch(command)
@@ -337,6 +358,12 @@ class RemoteRunner:
         except Exception:
             _log.warning("Remote command %s failed", command.kind, exc_info=True)
             await self._post(commands.command_failed())
+
+    def _exempt_from_rate_limit(self, command: commands.Command) -> bool:
+        """Stopping and answering a waiting prompt are never held back by the limit."""
+        if command.kind in ("stop", "stop_all", "answer", "interrupt"):
+            return True
+        return command.kind == "send" and any(s.prompt is not None for s in self._service.list())
 
     async def _dispatch(self, command: commands.Command) -> None:
         kind = command.kind
@@ -830,7 +857,8 @@ class RemoteRunner:
         """What another agent answered to a message sent from chat, or that it closed before answering."""
         session = event.session
         project = session.project.name
-        self._state.clear_prompt_messages(self._channel.name, session.id)
+        keep = session.prompt.id if event.kind == "input-required" and session.prompt is not None else ""
+        self._state.clear_prompt_messages(self._channel.name, session.id, keep)
         if event.kind == "input-required":
             if self.live:
                 await self._notify_waiting()
@@ -853,7 +881,10 @@ class RemoteRunner:
         short = session.short
         several = self._several(session)
         project = session.project.name
-        self._state.clear_prompt_messages(self._channel.name, session.id)
+        keep = session.prompt.id if event.kind == "input-required" and session.prompt is not None else ""
+        self._state.clear_prompt_messages(self._channel.name, session.id, keep)
+        if event.kind in ("completed", "input-required"):
+            self._window.extend()
         if event.kind == "input-required" and session.prompt is not None:
             await self._notify_waiting()
         elif event.kind in ("completed", "input-required"):

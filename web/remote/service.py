@@ -234,6 +234,7 @@ class RemoteService:
                 "vendor_session_id": session.vendor_session_id,
                 "created_at": session.created_at,
                 "last_activity": session.last_activity,
+                "awaiting_since": session.awaiting_since,
                 "state": session.state,
                 "failure": session.failure,
             },
@@ -294,6 +295,7 @@ class RemoteService:
                 vendor_session_id=keep.vendor_session_id,
                 created_at=keep.created_at or now,
                 last_activity=lane.get("last_activity", now) if same else now,
+                awaiting_since=lane.get("awaiting_since") if same else None,
             )
             self._sessions[session.id] = session
             self._persist(session)
@@ -348,6 +350,7 @@ class RemoteService:
             vendor_session_id=lane.get("vendor_session_id"),
             created_at=lane.get("created_at") or now,
             last_activity=lane.get("last_activity") or now,
+            awaiting_since=lane.get("awaiting_since"),
             state=lane["state"],
             failure=lane.get("failure") or "",
         )
@@ -437,6 +440,7 @@ class RemoteService:
         session.last_activity = self._clock()
         session.awaiting_since = None if result.ends_turn else session.last_activity
         session.waiting, session.prompt, session.asking_since = False, None, None
+        self._persist(session)
         return result
 
     async def needs_wake(self, session: Session) -> bool:
