@@ -61,6 +61,21 @@ class StalePrompt(HostError):
     """The prompt being answered is gone or has changed, so nothing was typed."""
 
 
+def read_prompt(pty_id: str, redact=None) -> Prompt | None:
+    """What the agent in this terminal is asking, from the hook file it wrote, redacted and capped. None when
+    it wrote none. Everything that shows or answers a prompt reads it here, so the ids always agree."""
+    import agent_handoff
+    import agent_state
+    from remote import prompts
+
+    found = agent_state.read_prompt(pty_id)
+    if not found:
+        return None
+    redact = redact or agent_handoff.Redactor(agent_handoff._configured_api_keys())
+    parsed = prompts.parse(found["payload"], found["at"], redact) if found["payload"] is not None else None
+    return parsed or prompts.unreadable(found["at"])
+
+
 class OpenElsewhere(HostError):
     """The lane's saved session is running in another terminal, so it is never woken a second time."""
 
@@ -497,16 +512,7 @@ class LocalPtyHost:
 
     @staticmethod
     def _prompt(pty_id: str) -> Prompt | None:
-        import agent_handoff
-        import agent_state
-        from remote import prompts
-
-        found = agent_state.read_prompt(pty_id)
-        if not found:
-            return None
-        redact = agent_handoff.Redactor(agent_handoff._configured_api_keys())
-        parsed = prompts.parse(found["payload"], found["at"], redact) if found["payload"] is not None else None
-        return parsed or prompts.unreadable(found["at"])
+        return read_prompt(pty_id)
 
     async def answer(self, pty_id: str, prompt_id: str, keys: tuple[str, ...], ends_turn: bool = False) -> None:
         """Types `keys` only while the agent is still showing the prompt `prompt_id`. No hook fires when the

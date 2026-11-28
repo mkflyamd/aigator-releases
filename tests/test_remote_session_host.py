@@ -403,3 +403,54 @@ async def test_the_dialog_of_the_same_tool_call_is_typed_into_even_when_the_comm
     shown = await host.prompt(PTY)
     await host.answer(PTY, shown.id, (prompts.ENTER,))
     assert typed == [(PTY, prompts.ENTER)]
+
+
+def _terminal_remote_did_not_start():
+    from remote.service import ADOPTED, RemoteService, Session
+    from remote.session_host import Project, read_prompt
+
+    project = Project(id="Budget", name="Budget", repo_path="C:/repo")
+    session = Session(
+        id=f"app:{PTY}",
+        pty_id=PTY,
+        project=project,
+        short="Budget",
+        vendor_session_id=None,
+        created_at=1.0,
+        last_activity=1.0,
+        from_chat=False,
+        kind=ADOPTED,
+    )
+    session.prompt, session.waiting = read_prompt(PTY), True
+    return RemoteService(LocalPtyHost(), default_project=lambda: project), session
+
+
+async def test_an_allow_for_a_terminal_remote_did_not_start_is_typed_when_its_dialog_is_on_screen(typed):
+    _show(BASH)
+    service, session = _terminal_remote_did_not_start()
+    result = await service.answer_session(session, "allow")
+    assert result.keys == (prompts.ENTER,)
+    assert typed == [(PTY, prompts.ENTER)]
+
+
+async def test_an_allow_for_a_terminal_remote_did_not_start_is_not_typed_into_another_dialog(typed, screen):
+    from remote.service import PromptGone
+
+    _show(BASH)
+    service, session = _terminal_remote_did_not_start()
+    screen.text = LATER_DIALOG
+    with pytest.raises(PromptGone):
+        await service.answer_session(session, "allow")
+    assert typed == []
+    assert not session.waiting and session.prompt is None
+
+
+async def test_an_allow_for_a_terminal_remote_did_not_start_is_not_typed_after_its_user_typed(typed, screen):
+    from remote.service import PromptGone
+
+    _show(BASH)
+    service, session = _terminal_remote_did_not_start()
+    screen.last_user_input = session.prompt.at + 1
+    with pytest.raises(PromptGone):
+        await service.answer_session(session, "allow")
+    assert typed == []

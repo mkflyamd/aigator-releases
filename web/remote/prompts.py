@@ -287,30 +287,26 @@ def label(session: str, project: str) -> str:
 
 
 def waiting_message(
-    session: str, project: str, prompt: Prompt, *, refused: str = "", waited: float | None = None
+    session: str,
+    project: str,
+    prompt: Prompt,
+    *,
+    refused: str = "",
+    waited: float | None = None,
+    prefix: str = "",
 ) -> str:
     """One message for one waiting session. `refused` turns it into the answer to a reply that was not sent.
-    `waited` is set only for a message that went out after a wait."""
+    `waited` is set only for a message that went out after a wait. `prefix` replaces the label of a session
+    that is not Remote's own (another agent, a terminal)."""
+    tag = prefix or label(session, project)
     after = f", waiting {elapsed_words(waited)}" if waited is not None else ""
     head = f"Not sent: {refused}" if refused else f"Needs you: {prompt.lead}{after}."
     if prompt.kind == DRAFT:
-        return _tidy(f"{label(session, project)} {head}\n{OPEN_APP_DRAFT}")
+        return _tidy(f"{tag} {head}\n{OPEN_APP_DRAFT}")
     body = _facts(prompt) if prompt.kind in (PERMISSION, PERMISSION_APP) else ([prompt.question] if prompt.question else [])
     if prompt.kind == APP_ONLY and prompt.why_app:
         body.append(f"This one cannot be answered here: {prompt.why_app}.")
-    return _tidy(f"{label(session, project)} {head}\n" + "\n".join(body) + f"\n\n{next_block(_options(prompt))}")
-
-
-ANSWER_IN_APP = "Answer this one in AI Gator."
-
-
-def elsewhere_message(project: str, prompt: Prompt) -> str:
-    """The stand-in for a session Remote did not start: that it waits and which kind, never what it asks."""
-    if prompt.kind == PERMISSION_APP:
-        what = f"permission ({prompt.tool})" if prompt.tool else "permission"
-    else:
-        what = "asking a question"
-    return system_reply(f"Needs you: {what} in {project}. Answer in AI Gator.", [])
+    return _tidy(f"{tag} {head}\n" + "\n".join(body) + f"\n\n{next_block(_options(prompt))}")
 
 
 def more_waiting(rows: list[tuple[str, float]]) -> str:
@@ -320,8 +316,8 @@ def more_waiting(rows: list[tuple[str, float]]) -> str:
     return system_reply(f"{len(rows)} more {noun} you: {names}.", ["`list` to see them."])
 
 
-def confirmation(session: str, project: str, done: str) -> str:
-    return _tidy(f"{label(session, project)} {done}")
+def confirmation(session: str, project: str, done: str, *, prefix: str = "") -> str:
+    return _tidy(f"{prefix or label(session, project)} {done}")
 
 
 def answer_word(prompt: Prompt | None) -> str:

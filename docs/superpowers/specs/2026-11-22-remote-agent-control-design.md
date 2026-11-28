@@ -214,7 +214,7 @@ Agent-initiated messages stay same-project only and go through `web/agent_mcp.py
 
 ## Out of scope
 
-Tailscale or any non-loopback listener, a remote or phone UI, server-hosted agents, bot-style channels, push notifications of our own, widget and dashboard sharing, agent memory or cached results over remote channels, remote approvals of agent permission prompts beyond forwarding the question text.
+Tailscale or any non-loopback listener, a remote or phone UI, server-hosted agents, bot-style channels, push notifications of our own, widget and dashboard sharing, agent memory or cached results over remote channels, approving prompts that need the app (see Needs-you prompts).
 
 ## Messaging other agents
 
@@ -232,6 +232,16 @@ After a message is delivered, Remote watches that session for one answer and pos
 - The reply is read through the same redaction as Remote's own replies and trimmed at the same length. The name is shown on one line with brackets replaced, so it cannot end the prefix early.
 - The prefix starts with the crocodile marker, so the loop guard ignores it and a reply can never start a command.
 - Watching is not owning. The session is held apart from the ones Remote started: it does not appear in `list` as a Remote session, `stop` and `stop all` never reach it, the idle limit only stops watching, and the terminal host refuses to close any session that was not started by this channel. A backend restart forgets what was being watched.
+
+## Needs-you prompts
+
+While Remote is armed, an agent waiting on a permission or a question reaches the user's own self-chat, and the reply is typed into the agent from there. This covers three kinds of session: the lane and sessions Remote started, other agents Remote has messaged and watches, and AI Gator terminals Remote did not start (only terminals of the user's own projects).
+
+- One message per prompt, posted at once for a session started from chat and after about 2 minutes for the others, at most 3 at a time with a summary line for the rest. The text is the same for every kind of session: redacted, capped, numbered options for a question, `allow` and `deny` for a permission. The label is the project for a terminal Remote did not start and the agent's name for a watched peer.
+- A permission is answered by Enter only for Bash, Edit and Write. Free text, multi-select, several questions, ExitPlanMode and MCP tools stay app-only and say `Open AI Gator`.
+- A reply is typed only when all of these hold: it was written after the prompt was first seen (a reply sent before is told "that was for an earlier question"); the prompt file is still the same prompt and the agent is still asking; the terminal still shows that dialog; and the user has not typed in the terminal since the prompt appeared. Otherwise nothing is typed and the chat says it was already answered.
+- A quoted reply is answered only when the quoted message is the prompt currently showing; a quote of an earlier prompt is told it was already answered and skips nothing. An unquoted `allow`, `deny` or number answers the one session that is waiting; when several wait, Remote asks which one and types nothing, and the user quotes the message of the one meant.
+- A terminal answered from chat is not posted again until it writes a new state.
 
 ## Chat tabs
 

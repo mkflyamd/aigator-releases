@@ -171,8 +171,12 @@ async def test_a_question_asked_before_the_message_is_not_reported(svc):
 
 
 async def test_a_question_after_the_message_is_reported_and_watching_goes_on(svc):
+    from remote import prompts
+    from tests.test_remote_prompts import BASH_PERMISSION
+
     service, host, clock, events = svc
     adopt(service)
+    host.prompts["p-1"] = prompts.parse(BASH_PERMISSION, clock.now + 5)
     host.states["p-1"] = {"state": "asking", "at": clock.now + 5}
     await service.tick()
     assert [e.kind for e in events] == ["input-required"]
@@ -478,7 +482,7 @@ async def test_the_hint_uses_the_id_when_the_name_starts_with_a_command_word(tmp
 
 # ---------------------------------------------------------------- another agent's permission prompt
 
-async def test_a_peers_permission_prompt_is_never_offered_for_an_answer_from_chat(pw):
+async def test_a_peers_permission_prompt_carries_the_real_prompt_and_allow_answers_it(pw):
     from remote import prompts
     from tests.test_remote_prompts import BASH_PERMISSION
 
@@ -486,58 +490,94 @@ async def test_a_peers_permission_prompt_is_never_offered_for_an_answer_from_cha
     pw.host.prompts[PEER_PTY] = prompts.parse(BASH_PERMISSION, pw.clock.now + 1.0)
     answer(pw, "asking", "Run echo?")
     await pw.runner.tick()
-    reply = pw.channel.posted[0]
-    assert reply.startswith(f"[{commands.CROC} MergeBrain - Budget]")
-    assert "`allow`" not in reply and "Tool: Bash" not in reply
-    assert pw.service.watched(ADOPTED)[0].prompt is None
+    [reply] = pw.channel.posted
+    assert reply.startswith(commands.peer_prefix("MergeBrain", "Budget"))
+    assert "Tool: Bash" in reply and "Command: echo hi > out.txt" in reply and "`allow`" in reply
+    assert "Run echo?" not in reply
+    assert pw.service.watched(ADOPTED)[0].prompt.kind == prompts.PERMISSION
+    pw.channel.posted.clear()
+    await pw.say("@gator allow")
+    assert pw.host.typed == [(PEER_PTY, (prompts.ENTER,))]
+    assert pw.channel.posted[0].startswith(commands.peer_prefix("MergeBrain", "Budget"))
 
 
-async def test_an_answer_cannot_be_typed_into_an_adopted_sessions_prompt(svc):
+async def test_a_reply_written_before_the_peers_prompt_was_seen_is_not_typed(pw):
     from remote import prompts
-    from remote.service import Refusal
+    from tests.test_remote_prompts import BASH_PERMISSION
+
+    await sent(pw)
+    pw.host.prompts[PEER_PTY] = prompts.parse(BASH_PERMISSION, pw.clock.now + 1.0)
+    answer(pw, "asking")
+    pw.clock.now += 50
+    await pw.runner.tick()
+    pw.channel.posted.clear()
+    pw.seq = getattr(pw, "seq", 100) + 1
+    await pw.feed(pw.msg(pw.seq, "@gator allow", age=40))
+    assert pw.host.typed == []
+    assert "that was for an earlier question" in pw.channel.posted[-1]
+
+
+async def test_an_answer_is_typed_into_an_adopted_sessions_prompt_through_the_service_guards(svc):
+    from remote import prompts
+    from remote.service import PromptRefused
     from tests.test_remote_prompts import BASH_PERMISSION
 
     service, host, clock, _ = svc
     session = adopt(service)
     host.prompts["p-1"] = prompts.parse(BASH_PERMISSION, clock.now + 1.0)
     host.states["p-1"] = {"state": "asking", "at": clock.now + 1.0}
-    session.prompt = host.prompts["p-1"]
-    with pytest.raises(Refusal):
-        await service.answer(session.id, "allow")
+    session.prompt, session.waiting, session.prompt_seen_at = host.prompts["p-1"], True, clock.now
+    with pytest.raises(PromptRefused):
+        await service.answer(session.id, "allow", sent_at=clock.now - 10)
     assert host.typed == []
+    await service.answer(session.id, "allow", sent_at=clock.now + 1)
+    assert host.typed == [("p-1", (prompts.ENTER,))]
 
 
 async def test_an_adopted_sessions_waiting_state_carries_no_assistant_text(svc):
+    from remote import prompts
+    from remote.service import PROMPT_GRACE_SECONDS
+
     service, host, clock, events = svc
-    adopt(service)
+    session = adopt(service)
     host.last["p-1"] = "I will now run rm -rf build"
     host.states["p-1"] = {"state": "asking", "at": clock.now + 5}
     await service.tick()
+    clock.now += PROMPT_GRACE_SECONDS + 1
+    await service.tick()
     assert [(e.kind, e.text) for e in events] == [("input-required", "")]
+    assert session.prompt.kind == prompts.APP_ONLY and "rm -rf" not in repr(session.prompt)
 
 
-async def test_a_peer_that_reaches_a_prompt_gets_one_stand_in_and_never_its_own_words(pw):
+async def test_a_peer_that_reaches_a_prompt_gets_one_message_with_the_prompt_and_never_its_own_words(pw):
+    from remote import prompts
     from tests.test_remote_app_terminals import Watch
+    from tests.test_remote_prompts import BASH_PERMISSION
 
     await sent(pw)
     watch = pw.runner._terminals = Watch()
+    pw.host.prompts[PEER_PTY] = prompts.parse(BASH_PERMISSION, pw.clock.now + 1.0)
     answer(pw, "asking", "I will now run rm -rf build")
     await pw.runner.tick()
-    assert pw.channel.posted == [commands.peer_waiting("MergeBrain", "Budget")]
-    assert "rm -rf" not in pw.channel.posted[0] and "Answer in AI Gator" in pw.channel.posted[0]
+    [reply] = pw.channel.posted
+    assert reply.startswith(commands.peer_prefix("MergeBrain", "Budget")) and "Command: echo hi" in reply
+    assert "rm -rf" not in reply
     assert PEER_PTY in watch.skipped
 
 
 async def test_the_terminal_scan_does_not_post_again_for_a_peer_remote_watches(pw):
-    from tests.test_remote_app_terminals import Watch
     from remote import prompts
     from remote.bystanders import Seen
+    from tests.test_remote_app_terminals import Watch
+    from tests.test_remote_prompts import BASH_PERMISSION
 
     await sent(pw)
     watch = pw.runner._terminals = Watch()
-    watch.seen.append(Seen(PEER_PTY, BUDGET, prompts.Prompt("p1", prompts.PERMISSION_APP, tool="Bash", at=pw.clock.now)))
+    prompt = prompts.parse(BASH_PERMISSION, pw.clock.now + 1.0)
+    watch.seen.append(Seen(PEER_PTY, BUDGET, prompt, pw.clock.now + 1.0))
+    pw.host.prompts[PEER_PTY] = prompt
     answer(pw, "asking")
     await pw.runner.tick()
     pw.clock.now += 130
     await pw.runner.tick()
-    assert pw.channel.posted == [commands.peer_waiting("MergeBrain", "Budget")]
+    assert len(pw.channel.posted) == 1

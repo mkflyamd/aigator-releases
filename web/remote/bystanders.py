@@ -1,17 +1,15 @@
 """AI Gator terminal sessions that Remote did not start and that are waiting for their user.
 
-Only the fact that one waits, whether it is a permission or a question, and the tool's name are read:
-never a command, a path or a question. Remote does not answer these; chat only points the user back
-to the app."""
+Their prompt is read from the hook file the agent wrote, the same way as for a session Remote started,
+so chat shows the same redacted, capped text and offers the same answers."""
 
 from __future__ import annotations
 
-import hashlib
 from dataclasses import dataclass
 from typing import Protocol
 
 from remote import prompts
-from remote.session_host import Project
+from remote.session_host import Project, read_prompt
 
 
 @dataclass(frozen=True)
@@ -19,6 +17,7 @@ class Seen:
     pty_id: str
     project: Project
     prompt: prompts.Prompt
+    state_at: float
 
 
 class TerminalWatch(Protocol):
@@ -58,20 +57,6 @@ class LocalTerminalWatch:
             entry = terminal.get_pty_session(pty_id)
             if entry is not None and entry.last_user_input > state["at"]:
                 continue
-            found.append(Seen(pty_id, project, _stand_in(pty_id, state["at"], redact)))
+            prompt = read_prompt(pty_id, redact) or prompts.unreadable(state["at"], prompts.UNSEEN_WHY)
+            found.append(Seen(pty_id, project, prompt, state["at"]))
         return found
-
-
-def _stand_in(pty_id: str, at: float, redact) -> prompts.Prompt:
-    """A prompt with no content: the hook payload is read for the tool's name and dropped."""
-    import agent_state
-
-    found = agent_state.read_prompt(pty_id)
-    payload = found["payload"] if found else None
-    tool = payload.get("tool_name") if payload else None
-    tool = tool if isinstance(tool, str) else ""
-    pid = hashlib.sha256(f"app:{pty_id}:{at}".encode()).hexdigest()[:12]
-    if not tool or tool == "AskUserQuestion":
-        return prompts.Prompt(pid, prompts.APP_ONLY, at=at)
-    shown, _ = prompts._plain(tool, prompts.TOOL_MAX_CHARS, redact)
-    return prompts.Prompt(pid, prompts.PERMISSION_APP, tool=shown, at=at)

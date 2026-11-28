@@ -410,12 +410,13 @@ class RemoteService:
         self._persist(session)
 
     async def answer(self, session_id: str, text: str, sent_at: float = 0.0) -> prompts.Answer:
-        """Types the reply into the prompt the session is showing. Only a session Remote started has one:
-        another agent's prompts are answered in its own terminal. A reply written before that prompt was first seen
-        was meant for an earlier one, and is not typed."""
-        session = self.get(session_id)
-        if session.kind != STARTED:
-            raise Refusal("Messages to another agent go through its name, not through Remote control.")
+        return await self.answer_session(self.get(session_id), text, sent_at)
+
+    async def answer_session(self, session: Session, text: str, sent_at: float = 0.0) -> prompts.Answer:
+        """Types the reply into the prompt the session is showing, for a session Remote started, one it watches
+        after messaging it, or a terminal it only looks at. A reply written before that prompt was first seen
+        was meant for an earlier one, and is not typed; the host types nothing unless the same prompt is
+        still the one on screen."""
         shown = session.prompt
         if shown is None:
             raise RemoteError("That session is not waiting on a prompt.")
@@ -689,19 +690,17 @@ class RemoteService:
         if adopted and (session.awaiting_since is None or state["at"] < session.awaiting_since):
             return
         if asking:
-            # An adopted agent's prompt is never read or answered here: it is answered in its own terminal.
-            if not adopted:
-                if session.waiting and session.prompt is not None:
-                    again = await self._host.prompt(session.pty_id)
-                    if again is None or again.id == session.prompt.id:
-                        session.last_event_at = state["at"]
-                        return
-                    session.prompt, session.prompt_seen_at = again, self._clock()
-                else:
-                    session.prompt, session.prompt_seen_at = await self._host.prompt(session.pty_id), self._clock()
+            if session.waiting and session.prompt is not None:
+                again = await self._host.prompt(session.pty_id)
+                if again is None or again.id == session.prompt.id:
+                    session.last_event_at = state["at"]
+                    return
+                session.prompt, session.prompt_seen_at = again, self._clock()
+            else:
+                session.prompt, session.prompt_seen_at = await self._host.prompt(session.pty_id), self._clock()
             session.waiting = True
             session.last_event_at = state["at"]
-            if not adopted and session.prompt is None:
+            if session.prompt is None:
                 session.asking_since = self._clock()
                 return
             kind = "input-required"
@@ -732,7 +731,8 @@ class RemoteService:
         if session.prompt is None:
             if self._clock() - session.asking_since < PROMPT_GRACE_SECONDS:
                 return
-            text = await self._host.last_message(session.pty_id)
+            # Another agent's own words are never carried to chat: its ask is the prompt or nothing.
+            text = "" if session.kind == ADOPTED else await self._host.last_message(session.pty_id)
             if not text:
                 session.prompt = prompts.unreadable(at, prompts.UNSEEN_WHY)
         session.asking_since = None
