@@ -198,7 +198,7 @@ async def test_the_answer_comes_back_under_the_agents_name_and_project(pw):
     answer(pw, "idle", "Rebased onto main.")
     await pw.runner.tick()
     assert pw.channel.posted == [commands.peer_result("MergeBrain", "Budget", "Rebased onto main.")]
-    assert pw.channel.posted[0].startswith(f"[MergeBrain - Budget] {commands.CROC} Rebased")
+    assert pw.channel.posted[0].startswith(f"[{commands.CROC} MergeBrain - Budget] Rebased")
     assert pw.service.watched(ADOPTED) == []
 
 
@@ -210,7 +210,15 @@ def test_a_hostile_agent_name_cannot_break_the_prefix(name):
     reply = commands.peer_result(name, "Budget", "hello")
     first_line = reply.split("\n")[0]
     assert commands.is_own_message(reply)
-    assert first_line.startswith("[") and first_line.count("]") == 1
+    assert first_line.startswith(f"[{commands.CROC} ") and first_line.count("]") == 1
+
+
+@pytest.mark.parametrize("name", ["Gator", "gator", "  GATOR "])
+def test_a_peer_called_gator_cannot_pass_for_the_agent_itself(name):
+    peer = commands.peer_result(name, "Budget", "hello")
+    own = commands.agent_reply("budget", "hello", [], project="Budget")
+    assert peer.split("]")[0] != own.split("]")[0]
+    assert "(other agent)" in peer.split("]")[0]
 
 
 async def test_a_peer_reply_never_triggers_a_command(pw):
@@ -233,7 +241,7 @@ async def test_a_question_shows_the_agents_name_and_how_to_answer(pw):
     answer(pw, "asking", "Which branch?\n1. main\n2. dev")
     await pw.runner.tick()
     reply = pw.channel.posted[0]
-    assert reply.startswith("[MergeBrain - Budget]")
+    assert reply.startswith(f"[{commands.CROC} MergeBrain - Budget]")
     assert commands.WAITING_HEADLINE in reply
     assert "`@gator MergeBrain main`" in reply
 

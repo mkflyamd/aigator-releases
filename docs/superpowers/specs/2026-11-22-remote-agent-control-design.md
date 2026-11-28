@@ -213,10 +213,10 @@ Tailscale or any non-loopback listener, a remote or phone UI, server-hosted agen
 
 ### Replies from another agent
 
-After a message is delivered, Remote watches that session for one answer and posts it back to the chat as `[<name> - <project>] 🐊 <reply>`, under the agent's own name rather than Gator's. Only the turn that follows the message is posted: the agent's earlier turns and its own idle events are not. A question the agent asks is posted with its name and how to answer it (`@gator <name> <answer>`). If the session closes before answering, the chat is told once.
+After a message is delivered, Remote watches that session for one answer and posts it back to the chat as `[🐊 <name> - <project>] <reply>`, under the agent's own name rather than Gator's. A peer whose name is the agent's own name is shown as `<name> (other agent)`. Only the turn that follows the message is posted: the agent's earlier turns and its own idle events are not. A question the agent asks is posted with its name and how to answer it (`@gator <name> <answer>`). If the session closes before answering, the chat is told once.
 
 - The reply is read through the same redaction as Remote's own replies and trimmed at the same length. The name is shown on one line with brackets replaced, so it cannot end the prefix early.
-- The prefix has the shape of Gator's own posts, so the loop guard ignores it and a reply can never start a command.
+- The prefix starts with the crocodile marker, so the loop guard ignores it and a reply can never start a command.
 - Watching is not owning. The session is held apart from the ones Remote started: it does not appear in `list` as a Remote session, `stop` and `stop all` never reach it, the idle limit only stops watching, and the terminal host refuses to close any session that was not started by this channel. A backend restart forgets what was being watched.
 
 ## Chat tabs

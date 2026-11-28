@@ -309,9 +309,13 @@ def peer_sent(name: str, woke: bool) -> str:
 
 
 def peer_prefix(name: str, project: str) -> str:
-    """`[{peer} - {project}] 🐊`: an agent that is not Remote's own, labelled with its name and project
-    and shaped like Gator's own posts so the loop guard ignores it."""
-    return f"[{peer_label(name)} - {peer_label(project)}] {CROC}"
+    """`[🐊 {peer} - {project}]`: an agent that is not Remote's own, labelled with its name and project.
+    It starts with the crocodile marker, so the loop guard ignores it. A peer that carries Gator's own
+    name is told apart, so it cannot pass for Remote's agent."""
+    label = peer_label(name)
+    if label.casefold() == settings.agent_name().casefold():
+        label = f"{label} (other agent)"
+    return f"[{CROC} {label} - {peer_label(project)}]"
 
 
 def peer_exited(name: str, project: str) -> str:
