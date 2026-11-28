@@ -546,3 +546,13 @@ test('a disabled switch does not call the server; set up opens the Remote contro
     [['settings', 'remote']],
   );
 });
+
+test('off with the server reason shows the invitation, not an error', () => {
+  const reason = 'Remote control is not turned on. Arm it in Settings.';
+  const view = pill.viewModel(base({ state: 'off', reason, armed_at: null, expires_at: null }), 0);
+  assert.strictEqual(view.title, 'Remote control');
+  assert.strictEqual(view.sw.on, false);
+  assert.ok(!view.sw.disabled);
+  assert(/Turns itself off after 12 hours\./.test(view.sub));
+  assert(!view.sub.includes(reason));
+});
