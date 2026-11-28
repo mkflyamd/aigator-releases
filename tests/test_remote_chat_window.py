@@ -125,6 +125,20 @@ async def test_an_untagged_message_runs_inside_the_window(w):
     assert w.channel.posted == [commands.greeting()]
 
 
+async def test_an_untagged_mention_of_another_name_is_not_for_gator_and_gets_no_reply(w):
+    await opened(w)
+    await say(w, "@remote control I can't see the options")
+    assert w.host.delivered == []
+    assert w.channel.posted == [commands.greeting()]
+
+
+async def test_an_untagged_mention_of_a_session_still_routes_to_it(w):
+    await opened(w)
+    await w.service.start(OTHER, "b")
+    await say(w, "@other say ok")
+    assert w.host.delivered[-1] == ("pty-1", "say ok")
+
+
 async def test_an_untagged_message_is_ignored_when_no_window_is_open(w):
     await baselined(w)
     await say(w, "run the tests")
@@ -951,6 +965,44 @@ def test_tp_teams_send_survives_an_emoji_under_a_cp1252_console(monkeypatch):
     out = teams.tp_teams_send("48:notes", teams.TeamsSendRequest(message=f"[{commands.CROC} Gator] Gator on watch."))
     assert out["ok"] is True and out["message_id"] == "9"
     assert commands.CROC in sent[0]["content"]
+
+
+def test_tp_teams_send_returns_the_arrival_time_the_skype_post_answers_with_as_the_message_id(monkeypatch):
+    import httpx
+    from routes import teams
+
+    class Skype:
+        def get_auth(self):
+            return "token", "https://chat.example"
+
+        def get_global_service(self):
+            return None
+
+    class Reply:
+        status_code = 201
+        text = '{"OriginalArrivalTime":1795839015312}'
+
+        def json(self):
+            return {"OriginalArrivalTime": 1795839015312}
+
+    monkeypatch.setattr(teams, "_get_skype_module", lambda: Skype())
+    monkeypatch.setattr(teams, "_get_my_name", lambda: "Me")
+    monkeypatch.setattr(teams, "_invalidate_chats_cache", lambda: None)
+    monkeypatch.setattr(httpx, "post", lambda url, **kwargs: Reply())
+    out = teams.tp_teams_send("48:notes", teams.TeamsSendRequest(message=f"[{commands.CROC} Gator] Online."))
+    assert out["message_id"] == "1795839015312"
+
+
+def test_the_teams_channel_records_each_post_so_it_reads_back_as_our_own(monkeypatch, tmp_path):
+    from remote import teams_channel
+    from remote.teams_channel import TeamsSelfChat
+
+    state = State(tmp_path / "s.json")
+    monkeypatch.setattr(teams_channel, "require_autosend", lambda: None)
+    monkeypatch.setattr(teams_channel, "send_message", lambda chat_id, content: "1795839015312")
+    chat = TeamsSelfChat(state=state)
+    assert chat.post(commands.online()) == "1795839015312"
+    assert state.is_own_post("teams", "1795839015312")
 
 
 # ---------------------------------------------------------------- the notepad guard: untagged text is not always for the agent
