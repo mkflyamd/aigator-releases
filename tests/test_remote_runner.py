@@ -5,7 +5,7 @@ from remote.channel import ChannelRefused, InboundMessage
 from remote.guard import Guard
 from remote.runner import RemoteRunner
 from remote.service import RemoteService
-from remote.session_host import HostError, HostSession, Project
+from remote.session_host import HostError, HostSession, Project, StalePrompt
 from remote.state import State
 
 
@@ -23,6 +23,8 @@ class FakeHost:
         self.alive_ids = set()
         self.states = {}
         self.last = {}
+        self.prompts = {}
+        self.typed = []
         self.delivered = []
         self.killed = []
         self.crash_on_deliver = False
@@ -65,6 +67,18 @@ class FakeHost:
 
     async def output(self, pty_id, since):
         return ("", since)
+
+    async def prompt(self, pty_id):
+        return self.prompts.get(pty_id)
+
+    async def answer(self, pty_id, prompt_id, keys, ends_turn=False):
+        shown, state = self.prompts.get(pty_id), self.states.get(pty_id)
+        if shown is None or shown.id != prompt_id or not state or state["state"] != "asking":
+            raise StalePrompt("That prompt is no longer showing.")
+        self.typed.append((pty_id, keys))
+        del self.prompts[pty_id]
+        if ends_turn:
+            self.states[pty_id] = {"state": "idle", "at": state["at"] + 1}
 
 
 class FakeChannel:
@@ -367,8 +381,9 @@ async def test_list_shows_the_count_name_project_and_state_in_words(w):
     await w.feed(w.msg(101, "@gator first"))
     await w.feed(w.msg(102, "@gator list"))
     line = w.channel.posted[-1]
-    assert line == commands.session_list([("budget", "Budget", "working")])
-    assert line.startswith("[Gator] 1 session running:\n1. budget \u00b7 Budget \u00b7 working\n\nNext:\n")
+    assert line == commands.session_list([("budget", "Budget", commands.WORKING, 0.0, "")])
+    assert line.startswith("[Gator] 1 session running:\nWorking:\n1. budget \u00b7 ")
+    assert "Next:" not in line and "Budget" not in line
 
 
 async def test_status_of_an_unknown_name_is_refused(w):

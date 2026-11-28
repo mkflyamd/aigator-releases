@@ -104,3 +104,35 @@ def test_a_quote_in_a_link_cannot_add_an_attribute(tmp_path, sent):
     chat = TeamsSelfChat(state=State(tmp_path / "s.json"))
     chat.post('[Gator - Claude - x] [a](https://a.com/"onmouseover="alert(1))')
     assert "<a " not in sent[0][1]
+
+
+QUOTE_REPLY_HTML = (
+    '<blockquote itemscope="" itemtype="http://schema.skype.com/Reply" itemid="1764237600123">'
+    '<strong itemprop="mri" itemid="8:orgid:00000000-0000-0000-0000-000000000000">Test User</strong>'
+    '<span itemprop="time" itemid="1764237600123"></span>'
+    '<p itemprop="preview">[Gator - budget - Budget] Needs you: permission. Tool: Bash Command: echo hi</p>'
+    "</blockquote><p>@gator allow</p>"
+)
+
+
+def _poll_one(monkeypatch, html, body=""):
+    raw = [{"id": "5", "message_type": "message", "body": body, "body_html": html, "created_at": "2026-11-26T10:00:00Z"}]
+    monkeypatch.setattr(teams_channel, "fetch_messages", lambda chat_id: raw)
+    return TeamsSelfChat().poll()[0]
+
+
+def test_a_quote_reply_keeps_only_the_typed_text_and_exposes_the_quoted_message_id(monkeypatch):
+    msg = _poll_one(monkeypatch, QUOTE_REPLY_HTML, body="Test User [Gator - budget] Needs you @gator allow")
+    assert msg.text == "@gator allow"
+    assert msg.reply_to == "1764237600123"
+
+
+def test_a_plain_message_has_no_reply_to(monkeypatch):
+    msg = _poll_one(monkeypatch, "<p>@gator allow</p>")
+    assert msg.text == "@gator allow" and msg.reply_to is None
+
+
+def test_a_quote_with_nothing_typed_is_empty_not_the_quoted_text(monkeypatch):
+    html = QUOTE_REPLY_HTML.split("</blockquote>")[0] + "</blockquote>"
+    msg = _poll_one(monkeypatch, html, body="Test User [Gator - budget] Needs you @gator allow")
+    assert msg.text == "" and msg.reply_to == "1764237600123"

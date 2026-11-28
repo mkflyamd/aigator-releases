@@ -47,5 +47,11 @@ class ChatWindow:
         if window is not None:
             self._state.set_window(self._channel, window[0], self._clock() + self._seconds)
 
+    def hold(self) -> None:
+        """Keeps the window open while someone is waiting, writing only when half of it has gone."""
+        window = self._state.window(self._channel)
+        if window is not None and window[1] - self._clock() < self._seconds / 2:
+            self.extend()
+
     def close(self) -> None:
         self._state.clear_window(self._channel)

@@ -12,10 +12,10 @@ import time
 from dataclasses import dataclass
 from typing import Callable
 
-from remote import commands
+from remote import commands, prompts
 from remote.channel import AutosendOff, Channel, InboundMessage
 from remote.guard import Guard, limit
-from remote.service import Event, RemoteError, RemoteService, Session
+from remote.service import Event, PromptGone, PromptRefused, RemoteError, RemoteService, Session
 from remote.session_host import current_branch
 from remote.state import State
 from remote.window import ChatWindow
@@ -26,6 +26,7 @@ _log = logging.getLogger(__name__)
 STALE_SECONDS = 15 * 60.0
 AGENT_LABEL = "Claude"
 WAITING_HEADLINE = "Waiting for your answer."
+PROMPT_ROUTE_SECONDS = 12 * 3600.0
 _TAGS = ("gator", AGENT_LABEL.lower())
 
 
@@ -102,15 +103,17 @@ class RemoteRunner:
         if not self._window.is_open():
             await self._post(commands.online())
 
-    async def _post(self, text: str) -> None:
+    async def _post(self, text: str) -> str:
+        """The id of the posted message, or "" when nothing was posted."""
         try:
-            await asyncio.to_thread(self._channel.post, text)
+            return await asyncio.to_thread(self._channel.post, text) or ""
         except AutosendOff:
             if not self._autosend_noticed:
                 self._autosend_noticed = True
                 _log.info("Remote control is not replying on %s: auto-send is off", self._channel.name)
         except Exception as exc:
             _log.warning("Remote control could not post a reply: %s", exc)
+        return ""
 
     async def poll(self) -> None:
         await self.process(await asyncio.to_thread(self._channel.poll))
@@ -175,8 +178,11 @@ class RemoteRunner:
         self._not_sent_noticed.add(reason)
         await self._post(reply())
 
+    def _anyone_waiting(self) -> bool:
+        return any(s.waiting for s in self._service.list())
+
     async def _close_if_expired(self) -> None:
-        if self._window.expired():
+        if self._window.expired() and not self._anyone_waiting():
             self._window.close()
             await self._post(commands.chat_closed_quiet())
 
@@ -248,16 +254,26 @@ class RemoteRunner:
             raise _Reply(commands.which_to_stop([s.short for s in sessions]))
         return sessions
 
+    def _since(self, session: Session) -> float:
+        if session.waiting:
+            return session.last_event_at or session.last_activity
+        return session.awaiting_since if session.awaiting_since is not None else session.last_activity
+
     def _describe(self, sessions: list[Session]) -> str:
-        return commands.session_list([(s.short, s.project.name, _state_word(s)) for s in sessions])
+        now = self._clock()
+        return commands.session_list(
+            [
+                (s.short, s.project.name, _state_word(s), now - self._since(s), prompts.answer_word(s.prompt))
+                for s in sessions
+            ]
+        )
 
     def _status(self, name: str | None) -> str:
         sessions = self._pick(name)
         if len(sessions) != 1:
             return self._describe(sessions)
         s = sessions[0]
-        since = s.awaiting_since if s.awaiting_since is not None else s.last_activity
-        return commands.session_status(AGENT_LABEL, s.short, _state_word(s), since, s.last_activity)
+        return commands.session_status(AGENT_LABEL, s.short, _state_word(s), self._since(s), s.last_activity)
 
     async def _send(self, text: str) -> None:
         """A message to a session. `@name text`, `name text` and `name: text` pick one; otherwise the
@@ -300,8 +316,37 @@ class RemoteRunner:
             self._begin(await self._service.start(project, prompt))
 
     async def _deliver(self, session: Session, text: str) -> None:
+        if session.waiting and session.prompt is not None:
+            await self._answer(session, text)
+            return
         await self._service.send(session.id, text)
+        self._state.clear_prompt_messages(self._channel.name, session.id)
         self._begin(session)
+
+    async def _answer(self, session: Session, text: str) -> None:
+        """A reply to a session that is showing a permission or a question: typed as that answer, or
+        not typed at all, and said so."""
+        short, project = session.short, session.project.name
+        try:
+            result = await self._service.answer(session.id, text)
+        except PromptRefused as exc:
+            raise _Reply(prompts.waiting_message(short, project, exc.prompt, refused=exc.reason)) from exc
+        except PromptGone as exc:
+            self._state.clear_prompt_messages(self._channel.name, session.id)
+            raise _Reply(prompts.confirmation(short, project, prompts.ALREADY_ANSWERED)) from exc
+        self._state.clear_prompt_messages(self._channel.name, session.id)
+        if not result.ends_turn:
+            self._begin(session)
+        await self._post(prompts.confirmation(short, project, result.done))
+
+    async def _post_prompt(self, session: Session, prompt: prompts.Prompt) -> None:
+        """One message for this session, remembered by its message id with the prompt and an expiry."""
+        message_id = await self._post(prompts.waiting_message(session.short, session.project.name, prompt))
+        if message_id:
+            now = self._clock()
+            self._state.record_prompt_message(
+                self._channel.name, message_id, session.id, prompt.id, now + PROMPT_ROUTE_SECONDS, now
+            )
 
     def _begin(self, session: Session) -> None:
         now = self._clock()
@@ -312,7 +357,10 @@ class RemoteRunner:
         short = session.short
         turn = self._turns.pop(session.id, None)
         several = len(self._service.list()) > 1
-        if event.kind in ("completed", "input-required"):
+        self._state.clear_prompt_messages(self._channel.name, session.id)
+        if event.kind == "input-required" and session.prompt is not None:
+            await self._post_prompt(session, session.prompt)
+        elif event.kind in ("completed", "input-required"):
             waiting = event.kind == "input-required" or commands.asks_a_question(event.text)
             session.waiting = waiting
             if waiting:
@@ -357,6 +405,8 @@ class RemoteRunner:
                 await self._post(commands.timed_out(self._guard.armed_max_seconds))
             return
         if self._guard.armed:
+            if self._anyone_waiting():
+                self._window.hold()
             await self._close_if_expired()
             await self._service.tick()
             await self._report_progress()

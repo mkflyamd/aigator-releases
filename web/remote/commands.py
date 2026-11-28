@@ -92,7 +92,8 @@ def system_reply(body: str, options: list[str], *, croc: bool = False, after: st
     """A [Gator] notice: the state and body, a blank line, the Next block, then an optional closing line."""
     mark = f" {CROC}" if croc else ""
     tail = f"\n\n{after}" if after else ""
-    return _tidy(f"{SYSTEM_PREFIX}]{mark} {body}\n\n{next_block(options)}{tail}")
+    choices = f"\n\n{next_block(options)}" if options else ""
+    return _tidy(f"{SYSTEM_PREFIX}]{mark} {body}{choices}{tail}")
 
 
 def agent_reply(agent: str, project: str, text: str, options: list[str]) -> str:
@@ -161,11 +162,7 @@ def attachment_not_sent() -> str:
 
 def help_text(chat_open: bool = True) -> str:
     if chat_open:
-        return system_reply(
-            f"This chat is open, so you can skip `@gator`.\n{EVERYTHING_GOES_TO_AGENT}",
-            _tip_options(True),
-            after=_quiet_note(),
-        )
+        return system_reply("Here is what you can type.", _tip_options(True))
     return system_reply("This chat is closed, so start each message with `@gator`.", _tip_options(False))
 
 
@@ -237,19 +234,36 @@ def session_not_found(name: str) -> str:
     return system_reply(f"No session named {shown}.", ["`list` to see what is running."])
 
 
-def session_list(rows: list[tuple[str, str, str]]) -> str:
-    """rows are (name, project, state); state is one of WORKING, WAITING, IDLE."""
+def _same_name(name: str, project: str) -> bool:
+    return re.sub(r"[^a-z0-9]+", "-", project.lower()).strip("-") == name
+
+
+def session_list(rows: list[tuple[str, str, str, float, str]]) -> str:
+    """rows are (name, project, state, seconds in that state, what to type to answer it). Grouped as the
+    History pane groups them, the longest wait first; the project is left out when it is the name."""
     if not rows:
         return no_sessions()
     head = f"{len(rows)} session{'' if len(rows) == 1 else 's'} running:"
-    lines = [f"{i}. {name} {DOT} {project} {DOT} {state}" for i, (name, project, state) in enumerate(rows, 1)]
-    waiting = next((name for name, _, state in rows if state == WAITING), None)
-    first = (
-        f"`{waiting}: your answer` to answer the one that is waiting."
-        if waiting
-        else f"`{rows[0][0]}: your request` to talk to a session."
+    waiting = sorted((r for r in rows if r[2] == WAITING), key=lambda r: -r[3])
+    groups = (
+        ("Needs you:", waiting),
+        ("Working:", [r for r in rows if r[2] == WORKING]),
+        ("Idle:", [r for r in rows if r[2] == IDLE]),
     )
-    return system_reply("\n".join([head, *lines]), [first, f"`status {rows[0][0]}` for details.", "`stop all` to stop everything and turn Remote control off."])
+    lines, number = [head], 0
+    for title, group in groups:
+        if group:
+            lines.append(title)
+        for name, project, state, seconds, _ in group:
+            number += 1
+            where = "" if _same_name(name, project) else f" {DOT} {project}"
+            lead = "waiting " if state == WAITING else ""
+            lines.append(f"{number}. {name}{where} {DOT} {lead}{elapsed_words(seconds)}")
+    if not waiting:
+        return system_reply("\n".join(lines), [])
+    name, answer = waiting[0][0], waiting[0][4]
+    what = "to allow once." if answer == "allow" else "to answer the longest-waiting one."
+    return system_reply("\n".join(lines), [f"`{name}: {answer}` {what}"])
 
 
 def which_session(names: list[str]) -> str:
@@ -278,8 +292,10 @@ def mention_needs_text(name: str) -> str:
 
 def session_status(agent: str, name: str, state: str, since: float, last_activity: float) -> str:
     lead = {WORKING: "Working", WAITING: "Waiting for you", IDLE: "Idle"}[state]
-    text = f"{lead} since {clock_time(since)}.\nLast activity {clock_time(last_activity)}."
-    return agent_reply(agent, name, text, ["Reply here to talk to it.", f"`stop {name}` to stop it."])
+    text = f"{lead} since {clock_time(since)}."
+    if clock_time(last_activity) != clock_time(since):
+        text += f"\nLast activity {clock_time(last_activity)}."
+    return agent_reply(agent, name, text, [])
 
 
 def working_ack(agent: str, name: str, text: str) -> str:

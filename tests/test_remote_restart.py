@@ -65,7 +65,7 @@ async def test_a_session_survives_a_restart_with_its_name_and_takes_a_named_send
     w.restart()
     await w.runner.restore()
     await w.feed(w.msg(103, "@gator list"))
-    assert "1. budget \u00b7 Budget \u00b7 idle" in w.channel.posted[-1]
+    assert "Idle:\n1. budget \u00b7 " in w.channel.posted[-1]
     await w.feed(w.msg(104, "@gator budget follow up"))
     assert w.host.delivered[-1] == ("pty-1", "follow up")
     assert w.host.n == 1

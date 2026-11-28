@@ -10,8 +10,9 @@ import time
 from dataclasses import dataclass
 from typing import Awaitable, Callable
 
+from remote import prompts
 from remote.guard import limit
-from remote.session_host import HostError, Project, SessionHost
+from remote.session_host import HostError, Project, SessionHost, StalePrompt
 
 _log = logging.getLogger(__name__)
 
@@ -20,6 +21,19 @@ IDLE_SECONDS = 8 * 3600.0
 
 class RemoteError(Exception):
     """A refusal with a reason that is safe to show the user."""
+
+
+class PromptRefused(RemoteError):
+    """The reply was not an answer to the prompt the session is showing."""
+
+    def __init__(self, prompt: prompts.Prompt, reason: str):
+        super().__init__(reason)
+        self.prompt = prompt
+        self.reason = reason
+
+
+class PromptGone(RemoteError):
+    """The prompt was answered, or changed, before the reply arrived. Nothing was typed."""
 
 
 @dataclass
@@ -35,6 +49,7 @@ class Session:
     waiting: bool = False
     last_event_at: float = 0.0
     stopping: bool = False
+    prompt: prompts.Prompt | None = None
 
 
 @dataclass(frozen=True)
@@ -167,6 +182,28 @@ class RemoteService:
             raise RemoteError(str(exc)) from exc
         session.last_activity = session.awaiting_since = self._clock()
         session.waiting = False
+        session.prompt = None
+
+    async def answer(self, session_id: str, text: str) -> prompts.Answer:
+        """Types the reply into the prompt the session is showing."""
+        session = self.get(session_id)
+        shown = session.prompt
+        if shown is None:
+            raise RemoteError("That session is not waiting on a prompt.")
+        result = prompts.resolve(shown, text)
+        if isinstance(result, prompts.Refused):
+            raise PromptRefused(shown, result.reason)
+        try:
+            await self._host.answer(session.pty_id, shown.id, result.keys, result.ends_turn)
+        except StalePrompt as exc:
+            session.waiting, session.prompt = False, None
+            raise PromptGone(str(exc)) from exc
+        except HostError as exc:
+            raise RemoteError(str(exc)) from exc
+        session.last_activity = self._clock()
+        session.awaiting_since = None if result.ends_turn else session.last_activity
+        session.waiting, session.prompt = False, None
+        return result
 
     async def stop(self, session_id: str) -> None:
         session = self.get(session_id)
@@ -224,6 +261,7 @@ class RemoteService:
         if state["state"] == "asking":
             kind = "input-required"
             session.waiting = True
+            session.prompt = await self._host.prompt(session.pty_id)
         elif state["state"] == "idle" and session.awaiting_since is not None and state["at"] >= session.awaiting_since:
             kind = "completed"
         else:
@@ -232,5 +270,7 @@ class RemoteService:
         if kind == "completed":
             session.awaiting_since = None
             session.waiting = False
+            session.prompt = None
         session.last_activity = max(session.last_activity, state["at"])
-        await self._emit(kind, session, await self._host.last_message(session.pty_id))
+        text = "" if kind == "input-required" and session.prompt else await self._host.last_message(session.pty_id)
+        await self._emit(kind, session, text)

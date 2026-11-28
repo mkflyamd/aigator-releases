@@ -8,7 +8,10 @@ import logging
 import re
 import time
 from dataclasses import dataclass
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
+
+if TYPE_CHECKING:
+    from remote.prompts import Prompt
 
 _log = logging.getLogger(__name__)
 
@@ -20,6 +23,10 @@ _ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\
 
 class HostError(Exception):
     """The host could not do what was asked; the message is for the user."""
+
+
+class StalePrompt(HostError):
+    """The prompt being answered is gone or has changed, so nothing was typed."""
 
 
 @dataclass(frozen=True)
@@ -71,6 +78,8 @@ class SessionHost(Protocol):
     async def state(self, pty_id: str) -> dict | None: ...
     async def last_message(self, pty_id: str) -> str: ...
     async def output(self, pty_id: str, since: int) -> tuple[str, int]: ...
+    async def prompt(self, pty_id: str) -> Prompt | None: ...
+    async def answer(self, pty_id: str, prompt_id: str, keys: tuple[str, ...], ends_turn: bool = False) -> None: ...
 
 
 class LocalPtyHost:
@@ -202,3 +211,38 @@ class LocalPtyHost:
             raise HostError("That session is no longer running.")
         text, end = entry.read_from(since)
         return _ANSI.sub("", text), end
+
+    async def prompt(self, pty_id: str) -> Prompt | None:
+        return await asyncio.to_thread(self._prompt, pty_id)
+
+    @staticmethod
+    def _prompt(pty_id: str) -> Prompt | None:
+        import agent_handoff
+        import agent_state
+        from remote import prompts
+
+        found = agent_state.read_prompt(pty_id)
+        if not found:
+            return None
+        redact = agent_handoff.Redactor(agent_handoff._configured_api_keys())
+        return prompts.parse(found["payload"], found["at"], redact)
+
+    async def answer(self, pty_id: str, prompt_id: str, keys: tuple[str, ...], ends_turn: bool = False) -> None:
+        """Types `keys` only while the agent is still showing the prompt `prompt_id`. A turn that the keys
+        end fires no hook, so the idle state is reported here."""
+        import agent_state
+        from remote import prompts
+        from routes import terminal
+
+        shown = await self.prompt(pty_id)
+        state = await self.state(pty_id)
+        if shown is None or shown.id != prompt_id or not state or state["state"] != "asking":
+            raise StalePrompt("That prompt is no longer showing.")
+        for index, key in enumerate(keys):
+            if index:
+                await asyncio.sleep(prompts.KEY_PAUSE_SECONDS)
+            if not await asyncio.to_thread(terminal.write_pty_session, pty_id, key):
+                raise HostError("The answer could not be typed into the terminal.")
+        await asyncio.to_thread(agent_state.clear_prompt, pty_id)
+        if ends_turn:
+            await asyncio.to_thread(agent_state.set_state, pty_id, "idle")

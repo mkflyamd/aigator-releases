@@ -15,6 +15,11 @@ _log = logging.getLogger(__name__)
 
 SELF_CHAT_ID = "48:notes"
 _FRACTION = re.compile(r"(\.\d{6})\d+")
+_QUOTE = re.compile(
+    r"<blockquote\b[^>]*itemtype=[\"']http://schema\.skype\.com/Reply[\"'][^>]*>.*?</blockquote>",
+    re.IGNORECASE | re.DOTALL,
+)
+_ITEM_ID = re.compile(r"itemid=[\"']([^\"']+)[\"']", re.IGNORECASE)
 
 
 def fetch_messages(chat_id: str) -> list[dict]:
@@ -47,11 +52,21 @@ def _epoch(composetime: str) -> float:
     return stamp.timestamp()
 
 
+def _quoted_id(body_html: str) -> str | None:
+    """The id of the message a Teams quote-reply is answering, or None when the message quotes nothing."""
+    match = _QUOTE.search(body_html)
+    found = _ITEM_ID.search(match.group(0)) if match else None
+    return found.group(1) if found else None
+
+
 def _text(raw: dict) -> str:
+    """The message as typed. A quote-reply carries the quoted message and its sender as a blockquote
+    in front of the reply; that is not part of the command."""
     from skills._m365.helpers import html_to_text
 
-    body_html = raw.get("body_html") or ""
-    return (html_to_text(body_html).strip() if body_html else "") or (raw.get("body") or "").strip()
+    body_html = _QUOTE.sub("", raw.get("body_html") or "")
+    typed = html_to_text(body_html).strip() if body_html.strip() else ""
+    return typed or ("" if _QUOTE.search(raw.get("body_html") or "") else (raw.get("body") or "").strip())
 
 
 class TeamsSelfChat:
@@ -71,6 +86,7 @@ class TeamsSelfChat:
                 text=_text(raw),
                 created_at=_epoch(raw.get("created_at", "")),
                 attachments=bool(raw.get("attachments")),
+                reply_to=_quoted_id(raw.get("body_html") or ""),
             )
             for raw in fetch_messages(self._chat_id)
             if raw.get("message_type") == "message"

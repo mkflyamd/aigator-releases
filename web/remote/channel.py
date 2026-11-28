@@ -42,6 +42,7 @@ class InboundMessage:
     text: str
     created_at: float  # epoch seconds; 0.0 when the channel gave no usable timestamp
     attachments: bool = False
+    reply_to: str | None = None  # id of the message this one quote-replies to, when the channel says
 
 
 class Channel(Protocol):

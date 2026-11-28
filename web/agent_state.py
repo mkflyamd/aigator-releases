@@ -30,6 +30,17 @@ def _write_cmd(word: str) -> str:
 
 
 _REMOVE_CMD = f"{_GUARD}rm -f {_PTY_FILE}"
+_PROMPT_FILE = '"$GATOR_AGENT_STATE_DIR/$GATOR_PTY_ID.prompt"'
+PROMPT_SUFFIX = ".prompt"
+PROMPT_MAX_BYTES = 64 * 1024
+# The hook payload names the tool and its input; a menu or permission prompt is that payload,
+# kept until the agent is working or idle again. Written whole, then moved, so it is never read half-done.
+_PROMPT_WRITE_CMD = f"{_GUARD}cat > {_PROMPT_FILE}.tmp && mv -f {_PROMPT_FILE}.tmp {_PROMPT_FILE}"
+
+
+def _turn_cmd(word: str) -> str:
+    """A state word that also drops the pending prompt: the agent has moved on."""
+    return f"{_write_cmd(word)}; rm -f {_PROMPT_FILE}"
 
 
 def launch_env(pty_id: str) -> dict[str, str]:
@@ -47,14 +58,15 @@ def _command_hook(command: str, matcher: str | None = None) -> list[dict]:
 def _claude_settings() -> dict:
     return {
         "hooks": {
-            "UserPromptSubmit": _command_hook(_write_cmd("working")),
-            "PostToolUse": _command_hook(_write_cmd("working")),
+            "UserPromptSubmit": _command_hook(_turn_cmd("working")),
+            "PostToolUse": _command_hook(_turn_cmd("working")),
+            "PermissionRequest": _command_hook(_PROMPT_WRITE_CMD),
             "Notification": _command_hook(_write_cmd("asking"), "permission_prompt|elicitation_dialog"),
-            "Stop": _command_hook(_write_cmd("idle")),
+            "Stop": _command_hook(_turn_cmd("idle")),
             # A woken agent is ready for a message once it has started; compact and clear
             # also fire SessionStart, and those happen mid-turn.
-            "SessionStart": _command_hook(_write_cmd("idle"), "startup|resume"),
-            "SessionEnd": _command_hook(_REMOVE_CMD),
+            "SessionStart": _command_hook(_turn_cmd("idle"), "startup|resume"),
+            "SessionEnd": _command_hook(f"{_REMOVE_CMD}; rm -f {_PROMPT_FILE}"),
         }
     }
 
@@ -138,6 +150,37 @@ def read_states(pty_ids: list[str]) -> dict[str, dict]:
     return out
 
 
+def read_prompt(pty_id: str) -> dict | None:
+    """The prompt the agent is showing: {"at": event time, "payload": the hook's JSON}, or None."""
+    try:
+        uuid.UUID(pty_id)
+        path = STATE_DIR / (pty_id + PROMPT_SUFFIX)
+        with open(path, "rb") as fh:
+            raw = fh.read(PROMPT_MAX_BYTES + 1)
+        at = path.stat().st_mtime
+        payload = json.loads(raw.decode("utf-8")) if len(raw) <= PROMPT_MAX_BYTES else None
+    except (ValueError, OSError):
+        return None
+    return {"at": at, "payload": payload} if isinstance(payload, dict) else None
+
+
+def set_state(pty_id: str, word: str) -> None:
+    """Report a state for a terminal whose agent fires no hook for it (Esc at a prompt ends the turn silently)."""
+    if word not in WORDS:
+        raise ValueError(word)
+    uuid.UUID(pty_id)
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    (STATE_DIR / pty_id).write_text(word, encoding="utf-8")
+
+
+def clear_prompt(pty_id: str) -> None:
+    try:
+        uuid.UUID(pty_id)
+        (STATE_DIR / (pty_id + PROMPT_SUFFIX)).unlink(missing_ok=True)
+    except (ValueError, OSError):
+        pass
+
+
 def clear(pty_id: str) -> None:
     """Drop a terminal's reported state, so a reused id does not inherit its last word."""
     try:
@@ -145,6 +188,7 @@ def clear(pty_id: str) -> None:
         (STATE_DIR / pty_id).unlink(missing_ok=True)
     except (ValueError, OSError):
         pass
+    clear_prompt(pty_id)
 
 
 def cleanup(max_age_seconds: float = STATE_MAX_AGE_SECONDS) -> None:

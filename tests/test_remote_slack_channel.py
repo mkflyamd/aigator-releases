@@ -294,7 +294,7 @@ async def test_list_and_stop_all_work_over_slack(tmp_path, slack):
     await w.deliver(a)
     b = w.say(w.ts(seq=2), "@gator list")
     await w.deliver(b, a)
-    assert "1. budget \u00b7 Budget \u00b7 working" in slack.posts()[-1][1]["text"]
+    assert "1. budget \u00b7 " in slack.posts()[-1][1]["text"]
     c = w.say(w.ts(seq=3), "@gator stop all")
     await w.deliver(c, b, a)
     assert w.host.killed == ["pty-1"]
