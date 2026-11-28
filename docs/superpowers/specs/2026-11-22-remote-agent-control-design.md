@@ -166,12 +166,12 @@ Teams and Slack messages to the user's own self-chat may auto-send (PR #189 reco
 
 ### Settings
 
-The "Remote control" section holds per-channel switches (Teams, Slack), the reply switch, a default project, and three limits. Values are saved through `PATCH /api/config` and checked before they are stored.
+The "Remote control" section holds per-channel switches (Teams, Slack), the reply switch, a default project, and four limits. Values are saved through `PATCH /api/config` and checked before they are stored.
 
 - `teams_remote_control_enabled`, `slack_remote_control_enabled`: booleans. The existing Teams value is the Teams switch.
 - "Reply in my own chat" sits directly under the channel switches and shows "Replies to your own Teams and Slack chat are off until you turn this on." while it is off. It is the user's own auto-send switch, saved through `POST /api/relay/self-chat-autosend` and read from `GET /api/relay`; it is the same setting as "Allow posting to my own Teams and Slack chat" under Agent messaging, and the two stay in step. If the administrator's policy is not `allow`, it is shown off and disabled with "Your administrator has turned this off."
 - `remote_default_project`: chosen from a dropdown of existing projects, or left on "Active project". A name that is not a project is rejected on save. If the chosen project is later deleted, a command that needs it is refused with `[Gator] The default project "X" no longer exists. Choose another in Settings, then resend.` and does not fall back to the active project.
-- `remote_session_idle_hours` (default 8, 1 to 72), `remote_stale_minutes` (default 15, 1 to 120), `remote_armed_max_hours` (default 24, 1 to 168). Each is read when it is used, so a change applies to running sessions without a restart. A stored value that is not valid falls back to its default.
+- `remote_session_idle_hours` (default 8, 1 to 72), `remote_stale_minutes` (default 15, 1 to 120), `remote_armed_max_hours` (default 24, 1 to 168), `remote_peer_messages_per_hour` (default 30, whole number 0 to 1000; 0 means no limit; see Messaging other agents). Each is read when it is used, so a change applies to running sessions without a restart. A stored value that is not valid falls back to its default.
 
 ## Compatibility with the current `/code` path
 
@@ -200,6 +200,15 @@ Agent-initiated messages stay same-project only and go through `web/agent_mcp.py
 ## Out of scope
 
 Tailscale or any non-loopback listener, a remote or phone UI, server-hosted agents, bot-style channels, push notifications of our own, widget and dashboard sharing, agent memory or cached results over remote channels, remote approvals of agent permission prompts beyond forwarding the question text.
+
+## Messaging other agents
+
+`@gator <name> <text>` reaches another agent session in the default project, such as a session working in a branch or a review session, live or suspended. `@gator list` shows them under the sessions Remote started, at most 8 with "N more". The tag is required: a message to a peer without `@gator` is never routed, and the window does not stick to a peer.
+
+- Reachable means: same project as the default project, not started by Remote, not opted out in Relay, and the administrator and user messaging switches are on. No per-session opt-in. Other projects are not reachable.
+- The name is matched exactly (case-insensitive) against the session title, or the full or 8-character session id. `gator`, `all` and the command words are reserved and never match a peer. Two peers with the same name get a reply listing the 8-character ids to use instead.
+- The text is typed into the peer as the user's own words, prefixed `[via remote chat from the user]`, through the wake-on-ping path: a suspended session is woken first, nothing is typed at a permission prompt, while the user is typing, or when the session is in a permission mode that skips approvals (bypass or auto-accept). A permission mode that cannot be read is treated as one that skips approvals.
+- Sends are counted per peer per hour against `remote_peer_messages_per_hour`, separately from Relay's agent-to-agent limit, which a person typing in chat does not use. Each delivery is written to the same audit log as agent messages.
 
 ## Chat tabs
 

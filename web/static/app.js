@@ -17158,6 +17158,7 @@ fetch('/api/teams/chats')
     { key: 'remote_session_idle_hours', input: 'remote-session-idle-hours', fallback: 8 },
     { key: 'remote_stale_minutes', input: 'remote-stale-minutes', fallback: 15 },
     { key: 'remote_armed_max_hours', input: 'remote-armed-max-hours', fallback: 24 },
+    { key: 'remote_peer_messages_per_hour', input: 'remote-peer-messages-per-hour', fallback: 30 },
   ];
   const _rcError = document.getElementById('remote-settings-error');
   let _rcProjectDrop = null;

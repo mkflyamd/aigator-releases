@@ -19,6 +19,7 @@ import re
 import threading
 import time
 from collections import deque
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -77,15 +78,21 @@ def clean(text: str) -> str:
     return " ".join(_CONTROL.sub(" ", text).split())
 
 
-def frame(sender_name: str, message: str) -> str:
+USER_TAG = "[via remote chat from the user]"
+
+
+def frame(sender_name: str, message: str, origin: str = "agent") -> str:
     """The text that is typed into the target. It always starts with the tag, so it can
-    never begin with a command character."""
+    never begin with a command character. `origin="user"` is a person typing in a chat app:
+    it is their own words, not another agent's."""
     name = " ".join(clean(sender_name).replace("[", " ").replace("]", " ").split())[:NAME_MAX_CHARS] or "another agent"
     body = clean(message)
     if not body:
         raise WakeRefused("invalid", "The message is empty.")
     if len(body.encode("utf-8")) > MESSAGE_MAX_BYTES:
         raise WakeRefused("invalid", f"The message is longer than {MESSAGE_MAX_BYTES} bytes.")
+    if origin == "user":
+        return f"{USER_TAG} {body}"
     return f"[Message from {name} via AI Gator, from another agent, not from the user] {body}"
 
 
@@ -253,6 +260,7 @@ def _live_entry(pty_id: str, meta: dict) -> dict:
     return {
         "state": "live",
         "pty_id": pty_id,
+        "remote_pinned": meta.get("remote_pinned") == "1",
         "agent": "claude",
         "project_id": meta.get("project_id"),
         "session_id": meta["session_id"],
@@ -423,12 +431,24 @@ async def _wake_and_deliver(sender: dict, target: str, message: str, allow_cross
     return await deliver_entry(sender, matches[0], message)
 
 
-async def deliver_entry(sender: dict, entry: dict, message: str, *, spend_slot: bool = True) -> dict:
+async def deliver_entry(
+    sender: dict,
+    entry: dict,
+    message: str,
+    *,
+    spend_slot: bool = True,
+    origin: str = "agent",
+    before_type: Callable[[str], Awaitable[None]] | None = None,
+    live_wait: float = LIVE_READY_SECONDS,
+) -> dict:
     """Deliver one message to a session `find_targets` or `find_by_pty` returned, waking it
-    first when it is suspended. The relay core passes spend_slot=False: it keeps its own limits."""
+    first when it is suspended. The relay core passes spend_slot=False: it keeps its own limits.
+    `before_type(pty_id)` runs once the session is awake and ready, just before the text is
+    typed; it raises WakeRefused to stop the delivery. `live_wait` is how long to wait for a
+    running session to finish its turn."""
     now = time.time()
     check_switches()
-    text = frame(sender.get("name", ""), message)
+    text = frame(sender.get("name", ""), message, origin)
     if entry["session_id"] == sender.get("session_id") or entry["pty_id"] == sender.get("pty_id"):
         raise WakeRefused("invalid", "An agent cannot message itself.")
     if relay_settings.opted_out(f"pty:{entry['pty_id']}"):
@@ -456,7 +476,9 @@ async def deliver_entry(sender: dict, entry: dict, message: str, *, spend_slot: 
             pty_id = entry["pty_id"]
             if not agent_state.read_states([pty_id]).get(pty_id):
                 raise WakeRefused("not_ready", "This agent does not report its state, so it cannot be messaged safely.")
-            await _wait_ready(pty_id, LIVE_READY_SECONDS)
+            await _wait_ready(pty_id, live_wait)
+        if before_type is not None:
+            await before_type(pty_id)
         await _type_message(pty_id, text)
     except WakeRefused as exc:
         if entry["state"] == "suspended" and exc.code == "failed":

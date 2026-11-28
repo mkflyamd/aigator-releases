@@ -13,6 +13,7 @@ from typing import Callable
 from config import load_config
 from remote import commands, settings
 from remote.guard import Guard
+from remote.peers import PeerDirectory, WakeGateway
 from remote.runner import RemoteRunner
 from remote.service import RemoteError, RemoteService
 from remote.session_host import LocalPtyHost, Project
@@ -120,6 +121,7 @@ def _build_loop(channel, state: State, enabled: Callable[[], bool]) -> RemoteLoo
         state,
         stale_seconds=settings.stale_seconds,
         first_prompt_hint=commands.BREVITY_HINT,
+        peers=PeerDirectory(WakeGateway(), settings.peer_messages_per_hour),
     )
     return RemoteLoop(runner, enabled)
 
