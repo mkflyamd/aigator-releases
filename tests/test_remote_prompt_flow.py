@@ -102,12 +102,14 @@ async def test_a_number_picks_that_menu_row(w):
     assert w.channel.posted[-1] == "[Gator - budget - Budget] Got it: Blue."
 
 
-async def test_typed_words_answer_the_type_something_row(w):
+async def test_typed_words_are_not_typed_into_a_question_and_it_keeps_waiting(w):
     await opened(w)
     await say(w, "run the tests")
     await show(w, "pty-1", ASK_USER_QUESTION)
     await say(w, "green please")
-    assert w.host.typed == [("pty-1", (prompts.DOWN, prompts.DOWN, "green please", prompts.ENTER))]
+    assert w.host.typed == []
+    assert "Not sent: pick 1 or 2, or answer it in AI Gator." in w.channel.posted[-1]
+    assert w.service.list()[0].waiting
 
 
 async def test_a_reply_that_is_not_an_answer_to_a_permission_says_what_is_asked_and_types_nothing(w):
@@ -130,7 +132,7 @@ async def test_an_out_of_range_number_says_what_to_pick_and_still_waits(w):
     await show(w, "pty-1", ASK_USER_QUESTION)
     await say(w, "5")
     assert w.host.typed == []
-    assert "Not sent: pick 1 or 2, or type your answer." in w.channel.posted[-1]
+    assert "Not sent: pick 1 or 2, or answer it in AI Gator." in w.channel.posted[-1]
     assert w.service.list()[0].waiting
 
 
