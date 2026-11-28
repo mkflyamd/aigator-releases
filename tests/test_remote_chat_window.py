@@ -85,10 +85,10 @@ async def test_the_greeting_has_the_tips_and_help_repeats_them_under_a_fresh_pre
     greeting, helped = w.channel.posted
     note = commands.EVERYTHING_GOES_TO_AGENT
     assert greeting.startswith(
-        f"[Gator] {commands.CROC} Gator on watch. This chat is open, so you can skip `@gator`.\n{note}\n\nNext:\n"
+        f"[{commands.CROC} Gator] Gator on watch. This chat is open, so you can skip `@gator`.\n{note}\n\nNext:\n"
     )
-    assert helped.startswith(f"[Gator] This chat is open, so you can skip `@gator`.\n{note}\n\nNext:\n")
-    assert "Gator on watch" not in helped and commands.CROC not in helped
+    assert helped.startswith(f"[\U0001F40A Gator] This chat is open, so you can skip `@gator`.\n{note}\n\nNext:\n")
+    assert "Gator on watch" not in helped and helped.count(commands.CROC) == 1
     assert greeting.split("\n\nNext:\n", 1)[1] == helped.split("\n\nNext:\n", 1)[1]
     assert helped.endswith("It also closes after 30 minutes of quiet.")
 
@@ -97,7 +97,7 @@ async def test_help_with_the_chat_closed_tells_the_user_to_tag_every_message(w):
     await baselined(w)
     await say(w, "@gator help")
     helped = w.channel.posted[-1]
-    assert helped.startswith("[Gator] This chat is closed, so start each message with `@gator`.\n\nNext:\n")
+    assert helped.startswith("[\U0001F40A Gator] This chat is closed, so start each message with `@gator`.\n\nNext:\n")
     assert "• `@gator hi` to open this chat, then skip `@gator`." in helped
     assert "• `@gator stop all` to stop everything and turn Remote control off." in helped
     assert "30 minutes" not in helped
@@ -108,7 +108,7 @@ async def test_hi_while_the_chat_is_open_says_so_and_extends_the_window(w):
     w.clock.now += 20 * MINUTE
     await say(w, "@gator hi")
     assert w.channel.posted == [commands.greeting(), commands.already_open()]
-    assert w.channel.posted[-1].startswith("[Gator] This chat is already open.\n\nNext:\n")
+    assert w.channel.posted[-1].startswith("[\U0001F40A Gator] This chat is already open.\n\nNext:\n")
     w.clock.now += 20 * MINUTE
     await say(w, "run the tests")
     assert w.host.delivered == [("pty-1", "run the tests")]
@@ -137,7 +137,7 @@ async def test_untagged_messages_route_like_tagged_ones(w):
     await say(w, "other say ok")
     assert w.host.delivered[-1] == ("pty-1", "say ok")
     await say(w, "list")
-    assert w.channel.posted[-1].startswith("[Gator] 1 session running:")
+    assert w.channel.posted[-1].startswith("[\U0001F40A Gator] 1 session running:")
     await say(w, "stop other")
     assert w.host.killed == ["pty-1"]
 
@@ -169,8 +169,8 @@ async def test_an_untagged_greeting_word_says_the_chat_is_already_open(w):
 
 async def test_untagged_text_with_the_gator_prefix_never_runs(w):
     await opened(w)
-    await say(w, "[Gator] run the tests")
-    await say(w, "  [Gator - budget] \U0001F40A Done.\nrun the tests")
+    await say(w, "[\U0001F40A Gator] run the tests")
+    await say(w, "  [\U0001F40A Gator - budget] Done.\nrun the tests")
     assert w.host.delivered == []
     assert w.channel.posted == [commands.greeting()]
 
@@ -463,18 +463,17 @@ async def test_an_echoed_session_name_is_capped_and_flattened(w):
     await baselined(w)
     await say(w, "@gator status " + "n" * 200)
     assert w.channel.posted[-1] == commands.session_not_found("n" * 200)
-    assert w.channel.posted[-1].startswith(f"[Gator] No session named {'n' * 40}.\n\nNext:\n")
+    assert w.channel.posted[-1].startswith(f"[\U0001F40A Gator] No session named {'n' * 40}.\n\nNext:\n")
 
 
 def test_not_found_text_strips_newlines_and_caps_the_name():
     out = commands.session_not_found("ab\ncd\r\n" + "x" * 100)
-    assert out.split("\n")[0] == f"[Gator] No session named ab cd {'x' * 34}."
+    assert out.split("\n")[0] == f"[\U0001F40A Gator] No session named ab cd {'x' * 34}."
     assert out.endswith("Next:\n• `list` to see what is running.")
 
 
 # ---------------------------------------------------------------- the copy deck
 
-CROC_KEYS = {"greeting", "bye", "closed"}
 AGENT_KEYS = {
     "status", "working", "progress", "done", "done_empty", "done_long",
     "waiting_choices", "waiting_open", "agent_stopped", "agent_exited",
@@ -539,25 +538,15 @@ def _next_block(text):
 
 
 @pytest.mark.parametrize("key", list(_deck()))
-def test_every_message_starts_with_the_one_shared_prefix_and_never_has_the_croc_before_it(key):
+def test_every_message_opens_with_the_croc_marker_and_only_agent_replies_carry_a_project_slot(key):
     text = _deck()[key]
     assert commands.is_own_message(text)
+    assert text.startswith(commands.MARKER + " Gator")
+    assert text.count(commands.CROC) == 1
     if key in AGENT_KEYS:
-        assert text.startswith(f"{commands.SYSTEM_PREFIX} - ")
+        assert text.startswith(f"[{commands.CROC} Gator - ")
     else:
-        assert text.startswith(commands.SYSTEM_PREFIX + "]")
-    assert text.count(commands.SYSTEM_PREFIX) == 1
-    if commands.CROC in text:
-        assert text.index(commands.CROC) > text.index("]")
-
-
-def test_the_croc_appears_only_in_the_greeting_bye_and_the_quiet_close():
-    deck = _deck()
-    assert {k for k, v in deck.items() if commands.CROC in v} == CROC_KEYS | AGENT_KEYS
-    assert deck["timeout"].count(commands.CROC) == 0
-    for key in CROC_KEYS:
-        assert deck[key].startswith(f"[Gator] {commands.CROC} ")
-        assert deck[key].count(commands.CROC) == 1
+        assert text.startswith(f"[{commands.CROC} Gator] ")
 
 
 @pytest.mark.parametrize("key", list(_deck()))
@@ -593,63 +582,63 @@ def test_wordplay_lives_only_in_the_greeting_and_bye_lines():
 def test_the_deck_texts_match_the_copy():
     deck = _deck()
     reopen = "Next:\n• `@gator hi` to open it again."
-    assert deck["closed"] == f"[Gator] {commands.CROC} Chat closed after 30 minutes of quiet.\n\n{reopen}"
-    assert deck["bye"] == f"[Gator] {commands.CROC} Chat closed. Gator out.\n\n{reopen}"
+    assert deck["closed"] == f"[{commands.CROC} Gator] Chat closed after 30 minutes of quiet.\n\n{reopen}"
+    assert deck["bye"] == f"[{commands.CROC} Gator] Chat closed. Gator out.\n\n{reopen}"
     assert deck["already_open"] == (
-        "[Gator] This chat is already open.\n\nNext:\n• Type a request to run it.\n• `help` to see all options."
+        "[\U0001F40A Gator] This chat is already open.\n\nNext:\n• Type a request to run it.\n• `help` to see all options."
     )
     assert deck["stale_one"] == (
-        "[Gator] Skipped a message you sent while AI Gator was off, because it was more than 15 minutes old.\n\n"
+        "[\U0001F40A Gator] Skipped a message you sent while AI Gator was off, because it was more than 15 minutes old.\n\n"
         "Next:\n• Send it again if you still need it."
     )
-    assert deck["stale_many"].startswith("[Gator] Skipped 3 messages you sent while AI Gator was off")
+    assert deck["stale_many"].startswith("[\U0001F40A Gator] Skipped 3 messages you sent while AI Gator was off")
     assert deck["slow_down"] == (
-        "[Gator] Slow down, that was too many messages at once.\n\nNext:\n• Wait 10 minutes, then send it again."
+        "[\U0001F40A Gator] Slow down, that was too many messages at once.\n\nNext:\n• Wait 10 minutes, then send it again."
     )
     assert deck["timeout"] == (
-        "[Gator] Remote control turned itself off after 24 hours.\n\n"
+        "[\U0001F40A Gator] Remote control turned itself off after 24 hours.\n\n"
         "Next:\n• Open AI Gator, then Settings, then Remote control, and switch it on."
     )
     assert deck["list"] == (
-        "[Gator] 2 sessions running:\n1. budget · Budget · working\n2. other · Other · waiting for you\n\n"
+        "[\U0001F40A Gator] 2 sessions running:\n1. budget · Budget · working\n2. other · Other · waiting for you\n\n"
         "Next:\n• `other: your answer` to answer the one that is waiting.\n"
         "• `status budget` for details.\n• `stop all` to stop everything and turn Remote control off."
     )
     assert "• `budget: your request` to talk to a session." in deck["list_idle"]
     assert deck["no_sessions"] == (
-        "[Gator] No remote sessions are running.\n\nNext:\n• Send a request and it starts a new session."
+        "[\U0001F40A Gator] No remote sessions are running.\n\nNext:\n• Send a request and it starts a new session."
     )
-    assert deck["not_found"] == "[Gator] No session named nope.\n\nNext:\n• `list` to see what is running."
+    assert deck["not_found"] == "[\U0001F40A Gator] No session named nope.\n\nNext:\n• `list` to see what is running."
     assert deck["which_session"] == (
-        "[Gator] Which session?\n\nNext:\n• `budget: your message`\n• `other: your message`\n• `list` to see them all."
+        "[\U0001F40A Gator] Which session?\n\nNext:\n• `budget: your message`\n• `other: your message`\n• `list` to see them all."
     )
-    assert deck["stopped_one"].startswith("[Gator] Stopped 1 session. Remote control is off.\n\n")
-    assert deck["stopped_many"].startswith("[Gator] Stopped 3 sessions. Remote control is off.\n\n")
+    assert deck["stopped_one"].startswith("[\U0001F40A Gator] Stopped 1 session. Remote control is off.\n\n")
+    assert deck["stopped_many"].startswith("[\U0001F40A Gator] Stopped 3 sessions. Remote control is off.\n\n")
     assert deck["status"] == (
-        f"[Gator - budget] \U0001F40A Working since {commands.clock_time(1000.0)}.\n"
+        f"[\U0001F40A Gator - budget] Working since {commands.clock_time(1000.0)}.\n"
         f"Last activity {commands.clock_time(2000.0)}.\n\n"
         "Next:\n• Reply here to talk to it.\n• `stop budget` to stop it."
     )
     assert deck["working"] == (
-        "[Gator - budget] \U0001F40A Working on it.\nBranch: main\n\nNext:\n• `stop` to stop it."
+        "[\U0001F40A Gator - budget] Working on it.\nBranch: main\n\nNext:\n• `stop` to stop it."
     )
-    assert deck["progress"] == "[Gator - budget] \U0001F40A Still working, 2 min."
+    assert deck["progress"] == "[\U0001F40A Gator - budget] Still working, 2 min."
     assert deck["agent_stopped"] == (
-        "[Gator - budget] \U0001F40A Stopped.\n\n"
+        "[\U0001F40A Gator - budget] Stopped.\n\n"
         "Next:\n• Send a message to start it again.\n• `list` to see what is running."
     )
     assert deck["agent_exited"] == (
-        "[Gator - budget] \U0001F40A The agent process exited.\n\nNext:\n• Send a message to start a new session."
+        "[\U0001F40A Gator - budget] The agent process exited.\n\nNext:\n• Send a message to start a new session."
     )
     assert deck["waiting_choices"].endswith(
         "Next:\n• `Use the repo root`\n• `Use web/`"
     )
-    assert deck["waiting_open"] == "[Gator - budget] \U0001F40A Waiting for your answer.\nWhich?"
-    assert deck["done"] == "[Gator - budget] \U0001F40A Done.\nTwo files are open."
+    assert deck["waiting_open"] == "[\U0001F40A Gator - budget] Waiting for your answer.\nWhich?"
+    assert deck["done"] == "[\U0001F40A Gator - budget] Done.\nTwo files are open."
 
 
 def test_the_prefix_literal_has_one_home():
-    """The loop guard reads commands.SYSTEM_PREFIX; no other module spells the prefix out in code."""
+    """The prefix is built in commands.py; no other module spells it out in code."""
     offenders = []
     for path in sorted((ROOT / "web" / "remote").glob("*.py")):
         if path.name == "commands.py":
@@ -665,16 +654,16 @@ def test_the_prefix_literal_has_one_home():
         }
         for node in ast.walk(tree):
             if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docstrings:
-                if "[Gator" in node.value:
+                if "[Gator" in node.value or commands.MARKER in node.value:
                     offenders.append(f"{path.name}:{node.lineno}")
     assert offenders == []
 
 
-def test_the_loop_guard_and_the_adapters_read_the_shared_prefix():
+def test_the_loop_guard_and_the_adapters_share_one_own_message_check():
     from remote import runner, slack_channel, teams_channel
 
     for module in (runner, slack_channel, teams_channel):
-        assert "SYSTEM_PREFIX" in Path(module.__file__).read_text(encoding="utf-8")
+        assert "is_own_message" in Path(module.__file__).read_text(encoding="utf-8")
 
 
 def test_the_timeout_notice_names_the_real_settings_section():
@@ -688,10 +677,10 @@ def test_the_timeout_notice_names_the_real_settings_section():
     assert commands.SETTINGS_SECTION == label
     assert f"Open AI Gator, then Settings, then {label}, and switch it on." in commands.timed_out(3600)
     assert commands.stopped(1) == (
-        "[Gator] Stopped 1 session. Remote control is off.\n\n"
+        "[\U0001F40A Gator] Stopped 1 session. Remote control is off.\n\n"
         "Next:\n• Open AI Gator and turn Remote control on again."
     )
-    assert commands.stopped(3).splitlines()[0] == "[Gator] Stopped 3 sessions. Remote control is off."
+    assert commands.stopped(3).splitlines()[0] == "[\U0001F40A Gator] Stopped 3 sessions. Remote control is off."
 
 
 async def test_everything_a_whole_session_posts_carries_the_prefix_and_a_next_block(w):
@@ -708,7 +697,7 @@ async def test_everything_a_whole_session_posts_carries_the_prefix_and_a_next_bl
     await say(w, "bye")
     assert len(w.channel.posted) >= 7
     assert all(commands.is_own_message(p) for p in w.channel.posted)
-    agent_replies = [p for p in w.channel.posted if p.startswith(f"{commands.SYSTEM_PREFIX} - ") and "Next:" not in p]
+    agent_replies = [p for p in w.channel.posted if p.startswith(f"[{commands.CROC} Gator - ") and "Next:" not in p]
     assert agent_replies == [commands.agent_result("Claude", "budget", "Waiting for your answer.", "Which one?", True, project="Budget")]
     assert all("\n\nNext:\n" in p for p in w.channel.posted if p not in agent_replies)
 
@@ -733,7 +722,7 @@ async def test_status_of_one_session_says_its_state_since_when_and_last_activity
     await say(w, "run the tests")
     await say(w, "status budget")
     out = w.channel.posted[-1]
-    assert out.startswith("[Gator - Budget] \U0001F40A Working since ")
+    assert out.startswith("[\U0001F40A Gator - Budget] Working since ")
     assert "\nLast activity " in out
     assert "• `stop budget` to stop it." in out
 
@@ -742,7 +731,7 @@ async def test_status_with_no_name_and_one_session_describes_that_session(w):
     await opened(w)
     await say(w, "run the tests")
     await say(w, "status")
-    assert w.channel.posted[-1].startswith("[Gator - Budget] \U0001F40A Working since ")
+    assert w.channel.posted[-1].startswith("[\U0001F40A Gator - Budget] Working since ")
 
 
 async def test_the_deck_wording_for_a_stop_that_needs_a_name_and_for_an_exit(w):
@@ -763,7 +752,7 @@ async def test_stop_all_failing_says_so_and_keeps_remote_control_on(w):
 
     w.host.fail_kill = {"pty-1"}
     await say(w, "stop all")
-    assert w.channel.posted[-1].startswith("[Gator] Could not stop budget")
+    assert w.channel.posted[-1].startswith("[\U0001F40A Gator] Could not stop budget")
     assert "Remote control stays on." in w.channel.posted[-1]
     assert w.guard.armed is True
 
@@ -779,9 +768,9 @@ async def test_the_loop_guard_ignores_every_deck_message_read_back_untagged(w, k
     assert w.channel.posted == [commands.greeting()]
 
 
-async def test_the_loop_guard_ignores_the_croc_greeting_and_a_recorded_id_catches_a_stripped_prefix(w):
+async def test_the_loop_guard_ignores_the_greeting_and_a_recorded_id_catches_a_stripped_prefix(w):
     await opened(w)
-    await say(w, f"[Gator] {commands.CROC} Gator on watch. do the thing")
+    await say(w, f"[{commands.CROC} Gator] Gator on watch. do the thing")
     assert w.host.delivered == []
     w.state.record_post("teams", "777")
     stripped = _deck()["greeting"].split("] ", 1)[1]
@@ -913,7 +902,7 @@ def test_the_adapters_send_a_multi_line_croc_message_intact(tmp_path, chat):
         assert "".join(f"<div>{p}</div>" for p in paragraphs) == content
         lines = [line for p in paragraphs for line in p.split("<br>")]
         assert lines[0] == (
-            f"[Gator] {commands.CROC} Gator on watch. This chat is open, so you can skip <code>@gator</code>."
+            f"[{commands.CROC} Gator] Gator on watch. This chat is open, so you can skip <code>@gator</code>."
         )
         assert "• <code>stop all</code> to stop everything and turn Remote control off." in lines
         assert lines[-1] == QUIET_NOTE
@@ -947,7 +936,7 @@ def test_tp_teams_send_survives_an_emoji_under_a_cp1252_console(monkeypatch):
     monkeypatch.setattr(httpx, "post", lambda url, **kwargs: sent.append(kwargs["json"]) or Reply())
     console = io.TextIOWrapper(io.BytesIO(), encoding="cp1252", errors="strict")
     monkeypatch.setattr(sys, "stdout", console)
-    out = teams.tp_teams_send("48:notes", teams.TeamsSendRequest(message=f"[Gator] {commands.CROC} Gator on watch."))
+    out = teams.tp_teams_send("48:notes", teams.TeamsSendRequest(message=f"[{commands.CROC} Gator] Gator on watch."))
     assert out["ok"] is True and out["message_id"] == "9"
     assert commands.CROC in sent[0]["content"]
 
@@ -968,11 +957,11 @@ def test_the_cap_and_the_greeting_line_are_named_constants():
     assert commands.EVERYTHING_GOES_TO_AGENT in commands.greeting()
     assert commands.EVERYTHING_GOES_TO_AGENT in commands.help_text(True)
     assert commands.too_long() == (
-        "[Gator] That message is too long to run from this chat, so it was not sent.\n\n"
+        "[\U0001F40A Gator] That message is too long to run from this chat, so it was not sent.\n\n"
         "Next:\n• Start it with `@gator` to send it anyway.\n• Or shorten it and send it again."
     )
     assert commands.attachment_not_sent() == (
-        "[Gator] Attachments are not sent from this chat.\n\nNext:\n• Describe what you need in text, and send that."
+        "[\U0001F40A Gator] Attachments are not sent from this chat.\n\nNext:\n• Describe what you need in text, and send that."
     )
 
 

@@ -8,15 +8,42 @@ def test_plain_note_is_not_a_command():
 
 
 def test_the_agent_prefix_has_two_slots_alone_and_three_while_several_sessions_are_live():
-    assert commands.agent_prefix("budget", "Budget") == "[Gator - Budget] \U0001F40A"
-    assert commands.agent_prefix("budget", "Budget", several=True) == "[Gator - budget - Budget] \U0001F40A"
-    assert commands.agent_prefix("budget") == "[Gator - budget] \U0001F40A"
+    assert commands.agent_prefix("budget", "Budget") == "[\U0001F40A Gator - Budget]"
+    assert commands.agent_prefix("budget", "Budget", several=True) == "[\U0001F40A Gator - budget - Budget]"
+    assert commands.agent_prefix("budget") == "[\U0001F40A Gator - budget]"
 
 
-def test_the_loop_guard_ignores_the_agent_prefix_and_not_a_plain_bracket_note():
-    assert commands.is_own_message("[Gator - proj] \U0001F40A Done.")
-    assert commands.is_own_message("[Gator - one - proj] \U0001F40A Done.")
-    assert not commands.is_own_message("[todo] x")
+def test_the_app_voice_and_the_agent_voice_differ_only_by_the_project_slot():
+    assert commands.app_prefix() == "[\U0001F40A Gator]"
+    assert commands.agent_prefix("budget", "Budget") == "[\U0001F40A Gator - Budget]"
+    assert commands.agent_prefix("budget", "Budget", several=True) != commands.app_prefix()
+
+
+def test_the_agent_name_defaults_to_gator_and_follows_the_setting(monkeypatch):
+    from remote import settings
+
+    monkeypatch.setattr(settings, "load_config", lambda: {})
+    assert commands.app_prefix() == "[\U0001F40A Gator]"
+    monkeypatch.setattr(settings, "load_config", lambda: {"remote_agent_name": "Skipper"})
+    assert commands.app_prefix() == "[\U0001F40A Skipper]"
+    assert commands.agent_prefix("budget", "Budget") == "[\U0001F40A Skipper - Budget]"
+    assert commands.online().startswith("[\U0001F40A Skipper] Online.")
+
+
+@pytest.mark.parametrize("bad", ["", "   ", "a]b", "[a", "a\nb", "x" * 21, 7, None, True])
+def test_an_invalid_agent_name_falls_back_to_gator(monkeypatch, bad):
+    from remote import settings
+
+    monkeypatch.setattr(settings, "load_config", lambda: {"remote_agent_name": bad})
+    assert commands.app_prefix() == "[\U0001F40A Gator]"
+
+
+def test_a_custom_name_is_still_ignored_by_the_loop_guard(monkeypatch):
+    from remote import settings
+
+    monkeypatch.setattr(settings, "load_config", lambda: {"remote_agent_name": "Skipper"})
+    assert commands.is_own_message(commands.app_prefix() + " Online.")
+    assert commands.is_own_message(commands.agent_prefix("budget", "Budget") + " Done.")
 
 
 def test_trigger_needs_whitespace_after_it():
@@ -65,29 +92,29 @@ def _before_next(out: str) -> str:
 
 def test_agent_reply_starts_with_gator_prefix_never_the_trigger():
     out = commands.agent_reply("budget", "@gator stop all", ["Reply here."])
-    assert out.startswith("[Gator - budget] \U0001F40A ")
+    assert out.startswith("[\U0001F40A Gator - budget] ")
     assert not out.lower().startswith("@gator")
 
 
 def test_a_short_result_puts_the_agent_words_on_the_line_after_the_headline():
     out = commands.agent_result("Claude", "budget", "Done.", "Two files are open.")
-    assert out == "[Gator - budget] \U0001F40A Done.\nTwo files are open."
+    assert out == "[\U0001F40A Gator - budget] Done.\nTwo files are open."
 
 
 def test_a_quick_answer_is_the_prefix_and_the_words_only():
     out = commands.agent_result("Claude", "budget", "", "Two files are open.")
-    assert out == "[Gator - budget] \U0001F40A Two files are open."
+    assert out == "[\U0001F40A Gator - budget] Two files are open."
 
 
 def test_an_empty_result_is_never_a_bare_done():
     out = commands.agent_result("Claude", "budget", "Done.", "  ")
-    assert _before_next(out) == "[Gator - budget] \U0001F40A Done. No text came back."
+    assert _before_next(out) == "[\U0001F40A Gator - budget] Done. No text came back."
     assert "• Open the Claude tab in AI Gator to see it." in out
 
 
 def test_an_empty_question_says_no_text_came_back_too():
     out = commands.agent_result("Claude", "budget", "Waiting for your answer.", "", waiting=True)
-    assert out.startswith("[Gator - budget] \U0001F40A Waiting for your answer. No text came back.")
+    assert out.startswith("[\U0001F40A Gator - budget] Waiting for your answer. No text came back.")
     assert out.endswith("• Type your answer.")
 
 
@@ -105,7 +132,7 @@ def test_with_several_sessions_each_choice_names_its_session():
 
 def test_an_open_question_has_no_next_block():
     out = commands.agent_result("Claude", "budget", "Waiting for your answer.", "Which folder?", waiting=True)
-    assert out == "[Gator - budget] \U0001F40A Waiting for your answer.\nWhich folder?"
+    assert out == "[\U0001F40A Gator - budget] Waiting for your answer.\nWhich folder?"
 
 
 @pytest.mark.parametrize(
@@ -128,7 +155,7 @@ def test_a_long_result_is_one_message_with_a_lead_a_clean_cut_and_a_trim_line():
     out = commands.agent_result("Claude", "budget", "Done.", body)
     main = _before_next(out)
     lines = main.split("\n")
-    assert lines[0] == "[Gator - budget] \U0001F40A Done. Outcome in one line."
+    assert lines[0] == "[\U0001F40A Gator - budget] Done. Outcome in one line."
     assert lines[-1].startswith("Trimmed, ")
     shown = main.split("\n\n", 1)[1].rsplit("\n\n", 1)[0]
     assert len(shown) <= 3500
@@ -149,7 +176,7 @@ def test_a_long_result_never_cuts_inside_a_word():
 
 def test_the_lead_is_capped_at_200_characters_on_a_word_boundary():
     out = commands.agent_result("Claude", "budget", "Done.", "word " * 2000)
-    lead = out.split("\n", 1)[0].removeprefix("[Gator - budget] \U0001F40A Done. ")
+    lead = out.split("\n", 1)[0].removeprefix("[\U0001F40A Gator - budget] Done. ")
     assert 0 < len(lead) <= 200
     assert set(lead.split()) == {"word"}
 
@@ -172,13 +199,13 @@ def test_a_result_that_echoes_a_command_cannot_form_one():
 
 def test_system_reply_has_the_prefix_a_blank_line_and_a_next_block():
     assert commands.system_reply("Online.", ["`@gator hi` to open a chat."]) == (
-        "[Gator] Online.\n\nNext:\n• `@gator hi` to open a chat."
+        "[\U0001F40A Gator] Online.\n\nNext:\n• `@gator hi` to open a chat."
     )
 
 
 def test_replies_have_no_trailing_spaces_and_no_double_blank_lines():
     out = commands.agent_result("Claude", "budget", "Done.", "one  \n\n\n\ntwo \n")
-    assert out == "[Gator - budget] \U0001F40A Done.\none\n\ntwo"
+    assert out == "[\U0001F40A Gator - budget] Done.\none\n\ntwo"
 
 
 def test_done_says_the_elapsed_time_only_past_a_minute():
@@ -192,25 +219,25 @@ def test_done_says_the_elapsed_time_only_past_a_minute():
 
 def test_working_names_the_branch_and_offers_stop():
     assert commands.working("budget", "main", False) == (
-        "[Gator - budget] \U0001F40A Working on it.\nBranch: main\n\nNext:\n• `stop` to stop it."
+        "[\U0001F40A Gator - budget] Working on it.\nBranch: main\n\nNext:\n• `stop` to stop it."
     )
     assert commands.working("budget", None, True, project="Budget") == (
-        "[Gator - budget - Budget] \U0001F40A Working on it.\n\nNext:\n• `stop budget` to stop it."
+        "[\U0001F40A Gator - budget - Budget] Working on it.\n\nNext:\n• `stop budget` to stop it."
     )
 
 
 def test_still_working_has_no_options():
-    assert commands.progress("budget", 130) == "[Gator - budget] \U0001F40A Still working, 2 min."
+    assert commands.progress("budget", 130) == "[\U0001F40A Gator - budget] Still working, 2 min."
 
 
 def test_an_unknown_name_lists_at_most_three_sessions():
     out = commands.unknown_mention("ghost", ["a", "b", "c", "d"])
     assert out == (
-        "[Gator] I don't know ghost. Start with `@gator` to send it to the agent.\n\n"
+        "[\U0001F40A Gator] I don't know ghost. Start with `@gator` to send it to the agent.\n\n"
         "Next:\n• `a: your message`\n• `b: your message`\n• `c: your message`"
     )
     assert commands.unknown_mention("ghost", []) == (
-        "[Gator] I don't know ghost. Start with `@gator` to send it to the agent."
+        "[\U0001F40A Gator] I don't know ghost. Start with `@gator` to send it to the agent."
     )
 
 
@@ -231,16 +258,23 @@ def test_a_trailing_question_is_detected(question, asks):
 @pytest.mark.parametrize(
     "text, own",
     [
-        ("[Gator] \U0001F40A x", True),
+        ("[\U0001F40A Gator] x", True),
+        ("[\U0001F40A Skipper - proj] x", True),
+        ("[\U0001F40A Gator - proj - sess] x", True),
+        ("  [\U0001F40A Gator] x", True),
+        ("[:crocodile: Gator] x", True),
+        ("[:crocodile: Gator - proj] x", True),
+        ("  [:crocodile: Skipper] x", True),
+        ("[Gator] x", True),
+        ("[Gator - proj] \U0001F40A x", True),
         ("[Claude - proj] \U0001F40A x", True),
-        ("[Gator - proj - sess] \U0001F40A x", True),
-        ("[Gator - proj] \U0001F40A Done.", True),
-        ("  [Gator] x", True),
-        ("[todo] fix it", False),
         ("[todo] \U0001F40A fix it", True),
+        ("[todo] fix it", False),
         ("[" + "x" * 81 + "] \U0001F40A y", False),
         ("[a\nb] \U0001F40A y", False),
-        ("fix it [Gator] \U0001F40A", False),
+        ("fix it [\U0001F40A Gator]", False),
+        ("fix it [:crocodile: Gator]", False),
+        ("plain text", False),
     ],
 )
 def test_own_messages_are_matched_by_shape(text, own):

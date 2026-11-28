@@ -27,6 +27,20 @@ def known_projects(monkeypatch):
     monkeypatch.setattr(projects, "get_active_project", lambda: None)
 
 
+@pytest.mark.parametrize("name", ["Gator", "Skipper", "x", "a b-c", "y" * 20])
+def test_a_valid_agent_name_is_accepted(name):
+    assert settings.validate({"remote_agent_name": name}) is None
+
+
+@pytest.mark.parametrize("name", ["", "  ", "a]", "[a", "a\nb", "a\rb", "y" * 21, 7, None, True])
+def test_an_invalid_agent_name_is_refused(name):
+    assert "agent name" in settings.validate({"remote_agent_name": name})
+
+
+def test_the_agent_name_setting_is_a_known_key():
+    assert "remote_agent_name" in settings.KEYS
+
+
 def test_a_known_project_blank_and_in_range_numbers_are_accepted(known_projects):
     assert settings.validate({"remote_default_project": "Budget"}) is None
     assert settings.validate({"remote_default_project": ""}) is None

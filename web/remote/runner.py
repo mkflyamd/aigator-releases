@@ -1,6 +1,6 @@
 """Turns channel messages into service calls and service events into channel replies.
 
-Loop guards: Gator's own posts are ignored by the SYSTEM_PREFIX and by recorded post ids.
+Loop guards: Gator's own posts are ignored by the crocodile marker and by recorded post ids.
 Each batch advances the stored last-processed id before anything runs, so a crash or restart
 never runs a message twice."""
 
